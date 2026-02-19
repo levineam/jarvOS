@@ -99,6 +99,15 @@ Validate session targeting, wake mode, scheduling/density guardrails, delivery r
 
 If a proposed cron change violates policy, queue a `🧭 INPUT` blocker instead of applying it silently.
 
+## 6.557 Live Plan upkeep (canonical reference)
+
+Use `TOOLS.md` (`Live Plan by Default Policy`) as the source of truth.
+
+During heartbeat/overnight maintenance:
+- Run `node scripts/live-plan-check.js`.
+- If an active project is missing/stale/non-compliant, queue a `🧭 INPUT` or `📋 TASK` item with the exact fix.
+- Do not redefine Live Plan rules here; keep policy centralized in TOOLS.md.
+
 ## 6.56 Continuous Integration of Learning (CIL) loop
 
 Run the CIL watchdog on hourly cadence to keep project/runtime/template learning integrated with low noise:

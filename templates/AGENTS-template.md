@@ -489,6 +489,7 @@ When work spans **multiple sessions** or has **3+ tasks**, create a Project Boar
 **Template + governance source of truth:** Use `TOOLS.md` as canonical for all project artifact policy:
 - `Feature work tracking gate (default)` for governance requirements (Portfolio/Program linkage, Board+Brief pair, milestones/gates, hotfix backfill)
 - `Frontmatter Standard (Canonical)` for required metadata on project artifacts (`status/type/project/created/updated/author`)
+- `Live Plan by Default Policy` for required `— Live Plan.md` execution artifacts, locked sections, and “Execute” semantics
 
 **Operational rules here (non-duplicative):**
 - Link project boards in the journal when created
