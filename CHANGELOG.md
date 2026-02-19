@@ -72,3 +72,6 @@ All notable public-doc sync changes are appended by `jarvos-public-docs-sync.sh`
 - Updated: starter-kit/templates/project-kickoff-pack-template.md
 - Updated: templates/okr-task-board-template.md
 - Updated: templates/project-kickoff-pack-template.md
+
+## 2026-02-19 12:07 EST — docs sync
+- Updated: docs/meta/source-to-export-map.json
