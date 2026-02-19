@@ -1,11 +1,16 @@
 ---
-adr: ADR-20260219-ars-contexta-patterns
+architecture_decision_record: architecture-decision-record-20260219-ars-contexta-patterns
 status: accepted
 date: 2026-02-19
 system: jarvOS
+type: decision
+project: ""
+created: 2026-02-19
+updated: 2026-02-19
+author: both
 ---
 
-# ADR-20260219: Selective Adoption of Ars Contexta Patterns
+# Architecture Decision Record 20260219: Selective Adoption of Ars Contexta Patterns
 
 ## Status
 Accepted
@@ -25,7 +30,7 @@ Treat **Ars Contexta as a watchlist pattern source** and adopt three specific pa
      - operational/ephemeral execution context,
      - durable knowledge context,
      - transfer boundary/process between them.
-   - In jarvOS terms: runtime state/queues stay operational; canonical notes/ADRs remain durable; promotion is explicit.
+   - In jarvOS terms: runtime state/queues stay operational; canonical notes/Architecture Decision Records remain durable; promotion is explicit.
 
 2. **Fresh-context phases**
    - Break execution into explicit phases with context reset/reload boundaries.
@@ -61,8 +66,8 @@ Treat **Ars Contexta as a watchlist pattern source** and adopt three specific pa
 
 ## Implementation Notes
 
-- Canonical architecture note updated: [[jarvOS — Architecture]]
+- Canonical architecture note updated: [jarvOS — Architecture](../jarvos-architecture.md)
 - Public-docs sync pipeline uses curated source mappings and no-change guards.
-- Future ADRs should reference whether changes affect ops context, durable context, or transfer boundary.
+- Future Architecture Decision Records should reference whether changes affect ops context, durable context, or transfer boundary.
 
-— Written by Jarvis
+— Edited by Jarvis

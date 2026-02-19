@@ -598,17 +598,17 @@ This logging happens INSIDE the sub-agent task (include it in spawn instructions
 
 When spawning specialist sub-agents:
 - Include the specialist mode in the task description
-- Instruct sub-agents to tag output notes with their mode (e.g., add `[[analyst-output]]` near the top)
+- Instruct sub-agents to tag output notes with their mode (e.g., add `analyst-output` near the top)
 - Before starting specialist work, search memory and vault for previous work in the same mode on related topics
 - This creates a searchable trail: future analyst work can build on past analyst work
 
 **Note tagging convention:** Sub-agents should add specialist mode tags to output notes using wiki-link format:
-- `[[analyst-output]]` for analysis work
-- `[[writer-output]]` for writing/content work  
-- `[[pm-output]]` for project management work
-- `[[architect-output]]` for system design work
-- `[[developer-output]]` for technical implementation
-- `[[qa-output]]` for testing/validation work
+- `analyst-output` for analysis work
+- `writer-output` for writing/content work  
+- `pm-output` for project management work
+- `architect-output` for system design work
+- `developer-output` for technical implementation
+- `qa-output` for testing/validation work
 
 **Context search before starting:** Include in spawn instructions: "Before beginning, search vault and memory for previous [mode] work on related topics."
 

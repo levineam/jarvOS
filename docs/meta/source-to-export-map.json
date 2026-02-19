@@ -1,0 +1,138 @@
+{
+  "generatedAt": "2026-02-19T16:07:17.866Z",
+  "manifestPath": "/Users/andrew/clawd/jarvos/public-docs/export-manifest.tsv",
+  "vaultRoot": "/Users/andrew/Documents/Vault v3",
+  "outputMode": "apply",
+  "sourceToExport": {
+    "/Users/andrew/Documents/Vault v3/Notes/jarvOS — Architecture.md": "docs/architecture/jarvos-architecture.md",
+    "/Users/andrew/Documents/Vault v3/Notes/jarvOS — Architecture Decision Records/Architecture Decision Record - 20260219 - Ars Contexta Patterns.md": "docs/architecture/architecture-decision-records/architecture-decision-record-20260219-ars-contexta-patterns.md",
+    "/Users/andrew/clawd/jarvos/templates/AGENTS-template.md": "templates/agents-template.md",
+    "/Users/andrew/clawd/jarvos/templates/BOOTSTRAP-template.md": "templates/bootstrap-template.md",
+    "/Users/andrew/clawd/jarvos/templates/HEARTBEAT-template.md": "templates/heartbeat-template.md",
+    "/Users/andrew/clawd/jarvos/templates/OKR-TASK-BOARD.template.md": "templates/okr-task-board-template.md",
+    "/Users/andrew/clawd/jarvos/templates/PROJECT-KICKOFF-PACK.template.md": "templates/project-kickoff-pack-template.md",
+    "/Users/andrew/clawd/jarvos-starter-kit/README.md": "starter-kit/readme.md",
+    "/Users/andrew/clawd/jarvos-starter-kit/templates/OKR-TASK-BOARD.template.md": "starter-kit/templates/okr-task-board-template.md",
+    "/Users/andrew/clawd/jarvos-starter-kit/templates/PROJECT-KICKOFF-PACK.template.md": "starter-kit/templates/project-kickoff-pack-template.md",
+    "/Users/andrew/clawd/jarvos-starter-kit/workflows/basic-ci.yml": "starter-kit/workflows/basic-ci.yml"
+  },
+  "entries": [
+    {
+      "sourcePath": "/Users/andrew/Documents/Vault v3/Notes/jarvOS — Architecture.md",
+      "destinationLogicalPath": "docs/architecture/jarvos-architecture.md",
+      "destinationSlugPath": "docs/architecture/jarvos-architecture.md"
+    },
+    {
+      "sourcePath": "/Users/andrew/Documents/Vault v3/Notes/jarvOS — Architecture Decision Records/Architecture Decision Record - 20260219 - Ars Contexta Patterns.md",
+      "destinationLogicalPath": "docs/architecture/architecture-decision-records/architecture-decision-record-20260219-ars-contexta-patterns.md",
+      "destinationSlugPath": "docs/architecture/architecture-decision-records/architecture-decision-record-20260219-ars-contexta-patterns.md"
+    },
+    {
+      "sourcePath": "/Users/andrew/clawd/jarvos/templates/AGENTS-template.md",
+      "destinationLogicalPath": "templates/AGENTS-template.md",
+      "destinationSlugPath": "templates/agents-template.md"
+    },
+    {
+      "sourcePath": "/Users/andrew/clawd/jarvos/templates/BOOTSTRAP-template.md",
+      "destinationLogicalPath": "templates/BOOTSTRAP-template.md",
+      "destinationSlugPath": "templates/bootstrap-template.md"
+    },
+    {
+      "sourcePath": "/Users/andrew/clawd/jarvos/templates/HEARTBEAT-template.md",
+      "destinationLogicalPath": "templates/HEARTBEAT-template.md",
+      "destinationSlugPath": "templates/heartbeat-template.md"
+    },
+    {
+      "sourcePath": "/Users/andrew/clawd/jarvos/templates/OKR-TASK-BOARD.template.md",
+      "destinationLogicalPath": "templates/OKR-TASK-BOARD.template.md",
+      "destinationSlugPath": "templates/okr-task-board-template.md"
+    },
+    {
+      "sourcePath": "/Users/andrew/clawd/jarvos/templates/PROJECT-KICKOFF-PACK.template.md",
+      "destinationLogicalPath": "templates/PROJECT-KICKOFF-PACK.template.md",
+      "destinationSlugPath": "templates/project-kickoff-pack-template.md"
+    },
+    {
+      "sourcePath": "/Users/andrew/clawd/jarvos-starter-kit/README.md",
+      "destinationLogicalPath": "starter-kit/README.md",
+      "destinationSlugPath": "starter-kit/readme.md"
+    },
+    {
+      "sourcePath": "/Users/andrew/clawd/jarvos-starter-kit/templates/OKR-TASK-BOARD.template.md",
+      "destinationLogicalPath": "starter-kit/templates/OKR-TASK-BOARD.template.md",
+      "destinationSlugPath": "starter-kit/templates/okr-task-board-template.md"
+    },
+    {
+      "sourcePath": "/Users/andrew/clawd/jarvos-starter-kit/templates/PROJECT-KICKOFF-PACK.template.md",
+      "destinationLogicalPath": "starter-kit/templates/PROJECT-KICKOFF-PACK.template.md",
+      "destinationSlugPath": "starter-kit/templates/project-kickoff-pack-template.md"
+    },
+    {
+      "sourcePath": "/Users/andrew/clawd/jarvos-starter-kit/workflows/basic-ci.yml",
+      "destinationLogicalPath": "starter-kit/workflows/basic-ci.yml",
+      "destinationSlugPath": "starter-kit/workflows/basic-ci.yml"
+    }
+  ],
+  "unresolvedLinksDropped": [
+    {
+      "kind": "wikilink-unresolved",
+      "source": "/Users/andrew/Documents/Vault v3/Notes/jarvOS — Architecture.md",
+      "link": "[[jarvOS - Architecture & Design]]"
+    },
+    {
+      "kind": "wikilink-unresolved",
+      "source": "/Users/andrew/Documents/Vault v3/Notes/jarvOS — Architecture.md",
+      "link": "[[jarvOS - Config Management Architecture]]"
+    },
+    {
+      "kind": "wikilink-unresolved",
+      "source": "/Users/andrew/Documents/Vault v3/Notes/jarvOS — Architecture.md",
+      "link": "[[jarvOS — Architecture Decision Records]]"
+    },
+    {
+      "kind": "wikilink-unresolved",
+      "source": "/Users/andrew/Documents/Vault v3/Notes/jarvOS — Architecture.md",
+      "link": "[[jarvOS - Architecture & Design]]"
+    },
+    {
+      "kind": "wikilink-unresolved",
+      "source": "/Users/andrew/Documents/Vault v3/Notes/jarvOS — Architecture.md",
+      "link": "[[jarvOS - Config Management Architecture]]"
+    },
+    {
+      "kind": "wikilink-unresolved",
+      "source": "/Users/andrew/clawd/jarvos/templates/AGENTS-template.md",
+      "link": "[[analyst-output]]"
+    },
+    {
+      "kind": "wikilink-unresolved",
+      "source": "/Users/andrew/clawd/jarvos/templates/AGENTS-template.md",
+      "link": "[[analyst-output]]"
+    },
+    {
+      "kind": "wikilink-unresolved",
+      "source": "/Users/andrew/clawd/jarvos/templates/AGENTS-template.md",
+      "link": "[[writer-output]]"
+    },
+    {
+      "kind": "wikilink-unresolved",
+      "source": "/Users/andrew/clawd/jarvos/templates/AGENTS-template.md",
+      "link": "[[pm-output]]"
+    },
+    {
+      "kind": "wikilink-unresolved",
+      "source": "/Users/andrew/clawd/jarvos/templates/AGENTS-template.md",
+      "link": "[[architect-output]]"
+    },
+    {
+      "kind": "wikilink-unresolved",
+      "source": "/Users/andrew/clawd/jarvos/templates/AGENTS-template.md",
+      "link": "[[developer-output]]"
+    },
+    {
+      "kind": "wikilink-unresolved",
+      "source": "/Users/andrew/clawd/jarvos/templates/AGENTS-template.md",
+      "link": "[[qa-output]]"
+    }
+  ]
+}

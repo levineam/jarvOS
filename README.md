@@ -10,7 +10,7 @@ This is the local public-repo working tree for jarvOS docs/templates.
 
 ## Structure
 
-- `docs/` — public architecture and ADR docs
+- `docs/` — public architecture and Architecture Decision Record docs
 - `templates/` — reusable jarvOS templates
 - `starter-kit/` — starter-kit assets safe for public share
 - `examples/` — implementation examples (placeholder)
