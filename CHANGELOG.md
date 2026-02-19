@@ -78,3 +78,9 @@ All notable public-doc sync changes are appended by `jarvos-public-docs-sync.sh`
 
 ## 2026-02-19 13:07 EST — docs sync
 - Updated: docs/meta/source-to-export-map.json
+
+## 2026-02-19 14:07 EST — docs sync
+- Updated: docs/architecture/architecture-decision-records/architecture-decision-record-20260219-ars-contexta-patterns.md
+- Updated: docs/meta/source-to-export-map.json
+- Updated: templates/AGENTS-template.md
+- Updated: templates/HEARTBEAT-template.md

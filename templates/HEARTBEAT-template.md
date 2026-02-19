@@ -66,6 +66,10 @@ When you receive a heartbeat poll, work through this checklist. **Do not skip st
 - If a task has been stalled for 7+ days, flag internally (surface during conversation, not heartbeat)
 - If a blocked item requires user input, queue it under `🧭 INPUT`
 
+### Recommend→Do + watchlist artifact capture (canonical reference)
+Apply the policy in `TOOLS.md` (`Recommend→Do + Watchlist capture policy`) as the source of truth.
+During heartbeat execution, perform the required watchlist artifacts in the same workflow (note + project-board task + journal link).
+
 ## 6.5 OKR-First Focus
 - Check active OKR dashboards first (per Portfolio)
 - Surface top Objectives/KRs + blockers before task‑level churn
@@ -83,9 +87,17 @@ Checks:
 - missing Portfolio/Program linkage
 - missing linked Project Brief
 - missing/out-of-range milestone or decision gates (must be 3-6)
+- missing canonical frontmatter on project artifacts (`status/type/project/created/updated/author`)
 - Incubator review/expiry due
 
 Queue drift items to `memory/briefing-queue.md` under `🧭 INPUT`.
+
+## 6.555 Cron Policy Enforcement (anti-congestion)
+
+Before creating or editing autonomous cron jobs, enforce `TOOLS.md` (`Cron Job Policy`) as the canonical source.
+Validate session targeting, wake mode, scheduling/density guardrails, delivery routing, and output/noise constraints per that policy.
+
+If a proposed cron change violates policy, queue a `🧭 INPUT` blocker instead of applying it silently.
 
 ## 6.56 Continuous Integration of Learning (CIL) loop
 
@@ -146,7 +158,8 @@ Guardrails:
 
 ## 6.7 Work-While-I-Sleep Maintenance Mode (20:00–05:00)
 
-- Window: 20:00–05:00 {{TIMEZONE}}
+- Canonical quiet-hours source: `TOOLS.md` (`Overnight autonomous mode`).
+- Window: 20:00–05:00 {{TIMEZONE}} (quiet outreach unless urgent).
 - From **23:00–05:00** (work-while-I-sleep window), continue autonomous maintenance/task execution silently.
 - **No motivational nudges** in this window (do not run 6.6 nudges).
 - No routine notifications in this window; notify only for genuinely urgent items.
@@ -283,8 +296,7 @@ When you find something noteworthy during a heartbeat:
 
 - **Never summarize heartbeat work to the user.** Only reply HEARTBEAT_OK or NO_REPLY, except for 6.6 decision‑only nudges.
 - **NO direct messaging** during heartbeats — except for 6.6 decision‑only nudges.
-- **Overnight Maintenance Mode** (20:00–23:00 {{TIMEZONE}}) — no motivational nudges; only notify for genuinely urgent items
-- **Quiet hours** (23:00–05:00 {{TIMEZONE}}) — no maintenance work, no nudges, and no notifications unless genuinely urgent. Reflection watchdog is exempt and may surface deduped decision signals.
+- Follow quiet-hours policy from `TOOLS.md`: outreach is quiet from **20:00–05:00** (urgent-only), and autonomous maintenance continues in the **23:00–05:00** work-while-I-sleep window. Reflection watchdog remains exempt and may surface deduped decision signals.
 - **Track your checks** in `memory/heartbeat-state.json` to avoid redundant work
 - **Be efficient** — heartbeats should be quick. If a task needs deep work, note it and handle in a full session
 
@@ -297,8 +309,7 @@ When you find something noteworthy during a heartbeat:
 
 ## When to Stay Quiet (HEARTBEAT_OK)
 
-- Overnight Maintenance Mode hours (20:00–23:00) (unless urgent; reflection watchdog can still run/surface deduped items)
-- Quiet hours (23:00–05:00) (unless urgent; reflection watchdog can still run/surface deduped items)
+- During TOOLS.md quiet-hours (20:00–05:00), keep outreach silent unless urgent; continue autonomous work silently during 23:00–05:00
 - Nothing new since last check
 - All tasks on track, no blockers
 - Last check was <15 minutes ago (scans can run every 15m; nudges only if ≥60m since last nudge).

@@ -486,98 +486,22 @@ When work spans **multiple sessions** or has **3+ tasks**, create a Project Boar
 
 **Location:** `{{VAULT_PATH}}/Notes/[Project Name] - Project Board.md`
 
-**Board format:**
-```markdown
-# [Project Name] - Project Board
+**Template + governance source of truth:** Use `TOOLS.md` as canonical for all project artifact policy:
+- `Feature work tracking gate (default)` for governance requirements (Portfolio/Program linkage, Board+Brief pair, milestones/gates, hotfix backfill)
+- `Frontmatter Standard (Canonical)` for required metadata on project artifacts (`status/type/project/created/updated/author`)
 
-**Direction:** What we're building and why
-**Appetite:** How much time/effort this deserves
-
-## Backlog
-- [ ] Task description
-- [ ] Task description
-
-## In Progress
-- [ ] Task currently being worked on
-
-## Done
-- [x] Completed task
-
-## Log
-- **YYYY-MM-DD:** What happened, decisions made, progress notes
-```
-
-**Rules:**
+**Operational rules here (non-duplicative):**
 - Link project boards in the journal when created
 - Update boards during heartbeats and when work progresses
 - Keep it lightweight — boards are coordination tools, not bureaucracy
 - Each task should be a concrete next action (action verb + specific outcome)
 
-### 📐 Project Governance Policy v1 (Default)
+## 💓 Sub-Agent Spawning
 
-When creating or updating projects, use these defaults:
-- Every project must be linked to both a **Portfolio** and a **Program**.
-- If no program fits yet, set `Program: Incubator` and include:
-  - a plain-language reason, and
-  - a review/expiry date.
-- Keep a required document pair for every active project:
-  - `... - Project Board.md`
-  - `... - Project Brief.md` (lightweight one-pager)
-- Define **3-6 milestones/decision gates** per project.
-- Run **weekly project review** + **monthly portfolio review** cadence.
-- Hotfixes can start fast, but governance backfill (links/docs/gates) is required in the same session.
-- Automation loops enforce this policy:
-  - autonomous work preflight checks board/brief/gate context before execution
-  - governance drift scans queue blockers for heartbeat/overnight review + briefings
+Main-chat tool-use/spawn behavior is canonical in `TOOLS.md` (`Main chat tool-use policy (HARD)`).
+Use that section as source of truth for spawn thresholds, pre-spawn ritual, and degraded-mode handling.
 
-### 🚀 Project Initialization Contract (Automatic)
-
-When a new project is created, do this immediately (same turn whenever possible):
-
-1. **Create project board** in `{{VAULT_PATH}}/Notes/[Project Name] - Project Board.md`
-2. **Create the required companion brief** in `{{VAULT_PATH}}/Notes/[Project Name] - Project Brief.md` (plus any optional spec/story artifacts)
-3. **Add an active task block** to `{{VAULT_PATH}}/Tasks.md` with concrete next actions
-4. **Link all new project notes** in today’s journal (`{{VAULT_PATH}}/Journal/YYYY-MM-DD.md`)
-5. **Log the initialization** in `memory/YYYY-MM-DD.md`
-
-### Required user-facing confirmation
-After initialization, explicitly report all five:
-- `✅ Project board created`
-- `✅ Project brief created`
-- `✅ Tasks created`
-- `✅ Journal linked`
-- `✅ Memory logged`
-
-If any step is missing, pause and complete it before continuing normal project work.
-
-## 💓 Sub-Agent Spawning (AGGRESSIVE)
-
-**Core principle:** Main session stays conversational. Sub-agents do the work.
-
-**Model mirroring (default):** When spawning sub-agents, mirror the active main-chat model unless the user explicitly requests an override (e.g., "spawn with opus").
-
-**When to spawn (err on the side of spawning):**
-- Web research / validation
-- Multi-source lookups or comparisons  
-- Long document creation or deep analysis
-- Any task where {{USER_NAME}}'s follow-up messages might derail progress
-- Debugging/troubleshooting that requires reading docs, testing configs
-- Config changes that need verification and iteration
-- ANY file editing + testing cycle
-- Git operations (commit, push, PR, fork — always spawn)
-- Investigating issues that require reading multiple files
-- Updating documents that require reading existing content first
-
-**When to stay inline (ONLY these):**
-- Model switches
-- Sending messages
-- Logging a quick idea (< 3 tool calls)
-- Single-file reads or edits with no research needed
-- Anything that's literally one tool call
-
-**Recognition heuristic:** If the task needs **2+ tool calls**, strongly consider spawning. If you find yourself making more than 2 tool calls without a response to {{USER_NAME}}, you MUST spawn a sub-agent immediately.
-
-**Always notify {{USER_NAME}}** when spawning a sub-agent.
+This section only adds project-specific sub-agent logging requirements.
 
 ### 📋 Mandatory Activity Logging
 
@@ -631,7 +555,7 @@ When you receive a heartbeat poll, don't just reply `HEARTBEAT_OK` every time. U
 - It's been >8h since you said anything
 
 **When to stay quiet (HEARTBEAT_OK):**
-- Late night (23:00-08:00 {{TIMEZONE}}) unless urgent
+- Follow quiet-hours policy from `TOOLS.md`: outreach stays quiet during **20:00–05:00 {{TIMEZONE}}** (urgent-only), while autonomous maintenance can continue during **23:00–05:00**.
 - Human is clearly busy
 - Nothing new since last check
 - You just checked <30 minutes ago

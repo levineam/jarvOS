@@ -1,6 +1,6 @@
 ---
 architecture_decision_record: architecture-decision-record-20260219-ars-contexta-patterns
-status: accepted
+status: active
 date: 2026-02-19
 system: jarvOS
 type: decision
