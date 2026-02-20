@@ -1,10 +1,18 @@
 # jarvOS
 
-**OpenClaw is the engine. jarvOS is the car you can actually drive.**
+**jarvOS is a set of tools that sit on top of OpenClaw which make it into a reliable, secure, and powerful personal assistant.**
 
 ---
 
-jarvOS is a set of markdown files, templates, and patterns that give your AI assistant a real operating system. Drop them into your OpenClaw workspace and your assistant gets three things it doesn't have by default: a project management system with actual governance, a personal ontology that connects all your work to goals and meaning, and a continuous execution engine that works without you.
+jarvOS has 3 main components:
+1. Project Management System
+2. Governance
+3. Ontology
+4. Continuous Learning and Execution
+5. Security
+
+
+JarvOS is a set of markdown files, templates, and patterns that give your AI assistant a real operating system. Drop them into your OpenClaw workspace and your assistant gets three things it doesn't have by default: a project management system with actual governance, a personal ontology that connects all your work to goals and meaning, and a continuous execution engine that works without you.
 
 It was built on top of [OpenClaw](https://openclaw.ai), which ships with a capable AI assistant, tool access, scheduling, and delivery channels. jarvOS is the layer that tells it what to actually do with all that.
 
@@ -14,19 +22,17 @@ Most AI assistants are reactive. You ask, they answer. Close the chat, and they 
 
 jarvOS changes the default. Instead of an assistant that waits, you get one that tracks projects across sessions, routes decisions to you instead of dropping them, runs work autonomously while you sleep, and connects everything you're building to why you're building it.
 
-## The three systems
-
-**Project Management System (PMS)** is structured project tracking your assistant can read and write without you. Projects live in a hierarchy: Portfolios contain Programs, Programs contain Project Boards, Boards drive Tasks. Every active project has two companion documents — a Project Brief with scope and goals, and a Live Plan with four locked sections: Decisions Confirmed, Execution Phases, Autonomous Now, and Needs Andrew.
+1. **Project Management System (PMS)** is structured project tracking your assistant can read and write without you. Projects live in a hierarchy: Portfolios contain Programs, Programs contain Project Boards, Boards drive Tasks. Every active project has two companion documents — a Project Brief with scope and goals, and a Live Plan with four locked sections: Decisions Confirmed, Execution Phases, Autonomous Now, and Needs Andrew.
 
 That division is the point. Your assistant works from Autonomous Now without being asked, routes blockers through Needs Andrew, and doesn't confuse the two.
 
-A governance layer runs underneath: compliance scanning, frontmatter standards, milestone gates, OKR integration. When a project drifts from its goals, the system flags it. Decisions queue with an escalation ladder — context, options, recommended path, and what happens automatically if you don't respond. The assistant handles the follow-up.
+2. **Governance**. A governance layer runs underneath: compliance scanning, frontmatter standards, milestone gates, OKR integration. When a project drifts from its goals, the system flags it. Decisions queue with an escalation ladder — context, options, recommended path, and what happens automatically if you don't respond. The assistant handles the follow-up.
 
-**ONTOLOGY.md** is the why layer. It's a single document that maps your belief system from the ground up: Higher Order purpose, Beliefs, Predictions, Core Self (Mission, Values, Strengths), Goals, then Portfolios and Projects at the bottom. Everything routes through it. A new project should trace back to a Goal. A Goal should trace back to your Mission. When reflection sessions surface new insights — a belief shift, a prediction proved wrong, a goal that no longer fits — those route into ONTOLOGY.md instead of getting lost in chat.
+3. **ONTOLOGY.md** is the why layer. It's a single document that maps your belief system from the ground up: Higher Order purpose, Beliefs, Predictions, Core Self (Mission, Values, Strengths), Goals, then Portfolios and Projects at the bottom. Everything routes through it. A new project should trace back to a Goal. A Goal should trace back to your Mission. When reflection sessions surface new insights — a belief shift, a prediction proved wrong, a goal that no longer fits — those route into ONTOLOGY.md instead of getting lost in chat.
 
 The practical output: orphan detection flags work that isn't connected to any stated Goal. Weekly health checks surface when your active projects have drifted from what you said matters. Prioritization has an actual basis.
 
-**Continuous Learning and Execution (CLE)** is the autonomous work loop. On a schedule, your assistant picks up unblocked tasks from active project boards, executes them, and writes proof-of-work so you know what happened. After each session, a structured reflection pass extracts what was learned to memory, routes understanding shifts to ONTOLOGY.md, and queues open questions in the briefing system.
+4. **Continuous Learning and Execution (CLE)** is the autonomous work loop. On a schedule, your assistant picks up unblocked tasks from active project boards, executes them, and writes proof-of-work so you know what happened. After each session, a structured reflection pass extracts what was learned to memory, routes understanding shifts to ONTOLOGY.md, and queues open questions in the briefing system.
 
 Briefings tie it together — morning, creative, evening, wind-down. Each one pulls the relevant slice of what's happening and what needs you, formatted for quick reading. Overnight maintenance mode handles lower-priority work while you sleep. Capture-first means ideas get saved before they get discussed, so nothing falls through when a conversation moves on.
 
