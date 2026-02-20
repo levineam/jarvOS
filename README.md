@@ -22,9 +22,7 @@ jarvOS changes the default. Instead of an assistant that waits, you get one that
 
 ## The five systems
 
-1. **Project Management System (PMS)** is structured project tracking your assistant can read and write without you. Projects live in a hierarchy: Portfolios contain Programs, Programs contain Project Boards, Boards drive Tasks. Every active project has two companion documents — a Project Brief with scope and goals, and a Live Plan with four locked sections: Decisions Confirmed, Execution Phases, Autonomous Now, and Needs Andrew.
-
-That division is the point. Your assistant works from Autonomous Now without being asked, routes blockers through Needs Andrew, and doesn't confuse the two.
+1. **Project Management System (PMS)** is structured project tracking your assistant can read and write without you. Projects live in a hierarchy: Portfolios contain Programs, Programs contain Project Boards, Boards drive Tasks. Every active project has two companion documents — a Project Brief with scope and goals, and a Live Plan with four locked sections: Decisions Confirmed, Execution Phases, Autonomous Now, and Needs you. That division is the point. Your assistant works from Autonomous Now without being asked, routes blockers through Needs Andrew, and doesn't confuse the two.
 
 2. **Governance**. A governance layer runs underneath: compliance scanning, frontmatter standards, milestone gates, OKR integration. When a project drifts from its goals, the system flags it. Decisions queue with an escalation ladder — context, options, recommended path, and what happens automatically if you don't respond. The assistant handles the follow-up.
 
