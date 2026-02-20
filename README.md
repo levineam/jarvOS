@@ -6,7 +6,9 @@
 
 jarvOS is a set of markdown files, templates, and patterns that give your AI assistant a real operating system. Workspace rules, proactive behaviors, project governance, memory across sessions — drop these files into your working directory and your assistant starts behaving like it actually knows what it's doing.
 
-It was built on top of [OpenClaw](https://openclaw.ai), but the patterns are general enough to work with any AI assistant that can read files and follow instructions.
+It was built on top of [OpenClaw](https://openclaw.ai), which ships with a capable AI assistant, tool access, scheduling, and delivery channels. What it doesn't ship with is the layer that tells your assistant what to do with all that — when to check your email, how to track your projects, where to put what it learns, and what to work on while you sleep. jarvOS is that layer.
+
+The patterns are general enough to work with any AI assistant that can read files and follow instructions.
 
 ## The problem
 
@@ -54,13 +56,21 @@ On a schedule during working hours (default every 45 minutes), your assistant pi
 
 Morning and evening briefings pull everything together — what came in, what's moving, what needs your input — formatted for quick reading.
 
-## How it works with OpenClaw
+## OpenClaw vs jarvOS
 
-Three layers:
+OpenClaw ships with the foundation: session management, cron scheduling, tool access, channel delivery (Telegram, etc.), and a set of baseline templates. A minimal `AGENTS.md`. Basic personality files. A first-run `BOOTSTRAP.md`. The heartbeat scheduler exists. The infrastructure works.
 
-OpenClaw handles tools, scheduling, model access, and delivery channels (Telegram, etc.). jarvOS sits on top and defines how that runtime behaves — the workspace rules, proactive patterns, governance model, and memory lifecycle. Your instance is the third layer: your persona, your schedule, your integrations.
+What isn't there: the behaviors.
 
-You own the third layer completely. This repo gives you the second. OpenClaw provides the first.
+OpenClaw gives you a capable AI assistant with access to tools. It doesn't tell that assistant what to check proactively, how to track your projects, where to store what it learns, or what to work on at 2am while you sleep. jarvOS is the layer that defines all of that.
+
+The `AGENTS.md` in this repo replaces the minimal template with invisible orchestration — specialist mode detection that routes work to the right approach without exposing the machinery, auto model tiering that picks the right model silently, a full writer pipeline, red team checkpoints for development work, and a capture-first protocol so decisions don't fall through the cracks.
+
+`HEARTBEAT.md` is a 12-section playbook: email scan, calendar review, task health, governance drift, post-session reflection, security checks, escalation routing, and an overnight work loop. OpenClaw provides the scheduler. jarvOS provides what runs on it.
+
+The rest of what this repo adds doesn't exist at all in a base OpenClaw setup. There's a memory architecture: daily session files, long-term `MEMORY.md`, `heartbeat-state.json` for check-in tracking, and a briefing queue for decisions that need your attention. There's a project management system with portfolios, programs, boards, briefs, live plans, and OKR integration — each active project has a board and a brief your assistant keeps current. There's a governance layer with compliance scanning, frontmatter standards, and blocker routing. And there are scripts that tie it together: `governance-scan.js`, lint tools, a summarize wrapper that turns URLs into vault notes with journal links.
+
+Your instance is the third layer: your persona, your schedule, your integrations. This repo gives you the second. OpenClaw provides the first.
 
 If you're using a different AI runtime — Claude Code, Cursor, something else — the markdown files still work. You lose the cron scheduling and channel delivery unless you wire those up yourself, but the operating patterns translate.
 
