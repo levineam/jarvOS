@@ -4,15 +4,13 @@
 
 ---
 
-jarvOS has 3 main components:
+jarvOS has 5 main components:
 1. Project Management System
 2. Governance
 3. Ontology
 4. Continuous Learning and Execution
 5. Security
 
-
-JarvOS is a set of markdown files, templates, and patterns that give your AI assistant a real operating system. Drop them into your OpenClaw workspace and your assistant gets three things it doesn't have by default: a project management system with actual governance, a personal ontology that connects all your work to goals and meaning, and a continuous execution engine that works without you.
 
 It was built on top of [OpenClaw](https://openclaw.ai), which ships with a capable AI assistant, tool access, scheduling, and delivery channels. jarvOS is the layer that tells it what to actually do with all that.
 
@@ -21,6 +19,8 @@ It was built on top of [OpenClaw](https://openclaw.ai), which ships with a capab
 Most AI assistants are reactive. You ask, they answer. Close the chat, and they forget everything — ready to start from scratch next time.
 
 jarvOS changes the default. Instead of an assistant that waits, you get one that tracks projects across sessions, routes decisions to you instead of dropping them, runs work autonomously while you sleep, and connects everything you're building to why you're building it.
+
+## The five systems
 
 1. **Project Management System (PMS)** is structured project tracking your assistant can read and write without you. Projects live in a hierarchy: Portfolios contain Programs, Programs contain Project Boards, Boards drive Tasks. Every active project has two companion documents — a Project Brief with scope and goals, and a Live Plan with four locked sections: Decisions Confirmed, Execution Phases, Autonomous Now, and Needs Andrew.
 
@@ -35,6 +35,10 @@ The practical output: orphan detection flags work that isn't connected to any st
 4. **Continuous Learning and Execution (CLE)** is the autonomous work loop. On a schedule, your assistant picks up unblocked tasks from active project boards, executes them, and writes proof-of-work so you know what happened. After each session, a structured reflection pass extracts what was learned to memory, routes understanding shifts to ONTOLOGY.md, and queues open questions in the briefing system.
 
 Briefings tie it together — morning, creative, evening, wind-down. Each one pulls the relevant slice of what's happening and what needs you, formatted for quick reading. Overnight maintenance mode handles lower-priority work while you sleep. Capture-first means ideas get saved before they get discussed, so nothing falls through when a conversation moves on.
+
+5. **Security** is automated daily scanning and incident response. Every morning a cron job checks the installed OpenClaw version against the latest release, scans security advisories and CVE databases for relevant vulnerabilities, and evaluates each finding by credibility, relevance, and severity. Results feed into a security intelligence document in the vault and surface through the briefing system — critical findings get urgent alerts, routine checks get logged quietly.
+
+The system also tracks version drift on customer and partner instances (flagging when someone is running behind on security patches), runs credential exposure detection during heartbeat scans, and maintains an active threats tracker. The credential detection has caught real things — it triggered rotation of leaked database and OAuth credentials in production. When something goes wrong, the incident response isn't theoretical. It's been used.
 
 ## OpenClaw is the prerequisite
 
