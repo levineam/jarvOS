@@ -74,6 +74,6 @@ When something doesn't fit your setup, the docs explain the reasoning behind it.
 
 ## Follow along
 
-Andrew shares how he uses and develops jarvOS on X: [@levineam](https://x.com/levineam).
+Andrew shares how he uses and develops jarvOS on X: [@andrarchy](https://x.com/andrarchy).
 
 If you build something on top of this, open an issue or find him there.
