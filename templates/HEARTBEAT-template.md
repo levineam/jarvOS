@@ -137,6 +137,9 @@ Guardrails:
 - If last user interaction <10 minutes, stay quiet (HEARTBEAT_OK)
 - Scan top goals/OKR dashboards + active work
 - Act first: immediately spawn subagents for any work you can do without user input
+  - Every `sessions_spawn` call must include explicit `model`
+  - Planning/orchestration or unknown scope → `openai-codex/gpt-5.3-codex`
+  - Narrow execution chunks (1–3 files, clear acceptance criteria) → `openai-codex/gpt-5.3-codex-spark`
 - Only message {{USER_NAME}} if blocked by a decision or human‑only step
 - If no decision needed, stay silent
 - Enforce cooldown: at most one nudge per 60 minutes (track in memory/heartbeat-state.json)
@@ -178,6 +181,9 @@ Guardrails:
   - Consolidate/merge/clean up task lists (remove duplicates, clarify next actions, archive dead ends). **Execute consolidation directly — do NOT queue consolidation work as questions or decision items for {{USER_NAME}}. Only escalate to the briefing queue if genuine ambiguity exists that requires human judgment.**
   - Progress any tasks that can be done autonomously without {{USER_NAME}} (drafts, research, code scaffolds, organizing)
   - Spawn subagents for work that doesn’t need {{USER_NAME}}’s input
+    - Every `sessions_spawn` call must include explicit `model`
+    - Planning/orchestration or unknown scope → `openai-codex/gpt-5.3-codex`
+    - Narrow execution chunks (1–3 files, clear acceptance criteria) → `openai-codex/gpt-5.3-codex-spark`
   - Run governance drift scan in overnight mode:
     ```bash
     node scripts/governance-scan.js --mode=overnight
