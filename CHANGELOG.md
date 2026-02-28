@@ -2,29 +2,6 @@
 
 All notable public-doc sync changes are appended by `jarvos-public-docs-sync.sh`.
 
-## 2026-02-28 — feat: major update — new templates, patterns, and optional modules
-
-### Phase 1: Updated existing templates
-- `templates/agents-template.md` — Replaced "Live Plan" → "Plan" throughout; replaced CE-PROCESS refs with "AGENTS.md § Process"; added Process section (wire first, report, never ask permission); added Do-First rule (HARD); added optional Lobster workflow gates section; added optional context engineering auto-triggers section; bumped to v2.0.0
-- `templates/heartbeat-template.md` — Added §6.8 Uncommitted Work Check; added §10 Escalation Ladder format; added §11 Autonomy Levels Policy; updated §6.7 to clarify autonomous work continues 24/7 (quiet hours only affect notifications/nudges); added §7.5 Disk Space Check; added §0 Fast Awareness Gate; fixed section numbering throughout; bumped to v2.0.0
-
-### Phase 2: Added missing templates
-- `templates/soul-template.md` — Generic persona template with customization guidance
-- `templates/identity-template.md` — Name, creature, emoji, example table
-- `templates/tools-template.md` — Slim operational policy template (<2K chars) with sections for spawn policy, model routing, quiet hours, approved acronyms
-- `templates/ontology-template.md` — Full Higher Order → Beliefs → Predictions → Core Self → Goals → Portfolios structure with usage notes
-
-### Phase 3: Added new patterns
-- `starter-kit/workflows/write-prose.lobster` — Generic humanizer gate; checks 15 AI writing pattern categories; requires score ≥85 and human approval before saving/sending
-- `starter-kit/workflows/spawn-code-subagent.lobster` — Generic code quality gate; enforces branch-first, PR-required, test-pass, and review-before-merge discipline
-- `docs/optional/jsonl-memory.md` — JSONL memory schema docs (experiences, decisions, failures); clearly marked OPTIONAL with "when to adopt" guidance; includes append discipline, search patterns, and integration notes
-- `docs/optional/context-engineering.md` — How to install and configure the ClawHub context engineering skill pack; when to install guidance; auto-trigger setup; key concepts from Koylan framework
-
-### Phase 4: Cleanup
-- `README.md` — Reflected all new components; updated template table; added optional modules section; replaced "Live Plan" with "Plan"
-- `CHANGELOG.md` — Added this entry
-- `starter-kit/readme.md` — Updated to reflect new workflows directory and optional modules
-
 ## 2026-02-19 08:38 EST — docs sync
 - Updated: docs/architecture/architecture-decision-records/architecture-decision-record-20260219-ars-contexta-patterns.md
 - Updated: docs/architecture/jarvos-architecture.md

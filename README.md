@@ -22,9 +22,9 @@ jarvOS changes the default. Instead of an assistant that waits, you get one that
 
 ## The five systems
 
-1. **Project Management System (PMS)** is structured project tracking your assistant can read and write without you. Projects live in a hierarchy: Portfolios contain Programs, Programs contain Project Boards, Boards drive Tasks. Every active project has two companion documents — a Project Brief with scope and goals, and a Plan with four locked sections: Decisions Confirmed, Execution Phases, Autonomous Now, and Needs You.
+1. **Project Management System (PMS)** is structured project tracking your assistant can read and write without you. Projects live in a hierarchy: Portfolios contain Programs, Programs contain Project Boards, Boards drive Tasks. Every active project has two companion documents — a Project Brief with scope and goals, and a Live Plan with four locked sections: Decisions Confirmed, Execution Phases, Autonomous Now, and Needs Andrew.
 
-That division is the point. Your assistant works from Autonomous Now without being asked, routes blockers through Needs You, and doesn't confuse the two.
+That division is the point. Your assistant works from Autonomous Now without being asked, routes blockers through Needs Andrew, and doesn't confuse the two.
 
 2. **Governance**. A governance layer runs underneath: compliance scanning, frontmatter standards, milestone gates, OKR integration. When a project drifts from its goals, the system flags it. Decisions queue with an escalation ladder — context, options, recommended path, and what happens automatically if you don't respond. The assistant handles the follow-up.
 
@@ -34,15 +34,17 @@ The practical output: orphan detection flags work that isn't connected to any st
 
 4. **Continuous Learning and Execution (CLE)** is the autonomous work loop. On a schedule, your assistant picks up unblocked tasks from active project boards, executes them, and writes proof-of-work so you know what happened. After each session, a structured reflection pass extracts what was learned to memory, routes understanding shifts to ONTOLOGY.md, and queues open questions in the briefing system.
 
-Briefings tie it together — morning, evening. Each one pulls the relevant slice of what's happening and what needs you, formatted for quick reading. Overnight maintenance mode handles lower-priority work while you sleep.
+Briefings tie it together — morning, creative, evening, wind-down. Each one pulls the relevant slice of what's happening and what needs you, formatted for quick reading. Overnight maintenance mode handles lower-priority work while you sleep. Capture-first means ideas get saved before they get discussed, so nothing falls through when a conversation moves on.
 
-5. **Security** is automated daily scanning and incident response. Every morning a cron job checks the installed OpenClaw version against the latest release and surfaces findings through the briefing system — critical findings get urgent alerts, routine checks get logged quietly.
+5. **Security** is automated daily scanning and incident response. Every morning a cron job checks the installed OpenClaw version against the latest release, scans security advisories and CVE databases for relevant vulnerabilities, and evaluates each finding by credibility, relevance, and severity. Results feed into a security intelligence document in the vault and surface through the briefing system — critical findings get urgent alerts, routine checks get logged quietly.
+
+The system also tracks version drift on customer and partner instances (flagging when someone is running behind on security patches), runs credential exposure detection during heartbeat scans, and maintains an active threats tracker. The credential detection has caught real things — it triggered rotation of leaked database and OAuth credentials in production. When something goes wrong, the incident response isn't theoretical. It's been used.
 
 ## OpenClaw is the prerequisite
 
 OpenClaw provides the foundation: session management, cron scheduling, tool access, channel delivery, and a set of baseline workspace files. jarvOS runs on top of it. The governance layer, the briefing system, the project hierarchy — none of it replaces OpenClaw's infrastructure; it runs on it.
 
-What this repo adds on the behavior side: an enhanced AGENTS.md with invisible orchestration, specialist mode detection, auto model tiering, a full writer pipeline, a Process section that enforces rule-wiring discipline, and red team checkpoints for development work. An enhanced HEARTBEAT.md that's a proactive 11-section playbook — what actually runs on OpenClaw's scheduler. A memory architecture that adds daily session files, heartbeat-state.json for check-in tracking, and a briefing queue for decisions that need your attention. Scripts that handle governance scanning, frontmatter linting, and maintenance work.
+What this repo adds on the behavior side: an enhanced AGENTS.md with invisible orchestration, specialist mode detection, auto model tiering, a full writer pipeline, and red team checkpoints for development work. An enhanced HEARTBEAT.md that's a 12-section proactive playbook — what actually runs on OpenClaw's scheduler. A memory architecture that adds daily session files, heartbeat-state.json for check-in tracking, and a briefing queue for decisions that need your attention. Scripts that handle governance scanning, frontmatter linting, and maintenance work.
 
 Your instance is the third layer: your persona, your schedule, your integrations. This repo gives you the second. OpenClaw provides the first.
 
@@ -50,35 +52,7 @@ Your instance is the third layer: your persona, your schedule, your integrations
 
 Clone the repo. Copy the files from `templates/` into your OpenClaw workspace. Tell your assistant to read `BOOTSTRAP.md` and follow its instructions — it handles setup and explains the system in its own terms.
 
-From there: set up your ONTOLOGY.md (start with Mission and a few Goals), create your first project with a Board and Brief, and let the Plan drive what gets worked on. The whole system is readable by both humans and AI, so when something doesn't work the way you expect, reading the relevant file usually tells you why.
-
-## What's in the templates folder
-
-| File | Purpose |
-|------|---------|
-| `agents-template.md` | Core behavior — copy to `AGENTS.md` in your workspace |
-| `heartbeat-template.md` | Proactive check-in — copy to `HEARTBEAT.md` in your workspace |
-| `soul-template.md` | Persona definition — copy to `SOUL.md` in your workspace |
-| `identity-template.md` | Name, creature, emoji — copy to `IDENTITY.md` in your workspace |
-| `tools-template.md` | Operational policy — copy to `TOOLS.md` in your workspace |
-| `ontology-template.md` | Personal alignment map — copy to `ONTOLOGY.md` in your workspace |
-| `bootstrap-template.md` | First-run instructions — copy to `BOOTSTRAP.md`, delete after setup |
-
-## What's in the starter-kit folder
-
-The `starter-kit/` folder has project management templates and Lobster workflow gates:
-
-- `templates/` — OKR Task Board + Project Kickoff Pack
-- `workflows/` — Lobster gate examples (`write-prose.lobster`, `spawn-code-subagent.lobster`)
-
-## Optional modules
-
-For advanced setups, see `docs/optional/`:
-
-- `jsonl-memory.md` — Structured JSONL memory schema (experiences, decisions, failures). Useful when markdown memory starts to break down at scale.
-- `context-engineering.md` — How to install and configure the ClawHub context engineering skill pack. Useful for multi-agent work and token optimization.
-
-Start without these. Add them when you hit the specific pain points they solve.
+From there: set up your ONTOLOGY.md (start with Mission and a few Goals), create your first project with a Board and Brief, and let the Live Plan drive what gets worked on. The whole system is readable by both humans and AI, so when something doesn't work the way you expect, reading the relevant file usually tells you why.
 
 ## Philosophy
 
@@ -90,6 +64,6 @@ The design principle throughout: if a behavior can run without pulling you in, i
 
 ## Follow along
 
-The creator shares how he uses and develops jarvOS on X: [@andrarchy](https://x.com/andrarchy).
+Andrew shares how he uses and develops jarvOS on X: [@andrarchy](https://x.com/andrarchy).
 
 If you build something on top of this, open an issue or find him there.
