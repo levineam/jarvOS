@@ -40,14 +40,14 @@ Or manually clone into your skills directory:
 
 ```bash
 git clone https://github.com/muratcankoylan/Agent-Skills-for-Context-Engineering \
-  ~/.openclaw/skills/context-engineering
+  "$(npm root -g)/openclaw/skills/agent-skills-context-engineering"
 ```
 
 ---
 
 ## Available Sub-Skills
 
-The pack includes 13 sub-skills. You don't need all of them — start with the ones that match your actual pain points.
+The pack includes 13 sub-skills; common starters are listed below. You don't need all of them — start with the ones that match your actual pain points.
 
 | Sub-Skill | When to Use |
 |-----------|-------------|
@@ -113,7 +113,7 @@ When spawning multiple subagents for parallel work, the `multi-agent-patterns` s
 ```bash
 # Load the sub-skill before spawning
 # (The auto-trigger in AGENTS.md will handle this automatically)
-cat ~/.openclaw/skills/agent-skills-context-engineering/skills/multi-agent-patterns/SKILL.md
+cat "$(npm root -g)/openclaw/skills/agent-skills-context-engineering/skills/multi-agent-patterns/SKILL.md"
 ```
 
 ---

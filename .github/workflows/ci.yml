@@ -28,14 +28,17 @@ jobs:
       - name: Lint markdown files
         run: |
           # Lint all .md files; ignore node_modules and .github internals
-          markdownlint '**/*.md' \
-            --ignore 'node_modules/**' \
-            --ignore '.github/**' \
-            --config .markdownlint.json 2>/dev/null \
-            || markdownlint '**/*.md' \
-                 --ignore 'node_modules/**' \
-                 --ignore '.github/**' \
-                 --disable MD013 MD033 MD041 --
+          if [[ -f .markdownlint.json ]]; then
+            markdownlint '**/*.md' \
+              --ignore 'node_modules/**' \
+              --ignore '.github/**' \
+              --config .markdownlint.json
+          else
+            markdownlint '**/*.md' \
+              --ignore 'node_modules/**' \
+              --ignore '.github/**' \
+              --disable MD013 MD033 MD041
+          fi
 
   link-check:
     name: Link check
@@ -44,7 +47,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Check markdown links
-        uses: gaurav-nelson/github-action-markdown-link-check@v1
+        uses: gaurav-nelson/github-action-markdown-link-check@5c5dfc0ac2e225883c0e5f03a85311ec2830d368  # v1
         with:
           use-quiet-mode: 'yes'
           use-verbose-mode: 'no'

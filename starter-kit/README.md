@@ -54,5 +54,5 @@ Gates are optional but strongly recommended for:
 
 ## See Also
 
-- `docs/optional/jsonl-memory.md` — Structured memory schema (adopt at scale)
-- `docs/optional/context-engineering.md` — Context engineering skill pack (adopt for multi-agent work)
+- `../docs/optional/jsonl-memory.md` — Structured memory schema (adopt at scale)
+- `../docs/optional/context-engineering.md` — Context engineering skill pack (adopt for multi-agent work)

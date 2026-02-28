@@ -29,6 +29,10 @@ inputs:
     type: boolean
     description: Whether tests must pass before PR creation
     default: true
+  test_command:
+    type: string
+    description: "Command to run tests (default: npm test)"
+    default: "npm test"
 
 # ─── STEPS ─────────────────────────────────────────────────────────────────────
 
@@ -56,7 +60,12 @@ steps:
         echo "{{inputs.branch}}"
       else
         # Slugify the task: lowercase, replace spaces/special chars with hyphens, truncate
-        echo "{{inputs.task}}" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/-/g' | sed 's/--*/-/g' | cut -c1-50 | sed 's/-$//'
+        SLUG=$(printf '%s' "{{inputs.task}}" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/-/g' | sed 's/--*/-/g' | cut -c1-50 | sed 's/-*$//' | sed 's/^-*//')
+        # If slug is empty after sanitization, use a safe default
+        if [ -z "$SLUG" ]; then
+          SLUG="untitled-task"
+        fi
+        echo "$SLUG"
       fi
     output: branch_name
 
@@ -86,7 +95,7 @@ steps:
       {{#if inputs.tests_required}}
       4. **Run tests before creating PR:**
          ```bash
-         npm test  # or equivalent for this repo
+         {{inputs.test_command}}
          ```
          If tests fail, fix them before proceeding. Do not create a PR with failing tests.
       {{/if}}
@@ -130,13 +139,18 @@ steps:
     script: |
       DATE=$(date +%Y-%m-%d)
       TIME=$(date +%H:%M)
-      MEMORY_DIR="${WORKSPACE_PATH:-$HOME/clawd}/memory"
+      # Resolve workspace path; create $HOME/clawd if neither is set nor exists
+      WS_PATH="${WORKSPACE_PATH:-$HOME/clawd}"
+      mkdir -p "$WS_PATH"
+      MEMORY_DIR="$WS_PATH/memory"
       mkdir -p "$MEMORY_DIR"
-      echo "" >> "$MEMORY_DIR/$DATE.md"
-      echo "## [$TIME] Code subagent spawned" >> "$MEMORY_DIR/$DATE.md"
-      echo "- Task: {{inputs.task}}" >> "$MEMORY_DIR/$DATE.md"
-      echo "- Branch: {{steps.generate_branch_name.branch_name}}" >> "$MEMORY_DIR/$DATE.md"
-      echo "- Model: {{inputs.model}}" >> "$MEMORY_DIR/$DATE.md"
+      # Escape task for markdown safety: collapse newlines, escape backticks
+      TASK_SAFE=$(printf '%s' "{{inputs.task}}" | tr '\n' ' ' | sed 's/`/\\`/g')
+      printf '\n' >> "$MEMORY_DIR/$DATE.md"
+      printf '## [%s] Code subagent spawned\n' "$TIME" >> "$MEMORY_DIR/$DATE.md"
+      printf '- Task: %s\n' "$TASK_SAFE" >> "$MEMORY_DIR/$DATE.md"
+      printf '- Branch: %s\n' "{{steps.generate_branch_name.branch_name}}" >> "$MEMORY_DIR/$DATE.md"
+      printf '- Model: %s\n' "{{inputs.model}}" >> "$MEMORY_DIR/$DATE.md"
       echo "Logged spawn to memory"
 
   - id: spawn_agent

@@ -8,7 +8,7 @@ This file is the **source of truth for operational policy** in your workspace. A
 
 - **Fail-closed gate:** if fulfilling a main-chat request requires any tool call, announce + spawn a subagent.
 - **Pre-spawn ritual:**
-  ```
+  ```text
   Spawning a subagent
   Why: <one-line reason>
   You'll get: <one-line deliverable>

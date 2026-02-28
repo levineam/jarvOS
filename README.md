@@ -42,7 +42,7 @@ Briefings tie it together — morning, evening. Each one pulls the relevant slic
 
 OpenClaw provides the foundation: session management, cron scheduling, tool access, channel delivery, and a set of baseline workspace files. jarvOS runs on top of it. The governance layer, the briefing system, the project hierarchy — none of it replaces OpenClaw's infrastructure; it runs on it.
 
-What this repo adds on the behavior side: an enhanced AGENTS.md with invisible orchestration, specialist mode detection, auto model tiering, a full writer pipeline, a Process section that enforces rule-wiring discipline, and red team checkpoints for development work. An enhanced HEARTBEAT.md that's a proactive 11-section playbook — what actually runs on OpenClaw's scheduler. A memory architecture that adds daily session files, heartbeat-state.json for check-in tracking, and a briefing queue for decisions that need your attention. Scripts that handle governance scanning, frontmatter linting, and maintenance work.
+What this repo adds on the behavior side: an enhanced AGENTS.md with invisible orchestration, specialist mode detection, auto model tiering, a full writer pipeline, a Process section that enforces rule-wiring discipline, and red team checkpoints for development work. An enhanced HEARTBEAT.md that's a comprehensive multi-section playbook — what actually runs on OpenClaw's scheduler. A memory architecture that adds daily session files, heartbeat-state.json for check-in tracking, and a briefing queue for decisions that need your attention. Scripts that handle governance scanning, frontmatter linting, and maintenance work.
 
 Your instance is the third layer: your persona, your schedule, your integrations. This repo gives you the second. OpenClaw provides the first.
 

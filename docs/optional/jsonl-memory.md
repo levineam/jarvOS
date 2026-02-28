@@ -28,8 +28,8 @@ Start considering JSONL memory when you hit one of these thresholds:
 Append-only log of significant events, interactions, and completed work.
 
 ```jsonl
-{"id":"exp_001","timestamp":"2026-02-28T18:00:00Z","type":"task_complete","session":"main","summary":"Refactored authentication module","outcome":"success","tags":["code","auth","backend"],"project":"[[My App Project Board]]","duration_min":45}
-{"id":"exp_002","timestamp":"2026-02-28T19:30:00Z","type":"conversation","session":"main","summary":"User decided to pivot newsletter focus to AI tools","outcome":"decision","tags":["newsletter","strategy"],"project":null,"duration_min":20}
+{"id":"exp_0001","timestamp":"2026-02-28T18:00:00Z","type":"task_complete","session":"main","summary":"Refactored authentication module","outcome":"success","tags":["code","auth","backend"],"project":"[[My App Project Board]]","duration_min":45}
+{"id":"exp_0002","timestamp":"2026-02-28T19:30:00Z","type":"conversation","session":"main","summary":"User decided to pivot newsletter focus to AI tools","outcome":"decision","tags":["newsletter","strategy"],"project":null,"duration_min":20}
 ```
 
 **Fields:**
@@ -38,7 +38,7 @@ Append-only log of significant events, interactions, and completed work.
 |-------|------|-------------|
 | `id` | string | Unique identifier (`exp_NNNN`) |
 | `timestamp` | ISO8601 | When this happened |
-| `type` | enum | `task_complete` \| `conversation` \| `research` \| `error` \| `milestone` |
+| `type` | enum | `task_complete` \| `conversation` \| `research` \| `error` \| `milestone` \| `correction` |
 | `session` | string | Session ID or name |
 | `summary` | string | One-sentence description |
 | `outcome` | string | `success` \| `failure` \| `partial` \| `decision` \| `learning` |
@@ -53,7 +53,7 @@ Append-only log of significant events, interactions, and completed work.
 Log of significant decisions made — by you, by the user, or jointly.
 
 ```jsonl
-{"id":"dec_001","timestamp":"2026-02-28T14:00:00Z","question":"Should we use Supabase or PlanetScale for the DB?","decision":"Supabase","rationale":"Better DX, auth built-in, fits budget","alternatives":["PlanetScale","self-hosted Postgres"],"confidence":"high","reversible":true,"tags":["infrastructure","database"],"project":"[[My App Project Board]]"}
+{"id":"dec_0001","timestamp":"2026-02-28T14:00:00Z","question":"Should we use Supabase or PlanetScale for the DB?","decision":"Supabase","rationale":"Better DX, auth built-in, fits budget","alternatives":["PlanetScale","self-hosted Postgres"],"confidence":"high","reversible":true,"tags":["infrastructure","database"],"project":"[[My App Project Board]]"}
 ```
 
 **Fields:**
@@ -78,7 +78,7 @@ Log of significant decisions made — by you, by the user, or jointly.
 Log of failures, errors, and things that went wrong — with root cause and fix.
 
 ```jsonl
-{"id":"fail_001","timestamp":"2026-02-28T11:00:00Z","what_failed":"Subagent hallucinated a function signature","root_cause":"prompt didn't include current type definitions","impact":"low","fix":"inject relevant types into spawn prompt","prevention":"Added to spawn-code-subagent.lobster template","tags":["subagent","prompt-engineering"],"session":"main"}
+{"id":"fail_0001","timestamp":"2026-02-28T11:00:00Z","what_failed":"Subagent hallucinated a function signature","root_cause":"prompt didn't include current type definitions","impact":"low","fix":"inject relevant types into spawn prompt","prevention":"Added to spawn-code-subagent.lobster template","tags":["subagent","prompt-engineering"],"session":"main"}
 ```
 
 **Fields:**
@@ -114,7 +114,7 @@ memory/
 JSONL is append-only. **Never edit or delete existing lines.** If something is wrong, add a correction entry:
 
 ```jsonl
-{"id":"exp_001_correction","timestamp":"2026-03-01T09:00:00Z","type":"correction","corrects":"exp_001","note":"Duration was actually 20 min, not 45"}
+{"id":"exp_0001_correction","timestamp":"2026-03-01T09:00:00Z","type":"correction","corrects":"exp_0001","note":"Duration was actually 20 min, not 45"}
 ```
 
 This preserves audit history and prevents race conditions when multiple agents write to the same file.

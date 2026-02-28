@@ -34,10 +34,14 @@ steps:
     description: Load draft from path or inline input
     action: script
     script: |
-      if [ -n "{{inputs.draftPath}}" ]; then
-        cat "{{inputs.draftPath}}"
+      DRAFT_PATH="{{inputs.draftPath}}"
+      if [ -n "$DRAFT_PATH" ]; then
+        # Validate: must be a regular file with no path traversal
+        REAL_PATH=$(realpath -- "$DRAFT_PATH" 2>/dev/null) || { echo "ERROR: Cannot resolve path: $DRAFT_PATH" >&2; exit 1; }
+        [ -f "$REAL_PATH" ] || { echo "ERROR: Not a regular file: $REAL_PATH" >&2; exit 1; }
+        cat -- "$REAL_PATH"
       else
-        echo "{{inputs.draft}}"
+        printf '%s' "{{inputs.draft}}"
       fi
     output: draft_text
 
@@ -130,11 +134,20 @@ steps:
     action: script
     condition: "{{steps.approval_request.approved}} == true AND inputs.outputPath != ''"
     script: |
-      mkdir -p "$(dirname '{{inputs.outputPath}}')"
-      cat > "{{inputs.outputPath}}" << 'DRAFT_EOF'
-      {{steps.load_draft.draft_text}}
-      DRAFT_EOF
-      echo "Saved to {{inputs.outputPath}}"
+      OUTPUT_PATH="{{inputs.outputPath}}"
+      # Validate outputPath: must be non-empty, no path traversal components
+      [ -n "$OUTPUT_PATH" ] || { echo "ERROR: outputPath is empty" >&2; exit 1; }
+      case "$OUTPUT_PATH" in
+        *../*|*/..*) echo "ERROR: outputPath contains path traversal" >&2; exit 1 ;;
+      esac
+      REAL_DIR=$(realpath -- "$(dirname "$OUTPUT_PATH")" 2>/dev/null || dirname "$OUTPUT_PATH")
+      mkdir -p "$REAL_DIR"
+      # Use a random unique delimiter (single-quoted in heredoc to prevent content expansion)
+      DELIM="PROSE_EOF_$(openssl rand -hex 8 2>/dev/null || date +%s%N)"
+      eval "cat > \"$OUTPUT_PATH\" <<'$DELIM'
+{{steps.load_draft.draft_text}}
+$DELIM"
+      echo "Saved to $OUTPUT_PATH"
 
 # ─── OUTPUT ────────────────────────────────────────────────────────────────────
 
