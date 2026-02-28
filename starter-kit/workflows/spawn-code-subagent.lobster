@@ -59,8 +59,16 @@ steps:
       if [ -n "{{inputs.branch}}" ]; then
         echo "{{inputs.branch}}"
       else
-        # Slugify the task: lowercase, replace spaces/special chars with hyphens, truncate
-        SLUG=$(printf '%s' "{{inputs.task}}" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/-/g' | sed 's/--*/-/g' | cut -c1-50 | sed 's/-*$//' | sed 's/^-*//')
+        # Read task into a variable via a single-quoted heredoc so the template-
+        # interpolated value is treated as literal data (no shell expansion of
+        # any $VAR, $(cmd), or backtick sequences the task text might contain).
+        TASK_CONTENT=$(cat << 'TASK_CONTENT_EOF_3b8d2f1a'
+{{inputs.task}}
+TASK_CONTENT_EOF_3b8d2f1a
+)
+        # Slugify: lowercase, replace non-alphanumeric with hyphens, collapse
+        # consecutive hyphens, strip leading/trailing hyphens, truncate to 50.
+        SLUG=$(printf '%s' "$TASK_CONTENT" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/-/g' | sed 's/--*/-/g' | sed 's/^-*//' | cut -c1-50 | sed 's/-*$//')
         # If slug is empty after sanitization, use a safe default
         if [ -z "$SLUG" ]; then
           SLUG="untitled-task"
@@ -144,8 +152,13 @@ steps:
       mkdir -p "$WS_PATH"
       MEMORY_DIR="$WS_PATH/memory"
       mkdir -p "$MEMORY_DIR"
-      # Escape task for markdown safety: collapse newlines, escape backticks
-      TASK_SAFE=$(printf '%s' "{{inputs.task}}" | tr '\n' ' ' | sed 's/`/\\`/g')
+      # Read task via single-quoted heredoc to prevent shell expansion, then
+      # sanitize for markdown safety: collapse newlines, escape backticks.
+      TASK_RAW=$(cat << 'TASK_RAW_EOF_5c9a1d3e'
+{{inputs.task}}
+TASK_RAW_EOF_5c9a1d3e
+)
+      TASK_SAFE=$(printf '%s' "$TASK_RAW" | tr '\n' ' ' | sed 's/`/\\`/g')
       printf '\n' >> "$MEMORY_DIR/$DATE.md"
       printf '## [%s] Code subagent spawned\n' "$TIME" >> "$MEMORY_DIR/$DATE.md"
       printf '- Task: %s\n' "$TASK_SAFE" >> "$MEMORY_DIR/$DATE.md"

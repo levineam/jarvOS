@@ -142,11 +142,13 @@ steps:
       esac
       REAL_DIR=$(realpath -- "$(dirname "$OUTPUT_PATH")" 2>/dev/null || dirname "$OUTPUT_PATH")
       mkdir -p "$REAL_DIR"
-      # Use a random unique delimiter (single-quoted in heredoc to prevent content expansion)
-      DELIM="PROSE_EOF_$(openssl rand -hex 8 2>/dev/null || date +%s%N)"
-      eval "cat > \"$OUTPUT_PATH\" <<'$DELIM'
+      # Write draft content using a static single-quoted heredoc delimiter (no eval).
+      # The single-quoted delimiter prevents shell expansion of the draft content.
+      # The template engine interpolates {{steps.load_draft.draft_text}} before the
+      # shell runs, so the content is embedded literally without a second eval pass.
+      cat > "$OUTPUT_PATH" << 'PROSE_DRAFT_CONTENT_EOF_7c3a9e1b'
 {{steps.load_draft.draft_text}}
-$DELIM"
+PROSE_DRAFT_CONTENT_EOF_7c3a9e1b
       echo "Saved to $OUTPUT_PATH"
 
 # ─── OUTPUT ────────────────────────────────────────────────────────────────────
