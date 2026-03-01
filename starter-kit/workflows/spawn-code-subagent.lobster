@@ -42,7 +42,13 @@ steps:
     description: Check required fields are present
     action: script
     script: |
-      if [ -z "{{inputs.model}}" ]; then
+      # Read model via single-quoted heredoc so template-interpolated content is
+      # treated as literal data — no shell expansion of $VAR, $(cmd), or backticks.
+      MODEL_INPUT=$(cat << 'MODEL_INPUT_EOF_2a7d9c4b'
+{{inputs.model}}
+MODEL_INPUT_EOF_2a7d9c4b
+)
+      if [ -z "$MODEL_INPUT" ]; then
         echo "ERROR: model parameter is required. No defaults. Set explicitly."
         exit 1
       fi
@@ -62,8 +68,15 @@ TASK_CHECK_EOF_9f2b4c7a
     description: Generate branch name from task if not provided
     action: script
     script: |
-      if [ -n "{{inputs.branch}}" ]; then
-        echo "{{inputs.branch}}"
+      # Read custom branch via single-quoted heredoc so template-interpolated
+      # content is treated as literal data — no shell expansion of $VAR, $(cmd),
+      # or backtick sequences the branch input might contain.
+      BRANCH_INPUT=$(cat << 'BRANCH_INPUT_EOF_6f3c1e8d'
+{{inputs.branch}}
+BRANCH_INPUT_EOF_6f3c1e8d
+)
+      if [ -n "$BRANCH_INPUT" ]; then
+        echo "$BRANCH_INPUT"
       else
         # Read task into a variable via a single-quoted heredoc so the template-
         # interpolated value is treated as literal data (no shell expansion of

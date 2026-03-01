@@ -34,7 +34,13 @@ steps:
     description: Load draft from path or inline input
     action: script
     script: |
-      DRAFT_PATH="{{inputs.draftPath}}"
+      # Read draftPath via single-quoted heredoc so template-interpolated content
+      # is treated as literal data — no shell expansion of $VAR, $(cmd), or
+      # backtick sequences the path might contain.
+      DRAFT_PATH=$(cat << 'DRAFT_PATH_EOF_8b2e5a1c'
+{{inputs.draftPath}}
+DRAFT_PATH_EOF_8b2e5a1c
+)
       if [ -n "$DRAFT_PATH" ]; then
         # Validate: must be a regular file with no path traversal
         REAL_PATH=$(realpath -- "$DRAFT_PATH" 2>/dev/null) || { echo "ERROR: Cannot resolve path: $DRAFT_PATH" >&2; exit 1; }
@@ -139,7 +145,13 @@ INLINE_DRAFT_EOF_4d7e2a9c
     action: script
     condition: "{{steps.approval_request.approved}} == true AND inputs.outputPath != ''"
     script: |
-      OUTPUT_PATH="{{inputs.outputPath}}"
+      # Read outputPath via single-quoted heredoc so template-interpolated content
+      # is treated as literal data — no shell expansion of $VAR, $(cmd), or
+      # backtick sequences the path might contain.
+      OUTPUT_PATH=$(cat << 'OUTPUT_PATH_EOF_3d9f7c2b'
+{{inputs.outputPath}}
+OUTPUT_PATH_EOF_3d9f7c2b
+)
       # Validate outputPath: must be non-empty, no path traversal components
       [ -n "$OUTPUT_PATH" ] || { echo "ERROR: outputPath is empty" >&2; exit 1; }
       case "$OUTPUT_PATH" in
