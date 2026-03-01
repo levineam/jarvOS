@@ -45,6 +45,14 @@ DRAFT_PATH_EOF_8b2e5a1c
         # Validate: must be a regular file with no path traversal
         REAL_PATH=$(realpath -- "$DRAFT_PATH" 2>/dev/null) || { echo "ERROR: Cannot resolve path: $DRAFT_PATH" >&2; exit 1; }
         [ -f "$REAL_PATH" ] || { echo "ERROR: Not a regular file: $REAL_PATH" >&2; exit 1; }
+        # Restrict to allowed workspace roots to prevent reading arbitrary files
+        # (e.g. ../../.env resolving to a sensitive path outside the workspace).
+        ALLOWED_ROOT="${WORKSPACE_PATH:-$HOME}"
+        ALLOWED_REAL=$(realpath -- "$ALLOWED_ROOT" 2>/dev/null || echo "$ALLOWED_ROOT")
+        case "$REAL_PATH" in
+          "$ALLOWED_REAL/"*) : ;;  # path is within allowed root — OK
+          *) echo "ERROR: draftPath '$REAL_PATH' is outside allowed root '$ALLOWED_REAL'" >&2; exit 1 ;;
+        esac
         cat -- "$REAL_PATH"
       else
         # Read inline draft via single-quoted heredoc so template-interpolated

@@ -76,7 +76,15 @@ TASK_CHECK_EOF_9f2b4c7a
 BRANCH_INPUT_EOF_6f3c1e8d
 )
       if [ -n "$BRANCH_INPUT" ]; then
-        echo "$BRANCH_INPUT"
+        # Validate: reject names with git-invalid chars (space, ~, ^, :, ?, *, [,
+        # .., @{, backslash, leading/trailing dot or hyphen, or @-only).
+        # git check-ref-format enforces all git ref rules in one command.
+        if git check-ref-format --branch "$BRANCH_INPUT" 2>/dev/null; then
+          echo "$BRANCH_INPUT"
+        else
+          echo "ERROR: Invalid branch name: '$BRANCH_INPUT'" >&2
+          exit 1
+        fi
       else
         # Read task into a variable via a single-quoted heredoc so the template-
         # interpolated value is treated as literal data (no shell expansion of
@@ -178,11 +186,26 @@ TASK_CONTENT_EOF_3b8d2f1a
 TASK_RAW_EOF_5c9a1d3e
 )
       TASK_SAFE=$(printf '%s' "$TASK_RAW" | tr '\n' ' ' | sed 's/`/\\`/g')
-      printf '\n' >> "$MEMORY_DIR/$DATE.md"
-      printf '## [%s] Code subagent spawned\n' "$TIME" >> "$MEMORY_DIR/$DATE.md"
-      printf '- Task: %s\n' "$TASK_SAFE" >> "$MEMORY_DIR/$DATE.md"
-      printf '- Branch: %s\n' "{{steps.generate_branch_name.branch_name}}" >> "$MEMORY_DIR/$DATE.md"
-      printf '- Model: %s\n' "{{inputs.model}}" >> "$MEMORY_DIR/$DATE.md"
+      # Load branch and model via single-quoted heredocs so template-interpolated
+      # values are treated as literal data — no shell expansion of $VAR, $(cmd),
+      # or backtick sequences these values might contain.
+      BRANCH_SAFE=$(cat << 'BRANCH_SAFE_EOF_1a4c7e2d'
+{{steps.generate_branch_name.branch_name}}
+BRANCH_SAFE_EOF_1a4c7e2d
+)
+      MODEL_SAFE=$(cat << 'MODEL_SAFE_EOF_8f5b3d9a'
+{{inputs.model}}
+MODEL_SAFE_EOF_8f5b3d9a
+)
+      # Atomic append via a single heredoc — avoids line-interleaving when
+      # multiple concurrent workflow runs write to the same memory file.
+      cat >> "$MEMORY_DIR/$DATE.md" << LOG_ENTRY_EOF
+
+## [$TIME] Code subagent spawned
+- Task: $TASK_SAFE
+- Branch: $BRANCH_SAFE
+- Model: $MODEL_SAFE
+LOG_ENTRY_EOF
       echo "Logged spawn to memory"
 
   - id: spawn_agent
