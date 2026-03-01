@@ -718,3 +718,7 @@ All notable public-doc sync changes are appended by `jarvos-public-docs-sync.sh`
 - Updated: templates/ontology-template.md
 - Updated: templates/soul-template.md
 - Updated: templates/tools-template.md
+
+## 2026-02-28 21:07 EST — docs sync
+- Updated: docs/meta/source-to-export-map.json
+- Updated: templates/AGENTS-template.md
