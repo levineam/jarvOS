@@ -56,13 +56,13 @@ From there: set up your ONTOLOGY.md (start with Mission and a few Goals), create
 
 | File | Purpose |
 |------|---------|
-| `agents-template.md` | Core behavior — copy to `AGENTS.md` in your workspace |
-| `heartbeat-template.md` | Proactive check-in — copy to `HEARTBEAT.md` in your workspace |
+| `AGENTS-template.md` | Core behavior — copy to `AGENTS.md` in your workspace |
+| `HEARTBEAT-template.md` | Proactive check-in — copy to `HEARTBEAT.md` in your workspace |
 | `soul-template.md` | Persona definition — copy to `SOUL.md` in your workspace |
 | `identity-template.md` | Name, creature, emoji — copy to `IDENTITY.md` in your workspace |
 | `tools-template.md` | Operational policy — copy to `TOOLS.md` in your workspace |
 | `ontology-template.md` | Personal alignment map — copy to `ONTOLOGY.md` in your workspace |
-| `bootstrap-template.md` | First-run instructions — copy to `BOOTSTRAP.md`, delete after setup |
+| `BOOTSTRAP-template.md` | First-run instructions — copy to `BOOTSTRAP.md`, delete after setup |
 
 ## What's in the starter-kit folder
 

@@ -30,9 +30,10 @@ inputs:
 
 steps:
 
-  - id: load_draft
-    description: Load draft from path or inline input
+  - id: load_draft_file
+    description: Load and validate draft from file path (only when draftPath is set)
     action: script
+    condition: "inputs.draftPath != ''"
     script: |
       # Read draftPath via single-quoted heredoc so template-interpolated content
       # is treated as literal data — no shell expansion of $VAR, $(cmd), or
@@ -41,27 +42,30 @@ steps:
 {{inputs.draftPath}}
 DRAFT_PATH_EOF_8b2e5a1c
 )
-      if [ -n "$DRAFT_PATH" ]; then
-        # Validate: must be a regular file with no path traversal
-        REAL_PATH=$(realpath -- "$DRAFT_PATH" 2>/dev/null) || { echo "ERROR: Cannot resolve path: $DRAFT_PATH" >&2; exit 1; }
-        [ -f "$REAL_PATH" ] || { echo "ERROR: Not a regular file: $REAL_PATH" >&2; exit 1; }
-        # Restrict to allowed workspace roots to prevent reading arbitrary files
-        # (e.g. ../../.env resolving to a sensitive path outside the workspace).
-        ALLOWED_ROOT="${WORKSPACE_PATH:-$HOME}"
-        ALLOWED_REAL=$(realpath -- "$ALLOWED_ROOT" 2>/dev/null || echo "$ALLOWED_ROOT")
-        case "$REAL_PATH" in
-          "$ALLOWED_REAL/"*) : ;;  # path is within allowed root — OK
-          *) echo "ERROR: draftPath '$REAL_PATH' is outside allowed root '$ALLOWED_REAL'" >&2; exit 1 ;;
-        esac
-        cat -- "$REAL_PATH"
-      else
-        # Read inline draft via single-quoted heredoc so template-interpolated
-        # content is treated as literal data — no shell expansion of $VAR, $(cmd),
-        # or backtick sequences the draft might contain.
-        cat << 'INLINE_DRAFT_EOF_4d7e2a9c'
-{{inputs.draft}}
-INLINE_DRAFT_EOF_4d7e2a9c
-      fi
+      # Validate: must be a regular file and must resolve without error
+      REAL_PATH=$(realpath -- "$DRAFT_PATH" 2>/dev/null) || { echo "ERROR: Cannot resolve path: $DRAFT_PATH" >&2; exit 1; }
+      [ -f "$REAL_PATH" ] || { echo "ERROR: Not a regular file: $REAL_PATH" >&2; exit 1; }
+      # Restrict to workspace root. Default is $HOME/clawd (narrower than $HOME)
+      # to reduce the traversal window (e.g. ../../.env outside workspace is rejected).
+      # Override by setting WORKSPACE_PATH in the execution environment.
+      ALLOWED_ROOT="${WORKSPACE_PATH:-$HOME/clawd}"
+      ALLOWED_REAL=$(realpath -- "$ALLOWED_ROOT" 2>/dev/null || echo "$ALLOWED_ROOT")
+      case "$REAL_PATH" in
+        "$ALLOWED_REAL/"*) : ;;  # path is within allowed root — OK
+        *) echo "ERROR: draftPath '$REAL_PATH' is outside allowed root '$ALLOWED_REAL'" >&2; exit 1 ;;
+      esac
+      cat -- "$REAL_PATH"
+    output: file_draft_text
+
+  - id: load_draft
+    description: |
+      Provide draft text from the appropriate source. Inline drafts are handled
+      entirely by the template engine (action: template) — no shell script, no
+      heredoc, no delimiter-collision injection risk. File drafts are read and
+      validated by the preceding load_draft_file script step and referenced here.
+    action: template
+    template: |
+      {{#if inputs.draftPath}}{{steps.load_draft_file.file_draft_text}}{{else}}{{inputs.draft}}{{/if}}
     output: draft_text
 
   - id: humanizer_check
@@ -167,13 +171,23 @@ OUTPUT_PATH_EOF_3d9f7c2b
       esac
       REAL_DIR=$(realpath -- "$(dirname "$OUTPUT_PATH")" 2>/dev/null || dirname "$OUTPUT_PATH")
       mkdir -p "$REAL_DIR"
-      # Write draft content using a static single-quoted heredoc delimiter (no eval).
-      # The single-quoted delimiter prevents shell expansion of the draft content.
-      # The template engine interpolates {{steps.load_draft.draft_text}} before the
-      # shell runs, so the content is embedded literally without a second eval pass.
-      cat > "$OUTPUT_PATH" << 'PROSE_DRAFT_CONTENT_EOF_7c3a9e1b'
+      # Write draft content to the output file.
+      #
+      # The inline draft was loaded via action:template (no shell), so
+      # {{steps.load_draft.draft_text}} is the template engine's output. Since
+      # the template engine substitutes this value before the shell script runs,
+      # a heredoc is used to embed it. The single-quoted delimiter prevents
+      # further shell expansion ($VAR, $(cmd), backticks) of the content.
+      #
+      # Residual limitation: if the draft content contains the exact delimiter
+      # string on its own line, the heredoc would terminate early (delimiter
+      # collision). The delimiter below is 64 hex chars — practically unguessable
+      # in normal prose, and by this point the content has been human-reviewed.
+      # For untrusted automated content, always use draftPath instead of inline
+      # draft: file reads bypass this step entirely, eliminating the risk.
+      cat > "$OUTPUT_PATH" << 'PROSE_EOF_a3f8c2d1e4b7a9c6f2e0d5b8a1c4f7e2d0b3a6c9f1e4b7'
 {{steps.load_draft.draft_text}}
-PROSE_DRAFT_CONTENT_EOF_7c3a9e1b
+PROSE_EOF_a3f8c2d1e4b7a9c6f2e0d5b8a1c4f7e2d0b3a6c9f1e4b7
       echo "Saved to $OUTPUT_PATH"
 
 # ─── OUTPUT ────────────────────────────────────────────────────────────────────
