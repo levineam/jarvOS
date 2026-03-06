@@ -1006,3 +1006,13 @@ All notable public-doc sync changes are appended by `jarvos-public-docs-sync.sh`
 
 ## 2026-03-06 13:07 EST — docs sync
 - Updated: docs/meta/source-to-export-map.json
+
+## 2026-03-06 14:07 EST — docs sync
+- Updated: docs/architecture/architecture-decision-records/architecture-decision-record-20260219-ars-contexta-patterns.md
+- Updated: docs/architecture/jarvos-architecture.md
+- Updated: docs/dogfood/phase-b-canary-runbook.md
+- Updated: docs/meta/source-to-export-map.json
+- Updated: docs/troubleshooting/acp-wrapper-regression-workaround.md
+- Updated: docs/troubleshooting/context-management-overload.md
+- Updated: starter-kit/README.md
+- Updated: templates/AGENTS-template.md
