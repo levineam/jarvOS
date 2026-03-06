@@ -115,9 +115,9 @@ When the user's message or work context matches these patterns, silently shift a
 
 When the jarvOS templates are updated, the local system should stay in sync.
 
-**Local sync helper:** This system is a live jarvOS instance — keep it in sync. After any template change, run `jarvos/sync-local.sh --apply` (or `jarvos/sync-local-auto.sh`) to apply updates immediately.
+**Sync guidance:** After any template change, re-copy or re-sync the affected files into the live workspace before relying on the new behavior.
 
-This sync flow also propagates the jarvOS kickoff standard templates (Kickoff Pack + OKR Task Board) from `jarvos/templates/` to `jarvos-starter-kit/templates/`.
+This sync flow can also propagate the kickoff standard templates (Kickoff Pack + OKR Task Board) from the canonical templates directory into any starter-kit mirror you maintain.
 
 ### The Test
 

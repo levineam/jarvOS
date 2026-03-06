@@ -69,5 +69,3 @@ Treat **Ars Contexta as a watchlist pattern source** and adopt three specific pa
 - Canonical architecture note updated: [jarvOS — Architecture](../jarvos-architecture.md)
 - Public-docs sync pipeline uses curated source mappings and no-change guards.
 - Future Architecture Decision Records should reference whether changes affect ops context, durable context, or transfer boundary.
-
-— Edited by Jarvis

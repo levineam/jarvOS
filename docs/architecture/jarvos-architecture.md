@@ -97,6 +97,4 @@ Constraint:
 
 - Default to the full phrase **Architecture Decision Record** in headings and body text.
 - Avoid acronyms by default.
-- Use an acronym only if Andrew introduced it first in the active context.
-
-— Edited by Jarvis
+- Use an acronym only if the operator introduced it first in the active context.

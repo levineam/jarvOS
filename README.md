@@ -48,37 +48,51 @@ Your instance is the third layer: your persona, your schedule, your integrations
 
 ## Quick start
 
-Clone the repo. Copy the files from `templates/` into your OpenClaw workspace. Tell your assistant to read `BOOTSTRAP.md` and follow its instructions — it handles setup and explains the system in its own terms.
+Clone the repo. Copy the templates you need into your OpenClaw workspace, then tell your assistant to read `BOOTSTRAP.md` and follow it.
 
-From there: set up your ONTOLOGY.md (start with Mission and a few Goals), create your first project with a Board and Brief, and let the Plan drive what gets worked on. The whole system is readable by both humans and AI, so when something doesn't work the way you expect, reading the relevant file usually tells you why.
+Minimal setup:
 
-## What's in the templates folder
+1. Copy `templates/agents-template.md` to `AGENTS.md`
+2. Copy `templates/heartbeat-template.md` to `HEARTBEAT.md`
+3. Copy `templates/bootstrap-template.md` to `BOOTSTRAP.md`
+4. Copy the planning templates you want from `templates/` or `starter-kit/templates/`
+5. Provide your own local `USER.md`, `MEMORY.md`, and any persona/alignment files your setup requires
+
+This repo does not yet ship public templates for `SOUL.md`, `IDENTITY.md`, `TOOLS.md`, or `ONTOLOGY.md`, so dogfood canaries should overlay local copies for those files.
+
+From there: create your first project with a Board and Brief, let the Plan drive what gets worked on, and keep long-lived context in files instead of chat whenever possible.
+
+## What's currently shipped
+
+### Core templates
 
 | File | Purpose |
 |------|---------|
-| `AGENTS-template.md` | Core behavior — copy to `AGENTS.md` in your workspace |
-| `HEARTBEAT-template.md` | Proactive check-in — copy to `HEARTBEAT.md` in your workspace |
-| `soul-template.md` | Persona definition — copy to `SOUL.md` in your workspace |
-| `identity-template.md` | Name, creature, emoji — copy to `IDENTITY.md` in your workspace |
-| `tools-template.md` | Operational policy — copy to `TOOLS.md` in your workspace |
-| `ontology-template.md` | Personal alignment map — copy to `ONTOLOGY.md` in your workspace |
-| `BOOTSTRAP-template.md` | First-run instructions — copy to `BOOTSTRAP.md`, delete after setup |
+| `agents-template.md` | Core behavior — copy to `AGENTS.md` in your workspace |
+| `heartbeat-template.md` | Proactive check-in — copy to `HEARTBEAT.md` in your workspace |
+| `bootstrap-template.md` | First-run instructions — copy to `BOOTSTRAP.md`, then delete after setup |
+
+### Planning templates
+
+| File | Purpose |
+|------|---------|
+| `okr-task-board-template.md` | Reusable OKR-linked task board |
+| `project-kickoff-pack-template.md` | Reusable kickoff pack for project setup |
+
+The root `templates/` directory is the canonical copy. `starter-kit/templates/` mirrors the planning templates so you can lift the starter kit on its own.
 
 ## What's in the starter-kit folder
 
-The `starter-kit/` folder has project management templates and Lobster workflow gates:
+The `starter-kit/` folder contains a small portable pack:
 
-- `templates/` — OKR Task Board + Project Kickoff Pack
-- `workflows/` — Lobster gate examples (`write-prose.lobster`, `spawn-code-subagent.lobster`)
+- `templates/` — mirrored planning templates
+- `workflows/basic-ci.yml` — starter automation example you can adapt
 
-## Optional modules
+## Troubleshooting and rollout notes
 
-For advanced setups, see `docs/optional/`:
-
-- `jsonl-memory.md` — Structured JSONL memory schema (experiences, decisions, failures). Useful when markdown memory starts to break down at scale.
-- `context-engineering.md` — How to install and configure the ClawHub context engineering skill pack. Useful for multi-agent work and token optimization.
-
-Start without these. Add them when you hit the specific pain points they solve.
+- `docs/troubleshooting/context-management-overload.md` — stabilize sessions when context gets too large
+- `docs/troubleshooting/acp-wrapper-regression-workaround.md` — temporary direct-`acpx` fallback when a wrapper path regresses
+- `docs/dogfood/phase-b-canary-runbook.md` — concise Phase B clone + overlay checklist
 
 ## Philosophy
 

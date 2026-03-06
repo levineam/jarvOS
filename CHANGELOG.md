@@ -2,6 +2,15 @@
 
 All notable public-doc sync changes are appended by `jarvos-public-docs-sync.sh`.
 
+## 2026-03-06 — docs: Phase A public repo hygiene + dogfood prep
+
+- `README.md` — corrected shipped-file inventory, removed stale optional/docs references, and clarified which files must still be provided locally during canaries
+- `starter-kit/readme.md` — corrected file paths to match the public repo layout
+- `docs/troubleshooting/context-management-overload.md` — added generic recovery guidance for context overload incidents
+- `docs/troubleshooting/acp-wrapper-regression-workaround.md` — added temporary direct-`acpx` one-shot fallback guidance
+- `docs/dogfood/phase-b-canary-runbook.md` — added concise clone + overlay canary checklist for Phase B
+- `docs/meta/source-to-export-map.json` and architecture docs — sanitized private absolute paths and operator-specific/internal-only wording
+
 ## 2026-02-28 — feat: major update — new templates, patterns, and optional modules
 
 ### Phase 1: Updated existing templates

@@ -4,9 +4,9 @@
 
 Before writing implementation code, complete project planning artifacts:
 
-1. Fill `templates/PROJECT-KICKOFF-PACK.template.md`
+1. Fill `templates/project-kickoff-pack-template.md`
 2. Define OKRs (objective + measurable KRs)
-3. Initialize `templates/OKR-TASK-BOARD.template.md`
+3. Initialize `templates/okr-task-board-template.md`
 4. Ensure each task maps to a KR and passes quality gates
 5. Begin build only after kickoff gate is fully checked
 
@@ -14,7 +14,7 @@ This keeps execution outcome-driven, auditable, and portable.
 
 ## Runtime Onboarding Defaults (Core)
 
-Runtime onboarding behavior is inherited from jarvOS core templates (`jarvos/templates/AGENTS-template.md` + `jarvos/templates/BOOTSTRAP-template.md`):
+Runtime onboarding behavior is inherited from jarvOS core templates (`../templates/agents-template.md` + `../templates/bootstrap-template.md`):
 - activation-first onboarding finish (1-3 concrete activation tasks)
 - brief-first setup (daily + weekly brief/review early)
 - proactive next-work closeouts (1-3 concrete options, unless user explicitly ends)
@@ -31,5 +31,6 @@ All project work should follow this baseline:
 
 ## Included Reusable Templates
 
-- `templates/PROJECT-KICKOFF-PACK.template.md`
-- `templates/OKR-TASK-BOARD.template.md`
+- `templates/project-kickoff-pack-template.md`
+- `templates/okr-task-board-template.md`
+- `workflows/basic-ci.yml`
