@@ -43,10 +43,13 @@ jobs:
   link-check:
     name: Link check
     runs-on: ubuntu-latest
+    outputs:
+      had_broken_links: ${{ steps.markdown_links.outcome == 'failure' }}
     steps:
       - uses: actions/checkout@v4
 
       - name: Check markdown links
+        id: markdown_links
         uses: gaurav-nelson/github-action-markdown-link-check@5c5dfc0ac2e225883c0e5f03a85311ec2830d368  # v1
         with:
           use-quiet-mode: 'yes'
@@ -56,6 +59,10 @@ jobs:
           file-extension: '.md'
         # Treat broken links as warnings, not hard failures, for doc repos
         continue-on-error: true
+
+      - name: Surface non-blocking link-check warning
+        if: steps.markdown_links.outcome == 'failure'
+        run: echo "Broken markdown links detected. See the link-check job logs."
 
   meta-hygiene:
     name: Meta hygiene
@@ -75,8 +82,14 @@ jobs:
             exit 1
           fi
 
-      - name: Diff whitespace sanity check
-        run: git diff --check
+      - name: Check workflow and metadata files for trailing whitespace
+        shell: bash
+        run: |
+          set -euo pipefail
+          if grep -nHE '[[:blank:]]+$' .github/workflows/*.yml docs/meta/*.json; then
+            echo "Trailing whitespace detected in workflow or metadata files"
+            exit 1
+          fi
 
   ci-summary:
     name: CI summary
@@ -92,7 +105,11 @@ jobs:
         run: |
           set -euo pipefail
           echo "markdown-lint : ${{ needs.markdown-lint.result }}"
-          echo "link-check    : ${{ needs.link-check.result }}"
+          if [[ "${{ needs.link-check.outputs.had_broken_links }}" == "true" ]]; then
+            echo "link-check    : warning (broken links detected; non-blocking)"
+          else
+            echo "link-check    : ${{ needs.link-check.result }}"
+          fi
           echo "meta-hygiene  : ${{ needs.meta-hygiene.result }}"
 
           for r in "${{ needs.markdown-lint.result }}" "${{ needs.link-check.result }}" "${{ needs.meta-hygiene.result }}"; do

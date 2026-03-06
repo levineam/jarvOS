@@ -52,9 +52,9 @@ Clone the repo. Copy the templates you need into your OpenClaw workspace, then t
 
 Minimal setup:
 
-1. Copy `templates/agents-template.md` to `AGENTS.md`
-2. Copy `templates/heartbeat-template.md` to `HEARTBEAT.md`
-3. Copy `templates/bootstrap-template.md` to `BOOTSTRAP.md`
+1. Copy `templates/AGENTS-template.md` to `AGENTS.md`
+2. Copy `templates/HEARTBEAT-template.md` to `HEARTBEAT.md`
+3. Copy `templates/BOOTSTRAP-template.md` to `BOOTSTRAP.md`
 4. Copy the planning templates you want from `templates/` or `starter-kit/templates/`
 5. Provide your own local `USER.md`, `MEMORY.md`, and any persona/alignment files your setup requires
 
@@ -68,9 +68,9 @@ From there: create your first project with a Board and Brief, let the Plan drive
 
 | File | Purpose |
 |------|---------|
-| `agents-template.md` | Core behavior — copy to `AGENTS.md` in your workspace |
-| `heartbeat-template.md` | Proactive check-in — copy to `HEARTBEAT.md` in your workspace |
-| `bootstrap-template.md` | First-run instructions — copy to `BOOTSTRAP.md`, then delete after setup |
+| `AGENTS-template.md` | Core behavior — copy to `AGENTS.md` in your workspace |
+| `HEARTBEAT-template.md` | Proactive check-in — copy to `HEARTBEAT.md` in your workspace |
+| `BOOTSTRAP-template.md` | First-run instructions — copy to `BOOTSTRAP.md`, then delete after setup |
 
 ### Planning templates
 
@@ -92,7 +92,7 @@ The `starter-kit/` folder contains a small portable pack:
 
 - `docs/troubleshooting/context-management-overload.md` — stabilize sessions when context gets too large
 - `docs/troubleshooting/acp-wrapper-regression-workaround.md` — temporary direct-`acpx` fallback when a wrapper path regresses
-- `docs/dogfood/phase-b-canary-runbook.md` — concise Phase B clone + overlay checklist
+- Phase B dogfood canary prep currently relies on your local/private overlay checklist rather than a public runbook file.
 
 ## Philosophy
 
