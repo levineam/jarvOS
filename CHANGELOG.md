@@ -1016,3 +1016,6 @@ All notable public-doc sync changes are appended by `jarvos-public-docs-sync.sh`
 - Updated: docs/troubleshooting/context-management-overload.md
 - Updated: starter-kit/README.md
 - Updated: templates/AGENTS-template.md
+
+## 2026-03-06 15:07 EST — docs sync
+- Updated: docs/meta/source-to-export-map.json
