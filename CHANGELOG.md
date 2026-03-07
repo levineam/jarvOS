@@ -1042,3 +1042,6 @@ All notable public-doc sync changes are appended by `jarvos-public-docs-sync.sh`
 - Updated: docs/troubleshooting/acp-wrapper-regression-workaround.md
 - Updated: docs/troubleshooting/context-management-overload.md
 - Updated: templates/AGENTS-template.md
+
+## 2026-03-06 21:07 EST — docs sync
+- Updated: docs/meta/source-to-export-map.json
