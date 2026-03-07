@@ -1035,3 +1035,10 @@ All notable public-doc sync changes are appended by `jarvos-public-docs-sync.sh`
 
 ## 2026-03-06 16:07 EST — docs sync
 - Updated: docs/meta/source-to-export-map.json
+
+## 2026-03-06 20:07 EST — docs sync
+- Updated: docs/dogfood/phase-b-canary-runbook.md
+- Updated: docs/meta/source-to-export-map.json
+- Updated: docs/troubleshooting/acp-wrapper-regression-workaround.md
+- Updated: docs/troubleshooting/context-management-overload.md
+- Updated: templates/AGENTS-template.md
