@@ -76,7 +76,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if grep -nE '"(/|[A-Za-z]:\\\\)' docs/meta/source-to-export-map.json; then
+          if grep -nE '"(/|[A-Za-z]:(/|\\\\))' docs/meta/source-to-export-map.json; then
             echo "Absolute local path leak detected in docs/meta/source-to-export-map.json"
             exit 1
           fi

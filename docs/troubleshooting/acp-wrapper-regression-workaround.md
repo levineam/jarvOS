@@ -13,12 +13,14 @@ Use this workaround only when a wrapper command regresses and blocks normal exec
 
 - keep the fallback temporary
 - do not widen permissions or automation scope just because the wrapper failed
-- record any direct-command workaround in the relevant project notes or changelog
+- record only a sanitized summary of any direct-command workaround in the relevant project notes or changelog
 - avoid baking the workaround into public templates unless the regression is persistent and broadly reproducible
 
 ## What to collect for follow-up
 
-- wrapper command that failed
-- exact error output
-- direct `acpx` command that succeeded
+- exact failing wrapper command, stored in a private incident log
+- exact error output, stored in a private incident log
+- exact direct `acpx` command that succeeded, stored in a private incident log
 - any environment assumptions required to reproduce the issue
+
+If you need to reference the incident from tracked public notes, use a sanitized summary that removes secrets, hostnames, and local paths.

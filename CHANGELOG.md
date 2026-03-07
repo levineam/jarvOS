@@ -10,6 +10,11 @@ All notable public-doc sync changes are appended by `jarvos-public-docs-sync.sh`
 - `docs/troubleshooting/acp-wrapper-regression-workaround.md` — added a public-safe temporary `acpx` fallback note
 - `docs/dogfood/phase-b-canary-runbook.md` — added the public Phase B canary checklist referenced by the README
 
+## 2026-03-06 — fix: address follow-up CodeRabbit findings
+
+- `.github/workflows/ci.yml` — expanded the metadata leak gate to catch both `C:\...` and `C:/...` absolute Windows paths
+- `docs/troubleshooting/acp-wrapper-regression-workaround.md` — clarified that raw commands and error output belong in a private incident log, while tracked public notes should only contain sanitized summaries
+
 ## 2026-03-06 — docs: Phase A public repo hygiene + dogfood prep
 
 - `README.md` — corrected shipped-file inventory, removed stale optional/docs references, and clarified which files must still be provided locally during canaries
