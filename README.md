@@ -92,7 +92,7 @@ The `starter-kit/` folder contains a small portable pack:
 
 - `docs/troubleshooting/context-management-overload.md` — stabilize sessions when context gets too large
 - `docs/troubleshooting/acp-wrapper-regression-workaround.md` — temporary direct-`acpx` fallback when a wrapper path regresses
-- Phase B dogfood canary prep currently relies on your local/private overlay checklist rather than a public runbook file.
+- `docs/dogfood/phase-b-canary-runbook.md` — public-safe clone + overlay checklist for Phase B canaries
 
 ## Philosophy
 

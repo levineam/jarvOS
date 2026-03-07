@@ -2,6 +2,14 @@
 
 All notable public-doc sync changes are appended by `jarvos-public-docs-sync.sh`.
 
+## 2026-03-06 — fix: resolve PR #2 merge blockers
+
+- `.github/workflows/ci.yml` — removed the missing `.mlc-config.json` reference and broadened the absolute-path leak check to catch any root-based Unix path or Windows drive path
+- `README.md` — pointed the rollout section at the shipped public canary runbook
+- `docs/troubleshooting/context-management-overload.md` — added public troubleshooting guidance for overloaded sessions
+- `docs/troubleshooting/acp-wrapper-regression-workaround.md` — added a public-safe temporary `acpx` fallback note
+- `docs/dogfood/phase-b-canary-runbook.md` — added the public Phase B canary checklist referenced by the README
+
 ## 2026-03-06 — docs: Phase A public repo hygiene + dogfood prep
 
 - `README.md` — corrected shipped-file inventory, removed stale optional/docs references, and clarified which files must still be provided locally during canaries

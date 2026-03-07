@@ -54,7 +54,6 @@ jobs:
         with:
           use-quiet-mode: 'yes'
           use-verbose-mode: 'no'
-          config-file: '.mlc-config.json'
           folder-path: '.'
           file-extension: '.md'
         # Treat broken links as warnings, not hard failures, for doc repos
@@ -77,7 +76,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if grep -nE '"/(Users|home|opt|var|private|tmp)/' docs/meta/source-to-export-map.json; then
+          if grep -nE '"(/|[A-Za-z]:\\\\)' docs/meta/source-to-export-map.json; then
             echo "Absolute local path leak detected in docs/meta/source-to-export-map.json"
             exit 1
           fi
