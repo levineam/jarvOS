@@ -5,7 +5,7 @@ All notable public-doc sync changes are appended by `jarvos-public-docs-sync.sh`
 ## 2026-03-06 — docs: Phase A public repo hygiene + dogfood prep
 
 - `README.md` — corrected shipped-file inventory, removed stale optional/docs references, and clarified which files must still be provided locally during canaries
-- `starter-kit/readme.md` — corrected file paths to match the public repo layout
+- `starter-kit/README.md` — corrected file paths to match the public repo layout
 - `docs/troubleshooting/context-management-overload.md` — added generic recovery guidance for context overload incidents
 - `docs/troubleshooting/acp-wrapper-regression-workaround.md` — added temporary direct-`acpx` one-shot fallback guidance
 - `docs/dogfood/phase-b-canary-runbook.md` — added concise clone + overlay canary checklist for Phase B
@@ -14,7 +14,7 @@ All notable public-doc sync changes are appended by `jarvos-public-docs-sync.sh`
 ## 2026-02-28 — feat: major update — new templates, patterns, and optional modules
 
 ### Phase 1: Updated existing templates
-- `templates/agents-template.md` — Replaced "Plan" → "Plan" throughout; replaced CE-PROCESS refs with "AGENTS.md § Process"; added Process section (wire first, report, never ask permission); added Do-First rule (HARD); added optional Lobster workflow gates section; added optional context engineering auto-triggers section; bumped to v2.0.0
+- `templates/agents-template.md` — Replaced "Live Plan" → "Plan" throughout; replaced CE-PROCESS refs with "AGENTS.md § Process"; added Process section (wire first, report, never ask permission); added Do-First rule (HARD); added optional Lobster workflow gates section; added optional context engineering auto-triggers section; bumped to v2.0.0
 - `templates/heartbeat-template.md` — Added §6.8 Uncommitted Work Check; added §10 Escalation Ladder format; added §11 Autonomy Levels Policy; updated §6.7 to clarify autonomous work continues 24/7 (quiet hours only affect notifications/nudges); added §7.5 Disk Space Check; added §0 Fast Awareness Gate; fixed section numbering throughout; bumped to v2.0.0
 
 ### Phase 2: Added missing templates
@@ -30,7 +30,7 @@ All notable public-doc sync changes are appended by `jarvos-public-docs-sync.sh`
 - `docs/optional/context-engineering.md` — How to install and configure the ClawHub context engineering skill pack; when to install guidance; auto-trigger setup; key concepts from Koylan framework
 
 ### Phase 4: Cleanup
-- `README.md` — Reflected all new components; updated template table; added optional modules section; replaced "Plan" with "Plan"
+- `README.md` — Reflected all new components; updated template table; added optional modules section; replaced "Live Plan" with "Plan"
 - `CHANGELOG.md` — Added this entry
 - `starter-kit/readme.md` — Updated to reflect new workflows directory and optional modules
 
