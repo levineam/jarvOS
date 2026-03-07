@@ -1072,3 +1072,15 @@ All notable public-doc sync changes are appended by `jarvos-public-docs-sync.sh`
 
 ## 2026-03-07 06:07 EST — docs sync
 - Updated: docs/meta/source-to-export-map.json
+
+## 2026-03-07 14:07 EST — docs sync
+- Updated: docs/meta/source-to-export-map.json
+- Updated: starter-kit/README.md
+- Updated: templates/HEARTBEAT-template.md
+- Updated: docs/operations/openclaw-watchdog-cooldown-pattern.md
+- Updated: docs/operations/openclaw-watchdog-runbook.md
+- Updated: starter-kit/scripts/lib/watchdog-signal-parser.sh
+- Updated: starter-kit/scripts/openclaw-gateway-probe.sh
+- Updated: starter-kit/scripts/openclaw-health-check.sh
+- Updated: starter-kit/scripts/openclaw-watchdog-status.sh
+- Updated: starter-kit/tests/watchdog-signal-parser-test.sh

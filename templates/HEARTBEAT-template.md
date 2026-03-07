@@ -132,6 +132,24 @@ Guardrails:
 - Enforce cooldown and per-run cap to avoid repeats
 - Never send autonomous external messages from CIL loop
 
+## 6.58 External gateway watchdog pattern
+
+Use an external service watchdog when the runtime can enter a partial-failure state that the main assistant session cannot safely detect or recover from.
+
+Contract:
+- run the watchdog outside the main assistant session
+- require both TCP reachability and a live RPC/CLI probe
+- try ordinary restarts before any session rotation
+- only rotate the main session on a narrow signal bundle
+- archive the affected session before changing live state
+
+Starter-kit reference assets:
+- `starter-kit/scripts/openclaw-health-check.sh`
+- `starter-kit/scripts/openclaw-gateway-probe.sh`
+- `starter-kit/scripts/openclaw-watchdog-status.sh`
+- `docs/operations/openclaw-watchdog-cooldown-pattern.md`
+- `docs/operations/openclaw-watchdog-runbook.md`
+
 ## 6.6 OKR‑first heartbeat nudges (act‑first, then ask)
 - Active hours only: 05:00–20:00 {{TIMEZONE}} (check every 15 minutes)
 - If last user interaction <10 minutes, stay quiet (HEARTBEAT_OK)
