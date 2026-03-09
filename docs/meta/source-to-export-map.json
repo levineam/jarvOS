@@ -1,26 +1,19 @@
 {
-  "generatedAt": "2026-03-09T21:09:02.371Z",
+  "generatedAt": "2026-03-09T22:09:03.625Z",
   "manifestPath": "/Users/andrew/clawd/jarvos/public-docs/export-manifest.tsv",
   "vaultRoot": "/Users/andrew/Documents/Vault v3",
   "outputMode": "apply",
   "sourceToExport": {
     "/Users/andrew/Documents/Vault v3/Notes/jarvOS — Architecture.md": "docs/architecture/jarvos-architecture.md",
     "/Users/andrew/Documents/Vault v3/Notes/jarvOS — Architecture Decision Records/Architecture Decision Record - 20260219 - Ars Contexta Patterns.md": "docs/architecture/architecture-decision-records/architecture-decision-record-20260219-ars-contexta-patterns.md",
-    "/Users/andrew/clawd/jarvos/public-docs/operations/openclaw-watchdog-cooldown-pattern.md": "docs/operations/openclaw-watchdog-cooldown-pattern.md",
-    "/Users/andrew/clawd/jarvos/public-docs/operations/openclaw-watchdog-runbook.md": "docs/operations/openclaw-watchdog-runbook.md",
     "/Users/andrew/clawd/jarvos/templates/AGENTS-template.md": "templates/agents-template.md",
     "/Users/andrew/clawd/jarvos/templates/BOOTSTRAP-template.md": "templates/bootstrap-template.md",
     "/Users/andrew/clawd/jarvos/templates/HEARTBEAT-template.md": "templates/heartbeat-template.md",
     "/Users/andrew/clawd/jarvos/templates/OKR-TASK-BOARD.template.md": "templates/okr-task-board-template.md",
     "/Users/andrew/clawd/jarvos/templates/PROJECT-KICKOFF-PACK.template.md": "templates/project-kickoff-pack-template.md",
     "/Users/andrew/clawd/jarvos-starter-kit/README.md": "starter-kit/readme.md",
-    "/Users/andrew/clawd/jarvos-starter-kit/scripts/lib/watchdog-signal-parser.sh": "starter-kit/scripts/lib/watchdog-signal-parser.sh",
-    "/Users/andrew/clawd/jarvos-starter-kit/scripts/openclaw-health-check.sh": "starter-kit/scripts/openclaw-health-check.sh",
-    "/Users/andrew/clawd/jarvos-starter-kit/scripts/openclaw-gateway-probe.sh": "starter-kit/scripts/openclaw-gateway-probe.sh",
-    "/Users/andrew/clawd/jarvos-starter-kit/scripts/openclaw-watchdog-status.sh": "starter-kit/scripts/openclaw-watchdog-status.sh",
     "/Users/andrew/clawd/jarvos-starter-kit/templates/OKR-TASK-BOARD.template.md": "starter-kit/templates/okr-task-board-template.md",
     "/Users/andrew/clawd/jarvos-starter-kit/templates/PROJECT-KICKOFF-PACK.template.md": "starter-kit/templates/project-kickoff-pack-template.md",
-    "/Users/andrew/clawd/jarvos-starter-kit/tests/watchdog-signal-parser.test.sh": "starter-kit/tests/watchdog-signal-parser-test.sh",
     "/Users/andrew/clawd/jarvos-starter-kit/workflows/basic-ci.yml": "starter-kit/workflows/basic-ci.yml"
   },
   "entries": [
@@ -33,16 +26,6 @@
       "sourcePath": "/Users/andrew/Documents/Vault v3/Notes/jarvOS — Architecture Decision Records/Architecture Decision Record - 20260219 - Ars Contexta Patterns.md",
       "destinationLogicalPath": "docs/architecture/architecture-decision-records/architecture-decision-record-20260219-ars-contexta-patterns.md",
       "destinationSlugPath": "docs/architecture/architecture-decision-records/architecture-decision-record-20260219-ars-contexta-patterns.md"
-    },
-    {
-      "sourcePath": "/Users/andrew/clawd/jarvos/public-docs/operations/openclaw-watchdog-cooldown-pattern.md",
-      "destinationLogicalPath": "docs/operations/openclaw-watchdog-cooldown-pattern.md",
-      "destinationSlugPath": "docs/operations/openclaw-watchdog-cooldown-pattern.md"
-    },
-    {
-      "sourcePath": "/Users/andrew/clawd/jarvos/public-docs/operations/openclaw-watchdog-runbook.md",
-      "destinationLogicalPath": "docs/operations/openclaw-watchdog-runbook.md",
-      "destinationSlugPath": "docs/operations/openclaw-watchdog-runbook.md"
     },
     {
       "sourcePath": "/Users/andrew/clawd/jarvos/templates/AGENTS-template.md",
@@ -75,26 +58,6 @@
       "destinationSlugPath": "starter-kit/readme.md"
     },
     {
-      "sourcePath": "/Users/andrew/clawd/jarvos-starter-kit/scripts/lib/watchdog-signal-parser.sh",
-      "destinationLogicalPath": "starter-kit/scripts/lib/watchdog-signal-parser.sh",
-      "destinationSlugPath": "starter-kit/scripts/lib/watchdog-signal-parser.sh"
-    },
-    {
-      "sourcePath": "/Users/andrew/clawd/jarvos-starter-kit/scripts/openclaw-health-check.sh",
-      "destinationLogicalPath": "starter-kit/scripts/openclaw-health-check.sh",
-      "destinationSlugPath": "starter-kit/scripts/openclaw-health-check.sh"
-    },
-    {
-      "sourcePath": "/Users/andrew/clawd/jarvos-starter-kit/scripts/openclaw-gateway-probe.sh",
-      "destinationLogicalPath": "starter-kit/scripts/openclaw-gateway-probe.sh",
-      "destinationSlugPath": "starter-kit/scripts/openclaw-gateway-probe.sh"
-    },
-    {
-      "sourcePath": "/Users/andrew/clawd/jarvos-starter-kit/scripts/openclaw-watchdog-status.sh",
-      "destinationLogicalPath": "starter-kit/scripts/openclaw-watchdog-status.sh",
-      "destinationSlugPath": "starter-kit/scripts/openclaw-watchdog-status.sh"
-    },
-    {
       "sourcePath": "/Users/andrew/clawd/jarvos-starter-kit/templates/OKR-TASK-BOARD.template.md",
       "destinationLogicalPath": "starter-kit/templates/OKR-TASK-BOARD.template.md",
       "destinationSlugPath": "starter-kit/templates/okr-task-board-template.md"
@@ -103,11 +66,6 @@
       "sourcePath": "/Users/andrew/clawd/jarvos-starter-kit/templates/PROJECT-KICKOFF-PACK.template.md",
       "destinationLogicalPath": "starter-kit/templates/PROJECT-KICKOFF-PACK.template.md",
       "destinationSlugPath": "starter-kit/templates/project-kickoff-pack-template.md"
-    },
-    {
-      "sourcePath": "/Users/andrew/clawd/jarvos-starter-kit/tests/watchdog-signal-parser.test.sh",
-      "destinationLogicalPath": "starter-kit/tests/watchdog-signal-parser.test.sh",
-      "destinationSlugPath": "starter-kit/tests/watchdog-signal-parser-test.sh"
     },
     {
       "sourcePath": "/Users/andrew/clawd/jarvos-starter-kit/workflows/basic-ci.yml",
