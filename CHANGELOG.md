@@ -1213,3 +1213,6 @@ All notable public-doc sync changes are appended by `jarvos-public-docs-sync.sh`
 - Updated: starter-kit/scripts/openclaw-watchdog-status.sh
 - Updated: starter-kit/tests/watchdog-signal-parser-test.sh
 - Updated: templates/HEARTBEAT-template.md
+
+## 2026-03-09 19:09 EDT — docs sync
+- Updated: docs/meta/source-to-export-map.json
