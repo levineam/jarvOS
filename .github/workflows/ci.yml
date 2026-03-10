@@ -43,19 +43,52 @@ jobs:
   link-check:
     name: Link check
     runs-on: ubuntu-latest
+    outputs:
+      had_broken_links: ${{ steps.markdown_links.outcome == 'failure' }}
     steps:
       - uses: actions/checkout@v4
 
       - name: Check markdown links
+        id: markdown_links
         uses: gaurav-nelson/github-action-markdown-link-check@5c5dfc0ac2e225883c0e5f03a85311ec2830d368  # v1
         with:
           use-quiet-mode: 'yes'
           use-verbose-mode: 'no'
-          config-file: '.mlc-config.json'
           folder-path: '.'
           file-extension: '.md'
         # Treat broken links as warnings, not hard failures, for doc repos
         continue-on-error: true
+
+      - name: Surface non-blocking link-check warning
+        if: steps.markdown_links.outcome == 'failure'
+        run: echo "Broken markdown links detected. See the link-check job logs."
+
+  meta-hygiene:
+    name: Meta hygiene
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate metadata JSON
+        run: python3 -m json.tool docs/meta/source-to-export-map.json > /dev/null
+
+      - name: Ensure metadata does not leak absolute local paths
+        shell: bash
+        run: |
+          set -euo pipefail
+          if grep -nE '"(/|[A-Za-z]:(/|\\\\))' docs/meta/source-to-export-map.json; then
+            echo "Absolute local path leak detected in docs/meta/source-to-export-map.json"
+            exit 1
+          fi
+
+      - name: Check workflow and metadata files for trailing whitespace
+        shell: bash
+        run: |
+          set -euo pipefail
+          if grep -nHE '[[:blank:]]+$' .github/workflows/*.yml docs/meta/*.json; then
+            echo "Trailing whitespace detected in workflow or metadata files"
+            exit 1
+          fi
 
   ci-summary:
     name: CI summary
@@ -63,6 +96,7 @@ jobs:
     needs:
       - markdown-lint
       - link-check
+      - meta-hygiene
     if: always()
     steps:
       - name: Summarize results
@@ -70,9 +104,14 @@ jobs:
         run: |
           set -euo pipefail
           echo "markdown-lint : ${{ needs.markdown-lint.result }}"
-          echo "link-check    : ${{ needs.link-check.result }}"
+          if [[ "${{ needs.link-check.outputs.had_broken_links }}" == "true" ]]; then
+            echo "link-check    : warning (broken links detected; non-blocking)"
+          else
+            echo "link-check    : ${{ needs.link-check.result }}"
+          fi
+          echo "meta-hygiene  : ${{ needs.meta-hygiene.result }}"
 
-          for r in "${{ needs.markdown-lint.result }}" "${{ needs.link-check.result }}"; do
+          for r in "${{ needs.markdown-lint.result }}" "${{ needs.link-check.result }}" "${{ needs.meta-hygiene.result }}"; do
             if [[ "$r" == "failure" || "$r" == "cancelled" ]]; then
               echo "One or more CI jobs failed/cancelled."
               exit 1
