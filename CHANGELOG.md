@@ -722,3 +722,6 @@ All notable public-doc sync changes are appended by `jarvos-public-docs-sync.sh`
 ## 2026-03-10 16:09 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
 - Updated: templates/AGENTS-template.md
+
+## 2026-03-10 17:09 EDT — docs sync
+- Updated: docs/meta/source-to-export-map.json
