@@ -829,3 +829,6 @@ All notable public-doc sync changes are appended by `jarvos-public-docs-sync.sh`
 
 ## 2026-03-12 13:11 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
+
+## 2026-03-12 14:09 EDT — docs sync
+- Updated: docs/meta/source-to-export-map.json
