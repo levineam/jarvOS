@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-03-13T19:09:04.166Z",
+  "generatedAt": "2026-03-13T20:16:31.644Z",
   "manifestPath": "/Users/andrew/clawd/jarvos/public-docs/export-manifest.tsv",
   "vaultRoot": "/Users/andrew/Documents/Vault v3",
   "outputMode": "apply",
@@ -29,27 +29,27 @@
     },
     {
       "sourcePath": "/Users/andrew/clawd/jarvos/templates/AGENTS-template.md",
-      "destinationLogicalPath": "templates/AGENTS-template.md",
+      "destinationLogicalPath": "templates/agents-template.md",
       "destinationSlugPath": "templates/agents-template.md"
     },
     {
       "sourcePath": "/Users/andrew/clawd/jarvos/templates/BOOTSTRAP-template.md",
-      "destinationLogicalPath": "templates/BOOTSTRAP-template.md",
+      "destinationLogicalPath": "templates/bootstrap-template.md",
       "destinationSlugPath": "templates/bootstrap-template.md"
     },
     {
       "sourcePath": "/Users/andrew/clawd/jarvos/templates/HEARTBEAT-template.md",
-      "destinationLogicalPath": "templates/HEARTBEAT-template.md",
+      "destinationLogicalPath": "templates/heartbeat-template.md",
       "destinationSlugPath": "templates/heartbeat-template.md"
     },
     {
       "sourcePath": "/Users/andrew/clawd/jarvos/templates/OKR-TASK-BOARD.template.md",
-      "destinationLogicalPath": "templates/OKR-TASK-BOARD.template.md",
+      "destinationLogicalPath": "templates/okr-task-board-template.md",
       "destinationSlugPath": "templates/okr-task-board-template.md"
     },
     {
       "sourcePath": "/Users/andrew/clawd/jarvos/templates/PROJECT-KICKOFF-PACK.template.md",
-      "destinationLogicalPath": "templates/PROJECT-KICKOFF-PACK.template.md",
+      "destinationLogicalPath": "templates/project-kickoff-pack-template.md",
       "destinationSlugPath": "templates/project-kickoff-pack-template.md"
     },
     {
