@@ -6,7 +6,7 @@ created: YYYY-MM-DD
 updated: YYYY-MM-DD
 ---
 
-# Project Name - Project Brief
+## Project Name - Project Brief
 
 ## Problem Statement
 [What problem does this project solve? Why does it matter now?]

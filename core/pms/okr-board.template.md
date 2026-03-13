@@ -5,7 +5,7 @@ quarter: Q[N] YYYY
 updated: YYYY-MM-DD
 ---
 
-# Q[N] YYYY — OKR Board
+## Q[N] YYYY — OKR Board
 
 ## Objective 1: [What you want to achieve]
 

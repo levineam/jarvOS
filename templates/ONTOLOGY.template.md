@@ -13,6 +13,7 @@
 - [Core belief that shapes your decisions]
 
 ## Predictions
+
 | Prediction | Confidence | Timeframe | Last Reviewed |
 |-----------|-----------|-----------|---------------|
 | [What you think will happen] | High/Med/Low | [When] | YYYY-MM-DD |

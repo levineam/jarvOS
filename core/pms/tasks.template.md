@@ -4,7 +4,7 @@ type: task-tracker
 updated: YYYY-MM-DD
 ---
 
-# Tasks
+## Tasks
 
 ## How to Use
 Every task must have a `[[Project Board]]` link. No board = the task is ungoverned.
