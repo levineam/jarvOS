@@ -51,6 +51,7 @@ echo "  ✓ Escalation ladders, approval gates, autonomy levels"
 # ── Personal templates (don't overwrite existing) ──
 echo "→ Setting up personal files..."
 for tmpl in "$TEMPLATES_DIR"/*.template.md; do
+  [ -f "$tmpl" ] || continue
   base=$(basename "$tmpl" .template.md)
   target="$WORKSPACE/$base.md"
   if [ -f "$target" ]; then

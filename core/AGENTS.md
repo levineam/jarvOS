@@ -74,6 +74,23 @@ Process fires when:
 1. **Touching any core doc** (AGENTS.md, SOUL.md, IDENTITY.md, or agents/*.md)
 2. **Proposing any new rule, behavioral constraint, or policy change**
 
+### Where Rules Live
+
+Before writing a rule, route it to the correct file:
+
+| Content type | Where it belongs |
+|---|---|
+| Always-loaded behavioral rules | AGENTS.md |
+| Tool CLI patterns, command references | TOOLS.md |
+| Model routing, session/spawn policy | agents/system.md (or runtime equivalent) |
+| Project management, planning, governance | agents/projects.md (or PMS docs) |
+| Content/writing rules | agents/content.md |
+| External messaging, customer comms | agents/customers.md |
+
+**Before writing to any file, ask: "Does this content match this file's purpose?"** If not, route it to the correct destination. Files drift from their purpose over time — this is the most common source of bloat and confusion.
+
+TOOLS.md in particular attracts drift: it should contain **only** tool/CLI references, not policy, process, or governance rules.
+
 ### How to Wire a Rule
 1. **Wire it first.** Add the rule to the appropriate file BEFORE responding.
 2. **Report what was done.** Your message should say "Added X to Y" — not "Want me to add X to Y?"
