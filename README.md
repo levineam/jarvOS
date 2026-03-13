@@ -11,7 +11,6 @@ jarvOS has 5 main components:
 4. Continuous Learning and Execution
 5. Security
 
-
 It was built on top of [OpenClaw](https://openclaw.ai), which ships with a capable AI assistant, tool access, scheduling, and delivery channels. jarvOS is the layer that tells it what to actually do with all that.
 
 ## The problem
@@ -42,49 +41,70 @@ Briefings tie it together — morning, evening. Each one pulls the relevant slic
 
 OpenClaw provides the foundation: session management, cron scheduling, tool access, channel delivery, and a set of baseline workspace files. jarvOS runs on top of it. The governance layer, the briefing system, the project hierarchy — none of it replaces OpenClaw's infrastructure; it runs on it.
 
-What this repo adds on the behavior side: an enhanced AGENTS.md with invisible orchestration, specialist mode detection, auto model tiering, a full writer pipeline, a Process section that enforces rule-wiring discipline, and red team checkpoints for development work. An enhanced HEARTBEAT.md that's a comprehensive multi-section playbook — what actually runs on OpenClaw's scheduler. A memory architecture that adds daily session files, heartbeat-state.json for check-in tracking, and a briefing queue for decisions that need your attention. Scripts that handle governance scanning, frontmatter linting, and maintenance work.
+What this repo adds on the behavior side: an enhanced AGENTS.md with invisible orchestration, specialist mode detection, auto model tiering, a full writer pipeline, and a Process section that enforces rule-wiring discipline. An enhanced HEARTBEAT.md that's a multi-section playbook for what actually runs on OpenClaw's scheduler. A memory architecture that adds daily session files, heartbeat-state tracking, and a briefing queue for decisions that need your attention. Scripts and templates that help keep the system readable by both humans and AI.
 
 Your instance is the third layer: your persona, your schedule, your integrations. This repo gives you the second. OpenClaw provides the first.
 
 ## Quick start
 
-Clone the repo. Copy the files from `templates/` into your OpenClaw workspace. Tell your assistant to read `BOOTSTRAP.md` and follow its instructions — it handles setup and explains the system in its own terms.
+Clone the repo. Copy the shipped core templates from `templates/` into your OpenClaw workspace, then tell your assistant to read `BOOTSTRAP.md` and follow it.
 
-From there: set up your ONTOLOGY.md (start with Mission and a few Goals), create your first project with a Board and Brief, and let the Plan drive what gets worked on. The whole system is readable by both humans and AI, so when something doesn't work the way you expect, reading the relevant file usually tells you why.
+Minimal setup:
 
-## What's in the templates folder
+1. Copy `templates/AGENTS-template.md` to `AGENTS.md`
+2. Copy `templates/HEARTBEAT-template.md` to `HEARTBEAT.md`
+3. Copy `templates/BOOTSTRAP-template.md` to `BOOTSTRAP.md`
+4. Copy the planning templates you want from `templates/` or `starter-kit/templates/`
+5. Provide your own local `USER.md`, `MEMORY.md`, and any persona/alignment files your setup requires
+
+This public repo does **not** currently ship templates for `SOUL.md`, `IDENTITY.md`, `TOOLS.md`, or `ONTOLOGY.md`, so a real dogfood canary still needs local overlay copies for those files.
+
+From there: create your first project with a Board and Brief, let the Plan drive what gets worked on, and keep long-lived context in files instead of chat whenever possible.
+
+## What's currently shipped
+
+### Core runtime templates
 
 | File | Purpose |
 |------|---------|
 | `AGENTS-template.md` | Core behavior — copy to `AGENTS.md` in your workspace |
 | `HEARTBEAT-template.md` | Proactive check-in — copy to `HEARTBEAT.md` in your workspace |
-| `soul-template.md` | Persona definition — copy to `SOUL.md` in your workspace |
-| `identity-template.md` | Name, creature, emoji — copy to `IDENTITY.md` in your workspace |
-| `tools-template.md` | Operational policy — copy to `TOOLS.md` in your workspace |
-| `ontology-template.md` | Personal alignment map — copy to `ONTOLOGY.md` in your workspace |
-| `BOOTSTRAP-template.md` | First-run instructions — copy to `BOOTSTRAP.md`, delete after setup |
+| `BOOTSTRAP-template.md` | First-run instructions — copy to `BOOTSTRAP.md`, then delete after setup |
+
+### Planning templates
+
+| File | Purpose |
+|------|---------|
+| `okr-task-board-template.md` | Reusable OKR-linked task board |
+| `project-kickoff-pack-template.md` | Reusable kickoff pack for project setup |
+
+The root `templates/` directory is the canonical copy. `starter-kit/templates/` mirrors the planning templates so you can lift the starter kit on its own.
 
 ## What's in the starter-kit folder
 
-The `starter-kit/` folder has project management templates and Lobster workflow gates:
+The `starter-kit/` folder is a small portable pack, not a full runtime:
 
-- `templates/` — OKR Task Board + Project Kickoff Pack
-- `workflows/` — Lobster gate examples (`write-prose.lobster`, `spawn-code-subagent.lobster`)
+- `templates/` — mirrored planning templates
+- `workflows/basic-ci.yml` — starter automation example you can adapt
+- `readme.md` — usage notes for the planning-only subset
 
-## Optional modules
+## Current dogfood baseline status
 
-For advanced setups, see `docs/optional/`:
+This repo is now documented as a **public-safe docs/template baseline**, not a zero-config clone of Andrew's live workspace.
 
-- `jsonl-memory.md` — Structured JSONL memory schema (experiences, decisions, failures). Useful when markdown memory starts to break down at scale.
-- `context-engineering.md` — How to install and configure the ClawHub context engineering skill pack. Useful for multi-agent work and token optimization.
+Before Andrew can dogfood it as the real baseline, these conditions still need to be true:
 
-Start without these. Add them when you hit the specific pain points they solve.
+1. README and starter-kit docs stay aligned with the files actually shipped here.
+2. Public metadata stays sanitized — no Andrew-local absolute paths in exported docs.
+3. Local overlay files exist for `USER.md`, `MEMORY.md`, `SOUL.md`, `IDENTITY.md`, `TOOLS.md`, and `ONTOLOGY.md`.
+4. A clean canary workspace proves `AGENTS.md`, `HEARTBEAT.md`, and `BOOTSTRAP.md` run correctly with those overlays.
+5. Only after that can broader automation be enabled with confidence.
 
 ## Philosophy
 
 The behaviors are on by default. You turn things off when they don't fit rather than manually activating each feature. An assistant that requires constant configuration isn't a system — it's a to-do list you maintain for your to-do list.
 
-Everything is markdown. No database, no cloud service, no proprietary format. The files are readable, versionable with git, and moveable between AI platforms as the ecosystem shifts.
+Everything is markdown. No database, no cloud service, no proprietary format. The files are readable, versionable with git, and movable between AI platforms as the ecosystem shifts.
 
 The design principle throughout: if a behavior can run without pulling you in, it should. If it can't, it surfaces a clear ask with a recommended default rather than a wall of options.
 
