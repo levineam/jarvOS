@@ -180,7 +180,19 @@ fi
 echo "→ Installing jarvOS skill..."
 HERMES_SKILLS="$HOME/.hermes/skills/jarvos"
 mkdir -p "$HERMES_SKILLS"
-copy_if_missing "$SKILL_DIR/SKILL.md" "$HERMES_SKILLS/SKILL.md"
+if [ -f "$HERMES_SKILLS/SKILL.md" ]; then
+  if cmp -s "$SKILL_DIR/SKILL.md" "$HERMES_SKILLS/SKILL.md"; then
+    echo "  ✓ SKILL.md already up to date"
+  else
+    backup="$HERMES_SKILLS/SKILL.md.bak.$(date +%Y%m%d%H%M%S).$$"
+    cp "$HERMES_SKILLS/SKILL.md" "$backup"
+    cp "$SKILL_DIR/SKILL.md" "$HERMES_SKILLS/SKILL.md"
+    echo "  • Updated SKILL.md (backup: $backup)"
+  fi
+else
+  cp "$SKILL_DIR/SKILL.md" "$HERMES_SKILLS/SKILL.md"
+  echo "  + SKILL.md installed"
+fi
 echo "  ✓ jarvos skill ready at ~/.hermes/skills/"
 
 # ── Configure Hermes workspace ──
