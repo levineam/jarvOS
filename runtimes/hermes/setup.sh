@@ -197,36 +197,64 @@ if command -v hermes >/dev/null 2>&1; then
       tmp_config="$HERMES_CONFIG.tmp.$$"
 
       awk -v workspace="$yaml_workspace" '
+        function leading_ws(str, tmp) {
+          tmp = str
+          sub(/[^[:space:]].*$/, "", tmp)
+          return tmp
+        }
         BEGIN {
           in_terminal = 0
           updated = 0
+          term_indent = ""
           child_indent = "  "
+          term_indent_len = 0
+          child_indent_len = 2
+          child_indent_set = 0
         }
-        /^([[:space:]]*)terminal:[[:space:]]*(#.*)?$/ {
-          print
-          in_terminal = 1
-          updated = 0
-          match($0, /^([[:space:]]*)terminal:/, m)
-          child_indent = m[1] "  "
-          next
-        }
-        in_terminal && /^[^[:space:]]/ {
-          if (!updated) {
-            printf "%scwd: '\''%s'\''\n", child_indent, workspace
-            updated = 1
+        {
+          line = $0
+
+          if (line ~ /^[[:space:]]*terminal:[[:space:]]*(#.*)?$/) {
+            print line
+            in_terminal = 1
+            updated = 0
+            term_indent = leading_ws(line)
+            term_indent_len = length(term_indent)
+            child_indent = term_indent "  "
+            child_indent_len = term_indent_len + 2
+            child_indent_set = 0
+            next
           }
-          in_terminal = 0
+
+          if (in_terminal) {
+            trimmed = line
+            sub(/^[[:space:]]+/, "", trimmed)
+
+            if (trimmed != "" && trimmed !~ /^#/) {
+              line_indent_len = length(leading_ws(line))
+
+              if (line_indent_len > term_indent_len && !child_indent_set) {
+                child_indent = leading_ws(line)
+                child_indent_len = line_indent_len
+                child_indent_set = 1
+              }
+
+              if (line_indent_len <= term_indent_len) {
+                if (!updated) {
+                  printf "%scwd: '\''%s'\''\n", child_indent, workspace
+                  updated = 1
+                }
+                in_terminal = 0
+              } else if (line_indent_len == child_indent_len && trimmed ~ /^cwd:[[:space:]]*/) {
+                printf "%scwd: '\''%s'\''\n", child_indent, workspace
+                updated = 1
+                next
+              }
+            }
+          }
+
+          print line
         }
-        in_terminal && /^[[:space:]]+[^[:space:]#]/ {
-          match($0, /^([[:space:]]+)/, m)
-          child_indent = m[1]
-        }
-        in_terminal && /^[[:space:]]+cwd:[[:space:]]*/ {
-          printf "%scwd: '\''%s'\''\n", child_indent, workspace
-          updated = 1
-          next
-        }
-        { print }
         END {
           if (in_terminal && !updated) {
             printf "%scwd: '\''%s'\''\n", child_indent, workspace
