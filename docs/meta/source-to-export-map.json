@@ -11,7 +11,7 @@
     "templates/HEARTBEAT-template.md": "templates/heartbeat-template.md",
     "templates/OKR-TASK-BOARD.template.md": "templates/okr-task-board-template.md",
     "templates/PROJECT-KICKOFF-PACK.template.md": "templates/project-kickoff-pack-template.md",
-    "starter-kit/README.md": "starter-kit/README.md",
+    "starter-kit/README.md": "starter-kit/readme.md",
     "starter-kit/templates/OKR-TASK-BOARD.template.md": "starter-kit/templates/okr-task-board-template.md",
     "starter-kit/templates/PROJECT-KICKOFF-PACK.template.md": "starter-kit/templates/project-kickoff-pack-template.md",
     "starter-kit/workflows/basic-ci.yml": "starter-kit/workflows/basic-ci.yml"
@@ -55,7 +55,7 @@
     {
       "sourcePath": "starter-kit/README.md",
       "destinationLogicalPath": "starter-kit/README.md",
-      "destinationSlugPath": "starter-kit/README.md"
+      "destinationSlugPath": "starter-kit/readme.md"
     },
     {
       "sourcePath": "starter-kit/templates/OKR-TASK-BOARD.template.md",

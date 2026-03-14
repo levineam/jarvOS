@@ -90,7 +90,7 @@ The `starter-kit/` folder is a small portable pack, not a full runtime:
 
 ## Current dogfood baseline status
 
-This repo is now documented as a **public-safe docs/template baseline**, not a zero-config clone of Andrew's live workspace.
+This repo is now documented as a **public docs/template baseline candidate** (still validating public-safe readiness), not a zero-config clone of Andrew's live workspace.
 
 Before Andrew can dogfood it as the real baseline, these conditions still need to be true:
 
