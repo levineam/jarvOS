@@ -5,23 +5,18 @@ All notable public-doc sync changes are appended by `jarvos-public-docs-sync.sh`
 ## 2026-03-06 — fix: resolve PR #2 merge blockers
 
 - `.github/workflows/ci.yml` — removed the missing `.mlc-config.json` reference and broadened the absolute-path leak check to catch any root-based Unix path or Windows drive path
-- `README.md` — pointed the rollout section at the shipped public canary runbook
-- `docs/troubleshooting/context-management-overload.md` — added public troubleshooting guidance for overloaded sessions
-- `docs/troubleshooting/acp-wrapper-regression-workaround.md` — added a public-safe temporary `acpx` fallback note
-- `docs/dogfood/phase-b-canary-runbook.md` — added the public Phase B canary checklist referenced by the README
+- `README.md` — updated rollout notes to reference only docs shipped in this repo
+- `docs/meta/source-to-export-map.json` — sanitized machine-local absolute paths from public metadata export fields
 
 ## 2026-03-06 — fix: address follow-up CodeRabbit findings
 
 - `.github/workflows/ci.yml` — expanded the metadata leak gate to catch both `C:\...` and `C:/...` absolute Windows paths
-- `docs/troubleshooting/acp-wrapper-regression-workaround.md` — clarified that raw commands and error output belong in a private incident log, while tracked public notes should only contain sanitized summaries
+- `templates/AGENTS-template.md` — restored the required trailing newline for markdownlint compatibility
 
 ## 2026-03-06 — docs: Phase A public repo hygiene + dogfood prep
 
 - `README.md` — corrected shipped-file inventory, removed stale optional/docs references, and clarified which files must still be provided locally during canaries
 - `starter-kit/README.md` — corrected file paths to match the public repo layout
-- `docs/troubleshooting/context-management-overload.md` — added generic recovery guidance for context overload incidents
-- `docs/troubleshooting/acp-wrapper-regression-workaround.md` — added temporary direct-`acpx` one-shot fallback guidance
-- `docs/dogfood/phase-b-canary-runbook.md` — added concise clone + overlay canary checklist for Phase B
 - `docs/meta/source-to-export-map.json` and architecture docs — sanitized private absolute paths and operator-specific/internal-only wording
 
 ## 2026-02-28 — feat: major update — new templates, patterns, and optional modules

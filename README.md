@@ -90,9 +90,9 @@ The `starter-kit/` folder contains a small portable pack:
 
 ## Troubleshooting and rollout notes
 
-- `docs/troubleshooting/context-management-overload.md` — stabilize sessions when context gets too large
-- `docs/troubleshooting/acp-wrapper-regression-workaround.md` — temporary direct-`acpx` fallback when a wrapper path regresses
-- `docs/dogfood/phase-b-canary-runbook.md` — public-safe clone + overlay checklist for Phase B canaries
+- `starter-kit/README.md` — starter-kit setup and rollout checklist
+- `docs/architecture/jarvos-architecture.md` — architecture overview and operating model
+- `docs/architecture/architecture-decision-records/architecture-decision-record-20260219-ars-contexta-patterns.md` — architecture decision context
 
 ## Philosophy
 
