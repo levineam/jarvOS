@@ -12,8 +12,8 @@ PMS_DIR="$REPO_ROOT/core/pms"
 GOV_DIR="$REPO_ROOT/core/governance"
 SKILL_DIR="$SCRIPT_DIR/skills/jarvos"
 
-# Default workspace is ~/jarvos, override with first argument
-WORKSPACE="${1:-$HOME/jarvos}"
+# Default workspace is this clone root, override with first argument
+WORKSPACE="${1:-$REPO_ROOT}"
 
 echo "┌─────────────────────────────────────────────────┐"
 echo "│            jarvOS — Hermes Setup                 │"
@@ -28,10 +28,16 @@ mkdir -p "$WORKSPACE/pms" "$WORKSPACE/governance"
 
 # ── Core files ──
 echo "→ Installing core behavioral layer..."
-cp "$CORE_DIR/AGENTS.md" "$WORKSPACE/AGENTS.md"
-cp "$CORE_DIR/SOUL.md" "$WORKSPACE/SOUL.md"
-cp "$CORE_DIR/IDENTITY.md" "$WORKSPACE/IDENTITY.md"
-echo "  ✓ AGENTS.md, SOUL.md, IDENTITY.md"
+for core_file in AGENTS.md SOUL.md IDENTITY.md; do
+  src="$CORE_DIR/$core_file"
+  dst="$WORKSPACE/$core_file"
+  if [ -f "$dst" ]; then
+    echo "  ⚠ $core_file exists — keeping yours"
+  else
+    cp "$src" "$dst"
+    echo "  + $core_file installed"
+  fi
+done
 
 # ── PMS templates ──
 echo "→ Installing Project Management System..."
@@ -41,7 +47,10 @@ cp "$PMS_DIR/project-brief.template.md" "$WORKSPACE/pms/project-brief.template.m
 cp "$PMS_DIR/plan.template.md" "$WORKSPACE/pms/plan.template.md"
 cp "$PMS_DIR/tasks.template.md" "$WORKSPACE/pms/tasks.template.md"
 cp "$PMS_DIR/okr-board.template.md" "$WORKSPACE/pms/okr-board.template.md"
-echo "  ✓ Project Board, Brief, Plan, Tasks, OKR templates"
+if [ -f "$PMS_DIR/session-lifecycle.md" ]; then
+  cp "$PMS_DIR/session-lifecycle.md" "$WORKSPACE/pms/session-lifecycle.md"
+fi
+echo "  ✓ Project Board, Brief, Plan, Tasks, OKR templates, Session Lifecycle guide"
 
 # ── Governance ──
 echo "→ Installing governance patterns..."
@@ -117,15 +126,47 @@ echo "→ Configuring Hermes..."
 if command -v hermes >/dev/null 2>&1; then
   HERMES_CONFIG="$HOME/.hermes/config.yaml"
   if [ -f "$HERMES_CONFIG" ]; then
-    if grep -q "cwd:" "$HERMES_CONFIG"; then
-      sed -i.bak "s|cwd:.*|cwd: $WORKSPACE|" "$HERMES_CONFIG"
-      echo "  ✓ Hermes workspace set to $WORKSPACE"
+    if grep -qE '^terminal:[[:space:]]*(#.*)?$' "$HERMES_CONFIG"; then
+      yaml_workspace=$(printf "%s" "$WORKSPACE" | sed "s/'/'\"'\"'/g")
+      replacement=$(printf "  cwd: '%s'" "$yaml_workspace")
+
+      cp "$HERMES_CONFIG" "$HERMES_CONFIG.bak"
+      awk -v replacement="$replacement" '
+        BEGIN { in_terminal = 0; updated = 0 }
+        /^terminal:[[:space:]]*(#.*)?$/ {
+          print
+          in_terminal = 1
+          next
+        }
+        in_terminal && /^[^[:space:]]/ {
+          if (!updated) {
+            print replacement
+            updated = 1
+          }
+          in_terminal = 0
+        }
+        in_terminal && /^[[:space:]]+cwd:[[:space:]]*/ {
+          print replacement
+          updated = 1
+          next
+        }
+        { print }
+        END {
+          if (in_terminal && !updated) {
+            print replacement
+          }
+        }
+      ' "$HERMES_CONFIG" > "$HERMES_CONFIG.tmp" && mv "$HERMES_CONFIG.tmp" "$HERMES_CONFIG"
+
+      echo "  ✓ Hermes terminal.cwd set to $WORKSPACE"
     else
-      echo "  ⚠ Set terminal.cwd to $WORKSPACE in $HERMES_CONFIG"
+      echo "  ⚠ Could not find terminal: block in $HERMES_CONFIG"
+      echo "    Add this under terminal:"
+      echo "    cwd: '$WORKSPACE'"
     fi
   else
     echo "  ⚠ Config not found at $HERMES_CONFIG"
-    echo "    Run 'hermes setup' first, then set terminal.cwd: $WORKSPACE"
+    echo "    Run 'hermes setup' first, then re-run this script"
   fi
 else
   echo "  ⚠ hermes not found — install it first, then set terminal.cwd to $WORKSPACE"
@@ -146,8 +187,7 @@ echo "│                                                 │"
 echo "│  Next steps:                                    │"
 echo "│  1. Edit USER.md with your info                 │"
 echo "│  2. Edit ONTOLOGY.md with your mission + goals  │"
-echo "│  3. Run: hermes setup (if not done)             │"
-echo "│  4. Run: hermes                                 │"
-echo "│  5. Tell your agent: 'Read AGENTS.md and the    │"
+echo "│  3. Run: hermes                                 │"
+echo "│  4. Tell your agent: 'Read AGENTS.md and the    │"
 echo "│     pms/ and governance/ directories'            │"
 echo "└─────────────────────────────────────────────────┘"

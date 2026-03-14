@@ -11,7 +11,7 @@ This folder currently ships as **documentation-only** (this README). The actual 
 Use this as an adapter checklist for files you place in your workspace root:
 
 - **HEARTBEAT.md** — start from `templates/HEARTBEAT-template.md`
-- **TOOLS.md** — start from `templates/TOOLS.template.md`
+- **TOOLS.md** — create this in your workspace (tool CLI notes + local operational patterns)
 - **AGENTS.md / SOUL.md / IDENTITY.md** — copy from `core/`
 - **CONSTITUTION.md / CRITICAL-RULES.md** — create for your runtime-specific routing and safety rules
 - **scripts/** — operational scripts (governance, briefing, cron management, etc.)
@@ -49,9 +49,9 @@ workspace/
 **Budget targets:**
 - Individual files: keep under 13K chars (warn at 15K, hard limit at 20K)
 - Total always-loaded: keep under 80% of model context budget
-- Run `node scripts/context-watchdog.js` to check current status
+- Run `node scripts/context-watchdog.js` (coming soon) to check current status
 
-**Anti-drift:** Schedule daily trend captures with `node scripts/context-budget-trend-capture.js` and run weekly governance reviews to catch gradual growth before it hits limits.
+**Anti-drift:** Schedule daily trend captures with `node scripts/context-budget-trend-capture.js` (coming soon) and run weekly governance reviews to catch gradual growth before it hits limits.
 
 ## Session Lifecycle — OpenClaw Implementation
 
