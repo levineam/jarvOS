@@ -6,14 +6,16 @@ This directory contains OpenClaw-specific implementation files for jarvOS.
 
 OpenClaw provides powerful scheduling, tool execution, and multi-channel messaging — but ships with blank templates. jarvOS fills the behavioral layer.
 
-This folder currently ships as **documentation-only** (this README). Use it as the adapter checklist for the files you place in your OpenClaw workspace root, such as:
+This folder currently ships as **documentation-only** (this README). The actual starter files live in repo root (`core/` and `templates/`) and are copied into your OpenClaw workspace.
 
-- **HEARTBEAT.md** — Proactive check-in system with script paths and governance scans
-- **TOOLS.md** — Operational cheat sheet for OpenClaw commands and patterns
-- **CONSTITUTION.md** — Routing rules using OpenClaw sessions and tools
-- **CRITICAL-RULES.md** — Runtime-specific critical rules (sessions_spawn, cron, QMD, ACP)
-- **scripts/** — Operational scripts (governance, briefing, cron management, etc.)
-- **workflows/** — Lobster approval workflows for high-stakes actions
+Use this as an adapter checklist for files you place in your workspace root:
+
+- **HEARTBEAT.md** — start from `templates/HEARTBEAT-template.md`
+- **TOOLS.md** — start from `templates/TOOLS.template.md`
+- **AGENTS.md / SOUL.md / IDENTITY.md** — copy from `core/`
+- **CONSTITUTION.md / CRITICAL-RULES.md** — create for your runtime-specific routing and safety rules
+- **scripts/** — operational scripts (governance, briefing, cron management, etc.)
+- **workflows/** — approval workflows for high-stakes actions
 
 ## Setup
 
