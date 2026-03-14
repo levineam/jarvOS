@@ -26,6 +26,18 @@ echo ""
 
 mkdir -p "$WORKSPACE/pms" "$WORKSPACE/governance"
 
+copy_if_missing() {
+  local src="$1"
+  local dst="$2"
+
+  if [ -f "$dst" ]; then
+    echo "  ⚠ $(basename "$dst") exists — keeping yours"
+  else
+    cp "$src" "$dst"
+    echo "  + $(basename "$dst") installed"
+  fi
+}
+
 # ── Core files ──
 echo "→ Installing core behavioral layer..."
 for core_file in AGENTS.md SOUL.md IDENTITY.md; do
@@ -41,20 +53,20 @@ done
 
 # ── PMS templates ──
 echo "→ Installing Project Management System..."
-cp "$PMS_DIR/README.md" "$WORKSPACE/pms/README.md"
-cp "$PMS_DIR/project-board.template.md" "$WORKSPACE/pms/project-board.template.md"
-cp "$PMS_DIR/project-brief.template.md" "$WORKSPACE/pms/project-brief.template.md"
-cp "$PMS_DIR/plan.template.md" "$WORKSPACE/pms/plan.template.md"
-cp "$PMS_DIR/tasks.template.md" "$WORKSPACE/pms/tasks.template.md"
-cp "$PMS_DIR/okr-board.template.md" "$WORKSPACE/pms/okr-board.template.md"
+copy_if_missing "$PMS_DIR/README.md" "$WORKSPACE/pms/README.md"
+copy_if_missing "$PMS_DIR/project-board.template.md" "$WORKSPACE/pms/project-board.template.md"
+copy_if_missing "$PMS_DIR/project-brief.template.md" "$WORKSPACE/pms/project-brief.template.md"
+copy_if_missing "$PMS_DIR/plan.template.md" "$WORKSPACE/pms/plan.template.md"
+copy_if_missing "$PMS_DIR/tasks.template.md" "$WORKSPACE/pms/tasks.template.md"
+copy_if_missing "$PMS_DIR/okr-board.template.md" "$WORKSPACE/pms/okr-board.template.md"
 if [ -f "$PMS_DIR/session-lifecycle.md" ]; then
-  cp "$PMS_DIR/session-lifecycle.md" "$WORKSPACE/pms/session-lifecycle.md"
+  copy_if_missing "$PMS_DIR/session-lifecycle.md" "$WORKSPACE/pms/session-lifecycle.md"
 fi
 echo "  ✓ Project Board, Brief, Plan, Tasks, OKR templates, Session Lifecycle guide"
 
 # ── Governance ──
 echo "→ Installing governance patterns..."
-cp "$GOV_DIR/README.md" "$WORKSPACE/governance/README.md"
+copy_if_missing "$GOV_DIR/README.md" "$WORKSPACE/governance/README.md"
 echo "  ✓ Escalation ladders, approval gates, autonomy levels"
 
 # ── Personal templates (don't overwrite existing) ──

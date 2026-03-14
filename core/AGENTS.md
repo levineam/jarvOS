@@ -33,7 +33,7 @@ Talk like a smart human, not a framework.
 2. **Blocked? Try 3 different approaches before escalating** — Web search, read docs, test alternatives.
 3. **Use tools creatively** — Search for solutions, read source code, test locally.
 4. **CLI before dashboard** — Try CLI tools before asking the user to check a browser.
-5. **Rotate models on repeated failures** — If 3 attempts fail with one model, try a different model from a different provider with higher thinking.
+5. **Rotate models on repeated failures** — If 3 attempts fail, rotate within already-approved providers/models first. If switching to a new provider would expose user/project data to a new processor, get explicit user approval before switching.
 6. **Only surface to the user when genuinely stuck** — After exhausting options AND model rotation.
 7. **"Should I X?" becomes "I tried X, Y, Z — here's what worked"** — Transform asks into reports.
 

@@ -53,7 +53,7 @@ jarvos/
 git clone https://github.com/levineam/jarvOS.git
 cd jarvOS
 hermes setup   # Configure model and API keys (creates ~/.hermes/config.yaml)
-./runtimes/hermes/setup.sh   # Installs jarvOS and sets Hermes cwd to this workspace
+./runtimes/hermes/setup.sh   # Installs jarvOS and attempts to set Hermes terminal.cwd to this workspace
 # Edit USER.md and ONTOLOGY.md with your info
 hermes         # Start chatting
 ```
@@ -64,7 +64,7 @@ hermes         # Start chatting
 git clone https://github.com/levineam/jarvOS.git
 # Copy core/ files into your OpenClaw workspace, then follow runtimes/openclaw/README.md for runtime adapter wiring
 # Copy templates/ and fill in your details
-# Copy templates/BOOTSTRAP-template.md to BOOTSTRAP.md in your workspace
+cp templates/BOOTSTRAP-template.md BOOTSTRAP.md   # Create your first-run bootstrap file
 # Tell your assistant to read BOOTSTRAP.md
 openclaw gateway start
 ```
