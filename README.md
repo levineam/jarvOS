@@ -32,7 +32,8 @@ jarvos/
 ├── templates/             # You fill these in
 │   ├── USER.template.md   # About you
 │   ├── MEMORY.template.md # Long-term memory seed
-│   └── ONTOLOGY.template.md # Your values and goals
+│   ├── ONTOLOGY.template.md # Your values and goals
+│   └── TOOLS.template.md  # Local tool notes + guardrails
 ├── runtimes/
 │   ├── openclaw/          # OpenClaw-specific (scripts, workflows, heartbeat)
 │   └── hermes/            # Hermes-specific (setup script, lean adapter)
@@ -64,9 +65,9 @@ hermes         # Start chatting
 git clone https://github.com/levineam/jarvOS.git
 cd jarvOS
 # Copy core/ files into your OpenClaw workspace, then follow runtimes/openclaw/README.md for runtime adapter wiring
-# Copy templates/ and fill in your details
-cp templates/BOOTSTRAP-template.md BOOTSTRAP.md   # Create your first-run bootstrap file
-# Tell your assistant to read BOOTSTRAP.md
+# Copy templates/ into that workspace and fill in your details
+cp templates/BOOTSTRAP-template.md /path/to/your/openclaw-workspace/BOOTSTRAP.md
+# Tell your assistant (in that workspace) to read BOOTSTRAP.md
 openclaw gateway start
 ```
 

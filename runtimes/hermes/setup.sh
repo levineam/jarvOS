@@ -104,6 +104,14 @@ if [ ! -f "$WORKSPACE/USER.md" ]; then
 
 ## Timezone
 [Your IANA timezone, e.g. America/New_York]
+
+## Priorities
+- [Top priority 1]
+- [Top priority 2]
+
+## Preferences
+- [Communication style]
+- [Working hours]
 EOF
   echo "  + USER.md created"
 fi
@@ -121,6 +129,10 @@ if [ ! -f "$WORKSPACE/ONTOLOGY.md" ]; then
 
 ## Goals
 - [Goal 1]
+- [Goal 2]
+
+## Constraints
+- [Hard constraints to respect]
 EOF
   echo "  + ONTOLOGY.md created"
 fi
@@ -168,12 +180,17 @@ if command -v hermes >/dev/null 2>&1; then
   HERMES_CONFIG="$HOME/.hermes/config.yaml"
   if [ -f "$HERMES_CONFIG" ]; then
     if grep -qE '^terminal:[[:space:]]*(#.*)?$' "$HERMES_CONFIG"; then
-      yaml_workspace=$(printf "%s" "$WORKSPACE" | sed "s/'/'\"'\"'/g")
+      yaml_workspace=$(printf "%s" "$WORKSPACE" | sed "s/'/''/g")
       replacement=$(printf "  cwd: '%s'" "$yaml_workspace")
 
       backup="$HERMES_CONFIG.bak.$(date +%Y%m%d%H%M%S).$$"
       cp "$HERMES_CONFIG" "$backup"
       echo "  • Backup saved to $backup"
+
+      config_mode=$(stat -c '%a' "$HERMES_CONFIG" 2>/dev/null || stat -f '%Lp' "$HERMES_CONFIG")
+      config_owner=$(stat -c '%u:%g' "$HERMES_CONFIG" 2>/dev/null || stat -f '%u:%g' "$HERMES_CONFIG")
+      tmp_config="$HERMES_CONFIG.tmp.$$"
+
       awk -v replacement="$replacement" '
         BEGIN { in_terminal = 0; updated = 0 }
         /^terminal:[[:space:]]*(#.*)?$/ {
@@ -199,7 +216,11 @@ if command -v hermes >/dev/null 2>&1; then
             print replacement
           }
         }
-      ' "$HERMES_CONFIG" > "$HERMES_CONFIG.tmp" && mv "$HERMES_CONFIG.tmp" "$HERMES_CONFIG"
+      ' "$HERMES_CONFIG" > "$tmp_config"
+
+      chmod "$config_mode" "$tmp_config" 2>/dev/null || true
+      chown "$config_owner" "$tmp_config" 2>/dev/null || true
+      mv "$tmp_config" "$HERMES_CONFIG"
 
       echo "  ✓ Hermes terminal.cwd set to $WORKSPACE"
     else
