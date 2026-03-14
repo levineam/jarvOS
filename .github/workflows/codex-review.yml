@@ -41,22 +41,37 @@ jobs:
             const isTrustedActor = trustedActors.has(actor) || senderType === 'Bot'
 
             const pr = context.payload.pull_request
-            const headSha = pr.head.sha
-            const { data: commit } = await github.rest.git.getCommit({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              commit_sha: headSha,
+            const owner = context.repo.owner
+            const repo = context.repo.repo
+
+            const commits = await github.paginate(github.rest.pulls.listCommits, {
+              owner,
+              repo,
+              pull_number: pr.number,
+              per_page: 100,
             })
-            const firstLine = (commit.message || '').split('\n')[0]
-            const hasAutoCommitPrefix =
-              firstLine.startsWith('auto-commit:') ||
-              firstLine.startsWith('docs(sync):')
-            const isAutoCommit = isTrustedActor && hasAutoCommitPrefix
-            if (isAutoCommit) {
-              core.info(`Skipping review trigger — trusted auto-commit detected: "${firstLine}"`)
+
+            const getFirstLine = message => (message || '').split('\n')[0]
+            const hasAutoCommitPrefix = message =>
+              message.startsWith('auto-commit:') ||
+              message.startsWith('docs(sync):')
+
+            const nonAutoCommits = commits.filter(({ commit }) => {
+              const firstLine = getFirstLine(commit?.message)
+              return !hasAutoCommitPrefix(firstLine)
+            })
+
+            const isAutoCommitPr =
+              isTrustedActor && commits.length > 0 && nonAutoCommits.length === 0
+
+            if (isAutoCommitPr) {
+              core.info(
+                `Skipping review trigger — trusted auto-commit PR detected (${commits.length} commit${commits.length === 1 ? '' : 's'}).`
+              )
               core.setOutput('skip', 'true')
             } else {
-              core.info(`Proceeding with review trigger for: "${firstLine}"`)
+              const sample = getFirstLine(nonAutoCommits[0]?.commit?.message)
+              core.info(`Proceeding with review trigger${sample ? ` for: "${sample}"` : '.'}`)
               core.setOutput('skip', 'false')
             }
 

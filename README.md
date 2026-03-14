@@ -68,6 +68,7 @@ cd jarvOS
 # Copy templates/ into that workspace and fill in your details
 cp templates/BOOTSTRAP-template.md /path/to/your/openclaw-workspace/BOOTSTRAP.md
 # Tell your assistant (in that workspace) to read BOOTSTRAP.md
+cd /path/to/your/openclaw-workspace
 openclaw gateway start
 ```
 
