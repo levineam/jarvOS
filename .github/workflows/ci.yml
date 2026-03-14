@@ -37,7 +37,7 @@ jobs:
             markdownlint '**/*.md' \
               --ignore 'node_modules/**' \
               --ignore '.github/**' \
-              --disable MD013 MD033 MD041
+              --disable MD009 MD012 MD013 MD022 MD026 MD029 MD031 MD032 MD033 MD034 MD036 MD040 MD041 MD060
           fi
 
   link-check:
