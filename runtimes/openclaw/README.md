@@ -4,7 +4,9 @@ This directory contains OpenClaw-specific implementation files for jarvOS.
 
 ## What's Here
 
-OpenClaw provides powerful scheduling, tool execution, and multi-channel messaging — but ships with blank templates. jarvOS fills the behavioral layer. This adapter wires jarvOS principles into OpenClaw-specific tooling:
+OpenClaw provides powerful scheduling, tool execution, and multi-channel messaging — but ships with blank templates. jarvOS fills the behavioral layer.
+
+This folder currently ships as **documentation-only** (this README). Use it as the adapter checklist for the files you place in your OpenClaw workspace root, such as:
 
 - **HEARTBEAT.md** — Proactive check-in system with script paths and governance scans
 - **TOOLS.md** — Operational cheat sheet for OpenClaw commands and patterns
@@ -19,7 +21,7 @@ OpenClaw provides powerful scheduling, tool execution, and multi-channel messagi
 2. Clone this repo into your workspace directory
 3. Copy `core/` files to your workspace root
 4. Copy templates and fill in your personal details
-5. Copy this adapter's files into your workspace
+5. Create/apply the OpenClaw adapter files in your workspace (HEARTBEAT.md, TOOLS.md, CONSTITUTION.md, scripts/, workflows/)
 6. Run `openclaw gateway start`
 
 ## What OpenClaw Handles Natively

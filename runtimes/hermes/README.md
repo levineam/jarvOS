@@ -13,9 +13,9 @@ Hermes Agent has built-in learning loops, memory nudges, skill auto-creation, se
 
 1. Install [Hermes Agent](https://github.com/NousResearch/hermes-agent)
 2. Clone this repo
-3. Run `./runtimes/hermes/setup.sh` (or manually copy core/ files to your Hermes workspace)
-4. Copy templates and fill in your personal details
-5. Run `hermes setup` to configure your model and API keys
+3. Run `hermes setup` first to configure your model/API keys and create `~/.hermes/config.yaml`
+4. Run `./runtimes/hermes/setup.sh` (or manually copy core/ files to your Hermes workspace)
+5. Fill in your personal details in `USER.md` and `ONTOLOGY.md`
 6. Start chatting: `hermes`
 
 ## What Hermes Handles Natively (don't duplicate)

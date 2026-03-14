@@ -50,13 +50,17 @@ echo "  ✓ Escalation ladders, approval gates, autonomy levels"
 
 # ── Personal templates (don't overwrite existing) ──
 echo "→ Setting up personal files..."
-nullglob_was_set=0
-if shopt -q nullglob; then
-  nullglob_was_set=1
-fi
-shopt -s nullglob
-template_files=("$TEMPLATES_DIR"/*.template.md "$TEMPLATES_DIR"/*-template.md)
+# Hermes-safe templates only (exclude OpenClaw-only bootstrap/heartbeat files)
+template_files=(
+  "$TEMPLATES_DIR/USER.template.md"
+  "$TEMPLATES_DIR/MEMORY.template.md"
+  "$TEMPLATES_DIR/ONTOLOGY.template.md"
+  "$TEMPLATES_DIR/TOOLS.template.md"
+  "$TEMPLATES_DIR/okr-task-board-template.md"
+  "$TEMPLATES_DIR/project-kickoff-pack-template.md"
+)
 for tmpl in "${template_files[@]}"; do
+  [ -f "$tmpl" ] || continue
   base=$(basename "$tmpl")
   base="${base%.template.md}"
   base="${base%-template.md}"
@@ -68,9 +72,6 @@ for tmpl in "${template_files[@]}"; do
     echo "  + $base.md created from template"
   fi
 done
-if [ "$nullglob_was_set" -eq 0 ]; then
-  shopt -u nullglob
-fi
 
 # Ensure expected personal files exist even if template pack is minimal
 if [ ! -f "$WORKSPACE/USER.md" ]; then

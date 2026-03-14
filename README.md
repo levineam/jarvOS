@@ -52,9 +52,9 @@ jarvos/
 ```bash
 git clone https://github.com/levineam/jarvOS.git
 cd jarvOS
-./runtimes/hermes/setup.sh
+hermes setup   # Configure model and API keys (creates ~/.hermes/config.yaml)
+./runtimes/hermes/setup.sh   # Installs jarvOS and sets Hermes cwd to this workspace
 # Edit USER.md and ONTOLOGY.md with your info
-hermes setup   # Configure model and API keys
 hermes         # Start chatting
 ```
 
