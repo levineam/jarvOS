@@ -13,7 +13,9 @@ GOV_DIR="$REPO_ROOT/core/governance"
 SKILL_DIR="$SCRIPT_DIR/skills/jarvos"
 
 # Default workspace is this clone root, override with first argument
-WORKSPACE="${1:-$REPO_ROOT}"
+WORKSPACE_INPUT="${1:-$REPO_ROOT}"
+mkdir -p "$WORKSPACE_INPUT"
+WORKSPACE="$(cd "$WORKSPACE_INPUT" && pwd)"
 
 echo "┌─────────────────────────────────────────────────┐"
 echo "│            jarvOS — Hermes Setup                 │"
@@ -81,7 +83,11 @@ template_files=(
   "$TEMPLATES_DIR/project-kickoff-pack-template.md"
 )
 for tmpl in "${template_files[@]}"; do
-  [ -f "$tmpl" ] || continue
+  if [ ! -f "$tmpl" ]; then
+    echo "  • $(basename "$tmpl") template not found — skipping (fallback file creation will run if needed)"
+    continue
+  fi
+
   base=$(basename "$tmpl")
   base="${base%.template.md}"
   base="${base%-template.md}"
@@ -181,7 +187,6 @@ if command -v hermes >/dev/null 2>&1; then
   if [ -f "$HERMES_CONFIG" ]; then
     if grep -qE '^terminal:[[:space:]]*(#.*)?$' "$HERMES_CONFIG"; then
       yaml_workspace=$(printf "%s" "$WORKSPACE" | sed "s/'/''/g")
-      replacement=$(printf "  cwd: '%s'" "$yaml_workspace")
 
       backup="$HERMES_CONFIG.bak.$(date +%Y%m%d%H%M%S).$$"
       cp "$HERMES_CONFIG" "$backup"
@@ -191,29 +196,40 @@ if command -v hermes >/dev/null 2>&1; then
       config_owner=$(stat -c '%u:%g' "$HERMES_CONFIG" 2>/dev/null || stat -f '%u:%g' "$HERMES_CONFIG")
       tmp_config="$HERMES_CONFIG.tmp.$$"
 
-      awk -v replacement="$replacement" '
-        BEGIN { in_terminal = 0; updated = 0 }
-        /^terminal:[[:space:]]*(#.*)?$/ {
+      awk -v workspace="$yaml_workspace" '
+        BEGIN {
+          in_terminal = 0
+          updated = 0
+          child_indent = "  "
+        }
+        /^([[:space:]]*)terminal:[[:space:]]*(#.*)?$/ {
           print
           in_terminal = 1
+          updated = 0
+          match($0, /^([[:space:]]*)terminal:/, m)
+          child_indent = m[1] "  "
           next
         }
         in_terminal && /^[^[:space:]]/ {
           if (!updated) {
-            print replacement
+            printf "%scwd: '\''%s'\''\n", child_indent, workspace
             updated = 1
           }
           in_terminal = 0
         }
+        in_terminal && /^[[:space:]]+[^[:space:]#]/ {
+          match($0, /^([[:space:]]+)/, m)
+          child_indent = m[1]
+        }
         in_terminal && /^[[:space:]]+cwd:[[:space:]]*/ {
-          print replacement
+          printf "%scwd: '\''%s'\''\n", child_indent, workspace
           updated = 1
           next
         }
         { print }
         END {
           if (in_terminal && !updated) {
-            print replacement
+            printf "%scwd: '\''%s'\''\n", child_indent, workspace
           }
         }
       ' "$HERMES_CONFIG" > "$tmp_config"

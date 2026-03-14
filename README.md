@@ -24,7 +24,7 @@ jarvOS changes the default:
 jarvOS separates **what the agent believes and how it behaves** (portable) from **how it executes** (runtime-specific).
 
 ```
-jarvos/
+jarvOS/
 ├── core/                  # Portable behavioral layer
 │   ├── AGENTS.md          # Behavioral rules (works on any runtime)
 │   ├── SOUL.md            # Personality and tone

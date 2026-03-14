@@ -6,9 +6,9 @@
   "sourceToExport": {
     "Notes/jarvOS \u2014 Architecture.md": "docs/architecture/jarvos-architecture.md",
     "Notes/jarvOS \u2014 Architecture Decision Records/Architecture Decision Record - 20260219 - Ars Contexta Patterns.md": "docs/architecture/architecture-decision-records/architecture-decision-record-20260219-ars-contexta-patterns.md",
-    "templates/AGENTS-template.md": "templates/agents-template.md",
-    "templates/BOOTSTRAP-template.md": "templates/bootstrap-template.md",
-    "templates/HEARTBEAT-template.md": "templates/heartbeat-template.md",
+    "templates/AGENTS-template.md": "templates/AGENTS-template.md",
+    "templates/BOOTSTRAP-template.md": "templates/BOOTSTRAP-template.md",
+    "templates/HEARTBEAT-template.md": "templates/HEARTBEAT-template.md",
     "templates/OKR-TASK-BOARD.template.md": "templates/okr-task-board-template.md",
     "templates/PROJECT-KICKOFF-PACK.template.md": "templates/project-kickoff-pack-template.md",
     "starter-kit/README.md": "starter-kit/readme.md",
@@ -29,17 +29,17 @@
     },
     {
       "sourcePath": "templates/AGENTS-template.md",
-      "destinationLogicalPath": "templates/agents-template.md",
+      "destinationLogicalPath": "templates/AGENTS-template.md",
       "destinationSlugPath": "templates/agents-template.md"
     },
     {
       "sourcePath": "templates/BOOTSTRAP-template.md",
-      "destinationLogicalPath": "templates/bootstrap-template.md",
+      "destinationLogicalPath": "templates/BOOTSTRAP-template.md",
       "destinationSlugPath": "templates/bootstrap-template.md"
     },
     {
       "sourcePath": "templates/HEARTBEAT-template.md",
-      "destinationLogicalPath": "templates/heartbeat-template.md",
+      "destinationLogicalPath": "templates/HEARTBEAT-template.md",
       "destinationSlugPath": "templates/heartbeat-template.md"
     },
     {
