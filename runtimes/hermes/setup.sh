@@ -201,7 +201,7 @@ echo "→ Configuring Hermes..."
 if command -v hermes >/dev/null 2>&1; then
   HERMES_CONFIG="$HOME/.hermes/config.yaml"
   if [ -f "$HERMES_CONFIG" ]; then
-    if grep -qE '^[[:space:]]*terminal:[[:space:]]*(#.*)?$' "$HERMES_CONFIG"; then
+    if grep -qE '^terminal:[[:space:]]*(#.*)?$' "$HERMES_CONFIG"; then
       yaml_workspace=$(printf "%s" "$WORKSPACE" | sed "s/'/''/g")
 
       backup="$HERMES_CONFIG.bak.$(date +%Y%m%d%H%M%S).$$"
@@ -231,7 +231,7 @@ if command -v hermes >/dev/null 2>&1; then
         {
           line = $0
 
-          if (!terminal_targeted && line ~ /^[[:space:]]*terminal:[[:space:]]*(#.*)?$/) {
+          if (!terminal_targeted && line ~ /^terminal:[[:space:]]*(#.*)?$/) {
             print line
             in_terminal = 1
             updated = 0
