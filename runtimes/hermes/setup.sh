@@ -209,6 +209,7 @@ if command -v hermes >/dev/null 2>&1; then
         BEGIN {
           in_terminal = 0
           updated = 0
+          terminal_targeted = 0
           term_indent = ""
           child_indent = "  "
           term_indent_len = 0
@@ -218,10 +219,11 @@ if command -v hermes >/dev/null 2>&1; then
         {
           line = $0
 
-          if (line ~ /^[[:space:]]*terminal:[[:space:]]*(#.*)?$/) {
+          if (!terminal_targeted && line ~ /^[[:space:]]*terminal:[[:space:]]*(#.*)?$/) {
             print line
             in_terminal = 1
             updated = 0
+            terminal_targeted = 1
             term_indent = leading_ws(line)
             term_indent_len = length(term_indent)
             child_indent = term_indent "  "
