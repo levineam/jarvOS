@@ -180,8 +180,8 @@ fi
 echo "→ Installing jarvOS skill..."
 HERMES_SKILLS="$HOME/.hermes/skills/jarvos"
 mkdir -p "$HERMES_SKILLS"
-cp "$SKILL_DIR/SKILL.md" "$HERMES_SKILLS/SKILL.md"
-echo "  ✓ jarvos skill installed to ~/.hermes/skills/"
+copy_if_missing "$SKILL_DIR/SKILL.md" "$HERMES_SKILLS/SKILL.md"
+echo "  ✓ jarvos skill ready at ~/.hermes/skills/"
 
 # ── Configure Hermes workspace ──
 echo ""
