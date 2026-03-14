@@ -26,6 +26,33 @@ Use this as an adapter checklist for files you place in your workspace root:
 5. Create/apply the OpenClaw adapter files in your workspace (HEARTBEAT.md, TOOLS.md, CONSTITUTION.md, scripts/, workflows/)
 6. Run `openclaw gateway start`
 
+## Bootstrap Budget Management
+
+OpenClaw loads bootstrap files (AGENTS.md, TOOLS.md, HEARTBEAT.md, MEMORY.md, etc.) on **every turn**. This consumes context budget — attention degrades as files grow, and large files suffer "lost-in-middle" effects above ~20K chars.
+
+**The pattern:** Keep always-loaded files compact. Extract detailed procedures, code blocks, and full specifications into `references/` files that are loaded on-demand.
+
+```
+workspace/
+├── HEARTBEAT.md                        # Compact checklist (~5K chars)
+├── references/
+│   └── heartbeat-procedures.md         # Full procedures (~16K chars, loaded when needed)
+└── ...
+```
+
+**How it works:**
+1. HEARTBEAT.md contains a concise checklist with section headers and one-line descriptions
+2. Each section that has detailed procedures includes a pointer: `*(Details: references/heartbeat-procedures.md § Section N)*`
+3. The agent reads the reference file only when executing that specific section
+4. Result: ~70% reduction in always-loaded context with zero content loss
+
+**Budget targets:**
+- Individual files: keep under 13K chars (warn at 15K, hard limit at 20K)
+- Total always-loaded: keep under 80% of model context budget
+- Run `node scripts/context-watchdog.js` to check current status
+
+**Anti-drift:** Schedule daily trend captures with `node scripts/context-budget-trend-capture.js` and run weekly governance reviews to catch gradual growth before it hits limits.
+
 ## What OpenClaw Handles Natively
 
 OpenClaw does NOT have built-in learning loops. jarvOS adds:
