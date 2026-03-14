@@ -86,7 +86,7 @@ The `starter-kit/` folder is a small portable pack, not a full runtime:
 
 - `templates/` — mirrored planning templates
 - `workflows/basic-ci.yml` — starter automation example you can adapt
-- `readme.md` — usage notes for the planning-only subset
+- `README.md` — usage notes for the planning-only subset
 
 ## Current dogfood baseline status
 
