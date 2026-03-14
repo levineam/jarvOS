@@ -53,6 +53,48 @@ workspace/
 
 **Anti-drift:** Schedule daily trend captures with `node scripts/context-budget-trend-capture.js` and run weekly governance reviews to catch gradual growth before it hits limits.
 
+## Session Lifecycle — OpenClaw Implementation
+
+OpenClaw implements the [PMS session lifecycle pattern](../../core/pms/session-lifecycle.md) via `scripts/lib/session-lifecycle.js`.
+
+### How It's Wired
+
+**Producer:** `reflection-watchdog.js` calls `syncLifecycle()` after each reflection pass. This keeps the snapshot fresh without running a separate cron.
+
+**Consumers:** Three scripts read via `readLifecycle()`:
+- `outcome-engine.js` — uses `working_on` to detect active WIP before selecting next task
+- `morning-briefing.js` — adds a "Current Work State" section to the daily briefing (uses 4-hour freshness window)
+- `reflection-watchdog.js` — reads before reflection to understand current project state
+
+**State store:** `memory/heartbeat-state.json` → `sessionLifecycle` key. This is the same file used by all other heartbeat scripts, so no additional infrastructure is needed.
+
+### Board Discovery
+
+The OpenClaw implementation scans the Obsidian vault for files matching `* - Project Board.md` with `status: active` in their YAML frontmatter. Board paths are resolved via `scripts/lib/governance-utils.js`.
+
+### Freshness
+
+- Default stale threshold: 2 hours
+- Morning briefing uses 4 hours (relaxed, since it runs once at startup)
+- If stale or missing, all consumers fall back to their existing behavior — no errors
+
+### Adding New Consumers
+
+To add a new script that reads lifecycle state:
+
+```javascript
+const { readLifecycle } = require('./lib/session-lifecycle');
+
+const lifecycle = readLifecycle({ maxAgeMs: 2 * 60 * 60 * 1000 });
+if (lifecycle) {
+  // use lifecycle.working_on, .blocked, .decisions, .next
+} else {
+  // fallback to direct board scanning or skip the feature
+}
+```
+
+Always handle the `null` case. The lifecycle layer is additive — it should never be a hard dependency.
+
 ## What OpenClaw Handles Natively
 
 OpenClaw does NOT have built-in learning loops. jarvOS adds:

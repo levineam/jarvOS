@@ -58,6 +58,18 @@ For quarterly planning, OKR boards connect to the project hierarchy:
 
 Your assistant can surface: "This project isn't linked to any OKR — is it still a priority?"
 
+## Session Lifecycle (Advanced)
+
+When you have multiple active projects, your assistant can spend significant time re-parsing every board on every request. The **session lifecycle pattern** solves this by creating a single structured snapshot of your project state that all consumers read instead.
+
+See [`session-lifecycle.md`](./session-lifecycle.md) for:
+- The snapshot field schema (`working_on`, `blocked`, `decisions`, `next`)
+- How sync and freshness checking work
+- How to implement it in any runtime
+- Consumer contract and fallback requirements
+
+This is an optional layer — the core PMS works fine without it. Add it when you have 5+ active projects or when multiple agents/scripts need consistent board state within a session.
+
 ## Getting Started
 
 1. Copy the templates from this directory into your workspace
