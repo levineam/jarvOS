@@ -31,6 +31,15 @@ jobs:
             // Auto-commits from the sync loop or uncommitted-work-check are not
             // meaningful code changes and must not trigger review bots.
             // Patterns: "auto-commit: ..." and "docs(sync): ..."
+            // Safety gate: only trusted automation identities can bypass review.
+            const trustedActors = new Set([
+              'github-actions[bot]',
+              context.repo.owner,
+            ])
+            const actor = context.actor || ''
+            const senderType = context.payload.sender?.type || ''
+            const isTrustedActor = trustedActors.has(actor) || senderType === 'Bot'
+
             const pr = context.payload.pull_request
             const headSha = pr.head.sha
             const { data: commit } = await github.rest.git.getCommit({
@@ -39,11 +48,12 @@ jobs:
               commit_sha: headSha,
             })
             const firstLine = (commit.message || '').split('\n')[0]
-            const isAutoCommit =
+            const hasAutoCommitPrefix =
               firstLine.startsWith('auto-commit:') ||
               firstLine.startsWith('docs(sync):')
+            const isAutoCommit = isTrustedActor && hasAutoCommitPrefix
             if (isAutoCommit) {
-              core.info(`Skipping review trigger — auto-commit detected: "${firstLine}"`)
+              core.info(`Skipping review trigger — trusted auto-commit detected: "${firstLine}"`)
               core.setOutput('skip', 'true')
             } else {
               core.info(`Proceeding with review trigger for: "${firstLine}"`)
