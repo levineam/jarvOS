@@ -23,7 +23,7 @@ All notable public-doc sync changes are appended by `jarvos-public-docs-sync.sh`
 ### Phase 4: Cleanup
 - `README.md` — Reflected all new components; updated template table; added optional modules section; replaced "Live Plan" with "Plan"
 - `CHANGELOG.md` — Added this entry
-- `starter-kit/readme.md` — Updated to reflect new workflows directory and optional modules
+- `starter-kit/README.md` — Updated to reflect new workflows directory and optional modules
 
 ## 2026-02-19 08:38 EST — docs sync
 - Updated: docs/architecture/architecture-decision-records/architecture-decision-record-20260219-ars-contexta-patterns.md
