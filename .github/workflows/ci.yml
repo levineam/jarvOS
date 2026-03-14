@@ -79,22 +79,30 @@ jobs:
           python3 - <<'PY'
           import json
           import pathlib
-          import re
           import sys
 
           source_map_path = pathlib.Path("docs/meta/source-to-export-map.json")
           data = json.loads(source_map_path.read_text())
-          absolute_path = re.compile(r'^(?:/|[A-Za-z]:(?:/|\\\\))')
+
+          def is_absolute_local_path(value: str) -> bool:
+              return (
+                  pathlib.PurePosixPath(value).is_absolute()
+                  or pathlib.PureWindowsPath(value).is_absolute()
+                  or value.startswith("\\")
+              )
 
           def walk(value, pointer: str = "$") -> None:
               if isinstance(value, str):
-                  if absolute_path.match(value):
+                  if is_absolute_local_path(value):
                       print(f"Absolute local path leak detected at {pointer}: {value}")
                       sys.exit(1)
                   return
 
               if isinstance(value, dict):
                   for key, child in value.items():
+                      if isinstance(key, str) and is_absolute_local_path(key):
+                          print(f"Absolute local path leak detected at {pointer}.{key}: {key}")
+                          sys.exit(1)
                       walk(child, f"{pointer}.{key}")
               elif isinstance(value, list):
                   for index, child in enumerate(value):
