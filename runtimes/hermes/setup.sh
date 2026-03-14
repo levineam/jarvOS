@@ -74,23 +74,27 @@ echo "  ✓ Escalation ladders, approval gates, autonomy levels"
 # ── Personal templates (don't overwrite existing) ──
 echo "→ Setting up personal files..."
 # Hermes-safe templates only (exclude OpenClaw-only bootstrap/heartbeat files)
-template_files=(
-  "$TEMPLATES_DIR/USER.template.md"
-  "$TEMPLATES_DIR/MEMORY.template.md"
-  "$TEMPLATES_DIR/ONTOLOGY.template.md"
-  "$TEMPLATES_DIR/TOOLS.template.md"
-  "$TEMPLATES_DIR/okr-task-board-template.md"
-  "$TEMPLATES_DIR/project-kickoff-pack-template.md"
+template_names=(
+  "USER"
+  "MEMORY"
+  "ONTOLOGY"
+  "TOOLS"
+  "okr-task-board"
+  "project-kickoff-pack"
 )
-for tmpl in "${template_files[@]}"; do
+for name in "${template_names[@]}"; do
+  tmpl="$TEMPLATES_DIR/$name.template.md"
   if [ ! -f "$tmpl" ]; then
-    echo "  • $(basename "$tmpl") template not found — skipping (fallback file creation will run if needed)"
-    continue
+    alt_tmpl="$TEMPLATES_DIR/$name-template.md"
+    if [ -f "$alt_tmpl" ]; then
+      tmpl="$alt_tmpl"
+    else
+      echo "  • $name template not found — skipping (fallback file creation will run if needed)"
+      continue
+    fi
   fi
 
-  base=$(basename "$tmpl")
-  base="${base%.template.md}"
-  base="${base%-template.md}"
+  base="${name%-template}"
   target="$WORKSPACE/$base.md"
   if [ -f "$target" ]; then
     echo "  ⚠ $base.md exists — keeping yours"
@@ -185,7 +189,7 @@ echo "→ Configuring Hermes..."
 if command -v hermes >/dev/null 2>&1; then
   HERMES_CONFIG="$HOME/.hermes/config.yaml"
   if [ -f "$HERMES_CONFIG" ]; then
-    if grep -qE '^terminal:[[:space:]]*(#.*)?$' "$HERMES_CONFIG"; then
+    if grep -qE '^[[:space:]]*terminal:[[:space:]]*(#.*)?$' "$HERMES_CONFIG"; then
       yaml_workspace=$(printf "%s" "$WORKSPACE" | sed "s/'/''/g")
 
       backup="$HERMES_CONFIG.bak.$(date +%Y%m%d%H%M%S).$$"
