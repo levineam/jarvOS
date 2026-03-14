@@ -51,7 +51,7 @@ jobs:
       - name: Check markdown links
         id: markdown_links
         uses: gaurav-nelson/github-action-markdown-link-check@5c5dfc0ac2e225883c0e5f03a85311ec2830d368  # v1
-        # Intentionally using action defaults (no repo-local .mlc-config.json override).
+        # Intentionally using action defaults (no repo-local markdown-link-check override).
         with:
           use-quiet-mode: 'yes'
           use-verbose-mode: 'no'
