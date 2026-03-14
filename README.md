@@ -62,6 +62,7 @@ hermes         # Start chatting
 
 ```bash
 git clone https://github.com/levineam/jarvOS.git
+cd jarvOS
 # Copy core/ files into your OpenClaw workspace, then follow runtimes/openclaw/README.md for runtime adapter wiring
 # Copy templates/ and fill in your details
 cp templates/BOOTSTRAP-template.md BOOTSTRAP.md   # Create your first-run bootstrap file

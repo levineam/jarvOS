@@ -125,6 +125,35 @@ EOF
   echo "  + ONTOLOGY.md created"
 fi
 
+if [ ! -f "$WORKSPACE/MEMORY.md" ]; then
+  cat > "$WORKSPACE/MEMORY.md" <<'EOF'
+# MEMORY.md
+
+## Key Context
+- [Important details to remember]
+
+## Preferences
+- [How you like to work]
+
+## Decisions
+- [Major decisions worth carrying forward]
+EOF
+  echo "  + MEMORY.md created"
+fi
+
+if [ ! -f "$WORKSPACE/TOOLS.md" ]; then
+  cat > "$WORKSPACE/TOOLS.md" <<'EOF'
+# TOOLS.md
+
+## Tool Notes
+- Add local CLI patterns and operational shortcuts here.
+
+## Setup Hints
+- Add provider/runtime-specific command references here.
+EOF
+  echo "  + TOOLS.md created"
+fi
+
 # ── Install jarvOS skill for Hermes ──
 echo "→ Installing jarvOS skill..."
 HERMES_SKILLS="$HOME/.hermes/skills/jarvos"
@@ -142,7 +171,9 @@ if command -v hermes >/dev/null 2>&1; then
       yaml_workspace=$(printf "%s" "$WORKSPACE" | sed "s/'/'\"'\"'/g")
       replacement=$(printf "  cwd: '%s'" "$yaml_workspace")
 
-      cp "$HERMES_CONFIG" "$HERMES_CONFIG.bak"
+      backup="$HERMES_CONFIG.bak.$(date +%Y%m%d%H%M%S).$$"
+      cp "$HERMES_CONFIG" "$backup"
+      echo "  • Backup saved to $backup"
       awk -v replacement="$replacement" '
         BEGIN { in_terminal = 0; updated = 0 }
         /^terminal:[[:space:]]*(#.*)?$/ {

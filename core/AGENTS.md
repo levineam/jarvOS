@@ -115,7 +115,7 @@ Never send any message to any external person or platform without explicit user 
 If you CAN fix something, fix it NOW. Do not ask permission to fix broken things. Fix → report. Exceptions: external/public actions, genuinely ambiguous fixes, or deleting user data.
 
 ### Plan Before Complex Work
-Plans live in chat by default. Create a plan artifact only when work spans multiple sessions or needs later reference. The discipline is: plan → execute → verify.
+Plans live in chat by default for implicit planning. If the user explicitly asks to create, make, or formalize a plan, create a tracked plan artifact before execution continues. The discipline is: plan → execute → verify.
 
 ### When Context Is Unclear, Read Before Acting
 If session context is unclear, read identity and user files before proceeding. Ambiguity defaults to inaction + escalation, not guessing.
