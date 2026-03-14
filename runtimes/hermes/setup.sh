@@ -152,13 +152,16 @@ if [ ! -f "$WORKSPACE/MEMORY.md" ]; then
 # MEMORY.md
 
 ## Key Context
-- [Important details to remember]
+- [Important personal or project context]
 
 ## Preferences
-- [How you like to work]
+- [Working preferences]
 
-## Decisions
-- [Major decisions worth carrying forward]
+## Ongoing Work
+- [Active projects or focus areas]
+
+## Durable Decisions
+- [Long-term decisions to preserve across sessions]
 EOF
   echo "  + MEMORY.md created"
 fi
@@ -168,10 +171,13 @@ if [ ! -f "$WORKSPACE/TOOLS.md" ]; then
 # TOOLS.md
 
 ## Tool Notes
-- Add local CLI patterns and operational shortcuts here.
+- Add local CLI patterns and shortcuts here.
 
-## Setup Hints
-- Add provider/runtime-specific command references here.
+## Runtime-Specific Commands
+- Add command examples for your runtime/toolchain.
+
+## Operational Guardrails
+- Add local do/don't reminders for tool usage.
 EOF
   echo "  + TOOLS.md created"
 fi
