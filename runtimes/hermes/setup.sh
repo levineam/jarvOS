@@ -43,14 +43,7 @@ copy_if_missing() {
 # ── Core files ──
 echo "→ Installing core behavioral layer..."
 for core_file in AGENTS.md SOUL.md IDENTITY.md; do
-  src="$CORE_DIR/$core_file"
-  dst="$WORKSPACE/$core_file"
-  if [ -f "$dst" ]; then
-    echo "  ⚠ $core_file exists — keeping yours"
-  else
-    cp "$src" "$dst"
-    echo "  + $core_file installed"
-  fi
+  copy_if_missing "$CORE_DIR/$core_file" "$WORKSPACE/$core_file"
 done
 
 # ── PMS templates ──
@@ -148,7 +141,11 @@ EOF
 fi
 
 if [ ! -f "$WORKSPACE/MEMORY.md" ]; then
-  cat > "$WORKSPACE/MEMORY.md" <<'EOF'
+  if [ -f "$TEMPLATES_DIR/MEMORY.template.md" ]; then
+    cp "$TEMPLATES_DIR/MEMORY.template.md" "$WORKSPACE/MEMORY.md"
+    echo "  + MEMORY.md created from template"
+  else
+    cat > "$WORKSPACE/MEMORY.md" <<'EOF'
 # MEMORY.md
 
 ## Key Context
@@ -163,11 +160,16 @@ if [ ! -f "$WORKSPACE/MEMORY.md" ]; then
 ## Durable Decisions
 - [Long-term decisions to preserve across sessions]
 EOF
-  echo "  + MEMORY.md created"
+    echo "  + MEMORY.md created"
+  fi
 fi
 
 if [ ! -f "$WORKSPACE/TOOLS.md" ]; then
-  cat > "$WORKSPACE/TOOLS.md" <<'EOF'
+  if [ -f "$TEMPLATES_DIR/TOOLS.template.md" ]; then
+    cp "$TEMPLATES_DIR/TOOLS.template.md" "$WORKSPACE/TOOLS.md"
+    echo "  + TOOLS.md created from template"
+  else
+    cat > "$WORKSPACE/TOOLS.md" <<'EOF'
 # TOOLS.md
 
 ## Tool Notes
@@ -179,7 +181,8 @@ if [ ! -f "$WORKSPACE/TOOLS.md" ]; then
 ## Operational Guardrails
 - Add local do/don't reminders for tool usage.
 EOF
-  echo "  + TOOLS.md created"
+    echo "  + TOOLS.md created"
+  fi
 fi
 
 # ── Install jarvOS skill for Hermes ──
