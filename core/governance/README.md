@@ -34,7 +34,9 @@ Some actions require explicit user approval:
 | **Delete user data** | **Yes — explicit approval** |
 | **Change system config** | **Yes — explicit approval** |
 
-"Yes", "okay", "sounds good" are NOT approval. Only explicit "send it" / "do it" / "approved" counts.
+"Yes", "okay", and "sounds good" are NOT approval.
+For **Send/publish externally**, only explicit **"send it"** counts (matching `core/AGENTS.md`).
+For other approval-gated actions, require explicit action-language confirmation (for example: "do it" or "approved").
 
 ## Decision Queue
 

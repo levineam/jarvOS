@@ -62,7 +62,7 @@ hermes         # Start chatting
 
 ```bash
 git clone https://github.com/levineam/jarvOS.git
-# Copy core/ files + runtimes/openclaw/ files to your OpenClaw workspace
+# Copy core/ files into your OpenClaw workspace, then follow runtimes/openclaw/README.md for runtime adapter wiring
 # Copy templates/ and fill in your details
 # Tell your assistant to read BOOTSTRAP.md
 openclaw gateway start

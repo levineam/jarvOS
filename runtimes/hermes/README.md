@@ -7,7 +7,7 @@ This directory contains Hermes-specific setup for jarvOS.
 Hermes Agent has built-in learning loops, memory nudges, skill auto-creation, session search, and Honcho user modeling. jarvOS on Hermes is deliberately lean — it provides the behavioral backbone and lets Hermes handle the mechanism.
 
 - **setup.sh** — Workspace setup script (copies core files, configures Hermes)
-- **cron/** — Briefing and proactive check job definitions (optional)
+- **cron/** — Briefing and proactive check job definitions (coming soon; optional)
 
 ## Setup
 

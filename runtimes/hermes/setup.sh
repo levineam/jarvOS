@@ -50,9 +50,16 @@ echo "  ✓ Escalation ladders, approval gates, autonomy levels"
 
 # ── Personal templates (don't overwrite existing) ──
 echo "→ Setting up personal files..."
-for tmpl in "$TEMPLATES_DIR"/*.template.md; do
-  [ -f "$tmpl" ] || continue
-  base=$(basename "$tmpl" .template.md)
+nullglob_was_set=0
+if shopt -q nullglob; then
+  nullglob_was_set=1
+fi
+shopt -s nullglob
+template_files=("$TEMPLATES_DIR"/*.template.md "$TEMPLATES_DIR"/*-template.md)
+for tmpl in "${template_files[@]}"; do
+  base=$(basename "$tmpl")
+  base="${base%.template.md}"
+  base="${base%-template.md}"
   target="$WORKSPACE/$base.md"
   if [ -f "$target" ]; then
     echo "  ⚠ $base.md exists — keeping yours"
@@ -61,6 +68,40 @@ for tmpl in "$TEMPLATES_DIR"/*.template.md; do
     echo "  + $base.md created from template"
   fi
 done
+if [ "$nullglob_was_set" -eq 0 ]; then
+  shopt -u nullglob
+fi
+
+# Ensure expected personal files exist even if template pack is minimal
+if [ ! -f "$WORKSPACE/USER.md" ]; then
+  cat > "$WORKSPACE/USER.md" <<'EOF'
+# USER.md
+
+## Name
+[Your name]
+
+## Timezone
+[Your IANA timezone, e.g. America/New_York]
+EOF
+  echo "  + USER.md created"
+fi
+
+if [ ! -f "$WORKSPACE/ONTOLOGY.md" ]; then
+  cat > "$WORKSPACE/ONTOLOGY.md" <<'EOF'
+# ONTOLOGY.md
+
+## Mission
+[What you're building toward]
+
+## Values
+- [Value 1]
+- [Value 2]
+
+## Goals
+- [Goal 1]
+EOF
+  echo "  + ONTOLOGY.md created"
+fi
 
 # ── Install jarvOS skill for Hermes ──
 echo "→ Installing jarvOS skill..."
@@ -81,6 +122,9 @@ if command -v hermes >/dev/null 2>&1; then
     else
       echo "  ⚠ Set terminal.cwd to $WORKSPACE in $HERMES_CONFIG"
     fi
+  else
+    echo "  ⚠ Config not found at $HERMES_CONFIG"
+    echo "    Run 'hermes setup' first, then set terminal.cwd: $WORKSPACE"
   fi
 else
   echo "  ⚠ hermes not found — install it first, then set terminal.cwd to $WORKSPACE"

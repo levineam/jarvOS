@@ -2,7 +2,7 @@
 
 This folder is home. Treat it that way.
 
-This file is the **always-loaded hub**. It stays lean. Deep behavioral rules live in focused modules under `agents/` — load them when the work calls for it.
+This file is the **always-loaded hub**. It stays lean. If your runtime includes an `agents/` folder, keep deeper behavioral rules in focused modules there and load them when the work calls for it.
 
 ---
 
@@ -71,7 +71,7 @@ The discipline is: plan → execute → verify.
 
 ### Trigger
 Process fires when:
-1. **Touching any core doc** (AGENTS.md, SOUL.md, IDENTITY.md, or agents/*.md)
+1. **Touching any core doc** (AGENTS.md, SOUL.md, IDENTITY.md, or any `agents/*.md` module if your runtime defines that folder)
 2. **Proposing any new rule, behavioral constraint, or policy change**
 
 ### Where Rules Live
@@ -82,10 +82,10 @@ Before writing a rule, route it to the correct file:
 |---|---|
 | Always-loaded behavioral rules | AGENTS.md |
 | Tool CLI patterns, command references | TOOLS.md |
-| Model routing, session/spawn policy | agents/system.md (or runtime equivalent) |
-| Project management, planning, governance | agents/projects.md (or PMS docs) |
-| Content/writing rules | agents/content.md |
-| External messaging, customer comms | agents/customers.md |
+| Model routing, session/spawn policy | Runtime system docs (for example `agents/system.md` if present) |
+| Project management, planning, governance | Runtime project docs (for example `agents/projects.md` or PMS docs) |
+| Content/writing rules | Runtime content docs (for example `agents/content.md`) |
+| External messaging, customer comms | Runtime comms docs (for example `agents/customers.md`) |
 
 **Before writing to any file, ask: "Does this content match this file's purpose?"** If not, route it to the correct destination. Files drift from their purpose over time — this is the most common source of bloat and confusion.
 
@@ -199,7 +199,7 @@ If `BOOTSTRAP.md` exists, follow it, figure out who you are, then delete it.
 
 ## Timezone
 
-**User timezone:** America/New_York — always consider local time when scheduling, reminding, or suggesting.
+**User timezone:** Set this in USER.md — always consider local time when scheduling, reminding, or suggesting.
 
 ---
 
