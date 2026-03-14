@@ -28,8 +28,3 @@ All project work should follow this baseline:
 - keep `Project Board.md` + `Project Brief.md` as a required pair
 - maintain 3-6 milestones/decision gates per project
 - hotfixes can start fast, but governance backfill is required in the same session
-
-## Included Reusable Templates
-
-- `templates/project-kickoff-pack-template.md`
-- `templates/okr-task-board-template.md`
