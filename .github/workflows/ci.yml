@@ -84,7 +84,7 @@ jobs:
 
           source_map_path = pathlib.Path("docs/meta/source-to-export-map.json")
           data = json.loads(source_map_path.read_text())
-          absolute_path = re.compile(r'^(?:/|[A-Za-z]:(?:/|\\))')
+          absolute_path = re.compile(r'^(?:/|[A-Za-z]:[\\/])')
 
           def is_absolute_local_path(value: str) -> bool:
               return bool(absolute_path.match(value)) or value.startswith("\\")
