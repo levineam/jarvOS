@@ -24,7 +24,7 @@ jarvOS changes the default:
 jarvOS separates **what the agent believes and how it behaves** (portable) from **how it executes** (runtime-specific).
 
 ```
-jarvos/
+jarvOS/
 ├── core/                  # Portable behavioral layer
 │   ├── AGENTS.md          # Behavioral rules (works on any runtime)
 │   ├── SOUL.md            # Personality and tone
@@ -32,7 +32,8 @@ jarvos/
 ├── templates/             # You fill these in
 │   ├── USER.template.md   # About you
 │   ├── MEMORY.template.md # Long-term memory seed
-│   └── ONTOLOGY.template.md # Your values and goals
+│   ├── ONTOLOGY.template.md # Your values and goals
+│   └── TOOLS.template.md  # Local tool notes + guardrails
 ├── runtimes/
 │   ├── openclaw/          # OpenClaw-specific (scripts, workflows, heartbeat)
 │   └── hermes/            # Hermes-specific (setup script, lean adapter)
@@ -53,7 +54,7 @@ jarvos/
 git clone https://github.com/levineam/jarvOS.git
 cd jarvOS
 hermes setup   # Configure model and API keys (creates ~/.hermes/config.yaml)
-./runtimes/hermes/setup.sh   # Installs jarvOS and sets Hermes cwd to this workspace
+./runtimes/hermes/setup.sh   # Installs jarvOS and attempts to set Hermes terminal.cwd to this workspace
 # Edit USER.md and ONTOLOGY.md with your info
 hermes         # Start chatting
 ```
@@ -62,9 +63,11 @@ hermes         # Start chatting
 
 ```bash
 git clone https://github.com/levineam/jarvOS.git
+cd jarvOS
 # Copy core/ files into your OpenClaw workspace, then follow runtimes/openclaw/README.md for runtime adapter wiring
-# Copy templates/ and fill in your details
-# Tell your assistant to read BOOTSTRAP.md
+# Copy templates/ into that workspace and fill in your details
+cp templates/BOOTSTRAP-template.md /path/to/your/openclaw-workspace/BOOTSTRAP.md
+# Tell your assistant (in that workspace) to read BOOTSTRAP.md
 openclaw gateway start
 ```
 

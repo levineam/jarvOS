@@ -12,8 +12,10 @@ PMS_DIR="$REPO_ROOT/core/pms"
 GOV_DIR="$REPO_ROOT/core/governance"
 SKILL_DIR="$SCRIPT_DIR/skills/jarvos"
 
-# Default workspace is ~/jarvos, override with first argument
-WORKSPACE="${1:-$HOME/jarvos}"
+# Default workspace is this clone root, override with first argument
+WORKSPACE_INPUT="${1:-$REPO_ROOT}"
+mkdir -p "$WORKSPACE_INPUT"
+WORKSPACE="$(cd "$WORKSPACE_INPUT" && pwd)"
 
 echo "┌─────────────────────────────────────────────────┐"
 echo "│            jarvOS — Hermes Setup                 │"
@@ -26,44 +28,66 @@ echo ""
 
 mkdir -p "$WORKSPACE/pms" "$WORKSPACE/governance"
 
+copy_if_missing() {
+  local src="$1"
+  local dst="$2"
+
+  if [ -f "$dst" ]; then
+    echo "  ⚠ $(basename "$dst") exists — keeping yours"
+  else
+    cp "$src" "$dst"
+    echo "  + $(basename "$dst") installed"
+  fi
+}
+
 # ── Core files ──
 echo "→ Installing core behavioral layer..."
-cp "$CORE_DIR/AGENTS.md" "$WORKSPACE/AGENTS.md"
-cp "$CORE_DIR/SOUL.md" "$WORKSPACE/SOUL.md"
-cp "$CORE_DIR/IDENTITY.md" "$WORKSPACE/IDENTITY.md"
-echo "  ✓ AGENTS.md, SOUL.md, IDENTITY.md"
+for core_file in AGENTS.md SOUL.md IDENTITY.md; do
+  copy_if_missing "$CORE_DIR/$core_file" "$WORKSPACE/$core_file"
+done
 
 # ── PMS templates ──
 echo "→ Installing Project Management System..."
-cp "$PMS_DIR/README.md" "$WORKSPACE/pms/README.md"
-cp "$PMS_DIR/project-board.template.md" "$WORKSPACE/pms/project-board.template.md"
-cp "$PMS_DIR/project-brief.template.md" "$WORKSPACE/pms/project-brief.template.md"
-cp "$PMS_DIR/plan.template.md" "$WORKSPACE/pms/plan.template.md"
-cp "$PMS_DIR/tasks.template.md" "$WORKSPACE/pms/tasks.template.md"
-cp "$PMS_DIR/okr-board.template.md" "$WORKSPACE/pms/okr-board.template.md"
-echo "  ✓ Project Board, Brief, Plan, Tasks, OKR templates"
+copy_if_missing "$PMS_DIR/README.md" "$WORKSPACE/pms/README.md"
+copy_if_missing "$PMS_DIR/project-board.template.md" "$WORKSPACE/pms/project-board.template.md"
+copy_if_missing "$PMS_DIR/project-brief.template.md" "$WORKSPACE/pms/project-brief.template.md"
+copy_if_missing "$PMS_DIR/plan.template.md" "$WORKSPACE/pms/plan.template.md"
+copy_if_missing "$PMS_DIR/tasks.template.md" "$WORKSPACE/pms/tasks.template.md"
+copy_if_missing "$PMS_DIR/okr-board.template.md" "$WORKSPACE/pms/okr-board.template.md"
+if [ -f "$PMS_DIR/session-lifecycle.md" ]; then
+  copy_if_missing "$PMS_DIR/session-lifecycle.md" "$WORKSPACE/pms/session-lifecycle.md"
+fi
+echo "  ✓ Project Board, Brief, Plan, Tasks, OKR templates, Session Lifecycle guide"
 
 # ── Governance ──
 echo "→ Installing governance patterns..."
-cp "$GOV_DIR/README.md" "$WORKSPACE/governance/README.md"
+copy_if_missing "$GOV_DIR/README.md" "$WORKSPACE/governance/README.md"
 echo "  ✓ Escalation ladders, approval gates, autonomy levels"
 
 # ── Personal templates (don't overwrite existing) ──
 echo "→ Setting up personal files..."
 # Hermes-safe templates only (exclude OpenClaw-only bootstrap/heartbeat files)
-template_files=(
-  "$TEMPLATES_DIR/USER.template.md"
-  "$TEMPLATES_DIR/MEMORY.template.md"
-  "$TEMPLATES_DIR/ONTOLOGY.template.md"
-  "$TEMPLATES_DIR/TOOLS.template.md"
-  "$TEMPLATES_DIR/okr-task-board-template.md"
-  "$TEMPLATES_DIR/project-kickoff-pack-template.md"
+template_names=(
+  "USER"
+  "MEMORY"
+  "ONTOLOGY"
+  "TOOLS"
+  "okr-task-board"
+  "project-kickoff-pack"
 )
-for tmpl in "${template_files[@]}"; do
-  [ -f "$tmpl" ] || continue
-  base=$(basename "$tmpl")
-  base="${base%.template.md}"
-  base="${base%-template.md}"
+for name in "${template_names[@]}"; do
+  tmpl="$TEMPLATES_DIR/$name.template.md"
+  if [ ! -f "$tmpl" ]; then
+    alt_tmpl="$TEMPLATES_DIR/$name-template.md"
+    if [ -f "$alt_tmpl" ]; then
+      tmpl="$alt_tmpl"
+    else
+      echo "  • $name template not found — skipping (fallback file creation will run if needed)"
+      continue
+    fi
+  fi
+
+  base="${name%-template}"
   target="$WORKSPACE/$base.md"
   if [ -f "$target" ]; then
     echo "  ⚠ $base.md exists — keeping yours"
@@ -83,6 +107,14 @@ if [ ! -f "$WORKSPACE/USER.md" ]; then
 
 ## Timezone
 [Your IANA timezone, e.g. America/New_York]
+
+## Priorities
+- [Top priority 1]
+- [Top priority 2]
+
+## Preferences
+- [Communication style]
+- [Working hours]
 EOF
   echo "  + USER.md created"
 fi
@@ -100,16 +132,77 @@ if [ ! -f "$WORKSPACE/ONTOLOGY.md" ]; then
 
 ## Goals
 - [Goal 1]
+- [Goal 2]
+
+## Constraints
+- [Hard constraints to respect]
 EOF
   echo "  + ONTOLOGY.md created"
+fi
+
+if [ ! -f "$WORKSPACE/MEMORY.md" ]; then
+  if [ -f "$TEMPLATES_DIR/MEMORY.template.md" ]; then
+    cp "$TEMPLATES_DIR/MEMORY.template.md" "$WORKSPACE/MEMORY.md"
+    echo "  + MEMORY.md created from template"
+  else
+    cat > "$WORKSPACE/MEMORY.md" <<'EOF'
+# MEMORY.md
+
+## Key Context
+- [Important personal or project context]
+
+## Preferences
+- [Working preferences]
+
+## Ongoing Work
+- [Active projects or focus areas]
+
+## Durable Decisions
+- [Long-term decisions to preserve across sessions]
+EOF
+    echo "  + MEMORY.md created"
+  fi
+fi
+
+if [ ! -f "$WORKSPACE/TOOLS.md" ]; then
+  if [ -f "$TEMPLATES_DIR/TOOLS.template.md" ]; then
+    cp "$TEMPLATES_DIR/TOOLS.template.md" "$WORKSPACE/TOOLS.md"
+    echo "  + TOOLS.md created from template"
+  else
+    cat > "$WORKSPACE/TOOLS.md" <<'EOF'
+# TOOLS.md
+
+## Tool Notes
+- Add local CLI patterns and shortcuts here.
+
+## Runtime-Specific Commands
+- Add command examples for your runtime/toolchain.
+
+## Operational Guardrails
+- Add local do/don't reminders for tool usage.
+EOF
+    echo "  + TOOLS.md created"
+  fi
 fi
 
 # ── Install jarvOS skill for Hermes ──
 echo "→ Installing jarvOS skill..."
 HERMES_SKILLS="$HOME/.hermes/skills/jarvos"
 mkdir -p "$HERMES_SKILLS"
-cp "$SKILL_DIR/SKILL.md" "$HERMES_SKILLS/SKILL.md"
-echo "  ✓ jarvos skill installed to ~/.hermes/skills/"
+if [ -f "$HERMES_SKILLS/SKILL.md" ]; then
+  if cmp -s "$SKILL_DIR/SKILL.md" "$HERMES_SKILLS/SKILL.md"; then
+    echo "  ✓ SKILL.md already up to date"
+  else
+    backup="$HERMES_SKILLS/SKILL.md.bak.$(date +%Y%m%d%H%M%S).$$"
+    cp "$HERMES_SKILLS/SKILL.md" "$backup"
+    cp "$SKILL_DIR/SKILL.md" "$HERMES_SKILLS/SKILL.md"
+    echo "  • Updated SKILL.md (backup: $backup)"
+  fi
+else
+  cp "$SKILL_DIR/SKILL.md" "$HERMES_SKILLS/SKILL.md"
+  echo "  + SKILL.md installed"
+fi
+echo "  ✓ jarvos skill ready at ~/.hermes/skills/"
 
 # ── Configure Hermes workspace ──
 echo ""
@@ -117,15 +210,98 @@ echo "→ Configuring Hermes..."
 if command -v hermes >/dev/null 2>&1; then
   HERMES_CONFIG="$HOME/.hermes/config.yaml"
   if [ -f "$HERMES_CONFIG" ]; then
-    if grep -q "cwd:" "$HERMES_CONFIG"; then
-      sed -i.bak "s|cwd:.*|cwd: $WORKSPACE|" "$HERMES_CONFIG"
-      echo "  ✓ Hermes workspace set to $WORKSPACE"
+    if grep -qE '^terminal:[[:space:]]*(#.*)?$' "$HERMES_CONFIG"; then
+      yaml_workspace=$(printf "%s" "$WORKSPACE" | sed "s/'/''/g")
+
+      backup="$HERMES_CONFIG.bak.$(date +%Y%m%d%H%M%S).$$"
+      cp "$HERMES_CONFIG" "$backup"
+      echo "  • Backup saved to $backup"
+
+      config_mode=$(stat -c '%a' "$HERMES_CONFIG" 2>/dev/null || stat -f '%Lp' "$HERMES_CONFIG")
+      config_owner=$(stat -c '%u:%g' "$HERMES_CONFIG" 2>/dev/null || stat -f '%u:%g' "$HERMES_CONFIG")
+      tmp_config="$HERMES_CONFIG.tmp.$$"
+
+      awk -v workspace="$yaml_workspace" '
+        function leading_ws(str, tmp) {
+          tmp = str
+          sub(/[^[:space:]].*$/, "", tmp)
+          return tmp
+        }
+        BEGIN {
+          in_terminal = 0
+          updated = 0
+          terminal_targeted = 0
+          term_indent = ""
+          child_indent = "  "
+          term_indent_len = 0
+          child_indent_len = 2
+          child_indent_set = 0
+        }
+        {
+          line = $0
+
+          if (!terminal_targeted && line ~ /^terminal:[[:space:]]*(#.*)?$/) {
+            print line
+            in_terminal = 1
+            updated = 0
+            terminal_targeted = 1
+            term_indent = leading_ws(line)
+            term_indent_len = length(term_indent)
+            child_indent = term_indent "  "
+            child_indent_len = term_indent_len + 2
+            child_indent_set = 0
+            next
+          }
+
+          if (in_terminal) {
+            trimmed = line
+            sub(/^[[:space:]]+/, "", trimmed)
+
+            if (trimmed != "" && trimmed !~ /^#/) {
+              line_indent_len = length(leading_ws(line))
+
+              if (line_indent_len > term_indent_len && !child_indent_set) {
+                child_indent = leading_ws(line)
+                child_indent_len = line_indent_len
+                child_indent_set = 1
+              }
+
+              if (line_indent_len <= term_indent_len) {
+                if (!updated) {
+                  printf "%scwd: '\''%s'\''\n", child_indent, workspace
+                  updated = 1
+                }
+                in_terminal = 0
+              } else if (line_indent_len == child_indent_len && trimmed ~ /^cwd:[[:space:]]*/) {
+                printf "%scwd: '\''%s'\''\n", child_indent, workspace
+                updated = 1
+                next
+              }
+            }
+          }
+
+          print line
+        }
+        END {
+          if (in_terminal && !updated) {
+            printf "%scwd: '\''%s'\''\n", child_indent, workspace
+          }
+        }
+      ' "$HERMES_CONFIG" > "$tmp_config"
+
+      chmod "$config_mode" "$tmp_config" 2>/dev/null || true
+      chown "$config_owner" "$tmp_config" 2>/dev/null || true
+      mv "$tmp_config" "$HERMES_CONFIG"
+
+      echo "  ✓ Hermes terminal.cwd set to $WORKSPACE"
     else
-      echo "  ⚠ Set terminal.cwd to $WORKSPACE in $HERMES_CONFIG"
+      echo "  ⚠ Could not find terminal: block in $HERMES_CONFIG"
+      echo "    Add this under terminal:"
+      echo "    cwd: '$WORKSPACE'"
     fi
   else
     echo "  ⚠ Config not found at $HERMES_CONFIG"
-    echo "    Run 'hermes setup' first, then set terminal.cwd: $WORKSPACE"
+    echo "    Run 'hermes setup' first, then re-run this script"
   fi
 else
   echo "  ⚠ hermes not found — install it first, then set terminal.cwd to $WORKSPACE"
@@ -146,8 +322,7 @@ echo "│                                                 │"
 echo "│  Next steps:                                    │"
 echo "│  1. Edit USER.md with your info                 │"
 echo "│  2. Edit ONTOLOGY.md with your mission + goals  │"
-echo "│  3. Run: hermes setup (if not done)             │"
-echo "│  4. Run: hermes                                 │"
-echo "│  5. Tell your agent: 'Read AGENTS.md and the    │"
+echo "│  3. Run: hermes                                 │"
+echo "│  4. Tell your agent: 'Read AGENTS.md and the    │"
 echo "│     pms/ and governance/ directories'            │"
 echo "└─────────────────────────────────────────────────┘"
