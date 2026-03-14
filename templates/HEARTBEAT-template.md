@@ -1,8 +1,13 @@
-<!-- jarvOS HEARTBEAT Template v1.1.2 | Updated: 2026-02-17 | Added: governance drift checks + CIL loop automation contract -->
+<!-- jarvOS HEARTBEAT Template v1.2.0 | Updated: 2026-03-14 | Added: reference file pattern for bootstrap budget management -->
 
 # HEARTBEAT.md — Proactive Check-In
 
 When you receive a heartbeat poll, work through this checklist. **Do not skip steps.** If nothing needs attention after all checks, reply `HEARTBEAT_OK`.
+
+> **⚡ Bootstrap Budget Pattern:** This file is loaded every turn. Keep it compact (under 6K chars).
+> Extract detailed procedures, code blocks, and full specifications into `references/heartbeat-procedures.md`
+> and add a pointer: `*(Details: references/heartbeat-procedures.md § Section N)*`.
+> This keeps each turn's context budget lean while preserving full procedure detail on-demand.
 
 ## 1. Resume Active Work
 

@@ -844,3 +844,10 @@ All notable public-doc sync changes are appended by `jarvos-public-docs-sync.sh`
 
 ## 2026-03-14 07:09 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
+
+## 2026-03-14 08:09 EDT — docs sync
+- Updated: docs/meta/source-to-export-map.json
+- Updated: templates/HEARTBEAT-template.md
+- Updated: templates/MEMORY.template.md
+- Updated: templates/ONTOLOGY.template.md
+- Updated: templates/USER.template.md
