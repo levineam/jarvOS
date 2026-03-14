@@ -52,11 +52,13 @@ Clone the repo. Copy the templates you need into your OpenClaw workspace, then t
 
 Minimal setup:
 
-1. Copy `templates/AGENTS-template.md` to `AGENTS.md`
-2. Copy `templates/HEARTBEAT-template.md` to `HEARTBEAT.md`
-3. Copy `templates/BOOTSTRAP-template.md` to `BOOTSTRAP.md`
+1. Copy `templates/AGENTS-template.md` (`templates/agents-template.md` in the export map) to `AGENTS.md`
+2. Copy `templates/HEARTBEAT-template.md` (`templates/heartbeat-template.md` in the export map) to `HEARTBEAT.md`
+3. Copy `templates/BOOTSTRAP-template.md` (`templates/bootstrap-template.md` in the export map) to `BOOTSTRAP.md`
 4. Copy the planning templates you want from `templates/` or `starter-kit/templates/`
 5. Provide your own local `USER.md`, `MEMORY.md`, and any persona/alignment files your setup requires
+
+Note: `docs/meta/source-to-export-map.json` also records lowercase slug aliases used by export tooling. The copy commands above use the exact on-disk filenames in this repo.
 
 This repo does not yet ship public templates for `SOUL.md`, `IDENTITY.md`, `TOOLS.md`, or `ONTOLOGY.md`, so dogfood canaries should overlay local copies for those files.
 
@@ -68,9 +70,9 @@ From there: create your first project with a Board and Brief, let the Plan drive
 
 | File | Purpose |
 |------|---------|
-| `AGENTS-template.md` | Core behavior — copy to `AGENTS.md` in your workspace |
-| `HEARTBEAT-template.md` | Proactive check-in — copy to `HEARTBEAT.md` in your workspace |
-| `BOOTSTRAP-template.md` | First-run instructions — copy to `BOOTSTRAP.md`, then delete after setup |
+| `templates/AGENTS-template.md` | Core behavior — copy to `AGENTS.md` in your workspace |
+| `templates/HEARTBEAT-template.md` | Proactive check-in — copy to `HEARTBEAT.md` in your workspace |
+| `templates/BOOTSTRAP-template.md` | First-run instructions — copy to `BOOTSTRAP.md`, then delete after setup |
 
 ### Planning templates
 
@@ -90,7 +92,7 @@ The `starter-kit/` folder contains a small portable pack:
 
 ## Troubleshooting and rollout notes
 
-- `starter-kit/README.md` — starter-kit setup and rollout checklist
+- `starter-kit/README.md` — starter-kit setup and rollout checklist (export slug: `starter-kit/readme.md`)
 - `docs/architecture/jarvos-architecture.md` — architecture overview and operating model
 - `docs/architecture/architecture-decision-records/architecture-decision-record-20260219-ars-contexta-patterns.md` — architecture decision context
 

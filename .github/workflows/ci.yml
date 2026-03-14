@@ -76,10 +76,32 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if grep -nE '"(/|[A-Za-z]:(/|\\\\))' docs/meta/source-to-export-map.json; then
-            echo "Absolute local path leak detected in docs/meta/source-to-export-map.json"
-            exit 1
-          fi
+          python3 - <<'PY'
+          import json
+          import pathlib
+          import re
+          import sys
+
+          source_map_path = pathlib.Path("docs/meta/source-to-export-map.json")
+          data = json.loads(source_map_path.read_text())
+          absolute_path = re.compile(r'^(?:/|[A-Za-z]:(?:/|\\\\))')
+
+          def walk(value, pointer: str = "$") -> None:
+              if isinstance(value, str):
+                  if absolute_path.match(value):
+                      print(f"Absolute local path leak detected at {pointer}: {value}")
+                      sys.exit(1)
+                  return
+
+              if isinstance(value, dict):
+                  for key, child in value.items():
+                      walk(child, f"{pointer}.{key}")
+              elif isinstance(value, list):
+                  for index, child in enumerate(value):
+                      walk(child, f"{pointer}[{index}]")
+
+          walk(data)
+          PY
 
       - name: Check workflow and metadata files for trailing whitespace
         shell: bash
