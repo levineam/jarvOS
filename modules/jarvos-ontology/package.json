@@ -3,7 +3,6 @@
   "version": "0.1.0",
   "description": "jarvOS worldview layer — structured belief graph, predictions, goals, values, and identity",
   "license": "MIT",
-  "type": "module",
   "main": "src/index.js",
   "exports": {
     ".": "./src/index.js",
