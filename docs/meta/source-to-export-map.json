@@ -1,5 +1,4 @@
 {
-  "generatedAt": "2026-03-27T16:09:08.154Z",
   "manifestPath": "workspace/jarvos/public-docs/export-manifest.tsv",
   "vaultRoot": "vault",
   "outputMode": "apply",
@@ -11,9 +10,9 @@
     "workspace/jarvos/templates/HEARTBEAT-template.md": "templates/heartbeat-template.md",
     "workspace/jarvos/templates/OKR-TASK-BOARD.template.md": "templates/okr-task-board-template.md",
     "workspace/jarvos/templates/PROJECT-KICKOFF-PACK.template.md": "templates/project-kickoff-pack-template.md",
-    "workspace/jarvos-starter-kit/README.md": "starter-kit/readme.md",
-    "workspace/jarvos-starter-kit/templates/OKR-TASK-BOARD.template.md": "starter-kit/templates/okr-task-board-template.md",
-    "workspace/jarvos-starter-kit/templates/PROJECT-KICKOFF-PACK.template.md": "starter-kit/templates/project-kickoff-pack-template.md",
+    "workspace/jarvos-starter-kit/README.md": "starter-kit/README.md",
+    "workspace/jarvos-starter-kit/templates/OKR-TASK-BOARD.template.md": "starter-kit/templates/OKR-TASK-BOARD.template.md",
+    "workspace/jarvos-starter-kit/templates/PROJECT-KICKOFF-PACK.template.md": "starter-kit/templates/PROJECT-KICKOFF-PACK.template.md",
     "workspace/jarvos-starter-kit/workflows/basic-ci.yml": "starter-kit/workflows/basic-ci.yml"
   },
   "entries": [
@@ -55,17 +54,17 @@
     {
       "sourcePath": "workspace/jarvos-starter-kit/README.md",
       "destinationLogicalPath": "starter-kit/README.md",
-      "destinationSlugPath": "starter-kit/readme.md"
+      "destinationSlugPath": "starter-kit/README.md"
     },
     {
       "sourcePath": "workspace/jarvos-starter-kit/templates/OKR-TASK-BOARD.template.md",
       "destinationLogicalPath": "starter-kit/templates/OKR-TASK-BOARD.template.md",
-      "destinationSlugPath": "starter-kit/templates/okr-task-board-template.md"
+      "destinationSlugPath": "starter-kit/templates/OKR-TASK-BOARD.template.md"
     },
     {
       "sourcePath": "workspace/jarvos-starter-kit/templates/PROJECT-KICKOFF-PACK.template.md",
       "destinationLogicalPath": "starter-kit/templates/PROJECT-KICKOFF-PACK.template.md",
-      "destinationSlugPath": "starter-kit/templates/project-kickoff-pack-template.md"
+      "destinationSlugPath": "starter-kit/templates/PROJECT-KICKOFF-PACK.template.md"
     },
     {
       "sourcePath": "workspace/jarvos-starter-kit/workflows/basic-ci.yml",
