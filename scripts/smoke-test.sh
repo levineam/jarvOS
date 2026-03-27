@@ -61,9 +61,9 @@ check_nonempty "core/SOUL.md"
 # ── Templates ─────────────────────────────────────────────────────────────────
 echo ""
 echo "→ Templates"
-check_file "templates/agents-template.md"
-check_file "templates/bootstrap-template.md"
-check_file "templates/heartbeat-template.md"
+check_file "templates/AGENTS-template.md"
+check_file "templates/BOOTSTRAP-template.md"
+check_file "templates/HEARTBEAT-template.md"
 
 # ── PMS ───────────────────────────────────────────────────────────────────────
 echo ""

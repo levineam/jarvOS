@@ -82,16 +82,17 @@ git clone https://github.com/levineam/jarvOS.git
 cd jarvOS
 bash scripts/smoke-test.sh           # Verify clone is complete
 # Copy core/ files into your OpenClaw workspace
-cp core/AGENTS.md  /path/to/your/openclaw-workspace/AGENTS.md
-cp core/SOUL.md    /path/to/your/openclaw-workspace/SOUL.md
-cp core/IDENTITY.md /path/to/your/openclaw-workspace/IDENTITY.md
-cp templates/bootstrap-template.md /path/to/your/openclaw-workspace/BOOTSTRAP.md
-# Fill in USER.md and ONTOLOGY.md with your info, then:
+cp core/AGENTS.md    /path/to/your/openclaw-workspace/AGENTS.md
+cp core/SOUL.md      /path/to/your/openclaw-workspace/SOUL.md
+cp core/IDENTITY.md  /path/to/your/openclaw-workspace/IDENTITY.md
+cp templates/BOOTSTRAP-template.md /path/to/your/openclaw-workspace/BOOTSTRAP.md
+cp templates/HEARTBEAT-template.md /path/to/your/openclaw-workspace/HEARTBEAT.md
+# Create USER.md and ONTOLOGY.md with your info, then:
 cd /path/to/your/openclaw-workspace
 openclaw gateway start
 ```
 
-See `runtimes/openclaw/README.md` for the full adapter wiring checklist.
+See `runtimes/openclaw/README.md` for the full adapter wiring checklist, including `TOOLS.md`, `CONSTITUTION.md`, `scripts/`, and `workflows/`.
 
 ## The five systems
 
