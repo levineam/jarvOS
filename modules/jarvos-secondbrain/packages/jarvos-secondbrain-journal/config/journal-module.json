@@ -1,0 +1,112 @@
+{
+  "$schema": "journal-module-v1",
+  "$doc": "Canonical package-owned journal contract. Controls which sections appear in daily journal entries and their order. The root clawd/config/journal-module.json file remains a compatibility mirror during the extraction phase.",
+
+  "vault": {
+    "_comment": "journalDir/notesDir/tagsDir default to ~/Documents/Vault v3/{Journal,Notes,Tags} when not set here. Override with JARVOS_JOURNAL_DIR / JARVOS_NOTES_DIR / JARVOS_VAULT_DIR env vars, or set jarvos.config.json paths.journal / paths.notes / paths.vault. The '~/...' tilde form is supported.",
+    "journalDir": "~/Documents/Vault v3/Journal",
+    "notesDir": "~/Documents/Vault v3/Notes",
+    "tagsDir": "~/Documents/Vault v3/Tags"
+  },
+
+  "frontmatter": {
+    "journal": "Journal",
+    "journal-date": "{{YYYY-MM-DD}}"
+  },
+
+  "sections": {
+    "required": [
+      {
+        "id": "current-focus",
+        "heading": "## 🎯 Current Focus",
+        "source": "manual",
+        "description": "User-curated focus areas for the day"
+      },
+      {
+        "id": "todays-calendar",
+        "heading": "## 📅 Today's Calendar",
+        "source": "google-calendar",
+        "description": "Today's events from Google Calendar via gog"
+      },
+      {
+        "id": "notes",
+        "heading": "## 📝 Notes",
+        "source": "manual",
+        "description": "Free-form notes, completed work, observations"
+      },
+      {
+        "id": "ideas",
+        "heading": "## 💡 Ideas",
+        "source": "manual",
+        "description": "Ideas captured during the day"
+      },
+      {
+        "id": "journal-entry",
+        "heading": "## 📓 Journal Entry",
+        "source": "manual",
+        "description": "End-of-day reflection or narrative entry"
+      }
+    ],
+
+    "optional": [
+      {
+        "id": "apple-reminders",
+        "heading": "## 🔔 Apple Reminders",
+        "source": "apple-reminders",
+        "enabled": true,
+        "description": "Today's due reminders from Apple Reminders via remindctl"
+      },
+      {
+        "id": "paperclip-inbox",
+        "heading": "## 📎 Paperclip Inbox",
+        "source": "paperclip",
+        "enabled": true,
+        "description": "Assigned Paperclip issues needing attention — shows todo/in_progress/blocked issues assigned to Jarvis or Michael. Read-only snapshot; sorted by status (blocked→in_progress→todo) then priority.",
+        "filter": {
+          "assignees": ["jarvis", "michael"],
+          "statuses": ["todo", "in_progress", "blocked"],
+          "doc": "Only open/actionable issues. Done/cancelled are excluded. Scope defined in scripts/journal-paperclip-inbox.js."
+        }
+      },
+      {
+        "id": "notes-created",
+        "heading": "## 🗂️ Notes Created",
+        "source": "notes-created",
+        "enabled": true,
+        "description": "Links to vault notes created or updated that day, rendered as a dedicated journal section instead of being mixed into general Notes."
+      }
+    ]
+  },
+
+  "ordering": {
+    "strategy": "config-defined",
+    "doc": "Sections render in the order listed: all required sections first (in array order), then enabled optional sections (in array order). To reorder, rearrange the arrays above."
+  },
+
+  "structureLock": {
+    "enabled": true,
+    "rules": {
+      "requiredSectionsAlwaysPresent": true,
+      "optionalSectionsMatchEnabled": true,
+      "noUnknownSections": true,
+      "orderMatchesConfig": true,
+      "driftAutoCorrect": true
+    },
+    "doc": "Structure lock validates that the journal entry matches this config. Required sections must always exist. Optional sections appear only when enabled=true. Unknown sections are flagged (not deleted — content is preserved under the nearest matching section or appended to Notes). Drift is auto-corrected on each heartbeat pass."
+  },
+
+  "migration": {
+    "legacySections": {
+      "tasks": {
+        "heading": "## ✅ Tasks",
+        "action": "remove",
+        "migrateContentTo": "notes",
+        "doc": "Legacy Tasks section is removed. Any existing content is migrated to Notes on first encounter."
+      }
+    }
+  },
+
+  "extensionGuide": {
+    "doc": "To add a new section: 1) Add an entry to sections.optional with a unique id, heading, source, enabled flag, and description. 2) If the source requires a data-fetch script, add the fetch logic to the heartbeat journal-populate step keyed by the section id. 3) Set enabled=true when ready. 4) Structure lock will automatically include it on the next heartbeat pass. No code changes to heartbeat-procedures.md are needed — it reads this config dynamically."
+  }
+}

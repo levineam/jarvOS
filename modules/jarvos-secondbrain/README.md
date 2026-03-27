@@ -21,40 +21,53 @@ surface for day-to-day context, research, and long-form content.
 
 ## Quick Start
 
-```js
-const { createJournalEntry, createNote, resolveJournalDir } = require('@jarvos/secondbrain');
-const path = require('path');
-
-// Resolve journal directory (respects JARVOS_JOURNAL_DIR env var)
-const journalDir = resolveJournalDir();
-console.log(journalDir); // ~/Documents/Vault v3/Journal
-
-// Create a journal entry object (does not write to disk)
-const entry = createJournalEntry({
-  date: '2026-03-27',
-  title: 'Daily capture',
-  body: 'Completed SUP-462 — module stubs shipped.',
-  tags: ['jarvos', 'progress'],
-});
-
-// Create a note reference
-const note = createNote({
-  title: 'Architecture decisions',
-  body: 'Decision: use env-var path resolution...',
-  tags: ['architecture'],
-});
+```bash
+npm install ./modules/jarvos-secondbrain
 ```
 
-## Environment Variables
+```bash
+cd modules/jarvos-secondbrain
+npm install
+# Copy jarvos.config.example.json → ~/clawd/jarvos.config.json and fill in your paths
+JARVOS_VAULT_DIR=/path/to/your/vault node bridge/config/jarvos-paths.js
+```
+
+## Configuration & path discovery
+
+All path resolution is handled by `bridge/config/jarvos-paths.js` — a shared module
+imported by all packages. No hardcoded user-specific paths exist in the source.
+
+### Environment Variables
 
 Path resolution follows: **env var → `jarvos.config.json` → `os.homedir()`-relative default**
 
-| Env var | Description | Default |
-|---|---|---|
-| `JARVOS_JOURNAL_DIR` | Journal markdown files | `~/Documents/Vault v3/Journal` |
-| `JARVOS_NOTES_DIR` | Notes vault directory | `~/Documents/Vault v3/Notes` |
-| `JARVOS_TAGS_DIR` | Tags directory | `~/Documents/Vault v3/Tags` |
-| `JARVOS_WORKSPACE` | Workspace root | `~/clawd` |
+| Env var | Default | Purpose |
+|---------|---------|---------|
+| `JARVOS_CLAWD_DIR` | `~/clawd` | Clawd/workspace root |
+| `JARVOS_VAULT_DIR` | `~/Documents/Vault v3` | Obsidian vault root |
+| `JARVOS_JOURNAL_DIR` | `$JARVOS_VAULT_DIR/Journal` | Daily journal directory |
+| `JARVOS_NOTES_DIR` | `$JARVOS_VAULT_DIR/Notes` | Notes directory |
+| `JARVOS_TAGS_DIR` | `$JARVOS_VAULT_DIR/Tags` | Tags directory |
+| `JARVOS_WORKSPACE` | `~/clawd` | Workspace root (alias) |
+
+Legacy env var aliases still honored: `CLAWD_DIR` → `JARVOS_CLAWD_DIR`,
+`VAULT_NOTES_DIR` → `JARVOS_NOTES_DIR`, `JOURNAL_DIR` → `JARVOS_JOURNAL_DIR`
+
+### Config file
+
+Copy `jarvos.config.example.json` → `$JARVOS_CLAWD_DIR/jarvos.config.json` to
+configure paths without env vars. Env vars always take precedence.
+
+```jsonc
+// ~/clawd/jarvos.config.json (example)
+{
+  "paths": {
+    "vault":   "~/Documents/MyVault",
+    "journal": "~/Documents/MyVault/Journal",
+    "notes":   "~/Documents/MyVault/Notes"
+  }
+}
+```
 
 ## Content Flow
 
@@ -65,3 +78,46 @@ Raw capture (journal/notes)
       → jarvos-ontology (worldview / belief graph)
         → Paperclip (live execution)
 ```
+
+## Layout
+
+```text
+jarvos-secondbrain/
+├── packages/
+│   ├── jarvos-secondbrain-journal/
+│   └── jarvos-secondbrain-notes/
+├── bridge/
+│   ├── config/jarvos-paths.js   # shared path resolution
+│   ├── paperclip/
+│   ├── provenance/
+│   └── routing/
+├── adapters/
+│   ├── obsidian/
+│   └── openclaw/
+└── docs/
+    ├── architecture/
+    ├── contracts/
+    └── migration/
+```
+
+## Bootstrap choices
+
+This initial pass is intentionally structure-first:
+
+- package, bridge, adapter, and docs directories now exist
+- package contract docs have been copied into package-local `docs/` folders
+- canonical umbrella docs have been copied into root `docs/`
+- no executable logic has been migrated yet
+- Paperclip remains the execution system of record
+
+See `docs/architecture/jarvos-secondbrain-monorepo-spec.md` for the boundary model.
+
+## Current scope boundary
+
+This is a **bootstrap monorepo skeleton**, not a runtime migration.
+
+Out of scope for this bootstrap:
+
+- changing the actual vault or journal format
+- moving content out of existing Obsidian vaults
+- replacing OpenClaw compaction or `lossless-claw`
