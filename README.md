@@ -87,7 +87,22 @@ cp core/SOUL.md      /path/to/your/openclaw-workspace/SOUL.md
 cp core/IDENTITY.md  /path/to/your/openclaw-workspace/IDENTITY.md
 cp templates/BOOTSTRAP-template.md /path/to/your/openclaw-workspace/BOOTSTRAP.md
 cp templates/HEARTBEAT-template.md /path/to/your/openclaw-workspace/HEARTBEAT.md
-# Create USER.md and ONTOLOGY.md with your info, then:
+cat > /path/to/your/openclaw-workspace/USER.md <<'EOF'
+# USER.md
+
+## Name
+[Your name]
+
+## Timezone
+[Your IANA timezone, e.g. America/New_York]
+EOF
+cat > /path/to/your/openclaw-workspace/ONTOLOGY.md <<'EOF'
+# ONTOLOGY.md
+
+## Mission
+[What you're building toward]
+EOF
+# Fill in USER.md and ONTOLOGY.md with your info, then:
 cd /path/to/your/openclaw-workspace
 openclaw gateway start
 ```
