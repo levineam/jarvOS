@@ -1,0 +1,24 @@
+{
+  "name": "jarvos-bootstrap",
+  "version": "0.1.0",
+  "description": "Bootstrap installer for jarvOS — sets up a working personal AI operating system on top of OpenClaw",
+  "keywords": ["jarvos", "openclaw", "ai-assistant", "personal-os", "bootstrap"],
+  "homepage": "https://github.com/levineam/jarvOS",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/levineam/jarvOS.git"
+  },
+  "license": "MIT",
+  "main": "bootstrap.js",
+  "bin": {
+    "jarvos-bootstrap": "bootstrap.js",
+    "jarvos-init": "bootstrap.js"
+  },
+  "scripts": {
+    "bootstrap": "node bootstrap.js",
+    "test": "bash tests/smoke-test.sh"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

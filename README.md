@@ -67,15 +67,22 @@ hermes         # Start chatting
 git clone https://github.com/levineam/jarvOS.git
 cd jarvOS
 
-# Option A — set up jarvOS in your existing OpenClaw workspace
+# Option A — interactive Node.js installer (prompts for names, paths, vault)
+node bootstrap.js
+# or: bash bootstrap.sh
+# or without cloning: npx jarvos-bootstrap
+
+# Option B — shell script into an existing OpenClaw workspace
 ./runtimes/openclaw/setup.sh /path/to/your/openclaw-workspace
 
-# Option B — set up in a new directory (defaults to current dir)
+# Option C — set up in a new directory (defaults to current dir)
 mkdir ~/my-agent && cd ~/my-agent
 /path/to/jarvOS/runtimes/openclaw/setup.sh .
 ```
 
-The script installs core behavioral files, starter templates, and creates your memory directory, then runs a smoke test. When it finishes:
+`bootstrap.js` generates `AGENTS.md`, `BOOTSTRAP.md`, `HEARTBEAT.md`, and `MEMORY.md` from templates with your values filled in. Run `npm test` at any time to re-verify the setup.
+
+When bootstrap finishes:
 
 ```bash
 # 1. Fill in your personal details
