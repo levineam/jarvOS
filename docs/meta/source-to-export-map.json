@@ -1,20 +1,20 @@
 {
-  "generatedAt": "2026-03-27T14:24:35.294Z",
-  "manifestPath": "workspace/jarvos/public-docs/export-manifest.tsv",
+  "generatedAt": "2026-03-27T14:27:44Z",
+  "manifestPath": "public-docs/export-manifest.tsv",
   "vaultRoot": "vault",
   "outputMode": "apply",
   "sourceToExport": {
     "vault/Notes/jarvOS — Architecture.md": "docs/architecture/jarvos-architecture.md",
     "vault/Notes/jarvOS — Architecture Decision Records/Architecture Decision Record - 20260219 - Ars Contexta Patterns.md": "docs/architecture/architecture-decision-records/architecture-decision-record-20260219-ars-contexta-patterns.md",
-    "workspace/jarvos/templates/AGENTS-template.md": "templates/agents-template.md",
-    "workspace/jarvos/templates/BOOTSTRAP-template.md": "templates/bootstrap-template.md",
-    "workspace/jarvos/templates/HEARTBEAT-template.md": "templates/heartbeat-template.md",
-    "workspace/jarvos/templates/OKR-TASK-BOARD.template.md": "templates/okr-task-board-template.md",
-    "workspace/jarvos/templates/PROJECT-KICKOFF-PACK.template.md": "templates/project-kickoff-pack-template.md",
-    "workspace/jarvos-starter-kit/README.md": "starter-kit/readme.md",
-    "workspace/jarvos-starter-kit/templates/OKR-TASK-BOARD.template.md": "starter-kit/templates/okr-task-board-template.md",
-    "workspace/jarvos-starter-kit/templates/PROJECT-KICKOFF-PACK.template.md": "starter-kit/templates/project-kickoff-pack-template.md",
-    "workspace/jarvos-starter-kit/workflows/basic-ci.yml": "starter-kit/workflows/basic-ci.yml"
+    "templates/AGENTS-template.md": "templates/agents-template.md",
+    "templates/BOOTSTRAP-template.md": "templates/bootstrap-template.md",
+    "templates/HEARTBEAT-template.md": "templates/heartbeat-template.md",
+    "templates/OKR-TASK-BOARD.template.md": "templates/okr-task-board-template.md",
+    "templates/PROJECT-KICKOFF-PACK.template.md": "templates/project-kickoff-pack-template.md",
+    "starter-kit/README.md": "starter-kit/readme.md",
+    "starter-kit/templates/OKR-TASK-BOARD.template.md": "starter-kit/templates/okr-task-board-template.md",
+    "starter-kit/templates/PROJECT-KICKOFF-PACK.template.md": "starter-kit/templates/project-kickoff-pack-template.md",
+    "starter-kit/workflows/basic-ci.yml": "starter-kit/workflows/basic-ci.yml"
   },
   "entries": [
     {
@@ -28,47 +28,47 @@
       "destinationSlugPath": "docs/architecture/architecture-decision-records/architecture-decision-record-20260219-ars-contexta-patterns.md"
     },
     {
-      "sourcePath": "workspace/jarvos/templates/AGENTS-template.md",
+      "sourcePath": "templates/AGENTS-template.md",
       "destinationLogicalPath": "templates/agents-template.md",
       "destinationSlugPath": "templates/agents-template.md"
     },
     {
-      "sourcePath": "workspace/jarvos/templates/BOOTSTRAP-template.md",
+      "sourcePath": "templates/BOOTSTRAP-template.md",
       "destinationLogicalPath": "templates/bootstrap-template.md",
       "destinationSlugPath": "templates/bootstrap-template.md"
     },
     {
-      "sourcePath": "workspace/jarvos/templates/HEARTBEAT-template.md",
+      "sourcePath": "templates/HEARTBEAT-template.md",
       "destinationLogicalPath": "templates/heartbeat-template.md",
       "destinationSlugPath": "templates/heartbeat-template.md"
     },
     {
-      "sourcePath": "workspace/jarvos/templates/OKR-TASK-BOARD.template.md",
+      "sourcePath": "templates/OKR-TASK-BOARD.template.md",
       "destinationLogicalPath": "templates/okr-task-board-template.md",
       "destinationSlugPath": "templates/okr-task-board-template.md"
     },
     {
-      "sourcePath": "workspace/jarvos/templates/PROJECT-KICKOFF-PACK.template.md",
+      "sourcePath": "templates/PROJECT-KICKOFF-PACK.template.md",
       "destinationLogicalPath": "templates/project-kickoff-pack-template.md",
       "destinationSlugPath": "templates/project-kickoff-pack-template.md"
     },
     {
-      "sourcePath": "workspace/jarvos-starter-kit/README.md",
+      "sourcePath": "starter-kit/README.md",
       "destinationLogicalPath": "starter-kit/README.md",
       "destinationSlugPath": "starter-kit/readme.md"
     },
     {
-      "sourcePath": "workspace/jarvos-starter-kit/templates/OKR-TASK-BOARD.template.md",
+      "sourcePath": "starter-kit/templates/OKR-TASK-BOARD.template.md",
       "destinationLogicalPath": "starter-kit/templates/OKR-TASK-BOARD.template.md",
       "destinationSlugPath": "starter-kit/templates/okr-task-board-template.md"
     },
     {
-      "sourcePath": "workspace/jarvos-starter-kit/templates/PROJECT-KICKOFF-PACK.template.md",
+      "sourcePath": "starter-kit/templates/PROJECT-KICKOFF-PACK.template.md",
       "destinationLogicalPath": "starter-kit/templates/PROJECT-KICKOFF-PACK.template.md",
       "destinationSlugPath": "starter-kit/templates/project-kickoff-pack-template.md"
     },
     {
-      "sourcePath": "workspace/jarvos-starter-kit/workflows/basic-ci.yml",
+      "sourcePath": "starter-kit/workflows/basic-ci.yml",
       "destinationLogicalPath": "starter-kit/workflows/basic-ci.yml",
       "destinationSlugPath": "starter-kit/workflows/basic-ci.yml"
     }
@@ -101,37 +101,37 @@
     },
     {
       "kind": "wikilink-unresolved",
-      "source": "workspace/jarvos/templates/AGENTS-template.md",
+      "source": "templates/AGENTS-template.md",
       "link": "[[analyst-output]]"
     },
     {
       "kind": "wikilink-unresolved",
-      "source": "workspace/jarvos/templates/AGENTS-template.md",
+      "source": "templates/AGENTS-template.md",
       "link": "[[analyst-output]]"
     },
     {
       "kind": "wikilink-unresolved",
-      "source": "workspace/jarvos/templates/AGENTS-template.md",
+      "source": "templates/AGENTS-template.md",
       "link": "[[writer-output]]"
     },
     {
       "kind": "wikilink-unresolved",
-      "source": "workspace/jarvos/templates/AGENTS-template.md",
+      "source": "templates/AGENTS-template.md",
       "link": "[[pm-output]]"
     },
     {
       "kind": "wikilink-unresolved",
-      "source": "workspace/jarvos/templates/AGENTS-template.md",
+      "source": "templates/AGENTS-template.md",
       "link": "[[architect-output]]"
     },
     {
       "kind": "wikilink-unresolved",
-      "source": "workspace/jarvos/templates/AGENTS-template.md",
+      "source": "templates/AGENTS-template.md",
       "link": "[[developer-output]]"
     },
     {
       "kind": "wikilink-unresolved",
-      "source": "workspace/jarvos/templates/AGENTS-template.md",
+      "source": "templates/AGENTS-template.md",
       "link": "[[qa-output]]"
     }
   ]
