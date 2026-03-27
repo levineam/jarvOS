@@ -19,9 +19,9 @@ jarvOS changes the default:
 - **Alignment** — every project traces back to your goals and values via ONTOLOGY.md
 - **Proactive work** — briefings, task execution, email monitoring, calendar awareness
 
-## Architecture: Core + Runtime
+## Architecture: Core + Runtime + Modules
 
-jarvOS separates **what the agent believes and how it behaves** (portable) from **how it executes** (runtime-specific).
+jarvOS separates **what the agent believes and how it behaves** (portable) from **how it executes** (runtime-specific), with **executable modules** that do the actual work.
 
 ```
 jarvOS/
@@ -34,6 +34,10 @@ jarvOS/
 │   ├── MEMORY.template.md # Long-term memory seed
 │   ├── ONTOLOGY.template.md # Your values and goals
 │   └── TOOLS.template.md  # Local tool notes + guardrails
+├── modules/               # Executable runtime modules (NEW — actual code)
+│   ├── jarvos-memory/     # Agent-state memory contract and audit helpers
+│   ├── jarvos-ontology/   # Ontology tooling (read/write/validate/render)
+│   └── jarvos-secondbrain/ # Vault bridges, journal/notes, capture routing
 ├── runtimes/
 │   ├── openclaw/          # OpenClaw-specific (scripts, workflows, heartbeat)
 │   └── hermes/            # Hermes-specific (setup script, lean adapter)
@@ -42,9 +46,29 @@ jarvOS/
 
 **Core** is the behavioral backbone — rules, principles, persona, governance philosophy. It's pure markdown with zero runtime assumptions. It works on any AI agent that loads project context files.
 
+**Modules** are the executable layer — three Node.js packages that your agent uses to manage memory, ontology, and your second brain. Code is public; your personal data stays local.
+
 **Runtimes** wire those principles into specific platforms:
 - **OpenClaw** adds scripts, Lobster workflow gates, heartbeat automation, and custom memory management (because OpenClaw doesn't have built-in learning loops)
 - **Hermes** is deliberately lean — Hermes has native skill creation, memory nudges, session search, and user modeling, so jarvOS just provides the behavioral layer and lets Hermes handle the mechanism
+
+## Modules
+
+The `modules/` directory contains three executable Node.js packages that power the runtime behavior of your jarvOS agent.
+
+| Module | Purpose |
+|--------|---------|
+| [`modules/jarvos-memory`](./modules/jarvos-memory/) | Durable agent-state memory — schema, audit helpers, promotion rules |
+| [`modules/jarvos-ontology`](./modules/jarvos-ontology/) | Ontology tooling — read, write, validate, and render your belief/goal graph |
+| [`modules/jarvos-secondbrain`](./modules/jarvos-secondbrain/) | Content layer — vault bridges (Obsidian/OpenClaw), journal, notes, capture routing |
+
+These are the same modules used in production. They ship with the repo so a `git clone` gives you working software, not just documentation.
+
+**Privacy model:** the modules contain generic, configurable code only. Your personal ontology data, memories, and vault content stay local. See [`PUBLIC_BASELINE.md`](./PUBLIC_BASELINE.md) for the full public/private boundary.
+
+For detailed module docs and usage, see [`modules/README.md`](./modules/README.md).
+
+---
 
 ## Quick start
 

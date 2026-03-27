@@ -1,0 +1,32 @@
+{
+  "_comment": "Copy to jarvos.config.json in your JARVOS_CLAWD_DIR (default: ~/clawd). All fields are optional — omit any you want to use the default for.",
+
+  "paths": {
+    "_comment": "All paths support leading ~/ expansion.",
+
+    "vault": "~/Documents/Vault v3",
+    "_vault_doc": "Root of your Obsidian vault (or equivalent). Used as the base for journal and notes dirs when those are not set explicitly. Default: ~/Documents/Vault v3",
+
+    "journal": "~/Documents/Vault v3/Journal",
+    "_journal_doc": "Where daily journal files are written. Default: $paths.vault/Journal. Override via JARVOS_JOURNAL_DIR env var.",
+
+    "notes": "~/Documents/Vault v3/Notes",
+    "_notes_doc": "Where durable notes are written. Default: $paths.vault/Notes. Override via JARVOS_NOTES_DIR env var.",
+
+    "tags": "~/Documents/Vault v3/Tags",
+    "_tags_doc": "Tags directory (used by journal-module config). Default: $paths.vault/Tags."
+  },
+
+  "_env_vars": {
+    "_doc": "Environment variables take precedence over this file. Canonical names (JARVOS_*) are checked first, then legacy aliases.",
+    "JARVOS_VAULT_DIR": "Vault root — overrides paths.vault",
+    "JARVOS_JOURNAL_DIR": "Journal dir — overrides paths.journal",
+    "JARVOS_NOTES_DIR": "Notes dir — overrides paths.notes",
+    "JARVOS_CLAWD_DIR": "Clawd/workspace root (where this config lives) — default: ~/clawd",
+    "_legacy_aliases": {
+      "VAULT_NOTES_DIR": "Legacy alias for JARVOS_NOTES_DIR (still honored)",
+      "JOURNAL_DIR": "Legacy alias for JARVOS_JOURNAL_DIR (still honored)",
+      "CLAWD_DIR": "Legacy alias for JARVOS_CLAWD_DIR (still honored)"
+    }
+  }
+}

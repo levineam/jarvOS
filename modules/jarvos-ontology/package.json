@@ -4,6 +4,25 @@
   "description": "jarvOS worldview layer — structured belief graph, predictions, goals, values, and identity",
   "license": "MIT",
   "main": "src/index.js",
+  "exports": {
+    ".": "./src/index.js",
+    "./reader": "./src/reader.js",
+    "./writer": "./src/writer.js",
+    "./extractor": "./src/extractor.js",
+    "./validator": "./src/validator.js",
+    "./renderer": "./src/renderer.js",
+    "./bridge": "./src/bridge.js"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.js",
+    "extract": "node scripts/extract.js",
+    "validate": "node scripts/validate.js",
+    "render": "node scripts/render.js",
+    "bootstrap": "node scripts/bootstrap.js",
+    "combined": "node scripts/combined.js",
+    "sync": "node scripts/sync-to-paperclip.js",
+    "sync:dry": "node scripts/sync-to-paperclip.js --dry-run --verbose"
+  },
   "repository": {
     "type": "git",
     "url": "https://github.com/levineam/jarvOS.git"
