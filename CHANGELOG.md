@@ -2,23 +2,6 @@
 
 All notable public-doc sync changes are appended by `jarvos-public-docs-sync.sh`.
 
-## 2026-03-06 — fix: resolve PR #2 merge blockers
-
-- `.github/workflows/ci.yml` — removed the missing `.mlc-config.json` reference and broadened the absolute-path leak check to catch any root-based Unix path or Windows drive path
-- `README.md` — updated rollout notes to reference only docs shipped in this repo
-- `docs/meta/source-to-export-map.json` — sanitized machine-local absolute paths from public metadata export fields
-
-## 2026-03-06 — fix: address follow-up CodeRabbit findings
-
-- `.github/workflows/ci.yml` — expanded the metadata leak gate to catch both `C:\...` and `C:/...` absolute Windows paths
-- `templates/AGENTS-template.md` — restored the required trailing newline for markdownlint compatibility
-
-## 2026-03-06 — docs: Phase A public repo hygiene + dogfood prep
-
-- `README.md` — corrected shipped-file inventory, removed stale optional/docs references, and clarified which files must still be provided locally during canaries
-- `starter-kit/README.md` — corrected file paths to match the public repo layout
-- `docs/meta/source-to-export-map.json` and architecture docs — sanitized private absolute paths and operator-specific/internal-only wording
-
 ## 2026-02-28 — feat: major update — new templates, patterns, and optional modules
 
 ### Phase 1: Updated existing templates
@@ -736,538 +719,956 @@ All notable public-doc sync changes are appended by `jarvos-public-docs-sync.sh`
 - Updated: templates/soul-template.md
 - Updated: templates/tools-template.md
 
-## 2026-02-28 21:07 EST — docs sync
+## 2026-03-10 16:09 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
 - Updated: templates/AGENTS-template.md
 
-## 2026-02-28 22:07 EST — docs sync
+## 2026-03-10 17:09 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
 
-## 2026-02-28 23:07 EST — docs sync
+## 2026-03-10 18:09 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
 
-## 2026-03-01 00:07 EST — docs sync
+## 2026-03-10 19:09 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
 
-## 2026-03-01 01:07 EST — docs sync
+## 2026-03-10 20:09 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
 
-## 2026-03-01 02:07 EST — docs sync
+## 2026-03-10 21:09 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
 
-## 2026-03-01 03:07 EST — docs sync
+## 2026-03-10 22:09 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
 
-## 2026-03-01 04:07 EST — docs sync
+## 2026-03-10 23:09 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
 
-## 2026-03-01 05:07 EST — docs sync
+## 2026-03-11 00:09 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
 
-## 2026-03-01 06:07 EST — docs sync
+## 2026-03-11 01:09 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
 
-## 2026-03-01 07:07 EST — docs sync
+## 2026-03-11 02:09 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
 
-## 2026-03-01 08:07 EST — docs sync
+## 2026-03-11 03:09 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
 
-## 2026-03-01 09:07 EST — docs sync
+## 2026-03-11 04:09 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
 
-## 2026-03-01 12:07 EST — docs sync
+## 2026-03-11 05:09 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
 
-## 2026-03-01 13:07 EST — docs sync
+## 2026-03-11 06:09 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
 
-## 2026-03-01 14:07 EST — docs sync
+## 2026-03-11 07:09 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
 
-## 2026-03-01 15:07 EST — docs sync
+## 2026-03-11 08:09 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
 
-## 2026-03-01 16:07 EST — docs sync
+## 2026-03-11 09:09 EDT — docs sync
+- Updated: docs/meta/source-to-export-map.json
+
+## 2026-03-11 10:09 EDT — docs sync
+- Updated: docs/meta/source-to-export-map.json
+
+## 2026-03-13 10:09 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
 - Updated: templates/AGENTS-template.md
+
+## 2026-03-14 13:43 EDT — docs sync
+- Updated: docs/meta/source-to-export-map.json
 - Updated: templates/HEARTBEAT-template.md
 
-## 2026-03-01 17:07 EST — docs sync
+## 2026-03-14 14:09 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
-- Updated: templates/AGENTS-template.md
-- Updated: templates/HEARTBEAT-template.md
 
-## 2026-03-01 18:07 EST — docs sync
+## 2026-03-14 15:09 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
 
-## 2026-03-01 19:07 EST — docs sync
+## 2026-03-14 16:11 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
 
-## 2026-03-01 20:07 EST — docs sync
+## 2026-03-14 17:09 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
 
-## 2026-03-01 21:07 EST — docs sync
+## 2026-03-14 18:09 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
 
-## 2026-03-01 22:07 EST — docs sync
+## 2026-03-14 19:09 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
 
-## 2026-03-01 23:07 EST — docs sync
+## 2026-03-14 20:09 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
 
-## 2026-03-02 00:07 EST — docs sync
+## 2026-03-14 21:09 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
 
-## 2026-03-02 01:07 EST — docs sync
+## 2026-03-14 22:09 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
 
-## 2026-03-02 02:07 EST — docs sync
+## 2026-03-14 23:09 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
 
-## 2026-03-02 04:07 EST — docs sync
+## 2026-03-15 00:09 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
 
-## 2026-03-02 05:07 EST — docs sync
+## 2026-03-15 01:09 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
 
-## 2026-03-02 06:07 EST — docs sync
+## 2026-03-15 02:09 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
 
-## 2026-03-02 07:07 EST — docs sync
+## 2026-03-15 03:09 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
 
-## 2026-03-02 08:07 EST — docs sync
+## 2026-03-15 04:09 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
 
-## 2026-03-02 09:07 EST — docs sync
+## 2026-03-15 05:09 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
 
-## 2026-03-02 10:07 EST — docs sync
+## 2026-03-15 06:09 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
 
-## 2026-03-02 11:07 EST — docs sync
+## 2026-03-15 07:09 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
 
-## 2026-03-02 12:07 EST — docs sync
+## 2026-03-15 08:09 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
 
-## 2026-03-02 13:07 EST — docs sync
+## 2026-03-15 09:15 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
 
-## 2026-03-02 14:08 EST — docs sync
+## 2026-03-15 10:16 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
 
-## 2026-03-02 15:09 EST — docs sync
+## 2026-03-15 11:09 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
 
-## 2026-03-02 16:07 EST — docs sync
+## 2026-03-15 12:13 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
 
-## 2026-03-02 17:07 EST — docs sync
+## 2026-03-15 13:12 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
 
-## 2026-03-02 18:07 EST — docs sync
+## 2026-03-15 14:09 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
 
-## 2026-03-02 19:07 EST — docs sync
+## 2026-03-15 16:09 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
 
-## 2026-03-02 20:07 EST — docs sync
+## 2026-03-15 17:09 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
 
-## 2026-03-02 21:07 EST — docs sync
+## 2026-03-15 18:09 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
-- Updated: templates/AGENTS-template.md
-- Updated: templates/HEARTBEAT-template.md
 
-## 2026-03-02 22:07 EST — docs sync
+## 2026-03-15 19:10 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
 
-## 2026-03-02 23:07 EST — docs sync
+## 2026-03-15 20:09 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
 
-## 2026-03-03 00:07 EST — docs sync
+## 2026-03-15 21:09 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
 
-## 2026-03-03 01:07 EST — docs sync
+## 2026-03-15 22:09 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
 
-## 2026-03-03 02:17 EST — docs sync
+## 2026-03-15 23:09 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
 
-## 2026-03-03 03:07 EST — docs sync
+## 2026-03-16 00:09 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
 
-## 2026-03-03 04:07 EST — docs sync
+## 2026-03-16 01:09 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
 
-## 2026-03-03 05:07 EST — docs sync
+## 2026-03-16 02:09 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
 
-## 2026-03-03 06:07 EST — docs sync
+## 2026-03-16 03:09 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
 
-## 2026-03-03 07:08 EST — docs sync
+## 2026-03-16 04:09 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
-- Updated: templates/AGENTS-template.md
-- Updated: templates/HEARTBEAT-template.md
 
-## 2026-03-03 08:07 EST — docs sync
+## 2026-03-16 05:09 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
 
-## 2026-03-03 09:07 EST — docs sync
+## 2026-03-16 06:09 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
 
-## 2026-03-03 10:09 EST — docs sync
+## 2026-03-16 07:09 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
 
-## 2026-03-03 11:07 EST — docs sync
+## 2026-03-16 08:09 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
 
-## 2026-03-03 12:07 EST — docs sync
+## 2026-03-16 09:11 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
 
-## 2026-03-03 13:07 EST — docs sync
+## 2026-03-16 10:09 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
 
-## 2026-03-03 15:07 EST — docs sync
+## 2026-03-16 11:09 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
 
-## 2026-03-03 20:07 EST — docs sync
+## 2026-03-16 12:09 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
 
-## 2026-03-04 12:07 EST — docs sync
+## 2026-03-16 14:38 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
 
-## 2026-03-04 14:07 EST — docs sync
+## 2026-03-16 15:09 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
 
-## 2026-03-04 16:07 EST — docs sync
+## 2026-03-16 16:16 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
 
-## 2026-03-04 18:07 EST — docs sync
+## 2026-03-16 17:15 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
 
-## 2026-03-04 21:07 EST — docs sync
+## 2026-03-16 18:16 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
 
-## 2026-03-05 00:07 EST — docs sync
+## 2026-03-16 19:16 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
 
-## 2026-03-05 01:07 EST — docs sync
+## 2026-03-16 20:10 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
 
-## 2026-03-05 02:07 EST — docs sync
+## 2026-03-16 21:09 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
 
-## 2026-03-05 03:07 EST — docs sync
+## 2026-03-16 22:11 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
 
-## 2026-03-05 04:07 EST — docs sync
+## 2026-03-16 23:09 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
 
-## 2026-03-05 05:07 EST — docs sync
+## 2026-03-17 00:09 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
 
-## 2026-03-05 06:07 EST — docs sync
+## 2026-03-17 01:09 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
 
-## 2026-03-05 09:07 EST — docs sync
+## 2026-03-17 02:09 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
 
-## 2026-03-05 11:07 EST — docs sync
+## 2026-03-17 03:09 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
 
-## 2026-03-05 13:07 EST — docs sync
+## 2026-03-17 04:09 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
 
-## 2026-03-05 16:07 EST — docs sync
+## 2026-03-17 05:09 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
 
-## 2026-03-05 17:07 EST — docs sync
+## 2026-03-17 06:09 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
 
-## 2026-03-05 19:07 EST — docs sync
+## 2026-03-17 07:09 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
 
-## 2026-03-05 21:07 EST — docs sync
+## 2026-03-17 08:09 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
 
-## 2026-03-06 07:07 EST — docs sync
+## 2026-03-17 09:16 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
 
-## 2026-03-06 08:07 EST — docs sync
+## 2026-03-17 10:09 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
 
-## 2026-03-06 09:07 EST — docs sync
+## 2026-03-17 11:09 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
 
-## 2026-03-06 10:07 EST — docs sync
+## 2026-03-17 12:09 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
 
-## 2026-03-06 11:07 EST — docs sync
+## 2026-03-17 13:18 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
 
-## 2026-03-06 12:07 EST — docs sync
+## 2026-03-17 14:12 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
 
-## 2026-03-06 13:07 EST — docs sync
+## 2026-03-17 15:09 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
 
-## 2026-03-06 14:07 EST — docs sync
-- Updated: docs/architecture/architecture-decision-records/architecture-decision-record-20260219-ars-contexta-patterns.md
-- Updated: docs/architecture/jarvos-architecture.md
-- Updated: docs/dogfood/phase-b-canary-runbook.md
+## 2026-03-17 16:17 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
-- Updated: docs/troubleshooting/acp-wrapper-regression-workaround.md
-- Updated: docs/troubleshooting/context-management-overload.md
-- Updated: starter-kit/README.md
-- Updated: templates/AGENTS-template.md
 
-## 2026-03-06 15:07 EST — docs sync
+## 2026-03-17 17:12 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
 
-## 2026-03-06 16:07 EST — docs sync
+## 2026-03-17 18:13 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
 
-## 2026-03-06 20:07 EST — docs sync
-- Updated: docs/dogfood/phase-b-canary-runbook.md
+## 2026-03-17 19:14 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
-- Updated: docs/troubleshooting/acp-wrapper-regression-workaround.md
-- Updated: docs/troubleshooting/context-management-overload.md
-- Updated: templates/AGENTS-template.md
 
-## 2026-03-06 21:07 EST — docs sync
+## 2026-03-17 20:16 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
 
-## 2026-03-06 22:07 EST — docs sync
+## 2026-03-17 21:11 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
 
-## 2026-03-06 23:07 EST — docs sync
+## 2026-03-17 22:09 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
 
-## 2026-03-07 00:07 EST — docs sync
+## 2026-03-17 23:09 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
 
-## 2026-03-07 01:07 EST — docs sync
+## 2026-03-18 00:09 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
 
-## 2026-03-07 02:07 EST — docs sync
+## 2026-03-18 01:09 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
 
-## 2026-03-07 03:07 EST — docs sync
+## 2026-03-18 02:09 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
 
-## 2026-03-07 04:07 EST — docs sync
+## 2026-03-18 03:09 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
 
-## 2026-03-07 05:07 EST — docs sync
+## 2026-03-18 04:09 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
 
-## 2026-03-07 06:07 EST — docs sync
+## 2026-03-18 05:09 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
 
-## 2026-03-07 14:07 EST — docs sync
+## 2026-03-18 06:09 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
-- Updated: starter-kit/README.md
-- Updated: templates/HEARTBEAT-template.md
-- Updated: docs/operations/openclaw-watchdog-cooldown-pattern.md
-- Updated: docs/operations/openclaw-watchdog-runbook.md
-- Updated: starter-kit/scripts/lib/watchdog-signal-parser.sh
-- Updated: starter-kit/scripts/openclaw-gateway-probe.sh
-- Updated: starter-kit/scripts/openclaw-health-check.sh
-- Updated: starter-kit/scripts/openclaw-watchdog-status.sh
-- Updated: starter-kit/tests/watchdog-signal-parser-test.sh
 
-## 2026-03-07 15:07 EST — docs sync
+## 2026-03-18 07:09 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
 
-## 2026-03-07 16:07 EST — docs sync
+## 2026-03-18 08:09 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
 
-## 2026-03-07 17:09 EST — docs sync
+## 2026-03-18 09:18 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
 
-## 2026-03-07 18:09 EST — docs sync
+## 2026-03-18 10:09 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
 
-## 2026-03-07 19:09 EST — docs sync
+## 2026-03-18 11:15 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
 
-## 2026-03-07 20:09 EST — docs sync
+## 2026-03-18 12:09 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
 
-## 2026-03-08 09:09 EDT — docs sync
+## 2026-03-18 13:12 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
 
-## 2026-03-08 10:09 EDT — docs sync
+## 2026-03-18 14:21 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
 
-## 2026-03-08 11:09 EDT — docs sync
+## 2026-03-18 15:09 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
 
-## 2026-03-08 12:09 EDT — docs sync
+## 2026-03-18 16:09 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
 
-## 2026-03-08 13:09 EDT — docs sync
+## 2026-03-18 17:09 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
 
-## 2026-03-08 14:09 EDT — docs sync
+## 2026-03-18 21:09 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
 
-## 2026-03-08 15:09 EDT — docs sync
+## 2026-03-18 22:09 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
 
-## 2026-03-08 16:09 EDT — docs sync
+## 2026-03-18 23:09 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
 
-## 2026-03-08 17:09 EDT — docs sync
+## 2026-03-19 00:09 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
 
-## 2026-03-08 18:09 EDT — docs sync
+## 2026-03-19 01:09 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
 
-## 2026-03-08 19:09 EDT — docs sync
+## 2026-03-19 02:09 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
 
-## 2026-03-08 20:09 EDT — docs sync
+## 2026-03-19 03:09 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
 
-## 2026-03-08 21:09 EDT — docs sync
+## 2026-03-19 04:09 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
 
-## 2026-03-08 22:09 EDT — docs sync
+## 2026-03-19 05:09 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
 
-## 2026-03-08 23:09 EDT — docs sync
+## 2026-03-19 06:09 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
 
-## 2026-03-09 00:09 EDT — docs sync
+## 2026-03-19 07:09 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
 
-## 2026-03-09 01:09 EDT — docs sync
+## 2026-03-19 08:09 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
 
-## 2026-03-09 02:09 EDT — docs sync
+## 2026-03-19 08:11 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
 
-## 2026-03-09 03:09 EDT — docs sync
+## 2026-03-19 09:09 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
 
-## 2026-03-09 04:09 EDT — docs sync
+## 2026-03-19 10:09 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
 
-## 2026-03-09 05:09 EDT — docs sync
+## 2026-03-19 11:09 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
 
-## 2026-03-09 06:09 EDT — docs sync
+## 2026-03-19 12:09 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
 
-## 2026-03-09 07:09 EDT — docs sync
+## 2026-03-19 13:09 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
 
-## 2026-03-09 08:09 EDT — docs sync
+## 2026-03-19 14:09 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
 
-## 2026-03-09 09:09 EDT — docs sync
+## 2026-03-19 15:09 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
 
-## 2026-03-09 10:09 EDT — docs sync
+## 2026-03-19 16:09 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
 
-## 2026-03-09 11:09 EDT — docs sync
+## 2026-03-19 17:09 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
 
-## 2026-03-09 12:09 EDT — docs sync
+## 2026-03-19 18:09 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
 
-## 2026-03-09 13:09 EDT — docs sync
+## 2026-03-19 19:09 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
 
-## 2026-03-09 14:09 EDT — docs sync
+## 2026-03-19 20:09 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
 
-## 2026-03-09 15:09 EDT — docs sync
+## 2026-03-19 21:09 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
 
-## 2026-03-09 16:09 EDT — docs sync
+## 2026-03-19 22:09 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
 
-## 2026-03-09 17:09 EDT — docs sync
+## 2026-03-19 23:09 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
 
-## 2026-03-09 18:09 EDT — docs sync
+## 2026-03-20 00:09 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
-- Updated: docs/operations/openclaw-watchdog-cooldown-pattern.md
-- Updated: docs/operations/openclaw-watchdog-runbook.md
-- Updated: starter-kit/README.md
-- Updated: starter-kit/scripts/lib/watchdog-signal-parser.sh
-- Updated: starter-kit/scripts/openclaw-gateway-probe.sh
-- Updated: starter-kit/scripts/openclaw-health-check.sh
-- Updated: starter-kit/scripts/openclaw-watchdog-status.sh
-- Updated: starter-kit/tests/watchdog-signal-parser-test.sh
-- Updated: templates/HEARTBEAT-template.md
 
-## 2026-03-09 19:09 EDT — docs sync
+## 2026-03-20 01:09 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
 
-## 2026-03-09 20:09 EDT — docs sync
+## 2026-03-20 02:09 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
 
-## 2026-03-09 21:09 EDT — docs sync
+## 2026-03-20 03:09 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
 
-## 2026-03-09 22:09 EDT — docs sync
+## 2026-03-20 04:09 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
 
-## 2026-03-09 23:09 EDT — docs sync
+## 2026-03-20 05:09 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
 
-## 2026-03-10 00:09 EDT — docs sync
+## 2026-03-20 06:09 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
 
-## 2026-03-10 01:09 EDT — docs sync
+## 2026-03-20 07:09 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
 
-## 2026-03-10 02:09 EDT — docs sync
+## 2026-03-20 08:09 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
 
-## 2026-03-10 03:09 EDT — docs sync
+## 2026-03-20 09:09 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
 
-## 2026-03-10 04:09 EDT — docs sync
+## 2026-03-20 10:16 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
 
-## 2026-03-10 05:09 EDT — docs sync
+## 2026-03-20 11:09 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
 
-## 2026-03-10 06:09 EDT — docs sync
+## 2026-03-20 12:09 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
 
-## 2026-03-10 07:09 EDT — docs sync
+## 2026-03-20 13:09 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
 
-## 2026-03-10 08:09 EDT — docs sync
+## 2026-03-20 14:09 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
 
-## 2026-03-10 09:09 EDT — docs sync
+## 2026-03-20 15:09 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
 
-## 2026-03-10 10:09 EDT — docs sync
+## 2026-03-20 16:09 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
 
-## 2026-03-10 11:09 EDT — docs sync
+## 2026-03-20 17:09 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
 
-## 2026-03-10 12:09 EDT — docs sync
+## 2026-03-20 18:09 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
 
-## 2026-03-10 13:09 EDT — docs sync
+## 2026-03-20 19:09 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
 
-## 2026-03-10 14:09 EDT — docs sync
+## 2026-03-20 20:09 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
 
-## 2026-03-10 15:09 EDT — docs sync
+## 2026-03-20 21:09 EDT — docs sync
+- Updated: docs/meta/source-to-export-map.json
+
+## 2026-03-20 22:09 EDT — docs sync
+- Updated: docs/meta/source-to-export-map.json
+
+## 2026-03-20 23:09 EDT — docs sync
+- Updated: docs/meta/source-to-export-map.json
+
+## 2026-03-21 00:09 EDT — docs sync
+- Updated: docs/meta/source-to-export-map.json
+
+## 2026-03-21 01:09 EDT — docs sync
+- Updated: docs/meta/source-to-export-map.json
+
+## 2026-03-21 02:09 EDT — docs sync
+- Updated: docs/meta/source-to-export-map.json
+
+## 2026-03-21 03:09 EDT — docs sync
+- Updated: docs/meta/source-to-export-map.json
+
+## 2026-03-21 04:09 EDT — docs sync
+- Updated: docs/meta/source-to-export-map.json
+
+## 2026-03-21 05:09 EDT — docs sync
+- Updated: docs/meta/source-to-export-map.json
+
+## 2026-03-21 06:09 EDT — docs sync
+- Updated: docs/meta/source-to-export-map.json
+
+## 2026-03-21 07:09 EDT — docs sync
+- Updated: docs/meta/source-to-export-map.json
+
+## 2026-03-21 08:09 EDT — docs sync
+- Updated: docs/meta/source-to-export-map.json
+
+## 2026-03-21 09:09 EDT — docs sync
+- Updated: docs/meta/source-to-export-map.json
+
+## 2026-03-21 10:09 EDT — docs sync
+- Updated: docs/meta/source-to-export-map.json
+
+## 2026-03-21 11:09 EDT — docs sync
+- Updated: docs/meta/source-to-export-map.json
+
+## 2026-03-21 12:09 EDT — docs sync
+- Updated: docs/meta/source-to-export-map.json
+
+## 2026-03-21 13:09 EDT — docs sync
+- Updated: docs/meta/source-to-export-map.json
+
+## 2026-03-21 14:09 EDT — docs sync
+- Updated: docs/meta/source-to-export-map.json
+
+## 2026-03-21 15:09 EDT — docs sync
+- Updated: docs/meta/source-to-export-map.json
+
+## 2026-03-21 16:09 EDT — docs sync
+- Updated: docs/meta/source-to-export-map.json
+
+## 2026-03-21 17:09 EDT — docs sync
+- Updated: docs/meta/source-to-export-map.json
+
+## 2026-03-21 18:09 EDT — docs sync
+- Updated: docs/meta/source-to-export-map.json
+
+## 2026-03-21 19:09 EDT — docs sync
+- Updated: docs/meta/source-to-export-map.json
+
+## 2026-03-21 20:09 EDT — docs sync
+- Updated: docs/meta/source-to-export-map.json
+
+## 2026-03-21 21:09 EDT — docs sync
+- Updated: docs/meta/source-to-export-map.json
+
+## 2026-03-21 22:09 EDT — docs sync
+- Updated: docs/meta/source-to-export-map.json
+
+## 2026-03-21 23:09 EDT — docs sync
+- Updated: docs/meta/source-to-export-map.json
+
+## 2026-03-22 00:09 EDT — docs sync
+- Updated: docs/meta/source-to-export-map.json
+
+## 2026-03-22 01:09 EDT — docs sync
+- Updated: docs/meta/source-to-export-map.json
+
+## 2026-03-22 02:09 EDT — docs sync
+- Updated: docs/meta/source-to-export-map.json
+
+## 2026-03-22 03:09 EDT — docs sync
+- Updated: docs/meta/source-to-export-map.json
+
+## 2026-03-22 04:09 EDT — docs sync
+- Updated: docs/meta/source-to-export-map.json
+
+## 2026-03-22 05:09 EDT — docs sync
+- Updated: docs/meta/source-to-export-map.json
+
+## 2026-03-22 06:09 EDT — docs sync
+- Updated: docs/meta/source-to-export-map.json
+
+## 2026-03-22 07:09 EDT — docs sync
+- Updated: docs/meta/source-to-export-map.json
+
+## 2026-03-22 08:09 EDT — docs sync
+- Updated: docs/meta/source-to-export-map.json
+
+## 2026-03-22 09:09 EDT — docs sync
+- Updated: docs/meta/source-to-export-map.json
+
+## 2026-03-22 10:09 EDT — docs sync
+- Updated: docs/meta/source-to-export-map.json
+
+## 2026-03-22 11:09 EDT — docs sync
+- Updated: docs/meta/source-to-export-map.json
+
+## 2026-03-22 12:09 EDT — docs sync
+- Updated: docs/meta/source-to-export-map.json
+
+## 2026-03-22 13:09 EDT — docs sync
+- Updated: docs/meta/source-to-export-map.json
+
+## 2026-03-22 14:09 EDT — docs sync
+- Updated: docs/meta/source-to-export-map.json
+
+## 2026-03-22 15:09 EDT — docs sync
+- Updated: docs/meta/source-to-export-map.json
+
+## 2026-03-22 16:09 EDT — docs sync
+- Updated: docs/meta/source-to-export-map.json
+
+## 2026-03-22 17:09 EDT — docs sync
+- Updated: docs/meta/source-to-export-map.json
+
+## 2026-03-22 18:09 EDT — docs sync
+- Updated: docs/meta/source-to-export-map.json
+
+## 2026-03-22 19:09 EDT — docs sync
+- Updated: docs/meta/source-to-export-map.json
+
+## 2026-03-22 20:09 EDT — docs sync
+- Updated: docs/meta/source-to-export-map.json
+
+## 2026-03-22 21:09 EDT — docs sync
+- Updated: docs/meta/source-to-export-map.json
+
+## 2026-03-22 22:09 EDT — docs sync
+- Updated: docs/meta/source-to-export-map.json
+
+## 2026-03-22 23:09 EDT — docs sync
+- Updated: docs/meta/source-to-export-map.json
+
+## 2026-03-23 00:09 EDT — docs sync
+- Updated: docs/meta/source-to-export-map.json
+
+## 2026-03-23 01:09 EDT — docs sync
+- Updated: docs/meta/source-to-export-map.json
+
+## 2026-03-23 02:09 EDT — docs sync
+- Updated: docs/meta/source-to-export-map.json
+
+## 2026-03-23 03:09 EDT — docs sync
+- Updated: docs/meta/source-to-export-map.json
+
+## 2026-03-23 04:09 EDT — docs sync
+- Updated: docs/meta/source-to-export-map.json
+
+## 2026-03-23 05:09 EDT — docs sync
+- Updated: docs/meta/source-to-export-map.json
+
+## 2026-03-23 06:09 EDT — docs sync
+- Updated: docs/meta/source-to-export-map.json
+
+## 2026-03-23 07:13 EDT — docs sync
+- Updated: docs/meta/source-to-export-map.json
+
+## 2026-03-23 08:09 EDT — docs sync
+- Updated: docs/meta/source-to-export-map.json
+
+## 2026-03-23 09:09 EDT — docs sync
+- Updated: docs/meta/source-to-export-map.json
+
+## 2026-03-23 10:12 EDT — docs sync
+- Updated: docs/meta/source-to-export-map.json
+
+## 2026-03-23 11:09 EDT — docs sync
+- Updated: docs/meta/source-to-export-map.json
+
+## 2026-03-23 13:29 EDT — docs sync
+- Updated: docs/meta/source-to-export-map.json
+
+## 2026-03-23 13:56 EDT — docs sync
+- Updated: docs/meta/source-to-export-map.json
+
+## 2026-03-23 14:09 EDT — docs sync
+- Updated: docs/meta/source-to-export-map.json
+
+## 2026-03-23 15:09 EDT — docs sync
+- Updated: docs/meta/source-to-export-map.json
+
+## 2026-03-23 16:11 EDT — docs sync
+- Updated: docs/meta/source-to-export-map.json
+
+## 2026-03-23 17:09 EDT — docs sync
+- Updated: docs/meta/source-to-export-map.json
+
+## 2026-03-23 18:09 EDT — docs sync
+- Updated: docs/meta/source-to-export-map.json
+
+## 2026-03-23 19:09 EDT — docs sync
+- Updated: docs/meta/source-to-export-map.json
+
+## 2026-03-23 20:09 EDT — docs sync
+- Updated: docs/meta/source-to-export-map.json
+
+## 2026-03-23 21:09 EDT — docs sync
+- Updated: docs/meta/source-to-export-map.json
+
+## 2026-03-23 22:09 EDT — docs sync
+- Updated: docs/meta/source-to-export-map.json
+
+## 2026-03-23 23:09 EDT — docs sync
+- Updated: docs/meta/source-to-export-map.json
+
+## 2026-03-24 00:09 EDT — docs sync
+- Updated: docs/meta/source-to-export-map.json
+
+## 2026-03-24 01:09 EDT — docs sync
+- Updated: docs/meta/source-to-export-map.json
+
+## 2026-03-24 02:09 EDT — docs sync
+- Updated: docs/meta/source-to-export-map.json
+
+## 2026-03-24 03:09 EDT — docs sync
+- Updated: docs/meta/source-to-export-map.json
+
+## 2026-03-24 04:09 EDT — docs sync
+- Updated: docs/meta/source-to-export-map.json
+
+## 2026-03-24 05:09 EDT — docs sync
+- Updated: docs/meta/source-to-export-map.json
+
+## 2026-03-24 06:09 EDT — docs sync
+- Updated: docs/meta/source-to-export-map.json
+
+## 2026-03-24 07:16 EDT — docs sync
+- Updated: docs/meta/source-to-export-map.json
+
+## 2026-03-24 08:09 EDT — docs sync
+- Updated: docs/meta/source-to-export-map.json
+
+## 2026-03-24 09:09 EDT — docs sync
+- Updated: docs/meta/source-to-export-map.json
+
+## 2026-03-24 10:17 EDT — docs sync
+- Updated: docs/meta/source-to-export-map.json
+
+## 2026-03-24 11:14 EDT — docs sync
+- Updated: docs/meta/source-to-export-map.json
+
+## 2026-03-24 12:20 EDT — docs sync
+- Updated: docs/meta/source-to-export-map.json
+
+## 2026-03-24 13:13 EDT — docs sync
+- Updated: docs/meta/source-to-export-map.json
+
+## 2026-03-24 14:15 EDT — docs sync
+- Updated: docs/meta/source-to-export-map.json
+
+## 2026-03-24 15:09 EDT — docs sync
+- Updated: docs/meta/source-to-export-map.json
+
+## 2026-03-24 16:26 EDT — docs sync
+- Updated: docs/meta/source-to-export-map.json
+
+## 2026-03-24 20:11 EDT — docs sync
+- Updated: docs/meta/source-to-export-map.json
+
+## 2026-03-24 21:14 EDT — docs sync
+- Updated: docs/meta/source-to-export-map.json
+
+## 2026-03-24 22:23 EDT — docs sync
+- Updated: docs/meta/source-to-export-map.json
+
+## 2026-03-24 23:10 EDT — docs sync
+- Updated: docs/meta/source-to-export-map.json
+
+## 2026-03-25 00:09 EDT — docs sync
+- Updated: docs/meta/source-to-export-map.json
+
+## 2026-03-25 01:09 EDT — docs sync
+- Updated: docs/meta/source-to-export-map.json
+
+## 2026-03-25 02:09 EDT — docs sync
+- Updated: docs/meta/source-to-export-map.json
+
+## 2026-03-25 03:09 EDT — docs sync
+- Updated: docs/meta/source-to-export-map.json
+
+## 2026-03-25 04:09 EDT — docs sync
+- Updated: docs/meta/source-to-export-map.json
+
+## 2026-03-25 05:09 EDT — docs sync
+- Updated: docs/meta/source-to-export-map.json
+
+## 2026-03-25 06:12 EDT — docs sync
+- Updated: docs/meta/source-to-export-map.json
+
+## 2026-03-25 07:09 EDT — docs sync
+- Updated: docs/meta/source-to-export-map.json
+
+## 2026-03-25 08:14 EDT — docs sync
+- Updated: docs/meta/source-to-export-map.json
+
+## 2026-03-25 10:39 EDT — docs sync
+- Updated: docs/meta/source-to-export-map.json
+
+## 2026-03-25 11:09 EDT — docs sync
+- Updated: docs/meta/source-to-export-map.json
+
+## 2026-03-25 12:17 EDT — docs sync
+- Updated: docs/meta/source-to-export-map.json
+
+## 2026-03-25 13:09 EDT — docs sync
+- Updated: docs/meta/source-to-export-map.json
+
+## 2026-03-25 14:14 EDT — docs sync
+- Updated: docs/meta/source-to-export-map.json
+
+## 2026-03-25 16:39 EDT — docs sync
+- Updated: docs/meta/source-to-export-map.json
+
+## 2026-03-25 17:09 EDT — docs sync
+- Updated: docs/meta/source-to-export-map.json
+
+## 2026-03-25 18:13 EDT — docs sync
+- Updated: docs/meta/source-to-export-map.json
+
+## 2026-03-25 19:10 EDT — docs sync
+- Updated: docs/meta/source-to-export-map.json
+
+## 2026-03-25 20:15 EDT — docs sync
+- Updated: docs/meta/source-to-export-map.json
+
+## 2026-03-25 22:09 EDT — docs sync
+- Updated: docs/meta/source-to-export-map.json
+
+## 2026-03-25 23:09 EDT — docs sync
+- Updated: docs/meta/source-to-export-map.json
+
+## 2026-03-26 00:09 EDT — docs sync
+- Updated: docs/meta/source-to-export-map.json
+
+## 2026-03-26 01:09 EDT — docs sync
+- Updated: docs/meta/source-to-export-map.json
+
+## 2026-03-26 02:09 EDT — docs sync
+- Updated: docs/meta/source-to-export-map.json
+
+## 2026-03-26 03:09 EDT — docs sync
+- Updated: docs/meta/source-to-export-map.json
+
+## 2026-03-26 04:09 EDT — docs sync
+- Updated: docs/meta/source-to-export-map.json
+
+## 2026-03-26 05:09 EDT — docs sync
+- Updated: docs/meta/source-to-export-map.json
+
+## 2026-03-26 06:09 EDT — docs sync
+- Updated: docs/meta/source-to-export-map.json
+
+## 2026-03-26 07:09 EDT — docs sync
+- Updated: docs/meta/source-to-export-map.json
+
+## 2026-03-26 08:22 EDT — docs sync
+- Updated: docs/meta/source-to-export-map.json
+
+## 2026-03-26 09:09 EDT — docs sync
+- Updated: docs/meta/source-to-export-map.json
+
+## 2026-03-26 11:09 EDT — docs sync
+- Updated: docs/meta/source-to-export-map.json
+
+## 2026-03-26 12:10 EDT — docs sync
+- Updated: docs/meta/source-to-export-map.json
+
+## 2026-03-26 14:09 EDT — docs sync
+- Updated: docs/meta/source-to-export-map.json
+
+## 2026-03-26 15:09 EDT — docs sync
+- Updated: docs/meta/source-to-export-map.json
+
+## 2026-03-26 16:09 EDT — docs sync
+- Updated: docs/meta/source-to-export-map.json
+
+## 2026-03-26 17:09 EDT — docs sync
+- Updated: docs/meta/source-to-export-map.json
+
+## 2026-03-26 18:11 EDT — docs sync
+- Updated: docs/meta/source-to-export-map.json
+
+## 2026-03-26 20:25 EDT — docs sync
+- Updated: docs/meta/source-to-export-map.json
+
+## 2026-03-26 21:09 EDT — docs sync
+- Updated: docs/meta/source-to-export-map.json
+
+## 2026-03-26 22:09 EDT — docs sync
+- Updated: docs/meta/source-to-export-map.json
+
+## 2026-03-26 23:25 EDT — docs sync
+- Updated: docs/meta/source-to-export-map.json
+
+## 2026-03-27 00:09 EDT — docs sync
+- Updated: docs/meta/source-to-export-map.json
+
+## 2026-03-27 01:09 EDT — docs sync
+- Updated: docs/meta/source-to-export-map.json
+
+## 2026-03-27 02:09 EDT — docs sync
+- Updated: docs/meta/source-to-export-map.json
+
+## 2026-03-27 03:09 EDT — docs sync
+- Updated: docs/meta/source-to-export-map.json
+
+## 2026-03-27 04:09 EDT — docs sync
+- Updated: docs/meta/source-to-export-map.json
+
+## 2026-03-27 05:09 EDT — docs sync
+- Updated: docs/meta/source-to-export-map.json
+
+## 2026-03-27 06:12 EDT — docs sync
+- Updated: docs/meta/source-to-export-map.json
+
+## 2026-03-27 07:16 EDT — docs sync
+- Updated: docs/meta/source-to-export-map.json
+
+## 2026-03-27 08:09 EDT — docs sync
+- Updated: docs/meta/source-to-export-map.json
+
+## 2026-03-27 09:09 EDT — docs sync
+- Updated: docs/meta/source-to-export-map.json
+
+## 2026-03-27 10:06 EDT — docs sync
 - Updated: docs/meta/source-to-export-map.json
