@@ -1,0 +1,115 @@
+name: Codex review trigger
+
+on:
+  pull_request_target:
+    types: [opened, reopened, synchronize]
+
+# This workflow posts a PR comment `@codex review` to trigger the Codex/ChatGPT Pro
+# GitHub review integration.
+#
+# Spam control:
+# - If the PR is labeled `skip-codex`, do nothing.
+# - If any existing PR comment already equals `@codex review` (trimmed), do nothing.
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: codex-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  comment:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Skip auto-commits (no review needed)
+        id: check_commit
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b  # v7
+        with:
+          script: |
+            // Auto-commits from the sync loop or uncommitted-work-check are not
+            // meaningful code changes and must not trigger review bots.
+            // Patterns: "auto-commit: ..." and "docs(sync): ..."
+            // Safety gate: only trusted automation identities can bypass review.
+            const trustedActors = new Set([
+              'github-actions[bot]',
+              context.repo.owner,
+            ])
+            const actor = context.actor || ''
+            const senderType = context.payload.sender?.type || ''
+            const isTrustedActor = trustedActors.has(actor) || senderType === 'Bot'
+
+            const pr = context.payload.pull_request
+            const owner = context.repo.owner
+            const repo = context.repo.repo
+
+            const commits = await github.paginate(github.rest.pulls.listCommits, {
+              owner,
+              repo,
+              pull_number: pr.number,
+              per_page: 100,
+            })
+
+            const getFirstLine = message => (message || '').split('\n')[0]
+            const hasAutoCommitPrefix = message =>
+              message.startsWith('auto-commit:') ||
+              message.startsWith('docs(sync):')
+
+            const nonAutoCommits = commits.filter(({ commit }) => {
+              const firstLine = getFirstLine(commit?.message)
+              return !hasAutoCommitPrefix(firstLine)
+            })
+
+            const isAutoCommitPr =
+              isTrustedActor && commits.length > 0 && nonAutoCommits.length === 0
+
+            if (isAutoCommitPr) {
+              core.info(
+                `Skipping review trigger — trusted auto-commit PR detected (${commits.length} commit${commits.length === 1 ? '' : 's'}).`
+              )
+              core.setOutput('skip', 'true')
+            } else {
+              const sample = getFirstLine(nonAutoCommits[0]?.commit?.message)
+              core.info(`Proceeding with review trigger${sample ? ` for: "${sample}"` : '.'}`)
+              core.setOutput('skip', 'false')
+            }
+
+      - name: Post @codex review comment (once)
+        if: steps.check_commit.outputs.skip != 'true'
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b  # v7
+        with:
+          script: |
+            const skipLabel = 'skip-codex'
+            const triggerText = '@codex review'
+
+            const pr = context.payload.pull_request
+            const owner = context.repo.owner
+            const repo = context.repo.repo
+            const issue_number = pr.number
+
+            const labels = (pr.labels || []).map(l => l.name)
+            if (labels.includes(skipLabel)) {
+              core.info(`Skipping Codex trigger because label '${skipLabel}' is present.`)
+              return
+            }
+
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner,
+              repo,
+              issue_number,
+              per_page: 100,
+            })
+
+            const alreadyCommented = comments.some(c => (c.body || '').trim() === triggerText)
+            if (alreadyCommented) {
+              core.info(`Codex trigger comment already exists on PR #${issue_number}.`)
+              return
+            }
+
+            await github.rest.issues.createComment({
+              owner,
+              repo,
+              issue_number,
+              body: triggerText,
+            })

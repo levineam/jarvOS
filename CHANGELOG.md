@@ -2,6 +2,21 @@
 
 All notable public-doc sync changes are appended by `jarvos-public-docs-sync.sh`.
 
+## 2026-03-27 — merged outstanding public repo PRs
+
+### PR #2 — docs: Phase A public hygiene + dogfood canary prep
+- merged the CI hygiene improvements and shipped-file clarifications from PR #2
+- kept the latest `main`-line sync-generated artifacts while updating the branch so the merge did not reintroduce docs-sync drift
+
+### PR #4 — docs: align public baseline docs and metadata
+- aligned the public README/starter-kit messaging with the files actually shipped in this repo
+- carried forward the baseline-candidate rollout notes and removed stale PR-autopilot diagnostics from the public repo
+
+### PR #5 — feat: cross-platform jarvOS core + runtime adapters
+- added the portable `core/` behavioral layer plus Hermes and OpenClaw runtime adapter docs
+- restored the Codex review trigger workflow with auto-commit/docs-sync skip logic
+- normalized public export metadata to relative, non-machine-specific source paths
+
 ## 2026-02-28 — feat: major update — new templates, patterns, and optional modules
 
 ### Phase 1: Updated existing templates
