@@ -61,16 +61,35 @@ hermes         # Start chatting
 
 ### OpenClaw
 
+**Prerequisites:** Node.js v18+, [OpenClaw](https://github.com/openclaw/openclaw) (`npm install -g openclaw`)
+
 ```bash
 git clone https://github.com/levineam/jarvOS.git
 cd jarvOS
-# Copy core/ files into your OpenClaw workspace, then follow runtimes/openclaw/README.md for runtime adapter wiring
-# Copy templates/ into that workspace and fill in your details
-cp templates/BOOTSTRAP-template.md /path/to/your/openclaw-workspace/BOOTSTRAP.md
-# Tell your assistant (in that workspace) to read BOOTSTRAP.md
-cd /path/to/your/openclaw-workspace
-openclaw gateway start
+
+# Option A — set up jarvOS in your existing OpenClaw workspace
+./runtimes/openclaw/setup.sh /path/to/your/openclaw-workspace
+
+# Option B — set up in a new directory (defaults to current dir)
+mkdir ~/my-agent && cd ~/my-agent
+/path/to/jarvOS/runtimes/openclaw/setup.sh .
 ```
+
+The script installs core behavioral files, starter templates, and creates your memory directory, then runs a smoke test. When it finishes:
+
+```bash
+# 1. Fill in your personal details
+$EDITOR USER.md        # name, timezone, priorities
+$EDITOR ONTOLOGY.md    # mission, values, goals
+
+# 2. Start OpenClaw
+openclaw gateway start
+
+# 3. Tell your agent to read BOOTSTRAP.md
+# The bootstrap ritual sets up identity, memory, and journal on first run
+```
+
+See `runtimes/openclaw/README.md` for advanced wiring (HEARTBEAT.md, scripts, workflows).
 
 ## The five systems
 
