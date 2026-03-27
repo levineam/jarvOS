@@ -11,6 +11,7 @@ jarvOS has 5 main components:
 4. Continuous Learning and Execution
 5. Security
 
+
 It was built on top of [OpenClaw](https://openclaw.ai), which ships with a capable AI assistant, tool access, scheduling, and delivery channels. jarvOS is the layer that tells it what to actually do with all that.
 
 ## The problem
@@ -41,35 +42,37 @@ Briefings tie it together — morning, evening. Each one pulls the relevant slic
 
 OpenClaw provides the foundation: session management, cron scheduling, tool access, channel delivery, and a set of baseline workspace files. jarvOS runs on top of it. The governance layer, the briefing system, the project hierarchy — none of it replaces OpenClaw's infrastructure; it runs on it.
 
-What this repo adds on the behavior side: an enhanced AGENTS.md with invisible orchestration, specialist mode detection, auto model tiering, a full writer pipeline, and a Process section that enforces rule-wiring discipline. An enhanced HEARTBEAT.md that's a multi-section playbook for what actually runs on OpenClaw's scheduler. A memory architecture that adds daily session files, heartbeat-state tracking, and a briefing queue for decisions that need your attention. Scripts and templates that help keep the system readable by both humans and AI.
+What this repo adds on the behavior side: an enhanced AGENTS.md with invisible orchestration, specialist mode detection, auto model tiering, a full writer pipeline, a Process section that enforces rule-wiring discipline, and red team checkpoints for development work. An enhanced HEARTBEAT.md that's a comprehensive multi-section playbook — what actually runs on OpenClaw's scheduler. A memory architecture that adds daily session files, heartbeat-state.json for check-in tracking, and a briefing queue for decisions that need your attention. Scripts that handle governance scanning, frontmatter linting, and maintenance work.
 
 Your instance is the third layer: your persona, your schedule, your integrations. This repo gives you the second. OpenClaw provides the first.
 
 ## Quick start
 
-Clone the repo. Copy the shipped core templates from `templates/` into your OpenClaw workspace, then tell your assistant to read `BOOTSTRAP.md` and follow it.
+Clone the repo. Copy the templates you need into your OpenClaw workspace, then tell your assistant to read `BOOTSTRAP.md` and follow it.
 
 Minimal setup:
 
-1. Copy `templates/AGENTS-template.md` to `AGENTS.md`
-2. Copy `templates/HEARTBEAT-template.md` to `HEARTBEAT.md`
-3. Copy `templates/BOOTSTRAP-template.md` to `BOOTSTRAP.md`
+1. Copy `templates/AGENTS-template.md` (`templates/agents-template.md` in the export map) to `AGENTS.md`
+2. Copy `templates/HEARTBEAT-template.md` (`templates/heartbeat-template.md` in the export map) to `HEARTBEAT.md`
+3. Copy `templates/BOOTSTRAP-template.md` (`templates/bootstrap-template.md` in the export map) to `BOOTSTRAP.md`
 4. Copy the planning templates you want from `templates/` or `starter-kit/templates/`
 5. Provide your own local `USER.md`, `MEMORY.md`, and any persona/alignment files your setup requires
 
-This public repo does **not** currently ship templates for `SOUL.md`, `IDENTITY.md`, `TOOLS.md`, or `ONTOLOGY.md`, so a real dogfood canary still needs local overlay copies for those files.
+Note: `docs/meta/source-to-export-map.json` also records lowercase slug aliases used by export tooling. The copy commands above use the exact on-disk filenames in this repo.
+
+This repo does not yet ship public templates for `SOUL.md`, `IDENTITY.md`, `TOOLS.md`, or `ONTOLOGY.md`, so dogfood canaries should overlay local copies for those files.
 
 From there: create your first project with a Board and Brief, let the Plan drive what gets worked on, and keep long-lived context in files instead of chat whenever possible.
 
 ## What's currently shipped
 
-### Core runtime templates
+### Core templates
 
 | File | Purpose |
 |------|---------|
-| `AGENTS-template.md` | Core behavior — copy to `AGENTS.md` in your workspace |
-| `HEARTBEAT-template.md` | Proactive check-in — copy to `HEARTBEAT.md` in your workspace |
-| `BOOTSTRAP-template.md` | First-run instructions — copy to `BOOTSTRAP.md`, then delete after setup |
+| `templates/AGENTS-template.md` | Core behavior — copy to `AGENTS.md` in your workspace |
+| `templates/HEARTBEAT-template.md` | Proactive check-in — copy to `HEARTBEAT.md` in your workspace |
+| `templates/BOOTSTRAP-template.md` | First-run instructions — copy to `BOOTSTRAP.md`, then delete after setup |
 
 ### Planning templates
 
@@ -82,11 +85,16 @@ The root `templates/` directory is the canonical copy. `starter-kit/templates/` 
 
 ## What's in the starter-kit folder
 
-The `starter-kit/` folder is a small portable pack, not a full runtime:
+The `starter-kit/` folder contains a small portable pack:
 
 - `templates/` — mirrored planning templates
 - `workflows/basic-ci.yml` — starter automation example you can adapt
-- `README.md` — usage notes for the planning-only subset
+
+## Troubleshooting and rollout notes
+
+- `starter-kit/README.md` — starter-kit setup and rollout checklist (export slug: `starter-kit/readme.md`)
+- `docs/architecture/jarvos-architecture.md` — architecture overview and operating model
+- `docs/architecture/architecture-decision-records/architecture-decision-record-20260219-ars-contexta-patterns.md` — architecture decision context
 
 ## Current dogfood baseline status
 
@@ -104,7 +112,7 @@ Before Andrew can dogfood it as the real baseline, these conditions still need t
 
 The behaviors are on by default. You turn things off when they don't fit rather than manually activating each feature. An assistant that requires constant configuration isn't a system — it's a to-do list you maintain for your to-do list.
 
-Everything is markdown. No database, no cloud service, no proprietary format. The files are readable, versionable with git, and movable between AI platforms as the ecosystem shifts.
+Everything is markdown. No database, no cloud service, no proprietary format. The files are readable, versionable with git, and moveable between AI platforms as the ecosystem shifts.
 
 The design principle throughout: if a behavior can run without pulling you in, it should. If it can't, it surfaces a clear ask with a recommended default rather than a wall of options.
 
