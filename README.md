@@ -48,29 +48,51 @@ jarvOS/
 
 ## Quick start
 
+### Verify your clone is complete
+
+After cloning, run the smoke test to confirm all required files are present:
+
+```bash
+git clone https://github.com/levineam/jarvOS.git
+cd jarvOS
+bash scripts/smoke-test.sh
+# Expected: "PASS — All checks passed. The repo is ready to use."
+```
+
+This takes under a second and requires no external tools. If it passes, you have a working jarvOS install.
+
 ### Hermes Agent
 
 ```bash
 git clone https://github.com/levineam/jarvOS.git
 cd jarvOS
-hermes setup   # Configure model and API keys (creates ~/.hermes/config.yaml)
-./runtimes/hermes/setup.sh   # Installs jarvOS and attempts to set Hermes terminal.cwd to this workspace
-# Edit USER.md and ONTOLOGY.md with your info
-hermes         # Start chatting
+bash scripts/smoke-test.sh           # Verify clone is complete
+hermes setup                          # Configure model and API keys
+./runtimes/hermes/setup.sh            # Install jarvOS into Hermes workspace
+# Fill in USER.md and ONTOLOGY.md with your info
+hermes                                # Start chatting
 ```
+
+See `runtimes/hermes/README.md` for full setup details.
 
 ### OpenClaw
 
 ```bash
 git clone https://github.com/levineam/jarvOS.git
 cd jarvOS
-# Copy core/ files into your OpenClaw workspace, then follow runtimes/openclaw/README.md for runtime adapter wiring
-# Copy templates/ into that workspace and fill in your details
+bash scripts/smoke-test.sh           # Verify clone is complete
+# Copy core/ files into your OpenClaw workspace
+cp core/AGENTS.md    /path/to/your/openclaw-workspace/AGENTS.md
+cp core/SOUL.md      /path/to/your/openclaw-workspace/SOUL.md
+cp core/IDENTITY.md  /path/to/your/openclaw-workspace/IDENTITY.md
 cp templates/BOOTSTRAP-template.md /path/to/your/openclaw-workspace/BOOTSTRAP.md
-# Tell your assistant (in that workspace) to read BOOTSTRAP.md
+cp templates/HEARTBEAT-template.md /path/to/your/openclaw-workspace/HEARTBEAT.md
+# Create USER.md and ONTOLOGY.md with your info, then:
 cd /path/to/your/openclaw-workspace
 openclaw gateway start
 ```
+
+See `runtimes/openclaw/README.md` for the full adapter wiring checklist, including `TOOLS.md`, `CONSTITUTION.md`, `scripts/`, and `workflows/`.
 
 ## The five systems
 
@@ -90,17 +112,29 @@ openclaw gateway start
 - `docs/architecture/jarvos-architecture.md` — architecture overview and operating model
 - `docs/architecture/architecture-decision-records/architecture-decision-record-20260219-ars-contexta-patterns.md` — architecture decision context
 
+## Distribution
+
+jarvOS is distributed as a plain git repo. No npm package, no build step, no install manager required. Clone it and use it.
+
+**Why no submodules or package manager?**
+
+- The core files are markdown — there is nothing to compile or link.
+- Each runtime provides its own setup path (`setup.sh` for Hermes, copy-and-wire for OpenClaw).
+- Keeping it as a single flat repo means you can fork it, modify it, and sync upstream changes with standard git.
+
+**Staying up to date:**
+
+```bash
+cd jarvOS
+git pull origin main
+bash scripts/smoke-test.sh   # Verify everything is still intact after the pull
+```
+
 ## Current dogfood baseline status
 
-This repo is now documented as a **public docs/template baseline candidate** and portable cross-runtime core, not a zero-config clone of Andrew's live workspace.
+This repo is a **public docs and template baseline** and portable cross-runtime core. It is not a zero-config clone of Andrew's live workspace.
 
-Before Andrew can dogfood it as the real baseline, these conditions still need to be true:
-
-1. README and starter-kit docs stay aligned with the files actually shipped here.
-2. Public metadata stays sanitized — no Andrew-local absolute paths in exported docs.
-3. Local overlay files exist for `USER.md`, `MEMORY.md`, `SOUL.md`, `IDENTITY.md`, `TOOLS.md`, and `ONTOLOGY.md`.
-4. A clean canary workspace proves the shipped OpenClaw adapter path works correctly with those overlays.
-5. Only after that can broader automation be enabled with confidence.
+The smoke test (`scripts/smoke-test.sh`) validates the shipped state on every CI run. All 27+ checks must pass before a PR merges.
 
 ## Philosophy
 
