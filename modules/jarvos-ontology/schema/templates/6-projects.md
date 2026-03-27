@@ -1,3 +1,4 @@
+<!-- markdownlint-disable MD024 -->
 # Projects
 
 *Organized efforts toward goals. Each project has a beginning and end, a defined scope, and requires multiple tasks to complete.*
@@ -15,6 +16,7 @@
 - **Key tasks:** [Link to task list or bullet key items]
 
 #### Links
+
 | Link Type | Target | Notes |
 |-----------|--------|-------|
 | serves | [[5-goals#Goal Name]] | This project directly advances [Goal] |
@@ -30,6 +32,7 @@
 - **Key tasks:** 
 
 #### Links
+
 | Link Type | Target | Notes |
 |-----------|--------|-------|
 | serves | | |
@@ -60,4 +63,4 @@
 
 ## History
 
-- [Date]: Created
+- Date: Created

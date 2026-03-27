@@ -1,3 +1,4 @@
+<!-- markdownlint-disable MD024 -->
 # Predictions
 
 *Your model of what will happen. Testable, time-bound, updateable. Where your worldview meets reality and gets feedback.*
@@ -58,4 +59,4 @@
 
 ## History
 
-- [Date]: Created
+- Date: Created

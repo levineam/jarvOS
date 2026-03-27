@@ -57,4 +57,4 @@
 
 ## History
 
-- [Date]: Created
+- Date: Created

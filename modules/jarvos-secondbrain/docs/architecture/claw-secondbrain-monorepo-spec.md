@@ -1,3 +1,4 @@
+<!-- markdownlint-disable MD024 -->
 # claw-secondbrain Monorepo Architecture Spec
 
 **Issue:** SUP-333  

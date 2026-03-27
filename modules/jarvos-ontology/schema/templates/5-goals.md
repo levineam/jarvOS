@@ -1,3 +1,4 @@
+<!-- markdownlint-disable MD024 -->
 # Goals
 
 *Time-bound objectives that serve your Core Self. Concrete enough to achieve, specific enough to measure, but connected upward to your mission.*
@@ -14,6 +15,7 @@
 - **Success looks like:** [How you'll know you've achieved it]
 
 #### Links
+
 | Link Type | Target | Notes |
 |-----------|--------|-------|
 | serves | [[Core Self#Mission]] | How this serves your mission |
@@ -32,6 +34,7 @@
 - **Success looks like:** 
 
 #### Links
+
 | Link Type | Target | Notes |
 |-----------|--------|-------|
 | serves | | |
@@ -47,6 +50,7 @@
 - **Success looks like:** 
 
 #### Links
+
 | Link Type | Target | Notes |
 |-----------|--------|-------|
 | serves | | |
@@ -76,4 +80,4 @@
 
 ## History
 
-- [Date]: Created
+- Date: Created
