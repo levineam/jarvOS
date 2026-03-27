@@ -119,6 +119,20 @@ jobs:
             exit 1
           fi
 
+  modules-smoke-test:
+    name: Modules smoke test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Run modules smoke test
+        run: node tests/modules-smoke-test.js
+
   ci-summary:
     name: CI summary
     runs-on: ubuntu-latest
@@ -126,21 +140,23 @@ jobs:
       - markdown-lint
       - link-check
       - meta-hygiene
+      - modules-smoke-test
     if: always()
     steps:
       - name: Summarize results
         shell: bash
         run: |
           set -euo pipefail
-          echo "markdown-lint : ${{ needs.markdown-lint.result }}"
+          echo "markdown-lint      : ${{ needs.markdown-lint.result }}"
           if [[ "${{ needs.link-check.outputs.had_broken_links }}" == "true" ]]; then
-            echo "link-check    : warning (broken links detected; non-blocking)"
+            echo "link-check         : warning (broken links detected; non-blocking)"
           else
-            echo "link-check    : ${{ needs.link-check.result }}"
+            echo "link-check         : ${{ needs.link-check.result }}"
           fi
-          echo "meta-hygiene  : ${{ needs.meta-hygiene.result }}"
+          echo "meta-hygiene       : ${{ needs.meta-hygiene.result }}"
+          echo "modules-smoke-test : ${{ needs.modules-smoke-test.result }}"
 
-          for r in "${{ needs.markdown-lint.result }}" "${{ needs.link-check.result }}" "${{ needs.meta-hygiene.result }}"; do
+          for r in "${{ needs.markdown-lint.result }}" "${{ needs.link-check.result }}" "${{ needs.meta-hygiene.result }}" "${{ needs.modules-smoke-test.result }}"; do
             if [[ "$r" == "failure" || "$r" == "cancelled" ]]; then
               echo "One or more CI jobs failed/cancelled."
               exit 1

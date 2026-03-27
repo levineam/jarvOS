@@ -1,0 +1,13 @@
+{
+  "name": "@jarvos/ontology",
+  "version": "0.1.0",
+  "description": "jarvOS worldview layer — structured belief graph, predictions, goals, values, and identity",
+  "license": "MIT",
+  "main": "src/index.js",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/levineam/jarvOS.git"
+  },
+  "engines": { "node": ">=18" },
+  "keywords": ["jarvos", "ontology", "beliefs", "goals", "ai-agent", "personal-os"]
+}
