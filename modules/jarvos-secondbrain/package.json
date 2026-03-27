@@ -1,0 +1,13 @@
+{
+  "name": "@jarvos/secondbrain",
+  "version": "0.1.0",
+  "description": "jarvOS second brain — journal and notes content layer for personal AI agents",
+  "license": "MIT",
+  "main": "src/index.js",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/levineam/jarvOS.git"
+  },
+  "engines": { "node": ">=18" },
+  "keywords": ["jarvos", "secondbrain", "journal", "notes", "ai-agent", "personal-os"]
+}

@@ -98,6 +98,65 @@ openclaw gateway start
 
 See `runtimes/openclaw/README.md` for advanced wiring (HEARTBEAT.md, scripts, workflows).
 
+## Modules: the software that actually runs
+
+jarvOS ships three executable Node.js modules in `modules/`. These are the code layer behind the templates.
+
+| Module | What it does |
+|---|---|
+| [`@jarvos/memory`](./modules/jarvos-memory/) | Compact agent-state recall — lessons, decisions, facts, preferences |
+| [`@jarvos/ontology`](./modules/jarvos-ontology/) | Structured worldview — beliefs, goals, predictions, values |
+| [`@jarvos/secondbrain`](./modules/jarvos-secondbrain/) | Content layer — journal entries and notes with env-aware path resolution |
+
+### Verify the modules work
+
+```bash
+# No install step needed — modules have zero external dependencies
+node tests/modules-smoke-test.js
+```
+
+Expected output: `17 checks: 17 passed, 0 failed.`
+
+### Use a module in your own code
+
+```js
+// Memory
+const { createMemoryRecord } = require('./modules/jarvos-memory/src');
+
+const result = createMemoryRecord({
+  class: 'lesson',
+  content: 'Prefer env-var path resolution over hardcoded home directories.',
+  confidence: 0.95,
+});
+console.log(result.record);
+// → { schema: 'jarvos-memory/v1', class: 'lesson', content: '...', id: '...', ... }
+
+// Ontology
+const { createLayer } = require('./modules/jarvos-ontology/src');
+
+const belief = createLayer('belief', {
+  statement: 'Reliable automation compounds faster than heroic one-off effort.',
+  confidence: 0.9,
+});
+
+// Second Brain
+const { createJournalEntry, resolveJournalDir } = require('./modules/jarvos-secondbrain/src');
+
+const entry = createJournalEntry({ date: '2026-03-27', title: 'Daily log', body: '...' });
+```
+
+### Content and execution flow
+
+```
+Raw capture (journal/notes)
+  → @jarvos/secondbrain     ← content layer
+    → @jarvos/memory        ← compact retained state
+      → @jarvos/ontology    ← worldview / belief graph
+        → Paperclip         ← live execution tracking
+```
+
+---
+
 ## The five systems
 
 1. **Project Management** — Portfolios → Programs → Project Boards → Tasks. Your assistant works from "Autonomous Now" without being asked, routes blockers through "Needs You", and doesn't confuse the two.
