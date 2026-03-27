@@ -96,6 +96,18 @@ The `starter-kit/` folder contains a small portable pack:
 - `docs/architecture/jarvos-architecture.md` — architecture overview and operating model
 - `docs/architecture/architecture-decision-records/architecture-decision-record-20260219-ars-contexta-patterns.md` — architecture decision context
 
+## Current dogfood baseline status
+
+This repo is now documented as a **public docs/template baseline candidate** (still validating public-safe readiness), not a zero-config clone of Andrew's live workspace.
+
+Before Andrew can dogfood it as the real baseline, these conditions still need to be true:
+
+1. README and starter-kit docs stay aligned with the files actually shipped here.
+2. Public metadata stays sanitized — no Andrew-local absolute paths in exported docs.
+3. Local overlay files exist for `USER.md`, `MEMORY.md`, `SOUL.md`, `IDENTITY.md`, `TOOLS.md`, and `ONTOLOGY.md`.
+4. A clean canary workspace proves `AGENTS.md`, `HEARTBEAT.md`, and `BOOTSTRAP.md` run correctly with those overlays.
+5. Only after that can broader automation be enabled with confidence.
+
 ## Philosophy
 
 The behaviors are on by default. You turn things off when they don't fit rather than manually activating each feature. An assistant that requires constant configuration isn't a system — it's a to-do list you maintain for your to-do list.
