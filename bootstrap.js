@@ -129,7 +129,8 @@ function nonInteractiveConfig() {
     COACH_NAME:     process.env.JARVOS_COACH_NAME     || 'jarvOS',
     TIMEZONE:       process.env.JARVOS_TIMEZONE       || tz,
     VAULT_PATH:     expandHome(process.env.JARVOS_VAULT_PATH      || path.join(os.homedir(), 'jarvos-vault')),
-    WORKSPACE_PATH: expandHome(process.env.JARVOS_WORKSPACE_PATH  || path.join(os.homedir(), 'clawd'))
+    WORKSPACE_PATH: expandHome(process.env.JARVOS_WORKSPACE_PATH  || path.join(os.homedir(), 'clawd')),
+    RUNTIME:        process.env.JARVOS_RUNTIME        || 'openclaw'
   };
   return defaults;
 }
@@ -152,6 +153,7 @@ async function gatherConfig(rl) {
     info(`  TIMEZONE:        ${cfg.TIMEZONE}`);
     info(`  VAULT_PATH:      ${cfg.VAULT_PATH}`);
     info(`  WORKSPACE_PATH:  ${cfg.WORKSPACE_PATH}`);
+    info(`  RUNTIME:         ${cfg.RUNTIME}`);
     return cfg;
   }
 
@@ -166,7 +168,8 @@ async function gatherConfig(rl) {
     ['COACH_NAME',     `Coach/operator name [${defaults.COACH_NAME}]: `],
     ['TIMEZONE',       `Your timezone [${defaults.TIMEZONE}]: `],
     ['VAULT_PATH',     `Vault path (Obsidian or notes folder) [${defaults.VAULT_PATH}]: `],
-    ['WORKSPACE_PATH', `OpenClaw workspace path [${defaults.WORKSPACE_PATH}]: `]
+    ['WORKSPACE_PATH', `OpenClaw workspace path [${defaults.WORKSPACE_PATH}]: `],
+    ['RUNTIME',        `Runtime (e.g. openclaw) [${defaults.RUNTIME}]: `]
   ];
 
   for (const [key, prompt] of fields) {
@@ -180,7 +183,8 @@ async function gatherConfig(rl) {
     COACH_NAME:      answers.COACH_NAME,
     TIMEZONE:        answers.TIMEZONE,
     VAULT_PATH:      expandHome(answers.VAULT_PATH),
-    WORKSPACE_PATH:  expandHome(answers.WORKSPACE_PATH)
+    WORKSPACE_PATH:  expandHome(answers.WORKSPACE_PATH),
+    RUNTIME:         answers.RUNTIME
   };
 }
 
@@ -335,7 +339,8 @@ function generateOverlays(config) {
       userName: config.USER_NAME,
       coachName: config.COACH_NAME,
       vaultPath: config.VAULT_PATH,
-      workspacePath: config.WORKSPACE_PATH
+      workspacePath: config.WORKSPACE_PATH,
+      runtime: config.RUNTIME
     };
     fs.writeFileSync(configPath, JSON.stringify(jarvosConfig, null, 2) + '\n', 'utf8');
     ok(`jarvos.config.json → ${configPath}`);
@@ -433,7 +438,11 @@ async function main() {
   const allPassed = smokeTest(config);
 
   console.log(`\n${BOLD}Next steps:${RESET}`);
-  console.log(`  1. Start OpenClaw:          openclaw gateway start`);
+  if (config.RUNTIME === 'openclaw') {
+    console.log(`  1. Start OpenClaw:          openclaw gateway start`);
+  } else {
+    console.log(`  1. Start your runtime (${config.RUNTIME}) and point it at: ${config.WORKSPACE_PATH}`);
+  }
   console.log(`  2. Tell your assistant:     "Read BOOTSTRAP.md and follow its instructions"`);
   console.log(`  3. Set up your ontology:    Edit ONTOLOGY.md with your mission and goals`);
   console.log(`  4. Create your first project: Board.md + Brief.md under a Portfolio folder`);
