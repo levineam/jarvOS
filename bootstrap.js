@@ -94,10 +94,15 @@ function checkDeps() {
 
   for (const c of optionals) {
     try {
-      if (c.test()) ok(`${c.name} (optional)`);
-      else warn(`${c.name} not found (optional)`);
+      if (c.test()) {
+        ok(`${c.name} (optional)`);
+      } else {
+        warn(`${c.name} not found (optional)`);
+        if (c.hint) info(c.hint);
+      }
     } catch {
       warn(`${c.name} not found (optional)`);
+      if (c.hint) info(c.hint);
     }
   }
 
@@ -338,6 +343,7 @@ function smokeTest(config) {
   const requiredDirs  = [
     path.join(config.VAULT_PATH, 'Notes'),
     path.join(config.VAULT_PATH, 'Journal'),
+    path.join(config.VAULT_PATH, 'Tags'),
     path.join(ws, 'memory')
   ];
 
