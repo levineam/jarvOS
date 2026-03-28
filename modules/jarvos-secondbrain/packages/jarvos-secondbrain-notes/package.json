@@ -1,0 +1,18 @@
+{
+  "name": "jarvos-secondbrain-notes",
+  "version": "1.0.0",
+  "description": "Notes package for jarvos-secondbrain — write-to-vault and lint-frontmatter implementations",
+  "main": "src/write-to-vault.js",
+  "scripts": {
+    "lint": "node src/lint-frontmatter.js",
+    "lint:fix": "node src/lint-frontmatter.js --fix",
+    "lint:json": "node src/lint-frontmatter.js --json"
+  },
+  "keywords": [
+    "jarvos",
+    "notes",
+    "secondbrain"
+  ],
+  "license": "UNLICENSED",
+  "private": true
+}

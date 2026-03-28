@@ -1709,3 +1709,6 @@ All notable public-doc sync changes are appended by `jarvos-public-docs-sync.sh`
 - Updated: starter-kit/templates/PROJECT-KICKOFF-PACK.template.md
 - Updated: starter-kit/templates/okr-task-board-template.md
 - Updated: starter-kit/templates/project-kickoff-pack-template.md
+
+## 2026-03-27 16:35 EDT — docs sync
+- Updated: starter-kit/README.md

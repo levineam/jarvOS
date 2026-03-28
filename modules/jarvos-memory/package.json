@@ -1,0 +1,23 @@
+{
+  "name": "@jarvos/memory",
+  "version": "0.1.0",
+  "description": "jarvOS agent-state memory — compact recall, schema, and audit helpers",
+  "license": "MIT",
+  "main": "src/index.js",
+  "exports": {
+    ".": "./src/index.js",
+    "./schema": "./src/lib/memory-schema.js",
+    "./config": "./src/lib/memory-config.js",
+    "./audit": "./src/lib/audit-memory.js"
+  },
+  "scripts": {
+    "audit": "node scripts/audit-memory.js",
+    "audit:json": "node scripts/audit-memory.js --json"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/levineam/jarvOS.git"
+  },
+  "engines": { "node": ">=18" },
+  "keywords": ["jarvos", "memory", "ai-agent", "personal-os"]
+}

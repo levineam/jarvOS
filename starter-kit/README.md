@@ -33,3 +33,37 @@ All project work should follow this baseline:
 
 - `templates/PROJECT-KICKOFF-PACK.template.md`
 - `templates/OKR-TASK-BOARD.template.md`
+
+---
+
+## Runtime Modules (`modules/`)
+
+The `modules/` directory at the repo root contains the three core jarvOS runtime modules. These give your agent executable code — not just markdown templates.
+
+### What's included
+
+| Module | What it provides |
+|--------|-----------------|
+| [`modules/jarvos-memory`](../modules/jarvos-memory/) | Memory schema, audit helpers, promotion rules — your agent's durable state contract |
+| [`modules/jarvos-ontology`](../modules/jarvos-ontology/) | Ontology tooling — read, write, validate, and render your belief/goal graph |
+| [`modules/jarvos-secondbrain`](../modules/jarvos-secondbrain/) | Vault bridges, journal/notes packages, capture routing — the content layer |
+
+### Wiring modules into your starter-kit workflow
+
+1. **Memory audits** — Point `jarvos-memory`'s audit script at your MEMORY.md:
+   ```bash
+   cd modules/jarvos-memory && npm install
+   node scripts/audit-memory.js --file /path/to/your/MEMORY.md
+   ```
+
+2. **Ontology templates** — Copy `modules/jarvos-ontology/schema/templates/` to your local `ontology/` directory and fill them in. These are the blank forms for your beliefs, goals, predictions, etc.
+
+3. **Path configuration** — Copy `modules/jarvos-secondbrain/jarvos.config.example.json` to `~/clawd/jarvos.config.json` (or set `JARVOS_*` env vars) so the secondbrain module knows where your vault lives.
+
+4. **Validate your ontology** — Once filled in:
+   ```bash
+   cd modules/jarvos-ontology && npm install
+   node scripts/validate.js --ontology /path/to/your/ontology/
+   ```
+
+See [`modules/README.md`](../modules/README.md) for full module documentation.
