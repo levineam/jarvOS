@@ -10,15 +10,18 @@
   },
   "license": "MIT",
   "main": "bootstrap.js",
+  "files": [
+    "bootstrap.js",
+    "bootstrap.sh",
+    "templates/"
+  ],
   "bin": {
     "jarvos-bootstrap": "bootstrap.js",
     "jarvos-init": "bootstrap.js"
   },
   "scripts": {
     "bootstrap": "node bootstrap.js",
-    "test": "bash tests/smoke-test.sh && node tests/modules-smoke-test.js",
-    "test:modules": "node tests/modules-smoke-test.js",
-    "test:bootstrap": "bash tests/smoke-test.sh"
+    "test": "bash tests/smoke-test.sh"
   },
   "engines": {
     "node": ">=18"

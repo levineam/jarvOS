@@ -35,6 +35,7 @@ function ask(rl, question) {
 
 function expandHome(p) {
   if (!p) return p;
+  if (p === '~') return os.homedir();
   if (p.startsWith('~/')) return path.join(os.homedir(), p.slice(2));
   return p;
 }
@@ -52,7 +53,11 @@ function checkDeps() {
         return major >= 18;
       },
       hint: 'Install Node.js 18+ from https://nodejs.org'
-    },
+    }
+  ];
+
+  // Optional but noted
+  const optionals = [
     {
       name: 'OpenClaw CLI (openclaw)',
       test: () => {
@@ -60,11 +65,7 @@ function checkDeps() {
         return r.status === 0;
       },
       hint: 'Install with: npm install -g openclaw  (see https://openclaw.ai)'
-    }
-  ];
-
-  // Optional but noted
-  const optionals = [
+    },
     {
       name: 'git',
       test: () => spawnSync('git', ['--version'], { encoding: 'utf8' }).status === 0
@@ -94,10 +95,15 @@ function checkDeps() {
 
   for (const c of optionals) {
     try {
-      if (c.test()) ok(`${c.name} (optional)`);
-      else warn(`${c.name} not found (optional)`);
+      if (c.test()) {
+        ok(`${c.name} (optional)`);
+      } else {
+        warn(`${c.name} not found (optional)`);
+        if (c.hint) info(c.hint);
+      }
     } catch {
       warn(`${c.name} not found (optional)`);
+      if (c.hint) info(c.hint);
     }
   }
 
@@ -123,7 +129,8 @@ function nonInteractiveConfig() {
     COACH_NAME:     process.env.JARVOS_COACH_NAME     || 'jarvOS',
     TIMEZONE:       process.env.JARVOS_TIMEZONE       || tz,
     VAULT_PATH:     expandHome(process.env.JARVOS_VAULT_PATH      || path.join(os.homedir(), 'jarvos-vault')),
-    WORKSPACE_PATH: expandHome(process.env.JARVOS_WORKSPACE_PATH  || path.join(os.homedir(), 'clawd'))
+    WORKSPACE_PATH: expandHome(process.env.JARVOS_WORKSPACE_PATH  || path.join(os.homedir(), 'clawd')),
+    RUNTIME:        process.env.JARVOS_RUNTIME        || 'openclaw'
   };
   return defaults;
 }
@@ -131,9 +138,12 @@ function nonInteractiveConfig() {
 async function gatherConfig(rl) {
   hdr('2/5  Configure your jarvOS instance');
 
-  // Non-interactive mode: --yes flag or JARVOS_YES env var
-  const isYes = process.argv.includes('--yes') || process.argv.includes('-y') ||
-                process.env.JARVOS_YES === '1';
+  // Non-interactive mode: --yes / -y / --non-interactive flag or JARVOS_YES env var
+  const isYes =
+    process.argv.includes('--yes') ||
+    process.argv.includes('-y') ||
+    process.argv.includes('--non-interactive') ||
+    process.env.JARVOS_YES === '1';
   if (isYes) {
     const cfg = nonInteractiveConfig();
     info('Non-interactive mode — using defaults / env vars');
@@ -143,6 +153,7 @@ async function gatherConfig(rl) {
     info(`  TIMEZONE:        ${cfg.TIMEZONE}`);
     info(`  VAULT_PATH:      ${cfg.VAULT_PATH}`);
     info(`  WORKSPACE_PATH:  ${cfg.WORKSPACE_PATH}`);
+    info(`  RUNTIME:         ${cfg.RUNTIME}`);
     return cfg;
   }
 
@@ -157,7 +168,8 @@ async function gatherConfig(rl) {
     ['COACH_NAME',     `Coach/operator name [${defaults.COACH_NAME}]: `],
     ['TIMEZONE',       `Your timezone [${defaults.TIMEZONE}]: `],
     ['VAULT_PATH',     `Vault path (Obsidian or notes folder) [${defaults.VAULT_PATH}]: `],
-    ['WORKSPACE_PATH', `OpenClaw workspace path [${defaults.WORKSPACE_PATH}]: `]
+    ['WORKSPACE_PATH', `OpenClaw workspace path [${defaults.WORKSPACE_PATH}]: `],
+    ['RUNTIME',        `Runtime (e.g. openclaw) [${defaults.RUNTIME}]: `]
   ];
 
   for (const [key, prompt] of fields) {
@@ -171,7 +183,8 @@ async function gatherConfig(rl) {
     COACH_NAME:      answers.COACH_NAME,
     TIMEZONE:        answers.TIMEZONE,
     VAULT_PATH:      expandHome(answers.VAULT_PATH),
-    WORKSPACE_PATH:  expandHome(answers.WORKSPACE_PATH)
+    WORKSPACE_PATH:  expandHome(answers.WORKSPACE_PATH),
+    RUNTIME:         answers.RUNTIME
   };
 }
 
@@ -215,7 +228,12 @@ const TEMPLATE_DIR = path.join(__dirname, 'templates');
 function generateOverlays(config) {
   hdr('4/5  Generating starter overlay files');
 
-  const today = new Date().toISOString().slice(0, 10);
+  const now = new Date();
+  const today = [
+    now.getFullYear(),
+    String(now.getMonth() + 1).padStart(2, '0'),
+    String(now.getDate()).padStart(2, '0')
+  ].join('-');
 
   // Destination paths
   const ws = config.WORKSPACE_PATH;
@@ -235,6 +253,26 @@ function generateOverlays(config) {
       template: path.join(TEMPLATE_DIR, 'HEARTBEAT-template.md'),
       dest: path.join(ws, 'HEARTBEAT.md'),
       label: 'HEARTBEAT.md'
+    },
+    {
+      template: path.join(TEMPLATE_DIR, 'USER.template.md'),
+      dest: path.join(ws, 'USER.md'),
+      label: 'USER.md'
+    },
+    {
+      template: path.join(TEMPLATE_DIR, 'ONTOLOGY.template.md'),
+      dest: path.join(ws, 'ONTOLOGY.md'),
+      label: 'ONTOLOGY.md'
+    },
+    {
+      template: path.join(TEMPLATE_DIR, 'SOUL.template.md'),
+      dest: path.join(ws, 'SOUL.md'),
+      label: 'SOUL.md'
+    },
+    {
+      template: path.join(TEMPLATE_DIR, 'TOOLS.template.md'),
+      dest: path.join(ws, 'TOOLS.md'),
+      label: 'TOOLS.md'
     }
   ];
 
@@ -301,7 +339,8 @@ function generateOverlays(config) {
       userName: config.USER_NAME,
       coachName: config.COACH_NAME,
       vaultPath: config.VAULT_PATH,
-      workspacePath: config.WORKSPACE_PATH
+      workspacePath: config.WORKSPACE_PATH,
+      runtime: config.RUNTIME
     };
     fs.writeFileSync(configPath, JSON.stringify(jarvosConfig, null, 2) + '\n', 'utf8');
     ok(`jarvos.config.json → ${configPath}`);
@@ -316,10 +355,11 @@ function smokeTest(config) {
   hdr('5/5  Smoke test');
 
   const ws = config.WORKSPACE_PATH;
-  const requiredFiles = ['AGENTS.md', 'BOOTSTRAP.md', 'HEARTBEAT.md', 'MEMORY.md'];
+  const requiredFiles = ['AGENTS.md', 'BOOTSTRAP.md', 'HEARTBEAT.md', 'MEMORY.md', 'USER.md', 'ONTOLOGY.md', 'SOUL.md', 'TOOLS.md', 'jarvos.config.json'];
   const requiredDirs  = [
     path.join(config.VAULT_PATH, 'Notes'),
     path.join(config.VAULT_PATH, 'Journal'),
+    path.join(config.VAULT_PATH, 'Tags'),
     path.join(ws, 'memory')
   ];
 
@@ -343,13 +383,15 @@ function smokeTest(config) {
   }
 
   // Template substitution check — no raw {{placeholders}} left
-  for (const f of ['AGENTS.md', 'BOOTSTRAP.md']) {
+  const templateFiles = ['AGENTS.md', 'BOOTSTRAP.md', 'HEARTBEAT.md', 'USER.md', 'ONTOLOGY.md', 'SOUL.md', 'TOOLS.md'];
+  for (const f of templateFiles) {
     const p = path.join(ws, f);
     if (!fs.existsSync(p)) continue;
     const content = fs.readFileSync(p, 'utf8');
     const remaining = content.match(/\{\{[A-Z_]+\}\}/g);
     if (remaining) {
-      warn(`${f} still has unreplaced placeholders: ${[...new Set(remaining)].join(', ')}`);
+      err(`${f} still has unreplaced placeholders: ${[...new Set(remaining)].join(', ')}`);
+      failed++;
     } else {
       ok(`${f} — no unreplaced placeholders`);
       passed++;
@@ -396,7 +438,11 @@ async function main() {
   const allPassed = smokeTest(config);
 
   console.log(`\n${BOLD}Next steps:${RESET}`);
-  console.log(`  1. Start OpenClaw:          openclaw gateway start`);
+  if (config.RUNTIME === 'openclaw') {
+    console.log(`  1. Start OpenClaw:          openclaw gateway start`);
+  } else {
+    console.log(`  1. Start your runtime (${config.RUNTIME}) and point it at: ${config.WORKSPACE_PATH}`);
+  }
   console.log(`  2. Tell your assistant:     "Read BOOTSTRAP.md and follow its instructions"`);
   console.log(`  3. Set up your ontology:    Edit ONTOLOGY.md with your mission and goals`);
   console.log(`  4. Create your first project: Board.md + Brief.md under a Portfolio folder`);
