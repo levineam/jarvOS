@@ -17,6 +17,9 @@ REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 PASS=0
 FAIL=0
 
+# check DESC CMD [ARGS...]
+# Run CMD with optional ARGS. Print a pass/fail line prefixed with DESC and
+# increment the global PASS or FAIL counter accordingly.
 check() {
   local desc="$1"
   shift
@@ -29,16 +32,24 @@ check() {
   fi
 }
 
+# check_file REL
+# Assert that the file at path REL (relative to REPO_ROOT) exists.
 check_file() {
   local rel="$1"
   check "file exists: $rel" test -f "$REPO_ROOT/$rel"
 }
 
+# check_executable REL
+# Assert that the file at path REL (relative to REPO_ROOT) exists and is
+# executable.
 check_executable() {
   local rel="$1"
   check "executable: $rel" test -x "$REPO_ROOT/$rel"
 }
 
+# check_nonempty REL
+# Assert that the file at path REL (relative to REPO_ROOT) exists and has a
+# non-zero size.
 check_nonempty() {
   local rel="$1"
   check "non-empty: $rel" test -s "$REPO_ROOT/$rel"
