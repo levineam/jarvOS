@@ -46,6 +46,10 @@ check_exists "AGENTS.md"      "$WORKSPACE/AGENTS.md"
 check_exists "BOOTSTRAP.md"   "$WORKSPACE/BOOTSTRAP.md"
 check_exists "HEARTBEAT.md"   "$WORKSPACE/HEARTBEAT.md"
 check_exists "MEMORY.md"      "$WORKSPACE/MEMORY.md"
+check_exists "USER.md"        "$WORKSPACE/USER.md"
+check_exists "ONTOLOGY.md"    "$WORKSPACE/ONTOLOGY.md"
+check_exists "SOUL.md"        "$WORKSPACE/SOUL.md"
+check_exists "TOOLS.md"       "$WORKSPACE/TOOLS.md"
 check_exists "jarvos.config.json" "$WORKSPACE/jarvos.config.json"
 check_exists "memory dir"     "$WORKSPACE/memory"
 check_exists "vault/Notes"    "$VAULT/Notes"
@@ -53,7 +57,7 @@ check_exists "vault/Journal"  "$VAULT/Journal"
 check_exists "vault/Tags"     "$VAULT/Tags"
 
 # Template substitution check
-for f in AGENTS.md BOOTSTRAP.md; do
+for f in AGENTS.md BOOTSTRAP.md HEARTBEAT.md USER.md ONTOLOGY.md SOUL.md TOOLS.md; do
   if grep -q '{{' "$WORKSPACE/$f" 2>/dev/null; then
     echo "  ✗ $f still contains {{placeholders}}"
     FAIL=$((FAIL + 1))

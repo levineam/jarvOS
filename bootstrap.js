@@ -258,6 +258,16 @@ function generateOverlays(config) {
       template: path.join(TEMPLATE_DIR, 'ONTOLOGY.template.md'),
       dest: path.join(ws, 'ONTOLOGY.md'),
       label: 'ONTOLOGY.md'
+    },
+    {
+      template: path.join(TEMPLATE_DIR, 'SOUL.template.md'),
+      dest: path.join(ws, 'SOUL.md'),
+      label: 'SOUL.md'
+    },
+    {
+      template: path.join(TEMPLATE_DIR, 'TOOLS.template.md'),
+      dest: path.join(ws, 'TOOLS.md'),
+      label: 'TOOLS.md'
     }
   ];
 
@@ -339,7 +349,7 @@ function smokeTest(config) {
   hdr('5/5  Smoke test');
 
   const ws = config.WORKSPACE_PATH;
-  const requiredFiles = ['AGENTS.md', 'BOOTSTRAP.md', 'HEARTBEAT.md', 'MEMORY.md', 'USER.md', 'ONTOLOGY.md'];
+  const requiredFiles = ['AGENTS.md', 'BOOTSTRAP.md', 'HEARTBEAT.md', 'MEMORY.md', 'USER.md', 'ONTOLOGY.md', 'SOUL.md', 'TOOLS.md'];
   const requiredDirs  = [
     path.join(config.VAULT_PATH, 'Notes'),
     path.join(config.VAULT_PATH, 'Journal'),
@@ -367,7 +377,7 @@ function smokeTest(config) {
   }
 
   // Template substitution check — no raw {{placeholders}} left
-  for (const f of ['AGENTS.md', 'BOOTSTRAP.md']) {
+  for (const f of requiredFiles.filter(f => f !== 'MEMORY.md')) {
     const p = path.join(ws, f);
     if (!fs.existsSync(p)) continue;
     const content = fs.readFileSync(p, 'utf8');
