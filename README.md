@@ -80,7 +80,7 @@ mkdir ~/my-agent && cd ~/my-agent
 /path/to/jarvOS/runtimes/openclaw/setup.sh .
 ```
 
-`bootstrap.js` generates `AGENTS.md`, `BOOTSTRAP.md`, `HEARTBEAT.md`, and `MEMORY.md` from templates with your values filled in. Run `npm test` at any time to re-verify the setup.
+`bootstrap.js` generates `AGENTS.md`, `BOOTSTRAP.md`, `HEARTBEAT.md`, `MEMORY.md`, `USER.md`, and `ONTOLOGY.md` from templates with your values filled in. (`npm test` runs the repo's own smoke test in a temporary workspace — it does not re-check your personal install.)
 
 When bootstrap finishes:
 

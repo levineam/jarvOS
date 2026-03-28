@@ -52,7 +52,11 @@ function checkDeps() {
         return major >= 18;
       },
       hint: 'Install Node.js 18+ from https://nodejs.org'
-    },
+    }
+  ];
+
+  // Optional but noted
+  const optionals = [
     {
       name: 'OpenClaw CLI (openclaw)',
       test: () => {
@@ -60,11 +64,7 @@ function checkDeps() {
         return r.status === 0;
       },
       hint: 'Install with: npm install -g openclaw  (see https://openclaw.ai)'
-    }
-  ];
-
-  // Optional but noted
-  const optionals = [
+    },
     {
       name: 'git',
       test: () => spawnSync('git', ['--version'], { encoding: 'utf8' }).status === 0
@@ -131,9 +131,12 @@ function nonInteractiveConfig() {
 async function gatherConfig(rl) {
   hdr('2/5  Configure your jarvOS instance');
 
-  // Non-interactive mode: --yes flag or JARVOS_YES env var
-  const isYes = process.argv.includes('--yes') || process.argv.includes('-y') ||
-                process.env.JARVOS_YES === '1';
+  // Non-interactive mode: --yes / -y / --non-interactive flag or JARVOS_YES env var
+  const isYes =
+    process.argv.includes('--yes') ||
+    process.argv.includes('-y') ||
+    process.argv.includes('--non-interactive') ||
+    process.env.JARVOS_YES === '1';
   if (isYes) {
     const cfg = nonInteractiveConfig();
     info('Non-interactive mode — using defaults / env vars');
@@ -215,7 +218,12 @@ const TEMPLATE_DIR = path.join(__dirname, 'templates');
 function generateOverlays(config) {
   hdr('4/5  Generating starter overlay files');
 
-  const today = new Date().toISOString().slice(0, 10);
+  const now = new Date();
+  const today = [
+    now.getFullYear(),
+    String(now.getMonth() + 1).padStart(2, '0'),
+    String(now.getDate()).padStart(2, '0')
+  ].join('-');
 
   // Destination paths
   const ws = config.WORKSPACE_PATH;
@@ -235,6 +243,16 @@ function generateOverlays(config) {
       template: path.join(TEMPLATE_DIR, 'HEARTBEAT-template.md'),
       dest: path.join(ws, 'HEARTBEAT.md'),
       label: 'HEARTBEAT.md'
+    },
+    {
+      template: path.join(TEMPLATE_DIR, 'USER.template.md'),
+      dest: path.join(ws, 'USER.md'),
+      label: 'USER.md'
+    },
+    {
+      template: path.join(TEMPLATE_DIR, 'ONTOLOGY.template.md'),
+      dest: path.join(ws, 'ONTOLOGY.md'),
+      label: 'ONTOLOGY.md'
     }
   ];
 
@@ -316,7 +334,7 @@ function smokeTest(config) {
   hdr('5/5  Smoke test');
 
   const ws = config.WORKSPACE_PATH;
-  const requiredFiles = ['AGENTS.md', 'BOOTSTRAP.md', 'HEARTBEAT.md', 'MEMORY.md'];
+  const requiredFiles = ['AGENTS.md', 'BOOTSTRAP.md', 'HEARTBEAT.md', 'MEMORY.md', 'USER.md', 'ONTOLOGY.md'];
   const requiredDirs  = [
     path.join(config.VAULT_PATH, 'Notes'),
     path.join(config.VAULT_PATH, 'Journal'),
