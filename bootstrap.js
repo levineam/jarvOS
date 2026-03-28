@@ -35,6 +35,7 @@ function ask(rl, question) {
 
 function expandHome(p) {
   if (!p) return p;
+  if (p === '~') return os.homedir();
   if (p.startsWith('~/')) return path.join(os.homedir(), p.slice(2));
   return p;
 }
@@ -349,7 +350,7 @@ function smokeTest(config) {
   hdr('5/5  Smoke test');
 
   const ws = config.WORKSPACE_PATH;
-  const requiredFiles = ['AGENTS.md', 'BOOTSTRAP.md', 'HEARTBEAT.md', 'MEMORY.md', 'USER.md', 'ONTOLOGY.md', 'SOUL.md', 'TOOLS.md'];
+  const requiredFiles = ['AGENTS.md', 'BOOTSTRAP.md', 'HEARTBEAT.md', 'MEMORY.md', 'USER.md', 'ONTOLOGY.md', 'SOUL.md', 'TOOLS.md', 'jarvos.config.json'];
   const requiredDirs  = [
     path.join(config.VAULT_PATH, 'Notes'),
     path.join(config.VAULT_PATH, 'Journal'),
@@ -377,13 +378,15 @@ function smokeTest(config) {
   }
 
   // Template substitution check — no raw {{placeholders}} left
-  for (const f of requiredFiles.filter(f => f !== 'MEMORY.md')) {
+  const templateFiles = ['AGENTS.md', 'BOOTSTRAP.md', 'HEARTBEAT.md', 'USER.md', 'ONTOLOGY.md', 'SOUL.md', 'TOOLS.md'];
+  for (const f of templateFiles) {
     const p = path.join(ws, f);
     if (!fs.existsSync(p)) continue;
     const content = fs.readFileSync(p, 'utf8');
     const remaining = content.match(/\{\{[A-Z_]+\}\}/g);
     if (remaining) {
-      warn(`${f} still has unreplaced placeholders: ${[...new Set(remaining)].join(', ')}`);
+      err(`${f} still has unreplaced placeholders: ${[...new Set(remaining)].join(', ')}`);
+      failed++;
     } else {
       ok(`${f} — no unreplaced placeholders`);
       passed++;

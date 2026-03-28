@@ -16,7 +16,17 @@ trap cleanup EXIT
 
 echo "→ Running bootstrap smoke test in $TMPDIR_BASE"
 
-# Run non-interactively via env vars + --yes flag
+# Run 1: non-interactive via env vars + --yes flag
+JARVOS_YES=1 \
+JARVOS_ASSISTANT_NAME=TestJarvis \
+JARVOS_USER_NAME=TestUser \
+JARVOS_COACH_NAME=TestCoach \
+JARVOS_VAULT_PATH="$VAULT" \
+JARVOS_WORKSPACE_PATH="$WORKSPACE" \
+  node "$BOOTSTRAP" --yes
+
+# Run 2: verify idempotence — second run must also exit 0
+echo "→ Running bootstrap a second time (idempotence check)"
 JARVOS_YES=1 \
 JARVOS_ASSISTANT_NAME=TestJarvis \
 JARVOS_USER_NAME=TestUser \
