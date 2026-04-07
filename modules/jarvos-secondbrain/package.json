@@ -1,0 +1,23 @@
+{
+  "name": "@jarvos/secondbrain",
+  "version": "0.1.0",
+  "description": "jarvOS second brain — journal and notes content layer for personal AI agents",
+  "license": "MIT",
+  "main": "src/index.js",
+  "private": true,
+  "workspaces": [
+    "packages/jarvos-secondbrain-journal",
+    "packages/jarvos-secondbrain-notes"
+  ],
+  "scripts": {
+    "test": "node --test tests/keyword-capture-router.test.js",
+    "lint:notes": "node packages/jarvos-secondbrain-notes/src/lint-frontmatter.js --json",
+    "journal:dry-run": "node packages/jarvos-secondbrain-journal/src/journal-maintenance.js --dry-run"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/levineam/jarvOS.git"
+  },
+  "engines": { "node": ">=18" },
+  "keywords": ["jarvos", "secondbrain", "journal", "notes", "ai-agent", "personal-os"]
+}

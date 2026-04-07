@@ -143,14 +143,14 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          echo "markdown-lint : ${{ needs.markdown-lint.result }}"
+          echo "markdown-lint      : ${{ needs.markdown-lint.result }}"
           if [[ "${{ needs.link-check.outputs.had_broken_links }}" == "true" ]]; then
-            echo "link-check    : warning (broken links detected; non-blocking)"
+            echo "link-check         : warning (broken links detected; non-blocking)"
           else
-            echo "link-check    : ${{ needs.link-check.result }}"
+            echo "link-check         : ${{ needs.link-check.result }}"
           fi
-          echo "meta-hygiene  : ${{ needs.meta-hygiene.result }}"
-          echo "smoke-test    : ${{ needs.smoke-test.result }}"
+          echo "meta-hygiene       : ${{ needs.meta-hygiene.result }}"
+          echo "smoke-test         : ${{ needs.smoke-test.result }}"
 
           for r in "${{ needs.markdown-lint.result }}" "${{ needs.link-check.result }}" "${{ needs.meta-hygiene.result }}" "${{ needs.smoke-test.result }}"; do
             if [[ "$r" == "failure" || "$r" == "cancelled" ]]; then

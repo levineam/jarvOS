@@ -77,6 +77,8 @@ See `runtimes/hermes/README.md` for full setup details.
 
 ### OpenClaw
 
+**Prerequisites:** Node.js v18+, [OpenClaw](https://github.com/openclaw/openclaw) (`npm install -g openclaw`)
+
 ```bash
 git clone https://github.com/levineam/jarvOS.git
 cd jarvOS

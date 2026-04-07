@@ -1,0 +1,17 @@
+{
+  "name": "jarvos-secondbrain-journal",
+  "version": "1.0.0",
+  "description": "Journal maintenance package for jarvos-secondbrain — creates and normalizes daily journal entries",
+  "main": "src/journal-maintenance.js",
+  "scripts": {
+    "start": "node src/journal-maintenance.js",
+    "dry-run": "node src/journal-maintenance.js --dry-run"
+  },
+  "keywords": [
+    "jarvos",
+    "journal",
+    "secondbrain"
+  ],
+  "license": "UNLICENSED",
+  "private": true
+}
