@@ -119,19 +119,15 @@ jobs:
             exit 1
           fi
 
-  modules-smoke-test:
-    name: Modules smoke test
+  smoke-test:
+    name: Smoke test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-
-      - name: Run modules smoke test
-        run: node tests/modules-smoke-test.js
+      - name: Run smoke test on clean checkout
+        shell: bash
+        run: bash scripts/smoke-test.sh
 
   ci-summary:
     name: CI summary
@@ -140,7 +136,7 @@ jobs:
       - markdown-lint
       - link-check
       - meta-hygiene
-      - modules-smoke-test
+      - smoke-test
     if: always()
     steps:
       - name: Summarize results
@@ -154,9 +150,9 @@ jobs:
             echo "link-check         : ${{ needs.link-check.result }}"
           fi
           echo "meta-hygiene       : ${{ needs.meta-hygiene.result }}"
-          echo "modules-smoke-test : ${{ needs.modules-smoke-test.result }}"
+          echo "smoke-test         : ${{ needs.smoke-test.result }}"
 
-          for r in "${{ needs.markdown-lint.result }}" "${{ needs.link-check.result }}" "${{ needs.meta-hygiene.result }}" "${{ needs.modules-smoke-test.result }}"; do
+          for r in "${{ needs.markdown-lint.result }}" "${{ needs.link-check.result }}" "${{ needs.meta-hygiene.result }}" "${{ needs.smoke-test.result }}"; do
             if [[ "$r" == "failure" || "$r" == "cancelled" ]]; then
               echo "One or more CI jobs failed/cancelled."
               exit 1

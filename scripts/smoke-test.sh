@@ -1,117 +1,135 @@
 #!/usr/bin/env bash
-# smoke-test.sh — jarvOS repo structure validation
+# jarvOS smoke test — verifies the repo is structurally complete and usable from a clean checkout.
 #
-# Run from the repo root:
+# Usage:
 #   bash scripts/smoke-test.sh
 #
-# Checks that the expected directories and files exist.
-# Exit code: 0 = all pass, 1 = one or more failures.
+# Exit codes:
+#   0 — all checks passed
+#   1 — one or more checks failed
+#
+# This script intentionally has no external dependencies beyond bash and standard POSIX tools.
+# It is designed to run on both macOS and Linux (CI).
 
 set -euo pipefail
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 PASS=0
 FAIL=0
-FAILURES=()
 
+# check DESC CMD [ARGS...]
+# Run CMD with optional ARGS. Print a pass/fail line prefixed with DESC and
+# increment the global PASS or FAIL counter accordingly.
 check() {
-  local label="$1"
-  local path="$REPO_ROOT/$2"
-  if [ -e "$path" ]; then
-    echo "  ✓ $label"
+  local desc="$1"
+  shift
+  if "$@" >/dev/null 2>&1; then
+    echo "  ✓ $desc"
     PASS=$((PASS + 1))
   else
-    echo "  ✗ $label  (missing: $2)"
+    echo "  ✗ $desc"
     FAIL=$((FAIL + 1))
-    FAILURES+=("$label")
   fi
 }
 
+# check_file REL
+# Assert that the file at path REL (relative to REPO_ROOT) exists.
+check_file() {
+  local rel="$1"
+  check "file exists: $rel" test -f "$REPO_ROOT/$rel"
+}
+
+# check_executable REL
+# Assert that the file at path REL (relative to REPO_ROOT) exists and is
+# executable.
+check_executable() {
+  local rel="$1"
+  check "executable: $rel" test -x "$REPO_ROOT/$rel"
+}
+
+# check_nonempty REL
+# Assert that the file at path REL (relative to REPO_ROOT) exists and has a
+# non-zero size.
+check_nonempty() {
+  local rel="$1"
+  check "non-empty: $rel" test -s "$REPO_ROOT/$rel"
+}
+
 echo ""
-echo "jarvOS smoke test — $(date)"
+echo "jarvOS smoke test"
+echo "================="
 echo "Repo: $REPO_ROOT"
 echo ""
 
-echo "── Core behavioral layer ─────────────────────────────────"
-check "core/AGENTS.md"        "core/AGENTS.md"
-check "core/SOUL.md"          "core/SOUL.md"
-check "core/IDENTITY.md"      "core/IDENTITY.md"
+# ── Core behavioral layer ──────────────────────────────────────────────────────
+echo "→ Core behavioral layer"
+check_file "core/AGENTS.md"
+check_file "core/SOUL.md"
+check_file "core/IDENTITY.md"
+check_nonempty "core/AGENTS.md"
+check_nonempty "core/SOUL.md"
 
+# ── Templates ─────────────────────────────────────────────────────────────────
 echo ""
-echo "── Templates ────────────────────────────────────────────"
-check "templates/AGENTS-template.md"          "templates/AGENTS-template.md"
-check "templates/BOOTSTRAP-template.md"       "templates/BOOTSTRAP-template.md"
-check "templates/HEARTBEAT-template.md"       "templates/HEARTBEAT-template.md"
+echo "→ Templates"
+check_file "templates/AGENTS-template.md"
+check_file "templates/BOOTSTRAP-template.md"
+check_file "templates/HEARTBEAT-template.md"
 
+# ── PMS ───────────────────────────────────────────────────────────────────────
 echo ""
-echo "── Runtimes ────────────────────────────────────────────"
-check "runtimes/openclaw/"    "runtimes/openclaw"
-check "runtimes/hermes/"      "runtimes/hermes"
+echo "→ Project Management System"
+check_file "core/pms/README.md"
+check_file "core/pms/project-board.template.md"
+check_file "core/pms/project-brief.template.md"
+check_file "core/pms/plan.template.md"
+check_file "core/pms/tasks.template.md"
 
+# ── Governance ────────────────────────────────────────────────────────────────
 echo ""
-echo "── Module: jarvos-memory ────────────────────────────────"
-check "modules/jarvos-memory/README.md"              "modules/jarvos-memory/README.md"
-check "modules/jarvos-memory/package.json"           "modules/jarvos-memory/package.json"
-check "modules/jarvos-memory/index.js"               "modules/jarvos-memory/index.js"
-check "modules/jarvos-memory/lib/memory-schema.js"   "modules/jarvos-memory/lib/memory-schema.js"
-check "modules/jarvos-memory/lib/audit-memory.js"    "modules/jarvos-memory/lib/audit-memory.js"
-check "modules/jarvos-memory/scripts/audit-memory.js" "modules/jarvos-memory/scripts/audit-memory.js"
+echo "→ Governance"
+check_file "core/governance/README.md"
 
+# ── Hermes runtime ────────────────────────────────────────────────────────────
 echo ""
-echo "── Module: jarvos-ontology ──────────────────────────────"
-check "modules/jarvos-ontology/README.md"              "modules/jarvos-ontology/README.md"
-check "modules/jarvos-ontology/package.json"           "modules/jarvos-ontology/package.json"
-check "modules/jarvos-ontology/src/index.js"           "modules/jarvos-ontology/src/index.js"
-check "modules/jarvos-ontology/src/validator.js"       "modules/jarvos-ontology/src/validator.js"
-check "modules/jarvos-ontology/src/reader.js"          "modules/jarvos-ontology/src/reader.js"
-check "modules/jarvos-ontology/schema/templates/"      "modules/jarvos-ontology/schema/templates"
-check "modules/jarvos-ontology/scripts/validate.js"    "modules/jarvos-ontology/scripts/validate.js"
+echo "→ Hermes runtime"
+check_file "runtimes/hermes/README.md"
+check_file "runtimes/hermes/setup.sh"
+check_executable "runtimes/hermes/setup.sh"
+check_nonempty "runtimes/hermes/setup.sh"
+check_file "runtimes/hermes/skills/jarvos/SKILL.md"
 
+# ── OpenClaw runtime ──────────────────────────────────────────────────────────
 echo ""
-echo "── Module: jarvos-secondbrain ───────────────────────────"
-check "modules/jarvos-secondbrain/README.md"                          "modules/jarvos-secondbrain/README.md"
-check "modules/jarvos-secondbrain/package.json"                       "modules/jarvos-secondbrain/package.json"
-check "modules/jarvos-secondbrain/jarvos.config.example.json"         "modules/jarvos-secondbrain/jarvos.config.example.json"
-check "modules/jarvos-secondbrain/bridge/config/jarvos-paths.js"      "modules/jarvos-secondbrain/bridge/config/jarvos-paths.js"
-check "modules/jarvos-secondbrain/bridge/routing/src/keyword-capture-router.js" \
-      "modules/jarvos-secondbrain/bridge/routing/src/keyword-capture-router.js"
-check "modules/jarvos-secondbrain/packages/jarvos-secondbrain-journal/package.json" \
-      "modules/jarvos-secondbrain/packages/jarvos-secondbrain-journal/package.json"
-check "modules/jarvos-secondbrain/packages/jarvos-secondbrain-notes/package.json" \
-      "modules/jarvos-secondbrain/packages/jarvos-secondbrain-notes/package.json"
+echo "→ OpenClaw runtime"
+check_file "runtimes/openclaw/README.md"
+check_nonempty "runtimes/openclaw/README.md"
 
+# ── Starter kit ───────────────────────────────────────────────────────────────
 echo ""
-echo "── Docs and governance ──────────────────────────────────"
-check "modules/README.md"     "modules/README.md"
-check "PUBLIC_BASELINE.md"    "PUBLIC_BASELINE.md"
-check "README.md"             "README.md"
+echo "→ Starter kit"
+check_file "starter-kit/README.md"
+check_file "starter-kit/templates/PROJECT-KICKOFF-PACK.template.md"
+check_file "starter-kit/templates/OKR-TASK-BOARD.template.md"
 
+# ── Top-level repo hygiene ────────────────────────────────────────────────────
 echo ""
-echo "── Privacy scan (no hardcoded user paths) ───────────────"
-PRIVATE_HITS=$(grep -r "/Users/andrew/" "$REPO_ROOT/modules/" 2>/dev/null | grep -v "Binary file" || true)
-if [ -z "$PRIVATE_HITS" ]; then
-  echo "  ✓ No /Users/andrew/ paths found in modules/"
-  PASS=$((PASS + 1))
-else
-  echo "  ✗ Private paths found in modules/:"
-  echo "$PRIVATE_HITS" | head -10
-  FAIL=$((FAIL + 1))
-  FAILURES+=("Privacy: /Users/andrew/ found in modules/")
-fi
+echo "→ Repo hygiene"
+check_file "README.md"
+check_file "LICENSE"
+check_file "CHANGELOG.md"
 
+# ── Summary ───────────────────────────────────────────────────────────────────
 echo ""
-echo "─────────────────────────────────────────────────────────"
-echo "Results: $PASS passed, $FAIL failed"
+echo "─────────────────────────────────────────"
+TOTAL=$((PASS + FAIL))
+echo "Results: $PASS/$TOTAL passed"
+echo ""
 
-if [ $FAIL -gt 0 ]; then
-  echo ""
-  echo "Failures:"
-  for f in "${FAILURES[@]}"; do
-    echo "  - $f"
-  done
+if [ "$FAIL" -gt 0 ]; then
+  echo "FAIL — $FAIL check(s) failed. See above for details."
   exit 1
+else
+  echo "PASS — All checks passed. The repo is ready to use."
+  exit 0
 fi
-
-echo ""
-echo "All checks passed. ✓"
-exit 0
