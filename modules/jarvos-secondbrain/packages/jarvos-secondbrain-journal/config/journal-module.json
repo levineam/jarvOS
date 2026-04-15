@@ -17,10 +17,10 @@
   "sections": {
     "required": [
       {
-        "id": "current-focus",
-        "heading": "## 🎯 Current Focus",
+        "id": "priorities",
+        "heading": "## 🎯 Priorities",
         "source": "manual",
-        "description": "User-curated focus areas for the day"
+        "description": "User-curated daily priorities. Manual list order is authoritative."
       },
       {
         "id": "todays-calendar",
@@ -80,7 +80,7 @@
 
   "ordering": {
     "strategy": "config-defined",
-    "doc": "Sections render in the order listed: all required sections first (in array order), then enabled optional sections (in array order). To reorder, rearrange the arrays above."
+    "doc": "Sections render in the order listed: all required sections first (in array order), then enabled optional sections (in array order). For manual sections like Priorities, the written list order inside the section is authoritative. To reorder sections, rearrange the arrays above."
   },
 
   "structureLock": {
@@ -97,6 +97,12 @@
 
   "migration": {
     "legacySections": {
+      "current-focus": {
+        "heading": "## 🎯 Current Focus",
+        "action": "rename",
+        "migrateContentTo": "priorities",
+        "doc": "Legacy Current Focus content is preserved by renaming the section to Priorities on first encounter."
+      },
       "tasks": {
         "heading": "## ✅ Tasks",
         "action": "remove",

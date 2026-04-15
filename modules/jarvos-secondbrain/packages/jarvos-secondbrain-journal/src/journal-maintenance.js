@@ -374,6 +374,11 @@ function normalizeSections(original, date, config) {
 
     if (legacySection) {
       const targetSection = configuredById.get(legacySection.migrateContentTo || 'notes');
+      if (legacySection.action === 'rename' && targetSection) {
+        const targetExisting = contentByHeading.get(targetSection.heading);
+        contentByHeading.set(targetSection.heading, appendBlock(targetExisting, section.content));
+        continue;
+      }
       const label = `${section.heading.replace(/^##\s+/, '')} (migrated)`;
       if (targetSection) migratedBlocks.push(formatMigratedBlock(label, section.content));
       continue;
