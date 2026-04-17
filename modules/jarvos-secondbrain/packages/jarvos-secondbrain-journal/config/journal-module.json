@@ -26,7 +26,9 @@
         "id": "todays-calendar",
         "heading": "## 📅 Today's Calendar",
         "source": "google-calendar",
-        "description": "Today's events from Google Calendar via gog"
+        "calendarFilter": [],
+        "$calendarFilter_doc": "Optional list of calendar names to include (e.g. [\"Work\", \"Personal\"]). Empty or omitted means all calendars. Requires icalBuddy (macOS only).",
+        "description": "Today's events from Google Calendar via icalBuddy (macOS only)"
       },
       {
         "id": "notes",

@@ -27,7 +27,7 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { execSync } = require('child_process');
+const { execSync, execFileSync } = require('child_process');
 const {
   findNotesForDate,
   formatNoteLinks,
@@ -251,13 +251,18 @@ function formatMigratedBlock(label, content) {
 
 function buildSourceFetchers() {
   return {
-    'google-calendar': ({ isToday }) => {
+    'google-calendar': ({ isToday, section }) => {
       if (!isToday) return null;
       try {
-        const out = execSync(
-          'icalBuddy -ic "Andrew Levine,Family,Home,Shared Calendar" eventsToday 2>/dev/null',
-          { encoding: 'utf8', timeout: 10000 },
-        ).trim();
+        const calFilter = section?.calendarFilter;
+        const args = Array.isArray(calFilter) && calFilter.length
+          ? ['-ic', calFilter.join(','), 'eventsToday']
+          : ['eventsToday'];
+        const out = execFileSync('icalBuddy', args, {
+          encoding: 'utf8',
+          timeout: 10000,
+          stdio: ['ignore', 'pipe', 'ignore'],
+        }).trim();
         if (!out) return '- No events today';
         const lines = out.split('\n').filter((line) => line.trim());
         const events = [];
