@@ -185,6 +185,16 @@ EOF
   fi
 fi
 
+# ── Shared secondbrain vault onboarding ──
+echo "→ Detecting shared secondbrain vault..."
+DETECT_VAULT="$REPO_ROOT/modules/jarvos-secondbrain/scripts/detect-vault.js"
+if [ -f "$DETECT_VAULT" ] && command -v node >/dev/null 2>&1; then
+  node "$DETECT_VAULT" --runtime=hermes
+else
+  echo "  ⚠ detect-vault.js not found — skipping vault detection"
+fi
+echo ""
+
 # ── Install jarvOS skill for Hermes ──
 echo "→ Installing jarvOS skill..."
 HERMES_SKILLS="$HOME/.hermes/skills/jarvos"

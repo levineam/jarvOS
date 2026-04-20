@@ -73,6 +73,16 @@ copy_if_missing() {
   fi
 }
 
+# ── Shared secondbrain vault onboarding ──────────────────────────────────────
+echo "→ Detecting shared secondbrain vault..."
+DETECT_VAULT="$REPO_ROOT/modules/jarvos-secondbrain/scripts/detect-vault.js"
+if [ -f "$DETECT_VAULT" ]; then
+  node "$DETECT_VAULT" --runtime=openclaw
+else
+  echo "  ⚠ detect-vault.js not found — skipping vault detection"
+fi
+echo ""
+
 # ── Core behavioral layer ─────────────────────────────────────────────────────
 echo "→ Installing core behavioral layer..."
 for f in AGENTS.md SOUL.md IDENTITY.md; do
