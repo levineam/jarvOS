@@ -17,9 +17,11 @@
  *   node ... --date=today|yesterday|YYYY-MM-DD
  *   node ... --dates=today,yesterday,YYYY-MM-DD
  *
- * Path env vars (all optional):
- *   JARVOS_JOURNAL_DIR  — override journal directory
- *   JARVOS_CLAWD_DIR    — override clawd/workspace root (also CLAWD_DIR for compat)
+ * Path resolution (all optional):
+ *   JARVOS_JOURNAL_DIR / JOURNAL_DIR env vars override journal directory
+ *   JARVOS_VAULT_DIR or jarvos.config.json paths.* drive shared defaults
+ *   config/journal-module.json vault.journalDir is legacy fallback only
+ *   JARVOS_CLAWD_DIR (or CLAWD_DIR) overrides clawd/workspace root
  */
 
 'use strict';
@@ -32,7 +34,12 @@ const {
   findNotesForDate,
   formatNoteLinks,
 } = require('../../../bridge/provenance/src/journal-note-audit.js');
-const { getJournalDir, getClawdDir, getTimeZone } = require('../../../bridge/config/jarvos-paths.js');
+const {
+  getJournalDir,
+  loadConfig: loadSharedPathConfig,
+  getClawdDir,
+  getTimeZone,
+} = require('../../../bridge/config/jarvos-paths.js');
 
 const PACKAGE_ROOT = path.resolve(__dirname, '..');
 const CONFIG_PATH = path.join(PACKAGE_ROOT, 'config', 'journal-module.json');
@@ -453,11 +460,28 @@ function resolveTilde(p) {
 }
 
 function resolveJournalDir(config) {
-  // 1. Canonical env var (JARVOS_JOURNAL_DIR) or legacy aliases (JOURNAL_DIR) via shared module
-  // 2. config.vault.journalDir from journal-module.json (allows per-instance override)
-  // 3. Default derived from vault root via shared module
-  if (config.vault && config.vault.journalDir) return resolveTilde(config.vault.journalDir);
-  return getJournalDir();
+  // Shared resolver owns canonical precedence:
+  // JARVOS_JOURNAL_DIR → JOURNAL_DIR → jarvos.config.json paths.journal →
+  // JARVOS_VAULT_DIR / jarvos.config.json paths.vault / default vault root.
+  const sharedJournalDir = getJournalDir();
+  const sharedConfig = loadSharedPathConfig();
+  const hasSharedPathInput = Boolean(
+    process.env.JARVOS_JOURNAL_DIR ||
+      process.env.JOURNAL_DIR ||
+      process.env.JARVOS_VAULT_DIR ||
+      sharedConfig.paths?.journal ||
+      sharedConfig.paths?.vault ||
+      sharedConfig.vaultPath
+  );
+
+  // Legacy journal-module.json fallback only applies when no shared path input
+  // was provided. This preserves old installs without overriding the shared
+  // vault contract.
+  if (!hasSharedPathInput && config.vault && config.vault.journalDir) {
+    return resolveTilde(config.vault.journalDir);
+  }
+
+  return sharedJournalDir;
 }
 
 function syncOneDate(date, config, opts) {
@@ -508,6 +532,7 @@ module.exports = {
   renderJournal,
   resolveDateSpec,
   localDate,
+  resolveJournalDir,
   today,
 };
 

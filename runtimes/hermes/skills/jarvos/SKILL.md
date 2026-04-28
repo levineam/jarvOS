@@ -84,15 +84,21 @@ Use the escalation ladder format:
 ## Secondbrain — Journal and Notes
 
 jarvOS-secondbrain is the shared vault layer for journal and notes. It resolves
-paths in this order: `JARVOS_JOURNAL_DIR` / `JARVOS_NOTES_DIR` env vars →
-`~/clawd/jarvos.config.json` → default `~/Documents/Vault v3/Journal` and `Notes`.
+paths in this order:
+1. Canonical env vars: `JARVOS_JOURNAL_DIR` / `JARVOS_NOTES_DIR`
+2. Legacy env aliases: `JOURNAL_DIR` / `VAULT_NOTES_DIR`
+3. `~/clawd/jarvos.config.json` `paths.journal` / `paths.notes`
+4. Vault root from `JARVOS_VAULT_DIR` or `jarvos.config.json` `paths.vault`,
+   with `Journal` / `Notes` appended
+5. Default `~/Documents/Vault v3/Journal` and `~/Documents/Vault v3/Notes`
 
 **If the user already uses OpenClaw with jarvOS**, they have a secondbrain vault
 configured. Hermes should use the **same vault** — not a separate one.
 
 ### To confirm vault config (ask the user once, then remember):
-- Journal dir: `$JARVOS_JOURNAL_DIR` or `~/Documents/Vault v3/Journal`
-- Notes dir:   `$JARVOS_NOTES_DIR`   or `~/Documents/Vault v3/Notes`
+- Vault root:  `$JARVOS_VAULT_DIR` or `~/Documents/Vault v3`
+- Journal dir: `$JARVOS_JOURNAL_DIR`, `$JOURNAL_DIR`, or `<vault>/Journal`
+- Notes dir:   `$JARVOS_NOTES_DIR`, `$VAULT_NOTES_DIR`, or `<vault>/Notes`
 
 ### When the user asks you to write to their journal or notes:
 1. Confirm the vault paths above are set (or use defaults).

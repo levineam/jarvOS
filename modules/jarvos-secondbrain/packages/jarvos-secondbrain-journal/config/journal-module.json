@@ -3,7 +3,7 @@
   "$doc": "Canonical package-owned journal contract. Controls which sections appear in daily journal entries and their order. The root clawd/config/journal-module.json file remains a compatibility mirror during the extraction phase.",
 
   "vault": {
-    "_comment": "journalDir/notesDir/tagsDir default to ~/Documents/Vault v3/{Journal,Notes,Tags} when not set here. Override with JARVOS_JOURNAL_DIR / JARVOS_NOTES_DIR / JARVOS_VAULT_DIR env vars, or set jarvos.config.json paths.journal / paths.notes / paths.vault. The '~/...' tilde form is supported.",
+    "_comment": "Legacy fallback only: shared path inputs win first (JARVOS_JOURNAL_DIR/JARVOS_NOTES_DIR, JOURNAL_DIR/VAULT_NOTES_DIR aliases, JARVOS_VAULT_DIR, or jarvos.config.json paths.journal/paths.notes/paths.vault). These values are used only when no shared path input is configured. The '~/...' tilde form is supported.",
     "journalDir": "~/Documents/Vault v3/Journal",
     "notesDir": "~/Documents/Vault v3/Notes",
     "tagsDir": "~/Documents/Vault v3/Tags"

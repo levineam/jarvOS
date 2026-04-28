@@ -2,9 +2,9 @@
 /**
  * detect-vault.js — jarvos-secondbrain shared-vault onboarding helper.
  *
- * Detects the existing vault configuration and emits a prompt for a new
- * runtime to reuse the same secondbrain vault, rather than starting fresh
- * or requiring runtime-specific manual instructions.
+ * Resolves the shared vault configuration and verifies whether the resolved
+ * vault directory exists on disk, then emits guidance for a new runtime to
+ * reuse the same secondbrain vault rather than starting fresh.
  *
  * This script is the shared-vault onboarding contract owned by
  * jarvos-secondbrain. Runtime setup scripts delegate here — they do NOT
@@ -14,8 +14,8 @@
  *   node detect-vault.js [--runtime=hermes|openclaw] [--json]
  *
  * Exit codes:
- *   0  — vault config found (jarvos.config.json present) or defaults usable
- *   2  — vault directory does not exist on disk (needs setup)
+ *   0  — vault directory exists on disk and paths are ready to use
+ *   2  — paths resolved, but vault directory does not exist on disk yet
  */
 
 'use strict';
@@ -140,7 +140,7 @@ function main() {
 
   // Header
   if (configExists) {
-    console.log('  ✓ Existing secondbrain vault detected');
+    console.log('  ✓ Existing secondbrain vault config found');
   } else {
     console.log('  ⚠ No jarvos.config.json found — using default vault paths');
   }
@@ -153,10 +153,13 @@ function main() {
   // Vault existence check
   const vaultExists = fs.existsSync(vault);
   if (!vaultExists) {
-    console.log(`  ✗ Vault directory not found at: ${vault}`);
-    console.log('    Create or update jarvos.config.json to point at your vault.');
+    console.log(`  ✗ Resolved vault directory does not exist on disk: ${vault}`);
+    console.log('    Create it, or update jarvos.config.json / JARVOS_VAULT_DIR to point at your vault.');
     process.exit(2);
   }
+
+  console.log('  ✓ Vault directory exists on disk');
+  console.log('');
 
   // Runtime-specific guidance
   if (runtime === 'hermes') {

@@ -26,6 +26,24 @@ echo "  Source:     $REPO_ROOT"
 echo "  Workspace:  $WORKSPACE"
 echo ""
 
+# ── Dependency checks ──
+echo "→ Checking dependencies..."
+if ! command -v node >/dev/null 2>&1; then
+  echo "  ✗ Node.js not found — install Node.js v18+ from https://nodejs.org"
+  echo ""
+  echo "Install Node.js, then re-run this script."
+  exit 1
+fi
+NODE_VER=$(node --version 2>/dev/null | sed 's/v//' | cut -d. -f1)
+if [ "${NODE_VER:-0}" -lt 18 ]; then
+  echo "  ✗ Node.js v18+ required (found v$NODE_VER)"
+  echo ""
+  echo "Install Node.js v18+, then re-run this script."
+  exit 1
+fi
+echo "  ✓ Node.js $(node --version)"
+echo ""
+
 mkdir -p "$WORKSPACE/pms" "$WORKSPACE/governance"
 
 copy_if_missing() {
@@ -188,8 +206,16 @@ fi
 # ── Shared secondbrain vault onboarding ──
 echo "→ Detecting shared secondbrain vault..."
 DETECT_VAULT="$REPO_ROOT/modules/jarvos-secondbrain/scripts/detect-vault.js"
-if [ -f "$DETECT_VAULT" ] && command -v node >/dev/null 2>&1; then
+if [ -f "$DETECT_VAULT" ]; then
+  set +e
   node "$DETECT_VAULT" --runtime=hermes
+  DETECT_STATUS=$?
+  set -e
+  if [ "$DETECT_STATUS" -eq 2 ]; then
+    echo "  i Vault directory is not on disk yet — continuing setup."
+  elif [ "$DETECT_STATUS" -ne 0 ]; then
+    exit "$DETECT_STATUS"
+  fi
 else
   echo "  ⚠ detect-vault.js not found — skipping vault detection"
 fi

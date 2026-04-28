@@ -77,7 +77,15 @@ copy_if_missing() {
 echo "→ Detecting shared secondbrain vault..."
 DETECT_VAULT="$REPO_ROOT/modules/jarvos-secondbrain/scripts/detect-vault.js"
 if [ -f "$DETECT_VAULT" ]; then
+  set +e
   node "$DETECT_VAULT" --runtime=openclaw
+  DETECT_STATUS=$?
+  set -e
+  if [ "$DETECT_STATUS" -eq 2 ]; then
+    echo "  i Vault directory is not on disk yet — continuing setup."
+  elif [ "$DETECT_STATUS" -ne 0 ]; then
+    exit "$DETECT_STATUS"
+  fi
 else
   echo "  ⚠ detect-vault.js not found — skipping vault detection"
 fi
