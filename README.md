@@ -109,7 +109,7 @@ Because Hermes already does learning, search, and user modeling natively, the He
 
 - Issues, projects, assignments, status transitions, comments, approvals, heartbeats
 - The execution-side source of truth for "what did the agent actually do"
-- Sync target for `@jarvos/ontology` projects via `scripts/sync-to-paperclip` in that module
+- Sync target for `@jarvos/ontology` projects via `scripts/sync-to-paperclip.js` in that module
 
 jarvOS does not implement task tracking. When work needs to happen, ontology projects are synced into Paperclip and Paperclip drives execution.
 
