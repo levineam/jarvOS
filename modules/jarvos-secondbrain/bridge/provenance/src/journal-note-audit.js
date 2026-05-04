@@ -20,6 +20,7 @@
 const fs = require('fs');
 const path = require('path');
 const { getVaultNotesDir, getVaultJournalDir } = require('./lib/provenance-config');
+const { getTimeZone } = require('../../config/jarvos-paths');
 
 const NOTES_DIR = getVaultNotesDir();
 const JOURNAL_DIR = getVaultJournalDir();
@@ -80,7 +81,7 @@ Exit codes:
 
 function nyToday() {
   return new Intl.DateTimeFormat('en-CA', {
-    timeZone: 'America/New_York',
+    timeZone: getTimeZone(),
     year: 'numeric', month: '2-digit', day: '2-digit',
   }).format(new Date());
 }
@@ -163,7 +164,7 @@ function findAllNotes() {
 
 function findNotesForDate(dateYmd) {
   const nyFormatter = new Intl.DateTimeFormat('en-CA', {
-    timeZone: 'America/New_York',
+    timeZone: getTimeZone(),
     year: 'numeric', month: '2-digit', day: '2-digit',
   });
 

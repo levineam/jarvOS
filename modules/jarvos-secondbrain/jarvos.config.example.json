@@ -1,6 +1,18 @@
 {
   "_comment": "Copy to jarvos.config.json in your JARVOS_CLAWD_DIR (default: ~/clawd). All fields are optional — omit any you want to use the default for.",
 
+  "timeZone": "America/New_York",
+  "_timeZone_doc": "Local IANA timezone for date-sensitive journal behavior. Override via JARVOS_TIMEZONE; if omitted, jarvOS reads USER.md, then system timezone, then UTC as the final fallback.",
+
+  "jobs": {
+    "journalMaintenance": {
+      "schedule": "1 0 * * *",
+      "_schedule_doc": "Default journal-maintenance cadence: 12:01 AM, the first safe minute of the local day. Override via JARVOS_JOURNAL_MAINTENANCE_SCHEDULE.",
+      "timezone": "America/New_York",
+      "_timezone_doc": "Explicit cron timezone passed to the runtime. Override via JARVOS_JOURNAL_MAINTENANCE_TIMEZONE; omit to inherit timeZone above."
+    }
+  },
+
   "paths": {
     "_comment": "All paths support leading ~/ expansion.",
 
@@ -23,6 +35,9 @@
     "JARVOS_JOURNAL_DIR": "Journal dir — overrides paths.journal",
     "JARVOS_NOTES_DIR": "Notes dir — overrides paths.notes",
     "JARVOS_CLAWD_DIR": "Clawd/workspace root (where this config lives) — default: ~/clawd",
+    "JARVOS_TIMEZONE": "Local IANA timezone for journal dates and default cron timezone",
+    "JARVOS_JOURNAL_MAINTENANCE_SCHEDULE": "Cron schedule override for journal-maintenance",
+    "JARVOS_JOURNAL_MAINTENANCE_TIMEZONE": "Cron timezone override for journal-maintenance",
     "_legacy_aliases": {
       "VAULT_NOTES_DIR": "Legacy alias for JARVOS_NOTES_DIR (still honored)",
       "JOURNAL_DIR": "Legacy alias for JARVOS_JOURNAL_DIR (still honored)",

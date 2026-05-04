@@ -83,7 +83,7 @@ test('getClawdDir: tilde expansion works', () => {
 // ─── getVaultDir ─────────────────────────────────────────────────────────────
 
 test('getVaultDir: defaults to ~/Documents/Vault v3', () => {
-  withEnv({ JARVOS_VAULT_DIR: undefined }, () => {
+  withEnv({ JARVOS_VAULT_DIR: undefined, JARVOS_CLAWD_DIR: '/nonexistent/dir/that/should/not/exist', CLAWD_DIR: undefined }, () => {
     const { getVaultDir } = require(PATHS_MODULE);
     assert.equal(getVaultDir(), path.join(os.homedir(), 'Documents', 'Vault v3'));
   });
@@ -112,7 +112,7 @@ test('getVaultDir: reads from jarvos.config.json paths.vault', () => {
 // ─── getNotesDir ─────────────────────────────────────────────────────────────
 
 test('getNotesDir: defaults to $vaultDir/Notes', () => {
-  withEnv({ JARVOS_NOTES_DIR: undefined, VAULT_NOTES_DIR: undefined, JARVOS_VAULT_DIR: undefined }, () => {
+  withEnv({ JARVOS_NOTES_DIR: undefined, VAULT_NOTES_DIR: undefined, JARVOS_VAULT_DIR: undefined, JARVOS_CLAWD_DIR: '/nonexistent/dir/that/should/not/exist', CLAWD_DIR: undefined }, () => {
     const { getNotesDir } = require(PATHS_MODULE);
     assert.equal(getNotesDir(), path.join(os.homedir(), 'Documents', 'Vault v3', 'Notes'));
   });
@@ -135,7 +135,7 @@ test('getNotesDir: VAULT_NOTES_DIR honored as backward-compat alias', () => {
 // ─── getJournalDir ────────────────────────────────────────────────────────────
 
 test('getJournalDir: defaults to $vaultDir/Journal', () => {
-  withEnv({ JARVOS_JOURNAL_DIR: undefined, JOURNAL_DIR: undefined, JARVOS_VAULT_DIR: undefined }, () => {
+  withEnv({ JARVOS_JOURNAL_DIR: undefined, JOURNAL_DIR: undefined, JARVOS_VAULT_DIR: undefined, JARVOS_CLAWD_DIR: '/nonexistent/dir/that/should/not/exist', CLAWD_DIR: undefined }, () => {
     const { getJournalDir } = require(PATHS_MODULE);
     assert.equal(getJournalDir(), path.join(os.homedir(), 'Documents', 'Vault v3', 'Journal'));
   });

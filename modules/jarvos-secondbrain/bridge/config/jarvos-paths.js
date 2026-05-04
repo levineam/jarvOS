@@ -7,6 +7,9 @@
  *   JARVOS_JOURNAL_DIR → journal dir (default: $JARVOS_VAULT_DIR/Journal)
  *   JARVOS_NOTES_DIR   → notes dir   (default: $JARVOS_VAULT_DIR/Notes)
  *   JARVOS_CLAWD_DIR   → clawd/workspace root (default: ~/clawd)
+ *   JARVOS_TIMEZONE    → local IANA timezone (default: USER.md/system timezone/UTC)
+ *   JARVOS_JOURNAL_MAINTENANCE_SCHEDULE → journal-maintenance cron schedule
+ *   JARVOS_JOURNAL_MAINTENANCE_TIMEZONE → journal-maintenance cron timezone
  *
  * Backward-compat aliases (still honored, checked after canonical names):
  *   VAULT_NOTES_DIR    → same as JARVOS_NOTES_DIR
@@ -32,6 +35,8 @@ const os = require('os');
 
 const DEFAULT_CLAWD_DIR = join(os.homedir(), 'clawd');
 const DEFAULT_VAULT_DIR = join(os.homedir(), 'Documents', 'Vault v3');
+const DEFAULT_TIMEZONE_FALLBACK = 'UTC';
+const DEFAULT_JOURNAL_MAINTENANCE_SCHEDULE = '1 0 * * *';
 
 // One shared cache per process lifetime.
 let _cachedConfig = null;
@@ -74,6 +79,63 @@ function loadConfig() {
  */
 function resetConfigCache() {
   _cachedConfig = null;
+}
+
+function firstString(...values) {
+  for (const value of values) {
+    if (typeof value === 'string' && value.trim()) return value.trim();
+  }
+  return null;
+}
+
+function readUserMarkdownTimeZone() {
+  const userPath = join(getClawdDir(), 'USER.md');
+  if (!existsSync(userPath)) return null;
+
+  let body = '';
+  try {
+    body = readFileSync(userPath, 'utf8');
+  } catch {
+    return null;
+  }
+
+  const lineMatch = body.match(/^\s*(?:[-*]\s*)?(?:time\s*zone|timezone)\s*:\s*([^\n#]+)/im);
+  if (lineMatch) return firstString(lineMatch[1]);
+
+  const headingMatch = body.match(/^##\s*(?:Time\s*zone|Timezone)\s*\r?\n\s*([^\n#]+)/im);
+  if (headingMatch) return firstString(headingMatch[1]);
+  return null;
+}
+
+function isValidTimeZone(value) {
+  const tz = firstString(value);
+  if (!tz) return false;
+  try {
+    new Intl.DateTimeFormat('en-US', { timeZone: tz }).format(new Date(0));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function firstTimeZone(...values) {
+  for (const value of values) {
+    const tz = firstString(value);
+    if (isValidTimeZone(tz)) return tz;
+  }
+  return DEFAULT_TIMEZONE_FALLBACK;
+}
+
+function systemTimeZone() {
+  try {
+    return firstString(Intl.DateTimeFormat().resolvedOptions().timeZone);
+  } catch {
+    return null;
+  }
+}
+
+function jobConfig(config = loadConfig()) {
+  return config.jobs?.journalMaintenance || config.journalMaintenance || {};
 }
 
 /**
@@ -126,6 +188,61 @@ function getJournalDir() {
   return join(getVaultDir(), 'Journal');
 }
 
+/**
+ * Resolve the local IANA timezone for date-sensitive journal operations.
+ * Priority: JARVOS_TIMEZONE → TZ → jarvos.config.json timezone/timeZone/user.* →
+ * USER.md Timezone → detected system timezone → UTC fallback.
+ *
+ * UTC is intentionally only the final fallback; normal deployments should supply
+ * a local timezone through runtime/user config or system detection.
+ * @returns {string}
+ */
+function getTimeZone() {
+  const cfg = loadConfig();
+  return firstTimeZone(
+    process.env.JARVOS_TIMEZONE,
+    process.env.TZ,
+    cfg.timeZone,
+    cfg.timezone,
+    cfg.TIMEZONE,
+    cfg.user?.timeZone,
+    cfg.user?.timezone,
+    readUserMarkdownTimeZone(),
+    systemTimeZone(),
+    DEFAULT_TIMEZONE_FALLBACK,
+  );
+}
+
+/**
+ * Resolve the cron expression for journal-maintenance.
+ * Defaults to 12:01 AM every day: the first safe minute after the local day boundary.
+ * Explicit env/config overrides are preserved.
+ * @returns {string}
+ */
+function getJournalMaintenanceSchedule() {
+  const cfg = jobConfig();
+  return firstString(
+    process.env.JARVOS_JOURNAL_MAINTENANCE_SCHEDULE,
+    cfg.schedule,
+    DEFAULT_JOURNAL_MAINTENANCE_SCHEDULE,
+  );
+}
+
+/**
+ * Resolve the timezone to pass when creating the journal-maintenance cron job.
+ * Priority: explicit job timezone override → general runtime/user timezone → UTC fallback.
+ * @returns {string}
+ */
+function getJournalMaintenanceTimeZone() {
+  const cfg = jobConfig();
+  return firstString(
+    process.env.JARVOS_JOURNAL_MAINTENANCE_TIMEZONE,
+    cfg.timeZone,
+    cfg.timezone,
+    getTimeZone(),
+  );
+}
+
 module.exports = {
   expandTilde,
   loadConfig,
@@ -134,7 +251,12 @@ module.exports = {
   getVaultDir,
   getNotesDir,
   getJournalDir,
+  getTimeZone,
+  getJournalMaintenanceSchedule,
+  getJournalMaintenanceTimeZone,
   // Expose defaults for documentation / tests
   DEFAULT_CLAWD_DIR,
   DEFAULT_VAULT_DIR,
+  DEFAULT_TIMEZONE_FALLBACK,
+  DEFAULT_JOURNAL_MAINTENANCE_SCHEDULE,
 };

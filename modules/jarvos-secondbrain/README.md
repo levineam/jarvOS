@@ -49,6 +49,9 @@ Path resolution follows: **env var → `jarvos.config.json` → `os.homedir()`-r
 | `JARVOS_NOTES_DIR` | `$JARVOS_VAULT_DIR/Notes` | Notes directory |
 | `JARVOS_TAGS_DIR` | `$JARVOS_VAULT_DIR/Tags` | Tags directory |
 | `JARVOS_WORKSPACE` | `~/clawd` | Workspace root (alias) |
+| `JARVOS_TIMEZONE` | USER.md/system timezone/`UTC` | Local IANA timezone for journal dates |
+| `JARVOS_JOURNAL_MAINTENANCE_SCHEDULE` | `1 0 * * *` | journal-maintenance cron schedule (12:01 AM local) |
+| `JARVOS_JOURNAL_MAINTENANCE_TIMEZONE` | resolved local timezone | Explicit cron timezone for journal-maintenance |
 
 Legacy env var aliases still honored: `CLAWD_DIR` → `JARVOS_CLAWD_DIR`,
 `VAULT_NOTES_DIR` → `JARVOS_NOTES_DIR`, `JOURNAL_DIR` → `JARVOS_JOURNAL_DIR`
@@ -58,9 +61,23 @@ Legacy env var aliases still honored: `CLAWD_DIR` → `JARVOS_CLAWD_DIR`,
 Copy `jarvos.config.example.json` → `$JARVOS_CLAWD_DIR/jarvos.config.json` to
 configure paths without env vars. Env vars always take precedence.
 
+`journal-maintenance` defaults to `1 0 * * *` (12:01 AM, the first safe
+minute of the local day). OpenClaw runtime wiring should pass the resolved
+`timezone` field from `adapters/openclaw/src/journal-maintenance-job.js`; if no
+explicit job timezone is configured, jarvOS uses `JARVOS_TIMEZONE`,
+`jarvos.config.json`, `USER.md`, system timezone detection, then `UTC` as the
+last-resort fallback.
+
 ```jsonc
 // ~/clawd/jarvos.config.json (example)
 {
+  "timeZone": "America/New_York",
+  "jobs": {
+    "journalMaintenance": {
+      "schedule": "1 0 * * *",
+      "timezone": "America/New_York"
+    }
+  },
   "paths": {
     "vault":   "~/Documents/MyVault",
     "journal": "~/Documents/MyVault/Journal",
