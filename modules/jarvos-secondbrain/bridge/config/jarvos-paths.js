@@ -192,8 +192,8 @@ function getJournalDir() {
 
 /**
  * Resolve the local IANA timezone for date-sensitive journal operations.
- * Priority: JARVOS_TIMEZONE → TZ → jarvos.config.json timezone/timeZone/user.* →
- * USER.md Timezone → detected system timezone → UTC fallback.
+ * Priority: JARVOS_TIMEZONE → jarvos.config.json timezone/timeZone/user.* →
+ * USER.md Timezone → TZ → detected system timezone → UTC fallback.
  *
  * UTC is intentionally only the final fallback; normal deployments should supply
  * a local timezone through runtime/user config or system detection.
@@ -204,13 +204,13 @@ function getTimeZone() {
   const cfg = loadConfig();
   _cachedTimeZone = firstTimeZone(
     process.env.JARVOS_TIMEZONE,
-    process.env.TZ,
     cfg.timeZone,
     cfg.timezone,
     cfg.TIMEZONE,
     cfg.user?.timeZone,
     cfg.user?.timezone,
     readUserMarkdownTimeZone(),
+    process.env.TZ,
     systemTimeZone(),
     DEFAULT_TIMEZONE_FALLBACK,
   );

@@ -73,6 +73,20 @@ test('journal-maintenance job defaults to 12:01 AM in configured local timezone'
   }
 });
 
+test('journal-maintenance prefers configured timezone over generic TZ env fallback', () => {
+  const tmpDir = makeClawdConfig({ timeZone: 'America/Los_Angeles' });
+
+  try {
+    withEnv({ JARVOS_CLAWD_DIR: tmpDir, TZ: 'UTC' }, () => {
+      const { getTimeZone, getJournalMaintenanceTimeZone } = require(PATHS_MODULE);
+      assert.equal(getTimeZone(), 'America/Los_Angeles');
+      assert.equal(getJournalMaintenanceTimeZone(), 'America/Los_Angeles');
+    });
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
 test('journal-maintenance preserves explicit schedule and timezone overrides', () => {
   const tmpDir = makeClawdConfig({
     timeZone: 'Europe/Berlin',
