@@ -40,6 +40,7 @@ const DEFAULT_JOURNAL_MAINTENANCE_SCHEDULE = '1 0 * * *';
 
 // One shared cache per process lifetime.
 let _cachedConfig = null;
+let _cachedTimeZone = null;
 
 /**
  * Expand a leading ~/ to the user's home directory.
@@ -79,6 +80,7 @@ function loadConfig() {
  */
 function resetConfigCache() {
   _cachedConfig = null;
+  _cachedTimeZone = null;
 }
 
 function firstString(...values) {
@@ -198,8 +200,9 @@ function getJournalDir() {
  * @returns {string}
  */
 function getTimeZone() {
+  if (_cachedTimeZone !== null) return _cachedTimeZone;
   const cfg = loadConfig();
-  return firstTimeZone(
+  _cachedTimeZone = firstTimeZone(
     process.env.JARVOS_TIMEZONE,
     process.env.TZ,
     cfg.timeZone,
@@ -211,6 +214,7 @@ function getTimeZone() {
     systemTimeZone(),
     DEFAULT_TIMEZONE_FALLBACK,
   );
+  return _cachedTimeZone;
 }
 
 /**
@@ -235,7 +239,7 @@ function getJournalMaintenanceSchedule() {
  */
 function getJournalMaintenanceTimeZone() {
   const cfg = jobConfig();
-  return firstString(
+  return firstTimeZone(
     process.env.JARVOS_JOURNAL_MAINTENANCE_TIMEZONE,
     cfg.timeZone,
     cfg.timezone,

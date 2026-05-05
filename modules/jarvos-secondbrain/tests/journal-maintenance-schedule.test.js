@@ -51,24 +51,26 @@ function makeClawdConfig(config = {}, userMd = null) {
 test('journal-maintenance job defaults to 12:01 AM in configured local timezone', () => {
   const tmpDir = makeClawdConfig({ timeZone: 'Europe/Berlin' });
 
-  withEnv({ JARVOS_CLAWD_DIR: tmpDir }, () => {
-    const {
-      getJournalMaintenanceSchedule,
-      getJournalMaintenanceTimeZone,
-    } = require(PATHS_MODULE);
-    const { buildJournalMaintenanceJobConfig } = require(JOB_MODULE);
+  try {
+    withEnv({ JARVOS_CLAWD_DIR: tmpDir }, () => {
+      const {
+        getJournalMaintenanceSchedule,
+        getJournalMaintenanceTimeZone,
+      } = require(PATHS_MODULE);
+      const { buildJournalMaintenanceJobConfig } = require(JOB_MODULE);
 
-    assert.equal(getJournalMaintenanceSchedule(), '1 0 * * *');
-    assert.equal(getJournalMaintenanceTimeZone(), 'Europe/Berlin');
+      assert.equal(getJournalMaintenanceSchedule(), '1 0 * * *');
+      assert.equal(getJournalMaintenanceTimeZone(), 'Europe/Berlin');
 
-    const job = buildJournalMaintenanceJobConfig({ clawdDir: '/opt/jarvos' });
-    assert.equal(job.name, 'journal-maintenance');
-    assert.equal(job.schedule, '1 0 * * *');
-    assert.equal(job.timezone, 'Europe/Berlin');
-    assert.match(job.command, /journal-maintenance\.js"$/);
-  });
-
-  fs.rmSync(tmpDir, { recursive: true, force: true });
+      const job = buildJournalMaintenanceJobConfig({ clawdDir: '/opt/jarvos' });
+      assert.equal(job.name, 'journal-maintenance');
+      assert.equal(job.schedule, '1 0 * * *');
+      assert.equal(job.timezone, 'Europe/Berlin');
+      assert.match(job.command, /journal-maintenance\.js"$/);
+    });
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
 });
 
 test('journal-maintenance preserves explicit schedule and timezone overrides', () => {
@@ -82,38 +84,62 @@ test('journal-maintenance preserves explicit schedule and timezone overrides', (
     },
   });
 
-  withEnv({ JARVOS_CLAWD_DIR: tmpDir }, () => {
-    const {
-      getJournalMaintenanceSchedule,
-      getJournalMaintenanceTimeZone,
-    } = require(PATHS_MODULE);
-    const { buildJournalMaintenanceJobConfig } = require(JOB_MODULE);
+  try {
+    withEnv({ JARVOS_CLAWD_DIR: tmpDir }, () => {
+      const {
+        getJournalMaintenanceSchedule,
+        getJournalMaintenanceTimeZone,
+      } = require(PATHS_MODULE);
+      const { buildJournalMaintenanceJobConfig } = require(JOB_MODULE);
 
-    assert.equal(getJournalMaintenanceSchedule(), '17 4 * * *');
-    assert.equal(getJournalMaintenanceTimeZone(), 'Asia/Tokyo');
+      assert.equal(getJournalMaintenanceSchedule(), '17 4 * * *');
+      assert.equal(getJournalMaintenanceTimeZone(), 'Asia/Tokyo');
 
-    const job = buildJournalMaintenanceJobConfig({
-      schedule: '42 3 * * *',
-      timeZone: 'America/Los_Angeles',
-      scriptPath: '/custom/journal-maintenance.js',
+      const job = buildJournalMaintenanceJobConfig({
+        schedule: '42 3 * * *',
+        timeZone: 'America/Los_Angeles',
+        scriptPath: '/custom/journal-maintenance.js',
+      });
+      assert.equal(job.schedule, '42 3 * * *');
+      assert.equal(job.timezone, 'America/Los_Angeles');
+      assert.equal(job.command, 'node "/custom/journal-maintenance.js"');
     });
-    assert.equal(job.schedule, '42 3 * * *');
-    assert.equal(job.timezone, 'America/Los_Angeles');
-    assert.equal(job.command, 'node "/custom/journal-maintenance.js"');
-  });
-
-  fs.rmSync(tmpDir, { recursive: true, force: true });
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
 });
 
 test('journal-maintenance timezone resolves from USER.md before UTC fallback', () => {
   const tmpDir = makeClawdConfig({}, '# USER.md\n\n## Timezone\nPacific/Auckland\n');
 
-  withEnv({ JARVOS_CLAWD_DIR: tmpDir }, () => {
-    const { getJournalMaintenanceTimeZone } = require(PATHS_MODULE);
-    assert.equal(getJournalMaintenanceTimeZone(), 'Pacific/Auckland');
+  try {
+    withEnv({ JARVOS_CLAWD_DIR: tmpDir }, () => {
+      const { getJournalMaintenanceTimeZone } = require(PATHS_MODULE);
+      assert.equal(getJournalMaintenanceTimeZone(), 'Pacific/Auckland');
+    });
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('journal-maintenance rejects invalid explicit timezone overrides', () => {
+  const tmpDir = makeClawdConfig({
+    timeZone: 'Europe/Berlin',
+    jobs: {
+      journalMaintenance: {
+        timezone: 'Not/A_Timezone',
+      },
+    },
   });
 
-  fs.rmSync(tmpDir, { recursive: true, force: true });
+  try {
+    withEnv({ JARVOS_CLAWD_DIR: tmpDir }, () => {
+      const { getJournalMaintenanceTimeZone } = require(PATHS_MODULE);
+      assert.equal(getJournalMaintenanceTimeZone(), 'Europe/Berlin');
+    });
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
 });
 
 test('journal-maintenance timezone falls back to UTC when runtime/user timezone is unavailable', () => {
