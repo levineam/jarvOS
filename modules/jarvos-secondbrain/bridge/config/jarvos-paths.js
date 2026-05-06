@@ -235,11 +235,14 @@ function getJournalMaintenanceSchedule() {
 /**
  * Resolve the timezone to pass when creating the journal-maintenance cron job.
  * Priority: explicit job timezone override → general runtime/user timezone → UTC fallback.
+ * @param {{ timezone?: string, timeZone?: string }} [overrides]
  * @returns {string}
  */
-function getJournalMaintenanceTimeZone() {
+function getJournalMaintenanceTimeZone(overrides = {}) {
   const cfg = jobConfig();
   return firstTimeZone(
+    overrides.timezone,
+    overrides.timeZone,
     process.env.JARVOS_JOURNAL_MAINTENANCE_TIMEZONE,
     cfg.timeZone,
     cfg.timezone,

@@ -149,7 +149,12 @@ test('journal-maintenance rejects invalid explicit timezone overrides', () => {
   try {
     withEnv({ JARVOS_CLAWD_DIR: tmpDir }, () => {
       const { getJournalMaintenanceTimeZone } = require(PATHS_MODULE);
+      const { buildJournalMaintenanceJobConfig } = require(JOB_MODULE);
       assert.equal(getJournalMaintenanceTimeZone(), 'Europe/Berlin');
+      assert.equal(
+        buildJournalMaintenanceJobConfig({ timezone: 'Not/A_Timezone' }).timezone,
+        'Europe/Berlin',
+      );
     });
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
