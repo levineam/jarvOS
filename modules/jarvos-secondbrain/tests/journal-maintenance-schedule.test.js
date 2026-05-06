@@ -66,7 +66,7 @@ test('journal-maintenance job defaults to 12:01 AM in configured local timezone'
       assert.equal(job.name, 'journal-maintenance');
       assert.equal(job.schedule, '1 0 * * *');
       assert.equal(job.timezone, 'Europe/Berlin');
-      assert.match(job.command, /journal-maintenance\.js"$/);
+      assert.equal(job.command, 'node "/opt/jarvos/scripts/journal-maintenance.js"');
     });
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });

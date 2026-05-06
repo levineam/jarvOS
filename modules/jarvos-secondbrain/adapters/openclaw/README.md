@@ -9,7 +9,7 @@ maintenance cron. It emits:
 
 - `schedule`: defaults to `1 0 * * *` (12:01 AM, first safe minute of the local day)
 - `timezone`: explicit IANA timezone to pass to the cron/job API
-- `command`: `node .../journal-maintenance.js`
+- `command`: `node $CLAWD_DIR/scripts/journal-maintenance.js` (the compatibility shim expected by current OpenClaw workspaces)
 
 Resolution preserves explicit overrides:
 

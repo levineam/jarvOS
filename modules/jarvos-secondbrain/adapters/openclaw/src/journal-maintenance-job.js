@@ -15,14 +15,7 @@ const {
 } = require('../../../bridge/config/jarvos-paths.js');
 
 const JOB_NAME = 'journal-maintenance';
-const RELATIVE_SCRIPT_PATH = path.join(
-  'modules',
-  'jarvos-secondbrain',
-  'packages',
-  'jarvos-secondbrain-journal',
-  'src',
-  'journal-maintenance.js',
-);
+const RELATIVE_SCRIPT_PATH = path.join('scripts', 'journal-maintenance.js');
 
 function buildJournalMaintenanceJobConfig(overrides = {}) {
   const schedule = overrides.schedule || getJournalMaintenanceSchedule();
