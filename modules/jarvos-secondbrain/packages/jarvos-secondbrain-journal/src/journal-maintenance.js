@@ -32,13 +32,12 @@ const {
   findNotesForDate,
   formatNoteLinks,
 } = require('../../../bridge/provenance/src/journal-note-audit.js');
-const { getJournalDir, getClawdDir } = require('../../../bridge/config/jarvos-paths.js');
+const { getJournalDir, getClawdDir, getTimeZone } = require('../../../bridge/config/jarvos-paths.js');
 
 const PACKAGE_ROOT = path.resolve(__dirname, '..');
 const CONFIG_PATH = path.join(PACKAGE_ROOT, 'config', 'journal-module.json');
 const PAPERCLIP_BRIDGE_SCRIPT = path.join(getClawdDir(), 'scripts', 'journal-paperclip-inbox.js');
 const SIGNATURE = '— Edited by Jarvis';
-const DEFAULT_TIMEZONE = 'America/New_York';
 
 function parseArgs(argv) {
   const out = {
@@ -83,10 +82,10 @@ function loadConfig() {
   }
 }
 
-function nyDate(offsetDays = 0) {
+function localDate(offsetDays = 0, timeZone = getTimeZone()) {
   const now = new Date();
   const localYmd = new Intl.DateTimeFormat('en-CA', {
-    timeZone: DEFAULT_TIMEZONE,
+    timeZone,
     year: 'numeric',
     month: '2-digit',
     day: '2-digit',
@@ -101,12 +100,12 @@ function nyDate(offsetDays = 0) {
 }
 
 function today() {
-  return nyDate(0);
+  return localDate(0);
 }
 
 function resolveDateSpec(spec) {
-  if (!spec || spec === 'today') return nyDate(0);
-  if (spec === 'yesterday') return nyDate(-1);
+  if (!spec || spec === 'today') return localDate(0);
+  if (spec === 'yesterday') return localDate(-1);
   if (/^\d{4}-\d{2}-\d{2}$/.test(spec)) return spec;
   throw new Error(`Invalid date spec: ${spec}`);
 }
@@ -295,7 +294,7 @@ function buildSourceFetchers() {
           if (reminder.dueDate) {
             const date = new Date(reminder.dueDate);
             due = date.toLocaleTimeString('en-US', {
-              timeZone: DEFAULT_TIMEZONE,
+              timeZone: getTimeZone(),
               hour: 'numeric',
               minute: '2-digit',
               hour12: true,
@@ -498,6 +497,7 @@ module.exports = {
   normalizeSections,
   renderJournal,
   resolveDateSpec,
+  localDate,
   today,
 };
 

@@ -10,7 +10,7 @@
     "packages/jarvos-secondbrain-notes"
   ],
   "scripts": {
-    "test": "node --test tests/keyword-capture-router.test.js",
+    "test": "node --test tests/*.test.js",
     "lint:notes": "node packages/jarvos-secondbrain-notes/src/lint-frontmatter.js --json",
     "journal:dry-run": "node packages/jarvos-secondbrain-journal/src/journal-maintenance.js --dry-run"
   },

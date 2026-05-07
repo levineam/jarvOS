@@ -26,6 +26,9 @@ const {
   getVaultJournalDir,
 } = require('../../../bridge/provenance/src/lib/provenance-config.js');
 const {
+  getTimeZone,
+} = require('../../../bridge/config/jarvos-paths.js');
+const {
   NOTES_CREATED_HEADING,
 } = require('../../../bridge/provenance/src/journal-note-audit.js');
 
@@ -36,7 +39,7 @@ const NOTES_PLACEHOLDER_RE = /^-\s+(?:No notes created(?: on .*)?|No notes today
 
 function todayDate() {
   return new Intl.DateTimeFormat('en-CA', {
-    timeZone: 'America/New_York',
+    timeZone: getTimeZone(),
     year: 'numeric',
     month: '2-digit',
     day: '2-digit',

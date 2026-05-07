@@ -9,11 +9,12 @@
 const { readFileSync, writeFileSync, existsSync } = require('fs');
 const { join } = require('path');
 const { getVaultJournalDir } = require('./lib/provenance-config');
+const { getTimeZone } = require('../../config/jarvos-paths');
 
 const JOURNAL_DIR = getVaultJournalDir();
 
 function todayPath() {
-  const today = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+  const today = new Date().toLocaleDateString('en-CA', { timeZone: getTimeZone() });
   return join(JOURNAL_DIR, `${today}.md`);
 }
 
