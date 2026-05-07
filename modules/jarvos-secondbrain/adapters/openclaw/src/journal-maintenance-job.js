@@ -18,10 +18,10 @@ const JOB_NAME = 'journal-maintenance';
 const RELATIVE_SCRIPT_PATH = path.join('scripts', 'journal-maintenance.js');
 
 function buildJournalMaintenanceJobConfig(overrides = {}) {
-  const schedule = overrides.schedule || getJournalMaintenanceSchedule();
+  const schedule = overrides.schedule ?? getJournalMaintenanceSchedule();
   const timezone = getJournalMaintenanceTimeZone(overrides);
-  const clawdDir = overrides.clawdDir || getClawdDir();
-  const scriptPath = overrides.scriptPath || path.join(clawdDir, RELATIVE_SCRIPT_PATH);
+  const clawdDir = overrides.clawdDir ?? getClawdDir();
+  const scriptPath = overrides.scriptPath ?? path.join(clawdDir, RELATIVE_SCRIPT_PATH);
 
   return {
     name: JOB_NAME,
