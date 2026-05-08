@@ -30,11 +30,12 @@
 'use strict';
 
 const { existsSync, readFileSync } = require('fs');
-const { join } = require('path');
+const { join, resolve, sep } = require('path');
 const os = require('os');
 
 const DEFAULT_CLAWD_DIR = join(os.homedir(), 'clawd');
 const DEFAULT_VAULT_DIR = join(os.homedir(), 'Documents', 'Vault v3');
+const DEFAULT_CANONICAL_VAULT_DIR = join(os.homedir(), 'Vaults', 'Vault v3');
 const DEFAULT_TIMEZONE_FALLBACK = 'UTC';
 const DEFAULT_JOURNAL_MAINTENANCE_SCHEDULE = '1 0 * * *';
 
@@ -52,6 +53,84 @@ function expandTilde(p) {
     return join(os.homedir(), p.slice(2));
   }
   return p;
+}
+
+function isSameOrSubPath(parentPath, candidatePath) {
+  const parent = resolve(parentPath);
+  const candidate = resolve(candidatePath);
+  return candidate === parent || candidate.startsWith(parent + sep);
+}
+
+function readCanonicalVaultHintFromDoNotUse(markerPath) {
+  if (!existsSync(markerPath)) return null;
+  let body = '';
+  try {
+    body = readFileSync(markerPath, 'utf8');
+  } catch {
+    return null;
+  }
+
+  const match = body.match(/((?:~\/|\/)[^\n]*Vault v\d[^\n]*)/);
+  if (!match) return null;
+  return expandTilde(match[1].trim());
+}
+
+function resolveDefaultVaultDir({
+  homedir = os.homedir(),
+  exists = existsSync,
+  read = readFileSync,
+} = {}) {
+  const candidateVaults = join(homedir, 'Vaults', 'Vault v3');
+  const candidateDocs = join(homedir, 'Documents', 'Vault v3');
+
+  // Prefer the newer ~/Vaults/... location when present.
+  if (exists(candidateVaults)) return candidateVaults;
+
+  // If the old default was explicitly marked as stale, try to follow its hint.
+  const markerCandidates = [
+    join(candidateDocs, 'DO_NOT_USE.txt'),
+    join(homedir, 'Documents', 'REDACTED-Vault v3', 'DO_NOT_USE.txt'),
+  ];
+  for (const markerPath of markerCandidates) {
+    const hinted = readCanonicalVaultHintFromDoNotUse(markerPath);
+    if (hinted && exists(hinted)) return hinted;
+  }
+
+  return candidateDocs;
+}
+
+function assertNotStaleVaultPath(value, {
+  homedir = os.homedir(),
+  exists = existsSync,
+  read = readFileSync,
+  source = 'unknown',
+} = {}) {
+  const docsVault = join(homedir, 'Documents', 'Vault v3');
+  if (!value) return;
+
+  const isDocsVault = isSameOrSubPath(docsVault, value);
+  if (!isDocsVault) return;
+
+  const markerCandidates = [
+    join(docsVault, 'DO_NOT_USE.txt'),
+    join(homedir, 'Documents', 'REDACTED-Vault v3', 'DO_NOT_USE.txt'),
+  ];
+  let hinted = null;
+  for (const markerPath of markerCandidates) {
+    hinted = readCanonicalVaultHintFromDoNotUse(markerPath);
+    if (hinted) break;
+  }
+
+  const canonical = exists(DEFAULT_CANONICAL_VAULT_DIR) ? DEFAULT_CANONICAL_VAULT_DIR : null;
+  const recommendation = canonical || hinted;
+
+  // If the user explicitly configured a Documents-based vault, treat it as a hard error
+  // when a canonical location exists or an explicit DO_NOT_USE marker is present.
+  if (source !== 'default' && (recommendation || hinted)) {
+    const reason = hinted ? 'DO_NOT_USE marker detected' : 'canonical vault detected';
+    const suffix = recommendation ? ` Recommended: ${recommendation}` : '';
+    throw new Error(`Refusing to use stale vault path under ~/Documents/Vault v3 (${reason}). Source: ${source}.${suffix}`);
+  }
 }
 
 /**
@@ -157,11 +236,26 @@ function getClawdDir() {
  * @returns {string}
  */
 function getVaultDir() {
-  if (process.env.JARVOS_VAULT_DIR) return expandTilde(process.env.JARVOS_VAULT_DIR);
+  if (process.env.JARVOS_VAULT_DIR) {
+    const resolved = expandTilde(process.env.JARVOS_VAULT_DIR);
+    assertNotStaleVaultPath(resolved, { source: 'env' });
+    return resolved;
+  }
   const cfg = loadConfig();
-  if (cfg.paths && cfg.paths.vault) return expandTilde(cfg.paths.vault);
-  if (cfg.vaultPath) return expandTilde(cfg.vaultPath);
-  return DEFAULT_VAULT_DIR;
+  if (cfg.paths && cfg.paths.vault) {
+    const resolved = expandTilde(cfg.paths.vault);
+    assertNotStaleVaultPath(resolved, { source: 'config' });
+    return resolved;
+  }
+  if (cfg.vaultPath) {
+    const resolved = expandTilde(cfg.vaultPath);
+    assertNotStaleVaultPath(resolved, { source: 'config' });
+    return resolved;
+  }
+
+  const resolved = resolveDefaultVaultDir();
+  assertNotStaleVaultPath(resolved, { source: 'default' });
+  return resolved;
 }
 
 /**
@@ -170,11 +264,25 @@ function getVaultDir() {
  * @returns {string}
  */
 function getNotesDir() {
-  if (process.env.JARVOS_NOTES_DIR) return expandTilde(process.env.JARVOS_NOTES_DIR);
-  if (process.env.VAULT_NOTES_DIR) return expandTilde(process.env.VAULT_NOTES_DIR);
+  if (process.env.JARVOS_NOTES_DIR) {
+    const resolved = expandTilde(process.env.JARVOS_NOTES_DIR);
+    assertNotStaleVaultPath(resolved, { source: 'env' });
+    return resolved;
+  }
+  if (process.env.VAULT_NOTES_DIR) {
+    const resolved = expandTilde(process.env.VAULT_NOTES_DIR);
+    assertNotStaleVaultPath(resolved, { source: 'env' });
+    return resolved;
+  }
   const cfg = loadConfig();
-  if (cfg.paths && cfg.paths.notes) return expandTilde(cfg.paths.notes);
-  return join(getVaultDir(), 'Notes');
+  if (cfg.paths && cfg.paths.notes) {
+    const resolved = expandTilde(cfg.paths.notes);
+    assertNotStaleVaultPath(resolved, { source: 'config' });
+    return resolved;
+  }
+  const resolved = join(getVaultDir(), 'Notes');
+  assertNotStaleVaultPath(resolved, { source: 'default' });
+  return resolved;
 }
 
 /**
@@ -183,11 +291,25 @@ function getNotesDir() {
  * @returns {string}
  */
 function getJournalDir() {
-  if (process.env.JARVOS_JOURNAL_DIR) return expandTilde(process.env.JARVOS_JOURNAL_DIR);
-  if (process.env.JOURNAL_DIR) return expandTilde(process.env.JOURNAL_DIR);
+  if (process.env.JARVOS_JOURNAL_DIR) {
+    const resolved = expandTilde(process.env.JARVOS_JOURNAL_DIR);
+    assertNotStaleVaultPath(resolved, { source: 'env' });
+    return resolved;
+  }
+  if (process.env.JOURNAL_DIR) {
+    const resolved = expandTilde(process.env.JOURNAL_DIR);
+    assertNotStaleVaultPath(resolved, { source: 'env' });
+    return resolved;
+  }
   const cfg = loadConfig();
-  if (cfg.paths && cfg.paths.journal) return expandTilde(cfg.paths.journal);
-  return join(getVaultDir(), 'Journal');
+  if (cfg.paths && cfg.paths.journal) {
+    const resolved = expandTilde(cfg.paths.journal);
+    assertNotStaleVaultPath(resolved, { source: 'config' });
+    return resolved;
+  }
+  const resolved = join(getVaultDir(), 'Journal');
+  assertNotStaleVaultPath(resolved, { source: 'default' });
+  return resolved;
 }
 
 /**
@@ -252,6 +374,8 @@ function getJournalMaintenanceTimeZone(overrides = {}) {
 
 module.exports = {
   expandTilde,
+  resolveDefaultVaultDir,
+  assertNotStaleVaultPath,
   loadConfig,
   resetConfigCache,
   getClawdDir,
@@ -264,6 +388,7 @@ module.exports = {
   // Expose defaults for documentation / tests
   DEFAULT_CLAWD_DIR,
   DEFAULT_VAULT_DIR,
+  DEFAULT_CANONICAL_VAULT_DIR,
   DEFAULT_TIMEZONE_FALLBACK,
   DEFAULT_JOURNAL_MAINTENANCE_SCHEDULE,
 };
