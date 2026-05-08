@@ -17,9 +17,11 @@
  *   node ... --date=today|yesterday|YYYY-MM-DD
  *   node ... --dates=today,yesterday,YYYY-MM-DD
  *
- * Path env vars (all optional):
- *   JARVOS_JOURNAL_DIR  — override journal directory
- *   JARVOS_CLAWD_DIR    — override clawd/workspace root (also CLAWD_DIR for compat)
+ * Path resolution (all optional):
+ *   JARVOS_JOURNAL_DIR / JOURNAL_DIR env vars override journal directory
+ *   JARVOS_VAULT_DIR or jarvos.config.json paths.* drive shared defaults
+ *   config/journal-module.json vault.journalDir is legacy fallback only
+ *   JARVOS_CLAWD_DIR (or CLAWD_DIR) overrides clawd/workspace root
  */
 
 'use strict';
@@ -27,12 +29,17 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { execSync } = require('child_process');
+const { execSync, execFileSync } = require('child_process');
 const {
   findNotesForDate,
   formatNoteLinks,
 } = require('../../../bridge/provenance/src/journal-note-audit.js');
-const { getJournalDir, getClawdDir, getTimeZone } = require('../../../bridge/config/jarvos-paths.js');
+const {
+  getJournalDir,
+  loadConfig: loadSharedPathConfig,
+  getClawdDir,
+  getTimeZone,
+} = require('../../../bridge/config/jarvos-paths.js');
 
 const PACKAGE_ROOT = path.resolve(__dirname, '..');
 const CONFIG_PATH = path.join(PACKAGE_ROOT, 'config', 'journal-module.json');
@@ -251,13 +258,18 @@ function formatMigratedBlock(label, content) {
 
 function buildSourceFetchers() {
   return {
-    'google-calendar': ({ isToday }) => {
+    'google-calendar': ({ isToday, section }) => {
       if (!isToday) return null;
       try {
-        const out = execSync(
-          'icalBuddy -ic "Andrew Levine,Family,Home,Shared Calendar" eventsToday 2>/dev/null',
-          { encoding: 'utf8', timeout: 10000 },
-        ).trim();
+        const calFilter = section?.calendarFilter;
+        const args = Array.isArray(calFilter) && calFilter.length
+          ? ['-ic', calFilter.join(','), 'eventsToday']
+          : ['eventsToday'];
+        const out = execFileSync('icalBuddy', args, {
+          encoding: 'utf8',
+          timeout: 10000,
+          stdio: ['ignore', 'pipe', 'ignore'],
+        }).trim();
         if (!out) return '- No events today';
         const lines = out.split('\n').filter((line) => line.trim());
         const events = [];
@@ -374,6 +386,11 @@ function normalizeSections(original, date, config) {
 
     if (legacySection) {
       const targetSection = configuredById.get(legacySection.migrateContentTo || 'notes');
+      if (legacySection.action === 'rename' && targetSection) {
+        const targetExisting = contentByHeading.get(targetSection.heading);
+        contentByHeading.set(targetSection.heading, appendBlock(targetExisting, section.content));
+        continue;
+      }
       const label = `${section.heading.replace(/^##\s+/, '')} (migrated)`;
       if (targetSection) migratedBlocks.push(formatMigratedBlock(label, section.content));
       continue;
@@ -443,11 +460,28 @@ function resolveTilde(p) {
 }
 
 function resolveJournalDir(config) {
-  // 1. Canonical env var (JARVOS_JOURNAL_DIR) or legacy aliases (JOURNAL_DIR) via shared module
-  // 2. config.vault.journalDir from journal-module.json (allows per-instance override)
-  // 3. Default derived from vault root via shared module
-  if (config.vault && config.vault.journalDir) return resolveTilde(config.vault.journalDir);
-  return getJournalDir();
+  // Shared resolver owns canonical precedence:
+  // JARVOS_JOURNAL_DIR → JOURNAL_DIR → jarvos.config.json paths.journal →
+  // JARVOS_VAULT_DIR / jarvos.config.json paths.vault / default vault root.
+  const sharedJournalDir = getJournalDir();
+  const sharedConfig = loadSharedPathConfig();
+  const hasSharedPathInput = Boolean(
+    process.env.JARVOS_JOURNAL_DIR ||
+      process.env.JOURNAL_DIR ||
+      process.env.JARVOS_VAULT_DIR ||
+      sharedConfig.paths?.journal ||
+      sharedConfig.paths?.vault ||
+      sharedConfig.vaultPath
+  );
+
+  // Legacy journal-module.json fallback only applies when no shared path input
+  // was provided. This preserves old installs without overriding the shared
+  // vault contract.
+  if (!hasSharedPathInput && config.vault && config.vault.journalDir) {
+    return resolveTilde(config.vault.journalDir);
+  }
+
+  return sharedJournalDir;
 }
 
 function syncOneDate(date, config, opts) {
@@ -498,6 +532,7 @@ module.exports = {
   renderJournal,
   resolveDateSpec,
   localDate,
+  resolveJournalDir,
   today,
 };
 

@@ -81,6 +81,37 @@ Use the escalation ladder format:
 5. Check Predictions for review dates
 6. Surface any drift between stated values and actual time allocation
 
+## Secondbrain — Journal and Notes
+
+jarvOS-secondbrain is the shared vault layer for journal and notes. It resolves
+paths in this order:
+1. Canonical env vars: `JARVOS_JOURNAL_DIR` / `JARVOS_NOTES_DIR`
+2. Legacy env aliases: `JOURNAL_DIR` / `VAULT_NOTES_DIR`
+3. `~/clawd/jarvos.config.json` `paths.journal` / `paths.notes`
+4. Vault root from `JARVOS_VAULT_DIR` or `jarvos.config.json` `paths.vault`,
+   with `Journal` / `Notes` appended
+5. Default `~/Documents/Vault v3/Journal` and `~/Documents/Vault v3/Notes`
+
+**If the user already uses OpenClaw with jarvOS**, they have a secondbrain vault
+configured. Hermes should use the **same vault** — not a separate one.
+
+### To confirm vault config (ask the user once, then remember):
+- Vault root:  `$JARVOS_VAULT_DIR` or `~/Documents/Vault v3`
+- Journal dir: `$JARVOS_JOURNAL_DIR`, `$JOURNAL_DIR`, or `<vault>/Journal`
+- Notes dir:   `$JARVOS_NOTES_DIR`, `$VAULT_NOTES_DIR`, or `<vault>/Notes`
+
+### When the user asks you to write to their journal or notes:
+1. Confirm the vault paths above are set (or use defaults).
+2. Write to the correct directory — do NOT create a separate Hermes-specific vault.
+3. If paths are unset and the default vault doesn't exist, ask the user to run:
+   `node modules/jarvos-secondbrain/scripts/detect-vault.js --runtime=hermes`
+   and follow the guidance it prints.
+
+### Pitfall: do NOT invent a new vault path
+The whole point of shared-vault onboarding is that every runtime (OpenClaw, Hermes,
+and any future runtime) uses one vault. If you're unsure, default to
+`~/Documents/Vault v3` and ask the user to confirm rather than creating a new path.
+
 ## Pitfalls
 - Don't create projects without Board + Brief — ungoverned work gets lost
 - Don't re-litigate Decisions Confirmed unless new evidence appears

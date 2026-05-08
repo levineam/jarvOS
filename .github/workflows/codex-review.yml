@@ -120,20 +120,20 @@ jobs:
               return
             }
 
-            try {
-              await github.rest.issues.createComment({
-                owner,
-                repo,
-                issue_number,
-                body: triggerText,
-              })
-            } catch (error) {
-              const status = error?.status || error?.response?.status
-              if (status === 403) {
-                core.warning(
-                  `Skipping Codex trigger comment — GitHub token lacks permission to comment on PR #${issue_number} (HTTP ${status}).`
-                )
-                return
-              }
-              throw error
-            }
+	            try {
+	              await github.rest.issues.createComment({
+	                owner,
+	                repo,
+	                issue_number,
+	                body: triggerText,
+	              })
+	            } catch (error) {
+	              const status = error?.status || error?.response?.status
+	              if (status === 403) {
+	                core.warning(
+	                  `Skipping Codex trigger comment — GitHub token lacks permission to comment on PR #${issue_number} (HTTP ${status}).`
+	                )
+	                return
+	              }
+	              throw error
+	            }

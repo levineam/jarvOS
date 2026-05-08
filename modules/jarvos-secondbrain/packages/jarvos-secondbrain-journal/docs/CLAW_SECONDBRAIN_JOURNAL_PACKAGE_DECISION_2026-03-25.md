@@ -111,7 +111,7 @@ Additional fields are allowed, but the default contract should stay small.
 ### Required sections
 
 Current required sections are:
-- `## 🎯 Current Focus`
+- `## 🎯 Priorities`
 - `## 📅 Today's Calendar`
 - `## 📝 Notes`
 - `## 💡 Ideas`
