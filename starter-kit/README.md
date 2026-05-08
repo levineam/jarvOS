@@ -38,7 +38,7 @@ All project work should follow this baseline:
 
 ## Runtime Modules (`modules/`)
 
-The `modules/` directory at the repo root contains the three core jarvOS runtime modules. These give your agent executable code — not just markdown templates.
+The `modules/` directory at the repo root contains the four core jarvOS runtime modules. These give your agent executable code — not just markdown templates.
 
 ### What's included
 
@@ -47,6 +47,7 @@ The `modules/` directory at the repo root contains the three core jarvOS runtime
 | [`modules/jarvos-memory`](../modules/jarvos-memory/) | Memory schema, audit helpers, promotion rules — your agent's durable state contract |
 | [`modules/jarvos-ontology`](../modules/jarvos-ontology/) | Ontology tooling — read, write, validate, and render your belief/goal graph |
 | [`modules/jarvos-secondbrain`](../modules/jarvos-secondbrain/) | Vault bridges, journal/notes packages, capture routing — the content layer |
+| [`modules/jarvos-gbrain`](../modules/jarvos-gbrain/) | Curated Obsidian-to-GBrain import, sync, doctor, and retrieval-eval helpers |
 
 ### Wiring modules into your starter-kit workflow
 
@@ -64,6 +65,13 @@ The `modules/` directory at the repo root contains the three core jarvOS runtime
    ```bash
    cd modules/jarvos-ontology && npm install
    node scripts/validate.js --ontology /path/to/your/ontology/
+   ```
+
+5. **Plan structured GBrain import** — Create a local curated import manifest,
+   then dry-run before writing generated GBrain pages:
+   ```bash
+   cd modules/jarvos-gbrain && npm install
+   node scripts/jarvos-gbrain.js import --dry-run --manifest /path/to/curated-import.json
    ```
 
 See [`modules/README.md`](../modules/README.md) for full module documentation.

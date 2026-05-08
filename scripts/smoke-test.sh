@@ -112,6 +112,16 @@ check_file "starter-kit/README.md"
 check_file "starter-kit/templates/PROJECT-KICKOFF-PACK.template.md"
 check_file "starter-kit/templates/OKR-TASK-BOARD.template.md"
 
+# ── Runtime modules ──────────────────────────────────────────────────────────
+echo ""
+echo "→ Runtime modules"
+check_file "modules/jarvos-memory/package.json"
+check_file "modules/jarvos-ontology/package.json"
+check_file "modules/jarvos-secondbrain/package.json"
+check_file "modules/jarvos-gbrain/package.json"
+check_file "modules/jarvos-gbrain/config/curated-import.json"
+check_file "modules/jarvos-gbrain/config/eval-questions.json"
+
 # ── Top-level repo hygiene ────────────────────────────────────────────────────
 echo ""
 echo "→ Repo hygiene"

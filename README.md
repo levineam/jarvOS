@@ -13,10 +13,11 @@ It is **not** a runtime. jarvOS rides on top of an existing agent runtime — to
 ```
 jarvOS/
 ├── core/              # Portable behavioral layer (AGENTS.md, SOUL.md, IDENTITY.md, governance, pms)
-├── modules/           # The three jarvOS-owned npm modules
+├── modules/           # The four jarvOS-owned npm modules
 │   ├── jarvos-secondbrain/   # Content layer — journal, notes, capture routing
 │   ├── jarvos-memory/        # Agent-state memory contract
-│   └── jarvos-ontology/      # Worldview / belief graph
+│   ├── jarvos-ontology/      # Worldview / belief graph
+│   └── jarvos-gbrain/        # Structured knowledge bridge for GBrain
 ├── templates/         # Blank starting points (USER, MEMORY, ONTOLOGY, TOOLS, AGENTS, BOOTSTRAP, HEARTBEAT)
 ├── runtimes/
 │   ├── openclaw/      # OpenClaw adapter notes + setup script
@@ -30,26 +31,28 @@ Everything jarvOS-owned is plain markdown plus a small amount of generic Node.js
 
 ## Architecture: layers, not a stack
 
-jarvOS is organized as six layers, each with a clear owner — three owned by this repo, three provided by dependencies. Mixing layers — putting a journal entry in memory, or a goal in your notes — is the most common way to break the system.
+jarvOS is organized as seven layers, each with a clear owner. Mixing layers — putting a journal entry in memory, or a goal in your notes — is the most common way to break the system.
 
 | Layer       | Owner                  | Typical content                                     |
 | ----------- | ---------------------- | --------------------------------------------------- |
 | Content     | `@jarvos/secondbrain`  | Journal entries, notes, raw capture                 |
 | Recall      | `@jarvos/memory`       | Lessons, decisions-with-rationale, preferences, facts |
 | Worldview   | `@jarvos/ontology`     | Beliefs, predictions, goals, projects, core self    |
+| Structured knowledge | `@jarvos/gbrain` | People, companies, projects, concepts, meetings, source pages |
 | Behavior    | `core/` (this repo)    | Identity, persona, rules, governance, PMS           |
 | Execution   | Paperclip (dependency) | Tasks, issues, assignments, done/not-done           |
 | Runtime     | OpenClaw or Hermes     | Scheduling, tool execution, messaging, model calls  |
 
-Read top to bottom: raw capture flows up into memory and ontology; the behavioral layer reads all three to decide how to act; the runtime executes those decisions; Paperclip records what got done. No layer reaches around its neighbors.
+Read top to bottom: raw capture flows up into memory, ontology, and structured knowledge; the behavioral layer reads the relevant surfaces to decide how to act; the runtime executes those decisions; Paperclip records what got done. No layer reaches around its neighbors.
 
-### The three jarvOS modules
+### The four jarvOS modules
 
 The `modules/` directory contains the runnable parts of jarvOS. Each module is a standalone npm package with its own README — see [`modules/README.md`](./modules/README.md) for the full breakdown.
 
 - **[`@jarvos/secondbrain`](./modules/jarvos-secondbrain/)** — content-facing monorepo. Journal maintenance, notes management, capture routing, and an Obsidian storage adapter (plus adapter notes for OpenClaw). All paths are env-var driven via `bridge/config/jarvos-paths.js`. Your actual notes never live here; they stay in your vault.
 - **[`@jarvos/memory`](./modules/jarvos-memory/)** — schema and audit tooling for agent-state memory. Defines what a `MEMORY.md` record looks like, how items get promoted, and how to validate a memory file against the contract. Your actual memories stay private and local.
 - **[`@jarvos/ontology`](./modules/jarvos-ontology/)** — reader/writer/validator/renderer for the six-layer ontology (higher-order principles, beliefs, predictions, core self, goals, projects). Ships blank templates (`schema/templates/`) and heuristics (`schema/heuristics.md`), plus a Paperclip sync script (`scripts/sync-to-paperclip.js`). Your filled-in beliefs and goals stay private and local.
+- **[`@jarvos/gbrain`](./modules/jarvos-gbrain/)** — curated bridge from an Obsidian-compatible vault into GBrain pages. It generates structured people, companies, projects, concepts, meetings, and source pages with provenance, then wraps GBrain sync/embed and retrieval eval commands.
 
 ### Portable core + templates
 
@@ -72,7 +75,7 @@ A common confusion is which behavior is jarvOS and which comes from the runtime 
 ### Owned by jarvOS (this repo)
 
 - The behavioral layer: `AGENTS.md`, `SOUL.md`, `IDENTITY.md`, governance rules, PMS model
-- The three modules: `@jarvos/secondbrain`, `@jarvos/memory`, `@jarvos/ontology`
+- The four modules: `@jarvos/secondbrain`, `@jarvos/memory`, `@jarvos/ontology`, `@jarvos/gbrain`
 - The templates and starter-kit
 - The adapter glue in `runtimes/`
 - Cross-runtime invariants: layer boundaries, ontology heuristics, memory promotion rules, the public/private boundary documented in [`PUBLIC_BASELINE.md`](./PUBLIC_BASELINE.md)
@@ -100,10 +103,21 @@ Because Hermes already does learning, search, and user modeling natively, the He
 ### Provided by **Obsidian / QMD / lossless-claw** (vault dependency)
 
 - Obsidian: the markdown vault application and file format
-- QMD (Obsidian-compatible vault layout): how journal and notes are organized on disk
+- QMD: fast local search and exact lookup across the vault
 - `lossless-claw`: the lossless-capture pipeline that writes into the vault
 
 `@jarvos/secondbrain` reads from and writes to this vault through its `adapters/obsidian/` adapter; it does not own the vault format or the capture pipeline.
+
+### Provided by **GBrain** (structured knowledge dependency)
+
+GBrain is a separate local knowledge base and graph layer. `@jarvos/gbrain`
+does not implement GBrain itself; it prepares curated, provenance-rich markdown
+pages and wraps the installed `gbrain` CLI for sync, embedding, doctor, and
+retrieval-eval workflows.
+
+OpenClaw `memory-wiki` is also separate from jarvOS. In this architecture it is
+treated as a native OpenClaw diagnostic and compiled-wiki layer, not the primary
+source for GBrain-ready graph discipline.
 
 ### Provided by **Paperclip** (execution-tracking dependency)
 
@@ -162,10 +176,10 @@ See [`runtimes/openclaw/README.md`](./runtimes/openclaw/README.md) for the full 
 
 ### Use the modules
 
-The three modules can be installed independently from a clone of this repo:
+The four modules can be installed independently from a clone of this repo:
 
 ```bash
-npm install ./modules/jarvos-memory ./modules/jarvos-ontology ./modules/jarvos-secondbrain
+npm install ./modules/jarvos-memory ./modules/jarvos-ontology ./modules/jarvos-secondbrain ./modules/jarvos-gbrain
 ```
 
 Each has its own quick-start in [`modules/README.md`](./modules/README.md).
@@ -200,7 +214,7 @@ bash scripts/smoke-test.sh   # Verify everything is still intact after the pull
 ## Philosophy
 
 - **Code is public. Content is private.** The repo ships generic templates and tooling; your beliefs, goals, memories, and journal stay in your local workspace.
-- **Layers, not features.** Content, recall, worldview, behavior, execution, and runtime each have a single owner. Don't mix them.
+- **Layers, not features.** Content, recall, worldview, structured knowledge, behavior, execution, and runtime each have a single owner. Don't mix them.
 - **Portable over proprietary.** The behavioral layer must run on any agent runtime that loads project context files.
 - **Generic over specific.** Prefer patterns that survive a runtime change over platform hacks that don't.
 - **Behaviors are on by default.** Turn things off when they don't fit.

@@ -1,6 +1,6 @@
 # jarvOS Modules
 
-The three core modules that make jarvOS work. Each module is a standalone npm package
+The four core modules that make jarvOS work. Each module is a standalone npm package
 with a clear boundary and a dedicated README.
 
 | Module | Purpose | Key entry point |
@@ -8,6 +8,7 @@ with a clear boundary and a dedicated README.
 | [`@jarvos/memory`](./jarvos-memory/) | Agent-state memory — compact recall across sessions | `src/index.js` |
 | [`@jarvos/ontology`](./jarvos-ontology/) | Worldview layer — beliefs, goals, values, predictions | `src/index.js` |
 | [`@jarvos/secondbrain`](./jarvos-secondbrain/) | Content layer — journal and notes | `bridge/config/jarvos-paths.js` |
+| [`@jarvos/gbrain`](./jarvos-gbrain/) | Structured knowledge bridge — curated vault import to GBrain | `src/index.js` |
 
 ## Architecture
 
@@ -16,6 +17,7 @@ Raw capture (journal/notes)
   → @jarvos/secondbrain (content layer)
     → @jarvos/memory (compact retained state)
       → @jarvos/ontology (worldview / belief graph)
+        → @jarvos/gbrain (structured people/projects/concepts/sources)
         → Paperclip (live execution tracking)
 ```
 
@@ -23,7 +25,7 @@ Raw capture (journal/notes)
 
 ```bash
 # From the root of this repo
-npm install ./modules/jarvos-memory ./modules/jarvos-ontology ./modules/jarvos-secondbrain
+npm install ./modules/jarvos-memory ./modules/jarvos-ontology ./modules/jarvos-secondbrain ./modules/jarvos-gbrain
 ```
 
 Or reference each module directly in your project:
@@ -41,6 +43,7 @@ Each module owns a distinct layer. **Do not use them interchangeably.**
 | Content | `@jarvos/secondbrain` | Journal entries, notes, raw capture |
 | Recall | `@jarvos/memory` | Lessons, decisions, preferences, facts |
 | Worldview | `@jarvos/ontology` | Beliefs, goals, values, predictions |
+| Structured knowledge | `@jarvos/gbrain` | People, companies, projects, concepts, meetings, source pages |
 | Execution | Paperclip | Tasks, issues, assignments, done/not-done |
 
 ## Smoke Test
@@ -137,6 +140,47 @@ All paths are resolved via environment variables or `jarvos.config.json`. See `b
 | `JARVOS_VAULT_DIR` | `~/Documents/Vault v3` | Obsidian vault root |
 | `JARVOS_JOURNAL_DIR` | `$JARVOS_VAULT_DIR/Journal` | Daily journal directory |
 | `JARVOS_NOTES_DIR` | `$JARVOS_VAULT_DIR/Notes` | Notes directory |
+
+---
+
+## @jarvos/gbrain
+
+**What it does:** Bridges a curated slice of your Obsidian-compatible vault into
+GBrain. It generates deterministic GBrain pages for people, companies, projects,
+concepts, meetings, and sources while preserving source provenance.
+
+**What it is NOT:** A full-vault search engine or a replacement for QMD. QMD
+remains the broad, fast vault lookup path. OpenClaw `memory-wiki` remains a
+runtime-native diagnostic/compiled-wiki layer.
+
+**Quick start:**
+
+```bash
+cd modules/jarvos-gbrain
+npm install
+node scripts/jarvos-gbrain.js doctor
+node scripts/jarvos-gbrain.js import --dry-run --manifest /path/to/curated-import.json
+node scripts/jarvos-gbrain.js sync --dry-run
+```
+
+**Key files:**
+
+- `src/index.js` — import planning, page generation, sync wrapper, eval, doctor
+- `scripts/jarvos-gbrain.js` — CLI entry point
+- `config/curated-import.json` — public template manifest
+- `config/eval-questions.json` — public template retrieval-eval fixture
+- `test/` — unit tests for mapping, provenance, dry-run behavior, and sync planning
+
+**Configuration:**
+
+| Env var | Default | Purpose |
+|---------|---------|---------|
+| `JARVOS_VAULT_DIR` | `~/Documents/ObsidianVault` | Obsidian-compatible vault root |
+| `JARVOS_BRAIN_DIR` | `~/brain` | GBrain content repo |
+| `JARVOS_GBRAIN_DIR` | `~/gbrain` | GBrain source/CLI repo |
+| `JARVOS_GBRAIN_BIN` | `gbrain` | GBrain CLI command |
+| `JARVOS_GBRAIN_IMPORT_MANIFEST` | `<package-root>/config/curated-import.json` | Curated import manifest |
+| `JARVOS_GBRAIN_EVAL_QUESTIONS` | `<package-root>/config/eval-questions.json` | Retrieval eval fixture |
 
 ---
 
