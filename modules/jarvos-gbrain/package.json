@@ -1,0 +1,27 @@
+{
+  "name": "@jarvos/gbrain",
+  "version": "0.1.0",
+  "description": "jarvOS GBrain bridge - curated Obsidian-to-GBrain import, sync, doctor, and retrieval eval helpers",
+  "license": "MIT",
+  "main": "src/index.js",
+  "exports": {
+    ".": "./src/index.js"
+  },
+  "bin": {
+    "jarvos-gbrain": "scripts/jarvos-gbrain.js"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.js",
+    "doctor": "node scripts/jarvos-gbrain.js doctor",
+    "plan": "node scripts/jarvos-gbrain.js plan",
+    "import:dry": "node scripts/jarvos-gbrain.js import --dry-run",
+    "sync": "node scripts/jarvos-gbrain.js sync",
+    "eval": "node scripts/jarvos-gbrain.js eval"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/levineam/jarvOS.git"
+  },
+  "engines": { "node": ">=18" },
+  "keywords": ["jarvos", "gbrain", "obsidian", "secondbrain", "ai-agent", "personal-os"]
+}

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * modules-smoke-test.js — proves the three jarvOS modules load and produce valid output
+ * modules-smoke-test.js — proves the jarvOS modules load and produce valid output
  *
  * Run: node tests/modules-smoke-test.js
  */
@@ -200,6 +200,53 @@ try {
 
 } catch (e) {
   bad('@jarvos/secondbrain module load', e);
+}
+
+// ── @jarvos/gbrain ──────────────────────────────────────────────────────────
+
+console.log('\n→ @jarvos/gbrain');
+
+try {
+  const gb = require(path.join(ROOT, 'modules/jarvos-gbrain/src/index.js'));
+
+  // slugify
+  const slug = gb.slugify('JarVOS & GBrain: Integration');
+  if (slug === 'jarvos-and-gbrain-integration') {
+    ok('slugify returns stable GBrain slug');
+  } else {
+    bad('slugify', new Error(`Got: ${slug}`));
+  }
+
+  // resolveConfig defaults
+  const cfg = gb.resolveConfig({
+    vaultDir: '/tmp/jarvos-vault',
+    brainDir: '/tmp/jarvos-brain',
+    gbrainDir: '/tmp/jarvos-gbrain',
+  });
+  if (cfg.vaultDir === '/tmp/jarvos-vault' && cfg.brainDir === '/tmp/jarvos-brain') {
+    ok('resolveConfig accepts portable overrides');
+  } else {
+    bad('resolveConfig', new Error(JSON.stringify(cfg)));
+  }
+
+  // createImportPlan with default empty manifest
+  const plan = gb.createImportPlan();
+  if (Array.isArray(plan.items) && Array.isArray(plan.warnings)) {
+    ok('createImportPlan returns plan shape');
+  } else {
+    bad('createImportPlan', new Error(JSON.stringify(plan)));
+  }
+
+  // sync dry-run
+  const sync = gb.syncBrain({ brainDir: '/tmp/jarvos-brain', gbrainDir: '/tmp/jarvos-gbrain' }, { dryRun: true });
+  if (sync.ok && sync.sync.args.includes('--repo') && sync.embed.args.includes('--stale')) {
+    ok('syncBrain dry-run returns planned commands');
+  } else {
+    bad('syncBrain dry-run', new Error(JSON.stringify(sync)));
+  }
+
+} catch (e) {
+  bad('@jarvos/gbrain module load', e);
 }
 
 // ── Summary ─────────────────────────────────────────────────────────────────

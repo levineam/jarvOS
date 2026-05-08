@@ -1,7 +1,7 @@
 ---
 status: active
 created: 2026-02-19
-updated: 2026-02-19
+updated: 2026-05-08
 canonical: true
 type: decision
 project: ""
@@ -57,6 +57,7 @@ Responsibilities:
 
 4. **Knowledge & Documentation Propagation**
    - Internal canonical notes (vault)
+   - Curated GBrain pages for people, companies, projects, concepts, meetings, and sources
    - Curated export set for public docs/templates
    - Sync scripts with “no change = no publish” safeguards
 
@@ -65,6 +66,25 @@ Responsibilities:
    - Environment-fit guidance (OpenClaw, Cowork, Codex app/CLI)
 
 ## 3) Adopted Patterns
+
+### Pattern: Layered memory and knowledge retrieval
+
+Status: **Adopted as jarvOS module boundary.**
+
+The current jarvOS repo separates memory-adjacent concerns into distinct owners:
+
+- `@jarvos/secondbrain` owns human-facing journal and note content.
+- `@jarvos/memory` owns compact operational recall.
+- `@jarvos/ontology` owns worldview, beliefs, goals, and predictions.
+- `@jarvos/gbrain` owns curated structured knowledge pages for GBrain.
+- QMD remains a fast broad vault-search dependency, not the graph layer.
+- OpenClaw `memory-wiki` remains a native runtime diagnostic/compiled-wiki layer, not the primary GBrain import source.
+
+Decision rationale summary:
+- Keeps Obsidian notes as the human source of truth.
+- Gives agents structured pages for entity/project/concept recall.
+- Avoids treating QMD, memory-wiki, and GBrain as interchangeable memory tools.
+- Preserves portability by shipping templates and bridge code, not private knowledge.
 
 ### Pattern: Ars Contexta (watchlist adoption)
 

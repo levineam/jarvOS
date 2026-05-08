@@ -18,6 +18,7 @@ This document defines what is and is not included in the public jarvOS repositor
 - `modules/jarvos-memory/` — agent-state memory contract (schema, audit helpers, promotion rules)
 - `modules/jarvos-ontology/` — ontology tooling (reader, writer, validator, renderer, blank templates)
 - `modules/jarvos-secondbrain/` — content layer (journal/notes packages, vault bridges, capture routing)
+- `modules/jarvos-gbrain/` — GBrain bridge code, public template manifest, public template eval fixture
 
 ---
 
@@ -38,6 +39,11 @@ This document defines what is and is not included in the public jarvOS repositor
 ### Vault content
 - Obsidian vault notes and journal entries
 - `~/Documents/Vault v3/` or any user-specific vault path
+
+### GBrain content
+- `~/brain/` or any user's generated GBrain pages
+- Local curated import manifests that list private vault files
+- Local retrieval-eval question sets that contain private facts
 
 ### Runtime secrets
 - API keys, tokens, credentials (never in any repo)
@@ -69,4 +75,4 @@ If yes to any: keep it local, add it to `.gitignore`, document it here.
 
 ---
 
-_Last updated: SUP-487 (2026-03-27). Branch: feat/sup-487-include-module-code_
+_Last updated: SUP-1469 (2026-05-08). Branch: sup-1469-gbrain-module_
