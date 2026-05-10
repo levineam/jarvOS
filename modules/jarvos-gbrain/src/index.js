@@ -603,6 +603,42 @@ function parseJsonOutput(output) {
   }
 }
 
+function parseGraphQueryOutput(output) {
+  const json = parseJsonOutput(output);
+  if (json.ok && Array.isArray(json.value)) return json;
+
+  const nodes = [];
+  const stack = [];
+  for (const line of String(output || '').split(/\r?\n/)) {
+    const rootMatch = line.match(/^\[depth\s+(\d+)\]\s+(\S+)/);
+    if (rootMatch) {
+      const node = { slug: rootMatch[2], depth: Number.parseInt(rootMatch[1], 10), links: [] };
+      nodes.push(node);
+      stack[node.depth] = node;
+      continue;
+    }
+
+    const edgeMatch = line.match(/^\s+--([a-z0-9_-]+)->\s+(\S+)\s+\(depth\s+(\d+)\)/i);
+    if (!edgeMatch) continue;
+    const depth = Number.parseInt(edgeMatch[3], 10);
+    const parent = stack[depth - 1] || null;
+    const node = {
+      slug: edgeMatch[2],
+      depth,
+      links: parent ? [{
+        from_slug: parent.slug,
+        to_slug: edgeMatch[2],
+        link_type: edgeMatch[1],
+      }] : [],
+    };
+    nodes.push(node);
+    stack[depth] = node;
+  }
+
+  if (nodes.length > 0) return { ok: true, value: nodes, error: null };
+  return { ok: false, value: null, error: json.error || 'Expected gbrain graph-query output' };
+}
+
 function summarizeCommand(command) {
   return {
     ok: command.ok,
@@ -632,7 +668,7 @@ function graphRecall(overrides = {}, options = {}) {
       dryRun,
       timeoutMs: config.retrievalTimeoutMs,
     });
-    const parsed = dryRun ? { ok: true, value: [], error: null } : parseJsonOutput(command.stdout || '[]');
+    const parsed = dryRun ? { ok: true, value: [], error: null } : parseGraphQueryOutput(command.stdout || '');
     const nodes = Array.isArray(parsed.value) ? parsed.value : [];
     const parseOk = parsed.ok && Array.isArray(parsed.value);
     return {
@@ -641,7 +677,7 @@ function graphRecall(overrides = {}, options = {}) {
       depth,
       nodeCount: nodes.length,
       nodes,
-      parseError: parseOk ? null : parsed.error || 'Expected gbrain graph-query to return a JSON array',
+      parseError: parseOk ? null : parsed.error || 'Expected gbrain graph-query output',
       command: summarizeCommand(command),
     };
   });

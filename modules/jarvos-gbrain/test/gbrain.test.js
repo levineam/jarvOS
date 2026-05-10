@@ -492,6 +492,36 @@ process.stdout.write(JSON.stringify([
   assert.deepEqual(captured.args, ['graph-query', 'projects/jarvos-context-engineering-upgrade', '--depth', '3']);
 });
 
+test('graphRecall parses gbrain graph-query text output', () => {
+  const root = tempDir();
+  const binPath = path.join(root, 'fake-gbrain');
+  fs.writeFileSync(binPath, `#!/bin/sh
+cat <<'OUT'
+[depth 0] sources/paperclip-openclaw-setup-guide-draft
+  --mentions-> concepts/jarvos-task-management-component (depth 1)
+    --mentions-> concepts/jarvos-memory-module-spec (depth 2)
+OUT
+`, 'utf8');
+  fs.chmodSync(binPath, 0o755);
+
+  const result = gbrain.graphRecall({
+    gbrainBin: binPath,
+    gbrainDir: root,
+  }, {
+    seeds: ['sources/paperclip-openclaw-setup-guide-draft'],
+    depth: 2,
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.results[0].nodeCount, 3);
+  assert.equal(result.results[0].nodes[1].slug, 'concepts/jarvos-task-management-component');
+  assert.deepEqual(result.results[0].nodes[1].links, [{
+    from_slug: 'sources/paperclip-openclaw-setup-guide-draft',
+    to_slug: 'concepts/jarvos-task-management-component',
+    link_type: 'mentions',
+  }]);
+});
+
 test('graphRecall fails when graph output is not a JSON array', () => {
   const root = tempDir();
   const binPath = path.join(root, 'fake-gbrain');
