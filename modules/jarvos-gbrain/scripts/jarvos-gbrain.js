@@ -45,6 +45,7 @@ function cliConfig() {
     seed: argValue('--seed'),
     seeds: argValues('--seed'),
     depth: argValue('--depth'),
+    graphDepth: argValue('--graph-depth'),
   };
 }
 
@@ -53,7 +54,7 @@ function printJson(value) {
 }
 
 function usage() {
-  process.stdout.write(`jarvos-gbrain\n\nCommands:\n  plan [--manifest path]\n  import [--dry-run] [--manifest path] [--brain-dir path] [--vault-dir path]\n  sync [--dry-run] [--brain-dir path] [--gbrain-dir path]\n  eval [--dry-run] [--eval-file path] [--compare-qmd] [--limit n] [--timeout-ms n]\n       [--qmd-bin path] [--qmd-mode search|query|vsearch] [--qmd-collection name] [--qmd-index name]\n  graph [--dry-run] --seed slug [--seed slug] [--depth n] [--timeout-ms n]\n  doctor\n\n`);
+  process.stdout.write(`jarvos-gbrain\n\nCommands:\n  plan [--manifest path]\n  import [--dry-run] [--manifest path] [--brain-dir path] [--vault-dir path]\n  sync [--dry-run] [--brain-dir path] [--gbrain-dir path]\n  eval [--dry-run] [--eval-file path] [--compare-qmd] [--compare-graph] [--graph-depth n]\n       [--limit n] [--timeout-ms n] [--qmd-bin path] [--qmd-mode search|query|vsearch]\n       [--qmd-collection name] [--qmd-index name]\n  graph [--dry-run] --seed slug [--seed slug] [--depth n] [--timeout-ms n]\n  doctor\n\n`);
 }
 
 function main() {
@@ -86,6 +87,8 @@ function main() {
       printJson(runRetrievalEval(config, {
         dryRun: hasFlag('--dry-run'),
         compareQmd: hasFlag('--compare-qmd'),
+        compareGraph: hasFlag('--compare-graph'),
+        graphDepth: argValue('--graph-depth'),
         limit: argValue('--limit'),
       }));
       return;

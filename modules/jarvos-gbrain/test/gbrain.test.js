@@ -459,6 +459,53 @@ test('runRetrievalEval marks timed-out comparison commands as failed', () => {
   assert.equal(result.results[0].engines.qmd.command.timedOut, true);
 });
 
+test('runRetrievalEval can compare graph sidecar evidence separately from search', () => {
+  const root = tempDir();
+  const evalPath = path.join(root, 'eval.json');
+  const gbrainBin = path.join(root, 'fake-gbrain');
+  fs.writeFileSync(evalPath, JSON.stringify({
+    version: 1,
+    questions: [{
+      query: 'what connects memory and continuity?',
+      graphSeeds: ['projects/jarvos-context-engineering-upgrade'],
+      graphDepth: 2,
+      expected: {
+        gbrain: 'projects/missing-from-search',
+        graph: {
+          all: ['concepts/openclaw-context-management-lessons'],
+          any: ['continuity', 'memory'],
+        },
+      },
+    }],
+  }), 'utf8');
+  fs.writeFileSync(gbrainBin, `#!/usr/bin/env node
+const args = process.argv.slice(2);
+if (args[0] === 'graph-query') {
+  process.stdout.write(JSON.stringify([
+    { slug: 'projects/jarvos-context-engineering-upgrade', title: 'Context Engineering', depth: 0, links: [{ to_slug: 'concepts/openclaw-context-management-lessons', link_type: 'mentions' }] },
+    { slug: 'concepts/openclaw-context-management-lessons', title: 'Memory Continuity Lessons', depth: 1, links: [] }
+  ]));
+} else {
+  process.stdout.write('[0.1] sources/other -- unrelated search result');
+}
+`, 'utf8');
+  fs.chmodSync(gbrainBin, 0o755);
+
+  const result = gbrain.runRetrievalEval({
+    evalPath,
+    gbrainBin,
+    gbrainDir: root,
+  }, { compareGraph: true });
+
+  assert.equal(result.ok, false);
+  assert.deepEqual(result.summary.engines.gbrain, { passed: 0, failed: 1 });
+  assert.deepEqual(result.summary.engines.gbrain_graph, { passed: 1, failed: 0 });
+  assert.equal(result.results[0].engines.gbrain.ok, false);
+  assert.equal(result.results[0].engines.gbrain_graph.ok, true);
+  assert.deepEqual(result.results[0].engineQueries.gbrain_graph, ['projects/jarvos-context-engineering-upgrade']);
+  assert.equal(result.results[0].engines.gbrain_graph.recall.results[0].nodeCount, 2);
+});
+
 test('graphRecall traverses seed pages through the gbrain graph-query command', () => {
   const root = tempDir();
   const binPath = path.join(root, 'fake-gbrain');

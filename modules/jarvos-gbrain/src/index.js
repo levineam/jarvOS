@@ -695,6 +695,75 @@ function graphRecall(overrides = {}, options = {}) {
   };
 }
 
+function graphSeedsForEntry(entry) {
+  if (!entry || typeof entry !== 'object') return [];
+  return asStringList(
+    entry.graphSeeds
+      || entry.graphSeed
+      || entry.gbrainGraphSeeds
+      || (entry.graph && entry.graph.seeds)
+      || (entry.graph && entry.graph.seed),
+  );
+}
+
+function graphDepthForEntry(entry, fallback) {
+  if (!entry || typeof entry !== 'object') return fallback;
+  return positiveInteger(
+    entry.graphDepth
+      || entry.gbrainGraphDepth
+      || (entry.graph && entry.graph.depth),
+    fallback,
+  );
+}
+
+function expectedForGraph(entry) {
+  if (!entry || typeof entry !== 'object') return undefined;
+  if (entry.graphExpected !== undefined) return entry.graphExpected;
+  if (entry.gbrainGraphExpected !== undefined) return entry.gbrainGraphExpected;
+  if (entry.expected && typeof entry.expected === 'object' && !Array.isArray(entry.expected)) {
+    if (entry.expected.graph !== undefined) return entry.expected.graph;
+    if (entry.expected.gbrainGraph !== undefined) return entry.expected.gbrainGraph;
+    if (entry.expected.gbrain_graph !== undefined) return entry.expected.gbrain_graph;
+  }
+  return undefined;
+}
+
+function graphRecallText(recall) {
+  return (recall.results || []).flatMap((result) => [
+    `seed ${result.seed} nodes ${result.nodeCount}`,
+    ...result.nodes.map((node) => {
+      const links = Array.isArray(node.links)
+        ? node.links.flatMap((link) => [
+            link.from_slug,
+            link.to_slug,
+            link.link_type,
+          ]).filter(Boolean)
+        : [];
+      return [
+        node.slug,
+        node.title,
+        node.type,
+        `depth:${node.depth}`,
+        ...links,
+      ].filter(Boolean).join(' ');
+    }),
+  ]).join('\n');
+}
+
+function runGraphEval(config, seeds, expected, dryRun, depth) {
+  const recall = graphRecall(config, { seeds, depth, dryRun });
+  const expectedMatch = dryRun
+    ? { checked: expected !== undefined, matched: null, missing: [] }
+    : matchExpected(graphRecallText(recall), expected);
+  return {
+    ok: recall.ok && (dryRun || !expectedMatch.checked || expectedMatch.matched),
+    expected,
+    expectedMatched: expectedMatch.checked ? expectedMatch.matched : undefined,
+    missingExpected: expectedMatch.missing,
+    recall,
+  };
+}
+
 function summarizeEvalResults(results) {
   const summary = { overall: { passed: 0, failed: 0, skipped: 0 }, engines: {} };
   for (const result of results) {
@@ -720,7 +789,12 @@ function runRetrievalEval(overrides = {}, options = {}) {
   const questions = readEvalQuestions(config);
   const dryRun = options.dryRun === true;
   const compareQmd = options.compareQmd === true;
+  const compareGraph = options.compareGraph === true;
   const limit = positiveInteger(options.limit || overrides.limit || process.env.JARVOS_GBRAIN_EVAL_LIMIT, DEFAULT_RETRIEVAL_LIMIT);
+  const graphDepth = positiveInteger(
+    options.graphDepth || overrides.graphDepth || process.env.JARVOS_GBRAIN_GRAPH_DEPTH,
+    2,
+  );
   const results = questions.map((entry, index) => {
     const query = typeof entry === 'string' ? entry : entry.query;
     if (!query) {
@@ -743,6 +817,18 @@ function runRetrievalEval(overrides = {}, options = {}) {
       ok = ok && qmdResult.ok;
     }
 
+    if (compareGraph && typeof entry === 'object') {
+      const graphSeeds = graphSeedsForEntry(entry);
+      if (graphSeeds.length > 0) {
+        const depth = graphDepthForEntry(entry, graphDepth);
+        const graphExpected = expectedForGraph(entry);
+        const graphResult = runGraphEval(config, graphSeeds, graphExpected, dryRun, depth);
+        engines.gbrain_graph = graphResult;
+        engineQueries.gbrain_graph = graphSeeds;
+        ok = ok && graphResult.ok;
+      }
+    }
+
     return {
       index,
       query,
@@ -760,7 +846,9 @@ function runRetrievalEval(overrides = {}, options = {}) {
     config,
     dryRun,
     compareQmd,
+    compareGraph,
     limit,
+    graphDepth,
     questionCount: questions.length,
     summary: summarizeEvalResults(results),
     results,

@@ -169,6 +169,33 @@ This comparison does not decide that one engine should replace the other. It
 shows where GBrain is strong enough for structured recall and where QMD still
 wins for broad vault lookup.
 
+For cross-source questions, add graph seeds and run the graph sidecar comparison:
+
+```bash
+node scripts/jarvos-gbrain.js eval \
+  --eval-file /path/to/eval-questions.json \
+  --compare-qmd \
+  --compare-graph
+```
+
+```json
+{
+  "query": "What connects memory behavior and agent continuity?",
+  "graphSeeds": ["projects/jarvos-context-engineering-upgrade"],
+  "expected": {
+    "gbrain": "projects/jarvos-context-engineering-upgrade",
+    "graph": {
+      "all": ["concepts/openclaw-context-management-lessons"],
+      "any": ["memory", "continuity"]
+    }
+  }
+}
+```
+
+The `gbrain_graph` engine is reported separately from direct GBrain search. Use
+it to prove sidecar graph traversal covers multi-hop questions without masking
+direct-search misses.
+
 ## Graph Recall
 
 Use graph recall when a planner or runtime already has a likely GBrain seed page
