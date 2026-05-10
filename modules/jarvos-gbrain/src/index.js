@@ -513,13 +513,18 @@ function expectedClauses(expected) {
   };
 }
 
+function hasGenericExpectedClauses(expected) {
+  const clauses = expectedClauses(expected);
+  return !!clauses && (clauses.all.length > 0 || clauses.any.length > 0);
+}
+
 function expectedForEngine(entry, engineName) {
   if (!entry || typeof entry !== 'object') return undefined;
   const directKey = `${engineName}Expected`;
   if (entry[directKey] !== undefined) return entry[directKey];
   if (entry.expected && typeof entry.expected === 'object' && !Array.isArray(entry.expected)) {
     if (entry.expected[engineName] !== undefined) return entry.expected[engineName];
-    if (hasEngineSpecificExpected(entry.expected)) return undefined;
+    if (hasEngineSpecificExpected(entry.expected) && !hasGenericExpectedClauses(entry.expected)) return undefined;
   }
   return entry.expected;
 }
