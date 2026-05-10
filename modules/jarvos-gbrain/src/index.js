@@ -819,9 +819,9 @@ function runRetrievalEval(overrides = {}, options = {}) {
 
     if (compareGraph && typeof entry === 'object') {
       const graphSeeds = graphSeedsForEntry(entry);
-      if (graphSeeds.length > 0) {
+      const graphExpected = expectedForGraph(entry);
+      if (graphSeeds.length > 0 || graphExpected !== undefined) {
         const depth = graphDepthForEntry(entry, graphDepth);
-        const graphExpected = expectedForGraph(entry);
         const graphResult = runGraphEval(config, graphSeeds, graphExpected, dryRun, depth);
         engines.gbrain_graph = graphResult;
         engineQueries.gbrain_graph = graphSeeds;

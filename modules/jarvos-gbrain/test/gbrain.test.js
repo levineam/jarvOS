@@ -506,6 +506,38 @@ if (args[0] === 'graph-query') {
   assert.equal(result.results[0].engines.gbrain_graph.recall.results[0].nodeCount, 2);
 });
 
+test('runRetrievalEval fails graph expectations that omit seeds', () => {
+  const root = tempDir();
+  const evalPath = path.join(root, 'eval.json');
+  const gbrainBin = path.join(root, 'fake-gbrain');
+  fs.writeFileSync(evalPath, JSON.stringify({
+    version: 1,
+    questions: [{
+      query: 'what connects memory and continuity?',
+      expected: {
+        gbrain: 'projects/jarvos-context-engineering-upgrade',
+        graph: 'concepts/openclaw-context-management-lessons',
+      },
+    }],
+  }), 'utf8');
+  fs.writeFileSync(gbrainBin, '#!/bin/sh\nprintf "%s\\n" "projects/jarvos-context-engineering-upgrade"\n', 'utf8');
+  fs.chmodSync(gbrainBin, 0o755);
+
+  const result = gbrain.runRetrievalEval({
+    evalPath,
+    gbrainBin,
+    gbrainDir: root,
+  }, { compareGraph: true });
+
+  assert.equal(result.ok, false);
+  assert.deepEqual(result.summary.engines.gbrain, { passed: 1, failed: 0 });
+  assert.deepEqual(result.summary.engines.gbrain_graph, { passed: 0, failed: 1 });
+  assert.equal(result.results[0].engines.gbrain.ok, true);
+  assert.equal(result.results[0].engines.gbrain_graph.ok, false);
+  assert.equal(result.results[0].engines.gbrain_graph.recall.seedCount, 0);
+  assert.deepEqual(result.results[0].engines.gbrain_graph.missingExpected, ['concepts/openclaw-context-management-lessons']);
+});
+
 test('graphRecall traverses seed pages through the gbrain graph-query command', () => {
   const root = tempDir();
   const binPath = path.join(root, 'fake-gbrain');
