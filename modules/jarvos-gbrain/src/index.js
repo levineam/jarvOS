@@ -764,6 +764,152 @@ function runGraphEval(config, seeds, expected, dryRun, depth) {
   };
 }
 
+function truncateText(value, maxChars) {
+  const text = String(value || '').trim();
+  const limit = positiveInteger(maxChars, 4000);
+  if (text.length <= limit) return text;
+  const headLength = Math.max(1, limit - 20);
+  return `${text.slice(0, headLength).trimEnd()}\n... [truncated]`;
+}
+
+function uniqueStrings(values) {
+  return [...new Set(asStringList(values))];
+}
+
+function extractGbrainSearchSlugs(output, limit) {
+  const slugs = [];
+  const max = positiveInteger(limit, 2);
+  const slugPattern = /\b(?:people|companies|projects|concepts|meetings|sources|notes)\/[a-z0-9][a-z0-9_-]*\b/ig;
+  for (const line of String(output || '').split(/\r?\n/)) {
+    const matches = line.match(slugPattern) || [];
+    for (const match of matches) {
+      slugs.push(match);
+      if (uniqueStrings(slugs).length >= max) return uniqueStrings(slugs).slice(0, max);
+    }
+  }
+  return uniqueStrings(slugs).slice(0, max);
+}
+
+function renderRecallMarkdown(bundle) {
+  const lines = [
+    '# jarvOS Recall Bundle',
+    '',
+    `Query: ${bundle.query || '(missing)'}`,
+    '',
+    '## Direct GBrain Search',
+    '',
+  ];
+
+  const gbrain = bundle.engines?.gbrain;
+  lines.push(`Status: ${gbrain?.ok ? 'ok' : 'failed'}`);
+  if (gbrain?.text) {
+    lines.push('', '```text', gbrain.text, '```');
+  }
+
+  if (bundle.engines?.qmd) {
+    lines.push('', '## QMD Broad Lookup', '', `Status: ${bundle.engines.qmd.ok ? 'ok' : 'failed'}`);
+    if (bundle.engines.qmd.text) {
+      lines.push('', '```text', bundle.engines.qmd.text, '```');
+    }
+  }
+
+  if (bundle.graph) {
+    lines.push('', '## GBrain Graph Sidecar', '', `Status: ${bundle.graph.ok ? 'ok' : 'failed'}`);
+    for (const result of bundle.graph.results || []) {
+      lines.push('', `Seed: ${result.seed} (${result.nodeCount} nodes)`);
+      for (const node of result.nodes || []) {
+        lines.push(`- ${node.slug}${node.title ? ` - ${node.title}` : ''}${node.depth !== undefined ? ` (depth ${node.depth})` : ''}`);
+      }
+    }
+  }
+
+  return `${lines.join('\n').trim()}\n`;
+}
+
+function recallBundle(overrides = {}, options = {}) {
+  const config = resolveConfig(overrides);
+  const query = firstString(options.query, overrides.query);
+  const dryRun = options.dryRun === true;
+  const limit = positiveInteger(options.limit || overrides.limit || process.env.JARVOS_RECALL_LIMIT, DEFAULT_RETRIEVAL_LIMIT);
+  const includeQmd = options.includeQmd !== false && overrides.includeQmd !== false;
+  const autoGraph = options.autoGraph !== false && overrides.autoGraph !== false;
+  const graphDepth = positiveInteger(
+    options.graphDepth || overrides.graphDepth || process.env.JARVOS_GBRAIN_GRAPH_DEPTH,
+    2,
+  );
+  const graphSeedLimit = positiveInteger(
+    options.graphSeedLimit || overrides.graphSeedLimit || process.env.JARVOS_GBRAIN_GRAPH_SEED_LIMIT,
+    2,
+  );
+  const maxChars = positiveInteger(options.maxChars || overrides.maxChars || process.env.JARVOS_RECALL_MAX_CHARS, 4000);
+
+  if (!query) {
+    return {
+      config,
+      ok: false,
+      dryRun,
+      error: 'missing query',
+      query: null,
+      engines: {},
+      graph: null,
+      markdown: renderRecallMarkdown({ query: null, engines: {}, graph: null }),
+    };
+  }
+
+  const gbrainCommand = runCommand(config.gbrainBin, ['search', query, '--limit', String(limit)], {
+    cwd: config.gbrainDir,
+    dryRun,
+    timeoutMs: config.retrievalTimeoutMs,
+  });
+  const engines = {
+    gbrain: {
+      ok: gbrainCommand.ok,
+      text: truncateText(`${gbrainCommand.stdout || ''}\n${gbrainCommand.stderr || ''}`, maxChars),
+      command: summarizeCommand(gbrainCommand),
+    },
+  };
+
+  if (includeQmd) {
+    const qmdCommand = runCommand(config.qmdBin, qmdSearchArgs(config, query, limit), {
+      dryRun,
+      timeoutMs: config.retrievalTimeoutMs,
+    });
+    engines.qmd = {
+      ok: qmdCommand.ok,
+      text: truncateText(`${qmdCommand.stdout || ''}\n${qmdCommand.stderr || ''}`, maxChars),
+      command: summarizeCommand(qmdCommand),
+    };
+  }
+
+  const explicitSeeds = asStringList(options.seeds || overrides.seeds || options.seed || overrides.seed);
+  const discoveredSeeds = autoGraph && gbrainCommand.ok
+    ? extractGbrainSearchSlugs(gbrainCommand.stdout, graphSeedLimit)
+    : [];
+  const seeds = uniqueStrings([...explicitSeeds, ...discoveredSeeds]).slice(0, graphSeedLimit);
+  const graph = seeds.length > 0
+    ? graphRecall(config, { seeds, depth: graphDepth, dryRun })
+    : null;
+
+  const bundle = {
+    config,
+    ok: gbrainCommand.ok && (!includeQmd || engines.qmd.ok) && (!graph || graph.ok),
+    dryRun,
+    query,
+    limit,
+    includeQmd,
+    autoGraph,
+    graphDepth,
+    graphSeedLimit,
+    graphSeeds: seeds,
+    engines,
+    graph,
+  };
+  return {
+    ...bundle,
+    markdown: renderRecallMarkdown(bundle),
+  };
+}
+
 function summarizeEvalResults(results) {
   const summary = { overall: { passed: 0, failed: 0, skipped: 0 }, engines: {} };
   for (const result of results) {
@@ -911,6 +1057,8 @@ module.exports = {
   syncBrain,
   runRetrievalEval,
   graphRecall,
+  recallBundle,
+  renderRecallMarkdown,
   doctor,
   renderBrainPage,
 };

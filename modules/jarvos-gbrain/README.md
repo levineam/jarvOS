@@ -14,6 +14,7 @@ retrieval-eval helpers.
 | **Sync wrapper** | Safe wrapper around `gbrain sync --repo <brainDir>` and `gbrain embed --stale` |
 | **Retrieval eval** | Small fixture-driven checks for whether GBrain can answer expected questions |
 | **Graph recall** | Compact wrapper around `gbrain graph-query` for sidecar recall from known seed pages |
+| **Runtime recall bundle** | One callable bundle for GBrain search, optional QMD lookup, and graph sidecar context |
 
 ## What this module is NOT for
 
@@ -39,6 +40,7 @@ node scripts/jarvos-gbrain.js plan --manifest /path/to/curated-import.json
 node scripts/jarvos-gbrain.js import --dry-run --manifest /path/to/curated-import.json
 node scripts/jarvos-gbrain.js sync --dry-run
 node scripts/jarvos-gbrain.js graph --seed projects/jarvos-context-engineering-upgrade --depth 2
+node scripts/jarvos-gbrain.js recall --query "What connects Paperclip and OpenClaw?" --format markdown
 ```
 
 ## Configuration
@@ -104,6 +106,8 @@ const {
   syncBrain,
   runRetrievalEval,
   graphRecall,
+  recallBundle,
+  renderRecallMarkdown,
   doctor,
 } = require('@jarvos/gbrain');
 ```
@@ -113,6 +117,8 @@ const {
 - `syncBrain(config, { dryRun })` wraps `gbrain sync --repo <brainDir>` and `gbrain embed --stale`.
 - `runRetrievalEval(config, { dryRun, compareQmd })` runs fixture queries through GBrain search and optionally QMD, then fails questions whose expected evidence is missing.
 - `graphRecall(config, { seeds, depth, dryRun })` runs `gbrain graph-query <seed> --depth <n>` and returns parsed graph nodes for sidecar recall.
+- `recallBundle(config, { query, includeQmd, autoGraph, seeds })` returns a compact runtime bundle with direct GBrain search, optional QMD broad lookup, and graph sidecar expansion.
+- `renderRecallMarkdown(bundle)` renders a bundle into context-ready Markdown.
 - `doctor(config)` checks manifest, eval file, brain directory, GBrain directory, and CLI availability.
 
 ## Retrieval Eval Fixture
@@ -211,6 +217,26 @@ node scripts/jarvos-gbrain.js graph \
 The command returns one result per seed with parsed GBrain graph nodes. This is
 intended as the sidecar path after direct search has found an anchor page; broad
 vault lookup still belongs to QMD.
+
+## Runtime Recall Bundle
+
+Use the recall bundle as the stable OpenClaw/jarVOS call surface for a user
+question. It keeps the retrieval layers distinct while returning one compact
+payload that can be injected into context:
+
+```bash
+node scripts/jarvos-gbrain.js recall \
+  --query "What connects Paperclip setup, jarvOS task management, and OpenClaw operation?" \
+  --format markdown
+```
+
+By default, the bundle runs direct GBrain search, QMD broad lookup, and graph
+expansion from the first GBrain search slugs. Use `--graph-seed` to force known
+anchors, `--no-qmd` when QMD is unavailable, or `--no-graph` when only direct
+search is needed.
+
+This command is a retrieval adapter, not automatic prompt injection. Runtime
+wiring should decide when to call it and how much of its Markdown to include.
 
 ## Role in the jarvOS Architecture
 

@@ -7,6 +7,7 @@ const {
   syncBrain,
   runRetrievalEval,
   graphRecall,
+  recallBundle,
   doctor,
 } = require('../src/index.js');
 
@@ -46,6 +47,9 @@ function cliConfig() {
     seeds: argValues('--seed'),
     depth: argValue('--depth'),
     graphDepth: argValue('--graph-depth'),
+    graphSeedLimit: argValue('--graph-seed-limit'),
+    query: argValue('--query'),
+    maxChars: argValue('--max-chars'),
   };
 }
 
@@ -54,7 +58,7 @@ function printJson(value) {
 }
 
 function usage() {
-  process.stdout.write(`jarvos-gbrain\n\nCommands:\n  plan [--manifest path]\n  import [--dry-run] [--manifest path] [--brain-dir path] [--vault-dir path]\n  sync [--dry-run] [--brain-dir path] [--gbrain-dir path]\n  eval [--dry-run] [--eval-file path] [--compare-qmd] [--compare-graph] [--graph-depth n]\n       [--limit n] [--timeout-ms n] [--qmd-bin path] [--qmd-mode search|query|vsearch]\n       [--qmd-collection name] [--qmd-index name]\n  graph [--dry-run] --seed slug [--seed slug] [--depth n] [--timeout-ms n]\n  doctor\n\n`);
+  process.stdout.write(`jarvos-gbrain\n\nCommands:\n  plan [--manifest path]\n  import [--dry-run] [--manifest path] [--brain-dir path] [--vault-dir path]\n  sync [--dry-run] [--brain-dir path] [--gbrain-dir path]\n  eval [--dry-run] [--eval-file path] [--compare-qmd] [--compare-graph] [--graph-depth n]\n       [--limit n] [--timeout-ms n] [--qmd-bin path] [--qmd-mode search|query|vsearch]\n       [--qmd-collection name] [--qmd-index name]\n  graph [--dry-run] --seed slug [--seed slug] [--depth n] [--timeout-ms n]\n  recall --query text [--no-qmd] [--no-graph] [--graph-seed slug] [--graph-depth n]\n         [--graph-seed-limit n] [--limit n] [--timeout-ms n] [--format markdown]\n  doctor\n\n`);
 }
 
 function main() {
@@ -100,6 +104,26 @@ function main() {
         seeds: argValues('--seed'),
         depth: argValue('--depth'),
       }));
+      return;
+    }
+
+    if (command === 'recall') {
+      const result = recallBundle(config, {
+        dryRun: hasFlag('--dry-run'),
+        query: argValue('--query'),
+        includeQmd: !hasFlag('--no-qmd'),
+        autoGraph: !hasFlag('--no-graph'),
+        seeds: argValues('--graph-seed'),
+        graphDepth: argValue('--graph-depth'),
+        graphSeedLimit: argValue('--graph-seed-limit'),
+        limit: argValue('--limit'),
+        maxChars: argValue('--max-chars'),
+      });
+      if (argValue('--format') === 'markdown') {
+        process.stdout.write(result.markdown);
+      } else {
+        printJson(result);
+      }
       return;
     }
 

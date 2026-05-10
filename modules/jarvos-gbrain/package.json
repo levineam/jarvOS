@@ -16,7 +16,8 @@
     "plan": "node scripts/jarvos-gbrain.js plan",
     "import:dry": "node scripts/jarvos-gbrain.js import --dry-run",
     "sync": "node scripts/jarvos-gbrain.js sync",
-    "eval": "node scripts/jarvos-gbrain.js eval"
+    "eval": "node scripts/jarvos-gbrain.js eval",
+    "recall": "node scripts/jarvos-gbrain.js recall"
   },
   "repository": {
     "type": "git",

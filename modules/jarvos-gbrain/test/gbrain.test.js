@@ -538,6 +538,55 @@ test('runRetrievalEval fails graph expectations that omit seeds', () => {
   assert.deepEqual(result.results[0].engines.gbrain_graph.missingExpected, ['concepts/openclaw-context-management-lessons']);
 });
 
+test('recallBundle combines GBrain search, QMD lookup, and graph expansion', () => {
+  const root = tempDir();
+  const gbrainBin = path.join(root, 'fake-gbrain');
+  const qmdBin = path.join(root, 'fake-qmd');
+  fs.writeFileSync(gbrainBin, `#!/usr/bin/env node
+const args = process.argv.slice(2);
+if (args[0] === 'graph-query') {
+  process.stdout.write(JSON.stringify([
+    { slug: args[1], title: 'JarVOS Runtime Recall', type: 'project', depth: 0, links: [] },
+    { slug: 'concepts/openclaw-context-management-lessons', title: 'OpenClaw Context Lessons', type: 'concept', depth: 1, links: [] }
+  ]));
+} else {
+  process.stdout.write('[0.99] projects/jarvos-runtime-recall -- structured GBrain context\\n[0.80] concepts/other -- extra context');
+}
+`, 'utf8');
+  fs.writeFileSync(qmdBin, '#!/bin/sh\nprintf "%s\\n" "[{\\"file\\":\\"qmd://notes/runtime-recall.md\\",\\"snippet\\":\\"broad lookup\\"}]"\n', 'utf8');
+  fs.chmodSync(gbrainBin, 0o755);
+  fs.chmodSync(qmdBin, 0o755);
+
+  const result = gbrain.recallBundle({
+    gbrainBin,
+    gbrainDir: root,
+    qmdBin,
+  }, {
+    query: 'runtime recall',
+    limit: 2,
+    graphSeedLimit: 1,
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.engines.gbrain.ok, true);
+  assert.equal(result.engines.qmd.ok, true);
+  assert.deepEqual(result.graphSeeds, ['projects/jarvos-runtime-recall']);
+  assert.equal(result.graph.results[0].nodeCount, 2);
+  assert.deepEqual(result.engines.qmd.command.args, ['search', 'runtime recall', '-n', '2', '--json']);
+  assert.match(result.markdown, /## Direct GBrain Search/);
+  assert.match(result.markdown, /## QMD Broad Lookup/);
+  assert.match(result.markdown, /## GBrain Graph Sidecar/);
+});
+
+test('recallBundle reports missing query without spawning commands', () => {
+  const result = gbrain.recallBundle({}, { query: '' });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.error, 'missing query');
+  assert.deepEqual(result.engines, {});
+  assert.match(result.markdown, /Query: \(missing\)/);
+});
+
 test('graphRecall traverses seed pages through the gbrain graph-query command', () => {
   const root = tempDir();
   const binPath = path.join(root, 'fake-gbrain');
