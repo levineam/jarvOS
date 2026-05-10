@@ -11,7 +11,8 @@ const DEFAULT_EVAL_PATH = path.join(MODULE_ROOT, 'config', 'eval-questions.json'
 const DEFAULT_VAULT_DIR = path.join(os.homedir(), 'Documents', 'Vault v3');
 const DEFAULT_BRAIN_DIR = path.join(os.homedir(), 'brain');
 const DEFAULT_GBRAIN_DIR = path.join(os.homedir(), 'gbrain');
-const JARVOS_PATHS_MODULE = path.resolve(
+const JARVOS_PATHS_PACKAGE = '@jarvos/secondbrain/bridge/config/jarvos-paths.js';
+const JARVOS_PATHS_SOURCE_MODULE = path.resolve(
   MODULE_ROOT,
   '..',
   'jarvos-secondbrain',
@@ -51,7 +52,16 @@ function firstString(...values) {
 
 function loadJarvosPaths() {
   try {
-    return require(JARVOS_PATHS_MODULE);
+    const packagePath = require.resolve(JARVOS_PATHS_PACKAGE, {
+      paths: [MODULE_ROOT, process.cwd()],
+    });
+    return require(packagePath);
+  } catch {
+    // Fall through to the monorepo source path for local development.
+  }
+
+  try {
+    return require(JARVOS_PATHS_SOURCE_MODULE);
   } catch {
     return null;
   }
