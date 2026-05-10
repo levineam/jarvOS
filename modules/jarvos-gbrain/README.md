@@ -51,6 +51,11 @@ resolver from `@jarvos/secondbrain`, then portable defaults:
 | `JARVOS_BRAIN_DIR` | `~/brain` | GBrain content repo |
 | `JARVOS_GBRAIN_DIR` | `~/gbrain` | GBrain source/CLI repo |
 | `JARVOS_GBRAIN_BIN` | `gbrain` | GBrain CLI command |
+| `JARVOS_QMD_BIN` | `qmd` | QMD CLI command for optional comparison evals |
+| `JARVOS_QMD_MODE` | `search` | QMD command for comparison evals: `search`, `query`, or `vsearch` |
+| `JARVOS_QMD_COLLECTION` | unset | Optional QMD collection filter |
+| `JARVOS_QMD_INDEX` | unset | Optional QMD index name |
+| `JARVOS_RETRIEVAL_TIMEOUT_MS` | `15000` | Per-query timeout for retrieval eval commands |
 | `JARVOS_GBRAIN_IMPORT_MANIFEST` | `<package-root>/config/curated-import.json` | Import manifest |
 | `JARVOS_GBRAIN_EVAL_QUESTIONS` | `<package-root>/config/eval-questions.json` | Retrieval eval fixture |
 
@@ -103,7 +108,7 @@ const {
 - `createImportPlan(config)` reads the manifest and returns planned source/target pairs.
 - `importToBrain(plan, { dryRun })` generates GBrain pages; dry-run reports writes without writing.
 - `syncBrain(config, { dryRun })` wraps `gbrain sync --repo <brainDir>` and `gbrain embed --stale`.
-- `runRetrievalEval(config, { dryRun })` runs fixture queries through GBrain search and fails questions whose `expected` evidence is missing from search output.
+- `runRetrievalEval(config, { dryRun, compareQmd })` runs fixture queries through GBrain search and optionally QMD, then fails questions whose expected evidence is missing.
 - `doctor(config)` checks manifest, eval file, brain directory, GBrain directory, and CLI availability.
 
 ## Retrieval Eval Fixture
@@ -126,6 +131,39 @@ const {
 `expected` may be a string, an array of required strings, or an object with
 `slug`, `slugs`, `title`, `text`, `contains`, `all`, and `any` checks. String
 matching is case-insensitive against `gbrain search` output.
+
+Run comparison evals with:
+
+```bash
+node scripts/jarvos-gbrain.js eval --eval-file /path/to/eval-questions.json --compare-qmd
+```
+
+When using `--compare-qmd`, each question runs against GBrain and QMD. Use
+engine-specific expected evidence when the same answer has different identifiers
+in each engine. You may also provide `gbrainQuery` or `qmdQuery` when a runtime
+planner should send a keywordized tool query while preserving the human-facing
+question:
+
+```json
+{
+  "query": "Where is the OpenClaw gateway recovery runbook?",
+  "qmdQuery": "OpenClaw gateway auth recovery",
+  "expected": {
+    "gbrain": {
+      "slug": "sources/openclaw-gateway-auth-recovery-playbook",
+      "any": ["gateway", "auth"]
+    },
+    "qmd": {
+      "all": ["qmd://notes/openclaw-gateway-auth-recovery-playbook.md"],
+      "any": ["OpenClaw Gateway", "auth"]
+    }
+  }
+}
+```
+
+This comparison does not decide that one engine should replace the other. It
+shows where GBrain is strong enough for structured recall and where QMD still
+wins for broad vault lookup.
 
 ## Role in the jarvOS Architecture
 

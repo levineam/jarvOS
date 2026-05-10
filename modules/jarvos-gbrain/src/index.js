@@ -11,6 +11,9 @@ const DEFAULT_EVAL_PATH = path.join(MODULE_ROOT, 'config', 'eval-questions.json'
 const DEFAULT_VAULT_DIR = path.join(os.homedir(), 'Documents', 'Vault v3');
 const DEFAULT_BRAIN_DIR = path.join(os.homedir(), 'brain');
 const DEFAULT_GBRAIN_DIR = path.join(os.homedir(), 'gbrain');
+const DEFAULT_QMD_BIN = 'qmd';
+const DEFAULT_RETRIEVAL_LIMIT = 5;
+const DEFAULT_RETRIEVAL_TIMEOUT_MS = 15000;
 const JARVOS_PATHS_PACKAGE = '@jarvos/secondbrain/bridge/config/jarvos-paths.js';
 const JARVOS_PATHS_SOURCE_MODULE = path.resolve(
   MODULE_ROOT,
@@ -137,6 +140,14 @@ function resolveConfig(overrides = {}) {
     DEFAULT_EVAL_PATH,
   ));
   const gbrainBin = expandTilde(firstString(overrides.gbrainBin, process.env.JARVOS_GBRAIN_BIN, 'gbrain'));
+  const qmdBin = expandTilde(firstString(overrides.qmdBin, process.env.JARVOS_QMD_BIN, DEFAULT_QMD_BIN));
+  const qmdMode = firstString(overrides.qmdMode, process.env.JARVOS_QMD_MODE, 'search');
+  const qmdCollection = firstString(overrides.qmdCollection, process.env.JARVOS_QMD_COLLECTION);
+  const qmdIndex = firstString(overrides.qmdIndex, process.env.JARVOS_QMD_INDEX);
+  const retrievalTimeoutMs = positiveInteger(
+    overrides.retrievalTimeoutMs || process.env.JARVOS_RETRIEVAL_TIMEOUT_MS,
+    DEFAULT_RETRIEVAL_TIMEOUT_MS,
+  );
 
   return {
     vaultDir,
@@ -146,6 +157,11 @@ function resolveConfig(overrides = {}) {
     manifestPath,
     evalPath,
     gbrainBin,
+    qmdBin,
+    qmdMode,
+    qmdCollection,
+    qmdIndex,
+    retrievalTimeoutMs,
   };
 }
 
@@ -412,19 +428,25 @@ function importToBrain(planOrOverrides = {}, options = {}) {
 
 function runCommand(command, args, options = {}) {
   if (options.dryRun) {
-    return { ok: true, dryRun: true, command, args, status: 0, stdout: '', stderr: '' };
+    return { ok: true, dryRun: true, command, args, status: 0, signal: null, timedOut: false, stdout: '', stderr: '', error: null };
   }
   const result = spawnSync(command, args, {
     cwd: options.cwd || process.cwd(),
     env: { ...process.env, ...(options.env || {}) },
     encoding: 'utf8',
+    timeout: positiveInteger(options.timeoutMs, DEFAULT_RETRIEVAL_TIMEOUT_MS),
+    killSignal: 'SIGKILL',
+    maxBuffer: 10 * 1024 * 1024,
   });
+  const timedOut = result.error && result.error.code === 'ETIMEDOUT';
   return {
-    ok: result.status === 0,
+    ok: result.status === 0 && !timedOut,
     dryRun: false,
     command,
     args,
     status: result.status,
+    signal: result.signal || null,
+    timedOut: !!timedOut,
     stdout: result.stdout || '',
     stderr: result.stderr || '',
     error: result.error ? result.error.message : null,
@@ -448,7 +470,9 @@ function syncBrain(overrides = {}, options = {}) {
 
 function readEvalQuestions(config) {
   const data = readJsonFile(config.evalPath, { version: 1, questions: [] });
-  return Array.isArray(data.questions) ? data.questions : [];
+  return Array.isArray(data.questions)
+    ? data.questions.filter((question) => !(question && typeof question === 'object' && question.include === false))
+    : [];
 }
 
 function asStringList(value) {
@@ -484,6 +508,27 @@ function expectedClauses(expected) {
   };
 }
 
+function expectedForEngine(entry, engineName) {
+  if (!entry || typeof entry !== 'object') return undefined;
+  const directKey = `${engineName}Expected`;
+  if (entry[directKey] !== undefined) return entry[directKey];
+  if (entry.expected && typeof entry.expected === 'object' && !Array.isArray(entry.expected)) {
+    if (entry.expected[engineName] !== undefined) return entry.expected[engineName];
+  }
+  return entry.expected;
+}
+
+function queryForEngine(entry, engineName, fallback) {
+  if (!entry || typeof entry !== 'object') return fallback;
+  const directKey = `${engineName}Query`;
+  if (typeof entry[directKey] === 'string' && entry[directKey].trim()) return entry[directKey].trim();
+  if (entry.queries && typeof entry.queries === 'object') {
+    const query = entry.queries[engineName];
+    if (typeof query === 'string' && query.trim()) return query.trim();
+  }
+  return fallback;
+}
+
 function matchExpected(output, expected) {
   const clauses = expectedClauses(expected);
   if (!clauses) return { checked: false, matched: true, missing: [] };
@@ -501,38 +546,118 @@ function matchExpected(output, expected) {
   };
 }
 
+function positiveInteger(value, fallback) {
+  const parsed = Number.parseInt(String(value ?? ''), 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function qmdSearchArgs(config, query, limit) {
+  const mode = ['search', 'query', 'vsearch'].includes(config.qmdMode) ? config.qmdMode : 'search';
+  const args = [];
+  if (config.qmdIndex) args.push('--index', config.qmdIndex);
+  args.push(mode, query, '-n', String(limit), '--json');
+  if (config.qmdCollection) args.push('--collection', config.qmdCollection);
+  return args;
+}
+
+function evalCommandResult(command, expected, dryRun) {
+  const expectedMatch = dryRun
+    ? { checked: expected !== undefined, matched: null, missing: [] }
+    : matchExpected(`${command.stdout || ''}\n${command.stderr || ''}`, expected);
+  return {
+    ok: command.ok && (dryRun || !expectedMatch.checked || expectedMatch.matched),
+    expected,
+    expectedMatched: expectedMatch.checked ? expectedMatch.matched : undefined,
+    missingExpected: expectedMatch.missing,
+    command,
+  };
+}
+
+function runGbrainEval(config, query, expected, dryRun, limit) {
+  const command = runCommand(config.gbrainBin, ['search', query, '--limit', String(limit)], {
+    cwd: config.gbrainDir,
+    dryRun,
+    timeoutMs: config.retrievalTimeoutMs,
+  });
+  return evalCommandResult(command, expected, dryRun);
+}
+
+function runQmdEval(config, query, expected, dryRun, limit) {
+  const command = runCommand(config.qmdBin, qmdSearchArgs(config, query, limit), {
+    dryRun,
+    timeoutMs: config.retrievalTimeoutMs,
+  });
+  return evalCommandResult(command, expected, dryRun);
+}
+
+function summarizeEvalResults(results) {
+  const summary = { overall: { passed: 0, failed: 0, skipped: 0 }, engines: {} };
+  for (const result of results) {
+    if (result.skipped) {
+      summary.overall.skipped += 1;
+    } else if (result.ok) {
+      summary.overall.passed += 1;
+    } else {
+      summary.overall.failed += 1;
+    }
+
+    for (const [engineName, engineResult] of Object.entries(result.engines || {})) {
+      if (!summary.engines[engineName]) summary.engines[engineName] = { passed: 0, failed: 0 };
+      if (engineResult.ok) summary.engines[engineName].passed += 1;
+      else summary.engines[engineName].failed += 1;
+    }
+  }
+  return summary;
+}
+
 function runRetrievalEval(overrides = {}, options = {}) {
   const config = resolveConfig(overrides);
   const questions = readEvalQuestions(config);
   const dryRun = options.dryRun === true;
+  const compareQmd = options.compareQmd === true;
+  const limit = positiveInteger(options.limit || overrides.limit || process.env.JARVOS_GBRAIN_EVAL_LIMIT, DEFAULT_RETRIEVAL_LIMIT);
   const results = questions.map((entry, index) => {
     const query = typeof entry === 'string' ? entry : entry.query;
     if (!query) {
       return { index, ok: false, skipped: true, reason: 'missing query' };
     }
-    const command = runCommand(config.gbrainBin, ['search', query, '--limit', '5'], {
-      cwd: config.gbrainDir,
-      dryRun,
-    });
-    const expected = typeof entry === 'object' ? entry.expected : undefined;
-    const expectedMatch = dryRun
-      ? { checked: expected !== undefined, matched: null, missing: [] }
-      : matchExpected(command.stdout, expected);
-    const ok = command.ok && (dryRun || !expectedMatch.checked || expectedMatch.matched);
+
+    const gbrainQuery = typeof entry === 'object' ? queryForEngine(entry, 'gbrain', query) : query;
+    const gbrainExpected = typeof entry === 'object' ? expectedForEngine(entry, 'gbrain') : undefined;
+    const gbrainResult = runGbrainEval(config, gbrainQuery, gbrainExpected, dryRun, limit);
+    const engines = { gbrain: gbrainResult };
+    const engineQueries = { gbrain: gbrainQuery };
+    let ok = gbrainResult.ok;
+
+    if (compareQmd) {
+      const qmdQuery = typeof entry === 'object' ? queryForEngine(entry, 'qmd', query) : query;
+      const qmdExpected = typeof entry === 'object' ? expectedForEngine(entry, 'qmd') : undefined;
+      const qmdResult = runQmdEval(config, qmdQuery, qmdExpected, dryRun, limit);
+      engines.qmd = qmdResult;
+      engineQueries.qmd = qmdQuery;
+      ok = ok && qmdResult.ok;
+    }
+
     return {
       index,
       query,
       ok,
-      expected,
-      expectedMatched: expectedMatch.checked ? expectedMatch.matched : undefined,
-      missingExpected: expectedMatch.missing,
-      command,
+      bucket: typeof entry === 'object' ? entry.bucket : undefined,
+      engineQueries,
+      expected: gbrainExpected,
+      expectedMatched: gbrainResult.expectedMatched,
+      missingExpected: gbrainResult.missingExpected,
+      command: gbrainResult.command,
+      engines,
     };
   });
   return {
     config,
     dryRun,
+    compareQmd,
+    limit,
     questionCount: questions.length,
+    summary: summarizeEvalResults(results),
     results,
     ok: results.every((result) => result.ok || result.skipped),
   };
@@ -569,11 +694,12 @@ function doctor(overrides = {}) {
     { name: 'brainDir', ok: fs.existsSync(config.brainDir), detail: config.brainDir },
     { name: 'gbrainDir', ok: fs.existsSync(config.gbrainDir), detail: config.gbrainDir },
     { name: 'gbrainBin', ok: commandExists(config.gbrainBin), detail: config.gbrainBin },
+    { name: 'qmdBin', ok: commandExists(config.qmdBin), detail: config.qmdBin, optional: true },
   ];
   return {
     config,
     checks,
-    ok: checks.every((check) => check.ok),
+    ok: checks.every((check) => check.ok || check.optional),
   };
 }
 
@@ -581,6 +707,8 @@ module.exports = {
   TYPE_DIRS,
   DEFAULT_MANIFEST_PATH,
   DEFAULT_EVAL_PATH,
+  DEFAULT_QMD_BIN,
+  DEFAULT_RETRIEVAL_TIMEOUT_MS,
   expandTilde,
   resolveConfig,
   slugify,

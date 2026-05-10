@@ -370,6 +370,92 @@ test('runRetrievalEval passes when expected evidence appears in search output', 
   assert.deepEqual(result.results[0].missingExpected, []);
 });
 
+test('runRetrievalEval can compare QMD with engine-specific expected evidence', () => {
+  const root = tempDir();
+  const evalPath = path.join(root, 'eval.json');
+  const gbrainBin = path.join(root, 'fake-gbrain');
+  const qmdBin = path.join(root, 'fake-qmd');
+  const query = 'where is OpenClaw gateway recovery documented?';
+  fs.writeFileSync(evalPath, JSON.stringify({
+    version: 1,
+    questions: [{
+      query,
+      qmdQuery: 'OpenClaw gateway auth recovery',
+      expected: {
+        gbrain: {
+          slug: 'sources/openclaw-gateway-auth-recovery-playbook',
+          any: ['gateway', 'auth'],
+        },
+        qmd: {
+          all: ['qmd://notes/openclaw-gateway-auth-recovery-playbook.md'],
+          any: ['OpenClaw Gateway', 'auth'],
+        },
+      },
+    }],
+  }), 'utf8');
+  fs.writeFileSync(gbrainBin, '#!/bin/sh\nprintf "%s\\n" "[0.99] sources/openclaw-gateway-auth-recovery-playbook -- gateway auth"\n', 'utf8');
+  fs.writeFileSync(qmdBin, '#!/bin/sh\nprintf "%s\\n" "[{\\"file\\":\\"qmd://notes/openclaw-gateway-auth-recovery-playbook.md\\",\\"title\\":\\"OpenClaw Gateway + Auth Recovery Playbook\\",\\"snippet\\":\\"auth recovery\\"}]"\n', 'utf8');
+  fs.chmodSync(gbrainBin, 0o755);
+  fs.chmodSync(qmdBin, 0o755);
+
+  const result = gbrain.runRetrievalEval({
+    evalPath,
+    gbrainBin,
+    gbrainDir: root,
+    qmdBin,
+    qmdCollection: 'notes',
+  }, { compareQmd: true, limit: 3 });
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.summary.engines.gbrain, { passed: 1, failed: 0 });
+  assert.deepEqual(result.summary.engines.qmd, { passed: 1, failed: 0 });
+  assert.equal(result.compareQmd, true);
+  assert.equal(result.results[0].engines.gbrain.ok, true);
+  assert.equal(result.results[0].engines.qmd.ok, true);
+  assert.deepEqual(result.results[0].engines.qmd.command.args, [
+    'search',
+    'OpenClaw gateway auth recovery',
+    '-n',
+    '3',
+    '--json',
+    '--collection',
+    'notes',
+  ]);
+});
+
+test('runRetrievalEval marks timed-out comparison commands as failed', () => {
+  const root = tempDir();
+  const evalPath = path.join(root, 'eval.json');
+  const gbrainBin = path.join(root, 'fake-gbrain');
+  const qmdBin = path.join(root, 'slow-qmd');
+  fs.writeFileSync(evalPath, JSON.stringify({
+    version: 1,
+    questions: [{
+      query: 'slow comparison',
+      expected: {
+        gbrain: 'projects/ok',
+        qmd: 'qmd://notes/ok.md',
+      },
+    }],
+  }), 'utf8');
+  fs.writeFileSync(gbrainBin, '#!/bin/sh\nprintf "%s\\n" "projects/ok"\n', 'utf8');
+  fs.writeFileSync(qmdBin, '#!/bin/sh\nsleep 2\nprintf "%s\\n" "qmd://notes/ok.md"\n', 'utf8');
+  fs.chmodSync(gbrainBin, 0o755);
+  fs.chmodSync(qmdBin, 0o755);
+
+  const result = gbrain.runRetrievalEval({
+    evalPath,
+    gbrainBin,
+    gbrainDir: root,
+    qmdBin,
+    retrievalTimeoutMs: 100,
+  }, { compareQmd: true });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.results[0].engines.qmd.ok, false);
+  assert.equal(result.results[0].engines.qmd.command.timedOut, true);
+});
+
 test('resolveConfig expands tilde gbrainBin paths before spawning', () => {
   const result = gbrain.resolveConfig({ gbrainBin: '~/bin/gbrain' });
   assert.equal(result.gbrainBin, path.join(os.homedir(), 'bin', 'gbrain'));
