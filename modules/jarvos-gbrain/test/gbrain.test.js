@@ -459,7 +459,7 @@ test('runRetrievalEval marks timed-out comparison commands as failed', () => {
   assert.equal(result.results[0].engines.qmd.command.timedOut, true);
 });
 
-test('graphRecall traverses seed pages through the gbrain graph command', () => {
+test('graphRecall traverses seed pages through the gbrain graph-query command', () => {
   const root = tempDir();
   const binPath = path.join(root, 'fake-gbrain');
   const argsPath = path.join(root, 'args.json');
@@ -489,7 +489,7 @@ process.stdout.write(JSON.stringify([
   assert.equal(result.results[0].nodeCount, 2);
   assert.equal(result.results[0].nodes[1].slug, 'concepts/openclaw-context-management-lessons');
   assert.equal(fs.realpathSync(captured.cwd), fs.realpathSync(root));
-  assert.deepEqual(captured.args, ['graph', 'projects/jarvos-context-engineering-upgrade', '--depth', '3']);
+  assert.deepEqual(captured.args, ['graph-query', 'projects/jarvos-context-engineering-upgrade', '--depth', '3']);
 });
 
 test('graphRecall fails when graph output is not a JSON array', () => {

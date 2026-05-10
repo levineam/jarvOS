@@ -13,7 +13,7 @@ retrieval-eval helpers.
 | **Provenance** | Original vault path, source type, imported timestamp, and generator metadata |
 | **Sync wrapper** | Safe wrapper around `gbrain sync --repo <brainDir>` and `gbrain embed --stale` |
 | **Retrieval eval** | Small fixture-driven checks for whether GBrain can answer expected questions |
-| **Graph recall** | Compact wrapper around `gbrain graph` for sidecar recall from known seed pages |
+| **Graph recall** | Compact wrapper around `gbrain graph-query` for sidecar recall from known seed pages |
 
 ## What this module is NOT for
 
@@ -112,7 +112,7 @@ const {
 - `importToBrain(plan, { dryRun })` generates GBrain pages; dry-run reports writes without writing.
 - `syncBrain(config, { dryRun })` wraps `gbrain sync --repo <brainDir>` and `gbrain embed --stale`.
 - `runRetrievalEval(config, { dryRun, compareQmd })` runs fixture queries through GBrain search and optionally QMD, then fails questions whose expected evidence is missing.
-- `graphRecall(config, { seeds, depth, dryRun })` runs `gbrain graph <seed> --depth <n>` and returns parsed graph nodes for sidecar recall.
+- `graphRecall(config, { seeds, depth, dryRun })` runs `gbrain graph-query <seed> --depth <n>` and returns parsed graph nodes for sidecar recall.
 - `doctor(config)` checks manifest, eval file, brain directory, GBrain directory, and CLI availability.
 
 ## Retrieval Eval Fixture

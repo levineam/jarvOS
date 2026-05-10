@@ -627,7 +627,7 @@ function graphRecall(overrides = {}, options = {}) {
   const seedValues = options.seeds || overrides.seeds || options.seed || overrides.seed;
   const seeds = asStringList(seedValues);
   const results = seeds.map((seed) => {
-    const command = runCommand(config.gbrainBin, ['graph', seed, '--depth', String(depth)], {
+    const command = runCommand(config.gbrainBin, ['graph-query', seed, '--depth', String(depth)], {
       cwd: config.gbrainDir,
       dryRun,
       timeoutMs: config.retrievalTimeoutMs,
@@ -641,7 +641,7 @@ function graphRecall(overrides = {}, options = {}) {
       depth,
       nodeCount: nodes.length,
       nodes,
-      parseError: parseOk ? null : parsed.error || 'Expected gbrain graph to return a JSON array',
+      parseError: parseOk ? null : parsed.error || 'Expected gbrain graph-query to return a JSON array',
       command: summarizeCommand(command),
     };
   });
