@@ -8,14 +8,82 @@ const { spawnSync } = require('child_process');
 const test = require('node:test');
 
 const gbrain = require('../src/index.js');
+const JARVOS_PATHS_MODULE = path.resolve(
+  __dirname,
+  '..',
+  '..',
+  'jarvos-secondbrain',
+  'bridge',
+  'config',
+  'jarvos-paths.js',
+);
 
 function tempDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-gbrain-'));
 }
 
+function withEnv(vars, fn) {
+  const saved = {};
+  for (const [key, value] of Object.entries(vars)) {
+    saved[key] = process.env[key];
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  }
+
+  try {
+    if (fs.existsSync(JARVOS_PATHS_MODULE)) {
+      require(JARVOS_PATHS_MODULE).resetConfigCache();
+    }
+    return fn();
+  } finally {
+    for (const [key, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    if (fs.existsSync(JARVOS_PATHS_MODULE)) {
+      require(JARVOS_PATHS_MODULE).resetConfigCache();
+    }
+  }
+}
+
 test('slugify produces stable filesystem-safe slugs', () => {
   assert.equal(gbrain.slugify('Andrew & JarVOS: Brain Notes'), 'andrew-and-jarvos-brain-notes');
   assert.equal(gbrain.slugify(''), 'untitled');
+});
+
+test('resolveConfig uses shared jarvOS vault paths when available', () => {
+  const root = tempDir();
+  const clawd = path.join(root, 'clawd');
+  const vault = path.join(root, 'Vaults', 'Vault v3');
+  const notes = path.join(vault, 'Notes');
+  fs.mkdirSync(notes, { recursive: true });
+  fs.mkdirSync(clawd, { recursive: true });
+  fs.writeFileSync(
+    path.join(clawd, 'jarvos.config.json'),
+    JSON.stringify({ paths: { vault, notes } }),
+    'utf8',
+  );
+
+  withEnv({
+    JARVOS_CLAWD_DIR: clawd,
+    CLAWD_DIR: undefined,
+    JARVOS_VAULT_DIR: undefined,
+    JARVOS_NOTES_DIR: undefined,
+    VAULT_NOTES_DIR: undefined,
+  }, () => {
+    const result = gbrain.resolveConfig({ brainDir: path.join(root, 'brain') });
+    assert.equal(result.vaultDir, vault);
+    assert.equal(result.notesDir, notes);
+  });
+});
+
+test('resolveConfig derives notes from an explicit vault override', () => {
+  const root = tempDir();
+  const vault = path.join(root, 'vault');
+  const result = gbrain.resolveConfig({ vaultDir: vault });
+
+  assert.equal(result.vaultDir, vault);
+  assert.equal(result.notesDir, path.join(vault, 'Notes'));
 });
 
 test('createImportPlan maps curated manifest items to GBrain targets', () => {
@@ -228,11 +296,15 @@ test('doctor can detect commands available on PATH', () => {
   const result = gbrain.doctor({
     manifestPath,
     evalPath,
+    vaultDir: root,
+    notesDir: root,
     brainDir: root,
     gbrainDir: root,
     gbrainBin: 'node',
   });
 
+  assert.equal(result.checks.find((check) => check.name === 'vaultDir').ok, true);
+  assert.equal(result.checks.find((check) => check.name === 'notesDir').ok, true);
   assert.equal(result.checks.find((check) => check.name === 'gbrainBin').ok, true);
 });
 
@@ -247,6 +319,8 @@ test('doctor does not execute shell metacharacters in gbrainBin', () => {
   const result = gbrain.doctor({
     manifestPath,
     evalPath,
+    vaultDir: root,
+    notesDir: root,
     brainDir: root,
     gbrainDir: root,
     gbrainBin: `node; touch ${sentinel}`,
