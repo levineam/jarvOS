@@ -199,6 +199,7 @@ test('importToBrain writes generated pages with source provenance', () => {
   const body = fs.readFileSync(target, 'utf8');
 
   assert.equal(fs.existsSync(target), true);
+  assert.match(body, /provenance:\n  kind: "obsidian"/);
   assert.match(body, /importedBy: "jarvos-gbrain"/);
   assert.match(body, /Source path: `Notes\/Concept.md`/);
   assert.match(body, /A durable concept/);
@@ -218,6 +219,53 @@ test('renderBrainPage escapes YAML scalar control characters', () => {
 
   assert.match(body, /title: "Line \\"One\\"\\nTab\\tBack\\\\slash"/);
   assert.match(body, /  - "tag\\nline"/);
+});
+
+test('renderBrainPage includes graph-friendly frontmatter and wikilinks', () => {
+  const root = tempDir();
+  const vault = path.join(root, 'vault');
+  const sourcePath = path.join(vault, 'Notes', 'Person.md');
+  const config = gbrain.resolveConfig({ vaultDir: vault, brainDir: path.join(root, 'brain') });
+  const body = gbrain.renderBrainPage({
+    type: 'person',
+    title: 'Ada Example',
+    sourcePath,
+    aliases: ['A. Example'],
+    company: 'companies/example-inc',
+    related: ['concepts/jarvos-memory'],
+    source: 'sources/person-note',
+    sources: ['sources/person-interview'],
+  }, 'body', config);
+
+  assert.match(body, /aliases:\n  - "A\. Example"/);
+  assert.match(body, /company: "companies\/example-inc"/);
+  assert.match(body, /related:\n  - "concepts\/jarvos-memory"/);
+  assert.match(body, /^source: "sources\/person-note"$/m);
+  assert.match(body, /sources:\n  - "sources\/person-interview"/);
+  assert.match(body, /## Graph Links/);
+  assert.match(body, /company: \[\[companies\/example-inc\]\]/);
+  assert.match(body, /related: \[\[concepts\/jarvos-memory\]\]/);
+  assert.match(body, /source: \[\[sources\/person-note\]\]/);
+  assert.match(body, /sources: \[\[sources\/person-interview\]\]/);
+});
+
+test('renderBrainPage accepts graph fields grouped under graph or relationships', () => {
+  const root = tempDir();
+  const vault = path.join(root, 'vault');
+  const sourcePath = path.join(vault, 'Notes', 'Meeting.md');
+  const config = gbrain.resolveConfig({ vaultDir: vault, brainDir: path.join(root, 'brain') });
+  const body = gbrain.renderBrainPage({
+    type: 'meeting',
+    title: 'Planning Meeting',
+    sourcePath,
+    graph: { attendees: ['people/andrew'] },
+    relationships: { see_also: ['projects/jarvos'] },
+  }, 'body', config);
+
+  assert.match(body, /attendees:\n  - "people\/andrew"/);
+  assert.match(body, /see_also:\n  - "projects\/jarvos"/);
+  assert.match(body, /attendees: \[\[people\/andrew\]\]/);
+  assert.match(body, /see also: \[\[projects\/jarvos\]\]/);
 });
 
 test('importToBrain records write failures without false imported entries', () => {

@@ -148,6 +148,8 @@ All paths are resolved via environment variables or `jarvos.config.json`. See `b
 **What it does:** Bridges a curated slice of your Obsidian-compatible vault into
 GBrain. It generates deterministic GBrain pages for people, companies, projects,
 concepts, meetings, and sources while preserving source provenance.
+Curated manifest items may also include graph-friendly relationship fields such
+as `company`, `key_people`, `attendees`, `related`, `see_also`, and `sources`.
 
 **What it is NOT:** A full-vault search engine or a replacement for QMD. QMD
 remains the broad, fast vault lookup path. OpenClaw `memory-wiki` remains a

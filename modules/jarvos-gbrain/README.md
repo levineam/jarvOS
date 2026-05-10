@@ -70,7 +70,9 @@ at those files.
       "sourcePath": "Notes/JarVOS Brain Integration.md",
       "slug": "jarvos-brain-integration",
       "tags": ["jarvos", "gbrain"],
-      "summary": "Why this note belongs in structured GBrain knowledge."
+      "summary": "Why this note belongs in structured GBrain knowledge.",
+      "related": ["concepts/personal-ai-os"],
+      "sources": ["sources/jarvos-architecture"]
     }
   ]
 }
@@ -79,6 +81,12 @@ at those files.
 Supported types: `person`, `company`, `project`, `concept`, `meeting`, and
 `source`. Relative `sourcePath` values are resolved from `JARVOS_VAULT_DIR`.
 Original vault notes are never mutated by this module.
+
+Optional graph-friendly fields can be placed directly on each item or under
+`graph` / `relationships`: `aliases`, `company`, `companies`, `founded`,
+`key_people`, `partner`, `investors`, `lead`, `attendees`, `related`,
+`see_also`, and `sources`. These render into YAML frontmatter and a `Graph Links`
+section with wikilinks so GBrain can extract typed relationships.
 
 ## Public API
 
