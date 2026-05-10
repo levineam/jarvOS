@@ -35,6 +35,32 @@ const TYPE_DIRS = Object.freeze({
   source: 'sources',
   sources: 'sources',
 });
+const GRAPH_FRONTMATTER_FIELDS = Object.freeze([
+  'aliases',
+  'company',
+  'companies',
+  'founded',
+  'key_people',
+  'partner',
+  'investors',
+  'lead',
+  'attendees',
+  'related',
+  'see_also',
+  'source',
+  'sources',
+]);
+const GRAPH_LIST_FIELDS = new Set([
+  'aliases',
+  'companies',
+  'founded',
+  'key_people',
+  'investors',
+  'attendees',
+  'related',
+  'see_also',
+  'sources',
+]);
 
 function expandTilde(value) {
   if (typeof value !== 'string') return value;
@@ -181,6 +207,58 @@ function yamlScalar(value) {
   return `"${text}"`;
 }
 
+function graphFieldValue(item, field) {
+  if (!item || typeof item !== 'object') return undefined;
+  if (item.graph && typeof item.graph === 'object' && item.graph[field] !== undefined) {
+    return item.graph[field];
+  }
+  if (item.relationships && typeof item.relationships === 'object' && item.relationships[field] !== undefined) {
+    return item.relationships[field];
+  }
+  return item[field];
+}
+
+function graphFieldEntries(item) {
+  const entries = [];
+  for (const field of GRAPH_FRONTMATTER_FIELDS) {
+    const values = asStringList(graphFieldValue(item, field));
+    if (values.length > 0) entries.push({ field, values });
+  }
+  return entries;
+}
+
+function renderGraphFrontmatter(item) {
+  return graphFieldEntries(item).flatMap(({ field, values }) => {
+    if (!GRAPH_LIST_FIELDS.has(field) && values.length === 1) {
+      return [`${field}: ${yamlScalar(values[0])}`];
+    }
+    return [
+      `${field}:`,
+      ...values.map((value) => `  - ${yamlScalar(value)}`),
+    ];
+  });
+}
+
+function wikilinkTarget(value) {
+  const text = String(value || '').trim();
+  if (!text) return null;
+  if (text.startsWith('[[') && text.endsWith(']]')) return text;
+  return `[[${text}]]`;
+}
+
+function renderGraphBodySection(item) {
+  const entries = graphFieldEntries(item).filter(({ field }) => field !== 'aliases');
+  if (entries.length === 0) return [];
+
+  const lines = ['## Graph Links', ''];
+  for (const { field, values } of entries) {
+    const label = field.replace(/_/g, ' ');
+    lines.push(`- ${label}: ${values.map(wikilinkTarget).filter(Boolean).join(', ')}`);
+  }
+  lines.push('');
+  return lines;
+}
+
 function relativeOrAbsolute(filePath, baseDir) {
   if (!filePath) return '';
   const rel = path.relative(baseDir, filePath);
@@ -199,12 +277,13 @@ function renderBrainPage(item, sourceContent, config) {
   const tagBlock = tags.length > 0
     ? tags.map((tag) => `  - ${yamlScalar(tag)}`).join('\n')
     : '  []';
+  const graphFrontmatter = renderGraphFrontmatter(item);
 
   return [
     '---',
     `title: ${yamlScalar(title)}`,
     `type: ${yamlScalar(pageType)}`,
-    'source:',
+    'provenance:',
     '  kind: "obsidian"',
     `  path: ${yamlScalar(sourceRel)}`,
     `  absolutePath: ${yamlScalar(sourcePath || '')}`,
@@ -212,6 +291,7 @@ function renderBrainPage(item, sourceContent, config) {
     '  importedBy: "jarvos-gbrain"',
     'tags:',
     tagBlock,
+    ...graphFrontmatter,
     '---',
     '',
     `# ${title}`,
@@ -224,6 +304,7 @@ function renderBrainPage(item, sourceContent, config) {
     `- Source path: \`${sourceRel || sourcePath || 'unknown'}\``,
     `- Page type: \`${pageType}\``,
     '',
+    ...renderGraphBodySection(item),
     '## Imported Content',
     '',
     sourceContent.trim() || '_Source note was empty at import time._',
