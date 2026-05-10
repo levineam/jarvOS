@@ -430,14 +430,19 @@ function runCommand(command, args, options = {}) {
   if (options.dryRun) {
     return { ok: true, dryRun: true, command, args, status: 0, signal: null, timedOut: false, stdout: '', stderr: '', error: null };
   }
-  const result = spawnSync(command, args, {
+  const timeout = positiveInteger(options.timeoutMs, 0);
+  const spawnOptions = {
     cwd: options.cwd || process.cwd(),
     env: { ...process.env, ...(options.env || {}) },
     encoding: 'utf8',
-    timeout: positiveInteger(options.timeoutMs, DEFAULT_RETRIEVAL_TIMEOUT_MS),
-    killSignal: 'SIGKILL',
     maxBuffer: 10 * 1024 * 1024,
-  });
+  };
+  if (timeout > 0) {
+    spawnOptions.timeout = timeout;
+    spawnOptions.killSignal = 'SIGKILL';
+  }
+
+  const result = spawnSync(command, args, spawnOptions);
   const timedOut = result.error && result.error.code === 'ETIMEDOUT';
   return {
     ok: result.status === 0 && !timedOut,
