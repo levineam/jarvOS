@@ -790,6 +790,17 @@ function extractGbrainSearchSlugs(output, limit) {
   return uniqueStrings(slugs).slice(0, max);
 }
 
+function markdownFenceFor(text) {
+  const runs = String(text || '').match(/`+/g) || [];
+  const longest = runs.reduce((max, run) => Math.max(max, run.length), 0);
+  return '`'.repeat(Math.max(3, longest + 1));
+}
+
+function pushFencedText(lines, info, text) {
+  const fence = markdownFenceFor(text);
+  lines.push('', `${fence}${info}`, text, fence);
+}
+
 function renderRecallMarkdown(bundle) {
   const lines = [
     '# jarvOS Recall Bundle',
@@ -803,13 +814,13 @@ function renderRecallMarkdown(bundle) {
   const gbrain = bundle.engines?.gbrain;
   lines.push(`Status: ${gbrain?.ok ? 'ok' : 'failed'}`);
   if (gbrain?.text) {
-    lines.push('', '```text', gbrain.text, '```');
+    pushFencedText(lines, 'text', gbrain.text);
   }
 
   if (bundle.engines?.qmd) {
     lines.push('', '## QMD Broad Lookup', '', `Status: ${bundle.engines.qmd.ok ? 'ok' : 'failed'}`);
     if (bundle.engines.qmd.text) {
-      lines.push('', '```text', bundle.engines.qmd.text, '```');
+      pushFencedText(lines, 'text', bundle.engines.qmd.text);
     }
   }
 

@@ -578,6 +578,26 @@ if (args[0] === 'graph-query') {
   assert.match(result.markdown, /## GBrain Graph Sidecar/);
 });
 
+test('renderRecallMarkdown preserves recalled code fences', () => {
+  const markdown = gbrain.renderRecallMarkdown({
+    query: 'fenced snippets',
+    engines: {
+      gbrain: {
+        ok: true,
+        text: 'before\n```bash\nnpm test\n```',
+      },
+      qmd: {
+        ok: true,
+        text: 'wide\n````\nvalue\n````',
+      },
+    },
+    graph: null,
+  });
+
+  assert.match(markdown, /````text\nbefore\n```bash\nnpm test\n```\n````/);
+  assert.match(markdown, /`````text\nwide\n````\nvalue\n````\n`````/);
+});
+
 test('recallBundle reports missing query without spawning commands', () => {
   const result = gbrain.recallBundle({}, { query: '' });
 
