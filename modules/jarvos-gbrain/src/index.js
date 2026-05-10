@@ -453,8 +453,11 @@ function readEvalQuestions(config) {
 
 function asStringList(value) {
   if (typeof value === 'string' && value.trim()) return [value.trim()];
+  if (typeof value === 'number' && Number.isFinite(value)) return [String(value)];
   if (!Array.isArray(value)) return [];
-  return value.filter((item) => typeof item === 'string' && item.trim()).map((item) => item.trim());
+  return value
+    .filter((item) => (typeof item === 'string' && item.trim()) || (typeof item === 'number' && Number.isFinite(item)))
+    .map((item) => String(item).trim());
 }
 
 function expectedClauses(expected) {
