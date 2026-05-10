@@ -53,7 +53,7 @@ function firstString(...values) {
 function loadJarvosPaths() {
   try {
     const packagePath = require.resolve(JARVOS_PATHS_PACKAGE, {
-      paths: [MODULE_ROOT, process.cwd()],
+      paths: [process.cwd(), MODULE_ROOT],
     });
     return require(packagePath);
   } catch {
