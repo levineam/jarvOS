@@ -558,9 +558,9 @@ function positiveInteger(value, fallback) {
 
 function qmdSearchArgs(config, query, limit) {
   const mode = ['search', 'query', 'vsearch'].includes(config.qmdMode) ? config.qmdMode : 'search';
-  const args = [];
+  const args = [mode];
   if (config.qmdIndex) args.push('--index', config.qmdIndex);
-  args.push(mode, query, '-n', String(limit), '--json');
+  args.push(query, '-n', String(limit), '--json');
   if (config.qmdCollection) args.push('--collection', config.qmdCollection);
   return args;
 }

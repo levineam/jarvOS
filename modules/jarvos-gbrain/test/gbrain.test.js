@@ -403,6 +403,7 @@ test('runRetrievalEval can compare QMD with engine-specific expected evidence', 
     gbrainBin,
     gbrainDir: root,
     qmdBin,
+    qmdIndex: 'notes-index',
     qmdCollection: 'notes',
   }, { compareQmd: true, limit: 3 });
 
@@ -414,6 +415,8 @@ test('runRetrievalEval can compare QMD with engine-specific expected evidence', 
   assert.equal(result.results[0].engines.qmd.ok, true);
   assert.deepEqual(result.results[0].engines.qmd.command.args, [
     'search',
+    '--index',
+    'notes-index',
     'OpenClaw gateway auth recovery',
     '-n',
     '3',
