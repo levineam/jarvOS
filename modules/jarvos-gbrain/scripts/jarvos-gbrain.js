@@ -27,6 +27,12 @@ function cliConfig() {
     gbrainDir: argValue('--gbrain-dir'),
     vaultDir: argValue('--vault-dir'),
     gbrainBin: argValue('--gbrain-bin'),
+    qmdBin: argValue('--qmd-bin'),
+    qmdMode: argValue('--qmd-mode'),
+    qmdCollection: argValue('--qmd-collection'),
+    qmdIndex: argValue('--qmd-index'),
+    limit: argValue('--limit'),
+    retrievalTimeoutMs: argValue('--timeout-ms'),
   };
 }
 
@@ -35,7 +41,7 @@ function printJson(value) {
 }
 
 function usage() {
-  process.stdout.write(`jarvos-gbrain\n\nCommands:\n  plan [--manifest path]\n  import [--dry-run] [--manifest path] [--brain-dir path] [--vault-dir path]\n  sync [--dry-run] [--brain-dir path] [--gbrain-dir path]\n  eval [--dry-run] [--eval-file path]\n  doctor\n\n`);
+  process.stdout.write(`jarvos-gbrain\n\nCommands:\n  plan [--manifest path]\n  import [--dry-run] [--manifest path] [--brain-dir path] [--vault-dir path]\n  sync [--dry-run] [--brain-dir path] [--gbrain-dir path]\n  eval [--dry-run] [--eval-file path] [--compare-qmd] [--limit n] [--timeout-ms n]\n       [--qmd-bin path] [--qmd-mode search|query|vsearch] [--qmd-collection name] [--qmd-index name]\n  doctor\n\n`);
 }
 
 function main() {
@@ -65,7 +71,11 @@ function main() {
     }
 
     if (command === 'eval') {
-      printJson(runRetrievalEval(config, { dryRun: hasFlag('--dry-run') }));
+      printJson(runRetrievalEval(config, {
+        dryRun: hasFlag('--dry-run'),
+        compareQmd: hasFlag('--compare-qmd'),
+        limit: argValue('--limit'),
+      }));
       return;
     }
 
