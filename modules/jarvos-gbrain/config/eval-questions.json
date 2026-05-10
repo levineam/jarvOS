@@ -9,11 +9,16 @@
           "slug": "projects/example-jarvos-brain",
           "any": ["jarvOS", "brain"]
         },
+        "graph": {
+          "all": ["projects/example-jarvos-brain"],
+          "any": ["source", "context"]
+        },
         "qmd": {
           "all": ["example-jarvos-brain.md"],
           "any": ["jarvOS", "brain"]
         }
       },
+      "graphSeeds": ["projects/example-jarvos-brain"],
       "include": false
     }
   ]
