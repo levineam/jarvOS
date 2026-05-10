@@ -232,6 +232,7 @@ test('renderBrainPage includes graph-friendly frontmatter and wikilinks', () => 
     sourcePath,
     aliases: ['A. Example'],
     company: 'companies/example-inc',
+    founded: 2020,
     related: ['concepts/jarvos-memory'],
     source: 'sources/person-note',
     sources: ['sources/person-interview'],
@@ -239,11 +240,13 @@ test('renderBrainPage includes graph-friendly frontmatter and wikilinks', () => 
 
   assert.match(body, /aliases:\n  - "A\. Example"/);
   assert.match(body, /company: "companies\/example-inc"/);
+  assert.match(body, /founded:\n  - "2020"/);
   assert.match(body, /related:\n  - "concepts\/jarvos-memory"/);
   assert.match(body, /^source: "sources\/person-note"$/m);
   assert.match(body, /sources:\n  - "sources\/person-interview"/);
   assert.match(body, /## Graph Links/);
   assert.match(body, /company: \[\[companies\/example-inc\]\]/);
+  assert.match(body, /founded: \[\[2020\]\]/);
   assert.match(body, /related: \[\[concepts\/jarvos-memory\]\]/);
   assert.match(body, /source: \[\[sources\/person-note\]\]/);
   assert.match(body, /sources: \[\[sources\/person-interview\]\]/);
