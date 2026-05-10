@@ -538,6 +538,60 @@ test('runRetrievalEval fails graph expectations that omit seeds', () => {
   assert.deepEqual(result.results[0].engines.gbrain_graph.missingExpected, ['concepts/openclaw-context-management-lessons']);
 });
 
+test('runRetrievalEval can score combined runtime recall separately from direct search', () => {
+  const root = tempDir();
+  const evalPath = path.join(root, 'eval.json');
+  const gbrainBin = path.join(root, 'fake-gbrain');
+  const qmdBin = path.join(root, 'fake-qmd');
+  fs.writeFileSync(evalPath, JSON.stringify({
+    version: 1,
+    questions: [{
+      query: 'what should runtime recall know?',
+      graphSeeds: ['sources/runtime-recall-seed'],
+      expected: {
+        gbrain: 'projects/missing-direct-answer',
+        qmd: 'qmd://notes/runtime-recall.md',
+        graph: 'concepts/runtime-context',
+      },
+    }],
+  }), 'utf8');
+  fs.writeFileSync(gbrainBin, `#!/usr/bin/env node
+const args = process.argv.slice(2);
+if (args[0] === 'graph-query') {
+  process.stdout.write(JSON.stringify([
+    { slug: args[1], title: 'Runtime Recall Seed', type: 'source', depth: 0, links: [] },
+    { slug: 'concepts/runtime-context', title: 'Runtime Context', type: 'concept', depth: 1, links: [] }
+  ]));
+} else {
+  process.stdout.write('[0.91] sources/runtime-recall-seed -- anchor only');
+}
+`, 'utf8');
+  fs.writeFileSync(qmdBin, '#!/bin/sh\nprintf "%s\\n" "[{\\"file\\":\\"qmd://notes/runtime-recall.md\\",\\"snippet\\":\\"broad lookup evidence\\"}]"\n', 'utf8');
+  fs.chmodSync(gbrainBin, 0o755);
+  fs.chmodSync(qmdBin, 0o755);
+
+  const result = gbrain.runRetrievalEval({
+    evalPath,
+    gbrainBin,
+    gbrainDir: root,
+    qmdBin,
+  }, {
+    compareQmd: true,
+    compareGraph: true,
+    compareRecall: true,
+    graphSeedLimit: 1,
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.compareRecall, true);
+  assert.deepEqual(result.summary.engines.gbrain, { passed: 0, failed: 1 });
+  assert.deepEqual(result.summary.engines.qmd, { passed: 1, failed: 0 });
+  assert.deepEqual(result.summary.engines.gbrain_graph, { passed: 1, failed: 0 });
+  assert.deepEqual(result.summary.engines.gbrain_recall, { passed: 1, failed: 0 });
+  assert.equal(result.results[0].engines.gbrain.ok, false);
+  assert.equal(result.results[0].engines.gbrain_recall.ok, true);
+});
+
 test('recallBundle combines GBrain search, QMD lookup, and graph expansion', () => {
   const root = tempDir();
   const gbrainBin = path.join(root, 'fake-gbrain');

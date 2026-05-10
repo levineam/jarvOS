@@ -81,7 +81,8 @@ The `modules/` directory at the repo root contains the four core jarvOS runtime 
    node scripts/jarvos-gbrain.js eval \
      --eval-file /path/to/eval-questions.json \
      --compare-qmd \
-     --compare-graph
+     --compare-graph \
+     --compare-recall
 
    node scripts/jarvos-gbrain.js recall \
      --query "What context should my assistant know before acting?" \

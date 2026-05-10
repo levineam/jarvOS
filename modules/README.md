@@ -166,7 +166,7 @@ npm install
 node scripts/jarvos-gbrain.js doctor
 node scripts/jarvos-gbrain.js import --dry-run --manifest /path/to/curated-import.json
 node scripts/jarvos-gbrain.js sync --dry-run
-node scripts/jarvos-gbrain.js eval --eval-file /path/to/eval-questions.json --compare-qmd --compare-graph
+node scripts/jarvos-gbrain.js eval --eval-file /path/to/eval-questions.json --compare-qmd --compare-graph --compare-recall
 node scripts/jarvos-gbrain.js recall --query "What should my assistant know about this project?" --format markdown
 ```
 

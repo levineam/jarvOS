@@ -728,6 +728,51 @@ function expectedForGraph(entry) {
   return undefined;
 }
 
+function expectedForRecall(entry) {
+  if (!entry || typeof entry !== 'object') return undefined;
+  if (entry.recallExpected !== undefined) return entry.recallExpected;
+  if (entry.gbrainRecallExpected !== undefined) return entry.gbrainRecallExpected;
+  if (entry.expected && typeof entry.expected === 'object' && !Array.isArray(entry.expected)) {
+    if (entry.expected.recall !== undefined) return entry.expected.recall;
+    if (entry.expected.gbrainRecall !== undefined) return entry.expected.gbrainRecall;
+    if (entry.expected.gbrain_recall !== undefined) return entry.expected.gbrain_recall;
+  }
+  return undefined;
+}
+
+function recallExpectedCandidates(entry) {
+  const explicit = expectedForRecall(entry);
+  if (explicit !== undefined) return [explicit];
+  if (!entry || typeof entry !== 'object') return [];
+
+  const candidates = [];
+  const gbrainExpected = expectedForEngine(entry, 'gbrain');
+  const qmdExpected = expectedForEngine(entry, 'qmd');
+  const graphExpected = expectedForGraph(entry);
+  for (const expected of [gbrainExpected, qmdExpected, graphExpected]) {
+    if (expected !== undefined) candidates.push(expected);
+  }
+  return candidates;
+}
+
+function matchAnyExpected(output, expectedCandidates) {
+  const candidates = Array.isArray(expectedCandidates)
+    ? expectedCandidates.filter((expected) => expected !== undefined)
+    : [];
+  if (candidates.length === 0) return { checked: false, matched: true, missing: [] };
+
+  const matches = candidates.map((expected) => matchExpected(output, expected));
+  const checked = matches.some((match) => match.checked);
+  if (!checked) return { checked: false, matched: true, missing: [] };
+
+  const matched = matches.some((match) => match.checked && match.matched);
+  return {
+    checked: true,
+    matched,
+    missing: matched ? [] : [...new Set(matches.flatMap((match) => match.missing || []))],
+  };
+}
+
 function graphRecallText(recall) {
   return (recall.results || []).flatMap((result) => [
     `seed ${result.seed} nodes ${result.nodeCount}`,
@@ -921,6 +966,31 @@ function recallBundle(overrides = {}, options = {}) {
   };
 }
 
+function runRecallEval(config, entry, query, expectedCandidates, dryRun, limit, graphDepth, graphSeedLimit) {
+  const seeds = typeof entry === 'object' ? graphSeedsForEntry(entry) : [];
+  const depth = typeof entry === 'object' ? graphDepthForEntry(entry, graphDepth) : graphDepth;
+  const bundle = recallBundle(config, {
+    dryRun,
+    query,
+    includeQmd: true,
+    autoGraph: true,
+    seeds,
+    graphDepth: depth,
+    graphSeedLimit: Math.max(positiveInteger(graphSeedLimit, 2), seeds.length || 0),
+    limit,
+  });
+  const expectedMatch = dryRun
+    ? { checked: expectedCandidates.length > 0, matched: null, missing: [] }
+    : matchAnyExpected(bundle.markdown, expectedCandidates);
+  return {
+    ok: bundle.ok && (dryRun || !expectedMatch.checked || expectedMatch.matched),
+    expectedCandidates,
+    expectedMatched: expectedMatch.checked ? expectedMatch.matched : undefined,
+    missingExpected: expectedMatch.missing,
+    bundle,
+  };
+}
+
 function summarizeEvalResults(results) {
   const summary = { overall: { passed: 0, failed: 0, skipped: 0 }, engines: {} };
   for (const result of results) {
@@ -947,9 +1017,14 @@ function runRetrievalEval(overrides = {}, options = {}) {
   const dryRun = options.dryRun === true;
   const compareQmd = options.compareQmd === true;
   const compareGraph = options.compareGraph === true;
+  const compareRecall = options.compareRecall === true;
   const limit = positiveInteger(options.limit || overrides.limit || process.env.JARVOS_GBRAIN_EVAL_LIMIT, DEFAULT_RETRIEVAL_LIMIT);
   const graphDepth = positiveInteger(
     options.graphDepth || overrides.graphDepth || process.env.JARVOS_GBRAIN_GRAPH_DEPTH,
+    2,
+  );
+  const graphSeedLimit = positiveInteger(
+    options.graphSeedLimit || overrides.graphSeedLimit || process.env.JARVOS_GBRAIN_GRAPH_SEED_LIMIT,
     2,
   );
   const results = questions.map((entry, index) => {
@@ -986,6 +1061,26 @@ function runRetrievalEval(overrides = {}, options = {}) {
       }
     }
 
+    if (compareRecall) {
+      const recallQuery = typeof entry === 'object' ? queryForEngine(entry, 'recall', query) : query;
+      const expectedCandidates = recallExpectedCandidates(entry);
+      const recallResult = runRecallEval(
+        config,
+        entry,
+        recallQuery,
+        expectedCandidates,
+        dryRun,
+        limit,
+        graphDepth,
+        graphSeedLimit,
+      );
+      engines.gbrain_recall = recallResult;
+      engineQueries.gbrain_recall = recallQuery;
+      ok = recallResult.ok;
+      if (engines.qmd) ok = ok && engines.qmd.ok;
+      if (engines.gbrain_graph) ok = ok && engines.gbrain_graph.ok;
+    }
+
     return {
       index,
       query,
@@ -1004,8 +1099,10 @@ function runRetrievalEval(overrides = {}, options = {}) {
     dryRun,
     compareQmd,
     compareGraph,
+    compareRecall,
     limit,
     graphDepth,
+    graphSeedLimit,
     questionCount: questions.length,
     summary: summarizeEvalResults(results),
     results,

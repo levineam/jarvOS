@@ -202,6 +202,22 @@ The `gbrain_graph` engine is reported separately from direct GBrain search. Use
 it to prove sidecar graph traversal covers multi-hop questions without masking
 direct-search misses.
 
+To score the actual runtime recall strategy, add `--compare-recall`:
+
+```bash
+node scripts/jarvos-gbrain.js eval \
+  --eval-file /path/to/eval-questions.json \
+  --compare-qmd \
+  --compare-graph \
+  --compare-recall
+```
+
+The `gbrain_recall` engine runs the recall bundle and checks its combined
+Markdown output. If a question does not define explicit `recall` expectations,
+the recall engine treats the GBrain, QMD, and graph expectations as acceptable
+evidence candidates. This lets the eval distinguish direct-search gaps from
+runtime recall failures.
+
 ## Graph Recall
 
 Use graph recall when a planner or runtime already has a likely GBrain seed page
