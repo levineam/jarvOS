@@ -96,14 +96,16 @@ The OpenClaw runtime should call the retrieval layer deliberately. A common
 pattern is:
 
 ```bash
-node modules/jarvos-gbrain/scripts/jarvos-gbrain.js recall \
+jarvos-gbrain recall \
   --query "What context should I know before answering this?" \
   --format markdown
 ```
 
-That command returns context-ready Markdown, but it does not inject anything on
-its own. Your OpenClaw adapter should decide when to call it and how much of the
-result belongs in the active prompt.
+Run it from a workspace where `@jarvos/gbrain` has been installed or with the
+equivalent explicit path to your jarvOS clone. The command returns context-ready
+Markdown, but it does not inject anything on its own. Your OpenClaw adapter
+should decide when to call it and how much of the result belongs in the active
+prompt.
 
 ## What jarvOS Adds On Top
 
