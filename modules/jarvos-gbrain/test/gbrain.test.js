@@ -592,6 +592,41 @@ if (args[0] === 'graph-query') {
   assert.equal(result.results[0].engines.gbrain_recall.ok, true);
 });
 
+test('runRetrievalEval recall candidates ignore omitted engine expectations', () => {
+  const root = tempDir();
+  const evalPath = path.join(root, 'eval.json');
+  const gbrainBin = path.join(root, 'fake-gbrain');
+  const qmdBin = path.join(root, 'fake-qmd');
+  fs.writeFileSync(evalPath, JSON.stringify({
+    version: 1,
+    questions: [{
+      query: 'qmd-only evidence',
+      expected: {
+        qmd: 'qmd://notes/expected.md',
+      },
+    }],
+  }), 'utf8');
+  fs.writeFileSync(gbrainBin, '#!/bin/sh\nprintf "%s\\n" "[0.50] projects/other -- unrelated"\n', 'utf8');
+  fs.writeFileSync(qmdBin, '#!/bin/sh\nprintf "%s\\n" "[{\\"file\\":\\"qmd://notes/other.md\\",\\"snippet\\":\\"unrelated\\"}]"\n', 'utf8');
+  fs.chmodSync(gbrainBin, 0o755);
+  fs.chmodSync(qmdBin, 0o755);
+
+  const result = gbrain.runRetrievalEval({
+    evalPath,
+    gbrainBin,
+    gbrainDir: root,
+    qmdBin,
+  }, {
+    compareRecall: true,
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.results[0].engines.gbrain.expectedMatched, undefined);
+  assert.deepEqual(result.results[0].engines.gbrain_recall.expectedCandidates, ['qmd://notes/expected.md']);
+  assert.equal(result.results[0].engines.gbrain_recall.ok, false);
+  assert.deepEqual(result.results[0].engines.gbrain_recall.missingExpected, ['qmd://notes/expected.md']);
+});
+
 test('recallBundle combines GBrain search, QMD lookup, and graph expansion', () => {
   const root = tempDir();
   const gbrainBin = path.join(root, 'fake-gbrain');

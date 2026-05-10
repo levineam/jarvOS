@@ -519,8 +519,23 @@ function expectedForEngine(entry, engineName) {
   if (entry[directKey] !== undefined) return entry[directKey];
   if (entry.expected && typeof entry.expected === 'object' && !Array.isArray(entry.expected)) {
     if (entry.expected[engineName] !== undefined) return entry.expected[engineName];
+    if (hasEngineSpecificExpected(entry.expected)) return undefined;
   }
   return entry.expected;
+}
+
+function hasEngineSpecificExpected(expected) {
+  if (!expected || typeof expected !== 'object' || Array.isArray(expected)) return false;
+  return [
+    'gbrain',
+    'qmd',
+    'graph',
+    'gbrainGraph',
+    'gbrain_graph',
+    'recall',
+    'gbrainRecall',
+    'gbrain_recall',
+  ].some((key) => expected[key] !== undefined);
 }
 
 function queryForEngine(entry, engineName, fallback) {
