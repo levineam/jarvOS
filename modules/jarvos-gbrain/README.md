@@ -13,6 +13,7 @@ retrieval-eval helpers.
 | **Provenance** | Original vault path, source type, imported timestamp, and generator metadata |
 | **Sync wrapper** | Safe wrapper around `gbrain sync --repo <brainDir>` and `gbrain embed --stale` |
 | **Retrieval eval** | Small fixture-driven checks for whether GBrain can answer expected questions |
+| **Graph recall** | Compact wrapper around `gbrain graph` for sidecar recall from known seed pages |
 
 ## What this module is NOT for
 
@@ -37,6 +38,7 @@ node scripts/jarvos-gbrain.js doctor
 node scripts/jarvos-gbrain.js plan --manifest /path/to/curated-import.json
 node scripts/jarvos-gbrain.js import --dry-run --manifest /path/to/curated-import.json
 node scripts/jarvos-gbrain.js sync --dry-run
+node scripts/jarvos-gbrain.js graph --seed projects/jarvos-context-engineering-upgrade --depth 2
 ```
 
 ## Configuration
@@ -101,6 +103,7 @@ const {
   importToBrain,
   syncBrain,
   runRetrievalEval,
+  graphRecall,
   doctor,
 } = require('@jarvos/gbrain');
 ```
@@ -109,6 +112,7 @@ const {
 - `importToBrain(plan, { dryRun })` generates GBrain pages; dry-run reports writes without writing.
 - `syncBrain(config, { dryRun })` wraps `gbrain sync --repo <brainDir>` and `gbrain embed --stale`.
 - `runRetrievalEval(config, { dryRun, compareQmd })` runs fixture queries through GBrain search and optionally QMD, then fails questions whose expected evidence is missing.
+- `graphRecall(config, { seeds, depth, dryRun })` runs `gbrain graph <seed> --depth <n>` and returns parsed graph nodes for sidecar recall.
 - `doctor(config)` checks manifest, eval file, brain directory, GBrain directory, and CLI availability.
 
 ## Retrieval Eval Fixture
@@ -164,6 +168,22 @@ question:
 This comparison does not decide that one engine should replace the other. It
 shows where GBrain is strong enough for structured recall and where QMD still
 wins for broad vault lookup.
+
+## Graph Recall
+
+Use graph recall when a planner or runtime already has a likely GBrain seed page
+and needs nearby structured context for a cross-source question:
+
+```bash
+node scripts/jarvos-gbrain.js graph \
+  --seed projects/jarvos-context-engineering-upgrade \
+  --seed sources/paperclip-openclaw-setup-guide-draft \
+  --depth 2
+```
+
+The command returns one result per seed with parsed GBrain graph nodes. This is
+intended as the sidecar path after direct search has found an anchor page; broad
+vault lookup still belongs to QMD.
 
 ## Role in the jarvOS Architecture
 

@@ -595,6 +595,67 @@ function runQmdEval(config, query, expected, dryRun, limit) {
   return evalCommandResult(command, expected, dryRun);
 }
 
+function parseJsonOutput(output) {
+  try {
+    return { ok: true, value: JSON.parse(output), error: null };
+  } catch (error) {
+    return { ok: false, value: null, error: error.message };
+  }
+}
+
+function summarizeCommand(command) {
+  return {
+    ok: command.ok,
+    dryRun: command.dryRun,
+    command: command.command,
+    args: command.args,
+    status: command.status,
+    signal: command.signal,
+    timedOut: command.timedOut,
+    stdoutBytes: Buffer.byteLength(command.stdout || '', 'utf8'),
+    stderrBytes: Buffer.byteLength(command.stderr || '', 'utf8'),
+    stdoutSample: command.stdout ? command.stdout.slice(0, 500) : '',
+    stderrSample: command.stderr ? command.stderr.slice(0, 1000) : '',
+    error: command.error,
+  };
+}
+
+function graphRecall(overrides = {}, options = {}) {
+  const config = resolveConfig(overrides);
+  const depth = positiveInteger(options.depth || overrides.depth, 2);
+  const dryRun = options.dryRun === true;
+  const seedValues = options.seeds || overrides.seeds || options.seed || overrides.seed;
+  const seeds = asStringList(seedValues);
+  const results = seeds.map((seed) => {
+    const command = runCommand(config.gbrainBin, ['graph', seed, '--depth', String(depth)], {
+      cwd: config.gbrainDir,
+      dryRun,
+      timeoutMs: config.retrievalTimeoutMs,
+    });
+    const parsed = dryRun ? { ok: true, value: [], error: null } : parseJsonOutput(command.stdout || '[]');
+    const nodes = Array.isArray(parsed.value) ? parsed.value : [];
+    const parseOk = parsed.ok && Array.isArray(parsed.value);
+    return {
+      seed,
+      ok: command.ok && parseOk,
+      depth,
+      nodeCount: nodes.length,
+      nodes,
+      parseError: parseOk ? null : parsed.error || 'Expected gbrain graph to return a JSON array',
+      command: summarizeCommand(command),
+    };
+  });
+
+  return {
+    config,
+    dryRun,
+    depth,
+    seedCount: seeds.length,
+    results,
+    ok: seeds.length > 0 && results.every((result) => result.ok),
+  };
+}
+
 function summarizeEvalResults(results) {
   const summary = { overall: { passed: 0, failed: 0, skipped: 0 }, engines: {} };
   for (const result of results) {
@@ -722,6 +783,7 @@ module.exports = {
   importToBrain,
   syncBrain,
   runRetrievalEval,
+  graphRecall,
   doctor,
   renderBrainPage,
 };

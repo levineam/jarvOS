@@ -459,6 +459,57 @@ test('runRetrievalEval marks timed-out comparison commands as failed', () => {
   assert.equal(result.results[0].engines.qmd.command.timedOut, true);
 });
 
+test('graphRecall traverses seed pages through the gbrain graph command', () => {
+  const root = tempDir();
+  const binPath = path.join(root, 'fake-gbrain');
+  const argsPath = path.join(root, 'args.json');
+  fs.writeFileSync(binPath, `#!/usr/bin/env node
+const fs = require('fs');
+fs.writeFileSync(${JSON.stringify(argsPath)}, JSON.stringify({ cwd: process.cwd(), args: process.argv.slice(2) }));
+process.stdout.write(JSON.stringify([
+  { slug: 'projects/jarvos-context-engineering-upgrade', depth: 0 },
+  { slug: 'concepts/openclaw-context-management-lessons', depth: 1 }
+]));
+`, 'utf8');
+  fs.chmodSync(binPath, 0o755);
+
+  const result = gbrain.graphRecall({
+    gbrainBin: binPath,
+    gbrainDir: root,
+  }, {
+    seeds: ['projects/jarvos-context-engineering-upgrade'],
+    depth: 3,
+  });
+  const captured = JSON.parse(fs.readFileSync(argsPath, 'utf8'));
+
+  assert.equal(result.ok, true);
+  assert.equal(result.seedCount, 1);
+  assert.equal(result.results[0].ok, true);
+  assert.equal(result.results[0].depth, 3);
+  assert.equal(result.results[0].nodeCount, 2);
+  assert.equal(result.results[0].nodes[1].slug, 'concepts/openclaw-context-management-lessons');
+  assert.equal(fs.realpathSync(captured.cwd), fs.realpathSync(root));
+  assert.deepEqual(captured.args, ['graph', 'projects/jarvos-context-engineering-upgrade', '--depth', '3']);
+});
+
+test('graphRecall fails when graph output is not a JSON array', () => {
+  const root = tempDir();
+  const binPath = path.join(root, 'fake-gbrain');
+  fs.writeFileSync(binPath, '#!/bin/sh\nprintf "%s\\n" "not json"\n', 'utf8');
+  fs.chmodSync(binPath, 0o755);
+
+  const result = gbrain.graphRecall({
+    gbrainBin: binPath,
+    gbrainDir: root,
+  }, {
+    seeds: ['projects/jarvos-context-engineering-upgrade'],
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.results[0].ok, false);
+  assert.match(result.results[0].parseError, /JSON/);
+});
+
 test('resolveConfig expands tilde gbrainBin paths before spawning', () => {
   const result = gbrain.resolveConfig({ gbrainBin: '~/bin/gbrain' });
   assert.equal(result.gbrainBin, path.join(os.homedir(), 'bin', 'gbrain'));

@@ -6,6 +6,7 @@ const {
   importToBrain,
   syncBrain,
   runRetrievalEval,
+  graphRecall,
   doctor,
 } = require('../src/index.js');
 
@@ -17,6 +18,14 @@ function argValue(name) {
   const index = process.argv.indexOf(name);
   if (index === -1) return null;
   return process.argv[index + 1] || null;
+}
+
+function argValues(name) {
+  const values = [];
+  for (let index = 0; index < process.argv.length; index += 1) {
+    if (process.argv[index] === name && process.argv[index + 1]) values.push(process.argv[index + 1]);
+  }
+  return values;
 }
 
 function cliConfig() {
@@ -33,6 +42,9 @@ function cliConfig() {
     qmdIndex: argValue('--qmd-index'),
     limit: argValue('--limit'),
     retrievalTimeoutMs: argValue('--timeout-ms'),
+    seed: argValue('--seed'),
+    seeds: argValues('--seed'),
+    depth: argValue('--depth'),
   };
 }
 
@@ -41,7 +53,7 @@ function printJson(value) {
 }
 
 function usage() {
-  process.stdout.write(`jarvos-gbrain\n\nCommands:\n  plan [--manifest path]\n  import [--dry-run] [--manifest path] [--brain-dir path] [--vault-dir path]\n  sync [--dry-run] [--brain-dir path] [--gbrain-dir path]\n  eval [--dry-run] [--eval-file path] [--compare-qmd] [--limit n] [--timeout-ms n]\n       [--qmd-bin path] [--qmd-mode search|query|vsearch] [--qmd-collection name] [--qmd-index name]\n  doctor\n\n`);
+  process.stdout.write(`jarvos-gbrain\n\nCommands:\n  plan [--manifest path]\n  import [--dry-run] [--manifest path] [--brain-dir path] [--vault-dir path]\n  sync [--dry-run] [--brain-dir path] [--gbrain-dir path]\n  eval [--dry-run] [--eval-file path] [--compare-qmd] [--limit n] [--timeout-ms n]\n       [--qmd-bin path] [--qmd-mode search|query|vsearch] [--qmd-collection name] [--qmd-index name]\n  graph [--dry-run] --seed slug [--seed slug] [--depth n] [--timeout-ms n]\n  doctor\n\n`);
 }
 
 function main() {
@@ -75,6 +87,15 @@ function main() {
         dryRun: hasFlag('--dry-run'),
         compareQmd: hasFlag('--compare-qmd'),
         limit: argValue('--limit'),
+      }));
+      return;
+    }
+
+    if (command === 'graph') {
+      printJson(graphRecall(config, {
+        dryRun: hasFlag('--dry-run'),
+        seeds: argValues('--seed'),
+        depth: argValue('--depth'),
       }));
       return;
     }
