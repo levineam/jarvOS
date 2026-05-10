@@ -124,6 +124,7 @@ function main() {
       } else {
         printJson(result);
       }
+      process.exitCode = result.ok ? 0 : 1;
       return;
     }
 

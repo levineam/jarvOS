@@ -587,6 +587,18 @@ test('recallBundle reports missing query without spawning commands', () => {
   assert.match(result.markdown, /Query: \(missing\)/);
 });
 
+test('CLI recall exits non-zero when recall bundle fails', () => {
+  const result = spawnSync(process.execPath, [
+    path.join(__dirname, '..', 'scripts', 'jarvos-gbrain.js'),
+    'recall',
+  ], { encoding: 'utf8' });
+  const payload = JSON.parse(result.stdout);
+
+  assert.equal(result.status, 1);
+  assert.equal(payload.ok, false);
+  assert.equal(payload.error, 'missing query');
+});
+
 test('graphRecall traverses seed pages through the gbrain graph-query command', () => {
   const root = tempDir();
   const binPath = path.join(root, 'fake-gbrain');
