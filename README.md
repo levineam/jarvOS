@@ -52,7 +52,7 @@ The `modules/` directory contains the runnable parts of jarvOS. Each module is a
 - **[`@jarvos/secondbrain`](./modules/jarvos-secondbrain/)** — content-facing monorepo. Journal maintenance, notes management, capture routing, and an Obsidian storage adapter (plus adapter notes for OpenClaw). All paths are env-var driven via `bridge/config/jarvos-paths.js`. Your actual notes never live here; they stay in your vault.
 - **[`@jarvos/memory`](./modules/jarvos-memory/)** — schema and audit tooling for agent-state memory. Defines what a `MEMORY.md` record looks like, how items get promoted, and how to validate a memory file against the contract. Your actual memories stay private and local.
 - **[`@jarvos/ontology`](./modules/jarvos-ontology/)** — reader/writer/validator/renderer for the six-layer ontology (higher-order principles, beliefs, predictions, core self, goals, projects). Ships blank templates (`schema/templates/`) and heuristics (`schema/heuristics.md`), plus a Paperclip sync script (`scripts/sync-to-paperclip.js`). Your filled-in beliefs and goals stay private and local.
-- **[`@jarvos/gbrain`](./modules/jarvos-gbrain/)** — curated bridge from an Obsidian-compatible vault into GBrain pages. It generates structured people, companies, projects, concepts, meetings, and source pages with provenance, then wraps GBrain sync/embed and retrieval eval commands.
+- **[`@jarvos/gbrain`](./modules/jarvos-gbrain/)** — curated bridge from an Obsidian-compatible vault into GBrain pages. It generates structured people, companies, projects, concepts, meetings, and source pages with provenance, then wraps GBrain sync/embed, retrieval eval, graph recall, and runtime recall-bundle commands.
 
 ### Portable core + templates
 
@@ -114,6 +114,21 @@ GBrain is a separate local knowledge base and graph layer. `@jarvos/gbrain`
 does not implement GBrain itself; it prepares curated, provenance-rich markdown
 pages and wraps the installed `gbrain` CLI for sync, embedding, doctor, and
 retrieval-eval workflows.
+
+The recommended jarvOS operating pattern is:
+
+1. Keep the Obsidian-compatible vault as the human-readable source of truth.
+2. Use QMD for broad, fast vault lookup and exact note retrieval.
+3. Use `@jarvos/gbrain` to import only a curated allowlist into GBrain.
+4. Use GBrain direct search for structured recall and graph recall for linked
+   people, projects, concepts, meetings, and sources.
+5. Use the runtime recall bundle (`jarvos-gbrain recall --query ...`) as the
+   call surface an agent runtime can invoke before deciding what context to
+   inject.
+
+The public repo ships template manifests and eval fixtures only. Real manifests,
+eval questions, generated private pages, and personal notes stay in your local
+workspace.
 
 OpenClaw `memory-wiki` is also separate from jarvOS. In this architecture it is
 treated as a native OpenClaw diagnostic and compiled-wiki layer, not the primary

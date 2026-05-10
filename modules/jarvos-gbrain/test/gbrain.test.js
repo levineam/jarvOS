@@ -199,6 +199,7 @@ test('importToBrain writes generated pages with source provenance', () => {
   const body = fs.readFileSync(target, 'utf8');
 
   assert.equal(fs.existsSync(target), true);
+  assert.match(body, /provenance:\n  kind: "obsidian"/);
   assert.match(body, /importedBy: "jarvos-gbrain"/);
   assert.match(body, /Source path: `Notes\/Concept.md`/);
   assert.match(body, /A durable concept/);
@@ -218,6 +219,56 @@ test('renderBrainPage escapes YAML scalar control characters', () => {
 
   assert.match(body, /title: "Line \\"One\\"\\nTab\\tBack\\\\slash"/);
   assert.match(body, /  - "tag\\nline"/);
+});
+
+test('renderBrainPage includes graph-friendly frontmatter and wikilinks', () => {
+  const root = tempDir();
+  const vault = path.join(root, 'vault');
+  const sourcePath = path.join(vault, 'Notes', 'Person.md');
+  const config = gbrain.resolveConfig({ vaultDir: vault, brainDir: path.join(root, 'brain') });
+  const body = gbrain.renderBrainPage({
+    type: 'person',
+    title: 'Ada Example',
+    sourcePath,
+    aliases: ['A. Example'],
+    company: 'companies/example-inc',
+    founded: 2020,
+    related: ['concepts/jarvos-memory'],
+    source: 'sources/person-note',
+    sources: ['sources/person-interview'],
+  }, 'body', config);
+
+  assert.match(body, /aliases:\n  - "A\. Example"/);
+  assert.match(body, /company: "companies\/example-inc"/);
+  assert.match(body, /founded:\n  - "2020"/);
+  assert.match(body, /related:\n  - "concepts\/jarvos-memory"/);
+  assert.match(body, /^source: "sources\/person-note"$/m);
+  assert.match(body, /sources:\n  - "sources\/person-interview"/);
+  assert.match(body, /## Graph Links/);
+  assert.match(body, /company: \[\[companies\/example-inc\]\]/);
+  assert.match(body, /founded: \[\[2020\]\]/);
+  assert.match(body, /related: \[\[concepts\/jarvos-memory\]\]/);
+  assert.match(body, /source: \[\[sources\/person-note\]\]/);
+  assert.match(body, /sources: \[\[sources\/person-interview\]\]/);
+});
+
+test('renderBrainPage accepts graph fields grouped under graph or relationships', () => {
+  const root = tempDir();
+  const vault = path.join(root, 'vault');
+  const sourcePath = path.join(vault, 'Notes', 'Meeting.md');
+  const config = gbrain.resolveConfig({ vaultDir: vault, brainDir: path.join(root, 'brain') });
+  const body = gbrain.renderBrainPage({
+    type: 'meeting',
+    title: 'Planning Meeting',
+    sourcePath,
+    graph: { attendees: ['people/andrew'] },
+    relationships: { see_also: ['projects/jarvos'] },
+  }, 'body', config);
+
+  assert.match(body, /attendees:\n  - "people\/andrew"/);
+  assert.match(body, /see_also:\n  - "projects\/jarvos"/);
+  assert.match(body, /attendees: \[\[people\/andrew\]\]/);
+  assert.match(body, /see also: \[\[projects\/jarvos\]\]/);
 });
 
 test('importToBrain records write failures without false imported entries', () => {
@@ -317,6 +368,492 @@ test('runRetrievalEval passes when expected evidence appears in search output', 
   assert.equal(result.results[0].ok, true);
   assert.equal(result.results[0].expectedMatched, true);
   assert.deepEqual(result.results[0].missingExpected, []);
+});
+
+test('runRetrievalEval can compare QMD with engine-specific expected evidence', () => {
+  const root = tempDir();
+  const evalPath = path.join(root, 'eval.json');
+  const gbrainBin = path.join(root, 'fake-gbrain');
+  const qmdBin = path.join(root, 'fake-qmd');
+  const query = 'where is OpenClaw gateway recovery documented?';
+  fs.writeFileSync(evalPath, JSON.stringify({
+    version: 1,
+    questions: [{
+      query,
+      qmdQuery: 'OpenClaw gateway auth recovery',
+      expected: {
+        gbrain: {
+          slug: 'sources/openclaw-gateway-auth-recovery-playbook',
+          any: ['gateway', 'auth'],
+        },
+        qmd: {
+          all: ['qmd://notes/openclaw-gateway-auth-recovery-playbook.md'],
+          any: ['OpenClaw Gateway', 'auth'],
+        },
+      },
+    }],
+  }), 'utf8');
+  fs.writeFileSync(gbrainBin, '#!/bin/sh\nprintf "%s\\n" "[0.99] sources/openclaw-gateway-auth-recovery-playbook -- gateway auth"\n', 'utf8');
+  fs.writeFileSync(qmdBin, '#!/bin/sh\nprintf "%s\\n" "[{\\"file\\":\\"qmd://notes/openclaw-gateway-auth-recovery-playbook.md\\",\\"title\\":\\"OpenClaw Gateway + Auth Recovery Playbook\\",\\"snippet\\":\\"auth recovery\\"}]"\n', 'utf8');
+  fs.chmodSync(gbrainBin, 0o755);
+  fs.chmodSync(qmdBin, 0o755);
+
+  const result = gbrain.runRetrievalEval({
+    evalPath,
+    gbrainBin,
+    gbrainDir: root,
+    qmdBin,
+    qmdIndex: 'notes-index',
+    qmdCollection: 'notes',
+  }, { compareQmd: true, limit: 3 });
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.summary.engines.gbrain, { passed: 1, failed: 0 });
+  assert.deepEqual(result.summary.engines.qmd, { passed: 1, failed: 0 });
+  assert.equal(result.compareQmd, true);
+  assert.equal(result.results[0].engines.gbrain.ok, true);
+  assert.equal(result.results[0].engines.qmd.ok, true);
+  assert.deepEqual(result.results[0].engines.qmd.command.args, [
+    'search',
+    '--index',
+    'notes-index',
+    'OpenClaw gateway auth recovery',
+    '-n',
+    '3',
+    '--json',
+    '--collection',
+    'notes',
+  ]);
+});
+
+test('runRetrievalEval marks timed-out comparison commands as failed', () => {
+  const root = tempDir();
+  const evalPath = path.join(root, 'eval.json');
+  const gbrainBin = path.join(root, 'fake-gbrain');
+  const qmdBin = path.join(root, 'slow-qmd');
+  fs.writeFileSync(evalPath, JSON.stringify({
+    version: 1,
+    questions: [{
+      query: 'slow comparison',
+      expected: {
+        gbrain: 'projects/ok',
+        qmd: 'qmd://notes/ok.md',
+      },
+    }],
+  }), 'utf8');
+  fs.writeFileSync(gbrainBin, '#!/bin/sh\nprintf "%s\\n" "projects/ok"\n', 'utf8');
+  fs.writeFileSync(qmdBin, '#!/bin/sh\nsleep 2\nprintf "%s\\n" "qmd://notes/ok.md"\n', 'utf8');
+  fs.chmodSync(gbrainBin, 0o755);
+  fs.chmodSync(qmdBin, 0o755);
+
+  const result = gbrain.runRetrievalEval({
+    evalPath,
+    gbrainBin,
+    gbrainDir: root,
+    qmdBin,
+    retrievalTimeoutMs: 100,
+  }, { compareQmd: true });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.results[0].engines.qmd.ok, false);
+  assert.equal(result.results[0].engines.qmd.command.timedOut, true);
+});
+
+test('runRetrievalEval can compare graph sidecar evidence separately from search', () => {
+  const root = tempDir();
+  const evalPath = path.join(root, 'eval.json');
+  const gbrainBin = path.join(root, 'fake-gbrain');
+  fs.writeFileSync(evalPath, JSON.stringify({
+    version: 1,
+    questions: [{
+      query: 'what connects memory and continuity?',
+      graphSeeds: ['projects/jarvos-context-engineering-upgrade'],
+      graphDepth: 2,
+      expected: {
+        gbrain: 'projects/missing-from-search',
+        graph: {
+          all: ['concepts/openclaw-context-management-lessons'],
+          any: ['continuity', 'memory'],
+        },
+      },
+    }],
+  }), 'utf8');
+  fs.writeFileSync(gbrainBin, `#!/usr/bin/env node
+const args = process.argv.slice(2);
+if (args[0] === 'graph-query') {
+  process.stdout.write(JSON.stringify([
+    { slug: 'projects/jarvos-context-engineering-upgrade', title: 'Context Engineering', depth: 0, links: [{ to_slug: 'concepts/openclaw-context-management-lessons', link_type: 'mentions' }] },
+    { slug: 'concepts/openclaw-context-management-lessons', title: 'Memory Continuity Lessons', depth: 1, links: [] }
+  ]));
+} else {
+  process.stdout.write('[0.1] sources/other -- unrelated search result');
+}
+`, 'utf8');
+  fs.chmodSync(gbrainBin, 0o755);
+
+  const result = gbrain.runRetrievalEval({
+    evalPath,
+    gbrainBin,
+    gbrainDir: root,
+  }, { compareGraph: true });
+
+  assert.equal(result.ok, false);
+  assert.deepEqual(result.summary.engines.gbrain, { passed: 0, failed: 1 });
+  assert.deepEqual(result.summary.engines.gbrain_graph, { passed: 1, failed: 0 });
+  assert.equal(result.results[0].engines.gbrain.ok, false);
+  assert.equal(result.results[0].engines.gbrain_graph.ok, true);
+  assert.deepEqual(result.results[0].engineQueries.gbrain_graph, ['projects/jarvos-context-engineering-upgrade']);
+  assert.equal(result.results[0].engines.gbrain_graph.recall.results[0].nodeCount, 2);
+});
+
+test('runRetrievalEval fails graph expectations that omit seeds', () => {
+  const root = tempDir();
+  const evalPath = path.join(root, 'eval.json');
+  const gbrainBin = path.join(root, 'fake-gbrain');
+  fs.writeFileSync(evalPath, JSON.stringify({
+    version: 1,
+    questions: [{
+      query: 'what connects memory and continuity?',
+      expected: {
+        gbrain: 'projects/jarvos-context-engineering-upgrade',
+        graph: 'concepts/openclaw-context-management-lessons',
+      },
+    }],
+  }), 'utf8');
+  fs.writeFileSync(gbrainBin, '#!/bin/sh\nprintf "%s\\n" "projects/jarvos-context-engineering-upgrade"\n', 'utf8');
+  fs.chmodSync(gbrainBin, 0o755);
+
+  const result = gbrain.runRetrievalEval({
+    evalPath,
+    gbrainBin,
+    gbrainDir: root,
+  }, { compareGraph: true });
+
+  assert.equal(result.ok, false);
+  assert.deepEqual(result.summary.engines.gbrain, { passed: 1, failed: 0 });
+  assert.deepEqual(result.summary.engines.gbrain_graph, { passed: 0, failed: 1 });
+  assert.equal(result.results[0].engines.gbrain.ok, true);
+  assert.equal(result.results[0].engines.gbrain_graph.ok, false);
+  assert.equal(result.results[0].engines.gbrain_graph.recall.seedCount, 0);
+  assert.deepEqual(result.results[0].engines.gbrain_graph.missingExpected, ['concepts/openclaw-context-management-lessons']);
+});
+
+test('runRetrievalEval can score combined runtime recall separately from direct search', () => {
+  const root = tempDir();
+  const evalPath = path.join(root, 'eval.json');
+  const gbrainBin = path.join(root, 'fake-gbrain');
+  const qmdBin = path.join(root, 'fake-qmd');
+  fs.writeFileSync(evalPath, JSON.stringify({
+    version: 1,
+    questions: [{
+      query: 'what should runtime recall know?',
+      graphSeeds: ['sources/runtime-recall-seed'],
+      expected: {
+        gbrain: 'projects/missing-direct-answer',
+        qmd: 'qmd://notes/runtime-recall.md',
+        graph: 'concepts/runtime-context',
+      },
+    }],
+  }), 'utf8');
+  fs.writeFileSync(gbrainBin, `#!/usr/bin/env node
+const args = process.argv.slice(2);
+if (args[0] === 'graph-query') {
+  process.stdout.write(JSON.stringify([
+    { slug: args[1], title: 'Runtime Recall Seed', type: 'source', depth: 0, links: [] },
+    { slug: 'concepts/runtime-context', title: 'Runtime Context', type: 'concept', depth: 1, links: [] }
+  ]));
+} else {
+  process.stdout.write('[0.91] sources/runtime-recall-seed -- anchor only');
+}
+`, 'utf8');
+  fs.writeFileSync(qmdBin, '#!/bin/sh\nprintf "%s\\n" "[{\\"file\\":\\"qmd://notes/runtime-recall.md\\",\\"snippet\\":\\"broad lookup evidence\\"}]"\n', 'utf8');
+  fs.chmodSync(gbrainBin, 0o755);
+  fs.chmodSync(qmdBin, 0o755);
+
+  const result = gbrain.runRetrievalEval({
+    evalPath,
+    gbrainBin,
+    gbrainDir: root,
+    qmdBin,
+  }, {
+    compareQmd: true,
+    compareGraph: true,
+    compareRecall: true,
+    graphSeedLimit: 1,
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.compareRecall, true);
+  assert.deepEqual(result.summary.engines.gbrain, { passed: 0, failed: 1 });
+  assert.deepEqual(result.summary.engines.qmd, { passed: 1, failed: 0 });
+  assert.deepEqual(result.summary.engines.gbrain_graph, { passed: 1, failed: 0 });
+  assert.deepEqual(result.summary.engines.gbrain_recall, { passed: 1, failed: 0 });
+  assert.equal(result.results[0].engines.gbrain.ok, false);
+  assert.equal(result.results[0].engines.gbrain_recall.ok, true);
+});
+
+test('runRetrievalEval recall candidates ignore omitted engine expectations', () => {
+  const root = tempDir();
+  const evalPath = path.join(root, 'eval.json');
+  const gbrainBin = path.join(root, 'fake-gbrain');
+  const qmdBin = path.join(root, 'fake-qmd');
+  fs.writeFileSync(evalPath, JSON.stringify({
+    version: 1,
+    questions: [{
+      query: 'qmd-only evidence',
+      expected: {
+        qmd: 'qmd://notes/expected.md',
+      },
+    }],
+  }), 'utf8');
+  fs.writeFileSync(gbrainBin, '#!/bin/sh\nprintf "%s\\n" "[0.50] projects/other -- unrelated"\n', 'utf8');
+  fs.writeFileSync(qmdBin, '#!/bin/sh\nprintf "%s\\n" "[{\\"file\\":\\"qmd://notes/other.md\\",\\"snippet\\":\\"unrelated\\"}]"\n', 'utf8');
+  fs.chmodSync(gbrainBin, 0o755);
+  fs.chmodSync(qmdBin, 0o755);
+
+  const result = gbrain.runRetrievalEval({
+    evalPath,
+    gbrainBin,
+    gbrainDir: root,
+    qmdBin,
+  }, {
+    compareRecall: true,
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.results[0].engines.gbrain.expectedMatched, undefined);
+  assert.deepEqual(result.results[0].engines.gbrain_recall.expectedCandidates, ['qmd://notes/expected.md']);
+  assert.equal(result.results[0].engines.gbrain_recall.ok, false);
+  assert.deepEqual(result.results[0].engines.gbrain_recall.missingExpected, ['qmd://notes/expected.md']);
+});
+
+test('runRetrievalEval preserves generic expectations alongside recall overrides', () => {
+  const root = tempDir();
+  const evalPath = path.join(root, 'eval.json');
+  const gbrainBin = path.join(root, 'fake-gbrain');
+  const qmdBin = path.join(root, 'fake-qmd');
+  fs.writeFileSync(evalPath, JSON.stringify({
+    version: 1,
+    questions: [{
+      query: 'mixed direct and recall evidence',
+      expected: {
+        slug: 'projects/foo',
+        recall: 'qmd://notes/foo.md',
+      },
+    }],
+  }), 'utf8');
+  fs.writeFileSync(gbrainBin, `#!/usr/bin/env node
+const args = process.argv.slice(2);
+if (args[0] === 'graph-query') {
+  process.stdout.write(JSON.stringify([{ slug: args[1], depth: 0, links: [] }]));
+} else {
+  process.stdout.write('[0.92] projects/foo -- direct answer');
+}
+`, 'utf8');
+  fs.writeFileSync(qmdBin, '#!/bin/sh\nprintf "%s\\n" "[{\\"file\\":\\"qmd://notes/foo.md\\",\\"snippet\\":\\"recall answer\\"}]"\n', 'utf8');
+  fs.chmodSync(gbrainBin, 0o755);
+  fs.chmodSync(qmdBin, 0o755);
+
+  const result = gbrain.runRetrievalEval({
+    evalPath,
+    gbrainBin,
+    gbrainDir: root,
+    qmdBin,
+  }, {
+    compareRecall: true,
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.results[0].engines.gbrain.expectedMatched, true);
+  assert.deepEqual(result.results[0].engines.gbrain_recall.expectedCandidates, ['qmd://notes/foo.md']);
+  assert.equal(result.results[0].engines.gbrain_recall.ok, true);
+});
+
+test('recallBundle combines GBrain search, QMD lookup, and graph expansion', () => {
+  const root = tempDir();
+  const gbrainBin = path.join(root, 'fake-gbrain');
+  const qmdBin = path.join(root, 'fake-qmd');
+  fs.writeFileSync(gbrainBin, `#!/usr/bin/env node
+const args = process.argv.slice(2);
+if (args[0] === 'graph-query') {
+  process.stdout.write(JSON.stringify([
+    { slug: args[1], title: 'JarVOS Runtime Recall', type: 'project', depth: 0, links: [] },
+    { slug: 'concepts/openclaw-context-management-lessons', title: 'OpenClaw Context Lessons', type: 'concept', depth: 1, links: [] }
+  ]));
+} else {
+  process.stdout.write('[0.99] projects/jarvos-runtime-recall -- structured GBrain context\\n[0.80] concepts/other -- extra context');
+}
+`, 'utf8');
+  fs.writeFileSync(qmdBin, '#!/bin/sh\nprintf "%s\\n" "[{\\"file\\":\\"qmd://notes/runtime-recall.md\\",\\"snippet\\":\\"broad lookup\\"}]"\n', 'utf8');
+  fs.chmodSync(gbrainBin, 0o755);
+  fs.chmodSync(qmdBin, 0o755);
+
+  const result = gbrain.recallBundle({
+    gbrainBin,
+    gbrainDir: root,
+    qmdBin,
+  }, {
+    query: 'runtime recall',
+    limit: 2,
+    graphSeedLimit: 1,
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.engines.gbrain.ok, true);
+  assert.equal(result.engines.qmd.ok, true);
+  assert.deepEqual(result.graphSeeds, ['projects/jarvos-runtime-recall']);
+  assert.equal(result.graph.results[0].nodeCount, 2);
+  assert.deepEqual(result.engines.qmd.command.args, ['search', 'runtime recall', '-n', '2', '--json']);
+  assert.match(result.markdown, /## Direct GBrain Search/);
+  assert.match(result.markdown, /## QMD Broad Lookup/);
+  assert.match(result.markdown, /## GBrain Graph Sidecar/);
+});
+
+test('renderRecallMarkdown preserves recalled code fences', () => {
+  const markdown = gbrain.renderRecallMarkdown({
+    query: 'fenced snippets',
+    engines: {
+      gbrain: {
+        ok: true,
+        text: 'before\n```bash\nnpm test\n```',
+      },
+      qmd: {
+        ok: true,
+        text: 'wide\n````\nvalue\n````',
+      },
+    },
+    graph: null,
+  });
+
+  assert.match(markdown, /````text\nbefore\n```bash\nnpm test\n```\n````/);
+  assert.match(markdown, /`````text\nwide\n````\nvalue\n````\n`````/);
+});
+
+test('recallBundle reports missing query without spawning commands', () => {
+  const result = gbrain.recallBundle({}, { query: '' });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.error, 'missing query');
+  assert.deepEqual(result.engines, {});
+  assert.match(result.markdown, /Query: \(missing\)/);
+});
+
+test('CLI recall exits non-zero when recall bundle fails', () => {
+  const result = spawnSync(process.execPath, [
+    path.join(__dirname, '..', 'scripts', 'jarvos-gbrain.js'),
+    'recall',
+  ], { encoding: 'utf8' });
+  const payload = JSON.parse(result.stdout);
+
+  assert.equal(result.status, 1);
+  assert.equal(payload.ok, false);
+  assert.equal(payload.error, 'missing query');
+});
+
+test('graphRecall traverses seed pages through the gbrain graph-query command', () => {
+  const root = tempDir();
+  const binPath = path.join(root, 'fake-gbrain');
+  const argsPath = path.join(root, 'args.json');
+  fs.writeFileSync(binPath, `#!/usr/bin/env node
+const fs = require('fs');
+fs.writeFileSync(${JSON.stringify(argsPath)}, JSON.stringify({ cwd: process.cwd(), args: process.argv.slice(2) }));
+process.stdout.write(JSON.stringify([
+  { slug: 'projects/jarvos-context-engineering-upgrade', depth: 0 },
+  { slug: 'concepts/openclaw-context-management-lessons', depth: 1 }
+]));
+`, 'utf8');
+  fs.chmodSync(binPath, 0o755);
+
+  const result = gbrain.graphRecall({
+    gbrainBin: binPath,
+    gbrainDir: root,
+  }, {
+    seeds: ['projects/jarvos-context-engineering-upgrade'],
+    depth: 3,
+  });
+  const captured = JSON.parse(fs.readFileSync(argsPath, 'utf8'));
+
+  assert.equal(result.ok, true);
+  assert.equal(result.seedCount, 1);
+  assert.equal(result.results[0].ok, true);
+  assert.equal(result.results[0].depth, 3);
+  assert.equal(result.results[0].nodeCount, 2);
+  assert.equal(result.results[0].nodes[1].slug, 'concepts/openclaw-context-management-lessons');
+  assert.equal(fs.realpathSync(captured.cwd), fs.realpathSync(root));
+  assert.deepEqual(captured.args, ['graph-query', 'projects/jarvos-context-engineering-upgrade', '--depth', '3']);
+});
+
+test('graphRecall parses gbrain graph-query text output', () => {
+  const root = tempDir();
+  const binPath = path.join(root, 'fake-gbrain');
+  fs.writeFileSync(binPath, `#!/bin/sh
+cat <<'OUT'
+[depth 0] sources/paperclip-openclaw-setup-guide-draft
+  --mentions-> concepts/jarvos-task-management-component (depth 1)
+    --mentions-> concepts/jarvos-memory-module-spec (depth 2)
+OUT
+`, 'utf8');
+  fs.chmodSync(binPath, 0o755);
+
+  const result = gbrain.graphRecall({
+    gbrainBin: binPath,
+    gbrainDir: root,
+  }, {
+    seeds: ['sources/paperclip-openclaw-setup-guide-draft'],
+    depth: 2,
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.results[0].nodeCount, 3);
+  assert.equal(result.results[0].nodes[1].slug, 'concepts/jarvos-task-management-component');
+  assert.deepEqual(result.results[0].nodes[1].links, [{
+    from_slug: 'sources/paperclip-openclaw-setup-guide-draft',
+    to_slug: 'concepts/jarvos-task-management-component',
+    link_type: 'mentions',
+  }]);
+});
+
+test('graphRecall accepts graph-query no-edge output', () => {
+  const root = tempDir();
+  const binPath = path.join(root, 'fake-gbrain');
+  fs.writeFileSync(binPath, '#!/bin/sh\nprintf "%s\\n" "No edges found for this node."\n', 'utf8');
+  fs.chmodSync(binPath, 0o755);
+
+  const result = gbrain.graphRecall({
+    gbrainBin: binPath,
+    gbrainDir: root,
+  }, {
+    seeds: ['projects/no-edge-seed'],
+    depth: 2,
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.results[0].ok, true);
+  assert.equal(result.results[0].nodeCount, 1);
+  assert.deepEqual(result.results[0].nodes[0], {
+    slug: 'projects/no-edge-seed',
+    depth: 0,
+    links: [],
+  });
+  assert.equal(result.results[0].parseError, null);
+});
+
+test('graphRecall fails when graph output is not a JSON array', () => {
+  const root = tempDir();
+  const binPath = path.join(root, 'fake-gbrain');
+  fs.writeFileSync(binPath, '#!/bin/sh\nprintf "%s\\n" "not json"\n', 'utf8');
+  fs.chmodSync(binPath, 0o755);
+
+  const result = gbrain.graphRecall({
+    gbrainBin: binPath,
+    gbrainDir: root,
+  }, {
+    seeds: ['projects/jarvos-context-engineering-upgrade'],
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.results[0].ok, false);
+  assert.match(result.results[0].parseError, /JSON/);
 });
 
 test('resolveConfig expands tilde gbrainBin paths before spawning', () => {

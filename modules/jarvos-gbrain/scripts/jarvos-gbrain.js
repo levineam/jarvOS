@@ -6,6 +6,8 @@ const {
   importToBrain,
   syncBrain,
   runRetrievalEval,
+  graphRecall,
+  recallBundle,
   doctor,
 } = require('../src/index.js');
 
@@ -19,6 +21,14 @@ function argValue(name) {
   return process.argv[index + 1] || null;
 }
 
+function argValues(name) {
+  const values = [];
+  for (let index = 0; index < process.argv.length; index += 1) {
+    if (process.argv[index] === name && process.argv[index + 1]) values.push(process.argv[index + 1]);
+  }
+  return values;
+}
+
 function cliConfig() {
   return {
     manifestPath: argValue('--manifest'),
@@ -27,6 +37,19 @@ function cliConfig() {
     gbrainDir: argValue('--gbrain-dir'),
     vaultDir: argValue('--vault-dir'),
     gbrainBin: argValue('--gbrain-bin'),
+    qmdBin: argValue('--qmd-bin'),
+    qmdMode: argValue('--qmd-mode'),
+    qmdCollection: argValue('--qmd-collection'),
+    qmdIndex: argValue('--qmd-index'),
+    limit: argValue('--limit'),
+    retrievalTimeoutMs: argValue('--timeout-ms'),
+    seed: argValue('--seed'),
+    seeds: argValues('--seed'),
+    depth: argValue('--depth'),
+    graphDepth: argValue('--graph-depth'),
+    graphSeedLimit: argValue('--graph-seed-limit'),
+    query: argValue('--query'),
+    maxChars: argValue('--max-chars'),
   };
 }
 
@@ -35,7 +58,7 @@ function printJson(value) {
 }
 
 function usage() {
-  process.stdout.write(`jarvos-gbrain\n\nCommands:\n  plan [--manifest path]\n  import [--dry-run] [--manifest path] [--brain-dir path] [--vault-dir path]\n  sync [--dry-run] [--brain-dir path] [--gbrain-dir path]\n  eval [--dry-run] [--eval-file path]\n  doctor\n\n`);
+  process.stdout.write(`jarvos-gbrain\n\nCommands:\n  plan [--manifest path]\n  import [--dry-run] [--manifest path] [--brain-dir path] [--vault-dir path]\n  sync [--dry-run] [--brain-dir path] [--gbrain-dir path]\n  eval [--dry-run] [--eval-file path] [--compare-qmd] [--compare-graph] [--compare-recall]\n       [--graph-depth n] [--graph-seed-limit n]\n       [--limit n] [--timeout-ms n] [--qmd-bin path] [--qmd-mode search|query|vsearch]\n       [--qmd-collection name] [--qmd-index name]\n  graph [--dry-run] --seed slug [--seed slug] [--depth n] [--timeout-ms n]\n  recall --query text [--no-qmd] [--no-graph] [--graph-seed slug] [--graph-depth n]\n         [--graph-seed-limit n] [--limit n] [--timeout-ms n] [--format markdown]\n  doctor\n\n`);
 }
 
 function main() {
@@ -65,7 +88,45 @@ function main() {
     }
 
     if (command === 'eval') {
-      printJson(runRetrievalEval(config, { dryRun: hasFlag('--dry-run') }));
+      printJson(runRetrievalEval(config, {
+        dryRun: hasFlag('--dry-run'),
+        compareQmd: hasFlag('--compare-qmd'),
+        compareGraph: hasFlag('--compare-graph'),
+        compareRecall: hasFlag('--compare-recall'),
+        graphDepth: argValue('--graph-depth'),
+        graphSeedLimit: argValue('--graph-seed-limit'),
+        limit: argValue('--limit'),
+      }));
+      return;
+    }
+
+    if (command === 'graph') {
+      printJson(graphRecall(config, {
+        dryRun: hasFlag('--dry-run'),
+        seeds: argValues('--seed'),
+        depth: argValue('--depth'),
+      }));
+      return;
+    }
+
+    if (command === 'recall') {
+      const result = recallBundle(config, {
+        dryRun: hasFlag('--dry-run'),
+        query: argValue('--query'),
+        includeQmd: !hasFlag('--no-qmd'),
+        autoGraph: !hasFlag('--no-graph'),
+        seeds: argValues('--graph-seed'),
+        graphDepth: argValue('--graph-depth'),
+        graphSeedLimit: argValue('--graph-seed-limit'),
+        limit: argValue('--limit'),
+        maxChars: argValue('--max-chars'),
+      });
+      if (argValue('--format') === 'markdown') {
+        process.stdout.write(result.markdown);
+      } else {
+        printJson(result);
+      }
+      process.exitCode = result.ok ? 0 : 1;
       return;
     }
 

@@ -1,5 +1,25 @@
 {
   "version": 1,
   "description": "Template retrieval eval. Add local questions in your workspace; keep private user facts out of the public repo.",
-  "questions": []
+  "questions": [
+    {
+      "query": "Where is the public jarvOS brain integration context?",
+      "expected": {
+        "gbrain": {
+          "slug": "projects/example-jarvos-brain",
+          "any": ["jarvOS", "brain"]
+        },
+        "graph": {
+          "all": ["projects/example-jarvos-brain"],
+          "any": ["source", "context"]
+        },
+        "qmd": {
+          "all": ["example-jarvos-brain.md"],
+          "any": ["jarvOS", "brain"]
+        }
+      },
+      "graphSeeds": ["projects/example-jarvos-brain"],
+      "include": false
+    }
+  ]
 }

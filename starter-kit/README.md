@@ -74,4 +74,19 @@ The `modules/` directory at the repo root contains the four core jarvOS runtime 
    node scripts/jarvos-gbrain.js import --dry-run --manifest /path/to/curated-import.json
    ```
 
+6. **Verify retrieval before runtime injection** — Keep your real eval questions
+   private, then compare GBrain, QMD, and graph recall before wiring automatic
+   context injection:
+   ```bash
+   node scripts/jarvos-gbrain.js eval \
+     --eval-file /path/to/eval-questions.json \
+     --compare-qmd \
+     --compare-graph \
+     --compare-recall
+
+   node scripts/jarvos-gbrain.js recall \
+     --query "What context should my assistant know before acting?" \
+     --format markdown
+   ```
+
 See [`modules/README.md`](../modules/README.md) for full module documentation.

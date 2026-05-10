@@ -1,7 +1,7 @@
 ---
 status: active
 created: 2026-02-19
-updated: 2026-05-08
+updated: 2026-05-10
 canonical: true
 type: decision
 project: ""
@@ -85,6 +85,29 @@ Decision rationale summary:
 - Gives agents structured pages for entity/project/concept recall.
 - Avoids treating QMD, memory-wiki, and GBrain as interchangeable memory tools.
 - Preserves portability by shipping templates and bridge code, not private knowledge.
+
+Validated operating pattern:
+
+1. The Obsidian-compatible vault remains the human source of truth.
+2. QMD remains the broad full-vault lookup and exact-retrieval layer.
+3. `@jarvos/gbrain` imports only curated, provenance-rich notes into GBrain.
+4. GBrain direct search handles structured recall when the curated page already
+   answers the question.
+5. GBrain graph recall handles cross-source recall when a known or discovered
+   seed page needs adjacent people, projects, concepts, meetings, or sources.
+6. `jarvos-gbrain recall` is the runtime-facing adapter that can bundle direct
+   GBrain search, optional QMD lookup, and graph sidecar context for OpenClaw or
+   another runtime to consider.
+7. OpenClaw `memory-wiki` remains a native diagnostic/synthesis layer and should
+   not be treated as the canonical GBrain import source without a separate
+   review and eval pass.
+
+Public/private boundary:
+
+- Public jarvOS includes reusable code, templates, docs, and empty example
+  manifests/eval fixtures.
+- Private deployments own real manifests, eval questions, generated GBrain
+  pages, note content, and runtime-specific prompt injection choices.
 
 ### Pattern: Ars Contexta (watchlist adoption)
 

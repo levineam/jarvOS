@@ -148,6 +148,11 @@ All paths are resolved via environment variables or `jarvos.config.json`. See `b
 **What it does:** Bridges a curated slice of your Obsidian-compatible vault into
 GBrain. It generates deterministic GBrain pages for people, companies, projects,
 concepts, meetings, and sources while preserving source provenance.
+Curated manifest items may also include graph-friendly relationship fields such
+as `company`, `key_people`, `attendees`, `related`, `see_also`, and `sources`.
+It also provides retrieval evals, graph sidecar recall, and a runtime recall
+bundle that combines direct GBrain search, optional QMD lookup, and graph
+expansion behind one callable adapter.
 
 **What it is NOT:** A full-vault search engine or a replacement for QMD. QMD
 remains the broad, fast vault lookup path. OpenClaw `memory-wiki` remains a
@@ -161,15 +166,26 @@ npm install
 node scripts/jarvos-gbrain.js doctor
 node scripts/jarvos-gbrain.js import --dry-run --manifest /path/to/curated-import.json
 node scripts/jarvos-gbrain.js sync --dry-run
+node scripts/jarvos-gbrain.js eval --eval-file /path/to/eval-questions.json --compare-qmd --compare-graph --compare-recall
+node scripts/jarvos-gbrain.js recall --query "What should my assistant know about this project?" --format markdown
 ```
 
 **Key files:**
 
-- `src/index.js` — import planning, page generation, sync wrapper, eval, doctor
+- `src/index.js` — import planning, page generation, sync wrapper, eval, graph recall, runtime recall, doctor
 - `scripts/jarvos-gbrain.js` — CLI entry point
 - `config/curated-import.json` — public template manifest
 - `config/eval-questions.json` — public template retrieval-eval fixture
 - `test/` — unit tests for mapping, provenance, dry-run behavior, and sync planning
+
+**Operating loop:**
+
+1. Keep private notes in the vault.
+2. Maintain a private curated GBrain import manifest outside this repo.
+3. Run import/sync/embed against that manifest.
+4. Prove recall quality with private eval questions.
+5. Use QMD for broad lookup and GBrain search/graph/recall for structured
+   runtime context.
 
 **Configuration:**
 
