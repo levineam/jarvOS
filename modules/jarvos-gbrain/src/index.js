@@ -603,7 +603,7 @@ function parseJsonOutput(output) {
   }
 }
 
-function parseGraphQueryOutput(output) {
+function parseGraphQueryOutput(output, seed) {
   const json = parseJsonOutput(output);
   if (json.ok && Array.isArray(json.value)) return json;
 
@@ -636,6 +636,9 @@ function parseGraphQueryOutput(output) {
   }
 
   if (nodes.length > 0) return { ok: true, value: nodes, error: null };
+  if (/No edges found/i.test(String(output || '')) && seed) {
+    return { ok: true, value: [{ slug: seed, depth: 0, links: [] }], error: null };
+  }
   return { ok: false, value: null, error: json.error || 'Expected gbrain graph-query output' };
 }
 
@@ -668,7 +671,7 @@ function graphRecall(overrides = {}, options = {}) {
       dryRun,
       timeoutMs: config.retrievalTimeoutMs,
     });
-    const parsed = dryRun ? { ok: true, value: [], error: null } : parseGraphQueryOutput(command.stdout || '');
+    const parsed = dryRun ? { ok: true, value: [], error: null } : parseGraphQueryOutput(command.stdout || '', seed);
     const nodes = Array.isArray(parsed.value) ? parsed.value : [];
     const parseOk = parsed.ok && Array.isArray(parsed.value);
     return {

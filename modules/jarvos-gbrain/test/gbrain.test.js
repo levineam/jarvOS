@@ -522,6 +522,31 @@ OUT
   }]);
 });
 
+test('graphRecall accepts graph-query no-edge output', () => {
+  const root = tempDir();
+  const binPath = path.join(root, 'fake-gbrain');
+  fs.writeFileSync(binPath, '#!/bin/sh\nprintf "%s\\n" "No edges found for this node."\n', 'utf8');
+  fs.chmodSync(binPath, 0o755);
+
+  const result = gbrain.graphRecall({
+    gbrainBin: binPath,
+    gbrainDir: root,
+  }, {
+    seeds: ['projects/no-edge-seed'],
+    depth: 2,
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.results[0].ok, true);
+  assert.equal(result.results[0].nodeCount, 1);
+  assert.deepEqual(result.results[0].nodes[0], {
+    slug: 'projects/no-edge-seed',
+    depth: 0,
+    links: [],
+  });
+  assert.equal(result.results[0].parseError, null);
+});
+
 test('graphRecall fails when graph output is not a JSON array', () => {
   const root = tempDir();
   const binPath = path.join(root, 'fake-gbrain');
