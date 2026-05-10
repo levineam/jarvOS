@@ -41,12 +41,13 @@ node scripts/jarvos-gbrain.js sync --dry-run
 
 ## Configuration
 
-Path resolution is environment-variable first, then portable defaults:
+Path resolution uses explicit overrides first, then the shared jarvOS path
+resolver from `@jarvos/secondbrain`, then portable defaults:
 
 | Env var | Default | Purpose |
 |---|---|---|
-| `JARVOS_VAULT_DIR` | `~/Documents/ObsidianVault` | Obsidian-compatible vault root |
-| `JARVOS_NOTES_DIR` | `$JARVOS_VAULT_DIR/Notes` | Notes directory for local callers |
+| `JARVOS_VAULT_DIR` | shared jarvOS resolver, then `~/Documents/Vault v3` | Obsidian-compatible vault root |
+| `JARVOS_NOTES_DIR` | shared jarvOS resolver, then `$JARVOS_VAULT_DIR/Notes` | Notes directory for local callers |
 | `JARVOS_BRAIN_DIR` | `~/brain` | GBrain content repo |
 | `JARVOS_GBRAIN_DIR` | `~/gbrain` | GBrain source/CLI repo |
 | `JARVOS_GBRAIN_BIN` | `gbrain` | GBrain CLI command |

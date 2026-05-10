@@ -8,9 +8,18 @@ const { spawnSync } = require('child_process');
 const MODULE_ROOT = path.resolve(__dirname, '..');
 const DEFAULT_MANIFEST_PATH = path.join(MODULE_ROOT, 'config', 'curated-import.json');
 const DEFAULT_EVAL_PATH = path.join(MODULE_ROOT, 'config', 'eval-questions.json');
-const DEFAULT_VAULT_DIR = path.join(os.homedir(), 'Documents', 'ObsidianVault');
+const DEFAULT_VAULT_DIR = path.join(os.homedir(), 'Documents', 'Vault v3');
 const DEFAULT_BRAIN_DIR = path.join(os.homedir(), 'brain');
 const DEFAULT_GBRAIN_DIR = path.join(os.homedir(), 'gbrain');
+const JARVOS_PATHS_PACKAGE = '@jarvos/secondbrain/bridge/config/jarvos-paths.js';
+const JARVOS_PATHS_SOURCE_MODULE = path.resolve(
+  MODULE_ROOT,
+  '..',
+  'jarvos-secondbrain',
+  'bridge',
+  'config',
+  'jarvos-paths.js',
+);
 
 const TYPE_DIRS = Object.freeze({
   person: 'people',
@@ -41,18 +50,46 @@ function firstString(...values) {
   return null;
 }
 
+function loadJarvosPaths() {
+  try {
+    const packagePath = require.resolve(JARVOS_PATHS_PACKAGE, {
+      paths: [process.cwd(), MODULE_ROOT],
+    });
+    return require(packagePath);
+  } catch {
+    // Fall through to the monorepo source path for local development.
+  }
+
+  try {
+    return require(JARVOS_PATHS_SOURCE_MODULE);
+  } catch {
+    return null;
+  }
+}
+
+function sharedPathOrFallback(jarvosPaths, getterName, fallback) {
+  if (jarvosPaths && typeof jarvosPaths[getterName] === 'function') {
+    return jarvosPaths[getterName]();
+  }
+  return fallback;
+}
+
 function resolveConfig(overrides = {}) {
-  const vaultDir = expandTilde(firstString(
-    overrides.vaultDir,
-    process.env.JARVOS_VAULT_DIR,
-    DEFAULT_VAULT_DIR,
-  ));
-  const notesDir = expandTilde(firstString(
-    overrides.notesDir,
-    process.env.JARVOS_NOTES_DIR,
-    process.env.VAULT_NOTES_DIR,
-    path.join(vaultDir, 'Notes'),
-  ));
+  const jarvosPaths = loadJarvosPaths();
+  const vaultDir = expandTilde(
+    firstString(overrides.vaultDir)
+      || sharedPathOrFallback(jarvosPaths, 'getVaultDir', firstString(process.env.JARVOS_VAULT_DIR, DEFAULT_VAULT_DIR)),
+  );
+  const notesDir = expandTilde(
+    firstString(overrides.notesDir)
+      || (firstString(overrides.vaultDir)
+        ? firstString(process.env.JARVOS_NOTES_DIR, process.env.VAULT_NOTES_DIR, path.join(vaultDir, 'Notes'))
+        : sharedPathOrFallback(
+          jarvosPaths,
+          'getNotesDir',
+          firstString(process.env.JARVOS_NOTES_DIR, process.env.VAULT_NOTES_DIR, path.join(vaultDir, 'Notes')),
+        )),
+  );
   const brainDir = expandTilde(firstString(
     overrides.brainDir,
     process.env.JARVOS_BRAIN_DIR,
@@ -441,6 +478,8 @@ function isExecutable(filePath) {
 function doctor(overrides = {}) {
   const config = resolveConfig(overrides);
   const checks = [
+    { name: 'vaultDir', ok: fs.existsSync(config.vaultDir), detail: config.vaultDir },
+    { name: 'notesDir', ok: fs.existsSync(config.notesDir), detail: config.notesDir },
     { name: 'manifest', ok: fs.existsSync(config.manifestPath), detail: config.manifestPath },
     { name: 'evalQuestions', ok: fs.existsSync(config.evalPath), detail: config.evalPath },
     { name: 'brainDir', ok: fs.existsSync(config.brainDir), detail: config.brainDir },
