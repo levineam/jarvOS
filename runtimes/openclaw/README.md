@@ -79,9 +79,37 @@ Use the full lifecycle contract from `core/pms/session-lifecycle.md`:
 - Morning briefing can use 4 hours (relaxed startup window)
 - If stale or missing, consumers should fall back cleanly
 
-## What OpenClaw Handles Natively
+## Memory and Knowledge Wiring
 
-OpenClaw does NOT have built-in learning loops. jarvOS adds:
+For OpenClaw, jarvOS treats the user's Obsidian-compatible vault as the source
+of truth and keeps retrieval tools in separate roles:
+
+| Layer | Recommended owner | Purpose |
+|-------|-------------------|---------|
+| Human notes | Obsidian-compatible vault | Source notes, journals, clippings, and durable personal context |
+| Broad lookup | QMD | Fast search and exact lookup across the full vault |
+| Structured recall | GBrain via `@jarvos/gbrain` | Curated people, companies, projects, concepts, meetings, and source pages |
+| Graph sidecar | GBrain graph commands | Cross-source recall once a likely seed page is known |
+| Runtime diagnostics | OpenClaw `memory-wiki` | Native wiki status, lint, dashboards, synthesis, and handoff diagnostics |
+
+The OpenClaw runtime should call the retrieval layer deliberately. A common
+pattern is:
+
+```bash
+node modules/jarvos-gbrain/scripts/jarvos-gbrain.js recall \
+  --query "What context should I know before answering this?" \
+  --format markdown
+```
+
+That command returns context-ready Markdown, but it does not inject anything on
+its own. Your OpenClaw adapter should decide when to call it and how much of the
+result belongs in the active prompt.
+
+## What jarvOS Adds On Top
+
+OpenClaw handles the runtime and can provide native memory-wiki diagnostics.
+jarvOS adds the opinionated operating loops:
+
 - Memory maintenance via HEARTBEAT.md
 - Daily memory files (`memory/YYYY-MM-DD.md`)
 - CIL (Continuous Integration of Learning) loop
