@@ -249,6 +249,36 @@ try {
   bad('@jarvos/gbrain module load', e);
 }
 
+// ── @jarvos/agent-context ──────────────────────────────────────────────────
+
+console.log('\n→ @jarvos/agent-context');
+
+try {
+  const ctx = require(path.join(ROOT, 'modules/jarvos-agent-context/src/index.js'));
+  const mcp = require(path.join(ROOT, 'modules/jarvos-agent-context/scripts/jarvos-mcp.js'));
+
+  const frontmatter = ctx.defaultFrontmatter({ project: 'smoke' });
+  if (
+    frontmatter.status === 'draft'
+    && frontmatter.type === 'note'
+    && frontmatter.project === 'smoke'
+  ) {
+    ok('defaultFrontmatter returns required note fields');
+  } else {
+    bad('defaultFrontmatter', new Error(JSON.stringify(frontmatter)));
+  }
+
+  const toolNames = mcp.TOOLS.map((tool) => tool.name);
+  if (toolNames.includes('jarvos_recall') && toolNames.includes('jarvos_create_note')) {
+    ok('jarvos MCP server exposes recall and note tools');
+  } else {
+    bad('jarvos MCP tools', new Error(JSON.stringify(toolNames)));
+  }
+
+} catch (e) {
+  bad('@jarvos/agent-context module load', e);
+}
+
 // ── Summary ─────────────────────────────────────────────────────────────────
 
 console.log(`\n${pass + fail} checks: ${pass} passed, ${fail} failed.\n`);
