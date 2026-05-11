@@ -254,6 +254,41 @@ search is needed.
 This command is a retrieval adapter, not automatic prompt injection. Runtime
 wiring should decide when to call it and how much of its Markdown to include.
 
+## Maintenance Loop
+
+`@jarvos/gbrain` is strongest when it is operated as a curated, evaluated layer
+instead of a full-vault mirror. A runtime or local workspace can wrap this module
+in a daily maintenance job with these steps:
+
+1. Refresh the broad vault index through QMD or the runtime's memory-index
+   command.
+2. Run `gbrain stats` and `gbrain doctor --fast --json`.
+3. Run the private combined eval:
+
+```bash
+node scripts/jarvos-gbrain.js eval \
+  --eval-file /path/to/private-eval-questions.json \
+  --compare-qmd \
+  --compare-graph \
+  --compare-recall
+```
+
+4. Scan recently edited vault notes for likely promotion candidates.
+5. Record candidates in the user's tracker or maintenance report.
+6. Generate a daily readable audit that explains the health of the stack in
+   user-facing language: QMD freshness, GBrain health, memory-wiki health,
+   combined recall eval result, scheduling state, changes, attention items, and
+   improvement opportunities.
+
+The audit should distinguish "the last report was healthy" from "today's
+maintenance actually ran." If the scheduled maintenance job was skipped,
+degraded, disabled, stale, or delivery failed, the report should say so plainly
+even when the previous memory report passed.
+
+The loop should be report-only for candidates. It should never write new pages
+into the GBrain repo or mutate the user's vault unless a human has approved the
+candidate and added it to the curated import manifest.
+
 ## Role in the jarvOS Architecture
 
 `@jarvos/gbrain` is the structured knowledge layer. It does not replace QMD or

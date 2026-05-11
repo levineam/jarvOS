@@ -186,6 +186,12 @@ node scripts/jarvos-gbrain.js recall --query "What should my assistant know abou
 4. Prove recall quality with private eval questions.
 5. Use QMD for broad lookup and GBrain search/graph/recall for structured
    runtime context.
+6. In OpenClaw or another runtime, automate a report-only maintenance loop that
+   refreshes indexes, checks GBrain and memory-wiki health, runs combined evals,
+   and proposes manifest additions without auto-promoting notes.
+7. Add a daily readable audit on top of the quiet maintenance loop so the user
+   can see, without remembering the system design, what was checked, why it
+   matters, what changed, and what needs attention.
 
 **Configuration:**
 

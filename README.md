@@ -130,6 +130,20 @@ The public repo ships template manifests and eval fixtures only. Real manifests,
 eval questions, generated private pages, and personal notes stay in your local
 workspace.
 
+A production OpenClaw setup should add a conservative maintenance loop around
+these tools: refresh QMD/OpenClaw memory indexes, run GBrain and memory-wiki
+health checks, run combined recall evals, and propose new GBrain promotion
+candidates for human review. The loop should not auto-promote notes into
+GBrain; approved additions still flow through the curated manifest and normal
+import/sync path.
+
+For human trust, pair that quiet loop with a daily readable audit. The audit
+should explain, in plain language, whether QMD refreshed, whether GBrain and
+memory-wiki are healthy, whether the combined recall eval still passes, what
+changed, what needs attention, and what improvement candidates are worth
+reviewing. The report is the user-facing assurance layer; the maintenance loop
+is the machine-facing work layer.
+
 OpenClaw `memory-wiki` is also separate from jarvOS. In this architecture it is
 treated as a native OpenClaw diagnostic and compiled-wiki layer, not the primary
 source for GBrain-ready graph discipline.
