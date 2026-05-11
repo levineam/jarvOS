@@ -107,6 +107,33 @@ Markdown, but it does not inject anything on its own. Your OpenClaw adapter
 should decide when to call it and how much of the result belongs in the active
 prompt.
 
+### Conservative Memory-Ops Cron Pattern
+
+For a production OpenClaw workspace, keep memory maintenance autonomous but
+bounded:
+
+- Run a daily isolated cron job that refreshes QMD/OpenClaw memory indexes.
+- Keep QMD in search/BM25 mode unless you explicitly choose an embedding pass.
+- Check GBrain with `gbrain stats` and `gbrain doctor --fast --json`.
+- Check OpenClaw `memory-wiki` with `openclaw wiki status`, `doctor`, and
+  `lint`.
+- Run `@jarvos/gbrain` private evals with `--compare-qmd --compare-graph
+  --compare-recall`.
+- Propose GBrain promotion candidates in the user's tracker or a maintenance
+  report, but do not auto-promote them.
+- Send or surface a daily readable audit during rollout. It should name what
+  passed, why each check matters, what changed, what needs user attention, and
+  what can be improved next. This is separate from quiet maintenance output.
+- Treat missed or preflight-skipped maintenance runs as visible attention items;
+  a previous healthy report should not make today's audit look healthy if the
+  scheduled maintenance job did not actually run.
+- If prompt injection is enabled, keep it narrow: one known session or agent,
+  low result count, strict character cap, short timeout, and an explicit
+  untrusted-context wrapper.
+
+This keeps the vault as the source of truth, QMD as broad lookup, GBrain as
+curated structured recall, and memory-wiki as runtime diagnostics.
+
 ## What jarvOS Adds On Top
 
 OpenClaw handles the runtime and can provide native memory-wiki diagnostics.
