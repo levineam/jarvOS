@@ -13,15 +13,17 @@ It is **not** a runtime. jarvOS rides on top of an existing agent runtime — to
 ```
 jarvOS/
 ├── core/              # Portable behavioral layer (AGENTS.md, SOUL.md, IDENTITY.md, governance, pms)
-├── modules/           # The four jarvOS-owned npm modules
+├── modules/           # The jarvOS-owned npm modules
 │   ├── jarvos-secondbrain/   # Content layer — journal, notes, capture routing
 │   ├── jarvos-memory/        # Agent-state memory contract
 │   ├── jarvos-ontology/      # Worldview / belief graph
-│   └── jarvos-gbrain/        # Structured knowledge bridge for GBrain
+│   ├── jarvos-gbrain/        # Structured knowledge bridge for GBrain
+│   └── jarvos-agent-context/ # Runtime-facing recall/action adapter + MCP tools
 ├── templates/         # Blank starting points (USER, MEMORY, ONTOLOGY, TOOLS, AGENTS, BOOTSTRAP, HEARTBEAT)
 ├── runtimes/
 │   ├── openclaw/      # OpenClaw adapter notes + setup script
-│   └── hermes/        # Hermes adapter notes + setup script
+│   ├── hermes/        # Hermes adapter notes + setup script
+│   └── codex/         # Codex CLI MCP adapter notes + setup script
 ├── starter-kit/       # Governance workflow templates and project-management scaffolding
 ├── docs/              # Architecture, operations, ADRs
 └── scripts/smoke-test.sh   # Verifies a fresh clone is intact
@@ -41,11 +43,11 @@ jarvOS is organized as seven layers, each with a clear owner. Mixing layers — 
 | Structured knowledge | `@jarvos/gbrain` | People, companies, projects, concepts, meetings, source pages |
 | Behavior    | `core/` (this repo)    | Identity, persona, rules, governance, PMS           |
 | Execution   | Paperclip (dependency) | Tasks, issues, assignments, done/not-done           |
-| Runtime     | OpenClaw or Hermes     | Scheduling, tool execution, messaging, model calls  |
+| Runtime     | OpenClaw, Hermes, Codex, etc. | Scheduling, tool execution, messaging, model calls  |
 
 Read top to bottom: raw capture flows up into memory, ontology, and structured knowledge; the behavioral layer reads the relevant surfaces to decide how to act; the runtime executes those decisions; Paperclip records what got done. No layer reaches around its neighbors.
 
-### The four jarvOS modules
+### The jarvOS modules
 
 The `modules/` directory contains the runnable parts of jarvOS. Each module is a standalone npm package with its own README — see [`modules/README.md`](./modules/README.md) for the full breakdown.
 
@@ -53,6 +55,7 @@ The `modules/` directory contains the runnable parts of jarvOS. Each module is a
 - **[`@jarvos/memory`](./modules/jarvos-memory/)** — schema and audit tooling for agent-state memory. Defines what a `MEMORY.md` record looks like, how items get promoted, and how to validate a memory file against the contract. Your actual memories stay private and local.
 - **[`@jarvos/ontology`](./modules/jarvos-ontology/)** — reader/writer/validator/renderer for the six-layer ontology (higher-order principles, beliefs, predictions, core self, goals, projects). Ships blank templates (`schema/templates/`) and heuristics (`schema/heuristics.md`), plus a Paperclip sync script (`scripts/sync-to-paperclip.js`). Your filled-in beliefs and goals stay private and local.
 - **[`@jarvos/gbrain`](./modules/jarvos-gbrain/)** — curated bridge from an Obsidian-compatible vault into GBrain pages. It generates structured people, companies, projects, concepts, meetings, and source pages with provenance, then wraps GBrain sync/embed, retrieval eval, graph recall, and runtime recall-bundle commands.
+- **[`@jarvos/agent-context`](./modules/jarvos-agent-context/)** — runtime-facing adapter for agent clients. It exposes current work, recall, startup brief, and verified note creation through a shared library and local stdio MCP server.
 
 ### Portable core + templates
 
@@ -75,7 +78,7 @@ A common confusion is which behavior is jarvOS and which comes from the runtime 
 ### Owned by jarvOS (this repo)
 
 - The behavioral layer: `AGENTS.md`, `SOUL.md`, `IDENTITY.md`, governance rules, PMS model
-- The four modules: `@jarvos/secondbrain`, `@jarvos/memory`, `@jarvos/ontology`, `@jarvos/gbrain`
+- The modules: `@jarvos/secondbrain`, `@jarvos/memory`, `@jarvos/ontology`, `@jarvos/gbrain`, `@jarvos/agent-context`
 - The templates and starter-kit
 - The adapter glue in `runtimes/`
 - Cross-runtime invariants: layer boundaries, ontology heuristics, memory promotion rules, the public/private boundary documented in [`PUBLIC_BASELINE.md`](./PUBLIC_BASELINE.md)
@@ -203,12 +206,21 @@ openclaw gateway start
 
 See [`runtimes/openclaw/README.md`](./runtimes/openclaw/README.md) for the full adapter wiring checklist (`TOOLS.md`, `CONSTITUTION.md`, `scripts/`, `workflows/`) and the bootstrap-budget guidance for keeping always-loaded files compact.
 
-### Use the modules
-
-The four modules can be installed independently from a clone of this repo:
+### Codex CLI
 
 ```bash
-npm install ./modules/jarvos-memory ./modules/jarvos-ontology ./modules/jarvos-secondbrain ./modules/jarvos-gbrain
+./runtimes/codex/setup.sh
+```
+
+This registers the local `jarvos` MCP server so Codex can call jarvOS recall,
+current-work, and note-capture tools.
+
+### Use the modules
+
+The modules can be installed independently from a clone of this repo:
+
+```bash
+npm install ./modules/jarvos-memory ./modules/jarvos-ontology ./modules/jarvos-secondbrain ./modules/jarvos-gbrain ./modules/jarvos-agent-context
 ```
 
 Each has its own quick-start in [`modules/README.md`](./modules/README.md).

@@ -1,6 +1,6 @@
 # jarvOS Modules
 
-The four core modules that make jarvOS work. Each module is a standalone npm package
+The core modules that make jarvOS work. Each module is a standalone npm package
 with a clear boundary and a dedicated README.
 
 | Module | Purpose | Key entry point |
@@ -9,6 +9,7 @@ with a clear boundary and a dedicated README.
 | [`@jarvos/ontology`](./jarvos-ontology/) | Worldview layer — beliefs, goals, values, predictions | `src/index.js` |
 | [`@jarvos/secondbrain`](./jarvos-secondbrain/) | Content layer — journal and notes | `bridge/config/jarvos-paths.js` |
 | [`@jarvos/gbrain`](./jarvos-gbrain/) | Structured knowledge bridge — curated vault import to GBrain | `src/index.js` |
+| [`@jarvos/agent-context`](./jarvos-agent-context/) | Runtime-facing adapter — recall, current work, note actions, MCP | `src/index.js` |
 
 ## Architecture
 
@@ -25,7 +26,7 @@ Raw capture (journal/notes)
 
 ```bash
 # From the root of this repo
-npm install ./modules/jarvos-memory ./modules/jarvos-ontology ./modules/jarvos-secondbrain ./modules/jarvos-gbrain
+npm install ./modules/jarvos-memory ./modules/jarvos-ontology ./modules/jarvos-secondbrain ./modules/jarvos-gbrain ./modules/jarvos-agent-context
 ```
 
 Or reference each module directly in your project:
@@ -204,6 +205,32 @@ node scripts/jarvos-gbrain.js recall --query "What should my assistant know abou
 | `JARVOS_GBRAIN_BIN` | `gbrain` | GBrain CLI command |
 | `JARVOS_GBRAIN_IMPORT_MANIFEST` | `<package-root>/config/curated-import.json` | Curated import manifest |
 | `JARVOS_GBRAIN_EVAL_QUESTIONS` | `<package-root>/config/eval-questions.json` | Retrieval eval fixture |
+
+---
+
+## @jarvos/agent-context
+
+**What it does:** Provides the runtime-facing jarvOS adapter for agent clients
+such as Codex CLI and Claude Code. It exposes one shared library and stdio MCP
+server for current work, GBrain/QMD/graph recall, startup briefs, and verified
+Obsidian note creation.
+
+**What it is NOT:** A new memory backend. It calls the existing jarvOS modules
+and Paperclip instead of storing private knowledge itself.
+
+**Quick start:**
+
+```bash
+cd modules/jarvos-agent-context
+npm test
+node scripts/jarvos-mcp.js startup-brief
+```
+
+**Codex setup:**
+
+```bash
+codex mcp add jarvos -- node /path/to/jarvOS/modules/jarvos-agent-context/scripts/jarvos-mcp.js
+```
 
 ---
 

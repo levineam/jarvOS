@@ -1,0 +1,36 @@
+{
+  "name": "@jarvos/agent-context",
+  "version": "0.1.0",
+  "description": "jarvOS runtime adapter context - shared recall, current-work, and note-capture tools for agent clients",
+  "license": "MIT",
+  "main": "src/index.js",
+  "exports": {
+    ".": "./src/index.js"
+  },
+  "bin": {
+    "jarvos-mcp": "scripts/jarvos-mcp.js"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.js",
+    "mcp": "node scripts/jarvos-mcp.js",
+    "startup-brief": "node scripts/jarvos-mcp.js startup-brief"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/levineam/jarvOS.git"
+  },
+  "peerDependencies": {
+    "@jarvos/gbrain": "0.1.0",
+    "@jarvos/secondbrain": "0.1.0"
+  },
+  "peerDependenciesMeta": {
+    "@jarvos/gbrain": {
+      "optional": true
+    },
+    "@jarvos/secondbrain": {
+      "optional": true
+    }
+  },
+  "engines": { "node": ">=18" },
+  "keywords": ["jarvos", "codex", "mcp", "agent-context", "memory", "obsidian"]
+}
