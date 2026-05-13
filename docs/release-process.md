@@ -15,7 +15,7 @@ jarvOS releases are milestone-driven. Ship when the active release scope is veri
 2. Confirm every included issue has evidence for the user-facing change, verification performed, and release-note impact.
 3. Confirm `package.json` version matches the intended tag.
 4. Update `CHANGELOG.md` with the version, date, user-facing changes, fixes, and known limitations.
-5. Prepare the GitHub Release notes at `docs/releases/v0.1.0.md` using `.github/release-template.md`.
+5. Prepare the GitHub Release notes at `docs/releases/<version>.md` using `.github/release-template.md`.
 6. Run the release readiness check:
 
    ```bash
@@ -32,11 +32,13 @@ jarvOS releases are milestone-driven. Ship when the active release scope is veri
 8. Create the git tag only after the release checklist is green:
 
    ```bash
-   git tag v0.1.0
-   git push origin v0.1.0
+   git tag <version>
+   git push origin <version>
    ```
 
-9. Publish a GitHub Release using `docs/releases/v0.1.0.md`.
+   Example: `<version>` is `v0.1.0` for the first public preview.
+
+9. Publish a GitHub Release using `docs/releases/<version>.md`.
 10. Record the release URL and final verification evidence on the Paperclip release issue.
 
 ## Release Gates

@@ -94,14 +94,18 @@ function checkReleaseReadiness(opts = {}) {
   if (pkg.version === target) pass('package.json version', pkg.version);
   else fail('package.json version', `package.json has ${pkg.version}; target is ${target}`);
 
-  const changelog = readText('CHANGELOG.md');
-  const changelogHeading = changelog.match(new RegExp(`^##\\s+${tag.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b([^\\n]*)`, 'm'));
-  if (!changelogHeading) {
-    fail('CHANGELOG.md version section', `Missing heading for ${tag}`);
-  } else if (/unreleased/i.test(changelogHeading[1] || '') && !opts.allowUnreleased) {
-    fail('CHANGELOG.md release date', `${tag} is still marked Unreleased`);
-  } else {
-    pass('CHANGELOG.md version section', changelogHeading[0]);
+  try {
+    const changelog = readText('CHANGELOG.md');
+    const changelogHeading = changelog.match(new RegExp(`^##\\s+${tag.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b([^\\n]*)`, 'm'));
+    if (!changelogHeading) {
+      fail('CHANGELOG.md version section', `Missing heading for ${tag}`);
+    } else if (/unreleased/i.test(changelogHeading[1] || '') && !opts.allowUnreleased) {
+      fail('CHANGELOG.md release date', `${tag} is still marked Unreleased`);
+    } else {
+      pass('CHANGELOG.md version section', changelogHeading[0]);
+    }
+  } catch (error) {
+    fail('CHANGELOG.md missing or unreadable', `Could not read CHANGELOG.md: ${error.message}`);
   }
 
   if (exists('docs/release-process.md')) pass('release process doc', 'docs/release-process.md');
@@ -130,22 +134,36 @@ function checkReleaseReadiness(opts = {}) {
   }
 
   const tagCheck = run('git', ['rev-parse', '--verify', '--quiet', `refs/tags/${tag}`]);
-  if (tagCheck.status === 0 && !opts.allowExistingTag) fail('git tag preflight', `${tag} already exists`);
-  else if (tagCheck.status === 0) pass('git tag preflight', `${tag} exists and was allowed`);
-  else pass('git tag preflight', `${tag} does not exist yet`);
+  if (tagCheck.error) {
+    fail('git tag preflight', `git failed: ${tagCheck.error.message}`);
+  } else if (tagCheck.status === 0 && !opts.allowExistingTag) {
+    fail('git tag preflight', `${tag} already exists`);
+  } else if (tagCheck.status === 0) {
+    pass('git tag preflight', `${tag} exists and was allowed`);
+  } else {
+    pass('git tag preflight', `${tag} does not exist yet`);
+  }
 
   const status = run('git', ['status', '--porcelain']);
-  const dirty = String(status.stdout || '').trim();
-  if (dirty && !opts.allowDirty) fail('working tree cleanliness', dirty.split('\n').slice(0, 10).join('; '));
-  else if (dirty) pass('working tree cleanliness', 'dirty tree allowed for development check');
-  else pass('working tree cleanliness', 'clean');
+  if (status.error) {
+    fail('working tree cleanliness', `git failed: ${status.error.message}`);
+  } else {
+    const dirty = String(status.stdout || '').trim();
+    if (dirty && !opts.allowDirty) fail('working tree cleanliness', dirty.split('\n').slice(0, 10).join('; '));
+    else if (dirty) pass('working tree cleanliness', 'dirty tree allowed for development check');
+    else pass('working tree cleanliness', 'clean');
+  }
 
   const tracked = run('git', ['ls-files']);
-  const localArtifacts = String(tracked.stdout || '')
-    .split(/\r?\n/)
-    .filter((file) => /(^|\/)(\.DS_Store|Thumbs\.db|desktop\.ini)$/.test(file));
-  if (localArtifacts.length) fail('tracked local artifacts', localArtifacts.join(', '));
-  else pass('tracked local artifacts', 'none');
+  if (tracked.error) {
+    fail('tracked local artifacts', `git failed: ${tracked.error.message}`);
+  } else {
+    const localArtifacts = String(tracked.stdout || '')
+      .split(/\r?\n/)
+      .filter((file) => /(^|\/)(\.DS_Store|Thumbs\.db|desktop\.ini)$/.test(file));
+    if (localArtifacts.length) fail('tracked local artifacts', localArtifacts.join(', '));
+    else pass('tracked local artifacts', 'none');
+  }
 
   if (opts.skipSmoke) {
     pass('smoke test', 'skipped by --skip-smoke');
