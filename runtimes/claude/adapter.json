@@ -1,0 +1,64 @@
+{
+  "schemaVersion": 1,
+  "id": "claude",
+  "displayName": "Claude",
+  "sharedAgentContext": {
+    "mcpServer": "modules/jarvos-agent-context/scripts/jarvos-mcp.js",
+    "requiredTools": [
+      "jarvos_current_work",
+      "jarvos_recall",
+      "jarvos_create_note",
+      "jarvos_startup_brief",
+      "jarvos_hydrate"
+    ]
+  },
+  "targets": [
+    {
+      "id": "claude-code",
+      "kind": "cli",
+      "mcp": {
+        "supported": true,
+        "registration": "claude mcp add --scope user jarvos -- node <mcp-server>"
+      },
+      "hydration": {
+        "mode": "hook",
+        "event": "SessionStart",
+        "script": "jarvos-session-start-hook.js",
+        "defaultMaxChars": 9500
+      }
+    },
+    {
+      "id": "claude-desktop",
+      "kind": "desktop",
+      "mcp": {
+        "supported": true,
+        "registration": "mcpServers.jarvos in Claude Desktop config"
+      },
+      "hydration": {
+        "mode": "manual",
+        "reason": "Claude Desktop local MCP config does not provide a verified startup additional-context hook in this v1 adapter."
+      }
+    }
+  ],
+  "setup": {
+    "script": "setup.sh"
+  },
+  "configWrites": {
+    "backupBeforeWrite": true,
+    "paths": [
+      "~/.claude/settings.json",
+      "~/Library/Application Support/Claude/claude_desktop_config.json"
+    ]
+  },
+  "unsupportedCapabilities": [
+    {
+      "capability": "claude-desktop-startup-hydration",
+      "reason": "Desktop startup context injection is not enabled until an official supported hook surface is verified."
+    }
+  ],
+  "verification": [
+    "claude mcp get jarvos",
+    "node runtimes/claude/jarvos-session-start-hook.js",
+    "node modules/jarvos-runtime-kit/scripts/jarvos-runtime-kit.js check claude"
+  ]
+}

@@ -1,0 +1,49 @@
+{
+  "schemaVersion": 1,
+  "id": "hermes",
+  "displayName": "Hermes Agent",
+  "sharedAgentContext": {
+    "mcpServer": "modules/jarvos-agent-context/scripts/jarvos-mcp.js",
+    "requiredTools": [
+      "jarvos_current_work",
+      "jarvos_recall",
+      "jarvos_create_note",
+      "jarvos_startup_brief",
+      "jarvos_hydrate"
+    ]
+  },
+  "targets": [
+    {
+      "id": "hermes-agent",
+      "kind": "agent-runtime",
+      "mcp": {
+        "supported": false,
+        "reason": "Current Hermes setup installs workspace files and a jarvOS skill, but does not register the shared jarvOS MCP server yet.",
+        "registration": "future Hermes MCP adapter pass"
+      },
+      "hydration": {
+        "mode": "manual",
+        "reason": "Existing Hermes adapter uses a jarvOS skill and native Hermes memory loops; automatic startup hydration is reserved for a future Hermes pass."
+      }
+    }
+  ],
+  "setup": {
+    "script": "setup.sh"
+  },
+  "configWrites": {
+    "backupBeforeWrite": true,
+    "paths": [
+      "~/.hermes/config.yaml",
+      "~/.hermes/skills/jarvos/SKILL.md"
+    ]
+  },
+  "unsupportedCapabilities": [
+    {
+      "capability": "automatic-startup-hydration",
+      "reason": "Deferred until the Hermes Agent integration pass can verify the native startup hook surface."
+    }
+  ],
+  "verification": [
+    "node modules/jarvos-runtime-kit/scripts/jarvos-runtime-kit.js check hermes"
+  ]
+}

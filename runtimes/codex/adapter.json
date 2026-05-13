@@ -1,0 +1,60 @@
+{
+  "schemaVersion": 1,
+  "id": "codex",
+  "displayName": "Codex",
+  "sharedAgentContext": {
+    "mcpServer": "modules/jarvos-agent-context/scripts/jarvos-mcp.js",
+    "requiredTools": [
+      "jarvos_current_work",
+      "jarvos_recall",
+      "jarvos_create_note",
+      "jarvos_startup_brief",
+      "jarvos_hydrate"
+    ]
+  },
+  "targets": [
+    {
+      "id": "codex-cli",
+      "kind": "cli",
+      "mcp": {
+        "supported": true,
+        "registration": "codex mcp add jarvos -- node <mcp-server>"
+      },
+      "hydration": {
+        "mode": "hook",
+        "event": "SessionStart",
+        "script": "jarvos-session-start-hook.js",
+        "defaultMaxChars": 12000
+      }
+    },
+    {
+      "id": "codex-app-local",
+      "kind": "desktop-local",
+      "mcp": {
+        "supported": true,
+        "registration": "shared ~/.codex/config.toml MCP server"
+      },
+      "hydration": {
+        "mode": "hook",
+        "event": "SessionStart",
+        "script": "jarvos-session-start-hook.js",
+        "defaultMaxChars": 12000
+      }
+    }
+  ],
+  "setup": {
+    "script": "setup.sh"
+  },
+  "configWrites": {
+    "backupBeforeWrite": true,
+    "paths": [
+      "~/.codex/config.toml"
+    ]
+  },
+  "unsupportedCapabilities": [],
+  "verification": [
+    "codex mcp get jarvos",
+    "node runtimes/codex/jarvos-session-start-hook.js",
+    "node modules/jarvos-runtime-kit/scripts/jarvos-runtime-kit.js check codex"
+  ]
+}
