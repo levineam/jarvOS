@@ -1,13 +1,21 @@
 # Changelog
 
-All notable public-doc sync changes are appended by `jarvos-public-docs-sync.sh`.
+Release sections describe user-facing jarvOS changes. Historical public-doc sync entries are preserved below for traceability.
 
-## v0.1.0 — Public preview (pending)
+## v0.1.0 — Unreleased
 
-### Release management
-- Added public release-management documentation for the v0.1.0 preview lane.
-- Added a v0.1.0 release-notes draft and readiness checklist.
-- Added a GitHub issue template for release-candidate intake.
+First public preview release candidate.
+
+### Included
+- Portable jarvOS core files for identity, persona, behavioral rules, and local setup templates.
+- Runtime setup paths for Hermes Agent and OpenClaw.
+- Smoke test coverage for shipped files and public baseline completeness.
+- Release process documentation, GitHub Release template, and executable release readiness check.
+
+### Known limitations
+- Distribution is git-based; no npm package is published for this release.
+- Setup still expects comfort with local developer tools and runtime-specific configuration.
+- Andrew's live private workspace is not included in the public baseline.
 
 ## 2026-03-27 — merged outstanding public repo PRs
 
