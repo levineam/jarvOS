@@ -124,9 +124,17 @@ bounded:
 - Send or surface a daily readable audit during rollout. It should name what
   passed, why each check matters, what changed, what needs user attention, and
   what can be improved next. This is separate from quiet maintenance output.
+- Keep the audit noisy-first until the loop has earned trust. During rollout,
+  deliver daily plain-English status to the human's normal attention channels
+  and keep durable evidence in the tracker or local memory artifacts.
 - Treat missed or preflight-skipped maintenance runs as visible attention items;
   a previous healthy report should not make today's audit look healthy if the
   scheduled maintenance job did not actually run.
+- Treat GBrain embedding provider changes as migrations. Before moving to a
+  local Ollama model such as `mxbai-embed-large`, back up GBrain, record current
+  doctor/stats/eval evidence, verify the model's vector dimensions, reinitialize
+  or migrate if dimensions differ, then rerun the same evals before calling the
+  migration healthy.
 - If prompt injection is enabled, keep it narrow: one known session or agent,
   low result count, strict character cap, short timeout, and an explicit
   untrusted-context wrapper.
