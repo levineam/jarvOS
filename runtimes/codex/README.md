@@ -43,13 +43,18 @@ result so Codex startup is not blocked.
 
 ## Hydration Scope
 
-Default budget is about 12,000 characters. The packet includes:
+Default budget is 12,000 characters, configurable with
+`JARVOS_HYDRATION_MAX_CHARS`. The packet includes:
 
 - Paperclip issues in `in_progress` and PR-backed `in_review`.
 - Today's journal entry.
 - Notes wikilinked from today's journal entry.
 - A compact `jarvos-ontology` meaning spine.
 - A report with sources, omissions, budget use, stale/missing data, and handles.
+
+The standalone `jarvos_current_work` tool keeps its broader default status
+filter of `in_progress`, `todo`, and `blocked`; hydration narrows the execution
+packet to active work plus review-backed PRs.
 
 ## Operating Rule
 

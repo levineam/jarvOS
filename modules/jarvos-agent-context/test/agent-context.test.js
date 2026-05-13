@@ -281,6 +281,44 @@ test('hydrate ignores journal wikilinks that resolve outside the notes directory
   }
 });
 
+test('hydrate keeps final output within the configured character budget', async () => {
+  const oldFetch = global.fetch;
+  const oldEnv = {
+    PAPERCLIP_API_KEY: process.env.PAPERCLIP_API_KEY,
+    PAPERCLIP_COMPANY_ID: process.env.PAPERCLIP_COMPANY_ID,
+    PAPERCLIP_AGENT_ID: process.env.PAPERCLIP_AGENT_ID,
+  };
+
+  process.env.PAPERCLIP_API_KEY = 'test-key';
+  process.env.PAPERCLIP_COMPANY_ID = 'company-1';
+  process.env.PAPERCLIP_AGENT_ID = 'agent-1';
+  global.fetch = async () => ({
+    ok: true,
+    json: async () => ([]),
+  });
+
+  try {
+    await withTempVault(async ({ journal }) => {
+      fs.writeFileSync(path.join(journal, '2026-05-12.md'), `# 2026-05-12\n\n${'journal detail '.repeat(400)}\n`, 'utf8');
+
+      const result = await hydrate({
+        maxChars: 900,
+        journal: { date: '2026-05-12', timeZone: 'UTC' },
+        ontology: { ontologyDir: path.join(journal, 'missing-ontology') },
+      });
+
+      assert.ok(result.markdown.length <= 900);
+      assert.equal(result.report.finalChars, result.markdown.length);
+    });
+  } finally {
+    global.fetch = oldFetch;
+    for (const [key, value] of Object.entries(oldEnv)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+});
+
 test('MCP jarvos_hydrate returns text content', async () => {
   await withTempVault(async ({ journal }) => {
     const oldEnv = {

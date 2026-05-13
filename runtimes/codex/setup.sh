@@ -50,7 +50,8 @@ const fs = require('fs');
 
 const [configPath, hookScript] = process.argv.slice(2);
 const hookCommand = `node ${JSON.stringify(hookScript)}`;
-const sessionStartLine = `SessionStart = [{ matcher = "startup", hooks = [{ type = "command", command = ${JSON.stringify(hookCommand)}, async = false, timeout = 30 }] }]`;
+const sessionStartHook = `{ matcher = "startup", hooks = [{ type = "command", command = ${JSON.stringify(hookCommand)}, async = false, timeout = 30 }] }`;
+const sessionStartLine = `SessionStart = [${sessionStartHook}]`;
 const original = fs.readFileSync(configPath, 'utf8');
 let next = original;
 
@@ -118,20 +119,24 @@ function setSessionStartHook(content) {
     }
   }
 
-  const filtered = lines.filter((line, index) => {
-    if (index <= start || index >= end) return true;
-    return !/^\s*SessionStart\s*=/.test(line);
-  });
-  start = filtered.findIndex((line) => /^\[hooks\]\s*$/.test(line));
-  end = filtered.length;
-  for (let i = start + 1; i < filtered.length; i += 1) {
-    if (/^\s*\[/.test(filtered[i])) {
-      end = i;
-      break;
+  for (let i = start + 1; i < end; i += 1) {
+    if (!/^\s*SessionStart\s*=/.test(lines[i])) continue;
+    if (lines[i].includes(hookScript)) {
+      lines[i] = sessionStartLine;
+      return lines.join('\n');
+    }
+
+    const close = lines[i].lastIndexOf(']');
+    if (close >= 0) {
+      const before = lines[i].slice(0, close).trimEnd();
+      const separator = before.endsWith('[') ? '' : ',';
+      lines[i] = `${before}${separator} ${sessionStartHook}${lines[i].slice(close)}`;
+      return lines.join('\n');
     }
   }
-  filtered.splice(end, 0, sessionStartLine);
-  return filtered.join('\n');
+
+  lines.splice(end, 0, sessionStartLine);
+  return lines.join('\n');
 }
 
 next = setSessionStartHook(next);

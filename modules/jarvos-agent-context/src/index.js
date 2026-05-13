@@ -395,7 +395,7 @@ function collectOntologySpine(options = {}, report) {
   return { ok: false, dir: null, sources: [], markdown: 'jarvos-ontology spine unavailable.' };
 }
 
-function renderHydrationReport(report, maxChars) {
+function renderHydrationReport(report, maxChars, finalChars = report.finalChars || 0) {
   const sources = report.sources.length
     ? report.sources.map((source) => `- ${source}`).join('\n')
     : '- none';
@@ -410,7 +410,7 @@ function renderHydrationReport(report, maxChars) {
     '# Hydration Report',
     '',
     `- Target budget: ${maxChars} chars`,
-    `- Final size: ${report.finalChars || 0} chars`,
+    `- Final size: ${finalChars} chars`,
     `- Redaction: obvious secrets/API tokens redacted before injection`,
     '',
     '## Included Sources',
@@ -490,7 +490,22 @@ async function hydrate(options = {}) {
     markdown = `${body.slice(0, Math.max(0, maxChars - finalReport.length - 20)).trimEnd()}\n\n${finalReport}`;
   }
   report.finalChars = markdown.length;
-  markdown = markdown.replace(/Final size: 0 chars/, `Final size: ${report.finalChars} chars`);
+  markdown = markdown.replace(/Final size: \d+ chars/, `Final size: ${report.finalChars} chars`);
+  if (markdown.length > maxChars) {
+    const before = markdown.length;
+    report.omissions.push(`final packet forcibly trimmed from ${before} to ${maxChars} chars`);
+    const finalReport = renderHydrationReport(report, maxChars, maxChars);
+    const bodyLimit = maxChars - finalReport.length - 2;
+    markdown = bodyLimit > 0
+      ? `${body.slice(0, bodyLimit).trimEnd()}\n\n${finalReport}`
+      : finalReport.slice(0, maxChars);
+    report.finalChars = markdown.length;
+    markdown = markdown.replace(/Final size: \d+ chars/, `Final size: ${report.finalChars} chars`);
+    if (markdown.length > maxChars) {
+      markdown = markdown.slice(0, maxChars);
+      report.finalChars = markdown.length;
+    }
+  }
 
   return { ok: true, markdown, report };
 }

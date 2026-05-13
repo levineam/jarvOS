@@ -118,7 +118,7 @@ appServer.stdout.on('data', (chunk) => {
         finish(1, 'jarvOS SessionStart hook disappeared after trust write');
         return;
       }
-      if (hook.trustStatus === 'trusted') {
+      if (hook.trustStatus === 'trusted' || hook.trustStatus === 'managed') {
         finish(0);
         return;
       }
