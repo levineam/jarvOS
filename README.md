@@ -140,6 +140,14 @@ candidates for human review. The loop should not auto-promote notes into
 GBrain; approved additions still flow through the curated manifest and normal
 import/sync path.
 
+Embedding maintenance should be handled with the same discipline. Treat an
+embedding model change as a data migration, not a provider toggle: capture
+`gbrain stats`, run `gbrain doctor --json`, back up the GBrain database, confirm
+the new model's vector dimensions, then run before/after retrieval evals. Local
+Ollama models such as `mxbai-embed-large` can be a good private default, but
+only after the live GBrain store is reinitialized or migrated for that model's
+dimensions.
+
 For human trust, pair that quiet loop with a daily readable audit. The audit
 should explain, in plain language, whether QMD refreshed, whether GBrain and
 memory-wiki are healthy, whether the combined recall eval still passes, what

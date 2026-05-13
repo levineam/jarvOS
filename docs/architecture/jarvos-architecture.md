@@ -1,7 +1,7 @@
 ---
 status: active
 created: 2026-02-19
-updated: 2026-05-10
+updated: 2026-05-13
 canonical: true
 type: decision
 project: ""
@@ -101,6 +101,17 @@ Validated operating pattern:
 7. OpenClaw `memory-wiki` remains a native diagnostic/synthesis layer and should
    not be treated as the canonical GBrain import source without a separate
    review and eval pass.
+
+Operational guardrails:
+
+- Run a daily plain-English audit during rollout so the human can see whether
+  QMD, GBrain, memory-wiki, scheduling, and recall evals are actually healthy.
+- Store follow-up work in the execution tracker instead of relying on a human to
+  remember what should be improved later.
+- Treat GBrain embedding-provider changes as migrations. A local Ollama model is
+  attractive for private operation, but vector dimensions must be checked and
+  the GBrain store must be backed up, reinitialized or migrated, re-embedded,
+  and re-evaluated before the change is considered healthy.
 
 Public/private boundary:
 

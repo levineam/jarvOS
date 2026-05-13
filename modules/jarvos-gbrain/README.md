@@ -289,6 +289,29 @@ The loop should be report-only for candidates. It should never write new pages
 into the GBrain repo or mutate the user's vault unless a human has approved the
 candidate and added it to the curated import manifest.
 
+### Embedding Provider Changes
+
+`gbrain embed --stale` writes vectors into the live GBrain store. Do not run it
+after changing embedding providers until the store and model dimensions are
+known to be compatible.
+
+Use this preflight before switching providers:
+
+1. Capture `gbrain stats` and `gbrain doctor --json`.
+2. Run the private retrieval eval with `--compare-qmd --compare-graph
+   --compare-recall`.
+3. Back up the GBrain database directory.
+4. Probe the target model and record its embedding dimensions.
+5. If dimensions differ from the current store, reinitialize or migrate the
+   vector store intentionally; do not mix dimensions in place.
+6. Run `gbrain embed --stale`.
+7. Re-run doctor, stats, and the same retrieval eval.
+8. Keep the backup until the after-state is at least as good as the baseline.
+
+For private local-first deployments, Ollama `mxbai-embed-large` is a reasonable
+candidate, but it is still a migration when the existing store was initialized
+with a different dimension model such as an OpenAI embedding model.
+
 ## Role in the jarvOS Architecture
 
 `@jarvos/gbrain` is the structured knowledge layer. It does not replace QMD or

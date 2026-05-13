@@ -194,6 +194,14 @@ node scripts/jarvos-gbrain.js recall --query "What should my assistant know abou
    can see, without remembering the system design, what was checked, why it
    matters, what changed, and what needs attention.
 
+**Embedding provider rule:** do not switch a live GBrain store from one embedding
+model family to another without treating it as a migration. Record current
+`gbrain stats`, `gbrain doctor --json`, and retrieval eval results; back up the
+database; verify the new model's vector dimensions; then reinitialize or migrate
+and re-embed with rollback proof. Local Ollama models such as
+`mxbai-embed-large` are suitable for private deployments when their dimensions
+match the store or the migration plan explicitly changes the store.
+
 **Configuration:**
 
 | Env var | Default | Purpose |
