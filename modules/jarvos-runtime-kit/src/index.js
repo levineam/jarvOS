@@ -5,6 +5,7 @@ const path = require('path');
 
 const DEFAULT_AGENT_CONTEXT_MCP = 'modules/jarvos-agent-context/scripts/jarvos-mcp.js';
 const REQUIRED_MCP_TOOL = 'jarvos_hydrate';
+const HYDRATION_MODES = ['hook', 'manual', 'unsupported'];
 
 function repoRootFrom(start = __dirname) {
   let dir = path.resolve(start);
@@ -72,6 +73,9 @@ function validateManifest(manifest) {
     }
     if (!target.hydration || !target.hydration.mode) {
       add(errors, `target ${target.id || '?'} hydration.mode is required`);
+    }
+    if (target.hydration?.mode && !HYDRATION_MODES.includes(target.hydration.mode)) {
+      add(errors, `target ${target.id || '?'} hydration.mode must be one of: ${HYDRATION_MODES.join(', ')}`);
     }
     if (target.hydration?.mode === 'unsupported' && !target.hydration.reason) {
       add(errors, `target ${target.id || '?'} unsupported hydration requires a reason`);
@@ -216,6 +220,7 @@ function scaffoldRuntime(runtimeId, outDir) {
 
 module.exports = {
   DEFAULT_AGENT_CONTEXT_MCP,
+  HYDRATION_MODES,
   REQUIRED_MCP_TOOL,
   checkRuntime,
   listRuntimeManifests,
