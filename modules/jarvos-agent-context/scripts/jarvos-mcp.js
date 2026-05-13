@@ -64,7 +64,7 @@ const TOOLS = [
   },
   {
     name: 'jarvos_hydrate',
-    description: 'Return a bounded jarvOS working-context hydration packet for Codex session startup.',
+    description: 'Return a bounded jarvOS Working Context Packet. Use this when the user says "boot jarvOS", asks to hydrate jarvOS, or wants current jarvOS working context for a chat or session.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -78,6 +78,35 @@ const TOOLS = [
         },
       },
     },
+  },
+];
+
+const BOOT_JARVOS_PROMPT_TEXT = [
+  'Boot jarvOS for this chat.',
+  '',
+  'Call the jarvos_hydrate tool with maxChars: 9000, then use the returned jarvOS Working Context Packet as working context for the rest of this chat.',
+  '',
+  'After the tool call, reply with a concise confirmation that includes:',
+  '- whether the jarvOS Working Context Packet was loaded',
+  '- whether the Hydration Report was included',
+  '- which source groups were included',
+  '- any omissions, stale data, or missing sources reported',
+  '',
+  'Do not paste raw private notes, secrets, API tokens, or the full packet unless explicitly asked.',
+].join('\n');
+
+const PROMPTS = [
+  {
+    name: 'boot_jarvos',
+    title: 'Boot jarvOS',
+    description: 'Hydrate the current chat with the bounded jarvOS Working Context Packet.',
+    arguments: [
+      {
+        name: 'maxChars',
+        description: 'Optional maximum character budget for the hydration packet. Defaults to 9000 for Claude Desktop.',
+        required: false,
+      },
+    ],
   },
 ];
 
@@ -116,6 +145,29 @@ async function callTool(name, args = {}) {
   throw new Error(`Unknown tool: ${name}`);
 }
 
+function promptResult(name, args = {}) {
+  if (name !== 'boot_jarvos') {
+    const error = new Error(`Unknown prompt: ${name}`);
+    error.code = -32602;
+    throw error;
+  }
+
+  const maxChars = Number(args.maxChars || 9000);
+  const text = Number.isFinite(maxChars) && maxChars > 0
+    ? BOOT_JARVOS_PROMPT_TEXT.replace('maxChars: 9000', `maxChars: ${Math.floor(maxChars)}`)
+    : BOOT_JARVOS_PROMPT_TEXT;
+
+  return {
+    description: 'Boot jarvOS manual hydration for this chat.',
+    messages: [
+      {
+        role: 'user',
+        content: { type: 'text', text },
+      },
+    ],
+  };
+}
+
 async function handle(message) {
   if (!message || typeof message !== 'object') return;
   const { id, method, params } = message;
@@ -128,7 +180,7 @@ async function handle(message) {
         id,
         result: {
           protocolVersion: params?.protocolVersion || '2024-11-05',
-          capabilities: { tools: {} },
+          capabilities: { tools: {}, prompts: {} },
           serverInfo: { name: 'jarvos', version: '0.1.0' },
         },
       });
@@ -137,6 +189,17 @@ async function handle(message) {
 
     if (method === 'tools/list') {
       write({ jsonrpc: '2.0', id, result: { tools: TOOLS } });
+      return;
+    }
+
+    if (method === 'prompts/list') {
+      write({ jsonrpc: '2.0', id, result: { prompts: PROMPTS } });
+      return;
+    }
+
+    if (method === 'prompts/get') {
+      const result = promptResult(params?.name, params?.arguments || {});
+      write({ jsonrpc: '2.0', id, result });
       return;
     }
 
@@ -155,7 +218,7 @@ async function handle(message) {
     write({
       jsonrpc: '2.0',
       id,
-      error: { code: -32000, message: error.message || String(error) },
+      error: { code: error.code || -32000, message: error.message || String(error) },
     });
   }
 }
@@ -204,3 +267,6 @@ if (require.main === module) {
 }
 
 module.exports = { TOOLS, callTool, handle, textResult };
+module.exports.BOOT_JARVOS_PROMPT_TEXT = BOOT_JARVOS_PROMPT_TEXT;
+module.exports.PROMPTS = PROMPTS;
+module.exports.promptResult = promptResult;

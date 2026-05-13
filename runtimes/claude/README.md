@@ -55,6 +55,22 @@ does not verify an official Desktop startup additional-context hook. Use the
 `jarvos_hydrate` MCP tool manually when a Desktop session needs the current
 working-context packet.
 
+### Boot jarvOS in Claude Desktop
+
+For a new Claude Desktop chat, use this short starter phrase:
+
+```text
+boot jarvOS
+```
+
+Claude should route that request to the `jarvos_hydrate` MCP tool with a bounded
+Desktop budget, then confirm the Working Context Packet and Hydration Report
+were loaded. The jarvOS MCP server also exposes a `boot_jarvos` prompt with the
+same instructions for clients that surface MCP prompts directly.
+
+This is still manual hydration. It makes one-step Desktop boot reliable, but it
+does not imply automatic startup context injection for Claude Desktop.
+
 ## Available Tools
 
 - `jarvos_current_work` — current Paperclip work summary.
@@ -64,6 +80,8 @@ working-context packet.
 - `jarvos_hydrate` — bounded working-context packet with Paperclip current work,
   today's journal, linked notes, jarvOS ontology spine, redaction, and a
   hydration report.
+- `boot_jarvos` prompt — user-facing "Boot jarvOS" starter prompt for Claude
+  Desktop manual hydration.
 
 ## Verification
 
