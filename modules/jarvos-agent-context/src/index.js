@@ -301,9 +301,15 @@ function walkMarkdownFiles(root, maxFiles = 2000) {
   return out;
 }
 
+function isPathInside(parentDir, candidatePath) {
+  const relative = path.relative(path.resolve(parentDir), path.resolve(candidatePath));
+  return relative === '' || (relative && !relative.startsWith('..') && !path.isAbsolute(relative));
+}
+
 function resolveWikilink(notesDir, title, searchIndex) {
   const normalized = title.replace(/[\\/]/g, path.sep);
-  const direct = path.join(notesDir, `${normalized}.md`);
+  const direct = path.resolve(notesDir, `${normalized}.md`);
+  if (!isPathInside(notesDir, direct)) return null;
   if (fs.existsSync(direct)) return direct;
 
   const basename = `${path.basename(normalized).toLowerCase()}.md`;

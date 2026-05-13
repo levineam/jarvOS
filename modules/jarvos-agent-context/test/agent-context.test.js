@@ -240,6 +240,47 @@ test('hydrate includes journal, linked notes, ontology spine, report, and redact
   }
 });
 
+test('hydrate ignores journal wikilinks that resolve outside the notes directory', async () => {
+  const oldFetch = global.fetch;
+  const oldEnv = {
+    PAPERCLIP_API_KEY: process.env.PAPERCLIP_API_KEY,
+    PAPERCLIP_COMPANY_ID: process.env.PAPERCLIP_COMPANY_ID,
+    PAPERCLIP_AGENT_ID: process.env.PAPERCLIP_AGENT_ID,
+  };
+
+  process.env.PAPERCLIP_API_KEY = 'test-key';
+  process.env.PAPERCLIP_COMPANY_ID = 'company-1';
+  process.env.PAPERCLIP_AGENT_ID = 'agent-1';
+  global.fetch = async () => ({
+    ok: true,
+    json: async () => ([]),
+  });
+
+  try {
+    await withTempVault(async ({ vault, notes, journal }) => {
+      fs.writeFileSync(path.join(journal, '2026-05-12.md'), '# 2026-05-12\n\n[[../Secret]] and [[Visible Note]]\n', 'utf8');
+      fs.writeFileSync(path.join(vault, 'Secret.md'), '# Secret\n\nOutside notes content.\n', 'utf8');
+      fs.writeFileSync(path.join(notes, 'Visible Note.md'), '# Visible Note\n\nInside notes content.\n', 'utf8');
+
+      const result = await hydrate({
+        maxChars: 9000,
+        journal: { date: '2026-05-12', timeZone: 'UTC' },
+        ontology: { ontologyDir: path.join(vault, 'missing-ontology') },
+      });
+
+      assert.match(result.markdown, /Inside notes content/);
+      assert.match(result.markdown, /linked note not found: \[\[\.\.\/Secret\]\]/);
+      assert.doesNotMatch(result.markdown, /Outside notes content/);
+    });
+  } finally {
+    global.fetch = oldFetch;
+    for (const [key, value] of Object.entries(oldEnv)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+});
+
 test('MCP jarvos_hydrate returns text content', async () => {
   await withTempVault(async ({ journal }) => {
     const oldEnv = {
