@@ -40,3 +40,12 @@ Hermes has built-in systems for things jarvOS custom-builds on OpenClaw:
 - **Governance rules** — when to ask permission, when to act
 - **Communication style** — conversational clarity, no corporate speak
 - **Alignment map** (ONTOLOGY.md) — what the user cares about
+
+## Runtime Adapter Status
+
+Target: `hermes-agent`.
+
+The current Hermes adapter does not register the shared jarvOS MCP server yet.
+Hydration is manual/unsupported in v1; this manifest intentionally exposes that
+gap so the future Hermes adapter pass can add MCP registration and
+`jarvos_hydrate` support without drifting from the shared runtime contract.

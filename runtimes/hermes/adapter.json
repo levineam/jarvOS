@@ -17,8 +17,9 @@
       "id": "hermes-agent",
       "kind": "agent-runtime",
       "mcp": {
-        "supported": true,
-        "registration": "setup.sh configures Hermes workspace and skills"
+        "supported": false,
+        "reason": "Current Hermes setup installs workspace files and a jarvOS skill, but does not register the shared jarvOS MCP server yet.",
+        "registration": "future Hermes MCP adapter pass"
       },
       "hydration": {
         "mode": "manual",

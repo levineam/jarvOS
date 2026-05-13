@@ -28,6 +28,6 @@ Each `runtimes/<runtime>/adapter.json` declares:
 - intentionally unsupported host capabilities
 
 The kit validates the manifest shape and checks the adapter directory for common
-drift: missing shared MCP wiring, missing `jarvos_hydrate`, setup scripts that
-edit config without backup behavior, and hook-based adapters that do not fail
-open.
+drift: missing shared MCP wiring, undocumented unsupported MCP targets, missing
+`jarvos_hydrate`, setup scripts that edit config without backup behavior, and
+hook-based adapters that do not fail open.

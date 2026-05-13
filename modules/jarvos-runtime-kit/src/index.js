@@ -64,8 +64,11 @@ function validateManifest(manifest) {
     }
     if (!target.id) add(errors, 'target.id is required');
     if (!target.kind) add(errors, `target ${target.id || '?'} kind is required`);
-    if (!target.mcp || target.mcp.supported !== true) {
-      add(errors, `target ${target.id || '?'} must support shared MCP`);
+    if (!target.mcp || typeof target.mcp.supported !== 'boolean') {
+      add(errors, `target ${target.id || '?'} mcp.supported is required`);
+    }
+    if (target.mcp?.supported === false && !target.mcp.reason) {
+      add(errors, `target ${target.id || '?'} unsupported MCP requires a reason`);
     }
     if (!target.hydration || !target.hydration.mode) {
       add(errors, `target ${target.id || '?'} hydration.mode is required`);

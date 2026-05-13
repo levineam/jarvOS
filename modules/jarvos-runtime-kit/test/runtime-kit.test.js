@@ -55,6 +55,32 @@ test('validateManifest reports malformed target entries', () => {
   assert.match(result.errors.join('\n'), /targets\[0\] must be an object/);
 });
 
+test('validateManifest requires a reason for unsupported MCP targets', () => {
+  const manifest = {
+    schemaVersion: 1,
+    id: 'sample-runtime',
+    displayName: 'Sample Runtime',
+    setup: { script: 'setup.sh' },
+    sharedAgentContext: {
+      mcpServer: 'modules/jarvos-agent-context/scripts/jarvos-mcp.js',
+      requiredTools: ['jarvos_hydrate'],
+    },
+    targets: [{
+      id: 'sample-runtime-cli',
+      kind: 'cli',
+      mcp: { supported: false },
+      hydration: { mode: 'manual', reason: 'test' },
+    }],
+  };
+
+  const rejected = validateManifest(manifest);
+  assert.equal(rejected.ok, false);
+  assert.match(rejected.errors.join('\n'), /unsupported MCP requires a reason/);
+
+  manifest.targets[0].mcp.reason = 'Host has no MCP registration surface yet.';
+  assert.equal(validateManifest(manifest).ok, true);
+});
+
 test('checkRuntime passes every checked-in adapter manifest', () => {
   const manifests = listRuntimeManifests(ROOT);
   assert.ok(manifests.length >= 3);
