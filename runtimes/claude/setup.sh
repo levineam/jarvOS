@@ -17,11 +17,25 @@ if [ ! -f "$HOOK_SCRIPT" ]; then
   exit 1
 fi
 
+warn_if_claude_mcp_shadowed() {
+  local details
+  details="$(claude mcp get jarvos 2>/dev/null || true)"
+  if [ -z "$details" ]; then
+    echo "Warning: Claude Code could not resolve the jarvOS MCP server after user-scope registration." >&2
+    return
+  fi
+  if ! printf "%s\n" "$details" | grep -F "$MCP_SERVER" >/dev/null; then
+    echo "Warning: the effective Claude Code jarvOS MCP entry does not point at $MCP_SERVER." >&2
+    echo "A local or project scoped Claude MCP server named jarvos may be shadowing the user-scoped jarvOS server." >&2
+  fi
+}
+
 if [ "${JARVOS_SKIP_CLAUDE_CODE_MCP:-0}" = "1" ]; then
   echo "Skipping Claude Code MCP registration because JARVOS_SKIP_CLAUDE_CODE_MCP=1."
 elif command -v claude >/dev/null 2>&1; then
   claude mcp remove --scope user jarvos >/dev/null 2>&1 || true
   claude mcp add --scope user jarvos -- node "$MCP_SERVER" >/dev/null
+  warn_if_claude_mcp_shadowed
   echo "Registered jarvOS MCP server for Claude Code: $MCP_SERVER"
 else
   echo "Claude Code CLI not found on PATH; skipping Claude Code MCP registration." >&2

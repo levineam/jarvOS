@@ -29,6 +29,10 @@ function isObject(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
+function escapeRegExp(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 function add(errors, message) {
   errors.push(message);
 }
@@ -53,7 +57,11 @@ function validateManifest(manifest) {
     add(errors, `sharedAgentContext.requiredTools must include ${REQUIRED_MCP_TOOL}`);
   }
 
-  for (const target of manifest.targets || []) {
+  for (const [index, target] of (manifest.targets || []).entries()) {
+    if (!isObject(target)) {
+      add(errors, `targets[${index}] must be an object`);
+      continue;
+    }
     if (!target.id) add(errors, 'target.id is required');
     if (!target.kind) add(errors, `target ${target.id || '?'} kind is required`);
     if (!target.mcp || target.mcp.supported !== true) {
@@ -123,9 +131,13 @@ function checkRuntime(manifestPath, options = {}) {
   const mcpServer = path.join(root, manifest.sharedAgentContext?.mcpServer || '');
   if (!fs.existsSync(mcpServer)) add(errors, `shared MCP server missing: ${rel(root, mcpServer)}`);
   if (fs.existsSync(mcpServer)) {
-    const mcp = require(mcpServer);
-    const tools = Array.isArray(mcp.TOOLS) ? mcp.TOOLS.map((tool) => tool.name) : [];
-    if (!tools.includes(REQUIRED_MCP_TOOL)) add(errors, `shared MCP server does not expose ${REQUIRED_MCP_TOOL}`);
+    try {
+      const mcp = require(mcpServer);
+      const tools = Array.isArray(mcp.TOOLS) ? mcp.TOOLS.map((tool) => tool.name) : [];
+      if (!tools.includes(REQUIRED_MCP_TOOL)) add(errors, `shared MCP server does not expose ${REQUIRED_MCP_TOOL}`);
+    } catch (error) {
+      add(errors, `shared MCP server could not be loaded: ${error.message}`);
+    }
   }
 
   if (manifest.configWrites?.backupBeforeWrite) {
@@ -135,6 +147,7 @@ function checkRuntime(manifestPath, options = {}) {
   }
 
   for (const target of manifest.targets || []) {
+    if (!isObject(target)) continue;
     if (target.hydration?.mode === 'hook') {
       const hookScript = path.join(runtimeDir, target.hydration.script || '');
       if (!fs.existsSync(hookScript)) {
@@ -144,7 +157,8 @@ function checkRuntime(manifestPath, options = {}) {
       }
     }
     if (target.hydration?.mode === 'manual' || target.hydration?.mode === 'unsupported') {
-      if (!fs.existsSync(readmePath) || !sourceContains(readmePath, [new RegExp(target.id, 'i'), /manual|unsupported|not supported/i])) {
+      const targetIdPattern = new RegExp(escapeRegExp(target.id || ''), 'i');
+      if (!fs.existsSync(readmePath) || !sourceContains(readmePath, [targetIdPattern, /manual|unsupported|not supported/i])) {
         add(errors, `README must document manual or unsupported hydration for ${target.id}`);
       }
     }
@@ -187,8 +201,8 @@ function scaffoldRuntime(runtimeId, outDir) {
   };
 
   fs.writeFileSync(path.join(targetDir, 'adapter.json'), `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
-  fs.writeFileSync(path.join(targetDir, 'README.md'), `# jarvOS — ${runtimeId} Runtime\n\nScaffolded runtime adapter. Replace this text with setup and verification details.\n`, 'utf8');
-  fs.writeFileSync(path.join(targetDir, 'setup.sh'), '#!/usr/bin/env bash\nset -euo pipefail\n\necho "TODO: register jarvOS MCP for this runtime"\n', { encoding: 'utf8', mode: 0o755 });
+  fs.writeFileSync(path.join(targetDir, 'README.md'), `# jarvOS — ${runtimeId} Runtime\n\nThis scaffold registers the shared jarvOS MCP server and keeps hydration manual until the host exposes a supported startup context hook.\n\n## Targets\n\n- ${runtimeId}-cli: manual hydration. Document the exact command or host workflow before shipping this adapter.\n`, 'utf8');
+  fs.writeFileSync(path.join(targetDir, 'setup.sh'), '#!/usr/bin/env bash\nset -euo pipefail\n\nbackup_config() {\n  local config_path="$1"\n  if [ -f "$config_path" ]; then\n    cp "$config_path" "$config_path.bak-jarvos-$(date -u +%Y%m%dT%H%M%SZ)"\n  fi\n}\n\necho "TODO: register jarvOS MCP for this runtime after calling backup_config for any user config writes"\n', { encoding: 'utf8', mode: 0o755 });
   return { ok: true, dir: targetDir };
 }
 
