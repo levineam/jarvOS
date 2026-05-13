@@ -1,6 +1,7 @@
 'use strict';
 
 const assert = require('assert');
+const { execFileSync } = require('child_process');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -174,6 +175,14 @@ test('scaffoldRuntime creates a valid starter adapter', () => {
     const manifest = JSON.parse(fs.readFileSync(path.join(result.dir, 'adapter.json'), 'utf8'));
     assert.equal(validateManifest(manifest).ok, true);
     assert.equal(checkRuntime(path.join(result.dir, 'adapter.json'), { root: ROOT }).ok, true);
+    assert.match(manifest.verification[0], /adapter\.json/);
+    const output = execFileSync(process.execPath, [
+      path.join(ROOT, 'modules/jarvos-runtime-kit/scripts/jarvos-runtime-kit.js'),
+      'check',
+      path.join(result.dir, 'adapter.json'),
+      '--json',
+    ], { cwd: ROOT, encoding: 'utf8' });
+    assert.equal(JSON.parse(output).ok, true);
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
   }

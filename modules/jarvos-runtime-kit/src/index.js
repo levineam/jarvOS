@@ -199,7 +199,7 @@ function scaffoldRuntime(runtimeId, outDir) {
     setup: { script: 'setup.sh' },
     configWrites: { backupBeforeWrite: true },
     unsupportedCapabilities: [],
-    verification: [`node modules/jarvos-runtime-kit/scripts/jarvos-runtime-kit.js check ${runtimeId}`],
+    verification: [`node modules/jarvos-runtime-kit/scripts/jarvos-runtime-kit.js check ${JSON.stringify(path.join(targetDir, 'adapter.json'))}`],
   };
 
   fs.writeFileSync(path.join(targetDir, 'adapter.json'), `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');

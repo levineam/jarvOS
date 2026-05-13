@@ -2,6 +2,7 @@
 'use strict';
 
 const path = require('path');
+const fs = require('fs');
 const {
   checkRuntime,
   listRuntimeManifests,
@@ -15,7 +16,7 @@ function usage() {
   return [
     'Usage:',
     '  jarvos-runtime-kit validate <adapter.json> [--json]',
-    '  jarvos-runtime-kit check <runtime|all> [--json]',
+    '  jarvos-runtime-kit check <runtime|all|adapter.json> [--json]',
     '  jarvos-runtime-kit scaffold <runtime-id> --out <dir>',
   ].join('\n');
 }
@@ -69,10 +70,12 @@ async function main() {
 
   if (command === 'check') {
     const runtime = args[1];
-    if (!runtime) throw new Error('check requires <runtime|all>');
+    if (!runtime) throw new Error('check requires <runtime|all|adapter.json>');
     const manifests = runtime === 'all'
       ? listRuntimeManifests(root)
-      : [path.join(root, 'runtimes', runtime, 'adapter.json')];
+      : fs.existsSync(path.resolve(runtime))
+        ? [path.resolve(runtime)]
+        : [path.join(root, 'runtimes', runtime, 'adapter.json')];
     const results = manifests.map((manifestPath) => checkRuntime(manifestPath, { root }));
     const result = { ok: results.every((item) => item.ok), results };
     printResult(result, json);

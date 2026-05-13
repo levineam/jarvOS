@@ -11,6 +11,7 @@ host runtime's native surfaces such as MCP, hooks, skills, or desktop config.
 ```bash
 node modules/jarvos-runtime-kit/scripts/jarvos-runtime-kit.js validate runtimes/codex/adapter.json
 node modules/jarvos-runtime-kit/scripts/jarvos-runtime-kit.js check all
+node modules/jarvos-runtime-kit/scripts/jarvos-runtime-kit.js check /tmp/my-runtime/adapter.json
 node modules/jarvos-runtime-kit/scripts/jarvos-runtime-kit.js scaffold my-runtime --out /tmp/my-runtime
 ```
 
