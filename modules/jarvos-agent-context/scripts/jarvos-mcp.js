@@ -5,6 +5,7 @@ const readline = require('readline');
 const {
   createNote,
   currentWork,
+  hydrate,
   recall,
   startupBrief,
 } = require('../src/index.js');
@@ -61,6 +62,23 @@ const TOOLS = [
       },
     },
   },
+  {
+    name: 'jarvos_hydrate',
+    description: 'Return a bounded jarvOS working-context hydration packet for Codex session startup.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        maxChars: { type: 'number', description: 'Maximum output characters. Defaults to about 12000.' },
+        maxItems: { type: 'number', description: 'Maximum Paperclip issue count to include.' },
+        includeAllAgents: { type: 'boolean', description: 'Include issues assigned to any agent.' },
+        statuses: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Paperclip statuses to include. Defaults to in_progress and in_review.',
+        },
+      },
+    },
+  },
 ];
 
 function write(message) {
@@ -89,6 +107,10 @@ async function callTool(name, args = {}) {
   }
   if (name === 'jarvos_startup_brief') {
     const result = await startupBrief(args);
+    return textResult(result.markdown, !result.ok);
+  }
+  if (name === 'jarvos_hydrate') {
+    const result = await hydrate(args);
     return textResult(result.markdown, !result.ok);
   }
   throw new Error(`Unknown tool: ${name}`);
@@ -143,6 +165,13 @@ async function runCliCommand() {
   if (command === 'startup-brief') {
     const query = process.argv.slice(3).join(' ').trim();
     const result = await startupBrief({ query });
+    process.stdout.write(`${result.markdown}\n`);
+    return true;
+  }
+  if (command === 'hydrate') {
+    const maxCharsIndex = process.argv.indexOf('--max-chars');
+    const maxChars = maxCharsIndex >= 0 ? Number(process.argv[maxCharsIndex + 1]) : undefined;
+    const result = await hydrate({ maxChars });
     process.stdout.write(`${result.markdown}\n`);
     return true;
   }

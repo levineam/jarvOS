@@ -9,7 +9,10 @@ const test = require('node:test');
 const jarvosPaths = require('../../jarvos-secondbrain/bridge/config/jarvos-paths.js');
 const {
   createNote,
+  currentWork,
   defaultFrontmatter,
+  hydrate,
+  redactObviousSecrets,
   verifyNoteCaptureContract,
 } = require('../src/index.js');
 const { callTool, TOOLS } = require('../scripts/jarvos-mcp.js');
@@ -120,6 +123,7 @@ test('MCP tool list includes jarvOS tools', () => {
     'jarvos_recall',
     'jarvos_create_note',
     'jarvos_startup_brief',
+    'jarvos_hydrate',
   ]);
 });
 
@@ -134,5 +138,131 @@ test('MCP jarvos_create_note returns text content', async () => {
     });
     assert.equal(result.isError, false);
     assert.match(result.content[0].text, /jarvOS Note Created/);
+  });
+});
+
+test('currentWork can filter hydration statuses and omit unbacked in_review issues', async () => {
+  const oldFetch = global.fetch;
+  const oldEnv = {
+    PAPERCLIP_API_KEY: process.env.PAPERCLIP_API_KEY,
+    PAPERCLIP_COMPANY_ID: process.env.PAPERCLIP_COMPANY_ID,
+    PAPERCLIP_AGENT_ID: process.env.PAPERCLIP_AGENT_ID,
+  };
+
+  process.env.PAPERCLIP_API_KEY = 'test-key';
+  process.env.PAPERCLIP_COMPANY_ID = 'company-1';
+  process.env.PAPERCLIP_AGENT_ID = 'agent-1';
+  global.fetch = async () => ({
+    ok: true,
+    json: async () => ([
+      { identifier: 'WORK-1', status: 'in_progress', title: 'Active work', assigneeAgentId: 'agent-1' },
+      { identifier: 'WORK-2', status: 'in_review', title: 'Review PR #42', assigneeAgentId: 'agent-1' },
+      { identifier: 'WORK-3', status: 'in_review', title: 'No review artifact', assigneeAgentId: 'agent-1' },
+      { identifier: 'WORK-4', status: 'todo', title: 'Later', assigneeAgentId: 'agent-1' },
+    ]),
+  });
+
+  try {
+    const result = await currentWork({ statuses: ['in_progress', 'in_review'], maxItems: 10 });
+    assert.equal(result.ok, true);
+    assert.deepEqual(result.issues.map((issue) => issue.identifier), ['WORK-1', 'WORK-2']);
+    assert.match(result.markdown, /WORK-1/);
+    assert.match(result.markdown, /WORK-2/);
+    assert.doesNotMatch(result.markdown, /WORK-3/);
+    assert.doesNotMatch(result.markdown, /WORK-4/);
+  } finally {
+    global.fetch = oldFetch;
+    for (const [key, value] of Object.entries(oldEnv)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+});
+
+test('redactObviousSecrets removes common token shapes', () => {
+  const redacted = redactObviousSecrets('OPENAI_API_KEY=sk-abc12345678901234567890\nAuthorization: Bearer abcdefghijklmnopqrstuvwxyz');
+  assert.match(redacted, /OPENAI_API_KEY=/);
+  assert.doesNotMatch(redacted, /abc12345678901234567890/);
+  assert.doesNotMatch(redacted, /abcdefghijklmnopqrstuvwxyz/);
+});
+
+test('hydrate includes journal, linked notes, ontology spine, report, and redacts secrets', async () => {
+  const oldFetch = global.fetch;
+  const oldEnv = {
+    PAPERCLIP_API_KEY: process.env.PAPERCLIP_API_KEY,
+    PAPERCLIP_COMPANY_ID: process.env.PAPERCLIP_COMPANY_ID,
+    PAPERCLIP_AGENT_ID: process.env.PAPERCLIP_AGENT_ID,
+  };
+
+  process.env.PAPERCLIP_API_KEY = 'test-key';
+  process.env.PAPERCLIP_COMPANY_ID = 'company-1';
+  process.env.PAPERCLIP_AGENT_ID = 'agent-1';
+  global.fetch = async () => ({
+    ok: true,
+    json: async () => ([
+      { identifier: 'WORK-1558', status: 'in_progress', title: 'Codex app hydration', assigneeAgentId: 'agent-1' },
+    ]),
+  });
+
+  try {
+    await withTempVault(async ({ notes, journal, tmp }) => {
+      const journalPath = path.join(journal, '2026-05-12.md');
+      fs.writeFileSync(journalPath, '# 2026-05-12\n\nWork on [[Codex Memory Note]].\nAPI_KEY=sk-abc12345678901234567890\n', 'utf8');
+      fs.writeFileSync(path.join(notes, 'Codex Memory Note.md'), '# Codex Memory Note\n\nHydration detail.\n', 'utf8');
+
+      const ontologyDir = path.join(tmp, 'ontology');
+      fs.mkdirSync(ontologyDir, { recursive: true });
+      fs.writeFileSync(path.join(ontologyDir, '1-higher-order.md'), '# Higher\n\n## My Higher Order\n\nUse meaning to steer execution.\n', 'utf8');
+      fs.writeFileSync(path.join(ontologyDir, '5-goals.md'), '## G1 — Build shared memory\n\n**Status:** active\n', 'utf8');
+
+      const result = await hydrate({
+        maxChars: 9000,
+        journal: { date: '2026-05-12', timeZone: 'UTC' },
+        ontology: { ontologyDir },
+      });
+
+      assert.equal(result.ok, true);
+      assert.match(result.markdown, /WORK-1558/);
+      assert.match(result.markdown, /Today Journal/);
+      assert.match(result.markdown, /Codex Memory Note/);
+      assert.match(result.markdown, /jarvos-ontology Meaning Spine/);
+      assert.match(result.markdown, /Hydration Report/);
+      assert.match(result.markdown, /Redaction/);
+      assert.ok(result.markdown.length <= 9000);
+      assert.doesNotMatch(result.markdown, /abc12345678901234567890/);
+    });
+  } finally {
+    global.fetch = oldFetch;
+    for (const [key, value] of Object.entries(oldEnv)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+});
+
+test('MCP jarvos_hydrate returns text content', async () => {
+  await withTempVault(async ({ journal }) => {
+    const oldEnv = {
+      JARVOS_PAPERCLIP_ENV_FILE: process.env.JARVOS_PAPERCLIP_ENV_FILE,
+      PAPERCLIP_API_KEY: process.env.PAPERCLIP_API_KEY,
+      PAPERCLIP_COMPANY_ID: process.env.PAPERCLIP_COMPANY_ID,
+    };
+    process.env.JARVOS_PAPERCLIP_ENV_FILE = path.join(journal, 'missing-paperclip-env.sh');
+    delete process.env.PAPERCLIP_API_KEY;
+    delete process.env.PAPERCLIP_COMPANY_ID;
+    fs.writeFileSync(path.join(journal, '2026-05-12.md'), '# 2026-05-12\n\nNo links today.\n', 'utf8');
+    try {
+      const result = await callTool('jarvos_hydrate', {
+        maxChars: 5000,
+        journal: { date: '2026-05-12', timeZone: 'UTC' },
+      });
+      assert.equal(result.isError, false);
+      assert.match(result.content[0].text, /jarvOS Working Context Packet/);
+    } finally {
+      for (const [key, value] of Object.entries(oldEnv)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
   });
 });
