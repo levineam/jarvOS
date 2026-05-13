@@ -81,6 +81,28 @@ test('validateManifest requires a reason for unsupported MCP targets', () => {
   assert.equal(validateManifest(manifest).ok, true);
 });
 
+test('validateManifest rejects unsupported hydration modes', () => {
+  const result = validateManifest({
+    schemaVersion: 1,
+    id: 'bad-runtime',
+    displayName: 'Bad Runtime',
+    setup: { script: 'setup.sh' },
+    sharedAgentContext: {
+      mcpServer: 'modules/jarvos-agent-context/scripts/jarvos-mcp.js',
+      requiredTools: ['jarvos_hydrate'],
+    },
+    targets: [{
+      id: 'bad-runtime-cli',
+      kind: 'cli',
+      mcp: { supported: true },
+      hydration: { mode: 'hooks' },
+    }],
+  });
+
+  assert.equal(result.ok, false);
+  assert.match(result.errors.join('\n'), /hydration\.mode must be one of: hook, manual, unsupported/);
+});
+
 test('checkRuntime passes every checked-in adapter manifest', () => {
   const manifests = listRuntimeManifests(ROOT);
   assert.ok(manifests.length >= 3);
