@@ -1,0 +1,23 @@
+{
+  "name": "@jarvos/runtime-kit",
+  "version": "0.1.0",
+  "description": "jarvOS runtime adapter manifest, scaffold, and conformance checks",
+  "license": "MIT",
+  "main": "src/index.js",
+  "exports": {
+    ".": "./src/index.js"
+  },
+  "bin": {
+    "jarvos-runtime-kit": "scripts/jarvos-runtime-kit.js"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.js",
+    "check": "node scripts/jarvos-runtime-kit.js check all"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/levineam/jarvOS.git"
+  },
+  "engines": { "node": ">=18" },
+  "keywords": ["jarvos", "runtime", "adapter", "mcp", "conformance"]
+}

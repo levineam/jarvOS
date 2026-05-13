@@ -98,6 +98,24 @@ check_file "runtimes/hermes/setup.sh"
 check_executable "runtimes/hermes/setup.sh"
 check_nonempty "runtimes/hermes/setup.sh"
 check_file "runtimes/hermes/skills/jarvos/SKILL.md"
+check_file "runtimes/hermes/adapter.json"
+
+# ── Codex runtime ────────────────────────────────────────────────────────────
+echo ""
+echo "→ Codex runtime"
+check_file "runtimes/codex/README.md"
+check_file "runtimes/codex/setup.sh"
+check_executable "runtimes/codex/setup.sh"
+check_file "runtimes/codex/adapter.json"
+
+# ── Claude runtime ───────────────────────────────────────────────────────────
+echo ""
+echo "→ Claude runtime"
+check_file "runtimes/claude/README.md"
+check_file "runtimes/claude/setup.sh"
+check_executable "runtimes/claude/setup.sh"
+check_file "runtimes/claude/jarvos-session-start-hook.js"
+check_file "runtimes/claude/adapter.json"
 
 # ── OpenClaw runtime ──────────────────────────────────────────────────────────
 echo ""
@@ -121,6 +139,8 @@ check_file "modules/jarvos-secondbrain/package.json"
 check_file "modules/jarvos-gbrain/package.json"
 check_file "modules/jarvos-gbrain/config/curated-import.json"
 check_file "modules/jarvos-gbrain/config/eval-questions.json"
+check_file "modules/jarvos-runtime-kit/package.json"
+check_file "modules/jarvos-runtime-kit/scripts/jarvos-runtime-kit.js"
 
 # ── Top-level repo hygiene ────────────────────────────────────────────────────
 echo ""

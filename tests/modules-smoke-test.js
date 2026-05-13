@@ -279,6 +279,30 @@ try {
   bad('@jarvos/agent-context module load', e);
 }
 
+// ── @jarvos/runtime-kit ────────────────────────────────────────────────────
+
+console.log('\n→ @jarvos/runtime-kit');
+
+try {
+  const runtimeKit = require(path.join(ROOT, 'modules/jarvos-runtime-kit/src/index.js'));
+  const manifests = runtimeKit.listRuntimeManifests(ROOT);
+  if (manifests.length >= 3) {
+    ok('listRuntimeManifests finds checked-in runtime adapters');
+  } else {
+    bad('listRuntimeManifests', new Error(JSON.stringify(manifests)));
+  }
+
+  const checked = manifests.map((manifest) => runtimeKit.checkRuntime(manifest, { root: ROOT }));
+  const failed = checked.filter((result) => !result.ok);
+  if (failed.length === 0) {
+    ok('checkRuntime passes checked-in runtime adapters');
+  } else {
+    bad('checkRuntime', new Error(JSON.stringify(failed)));
+  }
+} catch (e) {
+  bad('@jarvos/runtime-kit module load', e);
+}
+
 // ── Summary ─────────────────────────────────────────────────────────────────
 
 console.log(`\n${pass + fail} checks: ${pass} passed, ${fail} failed.\n`);
