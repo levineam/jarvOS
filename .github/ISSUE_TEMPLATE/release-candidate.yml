@@ -1,0 +1,54 @@
+name: Release candidate
+description: Nominate jarvOS work for the active public preview release.
+title: "[release-candidate]: "
+labels:
+  - jarvos
+  - jarvos-release-candidate
+  - release-v0.1.0
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this for work that may affect the active jarvOS public preview release.
+  - type: input
+    id: paperclip_issue
+    attributes:
+      label: Paperclip issue
+      description: Link or identifier, for example SUP-1648 or a child issue.
+      placeholder: SUP-0000
+    validations:
+      required: false
+  - type: dropdown
+    id: classification
+    attributes:
+      label: Proposed release classification
+      options:
+        - release-blocker
+        - included
+        - post-release
+        - internal-only
+        - not-release-related
+    validations:
+      required: true
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: What changed, and why should the release steward care?
+    validations:
+      required: true
+  - type: textarea
+    id: verification
+    attributes:
+      label: Verification
+      description: Tests, CI, screenshots, review links, or other evidence.
+    validations:
+      required: false
+  - type: textarea
+    id: release_notes
+    attributes:
+      label: Release notes impact
+      description: User-facing wording or "none".
+      placeholder: none
+    validations:
+      required: true

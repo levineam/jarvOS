@@ -2,6 +2,13 @@
 
 All notable public-doc sync changes are appended by `jarvos-public-docs-sync.sh`.
 
+## v0.1.0 — Public preview (pending)
+
+### Release management
+- Added public release-management documentation for the v0.1.0 preview lane.
+- Added a v0.1.0 release-notes draft and readiness checklist.
+- Added a GitHub issue template for release-candidate intake.
+
 ## 2026-03-27 — merged outstanding public repo PRs
 
 ### PR #2 — docs: Phase A public hygiene + dogfood canary prep
