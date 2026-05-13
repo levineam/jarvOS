@@ -22,6 +22,13 @@ The bundled stdio MCP server exposes:
 | `jarvos_startup_brief` | Bounded startup context for agent sessions |
 | `jarvos_hydrate` | Bounded working-context packet for startup hydration |
 
+## Prompts
+
+The MCP server also exposes a `boot_jarvos` prompt with user-facing "Boot
+jarvOS" instructions. It tells compatible clients to call `jarvos_hydrate` with
+a bounded Desktop budget, summarize the Hydration Report, and use the returned
+packet as working context without dumping raw private notes.
+
 ## Codex
 
 From the repo root:

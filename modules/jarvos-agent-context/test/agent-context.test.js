@@ -1,6 +1,7 @@
 'use strict';
 
 const assert = require('assert');
+const { spawnSync } = require('child_process');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -15,7 +16,7 @@ const {
   redactObviousSecrets,
   verifyNoteCaptureContract,
 } = require('../src/index.js');
-const { callTool, TOOLS } = require('../scripts/jarvos-mcp.js');
+const { callTool, PROMPTS, TOOLS } = require('../scripts/jarvos-mcp.js');
 
 function withTempVault(fn) {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-agent-context-'));
@@ -125,6 +126,81 @@ test('MCP tool list includes jarvOS tools', () => {
     'jarvos_startup_brief',
     'jarvos_hydrate',
   ]);
+  assert.match(
+    TOOLS.find((tool) => tool.name === 'jarvos_hydrate').description,
+    /boot jarvOS/,
+  );
+});
+
+function mcpRequest(message) {
+  const result = spawnSync(process.execPath, [
+    path.join(__dirname, '..', 'scripts', 'jarvos-mcp.js'),
+  ], {
+    input: `${JSON.stringify(message)}\n`,
+    encoding: 'utf8',
+  });
+  assert.equal(result.status, 0, result.stderr);
+  const lines = result.stdout.trim().split(/\r?\n/).filter(Boolean);
+  assert.equal(lines.length, 1, result.stdout);
+  return JSON.parse(lines[0]);
+}
+
+test('MCP initialize advertises tool and prompt capabilities', () => {
+  const response = mcpRequest({
+    jsonrpc: '2.0',
+    id: 1,
+    method: 'initialize',
+    params: { protocolVersion: '2025-06-18' },
+  });
+
+  assert.equal(response.id, 1);
+  assert.deepEqual(response.result.capabilities, { tools: {}, prompts: {} });
+});
+
+test('MCP prompt list includes boot jarvOS prompt', () => {
+  assert.deepEqual(PROMPTS.map((prompt) => prompt.name), ['boot_jarvos']);
+
+  const response = mcpRequest({
+    jsonrpc: '2.0',
+    id: 2,
+    method: 'prompts/list',
+    params: {},
+  });
+
+  assert.equal(response.id, 2);
+  assert.equal(response.result.prompts[0].name, 'boot_jarvos');
+  assert.equal(response.result.prompts[0].title, 'Boot jarvOS');
+  assert.match(response.result.prompts[0].description, /Working Context Packet/);
+});
+
+test('MCP prompt get returns boot jarvOS instructions', () => {
+  const response = mcpRequest({
+    jsonrpc: '2.0',
+    id: 3,
+    method: 'prompts/get',
+    params: { name: 'boot_jarvos', arguments: { maxChars: 7500 } },
+  });
+
+  const message = response.result.messages[0];
+  assert.equal(message.role, 'user');
+  assert.match(message.content.text, /Boot jarvOS/);
+  assert.match(message.content.text, /jarvos_hydrate/);
+  assert.match(message.content.text, /maxChars: 7500/);
+  assert.match(message.content.text, /Hydration Report/);
+  assert.match(message.content.text, /Do not paste raw private notes/);
+});
+
+test('MCP prompt get reports unknown prompts as JSON-RPC errors', () => {
+  const response = mcpRequest({
+    jsonrpc: '2.0',
+    id: 4,
+    method: 'prompts/get',
+    params: { name: 'missing_prompt' },
+  });
+
+  assert.equal(response.id, 4);
+  assert.equal(response.error.code, -32602);
+  assert.match(response.error.message, /Unknown prompt: missing_prompt/);
 });
 
 test('MCP jarvos_create_note returns text content', async () => {
