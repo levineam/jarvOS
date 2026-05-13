@@ -158,7 +158,9 @@ function checkRuntime(manifestPath, options = {}) {
     }
     if (target.hydration?.mode === 'manual' || target.hydration?.mode === 'unsupported') {
       const targetIdPattern = new RegExp(escapeRegExp(target.id || ''), 'i');
-      if (!fs.existsSync(readmePath) || !sourceContains(readmePath, [targetIdPattern, /manual|unsupported|not supported/i])) {
+      const documentsTarget = fs.existsSync(readmePath) && sourceContains(readmePath, [targetIdPattern]);
+      const documentsHydrationMode = fs.existsSync(readmePath) && sourceContains(readmePath, [/manual|unsupported|not supported/i]);
+      if (!documentsTarget || !documentsHydrationMode) {
         add(errors, `README must document manual or unsupported hydration for ${target.id}`);
       }
     }

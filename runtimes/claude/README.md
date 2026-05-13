@@ -27,6 +27,8 @@ claude mcp add --scope user jarvos -- node "$PWD/modules/jarvos-agent-context/sc
 
 ## Claude Code Hydration
 
+Target: `claude-code`.
+
 Claude Code supports `SessionStart` hook `additionalContext`, so the adapter
 uses `runtimes/claude/jarvos-session-start-hook.js` to emit the same jarvOS
 Working Context Packet used by Codex.
@@ -38,6 +40,8 @@ Claude Code caps hook-injected context at 10,000 characters. This adapter uses a
 Claude startup is not blocked.
 
 ## Claude Desktop
+
+Target: `claude-desktop`.
 
 Claude Desktop uses local MCP server configuration. This v1 adapter configures
 `mcpServers.jarvos` in:
