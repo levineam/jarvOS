@@ -9,12 +9,14 @@ First public preview release candidate.
 ### Included
 - Portable jarvOS core files for identity, persona, behavioral rules, and local setup templates.
 - Runtime setup paths for Hermes Agent and OpenClaw.
+- Claude Desktop manual MCP hydration via the `boot jarvOS` prompt.
 - Smoke test coverage for shipped files and public baseline completeness.
 - Release process documentation, GitHub Release template, and executable release readiness check.
 
 ### Known limitations
 - Distribution is git-based; no npm package is published for this release.
 - Setup still expects comfort with local developer tools and runtime-specific configuration.
+- Claude Desktop startup auto-hydration is not included; Desktop uses the manual MCP hydration flow.
 - Andrew's live private workspace is not included in the public baseline.
 
 ## 2026-03-27 — merged outstanding public repo PRs
