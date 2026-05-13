@@ -131,9 +131,12 @@ function checkRuntime(manifestPath, options = {}) {
   const readmePath = path.join(runtimeDir, 'README.md');
   if (!fs.existsSync(readmePath)) add(errors, `README missing: ${rel(root, readmePath)}`);
 
-  const mcpServer = path.join(root, manifest.sharedAgentContext?.mcpServer || '');
-  if (!fs.existsSync(mcpServer)) add(errors, `shared MCP server missing: ${rel(root, mcpServer)}`);
-  if (fs.existsSync(mcpServer)) {
+  const mcpServerPath = manifest.sharedAgentContext?.mcpServer;
+  const mcpServer = mcpServerPath === DEFAULT_AGENT_CONTEXT_MCP ? path.join(root, mcpServerPath) : null;
+  if (mcpServerPath === DEFAULT_AGENT_CONTEXT_MCP && !fs.existsSync(mcpServer)) {
+    add(errors, `shared MCP server missing: ${rel(root, mcpServer)}`);
+  }
+  if (mcpServer && fs.existsSync(mcpServer)) {
     try {
       const mcp = require(mcpServer);
       const tools = Array.isArray(mcp.TOOLS) ? mcp.TOOLS.map((tool) => tool.name) : [];

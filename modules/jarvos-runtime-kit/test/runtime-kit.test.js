@@ -127,6 +127,34 @@ test('checkRuntime reports unloadable MCP servers without throwing', () => {
   }
 });
 
+test('checkRuntime does not load repo root for malformed shared MCP config', () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-runtime-kit-missing-shared-'));
+  try {
+    const manifestPath = path.join(tmp, 'adapter.json');
+    fs.writeFileSync(path.join(tmp, 'README.md'), 'Manual hydration is documented for sample-runtime-cli.\n', 'utf8');
+    fs.writeFileSync(path.join(tmp, 'setup.sh'), '#!/usr/bin/env bash\ncp "$1" "$1.bak"\n', { encoding: 'utf8', mode: 0o755 });
+    fs.writeFileSync(manifestPath, JSON.stringify({
+      schemaVersion: 1,
+      id: 'sample-runtime',
+      displayName: 'Sample Runtime',
+      setup: { script: 'setup.sh' },
+      targets: [{
+        id: 'sample-runtime-cli',
+        kind: 'cli',
+        mcp: { supported: true },
+        hydration: { mode: 'manual', reason: 'test' },
+      }],
+      configWrites: { backupBeforeWrite: true },
+    }, null, 2));
+
+    const result = checkRuntime(manifestPath, { root: ROOT });
+    assert.equal(result.ok, false);
+    assert.match(result.errors.join('\n'), /sharedAgentContext is required/);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
 test('checkRuntime requires README manual hydration docs to name the target', () => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-runtime-kit-readme-docs-'));
   try {
