@@ -458,14 +458,58 @@ function runCommand(command, args, options = {}) {
   };
 }
 
+function isReadableFile(filePath) {
+  try {
+    fs.accessSync(filePath, fs.constants.R_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function gbrainCommandCandidateFromRepo(config) {
+  if (!config || !config.gbrainDir) return null;
+  if (commandExists(config.gbrainBin)) return null;
+  if (!commandExists('bun')) return null;
+  const cliPath = path.join(config.gbrainDir, 'src', 'cli.ts');
+  if (!isReadableFile(cliPath)) return null;
+  return { command: 'bun', args: ['run', cliPath] };
+}
+
+function hasGbrainExecutable(config) {
+  return commandExists(config.gbrainBin) || Boolean(gbrainCommandCandidateFromRepo(config));
+}
+
+function runGbrainCommand(config, args, options = {}) {
+  const fallback = gbrainCommandCandidateFromRepo(config);
+  const attempts = [{ command: config.gbrainBin, args }];
+  if (fallback) {
+    attempts.push({
+      command: fallback.command,
+      args: fallback.args.concat(args),
+    });
+  }
+
+  let lastErrorResult = null;
+  for (const candidate of attempts) {
+    const result = runCommand(candidate.command, candidate.args, options);
+    if (!result.error || !result.error.includes('ENOENT')) {
+      return result;
+    }
+    lastErrorResult = result;
+  }
+
+  return lastErrorResult || runCommand(config.gbrainBin, args, options);
+}
+
 function syncBrain(overrides = {}, options = {}) {
   const config = resolveConfig(overrides);
-  const sync = runCommand(config.gbrainBin, ['sync', '--repo', config.brainDir], {
+  const sync = runGbrainCommand(config, ['sync', '--repo', config.brainDir], {
     cwd: config.gbrainDir,
     dryRun: options.dryRun === true,
   });
   const embed = sync.ok
-    ? runCommand(config.gbrainBin, ['embed', '--stale'], {
+    ? runGbrainCommand(config, ['embed', '--stale'], {
         cwd: config.gbrainDir,
         dryRun: options.dryRun === true,
       })
@@ -599,7 +643,7 @@ function evalCommandResult(command, expected, dryRun) {
 }
 
 function runGbrainEval(config, query, expected, dryRun, limit) {
-  const command = runCommand(config.gbrainBin, ['search', query, '--limit', String(limit)], {
+  const command = runGbrainCommand(config, ['search', query, '--limit', String(limit)], {
     cwd: config.gbrainDir,
     dryRun,
     timeoutMs: config.retrievalTimeoutMs,
@@ -686,7 +730,7 @@ function graphRecall(overrides = {}, options = {}) {
   const seedValues = options.seeds || overrides.seeds || options.seed || overrides.seed;
   const seeds = asStringList(seedValues);
   const results = seeds.map((seed) => {
-    const command = runCommand(config.gbrainBin, ['graph-query', seed, '--depth', String(depth)], {
+    const command = runGbrainCommand(config, ['graph-query', seed, '--depth', String(depth)], {
       cwd: config.gbrainDir,
       dryRun,
       timeoutMs: config.retrievalTimeoutMs,
@@ -932,7 +976,7 @@ function recallBundle(overrides = {}, options = {}) {
     };
   }
 
-  const gbrainCommand = runCommand(config.gbrainBin, ['search', query, '--limit', String(limit)], {
+  const gbrainCommand = runGbrainCommand(config, ['search', query, '--limit', String(limit)], {
     cwd: config.gbrainDir,
     dryRun,
     timeoutMs: config.retrievalTimeoutMs,
@@ -1160,7 +1204,7 @@ function doctor(overrides = {}) {
     { name: 'evalQuestions', ok: fs.existsSync(config.evalPath), detail: config.evalPath },
     { name: 'brainDir', ok: fs.existsSync(config.brainDir), detail: config.brainDir },
     { name: 'gbrainDir', ok: fs.existsSync(config.gbrainDir), detail: config.gbrainDir },
-    { name: 'gbrainBin', ok: commandExists(config.gbrainBin), detail: config.gbrainBin },
+    { name: 'gbrainBin', ok: hasGbrainExecutable(config), detail: config.gbrainBin },
     { name: 'qmdBin', ok: commandExists(config.qmdBin), detail: config.qmdBin, optional: true },
   ];
   return {
