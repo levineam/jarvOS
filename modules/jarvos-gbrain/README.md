@@ -1,8 +1,13 @@
 # @jarvos/gbrain
 
-Structured knowledge bridge for jarvOS. This module imports a curated slice of an
-Obsidian-compatible vault into a GBrain repo, then provides sync, doctor, and
-retrieval-eval helpers.
+GBrain-first resolver/brain integration for jarvOS. This module imports a
+curated slice of an Obsidian-compatible vault into a local GBrain repo, then
+provides sync, doctor, graph recall, runtime recall-bundle, and retrieval-eval
+helpers.
+
+It does not implement GBrain or ship a private graph. It is the jarvOS adapter
+that makes an installed GBrain usable as the first structured recall layer for
+people, projects, concepts, meetings, and source pages.
 
 ## What this module owns
 
@@ -14,7 +19,7 @@ retrieval-eval helpers.
 | **Sync wrapper** | Safe wrapper around `gbrain sync --repo <brainDir>` and `gbrain embed --stale` |
 | **Retrieval eval** | Small fixture-driven checks for whether GBrain can answer expected questions |
 | **Graph recall** | Compact wrapper around `gbrain graph-query` for sidecar recall from known seed pages |
-| **Runtime recall bundle** | One callable bundle for GBrain search, optional QMD lookup, and graph sidecar context |
+| **Runtime resolver bundle** | One callable bundle for GBrain search, optional QMD lookup, and graph sidecar context |
 
 ## What this module is NOT for
 
@@ -117,7 +122,7 @@ const {
 - `syncBrain(config, { dryRun })` wraps `gbrain sync --repo <brainDir>` and `gbrain embed --stale`.
 - `runRetrievalEval(config, { dryRun, compareQmd })` runs fixture queries through GBrain search and optionally QMD, then fails questions whose expected evidence is missing.
 - `graphRecall(config, { seeds, depth, dryRun })` runs `gbrain graph-query <seed> --depth <n>` and returns parsed graph nodes for sidecar recall.
-- `recallBundle(config, { query, includeQmd, autoGraph, seeds })` returns a compact runtime bundle with direct GBrain search, optional QMD broad lookup, and graph sidecar expansion.
+- `recallBundle(config, { query, includeQmd, autoGraph, seeds })` returns a compact runtime resolver bundle with direct GBrain search, optional QMD broad lookup, and graph sidecar expansion.
 - `renderRecallMarkdown(bundle)` renders a bundle into context-ready Markdown.
 - `doctor(config)` checks manifest, eval file, brain directory, GBrain directory, and CLI availability.
 

@@ -8,7 +8,7 @@ with a clear boundary and a dedicated README.
 | [`@jarvos/memory`](./jarvos-memory/) | Agent-state memory — compact recall across sessions | `src/index.js` |
 | [`@jarvos/ontology`](./jarvos-ontology/) | Worldview layer — beliefs, goals, values, predictions | `src/index.js` |
 | [`@jarvos/secondbrain`](./jarvos-secondbrain/) | Content layer — journal and notes | `bridge/config/jarvos-paths.js` |
-| [`@jarvos/gbrain`](./jarvos-gbrain/) | Structured knowledge bridge — curated vault import to GBrain | `src/index.js` |
+| [`@jarvos/gbrain`](./jarvos-gbrain/) | GBrain-first resolver/brain integration — curated vault import to GBrain | `src/index.js` |
 | [`@jarvos/agent-context`](./jarvos-agent-context/) | Runtime-facing adapter — recall, current work, note actions, MCP | `src/index.js` |
 
 ## Architecture
@@ -146,14 +146,16 @@ All paths are resolved via environment variables or `jarvos.config.json`. See `b
 
 ## @jarvos/gbrain
 
-**What it does:** Bridges a curated slice of your Obsidian-compatible vault into
-GBrain. It generates deterministic GBrain pages for people, companies, projects,
-concepts, meetings, and sources while preserving source provenance.
+**What it does:** Provides the GBrain-first resolver/brain integration for
+curated structured knowledge. It imports an explicit allowlist from an
+Obsidian-compatible vault into GBrain and generates deterministic pages for
+people, companies, projects, concepts, meetings, and sources while preserving
+source provenance.
 Curated manifest items may also include graph-friendly relationship fields such
 as `company`, `key_people`, `attendees`, `related`, `see_also`, and `sources`.
-It also provides retrieval evals, graph sidecar recall, and a runtime recall
-bundle that combines direct GBrain search, optional QMD lookup, and graph
-expansion behind one callable adapter.
+It also provides retrieval evals, graph sidecar recall, and a runtime resolver
+bundle that gives runtimes one callable surface for direct GBrain search,
+optional QMD lookup, and graph expansion.
 
 **What it is NOT:** A full-vault search engine or a replacement for QMD. QMD
 remains the broad, fast vault lookup path. OpenClaw `memory-wiki` remains a

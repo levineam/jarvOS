@@ -11,6 +11,7 @@ First public preview release candidate.
 - Runtime setup paths for Hermes Agent and OpenClaw.
 - Claude Desktop manual MCP hydration via the `boot jarvOS` prompt.
 - Smoke test coverage for shipped files and public baseline completeness.
+- GBrain-first structured recall integration via `@jarvos/gbrain`: curated import planning, GBrain sync/embed wrappers, graph recall, runtime recall bundles, and public eval fixtures.
 - Release process documentation, GitHub Release template, and executable release readiness check.
 
 ### Known limitations
@@ -18,6 +19,7 @@ First public preview release candidate.
 - Setup still expects comfort with local developer tools and runtime-specific configuration.
 - Claude Desktop startup auto-hydration is not included; Desktop uses the manual MCP hydration flow.
 - Andrew's live private workspace is not included in the public baseline.
+- GBrain itself, private generated pages, private manifests, and private eval questions are not included; the repo ships the integration layer and public fixtures only.
 
 ## 2026-03-27 — merged outstanding public repo PRs
 

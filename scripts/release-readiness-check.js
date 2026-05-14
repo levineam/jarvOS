@@ -133,6 +133,41 @@ function checkReleaseReadiness(opts = {}) {
     fail('release notes draft', `${releaseNotesPath} missing`);
   }
 
+  const gbrainNarrativeFiles = [
+    'README.md',
+    'CHANGELOG.md',
+    releaseNotesPath,
+    'modules/README.md',
+    'modules/jarvos-gbrain/README.md',
+    'PUBLIC_BASELINE.md',
+  ];
+  try {
+    const missingFiles = gbrainNarrativeFiles.filter((filePath) => !exists(filePath));
+    if (missingFiles.length) {
+      fail('GBrain-first release narrative', `Missing files: ${missingFiles.join(', ')}`);
+    } else {
+      const combined = gbrainNarrativeFiles.map((filePath) => readText(filePath)).join('\n');
+      const requiredPhrases = [
+        'GBrain-first',
+        '@jarvos/gbrain',
+        'resolver',
+        'does not implement GBrain',
+        'not GBrain itself',
+      ];
+      const missingPhrases = requiredPhrases.filter((phrase) => !combined.includes(phrase));
+      const transitionalMatches = combined.match(/(?:structured knowledge bridge|GBrain bridge)/gi) || [];
+      if (missingPhrases.length) {
+        fail('GBrain-first release narrative', `Missing phrases: ${missingPhrases.join(', ')}`);
+      } else if (transitionalMatches.length) {
+        fail('GBrain-first release narrative', `Transitional bridge phrasing remains: ${[...new Set(transitionalMatches)].join(', ')}`);
+      } else {
+        pass('GBrain-first release narrative', 'public docs state resolver-first GBrain boundary without bridge framing');
+      }
+    }
+  } catch (error) {
+    fail('GBrain-first release narrative', error.message);
+  }
+
   const tagCheck = run('git', ['rev-parse', '--verify', '--quiet', `refs/tags/${tag}`]);
   if (tagCheck.error) {
     fail('git tag preflight', `git failed: ${tagCheck.error.message}`);

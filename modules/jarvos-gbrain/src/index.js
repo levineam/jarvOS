@@ -313,7 +313,7 @@ function renderBrainPage(item, sourceContent, config) {
     `# ${title}`,
     '',
     '<!-- jarvos-gbrain:generated:start -->',
-    summary ? `> ${summary}` : '> Imported from Obsidian by the jarvOS GBrain bridge.',
+    summary ? `> ${summary}` : '> Imported from Obsidian by the jarvOS GBrain integration.',
     '',
     '## Source',
     '',

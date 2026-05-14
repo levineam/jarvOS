@@ -76,7 +76,7 @@ The current jarvOS repo separates memory-adjacent concerns into distinct owners:
 - `@jarvos/secondbrain` owns human-facing journal and note content.
 - `@jarvos/memory` owns compact operational recall.
 - `@jarvos/ontology` owns worldview, beliefs, goals, and predictions.
-- `@jarvos/gbrain` owns curated structured knowledge pages for GBrain.
+- `@jarvos/gbrain` owns the GBrain-first resolver/brain integration for curated structured knowledge pages.
 - QMD remains a fast broad vault-search dependency, not the graph layer.
 - OpenClaw `memory-wiki` remains a native runtime diagnostic/compiled-wiki layer, not the primary GBrain import source.
 
@@ -86,19 +86,21 @@ Decision rationale summary:
 - Avoids treating QMD, memory-wiki, and GBrain as interchangeable memory tools.
 - Preserves portability by shipping templates and bridge code, not private knowledge.
 
-Validated operating pattern:
+Validated GBrain-first operating pattern:
 
-1. The Obsidian-compatible vault remains the human source of truth.
-2. QMD remains the broad full-vault lookup and exact-retrieval layer.
-3. `@jarvos/gbrain` imports only curated, provenance-rich notes into GBrain.
-4. GBrain direct search handles structured recall when the curated page already
+1. GBrain is the first structured recall brain for curated people, companies,
+   projects, concepts, meetings, and source pages.
+2. The Obsidian-compatible vault remains the human source of truth.
+3. QMD remains the broad full-vault lookup and exact-retrieval layer.
+4. `@jarvos/gbrain` imports only curated, provenance-rich notes into GBrain.
+5. GBrain direct search handles structured recall when the curated page already
    answers the question.
-5. GBrain graph recall handles cross-source recall when a known or discovered
+6. GBrain graph recall handles cross-source recall when a known or discovered
    seed page needs adjacent people, projects, concepts, meetings, or sources.
-6. `jarvos-gbrain recall` is the runtime-facing adapter that can bundle direct
-   GBrain search, optional QMD lookup, and graph sidecar context for OpenClaw or
-   another runtime to consider.
-7. OpenClaw `memory-wiki` remains a native diagnostic/synthesis layer and should
+7. `jarvos-gbrain recall` is the runtime-facing resolver adapter that can
+   bundle direct GBrain search, optional QMD lookup, and graph sidecar context
+   for OpenClaw or another runtime to consider.
+8. OpenClaw `memory-wiki` remains a native diagnostic/synthesis layer and should
    not be treated as the canonical GBrain import source without a separate
    review and eval pass.
 
