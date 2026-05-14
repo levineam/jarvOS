@@ -88,12 +88,12 @@ of truth and keeps retrieval tools in separate roles:
 |-------|-------------------|---------|
 | Human notes | Obsidian-compatible vault | Source notes, journals, clippings, and durable personal context |
 | Broad lookup | QMD | Fast search and exact lookup across the full vault |
-| Structured recall | GBrain via `@jarvos/gbrain` | Curated people, companies, projects, concepts, meetings, and source pages |
+| Structured recall resolver | GBrain via `@jarvos/gbrain` | First-pass curated people, companies, projects, concepts, meetings, and source pages |
 | Graph sidecar | GBrain graph commands | Cross-source recall once a likely seed page is known |
 | Runtime diagnostics | OpenClaw `memory-wiki` | Native wiki status, lint, dashboards, synthesis, and handoff diagnostics |
 
-The OpenClaw runtime should call the retrieval layer deliberately. A common
-pattern is:
+The OpenClaw runtime should call the GBrain-first resolver deliberately. A
+common pattern is:
 
 ```bash
 jarvos-gbrain recall \
@@ -102,10 +102,11 @@ jarvos-gbrain recall \
 ```
 
 Run it from a workspace where `@jarvos/gbrain` has been installed or with the
-equivalent explicit path to your jarvOS clone. The command returns context-ready
-Markdown, but it does not inject anything on its own. Your OpenClaw adapter
-should decide when to call it and how much of the result belongs in the active
-prompt.
+equivalent explicit path to your jarvOS clone. The command returns
+context-ready Markdown after checking GBrain first, expanding graph context, and
+using QMD only as fallback/source support. It does not inject anything on its
+own. Your OpenClaw adapter should decide when to call it and how much of the
+result belongs in the active prompt.
 
 ### Conservative Memory-Ops Cron Pattern
 
@@ -139,8 +140,8 @@ bounded:
   low result count, strict character cap, short timeout, and an explicit
   untrusted-context wrapper.
 
-This keeps the vault as the source of truth, QMD as broad lookup, GBrain as
-curated structured recall, and memory-wiki as runtime diagnostics.
+This keeps the vault as the source of truth, GBrain as the structured resolver,
+QMD as broad lookup fallback, and memory-wiki as runtime diagnostics.
 
 ## What jarvOS Adds On Top
 

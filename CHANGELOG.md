@@ -9,6 +9,9 @@ First public preview release candidate.
 ### Included
 - Portable jarvOS core files for identity, persona, behavioral rules, and local setup templates.
 - Runtime setup paths for Hermes Agent and OpenClaw.
+- GBrain-first resolver integration: `@jarvos/gbrain` is documented as the
+  first structured recall authority, with QMD and runtime-native indexes as
+  fallback/support layers.
 - Claude Desktop manual MCP hydration via the `boot jarvOS` prompt.
 - Smoke test coverage for shipped files and public baseline completeness.
 - Release process documentation, GitHub Release template, and executable release readiness check.

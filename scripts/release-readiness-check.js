@@ -133,6 +133,52 @@ function checkReleaseReadiness(opts = {}) {
     fail('release notes draft', `${releaseNotesPath} missing`);
   }
 
+  const gbrainNarrativeFiles = [
+    'README.md',
+    'docs/architecture/jarvos-architecture.md',
+    releaseNotesPath,
+    'modules/README.md',
+    'modules/jarvos-gbrain/README.md',
+    'runtimes/openclaw/README.md',
+  ];
+  const gbrainRequired = [
+    [/GBrain-first/i, 'GBrain-first resolver language'],
+    [/first structured recall authority|first-pass structured recall|first structured recall/i, 'GBrain as first structured recall authority'],
+    [/QMD[^.\n]*(fallback|support|source)/i, 'QMD framed as fallback/support, not peer authority'],
+  ];
+  const gbrainForbidden = [
+    /Structured knowledge bridge for GBrain/i,
+    /Structured knowledge bridge for jarvOS/i,
+    /curated bridge from an Obsidian-compatible vault into GBrain pages/i,
+    /jarvOS GBrain bridge\s*-/i,
+  ];
+  const gbrainCorpus = gbrainNarrativeFiles
+    .filter((file) => exists(file))
+    .map((file) => `${file}\n${readText(file)}`)
+    .join('\n\n');
+  const missingGbrainFiles = gbrainNarrativeFiles.filter((file) => !exists(file));
+  if (missingGbrainFiles.length) {
+    fail('GBrain-first release narrative files', `Missing files: ${missingGbrainFiles.join(', ')}`);
+  } else {
+    const missingRequired = gbrainRequired
+      .filter(([pattern]) => !pattern.test(gbrainCorpus))
+      .map(([, label]) => label);
+    const foundForbidden = gbrainForbidden
+      .filter((pattern) => pattern.test(gbrainCorpus))
+      .map((pattern) => pattern.source);
+    if (missingRequired.length || foundForbidden.length) {
+      fail(
+        'GBrain-first release narrative',
+        [
+          missingRequired.length ? `missing: ${missingRequired.join(', ')}` : '',
+          foundForbidden.length ? `forbidden: ${foundForbidden.join(', ')}` : '',
+        ].filter(Boolean).join('; '),
+      );
+    } else {
+      pass('GBrain-first release narrative', 'public docs frame GBrain as first structured resolver with QMD fallback/support');
+    }
+  }
+
   const tagCheck = run('git', ['rev-parse', '--verify', '--quiet', `refs/tags/${tag}`]);
   if (tagCheck.error) {
     fail('git tag preflight', `git failed: ${tagCheck.error.message}`);

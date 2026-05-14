@@ -17,7 +17,7 @@ jarvOS/
 │   ├── jarvos-secondbrain/   # Content layer — journal, notes, capture routing
 │   ├── jarvos-memory/        # Agent-state memory contract
 │   ├── jarvos-ontology/      # Worldview / belief graph
-│   ├── jarvos-gbrain/        # Structured knowledge bridge for GBrain
+│   ├── jarvos-gbrain/        # GBrain-first structured resolver layer
 │   └── jarvos-agent-context/ # Runtime-facing recall/action adapter + MCP tools
 ├── templates/         # Blank starting points (USER, MEMORY, ONTOLOGY, TOOLS, AGENTS, BOOTSTRAP, HEARTBEAT)
 ├── runtimes/
@@ -40,7 +40,7 @@ jarvOS is organized as seven layers, each with a clear owner. Mixing layers — 
 | Content     | `@jarvos/secondbrain`  | Journal entries, notes, raw capture                 |
 | Recall      | `@jarvos/memory`       | Lessons, decisions-with-rationale, preferences, facts |
 | Worldview   | `@jarvos/ontology`     | Beliefs, predictions, goals, projects, core self    |
-| Structured knowledge | `@jarvos/gbrain` | People, companies, projects, concepts, meetings, source pages |
+| Structured knowledge + resolver | `@jarvos/gbrain` | First-pass structured recall for people, companies, projects, concepts, meetings, source pages |
 | Behavior    | `core/` (this repo)    | Identity, persona, rules, governance, PMS           |
 | Execution   | Paperclip (dependency) | Tasks, issues, assignments, done/not-done           |
 | Runtime     | OpenClaw, Hermes, Codex, etc. | Scheduling, tool execution, messaging, model calls  |
@@ -54,7 +54,7 @@ The `modules/` directory contains the runnable parts of jarvOS. Each module is a
 - **[`@jarvos/secondbrain`](./modules/jarvos-secondbrain/)** — content-facing monorepo. Journal maintenance, notes management, capture routing, and an Obsidian storage adapter (plus adapter notes for OpenClaw). All paths are env-var driven via `bridge/config/jarvos-paths.js`. Your actual notes never live here; they stay in your vault.
 - **[`@jarvos/memory`](./modules/jarvos-memory/)** — schema and audit tooling for agent-state memory. Defines what a `MEMORY.md` record looks like, how items get promoted, and how to validate a memory file against the contract. Your actual memories stay private and local.
 - **[`@jarvos/ontology`](./modules/jarvos-ontology/)** — reader/writer/validator/renderer for the six-layer ontology (higher-order principles, beliefs, predictions, core self, goals, projects). Ships blank templates (`schema/templates/`) and heuristics (`schema/heuristics.md`), plus a Paperclip sync script (`scripts/sync-to-paperclip.js`). Your filled-in beliefs and goals stay private and local.
-- **[`@jarvos/gbrain`](./modules/jarvos-gbrain/)** — curated bridge from an Obsidian-compatible vault into GBrain pages. It generates structured people, companies, projects, concepts, meetings, and source pages with provenance, then wraps GBrain sync/embed, retrieval eval, graph recall, and runtime recall-bundle commands.
+- **[`@jarvos/gbrain`](./modules/jarvos-gbrain/)** — GBrain-first structured resolver layer. It generates curated people, companies, projects, concepts, meetings, and source pages with provenance, then wraps GBrain sync/embed, retrieval eval, graph recall, and runtime recall-bundle commands.
 - **[`@jarvos/agent-context`](./modules/jarvos-agent-context/)** — runtime-facing adapter for agent clients. It exposes current work, recall, startup brief, and verified note creation through a shared library and local stdio MCP server.
 
 ### Portable core + templates
@@ -79,6 +79,7 @@ A common confusion is which behavior is jarvOS and which comes from the runtime 
 
 - The behavioral layer: `AGENTS.md`, `SOUL.md`, `IDENTITY.md`, governance rules, PMS model
 - The modules: `@jarvos/secondbrain`, `@jarvos/memory`, `@jarvos/ontology`, `@jarvos/gbrain`, `@jarvos/agent-context`
+- The GBrain-first resolver contract: GBrain is the first structured recall authority; QMD and runtime-native memory indexes support it instead of competing with it
 - The templates and starter-kit
 - The adapter glue in `runtimes/`
 - Cross-runtime invariants: layer boundaries, ontology heuristics, memory promotion rules, the public/private boundary documented in [`PUBLIC_BASELINE.md`](./PUBLIC_BASELINE.md)
@@ -111,20 +112,24 @@ Because Hermes already does learning, search, and user modeling natively, the He
 
 `@jarvos/secondbrain` reads from and writes to this vault through its `adapters/obsidian/` adapter; it does not own the vault format or the capture pipeline.
 
-### Provided by **GBrain** (structured knowledge dependency)
+### Provided by **GBrain** (first structured recall authority)
 
-GBrain is a separate local knowledge base and graph layer. `@jarvos/gbrain`
-does not implement GBrain itself; it prepares curated, provenance-rich markdown
-pages and wraps the installed `gbrain` CLI for sync, embedding, doctor, and
-retrieval-eval workflows.
+GBrain is a separate local knowledge base and graph layer. In jarvOS v0.1,
+GBrain is the first structured recall authority for durable people, projects,
+companies, concepts, meetings, and sources. `@jarvos/gbrain` does not implement
+GBrain itself; it prepares curated, provenance-rich markdown pages and wraps the
+installed `gbrain` CLI for sync, embedding, doctor, retrieval eval, graph
+recall, and runtime resolver workflows.
 
 The recommended jarvOS operating pattern is:
 
 1. Keep the Obsidian-compatible vault as the human-readable source of truth.
-2. Use QMD for broad, fast vault lookup and exact note retrieval.
-3. Use `@jarvos/gbrain` to import only a curated allowlist into GBrain.
-4. Use GBrain direct search for structured recall and graph recall for linked
-   people, projects, concepts, meetings, and sources.
+2. Use `@jarvos/gbrain` to import only a curated allowlist into GBrain.
+3. Resolve structured recall through GBrain first: direct search for known
+   pages, then graph recall for linked people, projects, concepts, meetings,
+   and sources.
+4. Use QMD as broad vault fallback and exact note retrieval when the GBrain
+   resolver needs supporting source text.
 5. Use the runtime recall bundle (`jarvos-gbrain recall --query ...`) as the
    call surface an agent runtime can invoke before deciding what context to
    inject.

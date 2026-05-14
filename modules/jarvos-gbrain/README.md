@@ -1,8 +1,8 @@
 # @jarvos/gbrain
 
-Structured knowledge bridge for jarvOS. This module imports a curated slice of an
-Obsidian-compatible vault into a GBrain repo, then provides sync, doctor, and
-retrieval-eval helpers.
+GBrain-first structured resolver for jarvOS. This module imports a curated slice
+of an Obsidian-compatible vault into a GBrain repo, then provides sync, doctor,
+retrieval-eval, graph recall, and runtime recall-bundle helpers.
 
 ## What this module owns
 
@@ -14,7 +14,7 @@ retrieval-eval helpers.
 | **Sync wrapper** | Safe wrapper around `gbrain sync --repo <brainDir>` and `gbrain embed --stale` |
 | **Retrieval eval** | Small fixture-driven checks for whether GBrain can answer expected questions |
 | **Graph recall** | Compact wrapper around `gbrain graph-query` for sidecar recall from known seed pages |
-| **Runtime recall bundle** | One callable bundle for GBrain search, optional QMD lookup, and graph sidecar context |
+| **Runtime recall bundle** | One callable resolver that tries GBrain search first, expands through GBrain graph context, and uses QMD as optional source fallback |
 
 ## What this module is NOT for
 
@@ -117,7 +117,7 @@ const {
 - `syncBrain(config, { dryRun })` wraps `gbrain sync --repo <brainDir>` and `gbrain embed --stale`.
 - `runRetrievalEval(config, { dryRun, compareQmd })` runs fixture queries through GBrain search and optionally QMD, then fails questions whose expected evidence is missing.
 - `graphRecall(config, { seeds, depth, dryRun })` runs `gbrain graph-query <seed> --depth <n>` and returns parsed graph nodes for sidecar recall.
-- `recallBundle(config, { query, includeQmd, autoGraph, seeds })` returns a compact runtime bundle with direct GBrain search, optional QMD broad lookup, and graph sidecar expansion.
+- `recallBundle(config, { query, includeQmd, autoGraph, seeds })` returns a compact runtime bundle with direct GBrain search first, GBrain graph sidecar expansion, and optional QMD source fallback.
 - `renderRecallMarkdown(bundle)` renders a bundle into context-ready Markdown.
 - `doctor(config)` checks manifest, eval file, brain directory, GBrain directory, and CLI availability.
 
@@ -246,10 +246,11 @@ node scripts/jarvos-gbrain.js recall \
   --format markdown
 ```
 
-By default, the bundle runs direct GBrain search, QMD broad lookup, and graph
-expansion from the first GBrain search slugs. Use `--graph-seed` to force known
-anchors, `--no-qmd` when QMD is unavailable, or `--no-graph` when only direct
-search is needed.
+By default, the bundle runs direct GBrain search first, expands graph context
+from the first GBrain search slugs, and includes QMD only as broad vault fallback
+or exact source-note support. Use `--graph-seed` to force known anchors,
+`--no-qmd` when QMD is unavailable, or `--no-graph` when only direct search is
+needed.
 
 This command is a retrieval adapter, not automatic prompt injection. Runtime
 wiring should decide when to call it and how much of its Markdown to include.
@@ -260,9 +261,9 @@ wiring should decide when to call it and how much of its Markdown to include.
 instead of a full-vault mirror. A runtime or local workspace can wrap this module
 in a daily maintenance job with these steps:
 
-1. Refresh the broad vault index through QMD or the runtime's memory-index
-   command.
-2. Run `gbrain stats` and `gbrain doctor --fast --json`.
+1. Run `gbrain stats` and `gbrain doctor --fast --json`.
+2. Refresh the broad vault index through QMD or the runtime's memory-index
+   command so fallback lookup stays available.
 3. Run the private combined eval:
 
 ```bash
@@ -314,11 +315,11 @@ with a different dimension model such as an OpenAI embedding model.
 
 ## Role in the jarvOS Architecture
 
-`@jarvos/gbrain` is the structured knowledge layer. It does not replace QMD or
-OpenClaw memory-wiki:
+`@jarvos/gbrain` is the GBrain-first structured knowledge resolver. It does not
+replace QMD or OpenClaw memory-wiki:
 
-- QMD remains the broad, fast vault lookup path.
+- GBrain is the first structured recall authority for people, companies,
+  projects, concepts, meetings, source pages, and other structured knowledge
+  that should survive across runtimes.
+- QMD remains the broad, fast vault lookup fallback and exact source-note path.
 - memory-wiki remains a native OpenClaw compiled wiki and diagnostic dashboard.
-- GBrain becomes the graph-like source for people, companies, projects, concepts,
-  meetings, source pages, and other structured knowledge that should survive
-  across runtimes.

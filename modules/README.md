@@ -8,7 +8,7 @@ with a clear boundary and a dedicated README.
 | [`@jarvos/memory`](./jarvos-memory/) | Agent-state memory — compact recall across sessions | `src/index.js` |
 | [`@jarvos/ontology`](./jarvos-ontology/) | Worldview layer — beliefs, goals, values, predictions | `src/index.js` |
 | [`@jarvos/secondbrain`](./jarvos-secondbrain/) | Content layer — journal and notes | `bridge/config/jarvos-paths.js` |
-| [`@jarvos/gbrain`](./jarvos-gbrain/) | Structured knowledge bridge — curated vault import to GBrain | `src/index.js` |
+| [`@jarvos/gbrain`](./jarvos-gbrain/) | GBrain-first structured resolver — curated vault import, graph recall, and runtime recall bundles | `src/index.js` |
 | [`@jarvos/agent-context`](./jarvos-agent-context/) | Runtime-facing adapter — recall, current work, note actions, MCP | `src/index.js` |
 
 ## Architecture
@@ -44,7 +44,7 @@ Each module owns a distinct layer. **Do not use them interchangeably.**
 | Content | `@jarvos/secondbrain` | Journal entries, notes, raw capture |
 | Recall | `@jarvos/memory` | Lessons, decisions, preferences, facts |
 | Worldview | `@jarvos/ontology` | Beliefs, goals, values, predictions |
-| Structured knowledge | `@jarvos/gbrain` | People, companies, projects, concepts, meetings, source pages |
+| Structured knowledge + resolver | `@jarvos/gbrain` | First-pass structured recall for people, companies, projects, concepts, meetings, source pages |
 | Execution | Paperclip | Tasks, issues, assignments, done/not-done |
 
 ## Smoke Test
@@ -146,14 +146,15 @@ All paths are resolved via environment variables or `jarvos.config.json`. See `b
 
 ## @jarvos/gbrain
 
-**What it does:** Bridges a curated slice of your Obsidian-compatible vault into
-GBrain. It generates deterministic GBrain pages for people, companies, projects,
-concepts, meetings, and sources while preserving source provenance.
+**What it does:** Provides the GBrain-first structured resolver for jarvOS. It
+imports a curated slice of your Obsidian-compatible vault into GBrain and
+generates deterministic GBrain pages for people, companies, projects, concepts,
+meetings, and sources while preserving source provenance.
 Curated manifest items may also include graph-friendly relationship fields such
 as `company`, `key_people`, `attendees`, `related`, `see_also`, and `sources`.
 It also provides retrieval evals, graph sidecar recall, and a runtime recall
-bundle that combines direct GBrain search, optional QMD lookup, and graph
-expansion behind one callable adapter.
+bundle that resolves through GBrain first, uses graph expansion for adjacent
+context, and calls QMD only as broad vault fallback or exact source-note support.
 
 **What it is NOT:** A full-vault search engine or a replacement for QMD. QMD
 remains the broad, fast vault lookup path. OpenClaw `memory-wiki` remains a
@@ -185,8 +186,8 @@ node scripts/jarvos-gbrain.js recall --query "What should my assistant know abou
 2. Maintain a private curated GBrain import manifest outside this repo.
 3. Run import/sync/embed against that manifest.
 4. Prove recall quality with private eval questions.
-5. Use QMD for broad lookup and GBrain search/graph/recall for structured
-   runtime context.
+5. Use GBrain search/graph/recall as the structured runtime context resolver,
+   with QMD as broad lookup and exact source-note fallback.
 6. In OpenClaw or another runtime, automate a report-only maintenance loop that
    refreshes indexes, checks GBrain and memory-wiki health, runs combined evals,
    and proposes manifest additions without auto-promoting notes.
