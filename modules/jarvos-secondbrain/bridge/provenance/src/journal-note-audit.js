@@ -2,9 +2,9 @@
 /**
  * Bridge-owned canonical note↔journal link auditor.
  *
- * Detects notes created today (or on a given date) in the vault Notes/
- * directory and checks whether each is already linked in that day's journal
- * preferred ## 🗂️ Notes Created section (falling back to legacy ## 📝 Notes when
+ * Detects notes created or updated today (or on a given date) in the vault
+ * Notes/ directory and checks whether each is already linked in that day's journal
+ * preferred ## 📝 Notes section (falling back to legacy ## 🗂️ Notes Created when
  * auditing pre-migration entries). Reports gaps and optionally patches them.
  *
  * Usage:
@@ -24,9 +24,10 @@ const { getTimeZone } = require('../../config/jarvos-paths');
 
 const NOTES_DIR = getVaultNotesDir();
 const JOURNAL_DIR = getVaultJournalDir();
+const NOTES_HEADING = '## 📝 Notes';
 const NOTES_CREATED_HEADING = '## 🗂️ Notes Created';
-const LEGACY_NOTES_HEADING = '## 📝 Notes';
-const TRACKED_SECTION_HEADINGS = [NOTES_CREATED_HEADING, LEGACY_NOTES_HEADING];
+const TRACKED_SECTION_HEADINGS = [NOTES_HEADING, NOTES_CREATED_HEADING];
+const LEGACY_NOTES_CREATED_CUTOFF = '2026-05-14';
 
 const EXCLUDE_PATTERNS = [
   /- Project Board\.md$/i,
@@ -168,7 +169,9 @@ function findNotesForDate(dateYmd) {
     year: 'numeric', month: '2-digit', day: '2-digit',
   });
 
-  const results = findAllNotes().filter((note) => nyFormatter.format(note.createdAt) === dateYmd);
+  const results = findAllNotes().filter((note) => {
+    return nyFormatter.format(note.createdAt) === dateYmd || nyFormatter.format(note.mtime) === dateYmd;
+  });
   results.sort((a, b) => a.createdAt - b.createdAt || a.mtime - b.mtime);
   return results;
 }
@@ -206,10 +209,12 @@ function findSectionRange(lines, heading) {
   return { sectionLineStart, sectionLineEnd };
 }
 
-function extractTrackedSection(journalMd) {
+function extractTrackedSection(journalMd, opts = {}) {
+  const { allowLegacy = true } = opts;
   const lines = journalMd.split('\n');
+  const headings = allowLegacy ? TRACKED_SECTION_HEADINGS : [NOTES_HEADING];
 
-  for (const heading of TRACKED_SECTION_HEADINGS) {
+  for (const heading of headings) {
     const { sectionLineStart, sectionLineEnd } = findSectionRange(lines, heading);
     if (sectionLineStart === -1) continue;
     return {
@@ -232,8 +237,8 @@ function extractTrackedSection(journalMd) {
   };
 }
 
-function findMissingLinks(notes, journalMd, allNotes = notes) {
-  const parsed = extractTrackedSection(journalMd);
+function findMissingLinks(notes, journalMd, allNotes = notes, opts = {}) {
+  const parsed = extractTrackedSection(journalMd, opts);
   const existingLinks = extractWikiLinks(parsed.found ? parsed.sectionContent : '');
   const basenameCounts = new Map();
 
@@ -258,8 +263,8 @@ function injectNoteLinks(journalMd, missingNotes) {
   const parsed = extractTrackedSection(journalMd);
   const noteLines = formatNoteLinks(missingNotes).split('\n');
 
-  if (!parsed.found || parsed.heading !== NOTES_CREATED_HEADING) {
-    const insertion = `${NOTES_CREATED_HEADING}\n${formatNoteLinks(missingNotes)}\n`;
+  if (!parsed.found || parsed.heading !== NOTES_HEADING) {
+    const insertion = `${NOTES_HEADING}\n${formatNoteLinks(missingNotes)}\n`;
     return journalMd.trimEnd() + `\n\n${insertion}`;
   }
 
@@ -326,8 +331,9 @@ function main() {
     process.exit(2);
   }
 
-  const missingLinks = findMissingLinks(notesToday, journalMd, allNotes);
-  const trackedSection = extractTrackedSection(journalMd);
+  const allowLegacy = dateYmd < LEGACY_NOTES_CREATED_CUTOFF;
+  const missingLinks = findMissingLinks(notesToday, journalMd, allNotes, { allowLegacy });
+  const trackedSection = extractTrackedSection(journalMd, { allowLegacy });
 
   const result = {
     date: dateYmd,
@@ -377,7 +383,8 @@ function main() {
 module.exports = {
   main,
   NOTES_CREATED_HEADING,
-  LEGACY_NOTES_HEADING,
+  NOTES_HEADING,
+  LEGACY_NOTES_CREATED_CUTOFF,
   TRACKED_SECTION_HEADINGS,
   extractWikiLinks,
   extractTrackedSection,
