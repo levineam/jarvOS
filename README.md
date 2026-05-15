@@ -6,7 +6,9 @@
 
 jarvOS is a behavioral and knowledge layer for AI assistants. It gives an agent persistent identity, durable memory, a structured worldview, and the governance rules to act on your behalf without losing the plot between sessions.
 
-It is **not** a runtime. jarvOS rides on top of an existing agent runtime — today [OpenClaw](https://github.com/openclaw/openclaw) ([openclaw.ai](https://openclaw.ai)) or [Hermes Agent](https://github.com/NousResearch/hermes-agent) — and uses your existing tools (Obsidian, Paperclip, etc.) as backing stores. The same jarvOS core works across runtimes; only the adapter changes.
+It is **not** a runtime. jarvOS rides on top of an existing agent runtime — today [OpenClaw](https://github.com/openclaw/openclaw) ([openclaw.ai](https://openclaw.ai)) or [Hermes Agent](https://github.com/NousResearch/hermes-agent) — and uses your existing tools (Obsidian, Paperclip, GBrain, QMD, lossless-claw, etc.) as backing stores. The same jarvOS core works across runtimes; only the adapter changes.
+
+For v0.1, the public architecture is intentionally **GBrain-first** for structured recall: GBrain is the first-class brain/router layer for curated people, projects, concepts, meetings, and source pages. jarvOS ships the resolver-facing integration code, templates, and eval fixtures that let a local GBrain install become that brain layer; it does not ship GBrain itself or anyone's private graph.
 
 ## What's in this repo
 
@@ -17,7 +19,7 @@ jarvOS/
 │   ├── jarvos-secondbrain/   # Content layer — journal, notes, capture routing
 │   ├── jarvos-memory/        # Agent-state memory contract
 │   ├── jarvos-ontology/      # Worldview / belief graph
-│   ├── jarvos-gbrain/        # Structured knowledge bridge for GBrain
+│   ├── jarvos-gbrain/        # GBrain-first resolver/brain integration
 │   └── jarvos-agent-context/ # Runtime-facing recall/action adapter + MCP tools
 ├── templates/         # Blank starting points (USER, MEMORY, ONTOLOGY, TOOLS, AGENTS, BOOTSTRAP, HEARTBEAT)
 ├── runtimes/
@@ -54,7 +56,7 @@ The `modules/` directory contains the runnable parts of jarvOS. Each module is a
 - **[`@jarvos/secondbrain`](./modules/jarvos-secondbrain/)** — content-facing monorepo. Journal maintenance, notes management, capture routing, and an Obsidian storage adapter (plus adapter notes for OpenClaw). All paths are env-var driven via `bridge/config/jarvos-paths.js`. Your actual notes never live here; they stay in your vault.
 - **[`@jarvos/memory`](./modules/jarvos-memory/)** — schema and audit tooling for agent-state memory. Defines what a `MEMORY.md` record looks like, how items get promoted, and how to validate a memory file against the contract. Your actual memories stay private and local.
 - **[`@jarvos/ontology`](./modules/jarvos-ontology/)** — reader/writer/validator/renderer for the six-layer ontology (higher-order principles, beliefs, predictions, core self, goals, projects). Ships blank templates (`schema/templates/`) and heuristics (`schema/heuristics.md`), plus a Paperclip sync script (`scripts/sync-to-paperclip.js`). Your filled-in beliefs and goals stay private and local.
-- **[`@jarvos/gbrain`](./modules/jarvos-gbrain/)** — curated bridge from an Obsidian-compatible vault into GBrain pages. It generates structured people, companies, projects, concepts, meetings, and source pages with provenance, then wraps GBrain sync/embed, retrieval eval, graph recall, and runtime recall-bundle commands.
+- **[`@jarvos/gbrain`](./modules/jarvos-gbrain/)** — GBrain-first resolver/brain integration for curated structured knowledge. It turns an explicit allowlist from an Obsidian-compatible vault into provenance-rich GBrain pages, then wraps GBrain sync/embed, retrieval eval, graph recall, and runtime recall-bundle commands.
 - **[`@jarvos/agent-context`](./modules/jarvos-agent-context/)** — runtime-facing adapter for agent clients. It exposes current work, recall, startup brief, and verified note creation through a shared library and local stdio MCP server.
 
 ### Portable core + templates
@@ -113,10 +115,12 @@ Because Hermes already does learning, search, and user modeling natively, the He
 
 ### Provided by **GBrain** (structured knowledge dependency)
 
-GBrain is a separate local knowledge base and graph layer. `@jarvos/gbrain`
-does not implement GBrain itself; it prepares curated, provenance-rich markdown
-pages and wraps the installed `gbrain` CLI for sync, embedding, doctor, and
-retrieval-eval workflows.
+GBrain is a separate local knowledge base and graph layer. In jarvOS v0.1,
+GBrain is the first-class structured recall brain for curated entity/project/
+concept knowledge. `@jarvos/gbrain` does not implement GBrain itself; it
+prepares curated, provenance-rich markdown pages and wraps the installed
+`gbrain` CLI for sync, embedding, doctor, graph recall, and retrieval-eval
+workflows.
 
 The recommended jarvOS operating pattern is:
 
@@ -126,8 +130,8 @@ The recommended jarvOS operating pattern is:
 4. Use GBrain direct search for structured recall and graph recall for linked
    people, projects, concepts, meetings, and sources.
 5. Use the runtime recall bundle (`jarvos-gbrain recall --query ...`) as the
-   call surface an agent runtime can invoke before deciding what context to
-   inject.
+   resolver call surface an agent runtime can invoke before deciding what
+   context to inject.
 
 The public repo ships template manifests and eval fixtures only. Real manifests,
 eval questions, generated private pages, and personal notes stay in your local

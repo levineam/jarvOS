@@ -6,6 +6,7 @@ Short description of this release and who should install it.
 
 ## What's Included
 
+- GBrain-first resolver/brain integration status:
 - 
 
 ## Fixes
@@ -18,6 +19,7 @@ Short description of this release and who should install it.
 
 ## Known Limitations
 
+- GBrain inclusion boundary:
 - 
 
 ## Install / Update

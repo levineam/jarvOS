@@ -1,7 +1,7 @@
 {
   "name": "@jarvos/gbrain",
   "version": "0.1.0",
-  "description": "jarvOS GBrain bridge - curated Obsidian-to-GBrain import, sync, doctor, and retrieval eval helpers",
+  "description": "jarvOS GBrain-first resolver integration - curated Obsidian-to-GBrain import, sync, doctor, graph recall, and retrieval eval helpers",
   "license": "MIT",
   "main": "src/index.js",
   "exports": {

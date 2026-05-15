@@ -18,7 +18,7 @@ This document defines what is and is not included in the public jarvOS repositor
 - `modules/jarvos-memory/` — agent-state memory contract (schema, audit helpers, promotion rules)
 - `modules/jarvos-ontology/` — ontology tooling (reader, writer, validator, renderer, blank templates)
 - `modules/jarvos-secondbrain/` — content layer (journal/notes packages, vault bridges, capture routing)
-- `modules/jarvos-gbrain/` — GBrain bridge code, public template manifest, public template eval fixture
+- `modules/jarvos-gbrain/` — GBrain-first resolver/brain integration code, public template manifest, public template eval fixture
 
 ---
 
