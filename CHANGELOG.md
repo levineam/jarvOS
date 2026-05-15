@@ -12,6 +12,7 @@ First public preview release candidate.
 - Claude Desktop manual MCP hydration via the `boot jarvOS` prompt.
 - Smoke test coverage for shipped files and public baseline completeness.
 - GBrain-first structured recall integration via `@jarvos/gbrain`: curated import planning, GBrain sync/embed wrappers, graph recall, runtime recall bundles, and public eval fixtures.
+- Default operating-system skills via `@jarvos/skills`: workflow execution, rule creation, context management, and cron hygiene.
 - Release process documentation, GitHub Release template, and executable release readiness check.
 
 ### Known limitations
@@ -20,6 +21,7 @@ First public preview release candidate.
 - Claude Desktop startup auto-hydration is not included; Desktop uses the manual MCP hydration flow.
 - Andrew's live private workspace is not included in the public baseline.
 - GBrain itself, private generated pages, private manifests, and private eval questions are not included; the repo ships the integration layer and public fixtures only.
+- QMD is not bundled as a default skill; it remains an optional markdown-search adapter.
 
 ## 2026-03-27 — merged outstanding public repo PRs
 

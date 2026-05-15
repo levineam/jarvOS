@@ -10,6 +10,7 @@ with a clear boundary and a dedicated README.
 | [`@jarvos/secondbrain`](./jarvos-secondbrain/) | Content layer — journal and notes | `bridge/config/jarvos-paths.js` |
 | [`@jarvos/gbrain`](./jarvos-gbrain/) | GBrain-first resolver/brain integration — curated vault import to GBrain | `src/index.js` |
 | [`@jarvos/agent-context`](./jarvos-agent-context/) | Runtime-facing adapter — recall, current work, note actions, MCP | `src/index.js` |
+| [`@jarvos/skills`](./jarvos-skills/) | Operating-system skill bundle — planning, rule wiring, context hygiene, cron safety | `src/index.js` |
 
 ## Architecture
 
@@ -19,6 +20,7 @@ Raw capture (journal/notes)
     → @jarvos/memory (compact retained state)
       → @jarvos/ontology (worldview / belief graph)
         → @jarvos/gbrain (structured people/projects/concepts/sources)
+        → @jarvos/skills (portable operating workflow)
         → Paperclip (live execution tracking)
 ```
 
@@ -26,7 +28,7 @@ Raw capture (journal/notes)
 
 ```bash
 # From the root of this repo
-npm install ./modules/jarvos-memory ./modules/jarvos-ontology ./modules/jarvos-secondbrain ./modules/jarvos-gbrain ./modules/jarvos-agent-context
+npm install ./modules/jarvos-memory ./modules/jarvos-ontology ./modules/jarvos-secondbrain ./modules/jarvos-gbrain ./modules/jarvos-agent-context ./modules/jarvos-skills
 ```
 
 Or reference each module directly in your project:
@@ -45,6 +47,7 @@ Each module owns a distinct layer. **Do not use them interchangeably.**
 | Recall | `@jarvos/memory` | Lessons, decisions, preferences, facts |
 | Worldview | `@jarvos/ontology` | Beliefs, goals, values, predictions |
 | Structured knowledge | `@jarvos/gbrain` | People, companies, projects, concepts, meetings, source pages |
+| Operating workflow | `@jarvos/skills` | Agent procedures for planning, rule creation, context hygiene, cron safety |
 | Execution | Paperclip | Tasks, issues, assignments, done/not-done |
 
 ## Smoke Test
@@ -241,6 +244,33 @@ node scripts/jarvos-mcp.js startup-brief
 ```bash
 codex mcp add jarvos -- node /path/to/jarvOS/modules/jarvos-agent-context/scripts/jarvos-mcp.js
 ```
+
+---
+
+## @jarvos/skills
+
+**What it does:** Provides the default jarvOS operating-system skill bundle for
+OpenClaw-style agents. The default bundle includes `workflow-execution`,
+`rule-creation`, `context-management`, and `cron-hygiene`.
+
+**What it is NOT:** A dump of a private workspace's skills folder. The bundle is
+generic markdown plus a small installer/manifest API. QMD is not a default skill;
+it is documented as an optional markdown-search adapter.
+
+**Quick start:**
+
+```bash
+cd modules/jarvos-skills
+node scripts/install-skills.js --check
+node scripts/install-skills.js --dest /path/to/openclaw-workspace/skills
+```
+
+**Key files:**
+
+- `manifest.json` — default skill list and optional adapter metadata
+- `skills/*/SKILL.md` — portable skill definitions
+- `docs/qmd-adapter.md` — QMD boundary and optional adapter guidance
+- `src/index.js` — manifest, validation, and install helpers
 
 ---
 

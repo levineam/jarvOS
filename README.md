@@ -20,7 +20,8 @@ jarvOS/
 │   ├── jarvos-memory/        # Agent-state memory contract
 │   ├── jarvos-ontology/      # Worldview / belief graph
 │   ├── jarvos-gbrain/        # GBrain-first resolver/brain integration
-│   └── jarvos-agent-context/ # Runtime-facing recall/action adapter + MCP tools
+│   ├── jarvos-agent-context/ # Runtime-facing recall/action adapter + MCP tools
+│   └── jarvos-skills/        # Default operating-system skill bundle
 ├── templates/         # Blank starting points (USER, MEMORY, ONTOLOGY, TOOLS, AGENTS, BOOTSTRAP, HEARTBEAT)
 ├── runtimes/
 │   ├── openclaw/      # OpenClaw adapter notes + setup script
@@ -58,6 +59,7 @@ The `modules/` directory contains the runnable parts of jarvOS. Each module is a
 - **[`@jarvos/ontology`](./modules/jarvos-ontology/)** — reader/writer/validator/renderer for the six-layer ontology (higher-order principles, beliefs, predictions, core self, goals, projects). Ships blank templates (`schema/templates/`) and heuristics (`schema/heuristics.md`), plus a Paperclip sync script (`scripts/sync-to-paperclip.js`). Your filled-in beliefs and goals stay private and local.
 - **[`@jarvos/gbrain`](./modules/jarvos-gbrain/)** — GBrain-first resolver/brain integration for curated structured knowledge. It turns an explicit allowlist from an Obsidian-compatible vault into provenance-rich GBrain pages, then wraps GBrain sync/embed, retrieval eval, graph recall, and runtime recall-bundle commands.
 - **[`@jarvos/agent-context`](./modules/jarvos-agent-context/)** — runtime-facing adapter for agent clients. It exposes current work, recall, startup brief, and verified note creation through a shared library and local stdio MCP server.
+- **[`@jarvos/skills`](./modules/jarvos-skills/)** — default operating-system skill bundle for OpenClaw-style agents: workflow execution, rule creation, context management, and cron hygiene. QMD is documented as an optional markdown-search adapter, not installed by default.
 
 ### Portable core + templates
 
@@ -80,7 +82,7 @@ A common confusion is which behavior is jarvOS and which comes from the runtime 
 ### Owned by jarvOS (this repo)
 
 - The behavioral layer: `AGENTS.md`, `SOUL.md`, `IDENTITY.md`, governance rules, PMS model
-- The modules: `@jarvos/secondbrain`, `@jarvos/memory`, `@jarvos/ontology`, `@jarvos/gbrain`, `@jarvos/agent-context`
+- The modules: `@jarvos/secondbrain`, `@jarvos/memory`, `@jarvos/ontology`, `@jarvos/gbrain`, `@jarvos/agent-context`, `@jarvos/skills`
 - The templates and starter-kit
 - The adapter glue in `runtimes/`
 - Cross-runtime invariants: layer boundaries, ontology heuristics, memory promotion rules, the public/private boundary documented in [`PUBLIC_BASELINE.md`](./PUBLIC_BASELINE.md)
@@ -211,6 +213,7 @@ cp core/SOUL.md      /path/to/your/openclaw-workspace/SOUL.md
 cp core/IDENTITY.md  /path/to/your/openclaw-workspace/IDENTITY.md
 cp templates/BOOTSTRAP-template.md /path/to/your/openclaw-workspace/BOOTSTRAP.md
 cp templates/HEARTBEAT-template.md /path/to/your/openclaw-workspace/HEARTBEAT.md
+node modules/jarvos-skills/scripts/install-skills.js --dest /path/to/your/openclaw-workspace/skills
 # Create USER.md and ONTOLOGY.md from the templates and fill them in, then:
 cd /path/to/your/openclaw-workspace
 openclaw gateway start
@@ -232,7 +235,7 @@ current-work, and note-capture tools.
 The modules can be installed independently from a clone of this repo:
 
 ```bash
-npm install ./modules/jarvos-memory ./modules/jarvos-ontology ./modules/jarvos-secondbrain ./modules/jarvos-gbrain ./modules/jarvos-agent-context
+npm install ./modules/jarvos-memory ./modules/jarvos-ontology ./modules/jarvos-secondbrain ./modules/jarvos-gbrain ./modules/jarvos-agent-context ./modules/jarvos-skills
 ```
 
 Each has its own quick-start in [`modules/README.md`](./modules/README.md).
