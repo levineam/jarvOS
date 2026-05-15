@@ -141,6 +141,13 @@ check_file "modules/jarvos-gbrain/config/curated-import.json"
 check_file "modules/jarvos-gbrain/config/eval-questions.json"
 check_file "modules/jarvos-runtime-kit/package.json"
 check_file "modules/jarvos-runtime-kit/scripts/jarvos-runtime-kit.js"
+check_file "modules/jarvos-skills/package.json"
+check_file "modules/jarvos-skills/manifest.json"
+check_file "modules/jarvos-skills/skills/workflow-execution/SKILL.md"
+check_file "modules/jarvos-skills/skills/rule-creation/SKILL.md"
+check_file "modules/jarvos-skills/skills/context-management/SKILL.md"
+check_file "modules/jarvos-skills/skills/cron-hygiene/SKILL.md"
+check_file "modules/jarvos-skills/docs/qmd-adapter.md"
 
 # ── Top-level repo hygiene ────────────────────────────────────────────────────
 echo ""

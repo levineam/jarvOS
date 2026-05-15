@@ -279,6 +279,44 @@ try {
   bad('@jarvos/agent-context module load', e);
 }
 
+// ── @jarvos/skills ──────────────────────────────────────────────────────────
+
+console.log('\n→ @jarvos/skills');
+
+try {
+  const skills = require(path.join(ROOT, 'modules/jarvos-skills/src/index.js'));
+  const validation = skills.validateBundle();
+  const manifest = skills.getManifest();
+  const names = skills.listSkills().map((skill) => skill.name);
+
+  if (validation.ok && validation.skillCount === 4) {
+    ok('validateBundle accepts default skill bundle');
+  } else {
+    bad('validateBundle', new Error(JSON.stringify(validation)));
+  }
+
+  if (
+    names.includes('workflow-execution')
+    && names.includes('rule-creation')
+    && names.includes('context-management')
+    && names.includes('cron-hygiene')
+    && !manifest.defaultSkills.includes('qmd')
+  ) {
+    ok('default skills include OS bundle and exclude QMD');
+  } else {
+    bad('default skills', new Error(JSON.stringify({ names, defaultSkills: manifest.defaultSkills })));
+  }
+
+  const workflow = skills.getSkill('workflow-execution');
+  if (workflow && workflow.content.includes('Plan-first workflow')) {
+    ok('getSkill returns packaged skill content');
+  } else {
+    bad('getSkill workflow-execution', new Error(JSON.stringify(workflow && workflow.name)));
+  }
+} catch (e) {
+  bad('@jarvos/skills module load', e);
+}
+
 // ── @jarvos/runtime-kit ────────────────────────────────────────────────────
 
 console.log('\n→ @jarvos/runtime-kit');

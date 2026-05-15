@@ -1,0 +1,25 @@
+{
+  "name": "@jarvos/skills",
+  "version": "0.1.0",
+  "description": "Portable jarvOS operating-system skill bundle for OpenClaw-style agents.",
+  "license": "MIT",
+  "type": "commonjs",
+  "main": "src/index.js",
+  "bin": {
+    "jarvos-skills": "scripts/install-skills.js"
+  },
+  "files": [
+    "README.md",
+    "manifest.json",
+    "src/",
+    "scripts/",
+    "skills/",
+    "docs/"
+  ],
+  "scripts": {
+    "test": "node test/skills.test.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

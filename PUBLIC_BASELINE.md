@@ -19,6 +19,7 @@ This document defines what is and is not included in the public jarvOS repositor
 - `modules/jarvos-ontology/` — ontology tooling (reader, writer, validator, renderer, blank templates)
 - `modules/jarvos-secondbrain/` — content layer (journal/notes packages, vault bridges, capture routing)
 - `modules/jarvos-gbrain/` — GBrain-first resolver/brain integration code, public template manifest, public template eval fixture
+- `modules/jarvos-skills/` — generic operating-system skills for workflow execution, rule creation, context management, and cron hygiene
 
 ---
 

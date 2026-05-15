@@ -21,7 +21,10 @@
   },
   "scripts": {
     "bootstrap": "node bootstrap.js",
-    "test": "bash tests/smoke-test.sh",
+    "test": "bash tests/smoke-test.sh && node tests/modules-smoke-test.js && bash scripts/smoke-test.sh",
+    "test:bootstrap": "bash tests/smoke-test.sh",
+    "test:modules": "node tests/modules-smoke-test.js",
+    "test:structure": "bash scripts/smoke-test.sh",
     "release:check": "node scripts/release-readiness-check.js",
     "release:check:candidate": "node scripts/release-readiness-check.js --allow-dirty --allow-unreleased"
   },

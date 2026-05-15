@@ -1,0 +1,42 @@
+{
+  "bundle": "jarvos-operating-system-skills",
+  "version": "0.1.0",
+  "description": "Default jarvOS skill bundle for planning, rule wiring, context hygiene, and cron safety.",
+  "defaultSkills": [
+    "workflow-execution",
+    "rule-creation",
+    "context-management",
+    "cron-hygiene"
+  ],
+  "optionalAdapters": [
+    {
+      "name": "qmd",
+      "type": "markdown-search",
+      "default": false,
+      "docs": "docs/qmd-adapter.md",
+      "reason": "QMD is underlying markdown-search software, not a default jarvOS operating-system skill."
+    }
+  ],
+  "skills": [
+    {
+      "name": "workflow-execution",
+      "path": "skills/workflow-execution/SKILL.md",
+      "purpose": "Plan, track, package, execute, and verify non-trivial work."
+    },
+    {
+      "name": "rule-creation",
+      "path": "skills/rule-creation/SKILL.md",
+      "purpose": "Wire new behavioral rules into the right governance surface with enforcement assessment."
+    },
+    {
+      "name": "context-management",
+      "path": "skills/context-management/SKILL.md",
+      "purpose": "Maintain compact, coherent always-loaded context and durable memory routing."
+    },
+    {
+      "name": "cron-hygiene",
+      "path": "skills/cron-hygiene/SKILL.md",
+      "purpose": "Validate, audit, and maintain scheduled automation safely."
+    }
+  ]
+}
