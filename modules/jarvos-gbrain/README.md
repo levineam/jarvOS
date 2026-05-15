@@ -14,7 +14,7 @@ retrieval-eval, graph recall, and runtime recall-bundle helpers.
 | **Sync wrapper** | Safe wrapper around `gbrain sync --repo <brainDir>` and `gbrain embed --stale` |
 | **Retrieval eval** | Small fixture-driven checks for whether GBrain can answer expected questions |
 | **Graph recall** | Compact wrapper around `gbrain graph-query` for sidecar recall from known seed pages |
-| **Runtime recall bundle** | One callable resolver that tries GBrain search first, expands through GBrain graph context, and uses QMD as optional source fallback |
+| **Runtime recall bundle** | One callable resolver that tries GBrain search first, expands through GBrain graph context, and uses QMD as configurable source support |
 
 ## What this module is NOT for
 
@@ -117,7 +117,7 @@ const {
 - `syncBrain(config, { dryRun })` wraps `gbrain sync --repo <brainDir>` and `gbrain embed --stale`.
 - `runRetrievalEval(config, { dryRun, compareQmd })` runs fixture queries through GBrain search and optionally QMD, then fails questions whose expected evidence is missing.
 - `graphRecall(config, { seeds, depth, dryRun })` runs `gbrain graph-query <seed> --depth <n>` and returns parsed graph nodes for sidecar recall.
-- `recallBundle(config, { query, includeQmd, autoGraph, seeds })` returns a compact runtime bundle with direct GBrain search first, GBrain graph sidecar expansion, and optional QMD source fallback.
+- `recallBundle(config, { query, includeQmd, autoGraph, seeds })` returns a compact runtime bundle with direct GBrain search first, GBrain graph sidecar expansion, and configurable QMD source support.
 - `renderRecallMarkdown(bundle)` renders a bundle into context-ready Markdown.
 - `doctor(config)` checks manifest, eval file, brain directory, GBrain directory, and CLI availability.
 
@@ -247,10 +247,11 @@ node scripts/jarvos-gbrain.js recall \
 ```
 
 By default, the bundle runs direct GBrain search first, expands graph context
-from the first GBrain search slugs, and includes QMD only as broad vault fallback
-or exact source-note support. Use `--graph-seed` to force known anchors,
-`--no-qmd` when QMD is unavailable, or `--no-graph` when only direct search is
-needed.
+from the first GBrain search slugs, and includes QMD as broad vault lookup or
+exact source-note support. Because QMD is enabled by default, QMD failures make
+the bundle unhealthy even when GBrain succeeds. Use `--graph-seed` to force
+known anchors, `--no-qmd` when QMD is unavailable or a runtime wants GBrain-only
+recall, or `--no-graph` when only direct search is needed.
 
 This command is a retrieval adapter, not automatic prompt injection. Runtime
 wiring should decide when to call it and how much of its Markdown to include.
@@ -321,5 +322,5 @@ replace QMD or OpenClaw memory-wiki:
 - GBrain is the first structured recall authority for people, companies,
   projects, concepts, meetings, source pages, and other structured knowledge
   that should survive across runtimes.
-- QMD remains the broad, fast vault lookup fallback and exact source-note path.
+- QMD remains the broad, fast vault lookup and exact source-note path.
 - memory-wiki remains a native OpenClaw compiled wiki and diagnostic dashboard.

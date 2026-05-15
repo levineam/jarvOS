@@ -79,7 +79,7 @@ A common confusion is which behavior is jarvOS and which comes from the runtime 
 
 - The behavioral layer: `AGENTS.md`, `SOUL.md`, `IDENTITY.md`, governance rules, PMS model
 - The modules: `@jarvos/secondbrain`, `@jarvos/memory`, `@jarvos/ontology`, `@jarvos/gbrain`, `@jarvos/agent-context`
-- The GBrain-first resolver contract: GBrain is the first structured recall authority; QMD and runtime-native memory indexes support it instead of competing with it
+- The GBrain-first resolver contract: GBrain is the first structured recall authority; QMD and runtime-native memory indexes support it without competing with it
 - The templates and starter-kit
 - The adapter glue in `runtimes/`
 - Cross-runtime invariants: layer boundaries, ontology heuristics, memory promotion rules, the public/private boundary documented in [`PUBLIC_BASELINE.md`](./PUBLIC_BASELINE.md)
@@ -128,8 +128,10 @@ The recommended jarvOS operating pattern is:
 3. Resolve structured recall through GBrain first: direct search for known
    pages, then graph recall for linked people, projects, concepts, meetings,
    and sources.
-4. Use QMD as broad vault fallback and exact note retrieval when the GBrain
-   resolver needs supporting source text.
+4. Use QMD as broad vault lookup and exact note retrieval when the GBrain
+   resolver needs supporting source text. When QMD is enabled in the recall
+   bundle, QMD health is part of bundle success; use `--no-qmd` for GBrain-only
+   runtime calls.
 5. Use the runtime recall bundle (`jarvos-gbrain recall --query ...`) as the
    call surface an agent runtime can invoke before deciding what context to
    inject.

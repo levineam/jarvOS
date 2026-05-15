@@ -154,7 +154,8 @@ Curated manifest items may also include graph-friendly relationship fields such
 as `company`, `key_people`, `attendees`, `related`, `see_also`, and `sources`.
 It also provides retrieval evals, graph sidecar recall, and a runtime recall
 bundle that resolves through GBrain first, uses graph expansion for adjacent
-context, and calls QMD only as broad vault fallback or exact source-note support.
+context, and calls QMD, when enabled, as broad vault lookup or exact source-note
+support.
 
 **What it is NOT:** A full-vault search engine or a replacement for QMD. QMD
 remains the broad, fast vault lookup path. OpenClaw `memory-wiki` remains a
@@ -187,7 +188,8 @@ node scripts/jarvos-gbrain.js recall --query "What should my assistant know abou
 3. Run import/sync/embed against that manifest.
 4. Prove recall quality with private eval questions.
 5. Use GBrain search/graph/recall as the structured runtime context resolver,
-   with QMD as broad lookup and exact source-note fallback.
+   with QMD as broad lookup and exact source-note support. QMD is enabled by
+   default in the recall bundle; pass `--no-qmd` for GBrain-only runtime calls.
 6. In OpenClaw or another runtime, automate a report-only maintenance loop that
    refreshes indexes, checks GBrain and memory-wiki health, runs combined evals,
    and proposes manifest additions without auto-promoting notes.

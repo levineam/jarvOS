@@ -144,7 +144,8 @@ function checkReleaseReadiness(opts = {}) {
   const gbrainRequired = [
     [/GBrain-first/i, 'GBrain-first resolver language'],
     [/first structured recall authority|first-pass structured recall|first structured recall/i, 'GBrain as first structured recall authority'],
-    [/QMD[^.\n]*(fallback|support|source)/i, 'QMD framed as fallback/support, not peer authority'],
+    [/QMD[^.\n]*(broad lookup|support|source)/i, 'QMD framed as support/source lookup, not peer authority'],
+    [/--no-qmd/i, 'GBrain-only recall path documents --no-qmd'],
   ];
   const gbrainForbidden = [
     /Structured knowledge bridge for GBrain/i,
@@ -175,7 +176,7 @@ function checkReleaseReadiness(opts = {}) {
         ].filter(Boolean).join('; '),
       );
     } else {
-      pass('GBrain-first release narrative', 'public docs frame GBrain as first structured resolver with QMD fallback/support');
+      pass('GBrain-first release narrative', 'public docs frame GBrain as first structured resolver with QMD support and --no-qmd fallback');
     }
   }
 

@@ -104,9 +104,11 @@ jarvos-gbrain recall \
 Run it from a workspace where `@jarvos/gbrain` has been installed or with the
 equivalent explicit path to your jarvOS clone. The command returns
 context-ready Markdown after checking GBrain first, expanding graph context, and
-using QMD only as fallback/source support. It does not inject anything on its
-own. Your OpenClaw adapter should decide when to call it and how much of the
-result belongs in the active prompt.
+including QMD as enabled broad lookup and exact-source support. QMD is enabled
+by default, so a missing or unhealthy QMD command makes the bundle unhealthy
+even when GBrain search succeeds. Pass `--no-qmd` for GBrain-only runtime calls.
+It does not inject anything on its own. Your OpenClaw adapter should decide when
+to call it and how much of the result belongs in the active prompt.
 
 ### Conservative Memory-Ops Cron Pattern
 
@@ -141,7 +143,7 @@ bounded:
   untrusted-context wrapper.
 
 This keeps the vault as the source of truth, GBrain as the structured resolver,
-QMD as broad lookup fallback, and memory-wiki as runtime diagnostics.
+QMD as broad lookup and source support, and memory-wiki as runtime diagnostics.
 
 ## What jarvOS Adds On Top
 

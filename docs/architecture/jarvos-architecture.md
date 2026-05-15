@@ -77,7 +77,7 @@ The current jarvOS repo separates memory-adjacent concerns into distinct owners:
 - `@jarvos/memory` owns compact operational recall.
 - `@jarvos/ontology` owns worldview, beliefs, goals, and predictions.
 - `@jarvos/gbrain` owns the GBrain-first structured resolver and curated pages for GBrain.
-- QMD remains a fast broad vault-search fallback and exact source-note dependency, not the graph layer.
+- QMD remains a fast broad vault-search and exact source-note dependency, not the graph layer.
 - OpenClaw `memory-wiki` remains a native runtime diagnostic/compiled-wiki layer, not the primary GBrain import source.
 
 Decision rationale summary:
@@ -94,11 +94,13 @@ Validated operating pattern:
    answers the question.
 4. GBrain graph recall handles cross-source recall when a known or discovered
    seed page needs adjacent people, projects, concepts, meetings, or sources.
-5. QMD remains the broad full-vault lookup and exact-retrieval fallback when
-   the GBrain resolver needs supporting source text.
+5. QMD remains the broad full-vault lookup and exact-retrieval support layer
+   when the GBrain resolver needs supporting source text. If QMD is enabled in
+   the runtime recall bundle, QMD health contributes to bundle success.
 6. `jarvos-gbrain recall` is the runtime-facing adapter that resolves through
    GBrain first, expands graph sidecar context, and optionally includes QMD
-   fallback context for OpenClaw or another runtime to consider.
+   context for OpenClaw or another runtime to consider. Runtime calls that need
+   GBrain-only behavior should pass `--no-qmd`.
 7. OpenClaw `memory-wiki` remains a native diagnostic/synthesis layer and should
    not be treated as the canonical GBrain import source without a separate
    review and eval pass.

@@ -11,7 +11,8 @@ First public preview release candidate.
 - Runtime setup paths for Hermes Agent and OpenClaw.
 - GBrain-first resolver integration: `@jarvos/gbrain` is documented as the
   first structured recall authority, with QMD and runtime-native indexes as
-  fallback/support layers.
+  support layers. QMD is included by default in the recall bundle and should be
+  disabled with `--no-qmd` for GBrain-only runtime calls.
 - Claude Desktop manual MCP hydration via the `boot jarvOS` prompt.
 - Smoke test coverage for shipped files and public baseline completeness.
 - Release process documentation, GitHub Release template, and executable release readiness check.
