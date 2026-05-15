@@ -29,11 +29,13 @@ const {
   getTimeZone,
 } = require('../../../bridge/config/jarvos-paths.js');
 const {
-  NOTES_CREATED_HEADING,
+  NOTES_HEADING,
 } = require('../../../bridge/provenance/src/journal-note-audit.js');
+const {
+  linkNoteToJournal: linkNoteBacklinkToJournal,
+} = require('../../../bridge/provenance/src/link-to-journal.js');
 
 const IDEAS_HEADING = '## 💡 Ideas';
-const NOTES_HEADING = '## 📝 Notes';
 const SIGNATURE = '— Edited by Jarvis';
 const NOTES_PLACEHOLDER_RE = /^-\s+(?:No notes created(?: on .*)?|No notes today|No notes yet)$/i;
 
@@ -155,13 +157,15 @@ function createVaultStorageAdapter() {
       return writeNoteFile({ title, content, frontmatter });
     },
 
-    linkNoteToJournal({ noteTitle, date = todayDate(), heading = NOTES_CREATED_HEADING }) {
+    linkNoteToJournal({ noteTitle, date = todayDate(), heading = NOTES_HEADING }) {
       if (!noteTitle) throw new Error('noteTitle is required');
-      return this.appendLineToJournalSection({
-        heading,
+      const journalPath = path.join(getVaultJournalDir(), `${date}.md`);
+      const result = linkNoteBacklinkToJournal({ noteTitle, section: heading, journalPath });
+      return {
+        ...result,
+        heading: NOTES_HEADING,
         line: `- [[${noteTitle}]]`,
-        date,
-      });
+      };
     },
   };
 }
@@ -170,6 +174,5 @@ module.exports = {
   createVaultStorageAdapter,
   IDEAS_HEADING,
   NOTES_HEADING,
-  NOTES_CREATED_HEADING,
   todayDate,
 };
