@@ -90,19 +90,24 @@ function installSkills(destinationDir, options = {}) {
     : Array.isArray(options.skills)
       ? options.skills
       : [options.skills];
-  const installed = [];
 
-  for (const name of names) {
+  const plan = names.map((name) => {
     const skill = getSkill(name);
     if (!skill) throw new Error(`Unknown skill: ${name}`);
+    return { name, source: skill.absolutePath, target: path.join(destinationDir, name, 'SKILL.md') };
+  });
 
-    const target = path.join(destinationDir, name, 'SKILL.md');
-    if (fs.existsSync(target) && !options.force) {
-      throw new Error(`Refusing to overwrite existing skill without force: ${target}`);
+  if (!options.force) {
+    const existing = plan.filter((entry) => fs.existsSync(entry.target)).map((entry) => entry.target);
+    if (existing.length > 0) {
+      throw new Error(`Refusing to overwrite existing skill without force: ${existing.join(', ')}`);
     }
+  }
 
-    copyFileSync(skill.absolutePath, target);
-    installed.push({ name, path: target });
+  const installed = [];
+  for (const entry of plan) {
+    copyFileSync(entry.source, entry.target);
+    installed.push({ name: entry.name, path: entry.target });
   }
 
   return installed;
