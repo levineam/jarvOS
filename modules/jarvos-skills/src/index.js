@@ -32,6 +32,7 @@ function validateBundle() {
   const manifest = getManifest();
   const errors = [];
   const defaultSet = new Set(manifest.defaultSkills || []);
+  const declaredSkillNames = new Set((manifest.skills || []).map((skill) => skill.name));
 
   for (const expected of ['workflow-execution', 'rule-creation', 'context-management', 'cron-hygiene']) {
     if (!defaultSet.has(expected)) errors.push(`Missing default skill: ${expected}`);
@@ -39,6 +40,12 @@ function validateBundle() {
 
   if (defaultSet.has('qmd')) {
     errors.push('QMD must not be bundled as a default skill.');
+  }
+
+  for (const name of defaultSet) {
+    if (!declaredSkillNames.has(name)) {
+      errors.push(`Default skill not declared: ${name}`);
+    }
   }
 
   for (const skill of manifest.skills || []) {
@@ -78,7 +85,11 @@ function installSkills(destinationDir, options = {}) {
   }
 
   const manifest = getManifest();
-  const names = options.skills || manifest.defaultSkills;
+  const names = options.skills === undefined
+    ? manifest.defaultSkills
+    : Array.isArray(options.skills)
+      ? options.skills
+      : [options.skills];
   const installed = [];
 
   for (const name of names) {

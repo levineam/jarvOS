@@ -1,5 +1,5 @@
 {
-  "bundle": "jarvos-operating-system-skills",
+  "bundle": "operating-system-skills",
   "version": "0.1.0",
   "description": "Default jarvOS skill bundle for planning, rule wiring, context hygiene, and cron safety.",
   "defaultSkills": [

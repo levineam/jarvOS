@@ -308,7 +308,12 @@ try {
   }
 
   const workflow = skills.getSkill('workflow-execution');
-  if (workflow && workflow.content.includes('Plan-first workflow')) {
+  if (
+    workflow
+    && workflow.name === 'workflow-execution'
+    && typeof workflow.content === 'string'
+    && workflow.content.includes('name: workflow-execution')
+  ) {
     ok('getSkill returns packaged skill content');
   } else {
     bad('getSkill workflow-execution', new Error(JSON.stringify(workflow && workflow.name)));

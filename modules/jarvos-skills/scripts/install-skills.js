@@ -14,9 +14,13 @@ function parseArgs(argv) {
 
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
-    if ((arg === '--dest' || arg === '--destination') && argv[i + 1]) opts.destination = argv[++i];
+    if (arg === '--dest' || arg === '--destination') {
+      if (!argv[i + 1]) throw new Error(`${arg} requires a destination path`);
+      opts.destination = argv[++i];
+    }
     else if (arg === '--force') opts.force = true;
-    else if (arg === '--skill' && argv[i + 1]) {
+    else if (arg === '--skill') {
+      if (!argv[i + 1]) throw new Error('--skill requires a skill name');
       opts.skills = opts.skills || [];
       opts.skills.push(argv[++i]);
     } else if (arg === '--check') opts.check = true;
@@ -38,7 +42,13 @@ QMD is intentionally not installed by default; see docs/qmd-adapter.md.`);
 }
 
 function main() {
-  const opts = parseArgs(process.argv.slice(2));
+  let opts;
+  try {
+    opts = parseArgs(process.argv.slice(2));
+  } catch (error) {
+    console.error(`ERROR ${error.message}`);
+    process.exit(1);
+  }
   if (opts.help) {
     printHelp();
     return;
