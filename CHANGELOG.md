@@ -2,7 +2,7 @@
 
 Release sections describe user-facing jarvOS changes. Historical public-doc sync entries are preserved below for traceability.
 
-## v0.1.0 — Unreleased
+## v0.1.0 — 2026-05-15
 
 First public preview release candidate.
 
