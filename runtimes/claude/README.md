@@ -16,6 +16,9 @@ The setup script:
 
 - registers a user-scoped Claude Code MCP server named `jarvos`
 - installs a Claude Code `SessionStart` hook in `~/.claude/settings.json`
+- materializes `~/.claude/CLAUDE.md` from
+  `runtimes/claude/templates/CLAUDE.md.template` (see
+  [Claude Code CLAUDE.md bootstrap](#claude-code-claudemd-bootstrap) below)
 - adds the same MCP server to Claude Desktop's local MCP config on macOS
 - backs up existing config files before writing changes
 
@@ -38,6 +41,51 @@ Claude Code caps hook-injected context at 10,000 characters. This adapter uses a
 `JARVOS_CLAUDE_HYDRATION_MAX_CHARS`. Hook failures are logged to
 `~/.claude/jarvos-hydration.log` and fail open with an empty hook result so
 Claude startup is not blocked.
+
+## Claude Code CLAUDE.md bootstrap
+
+Claude Code loads `~/.claude/CLAUDE.md` into every session as the user-scope
+behavioral baseline. The setup script materializes that file from
+`runtimes/claude/templates/CLAUDE.md.template`, which provides:
+
+- jarvOS identity and governance pointers
+- Runtime applicability table for `CRITICAL-RULES.md` (which CRs are
+  OpenClaw-only and which apply to Claude Code)
+- **jarvOS Release Targeting** — version policy (v0.1.x vs v0.2.0), prompt
+  prefix convention, branch/label/CHANGELOG/PR-title routing, ambiguity rule
+- **jarvOS Upstream Evaluation (Proactive)** — when and how to evaluate
+  workspace changes as candidates for the public jarvOS repo, and how to
+  surface candidates without acting unilaterally
+- Working Context Hydration notes (lists the `jarvos_*` MCP tools)
+
+### Idempotency and local extensions
+
+The template ends with a `<!-- LOCAL-EXTENSIONS-BELOW -->` marker. Anything
+you add to `~/.claude/CLAUDE.md` below that marker is preserved across
+re-runs of `setup.sh`. Re-running setup is idempotent: if the resulting
+content matches the existing file, no write happens; if it differs, the
+existing file is backed up to `~/.claude/CLAUDE.md.bak-jarvos-<timestamp>`
+before the new content is written.
+
+If you already have a `~/.claude/CLAUDE.md` from normal Claude Code use
+(no jarvOS marker), the first setup run adopts your existing content as
+local extensions: the new file starts with the jarvOS template, then
+includes an "adopted" notice followed by your prior content below the
+`<!-- LOCAL-EXTENSIONS-BELOW -->` marker. Your prior Claude Code
+instructions stay active. Review and trim as needed after setup.
+
+To skip CLAUDE.md materialization (e.g., on shared workstations where
+`~/.claude/CLAUDE.md` is managed by another tool):
+
+```bash
+JARVOS_SKIP_CLAUDE_MD=1 ./runtimes/claude/setup.sh
+```
+
+To target a custom path:
+
+```bash
+CLAUDE_MD_PATH=/custom/path/CLAUDE.md ./runtimes/claude/setup.sh
+```
 
 ## Claude Desktop
 

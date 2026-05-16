@@ -25,6 +25,15 @@
         "event": "SessionStart",
         "script": "jarvos-session-start-hook.js",
         "defaultMaxChars": 9500
+      },
+      "bootstrap": {
+        "claudeMd": {
+          "template": "templates/CLAUDE.md.template",
+          "target": "~/.claude/CLAUDE.md",
+          "idempotent": true,
+          "preservesLocalExtensionsBelow": "<!-- LOCAL-EXTENSIONS-BELOW -->",
+          "skipEnv": "JARVOS_SKIP_CLAUDE_MD"
+        }
       }
     },
     {
@@ -47,6 +56,7 @@
     "backupBeforeWrite": true,
     "paths": [
       "~/.claude/settings.json",
+      "~/.claude/CLAUDE.md",
       "~/Library/Application Support/Claude/claude_desktop_config.json"
     ]
   },
