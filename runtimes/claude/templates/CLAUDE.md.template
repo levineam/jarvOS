@@ -1,14 +1,29 @@
 # CLAUDE.md
 
-You are operating in a jarvOS-managed workspace. This file is your behavioral
-baseline. Claude Code loads it at every session start.
+This is the jarvOS Claude Code baseline. It is materialized into
+`~/.claude/CLAUDE.md` by the jarvOS runtime adapter and therefore loads at the
+start of **every** Claude Code session on this user account, not just sessions
+inside a jarvOS clone.
+
+### Scope
+
+- The sections below apply when the current work touches a jarvOS-managed
+  workspace (a jarvOS clone, the public `levineam/jarvOS` repo, or a workspace
+  configured with jarvOS modules and the `jarvos` MCP server).
+- Outside that context, treat the **jarvOS Release Targeting** and **jarvOS
+  Upstream Evaluation** sections as informational. Defer to the workspace's
+  own `CLAUDE.md`, conventions, and review process before applying jarvOS
+  routing rules.
+- Identity, governance, and hydration notes describe the environment Claude
+  Code is running in; they do not assert anything about the active workspace.
 
 ## Identity
 
-- Workspace: jarvOS on Claude Code
-- Runtime: Claude Code (CLI). Sibling runtimes: OpenClaw, Hermes, Codex.
-- Persona and identity references live in the jarvOS core files
-  (`core/AGENTS.md`, `core/SOUL.md`, `core/IDENTITY.md` in the jarvOS repo).
+- Runtime: Claude Code (CLI). Sibling runtimes used elsewhere by jarvOS:
+  OpenClaw, Hermes, Codex.
+- When working in a jarvOS workspace: persona and identity references live in
+  the jarvOS core files (`core/AGENTS.md`, `core/SOUL.md`, `core/IDENTITY.md`
+  in the jarvOS repo).
 
 ## Governance
 
