@@ -1,0 +1,146 @@
+# CLAUDE.md
+
+You are operating in a jarvOS-managed workspace. This file is your behavioral
+baseline. Claude Code loads it at every session start.
+
+## Identity
+
+- Workspace: jarvOS on Claude Code
+- Runtime: Claude Code (CLI). Sibling runtimes: OpenClaw, Hermes, Codex.
+- Persona and identity references live in the jarvOS core files
+  (`core/AGENTS.md`, `core/SOUL.md`, `core/IDENTITY.md` in the jarvOS repo).
+
+## Governance
+
+jarvOS governance lives in markdown. Read the source files before acting on
+non-trivial work; do not rely on this summary alone.
+
+- **AGENTS.md** (jarvOS core) — portable behavioral rules
+- **SOUL.md** / **IDENTITY.md** (jarvOS core) — persona and tone
+- Workspace-local `CRITICAL-RULES.md`, `CONSTITUTION.md`, `skills/RESOLVER.md`
+  if present — they override anything below when they conflict
+
+### Runtime applicability of CRITICAL-RULES
+
+If the workspace ships a `CRITICAL-RULES.md`, apply every rule unless it is
+explicitly OpenClaw-runtime-specific. The following CRs are OpenClaw-only and
+do not apply to Claude Code:
+
+| CR | Why OpenClaw-only |
+|---|---|
+| Sessions-spawn model parameter rules | Claude Code uses the `Agent` tool (`subagent_type`), not `sessions_spawn`. |
+| Default subagent model rules (gpt-5.x, GLM) | Claude Code runs Anthropic models. Map equivalents: Opus for high-judgment, Sonnet for standard, Haiku for fast. |
+| ACP-first / PTY-fallback coding rules | Claude Code has its own coding loop; ACP routing is not exposed here. |
+| Agent-specific Paperclip routing rules (e.g., Michael) | Not applicable when Charlie/Claude Code is the executor. |
+
+All other rules apply directly. In particular: external-message approval,
+plan-first, fix-immediately, tiered auto-merge for safety-rail files,
+retry-with-context for subagents, Paperclip blocker routing, QMD-first (mapped
+to `jarvos_recall` here), read-before-acting under ambiguity, rule-wiring
+auto-trigger, and enforcement assessment for HARD rules.
+
+## jarvOS Release Targeting
+
+When the user signals a target with `Target: jarvOS v0.X.Y`, route the work
+accordingly. If no target is given but the work touches the jarvOS repo, ask
+before proceeding.
+
+### Version policy
+
+- **v0.1.x** — bug fixes, doc corrections, install-flow fixes, smoke-test
+  gaps. Patch-level only; no new capabilities.
+- **v0.2.0** — meaningful new capabilities, new MCP tools, new runtime
+  adapters, new skills, workflow improvements. Pre-v1.0 breaking changes
+  are allowed but must be flagged in the release notes.
+
+### What targeting triggers
+
+- **Branch naming** — `fix/SUP-XXXX/...` (v0.1.x) or `feat/SUP-XXXX/...` (v0.2.0)
+- **Paperclip labels** — `jarvos-release-candidate` + `release-v0.X.Y`,
+  linked to the parent release lane issue
+- **CHANGELOG.md** — add a bullet under `## v0.X.Y — Unreleased` (create the
+  section if it does not exist yet)
+- **PR title** — `fix(SUP-XXXX): …` or `feat(SUP-XXXX): …`
+- **Scope discipline** — reject scope creep that crosses release boundaries
+
+### Ambiguity rule
+
+If the work could plausibly be either: ask the user, do not guess.
+Default lean: fixes broken shipped behavior → v0.1.x; adds anything
+user-facing-new → v0.2.0.
+
+## jarvOS Upstream Evaluation (Proactive)
+
+When working anywhere in a workspace that contains a jarvOS clone or sits
+adjacent to one, evaluate each meaningful change for upstream candidacy. Do
+not wait to be asked.
+
+### When to evaluate
+
+Trigger this check whenever the work in question:
+
+- Adds or modifies a script, skill, MCP tool, or runtime hook
+- Establishes a new pattern (file convention, workflow gate, contract)
+- Fixes a bug in code that has a public equivalent in the jarvOS repo
+- Creates documentation that explains a generalizable concept
+
+Skip this check for: content edits (notes, journal, ontology data), personal
+configuration, one-off scripts, anything obviously user-specific.
+
+### Evaluation criteria, in order
+
+1. **Generalizable?** Would this help a stranger cloning jarvOS, or does it
+   only make sense for the current user's setup?
+2. **Code, not content?** Per `PUBLIC_BASELINE.md`, code is public and content
+   is private. Hardcoded paths, personal IDs, vault content, and secrets
+   disqualify a candidate until refactored.
+3. **Version?** Apply the targeting rules above — fix vs new capability.
+4. **Risk?** Identity, privacy, external-send, and marketing surfaces require
+   extra scrutiny under the tiered auto-merge rule.
+
+### How to surface candidates
+
+When a candidate is found, raise it inline using this format:
+
+> **Upstream candidate:** [one-line description]
+> **Target:** v0.X.Y — [reason]
+> **What it would take:** [refactor needs, e.g., extract hardcoded path, add
+> config var, write template]
+> **Recommend:** [ship now / queue for v0.X / pass]
+
+Do not open PRs, branches, or Paperclip issues unilaterally — surface the
+candidate and let the user decide.
+
+### What not to do
+
+- Do not restructure private content to make it upstreamable without asking.
+- Do not lift code that depends on private modules (e.g., personal-ontology
+  data) without first identifying the abstraction needed.
+- Do not promote every change. Most workspace work is local-only by design.
+
+## Working Context Hydration
+
+Every Claude Code session in this workspace starts with a hydrated Working
+Context Packet, injected by the jarvOS `SessionStart` hook (configured in
+`~/.claude/settings.json`). It includes current Paperclip work, today's
+journal, linked notes, the jarvos-ontology spine, and a Hydration Report.
+
+### MCP tools (registered as `jarvos`)
+
+- `jarvos_current_work` — compact Paperclip current-work summary
+- `jarvos_recall` — GBrain/graph recall bundle (use in place of QMD; same brain)
+- `jarvos_create_note` — Obsidian note creation with today's journal wikilink
+- `jarvos_startup_brief` — bounded startup context
+- `jarvos_hydrate` — bounded working-context packet (also used for Claude
+  Desktop manual hydration via the `boot jarvOS` prompt)
+
+## Local Extensions
+
+This file is generated from `runtimes/claude/templates/CLAUDE.md.template` in
+the jarvOS repo, then materialized into `~/.claude/CLAUDE.md`. To add
+workspace-specific behavior (pointers to local `CRITICAL-RULES.md`,
+`RESOLVER.md`, `CONSTITUTION.md`, project-specific routing notes, etc.), add
+them below this line. The setup script does not overwrite local edits
+without first creating a backup.
+
+<!-- LOCAL-EXTENSIONS-BELOW -->

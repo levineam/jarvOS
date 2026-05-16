@@ -4,8 +4,10 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 MCP_SERVER="$ROOT/modules/jarvos-agent-context/scripts/jarvos-mcp.js"
 HOOK_SCRIPT="$ROOT/runtimes/claude/jarvos-session-start-hook.js"
+CLAUDE_MD_TEMPLATE="$ROOT/runtimes/claude/templates/CLAUDE.md.template"
 CLAUDE_SETTINGS="${CLAUDE_SETTINGS:-$HOME/.claude/settings.json}"
 CLAUDE_DESKTOP_CONFIG="${CLAUDE_DESKTOP_CONFIG:-$HOME/Library/Application Support/Claude/claude_desktop_config.json}"
+CLAUDE_MD_PATH="${CLAUDE_MD_PATH:-$HOME/.claude/CLAUDE.md}"
 
 if [ ! -f "$MCP_SERVER" ]; then
   echo "jarvOS MCP server not found: $MCP_SERVER" >&2
@@ -14,6 +16,11 @@ fi
 
 if [ ! -f "$HOOK_SCRIPT" ]; then
   echo "jarvOS Claude hook script not found: $HOOK_SCRIPT" >&2
+  exit 1
+fi
+
+if [ ! -f "$CLAUDE_MD_TEMPLATE" ]; then
+  echo "jarvOS Claude CLAUDE.md template not found: $CLAUDE_MD_TEMPLATE" >&2
   exit 1
 fi
 
@@ -110,5 +117,55 @@ function upsertClaudeDesktopMcp(config) {
 backupAndWriteJson(settingsPath, upsertClaudeCodeHook(readJsonFile(settingsPath, {})), 'Claude Code settings');
 backupAndWriteJson(desktopConfigPath, upsertClaudeDesktopMcp(readJsonFile(desktopConfigPath, {})), 'Claude Desktop MCP config');
 NODE
+
+if [ "${JARVOS_SKIP_CLAUDE_MD:-0}" = "1" ]; then
+  echo "Skipping Claude Code CLAUDE.md materialization because JARVOS_SKIP_CLAUDE_MD=1."
+else
+  node - "$CLAUDE_MD_TEMPLATE" "$CLAUDE_MD_PATH" <<'NODE'
+const fs = require('fs');
+const path = require('path');
+
+const [templatePath, claudeMdPath] = process.argv.slice(2);
+const LOCAL_EXTENSIONS_MARKER = '<!-- LOCAL-EXTENSIONS-BELOW -->';
+
+function readFileOrNull(filePath) {
+  return fs.existsSync(filePath) ? fs.readFileSync(filePath, 'utf8') : null;
+}
+
+function extractLocalExtensions(existingContent) {
+  if (!existingContent) return '';
+  const idx = existingContent.indexOf(LOCAL_EXTENSIONS_MARKER);
+  if (idx === -1) return '';
+  return existingContent.slice(idx + LOCAL_EXTENSIONS_MARKER.length);
+}
+
+function timestampSuffix() {
+  return new Date().toISOString().replace(/[:.]/g, '').replace('T', '-').replace('Z', 'Z');
+}
+
+const template = fs.readFileSync(templatePath, 'utf8');
+const existing = readFileOrNull(claudeMdPath);
+const localExtensions = extractLocalExtensions(existing);
+const nextContent = template.endsWith('\n')
+  ? template + localExtensions.replace(/^\n/, '')
+  : `${template}\n${localExtensions.replace(/^\n/, '')}`;
+
+if (existing === nextContent) {
+  console.log(`Claude Code CLAUDE.md already up to date: ${claudeMdPath}`);
+} else {
+  fs.mkdirSync(path.dirname(claudeMdPath), { recursive: true });
+  if (existing !== null) {
+    const backupPath = `${claudeMdPath}.bak-jarvos-${timestampSuffix()}`;
+    fs.copyFileSync(claudeMdPath, backupPath);
+    console.log(`Backup: ${backupPath}`);
+  }
+  fs.writeFileSync(claudeMdPath, nextContent, 'utf8');
+  console.log(`Updated Claude Code CLAUDE.md: ${claudeMdPath}`);
+  if (localExtensions.trim()) {
+    console.log('Preserved local extensions found below LOCAL-EXTENSIONS-BELOW marker.');
+  }
+}
+NODE
+fi
 
 echo "Claude adapter setup complete."

@@ -2,6 +2,23 @@
 
 Release sections describe user-facing jarvOS changes. Historical public-doc sync entries are preserved below for traceability.
 
+## v0.2.0 — Unreleased
+
+Second public release. Tracked in SUP-1737.
+
+### Included
+- Claude Code runtime adapter now bootstraps `~/.claude/CLAUDE.md` from
+  `runtimes/claude/templates/CLAUDE.md.template`, giving every fresh Claude
+  Code session in a jarvOS workspace a baseline of identity, governance
+  pointers, runtime-applicability notes for `CRITICAL-RULES.md`, release
+  targeting routing, and proactive upstream-evaluation behavior — not just
+  hydration context (SUP-1738).
+- Setup script materialization is idempotent and preserves anything added
+  below the `<!-- LOCAL-EXTENSIONS-BELOW -->` marker across re-runs; existing
+  `~/.claude/CLAUDE.md` files are backed up before any overwrite.
+- New environment switches: `JARVOS_SKIP_CLAUDE_MD=1` to skip CLAUDE.md
+  materialization and `CLAUDE_MD_PATH` to retarget the destination.
+
 ## v0.1.0 — 2026-05-15
 
 First public preview release candidate.
