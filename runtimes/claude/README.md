@@ -67,6 +67,13 @@ content matches the existing file, no write happens; if it differs, the
 existing file is backed up to `~/.claude/CLAUDE.md.bak-jarvos-<timestamp>`
 before the new content is written.
 
+If you already have a `~/.claude/CLAUDE.md` from normal Claude Code use
+(no jarvOS marker), the first setup run adopts your existing content as
+local extensions: the new file starts with the jarvOS template, then
+includes an "adopted" notice followed by your prior content below the
+`<!-- LOCAL-EXTENSIONS-BELOW -->` marker. Your prior Claude Code
+instructions stay active. Review and trim as needed after setup.
+
 To skip CLAUDE.md materialization (e.g., on shared workstations where
 `~/.claude/CLAUDE.md` is managed by another tool):
 

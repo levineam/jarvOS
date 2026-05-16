@@ -19,11 +19,6 @@ if [ ! -f "$HOOK_SCRIPT" ]; then
   exit 1
 fi
 
-if [ ! -f "$CLAUDE_MD_TEMPLATE" ]; then
-  echo "jarvOS Claude CLAUDE.md template not found: $CLAUDE_MD_TEMPLATE" >&2
-  exit 1
-fi
-
 warn_if_claude_mcp_shadowed() {
   local details
   details="$(claude mcp get jarvos 2>/dev/null || true)"
@@ -121,22 +116,34 @@ NODE
 if [ "${JARVOS_SKIP_CLAUDE_MD:-0}" = "1" ]; then
   echo "Skipping Claude Code CLAUDE.md materialization because JARVOS_SKIP_CLAUDE_MD=1."
 else
+  if [ ! -f "$CLAUDE_MD_TEMPLATE" ]; then
+    echo "jarvOS Claude CLAUDE.md template not found: $CLAUDE_MD_TEMPLATE" >&2
+    exit 1
+  fi
   node - "$CLAUDE_MD_TEMPLATE" "$CLAUDE_MD_PATH" <<'NODE'
 const fs = require('fs');
 const path = require('path');
 
 const [templatePath, claudeMdPath] = process.argv.slice(2);
 const LOCAL_EXTENSIONS_MARKER = '<!-- LOCAL-EXTENSIONS-BELOW -->';
+const ADOPTED_NOTICE =
+  '\n<!-- The block below was preserved from your prior ~/.claude/CLAUDE.md ' +
+  'when jarvOS adopted this file. Review, then edit or remove as needed. -->\n';
 
 function readFileOrNull(filePath) {
   return fs.existsSync(filePath) ? fs.readFileSync(filePath, 'utf8') : null;
 }
 
 function extractLocalExtensions(existingContent) {
-  if (!existingContent) return '';
+  if (!existingContent) return { mode: 'none', body: '' };
   const idx = existingContent.indexOf(LOCAL_EXTENSIONS_MARKER);
-  if (idx === -1) return '';
-  return existingContent.slice(idx + LOCAL_EXTENSIONS_MARKER.length);
+  if (idx === -1) {
+    // No marker = this file existed before jarvOS adopted it.
+    // Preserve the full existing body as adopted local extensions so we
+    // never silently drop the user's prior Claude Code instructions.
+    return { mode: 'adopted', body: existingContent };
+  }
+  return { mode: 'marker', body: existingContent.slice(idx + LOCAL_EXTENSIONS_MARKER.length) };
 }
 
 function timestampSuffix() {
@@ -145,10 +152,18 @@ function timestampSuffix() {
 
 const template = fs.readFileSync(templatePath, 'utf8');
 const existing = readFileOrNull(claudeMdPath);
-const localExtensions = extractLocalExtensions(existing);
+const { mode, body } = extractLocalExtensions(existing);
+
+let extensionsBlock;
+if (mode === 'adopted' && body.trim()) {
+  extensionsBlock = `${ADOPTED_NOTICE}\n${body.replace(/^\n+/, '')}`;
+} else {
+  extensionsBlock = body.replace(/^\n/, '');
+}
+
 const nextContent = template.endsWith('\n')
-  ? template + localExtensions.replace(/^\n/, '')
-  : `${template}\n${localExtensions.replace(/^\n/, '')}`;
+  ? template + extensionsBlock
+  : `${template}\n${extensionsBlock}`;
 
 if (existing === nextContent) {
   console.log(`Claude Code CLAUDE.md already up to date: ${claudeMdPath}`);
@@ -161,7 +176,9 @@ if (existing === nextContent) {
   }
   fs.writeFileSync(claudeMdPath, nextContent, 'utf8');
   console.log(`Updated Claude Code CLAUDE.md: ${claudeMdPath}`);
-  if (localExtensions.trim()) {
+  if (mode === 'adopted' && body.trim()) {
+    console.log('Adopted prior CLAUDE.md content as local extensions (no marker found).');
+  } else if (mode === 'marker' && body.trim()) {
     console.log('Preserved local extensions found below LOCAL-EXTENSIONS-BELOW marker.');
   }
 }
