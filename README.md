@@ -1,225 +1,194 @@
 # jarvOS
 
-**A personal AI operating system. Cross-platform. Portable. Yours.**
+**An open operating layer for your personal AI assistant.**
 
----
+jarvOS turns AI agents like OpenClaw, Claude, Codex, and Hermes into your own
+personal Jarvis. It packages and connects a complete set of free/open-source,
+portable, local-first tools that unlock the useful capabilities of large
+language models: memory, notes, projects, structured knowledge, daily alignment,
+and context that follows you across agents.
 
-jarvOS is a behavioral and knowledge layer for AI assistants. It gives an agent persistent identity, durable memory, a structured worldview, and the governance rules to act on your behalf without losing the plot between sessions.
+Talk to your agent like normal. jarvOS routes the conversation into the right
+systems automatically:
 
-It is **not** a runtime. jarvOS rides on top of an existing agent runtime — today [OpenClaw](https://github.com/openclaw/openclaw) ([openclaw.ai](https://openclaw.ai)) or [Hermes Agent](https://github.com/NousResearch/hermes-agent) — and uses your existing tools (Obsidian, Paperclip, GBrain, QMD, lossless-claw, etc.) as backing stores. The same jarvOS core works across runtimes; only the adapter changes.
+- notes and drafts into Obsidian-compatible markdown
+- active work into Paperclip
+- durable facts, lessons, decisions, and preferences into memory
+- people, projects, concepts, meetings, and sources into structured knowledge
+- daily activity into your journal
+- relevant context back into whichever agent you are using next
 
-For v0.1, the public architecture is intentionally **GBrain-first** for structured recall: GBrain is the first-class brain/router layer for curated people, projects, concepts, meetings, and source pages. jarvOS ships the resolver-facing integration code, templates, and eval fixtures that let a local GBrain install become that brain layer; it does not ship GBrain itself or anyone's private graph.
+The result is a shared brain for you and your agents: one context spine that can
+support OpenClaw, Codex, Claude, Hermes, and whatever comes next.
 
-## What's in this repo
+## What jarvOS Does
 
-```
+Most AI assistants are powerful in a single chat and forgetful across real life.
+jarvOS gives them an operating layer:
+
+- **Daily journal as the control room.** Your journal shows what your agents did,
+  what changed, what notes were created or touched, and what still needs
+  attention. If you use Apple Reminders, reminders can be pulled into the daily
+  journal automatically.
+- **Notes as durable knowledge.** Human-readable content stays in your vault, not
+  inside a proprietary assistant database. The same notes remain useful to you,
+  Obsidian, search tools, and agents.
+- **Paperclip as the work tracker.** Concrete work becomes tracked issues,
+  assignments, status, blockers, and verification evidence instead of scattered
+  chat promises.
+- **Structured knowledge for recall.** Curated people, companies, projects,
+  concepts, meetings, and source pages become organized context an agent can
+  retrieve before it acts.
+- **Memory as the durable agent state.** Stable facts, decisions, preferences,
+  and lessons are promoted into compact memory files that can be loaded by
+  different agents.
+- **Runtime adapters instead of lock-in.** jarvOS can run on top of OpenClaw,
+  Hermes, Codex, Claude Desktop, and future agent runtimes through small
+  adapters.
+
+jarvOS is not another chat app. It is the connective tissue between your agent,
+your notes, your tasks, your knowledge, and your daily operating rhythm.
+
+## How It Works
+
+jarvOS is organized around a simple loop:
+
+1. **Capture.** You talk to an agent, save a note, complete a task, or change a
+   project.
+2. **Route.** jarvOS decides where that information belongs: journal, note,
+   memory, Paperclip, ontology, or structured knowledge.
+3. **Promote.** Important information is turned into durable, reusable context
+   instead of being stranded in chat history.
+4. **Inject.** The next agent you use gets the critical context it needs before
+   acting.
+5. **Audit.** The daily journal and health checks show what changed and what
+   still needs attention.
+
+This is the core idea: your assistant should not just answer you. It should help
+maintain the operating system around your work and life.
+
+## What's in This Repo
+
+```text
 jarvOS/
-├── core/              # Portable behavioral layer (AGENTS.md, SOUL.md, IDENTITY.md, governance, pms)
-├── modules/           # The jarvOS-owned npm modules
-│   ├── jarvos-secondbrain/   # Content layer — journal, notes, capture routing
-│   ├── jarvos-memory/        # Agent-state memory contract
-│   ├── jarvos-ontology/      # Worldview / belief graph
-│   ├── jarvos-gbrain/        # GBrain-first resolver/brain integration
-│   ├── jarvos-agent-context/ # Runtime-facing recall/action adapter + MCP tools
+├── core/              # Portable behavior layer: AGENTS, SOUL, IDENTITY, governance
+├── modules/           # jarvOS-owned npm modules
+│   ├── jarvos-secondbrain/   # Journal, notes, capture routing, Obsidian adapter
+│   ├── jarvos-memory/        # Durable memory contract and audit tooling
+│   ├── jarvos-ontology/      # Beliefs, goals, projects, predictions, worldview
+│   ├── jarvos-gbrain/        # Optional structured-knowledge adapter
+│   ├── jarvos-agent-context/ # Runtime-facing recall/action MCP adapter
 │   └── jarvos-skills/        # Default operating-system skill bundle
-├── templates/         # Blank starting points (USER, MEMORY, ONTOLOGY, TOOLS, AGENTS, BOOTSTRAP, HEARTBEAT)
-├── runtimes/
-│   ├── openclaw/      # OpenClaw adapter notes + setup script
-│   ├── hermes/        # Hermes adapter notes + setup script
-│   └── codex/         # Codex CLI MCP adapter notes + setup script
-├── starter-kit/       # Governance workflow templates and project-management scaffolding
-├── docs/              # Architecture, operations, ADRs
-└── scripts/smoke-test.sh   # Verifies a fresh clone is intact
+├── templates/         # Blank USER, MEMORY, ONTOLOGY, TOOLS, BOOTSTRAP, HEARTBEAT
+├── runtimes/          # Runtime-specific adapters for OpenClaw, Hermes, Codex
+├── starter-kit/       # Governance and project-management scaffolding
+├── docs/              # Architecture, release process, operations
+└── scripts/           # Smoke tests and release checks
 ```
 
-Everything jarvOS-owned is plain markdown plus a small amount of generic Node.js code in `modules/`. There is no database, no cloud service, and no proprietary format.
+Everything jarvOS-owned is plain markdown plus a small amount of generic Node.js
+code. There is no hosted service, no required database, and no proprietary
+knowledge format.
 
-## Architecture: layers, not a stack
+## Architecture
 
-jarvOS is organized as seven layers, each with a clear owner. Mixing layers — putting a journal entry in memory, or a goal in your notes — is the most common way to break the system.
+jarvOS is a set of layers, not a monolith:
 
-| Layer       | Owner                  | Typical content                                     |
-| ----------- | ---------------------- | --------------------------------------------------- |
-| Content     | `@jarvos/secondbrain`  | Journal entries, notes, raw capture                 |
-| Recall      | `@jarvos/memory`       | Lessons, decisions-with-rationale, preferences, facts |
-| Worldview   | `@jarvos/ontology`     | Beliefs, predictions, goals, projects, core self    |
-| Structured knowledge | `@jarvos/gbrain` | People, companies, projects, concepts, meetings, source pages |
-| Behavior    | `core/` (this repo)    | Identity, persona, rules, governance, PMS           |
-| Execution   | Paperclip (dependency) | Tasks, issues, assignments, done/not-done           |
-| Runtime     | OpenClaw, Hermes, Codex, etc. | Scheduling, tool execution, messaging, model calls  |
+| Layer | Owner | Purpose |
+| --- | --- | --- |
+| Content | `@jarvos/secondbrain` | Journal entries, notes, raw capture |
+| Recall | `@jarvos/memory` | Facts, preferences, lessons, decisions |
+| Worldview | `@jarvos/ontology` | Beliefs, predictions, goals, projects |
+| Structured knowledge | local knowledge tools | People, companies, projects, concepts, meetings, sources |
+| Behavior | `core/` | Identity, tone, rules, governance |
+| Execution | Paperclip | Issues, tasks, status, blockers, verification |
+| Runtime | OpenClaw, Hermes, Codex, Claude, etc. | Tools, messaging, sessions, model calls |
 
-Read top to bottom: raw capture flows up into memory, ontology, and structured knowledge; the behavioral layer reads the relevant surfaces to decide how to act; the runtime executes those decisions; Paperclip records what got done. No layer reaches around its neighbors.
+Each layer has one job. Notes do not become project boards. Project tasks do not
+become memory. Private beliefs do not leak into public templates. That discipline
+is what lets jarvOS stay portable.
 
-### The jarvOS modules
+## Modules
 
-The `modules/` directory contains the runnable parts of jarvOS. Each module is a standalone npm package with its own README — see [`modules/README.md`](./modules/README.md) for the full breakdown.
+The runnable pieces live in `modules/`:
 
-- **[`@jarvos/secondbrain`](./modules/jarvos-secondbrain/)** — content-facing monorepo. Journal maintenance, notes management, capture routing, and an Obsidian storage adapter (plus adapter notes for OpenClaw). All paths are env-var driven via `bridge/config/jarvos-paths.js`. Your actual notes never live here; they stay in your vault.
-- **[`@jarvos/memory`](./modules/jarvos-memory/)** — schema and audit tooling for agent-state memory. Defines what a `MEMORY.md` record looks like, how items get promoted, and how to validate a memory file against the contract. Your actual memories stay private and local.
-- **[`@jarvos/ontology`](./modules/jarvos-ontology/)** — reader/writer/validator/renderer for the six-layer ontology (higher-order principles, beliefs, predictions, core self, goals, projects). Ships blank templates (`schema/templates/`) and heuristics (`schema/heuristics.md`), plus a Paperclip sync script (`scripts/sync-to-paperclip.js`). Your filled-in beliefs and goals stay private and local.
-- **[`@jarvos/gbrain`](./modules/jarvos-gbrain/)** — GBrain-first resolver/brain integration for curated structured knowledge. It turns an explicit allowlist from an Obsidian-compatible vault into provenance-rich GBrain pages, then wraps GBrain sync/embed, retrieval eval, graph recall, and runtime recall-bundle commands.
-- **[`@jarvos/agent-context`](./modules/jarvos-agent-context/)** — runtime-facing adapter for agent clients. It exposes current work, recall, startup brief, and verified note creation through a shared library and local stdio MCP server.
-- **[`@jarvos/skills`](./modules/jarvos-skills/)** — default operating-system skill bundle for OpenClaw-style agents: workflow execution, rule creation, context management, and cron hygiene. QMD is documented as an optional markdown-search adapter, not installed by default.
+- **[`@jarvos/secondbrain`](./modules/jarvos-secondbrain/)** keeps the content
+  layer organized: journal maintenance, notes management, capture routing, and
+  Obsidian-compatible storage adapters.
+- **[`@jarvos/memory`](./modules/jarvos-memory/)** defines how durable agent
+  memory is represented, promoted, and audited.
+- **[`@jarvos/ontology`](./modules/jarvos-ontology/)** models goals, beliefs,
+  predictions, projects, and operating context.
+- **[`@jarvos/gbrain`](./modules/jarvos-gbrain/)** is the included structured
+  knowledge adapter. It prepares curated vault content for a local knowledge
+  base and exposes sync, recall, health-check, and retrieval-eval workflows.
+- **[`@jarvos/agent-context`](./modules/jarvos-agent-context/)** exposes current
+  work, recall bundles, startup briefs, and verified note creation to agent
+  runtimes through a local MCP adapter.
+- **[`@jarvos/skills`](./modules/jarvos-skills/)** packages default operating
+  skills: workflow execution, rule creation, context management, and cron
+  hygiene.
 
-### Portable core + templates
+Each module has its own README and can be used independently.
 
-The `core/` and `templates/` directories are pure markdown. They define **how an agent should think, communicate, and self-govern** without making any assumption about what runtime it runs on.
+## Runtime Adapters
 
-- `core/AGENTS.md` — behavioral rules
-- `core/SOUL.md` — personality and tone
-- `core/IDENTITY.md` — agent identity
-- `core/governance/`, `core/pms/` — governance philosophy and project-management model
-- `templates/*.md` — blank `USER.md`, `MEMORY.md`, `ONTOLOGY.md`, `TOOLS.md`, etc., that you fill in for yourself
+jarvOS deliberately separates portable behavior from runtime-specific glue.
 
-### Runtime adapters
+- **OpenClaw** provides scheduling, tools, messaging, workspace context loading,
+  cron jobs, and workflow gates. jarvOS supplies the behavior, memory, project,
+  note, and recall patterns that OpenClaw runs.
+- **Hermes Agent** provides its own model configuration, tool calling, learning,
+  session search, and user modeling. jarvOS adds the portable behavior layer and
+  avoids duplicating Hermes-native systems.
+- **Codex CLI and Claude Desktop** can use jarvOS context through local adapters
+  and manual hydration flows.
 
-The `runtimes/` directory is the **only** place where jarvOS knows about a specific agent platform. Each adapter is small on purpose: it copies the portable core into the runtime's expected layout and fills in any glue the runtime requires. See [`runtimes/openclaw/README.md`](./runtimes/openclaw/README.md) and [`runtimes/hermes/README.md`](./runtimes/hermes/README.md) for the per-runtime checklists.
+The same core files can move across runtimes because the source of truth is
+markdown and local tooling, not a single vendor's memory system.
 
-## What jarvOS owns vs. what it depends on
+## Quick Start
 
-A common confusion is which behavior is jarvOS and which comes from the runtime or a dependency. The split is explicit.
-
-### Owned by jarvOS (this repo)
-
-- The behavioral layer: `AGENTS.md`, `SOUL.md`, `IDENTITY.md`, governance rules, PMS model
-- The modules: `@jarvos/secondbrain`, `@jarvos/memory`, `@jarvos/ontology`, `@jarvos/gbrain`, `@jarvos/agent-context`, `@jarvos/skills`
-- The templates and starter-kit
-- The adapter glue in `runtimes/`
-- Cross-runtime invariants: layer boundaries, ontology heuristics, memory promotion rules, the public/private boundary documented in [`PUBLIC_BASELINE.md`](./PUBLIC_BASELINE.md)
-
-### Provided by **OpenClaw** (runtime dependency)
-
-OpenClaw is a separate project: <https://github.com/openclaw/openclaw> (homepage: [openclaw.ai](https://openclaw.ai)).
-
-- Agent runtime: scheduling, heartbeat ticks, tool execution, multi-channel messaging, the `openclaw gateway` process
-- Workspace bootstrap loading (`AGENTS.md`, `TOOLS.md`, `HEARTBEAT.md`, etc. on every turn)
-- Lobster workflow gates that jarvOS plugs governance into
-
-OpenClaw ships **blank** behavioral templates. jarvOS fills in the behavioral layer; OpenClaw runs it.
-
-### Provided by **Hermes Agent** (runtime dependency)
-
-Hermes is a separate project: <https://github.com/NousResearch/hermes-agent>.
-
-- Agent runtime: model and API-key configuration, session management, tool calling
-- Native learning and recall: skill auto-creation, configurable memory nudges, FTS5 session search with LLM summarization
-- Honcho-based dialectic user modeling
-
-Because Hermes already does learning, search, and user modeling natively, the Hermes adapter is intentionally lean — jarvOS only adds the behavioral layer and gets out of the way. Do not duplicate Hermes-native systems in jarvOS rules; see [`runtimes/hermes/README.md`](./runtimes/hermes/README.md) for the explicit "do not duplicate" table.
-
-### Provided by **Obsidian / QMD / lossless-claw** (vault dependency)
-
-- Obsidian: the markdown vault application and file format
-- QMD: fast local search and exact lookup across the vault
-- `lossless-claw`: the lossless-capture pipeline that writes into the vault
-
-`@jarvos/secondbrain` reads from and writes to this vault through its `adapters/obsidian/` adapter; it does not own the vault format or the capture pipeline.
-
-### Provided by **GBrain** (structured knowledge dependency)
-
-GBrain is a separate local knowledge base and graph layer. In jarvOS v0.1,
-GBrain is the first-class structured recall brain for curated entity/project/
-concept knowledge. `@jarvos/gbrain` does not implement GBrain itself; it
-prepares curated, provenance-rich markdown pages and wraps the installed
-`gbrain` CLI for sync, embedding, doctor, graph recall, and retrieval-eval
-workflows.
-
-The recommended jarvOS operating pattern is:
-
-1. Keep the Obsidian-compatible vault as the human-readable source of truth.
-2. Use QMD for broad, fast vault lookup and exact note retrieval.
-3. Use `@jarvos/gbrain` to import only a curated allowlist into GBrain.
-4. Use GBrain direct search for structured recall and graph recall for linked
-   people, projects, concepts, meetings, and sources.
-5. Use the runtime recall bundle (`jarvos-gbrain recall --query ...`) as the
-   resolver call surface an agent runtime can invoke before deciding what
-   context to inject.
-
-The public repo ships template manifests and eval fixtures only. Real manifests,
-eval questions, generated private pages, and personal notes stay in your local
-workspace.
-
-A production OpenClaw setup should add a conservative maintenance loop around
-these tools: refresh QMD/OpenClaw memory indexes, run GBrain and memory-wiki
-health checks, run combined recall evals, and propose new GBrain promotion
-candidates for human review. The loop should not auto-promote notes into
-GBrain; approved additions still flow through the curated manifest and normal
-import/sync path.
-
-Embedding maintenance should be handled with the same discipline. Treat an
-embedding model change as a data migration, not a provider toggle: capture
-`gbrain stats`, run `gbrain doctor --json`, back up the GBrain database, confirm
-the new model's vector dimensions, then run before/after retrieval evals. Local
-Ollama models such as `mxbai-embed-large` can be a good private default, but
-only after the live GBrain store is reinitialized or migrated for that model's
-dimensions.
-
-For human trust, pair that quiet loop with a daily readable audit. The audit
-should explain, in plain language, whether QMD refreshed, whether GBrain and
-memory-wiki are healthy, whether the combined recall eval still passes, what
-changed, what needs attention, and what improvement candidates are worth
-reviewing. The report is the user-facing assurance layer; the maintenance loop
-is the machine-facing work layer.
-
-OpenClaw `memory-wiki` is also separate from jarvOS. In this architecture it is
-treated as a native OpenClaw diagnostic and compiled-wiki layer, not the primary
-source for GBrain-ready graph discipline.
-
-### Provided by **Paperclip** (execution-tracking dependency)
-
-- Issues, projects, assignments, status transitions, comments, approvals, heartbeats
-- The execution-side source of truth for "what did the agent actually do"
-- Sync target for `@jarvos/ontology` projects via `scripts/sync-to-paperclip.js` in that module
-
-jarvOS does not implement task tracking. When work needs to happen, ontology projects are synced into Paperclip and Paperclip drives execution.
-
-### Other dependencies
-
-- **Node.js ≥ 18** for the modules and the bootstrap script
-- The runtime's own dependencies (model providers, API keys) — owned by the runtime, not by jarvOS
-
-## Quick start
-
-### Verify your clone is complete
+Clone the repo and run the smoke test:
 
 ```bash
 git clone https://github.com/levineam/jarvOS.git
 cd jarvOS
-bash scripts/smoke-test.sh
-# Expected: "PASS — All checks passed. The repo is ready to use."
+npm test
 ```
 
-The smoke test takes under a second, requires no external tools, and runs in CI on every PR.
+Expected result:
 
-### Hermes Agent
-
-```bash
-hermes setup                          # Hermes itself: configure model and API keys
-./runtimes/hermes/setup.sh            # jarvOS: install behavioral layer into Hermes workspace
-# Fill in USER.md and ONTOLOGY.md with your info
-hermes                                # Start chatting
+```text
+PASS — All checks passed. The repo is ready to use.
 ```
-
-See [`runtimes/hermes/README.md`](./runtimes/hermes/README.md) for full setup details and the list of Hermes-native systems jarvOS deliberately avoids duplicating.
 
 ### OpenClaw
 
-**Prerequisites:** Node.js ≥ 18 and OpenClaw (`npm install -g openclaw`).
-
 ```bash
-# Copy the portable core into your OpenClaw workspace
-cp core/AGENTS.md    /path/to/your/openclaw-workspace/AGENTS.md
-cp core/SOUL.md      /path/to/your/openclaw-workspace/SOUL.md
-cp core/IDENTITY.md  /path/to/your/openclaw-workspace/IDENTITY.md
-cp templates/BOOTSTRAP-template.md /path/to/your/openclaw-workspace/BOOTSTRAP.md
-cp templates/HEARTBEAT-template.md /path/to/your/openclaw-workspace/HEARTBEAT.md
-node modules/jarvos-skills/scripts/install-skills.js --dest /path/to/your/openclaw-workspace/skills
-# Create USER.md and ONTOLOGY.md from the templates and fill them in, then:
-cd /path/to/your/openclaw-workspace
-openclaw gateway start
+cp core/AGENTS.md    /path/to/openclaw-workspace/AGENTS.md
+cp core/SOUL.md      /path/to/openclaw-workspace/SOUL.md
+cp core/IDENTITY.md  /path/to/openclaw-workspace/IDENTITY.md
+cp templates/BOOTSTRAP-template.md /path/to/openclaw-workspace/BOOTSTRAP.md
+cp templates/HEARTBEAT-template.md /path/to/openclaw-workspace/HEARTBEAT.md
+node modules/jarvos-skills/scripts/install-skills.js --dest /path/to/openclaw-workspace/skills
 ```
 
-See [`runtimes/openclaw/README.md`](./runtimes/openclaw/README.md) for the full adapter wiring checklist (`TOOLS.md`, `CONSTITUTION.md`, `scripts/`, `workflows/`) and the bootstrap-budget guidance for keeping always-loaded files compact.
+Then create `USER.md`, `MEMORY.md`, and `ONTOLOGY.md` from the templates and
+fill them in for your own workspace.
+
+See [`runtimes/openclaw/README.md`](./runtimes/openclaw/README.md) for the full
+adapter checklist.
+
+### Hermes
+
+```bash
+hermes setup
+./runtimes/hermes/setup.sh
+```
+
+See [`runtimes/hermes/README.md`](./runtimes/hermes/README.md) for the Hermes
+setup path and the systems jarvOS intentionally does not duplicate.
 
 ### Codex CLI
 
@@ -227,56 +196,70 @@ See [`runtimes/openclaw/README.md`](./runtimes/openclaw/README.md) for the full 
 ./runtimes/codex/setup.sh
 ```
 
-This registers the local `jarvos` MCP server so Codex can call jarvOS recall,
+This registers the local jarvOS MCP server so Codex can call jarvOS recall,
 current-work, and note-capture tools.
 
-### Use the modules
+### Install Modules
 
-The modules can be installed independently from a clone of this repo:
+Install modules from a local clone:
 
 ```bash
 npm install ./modules/jarvos-memory ./modules/jarvos-ontology ./modules/jarvos-secondbrain ./modules/jarvos-gbrain ./modules/jarvos-agent-context ./modules/jarvos-skills
 ```
 
-Each has its own quick-start in [`modules/README.md`](./modules/README.md).
+## Public vs. Private
 
-## Documentation
+This repo is the public, reusable baseline. It includes templates, adapters,
+schemas, smoke tests, and generic operating patterns.
 
-- [`PUBLIC_BASELINE.md`](./PUBLIC_BASELINE.md) — what is and is not in this repo (public/private boundary)
-- [`modules/README.md`](./modules/README.md) — module-by-module reference
-- [`runtimes/openclaw/README.md`](./runtimes/openclaw/README.md) — OpenClaw adapter checklist
-- [`runtimes/hermes/README.md`](./runtimes/hermes/README.md) — Hermes adapter checklist
-- [`starter-kit/README.md`](./starter-kit/README.md) — starter-kit setup and rollout checklist
-- `docs/architecture/` — architecture overview, ADRs, operating model
+It does **not** include anyone's private workspace:
 
-## Distribution
+- personal notes
+- journal entries
+- reminders
+- memories
+- goals
+- beliefs
+- private structured-knowledge pages
+- private Paperclip projects
+- local API keys or runtime configuration
 
-jarvOS is distributed as a plain git repo. No npm publish, no build step, no install manager required. Clone it and use it.
+The design principle is simple: **code and patterns are public; personal context
+is private.**
 
-**Why a single flat repo?**
+## Release Status
 
-- The portable layer is markdown — there is nothing to compile or link.
-- Each runtime provides its own setup path (`setup.sh` for Hermes, copy-and-wire for OpenClaw).
-- Keeping core, modules, and adapters in one repo means you can fork it, modify it, and sync upstream changes with standard git.
+`v0.1.0` is the first public preview release.
 
-**Staying up to date:**
+Useful release files:
+
+- [`CHANGELOG.md`](./CHANGELOG.md)
+- [`docs/releases/v0.1.0.md`](./docs/releases/v0.1.0.md)
+- [`docs/release-process.md`](./docs/release-process.md)
+- [`PUBLIC_BASELINE.md`](./PUBLIC_BASELINE.md)
+
+Run the release readiness check locally:
 
 ```bash
-cd jarvOS
-git pull origin main
-bash scripts/smoke-test.sh   # Verify everything is still intact after the pull
+npm run release:check
 ```
 
 ## Philosophy
 
-- **Code is public. Content is private.** The repo ships generic templates and tooling; your beliefs, goals, memories, and journal stay in your local workspace.
-- **Layers, not features.** Content, recall, worldview, structured knowledge, behavior, execution, and runtime each have a single owner. Don't mix them.
-- **Portable over proprietary.** The behavioral layer must run on any agent runtime that loads project context files.
-- **Generic over specific.** Prefer patterns that survive a runtime change over platform hacks that don't.
-- **Behaviors are on by default.** Turn things off when they don't fit.
+- **Generic over specific.** Prefer portable markdown and assistant patterns over
+  setup-specific hacks.
+- **Portable over proprietary.** Your operating layer should outlive any one
+  model, runtime, or chat product.
+- **Human-readable first.** Important context should be inspectable in normal
+  files, especially notes and journals.
+- **Tracked work beats chat promises.** If an agent is doing real work, the work
+  should be visible in a project system with status and evidence.
+- **Context is an asset.** The point is not to save everything. The point is to
+  promote the right things into the right layer so future agents can act well.
 
-## Follow along
+## Follow Along
 
-The creator shares how he uses and develops jarvOS on X: [@andrarchy](https://x.com/andrarchy).
+The creator shares how he uses and develops jarvOS on X:
+[@andrarchy](https://x.com/andrarchy).
 
-If you build something on top of this, open an issue or find him there.
+If you build something on top of jarvOS, open an issue or find him there.
