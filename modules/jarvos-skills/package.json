@@ -1,7 +1,7 @@
 {
   "name": "@jarvos/skills",
   "version": "0.1.0",
-  "description": "Portable jarvOS operating-system skill bundle for OpenClaw-style agents.",
+  "description": "Portable jarvOS operating-system skill bundle for compatible agent runtimes.",
   "license": "MIT",
   "type": "commonjs",
   "main": "src/index.js",

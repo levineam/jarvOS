@@ -250,7 +250,7 @@ codex mcp add jarvos -- node /path/to/jarvOS/modules/jarvos-agent-context/script
 ## @jarvos/skills
 
 **What it does:** Provides the default jarvOS operating-system skill bundle for
-OpenClaw-style agents. The default bundle includes `workflow-execution`,
+compatible agent runtimes. The default bundle includes `workflow-execution`,
 `rule-creation`, `context-management`, and `cron-hygiene`.
 
 **What it is NOT:** A dump of a private workspace's skills folder. The bundle is
