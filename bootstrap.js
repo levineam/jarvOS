@@ -3,7 +3,7 @@
  * jarvOS Bootstrap CLI
  * Usage: npx jarvos-bootstrap  OR  node bootstrap.js
  *
- * Guides a new user through setting up jarvOS on top of OpenClaw.
+ * Guides a new user through setting up a portable jarvOS workspace.
  */
 
 'use strict';
@@ -415,7 +415,7 @@ async function main() {
   console.log(`\n${BOLD}${CYAN}╔══════════════════════════════════════╗`);
   console.log(`║      jarvOS Bootstrap Installer      ║`);
   console.log(`╚══════════════════════════════════════╝${RESET}\n`);
-  console.log('This script sets up jarvOS on top of your OpenClaw installation.');
+  console.log('This script sets up a portable jarvOS workspace for your selected runtime.');
   console.log('It will create the workspace file structure and generate starter overlay files.\n');
 
   const depsOk = checkDeps();

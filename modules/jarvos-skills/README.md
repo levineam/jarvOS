@@ -1,9 +1,9 @@
 # @jarvos/skills
 
 `@jarvos/skills` is the public jarvOS operating-system skill bundle. It packages
-the reusable agent workflows that make a fresh OpenClaw-style install behave
-like a disciplined personal AI operating system without importing Andrew-specific
-workspace rules.
+the reusable agent workflows that make a fresh compatible agent runtime behave
+like a disciplined personal AI operating system without importing
+Andrew-specific workspace rules.
 
 ## Included by default
 

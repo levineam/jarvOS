@@ -42,8 +42,8 @@ jarvOS gives them an operating layer:
 - **Memory as the durable agent state.** Stable facts, decisions, preferences,
   and lessons are promoted into compact memory files that can be loaded by
   different agents.
-- **Runtime adapters instead of lock-in.** jarvOS can run on top of OpenClaw,
-  Hermes, Codex, Claude Desktop, and future agent runtimes through small
+- **Runtime adapters instead of lock-in.** jarvOS gives OpenClaw, Hermes, Codex,
+  Claude Desktop, and future agent runtimes shared context through small
   adapters.
 
 jarvOS is not another chat app. It is the connective tissue between your agent,
@@ -144,8 +144,13 @@ jarvOS deliberately separates portable behavior from runtime-specific glue.
 - **Codex CLI and Claude Desktop** can use jarvOS context through local adapters
   and manual hydration flows.
 
-The same core files can move across runtimes because the source of truth is
-markdown and local tooling, not a single vendor's memory system.
+jarvOS is not the runtime. It is the user-owned context and governance layer
+that runtimes hydrate from and write back to. The same core files can move
+across runtimes because the source of truth is markdown and local tooling, not a
+single vendor's memory system.
+
+For the product-category boundary, see
+[`docs/architecture/product-category-and-boundaries.md`](./docs/architecture/product-category-and-boundaries.md).
 
 ## Quick Start
 

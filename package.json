@@ -1,7 +1,7 @@
 {
   "name": "jarvos-bootstrap",
   "version": "0.1.0",
-  "description": "Bootstrap installer for jarvOS — sets up a working personal AI operating system on top of OpenClaw",
+  "description": "Bootstrap installer for jarvOS — sets up a portable personal AI operating layer for compatible agent runtimes",
   "keywords": ["jarvos", "openclaw", "ai-assistant", "personal-os", "bootstrap"],
   "homepage": "https://github.com/levineam/jarvOS",
   "repository": {

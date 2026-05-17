@@ -14,11 +14,14 @@ This is the canonical architecture note for jarvOS.
 
 **Related:** jarvOS - Architecture & Design, jarvOS - Config Management Architecture
 
-## 1) Layer Model: OpenClaw vs jarvOS
+## 1) Layer Model: Runtimes vs jarvOS
 
-jarvOS is a product/system layer that runs on top of OpenClaw runtime primitives.
+jarvOS is a portable personal-AI operating layer for compatible agent runtimes.
+It owns user-controlled context, memory, ontology, workflow discipline, and
+governance boundaries. It does not own model calls, shell execution, sandboxing,
+messaging, scheduling, or session orchestration as core product responsibilities.
 
-### Layer A — OpenClaw Runtime (platform substrate)
+### Layer A — Agent Runtime (platform substrate)
 
 Responsibilities:
 - Agent runtime + model orchestration
@@ -33,6 +36,8 @@ Responsibilities:
 - Reusable workflows (briefings, watchdogs, sync loops, publication pipelines)
 - Project + task operating cadence (boards, briefs, gates, anti-thrash)
 - Knowledge lifecycle (capture → promote → propagate)
+- Runtime adapters that translate jarvOS context into OpenClaw, Hermes, Codex,
+  Claude, or future client surfaces
 
 ### Layer C — Customer/Instance Adaptation (deployment edges)
 
@@ -63,7 +68,8 @@ Responsibilities:
 
 5. **Instance Packaging**
    - jarvOS templates + starter kit
-   - Environment-fit guidance (OpenClaw, Cowork, Codex app/CLI)
+   - Environment-fit guidance for OpenClaw, Hermes, Codex, Claude, and future
+     runtime adapters
 
 ## 3) Adopted Patterns
 
