@@ -2,7 +2,13 @@
   "name": "jarvos-bootstrap",
   "version": "0.1.0",
   "description": "Bootstrap installer for jarvOS — sets up a portable personal AI operating layer for compatible agent runtimes",
-  "keywords": ["jarvos", "openclaw", "ai-assistant", "personal-os", "bootstrap"],
+  "keywords": [
+    "jarvos",
+    "openclaw",
+    "ai-assistant",
+    "personal-os",
+    "bootstrap"
+  ],
   "homepage": "https://github.com/levineam/jarvOS",
   "repository": {
     "type": "git",
@@ -21,6 +27,11 @@
   },
   "scripts": {
     "bootstrap": "node bootstrap.js",
+    "clawpatch": "node scripts/clawpatch-runner.js",
+    "clawpatch:doctor": "node scripts/clawpatch-runner.js doctor",
+    "clawpatch:map": "node scripts/clawpatch-runner.js map",
+    "clawpatch:status": "node scripts/clawpatch-runner.js status",
+    "clawpatch:review:dry-run": "node scripts/clawpatch-runner.js review --limit 1 --dry-run",
     "test": "bash tests/smoke-test.sh && node tests/modules-smoke-test.js && bash scripts/smoke-test.sh",
     "test:bootstrap": "bash tests/smoke-test.sh",
     "test:modules": "node tests/modules-smoke-test.js",
@@ -30,5 +41,8 @@
   },
   "engines": {
     "node": ">=18"
+  },
+  "devDependencies": {
+    "clawpatch": "^0.2.0"
   }
 }
