@@ -198,6 +198,19 @@ try {
     bad('notePath', new Error(`Got: ${nPath}`));
   }
 
+  const notePlan = sb.buildRoutingPlan({ text: 'make a note about module smoke capture' });
+  const flaggedPlan = sb.buildRoutingPlan({ text: 'remember this module smoke capture' });
+  if (
+    notePlan.route === 'note' &&
+    flaggedPlan.route === 'flagged' &&
+    sb.SKILL_CONTRACTS &&
+    sb.SKILL_CONTRACTS['note-creation']
+  ) {
+    ok('capture routing contracts are exported');
+  } else {
+    bad('capture routing contracts', new Error(JSON.stringify({ notePlan, flaggedPlan })));
+  }
+
 } catch (e) {
   bad('@jarvos/secondbrain module load', e);
 }

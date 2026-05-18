@@ -2,11 +2,23 @@
 
 Release sections describe user-facing jarvOS changes. Historical public-doc sync entries are preserved below for traceability.
 
-## v0.2.0 — Unreleased
+## v0.2.0 — 2026-05-18
 
 Second public release. Tracked in SUP-1737.
 
 ### Included
+- "Capture Your Thoughts" first-experience flow: high-confidence idea phrases
+  land in the journal Ideas section, high-confidence note phrases create
+  Obsidian-compatible notes with journal wiki-links, and medium-confidence
+  captures route to a Flagged review section instead of creating durable notes
+  prematurely (SUP-1804).
+- `@jarvos/secondbrain` now exposes the capture classifier, routing dispatcher,
+  and portable skill contracts for `journal-entry`, `note-creation`, and
+  `idea-parking`; the package includes explicit npm `exports` for the main API,
+  routing API, contracts, and config resolver.
+- The secondbrain public API now delegates path resolution to the shared
+  repo-owned `jarvos.config.json` / `JARVOS_*` resolver instead of keeping a
+  separate hardcoded `/clawd`-era fallback.
 - Claude Code runtime adapter now bootstraps `~/.claude/CLAUDE.md` from
   `runtimes/claude/templates/CLAUDE.md.template`, giving every fresh Claude
   Code session in a jarvOS workspace a baseline of identity, governance
