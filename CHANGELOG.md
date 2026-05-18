@@ -2,7 +2,7 @@
 
 Release sections describe user-facing jarvOS changes. Historical public-doc sync entries are preserved below for traceability.
 
-## v0.2.0 — Unreleased
+## v0.2.0 — 2026-05-18
 
 Second public release. Tracked in SUP-1737.
 
@@ -18,6 +18,22 @@ Second public release. Tracked in SUP-1737.
   `~/.claude/CLAUDE.md` files are backed up before any overwrite.
 - New environment switches: `JARVOS_SKIP_CLAUDE_MD=1` to skip CLAUDE.md
   materialization and `CLAUDE_MD_PATH` to retarget the destination.
+
+### Fixes
+
+- Added idempotent behavior and local-extension preservation for CLAUDE.md
+  materialization (`runtimes/claude/setup.sh`).
+
+### Known Limitations
+
+- CLAUDE.md runtime bootstrap is scoped to Claude Code setup and does not
+  currently apply to all local runtimes equally.
+- The public repo includes Claude runtime integration code and fixtures, not GBrain itself.
+- Distribution remains git-based; no npm package is published for this release.
+
+### Breaking Changes
+
+- None known.
 
 ## v0.1.0 — 2026-05-15
 
