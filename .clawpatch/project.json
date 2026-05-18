@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 1,
+  "projectId": "prj_https-github-com-levineam-jarvos_5deff1a693",
+  "name": "jarvos-bootstrap",
+  "rootPath": ".",
+  "git": {
+    "remoteUrl": "https://github.com/levineam/jarvOS.git",
+    "defaultBranch": "main",
+    "currentBranch": "main",
+    "headSha": "214fb6dc6bccdfe4ebfa94501bd068a0df420982"
+  },
+  "detected": {
+    "languages": [
+      "javascript"
+    ],
+    "frameworks": [],
+    "packageManagers": [
+      "npm"
+    ],
+    "commands": {
+      "typecheck": null,
+      "lint": null,
+      "format": null,
+      "test": "npm run test"
+    }
+  },
+  "createdAt": "2026-05-18T00:39:37.603Z",
+  "updatedAt": "2026-05-18T00:39:37.603Z"
+}

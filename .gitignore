@@ -1,2 +1,12 @@
 logs/pr-autopilot-diagnostics/
 tmp/
+node_modules/
+
+# clawpatch keeps portable setup in config/project and regenerated runtime state
+# per checkout. Do not commit review findings or feature-map state.
+.clawpatch/features/
+.clawpatch/findings/
+.clawpatch/locks/
+.clawpatch/patches/
+.clawpatch/reports/
+.clawpatch/runs/
