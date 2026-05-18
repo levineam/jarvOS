@@ -9,7 +9,23 @@ Note, or is promoted outward to adjacent systems.
   - `idea` → journal `## 💡 Ideas`
   - substantive `idea` → journal Ideas + standalone note + journal note link
   - `note` → standalone note + journal note link
-  - no explicit trigger → default vault-note bias
+  - medium-confidence capture → journal `## 🚩 Flagged` for review
+- `src/skill-contracts.js` — portable contracts for `journal-entry`,
+  `note-creation`, and `idea-parking`
+
+## Classifier contract
+
+`classifyCaptureIntent(capture)` returns:
+
+- `route`: `idea`, `note`, `flagged`, or `null`
+- `confidence`: `high`, `medium`, or `low`
+- `reviewRequired`: boolean
+- `skillIds`: the contracts that should handle the plan
+- `reason`: stable machine-readable explanation
+
+High-confidence idea/note phrasing dispatches directly. Medium-confidence
+captures are review-first so the system does not create durable notes from
+ambiguous language.
 
 ## Why this lives here
 

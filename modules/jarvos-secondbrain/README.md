@@ -96,6 +96,31 @@ Raw capture (journal/notes)
         → Paperclip (live execution)
 ```
 
+### Capture Your Thoughts contract
+
+`@jarvos/secondbrain` v0.2.0 exposes a small portable capture API:
+
+- `classifyCaptureIntent(capture)` returns `route`, `confidence`,
+  `reviewRequired`, `reason`, and `skillIds`.
+- `buildRoutingPlan(capture)` turns the classifier output into storage actions.
+- `dispatchCaptureToSkills(capture, { adapter })` executes the plan through the
+  adapter contract.
+
+Skill contracts are plain JavaScript objects exported as `SKILL_CONTRACTS`:
+
+- `journal-entry` appends a dated markdown list item to a journal section.
+- `note-creation` creates an Obsidian-compatible note and links it from the
+  journal Notes section.
+- `idea-parking` parks an idea in the journal Ideas section, with an optional
+  durable note for substantive ideas.
+
+Default routing:
+
+- "I have an idea about X" → journal `## 💡 Ideas`.
+- "make a note about Y" → note file + journal `## 📝 Notes` wiki-link.
+- Medium-confidence captures such as "remember this" / "capture this" →
+  journal `## 🚩 Flagged` for review, without creating a note.
+
 ## Layout
 
 ```text

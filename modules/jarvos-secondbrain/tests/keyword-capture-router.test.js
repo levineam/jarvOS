@@ -7,7 +7,9 @@ const path = require('path');
 const {
   applyRoutingPlan,
   buildRoutingPlan,
+  classifyCaptureIntent,
   detectTrigger,
+  dispatchCaptureToSkills,
   hasCaptureIntent,
 } = require('../bridge/routing/src/keyword-capture-router.js');
 
@@ -51,12 +53,32 @@ test('idea trigger routes lightweight capture to the journal Ideas section only'
     });
 
     assert.equal(result.plan.route, 'idea');
+    assert.equal(result.plan.confidence, 'high');
+    assert.deepEqual(result.plan.skillIds, ['idea-parking']);
     assert.equal(result.note, null);
     assert.equal(result.noteLink.heading, '## 💡 Ideas');
 
     const journal = readDirFile(vault.journalDir, `${TEST_DATE}.md`);
     assert.match(journal, /## 💡 Ideas\n- build a lighter bridge promotion dashboard/);
     assert.equal(fs.readdirSync(vault.notesDir).length, 0);
+  });
+});
+
+test('plain "I have an idea about X" lands cleanly in the Ideas section', () => {
+  const vault = makeTempVault();
+
+  withVaultEnv(vault, () => {
+    const result = applyRoutingPlan({
+      text: 'I have an idea about reusable capture workflows',
+      date: TEST_DATE,
+    });
+
+    assert.equal(result.plan.route, 'idea');
+    assert.equal(result.plan.createNote, false);
+
+    const journal = readDirFile(vault.journalDir, `${TEST_DATE}.md`);
+    assert.match(journal, /## 💡 Ideas\n- reusable capture workflows/);
+    assert.doesNotMatch(journal, /I have an idea/);
   });
 });
 
@@ -88,34 +110,71 @@ test('substantive idea creates both an Ideas entry and a standalone note link wi
   });
 });
 
-test('note trigger and ambiguous capture both bias to standalone notes plus journal Notes links', () => {
+test('note trigger creates a standalone note plus a journal Notes backlink', () => {
   const vault = makeTempVault();
 
   withVaultEnv(vault, () => {
     const explicit = applyRoutingPlan({
-      text: 'note: lock the package map and explain where routing belongs',
-      title: 'Secondbrain package map',
-      date: TEST_DATE,
-    });
-
-    const defaultPlan = buildRoutingPlan({
-      text: 'capture the package naming decision for later reference',
-      date: TEST_DATE,
-    });
-    assert.equal(defaultPlan.route, 'note');
-    assert.equal(defaultPlan.defaultedToNoteBias, true);
-
-    const implicit = applyRoutingPlan({
-      text: 'capture the package naming decision for later reference',
+      text: 'make a note about package map ownership',
       date: TEST_DATE,
     });
 
     assert.ok(explicit.note);
-    assert.ok(implicit.note);
+    assert.equal(explicit.note.title, 'package map ownership');
+    assert.deepEqual(explicit.plan.skillIds, ['note-creation', 'journal-entry']);
 
     const journal = readDirFile(vault.journalDir, `${TEST_DATE}.md`);
-    assert.match(journal, /## 📝 Notes\n- \[\[Secondbrain package map\]\]/);
-    assert.match(journal, /\[\[capture the package naming decision for later reference\]\]/);
+    assert.match(journal, /## 📝 Notes\n- \[\[package map ownership\]\]/);
+
+    const note = readDirFile(vault.notesDir, 'package map ownership.md');
+    assert.match(note, /# package map ownership/);
+    assert.match(note, /source: "note-capture"/);
+  });
+});
+
+test('medium-confidence capture routes to Flagged for review without creating a note', () => {
+  const vault = makeTempVault();
+
+  withVaultEnv(vault, () => {
+    const plan = buildRoutingPlan({
+      text: 'capture the package naming decision for later reference',
+      date: TEST_DATE,
+    });
+    assert.equal(plan.route, 'flagged');
+    assert.equal(plan.confidence, 'medium');
+    assert.equal(plan.reviewRequired, true);
+    assert.deepEqual(plan.skillIds, ['journal-entry']);
+
+    const result = dispatchCaptureToSkills({
+      text: 'capture the package naming decision for later reference',
+      date: TEST_DATE,
+    });
+
+    assert.equal(result.note, null);
+    assert.equal(fs.readdirSync(vault.notesDir).length, 0);
+
+    const journal = readDirFile(vault.journalDir, `${TEST_DATE}.md`);
+    assert.match(journal, /## 🚩 Flagged\n- \[ \] capture the package naming decision for later reference _\(review before filing\)_/);
+  });
+});
+
+test('classifier exposes release contract confidence and review metadata', () => {
+  assert.deepEqual(classifyCaptureIntent({ text: 'make a note about routing contracts' }), {
+    route: 'note',
+    detectedTrigger: 'note',
+    confidence: 'high',
+    reviewRequired: false,
+    skillIds: ['note-creation', 'journal-entry'],
+    reason: 'explicit-note-capture',
+  });
+
+  assert.deepEqual(classifyCaptureIntent({ text: 'remember this routing question' }), {
+    route: 'flagged',
+    detectedTrigger: null,
+    confidence: 'medium',
+    reviewRequired: true,
+    skillIds: ['journal-entry'],
+    reason: 'ambiguous-capture-for-review',
   });
 });
 
