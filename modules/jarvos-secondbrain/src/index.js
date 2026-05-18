@@ -7,37 +7,33 @@
  * Path resolution follows: env var → jarvos.config.json → os.homedir()-relative default.
  */
 
-const path = require('path');
-const os = require('os');
 const crypto = require('crypto');
+const {
+  expandTilde: resolveTilde,
+  getJournalDir,
+  getNotesDir,
+  getVaultDir,
+} = require('../bridge/config/jarvos-paths.js');
+const routing = require('../bridge/routing/src/keyword-capture-router.js');
+const skillContracts = require('../bridge/routing/src/skill-contracts.js');
+const path = require('path');
 
 // ── Path resolution ────────────────────────────────────────────────────────
 
-function resolveTilde(p) {
-  if (!p) return p;
-  if (p.startsWith('~/')) return path.join(os.homedir(), p.slice(2));
-  return p;
-}
-
 /**
  * Resolve the journal directory.
- * Priority: JARVOS_JOURNAL_DIR env → default ~/Documents/Vault v3/Journal
+ * Priority comes from the shared jarvos-secondbrain config resolver.
  */
 function resolveJournalDir() {
-  if (process.env.JARVOS_JOURNAL_DIR) {
-    return resolveTilde(process.env.JARVOS_JOURNAL_DIR);
-  }
-  return path.join(os.homedir(), 'Documents', 'Vault v3', 'Journal');
+  return getJournalDir();
 }
 
 /**
  * Resolve the notes directory.
- * Priority: JARVOS_NOTES_DIR → VAULT_NOTES_DIR → default
+ * Priority comes from the shared jarvos-secondbrain config resolver.
  */
 function resolveNotesDir() {
-  const envDir = process.env.JARVOS_NOTES_DIR || process.env.VAULT_NOTES_DIR;
-  if (envDir) return resolveTilde(envDir);
-  return path.join(os.homedir(), 'Documents', 'Vault v3', 'Notes');
+  return getNotesDir();
 }
 
 /**
@@ -45,7 +41,7 @@ function resolveNotesDir() {
  */
 function resolveTagsDir() {
   if (process.env.JARVOS_TAGS_DIR) return resolveTilde(process.env.JARVOS_TAGS_DIR);
-  return path.join(os.homedir(), 'Documents', 'Vault v3', 'Tags');
+  return path.join(getVaultDir(), 'Tags');
 }
 
 // ── Journal ────────────────────────────────────────────────────────────────
@@ -141,4 +137,6 @@ module.exports = {
   journalEntryPath,
   createNote,
   notePath,
+  ...routing,
+  ...skillContracts,
 };

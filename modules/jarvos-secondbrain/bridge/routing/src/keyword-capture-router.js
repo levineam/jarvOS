@@ -5,7 +5,7 @@
  * Rules:
  * - idea => append to the journal Ideas section; if substantive, also create a note
  * - note => always create a standalone note and link it in the journal Notes section
- * - default capture intent => bias toward standalone notes
+ * - medium-confidence capture intent => append to the journal Flagged section
  * - non-capture conversation => no-op
  *
  * Input (stdin):
@@ -24,12 +24,20 @@
 
 const {
   createStorageAdapter,
+  FLAGGED_HEADING,
   IDEAS_HEADING,
   NOTES_HEADING,
 } = require('../../../adapters');
+const {
+  IDEA_PARKING,
+  JOURNAL_ENTRY,
+  NOTE_CREATION,
+  SKILL_CONTRACTS,
+} = require('./skill-contracts.js');
 
 const IDEA = 'idea';
 const NOTE = 'note';
+const FLAGGED = 'flagged';
 const KEYWORD_RE = /^\s*(idea|note)\s*[:\-]\s*/i;
 const IDEA_ANTI_TRIGGER_PATTERNS = [
   /\bno idea\b/i,
@@ -50,6 +58,7 @@ const NOTE_CAPTURE_PATTERNS = [
   /\bside note\b/i,
   /\bi(?:'ll| will) note that\b/i,
   /\bmake a note\b/i,
+  /\bmake an? note\b/i,
   /\btake a note\b/i,
   /\bremember this note\b/i,
 ];
@@ -69,12 +78,15 @@ function normalizeTrigger(value) {
 function stripLeadingKeyword(text) {
   return String(text || '')
     .replace(KEYWORD_RE, '')
-    .replace(/^\s*i have an? idea\s*[:\-,]?\s*/i, '')
-    .replace(/^\s*here(?:'s| is) an? idea\s*[:\-,]?\s*/i, '')
+    .replace(/^\s*i have an? idea(?:\s+(?:about|for))?\s*[:\-,]?\s*/i, '')
+    .replace(/^\s*here(?:'s| is) an? idea(?:\s+(?:about|for))?\s*[:\-,]?\s*/i, '')
     .replace(/^\s*my idea is\s*[:\-,]?\s*/i, '')
     .replace(/^\s*note to self\s*[:\-,]?\s*/i, '')
     .replace(/^\s*side note\s*[:\-,]?\s*/i, '')
     .replace(/^\s*i(?:'ll| will) note that\s*[:\-,]?\s*/i, '')
+    .replace(/^\s*make an? note(?:\s+(?:about|for))?\s*[:\-,]?\s*/i, '')
+    .replace(/^\s*make a note(?:\s+(?:about|for))?\s*[:\-,]?\s*/i, '')
+    .replace(/^\s*take a note(?:\s+(?:about|for))?\s*[:\-,]?\s*/i, '')
     .trim();
 }
 
@@ -135,6 +147,53 @@ function hasCaptureIntent(capture = {}) {
   return false;
 }
 
+function classifyCaptureIntent(capture = {}) {
+  const detectedTrigger = detectTrigger(capture);
+  const captureIntent = hasCaptureIntent(capture);
+
+  if (!captureIntent) {
+    return {
+      route: null,
+      detectedTrigger,
+      confidence: 'low',
+      reviewRequired: false,
+      skillIds: [],
+      reason: 'no-capture-intent',
+    };
+  }
+
+  if (detectedTrigger === IDEA) {
+    return {
+      route: IDEA,
+      detectedTrigger,
+      confidence: 'high',
+      reviewRequired: false,
+      skillIds: [IDEA_PARKING],
+      reason: 'explicit-idea-capture',
+    };
+  }
+
+  if (detectedTrigger === NOTE) {
+    return {
+      route: NOTE,
+      detectedTrigger,
+      confidence: 'high',
+      reviewRequired: false,
+      skillIds: [NOTE_CREATION, JOURNAL_ENTRY],
+      reason: 'explicit-note-capture',
+    };
+  }
+
+  return {
+    route: FLAGGED,
+    detectedTrigger,
+    confidence: 'medium',
+    reviewRequired: true,
+    skillIds: [JOURNAL_ENTRY],
+    reason: 'ambiguous-capture-for-review',
+  };
+}
+
 function inferTitle(capture = {}, fallbackPrefix = 'Captured Note') {
   const explicit = String(capture.title || '').trim();
   if (explicit) return stripLeadingKeyword(explicit);
@@ -166,6 +225,13 @@ function ideaJournalLine(capture = {}, noteTitle = '') {
   return `- ${summary || title || 'Untitled idea'}`;
 }
 
+function flaggedJournalLine(capture = {}) {
+  const text = primaryText(capture);
+  const title = String(capture.title || '').trim();
+  const summary = text || title || 'Untitled capture';
+  return `- [ ] ${summary} _(review before filing)_`;
+}
+
 function buildNoteContent(capture = {}, route = NOTE) {
   const text = primaryText(capture);
   if (text) return text;
@@ -187,14 +253,18 @@ function isSubstantiveIdea(capture = {}) {
 }
 
 function buildRoutingPlan(capture = {}) {
-  const detectedTrigger = detectTrigger(capture);
-  const captureIntent = hasCaptureIntent(capture);
+  const classification = classifyCaptureIntent(capture);
+  const detectedTrigger = classification.detectedTrigger;
   const date = String(capture.date || '').trim() || undefined;
 
-  if (!captureIntent) {
+  if (!classification.route) {
     return {
       route: null,
       detectedTrigger,
+      confidence: classification.confidence,
+      reviewRequired: classification.reviewRequired,
+      reason: classification.reason,
+      skillIds: classification.skillIds,
       defaultedToNoteBias: false,
       ignored: true,
       date,
@@ -207,7 +277,27 @@ function buildRoutingPlan(capture = {}) {
     };
   }
 
-  const route = detectedTrigger || NOTE;
+  const route = classification.route;
+
+  if (route === FLAGGED) {
+    return {
+      route,
+      detectedTrigger,
+      confidence: classification.confidence,
+      reviewRequired: classification.reviewRequired,
+      reason: classification.reason,
+      skillIds: classification.skillIds,
+      defaultedToNoteBias: false,
+      ignored: false,
+      date,
+      journalSection: FLAGGED_HEADING,
+      journalLine: flaggedJournalLine(capture),
+      createNote: false,
+      noteTitle: '',
+      noteContent: '',
+      noteFrontmatter: null,
+    };
+  }
 
   if (route === IDEA) {
     const substantive = isSubstantiveIdea(capture);
@@ -215,7 +305,11 @@ function buildRoutingPlan(capture = {}) {
     return {
       route,
       detectedTrigger,
-      defaultedToNoteBias: !detectedTrigger,
+      confidence: classification.confidence,
+      reviewRequired: classification.reviewRequired,
+      reason: classification.reason,
+      skillIds: classification.skillIds,
+      defaultedToNoteBias: false,
       ignored: false,
       date,
       journalSection: IDEAS_HEADING,
@@ -238,7 +332,11 @@ function buildRoutingPlan(capture = {}) {
   return {
     route: NOTE,
     detectedTrigger,
-    defaultedToNoteBias: !detectedTrigger,
+    confidence: classification.confidence,
+    reviewRequired: classification.reviewRequired,
+    reason: classification.reason,
+    skillIds: classification.skillIds,
+    defaultedToNoteBias: false,
     ignored: false,
     date,
     journalSection: NOTES_HEADING,
@@ -255,7 +353,7 @@ function buildRoutingPlan(capture = {}) {
   };
 }
 
-function applyRoutingPlan(capture = {}, options = {}) {
+function dispatchCaptureToSkills(capture = {}, options = {}) {
   const adapter = options.adapter || createStorageAdapter(options);
   const plan = buildRoutingPlan(capture);
   const date = plan.date;
@@ -295,6 +393,10 @@ function applyRoutingPlan(capture = {}, options = {}) {
   return result;
 }
 
+function applyRoutingPlan(capture = {}, options = {}) {
+  return dispatchCaptureToSkills(capture, options);
+}
+
 function main() {
   let input = '';
   process.stdin.on('data', (chunk) => { input += chunk; });
@@ -320,15 +422,20 @@ function main() {
 module.exports = {
   IDEA,
   NOTE,
+  FLAGGED,
   KEYWORD_RE,
   IDEA_ANTI_TRIGGER_PATTERNS,
   IDEA_CAPTURE_PATTERNS,
   NOTE_CAPTURE_PATTERNS,
   GENERAL_CAPTURE_PATTERNS,
+  SKILL_CONTRACTS,
   applyRoutingPlan,
   buildNoteContent,
   buildRoutingPlan,
+  classifyCaptureIntent,
   detectTrigger,
+  dispatchCaptureToSkills,
+  flaggedJournalLine,
   hasCaptureIntent,
   ideaJournalLine,
   inferTitle,
