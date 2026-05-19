@@ -1,10 +1,24 @@
 {
   "name": "@jarvos/secondbrain",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "jarvOS second brain — journal and notes content layer for personal AI agents",
   "license": "MIT",
   "main": "src/index.js",
-  "private": true,
+  "exports": {
+    ".": "./src/index.js",
+    "./routing": "./bridge/routing/src/keyword-capture-router.js",
+    "./routing/contracts": "./bridge/routing/src/skill-contracts.js",
+    "./config": "./bridge/config/jarvos-paths.js"
+  },
+  "files": [
+    "src/",
+    "bridge/",
+    "adapters/",
+    "packages/",
+    "scripts/",
+    "jarvos.config.example.json",
+    "README.md"
+  ],
   "workspaces": [
     "packages/jarvos-secondbrain-journal",
     "packages/jarvos-secondbrain-notes"

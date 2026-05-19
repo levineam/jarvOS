@@ -36,6 +36,7 @@ const {
 } = require('../../../bridge/provenance/src/link-to-journal.js');
 
 const IDEAS_HEADING = '## 💡 Ideas';
+const FLAGGED_HEADING = '## 🚩 Flagged';
 const SIGNATURE = '— Edited by Jarvis';
 const NOTES_PLACEHOLDER_RE = /^-\s+(?:No notes created(?: on .*)?|No notes today|No notes yet)$/i;
 
@@ -172,6 +173,7 @@ function createVaultStorageAdapter() {
 
 module.exports = {
   createVaultStorageAdapter,
+  FLAGGED_HEADING,
   IDEAS_HEADING,
   NOTES_HEADING,
   todayDate,

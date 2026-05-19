@@ -43,6 +43,12 @@
         "description": "Ideas captured during the day"
       },
       {
+        "id": "flagged",
+        "heading": "## 🚩 Flagged",
+        "source": "manual",
+        "description": "Medium-confidence captures queued for human review before durable note creation"
+      },
+      {
         "id": "journal-entry",
         "heading": "## 📓 Journal Entry",
         "source": "manual",

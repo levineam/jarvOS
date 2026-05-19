@@ -2,6 +2,7 @@
 
 const {
   createVaultStorageAdapter,
+  FLAGGED_HEADING,
   IDEAS_HEADING,
   NOTES_HEADING,
   NOTES_CREATED_HEADING,
@@ -21,6 +22,7 @@ function createStorageAdapter(options = {}) {
 module.exports = {
   createStorageAdapter,
   createVaultStorageAdapter,
+  FLAGGED_HEADING,
   IDEAS_HEADING,
   NOTES_HEADING,
   NOTES_CREATED_HEADING,
