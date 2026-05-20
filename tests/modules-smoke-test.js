@@ -282,8 +282,12 @@ try {
   }
 
   const toolNames = mcp.TOOLS.map((tool) => tool.name);
-  if (toolNames.includes('jarvos_recall') && toolNames.includes('jarvos_create_note')) {
-    ok('jarvos MCP server exposes recall and note tools');
+  if (
+    toolNames.includes('jarvos_recall')
+    && toolNames.includes('jarvos_synthesize')
+    && toolNames.includes('jarvos_create_note')
+  ) {
+    ok('jarvos MCP server exposes recall, synthesis, and note tools');
   } else {
     bad('jarvos MCP tools', new Error(JSON.stringify(toolNames)));
   }

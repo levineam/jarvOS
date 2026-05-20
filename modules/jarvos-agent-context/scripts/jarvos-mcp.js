@@ -8,6 +8,7 @@ const {
   hydrate,
   recall,
   startupBrief,
+  synthesizeRecall,
 } = require('../src/index.js');
 
 const TOOLS = [
@@ -33,6 +34,23 @@ const TOOLS = [
         includeQmd: { type: 'boolean', description: 'Include QMD broad vault lookup when available.' },
         autoGraph: { type: 'boolean', description: 'Expand graph context from discovered GBrain seeds.' },
         seeds: { type: 'array', items: { type: 'string' }, description: 'Optional explicit GBrain graph seed pages.' },
+        synthesize: { type: 'boolean', description: 'Return a concise retrieval synthesis with the source bundle.' },
+        mode: { type: 'string', enum: ['recall', 'synthesis'], description: 'Use synthesis for a WS5 answer over WS4 retrieval evidence.' },
+      },
+    },
+  },
+  {
+    name: 'jarvos_synthesize',
+    description: 'Synthesize a concise answer from jarvOS WS4 retrieval evidence, preserving the source bundle for audit.',
+    inputSchema: {
+      type: 'object',
+      required: ['query'],
+      properties: {
+        query: { type: 'string', description: 'Natural-language synthesis question.' },
+        includeQmd: { type: 'boolean', description: 'Include QMD broad vault lookup when available.' },
+        autoGraph: { type: 'boolean', description: 'Expand graph context from discovered GBrain seeds.' },
+        seeds: { type: 'array', items: { type: 'string' }, description: 'Optional explicit GBrain graph seed pages.' },
+        evidenceLimit: { type: 'number', description: 'Maximum evidence lines to include before the source bundle.' },
       },
     },
   },
@@ -128,6 +146,10 @@ async function callTool(name, args = {}) {
   }
   if (name === 'jarvos_recall') {
     const result = recall(args);
+    return textResult(result.markdown, !result.ok);
+  }
+  if (name === 'jarvos_synthesize') {
+    const result = synthesizeRecall(args);
     return textResult(result.markdown, !result.ok);
   }
   if (name === 'jarvos_create_note') {

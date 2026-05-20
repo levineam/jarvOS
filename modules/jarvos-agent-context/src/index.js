@@ -513,6 +513,9 @@ async function hydrate(options = {}) {
 function recall(options = {}) {
   const query = firstString(options.query);
   if (!query) throw new Error('query is required');
+  if (options.synthesize === true || options.mode === 'synthesis') {
+    return synthesizeRecall(options);
+  }
 
   const gbrain = loadGbrain();
   const bundle = gbrain.recallBundle(options.config || {}, {
@@ -520,11 +523,85 @@ function recall(options = {}) {
     includeQmd: options.includeQmd !== false,
     autoGraph: options.autoGraph !== false,
     seeds: Array.isArray(options.seeds) ? options.seeds : undefined,
+    dryRun: options.dryRun === true,
   });
   return {
     ok: true,
     markdown: gbrain.renderRecallMarkdown(bundle),
     bundle,
+  };
+}
+
+function statusLine(name, engine) {
+  if (!engine) return `- ${name}: unavailable`;
+  return `- ${name}: ${engine.ok ? 'ok' : 'failed'}`;
+}
+
+function extractEvidenceLines(text, limit = 6) {
+  return String(text || '')
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .filter((line) => !/^(Status:|Query:|#|```)/.test(line))
+    .slice(0, limit);
+}
+
+function synthesizeRecall(options = {}) {
+  const query = firstString(options.query);
+  if (!query) throw new Error('query is required');
+
+  const gbrain = loadGbrain();
+  const bundle = gbrain.recallBundle(options.config || {}, {
+    query,
+    includeQmd: options.includeQmd !== false,
+    autoGraph: options.autoGraph !== false,
+    seeds: Array.isArray(options.seeds) ? options.seeds : undefined,
+    limit: options.limit,
+    maxChars: options.maxChars,
+    dryRun: options.dryRun === true,
+  });
+
+  const evidence = [
+    ...extractEvidenceLines(bundle.engines?.gbrain?.text),
+    ...extractEvidenceLines(bundle.engines?.qmd?.text),
+  ].slice(0, Number(options.evidenceLimit || 8));
+
+  const graphSeeds = (bundle.graph?.results || [])
+    .flatMap((result) => (result.nodes || []).map((node) => node.title || node.slug))
+    .filter(Boolean)
+    .slice(0, 8);
+
+  const lines = [
+    '# jarvOS Retrieval Synthesis',
+    '',
+    `Query: ${query}`,
+    '',
+    '## Retrieval Status',
+    '',
+    statusLine('GBrain', bundle.engines?.gbrain),
+    statusLine('QMD', bundle.engines?.qmd),
+    `- Graph: ${bundle.graph ? (bundle.graph.ok ? 'ok' : 'failed') : 'not requested or no seeds found'}`,
+    '',
+    '## Synthesis',
+    '',
+  ];
+
+  if (evidence.length === 0 && graphSeeds.length === 0) {
+    lines.push('No usable retrieval evidence was returned. Treat the answer as unproven until indexes are refreshed or the query is narrowed.');
+  } else {
+    lines.push('The strongest retrieved signals are:');
+    for (const item of evidence) lines.push(`- ${item}`);
+    for (const item of graphSeeds) lines.push(`- Related graph node: ${item}`);
+  }
+
+  lines.push('', '## Source Bundle', '', bundle.markdown.trim());
+
+  return {
+    ok: bundle.ok,
+    markdown: `${lines.join('\n').trim()}\n`,
+    bundle,
+    evidence,
+    graphSeeds,
   };
 }
 
@@ -554,12 +631,16 @@ function createNote(input = {}) {
     title,
     content,
     frontmatter,
-  });
-  const linkResult = journalLinker.linkNoteToJournal({
-    noteTitle: noteResult.title || safeTitle,
     section,
-    createIfMissing: input.createJournalIfMissing !== false,
+    createJournalIfMissing: input.createJournalIfMissing !== false,
   });
+  const linkResult = noteResult.journal?.linked
+    ? noteResult.journal
+    : journalLinker.linkNoteToJournal({
+      noteTitle: noteResult.title || safeTitle,
+      section,
+      createIfMissing: input.createJournalIfMissing !== false,
+    });
   const verification = verifyNoteCaptureContract({
     notePath: noteResult.path,
     noteTitle: noteResult.title || safeTitle,
@@ -579,6 +660,7 @@ function createNote(input = {}) {
       `- Note: ${noteResult.path}`,
       `- Journal: ${linkResult.journalPath}`,
       `- Link: ${verification.link}`,
+      `- Knowledge: ${noteResult.knowledge?.optimized ? noteResult.knowledge.qmdStatus : 'not optimized'}`,
     ].join('\n'),
   };
 }
@@ -621,5 +703,6 @@ module.exports = {
   recall,
   redactObviousSecrets,
   startupBrief,
+  synthesizeRecall,
   verifyNoteCaptureContract,
 };
