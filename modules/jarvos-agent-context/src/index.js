@@ -45,18 +45,25 @@ function loadModule(packageName, fallbackPath) {
   }
 }
 
+// WS7 cross-tool unification: let every runtime (OpenClaw / Claude / Codex) share
+// ONE canonical jarvos-secondbrain pipeline, so fixes apply to notes from any tool.
+// Defaults to the bundled modules copy; set JARVOS_SECONDBRAIN_DIR to an absolute
+// path (e.g. the canonical clawd mirror) to point all note-creation through it.
+function secondbrainDir() {
+  return expandTilde(process.env.JARVOS_SECONDBRAIN_DIR)
+    || path.join(JARVOS_ROOT, 'modules', 'jarvos-secondbrain');
+}
+
 function loadJarvosPaths() {
   return loadModule(
     '@jarvos/secondbrain/bridge/config/jarvos-paths.js',
-    path.join(JARVOS_ROOT, 'modules', 'jarvos-secondbrain', 'bridge', 'config', 'jarvos-paths.js'),
+    path.join(secondbrainDir(), 'bridge', 'config', 'jarvos-paths.js'),
   );
 }
 
 function loadNoteWriter() {
   return require(path.join(
-    JARVOS_ROOT,
-    'modules',
-    'jarvos-secondbrain',
+    secondbrainDir(),
     'packages',
     'jarvos-secondbrain-notes',
     'src',
@@ -66,9 +73,7 @@ function loadNoteWriter() {
 
 function loadJournalLinker() {
   return require(path.join(
-    JARVOS_ROOT,
-    'modules',
-    'jarvos-secondbrain',
+    secondbrainDir(),
     'bridge',
     'provenance',
     'src',
