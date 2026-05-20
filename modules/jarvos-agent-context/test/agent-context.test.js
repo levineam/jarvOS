@@ -14,6 +14,7 @@ const {
   defaultFrontmatter,
   hydrate,
   redactObviousSecrets,
+  synthesizeRecall,
   verifyNoteCaptureContract,
 } = require('../src/index.js');
 const { callTool, PROMPTS, TOOLS } = require('../scripts/jarvos-mcp.js');
@@ -92,6 +93,10 @@ test('createNote writes note, links journal, and verifies contract', () => {
     assert.ok(fs.readFileSync(result.note.path, 'utf8').includes('project: "codex"'));
     assert.ok(fs.readFileSync(journalPath, 'utf8').includes('[[Codex jarvOS Adapter Test]]'));
     assert.equal(result.verification.ok, true);
+    assert.equal(result.note.journal.journalPath, journalPath);
+    assert.equal(result.note.knowledge.optimized, true);
+    assert.equal(result.note.knowledge.qmdStatus, 'pending-refresh');
+    assert.ok(fs.existsSync(result.note.knowledge.artifactPath));
 
     const verification = verifyNoteCaptureContract({
       notePath: result.note.path,
@@ -122,6 +127,7 @@ test('MCP tool list includes jarvOS tools', () => {
   assert.deepEqual(names, [
     'jarvos_current_work',
     'jarvos_recall',
+    'jarvos_synthesize',
     'jarvos_create_note',
     'jarvos_startup_brief',
     'jarvos_hydrate',
@@ -215,6 +221,31 @@ test('MCP jarvos_create_note returns text content', async () => {
     assert.equal(result.isError, false);
     assert.match(result.content[0].text, /jarvOS Note Created/);
   });
+});
+
+test('jarvos_recall can return WS5 synthesis over WS4 retrieval evidence', () => {
+  const result = synthesizeRecall({
+    query: 'What matters for jarvOS notes?',
+    dryRun: true,
+    includeQmd: true,
+    autoGraph: false,
+  });
+
+  assert.equal(result.ok, true);
+  assert.match(result.markdown, /jarvOS Retrieval Synthesis/);
+  assert.match(result.markdown, /Retrieval Status/);
+  assert.match(result.markdown, /Source Bundle/);
+});
+
+test('MCP jarvos_synthesize returns text content', async () => {
+  const result = await callTool('jarvos_synthesize', {
+    query: 'What matters for jarvOS notes?',
+    dryRun: true,
+    includeQmd: true,
+    autoGraph: false,
+  });
+  assert.equal(result.isError, false);
+  assert.match(result.content[0].text, /jarvOS Retrieval Synthesis/);
 });
 
 test('currentWork can filter hydration statuses and omit unbacked in_review issues', async () => {

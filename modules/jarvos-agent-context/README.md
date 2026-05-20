@@ -17,8 +17,9 @@ The bundled stdio MCP server exposes:
 | Tool | Purpose |
 |---|---|
 | `jarvos_current_work` | Compact Paperclip current-work summary |
-| `jarvos_recall` | GBrain/QMD/graph recall bundle rendered as Markdown |
-| `jarvos_create_note` | Obsidian note creation + today journal wikilink + verification |
+| `jarvos_recall` | GBrain/QMD/graph recall bundle rendered as Markdown; pass `synthesize: true` or `mode: "synthesis"` for WS5 synthesis |
+| `jarvos_synthesize` | Concise WS5 synthesis over WS4 retrieval evidence with the source bundle preserved |
+| `jarvos_create_note` | Obsidian note creation + today journal wikilink + KB sidecars + verification |
 | `jarvos_startup_brief` | Bounded startup context for agent sessions |
 | `jarvos_hydrate` | Bounded working-context packet for startup hydration |
 
