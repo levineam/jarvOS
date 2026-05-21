@@ -1,12 +1,13 @@
 ---
 status: active
 created: 2026-05-17
-updated: 2026-05-17
+updated: 2026-05-21
 type: roadmap
 project: jarvOS
 source: SUP-1772
 related:
   - SUP-1765
+  - SUP-1926
 ---
 
 # jarvOS Packaging and Install Profiles
@@ -31,7 +32,12 @@ command that proves the local system is understandable after setup.
 - GBrain and graph recall are optional structured-knowledge subsystems.
 - Obsidian is a first-class markdown client, not a hard dependency.
 - `lossless-claw` belongs inside the OpenClaw profile because it is an OpenClaw
-  plugin, not jarvOS core.
+  plugin, not jarvOS core. It is **default-on and fully integrated** within the
+  recommended `local-openclaw` profile (part of the out-of-box "personal Jarvis"
+  context-continuity experience), but it is never a hard dependency of jarvOS
+  core or of non-OpenClaw runtimes, which manage context themselves. "Optional"
+  here means optional at the architecture level — not "the user must know to
+  turn it on." See SUP-1926.
 
 ## Packaging Principles
 
@@ -69,6 +75,16 @@ Everything else is a profile dependency.
 
 ## Install Profiles
 
+> **Implementation status:** The profiles below describe the *target* install
+> and doctor experience. Profile-driven install, verification, and `jarvos
+> doctor` automation are roadmap items (see the Versioned Roadmap: CLI/doctor in
+> v0.3, the `local-openclaw` profile and `lossless-claw` integration in v0.4 —
+> tracked in SUP-1926). They are not shipped yet. Today these subsystems are
+> wired up manually — e.g. `lossless-claw` is enabled by hand in OpenClaw config
+> (`plugins.allow`, `plugins.slots.contextEngine`, and an enabled plugin entry),
+> not by a jarvOS profile installer. Treat "Includes" and "Doctor checks" as the
+> spec the installer should satisfy, not a description of current behavior.
+
 ### `minimal`
 
 Purpose: inspectable local workspace with no live automation dependency.
@@ -103,7 +119,9 @@ Includes:
 - jarvOS OpenClaw adapter files
 - `@jarvos/agent-context` registration
 - `@jarvos/skills` installation
-- optional `lossless-claw` plugin install and verification
+- `lossless-claw` context engine installed, enabled, and verified **by default**
+  in this profile _(planned — v0.4 / SUP-1926; today this is a manual OpenClaw
+  config step)_
 - Paperclip prompt during setup, defaulting to enabled when credentials exist
 
 Doctor checks:
@@ -113,7 +131,9 @@ Doctor checks:
 - jarvOS core files are loaded from the expected workspace
 - MCP adapter is reachable
 - installed skills match the expected skill manifest
-- `lossless-claw` status is healthy when enabled
+- `lossless-claw` context engine is installed, enabled by default, and healthy
+  _(planned — v0.4 / SUP-1926; checkable manually today via `openclaw plugins
+  inspect lossless-claw`)_
 
 ### `codex`
 
@@ -304,7 +324,10 @@ Deliverables:
 - detect or guide OpenClaw onboarding
 - register jarvOS adapter files without overwriting user-owned runtime config
 - install `@jarvos/skills`
-- optionally install and verify `lossless-claw`
+- install, enable by default, and verify `lossless-claw` as the OpenClaw-profile
+  context engine (auto-wire `plugins.allow` / `plugins.slots.contextEngine` /
+  enabled entry + sane `summaryModel` default, without overwriting user config);
+  see SUP-1926
 - add runtime smoke tests for OpenClaw profile output
 
 Done when:
@@ -422,7 +445,10 @@ and full-profile health checks do not block each other.
 
 - Do not make Docker the default install path while jarvOS is primarily CLI,
   markdown, and adapters.
-- Do not bundle OpenClaw or `lossless-claw` as mandatory jarvOS dependencies.
+- Do not bundle OpenClaw or `lossless-claw` as mandatory jarvOS *core*
+  dependencies. (Default-on within the `local-openclaw` profile is the intended
+  experience — see SUP-1926 — but requiring them for jarvOS core or for
+  non-OpenClaw runtimes is not.)
 - Do not build a desktop app before the CLI, profiles, and doctor are reliable.
 - Do not turn Paperclip into jarvOS memory.
 - Do not require Obsidian; require a markdown vault contract.
