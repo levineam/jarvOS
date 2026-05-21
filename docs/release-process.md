@@ -9,6 +9,28 @@ jarvOS releases are milestone-driven. Ship when the active release scope is veri
 - `v0.2.0` is for meaningful new capabilities or workflow improvements.
 - Before `v1.0.0`, minor releases may include breaking changes, but the release notes must call them out plainly.
 
+## Unreleased Work and Drift
+
+Between releases, record merged user-facing changes under the `## [Unreleased]`
+section at the top of `CHANGELOG.md`. This keeps "merged on `main`" distinct from
+"shipped in a tagged release" and prevents release-state confusion (for example,
+assuming a version is published when only the version number moved).
+
+Cutting a release means moving the `## [Unreleased]` entries into a dated
+`## v<version>` section and leaving a fresh empty `## [Unreleased]` behind.
+
+Run the drift check at any time:
+
+```bash
+npm run release:drift
+```
+
+It fails when `package.json` is ahead of the latest git tag without a finalized
+changelog section (an untagged release), or when commits exist since the latest
+tag with nothing tracked under `## [Unreleased]` (unlogged work). It reports a
+healthy "ready to tag" state and is advisory — intentionally not part of
+`release:check`'s blocking gates.
+
 ## Release Checklist
 
 1. Confirm the active release issue in Paperclip lists the intended scope and blockers.
@@ -28,8 +50,9 @@ jarvOS releases are milestone-driven. Ship when the active release scope is veri
    npm run release:check:candidate
    ```
 
-7. Check for local-only or machine-specific files in the release diff.
-8. Create the git tag only after the release checklist is green:
+7. Run `npm run release:drift` to confirm there is no release drift (untagged release or unlogged work).
+8. Check for local-only or machine-specific files in the release diff.
+9. Create the git tag only after the release checklist is green:
 
    ```bash
    git tag <version>
@@ -38,8 +61,8 @@ jarvOS releases are milestone-driven. Ship when the active release scope is veri
 
    Example: `<version>` is `v0.1.0` for the first public preview.
 
-9. Publish a GitHub Release using `docs/releases/<version>.md`.
-10. Record the release URL and final verification evidence on the Paperclip release issue.
+10. Publish a GitHub Release using `docs/releases/<version>.md`.
+11. Record the release URL and final verification evidence on the Paperclip release issue.
 
 ## Release Gates
 

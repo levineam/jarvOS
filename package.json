@@ -1,6 +1,6 @@
 {
   "name": "jarvos-bootstrap",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Bootstrap installer for jarvOS — sets up a portable personal AI operating layer for compatible agent runtimes",
   "keywords": [
     "jarvos",
@@ -37,6 +37,7 @@
     "test:modules": "node tests/modules-smoke-test.js",
     "test:structure": "bash scripts/smoke-test.sh",
     "release:check": "node scripts/release-readiness-check.js",
+    "release:drift": "node scripts/unreleased-drift-check.js",
     "release:check:candidate": "node scripts/release-readiness-check.js --allow-dirty --allow-unreleased"
   },
   "engines": {
