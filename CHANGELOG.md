@@ -2,6 +2,36 @@
 
 Release sections describe user-facing jarvOS changes. Historical public-doc sync entries are preserved below for traceability.
 
+## [Unreleased]
+
+## v0.2.1 — 2026-05-21
+
+Release-process hardening. Tracked in SUP-1953 (part of the journal-spine reliability set SUP-1938–1942).
+
+### Included
+- Adopted a `## [Unreleased]` section in this changelog as the staging area for
+  merged-but-unreleased work, so "what has shipped" and "what is merged on main"
+  stay distinct.
+- Added `npm run release:drift` (`scripts/unreleased-drift-check.js`) to detect
+  release drift: a `package.json` version ahead of the latest git tag with no
+  finalized changelog section (an untagged release), or commits landed since the
+  latest tag with nothing tracked under `## [Unreleased]` (unlogged work).
+- Documented the `[Unreleased]` discipline and the drift check in
+  `docs/release-process.md`.
+
+### Fixes
+- Closes a release-process gap where work merged to `main` could be mistaken for
+  a published release because no signal distinguished merged work from a cut tag.
+
+### Known Limitations
+- The drift check is advisory maintainer tooling and is intentionally not part of
+  `release:check`'s blocking gates.
+- jarvOS remains GBrain-first: it integrates `@jarvos/gbrain` as a resolver and
+  runtime context layer and does not implement GBrain itself; this release is not
+  GBrain itself.
+- Distribution is still git/npm-from-repo based; no public npm registry package is
+  published yet.
+
 ## v0.2.0 — 2026-05-18
 
 Second public release. Tracked in SUP-1737.
