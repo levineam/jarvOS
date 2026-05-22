@@ -4,6 +4,44 @@ Release sections describe user-facing jarvOS changes. Historical public-doc sync
 
 ## [Unreleased]
 
+## v0.3.0 — 2026-05-22
+
+Public CLI and Doctor release. Tracked in SUP-1957 / SUP-1979.
+
+### Included
+- Added the public `jarvos` command router with discoverable `jarvos init`,
+  `jarvos doctor`, and `jarvos help` commands while preserving the existing
+  `jarvos-bootstrap` and `jarvos-init` compatibility aliases.
+- Added the public `minimal` profile manifest for portable starter workspaces:
+  Node.js, core workspace files, `jarvos.config.json`, vault folders, and the
+  `@jarvos/agent-context` package surface.
+- Added `jarvos doctor --profile minimal` with human-readable and JSON output
+  for release-grade starter health checks.
+- Added profile-aware `jarvos init --profile minimal` routing so setup and
+  doctor use the same public profile model.
+- Documented the CLI happy path in the README and included the CLI entrypoint,
+  profile files, and agent-context package in the npm package file list.
+
+### Fixes
+- Closes the release-readiness gap where new users could run smoke tests but had
+  no single public `jarvos` command for setup and health checks.
+- Keeps local-only Paperclip, private GBrain data, and future full-profile checks
+  outside the minimal public doctor so the public install path stays portable and
+  secret-free.
+
+### Known Limitations
+- Only the `minimal` public profile is implemented in this release; Codex,
+  Claude, Hermes, local OpenClaw, Paperclip, GBrain, and full profiles remain
+  future profile lanes.
+- `jarvos doctor` validates checked-in public surfaces and local workspace
+  structure, not private Paperclip state, private vault content, or a live local
+  GBrain graph.
+- jarvOS remains GBrain-first: it integrates `@jarvos/gbrain` as a resolver and
+  runtime context layer and does not implement GBrain itself; this release is not
+  GBrain itself.
+- Distribution is still git/npm-from-repo based; no public npm registry package
+  is published yet.
+
 ## v0.2.1 — 2026-05-21
 
 Release-process hardening. Tracked in SUP-1953 (part of the journal-spine reliability set SUP-1938–1942).
