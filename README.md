@@ -168,6 +168,21 @@ Expected result:
 PASS — All checks passed. The repo is ready to use.
 ```
 
+### Public CLI
+
+The public command router is `jarvos`. It keeps the old bootstrap aliases
+working while making new profile-aware commands discoverable:
+
+```bash
+jarvos init --profile minimal --yes
+jarvos doctor --profile minimal --workspace /path/to/jarvos-workspace
+```
+
+`jarvos doctor` uses the checked-in profile manifest and reports portable health
+checks for the starter workspace, `jarvos.config.json`, vault folders, Node.js,
+and the public agent-context package. Local-only Paperclip, GBrain, and full
+profile checks are intentionally out of the minimal public profile.
+
 ### OpenClaw
 
 ```bash

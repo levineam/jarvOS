@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/levineam/jarvOS/schemas/jarvos.config.schema.json",
+  "title": "jarvOS config",
+  "type": "object",
+  "required": [
+    "assistantName",
+    "userName",
+    "coachName",
+    "vaultPath",
+    "workspacePath",
+    "runtime"
+  ],
+  "properties": {
+    "assistantName": { "type": "string" },
+    "userName": { "type": "string" },
+    "coachName": { "type": "string" },
+    "vaultPath": { "type": "string" },
+    "workspacePath": { "type": "string" },
+    "runtime": { "type": "string" }
+  },
+  "additionalProperties": true
+}

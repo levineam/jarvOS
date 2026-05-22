@@ -155,6 +155,10 @@ echo "→ Repo hygiene"
 check_file "README.md"
 check_file "LICENSE"
 check_file "CHANGELOG.md"
+check_file "scripts/jarvos.js"
+check_file "lib/jarvos-cli.js"
+check_file "profiles/minimal.json"
+check_file "jarvos.config.schema.json"
 
 # ── Summary ───────────────────────────────────────────────────────────────────
 echo ""
