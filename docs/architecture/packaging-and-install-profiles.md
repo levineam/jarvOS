@@ -252,6 +252,15 @@ private paths.
 
 ## Versioned Roadmap
 
+Current release-management state:
+
+- v0.1.0 and v0.2.0 are shipped public releases. Their Paperclip parents are
+  SUP-1648 and SUP-1737, respectively, and they are closed to new candidates.
+- v0.2.1/v0.3 knowledge-base work in Paperclip is internal secondbrain work,
+  not the public package lane described below.
+- The active public parent for this roadmap is SUP-1957, starting at v0.3 CLI
+  and Doctor.
+
 ### v0.2 — Packaging Clarity
 
 Goal: make the current public repo honest and navigable before changing install
