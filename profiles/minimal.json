@@ -1,0 +1,27 @@
+{
+  "schemaVersion": "jarvos.profile.v1",
+  "id": "minimal",
+  "title": "Minimal",
+  "description": "Portable jarvOS starter workspace with core files, config, vault folders, and agent-context checks.",
+  "public": true,
+  "required": [
+    "node",
+    "workspace",
+    "vault",
+    "config-schema",
+    "agent-context"
+  ],
+  "optional": [],
+  "writes": [
+    "core-files",
+    "jarvos.config.json",
+    "vault-folders"
+  ],
+  "doctorChecks": [
+    "node-version",
+    "workspace-files",
+    "config-schema",
+    "vault-path",
+    "agent-context-package"
+  ]
+}
