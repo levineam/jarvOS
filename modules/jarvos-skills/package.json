@@ -1,7 +1,7 @@
 {
   "name": "@jarvos/skills",
-  "version": "0.1.0",
-  "description": "Portable jarvOS operating-system skill bundle for compatible agent runtimes.",
+  "version": "0.3.0",
+  "description": "Portable jarvOS operating-system skills and default experience packs for compatible agent runtimes.",
   "license": "MIT",
   "type": "commonjs",
   "main": "src/index.js",
@@ -11,6 +11,7 @@
   "files": [
     "README.md",
     "manifest.json",
+    "packs/",
     "src/",
     "scripts/",
     "skills/",

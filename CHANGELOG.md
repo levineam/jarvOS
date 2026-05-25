@@ -6,7 +6,8 @@ Release sections describe user-facing jarvOS changes. Historical public-doc sync
 
 ## v0.3.0 — 2026-05-22
 
-Public CLI and Doctor release. Tracked in SUP-1957 / SUP-1979.
+Public CLI, Doctor, and Obsidian default experience-pack release. Tracked in
+SUP-1957 / SUP-1979 / SUP-2056.
 
 ### Included
 - Added the public `jarvos` command router with discoverable `jarvos init`,
@@ -20,7 +21,13 @@ Public CLI and Doctor release. Tracked in SUP-1957 / SUP-1979.
 - Added profile-aware `jarvos init --profile minimal` routing so setup and
   doctor use the same public profile model.
 - Documented the CLI happy path in the README and included the CLI entrypoint,
-  profile files, and agent-context package in the npm package file list.
+  profile files, agent-context package, and skills module in the npm package
+  file list.
+- Added the `obsidian-default` experience pack to `@jarvos/skills`, referencing
+  `kepano/obsidian-skills` commit `553ef99` and covering Obsidian Markdown,
+  `obsidian-cli`, Defuddle, JSON Canvas, and Obsidian Bases.
+- Added an experience-pack doctor/install-plan surface for optional Obsidian and
+  Defuddle command detection while keeping jarvOS Markdown-first.
 
 ### Fixes
 - Closes the release-readiness gap where new users could run smoke tests but had
@@ -28,6 +35,8 @@ Public CLI and Doctor release. Tracked in SUP-1957 / SUP-1979.
 - Keeps local-only Paperclip, private GBrain data, and future full-profile checks
   outside the minimal public doctor so the public install path stays portable and
   secret-free.
+- Keeps Obsidian Bases and Canvas as reading, review, and artifact surfaces
+  rather than live project-management or execution-state authorities.
 
 ### Known Limitations
 - Only the `minimal` public profile is implemented in this release; Codex,
@@ -41,6 +50,8 @@ Public CLI and Doctor release. Tracked in SUP-1957 / SUP-1979.
   GBrain itself.
 - Distribution is still git/npm-from-repo based; no public npm registry package
   is published yet.
+- The Obsidian pack is a manifest and install-plan surface in this release; the
+  referenced upstream skills are not vendored into the public jarvOS repo.
 
 ## v0.2.1 — 2026-05-21
 

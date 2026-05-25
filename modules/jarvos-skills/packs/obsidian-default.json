@@ -1,0 +1,121 @@
+{
+  "name": "obsidian-default",
+  "version": "0.3.0",
+  "title": "Obsidian Default Experience Pack",
+  "description": "Default jarvOS profile for making a Markdown vault feel native in Obsidian without making Obsidian a hard foundation.",
+  "release": {
+    "targetVersion": "v0.3.0",
+    "paperclipIssue": "SUP-2056",
+    "releaseParentIssue": "SUP-1957"
+  },
+  "source": {
+    "repo": "https://github.com/kepano/obsidian-skills",
+    "commit": "553ef99",
+    "license": "MIT",
+    "scannedAt": "2026-05-24",
+    "importMode": "manifest-reference"
+  },
+  "boundary": {
+    "defaultSurface": "Obsidian",
+    "foundationRequired": false,
+    "contentContractOwner": "@jarvos/secondbrain",
+    "principle": "Obsidian is the default magical front door for Markdown content; jarvOS remains Markdown-first and adapter-backed.",
+    "taskAuthority": "Paperclip remains the live project/status system. Bases and Canvas may summarize work, but never own status."
+  },
+  "skills": [
+    {
+      "name": "obsidian-markdown",
+      "sourcePath": "skills/obsidian-markdown/SKILL.md",
+      "default": true,
+      "type": "syntax",
+      "role": "Write Obsidian-flavored Markdown with wikilinks, properties, embeds, and callouts.",
+      "requires": [],
+      "install": {
+        "kind": "copy-skill",
+        "target": "skills/obsidian-markdown"
+      },
+      "guardrails": [
+        "Keep notes portable Markdown first; use Obsidian syntax only when it improves the vault experience."
+      ]
+    },
+    {
+      "name": "obsidian-cli",
+      "sourcePath": "skills/obsidian-cli/SKILL.md",
+      "default": true,
+      "type": "tool-adapter",
+      "role": "Interact with a running Obsidian app through the obsidian CLI when available.",
+      "requires": ["obsidian"],
+      "install": {
+        "kind": "copy-skill",
+        "target": "skills/obsidian-cli"
+      },
+      "guardrails": [
+        "Detect the CLI before use and fall back to Markdown file operations when unavailable.",
+        "Obsidian must be open for CLI-backed operations."
+      ]
+    },
+    {
+      "name": "defuddle",
+      "sourcePath": "skills/defuddle/SKILL.md",
+      "default": true,
+      "type": "tool-adapter",
+      "role": "Extract clean Markdown from web pages before turning source material into vault notes.",
+      "requires": ["defuddle"],
+      "install": {
+        "kind": "npm-global",
+        "command": "npm install -g defuddle"
+      },
+      "guardrails": [
+        "Use for standard web pages, not direct Markdown URLs."
+      ]
+    },
+    {
+      "name": "json-canvas",
+      "sourcePath": "skills/json-canvas/SKILL.md",
+      "default": true,
+      "type": "visual-artifact",
+      "role": "Create and edit Obsidian Canvas files for maps, diagrams, and visual knowledge layouts.",
+      "requires": [],
+      "install": {
+        "kind": "copy-skill",
+        "target": "skills/json-canvas"
+      },
+      "guardrails": [
+        "Canvas is an artifact and exploration surface, not the live system of record for tasks or blockers.",
+        "Validate JSON and edge references before writing .canvas files."
+      ]
+    },
+    {
+      "name": "obsidian-bases",
+      "sourcePath": "skills/obsidian-bases/SKILL.md",
+      "default": true,
+      "type": "view-artifact",
+      "role": "Create Obsidian Bases views over notes for reading, review, and lightweight knowledge dashboards.",
+      "requires": [],
+      "install": {
+        "kind": "copy-skill",
+        "target": "skills/obsidian-bases"
+      },
+      "guardrails": [
+        "Bases are read/review views over notes, not a project-management replacement.",
+        "Do not mirror or mutate Paperclip issue status through Bases."
+      ]
+    }
+  ],
+  "detection": {
+    "commands": [
+      {
+        "name": "obsidian",
+        "purpose": "Enable obsidian-cli workflows against a running Obsidian app.",
+        "requiredFor": ["obsidian-cli"],
+        "installHint": "Install or expose the Obsidian CLI, then keep Obsidian open while using CLI-backed commands."
+      },
+      {
+        "name": "defuddle",
+        "purpose": "Enable clean web-page-to-Markdown extraction.",
+        "requiredFor": ["defuddle"],
+        "installHint": "npm install -g defuddle"
+      }
+    ]
+  }
+}
