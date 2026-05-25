@@ -106,14 +106,39 @@ function assertPackManifest(pack) {
     }
   }
 
+  if (!pack.source || typeof pack.source !== 'object' || Array.isArray(pack.source)) {
+    throw new Error(`jarvOS skill pack ${pack.name} must declare a source object`);
+  }
+  for (const key of ['repo', 'commit']) {
+    if (typeof pack.source[key] !== 'string' || pack.source[key].trim() === '') {
+      throw new Error(`jarvOS skill pack ${pack.name} source missing ${key}`);
+    }
+  }
+
+  if (!pack.detection || typeof pack.detection !== 'object' || Array.isArray(pack.detection)) {
+    throw new Error(`jarvOS skill pack ${pack.name} must declare a detection object`);
+  }
+  if (!Array.isArray(pack.detection.commands)) {
+    throw new Error(`jarvOS skill pack ${pack.name} must declare detection.commands`);
+  }
+
   if (!Array.isArray(pack.skills) || pack.skills.length === 0) {
     throw new Error(`jarvOS skill pack ${pack.name} must declare at least one skill`);
   }
 
   const seen = new Set();
+  const requiredCommands = new Set();
   for (const skill of pack.skills) {
-    for (const key of ['name', 'sourcePath', 'role', 'install']) {
-      if (!skill[key]) throw new Error(`${pack.name} skill missing ${key}`);
+    for (const key of ['name', 'sourcePath', 'role']) {
+      if (typeof skill[key] !== 'string' || skill[key].trim() === '') {
+        throw new Error(`${pack.name} skill missing ${key}`);
+      }
+    }
+    if (!skill.install || typeof skill.install !== 'object' || Array.isArray(skill.install)) {
+      throw new Error(`${pack.name}/${skill.name} must declare install metadata`);
+    }
+    if (typeof skill.install.kind !== 'string' || skill.install.kind.trim() === '') {
+      throw new Error(`${pack.name}/${skill.name} install missing kind`);
     }
     if (seen.has(skill.name)) throw new Error(`${pack.name} duplicates skill ${skill.name}`);
     seen.add(skill.name);
@@ -122,6 +147,33 @@ function assertPackManifest(pack) {
     }
     if (!Array.isArray(skill.requires)) {
       throw new Error(`${pack.name}/${skill.name} must declare requires`);
+    }
+    for (const commandName of skill.requires) {
+      if (typeof commandName !== 'string' || commandName.trim() === '') {
+        throw new Error(`${pack.name}/${skill.name} requires contains an invalid command`);
+      }
+      requiredCommands.add(commandName);
+    }
+  }
+
+  const detectionNames = new Set();
+  for (const command of pack.detection.commands) {
+    for (const key of ['name', 'purpose', 'installHint']) {
+      if (typeof command[key] !== 'string' || command[key].trim() === '') {
+        throw new Error(`${pack.name} detection command missing ${key}`);
+      }
+    }
+    if (detectionNames.has(command.name)) {
+      throw new Error(`${pack.name} duplicates detection command ${command.name}`);
+    }
+    if (!Array.isArray(command.requiredFor)) {
+      throw new Error(`${pack.name}/${command.name} must declare requiredFor`);
+    }
+    detectionNames.add(command.name);
+  }
+  for (const commandName of requiredCommands) {
+    if (!detectionNames.has(commandName)) {
+      throw new Error(`${pack.name} missing detection metadata for required command: ${commandName}`);
     }
   }
 
@@ -136,9 +188,11 @@ function assertPackManifest(pack) {
 }
 
 function commandExists(command) {
-  const result = spawnSync('sh', ['-lc', `command -v ${shellQuote(command)} >/dev/null 2>&1`], {
-    stdio: 'ignore',
-  });
+  const result = process.platform === 'win32'
+    ? spawnSync('where.exe', [command], { stdio: 'ignore' })
+    : spawnSync('sh', ['-lc', `command -v ${shellQuote(command)} >/dev/null 2>&1`], {
+      stdio: 'ignore',
+    });
   return result.status === 0;
 }
 

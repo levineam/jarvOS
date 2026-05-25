@@ -2,9 +2,11 @@
 'use strict';
 
 const assert = require('assert');
+const { spawnSync } = require('child_process');
 const os = require('os');
 const path = require('path');
 const {
+  assertPackManifest,
   buildInstallPlan,
   getManifest,
   getSkill,
@@ -84,6 +86,22 @@ const guardedText = obsidianPack.skills
 assert.match(guardedText, /not a project-management replacement|not the live system of record/i);
 assert.match(guardedText, /Paperclip issue status|tasks or blockers/i);
 
+assert.throws(
+  () => assertPackManifest({ ...obsidianPack, source: { repo: '' } }),
+  /source missing repo/,
+);
+assert.throws(
+  () => assertPackManifest({ ...obsidianPack, detection: { commands: [] } }),
+  /missing detection metadata for required command: obsidian/,
+);
+assert.throws(
+  () => assertPackManifest({
+    ...obsidianPack,
+    detection: { commands: [{ name: 'obsidian', purpose: 'Detect Obsidian CLI' }] },
+  }),
+  /detection command missing installHint/,
+);
+
 const missingToolsPlan = buildInstallPlan({
   pack: obsidianPack,
   commandsPresent: {
@@ -108,5 +126,20 @@ const readyPlan = buildInstallPlan({
 assert.equal(readyPlan.status, 'ready');
 assert.deepEqual(readyPlan.missingCommands, []);
 assert.equal(readyPlan.skills.every((skill) => skill.ready), true);
+
+const cliPath = path.join(__dirname, '..', 'scripts', 'install-skills.js');
+const invalidPackResult = spawnSync(process.execPath, [
+  cliPath,
+  'doctor',
+  '--pack',
+  '../bad',
+  '--json',
+], { encoding: 'utf8' });
+assert.notEqual(invalidPackResult.status, 0, 'invalid pack doctor should fail');
+assert.doesNotMatch(invalidPackResult.stderr, /at .*install-skills\.js/, 'invalid pack error should not print a stack trace');
+assert.deepEqual(JSON.parse(invalidPackResult.stdout), {
+  ok: false,
+  error: 'Invalid jarvOS skill pack name: ../bad',
+});
 
 console.log('PASS @jarvos/skills bundle');

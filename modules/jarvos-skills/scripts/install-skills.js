@@ -85,6 +85,14 @@ function printPlan(plan, json) {
   }
 }
 
+function printError(error, json) {
+  if (json) {
+    process.stdout.write(`${JSON.stringify({ ok: false, error: error.message }, null, 2)}\n`);
+    return;
+  }
+  console.error(`ERROR ${error.message}`);
+}
+
 function main() {
   let opts;
   try {
@@ -105,10 +113,15 @@ function main() {
   }
 
   if (opts.command === 'doctor' || opts.command === 'install-plan') {
-    const pack = loadPack(opts.packName);
-    const plan = buildInstallPlan({ pack });
-    printPlan(plan, opts.json);
-    return;
+    try {
+      const pack = loadPack(opts.packName);
+      const plan = buildInstallPlan({ pack });
+      printPlan(plan, opts.json);
+      return;
+    } catch (error) {
+      printError(error, opts.json);
+      process.exit(1);
+    }
   }
 
   if (opts.command) {
