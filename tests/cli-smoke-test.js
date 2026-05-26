@@ -38,6 +38,12 @@ try {
   assert.equal(help.status, 0, help.stderr || help.stdout);
   assert.match(help.stdout, /jarvos init/);
   assert.match(help.stdout, /jarvos doctor/);
+  assert.match(help.stdout, /minimal\s+Portable jarvOS starter workspace/);
+
+  const initHelp = run(['init', '--help']);
+  assert.equal(initHelp.status, 0, initHelp.stderr || initHelp.stdout);
+  assert.match(initHelp.stdout, /jarvos init --profile minimal --yes/);
+  assert.match(initHelp.stdout, /Profiles:\n\s+minimal\s+Minimal/);
 
   const doctorHelp = run(['doctor', '--help']);
   assert.equal(doctorHelp.status, 0, doctorHelp.stderr || doctorHelp.stdout);
@@ -50,6 +56,40 @@ try {
   const init = run(['init', '--profile', 'minimal', '--yes'], { env });
   assert.equal(init.status, 0, init.stderr || init.stdout);
   assert.ok(fs.existsSync(path.join(workspace, 'jarvos.config.json')));
+
+  const packageJson = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
+  assert.equal(packageJson.bin.jarvos, 'scripts/jarvos.js');
+  assert.equal(packageJson.bin['jarvos-bootstrap'], 'scripts/jarvos.js');
+  assert.equal(packageJson.bin['jarvos-init'], 'scripts/jarvos.js');
+
+  const legacyTmp = path.join(tmp, 'legacy-bin');
+  fs.mkdirSync(legacyTmp);
+  const legacyAlias = path.join(legacyTmp, 'jarvos-bootstrap');
+  fs.symlinkSync(CLI, legacyAlias);
+  const legacyWorkspace = path.join(tmp, 'legacy-workspace');
+  const legacyVault = path.join(tmp, 'legacy-vault');
+  const legacyEnv = {
+    ...env,
+    JARVOS_VAULT_PATH: legacyVault,
+    JARVOS_WORKSPACE_PATH: legacyWorkspace,
+  };
+  const legacyHelp = spawnSync(legacyAlias, ['--help'], {
+    cwd: ROOT,
+    encoding: 'utf8',
+    maxBuffer: 10 * 1024 * 1024,
+  });
+  assert.equal(legacyHelp.status, 0, legacyHelp.stderr || legacyHelp.stdout);
+  assert.match(legacyHelp.stdout, /jarvos init/);
+  assert.match(legacyHelp.stdout, /Profiles:\n\s+minimal\s+Minimal/);
+
+  const legacyInit = spawnSync(legacyAlias, ['--profile', 'minimal', '--yes'], {
+    cwd: ROOT,
+    env: legacyEnv,
+    encoding: 'utf8',
+    maxBuffer: 10 * 1024 * 1024,
+  });
+  assert.equal(legacyInit.status, 0, legacyInit.stderr || legacyInit.stdout);
+  assert.ok(fs.existsSync(path.join(legacyWorkspace, 'jarvos.config.json')));
 
   const doctor = run(['doctor', '--profile', 'minimal', '--workspace', workspace], { env });
   assert.equal(doctor.status, 0, doctor.stderr || doctor.stdout);
