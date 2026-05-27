@@ -2,12 +2,17 @@
 'use strict';
 
 const assert = require('assert');
+const { spawnSync } = require('child_process');
 const os = require('os');
 const path = require('path');
 const {
+  assertPackManifest,
+  buildInstallPlan,
   getManifest,
   getSkill,
+  listPacks,
   listSkills,
+  loadPack,
   validateBundle,
   installSkills,
 } = require('../src');
@@ -56,5 +61,85 @@ assert.throws(
 );
 assert.equal(fs.existsSync(firstTarget), false, 'workflow-execution must not be copied when a later target already exists');
 assert.equal(fs.readFileSync(existingTarget, 'utf8'), 'preexisting content', 'preexisting skill content must be untouched');
+
+const obsidianPack = loadPack('obsidian-default');
+assert.equal(obsidianPack.name, 'obsidian-default');
+assert.equal(obsidianPack.source.repo, 'https://github.com/kepano/obsidian-skills');
+assert.equal(obsidianPack.source.commit, '553ef99');
+assert.equal(obsidianPack.boundary.foundationRequired, false);
+assert.equal(obsidianPack.boundary.contentContractOwner, '@jarvos/secondbrain');
+assert.equal(obsidianPack.release.targetVersion, 'v0.3.0');
+assert.equal(obsidianPack.release.releaseParentIssue, 'SUP-1957');
+assert.deepEqual(obsidianPack.skills.map((skill) => skill.name).sort(), [
+  'defuddle',
+  'json-canvas',
+  'obsidian-bases',
+  'obsidian-cli',
+  'obsidian-markdown',
+]);
+assert.ok(listPacks().includes('obsidian-default'), 'obsidian-default pack should be discoverable');
+
+const guardedText = obsidianPack.skills
+  .filter((skill) => skill.name === 'obsidian-bases' || skill.name === 'json-canvas')
+  .flatMap((skill) => skill.guardrails)
+  .join(' ');
+assert.match(guardedText, /not a project-management replacement|not the live system of record/i);
+assert.match(guardedText, /Paperclip issue status|tasks or blockers/i);
+
+assert.throws(
+  () => assertPackManifest({ ...obsidianPack, source: { repo: '' } }),
+  /source missing repo/,
+);
+assert.throws(
+  () => assertPackManifest({ ...obsidianPack, detection: { commands: [] } }),
+  /missing detection metadata for required command: obsidian/,
+);
+assert.throws(
+  () => assertPackManifest({
+    ...obsidianPack,
+    detection: { commands: [{ name: 'obsidian', purpose: 'Detect Obsidian CLI' }] },
+  }),
+  /detection command missing installHint/,
+);
+
+const missingToolsPlan = buildInstallPlan({
+  pack: obsidianPack,
+  commandsPresent: {
+    obsidian: false,
+    defuddle: false,
+  },
+});
+assert.equal(missingToolsPlan.status, 'needs-optional-tools');
+assert.deepEqual(missingToolsPlan.missingCommands, ['defuddle', 'obsidian']);
+assert.equal(missingToolsPlan.skills.find((skill) => skill.name === 'obsidian-markdown').ready, true);
+assert.equal(missingToolsPlan.skills.find((skill) => skill.name === 'obsidian-cli').ready, false);
+assert.match(missingToolsPlan.setup.join(' '), /JARVOS_NOTES_DIR/);
+assert.match(missingToolsPlan.setup.join(' '), /Paperclip as the live task authority/);
+
+const readyPlan = buildInstallPlan({
+  pack: obsidianPack,
+  commandsPresent: {
+    obsidian: true,
+    defuddle: true,
+  },
+});
+assert.equal(readyPlan.status, 'ready');
+assert.deepEqual(readyPlan.missingCommands, []);
+assert.equal(readyPlan.skills.every((skill) => skill.ready), true);
+
+const cliPath = path.join(__dirname, '..', 'scripts', 'install-skills.js');
+const invalidPackResult = spawnSync(process.execPath, [
+  cliPath,
+  'doctor',
+  '--pack',
+  '../bad',
+  '--json',
+], { encoding: 'utf8' });
+assert.notEqual(invalidPackResult.status, 0, 'invalid pack doctor should fail');
+assert.doesNotMatch(invalidPackResult.stderr, /at .*install-skills\.js/, 'invalid pack error should not print a stack trace');
+assert.deepEqual(JSON.parse(invalidPackResult.stdout), {
+  ok: false,
+  error: 'Invalid jarvOS skill pack name: ../bad',
+});
 
 console.log('PASS @jarvos/skills bundle');

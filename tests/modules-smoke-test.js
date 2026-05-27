@@ -335,6 +335,32 @@ try {
   } else {
     bad('getSkill workflow-execution', new Error(JSON.stringify(workflow && workflow.name)));
   }
+
+  const obsidianPack = skills.loadPack('obsidian-default');
+  const obsidianPlan = skills.buildInstallPlan({
+    pack: obsidianPack,
+    commandsPresent: {
+      obsidian: false,
+      defuddle: false,
+    },
+  });
+  if (
+    skills.listPacks().includes('obsidian-default')
+    && obsidianPack.boundary.foundationRequired === false
+    && obsidianPack.boundary.contentContractOwner === '@jarvos/secondbrain'
+    && obsidianPlan.status === 'needs-optional-tools'
+    && obsidianPlan.missingCommands.includes('obsidian')
+    && obsidianPlan.missingCommands.includes('defuddle')
+  ) {
+    ok('obsidian-default pack is packaged with optional-tool doctor plan');
+  } else {
+    bad('obsidian-default pack', new Error(JSON.stringify({
+      packs: skills.listPacks(),
+      boundary: obsidianPack.boundary,
+      status: obsidianPlan.status,
+      missingCommands: obsidianPlan.missingCommands,
+    })));
+  }
 } catch (e) {
   bad('@jarvos/skills module load', e);
 }

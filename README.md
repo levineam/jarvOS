@@ -126,8 +126,9 @@ The runnable pieces live in `modules/`:
   work, recall bundles, startup briefs, and verified note creation to agent
   runtimes through a local MCP adapter.
 - **[`@jarvos/skills`](./modules/jarvos-skills/)** packages default operating
-  skills: workflow execution, rule creation, context management, and cron
-  hygiene.
+  skills plus the `obsidian-default` experience pack: workflow execution, rule
+  creation, context management, cron hygiene, Obsidian Markdown, Obsidian CLI,
+  Defuddle, JSON Canvas, and Obsidian Bases.
 
 Each module has its own README and can be used independently.
 
