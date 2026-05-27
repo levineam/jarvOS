@@ -1,53 +1,122 @@
 # jarvOS
 
-**An open operating layer for your personal AI assistant.**
+**Personal artificial Superintelligence, without the power-user tax.**
 
-jarvOS turns AI agents like OpenClaw, Claude, Codex, and Hermes into your own
-personal Jarvis. It packages and connects a complete set of free/open-source,
-portable, local-first tools that unlock the useful capabilities of large
-language models: memory, notes, projects, structured knowledge, daily alignment,
-and context that follows you across agents.
+Artificial intelligence and OpenClaw power users are already building personal
+artificial Superintelligence for themselves. They combine OpenClaw, Obsidian,
+lossless-claw, GBrain, Paperclip, memory-wiki, custom skills, local search,
+daily journals, structured knowledge, scheduled checks, and carefully tuned
+workflows until their assistant remembers them, tracks their work, builds a
+useful knowledge base, and gets better over time.
 
-Talk to your agent like normal. jarvOS routes the conversation into the right
-systems automatically:
+That stack is powerful. It is also too much work for most people to assemble by
+hand.
 
-- notes and drafts into Obsidian-compatible markdown
-- active work into Paperclip
-- durable facts, lessons, decisions, and preferences into memory
-- people, projects, concepts, meetings, and sources into structured knowledge
-- daily activity into your journal
-- relevant context back into whichever agent you are using next
+jarvOS bundles those tools and patterns into one local-first operating layer. It
+turns OpenClaw from a powerful agent runtime into a personal system that
+remembers, organizes, learns, and helps you move through your work with
+continuity.
 
-The result is a shared brain for you and your agents: one context spine that can
-support OpenClaw, Codex, Claude, Hermes, and whatever comes next.
+It also gives you a compounding, self-improving knowledge base that can support
+more than one assistant. The same context spine can be used by OpenClaw, Codex,
+Claude, Hermes Agent, and the next generation of agent runtimes still to come.
 
 ## What jarvOS Does
 
-Most AI assistants are powerful in a single chat and forgetful across real life.
-jarvOS gives them an operating layer:
+jarvOS connects the pieces that usually live apart:
 
-- **Daily journal as the control room.** Your journal shows what your agents did,
-  what changed, what notes were created or touched, and what still needs
-  attention. If you use Apple Reminders, reminders can be pulled into the daily
-  journal automatically.
-- **Notes as durable knowledge.** Human-readable content stays in your vault, not
-  inside a proprietary assistant database. The same notes remain useful to you,
-  Obsidian, search tools, and agents.
-- **Paperclip as the work tracker.** Concrete work becomes tracked issues,
-  assignments, status, blockers, and verification evidence instead of scattered
-  chat promises.
-- **Structured knowledge for recall.** Curated people, companies, projects,
-  concepts, meetings, and source pages become organized context an agent can
-  retrieve before it acts.
-- **Memory as the durable agent state.** Stable facts, decisions, preferences,
-  and lessons are promoted into compact memory files that can be loaded by
-  different agents.
-- **Runtime adapters instead of lock-in.** jarvOS gives OpenClaw, Hermes, Codex,
-  Claude Desktop, and future agent runtimes shared context through small
-  adapters.
+- conversations
+- notes and journals
+- long-term memory
+- structured knowledge
+- active projects and tasks
+- startup context for future sessions
 
-jarvOS is not another chat app. It is the connective tissue between your agent,
-your notes, your tasks, your knowledge, and your daily operating rhythm.
+You talk to your assistant like normal. jarvOS routes useful information into
+the right place, then brings the right context back when your assistant needs
+it.
+
+The result is not just a better chat. It is a personal operating system for your
+artificial intelligence assistant.
+
+## The Power-User Stack, Bundled
+
+jarvOS is built around excellent tools that already exist.
+
+**OpenClaw** is the local agent runtime. It handles tools, sessions, messaging,
+scheduled work, model routing, and native knowledge features like memory-wiki.
+jarvOS uses OpenClaw as the engine and adds the operating layer around it.
+
+**lossless-claw** gives OpenClaw stronger continuity across long conversations
+and context compaction. It helps your assistant keep track of what happened
+instead of losing the thread when a session gets large.
+
+**Obsidian-compatible Markdown** gives your knowledge a home you own. Notes,
+journals, drafts, references, and decisions stay in plain files you can open,
+edit, search, sync, and back up.
+
+**GBrain** turns your knowledge into structured recall. People, projects,
+companies, concepts, meetings, and source material can become a queryable
+knowledge base your assistant can use before it acts.
+
+**Paperclip** gives real work a real system. Agent tasks can become tracked
+issues with owners, blockers, status, and verification evidence instead of
+disappearing into chat.
+
+**jarvOS skills and adapters** are the webbing. They connect the tools, install
+sane defaults, route context, define workflows, and make the system feel like
+one assistant instead of a pile of software.
+
+## A Compounding Knowledge Base for Every Agent You Use
+
+Most assistant memory is trapped inside one product. jarvOS takes a different
+path: your knowledge base lives in local, readable files and structured indexes
+that multiple agents can use.
+
+OpenClaw can use it for daily operation. Codex can use it for coding context.
+Claude can use it for writing, planning, and analysis. Hermes Agent can use it
+as part of a broader local assistant setup. Future runtimes can plug into the
+same context spine through adapters.
+
+Every useful capture makes the system better. Notes become searchable
+knowledge. Repeated preferences become memory. Important entities become
+structured recall. Completed work becomes durable context.
+
+The longer you use jarvOS, the more leverage your assistants have.
+
+## Your Knowledge Base Builds Itself
+
+This is the part that matters most: every useful interaction can make your
+system better.
+
+When you share an idea, jarvOS can put it in today's journal.
+
+When something should last, jarvOS can turn it into a Markdown note.
+
+When a fact, preference, decision, or lesson will matter later, jarvOS can
+promote it into durable memory.
+
+When a note describes a person, project, company, meeting, source, or concept,
+jarvOS can prepare it for structured recall through GBrain.
+
+When something becomes real work, jarvOS can move it into Paperclip.
+
+Over time, your assistant is not just accumulating chat logs. It is helping
+construct your personal knowledge base from the work you are already doing.
+
+## The First Magical Moment
+
+After setup, say something like:
+
+> I have an idea for a project: build a tiny app that helps me plan better
+> mornings. Capture it and turn it into a real note.
+
+jarvOS should add the idea to today's journal, create a clean Markdown note,
+link that note from the journal, preserve the useful context, and offer the next
+concrete step.
+
+That is the difference. A normal assistant replies. A jarvOS-powered assistant
+starts maintaining the operating system around you.
 
 ## How It Works
 
@@ -57,10 +126,9 @@ jarvOS is organized around a simple loop:
    project.
 2. **Route.** jarvOS decides where that information belongs: journal, note,
    memory, Paperclip, ontology, or structured knowledge.
-3. **Promote.** Important information is turned into durable, reusable context
-   instead of being stranded in chat history.
-4. **Inject.** The next agent you use gets the critical context it needs before
-   acting.
+3. **Promote.** Important information becomes durable context instead of being
+   stranded in chat history.
+4. **Inject.** The next agent gets the critical context it needs before acting.
 5. **Audit.** The daily journal and health checks show what changed and what
    still needs attention.
 
@@ -76,7 +144,7 @@ jarvOS/
 │   ├── jarvos-secondbrain/   # Journal, notes, capture routing, Obsidian adapter
 │   ├── jarvos-memory/        # Durable memory contract and audit tooling
 │   ├── jarvos-ontology/      # Beliefs, goals, projects, predictions, worldview
-│   ├── jarvos-gbrain/        # Optional structured-knowledge adapter
+│   ├── jarvos-gbrain/        # Structured-knowledge adapter
 │   ├── jarvos-agent-context/ # Runtime-facing recall/action MCP adapter
 │   └── jarvos-skills/        # Default operating-system skill bundle
 ├── templates/         # Blank USER, MEMORY, ONTOLOGY, TOOLS, BOOTSTRAP, HEARTBEAT
@@ -86,7 +154,7 @@ jarvOS/
 └── scripts/           # Smoke tests and release checks
 ```
 
-Everything jarvOS-owned is plain markdown plus a small amount of generic Node.js
+Everything jarvOS-owned is plain Markdown plus a small amount of generic Node.js
 code. There is no hosted service, no required database, and no proprietary
 knowledge format.
 
@@ -99,14 +167,15 @@ jarvOS is a set of layers, not a monolith:
 | Content | `@jarvos/secondbrain` | Journal entries, notes, raw capture |
 | Recall | `@jarvos/memory` | Facts, preferences, lessons, decisions |
 | Worldview | `@jarvos/ontology` | Beliefs, predictions, goals, projects |
-| Structured knowledge | local knowledge tools | People, companies, projects, concepts, meetings, sources |
+| Structured knowledge | `@jarvos/gbrain` and local knowledge tools | People, companies, projects, concepts, meetings, sources |
+| Runtime context | `@jarvos/agent-context` | Current work, recall bundles, startup briefs, note creation |
 | Behavior | `core/` | Identity, tone, rules, governance |
 | Execution | Paperclip | Issues, tasks, status, blockers, verification |
 | Runtime | OpenClaw, Hermes, Codex, Claude, etc. | Tools, messaging, sessions, model calls |
 
 Each layer has one job. Notes do not become project boards. Project tasks do not
-become memory. Private beliefs do not leak into public templates. That discipline
-is what lets jarvOS stay portable.
+become memory. Private beliefs do not leak into public templates. That
+discipline is what lets jarvOS stay portable.
 
 ## Modules
 
@@ -119,9 +188,9 @@ The runnable pieces live in `modules/`:
   memory is represented, promoted, and audited.
 - **[`@jarvos/ontology`](./modules/jarvos-ontology/)** models goals, beliefs,
   predictions, projects, and operating context.
-- **[`@jarvos/gbrain`](./modules/jarvos-gbrain/)** is the included structured
-  knowledge adapter. It prepares curated vault content for a local knowledge
-  base and exposes sync, recall, health-check, and retrieval-eval workflows.
+- **[`@jarvos/gbrain`](./modules/jarvos-gbrain/)** prepares curated vault content
+  for a local knowledge base and exposes sync, recall, health-check, and
+  retrieval-eval workflows.
 - **[`@jarvos/agent-context`](./modules/jarvos-agent-context/)** exposes current
   work, recall bundles, startup briefs, and verified note creation to agent
   runtimes through a local MCP adapter.
@@ -136,18 +205,19 @@ Each module has its own README and can be used independently.
 jarvOS deliberately separates portable behavior from runtime-specific glue.
 
 - **OpenClaw** provides scheduling, tools, messaging, workspace context loading,
-  cron jobs, and workflow gates. jarvOS supplies the behavior, memory, project,
-  note, and recall patterns that OpenClaw runs.
+  cron jobs, workflow gates, and native knowledge surfaces like memory-wiki.
+  jarvOS supplies the behavior, memory, project, note, and recall patterns that
+  OpenClaw runs.
 - **Hermes Agent** provides its own model configuration, tool calling, learning,
   session search, and user modeling. jarvOS adds the portable behavior layer and
   avoids duplicating Hermes-native systems.
-- **Codex CLI and Claude Desktop** can use jarvOS context through local adapters
-  and manual hydration flows.
+- **Codex and Claude** can use jarvOS context through local adapters and
+  hydration flows.
 
-jarvOS is not the runtime. It is the user-owned context and governance layer
-that runtimes hydrate from and write back to. The same core files can move
-across runtimes because the source of truth is markdown and local tooling, not a
-single vendor's memory system.
+jarvOS is not the runtime. It is the user-owned context and governance layer that
+runtimes hydrate from and write back to. The same core files and knowledge base
+can move across runtimes because the source of truth is Markdown and local
+tooling, not a single vendor's memory system.
 
 For the product-category boundary, see
 [`docs/architecture/product-category-and-boundaries.md`](./docs/architecture/product-category-and-boundaries.md).
@@ -165,10 +235,12 @@ npm test
 Expected result:
 
 ```text
-PASS — All checks passed. The repo is ready to use.
+PASS - All checks passed. The repo is ready to use.
 ```
 
 ### OpenClaw
+
+OpenClaw is the recommended first runtime for the full jarvOS experience.
 
 ```bash
 cp core/AGENTS.md    /path/to/openclaw-workspace/AGENTS.md
@@ -195,7 +267,7 @@ hermes setup
 See [`runtimes/hermes/README.md`](./runtimes/hermes/README.md) for the Hermes
 setup path and the systems jarvOS intentionally does not duplicate.
 
-### Codex CLI
+### Codex
 
 ```bash
 ./runtimes/codex/setup.sh
@@ -234,12 +306,12 @@ is private.**
 
 ## Release Status
 
-`v0.1.0` is the first public preview release.
+`v0.2.0` is the current public preview release. The next release lane is focused
+on making setup, doctor checks, and the first jarvOS experience easier to verify.
 
 Useful release files:
 
 - [`CHANGELOG.md`](./CHANGELOG.md)
-- [`docs/releases/v0.1.0.md`](./docs/releases/v0.1.0.md)
 - [`docs/release-process.md`](./docs/release-process.md)
 - [`PUBLIC_BASELINE.md`](./PUBLIC_BASELINE.md)
 
@@ -251,16 +323,19 @@ npm run release:check
 
 ## Philosophy
 
-- **Generic over specific.** Prefer portable markdown and assistant patterns over
-  setup-specific hacks.
-- **Portable over proprietary.** Your operating layer should outlive any one
-  model, runtime, or chat product.
+- **Bundle the best tools, do not hide them.** jarvOS is strongest when it makes
+  excellent local tools work together.
+- **Local-first over hosted lock-in.** Your operating layer should outlive any
+  one model, runtime, or chat product.
 - **Human-readable first.** Important context should be inspectable in normal
   files, especially notes and journals.
+- **Context compounds.** Every useful capture should make future assistant work
+  better.
 - **Tracked work beats chat promises.** If an agent is doing real work, the work
   should be visible in a project system with status and evidence.
-- **Context is an asset.** The point is not to save everything. The point is to
-  promote the right things into the right layer so future agents can act well.
+- **Power-user workflows should be usable by most people.** The goal is to give
+  more people the personal artificial Superintelligence stack that power users
+  are already building for themselves.
 
 ## Follow Along
 
