@@ -31,8 +31,8 @@
   ],
   "bin": {
     "jarvos": "scripts/jarvos.js",
-    "jarvos-bootstrap": "bootstrap.js",
-    "jarvos-init": "bootstrap.js"
+    "jarvos-bootstrap": "scripts/jarvos.js",
+    "jarvos-init": "scripts/jarvos.js"
   },
   "scripts": {
     "bootstrap": "node bootstrap.js",
