@@ -472,6 +472,291 @@ try {
   bad('@jarvos/runtime-kit module load', e);
 }
 
+// ── @jarvos/agentify (activity log) ─────────────────────────────────────────
+
+console.log('\n→ @jarvos/agentify (activity log)');
+
+try {
+  const agentify = require(path.join(ROOT, 'modules/jarvos-agentify/src/index.js'));
+  const os  = require('os');
+  const fs  = require('fs');
+  const fsp = require('fs').promises;
+
+  // ── Schema: listEventTypes ──────────────────────────────────────────────────
+  const types = agentify.listEventTypes();
+  if (
+    Array.isArray(types)
+    && types.includes('agent.loop.started')
+    && types.includes('plan.proposed')
+    && types.includes('content.published')
+    && types.includes('metric.measured')
+  ) {
+    ok('listEventTypes returns expected taxonomy');
+  } else {
+    bad('listEventTypes', new Error(JSON.stringify(types)));
+  }
+
+  // ── Schema: listEventTypesByGroup ───────────────────────────────────────────
+  const agentTypes = agentify.listEventTypesByGroup('agent');
+  if (agentTypes.includes('agent.loop.started') && agentTypes.includes('agent.loop.completed')) {
+    ok('listEventTypesByGroup returns agent group types');
+  } else {
+    bad('listEventTypesByGroup', new Error(JSON.stringify(agentTypes)));
+  }
+
+  // ── Schema: getEventTypeDef ─────────────────────────────────────────────────
+  const def = agentify.getEventTypeDef('plan.proposed');
+  if (def && def.group === 'plan' && Array.isArray(def.payloadFields)) {
+    ok('getEventTypeDef returns plan.proposed definition');
+  } else {
+    bad('getEventTypeDef', new Error(JSON.stringify(def)));
+  }
+
+  // ── Schema: validateEvent — valid ───────────────────────────────────────────
+  const { valid: v1, errors: e1 } = agentify.validateEvent({
+    tenant_id:   'aaf',
+    type:        'agent.loop.started',
+    occurred_at: '2026-05-29T10:00:00.000Z',
+    source:      'jarvos-agentify',
+    payload:     { loop_id: 'loop-001', trigger: 'cron' },
+  });
+  if (v1 && e1.length === 0) {
+    ok('validateEvent accepts valid event');
+  } else {
+    bad('validateEvent valid', new Error(e1.join('; ')));
+  }
+
+  // ── Schema: validateEvent — missing tenant_id ───────────────────────────────
+  const { valid: v2, errors: e2 } = agentify.validateEvent({
+    type: 'agent.loop.started',
+    occurred_at: '2026-05-29T10:00:00.000Z',
+    source: 'test',
+  });
+  if (!v2 && e2.some((e) => e.includes('tenant_id'))) {
+    ok('validateEvent rejects missing tenant_id');
+  } else {
+    bad('validateEvent missing tenant_id', new Error('Expected error'));
+  }
+
+  // ── Schema: validateEvent — unknown type ────────────────────────────────────
+  const { valid: v3, errors: e3 } = agentify.validateEvent({
+    tenant_id:   'aaf',
+    type:        'not.a.type',
+    occurred_at: '2026-05-29T10:00:00.000Z',
+    source:      'test',
+  });
+  if (!v3 && e3.some((e) => e.includes('Unknown event type'))) {
+    ok('validateEvent rejects unknown event type');
+  } else {
+    bad('validateEvent unknown type', new Error('Expected error'));
+  }
+
+  // ── Schema: validateEvent — strict scalar fields ───────────────────────────
+  const { valid: v4, errors: e4 } = agentify.validateEvent({
+    tenant_id: 'aaf',
+    type: 'system.checkpoint',
+    occurred_at: Date.now(),
+    source: 123,
+    payload: { status: 'ok' },
+  });
+  if (!v4 && e4.some((e) => e.includes('occurred_at')) && e4.some((e) => e.includes('source'))) {
+    ok('validateEvent rejects non-string occurred_at and source');
+  } else {
+    bad('validateEvent strict scalar fields', new Error(JSON.stringify(e4)));
+  }
+
+  // ── ActivityLog: write + read + watermark ───────────────────────────────────
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-agentify-test-'));
+  if (agentify.store.resolveStoreDir(tmpDir) === tmpDir) {
+    ok('resolveStoreDir() preserves caller-provided storeDir');
+  } else {
+    bad('resolveStoreDir override', new Error(agentify.store.resolveStoreDir(tmpDir)));
+  }
+
+  const log = agentify.createActivityLog({ storeDir: tmpDir });
+
+  const { event: e, error: writeErr } = log.write('aaf', 'agent.loop.started', {
+    loop_id: 'loop-001',
+    trigger: 'cron',
+  }, { source: 'smoke-test' });
+
+  if (!writeErr && e && e.tenant_id === 'aaf' && e.seq === 1 && e.id && e.schema) {
+    ok('write() appends event with tenant_id, seq=1, id, schema');
+  } else {
+    bad('write() first event', new Error(writeErr || JSON.stringify(e)));
+  }
+
+  // second write — different type, same tenant
+  const { event: e2w, error: w2err } = log.write('aaf', 'plan.proposed', {
+    plan_id: 'plan-001',
+    summary: 'Review last 24h and propose next actions.',
+    items: ['Review activity log'],
+    proposed_by: 'smoke-test',
+  }, { source: 'smoke-test' });
+
+  if (!w2err && e2w && e2w.seq === 2 && e2w.type === 'plan.proposed') {
+    ok('write() second event gets seq=2');
+  } else {
+    bad('write() second event', new Error(w2err || JSON.stringify(e2w)));
+  }
+
+  // watermark
+  const { seq: wm, error: wmErr } = log.watermark('aaf');
+  if (!wmErr && wm === 2) {
+    ok('watermark() returns seq=2 after two writes');
+  } else {
+    bad('watermark()', new Error(wmErr || `seq=${wm}`));
+  }
+
+  // corrupt meta should not block reads/writes; watermark falls back to JSONL
+  fs.writeFileSync(path.join(tmpDir, 'aaf', 'meta.json'), '{not json', 'utf8');
+  const { seq: recoveredSeq, error: recoveredErr } = log.watermark('aaf');
+  if (!recoveredErr && recoveredSeq === 2) {
+    ok('watermark() recovers from corrupt meta.json via JSONL scan');
+  } else {
+    bad('watermark() corrupt meta fallback', new Error(recoveredErr || `seq=${recoveredSeq}`));
+  }
+
+  // read all (after=0)
+  const { events: all, cursor: cur1 } = log.read('aaf', { after: 0 });
+  if (all.length === 2 && cur1 === 2 && all[0].type === 'agent.loop.started') {
+    ok('read() returns all events with cursor=2');
+  } else {
+    bad('read() all events', new Error(JSON.stringify({ length: all.length, cur1 })));
+  }
+
+  // read with watermark (after=1 returns only the second event)
+  const { events: incremental, cursor: cur2 } = log.read('aaf', { after: 1 });
+  if (incremental.length === 1 && incremental[0].seq === 2 && cur2 === 2) {
+    ok('read() incremental after watermark=1 returns one event');
+  } else {
+    bad('read() incremental', new Error(JSON.stringify({ length: incremental.length, cur2 })));
+  }
+
+  // read with type filter
+  const { events: filtered } = log.read('aaf', { after: 0, types: ['plan.proposed'] });
+  if (filtered.length === 1 && filtered[0].type === 'plan.proposed') {
+    ok('read() type filter returns only matching events');
+  } else {
+    bad('read() type filter', new Error(JSON.stringify(filtered)));
+  }
+
+  // read with wildcard type filter
+  const { events: wildcardFiltered } = log.read('aaf', { after: 0, types: ['agent.*'] });
+  if (wildcardFiltered.length >= 1 && wildcardFiltered.every((ev) => ev.type.startsWith('agent.'))) {
+    ok('read() wildcard type filter supports group matching');
+  } else {
+    bad('read() wildcard type filter', new Error(JSON.stringify(wildcardFiltered)));
+  }
+
+  // read from empty / non-existent tenant
+  const { events: none, error: noneErr } = log.read('no-such-tenant', { after: 0 });
+  if (!noneErr && none.length === 0) {
+    ok('read() on non-existent tenant returns empty array without error');
+  } else {
+    bad('read() non-existent tenant', new Error(noneErr || `length=${none.length}`));
+  }
+
+  // multi-tenant isolation
+  log.write('jarvos', 'system.checkpoint', { status: 'ok', message: 'smoke' }, { source: 'smoke-test' });
+  const { seq: jarvosSeq } = log.watermark('jarvos');
+  const { seq: aafSeq }    = log.watermark('aaf');
+  if (jarvosSeq === 1 && aafSeq === 2) {
+    ok('multi-tenant isolation: separate watermarks per tenant');
+  } else {
+    bad('multi-tenant isolation', new Error(`jarvosSeq=${jarvosSeq} aafSeq=${aafSeq}`));
+  }
+
+  // ── ActivityLog: subscription (manual poll) ─────────────────────────────────
+  const received = [];
+  const sub = log.subscribe('aaf', (events) => received.push(...events), {
+    pollIntervalMs: 0,  // manual-poll mode for testing
+    after: 2,
+  });
+
+  // write a third event
+  log.write('aaf', 'agent.loop.completed', {
+    loop_id: 'loop-001',
+    duration_ms: 1200,
+    outcome: 'ok',
+  }, { source: 'smoke-test' });
+
+  // manually poll
+  sub._poll();
+  sub.stop();
+
+  if (received.length === 1 && received[0].type === 'agent.loop.completed') {
+    ok('subscribe() delivers new events after manual poll');
+  } else {
+    bad('subscribe() manual poll', new Error(JSON.stringify(received)));
+  }
+
+  // write validation: unknown type is rejected
+  const { event: badEv, error: badEvErr } = log.write('aaf', 'not.a.real.type', {});
+  if (badEv === null && badEvErr && badEvErr.includes('validation failed')) {
+    ok('write() rejects unknown event type');
+  } else {
+    bad('write() unknown type rejection', new Error(badEvErr || 'Expected error'));
+  }
+
+  // write validation: missing required payload field is rejected
+  const { event: badPayload, error: badPayloadErr } = log.write('aaf', 'agent.loop.completed', {
+    loop_id: 'loop-002',
+  });
+  if (badPayload === null && badPayloadErr && badPayloadErr.includes('payload field')) {
+    ok('write() rejects events missing required payload fields');
+  } else {
+    bad('write() required payload field validation', new Error(badPayloadErr || JSON.stringify(badPayload)));
+  }
+
+  // tenant IDs are filesystem path segments: traversal must be rejected
+  const { event: traversalEv, error: traversalErr } = log.write('../escape', 'system.checkpoint', { status: 'bad', message: 'bad' });
+  const escapedPath = path.resolve(tmpDir, '..', 'escape', 'activity.jsonl');
+  if (traversalEv === null && traversalErr && traversalErr.includes('tenant_id') && !fs.existsSync(escapedPath)) {
+    ok('write() rejects tenant_id path traversal');
+  } else {
+    bad('write() tenant traversal rejection', new Error(JSON.stringify({ traversalEv, traversalErr, escapedExists: fs.existsSync(escapedPath) })));
+  }
+
+  // failed appends must not advance the persisted watermark
+  const failDir = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-agentify-fail-'));
+  const failStoreDir = path.join(failDir, 'activity-log');
+  const originalAppendFileSync = fs.appendFileSync;
+  fs.appendFileSync = function patchedAppendFileSync(filePath, ...args) {
+    if (String(filePath).endsWith(path.join('fail-append', 'activity.jsonl'))) {
+      throw new Error('simulated append failure');
+    }
+    return originalAppendFileSync.call(this, filePath, ...args);
+  };
+  try {
+    const failed = agentify.store.appendEvent(failStoreDir, 'fail-append', {
+      schema: agentify.SCHEMA_VERSION,
+      id: 'fail-1',
+      tenant_id: 'fail-append',
+      type: 'system.checkpoint',
+      occurred_at: new Date().toISOString(),
+      recorded_at: new Date().toISOString(),
+      source: 'smoke-test',
+      payload: {},
+    });
+    const { seq: failedSeq } = agentify.store.getWatermark(failStoreDir, 'fail-append');
+    if (failed.event === null && failed.error && failedSeq === 0) {
+      ok('appendEvent() failed append leaves watermark unchanged');
+    } else {
+      bad('appendEvent() failed append watermark', new Error(JSON.stringify({ failed, failedSeq })));
+    }
+  } finally {
+    fs.appendFileSync = originalAppendFileSync;
+    fs.rmSync(failDir, { recursive: true, force: true });
+  }
+
+  // cleanup tmp dir
+  fs.rmSync(tmpDir, { recursive: true, force: true });
+
+} catch (e) {
+  bad('@jarvos/agentify module load', e);
+}
+
 // ── Summary ─────────────────────────────────────────────────────────────────
 
 console.log(`\n${pass + fail} checks: ${pass} passed, ${fail} failed.\n`);

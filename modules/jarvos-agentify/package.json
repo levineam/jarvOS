@@ -1,0 +1,22 @@
+{
+  "name": "@jarvos/agentify",
+  "version": "0.5.0",
+  "description": "jarvos-agentify — turns a designated channel into an autonomous agent-loop HQ with activity-log seam, per-tenant config, and content-as-exhaust",
+  "license": "MIT",
+  "main": "src/index.js",
+  "exports": {
+    ".": "./src/index.js",
+    "./activity-log": "./src/lib/activity-log.js",
+    "./activity-log/schema": "./src/lib/activity-log-schema.js",
+    "./activity-log/store": "./src/lib/activity-log-store.js"
+  },
+  "scripts": {
+    "test": "node ../../tests/modules-smoke-test.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/levineam/jarvOS.git"
+  },
+  "engines": { "node": ">=18" },
+  "keywords": ["jarvos", "agentify", "activity-log", "ai-agent", "personal-os"]
+}
