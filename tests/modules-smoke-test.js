@@ -526,6 +526,14 @@ try {
     bad('read() type filter', new Error(JSON.stringify(filtered)));
   }
 
+  // read with wildcard type filter
+  const { events: wildcardFiltered } = log.read('aaf', { after: 0, types: ['agent.*'] });
+  if (wildcardFiltered.length >= 1 && wildcardFiltered.every((ev) => ev.type.startsWith('agent.'))) {
+    ok('read() wildcard type filter supports group matching');
+  } else {
+    bad('read() wildcard type filter', new Error(JSON.stringify(wildcardFiltered)));
+  }
+
   // read from empty / non-existent tenant
   const { events: none, error: noneErr } = log.read('no-such-tenant', { after: 0 });
   if (!noneErr && none.length === 0) {
@@ -574,6 +582,16 @@ try {
     ok('write() rejects unknown event type');
   } else {
     bad('write() unknown type rejection', new Error(badEvErr || 'Expected error'));
+  }
+
+  // write validation: missing required payload field is rejected
+  const { event: badPayload, error: badPayloadErr } = log.write('aaf', 'agent.loop.completed', {
+    loop_id: 'loop-002',
+  });
+  if (badPayload === null && badPayloadErr && badPayloadErr.includes('payload field')) {
+    ok('write() rejects events missing required payload fields');
+  } else {
+    bad('write() required payload field validation', new Error(badPayloadErr || JSON.stringify(badPayload)));
   }
 
   // tenant IDs are filesystem path segments: traversal must be rejected

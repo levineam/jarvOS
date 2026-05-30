@@ -159,7 +159,7 @@ Read events for a tenant, optionally from a watermark.
 const { events, cursor, error } = log.read('aaf', {
   after: 0,              // return events with seq > after (default 0)
   limit: 100,            // max events to return (default 1000)
-  types: ['plan.*'],     // filter to these exact type strings (default all)
+  types: ['plan.*'],     // filter by exact types or wildcard groups like plan.*
 });
 ```
 

@@ -171,8 +171,27 @@ const EVENT_TYPES = {
 const REQUIRED_FIELDS = ['tenant_id', 'type', 'occurred_at', 'source'];
 
 /**
+ * Return whether an event payload has all required fields for its type.
+ * Required fields are informationally useful schema hints, not deep type checks.
+ *
+ * @param {string} type
+ * @param {object} payload
+ * @returns {string[]}
+ */
+function missingPayloadFields(type, payload) {
+  if (!type || !EVENT_TYPES[type]) {
+    return [];
+  }
+
+  const typeDef = EVENT_TYPES[type];
+  const typedPayload = payload && typeof payload === 'object' ? payload : {};
+  return (typeDef.payloadFields || []).filter((field) => !Object.prototype.hasOwnProperty.call(typedPayload, field));
+}
+
+/**
  * Validate a raw event object.
  * @param {object} event
+ * @param {object} [event.payload]
  * @returns {{ valid: boolean, errors: string[] }}
  */
 function validateEvent(event = {}) {
@@ -186,6 +205,13 @@ function validateEvent(event = {}) {
 
   if (event.type && !EVENT_TYPES[event.type]) {
     errors.push(`Unknown event type: "${event.type}". Valid types: ${Object.keys(EVENT_TYPES).join(', ')}`);
+  }
+
+  if (event.type && EVENT_TYPES[event.type]) {
+    const missing = missingPayloadFields(event.type, event.payload);
+    for (const field of missing) {
+      errors.push(`Missing required payload field: ${field}`);
+    }
   }
 
   if (event.occurred_at) {
@@ -234,6 +260,7 @@ module.exports = {
   SCHEMA_VERSION,
   EVENT_TYPES,
   REQUIRED_FIELDS,
+  missingPayloadFields,
   validateEvent,
   getEventTypeDef,
   listEventTypes,

@@ -232,9 +232,25 @@ function appendEvent(storeDir, tenantId, record) {
  * @returns {{ events: object[], cursor: number, error: string|null }}
  */
 function readEvents(storeDir, tenantId, opts = {}) {
-  const after = typeof opts.after === 'number' ? opts.after : 0;
+ const after = typeof opts.after === 'number' ? opts.after : 0;
   const limit  = typeof opts.limit  === 'number' ? opts.limit  : 1000;
-  const types  = Array.isArray(opts.types) && opts.types.length > 0 ? new Set(opts.types) : null;
+  const rawTypes = Array.isArray(opts.types) && opts.types.length > 0 ? opts.types : null;
+  const hasTypeFilters = Array.isArray(rawTypes) && rawTypes.length > 0;
+  const exactTypes = new Set(
+    (hasTypeFilters ? rawTypes.filter((type) => !String(type).endsWith('.*')) : [])
+      .map((type) => String(type))
+  );
+  const prefixFilters = hasTypeFilters
+    ? rawTypes
+      .filter((type) => String(type).endsWith('.*'))
+      .map((type) => String(type).slice(0, -1))
+    : [];
+
+  const matchesTypeFilter = (type) => {
+    if (!hasTypeFilters) return true;
+    if (exactTypes.has(type)) return true;
+    return prefixFilters.some((prefix) => type.startsWith(prefix));
+  };
 
   const { filePath, error: filePathErr } = tenantFilePath(storeDir, tenantId);
   if (filePathErr) return { events: [], cursor: 0, error: filePathErr };
@@ -266,7 +282,7 @@ function readEvents(storeDir, tenantId, opts = {}) {
     }
 
     if (typeof event.seq !== 'number' || event.seq <= after) continue;
-    if (types && !types.has(event.type)) continue;
+    if (!matchesTypeFilter(event.type)) continue;
 
     events.push(event);
     if (event.seq > lastSeq) lastSeq = event.seq;

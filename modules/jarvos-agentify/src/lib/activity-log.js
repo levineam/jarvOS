@@ -68,6 +68,7 @@ class ActivityLog {
       type,
       occurred_at: opts.occurredAt || now,
       source:      opts.source || 'jarvos-agentify',
+      payload,
     };
 
     const { valid, errors } = schema.validateEvent(rawEvent);
@@ -99,6 +100,7 @@ class ActivityLog {
    *
    * @param {string} tenantId
    * @param {{ after?: number, limit?: number, types?: string[] }} [opts]
+   * types supports exact matches or prefix wildcard (e.g. "plan.*")
    * @returns {{ events: object[], cursor: number, error: string|null }}
    */
   read(tenantId, opts = {}) {
