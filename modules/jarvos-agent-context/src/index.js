@@ -18,9 +18,9 @@ const DEFAULT_HYDRATION_STATUSES = ['in_progress', 'in_review'];
 const DEFAULT_CURRENT_WORK_STATUSES = ['in_progress', 'todo', 'blocked'];
 const DEFAULT_SESSION_THREAD_PREFIX = 'JarvOS Session Thread';
 const DEFAULT_SESSION_THREAD_SECTION = DEFAULT_NOTES_SECTION;
-const DEFAULT_SESSION_THREAD_LOCK_RETRIES = 80;
 const DEFAULT_SESSION_THREAD_LOCK_RETRY_DELAY_MS = 25;
 const DEFAULT_SESSION_THREAD_LOCK_STALE_MS = 30000;
+const DEFAULT_SESSION_THREAD_LOCK_TIMEOUT_MS = 30000;
 const ONTOLOGY_FILES = [
   '1-higher-order.md',
   '4-core-self.md',
@@ -273,15 +273,19 @@ function numberOption(value, fallback) {
 }
 
 function acquireLockFile(lockPath, options = {}) {
-  const maxAttempts = Math.max(1, numberOption(options.lockRetries, DEFAULT_SESSION_THREAD_LOCK_RETRIES));
   const retryDelayMs = numberOption(options.lockRetryDelayMs, DEFAULT_SESSION_THREAD_LOCK_RETRY_DELAY_MS);
   const staleMs = numberOption(options.lockStaleMs, DEFAULT_SESSION_THREAD_LOCK_STALE_MS);
+  const timeoutMs = numberOption(
+    options.lockTimeoutMs,
+    numberOption(options.lockRetries, 0) * retryDelayMs || DEFAULT_SESSION_THREAD_LOCK_TIMEOUT_MS,
+  );
+  const deadline = Date.now() + Math.max(1, timeoutMs);
   let fd = null;
   let lastError = null;
 
   fs.mkdirSync(path.dirname(lockPath), { recursive: true });
 
-  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+  while (Date.now() <= deadline) {
     try {
       fd = fs.openSync(lockPath, 'wx');
       fs.writeFileSync(fd, JSON.stringify({
@@ -316,7 +320,7 @@ function acquireLockFile(lockPath, options = {}) {
         }
       }
 
-      if (attempt < maxAttempts) sleepSync(retryDelayMs);
+      sleepSync(Math.min(retryDelayMs, Math.max(1, deadline - Date.now())));
     }
   }
 
@@ -331,8 +335,8 @@ function normalizeThreadKey(input = {}) {
     input.issueIdentifier,
     input.artifact,
     input.project,
-    process.env.JARVOS_SESSION_THREAD_ID,
     process.env.PAPERCLIP_TASK_ID,
+    process.env.JARVOS_SESSION_THREAD_ID,
     'default',
   );
   return raw.replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 120) || 'default';
@@ -697,8 +701,8 @@ async function hydrate(options = {}) {
         ...threadOptions,
         maxChars: Number(options.sessionThreadMaxChars || threadOptions.maxChars || 2200),
       });
-      parts.push('', '# Live Session Thread', '', thread.found ? thread.markdown : 'No live session thread found.');
       if (thread.found) {
+        parts.push('', '# Live Session Thread', '', thread.markdown);
         report.sources.push(thread.notePath);
         report.handles.push(`Session thread: ${thread.notePath}`);
       }

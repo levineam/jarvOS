@@ -166,8 +166,8 @@ test('session thread writes serialize concurrent checkpoints', async () => {
         actor: worker,
         event: 'checkpoint',
         summary: 'summary from ' + worker,
-        lockRetries: 120,
-        lockRetryDelayMs: 10
+        lockTimeoutMs: 30000,
+        lockRetryDelayMs: 25
       });
     `;
 
@@ -194,6 +194,31 @@ test('session thread writes serialize concurrent checkpoints', async () => {
     const read = readSessionThread({ threadId: 'race-thread', maxChars: 12000 });
     for (let index = 0; index < children.length; index += 1) {
       assert.match(read.content, new RegExp(`summary from worker-${index}`));
+    }
+  });
+});
+
+test('session thread defaults prefer current Paperclip task over global host thread', () => {
+  withTempVault(() => {
+    const oldPaperclipTaskId = process.env.PAPERCLIP_TASK_ID;
+    const oldSessionThreadId = process.env.JARVOS_SESSION_THREAD_ID;
+    process.env.PAPERCLIP_TASK_ID = 'SUP-2219';
+    process.env.JARVOS_SESSION_THREAD_ID = 'global-host-thread';
+    try {
+      const write = writeSessionThread({
+        actor: 'Codex',
+        event: 'checkpoint',
+        summary: 'Issue-specific handoff.',
+      });
+      assert.match(write.title, /SUP-2219/);
+      assert.doesNotMatch(write.title, /global-host-thread/);
+      assert.equal(readSessionThread({ threadId: 'SUP-2219' }).found, true);
+      assert.equal(readSessionThread({ threadId: 'global-host-thread' }).found, false);
+    } finally {
+      if (oldPaperclipTaskId === undefined) delete process.env.PAPERCLIP_TASK_ID;
+      else process.env.PAPERCLIP_TASK_ID = oldPaperclipTaskId;
+      if (oldSessionThreadId === undefined) delete process.env.JARVOS_SESSION_THREAD_ID;
+      else process.env.JARVOS_SESSION_THREAD_ID = oldSessionThreadId;
     }
   });
 });
@@ -520,6 +545,7 @@ test('hydrate keeps final output within the configured character budget', async 
 
       assert.ok(result.markdown.length <= 900);
       assert.equal(result.report.finalChars, result.markdown.length);
+      assert.doesNotMatch(result.markdown, /No live session thread found/);
     });
   } finally {
     global.fetch = oldFetch;
