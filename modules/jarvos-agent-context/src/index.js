@@ -16,6 +16,11 @@ const DEFAULT_PAPERCLIP_PROJECT_ID = '3ba24079-15f4-48a5-aef3-24aa742d1177';
 const DEFAULT_HYDRATION_MAX_CHARS = 12000;
 const DEFAULT_HYDRATION_STATUSES = ['in_progress', 'in_review'];
 const DEFAULT_CURRENT_WORK_STATUSES = ['in_progress', 'todo', 'blocked'];
+const DEFAULT_SESSION_THREAD_PREFIX = 'JarvOS Session Thread';
+const DEFAULT_SESSION_THREAD_SECTION = DEFAULT_NOTES_SECTION;
+const DEFAULT_SESSION_THREAD_LOCK_RETRY_DELAY_MS = 25;
+const DEFAULT_SESSION_THREAD_LOCK_STALE_MS = 30000;
+const DEFAULT_SESSION_THREAD_LOCK_TIMEOUT_MS = 30000;
 const ONTOLOGY_FILES = [
   '1-higher-order.md',
   '4-core-self.md',
@@ -256,6 +261,235 @@ function readIfExists(filePath) {
   }
 }
 
+function sleepSync(ms) {
+  const delay = Number(ms || 0);
+  if (!Number.isFinite(delay) || delay <= 0) return;
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, delay);
+}
+
+function numberOption(value, fallback) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
+}
+
+function acquireLockFile(lockPath, options = {}) {
+  const retryDelayMs = numberOption(options.lockRetryDelayMs, DEFAULT_SESSION_THREAD_LOCK_RETRY_DELAY_MS);
+  const staleMs = numberOption(options.lockStaleMs, DEFAULT_SESSION_THREAD_LOCK_STALE_MS);
+  const timeoutMs = numberOption(
+    options.lockTimeoutMs,
+    numberOption(options.lockRetries, 0) * retryDelayMs || DEFAULT_SESSION_THREAD_LOCK_TIMEOUT_MS,
+  );
+  const deadline = Date.now() + Math.max(1, timeoutMs);
+  let fd = null;
+  let lastError = null;
+
+  fs.mkdirSync(path.dirname(lockPath), { recursive: true });
+
+  while (Date.now() <= deadline) {
+    try {
+      fd = fs.openSync(lockPath, 'wx');
+      fs.writeFileSync(fd, JSON.stringify({
+        pid: process.pid,
+        createdAt: new Date().toISOString(),
+      }));
+      return () => {
+        try {
+          if (fd !== null) fs.closeSync(fd);
+        } finally {
+          fd = null;
+          try {
+            fs.unlinkSync(lockPath);
+          } catch (error) {
+            if (error.code !== 'ENOENT') throw error;
+          }
+        }
+      };
+    } catch (error) {
+      lastError = error;
+      if (error.code !== 'EEXIST') throw error;
+
+      if (staleMs > 0) {
+        try {
+          const stat = fs.statSync(lockPath);
+          if (Date.now() - stat.mtimeMs > staleMs) {
+            fs.unlinkSync(lockPath);
+            continue;
+          }
+        } catch (statError) {
+          if (statError.code !== 'ENOENT') throw statError;
+        }
+      }
+
+      sleepSync(Math.min(retryDelayMs, Math.max(1, deadline - Date.now())));
+    }
+  }
+
+  throw new Error(`Timed out acquiring session thread lock: ${lockPath}${lastError ? ` (${lastError.message})` : ''}`);
+}
+
+function normalizeThreadKey(input = {}) {
+  const raw = firstString(
+    input.threadId,
+    input.threadKey,
+    input.sessionId,
+    input.issueIdentifier,
+    input.artifact,
+    input.project,
+    process.env.PAPERCLIP_TASK_ID,
+    process.env.JARVOS_SESSION_THREAD_ID,
+    'default',
+  );
+  return raw.replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 120) || 'default';
+}
+
+function sessionThreadTitle(input = {}) {
+  const explicit = firstString(input.title, input.noteTitle);
+  if (explicit) return sanitizeTitle(explicit);
+  return sanitizeTitle(`${DEFAULT_SESSION_THREAD_PREFIX} - ${normalizeThreadKey(input)}`);
+}
+
+function stripFrontmatter(markdown) {
+  return String(markdown || '').replace(/^---\n[\s\S]*?\n---\n?/, '').trim();
+}
+
+function boundedMarkdown(markdown, maxChars = 4000) {
+  const text = redactObviousSecrets(String(markdown || '').trim());
+  const budget = Number(maxChars || 4000);
+  if (!Number.isFinite(budget) || budget <= 0 || text.length <= budget) return text;
+  return `${text.slice(0, Math.max(0, budget - 80)).trimEnd()}\n\n[session thread trimmed to ${budget} characters]`;
+}
+
+function resolveSessionThread(input = {}) {
+  const noteWriter = loadNoteWriter();
+  const title = sessionThreadTitle(input);
+  const notePath = noteWriter.noteFilePath(title);
+  return {
+    threadKey: normalizeThreadKey(input),
+    title,
+    notePath,
+  };
+}
+
+function formatThreadEntry(input = {}, timestamp = new Date().toISOString()) {
+  const actor = firstString(input.actor, input.host, input.persona, 'agent');
+  const event = firstString(input.event, input.kind, 'checkpoint');
+  const artifact = firstString(input.artifact, input.issueIdentifier, input.path, input.url);
+  const summary = firstString(input.summary, input.content, input.body, input.text);
+  const nextStep = firstString(input.nextStep, input.next);
+  const decision = firstString(input.decision, input.lastDecision);
+  if (!summary && !nextStep && !decision) {
+    throw new Error('session thread write requires summary, nextStep, or decision');
+  }
+
+  const lines = [
+    `## ${timestamp} - ${actor} - ${event}`,
+  ];
+  if (artifact) lines.push('', `Artifact: ${artifact}`);
+  if (decision) lines.push('', 'Decision:', redactObviousSecrets(decision));
+  if (summary) lines.push('', 'Summary:', redactObviousSecrets(summary));
+  if (nextStep) lines.push('', 'Next:', redactObviousSecrets(nextStep));
+  return `${lines.join('\n')}\n`;
+}
+
+function sessionThreadFrontmatter(input = {}, thread) {
+  return {
+    status: 'active',
+    type: 'session-thread',
+    project: firstString(input.project, 'jarvOS'),
+    thread_key: thread.threadKey,
+    artifact: firstString(input.artifact, input.issueIdentifier, input.path, input.url, ''),
+    host: firstString(input.host, ''),
+    updated_by: firstString(input.actor, input.persona, ''),
+    tags: ['jarvos', 'session-thread'].concat(input.project ? [String(input.project)] : []),
+    ...(input.frontmatter && typeof input.frontmatter === 'object' && !Array.isArray(input.frontmatter) ? input.frontmatter : {}),
+  };
+}
+
+function renderSessionThreadRead(result) {
+  if (!result.found) {
+    return [
+      '# jarvOS Session Thread',
+      '',
+      `No session thread found for ${result.title}.`,
+      `Note path: ${result.notePath}`,
+    ].join('\n');
+  }
+  return [
+    '# jarvOS Session Thread',
+    '',
+    `- Thread: [[${result.title}]]`,
+    `- Note: ${result.notePath}`,
+    '',
+    result.content,
+  ].join('\n');
+}
+
+function readSessionThread(input = {}) {
+  const thread = resolveSessionThread(input);
+  const raw = readIfExists(thread.notePath);
+  const content = raw === null ? '' : boundedMarkdown(stripFrontmatter(raw), Number(input.maxChars || 4000));
+  const result = {
+    ok: true,
+    found: raw !== null,
+    ...thread,
+    content,
+  };
+  return {
+    ...result,
+    markdown: renderSessionThreadRead(result),
+  };
+}
+
+function writeSessionThread(input = {}) {
+  const thread = resolveSessionThread(input);
+  const noteWriter = loadNoteWriter();
+  const releaseLock = acquireLockFile(`${thread.notePath}.lock`, input);
+
+  let noteResult;
+  let readBack;
+  try {
+    const existing = readIfExists(thread.notePath);
+    const existingBody = existing ? stripFrontmatter(existing) : '';
+    const timestamp = firstString(input.timestamp) || new Date().toISOString();
+    const entry = formatThreadEntry(input, timestamp);
+    const header = [
+      `# ${thread.title}`,
+      '',
+      'Rolling live working thread for cross-host AI continuity. Hosts should read this note on entry and append checkpoints at task switches, decisions, artifact changes, and pre-compaction flushes.',
+    ].join('\n');
+    const content = existingBody
+      ? `${existingBody.trimEnd()}\n\n${entry}`
+      : `${header}\n\n${entry}`;
+    noteResult = noteWriter.writeNoteFile({
+      title: thread.title,
+      content,
+      frontmatter: sessionThreadFrontmatter(input, thread),
+      section: firstString(input.section, DEFAULT_SESSION_THREAD_SECTION),
+      createJournalIfMissing: input.createJournalIfMissing !== false,
+    });
+    readBack = readSessionThread({ ...input, title: thread.title, maxChars: input.maxChars });
+  } finally {
+    releaseLock();
+  }
+
+  return {
+    ok: true,
+    status: 'written',
+    ...thread,
+    note: noteResult,
+    journal: noteResult.journal,
+    readOnEntry: readBack.markdown,
+    markdown: [
+      '# jarvOS Session Thread Written',
+      '',
+      `- Thread: [[${thread.title}]]`,
+      `- Note: ${noteResult.path}`,
+      `- Journal: ${noteResult.journal?.journalPath || 'not linked'}`,
+      `- Event: ${firstString(input.event, input.kind, 'checkpoint')}`,
+    ].join('\n'),
+  };
+}
+
 function findTodayJournal(jarvosPaths, options = {}) {
   const journalDir = expandTilde(firstString(options.journalDir, jarvosPaths.getJournalDir()));
   const timeZone = firstString(options.timeZone, jarvosPaths.getTimeZone(), 'UTC');
@@ -458,6 +692,23 @@ async function hydrate(options = {}) {
   } else {
     report.omissions.push(`today journal missing: ${journal.path}`);
     parts.push('', '# Today Journal', '', `No journal entry found for ${journal.date}.`);
+  }
+
+  if (options.sessionThread !== false) {
+    try {
+      const threadOptions = typeof options.sessionThread === 'object' ? options.sessionThread : {};
+      const thread = readSessionThread({
+        ...threadOptions,
+        maxChars: Number(options.sessionThreadMaxChars || threadOptions.maxChars || 2200),
+      });
+      if (thread.found) {
+        parts.push('', '# Live Session Thread', '', thread.markdown);
+        report.sources.push(thread.notePath);
+        report.handles.push(`Session thread: ${thread.notePath}`);
+      }
+    } catch (error) {
+      report.omissions.push(`session thread unavailable: ${error.message}`);
+    }
   }
 
   try {
@@ -707,7 +958,9 @@ module.exports = {
   loadPaperclipAuth,
   recall,
   redactObviousSecrets,
+  readSessionThread,
   startupBrief,
   synthesizeRecall,
   verifyNoteCaptureContract,
+  writeSessionThread,
 };

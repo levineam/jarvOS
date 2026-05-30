@@ -7,8 +7,10 @@ const {
   currentWork,
   hydrate,
   recall,
+  readSessionThread,
   startupBrief,
   synthesizeRecall,
+  writeSessionThread,
 } = require('../src/index.js');
 
 const TOOLS = [
@@ -65,6 +67,41 @@ const TOOLS = [
         content: { type: 'string', description: 'Markdown note body.' },
         frontmatter: { type: 'object', description: 'Additional YAML frontmatter fields.' },
         section: { type: 'string', description: 'Journal section for the wikilink.' },
+      },
+    },
+  },
+  {
+    name: 'jarvos_session_thread_read',
+    description: 'Read the rolling journal-backed live session thread for an artifact, issue, project, or host session. Use on entry before continuing work across AIs.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        threadId: { type: 'string', description: 'Stable thread key. Defaults to PAPERCLIP_TASK_ID/JARVOS_SESSION_THREAD_ID/default.' },
+        issueIdentifier: { type: 'string', description: 'Issue identifier such as SUP-2219.' },
+        artifact: { type: 'string', description: 'Artifact pointer such as an issue, branch, note, URL, or file path.' },
+        project: { type: 'string', description: 'Project tag used when no explicit thread id is provided.' },
+        title: { type: 'string', description: 'Explicit note title to read.' },
+        maxChars: { type: 'number', description: 'Maximum characters of thread content to return.' },
+      },
+    },
+  },
+  {
+    name: 'jarvos_session_thread_write',
+    description: "Append a checkpoint to the rolling journal-backed live session thread and link the thread note from today's journal.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        threadId: { type: 'string', description: 'Stable thread key. Defaults to PAPERCLIP_TASK_ID/JARVOS_SESSION_THREAD_ID/default.' },
+        issueIdentifier: { type: 'string', description: 'Issue identifier such as SUP-2219.' },
+        artifact: { type: 'string', description: 'Artifact pointer such as an issue, branch, note, URL, or file path.' },
+        project: { type: 'string', description: 'Project tag for frontmatter.' },
+        host: { type: 'string', description: 'Host writing the checkpoint, such as claude-code, openclaw, codex, or hermes.' },
+        actor: { type: 'string', description: 'AI/persona writing the checkpoint.' },
+        event: { type: 'string', description: 'Checkpoint event such as entry, decision, artifact-change, task-switch, or pre-compaction.' },
+        summary: { type: 'string', description: 'What changed or what the next AI needs to know.' },
+        decision: { type: 'string', description: 'Latest decision to preserve.' },
+        nextStep: { type: 'string', description: 'Concrete next action for the next host.' },
+        title: { type: 'string', description: 'Explicit note title to write.' },
       },
     },
   },
@@ -154,6 +191,14 @@ async function callTool(name, args = {}) {
   }
   if (name === 'jarvos_create_note') {
     const result = createNote(args);
+    return textResult(result.markdown, !result.ok);
+  }
+  if (name === 'jarvos_session_thread_read') {
+    const result = readSessionThread(args);
+    return textResult(result.markdown, !result.ok);
+  }
+  if (name === 'jarvos_session_thread_write') {
+    const result = writeSessionThread(args);
     return textResult(result.markdown, !result.ok);
   }
   if (name === 'jarvos_startup_brief') {
