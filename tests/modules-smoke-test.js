@@ -669,8 +669,8 @@ try {
   if (cct.name === 'get_channel_context' &&
       typeof cct.description === 'string' &&
       typeof cct.execute === 'function' &&
-      cct.input_schema.required.includes('tenant_id') &&
-      cct.input_schema.required.includes('channel_id')) {
+      cct.inputSchema.required.includes('tenant_id') &&
+      cct.inputSchema.required.includes('channel_id')) {
     ok('get_channel_context has correct MCP shape');
   } else {
     bad('get_channel_context shape', new Error(JSON.stringify(cct)));
@@ -680,7 +680,7 @@ try {
   if (tmt.name === 'get_thread_messages' &&
       typeof tmt.description === 'string' &&
       typeof tmt.execute === 'function' &&
-      tmt.input_schema.required.includes('thread_id')) {
+      tmt.inputSchema.required.includes('thread_id')) {
     ok('get_thread_messages has correct MCP shape');
   } else {
     bad('get_thread_messages shape', new Error(JSON.stringify(tmt)));
@@ -708,7 +708,7 @@ try {
     afterSeq:       0,
     messages:       [{ author: 'andrew', ts: '2026-05-29T11:00:00Z', content: 'AAF channel active.', embeds: [], thread: null }],
     threads:        [{ id: '999', name: 'Planning', messageCount: 3 }],
-    activityEvents: [{ type: 'agent.loop.started', seq: 1, source: 'smoke-test', occurred_at: '2026-05-29T10:00:00Z' }],
+    activityEvents: [{ type: 'agent.loop.started', seq: 1, source: 'smoke-test', occurred_at: '2026-05-29T10:00:00Z', payload: { summary: 'Agent loop started from Discord context.' } }],
     linkedResources: [{ type: 'note', path: 'Notes/AAF Plan v3.md' }],
     partial: false,
     errors: [],
@@ -719,7 +719,9 @@ try {
     md.includes('## Channel Context — aaf') &&
     md.includes('AAF channel active.') &&
     md.includes('Planning') &&
+    md.includes('id: `999`') &&
     md.includes('agent.loop.started') &&
+    md.includes('Agent loop started from Discord context.') &&
     md.includes('Notes/AAF Plan v3.md')
   ) {
     ok('renderContextMarkdown produces correct markdown sections');

@@ -36,6 +36,23 @@ function isAtOrAfter(value, cutoff) {
   return Number.isFinite(valueMs) && Number.isFinite(cutoffMs) && valueMs >= cutoffMs;
 }
 
+function compactJson(value, maxLength = 500) {
+  if (value === undefined) return null;
+
+  let rendered;
+  try {
+    rendered = JSON.stringify(value);
+  } catch {
+    rendered = String(value);
+  }
+
+  if (rendered.length > maxLength) {
+    return rendered.slice(0, maxLength - 3) + '...';
+  }
+
+  return rendered;
+}
+
 // ── Context builder ──────────────────────────────────────────────────────────
 
 /**
@@ -144,14 +161,16 @@ function renderContextMarkdown(ctx) {
   if (ctx.threads.length > 0) {
     parts.push('\n### Active Threads');
     for (const t of ctx.threads) {
-      parts.push(`- **${t.name}** (${t.messageCount} messages)`);
+      parts.push(`- **${t.name}** (id: \`${t.id}\`, ${t.messageCount} messages)`);
     }
   }
 
   if (ctx.activityEvents.length > 0) {
     parts.push('\n### Activity Log (new events)');
     for (const e of ctx.activityEvents) {
-      parts.push(`- [${e.type}] **${e.source || ''}** seq=${e.seq} (${e.occurred_at})`);
+      const payload = compactJson(e.payload);
+      const suffix = payload ? ` payload=${payload}` : '';
+      parts.push(`- [${e.type}] **${e.source || ''}** seq=${e.seq} (${e.occurred_at})${suffix}`);
     }
   }
 
@@ -186,7 +205,7 @@ const getChannelContextTool = {
   description:
     'Fetch recent messages, active threads, and activity log events for a jarvos-agentify ' +
     'channel. Returns a markdown context block ready for agent consumption.',
-  input_schema: {
+  inputSchema: {
     type: 'object',
     properties: {
       tenant_id:   { type: 'string',  description: 'Tenant identifier, e.g. "aaf"' },
@@ -240,7 +259,7 @@ const getThreadMessagesTool = {
   description:
     'Fetch all messages in a Discord thread by its ID. ' +
     'Useful for deep-reading a specific discussion.',
-  input_schema: {
+  inputSchema: {
     type: 'object',
     properties: {
       thread_id:    { type: 'string', description: 'Discord thread (channel) snowflake ID' },
