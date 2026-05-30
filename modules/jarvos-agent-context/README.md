@@ -20,8 +20,29 @@ The bundled stdio MCP server exposes:
 | `jarvos_recall` | GBrain/QMD/graph recall bundle rendered as Markdown; pass `synthesize: true` or `mode: "synthesis"` for WS5 synthesis |
 | `jarvos_synthesize` | Concise WS5 synthesis over WS4 retrieval evidence with the source bundle preserved |
 | `jarvos_create_note` | Obsidian note creation + today journal wikilink + KB sidecars + verification |
+| `jarvos_session_thread_read` | Read the rolling live working thread for an issue, artifact, project, or host session |
+| `jarvos_session_thread_write` | Append a checkpoint to that thread as a normal secondbrain note linked from today's journal |
 | `jarvos_startup_brief` | Bounded startup context for agent sessions |
 | `jarvos_hydrate` | Bounded working-context packet for startup hydration |
+
+## Session Thread Continuity
+
+The session thread is the lightweight handoff surface for work that moves across
+Claude Code, OpenClaw, Codex, Hermes, or another host. It is not a hidden store:
+each thread is a Markdown note named `JarvOS Session Thread - <threadId>` in the
+configured Notes directory, and every write links that note from today's journal
+through the same `@jarvos/secondbrain` note and journal helpers used by
+`jarvos_create_note`.
+
+Host reflex:
+
+1. On entry, call `jarvos_session_thread_read` with the issue, artifact, project,
+   or `JARVOS_SESSION_THREAD_ID`, then call `jarvos_current_work` or
+   `jarvos_hydrate`.
+2. During work, call `jarvos_session_thread_write` at task switches, decisions,
+   artifact changes, and pre-compaction flushes.
+3. Keep writes compact: summary, latest decision, and concrete next step. Link
+   the live artifact instead of copying large snapshots.
 
 ## Prompts
 

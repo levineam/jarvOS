@@ -13,9 +13,11 @@ const {
   currentWork,
   defaultFrontmatter,
   hydrate,
+  readSessionThread,
   redactObviousSecrets,
   synthesizeRecall,
   verifyNoteCaptureContract,
+  writeSessionThread,
 } = require('../src/index.js');
 const { callTool, PROMPTS, TOOLS } = require('../scripts/jarvos-mcp.js');
 
@@ -32,6 +34,7 @@ function withTempVault(fn) {
     JARVOS_NOTES_DIR: process.env.JARVOS_NOTES_DIR,
     JARVOS_JOURNAL_DIR: process.env.JARVOS_JOURNAL_DIR,
     JARVOS_TIMEZONE: process.env.JARVOS_TIMEZONE,
+    JARVOS_SESSION_THREAD_ID: process.env.JARVOS_SESSION_THREAD_ID,
   };
 
   process.env.JARVOS_VAULT_DIR = vault;
@@ -122,6 +125,63 @@ test('createNote creates today journal when missing', () => {
   });
 });
 
+test('session thread writes a note, links today journal, and reads across hosts', () => {
+  withTempVault(({ notes, journal }) => {
+    const date = new Date().toLocaleDateString('en-CA', { timeZone: 'UTC' });
+    const write = writeSessionThread({
+      threadId: 'SUP-2219',
+      issueIdentifier: 'SUP-2219',
+      artifact: 'SUP-2219',
+      project: 'continuity',
+      host: 'claude-code',
+      actor: 'Claude',
+      event: 'decision',
+      summary: 'Read side works; write side needs the shared session thread.',
+      nextStep: 'Have Codex read this on entry and continue the implementation.',
+    });
+
+    assert.equal(write.ok, true);
+    assert.ok(write.note.path.startsWith(notes));
+    assert.ok(fs.readFileSync(write.note.path, 'utf8').includes('Have Codex read this on entry'));
+    assert.ok(fs.readFileSync(path.join(journal, `${date}.md`), 'utf8').includes('[[JarvOS Session Thread - SUP-2219]]'));
+
+    const read = readSessionThread({
+      threadId: 'SUP-2219',
+      host: 'codex',
+    });
+    assert.equal(read.found, true);
+    assert.match(read.markdown, /Claude - decision/);
+    assert.match(read.markdown, /Next:/);
+    assert.match(read.markdown, /Have Codex read this on entry/);
+  });
+});
+
+test('MCP session thread tools round-trip through the shared note and journal path', async () => {
+  await withTempVault(async ({ journal }) => {
+    const date = new Date().toLocaleDateString('en-CA', { timeZone: 'UTC' });
+    const write = await callTool('jarvos_session_thread_write', {
+      threadId: 'artifact-a',
+      artifact: 'artifact-a',
+      host: 'openclaw',
+      actor: 'OpenClaw',
+      event: 'artifact-change',
+      summary: 'Artifact moved from draft to review.',
+      nextStep: 'Review the linked artifact before editing.',
+    });
+    assert.equal(write.isError, false);
+    assert.match(write.content[0].text, /jarvOS Session Thread Written/);
+    assert.ok(fs.readFileSync(path.join(journal, `${date}.md`), 'utf8').includes('[[JarvOS Session Thread - artifact-a]]'));
+
+    const read = await callTool('jarvos_session_thread_read', {
+      threadId: 'artifact-a',
+      host: 'codex',
+    });
+    assert.equal(read.isError, false);
+    assert.match(read.content[0].text, /Artifact moved from draft to review/);
+    assert.match(read.content[0].text, /Review the linked artifact before editing/);
+  });
+});
+
 test('MCP tool list includes jarvOS tools', () => {
   const names = TOOLS.map((tool) => tool.name);
   assert.deepEqual(names, [
@@ -129,6 +189,8 @@ test('MCP tool list includes jarvOS tools', () => {
     'jarvos_recall',
     'jarvos_synthesize',
     'jarvos_create_note',
+    'jarvos_session_thread_read',
+    'jarvos_session_thread_write',
     'jarvos_startup_brief',
     'jarvos_hydrate',
   ]);
