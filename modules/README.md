@@ -10,6 +10,7 @@ with a clear boundary and a dedicated README.
 | [`@jarvos/secondbrain`](./jarvos-secondbrain/) | Content layer — journal and notes | `bridge/config/jarvos-paths.js` |
 | [`@jarvos/gbrain`](./jarvos-gbrain/) | GBrain-first resolver/brain integration — curated vault import to GBrain | `src/index.js` |
 | [`@jarvos/agent-context`](./jarvos-agent-context/) | Runtime-facing adapter — recall, current work, note actions, MCP | `src/index.js` |
+| [`@jarvos/coding`](./jarvos-coding/) | Coding-work orchestrator — review gates and host adapters for Claude Code/Codex | `src/index.js` |
 | [`@jarvos/skills`](./jarvos-skills/) | Operating-system skill bundle — planning, rule wiring, context hygiene, cron safety | `src/index.js` |
 
 ## Architecture
@@ -21,6 +22,7 @@ Raw capture (journal/notes)
       → @jarvos/ontology (worldview / belief graph)
         → @jarvos/gbrain (structured people/projects/concepts/sources)
         → @jarvos/skills (portable operating workflow)
+        → @jarvos/coding (portable coding execution loop)
         → Paperclip (live execution tracking)
 ```
 
@@ -28,7 +30,7 @@ Raw capture (journal/notes)
 
 ```bash
 # From the root of this repo
-npm install ./modules/jarvos-memory ./modules/jarvos-ontology ./modules/jarvos-secondbrain ./modules/jarvos-gbrain ./modules/jarvos-agent-context ./modules/jarvos-skills
+npm install ./modules/jarvos-memory ./modules/jarvos-ontology ./modules/jarvos-secondbrain ./modules/jarvos-gbrain ./modules/jarvos-agent-context ./modules/jarvos-coding ./modules/jarvos-skills
 ```
 
 Or reference each module directly in your project:
@@ -48,6 +50,7 @@ Each module owns a distinct layer. **Do not use them interchangeably.**
 | Worldview | `@jarvos/ontology` | Beliefs, goals, values, predictions |
 | Structured knowledge | `@jarvos/gbrain` | People, companies, projects, concepts, meetings, source pages |
 | Operating workflow | `@jarvos/skills` | Agent procedures for planning, rule creation, context hygiene, cron safety |
+| Coding execution | `@jarvos/coding` | Issue-to-PR orchestration, review gates, host adapters |
 | Execution | Paperclip | Tasks, issues, assignments, done/not-done |
 
 ## Smoke Test
@@ -244,6 +247,40 @@ node scripts/jarvos-mcp.js startup-brief
 ```bash
 codex mcp add jarvos -- node /path/to/jarvOS/modules/jarvos-agent-context/scripts/jarvos-mcp.js
 ```
+
+---
+
+## @jarvos/coding
+
+**What it does:** Provides the portable coding execution loop for jarvOS-style
+work: claim an issue, create an issue-named branch, run slice and holistic
+review engines, fix and rerun, open a PR, sweep after merge, and verify/close
+with an audit trail.
+
+**What it is NOT:** A Paperclip-only bot or a clawd script wrapper. Hosts inject
+tracker, git, PR, fixer, post-merge, session-state, and review-engine adapters.
+The default review-engine contract calls generic `clawpatch` and `autoreview`
+commands without hardcoded private paths.
+
+**Quick start:**
+
+```bash
+cd modules/jarvos-coding
+npm test
+```
+
+**Host adapters:**
+
+```js
+const {
+  createClaudeCodeHostAdapter,
+  createCodexHostAdapter,
+} = require('@jarvos/coding');
+```
+
+Both adapters register the `jarvos_coding_take_issue_to_done` MCP-style tool and
+a `jarvos-coding` skill descriptor when the host supplies a registry. Both call
+the same `runTakeIssueToDone` orchestrator.
 
 ---
 
