@@ -365,6 +365,89 @@ try {
   bad('@jarvos/skills module load', e);
 }
 
+// ── @jarvos/coding ─────────────────────────────────────────────────────────
+
+console.log('\n→ @jarvos/coding');
+
+try {
+  const coding = require(path.join(ROOT, 'modules/jarvos-coding/src/index.js'));
+  const calls = [];
+  const adapter = coding.createCodexHostAdapter({
+    adapters: {
+      sessionState: coding.createMemorySessionStateStore(),
+      reviewEngine: coding.createClawpatchAutoreviewAdapter({
+        runner: async (payload) => {
+          calls.push(payload.stage);
+          return { status: 'passed', artifact: `${payload.stage}.json` };
+        },
+      }),
+      tracker: {
+        async claimIssue() { calls.push('claim'); return { status: 'claimed' }; },
+        async verifyAndClose() { calls.push('verifyClose'); return { status: 'closed' }; },
+      },
+      git: {
+        async createBranch(input) { calls.push('branch'); return { status: 'created', branch: input.branch }; },
+      },
+      fixer: {
+        async fixAndRerun() { calls.push('fixRerun'); return { status: 'passed' }; },
+      },
+      pullRequest: {
+        async openPullRequest() { calls.push('pullRequest'); return { status: 'created' }; },
+      },
+      postMerge: {
+        async sweep() { calls.push('postMergeSweep'); return { status: 'completed' }; },
+      },
+    },
+  });
+
+  if (
+    coding.codingHostAdapterContract('claude').host === 'claude-code'
+    && adapter.host === 'codex'
+    && adapter.mcpTool.name === 'jarvos_coding_take_issue_to_done'
+  ) {
+    ok('host adapters expose Claude Code and Codex contracts');
+  } else {
+    bad('host adapters', new Error(JSON.stringify({
+      claude: coding.codingHostAdapterContract('claude'),
+      codex: adapter.host,
+      mcpTool: adapter.mcpTool,
+    })));
+  }
+
+  const smoke = require('child_process').spawnSync(process.execPath, ['-e', `
+    const coding = require('./modules/jarvos-coding/src');
+    const calls = [];
+    const adapter = coding.createCodexHostAdapter({ adapters: {
+      sessionState: coding.createMemorySessionStateStore(),
+      reviewEngine: coding.createClawpatchAutoreviewAdapter({ runner: async (payload) => {
+        calls.push(payload.stage); return { status: 'passed', artifact: payload.stage + '.json' };
+      }}),
+      tracker: {
+        async claimIssue() { calls.push('claim'); return { status: 'claimed' }; },
+        async verifyAndClose() { calls.push('verifyClose'); return { status: 'closed' }; },
+      },
+      git: { async createBranch(input) { calls.push('branch'); return { status: 'created', branch: input.branch }; } },
+      fixer: { async fixAndRerun() { calls.push('fixRerun'); return { status: 'passed' }; } },
+      pullRequest: { async openPullRequest() { calls.push('pullRequest'); return { status: 'created' }; } },
+      postMerge: { async sweep() { calls.push('postMergeSweep'); return { status: 'completed' }; } },
+    }});
+    adapter.runTakeIssueToDone({ issueIdentifier: 'SUP-2214', branch: 'SUP-2214/modules-smoke' })
+      .then((result) => {
+        if (result.status !== 'completed') throw new Error('host adapter did not complete');
+        if (result.result.events.length !== coding.TAKE_ISSUE_TO_DONE_STAGES.length) throw new Error('stage count mismatch');
+      })
+      .catch((error) => { console.error(error.message); process.exit(1); });
+  `], { cwd: ROOT, encoding: 'utf8' });
+
+  if (smoke.status === 0) {
+    ok('Codex host adapter invokes runTakeIssueToDone');
+  } else {
+    bad('Codex host adapter invocation', new Error(smoke.stderr || smoke.stdout || `exit ${smoke.status}`));
+  }
+} catch (e) {
+  bad('@jarvos/coding module load', e);
+}
+
 // ── @jarvos/runtime-kit ────────────────────────────────────────────────────
 
 console.log('\n→ @jarvos/runtime-kit');
@@ -389,89 +472,9 @@ try {
   bad('@jarvos/runtime-kit module load', e);
 }
 
-// ── @jarvos/coding ─────────────────────────────────────────────────────────
-
-console.log('\n→ @jarvos/coding');
-
-try {
-  const coding = require(path.join(ROOT, 'modules/jarvos-coding/src/index.js'));
-  const calls = [];
-  const orchestrator = coding.createCodingOrchestrator({
-    reviewEngine: {
-      async sliceReview() {
-        calls.push('slice');
-        return { ok: true, findings: [], summary: 'slice clean' };
-      },
-      async holisticReview() {
-        calls.push('holistic');
-        return { ok: true, findings: [], summary: 'holistic clean' };
-      },
-    },
-    issueDriver: {
-      async claim(input) {
-        calls.push('claim');
-        return { identifier: input.issueId, status: 'in_progress' };
-      },
-      async close(input) {
-        calls.push('close');
-        return { identifier: input.issueId, status: 'done' };
-      },
-    },
-    branchDriver: {
-      async createBranch(input) {
-        calls.push('branch');
-        return { name: input.branchName };
-      },
-    },
-    pullRequestDriver: {
-      async open() {
-        calls.push('pr');
-        return { url: 'https://example.test/pr/1' };
-      },
-    },
-    postMergeDriver: {
-      async sweep() {
-        calls.push('sweep');
-        return { ok: true };
-      },
-    },
-    verificationDriver: {
-      async verify() {
-        calls.push('verify');
-        return { ok: true };
-      },
-    },
-  });
-
-  orchestrator.runTakeIssueToDone({
-    issueId: 'SUP-2213',
-    branchName: 'SUP-2213/smoke',
-  }).then((result) => {
-    if (
-      result.ok
-      && result.closedIssue.status === 'done'
-      && result.auditTrail.some((event) => event.stage === 'closeIssue')
-      && calls.join('>') === 'claim>branch>slice>holistic>pr>sweep>verify>close'
-    ) {
-      ok('orchestrator runs the take-issue-to-done loop');
-    } else {
-      bad('orchestrator loop', new Error(JSON.stringify({ calls, result })));
-    }
-    finish();
-  }, (error) => {
-    bad('orchestrator loop', error);
-    finish();
-  });
-} catch (e) {
-  bad('@jarvos/coding module load', e);
-  finish();
-}
-
 // ── Summary ─────────────────────────────────────────────────────────────────
 
-function finish() {
-  console.log(`\n${pass + fail} checks: ${pass} passed, ${fail} failed.\n`);
-  if (fail > 0) {
-    process.exit(1);
-  }
+console.log(`\n${pass + fail} checks: ${pass} passed, ${fail} failed.\n`);
+if (fail > 0) {
+  process.exit(1);
 }

@@ -1,12 +1,14 @@
 {
   "name": "@jarvos/coding",
   "version": "0.1.0",
-  "description": "Portable jarvOS coding orchestrator with swappable review-engine adapters",
+  "description": "Portable jarvOS coding orchestrator with thin Claude Code and Codex host adapters.",
   "license": "MIT",
   "main": "src/index.js",
   "exports": {
     ".": "./src/index.js"
   },
+  "type": "commonjs",
+  "private": false,
   "scripts": {
     "test": "node --test test/*.test.js"
   },
@@ -22,6 +24,7 @@
     "coding",
     "orchestrator",
     "review-engine",
-    "paperclip"
+    "claude-code",
+    "codex"
   ]
 }
