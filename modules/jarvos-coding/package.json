@@ -1,0 +1,27 @@
+{
+  "name": "@jarvos/coding",
+  "version": "0.1.0",
+  "description": "Portable jarvOS coding orchestrator with swappable review-engine adapters",
+  "license": "MIT",
+  "main": "src/index.js",
+  "exports": {
+    ".": "./src/index.js"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/levineam/jarvOS.git"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": [
+    "jarvos",
+    "coding",
+    "orchestrator",
+    "review-engine",
+    "paperclip"
+  ]
+}
