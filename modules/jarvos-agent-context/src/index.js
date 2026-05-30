@@ -18,6 +18,9 @@ const DEFAULT_HYDRATION_STATUSES = ['in_progress', 'in_review'];
 const DEFAULT_CURRENT_WORK_STATUSES = ['in_progress', 'todo', 'blocked'];
 const DEFAULT_SESSION_THREAD_PREFIX = 'JarvOS Session Thread';
 const DEFAULT_SESSION_THREAD_SECTION = DEFAULT_NOTES_SECTION;
+const DEFAULT_SESSION_THREAD_LOCK_RETRIES = 80;
+const DEFAULT_SESSION_THREAD_LOCK_RETRY_DELAY_MS = 25;
+const DEFAULT_SESSION_THREAD_LOCK_STALE_MS = 30000;
 const ONTOLOGY_FILES = [
   '1-higher-order.md',
   '4-core-self.md',
@@ -258,6 +261,68 @@ function readIfExists(filePath) {
   }
 }
 
+function sleepSync(ms) {
+  const delay = Number(ms || 0);
+  if (!Number.isFinite(delay) || delay <= 0) return;
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, delay);
+}
+
+function numberOption(value, fallback) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
+}
+
+function acquireLockFile(lockPath, options = {}) {
+  const maxAttempts = Math.max(1, numberOption(options.lockRetries, DEFAULT_SESSION_THREAD_LOCK_RETRIES));
+  const retryDelayMs = numberOption(options.lockRetryDelayMs, DEFAULT_SESSION_THREAD_LOCK_RETRY_DELAY_MS);
+  const staleMs = numberOption(options.lockStaleMs, DEFAULT_SESSION_THREAD_LOCK_STALE_MS);
+  let fd = null;
+  let lastError = null;
+
+  fs.mkdirSync(path.dirname(lockPath), { recursive: true });
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      fd = fs.openSync(lockPath, 'wx');
+      fs.writeFileSync(fd, JSON.stringify({
+        pid: process.pid,
+        createdAt: new Date().toISOString(),
+      }));
+      return () => {
+        try {
+          if (fd !== null) fs.closeSync(fd);
+        } finally {
+          fd = null;
+          try {
+            fs.unlinkSync(lockPath);
+          } catch (error) {
+            if (error.code !== 'ENOENT') throw error;
+          }
+        }
+      };
+    } catch (error) {
+      lastError = error;
+      if (error.code !== 'EEXIST') throw error;
+
+      if (staleMs > 0) {
+        try {
+          const stat = fs.statSync(lockPath);
+          if (Date.now() - stat.mtimeMs > staleMs) {
+            fs.unlinkSync(lockPath);
+            continue;
+          }
+        } catch (statError) {
+          if (statError.code !== 'ENOENT') throw statError;
+        }
+      }
+
+      if (attempt < maxAttempts) sleepSync(retryDelayMs);
+    }
+  }
+
+  throw new Error(`Timed out acquiring session thread lock: ${lockPath}${lastError ? ` (${lastError.message})` : ''}`);
+}
+
 function normalizeThreadKey(input = {}) {
   const raw = firstString(
     input.threadId,
@@ -374,26 +439,34 @@ function readSessionThread(input = {}) {
 function writeSessionThread(input = {}) {
   const thread = resolveSessionThread(input);
   const noteWriter = loadNoteWriter();
-  const existing = readIfExists(thread.notePath);
-  const existingBody = existing ? stripFrontmatter(existing) : '';
-  const timestamp = firstString(input.timestamp) || new Date().toISOString();
-  const entry = formatThreadEntry(input, timestamp);
-  const header = [
-    `# ${thread.title}`,
-    '',
-    'Rolling live working thread for cross-host AI continuity. Hosts should read this note on entry and append checkpoints at task switches, decisions, artifact changes, and pre-compaction flushes.',
-  ].join('\n');
-  const content = existingBody
-    ? `${existingBody.trimEnd()}\n\n${entry}`
-    : `${header}\n\n${entry}`;
-  const noteResult = noteWriter.writeNoteFile({
-    title: thread.title,
-    content,
-    frontmatter: sessionThreadFrontmatter(input, thread),
-    section: firstString(input.section, DEFAULT_SESSION_THREAD_SECTION),
-    createJournalIfMissing: input.createJournalIfMissing !== false,
-  });
-  const readBack = readSessionThread({ ...input, title: thread.title, maxChars: input.maxChars });
+  const releaseLock = acquireLockFile(`${thread.notePath}.lock`, input);
+
+  let noteResult;
+  let readBack;
+  try {
+    const existing = readIfExists(thread.notePath);
+    const existingBody = existing ? stripFrontmatter(existing) : '';
+    const timestamp = firstString(input.timestamp) || new Date().toISOString();
+    const entry = formatThreadEntry(input, timestamp);
+    const header = [
+      `# ${thread.title}`,
+      '',
+      'Rolling live working thread for cross-host AI continuity. Hosts should read this note on entry and append checkpoints at task switches, decisions, artifact changes, and pre-compaction flushes.',
+    ].join('\n');
+    const content = existingBody
+      ? `${existingBody.trimEnd()}\n\n${entry}`
+      : `${header}\n\n${entry}`;
+    noteResult = noteWriter.writeNoteFile({
+      title: thread.title,
+      content,
+      frontmatter: sessionThreadFrontmatter(input, thread),
+      section: firstString(input.section, DEFAULT_SESSION_THREAD_SECTION),
+      createJournalIfMissing: input.createJournalIfMissing !== false,
+    });
+    readBack = readSessionThread({ ...input, title: thread.title, maxChars: input.maxChars });
+  } finally {
+    releaseLock();
+  }
 
   return {
     ok: true,

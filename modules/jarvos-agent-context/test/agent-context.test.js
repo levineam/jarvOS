@@ -1,7 +1,7 @@
 'use strict';
 
 const assert = require('assert');
-const { spawnSync } = require('child_process');
+const { spawn, spawnSync } = require('child_process');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -153,6 +153,48 @@ test('session thread writes a note, links today journal, and reads across hosts'
     assert.match(read.markdown, /Claude - decision/);
     assert.match(read.markdown, /Next:/);
     assert.match(read.markdown, /Have Codex read this on entry/);
+  });
+});
+
+test('session thread writes serialize concurrent checkpoints', async () => {
+  await withTempVault(async () => {
+    const script = `
+      const { writeSessionThread } = require(${JSON.stringify(path.join(__dirname, '..', 'src', 'index.js'))});
+      const worker = process.argv[1];
+      writeSessionThread({
+        threadId: 'race-thread',
+        actor: worker,
+        event: 'checkpoint',
+        summary: 'summary from ' + worker,
+        lockRetries: 120,
+        lockRetryDelayMs: 10
+      });
+    `;
+
+    const children = Array.from({ length: 6 }, (_, index) => {
+      return spawn(process.execPath, ['-e', script, `worker-${index}`], {
+        cwd: path.join(__dirname, '..'),
+        env: { ...process.env },
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+    });
+
+    const results = await Promise.all(children.map((child) => new Promise((resolve) => {
+      let stderr = '';
+      child.stderr.on('data', (chunk) => {
+        stderr += chunk;
+      });
+      child.on('close', (code) => resolve({ code, stderr }));
+    })));
+
+    for (const result of results) {
+      assert.equal(result.code, 0, result.stderr);
+    }
+
+    const read = readSessionThread({ threadId: 'race-thread', maxChars: 12000 });
+    for (let index = 0; index < children.length; index += 1) {
+      assert.match(read.content, new RegExp(`summary from worker-${index}`));
+    }
   });
 });
 
