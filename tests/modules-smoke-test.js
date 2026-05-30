@@ -531,6 +531,23 @@ try {
     bad('write() stale tenant lock recovery', new Error(staleLockErr || JSON.stringify(staleLockEvent)));
   }
 
+  const staleReclaimTenantDir = path.join(storeRoot, 'stale-reclaim-lock');
+  fs.mkdirSync(staleReclaimTenantDir, { recursive: true });
+  const staleReclaimLockPath = path.join(staleReclaimTenantDir, '.activity.lock');
+  const staleReclaimPath = `${staleReclaimLockPath}.reclaim`;
+  fs.writeFileSync(staleReclaimLockPath, JSON.stringify({ pid: 0 }), 'utf8');
+  fs.writeFileSync(staleReclaimPath, JSON.stringify({ pid: 0 }), 'utf8');
+  fs.utimesSync(staleReclaimLockPath, staleTime, staleTime);
+  fs.utimesSync(staleReclaimPath, staleTime, staleTime);
+  const { event: staleReclaimEvent, error: staleReclaimErr } = log.write('stale-reclaim-lock', 'system.checkpoint', {
+    status: 'ok',
+  }, { source: 'smoke-test' });
+  if (!staleReclaimErr && staleReclaimEvent && staleReclaimEvent.seq === 1) {
+    ok('write() recovers from stale reclaim lock file');
+  } else {
+    bad('write() stale reclaim lock recovery', new Error(staleReclaimErr || JSON.stringify(staleReclaimEvent)));
+  }
+
   // read all (after=0)
   const { events: all, cursor: cur1 } = log.read('aaf', { after: 0 });
   if (all.length === 2 && cur1 === 2 && all[0].type === 'agent.loop.started') {
@@ -662,6 +679,13 @@ try {
     ok('CHANNEL_CONTEXT_TOOLS array contains 2 tools');
   } else {
     bad('CHANNEL_CONTEXT_TOOLS', new Error(`Expected array of 2, got: ${JSON.stringify(agentify.CHANNEL_CONTEXT_TOOLS)}`));
+  }
+
+  const agentifyPackage = require(path.join(ROOT, 'modules/jarvos-agentify/package.json'));
+  if (agentifyPackage.exports && agentifyPackage.exports['./package.json'] === './package.json') {
+    ok('@jarvos/agentify exports package metadata');
+  } else {
+    bad('@jarvos/agentify package metadata export', new Error(JSON.stringify(agentifyPackage.exports)));
   }
 
   // ── Tool names and MCP shape ───────────────────────────────────────────────

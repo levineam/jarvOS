@@ -197,11 +197,35 @@ function writeLockOwner(fd) {
   }), 'utf8');
 }
 
+function openReclaimLock(reclaimPath) {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      return fs.openSync(reclaimPath, 'wx');
+    } catch (err) {
+      if (err.code !== 'EEXIST') throw err;
+
+      try {
+        const stat = fs.statSync(reclaimPath);
+        if (Date.now() - stat.mtimeMs <= LOCK_STALE_MS) return null;
+        fs.rmSync(reclaimPath, { force: true });
+      } catch (statErr) {
+        if (statErr.code !== 'ENOENT') throw statErr;
+      }
+    }
+  }
+
+  return null;
+}
+
 function tryStealStaleLock(lockPath) {
   const reclaimPath = `${lockPath}.reclaim`;
   let reclaimFd = null;
+  let createdReclaim = false;
   try {
-    reclaimFd = fs.openSync(reclaimPath, 'wx');
+    reclaimFd = openReclaimLock(reclaimPath);
+    if (reclaimFd === null) return null;
+    createdReclaim = true;
+
     const stat = fs.statSync(lockPath);
     const owner = readLockOwner(lockPath);
     const holderAlive = owner && isProcessAlive(owner.pid);
@@ -215,7 +239,7 @@ function tryStealStaleLock(lockPath) {
     if (err.code === 'EEXIST' || err.code === 'ENOENT') return null;
     throw err;
   } finally {
-    if (reclaimFd !== null) {
+    if (createdReclaim && reclaimFd !== null) {
       fs.closeSync(reclaimFd);
       fs.rmSync(reclaimPath, { force: true });
     }

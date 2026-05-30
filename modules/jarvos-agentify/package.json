@@ -10,7 +10,8 @@
     "./activity-log/schema": "./src/lib/activity-log-schema.js",
     "./activity-log/store": "./src/lib/activity-log-store.js",
     "./channel-context": "./src/lib/channel-context.js",
-    "./discord-api": "./src/lib/discord-api.js"
+    "./discord-api": "./src/lib/discord-api.js",
+    "./package.json": "./package.json"
   },
   "scripts": {
     "test": "node ../../tests/modules-smoke-test.js"
