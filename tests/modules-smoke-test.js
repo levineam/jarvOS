@@ -435,6 +435,7 @@ try {
     type:        'agent.loop.started',
     occurred_at: '2026-05-29T10:00:00.000Z',
     source:      'jarvos-agentify',
+    payload:     { loop_id: 'loop-001', trigger: 'cron' },
   });
   if (v1 && e1.length === 0) {
     ok('validateEvent accepts valid event');
@@ -486,6 +487,8 @@ try {
   const { event: e2w, error: w2err } = log.write('aaf', 'plan.proposed', {
     plan_id: 'plan-001',
     summary: 'Review last 24h and propose next actions.',
+    items: ['Inspect activity log', 'Propose next action'],
+    proposed_by: 'smoke-test',
   }, { source: 'smoke-test' });
 
   if (!w2err && e2w && e2w.seq === 2 && e2w.type === 'plan.proposed') {
@@ -543,7 +546,7 @@ try {
   }
 
   // multi-tenant isolation
-  log.write('jarvos', 'system.checkpoint', { status: 'ok' }, { source: 'smoke-test' });
+  log.write('jarvos', 'system.checkpoint', { status: 'ok', message: 'smoke test checkpoint' }, { source: 'smoke-test' });
   const { seq: jarvosSeq } = log.watermark('jarvos');
   const { seq: aafSeq }    = log.watermark('aaf');
   if (jarvosSeq === 1 && aafSeq === 2) {
@@ -595,7 +598,10 @@ try {
   }
 
   // tenant IDs are filesystem path segments: traversal must be rejected
-  const { event: traversalEv, error: traversalErr } = log.write('../escape', 'system.checkpoint', { status: 'bad' });
+  const { event: traversalEv, error: traversalErr } = log.write('../escape', 'system.checkpoint', {
+    status: 'bad',
+    message: 'should not write outside tenant store',
+  });
   const escapedPath = path.join(tmpDir, 'escape', 'activity.jsonl');
   if (traversalEv === null && traversalErr && traversalErr.includes('tenant_id') && !fs.existsSync(escapedPath)) {
     ok('write() rejects tenant_id path traversal');
@@ -640,6 +646,154 @@ try {
 
 } catch (e) {
   bad('@jarvos/agentify module load', e);
+}
+
+// ── @jarvos/agentify (channel-context tools) ─────────────────────────────────
+
+console.log('\n→ @jarvos/agentify (channel-context tools, SUP-2197)');
+
+try {
+  const agentify = require(path.join(ROOT, 'modules/jarvos-agentify/src/index.js'));
+
+  // ── Tool exports are present ───────────────────────────────────────────────
+  if (typeof agentify.getChannelContextTool === 'object' &&
+      agentify.getChannelContextTool !== null) {
+    ok('getChannelContextTool is exported from root module');
+  } else {
+    bad('getChannelContextTool export', new Error('Expected object'));
+  }
+
+  if (typeof agentify.getThreadMessagesTool === 'object' &&
+      agentify.getThreadMessagesTool !== null) {
+    ok('getThreadMessagesTool is exported from root module');
+  } else {
+    bad('getThreadMessagesTool export', new Error('Expected object'));
+  }
+
+  if (Array.isArray(agentify.CHANNEL_CONTEXT_TOOLS) &&
+      agentify.CHANNEL_CONTEXT_TOOLS.length === 2) {
+    ok('CHANNEL_CONTEXT_TOOLS array contains 2 tools');
+  } else {
+    bad('CHANNEL_CONTEXT_TOOLS', new Error(`Expected array of 2, got: ${JSON.stringify(agentify.CHANNEL_CONTEXT_TOOLS)}`));
+  }
+
+  // ── Tool names and MCP shape ───────────────────────────────────────────────
+  const cct = agentify.getChannelContextTool;
+  if (cct.name === 'get_channel_context' &&
+      typeof cct.description === 'string' &&
+      typeof cct.execute === 'function' &&
+      cct.input_schema.required.includes('tenant_id') &&
+      cct.input_schema.required.includes('channel_id')) {
+    ok('get_channel_context has correct MCP shape');
+  } else {
+    bad('get_channel_context shape', new Error(JSON.stringify(cct)));
+  }
+
+  const tmt = agentify.getThreadMessagesTool;
+  if (tmt.name === 'get_thread_messages' &&
+      typeof tmt.description === 'string' &&
+      typeof tmt.execute === 'function' &&
+      tmt.input_schema.required.includes('thread_id')) {
+    ok('get_thread_messages has correct MCP shape');
+  } else {
+    bad('get_thread_messages shape', new Error(JSON.stringify(tmt)));
+  }
+
+  // ── buildChannelContext and renderContextMarkdown ──────────────────────────
+  if (typeof agentify.buildChannelContext === 'function') {
+    ok('buildChannelContext is exported');
+  } else {
+    bad('buildChannelContext export', new Error('Expected function'));
+  }
+
+  if (typeof agentify.renderContextMarkdown === 'function') {
+    ok('renderContextMarkdown is exported');
+  } else {
+    bad('renderContextMarkdown export', new Error('Expected function'));
+  }
+
+  // ── renderContextMarkdown output ───────────────────────────────────────────
+  const ctx = {
+    tenantId:       'aaf',
+    channelId:      '1234567890',
+    fetchedAt:      '2026-05-29T12:00:00.000Z',
+    windowHours:    24,
+    afterSeq:       0,
+    messages:       [{ author: 'andrew', ts: '2026-05-29T11:00:00Z', content: 'AAF channel active.', embeds: [], thread: null }],
+    threads:        [{ id: '999', name: 'Planning', messageCount: 3 }],
+    activityEvents: [{ type: 'agent.loop.started', seq: 1, source: 'smoke-test', occurred_at: '2026-05-29T10:00:00Z' }],
+    linkedResources: [{ type: 'note', path: 'Notes/AAF Plan v3.md' }],
+  };
+
+  const md = agentify.renderContextMarkdown(ctx);
+  if (
+    md.includes('## Channel Context - aaf') &&
+    md.includes('AAF channel active.') &&
+    md.includes('Planning') &&
+    md.includes('agent.loop.started') &&
+    md.includes('Notes/AAF Plan v3.md')
+  ) {
+    ok('renderContextMarkdown produces correct markdown sections');
+  } else {
+    bad('renderContextMarkdown output', new Error('Missing expected sections in:\n' + md));
+  }
+
+  const warningMarkdown = agentify.renderContextMarkdown({
+    tenantId:       'aaf',
+    channelId:      '1234567890',
+    fetchedAt:      '2026-05-29T12:00:00.000Z',
+    windowHours:    24,
+    afterSeq:       0,
+    messages:       [],
+    threads:        [],
+    activityEvents: [],
+    linkedResources: [],
+    errors:         [{ source: 'channel_messages', message: 'DISCORD_BOT_TOKEN is required' }],
+  });
+  if (
+    warningMarkdown.includes('### Fetch Warnings') &&
+    warningMarkdown.includes('DISCORD_BOT_TOKEN is required')
+  ) {
+    ok('renderContextMarkdown surfaces fetch warnings');
+  } else {
+    bad('renderContextMarkdown warnings', new Error('Missing fetch warning section in:\n' + warningMarkdown));
+  }
+
+  // ── sub-path export: ./channel-context ────────────────────────────────────
+  const ccModule = require(path.join(ROOT, 'modules/jarvos-agentify/src/lib/channel-context.js'));
+  if (ccModule.ALL_TOOLS && ccModule.ALL_TOOLS.length === 2) {
+    ok('./channel-context sub-path exports ALL_TOOLS');
+  } else {
+    bad('./channel-context sub-path', new Error('Expected ALL_TOOLS array of 2'));
+  }
+
+  // ── sub-path export: ./discord-api ────────────────────────────────────────
+  const daModule = require(path.join(ROOT, 'modules/jarvos-agentify/src/lib/discord-api.js'));
+  if (typeof daModule.normaliseMessage === 'function') {
+    ok('./discord-api sub-path exports normaliseMessage');
+  } else {
+    bad('./discord-api sub-path', new Error('Expected normaliseMessage function'));
+  }
+
+  // ── normaliseMessage correctness ──────────────────────────────────────────
+  const raw = {
+    id: '111',
+    timestamp: '2026-05-29T12:00:00.000Z',
+    author: { username: 'andrew' },
+    content: 'Hello AAF.',
+    embeds: [{ title: 'Plan', description: 'Do the thing.' }],
+    thread: { id: '222', name: 'AAF planning' },
+  };
+  const nm = daModule.normaliseMessage(raw);
+  if (nm.id === '111' && nm.author === 'andrew' && nm.content === 'Hello AAF.' &&
+      nm.embeds.length === 1 && nm.thread.name === 'AAF planning') {
+    ok('normaliseMessage returns correct compact shape');
+  } else {
+    bad('normaliseMessage', new Error(JSON.stringify(nm)));
+  }
+
+} catch (e) {
+  bad('@jarvos/agentify channel-context load', e);
 }
 
 // ── Summary ─────────────────────────────────────────────────────────────────
