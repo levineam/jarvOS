@@ -389,9 +389,89 @@ try {
   bad('@jarvos/runtime-kit module load', e);
 }
 
+// ── @jarvos/coding ─────────────────────────────────────────────────────────
+
+console.log('\n→ @jarvos/coding');
+
+try {
+  const coding = require(path.join(ROOT, 'modules/jarvos-coding/src/index.js'));
+  const calls = [];
+  const orchestrator = coding.createCodingOrchestrator({
+    reviewEngine: {
+      async sliceReview() {
+        calls.push('slice');
+        return { ok: true, findings: [], summary: 'slice clean' };
+      },
+      async holisticReview() {
+        calls.push('holistic');
+        return { ok: true, findings: [], summary: 'holistic clean' };
+      },
+    },
+    issueDriver: {
+      async claim(input) {
+        calls.push('claim');
+        return { identifier: input.issueId, status: 'in_progress' };
+      },
+      async close(input) {
+        calls.push('close');
+        return { identifier: input.issueId, status: 'done' };
+      },
+    },
+    branchDriver: {
+      async createBranch(input) {
+        calls.push('branch');
+        return { name: input.branchName };
+      },
+    },
+    pullRequestDriver: {
+      async open() {
+        calls.push('pr');
+        return { url: 'https://example.test/pr/1' };
+      },
+    },
+    postMergeDriver: {
+      async sweep() {
+        calls.push('sweep');
+        return { ok: true };
+      },
+    },
+    verificationDriver: {
+      async verify() {
+        calls.push('verify');
+        return { ok: true };
+      },
+    },
+  });
+
+  orchestrator.runTakeIssueToDone({
+    issueId: 'SUP-2213',
+    branchName: 'SUP-2213/smoke',
+  }).then((result) => {
+    if (
+      result.ok
+      && result.closedIssue.status === 'done'
+      && result.auditTrail.some((event) => event.stage === 'closeIssue')
+      && calls.join('>') === 'claim>branch>slice>holistic>pr>sweep>verify>close'
+    ) {
+      ok('orchestrator runs the take-issue-to-done loop');
+    } else {
+      bad('orchestrator loop', new Error(JSON.stringify({ calls, result })));
+    }
+    finish();
+  }, (error) => {
+    bad('orchestrator loop', error);
+    finish();
+  });
+} catch (e) {
+  bad('@jarvos/coding module load', e);
+  finish();
+}
+
 // ── Summary ─────────────────────────────────────────────────────────────────
 
-console.log(`\n${pass + fail} checks: ${pass} passed, ${fail} failed.\n`);
-if (fail > 0) {
-  process.exit(1);
+function finish() {
+  console.log(`\n${pass + fail} checks: ${pass} passed, ${fail} failed.\n`);
+  if (fail > 0) {
+    process.exit(1);
+  }
 }
