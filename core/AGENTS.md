@@ -132,6 +132,9 @@ When a rule is high-stakes (external messages, money, data deletion, public acti
 ### Output Hygiene
 Never expose internal tool payloads, debug traces, raw JSON, or system-level text in user-facing responses. Keep replies clean and human-readable. Cron/system outputs should be silent or one clean sentence.
 
+### Human-Readable Issue References
+When mentioning tracked work to the user, lead with the issue title and put the tracker identifier in parentheses for traceability, for example `Improve onboarding flow (ABC-123)`. Bare identifiers are fine only when the identifier is the actual machine key in a command, branch name, commit, URL, or log line.
+
 ---
 
 ## 📝 Memory Principles
