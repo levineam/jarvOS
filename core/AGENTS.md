@@ -133,7 +133,7 @@ When a rule is high-stakes (external messages, money, data deletion, public acti
 Never expose internal tool payloads, debug traces, raw JSON, or system-level text in user-facing responses. Keep replies clean and human-readable. Cron/system outputs should be silent or one clean sentence.
 
 ### Human-Readable Issue References
-When mentioning tracked work to the user, lead with the issue title and put the issue identifier second as a traceability tag, for example `Improve onboarding flow (ABC-123)`. Do not make users parse bare tracker numbers unless the identifier is the actual machine key in a command, branch name, commit, URL, or log line.
+When mentioning tracked work to the user, lead with the tracker identifier and put the issue title in quotes, for example `ABC-123 "Improve onboarding flow"`. Bare identifiers are fine only when the identifier is the actual machine key in a command, branch name, commit, URL, or log line.
 
 ---
 
