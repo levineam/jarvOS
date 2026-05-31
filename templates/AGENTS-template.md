@@ -43,11 +43,11 @@ If no, rewrite.
 
 ## 🔖 Human-Readable Issue References (Global Rule)
 
-When mentioning tracked work to {{USER_NAME}}, lead with the tracker identifier and put the issue title in quotes.
+When mentioning tracked work to {{USER_NAME}}, lead with the issue title and put the tracker identifier in parentheses for traceability.
 
-- Say: `ABC-123 "Improve onboarding flow"`
+- Say: `Improve onboarding flow (ABC-123)`
 - Do not say: `ABC-123`
-- Do not say: `Improve onboarding flow (ABC-123)`
+- Do not say: `ABC-123 "Improve onboarding flow"`
 - Bare identifiers are fine in commands, branch names, commits, URLs, and logs where the identifier is the actual machine key.
 
 ## 🔎 Phrase Interpretation Defaults (Global)
