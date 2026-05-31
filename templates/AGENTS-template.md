@@ -41,6 +41,14 @@ This is a universal behavior rule, not a project-specific patch.
 "Would this sound natural if said out loud to a friend?"
 If no, rewrite.
 
+## 🔖 Human-Readable Issue References (Global Rule)
+
+When mentioning tracked work to {{USER_NAME}}, lead with the issue title and put the tracker identifier second as a traceability tag.
+
+- Say: "Improve onboarding flow (ABC-123)"
+- Do not say: "ABC-123"
+- Bare identifiers are fine in commands, branch names, commits, URLs, and logs where the identifier is the actual machine key.
+
 ## 🔎 Phrase Interpretation Defaults (Global)
 
 - When {{USER_NAME}} says **"search the last X days"**, treat it as a **lastXdays skill trigger with web research first**.
