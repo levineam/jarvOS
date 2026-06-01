@@ -9,6 +9,7 @@
 const { existsSync, mkdirSync, readFileSync, writeFileSync } = require('fs');
 const { dirname, join } = require('path');
 const { getVaultNotesDir } = require('./lib/notes-config');
+const { repairZeroByteVaultRootDuplicate } = require('./lib/vault-root-duplicate-guard');
 const { optimizeNoteKnowledge } = require('./knowledge-optimizer');
 const { linkNoteToJournal } = require('../../../bridge/provenance/src/link-to-journal');
 
@@ -129,6 +130,11 @@ function writeNoteFile({
 
   mkdirSync(dirname(filePath), { recursive: true });
   writeFileSync(filePath, fileContent, 'utf8');
+  const vaultRootDuplicate = repairZeroByteVaultRootDuplicate({
+    noteTitle: safeName,
+    notesDir,
+    notesFilePath: filePath,
+  });
 
   let journal = { linked: false, skipped: true, reason: 'disabled by JARVOS_JOURNAL_BACKLINK=0' };
   if (process.env.JARVOS_JOURNAL_BACKLINK !== '0') {
@@ -149,7 +155,7 @@ function writeNoteFile({
     journal,
   });
 
-  return { written: true, path: filePath, title: safeName, created, journal, knowledge };
+  return { written: true, path: filePath, title: safeName, created, journal, knowledge, vaultRootDuplicate };
 }
 
 function main() {

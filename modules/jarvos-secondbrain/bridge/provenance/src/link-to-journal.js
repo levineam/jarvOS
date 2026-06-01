@@ -8,8 +8,9 @@
 
 const { readFileSync, writeFileSync, existsSync, mkdirSync } = require('fs');
 const path = require('path');
-const { getVaultJournalDir } = require('./lib/provenance-config');
+const { getVaultDir, getVaultJournalDir, getVaultNotesDir } = require('./lib/provenance-config');
 const { getTimeZone } = require('../../config/jarvos-paths');
+const { repairZeroByteVaultRootDuplicate } = require('../../../packages/jarvos-secondbrain-notes/src/lib/vault-root-duplicate-guard');
 const {
   loadConfig,
   normalizeSections,
@@ -53,7 +54,12 @@ function linkNoteToJournal({ noteTitle, section = '📝 Notes', journalPath = to
     writeFileSync(journalPath, content, 'utf8');
   }
 
-  return { linked: true, journalPath, alreadyPresent };
+  const vaultRootDuplicate = repairZeroByteVaultRootDuplicate({
+    noteTitle,
+    notesDir: getVaultNotesDir(),
+    vaultRoot: getVaultDir(),
+  });
+  return { linked: true, journalPath, alreadyPresent, vaultRootDuplicate };
 }
 
 function main() {
