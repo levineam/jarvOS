@@ -110,3 +110,31 @@ test('journal backlink repairs matching zero-byte vault-root duplicate without d
     assert.match(fs.readFileSync(journalPath, 'utf8'), /\[\[Backlinked Durable Note\]\]/);
   });
 });
+
+test('guard treats unlink failures as non-fatal', () => {
+  const vault = makeVault();
+  const title = 'Locked Durable Note';
+  const notesPath = path.join(vault.notesDir, `${title}.md`);
+  const rootPath = path.join(vault.vaultRoot, `${title}.md`);
+  fs.writeFileSync(notesPath, '# Locked Durable Note\n\nBody.\n');
+  fs.closeSync(fs.openSync(rootPath, 'w'));
+
+  const originalUnlinkSync = fs.unlinkSync;
+  fs.unlinkSync = (target) => {
+    if (target === rootPath) throw new Error('permission denied');
+    return originalUnlinkSync(target);
+  };
+  try {
+    const result = repairZeroByteVaultRootDuplicate({
+      noteTitle: title,
+      notesDir: vault.notesDir,
+      notesFilePath: notesPath,
+    });
+
+    assert.equal(result.repaired, false);
+    assert.match(result.reason, /could not remove zero-byte vault-root duplicate: permission denied/);
+    assert.equal(fs.existsSync(rootPath), true);
+  } finally {
+    fs.unlinkSync = originalUnlinkSync;
+  }
+});

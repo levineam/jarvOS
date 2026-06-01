@@ -53,7 +53,18 @@ function repairZeroByteVaultRootDuplicate({
     return { checked: false, repaired: false, reason: 'root path matches canonical note path' };
   }
 
-  const rootStat = fileStat(rootPath);
+  let rootStat;
+  try {
+    rootStat = fileStat(rootPath);
+  } catch (error) {
+    return {
+      checked: true,
+      repaired: false,
+      rootPath,
+      notesPath: canonicalPath,
+      reason: `could not inspect root duplicate: ${error.message}`,
+    };
+  }
   if (!rootStat) {
     return { checked: true, repaired: false, rootPath, notesPath: canonicalPath, reason: 'no root duplicate' };
   }
@@ -62,12 +73,33 @@ function repairZeroByteVaultRootDuplicate({
     return { checked: true, repaired: false, rootPath, notesPath: canonicalPath, reason: 'root duplicate is not zero-byte' };
   }
 
-  const canonicalStat = fileStat(canonicalPath);
+  let canonicalStat;
+  try {
+    canonicalStat = fileStat(canonicalPath);
+  } catch (error) {
+    return {
+      checked: true,
+      repaired: false,
+      rootPath,
+      notesPath: canonicalPath,
+      reason: `could not inspect canonical Notes file: ${error.message}`,
+    };
+  }
   if (!canonicalStat || canonicalStat.size === 0) {
     return { checked: true, repaired: false, rootPath, notesPath: canonicalPath, reason: 'matching populated Notes file not found' };
   }
 
-  fs.unlinkSync(rootPath);
+  try {
+    fs.unlinkSync(rootPath);
+  } catch (error) {
+    return {
+      checked: true,
+      repaired: false,
+      rootPath,
+      notesPath: canonicalPath,
+      reason: `could not remove zero-byte vault-root duplicate: ${error.message}`,
+    };
+  }
   return { checked: true, repaired: true, rootPath, notesPath: canonicalPath, reason: 'removed zero-byte vault-root duplicate' };
 }
 
