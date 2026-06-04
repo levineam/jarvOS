@@ -97,6 +97,8 @@ try {
   assert.match(doctor.stdout, /PASS workspace-files/);
   assert.match(doctor.stdout, /PASS config-schema/);
   assert.match(doctor.stdout, /PASS vault-path/);
+  assert.match(doctor.stdout, /PASS vault-path-stale/);
+  assert.match(doctor.stdout, /PASS journal-conflict/);
   assert.match(doctor.stdout, /READY/);
 
   const jsonDoctor = run(['doctor', '--profile=minimal', '--workspace', workspace, '--json'], { env });

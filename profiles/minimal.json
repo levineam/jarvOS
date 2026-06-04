@@ -22,6 +22,8 @@
     "workspace-files",
     "config-schema",
     "vault-path",
+    "vault-path-stale",
+    "journal-conflict",
     "agent-context-package"
   ]
 }
