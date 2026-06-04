@@ -251,7 +251,13 @@ jarvos doctor --profile minimal --workspace /path/to/jarvos-workspace
 
 `jarvos doctor` uses the checked-in profile manifest and reports portable health
 checks for the starter workspace, `jarvos.config.json`, vault folders, Node.js,
-and the public agent-context package. Local-only Paperclip, GBrain, and full
+and the public agent-context package. It also verifies your journal stays safe:
+`vault-path-stale` catches a configured vault root that has moved or gone away,
+and `journal-conflict` catches a second journaling tool (Obsidian's `journals`
+plugin or core Daily notes) writing into the same `Journal/` folder jarvOS owns.
+Run it after install and whenever you change vault or Obsidian settings. See the
+[Journal Install Contract](./docs/journal-install-contract.md) for the
+single-writer rule these checks enforce. Local-only Paperclip, GBrain, and full
 profile checks are intentionally out of the minimal public profile.
 
 ### OpenClaw
