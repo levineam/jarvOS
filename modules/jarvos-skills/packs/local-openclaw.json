@@ -1,0 +1,143 @@
+{
+  "name": "local-openclaw",
+  "version": "0.3.0",
+  "title": "Local OpenClaw Install Profile",
+  "description": "JarvOS profile for onboarding a local OpenClaw runtime without making OpenClaw the portable foundation.",
+  "release": {
+    "targetVersion": "v0.3.0",
+    "paperclipIssue": "SUP-1776",
+    "releaseParentIssue": "SUP-1957"
+  },
+  "source": {
+    "repo": "https://github.com/levineam/clawd",
+    "commit": "package-local",
+    "license": "ISC",
+    "scannedAt": "2026-05-26",
+    "importMode": "local-profile"
+  },
+  "boundary": {
+    "defaultSurface": "OpenClaw",
+    "foundationRequired": false,
+    "contentContractOwner": "@jarvos/secondbrain",
+    "principle": "OpenClaw is the local runtime adapter; JarvOS remains Markdown-first, tracker-agnostic, and assistant-portable.",
+    "taskAuthority": "Paperclip remains the live project/status system. OpenClaw sessions execute work, but do not own canonical issue status."
+  },
+  "skills": [
+    {
+      "name": "openclaw-runtime-adapter",
+      "sourcePath": "jarvos-secondbrain/adapters/openclaw/README.md",
+      "default": true,
+      "type": "runtime-adapter",
+      "role": "Register a local OpenClaw runtime as an adapter around JarvOS contracts.",
+      "requires": ["openclaw"],
+      "optionalRequires": [],
+      "install": {
+        "kind": "register-adapter",
+        "target": "runtimeAdapters.openclaw"
+      },
+      "guardrails": [
+        "Keep OpenClaw-specific behavior behind adapter registration instead of hard-coding it into core JarvOS packages.",
+        "Do not overwrite an existing OpenClaw runtime config during onboarding."
+      ]
+    },
+    {
+      "name": "openclaw-guidelines",
+      "sourcePath": "skills/openclaw-guidelines/SKILL.md",
+      "default": true,
+      "type": "runtime-guidance",
+      "role": "Expose OpenClaw operational guidelines as an installed runtime skill.",
+      "requires": [],
+      "optionalRequires": [],
+      "install": {
+        "kind": "copy-skill",
+        "target": "skills/openclaw-guidelines"
+      },
+      "guardrails": [
+        "Use guidelines to improve runtime behavior while keeping reusable JarvOS principles portable."
+      ]
+    },
+    {
+      "name": "workflow-execution",
+      "sourcePath": "skills/workflow-execution/SKILL.md",
+      "default": true,
+      "type": "workflow",
+      "role": "Route meaningful work through plan, tracker intake, execution, and verification.",
+      "requires": [],
+      "optionalRequires": [],
+      "install": {
+        "kind": "copy-skill",
+        "target": "skills/workflow-execution"
+      },
+      "guardrails": [
+        "Paperclip is the default live tracker; markdown project boards are reference artifacts unless explicitly in compatibility mode."
+      ]
+    },
+    {
+      "name": "context-management",
+      "sourcePath": "skills/context-management/SKILL.md",
+      "default": true,
+      "type": "continuity",
+      "role": "Install context-budget, compaction, and continuity guidance for long-running local sessions.",
+      "requires": [],
+      "optionalRequires": [],
+      "install": {
+        "kind": "copy-skill",
+        "target": "skills/context-management"
+      },
+      "guardrails": [
+        "Treat runtime compaction as an adapter concern; durable memory contracts stay in JarvOS packages."
+      ]
+    },
+    {
+      "name": "lossless-claw-continuity-check",
+      "sourcePath": "docs/openclaw/QMD_RETRIEVAL_STACK_DECISION_2026-03-23.md",
+      "default": false,
+      "type": "optional-runtime-check",
+      "role": "Check whether lossless-claw is available for conversation continuity without requiring it for profile install.",
+      "requires": [],
+      "optionalRequires": ["lossless-claw"],
+      "install": {
+        "kind": "doctor-check",
+        "target": "optional.lossless-claw"
+      },
+      "guardrails": [
+        "Use lossless-claw for conversation continuity only; do not treat it as the canonical note or task store."
+      ]
+    }
+  ],
+  "detection": {
+    "commands": [
+      {
+        "name": "openclaw",
+        "purpose": "Run and inspect the local OpenClaw runtime.",
+        "required": true,
+        "requiredFor": ["openclaw-runtime-adapter"],
+        "installHint": "Install OpenClaw and ensure `openclaw --version` works on PATH."
+      },
+      {
+        "name": "lossless-claw",
+        "purpose": "Optional conversation-continuity checks for local OpenClaw sessions.",
+        "required": false,
+        "statusImpact": "warning",
+        "requiredFor": ["lossless-claw-continuity-check"],
+        "installHint": "Optional: install lossless-claw as an OpenClaw extension, then run `jarvos-skills init --pack local-openclaw --enable-lossless-claw` to wire it as the context engine."
+      }
+    ],
+    "files": [
+      {
+        "name": "openclaw-state-dir",
+        "path": "~/.openclaw",
+        "purpose": "Default OpenClaw state directory.",
+        "required": false,
+        "installHint": "Run `jarvos-skills init --pack local-openclaw` to register the workspace without overwriting runtime config."
+      },
+      {
+        "name": "openclaw-runtime-config",
+        "path": "~/.openclaw/openclaw.json",
+        "purpose": "Existing OpenClaw runtime configuration, if one has already been created.",
+        "required": false,
+        "installHint": "If absent, let OpenClaw create its runtime config; JarvOS onboarding will not write this file."
+      }
+    ]
+  }
+}

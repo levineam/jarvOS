@@ -1,0 +1,69 @@
+{
+  "name": "v0-5-0",
+  "version": "0.5.0",
+  "title": "JarvOS v0.5.0 autonomy install profile",
+  "description": "Portable profile for non-clawd hosts that enables @jarvos/coding orchestration and shared-brain continuity.",
+  "release": {
+    "targetVersion": "v0.5.0",
+    "paperclipIssue": "SUP-2193",
+    "releaseParentIssue": "SUP-2232"
+  },
+  "source": {
+    "repo": "https://github.com/levineam/clawd",
+    "commit": "package-local",
+    "license": "ISC",
+    "scannedAt": "2026-05-31",
+    "importMode": "local-profile"
+  },
+  "boundary": {
+    "defaultSurface": "Claude/Codex",
+    "foundationRequired": false,
+    "contentContractOwner": "@jarvos/secondbrain",
+    "principle": "Profiles for non-clawd hosts should keep coding and continuity as runtime boundaries, not mutable state.",
+    "taskAuthority": "Paperclip remains the live task/state authority. Runtime agents read/write execution state through shared-brain continuity pointers."
+  },
+  "skills": [
+    {
+      "name": "coding",
+      "sourcePath": "jarvos-coding/src/index.js",
+      "default": true,
+      "type": "automation",
+      "role": "Expose @jarvos/coding with runTakeIssueToDone in the assistant/runtime surface.",
+      "requires": [],
+      "optionalRequires": [],
+      "install": {
+        "kind": "copy-skill",
+        "target": "skills/jarvos-coding"
+      },
+      "guardrails": [
+        "Keep coding execution evidence-backed and routed through Paperclip issue state.",
+        "Use runTakeIssueToDone through the portable host adapter contract.",
+        "Preserve existing tracker ownership and do not override Paperclip status.",
+        "Keep continuity checkpoints in the shared jarvos_session_state surface."
+      ]
+    },
+    {
+      "name": "agent-context",
+      "sourcePath": "scripts/jarvos-session-state.js",
+      "default": true,
+      "type": "continuity",
+      "role": "Register shared-brain MCP continuity seam under jarvos_session_state tools.",
+      "requires": [],
+      "optionalRequires": [],
+      "install": {
+        "kind": "copy-skill",
+        "target": "tools/jarvos-session-state.js"
+      },
+      "guardrails": [
+        "Keep session state file-backed and keyed by stable session identifiers.",
+        "Read live artifact pointers before mutating execution artifacts.",
+        "Report continuity health and failures through existing profile doctor checks.",
+        "Do not treat local session artifacts as the primary source of truth."
+      ]
+    }
+  ],
+  "detection": {
+    "commands": [],
+    "files": []
+  }
+}
