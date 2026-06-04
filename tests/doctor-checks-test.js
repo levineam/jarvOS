@@ -123,3 +123,52 @@ test('journal-conflict ignores a daily-notes folder that does not overlap Journa
     fs.rmSync(tmp, { recursive: true, force: true });
   }
 });
+
+test('journal-conflict fails when Periodic Notes daily folder overlaps Journal', () => {
+  const tmp = scratch();
+  try {
+    const vault = makeVault(path.join(tmp, 'vault'), { obsidian: true });
+    fs.writeFileSync(path.join(vault, '.obsidian', 'community-plugins.json'), JSON.stringify(['periodic-notes']));
+    const pnDir = path.join(vault, '.obsidian', 'plugins', 'periodic-notes');
+    fs.mkdirSync(pnDir, { recursive: true });
+    fs.writeFileSync(path.join(pnDir, 'data.json'), JSON.stringify({ daily: { enabled: true, folder: 'Journal' } }));
+    const configPath = writeConfig(tmp, { vaultPath: vault });
+    const res = checkJournalConflict(configPath);
+    assert.equal(res.ok, false);
+    assert.match(res.detail, /periodic-notes.*overlapping jarvOS Journal/);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('journal-conflict ignores Periodic Notes when its daily folder does not overlap Journal', () => {
+  const tmp = scratch();
+  try {
+    const vault = makeVault(path.join(tmp, 'vault'), { obsidian: true });
+    fs.writeFileSync(path.join(vault, '.obsidian', 'community-plugins.json'), JSON.stringify(['periodic-notes']));
+    const pnDir = path.join(vault, '.obsidian', 'plugins', 'periodic-notes');
+    fs.mkdirSync(pnDir, { recursive: true });
+    fs.writeFileSync(path.join(pnDir, 'data.json'), JSON.stringify({ daily: { enabled: true, folder: 'Daily' } }));
+    const configPath = writeConfig(tmp, { vaultPath: vault });
+    const res = checkJournalConflict(configPath);
+    assert.equal(res.ok, true, res.detail);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('journal-conflict ignores Periodic Notes when its daily section is disabled', () => {
+  const tmp = scratch();
+  try {
+    const vault = makeVault(path.join(tmp, 'vault'), { obsidian: true });
+    fs.writeFileSync(path.join(vault, '.obsidian', 'community-plugins.json'), JSON.stringify(['periodic-notes']));
+    const pnDir = path.join(vault, '.obsidian', 'plugins', 'periodic-notes');
+    fs.mkdirSync(pnDir, { recursive: true });
+    fs.writeFileSync(path.join(pnDir, 'data.json'), JSON.stringify({ daily: { enabled: false, folder: 'Journal' } }));
+    const configPath = writeConfig(tmp, { vaultPath: vault });
+    const res = checkJournalConflict(configPath);
+    assert.equal(res.ok, true, res.detail);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});

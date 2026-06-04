@@ -36,8 +36,10 @@ tools assume they own the dated file and will overwrite each other:
 - ❌ Do **not** enable the Obsidian core **Daily notes** plugin with its *New file
   location* set to `Journal/` (or to the vault root, which also lands daily notes
   on top of the journal).
-- ✅ It is fine to keep Daily notes / journaling plugins enabled if they write to a
-  **different** folder that does not overlap `Journal/`.
+- ❌ Do **not** point the **Periodic Notes** community plugin's daily notes at
+  `Journal/` (or the vault root).
+- ✅ It is fine to keep Daily notes / Periodic Notes / journaling plugins enabled if
+  they write to a **different** folder that does not overlap `Journal/`.
 
 If you want Obsidian's daily-note convenience, give it its own folder (for
 example `Daily/`) and leave `Journal/` to jarvOS.
@@ -50,7 +52,7 @@ the failure modes before they cost you journal content:
 | Check | Fails when | Why it matters |
 | --- | --- | --- |
 | `vault-path-stale` | the configured `vaultPath` root no longer exists | a moved/renamed vault means journal writes silently land in the wrong place |
-| `journal-conflict` | the `journals` plugin is enabled, or core Daily notes writes into a folder overlapping `Journal/` | a second writer can overwrite jarvOS journal entries with stubs (SUP-2269) |
+| `journal-conflict` | the `journals` plugin is enabled, or core Daily notes / Periodic Notes write into a folder overlapping `Journal/` | a second writer can overwrite jarvOS journal entries with stubs (SUP-2269) |
 
 Run it after install and any time you change vault or Obsidian settings:
 
