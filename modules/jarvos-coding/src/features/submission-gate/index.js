@@ -29,6 +29,11 @@ const REQUIRED_EVIDENCE = Object.freeze([
     description: 'Local autoreview ran before PR creation and accepted/actionable findings were fixed.',
   },
   {
+    key: 'goalAlignment',
+    label: 'Goal-alignment review',
+    description: 'An AI reviewer compared the PR against the issue plan/goal and recorded aligned or a specific goal-clarity blocker.',
+  },
+  {
     key: 'pullRequest',
     label: 'Pull request evidence',
     description: 'A PR URL/number exists, or the task is explicitly marked intake-only with no code submission.',
@@ -154,17 +159,22 @@ function formatSubmissionGateMarkdown({ identifier = 'SUP-XX', mode = 'code-subm
 Schema: \`${gate.schemaVersion}\`
 Decision mode: \`${gate.decision}\`
 
-This is an agent-agnostic OpenClaw code submission gate. It applies to Michael, Charlie, Codex-native subagents, and future code-producing agents.
+This is an agent-agnostic OpenClaw code submission gate. It applies to every AI personality that produces code: Michael, Charlie, Codex-native subagents, Hermes-hosted executors, and future code-producing agents.
+
+Execution entrypoint:
+- Start from workflow-execution/Paperclip intake. The issue plan/goal is the source of truth for scope, done criteria, and autonomous merge alignment.
 
 Required evidence before reporting code work complete:
 ${requirementLines.join('\n')}
 
 Tool roles:
-- \`clawpatch\`: slice-scoped advisory review and bounded fix loop before PR creation.
-- \`autoreview\`: local branch gate before PR creation; accepted/actionable findings block submission until fixed.
+- \`clawpatch\`: slice-scoped advisory review and bounded fix loop before PR creation. Equivalent allowed only when it is explicitly documented and provides pre-PR slice review plus bounded fix evidence.
+- \`autoreview\`: local branch gate before PR creation; accepted/actionable findings block submission until fixed. Equivalent allowed only when it records a holistic AI branch review against the PR diff.
+- Goal alignment: AI reviewer checks the PR against the issue plan/goal and vault/project plan context. If aligned and gates are clean, autonomous merge is allowed; if alignment is ambiguous, escalate only with the specific goal-clarity question.
 - Tests: focused command output or explicit no-test rationale tied to the changed surface.
 - Pull request: durable PR URL/number and branch evidence for review/CI.
-- \`clawsweeper\`: post-merge sweep only; it must not replace pre-submit clawpatch, autoreview, tests, or PR evidence.
+- \`clawsweeper\`: post-merge sweep only; equivalent allowed only when merged commits feed a documented follow-up audit queue. It must not replace pre-submit clawpatch, autoreview, tests, goal-alignment, or PR evidence.
+- Surface equivalents: use \`scripts/jarvos-gate-equivalents.js\` or the \`@jarvos/coding\` equivalent registry for jarvOS-repo PRs, Codex-native workers, and Hermes-hosted executors.
 
 If any required evidence is missing, fail closed and update the Paperclip issue as blocked or mark the task \`intake-only\` with the reason no code was submitted.`;
 }

@@ -2,6 +2,7 @@
 
 const SESSION_STATE_SCHEMA_VERSION = 'jarvos-session-state/v1';
 const ARTICLE_THREAD_KIND = 'article-thread';
+const ARTICLE_SESSION_KIND = ARTICLE_THREAD_KIND;
 const CODE_THREAD_KIND = 'code-thread';
 const DEFAULT_SESSION_STATE_FILE = '.jarvos/session-state.json';
 
@@ -75,7 +76,7 @@ function buildCodeThreadCheckpoint(input = {}) {
 function buildArticleThreadCheckpoint(input = {}) {
   return buildSessionCheckpoint({
     ...input,
-    kind: ARTICLE_THREAD_KIND,
+    kind: ARTICLE_SESSION_KIND,
   });
 }
 

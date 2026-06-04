@@ -3,7 +3,7 @@
 const { runTakeIssueToDone } = require('../features/orchestrator');
 
 const HOST_ADAPTER_SCHEMA_VERSION = 'jarvos-coding-host-adapter/v1';
-const SUPPORTED_HOSTS = Object.freeze(['claude-code', 'codex']);
+const SUPPORTED_HOSTS = Object.freeze(['claude-code', 'codex', 'hermes', 'personality']);
 const DEFAULT_MCP_TOOL_NAME = 'jarvos_coding_take_issue_to_done';
 const DEFAULT_SKILL_NAME = 'jarvos-coding';
 
@@ -11,6 +11,8 @@ function normalizeHost(host = '') {
   const value = String(host || '').trim().toLowerCase();
   if (value === 'claude' || value === 'claude_code') return 'claude-code';
   if (value === 'codex-cli') return 'codex';
+  if (value === 'hermes-cli' || value === 'hermes-sidecar') return 'hermes';
+  if (value === 'future-personality' || value === 'custom-personality') return 'personality';
   return value;
 }
 
@@ -30,11 +32,52 @@ function codingHostAdapterContract(host) {
       readSessionState: true,
       readLiveArtifactFromPointer: true,
     },
+    continuity: {
+      sharedBrain: 'jarvos_session_state',
+      surfaces: ['@jarvos/agent-context', 'scripts/jarvos-session-state.js'],
+      readOnEntry: ['jarvos_session_state.read', 'hydrate_live_artifact_pointer'],
+      writeCheckpoint: ['jarvos_session_state.write'],
+      freshSessionSurvival: 'file-backed session state keyed by session id',
+    },
     checkpointPolicy: {
       docsAndIssues: 'pointer-only',
       code: 'checkpoint-thin-thread-at-gates',
     },
   };
+}
+
+function articleFor(value) {
+  return /^[aeiou]/i.test(String(value || '')) ? 'an' : 'a';
+}
+
+function continuityAdapterMatrix(hosts = SUPPORTED_HOSTS) {
+  return hosts.map((host) => {
+    try {
+      const contract = codingHostAdapterContract(host);
+      return {
+        host,
+        normalizedHost: contract.host,
+        status: 'supported',
+        readOnEntry: contract.entryBehavior.readSessionState,
+        hydrateLiveArtifact: contract.entryBehavior.readLiveArtifactFromPointer,
+        writeCheckpoint: contract.requiredTools.includes('jarvos_session_state.write'),
+        freshSessionSurvival: contract.continuity.freshSessionSurvival,
+        ownerAction: null,
+      };
+    } catch (error) {
+      const normalizedHost = normalizeHost(host);
+      return {
+        host,
+        normalizedHost,
+        status: 'unsupported',
+        readOnEntry: false,
+        hydrateLiveArtifact: false,
+        writeCheckpoint: false,
+        freshSessionSurvival: null,
+        ownerAction: `Add ${articleFor(normalizedHost)} ${normalizedHost} host adapter or mark the lane out of scope before assigning shared-brain continuity work.`,
+      };
+    }
+  });
 }
 
 function requireObject(value, label) {
@@ -174,6 +217,7 @@ module.exports = {
   buildMcpToolDescriptor,
   buildSkillDescriptor,
   codingHostAdapterContract,
+  continuityAdapterMatrix,
   createClaudeCodeHostAdapter,
   createCodexHostAdapter,
   createCodingHostAdapter,
