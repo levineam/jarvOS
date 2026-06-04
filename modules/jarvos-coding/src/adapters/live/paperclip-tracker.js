@@ -20,11 +20,6 @@ function defaultPrLink() {
   return require(path.join(root, DEFAULT_PR_LINK_RELATIVE));
 }
 
-function resolvePrLink(prLink) {
-  if (prLink) return prLink;
-  return defaultPrLink();
-}
-
 function issueIdentifierOf(input = {}) {
   return input.issue?.identifier || input.issueIdentifier || null;
 }
@@ -35,7 +30,12 @@ function issueIdentifierOf(input = {}) {
  * verifyAndClose (final close) stages against the real Paperclip API.
  */
 function createLivePaperclipTracker(options = {}) {
-  const prLink = resolvePrLink(options.prLink);
+  // Resolve clawd's paperclip-pr-link lazily on first use, not at construction:
+  // buildLiveCodingAdapters() must stay constructible in the public package
+  // (where clawd's scripts are absent) and only require the real module when a
+  // live method actually runs. Tests/callers inject their own `prLink`.
+  let prLinkRef = options.prLink || null;
+  const prLink = () => (prLinkRef || (prLinkRef = defaultPrLink()));
   const claimStatus = options.claimStatus || 'in_progress';
   const closeStatus = options.closeStatus || 'done';
 
@@ -46,7 +46,7 @@ function createLivePaperclipTracker(options = {}) {
       const identifier = issueIdentifierOf(input);
       if (!identifier) throw new Error('live tracker claimIssue requires an issue identifier');
 
-      const issue = prLink.getIssueByIdentifier(identifier);
+      const issue = prLink().getIssueByIdentifier(identifier);
       if (!issue) {
         return { schemaVersion: TRACKER_SCHEMA_VERSION, status: 'not_found', identifier, ok: false };
       }
@@ -61,7 +61,7 @@ function createLivePaperclipTracker(options = {}) {
         };
       }
 
-      const result = prLink.transitionIssue(identifier, claimStatus, options.claimComment);
+      const result = prLink().transitionIssue(identifier, claimStatus, options.claimComment);
       return {
         schemaVersion: TRACKER_SCHEMA_VERSION,
         status: result.ok ? 'claimed' : 'failed',
@@ -78,7 +78,7 @@ function createLivePaperclipTracker(options = {}) {
       const identifier = issueIdentifierOf(input);
       if (!identifier) throw new Error('live tracker verifyAndClose requires an issue identifier');
 
-      const issue = prLink.getIssueByIdentifier(identifier);
+      const issue = prLink().getIssueByIdentifier(identifier);
       if (!issue) {
         return { schemaVersion: TRACKER_SCHEMA_VERSION, status: 'not_found', identifier, ok: false };
       }
@@ -94,9 +94,24 @@ function createLivePaperclipTracker(options = {}) {
         };
       }
 
+      // Never close an issue without proof its PR merged. In the default flow the
+      // pullRequest stage yields an OPEN PR and postMergeSweep no-ops, so closing
+      // here would prematurely complete a still-open issue. Defer the close to the
+      // out-of-band onPRMerged path (or a later run fed merge evidence).
+      if (!isPullRequestMerged(input, input.pullRequest || {})) {
+        return {
+          schemaVersion: TRACKER_SCHEMA_VERSION,
+          status: 'deferred',
+          identifier,
+          issueId: issue.id,
+          reason: 'pull request not merged',
+          ok: true,
+        };
+      }
+
       const comment = options.closeComment
         || `[jarvos-coding] verifyAndClose: closing ${identifier} after merge of ${input.pullRequest?.url || input.branch || 'branch'}.`;
-      const result = prLink.transitionIssue(identifier, closeStatus, comment);
+      const result = prLink().transitionIssue(identifier, closeStatus, comment);
       return {
         schemaVersion: TRACKER_SCHEMA_VERSION,
         status: result.ok ? 'closed' : 'failed',
@@ -129,7 +144,10 @@ function isPullRequestMerged(input, pullRequest) {
  * linked issues to done.
  */
 function createLivePostMergeSweep(options = {}) {
-  const prLink = resolvePrLink(options.prLink);
+  // Lazy clawd require (see createLivePaperclipTracker): stay constructible in
+  // the public package; only touch the real module when sweep() actually runs.
+  let prLinkRef = options.prLink || null;
+  const prLink = () => (prLinkRef || (prLinkRef = defaultPrLink()));
   const defaultRepo = options.repo || process.env.PR_AUTOPILOT_REPO || null;
 
   return {
@@ -166,7 +184,7 @@ function createLivePostMergeSweep(options = {}) {
         };
       }
 
-      const actions = prLink.onPRMerged({
+      const actions = prLink().onPRMerged({
         repo,
         prNumber,
         title: pullRequest.title || input.title || '',
