@@ -29,6 +29,8 @@
   "scripts": {
     "test": "node --test tests/*.test.js",
     "lint:notes": "node packages/jarvos-secondbrain-notes/src/lint-frontmatter.js --json",
+    "maintain:manual-notes": "node packages/jarvos-secondbrain-notes/src/manual-notes-maintenance.js --dry-run",
+    "maintain:manual-notes:apply": "node packages/jarvos-secondbrain-notes/src/manual-notes-maintenance.js --apply",
     "journal:dry-run": "node packages/jarvos-secondbrain-journal/src/journal-maintenance.js --dry-run",
     "detect-vault": "node scripts/detect-vault.js"
   },

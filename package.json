@@ -31,6 +31,12 @@
     "modules/jarvos-coding/README.md",
     "modules/jarvos-coding/package.json",
     "modules/jarvos-coding/src/",
+    "modules/jarvos-secondbrain/README.md",
+    "modules/jarvos-secondbrain/package.json",
+    "modules/jarvos-secondbrain/bridge/",
+    "modules/jarvos-secondbrain/packages/",
+    "modules/jarvos-secondbrain/scripts/",
+    "modules/jarvos-secondbrain/src/",
     "modules/jarvos-skills/README.md",
     "modules/jarvos-skills/docs/",
     "modules/jarvos-skills/manifest.json",
@@ -41,6 +47,7 @@
     "modules/jarvos-skills/src/",
     "profiles/",
     "scripts/jarvos.js",
+    "scripts/manual-notes-maintenance.js",
     "templates/"
   ],
   "bin": {
@@ -61,7 +68,9 @@
     "test:structure": "bash scripts/smoke-test.sh",
     "release:check": "node scripts/release-readiness-check.js",
     "release:drift": "node scripts/unreleased-drift-check.js",
-    "release:check:candidate": "node scripts/release-readiness-check.js --allow-dirty --allow-unreleased"
+    "release:check:candidate": "node scripts/release-readiness-check.js --allow-dirty --allow-unreleased",
+    "maintain:manual-notes": "node scripts/manual-notes-maintenance.js --dry-run",
+    "maintain:manual-notes:apply": "node scripts/manual-notes-maintenance.js --apply"
   },
   "engines": {
     "node": ">=18"
