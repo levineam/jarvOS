@@ -3,12 +3,24 @@
   "version": "1.0.0",
   "description": "Notes package for jarvos-secondbrain — write-to-vault and lint-frontmatter implementations",
   "main": "src/write-to-vault.js",
+  "bin": {
+    "jarvos-write-to-vault": "src/write-to-vault.js",
+    "jarvos-lint-frontmatter": "src/lint-frontmatter.js",
+    "jarvos-manual-notes-maintenance": "src/manual-notes-maintenance.js"
+  },
   "scripts": {
+    "start": "node src/write-to-vault.js",
     "lint": "node src/lint-frontmatter.js",
     "lint:fix": "node src/lint-frontmatter.js --fix",
     "lint:json": "node src/lint-frontmatter.js --json",
     "maintain:manual-notes": "node src/manual-notes-maintenance.js --dry-run",
     "maintain:manual-notes:apply": "node src/manual-notes-maintenance.js --apply"
+  },
+  "exports": {
+    ".": "./src/write-to-vault.js",
+    "./lint-frontmatter": "./src/lint-frontmatter.js",
+    "./manual-notes-maintenance": "./src/manual-notes-maintenance.js",
+    "./write-to-vault": "./src/write-to-vault.js"
   },
   "keywords": [
     "jarvos",

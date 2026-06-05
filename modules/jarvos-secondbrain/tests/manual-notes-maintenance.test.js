@@ -189,6 +189,46 @@ test('since-state catches frontmatter-only privacy changes and cleans queues', (
   }
 });
 
+test('since-state still processes stale audit coverage after dry-run state updates', () => {
+  const { root, notesDir, knowledgeDir, statePath } = makeTempVault();
+  try {
+    const notePath = path.join(notesDir, 'Manual Idea.md');
+    fs.writeFileSync(notePath, '# Manual Idea\n\nA useful portable pattern belongs in the stack.\n', 'utf8');
+
+    processOnce(runFlags({
+      apply: true,
+      dryRun: false,
+      notesDir,
+      knowledgeDir,
+      statePath,
+    }));
+
+    fs.appendFileSync(notePath, '\nNew body material that has not been optimized yet.\n', 'utf8');
+
+    const dryRunUpdate = processOnce(runFlags({
+      updateState: true,
+      sinceState: true,
+      notesDir,
+      knowledgeDir,
+      statePath,
+    }));
+    assert.equal(dryRunUpdate.candidates, 1);
+
+    const report = processOnce(runFlags({
+      sinceState: true,
+      notesDir,
+      knowledgeDir,
+      statePath,
+    }));
+
+    assert.equal(report.candidates, 1);
+    assert.equal(report.files[0].auditCovered, false);
+    assert.equal(report.optimization.auditOnly, 1);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('apply avoids partial rewrite when unfixable frontmatter drift exists', () => {
   const { root, notesDir, knowledgeDir, statePath } = makeTempVault();
   try {
