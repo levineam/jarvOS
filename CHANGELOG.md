@@ -4,6 +4,12 @@ Release sections describe user-facing jarvOS changes. Historical public-doc sync
 
 ## [Unreleased]
 
+- Added portable `jarvos-secondbrain-notes` manual note maintenance for
+  markdown notes created outside the canonical writer: dry-run audit, explicit
+  apply mode, state/audit coverage checks, sensitivity-aware GBrain and
+  memory-wiki queue cleanup, QMD freshness records, package bin/exports, docs,
+  and focused tests.
+
 ## v0.3.0 — 2026-05-22
 
 Public CLI, Doctor, and Obsidian default experience-pack release. Tracked in
