@@ -6,7 +6,9 @@
   "scripts": {
     "lint": "node src/lint-frontmatter.js",
     "lint:fix": "node src/lint-frontmatter.js --fix",
-    "lint:json": "node src/lint-frontmatter.js --json"
+    "lint:json": "node src/lint-frontmatter.js --json",
+    "maintain:manual-notes": "node src/manual-notes-maintenance.js --dry-run",
+    "maintain:manual-notes:apply": "node src/manual-notes-maintenance.js --apply"
   },
   "keywords": [
     "jarvos",

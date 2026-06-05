@@ -61,7 +61,17 @@ function writeJson(filePath, data) {
 function parseList(value) {
   if (Array.isArray(value)) return value.map(String).map((item) => item.trim()).filter(Boolean);
   if (typeof value !== 'string') return [];
-  return value.split(',').map((item) => item.replace(/^[-\s]+/, '').trim()).filter(Boolean);
+  const trimmed = value.trim();
+  if (!trimmed) return [];
+  if (trimmed.startsWith('[')) {
+    try {
+      const parsed = JSON.parse(trimmed.replace(/'/g, '"'));
+      if (Array.isArray(parsed)) return parsed.map(String).map((item) => item.trim()).filter(Boolean);
+    } catch {
+      // Fall through to comma parsing.
+    }
+  }
+  return trimmed.split(',').map((item) => item.replace(/^[-\s]+/, '').trim()).filter(Boolean);
 }
 
 function extractWikilinks(body) {
@@ -88,6 +98,16 @@ function extractEntities(title, body, wikilinks = []) {
   return [...entities].slice(0, 24);
 }
 
+function extractClaims(body) {
+  const sentences = String(body || '')
+    .replace(/^#\s+.+$/gm, '')
+    .split(/(?<=[.!?])\s+/)
+    .map((sentence) => sentence.trim())
+    .filter((sentence) => sentence.length >= 24 && sentence.length <= 280)
+    .slice(0, 6);
+  return sentences.map((text, index) => ({ id: `claim-${index + 1}`, text, evidence: 'source-note-body' }));
+}
+
 function summarize(body) {
   const clean = String(body || '')
     .replace(/^---[\s\S]*?---\s*/m, '')
@@ -106,7 +126,13 @@ function vaultRootFor(notesDir) {
 }
 
 function defaultKnowledgeDir(notesDir) {
-  return process.env.JARVOS_KNOWLEDGE_DIR || path.join(vaultRootFor(notesDir || process.cwd()), '.jarvos', 'knowledge');
+  const vaultRoot = vaultRootFor(notesDir || process.cwd());
+  return process.env.JARVOS_KNOWLEDGE_DIR || path.join(vaultRoot, '.jarvos', 'knowledge');
+}
+
+function booleanish(value) {
+  if (typeof value === 'boolean') return value;
+  return /^(true|yes|1)$/i.test(String(value || '').trim());
 }
 
 function sensitivityFor({ filePath, body, frontmatter }) {
@@ -115,7 +141,7 @@ function sensitivityFor({ filePath, body, frontmatter }) {
     .join('\n')
     .toLowerCase();
   const reasons = [];
-  if (frontmatter.private === true || frontmatter.sensitive === true) {
+  if (booleanish(frontmatter.private) || booleanish(frontmatter.sensitive)) {
     reasons.push('frontmatter marks note private/sensitive');
   }
   if (tags.some((tag) => /^(private|sensitive|secret|credentials?|medical|financial|tax)$/i.test(tag))) {
@@ -131,6 +157,10 @@ function sensitivityFor({ filePath, body, frontmatter }) {
   };
 }
 
+function exclusionReasons(args) {
+  return sensitivityFor(args).reasons;
+}
+
 function sourcePathFor(filePath, notesDir) {
   const root = vaultRootFor(notesDir || path.dirname(filePath));
   const rel = path.relative(root, filePath).replace(/\\/g, '/');
@@ -138,13 +168,17 @@ function sourcePathFor(filePath, notesDir) {
 }
 
 function buildArtifact({ filePath, notesDir, title, body, frontmatter, created, journal = null }) {
+  const aliases = [...new Set([title, ...parseList(frontmatter.aliases || '')].filter(Boolean))];
   const wikilinks = extractWikilinks(body);
   const entities = extractEntities(title, body, wikilinks);
+  const concepts = [...new Set([...wikilinks, ...entities].map((value) => slugify(value)).filter(Boolean))].slice(0, 24);
   const sensitivity = sensitivityFor({ filePath, body, frontmatter });
   const sourcePath = sourcePathFor(filePath, notesDir);
   const bodyHash = sha256(body);
   const now = new Date().toISOString();
-  const queueStatus = sensitivity.excluded ? 'skipped' : 'queued';
+  const claims = extractClaims(body);
+  const gbrainStatus = sensitivity.excluded ? 'skipped' : 'queued';
+  const memoryWikiStatus = sensitivity.excluded ? 'skipped' : 'queued';
 
   return {
     version: 1,
@@ -154,10 +188,11 @@ function buildArtifact({ filePath, notesDir, title, body, frontmatter, created, 
     sourceNote: sourcePath,
     title,
     bodyHash,
-    aliases: [...new Set([title, ...parseList(frontmatter.aliases || '')].filter(Boolean))],
+    aliases,
     entities,
-    concepts: [...new Set([...wikilinks, ...entities].map(slugify))].slice(0, 24),
+    concepts,
     relationships: wikilinks.map((link) => ({ type: 'wikilink', target: link, targetSlug: slugify(link) })),
+    claims,
     privacyTier: sensitivity.privacyTier,
     sensitivity: { excluded: sensitivity.excluded, reasons: sensitivity.reasons },
     provenance: {
@@ -169,12 +204,38 @@ function buildArtifact({ filePath, notesDir, title, body, frontmatter, created, 
       journalBacklink: journal || null,
     },
     summary: summarize(body),
+    gbrain: { status: gbrainStatus, slug: sensitivity.excluded ? null : slugify(title), skippedReasons: sensitivity.reasons },
+    memoryWiki: { status: memoryWikiStatus, skippedReasons: sensitivity.reasons },
+    qmd: { status: 'pending-refresh', reason: 'note optimized after write; refresh/index should run before treating search as fresh' },
+    obsidian: { status: 'optimized', evidence: ['readable markdown source', 'stable markdown path', 'Dataview-friendly frontmatter'] },
+    losslessClaw: {
+      status: 'continuity-captured',
+      note: 'continuity artifact records the note action; lossless-claw is not treated as the primary vault note knowledge base',
+    },
     downstreamStatuses: {
       obsidian: 'optimized',
-      memoryWiki: queueStatus,
+      memoryWiki: memoryWikiStatus,
       qmd: 'pending-refresh',
-      gbrain: queueStatus,
+      gbrain: gbrainStatus,
       losslessClaw: 'continuity-captured',
+    },
+    derivative: {
+      summary: summarize(body),
+      aliases,
+      entities,
+      concepts,
+      relationships: {
+        wikilinks,
+        related: wikilinks.map((link) => slugify(link)),
+      },
+      claims,
+    },
+    stack: {
+      obsidian: { optimized: true, status: 'optimized' },
+      memoryWiki: { optimized: true, status: memoryWikiStatus, skippedReasons: sensitivity.reasons },
+      qmd: { optimized: true, status: 'pending-refresh' },
+      gbrain: { eligible: !sensitivity.excluded, queued: !sensitivity.excluded, status: gbrainStatus, skippedReasons: sensitivity.reasons },
+      losslessClaw: { continuityCaptured: true, status: 'continuity-captured' },
     },
   };
 }
@@ -186,6 +247,7 @@ function upsertBySource(filePath, key, entry) {
   data.entries = data.entries && typeof data.entries === 'object' ? data.entries : {};
   data.entries[key] = entry;
   writeJson(filePath, data);
+  return data.entries[key];
 }
 
 function removeBySource(filePath, key) {
@@ -196,14 +258,41 @@ function removeBySource(filePath, key) {
   writeJson(filePath, data);
 }
 
-function optimizeNoteKnowledge({ filePath, notesDir, title, body, frontmatter = {}, created = true, journal = null }) {
+function recordAudit(knowledgeDir, artifact) {
+  const auditPath = path.join(knowledgeDir, 'optimization-audit.json');
+  const audit = readJson(auditPath, { version: 1, entries: {}, counts: {} });
+  audit.version = 1;
+  audit.updatedAt = artifact.updatedAt;
+  audit.entries = audit.entries && typeof audit.entries === 'object' ? audit.entries : {};
+  audit.entries[artifact.sourceNote] = {
+    sourceNote: artifact.sourceNote,
+    title: artifact.title,
+    bodyHash: artifact.bodyHash,
+    updatedAt: artifact.updatedAt,
+    statuses: artifact.downstreamStatuses,
+    sensitivity: artifact.sensitivity,
+  };
+  const entries = Object.values(audit.entries);
+  audit.counts = {
+    optimized: entries.filter((entry) => entry.statuses?.obsidian === 'optimized').length,
+    queued: entries.filter((entry) => ['queued', 'pending-refresh'].includes(entry.statuses?.gbrain) || ['queued', 'pending-refresh'].includes(entry.statuses?.memoryWiki)).length,
+    skipped: entries.filter((entry) => entry.statuses?.gbrain === 'skipped' || entry.statuses?.memoryWiki === 'skipped').length,
+    pending: entries.filter((entry) => entry.statuses?.qmd === 'pending-refresh').length,
+    imported: entries.filter((entry) => entry.statuses?.gbrain === 'imported' || entry.statuses?.memoryWiki === 'imported').length,
+  };
+  writeJson(auditPath, audit);
+  return { auditPath, counts: audit.counts };
+}
+
+function optimizeNoteKnowledge({ filePath, notesDir, knowledgeDir: providedKnowledgeDir = null, title, body, frontmatter = {}, created = true, journal = null }) {
   if (process.env.JARVOS_NOTE_OPTIMIZATION === '0') {
     return { optimized: false, skipped: true, reason: 'disabled by JARVOS_NOTE_OPTIMIZATION=0' };
   }
 
-  const knowledgeDir = defaultKnowledgeDir(notesDir);
+  const knowledgeDir = path.resolve(providedKnowledgeDir || defaultKnowledgeDir(notesDir));
   const sourcePath = sourcePathFor(filePath, notesDir);
-  const artifactKey = sha256(`${sourcePath}:${sha256(body)}`).slice(0, 16);
+  const bodyHash = sha256(body);
+  const artifactKey = sha256(`${sourcePath}:${bodyHash}`).slice(0, 16);
   const artifactPath = path.join(knowledgeDir, 'artifacts', `${slugify(title)}-${artifactKey}.json`);
   const artifact = buildArtifact({ filePath, notesDir, title, body, frontmatter, created, journal });
   writeJson(artifactPath, artifact);
@@ -213,7 +302,7 @@ function optimizeNoteKnowledge({ filePath, notesDir, title, body, frontmatter = 
   const qmdPendingPath = path.join(knowledgeDir, 'qmd-refresh-pending.json');
   const continuityPath = path.join(knowledgeDir, 'lossless-continuity.json');
 
-  if (artifact.downstreamStatuses.gbrain === 'queued') {
+  if (artifact.gbrain.status === 'queued') {
     upsertBySource(queuePath, sourcePath, {
       queuedAt: artifact.generatedAt,
       sourcePath,
@@ -224,21 +313,32 @@ function optimizeNoteKnowledge({ filePath, notesDir, title, body, frontmatter = 
       entities: artifact.entities,
       concepts: artifact.concepts,
       relationships: artifact.relationships,
+      claims: artifact.claims,
       citations: [{ sourcePath, title, bodySha256: artifact.bodyHash }],
+      bodySha256: artifact.bodyHash,
       status: 'queued',
+      policy: 'safe-note-auto-queue',
+      sync: { status: 'pending', reason: 'gbrain sync/embed not run inline by note writer' },
     });
+  } else {
+    removeBySource(queuePath, sourcePath);
+  }
+
+  if (artifact.memoryWiki.status === 'queued') {
     upsertBySource(memoryWikiQueuePath, sourcePath, {
       queuedAt: artifact.generatedAt,
       sourcePath,
       artifactPath,
       title,
       summary: artifact.summary,
+      aliases: artifact.aliases,
       entities: artifact.entities,
       concepts: artifact.concepts,
+      claims: artifact.claims,
+      evidence: [{ sourcePath, citation: artifact.provenance.citation }],
       status: 'queued',
     });
   } else {
-    removeBySource(queuePath, sourcePath);
     removeBySource(memoryWikiQueuePath, sourcePath);
   }
 
@@ -249,6 +349,7 @@ function optimizeNoteKnowledge({ filePath, notesDir, title, body, frontmatter = 
     title,
     bodySha256: artifact.bodyHash,
     status: 'pending-refresh',
+    reason: 'QMD/search freshness should be refreshed after note optimization',
   });
   upsertBySource(continuityPath, sourcePath, {
     capturedAt: artifact.generatedAt,
@@ -260,6 +361,8 @@ function optimizeNoteKnowledge({ filePath, notesDir, title, body, frontmatter = 
     status: 'continuity-captured',
   });
 
+  const audit = recordAudit(knowledgeDir, artifact);
+
   return {
     optimized: true,
     artifactPath,
@@ -267,18 +370,22 @@ function optimizeNoteKnowledge({ filePath, notesDir, title, body, frontmatter = 
     memoryWikiQueuePath,
     qmdPendingPath,
     continuityPath,
-    gbrainQueued: artifact.downstreamStatuses.gbrain === 'queued',
-    memoryWikiQueued: artifact.downstreamStatuses.memoryWiki === 'queued',
-    qmdStatus: artifact.downstreamStatuses.qmd,
+    auditPath: audit.auditPath,
+    auditCounts: audit.counts,
+    gbrainQueued: artifact.gbrain.status === 'queued',
+    memoryWikiQueued: artifact.memoryWiki.status === 'queued',
+    qmdStatus: artifact.qmd.status,
     excluded: artifact.sensitivity.excluded,
     skippedReasons: artifact.sensitivity.reasons,
     statuses: artifact.downstreamStatuses,
+    stack: artifact.stack,
   };
 }
 
 module.exports = {
   buildArtifact,
   defaultKnowledgeDir,
+  exclusionReasons,
   optimizeNoteKnowledge,
   sensitivityFor,
   slugify,
