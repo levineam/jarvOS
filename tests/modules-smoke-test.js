@@ -757,6 +757,155 @@ try {
   bad('@jarvos/agentify module load', e);
 }
 
+// ── @jarvos/agentify (channel-context tools) ─────────────────────────────────
+
+console.log('\n→ @jarvos/agentify (channel-context tools, SUP-2197)');
+
+try {
+  const agentify = require(path.join(ROOT, 'modules/jarvos-agentify/src/index.js'));
+
+  // ── Tool exports are present ───────────────────────────────────────────────
+  if (typeof agentify.getChannelContextTool === 'object' &&
+      agentify.getChannelContextTool !== null) {
+    ok('getChannelContextTool is exported from root module');
+  } else {
+    bad('getChannelContextTool export', new Error('Expected object'));
+  }
+
+  if (typeof agentify.getThreadMessagesTool === 'object' &&
+      agentify.getThreadMessagesTool !== null) {
+    ok('getThreadMessagesTool is exported from root module');
+  } else {
+    bad('getThreadMessagesTool export', new Error('Expected object'));
+  }
+
+  if (Array.isArray(agentify.CHANNEL_CONTEXT_TOOLS) &&
+      agentify.CHANNEL_CONTEXT_TOOLS.length === 2) {
+    ok('CHANNEL_CONTEXT_TOOLS array contains 2 tools');
+  } else {
+    bad('CHANNEL_CONTEXT_TOOLS', new Error(`Expected array of 2, got: ${JSON.stringify(agentify.CHANNEL_CONTEXT_TOOLS)}`));
+  }
+
+  const agentifyPackage = require(path.join(ROOT, 'modules/jarvos-agentify/package.json'));
+  if (agentifyPackage.exports && agentifyPackage.exports['./package.json'] === './package.json') {
+    ok('@jarvos/agentify exports package metadata');
+  } else {
+    bad('@jarvos/agentify package metadata export', new Error(JSON.stringify(agentifyPackage.exports)));
+  }
+
+  // ── Tool names and MCP shape ───────────────────────────────────────────────
+  const cct = agentify.getChannelContextTool;
+  if (cct.name === 'get_channel_context' &&
+      typeof cct.description === 'string' &&
+      typeof cct.execute === 'function' &&
+      cct.inputSchema.required.includes('tenant_id') &&
+      cct.inputSchema.required.includes('channel_id')) {
+    ok('get_channel_context has correct MCP shape');
+  } else {
+    bad('get_channel_context shape', new Error(JSON.stringify(cct)));
+  }
+
+  const tmt = agentify.getThreadMessagesTool;
+  if (tmt.name === 'get_thread_messages' &&
+      typeof tmt.description === 'string' &&
+      typeof tmt.execute === 'function' &&
+      tmt.inputSchema.required.includes('thread_id')) {
+    ok('get_thread_messages has correct MCP shape');
+  } else {
+    bad('get_thread_messages shape', new Error(JSON.stringify(tmt)));
+  }
+
+  // ── buildChannelContext and renderContextMarkdown ──────────────────────────
+  if (typeof agentify.buildChannelContext === 'function') {
+    ok('buildChannelContext is exported');
+  } else {
+    bad('buildChannelContext export', new Error('Expected function'));
+  }
+
+  if (typeof agentify.renderContextMarkdown === 'function') {
+    ok('renderContextMarkdown is exported');
+  } else {
+    bad('renderContextMarkdown export', new Error('Expected function'));
+  }
+
+  // ── renderContextMarkdown output ───────────────────────────────────────────
+  const ctx = {
+    tenantId:       'aaf',
+    channelId:      '1234567890',
+    fetchedAt:      '2026-05-29T12:00:00.000Z',
+    windowHours:    24,
+    afterSeq:       0,
+    messages:       [{ author: 'andrew', ts: '2026-05-29T11:00:00Z', content: 'AAF channel active.', embeds: [], thread: null }],
+    threads:        [{ id: '999', name: 'Planning', messageCount: 3 }],
+    activityEvents: [{ type: 'agent.loop.started', seq: 1, source: 'smoke-test', occurred_at: '2026-05-29T10:00:00Z', payload: { summary: 'Agent loop started from Discord context.' } }],
+    linkedResources: [{ type: 'note', path: 'Notes/AAF Plan v3.md' }],
+    partial: false,
+    errors: [],
+  };
+
+  const md = agentify.renderContextMarkdown(ctx);
+  if (
+    md.includes('## Channel Context — aaf') &&
+    md.includes('AAF channel active.') &&
+    md.includes('Planning') &&
+    md.includes('id: `999`') &&
+    md.includes('agent.loop.started') &&
+    md.includes('Agent loop started from Discord context.') &&
+    md.includes('Notes/AAF Plan v3.md')
+  ) {
+    ok('renderContextMarkdown produces correct markdown sections');
+  } else {
+    bad('renderContextMarkdown output', new Error('Missing expected sections in:\n' + md));
+  }
+
+  const partialMd = agentify.renderContextMarkdown({
+    ...ctx,
+    partial: true,
+    errors: [{ source: 'messages', message: 'DISCORD_BOT_TOKEN is required' }],
+  });
+  if (partialMd.includes('Context Fetch Errors') && partialMd.includes('messages: DISCORD_BOT_TOKEN is required')) {
+    ok('renderContextMarkdown surfaces partial fetch errors');
+  } else {
+    bad('renderContextMarkdown partial errors', new Error(partialMd));
+  }
+
+  // ── sub-path export: ./channel-context ────────────────────────────────────
+  const ccModule = require(path.join(ROOT, 'modules/jarvos-agentify/src/lib/channel-context.js'));
+  if (ccModule.ALL_TOOLS && ccModule.ALL_TOOLS.length === 2) {
+    ok('./channel-context sub-path exports ALL_TOOLS');
+  } else {
+    bad('./channel-context sub-path', new Error('Expected ALL_TOOLS array of 2'));
+  }
+
+  // ── sub-path export: ./discord-api ────────────────────────────────────────
+  const daModule = require(path.join(ROOT, 'modules/jarvos-agentify/src/lib/discord-api.js'));
+  if (typeof daModule.normaliseMessage === 'function') {
+    ok('./discord-api sub-path exports normaliseMessage');
+  } else {
+    bad('./discord-api sub-path', new Error('Expected normaliseMessage function'));
+  }
+
+  // ── normaliseMessage correctness ──────────────────────────────────────────
+  const raw = {
+    id: '111',
+    timestamp: '2026-05-29T12:00:00.000Z',
+    author: { username: 'andrew' },
+    content: 'Hello AAF.',
+    embeds: [{ title: 'Plan', description: 'Do the thing.' }],
+    thread: { id: '222', name: 'AAF planning' },
+  };
+  const nm = daModule.normaliseMessage(raw);
+  if (nm.id === '111' && nm.author === 'andrew' && nm.content === 'Hello AAF.' &&
+      nm.embeds.length === 1 && nm.thread.name === 'AAF planning') {
+    ok('normaliseMessage returns correct compact shape');
+  } else {
+    bad('normaliseMessage', new Error(JSON.stringify(nm)));
+  }
+
+} catch (e) {
+  bad('@jarvos/agentify channel-context load', e);
+}
+
 // ── Summary ─────────────────────────────────────────────────────────────────
 
 console.log(`\n${pass + fail} checks: ${pass} passed, ${fail} failed.\n`);
