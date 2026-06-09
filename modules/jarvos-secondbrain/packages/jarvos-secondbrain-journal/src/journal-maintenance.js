@@ -10,6 +10,12 @@
  * - remove legacy ## ✅ Tasks drift by migrating content into Notes
  * - keep auto sections source-specific (calendar, reminders, Paperclip, notes created)
  * - preserve human-written content while repairing order/shape drift
+ * - guard journal data integrity (SUP-2270): classify missing/stub/stale/healthy
+ *   states against a known-good snapshot, restore populated content when an
+ *   external writer replaces it with a frontmatter-only stub, write audit
+ *   backups before any repair, and warn when another automated daily-note
+ *   writer (Obsidian journals/daily-notes/periodic-notes) targets the same
+ *   journal folder
  *
  * Usage:
  *   node jarvos-secondbrain/packages/jarvos-secondbrain-journal/src/journal-maintenance.js
@@ -29,6 +35,7 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const crypto = require('crypto');
 const { execSync, execFileSync } = require('child_process');
 const {
   findNotesForDate,
@@ -45,6 +52,11 @@ const PACKAGE_ROOT = path.resolve(__dirname, '..');
 const CONFIG_PATH = path.join(PACKAGE_ROOT, 'config', 'journal-module.json');
 const PAPERCLIP_BRIDGE_SCRIPT = path.join(getClawdDir(), 'scripts', 'journal-paperclip-inbox.js');
 const SIGNATURE = '— Edited by Jarvis';
+const JOURNAL_STATE_DIR = '.jarvos/journal-maintenance';
+const OBSIDIAN_DIR = '.obsidian';
+const OBSIDIAN_JOURNAL_PLUGIN = 'journals';
+const OBSIDIAN_PERIODIC_NOTES_PLUGIN = 'periodic-notes';
+const OBSIDIAN_DAILY_NOTES_PLUGIN = 'daily-notes';
 
 function parseArgs(argv) {
   const out = {
@@ -154,6 +166,186 @@ function splitFrontmatter(md) {
     frontmatter: trimOuterBlankLines(match[0]),
     body: text.slice(match[0].length),
   };
+}
+
+function contentHash(text) {
+  return crypto.createHash('sha256').update(String(text || '')).digest('hex');
+}
+
+function safeTimestamp(date = new Date()) {
+  return date.toISOString().replace(/[-:]/g, '').replace(/\.\d{3}Z$/, 'Z');
+}
+
+// Journal integrity state lives in the vault next to Journal/ so every machine
+// syncing the vault shares the same known-good snapshots.
+function journalStateRoot(journalDir) {
+  return path.join(path.dirname(journalDir), JOURNAL_STATE_DIR);
+}
+
+function journalStatePath(journalDir) {
+  return path.join(journalStateRoot(journalDir), 'state.json');
+}
+
+function knownGoodPath(journalDir, date) {
+  return path.join(journalStateRoot(journalDir), 'known-good', `${date}.md`);
+}
+
+function auditBackupPath(journalDir, date, reason, timestamp = safeTimestamp()) {
+  const safeReason = String(reason || 'update').replace(/[^a-z0-9-]+/gi, '-').toLowerCase();
+  return path.join(journalStateRoot(journalDir), 'audit-backups', `${date}.${timestamp}.${safeReason}.md`);
+}
+
+function loadJournalState(journalDir) {
+  try {
+    return JSON.parse(fs.readFileSync(journalStatePath(journalDir), 'utf8'));
+  } catch {
+    return { version: 1, dates: {} };
+  }
+}
+
+function writeJournalState(journalDir, state) {
+  const statePath = journalStatePath(journalDir);
+  fs.mkdirSync(path.dirname(statePath), { recursive: true });
+  fs.writeFileSync(statePath, `${JSON.stringify(state, null, 2)}\n`, 'utf8');
+}
+
+function hasMeaningfulBodyText(body) {
+  return trimOuterBlankLines(body)
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .some((line) => line !== SIGNATURE && line !== '-');
+}
+
+function journalMetrics(markdown) {
+  const text = String(markdown || '');
+  const { body } = splitFrontmatter(text);
+  const sections = parseSections(body).sections.map((section) => section.heading);
+  const hasBodyText = trimOuterBlankLines(body).length > 0;
+  return {
+    size: Buffer.byteLength(text, 'utf8'),
+    hash: contentHash(text),
+    sections,
+    sectionCount: sections.length,
+    hasBodyText,
+    isFrontmatterOnly: Boolean(text.trim()) && sections.length === 0 && !hasMeaningfulBodyText(body),
+  };
+}
+
+function classifyJournalHealth({ existed, markdown, knownGood }) {
+  if (!existed) {
+    return {
+      status: 'missing',
+      degraded: false,
+      reason: 'Journal file is missing',
+      metrics: journalMetrics(''),
+    };
+  }
+
+  const metrics = journalMetrics(markdown);
+  if (metrics.isFrontmatterOnly) {
+    return {
+      status: 'stub',
+      degraded: true,
+      reason: 'Journal is a frontmatter-only stub',
+      metrics,
+    };
+  }
+
+  if (
+    knownGood
+    && knownGood.size
+    && knownGood.sectionCount
+    && metrics.hash !== knownGood.hash
+    && (metrics.size < knownGood.size || metrics.sectionCount < knownGood.sectionCount)
+  ) {
+    return {
+      status: 'stale',
+      degraded: true,
+      reason: 'Journal shrank compared with the prior known-good state',
+      metrics,
+    };
+  }
+
+  return {
+    status: 'healthy',
+    degraded: false,
+    reason: 'Journal has body sections',
+    metrics,
+  };
+}
+
+function readKnownGoodContent(journalDir, date, knownGood) {
+  const candidate = (knownGood && knownGood.knownGoodPath) || knownGoodPath(journalDir, date);
+  try {
+    const content = fs.readFileSync(candidate, 'utf8');
+    const metrics = journalMetrics(content);
+    if (metrics.sectionCount > 0 && !metrics.isFrontmatterOnly) return content;
+  } catch {
+    // Missing state snapshots are non-fatal; normalization can still scaffold.
+  }
+  return null;
+}
+
+function readJsonSafe(filePath) {
+  try {
+    return JSON.parse(fs.readFileSync(filePath, 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
+function folderOverlapsJournal(folder, vaultPath, journalDir) {
+  const noteFolder = folder ? path.resolve(vaultPath, folder) : path.resolve(vaultPath);
+  const resolvedJournal = path.resolve(journalDir);
+  return noteFolder === resolvedJournal
+    || noteFolder === path.resolve(vaultPath)
+    || noteFolder.startsWith(`${resolvedJournal}${path.sep}`)
+    || resolvedJournal.startsWith(`${noteFolder}${path.sep}`);
+}
+
+/**
+ * Single-writer guard (SUP-2270 / SUP-2269): jarvOS owns automated creation of
+ * Journal/YYYY-MM-DD.md. Detect other automated daily-note creators configured
+ * in the vault's Obsidian settings so the maintenance run can warn loudly
+ * instead of silently losing the race to a stub-writing plugin.
+ * Returns a list of human-readable conflict descriptions (empty = sole writer).
+ */
+function detectConflictingJournalWriters(journalDir) {
+  const vaultPath = path.dirname(path.resolve(journalDir));
+  const obsidianDir = path.join(vaultPath, OBSIDIAN_DIR);
+  if (!fs.existsSync(obsidianDir)) return [];
+
+  const conflicts = [];
+  const community = readJsonSafe(path.join(obsidianDir, 'community-plugins.json'));
+  const communityEnabled = (pluginId) => Array.isArray(community) && community.includes(pluginId);
+
+  if (communityEnabled(OBSIDIAN_JOURNAL_PLUGIN)) {
+    conflicts.push('Obsidian community plugin "journals" is enabled');
+  }
+
+  if (communityEnabled(OBSIDIAN_PERIODIC_NOTES_PLUGIN)) {
+    const pnCfg = readJsonSafe(path.join(obsidianDir, 'plugins', OBSIDIAN_PERIODIC_NOTES_PLUGIN, 'data.json'));
+    const daily = pnCfg && typeof pnCfg === 'object' ? pnCfg.daily : null;
+    const dailyEnabled = !pnCfg || !daily || daily.enabled !== false; // default-on unless explicitly disabled
+    const folder = daily && typeof daily.folder === 'string' ? daily.folder.trim() : '';
+    if (dailyEnabled && folderOverlapsJournal(folder, vaultPath, journalDir)) {
+      conflicts.push(`Obsidian "periodic-notes" daily notes write to ${folder || '(vault root)'}, overlapping the jarvOS journal`);
+    }
+  }
+
+  const core = readJsonSafe(path.join(obsidianDir, 'core-plugins.json'));
+  const coreEnabled = (Array.isArray(core) && core.includes(OBSIDIAN_DAILY_NOTES_PLUGIN))
+    || (core && typeof core === 'object' && core[OBSIDIAN_DAILY_NOTES_PLUGIN] === true);
+  if (coreEnabled) {
+    const dailyCfg = readJsonSafe(path.join(obsidianDir, 'daily-notes.json'));
+    const folder = dailyCfg && typeof dailyCfg.folder === 'string' ? dailyCfg.folder.trim() : '';
+    if (folderOverlapsJournal(folder, vaultPath, journalDir)) {
+      conflicts.push(`Obsidian core "daily-notes" writes to ${folder || '(vault root)'}, overlapping the jarvOS journal`);
+    }
+  }
+
+  return conflicts;
 }
 
 function parseFrontmatterEntries(frontmatter) {
@@ -484,18 +676,62 @@ function resolveJournalDir(config) {
   return sharedJournalDir;
 }
 
-function syncOneDate(date, config, opts) {
+function syncOneDate(date, config, opts = {}) {
   const journalDir = resolveJournalDir(config);
   const journalPath = path.join(journalDir, `${date}.md`);
   const existed = fs.existsSync(journalPath);
   const original = existed ? fs.readFileSync(journalPath, 'utf8') : '';
-  const normalized = normalizeSections(original, date, config);
+  const state = loadJournalState(journalDir);
+  const knownGood = state.dates ? state.dates[date] : null;
+  const healthBefore = classifyJournalHealth({ existed, markdown: original, knownGood });
+  // Repair source: a stub carries no user-authored text, so restoring the
+  // known-good snapshot loses nothing; normalization then re-fetches live
+  // sections on top of it. All other states normalize the on-disk content,
+  // which preserves user-authored text by construction.
+  const restoreSource = healthBefore.status === 'stub'
+    ? readKnownGoodContent(journalDir, date, knownGood)
+    : null;
+  const source = restoreSource || original;
+  const normalized = normalizeSections(source, date, config);
   const updated = renderJournal(date, config, normalized);
   const changed = updated !== original;
+  const backupReason = restoreSource ? 'stub-restore' : healthBefore.status;
+  let backupPath = null;
 
   if (changed && !opts.dryRun) {
     fs.mkdirSync(journalDir, { recursive: true });
+    if (existed) {
+      // Audit backup BEFORE any repair/rewrite so no on-disk content is ever lost.
+      backupPath = auditBackupPath(journalDir, date, backupReason);
+      fs.mkdirSync(path.dirname(backupPath), { recursive: true });
+      fs.writeFileSync(backupPath, original, 'utf8');
+    }
     fs.writeFileSync(journalPath, updated, 'utf8');
+  }
+
+  const healthAfter = classifyJournalHealth({
+    existed: true,
+    markdown: changed ? updated : original,
+    knownGood,
+  });
+
+  if (!opts.dryRun && healthAfter.status === 'healthy') {
+    const updatedKnownGoodPath = knownGoodPath(journalDir, date);
+    fs.mkdirSync(path.dirname(updatedKnownGoodPath), { recursive: true });
+    fs.writeFileSync(updatedKnownGoodPath, changed ? updated : original, 'utf8');
+    const metrics = journalMetrics(changed ? updated : original);
+    state.version = 1;
+    state.dates = state.dates || {};
+    state.dates[date] = {
+      date,
+      size: metrics.size,
+      hash: metrics.hash,
+      sectionCount: metrics.sectionCount,
+      sections: metrics.sections,
+      knownGoodPath: updatedKnownGoodPath,
+      updatedAt: new Date().toISOString(),
+    };
+    writeJournalState(journalDir, state);
   }
 
   return {
@@ -503,6 +739,10 @@ function syncOneDate(date, config, opts) {
     journalPath,
     existed,
     changed,
+    healthBefore,
+    healthAfter,
+    backupPath,
+    restoredKnownGood: Boolean(restoreSource),
   };
 }
 
@@ -511,17 +751,33 @@ function main(argv = process.argv.slice(2)) {
   const config = loadConfig();
   const dates = unique(args.dateSpecs.map(resolveDateSpec));
   const results = dates.map((date) => syncOneDate(date, config, args));
+  const writerConflicts = detectConflictingJournalWriters(resolveJournalDir(config));
 
-  const changed = results.filter((result) => result.changed);
-  if (changed.length === 0) {
+  const reportable = results.filter((result) => result.changed || result.healthBefore.degraded || result.healthAfter.degraded);
+  if (reportable.length === 0 && writerConflicts.length === 0) {
     console.log('NO_REPLY');
     return;
   }
 
-  const lines = changed.map((result) => {
-    const verb = result.existed ? 'UPDATED' : 'CREATED';
-    return `${verb} ${result.journalPath}${args.dryRun ? ' (dry run)' : ''}`;
+  const lines = reportable.map((result) => {
+    let verb = result.existed ? 'UPDATED' : 'CREATED';
+    if (result.healthBefore.status === 'missing') verb = 'MISSING -> CREATED';
+    if (result.healthBefore.status === 'stub') verb = result.restoredKnownGood ? 'STUB -> REPAIRED restored known-good' : 'STUB -> REPAIRED scaffolded';
+    if (result.healthBefore.status === 'stale') {
+      verb = result.healthAfter.status === 'healthy' ? 'STALE -> REPAIRED normalized' : 'STALE detected';
+    }
+    if (!result.changed && result.healthBefore.degraded) {
+      verb = `${verb} without write`;
+    }
+    const suffixes = [];
+    if (args.dryRun) suffixes.push('dry run');
+    if (result.backupPath) suffixes.push(`audit backup: ${result.backupPath}`);
+    return `${verb} ${result.journalPath}${suffixes.length ? ` (${suffixes.join('; ')})` : ''}`;
   });
+
+  for (const conflict of writerConflicts) {
+    lines.push(`WRITER-CONFLICT ${conflict}. Disable it so jarvOS stays the single journal writer (see SUP-2269).`);
+  }
   console.log(lines.join('\n'));
 }
 
@@ -534,6 +790,10 @@ module.exports = {
   localDate,
   resolveJournalDir,
   today,
+  syncOneDate,
+  classifyJournalHealth,
+  journalMetrics,
+  detectConflictingJournalWriters,
 };
 
 if (require.main === module) {
