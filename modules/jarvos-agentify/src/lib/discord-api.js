@@ -20,10 +20,10 @@ const DISCORD_API_BASE = 'https://discord.com/api/v10';
  * Throws on non-2xx after 3 attempts.
  *
  * @param {string} path
- * @param {{ token?: string }} [opts]
+ * @param {{ token?: string, timeoutMs?: number }} [opts]
  * @returns {Promise<any>}
  */
-async function discordGet(path, { token } = {}) {
+async function discordGet(path, { token, timeoutMs = 10000 } = {}) {
   const botToken = token || process.env.DISCORD_BOT_TOKEN;
   if (!botToken) throw new Error('DISCORD_BOT_TOKEN is required');
 
@@ -31,12 +31,21 @@ async function discordGet(path, { token } = {}) {
   let attempts = 0;
 
   while (attempts < 3) {
-    const resp = await fetch(url, {
-      headers: {
-        Authorization: `Bot ${botToken}`,
-        'Content-Type': 'application/json',
-      },
-    });
+    let resp;
+    try {
+      resp = await fetch(url, {
+        headers: {
+          Authorization: `Bot ${botToken}`,
+          'Content-Type': 'application/json',
+        },
+        signal: AbortSignal.timeout(timeoutMs),
+      });
+    } catch (err) {
+      if (err && (err.name === 'TimeoutError' || err.name === 'AbortError')) {
+        throw new Error(`Discord API: request timed out after ${timeoutMs}ms on ${path}`);
+      }
+      throw err;
+    }
 
     if (resp.status === 429) {
       const retryAfter = parseFloat(resp.headers.get('Retry-After') || '1');

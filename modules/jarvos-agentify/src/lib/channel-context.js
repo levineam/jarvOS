@@ -36,6 +36,35 @@ function isAtOrAfter(value, cutoff) {
   return Number.isFinite(valueMs) && Number.isFinite(cutoffMs) && valueMs >= cutoffMs;
 }
 
+/**
+ * Fetch channel messages back to a time cutoff, paginating as needed so that
+ * busy channels do not silently drop in-window messages beyond the first page.
+ *
+ * @param {string} channelId
+ * @param {string} cutoff                    — ISO timestamp; include messages at/after this
+ * @param {{ token?: string, maxMessages?: number }} [opts]
+ * @returns {Promise<object[]>}              — in-window messages, oldest-first
+ */
+async function fetchMessagesSince(channelId, cutoff, { token, maxMessages = 500 } = {}) {
+  const collected = [];
+  let before = null;
+
+  while (collected.length < maxMessages) {
+    // fetchChannelMessages returns oldest-first; batch[0] is the oldest in the page
+    const batch = await fetchChannelMessages(channelId, { limit: 100, before, token });
+    if (batch.length === 0) break;
+    collected.unshift(...batch);
+
+    const oldest = batch[0];
+    // Stop once we've paged past the window or exhausted the channel
+    if (!isAtOrAfter(oldest.timestamp, cutoff)) break;
+    if (batch.length < 100) break;
+    before = oldest.id;
+  }
+
+  return collected.filter(m => isAtOrAfter(m.timestamp, cutoff));
+}
+
 function compactJson(value, maxLength = 500) {
   if (value === undefined) return null;
 
@@ -87,11 +116,10 @@ async function buildChannelContext({
   const cutoff = new Date(Date.now() - windowHours * HOUR_MS).toISOString();
   const errors = [];
 
-  // 1. Channel messages — filtered to window
+  // 1. Channel messages — paginated back to the window cutoff
   let rawMessages = [];
   try {
-    rawMessages = await fetchChannelMessages(channelId, { limit: 100, token });
-    rawMessages = rawMessages.filter(m => isAtOrAfter(m.timestamp, cutoff));
+    rawMessages = await fetchMessagesSince(channelId, cutoff, { token });
   } catch (err) {
     errors.push({ source: 'messages', message: err.message });
     rawMessages = [];
@@ -109,10 +137,12 @@ async function buildChannelContext({
     }
   }
 
-  // 3. Activity log events since watermark
+  // 3. Activity log events since watermark — excluding our own fetch-audit
+  //    events so repeated context reads are not self-referential.
   const log = createActivityLog({ storeDir });
-  const { events: activityEvents, error: activityError } = log.read(tenantId, { after: afterSeq });
+  const { events: rawActivityEvents, error: activityError } = log.read(tenantId, { after: afterSeq });
   if (activityError) errors.push({ source: 'activity-log', message: activityError });
+  const activityEvents = (rawActivityEvents || []).filter(e => e.type !== 'channel.context.fetched');
 
   // 4. Linked resources
   const linkedResources = notesPaths.map(p => ({ type: 'note', path: p }));
