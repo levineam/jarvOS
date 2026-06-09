@@ -715,7 +715,12 @@ function syncOneDate(date, config, opts = {}) {
     knownGood,
   });
 
-  if (!opts.dryRun && healthAfter.status === 'healthy') {
+  // Never refresh the known-good snapshot from a run that started stale: the
+  // on-disk file lost content vs the snapshot, and normalization (plus live
+  // section fetchers) can grow the rewrite past the old size, which would
+  // poison the snapshot with the degraded text. The richer snapshot survives
+  // until a run that starts healthy confirms the current content.
+  if (!opts.dryRun && healthAfter.status === 'healthy' && healthBefore.status !== 'stale') {
     const updatedKnownGoodPath = knownGoodPath(journalDir, date);
     fs.mkdirSync(path.dirname(updatedKnownGoodPath), { recursive: true });
     fs.writeFileSync(updatedKnownGoodPath, changed ? updated : original, 'utf8');

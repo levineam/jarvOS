@@ -282,6 +282,50 @@ test('detectConflictingJournalWriters flags the journals plugin and overlapping 
   }
 });
 
+test('partial clobber (stale) is detected and does not poison the known-good snapshot', () => {
+  const { journalDir, vault } = makeVault();
+  try {
+    inVault(journalDir, () => {
+      const { syncOneDate } = journalModule();
+      const journalPath = path.join(journalDir, `${DATE}.md`);
+
+      // Establish the rich journal as known-good.
+      fs.writeFileSync(journalPath, populatedJournal(), 'utf8');
+      const first = syncOneDate(DATE, TEST_CONFIG, {});
+      assert.equal(first.healthAfter.status, 'healthy');
+      const knownGoodFile = path.join(vault, '.jarvos/journal-maintenance/known-good', `${DATE}.md`);
+      const goodSnapshot = fs.readFileSync(knownGoodFile, 'utf8');
+      const statePath = path.join(vault, '.jarvos/journal-maintenance/state.json');
+      const goodState = fs.readFileSync(statePath, 'utf8');
+
+      // External writer clobbers it with a partial file: still has a section
+      // heading (so NOT a frontmatter-only stub), but the user text is gone.
+      const partial = [
+        '---',
+        'journal: Journal',
+        'journal-date: 2024-01-15',
+        '---',
+        '',
+        '## 📝 Notes',
+        '-',
+        '',
+      ].join('\n');
+      fs.writeFileSync(journalPath, partial, 'utf8');
+
+      const result = syncOneDate(DATE, TEST_CONFIG, {});
+      assert.equal(result.healthBefore.status, 'stale');
+      assert.ok(result.backupPath, 'stale rewrite records an audit backup');
+      assert.equal(fs.readFileSync(result.backupPath, 'utf8'), partial);
+
+      // The richer snapshot must survive the degraded run untouched.
+      assert.equal(fs.readFileSync(knownGoodFile, 'utf8'), goodSnapshot);
+      assert.equal(fs.readFileSync(statePath, 'utf8'), goodState);
+    });
+  } finally {
+    fs.rmSync(vault, { recursive: true, force: true });
+  }
+});
+
 test('healthy journal refresh keeps known-good state in sync', () => {
   const { journalDir, vault } = makeVault();
   try {
