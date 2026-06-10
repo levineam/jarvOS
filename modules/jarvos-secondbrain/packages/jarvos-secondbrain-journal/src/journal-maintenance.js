@@ -173,7 +173,9 @@ function contentHash(text) {
 }
 
 function safeTimestamp(date = new Date()) {
-  return date.toISOString().replace(/[-:]/g, '').replace(/\.\d{3}Z$/, 'Z');
+  // Keep millisecond precision so repeated repairs of the same date within one
+  // second get distinct audit-backup filenames instead of overwriting each other.
+  return date.toISOString().replace(/[-:.]/g, '');
 }
 
 // Journal integrity state lives in the vault next to Journal/ so every machine
@@ -275,8 +277,10 @@ function classifyJournalHealth({ existed, markdown, knownGood }) {
   };
 }
 
-function readKnownGoodContent(journalDir, date, knownGood) {
-  const candidate = (knownGood && knownGood.knownGoodPath) || knownGoodPath(journalDir, date);
+// state.json syncs across machines, so never trust an absolute path stored in
+// it — always recompute the snapshot location from the local vault layout.
+function readKnownGoodContent(journalDir, date) {
+  const candidate = knownGoodPath(journalDir, date);
   try {
     const content = fs.readFileSync(candidate, 'utf8');
     const metrics = journalMetrics(content);
@@ -689,7 +693,7 @@ function syncOneDate(date, config, opts = {}) {
   // sections on top of it. All other states normalize the on-disk content,
   // which preserves user-authored text by construction.
   const restoreSource = healthBefore.status === 'stub'
-    ? readKnownGoodContent(journalDir, date, knownGood)
+    ? readKnownGoodContent(journalDir, date)
     : null;
   const source = restoreSource || original;
   const normalized = normalizeSections(source, date, config);
@@ -733,7 +737,6 @@ function syncOneDate(date, config, opts = {}) {
       hash: metrics.hash,
       sectionCount: metrics.sectionCount,
       sections: metrics.sections,
-      knownGoodPath: updatedKnownGoodPath,
       updatedAt: new Date().toISOString(),
     };
     writeJournalState(journalDir, state);
