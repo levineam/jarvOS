@@ -1,0 +1,19 @@
+{
+  "port": 4807,
+  "vault": {
+    "root": "~/Vaults/Vault v3",
+    "journalDir": "~/Vaults/Vault v3/Journal",
+    "notesDir": "~/Vaults/Vault v3/Notes"
+  },
+  "ontologyDir": "~/clawd/jarvos-ontology/ontology",
+  "memory": {
+    "indexFile": "~/clawd/MEMORY.md",
+    "dailyDir": "~/clawd/memory"
+  },
+  "paperclip": {
+    "url": "http://localhost:3100",
+    "companyId": "f5da26c7-6d26-4212-8e6f-716328a6331d",
+    "authFile": "~/.paperclip/auth.json"
+  },
+  "jarvosRepo": "~/jarvOS"
+}

@@ -1,0 +1,15 @@
+{
+  "name": "jarvos-desktop",
+  "version": "0.1.0",
+  "description": "jarvOS Desktop — a unified local-first interface for the jarvOS operating layer: journal, notes, work, memory, ontology.",
+  "main": "electron/main.js",
+  "scripts": {
+    "serve": "node server/index.js",
+    "desktop": "electron .",
+    "smoke": "node scripts/smoke.js"
+  },
+  "license": "MIT",
+  "devDependencies": {
+    "electron": "^36.0.0"
+  }
+}
