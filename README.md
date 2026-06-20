@@ -145,6 +145,7 @@ jarvOS/
 │   ├── jarvos-memory/        # Durable memory contract and audit tooling
 │   ├── jarvos-ontology/      # Beliefs, goals, projects, predictions, worldview
 │   ├── jarvos-gbrain/        # Structured-knowledge adapter
+│   ├── jarvos-coding/        # Issue-to-PR coding orchestrator, review gates, host adapters
 │   ├── jarvos-agent-context/ # Runtime-facing recall/action MCP adapter
 │   └── jarvos-skills/        # Default operating-system skill bundle
 ├── templates/         # Blank USER, MEMORY, ONTOLOGY, TOOLS, BOOTSTRAP, HEARTBEAT
@@ -191,6 +192,10 @@ The runnable pieces live in `modules/`:
 - **[`@jarvos/gbrain`](./modules/jarvos-gbrain/)** prepares curated vault content
   for a local knowledge base and exposes sync, recall, health-check, and
   retrieval-eval workflows.
+- **[`@jarvos/coding`](./modules/jarvos-coding/)** orchestrates coding work from
+  tracked issue to pull request: the portable `runTakeIssueToDone` loop, review
+  gates with documented host equivalents, live tracker/git/PR adapters, and thin
+  Claude Code/Codex host adapters.
 - **[`@jarvos/agent-context`](./modules/jarvos-agent-context/)** exposes current
   work, recall bundles, startup briefs, and verified note creation to agent
   runtimes through a local MCP adapter.
