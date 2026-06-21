@@ -333,8 +333,8 @@ is private.**
 
 ## Release Status
 
-`v0.2.0` is the current public preview release. The next release lane is focused
-on making setup, doctor checks, and the first jarvOS experience easier to verify.
+`v0.5.0` is the current public preview release. It is the clean consolidated
+public cut after the accepted fresh-host ship gate.
 
 Useful release files:
 

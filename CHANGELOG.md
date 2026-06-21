@@ -4,11 +4,60 @@ Release sections describe user-facing jarvOS changes. Historical public-doc sync
 
 ## [Unreleased]
 
-- Added portable `jarvos-secondbrain-notes` manual note maintenance for
-  markdown notes created outside the canonical writer: dry-run audit, explicit
-  apply mode, state/audit coverage checks, sensitivity-aware GBrain and
-  memory-wiki queue cleanup, QMD freshness records, package bin/exports, docs,
-  and focused tests.
+- Nothing yet.
+
+## v0.5.0 — 2026-06-21
+
+Clean public release after the accepted fresh-host ship gate. This is the next
+public tag after v0.2.0 and consolidates the previously staged v0.2.1/v0.3.0
+release work with the v0.5.0 autonomy install-profile lane.
+
+### Included
+- Added the public `jarvos` command router with discoverable `jarvos init`,
+  `jarvos doctor`, and `jarvos help` commands while preserving the existing
+  compatibility aliases.
+- Added the public `minimal` profile, profile-aware init routing, and
+  `jarvos doctor --profile minimal` checks for starter workspace health.
+- Added the Obsidian default experience pack and `@jarvos/skills` doctor /
+  install-plan surface for optional local commands.
+- Added release-process drift protection with `## [Unreleased]`,
+  `npm run release:drift`, and documented release checklist expectations.
+- Added the portable `@jarvos/coding` orchestration layer: issue-to-PR lifecycle
+  policy, release/product triage, host adapters, goal-alignment review, and
+  documented equivalents for review/merge gates.
+- Added the v0.5.0 OpenClaw autonomy install-profile pack, skills reconciliation
+  checks, fresh-host ship-gate smoke coverage, and release-grade documentation
+  for running the full profile without private workspace state.
+- Added journal safety checks for stale vault paths and single-writer conflicts,
+  including Obsidian Daily Notes and Periodic Notes conflict detection.
+- Added journal-backed session-thread context, title-first Paperclip reference
+  conventions, and Discord channel-as-context documentation for agent runtime
+  continuity.
+- Added portable manual note maintenance for markdown notes created outside the
+  canonical writer: dry-run audit, explicit apply mode, state/audit coverage,
+  sensitivity-aware GBrain and memory-wiki queue cleanup, QMD freshness records,
+  package bin/exports, docs, and focused tests.
+
+### Fixes
+- Closes the release-state confusion where `main` had moved beyond v0.2.0 while
+  GitHub still showed v0.2.0 as the latest public release.
+- Keeps private Paperclip, private GBrain data, and local machine paths outside
+  the public install path while documenting where full-profile checks plug in.
+- Preserves Markdown-first, local-first operation: Obsidian, Paperclip, and
+  GBrain remain integrations around jarvOS-owned portable contracts rather than
+  hidden hosted dependencies.
+
+### Known Limitations
+- Distribution is still git/npm-from-repo based; no public npm registry package
+  is published yet.
+- Full-profile Paperclip and GBrain checks require local credentials and fixture
+  configuration; they are documented and smoke-tested but not enabled for every
+  fresh clone by default.
+- jarvOS remains GBrain-first: it integrates `@jarvos/gbrain` as a resolver and
+  runtime context layer and does not implement GBrain itself; this release is
+  not GBrain itself.
+- The public repo includes generic adapters, packs, policies, and fixtures, not
+  Andrew's private workspace, private vault content, or private Paperclip data.
 
 ## v0.3.0 — 2026-05-22
 
