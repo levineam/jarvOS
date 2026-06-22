@@ -6,6 +6,18 @@ Release sections describe user-facing jarvOS changes. Historical public-doc sync
 
 - Nothing yet.
 
+## v0.6.1 — 2026-06-22
+
+Patch release for capitalization cleanup after v0.6.0.
+
+### Fixes
+- Replaced unintended `jarVOS` strings in public `jarvos-secondbrain`
+  docs/tests with canonical `jarvOS`.
+
+### Known Limitations
+- Legacy `JarVOS` fixture names and historical docs remain for a separate,
+  broader naming cleanup decision.
+
 ## v0.6.0 — 2026-06-22
 
 Focused secondbrain release for intentional capture, canonical note/journal

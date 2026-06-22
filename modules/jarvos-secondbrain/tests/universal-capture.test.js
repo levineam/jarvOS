@@ -117,7 +117,7 @@ test('idea capture keeps lightweight ideas in journal and promotes substantive i
 
     const substantive = captureWithJarvos(baseCapture('codex', {
       title: 'Universal capture contract',
-      text: 'idea: define one jarVOS capture contract because each agent should call the same entrypoint and retrieval should cite the same source-backed sidecars.',
+      text: 'idea: define one jarvOS capture contract because each agent should call the same entrypoint and retrieval should cite the same source-backed sidecars.',
       frontmatter: {
         status: 'draft',
         type: 'reference',

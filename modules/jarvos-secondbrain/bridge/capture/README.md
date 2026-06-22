@@ -1,6 +1,6 @@
 # bridge/capture
 
-jarVOS-owned universal capture entrypoint for intentional notes and ideas.
+jarvOS-owned universal capture entrypoint for intentional notes and ideas.
 
 This bridge is the runtime-neutral surface agents should call when Andrew says
 `note: ...`, `make a note`, `idea: ...`, `save this`, or similar intentional
