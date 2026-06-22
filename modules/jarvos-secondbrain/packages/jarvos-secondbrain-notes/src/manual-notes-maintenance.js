@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 /**
- * Backfill/watch bridge for markdown notes created outside the canonical writer.
+ * manual-notes-maintenance.js
  *
+ * Backfill/watch bridge for Obsidian notes created outside the canonical writer.
  * Dry-run mode audits what would change. Apply mode can normalize fixable
  * frontmatter and writes lossless knowledge sidecars/queues through the shared
  * optimizer.
@@ -23,11 +24,13 @@ const {
 const {
   defaultFields,
   findProjectNames,
-  frontmatterToObject,
-  parseFrontmatter,
   validateOneFile,
   walkMarkdownFiles,
 } = require('./lint-frontmatter');
+const {
+  frontmatterToObject,
+  parseFrontmatter,
+} = require('./lib/note-schema');
 
 const DEFAULT_INTERVAL_SECONDS = 300;
 const DEFAULT_LIMIT = 0;
@@ -188,7 +191,7 @@ function stateCoversNote(previous, note) {
   return previous.bodySha256 === note.bodySha256;
 }
 
-function shouldProcessFile({ flags, note, sourcePath, state, auditEntry, frontmatterViolations }) {
+function shouldProcessFile({ flags, filePath, note, sourcePath, state, auditEntry, frontmatterViolations }) {
   if (!flags.sinceState) return true;
   const previous = state.files[sourcePath];
   if (!auditCoversNote(auditEntry, note)) return true;
@@ -284,6 +287,7 @@ function processOnce(flags) {
       const auditEntry = audit.entries?.[sourcePath] || null;
       const processFile = shouldProcessFile({
         flags,
+        filePath,
         note,
         sourcePath,
         state,

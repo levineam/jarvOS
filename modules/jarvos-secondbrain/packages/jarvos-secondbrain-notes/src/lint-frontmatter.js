@@ -177,30 +177,6 @@ function stripQuotes(value) {
   return v;
 }
 
-function parseFrontmatterValue(raw) {
-  const value = String(raw ?? '').trim();
-  if (!value) return '';
-  if (/^(true|false)$/i.test(value)) return value.toLowerCase() === 'true';
-  if (/^-?\d+(?:\.\d+)?$/.test(value)) return Number(value);
-  if (value.startsWith('[') || value.startsWith('{')) {
-    try {
-      return JSON.parse(value.replace(/'/g, '"'));
-    } catch {
-      // Fall through to quoted-string cleanup.
-    }
-  }
-  return stripQuotes(value);
-}
-
-function frontmatterToObject(parsed) {
-  const out = {};
-  if (!parsed) return out;
-  for (const [key, raw] of parsed.keyValueRaw.entries()) {
-    out[key] = parseFrontmatterValue(raw);
-  }
-  return out;
-}
-
 function normalizeKey(value) {
   return String(value ?? '')
     .trim()
@@ -612,7 +588,6 @@ module.exports = {
   collectViolations,
   defaultFields,
   findProjectNames,
-  frontmatterToObject,
   inferAuthor,
   inferCreated,
   inferProject,
@@ -620,8 +595,6 @@ module.exports = {
   inferType,
   inferUpdated,
   parseArgs,
-  parseFrontmatter,
-  parseFrontmatterValue,
   validateOneFile,
   walkMarkdownFiles,
 };

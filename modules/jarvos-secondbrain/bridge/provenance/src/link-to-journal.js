@@ -6,10 +6,10 @@
 
 'use strict';
 
-const { readFileSync, writeFileSync, existsSync, mkdirSync } = require('fs');
+const { readFileSync, writeFileSync, existsSync } = require('fs');
+const { mkdirSync } = require('node:fs');
 const path = require('path');
 const { getVaultDir, getVaultJournalDir, getVaultNotesDir } = require('./lib/provenance-config');
-const { getTimeZone } = require('../../config/jarvos-paths');
 const { repairZeroByteVaultRootDuplicate } = require('../../../packages/jarvos-secondbrain-notes/src/lib/vault-root-duplicate-guard');
 const {
   loadConfig,
@@ -18,14 +18,14 @@ const {
 } = require('../../../packages/jarvos-secondbrain-journal/src/journal-maintenance.js');
 
 function todayPath() {
-  const today = new Date().toLocaleDateString('en-CA', { timeZone: getTimeZone() });
+  const today = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
   return path.join(getVaultJournalDir(), `${today}.md`);
 }
 
 function dateFromJournalPath(journalPath) {
   const fromName = path.basename(journalPath, '.md');
   if (/^\d{4}-\d{2}-\d{2}$/.test(fromName)) return fromName;
-  return new Date().toLocaleDateString('en-CA', { timeZone: getTimeZone() });
+  return new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
 }
 
 function ensureJournalFile(journalPath, date = dateFromJournalPath(journalPath)) {
@@ -37,23 +37,30 @@ function ensureJournalFile(journalPath, date = dateFromJournalPath(journalPath))
   writeFileSync(journalPath, rendered, 'utf8');
 }
 
-function linkNoteToJournal({ noteTitle, section = '📝 Notes', journalPath = todayPath(), createIfMissing = true }) {
-  if (!noteTitle) {
-    throw new Error('noteTitle is required');
-  }
+function linkNoteToTodayJournal(noteTitle, section = '📝 Notes') {
+  return linkNoteToJournal({ noteTitle, section, journalPath: todayPath() });
+}
+
+// Compatibility wrapper for the jarvos-agent-context MCP, which calls
+// linkNoteToJournal({ noteTitle, section, createIfMissing }) (WS7 cross-tool unification).
+function linkNoteToJournal({
+  noteTitle,
+  section = '📝 Notes',
+  journalPath = todayPath(),
+  createIfMissing = true,
+} = {}) {
+  if (!noteTitle) throw new Error('noteTitle is required');
 
   if (!existsSync(journalPath)) {
     if (!createIfMissing) throw new Error(`Journal not found: ${journalPath}`);
     ensureJournalFile(journalPath);
   }
-
   const original = readFileSync(journalPath, 'utf8');
   const { content, alreadyPresent } = linkNoteInSection(original, noteTitle, section);
 
   if (content !== original) {
     writeFileSync(journalPath, content, 'utf8');
   }
-
   const vaultRootDuplicate = repairZeroByteVaultRootDuplicate({
     noteTitle,
     notesDir: getVaultNotesDir(),
@@ -75,7 +82,8 @@ function main() {
     }
 
     try {
-      console.log(JSON.stringify(linkNoteToJournal(parsed)));
+      const { noteTitle, section = '📝 Notes' } = parsed;
+      console.log(JSON.stringify(linkNoteToTodayJournal(noteTitle, section)));
     } catch (error) {
       console.error(JSON.stringify({ error: error.message }));
       process.exit(1);
@@ -155,9 +163,11 @@ function linkNoteInSection(journalMd, noteTitle, section = '📝 Notes') {
 module.exports = {
   main,
   todayPath,
-  escapeRegex,
+  dateFromJournalPath,
   ensureJournalFile,
+  escapeRegex,
   linkNoteInSection,
+  linkNoteToTodayJournal,
   linkNoteToJournal,
   normalizeSectionName,
 };

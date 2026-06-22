@@ -1,17 +1,21 @@
 #!/usr/bin/env node
 /**
- * Lossless KB sidecars for notes created through any jarvOS runtime.
+ * knowledge-optimizer.js — derivative second-brain artifacts for durable notes.
  *
- * The note remains the source of truth. This module writes deterministic local
- * artifacts that WS4 retrieval and WS5 synthesis surfaces can consume without
- * making OpenClaw, Claude, Codex, or Hermes each maintain a separate pipeline.
+ * The optimizer is intentionally lossless: it never edits the source note body.
+ * It writes deterministic sidecar artifacts that help the installed stack ingest a
+ * newly-created note:
+ * - Obsidian / memory-wiki: canonical frontmatter and wikilink metadata in the source note.
+ * - QMD: title/body/aliases/metadata plus a durable pending refresh record.
+ * - GBrain: structured import queue entry for safe notes; explicit skip for excluded notes.
+ * - lossless-claw: continuity record of the note action, not a replacement knowledge base.
  */
 
 'use strict';
 
-const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 
 const SECRET_TERMS = [
   'password',
@@ -108,6 +112,75 @@ function extractClaims(body) {
   return sentences.map((text, index) => ({ id: `claim-${index + 1}`, text, evidence: 'source-note-body' }));
 }
 
+function knowledgeUnitId({ sourcePath, bodyHash, kind, text }) {
+  return `ku_${sha256(`${sourcePath}:${bodyHash}:${kind}:${text}`).slice(0, 16)}`;
+}
+
+function buildKnowledgeUnits({ sourcePath, title, bodyHash, frontmatter, claims, summary, sensitivity }) {
+  const author = String(frontmatter.author || 'unknown').trim() || 'unknown';
+  const source = {
+    type: 'note',
+    path: sourcePath,
+    title,
+    bodySha256: bodyHash,
+  };
+  const privacyDecision = {
+    tier: sensitivity.privacyTier,
+    eligibleForPublicExport: false,
+    excludedFromPromotion: sensitivity.excluded,
+    reasons: sensitivity.reasons,
+  };
+  const downstreamEligibility = {
+    qmd: true,
+    gbrain: !sensitivity.excluded,
+    memoryWiki: !sensitivity.excluded,
+    memoryPromotion: !sensitivity.excluded,
+    ontologyPromotion: false,
+  };
+
+  const claimUnits = claims.map((claim, index) => ({
+    id: knowledgeUnitId({ sourcePath, bodyHash, kind: 'claim', text: claim.text }),
+    kind: 'claim',
+    text: claim.text,
+    title,
+    author,
+    source,
+    confidence: 0.72,
+    evidence: [{
+      type: 'note',
+      sourcePath,
+      ref: claim.id,
+      quote: claim.text,
+      bodySha256: bodyHash,
+      ordinal: index + 1,
+    }],
+    privacyDecision,
+    downstreamEligibility,
+  }));
+
+  if (claimUnits.length > 0 || !summary) return claimUnits;
+
+  return [{
+    id: knowledgeUnitId({ sourcePath, bodyHash, kind: 'summary', text: summary }),
+    kind: 'summary',
+    text: summary,
+    title,
+    author,
+    source,
+    confidence: 0.58,
+    evidence: [{
+      type: 'note',
+      sourcePath,
+      ref: 'summary',
+      quote: summary,
+      bodySha256: bodyHash,
+      ordinal: 1,
+    }],
+    privacyDecision,
+    downstreamEligibility,
+  }];
+}
+
 function summarize(body) {
   const clean = String(body || '')
     .replace(/^---[\s\S]*?---\s*/m, '')
@@ -117,7 +190,7 @@ function summarize(body) {
     .trim();
   if (!clean) return '';
   const words = clean.split(/\s+/).slice(0, 48).join(' ');
-  return words.length < clean.length ? `${words}...` : words;
+  return words.length < clean.length ? `${words}…` : words;
 }
 
 function vaultRootFor(notesDir) {
@@ -177,8 +250,19 @@ function buildArtifact({ filePath, notesDir, title, body, frontmatter, created, 
   const bodyHash = sha256(body);
   const now = new Date().toISOString();
   const claims = extractClaims(body);
+  const noteSummary = summarize(body);
+
   const gbrainStatus = sensitivity.excluded ? 'skipped' : 'queued';
   const memoryWikiStatus = sensitivity.excluded ? 'skipped' : 'queued';
+  const knowledgeUnits = buildKnowledgeUnits({
+    sourcePath,
+    title,
+    bodyHash,
+    frontmatter,
+    claims,
+    summary: noteSummary,
+    sensitivity,
+  });
 
   return {
     version: 1,
@@ -194,7 +278,11 @@ function buildArtifact({ filePath, notesDir, title, body, frontmatter, created, 
     relationships: wikilinks.map((link) => ({ type: 'wikilink', target: link, targetSlug: slugify(link) })),
     claims,
     privacyTier: sensitivity.privacyTier,
-    sensitivity: { excluded: sensitivity.excluded, reasons: sensitivity.reasons },
+    knowledgeUnits,
+    sensitivity: {
+      excluded: sensitivity.excluded,
+      reasons: sensitivity.reasons,
+    },
     provenance: {
       sourcePath,
       absolutePath: filePath,
@@ -203,7 +291,7 @@ function buildArtifact({ filePath, notesDir, title, body, frontmatter, created, 
       citation: `[[${title}]]`,
       journalBacklink: journal || null,
     },
-    summary: summarize(body),
+    summary: noteSummary,
     gbrain: { status: gbrainStatus, slug: sensitivity.excluded ? null : slugify(title), skippedReasons: sensitivity.reasons },
     memoryWiki: { status: memoryWikiStatus, skippedReasons: sensitivity.reasons },
     qmd: { status: 'pending-refresh', reason: 'note optimized after write; refresh/index should run before treating search as fresh' },
@@ -220,7 +308,7 @@ function buildArtifact({ filePath, notesDir, title, body, frontmatter, created, 
       losslessClaw: 'continuity-captured',
     },
     derivative: {
-      summary: summarize(body),
+      summary: noteSummary,
       aliases,
       entities,
       concepts,
@@ -229,6 +317,7 @@ function buildArtifact({ filePath, notesDir, title, body, frontmatter, created, 
         related: wikilinks.map((link) => slugify(link)),
       },
       claims,
+      knowledgeUnits,
     },
     stack: {
       obsidian: { optimized: true, status: 'optimized' },
@@ -242,7 +331,7 @@ function buildArtifact({ filePath, notesDir, title, body, frontmatter, created, 
 
 function upsertBySource(filePath, key, entry) {
   const data = readJson(filePath, { version: 1, entries: {} });
-  data.version = 1;
+  data.version = data.version || 1;
   data.updatedAt = new Date().toISOString();
   data.entries = data.entries && typeof data.entries === 'object' ? data.entries : {};
   data.entries[key] = entry;
@@ -252,9 +341,10 @@ function upsertBySource(filePath, key, entry) {
 
 function removeBySource(filePath, key) {
   const data = readJson(filePath, { version: 1, entries: {} });
+  data.version = data.version || 1;
+  data.updatedAt = new Date().toISOString();
   data.entries = data.entries && typeof data.entries === 'object' ? data.entries : {};
   delete data.entries[key];
-  data.updatedAt = new Date().toISOString();
   writeJson(filePath, data);
 }
 
@@ -293,14 +383,15 @@ function optimizeNoteKnowledge({ filePath, notesDir, knowledgeDir: providedKnowl
   const sourcePath = sourcePathFor(filePath, notesDir);
   const bodyHash = sha256(body);
   const artifactKey = sha256(`${sourcePath}:${bodyHash}`).slice(0, 16);
-  const artifactPath = path.join(knowledgeDir, 'artifacts', `${slugify(title)}-${artifactKey}.json`);
+  const artifactName = `${slugify(title)}-${artifactKey}.json`;
+  const artifactPath = path.join(knowledgeDir, 'artifacts', artifactName);
   const artifact = buildArtifact({ filePath, notesDir, title, body, frontmatter, created, journal });
+
   writeJson(artifactPath, artifact);
 
   const queuePath = path.join(knowledgeDir, 'gbrain-import-queue.json');
   const memoryWikiQueuePath = path.join(knowledgeDir, 'memory-wiki-queue.json');
   const qmdPendingPath = path.join(knowledgeDir, 'qmd-refresh-pending.json');
-  const continuityPath = path.join(knowledgeDir, 'lossless-continuity.json');
 
   if (artifact.gbrain.status === 'queued') {
     upsertBySource(queuePath, sourcePath, {
@@ -308,12 +399,14 @@ function optimizeNoteKnowledge({ filePath, notesDir, knowledgeDir: providedKnowl
       sourcePath,
       artifactPath,
       title,
+      type: frontmatter.type || 'reference',
       summary: artifact.summary,
       aliases: artifact.aliases,
       entities: artifact.entities,
       concepts: artifact.concepts,
       relationships: artifact.relationships,
       claims: artifact.claims,
+      knowledgeUnits: artifact.knowledgeUnits,
       citations: [{ sourcePath, title, bodySha256: artifact.bodyHash }],
       bodySha256: artifact.bodyHash,
       status: 'queued',
@@ -335,6 +428,7 @@ function optimizeNoteKnowledge({ filePath, notesDir, knowledgeDir: providedKnowl
       entities: artifact.entities,
       concepts: artifact.concepts,
       claims: artifact.claims,
+      knowledgeUnits: artifact.knowledgeUnits,
       evidence: [{ sourcePath, citation: artifact.provenance.citation }],
       status: 'queued',
     });
@@ -351,6 +445,8 @@ function optimizeNoteKnowledge({ filePath, notesDir, knowledgeDir: providedKnowl
     status: 'pending-refresh',
     reason: 'QMD/search freshness should be refreshed after note optimization',
   });
+
+  const continuityPath = path.join(knowledgeDir, 'lossless-continuity.json');
   upsertBySource(continuityPath, sourcePath, {
     capturedAt: artifact.generatedAt,
     action: artifact.action,

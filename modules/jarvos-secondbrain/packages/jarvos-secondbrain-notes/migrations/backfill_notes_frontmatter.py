@@ -211,11 +211,7 @@ def verify_batch(files: List[Path]) -> Tuple[bool, List[str]]:
 
 def main():
     ap = argparse.ArgumentParser()
-    _notes_default = (os.environ.get("JARVOS_NOTES_DIR") or
-                      os.environ.get("JARVOS_VAULT_NOTES") or
-                      os.environ.get("VAULT_NOTES_DIR") or
-                      os.path.join(os.path.expanduser("~"), "Documents", "Vault v3", "Notes"))
-    ap.add_argument("--notes-dir", default=_notes_default)
+    ap.add_argument("--notes-dir", default=os.environ.get("JARVOS_VAULT_NOTES", os.path.join(os.path.expanduser("~"), "Vaults", "Vault v3", "Notes")))
     ap.add_argument("--start", type=int, default=0)
     ap.add_argument("--count", type=int, default=20)
     ap.add_argument("--dry-run", action="store_true")

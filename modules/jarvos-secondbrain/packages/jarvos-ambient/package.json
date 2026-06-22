@@ -1,0 +1,31 @@
+{
+  "name": "@jarvos/ambient",
+  "version": "0.1.0",
+  "description": "Portable jarvOS ambient intelligence primitives: intent classification and capture contracts.",
+  "main": "src/index.js",
+  "type": "commonjs",
+  "exports": {
+    ".": "./src/index.js",
+    "./adapters": "./src/adapters/index.js",
+    "./adapters/contract": "./src/adapters/contract.js",
+    "./adapters/local-storage": "./src/adapters/local-storage.js",
+    "./adapters/skill-dispatch": "./src/adapters/skill-dispatch.js",
+    "./routing": "./src/routing/index.js",
+    "./intent": "./src/intent/index.js",
+    "./intent/salience-detector": "./src/intent/salience-detector.js",
+    "./intent/keyword-capture-router": "./src/intent/keyword-capture-router.js",
+    "./intent/retroactive-capture": "./src/intent/retroactive-capture.js",
+    "./intent/capture-contract": "./src/intent/capture-contract.js"
+  },
+  "files": [
+    "src",
+    "README.md"
+  ],
+  "scripts": {
+    "test": "node --test test/*.test.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "license": "ISC"
+}

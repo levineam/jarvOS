@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 // Package-owned canonical note writer for jarvos-secondbrain-notes.
 // Input (stdin): { "title": "...", "content": "...", "frontmatter": {...} }
-// Writes to <vault-notes>/<title>.md, links it from the journal, and emits KB sidecars.
-// Output: { "written": true, "path": "...", "journal": {...}, "knowledge": {...} }
+// Writes to <vault-notes>/<title>.md.
+// Output: { "written": true, "path": "...", "created": true|false, "journal": {...}, "knowledge": {...} }
 
 'use strict';
 
@@ -11,105 +11,63 @@ const { dirname, join } = require('path');
 const { getVaultNotesDir } = require('./lib/notes-config');
 const { repairZeroByteVaultRootDuplicate } = require('./lib/vault-root-duplicate-guard');
 const { optimizeNoteKnowledge } = require('./knowledge-optimizer');
-const { linkNoteToJournal } = require('../../../bridge/provenance/src/link-to-journal');
-
-const REQUIRED_FRONTMATTER = ['status', 'type', 'project', 'created', 'updated', 'author'];
+const {
+  canonicalizeFrontmatter,
+  frontmatterToObject,
+  parseFrontmatter,
+  renderFrontmatter,
+} = require('./lib/note-schema');
+const { linkNoteToTodayJournal } = require('../../../bridge/provenance/src/link-to-journal');
 
 function todayDate() {
-  const today = new Date().toISOString().slice(0, 10);
-  return today;
-}
-
-function parseFrontmatter(content) {
-  const match = /^---\n([\s\S]*?)\n---\n?/.exec(String(content || ''));
-  if (!match) return {};
-
-  const fields = {};
-  for (const line of match[1].split('\n')) {
-    const item = /^([A-Za-z0-9_-]+):\s*(.*)$/.exec(line);
-    if (!item) continue;
-    fields[item[1]] = parseFrontmatterValue(item[2].trim());
-  }
-  return fields;
-}
-
-function parseFrontmatterValue(raw) {
-  const value = String(raw || '').trim();
-  if (!value) return '';
-  try {
-    return JSON.parse(value);
-  } catch {
-    return value.replace(/^["']|["']$/g, '');
-  }
-}
-
-function normalizeFrontmatter({ incoming = {}, existing = {} } = {}) {
-  const today = todayDate();
-  const base = {
-    status: 'draft',
-    type: 'note',
-    project: 'jarvOS',
-    created: existing.created || today,
-    updated: today,
-    author: 'jarvis',
-    ...existing,
-    ...incoming,
-  };
-
-  base.updated = today;
-  for (const key of REQUIRED_FRONTMATTER) {
-    if (base[key] === undefined || base[key] === null || base[key] === '') {
-      if (key === 'created' || key === 'updated') base[key] = today;
-      else if (key === 'author') base[key] = 'jarvis';
-      else if (key === 'status') base[key] = 'draft';
-      else if (key === 'type') base[key] = 'note';
-      else if (key === 'project') base[key] = 'jarvOS';
-    }
-  }
-
-  return base;
-}
-
-function renderFrontmatterValue(value) {
-  if (Array.isArray(value) || (value && typeof value === 'object')) return JSON.stringify(value);
-  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
-  const text = String(value ?? '');
-  if (/^\d{4}-\d{2}-\d{2}$/.test(text)) return text;
-  return JSON.stringify(text);
-}
-
-function buildFrontmatter(fm) {
-  const base = normalizeFrontmatter({ incoming: fm || {} });
-  const lines = Object.entries(base).map(([k, v]) => {
-    return `${k}: ${renderFrontmatterValue(v)}`;
-  });
-  return `---\n${lines.join('\n')}\n---\n\n`;
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/New_York',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(new Date());
 }
 
 function sanitizeTitle(title) {
   return String(title || '').trim().replace(/[/\\:*?"<>|]/g, '-');
 }
 
-function buildNoteBody(title, content) {
-  return String(content || '').startsWith('# ') ? String(content || '') : `# ${title}\n\n${content}`;
-}
-
 function noteFilePath(title) {
   return join(getVaultNotesDir(), `${sanitizeTitle(title)}.md`);
 }
 
-function readExistingFrontmatter(filePath) {
-  if (!existsSync(filePath)) return {};
-  return parseFrontmatter(readFileSync(filePath, 'utf8'));
+function buildNoteBody(title, content) {
+  return String(content || '').startsWith('# ') ? String(content || '') : `# ${title}\n\n${content}`;
 }
 
-function writeNoteFile({
-  title,
-  content,
-  frontmatter = {},
-  section = '📝 Notes',
-  createJournalIfMissing = true,
-} = {}) {
+function readExistingFrontmatter(filePath) {
+  if (!existsSync(filePath)) return {};
+  const existing = readFileSync(filePath, 'utf8');
+  return frontmatterToObject(parseFrontmatter(existing));
+}
+
+function normalizeFrontmatter({ incoming = {}, existing = {} } = {}) {
+  const canonical = canonicalizeFrontmatter({
+    incomingFrontmatter: incoming,
+    existingFrontmatter: existing,
+    today: todayDate(),
+  });
+
+  if (canonical.errors?.length) {
+    throw new Error(`Invalid note frontmatter: ${canonical.errors.join('; ')}`);
+  }
+
+  return canonical.frontmatter;
+}
+
+function buildFrontmatter({ incomingFrontmatter = {}, existingFrontmatter = {} } = {}) {
+  return renderFrontmatter(normalizeFrontmatter({
+    incoming: incomingFrontmatter,
+    existing: existingFrontmatter,
+  }));
+}
+
+function writeNoteFile({ title, content, frontmatter = {} }) {
   if (!title) throw new Error('title is required');
   if (content === undefined || content === null) throw new Error('content is required');
   if (!frontmatter || typeof frontmatter !== 'object' || Array.isArray(frontmatter)) {
@@ -120,13 +78,13 @@ function writeNoteFile({
   const notesDir = getVaultNotesDir();
   const filePath = noteFilePath(safeName);
   const created = !existsSync(filePath);
+  const existingFrontmatter = readExistingFrontmatter(filePath);
+  const body = buildNoteBody(title, content);
   const normalizedFrontmatter = normalizeFrontmatter({
     incoming: frontmatter,
-    existing: readExistingFrontmatter(filePath),
+    existing: existingFrontmatter,
   });
-  const fmBlock = buildFrontmatter(normalizedFrontmatter);
-  const body = buildNoteBody(title, content);
-  const fileContent = fmBlock + body;
+  const fileContent = renderFrontmatter(normalizedFrontmatter) + body;
 
   mkdirSync(dirname(filePath), { recursive: true });
   writeFileSync(filePath, fileContent, 'utf8');
@@ -138,11 +96,11 @@ function writeNoteFile({
 
   let journal = { linked: false, skipped: true, reason: 'disabled by JARVOS_JOURNAL_BACKLINK=0' };
   if (process.env.JARVOS_JOURNAL_BACKLINK !== '0') {
-    journal = linkNoteToJournal({
-      noteTitle: safeName,
-      section,
-      createIfMissing: createJournalIfMissing,
-    });
+    try {
+      journal = linkNoteToTodayJournal(safeName, '📝 Notes');
+    } catch (error) {
+      journal = { linked: false, skipped: true, reason: error.message };
+    }
   }
 
   const knowledge = optimizeNoteKnowledge({
@@ -185,9 +143,8 @@ module.exports = {
   buildFrontmatter,
   buildNoteBody,
   normalizeFrontmatter,
-  noteFilePath,
-  parseFrontmatter,
   sanitizeTitle,
+  noteFilePath,
   todayDate,
   writeNoteFile,
 };

@@ -1,165 +1,139 @@
-# @jarvos/secondbrain
+# jarvos-secondbrain
 
-Content layer for jarvOS. Manages your agent's journal and notes — the raw capture
-surface for day-to-day context, research, and long-form content.
+Canonical local content layer for the `jarvos-secondbrain` architecture.
 
-## What this module owns
-
-| Surface | Description |
-|---|---|
-| **Journal** | Day-by-day chronological log and raw capture |
-| **Notes** | Longer-form research, architecture, and source material |
-| **Bridge** | Routes content to downstream systems (Paperclip, ontology) |
-
-## What this module is NOT for
-
-| Use this instead | For |
-|---|---|
-| `@jarvos/memory` | Compact agent-state recall (decisions, lessons, facts) |
-| `@jarvos/ontology` | Structured worldview (beliefs, goals, values) |
-| Paperclip | Live task tracking and execution state |
-
-## Quick Start
-
-```bash
-npm install ./modules/jarvos-secondbrain
-```
-
-```bash
-cd modules/jarvos-secondbrain
-npm install
-# Copy jarvos.config.example.json → ~/clawd/jarvos.config.json and fill in your paths
-JARVOS_VAULT_DIR=/path/to/your/vault node bridge/config/jarvos-paths.js
-```
-
-## Configuration & path discovery
-
-All path resolution is handled by `bridge/config/jarvos-paths.js` — a shared module
-imported by all packages. No hardcoded user-specific paths exist in the source.
-
-### Environment Variables
-
-Path resolution follows: **env var → `jarvos.config.json` → `os.homedir()`-relative default**
-
-| Env var | Default | Purpose |
-|---------|---------|---------|
-| `JARVOS_CLAWD_DIR` | `~/clawd` | Clawd/workspace root |
-| `JARVOS_VAULT_DIR` | `~/Documents/Vault v3` | Obsidian vault root |
-| `JARVOS_JOURNAL_DIR` | `$JARVOS_VAULT_DIR/Journal` | Daily journal directory |
-| `JARVOS_NOTES_DIR` | `$JARVOS_VAULT_DIR/Notes` | Notes directory |
-| `JARVOS_TAGS_DIR` | `$JARVOS_VAULT_DIR/Tags` | Tags directory |
-| `JARVOS_WORKSPACE` | `~/clawd` | Workspace root (alias) |
-| `JARVOS_TIMEZONE` | USER.md/system timezone/`UTC` | Local IANA timezone for journal dates |
-| `JARVOS_JOURNAL_MAINTENANCE_SCHEDULE` | `1 0 * * *` | journal-maintenance cron schedule (12:01 AM local) |
-| `JARVOS_JOURNAL_MAINTENANCE_TIMEZONE` | resolved local timezone | Explicit cron timezone for journal-maintenance |
-
-Legacy env var aliases still honored: `CLAWD_DIR` → `JARVOS_CLAWD_DIR`,
-`VAULT_NOTES_DIR` → `JARVOS_NOTES_DIR`, `JOURNAL_DIR` → `JARVOS_JOURNAL_DIR`
-
-### Config file
-
-Copy `jarvos.config.example.json` → `$JARVOS_CLAWD_DIR/jarvos.config.json` to
-configure paths without env vars. Env vars always take precedence.
-
-`journal-maintenance` defaults to `1 0 * * *` (12:01 AM, the first safe
-minute of the local day). OpenClaw runtime wiring should pass the resolved
-`timezone` field from `adapters/openclaw/src/journal-maintenance-job.js`; if no
-explicit job timezone is configured, jarvOS uses `JARVOS_TIMEZONE`,
-`jarvos.config.json`, `USER.md`, system timezone detection, then `UTC` as the
-last-resort fallback.
-
-```jsonc
-// ~/clawd/jarvos.config.json (example)
-{
-  "timeZone": "America/New_York",
-  "jobs": {
-    "journalMaintenance": {
-      "schedule": "1 0 * * *",
-      "timezone": "America/New_York"
-    }
-  },
-  "paths": {
-    "vault":   "~/Documents/MyVault",
-    "journal": "~/Documents/MyVault/Journal",
-    "notes":   "~/Documents/MyVault/Notes"
-  }
-}
-```
-
-## Content Flow
-
-```
-Raw capture (journal/notes)
-  → jarvos-secondbrain (content layer)
-    → jarvos-memory (compact retained state)
-      → jarvos-ontology (worldview / belief graph)
-        → Paperclip (live execution)
-```
-
-### Capture Your Thoughts contract
-
-`@jarvos/secondbrain` v0.2.0 exposes a small portable capture API:
-
-- `classifyCaptureIntent(capture)` returns `route`, `confidence`,
-  `reviewRequired`, `reason`, and `skillIds`.
-- `buildRoutingPlan(capture)` turns the classifier output into storage actions.
-- `dispatchCaptureToSkills(capture, { adapter })` executes the plan through the
-  adapter contract.
-
-Skill contracts are plain JavaScript objects exported as `SKILL_CONTRACTS`:
-
-- `journal-entry` appends a dated markdown list item to a journal section.
-- `note-creation` creates an Obsidian-compatible note and links it from the
-  journal Notes section.
-- `idea-parking` parks an idea in the journal Ideas section, with an optional
-  durable note for substantive ideas.
-
-Default routing:
-
-- "I have an idea about X" → journal `## 💡 Ideas`.
-- "make a note about Y" → note file + journal `## 📝 Notes` wiki-link.
-- Medium-confidence captures such as "remember this" / "capture this" →
-  journal `## 🚩 Flagged` for review, without creating a note.
+Current local state:
+- package, bridge, adapter, and docs directories exist
+- root `clawd` entrypoints for journal maintenance, note writing/linting, and related routing/provenance flows delegate into `jarvos-secondbrain`
+- package contract docs are maintained under package-local `docs/`
+- root canonical architecture/migration/contracts docs live under `clawd/docs/`
+- Paperclip remains the execution system of record
+- automatic secondbrain capture, generated wiki, retrieval evals, promotion gates, and watch status are generic/public jarvOS surfaces; private vault content and raw transcripts are not part of this package
 
 ## Layout
 
 ```text
 jarvos-secondbrain/
-├── packages/
-│   ├── jarvos-secondbrain-journal/
-│   └── jarvos-secondbrain-notes/
-├── bridge/
-│   ├── config/jarvos-paths.js   # shared path resolution
-│   ├── paperclip/
-│   ├── provenance/
-│   └── routing/
-├── adapters/
-│   ├── obsidian/
-│   └── openclaw/
-└── docs/
-    ├── architecture/
-    ├── contracts/
-    └── migration/
+  packages/
+    jarvos-ambient/
+    jarvos-secondbrain-journal/
+    jarvos-secondbrain-notes/
+    jarvos-secondbrain-wiki/
+    jarvos-memory (at jarvOS level)/
+  bridge/
+    config/
+    paperclip/
+    provenance/
+    routing/
+  adapters/
+    claude-code/
+    codex/
+    openclaw/
+    obsidian/
+    session-source/
+  docs/
+    architecture/
+    contracts/
+    migration/
 ```
+
+## Environment Variables
+
+Path resolution is centralized in `bridge/config` through `resolveConfig()`.
+The portable pattern is: **env var → `jarvos.config.json` / XDG config → homedir-relative default**.
+
+| Env var | Description | Default |
+|---|---|---|
+| `JARVOS_JOURNAL_DIR` | Journal markdown files | `~/Vaults/<vault>/Journal` |
+| `JARVOS_NOTES_DIR` / `VAULT_NOTES_DIR` | Notes vault directory | `~/Vaults/<vault>/Notes` |
+| `JARVOS_TAGS_DIR` | Tags directory | `~/Vaults/<vault>/Tags` |
+| `CLAWD_DIR` | Root clawd workspace (for config discovery) | `~/clawd` |
+| `JARVOS_CONFIG_PATH` / `JARVOS_CONFIG_FILE` | Explicit config file path | unset |
+
+Alternatively, set paths under `paths.*` in `jarvos.config.json`:
+```json
+{
+  "paths": {
+    "journal": "~/Documents/MyVault/Journal",
+    "notes": "~/Documents/MyVault/Notes"
+  }
+}
+```
+
+## Shared-Vault Runtime Onboarding
+
+When a new runtime such as Hermes should reuse an existing secondbrain, make
+`jarvos-secondbrain` own the vault handoff instead of adding runtime-specific
+path instructions. Run the shared-vault onboarding helper from the runtime's
+workspace:
+
+```bash
+npm --prefix jarvos-secondbrain run onboard:shared-vault -- \
+  --vault "$HOME/Vaults/MyVault" \
+  --workspace "$PWD" \
+  --config "$PWD/jarvos.config.json"
+```
+
+The helper validates that the vault contains `Notes/` and `Journal/`, then writes
+a `jarvos.config.json` whose `paths.vault`, `paths.notes`, and `paths.journal`
+all point at the existing vault. After that, any runtime using
+`resolveConfig()` writes through the same Journal and Notes surfaces as the
+current OpenClaw setup. Use `--dry-run` first when you want to inspect the
+resolved paths without writing the config.
 
 ## Bootstrap choices
 
-This initial pass is intentionally structure-first:
-
-- package, bridge, adapter, and docs directories now exist
-- package contract docs have been copied into package-local `docs/` folders
-- canonical umbrella docs have been copied into root `docs/`
-- no executable logic has been migrated yet
-- Paperclip remains the execution system of record
+- Docs were copied from `clawd/docs/...` instead of moved, to avoid breaking current references during the bootstrap phase.
+- Empty implementation areas are represented with tracked placeholders only.
+- Bridge and adapter directories are present but intentionally contain no logic yet.
 
 See `docs/architecture/jarvos-secondbrain-monorepo-spec.md` for the boundary model.
 
-## Current scope boundary
+## Ambient Package
 
-This is a **bootstrap monorepo skeleton**, not a runtime migration.
+`packages/jarvos-ambient` exposes `@jarvos/ambient`, the portable intent layer
+for salience classification, keyword capture detection, retroactive capture
+selection, and capture-event validation. It is intentionally side-effect free:
+host apps classify first, build routing plans second, then apply those plans
+through their own adapters.
 
-Out of scope for this bootstrap:
+## Universal Capture Entrypoint
 
-- changing the actual vault or journal format
-- moving content out of existing Obsidian vaults
-- replacing OpenClaw compaction or `lossless-claw`
+Agents should call the jarVOS-owned capture entrypoint instead of raw-writing
+Markdown or using runtime-specific note rules:
+
+```bash
+printf '%s\n' '{
+  "source": "codex",
+  "actor": { "type": "assistant", "name": "Codex" },
+  "captureMode": "prompted",
+  "privacyTier": "local-private",
+  "origin": { "kind": "prompt", "ref": "codex:session-message" },
+  "evidence": [{ "type": "message", "text": "note: capture this architecture decision" }],
+  "text": "note: capture this architecture decision"
+}' | node scripts/jarvos-capture.js
+```
+
+Supported source tools include `openclaw`, `codex`, `claude-code`, `hermes`,
+`chatgpt`, and `custom:<slug>` for future agents. The entrypoint normalizes the
+input into `CaptureEvent` v2, routes it through `jarvos-ambient`, writes through
+the canonical Obsidian adapter, and uses the note optimizer so durable notes
+enter the secondbrain stack. Lightweight `idea:` captures stay in the Journal
+Ideas section; substantive ideas become source-backed notes linked from Ideas.
+
+The canonical journal path is `Journal/YYYY-MM-DD.md`. Agents must not create
+guessed daily journal files under `Notes/`.
+
+## Automatic Secondbrain Stack
+
+The public stack is source-backed and rebuildable:
+
+- `CaptureEvent` v2 records source tool, actor, capture mode, privacy tier, origin, and evidence.
+- Session source adapters normalize OpenClaw, Codex, and Claude Code records into `CaptureEvent` v2.
+- Note sidecars write generalized `knowledgeUnits` with stable IDs, source attribution, evidence, confidence, privacy decisions, and downstream eligibility.
+- `packages/jarvos-secondbrain-wiki` compiles generated Markdown wiki pages from sidecars. Generated pages are derived artifacts and can be deleted/rebuilt.
+- Retrieval evals compare qmd-only, qmd plus generated wiki, and qmd plus graph retrieval with expected source evidence.
+- Promotion gates keep memory and ontology downstream of cited, privacy-eligible knowledge units.
+- The watch surface reports artifacts, private skips, qmd freshness, generated wiki state, queue counts, eval status, and stale/failure signals.
+
+See `docs/architecture/automatic-secondbrain-public-boundary.md` for the public/private packaging boundary and local-to-public release path.

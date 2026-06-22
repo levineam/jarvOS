@@ -1,0 +1,220 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://jarvos.local/schemas/skill-contract.schema.json",
+  "title": "jarvOS Capture Skill Contract",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "name",
+    "version",
+    "description",
+    "triggers",
+    "input",
+    "output",
+    "capabilities",
+    "adapters"
+  ],
+  "properties": {
+    "name": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]*$"
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+\\.\\d+$"
+    },
+    "description": {
+      "type": "string",
+      "minLength": 1
+    },
+    "triggers": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/definitions/trigger"
+      }
+    },
+    "input": {
+      "$ref": "#/definitions/jsonSchema"
+    },
+    "output": {
+      "$ref": "#/definitions/jsonSchema"
+    },
+    "capabilities": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/definitions/capability"
+      }
+    },
+    "adapters": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/definitions/adapterDependency"
+      }
+    }
+  },
+  "definitions": {
+    "trigger": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source", "when", "action"],
+      "properties": {
+        "source": {
+          "type": "string",
+          "enum": ["classifier", "keyword-router", "capture-router"]
+        },
+        "when": {
+          "type": "object",
+          "additionalProperties": false,
+          "minProperties": 1,
+          "properties": {
+            "captured": {
+              "type": "boolean"
+            },
+            "trigger": {
+              "type": "string",
+              "enum": ["idea", "note", "decision", "preference", "fact", "lesson"]
+            },
+            "salienceClass": {
+              "type": "string",
+              "enum": [
+                "idea",
+                "decision",
+                "belief_change",
+                "commitment",
+                "preference",
+                "factual_learning",
+                "lesson",
+                "nothing"
+              ]
+            },
+            "confidence": {
+              "type": "object",
+              "additionalProperties": false,
+              "minProperties": 1,
+              "properties": {
+                "min": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 1
+                },
+                "max": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 1
+                }
+              }
+            },
+            "path": {
+              "type": "string",
+              "enum": [
+                "keyword_trigger",
+                "salience_high",
+                "salience_medium_flagged",
+                "salience_medium_ignored",
+                "work_intake",
+                "capture_that",
+                "capture_that_no_messages",
+                "capture_that_no_content",
+                "no_capture",
+                "empty_input"
+              ]
+            },
+            "destinations": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": ["journal", "notes", "memory", "review", "work"]
+              }
+            }
+          }
+        },
+        "action": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reason": {
+          "type": "string"
+        }
+      }
+    },
+    "capability": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "description", "writes"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]*$"
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1
+        },
+        "writes": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/definitions/writeOperation"
+          }
+        }
+      }
+    },
+    "writeOperation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["adapter", "operation"],
+      "properties": {
+        "adapter": {
+          "type": "string",
+          "minLength": 1
+        },
+        "operation": {
+          "type": "string",
+          "minLength": 1
+        },
+        "target": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "adapterDependency": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "module", "role", "required"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]*$"
+        },
+        "module": {
+          "type": "string",
+          "minLength": 1
+        },
+        "role": {
+          "type": "string",
+          "minLength": 1
+        },
+        "required": {
+          "type": "boolean"
+        }
+      }
+    },
+    "jsonSchema": {
+      "type": "object",
+      "required": ["type"],
+      "properties": {
+        "$schema": {
+          "type": "string"
+        },
+        "type": {
+          "type": ["string", "array"]
+        }
+      },
+      "additionalProperties": true
+    }
+  }
+}

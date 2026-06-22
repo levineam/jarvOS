@@ -522,10 +522,7 @@ def ensure_report_dir(path_arg: Optional[str]) -> Path:
     if path_arg:
         report_dir = Path(path_arg).expanduser().resolve()
     else:
-        clawd_dir = (os.environ.get("JARVOS_CLAWD_DIR") or
-                     os.environ.get("CLAWD_DIR") or
-                     os.path.join(os.path.expanduser("~"), "clawd"))
-        report_dir = Path(clawd_dir) / "artifacts" / "note-contract-migration" / utc_stamp()
+        report_dir = Path(os.environ.get("JARVOS_ARTIFACTS_DIR", os.path.join(os.path.expanduser("~"), "clawd", "artifacts", "note-contract-migration"))) / utc_stamp()
     report_dir.mkdir(parents=True, exist_ok=True)
     return report_dir
 
@@ -726,11 +723,7 @@ def run_apply(args: argparse.Namespace, report_dir: Path, records: List[Dict[str
 def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser()
     ap.add_argument("mode", choices=["audit", "apply"])
-    _notes_default = (os.environ.get("JARVOS_NOTES_DIR") or
-                      os.environ.get("JARVOS_VAULT_NOTES") or
-                      os.environ.get("VAULT_NOTES_DIR") or
-                      os.path.join(os.path.expanduser("~"), "Documents", "Vault v3", "Notes"))
-    ap.add_argument("--notes-dir", default=_notes_default)
+    ap.add_argument("--notes-dir", default=os.environ.get("JARVOS_VAULT_NOTES", os.path.join(os.path.expanduser("~"), "Vaults", "Vault v3", "Notes")))
     ap.add_argument("--report-dir")
     return ap
 

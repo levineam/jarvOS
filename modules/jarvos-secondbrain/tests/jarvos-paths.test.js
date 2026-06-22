@@ -103,11 +103,11 @@ test('getClawdDir: tilde expansion works', () => {
 
 // ─── getVaultDir ─────────────────────────────────────────────────────────────
 
-test('getVaultDir: defaults to ~/Documents/Vault v3 when no newer vault exists', () => {
+test('getVaultDir: defaults to ~/Vaults/Vault v3', () => {
   withTempHome((home) => {
     withEnv({ JARVOS_VAULT_DIR: undefined, JARVOS_CLAWD_DIR: '/nonexistent/dir/that/should/not/exist', CLAWD_DIR: undefined }, () => {
       const { getVaultDir } = require(PATHS_MODULE);
-      assert.equal(getVaultDir(), path.join(home, 'Documents', 'Vault v3'));
+      assert.equal(getVaultDir(), path.join(home, 'Vaults', 'Vault v3'));
     });
   });
 });
@@ -186,7 +186,7 @@ test('getNotesDir: defaults to $vaultDir/Notes', () => {
   withTempHome((home) => {
     withEnv({ JARVOS_NOTES_DIR: undefined, VAULT_NOTES_DIR: undefined, JARVOS_VAULT_DIR: undefined, JARVOS_CLAWD_DIR: '/nonexistent/dir/that/should/not/exist', CLAWD_DIR: undefined }, () => {
       const { getNotesDir } = require(PATHS_MODULE);
-      assert.equal(getNotesDir(), path.join(home, 'Documents', 'Vault v3', 'Notes'));
+      assert.equal(getNotesDir(), path.join(home, 'Vaults', 'Vault v3', 'Notes'));
     });
   });
 });
@@ -215,7 +215,7 @@ test('getJournalDir: defaults to $vaultDir/Journal', () => {
   withTempHome((home) => {
     withEnv({ JARVOS_JOURNAL_DIR: undefined, JOURNAL_DIR: undefined, JARVOS_VAULT_DIR: undefined, JARVOS_CLAWD_DIR: '/nonexistent/dir/that/should/not/exist', CLAWD_DIR: undefined }, () => {
       const { getJournalDir } = require(PATHS_MODULE);
-      assert.equal(getJournalDir(), path.join(home, 'Documents', 'Vault v3', 'Journal'));
+      assert.equal(getJournalDir(), path.join(home, 'Vaults', 'Vault v3', 'Journal'));
     });
   });
 });
@@ -249,7 +249,7 @@ test('config file: malformed JSON returns {} gracefully', () => {
     withEnv({ JARVOS_CLAWD_DIR: tmpDir, CLAWD_DIR: undefined, JARVOS_NOTES_DIR: undefined, VAULT_NOTES_DIR: undefined, JARVOS_VAULT_DIR: undefined }, () => {
       const { getNotesDir } = require(PATHS_MODULE);
       // Should fall back to default without throwing
-      assert.equal(getNotesDir(), path.join(home, 'Documents', 'Vault v3', 'Notes'));
+      assert.equal(getNotesDir(), path.join(home, 'Vaults', 'Vault v3', 'Notes'));
     });
 
     fs.rmSync(tmpDir, { recursive: true, force: true });
@@ -260,7 +260,7 @@ test('config file: missing config file returns defaults gracefully', () => {
   withTempHome((home) => {
     withEnv({ JARVOS_CLAWD_DIR: '/nonexistent/dir/that/should/not/exist', CLAWD_DIR: undefined, JARVOS_NOTES_DIR: undefined, VAULT_NOTES_DIR: undefined, JARVOS_VAULT_DIR: undefined }, () => {
       const { getNotesDir } = require(PATHS_MODULE);
-      assert.equal(getNotesDir(), path.join(home, 'Documents', 'Vault v3', 'Notes'));
+      assert.equal(getNotesDir(), path.join(home, 'Vaults', 'Vault v3', 'Notes'));
     });
   });
 });

@@ -17,6 +17,11 @@ const {
 const routing = require('../bridge/routing/src/keyword-capture-router.js');
 const skillContracts = require('../bridge/routing/src/skill-contracts.js');
 const path = require('path');
+const adapters = require('../adapters');
+const ambient = require('../packages/jarvos-ambient/src');
+const capture = require('../bridge/capture/src/universal-capture.js');
+const synthesis = require('../bridge/synthesis');
+const wiki = require('../packages/jarvos-secondbrain-wiki/src');
 
 // ── Path resolution ────────────────────────────────────────────────────────
 
@@ -137,6 +142,15 @@ module.exports = {
   journalEntryPath,
   createNote,
   notePath,
+  adapters,
+  ambient,
+  capture,
+  synthesis,
+  wiki,
+  ...adapters,
+  ...capture,
+  ...synthesis,
+  ...wiki,
   ...routing,
   ...skillContracts,
 };

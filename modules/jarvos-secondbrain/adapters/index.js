@@ -5,8 +5,23 @@ const {
   FLAGGED_HEADING,
   IDEAS_HEADING,
   NOTES_HEADING,
-  NOTES_CREATED_HEADING,
 } = require('./obsidian/src/vault-storage-adapter.js');
+const {
+  createAmbientLocalStorageAdapter,
+} = require('./ambient-local-storage-adapter.js');
+const {
+  createSessionSourceAdapter,
+  normalizeSessionToCaptureEvents,
+} = require('./session-source/session-source-adapter.js');
+const {
+  createOpenClawSessionAdapter,
+} = require('./openclaw');
+const {
+  createCodexSessionAdapter,
+} = require('./codex');
+const {
+  createClaudeCodeSessionAdapter,
+} = require('./claude-code');
 
 function createStorageAdapter(options = {}) {
   const kind = String(options.kind || process.env.JARVOS_SECONDBRAIN_ADAPTER || 'obsidian').trim().toLowerCase();
@@ -21,9 +36,14 @@ function createStorageAdapter(options = {}) {
 
 module.exports = {
   createStorageAdapter,
+  createAmbientLocalStorageAdapter,
   createVaultStorageAdapter,
+  createSessionSourceAdapter,
+  normalizeSessionToCaptureEvents,
+  createOpenClawSessionAdapter,
+  createCodexSessionAdapter,
+  createClaudeCodeSessionAdapter,
   FLAGGED_HEADING,
   IDEAS_HEADING,
   NOTES_HEADING,
-  NOTES_CREATED_HEADING,
 };
