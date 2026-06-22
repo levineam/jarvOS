@@ -333,8 +333,9 @@ is private.**
 
 ## Release Status
 
-`v0.5.0` is the current public preview release. It is the clean consolidated
-public cut after the accepted fresh-host ship gate.
+`v0.6.0` is the current public preview release. It is the focused secondbrain
+cut for intentional note and idea capture, canonical Obsidian routing,
+source-backed provenance, generated knowledge surfaces, and retrieval status.
 
 Useful release files:
 
