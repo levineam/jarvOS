@@ -6,6 +6,60 @@ Release sections describe user-facing jarvOS changes. Historical public-doc sync
 
 - Nothing yet.
 
+## v0.6.0 — 2026-06-22
+
+Focused secondbrain release for intentional capture, canonical note/journal
+routing, provenance, generated knowledge surfaces, and release-coherent public
+packaging.
+
+### Included
+- Added a jarvOS-owned universal capture path for intentional note and idea
+  capture across supported AI agent paths, including Claude Code, Codex,
+  OpenClaw, Hermes/custom future-agent adapters, and explicit unsupported-agent
+  fail-closed behavior.
+- Routes note capture through canonical Obsidian note creation plus exactly one
+  journal backlink, preserving the canonical `Journal/YYYY-MM-DD.md` path instead
+  of creating orphan daily-journal notes.
+- Routes lightweight ideas into the journal Ideas section and promotes
+  substantive ideas into standalone notes under the same capture contract.
+- Emits source-backed CaptureEvent v2 records, provenance metadata, knowledge
+  sidecars, generated LLM-wiki inputs, QMD pending state, GBrain queue entries,
+  and secondbrain status surfaces when notes are created through the supported
+  paths.
+- Adds session-source adapters, capture dispatcher contracts, package-safe local
+  storage adapters, shared vault config/onboarding, Paperclip client support, and
+  public documentation for the secondbrain public/private boundary.
+- Adds manual-note maintenance documentation and test coverage for integrating
+  Markdown notes created outside the canonical writer into the secondbrain stack.
+- Adds retrieval evaluation and status reporting for qmd/wiki/graph-style
+  adapters, with Engraph explicitly deferred behind a future adapter/eval gate.
+
+### Fixes
+- Keeps Lobster/OpenClaw as an adapter/enforcement path instead of the owner of
+  note capture.
+- Avoids dangling journal wiki-links when note persistence fails.
+- Avoids attaching memory `noteRef` values when the backing note write failed.
+- Allows manual notes without `updated` frontmatter to be audited by filesystem
+  modification time.
+- Hardens package imports so optional memory integration does not make the
+  shipped secondbrain package crash in standalone contexts.
+- Treats `Source Material` as valid only when the configured path is a directory.
+
+### Known Limitations
+- v0.6.0 intentionally does not ingest every AI conversation automatically.
+  Capture is intentional: when a note or idea is created, it enters the
+  secondbrain stack correctly.
+- Engraph is not production-integrated in this release. It remains deferred
+  until a real optional adapter measurably improves on qmd plus the generated
+  LLM-wiki.
+- The manual-note maintenance routine is documented with dry-run/apply smoke
+  coverage, but a hosted Paperclip Routine is not enabled by this public repo.
+- Distribution is still git/npm-from-repo based; no public npm registry package
+  is published yet.
+- Public jarvOS includes generic adapters, contracts, docs, and fixtures, not
+  Andrew's private vault content, private Paperclip data, local credentials, or
+  machine-local routing.
+
 ## v0.5.0 — 2026-06-21
 
 Clean public release after the accepted fresh-host ship gate. This is the next
