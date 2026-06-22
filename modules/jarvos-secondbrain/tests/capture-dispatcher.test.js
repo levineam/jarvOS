@@ -54,7 +54,7 @@ test('dispatcher creates notes for substantive natural-language ideas', () => {
   const result = dispatchCapture(
     {
       title: 'Routing dispatch skills',
-      text: 'I have an idea about routing dispatch invoking capture skills because every agent should call one jarVOS entrypoint.',
+      text: 'I have an idea about routing dispatch invoking capture skills because every agent should call one jarvOS entrypoint.',
       date: '2026-01-02',
       classification: { salienceClass: 'idea', confidence: 0.7 },
     },
@@ -70,7 +70,7 @@ test('dispatcher creates notes for substantive natural-language ideas', () => {
   assert.deepEqual(mock.calls[1], [
     'appendLineToJournalSection',
     '## 💡 Ideas',
-    '- [[Routing dispatch skills]] — routing dispatch invoking capture skills because every agent should call one jarVOS entrypoint.',
+    '- [[Routing dispatch skills]] — routing dispatch invoking capture skills because every agent should call one jarvOS entrypoint.',
     '2026-01-02',
   ]);
 });

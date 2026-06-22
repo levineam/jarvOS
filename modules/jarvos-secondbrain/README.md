@@ -99,7 +99,7 @@ through their own adapters.
 
 ## Universal Capture Entrypoint
 
-Agents should call the jarVOS-owned capture entrypoint instead of raw-writing
+Agents should call the jarvOS-owned capture entrypoint instead of raw-writing
 Markdown or using runtime-specific note rules:
 
 ```bash

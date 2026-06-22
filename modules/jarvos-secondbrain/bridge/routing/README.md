@@ -10,7 +10,7 @@ Note, or is promoted outward to adjacent systems.
   - substantive `idea` → standalone note linked from journal `## 💡 Ideas`
   - `note` → standalone note + journal note link
   - no explicit trigger → default vault-note bias
-- `../capture/src/universal-capture.js` — jarVOS-owned CaptureEvent v2
+- `../capture/src/universal-capture.js` — jarvOS-owned CaptureEvent v2
   entrypoint for agents
 - `../dispatch/src/capture-dispatcher.js` — classifier-output dispatch into capture skills
   - high-confidence idea → journal entry
