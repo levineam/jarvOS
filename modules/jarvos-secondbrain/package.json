@@ -50,6 +50,9 @@
     "type": "git",
     "url": "https://github.com/levineam/jarvOS.git"
   },
+  "devDependencies": {
+    "ajv": "^8.17.1"
+  },
   "engines": { "node": ">=18" },
   "keywords": ["jarvos", "secondbrain", "journal", "notes", "ai-agent", "personal-os"]
 }

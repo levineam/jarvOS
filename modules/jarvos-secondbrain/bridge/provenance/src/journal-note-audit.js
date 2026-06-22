@@ -133,9 +133,9 @@ function createdAtForStat(stat) {
   return stat.mtime;
 }
 
-// Read the frontmatter `updated:` date (YYYY-MM-DD) if present. We use this rather
-// than raw fs mtime so that "touched today" means a meaningful, system-tracked update
-// (note write / grooming), not an incidental stat bump from indexing or sync.
+// Read the frontmatter `updated:` date (YYYY-MM-DD) if present. If a manually
+// edited note has no updated frontmatter, the audit falls back to file mtime so
+// external/Obsidian edits still get a daily journal backlink.
 function readUpdatedDate(fullPath) {
   let text;
   try {
@@ -152,7 +152,11 @@ function readUpdatedDate(fullPath) {
 // A note belongs in a given day's journal Notes section if it was CREATED that day
 // or UPDATED that day (per the journal-module contract: "created or updated that day").
 function noteMatchesDate(note, dateYmd, fmt) {
-  return fmt(note.createdAt) === dateYmd || note.updated === dateYmd;
+  return (
+    fmt(note.createdAt) === dateYmd ||
+    note.updated === dateYmd ||
+    (!note.updated && note.mtime && fmt(note.mtime) === dateYmd)
+  );
 }
 
 function findAllNotes() {

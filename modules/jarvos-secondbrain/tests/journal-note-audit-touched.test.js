@@ -18,11 +18,12 @@ test('note created earlier but UPDATED today matches (touched, not just new)', (
   assert.equal(noteMatchesDate({ createdAt: EARLIER, updated: '2026-05-20' }, TODAY, fmt), true);
 });
 
-test('note created earlier and not updated today does NOT match', () => {
+test('note created earlier and not updated today does NOT match when updated frontmatter is authoritative', () => {
   assert.equal(noteMatchesDate({ createdAt: EARLIER, updated: '2026-05-10' }, TODAY, fmt), false);
 });
 
-test('note with no updated frontmatter falls back to creation date only', () => {
-  assert.equal(noteMatchesDate({ createdAt: EARLIER, updated: null }, TODAY, fmt), false);
+test('note with no updated frontmatter falls back to mtime for manual edits', () => {
+  assert.equal(noteMatchesDate({ createdAt: EARLIER, updated: null, mtime: TODAY_DATE }, TODAY, fmt), true);
+  assert.equal(noteMatchesDate({ createdAt: EARLIER, updated: null, mtime: EARLIER }, TODAY, fmt), false);
   assert.equal(noteMatchesDate({ createdAt: TODAY_DATE, updated: null }, TODAY, fmt), true);
 });

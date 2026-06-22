@@ -6,7 +6,6 @@ const {
 const {
   createVaultStorageAdapter,
 } = require('./obsidian/src/vault-storage-adapter.js');
-const memoryRecord = require('../../jarvos-memory/src');
 const {
   createPaperclipClient,
 } = require('../bridge/paperclip/client');
@@ -29,13 +28,38 @@ function createLazyPaperclipClient(options = {}) {
   };
 }
 
+function createUnavailableMemoryAdapter(loadError) {
+  return {
+    createMemoryRecord() {
+      return {
+        record: null,
+        written: false,
+        path: null,
+        error: `@jarvos/memory is unavailable: ${loadError.message}`,
+      };
+    },
+  };
+}
+
+function loadDefaultMemoryAdapter() {
+  try {
+    return require('@jarvos/memory');
+  } catch (packageError) {
+    try {
+      return require('../../jarvos-memory/src');
+    } catch {
+      return createUnavailableMemoryAdapter(packageError);
+    }
+  }
+}
+
 function createAmbientLocalStorageAdapter(options = {}) {
   const storageAdapter = hasOwn(options, 'storageAdapter')
     ? options.storageAdapter
     : createVaultStorageAdapter(options.storage || {});
   const memoryAdapter = hasOwn(options, 'memoryAdapter')
     ? options.memoryAdapter
-    : memoryRecord;
+    : loadDefaultMemoryAdapter();
   const paperclipClient = hasOwn(options, 'paperclipClient')
     ? options.paperclipClient
     : createLazyPaperclipClient(options.paperclip || {});

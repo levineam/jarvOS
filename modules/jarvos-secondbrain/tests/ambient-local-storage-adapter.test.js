@@ -49,3 +49,13 @@ test('jarvos-secondbrain ambient local adapter composes injected storage, memory
 test('jarvos-secondbrain adapters index exports the ambient local adapter factory', () => {
   assert.equal(adaptersIndex.createAmbientLocalStorageAdapter, createAmbientLocalStorageAdapter);
 });
+
+test('default memory adapter is lazy so package import does not require jarvos-memory eagerly', () => {
+  const adapter = createAmbientLocalStorageAdapter({
+    storageAdapter: {},
+    paperclipClient: {},
+  });
+
+  assert.equal(adapter.kind, 'local-storage');
+  assert.equal(typeof adapter.createMemoryRecord, 'function');
+});
