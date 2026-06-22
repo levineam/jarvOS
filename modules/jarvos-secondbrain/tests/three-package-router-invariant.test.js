@@ -2,6 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 
 const {
+  applyThreePackagePlan,
   applyStoragePlan,
   buildThreePackagePlan,
 } = require('../bridge/routing/src/three-package-router');
@@ -64,4 +65,19 @@ test('applyStoragePlan still writes non-note journal lines (idea/flagged) uncond
   assert.equal(adapter.calls.appended[0].line, '- a plain captured idea');
   assert.ok(result.journalEntry);
   assert.ok(!result.noteLinkSkipped);
+});
+
+test('applyThreePackagePlan does not attach memory noteRef when note write failed', () => {
+  const result = applyThreePackagePlan({
+    trigger: 'decision',
+    salienceClass: 'decision',
+    confidence: 0.95,
+    title: 'Package naming decision',
+    text: 'Decision: keep failed note writes out of memory note references.',
+  }, {
+    adapter: recordingAdapter({ written: false, error: 'misrouted write', title: 'Package naming decision' }),
+  });
+
+  assert.equal(result.note.written, false);
+  assert.equal(result.memory.record.noteRef, undefined);
 });

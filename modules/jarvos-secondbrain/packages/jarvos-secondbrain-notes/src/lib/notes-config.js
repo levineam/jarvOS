@@ -26,7 +26,9 @@ function getVaultSourceMaterialDir() {
   const config = loadConfig();
   if (config.paths.sourceMaterial) return config.paths.sourceMaterial;
   const plainSourceMaterial = path.join(config.paths.vault, 'Source Material');
-  if (fs.existsSync(plainSourceMaterial)) return plainSourceMaterial;
+  if (fs.existsSync(plainSourceMaterial) && fs.statSync(plainSourceMaterial).isDirectory()) {
+    return plainSourceMaterial;
+  }
   return path.join(config.paths.vault, '2 - Source Material');
 }
 
