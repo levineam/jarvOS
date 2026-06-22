@@ -1,0 +1,8 @@
+{
+  "name": "@jarvos/secondbrain-wiki",
+  "version": "0.1.0",
+  "description": "Generated Markdown wiki compiler for jarvOS secondbrain sidecars",
+  "main": "src/index.js",
+  "type": "commonjs",
+  "license": "UNLICENSED"
+}

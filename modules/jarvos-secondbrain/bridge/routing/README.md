@@ -7,25 +7,15 @@ Note, or is promoted outward to adjacent systems.
 
 - `src/keyword-capture-router.js` — keyword-triggered capture routing
   - `idea` → journal `## 💡 Ideas`
-  - substantive `idea` → journal Ideas + standalone note + journal note link
+  - substantive `idea` → standalone note linked from journal `## 💡 Ideas`
   - `note` → standalone note + journal note link
-  - medium-confidence capture → journal `## 🚩 Flagged` for review
-- `src/skill-contracts.js` — portable contracts for `journal-entry`,
-  `note-creation`, and `idea-parking`
-
-## Classifier contract
-
-`classifyCaptureIntent(capture)` returns:
-
-- `route`: `idea`, `note`, `flagged`, or `null`
-- `confidence`: `high`, `medium`, or `low`
-- `reviewRequired`: boolean
-- `skillIds`: the contracts that should handle the plan
-- `reason`: stable machine-readable explanation
-
-High-confidence idea/note phrasing dispatches directly. Medium-confidence
-captures are review-first so the system does not create durable notes from
-ambiguous language.
+  - no explicit trigger → default vault-note bias
+- `../capture/src/universal-capture.js` — jarVOS-owned CaptureEvent v2
+  entrypoint for agents
+- `../dispatch/src/capture-dispatcher.js` — classifier-output dispatch into capture skills
+  - high-confidence idea → journal entry
+  - high-confidence non-idea salience → note creation plus memory where eligible
+  - medium-confidence salience → journal `## 📌 Flagged`
 
 ## Why this lives here
 
@@ -34,6 +24,9 @@ This is cross-package orchestration:
 - `jarvos-secondbrain-journal` owns journal structure
 - `jarvos-secondbrain-notes` owns note writing/schema
 - `bridge/routing` decides which package path a capture should take
+- `bridge/capture` owns the stable agent-facing entrypoint so OpenClaw,
+  Codex, Claude Code, Hermes, ChatGPT, and future adapters do not need
+  one-off capture rules
 
 ## Storage adapter boundary
 

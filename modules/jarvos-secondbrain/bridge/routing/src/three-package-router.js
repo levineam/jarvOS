@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Three-package capture router for JarvOS.
+ * Three-package capture router for jarvOS.
  *
  * Routes capture events to up to three destinations:
  * 1. jarvos-secondbrain-journal (chronological record)
@@ -29,116 +29,137 @@
 'use strict';
 
 const {
-  buildRoutingPlan: buildKeywordPlan,
-  applyRoutingPlan: applyKeywordPlan,
-  detectTrigger,
-  hasCaptureIntent,
-  primaryText,
-  IDEA,
-  NOTE,
-} = require('./keyword-capture-router');
+  createStorageAdapter,
+} = require('../../../adapters');
+
+function createUnavailableMemoryApi(loadError) {
+  return {
+    createMemoryRecord() {
+      return {
+        record: null,
+        written: false,
+        path: null,
+        error: `@jarvos/memory is unavailable: ${loadError.message}`,
+      };
+    },
+    checkMemoryDedup() {
+      return { isDuplicate: false, existingPath: null, action: null };
+    },
+  };
+}
+
+function loadMemoryApi() {
+  try {
+    return require('@jarvos/memory');
+  } catch (packageError) {
+    try {
+      return require('../../../../jarvos-memory/src');
+    } catch {
+      return createUnavailableMemoryApi(packageError);
+    }
+  }
+}
+
+const memoryApi = loadMemoryApi();
+
+const createMemoryRecord = typeof memoryApi.createMemoryRecord === 'function'
+  ? memoryApi.createMemoryRecord
+  : () => ({
+    record: null,
+    written: false,
+    path: null,
+    error: 'createMemoryRecord is unavailable',
+  });
+
+const checkMemoryDedup = typeof memoryApi.checkMemoryDedup === 'function'
+  ? memoryApi.checkMemoryDedup
+  : () => ({ isDuplicate: false, existingPath: null, action: null });
 
 const {
-  createMemoryRecord,
-  checkMemoryDedup,
-} = require('../../../../jarvos-memory/src/lib/memory-record');
+  SALIENCE_TO_MEMORY_CLASS,
+  MEMORY_CONFIDENCE_THRESHOLD,
+  DECISIONS_HEADING,
+  REMEMBERED_HEADING,
+  FLAGGED_HEADING,
+  REVIEW_CONFIDENCE_MIN,
+  REVIEW_CONFIDENCE_MAX,
+  buildThreePackagePlan,
+} = require('../../../packages/jarvos-ambient/src/routing');
 
-// Salience class → memory class mapping
-const SALIENCE_TO_MEMORY_CLASS = {
-  decision: 'decision',
-  belief_change: 'fact',
-  preference: 'preference',
-  factual_learning: 'fact',
-  lesson: 'lesson',
-};
+const {
+  resolveConfiguredHeading,
+} = require('../../../packages/jarvos-secondbrain-journal/src/section-config');
 
-// Minimum confidence for memory promotion
-const MEMORY_CONFIDENCE_THRESHOLD = 0.8;
+function noteWriteSucceeded(note) {
+  return Boolean(note) && note.written !== false && note.error == null;
+}
 
-// Journal section headings for memory-related captures
-const DECISIONS_HEADING = '## ✅ Decisions';
-const REMEMBERED_HEADING = '## 🧠 Remembered';
-
-/**
- * Build a three-package routing plan from a capture event.
- *
- * Extends the keyword routing plan with memory routing decisions.
- */
-function buildThreePackagePlan(capture = {}) {
-  const keywordPlan = buildKeywordPlan(capture);
-
-  const salienceClass = capture.salienceClass || null;
-  const confidence = typeof capture.confidence === 'number' ? capture.confidence : null;
-  const memoryClass = salienceClass ? SALIENCE_TO_MEMORY_CLASS[salienceClass] : null;
-
-  // Salience-driven captures can override the keyword "ignored" flag.
-  // If salience detects a high-confidence signal, we still route even
-  // if no keyword trigger was present.
-  const salienceOverridesIgnored = Boolean(
-    salienceClass
-    && salienceClass !== 'nothing'
-    && confidence !== null
-    && confidence >= MEMORY_CONFIDENCE_THRESHOLD,
-  );
-
-  // If keyword layer ignored the capture but salience says it's important,
-  // force the journal + notes routing for the keyword plan
-  if (keywordPlan.ignored && salienceOverridesIgnored) {
-    const text = primaryText(capture);
-    const title = String(capture.title || text.split(/\r?\n/)[0] || '').slice(0, 80).trim();
-    keywordPlan.ignored = false;
-    keywordPlan.route = NOTE;
-    keywordPlan.defaultedToNoteBias = true;
-    keywordPlan.journalSection = salienceClass === 'decision' ? DECISIONS_HEADING : '## 📝 Notes';
-    keywordPlan.journalLine = title ? `- [[${title}]]` : `- ${text.slice(0, 120)}`;
-    keywordPlan.createNote = true;
-    keywordPlan.noteTitle = title || `Captured ${salienceClass} ${new Date().toISOString().slice(0, 16)}`;
-    keywordPlan.noteContent = text;
-    keywordPlan.noteFrontmatter = {
-      type: 'draft',
-      source: 'salience-capture',
-      salience_class: salienceClass,
-      confidence,
-      created_from: capture.date ? `journal/${capture.date}` : 'journal',
-    };
-  }
-
-  // Determine if we should route to memory
-  const shouldRouteToMemory = Boolean(
-    memoryClass
-    && confidence !== null
-    && confidence >= MEMORY_CONFIDENCE_THRESHOLD
-    && !keywordPlan.ignored,
-  );
-
-  // Memory record params (built but not written yet)
-  const memoryParams = shouldRouteToMemory ? {
-    class: memoryClass,
-    content: capture.title || primaryText(capture).slice(0, 200),
-    rationale: capture.rationale || undefined,
-    source: capture.date ? `journal/${capture.date}` : 'journal',
-    confidence,
-  } : null;
-
-  // Dedup check
-  let dedupResult = null;
-  if (memoryParams) {
-    dedupResult = checkMemoryDedup(memoryParams.content, memoryParams.class);
-  }
-
-  return {
-    ...keywordPlan,
-
-    // Memory routing
-    routeToMemory: shouldRouteToMemory && (!dedupResult || !dedupResult.isDuplicate),
-    memoryClass,
-    memoryParams,
-    memoryDedup: dedupResult,
-
-    // Salience metadata
-    salienceClass,
-    confidence,
+function applyStoragePlan(plan, capture = {}, options = {}) {
+  const adapter = options.adapter || createStorageAdapter(options);
+  const date = plan.date;
+  const result = {
+    journalEntry: null,
+    note: null,
+    noteLink: null,
   };
+
+  if (plan.ignored) {
+    return result;
+  }
+
+  if (plan.createNote) {
+    result.note = adapter.writeNote({
+      title: plan.noteTitle,
+      content: plan.noteContent,
+      frontmatter: {
+        ...(capture.frontmatter || {}),
+        ...(plan.noteFrontmatter || {}),
+      },
+    });
+  }
+
+  if (plan.journalSection && plan.journalLine) {
+    let journalLine = plan.journalLine;
+    if (
+      result.note
+      && result.note.title
+      && plan.noteTitle
+      && journalLine === `- [[${plan.noteTitle}]]`
+    ) {
+      journalLine = `- [[${result.note.title}]]`;
+    }
+
+    // Invariant (SUP-1900): never write a note wiki-link into the journal unless the
+    // note was actually written to disk. A failed or misrouted note write must NOT
+    // leave a dangling [[link]] with no backing note. Fail closed.
+    const isNoteWikiLink = plan.createNote && /^\s*-\s*\[\[/.test(journalLine);
+    // Trust the adapter's write result: link only if the note write was not an
+    // explicit failure. (The adapter is authoritative for its own vault within this
+    // call; cross-vault/cross-runtime drift is covered by the integrity sweep + WS7.)
+    const noteWritten = noteWriteSucceeded(result.note);
+
+    if (isNoteWikiLink && !noteWritten) {
+      result.noteLinkSkipped = {
+        reason: 'note_not_written',
+        plannedLine: journalLine,
+        notePath: result.note ? (result.note.path || null) : null,
+      };
+    } else {
+      // Resolve the plan's (default) heading to the currently-configured one, so a
+      // renamed/reordered section in journal-module.json is honored by the capture
+      // path — not just the renderer (WS0 config-driven sections).
+      result.journalEntry = adapter.appendLineToJournalSection({
+        heading: resolveConfiguredHeading(plan.journalSection),
+        line: journalLine,
+        date,
+      });
+      result.noteLink = result.journalEntry;
+    }
+  } else {
+    adapter.ensureJournal({ date });
+  }
+
+  return result;
 }
 
 /**
@@ -152,15 +173,30 @@ function applyThreePackagePlan(capture = {}, options = {}) {
   const plan = buildThreePackagePlan(capture);
 
   // Step 1: Apply keyword routing (journal + notes)
-  const keywordResult = applyKeywordPlan(capture, options);
+  const keywordResult = applyStoragePlan(plan, capture, options);
 
   // Step 2: Apply memory routing
   let memoryResult = null;
   if (plan.routeToMemory && plan.memoryParams) {
+    const dedupResult = checkMemoryDedup(plan.memoryParams.content, plan.memoryParams.class);
+    plan.memoryDedup = dedupResult;
+    if (dedupResult && dedupResult.isDuplicate) {
+      return {
+        plan: {
+          ...plan,
+          routeToMemory: false,
+        },
+        journal: keywordResult.journalEntry,
+        note: keywordResult.note,
+        noteLink: keywordResult.noteLink,
+        memory: null,
+      };
+    }
+
     const params = { ...plan.memoryParams };
 
-    // If a note was created, add the reference
-    if (keywordResult.note) {
+    // If a note was persisted, add the reference.
+    if (noteWriteSucceeded(keywordResult.note)) {
       params.noteRef = keywordResult.note.title || keywordResult.note.path || undefined;
     }
 
@@ -194,6 +230,8 @@ function previewRouting(capture = {}) {
     confidence: plan.confidence,
     trigger: plan.detectedTrigger,
     dedup: plan.memoryDedup,
+    workIntake: Boolean(plan.workIntake),
+    skillInvocations: plan.skillInvocations.map((invocation) => invocation.skillId),
   };
 }
 
@@ -230,8 +268,13 @@ module.exports = {
   MEMORY_CONFIDENCE_THRESHOLD,
   DECISIONS_HEADING,
   REMEMBERED_HEADING,
+  FLAGGED_HEADING,
+  REVIEW_CONFIDENCE_MIN,
+  REVIEW_CONFIDENCE_MAX,
+  applyStoragePlan,
   applyThreePackagePlan,
   buildThreePackagePlan,
+  noteWriteSucceeded,
   previewRouting,
 };
 

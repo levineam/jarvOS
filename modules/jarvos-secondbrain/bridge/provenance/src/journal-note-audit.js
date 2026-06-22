@@ -2,8 +2,8 @@
 /**
  * Bridge-owned canonical note↔journal link auditor.
  *
- * Detects notes created or updated today (or on a given date) in the vault
- * Notes/ directory and checks whether each is already linked in that day's journal
+ * Detects notes created today (or on a given date) in the vault Notes/
+ * directory and checks whether each is already linked in that day's journal
  * preferred ## 📝 Notes section (falling back to legacy ## 🗂️ Notes Created when
  * auditing pre-migration entries). Reports gaps and optionally patches them.
  *
@@ -20,11 +20,13 @@
 const fs = require('fs');
 const path = require('path');
 const { getVaultNotesDir, getVaultJournalDir } = require('./lib/provenance-config');
-const { getTimeZone } = require('../../config/jarvos-paths');
+const { getSectionHeading, getJournalSections } = require('../../../packages/jarvos-secondbrain-journal/src/section-config');
+const { migrateLegacyNotesCreatedSection } = require('./notes-section-normalizer');
 
 const NOTES_DIR = getVaultNotesDir();
 const JOURNAL_DIR = getVaultJournalDir();
-const NOTES_HEADING = '## 📝 Notes';
+// Resolve from journal-module.json so a renamed Notes heading is honored (WS0).
+const NOTES_HEADING = getSectionHeading('notes', { fallback: '## 📝 Notes' });
 const NOTES_CREATED_HEADING = '## 🗂️ Notes Created';
 const TRACKED_SECTION_HEADINGS = [NOTES_HEADING, NOTES_CREATED_HEADING];
 const LEGACY_NOTES_CREATED_CUTOFF = '2026-05-14';
@@ -82,7 +84,7 @@ Exit codes:
 
 function nyToday() {
   return new Intl.DateTimeFormat('en-CA', {
-    timeZone: getTimeZone(),
+    timeZone: 'America/New_York',
     year: 'numeric', month: '2-digit', day: '2-digit',
   }).format(new Date());
 }
@@ -131,6 +133,32 @@ function createdAtForStat(stat) {
   return stat.mtime;
 }
 
+// Read the frontmatter `updated:` date (YYYY-MM-DD) if present. If a manually
+// edited note has no updated frontmatter, the audit falls back to file mtime so
+// external/Obsidian edits still get a daily journal backlink.
+function readUpdatedDate(fullPath) {
+  let text;
+  try {
+    text = fs.readFileSync(fullPath, 'utf8');
+  } catch {
+    return null;
+  }
+  const fm = text.match(/^---\r?\n([\s\S]*?)\r?\n---/);
+  if (!fm) return null;
+  const m = fm[1].match(/^\s*updated\s*:\s*["']?(\d{4}-\d{2}-\d{2})/m);
+  return m ? m[1] : null;
+}
+
+// A note belongs in a given day's journal Notes section if it was CREATED that day
+// or UPDATED that day (per the journal-module contract: "created or updated that day").
+function noteMatchesDate(note, dateYmd, fmt) {
+  return (
+    fmt(note.createdAt) === dateYmd ||
+    note.updated === dateYmd ||
+    (!note.updated && note.mtime && fmt(note.mtime) === dateYmd)
+  );
+}
+
 function findAllNotes() {
   let allFiles;
   try {
@@ -157,6 +185,7 @@ function findAllNotes() {
       fullPath,
       createdAt: createdAtForStat(stat),
       mtime: stat.mtime,
+      updated: readUpdatedDate(fullPath),
     });
   }
 
@@ -165,13 +194,12 @@ function findAllNotes() {
 
 function findNotesForDate(dateYmd) {
   const nyFormatter = new Intl.DateTimeFormat('en-CA', {
-    timeZone: getTimeZone(),
+    timeZone: 'America/New_York',
     year: 'numeric', month: '2-digit', day: '2-digit',
   });
 
-  const results = findAllNotes().filter((note) => {
-    return nyFormatter.format(note.createdAt) === dateYmd || nyFormatter.format(note.mtime) === dateYmd;
-  });
+  const fmt = (d) => nyFormatter.format(d);
+  const results = findAllNotes().filter((note) => noteMatchesDate(note, dateYmd, fmt));
   results.sort((a, b) => a.createdAt - b.createdAt || a.mtime - b.mtime);
   return results;
 }
@@ -286,6 +314,49 @@ function injectNoteLinks(journalMd, missingNotes) {
   return rebuilt.join('\n');
 }
 
+// --- Structural health (SUP-1941) -----------------------------------------
+// The note↔link audit alone cannot distinguish a healthy journal from a
+// ~50-byte frontmatter-only stub: a stub simply reports "no notes today" and
+// exits 0, masking a broken journal. This is exactly what happened on
+// 2026-05-21 — the journal-maintenance cron failed silently and the Obsidian
+// Journals plugin auto-created a bare frontmatter shell that went unnoticed.
+// So we also verify the journal carries its required section scaffold per
+// journal-module.json, and (under --fix) scaffold any missing required
+// headings. Scaffolding is purely ADDITIVE — it never deletes content — and a
+// full repopulate of auto-fetch sections (calendar/reminders/paperclip)
+// remains journal-maintenance.js's job.
+
+function getRequiredHeadings() {
+  return getJournalSections()
+    .filter((s) => s.enabled !== false)
+    .map((s) => String(s.heading).trim());
+}
+
+function stripFrontmatter(md) {
+  const m = md.match(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/);
+  return m ? md.slice(m[0].length) : md;
+}
+
+// Returns { healthy, isStub, present, missing }. A "stub" is a journal whose
+// body (after frontmatter) carries no '## ' section at all — the bare
+// auto-created shell, not a real entry.
+function checkJournalStructure(journalMd, requiredHeadings = getRequiredHeadings()) {
+  const lines = String(journalMd).split('\n');
+  const present = requiredHeadings.filter((h) => lines.some((l) => l.trim() === h));
+  const missing = requiredHeadings.filter((h) => !present.includes(h));
+  const body = stripFrontmatter(String(journalMd)).trim();
+  const isStub = body.length === 0 || !/^##\s/m.test(body);
+  return { healthy: !isStub && missing.length === 0, isStub, present, missing };
+}
+
+// Append any missing required headings (in config order) with an empty
+// placeholder. Additive only; structure-lock's drift pass will reorder/fill.
+function scaffoldMissingSections(journalMd, missingHeadings) {
+  if (!missingHeadings.length) return journalMd;
+  const additions = missingHeadings.map((h) => `${h}\n-`).join('\n\n');
+  return `${String(journalMd).trimEnd()}\n\n${additions}\n`;
+}
+
 function main() {
   const opts = parseArgs(process.argv.slice(2));
 
@@ -331,9 +402,14 @@ function main() {
     process.exit(2);
   }
 
-  const allowLegacy = dateYmd < LEGACY_NOTES_CREATED_CUTOFF;
-  const missingLinks = findMissingLinks(notesToday, journalMd, allNotes, { allowLegacy });
-  const trackedSection = extractTrackedSection(journalMd, { allowLegacy });
+  const legacyMigration = migrateLegacyNotesCreatedSection(journalMd);
+  const shouldMigrateLegacy = legacyMigration.migrated;
+  const auditMd = opts.fix && shouldMigrateLegacy ? legacyMigration.content : journalMd;
+  const allowLegacy = dateYmd < LEGACY_NOTES_CREATED_CUTOFF && !shouldMigrateLegacy;
+  const missingLinks = findMissingLinks(notesToday, auditMd, allNotes, { allowLegacy });
+  const trackedSection = extractTrackedSection(auditMd, { allowLegacy });
+
+  const structure = checkJournalStructure(auditMd);
 
   const result = {
     date: dateYmd,
@@ -342,42 +418,89 @@ function main() {
     trackedSection: trackedSection.heading,
     notesToday: notesToday.map((n) => n.title),
     missingLinks: missingLinks.map((n) => n.title),
+    structure: {
+      healthy: structure.healthy,
+      isStub: structure.isStub,
+      missingSections: structure.missing,
+    },
+    legacyNotesCreated: {
+      present: shouldMigrateLegacy,
+      migrated: false,
+      movedLines: legacyMigration.movedLines,
+      duplicateLinks: legacyMigration.duplicateLinks,
+    },
     patched: false,
+    structureRepaired: false,
   };
 
-  if (opts.fix && missingLinks.length > 0) {
-    const updated = injectNoteLinks(journalMd, missingLinks);
-    fs.writeFileSync(journalPath, updated, 'utf8');
-    result.patched = true;
+  // Apply structural scaffold and note-link injection in a single write.
+  let working = journalMd;
+  let mutated = false;
 
-    if (!opts.json) {
-      console.log(`[journal-note-audit] PATCHED ${journalPath}`);
-      for (const n of missingLinks) {
-        console.log(`  + [[${n.title}]]`);
-      }
+  if (opts.fix && shouldMigrateLegacy) {
+    working = legacyMigration.content;
+    result.legacyNotesCreated.migrated = true;
+    mutated = true;
+  }
+  if (opts.fix && fs.existsSync(journalPath) && structure.missing.length > 0) {
+    working = scaffoldMissingSections(working, structure.missing);
+    result.structureRepaired = true;
+    mutated = true;
+  }
+  if (opts.fix && missingLinks.length > 0) {
+    working = injectNoteLinks(working, missingLinks);
+    result.patched = true;
+    mutated = true;
+  }
+  if (mutated) {
+    fs.writeFileSync(journalPath, working, 'utf8');
+  }
+
+  // Re-evaluate structure post-repair so the exit code reflects the final file.
+  const structureAfter = result.structureRepaired ? checkJournalStructure(working) : structure;
+  result.structure.healthy = structureAfter.healthy;
+  result.structure.isStub = structureAfter.isStub;
+  result.structure.missingSections = structureAfter.missing;
+
+  if (!opts.json) {
+    // Structural health first — a stub/missing-section journal is the more
+    // serious problem and would otherwise be masked by "no notes today".
+    if (result.structureRepaired) {
+      console.log(`[journal-note-audit] SCAFFOLDED missing required section(s) in ${journalPath}: ${structure.missing.join(', ')}`);
+      console.log('[journal-note-audit] NOTE: run journal-maintenance.js to repopulate auto-fetch sections (calendar/reminders/paperclip).');
+    } else if (!structureAfter.healthy) {
+      const what = structureAfter.isStub ? 'is a stub (no sections)' : `is missing required section(s): ${structureAfter.missing.join(', ')}`;
+      console.warn(`[journal-note-audit] STRUCTURE: journal for ${dateYmd} ${what}.`);
+      if (opts.dryRun) console.warn('[journal-note-audit] Run with --fix to scaffold the missing required sections.');
     }
-  } else if (!opts.json) {
-    if (notesToday.length === 0) {
+
+    if (result.legacyNotesCreated.migrated) {
+      console.log(`[journal-note-audit] MIGRATED legacy Notes Created section into ${NOTES_HEADING} (${result.legacyNotesCreated.movedLines} line(s), ${result.legacyNotesCreated.duplicateLinks} duplicate link(s) skipped).`);
+    } else if (result.legacyNotesCreated.present && opts.dryRun) {
+      console.warn(`[journal-note-audit] LEGACY: journal for ${dateYmd} still has ${NOTES_CREATED_HEADING}; run with --fix to migrate it into ${NOTES_HEADING}.`);
+    }
+
+    // Note-link status.
+    if (result.patched) {
+      console.log(`[journal-note-audit] PATCHED ${journalPath}`);
+      for (const n of missingLinks) console.log(`  + [[${n.title}]]`);
+    } else if (notesToday.length === 0) {
       console.log(`[journal-note-audit] No notes found for ${dateYmd}.`);
     } else if (missingLinks.length === 0) {
       console.log(`[journal-note-audit] All ${notesToday.length} note(s) already linked. OK.`);
     } else {
       console.log(`[journal-note-audit] ${missingLinks.length} note(s) NOT linked in journal for ${dateYmd}:`);
-      for (const n of missingLinks) {
-        console.log(`  MISSING: [[${n.title}]]`);
-      }
-      if (opts.dryRun) {
-        console.log('[journal-note-audit] Run with --fix to patch.');
-      }
+      for (const n of missingLinks) console.log(`  MISSING: [[${n.title}]]`);
+      if (opts.dryRun) console.log('[journal-note-audit] Run with --fix to patch.');
     }
-  }
-
-  if (opts.json) {
+  } else {
     console.log(JSON.stringify(result, null, 2));
   }
 
   const hasGaps = missingLinks.length > 0 && !result.patched;
-  process.exit(hasGaps ? 1 : 0);
+  const structurallyUnhealthy = !structureAfter.healthy;
+  const legacyUnmigrated = result.legacyNotesCreated.present && !result.legacyNotesCreated.migrated;
+  process.exit((hasGaps || structurallyUnhealthy || legacyUnmigrated) ? 1 : 0);
 }
 
 module.exports = {
@@ -390,11 +513,17 @@ module.exports = {
   extractTrackedSection,
   findAllNotes,
   findNotesForDate,
+  noteMatchesDate,
   findMissingLinks,
   formatNoteLinks,
   injectNoteLinks,
   noteLinkTargetFromPath,
   normalizeWikiTarget,
+  migrateLegacyNotesCreatedSection,
+  getRequiredHeadings,
+  stripFrontmatter,
+  checkJournalStructure,
+  scaffoldMissingSections,
 };
 
 if (require.main === module) {

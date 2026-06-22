@@ -3,10 +3,10 @@
   "$doc": "Canonical package-owned journal contract. Controls which sections appear in daily journal entries and their order. The root clawd/config/journal-module.json file remains a compatibility mirror during the extraction phase.",
 
   "vault": {
-    "_comment": "Legacy fallback only: shared path inputs win first (JARVOS_JOURNAL_DIR/JARVOS_NOTES_DIR, JOURNAL_DIR/VAULT_NOTES_DIR aliases, JARVOS_VAULT_DIR, or jarvos.config.json paths.journal/paths.notes/paths.vault). These values are used only when no shared path input is configured. The '~/...' tilde form is supported.",
-    "journalDir": "~/Documents/Vault v3/Journal",
-    "notesDir": "~/Documents/Vault v3/Notes",
-    "tagsDir": "~/Documents/Vault v3/Tags"
+    "journalDir": "~/Vaults/Vault v3/Journal",
+    "notesDir": "~/Vaults/Vault v3/Notes",
+    "tagsDir": "~/Vaults/Vault v3/Tags",
+    "$doc": "Paths support ~/... (resolved at runtime via os.homedir()). Override with JARVOS_JOURNAL_DIR, JARVOS_NOTES_DIR, JARVOS_TAGS_DIR env vars."
   },
 
   "frontmatter": {
@@ -17,24 +17,16 @@
   "sections": {
     "required": [
       {
-        "id": "priorities",
-        "heading": "## 🎯 Priorities",
-        "source": "manual",
-        "description": "User-curated daily priorities. Manual list order is authoritative."
-      },
-      {
         "id": "todays-calendar",
         "heading": "## 📅 Today's Calendar",
         "source": "google-calendar",
-        "calendarFilter": [],
-        "$calendarFilter_doc": "Optional list of calendar names to include (e.g. [\"Work\", \"Personal\"]). Empty or omitted means all calendars. Requires icalBuddy (macOS only).",
-        "description": "Today's events from Google Calendar via icalBuddy (macOS only)"
+        "description": "Today's events from Google Calendar via gog"
       },
       {
         "id": "notes",
         "heading": "## 📝 Notes",
         "source": "manual",
-        "description": "Free-form notes, completed work, observations"
+        "description": "Canonical wiki-link hub for notes created or updated that day. Keep salience, memory, and recent-work bullets out of this section."
       },
       {
         "id": "ideas",
@@ -44,9 +36,9 @@
       },
       {
         "id": "flagged",
-        "heading": "## 🚩 Flagged",
-        "source": "manual",
-        "description": "Medium-confidence captures queued for human review before durable note creation"
+        "heading": "## 📌 Flagged",
+        "source": "capture-router",
+        "description": "Medium-confidence captures awaiting review"
       },
       {
         "id": "journal-entry",
@@ -69,26 +61,19 @@
         "heading": "## 📎 Paperclip Inbox",
         "source": "paperclip",
         "enabled": true,
-        "description": "Assigned Paperclip issues needing attention — shows todo/in_progress/blocked issues assigned to Jarvis or Michael. Read-only snapshot; sorted by status (blocked→in_progress→todo) then priority.",
+        "description": "Assigned Paperclip issues needing attention — shows blocked issues assigned to Jarvis or Michael. Read-only snapshot; sorted by priority.",
         "filter": {
           "assignees": ["jarvis", "michael"],
-          "statuses": ["todo", "in_progress", "blocked"],
-          "doc": "Only open/actionable issues. Done/cancelled are excluded. Scope defined in scripts/journal-paperclip-inbox.js."
+          "statuses": ["blocked"],
+          "doc": "Only blocked issues are surfaced here. Scope defined in scripts/journal-paperclip-inbox.js."
         }
-      },
-      {
-        "id": "notes-created",
-        "heading": "## 🗂️ Notes Created",
-        "source": "notes-created",
-        "enabled": true,
-        "description": "Links to vault notes created or updated that day, rendered as a dedicated journal section instead of being mixed into general Notes."
       }
     ]
   },
 
   "ordering": {
     "strategy": "config-defined",
-    "doc": "Sections render in the order listed: all required sections first (in array order), then enabled optional sections (in array order). For manual sections like Priorities, the written list order inside the section is authoritative. To reorder sections, rearrange the arrays above."
+    "doc": "Sections render in the order listed: all required sections first (in array order), then enabled optional sections (in array order). To reorder, rearrange the arrays above."
   },
 
   "structureLock": {
@@ -107,15 +92,21 @@
     "legacySections": {
       "current-focus": {
         "heading": "## 🎯 Current Focus",
-        "action": "rename",
-        "migrateContentTo": "priorities",
-        "doc": "Legacy Current Focus content is preserved by renaming the section to Priorities on first encounter."
+        "action": "remove",
+        "migrateContentTo": "notes",
+        "doc": "Current Focus was consistently empty and is no longer part of the journal contract. Any legacy content is migrated into Notes."
       },
       "tasks": {
         "heading": "## ✅ Tasks",
         "action": "remove",
         "migrateContentTo": "notes",
         "doc": "Legacy Tasks section is removed. Any existing content is migrated to Notes on first encounter."
+      },
+      "notes-created": {
+        "heading": "## 🗂️ Notes Created",
+        "action": "rename",
+        "migrateContentTo": "notes",
+        "doc": "Legacy Notes Created content is folded into the canonical ## 📝 Notes section on the next maintenance pass."
       }
     }
   },

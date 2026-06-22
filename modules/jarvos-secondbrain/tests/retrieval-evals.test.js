@@ -1,0 +1,132 @@
+'use strict';
+
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+
+const {
+  createGraphRetrievalAdapter,
+  createQmdRetrievalAdapter,
+  createWikiRetrievalAdapter,
+  runRetrievalEvalPack,
+  summarizeRetrievalEval,
+} = require('../bridge/synthesis');
+
+function writeFile(filePath, text) {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, text, 'utf8');
+}
+
+function fixtureRoots() {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-retrieval-'));
+  const notesDir = path.join(root, 'Notes');
+  const wikiDir = path.join(root, 'Generated Wiki');
+  writeFile(path.join(notesDir, 'Quotes.md'), [
+    '# Quotes',
+    '',
+    'The quote says: "Generated retrieval should cite the source note."',
+  ].join('\n'));
+  writeFile(path.join(notesDir, 'Memory Stack Decision.md'), [
+    '# Memory Stack Decision',
+    '',
+    'Decision: qmd remains the baseline retrieval layer before graph memory is trusted.',
+  ].join('\n'));
+  writeFile(path.join(notesDir, 'Preferences.md'), [
+    '# Preferences',
+    '',
+    'Preference: Andrew wants concise engineering updates with explicit evidence.',
+  ].join('\n'));
+  writeFile(path.join(notesDir, 'Project Context.md'), [
+    '# Project Context',
+    '',
+    'Project context: SUP-3189 owns the automatic secondbrain roadmap.',
+  ].join('\n'));
+  writeFile(path.join(wikiDir, 'concepts', 'automatic-secondbrain.md'), [
+    '# automatic-secondbrain',
+    '',
+    'Generated wiki evidence: SUP-3189 owns the automatic secondbrain roadmap.',
+    'Generated wiki evidence: qmd remains the baseline retrieval layer.',
+    'Generated wiki evidence: LLM-wiki adds synthesized quote retrieval coverage.',
+  ].join('\n'));
+  return { notesDir, wikiDir };
+}
+
+test('retrieval eval pack compares qmd wiki and graph adapters with source evidence', () => {
+  const { notesDir, wikiDir } = fixtureRoots();
+  const questions = [
+    {
+      id: 'quote-source-citation',
+      category: 'quote',
+      question: 'Find the quote about generated retrieval citing source notes',
+      expectedEvidence: 'Generated retrieval should cite the source note',
+    },
+    {
+      id: 'memory-stack-decision',
+      category: 'decision',
+      question: 'What did we decide about qmd and graph memory?',
+      expectedEvidence: 'qmd remains the baseline retrieval layer',
+    },
+    {
+      id: 'andrew-update-preference',
+      category: 'preference',
+      question: 'What is Andrew preference for engineering updates?',
+      expectedEvidence: 'concise engineering updates with explicit evidence',
+    },
+    {
+      id: 'secondbrain-project-context',
+      category: 'project-context',
+      question: 'Which issue owns the automatic secondbrain roadmap?',
+      expectedEvidence: 'SUP-3189 owns the automatic secondbrain roadmap',
+    },
+    {
+      id: 'wiki-synthesized-quote-coverage',
+      category: 'quote',
+      question: 'What synthesized layer adds quote retrieval coverage?',
+      expectedEvidence: 'LLM-wiki adds synthesized quote retrieval coverage',
+    },
+  ];
+  const report = runRetrievalEvalPack({
+    questions,
+    adapters: [
+      createQmdRetrievalAdapter({ roots: [notesDir] }),
+      createWikiRetrievalAdapter({ roots: [notesDir, wikiDir] }),
+      createGraphRetrievalAdapter({ roots: [notesDir, wikiDir], enabled: true }),
+    ],
+  });
+  const summary = summarizeRetrievalEval(report);
+
+  assert.equal(report.results.length, 5);
+  assert.deepEqual(summary.map((item) => item.adapter), [
+    'qmd-only',
+    'qmd-plus-llm-wiki',
+    'qmd-plus-graph',
+  ]);
+  assert.equal(summary.find((item) => item.adapter === 'qmd-plus-llm-wiki').passed, 5);
+  assert.equal(summary.find((item) => item.adapter === 'qmd-plus-graph').ok, true);
+  assert.ok(report.results.every((result) => result.adapters.some((adapter) => adapter.passed)));
+
+  const wikiOnly = report.results.find((result) => result.id === 'wiki-synthesized-quote-coverage');
+  assert.equal(wikiOnly.adapters.find((adapter) => adapter.adapter === 'qmd-only').passed, false);
+  assert.equal(wikiOnly.adapters.find((adapter) => adapter.adapter === 'qmd-plus-llm-wiki').passed, true);
+});
+
+test('graph retrieval adapter fails closed when disabled', () => {
+  const { notesDir } = fixtureRoots();
+  const report = runRetrievalEvalPack({
+    questions: [{
+      id: 'graph-disabled',
+      category: 'decision',
+      question: 'What did we decide about qmd?',
+      expectedEvidence: 'qmd remains the baseline retrieval layer',
+    }],
+    adapters: [
+      createGraphRetrievalAdapter({ roots: [notesDir], enabled: false }),
+    ],
+  });
+
+  assert.equal(report.results[0].adapters[0].enabled, false);
+  assert.equal(report.results[0].adapters[0].passed, false);
+  assert.deepEqual(report.results[0].adapters[0].hits, []);
+});

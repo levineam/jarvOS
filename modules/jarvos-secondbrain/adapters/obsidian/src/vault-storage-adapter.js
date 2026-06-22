@@ -25,24 +25,15 @@ const {
 const {
   getVaultJournalDir,
 } = require('../../../bridge/provenance/src/lib/provenance-config.js');
-const {
-  getTimeZone,
-} = require('../../../bridge/config/jarvos-paths.js');
-const {
-  NOTES_HEADING,
-} = require('../../../bridge/provenance/src/journal-note-audit.js');
-const {
-  linkNoteToJournal: linkNoteBacklinkToJournal,
-} = require('../../../bridge/provenance/src/link-to-journal.js');
-
 const IDEAS_HEADING = '## 💡 Ideas';
-const FLAGGED_HEADING = '## 🚩 Flagged';
+const NOTES_HEADING = '## 📝 Notes';
+const FLAGGED_HEADING = '## 📌 Flagged';
 const SIGNATURE = '— Edited by Jarvis';
 const NOTES_PLACEHOLDER_RE = /^-\s+(?:No notes created(?: on .*)?|No notes today|No notes yet)$/i;
 
 function todayDate() {
   return new Intl.DateTimeFormat('en-CA', {
-    timeZone: getTimeZone(),
+    timeZone: 'America/New_York',
     year: 'numeric',
     month: '2-digit',
     day: '2-digit',
@@ -109,6 +100,19 @@ function appendLineToSectionContent(contentLines, line) {
   };
 }
 
+function insertMissingSection(lines, heading) {
+  const insertAt = lines.findIndex((line) => line.trim() === SIGNATURE);
+  const insertion = [heading, '-', ''];
+  if (insertAt === -1) {
+    return [...lines, '', ...insertion];
+  }
+  return [
+    ...lines.slice(0, insertAt),
+    ...insertion,
+    ...lines.slice(insertAt),
+  ];
+}
+
 function createVaultStorageAdapter() {
   return {
     ensureJournal({ date = todayDate() } = {}) {
@@ -125,20 +129,21 @@ function createVaultStorageAdapter() {
 
       const { journalPath } = this.ensureJournal({ date });
       const current = fs.readFileSync(journalPath, 'utf8');
-      const lines = current.split(/\r?\n/);
-      const { sectionLineStart, sectionLineEnd } = findSectionRange(lines, heading);
+      let lines = current.split(/\r?\n/);
+      let range = findSectionRange(lines, heading);
 
-      if (sectionLineStart === -1) {
-        throw new Error(`Journal heading not found: ${heading}`);
+      if (range.sectionLineStart === -1) {
+        lines = insertMissingSection(lines, heading);
+        range = findSectionRange(lines, heading);
       }
 
-      const existingSection = lines.slice(sectionLineStart + 1, sectionLineEnd);
+      const existingSection = lines.slice(range.sectionLineStart + 1, range.sectionLineEnd);
       const appended = appendLineToSectionContent(existingSection, line);
       const rebuilt = [
-        ...lines.slice(0, sectionLineStart + 1),
+        ...lines.slice(0, range.sectionLineStart + 1),
         ...appended.contentLines,
         '',
-        ...lines.slice(sectionLineEnd),
+        ...lines.slice(range.sectionLineEnd),
       ].join('\n');
       const finalContent = trimOuterBlankLines(rebuilt) + '\n';
 
@@ -155,26 +160,31 @@ function createVaultStorageAdapter() {
     },
 
     writeNote({ title, content, frontmatter = {} }) {
-      return writeNoteFile({ title, content, frontmatter });
+      const previous = process.env.JARVOS_JOURNAL_BACKLINK;
+      process.env.JARVOS_JOURNAL_BACKLINK = '0';
+      try {
+        return writeNoteFile({ title, content, frontmatter });
+      } finally {
+        if (previous === undefined) delete process.env.JARVOS_JOURNAL_BACKLINK;
+        else process.env.JARVOS_JOURNAL_BACKLINK = previous;
+      }
     },
 
     linkNoteToJournal({ noteTitle, date = todayDate(), heading = NOTES_HEADING }) {
       if (!noteTitle) throw new Error('noteTitle is required');
-      const journalPath = path.join(getVaultJournalDir(), `${date}.md`);
-      const result = linkNoteBacklinkToJournal({ noteTitle, section: heading, journalPath });
-      return {
-        ...result,
-        heading: NOTES_HEADING,
+      return this.appendLineToJournalSection({
+        heading,
         line: `- [[${noteTitle}]]`,
-      };
+        date,
+      });
     },
   };
 }
 
 module.exports = {
   createVaultStorageAdapter,
-  FLAGGED_HEADING,
   IDEAS_HEADING,
   NOTES_HEADING,
+  FLAGGED_HEADING,
   todayDate,
 };

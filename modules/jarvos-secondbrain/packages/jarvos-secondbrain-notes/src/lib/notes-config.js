@@ -2,21 +2,34 @@
 /**
  * notes-config.js — package-owned Notes path/config helpers.
  *
- * Delegates to the shared bridge/config/jarvos-paths module.
- *
  * Resolution order for the Notes directory:
- *   1. JARVOS_NOTES_DIR env var
- *   2. VAULT_NOTES_DIR env var (backward compat)
- *   3. jarvos.config.json paths.notes in JARVOS_CLAWD_DIR (or CLAWD_DIR or ~/clawd)
- *   4. $JARVOS_VAULT_DIR/Notes (default: ~/Documents/Vault v3/Notes)
+ *   1. VAULT_NOTES_DIR env var
+ *   2. jarvos.config.json in CLAWD_DIR / workspace
+ *   3. homedir-relative defaults
  */
 
 'use strict';
 
-const { getNotesDir } = require('../../../../bridge/config/jarvos-paths.js');
+const fs = require('fs');
+const path = require('path');
+const { resolveConfig } = require('../../../../bridge/config');
 
-function getVaultNotesDir() {
-  return getNotesDir();
+function loadConfig() {
+  return resolveConfig();
 }
 
-module.exports = { getVaultNotesDir };
+function getVaultNotesDir() {
+  return loadConfig().paths.notes;
+}
+
+function getVaultSourceMaterialDir() {
+  const config = loadConfig();
+  if (config.paths.sourceMaterial) return config.paths.sourceMaterial;
+  const plainSourceMaterial = path.join(config.paths.vault, 'Source Material');
+  if (fs.existsSync(plainSourceMaterial) && fs.statSync(plainSourceMaterial).isDirectory()) {
+    return plainSourceMaterial;
+  }
+  return path.join(config.paths.vault, '2 - Source Material');
+}
+
+module.exports = { loadConfig, getVaultNotesDir, getVaultSourceMaterialDir };

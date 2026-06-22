@@ -6,37 +6,52 @@
   "main": "src/index.js",
   "exports": {
     ".": "./src/index.js",
+    "./ambient": "./packages/jarvos-ambient/src/index.js",
+    "./capture": "./bridge/capture/src/universal-capture.js",
     "./routing": "./bridge/routing/src/keyword-capture-router.js",
     "./routing/contracts": "./bridge/routing/src/skill-contracts.js",
-    "./config": "./bridge/config/jarvos-paths.js"
+    "./config": "./bridge/config/jarvos-paths.js",
+    "./config/resolve": "./bridge/config/index.js",
+    "./session-source": "./adapters/session-source/session-source-adapter.js",
+    "./synthesis": "./bridge/synthesis/index.js",
+    "./wiki": "./packages/jarvos-secondbrain-wiki/src/index.js"
   },
   "files": [
     "src/",
     "bridge/",
     "adapters/",
     "packages/",
+    "docs/",
     "scripts/",
     "jarvos.config.example.json",
     "README.md"
   ],
   "workspaces": [
+    "packages/jarvos-ambient",
     "packages/jarvos-secondbrain-journal",
-    "packages/jarvos-secondbrain-notes"
+    "packages/jarvos-secondbrain-notes",
+    "packages/jarvos-secondbrain-wiki"
   ],
   "bin": {
+    "jarvos-capture": "scripts/jarvos-capture.js",
     "jarvos-detect-vault": "scripts/detect-vault.js"
   },
   "scripts": {
     "test": "node --test tests/*.test.js",
+    "capture": "node scripts/jarvos-capture.js",
     "lint:notes": "node packages/jarvos-secondbrain-notes/src/lint-frontmatter.js --json",
     "maintain:manual-notes": "node packages/jarvos-secondbrain-notes/src/manual-notes-maintenance.js --dry-run",
     "maintain:manual-notes:apply": "node packages/jarvos-secondbrain-notes/src/manual-notes-maintenance.js --apply",
+    "wiki:build": "node packages/jarvos-secondbrain-wiki/src/index.js",
     "journal:dry-run": "node packages/jarvos-secondbrain-journal/src/journal-maintenance.js --dry-run",
     "detect-vault": "node scripts/detect-vault.js"
   },
   "repository": {
     "type": "git",
     "url": "https://github.com/levineam/jarvOS.git"
+  },
+  "devDependencies": {
+    "ajv": "^8.17.1"
   },
   "engines": { "node": ">=18" },
   "keywords": ["jarvos", "secondbrain", "journal", "notes", "ai-agent", "personal-os"]

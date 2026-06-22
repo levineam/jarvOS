@@ -199,16 +199,17 @@ try {
   }
 
   const notePlan = sb.buildRoutingPlan({ text: 'make a note about module smoke capture' });
-  const flaggedPlan = sb.buildRoutingPlan({ text: 'remember this module smoke capture' });
+  const defaultNotePlan = sb.buildRoutingPlan({ text: 'remember this module smoke capture' });
   if (
     notePlan.route === 'note' &&
-    flaggedPlan.route === 'flagged' &&
+    defaultNotePlan.route === 'note' &&
+    defaultNotePlan.defaultedToNoteBias === true &&
     sb.SKILL_CONTRACTS &&
     sb.SKILL_CONTRACTS['note-creation']
   ) {
     ok('capture routing contracts are exported');
   } else {
-    bad('capture routing contracts', new Error(JSON.stringify({ notePlan, flaggedPlan })));
+    bad('capture routing contracts', new Error(JSON.stringify({ notePlan, defaultNotePlan })));
   }
 
 } catch (e) {
@@ -223,7 +224,7 @@ try {
   const gb = require(path.join(ROOT, 'modules/jarvos-gbrain/src/index.js'));
 
   // slugify
-  const slug = gb.slugify('JarVOS & GBrain: Integration');
+  const slug = gb.slugify('jarvOS & GBrain: Integration');
   if (slug === 'jarvos-and-gbrain-integration') {
     ok('slugify returns stable GBrain slug');
   } else {

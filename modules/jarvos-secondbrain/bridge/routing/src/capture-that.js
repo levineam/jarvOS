@@ -33,117 +33,13 @@ const {
 } = require('./three-package-router');
 
 const {
+  extractTitle,
+  findBestCapture,
   classifyMessage,
-} = require('./salience-detector');
-
-// Minimum content length to consider substantive
-const MIN_CONTENT_LENGTH = 20;
-
-// Maximum messages to look back
-const MAX_LOOKBACK = 10;
-
-// Patterns that indicate the message IS the capture command, not content
-const CAPTURE_COMMAND_PATTERNS = [
-  /^\s*capture\s+that\b/i,
-  /^\s*save\s+that\b/i,
-  /^\s*write\s+that\s+down\b/i,
-  /^\s*remember\s+this\b/i,
-  /^\s*note\s+that\b/i,
-];
-
-/**
- * Check if a message is the capture command itself (not capturable content).
- */
-function isCaptureCommand(text) {
-  const trimmed = String(text || '').trim();
-  return CAPTURE_COMMAND_PATTERNS.some((p) => p.test(trimmed));
-}
-
-/**
- * Score a message's "capturability" — how likely it contains substantive content.
- */
-function scoreCapturability(message) {
-  const text = String(message.content || '').trim();
-  if (!text || text.length < MIN_CONTENT_LENGTH) return 0;
-  if (isCaptureCommand(text)) return 0;
-
-  let score = 0;
-
-  // Longer messages are more likely to be substantive
-  if (text.length >= 200) score += 3;
-  else if (text.length >= 100) score += 2;
-  else if (text.length >= 40) score += 1;
-
-  // Assistant messages with structure are good candidates
-  if (message.role === 'assistant') {
-    if (text.includes('\n')) score += 1;
-    if (/^#+\s/m.test(text)) score += 1; // has headings
-    if (/^[-*]\s/m.test(text)) score += 1; // has lists
-    if (/```/.test(text)) score += 1; // has code blocks
-  }
-
-  // User messages with decisions, ideas, or explicit content
-  if (message.role === 'user') {
-    const classification = classifyMessage(text);
-    if (classification.salienceClass !== 'nothing') {
-      score += 2;
-      if (classification.confidence >= 0.8) score += 1;
-    }
-  }
-
-  return score;
-}
-
-/**
- * Find the best content to capture from recent messages.
- *
- * Strategy: scan backwards, score each message, pick the highest-scoring
- * non-command message. Prefer the message immediately before the capture
- * command if it's substantive.
- */
-function findBestCapture(recentMessages = []) {
-  const messages = recentMessages.slice(-MAX_LOOKBACK);
-
-  let bestIdx = -1;
-  let bestScore = 0;
-
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const msg = messages[i];
-    const score = scoreCapturability(msg);
-
-    if (score > bestScore) {
-      bestScore = score;
-      bestIdx = i;
-    }
-  }
-
-  if (bestIdx === -1) {
-    return null;
-  }
-
-  return {
-    message: messages[bestIdx],
-    index: bestIdx,
-    score: bestScore,
-  };
-}
-
-/**
- * Extract a title from the captured content.
- */
-function extractTitle(content, maxLength = 80) {
-  const lines = String(content || '').split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
-
-  // If first line looks like a heading, use it
-  const heading = lines.find((l) => /^#+\s/.test(l));
-  if (heading) {
-    return heading.replace(/^#+\s+/, '').slice(0, maxLength);
-  }
-
-  // Use the first substantive line
-  const firstLine = lines[0] || '';
-  return firstLine.slice(0, maxLength).replace(/[.。!?]+$/, '') || 'Captured content';
-}
+  isCaptureCommand,
+  messageContent,
+  scoreCapturability,
+} = require('../../../packages/jarvos-ambient/src/intent');
 
 /**
  * Execute "capture that" — find the best recent content and route it.
@@ -178,7 +74,7 @@ function captureThat(input = {}, options = {}) {
     };
   }
 
-  const content = String(best.message.content || '').trim();
+  const content = messageContent(best.message);
   const title = hint || extractTitle(content);
 
   // Classify the content to determine memory routing
@@ -225,7 +121,7 @@ function previewCaptureThat(input = {}) {
     return { found: false, error: 'No substantive content found' };
   }
 
-  const content = String(best.message.content || '').trim();
+  const content = messageContent(best.message);
   const title = hint || extractTitle(content);
   const classification = classifyMessage(content);
 
@@ -283,6 +179,7 @@ module.exports = {
   findBestCapture,
   extractTitle,
   isCaptureCommand,
+  messageContent,
   scoreCapturability,
 };
 

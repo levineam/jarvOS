@@ -4,11 +4,12 @@ Package-owned durable Notes contract and tooling for the `jarvos-secondbrain` mo
 
 ## What lives here
 
-- `docs/CLAW_SECONDBRAIN_NOTES_PACKAGE_DECISION_2026-03-25.md` — package boundary and contract decision
-- `src/write-to-vault.js` — canonical automated note writer path; writes the note, links the journal, and emits local KB sidecars in one call
-- `src/knowledge-optimizer.js` — lossless WS4/WS5 sidecar artifacts for GBrain, QMD refresh, memory-wiki, and continuity queues
+- `docs/JARVOS_SECONDBRAIN_NOTES_PACKAGE_DECISION_2026-03-25.md` — package boundary and contract decision
+- `src/write-to-vault.js` — canonical automated note writer path
+- `src/knowledge-optimizer.js` — lossless sidecar artifact writer for newly durable notes
 - `src/lint-frontmatter.js` — schema lint / normalization entrypoint for durable notes
-- `src/manual-notes-maintenance.js` — dry-run/apply scanner for manually-created markdown notes
+- `src/manual-notes-maintenance.js` — dry-run/apply scanner for manually-created Obsidian notes
+- `src/lint-source-material.js` — provenance lint for external Source Material markdown
 - `migrations/note_contract_migration.py` — safe audit/apply migration runner toward the canonical contract
 - `migrations/backfill_notes_frontmatter.py` — batch backfill helper for legacy notes
 
@@ -16,65 +17,93 @@ Package-owned durable Notes contract and tooling for the `jarvos-secondbrain` mo
 
 These remain outside the package core because they are bridge, adapter, or workflow wiring rather than Notes ownership:
 
-- `$CLAWD_DIR/scripts/lobster-utils/link-to-journal.js` — provenance helper from notes back to the daily journal
-- `$CLAWD_DIR/workflows/*.lobster` — current caller surfaces that still invoke the root compatibility shims
-- `$CLAWD_DIR/scripts/sync-vault-to-supabase.js` — downstream adapter/export behavior
-
-`CLAWD_DIR` defaults to `~/clawd`; override with the `CLAWD_DIR` env var.
+- `~/clawd/scripts/lobster-utils/link-to-journal.js` — provenance helper from notes back to the daily journal
+- `~/clawd/workflows/*.lobster` — current caller surfaces that still invoke the root compatibility shims
+- `~/clawd/scripts/sync-vault-to-supabase.js` — downstream adapter/export behavior
 
 ## Compatibility shims
 
 Current `clawd` callers still reference these root paths:
 
-- `$CLAWD_DIR/scripts/lobster-utils/write-to-vault.js`
-- `$CLAWD_DIR/scripts/lint-frontmatter.js`
-- `$CLAWD_DIR/scripts/manual-notes-maintenance.js`
-- `$CLAWD_DIR/scripts/note_contract_migration.py`
-- `$CLAWD_DIR/scripts/backfill_notes_frontmatter.py`
+- `~/clawd/scripts/lobster-utils/write-to-vault.js`
+- `~/clawd/scripts/lint-frontmatter.js`
+- `~/clawd/scripts/manual-notes-maintenance.js`
+- `~/clawd/scripts/lint-source-material.js`
+- `~/clawd/scripts/note_contract_migration.py`
+- `~/clawd/scripts/backfill_notes_frontmatter.py`
 
 For this extraction pass, those root files remain as thin shims that delegate into the package-owned implementations above.
 
 That keeps the current note creation and lint/migration paths working while making the package boundary explicit in the monorepo.
 
-The note body remains the source of truth. Retrieval and synthesis systems consume deterministic sidecars under `<vault-root>/.jarvos/knowledge/` so OpenClaw, Claude, Codex, and Hermes do not each need a separate note pipeline.
+## Durable note creation behavior
 
-## Durable note sidecars
+New notes written through the canonical writer are not saved as title/body-only files. The writer normalizes canonical frontmatter for Obsidian and memory-wiki consumers:
 
-The optimizer keeps derivative data out of the markdown body and writes local sidecars instead:
+- `status`
+- `type`
+- `project`
+- `created`
+- `updated`
+- `author`
 
-- `artifacts/*.json` records retrieval metadata, aliases, wikilinks, entities, claims, summary, and stack readiness.
+The note body remains the source of truth and is not rewritten with derivative sections. Retrieval and memory systems get sidecar artifacts under `<vault-root>/.jarvos/knowledge/` instead:
+
+- `artifacts/*.json` records retrieval metadata, aliases, wikilinks, entities, summary, and stack readiness.
+- `knowledgeUnits` inside each artifact model claims, summaries, decisions, preferences, quotes, or other future note facts through one source-backed shape with stable IDs, author/source attribution, evidence, confidence, privacy decisions, and downstream eligibility.
 - `gbrain-import-queue.json` queues safe notes for structured GBrain import.
-- `memory-wiki-queue.json` queues safe notes for memory-wiki import.
-- `qmd-refresh-pending.json` records notes whose search/index freshness must be refreshed.
-- `optimization-audit.json` records source-note body hashes and downstream status decisions.
 - `lossless-continuity.json` records the note create/update event for continuity capture.
 
-Notes marked `private`, `sensitive`, or tagged with sensitive terms still get the local artifact, QMD freshness, audit, and continuity records, but are removed from automatic GBrain and memory-wiki queues.
+Notes marked `private`, `sensitive`, or tagged with sensitive terms still get the local artifact and continuity record, but are removed from the automatic GBrain queue.
 
 Set `JARVOS_NOTE_OPTIMIZATION=0` to disable sidecar artifact generation for a write. Set `JARVOS_KNOWLEDGE_DIR=/path/to/knowledge` to redirect sidecar output.
 
-## Manual note maintenance
+## Manual Obsidian note maintenance
 
-Notes created directly in Obsidian or another markdown editor bypass `src/write-to-vault.js`, so they need a safe maintenance path into the same stack. Dry-run mode is the default:
+Notes created directly in Obsidian bypass `src/write-to-vault.js`, so they need a safe maintenance path into the same stack. Run the package-owned scanner through the root shim:
 
 ```bash
-npm run maintain:manual-notes -- --notes-dir /path/to/Vault/Notes
+npm run maintain:manual-notes
 ```
 
-Dry-run mode scans notes, reports missing or invalid canonical frontmatter, checks `.jarvos/knowledge/optimization-audit.json` coverage, and predicts GBrain, memory-wiki, QMD, and continuity decisions without writing files.
+This is dry-run mode. It scans Notes, reports missing/invalid canonical frontmatter, checks `.jarvos/knowledge/optimization-audit.json` coverage, and predicts GBrain, memory-wiki, and QMD queue decisions without writing files.
 
 Apply mode is explicit:
 
 ```bash
-npm run maintain:manual-notes:apply -- --notes-dir /path/to/Vault/Notes
+npm run maintain:manual-notes:apply
 ```
 
-Apply mode only fixes frontmatter drift that the linter can infer, then calls the shared optimizer for each candidate. The optimizer writes local artifacts, queue decisions for safe notes, sensitivity skip decisions for private notes, lossless continuity, `qmd-refresh-pending.json`, and `optimization-audit.json`. Run `qmd update` and `qmd embed` after apply mode before treating search as fresh.
+Apply mode only fixes frontmatter drift that the normal linter can infer, then calls the shared optimizer for each candidate. The optimizer writes local artifacts, GBrain and memory-wiki queues for safe notes, sensitivity skip decisions for private notes, lossless continuity, and `qmd-refresh-pending.json`. Run `qmd update` and `qmd embed` after apply mode before treating QMD search as fresh.
 
-For ongoing maintenance, run a bounded poll from cron or a service supervisor:
+For ongoing watcher-style maintenance, run a bounded poll from cron or a service supervisor:
 
 ```bash
 node scripts/manual-notes-maintenance.js --apply --since-state --watch --max-runs 1
 ```
 
-The portable pattern is one scanner for markdown notes that missed the canonical writer, one conservative frontmatter normalizer, one sidecar optimizer for downstream routing, one audit file for coverage, and one explicit freshness queue for search/index refresh.
+The generic pattern is portable: one scanner finds markdown notes that missed the canonical writer, one frontmatter normalizer repairs only obvious metadata drift, one sidecar optimizer routes downstream systems, and one freshness queue keeps search/index refresh explicit.
+
+## AI personality entrypoint
+
+AI personalities should not raw-write Obsidian markdown directly. Michael,
+Claude Code, Hermes, and compatible assistants use the shared executable
+contract:
+
+```bash
+printf '%s' '{"personality":"michael","title":"Example","content":"Body"}' \
+  | node scripts/obsidian-note-journal-contract.js
+```
+
+The contract delegates to `src/write-to-vault.js`, then fails closed unless:
+
+- the note path is under the canonical Notes directory
+- canonical frontmatter is present, including the calling personality
+- today's journal has exactly one `[[note title]]` backlink
+- QMD/search freshness is recorded as `pending-refresh`
+
+## Source Material provenance
+
+External source material is linted separately from authored Notes. Durable notes use `author: jarvis|andrew|both`; Source Material markdown uses source provenance fields instead so external authorship is not collapsed into the note author schema.
+
+See `docs/SOURCE_MATERIAL_PROVENANCE_CONTRACT.md` for the reusable metadata contract.

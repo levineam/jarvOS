@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Tests for the JarvOS capture system (SUP-370).
+ * Tests for the jarvOS capture system (SUP-370).
  *
  * Covers:
  * - Salience detector classification
@@ -16,8 +16,8 @@
 const { classifyMessage, detectSalience } = require('../src/salience-detector');
 const { buildThreePackagePlan, previewRouting } = require('../src/three-package-router');
 const { buildRoutingPlan, detectTrigger, hasCaptureIntent } = require('../src/keyword-capture-router');
-const { findBestCapture, extractTitle, isCaptureCommand, scoreCapturability } = require('../src/capture-that');
-const { createMemoryRecord, checkMemoryDedup } = require('../../../../jarvos-memory/src/lib/memory-record');
+const { findBestCapture, extractTitle, isCaptureCommand, previewCaptureThat, scoreCapturability } = require('../src/capture-that');
+const { createMemoryRecord, checkMemoryDedup } = require('../../../../jarvos-memory/src');
 const fs = require('fs');
 
 let passed = 0;
@@ -168,7 +168,7 @@ test('three-pkg: casual messages ignored', () => {
 test('capture-that: identifies substantive content', () => {
   const messages = [
     { role: 'user', content: 'Tell me about the architecture' },
-    { role: 'assistant', content: 'The JarvOS architecture has three modules:\n\n## jarvos-memory\nCompact durable recall.\n\n## jarvos-ontology\nBelief graph.\n\n## jarvos-secondbrain\nContent layer.' },
+    { role: 'assistant', content: 'The jarvOS architecture has three modules:\n\n## jarvos-memory\nCompact durable recall.\n\n## jarvos-ontology\nBelief graph.\n\n## jarvos-secondbrain\nContent layer.' },
     { role: 'user', content: 'capture that' },
   ];
   const best = findBestCapture(messages);
@@ -196,6 +196,19 @@ test('capture-that: extracts title from first line', () => {
 test('capture-that: handles empty messages', () => {
   const best = findBestCapture([]);
   assert(best === null, 'Should return null for empty messages');
+});
+
+test('capture-that: preserves selected text-field content in preview wrapper', () => {
+  const preview = previewCaptureThat({
+    recentMessages: [
+      { role: 'user', content: 'capture that' },
+      { role: 'assistant', text: '## Ambient Contract\n\nSelected text fields should flow through the compatibility wrapper.' },
+    ],
+  });
+
+  assert(preview.found === true, 'Should find text-field message');
+  assert(preview.title === 'Ambient Contract', `Expected heading title, got '${preview.title}'`);
+  assert(preview.contentPreview.includes('Selected text fields'), 'Should preserve selected text-field content');
 });
 
 // ── Memory Records ────────────────────────────────────────────────

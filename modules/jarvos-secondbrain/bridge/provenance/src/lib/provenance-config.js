@@ -2,32 +2,34 @@
 /**
  * provenance-config.js — bridge-owned path/config helpers for note↔journal provenance.
  *
- * Delegates to the shared bridge/config/jarvos-paths module.
- *
  * Resolution order:
- *   1. Canonical JARVOS_* env vars (JARVOS_NOTES_DIR, JARVOS_JOURNAL_DIR, JARVOS_VAULT_DIR)
- *   2. Legacy env var aliases (VAULT_NOTES_DIR, JOURNAL_DIR)
- *   3. jarvos.config.json paths.* in JARVOS_CLAWD_DIR (or CLAWD_DIR or ~/clawd)
- *   4. Defaults derived from vault root (~/Documents/Vault v3)
+ *   1. env overrides (VAULT_NOTES_DIR / JOURNAL_DIR)
+ *   2. jarvos.config.json in CLAWD_DIR / workspace
+ *   3. homedir-relative defaults
  */
 
 'use strict';
 
-const {
-  getVaultDir,
-  getNotesDir,
-  getJournalDir,
-} = require('../../../config/jarvos-paths.js');
+const { resolveConfig } = require('../../../config');
+
+function loadConfig() {
+  return resolveConfig();
+}
+
+function getVaultDir() {
+  return loadConfig().paths.vault;
+}
 
 function getVaultNotesDir() {
-  return getNotesDir();
+  return loadConfig().paths.notes;
 }
 
 function getVaultJournalDir() {
-  return getJournalDir();
+  return loadConfig().paths.journal;
 }
 
 module.exports = {
+  loadConfig,
   getVaultDir,
   getVaultNotesDir,
   getVaultJournalDir,
