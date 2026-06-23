@@ -7,8 +7,10 @@ jarvOS releases are milestone-driven. Ship when the active release scope is veri
 - `v0.1.0` is the first public preview.
 - `v0.1.x` is for bug fixes, documentation corrections, and small install-flow fixes.
 - `v0.2.0` is for meaningful new capabilities or workflow improvements.
-- `v0.3.0` is the next planned public lane: the CLI command router and
-  `jarvos doctor` profile checks.
+- `v0.6.x` is the current secondbrain hardening lane after the v0.6.0 focused
+  release and v0.6.1 capitalization patch.
+- `v0.6.2` is the current patch-candidate lane for AI coding-tool capture
+  determinism unless a newer Paperclip release parent supersedes it.
 - Before `v1.0.0`, minor releases may include breaking changes, but the release notes must call them out plainly.
 
 ## Unreleased Work and Drift
@@ -84,20 +86,19 @@ Paperclip is the release source of truth. Issues related to the public `levineam
 
 - `jarvos`
 - `jarvos-release-candidate`
-- `release-v0.3.0` or the current active release label
+- the current active release label, such as `release-v0.6.2`
 
 Internal release process work should carry:
 
 - `jarvos`
 - `jarvos-release-ops`
-- `release-v0.3.0` or the current active release label
+- the current active release label, such as `release-v0.6.2`
 
 Candidate issues enter release review automatically. Jarvis promotes each candidate to included, release-blocking, post-release, or internal-only during release review.
 
 If the active Paperclip instance does not expose labels on issue reads, Jarvis writes a `release-intake` document on the issue with the same classification. That document is the durable fallback marker.
 
-As of the v0.2.0 ship, the active public Paperclip release parent is SUP-1957
-for v0.3.0. Shipped parents SUP-1648 and SUP-1737 are historical and should not
-receive new candidates. Internal secondbrain reliability and knowledge-base
-work tracked as v0.2.1/v0.3 in Paperclip belongs to its achieved private
-secondbrain goal unless a separate public patch-release parent is opened.
+As of the v0.6.1 ship, v0.3-era release parents are historical and should not
+receive new candidates. New jarvOS public-release candidates should use the
+current active release label and the live Paperclip release parent for that
+lane. If no parent exists yet, create one before claiming release readiness.

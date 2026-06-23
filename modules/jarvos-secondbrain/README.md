@@ -114,12 +114,13 @@ printf '%s\n' '{
 }' | node scripts/jarvos-capture.js
 ```
 
-Supported source tools include `openclaw`, `codex`, `claude-code`, `hermes`,
-`chatgpt`, and `custom:<slug>` for future agents. The entrypoint normalizes the
-input into `CaptureEvent` v2, routes it through `jarvos-ambient`, writes through
-the canonical Obsidian adapter, and uses the note optimizer so durable notes
-enter the secondbrain stack. Lightweight `idea:` captures stay in the Journal
-Ideas section; substantive ideas become source-backed notes linked from Ideas.
+Supported coding-tool sources include `openclaw`, `codex`, `claude-code`,
+`hermes`, and `custom:<slug>` for future coding agents. The entrypoint
+normalizes the input into `CaptureEvent` v2, routes it through
+`jarvos-ambient`, writes through the canonical Obsidian adapter, and uses the
+note optimizer so durable notes enter the secondbrain stack. Lightweight `idea:`
+captures stay in the Journal Ideas section; substantive ideas become
+source-backed notes linked from Ideas.
 
 The canonical journal path is `Journal/YYYY-MM-DD.md`. Agents must not create
 guessed daily journal files under `Notes/`.
@@ -129,7 +130,8 @@ guessed daily journal files under `Notes/`.
 The public stack is source-backed and rebuildable:
 
 - `CaptureEvent` v2 records source tool, actor, capture mode, privacy tier, origin, and evidence.
-- Session source adapters normalize OpenClaw, Codex, and Claude Code records into `CaptureEvent` v2.
+- Session source adapters normalize OpenClaw, Codex, Claude Code, and Hermes
+  records into `CaptureEvent` v2.
 - Note sidecars write generalized `knowledgeUnits` with stable IDs, source attribution, evidence, confidence, privacy decisions, and downstream eligibility.
 - `packages/jarvos-secondbrain-wiki` compiles generated Markdown wiki pages from sidecars. Generated pages are derived artifacts and can be deleted/rebuilt.
 - Retrieval evals compare qmd-only, qmd plus generated wiki, and qmd plus graph retrieval with expected source evidence.

@@ -7,6 +7,7 @@ const {
   createOpenClawSessionAdapter,
   createCodexSessionAdapter,
   createClaudeCodeSessionAdapter,
+  createHermesSessionAdapter,
   createSessionSourceAdapter,
 } = require('../adapters');
 const {
@@ -89,6 +90,25 @@ test('Claude Code session adapter accepts entries and caller privacy overrides',
   assertSourceBackedEvent(result.events[0], 'claude-code', 'private');
   assert.equal(result.events[0].actor.type, 'tool');
   assert.equal(result.events[0].privacyTier, 'private');
+});
+
+test('Hermes session adapter emits source-backed CaptureEvent v2 events', () => {
+  const adapter = createHermesSessionAdapter();
+  const result = adapter.normalizeSession({
+    sessionId: 'hermes-session-1',
+    title: 'Secondbrain capture',
+    messages: [{
+      id: 'hermes-message-1',
+      role: 'assistant',
+      content: 'note: keep Hermes capture aligned with the shared jarvOS entrypoint.',
+    }],
+  });
+
+  assert.equal(result.skipped.length, 0);
+  assert.equal(result.events.length, 1);
+  assertSourceBackedEvent(result.events[0], 'hermes');
+  assert.equal(result.events[0].id, 'capture:hermes:hermes-session-1:hermes-message-1');
+  assert.match(result.events[0].text, /shared jarvOS entrypoint/);
 });
 
 test('session adapters skip secret sessions and unsupported tools explicitly', () => {

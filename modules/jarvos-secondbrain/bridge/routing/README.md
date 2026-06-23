@@ -24,8 +24,8 @@ This is cross-package orchestration:
 - `jarvos-secondbrain-journal` owns journal structure
 - `jarvos-secondbrain-notes` owns note writing/schema
 - `bridge/routing` decides which package path a capture should take
-- `bridge/capture` owns the stable agent-facing entrypoint so OpenClaw,
-  Codex, Claude Code, Hermes, ChatGPT, and future adapters do not need
+- `bridge/capture` owns the stable coding-tool-facing entrypoint so OpenClaw,
+  Codex, Claude Code, Hermes, and future coding adapters do not need
   one-off capture rules
 
 ## Storage adapter boundary

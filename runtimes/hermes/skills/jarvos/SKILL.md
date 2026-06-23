@@ -102,15 +102,22 @@ configured. Hermes should use the **same vault** — not a separate one.
 
 ### When the user asks you to write to their journal or notes:
 1. Confirm the vault paths above are set (or use defaults).
-2. Write to the correct directory — do NOT create a separate Hermes-specific vault.
-3. If paths are unset and the default vault doesn't exist, ask the user to run:
+2. For intentional captures such as `note:`, `make a note`, `idea:`, or
+   `save this`, call the jarvOS universal capture entrypoint with source
+   `hermes`; do not raw-write Markdown.
+3. Verify note captures write under `Notes/`, link exactly once from
+   `Journal/YYYY-MM-DD.md`, preserve source-backed provenance, and leave
+   QMD/search freshness as `pending-refresh`.
+4. If paths are unset and the default vault doesn't exist, ask the user to run:
    `node modules/jarvos-secondbrain/scripts/detect-vault.js --runtime=hermes`
    and follow the guidance it prints.
 
-### Pitfall: do NOT invent a new vault path
+### Pitfall: do NOT invent a new vault path or journal file
 The whole point of shared-vault onboarding is that every runtime (OpenClaw, Hermes,
 and any future runtime) uses one vault. If you're unsure, default to
 `~/Documents/Vault v3` and ask the user to confirm rather than creating a new path.
+Do not create guessed daily journal files under `Notes/`; canonical journals
+live at `Journal/YYYY-MM-DD.md`.
 
 ## Pitfalls
 - Don't create projects without Board + Brief — ungoverned work gets lost

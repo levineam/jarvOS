@@ -6,6 +6,30 @@ Release sections describe user-facing jarvOS changes. Historical public-doc sync
 
 - Nothing yet.
 
+## v0.6.2 — Unreleased
+
+Patch candidate for secondbrain capture determinism across AI coding tools.
+
+### Included
+- Hardens the post-v0.6.1 secondbrain lane around AI coding tools: OpenClaw,
+  Codex, Claude Code, Hermes, and future coding adapters now share an explicit
+  jarvOS-owned capture determinism contract and drift smoke.
+- Adds a first-class Hermes session-source adapter so Hermes is no longer
+  source-compatible only through prompted capture.
+- Narrows active secondbrain source constants and docs away from general chat
+  apps; future non-coding assistants can start as `custom:<slug>` experiments.
+- Updates Codex, Claude Code, Hermes, and OpenClaw runtime docs/templates with
+  shared capture instructions, canonical `Journal/YYYY-MM-DD.md` behavior,
+  exactly-one-backlink expectations, source-backed provenance, and QMD pending
+  evidence.
+
+### Known Limitations
+- This patch does not add automatic ingestion of every AI conversation.
+- This patch does not make general chat applications active secondbrain
+  determinism targets.
+- The release remains a candidate until the normal release checklist is run on a
+  clean tree and Andrew approves public publication.
+
 ## v0.6.1 — 2026-06-22
 
 Patch release for capitalization cleanup after v0.6.0.
