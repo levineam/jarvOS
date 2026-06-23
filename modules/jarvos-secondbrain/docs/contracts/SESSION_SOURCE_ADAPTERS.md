@@ -10,6 +10,7 @@ about a specific person's vault, machine paths, Paperclip state, or credentials.
 - `openclaw`
 - `codex`
 - `claude-code`
+- `hermes`
 
 Future tools should add a thin adapter around the same common normalizer when
 their local session format is available.

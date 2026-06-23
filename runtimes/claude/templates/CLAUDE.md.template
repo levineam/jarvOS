@@ -149,6 +149,29 @@ journal, linked notes, the jarvos-ontology spine, and a Hydration Report.
 - `jarvos_hydrate` — bounded working-context packet (also used for Claude
   Desktop manual hydration via the `boot jarvOS` prompt)
 
+## Secondbrain Capture Rule
+
+For intentional capture requests such as `note:`, `make a note`, `idea:`, or
+`save this`, Claude Code should call the jarvOS universal capture contract
+instead of raw-writing Markdown. Use source `claude-code`.
+
+Preferred path:
+
+```bash
+node modules/jarvos-secondbrain/scripts/jarvos-capture.js
+```
+
+Compatibility path:
+
+```bash
+node scripts/obsidian-note-journal-contract.js
+```
+
+Successful note captures must write under the configured `Notes/` directory,
+link exactly once from `Journal/YYYY-MM-DD.md`, preserve source-backed
+provenance, and leave QMD/search freshness as `pending-refresh`. Do not create
+guessed daily journal files under `Notes/`.
+
 ## Local Extensions
 
 This file is generated from `runtimes/claude/templates/CLAUDE.md.template` in

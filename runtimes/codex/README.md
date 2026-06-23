@@ -61,3 +61,19 @@ packet to active work plus review-backed PRs.
 Codex should treat jarvOS as the source of truth for memory and capture
 semantics. Do not reimplement note writing or memory persistence in Codex
 instructions; call the jarvOS tools.
+
+## Secondbrain Capture Rule
+
+For intentional capture requests such as `note:`, `make a note`, `idea:`, or
+`save this`, Codex should call the jarvOS universal capture entrypoint instead
+of raw-writing Markdown:
+
+```bash
+node modules/jarvos-secondbrain/scripts/jarvos-capture.js
+```
+
+The capture event source is `codex`. Successful note captures must end up under
+the configured `Notes/` directory, link exactly once from
+`Journal/YYYY-MM-DD.md`, record source-backed provenance, and leave QMD/search
+freshness as `pending-refresh`. Codex must not create guessed daily journal
+files under `Notes/`.

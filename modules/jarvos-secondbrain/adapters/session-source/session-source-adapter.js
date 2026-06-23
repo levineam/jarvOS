@@ -10,6 +10,7 @@ const TOOL_SOURCE = {
   openclaw: 'openclaw',
   codex: 'codex',
   'claude-code': 'claude-code',
+  hermes: 'hermes',
 };
 
 const ROLE_TO_ACTOR = {

@@ -84,11 +84,17 @@ node scripts/manual-notes-maintenance.js --apply --since-state --watch --max-run
 
 The generic pattern is portable: one scanner finds markdown notes that missed the canonical writer, one frontmatter normalizer repairs only obvious metadata drift, one sidecar optimizer routes downstream systems, and one freshness queue keeps search/index refresh explicit.
 
-## AI personality entrypoint
+## AI coding-tool entrypoint
 
-AI personalities should not raw-write Obsidian markdown directly. Michael,
-Claude Code, Hermes, and compatible assistants use the shared executable
-contract:
+AI coding tools should not raw-write Obsidian markdown directly. Prefer the
+jarvOS-owned universal capture entrypoint for intentional notes and ideas:
+
+```bash
+printf '%s' '{"source":"codex","text":"note: Example","evidence":[{"type":"message","text":"note: Example"}]}' \
+  | node scripts/jarvos-capture.js
+```
+
+Older personality writers can use the compatibility executable contract:
 
 ```bash
 printf '%s' '{"personality":"michael","title":"Example","content":"Body"}' \

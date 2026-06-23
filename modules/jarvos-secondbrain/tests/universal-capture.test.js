@@ -60,7 +60,7 @@ function baseCapture(source, overrides = {}) {
 }
 
 test('normalizes supported and custom agents into CaptureEvent v2', () => {
-  for (const source of ['codex', 'claude-code', 'openclaw', 'chatgpt', 'custom:future-agent']) {
+  for (const source of ['codex', 'claude-code', 'openclaw', 'hermes', 'custom:future-agent']) {
     const event = normalizeCaptureEvent(baseCapture(source, {
       text: 'note: capture the universal contract',
     }));

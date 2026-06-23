@@ -142,6 +142,23 @@ bounded:
 This keeps the vault as the source of truth, QMD as broad lookup, GBrain as
 curated structured recall, and memory-wiki as runtime diagnostics.
 
+## Intentional Secondbrain Capture
+
+OpenClaw is the reference adapter for deterministic note and journal behavior,
+but jarvOS owns the contract. For `note:`, `make a note`, `idea:`, `save this`,
+and similar explicit capture requests, OpenClaw should call:
+
+```bash
+node modules/jarvos-secondbrain/scripts/jarvos-capture.js
+```
+
+The capture event source is `openclaw`. Successful note captures must write
+under the configured `Notes/` directory, link exactly once from
+`Journal/YYYY-MM-DD.md`, preserve source-backed provenance, and leave QMD/search
+freshness as `pending-refresh`. OpenClaw adapters should enforce this behavior
+without becoming the owner of the abstraction, and they must not create guessed
+daily journal files under `Notes/`.
+
 ## What jarvOS Adds On Top
 
 OpenClaw handles the runtime and can provide native memory-wiki diagnostics.

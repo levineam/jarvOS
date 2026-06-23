@@ -9,7 +9,7 @@ capture prompts.
 ## Contract
 
 ```text
-Any AI agent
+Any AI coding tool
 -> CaptureEvent v2
 -> jarvos-ambient routing
 -> Obsidian Notes/Journal adapter
@@ -17,7 +17,7 @@ Any AI agent
 ```
 
 OpenClaw and Lobster can enforce or adapt this path, but they do not own the
-abstraction. Claude Code, Codex, OpenClaw, Hermes, ChatGPT, and future agents
+abstraction. Claude Code, Codex, OpenClaw, Hermes, and future coding agents
 should all call the same root shim:
 
 ```bash
@@ -38,9 +38,9 @@ The command reads a JSON object from stdin. Minimum recommended input:
 }
 ```
 
-Use `custom:<slug>` for a future agent that does not yet have a first-class
-source enum. Do not raw-write daily journal files. The canonical journal is
-`Journal/YYYY-MM-DD.md`; durable notes live under `Notes/`.
+Use `custom:<slug>` for a future coding agent that does not yet have a
+first-class source enum. Do not raw-write daily journal files. The canonical
+journal is `Journal/YYYY-MM-DD.md`; durable notes live under `Notes/`.
 
 ## Routing
 

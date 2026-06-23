@@ -49,6 +49,16 @@ This preserves current behavior while making bridge ownership explicit in the mo
 - absorb Paperclip execution logic
 - broaden into generic routing or package-core behavior
 
+## Coding-tool capture role
+
+AI coding tools should normally enter through `bridge/capture` and
+`scripts/jarvos-capture.js`. When a host still uses the compatibility
+note/journal contract, this bridge is the guardrail that keeps the write
+deterministic: canonical Notes directory, canonical `Journal/YYYY-MM-DD.md`,
+exactly one daily journal backlink, canonical frontmatter, and QMD
+pending-refresh evidence. OpenClaw, Codex, Claude Code, Hermes, and future
+coding agents should share this behavior instead of raw-writing vault Markdown.
+
 ## Verification
 
 Safe compatibility verification can be done against temp directories with env overrides:

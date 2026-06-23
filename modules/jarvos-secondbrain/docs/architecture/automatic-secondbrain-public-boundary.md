@@ -9,7 +9,7 @@ These surfaces are generic and portable:
 
 - `CaptureEvent` v2 schema and validation.
 - Session source adapter interfaces and generic adapters for OpenClaw, Codex,
-  and Claude Code.
+  Claude Code, and Hermes.
 - Knowledge-unit sidecar schema and queue contracts.
 - Generated LLM-wiki compiler.
 - qmd, generated-wiki, and graph retrieval eval harnesses.
@@ -40,11 +40,11 @@ journals, qmd, and existing reviewed memory queues as the authority.
 
 ## Release Path
 
-This work is post-`v0.5.0` future-release/local-dogfood work. Universal
-capture and secondbrain integration candidates belong under the planned
-`v0.6.0` lane (`SUP-2290`) unless a narrower patch-release issue explicitly
-pulls documentation-only cleanup into `v0.5.x`. It is not active `v0.3.0` work
-under `SUP-1957`, and it should not be described as shipped in `v0.5.0`.
+This document now describes shipped v0.6.x secondbrain surfaces plus
+post-v0.6.1 hardening work. New capture-determinism changes belong under a
+future v0.6.x patch or the next focused minor lane unless a release issue
+explicitly pulls them forward. Do not rewrite shipped v0.5.0, v0.6.0, or
+v0.6.1 release history to claim later hardening work.
 
 Before public promotion:
 

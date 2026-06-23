@@ -1,8 +1,9 @@
-# jarvOS — Claude Runtime
+# jarvOS — Claude Code Runtime
 
-This adapter connects Claude Code and Claude Desktop to jarvOS through the
-shared `@jarvos/agent-context` MCP server. Claude Code also gets bounded startup
-hydration through a `SessionStart` hook.
+This adapter focuses jarvOS on Claude Code through the shared
+`@jarvos/agent-context` MCP server, bounded startup hydration, and the
+`CLAUDE.md` behavioral baseline. Claude Desktop MCP compatibility is documented
+below, but it is not part of the current AI-coding-tool determinism target.
 
 ## Setup
 
@@ -19,7 +20,8 @@ The setup script:
 - materializes `~/.claude/CLAUDE.md` from
   `runtimes/claude/templates/CLAUDE.md.template` (see
   [Claude Code CLAUDE.md bootstrap](#claude-code-claudemd-bootstrap) below)
-- adds the same MCP server to Claude Desktop's local MCP config on macOS
+- optionally adds the same MCP server to Claude Desktop's local MCP config on
+  macOS for manual compatibility
 - backs up existing config files before writing changes
 
 Claude Code MCP registration uses:
@@ -128,6 +130,13 @@ does not imply automatic startup context injection for Claude Desktop.
 - `jarvos_hydrate` — bounded working-context packet with Paperclip current work,
   today's journal, linked notes, jarvOS ontology spine, redaction, and a
   hydration report.
+
+## Secondbrain Capture Rule
+
+For intentional capture requests in Claude Code, such as `note:`,
+`make a note`, `idea:`, or `save this`, call the jarvOS universal capture
+contract with source `claude-code`. Do not raw-write Obsidian notes or journals,
+and do not create guessed daily journal files under `Notes/`.
 - `boot_jarvos` prompt — user-facing "Boot jarvOS" starter prompt for Claude
   Desktop manual hydration.
 
