@@ -6,9 +6,9 @@ Release sections describe user-facing jarvOS changes. Historical public-doc sync
 
 - Nothing yet.
 
-## v0.6.2 — Unreleased
+## v0.6.2 — 2026-06-23
 
-Patch candidate for secondbrain capture determinism across AI coding tools.
+Patch release for secondbrain capture determinism across AI coding tools.
 
 ### Included
 - Hardens the post-v0.6.1 secondbrain lane around AI coding tools: OpenClaw,
@@ -27,8 +27,7 @@ Patch candidate for secondbrain capture determinism across AI coding tools.
 - This patch does not add automatic ingestion of every AI conversation.
 - This patch does not make general chat applications active secondbrain
   determinism targets.
-- The release remains a candidate until the normal release checklist is run on a
-  clean tree and Andrew approves public publication.
+- Publication requires the normal release checklist to pass on a clean tree.
 
 ## v0.6.1 — 2026-06-22
 
