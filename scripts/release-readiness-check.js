@@ -50,6 +50,88 @@ function normalizeVersion(value) {
   return String(value || '').trim().replace(/^v/i, '');
 }
 
+function findReleaseProcessCurrentClaims(releaseProcess) {
+  const text = String(releaseProcess || '');
+  const claims = [];
+
+  for (const match of text.matchAll(/`?(v\d+\.\d+\.\d+)`?\s+is\s+the\s+current\s+[^.\n]*(?:lane|release|label|version|public preview)[^.\n]*/gi)) {
+    claims.push({ version: match[1], text: match[0] });
+  }
+
+  for (const match of text.matchAll(/current active release label,\s+such as\s+`?release-(v\d+\.\d+\.\d+)`?/gi)) {
+    claims.push({ version: match[1], text: match[0] });
+  }
+
+  return claims;
+}
+
+function findReadmeCurrentReleaseClaims(readme) {
+  return Array.from(String(readme || '').matchAll(/`?(v\d+\.\d+\.\d+)`?\s+is the current public preview release[^.\n]*/gi))
+    .map((match) => ({ version: match[1], text: match[0] }));
+}
+
+function checkFrontDoorReleaseProse({ target, tag, allowUnreleased, readText: read, exists: fileExists }) {
+  const results = [];
+
+  function pass(label, detail = '') {
+    results.push({ ok: true, label, detail });
+  }
+
+  function fail(label, detail = '') {
+    results.push({ ok: false, label, detail });
+  }
+
+  try {
+    if (!fileExists('README.md')) {
+      fail('README current release prose', 'README.md missing');
+    } else if (allowUnreleased) {
+      pass('README current release prose', 'candidate-mode wording allowed');
+    } else {
+      const readme = read('README.md');
+      const currentReleaseClaims = findReadmeCurrentReleaseClaims(readme);
+      const candidateClaim = currentReleaseClaims.find((claim) => /candidate/i.test(claim.text));
+      const staleClaim = currentReleaseClaims.find((claim) => normalizeVersion(claim.version) !== target);
+      if (currentReleaseClaims.length === 0) {
+        fail('README current release prose', 'Missing "`vX.Y.Z` is the current public preview release" line');
+      } else if (candidateClaim) {
+        fail('README current release prose', `${candidateClaim.version} is still described as a current candidate`);
+      } else if (staleClaim) {
+        fail('README current release prose', `README names ${staleClaim.version}; target is ${tag}`);
+      } else {
+        pass('README current release prose', `${tag} is named as the current public preview`);
+      }
+    }
+  } catch (error) {
+    fail('README current release prose', error.message);
+  }
+
+  try {
+    if (!fileExists('docs/release-process.md')) {
+      fail('release-process final-version prose', 'docs/release-process.md missing');
+    } else if (allowUnreleased) {
+      pass('release-process final-version prose', 'candidate-mode wording allowed');
+    } else {
+      const releaseProcess = read('docs/release-process.md');
+      const currentClaims = findReleaseProcessCurrentClaims(releaseProcess);
+      const candidateClaim = currentClaims.find((claim) => /candidate/i.test(claim.text));
+      const staleClaim = currentClaims.find((claim) => normalizeVersion(claim.version) !== target);
+      if (candidateClaim) {
+        fail('release-process final-version prose', `${candidateClaim.version} is still described as a current candidate`);
+      } else if (staleClaim) {
+        fail('release-process final-version prose', `Release-process current claim names ${staleClaim.version}; target is ${tag}`);
+      } else if (currentClaims.length === 0) {
+        fail('release-process final-version prose', 'Missing a current release-process version or active release label claim');
+      } else {
+        pass('release-process final-version prose', `${tag} is the release-process current claim`);
+      }
+    }
+  } catch (error) {
+    fail('release-process final-version prose', error.message);
+  }
+
+  return results;
+}
+
 function printHelp() {
   console.log(`Usage: node scripts/release-readiness-check.js [--version v0.1.0]
 
@@ -110,6 +192,14 @@ function checkReleaseReadiness(opts = {}) {
 
   if (exists('docs/release-process.md')) pass('release process doc', 'docs/release-process.md');
   else fail('release process doc', 'docs/release-process.md missing');
+
+  results.push(...checkFrontDoorReleaseProse({
+    target,
+    tag,
+    allowUnreleased: opts.allowUnreleased,
+    readText,
+    exists,
+  }));
 
   if (exists('.github/release-template.md')) {
     const template = readText('.github/release-template.md');
@@ -233,7 +323,10 @@ function main() {
 }
 
 module.exports = {
+  checkFrontDoorReleaseProse,
   checkReleaseReadiness,
+  findReadmeCurrentReleaseClaims,
+  findReleaseProcessCurrentClaims,
   normalizeVersion,
   parseArgs,
 };
