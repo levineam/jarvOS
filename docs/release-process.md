@@ -8,9 +8,10 @@ jarvOS releases are milestone-driven. Ship when the active release scope is veri
 - `v0.1.x` is for bug fixes, documentation corrections, and small install-flow fixes.
 - `v0.2.0` is for meaningful new capabilities or workflow improvements.
 - `v0.6.x` is the current secondbrain hardening lane after the v0.6.0 focused
-  release and v0.6.1 capitalization patch.
-- `v0.6.2` is the current patch-candidate lane for AI coding-tool capture
-  determinism unless a newer Paperclip release parent supersedes it.
+  release, v0.6.1 capitalization patch, and v0.6.2 AI coding-tool capture
+  determinism patch.
+- Future `v0.6.x` patches should name their active Paperclip release parent and
+  target version before release readiness is claimed.
 - Before `v1.0.0`, minor releases may include breaking changes, but the release notes must call them out plainly.
 
 ## Unreleased Work and Drift
@@ -38,11 +39,15 @@ healthy "ready to tag" state and is advisory — intentionally not part of
 ## Release Checklist
 
 1. Confirm the active release issue in Paperclip lists the intended scope and blockers.
-2. Confirm every included issue has evidence for the user-facing change, verification performed, and release-note impact.
+2. Confirm every included issue has evidence for the user-facing change, verification performed, and documentation impact.
 3. Confirm `package.json` version matches the intended tag.
 4. Update `CHANGELOG.md` with the version, date, user-facing changes, fixes, and known limitations.
 5. Prepare the GitHub Release notes at `docs/releases/<version>.md` using `.github/release-template.md`.
-6. Run the release readiness check:
+6. Confirm front-door release prose is current when it changed: `README.md`
+   current release status, `docs/release-process.md` active lane wording,
+   install/update instructions, module inventory, core capabilities,
+   limitations, and the public/private boundary.
+7. Run the release readiness check:
 
    ```bash
    npm run release:check
@@ -54,9 +59,9 @@ healthy "ready to tag" state and is advisory — intentionally not part of
    npm run release:check:candidate
    ```
 
-7. Run `npm run release:drift` to confirm there is no release drift (untagged release or unlogged work).
-8. Check for local-only or machine-specific files in the release diff.
-9. Create the git tag only after the release checklist is green:
+8. Run `npm run release:drift` to confirm there is no release drift (untagged release or unlogged work).
+9. Check for local-only or machine-specific files in the release diff.
+10. Create the git tag only after the release checklist is green:
 
    ```bash
    git tag <version>
@@ -65,8 +70,8 @@ healthy "ready to tag" state and is advisory — intentionally not part of
 
    Example: `<version>` is `v0.1.0` for the first public preview.
 
-10. Publish a GitHub Release using `docs/releases/<version>.md`.
-11. Record the release URL and final verification evidence on the Paperclip release issue.
+11. Publish a GitHub Release using `docs/releases/<version>.md`.
+12. Record the release URL, final verification evidence, and documentation-impact evidence on the Paperclip release issue.
 
 ## Release Gates
 
@@ -76,9 +81,40 @@ A release is not ready while any of these are true:
 - `package.json` and the git tag disagree.
 - `CHANGELOG.md` has no section for the release.
 - `docs/releases/<version>.md` is missing or still contains placeholders.
+- README or release-process prose still describes a prior current release or the target release as an active candidate after finalization.
 - Install or update instructions do not match the shipped files.
+- Any release-blocking Paperclip issue lacks documentation-impact evidence or a follow-up issue for deferred documentation work.
 - Any release-blocking Paperclip issue lacks verification evidence.
 - Andrew has not approved public publication.
+
+## Documentation Impact Closeout
+
+Every public jarvOS PR or release issue should record one documentation impact
+classification before closeout:
+
+- `none`
+- `changelog`
+- `release-notes`
+- `README`
+- `module-docs`
+- `architecture-docs`
+- `operator-docs`
+- `follow-up`
+
+Use `README` only when a front-door claim changes: current version,
+install/update path, first-run story, module inventory, core capabilities,
+limitations, or the public/private boundary.
+
+`follow-up` must name the Paperclip issue or blocker carrying the deferred
+documentation work. `none` must include a short rationale.
+
+Closeout evidence should use this shape:
+
+```text
+Documentation impact: README, release-notes
+Evidence: README release-status section updated; docs/releases/vX.Y.Z.md updated.
+Follow-up: none.
+```
 
 ## Paperclip Intake
 
