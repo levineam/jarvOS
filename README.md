@@ -97,7 +97,9 @@ jarvOS is organized around a simple loop:
 
 1. **Capture.** You talk to an agent like you would a personal assistant; tell 
 it to save an idea, make a note, start a project.
-2. **Route.** jarvOS automatically knows where and how to store that information. 
+2. **Route.** jarvOS automatically knows where and how to store that information
+so that it cam both be put to use, and efficiently
+retrieved in the future. 
 3. **Promote.** Important information becomes durable context instead of being
    stranded in chat history.
 4. **Inject.** The next agent gets the critical context it needs before acting.
