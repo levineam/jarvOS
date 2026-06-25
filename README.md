@@ -1,16 +1,13 @@
 # jarvOS
 
-**Personal artificial Superintelligence, without the power-user tax.**
+**Your own personal Jarvis that just works.**
 
-Artificial intelligence and OpenClaw power users are already building personal
-artificial Superintelligence for themselves. They combine OpenClaw, Obsidian,
-lossless-claw, GBrain, Paperclip, memory-wiki, custom skills, local search,
-daily journals, structured knowledge, scheduled checks, and carefully tuned
-workflows until their assistant remembers them, tracks their work, builds a
-useful knowledge base, and gets better over time.
-
-That stack is powerful. It is also too much work for most people to assemble by
-hand.
+AI power users are already building personal
+Artificial Superintelligences by stringing together a complicated set of open 
+source solutions plus custom code to make eveything work together to unclock 
+incredible capabilities. But these setups are completely inaccessible to non-
+developers or even developers who just dont have the time to spend endlessly
+tinkering and debugging. 
 
 jarvOS bundles those tools and patterns into one local-first operating layer. It
 turns OpenClaw from a powerful agent runtime into a personal system that
@@ -23,14 +20,10 @@ Claude, Hermes Agent, and the next generation of agent runtimes still to come.
 
 ## What jarvOS Does
 
-jarvOS connects the pieces that usually live apart:
-
-- conversations
-- notes and journals
-- long-term memory
-- structured knowledge
-- active projects and tasks
-- startup context for future sessions
+jarvOS combines an autonomous journaling and note-taking system with a Project 
+Management System to construct a "digital twin" that serves as a unifying "mind" 
+for your AI agents. Not only does it enable your AI agent to understand you and what you're 
+trying to accomplish, but you can seamlessly switch between agents without losing any 
 
 You talk to your assistant like normal. jarvOS routes useful information into
 the right place, then brings the right context back when your assistant needs
