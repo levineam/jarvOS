@@ -90,6 +90,10 @@ software and an optional retrieval adapter. Use it when your runtime needs broad
 vault lookup or exact note retrieval; do not make it part of the core operating
 workflow layer. See [`docs/qmd-adapter.md`](docs/qmd-adapter.md).
 
+For how QMD fits beside Obsidian-compatible Markdown, GBrain, memory-wiki,
+generated LLM-wiki, agentmemory, Engraph, and optional Obsidian tooling, see
+[the public secondbrain external integration inventory](https://github.com/levineam/jarvOS/blob/main/docs/architecture/secondbrain-external-integrations.md).
+
 ## Public boundary
 
 The skills and packs in this module describe generic behavior, workflow

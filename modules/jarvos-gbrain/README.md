@@ -31,6 +31,11 @@ people, projects, concepts, meetings, and source pages.
 | QMD | Fast keyword search and exact lookup across the full vault |
 | OpenClaw `memory-wiki` | Runtime-native wiki status, lint, dashboards, and diagnostics |
 
+For the broader external secondbrain integration inventory, including QMD,
+GBrain, memory-wiki, generated LLM-wiki, agentmemory, and Engraph status, see
+the public
+[secondbrain external integration inventory](https://github.com/levineam/jarvOS/blob/main/docs/architecture/secondbrain-external-integrations.md).
+
 ## Quick Start
 
 ```bash
