@@ -4,33 +4,27 @@
 
 AI power users are already building personal
 Artificial Superintelligences by stringing together a complicated set of open 
-source solutions plus custom code to make eveything work together to unclock 
-incredible capabilities. But these setups are completely inaccessible to non-
-developers or even developers who just dont have the time to spend endlessly
-tinkering and debugging. 
+source solutions plus custom code to make eveything work together to unlock 
+incredible capabilities. But these setups are completely inaccessible to 
+non-developers or even developers who just dont have the time to spend endlessly
+tinkering and debugging these inherently
+fragile setups. 
 
-jarvOS bundles those tools and patterns into one local-first operating layer. It
-turns OpenClaw from a powerful agent runtime into a personal system that
-remembers, organizes, learns, and helps you move through your work with
-continuity.
-
-It also gives you a compounding, self-improving knowledge base that can support
-more than one assistant. The same context spine can be used by OpenClaw, Codex,
-Claude, Hermes Agent, and the next generation of agent runtimes still to come.
+jarvOS bundles those tools and patterns into a compounding, self-improving knowledge 
+base which any AI agent can tap into to understand who you are, what you're working on,
+and what you're trying to accomplish. 
 
 ## What jarvOS Does
 
-jarvOS combines an autonomous journaling and note-taking system with a Project 
-Management System to construct a "digital twin" that serves as a unifying "mind" 
+jarvOS combines an autonomous journaling and note-taking system (powered by Obsidian) with a Project 
+Management System (powered by Paperclip) as well as a number of other pieces
+of open sources software to construct a "digital twin" that serves as a unifying "mind" 
 for your AI agents. Not only does it enable your AI agent to understand you and what you're 
 trying to accomplish, but you can seamlessly switch between agents without losing any 
 
 You talk to your assistant like normal. jarvOS routes useful information into
 the right place, then brings the right context back when your assistant needs
 it.
-
-The result is not just a better chat. It is a personal operating system for your
-artificial intelligence assistant.
 
 ## The Power-User Stack, Bundled
 
