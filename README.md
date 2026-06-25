@@ -18,7 +18,7 @@ and what you're trying to accomplish.
 
 jarvOS combines an autonomous journaling and note-taking system (powered by Obsidian) with a Project 
 Management System (powered by Paperclip) as well as a number of other pieces
-of open sources software to construct a "digital twin" that serves as a unifying "mind" 
+of open source software to construct a "digital twin" that serves as a unifying "mind" 
 for your AI agents. Not only does it enable your AI agent to understand you and what you're 
 trying to accomplish, but you can seamlessly switch between agents without losing any 
 
