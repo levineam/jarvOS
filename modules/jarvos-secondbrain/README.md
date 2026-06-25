@@ -88,6 +88,8 @@ resolved paths without writing the config.
 - Bridge and adapter directories are present but intentionally contain no logic yet.
 
 See `docs/architecture/jarvos-secondbrain-monorepo-spec.md` for the boundary model.
+The public external integration inventory lives at
+[the secondbrain external integration inventory](https://github.com/levineam/jarvOS/blob/main/docs/architecture/secondbrain-external-integrations.md).
 
 ## Ambient Package
 
@@ -139,3 +141,7 @@ The public stack is source-backed and rebuildable:
 - The watch surface reports artifacts, private skips, qmd freshness, generated wiki state, queue counts, eval status, and stale/failure signals.
 
 See `docs/architecture/automatic-secondbrain-public-boundary.md` for the public/private packaging boundary and local-to-public release path.
+See the public
+[secondbrain external integration inventory](https://github.com/levineam/jarvOS/blob/main/docs/architecture/secondbrain-external-integrations.md)
+for the status of Obsidian-compatible Markdown, QMD, GBrain, memory-wiki,
+generated LLM-wiki, agentmemory, Engraph, and related optional tools.

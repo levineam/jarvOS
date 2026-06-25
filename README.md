@@ -54,6 +54,10 @@ disappearing into chat.
 sane defaults, route context, define workflows, and make the system feel like
 one assistant instead of a pile of software.
 
+For the exact external secondbrain integration status -- active, optional,
+dogfood-only, deferred, or guarded -- see
+[`docs/architecture/secondbrain-external-integrations.md`](./docs/architecture/secondbrain-external-integrations.md).
+
 ## A Compounding Knowledge Base for Every Agent You Use
 
 Most assistant memory is trapped inside one product. jarvOS takes a different
@@ -201,6 +205,8 @@ tooling, not a single vendor's memory system.
 
 For the product-category boundary, see
 [`docs/architecture/product-category-and-boundaries.md`](./docs/architecture/product-category-and-boundaries.md).
+For the secondbrain external integration inventory, see
+[`docs/architecture/secondbrain-external-integrations.md`](./docs/architecture/secondbrain-external-integrations.md).
 
 ## Quick Start
 
