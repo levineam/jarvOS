@@ -91,26 +91,12 @@ When something becomes real work, jarvOS can move it into Paperclip.
 Over time, your assistant is not just accumulating chat logs. It is helping
 construct your personal knowledge base from the work you are already doing.
 
-## The First Magical Moment
-
-After setup, say something like:
-
-> I have an idea for a project: build a tiny app that helps me plan better
-> mornings. Capture it and turn it into a real note.
-
-jarvOS should add the idea to today's journal, create a clean Markdown note,
-link that note from the journal, preserve the useful context, and offer the next
-concrete step.
-
-That is the difference. A normal assistant replies. A jarvOS-powered assistant
-starts maintaining the operating system around you.
-
 ## How It Works
 
 jarvOS is organized around a simple loop:
 
-1. **Capture.** You talk to an agent, save a note, complete a task, or change a
-   project.
+1. **Capture.** You talk to an agent like you would a personal assistant; tell 
+it to save an idea, make a note, start a project 
 2. **Route.** jarvOS decides where that information belongs: journal, note,
    memory, Paperclip, ontology, or structured knowledge.
 3. **Promote.** Important information becomes durable context instead of being
