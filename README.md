@@ -96,9 +96,8 @@ construct your personal knowledge base from the work you are already doing.
 jarvOS is organized around a simple loop:
 
 1. **Capture.** You talk to an agent like you would a personal assistant; tell 
-it to save an idea, make a note, start a project 
-2. **Route.** jarvOS decides where that information belongs: journal, note,
-   memory, Paperclip, ontology, or structured knowledge.
+it to save an idea, make a note, start a project.
+2. **Route.** jarvOS automatically knows where and how to store that information. 
 3. **Promote.** Important information becomes durable context instead of being
    stranded in chat history.
 4. **Inject.** The next agent gets the critical context it needs before acting.
