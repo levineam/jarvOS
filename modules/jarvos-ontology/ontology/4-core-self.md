@@ -1,5 +1,7 @@
 # Core Self
 
+## Profile
+
 ### Mission
 
 Build useful, source-backed personal AI operating systems.

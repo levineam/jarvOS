@@ -1,5 +1,7 @@
 # Predictions
 
+## Prediction Candidates
+
 ### Review-gated ontology improves agent judgment
 
 - **Status:** Active
