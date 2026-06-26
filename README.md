@@ -165,8 +165,10 @@ The runnable pieces live in `modules/`:
   Obsidian-compatible storage adapters.
 - **[`@jarvos/memory`](./modules/jarvos-memory/)** defines how durable agent
   memory is represented, promoted, and audited.
-- **[`@jarvos/ontology`](./modules/jarvos-ontology/)** models goals, beliefs,
-  predictions, projects, and operating context.
+- **[`@jarvos/ontology`](./modules/jarvos-ontology/)** renders a reviewed
+  hierarchy-of-meaning packet for goals, beliefs, predictions, values, and
+  project relationships. Source-backed secondbrain evidence can create
+  candidates or inquiry items, but review is required before promotion.
 - **[`@jarvos/gbrain`](./modules/jarvos-gbrain/)** prepares curated vault content
   for a local knowledge base and exposes sync, recall, health-check, and
   retrieval-eval workflows.
@@ -175,8 +177,8 @@ The runnable pieces live in `modules/`:
   gates with documented host equivalents, live tracker/git/PR adapters, and thin
   Claude Code/Codex host adapters.
 - **[`@jarvos/agent-context`](./modules/jarvos-agent-context/)** exposes current
-  work, recall bundles, startup briefs, and verified note creation to agent
-  runtimes through a local MCP adapter.
+  work, recall bundles, startup briefs, ontology context packets, and verified
+  note creation to agent runtimes through a local MCP adapter.
 - **[`@jarvos/skills`](./modules/jarvos-skills/)** packages default operating
   skills plus the `obsidian-default` experience pack: workflow execution, rule
   creation, context management, cron hygiene, Obsidian Markdown, Obsidian CLI,

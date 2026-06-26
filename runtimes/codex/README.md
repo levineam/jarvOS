@@ -38,7 +38,7 @@ result so Codex startup is not blocked.
 - `jarvos_create_note` — Obsidian note creation, journal wikilink, and verification.
 - `jarvos_startup_brief` — bounded startup context for future Codex hooks/wrappers.
 - `jarvos_hydrate` — bounded Codex startup packet with Paperclip current work,
-  today's journal, linked notes, jarvOS ontology spine, redaction, and a
+  today's journal, linked notes, the jarvOS ontology context packet, redaction, and a
   hydration report.
 
 ## Hydration Scope
@@ -49,7 +49,7 @@ Default budget is 12,000 characters, configurable with
 - Paperclip issues in `in_progress` and PR-backed `in_review`.
 - Today's journal entry.
 - Notes wikilinked from today's journal entry.
-- A compact `jarvos-ontology` meaning spine.
+- A compact `@jarvos/ontology` provider packet for hierarchy-of-meaning context.
 - A report with sources, omissions, budget use, stale/missing data, and handles.
 
 The standalone `jarvos_current_work` tool keeps its broader default status
@@ -61,6 +61,14 @@ packet to active work plus review-backed PRs.
 Codex should treat jarvOS as the source of truth for memory and capture
 semantics. Do not reimplement note writing or memory persistence in Codex
 instructions; call the jarvOS tools.
+
+## Ontology Context Rule
+
+Codex should load ontology through `jarvos_hydrate` or the shared
+`@jarvos/ontology` provider. The ontology packet is hierarchy-of-meaning
+context, not task state and not raw memory. Codex must not directly mutate
+ontology source files or rewrite `ONTOLOGY.md`; secondbrain evidence can only
+create source-backed ontology candidates or inquiry items for review.
 
 ## Secondbrain Capture Rule
 

@@ -11,7 +11,9 @@
     "./extractor": "./src/extractor.js",
     "./validator": "./src/validator.js",
     "./renderer": "./src/renderer.js",
-    "./bridge": "./src/bridge.js"
+    "./bridge": "./src/bridge.js",
+    "./provider": "./src/provider.js",
+    "./review-workflow": "./src/review-workflow.js"
   },
   "scripts": {
     "test": "node --test test/*.test.js",
@@ -20,6 +22,7 @@
     "render": "node scripts/render.js",
     "bootstrap": "node scripts/bootstrap.js",
     "combined": "node scripts/combined.js",
+    "promote": "node scripts/promote-reviewed.js",
     "sync": "node scripts/sync-to-paperclip.js",
     "sync:dry": "node scripts/sync-to-paperclip.js --dry-run --verbose"
   },

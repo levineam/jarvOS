@@ -1,7 +1,7 @@
 /**
  * extractor.js — Detect ontology-relevant signals from text.
  *
- * Rewritten as ES module from clawd/scripts/ontology-extractor.js.
+ * Rewritten as the public jarvOS ontology signal extractor.
  * Accepts ontology dir as argument instead of hardcoded paths.
  * Exports extraction functions for programmatic use.
  */

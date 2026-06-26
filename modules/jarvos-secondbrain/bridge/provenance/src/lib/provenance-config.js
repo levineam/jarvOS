@@ -28,9 +28,14 @@ function getVaultJournalDir() {
   return loadConfig().paths.journal;
 }
 
+function getTimeZone() {
+  return loadConfig().user.timezone;
+}
+
 module.exports = {
   loadConfig,
   getVaultDir,
   getVaultNotesDir,
   getVaultJournalDir,
+  getTimeZone,
 };

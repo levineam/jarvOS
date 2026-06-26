@@ -66,6 +66,10 @@ test('coding-tool determinism contract documents the OpenClaw-derived behavior',
   assert.match(text, /knowledge sidecars/);
   assert.match(text, /QMD pending/);
   assert.match(text, /not automatically ingested/);
+  assert.match(text, /ontology provider/);
+  assert.match(text, /hierarchy-of-meaning/);
+  assert.match(text, /jarvos_hydrate/);
+  assert.match(text, /must not directly mutate ontology source files/i);
 });
 
 test('supported coding runtime docs point at the shared capture path', () => {
@@ -84,5 +88,8 @@ test('supported coding runtime docs point at the shared capture path', () => {
     assert.match(text, /exactly once/i, docPath);
     assert.match(text, /pending-refresh/, docPath);
     assert.match(text, /do not raw-write|raw-writing|do not create guessed|must not create guessed|must not raw-write/i, docPath);
+    assert.match(text, /jarvos_hydrate|ontology provider/i, docPath);
+    assert.match(text, /hierarchy-of-meaning|ontology context packet/i, docPath);
+    assert.match(text, /must not directly\s+mutate\s+ontology|do not directly\s+mutate\s+ontology|must not rewrite ONTOLOGY|do not rewrite ONTOLOGY/i, docPath);
   }
 });

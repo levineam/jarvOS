@@ -422,7 +422,7 @@ test('redactObviousSecrets removes common token shapes', () => {
   assert.doesNotMatch(redacted, /abcdefghijklmnopqrstuvwxyz/);
 });
 
-test('hydrate includes journal, linked notes, ontology spine, report, and redacts secrets', async () => {
+test('hydrate includes journal, linked notes, ontology context packet, report, and redacts secrets', async () => {
   const oldFetch = global.fetch;
   const oldEnv = {
     PAPERCLIP_API_KEY: process.env.PAPERCLIP_API_KEY,
@@ -448,7 +448,7 @@ test('hydrate includes journal, linked notes, ontology spine, report, and redact
 
       const ontologyDir = path.join(tmp, 'ontology');
       fs.mkdirSync(ontologyDir, { recursive: true });
-      fs.writeFileSync(path.join(ontologyDir, '1-higher-order.md'), '# Higher\n\n## My Higher Order\n\nUse meaning to steer execution.\n', 'utf8');
+      fs.writeFileSync(path.join(ontologyDir, '1-higher-order.md'), '# Higher\n\n## My Higher Order\n\nUse meaning to interpret and prioritize work.\n', 'utf8');
       fs.writeFileSync(path.join(ontologyDir, '5-goals.md'), '## G1 — Build shared memory\n\n**Status:** active\n', 'utf8');
 
       const result = await hydrate({
@@ -461,7 +461,9 @@ test('hydrate includes journal, linked notes, ontology spine, report, and redact
       assert.match(result.markdown, /WORK-1558/);
       assert.match(result.markdown, /Today Journal/);
       assert.match(result.markdown, /Codex Memory Note/);
-      assert.match(result.markdown, /jarvos-ontology Meaning Spine/);
+      assert.match(result.markdown, /jarvOS Ontology Context Packet/);
+      assert.match(result.markdown, /hierarchy-of-meaning/);
+      assert.match(result.markdown, /G1/);
       assert.match(result.markdown, /Hydration Report/);
       assert.match(result.markdown, /Redaction/);
       assert.ok(result.markdown.length <= 9000);

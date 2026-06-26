@@ -142,6 +142,18 @@ bounded:
 This keeps the vault as the source of truth, QMD as broad lookup, GBrain as
 curated structured recall, and memory-wiki as runtime diagnostics.
 
+## Ontology Context
+
+OpenClaw should load ontology through `jarvos_hydrate` or the shared
+`@jarvos/ontology` provider when that MCP/tooling path is available. The
+ontology packet is hierarchy-of-meaning context for values, motivations,
+reviewed beliefs, goals, predictions, and project relationships. It is not
+task state and not raw memory.
+
+OpenClaw adapters must not directly mutate ontology source files or rewrite
+`ONTOLOGY.md`. Source-backed secondbrain evidence can create ontology
+candidates or inquiry items; promotion into active ontology requires review.
+
 ## Intentional Secondbrain Capture
 
 OpenClaw is the reference adapter for deterministic note and journal behavior,

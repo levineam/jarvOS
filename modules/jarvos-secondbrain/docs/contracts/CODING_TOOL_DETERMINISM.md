@@ -62,6 +62,24 @@ write to the secondbrain stack when the user intentionally asks to capture a
 note, idea, decision, quote, preference, fact, or lesson, or when a host-owned
 classifier explicitly routes a source-backed event.
 
+## Ontology Context
+
+The user's ontology is hierarchy-of-meaning context: values, motivations,
+reviewed beliefs, goals, predictions, and project relationships. Coding tools
+must load it through the jarvOS ontology provider, normally by calling
+`jarvos_hydrate` from `@jarvos/agent-context`.
+
+Runtime docs should not copy divergent `ONTOLOGY.md` parsing instructions.
+They should reference the same provider/update contract:
+
+- `@jarvos/ontology` renders a bounded ontology context packet.
+- `@jarvos/agent-context` includes that packet in startup hydration when a
+  provider source is configured.
+- Secondbrain evidence may create source-backed ontology candidates or inquiry
+  items.
+- Agents must not directly mutate ontology source files. Promotion requires a
+  reviewed ontology candidate or resolved inquiry.
+
 ## Drift Checks
 
 The package test suite includes a static determinism smoke that checks:
@@ -71,6 +89,9 @@ The package test suite includes a static determinism smoke that checks:
 - docs do not list general chat apps as active determinism targets
 - canonical journal, exactly-one-backlink, provenance, sidecar, and QMD pending
   behavior remains documented
+- runtime docs load ontology context through `jarvos_hydrate` or the shared
+  ontology provider instead of per-runtime raw file parsing
+- direct ontology mutation by agents remains prohibited
 
 OpenClaw behavior is the reference benchmark, not the owner of the abstraction.
 When OpenClaw gains useful deterministic behavior, move the generic rule here

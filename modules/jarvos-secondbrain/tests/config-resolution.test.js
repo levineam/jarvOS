@@ -66,6 +66,42 @@ test('resolveConfig lets env vars override config paths and supports legacy note
   assert.equal(config.paths.journal, '/env/journal');
 });
 
+test('resolveConfig lets JARVOS_TIMEZONE env override config timezone', () => {
+  const root = tempDir();
+  const configPath = path.join(root, 'jarvos.config.json');
+  fs.writeFileSync(configPath, JSON.stringify({
+    user: {
+      timezone: 'America/Los_Angeles',
+    },
+  }));
+
+  const config = resolveConfig({
+    configPath,
+    homeDir: '/home/tester',
+    env: {
+      JARVOS_TIMEZONE: 'UTC',
+    },
+  });
+
+  assert.equal(config.user.timezone, 'UTC');
+});
+
+test('resolveConfig uses JARVOS_TIMEZONE when no config timezone is set', () => {
+  const root = tempDir();
+  const configPath = path.join(root, 'jarvos.config.json');
+  fs.writeFileSync(configPath, '{}');
+
+  const config = resolveConfig({
+    configPath,
+    homeDir: '/home/tester',
+    env: {
+      JARVOS_TIMEZONE: 'UTC',
+    },
+  });
+
+  assert.equal(config.user.timezone, 'UTC');
+});
+
 test('resolveConfig rejects non-string, empty, and relative path overrides', () => {
   const root = tempDir();
   const configPath = path.join(root, 'jarvos.config.json');

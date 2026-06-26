@@ -1,6 +1,6 @@
 ---
 name: jarvos
-description: "jarvOS personal AI operating system — project management, ontology alignment, governance, and behavioral rules for your assistant."
+description: "jarvOS personal AI operating system — project management, ontology context, governance, and behavioral rules for your assistant."
 version: 1.0.0
 platforms: [macos, linux]
 metadata:
@@ -13,11 +13,11 @@ metadata:
 
 ## When to Use
 - When managing projects, tasks, or plans
-- When the user asks about goals, priorities, or alignment
+- When the user asks about goals, priorities, or ontology context
 - When making decisions about what to work on next
 - When escalating blockers or decisions to the user
 - When creating new projects, boards, briefs, or plans
-- When doing reflection or alignment checks
+- When doing reflection or ontology checks
 
 ## Core Concepts
 
@@ -35,14 +35,19 @@ Every active project has three companions:
 
 **Key rule:** Every task must link to a Project Board. No board = ungoverned.
 
-### ONTOLOGY.md
-The alignment map: Purpose → Beliefs → Mission → Values → Goals → Projects.
+### Ontology Context
+The hierarchy-of-meaning map: Purpose → Beliefs → Mission → Values → Goals → Projects.
 
 Use it for:
 - **Goal tracing** — every project should trace to a Goal
 - **Orphan detection** — flag projects/goals not connected to anything
-- **Alignment checks** — compare recent work against Mission and Values
+- **Meaning checks** — compare recent work against Mission and Values
 - **Prioritization** — Mission > Values > Goals > Projects
+
+Hermes should load ontology through `jarvos_hydrate` or the shared
+`@jarvos/ontology` provider when available. Do not directly mutate ontology
+source files or rewrite `ONTOLOGY.md`; secondbrain evidence can only create
+source-backed ontology candidates or inquiry items for review.
 
 ### Governance
 - **Escalation ladder** for decisions: Blocked / Why now / Options / Recommended / Default
@@ -73,8 +78,8 @@ Use the escalation ladder format:
 **Default if no response by [time]:** [what I'll do]
 ```
 
-### During reflection / alignment checks:
-1. Read ONTOLOGY.md
+### During reflection / ontology checks:
+1. Use `jarvos_hydrate` or the ontology provider packet before falling back to `ONTOLOGY.md`
 2. Compare recent work against stated Goals
 3. Flag orphaned projects (no Goal link)
 4. Flag stale Goals (no active project)
@@ -87,7 +92,7 @@ jarvOS-secondbrain is the shared vault layer for journal and notes. It resolves
 paths in this order:
 1. Canonical env vars: `JARVOS_JOURNAL_DIR` / `JARVOS_NOTES_DIR`
 2. Legacy env aliases: `JOURNAL_DIR` / `VAULT_NOTES_DIR`
-3. `~/clawd/jarvos.config.json` `paths.journal` / `paths.notes`
+3. `~/.jarvos/config.json` `paths.journal` / `paths.notes`
 4. Vault root from `JARVOS_VAULT_DIR` or `jarvos.config.json` `paths.vault`,
    with `Journal` / `Notes` appended
 5. Default `~/Documents/Vault v3/Journal` and `~/Documents/Vault v3/Notes`

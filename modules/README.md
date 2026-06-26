@@ -87,7 +87,7 @@ node scripts/audit-memory.js --help
 
 ## @jarvos/ontology
 
-**What it does:** Structured belief graph — who you are, what you believe, what you predict, and where you're headed. Six ontology layers: higher-order principles, beliefs, predictions, core self, goals, projects.
+**What it does:** Reviewed hierarchy-of-meaning context — beliefs, predictions, goals, values, identity, and project relationships. It renders a bounded provider packet for AI coding tools and keeps the internal Markdown shape swappable.
 
 **What it is NOT:** Your actual ontology data. The templates live in `schema/templates/`. Your filled-in data stays private in your local workspace.
 
@@ -103,8 +103,9 @@ node scripts/render.js --help
 
 **Key files:**
 
-- `src/` — reader, writer, validator, renderer, extractor, bridge
+- `src/` — provider, review workflow, reader, writer, validator, renderer, extractor, bridge
 - `schema/templates/` — blank templates for all six ontology layers
+- `schema/ontology-candidate.schema.json` and `schema/inquiry-item.schema.json` — review queue records for source-backed secondbrain evidence
 - `schema/heuristics.md` — rules for what belongs in each layer
 - `scripts/` — validate, render, extract, sync-to-paperclip
 - `test/` — unit tests for all src modules
@@ -122,7 +123,7 @@ node scripts/render.js --help
 ```bash
 cd modules/jarvos-secondbrain
 npm install
-# Copy jarvos.config.example.json → ~/clawd/jarvos.config.json and fill in your paths
+# Copy jarvos.config.example.json → ~/.jarvos/config.json and fill in your paths
 JARVOS_VAULT_DIR=/path/to/your/vault node bridge/config/jarvos-paths.js
 ```
 

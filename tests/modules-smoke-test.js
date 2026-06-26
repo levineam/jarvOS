@@ -138,6 +138,36 @@ try {
     ok('createLayer throws on unknown layer');
   }
 
+  const provider = onto.createFixtureOntologyProvider({
+    sections: [
+      {
+        id: 'meaning',
+        title: 'Meaning',
+        summary: 'The user values source-backed systems.',
+        anchors: [{ id: 'M1', label: 'Source-backed systems', type: 'value', source: 'fixture' }],
+      },
+    ],
+  });
+  const packet = provider.renderAgentPacket({ maxChars: 1000 });
+  if (packet.ok && packet.markdown.includes('jarvOS Ontology Context') && packet.anchors[0].id === 'M1') {
+    ok('ontology provider renders agent-ready context packet');
+  } else {
+    bad('ontology provider context packet', new Error(JSON.stringify(packet)));
+  }
+
+  const blockedPromotion = onto.canPromoteCandidate({
+    type: 'ontology-candidate',
+    status: 'new',
+    source: { type: 'CaptureEvent v2', ref: 'cap_1' },
+    proposed_target: 'beliefs',
+    proposal: 'Example.',
+  });
+  if (!blockedPromotion.ok && blockedPromotion.errors.join('\n').includes('reviewing')) {
+    ok('ontology review workflow blocks unreviewed promotion');
+  } else {
+    bad('ontology review workflow blocks unreviewed promotion', new Error(JSON.stringify(blockedPromotion)));
+  }
+
 } catch (e) {
   bad('@jarvos/ontology module load', e);
 }

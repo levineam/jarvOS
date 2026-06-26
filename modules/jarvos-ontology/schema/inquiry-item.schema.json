@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://jarvos.dev/schemas/inquiry-item.schema.json",
+  "title": "jarvOS ontology inquiry item",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "id",
+    "type",
+    "status",
+    "question",
+    "source",
+    "owner",
+    "created_at",
+    "updated_at",
+    "links"
+  ],
+  "properties": {
+    "id": { "type": "string", "minLength": 3 },
+    "type": { "const": "ontology-inquiry" },
+    "status": {
+      "type": "string",
+      "enum": ["new", "reviewing", "promoted", "dismissed", "resolved", "stale"]
+    },
+    "question": { "type": "string", "minLength": 1 },
+    "source": {
+      "type": "object",
+      "required": ["type", "ref"],
+      "additionalProperties": true,
+      "properties": {
+        "type": { "type": "string", "minLength": 1 },
+        "ref": { "type": "string", "minLength": 1 },
+        "quote": { "type": "string" }
+      }
+    },
+    "owner": { "type": "string", "minLength": 1 },
+    "created_at": { "type": "string", "format": "date-time" },
+    "updated_at": { "type": "string", "format": "date-time" },
+    "review_after": { "type": ["string", "null"], "format": "date" },
+    "resolved_at": { "type": ["string", "null"], "format": "date-time" },
+    "resolution": { "type": ["string", "null"] },
+    "links": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "ontology_anchors": { "type": "array", "items": { "type": "string" } },
+        "notes": { "type": "array", "items": { "type": "string" } },
+        "paperclip_issues": { "type": "array", "items": { "type": "string" } },
+        "beliefs": { "type": "array", "items": { "type": "string" } },
+        "predictions": { "type": "array", "items": { "type": "string" } },
+        "goals": { "type": "array", "items": { "type": "string" } },
+        "projects": { "type": "array", "items": { "type": "string" } }
+      }
+    }
+  }
+}
