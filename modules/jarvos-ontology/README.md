@@ -1,7 +1,8 @@
 # @jarvos/ontology
 
-Worldview layer for jarvOS. Provides the structured belief graph, predictions, goals,
-values, and identity model for your AI agent.
+Worldview layer for jarvOS. Provides a reviewed hierarchy-of-meaning context:
+beliefs, predictions, goals, values, identity, and project relationships for AI
+coding agents.
 
 See also: [`jarvos/ARCHITECTURE.md`](../jarvos/ARCHITECTURE.md) for the full module map.
 
@@ -15,6 +16,10 @@ See also: [`jarvos/ARCHITECTURE.md`](../jarvos/ARCHITECTURE.md) for the full mod
 | **Core self** | Mission statement, values, and key strengths |
 | **Goals** | Time-bound objectives tied to core self |
 | **Projects** | Organized efforts that serve one or more goals |
+
+The agent-facing API is the ontology provider. Coding tools should consume the
+bounded ontology context packet rendered by `createOntologyProvider()` or
+`jarvos_hydrate`, not parse private ontology files directly.
 
 ## What this module is NOT for
 
@@ -34,6 +39,8 @@ facts live there — not here.
 
 `jarvos-secondbrain` is the **content** layer: daily journals, research notes, long-form
 writing. Raw capture lives there. Ontology is refined signal, not raw material.
+Secondbrain evidence can create source-backed ontology candidates or inquiry
+items, but review is required before promotion.
 
 ### vs. Paperclip
 
@@ -47,7 +54,12 @@ npm install ./modules/jarvos-ontology
 ```
 
 ```js
-const { createLayer, validateEntry, LAYER_NAMES } = require('@jarvos/ontology');
+const {
+  createLayer,
+  createOntologyProvider,
+  validateEntry,
+  LAYER_NAMES,
+} = require('@jarvos/ontology');
 
 // List available layers
 console.log(LAYER_NAMES);
@@ -66,6 +78,10 @@ console.log(entry);
 // Validate an entry
 const { valid, errors } = validateEntry(entry);
 console.log(valid); // true
+
+const provider = createOntologyProvider({ ontologyDir: './ontology' });
+const packet = provider.renderAgentPacket({ maxChars: 2200 });
+console.log(packet.markdown); // Bounded hierarchy-of-meaning context for agents.
 ```
 
 Or use the CLI tools directly:
@@ -77,6 +93,15 @@ npm install
 node scripts/validate.js --help
 node scripts/render.js --help
 ```
+
+Review records use Markdown plus frontmatter:
+
+- `schema/templates/ontology-candidate.template.md` for proposed updates from
+  source-backed secondbrain evidence.
+- `schema/templates/inquiry-item.template.md` for durable unresolved questions.
+
+Agents must not directly mutate ontology source files. Promote reviewed
+candidates through the review workflow only.
 
 ## Data flow
 
@@ -168,8 +193,11 @@ jarvos-ontology/
 │   ├── heuristics.md         # Classification rules
 │   ├── prompts.md            # Guided prompts for filling gaps
 │   └── templates/            # Blank templates for new ontologies
+├── ontology/                 # Public sample ontology fixture
 ├── src/                      # Library
 │   ├── index.js              # Barrel export
+│   ├── provider.js           # Bounded ontology context provider
+│   ├── review-workflow.js    # Review-gated promotion helpers
 │   ├── reader.js             # Load & query ontology
 │   ├── writer.js             # Append & update sections
 │   ├── extractor.js          # Signal detection from text
@@ -197,7 +225,7 @@ node --test test/*.test.js
 ## Current scope boundary
 
 This is the canonical module for ontology data and tooling. It is **not** a migration
-tool, a knowledge base, or an execution tracker.
+tool, a knowledge base, raw memory, or an execution tracker.
 
 Out of scope:
 

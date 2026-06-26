@@ -138,7 +138,8 @@ candidate and let the user decide.
 Every Claude Code session in this workspace starts with a hydrated Working
 Context Packet, injected by the jarvOS `SessionStart` hook (configured in
 `~/.claude/settings.json`). It includes current Paperclip work, today's
-journal, linked notes, the jarvos-ontology spine, and a Hydration Report.
+journal, linked notes, the jarvOS ontology context packet, and a Hydration
+Report.
 
 ### MCP tools (registered as `jarvos`)
 
@@ -148,6 +149,14 @@ journal, linked notes, the jarvos-ontology spine, and a Hydration Report.
 - `jarvos_startup_brief` — bounded startup context
 - `jarvos_hydrate` — bounded working-context packet (also used for Claude
   Desktop manual hydration via the `boot jarvOS` prompt)
+
+## Ontology Context Rule
+
+Claude Code should load ontology through `jarvos_hydrate` or the shared
+`@jarvos/ontology` provider. The ontology packet is hierarchy-of-meaning
+context, not task state and not raw memory. Claude Code must not directly
+mutate ontology source files or rewrite `ONTOLOGY.md`; secondbrain evidence can
+only create source-backed ontology candidates or inquiry items for review.
 
 ## Secondbrain Capture Rule
 

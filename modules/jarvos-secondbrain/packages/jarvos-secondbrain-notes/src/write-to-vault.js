@@ -8,7 +8,7 @@
 
 const { existsSync, mkdirSync, readFileSync, writeFileSync } = require('fs');
 const { dirname, join } = require('path');
-const { getVaultNotesDir } = require('./lib/notes-config');
+const { getVaultNotesDir, loadConfig } = require('./lib/notes-config');
 const { repairZeroByteVaultRootDuplicate } = require('./lib/vault-root-duplicate-guard');
 const { optimizeNoteKnowledge } = require('./knowledge-optimizer');
 const {
@@ -21,7 +21,7 @@ const { linkNoteToTodayJournal } = require('../../../bridge/provenance/src/link-
 
 function todayDate() {
   return new Intl.DateTimeFormat('en-CA', {
-    timeZone: 'America/New_York',
+    timeZone: loadConfig().user.timezone,
     year: 'numeric',
     month: '2-digit',
     day: '2-digit',

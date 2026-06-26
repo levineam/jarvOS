@@ -1,6 +1,6 @@
 # Personal Ontology
 
-*A compact map of what matters — your "meaning guardrails."*
+*A compact map of what matters — your hierarchy of meaning.*
 
 ---
 

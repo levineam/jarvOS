@@ -8,6 +8,7 @@ modules rather than replacing them:
 
 - `@jarvos/gbrain` for recall bundles.
 - `@jarvos/secondbrain` for note writing and journal linking.
+- `@jarvos/ontology` for bounded hierarchy-of-meaning context packets.
 - Paperclip for current execution state.
 
 ## Tools
@@ -23,7 +24,18 @@ The bundled stdio MCP server exposes:
 | `jarvos_session_thread_read` | Read the rolling live working thread for an issue, artifact, project, or host session |
 | `jarvos_session_thread_write` | Append a checkpoint to that thread as a normal secondbrain note linked from today's journal |
 | `jarvos_startup_brief` | Bounded startup context for agent sessions |
-| `jarvos_hydrate` | Bounded working-context packet for startup hydration |
+| `jarvos_hydrate` | Bounded working-context packet for startup hydration, including ontology context when configured |
+
+## Ontology Context
+
+`jarvos_hydrate` includes a compact ontology context packet when an ontology
+provider source is available. The packet is hierarchy-of-meaning context for AI
+coding tools: values, motivations, reviewed beliefs, goals, predictions, and
+project relationships.
+
+The packet is intentionally bounded and source-labeled. It does not dump raw
+private notes or require runtimes to parse `ONTOLOGY.md` directly. If no
+ontology source is configured, hydration succeeds and reports the omission.
 
 ## Session Thread Continuity
 

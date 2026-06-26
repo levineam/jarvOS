@@ -20,6 +20,17 @@ test('jarvos-paths shim returns a valid timezone', () => {
   new Intl.DateTimeFormat('en-US', { timeZone: tz }).format(new Date(0));
 });
 
+test('jarvos-paths shim lets JARVOS_TIMEZONE override ambient config', () => {
+  const previous = process.env.JARVOS_TIMEZONE;
+  process.env.JARVOS_TIMEZONE = 'UTC';
+  try {
+    assert.equal(jp.getTimeZone(opts), 'UTC');
+  } finally {
+    if (previous === undefined) delete process.env.JARVOS_TIMEZONE;
+    else process.env.JARVOS_TIMEZONE = previous;
+  }
+});
+
 test('jarvos-paths shim honors an env override (so a pinned canonical vault resolves)', () => {
   const o = { homeDir: '/home/tester', env: { JARVOS_VAULT_DIR: '/abs/Vault' } };
   assert.equal(jp.getVaultDir(o), '/abs/Vault');

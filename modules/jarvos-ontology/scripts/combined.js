@@ -2,8 +2,8 @@
 /**
  * combined.js — Render all ontology files into a single ONTOLOGY.md.
  *
- * Used during migration: generates a combined file that can be symlinked
- * from the old clawd/ONTOLOGY.md location.
+ * Used during migration: generates a combined file that can be copied or
+ * symlinked into a workspace-level ONTOLOGY.md.
  *
  * Usage: node scripts/combined.js [--ontology-dir DIR] [--output FILE]
  */

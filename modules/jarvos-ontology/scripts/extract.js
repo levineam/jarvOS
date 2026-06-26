@@ -8,7 +8,7 @@
  * Options:
  *   --date YYYY-MM-DD   Scan a specific date (default: today)
  *   --days N            Scan last N days (default: 1)
- *   --memory-dir DIR    Path to memory directory (default: ~/clawd/memory)
+ *   --memory-dir DIR    Path to memory directory (default: ~/.jarvos/memory)
  *   --ontology-dir DIR  Path to ontology/ directory (default: ./ontology)
  *   --dry-run           Show what would change without writing
  *   --json              Output structured JSON
@@ -30,7 +30,7 @@ function parseArgs() {
     dryRun: false,
     json: false,
     help: false,
-    memoryDir: join(HOME, 'clawd', 'memory'),
+    memoryDir: join(HOME, '.jarvos', 'memory'),
     ontologyDir: join(new URL('.', import.meta.url).pathname, '..', 'ontology'),
   };
 

@@ -120,6 +120,17 @@ function validTimezone(value) {
   }
 }
 
+function resolveUserTimezone(rest = {}, env = process.env) {
+  return validTimezone(
+    env.JARVOS_TIMEZONE
+    || env.TZ
+    || rest.user?.timezone
+    || rest.user?.timeZone
+    || rest.timezone
+    || rest.timeZone,
+  );
+}
+
 // --- Vault-drift guardrails (SUP-1307 / SUP-1884) ---------------------------
 // The active vault migrated from ~/Documents/Vault v3 to ~/Vaults/Vault v3.
 // These guards restore the "target the active vault or fail closed" intent for
@@ -256,7 +267,7 @@ function resolveConfig(options = {}) {
 
   const user = {
     name: rest.user?.name || DEFAULT_USER_NAME,
-    timezone: validTimezone(rest.user?.timezone),
+    timezone: resolveUserTimezone(rest, env),
   };
 
   const config = { paths, user };
@@ -280,5 +291,6 @@ module.exports = {
   discoverConfigPath,
   expandTilde,
   resolveConfig,
+  resolveUserTimezone,
   xdgConfigPath,
 };

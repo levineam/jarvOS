@@ -9,7 +9,12 @@
 const { readFileSync, writeFileSync, existsSync } = require('fs');
 const { mkdirSync } = require('node:fs');
 const path = require('path');
-const { getVaultDir, getVaultJournalDir, getVaultNotesDir } = require('./lib/provenance-config');
+const {
+  getTimeZone,
+  getVaultDir,
+  getVaultJournalDir,
+  getVaultNotesDir,
+} = require('./lib/provenance-config');
 const { repairZeroByteVaultRootDuplicate } = require('../../../packages/jarvos-secondbrain-notes/src/lib/vault-root-duplicate-guard');
 const {
   loadConfig,
@@ -18,14 +23,14 @@ const {
 } = require('../../../packages/jarvos-secondbrain-journal/src/journal-maintenance.js');
 
 function todayPath() {
-  const today = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+  const today = new Date().toLocaleDateString('en-CA', { timeZone: getTimeZone() });
   return path.join(getVaultJournalDir(), `${today}.md`);
 }
 
 function dateFromJournalPath(journalPath) {
   const fromName = path.basename(journalPath, '.md');
   if (/^\d{4}-\d{2}-\d{2}$/.test(fromName)) return fromName;
-  return new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+  return new Date().toLocaleDateString('en-CA', { timeZone: getTimeZone() });
 }
 
 function ensureJournalFile(journalPath, date = dateFromJournalPath(journalPath)) {

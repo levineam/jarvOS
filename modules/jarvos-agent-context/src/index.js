@@ -21,12 +21,6 @@ const DEFAULT_SESSION_THREAD_SECTION = DEFAULT_NOTES_SECTION;
 const DEFAULT_SESSION_THREAD_LOCK_RETRY_DELAY_MS = 25;
 const DEFAULT_SESSION_THREAD_LOCK_STALE_MS = 30000;
 const DEFAULT_SESSION_THREAD_LOCK_TIMEOUT_MS = 30000;
-const ONTOLOGY_FILES = [
-  '1-higher-order.md',
-  '4-core-self.md',
-  '5-goals.md',
-  '6-projects.md',
-];
 
 function expandTilde(value) {
   if (typeof value !== 'string') return value;
@@ -88,6 +82,10 @@ function loadJournalLinker() {
 
 function loadGbrain() {
   return loadModule('@jarvos/gbrain', path.join(JARVOS_ROOT, 'modules', 'jarvos-gbrain', 'src', 'index.js'));
+}
+
+function loadOntologyProviderModule() {
+  return loadModule('@jarvos/ontology/provider', path.join(JARVOS_ROOT, 'modules', 'jarvos-ontology', 'src', 'provider.js'));
 }
 
 function readShellExports(filePath) {
@@ -394,7 +392,8 @@ function formatThreadEntry(input = {}, timestamp = new Date().toISOString()) {
 function sessionThreadFrontmatter(input = {}, thread) {
   return {
     status: 'active',
-    type: 'session-thread',
+    type: 'note',
+    subtype: 'session-thread',
     project: firstString(input.project, 'jarvOS'),
     thread_key: thread.threadKey,
     artifact: firstString(input.artifact, input.issueIdentifier, input.path, input.url, ''),
@@ -581,57 +580,45 @@ function collectLinkedNotes(journalContent, jarvosPaths, options = {}, report) {
 function ontologyCandidateDirs(options = {}) {
   return [
     expandTilde(options.ontologyDir),
-    path.join(os.homedir(), 'clawd', 'jarvos-ontology', 'ontology'),
-    path.join(JARVOS_ROOT, 'jarvos-ontology', 'ontology'),
+    expandTilde(process.env.JARVOS_ONTOLOGY_DIR),
     path.join(JARVOS_ROOT, 'modules', 'jarvos-ontology', 'ontology'),
   ].filter(Boolean);
 }
 
-function compactOntologyFile(content) {
-  const lines = String(content || '').split(/\r?\n/);
-  const kept = [];
-  let bodyLines = 0;
-  for (const line of lines) {
-    const trimmed = line.trim();
-    if (!trimmed || trimmed === '---') continue;
-    if (/^#{1,3}\s+/.test(trimmed)) {
-      kept.push(trimmed);
-      bodyLines = 0;
-      continue;
-    }
-    if (/^\*\*(?:Status|Mission|Values|Strengths|Quote|Reason|Timeframe|Confidence):\*\*/i.test(trimmed)) {
-      kept.push(trimmed);
-      continue;
-    }
-    if (/^[-*]\s+/.test(trimmed) && bodyLines < 2) {
-      kept.push(trimmed);
-      bodyLines += 1;
-      continue;
-    }
-    if (bodyLines < 1 && trimmed.length < 180) {
-      kept.push(trimmed);
-      bodyLines += 1;
-    }
-  }
-  return kept.join('\n');
-}
+function collectOntologyPacket(options = {}, report) {
+  const ontologyProvider = loadOntologyProviderModule();
+  const candidateDirs = ontologyCandidateDirs(options);
+  const configuredFile = firstString(options.sourceFile, options.ontologyFile);
 
-function collectOntologySpine(options = {}, report) {
-  for (const dir of ontologyCandidateDirs(options)) {
-    if (!fs.existsSync(dir)) continue;
-    const parts = [];
-    const sources = [];
-    for (const file of ONTOLOGY_FILES) {
-      const filePath = path.join(dir, file);
-      const content = readIfExists(filePath);
-      if (content === null) continue;
-      parts.push(`## ${file.replace(/^\d-/, '').replace(/\.md$/, '')}\n${compactOntologyFile(content)}`);
-      sources.push(filePath);
+  if (configuredFile) {
+    const provider = ontologyProvider.createOntologyProvider({ sourceFile: expandTilde(configuredFile) });
+    const packet = provider.renderAgentPacket({ maxChars: Number(options.maxChars || options.packetMaxChars || 2200) });
+    if (packet.ok) {
+      return { ok: true, dir: null, sources: packet.sources.map((source) => source.source), markdown: packet.markdown, packet };
     }
-    if (parts.length) return { ok: true, dir, sources, markdown: parts.join('\n\n') };
+    report.omissions.push(`jarvos-ontology provider unavailable: ${packet.errors.map((error) => error.message).join('; ')}`);
+    return { ok: false, dir: null, sources: [], markdown: packet.markdown, packet };
   }
-  report.omissions.push('jarvos-ontology spine unavailable');
-  return { ok: false, dir: null, sources: [], markdown: 'jarvos-ontology spine unavailable.' };
+
+  for (const dir of candidateDirs) {
+    if (!fs.existsSync(dir)) continue;
+    const provider = ontologyProvider.createOntologyProvider({ ontologyDir: dir });
+    const packet = provider.renderAgentPacket({ maxChars: Number(options.maxChars || options.packetMaxChars || 2200) });
+    if (packet.ok) {
+      return {
+        ok: true,
+        dir,
+        sources: packet.sources.map((source) => source.source),
+        markdown: packet.markdown,
+        packet,
+      };
+    }
+  }
+
+  const provider = ontologyProvider.createOntologyProvider({ ontologyDir: candidateDirs[0] || '' });
+  const packet = provider.renderAgentPacket({ maxChars: Number(options.maxChars || options.packetMaxChars || 2200) });
+  report.omissions.push('jarvos-ontology provider unavailable');
+  return { ok: false, dir: null, sources: [], markdown: packet.markdown, packet };
 }
 
 function renderHydrationReport(report, maxChars, finalChars = report.finalChars || 0) {
@@ -661,6 +648,18 @@ function renderHydrationReport(report, maxChars, finalChars = report.finalChars 
     '## Retrieval Handles',
     handles,
   ].join('\n');
+}
+
+function refreshFinalSize(markdown, report) {
+  let next = markdown;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const beforeLength = next.length;
+    const refreshed = next.replace(/Final size: \d+ chars/, `Final size: ${beforeLength} chars`);
+    next = refreshed;
+    report.finalChars = next.length;
+    if (report.finalChars === beforeLength) return next;
+  }
+  return next;
 }
 
 async function hydrate(options = {}) {
@@ -727,10 +726,11 @@ async function hydrate(options = {}) {
     report.omissions.push(`linked-note collection unavailable: ${error.message}`);
   }
 
-  const ontology = collectOntologySpine(options.ontology || {}, report);
-  parts.push('', '# jarvos-ontology Meaning Spine', '', truncateText(ontology.markdown, Number(options.ontologyMaxChars || 2200), 'jarvos-ontology spine', report));
+  const ontology = collectOntologyPacket(options.ontology || {}, report);
+  parts.push('', '# jarvOS Ontology Context Packet', '', truncateText(ontology.markdown, Number(options.ontologyMaxChars || 2200), 'jarvos-ontology context packet', report));
   for (const source of ontology.sources) report.sources.push(source);
-  if (ontology.dir) report.handles.push(`Ontology: ${ontology.dir}`);
+  if (ontology.dir) report.handles.push(`Ontology provider: ${ontology.dir}`);
+  else if (ontology.packet?.sourceKind) report.handles.push(`Ontology provider: ${ontology.packet.sourceKind}`);
 
   let body = redactObviousSecrets(parts.join('\n'));
   const reservedReportChars = 1800;
@@ -745,8 +745,7 @@ async function hydrate(options = {}) {
     const finalReport = renderHydrationReport(report, maxChars);
     markdown = `${body.slice(0, Math.max(0, maxChars - finalReport.length - 20)).trimEnd()}\n\n${finalReport}`;
   }
-  report.finalChars = markdown.length;
-  markdown = markdown.replace(/Final size: \d+ chars/, `Final size: ${report.finalChars} chars`);
+  markdown = refreshFinalSize(markdown, report);
   if (markdown.length > maxChars) {
     const before = markdown.length;
     report.omissions.push(`final packet forcibly trimmed from ${before} to ${maxChars} chars`);
@@ -755,8 +754,7 @@ async function hydrate(options = {}) {
     markdown = bodyLimit > 0
       ? `${body.slice(0, bodyLimit).trimEnd()}\n\n${finalReport}`
       : finalReport.slice(0, maxChars);
-    report.finalChars = markdown.length;
-    markdown = markdown.replace(/Final size: \d+ chars/, `Final size: ${report.finalChars} chars`);
+    markdown = refreshFinalSize(markdown, report);
     if (markdown.length > maxChars) {
       markdown = markdown.slice(0, maxChars);
       report.finalChars = markdown.length;

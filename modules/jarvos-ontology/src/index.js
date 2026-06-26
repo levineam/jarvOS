@@ -8,6 +8,8 @@
  */
 
 const crypto = require('crypto');
+const provider = require('./provider.js');
+const reviewWorkflow = require('./review-workflow.js');
 
 const LAYER_NAMES = [
   'higher-order',
@@ -133,4 +135,6 @@ module.exports = {
   createLayer,
   validateEntry,
   getLayerDef,
+  ...provider,
+  ...reviewWorkflow,
 };
