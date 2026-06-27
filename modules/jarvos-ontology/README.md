@@ -134,7 +134,9 @@ significant durable signals — the ones that define who you are, not just what 
 | `5-goals.md` | Goals | Time-bound objectives linked to core self |
 | `6-projects.md` | Projects | Organized efforts serving one or more goals |
 
-`ontology/index.md` is the layer map — read it first when navigating manually.
+`schema/templates/index.md` is the blank layer map for new ontologies. The public
+example fixture lives under `schema/examples/public-ontology/`; keep your filled-in
+private ontology in a local `ontology/` directory outside published package files.
 
 ## CLI
 
@@ -192,8 +194,8 @@ jarvos-ontology/
 ├── schema/                   # Structure definitions
 │   ├── heuristics.md         # Classification rules
 │   ├── prompts.md            # Guided prompts for filling gaps
-│   └── templates/            # Blank templates for new ontologies
-├── ontology/                 # Public sample ontology fixture
+│   ├── templates/            # Blank templates for new ontologies
+│   └── examples/             # Public example fixtures used by tests/docs
 ├── src/                      # Library
 │   ├── index.js              # Barrel export
 │   ├── provider.js           # Bounded ontology context provider

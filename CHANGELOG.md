@@ -4,7 +4,11 @@ Release sections describe user-facing jarvOS changes. Historical public-doc sync
 
 ## [Unreleased]
 
-- Nothing yet.
+### Fixes
+- Prefer explicit jarvOS timezone config over ambient `TZ` so journal and note
+  dates do not drift when shells or CI set generic timezone environment.
+- Keep live `@jarvos/ontology` data out of publish allowlists; public sample
+  ontology files now live under `schema/examples/public-ontology/`.
 
 ## v0.6.2 — 2026-06-23
 

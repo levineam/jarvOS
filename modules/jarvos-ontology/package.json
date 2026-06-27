@@ -15,6 +15,14 @@
     "./provider": "./src/provider.js",
     "./review-workflow": "./src/review-workflow.js"
   },
+  "files": [
+    "README.md",
+    "docs/",
+    "package.json",
+    "schema/",
+    "scripts/",
+    "src/"
+  ],
   "scripts": {
     "test": "node --test test/*.test.js",
     "extract": "node scripts/extract.js",

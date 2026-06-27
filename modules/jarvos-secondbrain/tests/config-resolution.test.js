@@ -102,6 +102,26 @@ test('resolveConfig uses JARVOS_TIMEZONE when no config timezone is set', () => 
   assert.equal(config.user.timezone, 'UTC');
 });
 
+test('resolveConfig prefers configured timezone over generic TZ env fallback', () => {
+  const root = tempDir();
+  const configPath = path.join(root, 'jarvos.config.json');
+  fs.writeFileSync(configPath, JSON.stringify({
+    user: {
+      timezone: 'America/Los_Angeles',
+    },
+  }));
+
+  const config = resolveConfig({
+    configPath,
+    homeDir: '/home/tester',
+    env: {
+      TZ: 'UTC',
+    },
+  });
+
+  assert.equal(config.user.timezone, 'America/Los_Angeles');
+});
+
 test('resolveConfig rejects non-string, empty, and relative path overrides', () => {
   const root = tempDir();
   const configPath = path.join(root, 'jarvos.config.json');

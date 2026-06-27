@@ -87,6 +87,20 @@ test('journal-maintenance prefers configured timezone over generic TZ env fallba
   }
 });
 
+test('journal-maintenance inherits explicit JARVOS_TIMEZONE before configured user timezone', () => {
+  const tmpDir = makeClawdConfig({ timeZone: 'America/Los_Angeles' });
+
+  try {
+    withEnv({ JARVOS_CLAWD_DIR: tmpDir, JARVOS_TIMEZONE: 'UTC' }, () => {
+      const { getTimeZone, getJournalMaintenanceTimeZone } = require(PATHS_MODULE);
+      assert.equal(getTimeZone(), 'UTC');
+      assert.equal(getJournalMaintenanceTimeZone(), 'UTC');
+    });
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
 test('journal-maintenance preserves explicit schedule and timezone overrides', () => {
   const tmpDir = makeClawdConfig({
     timeZone: 'Europe/Berlin',
@@ -99,7 +113,7 @@ test('journal-maintenance preserves explicit schedule and timezone overrides', (
   });
 
   try {
-    withEnv({ JARVOS_CLAWD_DIR: tmpDir }, () => {
+    withEnv({ JARVOS_CLAWD_DIR: tmpDir, JARVOS_TIMEZONE: 'UTC' }, () => {
       const {
         getJournalMaintenanceSchedule,
         getJournalMaintenanceTimeZone,
