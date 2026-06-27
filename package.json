@@ -34,7 +34,6 @@
     "modules/jarvos-coding/src/",
     "modules/jarvos-ontology/README.md",
     "modules/jarvos-ontology/docs/",
-    "modules/jarvos-ontology/ontology/",
     "modules/jarvos-ontology/package.json",
     "modules/jarvos-ontology/schema/",
     "modules/jarvos-ontology/scripts/",

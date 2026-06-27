@@ -12,10 +12,10 @@ import {
   findOrphans,
 } from '../src/reader.js';
 
-const ONTOLOGY_DIR = resolve(new URL('.', import.meta.url).pathname, '..', 'ontology');
+const ONTOLOGY_DIR = resolve(new URL('.', import.meta.url).pathname, '..', 'schema', 'examples', 'public-ontology');
 
 describe('reader', () => {
-  it('loads ontology from canonical files', () => {
+  it('loads ontology from public example files', () => {
     const ontology = loadOntology(ONTOLOGY_DIR);
     assert.ok(ontology.objects.length > 0, 'should have objects');
     assert.ok(ontology.links.length > 0, 'should have links');

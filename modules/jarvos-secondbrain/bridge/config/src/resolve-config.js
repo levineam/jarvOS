@@ -123,11 +123,11 @@ function validTimezone(value) {
 function resolveUserTimezone(rest = {}, env = process.env) {
   return validTimezone(
     env.JARVOS_TIMEZONE
-    || env.TZ
     || rest.user?.timezone
     || rest.user?.timeZone
     || rest.timezone
-    || rest.timeZone,
+    || rest.timeZone
+    || env.TZ,
   );
 }
 

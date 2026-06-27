@@ -7,6 +7,7 @@
 
 'use strict';
 
+const fs = require('fs');
 const path = require('path');
 const ROOT = path.resolve(__dirname, '..');
 
@@ -166,6 +167,19 @@ try {
     ok('ontology review workflow blocks unreviewed promotion');
   } else {
     bad('ontology review workflow blocks unreviewed promotion', new Error(JSON.stringify(blockedPromotion)));
+  }
+
+  const rootPackage = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
+  const ontologyPackage = JSON.parse(fs.readFileSync(path.join(ROOT, 'modules/jarvos-ontology/package.json'), 'utf8'));
+  if (!rootPackage.files.includes('modules/jarvos-ontology/ontology/')) {
+    ok('root package excludes live ontology write target');
+  } else {
+    bad('root package excludes live ontology write target', new Error('modules/jarvos-ontology/ontology/ is publishable'));
+  }
+  if (ontologyPackage.files && !ontologyPackage.files.includes('ontology/')) {
+    ok('@jarvos/ontology package excludes live ontology write target');
+  } else {
+    bad('@jarvos/ontology package excludes live ontology write target', new Error('ontology/ is publishable'));
   }
 
 } catch (e) {

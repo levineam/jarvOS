@@ -3,12 +3,12 @@ import assert from 'node:assert/strict';
 import { resolve } from 'path';
 import { validate, formatValidation } from '../src/validator.js';
 
-const ONTOLOGY_DIR = resolve(new URL('.', import.meta.url).pathname, '..', 'ontology');
+const ONTOLOGY_DIR = resolve(new URL('.', import.meta.url).pathname, '..', 'schema', 'examples', 'public-ontology');
 
 describe('validator', () => {
-  it('validates the canonical ontology', () => {
+  it('validates the public example ontology', () => {
     const result = validate(ONTOLOGY_DIR);
-    assert.ok(result.valid, 'canonical ontology should be valid (no errors)');
+    assert.ok(result.valid, 'public example ontology should be valid (no errors)');
     assert.ok(result.objectCount > 0, 'should have objects');
     assert.ok(result.linkCount > 0, 'should have links');
   });

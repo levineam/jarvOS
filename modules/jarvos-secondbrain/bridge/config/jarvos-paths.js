@@ -101,11 +101,11 @@ function getTimeZone(options = {}) {
   const config = currentConfig();
   return firstValidTimezone([
     process.env.JARVOS_TIMEZONE,
-    process.env.TZ,
     config.user?.timezone ||
     config.user?.timeZone,
     config.timezone,
     config.timeZone,
+    process.env.TZ,
   ]) || runtimeTimezone() || 'UTC';
 }
 
@@ -126,12 +126,13 @@ function getJournalMaintenanceTimeZone(overrides = {}) {
     process.env.JARVOS_JOURNAL_MAINTENANCE_TIMEZONE,
     config.jobs?.journalMaintenance?.timezone,
     config.jobs?.journalMaintenance?.timeZone,
+    process.env.JARVOS_TIMEZONE,
     config.user?.timezone,
     config.user?.timeZone,
     config.timezone,
     config.timeZone,
-    process.env.JARVOS_TIMEZONE,
     userMdTimezone(),
+    process.env.TZ,
   ]) || runtimeTimezone() || 'UTC';
 }
 
