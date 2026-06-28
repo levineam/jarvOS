@@ -1,7 +1,10 @@
 'use strict';
 
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
+const { expandTilde, resolveConfig } = require('../../config');
+const { DEFAULT_WIKI_DIR_NAME } = require('../../../packages/jarvos-secondbrain-wiki/src');
 
 function readJson(filePath, fallback = null) {
   try {
@@ -67,6 +70,48 @@ function evalStatus(evalReportPath) {
   };
 }
 
+function asAbsolutePath(value, { baseDir = process.cwd(), homeDir = process.env.HOME } = {}) {
+  if (!value) return value;
+  const expanded = expandTilde(String(value), homeDir);
+  return path.isAbsolute(expanded) ? expanded : path.resolve(baseDir, expanded);
+}
+
+function resolveSecondbrainStatusOptions(options = {}) {
+  const env = options.env || process.env;
+  const homeDir = options.homeDir || env.HOME || os.homedir();
+  const config = resolveConfig({
+    configPath: options.configPath,
+    env,
+    homeDir,
+    workspaceRoot: options.workspaceRoot,
+  });
+  const vaultDir = asAbsolutePath(
+    options.vaultDir
+    || env.JARVOS_VAULT_DIR
+    || config.paths.vault,
+    { homeDir },
+  );
+  const knowledgeDir = asAbsolutePath(
+    options.knowledgeDir
+    || env.JARVOS_KNOWLEDGE_DIR
+    || path.join(vaultDir, '.jarvos', 'knowledge'),
+    { homeDir },
+  );
+  const wikiDir = asAbsolutePath(
+    options.wikiDir
+    || env.JARVOS_GENERATED_WIKI_DIR
+    || path.join(vaultDir, DEFAULT_WIKI_DIR_NAME),
+    { homeDir },
+  );
+  const evalReportPath = asAbsolutePath(
+    options.evalReportPath
+    || env.JARVOS_RETRIEVAL_EVAL_REPORT
+    || path.join(knowledgeDir, 'retrieval-eval-report.json'),
+    { homeDir },
+  );
+  return { knowledgeDir, wikiDir, evalReportPath };
+}
+
 function buildSecondbrainStatus({
   knowledgeDir,
   wikiDir = null,
@@ -124,4 +169,5 @@ function renderSecondbrainStatus(status) {
 module.exports = {
   buildSecondbrainStatus,
   renderSecondbrainStatus,
+  resolveSecondbrainStatusOptions,
 };

@@ -49,3 +49,18 @@ Routine shape:
 - Follow-up: run QMD update/embed after apply mode before treating QMD search as fresh.
 
 Do not use this routine to ingest every AI conversation. It is only for notes that already exist or were intentionally created.
+
+## Generated Wiki Refresh
+
+Manual note maintenance updates the source-backed sidecars. It does not make the
+visible generated LLM-wiki current by itself. After an apply run, refresh the
+generated wiki from the sidecars:
+
+```bash
+npm run wiki:build
+```
+
+The generated wiki build reads from the configured knowledge artifacts directory
+and writes to the configured generated wiki directory, defaulting to a visible
+`Generated Secondbrain Wiki` folder under the vault root. Generated pages are
+safe to delete and rebuild; do not edit them as source notes.

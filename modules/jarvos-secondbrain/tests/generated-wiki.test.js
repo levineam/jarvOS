@@ -2,12 +2,16 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const { spawnSync } = require('node:child_process');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
 const {
   compileSecondbrainWiki,
+  DEFAULT_WIKI_DIR_NAME,
+  MANAGED_OUTPUT_MARKER,
+  resolveWikiBuildOptions,
 } = require('../packages/jarvos-secondbrain-wiki/src');
 const {
   buildArtifact,
@@ -78,6 +82,7 @@ test('compileSecondbrainWiki builds deterministic concept source daily and index
   assert.match(firstConcept, /\[\[Generated Wiki\]\]/);
   assert.match(firstConcept, /Source: \[\[Generated Wiki\]\]/);
   assert.ok(fs.existsSync(path.join(outputDir, 'daily', '2026-06-21.md')));
+  assert.ok(fs.existsSync(path.join(outputDir, MANAGED_OUTPUT_MARKER)));
 });
 
 test('compileSecondbrainWiki does not mutate source notes', () => {
@@ -143,4 +148,88 @@ test('compileSecondbrainWiki removes stale generated pages before rebuilding', (
   assert.equal(result.artifacts, 0);
   assert.equal(fs.existsSync(path.join(outputDir, 'sources', 'stale-source.md')), false);
   assert.equal(fs.existsSync(path.join(outputDir, 'index.md')), true);
+});
+
+test('compileSecondbrainWiki refuses to reset unmanaged nonempty output directories', () => {
+  const { notesDir, artifactsDir, outputDir } = fixtureRoot();
+  writeArtifact({
+    notesDir,
+    artifactsDir,
+    title: 'Unsafe Output',
+    body: '# Unsafe Output\n\nThe build should not clean an unmanaged folder.',
+  });
+  fs.mkdirSync(outputDir, { recursive: true });
+  fs.writeFileSync(path.join(outputDir, 'manual.md'), '# Manual content\n', 'utf8');
+
+  assert.throws(
+    () => compileSecondbrainWiki({ artifactsDir, outputDir }),
+    /Refusing to reset unmanaged generated wiki output directory/,
+  );
+  assert.equal(fs.readFileSync(path.join(outputDir, 'manual.md'), 'utf8'), '# Manual content\n');
+});
+
+test('resolveWikiBuildOptions defaults to visible wiki under configured vault', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-wiki-config-'));
+  const vaultDir = path.join(root, 'Vault');
+  const configPath = path.join(root, 'jarvos.config.json');
+  fs.writeFileSync(configPath, JSON.stringify({
+    paths: {
+      vault: vaultDir,
+    },
+  }));
+
+  const options = resolveWikiBuildOptions({
+    configPath,
+    homeDir: root,
+    env: {},
+  });
+
+  assert.equal(options.vaultDir, vaultDir);
+  assert.equal(options.artifactsDir, path.join(vaultDir, '.jarvos', 'knowledge', 'artifacts'));
+  assert.equal(options.outputDir, path.join(vaultDir, DEFAULT_WIKI_DIR_NAME));
+});
+
+test('resolveWikiBuildOptions expands tilde path overrides', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-wiki-home-'));
+  const options = resolveWikiBuildOptions({
+    homeDir: home,
+    env: {
+      JARVOS_VAULT_DIR: '~/Vault',
+      JARVOS_KNOWLEDGE_ARTIFACTS_DIR: '~/Vault/.jarvos/knowledge/artifacts',
+      JARVOS_GENERATED_WIKI_DIR: '~/Vault/Wiki',
+    },
+  });
+
+  assert.equal(options.vaultDir, path.join(home, 'Vault'));
+  assert.equal(options.artifactsDir, path.join(home, 'Vault', '.jarvos', 'knowledge', 'artifacts'));
+  assert.equal(options.outputDir, path.join(home, 'Vault', 'Wiki'));
+});
+
+test('generated wiki CLI builds pages and prints json summary', () => {
+  const { notesDir, artifactsDir, outputDir } = fixtureRoot();
+  writeArtifact({
+    notesDir,
+    artifactsDir,
+    title: 'CLI Build',
+    body: '# CLI Build\n\nCLI builds should produce generated wiki pages.',
+  });
+
+  const cliPath = path.join(__dirname, '..', 'packages', 'jarvos-secondbrain-wiki', 'src', 'index.js');
+  const result = spawnSync(process.execPath, [
+    cliPath,
+    '--artifacts-dir',
+    artifactsDir,
+    '--output-dir',
+    outputDir,
+    '--json',
+  ], {
+    encoding: 'utf8',
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  const summary = JSON.parse(result.stdout);
+  assert.equal(summary.artifacts, 1);
+  assert.equal(summary.sourcePages, 1);
+  assert.ok(fs.existsSync(path.join(outputDir, 'index.md')));
+  assert.ok(fs.existsSync(path.join(outputDir, MANAGED_OUTPUT_MARKER)));
 });

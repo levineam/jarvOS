@@ -4,6 +4,11 @@ Release sections describe user-facing jarvOS changes. Historical public-doc sync
 
 ## [Unreleased]
 
+### Added
+- Make generated LLM-wiki buildable as a visible, managed Markdown surface from
+  source-backed secondbrain sidecars, with safe rebuild guards and documented
+  vault/output defaults.
+
 ### Fixes
 - Prefer explicit jarvOS timezone config over ambient `TZ` so journal and note
   dates do not drift when shells or CI set generic timezone environment.
