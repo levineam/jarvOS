@@ -27,7 +27,7 @@ Status values:
 | GBrain | active | Curated structured recall for people, companies, projects, concepts, meetings, and sources. | Reviewed structured graph memory. jarvOS queues/imports curated, provenance-rich notes; GBrain does not replace the vault or QMD. |
 | OpenClaw memory-wiki | active | Runtime-native compiled wiki, diagnostics, and synthesis support. | Diagnostic/generated runtime layer. It is not the canonical GBrain import source and does not own authored notes. |
 | OpenClaw runtime memory | active | Session continuity, diary/dreaming, compaction recall, and runtime health. | Runtime continuity layer. It must not mirror itself into durable memory or overwrite canonical notes. |
-| generated LLM-wiki / secondbrain wiki | generated | Derived Markdown wiki pages compiled from source-backed sidecars. | Rebuildable retrieval artifact. Source notes, journals, and sidecars remain authoritative. |
+| generated LLM-wiki / secondbrain wiki | generated | Visible derived Markdown wiki pages compiled from source-backed sidecars. | Rebuildable retrieval and inspection artifact. Source notes, journals, and sidecars remain authoritative. The generated output is managed and marked as generated so it can be safely rebuilt without becoming editable truth. |
 | Paperclip | active | Live execution state for work that becomes tasks, blockers, reviews, and release evidence. | Project/task truth only. It is not long-form memory or the knowledge base. |
 | agentmemory | dogfood-optional | Optional local shared experience-memory sidecar for recent cross-agent observations. | Advisory only. It is not public-core, not durable truth, not live task state, and must not auto-promote into GBrain, Vault notes, Paperclip, ontology, or durable memory. |
 | Engraph | deferred | Potential future vault-native graph/retrieval backend. | Not production-integrated. It must stay behind the `qmd-plus-graph` / `qmd-plus-engraph` eval gate until a real adapter materially beats QMD plus generated LLM-wiki with source evidence. |
@@ -68,6 +68,8 @@ Active integrations should be proven through these public-safe signals:
 - `gbrain-import-queue.json` queues only privacy-eligible structured candidates
 - `memory-wiki-queue.json` records runtime wiki queue decisions
 - generated wiki tests prove pages are derived and rebuildable
+- generated wiki build output is visible as Markdown under the configured vault
+  root or explicit output directory, with a managed-output marker
 - retrieval evals compare `qmd-only`, `qmd-plus-llm-wiki`, and graph-style
   adapters with source evidence
 - release/readiness checks prevent public docs from presenting deferred or

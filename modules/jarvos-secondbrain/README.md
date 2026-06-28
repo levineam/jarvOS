@@ -49,6 +49,9 @@ The portable pattern is: **env var → `jarvos.config.json` / XDG config → hom
 | `JARVOS_TAGS_DIR` | Tags directory | `~/Vaults/<vault>/Tags` |
 | `CLAWD_DIR` | Root clawd workspace (for config discovery) | `~/clawd` |
 | `JARVOS_CONFIG_PATH` / `JARVOS_CONFIG_FILE` | Explicit config file path | unset |
+| `JARVOS_VAULT_DIR` | Vault root used to derive Notes, Journal, sidecars, and generated wiki defaults | `~/Vaults/Vault v3` |
+| `JARVOS_KNOWLEDGE_ARTIFACTS_DIR` | Knowledge sidecar artifacts consumed by generated wiki builds | `$JARVOS_VAULT_DIR/.jarvos/knowledge/artifacts` |
+| `JARVOS_GENERATED_WIKI_DIR` | Visible generated LLM-wiki output directory | `$JARVOS_VAULT_DIR/Generated Secondbrain Wiki` |
 
 Alternatively, set paths under `paths.*` in `jarvos.config.json`:
 ```json
@@ -145,3 +148,36 @@ See the public
 [secondbrain external integration inventory](https://github.com/levineam/jarvOS/blob/main/docs/architecture/secondbrain-external-integrations.md)
 for the status of Obsidian-compatible Markdown, QMD, GBrain, memory-wiki,
 generated LLM-wiki, agentmemory, Engraph, and related optional tools.
+
+## Generated LLM-wiki
+
+Generated LLM-wiki is the visible, rebuildable Markdown view over source-backed
+knowledge sidecars. It is useful for inspection, Obsidian navigation, and
+retrieval evals. It is not canonical memory: source notes, journals, provenance,
+and `.jarvos/knowledge` sidecars remain authoritative.
+
+Build it with:
+
+```bash
+npm run wiki:build
+```
+
+By default, the build reads artifacts from
+`$JARVOS_VAULT_DIR/.jarvos/knowledge/artifacts` and writes generated Markdown
+under `$JARVOS_VAULT_DIR/Generated Secondbrain Wiki`. Both locations can be
+overridden:
+
+```bash
+npm run wiki:build -- \
+  --artifacts-dir "$JARVOS_KNOWLEDGE_ARTIFACTS_DIR" \
+  --output-dir "$JARVOS_GENERATED_WIKI_DIR"
+```
+
+The output directory is marked with `.jarvos-generated-wiki.json`. Rebuilds clean
+only the generated `concepts/`, `sources/`, `daily/`, and `index.md` surfaces
+inside that managed directory. A nonempty unmanaged output directory fails
+closed so jarvOS cannot accidentally clean a user's unrelated vault folder.
+
+When manually-created Obsidian notes need to enter the secondbrain stack, run
+manual note maintenance first so the notes have sidecars, then run
+`npm run wiki:build` to refresh the visible generated wiki.
