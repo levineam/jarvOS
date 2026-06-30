@@ -32,6 +32,28 @@ function partText(part: any) {
   return '';
 }
 
+// Render assistant markdown using the marked + DOMPurify globals already loaded
+// on the page (same pipeline the rest of the app uses in static/app.js). Returns
+// sanitized HTML, or '' if the libs are unavailable so callers can fall back to
+// plain text.
+function renderMarkdown(text: string): string {
+  const marked = (window as any).marked;
+  const DOMPurify = (window as any).DOMPurify;
+  if (!marked || !DOMPurify) return '';
+  const parse = typeof marked.parse === 'function' ? marked.parse : marked;
+  return DOMPurify.sanitize(parse(text, { mangle: false, headerIds: false }));
+}
+
+// Assistant text is markdown; user text is shown verbatim. React escapes the
+// plain-text branch, and DOMPurify sanitizes the markdown branch.
+function MessageText({ text, role }: { text: string; role: string }) {
+  if (role === 'assistant') {
+    const html = renderMarkdown(text);
+    if (html) return <div className="md" dangerouslySetInnerHTML={{ __html: html }} />;
+  }
+  return <p>{text}</p>;
+}
+
 function ActivityPart({ part, onApprove, onDeny }: { part: any; onApprove: (id: string) => void; onDeny: (id: string) => void }) {
   if (!String(part.type || '').startsWith('tool-')) return null;
   const name = part.type.replace(/^tool-/, '').replace(/_/g, ' ');
@@ -244,7 +266,7 @@ function ChatApp() {
               <div className="msg-body">
                 {(message.parts || []).map((part: any, index: number) => {
                   const text = partText(part);
-                  if (text) return <p key={index}>{text}</p>;
+                  if (text) return <MessageText key={index} text={text} role={message.role} />;
                   return <ActivityPart key={index} part={part} onApprove={(id) => approve(id, true)} onDeny={(id) => approve(id, false)} />;
                 })}
               </div>
