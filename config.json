@@ -17,8 +17,9 @@
     "authFile": "~/.paperclip/auth.json"
   },
   "whisper": {
-    "binary": "",
-    "model": "",
+    "binary": "whisper-cli",
+    "ffmpeg": "ffmpeg",
+    "model": "~/.cache/whisper.cpp/ggml-base.en.bin",
     "args": [],
     "timeoutMs": 60000
   },

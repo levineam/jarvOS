@@ -6,14 +6,38 @@ const path = require('path');
 const { spawn } = require('child_process');
 const { httpError } = require('../http-utils');
 
+// Resolve a command to an executable path: a path-bearing value is checked
+// directly; a bare name (e.g. "whisper-cli") is looked up on PATH so the
+// availability check works for PATH-installed binaries, not just absolute paths.
+function resolveOnPath(cmd) {
+  if (!cmd) return null;
+  if (cmd.includes('/')) return fs.existsSync(cmd) ? cmd : null;
+  for (const dir of (process.env.PATH || '').split(path.delimiter)) {
+    if (!dir) continue;
+    const full = path.join(dir, cmd);
+    try {
+      fs.accessSync(full, fs.constants.X_OK);
+      return full;
+    } catch {
+      /* not here */
+    }
+  }
+  return null;
+}
+
 function voiceStatus(cfg) {
   const whisper = cfg.whisper || {};
   const binary = whisper.binary;
   const model = whisper.model;
+  const ffmpeg = whisper.ffmpeg || 'ffmpeg';
+  const binaryOk = Boolean(resolveOnPath(binary));
+  const modelOk = Boolean(model && fs.existsSync(model));
+  const ffmpegOk = Boolean(resolveOnPath(ffmpeg));
   return {
-    available: Boolean(binary && model && fs.existsSync(binary) && fs.existsSync(model)),
+    available: binaryOk && modelOk && ffmpegOk,
     binaryConfigured: Boolean(binary),
     modelConfigured: Boolean(model),
+    ffmpegAvailable: ffmpegOk,
   };
 }
 
@@ -35,37 +59,49 @@ function readRequestBuffer(req, { limit = 25 * 1024 * 1024 } = {}) {
   });
 }
 
+function run(command, args, timeoutMs) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, { timeout: timeoutMs });
+    let stderr = '';
+    child.stderr.on('data', (chunk) => { stderr += chunk; });
+    child.on('error', reject);
+    child.on('close', (code) => {
+      if (code !== 0) return reject(httpError(500, stderr.trim() || `${command} exited ${code}`));
+      resolve();
+    });
+  });
+}
+
 async function transcribe(req, cfg) {
   const status = voiceStatus(cfg);
   if (!status.available) {
-    return { available: false, text: '', reason: 'whisper.cpp binary/model is not configured or missing' };
+    return { available: false, text: '', reason: 'whisper.cpp binary/model/ffmpeg is not configured or missing' };
   }
   const audio = await readRequestBuffer(req);
   if (!audio.length) throw httpError(400, 'audio body required');
 
+  const whisper = cfg.whisper;
+  const timeoutMs = whisper.timeoutMs || 60_000;
+  const ffmpeg = whisper.ffmpeg || 'ffmpeg';
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-voice-'));
   const audioPath = path.join(dir, 'audio.webm');
+  const wavPath = path.join(dir, 'audio.wav');
+  const outBase = path.join(dir, 'out');
   try {
     fs.writeFileSync(audioPath, audio);
 
-    const whisper = cfg.whisper;
-    const args = [...(whisper.args || []), '-m', whisper.model, '-f', audioPath, '-otxt'];
-    const output = await new Promise((resolve, reject) => {
-      const child = spawn(whisper.binary, args, { timeout: whisper.timeoutMs || 60_000 });
-      let stdout = '';
-      let stderr = '';
-      child.stdout.on('data', (chunk) => { stdout += chunk; });
-      child.stderr.on('data', (chunk) => { stderr += chunk; });
-      child.on('error', reject);
-      child.on('close', (code) => {
-        if (code !== 0) return reject(httpError(500, stderr || `whisper exited ${code}`));
-        resolve(stdout);
-      });
-    });
-    return { available: true, text: output.trim() };
+    // whisper.cpp needs 16 kHz mono PCM WAV; the mic posts webm/opus.
+    await run(ffmpeg, ['-hide_banner', '-loglevel', 'error', '-y', '-i', audioPath, '-ar', '16000', '-ac', '1', wavPath], timeoutMs);
+
+    // -otxt -of <base> writes <base>.txt with the plain transcription (no timestamps).
+    const args = [...(whisper.args || []), '-m', whisper.model, '-f', wavPath, '-otxt', '-of', outBase];
+    await run(whisper.binary, args, timeoutMs);
+
+    const text = fs.readFileSync(`${outBase}.txt`, 'utf8').trim();
+    return { available: true, text };
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
 }
 
-module.exports = { voiceStatus, transcribe };
+module.exports = { voiceStatus, transcribe, resolveOnPath };

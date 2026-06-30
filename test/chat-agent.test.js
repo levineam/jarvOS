@@ -116,11 +116,53 @@ test('provider model and reasoning effort mapping are bounded', () => {
   assert.throws(() => providers.parseModelId('openai:gpt-4o'), /unknown model/);
 });
 
-test('failed transcription removes temp audio', async () => {
+function writeExec(dir, name, body) {
+  const p = path.join(dir, name);
+  fs.writeFileSync(p, body);
+  fs.chmodSync(p, 0o755);
+  return p;
+}
+// Stubs stand in for ffmpeg/whisper-cli so the pipeline is testable without them.
+const FAKE_FFMPEG = '#!/bin/sh\nfor a; do out="$a"; done\nprintf wav > "$out"\n';
+const FAKE_WHISPER_OK = '#!/bin/sh\nof=""\nwhile [ $# -gt 0 ]; do [ "$1" = "-of" ] && of="$2"; shift; done\nprintf "hello world" > "$of.txt"\n';
+const FAKE_WHISPER_FAIL = '#!/bin/sh\necho boom >&2\nexit 2\n';
+
+function stubWhisper(dir, whisperBody) {
+  const model = path.join(dir, 'model.bin');
+  fs.writeFileSync(model, 'm');
+  return {
+    binary: writeExec(dir, 'fake-whisper', whisperBody),
+    ffmpeg: writeExec(dir, 'fake-ffmpeg', FAKE_FFMPEG),
+    model,
+    timeoutMs: 5_000,
+  };
+}
+
+test('voice unavailable when binary/model/ffmpeg missing', async () => {
+  const whisper = { binary: '', model: '', ffmpeg: '/nope/ffmpeg' };
+  assert.equal(transcribe.voiceStatus({ whisper }).available, false);
+  const result = await transcribe.transcribe(Readable.from([Buffer.from('x')]), { whisper });
+  assert.equal(result.available, false);
+  assert.match(result.reason, /not configured or missing/);
+});
+
+test('transcription runs ffmpeg then whisper and returns the .txt text', async () => {
+  const whisper = stubWhisper(tempDir(), FAKE_WHISPER_OK);
+  assert.equal(transcribe.voiceStatus({ whisper }).available, true);
+  const result = await transcribe.transcribe(Readable.from([Buffer.from('audio bytes')]), { whisper });
+  assert.equal(result.available, true);
+  assert.equal(result.text, 'hello world');
+});
+
+test('empty audio upload is rejected', async () => {
+  const whisper = stubWhisper(tempDir(), FAKE_WHISPER_OK);
+  await assert.rejects(() => transcribe.transcribe(Readable.from([]), { whisper }), /audio body required/);
+});
+
+test('failed transcription surfaces the error and removes temp audio', async () => {
   const root = tempDir();
   const targetDir = path.join(root, 'jarvos-voice-fixed');
-  const model = path.join(root, 'model.bin');
-  fs.writeFileSync(model, 'test model');
+  const whisper = stubWhisper(root, FAKE_WHISPER_FAIL);
 
   const originalMkdtemp = fs.mkdtempSync;
   fs.mkdtempSync = (prefix) => {
@@ -128,19 +170,10 @@ test('failed transcription removes temp audio', async () => {
     fs.mkdirSync(targetDir);
     return targetDir;
   };
-
   try {
-    const req = Readable.from([Buffer.from('private voice bytes')]);
     await assert.rejects(
-      () => transcribe.transcribe(req, {
-        whisper: {
-          binary: process.execPath,
-          model,
-          args: ['-e', 'process.exit(2)'],
-          timeoutMs: 5_000,
-        },
-      }),
-      /bad option: -m|whisper exited 2/,
+      () => transcribe.transcribe(Readable.from([Buffer.from('audio bytes')]), { whisper }),
+      /boom|exited 2/,
     );
     assert.equal(fs.existsSync(targetDir), false);
   } finally {
