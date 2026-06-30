@@ -6,8 +6,8 @@
 }
 
 .chat-main {
-  display: grid;
-  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  display: flex;
+  flex-direction: column;
   min-width: 0;
 }
 
@@ -94,31 +94,52 @@
   display: flex;
   flex-direction: column;
   gap: 14px;
+  flex: 1;
   min-height: 0;
   overflow-y: auto;
   padding-right: 6px;
 }
 
 .msg {
-  display: grid;
-  grid-template-columns: 74px minmax(0, 1fr);
-  gap: 12px;
-  padding: 13px 0;
-  border-bottom: 1px solid var(--line-soft);
+  display: flex;
+  max-width: 100%;
 }
 
-.msg-role {
-  font-family: var(--mono);
-  font-size: 10px;
-  color: var(--ink-faint);
-  text-transform: uppercase;
-  letter-spacing: .11em;
+.msg-body {
+  max-width: 82%;
+  border-radius: 16px;
+  padding: 11px 15px;
+  line-height: 1.6;
+}
+
+/* User: right-aligned amber-tinted bubble */
+.msg.user {
+  justify-content: flex-end;
+}
+
+.msg.user .msg-body {
+  background: rgba(232, 176, 75, .13);
+  border: 1px solid rgba(232, 176, 75, .22);
+  color: var(--ink);
+  border-bottom-right-radius: 5px;
+}
+
+/* Assistant: left-aligned soft card bubble */
+.msg.assistant .msg-body,
+.msg.system .msg-body {
+  background: var(--bg-card);
+  border: 1px solid var(--line-soft);
+  color: var(--ink);
+  border-bottom-left-radius: 5px;
 }
 
 .msg-body p {
   margin: 0 0 10px;
-  line-height: 1.6;
   white-space: pre-wrap;
+}
+
+.msg-body p:last-child {
+  margin-bottom: 0;
 }
 
 .activity-card {
@@ -170,33 +191,89 @@
   margin-top: 10px;
 }
 
+/* Composer: one rounded input card with controls tucked inside */
 .composer {
-  display: grid;
-  grid-template-columns: 130px 110px 34px minmax(0, 1fr) 78px;
-  gap: 8px;
-  align-items: end;
-  padding-top: 14px;
+  margin-top: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  background: var(--bg-card);
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  padding: 12px 14px 10px;
+  transition: border-color .15s ease, box-shadow .15s ease;
+}
+
+.composer:focus-within {
+  border-color: rgba(232, 176, 75, .5);
+  box-shadow: 0 0 0 3px rgba(232, 176, 75, .08);
 }
 
 .composer textarea {
-  min-height: 46px;
-  max-height: 130px;
-  resize: vertical;
-}
-
-.composer select,
-.composer textarea,
-.settings-popover input {
-  background: var(--bg-card);
-  border: 1px solid var(--line);
-  border-radius: 8px;
+  width: 100%;
+  min-height: 26px;
+  max-height: 200px;
+  resize: none;
+  field-sizing: content;
+  background: transparent;
+  border: 0;
   color: var(--ink);
-  font: 13px var(--sans);
-  padding: 10px;
+  font: 15px/1.55 var(--sans);
+  padding: 4px 2px;
   outline: none;
 }
 
-.composer button,
+.composer textarea::placeholder { color: var(--ink-faint); }
+
+.composer-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.composer-controls {
+  display: flex;
+  gap: 6px;
+  min-width: 0;
+}
+
+.composer-controls select {
+  background: transparent;
+  border: 1px solid var(--line-soft);
+  border-radius: 999px;
+  color: var(--ink-dim);
+  font: 12px var(--sans);
+  padding: 5px 10px;
+  outline: none;
+  cursor: pointer;
+}
+
+.composer-controls select:hover { color: var(--ink); border-color: var(--line); }
+
+.composer-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.icon-btn.round { border-radius: 999px; width: 36px; height: 36px; }
+
+.send-btn {
+  width: 36px;
+  height: 36px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--amber);
+  color: #111318;
+  font-size: 16px;
+  font-weight: 700;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
 .approval-actions button,
 .settings-popover button {
   background: var(--amber);
@@ -209,9 +286,19 @@
   cursor: pointer;
 }
 
-.composer button:disabled,
+.settings-popover input {
+  background: var(--bg-card);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--ink);
+  font: 13px var(--sans);
+  padding: 10px;
+  outline: none;
+}
+
+.send-btn:disabled,
 .icon-btn:disabled {
-  opacity: .45;
+  opacity: .4;
   cursor: not-allowed;
 }
 
@@ -269,11 +356,11 @@
 }
 
 @media (max-width: 760px) {
-  .composer {
-    grid-template-columns: 1fr 1fr 34px;
+  .composer-controls select {
+    padding: 5px 8px;
+    font-size: 11px;
   }
-  .composer textarea,
-  .composer button:last-child {
-    grid-column: 1 / -1;
+  .msg-body {
+    max-width: 92%;
   }
 }
