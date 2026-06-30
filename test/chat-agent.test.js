@@ -181,6 +181,27 @@ test('failed transcription surfaces the error and removes temp audio', async () 
   }
 });
 
+test('whisper exiting 0 without output is surfaced as an error', async () => {
+  const whisper = stubWhisper(tempDir(), '#!/bin/sh\nexit 0\n');
+  await assert.rejects(
+    () => transcribe.transcribe(Readable.from([Buffer.from('audio bytes')]), { whisper }),
+    /produced no output/,
+  );
+});
+
+test('resolveOnPath resolves a bare command name via PATH', () => {
+  const dir = tempDir();
+  writeExec(dir, 'fake-on-path', '#!/bin/sh\n');
+  const originalPath = process.env.PATH;
+  process.env.PATH = `${dir}${path.delimiter}${originalPath}`;
+  try {
+    assert.equal(transcribe.resolveOnPath('fake-on-path'), path.join(dir, 'fake-on-path'));
+    assert.equal(transcribe.resolveOnPath('definitely-not-a-real-binary-xyz'), null);
+  } finally {
+    process.env.PATH = originalPath;
+  }
+});
+
 test('Chat is first nav item and default route', () => {
   const index = fs.readFileSync(path.join(__dirname, '..', 'static', 'index.html'), 'utf8');
   const app = fs.readFileSync(path.join(__dirname, '..', 'static', 'app.js'), 'utf8');

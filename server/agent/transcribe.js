@@ -11,7 +11,14 @@ const { httpError } = require('../http-utils');
 // availability check works for PATH-installed binaries, not just absolute paths.
 function resolveOnPath(cmd) {
   if (!cmd) return null;
-  if (cmd.includes('/')) return fs.existsSync(cmd) ? cmd : null;
+  if (cmd.includes('/')) {
+    try {
+      fs.accessSync(cmd, fs.constants.X_OK);
+      return cmd;
+    } catch {
+      return null;
+    }
+  }
   for (const dir of (process.env.PATH || '').split(path.delimiter)) {
     if (!dir) continue;
     const full = path.join(dir, cmd);
@@ -61,7 +68,10 @@ function readRequestBuffer(req, { limit = 25 * 1024 * 1024 } = {}) {
 
 function run(command, args, timeoutMs) {
   return new Promise((resolve, reject) => {
-    const child = spawn(command, args, { timeout: timeoutMs });
+    // stdout is ignored so a chatty child can't deadlock on a full OS pipe:
+    // whisper-cli prints the transcription to stdout, but we read the -otxt
+    // file, not stdout. stderr stays piped for error reporting.
+    const child = spawn(command, args, { stdio: ['ignore', 'ignore', 'pipe'], timeout: timeoutMs });
     let stderr = '';
     child.stderr.on('data', (chunk) => { stderr += chunk; });
     child.on('error', reject);
@@ -97,7 +107,9 @@ async function transcribe(req, cfg) {
     const args = [...(whisper.args || []), '-m', whisper.model, '-f', wavPath, '-otxt', '-of', outBase];
     await run(whisper.binary, args, timeoutMs);
 
-    const text = fs.readFileSync(`${outBase}.txt`, 'utf8').trim();
+    const outFile = `${outBase}.txt`;
+    if (!fs.existsSync(outFile)) throw httpError(500, 'transcription produced no output');
+    const text = fs.readFileSync(outFile, 'utf8').trim();
     return { available: true, text };
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });

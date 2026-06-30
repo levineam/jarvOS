@@ -137,6 +137,7 @@ function ChatApp() {
   const [settings, setSettings] = useState<Settings | null>(null);
   const [input, setInput] = useState('');
   const [voiceState, setVoiceState] = useState<'idle' | 'recording' | 'working'>('idle');
+  const [voiceError, setVoiceError] = useState('');
   const [recorder, setRecorder] = useState<MediaRecorder | null>(null);
 
   const transport = useMemo(() => new DefaultChatTransport({
@@ -187,7 +188,16 @@ function ChatApp() {
       return;
     }
     if (!settings?.voice?.available) return;
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    let stream: MediaStream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    } catch (err: any) {
+      // Denied/unavailable mic: surface it instead of leaving an unhandled rejection.
+      setVoiceError(err?.message || 'Microphone unavailable');
+      setVoiceState('idle');
+      return;
+    }
+    setVoiceError('');
     const chunks: Blob[] = [];
     const next = new MediaRecorder(stream);
     next.ondataavailable = (event) => event.data.size && chunks.push(event.data);
@@ -198,6 +208,8 @@ function ChatApp() {
         const blob = new Blob(chunks, { type: 'audio/webm' });
         const data = await api<{ text: string }>('/api/transcribe', { method: 'POST', body: blob });
         setInput((current) => [current, data.text].filter(Boolean).join(' ').trim());
+      } catch (err: any) {
+        setVoiceError(err?.message || 'Transcription failed');
       } finally {
         setVoiceState('idle');
       }
@@ -264,7 +276,7 @@ function ChatApp() {
               </select>
             </div>
             <div className="composer-actions">
-              <button type="button" className="icon-btn round" disabled={!settings?.voice?.available || voiceState === 'working'} onClick={toggleMic} title={settings?.voice?.available ? 'Dictate' : 'Voice unavailable'}>
+              <button type="button" className="icon-btn round" disabled={!settings?.voice?.available || voiceState === 'working'} onClick={toggleMic} aria-label={settings?.voice?.available ? 'Dictate' : 'Voice unavailable'} title={settings?.voice?.available ? 'Dictate' : 'Voice unavailable'}>
                 {voiceState === 'recording' ? '■' : '◉'}
               </button>
               {status === 'streaming' || status === 'submitted'
@@ -272,6 +284,7 @@ function ChatApp() {
                 : <button type="button" className="send-btn" disabled={!settings?.hasKey || !input.trim()} onClick={submit} aria-label="Send">↑</button>}
             </div>
           </div>
+          {voiceError && <div className="chat-error">{voiceError}</div>}
         </footer>
       </section>
       <RightPanel pending={pendingApprovals} onApprove={(id) => approve(id, true)} onDeny={(id) => approve(id, false)} />
