@@ -1,5 +1,6 @@
 'use strict';
 
+const crypto = require('crypto');
 const credentials = require('./credentials');
 const providers = require('./providers');
 const { createReadTools } = require('./tools/read');
@@ -14,6 +15,11 @@ const GATED_TOOLS = {
   update_paperclip_issue: 'user-approval',
   dispatch_runtime: 'user-approval',
 };
+
+const TOOL_APPROVAL_SECRET =
+  process.env.JARVOS_TOOL_APPROVAL_SECRET ||
+  process.env.TOOL_APPROVAL_SECRET ||
+  crypto.randomBytes(32);
 
 function instructions() {
   return [
@@ -39,6 +45,7 @@ async function buildAgent(cfg, { modelId, apiKey }) {
     instructions: instructions(),
     tools: { ...readTools, ...writeTools, ...dispatchTools },
     toolApproval: GATED_TOOLS,
+    experimental_toolApprovalSecret: TOOL_APPROVAL_SECRET,
     stopWhen: stepCountIs(20),
   });
 }

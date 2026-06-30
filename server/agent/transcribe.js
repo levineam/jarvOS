@@ -45,24 +45,27 @@ async function transcribe(req, cfg) {
 
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-voice-'));
   const audioPath = path.join(dir, 'audio.webm');
-  fs.writeFileSync(audioPath, audio);
+  try {
+    fs.writeFileSync(audioPath, audio);
 
-  const whisper = cfg.whisper;
-  const args = [...(whisper.args || []), '-m', whisper.model, '-f', audioPath, '-otxt'];
-  const output = await new Promise((resolve, reject) => {
-    const child = spawn(whisper.binary, args, { timeout: whisper.timeoutMs || 60_000 });
-    let stdout = '';
-    let stderr = '';
-    child.stdout.on('data', (chunk) => { stdout += chunk; });
-    child.stderr.on('data', (chunk) => { stderr += chunk; });
-    child.on('error', reject);
-    child.on('close', (code) => {
-      if (code !== 0) return reject(httpError(500, stderr || `whisper exited ${code}`));
-      resolve(stdout);
+    const whisper = cfg.whisper;
+    const args = [...(whisper.args || []), '-m', whisper.model, '-f', audioPath, '-otxt'];
+    const output = await new Promise((resolve, reject) => {
+      const child = spawn(whisper.binary, args, { timeout: whisper.timeoutMs || 60_000 });
+      let stdout = '';
+      let stderr = '';
+      child.stdout.on('data', (chunk) => { stdout += chunk; });
+      child.stderr.on('data', (chunk) => { stderr += chunk; });
+      child.on('error', reject);
+      child.on('close', (code) => {
+        if (code !== 0) return reject(httpError(500, stderr || `whisper exited ${code}`));
+        resolve(stdout);
+      });
     });
-  });
-  fs.rmSync(dir, { recursive: true, force: true });
-  return { available: true, text: output.trim() };
+    return { available: true, text: output.trim() };
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 }
 
 module.exports = { voiceStatus, transcribe };

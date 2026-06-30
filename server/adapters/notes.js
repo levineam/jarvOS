@@ -71,9 +71,10 @@ function list(notesDir, { limit = 60, q = '' } = {}) {
 
 // Resolve a note by exact title, then case-insensitive, then prefix.
 function resolve(notesDir, title) {
-  const exact = path.join(notesDir, `${title}.md`);
+  const safeTitle = assertSafeTitle(title);
+  const exact = path.join(notesDir, `${safeTitle}.md`);
   if (fs.existsSync(exact)) return exact;
-  const lower = title.toLowerCase();
+  const lower = safeTitle.toLowerCase();
   const all = fs.readdirSync(notesDir).filter((f) => f.endsWith('.md'));
   const ci = all.find((f) => f.slice(0, -3).toLowerCase() === lower);
   if (ci) return path.join(notesDir, ci);
@@ -125,4 +126,4 @@ function recent(notesDir, { limit = 8, sinceHours = 72 } = {}) {
     .map((f) => ({ title: f.title, modified: f.modified.toISOString() }));
 }
 
-module.exports = { list, read, recent, create, resolve, stripMarkdown };
+module.exports = { list, read, recent, create, resolve, stripMarkdown, assertSafeTitle };

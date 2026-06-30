@@ -5,6 +5,7 @@ const fs = require('node:fs');
 const http = require('node:http');
 const os = require('node:os');
 const path = require('node:path');
+const { Readable } = require('node:stream');
 const test = require('node:test');
 
 const notes = require('../server/adapters/notes');
@@ -12,6 +13,7 @@ const journal = require('../server/adapters/journal');
 const paperclip = require('../server/adapters/paperclip');
 const credentials = require('../server/agent/credentials');
 const providers = require('../server/agent/providers');
+const transcribe = require('../server/agent/transcribe');
 
 function tempDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-chat-test-'));
@@ -24,6 +26,19 @@ test('note creation is additive and blocks path traversal', () => {
   assert.equal(fs.readFileSync(path.join(dir, 'Meeting Notes.md'), 'utf8'), '# Meeting\n');
   assert.throws(() => notes.create(dir, '../escape', 'bad'), /path separators/);
   assert.throws(() => notes.create(dir, 'Meeting Notes', 'again'), /already exists/);
+});
+
+test('note reads block path traversal', () => {
+  const root = tempDir();
+  const notesDir = path.join(root, 'Notes');
+  const journalDir = path.join(root, 'Journal');
+  fs.mkdirSync(notesDir);
+  fs.mkdirSync(journalDir);
+  fs.writeFileSync(path.join(notesDir, 'Project.md'), '# Project\n');
+  fs.writeFileSync(path.join(journalDir, '2026-06-29.md'), '# private journal\n');
+
+  assert.equal(notes.read(notesDir, 'Project').title, 'Project');
+  assert.throws(() => notes.read(notesDir, '../Journal/2026-06-29'), /path separators/);
 });
 
 test('journal append only adds bullets and preserves existing content', () => {
@@ -99,6 +114,38 @@ test('provider model and reasoning effort mapping are bounded', () => {
     openai: { reasoningEffort: 'low' },
   });
   assert.throws(() => providers.parseModelId('openai:gpt-4o'), /unknown model/);
+});
+
+test('failed transcription removes temp audio', async () => {
+  const root = tempDir();
+  const targetDir = path.join(root, 'jarvos-voice-fixed');
+  const model = path.join(root, 'model.bin');
+  fs.writeFileSync(model, 'test model');
+
+  const originalMkdtemp = fs.mkdtempSync;
+  fs.mkdtempSync = (prefix) => {
+    assert.match(prefix, /jarvos-voice-/);
+    fs.mkdirSync(targetDir);
+    return targetDir;
+  };
+
+  try {
+    const req = Readable.from([Buffer.from('private voice bytes')]);
+    await assert.rejects(
+      () => transcribe.transcribe(req, {
+        whisper: {
+          binary: process.execPath,
+          model,
+          args: ['-e', 'process.exit(2)'],
+          timeoutMs: 5_000,
+        },
+      }),
+      /bad option: -m|whisper exited 2/,
+    );
+    assert.equal(fs.existsSync(targetDir), false);
+  } finally {
+    fs.mkdtempSync = originalMkdtemp;
+  }
 });
 
 test('Chat is first nav item and default route', () => {
