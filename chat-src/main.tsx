@@ -229,7 +229,6 @@ function ChatApp() {
           {messages.length === 0 && <div className="empty-chat">Ask about your journal, notes, memory, ontology, or Paperclip work.</div>}
           {messages.map((message: any) => (
             <article className={`msg ${message.role}`} key={message.id}>
-              <div className="msg-role">{message.role}</div>
               <div className="msg-body">
                 {(message.parts || []).map((part: any, index: number) => {
                   const text = partText(part);
@@ -243,15 +242,6 @@ function ChatApp() {
         </div>
 
         <footer className="composer">
-          <select value={modelId} onChange={(e) => setModelId(e.target.value)} aria-label="Model">
-            {models.map((model) => <option key={model.id} value={model.id}>{model.label}</option>)}
-          </select>
-          <select value={reasoningEffort} onChange={(e) => setReasoningEffort(e.target.value)} aria-label="Thinking level">
-            {['minimal', 'low', 'medium', 'high'].map((effort) => <option key={effort} value={effort}>{effort}</option>)}
-          </select>
-          <button type="button" className="icon-btn" disabled={!settings?.voice?.available || voiceState === 'working'} onClick={toggleMic} title={settings?.voice?.available ? 'Dictate' : 'Voice unavailable'}>
-            {voiceState === 'recording' ? '■' : '◉'}
-          </button>
           <textarea
             value={input}
             onChange={(e) => setInput(e.target.value)}
@@ -261,11 +251,27 @@ function ChatApp() {
                 submit();
               }
             }}
-            placeholder="Ask jarvOS..."
+            placeholder="Ask jarvOS…"
+            rows={1}
           />
-          {status === 'streaming' || status === 'submitted'
-            ? <button type="button" onClick={stop}>Stop</button>
-            : <button type="button" disabled={!settings?.hasKey || !input.trim()} onClick={submit}>Send</button>}
+          <div className="composer-bar">
+            <div className="composer-controls">
+              <select value={modelId} onChange={(e) => setModelId(e.target.value)} aria-label="Model">
+                {models.map((model) => <option key={model.id} value={model.id}>{model.label}</option>)}
+              </select>
+              <select value={reasoningEffort} onChange={(e) => setReasoningEffort(e.target.value)} aria-label="Thinking level">
+                {['minimal', 'low', 'medium', 'high'].map((effort) => <option key={effort} value={effort}>thinking: {effort}</option>)}
+              </select>
+            </div>
+            <div className="composer-actions">
+              <button type="button" className="icon-btn round" disabled={!settings?.voice?.available || voiceState === 'working'} onClick={toggleMic} title={settings?.voice?.available ? 'Dictate' : 'Voice unavailable'}>
+                {voiceState === 'recording' ? '■' : '◉'}
+              </button>
+              {status === 'streaming' || status === 'submitted'
+                ? <button type="button" className="send-btn" onClick={stop} aria-label="Stop">■</button>
+                : <button type="button" className="send-btn" disabled={!settings?.hasKey || !input.trim()} onClick={submit} aria-label="Send">↑</button>}
+            </div>
+          </div>
         </footer>
       </section>
       <RightPanel pending={pendingApprovals} onApprove={(id) => approve(id, true)} onDeny={(id) => approve(id, false)} />
