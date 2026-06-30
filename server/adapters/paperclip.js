@@ -21,20 +21,30 @@ function readToken(cfg) {
   }
 }
 
-async function api(cfg, route) {
+async function request(cfg, route, { method = 'GET', body, companyScoped = true, cacheable = method === 'GET' } = {}) {
   const key = route;
-  const hit = cache.get(key);
+  const hit = cacheable ? cache.get(key) : null;
   if (hit && Date.now() - hit.at < CACHE_TTL_MS) return hit.value;
   const token = readToken(cfg);
   if (!token) throw new Error('No Paperclip credential (auth file or PAPERCLIP_BOARD_TOKEN)');
-  const res = await fetch(`${cfg.url}/api/companies/${cfg.companyId}${route}`, {
-    headers: { Authorization: `Bearer ${token}` },
+  const prefix = companyScoped ? `/api/companies/${cfg.companyId}` : '/api';
+  const res = await fetch(`${cfg.url}${prefix}${route}`, {
+    method,
+    headers: {
+      Authorization: `Bearer ${token}`,
+      ...(body ? { 'Content-Type': 'application/json' } : {}),
+    },
+    body: body ? JSON.stringify(body) : undefined,
     signal: AbortSignal.timeout(8000),
   });
   if (!res.ok) throw new Error(`Paperclip ${route} -> ${res.status}`);
   const value = await res.json();
-  cache.set(key, { at: Date.now(), value });
+  if (cacheable) cache.set(key, { at: Date.now(), value });
   return value;
+}
+
+async function api(cfg, route) {
+  return request(cfg, route);
 }
 
 function unwrap(payload, ...keys) {
@@ -123,4 +133,21 @@ async function ping(cfg) {
   }
 }
 
-module.exports = { issues, issueDetail, agents, activity, projects, ping };
+async function createIssue(cfg, payload) {
+  const created = await request(cfg, '/issues', { method: 'POST', body: payload, cacheable: false });
+  cache.clear();
+  return created.issue || created.data || created;
+}
+
+async function updateIssue(cfg, id, payload) {
+  const updated = await request(cfg, `/issues/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    body: payload,
+    companyScoped: false,
+    cacheable: false,
+  });
+  cache.clear();
+  return updated.issue || updated.data || updated;
+}
+
+module.exports = { issues, issueDetail, agents, activity, projects, ping, createIssue, updateIssue, readToken };

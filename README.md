@@ -13,6 +13,7 @@ does not invent its own database.
 
 | Page | Layer | Source |
 | --- | --- | --- |
+| **Chat** | Interactive agent | Server-side AI SDK agent over local jarvOS tools; write actions require approval |
 | **Today** | Control room | Composed brief: journal + Paperclip + recent notes. What's moving, what needs you, what shipped. |
 | **Journal** | Daily trail | `Vault/Journal/YYYY-MM-DD.md`, newest first, parsed into sections |
 | **Notes** | Durable knowledge | `Vault/Notes/*.md` — search, reader, wikilinks, CriticMarkup rendering |
@@ -30,6 +31,11 @@ npm run serve            # http://127.0.0.1:4807
 # as a desktop app
 npm install              # first time only (pulls Electron)
 npm run desktop
+
+# verify
+npm run build
+npm test
+npm run smoke
 ```
 
 The Electron shell boots the server in-process; if a server is already running
@@ -50,6 +56,7 @@ no telemetry, all assets vendored (fonts, markdown renderer, sanitizer).
 
 ```
 server/            zero-dependency Node HTTP server
+  agent/           AI SDK ToolLoopAgent, tools, credentials, transcription
   config.js        loads config.json, expands ~
   today.js         composes the Today brief (deterministic, no LLM)
   adapters/
@@ -60,6 +67,8 @@ server/            zero-dependency Node HTTP server
     memory.js      MEMORY.md + daily memory files
     health.js      service checks
 static/            single-page UI, vanilla JS, vendored assets
+  chat/            Vite-built React chat island
+chat-src/          Chat source (React + AI SDK useChat)
 electron/main.js   thin desktop shell
 config.json        all paths/endpoints — edit to point at your own setup
 ```
@@ -71,12 +80,20 @@ config.json        all paths/endpoints — edit to point at your own setup
   in `adapterConfig` never reach the browser.
 - All rendered markdown is sanitized with DOMPurify (journal content is partly
   agent-written).
-- Read-only: the app writes nothing to the vault, Paperclip, or memory.
+- The Chat agent keeps model calls and the OpenAI key server-side. In Electron,
+  saved keys are encrypted with `safeStorage`; in browser serve mode use
+  `OPENAI_API_KEY`.
+- Read tools run automatically. Creating notes, appending journal entries,
+  mutating Paperclip, and dispatching OpenClaw work are approval-gated before
+  execution.
+- Vault writes are additive only in v1: new notes or appended journal bullets.
 
 ## Known prototype limits
 
-- No write actions yet (capture box, issue transitions, approvals are the
-  obvious next step).
+- Voice dictation requires a configured local whisper.cpp binary and model in
+  `config.json`; when absent, text chat still works.
+- The Chat bundle is intentionally isolated from the vanilla pages, but it is a
+  larger React/AI island and can be code-split later.
 - The Today brief is deterministic composition, not an LLM synthesis — the
   Jarvis "what changed and why it matters" narrative is future work.
 - Paperclip issue list is capped at 250 most recent issues.

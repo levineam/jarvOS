@@ -4,6 +4,7 @@ const fs = require('fs');
 const path = require('path');
 
 const EXCERPT_LEN = 220;
+const SAFE_TITLE_RE = /^[^/\\:]+$/;
 
 function listNoteFiles(notesDir) {
   return fs
@@ -92,6 +93,30 @@ function read(notesDir, title) {
   };
 }
 
+function assertSafeTitle(title) {
+  if (!title || typeof title !== 'string' || !SAFE_TITLE_RE.test(title.trim())) {
+    const err = new Error('note title must be non-empty and cannot contain path separators');
+    err.status = 400;
+    throw err;
+  }
+  return title.trim();
+}
+
+function create(notesDir, title, content) {
+  const safeTitle = assertSafeTitle(title);
+  fs.mkdirSync(notesDir, { recursive: true });
+  const file = path.join(notesDir, `${safeTitle}.md`);
+  if (fs.existsSync(file)) {
+    const err = new Error(`note "${safeTitle}" already exists`);
+    err.status = 409;
+    throw err;
+  }
+  const body = String(content || '').trimEnd() + '\n';
+  fs.writeFileSync(file, body, { flag: 'wx', mode: 0o600 });
+  const stat = fs.statSync(file);
+  return { title: safeTitle, path: file, modified: stat.mtime.toISOString(), created: true };
+}
+
 function recent(notesDir, { limit = 8, sinceHours = 72 } = {}) {
   const cutoff = Date.now() - sinceHours * 3600 * 1000;
   return listNoteFiles(notesDir)
@@ -100,4 +125,4 @@ function recent(notesDir, { limit = 8, sinceHours = 72 } = {}) {
     .map((f) => ({ title: f.title, modified: f.modified.toISOString() }));
 }
 
-module.exports = { list, read, recent };
+module.exports = { list, read, recent, create, resolve, stripMarkdown };

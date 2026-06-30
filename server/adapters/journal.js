@@ -80,4 +80,33 @@ function today(journalDir, date) {
   return readDay(journalDir, date);
 }
 
-module.exports = { stream, today, readDay, parseSections };
+function appendBullet(journalDir, date, section, bullet) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date || '')) {
+    const err = new Error('date=YYYY-MM-DD required');
+    err.status = 400;
+    throw err;
+  }
+  const cleanSection = String(section || 'Agent Notes').replace(/\n/g, ' ').trim() || 'Agent Notes';
+  const cleanBullet = String(bullet || '').replace(/\r?\n/g, ' ').trim();
+  if (!cleanBullet) {
+    const err = new Error('bullet required');
+    err.status = 400;
+    throw err;
+  }
+  fs.mkdirSync(journalDir, { recursive: true });
+  const file = path.join(journalDir, `${date}.md`);
+  let raw = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : `---\ndate: ${date}\n---\n\n`;
+  const heading = `## ${cleanSection}`;
+  const escapedHeading = cleanSection.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const sectionRe = new RegExp(`(^##\\s+${escapedHeading}\\s*$)`, 'm');
+  const addition = `- ${cleanBullet}`;
+  if (sectionRe.test(raw)) {
+    raw = raw.replace(sectionRe, `$1\n${addition}`);
+  } else {
+    raw = `${raw.trimEnd()}\n\n${heading}\n${addition}\n`;
+  }
+  fs.writeFileSync(file, raw.endsWith('\n') ? raw : `${raw}\n`);
+  return { date, section: cleanSection, appended: true, path: file };
+}
+
+module.exports = { stream, today, readDay, parseSections, appendBullet };

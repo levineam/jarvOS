@@ -133,8 +133,14 @@ function agentChip(a) {
 /* ── Pages ──────────────────────────────────────────────── */
 
 const state = { journalDays: [], notes: [], activeNote: null, pendingNote: null, after: null };
+let renderedPage = null;
 
 const pages = {
+  async chat() {
+    state.after = () => mountChatIsland();
+    return '<div id="chat-root" class="reveal"><div class="spin">opening chat…</div></div>';
+  },
+
   async today() {
     const d = await api('/api/today');
     const hour = new Date().getHours();
@@ -372,11 +378,43 @@ async function openNote(title) {
 
 function currentPage() {
   const m = location.hash.match(/^#\/(\w+)/);
-  return m && pages[m[1]] ? m[1] : 'today';
+  return m && pages[m[1]] ? m[1] : 'chat';
+}
+
+function mountChatIsland() {
+  const cssId = 'chat-css';
+  if (!document.getElementById(cssId)) {
+    const link = document.createElement('link');
+    link.id = cssId;
+    link.rel = 'stylesheet';
+    link.href = '/chat/style.css';
+    document.head.appendChild(link);
+  }
+  if (window.__jarvosChatLoaded) {
+    window.mountJarvosChat?.();
+    return;
+  }
+  const script = document.createElement('script');
+  script.type = 'module';
+  script.src = '/chat/chat.js';
+  script.onload = () => {
+    window.__jarvosChatLoaded = true;
+    window.mountJarvosChat?.();
+  };
+  document.body.appendChild(script);
+}
+
+function unmountChatIsland() {
+  if (window.unmountJarvosChat && typeof window.unmountJarvosChat === 'function') {
+    window.unmountJarvosChat();
+  }
 }
 
 async function render() {
   const page = currentPage();
+  if (renderedPage === 'chat' && page !== 'chat') {
+    unmountChatIsland();
+  }
   document.querySelectorAll('.nav a').forEach((a) =>
     a.classList.toggle('active', a.dataset.page === page));
   document.removeEventListener('click', notesClickDelegate);
@@ -384,10 +422,12 @@ async function render() {
   state.after = null;
   try {
     $main.innerHTML = await pages[page]();
+    renderedPage = page;
     state.after?.(); // post-render bindings, now that the HTML is in the DOM
   } catch (err) {
     $main.innerHTML = head('hm', 'Something broke', '') +
       `<div class="err-banner">${fmt.esc(err.message)}</div>`;
+    renderedPage = 'error';
   }
   $main.scrollTop = 0;
 }

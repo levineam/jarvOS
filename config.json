@@ -13,7 +13,14 @@
   "paperclip": {
     "url": "http://localhost:3100",
     "companyId": "f5da26c7-6d26-4212-8e6f-716328a6331d",
+    "projectId": "f805b421-ecc9-40e6-a890-501d8acfbe62",
     "authFile": "~/.paperclip/auth.json"
+  },
+  "whisper": {
+    "binary": "",
+    "model": "",
+    "args": [],
+    "timeoutMs": 60000
   },
   "jarvosRepo": "~/jarvOS"
 }
