@@ -33,8 +33,16 @@ app.whenReady().then(() => {
     userDataPath: app.getPath('userData'),
   });
   session.defaultSession.setPermissionRequestHandler((webContents, permission, callback) => {
-    const url = webContents.getURL();
-    const local = url.startsWith(`http://127.0.0.1:${PORT}`) || url.startsWith(`http://localhost:${PORT}`);
+    let local = false;
+    try {
+      const u = new URL(webContents.getURL());
+      local =
+        (u.hostname === '127.0.0.1' || u.hostname === 'localhost') &&
+        u.port === String(PORT) &&
+        (u.protocol === 'http:' || u.protocol === 'https:');
+    } catch {
+      /* malformed URL -> not local */
+    }
     callback(permission === 'media' && local);
   });
   require(path.join(__dirname, '..', 'server', 'index.js'));
