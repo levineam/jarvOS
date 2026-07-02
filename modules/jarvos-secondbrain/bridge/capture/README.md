@@ -24,14 +24,10 @@ should all call the same root shim:
 node scripts/jarvos-capture.js
 ```
 
-The command reads a JSON object from stdin. Intentional programmatic callers
-should pass `trigger: "note"` or use note-like text such as `note: ...`; a
-triggerless payload that the router ignores exits nonzero and prints an
-actionable message instead of silently succeeding. Minimum recommended input:
+The command reads a JSON object from stdin. Minimum recommended input:
 
 ```json
 {
-  "trigger": "note",
   "source": "claude-code",
   "actor": { "type": "assistant", "name": "Claude Code" },
   "captureMode": "prompted",

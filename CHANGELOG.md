@@ -10,9 +10,6 @@ Release sections describe user-facing jarvOS changes. Historical public-doc sync
   vault/output defaults.
 
 ### Fixes
-- Make jarvOS MCP note creation inject explicit note intent and bound tool calls
-  with a loud timeout error; triggerless capture CLI calls now exit nonzero with
-  an actionable ignored-capture message.
 - Prefer explicit jarvOS timezone config over ambient `TZ` so journal and note
   dates do not drift when shells or CI set generic timezone environment.
 - Keep live `@jarvos/ontology` data out of publish allowlists; public sample

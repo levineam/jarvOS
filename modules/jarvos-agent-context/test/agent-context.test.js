@@ -19,13 +19,7 @@ const {
   verifyNoteCaptureContract,
   writeSessionThread,
 } = require('../src/index.js');
-const {
-  callTool,
-  noteCaptureArgs,
-  PROMPTS,
-  TOOLS,
-  withToolTimeout,
-} = require('../scripts/jarvos-mcp.js');
+const { callTool, PROMPTS, TOOLS } = require('../scripts/jarvos-mcp.js');
 
 function withTempVault(fn) {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-agent-context-'));
@@ -356,25 +350,6 @@ test('MCP jarvos_create_note returns text content', async () => {
     assert.equal(result.isError, false);
     assert.match(result.content[0].text, /jarvOS Note Created/);
   });
-});
-
-test('MCP jarvos_create_note injects explicit note intent', () => {
-  const args = noteCaptureArgs({
-    title: 'MCP Intent Test',
-    content: 'Created through the MCP call path.',
-    frontmatter: { project: 'jarvOS' },
-  });
-
-  assert.equal(args.trigger, 'note');
-  assert.equal(args.frontmatter.trigger, 'note');
-  assert.equal(args.frontmatter.project, 'jarvOS');
-});
-
-test('MCP tool timeout rejects with a loud bounded error', async () => {
-  await assert.rejects(
-    () => withToolTimeout('jarvos_never_returns', () => new Promise(() => {}), 5),
-    /jarvos_never_returns timed out after 5ms/,
-  );
 });
 
 test('jarvos_recall can return WS5 synthesis over WS4 retrieval evidence', () => {
