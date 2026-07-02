@@ -128,6 +128,10 @@ function frontmatterForCaptureEvent(event) {
   });
 }
 
+function ignoredCaptureMessage() {
+  return 'Capture ignored: no explicit trigger or capture intent was detected. Intentional programmatic callers must send trigger: "note" or note-like text such as "note: ...".';
+}
+
 function captureWithJarvos(rawInput = {}, options = {}) {
   const captureEvent = normalizeCaptureEvent(rawInput);
   const adapter = options.adapter || createStorageAdapter(options);
@@ -149,6 +153,7 @@ function captureWithJarvos(rawInput = {}, options = {}) {
     journalEntry: routing.journalEntry,
     noteLink: routing.noteLink,
     knowledge: routing.note?.knowledge || null,
+    error: routing.plan.ignored ? ignoredCaptureMessage() : null,
   };
 }
 
@@ -158,7 +163,12 @@ async function main() {
   process.stdin.on('end', () => {
     try {
       const parsed = input.trim() ? JSON.parse(input) : {};
-      process.stdout.write(`${JSON.stringify(captureWithJarvos(parsed), null, 2)}\n`);
+      const result = captureWithJarvos(parsed);
+      process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+      if (result.routing?.plan?.ignored) {
+        process.stderr.write(`${result.error}\n`);
+        process.exitCode = 2;
+      }
     } catch (error) {
       process.stderr.write(`${JSON.stringify({
         error: error.message,
@@ -172,6 +182,7 @@ async function main() {
 module.exports = {
   captureWithJarvos,
   frontmatterForCaptureEvent,
+  ignoredCaptureMessage,
   main,
   normalizeCaptureEvent,
 };
