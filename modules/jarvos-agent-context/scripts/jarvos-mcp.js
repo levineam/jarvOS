@@ -237,7 +237,7 @@ async function callTool(name, args = {}) {
     return textResult(result.markdown, !result.ok);
   }
   if (name === 'jarvos_create_note') {
-    const result = createNote(noteCaptureArgs(args));
+    const result = await createNote(noteCaptureArgs(args));
     return textResult(result.markdown, !result.ok);
   }
   if (name === 'jarvos_session_thread_read') {

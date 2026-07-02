@@ -137,7 +137,7 @@ test('idea capture keeps lightweight ideas in journal and promotes substantive i
   });
 });
 
-test('triggerless prompted capture exposes ignored error for library callers', () => {
+test('triggerless title+content capture defaults to note intent for library callers', () => {
   const vault = makeTempVault();
   withVaultEnv(vault, () => {
     const result = captureWithJarvos(baseCapture('claude-code', {
@@ -146,14 +146,16 @@ test('triggerless prompted capture exposes ignored error for library callers', (
       evidence: [{ type: 'message', text: 'Durable body text without router keywords.' }],
     }));
 
-    assert.equal(result.ok, false);
-    assert.equal(result.routing.plan.ignored, true);
-    assert.match(result.error, /Intentional programmatic callers must send trigger/);
-    assert.equal(fs.readdirSync(vault.notesDir).length, 0);
+    assert.equal(result.ok, true);
+    assert.equal(result.routing.plan.ignored, false);
+    assert.equal(result.routing.plan.route, 'note');
+    assert.equal(result.routing.plan.defaultedToNoteBias, false);
+    assert.equal(result.error, null);
+    assert.equal(fs.readdirSync(vault.notesDir).length, 1);
   });
 });
 
-test('triggerless capture CLI exits nonzero and writes an actionable ignored message', () => {
+test('triggerless capture CLI defaults to note capture instead of ignored', () => {
   const vault = makeTempVault();
   const env = {
     ...process.env,
@@ -175,10 +177,11 @@ test('triggerless capture CLI exits nonzero and writes an actionable ignored mes
     encoding: 'utf8',
   });
 
-  assert.equal(result.status, 2);
-  assert.match(result.stderr, /Intentional programmatic callers must send trigger/);
+  assert.equal(result.status, 0);
+  assert.equal(result.stderr, '');
   const parsed = JSON.parse(result.stdout);
-  assert.equal(parsed.ok, false);
-  assert.equal(parsed.routing.plan.ignored, true);
-  assert.equal(fs.readdirSync(vault.notesDir).length, 0);
+  assert.equal(parsed.ok, true);
+  assert.equal(parsed.routing.plan.ignored, false);
+  assert.equal(parsed.routing.plan.route, 'note');
+  assert.equal(fs.readdirSync(vault.notesDir).length, 1);
 });

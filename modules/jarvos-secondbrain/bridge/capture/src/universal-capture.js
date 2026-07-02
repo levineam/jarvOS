@@ -128,6 +128,13 @@ function frontmatterForCaptureEvent(event) {
   });
 }
 
+function isLikelyProgrammaticCapture(event = {}) {
+  const title = String(event.title || '').trim();
+  const text = String(event.text || event.content || event.body || '').trim();
+  if (!title || !text) return false;
+  return event.source && typeof event.source === 'object' && typeof event.source.tool === 'string';
+}
+
 function ignoredCaptureMessage() {
   return 'Capture ignored: no explicit trigger or capture intent was detected. Intentional programmatic callers must send trigger: "note" or note-like text such as "note: ...".';
 }
@@ -141,6 +148,7 @@ function captureWithJarvos(rawInput = {}, options = {}) {
   };
   const routingInput = {
     ...captureEvent,
+    trigger: isLikelyProgrammaticCapture(captureEvent) ? 'note' : captureEvent.trigger,
     frontmatter,
   };
   const routing = applyRoutingPlan(routingInput, { ...options, adapter });
