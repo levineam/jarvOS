@@ -142,6 +142,86 @@
   margin-bottom: 0;
 }
 
+/* Rendered markdown (assistant messages). marked already emits proper HTML,
+   so drop the pre-wrap the raw-text fallback relies on. */
+.msg-body .md {
+  white-space: normal;
+}
+
+.md > :first-child { margin-top: 0; }
+.md > :last-child { margin-bottom: 0; }
+
+.md p {
+  margin: 0 0 10px;
+  white-space: normal;
+}
+
+.md h1, .md h2, .md h3, .md h4 {
+  margin: 14px 0 8px;
+  line-height: 1.25;
+  font-weight: 650;
+}
+.md h1 { font-size: 18px; }
+.md h2 { font-size: 16px; }
+.md h3 { font-size: 14px; }
+.md h4 { font-size: 13px; }
+
+.md ul, .md ol {
+  margin: 0 0 10px;
+  padding-left: 20px;
+}
+.md li { margin: 2px 0; }
+.md li > p { margin: 0; }
+
+.md a {
+  color: var(--sky);
+  text-decoration: underline;
+  word-break: break-word;
+}
+
+.md code {
+  font: 12px/1.4 var(--mono);
+  background: #10131a;
+  border: 1px solid var(--line-soft);
+  border-radius: 4px;
+  padding: 1px 5px;
+}
+
+/* Fenced blocks: <pre> already handled by .chat-panel pre; clear the inline
+   code chrome so nested <code> doesn't double-box. */
+.md pre code {
+  background: none;
+  border: 0;
+  padding: 0;
+}
+
+.md blockquote {
+  margin: 0 0 10px;
+  padding: 2px 12px;
+  border-left: 2px solid var(--line-soft);
+  color: var(--ink-dim);
+}
+
+.md hr {
+  border: 0;
+  border-top: 1px solid var(--line-soft);
+  margin: 12px 0;
+}
+
+.md table {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+  border-collapse: collapse;
+  margin: 0 0 10px;
+  font-size: 12px;
+}
+.md th, .md td {
+  border: 1px solid var(--line-soft);
+  padding: 4px 8px;
+  text-align: left;
+}
+
 .activity-card {
   border: 1px solid var(--line-soft);
   border-left: 2px solid var(--sky);

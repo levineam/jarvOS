@@ -14,6 +14,8 @@ const paperclip = require('../server/adapters/paperclip');
 const credentials = require('../server/agent/credentials');
 const providers = require('../server/agent/providers');
 const transcribe = require('../server/agent/transcribe');
+const config = require('../server/config');
+const selfTools = require('../server/agent/tools/self');
 
 function tempDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-chat-test-'));
@@ -207,4 +209,118 @@ test('Chat is first nav item and default route', () => {
   const app = fs.readFileSync(path.join(__dirname, '..', 'static', 'app.js'), 'utf8');
   assert(index.indexOf('data-page="chat"') < index.indexOf('data-page="today"'));
   assert.match(app, /return m && pages\[m\[1\]\] \? m\[1\] : 'chat'/);
+});
+
+const REPO_ROOT = path.join(__dirname, '..');
+
+test('config derives appRoot at the app root, distinct from jarvosRepo', () => {
+  const cfg = config.loadConfig();
+  assert.ok(path.isAbsolute(cfg.appRoot));
+  assert.ok(fs.existsSync(path.join(cfg.appRoot, 'package.json')));
+  assert.notEqual(cfg.appRoot, cfg.jarvosRepo);
+});
+
+test('read_app_source reads app files and confines reads to the app root', () => {
+  const h = selfTools.__test.makeHandlers({ appRoot: REPO_ROOT });
+
+  const ok = h.readAppSource({ path: 'server/agent/index.js' });
+  assert.equal(ok.found, true);
+  assert.match(ok.content, /jarvOS Desktop Chat agent/);
+
+  // Path traversal / absolute escape is blocked.
+  assert.throws(() => h.readAppSource({ path: '../../.paperclip/auth.json' }), /outside the app root/);
+  assert.throws(() => h.readAppSource({ path: 'server/../../etc/hosts' }), /outside the app root/);
+  assert.throws(() => h.readAppSource({ path: '/etc/passwd' }), /outside the app root/);
+
+  // Denylisted directories are rejected even though they sit under the root.
+  assert.throws(() => h.readAppSource({ path: '.git/config' }), /not permitted/);
+  assert.throws(() => h.readAppSource({ path: 'node_modules/ai/package.json' }), /not permitted/);
+
+  // Extension allowlist: binary assets and extensionless files are rejected.
+  assert.throws(() => h.readAppSource({ path: 'static/fonts/plex-sans-400.woff2' }), /file type is not permitted/);
+
+  // Missing-but-allowed path returns found:false rather than throwing.
+  assert.equal(h.readAppSource({ path: 'server/does-not-exist.js' }).found, false);
+});
+
+test('self-tools reject symlinks that escape the app root', () => {
+  const root = tempDir();
+  const outside = tempDir();
+  // A secret living outside the app root, reachable only via a symlink placed
+  // inside it. The lexical path check passes; realpath resolution must not.
+  fs.writeFileSync(path.join(outside, 'secret.md'), 'exfiltrate me');
+  fs.symlinkSync(path.join(outside, 'secret.md'), path.join(root, 'link.md'));
+  fs.symlinkSync(outside, path.join(root, 'linkdir'));
+
+  const h = selfTools.__test.makeHandlers({ appRoot: root });
+  assert.throws(() => h.readAppSource({ path: 'link.md' }), /symlink/);
+  assert.throws(() => h.readAppSource({ path: 'linkdir/secret.md' }), /symlink/);
+  // Listing a symlinked directory must not traverse outside the root either.
+  const listed = h.listAppSource({ dir: '.', depth: 2 });
+  assert.ok(!listed.entries.some((e) => e.name === 'secret.md'));
+});
+
+test('list_app_source lists files without contents and prunes node_modules', () => {
+  const h = selfTools.__test.makeHandlers({ appRoot: REPO_ROOT });
+
+  const res = h.listAppSource({ dir: 'server/agent/tools' });
+  assert.equal(res.found, true);
+  const names = res.entries.map((e) => e.name);
+  assert.ok(names.includes('self.js'));
+  assert.ok(names.includes('read.js'));
+  res.entries.forEach((e) => assert.equal('content' in e, false));
+
+  const root = h.listAppSource({ dir: '.', depth: 1 });
+  assert.ok(!root.entries.some((e) => e.name === 'node_modules'));
+});
+
+test('read_app_source redacts secrets and caps size', () => {
+  const root = tempDir();
+  fs.writeFileSync(
+    path.join(root, 'leak.md'),
+    `key sk-ABCDEFGHIJKLMNOPQRSTUVWX and hash ${'a'.repeat(50)}\n`,
+  );
+  const h = selfTools.__test.makeHandlers({ appRoot: root });
+
+  const res = h.readAppSource({ path: 'leak.md' });
+  assert.doesNotMatch(res.content, /sk-ABCDEFGHIJKLMNOPQRSTUVWX/);
+  assert.match(res.content, /sk-\[redacted\]/);
+  assert.doesNotMatch(res.content, /a{50}/);
+
+  fs.writeFileSync(path.join(root, 'big.js'), '// line\n'.repeat(40000)); // > MAX_BYTES
+  const capped = h.readAppSource({ path: 'big.js' });
+  assert.equal(capped.truncated, true);
+  assert.ok(Buffer.byteLength(capped.content) <= selfTools.__test.MAX_BYTES);
+  assert.match(capped.content, /\/\/ line/);
+});
+
+test('read_app_logs tails a present log and reports absence without throwing', () => {
+  const root = tempDir();
+  const h = selfTools.__test.makeHandlers({ appRoot: root });
+
+  const absent = h.readAppLogs({ name: 'browse' });
+  assert.equal(absent.found, false);
+  assert.equal(absent.path, '.gstack/browse-network.log');
+
+  fs.mkdirSync(path.join(root, '.gstack'));
+  fs.writeFileSync(path.join(root, '.gstack', 'browse-network.log'), 'GET / 200\n');
+  const present = h.readAppLogs({ name: 'browse' });
+  assert.equal(present.found, true);
+  assert.match(present.content, /GET \/ 200/);
+});
+
+test('read_app_health returns the service-status array', async () => {
+  const tmp = tempDir();
+  const cfg = {
+    appRoot: REPO_ROOT,
+    vault: { journalDir: tmp, notesDir: tmp },
+    ontologyDir: tmp,
+    memory: { indexFile: path.join(tmp, 'MEMORY.md'), dailyDir: tmp },
+    // Unused port -> ping fails fast instead of touching a live Paperclip.
+    paperclip: { url: 'http://127.0.0.1:1', companyId: 'x', authFile: path.join(tmp, 'noauth.json') },
+    jarvosRepo: tmp,
+  };
+  const services = await selfTools.__test.makeHandlers(cfg).readAppHealth();
+  assert.ok(Array.isArray(services));
+  assert.ok(services.some((s) => s.key === 'paperclip'));
 });

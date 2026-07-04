@@ -25,7 +25,12 @@ function expandDeep(value) {
 function loadConfig() {
   const configPath = path.join(__dirname, '..', 'config.json');
   const raw = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-  return expandDeep(raw);
+  const cfg = expandDeep(raw);
+  // The app's own root (the repo containing this server). Derived, not read
+  // from config.json — `jarvosRepo` points at a *different* repo (~/jarvOS).
+  // Self-introspection tools confine all reads to this directory.
+  cfg.appRoot = path.join(__dirname, '..');
+  return cfg;
 }
 
 module.exports = { loadConfig, expandTilde };
