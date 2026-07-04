@@ -243,6 +243,23 @@ test('read_app_source reads app files and confines reads to the app root', () =>
   assert.equal(h.readAppSource({ path: 'server/does-not-exist.js' }).found, false);
 });
 
+test('self-tools reject symlinks that escape the app root', () => {
+  const root = tempDir();
+  const outside = tempDir();
+  // A secret living outside the app root, reachable only via a symlink placed
+  // inside it. The lexical path check passes; realpath resolution must not.
+  fs.writeFileSync(path.join(outside, 'secret.md'), 'exfiltrate me');
+  fs.symlinkSync(path.join(outside, 'secret.md'), path.join(root, 'link.md'));
+  fs.symlinkSync(outside, path.join(root, 'linkdir'));
+
+  const h = selfTools.__test.makeHandlers({ appRoot: root });
+  assert.throws(() => h.readAppSource({ path: 'link.md' }), /symlink/);
+  assert.throws(() => h.readAppSource({ path: 'linkdir/secret.md' }), /symlink/);
+  // Listing a symlinked directory must not traverse outside the root either.
+  const listed = h.listAppSource({ dir: '.', depth: 2 });
+  assert.ok(!listed.entries.some((e) => e.name === 'secret.md'));
+});
+
 test('list_app_source lists files without contents and prunes node_modules', () => {
   const h = selfTools.__test.makeHandlers({ appRoot: REPO_ROOT });
 

@@ -41,7 +41,21 @@ function renderMarkdown(text: string): string {
   const DOMPurify = (window as any).DOMPurify;
   if (!marked || !DOMPurify) return '';
   const parse = typeof marked.parse === 'function' ? marked.parse : marked;
-  return DOMPurify.sanitize(parse(text, { mangle: false, headerIds: false }));
+  // Assistant output can carry prompt-injected content (the agent reads local
+  // notes, memory, source, and logs). Forbid every tag/attr that auto-loads a
+  // remote resource, so a rendered message can never silently beacon data out
+  // via an image/media/CSS fetch. Text, links, code, and tables still render.
+  return DOMPurify.sanitize(parse(text, { mangle: false, headerIds: false }), {
+    FORBID_TAGS: [
+      'img', 'picture', 'source', 'svg', 'math', 'iframe', 'frame',
+      'object', 'embed', 'video', 'audio', 'track', 'style', 'link',
+      'form', 'input', 'button', 'base', 'meta',
+    ],
+    FORBID_ATTR: [
+      'src', 'srcset', 'poster', 'background', 'style', 'ping',
+      'formaction', 'action', 'lowsrc', 'dynsrc',
+    ],
+  });
 }
 
 // Assistant text is markdown; user text is shown verbatim. React escapes the

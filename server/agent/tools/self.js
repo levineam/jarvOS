@@ -41,6 +41,17 @@ function resolveWithinRoot(root, requested) {
   if (abs !== normRoot && !abs.startsWith(normRoot + path.sep)) {
     throw badRequest('path is outside the app root');
   }
+  // The lexical check above stops `..` traversal but NOT symlinks: a symlink
+  // under the root can point outside it, and fs reads follow it. If the target
+  // exists, resolve symlinks and require the REAL path to stay within the REAL
+  // root. (Non-existent paths can't leak — nothing to read/list.)
+  if (fs.existsSync(abs)) {
+    const realRoot = fs.realpathSync.native(normRoot);
+    const realAbs = fs.realpathSync.native(abs);
+    if (realAbs !== realRoot && !realAbs.startsWith(realRoot + path.sep)) {
+      throw badRequest('path escapes the app root via a symlink');
+    }
+  }
   return abs;
 }
 
