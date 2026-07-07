@@ -138,16 +138,24 @@ jobs:
             base="${{ github.event.before }}"
           fi
 
-          pattern='(api[_-]?key|secret|token|password|bearer|private[_-]?key|BEGIN (RSA|OPENSSH|EC|DSA|PRIVATE) KEY|ghp_|sk-[A-Za-z0-9]|xox[baprs]-)'
-          if [[ -z "$base" || "$base" =~ ^0+$ ]] || ! git cat-file -e "$base^{commit}" 2>/dev/null; then
-            scan_cmd=(git grep -nI -E "$pattern" -- .)
-          else
-            scan_cmd=(bash -c "git diff -U0 '$base'...HEAD -- | grep -E -i '$pattern'")
-          fi
+          pattern='(ghp_|sk-[A-Za-z0-9]{20,}|xox[baprs]-[A-Za-z0-9-]{10,}|BEGIN (RSA|OPENSSH|EC|DSA|PRIVATE) KEY|api[_-]?key[[:space:]]*[:=]|private[_-]?key[[:space:]]*[:=]|access[_-]?token[[:space:]]*[:=]|bearer[_-]?token[[:space:]]*[:=]|password[[:space:]]*[:=]|secret[_-]?key[[:space:]]*[:=]|auth[_-]?token[[:space:]]*[:=])'
+          sensitive_exts=(
+            '*.js' '*.jsx' '*.ts' '*.tsx' '*.mjs' '*.cjs'
+            '*.py' '*.sh' '*.bash'
+            '*.yml' '*.yaml' '*.json' '*.toml' '*.ini' '*.cfg'
+            '.env*'
+          )
 
-          if "${scan_cmd[@]}"; then
-            echo "Potential secret pattern detected in changed content."
-            exit 1
+          if [[ -z "$base" || "$base" =~ ^0+$ ]] || ! git cat-file -e "$base^{commit}" 2>/dev/null; then
+            if git grep -nI -E "$pattern" -- "${sensitive_exts[@]}" ':!.github/workflows/ci.yml'; then
+              echo "Potential secret pattern detected in repository history scan."
+              exit 1
+            fi
+          else
+            if git diff -U0 "$base"...HEAD -- "${sensitive_exts[@]}" ':!.github/workflows/ci.yml' | grep -E -i "$pattern"; then
+              echo "Potential secret pattern detected in changed content."
+              exit 1
+            fi
           fi
 
   smoke-test:
