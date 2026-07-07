@@ -2,6 +2,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const { spawnSync } = require('node:child_process');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
@@ -134,4 +135,53 @@ test('idea capture keeps lightweight ideas in journal and promotes substantive i
     assert.equal(journal.split('[[Universal capture contract]]').length - 1, 1);
     assert.equal(substantive.knowledge.qmdStatus, 'pending-refresh');
   });
+});
+
+test('triggerless title+content capture defaults to note intent for library callers', () => {
+  const vault = makeTempVault();
+  withVaultEnv(vault, () => {
+    const result = captureWithJarvos(baseCapture('claude-code', {
+      title: 'Plain Programmatic Entry',
+      content: 'Durable body text without router keywords.',
+      evidence: [{ type: 'message', text: 'Durable body text without router keywords.' }],
+    }));
+
+    assert.equal(result.ok, true);
+    assert.equal(result.routing.plan.ignored, false);
+    assert.equal(result.routing.plan.route, 'note');
+    assert.equal(result.routing.plan.defaultedToNoteBias, false);
+    assert.equal(result.error, null);
+    assert.equal(fs.readdirSync(vault.notesDir).length, 1);
+  });
+});
+
+test('triggerless capture CLI defaults to note capture instead of ignored', () => {
+  const vault = makeTempVault();
+  const env = {
+    ...process.env,
+    VAULT_NOTES_DIR: vault.notesDir,
+    JARVOS_NOTES_DIR: vault.notesDir,
+    JOURNAL_DIR: vault.journalDir,
+    JARVOS_JOURNAL_DIR: vault.journalDir,
+    JARVOS_KNOWLEDGE_DIR: vault.knowledgeDir,
+  };
+  const result = spawnSync(process.execPath, [
+    path.join(__dirname, '../scripts/jarvos-capture.js'),
+  ], {
+    env,
+    input: JSON.stringify(baseCapture('claude-code', {
+      title: 'Plain CLI Entry',
+      content: 'Durable body text without router keywords.',
+      evidence: [{ type: 'message', text: 'Durable body text without router keywords.' }],
+    })),
+    encoding: 'utf8',
+  });
+
+  assert.equal(result.status, 0);
+  assert.equal(result.stderr, '');
+  const parsed = JSON.parse(result.stdout);
+  assert.equal(parsed.ok, true);
+  assert.equal(parsed.routing.plan.ignored, false);
+  assert.equal(parsed.routing.plan.route, 'note');
+  assert.equal(fs.readdirSync(vault.notesDir).length, 1);
 });

@@ -176,6 +176,70 @@ function textResult(text, isError = false) {
   };
 }
 
+function toolTimeoutMs() {
+  const value = Number(process.env.JARVOS_MCP_TOOL_TIMEOUT_MS || 15000);
+  return Number.isFinite(value) && value > 0 ? value : 15000;
+}
+
+function toolTimeoutError(name, timeoutMs) {
+  const error = new Error(`${name || 'tool'} timed out after ${timeoutMs}ms`);
+  error.code = -32000;
+  return error;
+}
+
+function logLateToolSettlement(name, state, value) {
+  const message = value && value.message ? value.message : undefined;
+  process.stderr.write(`${JSON.stringify({
+    level: 'warn',
+    event: 'jarvos_mcp_tool_late_settlement',
+    tool: name || 'tool',
+    state,
+    message,
+  })}\n`);
+}
+
+function withToolTimeout(name, operation, timeoutMs = toolTimeoutMs()) {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      reject(toolTimeoutError(name, timeoutMs));
+    }, timeoutMs);
+
+    Promise.resolve()
+      .then(operation)
+      .then((result) => {
+        if (settled) {
+          logLateToolSettlement(name, 'resolved');
+          return;
+        }
+        settled = true;
+        clearTimeout(timer);
+        resolve(result);
+      }, (error) => {
+        if (settled) {
+          logLateToolSettlement(name, 'rejected', error);
+          return;
+        }
+        settled = true;
+        clearTimeout(timer);
+        reject(error);
+      });
+  });
+}
+
+function noteCaptureArgs(args = {}) {
+  return {
+    ...args,
+    trigger: 'note',
+    frontmatter: {
+      ...(args.frontmatter || {}),
+      trigger: 'note',
+    },
+  };
+}
+
 async function callTool(name, args = {}) {
   if (name === 'jarvos_current_work') {
     const result = await currentWork(args);
@@ -190,7 +254,7 @@ async function callTool(name, args = {}) {
     return textResult(result.markdown, !result.ok);
   }
   if (name === 'jarvos_create_note') {
-    const result = createNote(args);
+    const result = await createNote(noteCaptureArgs(args));
     return textResult(result.markdown, !result.ok);
   }
   if (name === 'jarvos_session_thread_read') {
@@ -271,7 +335,10 @@ async function handle(message) {
     }
 
     if (method === 'tools/call') {
-      const result = await callTool(params?.name, params?.arguments || {});
+      const result = await withToolTimeout(
+        params?.name,
+        () => callTool(params?.name, params?.arguments || {}),
+      );
       write({ jsonrpc: '2.0', id, result });
       return;
     }
@@ -337,3 +404,5 @@ module.exports = { TOOLS, callTool, handle, textResult };
 module.exports.BOOT_JARVOS_PROMPT_TEXT = BOOT_JARVOS_PROMPT_TEXT;
 module.exports.PROMPTS = PROMPTS;
 module.exports.promptResult = promptResult;
+module.exports.noteCaptureArgs = noteCaptureArgs;
+module.exports.withToolTimeout = withToolTimeout;

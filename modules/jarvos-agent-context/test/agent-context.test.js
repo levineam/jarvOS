@@ -19,7 +19,7 @@ const {
   verifyNoteCaptureContract,
   writeSessionThread,
 } = require('../src/index.js');
-const { callTool, PROMPTS, TOOLS } = require('../scripts/jarvos-mcp.js');
+const { callTool, PROMPTS, TOOLS, withToolTimeout } = require('../scripts/jarvos-mcp.js');
 
 function withTempVault(fn) {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-agent-context-'));
@@ -350,6 +350,32 @@ test('MCP jarvos_create_note returns text content', async () => {
     assert.equal(result.isError, false);
     assert.match(result.content[0].text, /jarvOS Note Created/);
   });
+});
+
+test('MCP timeout logs late tool completion after bounded failure', async () => {
+  const writes = [];
+  const originalWrite = process.stderr.write;
+  process.stderr.write = function captureWrite(chunk, encoding, callback) {
+    writes.push(String(chunk));
+    if (typeof encoding === 'function') encoding();
+    if (typeof callback === 'function') callback();
+    return true;
+  };
+
+  try {
+    await assert.rejects(
+      withToolTimeout('slow_tool', () => new Promise((resolve) => {
+        setTimeout(() => resolve('ok'), 20);
+      }), 1),
+      /slow_tool timed out after 1ms/,
+    );
+    await new Promise((resolve) => setTimeout(resolve, 30));
+  } finally {
+    process.stderr.write = originalWrite;
+  }
+
+  assert.match(writes.join(''), /jarvos_mcp_tool_late_settlement/);
+  assert.match(writes.join(''), /slow_tool/);
 });
 
 test('jarvos_recall can return WS5 synthesis over WS4 retrieval evidence', () => {
