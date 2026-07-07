@@ -61,7 +61,7 @@ function baseCapture(source, overrides = {}) {
 }
 
 test('normalizes supported and custom agents into CaptureEvent v2', () => {
-  for (const source of ['codex', 'claude-code', 'openclaw', 'hermes', 'custom:future-agent']) {
+  for (const source of ['codex', 'claude-code', 'openclaw', 'chatgpt', 'custom:future-agent']) {
     const event = normalizeCaptureEvent(baseCapture(source, {
       text: 'note: capture the universal contract',
     }));
@@ -118,7 +118,7 @@ test('idea capture keeps lightweight ideas in journal and promotes substantive i
 
     const substantive = captureWithJarvos(baseCapture('codex', {
       title: 'Universal capture contract',
-      text: 'idea: define one jarvOS capture contract because each agent should call the same entrypoint and retrieval should cite the same source-backed sidecars.',
+      text: 'idea: define one jarVOS capture contract because each agent should call the same entrypoint and retrieval should cite the same source-backed sidecars.',
       frontmatter: {
         status: 'draft',
         type: 'reference',

@@ -1,7 +1,7 @@
 {
   "name": "jarvos-secondbrain-notes",
   "version": "1.0.0",
-  "description": "jarvOS secondbrain — note writer and frontmatter lint for vault notes",
+  "description": "JarvOS secondbrain — note writer and frontmatter lint for vault notes",
   "main": "src/write-to-vault.js",
   "bin": {
     "jarvos-write-to-vault": "src/write-to-vault.js",

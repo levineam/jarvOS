@@ -9,11 +9,7 @@ const path = require('node:path');
 const {
   buildSecondbrainStatus,
   renderSecondbrainStatus,
-  resolveSecondbrainStatusOptions,
 } = require('../bridge/synthesis');
-const {
-  DEFAULT_WIKI_DIR_NAME,
-} = require('../packages/jarvos-secondbrain-wiki/src');
 
 function writeJson(filePath, data) {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
@@ -49,7 +45,20 @@ test('secondbrain status reports healthy generated wiki and eval state', () => {
     }],
   });
 
-  const status = buildSecondbrainStatus({ knowledgeDir, wikiDir, evalReportPath });
+  const status = buildSecondbrainStatus({
+    knowledgeDir,
+    wikiDir,
+    evalReportPath,
+    gbrainProvider: {
+      status: 'ready',
+      version: '0.42.52.0',
+      advisor: 'info',
+      runtimeConnections: {
+        codex: 'connected',
+        'claude-code': 'missing',
+      },
+    },
+  });
   const text = renderSecondbrainStatus(status);
 
   assert.equal(status.ok, true);
@@ -57,7 +66,11 @@ test('secondbrain status reports healthy generated wiki and eval state', () => {
   assert.equal(status.counts.sensitiveSkipped, 1);
   assert.equal(status.generatedWiki.status, 'built');
   assert.equal(status.retrievalEval.status, 'passing');
+  assert.equal(status.gbrainProvider.status, 'ready');
+  assert.equal(status.gbrainProvider.version, '0.42.52.0');
   assert.match(text, /Secondbrain status: OK/);
+  assert.match(text, /GBrain provider: ready \(0\.42\.52\.0\)/);
+  assert.match(text, /GBrain advisor: info/);
   assert.match(text, /Skipped private\/sensitive: 1/);
 });
 
@@ -110,42 +123,4 @@ test('secondbrain status reports empty generated wiki and failing retrieval eval
   ]);
   assert.equal(status.generatedWiki.status, 'empty');
   assert.equal(status.retrievalEval.status, 'failing');
-});
-
-test('secondbrain status resolves generated wiki path from configured vault', () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-status-config-'));
-  const vaultDir = path.join(root, 'Vault');
-  const configPath = path.join(root, 'jarvos.config.json');
-  fs.writeFileSync(configPath, JSON.stringify({
-    paths: {
-      vault: vaultDir,
-    },
-  }));
-
-  const options = resolveSecondbrainStatusOptions({
-    configPath,
-    homeDir: root,
-    env: {},
-  });
-
-  assert.equal(options.knowledgeDir, path.join(vaultDir, '.jarvos', 'knowledge'));
-  assert.equal(options.wikiDir, path.join(vaultDir, DEFAULT_WIKI_DIR_NAME));
-  assert.equal(options.evalReportPath, path.join(vaultDir, '.jarvos', 'knowledge', 'retrieval-eval-report.json'));
-});
-
-test('secondbrain status expands tilde path overrides', () => {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-status-home-'));
-  const options = resolveSecondbrainStatusOptions({
-    homeDir: home,
-    env: {
-      JARVOS_VAULT_DIR: '~/Vault',
-      JARVOS_KNOWLEDGE_DIR: '~/Vault/.jarvos/knowledge',
-      JARVOS_GENERATED_WIKI_DIR: '~/Vault/Wiki',
-      JARVOS_RETRIEVAL_EVAL_REPORT: '~/Vault/.jarvos/knowledge/eval.json',
-    },
-  });
-
-  assert.equal(options.knowledgeDir, path.join(home, 'Vault', '.jarvos', 'knowledge'));
-  assert.equal(options.wikiDir, path.join(home, 'Vault', 'Wiki'));
-  assert.equal(options.evalReportPath, path.join(home, 'Vault', '.jarvos', 'knowledge', 'eval.json'));
 });

@@ -7,7 +7,7 @@ const os = require('os');
 const path = require('path');
 const { spawnSync } = require('child_process');
 
-const REPO_ROOT = path.resolve(__dirname, '..');
+const REPO_ROOT = path.resolve(__dirname, '..', '..');
 const CONTRACT_CLI = path.join(REPO_ROOT, 'scripts', 'obsidian-note-journal-contract.js');
 
 function runContract({ root, personality }) {

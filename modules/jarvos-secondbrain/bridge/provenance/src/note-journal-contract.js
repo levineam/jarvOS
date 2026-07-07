@@ -8,7 +8,7 @@ const path = require('path');
 const { writeNoteFile, todayDate } = require('../../../packages/jarvos-secondbrain-notes/src/write-to-vault');
 const { sourcePathFor } = require('../../../packages/jarvos-secondbrain-notes/src/knowledge-optimizer');
 const { getVaultNotesDir, getVaultJournalDir } = require('./lib/provenance-config');
-const { frontmatterToObject, parseFrontmatter } = require('../../../packages/jarvos-secondbrain-notes/src/lib/note-schema');
+const { frontmatterToObject, parseFrontmatter } = require('../../../../scripts/lib/note-schema');
 
 const SUPPORTED_PERSONALITIES = new Set(['michael', 'claude-code', 'hermes', 'codex']);
 const LIGHTWEIGHT_IDEA_RE = /^\s*idea\s*[:\-]/i;

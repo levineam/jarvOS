@@ -1,0 +1,36 @@
+# source_path<TAB>destination_path_in_public_repo
+# Curated allowlist only. No wildcard exports from vault Notes.
+
+# ── Core behavioral layer (source of truth: clawd workspace → jarvOS core/) ──
+# NOTE: core/AGENTS.md in the public repo is the PORTABLE version (no OpenClaw refs).
+# It is maintained directly in the public repo, NOT synced from clawd/AGENTS.md.
+# Do NOT add a mapping for AGENTS.md here — it would overwrite the portable version.
+
+# ── Architecture docs ──
+# NOTE: These docs are mirrored into the clawd repo so unattended cron runs do not
+# depend on macOS TCC permissions for vault access.
+jarvos/ARCHITECTURE.md	docs/architecture/jarvos-architecture.md
+jarvos/docs/architecture-decision-records/Architecture Decision Record - 20260219 - Ars Contexta Patterns.md	docs/architecture/architecture-decision-records/architecture-decision-record-20260219-ars-contexta-patterns.md
+jarvos/docs/INSTALL.md	docs/install.md
+jarvos/RELEASE_NOTES.md	docs/release-notes.md
+jarvos/CHANGELOG.md	CHANGELOG.md
+
+# ── PMS templates (source of truth: public repo, edited directly) ──
+# These are maintained directly in the public repo under core/pms/.
+# No sync mapping needed — they don't have a clawd workspace source.
+
+# ── Governance (source of truth: public repo, edited directly) ──
+# Maintained directly in the public repo under core/governance/.
+
+# ── Legacy templates (kept for backward compat until fully migrated) ──
+jarvos/templates/AGENTS-template.md	templates/agents-template.md
+jarvos/templates/BOOTSTRAP-template.md	templates/bootstrap-template.md
+jarvos/templates/HEARTBEAT-template.md	templates/heartbeat-template.md
+jarvos/templates/OKR-TASK-BOARD.template.md	templates/okr-task-board-template.md
+jarvos/templates/PROJECT-KICKOFF-PACK.template.md	templates/project-kickoff-pack-template.md
+
+# ── Starter kit ──
+jarvos-starter-kit/README.md	starter-kit/README.md
+jarvos-starter-kit/templates/OKR-TASK-BOARD.template.md	starter-kit/templates/OKR-TASK-BOARD.template.md
+jarvos-starter-kit/templates/PROJECT-KICKOFF-PACK.template.md	starter-kit/templates/PROJECT-KICKOFF-PACK.template.md
+jarvos-starter-kit/workflows/basic-ci.yml	starter-kit/workflows/basic-ci.yml

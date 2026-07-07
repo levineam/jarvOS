@@ -68,6 +68,14 @@ npm run maintain:manual-notes
 
 This is dry-run mode. It scans Notes, reports missing/invalid canonical frontmatter, checks `.jarvos/knowledge/optimization-audit.json` coverage, and predicts GBrain, memory-wiki, and QMD queue decisions without writing files.
 
+Use a private-safe summary when the result will be pasted into Paperclip or another tracker:
+
+```bash
+node scripts/manual-notes-maintenance.js --dry-run --summary-path /tmp/manual-notes-maintenance-summary.json
+```
+
+The summary records counts and gate decisions only. The full JSON output can include note titles, paths, and hashes, so keep it local.
+
 Apply mode is explicit:
 
 ```bash
@@ -84,17 +92,13 @@ node scripts/manual-notes-maintenance.js --apply --since-state --watch --max-run
 
 The generic pattern is portable: one scanner finds markdown notes that missed the canonical writer, one frontmatter normalizer repairs only obvious metadata drift, one sidecar optimizer routes downstream systems, and one freshness queue keeps search/index refresh explicit.
 
-## AI coding-tool entrypoint
+See `../../docs/operations/manual-note-maintenance.md` for the full backfill runbook: baseline audit, sample apply, batch apply, downstream refresh, and routine placement.
 
-AI coding tools should not raw-write Obsidian markdown directly. Prefer the
-jarvOS-owned universal capture entrypoint for intentional notes and ideas:
+## AI personality entrypoint
 
-```bash
-printf '%s' '{"source":"codex","text":"note: Example","evidence":[{"type":"message","text":"note: Example"}]}' \
-  | node scripts/jarvos-capture.js
-```
-
-Older personality writers can use the compatibility executable contract:
+AI personalities should not raw-write Obsidian markdown directly. Michael,
+Claude Code, Hermes, and compatible assistants use the shared executable
+contract:
 
 ```bash
 printf '%s' '{"personality":"michael","title":"Example","content":"Body"}' \

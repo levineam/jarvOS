@@ -1,66 +1,110 @@
 # Manual Note Maintenance
 
-Intentional capture through `jarvos-capture` is the primary path for notes and ideas created by AI agents. Notes created manually in Obsidian can still enter the secondbrain stack through the manual-note maintenance command.
+Manual Obsidian notes bypass the canonical note writer, so they need a controlled backfill path into the secondbrain stack. Use `manual-notes-maintenance` as the one primitive for audits, sampled applies, batch applies, and routine checks.
 
-## Contract
+## Safety Contract
 
-Run `manual-notes-maintenance` against the canonical `Notes/` directory. The command audits Markdown files, normalizes fixable frontmatter, writes knowledge sidecars, updates the QMD pending queue, and queues eligible units for generated wiki and GBrain promotion.
+- Dry-run is the default. Nothing writes unless `--apply` is present.
+- Apply mode only normalizes frontmatter the canonical linter can infer safely.
+- Note bodies are never rewritten by this command.
+- Sensitive or private notes still get local artifacts and QMD pending records, but are removed from automatic GBrain and memory-wiki queues.
+- QMD freshness remains explicit. A `qmd-refresh-pending.json` entry means search is not fresh until the QMD refresh path runs.
+- Public docs and tracker comments should use `--summary-path` evidence, not full JSON output, because full JSON includes note paths, titles, and hashes.
 
-Safe defaults:
+## Baseline Audit
 
-- `--dry-run` is the default audit mode.
-- `--apply` is required before any note or sidecar write.
-- `--since-state` limits ongoing maintenance to changed or not-yet-audited files.
-- `--watch` is available for a long-running worker, but a scheduler should normally invoke bounded runs.
-
-Example dry run:
+Run a full dry-run and write a private-safe summary:
 
 ```bash
-node packages/jarvos-secondbrain-notes/src/manual-notes-maintenance.js \
-  --notes-dir "$JARVOS_NOTES_DIR" \
-  --knowledge-dir "$JARVOS_KNOWLEDGE_DIR" \
-  --since-state \
+node scripts/manual-notes-maintenance.js \
   --dry-run \
-  --json
+  --summary-path /tmp/manual-notes-maintenance-summary.json
 ```
 
-Example apply run:
+The summary contains only counts and gate decisions:
+
+- scanned notes
+- candidate notes
+- frontmatter violation counts
+- sidecar and queue predictions
+- sensitive skip counts
+- errors count
+- whether apply is allowed
+- whether QMD refresh or queue review is required
+
+If `gates.applyAllowed` is false, stop and review the full local output. Do not run full apply when unfixable frontmatter or command errors are present.
+
+## Sample Apply
+
+After the audit is clean, run a bounded sample:
 
 ```bash
-node packages/jarvos-secondbrain-notes/src/manual-notes-maintenance.js \
-  --notes-dir "$JARVOS_NOTES_DIR" \
-  --knowledge-dir "$JARVOS_KNOWLEDGE_DIR" \
-  --since-state \
+node scripts/manual-notes-maintenance.js \
   --apply \
-  --json
+  --since-state \
+  --limit 5 \
+  --summary-path /tmp/manual-notes-maintenance-sample-summary.json
 ```
+
+Verify:
+
+- edited files only changed frontmatter
+- note body content stayed byte-for-byte intact after the frontmatter block
+- `.jarvos/knowledge/artifacts/` contains sidecars
+- `optimization-audit.json` covers the sampled notes
+- `qmd-refresh-pending.json` includes sampled notes
+- safe notes entered the GBrain and memory-wiki queues
+- private/sensitive notes did not enter automatic queues
+
+## Batch Apply
+
+Use small batches until the output is boring:
+
+```bash
+node scripts/manual-notes-maintenance.js \
+  --apply \
+  --since-state \
+  --limit 25 \
+  --summary-path /tmp/manual-notes-maintenance-batch-summary.json
+```
+
+Only use an unbounded apply after a clean full dry-run, a clean sample apply, and at least one clean batch review.
+
+## Downstream Refresh
+
+Apply mode writes queue and freshness state. It does not import into GBrain, rebuild generated wiki pages, or refresh QMD inline.
+
+After reviewed apply output:
+
+1. Refresh QMD before trusting search.
+2. Review GBrain and memory-wiki queues before import.
+3. Rebuild generated wiki output if the local stack uses it.
+4. Run secondbrain status and retrieval evals.
+
+The issue or routine can close only when the summary counts, QMD disposition, queue disposition, and retrieval/status result are all recorded.
 
 ## Routine Placement
 
-Prefer a tracker-owned routine over local cron when one is available. The routine should create or run a bounded daily maintenance task with visible success/failure output.
-
-Routine shape:
-
-- Scope: manually-created or externally-created Markdown notes under the configured `Notes/` directory.
-- Cadence: daily, plus manual on-demand runs before release checks.
-- Cost posture: local Node process; no model call required.
-- Success signal: nonzero scanned count or clean unchanged report, no errors, QMD pending queue updated when applicable.
-- Failure signal: command exit nonzero, frontmatter unfixable files, or sidecar write errors.
-- Follow-up: run QMD update/embed after apply mode before treating QMD search as fresh.
-
-Do not use this routine to ingest every AI conversation. It is only for notes that already exist or were intentionally created.
-
-## Generated Wiki Refresh
-
-Manual note maintenance updates the source-backed sidecars. It does not make the
-visible generated LLM-wiki current by itself. After an apply run, refresh the
-generated wiki from the sidecars:
+Prefer a Paperclip Routine or tracked on-demand run over local cron for this workflow. A good routine runs a bounded since-state pass and reports one private-safe summary:
 
 ```bash
-npm run wiki:build
+node scripts/manual-notes-maintenance.js \
+  --apply \
+  --since-state \
+  --watch \
+  --max-runs 1 \
+  --summary-path /tmp/manual-notes-maintenance-routine-summary.json
 ```
 
-The generated wiki build reads from the configured knowledge artifacts directory
-and writes to the configured generated wiki directory, defaulting to a visible
-`Generated Secondbrain Wiki` folder under the vault root. Generated pages are
-safe to delete and rebuild; do not edit them as source notes.
+Routine watch surface:
+
+- Cadence: daily or on-demand after manual note sessions.
+- Cost posture: local file scan and deterministic optimization only.
+- Success signal: summary shows `ok: true`, low or expected candidate count, zero errors, and expected queue/QMD counts.
+- Failure signal: nonzero errors, unfixable frontmatter, stale QMD pending state after refresh, or missing routine run.
+- Owner/action if bad: pause apply/import, preserve the summary, and inspect the full local JSON output.
+- Delivery channel: Paperclip issue/routine result with private-safe counts only.
+
+## Generic Pattern
+
+For any portable AI operating system, route manually created Markdown through the same deterministic contract as AI-created notes: audit first, repair only inferable metadata, write lossless sidecars, queue downstream systems instead of importing inline, and keep search freshness explicit.

@@ -3,7 +3,7 @@
 **Umbrella issue:** SUP-333
 **Updated for local cutover:** 2026-04-05
 
-Purpose: map current `clawd` artifacts to the active jarvOS boundary.
+Purpose: map current `clawd` artifacts to the active JarvOS boundary.
 
 ## Classification rule
 
@@ -11,7 +11,7 @@ Purpose: map current `clawd` artifacts to the active jarvOS boundary.
 - **package contract** = doc/config intrinsic to that package
 - **bridge / adapter** = cross-package or external-system wiring
 - **compatibility shim** = old root caller kept only to delegate
-- **adjacent module** = jarvOS module outside `jarvos-secondbrain`
+- **adjacent module** = JarvOS module outside `jarvos-secondbrain`
 
 ## Current artifact map
 

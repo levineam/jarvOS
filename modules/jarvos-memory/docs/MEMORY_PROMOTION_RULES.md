@@ -51,6 +51,11 @@ Use Notes as source material when long-form content yields a compact retained in
 
 Do not mirror full notes into Memory.
 
+Secondbrain sidecars promote through `knowledgeUnit` references, not raw notes or
+raw transcripts. A knowledge unit must have source evidence, a non-sensitive
+privacy decision, and `downstreamEligibility.memoryPromotion !== false`.
+Sensitive/private or uncited units stay in the secondbrain sidecar layer.
+
 ### Paperclip -> Memory
 Paperclip may produce a Memory artifact when a completed issue leaves behind:
 - a durable decision
