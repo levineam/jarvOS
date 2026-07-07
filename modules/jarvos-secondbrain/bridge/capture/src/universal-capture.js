@@ -6,6 +6,7 @@ const {
 } = require('../../../packages/jarvos-ambient/src/intent/capture-contract');
 const {
   applyRoutingPlan,
+  detectTrigger,
 } = require('../../routing/src/keyword-capture-router');
 const {
   createStorageAdapter,
@@ -135,6 +136,11 @@ function isLikelyProgrammaticCapture(event = {}) {
   return event.source && typeof event.source === 'object' && typeof event.source.tool === 'string';
 }
 
+function defaultProgrammaticTrigger(event = {}) {
+  if (event.trigger || detectTrigger(event)) return event.trigger;
+  return isLikelyProgrammaticCapture(event) ? 'note' : event.trigger;
+}
+
 function ignoredCaptureMessage() {
   return 'Capture ignored: no explicit trigger or capture intent was detected. Intentional programmatic callers must send trigger: "note" or note-like text such as "note: ...".';
 }
@@ -148,7 +154,7 @@ function captureWithJarvos(rawInput = {}, options = {}) {
   };
   const routingInput = {
     ...captureEvent,
-    trigger: isLikelyProgrammaticCapture(captureEvent) ? 'note' : captureEvent.trigger,
+    trigger: defaultProgrammaticTrigger(captureEvent),
     frontmatter,
   };
   const routing = applyRoutingPlan(routingInput, { ...options, adapter });

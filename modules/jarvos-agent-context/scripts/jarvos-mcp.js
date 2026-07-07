@@ -187,6 +187,17 @@ function toolTimeoutError(name, timeoutMs) {
   return error;
 }
 
+function logLateToolSettlement(name, state, value) {
+  const message = value && value.message ? value.message : undefined;
+  process.stderr.write(`${JSON.stringify({
+    level: 'warn',
+    event: 'jarvos_mcp_tool_late_settlement',
+    tool: name || 'tool',
+    state,
+    message,
+  })}\n`);
+}
+
 function withToolTimeout(name, operation, timeoutMs = toolTimeoutMs()) {
   return new Promise((resolve, reject) => {
     let settled = false;
@@ -199,12 +210,18 @@ function withToolTimeout(name, operation, timeoutMs = toolTimeoutMs()) {
     Promise.resolve()
       .then(operation)
       .then((result) => {
-        if (settled) return;
+        if (settled) {
+          logLateToolSettlement(name, 'resolved');
+          return;
+        }
         settled = true;
         clearTimeout(timer);
         resolve(result);
       }, (error) => {
-        if (settled) return;
+        if (settled) {
+          logLateToolSettlement(name, 'rejected', error);
+          return;
+        }
         settled = true;
         clearTimeout(timer);
         reject(error);
