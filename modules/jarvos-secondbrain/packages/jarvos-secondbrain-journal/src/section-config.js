@@ -20,7 +20,6 @@ const DEFAULT_SECTIONS = [
   { id: 'todays-calendar', heading: "## 📅 Today's Calendar" },
   { id: 'notes', heading: '## 📝 Notes' },
   { id: 'ideas', heading: '## 💡 Ideas' },
-  { id: 'flagged', heading: '## 📌 Flagged' },
   { id: 'journal-entry', heading: '## 📓 Journal Entry' },
   { id: 'decisions', heading: '## ✅ Decisions' },
 ];

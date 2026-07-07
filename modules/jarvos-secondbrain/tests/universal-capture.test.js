@@ -185,3 +185,40 @@ test('triggerless capture CLI defaults to note capture instead of ignored', () =
   assert.equal(parsed.routing.plan.route, 'note');
   assert.equal(fs.readdirSync(vault.notesDir).length, 1);
 });
+test('long raw Idea capture stays journal-only without note backlink or QMD artifact', () => {
+  const vault = makeTempVault();
+  withVaultEnv(vault, () => {
+    const text = 'Idea: the end of "vibe economics". Concept is that economics up until now has basically been based on vibes, and the shift is that agents, markets, and measurement loops can finally make those vibes explicit enough to inspect.';
+    const result = captureWithJarvos(baseCapture('codex', { text }));
+
+    assert.equal(result.ok, true);
+    assert.equal(result.routing.plan.route, 'idea');
+    assert.equal(result.routing.plan.createNote, false);
+    assert.equal(result.note, null);
+    assert.equal(result.knowledge, null);
+    assert.equal(fs.readdirSync(vault.notesDir).filter((name) => name.endsWith('.md')).length, 0);
+    assert.equal(fs.existsSync(path.join(vault.knowledgeDir, 'qmd-refresh-pending.json')), false);
+
+    const journal = fs.readFileSync(path.join(vault.journalDir, `${TEST_DATE}.md`), 'utf8');
+    assert.match(journal, /## 💡 Ideas/);
+    assert.match(journal, /vibe economics/);
+    assert.doesNotMatch(journal, /\[\[/);
+  });
+});
+
+test('explicit durable idea flag wins over substantive false', () => {
+  const vault = makeTempVault();
+  withVaultEnv(vault, () => {
+    const result = captureWithJarvos(baseCapture('codex', {
+      text: 'Idea: durable capture contract for future agents',
+      substantive: false,
+      createDurableNote: true,
+    }));
+
+    assert.equal(result.ok, true);
+    assert.equal(result.routing.plan.route, 'idea');
+    assert.equal(result.routing.plan.createNote, true);
+    assert.ok(result.note);
+    assert.equal(result.knowledge.qmdStatus, 'pending-refresh');
+  });
+});

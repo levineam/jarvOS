@@ -11,6 +11,7 @@ const { getVaultNotesDir, getVaultJournalDir } = require('./lib/provenance-confi
 const { frontmatterToObject, parseFrontmatter } = require('../../../packages/jarvos-secondbrain-notes/src/lib/note-schema');
 
 const SUPPORTED_PERSONALITIES = new Set(['michael', 'claude-code', 'hermes', 'codex']);
+const LIGHTWEIGHT_IDEA_RE = /^\s*idea\s*[:\-]/i;
 
 function escapeRegex(str) {
   return String(str || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -43,6 +44,14 @@ function parseInput(input) {
   if (input.content === undefined || input.content === null) throw new Error('content is required');
   if (input.frontmatter !== undefined && (!input.frontmatter || typeof input.frontmatter !== 'object' || Array.isArray(input.frontmatter))) {
     throw new Error('frontmatter must be an object when provided');
+  }
+  if (
+    LIGHTWEIGHT_IDEA_RE.test(String(input.content || ''))
+    && input.substantive !== true
+    && input.createDurableNote !== true
+    && input.forceDurable !== true
+  ) {
+    throw new Error('lightweight Idea: captures must use node scripts/jarvos-capture.js; pass substantive:true or createDurableNote:true only for intentional durable idea notes');
   }
   return {
     personality,

@@ -46,9 +46,11 @@ journal is `Journal/YYYY-MM-DD.md`; durable notes live under `Notes/`.
 
 - `note:` / `make a note` / `save this` create a note and exactly one journal
   backlink.
-- Lightweight `idea:` captures append to Journal Ideas only.
+- Raw `idea:` / `Idea:` captures append to Journal Ideas only by default, even
+  when the idea is a long single-line thought.
 - Substantive `idea:` captures create a note and link that note from Journal
-  Ideas.
+  Ideas only when the capture explicitly sets `substantive:true`, supplies a
+  title, or sets a durable-note flag such as `createDurableNote:true`.
 - Non-capture text is ignored unless a classifier/salience path explicitly
   routes it.
 
