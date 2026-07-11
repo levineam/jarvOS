@@ -154,6 +154,28 @@ test('catastrophic shrink restores blank templates but not meaningful short edit
   ), false);
 });
 
+test('generated blank-template placeholders are recoverable', () => {
+  const config = loadConfig();
+  const blank = renderJournal(TEST_DATE, config, normalizeSections('', TEST_DATE, config));
+  const populated = `${blank}\n${'Prior journal content. '.repeat(150)}`;
+  const health = classifyJournalHealth({
+    existed: true,
+    markdown: blank,
+    knownGood: {
+      size: Buffer.byteLength(populated, 'utf8'),
+      hash: 'known-good-hash',
+      sectionCount: 6,
+    },
+  });
+
+  assert.equal(health.status, 'stale');
+  assert.equal(health.metrics.meaningfulBodyChars, 0);
+  assert.equal(isCatastrophicJournalShrink(health.metrics, {
+    size: Buffer.byteLength(populated, 'utf8'),
+    sectionCount: 6,
+  }), true);
+});
+
 test('syncOneDate restores a frontmatter-only stub from known-good content and writes an audit backup', () => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-journal-stub-'));
   const journalDir = path.join(tmp, 'Vault', 'Journal');

@@ -195,6 +195,7 @@ function journalMetrics(markdown) {
     .split(/\r?\n/)
     .map((line) => line.trim())
     .filter((line) => line && line !== SIGNATURE && line !== '-' && !/^##\s+/.test(line))
+    .filter((line) => !isGeneratedPlaceholderLine(line))
     .join('\n').length;
   return {
     size: Buffer.byteLength(text, 'utf8'),
@@ -205,6 +206,10 @@ function journalMetrics(markdown) {
     meaningfulBodyChars,
     isFrontmatterOnly: Boolean(text.trim()) && sectionCountFromBody(body) === 0 && !hasMeaningfulBodyText(body),
   };
+}
+
+function isGeneratedPlaceholderLine(line) {
+  return /^-\s+(?:No events today|No reminders due today|No blocked Paperclip issues|No notes created(?: on .*)?|No notes today|No notes yet|\((?:calendar unavailable|reminders unavailable|Paperclip inbox script not found|Paperclip API unavailable)\))$/i.test(line);
 }
 
 function sectionCountFromBody(body) {
@@ -276,7 +281,7 @@ function readKnownGoodContent(journalDir, date, knownGood) {
 
 function isCatastrophicJournalShrink(metrics, knownGood) {
   if (!knownGood?.size || !knownGood?.sectionCount) return false;
-  return metrics.size <= Math.min(512, Math.floor(knownGood.size * 0.25))
+  return metrics.size <= Math.floor(knownGood.size * 0.25)
     && metrics.meaningfulBodyChars === 0;
 }
 
