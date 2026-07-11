@@ -6,6 +6,7 @@ const path = require('node:path');
 
 const {
   classifyJournalHealth,
+  isCatastrophicJournalShrink,
   loadConfig,
   normalizeSections,
   renderJournal,
@@ -141,6 +142,40 @@ test('classifyJournalHealth flags a shrink against known-good journal state as s
   assert.equal(classifyJournalHealth({ existed: true, markdown: shrunken, knownGood }).status, 'stale');
 });
 
+test('catastrophic shrink restores blank templates but not meaningful short edits', () => {
+  const knownGood = { size: 4000, sectionCount: 6 };
+  assert.equal(isCatastrophicJournalShrink(
+    { size: 400, sectionCount: 6, meaningfulBodyChars: 0 },
+    knownGood,
+  ), true);
+  assert.equal(isCatastrophicJournalShrink(
+    { size: 400, sectionCount: 2, meaningfulBodyChars: 20 },
+    knownGood,
+  ), false);
+});
+
+test('generated blank-template placeholders are recoverable', () => {
+  const config = loadConfig();
+  const blank = renderJournal(TEST_DATE, config, normalizeSections('', TEST_DATE, config));
+  const populated = `${blank}\n${'Prior journal content. '.repeat(150)}`;
+  const health = classifyJournalHealth({
+    existed: true,
+    markdown: blank,
+    knownGood: {
+      size: Buffer.byteLength(populated, 'utf8'),
+      hash: 'known-good-hash',
+      sectionCount: 6,
+    },
+  });
+
+  assert.equal(health.status, 'stale');
+  assert.equal(health.metrics.meaningfulBodyChars, 0);
+  assert.equal(isCatastrophicJournalShrink(health.metrics, {
+    size: Buffer.byteLength(populated, 'utf8'),
+    sectionCount: 6,
+  }), true);
+});
+
 test('syncOneDate restores a frontmatter-only stub from known-good content and writes an audit backup', () => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-journal-stub-'));
   const journalDir = path.join(tmp, 'Vault', 'Journal');
@@ -180,6 +215,31 @@ test('syncOneDate restores a frontmatter-only stub from known-good content and w
     assert.ok(repaired.backupPath);
     assert.equal(fs.existsSync(repaired.backupPath), true);
     assert.match(fs.readFileSync(repaired.backupPath, 'utf8'), /journal-date: 2026-01-02/);
+  } finally {
+    if (previousJournalDir === undefined) delete process.env.JARVOS_JOURNAL_DIR;
+    else process.env.JARVOS_JOURNAL_DIR = previousJournalDir;
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('syncOneDate restores a deleted journal from known-good content', () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-journal-deleted-'));
+  const journalDir = path.join(tmp, 'Vault', 'Journal');
+  fs.mkdirSync(journalDir, { recursive: true });
+  const previousJournalDir = process.env.JARVOS_JOURNAL_DIR;
+  process.env.JARVOS_JOURNAL_DIR = journalDir;
+  try {
+    const config = loadConfig();
+    syncOneDate(TEST_DATE, config, { dryRun: false });
+    const journalPath = path.join(journalDir, `${TEST_DATE}.md`);
+    const before = fs.readFileSync(journalPath, 'utf8');
+    fs.rmSync(journalPath);
+
+    const repaired = syncOneDate(TEST_DATE, config, { dryRun: false });
+
+    assert.equal(repaired.healthBefore.status, 'missing');
+    assert.equal(repaired.restoredKnownGood, true);
+    assert.equal(fs.readFileSync(journalPath, 'utf8'), before);
   } finally {
     if (previousJournalDir === undefined) delete process.env.JARVOS_JOURNAL_DIR;
     else process.env.JARVOS_JOURNAL_DIR = previousJournalDir;

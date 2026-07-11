@@ -191,14 +191,25 @@ function journalMetrics(markdown) {
   const { body } = splitFrontmatter(text);
   const sections = parseSections(body).sections.map((section) => section.heading);
   const hasBodyText = trimOuterBlankLines(body).length > 0;
+  const meaningfulBodyChars = trimOuterBlankLines(body)
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line && line !== SIGNATURE && line !== '-' && !/^##\s+/.test(line))
+    .filter((line) => !isGeneratedPlaceholderLine(line))
+    .join('\n').length;
   return {
     size: Buffer.byteLength(text, 'utf8'),
     hash: contentHash(text),
     sections,
     sectionCount: sections.length,
     hasBodyText,
+    meaningfulBodyChars,
     isFrontmatterOnly: Boolean(text.trim()) && sectionCountFromBody(body) === 0 && !hasMeaningfulBodyText(body),
   };
+}
+
+function isGeneratedPlaceholderLine(line) {
+  return /^-\s+(?:No events today|No reminders due today|No blocked Paperclip issues|No notes created(?: on .*)?|No notes today|No notes yet|\((?:calendar unavailable|reminders unavailable|Paperclip inbox script not found|Paperclip API unavailable)\))$/i.test(line);
 }
 
 function sectionCountFromBody(body) {
@@ -266,6 +277,12 @@ function readKnownGoodContent(journalDir, date, knownGood) {
     // Missing state snapshots are non-fatal; normalization can still scaffold.
   }
   return null;
+}
+
+function isCatastrophicJournalShrink(metrics, knownGood) {
+  if (!knownGood?.size || !knownGood?.sectionCount) return false;
+  return metrics.size <= Math.floor(knownGood.size * 0.25)
+    && metrics.meaningfulBodyChars === 0;
 }
 
 function parseFrontmatterEntries(frontmatter) {
@@ -705,7 +722,9 @@ function syncOneDate(date, config, opts = {}) {
   const state = loadJournalState(journalDir);
   const knownGood = state.dates?.[date];
   const healthBefore = classifyJournalHealth({ existed, markdown: original, knownGood });
-  const restoreSource = healthBefore.status === 'stub'
+  const restoreSource = (healthBefore.status === 'missing'
+    || healthBefore.status === 'stub'
+    || (healthBefore.status === 'stale' && isCatastrophicJournalShrink(healthBefore.metrics, knownGood)))
     ? readKnownGoodContent(journalDir, date, knownGood)
     : null;
   const source = restoreSource || original;
@@ -795,6 +814,7 @@ function main(argv = process.argv.slice(2)) {
 module.exports = {
   main,
   classifyJournalHealth,
+  isCatastrophicJournalShrink,
   detectConflictingJournalWriters,
   journalMetrics,
   loadConfig,
