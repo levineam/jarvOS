@@ -27,6 +27,7 @@ function runContract({ root, personality }) {
     VAULT_NOTES_DIR: path.join(root, 'Notes'),
     JOURNAL_DIR: path.join(root, 'Journal'),
     JARVOS_KNOWLEDGE_DIR: path.join(root, '.jarvos', 'knowledge'),
+    JARVOS_ALLOW_UNSAFE_TEST_JOURNAL_WRITE: '1',
   };
   return spawnSync(process.execPath, [CONTRACT_CLI], {
     cwd: REPO_ROOT,
