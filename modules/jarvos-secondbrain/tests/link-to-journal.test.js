@@ -272,6 +272,67 @@ test('generated Vault.process mutation preserves the latest editor content', () 
   }
 });
 
+test('generated mutation creates a missing journal through Obsidian before Vault.process', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-obsidian-create-journal-'));
+  const journalDir = path.join(root, 'Journal');
+  fs.mkdirSync(journalDir, { recursive: true });
+  const today = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+  const journalPath = path.join(journalDir, `${today}.md`);
+  let editorContent = '';
+  let createCalls = 0;
+  let processCalls = 0;
+  const file = { path: `Journal/${today}.md` };
+  const context = vm.createContext({
+    app: {
+      vault: {
+        getFileByPath: () => (createCalls ? file : null),
+        create: (_relativePath, initialContent) => {
+          createCalls += 1;
+          editorContent = `${initialContent}\n## Scratch\n- Created inside Obsidian\n`;
+          return {
+            then: (resolve) => {
+              resolve(file);
+              return { catch: () => {} };
+            },
+          };
+        },
+        process: (_file, mutate) => {
+          processCalls += 1;
+          editorContent = mutate(editorContent);
+          fs.writeFileSync(journalPath, editorContent, 'utf8');
+          return {
+            then: (resolve) => {
+              resolve();
+              return { catch: () => {} };
+            },
+          };
+        },
+      },
+    },
+    atob,
+    TextDecoder,
+  });
+
+  try {
+    const result = withVaultEnv(root, () => mutateJournalThroughObsidian({
+      journalPath,
+      noteTitle: 'Created By Obsidian',
+      section: '📝 Notes',
+      initialContent: `---\njournal: Journal\njournal-date: ${today}\n---\n\n## 📝 Notes\n-\n`,
+      pollIntervalMs: 1,
+      evaluate: (code) => JSON.parse(vm.runInContext(code, context)),
+    }));
+
+    assert.equal(createCalls, 1);
+    assert.equal(processCalls, 1);
+    assert.equal(result.mutationOwner, 'obsidian-vault-process');
+    assert.match(editorContent, /\[\[Created By Obsidian\]\]/);
+    assert.match(editorContent, /Created inside Obsidian/);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('runObsidianEval targets the vault before eval', () => {
   let invocation;
   const result = runObsidianEval('JSON.stringify({ok:true})', {
@@ -313,6 +374,49 @@ test('journal-only configuration infers the Obsidian vault root', () => {
       else process.env[key] = value;
     }
     fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('legacy configuration repairs duplicate notes only inside the journal vault', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-legacy-repair-root-'));
+  const wrongRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-wrong-repair-root-'));
+  const journalDir = path.join(root, 'Journal');
+  const notesDir = path.join(root, 'Notes');
+  fs.mkdirSync(journalDir, { recursive: true });
+  fs.mkdirSync(notesDir, { recursive: true });
+  const today = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+  const journalPath = path.join(journalDir, `${today}.md`);
+  fs.writeFileSync(journalPath, '## 📝 Notes\n-\n', 'utf8');
+  fs.writeFileSync(path.join(notesDir, 'Legacy Repair Note.md'), '# Populated note\n', 'utf8');
+  fs.writeFileSync(path.join(root, 'Legacy Repair Note.md'), '', 'utf8');
+  fs.writeFileSync(path.join(wrongRoot, 'Legacy Repair Note.md'), '', 'utf8');
+  const keys = ['JARVOS_VAULT_DIR', 'JARVOS_JOURNAL_DIR', 'JOURNAL_DIR', 'JARVOS_NOTES_DIR'];
+  const previous = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
+  process.env.JARVOS_VAULT_DIR = wrongRoot;
+  delete process.env.JARVOS_JOURNAL_DIR;
+  process.env.JOURNAL_DIR = journalDir;
+  process.env.JARVOS_NOTES_DIR = notesDir;
+
+  try {
+    const result = linkNoteToJournal({
+      noteTitle: 'Legacy Repair Note',
+      journalPath,
+      ownedJournalMutator: ({ journalPath: target, noteTitle, section }) => {
+        const mutation = linkNoteInSection(fs.readFileSync(target, 'utf8'), noteTitle, section);
+        fs.writeFileSync(target, mutation.content, 'utf8');
+        return { ...mutation, mutationOwner: 'obsidian-vault-process' };
+      },
+    });
+    assert.equal(result.vaultRootDuplicate.repaired, true);
+    assert.equal(fs.existsSync(path.join(root, 'Legacy Repair Note.md')), false);
+    assert.equal(fs.existsSync(path.join(wrongRoot, 'Legacy Repair Note.md')), true);
+  } finally {
+    for (const [key, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(wrongRoot, { recursive: true, force: true });
   }
 });
 
@@ -373,3 +477,37 @@ test('a corrupt deferred queue is preserved instead of being replaced', () => {
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+for (const [name, queueContent] of [
+  ['array root', '[]'],
+  ['array entries', '{"version":1,"entries":[]}'],
+  ['string entries', '{"version":1,"entries":"corrupt"}'],
+]) {
+  test(`a parseable deferred queue with an invalid ${name} is preserved`, () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-invalid-backlink-queue-'));
+    const journalDir = path.join(root, 'Journal');
+    const stateDir = path.join(root, '.jarvos', 'journal-maintenance');
+    fs.mkdirSync(journalDir, { recursive: true });
+    fs.mkdirSync(stateDir, { recursive: true });
+    const today = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+    const journalPath = path.join(journalDir, `${today}.md`);
+    const queuePath = path.join(stateDir, 'deferred-backlinks.json');
+    const originalJournal = '## 📝 Notes\n-\n';
+    fs.writeFileSync(journalPath, originalJournal, 'utf8');
+    fs.writeFileSync(queuePath, queueContent, 'utf8');
+
+    try {
+      assert.throws(() => withVaultEnv(root, () => linkNoteToJournal({
+        noteTitle: 'Do Not Replace Invalid Queue',
+        journalPath,
+        ownedJournalMutator: () => {
+          throw new Error('Obsidian unavailable');
+        },
+      })), /Invalid deferred backlink queue/);
+      assert.equal(fs.readFileSync(journalPath, 'utf8'), originalJournal);
+      assert.equal(fs.readFileSync(queuePath, 'utf8'), queueContent);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+}

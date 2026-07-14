@@ -70,6 +70,18 @@ function readJsonSafe(filePath, fallback) {
   }
 }
 
+function isPlainObject(value) {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function readDeferredQueue(filePath) {
+  const data = readJsonSafe(filePath, { version: 1, entries: {} });
+  if (!isPlainObject(data)) throw new Error(`Invalid deferred backlink queue shape: ${filePath}`);
+  if (data.entries === undefined) data.entries = {};
+  if (!isPlainObject(data.entries)) throw new Error(`Invalid deferred backlink queue entries: ${filePath}`);
+  return data;
+}
+
 function writeJson(filePath, data) {
   mkdirSync(path.dirname(filePath), { recursive: true });
   const tempPath = path.join(
@@ -286,11 +298,10 @@ function recordDeferredBacklink({ journalPath, noteTitle, section, reason }) {
     .digest('hex')
     .slice(0, 16);
   withDeferredQueueLock(deferredPath, () => {
-    const data = readJsonSafe(deferredPath, { version: 1, entries: {} });
+    const data = readDeferredQueue(deferredPath);
     const now = new Date().toISOString();
     data.version = 1;
     data.updatedAt = now;
-    data.entries = data.entries && typeof data.entries === 'object' ? data.entries : {};
     data.entries[key] = {
       status: 'pending',
       reason,
@@ -355,11 +366,15 @@ function linkNoteToJournal({
     wrapped.deferredBacklink = deferred;
     throw wrapped;
   }
-  const vaultRootDuplicate = repairZeroByteVaultRootDuplicate({
-    noteTitle,
-    notesDir: getVaultNotesDir(),
-    vaultRoot: getVaultDir(),
-  });
+  const effectiveVaultRoot = resolveVaultRootForJournal(journalPath);
+  const notesDir = getVaultNotesDir();
+  const vaultRootDuplicate = isPathInside(effectiveVaultRoot, notesDir)
+    ? repairZeroByteVaultRootDuplicate({ noteTitle, notesDir, vaultRoot: effectiveVaultRoot })
+    : {
+      checked: false,
+      repaired: false,
+      reason: 'notes directory is outside the journal vault',
+    };
   return {
     linked: true,
     journalPath,
