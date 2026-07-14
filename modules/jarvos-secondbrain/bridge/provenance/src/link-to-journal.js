@@ -6,7 +6,16 @@
 
 'use strict';
 
-const { readFileSync, writeFileSync, existsSync } = require('fs');
+const {
+  readFileSync,
+  writeFileSync,
+  existsSync,
+  renameSync,
+  openSync,
+  closeSync,
+  unlinkSync,
+  statSync,
+} = require('fs');
 const { mkdirSync } = require('node:fs');
 const crypto = require('node:crypto');
 const { execFileSync } = require('node:child_process');
@@ -26,6 +35,7 @@ const {
 
 const OBSIDIAN_MUTATION_RESULT_STORE = '__jarvosJournalMutationResults';
 const OBSIDIAN_MUTATION_TIMEOUT_MS = 10 * 1000;
+const DEFERRED_QUEUE_LOCK_MAX_AGE_MS = 30 * 1000;
 
 function todayPath() {
   const today = new Date().toLocaleDateString('en-CA', { timeZone: getTimeZone() });
@@ -38,11 +48,15 @@ function dateFromJournalPath(journalPath) {
   return new Date().toLocaleDateString('en-CA', { timeZone: getTimeZone() });
 }
 
-function ensureJournalFile(journalPath, date = dateFromJournalPath(journalPath)) {
-  if (existsSync(journalPath)) return;
+function renderInitialJournal(journalPath, date = dateFromJournalPath(journalPath)) {
   const config = loadConfig();
   const normalized = normalizeSections('', date, config);
-  const rendered = renderJournal(date, config, normalized);
+  return renderJournal(date, config, normalized);
+}
+
+function ensureJournalFile(journalPath, date = dateFromJournalPath(journalPath)) {
+  if (existsSync(journalPath)) return;
+  const rendered = renderInitialJournal(journalPath, date);
   mkdirSync(path.dirname(journalPath), { recursive: true });
   writeFileSync(journalPath, rendered, 'utf8');
 }
@@ -50,19 +64,66 @@ function ensureJournalFile(journalPath, date = dateFromJournalPath(journalPath))
 function readJsonSafe(filePath, fallback) {
   try {
     return JSON.parse(readFileSync(filePath, 'utf8'));
-  } catch {
-    return fallback;
+  } catch (error) {
+    if (error.code === 'ENOENT') return fallback;
+    throw error;
   }
 }
 
 function writeJson(filePath, data) {
   mkdirSync(path.dirname(filePath), { recursive: true });
-  writeFileSync(filePath, `${JSON.stringify(data, null, 2)}\n`, 'utf8');
+  const tempPath = path.join(
+    path.dirname(filePath),
+    `.${path.basename(filePath)}.${process.pid}.${Date.now()}.${crypto.randomBytes(4).toString('hex')}.tmp`,
+  );
+  try {
+    writeFileSync(tempPath, `${JSON.stringify(data, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
+    renameSync(tempPath, filePath);
+  } catch (error) {
+    try {
+      unlinkSync(tempPath);
+    } catch {
+      // Cleanup is best-effort; preserve the original write failure.
+    }
+    throw error;
+  }
 }
 
 function sleepSync(ms) {
   if (!Number.isFinite(ms) || ms <= 0) return;
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+function withDeferredQueueLock(deferredPath, fn, { maxAttempts = 40, retryMs = 25 } = {}) {
+  const lockPath = `${deferredPath}.lock`;
+  mkdirSync(path.dirname(lockPath), { recursive: true });
+  let fd = null;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      fd = openSync(lockPath, 'wx', 0o600);
+      break;
+    } catch (error) {
+      if (error.code !== 'EEXIST') throw error;
+      try {
+        if (Date.now() - statSync(lockPath).mtimeMs > DEFERRED_QUEUE_LOCK_MAX_AGE_MS) unlinkSync(lockPath);
+      } catch {
+        // The lock may disappear between attempts.
+      }
+      if (attempt === maxAttempts) throw new Error(`Timed out locking deferred backlink queue: ${deferredPath}`);
+      sleepSync(retryMs);
+    }
+  }
+
+  try {
+    return fn();
+  } finally {
+    if (fd !== null) closeSync(fd);
+    try {
+      unlinkSync(lockPath);
+    } catch {
+      // A stale-lock cleanup may already have removed it.
+    }
+  }
 }
 
 function parseObsidianEvalResult(output) {
@@ -118,12 +179,13 @@ function journalPathRelativeToVault(journalPath) {
   return relativePath.split(path.sep).join('/');
 }
 
-function obsidianMutationScript({ journalPath, noteTitle, section, token }) {
+function obsidianMutationScript({ journalPath, noteTitle, section, token, initialContent }) {
   const payload = Buffer.from(JSON.stringify({
     journalPath: journalPathRelativeToVault(journalPath),
     noteTitle,
     section,
     token,
+    initialContent,
   }), 'utf8').toString('base64');
   const helpers = [escapeRegex, normalizeSectionName, findSectionRange, linkLineRegex, linkNoteInSection]
     .map((fn) => fn.toString())
@@ -134,18 +196,30 @@ function obsidianMutationScript({ journalPath, noteTitle, section, token }) {
     const bytes = Uint8Array.from(atob('${payload}'), (char) => char.charCodeAt(0));
     const input = JSON.parse(new TextDecoder().decode(bytes));
     const store = globalThis.${OBSIDIAN_MUTATION_RESULT_STORE} ||= {};
-    const file = app.vault.getFileByPath(input.journalPath);
-    if (!file) throw new Error('Journal not found in Obsidian vault: ' + input.journalPath);
     store[input.token] = { status: 'pending' };
-    app.vault.process(file, (current) => {
-      const mutation = linkNoteInSection(current, input.noteTitle, input.section);
-      store[input.token] = { status: 'writing', alreadyPresent: mutation.alreadyPresent };
-      return mutation.content;
-    }).then(() => {
-      store[input.token] = { ...store[input.token], status: 'done' };
-    }).catch((error) => {
-      store[input.token] = { status: 'error', error: error?.message || String(error) };
-    });
+    const processFile = (file) => app.vault.process(file, (current) => {
+        const mutation = linkNoteInSection(current, input.noteTitle, input.section);
+        store[input.token] = { status: 'writing', alreadyPresent: mutation.alreadyPresent };
+        return mutation.content;
+      }).then(() => {
+        store[input.token] = { ...store[input.token], status: 'done' };
+      }).catch((error) => {
+        store[input.token] = { status: 'error', error: error?.message || String(error) };
+      });
+    const existing = app.vault.getFileByPath(input.journalPath);
+    if (existing) {
+      processFile(existing);
+    } else if (typeof input.initialContent === 'string') {
+      app.vault.create(input.journalPath, input.initialContent)
+        .then(processFile)
+        .catch((error) => {
+          const concurrentlyCreated = app.vault.getFileByPath(input.journalPath);
+          if (concurrentlyCreated) processFile(concurrentlyCreated);
+          else store[input.token] = { status: 'error', error: error?.message || String(error) };
+        });
+    } else {
+      store[input.token] = { status: 'error', error: 'Journal not found in Obsidian vault: ' + input.journalPath };
+    }
     return JSON.stringify({ queued: true, token: input.token });
   })()`;
 }
@@ -154,6 +228,7 @@ function mutateJournalThroughObsidian({
   journalPath,
   noteTitle,
   section,
+  initialContent,
   evaluate,
   maxPollAttempts = 40,
   pollIntervalMs = 50,
@@ -162,7 +237,7 @@ function mutateJournalThroughObsidian({
     vaultName: path.basename(resolveVaultRootForJournal(journalPath)),
   }));
   const token = crypto.randomUUID();
-  const queued = runEvaluate(obsidianMutationScript({ journalPath, noteTitle, section, token }));
+  const queued = runEvaluate(obsidianMutationScript({ journalPath, noteTitle, section, token, initialContent }));
   if (!queued?.queued || queued.token !== token) {
     throw new Error('Obsidian did not acknowledge the journal mutation');
   }
@@ -206,25 +281,27 @@ function deferredBacklinksPath(journalPath) {
 
 function recordDeferredBacklink({ journalPath, noteTitle, section, reason }) {
   const deferredPath = deferredBacklinksPath(journalPath);
-  const data = readJsonSafe(deferredPath, { version: 1, entries: {} });
-  const now = new Date().toISOString();
   const key = crypto.createHash('sha256')
     .update(`${journalPath}\0${section}\0${noteTitle}`)
     .digest('hex')
     .slice(0, 16);
-  data.version = 1;
-  data.updatedAt = now;
-  data.entries = data.entries && typeof data.entries === 'object' ? data.entries : {};
-  data.entries[key] = {
-    status: 'pending',
-    reason,
-    noteTitle,
-    section,
-    journalPath,
-    recordedAt: data.entries[key]?.recordedAt || now,
-    updatedAt: now,
-  };
-  writeJson(deferredPath, data);
+  withDeferredQueueLock(deferredPath, () => {
+    const data = readJsonSafe(deferredPath, { version: 1, entries: {} });
+    const now = new Date().toISOString();
+    data.version = 1;
+    data.updatedAt = now;
+    data.entries = data.entries && typeof data.entries === 'object' ? data.entries : {};
+    data.entries[key] = {
+      status: 'pending',
+      reason,
+      noteTitle,
+      section,
+      journalPath,
+      recordedAt: data.entries[key]?.recordedAt || now,
+      updatedAt: now,
+    };
+    writeJson(deferredPath, data);
+  });
   return { deferredPath, key };
 }
 
@@ -243,20 +320,25 @@ function linkNoteToJournal({
 } = {}) {
   if (!noteTitle) throw new Error('noteTitle is required');
 
-  if (!existsSync(journalPath)) {
-    if (!createIfMissing) throw new Error(`Journal not found: ${journalPath}`);
-    ensureJournalFile(journalPath);
-  }
+  const existedBefore = existsSync(journalPath);
+  if (!existedBefore && !createIfMissing) throw new Error(`Journal not found: ${journalPath}`);
   const normalizedSection = normalizeSectionName(section);
-  const original = readFileSync(journalPath, 'utf8');
+  const useObsidianOwnedMutation = isTodayJournalPath(journalPath)
+    && process.env.JARVOS_ALLOW_UNSAFE_TEST_JOURNAL_WRITE !== '1';
+  if (!existedBefore && !useObsidianOwnedMutation) ensureJournalFile(journalPath);
+  const original = existsSync(journalPath) ? readFileSync(journalPath, 'utf8') : '';
   const existing = linkNoteInSection(original, noteTitle, normalizedSection);
   let mutation;
   try {
     if (existing.alreadyPresent) {
       mutation = { alreadyPresent: true, mutationOwner: 'existing-journal-content' };
-    } else if (isTodayJournalPath(journalPath)
-      && process.env.JARVOS_ALLOW_UNSAFE_TEST_JOURNAL_WRITE !== '1') {
-      mutation = ownedJournalMutator({ journalPath, noteTitle, section: normalizedSection });
+    } else if (useObsidianOwnedMutation) {
+      mutation = ownedJournalMutator({
+        journalPath,
+        noteTitle,
+        section: normalizedSection,
+        initialContent: existedBefore ? undefined : renderInitialJournal(journalPath),
+      });
     } else {
       writeFileSync(journalPath, existing.content, 'utf8');
       mutation = { alreadyPresent: false, mutationOwner: 'jarvos-filesystem' };
