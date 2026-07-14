@@ -10,6 +10,7 @@ const {
   linkNoteToJournal,
   mutateJournalThroughObsidian,
   normalizeSectionName,
+  resolveVaultRootForJournal,
   runObsidianEval,
 } = require('../bridge/provenance/src/link-to-journal.js');
 
@@ -254,6 +255,31 @@ test('runObsidianEval targets the vault before eval', () => {
     args: ['vault=Test Vault', 'eval', 'code=JSON.stringify({ok:true})'],
     options: { encoding: 'utf8', timeout: 10000, stdio: ['ignore', 'pipe', 'pipe'] },
   });
+});
+
+test('journal-only configuration infers the Obsidian vault root', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-journal-only-vault-'));
+  const journalDir = path.join(root, 'Journal');
+  const journalPath = path.join(journalDir, '2030-02-03.md');
+  fs.mkdirSync(journalDir, { recursive: true });
+  const previous = {
+    JARVOS_VAULT_DIR: process.env.JARVOS_VAULT_DIR,
+    JARVOS_JOURNAL_DIR: process.env.JARVOS_JOURNAL_DIR,
+    JOURNAL_DIR: process.env.JOURNAL_DIR,
+  };
+  delete process.env.JARVOS_VAULT_DIR;
+  delete process.env.JARVOS_JOURNAL_DIR;
+  process.env.JOURNAL_DIR = journalDir;
+
+  try {
+    assert.equal(resolveVaultRootForJournal(journalPath), root);
+  } finally {
+    for (const [key, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test('Obsidian failure leaves journal untouched and queues recovery', () => {

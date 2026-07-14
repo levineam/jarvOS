@@ -95,8 +95,22 @@ function runObsidianEval(code, {
   return parseObsidianEvalResult(output);
 }
 
+function isPathInside(parentDir, candidatePath) {
+  const relativePath = path.relative(path.resolve(parentDir), path.resolve(candidatePath));
+  return relativePath === '' || (!relativePath.startsWith('..') && !path.isAbsolute(relativePath));
+}
+
+function resolveVaultRootForJournal(journalPath) {
+  const configuredVaultRoot = path.resolve(getVaultDir());
+  if (isPathInside(configuredVaultRoot, journalPath)) return configuredVaultRoot;
+
+  const configuredJournalDir = path.resolve(getVaultJournalDir());
+  if (isPathInside(configuredJournalDir, journalPath)) return path.dirname(configuredJournalDir);
+  return configuredVaultRoot;
+}
+
 function journalPathRelativeToVault(journalPath) {
-  const vaultRoot = path.resolve(getVaultDir());
+  const vaultRoot = resolveVaultRootForJournal(journalPath);
   const relativePath = path.relative(vaultRoot, path.resolve(journalPath));
   if (!relativePath || relativePath.startsWith('..') || path.isAbsolute(relativePath)) {
     throw new Error(`Journal is outside the active Obsidian vault: ${journalPath}`);
@@ -140,12 +154,15 @@ function mutateJournalThroughObsidian({
   journalPath,
   noteTitle,
   section,
-  evaluate = runObsidianEval,
+  evaluate,
   maxPollAttempts = 40,
   pollIntervalMs = 50,
 } = {}) {
+  const runEvaluate = evaluate || ((code) => runObsidianEval(code, {
+    vaultName: path.basename(resolveVaultRootForJournal(journalPath)),
+  }));
   const token = crypto.randomUUID();
-  const queued = evaluate(obsidianMutationScript({ journalPath, noteTitle, section, token }));
+  const queued = runEvaluate(obsidianMutationScript({ journalPath, noteTitle, section, token }));
   if (!queued?.queued || queued.token !== token) {
     throw new Error('Obsidian did not acknowledge the journal mutation');
   }
@@ -154,14 +171,14 @@ function mutateJournalThroughObsidian({
   try {
     for (let attempt = 0; attempt < maxPollAttempts; attempt += 1) {
       if (attempt > 0) sleepSync(pollIntervalMs);
-      result = evaluate(`JSON.stringify(globalThis.${OBSIDIAN_MUTATION_RESULT_STORE}?.['${token}'] || null)`);
+      result = runEvaluate(`JSON.stringify(globalThis.${OBSIDIAN_MUTATION_RESULT_STORE}?.['${token}'] || null)`);
       if (result?.status === 'done') break;
       if (result?.status === 'error') throw new Error(`Obsidian journal mutation failed: ${result.error}`);
     }
     if (result?.status !== 'done') throw new Error('Timed out waiting for Obsidian to commit the journal mutation');
   } finally {
     try {
-      evaluate(`delete globalThis.${OBSIDIAN_MUTATION_RESULT_STORE}?.['${token}']; JSON.stringify(true)`);
+      runEvaluate(`delete globalThis.${OBSIDIAN_MUTATION_RESULT_STORE}?.['${token}']; JSON.stringify(true)`);
     } catch {
       // Cleanup is best-effort and must not mask the mutation result.
     }
@@ -376,6 +393,7 @@ module.exports = {
   obsidianMutationScript,
   parseObsidianEvalResult,
   recordDeferredBacklink,
+  resolveVaultRootForJournal,
   runObsidianEval,
 };
 
