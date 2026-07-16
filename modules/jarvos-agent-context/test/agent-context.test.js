@@ -35,12 +35,14 @@ function withTempVault(fn) {
     JARVOS_JOURNAL_DIR: process.env.JARVOS_JOURNAL_DIR,
     JARVOS_TIMEZONE: process.env.JARVOS_TIMEZONE,
     JARVOS_SESSION_THREAD_ID: process.env.JARVOS_SESSION_THREAD_ID,
+    JARVOS_ALLOW_UNSAFE_TEST_JOURNAL_WRITE: process.env.JARVOS_ALLOW_UNSAFE_TEST_JOURNAL_WRITE,
   };
 
   process.env.JARVOS_VAULT_DIR = vault;
   process.env.JARVOS_NOTES_DIR = notes;
   process.env.JARVOS_JOURNAL_DIR = journal;
   process.env.JARVOS_TIMEZONE = 'UTC';
+  process.env.JARVOS_ALLOW_UNSAFE_TEST_JOURNAL_WRITE = '1';
   jarvosPaths.resetConfigCache();
 
   let result;
