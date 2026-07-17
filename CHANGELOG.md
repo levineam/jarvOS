@@ -4,7 +4,27 @@ Release sections describe user-facing jarvOS changes. Historical public-doc sync
 
 ## [Unreleased]
 
-- Nothing yet.
+Part of the v0.7.0 lane (SUP-3497): control-plane application service,
+protected-resource mutation policy, and public parity.
+
+### Added
+- Add the core authenticated control-plane application-service boundary for
+  adapter request envelopes: approvals bind to action key, capability,
+  expiry, and fence, and fail closed on replay or staleness; list/inspect
+  projections filter by principal sensitivity (SUP-3478, #103).
+- Add a portable protected-resource mutation policy layer to
+  `@jarvos/control-plane`: resource identity, owning adapter, and allowed
+  named operations resolve to structured allow/deny/fail-closed decisions
+  with evidence digests, including a Daily Journal identity matcher pattern
+  (SUP-3493, #107).
+- Add an opt-in section-transform seam to `jarvos-secondbrain-journal` so
+  hosts can surgically clean recovered Notes scaffold through maintenance
+  APIs instead of raw writes (SUP-3493, #108).
+
+### Known Limitations
+- Public CLI/MCP parity for the control-plane application service
+  (SUP-3466, #106) is not yet merged and is deferred out of this
+  [Unreleased] lane pending an explicit merge decision.
 
 ## v0.6.3 — 2026-07-16
 
