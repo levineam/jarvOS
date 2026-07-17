@@ -259,7 +259,11 @@ function noteCaptureArgs(args = {}) {
 
 async function callTool(name, args = {}) {
   if (name === 'jarvos_control_plane') {
-    const result = controlPlane(args.operation, args);
+    // MCP tool arguments are untrusted. In particular, never allow a caller to
+    // supply the manager's service construction options (token, state path, or
+    // requireAuth); those belong to the installed host/test seam only.
+    const { service: _service, ...input } = args;
+    const result = controlPlane(input.operation, input);
     return textResult(JSON.stringify(result, null, 2), !result.ok);
   }
   if (name === 'jarvos_current_work') {

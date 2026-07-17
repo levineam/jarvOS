@@ -84,8 +84,12 @@ test('defaultFrontmatter includes note-capture contract fields', () => {
 
 test('control-plane service gives authenticated human and MCP callers the same request lifecycle', async () => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-control-plane-parity-'));
+  const previousToken = process.env.JARVOS_CONTROL_PLANE_TOKEN;
+  const previousStatePath = process.env.JARVOS_CONTROL_PLANE_STATE_PATH;
   try {
     const service = { statePath: path.join(tmp, 'state.json'), token: 'test-token' };
+    process.env.JARVOS_CONTROL_PLANE_TOKEN = service.token;
+    process.env.JARVOS_CONTROL_PLANE_STATE_PATH = service.statePath;
     const input = {
       authToken: 'test-token', service,
       principal: { id: 'principal:test' }, actor: { kind: 'agent', harness: 'test' },
@@ -96,12 +100,23 @@ test('control-plane service gives authenticated human and MCP callers the same r
     const human = controlPlane('request', input);
     assert.equal(human.ok, true);
     assert.equal(human.request.status, 'approval_required');
-    const mcp = await callTool('jarvos_control_plane', { operation: 'approval-state', authToken: 'test-token', requestId: human.request.id, service });
+    await assert.rejects(
+      callTool('jarvos_control_plane', {
+        operation: 'approval-state', requestId: human.request.id,
+        service: { requireAuth: false, statePath: service.statePath },
+      }),
+      /authentication failed/,
+    );
+    const mcp = await callTool('jarvos_control_plane', { operation: 'approval-state', authToken: 'test-token', requestId: human.request.id });
     assert.equal(mcp.isError, false);
     assert.match(mcp.content[0].text, /approval_required/);
     const approved = controlPlane('approve', { authToken: 'test-token', requestId: human.request.id, service });
     assert.equal(approved.request.status, 'approved');
   } finally {
+    if (previousToken === undefined) delete process.env.JARVOS_CONTROL_PLANE_TOKEN;
+    else process.env.JARVOS_CONTROL_PLANE_TOKEN = previousToken;
+    if (previousStatePath === undefined) delete process.env.JARVOS_CONTROL_PLANE_STATE_PATH;
+    else process.env.JARVOS_CONTROL_PLANE_STATE_PATH = previousStatePath;
     fs.rmSync(tmp, { recursive: true, force: true });
   }
 });

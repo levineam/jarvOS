@@ -58,6 +58,7 @@
     "modules/jarvos-skills/skills/",
     "modules/jarvos-skills/src/",
     "profiles/",
+    "runtimes/codex/adapter.json",
     "scripts/jarvos.js",
     "scripts/manual-notes-maintenance.js",
     "templates/"
