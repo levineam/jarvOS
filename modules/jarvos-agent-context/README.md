@@ -25,6 +25,12 @@ The bundled stdio MCP server exposes:
 | `jarvos_session_thread_write` | Append a checkpoint to that thread as a normal secondbrain note linked from today's journal |
 | `jarvos_startup_brief` | Bounded startup context for agent sessions |
 | `jarvos_hydrate` | Bounded working-context packet for startup hydration, including ontology context when configured |
+| `jarvos_control_plane` | Authenticated request, inspection, evidence, and approval access through the installed host application service |
+
+`jarvos_control_plane` is available only after the host has configured
+`JARVOS_CONTROL_PLANE_SERVICE_MODULE`. `@jarvos/agent-context` declares
+`@jarvos/control-plane` as a runtime dependency so this boundary resolves from
+an installed package, not from a repository-relative path.
 
 ## Ontology Context
 
@@ -65,11 +71,36 @@ packet as working context without dumping raw private notes.
 
 ## Codex
 
-From the repo root:
+Prefer the runtime setup script. On a public/minimal install with no private
+host configured, register the shared MCP server alone:
 
 ```bash
-codex mcp add jarvos -- node "$PWD/modules/jarvos-agent-context/scripts/jarvos-mcp.js"
+./runtimes/codex/setup.sh
 ```
+
+When an authenticated host is available, pass both non-secret bindings together
+(absolute paths only; either alone is rejected):
+
+```bash
+JARVOS_CONTROL_PLANE_SERVICE_MODULE=/absolute/path/to/authenticated-host-service.js \
+JARVOS_CONTROL_PLANE_CREDENTIAL_FILE=/absolute/path/to/control-plane.credential \
+  ./runtimes/codex/setup.sh
+```
+
+Manual registration (for non-persisted sessions) may use an ambient credential
+in the current shell, but persisted MCP config must never store the secret
+value — register `JARVOS_CONTROL_PLANE_CREDENTIAL_FILE` instead:
+
+```bash
+codex mcp add \
+  --env "JARVOS_CONTROL_PLANE_SERVICE_MODULE=/absolute/path/to/host-service.js" \
+  --env "JARVOS_CONTROL_PLANE_CREDENTIAL_FILE=/absolute/path/to/control-plane.credential" \
+  jarvos -- node "$PWD/modules/jarvos-agent-context/scripts/jarvos-mcp.js"
+```
+
+The MCP server binds the control-plane credential server-side from that file
+(or from ambient `JARVOS_CONTROL_PLANE_CREDENTIAL` for non-persisted host
+sessions). Never pass a credential as a tool argument.
 
 Then a Codex session can call the jarvOS tools instead of guessing from local
 files or relying on static memory.
