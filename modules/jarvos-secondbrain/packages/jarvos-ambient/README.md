@@ -1,6 +1,6 @@
 # @jarvos/ambient
 
-Portable ambient intelligence primitives for jarvOS-style assistants.
+Portable ambient intelligence primitives for JarvOS-style assistants.
 
 This package starts with the pure intent layer and a replaceable adapter
 contract. Intent classifiers return plain objects; adapter wrappers normalize

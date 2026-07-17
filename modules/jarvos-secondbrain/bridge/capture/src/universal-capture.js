@@ -100,6 +100,11 @@ function normalizeCaptureEvent(rawInput = {}) {
     origin: normalizeOrigin(raw, source),
     evidence: normalizeEvidence(raw, text),
     substantive: raw.substantive,
+    createNote: raw.createNote,
+    createDurableNote: raw.createDurableNote,
+    durable: raw.durable,
+    durableNote: raw.durableNote,
+    standaloneNote: raw.standaloneNote,
   };
 
   const normalized = compact(event);

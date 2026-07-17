@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Three-package capture router for jarvOS.
+ * Three-package capture router for JarvOS.
  *
  * Routes capture events to up to three destinations:
  * 1. jarvos-secondbrain-journal (chronological record)
@@ -32,55 +32,16 @@ const {
   createStorageAdapter,
 } = require('../../../adapters');
 
-function createUnavailableMemoryApi(loadError) {
-  return {
-    createMemoryRecord() {
-      return {
-        record: null,
-        written: false,
-        path: null,
-        error: `@jarvos/memory is unavailable: ${loadError.message}`,
-      };
-    },
-    checkMemoryDedup() {
-      return { isDuplicate: false, existingPath: null, action: null };
-    },
-  };
-}
-
-function loadMemoryApi() {
-  try {
-    return require('@jarvos/memory');
-  } catch (packageError) {
-    try {
-      return require('../../../../jarvos-memory/src');
-    } catch {
-      return createUnavailableMemoryApi(packageError);
-    }
-  }
-}
-
-const memoryApi = loadMemoryApi();
-
-const createMemoryRecord = typeof memoryApi.createMemoryRecord === 'function'
-  ? memoryApi.createMemoryRecord
-  : () => ({
-    record: null,
-    written: false,
-    path: null,
-    error: 'createMemoryRecord is unavailable',
-  });
-
-const checkMemoryDedup = typeof memoryApi.checkMemoryDedup === 'function'
-  ? memoryApi.checkMemoryDedup
-  : () => ({ isDuplicate: false, existingPath: null, action: null });
+const {
+  createMemoryRecord,
+  checkMemoryDedup,
+} = require('../../../../jarvos-memory/src');
 
 const {
   SALIENCE_TO_MEMORY_CLASS,
   MEMORY_CONFIDENCE_THRESHOLD,
   DECISIONS_HEADING,
   REMEMBERED_HEADING,
-  FLAGGED_HEADING,
   REVIEW_CONFIDENCE_MIN,
   REVIEW_CONFIDENCE_MAX,
   buildThreePackagePlan,
@@ -89,10 +50,6 @@ const {
 const {
   resolveConfiguredHeading,
 } = require('../../../packages/jarvos-secondbrain-journal/src/section-config');
-
-function noteWriteSucceeded(note) {
-  return Boolean(note) && note.written !== false && note.error == null;
-}
 
 function applyStoragePlan(plan, capture = {}, options = {}) {
   const adapter = options.adapter || createStorageAdapter(options);
@@ -136,7 +93,7 @@ function applyStoragePlan(plan, capture = {}, options = {}) {
     // Trust the adapter's write result: link only if the note write was not an
     // explicit failure. (The adapter is authoritative for its own vault within this
     // call; cross-vault/cross-runtime drift is covered by the integrity sweep + WS7.)
-    const noteWritten = noteWriteSucceeded(result.note);
+    const noteWritten = Boolean(result.note) && result.note.written !== false && result.note.error == null;
 
     if (isNoteWikiLink && !noteWritten) {
       result.noteLinkSkipped = {
@@ -195,8 +152,8 @@ function applyThreePackagePlan(capture = {}, options = {}) {
 
     const params = { ...plan.memoryParams };
 
-    // If a note was persisted, add the reference.
-    if (noteWriteSucceeded(keywordResult.note)) {
+    // If a note was created, add the reference
+    if (keywordResult.note) {
       params.noteRef = keywordResult.note.title || keywordResult.note.path || undefined;
     }
 
@@ -268,13 +225,11 @@ module.exports = {
   MEMORY_CONFIDENCE_THRESHOLD,
   DECISIONS_HEADING,
   REMEMBERED_HEADING,
-  FLAGGED_HEADING,
   REVIEW_CONFIDENCE_MIN,
   REVIEW_CONFIDENCE_MAX,
   applyStoragePlan,
   applyThreePackagePlan,
   buildThreePackagePlan,
-  noteWriteSucceeded,
   previewRouting,
 };
 

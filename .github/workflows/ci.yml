@@ -119,6 +119,45 @@ jobs:
             exit 1
           fi
 
+  secret-scan:
+    name: Secret scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Scan changed lines for common secret patterns
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            base="${{ github.event.pull_request.base.sha }}"
+          else
+            base="${{ github.event.before }}"
+          fi
+
+          pattern='(ghp_|sk-[A-Za-z0-9]{20,}|xox[baprs]-[A-Za-z0-9-]{10,}|BEGIN (RSA|OPENSSH|EC|DSA|PRIVATE) KEY|api[_-]?key[[:space:]]*[:=]|private[_-]?key[[:space:]]*[:=]|access[_-]?token[[:space:]]*[:=]|bearer[_-]?token[[:space:]]*[:=]|password[[:space:]]*[:=]|secret[_-]?key[[:space:]]*[:=]|auth[_-]?token[[:space:]]*[:=])'
+          sensitive_exts=(
+            '*.js' '*.jsx' '*.ts' '*.tsx' '*.mjs' '*.cjs'
+            '*.py' '*.sh' '*.bash'
+            '*.yml' '*.yaml' '*.json' '*.toml' '*.ini' '*.cfg'
+            '.env*'
+          )
+
+          if [[ -z "$base" || "$base" =~ ^0+$ ]] || ! git cat-file -e "$base^{commit}" 2>/dev/null; then
+            if git grep -nI -E "$pattern" -- "${sensitive_exts[@]}" ':!.github/workflows/ci.yml'; then
+              echo "Potential secret pattern detected in repository history scan."
+              exit 1
+            fi
+          else
+            if git diff -U0 "$base"...HEAD -- "${sensitive_exts[@]}" ':!.github/workflows/ci.yml' | grep -E -i "$pattern"; then
+              echo "Potential secret pattern detected in changed content."
+              exit 1
+            fi
+          fi
+
   smoke-test:
     name: Smoke test
     runs-on: ubuntu-latest
@@ -136,6 +175,7 @@ jobs:
       - markdown-lint
       - link-check
       - meta-hygiene
+      - secret-scan
       - smoke-test
     if: always()
     steps:
@@ -150,9 +190,10 @@ jobs:
             echo "link-check         : ${{ needs.link-check.result }}"
           fi
           echo "meta-hygiene       : ${{ needs.meta-hygiene.result }}"
+          echo "secret-scan        : ${{ needs.secret-scan.result }}"
           echo "smoke-test         : ${{ needs.smoke-test.result }}"
 
-          for r in "${{ needs.markdown-lint.result }}" "${{ needs.link-check.result }}" "${{ needs.meta-hygiene.result }}" "${{ needs.smoke-test.result }}"; do
+          for r in "${{ needs.markdown-lint.result }}" "${{ needs.link-check.result }}" "${{ needs.meta-hygiene.result }}" "${{ needs.secret-scan.result }}" "${{ needs.smoke-test.result }}"; do
             if [[ "$r" == "failure" || "$r" == "cancelled" ]]; then
               echo "One or more CI jobs failed/cancelled."
               exit 1

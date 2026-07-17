@@ -37,6 +37,24 @@ test('contract input and output schemas compile as JSON Schema', () => {
   }
 });
 
+test('idea-parking requires an explicit review queue', () => {
+  const ajv = makeValidator();
+  const validate = ajv.compile(getSkillContract('idea-parking').input);
+
+  assert.equal(validate({
+    text: 'I like using TypeScript for new projects.',
+    confidence: 0.7,
+    salienceClass: 'preference',
+  }), false);
+
+  assert.equal(validate({
+    text: 'I like using TypeScript for new projects.',
+    confidence: 0.7,
+    salienceClass: 'preference',
+    reviewQueue: 'capture-review',
+  }), true, ajv.errorsText(validate.errors));
+});
+
 test('capture and routing contracts are importable by stable name', () => {
   assert.deepEqual(
     listSkillContracts().map((contract) => contract.name).sort(),

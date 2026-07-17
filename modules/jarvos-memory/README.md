@@ -1,143 +1,112 @@
-# @jarvos/memory
+# jarvos-memory
 
-Agent-state memory module for jarvOS. Provides compact recall that helps your AI agent
-persist knowledge across sessions without turning Memory into a second content store.
+JarvOS-level agent-state memory contract, schema surface, stack map, and audit helpers.
 
-## What this module owns
+This module is the home for **durable agent memory**: compact recall that helps Jarvis
+and other agents operate across sessions without turning Memory into a second content
+store.
 
-- Stable **facts** worth reusing later
-- **Preferences** that change future decisions
-- Durable **decisions** with rationale
-- **Lessons** and corrections
-- **Project-state** snapshots worth carrying across days
+## What this module is for
 
-## What this module is NOT for
+Use `jarvos-memory` for:
+- stable facts worth reusing later
+- preferences that change future decisions
+- durable decisions with rationale
+- lessons and corrections
+- project-state snapshots worth carrying across days
+- stack-map documentation for the full JarVOS memory stack
+- the shared experience-memory adapter contract for optional agentmemory dogfood
 
-| Use this instead | For |
-|---|---|
-| `@jarvos/secondbrain` | Day-by-day journal and raw capture |
-| `@jarvos/ontology` | Structured worldview (beliefs, goals, values) |
-| Paperclip | Live task tracking and execution state |
+## What this module is not for
 
-More detail on boundaries:
-
-### vs. `jarvos-secondbrain`
-
-`jarvos-secondbrain` is the **content-facing** layer:
-
+### `jarvos-secondbrain`
+`jarvos-secondbrain` remains the **content-facing** layer:
 - Journal = day-by-day chronology and raw capture
 - Notes = longer-form research, architecture, and source material
 
 `jarvos-memory` is the **agent-facing** layer:
-
 - compact retained state
 - promotion rules
 - provenance expectations
 - lightweight audits
 
-### vs. `jarvos-ontology`
-
-`jarvos-ontology` is the worldview / graph layer.
+### `jarvos-ontology`
+`jarvos-ontology` remains the worldview / graph layer.
 
 Integration rule:
-
 - Memory keeps compact retained state.
 - Ontology turns the most important durable signals into structured beliefs, goals,
   projects, and relationships.
 - Not every memory becomes ontology, but ontology should be informed by durable memory.
 
-## Quick Start
+## Stack Map
 
-```bash
-npm install ./modules/jarvos-memory
-```
+The current package name is `@claw/jarvos-memory`; the architecture shorthand is
+`@jarvos/memory`. This module is the compact memory registry and boundary contract,
+not a runtime router.
 
-```js
-const { createMemoryRecord, getMemoryClasses } = require('@jarvos/memory');
+Detailed stack-map documentation lives in:
+- `docs/STACK_MAP.md`
 
-// Create a durable memory
-const result = createMemoryRecord({
-  class: 'lesson',
-  content: 'Prefer env-var path resolution over hardcoded home directories.',
-  rationale: 'Enables portability across machines and CI environments.',
-  source: '2026-03-27',
-  confidence: 0.95,
-});
-
-console.log(result.record); // { class: 'lesson', content: '...', id: '...', ... }
-
-// List available memory classes
-console.log(getMemoryClasses()); // ['fact', 'preference', 'decision', 'lesson', 'project-state']
-```
-
-Or use the audit CLI directly:
-
-```bash
-cd modules/jarvos-memory
-npm install
-node scripts/audit-memory.js --help
-```
-
-## Memory Schema
-
-```json
-{
-  "schema": "jarvos-memory/v1",
-  "class": "lesson",
-  "content": "Compact human-readable statement.",
-  "rationale": "Why this matters.",
-  "source": "2026-03-27",
-  "confidence": 0.9,
-  "id": "abc123",
-  "createdAt": "2026-03-27T00:00:00.000Z"
-}
-```
-
-## Promotion Rules
-
-Promote into Memory only when the result is:
-
-- Useful in a future session
-- Compact enough to scan quickly
-- Specific enough to source
-- Better suited to recall than reopening a long note
-
-Default routing:
-
-- Journal/daily logs → raw chronology and source material
-- Notes → long-form content and detailed context
-- Memory → compact durable recall
-- Ontology → graph-level concepts and relationships derived from durable signals
-- Paperclip → live execution state, ownership, and closure
-
-Detailed promotion guidance lives in:
-
-- `docs/MEMORY_PROMOTION_RULES.md`
-- `docs/MEMORY_SCHEMA_AND_AUDIT_HELPERS.md`
+Optional shared experience-memory dogfood is governed by:
+- `docs/EXPERIENCE_MEMORY_AGENTMEMORY_CONTRACT.md`
 
 ## Current canonical memory surfaces
 
 During this bootstrap phase, the module owns these working surfaces in `clawd/`:
-
 - `MEMORY.md`
 - `memory/decisions/`
 - `memory/lessons/`
 - `memory/projects/`
 
 Current project-state handling is intentionally conservative:
-
 - `memory/projects/` is the canonical project-state container
 - the bootstrap accepts either `memory/projects/<slug>.md` or `memory/projects/<slug>/`
 - this module does **not** force a migration to one project-state shape yet
 
-## Memory system operation specs
+## Promotion rules
 
+Promote into Memory only when the result is:
+- useful in a future session
+- compact enough to scan quickly
+- specific enough to source
+- better suited to recall than to reopening a long note
+
+Default placement:
+- Journal/daily logs -> raw chronology and source material
+- Notes -> long-form content and detailed context
+- Memory -> compact durable recall
+- Ontology -> graph-level concepts and relationships derived from durable signals
+- Paperclip -> live execution state, ownership, and closure
+
+Detailed promotion guidance lives in:
+- `docs/MEMORY_PROMOTION_RULES.md`
+- `docs/MEMORY_SCHEMA_AND_AUDIT_HELPERS.md`
+
+Memory system operation specs live in:
 - `docs/FLUSH_TIMING.md` — flush trigger strategy (D3: session-end + pre-compaction flush)
 - `docs/FLUSH_QUALITY.md` — flush prompt contract (D4: what to capture, what to skip)
 - `docs/CONTEXT_PRUNING.md` — context pruning rules (D5: TTL-based stale tool output pruning)
 - `docs/COMPACTION_SURVIVAL.md` — compaction survival contract (D6: behavioral rules, postCompactionSections)
 - `docs/TRANSCRIPT_SEARCH.md` — transcript search as first-class capability (D7)
 - `docs/WATCHDOG_SAFETY.md` — watchdog safety contract and budget constraints (D8)
+
+## Quick start
+
+```bash
+# Human-readable audit
+node jarvos-memory/scripts/audit-memory.js
+
+# Machine-readable audit
+node jarvos-memory/scripts/audit-memory.js --json
+```
+
+The audit currently checks:
+- `MEMORY.md` exists
+- `memory/decisions/`, `memory/lessons/`, and `memory/projects/` exist
+- decision and lesson records have required frontmatter + provenance
+- decision and lesson filenames match `YYYY-MM-DD-slug.md`
+- project-state entries under `memory/projects/` use an accepted bootstrap shape
 
 ## Layout
 
@@ -149,12 +118,15 @@ jarvos-memory/
 │   ├── JARVOS_MEMORY_BOOTSTRAP_DECISION_2026-03-25.md
 │   ├── MEMORY_PROMOTION_RULES.md
 │   ├── MEMORY_SCHEMA_AND_AUDIT_HELPERS.md
-│   ├── FLUSH_TIMING.md
-│   ├── FLUSH_QUALITY.md
-│   ├── CONTEXT_PRUNING.md
-│   ├── COMPACTION_SURVIVAL.md
-│   ├── TRANSCRIPT_SEARCH.md
-│   └── WATCHDOG_SAFETY.md
+│   ├── FLUSH_TIMING.md           ← D3: flush trigger strategy
+│   ├── FLUSH_QUALITY.md          ← D4: flush prompt contract
+│   ├── CONTEXT_PRUNING.md        ← D5: context pruning rules
+│   ├── COMPACTION_SURVIVAL.md    ← D6: compaction survival contract
+│   ├── TRANSCRIPT_SEARCH.md      ← D7: transcript search (first-class)
+│   ├── WATCHDOG_SAFETY.md        ← D8: watchdog safety contract
+│   ├── EXPERIENCE_MEMORY_AGENTMEMORY_CONTRACT.md
+│   │                              ← agentmemory sidecar adapter contract
+│   └── STACK_MAP.md              ← memory stack map and boundary guide
 ├── scripts/
 │   └── audit-memory.js
 └── src/
@@ -170,7 +142,6 @@ jarvos-memory/
 This is a **module definition and tooling pass**, not a runtime migration.
 
 Out of scope for this bootstrap:
-
 - changing the actual `MEMORY.md` format
 - changing the existing `memory/` directory structure
 - moving Journal or Notes content into a new runtime system

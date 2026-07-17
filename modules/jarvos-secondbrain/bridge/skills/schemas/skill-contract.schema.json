@@ -1,7 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://jarvos.local/schemas/skill-contract.schema.json",
-  "title": "jarvOS Capture Skill Contract",
+  "title": "JarvOS Capture Skill Contract",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -112,7 +112,6 @@
               "enum": [
                 "keyword_trigger",
                 "salience_high",
-                "salience_medium_flagged",
                 "salience_medium_ignored",
                 "work_intake",
                 "capture_that",

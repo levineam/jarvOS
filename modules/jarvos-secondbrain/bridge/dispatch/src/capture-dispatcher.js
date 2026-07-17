@@ -1,15 +1,10 @@
 'use strict';
 
 const {
-  createStorageAdapter,
-  FLAGGED_HEADING,
-} = require('../../../adapters');
-const {
   applyThreePackagePlan,
 } = require('../../routing/src/three-package-router');
 const {
   detectTrigger,
-  primaryText,
 } = require('../../routing/src/keyword-capture-router');
 
 const HIGH_CONFIDENCE = 0.8;
@@ -49,14 +44,6 @@ function destinationsFromRouting(routing) {
   return destinations;
 }
 
-function formatFlaggedLine(capture) {
-  const { classification } = capture;
-  const percent = Math.round(classification.confidence * 100);
-  const label = classification.salienceClass || 'unknown';
-  const text = primaryText(capture).replace(/\s+/g, ' ').trim() || capture.text;
-  return `- (${label}, ${percent}%) ${text}`;
-}
-
 function buildCaptureEvent(capture, trigger) {
   const { classification } = capture;
   const captureEvent = {
@@ -67,6 +54,11 @@ function buildCaptureEvent(capture, trigger) {
     frontmatter: capture.frontmatter,
     date: capture.date,
     substantive: capture.substantive,
+    createNote: capture.createNote,
+    createDurableNote: capture.createDurableNote,
+    durable: capture.durable,
+    durableNote: capture.durableNote,
+    standaloneNote: capture.standaloneNote,
   };
 
   if (classification.salienceClass !== 'nothing' && classification.confidence >= HIGH_CONFIDENCE) {
@@ -126,45 +118,6 @@ const CAPTURE_SKILLS = [
       };
     },
   },
-  {
-    id: 'flagged-review',
-    description: 'Write medium-confidence captures to the journal review surface.',
-    matches(capture) {
-      return capture.classification.salienceClass !== 'nothing'
-        && capture.classification.confidence >= MEDIUM_CONFIDENCE
-        && capture.classification.confidence < HIGH_CONFIDENCE;
-    },
-    invoke(capture, options = {}) {
-      const adapter = options.adapter || createStorageAdapter(options);
-      const journalEntry = adapter.appendLineToJournalSection({
-        heading: FLAGGED_HEADING,
-        line: formatFlaggedLine(capture),
-        date: capture.date,
-      });
-      return {
-        captured: true,
-        skillId: 'flagged-review',
-        path: 'salience_medium_flagged',
-        trigger: capture.trigger || null,
-        salienceClass: capture.classification.salienceClass,
-        confidence: capture.classification.confidence,
-        destinations: ['journal'],
-        title: null,
-        routing: {
-          plan: {
-            route: 'flagged',
-            journalSection: FLAGGED_HEADING,
-            createNote: false,
-            routeToMemory: false,
-          },
-          journal: journalEntry,
-          note: null,
-          noteLink: null,
-          memory: null,
-        },
-      };
-    },
-  },
 ];
 
 function noCaptureResult(capture, path = 'no_capture') {
@@ -180,6 +133,18 @@ function noCaptureResult(capture, path = 'no_capture') {
   };
 }
 
+function ignoredPathForCapture(capture) {
+  const confidence = capture.classification?.confidence;
+  if (
+    typeof confidence === 'number'
+    && confidence >= MEDIUM_CONFIDENCE
+    && confidence < HIGH_CONFIDENCE
+  ) {
+    return 'salience_medium_ignored';
+  }
+  return 'no_capture';
+}
+
 function dispatchCapture(input = {}, options = {}) {
   const capture = normalizeInput(input);
 
@@ -189,7 +154,7 @@ function dispatchCapture(input = {}, options = {}) {
 
   const skill = CAPTURE_SKILLS.find((candidate) => candidate.matches(capture));
   if (!skill) {
-    return noCaptureResult(capture);
+    return noCaptureResult(capture, ignoredPathForCapture(capture));
   }
 
   return skill.invoke(capture, options);
@@ -200,7 +165,7 @@ module.exports = {
   HIGH_CONFIDENCE,
   MEDIUM_CONFIDENCE,
   dispatchCapture,
-  formatFlaggedLine,
+  ignoredPathForCapture,
   normalizeClassification,
   normalizeInput,
 };

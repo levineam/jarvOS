@@ -48,15 +48,13 @@ const SALIENCE_CLASSES = [
 
 const KEYWORD_TRIGGERS = ['idea', 'note', 'decision', 'preference', 'fact', 'lesson'];
 
-const CODING_TOOL_SOURCE_TOOLS = [
+const SOURCE_TOOLS = [
   'openclaw',
   'codex',
   'claude-code',
   'hermes',
-];
-
-const SOURCE_TOOLS = [
-  ...CODING_TOOL_SOURCE_TOOLS,
+  'chatgpt',
+  'claude-app',
   'manual',
   'journal',
   'note',
@@ -324,7 +322,6 @@ module.exports = {
   SUPPORTED_CAPTURE_EVENT_SCHEMA_VERSIONS,
   SALIENCE_CLASSES,
   KEYWORD_TRIGGERS,
-  CODING_TOOL_SOURCE_TOOLS,
   SOURCE_TOOLS,
   ACTOR_TYPES,
   CAPTURE_MODES,

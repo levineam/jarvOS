@@ -10,7 +10,7 @@ Package-owned Journal contract and maintenance logic for the `jarvos-secondbrain
 
 ## Single-writer contract
 
-jarvOS is the automated writer for generated `Journal/YYYY-MM-DD.md` sections.
+JarvOS is the automated writer for generated `Journal/YYYY-MM-DD.md` sections.
 Obsidian Sync can sync the vault across devices, and humans can keep editing the
 markdown file, but Obsidian daily-note plugins should not independently create
 or populate the same journal path.
@@ -22,9 +22,10 @@ Disable or de-scope automated daily-note creation in:
 - Periodic Notes
 - Templater startup scripts that create daily notes
 
-`jarvos doctor --obsidian-vault /path/to/vault` reports those conflicts when an
-Obsidian `.obsidian` directory is available. It also warns when
-`jarvos.config.json` points at a stale vault, journal, or notes path.
+`jarvos doctor --obsidian-vault /path/to/vault` and the journal maintenance pass
+report those conflicts when an Obsidian `.obsidian` directory is available. The
+portable pattern is: one automated process owns creation/population; other tools
+may sync or let humans edit, but they should not create the same dated file.
 
 ## Stub and shrink repair
 
@@ -37,8 +38,9 @@ Maintenance records known-good daily journal snapshots under:
 Before any repair, the current file is copied into `audit-backups/`. If a
 frontmatter-only stub replaces a populated journal, the next maintenance pass
 restores the known-good content, normalizes the configured sections, and updates
-the known-good snapshot. Non-stub files are normalized from the current file so
-human-authored text remains the source of truth.
+the known-good snapshot. Section-shrinking regressions are detected and reported,
+but they are normalized from the current file unless they are concrete stubs, so
+legitimate shorter human edits remain the source of truth.
 
 Cron/default runtime installs should run maintenance for both `today` and
 `yesterday`, including a post-startup morning pass:

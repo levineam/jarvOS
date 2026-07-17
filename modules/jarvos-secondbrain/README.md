@@ -8,7 +8,7 @@ Current local state:
 - package contract docs are maintained under package-local `docs/`
 - root canonical architecture/migration/contracts docs live under `clawd/docs/`
 - Paperclip remains the execution system of record
-- automatic secondbrain capture, generated wiki, retrieval evals, promotion gates, and watch status are generic/public jarvOS surfaces; private vault content and raw transcripts are not part of this package
+- automatic secondbrain capture, generated wiki, retrieval evals, promotion gates, and watch status are generic/public JarvOS surfaces; private vault content and raw transcripts are not part of this package
 
 ## Layout
 
@@ -19,7 +19,7 @@ jarvos-secondbrain/
     jarvos-secondbrain-journal/
     jarvos-secondbrain-notes/
     jarvos-secondbrain-wiki/
-    jarvos-memory (at jarvOS level)/
+    jarvos-memory (at JarvOS level)/
   bridge/
     config/
     paperclip/
@@ -49,9 +49,6 @@ The portable pattern is: **env var → `jarvos.config.json` / XDG config → hom
 | `JARVOS_TAGS_DIR` | Tags directory | `~/Vaults/<vault>/Tags` |
 | `CLAWD_DIR` | Root clawd workspace (for config discovery) | `~/clawd` |
 | `JARVOS_CONFIG_PATH` / `JARVOS_CONFIG_FILE` | Explicit config file path | unset |
-| `JARVOS_VAULT_DIR` | Vault root used to derive Notes, Journal, sidecars, and generated wiki defaults | `~/Vaults/Vault v3` |
-| `JARVOS_KNOWLEDGE_ARTIFACTS_DIR` | Knowledge sidecar artifacts consumed by generated wiki builds | `$JARVOS_VAULT_DIR/.jarvos/knowledge/artifacts` |
-| `JARVOS_GENERATED_WIKI_DIR` | Visible generated LLM-wiki output directory | `$JARVOS_VAULT_DIR/Generated Secondbrain Wiki` |
 
 Alternatively, set paths under `paths.*` in `jarvos.config.json`:
 ```json
@@ -91,8 +88,6 @@ resolved paths without writing the config.
 - Bridge and adapter directories are present but intentionally contain no logic yet.
 
 See `docs/architecture/jarvos-secondbrain-monorepo-spec.md` for the boundary model.
-The public external integration inventory lives at
-[the secondbrain external integration inventory](https://github.com/levineam/jarvOS/blob/main/docs/architecture/secondbrain-external-integrations.md).
 
 ## Ambient Package
 
@@ -104,7 +99,7 @@ through their own adapters.
 
 ## Universal Capture Entrypoint
 
-Agents should call the jarvOS-owned capture entrypoint instead of raw-writing
+Agents should call the jarVOS-owned capture entrypoint instead of raw-writing
 Markdown or using runtime-specific note rules:
 
 ```bash
@@ -119,13 +114,12 @@ printf '%s\n' '{
 }' | node scripts/jarvos-capture.js
 ```
 
-Supported coding-tool sources include `openclaw`, `codex`, `claude-code`,
-`hermes`, and `custom:<slug>` for future coding agents. The entrypoint
-normalizes the input into `CaptureEvent` v2, routes it through
-`jarvos-ambient`, writes through the canonical Obsidian adapter, and uses the
-note optimizer so durable notes enter the secondbrain stack. Lightweight `idea:`
-captures stay in the Journal Ideas section; substantive ideas become
-source-backed notes linked from Ideas.
+Supported source tools include `openclaw`, `codex`, `claude-code`, `hermes`,
+`chatgpt`, and `custom:<slug>` for future agents. The entrypoint normalizes the
+input into `CaptureEvent` v2, routes it through `jarvos-ambient`, writes through
+the canonical Obsidian adapter, and uses the note optimizer so durable notes
+enter the secondbrain stack. Lightweight `idea:` captures stay in the Journal
+Ideas section; substantive ideas become source-backed notes linked from Ideas.
 
 The canonical journal path is `Journal/YYYY-MM-DD.md`. Agents must not create
 guessed daily journal files under `Notes/`.
@@ -135,49 +129,11 @@ guessed daily journal files under `Notes/`.
 The public stack is source-backed and rebuildable:
 
 - `CaptureEvent` v2 records source tool, actor, capture mode, privacy tier, origin, and evidence.
-- Session source adapters normalize OpenClaw, Codex, Claude Code, and Hermes
-  records into `CaptureEvent` v2.
+- Session source adapters normalize OpenClaw, Codex, and Claude Code records into `CaptureEvent` v2.
 - Note sidecars write generalized `knowledgeUnits` with stable IDs, source attribution, evidence, confidence, privacy decisions, and downstream eligibility.
 - `packages/jarvos-secondbrain-wiki` compiles generated Markdown wiki pages from sidecars. Generated pages are derived artifacts and can be deleted/rebuilt.
 - Retrieval evals compare qmd-only, qmd plus generated wiki, and qmd plus graph retrieval with expected source evidence.
 - Promotion gates keep memory and ontology downstream of cited, privacy-eligible knowledge units.
 - The watch surface reports artifacts, private skips, qmd freshness, generated wiki state, queue counts, eval status, and stale/failure signals.
 
-See `docs/architecture/automatic-secondbrain-public-boundary.md` for the public/private packaging boundary and local-to-public release path.
-See the public
-[secondbrain external integration inventory](https://github.com/levineam/jarvOS/blob/main/docs/architecture/secondbrain-external-integrations.md)
-for the status of Obsidian-compatible Markdown, QMD, GBrain, memory-wiki,
-generated LLM-wiki, agentmemory, Engraph, and related optional tools.
-
-## Generated LLM-wiki
-
-Generated LLM-wiki is the visible, rebuildable Markdown view over source-backed
-knowledge sidecars. It is useful for inspection, Obsidian navigation, and
-retrieval evals. It is not canonical memory: source notes, journals, provenance,
-and `.jarvos/knowledge` sidecars remain authoritative.
-
-Build it with:
-
-```bash
-npm run wiki:build
-```
-
-By default, the build reads artifacts from
-`$JARVOS_VAULT_DIR/.jarvos/knowledge/artifacts` and writes generated Markdown
-under `$JARVOS_VAULT_DIR/Generated Secondbrain Wiki`. Both locations can be
-overridden:
-
-```bash
-npm run wiki:build -- \
-  --artifacts-dir "$JARVOS_KNOWLEDGE_ARTIFACTS_DIR" \
-  --output-dir "$JARVOS_GENERATED_WIKI_DIR"
-```
-
-The output directory is marked with `.jarvos-generated-wiki.json`. Rebuilds clean
-only the generated `concepts/`, `sources/`, `daily/`, and `index.md` surfaces
-inside that managed directory. A nonempty unmanaged output directory fails
-closed so jarvOS cannot accidentally clean a user's unrelated vault folder.
-
-When manually-created Obsidian notes need to enter the secondbrain stack, run
-manual note maintenance first so the notes have sidecars, then run
-`npm run wiki:build` to refresh the visible generated wiki.
+See `docs/architecture/automatic-secondbrain-public-boundary.md` for the public/private packaging boundary and local-to-public release path. See [the public-safe inventory of active, optional, dogfood, and deferred external integrations](https://github.com/levineam/jarvOS/blob/main/docs/architecture/secondbrain-external-integrations.md).

@@ -35,12 +35,6 @@
         "description": "Ideas captured during the day"
       },
       {
-        "id": "flagged",
-        "heading": "## 📌 Flagged",
-        "source": "capture-router",
-        "description": "Medium-confidence captures awaiting review"
-      },
-      {
         "id": "journal-entry",
         "heading": "## 📓 Journal Entry",
         "source": "manual",

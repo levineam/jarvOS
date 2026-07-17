@@ -49,12 +49,74 @@ test('dispatcher invokes journal-entry skill for natural-language ideas', () => 
   ]);
 });
 
+test('dispatcher keeps long raw Idea prompts journal-only by default', () => {
+  const mock = makeMockAdapter();
+  const result = dispatchCapture(
+    {
+      text: 'Idea: the end of "vibe economics". Concept is that economics up until now has basically been based on vibes, and the shift is that agents, markets, and measurement loops can finally make those vibes explicit enough to inspect.',
+      date: '2026-01-02',
+      classification: { salienceClass: 'idea', confidence: 0.7 },
+    },
+    { adapter: mock.adapter },
+  );
+
+  assert.equal(result.captured, true);
+  assert.equal(result.skillId, 'journal-entry');
+  assert.equal(result.trigger, 'idea');
+  assert.deepEqual(result.destinations, ['journal']);
+  assert.deepEqual(mock.calls[0], [
+    'appendLineToJournalSection',
+    '## 💡 Ideas',
+    '- the end of "vibe economics". Concept is that economics up until now has basically been based on vibes, and the shift is that agents, markets, and measurement loops can finally make those vibes explicit enough to inspect.',
+    '2026-01-02',
+  ]);
+});
+
+test('dispatcher promotes ideas to notes only with explicit durable intent', () => {
+  const mock = makeMockAdapter();
+  const result = dispatchCapture(
+    {
+      text: 'Idea: durable capture contract for future agents',
+      date: '2026-01-02',
+      createDurableNote: true,
+      classification: { salienceClass: 'idea', confidence: 0.7 },
+    },
+    { adapter: mock.adapter },
+  );
+
+  assert.equal(result.captured, true);
+  assert.equal(result.skillId, 'note-creation');
+  assert.deepEqual(result.destinations, ['journal', 'notes']);
+  assert.equal(mock.calls[0][0], 'writeNote');
+  assert.equal(mock.calls[1][0], 'appendLineToJournalSection');
+  assert.equal(mock.calls[1][1], '## 💡 Ideas');
+});
+
+test('durable flags override substantive false for explicit idea promotion', () => {
+  const mock = makeMockAdapter();
+  const result = dispatchCapture(
+    {
+      text: 'Idea: durable capture contract for future agents',
+      date: '2026-01-02',
+      substantive: false,
+      createDurableNote: true,
+      classification: { salienceClass: 'idea', confidence: 0.7 },
+    },
+    { adapter: mock.adapter },
+  );
+
+  assert.equal(result.captured, true);
+  assert.equal(result.skillId, 'note-creation');
+  assert.deepEqual(result.destinations, ['journal', 'notes']);
+  assert.equal(mock.calls[0][0], 'writeNote');
+});
+
 test('dispatcher creates notes for substantive natural-language ideas', () => {
   const mock = makeMockAdapter();
   const result = dispatchCapture(
     {
       title: 'Routing dispatch skills',
-      text: 'I have an idea about routing dispatch invoking capture skills because every agent should call one jarvOS entrypoint.',
+      text: 'I have an idea about routing dispatch invoking capture skills because every agent should call one jarVOS entrypoint.',
       date: '2026-01-02',
       classification: { salienceClass: 'idea', confidence: 0.7 },
     },
@@ -70,7 +132,7 @@ test('dispatcher creates notes for substantive natural-language ideas', () => {
   assert.deepEqual(mock.calls[1], [
     'appendLineToJournalSection',
     '## 💡 Ideas',
-    '- [[Routing dispatch skills]] — routing dispatch invoking capture skills because every agent should call one jarvOS entrypoint.',
+    '- [[Routing dispatch skills]] — routing dispatch invoking capture skills because every agent should call one jarVOS entrypoint.',
     '2026-01-02',
   ]);
 });
@@ -100,7 +162,7 @@ test('dispatcher invokes note-creation skill for natural-language note requests'
   ]);
 });
 
-test('dispatcher invokes flagged-review skill for medium-confidence salience', () => {
+test('dispatcher ignores medium-confidence salience instead of writing a Flagged review entry', () => {
   const mock = makeMockAdapter();
   const result = dispatchCapture(
     {
@@ -111,14 +173,9 @@ test('dispatcher invokes flagged-review skill for medium-confidence salience', (
     { adapter: mock.adapter },
   );
 
-  assert.equal(result.captured, true);
-  assert.equal(result.skillId, 'flagged-review');
-  assert.equal(result.path, 'salience_medium_flagged');
-  assert.deepEqual(result.destinations, ['journal']);
-  assert.deepEqual(mock.calls[0], [
-    'appendLineToJournalSection',
-    '## 📌 Flagged',
-    '- (preference, 70%) I like using TypeScript for new projects.',
-    '2026-01-02',
-  ]);
+  assert.equal(result.captured, false);
+  assert.equal(result.skillId, null);
+  assert.equal(result.path, 'salience_medium_ignored');
+  assert.deepEqual(result.destinations, []);
+  assert.deepEqual(mock.calls, []);
 });
