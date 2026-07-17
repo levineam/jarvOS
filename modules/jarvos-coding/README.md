@@ -119,11 +119,23 @@ const execution = await port.executeFenced(command, {
 const verification = await port.verify(command, { execution });
 ```
 
-The port checks the fence before dispatch and again before returning. Repeated
-delivery of the same command returns its original evidence rather than running
-the coding/PR lifecycle again. Session-loss recovery stays pointer-first: a
-command checkpoint and its existing issue, worktree branch, and PR reference
-are forwarded to the host adapter as `resumeFrom`.
+The port is fail-closed at both execute and verify:
+
+- `verify` returns `satisfied` only for successful terminal close evidence
+  (`closed` / `verified` / `done`), never for `deferred`, `failed`, or missing
+  close stages
+- execute rejects unless the host finished with successful close evidence and a
+  ready complete-phase submission gate
+- repeated delivery of an already-completed command id returns the original
+  evidence **before** fence assertion (redelivery after lease release stays
+  idempotent)
+- the fence is asserted before dispatch, at final side-effect stage boundaries
+  (`pullRequest`, `postMergeSweep`, `verifyClose`), and again before returning
+
+Session-loss recovery is pointer-first and honored by the default host
+composition: a command checkpoint is passed as `resumeFrom`, and
+`runTakeIssueToDone` skips already-completed lifecycle stages while reattaching
+branch/PR pointers instead of re-running claim/branch/review/PR work.
 
 ```js
 const gate = evaluateSubmissionGate({
