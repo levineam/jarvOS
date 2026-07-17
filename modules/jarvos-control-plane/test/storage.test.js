@@ -77,6 +77,36 @@ test('file store recovers from an orphaned stale lock', () => {
   } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
 });
 
+test('stale-lock recovery never unlinks a fresh lock installed after takeover', () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-control-plane-lock-race-'));
+  const lockPath = path.join(tmp, 'state.lock');
+  const originalRename = fs.renameSync;
+  try {
+    fs.writeFileSync(lockPath, JSON.stringify({ pid: 999999999, createdAt: '2000-01-01T00:00:00.000Z' }));
+    const staleAt = new Date(Date.now() - 1000);
+    fs.utimesSync(lockPath, staleAt, staleAt);
+    let installedFreshLock = false;
+    fs.renameSync = (from, to) => {
+      const result = originalRename(from, to);
+      if (from === lockPath && !installedFreshLock) {
+        installedFreshLock = true;
+        fs.writeFileSync(lockPath, JSON.stringify({ pid: process.pid, token: 'fresh-owner' }));
+      }
+      return result;
+    };
+
+    assert.throws(
+      () => createFileStore(tmp, { staleLockMs: 10, lockTimeoutMs: 20 }).acquireLease({ key: 'race', holder: 'contender' }),
+      /Timed out acquiring file store lock/
+    );
+    assert.equal(installedFreshLock, true);
+    assert.equal(JSON.parse(fs.readFileSync(lockPath, 'utf8')).token, 'fresh-owner');
+  } finally {
+    fs.renameSync = originalRename;
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
 test('file store serializes leases across independent processes', async () => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-control-plane-process-store-'));
   const modulePath = path.resolve(__dirname, '../src/index.js');
@@ -103,6 +133,34 @@ test('file store replays durable frames and ignores only a torn final frame', ()
     assert.equal(reopened.snapshot().leases[0].id, lease.lease.id);
     fs.appendFileSync(path.join(tmp, 'journal.ndjson'), '\n{"sequence":999}\n');
     assert.throws(() => createFileStore(tmp).snapshot(), /(Corrupt|Invalid) journal/);
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+});
+
+test('file store truncates a torn tail before a later mutation is appended', () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-control-plane-torn-tail-'));
+  try {
+    const store = createFileStore(tmp);
+    store.putRecord({ id: 'old-record', type: 'request' });
+    fs.appendFileSync(path.join(tmp, 'journal.ndjson'), '{"sequence":999');
+
+    createFileStore(tmp).putRecord({ id: 'new-record', type: 'request' });
+    const reopened = createFileStore(tmp).snapshot();
+    assert.ok(reopened.records.some((record) => record.id === 'old-record'));
+    assert.ok(reopened.records.some((record) => record.id === 'new-record'));
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+});
+
+test('file store checkpoints the journal without losing records or evidence', () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-control-plane-checkpoint-'));
+  try {
+    const store = createFileStore(tmp, { checkpointEntries: 2 });
+    store.putRecord({ id: 'record-a', type: 'request' });
+    store.putRecord({ id: 'evidence-a', type: 'evidence', digest: 'durable-digest' });
+    assert.equal(fs.readFileSync(path.join(tmp, 'journal.ndjson'), 'utf8'), '');
+
+    const reopened = createFileStore(tmp).snapshot();
+    assert.deepEqual(reopened.records.map((record) => record.id).sort(), ['evidence-a', 'record-a']);
+    assert.equal(reopened.records.find((record) => record.id === 'evidence-a').digest, 'durable-digest');
   } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
 });
 

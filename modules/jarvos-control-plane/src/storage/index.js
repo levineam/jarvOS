@@ -2,6 +2,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { execFileSync } = require('child_process');
 
 const { clone, digest, stableStringify } = require('../contracts');
 
@@ -79,28 +80,35 @@ function createMemoryStore(options = {}) {
 }
 
 function parseJournal(journalPath) {
-  if (!fs.existsSync(journalPath)) return [];
+  if (!fs.existsSync(journalPath)) return { entries: [], tornTailOffset: null };
   const text = fs.readFileSync(journalPath, 'utf8');
   const lines = text.split('\n');
   const entries = [];
+  let offset = 0;
   for (let index = 0; index < lines.length; index += 1) {
-    if (!lines[index]) continue;
+    const line = lines[index];
+    const nextOffset = offset + Buffer.byteLength(line, 'utf8') + (index < lines.length - 1 ? 1 : 0);
+    if (!line) { offset = nextOffset; continue; }
     let entry;
-    try { entry = JSON.parse(lines[index]); } catch (error) {
-      if (index === lines.length - 1) break;
+    try { entry = JSON.parse(line); } catch (error) {
+      if (index === lines.length - 1) return { entries, tornTailOffset: offset };
       throw new Error(`Corrupt journal entry ${index + 1}: ${error.message}`);
     }
     if (entry.sequence !== entries.length + 1 || entry.digest !== digest({ sequence: entry.sequence, type: entry.type, at: entry.at, payload: entry.payload })) {
       throw new Error(`Invalid journal frame ${index + 1}`);
     }
     entries.push(entry);
+    offset = nextOffset;
   }
-  return entries;
+  return { entries, tornTailOffset: null };
 }
 
-function replayJournal(entries) {
+function replayJournal(entries, initialState = {}) {
   const state = { journal: entries, records: [], leases: [], fences: {} };
   const records = new Map(); const leases = new Map(); const fences = new Map();
+  for (const record of initialState.records || []) records.set(record.id, record);
+  for (const lease of initialState.leases || []) leases.set(lease.key, lease);
+  for (const [key, value] of Object.entries(initialState.fences || {})) fences.set(key, value);
   for (const entry of entries) {
     if (entry.type === 'record.put') records.set(entry.payload.id, entry.payload);
     if (entry.type === 'lease.acquire') leases.set(entry.payload.key, entry.payload);
@@ -115,9 +123,22 @@ function createFileStore(rootDir, options = {}) {
   const statePath = path.join(rootDir, 'state.json'); const journalPath = path.join(rootDir, 'journal.ndjson'); const lockPath = path.join(rootDir, 'state.lock');
   const retryMs = options.lockRetryMs ?? 10;
   const staleLockMs = options.staleLockMs ?? 100;
+  const checkpointEntries = options.checkpointEntries ?? 128;
+  function processStartMarker(pid) {
+    try {
+      // Linux exposes a process-start tick that makes recycled PIDs distinguishable.
+      return fs.readFileSync(`/proc/${pid}/stat`, 'utf8').trim().split(' ')[21] || null;
+    } catch (_) {
+      try { return execFileSync('ps', ['-o', 'lstart=', '-p', String(pid)], { encoding: 'utf8' }).trim() || null; } catch (_) { return null; }
+    }
+  }
   function lockOwnerIsRunning(lock) {
     if (!Number.isInteger(lock.pid) || lock.pid <= 0) return false;
-    try { process.kill(lock.pid, 0); return true; } catch (error) { return error.code === 'EPERM'; }
+    try {
+      process.kill(lock.pid, 0);
+      const marker = processStartMarker(lock.pid);
+      return !lock.processStart || !marker || marker === lock.processStart;
+    } catch (error) { return error.code === 'EPERM'; }
   }
   function recoverStaleLock() {
     let stat; let lock = {};
@@ -129,15 +150,27 @@ function createFileStore(rootDir, options = {}) {
     }
     try { const text = fs.readFileSync(lockPath, 'utf8'); if (text) lock = JSON.parse(text); } catch (error) { if (error.code === 'ENOENT') return false; }
     const ageMs = Date.now() - stat.mtimeMs;
+    // A matching process-start marker proves this is a live owner; a recycled
+    // PID fails the comparison and is recoverable once the stale interval passes.
     if (lockOwnerIsRunning(lock) || ageMs < staleLockMs) return false;
-    try { fs.unlinkSync(lockPath); return true; } catch (error) { if (error.code === 'ENOENT') return true; throw error; }
+    const recoveryPath = `${lockPath}.recover-${process.pid}-${Math.random().toString(16).slice(2)}`;
+    try {
+      // Rename claims the exact inode we inspected. Never unlink lockPath after
+      // validation: another process may have installed a fresh live lock.
+      fs.renameSync(lockPath, recoveryPath);
+    } catch (error) {
+      if (error.code === 'ENOENT') return true;
+      throw error;
+    }
+    try { fs.unlinkSync(recoveryPath); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+    return true;
   }
   function withLock(fn) {
     let fd; const deadline = Date.now() + (options.lockTimeoutMs || 5000);
     while (!fd) {
       try {
         fd = fs.openSync(lockPath, 'wx', 0o600);
-        fs.writeFileSync(fd, JSON.stringify({ pid: process.pid, createdAt: nowIso() }), 'utf8');
+        fs.writeFileSync(fd, JSON.stringify({ pid: process.pid, processStart: processStartMarker(process.pid), token: `${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`, createdAt: nowIso() }), 'utf8');
         fs.fsyncSync(fd);
       } catch (error) {
         if (fd) { fs.closeSync(fd); fs.rmSync(lockPath, { force: true }); fd = undefined; throw error; }
@@ -147,15 +180,29 @@ function createFileStore(rootDir, options = {}) {
     }
     try { return fn(); } finally { fs.closeSync(fd); fs.rmSync(lockPath, { force: true }); }
   }
-  function load() { const entries = parseJournal(journalPath); return createMemoryStore({ ...options, initialState: entries.length ? replayJournal(entries) : options.initialState }); }
+  function load() {
+    let checkpoint = options.initialState || {};
+    try { if (fs.existsSync(statePath)) checkpoint = JSON.parse(fs.readFileSync(statePath, 'utf8')); } catch (_) { /* journal remains authoritative */ }
+    const parsed = parseJournal(journalPath);
+    if (parsed.tornTailOffset !== null) {
+      const fd = fs.openSync(journalPath, 'r+');
+      try { fs.ftruncateSync(fd, parsed.tornTailOffset); fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
+    }
+    return createMemoryStore({ ...options, initialState: replayJournal(parsed.entries, checkpoint) });
+  }
   function persist(memory, before) {
     const entries = memory.snapshot().journal.slice(before);
     if (entries.length) { const fd = fs.openSync(journalPath, 'a', 0o600); try { fs.writeFileSync(fd, `${entries.map(stableStringify).join('\n')}\n`, 'utf8'); fs.fsyncSync(fd); } finally { fs.closeSync(fd); } }
     const tmp = `${statePath}.${process.pid}.tmp`;
     try {
       const fd = fs.openSync(tmp, 'w', 0o600);
-      try { fs.writeFileSync(fd, JSON.stringify(memory.snapshot(), null, 2), 'utf8'); fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
+      const snapshot = memory.snapshot();
+      try { fs.writeFileSync(fd, JSON.stringify({ records: snapshot.records, leases: snapshot.leases, fences: snapshot.fences }, null, 2), 'utf8'); fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
       fs.renameSync(tmp, statePath); const dirfd = fs.openSync(rootDir, 'r'); try { fs.fsyncSync(dirfd); } finally { fs.closeSync(dirfd); }
+      if (checkpointEntries > 0 && fs.existsSync(journalPath) && parseJournal(journalPath).entries.length >= checkpointEntries) {
+        const journalFd = fs.openSync(journalPath, 'r+');
+        try { fs.ftruncateSync(journalFd, 0); fs.fsyncSync(journalFd); } finally { fs.closeSync(journalFd); }
+      }
     } catch (error) {
       try { fs.rmSync(tmp, { force: true }); } catch (_) { /* journal remains authoritative */ }
       if (options.logger && typeof options.logger.warn === 'function') options.logger.warn(`State snapshot persistence failed: ${error.message}`);

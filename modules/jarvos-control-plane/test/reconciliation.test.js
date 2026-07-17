@@ -179,3 +179,32 @@ test('verifier failures become terminal and permit a later retry', async () => {
   const second = await reconciler.reconcileRequest(fixtureRequest({ id: 'verify-failure-2' }));
   assert.equal(second.status, 'satisfied');
 });
+
+test('invalid verifier output becomes terminal and releases the lease for retry', async () => {
+  const fixture = buildFixture();
+  fixture.managers['workspace-manager'].verify = async () => undefined;
+  const reconciler = createReconciler(fixture);
+
+  const first = await reconciler.reconcileRequest(fixtureRequest({ id: 'invalid-verifier-1' }));
+  assert.equal(first.status, 'unverifiable');
+  assert.equal(first.command.status, 'unverifiable');
+  assert.equal(fixture.store.snapshot().leases.length, 0);
+
+  fixture.managers['workspace-manager'].verify = async () => ({ outcome: 'satisfied' });
+  const second = await reconciler.reconcileRequest(fixtureRequest({ id: 'invalid-verifier-2' }));
+  assert.equal(second.status, 'satisfied');
+});
+
+test('a fence superseded during execution never transitions to executed', async () => {
+  const fixture = buildFixture();
+  fixture.managers['workspace-manager'].executeFenced = async (_command, context) => {
+    fixture.store.releaseLease(context.lease);
+    fixture.store.acquireLease({ key: context.lease.key, holder: 'new-holder', ttlMs: 60000 });
+    return { applied: true };
+  };
+
+  const result = await createReconciler(fixture).reconcileRequest(fixtureRequest());
+  assert.equal(result.status, 'failed');
+  assert.equal(result.command.status, 'failed');
+  assert.doesNotMatch(result.command.lifecycle.map((entry) => entry.status).join(','), /executed/);
+});
