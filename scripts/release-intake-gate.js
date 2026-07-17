@@ -100,8 +100,7 @@ function commitSubjectsInRange(baseRef, headRef) {
 // This is the label-based path from docs/release-process.md's "Paperclip
 // Intake" section. The release-intake *document* fallback (for Paperclip
 // instances that don't expose labels on reads, per that same doc section) is
-// not implemented here yet — a named follow-up, not silently assumed
-// equivalent to the label path.
+// implemented separately below (parseReleaseIntakeDocument / resolveReleaseFit).
 function classificationFromLabels(labels = []) {
   const normalized = (labels || []).map((label) => String(label).toLowerCase());
   for (const [label, classification] of Object.entries(KNOWN_LABEL_DISPOSITIONS)) {
