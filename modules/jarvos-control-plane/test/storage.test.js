@@ -4,6 +4,7 @@ const assert = require('assert');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const { spawn } = require('child_process');
 const test = require('node:test');
 
 const {
@@ -58,4 +59,33 @@ test('file store writes canonical state and journal after interruption-safe upda
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
   }
+});
+
+test('file store serializes leases across independent processes', async () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-control-plane-process-store-'));
+  const modulePath = path.resolve(__dirname, '../src/index.js');
+  const script = `const {createFileStore}=require(process.argv[1]); const r=createFileStore(process.argv[2]).acquireLease({key:'shared',holder:process.argv[3]}); process.stdout.write(JSON.stringify(r));`;
+  try {
+    const run = (holder) => new Promise((resolve, reject) => {
+      const child = spawn(process.execPath, ['-e', script, modulePath, tmp, holder]); let output = '';
+      child.stdout.on('data', (chunk) => { output += chunk; });
+      child.on('error', reject); child.on('close', (code) => code === 0 ? resolve(JSON.parse(output)) : reject(new Error(`child exited ${code}`)));
+    });
+    const results = await Promise.all([run('process-a'), run('process-b')]);
+    assert.equal(results.filter((result) => result.ok).length, 1);
+    assert.equal(results.filter((result) => !result.ok)[0].reason, 'lease_conflict');
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+});
+
+test('file store replays durable frames and ignores only a torn final frame', () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-control-plane-recovery-'));
+  try {
+    const store = createFileStore(tmp);
+    const lease = store.acquireLease({ key: 'recoverable', holder: 'command-1' });
+    fs.appendFileSync(path.join(tmp, 'journal.ndjson'), '{"sequence":999');
+    const reopened = createFileStore(tmp);
+    assert.equal(reopened.snapshot().leases[0].id, lease.lease.id);
+    fs.appendFileSync(path.join(tmp, 'journal.ndjson'), '\n{"sequence":999}\n');
+    assert.throws(() => createFileStore(tmp).snapshot(), /(Corrupt|Invalid) journal/);
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
 });

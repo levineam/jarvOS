@@ -6,12 +6,15 @@ const test = require('node:test');
 const {
   CONTRACT_VERSION,
   buildActionKey,
+  canonicalResourceKey,
+  commandSpecDigest,
   createCommand,
   createManagerManifest,
   createRequest,
   toPublicProjection,
   validateRecord,
 } = require('../src/index.js');
+const { createPolicyEngine } = require('../src/index.js');
 
 function sampleResource(id = 'repo-1') {
   return { machineId: 'machine-a', type: 'git-repository', id };
@@ -95,6 +98,24 @@ test('unknown contract major fails closed before executable manager registration
   }), /compatible/);
 });
 
+test('only explicitly supported, well-formed contract versions are executable', () => {
+  for (const version of ['1.999.0', '1.anything', '1.0', 'v1.0.0']) {
+    assert.throws(() => createManagerManifest({
+      contractVersion: version, managerId: 'bad-version', trust: { level: 'trusted' },
+      mutationClasses: [{ resourceType: 'git-repository', class: 'workspace.cleanup' }],
+    }), /compatible/);
+  }
+});
+
+test('canonical resource and command digests reject ambiguous values', () => {
+  assert.notEqual(
+    canonicalResourceKey({ machineId: 'a:b', type: 'c', id: 'd' }),
+    canonicalResourceKey({ machineId: 'a', type: 'b:c', id: 'd' }),
+  );
+  assert.throws(() => commandSpecDigest({ operation: 'test', arguments: { value: NaN } }), /Non-finite/);
+  assert.throws(() => commandSpecDigest({ operation: 'test', arguments: { value: undefined } }), /Unsupported/);
+});
+
 test('trusted compatible manifest accepts fence and verifier declarations', () => {
   const manifest = createManagerManifest({
     contractVersion: CONTRACT_VERSION,
@@ -115,6 +136,13 @@ test('trusted compatible manifest accepts fence and verifier declarations', () =
 
   assert.equal(manifest.operationContract.finalSideEffectFence.required, true);
   assert.equal(manifest.operationContract.verifier.errorBehavior, 'unverifiable');
+});
+
+test('trusted manifests must declare target-side fencing', () => {
+  assert.throws(() => createManagerManifest({
+    managerId: 'unsafe-manager', trust: { level: 'trusted' },
+    mutationClasses: [{ resourceType: 'git-repository', class: 'workspace.cleanup' }],
+  }), /target-side finalSideEffectFence/);
 });
 
 test('sensitive adapter data is omitted from unauthorized projections', () => {
@@ -144,4 +172,8 @@ test('record validation rejects malformed lifecycle records', () => {
   };
 
   assert.throws(() => validateRecord(invalid), /actor.kind/);
+});
+
+test('policy defaults cannot allow unmatched mutations', () => {
+  assert.throws(() => createPolicyEngine({ defaultOutcome: 'allow' }), /allow requires an explicit rule/);
 });

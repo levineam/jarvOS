@@ -54,7 +54,8 @@ Installed hosts own:
 
 ## Fail-Closed Rules
 
-- Unknown major contract versions do not execute.
+- Unsupported or malformed contract versions do not execute; compatible versions
+  are selected from an explicit supported-version table.
 - Data-only or untrusted managers may be displayed for health, but mutation code
   is not called.
 - Conflicting ownership for the same `(machine, resource, mutation class)` is a
@@ -70,7 +71,9 @@ Installed hosts own:
 
 The reference store is intentionally simple:
 
-- append-only journal entries with stable digests
+- write-ahead, framed, fsynced append-only journal entries with stable digests
+- replay from the journal at startup; an incomplete final frame is ignored and
+  an invalid complete frame fails closed
 - current record projections derived from the journal
 - compare-and-set leases keyed by independent mutation resource
 - monotonic fences per mutation key

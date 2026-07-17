@@ -36,7 +36,7 @@ function buildFixture() {
     capabilities: ['observe', 'execute', 'verify'],
     mutationClasses: [{ resourceType: 'git-repository', class: 'workspace.cleanup' }],
     operationContract: {
-      finalSideEffectFence: { required: true },
+      finalSideEffectFence: { required: true, mode: 'compare-and-set' },
       verifier: { authoritativeReadPath: 'fixture-current-state' },
     },
   });
@@ -44,8 +44,9 @@ function buildFixture() {
   const store = createMemoryStore();
   const managers = {
     'workspace-manager': {
-      async execute(command, context) {
+      async executeFenced(command, context) {
         assert.ok(context.fence > 0);
+        assert.equal(context.assertCurrentFence(), true);
         return { applied: true, commandId: command.id, fence: context.fence };
       },
       async verify(command, context) {
@@ -76,7 +77,7 @@ test('allowed request emits one command and independently verified evidence', as
 test('equivalent allowed requests converge on the same action key without duplicate dispatch', async () => {
   const fixture = buildFixture();
   let dispatches = 0;
-  fixture.managers['workspace-manager'].execute = async () => {
+  fixture.managers['workspace-manager'].executeFenced = async () => {
     dispatches += 1;
     return { applied: true };
   };
@@ -95,7 +96,7 @@ test('policy denial records a decision and never dispatches manager code', async
   const fixture = buildFixture();
   let dispatches = 0;
   fixture.policy = createPolicyEngine({ denied: ['workspace.cleanup'] });
-  fixture.managers['workspace-manager'].execute = async () => {
+  fixture.managers['workspace-manager'].executeFenced = async () => {
     dispatches += 1;
     return { applied: true };
   };
@@ -126,11 +127,13 @@ test('conflicting mutation ownership fails registration as executable owner', ()
     managerId: 'workspace-manager',
     trust: { level: 'trusted' },
     mutationClasses: [{ resourceType: 'git-repository', class: 'workspace.cleanup' }],
+    operationContract: { finalSideEffectFence: { required: true, mode: 'compare-and-set' } },
   });
   const second = registry.registerManager({
     managerId: 'release-manager',
     trust: { level: 'trusted' },
     mutationClasses: [{ resourceType: 'git-repository', class: 'workspace.cleanup' }],
+    operationContract: { finalSideEffectFence: { required: true, mode: 'compare-and-set' } },
   });
 
   assert.equal(first.status, 'active');
@@ -150,4 +153,15 @@ test('untrusted plugin can be observed but cannot execute mutations', () => {
   assert.equal(registration.status, 'observation_only');
   assert.equal(registration.executable, false);
   assert.equal(registry.selectManager({ machineId: 'machine-a', type: 'git-repository', id: 'repo-1' }, 'workspace.cleanup').ok, false);
+});
+
+test('verifier failures become terminal and permit a later retry', async () => {
+  const fixture = buildFixture();
+  fixture.managers['workspace-manager'].verify = async () => { throw new Error('read path unavailable'); };
+  const reconciler = createReconciler(fixture);
+  const first = await reconciler.reconcileRequest(fixtureRequest({ id: 'verify-failure-1' }));
+  assert.equal(first.status, 'unverifiable');
+  fixture.managers['workspace-manager'].verify = async () => ({ outcome: 'satisfied' });
+  const second = await reconciler.reconcileRequest(fixtureRequest({ id: 'verify-failure-2' }));
+  assert.equal(second.status, 'satisfied');
 });

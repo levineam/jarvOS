@@ -54,16 +54,19 @@ function createReconciler(options = {}) {
       provenance: request.provenance,
     });
 
-    const existing = store.getCommandByActionKey(command.actionKey);
-    if (existing && !['failed', 'unverifiable', 'expired'].includes(existing.status)) {
+    const reservation = store.putCommandIfAbsent
+      ? store.putCommandIfAbsent(command)
+      : { inserted: !store.getCommandByActionKey(command.actionKey), command: store.getCommandByActionKey(command.actionKey) || command };
+    if (!reservation.inserted) {
       return {
         ok: true,
         status: 'deduped',
         request,
         policyDecision,
-        command: existing,
+        command: reservation.command,
       };
     }
+    command = reservation.command;
 
     const leaseKey = canonicalMutationKey({ resource: request.resource, mutationClass: request.mutationClass });
     const leaseResult = store.acquireLease({
@@ -94,8 +97,8 @@ function createReconciler(options = {}) {
     store.putRecord(command);
 
     const port = managers[selected.managerId];
-    if (!port || typeof port.execute !== 'function') {
-      command = lifecycleTransition(command, 'deferred', { reason: 'manager execution port unavailable' });
+    if (!port || typeof port.executeFenced !== 'function') {
+      command = lifecycleTransition(command, 'deferred', { reason: 'manager fenced execution port unavailable' });
       store.putRecord(command);
       return { ok: false, status: 'deferred', request, policyDecision, command };
     }
@@ -105,10 +108,21 @@ function createReconciler(options = {}) {
 
     let execution;
     try {
-      execution = await port.execute(command, { fence: leaseResult.lease.fence, request });
+      const assertCurrentFence = () => {
+        if (!store.assertLeaseCurrent || !store.assertLeaseCurrent(leaseResult.lease)) throw new Error('stale_fence');
+        return true;
+      };
+      assertCurrentFence();
+      execution = await port.executeFenced(command, {
+        fence: leaseResult.lease.fence,
+        lease: leaseResult.lease,
+        request,
+        assertCurrentFence,
+      });
     } catch (error) {
       command = lifecycleTransition(command, 'failed', { reason: error.message, checkpoint: { phase: 'execute-error' } });
       store.putRecord(command);
+      if (store.releaseLease) store.releaseLease(leaseResult.lease);
       return { ok: false, status: 'failed', error, request, policyDecision, command };
     }
 
@@ -118,7 +132,18 @@ function createReconciler(options = {}) {
     const verifier = port.verify || (() => ({ outcome: 'unverifiable', reason: 'verifier unavailable' }));
     command = lifecycleTransition(command, 'verifying', { checkpoint: { phase: 'verifying' } });
     store.putRecord(command);
-    const verification = await verifier(command, { execution, request });
+    let verification;
+    try {
+      verification = await verifier(command, { execution, request });
+    } catch (error) {
+      command = lifecycleTransition(command, 'unverifiable', {
+        reason: `verifier_error: ${error.message}`,
+        checkpoint: { phase: 'verify-error' },
+      });
+      store.putRecord(command);
+      if (store.releaseLease) store.releaseLease(leaseResult.lease);
+      return { ok: false, status: 'unverifiable', error, request, policyDecision, command };
+    }
     const evidence = createEvidence({
       commandId: command.id,
       managerId: command.managerId,
@@ -132,12 +157,14 @@ function createReconciler(options = {}) {
     if (!evidenceCommit.ok) {
       command = lifecycleTransition(command, 'unverifiable', { reason: evidenceCommit.reason, checkpoint: { phase: 'evidence-rejected' } });
       store.putRecord(command);
+      if (store.releaseLease) store.releaseLease(leaseResult.lease);
       return { ok: false, status: 'unverifiable', request, policyDecision, command, evidenceCommit };
     }
 
     const terminal = verification.outcome === 'satisfied' ? 'satisfied' : 'unverifiable';
     command = lifecycleTransition(command, terminal, { checkpoint: { phase: 'terminal', evidenceId: evidence.id } });
     store.putRecord(command);
+    if (store.releaseLease) store.releaseLease(leaseResult.lease);
     return {
       ok: terminal === 'satisfied',
       status: terminal,

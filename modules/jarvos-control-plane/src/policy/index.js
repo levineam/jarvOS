@@ -9,6 +9,9 @@ function createPolicyEngine(options = {}) {
   const approvalRequired = new Set(options.approvalRequired || []);
   const denied = new Set(options.denied || []);
   const defaultOutcome = options.defaultOutcome || 'defer';
+  if (!['deny', 'require_approval', 'defer'].includes(defaultOutcome)) {
+    throw new Error('defaultOutcome must deny, require approval, or defer; allow requires an explicit rule');
+  }
   const now = options.now || (() => new Date().toISOString());
 
   function keyFor(request) {

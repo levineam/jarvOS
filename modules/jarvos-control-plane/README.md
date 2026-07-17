@@ -12,13 +12,13 @@ Paperclip, OpenClaw, Codex, Claude Code, cron, or a private machine path.
 
 - Validates v1 record and manager-manifest contracts.
 - Canonicalizes command specs and derives stable action keys for dedupe.
-- Registers managers and fails closed on incompatible versions, untrusted code,
+- Registers managers and fails closed on unsupported or malformed versions, untrusted code,
   or conflicting mutation ownership.
 - Separates per-request policy authorization from command dedupe.
 - Acquires compare-and-set leases with monotonic fences before dispatch.
 - Runs manager execution through checkpointed reconciliation and independent
   verification.
-- Persists an append-only reference journal with a local filesystem adapter.
+- Persists a write-ahead, framed, fsynced reference journal with a cross-process local filesystem adapter.
 
 ## What It Is Not
 
@@ -59,7 +59,7 @@ Managers register a manifest with:
 - final-side-effect fence capability
 - verifier/postcondition port details
 
-Unknown major versions and untrusted manifests never execute mutation code. A
+Only explicitly supported, well-formed contract versions and trusted manifests execute mutation code. A
 trusted manager with compatible observation behavior but incompatible mutation
 behavior must run observation-only until a reviewed contract revision exists.
 
@@ -103,7 +103,7 @@ registry.registerManager({
   capabilities: ['observe', 'execute', 'verify'],
   mutationClasses: [{ resourceType: 'git-repository', class: 'workspace.cleanup' }],
   operationContract: {
-    finalSideEffectFence: { required: true },
+    finalSideEffectFence: { required: true, mode: 'compare-and-set' },
     verifier: { authoritativeReadPath: 'git worktree list' },
   },
 });
@@ -118,7 +118,8 @@ const reconciler = createReconciler({
   store,
   managers: {
     'workspace-manager': {
-      async execute(command, { fence }) {
+      async executeFenced(command, { fence, assertCurrentFence }) {
+        assertCurrentFence(); // invoke at the target's final mutation boundary
         return { applied: true, fence };
       },
       async verify() {
@@ -151,7 +152,7 @@ cd modules/jarvos-control-plane
 npm test
 ```
 
-The focused test suite covers contract validation, unknown version behavior,
-untrusted manager execution blocking, mutation ownership conflicts, request
-dedupe, lease races, monotonic fences, stale evidence rejection, and filesystem
-journal persistence.
+The focused test suite covers strict contract validation, collision-safe keys and
+digests, deny/defer-only defaults, request dedupe, cross-process lease races,
+target-side fencing, terminal verifier failures, stale evidence rejection, and
+filesystem journal recovery.

@@ -4,6 +4,7 @@ const crypto = require('crypto');
 
 const CONTRACT_VERSION = '1.0.0';
 const CONTRACT_MAJOR = 1;
+const SUPPORTED_CONTRACT_VERSIONS = new Set([CONTRACT_VERSION]);
 const RECORD_SCHEMA_VERSION = 'jarvos-control-plane.record.v1';
 const MANAGER_SCHEMA_VERSION = 'jarvos-control-plane.manager.v1';
 
@@ -53,7 +54,13 @@ function clone(value) {
 }
 
 function stableStringify(value) {
-  if (value === null || typeof value !== 'object') return JSON.stringify(value);
+  if (value === null) return 'null';
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value)) throw new Error('Non-finite numbers are not valid canonical values');
+    return JSON.stringify(value);
+  }
+  if (typeof value === 'string' || typeof value === 'boolean') return JSON.stringify(value);
+  if (typeof value !== 'object') throw new Error(`Unsupported canonical value type: ${typeof value}`);
   if (Array.isArray(value)) return `[${value.map(stableStringify).join(',')}]`;
   return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${stableStringify(value[key])}`).join(',')}}`;
 }
@@ -66,13 +73,8 @@ function digest(value) {
   return sha256(typeof value === 'string' ? value : stableStringify(value));
 }
 
-function parseMajor(version) {
-  const match = String(version || '').match(/^(\d+)\./);
-  return match ? Number(match[1]) : null;
-}
-
 function assertCompatibleVersion(version, label = 'contractVersion') {
-  if (parseMajor(version) !== CONTRACT_MAJOR) {
+  if (typeof version !== 'string' || !/^\d+\.\d+\.\d+$/.test(version) || !SUPPORTED_CONTRACT_VERSIONS.has(version)) {
     throw new Error(`${label} must be compatible with ${CONTRACT_VERSION}`);
   }
 }
@@ -91,14 +93,14 @@ function canonicalResourceKey(resource = {}) {
   for (const field of ['machineId', 'type', 'id']) {
     if (!resource[field]) throw new Error(`resource.${field} is required`);
   }
-  return `${resource.machineId}:${resource.type}:${resource.id}`;
+  return `resource:${digest([resource.machineId, resource.type, resource.id])}`;
 }
 
 function canonicalMutationKey({ machineId, resource, mutationClass }) {
   if (!mutationClass) throw new Error('mutationClass is required');
-  const base = resource ? canonicalResourceKey(resource) : machineId;
-  if (!base) throw new Error('machineId or resource is required');
-  return `${base}:${mutationClass}`;
+  const base = resource ? [resource.machineId, resource.type, resource.id] : [machineId];
+  if (!base[0]) throw new Error('machineId or resource is required');
+  return `mutation:${digest([...base, mutationClass])}`;
 }
 
 function canonicalCommandSpec(spec = {}) {
@@ -142,7 +144,7 @@ function baseRecord(type, input = {}) {
     schemaVersion: input.schemaVersion || RECORD_SCHEMA_VERSION,
     contractVersion: input.contractVersion || CONTRACT_VERSION,
     type,
-    id: input.id || digest({ type, createdAt, seed: input.seed || input }),
+    id: input.id || digest({ type, createdAt, seed: input.seed || Object.fromEntries(Object.entries(input).filter(([, value]) => value !== undefined)) }),
     createdAt,
     updatedAt: normalizeTimestamp(input.updatedAt || createdAt),
     authority: input.authority || null,
@@ -340,6 +342,11 @@ function validateManagerManifest(manifest = {}) {
   for (const mutation of manifest.mutationClasses) {
     if (!mutation || !mutation.class) throw new Error('mutationClasses entries require class');
     if (!mutation.resourceType) throw new Error(`mutation ${mutation.class} requires resourceType`);
+  }
+  const fence = manifest.operationContract && manifest.operationContract.finalSideEffectFence;
+  if (manifest.trust && manifest.trust.level === 'trusted' &&
+      (!isObject(fence) || fence.required !== true || !['compare-and-set', 'target-fenced'].includes(fence.mode))) {
+    throw new Error('trusted managers require a target-side finalSideEffectFence declaration');
   }
   if (manifest.trust && !['data-only', 'trusted'].includes(manifest.trust.level)) {
     throw new Error('trust.level must be data-only or trusted');
