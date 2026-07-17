@@ -85,7 +85,7 @@ function loadGbrain() {
 }
 
 function loadOntologyProviderModule() {
-  return loadModule('@jarvos/ontology/provider', path.join(JARVOS_ROOT, 'modules', 'jarvos-ontology', 'src', 'provider.js'));
+  return loadModule('@jarvos/ontology/provider', path.join(JARVOS_ROOT, 'modules', 'jarvos-ontology', 'src', 'provider.cjs'));
 }
 
 function readShellExports(filePath) {

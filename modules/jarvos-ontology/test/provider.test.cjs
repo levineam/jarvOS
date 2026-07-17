@@ -10,7 +10,7 @@ const {
   ONTOLOGY_PACKET_VERSION,
   createFixtureOntologyProvider,
   createOntologyProvider,
-} = require('../src/provider.js');
+} = require('../src/provider.cjs');
 
 function withTempDir(fn) {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-ontology-provider-'));

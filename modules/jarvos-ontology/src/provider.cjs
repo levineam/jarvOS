@@ -8,7 +8,7 @@ const {
   DEFAULT_ONTOLOGY_WARNING,
   DEFAULT_PACKET_MAX_CHARS,
   ONTOLOGY_PACKET_VERSION,
-} = require('./provider-types.js');
+} = require('./provider-types.cjs');
 
 function firstString(...values) {
   for (const value of values) {

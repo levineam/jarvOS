@@ -7,7 +7,7 @@ const {
   canPromoteCandidate,
   promoteReviewedCandidate,
   resolveInquiry,
-} = require('../src/review-workflow.js');
+} = require('../src/review-workflow.cjs');
 
 function reviewedCandidate(overrides = {}) {
   return {

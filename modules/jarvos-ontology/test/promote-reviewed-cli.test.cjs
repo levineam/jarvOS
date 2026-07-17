@@ -7,7 +7,7 @@ const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const test = require('node:test');
 
-const SCRIPT = path.resolve(__dirname, '..', 'scripts', 'promote-reviewed.js');
+const SCRIPT = path.resolve(__dirname, '..', 'scripts', 'promote-reviewed.cjs');
 
 test('promote-reviewed CLI refuses unreviewed candidates', () => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-promote-reviewed-'));

@@ -4,7 +4,7 @@
 const fs = require('fs');
 const path = require('path');
 
-const { promoteReviewedCandidate } = require('../src/review-workflow.js');
+const { promoteReviewedCandidate } = require('../src/review-workflow.cjs');
 
 function parseScalar(value) {
   if (value === '') return null;
@@ -52,7 +52,7 @@ function parseFrontmatter(markdown) {
 function main(argv = process.argv.slice(2)) {
   const candidatePath = argv.find((arg) => !arg.startsWith('--'));
   if (!candidatePath || argv.includes('--help') || argv.includes('-h')) {
-    console.log('Usage: node scripts/promote-reviewed.js <candidate.md> [--dry-run]');
+    console.log('Usage: node scripts/promote-reviewed.cjs <candidate.md> [--dry-run]');
     return;
   }
 
