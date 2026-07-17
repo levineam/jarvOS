@@ -2,7 +2,7 @@
 
 const assert = require('assert');
 const test = require('node:test');
-const { createApplicationService, createMemoryApplicationStore } = require('../src');
+const { createApplicationService, createMemoryApplicationStore, createPolicyEngine } = require('../src');
 
 function fixture(options = {}) {
   let time = Date.parse('2026-07-17T00:00:00.000Z');
@@ -50,6 +50,13 @@ test('explicit policy delegation may permit creator approval', () => {
   const { service, request } = fixture({ policy: () => ({ outcome: 'require_approval', requiredCapability: 'control-plane.mutate', allowCreatorApproval: true }) });
   const created = request();
   assert.equal(service.execute('approve', { credential: 'writer', requestId: created.request.id, fence: created.request.approval.fence }).request.status, 'approved');
+});
+
+test('application service accepts a policy engine decision object and rejects invalid policy shapes', () => {
+  const { request } = fixture({ policy: createPolicyEngine({ approvalRequired: ['workspace.cleanup'] }) });
+  const created = request();
+  assert.equal(created.request.status, 'approval_required');
+  assert.throws(() => fixture({ policy: { decide: true } }), /policy must be a callback or expose decide/);
 });
 
 test('approval cannot replay and unrelated requests do not invalidate keyed approval freshness', () => {

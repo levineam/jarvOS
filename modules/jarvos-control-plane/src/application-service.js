@@ -16,6 +16,12 @@ function createApplicationService(options = {}) {
   if (typeof options.canRead !== 'function') throw new Error('canRead policy is required');
   const clock = options.clock || (() => Date.now());
   const policy = options.policy || (() => ({ outcome: 'require_approval' }));
+  const decidePolicy = typeof policy === 'function'
+    ? policy
+    : policy && typeof policy.decide === 'function'
+      ? (request, principal) => policy.decide(request, principal)
+      : null;
+  if (!decidePolicy) throw new Error('policy must be a callback or expose decide');
   const stamp = () => new Date(clock()).toISOString();
   const authenticate = (input) => {
     const trusted = options.resolveCredential(input.credential);
@@ -92,7 +98,7 @@ function createApplicationService(options = {}) {
       const existingId = state.idempotency[dedupeKey];
       if (existingId) return { ok: true, deduped: true, request: project(requestFor(state, existingId), principal) };
 
-      const decision = policy(request, principal) || {};
+      const decision = decidePolicy(request, principal) || {};
       const outcome = decision.outcome || 'require_approval';
       if (!['allow', 'deny', 'defer', 'require_approval'].includes(outcome)) throw new Error('policy returned an invalid outcome');
       const fence = currentFence(state, request.actionKey) + 1;
