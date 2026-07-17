@@ -119,6 +119,7 @@ function createReconciler(options = {}) {
         request,
         assertCurrentFence,
       });
+      assertCurrentFence();
     } catch (error) {
       command = lifecycleTransition(command, 'failed', { reason: error.message, checkpoint: { phase: 'execute-error' } });
       store.putRecord(command);
@@ -135,6 +136,9 @@ function createReconciler(options = {}) {
     let verification;
     try {
       verification = await verifier(command, { execution, request });
+      if (!verification || typeof verification !== 'object' || typeof verification.outcome !== 'string') {
+        throw new Error('invalid verifier result');
+      }
     } catch (error) {
       command = lifecycleTransition(command, 'unverifiable', {
         reason: `verifier_error: ${error.message}`,

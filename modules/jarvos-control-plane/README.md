@@ -18,7 +18,8 @@ Paperclip, OpenClaw, Codex, Claude Code, cron, or a private machine path.
 - Acquires compare-and-set leases with monotonic fences before dispatch.
 - Runs manager execution through checkpointed reconciliation and independent
   verification.
-- Persists a write-ahead, framed, fsynced reference journal with a cross-process local filesystem adapter.
+- Persists a write-ahead, framed, fsynced reference journal with atomic stale-lock
+  recovery, torn-tail repair, and bounded checkpoint compaction.
 
 ## What It Is Not
 
@@ -154,5 +155,5 @@ npm test
 
 The focused test suite covers strict contract validation, collision-safe keys and
 digests, deny/defer-only defaults, request dedupe, cross-process lease races,
-target-side fencing, terminal verifier failures, stale evidence rejection, and
-filesystem journal recovery.
+target-side fencing, terminal verifier failures, stale evidence rejection,
+torn-tail repair, checkpoint recovery, and filesystem journal recovery.

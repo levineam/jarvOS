@@ -47,8 +47,10 @@ Installed hosts own:
 5. The store dedupes equivalent authorized commands by action key.
 6. The store grants a compare-and-set lease and monotonic fence.
 7. The manager executes only after validating the fence at the final side-effect
-   boundary.
-8. The verifier reads authoritative current state independently.
+   boundary, and reconciliation rechecks it after execution before recording an
+   `executed` transition.
+8. The verifier reads authoritative current state independently; malformed or
+   failed verifier output is terminal `unverifiable` and releases the lease.
 9. Evidence is committed only if the lease and fence are still current.
 10. The final projection references the durable command/evidence identity.
 
@@ -72,8 +74,12 @@ Installed hosts own:
 The reference store is intentionally simple:
 
 - write-ahead, framed, fsynced append-only journal entries with stable digests
-- replay from the journal at startup; an incomplete final frame is ignored and
-  an invalid complete frame fails closed
+- replay from a checkpoint plus the journal at startup; an incomplete final
+  frame is truncated and fsynced before a later append, while an invalid
+  complete frame fails closed
+- atomic stale-lock takeover keyed to the validated lock inode, with PID reuse
+  detection via a process-start marker
+- bounded checkpoint compaction that retains current records and evidence digests
 - current record projections derived from the journal
 - compare-and-set leases keyed by independent mutation resource
 - monotonic fences per mutation key
