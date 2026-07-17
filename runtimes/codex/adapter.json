@@ -9,7 +9,8 @@
       "jarvos_recall",
       "jarvos_create_note",
       "jarvos_startup_brief",
-      "jarvos_hydrate"
+      "jarvos_hydrate",
+      "jarvos_control_plane"
     ]
   },
   "targets": [
@@ -52,6 +53,11 @@
     ]
   },
   "unsupportedCapabilities": [],
+  "controlPlane": {
+    "module": "modules/jarvos-control-plane/scripts/jarvos-manager.js",
+    "hostService": "JARVOS_CONTROL_PLANE_SERVICE_MODULE",
+    "parity": "Human CLI and agent MCP delegate to the same installed authenticated application service."
+  },
   "verification": [
     "codex mcp get jarvos",
     "node runtimes/codex/jarvos-session-start-hook.js",

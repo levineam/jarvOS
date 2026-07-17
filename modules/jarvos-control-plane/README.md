@@ -36,6 +36,30 @@ Paperclip, OpenClaw, Codex, Claude Code, cron, or a private machine path.
 - It is not permission to mutate by free-form text. Requests must declare a
   resource, mutation class, authority, command spec, budget, and lifecycle.
 
+## Public human and agent adapters
+
+The package ships `jarvos-manager` for a human CLI and exposes the same
+boundary through `@jarvos/agent-context` as the `jarvos_control_plane` MCP
+tool. Both transports delegate only to a host-provided authenticated
+application service; neither keeps a state file, resolves credentials, or
+dispatches mutations.
+
+An installed host configures `JARVOS_CONTROL_PLANE_SERVICE_MODULE` to an
+absolute local module that exports either an application service or a
+zero-argument factory returning one. That host module owns credential
+resolution, read disclosure policy, and the store. Callers pass a credential
+as data to the common service, which establishes the trusted principal and
+ignores any caller-supplied authority fields.
+
+```bash
+jarvos-manager request --credential "$HOST_CREDENTIAL" --input '{"actor":{"kind":"human"},"resource":{"machineId":"machine-a","type":"workspace","id":"one"},"mutationClass":"workspace.cleanup","desiredGeneration":"1","commandSpec":{"operation":"preview"}}'
+```
+
+Use `request`/`approve` (the CLI aliases) or the core
+`createRequest`/`approve` operations. Terminal command outcomes remain the
+reconciler's responsibility; the adapter can only create requests, read
+filtered projections, and consume command-bound approvals.
+
 ## Core Concepts
 
 ### Records

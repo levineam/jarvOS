@@ -20,6 +20,21 @@ test('validateManifest accepts the Codex runtime manifest', () => {
   const manifest = JSON.parse(fs.readFileSync(path.join(ROOT, 'runtimes/codex/adapter.json'), 'utf8'));
   const result = validateManifest(manifest);
   assert.equal(result.ok, true, result.errors.join('\n'));
+  assert.ok(manifest.sharedAgentContext.requiredTools.includes('jarvos_control_plane'));
+  assert.equal(manifest.controlPlane.module, 'modules/jarvos-control-plane/scripts/jarvos-manager.js');
+});
+
+test('validateManifest rejects incomplete control-plane parity declarations', () => {
+  const result = validateManifest({
+    schemaVersion: 1, id: 'bad-runtime', displayName: 'Bad Runtime', setup: { script: 'setup.sh' },
+    sharedAgentContext: { mcpServer: 'modules/jarvos-agent-context/scripts/jarvos-mcp.js', requiredTools: ['jarvos_hydrate'] },
+    targets: [{ id: 'bad-cli', kind: 'cli', mcp: { supported: true }, hydration: { mode: 'manual', reason: 'test' } }],
+    controlPlane: { module: 'wrong.js' },
+  });
+  assert.equal(result.ok, false);
+  assert.match(result.errors.join('\n'), /controlPlane\.module/);
+  assert.match(result.errors.join('\n'), /jarvos_control_plane/);
+  assert.match(result.errors.join('\n'), /hostService/);
 });
 
 test('validateManifest rejects missing shared jarvos_hydrate tool', () => {

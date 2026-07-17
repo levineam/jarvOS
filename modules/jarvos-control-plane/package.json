@@ -11,7 +11,11 @@
     "./reconciliation": "./src/reconciliation/index.js",
     "./policy": "./src/policy/index.js",
     "./storage": "./src/storage/index.js",
-    "./application-service": "./src/application-service.js"
+    "./application-service": "./src/application-service.js",
+    "./manager": "./scripts/jarvos-manager.js"
+  },
+  "bin": {
+    "jarvos-manager": "scripts/jarvos-manager.js"
   },
   "scripts": {
     "test": "node --test test/*.test.js"

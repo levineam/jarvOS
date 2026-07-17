@@ -10,6 +10,7 @@ const test = require('node:test');
 const jarvosPaths = require('../../jarvos-secondbrain/bridge/config/jarvos-paths.js');
 const {
   createNote,
+  controlPlane,
   currentWork,
   defaultFrontmatter,
   hydrate,
@@ -74,11 +75,48 @@ function withTempVault(fn) {
   return result;
 }
 
+async function withControlPlaneHost(fn) {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-control-plane-host-'));
+  const hostModule = path.join(tmp, 'host-service.js');
+  const previous = process.env.JARVOS_CONTROL_PLANE_SERVICE_MODULE;
+  const source = path.join(__dirname, '..', '..', 'jarvos-control-plane', 'src', 'index.js');
+  fs.writeFileSync(hostModule, [
+    `const { createApplicationService, createMemoryApplicationStore } = require(${JSON.stringify(source)});`,
+    "const service = createApplicationService({ store: createMemoryApplicationStore(), resolveCredential: (credential) => credential === 'test-credential' ? { id: 'principal:test', capabilities: ['control-plane.read', 'control-plane.mutate', 'control-plane.approve'], maxSensitivity: 'internal' } : null, canRead: () => true, policy: () => ({ outcome: 'require_approval', allowCreatorApproval: true, requiredCapability: 'control-plane.approve' }) });",
+    'module.exports = () => service;',
+  ].join('\n'), 'utf8');
+  process.env.JARVOS_CONTROL_PLANE_SERVICE_MODULE = hostModule;
+  try { return await fn(); } finally {
+    if (previous === undefined) delete process.env.JARVOS_CONTROL_PLANE_SERVICE_MODULE;
+    else process.env.JARVOS_CONTROL_PLANE_SERVICE_MODULE = previous;
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
 test('defaultFrontmatter includes note-capture contract fields', () => {
   const frontmatter = defaultFrontmatter({ project: 'codex' });
   assert.equal(frontmatter.status, 'draft');
   assert.equal(frontmatter.type, 'note');
   assert.equal(frontmatter.project, 'codex');
+});
+
+test('control-plane service gives authenticated human and MCP callers the same core lifecycle', async () => {
+  await withControlPlaneHost(async () => {
+    const input = {
+      credential: 'test-credential', actor: { kind: 'agent', harness: 'test' },
+      resource: { machineId: 'machine-test', type: 'workspace', id: 'one' }, mutationClass: 'workspace.test',
+      desiredGeneration: '1', commandSpec: { operation: 'test' }, idempotencyKey: 'agent-context-parity',
+    };
+    assert.throws(() => controlPlane('list', {}), /authentication failed/);
+    const human = controlPlane('request', input);
+    assert.equal(human.ok, true);
+    assert.equal(human.request.status, 'approval_required');
+    const mcp = await callTool('jarvos_control_plane', { operation: 'approval-state', credential: 'test-credential', requestId: human.request.id });
+    assert.equal(mcp.isError, false);
+    assert.match(mcp.content[0].text, /approval_required/);
+    const approved = controlPlane('approve', { credential: 'test-credential', requestId: human.request.id, fence: human.request.approval.fence });
+    assert.equal(approved.request.status, 'approved');
+  });
 });
 
 test('createNote writes note, links journal, and verifies contract', () => {
@@ -254,6 +292,7 @@ test('MCP session thread tools round-trip through the shared note and journal pa
 test('MCP tool list includes jarvOS tools', () => {
   const names = TOOLS.map((tool) => tool.name);
   assert.deepEqual(names, [
+    'jarvos_control_plane',
     'jarvos_current_work',
     'jarvos_recall',
     'jarvos_synthesize',

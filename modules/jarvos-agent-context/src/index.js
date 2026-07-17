@@ -22,6 +22,17 @@ const DEFAULT_SESSION_THREAD_LOCK_RETRY_DELAY_MS = 25;
 const DEFAULT_SESSION_THREAD_LOCK_STALE_MS = 30000;
 const DEFAULT_SESSION_THREAD_LOCK_TIMEOUT_MS = 30000;
 
+function loadControlPlaneManager() {
+  return loadModule(
+    '@jarvos/control-plane/manager',
+    path.join(JARVOS_ROOT, 'modules', 'jarvos-control-plane', 'scripts', 'jarvos-manager.js'),
+  );
+}
+
+function controlPlane(operation, input = {}, options = {}) {
+  return loadControlPlaneManager().createControlPlaneService(options).execute(operation, input);
+}
+
 function expandTilde(value) {
   if (typeof value !== 'string') return value;
   if (value === '~') return os.homedir();
@@ -948,6 +959,7 @@ async function startupBrief(options = {}) {
 }
 
 module.exports = {
+  controlPlane,
   createNote,
   currentWork,
   defaultFrontmatter,

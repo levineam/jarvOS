@@ -5,6 +5,8 @@ const path = require('path');
 
 const DEFAULT_AGENT_CONTEXT_MCP = 'modules/jarvos-agent-context/scripts/jarvos-mcp.js';
 const REQUIRED_MCP_TOOL = 'jarvos_hydrate';
+const CONTROL_PLANE_TOOL = 'jarvos_control_plane';
+const CONTROL_PLANE_MODULE = 'modules/jarvos-control-plane/scripts/jarvos-manager.js';
 const HYDRATION_MODES = ['hook', 'manual', 'unsupported'];
 
 function repoRootFrom(start = __dirname) {
@@ -56,6 +58,11 @@ function validateManifest(manifest) {
   }
   if (!Array.isArray(shared.requiredTools) || !shared.requiredTools.includes(REQUIRED_MCP_TOOL)) {
     add(errors, `sharedAgentContext.requiredTools must include ${REQUIRED_MCP_TOOL}`);
+  }
+  if (manifest.controlPlane) {
+    if (manifest.controlPlane.module !== CONTROL_PLANE_MODULE) add(errors, `controlPlane.module must be ${CONTROL_PLANE_MODULE}`);
+    if (!shared.requiredTools?.includes(CONTROL_PLANE_TOOL)) add(errors, `sharedAgentContext.requiredTools must include ${CONTROL_PLANE_TOOL} when controlPlane is declared`);
+    if (!manifest.controlPlane.hostService) add(errors, 'controlPlane.hostService is required when controlPlane is declared');
   }
 
   for (const [index, target] of (manifest.targets || []).entries()) {
@@ -222,6 +229,8 @@ module.exports = {
   DEFAULT_AGENT_CONTEXT_MCP,
   HYDRATION_MODES,
   REQUIRED_MCP_TOOL,
+  CONTROL_PLANE_MODULE,
+  CONTROL_PLANE_TOOL,
   checkRuntime,
   listRuntimeManifests,
   loadManifest,

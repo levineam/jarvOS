@@ -4,6 +4,7 @@
 const readline = require('readline');
 const {
   createNote,
+  controlPlane,
   currentWork,
   hydrate,
   recall,
@@ -14,6 +15,21 @@ const {
 } = require('../src/index.js');
 
 const TOOLS = [
+  {
+    name: 'jarvos_control_plane',
+    description: 'Use the installed host\'s authenticated jarvOS control-plane application service. It has the same request and approval semantics as the human CLI.',
+    inputSchema: {
+      type: 'object',
+      required: ['operation', 'credential'],
+      properties: {
+        operation: { type: 'string', enum: ['list', 'inspect', 'evidence', 'approval-state', 'request', 'approve'] },
+        credential: { type: 'string', description: 'Credential supplied by the installed host.' },
+        requestId: { type: 'string' },
+        actor: { type: 'object' }, resource: { type: 'object' }, mutationClass: { type: 'string' },
+        desiredGeneration: { type: 'string' }, commandSpec: { type: 'object' }, idempotencyKey: { type: 'string' }, fence: { type: 'number' },
+      },
+    },
+  },
   {
     name: 'jarvos_current_work',
     description: 'Return a compact jarvOS current-work summary from Paperclip.',
@@ -241,6 +257,11 @@ function noteCaptureArgs(args = {}) {
 }
 
 async function callTool(name, args = {}) {
+  if (name === 'jarvos_control_plane') {
+    const { service: _service, applicationService: _applicationService, serviceModule: _serviceModule, ...input } = args;
+    const result = controlPlane(input.operation, input);
+    return textResult(JSON.stringify(result, null, 2), !result.ok);
+  }
   if (name === 'jarvos_current_work') {
     const result = await currentWork(args);
     return textResult(result.markdown, !result.ok);
