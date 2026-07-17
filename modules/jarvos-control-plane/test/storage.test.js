@@ -80,17 +80,16 @@ test('file store recovers from an orphaned stale lock', () => {
 test('stale-lock recovery never unlinks a fresh lock installed after takeover', () => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-control-plane-lock-race-'));
   const lockPath = path.join(tmp, 'state.lock');
-  const originalOpen = fs.openSync;
+  const originalRename = fs.renameSync;
   try {
     fs.writeFileSync(lockPath, JSON.stringify({ pid: 999999999, createdAt: '2000-01-01T00:00:00.000Z' }));
     const staleAt = new Date(Date.now() - 1000);
     fs.utimesSync(lockPath, staleAt, staleAt);
     let installedFreshLock = false;
-    fs.openSync = (target, flags, ...args) => {
-      const result = originalOpen(target, flags, ...args);
-      if (String(target).startsWith(`${lockPath}.takeover-`) && flags === 'wx' && !installedFreshLock) {
+    fs.renameSync = (from, to) => {
+      const result = originalRename(from, to);
+      if (from === lockPath && String(to).startsWith(`${lockPath}.takeover-`) && !installedFreshLock) {
         installedFreshLock = true;
-        fs.unlinkSync(lockPath);
         fs.writeFileSync(lockPath, JSON.stringify({ pid: process.pid, token: 'fresh-owner' }));
       }
       return result;
@@ -103,7 +102,7 @@ test('stale-lock recovery never unlinks a fresh lock installed after takeover', 
     assert.equal(installedFreshLock, true);
     assert.equal(JSON.parse(fs.readFileSync(lockPath, 'utf8')).token, 'fresh-owner');
   } finally {
-    fs.openSync = originalOpen;
+    fs.renameSync = originalRename;
     fs.rmSync(tmp, { recursive: true, force: true });
   }
 });

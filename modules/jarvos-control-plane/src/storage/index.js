@@ -148,32 +148,30 @@ function createFileStore(rootDir, options = {}) {
       if (error.code === 'ENOENT') return false;
       throw error;
     }
-    const takeoverPath = `${lockPath}.takeover-${stat.dev}-${stat.ino}`;
-    let takeoverFd;
+
+    const takeoverPath = `${lockPath}.takeover-${stat.dev}-${stat.ino}-${process.pid}-${Math.random().toString(16).slice(2)}`;
     try {
-      // The marker serializes every cooperating stale-lock recoverer before any
-      // unlink. Its inode-specific name prevents a contender from claiming a
-      // fresh lock that replaced the one originally observed.
-      takeoverFd = fs.openSync(takeoverPath, 'wx', 0o600);
+      fs.renameSync(lockPath, takeoverPath);
     } catch (error) {
-      if (error.code === 'EEXIST' || error.code === 'ENOENT') return false;
+      if (error.code === 'ENOENT' || error.code === 'EEXIST') return false;
       throw error;
     }
+
     try {
-      const current = fs.statSync(lockPath);
-      if (current.dev !== stat.dev || current.ino !== stat.ino) return false;
-      try { const text = fs.readFileSync(lockPath, 'utf8'); if (text) lock = JSON.parse(text); } catch (error) { if (error.code === 'ENOENT') return false; throw error; }
-      const ageMs = Date.now() - current.mtimeMs;
+      try { const text = fs.readFileSync(takeoverPath, 'utf8'); if (text) lock = JSON.parse(text); } catch (error) { if (error.code === 'ENOENT') return false; throw error; }
+      const ageMs = Date.now() - fs.statSync(takeoverPath).mtimeMs;
       // A matching process-start marker proves this is a live owner; a recycled
       // PID fails the comparison and is recoverable once the stale interval passes.
-      if (lockOwnerIsRunning(lock) || ageMs < staleLockMs) return false;
-      fs.unlinkSync(lockPath);
+      if (lockOwnerIsRunning(lock) || ageMs < staleLockMs) {
+        try { fs.renameSync(takeoverPath, lockPath); } catch (error) { if (error.code !== 'EEXIST') throw error; }
+        return false;
+      }
+      fs.unlinkSync(takeoverPath);
       return true;
     } catch (error) {
       if (error.code === 'ENOENT') return true;
       throw error;
     } finally {
-      if (takeoverFd !== undefined) fs.closeSync(takeoverFd);
       try { fs.unlinkSync(takeoverPath); } catch (error) { if (error.code !== 'ENOENT') throw error; }
     }
   }
