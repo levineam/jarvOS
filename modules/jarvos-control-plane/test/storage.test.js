@@ -80,16 +80,17 @@ test('file store recovers from an orphaned stale lock', () => {
 test('stale-lock recovery never unlinks a fresh lock installed after takeover', () => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-control-plane-lock-race-'));
   const lockPath = path.join(tmp, 'state.lock');
-  const originalRename = fs.renameSync;
+  const originalOpen = fs.openSync;
   try {
     fs.writeFileSync(lockPath, JSON.stringify({ pid: 999999999, createdAt: '2000-01-01T00:00:00.000Z' }));
     const staleAt = new Date(Date.now() - 1000);
     fs.utimesSync(lockPath, staleAt, staleAt);
     let installedFreshLock = false;
-    fs.renameSync = (from, to) => {
-      const result = originalRename(from, to);
-      if (from === lockPath && !installedFreshLock) {
+    fs.openSync = (target, flags, ...args) => {
+      const result = originalOpen(target, flags, ...args);
+      if (String(target).startsWith(`${lockPath}.takeover-`) && flags === 'wx' && !installedFreshLock) {
         installedFreshLock = true;
+        fs.unlinkSync(lockPath);
         fs.writeFileSync(lockPath, JSON.stringify({ pid: process.pid, token: 'fresh-owner' }));
       }
       return result;
@@ -102,7 +103,7 @@ test('stale-lock recovery never unlinks a fresh lock installed after takeover', 
     assert.equal(installedFreshLock, true);
     assert.equal(JSON.parse(fs.readFileSync(lockPath, 'utf8')).token, 'fresh-owner');
   } finally {
-    fs.renameSync = originalRename;
+    fs.openSync = originalOpen;
     fs.rmSync(tmp, { recursive: true, force: true });
   }
 });
@@ -161,6 +162,19 @@ test('file store checkpoints the journal without losing records or evidence', ()
     const reopened = createFileStore(tmp).snapshot();
     assert.deepEqual(reopened.records.map((record) => record.id).sort(), ['evidence-a', 'record-a']);
     assert.equal(reopened.records.find((record) => record.id === 'evidence-a').digest, 'durable-digest');
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+});
+
+test('file store fails closed when a compacted checkpoint is missing or corrupt', () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-control-plane-checkpoint-corrupt-'));
+  try {
+    const store = createFileStore(tmp, { checkpointEntries: 1 });
+    store.putRecord({ id: 'record-a', type: 'request' });
+    fs.writeFileSync(path.join(tmp, 'state.json'), '{not-json');
+    assert.throws(() => createFileStore(tmp).snapshot(), /Corrupt state checkpoint/);
+
+    fs.rmSync(path.join(tmp, 'state.json'));
+    assert.throws(() => createFileStore(tmp).snapshot(), /Missing state checkpoint/);
   } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
 });
 
