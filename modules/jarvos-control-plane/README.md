@@ -8,6 +8,17 @@ for desired state, observations, requests, policy decisions, commands, evidence,
 manager manifests, mutation leases, and durable storage without depending on
 Paperclip, OpenClaw, Codex, Claude Code, cron, or a private machine path.
 
+## Human and Agent Access
+
+`jarvos-manager` is the public, local application service used by both the
+human CLI and `jarvos_control_plane` MCP tool. Set
+`JARVOS_CONTROL_PLANE_TOKEN` in the installed host before invoking it; missing
+or incorrect credentials fail closed. Its supported operations are `list`,
+`inspect`, `explain-policy`, `dry-run`, `request`, `approval-state`,
+`approve`, `reject`, `pause`, `resume`, `cancel`, `conflict-detail`, and
+`evidence`. The durable state path is host configuration
+(`JARVOS_CONTROL_PLANE_STATE_PATH`), never package data.
+
 ## What It Does
 
 - Validates v1 record and manager-manifest contracts.

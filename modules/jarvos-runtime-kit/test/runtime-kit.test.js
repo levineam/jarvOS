@@ -20,6 +20,8 @@ test('validateManifest accepts the Codex runtime manifest', () => {
   const manifest = JSON.parse(fs.readFileSync(path.join(ROOT, 'runtimes/codex/adapter.json'), 'utf8'));
   const result = validateManifest(manifest);
   assert.equal(result.ok, true, result.errors.join('\n'));
+  assert.ok(manifest.sharedAgentContext.requiredTools.includes('jarvos_control_plane'));
+  assert.equal(manifest.controlPlane.module, 'modules/jarvos-control-plane/scripts/jarvos-manager.js');
 });
 
 test('validateManifest rejects missing shared jarvos_hydrate tool', () => {

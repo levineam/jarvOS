@@ -40,6 +40,8 @@ result so Codex startup is not blocked.
 - `jarvos_hydrate` — bounded Codex startup packet with Paperclip current work,
   today's journal, linked notes, the jarvOS ontology context packet, redaction, and a
   hydration report.
+- `jarvos_control_plane` — authenticated request, approval, policy, conflict,
+  and evidence operations shared with the `jarvos-manager` human CLI.
 
 ## Hydration Scope
 

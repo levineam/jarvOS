@@ -4,6 +4,9 @@
   "description": "Portable jarvOS control-plane contracts, registry, reconciliation engine, policy primitives, leases, and reference store",
   "license": "MIT",
   "main": "src/index.js",
+  "bin": {
+    "jarvos-manager": "scripts/jarvos-manager.js"
+  },
   "exports": {
     ".": "./src/index.js",
     "./contracts": "./src/contracts/index.js",

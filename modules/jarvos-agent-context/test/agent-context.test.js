@@ -10,6 +10,7 @@ const test = require('node:test');
 const jarvosPaths = require('../../jarvos-secondbrain/bridge/config/jarvos-paths.js');
 const {
   createNote,
+  controlPlane,
   currentWork,
   defaultFrontmatter,
   hydrate,
@@ -79,6 +80,30 @@ test('defaultFrontmatter includes note-capture contract fields', () => {
   assert.equal(frontmatter.status, 'draft');
   assert.equal(frontmatter.type, 'note');
   assert.equal(frontmatter.project, 'codex');
+});
+
+test('control-plane service gives authenticated human and MCP callers the same request lifecycle', async () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-control-plane-parity-'));
+  try {
+    const service = { statePath: path.join(tmp, 'state.json'), token: 'test-token' };
+    const input = {
+      authToken: 'test-token', service,
+      principal: { id: 'principal:test' }, actor: { kind: 'agent', harness: 'test' },
+      resource: { machineId: 'machine-test', type: 'workspace', id: 'one' },
+      mutationClass: 'workspace.test', desiredGeneration: '1', commandSpec: { operation: 'test' },
+    };
+    assert.throws(() => controlPlane('list', { service }), /authentication failed/);
+    const human = controlPlane('request', input);
+    assert.equal(human.ok, true);
+    assert.equal(human.request.status, 'approval_required');
+    const mcp = await callTool('jarvos_control_plane', { operation: 'approval-state', authToken: 'test-token', requestId: human.request.id, service });
+    assert.equal(mcp.isError, false);
+    assert.match(mcp.content[0].text, /approval_required/);
+    const approved = controlPlane('approve', { authToken: 'test-token', requestId: human.request.id, service });
+    assert.equal(approved.request.status, 'approved');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
 });
 
 test('createNote writes note, links journal, and verifies contract', () => {
@@ -254,6 +279,7 @@ test('MCP session thread tools round-trip through the shared note and journal pa
 test('MCP tool list includes jarvOS tools', () => {
   const names = TOOLS.map((tool) => tool.name);
   assert.deepEqual(names, [
+    'jarvos_control_plane',
     'jarvos_current_work',
     'jarvos_recall',
     'jarvos_synthesize',

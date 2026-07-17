@@ -34,6 +34,7 @@
     "modules/jarvos-coding/src/",
     "modules/jarvos-control-plane/README.md",
     "modules/jarvos-control-plane/package.json",
+    "modules/jarvos-control-plane/scripts/",
     "modules/jarvos-control-plane/src/",
     "docs/architecture/control-plane.md",
     "modules/jarvos-ontology/README.md",
