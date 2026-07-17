@@ -51,8 +51,13 @@ function createApplicationService(options = {}) {
       const decision = policy(request, principal);
       const requiredCapability = decision.requiredCapability || 'control-plane.mutate';
       request.actionKey = command.actionKey;
-      request.status = decision.outcome === 'allow' ? 'approved' : 'approval_required';
-      request.approval = decision.outcome === 'allow' ? null : { actionKey: command.actionKey, requiredCapability, expiresAt: decision.expiresAt || new Date(clock() + 300000).toISOString(), fence: state.fence + 1, usedAt: null };
+      request.status = decision.outcome === 'allow' ? 'approved'
+        : decision.outcome === 'deny' ? 'rejected'
+          : decision.outcome === 'defer' ? 'deferred'
+            : 'approval_required';
+      request.approval = decision.outcome === 'require_approval'
+        ? { actionKey: command.actionKey, requiredCapability, expiresAt: decision.expiresAt || new Date(clock() + 300000).toISOString(), fence: state.fence + 1, usedAt: null }
+        : null;
       state.fence += 1; state.requests.push(request); evidence(state, request.id, request.status, 'request accepted by authenticated application service');
       options.store.save(state, state.revision); return { ok: true, request: project(request, principal) };
     }
@@ -61,7 +66,7 @@ function createApplicationService(options = {}) {
     if (operation === 'approve') {
       const approval = request.approval;
       if (!approval || request.status !== 'approval_required') throw new Error('request is not awaiting approval');
-      if (approval.actionKey !== request.actionKey || approval.fence !== input.fence || approval.usedAt || new Date(approval.expiresAt).getTime() <= clock()) throw new Error('approval is stale, replayed, expired, or not bound to the current fence');
+      if (approval.actionKey !== request.actionKey || approval.fence !== input.fence || approval.fence !== state.fence || approval.usedAt || new Date(approval.expiresAt).getTime() <= clock()) throw new Error('approval is stale, replayed, expired, or not bound to the current fence');
       if (!has(principal, approval.requiredCapability)) throw new Error('approval capability is not authorized');
       approval.usedAt = stamp(); request.status = 'approved'; request.updatedAt = approval.usedAt;
       const item = evidence(state, request.id, 'approved', 'command-bound approval consumed'); options.store.save(state, state.revision);
