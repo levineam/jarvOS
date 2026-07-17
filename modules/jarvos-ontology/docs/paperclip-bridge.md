@@ -94,7 +94,7 @@ npm run sync
 ## Interfaces
 
 ```javascript
-import { syncOntologyToPaperclip, loadBridgeState } from '@claw/ontology/bridge';
+import { syncOntologyToPaperclip, loadBridgeState } from '@jarvos/ontology/bridge';
 
 const result = await syncOntologyToPaperclip({
   ontologyDir: '/path/to/ontology',

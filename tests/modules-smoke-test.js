@@ -86,7 +86,7 @@ try {
 console.log('\n→ @jarvos/ontology');
 
 try {
-  const onto = require(path.join(ROOT, 'modules/jarvos-ontology/src/index.js'));
+  const onto = require(path.join(ROOT, 'modules/jarvos-ontology/src/index.cjs'));
 
   // LAYER_NAMES
   if (onto.LAYER_NAMES.includes('belief') && onto.LAYER_NAMES.includes('goal')) {

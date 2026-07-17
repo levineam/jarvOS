@@ -3,17 +3,18 @@
   "version": "0.1.0",
   "description": "jarvOS worldview layer — structured belief graph, predictions, goals, values, and identity",
   "license": "MIT",
-  "main": "src/index.js",
+  "type": "module",
+  "main": "src/index.cjs",
   "exports": {
-    ".": "./src/index.js",
+    ".": "./src/index.cjs",
     "./reader": "./src/reader.js",
     "./writer": "./src/writer.js",
     "./extractor": "./src/extractor.js",
     "./validator": "./src/validator.js",
     "./renderer": "./src/renderer.js",
     "./bridge": "./src/bridge.js",
-    "./provider": "./src/provider.js",
-    "./review-workflow": "./src/review-workflow.js"
+    "./provider": "./src/provider.cjs",
+    "./review-workflow": "./src/review-workflow.cjs"
   },
   "files": [
     "README.md",
@@ -24,13 +25,13 @@
     "src/"
   ],
   "scripts": {
-    "test": "node --test test/*.test.js",
+    "test": "node --test test/*.test.js test/*.test.cjs",
     "extract": "node scripts/extract.js",
     "validate": "node scripts/validate.js",
     "render": "node scripts/render.js",
     "bootstrap": "node scripts/bootstrap.js",
     "combined": "node scripts/combined.js",
-    "promote": "node scripts/promote-reviewed.js",
+    "promote": "node scripts/promote-reviewed.cjs",
     "sync": "node scripts/sync-to-paperclip.js",
     "sync:dry": "node scripts/sync-to-paperclip.js --dry-run --verbose"
   },

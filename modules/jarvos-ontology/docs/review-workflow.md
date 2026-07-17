@@ -44,7 +44,7 @@ unreviewed, stale, dismissed, already-promoted, or source-less records.
 The bundled CLI validates the gate and prints the promotion plan:
 
 ```bash
-node modules/jarvos-ontology/scripts/promote-reviewed.js path/to/candidate.md --dry-run
+node modules/jarvos-ontology/scripts/promote-reviewed.cjs path/to/candidate.md --dry-run
 ```
 
 The current CLI is intentionally conservative: it proves whether a candidate is

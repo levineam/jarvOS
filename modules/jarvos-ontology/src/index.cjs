@@ -8,8 +8,8 @@
  */
 
 const crypto = require('crypto');
-const provider = require('./provider.js');
-const reviewWorkflow = require('./review-workflow.js');
+const provider = require('./provider.cjs');
+const reviewWorkflow = require('./review-workflow.cjs');
 
 const LAYER_NAMES = [
   'higher-order',
