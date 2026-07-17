@@ -300,27 +300,55 @@ function isSuccessfulClose(verifyClose) {
 function stageLooksPassed(result) {
   if (!result || typeof result !== 'object') return false;
   if (result.ok === false) return false;
+  // Reattached-only blobs are never authoritative stage evidence.
+  if (result.reattached === true && result.alreadyClosed === true) return false;
   const token = statusToken(result);
   if (!token) return result.ok === true;
   if (FAILED_CLOSE_STATUSES.has(token) || INCOMPLETE_CLOSE_STATUSES.has(token)) return false;
   return true;
 }
 
-function normalizeReviewStatus(result, preferred = 'passed') {
-  if (!result || typeof result !== 'object') return 'failed';
+function hasAuthenticStageResult(result) {
+  if (!result || typeof result !== 'object') return false;
+  // Pure reattachment inventions (no live adapter confirmation) are not evidence.
+  if (result.reattached === true && result.alreadyClosed === true) return false;
+  if (result.reattached === true && !result.liveConfirmed && result.ok !== true && !statusToken(result)) {
+    return false;
+  }
+  return true;
+}
+
+function normalizeReviewStatus(result) {
+  if (!result || typeof result !== 'object') return 'missing';
   if (result.ok === false) return 'failed';
+  if (!hasAuthenticStageResult(result)) return 'missing';
   const token = statusToken(result);
-  if (['passed', 'clean', 'completed', 'recorded', 'approved'].includes(token)) return token;
-  if (stageLooksPassed(result)) return preferred;
-  return token || 'failed';
+  if (!token) return result.ok === true ? 'passed' : 'missing';
+  if (['passed', 'clean', 'completed', 'recorded', 'approved', 'failed', 'missing'].includes(token)) {
+    return token;
+  }
+  if (stageLooksPassed(result)) return token;
+  return token || 'missing';
 }
 
 function normalizePullRequestForGate(pullRequest) {
   if (!pullRequest || typeof pullRequest !== 'object') return null;
+  // Pointer-only reattachment without a live open/create confirmation is not PR evidence.
+  if (pullRequest.reattached === true && !pullRequest.liveConfirmed && !statusToken(pullRequest)) {
+    return null;
+  }
   const token = statusToken(pullRequest);
   let status = token;
   if (token === 'exists' || token === 'merged' || token === 'open') status = 'created';
-  if (!status && (pullRequest.url || pullRequest.number)) status = 'created';
+  // Do not invent "created" from a bare URL/number alone when status is absent —
+  // require an explicit stage status or liveConfirmed flag from the PR adapter.
+  if (!status && (pullRequest.url || pullRequest.number) && pullRequest.liveConfirmed === true) {
+    status = 'created';
+  }
+  if (!status && (pullRequest.url || pullRequest.number) && pullRequest.ok === true && pullRequest.reattached !== true) {
+    status = 'created';
+  }
+  if (!status) return null;
   return {
     ...pullRequest,
     status,
@@ -332,6 +360,9 @@ function normalizePullRequestForGate(pullRequest) {
 
 function normalizePostMergeForGate(postMerge) {
   if (!postMerge || typeof postMerge !== 'object') {
+    return { status: 'missing' };
+  }
+  if (postMerge.reattached === true && !postMerge.liveConfirmed && !statusToken(postMerge)) {
     return { status: 'missing' };
   }
   const token = statusToken(postMerge);
@@ -352,7 +383,7 @@ function normalizePostMergeForGate(postMerge) {
   if (stageLooksPassed(postMerge)) {
     return { status: 'completed', artifact: postMerge.artifact || postMerge.summary || null };
   }
-  return { status: token || 'failed', reason: postMerge.reason || null };
+  return { status: token || 'missing', reason: postMerge.reason || null };
 }
 
 function buildSubmissionGateInput(orchestrator = {}, evidence = null) {
@@ -360,50 +391,70 @@ function buildSubmissionGateInput(orchestrator = {}, evidence = null) {
   const byStage = eventsByStage(orchestrator);
   const issueIdentifier = orchestrator.issueIdentifier || submissionEvidence.issueIdentifier;
   const branch = orchestrator.branch || submissionEvidence.branch;
-  const claim = byStage.claim || {};
-  const slice = byStage.sliceReview || {};
-  const holistic = byStage.holisticReview || {};
-  const fix = byStage.fixRerun || {};
+  const claim = byStage.claim || null;
+  const slice = byStage.sliceReview || null;
+  const holistic = byStage.holisticReview || null;
+  const fix = byStage.fixRerun || null;
+  const gitEvidence = orchestrator.git || submissionEvidence.git || null;
   const pullRequest = normalizePullRequestForGate(
-    submissionEvidence.pullRequest || byStage.pullRequest || {},
+    submissionEvidence.pullRequest || byStage.pullRequest || null,
   );
   const postMerge = normalizePostMergeForGate(
-    submissionEvidence.postMergeSweep || byStage.postMergeSweep || {},
+    submissionEvidence.postMergeSweep || byStage.postMergeSweep || null,
   );
 
-  const tests = Array.isArray(fix.tests) && fix.tests.length
+  const tests = Array.isArray(fix?.tests) && fix.tests.length
     ? fix.tests
-    : [{
-      command: 'fixRerun',
-      status: stageLooksPassed(fix) ? 'passed' : (statusToken(fix) || 'failed'),
-    }];
+    : (fix && stageLooksPassed(fix)
+      ? [{ command: 'fixRerun', status: 'passed' }]
+      : [{ command: 'fixRerun', status: statusToken(fix) || 'missing' }]);
+
+  const sliceStatus = normalizeReviewStatus(slice);
+  const holisticStatus = normalizeReviewStatus(holistic);
+  const claimPassed = Boolean(claim) && stageLooksPassed(claim) && hasAuthenticStageResult(claim);
+
+  // Never hardcode git.clean: true. Accept only explicit durable git evidence or
+  // an authentic (non-reattached-invention) branch stage result.
+  const branchStage = byStage.branch;
+  const clean = (gitEvidence && typeof gitEvidence === 'object' && gitEvidence.clean === true)
+    || (Boolean(branchStage)
+      && stageLooksPassed(branchStage)
+      && hasAuthenticStageResult(branchStage)
+      && branchStage.reattached !== true);
+
+  const intendedFiles = Array.isArray(orchestrator.intendedFiles) && orchestrator.intendedFiles.length
+    ? orchestrator.intendedFiles
+    : (Array.isArray(gitEvidence?.intendedFiles) ? gitEvidence.intendedFiles : []);
 
   return {
     issue: { identifier: issueIdentifier },
     issueIdentifier,
     git: {
       branch,
-      baseBranch: orchestrator.baseRef || 'origin/main',
-      clean: true,
-      intendedFiles: orchestrator.intendedFiles || [branch || issueIdentifier || 'workspace'],
+      baseBranch: orchestrator.baseRef || gitEvidence?.baseBranch || gitEvidence?.baseRef || 'origin/main',
+      clean,
+      intendedFiles: intendedFiles.length
+        ? intendedFiles
+        : (branch || issueIdentifier ? [branch || issueIdentifier] : []),
     },
     checks: {
       tests,
       clawpatch: {
-        status: normalizeReviewStatus(slice, 'passed'),
-        artifact: slice.artifact || slice.summary || 'sliceReview',
+        status: sliceStatus,
+        artifact: slice?.artifact || slice?.summary || null,
       },
       autoreview: {
-        status: normalizeReviewStatus(holistic, 'recorded'),
-        artifact: holistic.artifact || holistic.summary || 'holisticReview',
+        status: holisticStatus === 'passed' ? 'recorded' : holisticStatus,
+        artifact: holistic?.artifact || holistic?.summary || null,
       },
       goalAlignment: {
         status: stageLooksPassed(holistic) || stageLooksPassed(fix) ? 'aligned' : 'blocked',
-        summary: holistic.summary || fix.summary || 'goal alignment derived from review/fix stages',
+        summary: holistic?.summary || fix?.summary || null,
       },
-      pullRequest: pullRequest || { status: 'failed' },
+      pullRequest: pullRequest || { status: 'missing' },
+      // Paperclip evidence requires an authentic claim stage — issue id alone is not enough.
       paperclipEvidence: {
-        status: stageLooksPassed(claim) || issueIdentifier ? 'recorded' : 'missing',
+        status: claimPassed ? 'recorded' : 'missing',
         issueIdentifier,
       },
       postMergeClawsweeper: postMerge,
@@ -413,9 +464,10 @@ function buildSubmissionGateInput(orchestrator = {}, evidence = null) {
 
 /**
  * Terminal coding submission is only successful when:
- * - verifyClose is an explicit successful close status (not deferred/failed/missing)
- * - there is merged PR evidence or an already-successful close
- * - the submission gate evaluates ready for the complete phase
+ * - verifyClose is an explicit successful close from live stage execution
+ *   (not deferred/failed/missing, not a reattached invention)
+ * - the submission gate independently evaluates ready for the complete phase
+ *   from durable stage evidence (never from a caller-cached gate blob)
  */
 function assessTerminalSubmission(orchestrator = {}, options = {}) {
   const evidence = options.submissionEvidence || submissionEvidenceFrom(orchestrator);
@@ -425,6 +477,9 @@ function assessTerminalSubmission(orchestrator = {}, options = {}) {
 
   if (!verifyClose) {
     reasons.push('verifyClose evidence is missing');
+  } else if (verifyClose.reattached === true && verifyClose.liveConfirmed !== true) {
+    // Reattachment hints cannot close an issue. Live tracker confirmation is required.
+    reasons.push('verifyClose is reattached without live tracker confirmation');
   } else {
     const token = statusToken(verifyClose);
     if (verifyClose.ok === false || FAILED_CLOSE_STATUSES.has(token)) {
@@ -436,7 +491,8 @@ function assessTerminalSubmission(orchestrator = {}, options = {}) {
     }
   }
 
-  const successfulClose = isSuccessfulClose(verifyClose);
+  const successfulClose = isSuccessfulClose(verifyClose)
+    && !(verifyClose?.reattached === true && verifyClose?.liveConfirmed !== true);
   const merged = isMergedPullRequest(pullRequest);
   // Terminal success requires an explicit successful close. Merged PR alone is
   // not enough (live tracker defers close until merge, then closes).
@@ -444,11 +500,10 @@ function assessTerminalSubmission(orchestrator = {}, options = {}) {
     reasons.push('pull request is merged but verifyClose is not a successful terminal close');
   }
 
-  const submissionGate = options.submissionGate
-    || evaluateSubmissionGate(
-      options.gateInput || buildSubmissionGateInput(orchestrator, evidence),
-      { phase: 'complete' },
-    );
+  // Always recompute the complete-phase gate from durable evidence. Ignore any
+  // caller-provided / cached submissionGate.ready blob.
+  const gateInput = options.gateInput || buildSubmissionGateInput(orchestrator, evidence);
+  const submissionGate = evaluateSubmissionGate(gateInput, { phase: 'complete' });
   if (!submissionGate.ready) {
     reasons.push(`submission gate blocked: ${(submissionGate.missing || []).join(', ') || 'incomplete evidence'}`);
   }
@@ -456,6 +511,22 @@ function assessTerminalSubmission(orchestrator = {}, options = {}) {
   const hostStatus = String(orchestrator.status || '').toLowerCase();
   if (hostStatus && !['completed', 'satisfied', ''].includes(hostStatus)) {
     reasons.push(`host orchestrator status is ${hostStatus}`);
+  }
+
+  // Events that are entirely reattached inventions cannot authorize terminal close.
+  const events = Array.isArray(orchestrator.events)
+    ? orchestrator.events
+    : (Array.isArray(evidence.events) ? evidence.events : []);
+  if (events.length > 0) {
+    const allReattached = events.every((event) => event?.reattached === true
+      || event?.result?.reattached === true);
+    const verifyEvent = events.find((event) => event?.stage === 'verifyClose');
+    if (allReattached || (verifyEvent?.reattached === true && verifyEvent?.result?.liveConfirmed !== true
+      && verifyClose?.liveConfirmed !== true && verifyClose?.reattached === true)) {
+      if (!reasons.some((reason) => /reattach|live tracker/i.test(reason))) {
+        reasons.push('terminal evidence is reattached-only and lacks live stage confirmation');
+      }
+    }
   }
 
   return {
@@ -562,9 +633,10 @@ function createCodingControlPlanePort(options = {}) {
       checkpoints: execution.checkpoint ? [execution.checkpoint] : [],
     };
 
+    // Independently recompute the complete-phase gate from durable evidence.
+    // Never trust a caller-provided / execution-cached submissionGate.ready blob.
     const assessment = assessTerminalSubmission(orchestrator, {
       submissionEvidence: execution.submissionEvidence,
-      submissionGate: execution.submissionGate || null,
     });
 
     if (!assessment.ok) {

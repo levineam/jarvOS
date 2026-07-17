@@ -426,6 +426,26 @@ function toPublicProjection(record, options = {}) {
   return projection;
 }
 
+/**
+ * Merge a phase/status checkpoint onto an existing command checkpoint so
+ * reconciler phase updates (dispatching, verifying, …) do not erase
+ * reattachment hints such as branch/PR/session pointers.
+ *
+ * Lifecycle history still records the phase patch as provided; only the
+ * durable command.checkpoint field merges.
+ */
+function mergeCommandCheckpoint(existing, incoming) {
+  if (incoming === undefined) return existing || null;
+  if (incoming === null) return null;
+  const prev = existing && typeof existing === 'object' && !Array.isArray(existing)
+    ? existing
+    : {};
+  if (typeof incoming !== 'object' || Array.isArray(incoming)) {
+    return { ...prev, value: incoming };
+  }
+  return { ...prev, ...incoming };
+}
+
 function lifecycleTransition(command, status, patch = {}) {
   if (!COMMAND_STATUSES.includes(status)) throw new Error(`Unknown command status: ${status}`);
   const next = clone(command);
@@ -442,7 +462,9 @@ function lifecycleTransition(command, status, patch = {}) {
     checkpoint: patch.checkpoint || null,
     reason: patch.reason || null,
   });
-  if (patch.checkpoint) next.checkpoint = patch.checkpoint;
+  if (Object.prototype.hasOwnProperty.call(patch, 'checkpoint')) {
+    next.checkpoint = mergeCommandCheckpoint(next.checkpoint, patch.checkpoint);
+  }
   if (patch.leaseId) next.leaseId = patch.leaseId;
   if (patch.fence) next.fence = patch.fence;
   validateRecord(next);
@@ -466,6 +488,7 @@ module.exports = {
   canonicalResourceKey,
   clone,
   commandSpecDigest,
+  mergeCommandCheckpoint,
   createCommand,
   createDesiredState,
   createEvidence,

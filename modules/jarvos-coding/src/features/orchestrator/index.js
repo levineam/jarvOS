@@ -30,6 +30,27 @@ const SUCCESSFUL_CLOSE_STATUSES = new Set(['closed', 'verified', 'done', 'comple
 const FAILED_STAGE_STATUSES = new Set(['failed', 'error', 'not_found']);
 const DEFERRED_STAGE_STATUSES = new Set(['deferred', 'skipped', 'blocked', 'pending', 'incomplete']);
 
+/**
+ * Keys that may travel on a resume/checkpoint blob as reattachment hints.
+ * These are never treated as proof of reviews, cleanliness, submission
+ * readiness, merge, or issue close.
+ */
+const REATTACHMENT_HINT_KEYS = Object.freeze([
+  'branch',
+  'branchName',
+  'pr',
+  'prUrl',
+  'pullRequestUrl',
+  'pullRequest',
+  'sessionId',
+  'session',
+  'worktree',
+  'worktreePath',
+  'artifact',
+  'codeThread',
+  'issueIdentifier',
+]);
+
 function requireFn(container, method, stage) {
   const fn = container?.[method];
   if (typeof fn !== 'function') {
@@ -51,37 +72,101 @@ function buildStageEvent(stage, result, options = {}) {
   };
 }
 
-function normalizeStageName(value) {
-  const raw = String(value || '').trim();
-  if (!raw) return null;
-  if (raw === 'complete' || raw === 'completed') return 'complete';
-  if (TAKE_ISSUE_TO_DONE_STAGES.includes(raw)) return raw;
-  const aliases = {
-    claimIssue: 'claim',
-    createBranch: 'branch',
-    slice: 'sliceReview',
-    holistic: 'holisticReview',
-    fix: 'fixRerun',
-    pr: 'pullRequest',
-    pull_request: 'pullRequest',
-    sweep: 'postMergeSweep',
-    postMerge: 'postMergeSweep',
-    close: 'verifyClose',
-    verify: 'verifyClose',
-    phase: null,
-  };
-  if (Object.prototype.hasOwnProperty.call(aliases, raw)) return aliases[raw];
-  return null;
-}
-
 function firstDefined(...values) {
   return values.find((value) => value !== undefined && value !== null && value !== '');
 }
 
+function isPlainObject(value) {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+/**
+ * Extract only reattachment hints from a resume/checkpoint/session blob.
+ * Explicitly ignores nextStep/stage/phase/events as authority for progress.
+ */
+function extractReattachmentHints(source = null) {
+  if (!isPlainObject(source)) return null;
+
+  const codeThread = isPlainObject(source.codeThread) ? source.codeThread : null;
+  const hints = {};
+
+  for (const key of REATTACHMENT_HINT_KEYS) {
+    if (source[key] !== undefined && source[key] !== null && source[key] !== '') {
+      hints[key] = source[key];
+    }
+  }
+
+  if (codeThread) {
+    if (!hints.branch) {
+      const nestedBranch = firstDefined(codeThread.branch, codeThread.branchName);
+      if (nestedBranch) hints.branch = nestedBranch;
+    }
+    if (!hints.pr && !hints.prUrl && !hints.pullRequest) {
+      const nestedPr = firstDefined(codeThread.pr, codeThread.prUrl, codeThread.pullRequest);
+      if (nestedPr) {
+        if (typeof nestedPr === 'string') hints.pr = nestedPr;
+        else hints.pullRequest = nestedPr;
+      }
+    }
+    if (!hints.issueIdentifier && codeThread.issueIdentifier) {
+      hints.issueIdentifier = codeThread.issueIdentifier;
+    }
+    // Keep the thin code-thread pointer (branch/session metadata only). Do not
+    // promote nextStep/stage as authoritative progress.
+    hints.codeThread = {
+      issueIdentifier: codeThread.issueIdentifier || null,
+      branch: codeThread.branch || null,
+      stage: codeThread.stage || null,
+      lastDecision: codeThread.lastDecision || null,
+      nextStep: codeThread.nextStep || null,
+    };
+  }
+
+  const prUrl = firstDefined(
+    hints.pr,
+    hints.prUrl,
+    hints.pullRequestUrl,
+    isPlainObject(hints.pullRequest) ? hints.pullRequest.url : null,
+    isPlainObject(hints.artifact) ? hints.artifact.url : null,
+  );
+  const pullRequestPointer = isPlainObject(hints.pullRequest)
+    ? {
+      // Pointer only — not merge/close proof.
+      url: hints.pullRequest.url || prUrl || null,
+      number: hints.pullRequest.number || null,
+      reattached: true,
+    }
+    : (prUrl ? { url: prUrl, reattached: true } : null);
+
+  const branch = firstDefined(
+    hints.branch,
+    hints.branchName,
+    isPlainObject(hints.artifact) ? hints.artifact.branch : null,
+  );
+
+  if (!branch && !pullRequestPointer && !hints.sessionId && !hints.session && !hints.worktree && !hints.worktreePath && !hints.codeThread) {
+    return null;
+  }
+
+  return {
+    branch: branch || null,
+    pullRequest: pullRequestPointer,
+    sessionId: hints.sessionId || (isPlainObject(hints.session) ? hints.session.id || null : null),
+    worktreePath: firstDefined(hints.worktreePath, hints.worktree) || null,
+    issueIdentifier: hints.issueIdentifier || null,
+    codeThread: hints.codeThread || null,
+    artifact: hints.artifact || null,
+    source: source,
+  };
+}
+
 /**
  * Resolve resume pointers from explicit resumeFrom/checkpoint or session state.
- * Returns the index of the first stage that still needs to run, plus rehydrated
- * branch/PR context so later stages do not re-open worktrees/PRs blindly.
+ *
+ * Safe contract: resume/checkpoint is only a reattachment hint (branch/PR/
+ * session pointers). It is never proof of reviews, cleanliness, submission
+ * readiness, merge, or issue close. Every stage still runs (or is
+ * authoritatively revalidated) under the current fence at mutation boundaries.
  */
 function resolveResumePlan(input = {}, entrySessionState = null) {
   const candidates = [
@@ -89,113 +174,33 @@ function resolveResumePlan(input = {}, entrySessionState = null) {
     input.checkpoint,
     entrySessionState?.state,
     entrySessionState?.state?.codeThread ? entrySessionState.state : null,
-  ].filter((value) => value && typeof value === 'object');
+  ].filter((value) => isPlainObject(value));
 
-  let resume = null;
+  let reattachment = null;
   for (const candidate of candidates) {
-    if (candidate.codeThread || candidate.stage || candidate.phase || candidate.nextStep || candidate.events) {
-      resume = candidate;
+    const hints = extractReattachmentHints(candidate);
+    if (hints) {
+      reattachment = hints;
       break;
     }
   }
-  if (!resume) {
-    return {
-      startIndex: 0,
-      branch: input.branch || input.branchName || null,
-      pullRequest: null,
-      priorResults: {},
-      resume: null,
-    };
-  }
-
-  const codeThread = resume.codeThread && typeof resume.codeThread === 'object' ? resume.codeThread : {};
-  const nextStep = normalizeStageName(resume.nextStep || codeThread.nextStep);
-  const completedStage = normalizeStageName(
-    resume.stage || resume.phase || codeThread.stage || resume.loopStage,
-  );
-
-  let startIndex = 0;
-  if (nextStep === 'complete') {
-    startIndex = TAKE_ISSUE_TO_DONE_STAGES.length;
-  } else if (nextStep && TAKE_ISSUE_TO_DONE_STAGES.includes(nextStep)) {
-    startIndex = TAKE_ISSUE_TO_DONE_STAGES.indexOf(nextStep);
-  } else if (completedStage && TAKE_ISSUE_TO_DONE_STAGES.includes(completedStage)) {
-    startIndex = TAKE_ISSUE_TO_DONE_STAGES.indexOf(completedStage) + 1;
-  }
-
-  const priorResults = {};
-  if (Array.isArray(resume.events)) {
-    for (const event of resume.events) {
-      if (event && event.stage) priorResults[event.stage] = event.result || event;
-    }
-  }
-  for (const stage of TAKE_ISSUE_TO_DONE_STAGES) {
-    if (resume[stage]) priorResults[stage] = resume[stage];
-  }
-  if (resume.claim) priorResults.claim = resume.claim;
-  if (resume.branchResult) priorResults.branch = resume.branchResult;
-
-  const prUrl = firstDefined(
-    resume.pr,
-    resume.prUrl,
-    resume.pullRequest?.url,
-    resume.pullRequestUrl,
-    codeThread.pr,
-    resume.artifact?.url,
-  );
-  const pullRequest = resume.pullRequest
-    || (prUrl ? { status: 'exists', url: prUrl, reattached: true, ok: true } : null)
-    || priorResults.pullRequest
-    || null;
-  if (pullRequest) priorResults.pullRequest = pullRequest;
 
   const branch = firstDefined(
     input.branch,
     input.branchName,
-    resume.branch,
-    codeThread.branch,
-    resume.artifact?.branch,
-    priorResults.branch?.branch,
-    priorResults.branch?.name,
+    reattachment?.branch,
   );
 
   return {
-    startIndex,
+    // Always re-run stages. Resume never advances the stage cursor.
+    startIndex: 0,
     branch: branch || null,
-    pullRequest,
-    priorResults,
-    resume,
+    pullRequest: reattachment?.pullRequest || null,
+    reattachment,
+    // Intentionally empty: prior checkpoint events are not durable proof.
+    priorResults: {},
+    resume: reattachment?.source || null,
   };
-}
-
-function rehydrateSkippedResult(stage, plan, context) {
-  if (plan.priorResults[stage]) return { ...plan.priorResults[stage], reattached: true };
-
-  switch (stage) {
-    case 'claim':
-      return { status: 'claimed', reattached: true, ok: true };
-    case 'branch':
-      return { status: 'exists', branch: context.branch, reattached: true, ok: true };
-    case 'sliceReview':
-    case 'holisticReview':
-      return { status: 'passed', reattached: true, summary: `reattached ${stage}` };
-    case 'fixRerun':
-      return { status: 'passed', reattached: true };
-    case 'pullRequest':
-      return plan.pullRequest || {
-        status: 'exists',
-        url: null,
-        branch: context.branch,
-        reattached: true,
-        ok: true,
-      };
-    case 'postMergeSweep':
-      return { status: 'completed', reattached: true };
-    case 'verifyClose':
-      return { status: 'verified', reattached: true, alreadyClosed: true, ok: true };
-    default:
-      return { status: 'reattached', reattached: true };
-  }
 }
 
 function assertFenceForStage(stage, controlPlane) {
@@ -252,6 +257,16 @@ async function checkpointIfConfigured(input, context, stage, result, nextStep) {
   return checkpoint;
 }
 
+function reattachmentPayload(context) {
+  if (!context.reattachment && !context.pullRequest) return null;
+  return {
+    branch: context.branch || null,
+    pullRequest: context.pullRequest || null,
+    sessionId: context.reattachment?.sessionId || null,
+    worktreePath: context.reattachment?.worktreePath || null,
+  };
+}
+
 async function runTakeIssueToDone(input = {}, adapters = {}) {
   const issueIdentifier = input.issue?.identifier || input.issueIdentifier;
   if (!issueIdentifier) throw new Error('take-issue-to-done orchestration requires an issue identifier');
@@ -266,6 +281,7 @@ async function runTakeIssueToDone(input = {}, adapters = {}) {
     baseRef: input.baseRef || 'origin/main',
     sessionState: adapters.sessionState || null,
     pullRequest: null,
+    reattachment: null,
   };
   const entrySessionState = context.sessionState
     ? await readJarvosSessionState(context.sessionState).catch(() => null)
@@ -273,26 +289,25 @@ async function runTakeIssueToDone(input = {}, adapters = {}) {
   const resumePlan = resolveResumePlan(input, entrySessionState);
   if (resumePlan.branch) context.branch = resumePlan.branch;
   if (resumePlan.pullRequest) context.pullRequest = resumePlan.pullRequest;
+  context.reattachment = resumePlan.reattachment;
 
   const events = [];
   const checkpoints = [];
   const stageResults = {};
+  const reattach = reattachmentPayload(context);
 
   const runStage = async (stage, action) => {
     const index = TAKE_ISSUE_TO_DONE_STAGES.indexOf(stage);
-    let result;
-    let reattached = false;
+    // Always execute the stage through the live adapter (or revalidate). Resume
+    // hints may avoid duplicate worktree/PR allocation inside adapters, but
+    // never synthesize successful skipped-stage evidence here.
+    assertFenceForStage(stage, controlPlane);
+    const result = await action();
+    assertFenceForStage(stage, controlPlane);
 
-    if (index < resumePlan.startIndex) {
-      reattached = true;
-      result = rehydrateSkippedResult(stage, resumePlan, context);
-    } else {
-      assertFenceForStage(stage, controlPlane);
-      result = await action();
-      assertFenceForStage(stage, controlPlane);
-    }
-
-    const event = buildStageEvent(stage, result, { reattached });
+    const event = buildStageEvent(stage, result, {
+      reattached: Boolean(reattach) && Boolean(result?.reattached),
+    });
     events.push(event);
     stageResults[stage] = result;
     const checkpoint = await checkpointIfConfigured(
@@ -310,6 +325,7 @@ async function runTakeIssueToDone(input = {}, adapters = {}) {
     issue: input.issue,
     issueIdentifier,
     controlPlane,
+    reattach,
   }));
 
   const branch = await runStage('branch', () => requireFn(adapters.git, 'createBranch', 'branch')({
@@ -319,6 +335,8 @@ async function runTakeIssueToDone(input = {}, adapters = {}) {
     branch: context.branch,
     claim,
     controlPlane,
+    reattach,
+    existingBranch: context.branch,
   }));
   context.branch = branch?.branch || branch?.name || context.branch;
 
@@ -329,6 +347,7 @@ async function runTakeIssueToDone(input = {}, adapters = {}) {
     baseRef: context.baseRef,
     branchResult: branch,
     controlPlane,
+    reattach,
   }));
 
   const holisticReview = await runStage('holisticReview', () => reviewEngine.holisticReview({
@@ -338,6 +357,7 @@ async function runTakeIssueToDone(input = {}, adapters = {}) {
     baseRef: context.baseRef,
     sliceReview,
     controlPlane,
+    reattach,
   }));
 
   const fixRerun = await runStage('fixRerun', () => requireFn(adapters.fixer, 'fixAndRerun', 'fixRerun')({
@@ -350,6 +370,7 @@ async function runTakeIssueToDone(input = {}, adapters = {}) {
       holisticReview,
     },
     controlPlane,
+    reattach,
   }));
 
   const pullRequest = await runStage('pullRequest', () => requireFn(adapters.pullRequest, 'openPullRequest', 'pullRequest')({
@@ -361,6 +382,8 @@ async function runTakeIssueToDone(input = {}, adapters = {}) {
     controlPlane,
     fence: controlPlane?.fence,
     assertCurrentFence: controlPlane?.assertCurrentFence,
+    reattach,
+    existingPullRequest: context.pullRequest,
   }));
   context.pullRequest = pullRequest || context.pullRequest;
 
@@ -372,6 +395,7 @@ async function runTakeIssueToDone(input = {}, adapters = {}) {
     controlPlane,
     fence: controlPlane?.fence,
     assertCurrentFence: controlPlane?.assertCurrentFence,
+    reattach,
   }));
 
   await runStage('verifyClose', () => requireFn(adapters.tracker, 'verifyAndClose', 'verifyClose')({
@@ -383,6 +407,7 @@ async function runTakeIssueToDone(input = {}, adapters = {}) {
     controlPlane,
     fence: controlPlane?.fence,
     assertCurrentFence: controlPlane?.assertCurrentFence,
+    reattach,
   }));
 
   const status = deriveOrchestratorStatus(events);
@@ -395,7 +420,9 @@ async function runTakeIssueToDone(input = {}, adapters = {}) {
     continuity: {
       read: entrySessionState || null,
       resumeFrom: resumePlan.resume || null,
-      resumedFromStageIndex: resumePlan.startIndex,
+      reattachment: resumePlan.reattachment || null,
+      // Always 0 under the safe contract — stages are never skipped as complete.
+      resumedFromStageIndex: 0,
     },
     events,
     checkpoints,
@@ -406,7 +433,9 @@ module.exports = {
   ORCHESTRATOR_SCHEMA_VERSION,
   TAKE_ISSUE_TO_DONE_STAGES,
   FENCED_MUTATION_STAGES,
+  REATTACHMENT_HINT_KEYS,
   runTakeIssueToDone,
   resolveResumePlan,
+  extractReattachmentHints,
   deriveOrchestratorStatus,
 };

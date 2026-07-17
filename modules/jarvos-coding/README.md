@@ -132,10 +132,18 @@ The port is fail-closed at both execute and verify:
 - the fence is asserted before dispatch, at final side-effect stage boundaries
   (`pullRequest`, `postMergeSweep`, `verifyClose`), and again before returning
 
-Session-loss recovery is pointer-first and honored by the default host
-composition: a command checkpoint is passed as `resumeFrom`, and
-`runTakeIssueToDone` skips already-completed lifecycle stages while reattaching
-branch/PR pointers instead of re-running claim/branch/review/PR work.
+Session-loss recovery is pointer-first and **reattachment-only**. A command
+checkpoint is passed as `resumeFrom`, and `runTakeIssueToDone` treats it solely
+as a branch/PR/session reattachment hint so adapters can reuse worktrees and
+open PRs when they support it. Resume/checkpoint is **never** proof of reviews,
+cleanliness, submission readiness, merge, or issue close:
+
+- stages always re-run or are authoritatively revalidated through live adapters
+- the orchestrator does **not** synthesize successful skipped-stage evidence
+- terminal close must come from the live tracker/adapter under a current fence
+- `verify` independently recomputes the complete-phase submission gate from
+  durable stage evidence and ignores any caller-cached `submissionGate.ready`
+- gate input never hardcodes success fields such as `git.clean: true`
 
 ```js
 const gate = evaluateSubmissionGate({
