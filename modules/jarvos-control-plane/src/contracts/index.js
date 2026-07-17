@@ -283,6 +283,49 @@ function validateSensitivity(sensitivity = {}) {
   if (!SENSITIVITY_LEVELS.includes(sensitivity.level)) {
     throw new Error(`sensitivity.level must be one of: ${SENSITIVITY_LEVELS.join(', ')}`);
   }
+  if (sensitivity.fields != null && !Array.isArray(sensitivity.fields)) {
+    throw new Error('sensitivity.fields must be an array');
+  }
+}
+
+function pathParts(path) {
+  if (typeof path !== 'string' || !path || path.startsWith('.') || path.endsWith('.')) {
+    throw new Error('sensitive field path must be a non-empty dot path');
+  }
+  const parts = path.split('.');
+  if (parts.some((part) => !part || ['__proto__', 'prototype', 'constructor'].includes(part))) {
+    throw new Error(`invalid sensitive field path: ${path}`);
+  }
+  return parts;
+}
+
+function sensitivePathParent(record, path, requireLeaf = true) {
+  const parts = pathParts(path);
+  let parent = record;
+  for (let index = 0; index < parts.length - 1; index += 1) {
+    const part = parts[index];
+    if (!isObject(parent) && !Array.isArray(parent) || !Object.prototype.hasOwnProperty.call(parent, part)) {
+      if (!requireLeaf) return null;
+      throw new Error(`sensitive field path does not exist: ${path}`);
+    }
+    parent = parent[part];
+  }
+  const leaf = parts[parts.length - 1];
+  if (requireLeaf && (!isObject(parent) && !Array.isArray(parent) || !Object.prototype.hasOwnProperty.call(parent, leaf))) {
+    throw new Error(`sensitive field path does not exist: ${path}`);
+  }
+  return { parent, leaf };
+}
+
+function validateSensitivePaths(record) {
+  const fields = record.sensitivity && record.sensitivity.fields;
+  if (!fields) return;
+  for (const field of fields) {
+    if (!isObject(field) || !SENSITIVITY_LEVELS.includes(field.level)) {
+      throw new Error('sensitivity.fields entries require a valid level');
+    }
+    sensitivePathParent(record, field.path);
+  }
 }
 
 function validateActor(actor = {}) {
@@ -329,6 +372,7 @@ function validateRecord(record = {}) {
   if (record.type === 'evidence') {
     if (!record.outcome) throw new Error('evidence.outcome is required');
   }
+  validateSensitivePaths(record);
   return { ok: true, record };
 }
 
@@ -371,8 +415,11 @@ function toPublicProjection(record, options = {}) {
   if (!options.includeAdapterExtensions) delete projection.adapterExtensions;
   if (projection.sensitivity && projection.sensitivity.fields) {
     for (const field of projection.sensitivity.fields) {
-      if (field.level === 'secret' || field.level === 'private') {
-        delete projection[field.path];
+      if (order.get(field.level) > order.get(maxLevel)) {
+        const target = sensitivePathParent(projection, field.path, false);
+        if (target && (isObject(target.parent) || Array.isArray(target.parent)) && Object.prototype.hasOwnProperty.call(target.parent, target.leaf)) {
+          delete target.parent[target.leaf];
+        }
       }
     }
   }

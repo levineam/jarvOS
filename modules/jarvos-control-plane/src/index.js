@@ -5,6 +5,7 @@ const registry = require('./registry');
 const reconciliation = require('./reconciliation');
 const policy = require('./policy');
 const storage = require('./storage');
+const applicationService = require('./application-service');
 
 module.exports = {
   ...contracts,
@@ -12,4 +13,5 @@ module.exports = {
   ...reconciliation,
   ...policy,
   ...storage,
+  ...applicationService,
 };
