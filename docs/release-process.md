@@ -34,8 +34,47 @@ npm run release:drift
 It fails when `package.json` is ahead of the latest git tag without a finalized
 changelog section (an untagged release), or when commits exist since the latest
 tag with nothing tracked under `## [Unreleased]` (unlogged work). It reports a
-healthy "ready to tag" state and is advisory — intentionally not part of
-`release:check`'s blocking gates.
+healthy "ready to tag" state.
+
+**Policy decision (SUP-3499):** `npm run release:drift` is a blocking CI check
+(`.github/workflows/ci.yml`'s `release-drift` job, required via `ci-summary`).
+It was advisory-only while a placeholder-blindspot bug meant the check could
+silently pass over real drift; that bug is fixed (PR #109), so there is no
+longer a reason to let drift merge to `main` unnoticed. It remains separate
+from `release:check`'s gates because it answers a different question (is
+`main` drifting between releases, day to day) than `release:check` does (is a
+specific release candidate ready to tag).
+
+## Merge-Time Release-Intake Gate
+
+Every PR is checked for release-intake linkage before merge (`SUP-3499`,
+following up on `SUP-3496`/`SUP-3493`: PRs #107/#108 merged with a linked
+Paperclip issue that never got an explicit release/future/internal-only
+disposition recorded, which required manual backfill). The gate has two
+independent layers — see `scripts/release-intake-gate.js`'s file comment for
+the full design rationale:
+
+1. **Structural** — the PR title, body, or commit subjects must contain at
+   least one `SUP-####` reference. Pure and offline; runs as the public,
+   credential-free `.github/workflows/release-intake-gate.yml` required
+   check on every PR.
+2. **Disposition** — the linked Paperclip issue's release-intake
+   classification (see "Paperclip Intake" below) must not be `unknown`.
+   This requires a live Paperclip API read
+   (`PAPERCLIP_API_URL`/`PAPERCLIP_API_KEY`) and is intentionally **not**
+   wired into public GitHub Actions by this change — provisioning a public
+   repo's Actions runner with Paperclip API credentials is a decision for the
+   repo owner, not something to assume silently. `scripts/release-intake-gate.js`
+   activates this layer automatically whenever it runs somewhere those
+   credentials already exist (for example, the local jarvOS/Paperclip agent
+   runtime), and `scripts/release-intake-poll.js` re-checks it after the fact
+   against recently-merged PRs (read-only by default; `--comment` posts a
+   follow-up comment on any gapped issue). Recurring automated enforcement of
+   this layer (running the poll script on a schedule) is tracked as a
+   follow-up issue pending a credentials-provisioning decision.
+
+Both layers apply uniformly to direct `levineam/jarvOS` PRs and
+clawd-mirror-promoted PRs; neither path is pre-trusted.
 
 ## Release Checklist
 
@@ -134,6 +173,19 @@ Internal release process work should carry:
 Candidate issues enter release review automatically. Jarvis promotes each candidate to included, release-blocking, post-release, or internal-only during release review.
 
 If the active Paperclip instance does not expose labels on issue reads, Jarvis writes a `release-intake` document on the issue with the same classification. That document is the durable fallback marker.
+
+As verified live against the production Paperclip instance while building the
+SUP-3499 merge-time gate: `issue.labels` currently comes back empty on every
+issue read, so the label path above is presently a no-op there — the document
+fallback is the actual signal in practice, at
+`GET /api/issues/{id}/documents/release-intake`. Its body is freeform
+markdown with a `Classification: <value>` line (observed to vary in small,
+harmless ways across writers — sometimes bulleted, sometimes with a trailing
+period, "Release parent:" vs "Release parent issue:" — `parseReleaseIntakeDocument`
+in `scripts/release-intake-gate.js` parses both forms leniently rather than
+assuming one canonical writer). `resolveReleaseFit()` tries labels first
+(future-proof if an instance ever populates them) and falls back to the
+document automatically.
 
 As of the v0.6.1 ship, v0.3-era release parents are historical and should not
 receive new candidates. New jarvOS public-release candidates should use the

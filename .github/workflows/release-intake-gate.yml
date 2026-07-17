@@ -1,0 +1,45 @@
+name: Release intake gate
+
+# Structural half (Layer 1) of the SUP-3499 merge-time release-intake gate:
+# fails when a PR carries no SUP-#### reference anywhere in its title, body,
+# or commit subjects. This is pure and offline (no Paperclip credentials), so
+# it is safe to run as a public, credential-free required check.
+#
+# The disposition half (Layer 2 — is the linked issue's release-intake
+# classification anything other than "unknown"?) requires a live Paperclip
+# API read and is intentionally NOT wired in here. Handing a public repo's
+# Actions runner read access to the Paperclip API is a credentials-
+# provisioning decision for the repo owner, not something this workflow
+# assumes. See scripts/release-intake-gate.js's file comment and
+# docs/release-process.md's "Paperclip Intake" section for the full design
+# and the plan to activate Layer 2 once that decision is made.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, edited]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  structural-check:
+    name: Ticket linkage check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Run release-intake gate (structural only)
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: node scripts/release-intake-gate.js

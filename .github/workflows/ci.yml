@@ -168,6 +168,28 @@ jobs:
         shell: bash
         run: bash scripts/smoke-test.sh
 
+  release-drift:
+    name: Release drift check
+    # Blocking as of SUP-3499: npm run release:drift was advisory-only because
+    # of a placeholder-blindspot bug (fixed in PR #109). With that fix landed,
+    # drift (an untagged release, or unlogged work since the latest tag) is
+    # now a hard CI gate rather than something caught manually at release
+    # time. See docs/release-process.md "Unreleased Work and Drift" for the
+    # rationale.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Run release drift check
+        run: npm run release:drift
+
   ci-summary:
     name: CI summary
     runs-on: ubuntu-latest
@@ -177,6 +199,7 @@ jobs:
       - meta-hygiene
       - secret-scan
       - smoke-test
+      - release-drift
     if: always()
     steps:
       - name: Summarize results
@@ -192,8 +215,9 @@ jobs:
           echo "meta-hygiene       : ${{ needs.meta-hygiene.result }}"
           echo "secret-scan        : ${{ needs.secret-scan.result }}"
           echo "smoke-test         : ${{ needs.smoke-test.result }}"
+          echo "release-drift      : ${{ needs.release-drift.result }}"
 
-          for r in "${{ needs.markdown-lint.result }}" "${{ needs.link-check.result }}" "${{ needs.meta-hygiene.result }}" "${{ needs.secret-scan.result }}" "${{ needs.smoke-test.result }}"; do
+          for r in "${{ needs.markdown-lint.result }}" "${{ needs.link-check.result }}" "${{ needs.meta-hygiene.result }}" "${{ needs.secret-scan.result }}" "${{ needs.smoke-test.result }}" "${{ needs.release-drift.result }}"; do
             if [[ "$r" == "failure" || "$r" == "cancelled" ]]; then
               echo "One or more CI jobs failed/cancelled."
               exit 1
