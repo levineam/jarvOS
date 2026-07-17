@@ -5,11 +5,13 @@ const os = require('node:os');
 const path = require('node:path');
 
 const {
+  applySectionTransforms,
   classifyJournalHealth,
   isCatastrophicJournalShrink,
   loadConfig,
   normalizeSections,
   renderJournal,
+  stripLeadingRecoveryScaffold,
   syncOneDate,
 } = require('../packages/jarvos-secondbrain-journal/src/journal-maintenance.js');
 
@@ -240,6 +242,93 @@ test('syncOneDate restores a deleted journal from known-good content', () => {
     assert.equal(repaired.healthBefore.status, 'missing');
     assert.equal(repaired.restoredKnownGood, true);
     assert.equal(fs.readFileSync(journalPath, 'utf8'), before);
+  } finally {
+    if (previousJournalDir === undefined) delete process.env.JARVOS_JOURNAL_DIR;
+    else process.env.JARVOS_JOURNAL_DIR = previousJournalDir;
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('stripLeadingRecoveryScaffold removes only the incident scaffold', () => {
+  const bulletA = '- Created the **AAF Management Module** — first standalone AAF module';
+  const bulletB = '- Kicked off the **AAF Cycle Monitor Module** — second standalone module';
+  const withScaffold = [
+    '**Recovered content**',
+    `# ${TEST_DATE}`,
+    '',
+    bulletA,
+    bulletB,
+    '### Still legitimate',
+  ].join('\n');
+
+  const cleaned = stripLeadingRecoveryScaffold(withScaffold, TEST_DATE);
+  assert.doesNotMatch(cleaned, /\*\*Recovered content\*\*/);
+  assert.doesNotMatch(cleaned, new RegExp(`^# ${TEST_DATE}$`, 'm'));
+  assert.match(cleaned, /AAF Management Module/);
+  assert.match(cleaned, /### Still legitimate/);
+});
+
+test('applySectionTransforms is opt-in and section-scoped', () => {
+  const normalized = {
+    frontmatter: '---\njournal: Journal\n---',
+    sections: [
+      { id: 'notes', heading: '## 📝 Notes', content: '**Recovered content**\n# x\n- keep' },
+      { id: 'ideas', heading: '## 💡 Ideas', content: '- idea stays' },
+    ],
+  };
+  assert.equal(applySectionTransforms(normalized, null), normalized);
+  const transformed = applySectionTransforms(normalized, [
+    {
+      sectionId: 'notes',
+      transform: (content) => content.replace('**Recovered content**\n# x\n', ''),
+    },
+  ], { date: TEST_DATE });
+  assert.equal(transformed.sections[0].content, '- keep');
+  assert.equal(transformed.sections[1].content, '- idea stays');
+});
+
+test('syncOneDate sectionTransforms strip recovery scaffold via maintenance write path', () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-journal-scaffold-'));
+  const journalDir = path.join(tmp, 'Vault', 'Journal');
+  fs.mkdirSync(journalDir, { recursive: true });
+  const previousJournalDir = process.env.JARVOS_JOURNAL_DIR;
+  process.env.JARVOS_JOURNAL_DIR = journalDir;
+  try {
+    const config = loadConfig();
+    const bulletA = '- Created the **AAF Management Module** — first standalone AAF module';
+    const bulletB = '- Kicked off the **AAF Cycle Monitor Module** — second standalone module';
+    const original = renderJournal(TEST_DATE, config, normalizeSections([
+      '## 📝 Notes',
+      '**Recovered content**',
+      `# ${TEST_DATE}`,
+      bulletA,
+      bulletB,
+      '### Keep this heading',
+    ].join('\n'), TEST_DATE, config, {
+      fetchers: { calendar: () => '-', reminders: () => '-', paperclip: () => '-' },
+    }));
+    const journalPath = path.join(journalDir, `${TEST_DATE}.md`);
+    fs.writeFileSync(journalPath, original, 'utf8');
+
+    const result = syncOneDate(TEST_DATE, config, {
+      dryRun: false,
+      fetchers: { calendar: () => '-', reminders: () => '-', paperclip: () => '-' },
+      sectionTransforms: [
+        {
+          sectionId: 'notes',
+          transform: (content, ctx) => stripLeadingRecoveryScaffold(content, ctx.date),
+        },
+      ],
+    });
+    const notes = sectionBody(fs.readFileSync(journalPath, 'utf8'), '## 📝 Notes');
+
+    assert.equal(result.written, true);
+    assert.ok(result.backupPath);
+    assert.match(fs.readFileSync(result.backupPath, 'utf8'), /\*\*Recovered content\*\*/);
+    assert.doesNotMatch(notes, /\*\*Recovered content\*\*/);
+    assert.match(notes, /AAF Management Module/);
+    assert.match(notes, /### Keep this heading/);
+    assert.equal(result.healthAfter.status, 'healthy');
   } finally {
     if (previousJournalDir === undefined) delete process.env.JARVOS_JOURNAL_DIR;
     else process.env.JARVOS_JOURNAL_DIR = previousJournalDir;

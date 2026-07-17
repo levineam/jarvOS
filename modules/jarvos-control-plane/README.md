@@ -24,6 +24,9 @@ Paperclip, OpenClaw, Codex, Claude Code, cron, or a private machine path.
   credential resolution supplies principals; caller-provided principal fields
   cannot add capabilities. Approval is single-use and binds the action key,
   required capability, expiry, and current fence.
+- Defines portable protected-resource mutation policy: resource identity, owning
+  adapter, allowed named operations, raw-write denial, and structured decisions
+  reusable by runtime adapters. Absolute personal paths stay in private hosts.
 
 ## What It Is Not
 
