@@ -136,4 +136,4 @@ The public stack is source-backed and rebuildable:
 - Promotion gates keep memory and ontology downstream of cited, privacy-eligible knowledge units.
 - The watch surface reports artifacts, private skips, qmd freshness, generated wiki state, queue counts, eval status, and stale/failure signals.
 
-See `docs/architecture/automatic-secondbrain-public-boundary.md` for the public/private packaging boundary and local-to-public release path. See `../docs/architecture/secondbrain-external-integrations.md` for the public-safe inventory of active, optional, dogfood, and deferred external integrations.
+See `docs/architecture/automatic-secondbrain-public-boundary.md` for the public/private packaging boundary and local-to-public release path. See [the public-safe inventory of active, optional, dogfood, and deferred external integrations](https://github.com/levineam/jarvOS/blob/main/docs/architecture/secondbrain-external-integrations.md).
