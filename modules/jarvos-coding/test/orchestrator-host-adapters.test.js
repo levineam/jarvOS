@@ -394,6 +394,44 @@ test('adversarial: reattached verifyClose without live confirmation cannot compl
   assert.ok(assessment.reasons.some((reason) => /reattach|live tracker/i.test(reason)));
 });
 
+test('adversarial: reattached review results require live confirmation', () => {
+  const { assessTerminalSubmission } = require('../src/adapters/hosts.js');
+  const result = completedOrchestration();
+  for (const stage of ['sliceReview', 'holisticReview']) {
+    const event = result.events.find((row) => row.stage === stage);
+    event.result = { ...event.result, reattached: true, status: 'passed', ok: true };
+    event.reattached = true;
+  }
+
+  const assessment = assessTerminalSubmission(result);
+  assert.equal(assessment.ok, false);
+  assert.ok(assessment.submissionGate.missing.includes('clawpatch'));
+  assert.ok(assessment.submissionGate.missing.includes('autoreview'));
+
+  for (const stage of ['sliceReview', 'holisticReview']) {
+    result.events.find((row) => row.stage === stage).result.liveConfirmed = true;
+  }
+  assert.equal(assessTerminalSubmission(result).ok, true);
+});
+
+test('adversarial: unmerged post-merge skip cannot satisfy completion', () => {
+  const { assessTerminalSubmission } = require('../src/adapters/hosts.js');
+  const result = completedOrchestration({
+    eventOverrides: {
+      postMergeSweep: {
+        status: 'skipped',
+        reason: 'pull request not merged',
+        ok: true,
+      },
+      verifyClose: { status: 'verified', ok: true, liveConfirmed: true },
+    },
+  });
+
+  const assessment = assessTerminalSubmission(result);
+  assert.equal(assessment.ok, false);
+  assert.ok(assessment.submissionGate.missing.includes('post_merge_clawsweeper'));
+});
+
 test('control-plane verifier fails closed for deferred, failed, and incomplete close evidence', async () => {
   const port = createCodingControlPlanePort({
     hostAdapter: {

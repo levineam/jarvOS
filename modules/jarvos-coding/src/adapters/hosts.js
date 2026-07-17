@@ -323,9 +323,7 @@ function hasAuthenticStageResult(result) {
   if (!result || typeof result !== 'object') return false;
   // Pure reattachment inventions (no live adapter confirmation) are not evidence.
   if (result.reattached === true && result.alreadyClosed === true) return false;
-  if (result.reattached === true && !result.liveConfirmed && result.ok !== true && !statusToken(result)) {
-    return false;
-  }
+  if (result.reattached === true && result.liveConfirmed !== true) return false;
   return true;
 }
 
@@ -378,6 +376,12 @@ function normalizePostMergeForGate(postMerge) {
   }
   const token = statusToken(postMerge);
   if (token === 'skipped' && postMerge.reason) {
+    if (postMerge.notApplicable !== true) {
+      return {
+        status: 'missing',
+        reason: postMerge.reason,
+      };
+    }
     return {
       status: 'not_applicable',
       reason: postMerge.reason,
