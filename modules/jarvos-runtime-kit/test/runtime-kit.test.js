@@ -266,6 +266,16 @@ test('checkRuntime reports missing setup scripts without throwing', () => {
   }
 });
 
+test('Codex runtime setup uses credential-file binding without registering the secret', () => {
+  const setupPath = path.join(ROOT, 'runtimes/codex/setup.sh');
+  const source = fs.readFileSync(setupPath, 'utf8');
+  assert.match(source, /JARVOS_CONTROL_PLANE_CREDENTIAL_FILE/);
+  assert.match(source, /--env "JARVOS_CONTROL_PLANE_CREDENTIAL_FILE=/);
+  assert.doesNotMatch(source, /--env\s+["']?JARVOS_CONTROL_PLANE_CREDENTIAL(?!_FILE)=/);
+  const result = checkRuntime(path.join(ROOT, 'runtimes/codex/adapter.json'), { root: ROOT });
+  assert.equal(result.ok, true, result.errors.join('\n'));
+});
+
 test('scaffoldRuntime creates a valid starter adapter', () => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-runtime-kit-'));
   try {

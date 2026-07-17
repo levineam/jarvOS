@@ -47,12 +47,25 @@ dispatches mutations.
 An installed host configures `JARVOS_CONTROL_PLANE_SERVICE_MODULE` to an
 absolute local module that exports either an application service or a
 zero-argument factory returning one. That host module owns credential
-resolution, read disclosure policy, and the store. Callers pass a credential
-as data to the common service, which establishes the trusted principal and
-ignores any caller-supplied authority fields.
+resolution, read disclosure policy, and the store. The human CLI and MCP
+surface bind the credential server-side (env, credential file, or stdin);
+raw `--credential` on argv is rejected by default because it is visible in
+process listings and shell history. The service establishes the trusted
+principal from that bound credential and ignores any caller-supplied
+authority fields.
+
+For persisted MCP registrations (Codex `setup.sh`), bind only a non-secret
+credential *file path* via `JARVOS_CONTROL_PLANE_CREDENTIAL_FILE`. Setup must
+never pass `JARVOS_CONTROL_PLANE_CREDENTIAL=...` through `codex mcp add --env`,
+which would expose the secret on argv and persist it in host config. The MCP
+server reads the file at runtime with owner-only permission checks. Ambient
+`JARVOS_CONTROL_PLANE_CREDENTIAL` remains valid for non-persisted host sessions.
 
 ```bash
-jarvos-manager request --credential "$HOST_CREDENTIAL" --input '{"actor":{"kind":"human"},"resource":{"machineId":"machine-a","type":"workspace","id":"one"},"mutationClass":"workspace.cleanup","desiredGeneration":"1","commandSpec":{"operation":"preview"}}'
+export JARVOS_CONTROL_PLANE_SERVICE_MODULE=/absolute/path/to/host-service.js
+# Prefer file binding for long-lived sessions; ambient env is fine for one-shot CLI.
+export JARVOS_CONTROL_PLANE_CREDENTIAL="$HOST_CREDENTIAL"
+jarvos-manager request --input '{"actor":{"kind":"human"},"resource":{"machineId":"machine-a","type":"workspace","id":"one"},"mutationClass":"workspace.cleanup","desiredGeneration":"1","commandSpec":{"operation":"preview"}}'
 ```
 
 Use `request`/`approve` (the CLI aliases) or the core

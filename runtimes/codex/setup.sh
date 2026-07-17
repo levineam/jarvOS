@@ -8,6 +8,9 @@ HOOK_SCRIPT="$ROOT/runtimes/codex/jarvos-session-start-hook.js"
 TRUST_SCRIPT="$ROOT/runtimes/codex/trust-session-start-hook.js"
 CODEX_CONFIG="${CODEX_CONFIG:-$HOME/.codex/config.toml}"
 CONTROL_PLANE_SERVICE_MODULE="${JARVOS_CONTROL_PLANE_SERVICE_MODULE:-}"
+# Setup registers only a non-secret file path. Never pass the credential value
+# through `codex mcp add --env` — that puts it on argv and persists it in config.
+CONTROL_PLANE_CREDENTIAL_FILE="${JARVOS_CONTROL_PLANE_CREDENTIAL_FILE:-}"
 
 if ! command -v codex >/dev/null 2>&1; then
   echo "codex CLI not found on PATH" >&2
@@ -47,6 +50,45 @@ if [ ! -f "$CONTROL_PLANE_SERVICE_MODULE" ]; then
   exit 1
 fi
 
+# The MCP server never accepts a model-supplied credential; it authenticates
+# every control-plane call with a host-bound credential read at runtime. Setup
+# registers only the credential *file path* so the secret never lands on argv
+# or in ~/.codex/config.toml. Ambient JARVOS_CONTROL_PLANE_CREDENTIAL remains
+# valid for non-persisted host sessions, but setup must never pass its value.
+if [ -z "$CONTROL_PLANE_CREDENTIAL_FILE" ]; then
+  echo "JARVOS_CONTROL_PLANE_CREDENTIAL_FILE must point to a host credential file the MCP server reads at runtime" >&2
+  exit 1
+fi
+
+case "$CONTROL_PLANE_CREDENTIAL_FILE" in
+  /*) ;;
+  *)
+    echo "JARVOS_CONTROL_PLANE_CREDENTIAL_FILE must be an absolute path" >&2
+    exit 1
+    ;;
+esac
+
+if [ ! -f "$CONTROL_PLANE_CREDENTIAL_FILE" ]; then
+  echo "Configured control-plane credential file does not exist" >&2
+  exit 1
+fi
+
+# Fail closed on group/other-readable credential files before registration.
+# The MCP server re-checks this at runtime; setup rejects early so we never
+# persist a path that cannot be used safely.
+if ! node -e '
+const fs = require("fs");
+const path = process.argv[1];
+const st = fs.statSync(path);
+if (!st.isFile()) process.exit(2);
+if (st.mode & 0o077) process.exit(3);
+if (typeof process.getuid === "function" && st.uid !== 0 && st.uid !== process.getuid()) process.exit(4);
+if (!fs.readFileSync(path, "utf8").replace(/\r?\n$/, "")) process.exit(5);
+' "$CONTROL_PLANE_CREDENTIAL_FILE"; then
+  echo "JARVOS_CONTROL_PLANE_CREDENTIAL_FILE must be a non-empty, owner-only credential file (mode 0600/0400)" >&2
+  exit 1
+fi
+
 if ! node "$ROOT/modules/jarvos-control-plane/scripts/jarvos-manager.js" verify-host-service \
   --service-module "$CONTROL_PLANE_SERVICE_MODULE" >/dev/null; then
   echo "Configured control-plane host service is not ready" >&2
@@ -57,7 +99,9 @@ if codex mcp get jarvos >/dev/null 2>&1; then
   codex mcp remove jarvos >/dev/null
 fi
 
+# Register non-secret paths only — never the raw credential env value.
 codex mcp add --env "JARVOS_CONTROL_PLANE_SERVICE_MODULE=$CONTROL_PLANE_SERVICE_MODULE" \
+  --env "JARVOS_CONTROL_PLANE_CREDENTIAL_FILE=$CONTROL_PLANE_CREDENTIAL_FILE" \
   jarvos -- node "$MCP_SERVER"
 echo "Registered jarvOS MCP server for Codex: $MCP_SERVER"
 

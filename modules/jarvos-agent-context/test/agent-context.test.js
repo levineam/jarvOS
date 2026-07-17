@@ -20,7 +20,16 @@ const {
   verifyNoteCaptureContract,
   writeSessionThread,
 } = require('../src/index.js');
-const { callTool, PROMPTS, TOOLS, withToolTimeout } = require('../scripts/jarvos-mcp.js');
+const {
+  callTool,
+  PROMPTS,
+  TOOLS,
+  withToolTimeout,
+  resolveHostCredential,
+  readCredentialFile,
+  CREDENTIAL_ENV,
+  CREDENTIAL_FILE_ENV,
+} = require('../scripts/jarvos-mcp.js');
 
 function withIsolatedAgentContextPackage(fn) {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-agent-context-package-'));
@@ -97,6 +106,7 @@ async function withControlPlaneHost(fn) {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-control-plane-host-'));
   const hostModule = path.join(tmp, 'host-service.js');
   const previous = process.env.JARVOS_CONTROL_PLANE_SERVICE_MODULE;
+  const previousCredential = process.env.JARVOS_CONTROL_PLANE_CREDENTIAL;
   const source = path.join(__dirname, '..', '..', 'jarvos-control-plane', 'src', 'index.js');
   fs.writeFileSync(hostModule, [
     `const { createApplicationService, createMemoryApplicationStore } = require(${JSON.stringify(source)});`,
@@ -104,9 +114,14 @@ async function withControlPlaneHost(fn) {
     'module.exports = () => service;',
   ].join('\n'), 'utf8');
   process.env.JARVOS_CONTROL_PLANE_SERVICE_MODULE = hostModule;
+  // The MCP surface binds the credential from the host session, never from
+  // model-visible tool input.
+  process.env.JARVOS_CONTROL_PLANE_CREDENTIAL = 'test-credential';
   try { return await fn(); } finally {
     if (previous === undefined) delete process.env.JARVOS_CONTROL_PLANE_SERVICE_MODULE;
     else process.env.JARVOS_CONTROL_PLANE_SERVICE_MODULE = previous;
+    if (previousCredential === undefined) delete process.env.JARVOS_CONTROL_PLANE_CREDENTIAL;
+    else process.env.JARVOS_CONTROL_PLANE_CREDENTIAL = previousCredential;
     fs.rmSync(tmp, { recursive: true, force: true });
   }
 }
@@ -129,12 +144,37 @@ test('control-plane service gives authenticated human and MCP callers the same c
     const human = controlPlane('request', input);
     assert.equal(human.ok, true);
     assert.equal(human.request.status, 'approval_required');
-    const mcp = await callTool('jarvos_control_plane', { operation: 'approval-state', credential: 'test-credential', requestId: human.request.id });
+    // The MCP caller supplies no credential; it is bound server-side. A model
+    // credential is ignored even if passed.
+    const mcp = await callTool('jarvos_control_plane', { operation: 'approval-state', credential: 'attacker-supplied', requestId: human.request.id });
     assert.equal(mcp.isError, false);
     assert.match(mcp.content[0].text, /approval_required/);
     const approved = controlPlane('approve', { credential: 'test-credential', requestId: human.request.id, fence: human.request.approval.fence });
     assert.equal(approved.request.status, 'approved');
   });
+});
+
+test('control-plane manager never resolves from a shadowing workspace cwd', () => {
+  const { loadControlPlaneManager } = require('../src/index.js');
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-shadow-'));
+  const previousCwd = process.cwd();
+  try {
+    // Plant a hostile @jarvos/control-plane/manager under the workspace cwd.
+    const shadowDir = path.join(tmp, 'node_modules', '@jarvos', 'control-plane');
+    fs.mkdirSync(shadowDir, { recursive: true });
+    fs.writeFileSync(path.join(shadowDir, 'package.json'), JSON.stringify({
+      name: '@jarvos/control-plane', version: '9.9.9', exports: { './manager': './manager.js' },
+    }), 'utf8');
+    fs.writeFileSync(path.join(shadowDir, 'manager.js'), 'module.exports = { __shadow: true, createControlPlaneService() { throw new Error("shadow manager was loaded"); } };', 'utf8');
+
+    process.chdir(tmp);
+    const manager = loadControlPlaneManager();
+    assert.notEqual(manager.__shadow, true, 'workspace cwd must never shadow the control-plane manager');
+    assert.equal(typeof manager.createControlPlaneService, 'function');
+  } finally {
+    process.chdir(previousCwd);
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
 });
 
 test('published agent-context resolves its declared control-plane dependency in an isolated install', () => {
@@ -340,6 +380,113 @@ test('MCP tool list includes jarvOS tools', () => {
     TOOLS.find((tool) => tool.name === 'jarvos_hydrate').description,
     /boot jarvOS/,
   );
+});
+
+test('control-plane MCP tool never takes a model-visible credential', () => {
+  const controlPlaneTool = TOOLS.find((tool) => tool.name === 'jarvos_control_plane');
+  assert.ok(!(controlPlaneTool.inputSchema.required || []).includes('credential'));
+  assert.ok(!('credential' in (controlPlaneTool.inputSchema.properties || {})));
+  assert.deepEqual(controlPlaneTool.inputSchema.required, ['operation']);
+});
+
+test('Codex setup registers only credential file path, never the secret value', () => {
+  const setupPath = path.join(__dirname, '..', '..', '..', 'runtimes', 'codex', 'setup.sh');
+  const source = fs.readFileSync(setupPath, 'utf8');
+  // Persisted MCP registration must use the file-path binding.
+  assert.match(source, /JARVOS_CONTROL_PLANE_CREDENTIAL_FILE/);
+  assert.match(source, /--env "JARVOS_CONTROL_PLANE_CREDENTIAL_FILE=\$CONTROL_PLANE_CREDENTIAL_FILE"/);
+  // Never put the secret on codex mcp add argv / config.
+  // Negative lookahead: CREDENTIAL_FILE must not count as the forbidden binding.
+  assert.doesNotMatch(source, /--env\s+["']?JARVOS_CONTROL_PLANE_CREDENTIAL(?!_FILE)=/);
+  assert.doesNotMatch(source, /JARVOS_CONTROL_PLANE_CREDENTIAL(?!_FILE)=\$\{?CONTROL_PLANE_CREDENTIAL\}?/);
+  // Setup must not require ambient secret for registration.
+  assert.doesNotMatch(source, /CONTROL_PLANE_CREDENTIAL="\$\{JARVOS_CONTROL_PLANE_CREDENTIAL(?!_FILE)/);
+});
+
+test('resolveHostCredential reads owner-only credential file and fails closed', () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-mcp-cred-'));
+  const previousFile = process.env[CREDENTIAL_FILE_ENV];
+  const previousAmbient = process.env[CREDENTIAL_ENV];
+  try {
+    delete process.env[CREDENTIAL_FILE_ENV];
+    delete process.env[CREDENTIAL_ENV];
+
+    const credFile = path.join(tmp, 'control-plane.credential');
+    fs.writeFileSync(credFile, 'file-secret\n', { encoding: 'utf8', mode: 0o600 });
+    fs.chmodSync(credFile, 0o600);
+
+    assert.equal(readCredentialFile(credFile), 'file-secret');
+    assert.equal(resolveHostCredential({ [CREDENTIAL_FILE_ENV]: credFile }), 'file-secret');
+
+    // Ambient env remains valid when no file binding is configured.
+    assert.equal(resolveHostCredential({ [CREDENTIAL_ENV]: 'ambient-secret' }), 'ambient-secret');
+    assert.equal(resolveHostCredential({}), null);
+
+    // Relative paths fail closed.
+    assert.throws(() => readCredentialFile('relative/secret'), /absolute path/);
+
+    // Missing file fails closed (and does not fall through to ambient when set).
+    const missing = path.join(tmp, 'missing.credential');
+    assert.throws(
+      () => resolveHostCredential({ [CREDENTIAL_FILE_ENV]: missing, [CREDENTIAL_ENV]: 'ambient-secret' }),
+      /does not exist/,
+    );
+
+    // Empty file fails closed.
+    const empty = path.join(tmp, 'empty.credential');
+    fs.writeFileSync(empty, '', { encoding: 'utf8', mode: 0o600 });
+    fs.chmodSync(empty, 0o600);
+    assert.throws(() => readCredentialFile(empty), /empty/);
+
+    // Group/other-readable file fails closed.
+    const open = path.join(tmp, 'open.credential');
+    fs.writeFileSync(open, 'leaky\n', { encoding: 'utf8', mode: 0o644 });
+    fs.chmodSync(open, 0o644);
+    assert.throws(() => readCredentialFile(open), /owner-only/);
+
+    // Directory is not a credential file.
+    assert.throws(() => readCredentialFile(tmp), /regular file/);
+  } finally {
+    if (previousFile === undefined) delete process.env[CREDENTIAL_FILE_ENV];
+    else process.env[CREDENTIAL_FILE_ENV] = previousFile;
+    if (previousAmbient === undefined) delete process.env[CREDENTIAL_ENV];
+    else process.env[CREDENTIAL_ENV] = previousAmbient;
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('control-plane MCP tool binds credential from file at runtime', async () => {
+  await withControlPlaneHost(async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-mcp-file-bind-'));
+    const previousFile = process.env[CREDENTIAL_FILE_ENV];
+    const previousAmbient = process.env[CREDENTIAL_ENV];
+    try {
+      const credFile = path.join(tmp, 'control-plane.credential');
+      fs.writeFileSync(credFile, 'test-credential\n', { encoding: 'utf8', mode: 0o600 });
+      fs.chmodSync(credFile, 0o600);
+
+      // Prefer file binding over ambient; clear ambient to prove file path works.
+      delete process.env[CREDENTIAL_ENV];
+      process.env[CREDENTIAL_FILE_ENV] = credFile;
+
+      const listed = await callTool('jarvos_control_plane', { operation: 'list' });
+      assert.equal(listed.isError, false, listed.content?.[0]?.text);
+      assert.match(listed.content[0].text, /"ok": true/);
+
+      // Fail closed when the configured file is unusable (do not use ambient).
+      process.env[CREDENTIAL_ENV] = 'test-credential';
+      process.env[CREDENTIAL_FILE_ENV] = path.join(tmp, 'missing.credential');
+      const failed = await callTool('jarvos_control_plane', { operation: 'list' });
+      assert.equal(failed.isError, true);
+      assert.match(failed.content[0].text, /does not exist|credential/i);
+    } finally {
+      if (previousFile === undefined) delete process.env[CREDENTIAL_FILE_ENV];
+      else process.env[CREDENTIAL_FILE_ENV] = previousFile;
+      if (previousAmbient === undefined) delete process.env[CREDENTIAL_ENV];
+      else process.env[CREDENTIAL_ENV] = previousAmbient;
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
 });
 
 function mcpRequest(message) {

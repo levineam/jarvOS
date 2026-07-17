@@ -23,13 +23,37 @@ const DEFAULT_SESSION_THREAD_LOCK_STALE_MS = 30000;
 const DEFAULT_SESSION_THREAD_LOCK_TIMEOUT_MS = 30000;
 
 function loadControlPlaneManager() {
-  // Published installs resolve this declared dependency. The repository path
-  // remains only for source-tree development before npm has materialized local
-  // package dependencies; it never provides an adapter-owned implementation.
-  return loadModule(
+  // The control-plane manager supplies the authenticated service to the MCP
+  // surface, so it is a security boundary: resolve it ONLY from the installed
+  // package tree, never process.cwd(), and realpath-verify the resolved file is
+  // inside a trusted root. Otherwise a workspace with its own
+  // node_modules/@jarvos/control-plane could silently supply a fake service.
+  return loadTrustedModule(
     '@jarvos/control-plane/manager',
     path.join(JARVOS_ROOT, 'modules', 'jarvos-control-plane', 'scripts', 'jarvos-manager.js'),
   );
+}
+
+function loadTrustedModule(packageName, fallbackPath) {
+  const trustedRoots = [MODULE_ROOT, JARVOS_ROOT]
+    .map((root) => { try { return fs.realpathSync(root); } catch { return path.resolve(root); } });
+  const isTrusted = (candidate) => trustedRoots.some((root) => candidate === root || candidate.startsWith(root + path.sep));
+  let resolved = null;
+  try {
+    // paths deliberately excludes process.cwd() so an arbitrary working
+    // directory cannot inject a shadowing package.
+    resolved = require.resolve(packageName, { paths: [MODULE_ROOT] });
+  } catch {
+    resolved = null;
+  }
+  if (resolved) {
+    let real;
+    try { real = fs.realpathSync(resolved); } catch { real = null; }
+    if (real && isTrusted(real)) return require(real);
+  }
+  // Fall back to the vendored source path, which is inside JARVOS_ROOT by
+  // construction and therefore always trusted.
+  return require(fs.realpathSync(fallbackPath));
 }
 
 function controlPlane(operation, input = {}, options = {}) {
@@ -963,6 +987,7 @@ async function startupBrief(options = {}) {
 
 module.exports = {
   controlPlane,
+  loadControlPlaneManager,
   createNote,
   currentWork,
   defaultFrontmatter,

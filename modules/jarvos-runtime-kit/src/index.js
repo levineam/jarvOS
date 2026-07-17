@@ -164,9 +164,21 @@ function checkRuntime(manifestPath, options = {}) {
     }
   }
 
-  if (manifest.controlPlane && fs.existsSync(setupScript)
-    && !sourceContains(setupScript, [/JARVOS_CONTROL_PLANE_SERVICE_MODULE/, /codex\s+mcp\s+add\s+--env/])) {
-    add(errors, 'control-plane runtime setup must configure JARVOS_CONTROL_PLANE_SERVICE_MODULE for the MCP host');
+  if (manifest.controlPlane && fs.existsSync(setupScript)) {
+    if (!sourceContains(setupScript, [/JARVOS_CONTROL_PLANE_SERVICE_MODULE/, /codex\s+mcp\s+add\s+--env/])) {
+      add(errors, 'control-plane runtime setup must configure JARVOS_CONTROL_PLANE_SERVICE_MODULE for the MCP host');
+    }
+    // Setup may persist only a non-secret credential *file path*. Registering
+    // the raw credential env would put the secret on argv and in host config.
+    // Negative lookahead keeps CREDENTIAL_FILE registrations from matching.
+    if (sourceContains(setupScript, [
+      /--env\s+["']?JARVOS_CONTROL_PLANE_CREDENTIAL(?!_FILE)=/,
+    ])) {
+      add(errors, 'control-plane runtime setup must not register JARVOS_CONTROL_PLANE_CREDENTIAL (use JARVOS_CONTROL_PLANE_CREDENTIAL_FILE)');
+    }
+    if (!sourceContains(setupScript, [/JARVOS_CONTROL_PLANE_CREDENTIAL_FILE/])) {
+      add(errors, 'control-plane runtime setup must configure JARVOS_CONTROL_PLANE_CREDENTIAL_FILE for the MCP host');
+    }
   }
 
   for (const target of manifest.targets || []) {

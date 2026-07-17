@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 'use strict';
 
+const fs = require('fs');
+const path = require('path');
 const readline = require('readline');
 const {
   createNote,
@@ -14,16 +16,69 @@ const {
   writeSessionThread,
 } = require('../src/index.js');
 
+const CREDENTIAL_ENV = 'JARVOS_CONTROL_PLANE_CREDENTIAL';
+const CREDENTIAL_FILE_ENV = 'JARVOS_CONTROL_PLANE_CREDENTIAL_FILE';
+
+// Strict host-credential file binding for persisted MCP sessions. The file path
+// is configuration; the secret is read only at runtime and never accepted as
+// model-visible tool input. Fail closed on missing/empty/world-readable files
+// or untrusted ownership rather than falling through to a weaker source.
+function readCredentialFile(filePath) {
+  if (typeof filePath !== 'string' || !filePath) {
+    throw new Error(`${CREDENTIAL_FILE_ENV} must be a non-empty path`);
+  }
+  if (!path.isAbsolute(filePath)) {
+    throw new Error(`${CREDENTIAL_FILE_ENV} must be an absolute path`);
+  }
+  let realPath;
+  try {
+    realPath = fs.realpathSync(filePath);
+  } catch {
+    throw new Error('control-plane credential file does not exist');
+  }
+  const stat = fs.statSync(realPath);
+  if (!stat.isFile()) {
+    throw new Error('control-plane credential file must be a regular file');
+  }
+  // Owner-only: reject group/other read or write (0600/0400).
+  if (stat.mode & 0o077) {
+    throw new Error('control-plane credential file permissions must be owner-only (e.g. 0600)');
+  }
+  if (typeof process.getuid === 'function' && stat.uid !== 0 && stat.uid !== process.getuid()) {
+    throw new Error('control-plane credential file is owned by an untrusted user');
+  }
+  const value = fs.readFileSync(realPath, 'utf8').replace(/\r?\n$/, '');
+  if (!value) {
+    throw new Error('control-plane credential file is empty');
+  }
+  return value;
+}
+
+// Resolve the host-bound control-plane credential for this MCP session.
+// Precedence: credential file (persisted host binding) then ambient env
+// (non-persisted host sessions / tests). File binding fails closed and never
+// falls through to ambient when the file path is configured but unusable.
+function resolveHostCredential(env = process.env) {
+  if (Object.prototype.hasOwnProperty.call(env, CREDENTIAL_FILE_ENV)
+    && env[CREDENTIAL_FILE_ENV] !== undefined
+    && env[CREDENTIAL_FILE_ENV] !== null
+    && String(env[CREDENTIAL_FILE_ENV]).length > 0) {
+    return readCredentialFile(String(env[CREDENTIAL_FILE_ENV]));
+  }
+  const ambient = env[CREDENTIAL_ENV];
+  if (typeof ambient === 'string' && ambient.length > 0) return ambient;
+  return null;
+}
+
 const TOOLS = [
   {
     name: 'jarvos_control_plane',
-    description: 'Use the installed host\'s authenticated jarvOS control-plane application service. It has the same request and approval semantics as the human CLI.',
+    description: 'Use the installed host\'s authenticated jarvOS control-plane application service. It has the same request and approval semantics as the human CLI. The host binds the credential to this MCP session server-side; never pass a credential as a tool argument.',
     inputSchema: {
       type: 'object',
-      required: ['operation', 'credential'],
+      required: ['operation'],
       properties: {
         operation: { type: 'string', enum: ['list', 'inspect', 'evidence', 'approval-state', 'request', 'approve'] },
-        credential: { type: 'string', description: 'Credential supplied by the installed host.' },
         requestId: { type: 'string' },
         actor: { type: 'object' }, resource: { type: 'object' }, mutationClass: { type: 'string' },
         desiredGeneration: { type: 'string' }, commandSpec: { type: 'object' }, idempotencyKey: { type: 'string' }, fence: { type: 'number' },
@@ -258,8 +313,21 @@ function noteCaptureArgs(args = {}) {
 
 async function callTool(name, args = {}) {
   if (name === 'jarvos_control_plane') {
-    const { service: _service, applicationService: _applicationService, serviceModule: _serviceModule, ...input } = args;
-    const result = controlPlane(input.operation, input);
+    // The credential is bound to this MCP session server-side by the installed
+    // host, never taken as model-visible tool input (it would persist in
+    // transcripts). Strip any credential the model supplies and inject the
+    // host session credential instead.
+    const { credential: _credential, service: _service, applicationService: _applicationService, serviceModule: _serviceModule, ...input } = args;
+    let hostCredential;
+    try {
+      hostCredential = resolveHostCredential();
+    } catch (error) {
+      return textResult(error.message || 'control-plane host credential binding failed', true);
+    }
+    if (!hostCredential) {
+      return textResult('control-plane host credential is not configured for this MCP session', true);
+    }
+    const result = controlPlane(input.operation, { ...input, credential: hostCredential });
     return textResult(JSON.stringify(result, null, 2), !result.ok);
   }
   if (name === 'jarvos_current_work') {
@@ -427,3 +495,7 @@ module.exports.PROMPTS = PROMPTS;
 module.exports.promptResult = promptResult;
 module.exports.noteCaptureArgs = noteCaptureArgs;
 module.exports.withToolTimeout = withToolTimeout;
+module.exports.resolveHostCredential = resolveHostCredential;
+module.exports.readCredentialFile = readCredentialFile;
+module.exports.CREDENTIAL_ENV = CREDENTIAL_ENV;
+module.exports.CREDENTIAL_FILE_ENV = CREDENTIAL_FILE_ENV;

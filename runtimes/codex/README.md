@@ -17,15 +17,31 @@ write, and persists the hook's current trusted hash through Codex's app-server
 config path so the hook is runnable in Codex app Local sessions:
 
 ```bash
+# Credential file must be absolute and owner-only (mode 0600/0400).
+# Setup registers the *path* only — never the secret value.
+umask 077
+printf '%s' "$HOST_CREDENTIAL" > /absolute/path/to/control-plane.credential
+chmod 600 /absolute/path/to/control-plane.credential
+
 JARVOS_CONTROL_PLANE_SERVICE_MODULE=/absolute/path/to/authenticated-host-service.js \
+JARVOS_CONTROL_PLANE_CREDENTIAL_FILE=/absolute/path/to/control-plane.credential \
   ./runtimes/codex/setup.sh
 ```
 
-The setup command verifies only that the service can provide the application
-service boundary, then stores its path as an environment variable for the
-stdio MCP process. It never writes credentials into Codex configuration. The
-host service is responsible for resolving credentials and enforcing
-authorization. Setup fails closed when this boundary is missing or unusable.
+The setup command verifies the authenticated host-service boundary, then
+registers two non-secret environment bindings for the stdio MCP process:
+
+- `JARVOS_CONTROL_PLANE_SERVICE_MODULE` — absolute path of the host service module
+- `JARVOS_CONTROL_PLANE_CREDENTIAL_FILE` — absolute path of the owner-only credential file
+
+Setup never puts the credential value on `codex mcp add` argv and never
+persists it in `~/.codex/config.toml`. The MCP server reads the file at runtime
+with strict permission and ownership checks and fails closed if the binding is
+missing, empty, world-readable, or untrusted. Ambient
+`JARVOS_CONTROL_PLANE_CREDENTIAL` remains valid for non-persisted host sessions
+(for example tests), but setup must not register that variable. The host service
+enforces authorization. Setup fails closed when the service or credential-file
+boundary is missing or unusable.
 
 The repo also includes an equivalent hook manifest template for review/reference:
 

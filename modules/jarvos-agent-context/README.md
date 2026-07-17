@@ -71,11 +71,28 @@ packet as working context without dumping raw private notes.
 
 ## Codex
 
-From the repo root:
+Prefer the runtime setup script, which registers non-secret host bindings only:
 
 ```bash
-codex mcp add jarvos -- node "$PWD/modules/jarvos-agent-context/scripts/jarvos-mcp.js"
+JARVOS_CONTROL_PLANE_SERVICE_MODULE=/absolute/path/to/authenticated-host-service.js \
+JARVOS_CONTROL_PLANE_CREDENTIAL_FILE=/absolute/path/to/control-plane.credential \
+  ./runtimes/codex/setup.sh
 ```
+
+Manual registration (for non-persisted sessions) may use an ambient credential
+in the current shell, but persisted MCP config must never store the secret
+value — register `JARVOS_CONTROL_PLANE_CREDENTIAL_FILE` instead:
+
+```bash
+codex mcp add \
+  --env "JARVOS_CONTROL_PLANE_SERVICE_MODULE=/absolute/path/to/host-service.js" \
+  --env "JARVOS_CONTROL_PLANE_CREDENTIAL_FILE=/absolute/path/to/control-plane.credential" \
+  jarvos -- node "$PWD/modules/jarvos-agent-context/scripts/jarvos-mcp.js"
+```
+
+The MCP server binds the control-plane credential server-side from that file
+(or from ambient `JARVOS_CONTROL_PLANE_CREDENTIAL` for non-persisted host
+sessions). Never pass a credential as a tool argument.
 
 Then a Codex session can call the jarvOS tools instead of guessing from local
 files or relying on static memory.
