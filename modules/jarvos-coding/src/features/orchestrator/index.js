@@ -365,6 +365,8 @@ async function runTakeIssueToDone(input = {}, adapters = {}) {
     issueIdentifier,
     branch: context.branch,
     baseRef: context.baseRef,
+    branchResult: branch,
+    worktreeDir: branch?.worktreeDir || null,
     reviews: {
       sliceReview,
       holisticReview,

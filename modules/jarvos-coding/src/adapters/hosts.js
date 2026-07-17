@@ -2,13 +2,23 @@
 
 const { runTakeIssueToDone } = require('../features/orchestrator');
 const { evaluateSubmissionGate } = require('../lifecycle/policy');
-let CONTRACT_VERSION;
-try {
-  ({ CONTRACT_VERSION } = require('@jarvos/control-plane'));
-} catch (_) {
-  // The bootstrap repository ships public modules side-by-side before package
-  // installation; published consumers resolve the declared package dependency.
-  ({ CONTRACT_VERSION } = require('../../../jarvos-control-plane/src/contracts'));
+
+function controlPlaneContractVersion() {
+  try {
+    return require('@jarvos/control-plane').CONTRACT_VERSION;
+  } catch (packageError) {
+    try {
+      // Source-checkout compatibility before the sibling public packages are
+      // installed. Published consumers resolve the declared semver dependency.
+      return require('../../../jarvos-control-plane/src/contracts').CONTRACT_VERSION;
+    } catch (_) {
+      const error = new Error(
+        '@jarvos/coding control-plane features require @jarvos/control-plane@0.1.0',
+      );
+      error.cause = packageError;
+      throw error;
+    }
+  }
 }
 
 const HOST_ADAPTER_SCHEMA_VERSION = 'jarvos-coding-host-adapter/v1';
@@ -233,7 +243,7 @@ function createOpenClawHostAdapter(options = {}) {
 function codingControlPlaneManifest(options = {}) {
   return {
     schemaVersion: 'jarvos-control-plane.manager.v1',
-    contractVersion: CONTRACT_VERSION,
+    contractVersion: controlPlaneContractVersion(),
     managerId: options.managerId || CODING_MANAGER_ID,
     displayName: options.displayName || 'jarvOS Coding',
     capabilities: ['execute', 'verify'],
@@ -271,6 +281,7 @@ function submissionEvidenceFrom(result = {}) {
     issueIdentifier: result.issueIdentifier || null,
     branch: result.branch || null,
     checkpoint,
+    git: byStage.fixRerun?.git || null,
     pullRequest: byStage.pullRequest || null,
     postMergeSweep: byStage.postMergeSweep || null,
     verifyClose: byStage.verifyClose || null,
@@ -395,7 +406,7 @@ function buildSubmissionGateInput(orchestrator = {}, evidence = null) {
   const slice = byStage.sliceReview || null;
   const holistic = byStage.holisticReview || null;
   const fix = byStage.fixRerun || null;
-  const gitEvidence = orchestrator.git || submissionEvidence.git || null;
+  const gitEvidence = orchestrator.git || submissionEvidence.git || fix?.git || null;
   const pullRequest = normalizePullRequestForGate(
     submissionEvidence.pullRequest || byStage.pullRequest || null,
   );
@@ -403,24 +414,28 @@ function buildSubmissionGateInput(orchestrator = {}, evidence = null) {
     submissionEvidence.postMergeSweep || byStage.postMergeSweep || null,
   );
 
+  const prePrFixNotApplicable = fix?.ok === true
+    && statusToken(fix) === 'skipped'
+    && fix?.reasonCode === 'pre_pr_no_fix_context';
   const tests = Array.isArray(fix?.tests) && fix.tests.length
     ? fix.tests
+    : (prePrFixNotApplicable
+      ? [{
+        command: 'fixRerun',
+        status: 'passed',
+        noTestRationale: fix.reason,
+      }]
     : (fix && stageLooksPassed(fix)
       ? [{ command: 'fixRerun', status: 'passed' }]
-      : [{ command: 'fixRerun', status: statusToken(fix) || 'missing' }]);
+      : [{ command: 'fixRerun', status: statusToken(fix) || 'missing' }]));
 
   const sliceStatus = normalizeReviewStatus(slice);
   const holisticStatus = normalizeReviewStatus(holistic);
   const claimPassed = Boolean(claim) && stageLooksPassed(claim) && hasAuthenticStageResult(claim);
 
-  // Never hardcode git.clean: true. Accept only explicit durable git evidence or
-  // an authentic (non-reattached-invention) branch stage result.
-  const branchStage = byStage.branch;
-  const clean = (gitEvidence && typeof gitEvidence === 'object' && gitEvidence.clean === true)
-    || (Boolean(branchStage)
-      && stageLooksPassed(branchStage)
-      && hasAuthenticStageResult(branchStage)
-      && branchStage.reattached !== true);
+  // Branch creation happens before review/fix mutations and is not cleanliness
+  // proof. Only a real post-fix git inspection may satisfy this gate.
+  const clean = gitEvidence && typeof gitEvidence === 'object' && gitEvidence.clean === true;
 
   const intendedFiles = Array.isArray(orchestrator.intendedFiles) && orchestrator.intendedFiles.length
     ? orchestrator.intendedFiles

@@ -9,7 +9,7 @@
   },
   "type": "commonjs",
   "dependencies": {
-    "@jarvos/control-plane": "file:../jarvos-control-plane"
+    "@jarvos/control-plane": "0.1.0"
   },
   "private": false,
   "scripts": {

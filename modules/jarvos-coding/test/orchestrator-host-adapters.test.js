@@ -49,7 +49,10 @@ function buildAdapters(calls, sessionState = createMemorySessionStateStore()) {
     fixer: {
       async fixAndRerun() {
         calls.push('fixRerun');
-        return { status: 'passed' };
+        return {
+          status: 'passed',
+          git: { clean: true, status: 'clean', worktreePath: '/tmp/test-worktree' },
+        };
       },
     },
     pullRequest: {
@@ -144,7 +147,13 @@ function fullStageEvents(overrides = {}) {
     { stage: 'branch', result: { status: 'created', branch: 'SUP-2214/control-plane', ok: true } },
     { stage: 'sliceReview', result: { status: 'passed', artifact: 'slice.json', summary: 'clawpatch' } },
     { stage: 'holisticReview', result: { status: 'passed', artifact: 'holistic.json', summary: 'autoreview' } },
-    { stage: 'fixRerun', result: { status: 'passed' } },
+    {
+      stage: 'fixRerun',
+      result: {
+        status: 'passed',
+        git: { clean: true, status: 'clean', worktreePath: '/tmp/test-worktree' },
+      },
+    },
     { stage: 'pullRequest', result: { status: 'created', url: 'https://example.test/pr/1', ok: true, ...(overrides.pullRequest || {}) } },
     { stage: 'postMergeSweep', result: { status: 'completed', ...(overrides.postMergeSweep || {}) } },
     { stage: 'verifyClose', result: { status: 'closed', ok: true, ...(overrides.verifyClose || {}) } },
@@ -307,6 +316,37 @@ test('adversarial: pullRequest checkpoint without authentic prior reviews cannot
   const assessment = assessTerminalSubmission(forged);
   assert.equal(assessment.ok, false);
   assert.ok(assessment.reasons.some((reason) => /gate|review|reattach|clawpatch|paperclip|missing/i.test(reason)));
+});
+
+test('adversarial: branch creation cannot stand in for post-fix git cleanliness', () => {
+  const { assessTerminalSubmission } = require('../src/adapters/hosts.js');
+  const result = completedOrchestration();
+  const fix = result.events.find((event) => event.stage === 'fixRerun');
+  delete fix.result.git;
+
+  const assessment = assessTerminalSubmission(result);
+  assert.equal(assessment.ok, false);
+  assert.ok(assessment.submissionGate.missing.includes('branch_hygiene'));
+});
+
+test('normal pre-PR fixer skip is accepted only with explicit rationale and clean git evidence', () => {
+  const { assessTerminalSubmission } = require('../src/adapters/hosts.js');
+  const result = completedOrchestration();
+  const fix = result.events.find((event) => event.stage === 'fixRerun');
+  fix.result = {
+    status: 'skipped',
+    ok: true,
+    reasonCode: 'pre_pr_no_fix_context',
+    reason: 'no pull request in context',
+    git: { clean: true, status: 'clean', worktreePath: '/tmp/test-worktree' },
+  };
+
+  assert.equal(assessTerminalSubmission(result).ok, true);
+
+  delete fix.result.reasonCode;
+  const unproven = assessTerminalSubmission(result);
+  assert.equal(unproven.ok, false);
+  assert.ok(unproven.submissionGate.missing.includes('tests'));
 });
 
 test('adversarial: forged submissionGate.ready cannot satisfy verify', async () => {

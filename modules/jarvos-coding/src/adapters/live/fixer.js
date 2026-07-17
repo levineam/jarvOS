@@ -1,6 +1,7 @@
 'use strict';
 
 const path = require('path');
+const { run: defaultRun } = require('./run');
 
 const FIXER_SCHEMA_VERSION = 'jarvos-coding-live-fixer/v1';
 
@@ -82,6 +83,30 @@ function createLiveFixer(options = {}) {
   const autopilotFixPass = options.autopilotFixPass
     || ((payload) => defaultAutopilotFixPass(env)(payload));
   const enableAutopilotFallback = options.enableAutopilotFallback !== false;
+  const run = options.run || defaultRun;
+
+  function inspectGit(input = {}) {
+    const cwd = input.worktreeDir || input.branchResult?.worktreeDir || null;
+    if (!cwd) {
+      return {
+        clean: false,
+        status: 'missing',
+        reason: 'post-fix worktree path unavailable',
+      };
+    }
+    const result = run('git', ['status', '--porcelain'], {
+      cwd,
+      timeoutMs: 30000,
+      allowFail: true,
+    });
+    const clean = result.status === 0 && !String(result.stdout || '').trim();
+    return {
+      clean,
+      status: clean ? 'clean' : 'dirty',
+      worktreePath: cwd,
+      exitCode: result.status,
+    };
+  }
 
   return {
     schemaVersion: FIXER_SCHEMA_VERSION,
@@ -89,13 +114,16 @@ function createLiveFixer(options = {}) {
     async fixAndRerun(input = {}) {
       const pr = prShapeFromInput(input);
       if (!pr.number || !pr.headRefName) {
+        const git = inspectGit(input);
         return {
           schemaVersion: FIXER_SCHEMA_VERSION,
           stage: 'fixRerun',
           source: 'none',
           status: 'skipped',
           ok: true,
+          reasonCode: 'pre_pr_no_fix_context',
           reason: 'no pull request in context (number + head ref required for a fix pass)',
+          git,
         };
       }
 

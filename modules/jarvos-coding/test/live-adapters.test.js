@@ -5,9 +5,16 @@ const test = require('node:test');
 
 const {
   buildLiveCodingAdapters,
+  createLiveFixer,
   createLivePaperclipTracker,
   createLivePostMergeSweep,
 } = require('../src/index.js');
+
+test('public package declares a registry-safe control-plane dependency', () => {
+  const manifest = require('../package.json');
+  assert.equal(manifest.dependencies['@jarvos/control-plane'], '0.1.0');
+  assert.doesNotMatch(manifest.dependencies['@jarvos/control-plane'], /^(file:|link:)/);
+});
 
 test('buildLiveCodingAdapters() constructs without clawd present (lazy clawd require)', () => {
   // In the public package clawd scripts are absent. Construction must NOT require
@@ -17,6 +24,44 @@ test('buildLiveCodingAdapters() constructs without clawd present (lazy clawd req
   assert.ok(adapters.postMerge, 'postMerge built');
   assert.ok(adapters.reviewEngine && typeof adapters.reviewEngine.sliceReview === 'function');
   assert.ok(adapters.git && adapters.fixer && adapters.pullRequest);
+});
+
+test('pre-PR fixer records real post-fix cleanliness and an explicit no-test rationale', async () => {
+  const calls = [];
+  const fixer = createLiveFixer({
+    run(command, args, options) {
+      calls.push({ command, args, options });
+      return { status: 0, stdout: '', stderr: '' };
+    },
+  });
+
+  const result = await fixer.fixAndRerun({
+    branch: 'SUP-3470/public-jarvos-coding',
+    worktreeDir: '/tmp/SUP-3470',
+  });
+
+  assert.equal(result.status, 'skipped');
+  assert.equal(result.reasonCode, 'pre_pr_no_fix_context');
+  assert.deepEqual(result.git, {
+    clean: true,
+    status: 'clean',
+    worktreePath: '/tmp/SUP-3470',
+    exitCode: 0,
+  });
+  assert.deepEqual(calls[0].args, ['status', '--porcelain']);
+  assert.equal(calls[0].options.cwd, '/tmp/SUP-3470');
+});
+
+test('pre-PR fixer fails cleanliness closed when the post-fix worktree is dirty', async () => {
+  const fixer = createLiveFixer({
+    run: () => ({ status: 0, stdout: ' M src/index.js\n', stderr: '' }),
+  });
+  const result = await fixer.fixAndRerun({
+    branch: 'SUP-3470/public-jarvos-coding',
+    worktreeDir: '/tmp/SUP-3470',
+  });
+  assert.equal(result.git.clean, false);
+  assert.equal(result.git.status, 'dirty');
 });
 
 test('live tracker defers close until there is merge evidence', async () => {
