@@ -198,6 +198,19 @@ test('file store truncates a torn tail before a later mutation is appended', () 
   } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
 });
 
+test('file store accepts an empty uncommitted journal without a checkpoint', () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-control-plane-empty-journal-'));
+  try {
+    fs.writeFileSync(path.join(tmp, 'journal.ndjson'), '');
+
+    const reopened = createFileStore(tmp).snapshot();
+
+    assert.deepEqual(reopened.records, []);
+    assert.deepEqual(reopened.leases, []);
+    assert.equal(reopened.journal.length, 0);
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+});
+
 test('file store checkpoints the journal without losing records or evidence', () => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-control-plane-checkpoint-'));
   try {

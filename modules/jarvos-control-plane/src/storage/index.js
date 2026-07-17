@@ -121,6 +121,7 @@ function replayJournal(entries, initialState = {}) {
 function createFileStore(rootDir, options = {}) {
   if (!rootDir) throw new Error('rootDir is required'); ensureDir(rootDir);
   const statePath = path.join(rootDir, 'state.json'); const journalPath = path.join(rootDir, 'journal.ndjson'); const lockPath = path.join(rootDir, 'state.lock');
+  const checkpointMarkerPath = path.join(rootDir, 'journal.checkpointed');
   const retryMs = options.lockRetryMs ?? 10;
   const staleLockMs = options.staleLockMs ?? 100;
   const checkpointEntries = options.checkpointEntries ?? 128;
@@ -216,9 +217,12 @@ function createFileStore(rootDir, options = {}) {
       try { checkpoint = JSON.parse(fs.readFileSync(statePath, 'utf8')); } catch (error) { throw new Error(`Corrupt state checkpoint: ${error.message}`); }
     }
     const parsed = parseJournal(journalPath);
-    if (!hasCheckpoint && fs.existsSync(journalPath) && parsed.entries.length === 0 && parsed.tornTailOffset === null) {
+    const journalExists = fs.existsSync(journalPath);
+    const journalSize = journalExists ? fs.statSync(journalPath).size : 0;
+    if (!hasCheckpoint && fs.existsSync(checkpointMarkerPath)) {
       throw new Error('Missing state checkpoint for compacted journal');
     }
+    if (!hasCheckpoint && journalExists && journalSize > 0 && parsed.entries.length === 0 && parsed.tornTailOffset === null) throw new Error('Missing state checkpoint for compacted journal');
     if (parsed.tornTailOffset !== null) {
       const fd = fs.openSync(journalPath, 'r+');
       try { fs.ftruncateSync(fd, parsed.tornTailOffset); fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
@@ -235,8 +239,12 @@ function createFileStore(rootDir, options = {}) {
       try { fs.writeFileSync(fd, JSON.stringify({ records: snapshot.records, leases: snapshot.leases, fences: snapshot.fences }, null, 2), 'utf8'); fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
       fs.renameSync(tmp, statePath); const dirfd = fs.openSync(rootDir, 'r'); try { fs.fsyncSync(dirfd); } finally { fs.closeSync(dirfd); }
       if (checkpointEntries > 0 && fs.existsSync(journalPath) && parseJournal(journalPath).entries.length >= checkpointEntries) {
+        const markerFd = fs.openSync(checkpointMarkerPath, 'w', 0o600);
+        try { fs.writeFileSync(markerFd, JSON.stringify({ checkpointedAt: nowIso() }), 'utf8'); fs.fsyncSync(markerFd); } finally { fs.closeSync(markerFd); }
         const journalFd = fs.openSync(journalPath, 'r+');
         try { fs.ftruncateSync(journalFd, 0); fs.fsyncSync(journalFd); } finally { fs.closeSync(journalFd); }
+        const checkpointDirFd = fs.openSync(rootDir, 'r');
+        try { fs.fsyncSync(checkpointDirFd); } finally { fs.closeSync(checkpointDirFd); }
       }
     } catch (error) {
       try { fs.rmSync(tmp, { force: true }); } catch (_) { /* journal remains authoritative */ }
