@@ -493,6 +493,56 @@ try {
   bad('@jarvos/coding module load', e);
 }
 
+// ── @jarvos/control-plane ──────────────────────────────────────────────────
+
+console.log('\n→ @jarvos/control-plane');
+
+try {
+  const controlPlane = require(path.join(ROOT, 'modules/jarvos-control-plane/src/index.js'));
+  const registry = controlPlane.createRegistry({ machineId: 'machine-a' });
+  registry.registerManager({
+    managerId: 'workspace-manager',
+    trust: { level: 'trusted' },
+    capabilities: ['observe', 'execute', 'verify'],
+    operationContract: {
+      finalSideEffectFence: { required: true, mode: 'target-fenced' },
+    },
+    mutationClasses: [{ resourceType: 'git-repository', class: 'workspace.cleanup' }],
+  });
+  const request = controlPlane.createRequest({
+    principal: { id: 'principal:codex' },
+    actor: { kind: 'agent', harness: 'codex' },
+    resource: { machineId: 'machine-a', type: 'git-repository', id: 'repo-1' },
+    mutationClass: 'workspace.cleanup',
+    desiredGeneration: 'gen-1',
+    commandSpec: {
+      operation: 'cleanup-worktree',
+      arguments: { pathToken: 'repo-1' },
+      constraints: { destructive: false },
+    },
+  });
+  const command = controlPlane.createCommand({
+    requestId: request.id,
+    managerId: 'workspace-manager',
+    resource: request.resource,
+    mutationClass: request.mutationClass,
+    desiredGeneration: request.desiredGeneration,
+    commandSpec: request.commandSpec,
+  });
+
+  if (
+    controlPlane.CONTRACT_VERSION.startsWith('1.')
+    && registry.selectManager(request.resource, request.mutationClass).ok
+    && command.actionKey
+  ) {
+    ok('control-plane exports v1 contracts, registry, and action-key dedupe');
+  } else {
+    bad('@jarvos/control-plane smoke', new Error(JSON.stringify({ request, command })));
+  }
+} catch (e) {
+  bad('@jarvos/control-plane module load', e);
+}
+
 // ── @jarvos/runtime-kit ────────────────────────────────────────────────────
 
 console.log('\n→ @jarvos/runtime-kit');

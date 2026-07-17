@@ -1,0 +1,33 @@
+{
+  "name": "@jarvos/control-plane",
+  "version": "0.1.0",
+  "description": "Portable jarvOS control-plane contracts, registry, reconciliation engine, policy primitives, leases, and reference store",
+  "license": "MIT",
+  "main": "src/index.js",
+  "exports": {
+    ".": "./src/index.js",
+    "./contracts": "./src/contracts/index.js",
+    "./registry": "./src/registry/index.js",
+    "./reconciliation": "./src/reconciliation/index.js",
+    "./policy": "./src/policy/index.js",
+    "./storage": "./src/storage/index.js"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/levineam/jarvOS.git"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": [
+    "jarvos",
+    "control-plane",
+    "reconciliation",
+    "policy",
+    "leases",
+    "ai-agent"
+  ]
+}
