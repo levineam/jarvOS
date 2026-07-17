@@ -20,6 +20,10 @@ Paperclip, OpenClaw, Codex, Claude Code, cron, or a private machine path.
   verification.
 - Persists a write-ahead, framed, fsynced reference journal with atomic stale-lock
   recovery, torn-tail repair, and bounded checkpoint compaction.
+- Provides an adapter-facing authenticated application service. Trusted
+  credential resolution supplies principals; caller-provided principal fields
+  cannot add capabilities. Approval is single-use and binds the action key,
+  required capability, expiry, and current fence.
 
 ## What It Is Not
 

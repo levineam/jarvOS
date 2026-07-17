@@ -10,7 +10,8 @@
     "./registry": "./src/registry/index.js",
     "./reconciliation": "./src/reconciliation/index.js",
     "./policy": "./src/policy/index.js",
-    "./storage": "./src/storage/index.js"
+    "./storage": "./src/storage/index.js",
+    "./application-service": "./src/application-service.js"
   },
   "scripts": {
     "test": "node --test test/*.test.js"
