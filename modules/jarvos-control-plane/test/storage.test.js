@@ -105,3 +105,24 @@ test('file store replays durable frames and ignores only a torn final frame', ()
     assert.throws(() => createFileStore(tmp).snapshot(), /(Corrupt|Invalid) journal/);
   } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
 });
+
+test('file store accepts a committed journal mutation when state snapshot persistence fails', () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-control-plane-state-failure-'));
+  const warnings = [];
+  try {
+    const store = createFileStore(tmp, { logger: { warn: (message) => warnings.push(message) } });
+    const originalRename = fs.renameSync;
+    fs.renameSync = (from, to) => {
+      if (to === path.join(tmp, 'state.json')) throw new Error('simulated snapshot failure');
+      return originalRename(from, to);
+    };
+    try {
+      const lease = store.acquireLease({ key: 'journal-survives', holder: 'command-1' });
+      assert.equal(lease.ok, true);
+    } finally { fs.renameSync = originalRename; }
+
+    const reopened = createFileStore(tmp);
+    assert.equal(reopened.snapshot().leases.length, 1);
+    assert.match(warnings[0], /State snapshot persistence failed/);
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+});

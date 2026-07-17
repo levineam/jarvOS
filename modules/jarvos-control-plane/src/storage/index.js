@@ -151,9 +151,15 @@ function createFileStore(rootDir, options = {}) {
   function persist(memory, before) {
     const entries = memory.snapshot().journal.slice(before);
     if (entries.length) { const fd = fs.openSync(journalPath, 'a', 0o600); try { fs.writeFileSync(fd, `${entries.map(stableStringify).join('\n')}\n`, 'utf8'); fs.fsyncSync(fd); } finally { fs.closeSync(fd); } }
-    const tmp = `${statePath}.${process.pid}.tmp`; const fd = fs.openSync(tmp, 'w', 0o600);
-    try { fs.writeFileSync(fd, JSON.stringify(memory.snapshot(), null, 2), 'utf8'); fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
-    fs.renameSync(tmp, statePath); const dirfd = fs.openSync(rootDir, 'r'); try { fs.fsyncSync(dirfd); } finally { fs.closeSync(dirfd); }
+    const tmp = `${statePath}.${process.pid}.tmp`;
+    try {
+      const fd = fs.openSync(tmp, 'w', 0o600);
+      try { fs.writeFileSync(fd, JSON.stringify(memory.snapshot(), null, 2), 'utf8'); fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
+      fs.renameSync(tmp, statePath); const dirfd = fs.openSync(rootDir, 'r'); try { fs.fsyncSync(dirfd); } finally { fs.closeSync(dirfd); }
+    } catch (error) {
+      try { fs.rmSync(tmp, { force: true }); } catch (_) { /* journal remains authoritative */ }
+      if (options.logger && typeof options.logger.warn === 'function') options.logger.warn(`State snapshot persistence failed: ${error.message}`);
+    }
   }
   function mutate(method) { return (...args) => withLock(() => { const memory = load(); const before = memory.snapshot().journal.length; const result = memory[method](...args); persist(memory, before); return result; }); }
   function read(method) { return (...args) => withLock(() => load()[method](...args)); }

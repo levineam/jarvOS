@@ -16,6 +16,7 @@ function createReconciler(options = {}) {
   const store = options.store;
   const managers = options.managers || {};
   const leaseTtlMs = options.leaseTtlMs || 60000;
+  if (typeof store.putCommandIfAbsent !== 'function') throw new Error('store.putCommandIfAbsent is required');
 
   async function reconcileRequest(request, context = {}) {
     const policyDecision = policy.decide(request, context.policy || {});
@@ -54,9 +55,7 @@ function createReconciler(options = {}) {
       provenance: request.provenance,
     });
 
-    const reservation = store.putCommandIfAbsent
-      ? store.putCommandIfAbsent(command)
-      : { inserted: !store.getCommandByActionKey(command.actionKey), command: store.getCommandByActionKey(command.actionKey) || command };
+    const reservation = store.putCommandIfAbsent(command);
     if (!reservation.inserted) {
       return {
         ok: true,
@@ -100,6 +99,7 @@ function createReconciler(options = {}) {
     if (!port || typeof port.executeFenced !== 'function') {
       command = lifecycleTransition(command, 'deferred', { reason: 'manager fenced execution port unavailable' });
       store.putRecord(command);
+      if (store.releaseLease) store.releaseLease(leaseResult.lease);
       return { ok: false, status: 'deferred', request, policyDecision, command };
     }
 

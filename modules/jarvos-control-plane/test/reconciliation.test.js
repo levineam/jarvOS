@@ -92,6 +92,20 @@ test('equivalent allowed requests converge on the same action key without duplic
   assert.equal(dispatches, 1);
 });
 
+test('reconciler requires atomic action-key reservation from injected stores', () => {
+  const fixture = buildFixture();
+  delete fixture.store.putCommandIfAbsent;
+  assert.throws(() => createReconciler(fixture), /putCommandIfAbsent is required/);
+});
+
+test('unavailable manager port releases the acquired lease', async () => {
+  const fixture = buildFixture();
+  delete fixture.managers['workspace-manager'];
+  const result = await createReconciler(fixture).reconcileRequest(fixtureRequest());
+  assert.equal(result.status, 'deferred');
+  assert.equal(fixture.store.snapshot().leases.length, 0);
+});
+
 test('policy denial records a decision and never dispatches manager code', async () => {
   const fixture = buildFixture();
   let dispatches = 0;
