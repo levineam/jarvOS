@@ -27,6 +27,9 @@ const {
 const {
   DEFAULT_MCP_TOOL_NAME,
   DEFAULT_SKILL_NAME,
+  CODING_CONTROL_PLANE_PORT_SCHEMA_VERSION,
+  CODING_MANAGER_ID,
+  CODING_MUTATION_CLASS,
   HOST_ADAPTER_SCHEMA_VERSION,
   SUPPORTED_HOSTS,
   buildMcpToolDescriptor,
@@ -36,6 +39,9 @@ const {
   createClaudeCodeHostAdapter,
   createCodexHostAdapter,
   createCodingHostAdapter,
+  createCodingControlPlanePort,
+  createOpenClawHostAdapter,
+  codingControlPlaneManifest,
   normalizeHost,
 } = require('./adapters/hosts');
 const {
@@ -206,6 +212,9 @@ module.exports = {
   createClawpatchAutoreviewAdapter,
   createCodexHostAdapter,
   createCodingHostAdapter,
+  createCodingControlPlanePort,
+  createOpenClawHostAdapter,
+  codingControlPlaneManifest,
   createGateEquivalentReviewEngine,
   createMemorySessionStateStore,
   decideCodingTriage,

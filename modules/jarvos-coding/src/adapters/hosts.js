@@ -1,15 +1,27 @@
 'use strict';
 
 const { runTakeIssueToDone } = require('../features/orchestrator');
+let CONTRACT_VERSION;
+try {
+  ({ CONTRACT_VERSION } = require('@jarvos/control-plane'));
+} catch (_) {
+  // The bootstrap repository ships public modules side-by-side before package
+  // installation; published consumers resolve the declared package dependency.
+  ({ CONTRACT_VERSION } = require('../../../jarvos-control-plane/src/contracts'));
+}
 
 const HOST_ADAPTER_SCHEMA_VERSION = 'jarvos-coding-host-adapter/v1';
-const SUPPORTED_HOSTS = Object.freeze(['claude-code', 'codex', 'hermes', 'personality']);
+const CODING_CONTROL_PLANE_PORT_SCHEMA_VERSION = 'jarvos-coding-control-plane-port/v1';
+const CODING_MANAGER_ID = 'jarvos-coding';
+const CODING_MUTATION_CLASS = 'coding.take-issue-to-done';
+const SUPPORTED_HOSTS = Object.freeze(['claude-code', 'openclaw', 'codex', 'hermes', 'personality']);
 const DEFAULT_MCP_TOOL_NAME = 'jarvos_coding_take_issue_to_done';
 const DEFAULT_SKILL_NAME = 'jarvos-coding';
 
 function normalizeHost(host = '') {
   const value = String(host || '').trim().toLowerCase();
   if (value === 'claude' || value === 'claude_code') return 'claude-code';
+  if (value === 'open-claw' || value === 'open_claw') return 'openclaw';
   if (value === 'codex-cli') return 'codex';
   if (value === 'hermes-cli' || value === 'hermes-sidecar') return 'hermes';
   if (value === 'future-personality' || value === 'custom-personality') return 'personality';
@@ -209,7 +221,133 @@ function createCodexHostAdapter(options = {}) {
   return createCodingHostAdapter('codex', options);
 }
 
+function createOpenClawHostAdapter(options = {}) {
+  return createCodingHostAdapter('openclaw', options);
+}
+
+function codingControlPlaneManifest(options = {}) {
+  return {
+    schemaVersion: 'jarvos-control-plane.manager.v1',
+    contractVersion: CONTRACT_VERSION,
+    managerId: options.managerId || CODING_MANAGER_ID,
+    displayName: options.displayName || 'jarvOS Coding',
+    capabilities: ['execute', 'verify'],
+    mutationClasses: [{
+      resourceType: 'paperclip-issue',
+      class: CODING_MUTATION_CLASS,
+    }],
+    operationContract: {
+      finalSideEffectFence: { required: true, mode: 'target-fenced' },
+      verifier: { authoritativeReadPath: 'coding-submission-evidence' },
+    },
+    trust: { level: 'trusted' },
+  };
+}
+
+function issueIdentifierFor(command = {}) {
+  const identifier = command.commandSpec?.arguments?.issueIdentifier
+    || command.commandSpec?.arguments?.issue?.identifier
+    || command.resource?.id;
+  if (!identifier) throw new Error('coding command requires an issueIdentifier-scoped resource');
+  return String(identifier);
+}
+
+function submissionEvidenceFrom(result = {}) {
+  const events = Array.isArray(result.events) ? result.events : [];
+  const byStage = Object.fromEntries(events.map((event) => [event.stage, event.result || null]));
+  const checkpoint = Array.isArray(result.checkpoints) && result.checkpoints.length
+    ? result.checkpoints.at(-1)
+    : null;
+  return {
+    issueIdentifier: result.issueIdentifier || null,
+    branch: result.branch || null,
+    checkpoint,
+    pullRequest: byStage.pullRequest || null,
+    postMergeSweep: byStage.postMergeSweep || null,
+    verifyClose: byStage.verifyClose || null,
+  };
+}
+
+function createCodingControlPlanePort(options = {}) {
+  const host = normalizeHost(options.host || 'codex');
+  const hostAdapter = options.hostAdapter || createCodingHostAdapter(host, { adapters: options.adapters });
+  const completed = new Map();
+
+  async function executeFenced(command = {}, context = {}) {
+    if (command.mutationClass !== CODING_MUTATION_CLASS) {
+      throw new Error(`unsupported coding mutation class: ${command.mutationClass}`);
+    }
+    if (command.commandSpec?.operation !== 'take-issue-to-done') {
+      throw new Error(`unsupported coding operation: ${command.commandSpec?.operation}`);
+    }
+    if (!context || typeof context.assertCurrentFence !== 'function') {
+      throw new Error('coding control-plane execution requires assertCurrentFence');
+    }
+    context.assertCurrentFence();
+    const completedResult = completed.get(command.id);
+    if (completedResult) return completedResult;
+
+    const issueIdentifier = issueIdentifierFor(command);
+    const args = command.commandSpec.arguments || {};
+    const result = await hostAdapter.runTakeIssueToDone({
+      issueIdentifier,
+      issue: args.issue || { identifier: issueIdentifier },
+      branch: args.branch,
+      baseRef: args.baseRef,
+      resumeFrom: command.checkpoint || null,
+      controlPlane: {
+        commandId: command.id,
+        fence: context.fence,
+        desiredGeneration: command.desiredGeneration,
+      },
+    });
+    context.assertCurrentFence();
+    const orchestrator = result.result || result;
+    if (orchestrator.status !== 'completed') {
+      throw new Error(`coding host did not complete command: ${orchestrator.status || 'unknown'}`);
+    }
+    const execution = {
+      schemaVersion: CODING_CONTROL_PLANE_PORT_SCHEMA_VERSION,
+      status: 'completed',
+      host,
+      commandId: command.id,
+      fence: context.fence,
+      checkpoint: submissionEvidenceFrom(orchestrator).checkpoint,
+      submissionEvidence: submissionEvidenceFrom(orchestrator),
+    };
+    completed.set(command.id, execution);
+    return execution;
+  }
+
+  async function verify(_command, context = {}) {
+    const execution = context.execution;
+    if (!execution || execution.status !== 'completed' || !execution.submissionEvidence?.verifyClose) {
+      return { outcome: 'unverifiable', verifier: `${CODING_MANAGER_ID}.verify`, reason: 'submission evidence is incomplete' };
+    }
+    return {
+      outcome: 'satisfied',
+      verifier: `${CODING_MANAGER_ID}.verify`,
+      postcondition: {
+        issueIdentifier: execution.submissionEvidence.issueIdentifier,
+        branch: execution.submissionEvidence.branch,
+        checkpoint: execution.checkpoint,
+      },
+      submissionEvidence: execution.submissionEvidence,
+    };
+  }
+
+  return {
+    schemaVersion: CODING_CONTROL_PLANE_PORT_SCHEMA_VERSION,
+    manifest: codingControlPlaneManifest(options),
+    executeFenced,
+    verify,
+  };
+}
+
 module.exports = {
+  CODING_CONTROL_PLANE_PORT_SCHEMA_VERSION,
+  CODING_MANAGER_ID,
+  CODING_MUTATION_CLASS,
   DEFAULT_MCP_TOOL_NAME,
   DEFAULT_SKILL_NAME,
   HOST_ADAPTER_SCHEMA_VERSION,
@@ -221,5 +359,8 @@ module.exports = {
   createClaudeCodeHostAdapter,
   createCodexHostAdapter,
   createCodingHostAdapter,
+  createCodingControlPlanePort,
+  createOpenClawHostAdapter,
+  codingControlPlaneManifest,
   normalizeHost,
 };

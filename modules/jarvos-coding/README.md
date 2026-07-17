@@ -95,9 +95,35 @@ await codex.register();
 await codex.runTakeIssueToDone({ issueIdentifier: 'SUP-2214' });
 ```
 
-`codingHostAdapterContract('claude-code' | 'codex')` remains the descriptor-only
+`codingHostAdapterContract('claude-code' | 'openclaw' | 'codex')` remains the descriptor-only
 contract for registries, docs, and setup tools that need to inspect support
 without instantiating a runtime adapter.
+
+## Control-plane compatibility
+
+`createCodingControlPlanePort(...)` is the public, fenced compatibility port
+for a control-plane manager. It accepts only the scoped
+`coding.take-issue-to-done` command, invokes a selected portable host adapter,
+and returns the orchestrator's final checkpoint plus pull-request,
+post-merge, and close evidence. It does not create extra PR lifecycle states or
+import any private host behavior.
+
+```js
+const { createCodingControlPlanePort } = require('@jarvos/coding');
+
+const port = createCodingControlPlanePort({ host: 'openclaw', hostAdapter });
+const execution = await port.executeFenced(command, {
+  fence: 7,
+  assertCurrentFence: () => leaseIsCurrent(),
+});
+const verification = await port.verify(command, { execution });
+```
+
+The port checks the fence before dispatch and again before returning. Repeated
+delivery of the same command returns its original evidence rather than running
+the coding/PR lifecycle again. Session-loss recovery stays pointer-first: a
+command checkpoint and its existing issue, worktree branch, and PR reference
+are forwarded to the host adapter as `resumeFrom`.
 
 ```js
 const gate = evaluateSubmissionGate({
@@ -190,6 +216,8 @@ The module boundary is intentionally future-feature friendly:
 - `src/features/orchestrator/` owns the executable take-an-issue-to-done loop.
 - `src/features/session-state/` owns pointer-first continuity state for live
   artifact handoff and code-thread checkpoints.
+- `src/adapters/hosts.js` owns host selection plus the narrow control-plane
+  compatibility port; the control plane never imports coding internals.
 - `src/adapters/` translates external systems into portable shapes. The current
   Paperclip adapter maps SUP-1956 release-intake classifications into
   `releaseFit` without changing the release-intake source of truth.

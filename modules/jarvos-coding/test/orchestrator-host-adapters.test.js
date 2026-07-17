@@ -12,6 +12,7 @@ const {
   createClaudeCodeHostAdapter,
   createClawpatchAutoreviewAdapter,
   createCodexHostAdapter,
+  createCodingControlPlanePort,
   createMemorySessionStateStore,
   runTakeIssueToDone,
 } = require('../src/index.js');
@@ -116,6 +117,89 @@ test('host contract normalizes Claude Code and Codex aliases', () => {
   assert.deepEqual(codingHostAdapterContract('claude').drives, ['runTakeIssueToDone']);
   assert.equal(codingHostAdapterContract('claude').host, 'claude-code');
   assert.equal(codingHostAdapterContract('codex-cli').host, 'codex');
+  assert.equal(codingHostAdapterContract('open-claw').host, 'openclaw');
+});
+
+function codingCommand(overrides = {}) {
+  return {
+    id: 'command-1',
+    mutationClass: 'coding.take-issue-to-done',
+    desiredGeneration: 'generation-1',
+    resource: { machineId: 'machine-1', type: 'paperclip-issue', id: 'SUP-2214' },
+    commandSpec: {
+      operation: 'take-issue-to-done',
+      arguments: { issueIdentifier: 'SUP-2214', branch: 'SUP-2214/control-plane' },
+    },
+    ...overrides,
+  };
+}
+
+function completedOrchestration(overrides = {}) {
+  return {
+    status: 'completed',
+    issueIdentifier: 'SUP-2214',
+    branch: 'SUP-2214/control-plane',
+    checkpoints: [{ codeThread: { stage: 'verifyClose', nextStep: 'complete' } }],
+    events: [
+      { stage: 'pullRequest', result: { status: 'created', url: 'https://example.test/pr/1' } },
+      { stage: 'postMergeSweep', result: { status: 'completed' } },
+      { stage: 'verifyClose', result: { status: 'closed' } },
+    ],
+    ...overrides,
+  };
+}
+
+test('control-plane port selects public hosts and returns canonical submission evidence', async () => {
+  const seen = [];
+  const port = createCodingControlPlanePort({
+    host: 'openclaw',
+    hostAdapter: { runTakeIssueToDone: async (input) => { seen.push(input); return completedOrchestration(); } },
+  });
+  const execution = await port.executeFenced(codingCommand(), { fence: 4, assertCurrentFence: () => true });
+  const verification = await port.verify(codingCommand(), { execution });
+
+  assert.equal(port.manifest.contractVersion, '1.0.0');
+  assert.equal(execution.host, 'openclaw');
+  assert.equal(execution.submissionEvidence.verifyClose.status, 'closed');
+  assert.equal(verification.outcome, 'satisfied');
+  assert.equal(seen[0].issueIdentifier, 'SUP-2214');
+});
+
+test('control-plane port reattaches supplied branch and checkpoint after session loss', async () => {
+  let input;
+  const port = createCodingControlPlanePort({
+    hostAdapter: { runTakeIssueToDone: async (next) => { input = next; return completedOrchestration(); } },
+  });
+  const checkpoint = { phase: 'pullRequest', issueIdentifier: 'SUP-2214', branch: 'SUP-2214/existing', pr: 'https://example.test/pr/1' };
+  await port.executeFenced(codingCommand({ checkpoint, commandSpec: { operation: 'take-issue-to-done', arguments: { issueIdentifier: 'SUP-2214', branch: 'SUP-2214/existing' } } }), { fence: 1, assertCurrentFence: () => true });
+  assert.equal(input.branch, 'SUP-2214/existing');
+  assert.deepEqual(input.resumeFrom, checkpoint);
+});
+
+test('control-plane port fails closed for unavailable hosts, stale fences, supersession, and failed submission', async () => {
+  const unavailable = createCodingControlPlanePort({ hostAdapter: { runTakeIssueToDone: null } });
+  await assert.rejects(() => unavailable.executeFenced(codingCommand(), { fence: 1, assertCurrentFence: () => true }));
+
+  let calls = 0;
+  const port = createCodingControlPlanePort({ hostAdapter: { runTakeIssueToDone: async () => { calls += 1; return completedOrchestration(); } } });
+  await assert.rejects(() => port.executeFenced(codingCommand(), { fence: 2, assertCurrentFence: () => { throw new Error('stale_fence'); } }), /stale_fence/);
+  assert.equal(calls, 0);
+  await assert.rejects(() => port.executeFenced(codingCommand({ id: 'superseded' }), { fence: 3, assertCurrentFence: () => { throw new Error('superseded'); } }), /superseded/);
+
+  const failed = createCodingControlPlanePort({ hostAdapter: { runTakeIssueToDone: async () => ({ status: 'failed' }) } });
+  await assert.rejects(() => failed.executeFenced(codingCommand({ id: 'failed-submission' }), { fence: 4, assertCurrentFence: () => true }), /did not complete/);
+});
+
+test('duplicate control-plane dispatch returns the original evidence without a second PR lifecycle run', async () => {
+  let invocations = 0;
+  const port = createCodingControlPlanePort({
+    hostAdapter: { runTakeIssueToDone: async () => { invocations += 1; return completedOrchestration(); } },
+  });
+  const context = { fence: 8, assertCurrentFence: () => true };
+  const first = await port.executeFenced(codingCommand(), context);
+  const second = await port.executeFenced(codingCommand(), context);
+  assert.equal(invocations, 1);
+  assert.strictEqual(second, first);
 });
 
 test('Claude Code host adapter registers MCP and skill surfaces then invokes orchestrator', async () => {

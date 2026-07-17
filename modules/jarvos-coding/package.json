@@ -1,13 +1,16 @@
 {
   "name": "@jarvos/coding",
   "version": "0.1.0",
-  "description": "Portable jarvOS coding orchestrator with thin Claude Code and Codex host adapters.",
+  "description": "Portable jarvOS coding orchestrator with thin Claude Code, Codex, and OpenClaw host adapters.",
   "license": "MIT",
   "main": "src/index.js",
   "exports": {
     ".": "./src/index.js"
   },
   "type": "commonjs",
+  "dependencies": {
+    "@jarvos/control-plane": "file:../jarvos-control-plane"
+  },
   "private": false,
   "scripts": {
     "test": "node --test test/*.test.js"
@@ -25,6 +28,8 @@
     "orchestrator",
     "review-engine",
     "claude-code",
-    "codex"
+    "codex",
+    "openclaw",
+    "control-plane"
   ]
 }
