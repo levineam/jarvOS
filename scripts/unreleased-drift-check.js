@@ -57,6 +57,12 @@ function changelogVersionSection(changelog, version) {
   return { present: true, dated: !/unreleased/i.test(m[1] || '') };
 }
 
+// Placeholder bullets that mean "no entries recorded yet" rather than real,
+// tracked work. Without this, a literal "- Nothing yet." placeholder counts
+// as tracked content and the drift check reports a false OK (this is exactly
+// how #107/#108 landed on main without ever showing up as [Unreleased] drift).
+const PLACEHOLDER_UNRELEASED_ENTRY = /^(nothing yet|none|n\/a|tbd)\.?$/i;
+
 // Returns { present, nonEmpty } for the `## [Unreleased]` section.
 function unreleasedSection(changelog) {
   const lines = changelog.split('\n');
@@ -68,7 +74,11 @@ function unreleasedSection(changelog) {
   let nonEmpty = false;
   for (let i = start + 1; i < lines.length; i += 1) {
     if (/^##\s/.test(lines[i])) break;
-    if (/^\s*[-*]\s+\S/.test(lines[i])) { nonEmpty = true; break; }
+    const bullet = lines[i].match(/^\s*[-*]\s+(\S.*)$/);
+    if (bullet && !PLACEHOLDER_UNRELEASED_ENTRY.test(bullet[1].trim())) {
+      nonEmpty = true;
+      break;
+    }
   }
   return { present: true, nonEmpty };
 }
