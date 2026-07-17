@@ -163,6 +163,27 @@ test('sensitive adapter data is omitted from unauthorized projections', () => {
   assert.equal(internal.adapterExtensions, undefined);
 });
 
+test('nested sensitive paths are validated then structurally redacted', () => {
+  const request = sampleRequest({
+    sensitivity: { level: 'internal', fields: [{ path: 'commandSpec.arguments.token', level: 'secret' }] },
+    commandSpec: {
+      operation: 'classify-worktree',
+      arguments: { mode: 'dry-run', token: 'not-for-projection' },
+      constraints: { destructive: false },
+      lifecycle: { idempotent: true },
+    },
+  });
+  const projected = toPublicProjection(request, { maxSensitivity: 'internal' });
+  assert.equal(projected.commandSpec.arguments.token, undefined);
+  assert.equal(projected.commandSpec.arguments.mode, 'dry-run');
+  assert.throws(() => sampleRequest({
+    sensitivity: { level: 'internal', fields: [{ path: 'commandSpec.arguments.missing', level: 'secret' }] },
+  }), /sensitive field path does not exist/);
+  assert.throws(() => sampleRequest({
+    sensitivity: { level: 'internal', fields: [{ path: 'commandSpec..arguments', level: 'secret' }] },
+  }), /sensitive field path/);
+});
+
 test('record validation rejects malformed lifecycle records', () => {
   const request = sampleRequest();
   const invalid = {
