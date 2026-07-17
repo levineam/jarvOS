@@ -504,6 +504,9 @@ try {
     managerId: 'workspace-manager',
     trust: { level: 'trusted' },
     capabilities: ['observe', 'execute', 'verify'],
+    operationContract: {
+      finalSideEffectFence: { required: true, mode: 'target-fenced' },
+    },
     mutationClasses: [{ resourceType: 'git-repository', class: 'workspace.cleanup' }],
   });
   const request = controlPlane.createRequest({

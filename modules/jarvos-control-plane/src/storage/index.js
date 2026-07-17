@@ -113,10 +113,39 @@ function replayJournal(entries) {
 function createFileStore(rootDir, options = {}) {
   if (!rootDir) throw new Error('rootDir is required'); ensureDir(rootDir);
   const statePath = path.join(rootDir, 'state.json'); const journalPath = path.join(rootDir, 'journal.ndjson'); const lockPath = path.join(rootDir, 'state.lock');
+  const retryMs = options.lockRetryMs ?? 10;
+  const staleLockMs = options.staleLockMs ?? 100;
+  function lockOwnerIsRunning(lock) {
+    if (!Number.isInteger(lock.pid) || lock.pid <= 0) return false;
+    try { process.kill(lock.pid, 0); return true; } catch (error) { return error.code === 'EPERM'; }
+  }
+  function recoverStaleLock() {
+    let stat; let lock = {};
+    try {
+      stat = fs.statSync(lockPath);
+    } catch (error) {
+      if (error.code === 'ENOENT') return false;
+      throw error;
+    }
+    try { const text = fs.readFileSync(lockPath, 'utf8'); if (text) lock = JSON.parse(text); } catch (error) { if (error.code === 'ENOENT') return false; }
+    const ageMs = Date.now() - stat.mtimeMs;
+    if (lockOwnerIsRunning(lock) || ageMs < staleLockMs) return false;
+    try { fs.unlinkSync(lockPath); return true; } catch (error) { if (error.code === 'ENOENT') return true; throw error; }
+  }
   function withLock(fn) {
     let fd; const deadline = Date.now() + (options.lockTimeoutMs || 5000);
-    while (!fd) { try { fd = fs.openSync(lockPath, 'wx', 0o600); } catch (error) { if (error.code !== 'EEXIST' || Date.now() >= deadline) throw new Error('Timed out acquiring file store lock'); Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10); } }
-    try { return fn(); } finally { fs.closeSync(fd); fs.unlinkSync(lockPath); }
+    while (!fd) {
+      try {
+        fd = fs.openSync(lockPath, 'wx', 0o600);
+        fs.writeFileSync(fd, JSON.stringify({ pid: process.pid, createdAt: nowIso() }), 'utf8');
+        fs.fsyncSync(fd);
+      } catch (error) {
+        if (fd) { fs.closeSync(fd); fs.rmSync(lockPath, { force: true }); fd = undefined; throw error; }
+        if (error.code !== 'EEXIST' || Date.now() >= deadline) throw new Error('Timed out acquiring file store lock');
+        if (!recoverStaleLock()) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, retryMs);
+      }
+    }
+    try { return fn(); } finally { fs.closeSync(fd); fs.rmSync(lockPath, { force: true }); }
   }
   function load() { const entries = parseJournal(journalPath); return createMemoryStore({ ...options, initialState: entries.length ? replayJournal(entries) : options.initialState }); }
   function persist(memory, before) {

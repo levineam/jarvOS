@@ -61,6 +61,22 @@ test('file store writes canonical state and journal after interruption-safe upda
   }
 });
 
+test('file store recovers from an orphaned stale lock', () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-control-plane-stale-lock-'));
+  try {
+    const lockPath = path.join(tmp, 'state.lock');
+    fs.writeFileSync(lockPath, JSON.stringify({ pid: 999999999, createdAt: '2000-01-01T00:00:00.000Z' }));
+    const staleAt = new Date(Date.now() - 1000);
+    fs.utimesSync(lockPath, staleAt, staleAt);
+
+    const result = createFileStore(tmp, { staleLockMs: 10, lockTimeoutMs: 1000 })
+      .acquireLease({ key: 'recoverable-lock', holder: 'command-1' });
+
+    assert.equal(result.ok, true);
+    assert.equal(fs.existsSync(lockPath), false);
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+});
+
 test('file store serializes leases across independent processes', async () => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-control-plane-process-store-'));
   const modulePath = path.resolve(__dirname, '../src/index.js');
