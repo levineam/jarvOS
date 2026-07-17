@@ -4,8 +4,10 @@
 const readline = require('readline');
 const {
   createNote,
+  controlPlane,
   currentWork,
   hydrate,
+  loadControlPlaneManager,
   recall,
   readSessionThread,
   startupBrief,
@@ -13,7 +15,48 @@ const {
   writeSessionThread,
 } = require('../src/index.js');
 
+const CREDENTIAL_ENV = 'JARVOS_CONTROL_PLANE_CREDENTIAL';
+const CREDENTIAL_FILE_ENV = 'JARVOS_CONTROL_PLANE_CREDENTIAL_FILE';
+
+// Strict host-credential file binding for persisted MCP sessions. Shared with
+// the human CLI and runtime setup: absolute path, owner-only leaf, trusted
+// ownership, and trusted non-writable ancestry. Never accept model-visible
+// credentials or put path/secret into errors.
+function readCredentialFile(filePath) {
+  return loadControlPlaneManager().readTrustedCredentialFile(filePath);
+}
+
+// Resolve the host-bound control-plane credential for this MCP session.
+// Precedence: credential file (persisted host binding) then ambient env
+// (non-persisted host sessions / tests). File binding fails closed and never
+// falls through to ambient when the file path is configured but unusable.
+function resolveHostCredential(env = process.env) {
+  if (Object.prototype.hasOwnProperty.call(env, CREDENTIAL_FILE_ENV)
+    && env[CREDENTIAL_FILE_ENV] !== undefined
+    && env[CREDENTIAL_FILE_ENV] !== null
+    && String(env[CREDENTIAL_FILE_ENV]).length > 0) {
+    return readCredentialFile(String(env[CREDENTIAL_FILE_ENV]));
+  }
+  const ambient = env[CREDENTIAL_ENV];
+  if (typeof ambient === 'string' && ambient.length > 0) return ambient;
+  return null;
+}
+
 const TOOLS = [
+  {
+    name: 'jarvos_control_plane',
+    description: 'Use the installed host\'s authenticated jarvOS control-plane application service. It has the same request and approval semantics as the human CLI. The host binds the credential to this MCP session server-side; never pass a credential as a tool argument.',
+    inputSchema: {
+      type: 'object',
+      required: ['operation'],
+      properties: {
+        operation: { type: 'string', enum: ['list', 'inspect', 'evidence', 'approval-state', 'request', 'approve'] },
+        requestId: { type: 'string' },
+        actor: { type: 'object' }, resource: { type: 'object' }, mutationClass: { type: 'string' },
+        desiredGeneration: { type: 'string' }, commandSpec: { type: 'object' }, idempotencyKey: { type: 'string' }, fence: { type: 'number' },
+      },
+    },
+  },
   {
     name: 'jarvos_current_work',
     description: 'Return a compact jarvOS current-work summary from Paperclip.',
@@ -241,6 +284,30 @@ function noteCaptureArgs(args = {}) {
 }
 
 async function callTool(name, args = {}) {
+  if (name === 'jarvos_control_plane') {
+    // The credential is bound to this MCP session server-side by the installed
+    // host, never taken as model-visible tool input (it would persist in
+    // transcripts). Strip any credential the model supplies and inject the
+    // host session credential instead.
+    const { credential: _credential, service: _service, applicationService: _applicationService, serviceModule: _serviceModule, ...input } = args;
+    let hostCredential;
+    try {
+      hostCredential = resolveHostCredential();
+    } catch (error) {
+      return textResult(error.message || 'control-plane host credential binding failed', true);
+    }
+    if (!hostCredential) {
+      return textResult('control-plane host credential is not configured for this MCP session', true);
+    }
+    // Match CLI numeric semantics for approve fence comparisons (strict ===).
+    try {
+      loadControlPlaneManager().coerceNumericFlags(input, { labelPrefix: '' });
+    } catch (error) {
+      return textResult(error.message || 'control-plane input validation failed', true);
+    }
+    const result = controlPlane(input.operation, { ...input, credential: hostCredential });
+    return textResult(JSON.stringify(result, null, 2), !result.ok);
+  }
   if (name === 'jarvos_current_work') {
     const result = await currentWork(args);
     return textResult(result.markdown, !result.ok);
@@ -406,3 +473,7 @@ module.exports.PROMPTS = PROMPTS;
 module.exports.promptResult = promptResult;
 module.exports.noteCaptureArgs = noteCaptureArgs;
 module.exports.withToolTimeout = withToolTimeout;
+module.exports.resolveHostCredential = resolveHostCredential;
+module.exports.readCredentialFile = readCredentialFile;
+module.exports.CREDENTIAL_ENV = CREDENTIAL_ENV;
+module.exports.CREDENTIAL_FILE_ENV = CREDENTIAL_FILE_ENV;

@@ -39,6 +39,49 @@ Paperclip, OpenClaw, Codex, Claude Code, cron, or a private machine path.
 - It is not permission to mutate by free-form text. Requests must declare a
   resource, mutation class, authority, command spec, budget, and lifecycle.
 
+## Public human and agent adapters
+
+The package ships `jarvos-manager` for a human CLI and exposes the same
+boundary through `@jarvos/agent-context` as the `jarvos_control_plane` MCP
+tool. Both transports delegate only to a host-provided authenticated
+application service; neither keeps a state file, resolves credentials, or
+dispatches mutations.
+
+An installed host configures `JARVOS_CONTROL_PLANE_SERVICE_MODULE` to an
+absolute local module that exports either an application service or a
+zero-argument factory returning one. That host module owns credential
+resolution, read disclosure policy, and the store. The human CLI and MCP
+surface bind the credential server-side (env, credential file, or stdin);
+raw `--credential` on argv is rejected by default because it is visible in
+process listings and shell history. `--credential-file` requires an absolute
+path to an owner-only leaf with trusted ownership and trusted non-writable
+ancestry — the same fail-closed bar as MCP and setup — and never puts the path
+or secret into error messages. The service establishes the trusted principal
+from that bound credential and ignores any caller-supplied authority fields.
+
+For persisted MCP registrations (Codex `setup.sh`), public/minimal installs may
+register the shared MCP without host bindings. When a private host is
+configured, bind both absolute non-secret paths
+(`JARVOS_CONTROL_PLANE_SERVICE_MODULE` and
+`JARVOS_CONTROL_PLANE_CREDENTIAL_FILE`). Setup must never pass
+`JARVOS_CONTROL_PLANE_CREDENTIAL=...` through MCP `--env` registration, which
+would expose the secret on argv and persist it in host config. The MCP server
+reads the credential file at runtime with the shared owner-only, ownership, and
+ancestry checks. Ambient `JARVOS_CONTROL_PLANE_CREDENTIAL` remains valid for
+non-persisted host sessions.
+
+```bash
+export JARVOS_CONTROL_PLANE_SERVICE_MODULE=/absolute/path/to/host-service.js
+# Prefer file binding for long-lived sessions; ambient env is fine for one-shot CLI.
+export JARVOS_CONTROL_PLANE_CREDENTIAL="$HOST_CREDENTIAL"
+jarvos-manager request --input '{"actor":{"kind":"human"},"resource":{"machineId":"machine-a","type":"workspace","id":"one"},"mutationClass":"workspace.cleanup","desiredGeneration":"1","commandSpec":{"operation":"preview"}}'
+```
+
+Use `request`/`approve` (the CLI aliases) or the core
+`createRequest`/`approve` operations. Terminal command outcomes remain the
+reconciler's responsibility; the adapter can only create requests, read
+filtered projections, and consume command-bound approvals.
+
 ## Core Concepts
 
 ### Records
