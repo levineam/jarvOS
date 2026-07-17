@@ -219,6 +219,27 @@ test('control-plane port reattaches supplied branch and checkpoint after session
   assert.deepEqual(input.resumeFrom, checkpoint);
 });
 
+test('control-plane port forwards resumeFrom supplied in command arguments', async () => {
+  let input;
+  const port = createCodingControlPlanePort({
+    hostAdapter: { runTakeIssueToDone: async (next) => { input = next; return completedOrchestration(); } },
+  });
+  const resumeFrom = {
+    phase: 'pullRequest',
+    issueIdentifier: 'SUP-2214',
+    branch: 'SUP-2214/existing',
+    pullRequest: { url: 'https://example.test/pr/1' },
+  };
+  await port.executeFenced(codingCommand({
+    commandSpec: {
+      operation: 'take-issue-to-done',
+      arguments: { issueIdentifier: 'SUP-2214', branch: 'SUP-2214/existing', resumeFrom },
+    },
+  }), { fence: 1, assertCurrentFence: () => true });
+
+  assert.deepEqual(input.resumeFrom, resumeFrom);
+});
+
 test('default host composition treats resumeFrom as reattachment hints and still runs all stages', async () => {
   const calls = [];
   const adapters = buildAdapters(calls);
@@ -430,6 +451,23 @@ test('adversarial: unmerged post-merge skip cannot satisfy completion', () => {
   const assessment = assessTerminalSubmission(result);
   assert.equal(assessment.ok, false);
   assert.ok(assessment.submissionGate.missing.includes('post_merge_clawsweeper'));
+});
+
+test('adversarial: a referenced PR with a failed or closed status cannot satisfy completion', () => {
+  const { assessTerminalSubmission } = require('../src/adapters/hosts.js');
+  for (const status of ['failed', 'closed']) {
+    const result = completedOrchestration({
+      eventOverrides: {
+        pullRequest: { status, url: 'https://example.test/pr/1' },
+      },
+    });
+    const pullRequest = result.events.find((event) => event.stage === 'pullRequest').result;
+    delete pullRequest.ok;
+
+    const assessment = assessTerminalSubmission(result);
+    assert.equal(assessment.ok, false, status);
+    assert.ok(assessment.submissionGate.missing.includes('pull_request'), status);
+  }
 });
 
 test('control-plane verifier fails closed for deferred, failed, and incomplete close evidence', async () => {

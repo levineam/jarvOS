@@ -358,12 +358,15 @@ function normalizePullRequestForGate(pullRequest) {
     status = 'created';
   }
   if (!status) return null;
+  const successfulStatus = ['created', 'approved', 'passed'].includes(status);
   return {
     ...pullRequest,
     status,
     url: pullRequest.url || null,
     number: pullRequest.number || null,
-    ok: pullRequest.ok !== false,
+    // The lifecycle gate checks an explicit boolean before it checks status.
+    // Never synthesize ok=true for a closed/failed/unknown PR state.
+    ok: pullRequest.ok === true ? successfulStatus : successfulStatus && pullRequest.ok !== false,
   };
 }
 
@@ -589,7 +592,7 @@ function createCodingControlPlanePort(options = {}) {
       issue: args.issue || { identifier: issueIdentifier },
       branch: args.branch,
       baseRef: args.baseRef,
-      resumeFrom: command.checkpoint || null,
+      resumeFrom: command.checkpoint || args.resumeFrom || null,
       controlPlane: {
         commandId: command.id,
         fence: context.fence,
