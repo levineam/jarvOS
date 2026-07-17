@@ -118,6 +118,9 @@ test('orchestrator runs the full stage loop and checkpoints code thread state', 
     lastDecision: 'closed',
     nextStep: 'complete',
   });
+  const pullRequestCheckpoint = result.checkpoints.find((checkpoint) => checkpoint.codeThread.stage === 'pullRequest');
+  assert.equal(pullRequestCheckpoint.artifact.kind, 'pull-request');
+  assert.equal(pullRequestCheckpoint.artifact.url, 'https://github.com/example/repo/pull/1');
 });
 
 test('host contract normalizes Claude Code and Codex aliases', () => {
@@ -300,6 +303,24 @@ test('control-plane default path reattaches pointers but revalidates all stages'
   assert.equal(execution.submissionEvidence.verifyClose.status, 'closed');
 });
 
+test('paperclip issue artifact URLs are not promoted to pull-request reattachment pointers', () => {
+  const { resolveResumePlan } = require('../src/features/orchestrator');
+  const plan = resolveResumePlan({
+    branch: 'SUP-2214/control-plane',
+    resumeFrom: {
+      artifact: {
+        kind: 'paperclip-issue',
+        issueIdentifier: 'SUP-2214',
+        branch: 'SUP-2214/control-plane',
+        url: 'https://paperclip.example/SUP/issues/SUP-2214',
+      },
+    },
+  });
+
+  assert.equal(plan.pullRequest, null);
+  assert.equal(plan.branch, 'SUP-2214/control-plane');
+});
+
 test('adversarial: forged nextStep complete cannot complete with zero adapter calls', async () => {
   const calls = [];
   const adapters = buildAdapters(calls);
@@ -433,6 +454,19 @@ test('adversarial: reattached review results require live confirmation', () => {
     result.events.find((row) => row.stage === stage).result.liveConfirmed = true;
   }
   assert.equal(assessTerminalSubmission(result).ok, true);
+});
+
+test('all reattached stages can complete when every result is live-confirmed', () => {
+  const { assessTerminalSubmission } = require('../src/adapters/hosts.js');
+  const result = completedOrchestration();
+  result.events = result.events.map((event) => ({
+    ...event,
+    reattached: true,
+    result: { ...event.result, reattached: true, liveConfirmed: true },
+  }));
+
+  const assessment = assessTerminalSubmission(result);
+  assert.equal(assessment.ok, true);
 });
 
 test('adversarial: unmerged post-merge skip cannot satisfy completion', () => {

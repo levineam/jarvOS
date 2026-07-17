@@ -122,12 +122,14 @@ function extractReattachmentHints(source = null) {
     };
   }
 
+  const artifactKind = String(isPlainObject(hints.artifact) ? hints.artifact.kind || '' : '').toLowerCase();
+  const artifactIsPullRequest = ['pull-request', 'pull_request', 'github-pr', 'review'].includes(artifactKind);
   const prUrl = firstDefined(
     hints.pr,
     hints.prUrl,
     hints.pullRequestUrl,
     isPlainObject(hints.pullRequest) ? hints.pullRequest.url : null,
-    isPlainObject(hints.artifact) ? hints.artifact.url : null,
+    artifactIsPullRequest ? hints.artifact.url : null,
   );
   const pullRequestPointer = isPlainObject(hints.pullRequest)
     ? {
@@ -239,6 +241,7 @@ async function checkpointIfConfigured(input, context, stage, result, nextStep) {
   const sessionState = context.sessionState;
   if (!sessionState) return null;
 
+  const pullRequestUrl = context.pullRequest?.url || null;
   const checkpoint = buildCodeThreadCheckpoint({
     issueIdentifier: input.issue?.identifier || input.issueIdentifier,
     branch: context.branch || input.branch,
@@ -246,10 +249,10 @@ async function checkpointIfConfigured(input, context, stage, result, nextStep) {
     lastDecision: result?.decision || result?.status || null,
     nextStep,
     artifact: {
-      kind: 'paperclip-issue',
+      kind: pullRequestUrl ? 'pull-request' : 'paperclip-issue',
       issueIdentifier: input.issue?.identifier || input.issueIdentifier,
       branch: context.branch || input.branch,
-      url: input.issue?.url || context.pullRequest?.url,
+      url: pullRequestUrl || input.issue?.url,
     },
   });
 
@@ -296,7 +299,7 @@ async function runTakeIssueToDone(input = {}, adapters = {}) {
   const stageResults = {};
   const reattach = reattachmentPayload(context);
 
-  const runStage = async (stage, action) => {
+  const runStage = async (stage, action, options = {}) => {
     const index = TAKE_ISSUE_TO_DONE_STAGES.indexOf(stage);
     // Always execute the stage through the live adapter (or revalidate). Resume
     // hints may avoid duplicate worktree/PR allocation inside adapters, but
@@ -310,6 +313,9 @@ async function runTakeIssueToDone(input = {}, adapters = {}) {
     });
     events.push(event);
     stageResults[stage] = result;
+    if (typeof options.beforeCheckpoint === 'function') {
+      options.beforeCheckpoint(result);
+    }
     const checkpoint = await checkpointIfConfigured(
       input,
       context,
@@ -386,7 +392,11 @@ async function runTakeIssueToDone(input = {}, adapters = {}) {
     assertCurrentFence: controlPlane?.assertCurrentFence,
     reattach,
     existingPullRequest: context.pullRequest,
-  }));
+  }), {
+    beforeCheckpoint: (result) => {
+      context.pullRequest = result || context.pullRequest;
+    },
+  });
   context.pullRequest = pullRequest || context.pullRequest;
 
   const postMergeSweep = await runStage('postMergeSweep', () => requireFn(adapters.postMerge, 'sweep', 'postMergeSweep')({

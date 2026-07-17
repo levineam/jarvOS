@@ -540,10 +540,13 @@ function assessTerminalSubmission(orchestrator = {}, options = {}) {
     ? orchestrator.events
     : (Array.isArray(evidence.events) ? evidence.events : []);
   if (events.length > 0) {
-    const allReattached = events.every((event) => event?.reattached === true
-      || event?.result?.reattached === true);
+    const allReattachedWithoutLiveConfirmation = events.every((event) => {
+      const reattached = event?.reattached === true || event?.result?.reattached === true;
+      const liveConfirmed = event?.liveConfirmed === true || event?.result?.liveConfirmed === true;
+      return reattached && !liveConfirmed;
+    });
     const verifyEvent = events.find((event) => event?.stage === 'verifyClose');
-    if (allReattached || (verifyEvent?.reattached === true && verifyEvent?.result?.liveConfirmed !== true
+    if (allReattachedWithoutLiveConfirmation || (verifyEvent?.reattached === true && verifyEvent?.result?.liveConfirmed !== true
       && verifyClose?.liveConfirmed !== true && verifyClose?.reattached === true)) {
       if (!reasons.some((reason) => /reattach|live tracker/i.test(reason))) {
         reasons.push('terminal evidence is reattached-only and lacks live stage confirmation');
