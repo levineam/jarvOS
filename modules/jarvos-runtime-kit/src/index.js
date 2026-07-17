@@ -63,6 +63,7 @@ function validateManifest(manifest) {
     if (manifest.controlPlane.module !== CONTROL_PLANE_MODULE) add(errors, `controlPlane.module must be ${CONTROL_PLANE_MODULE}`);
     if (!shared.requiredTools?.includes(CONTROL_PLANE_TOOL)) add(errors, `sharedAgentContext.requiredTools must include ${CONTROL_PLANE_TOOL} when controlPlane is declared`);
     if (!manifest.controlPlane.hostService) add(errors, 'controlPlane.hostService is required when controlPlane is declared');
+    if (manifest.controlPlane.hostService !== 'JARVOS_CONTROL_PLANE_SERVICE_MODULE') add(errors, 'controlPlane.hostService must be JARVOS_CONTROL_PLANE_SERVICE_MODULE');
   }
 
   for (const [index, target] of (manifest.targets || []).entries()) {
@@ -161,6 +162,11 @@ function checkRuntime(manifestPath, options = {}) {
     if (!sourceContains(setupScript, [/backup/i, /copyFileSync/, /\bcp\s+/])) {
       add(errors, 'setup script declares config writes but no backup behavior was detected');
     }
+  }
+
+  if (manifest.controlPlane && fs.existsSync(setupScript)
+    && !sourceContains(setupScript, [/JARVOS_CONTROL_PLANE_SERVICE_MODULE/, /codex\s+mcp\s+add\s+--env/])) {
+    add(errors, 'control-plane runtime setup must configure JARVOS_CONTROL_PLANE_SERVICE_MODULE for the MCP host');
   }
 
   for (const target of manifest.targets || []) {

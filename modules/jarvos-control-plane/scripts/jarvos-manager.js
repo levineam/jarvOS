@@ -30,6 +30,16 @@ function loadHostService(modulePath) {
   return service;
 }
 
+function verifyHostService(modulePath) {
+  try {
+    loadHostService(modulePath);
+    // Do not return, print, or otherwise expose the configured module path.
+    return { ok: true };
+  } catch {
+    return { ok: false };
+  }
+}
+
 function createControlPlaneService(options = {}) {
   const applicationService = options.applicationService || loadHostService(
     options.serviceModule || process.env.JARVOS_CONTROL_PLANE_SERVICE_MODULE,
@@ -58,13 +68,22 @@ function parseCli(argv) {
 }
 
 function usage() {
-  return 'Usage: jarvos-manager <list|inspect|evidence|approval-state|request|approve> --credential <credential> [--request-id <id>] [--input <json>]';
+  return 'Usage: jarvos-manager <list|inspect|evidence|approval-state|request|approve> --credential <credential> [--request-id <id>] [--input <json>]\n       jarvos-manager verify-host-service --service-module <absolute-path>';
 }
 
 function main() {
   const { operation, input } = parseCli(process.argv.slice(2));
   if (operation === 'help' || input.help) {
     process.stdout.write(`${usage()}\n`);
+    return;
+  }
+  if (operation === 'verify-host-service') {
+    if (!verifyHostService(input.serviceModule)) {
+      process.stderr.write('Configured control-plane host service is not ready\n');
+      process.exitCode = 1;
+      return;
+    }
+    process.stdout.write('{"ok":true}\n');
     return;
   }
   const result = createControlPlaneService().execute(operation, input);
@@ -75,4 +94,4 @@ if (require.main === module) {
   try { main(); } catch (error) { process.stderr.write(`${error.message}\n`); process.exitCode = 1; }
 }
 
-module.exports = { PUBLIC_OPERATIONS, createControlPlaneService, normalizeOperation, parseCli };
+module.exports = { PUBLIC_OPERATIONS, createControlPlaneService, loadHostService, normalizeOperation, parseCli, verifyHostService };

@@ -17,8 +17,15 @@ write, and persists the hook's current trusted hash through Codex's app-server
 config path so the hook is runnable in Codex app Local sessions:
 
 ```bash
-codex mcp add jarvos -- node "$PWD/modules/jarvos-agent-context/scripts/jarvos-mcp.js"
+JARVOS_CONTROL_PLANE_SERVICE_MODULE=/absolute/path/to/authenticated-host-service.js \
+  ./runtimes/codex/setup.sh
 ```
+
+The setup command verifies only that the service can provide the application
+service boundary, then stores its path as an environment variable for the
+stdio MCP process. It never writes credentials into Codex configuration. The
+host service is responsible for resolving credentials and enforcing
+authorization. Setup fails closed when this boundary is missing or unusable.
 
 The repo also includes an equivalent hook manifest template for review/reference:
 

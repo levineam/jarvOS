@@ -23,6 +23,9 @@ const DEFAULT_SESSION_THREAD_LOCK_STALE_MS = 30000;
 const DEFAULT_SESSION_THREAD_LOCK_TIMEOUT_MS = 30000;
 
 function loadControlPlaneManager() {
+  // Published installs resolve this declared dependency. The repository path
+  // remains only for source-tree development before npm has materialized local
+  // package dependencies; it never provides an adapter-owned implementation.
   return loadModule(
     '@jarvos/control-plane/manager',
     path.join(JARVOS_ROOT, 'modules', 'jarvos-control-plane', 'scripts', 'jarvos-manager.js'),

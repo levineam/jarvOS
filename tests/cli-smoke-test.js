@@ -23,6 +23,12 @@ const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-cli-'));
 try {
   const workspace = path.join(tmp, 'workspace');
   const vault = path.join(tmp, 'vault');
+  const controlPlaneHost = path.join(tmp, 'control-plane-host.js');
+  const controlPlaneSource = path.join(ROOT, 'modules', 'jarvos-control-plane', 'src', 'index.js');
+  fs.writeFileSync(controlPlaneHost, [
+    `const { createApplicationService, createMemoryApplicationStore } = require(${JSON.stringify(controlPlaneSource)});`,
+    "module.exports = () => createApplicationService({ store: createMemoryApplicationStore(), resolveCredential: () => null, canRead: () => false, policy: () => ({ outcome: 'deny' }) });",
+  ].join('\n'), 'utf8');
   const env = {
     ...process.env,
     JARVOS_YES: '1',
@@ -32,7 +38,12 @@ try {
     JARVOS_VAULT_PATH: vault,
     JARVOS_WORKSPACE_PATH: workspace,
     JARVOS_RUNTIME: 'minimal',
+    JARVOS_CONTROL_PLANE_SERVICE_MODULE: controlPlaneHost,
   };
+  assert.equal(
+    require(path.join(ROOT, 'modules', 'jarvos-control-plane', 'scripts', 'jarvos-manager.js')).verifyHostService(controlPlaneHost).ok,
+    true,
+  );
 
   const help = run(['--help']);
   assert.equal(help.status, 0, help.stderr || help.stdout);
@@ -99,6 +110,7 @@ try {
   assert.match(doctor.stdout, /PASS vault-path/);
   assert.match(doctor.stdout, /PASS vault-path-stale/);
   assert.match(doctor.stdout, /PASS journal-conflict/);
+  assert.match(doctor.stdout, /PASS control-plane-module/);
   assert.match(doctor.stdout, /READY/);
 
   const jsonDoctor = run(['doctor', '--profile=minimal', '--workspace', workspace, '--json'], { env });

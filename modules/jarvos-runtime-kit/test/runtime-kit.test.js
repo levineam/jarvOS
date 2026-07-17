@@ -37,6 +37,17 @@ test('validateManifest rejects incomplete control-plane parity declarations', ()
   assert.match(result.errors.join('\n'), /hostService/);
 });
 
+test('validateManifest requires the secure control-plane host-service environment boundary', () => {
+  const result = validateManifest({
+    schemaVersion: 1, id: 'bad-runtime', displayName: 'Bad Runtime', setup: { script: 'setup.sh' },
+    sharedAgentContext: { mcpServer: 'modules/jarvos-agent-context/scripts/jarvos-mcp.js', requiredTools: ['jarvos_hydrate', 'jarvos_control_plane'] },
+    targets: [{ id: 'bad-cli', kind: 'cli', mcp: { supported: true }, hydration: { mode: 'manual', reason: 'test' } }],
+    controlPlane: { module: 'modules/jarvos-control-plane/scripts/jarvos-manager.js', hostService: 'unsafe-service-path' },
+  });
+  assert.equal(result.ok, false);
+  assert.match(result.errors.join('\n'), /JARVOS_CONTROL_PLANE_SERVICE_MODULE/);
+});
+
 test('validateManifest rejects missing shared jarvos_hydrate tool', () => {
   const result = validateManifest({
     schemaVersion: 1,

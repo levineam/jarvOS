@@ -25,6 +25,12 @@ The bundled stdio MCP server exposes:
 | `jarvos_session_thread_write` | Append a checkpoint to that thread as a normal secondbrain note linked from today's journal |
 | `jarvos_startup_brief` | Bounded startup context for agent sessions |
 | `jarvos_hydrate` | Bounded working-context packet for startup hydration, including ontology context when configured |
+| `jarvos_control_plane` | Authenticated request, inspection, evidence, and approval access through the installed host application service |
+
+`jarvos_control_plane` is available only after the host has configured
+`JARVOS_CONTROL_PLANE_SERVICE_MODULE`. `@jarvos/agent-context` declares
+`@jarvos/control-plane` as a runtime dependency so this boundary resolves from
+an installed package, not from a repository-relative path.
 
 ## Ontology Context
 

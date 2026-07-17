@@ -22,6 +22,24 @@ const {
 } = require('../src/index.js');
 const { callTool, PROMPTS, TOOLS, withToolTimeout } = require('../scripts/jarvos-mcp.js');
 
+function withIsolatedAgentContextPackage(fn) {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-agent-context-package-'));
+  const packageRoot = path.join(tmp, 'node_modules', '@jarvos', 'agent-context');
+  const controlPlaneRoot = path.join(tmp, 'node_modules', '@jarvos', 'control-plane');
+  try {
+    fs.mkdirSync(path.dirname(packageRoot), { recursive: true });
+    fs.mkdirSync(path.dirname(controlPlaneRoot), { recursive: true });
+    fs.cpSync(path.join(__dirname, '..', 'src'), path.join(packageRoot, 'src'), { recursive: true });
+    fs.copyFileSync(path.join(__dirname, '..', 'package.json'), path.join(packageRoot, 'package.json'));
+    fs.cpSync(path.join(__dirname, '..', '..', 'jarvos-control-plane', 'src'), path.join(controlPlaneRoot, 'src'), { recursive: true });
+    fs.cpSync(path.join(__dirname, '..', '..', 'jarvos-control-plane', 'scripts'), path.join(controlPlaneRoot, 'scripts'), { recursive: true });
+    fs.copyFileSync(path.join(__dirname, '..', '..', 'jarvos-control-plane', 'package.json'), path.join(controlPlaneRoot, 'package.json'));
+    return fn(packageRoot);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
 function withTempVault(fn) {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-agent-context-'));
   const vault = path.join(tmp, 'vault');
@@ -116,6 +134,22 @@ test('control-plane service gives authenticated human and MCP callers the same c
     assert.match(mcp.content[0].text, /approval_required/);
     const approved = controlPlane('approve', { credential: 'test-credential', requestId: human.request.id, fence: human.request.approval.fence });
     assert.equal(approved.request.status, 'approved');
+  });
+});
+
+test('published agent-context resolves its declared control-plane dependency in an isolated install', () => {
+  const manifest = require('../package.json');
+  assert.equal(manifest.dependencies['@jarvos/control-plane'], '0.1.0');
+  withIsolatedAgentContextPackage((packageRoot) => {
+    const isolated = require(packageRoot);
+    const { createApplicationService, createMemoryApplicationStore } = require(path.join(packageRoot, '..', 'control-plane', 'src'));
+    const applicationService = createApplicationService({
+      store: createMemoryApplicationStore(),
+      resolveCredential: () => ({ id: 'principal:isolated', capabilities: ['control-plane.read'] }),
+      canRead: () => true,
+    });
+    const result = isolated.controlPlane('list', { credential: 'installed-package' }, { applicationService });
+    assert.equal(result.ok, true);
   });
 });
 

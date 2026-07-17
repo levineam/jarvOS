@@ -7,6 +7,7 @@ HOOKS_JSON="$ROOT/runtimes/codex/hooks.json"
 HOOK_SCRIPT="$ROOT/runtimes/codex/jarvos-session-start-hook.js"
 TRUST_SCRIPT="$ROOT/runtimes/codex/trust-session-start-hook.js"
 CODEX_CONFIG="${CODEX_CONFIG:-$HOME/.codex/config.toml}"
+CONTROL_PLANE_SERVICE_MODULE="${JARVOS_CONTROL_PLANE_SERVICE_MODULE:-}"
 
 if ! command -v codex >/dev/null 2>&1; then
   echo "codex CLI not found on PATH" >&2
@@ -33,11 +34,31 @@ if [ ! -f "$TRUST_SCRIPT" ]; then
   exit 1
 fi
 
+# The control-plane MCP tool is only safe when the installed host provides the
+# authenticated application service.  The module path is configuration, not a
+# credential; the service itself owns credential resolution and authorization.
+if [ -z "$CONTROL_PLANE_SERVICE_MODULE" ]; then
+  echo "JARVOS_CONTROL_PLANE_SERVICE_MODULE must name the installed authenticated control-plane host service" >&2
+  exit 1
+fi
+
+if [ ! -f "$CONTROL_PLANE_SERVICE_MODULE" ]; then
+  echo "Configured control-plane host service module does not exist" >&2
+  exit 1
+fi
+
+if ! node "$ROOT/modules/jarvos-control-plane/scripts/jarvos-manager.js" verify-host-service \
+  --service-module "$CONTROL_PLANE_SERVICE_MODULE" >/dev/null; then
+  echo "Configured control-plane host service is not ready" >&2
+  exit 1
+fi
+
 if codex mcp get jarvos >/dev/null 2>&1; then
   codex mcp remove jarvos >/dev/null
 fi
 
-codex mcp add jarvos -- node "$MCP_SERVER"
+codex mcp add --env "JARVOS_CONTROL_PLANE_SERVICE_MODULE=$CONTROL_PLANE_SERVICE_MODULE" \
+  jarvos -- node "$MCP_SERVER"
 echo "Registered jarvOS MCP server for Codex: $MCP_SERVER"
 
 mkdir -p "$(dirname "$CODEX_CONFIG")"
