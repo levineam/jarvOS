@@ -191,7 +191,7 @@ Apply these lenses at the Strategy and Architecture phases:
 ### Adversarial Checkpoint Flow
 
 ```
-Mary (Discovery) 
+Mary (Discovery)
     → RED TEAM: Challenge assumptions, missing research
     → John (Strategy)
         → RED TEAM: PMF gauntlet, kill criteria check
@@ -469,7 +469,7 @@ Listen for intention signals:
 - Making commitments to others
 
 **On detection:**
-1. **Log immediately** in today's `memory/YYYY-MM-DD.md` 
+1. **Log immediately** in today's `memory/YYYY-MM-DD.md`
 2. **Add to appropriate system:**
    - Quick tasks (< 2 hours) → log in daily memory file with priority flag
    - Project tasks → Project Board in vault
@@ -549,7 +549,7 @@ When spawning specialist sub-agents:
 
 **Note tagging convention:** Sub-agents should add specialist mode tags to output notes using wiki-link format:
 - `[[analyst-output]]` for analysis work
-- `[[writer-output]]` for writing/content work  
+- `[[writer-output]]` for writing/content work
 - `[[pm-output]]` for project management work
 - `[[architect-output]]` for system design work
 - `[[developer-output]]` for technical implementation
