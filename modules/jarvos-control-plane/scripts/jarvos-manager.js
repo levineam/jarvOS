@@ -38,7 +38,9 @@ function writeState(file, state) {
 function id(prefix) { return `${prefix}_${crypto.randomUUID()}`; }
 function now() { return new Date().toISOString(); }
 function redactRequest(request) {
-  const { authToken, token, ...safe } = request || {};
+  // Service options configure this in-process boundary; they are never part of
+  // the public request envelope and must not be persisted or returned.
+  const { authToken, token, service, ...safe } = request || {};
   return safe;
 }
 

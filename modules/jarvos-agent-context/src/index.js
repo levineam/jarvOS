@@ -23,7 +23,7 @@ const DEFAULT_SESSION_THREAD_LOCK_STALE_MS = 30000;
 const DEFAULT_SESSION_THREAD_LOCK_TIMEOUT_MS = 30000;
 
 function loadControlPlaneManager() {
-  return require(path.join(JARVOS_ROOT, 'modules', 'jarvos-control-plane', 'scripts', 'jarvos-manager.js'));
+  return require('@jarvos/control-plane/manager');
 }
 
 function controlPlane(operation, input = {}) {

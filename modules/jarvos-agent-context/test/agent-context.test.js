@@ -6,6 +6,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const test = require('node:test');
+const Module = require('module');
 
 const jarvosPaths = require('../../jarvos-secondbrain/bridge/config/jarvos-paths.js');
 const {
@@ -75,6 +76,29 @@ function withTempVault(fn) {
   return result;
 }
 
+function withControlPlanePackage(fn) {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-control-plane-package-'));
+  const packageDir = path.join(tmp, '@jarvos', 'control-plane');
+  const previousNodePath = process.env.NODE_PATH;
+  fs.mkdirSync(path.dirname(packageDir), { recursive: true });
+  fs.cpSync(path.join(__dirname, '..', '..', 'jarvos-control-plane'), packageDir, { recursive: true });
+  process.env.NODE_PATH = previousNodePath ? `${tmp}${path.delimiter}${previousNodePath}` : tmp;
+  Module._initPaths();
+  const cleanup = () => {
+    if (previousNodePath === undefined) delete process.env.NODE_PATH;
+    else process.env.NODE_PATH = previousNodePath;
+    Module._initPaths();
+    fs.rmSync(tmp, { recursive: true, force: true });
+  };
+  try {
+    const result = fn();
+    return result && typeof result.then === 'function' ? result.finally(cleanup) : (cleanup(), result);
+  } catch (error) {
+    cleanup();
+    throw error;
+  }
+}
+
 test('defaultFrontmatter includes note-capture contract fields', () => {
   const frontmatter = defaultFrontmatter({ project: 'codex' });
   assert.equal(frontmatter.status, 'draft');
@@ -90,28 +114,33 @@ test('control-plane service gives authenticated human and MCP callers the same r
     const service = { statePath: path.join(tmp, 'state.json'), token: 'test-token' };
     process.env.JARVOS_CONTROL_PLANE_TOKEN = service.token;
     process.env.JARVOS_CONTROL_PLANE_STATE_PATH = service.statePath;
-    const input = {
-      authToken: 'test-token', service,
-      principal: { id: 'principal:test' }, actor: { kind: 'agent', harness: 'test' },
-      resource: { machineId: 'machine-test', type: 'workspace', id: 'one' },
-      mutationClass: 'workspace.test', desiredGeneration: '1', commandSpec: { operation: 'test' },
-    };
-    assert.throws(() => controlPlane('list', { service }), /authentication failed/);
-    const human = controlPlane('request', input);
-    assert.equal(human.ok, true);
-    assert.equal(human.request.status, 'approval_required');
-    await assert.rejects(
-      callTool('jarvos_control_plane', {
-        operation: 'approval-state', requestId: human.request.id,
-        service: { requireAuth: false, statePath: service.statePath },
-      }),
-      /authentication failed/,
-    );
-    const mcp = await callTool('jarvos_control_plane', { operation: 'approval-state', authToken: 'test-token', requestId: human.request.id });
-    assert.equal(mcp.isError, false);
-    assert.match(mcp.content[0].text, /approval_required/);
-    const approved = controlPlane('approve', { authToken: 'test-token', requestId: human.request.id, service });
-    assert.equal(approved.request.status, 'approved');
+    await withControlPlanePackage(async () => {
+      const input = {
+        authToken: 'test-token', service,
+        principal: { id: 'principal:test' }, actor: { kind: 'agent', harness: 'test' },
+        resource: { machineId: 'machine-test', type: 'workspace', id: 'one' },
+        mutationClass: 'workspace.test', desiredGeneration: '1', commandSpec: { operation: 'test' },
+      };
+      assert.throws(() => controlPlane('list', { service }), /authentication failed/);
+      const human = controlPlane('request', input);
+      assert.equal(human.ok, true);
+      assert.equal(human.request.status, 'approval_required');
+      assert.equal(human.request.service, undefined);
+      assert.doesNotMatch(fs.readFileSync(service.statePath, 'utf8'), /test-token/);
+      await assert.rejects(
+        callTool('jarvos_control_plane', {
+          operation: 'approval-state', requestId: human.request.id,
+          service: { requireAuth: false, statePath: service.statePath },
+        }),
+        /authentication failed/,
+      );
+      const mcp = await callTool('jarvos_control_plane', { operation: 'approval-state', authToken: 'test-token', requestId: human.request.id });
+      assert.equal(mcp.isError, false);
+      assert.match(mcp.content[0].text, /approval_required/);
+      const approved = controlPlane('approve', { authToken: 'test-token', requestId: human.request.id, service });
+      assert.equal(approved.request.status, 'approved');
+      assert.equal(approved.request.service, undefined);
+    });
   } finally {
     if (previousToken === undefined) delete process.env.JARVOS_CONTROL_PLANE_TOKEN;
     else process.env.JARVOS_CONTROL_PLANE_TOKEN = previousToken;

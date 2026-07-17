@@ -10,6 +10,9 @@
   "bin": {
     "jarvos-mcp": "scripts/jarvos-mcp.js"
   },
+  "dependencies": {
+    "@jarvos/control-plane": "0.1.0"
+  },
   "scripts": {
     "test": "node --test test/*.test.js",
     "mcp": "node scripts/jarvos-mcp.js",
