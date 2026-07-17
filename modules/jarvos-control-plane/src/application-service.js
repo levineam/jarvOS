@@ -53,7 +53,22 @@ function createApplicationService(options = {}) {
     return item;
   };
   const currentFence = (state, actionKey) => (state.keyedFences && state.keyedFences[actionKey]) || 0;
-  const idempotencyKey = (principal, request, input) => `${principal.id}:${input.idempotencyKey || request.actionKey}`;
+  // Hash a structured tuple: principal identifiers and caller keys may both contain
+  // delimiters, so concatenating them can make two distinct identities collide.
+  const idempotencyKey = (principal, request, input) => crypto
+    .createHash('sha256')
+    .update(JSON.stringify([principal.id, input.idempotencyKey || request.actionKey]))
+    .digest('hex');
+  const maxIdempotencyEntries = Number.isInteger(options.maxIdempotencyEntries) && options.maxIdempotencyEntries > 0
+    ? options.maxIdempotencyEntries
+    : 1000;
+  const pruneIdempotency = (state) => {
+    const entries = Object.entries(state.idempotency)
+      .map(([key, requestId]) => ({ key, request: state.requests.find((item) => item.id === requestId) }))
+      .filter((entry) => entry.request)
+      .sort((left, right) => Date.parse(left.request.createdAt) - Date.parse(right.request.createdAt));
+    for (const entry of entries.slice(0, Math.max(0, entries.length - maxIdempotencyEntries))) delete state.idempotency[entry.key];
+  };
 
   function execute(operation, input = {}) {
     const principal = authenticate(input);
@@ -94,13 +109,17 @@ function createApplicationService(options = {}) {
         mutationClass: request.mutationClass, desiredGeneration: request.desiredGeneration, commandSpec: request.commandSpec,
       });
       request.actionKey = command.actionKey;
-      const dedupeKey = idempotencyKey(principal, request, input);
-      const existingId = state.idempotency[dedupeKey];
-      if (existingId) return { ok: true, deduped: true, request: project(requestFor(state, existingId), principal) };
-
       const decision = decidePolicy(request, principal) || {};
       const outcome = decision.outcome || 'require_approval';
       if (!['allow', 'deny', 'defer', 'require_approval'].includes(outcome)) throw new Error('policy returned an invalid outcome');
+      const dedupeKey = idempotencyKey(principal, request, input);
+      const existingId = state.idempotency[dedupeKey];
+      if (existingId && !['deny', 'defer'].includes(outcome)) {
+        const existing = requestFor(state, existingId);
+        if (existing.principal.id !== principal.id) throw new Error('idempotency record is not owned by this principal');
+        requireReadable(principal, existing);
+        return { ok: true, deduped: true, request: project(existing, principal) };
+      }
       const fence = currentFence(state, request.actionKey) + 1;
       state.keyedFences[request.actionKey] = fence;
       request.status = outcome === 'allow' ? 'approved' : outcome === 'deny' ? 'rejected' : outcome === 'defer' ? 'deferred' : 'approval_required';
@@ -114,12 +133,14 @@ function createApplicationService(options = {}) {
       } : null;
       state.requests.push(request);
       state.idempotency[dedupeKey] = request.id;
+      pruneIdempotency(state);
       audit(state, request, request.status, 'request accepted by authenticated application service');
       options.store.save(state, state.revision);
       return { ok: true, request: project(request, principal) };
     }
 
     const request = requestFor(state, input.requestId);
+    requireReadable(principal, request);
     const approval = request.approval;
     if (!approval || request.status !== 'approval_required') throw new Error('request is not awaiting approval');
     if (!has(principal, approval.requiredCapability)) throw new Error('approval capability is not authorized');

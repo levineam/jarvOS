@@ -17,8 +17,9 @@ function fixture(options = {}) {
     store,
     clock: () => time,
     policy: options.policy,
-    canRead: options.canRead || ((principal, record) => !record.principal || record.principal.id === principal.id),
+    canRead: options.canRead || ((principal, record) => !record.principal || record.principal.id === principal.id || principal.id === 'principal:approver'),
     resolveCredential: (credential) => principals[credential] || null,
+    maxIdempotencyEntries: options.maxIdempotencyEntries,
   });
   const request = (credential = 'writer', extra = {}) => service.execute('createRequest', {
     credential, principal: { id: 'principal:forged', capabilities: ['control-plane.approve'] },
@@ -83,6 +84,58 @@ test('createRequest is principal-scoped idempotent after authorization', () => {
   assert.equal(retry.deduped, true);
   assert.equal(retry.request.id, first.request.id);
   assert.equal(store.load().requests.length, 1);
+});
+
+test('structured idempotency keys cannot collide across principals or disclose a cached request', () => {
+  const store = createMemoryApplicationStore();
+  const principals = {
+    first: { id: 'principal:a', capabilities: ['control-plane.read', 'control-plane.mutate'], maxSensitivity: 'internal' },
+    second: { id: 'principal:a:b', capabilities: ['control-plane.read', 'control-plane.mutate'], maxSensitivity: 'internal' },
+  };
+  const service = createApplicationService({
+    store,
+    policy: () => ({ outcome: 'allow' }),
+    canRead: (principal, record) => principal.id === record.principal.id,
+    resolveCredential: (credential) => principals[credential] || null,
+  });
+  const input = (credential, idempotencyKey) => service.execute('createRequest', {
+    credential, idempotencyKey, actor: { kind: 'agent', harness: 'test' },
+    resource: { machineId: 'machine-a', type: 'repository', id: 'one' }, mutationClass: 'workspace.cleanup',
+    desiredGeneration: 'g1', commandSpec: { operation: 'dry-run', arguments: {} },
+  });
+  const first = input('first', 'b:key');
+  const second = input('second', 'key');
+  assert.notEqual(second.request.id, first.request.id);
+  assert.equal(store.load().requests.length, 2);
+});
+
+test('a fresh deny policy decision never returns a previously approved dedupe record', () => {
+  let outcome = 'allow';
+  const { request, store } = fixture({ policy: () => ({ outcome }) });
+  const first = request('writer', { idempotencyKey: 'policy-change' });
+  assert.equal(first.request.status, 'approved');
+  outcome = 'deny';
+  const retried = request('writer', { idempotencyKey: 'policy-change' });
+  assert.equal(retried.deduped, undefined);
+  assert.equal(retried.request.status, 'rejected');
+  assert.equal(store.load().requests.length, 2);
+});
+
+test('approval requires read authorization before an approver can consume it', () => {
+  const { service, request } = fixture({ canRead: (principal, record) => principal.id === record.principal.id });
+  const created = request();
+  assert.throws(
+    () => service.execute('approve', { credential: 'approver', requestId: created.request.id, fence: created.request.approval.fence }),
+    /read is not authorized/,
+  );
+});
+
+test('idempotency retention is bounded', () => {
+  const { request, store } = fixture({ policy: () => ({ outcome: 'allow' }), maxIdempotencyEntries: 2 });
+  request('writer', { idempotencyKey: 'one' });
+  request('writer', { idempotencyKey: 'two' });
+  request('writer', { idempotencyKey: 'three' });
+  assert.equal(Object.keys(store.load().idempotency).length, 2);
 });
 
 test('read projections invoke canRead and structurally redact nested sensitive values and evidence', () => {
