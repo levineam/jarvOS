@@ -26,12 +26,20 @@ protected-resource mutation policy, and public human/agent parity.
   `@jarvos/agent-context`), with host-provided service-module binding,
   server-side credential resolution, and doctor/setup readiness checks
   (SUP-3466, #106; merged as `03ea5df597`).
+- Add public `@jarvos/coding` control-plane compatibility for Claude Code,
+  Codex, and OpenClaw host adapters. Coding lifecycles now resume from durable
+  checkpoints, reassert fences at pull-request and closeout boundaries, and
+  fail closed when submission evidence or the final issue-close result is
+  deferred, failed, or incomplete (SUP-3470, #112).
 
 ### Known Limitations
 - Public CLI/MCP control-plane surfaces still require an installed host that
   configures `JARVOS_CONTROL_PLANE_SERVICE_MODULE` and binds credentials;
   public/minimal installs do not ship private host state or multi-manager
   dogfood.
+- `@jarvos/coding` provides the portable manager and host contracts; live
+  repository credentials, private Paperclip wiring, and host-specific session
+  stores remain the responsibility of the installed host.
 
 ## v0.6.3 — 2026-07-16
 
