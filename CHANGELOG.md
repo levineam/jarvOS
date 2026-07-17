@@ -5,7 +5,7 @@ Release sections describe user-facing jarvOS changes. Historical public-doc sync
 ## [Unreleased]
 
 Part of the v0.7.0 lane (SUP-3497): control-plane application service,
-protected-resource mutation policy, and public parity.
+protected-resource mutation policy, and public human/agent parity.
 
 ### Added
 - Add the core authenticated control-plane application-service boundary for
@@ -20,11 +20,18 @@ protected-resource mutation policy, and public parity.
 - Add an opt-in section-transform seam to `jarvos-secondbrain-journal` so
   hosts can surgically clean recovered Notes scaffold through maintenance
   APIs instead of raw writes (SUP-3493, #108).
+- Expose public control-plane parity so humans and supported agent harnesses
+  share the same authenticated, capability-filtered application-service path:
+  `jarvos-manager` (CLI) and `jarvos_control_plane` (MCP via
+  `@jarvos/agent-context`), with host-provided service-module binding,
+  server-side credential resolution, and doctor/setup readiness checks
+  (SUP-3466, #106; merged as `03ea5df597`).
 
 ### Known Limitations
-- Public CLI/MCP parity for the control-plane application service
-  (SUP-3466, #106) is not yet merged and is deferred out of this
-  [Unreleased] lane pending an explicit merge decision.
+- Public CLI/MCP control-plane surfaces still require an installed host that
+  configures `JARVOS_CONTROL_PLANE_SERVICE_MODULE` and binds credentials;
+  public/minimal installs do not ship private host state or multi-manager
+  dogfood.
 
 ## v0.6.3 — 2026-07-16
 
