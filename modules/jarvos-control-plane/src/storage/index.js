@@ -157,8 +157,25 @@ function createFileStore(rootDir, options = {}) {
       throw error;
     }
 
+    let preserveTakeoverPath = false;
     try {
-      try { const text = fs.readFileSync(takeoverPath, 'utf8'); if (text) lock = JSON.parse(text); } catch (error) { if (error.code === 'ENOENT') return false; throw error; }
+      const takeoverStat = fs.statSync(takeoverPath);
+      if (takeoverStat.dev !== stat.dev || takeoverStat.ino !== stat.ino) {
+        try {
+          fs.renameSync(takeoverPath, lockPath);
+        } catch (error) {
+          if (error.code !== 'EEXIST') throw error;
+          preserveTakeoverPath = true;
+        }
+        return false;
+      }
+      try {
+        const text = fs.readFileSync(takeoverPath, 'utf8');
+        if (text) lock = JSON.parse(text);
+      } catch (error) {
+        if (error.code === 'ENOENT') return false;
+        if (!(error instanceof SyntaxError)) throw error;
+      }
       const ageMs = Date.now() - fs.statSync(takeoverPath).mtimeMs;
       // A matching process-start marker proves this is a live owner; a recycled
       // PID fails the comparison and is recoverable once the stale interval passes.
@@ -172,7 +189,9 @@ function createFileStore(rootDir, options = {}) {
       if (error.code === 'ENOENT') return true;
       throw error;
     } finally {
-      try { fs.unlinkSync(takeoverPath); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+      if (!preserveTakeoverPath) {
+        try { fs.unlinkSync(takeoverPath); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+      }
     }
   }
   function withLock(fn) {

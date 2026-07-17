@@ -77,6 +77,22 @@ test('file store recovers from an orphaned stale lock', () => {
   } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
 });
 
+test('file store recovers from a malformed stale lock', () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-control-plane-malformed-lock-'));
+  try {
+    const lockPath = path.join(tmp, 'state.lock');
+    fs.writeFileSync(lockPath, '{"pid":');
+    const staleAt = new Date(Date.now() - 1000);
+    fs.utimesSync(lockPath, staleAt, staleAt);
+
+    const result = createFileStore(tmp, { staleLockMs: 10, lockTimeoutMs: 1000 })
+      .acquireLease({ key: 'malformed-lock', holder: 'command-1' });
+
+    assert.equal(result.ok, true);
+    assert.equal(fs.existsSync(lockPath), false);
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+});
+
 test('stale-lock recovery never unlinks a fresh lock installed after takeover', () => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-control-plane-lock-race-'));
   const lockPath = path.join(tmp, 'state.lock');
@@ -103,6 +119,38 @@ test('stale-lock recovery never unlinks a fresh lock installed after takeover', 
     assert.equal(JSON.parse(fs.readFileSync(lockPath, 'utf8')).token, 'fresh-owner');
   } finally {
     fs.renameSync = originalRename;
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('stale-lock recovery never takes over a fresh lock installed before takeover', () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-control-plane-lock-pre-takeover-race-'));
+  const lockPath = path.join(tmp, 'state.lock');
+  const originalStat = fs.statSync;
+  try {
+    fs.writeFileSync(lockPath, JSON.stringify({ pid: 999999999, createdAt: '2000-01-01T00:00:00.000Z' }));
+    const staleAt = new Date(Date.now() - 1000);
+    fs.utimesSync(lockPath, staleAt, staleAt);
+    let installedFreshLock = false;
+    fs.statSync = (target, ...args) => {
+      if (target === lockPath && !installedFreshLock) {
+        const staleStat = originalStat(target, ...args);
+        fs.rmSync(lockPath, { force: true });
+        fs.writeFileSync(lockPath, JSON.stringify({ pid: process.pid, token: 'fresh-owner' }));
+        installedFreshLock = true;
+        return staleStat;
+      }
+      return originalStat(target, ...args);
+    };
+
+    assert.throws(
+      () => createFileStore(tmp, { staleLockMs: 10, lockTimeoutMs: 20 }).acquireLease({ key: 'race', holder: 'contender' }),
+      /Timed out acquiring file store lock/
+    );
+    assert.equal(installedFreshLock, true);
+    assert.equal(JSON.parse(fs.readFileSync(lockPath, 'utf8')).token, 'fresh-owner');
+  } finally {
+    fs.statSync = originalStat;
     fs.rmSync(tmp, { recursive: true, force: true });
   }
 });
