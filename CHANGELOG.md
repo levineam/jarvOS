@@ -4,16 +4,36 @@ Release sections describe user-facing jarvOS changes. Historical public-doc sync
 
 ## [Unreleased]
 
+- Nothing yet.
+
+## v0.6.3 — 2026-07-16
+
+Patch release for the GBrain-first provider lane and reconciled public
+secondbrain surfaces.
+
 ### Added
-- Make generated LLM-wiki buildable as a visible, managed Markdown surface from
+- Add the reviewed `@jarvos/ontology` provider pipeline so coding agents can
+  consume a bounded hierarchy-of-meaning context packet rather than parse
+  private ontology files directly. Source-backed secondbrain evidence now enters
+  through reviewable candidate and inquiry records before promotion.
+- Make the generated LLM-wiki a visible, managed Markdown surface built from
   source-backed secondbrain sidecars, with safe rebuild guards and documented
   vault/output defaults.
 
 ### Fixes
-- Prefer explicit jarvOS timezone config over ambient `TZ` so journal and note
-  dates do not drift when shells or CI set generic timezone environment.
+- Prefer explicit jarvOS timezone configuration over ambient `TZ` so journal
+  and note dates do not drift when shells or CI set a generic timezone.
 - Keep live `@jarvos/ontology` data out of publish allowlists; public sample
   ontology files now live under `schema/examples/public-ontology/`.
+- Isolate release smoke journal writes so public release verification does not
+  contaminate a caller's configured journal location.
+
+### Known Limitations
+- `@jarvos/gbrain` remains a GBrain-first resolver integration: it prepares
+  curated local content and recall workflows, but does not implement GBrain or
+  ship a private graph.
+- This patch does not add automatic ingestion of private vault content or AI
+  conversations; curated imports and reviewed promotion remain explicit.
 
 ## v0.6.2 — 2026-06-23
 

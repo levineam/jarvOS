@@ -8,8 +8,9 @@ jarvOS releases are milestone-driven. Ship when the active release scope is veri
 - `v0.1.x` is for bug fixes, documentation corrections, and small install-flow fixes.
 - `v0.2.0` is for meaningful new capabilities or workflow improvements.
 - `v0.6.x` is the current secondbrain hardening lane after the v0.6.0 focused
-  release, v0.6.1 capitalization patch, and v0.6.2 AI coding-tool capture
-  determinism patch.
+  release, v0.6.1 capitalization patch, v0.6.2 AI coding-tool capture
+  determinism patch, and v0.6.3 GBrain-first provider/reconciled-public-surface
+  patch.
 - Future `v0.6.x` patches should name their active Paperclip release parent and
   target version before release readiness is claimed.
 - Before `v1.0.0`, minor releases may include breaking changes, but the release notes must call them out plainly.
@@ -122,13 +123,13 @@ Paperclip is the release source of truth. Issues related to the public `levineam
 
 - `jarvos`
 - `jarvos-release-candidate`
-- the current active release label, such as `release-v0.6.2`
+- the current active release label, such as `release-v0.6.3`
 
 Internal release process work should carry:
 
 - `jarvos`
 - `jarvos-release-ops`
-- the current active release label, such as `release-v0.6.2`
+- the current active release label, such as `release-v0.6.3`
 
 Candidate issues enter release review automatically. Jarvis promotes each candidate to included, release-blocking, post-release, or internal-only during release review.
 

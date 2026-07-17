@@ -315,10 +315,10 @@ is private.**
 
 ## Release Status
 
-`v0.6.2` is the current public preview release. It is a patch on the focused
-v0.6.0 secondbrain cut for AI coding-tool capture determinism, intentional note
-and idea capture, canonical Obsidian routing, source-backed provenance,
-generated knowledge surfaces, and retrieval status.
+`v0.6.3` is the current public preview release. It advances the focused v0.6.0
+secondbrain line with the GBrain-first provider lane: reviewed ontology context
+packets, a visible generated LLM-wiki, and release-safe, portable public
+packaging alongside AI coding-tool capture determinism and retrieval status.
 
 Useful release files:
 
