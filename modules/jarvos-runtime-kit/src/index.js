@@ -187,6 +187,7 @@ function checkRuntime(manifestPath, options = {}) {
     const hostEnvRe = new RegExp(escapeRegExp(hostEnv));
     const hostEnvBindRe = new RegExp(`--env\\s+["']?${escapeRegExp(hostEnv)}=`);
     const credFileEnvRe = new RegExp(escapeRegExp(credFileEnv));
+    const credFileEnvBindRe = new RegExp(`--env\\s+["']?${escapeRegExp(credFileEnv)}=`);
     // Require host env presence and binding independently. sourceContains uses
     // .some() (OR), so a single call would pass when only one pattern exists.
     if (!sourceContains(setupScript, [hostEnvRe])) {
@@ -204,6 +205,8 @@ function checkRuntime(manifestPath, options = {}) {
     }
     if (!sourceContains(setupScript, [credFileEnvRe])) {
       add(errors, `control-plane runtime setup must configure ${credFileEnv} for the MCP host`);
+    } else if (!sourceContains(setupScript, [credFileEnvBindRe])) {
+      add(errors, `control-plane runtime setup must bind ${credFileEnv} into the MCP host environment`);
     }
   }
 

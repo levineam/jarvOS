@@ -352,6 +352,19 @@ test('checkRuntime requires host env presence and --env binding for control-plan
     assert.equal(result.ok, false);
     assert.match(result.errors.join('\n'), /configure JARVOS_CONTROL_PLANE_SERVICE_MODULE for the MCP host/);
 
+    // Credential-file env name alone is not enough — setup must bind the
+    // non-secret path into the MCP host environment too.
+    fs.writeFileSync(path.join(runtimeDir, 'setup.sh'), [
+      '#!/usr/bin/env bash',
+      'cp "$1" "$1.bak"',
+      'mcp add --env "JARVOS_CONTROL_PLANE_SERVICE_MODULE=$JARVOS_CONTROL_PLANE_SERVICE_MODULE" jarvos -- node server.js',
+      'echo "$JARVOS_CONTROL_PLANE_CREDENTIAL_FILE"',
+      '',
+    ].join('\n'), { encoding: 'utf8', mode: 0o755 });
+    result = checkRuntime(manifestPath, { root: tmp });
+    assert.equal(result.ok, false);
+    assert.match(result.errors.join('\n'), /bind JARVOS_CONTROL_PLANE_CREDENTIAL_FILE into the MCP host environment/);
+
     // Host env bound via --env (runtime-agnostic) plus credential-file boundary passes.
     fs.writeFileSync(path.join(runtimeDir, 'setup.sh'), [
       '#!/usr/bin/env bash',
