@@ -37,73 +37,90 @@ if [ ! -f "$TRUST_SCRIPT" ]; then
   exit 1
 fi
 
-# The control-plane MCP tool is only safe when the installed host provides the
-# authenticated application service.  The module path is configuration, not a
-# credential; the service itself owns credential resolution and authorization.
-if [ -z "$CONTROL_PLANE_SERVICE_MODULE" ]; then
-  echo "JARVOS_CONTROL_PLANE_SERVICE_MODULE must name the installed authenticated control-plane host service" >&2
-  exit 1
-fi
-
-if [ ! -f "$CONTROL_PLANE_SERVICE_MODULE" ]; then
-  echo "Configured control-plane host service module does not exist" >&2
-  exit 1
-fi
-
+# Control-plane host bindings are optional on public/minimal installs.
+# - Neither set → register the shared MCP server without host env bindings.
+# - Either set  → require a complete valid pair, verify the host, then bind both
+#   non-secret paths. Never register the raw credential value.
 # The MCP server never accepts a model-supplied credential; it authenticates
 # every control-plane call with a host-bound credential read at runtime. Setup
 # registers only the credential *file path* so the secret never lands on argv
 # or in ~/.codex/config.toml. Ambient JARVOS_CONTROL_PLANE_CREDENTIAL remains
 # valid for non-persisted host sessions, but setup must never pass its value.
-if [ -z "$CONTROL_PLANE_CREDENTIAL_FILE" ]; then
-  echo "JARVOS_CONTROL_PLANE_CREDENTIAL_FILE must point to a host credential file the MCP server reads at runtime" >&2
-  exit 1
-fi
-
-case "$CONTROL_PLANE_CREDENTIAL_FILE" in
-  /*) ;;
-  *)
-    echo "JARVOS_CONTROL_PLANE_CREDENTIAL_FILE must be an absolute path" >&2
+MCP_ENV_ARGS=()
+if [ -n "$CONTROL_PLANE_SERVICE_MODULE" ] || [ -n "$CONTROL_PLANE_CREDENTIAL_FILE" ]; then
+  if [ -z "$CONTROL_PLANE_SERVICE_MODULE" ]; then
+    echo "JARVOS_CONTROL_PLANE_SERVICE_MODULE must name the installed authenticated control-plane host service when control-plane host bindings are configured" >&2
     exit 1
-    ;;
-esac
+  fi
 
-if [ ! -f "$CONTROL_PLANE_CREDENTIAL_FILE" ]; then
-  echo "Configured control-plane credential file does not exist" >&2
-  exit 1
-fi
+  case "$CONTROL_PLANE_SERVICE_MODULE" in
+    /*) ;;
+    *)
+      echo "JARVOS_CONTROL_PLANE_SERVICE_MODULE must be an absolute path" >&2
+      exit 1
+      ;;
+  esac
 
-# Fail closed on group/other-readable credential files before registration.
-# The MCP server re-checks this at runtime; setup rejects early so we never
-# persist a path that cannot be used safely.
-if ! node -e '
-const fs = require("fs");
-const path = process.argv[1];
-const st = fs.statSync(path);
-if (!st.isFile()) process.exit(2);
-if (st.mode & 0o077) process.exit(3);
-if (typeof process.getuid === "function" && st.uid !== 0 && st.uid !== process.getuid()) process.exit(4);
-if (!fs.readFileSync(path, "utf8").replace(/\r?\n$/, "")) process.exit(5);
-' "$CONTROL_PLANE_CREDENTIAL_FILE"; then
-  echo "JARVOS_CONTROL_PLANE_CREDENTIAL_FILE must be a non-empty, owner-only credential file (mode 0600/0400)" >&2
-  exit 1
-fi
+  if [ ! -f "$CONTROL_PLANE_SERVICE_MODULE" ]; then
+    echo "Configured control-plane host service module does not exist" >&2
+    exit 1
+  fi
 
-if ! node "$ROOT/modules/jarvos-control-plane/scripts/jarvos-manager.js" verify-host-service \
-  --service-module "$CONTROL_PLANE_SERVICE_MODULE" >/dev/null; then
-  echo "Configured control-plane host service is not ready" >&2
-  exit 1
+  if [ -z "$CONTROL_PLANE_CREDENTIAL_FILE" ]; then
+    echo "JARVOS_CONTROL_PLANE_CREDENTIAL_FILE must point to a host credential file the MCP server reads at runtime when control-plane host bindings are configured" >&2
+    exit 1
+  fi
+
+  case "$CONTROL_PLANE_CREDENTIAL_FILE" in
+    /*) ;;
+    *)
+      echo "JARVOS_CONTROL_PLANE_CREDENTIAL_FILE must be an absolute path" >&2
+      exit 1
+      ;;
+  esac
+
+  if [ ! -f "$CONTROL_PLANE_CREDENTIAL_FILE" ]; then
+    echo "Configured control-plane credential file does not exist" >&2
+    exit 1
+  fi
+
+  # Fail closed on unsafe credential files before registration. Same bar as the
+  # human CLI and MCP server: absolute path (already checked), owner-only leaf,
+  # trusted ownership, trusted non-writable ancestry, non-empty. Errors never
+  # echo the path or secret; setup rejects early so we never persist a path that
+  # cannot be used safely.
+  if ! node -e '
+const { readTrustedCredentialFile } = require(process.argv[1]);
+readTrustedCredentialFile(process.argv[2]);
+' "$ROOT/modules/jarvos-control-plane/scripts/jarvos-manager.js" "$CONTROL_PLANE_CREDENTIAL_FILE"; then
+    echo "JARVOS_CONTROL_PLANE_CREDENTIAL_FILE must be a non-empty, owner-only credential file in a trusted non-writable location (mode 0600/0400)" >&2
+    exit 1
+  fi
+
+  if ! node "$ROOT/modules/jarvos-control-plane/scripts/jarvos-manager.js" verify-host-service \
+    --service-module "$CONTROL_PLANE_SERVICE_MODULE" >/dev/null; then
+    echo "Configured control-plane host service is not ready" >&2
+    exit 1
+  fi
+
+  # Register non-secret paths only — never the raw credential env value.
+  MCP_ENV_ARGS=(
+    --env "JARVOS_CONTROL_PLANE_SERVICE_MODULE=$CONTROL_PLANE_SERVICE_MODULE"
+    --env "JARVOS_CONTROL_PLANE_CREDENTIAL_FILE=$CONTROL_PLANE_CREDENTIAL_FILE"
+  )
 fi
 
 if codex mcp get jarvos >/dev/null 2>&1; then
   codex mcp remove jarvos >/dev/null
 fi
 
-# Register non-secret paths only — never the raw credential env value.
-codex mcp add --env "JARVOS_CONTROL_PLANE_SERVICE_MODULE=$CONTROL_PLANE_SERVICE_MODULE" \
-  --env "JARVOS_CONTROL_PLANE_CREDENTIAL_FILE=$CONTROL_PLANE_CREDENTIAL_FILE" \
-  jarvos -- node "$MCP_SERVER"
-echo "Registered jarvOS MCP server for Codex: $MCP_SERVER"
+if [ ${#MCP_ENV_ARGS[@]} -gt 0 ]; then
+  codex mcp add "${MCP_ENV_ARGS[@]}" jarvos -- node "$MCP_SERVER"
+  echo "Registered jarvOS MCP server for Codex with control-plane host bindings: $MCP_SERVER"
+else
+  codex mcp add jarvos -- node "$MCP_SERVER"
+  echo "Registered jarvOS MCP server for Codex: $MCP_SERVER"
+fi
 
 mkdir -p "$(dirname "$CODEX_CONFIG")"
 if [ ! -f "$CODEX_CONFIG" ]; then

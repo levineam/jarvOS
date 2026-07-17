@@ -21,38 +21,41 @@ function normalizeOperation(operation) {
   return normalized;
 }
 
+const HOST_SUBJECT = 'control-plane host service module';
+const CREDENTIAL_FILE_SUBJECT = 'control-plane credential file';
+
 // Reject group/other-writable files or directories so a lower-privileged actor
-// cannot substitute the host-service module we require(). Sticky directories
+// cannot substitute a require()/credential path we trust. Sticky directories
 // (shared temp roots) restrict deletion to owners and are allowed.
-function assertNotOtherWritable(target, stat) {
+function assertNotOtherWritable(target, stat, subject = HOST_SUBJECT) {
   const groupOrOtherWritable = stat.mode & 0o022;
   const sticky = stat.mode & 0o1000;
   if (groupOrOtherWritable && !(stat.isDirectory() && sticky)) {
-    throw new Error('control-plane host service module is in a writable location');
+    throw new Error(`${subject} is in a writable location`);
   }
 }
 
-// Reject a module (or an ancestor directory) owned by a different, unprivileged
+// Reject a path (or an ancestor directory) owned by a different, unprivileged
 // user. Permission bits alone are insufficient: a 0644 file an attacker owns in a
 // shared temp root passes the writability check yet can be rewritten at will by
 // its owner. Trusting only files owned by us or by root closes that path.
-function assertTrustedOwnership(target, stat) {
+function assertTrustedOwnership(target, stat, subject = HOST_SUBJECT) {
   const owner = stat.uid;
   if (owner === 0) return;
   if (typeof process.getuid === 'function' && owner === process.getuid()) return;
-  throw new Error('control-plane host service module is owned by an untrusted user');
+  throw new Error(`${subject} is owned by an untrusted user`);
 }
 
-// Validate every directory from the module up to the filesystem root. Checking
+// Validate every directory from the path up to the filesystem root. Checking
 // only the immediate parent leaves higher, attacker-controlled ancestors free to
 // be renamed or swapped out from under us: a hostile non-sticky ancestor lets an
-// attacker relocate the validated subtree and point require() at planted code.
-function assertTrustedAncestry(startDir) {
+// attacker relocate the validated subtree and point us at planted content.
+function assertTrustedAncestry(startDir, subject = HOST_SUBJECT) {
   let dir = startDir;
   while (true) {
     const dirStat = fs.statSync(dir);
-    assertNotOtherWritable(dir, dirStat);
-    assertTrustedOwnership(dir, dirStat);
+    assertNotOtherWritable(dir, dirStat, subject);
+    assertTrustedOwnership(dir, dirStat, subject);
     const parent = path.dirname(dir);
     if (parent === dir) break;
     dir = parent;
@@ -75,10 +78,62 @@ function resolveTrustedServiceModule(modulePath) {
   }
   const stat = fs.statSync(realPath);
   if (!stat.isFile()) throw new Error('control-plane host service module must be a file');
-  assertNotOtherWritable(realPath, stat);
-  assertTrustedOwnership(realPath, stat);
-  assertTrustedAncestry(path.dirname(realPath));
+  assertNotOtherWritable(realPath, stat, HOST_SUBJECT);
+  assertTrustedOwnership(realPath, stat, HOST_SUBJECT);
+  assertTrustedAncestry(path.dirname(realPath), HOST_SUBJECT);
   return realPath;
+}
+
+// Fail-closed credential-file read shared by the human CLI, MCP host binding,
+// and runtime setup. Absolute path, owner-only leaf, trusted ownership, and
+// trusted non-writable ancestry. Never put the path or secret into errors.
+function readTrustedCredentialFile(filePath) {
+  if (typeof filePath !== 'string' || !filePath) {
+    throw new Error('control-plane credential file must be a non-empty path');
+  }
+  if (!path.isAbsolute(filePath)) {
+    throw new Error('control-plane credential file must be an absolute path');
+  }
+  let realPath;
+  try {
+    realPath = fs.realpathSync(filePath);
+  } catch {
+    throw new Error('control-plane credential file does not exist');
+  }
+  let stat;
+  try {
+    stat = fs.statSync(realPath);
+  } catch {
+    throw new Error('control-plane credential file does not exist');
+  }
+  if (!stat.isFile()) {
+    throw new Error('control-plane credential file must be a regular file');
+  }
+  // Owner-only leaf: reject group/other read or write (0600/0400).
+  if (stat.mode & 0o077) {
+    throw new Error('control-plane credential file permissions must be owner-only (e.g. 0600)');
+  }
+  assertTrustedOwnership(realPath, stat, CREDENTIAL_FILE_SUBJECT);
+  try {
+    assertTrustedAncestry(path.dirname(realPath), CREDENTIAL_FILE_SUBJECT);
+  } catch (error) {
+    // Ancestry failures already use the credential subject; rethrow as-is when
+    // safe, otherwise map to a path-free message.
+    if (error && typeof error.message === 'string' && error.message.startsWith(CREDENTIAL_FILE_SUBJECT)) {
+      throw error;
+    }
+    throw new Error('control-plane credential file is in an untrusted location');
+  }
+  let value;
+  try {
+    value = fs.readFileSync(realPath, 'utf8').replace(/\r?\n$/, '');
+  } catch {
+    throw new Error('control-plane credential file could not be read');
+  }
+  if (!value) {
+    throw new Error('control-plane credential file is empty');
+  }
+  return value;
 }
 
 function loadHostService(modulePath) {
@@ -140,10 +195,12 @@ function resolveCliCredential(input) {
     return value;
   }
   if (input.credentialFile) {
-    if (typeof input.credentialFile !== 'string') throw new Error('--credential-file requires a path');
-    const value = fs.readFileSync(input.credentialFile, 'utf8').replace(/\r?\n$/, '');
-    if (!value) throw new Error('credential file is empty');
-    return value;
+    if (typeof input.credentialFile !== 'string') {
+      throw new Error('--credential-file requires an absolute path');
+    }
+    // Same fail-closed bar as MCP/setup: absolute, owner-only leaf, trusted
+    // ownership, trusted non-writable ancestry. Errors never include path/secret.
+    return readTrustedCredentialFile(input.credentialFile);
   }
   if (process.env[CREDENTIAL_ENV]) return process.env[CREDENTIAL_ENV];
   if (typeof input.credential === 'string') {
@@ -167,17 +224,29 @@ function createControlPlaneService(options = {}) {
   };
 }
 
-function coerceNumericFlags(input) {
+// Coerce strict integer fields (CLI argv strings and MCP JSON numbers/strings)
+// so application-service comparisons never mix string "3" with number 3.
+// labelPrefix is "--" for CLI flags and "" for MCP tool fields.
+function coerceIntegerField(input, key, { labelPrefix = '--' } = {}) {
+  const value = input[key];
+  if (value === undefined || value === true || value === null) return input;
+  const label = `${labelPrefix}${key}`;
+  if (typeof value === 'number') {
+    if (!Number.isInteger(value)) throw new Error(`${label} must be an integer`);
+    return input;
+  }
+  if (typeof value === 'boolean') {
+    throw new Error(`${label} must be an integer`);
+  }
+  const text = String(value).trim();
+  if (!/^-?\d+$/.test(text)) throw new Error(`${label} must be an integer`);
+  input[key] = Number.parseInt(text, 10);
+  return input;
+}
+
+function coerceNumericFlags(input, options = {}) {
   for (const key of NUMERIC_CLI_FLAGS) {
-    const value = input[key];
-    if (value === undefined || value === true) continue;
-    if (typeof value === 'number') {
-      if (!Number.isInteger(value)) throw new Error(`--${key} must be an integer`);
-      continue;
-    }
-    const text = String(value).trim();
-    if (!/^-?\d+$/.test(text)) throw new Error(`--${key} must be an integer`);
-    input[key] = Number.parseInt(text, 10);
+    coerceIntegerField(input, key, options);
   }
   return input;
 }
@@ -234,11 +303,14 @@ if (require.main === module) {
 
 module.exports = {
   PUBLIC_OPERATIONS,
+  coerceIntegerField,
+  coerceNumericFlags,
   createControlPlaneService,
   loadHostService,
   normalizeOperation,
   parseCli,
   probeReadiness,
+  readTrustedCredentialFile,
   resolveCliCredential,
   resolveTrustedServiceModule,
   verifyHostService,

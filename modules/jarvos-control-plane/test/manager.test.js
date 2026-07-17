@@ -8,10 +8,12 @@ const path = require('path');
 const { spawnSync } = require('child_process');
 const { createApplicationService, createMemoryApplicationStore } = require('../src');
 const {
+  coerceNumericFlags,
   createControlPlaneService,
   normalizeOperation,
   parseCli,
   probeReadiness,
+  readTrustedCredentialFile,
   resolveCliCredential,
   verifyHostService,
 } = require('../scripts/jarvos-manager.js');
@@ -209,10 +211,12 @@ test('CLI resolves credential from env or file, never requiring it on argv', () 
     // No source at all is an explicit error, not a silent empty credential.
     assert.throws(() => resolveCliCredential({}), /credential required/);
 
-    // Credential file is accepted without ever touching argv.
+    // Credential file is accepted without ever touching argv (owner-only leaf).
+    const secret = 'writer-file-secret';
     const credFile = path.join(tmp, 'cred');
-    fs.writeFileSync(credFile, 'writer\n', 'utf8');
-    assert.equal(resolveCliCredential({ credentialFile: credFile }), 'writer');
+    fs.writeFileSync(credFile, `${secret}\n`, { encoding: 'utf8', mode: 0o600 });
+    fs.chmodSync(credFile, 0o600);
+    assert.equal(resolveCliCredential({ credentialFile: credFile }), secret);
 
     // A raw --credential on argv is rejected by default: a warning does not undo
     // its exposure in process listings and shell history.
@@ -230,6 +234,75 @@ test('CLI resolves credential from env or file, never requiring it on argv', () 
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
   }
+});
+
+test('CLI credential-file matches MCP/setup fail-closed bar without leaking path or secret', () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-cred-strict-'));
+  try {
+    const previous = process.env.JARVOS_CONTROL_PLANE_CREDENTIAL;
+    delete process.env.JARVOS_CONTROL_PLANE_CREDENTIAL;
+    const secret = 'super-secret-never-in-errors';
+
+    // Relative paths fail closed.
+    assert.throws(() => resolveCliCredential({ credentialFile: 'relative/secret' }), /absolute path/);
+    assert.throws(() => readTrustedCredentialFile('relative/secret'), /absolute path/);
+
+    // Owner-only absolute file succeeds.
+    const okFile = path.join(tmp, 'ok.credential');
+    fs.writeFileSync(okFile, `${secret}\n`, { encoding: 'utf8', mode: 0o600 });
+    fs.chmodSync(okFile, 0o600);
+    assert.equal(readTrustedCredentialFile(okFile), secret);
+    assert.equal(resolveCliCredential({ credentialFile: okFile }), secret);
+
+    // Group/other-readable leaf fails closed.
+    const openFile = path.join(tmp, 'open.credential');
+    fs.writeFileSync(openFile, `${secret}\n`, { encoding: 'utf8', mode: 0o644 });
+    fs.chmodSync(openFile, 0o644);
+    assert.throws(() => {
+      try {
+        resolveCliCredential({ credentialFile: openFile });
+      } catch (error) {
+        assert.ok(!String(error.message).includes(secret), 'error must not include secret');
+        assert.ok(!String(error.message).includes(openFile), 'error must not include path');
+        throw error;
+      }
+    }, /owner-only/);
+
+    // Unsafe writable parent (non-sticky) fails closed for ancestry.
+    const unsafeParent = path.join(tmp, 'unsafe-parent');
+    fs.mkdirSync(unsafeParent, { recursive: true });
+    fs.chmodSync(unsafeParent, 0o777);
+    const nested = path.join(unsafeParent, 'nested.credential');
+    fs.writeFileSync(nested, `${secret}\n`, { encoding: 'utf8', mode: 0o600 });
+    fs.chmodSync(nested, 0o600);
+    assert.throws(() => {
+      try {
+        readTrustedCredentialFile(nested);
+      } catch (error) {
+        assert.ok(!String(error.message).includes(secret), 'ancestry error must not include secret');
+        assert.ok(!String(error.message).includes(nested), 'ancestry error must not include path');
+        throw error;
+      }
+    }, /writable location|untrusted location/);
+
+    // Restore parent mode before cleanup so rmSync can traverse.
+    fs.chmodSync(unsafeParent, 0o755);
+
+    if (previous === undefined) delete process.env.JARVOS_CONTROL_PLANE_CREDENTIAL;
+    else process.env.JARVOS_CONTROL_PLANE_CREDENTIAL = previous;
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('coerceNumericFlags accepts integer strings and rejects non-integers safely', () => {
+  const coerced = coerceNumericFlags({ fence: '7' }, { labelPrefix: '' });
+  assert.strictEqual(coerced.fence, 7);
+  // Bare true is the CLI "flag present without value" sentinel; leave it alone.
+  assert.strictEqual(coerceNumericFlags({ fence: true }).fence, true);
+  assert.throws(() => coerceNumericFlags({ fence: '3.5' }), /--fence must be an integer/);
+  assert.throws(() => coerceNumericFlags({ fence: 3.5 }, { labelPrefix: '' }), /fence must be an integer/);
+  assert.throws(() => coerceNumericFlags({ fence: 'nope' }, { labelPrefix: '' }), /fence must be an integer/);
 });
 
 test('host-service module must be an absolute path in a non-writable location', () => {

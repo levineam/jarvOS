@@ -57,7 +57,7 @@
     "module": "modules/jarvos-control-plane/scripts/jarvos-manager.js",
     "hostService": "JARVOS_CONTROL_PLANE_SERVICE_MODULE",
     "credentialFile": "JARVOS_CONTROL_PLANE_CREDENTIAL_FILE",
-    "parity": "Human CLI and agent MCP delegate to the same installed authenticated application service. Setup registers only the non-secret credential file path; the MCP server reads the secret at runtime."
+    "parity": "Human CLI and agent MCP delegate to the same installed authenticated application service. Public/minimal setup registers the shared MCP without host bindings; when either host env is set, both absolute non-secret paths are required and verified. Setup never registers the raw credential value; the MCP server reads the secret at runtime."
   },
   "verification": [
     "codex mcp get jarvos",

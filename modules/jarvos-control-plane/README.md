@@ -53,16 +53,22 @@ zero-argument factory returning one. That host module owns credential
 resolution, read disclosure policy, and the store. The human CLI and MCP
 surface bind the credential server-side (env, credential file, or stdin);
 raw `--credential` on argv is rejected by default because it is visible in
-process listings and shell history. The service establishes the trusted
-principal from that bound credential and ignores any caller-supplied
-authority fields.
+process listings and shell history. `--credential-file` requires an absolute
+path to an owner-only leaf with trusted ownership and trusted non-writable
+ancestry — the same fail-closed bar as MCP and setup — and never puts the path
+or secret into error messages. The service establishes the trusted principal
+from that bound credential and ignores any caller-supplied authority fields.
 
-For persisted MCP registrations (Codex `setup.sh`), bind only a non-secret
-credential *file path* via `JARVOS_CONTROL_PLANE_CREDENTIAL_FILE`. Setup must
-never pass `JARVOS_CONTROL_PLANE_CREDENTIAL=...` through `codex mcp add --env`,
-which would expose the secret on argv and persist it in host config. The MCP
-server reads the file at runtime with owner-only permission checks. Ambient
-`JARVOS_CONTROL_PLANE_CREDENTIAL` remains valid for non-persisted host sessions.
+For persisted MCP registrations (Codex `setup.sh`), public/minimal installs may
+register the shared MCP without host bindings. When a private host is
+configured, bind both absolute non-secret paths
+(`JARVOS_CONTROL_PLANE_SERVICE_MODULE` and
+`JARVOS_CONTROL_PLANE_CREDENTIAL_FILE`). Setup must never pass
+`JARVOS_CONTROL_PLANE_CREDENTIAL=...` through MCP `--env` registration, which
+would expose the secret on argv and persist it in host config. The MCP server
+reads the credential file at runtime with the shared owner-only, ownership, and
+ancestry checks. Ambient `JARVOS_CONTROL_PLANE_CREDENTIAL` remains valid for
+non-persisted host sessions.
 
 ```bash
 export JARVOS_CONTROL_PLANE_SERVICE_MODULE=/absolute/path/to/host-service.js

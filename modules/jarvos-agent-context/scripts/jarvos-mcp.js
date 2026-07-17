@@ -1,14 +1,13 @@
 #!/usr/bin/env node
 'use strict';
 
-const fs = require('fs');
-const path = require('path');
 const readline = require('readline');
 const {
   createNote,
   controlPlane,
   currentWork,
   hydrate,
+  loadControlPlaneManager,
   recall,
   readSessionThread,
   startupBrief,
@@ -19,39 +18,12 @@ const {
 const CREDENTIAL_ENV = 'JARVOS_CONTROL_PLANE_CREDENTIAL';
 const CREDENTIAL_FILE_ENV = 'JARVOS_CONTROL_PLANE_CREDENTIAL_FILE';
 
-// Strict host-credential file binding for persisted MCP sessions. The file path
-// is configuration; the secret is read only at runtime and never accepted as
-// model-visible tool input. Fail closed on missing/empty/world-readable files
-// or untrusted ownership rather than falling through to a weaker source.
+// Strict host-credential file binding for persisted MCP sessions. Shared with
+// the human CLI and runtime setup: absolute path, owner-only leaf, trusted
+// ownership, and trusted non-writable ancestry. Never accept model-visible
+// credentials or put path/secret into errors.
 function readCredentialFile(filePath) {
-  if (typeof filePath !== 'string' || !filePath) {
-    throw new Error(`${CREDENTIAL_FILE_ENV} must be a non-empty path`);
-  }
-  if (!path.isAbsolute(filePath)) {
-    throw new Error(`${CREDENTIAL_FILE_ENV} must be an absolute path`);
-  }
-  let realPath;
-  try {
-    realPath = fs.realpathSync(filePath);
-  } catch {
-    throw new Error('control-plane credential file does not exist');
-  }
-  const stat = fs.statSync(realPath);
-  if (!stat.isFile()) {
-    throw new Error('control-plane credential file must be a regular file');
-  }
-  // Owner-only: reject group/other read or write (0600/0400).
-  if (stat.mode & 0o077) {
-    throw new Error('control-plane credential file permissions must be owner-only (e.g. 0600)');
-  }
-  if (typeof process.getuid === 'function' && stat.uid !== 0 && stat.uid !== process.getuid()) {
-    throw new Error('control-plane credential file is owned by an untrusted user');
-  }
-  const value = fs.readFileSync(realPath, 'utf8').replace(/\r?\n$/, '');
-  if (!value) {
-    throw new Error('control-plane credential file is empty');
-  }
-  return value;
+  return loadControlPlaneManager().readTrustedCredentialFile(filePath);
 }
 
 // Resolve the host-bound control-plane credential for this MCP session.
@@ -326,6 +298,12 @@ async function callTool(name, args = {}) {
     }
     if (!hostCredential) {
       return textResult('control-plane host credential is not configured for this MCP session', true);
+    }
+    // Match CLI numeric semantics for approve fence comparisons (strict ===).
+    try {
+      loadControlPlaneManager().coerceNumericFlags(input, { labelPrefix: '' });
+    } catch (error) {
+      return textResult(error.message || 'control-plane input validation failed', true);
     }
     const result = controlPlane(input.operation, { ...input, credential: hostCredential });
     return textResult(JSON.stringify(result, null, 2), !result.ok);

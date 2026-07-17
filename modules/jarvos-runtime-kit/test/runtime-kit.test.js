@@ -48,6 +48,20 @@ test('validateManifest requires the secure control-plane host-service environmen
   assert.match(result.errors.join('\n'), /JARVOS_CONTROL_PLANE_SERVICE_MODULE/);
 });
 
+test('validateManifest emits a single hostService error when the field is omitted', () => {
+  const result = validateManifest({
+    schemaVersion: 1, id: 'bad-runtime', displayName: 'Bad Runtime', setup: { script: 'setup.sh' },
+    sharedAgentContext: { mcpServer: 'modules/jarvos-agent-context/scripts/jarvos-mcp.js', requiredTools: ['jarvos_hydrate', 'jarvos_control_plane'] },
+    targets: [{ id: 'bad-cli', kind: 'cli', mcp: { supported: true }, hydration: { mode: 'manual', reason: 'test' } }],
+    controlPlane: { module: 'modules/jarvos-control-plane/scripts/jarvos-manager.js' },
+  });
+  assert.equal(result.ok, false);
+  const hostServiceErrors = result.errors.filter((message) => /hostService/.test(message));
+  assert.deepEqual(hostServiceErrors, [
+    'controlPlane.hostService is required when controlPlane is declared',
+  ]);
+});
+
 test('validateManifest rejects missing shared jarvos_hydrate tool', () => {
   const result = validateManifest({
     schemaVersion: 1,
@@ -274,6 +288,137 @@ test('Codex runtime setup uses credential-file binding without registering the s
   assert.doesNotMatch(source, /--env\s+["']?JARVOS_CONTROL_PLANE_CREDENTIAL(?!_FILE)=/);
   const result = checkRuntime(path.join(ROOT, 'runtimes/codex/adapter.json'), { root: ROOT });
   assert.equal(result.ok, true, result.errors.join('\n'));
+});
+
+test('checkRuntime requires host env presence and --env binding for control-plane setup', () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-runtime-kit-cp-setup-'));
+  try {
+    const runtimeDir = path.join(tmp, 'runtimes/sample-runtime');
+    const mcpDir = path.join(tmp, 'modules/jarvos-agent-context/scripts');
+    fs.mkdirSync(runtimeDir, { recursive: true });
+    fs.mkdirSync(mcpDir, { recursive: true });
+    fs.writeFileSync(path.join(mcpDir, 'jarvos-mcp.js'), [
+      "module.exports = { TOOLS: [{ name: 'jarvos_hydrate' }, { name: 'jarvos_control_plane' }] };",
+      '',
+    ].join('\n'), 'utf8');
+    fs.writeFileSync(path.join(runtimeDir, 'README.md'), 'Manual hydration is documented for sample-runtime-cli.\n', 'utf8');
+
+    const baseManifest = {
+      schemaVersion: 1,
+      id: 'sample-runtime',
+      displayName: 'Sample Runtime',
+      setup: { script: 'setup.sh' },
+      sharedAgentContext: {
+        mcpServer: 'modules/jarvos-agent-context/scripts/jarvos-mcp.js',
+        requiredTools: ['jarvos_hydrate', 'jarvos_control_plane'],
+      },
+      targets: [{
+        id: 'sample-runtime-cli',
+        kind: 'cli',
+        mcp: { supported: true },
+        hydration: { mode: 'manual', reason: 'test' },
+      }],
+      controlPlane: {
+        module: 'modules/jarvos-control-plane/scripts/jarvos-manager.js',
+        hostService: 'JARVOS_CONTROL_PLANE_SERVICE_MODULE',
+        credentialFile: 'JARVOS_CONTROL_PLANE_CREDENTIAL_FILE',
+      },
+      configWrites: { backupBeforeWrite: true },
+    };
+    const manifestPath = path.join(runtimeDir, 'adapter.json');
+    fs.writeFileSync(manifestPath, JSON.stringify(baseManifest, null, 2));
+
+    // Host env name alone is not enough — setup must also bind it via --env.
+    fs.writeFileSync(path.join(runtimeDir, 'setup.sh'), [
+      '#!/usr/bin/env bash',
+      'cp "$1" "$1.bak"',
+      'echo "$JARVOS_CONTROL_PLANE_SERVICE_MODULE"',
+      'echo "$JARVOS_CONTROL_PLANE_CREDENTIAL_FILE"',
+      '',
+    ].join('\n'), { encoding: 'utf8', mode: 0o755 });
+    let result = checkRuntime(manifestPath, { root: tmp });
+    assert.equal(result.ok, false);
+    assert.match(result.errors.join('\n'), /bind JARVOS_CONTROL_PLANE_SERVICE_MODULE into the MCP host environment/);
+
+    // --env for something else must fail without the host env token.
+    fs.writeFileSync(path.join(runtimeDir, 'setup.sh'), [
+      '#!/usr/bin/env bash',
+      'cp "$1" "$1.bak"',
+      'mcp add --env "OTHER=1" jarvos -- node server.js',
+      'echo "$JARVOS_CONTROL_PLANE_CREDENTIAL_FILE"',
+      '',
+    ].join('\n'), { encoding: 'utf8', mode: 0o755 });
+    result = checkRuntime(manifestPath, { root: tmp });
+    assert.equal(result.ok, false);
+    assert.match(result.errors.join('\n'), /configure JARVOS_CONTROL_PLANE_SERVICE_MODULE for the MCP host/);
+
+    // Host env bound via --env (runtime-agnostic) plus credential-file boundary passes.
+    fs.writeFileSync(path.join(runtimeDir, 'setup.sh'), [
+      '#!/usr/bin/env bash',
+      'cp "$1" "$1.bak"',
+      'mcp add --env "JARVOS_CONTROL_PLANE_SERVICE_MODULE=$JARVOS_CONTROL_PLANE_SERVICE_MODULE" \\',
+      '  --env "JARVOS_CONTROL_PLANE_CREDENTIAL_FILE=$JARVOS_CONTROL_PLANE_CREDENTIAL_FILE" \\',
+      '  jarvos -- node server.js',
+      '',
+    ].join('\n'), { encoding: 'utf8', mode: 0o755 });
+    result = checkRuntime(manifestPath, { root: tmp });
+    assert.equal(result.ok, true, result.errors.join('\n'));
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('checkRuntime requires live MCP TOOLS to include jarvos_control_plane when controlPlane is declared', () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-runtime-kit-cp-tools-'));
+  try {
+    const runtimeDir = path.join(tmp, 'runtimes/sample-runtime');
+    const mcpDir = path.join(tmp, 'modules/jarvos-agent-context/scripts');
+    fs.mkdirSync(runtimeDir, { recursive: true });
+    fs.mkdirSync(mcpDir, { recursive: true });
+    // Negative: hydrate present, control-plane tool missing.
+    fs.writeFileSync(path.join(mcpDir, 'jarvos-mcp.js'), [
+      "module.exports = { TOOLS: [{ name: 'jarvos_hydrate' }] };",
+      '',
+    ].join('\n'), 'utf8');
+    fs.writeFileSync(path.join(runtimeDir, 'README.md'), 'Manual hydration is documented for sample-runtime-cli.\n', 'utf8');
+    fs.writeFileSync(path.join(runtimeDir, 'setup.sh'), [
+      '#!/usr/bin/env bash',
+      'cp "$1" "$1.bak"',
+      'mcp add --env "JARVOS_CONTROL_PLANE_SERVICE_MODULE=$JARVOS_CONTROL_PLANE_SERVICE_MODULE" \\',
+      '  --env "JARVOS_CONTROL_PLANE_CREDENTIAL_FILE=$JARVOS_CONTROL_PLANE_CREDENTIAL_FILE" \\',
+      '  jarvos -- node server.js',
+      '',
+    ].join('\n'), { encoding: 'utf8', mode: 0o755 });
+    const manifestPath = path.join(runtimeDir, 'adapter.json');
+    fs.writeFileSync(manifestPath, JSON.stringify({
+      schemaVersion: 1,
+      id: 'sample-runtime',
+      displayName: 'Sample Runtime',
+      setup: { script: 'setup.sh' },
+      sharedAgentContext: {
+        mcpServer: 'modules/jarvos-agent-context/scripts/jarvos-mcp.js',
+        requiredTools: ['jarvos_hydrate', 'jarvos_control_plane'],
+      },
+      targets: [{
+        id: 'sample-runtime-cli',
+        kind: 'cli',
+        mcp: { supported: true },
+        hydration: { mode: 'manual', reason: 'test' },
+      }],
+      controlPlane: {
+        module: 'modules/jarvos-control-plane/scripts/jarvos-manager.js',
+        hostService: 'JARVOS_CONTROL_PLANE_SERVICE_MODULE',
+        credentialFile: 'JARVOS_CONTROL_PLANE_CREDENTIAL_FILE',
+      },
+      configWrites: { backupBeforeWrite: true },
+    }, null, 2));
+
+    const result = checkRuntime(manifestPath, { root: tmp });
+    assert.equal(result.ok, false);
+    assert.match(result.errors.join('\n'), /shared MCP server does not expose jarvos_control_plane/);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
 });
 
 test('scaffoldRuntime creates a valid starter adapter', () => {

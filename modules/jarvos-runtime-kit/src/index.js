@@ -62,8 +62,17 @@ function validateManifest(manifest) {
   if (manifest.controlPlane) {
     if (manifest.controlPlane.module !== CONTROL_PLANE_MODULE) add(errors, `controlPlane.module must be ${CONTROL_PLANE_MODULE}`);
     if (!shared.requiredTools?.includes(CONTROL_PLANE_TOOL)) add(errors, `sharedAgentContext.requiredTools must include ${CONTROL_PLANE_TOOL} when controlPlane is declared`);
-    if (!manifest.controlPlane.hostService) add(errors, 'controlPlane.hostService is required when controlPlane is declared');
-    if (manifest.controlPlane.hostService !== 'JARVOS_CONTROL_PLANE_SERVICE_MODULE') add(errors, 'controlPlane.hostService must be JARVOS_CONTROL_PLANE_SERVICE_MODULE');
+    // Omitted hostService is a single "required" error — do not also emit the
+    // "must be JARVOS_CONTROL_PLANE_SERVICE_MODULE" message for the same field.
+    if (!manifest.controlPlane.hostService) {
+      add(errors, 'controlPlane.hostService is required when controlPlane is declared');
+    } else if (manifest.controlPlane.hostService !== 'JARVOS_CONTROL_PLANE_SERVICE_MODULE') {
+      add(errors, 'controlPlane.hostService must be JARVOS_CONTROL_PLANE_SERVICE_MODULE');
+    }
+    if (manifest.controlPlane.credentialFile
+      && manifest.controlPlane.credentialFile !== 'JARVOS_CONTROL_PLANE_CREDENTIAL_FILE') {
+      add(errors, 'controlPlane.credentialFile must be JARVOS_CONTROL_PLANE_CREDENTIAL_FILE');
+    }
   }
 
   for (const [index, target] of (manifest.targets || []).entries()) {
@@ -153,6 +162,11 @@ function checkRuntime(manifestPath, options = {}) {
       const mcp = require(mcpServer);
       const tools = Array.isArray(mcp.TOOLS) ? mcp.TOOLS.map((tool) => tool.name) : [];
       if (!tools.includes(REQUIRED_MCP_TOOL)) add(errors, `shared MCP server does not expose ${REQUIRED_MCP_TOOL}`);
+      // When a runtime declares controlPlane, the live MCP tool surface must
+      // include the control-plane tool — not only jarvos_hydrate.
+      if (manifest.controlPlane && !tools.includes(CONTROL_PLANE_TOOL)) {
+        add(errors, `shared MCP server does not expose ${CONTROL_PLANE_TOOL}`);
+      }
     } catch (error) {
       add(errors, `shared MCP server could not be loaded: ${error.message}`);
     }
@@ -165,8 +179,20 @@ function checkRuntime(manifestPath, options = {}) {
   }
 
   if (manifest.controlPlane && fs.existsSync(setupScript)) {
-    if (!sourceContains(setupScript, [/JARVOS_CONTROL_PLANE_SERVICE_MODULE/, /codex\s+mcp\s+add\s+--env/])) {
-      add(errors, 'control-plane runtime setup must configure JARVOS_CONTROL_PLANE_SERVICE_MODULE for the MCP host');
+    // Manifest-driven: require the declared host/credential env names and an
+    // env binding for the host service. Avoid hardcoding a specific runtime CLI
+    // (e.g. "codex mcp add") so non-Codex adapters can share the same check.
+    const hostEnv = manifest.controlPlane.hostService || 'JARVOS_CONTROL_PLANE_SERVICE_MODULE';
+    const credFileEnv = manifest.controlPlane.credentialFile || 'JARVOS_CONTROL_PLANE_CREDENTIAL_FILE';
+    const hostEnvRe = new RegExp(escapeRegExp(hostEnv));
+    const hostEnvBindRe = new RegExp(`--env\\s+["']?${escapeRegExp(hostEnv)}=`);
+    const credFileEnvRe = new RegExp(escapeRegExp(credFileEnv));
+    // Require host env presence and binding independently. sourceContains uses
+    // .some() (OR), so a single call would pass when only one pattern exists.
+    if (!sourceContains(setupScript, [hostEnvRe])) {
+      add(errors, `control-plane runtime setup must configure ${hostEnv} for the MCP host`);
+    } else if (!sourceContains(setupScript, [hostEnvBindRe])) {
+      add(errors, `control-plane runtime setup must bind ${hostEnv} into the MCP host environment`);
     }
     // Setup may persist only a non-secret credential *file path*. Registering
     // the raw credential env would put the secret on argv and in host config.
@@ -176,8 +202,8 @@ function checkRuntime(manifestPath, options = {}) {
     ])) {
       add(errors, 'control-plane runtime setup must not register JARVOS_CONTROL_PLANE_CREDENTIAL (use JARVOS_CONTROL_PLANE_CREDENTIAL_FILE)');
     }
-    if (!sourceContains(setupScript, [/JARVOS_CONTROL_PLANE_CREDENTIAL_FILE/])) {
-      add(errors, 'control-plane runtime setup must configure JARVOS_CONTROL_PLANE_CREDENTIAL_FILE for the MCP host');
+    if (!sourceContains(setupScript, [credFileEnvRe])) {
+      add(errors, `control-plane runtime setup must configure ${credFileEnv} for the MCP host`);
     }
   }
 

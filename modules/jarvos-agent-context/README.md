@@ -71,7 +71,15 @@ packet as working context without dumping raw private notes.
 
 ## Codex
 
-Prefer the runtime setup script, which registers non-secret host bindings only:
+Prefer the runtime setup script. On a public/minimal install with no private
+host configured, register the shared MCP server alone:
+
+```bash
+./runtimes/codex/setup.sh
+```
+
+When an authenticated host is available, pass both non-secret bindings together
+(absolute paths only; either alone is rejected):
 
 ```bash
 JARVOS_CONTROL_PLANE_SERVICE_MODULE=/absolute/path/to/authenticated-host-service.js \
