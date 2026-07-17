@@ -385,6 +385,69 @@ function formatMigratedBlock(label, content) {
   return `**${label}**\n${trimmed}`;
 }
 
+/**
+ * Strip the exact one-shot recovery scaffold from section content:
+ * optional leading `**Recovered content**` marker and optional leading H1
+ * exactly matching `# <date>`. Leaves all other content/headings untouched.
+ */
+function stripLeadingRecoveryScaffold(content, date) {
+  const expectedDate = String(date || '').trim();
+  const expectedH1 = expectedDate ? `# ${expectedDate}` : null;
+  const lines = String(content || '').split(/\r?\n/);
+  let i = 0;
+
+  while (i < lines.length && lines[i].trim() === '') i += 1;
+
+  if (i < lines.length && lines[i].trim() === '**Recovered content**') {
+    i += 1;
+    while (i < lines.length && lines[i].trim() === '') i += 1;
+  }
+
+  if (expectedH1 && i < lines.length && lines[i].trim() === expectedH1) {
+    i += 1;
+    while (i < lines.length && lines[i].trim() === '') i += 1;
+  }
+
+  return trimOuterBlankLines(lines.slice(i).join('\n')) || '-';
+}
+
+/**
+ * Opt-in section content transforms applied to already-normalized sections.
+ * Ordinary maintenance leaves transforms unset so behavior is unchanged.
+ *
+ * Each transform: { sectionId?: string, heading?: string, transform(content, ctx) }
+ */
+function applySectionTransforms(normalized, transforms, context = {}) {
+  if (!Array.isArray(transforms) || transforms.length === 0) return normalized;
+  if (!normalized || !Array.isArray(normalized.sections)) return normalized;
+
+  const sections = normalized.sections.map((section) => {
+    const match = transforms.find((entry) => {
+      if (!entry || typeof entry.transform !== 'function') return false;
+      if (entry.sectionId && section.id && entry.sectionId === section.id) return true;
+      if (entry.heading && entry.heading === section.heading) return true;
+      return false;
+    });
+    if (!match) return section;
+
+    const next = match.transform(section.content, {
+      ...context,
+      sectionId: section.id,
+      heading: section.heading,
+      date: context.date,
+    });
+    return {
+      ...section,
+      content: trimOuterBlankLines(String(next ?? '')) || '-',
+    };
+  });
+
+  return {
+    ...normalized,
+    sections,
+  };
+}
+
 function appendUniqueLines(existing, additions) {
   const lines = String(existing || '')
     .split(/\r?\n/)
@@ -561,12 +624,12 @@ function detectConflictingJournalWriters(journalDir) {
   return conflicts;
 }
 
-function normalizeSections(original, date, config) {
+function normalizeSections(original, date, config, opts = {}) {
   const desiredSections = buildDesiredSections(config);
   const desiredByHeading = new Map(desiredSections.map((section) => [section.heading, section]));
   const configuredHeadingMap = buildConfiguredHeadingMap(config);
   const configuredById = new Map(desiredSections.map((section) => [section.id, section]));
-  const fetchers = buildSourceFetchers();
+  const fetchers = opts.fetchers || buildSourceFetchers();
   const isToday = date === today();
 
   const withoutSignature = stripSignature(original);
@@ -662,15 +725,27 @@ function normalizeSections(original, date, config) {
     }
 
     renderedSections.push({
+      id: section.id,
       heading: section.heading,
       content: trimOuterBlankLines(content) || '-',
     });
   }
 
-  return {
+  const base = {
     frontmatter: renderFrontmatter(date, config, frontmatter),
     sections: renderedSections,
   };
+
+  // Opt-in only: ordinary callers never pass sectionTransforms.
+  if (opts.sectionTransforms) {
+    return applySectionTransforms(base, opts.sectionTransforms, {
+      date,
+      config,
+      isToday,
+    });
+  }
+
+  return base;
 }
 
 function renderJournal(date, config, normalized) {
@@ -728,7 +803,10 @@ function syncOneDate(date, config, opts = {}) {
     ? readKnownGoodContent(journalDir, date, knownGood)
     : null;
   const source = restoreSource || original;
-  const normalized = normalizeSections(source, date, config);
+  const normalized = normalizeSections(source, date, config, {
+    fetchers: opts.fetchers,
+    sectionTransforms: opts.sectionTransforms,
+  });
   const updated = renderJournal(date, config, normalized);
   const changed = updated !== original;
   const backupReason = restoreSource ? 'stub-restore' : healthBefore.status;
@@ -744,11 +822,28 @@ function syncOneDate(date, config, opts = {}) {
     fs.writeFileSync(journalPath, updated, 'utf8');
   }
 
-  const healthAfter = classifyJournalHealth({
+  let healthAfter = classifyJournalHealth({
     existed: true,
     markdown: changed ? updated : original,
     knownGood,
   });
+
+  // Intentional opt-in section transforms may shrink content (e.g. scaffold strip).
+  // That shrink is the new known-good, not a stale regression against prior state.
+  const intentionalTransformWrite = Boolean(
+    !opts.dryRun
+    && changed
+    && Array.isArray(opts.sectionTransforms)
+    && opts.sectionTransforms.length > 0,
+  );
+  if (intentionalTransformWrite && healthAfter.status === 'stale') {
+    healthAfter = {
+      status: 'healthy',
+      degraded: false,
+      reason: 'Journal updated via intentional section transform',
+      metrics: journalMetrics(updated),
+    };
+  }
 
   if (!opts.dryRun && healthAfter.status === 'healthy') {
     const updatedKnownGoodPath = knownGoodPath(journalDir, date);
@@ -774,6 +869,8 @@ function syncOneDate(date, config, opts = {}) {
     journalPath,
     existed,
     changed,
+    written: Boolean(changed && !opts.dryRun),
+    writeStatus: opts.dryRun ? 'dry-run' : (changed ? 'written' : 'unchanged'),
     healthBefore,
     healthAfter,
     backupPath,
@@ -812,6 +909,7 @@ function main(argv = process.argv.slice(2)) {
 }
 
 module.exports = {
+  applySectionTransforms,
   main,
   classifyJournalHealth,
   isCatastrophicJournalShrink,
@@ -822,6 +920,7 @@ module.exports = {
   renderJournal,
   resolveDateSpec,
   resolveJournalDir,
+  stripLeadingRecoveryScaffold,
   syncOneDate,
   today,
 };
