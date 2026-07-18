@@ -43,6 +43,13 @@ function createReconciler(options = {}) {
       };
     }
 
+    // Reattachment hints (branch/PR/session) may ride on the request or
+    // commandSpec.arguments. They are pointers only — never proof of progress.
+    const reattachmentCheckpoint = request.checkpoint
+      || request.commandSpec?.arguments?.resumeFrom
+      || request.commandSpec?.arguments?.checkpoint
+      || null;
+
     let command = createCommand({
       requestId: request.id,
       policyDecisionId: policyDecision.id,
@@ -53,6 +60,7 @@ function createReconciler(options = {}) {
       commandSpec: request.commandSpec,
       authority: policyDecision.authority,
       provenance: request.provenance,
+      checkpoint: reattachmentCheckpoint,
     });
 
     const reservation = store.putCommandIfAbsent(command);
