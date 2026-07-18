@@ -79,7 +79,7 @@
     "clawpatch:map": "node scripts/clawpatch-runner.js map",
     "clawpatch:status": "node scripts/clawpatch-runner.js status",
     "clawpatch:review:dry-run": "node scripts/clawpatch-runner.js review --limit 1 --dry-run",
-    "test": "bash tests/smoke-test.sh && node --test modules/jarvos-ontology/test/*.test.js && node --test modules/jarvos-agent-context/test/agent-context.test.js && node --test modules/jarvos-control-plane/test/*.test.js && node --test modules/jarvos-runtime-kit/test/*.test.js && node tests/modules-smoke-test.js && node tests/cli-smoke-test.js && node --test tests/doctor-checks-test.js && node --test tests/pack-manifest-test.js && node --test tests/release-readiness-check-test.js && node --test tests/secondbrain-external-integrations-doc-test.js && node --test tests/v05-shipgate-test.js && bash scripts/smoke-test.sh",
+    "test": "bash tests/smoke-test.sh && node --test modules/jarvos-ontology/test/*.test.js && node --test modules/jarvos-agent-context/test/agent-context.test.js && node --test modules/jarvos-control-plane/test/*.test.js && node --test modules/jarvos-coding/test/*.test.js && node --test modules/jarvos-runtime-kit/test/*.test.js && node tests/modules-smoke-test.js && node tests/cli-smoke-test.js && node --test tests/doctor-checks-test.js && node --test tests/pack-manifest-test.js && node --test tests/release-readiness-check-test.js && node --test tests/unreleased-drift-check-test.js && node --test tests/secondbrain-external-integrations-doc-test.js && node --test tests/v05-shipgate-test.js && bash scripts/smoke-test.sh",
     "test:bootstrap": "bash tests/smoke-test.sh",
     "test:modules": "node tests/modules-smoke-test.js",
     "test:structure": "bash scripts/smoke-test.sh",
