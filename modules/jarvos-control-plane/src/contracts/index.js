@@ -443,7 +443,15 @@ function mergeCommandCheckpoint(existing, incoming) {
   if (typeof incoming !== 'object' || Array.isArray(incoming)) {
     return { ...prev, value: incoming };
   }
-  return { ...prev, ...incoming };
+  const next = { ...prev, ...incoming };
+  // Execution output is transient verifier input, not a durable reattachment
+  // hint. Once the reconciler advances beyond post-side-effect, evidenceId is
+  // the compact durable pointer and the full manager payload must be dropped.
+  if (incoming.phase && incoming.phase !== 'post-side-effect'
+    && !Object.prototype.hasOwnProperty.call(incoming, 'execution')) {
+    delete next.execution;
+  }
+  return next;
 }
 
 function lifecycleTransition(command, status, patch = {}) {

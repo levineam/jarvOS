@@ -247,6 +247,15 @@ test('default host composition treats resumeFrom as reattachment hints and still
   const calls = [];
   const adapters = buildAdapters(calls);
   let seenPrInput;
+  let seenFixInput;
+  adapters.fixer.fixAndRerun = async (input) => {
+    seenFixInput = input;
+    calls.push('fixRerun');
+    return {
+      status: 'passed',
+      git: { clean: true, status: 'clean', worktreePath: '/tmp/test-worktree' },
+    };
+  };
   adapters.pullRequest.openPullRequest = async (input) => {
     seenPrInput = input;
     calls.push('pullRequest');
@@ -273,6 +282,7 @@ test('default host composition treats resumeFrom as reattachment hints and still
   assert.equal(wrapped.result.continuity.resumedFromStageIndex, 0);
   assert.equal(seenPrInput.existingPullRequest.url, 'https://example.test/pr/99');
   assert.equal(seenPrInput.reattach.branch, 'SUP-2214/existing');
+  assert.equal(seenFixInput.pullRequest.url, 'https://example.test/pr/99');
   assert.equal(wrapped.result.events.find((event) => event.stage === 'pullRequest').result.url, 'https://example.test/pr/99');
 });
 

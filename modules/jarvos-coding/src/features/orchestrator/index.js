@@ -373,6 +373,7 @@ async function runTakeIssueToDone(input = {}, adapters = {}) {
     baseRef: context.baseRef,
     branchResult: branch,
     worktreeDir: branch?.worktreeDir || null,
+    pullRequest: context.pullRequest,
     reviews: {
       sliceReview,
       holisticReview,

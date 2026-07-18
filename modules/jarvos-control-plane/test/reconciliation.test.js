@@ -163,6 +163,36 @@ test('lifecycleTransition merges phase checkpoints onto existing reattachment hi
   assert.deepEqual(dispatched.lifecycle.at(-1).checkpoint, { phase: 'dispatching' });
 });
 
+test('lifecycleTransition drops transient execution after the verifier phase advances', () => {
+  const { lifecycleTransition, createCommand } = require('../src/index.js');
+  const command = createCommand({
+    requestId: 'req-execution',
+    managerId: 'workspace-manager',
+    resource: { machineId: 'machine-a', type: 'git-repository', id: 'repo-1' },
+    mutationClass: 'workspace.cleanup',
+    desiredGeneration: 'desired-execution',
+    commandSpec: { operation: 'cleanup-worktree', arguments: {} },
+    checkpoint: { branch: 'SUP-2214/existing', pr: 'https://example.test/pr/7' },
+  });
+  const executed = lifecycleTransition(command, 'executed', {
+    checkpoint: { phase: 'post-side-effect', execution: { large: 'manager-output' } },
+  });
+  assert.deepEqual(executed.checkpoint.execution, { large: 'manager-output' });
+
+  const verifying = lifecycleTransition(executed, 'verifying', {
+    checkpoint: { phase: 'verifying' },
+  });
+  assert.equal(Object.prototype.hasOwnProperty.call(verifying.checkpoint, 'execution'), false);
+  assert.equal(verifying.checkpoint.branch, 'SUP-2214/existing');
+  assert.equal(verifying.checkpoint.pr, 'https://example.test/pr/7');
+
+  const terminal = lifecycleTransition(verifying, 'satisfied', {
+    checkpoint: { phase: 'terminal', evidenceId: 'evidence-1' },
+  });
+  assert.equal(Object.prototype.hasOwnProperty.call(terminal.checkpoint, 'execution'), false);
+  assert.equal(terminal.checkpoint.evidenceId, 'evidence-1');
+});
+
 test('unavailable manager port releases the acquired lease', async () => {
   const fixture = buildFixture();
   delete fixture.managers['workspace-manager'];
