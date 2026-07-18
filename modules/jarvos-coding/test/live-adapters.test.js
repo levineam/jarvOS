@@ -8,6 +8,7 @@ const {
   createLiveFixer,
   createLivePaperclipTracker,
   createLivePostMergeSweep,
+  createLivePullRequest,
 } = require('../src/index.js');
 
 test('public package declares a registry-safe control-plane dependency', () => {
@@ -62,6 +63,54 @@ test('pre-PR fixer fails cleanliness closed when the post-fix worktree is dirty'
   });
   assert.equal(result.git.clean, false);
   assert.equal(result.git.status, 'dirty');
+});
+
+test('PR-scoped fixer attaches post-fix git cleanliness to a successful primary pass', async () => {
+  const fixer = createLiveFixer({
+    primaryFixPass: () => ({ status: 'passed' }),
+    run: () => ({ status: 0, stdout: '', stderr: '' }),
+  });
+  const result = await fixer.fixAndRerun({
+    branch: 'SUP-3470/public-jarvos-coding',
+    worktreeDir: '/tmp/SUP-3470',
+    pullRequest: { number: 112, headRefName: 'SUP-3470/public-jarvos-coding' },
+  });
+
+  assert.equal(result.status, 'passed');
+  assert.equal(result.git.clean, true);
+  assert.equal(result.git.worktreePath, '/tmp/SUP-3470');
+});
+
+test('live PR adapter revalidates a merged reattachment by number after branch deletion', async () => {
+  const calls = [];
+  const adapter = createLivePullRequest({
+    repo: 'levineam/jarVOS',
+    run(command, args) {
+      calls.push([command, args]);
+      assert.deepEqual(args.slice(0, 3), ['pr', 'view', '112']);
+      return {
+        status: 0,
+        stdout: JSON.stringify({
+          number: 112,
+          url: 'https://github.com/levineam/jarVOS/pull/112',
+          title: 'Coding compatibility',
+          state: 'MERGED',
+          headRefName: 'SUP-3470/public-jarvos-coding',
+        }),
+        stderr: '',
+      };
+    },
+  });
+
+  const result = await adapter.openPullRequest({
+    branch: 'SUP-3470/public-jarvos-coding',
+    existingPullRequest: { number: 112 },
+  });
+  assert.equal(result.status, 'merged');
+  assert.equal(result.state, 'MERGED');
+  assert.equal(result.liveConfirmed, true);
+  assert.equal(result.reattached, true);
+  assert.equal(calls.length, 1);
 });
 
 test('live tracker defers close until there is merge evidence', async () => {

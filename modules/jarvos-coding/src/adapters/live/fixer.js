@@ -128,7 +128,10 @@ function createLiveFixer(options = {}) {
       }
 
       const primary = primaryFixPass({ repoRootDir, repo, pr, runId: input.runId });
-      const primaryResult = normalizeFixResult('clawpatch-primary', primary);
+      const primaryResult = {
+        ...normalizeFixResult('clawpatch-primary', primary),
+        git: inspectGit(input),
+      };
 
       if (!FALLBACK_STATUSES.has(primaryResult.status) || !enableAutopilotFallback) {
         return primaryResult;
@@ -138,7 +141,11 @@ function createLiveFixer(options = {}) {
       const opts = input.opts || { repo, codexTimeoutMin: input.codexTimeoutMin || 30 };
       const analysis = input.analysis || input.reviews || {};
       const fallback = autopilotFixPass({ repoRootDir, pr, analysis, opts });
-      return { ...normalizeFixResult('pr-autopilot', fallback), primary: primaryResult };
+      return {
+        ...normalizeFixResult('pr-autopilot', fallback),
+        git: inspectGit(input),
+        primary: primaryResult,
+      };
     },
   };
 }
