@@ -32,6 +32,12 @@ protected-resource mutation policy, and public human/agent parity.
   fail closed when submission evidence or the final issue-close result is
   deferred, failed, or incomplete (SUP-3470, #112).
 
+### Fixed
+- Treat placeholder-only `[Unreleased]` bullets as empty release tracking and
+  remove the historical v0.3/SUP-1957 default from unconfigured coding triage,
+  so release drift and missing active-parent state fail visibly instead of
+  silently attaching or reporting success (SUP-3496).
+
 ### Known Limitations
 - Public CLI/MCP control-plane surfaces still require an installed host that
   configures `JARVOS_CONTROL_PLANE_SERVICE_MODULE` and binds credentials;
