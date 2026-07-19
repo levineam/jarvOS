@@ -4,8 +4,10 @@ Release sections describe user-facing jarvOS changes. Historical public-doc sync
 
 ## [Unreleased]
 
-Part of the v0.7.0 lane (SUP-3497): control-plane application service,
-protected-resource mutation policy, and public human/agent parity.
+## v0.7.0 — 2026-07-19
+
+Control-plane release (SUP-3497): authenticated control-plane application
+service, protected-resource mutation policy, and public human/agent parity.
 
 ### Added
 - Add the core authenticated control-plane application-service boundary for

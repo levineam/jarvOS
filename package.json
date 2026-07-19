@@ -1,6 +1,6 @@
 {
   "name": "jarvos-bootstrap",
-  "version": "0.6.3",
+  "version": "0.7.0",
   "description": "Bootstrap installer for jarvOS — sets up a portable personal AI operating layer for compatible agent runtimes",
   "keywords": [
     "jarvos",
