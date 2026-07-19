@@ -315,10 +315,11 @@ is private.**
 
 ## Release Status
 
-`v0.6.3` is the current public preview release. It advances the focused v0.6.0
-secondbrain line with the GBrain-first provider lane: reviewed ontology context
-packets, a visible generated LLM-wiki, and release-safe, portable public
-packaging alongside AI coding-tool capture determinism and retrieval status.
+`v0.7.0` is the current public preview release. It is the post-v0.6.3
+control-plane release: an authenticated control-plane application service, a
+protected-resource mutation policy layer, public human/agent parity for that
+service (`jarvos-manager` CLI and `jarvos_control_plane` MCP), and a portable
+`@jarvos/coding` control-plane compatibility layer for supported agent hosts.
 
 Useful release files:
 
