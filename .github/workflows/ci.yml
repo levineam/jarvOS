@@ -168,6 +168,36 @@ jobs:
         shell: bash
         run: bash scripts/smoke-test.sh
 
+  # The repo's own `npm test` is a 15-command chain covering every module's
+  # unit tests (ontology, agent-context, control-plane, coding, runtime-kit)
+  # plus doctor/pack/release-readiness/ship-gate suites. Until this job
+  # existed, CI ran only `scripts/smoke-test.sh` — one link in that chain —
+  # so the module unit tests never executed on a PR or on main, including the
+  # control-plane tests gating the headline v0.7.0 capability. The README's
+  # documented Quick Start is literally `npm test`, so CI now runs exactly
+  # what the docs tell a new user to run.
+  unit-tests:
+    name: Unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      # Required: the suite's schema tests require `ajv` (a declared
+      # dependency), so `npm test` on a bare checkout fails with
+      # MODULE_NOT_FOUND rather than a real assertion failure.
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run the full test suite
+        shell: bash
+        run: npm test
+
   ci-summary:
     name: CI summary
     runs-on: ubuntu-latest
@@ -177,6 +207,7 @@ jobs:
       - meta-hygiene
       - secret-scan
       - smoke-test
+      - unit-tests
     if: always()
     steps:
       - name: Summarize results
@@ -192,8 +223,9 @@ jobs:
           echo "meta-hygiene       : ${{ needs.meta-hygiene.result }}"
           echo "secret-scan        : ${{ needs.secret-scan.result }}"
           echo "smoke-test         : ${{ needs.smoke-test.result }}"
+          echo "unit-tests         : ${{ needs.unit-tests.result }}"
 
-          for r in "${{ needs.markdown-lint.result }}" "${{ needs.link-check.result }}" "${{ needs.meta-hygiene.result }}" "${{ needs.secret-scan.result }}" "${{ needs.smoke-test.result }}"; do
+          for r in "${{ needs.markdown-lint.result }}" "${{ needs.link-check.result }}" "${{ needs.meta-hygiene.result }}" "${{ needs.secret-scan.result }}" "${{ needs.smoke-test.result }}" "${{ needs.unit-tests.result }}"; do
             if [[ "$r" == "failure" || "$r" == "cancelled" ]]; then
               echo "One or more CI jobs failed/cancelled."
               exit 1
