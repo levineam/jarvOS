@@ -4,6 +4,22 @@ Release sections describe user-facing jarvOS changes. Historical public-doc sync
 
 ## [Unreleased]
 
+Staging area for the active v1.0.0 clean-machine confidence lane (Paperclip
+SUP-3548). These entries are merged on `main` after v0.7.0 and are **not** a
+published release. Publication still requires Andrew approval and a green
+`npm run release:check` after `package.json` is intentionally bumped.
+
+### Fixed
+- Run the full `npm test` suite in CI (with `npm ci`) so module unit tests,
+  release-readiness, and unreleased-drift gates actually execute on every PR
+  and on `main`, instead of only lint/link/secret-scan and the thin smoke
+  script (#115).
+
+### Added
+- Land the orphaned 2026-07-09 `STRATEGY.md` and recommendable public-release
+  plan as durable, reviewable drafts (not ratified work queues), with
+  cold-install and CI premises re-verified against shipped v0.7.0 (#116).
+
 ## v0.7.0 — 2026-07-19
 
 Control-plane release (SUP-3497): authenticated control-plane application
