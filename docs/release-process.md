@@ -10,14 +10,17 @@ jarvOS releases are milestone-driven. Ship when the active release scope is veri
 - `v0.6.x` was the secondbrain hardening lane: the v0.6.0 focused release,
   v0.6.1 capitalization patch, v0.6.2 AI coding-tool capture determinism
   patch, and v0.6.3 GBrain-first provider/reconciled-public-surface patch.
-- `v0.7.0` is the current control-plane lane (SUP-3497): an authenticated
+- `v0.7.0` is the latest shipped public release (SUP-3497): an authenticated
   control-plane application service, a protected-resource mutation policy
   layer, public human/agent parity for that service, and a portable
   `@jarvos/coding` control-plane compatibility layer for supported agent
   hosts.
+- `v1.0.0` is the active target lane (SUP-3548): clean-machine confidence.
+  Draft notes live at `docs/releases/v1.0.0.md`; post-v0.7.0 merged work is
+  tracked under `CHANGELOG.md` `[Unreleased]` until Andrew approves a cut.
 - Future release lanes should name their active Paperclip release parent and
   target version before release readiness is claimed.
-- Before `v1.0.0`, minor releases may include breaking changes, but the release notes must call them out plainly.
+- Before `v1.0.0` is published, minor releases may include breaking changes, but the release notes must call them out plainly.
 
 ## Unreleased Work and Drift
 
@@ -127,13 +130,13 @@ Paperclip is the release source of truth. Issues related to the public `levineam
 
 - `jarvos`
 - `jarvos-release-candidate`
-- the current active release label, such as `release-v0.7.0`
+- the current active release label, such as `release-v1.0.0`
 
 Internal release process work should carry:
 
 - `jarvos`
 - `jarvos-release-ops`
-- the current active release label, such as `release-v0.7.0`
+- the current active release label, such as `release-v1.0.0`
 
 Candidate issues enter release review automatically. Jarvis promotes each candidate to included, release-blocking, post-release, or internal-only during release review.
 
