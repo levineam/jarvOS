@@ -105,7 +105,9 @@ function slugify(title) {
 }
 
 function splitFrontmatter(md) {
-  const text = String(md || '');
+  // Normalise CRLF up front so every downstream line split and trim behaves
+  // the same whether the file was written on macOS, Linux, or Windows.
+  const text = String(md || '').replace(/\r\n/g, '\n');
   if (!text.startsWith('---')) return { frontmatter: '', body: text };
   const end = text.indexOf('\n---', 3);
   if (end === -1) return { frontmatter: '', body: text };
@@ -134,9 +136,14 @@ function parseSections(body) {
   let heading = null;
   let buffer = [];
   const flush = () => {
-    if (heading !== null) sections.set(heading, buffer.join('\n').trim());
+    if (heading === null) return;
+    // A duplicated heading appends rather than replaces, so content in the
+    // first occurrence is never silently dropped from the completeness check.
+    const prior = sections.get(heading);
+    const next = buffer.join('\n').trim();
+    sections.set(heading, prior ? `${prior}\n${next}`.trim() : next);
   };
-  for (const line of String(body || '').split(/\r?\n/)) {
+  for (const line of String(body || '').replace(/\r\n/g, '\n').split('\n')) {
     if (/^##\s+/.test(line)) {
       flush();
       heading = line.trim();

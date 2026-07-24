@@ -154,12 +154,43 @@ test('the empty-projects line does not read as real content to the blank-journal
   }
 });
 
-test('a real project list does count as content', () => {
+test('a populated Projects list does not disguise a wiped journal', () => {
+  // Projects is machine-rendered every pass, so it is never evidence that the
+  // user's own writing survived. If it counted, a journal whose Notes, Ideas,
+  // and Journal Entry had been gutted would still look populated and the
+  // known-good restore would not fire — the exact loss this guard exists for.
   const config = loadConfig();
-  const rendered = renderJournal(TEST_DATE, config, normalizeSections('', TEST_DATE, config, {
-    fetchers: { projects: () => '- [[Alpha]]' },
+  const wiped = renderJournal(TEST_DATE, config, normalizeSections('', TEST_DATE, config, {
+    fetchers: { projects: () => '- [[Alpha]]\n- [[Beta]]\n- [[Gamma]]' },
   }));
-  const health = classifyJournalHealth({ existed: true, markdown: rendered, knownGood: null });
+
+  const health = classifyJournalHealth({ existed: true, markdown: wiped, knownGood: null });
+  assert.equal(health.metrics.meaningfulBodyChars, 0);
+});
+
+test('the user\'s own writing still counts as content', () => {
+  const config = loadConfig();
+  const written = [
+    '---',
+    'journal: Journal',
+    `journal-date: ${TEST_DATE}`,
+    '---',
+    '',
+    '## 🚀 Projects',
+    '- [[Alpha]]',
+    '',
+    '## 📝 Notes',
+    '- [[A real note I wrote]]',
+    '',
+    '## 💡 Ideas',
+    '-',
+    '',
+    '## 📓 Journal Entry',
+    '-',
+    '',
+  ].join('\n');
+
+  const health = classifyJournalHealth({ existed: true, markdown: written, knownGood: null });
   assert.ok(health.metrics.meaningfulBodyChars > 0);
 });
 

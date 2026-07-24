@@ -218,6 +218,47 @@ test('a project title falls back to the filename when frontmatter has none', () 
   assert.equal(project.status, 'active');
 });
 
+test('CRLF files parse the same as LF files', () => {
+  const dir = tmpDir();
+  write(dir, 'Windows.md', completePage('Windows').replace(/\n/g, '\r\n'));
+
+  const [project] = projects.listProjects({ dir });
+  assert.equal(project.title, 'Windows');
+  assert.equal(project.status, 'active');
+  assert.deepEqual(project.missingSections, []);
+});
+
+test('a duplicated heading keeps the content of the first occurrence', () => {
+  const dir = tmpDir();
+  write(dir, 'Dupe.md', [
+    '---',
+    'type: project',
+    'title: Dupe',
+    'status: active',
+    '---',
+    '',
+    '# Dupe',
+    '',
+    '## Goal',
+    'The real goal.',
+    '',
+    '## High-level plan',
+    'Step one.',
+    '',
+    '## Definition of Done',
+    'Shipped.',
+    '',
+    '## Goal',
+    '-',
+    '',
+  ].join('\n'));
+
+  const [project] = projects.listProjects({ dir });
+  // Last-wins would see an empty second "## Goal" and call the project incomplete.
+  assert.deepEqual(project.missingSections, []);
+  assert.match(project.sections.goal, /The real goal\./);
+});
+
 test('JARVOS_PROJECTS_DIR wins over the configured directory', () => {
   const dir = tmpDir();
   const resolved = projects.resolveProjectsDir(

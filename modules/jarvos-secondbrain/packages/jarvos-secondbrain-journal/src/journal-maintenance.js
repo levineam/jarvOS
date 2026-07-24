@@ -186,17 +186,48 @@ function writeJournalState(journalDir, state) {
   fs.writeFileSync(statePath, `${JSON.stringify(state, null, 2)}\n`, 'utf8');
 }
 
+/**
+ * Sections whose entire body is machine-rendered on every maintenance pass.
+ *
+ * Nothing under these headings is evidence that the user's own writing is
+ * still intact, so they are excluded wholesale from `meaningfulBodyChars`.
+ * Excluding only their empty-state placeholder is not enough: a populated
+ * Projects list would otherwise make a journal whose Notes, Ideas, and
+ * Journal Entry had been wiped still look populated, and suppress the
+ * known-good restore that exists to catch exactly that.
+ */
+const GENERATED_SECTION_HEADINGS = new Set([
+  '## 🚀 Projects',
+  "## 📅 Today's Calendar",
+  '## 🔔 Apple Reminders',
+  '## 📎 Paperclip Inbox',
+  '## 🗂️ Notes Created',
+]);
+
+/** Body lines that could be the user's own writing — generated sections excluded. */
+function authoredBodyLines(body) {
+  const lines = [];
+  let generated = false;
+  for (const raw of trimOuterBlankLines(body).split(/\r?\n/)) {
+    const line = raw.trim();
+    if (/^##\s+/.test(line)) {
+      generated = GENERATED_SECTION_HEADINGS.has(line);
+      continue;
+    }
+    if (generated) continue;
+    if (!line || line === SIGNATURE || line === '-') continue;
+    if (isGeneratedPlaceholderLine(line)) continue;
+    lines.push(line);
+  }
+  return lines;
+}
+
 function journalMetrics(markdown) {
   const text = String(markdown || '');
   const { body } = splitFrontmatter(text);
   const sections = parseSections(body).sections.map((section) => section.heading);
   const hasBodyText = trimOuterBlankLines(body).length > 0;
-  const meaningfulBodyChars = trimOuterBlankLines(body)
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter((line) => line && line !== SIGNATURE && line !== '-' && !/^##\s+/.test(line))
-    .filter((line) => !isGeneratedPlaceholderLine(line))
-    .join('\n').length;
+  const meaningfulBodyChars = authoredBodyLines(body).join('\n').length;
   return {
     size: Buffer.byteLength(text, 'utf8'),
     hash: contentHash(text),
