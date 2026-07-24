@@ -209,7 +209,7 @@ function journalMetrics(markdown) {
 }
 
 function isGeneratedPlaceholderLine(line) {
-  return /^-\s+(?:No events today|No reminders due today|No blocked Paperclip issues|No notes created(?: on .*)?|No notes today|No notes yet|\((?:calendar unavailable|reminders unavailable|Paperclip inbox script not found|Paperclip API unavailable)\))$/i.test(line);
+  return /^-\s+(?:No events today|No reminders due today|No blocked Paperclip issues|No notes created(?: on .*)?|No notes today|No notes yet|No ongoing projects|\((?:calendar unavailable|reminders unavailable|projects unavailable|Paperclip inbox script not found|Paperclip API unavailable)\))$/i.test(line);
 }
 
 function sectionCountFromBody(body) {
@@ -501,6 +501,24 @@ function filterLegacyNotesCreatedContent(content) {
 
 function buildSourceFetchers() {
   return {
+    /**
+     * Ongoing projects from the vault Projects record, as wiki-links.
+     *
+     * Unlike the other sources this is not time-bound — the projects you have
+     * are the projects you have, whichever day's entry is being written — so it
+     * renders for backfilled dates too rather than returning null for !isToday.
+     */
+    projects: () => {
+      try {
+        // eslint-disable-next-line global-require
+        const projects = require('../../jarvos-secondbrain-projects/src/projects');
+        const config = projects.loadConfig();
+        return projects.journalProjectLines(projects.listProjects({ config }), config);
+      } catch {
+        return '- (projects unavailable)';
+      }
+    },
+
     'google-calendar': ({ isToday }) => {
       if (!isToday) return null;
       try {
@@ -657,6 +675,12 @@ function normalizeSections(original, date, config, opts = {}) {
     const legacySection = legacySections.find((entry) => entry.heading === section.heading);
 
     if (legacySection) {
+      // 'drop' discards the section outright. Reserved for sections whose
+      // content was a regenerated daily snapshot (calendar, reminders, tracker
+      // inbox) — preserving those under Notes would bury real notes under
+      // stale machine output. Never use it for anything the user typed.
+      if (legacySection.action === 'drop') continue;
+
       const targetSection = configuredById.get(legacySection.migrateContentTo || 'notes');
       if (legacySection.action === 'rename' && targetSection) {
         const filteredContent = filterLegacyNotesCreatedContent(section.content);
@@ -714,8 +738,22 @@ function normalizeSections(original, date, config, opts = {}) {
       if (!trimOuterBlankLines(content)) content = '-';
     } else if (section.source !== 'manual') {
       const fetcher = fetchers[section.source];
-      const fetched = fetcher ? fetcher({ date, isToday, config, section }) : null;
-      if (isToday) {
+      // A source that throws must cost its own section, never the whole entry.
+      // The bundled fetchers catch internally, but an injected or future one
+      // may not — and losing a day's journal to a flaky data source is exactly
+      // the silent loss this package exists to prevent.
+      let fetched = null;
+      if (fetcher) {
+        try {
+          fetched = fetcher({ date, isToday, config, section });
+        } catch {
+          fetched = null;
+        }
+      }
+      // Most sources are a snapshot of *that day* and must never be
+      // back-written onto an older entry. Projects are current-state, not
+      // day-scoped, so they render on backfilled dates too.
+      if (isToday || section.source === 'projects') {
         content = fetched || existingContent || '-';
       } else {
         content = existingContent || '-';

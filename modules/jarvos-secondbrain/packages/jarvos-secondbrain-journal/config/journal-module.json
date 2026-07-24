@@ -17,10 +17,10 @@
   "sections": {
     "required": [
       {
-        "id": "todays-calendar",
-        "heading": "## 📅 Today's Calendar",
-        "source": "google-calendar",
-        "description": "Today's events from Google Calendar via gog"
+        "id": "projects",
+        "heading": "## 🚀 Projects",
+        "source": "projects",
+        "description": "Ongoing projects from the vault Projects record, as wiki-links. The orientation surface: what you are actually working on, and the shared reference point between you and your assistants. Owned by jarvos-secondbrain-projects."
       },
       {
         "id": "notes",
@@ -42,27 +42,8 @@
       }
     ],
 
-    "optional": [
-      {
-        "id": "apple-reminders",
-        "heading": "## 🔔 Apple Reminders",
-        "source": "apple-reminders",
-        "enabled": true,
-        "description": "Today's due reminders from Apple Reminders via remindctl"
-      },
-      {
-        "id": "paperclip-inbox",
-        "heading": "## 📎 Paperclip Inbox",
-        "source": "paperclip",
-        "enabled": true,
-        "description": "Assigned Paperclip issues needing attention — shows blocked issues assigned to Jarvis or Michael. Read-only snapshot; sorted by priority.",
-        "filter": {
-          "assignees": ["jarvis", "michael"],
-          "statuses": ["blocked"],
-          "doc": "Only blocked issues are surfaced here. Scope defined in scripts/journal-paperclip-inbox.js."
-        }
-      }
-    ]
+    "optional": [],
+    "$optional_doc": "Empty by design. Today's Calendar, Apple Reminders, and Paperclip Inbox were removed in favour of a simpler journal — see migration.legacySections. Add new opt-in sections here."
   },
 
   "ordering": {
@@ -83,7 +64,23 @@
   },
 
   "migration": {
+    "$actions_doc": "'rename' folds content into migrateContentTo. 'remove' preserves content as a labelled block under Notes. 'drop' discards the section and its content — use it only for sections whose content was a regenerated daily snapshot, never for anything the user typed.",
     "legacySections": {
+      "todays-calendar": {
+        "heading": "## 📅 Today's Calendar",
+        "action": "drop",
+        "doc": "Removed to keep the journal focused on what the user writes. Content was a daily snapshot re-fetched from the calendar, so there is nothing to preserve — folding stale event lists into Notes would be noise. Existing journal files are not rewritten in bulk; a file only loses the section if maintenance touches it."
+      },
+      "apple-reminders": {
+        "heading": "## 🔔 Apple Reminders",
+        "action": "drop",
+        "doc": "Removed for the same reason as Today's Calendar: a regenerated daily snapshot, not authored content. Reminders remain in Apple Reminders, which is their source of truth."
+      },
+      "paperclip-inbox": {
+        "heading": "## 📎 Paperclip Inbox",
+        "action": "drop",
+        "doc": "Removed. Issue-tracker state belongs in the tracker; the journal's job is the human-readable surface. The Projects section is the replacement orientation view."
+      },
       "current-focus": {
         "heading": "## 🎯 Current Focus",
         "action": "remove",
