@@ -298,3 +298,52 @@ test('creating a project cannot collide with the generated index', () => {
   assert.throws(() => projects.createProject({ title: 'index', dir }), /collides with the generated index/);
   assert.deepEqual(projects.listProjects({ dir }), []);
 });
+
+/**
+ * The shared-config bridge throws deliberately when the resolved vault is stale
+ * or outside JARVOS_REQUIRE_CANONICAL_VAULT. tryResolveSharedConfig() used to
+ * catch everything and return null, so resolveProjectsDir() dropped through to
+ * $HOME/Vaults/Vault v3/Projects -- turning a fail-closed guard into a silent
+ * write into a dead vault. Nothing asserted this, which is why it shipped.
+ */
+test('a fail-closed vault guard rejection is not swallowed into a $HOME fallback', () => {
+  const saved = {
+    required: process.env.JARVOS_REQUIRE_CANONICAL_VAULT,
+    vault: process.env.JARVOS_VAULT_DIR,
+    projects: process.env.JARVOS_PROJECTS_DIR,
+  };
+  try {
+    // JARVOS_PROJECTS_DIR would short-circuit before the bridge is consulted.
+    delete process.env.JARVOS_PROJECTS_DIR;
+    process.env.JARVOS_REQUIRE_CANONICAL_VAULT = path.join(os.tmpdir(), 'required-canonical-vault');
+    process.env.JARVOS_VAULT_DIR = path.join(os.tmpdir(), 'somewhere-else-entirely');
+
+    assert.throws(
+      () => projects.resolveProjectsDir(),
+      /outside the required canonical vault/,
+      'the guard must propagate rather than resolving to a $HOME-derived path',
+    );
+  } finally {
+    for (const [key, value] of [
+      ['JARVOS_REQUIRE_CANONICAL_VAULT', saved.required],
+      ['JARVOS_VAULT_DIR', saved.vault],
+      ['JARVOS_PROJECTS_DIR', saved.projects],
+    ]) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+});
+
+test('an absent bridge is still tolerated and falls back', () => {
+  // The other half of the contract: a standalone install with no bridge must
+  // keep working. Only MODULE_NOT_FOUND is swallowed.
+  const saved = process.env.JARVOS_PROJECTS_DIR;
+  try {
+    process.env.JARVOS_PROJECTS_DIR = path.join(os.tmpdir(), 'explicit-projects-dir');
+    assert.equal(projects.resolveProjectsDir(), path.join(os.tmpdir(), 'explicit-projects-dir'));
+  } finally {
+    if (saved === undefined) delete process.env.JARVOS_PROJECTS_DIR;
+    else process.env.JARVOS_PROJECTS_DIR = saved;
+  }
+});

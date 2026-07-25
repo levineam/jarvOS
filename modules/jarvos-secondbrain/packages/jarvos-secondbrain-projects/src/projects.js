@@ -22,15 +22,35 @@ const path = require('path');
 
 const CONFIG_PATH = path.join(__dirname, '..', 'config', 'projects-module.json');
 
-/** Resolve the shared vault config if the bridge is present; tolerate its absence. */
+/**
+ * Resolve the shared vault config if the bridge is present.
+ *
+ * Only the bridge being ABSENT is tolerable -- this package has to work
+ * standalone. A rejection from `resolveConfig()` is not: it throws
+ * deliberately, as a fail-closed guard, when the resolved vault is the stale
+ * `~/Documents/Vault v3` or falls outside `JARVOS_REQUIRE_CANONICAL_VAULT`
+ * (a sandboxed runtime with an unexpected `$HOME`).
+ *
+ * Swallowing that turned the guard into a silent fallback: `resolveProjectsDir`
+ * dropped through to `$HOME/Vaults/Vault v3/Projects`, `mkdirSync` conjured
+ * that path into existence, and the Projects record was written into a dead
+ * vault -- while the journal rendered `- (projects unavailable)` over the real
+ * list. `journal-maintenance.js` calls the same `resolveConfig()` unguarded and
+ * fails closed, so the two halves of this feature disagreed about one guard.
+ *
+ * Resolving the module and calling it are therefore separate steps: only the
+ * `require` is caught.
+ */
 function tryResolveSharedConfig() {
+  let resolveConfig;
   try {
     // eslint-disable-next-line global-require
-    const { resolveConfig } = require('../../../bridge/config');
-    return resolveConfig();
-  } catch {
-    return null;
+    ({ resolveConfig } = require('../../../bridge/config'));
+  } catch (err) {
+    if (err && err.code === 'MODULE_NOT_FOUND') return null;
+    throw err;
   }
+  return resolveConfig();
 }
 
 function loadConfig({ configFile } = {}) {
