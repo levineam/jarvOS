@@ -301,6 +301,27 @@ function contractSignature(config) {
   return contentHash(headings.join('\u0000'));
 }
 
+/**
+ * True when an entry's headings are exactly the currently-configured contract,
+ * in order.
+ *
+ * This is what makes the guard safe for snapshots written before signatures
+ * existed — i.e. every snapshot already on disk when this shipped, which is the
+ * only population the migration wedge could ever affect. A signature cannot be
+ * compared against a snapshot that has none, so the shape of the entry is used
+ * instead: if it holds precisely the sections the contract now asks for, then a
+ * shrink against the older snapshot is explained by the contract change and the
+ * snapshot should be refreshed. If the entry is missing configured sections it
+ * is genuinely damaged, and the shrink guard and restore path must still fire.
+ */
+function structureMatchesContract(sections, config) {
+  const desired = buildDesiredSections(config || {}).map((section) => String(section.heading).trim());
+  if (!desired.length) return false;
+  const have = (sections || []).map((heading) => String(heading).trim());
+  if (have.length !== desired.length) return false;
+  return desired.every((heading, index) => have[index] === heading);
+}
+
 function classifyJournalHealth({ existed, markdown, knownGood, contract, config }) {
   if (!existed) {
     return {
@@ -326,13 +347,8 @@ function classifyJournalHealth({ existed, markdown, knownGood, contract, config 
   // that boundary. Treat the entry as healthy so the snapshot is refreshed to the
   // new shape on this pass rather than frozen at the old one. Snapshots written
   // before signatures existed carry none, and are trusted as before.
-  const contractChanged = Boolean(
-    contract && knownGood && knownGood.contractSignature && knownGood.contractSignature !== contract,
-  );
-
   if (
-    !contractChanged
-    && knownGood
+    knownGood
     && knownGood.size
     && knownGood.sectionCount
     && metrics.hash !== knownGood.hash
@@ -977,7 +993,28 @@ function syncOneDate(date, config, opts = {}) {
     };
   }
 
-  if (!opts.dryRun && healthAfter.status === 'healthy') {
+  // The known-good snapshot must also refresh across a section-contract change,
+  // not only when the entry reads `healthy`.
+  //
+  // Retiring a section shrinks every entry, so the first pass after the change
+  // reports `stale` against the old snapshot. If refresh only ran on `healthy`,
+  // the snapshot would stay pinned to pre-migration content and every later pass
+  // would repeat the same comparison — permanently frozen. A genuine truncation
+  // afterwards would then restore the pre-migration entry over whatever the user
+  // had written since.
+  //
+  // Gated on the entry's structure matching the current contract, so this cannot
+  // become a blanket bypass: an entry MISSING configured sections is real damage,
+  // stays `stale`, and keeps its old snapshot for the restore path. Health
+  // classification itself is deliberately untouched — only the refresh decision
+  // knows about contract migrations.
+  const contractMigrated = Boolean(
+    knownGood
+    && knownGood.contractSignature !== contract
+    && structureMatchesContract(healthAfter.metrics && healthAfter.metrics.sections, config)
+  );
+
+  if (!opts.dryRun && (healthAfter.status === 'healthy' || contractMigrated)) {
     const updatedKnownGoodPath = knownGoodPath(journalDir, date);
     fs.mkdirSync(path.dirname(updatedKnownGoodPath), { recursive: true });
     fs.writeFileSync(updatedKnownGoodPath, changed ? updated : original, 'utf8');
@@ -1046,6 +1083,7 @@ module.exports = {
   main,
   classifyJournalHealth,
   contractSignature,
+  structureMatchesContract,
   isCatastrophicJournalShrink,
   detectConflictingJournalWriters,
   journalMetrics,

@@ -282,6 +282,13 @@ function createProject({ title, dir, config = loadConfig(), now = new Date(), ..
   fs.mkdirSync(projectsDir, { recursive: true });
 
   const filePath = path.join(projectsDir, `${clean}.md`);
+  // The generated index is not a project. Without this, `new "Index"` writes
+  // Index.md and the caller's follow-up writeIndex() overwrites it — the same
+  // inode on a case-insensitive filesystem — silently replacing a page the CLI
+  // just reported creating.
+  if (path.basename(filePath).toLowerCase() === indexFilename(config).toLowerCase()) {
+    throw new Error(`"${clean}" collides with the generated index (${indexFilename(config)}); pick another title`);
+  }
   if (fs.existsSync(filePath)) throw new Error(`project already exists: ${filePath}`);
 
   const created = now.toISOString().slice(0, 10);

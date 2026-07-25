@@ -4,6 +4,7 @@ const assert = require('node:assert/strict');
 const {
   classifyJournalHealth,
   contractSignature,
+  structureMatchesContract,
   loadConfig,
   normalizeSections,
   renderJournal,
@@ -223,69 +224,40 @@ test('an entry already in the new shape is left alone', () => {
   assert.ok(!output.includes('migrated'));
 });
 
-test('retiring a section does not freeze the known-good snapshot', () => {
-  // The shrink guard compares an entry against its own past self. Across a
-  // contract change every entry legitimately loses sections, so without a
-  // signature the first post-migration pass reports `stale`, the known-good
-  // refresh (which only runs on `healthy`) is skipped, and the snapshot stays
-  // pinned to pre-migration content forever. A later truncation would then
-  // restore that stale entry over the user's newer writing.
+test('classifyJournalHealth is unchanged by the migration fix', () => {
+  // The wedge is fixed in the snapshot-refresh decision, NOT here. Health
+  // classification must keep flagging a shrink, or the restore path loses its
+  // trigger. An earlier attempt relaxed this and broke exactly that.
   const config = loadConfig();
   const current = renderJournal(TEST_DATE, config, normalizeSections('', TEST_DATE, config, {
     fetchers: stubFetchers,
   }));
-
-  // A snapshot taken under the old six-section contract: bigger, more sections.
-  const oldContractKnownGood = {
+  const shrunkAgainst = {
     size: Buffer.byteLength(current, 'utf8') * 3,
     sectionCount: 6,
-    hash: 'old-contract-hash',
-    contractSignature: 'signature-of-the-retired-contract',
-  };
-
-  const contract = contractSignature(config);
-  assert.notEqual(contract, oldContractKnownGood.contractSignature);
-
-  const healed = classifyJournalHealth({
-    existed: true,
-    markdown: current,
-    knownGood: oldContractKnownGood,
-    contract,
-    config,
-  });
-  assert.equal(healed.status, 'healthy', 'a contract change must not read as a shrink');
-
-  // Same numbers, same contract -> a genuine shrink must still be caught.
-  const sameContract = { ...oldContractKnownGood, contractSignature: contract };
-  const stale = classifyJournalHealth({
-    existed: true,
-    markdown: current,
-    knownGood: sameContract,
-    contract,
-    config,
-  });
-  assert.equal(stale.status, 'stale', 'a real shrink under one contract must still be flagged');
-});
-
-test('a snapshot predating signatures is still trusted', () => {
-  const config = loadConfig();
-  const current = renderJournal(TEST_DATE, config, normalizeSections('', TEST_DATE, config, {
-    fetchers: stubFetchers,
-  }));
-  const legacyKnownGood = {
-    size: Buffer.byteLength(current, 'utf8') * 3,
-    sectionCount: 6,
-    hash: 'legacy-hash',
-    // no contractSignature — written before the field existed
+    hash: 'old-hash',
   };
   const health = classifyJournalHealth({
     existed: true,
     markdown: current,
-    knownGood: legacyKnownGood,
+    knownGood: shrunkAgainst,
     contract: contractSignature(config),
     config,
   });
   assert.equal(health.status, 'stale');
+});
+
+test('structureMatchesContract separates a contract change from real damage', () => {
+  const config = loadConfig();
+  const desired = config.sections.required.map((section) => section.heading);
+
+  // Exactly the configured contract -> a shrink is explained by the migration.
+  assert.equal(structureMatchesContract(desired, config), true);
+  // Missing a configured section -> real loss, must not be excused.
+  assert.equal(structureMatchesContract(desired.slice(1), config), false);
+  // Extra section, or wrong order -> not the current contract.
+  assert.equal(structureMatchesContract([...desired, '## Extra'], config), false);
+  assert.equal(structureMatchesContract([desired[1], desired[0], ...desired.slice(2)], config), false);
 });
 
 test('a renamed generated heading is still excluded from authored content', () => {
@@ -310,4 +282,74 @@ test('a renamed generated heading is still excluded from authored content', () =
     config: renamed,
   });
   assert.equal(health.metrics.meaningfulBodyChars, 0);
+});
+
+test('the known-good snapshot refreshes across a contract migration', () => {
+  // The real regression test for the wedge: seed a pre-migration snapshot the way
+  // main's code would have written it (more sections, no signature), run a real
+  // maintenance pass, and assert the snapshot moved forward instead of freezing.
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const { syncOneDate, today } = require('../packages/jarvos-secondbrain-journal/src/journal-maintenance.js');
+
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-contract-migration-'));
+  const journalDir = path.join(tmp, 'Vault', 'Journal');
+  fs.mkdirSync(journalDir, { recursive: true });
+
+  const previousJournalDir = process.env.JARVOS_JOURNAL_DIR;
+  const previousProjectsDir = process.env.JARVOS_PROJECTS_DIR;
+  process.env.JARVOS_JOURNAL_DIR = journalDir;
+  process.env.JARVOS_PROJECTS_DIR = path.join(tmp, 'Vault', 'Projects');
+
+  try {
+    const config = loadConfig();
+    const date = today();
+
+    const preMigration = [
+      '---', 'journal: Journal', `journal-date: ${date}`, '---', '',
+      "## 📅 Today's Calendar", '- 9:00 AM Standup', '',
+      '## 📝 Notes', '- [[A note the user wrote]]', '',
+      '## 💡 Ideas', '- an idea', '',
+      '## 📓 Journal Entry', 'Evening reflection.', '',
+      '## 🔔 Apple Reminders', '- Buy milk', '',
+      '## 📎 Paperclip Inbox', '- SUP-1: something', '',
+    ].join('\n');
+    fs.writeFileSync(path.join(journalDir, `${date}.md`), preMigration, 'utf8');
+
+    // A snapshot exactly as the previous contract would have recorded it.
+    const stateDir = path.join(tmp, 'Vault', '.jarvos', 'journal-maintenance');
+    fs.mkdirSync(path.join(stateDir, 'known-good'), { recursive: true });
+    fs.writeFileSync(path.join(stateDir, 'known-good', `${date}.md`), preMigration, 'utf8');
+    fs.writeFileSync(path.join(stateDir, 'state.json'), JSON.stringify({
+      version: 1,
+      dates: {
+        [date]: {
+          date,
+          size: Buffer.byteLength(preMigration, 'utf8'),
+          hash: 'pre-migration-hash',
+          sectionCount: 6,
+          sections: ["## 📅 Today's Calendar", '## 📝 Notes', '## 💡 Ideas', '## 📓 Journal Entry', '## 🔔 Apple Reminders', '## 📎 Paperclip Inbox'],
+          knownGoodPath: path.join(stateDir, 'known-good', `${date}.md`),
+          // no contractSignature — main's code never wrote one
+        },
+      },
+    }, null, 2), 'utf8');
+
+    syncOneDate(date, config, { dryRun: false, fetchers: { projects: () => '- [[Alpha]]' } });
+
+    const after = JSON.parse(fs.readFileSync(path.join(stateDir, 'state.json'), 'utf8'));
+    const entry = after.dates[date];
+    assert.equal(entry.sectionCount, 4, 'snapshot must move to the new contract, not stay frozen at 6');
+    assert.ok(entry.contractSignature, 'snapshot must now carry a contract signature');
+
+    const snapshot = fs.readFileSync(path.join(stateDir, 'known-good', `${date}.md`), 'utf8');
+    assert.ok(!snapshot.includes('Apple Reminders'), 'snapshot must not still hold pre-migration sections');
+    assert.match(snapshot, /A note the user wrote/, 'the user\'s own content must survive into the snapshot');
+  } finally {
+    if (previousJournalDir === undefined) delete process.env.JARVOS_JOURNAL_DIR;
+    else process.env.JARVOS_JOURNAL_DIR = previousJournalDir;
+    if (previousProjectsDir === undefined) delete process.env.JARVOS_PROJECTS_DIR;
+    else process.env.JARVOS_PROJECTS_DIR = previousProjectsDir;
+  }
 });

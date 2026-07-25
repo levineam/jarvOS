@@ -289,3 +289,12 @@ test('a genuinely empty projects directory still reports no projects', () => {
 test('listProjects still flattens an unreadable directory to an empty list', () => {
   assert.deepEqual(projects.listProjects({ dir: '/definitely/not/a/directory' }), []);
 });
+
+test('creating a project cannot collide with the generated index', () => {
+  const dir = tmpDir();
+  // Would otherwise write Index.md and then be overwritten by writeIndex() on a
+  // case-insensitive filesystem, silently discarding the page just created.
+  assert.throws(() => projects.createProject({ title: 'Index', dir }), /collides with the generated index/);
+  assert.throws(() => projects.createProject({ title: 'index', dir }), /collides with the generated index/);
+  assert.deepEqual(projects.listProjects({ dir }), []);
+});

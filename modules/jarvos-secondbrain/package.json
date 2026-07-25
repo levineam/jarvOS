@@ -7,7 +7,8 @@
     "packages/jarvos-ambient",
     "packages/jarvos-secondbrain-journal",
     "packages/jarvos-secondbrain-notes",
-    "packages/jarvos-secondbrain-wiki"
+    "packages/jarvos-secondbrain-wiki",
+    "packages/jarvos-secondbrain-projects"
   ],
   "scripts": {
     "onboard:shared-vault": "node bridge/config/src/shared-vault-onboarding.js",
