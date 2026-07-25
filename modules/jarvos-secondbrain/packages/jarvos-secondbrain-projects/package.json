@@ -1,0 +1,28 @@
+{
+  "name": "jarvos-secondbrain-projects",
+  "version": "1.0.0",
+  "description": "JarvOS secondbrain — the Projects record: one markdown page per project holding Goal, High-level plan, and Definition of Done",
+  "main": "src/projects.js",
+  "bin": {
+    "jarvos-projects": "src/projects-cli.js"
+  },
+  "scripts": {
+    "start": "node src/projects-cli.js list",
+    "check": "node src/projects-cli.js check"
+  },
+  "keywords": [
+    "jarvos",
+    "projects",
+    "secondbrain"
+  ],
+  "license": "UNLICENSED",
+  "private": true,
+  "dependencies": {},
+  "engines": {
+    "node": ">=18"
+  },
+  "exports": {
+    ".": "./src/projects.js",
+    "./cli": "./src/projects-cli.js"
+  }
+}
