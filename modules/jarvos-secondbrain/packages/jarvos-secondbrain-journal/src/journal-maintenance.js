@@ -322,7 +322,30 @@ function structureMatchesContract(sections, config) {
   return desired.every((heading, index) => have[index] === heading);
 }
 
-function classifyJournalHealth({ existed, markdown, knownGood, contract, config }) {
+/**
+ * True when every authored line in `priorMarkdown` still appears in
+ * `currentMarkdown`.
+ *
+ * This is the safety property that makes refreshing the known-good snapshot
+ * across a contract migration sound. Checking the entry's *structure* is
+ * useless here: the candidate is always freshly rendered output, which by
+ * construction carries exactly the configured sections, so a structure check is
+ * vacuously true on every write path.
+ *
+ * Content is what actually distinguishes the two cases. A contract migration
+ * drops machine-rendered sections, which `authoredBodyLines` already ignores,
+ * so every authored line survives. Real damage — a bad mobile sync gutting
+ * Notes and Journal Entry — loses authored lines, and must leave the old
+ * snapshot untouched so the restore path can still recover it.
+ */
+function authoredContentPreserved(currentMarkdown, priorMarkdown, config) {
+  const prior = authoredBodyLines(splitFrontmatter(String(priorMarkdown || '')).body, config);
+  if (!prior.length) return true;
+  const current = new Set(authoredBodyLines(splitFrontmatter(String(currentMarkdown || '')).body, config));
+  return prior.every((line) => current.has(line));
+}
+
+function classifyJournalHealth({ existed, markdown, knownGood, config }) {
   if (!existed) {
     return {
       status: 'missing',
@@ -342,11 +365,6 @@ function classifyJournalHealth({ existed, markdown, knownGood, contract, config 
     };
   }
 
-  // A recorded signature that no longer matches means the section contract
-  // itself changed since the snapshot; the shrink comparison is not valid across
-  // that boundary. Treat the entry as healthy so the snapshot is refreshed to the
-  // new shape on this pass rather than frozen at the old one. Snapshots written
-  // before signatures existed carry none, and are trusted as before.
   if (
     knownGood
     && knownGood.size
@@ -942,7 +960,7 @@ function syncOneDate(date, config, opts = {}) {
   const state = loadJournalState(journalDir);
   const knownGood = state.dates?.[date];
   const contract = contractSignature(config);
-  const healthBefore = classifyJournalHealth({ existed, markdown: original, knownGood, contract, config });
+  const healthBefore = classifyJournalHealth({ existed, markdown: original, knownGood, config });
   const restoreSource = (healthBefore.status === 'missing'
     || healthBefore.status === 'stub'
     || (healthBefore.status === 'stale' && isCatastrophicJournalShrink(healthBefore.metrics, knownGood)))
@@ -972,7 +990,6 @@ function syncOneDate(date, config, opts = {}) {
     existed: true,
     markdown: changed ? updated : original,
     knownGood,
-    contract,
     config,
   });
 
@@ -1008,10 +1025,16 @@ function syncOneDate(date, config, opts = {}) {
   // stays `stale`, and keeps its old snapshot for the restore path. Health
   // classification itself is deliberately untouched — only the refresh decision
   // knows about contract migrations.
+  // Gated on authored content surviving, NOT on the entry's structure: the
+  // candidate here is freshly rendered output, so a structure check would be
+  // true on every write path and this would become a blanket bypass that
+  // overwrites a good snapshot with a damaged entry.
+  const knownGoodMarkdown = knownGood ? readKnownGoodContent(journalDir, date, knownGood) : null;
   const contractMigrated = Boolean(
     knownGood
     && knownGood.contractSignature !== contract
-    && structureMatchesContract(healthAfter.metrics && healthAfter.metrics.sections, config)
+    && knownGoodMarkdown
+    && authoredContentPreserved(changed ? updated : original, knownGoodMarkdown, config)
   );
 
   if (!opts.dryRun && (healthAfter.status === 'healthy' || contractMigrated)) {
@@ -1084,6 +1107,7 @@ module.exports = {
   classifyJournalHealth,
   contractSignature,
   structureMatchesContract,
+  authoredContentPreserved,
   isCatastrophicJournalShrink,
   detectConflictingJournalWriters,
   journalMetrics,

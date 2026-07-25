@@ -4,7 +4,7 @@ const assert = require('node:assert/strict');
 const {
   classifyJournalHealth,
   contractSignature,
-  structureMatchesContract,
+  authoredContentPreserved,
   loadConfig,
   normalizeSections,
   renderJournal,
@@ -241,23 +241,37 @@ test('classifyJournalHealth is unchanged by the migration fix', () => {
     existed: true,
     markdown: current,
     knownGood: shrunkAgainst,
-    contract: contractSignature(config),
     config,
   });
   assert.equal(health.status, 'stale');
 });
 
-test('structureMatchesContract separates a contract change from real damage', () => {
+test('authoredContentPreserved distinguishes a migration from real damage', () => {
   const config = loadConfig();
-  const desired = config.sections.required.map((section) => section.heading);
+  const prior = [
+    '---', 'journal: Journal', '---', '',
+    "## 📅 Today's Calendar", '- 9:00 AM Standup', '',
+    '## 📝 Notes', '- [[A note the user wrote]]', '',
+    '## 📓 Journal Entry', 'Evening reflection.', '',
+  ].join('\n');
 
-  // Exactly the configured contract -> a shrink is explained by the migration.
-  assert.equal(structureMatchesContract(desired, config), true);
-  // Missing a configured section -> real loss, must not be excused.
-  assert.equal(structureMatchesContract(desired.slice(1), config), false);
-  // Extra section, or wrong order -> not the current contract.
-  assert.equal(structureMatchesContract([...desired, '## Extra'], config), false);
-  assert.equal(structureMatchesContract([desired[1], desired[0], ...desired.slice(2)], config), false);
+  // Migration: machine sections dropped, authored lines intact -> preserved.
+  const migrated = [
+    '---', 'journal: Journal', '---', '',
+    '## 🚀 Projects', '- [[Alpha]]', '',
+    '## 📝 Notes', '- [[A note the user wrote]]', '',
+    '## 📓 Journal Entry', 'Evening reflection.', '',
+  ].join('\n');
+  assert.equal(authoredContentPreserved(migrated, prior, config), true);
+
+  // Damage: the user's Notes and Journal Entry are gone -> NOT preserved.
+  const gutted = [
+    '---', 'journal: Journal', '---', '',
+    '## 🚀 Projects', '- [[Alpha]]', '',
+    '## 📝 Notes', '-', '',
+    '## 📓 Journal Entry', '-', '',
+  ].join('\n');
+  assert.equal(authoredContentPreserved(gutted, prior, config), false);
 });
 
 test('a renamed generated heading is still excluded from authored content', () => {
@@ -351,5 +365,84 @@ test('the known-good snapshot refreshes across a contract migration', () => {
     else process.env.JARVOS_JOURNAL_DIR = previousJournalDir;
     if (previousProjectsDir === undefined) delete process.env.JARVOS_PROJECTS_DIR;
     else process.env.JARVOS_PROJECTS_DIR = previousProjectsDir;
+  }
+});
+
+test('a damaged entry must not overwrite a good pre-migration snapshot', () => {
+  // The failure mode of the previous attempt at this fix: the migration gate was
+  // vacuously true on every write path, so the first pass after deploy replaced a
+  // good snapshot with whatever was on disk — including a gutted entry — and the
+  // intact copy the restore path needed was gone.
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const { syncOneDate, today } = require('../packages/jarvos-secondbrain-journal/src/journal-maintenance.js');
+
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-damage-guard-'));
+  const journalDir = path.join(tmp, 'Vault', 'Journal');
+  fs.mkdirSync(journalDir, { recursive: true });
+
+  const prevJournal = process.env.JARVOS_JOURNAL_DIR;
+  const prevProjects = process.env.JARVOS_PROJECTS_DIR;
+  process.env.JARVOS_JOURNAL_DIR = journalDir;
+  process.env.JARVOS_PROJECTS_DIR = path.join(tmp, 'Vault', 'Projects');
+
+  try {
+    const config = loadConfig();
+    const date = today();
+
+    // The intact copy: real user content under the old contract.
+    const intact = [
+      '---', 'journal: Journal', `journal-date: ${date}`, '---', '',
+      "## 📅 Today's Calendar", '- 9:00 AM Standup', '',
+      '## 📝 Notes', '- [[Note one]]', '- [[Note two]]', '- [[Note three]]', '',
+      '## 💡 Ideas', '- an idea worth keeping', '',
+      '## 📓 Journal Entry', 'A long evening reflection that must not be lost.', '',
+      '## 🔔 Apple Reminders', '- Buy milk', '',
+      '## 📎 Paperclip Inbox', '- SUP-1: something', '',
+    ].join('\n');
+
+    // What is actually on disk now: a bad sync gutted Notes and Journal Entry but
+    // left an Ideas bullet, so it is not a stub and not a catastrophic shrink.
+    const gutted = [
+      '---', 'journal: Journal', `journal-date: ${date}`, '---', '',
+      "## 📅 Today's Calendar", '- 9:00 AM Standup', '',
+      '## 📝 Notes', '-', '',
+      '## 💡 Ideas', '- an idea worth keeping', '',
+      '## 📓 Journal Entry', '-', '',
+      '## 🔔 Apple Reminders', '- Buy milk', '',
+      '## 📎 Paperclip Inbox', '- SUP-1: something', '',
+    ].join('\n');
+    fs.writeFileSync(path.join(journalDir, `${date}.md`), gutted, 'utf8');
+
+    const stateDir = path.join(tmp, 'Vault', '.jarvos', 'journal-maintenance');
+    const kgPath = path.join(stateDir, 'known-good', `${date}.md`);
+    fs.mkdirSync(path.dirname(kgPath), { recursive: true });
+    fs.writeFileSync(kgPath, intact, 'utf8');
+    fs.writeFileSync(path.join(stateDir, 'state.json'), JSON.stringify({
+      version: 1,
+      dates: {
+        [date]: {
+          date,
+          size: Buffer.byteLength(intact, 'utf8'),
+          hash: 'pre-migration-hash',
+          sectionCount: 6,
+          knownGoodPath: kgPath,
+          // no contractSignature — written before the field existed
+        },
+      },
+    }, null, 2), 'utf8');
+
+    syncOneDate(date, config, { dryRun: false, fetchers: { projects: () => '- [[Alpha]]' } });
+
+    const snapshot = fs.readFileSync(kgPath, 'utf8');
+    assert.match(snapshot, /Note one/, 'the intact snapshot must survive a damaged entry');
+    assert.match(snapshot, /A long evening reflection/, 'the evening entry must still be recoverable');
+
+    const after = JSON.parse(fs.readFileSync(path.join(stateDir, 'state.json'), 'utf8'));
+    assert.equal(after.dates[date].hash, 'pre-migration-hash', 'state must not be re-stamped from a damaged entry');
+  } finally {
+    if (prevJournal === undefined) delete process.env.JARVOS_JOURNAL_DIR; else process.env.JARVOS_JOURNAL_DIR = prevJournal;
+    if (prevProjects === undefined) delete process.env.JARVOS_PROJECTS_DIR; else process.env.JARVOS_PROJECTS_DIR = prevProjects;
   }
 });
