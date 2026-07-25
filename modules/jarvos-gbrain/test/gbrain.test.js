@@ -904,3 +904,27 @@ test('doctor does not execute shell metacharacters in gbrainBin', () => {
   assert.equal(result.checks.find((check) => check.name === 'gbrainBin').ok, false);
   assert.equal(fs.existsSync(sentinel), false);
 });
+
+test('resolveConfig falls back to the bun-link gbrain path when PATH omits it', () => {
+  const fakeHome = tempDir();
+  const bunBinDir = path.join(fakeHome, '.bun', 'bin');
+  const gbrainBinPath = path.join(bunBinDir, 'gbrain');
+  fs.mkdirSync(bunBinDir, { recursive: true });
+  fs.writeFileSync(gbrainBinPath, '#!/usr/bin/env node\n', { mode: 0o755 });
+
+  const env = { ...process.env, HOME: fakeHome, PATH: '/usr/bin:/bin' };
+  delete env.JARVOS_GBRAIN_BIN;
+  const child = spawnSync(process.execPath, [
+    '-e',
+    `const gbrain = require(${JSON.stringify(path.join(__dirname, '..', 'src', 'index.js'))});
+process.stdout.write(JSON.stringify(gbrain.resolveConfig({}).gbrainBin));
+`,
+  ], {
+    cwd: fakeHome,
+    env,
+    encoding: 'utf8',
+  });
+
+  assert.equal(child.status, 0, child.stderr);
+  assert.equal(JSON.parse(child.stdout), gbrainBinPath);
+});
