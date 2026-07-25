@@ -129,6 +129,65 @@ test('Projects is refreshed on a backfilled date, unlike day-scoped sources', ()
   assert.equal(sectionBody(output, '## 🚀 Projects'), '- [[Alpha]]\n- [[Beta]]');
 });
 
+/**
+ * `projects.js` documented this contract -- "the journal treats [the unavailable
+ * marker] as a degraded source and will not write over existing content" -- and
+ * the journal never implemented it. `'- (projects unavailable)'` is a truthy
+ * string, so it won the `fetched || existingContent` chain and replaced the
+ * real list. One unmounted volume or permissions blip would rewrite a populated
+ * Projects section down to a single placeholder line on every date in the run.
+ */
+test('a degraded projects read does not overwrite an existing project list', () => {
+  const entry = [
+    '---',
+    'journal: Journal',
+    `journal-date: ${TEST_DATE}`,
+    '---',
+    '',
+    '## 🚀 Projects',
+    '- [[AAF Observatory]]',
+    '- [[Proof of Value]]',
+    '',
+    '## 📝 Notes',
+    '- [[Existing Note]]',
+    '',
+  ].join('\n');
+
+  const output = render(entry, { fetchers: { projects: () => '- (projects unavailable)' } });
+  assert.equal(
+    sectionBody(output, '## 🚀 Projects'),
+    '- [[AAF Observatory]]\n- [[Proof of Value]]',
+    'a marker meaning "could not read" must not replace real evidence',
+  );
+});
+
+test('a degraded projects read still renders the marker when there is nothing to protect', () => {
+  // The other half: the marker is diagnostic and must stay visible on an entry
+  // whose Projects section is genuinely empty, rather than silently rendering
+  // a bare '-'.
+  const output = render(legacyEntry(), { fetchers: { projects: () => '- (projects unavailable)' } });
+  assert.equal(sectionBody(output, '## 🚀 Projects'), '- (projects unavailable)');
+});
+
+test('a positive empty-state claim still replaces a stale list', () => {
+  // `- No ongoing projects` is an observation, not a read failure, so it is
+  // allowed to overwrite -- otherwise closing your last project could never
+  // clear the section.
+  const entry = [
+    '---',
+    'journal: Journal',
+    `journal-date: ${TEST_DATE}`,
+    '---',
+    '',
+    '## 🚀 Projects',
+    '- [[Finished Project]]',
+    '',
+  ].join('\n');
+
+  const output = render(entry, { fetchers: { projects: () => '- No ongoing projects' } });
+  assert.equal(sectionBody(output, '## 🚀 Projects'), '- No ongoing projects');
+});
+
 test('a failing projects source degrades visibly instead of emptying the section', () => {
   const output = render(legacyEntry(), {
     fetchers: {

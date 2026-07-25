@@ -268,6 +268,34 @@ function isGeneratedPlaceholderLine(line) {
   return /^-\s+(?:No events today|No reminders due today|No blocked Paperclip issues|No notes created(?: on .*)?|No notes today|No notes yet|No ongoing projects|\((?:calendar unavailable|reminders unavailable|projects unavailable|Paperclip inbox script not found|Paperclip API unavailable)\))$/i.test(line);
 }
 
+/**
+ * A fetcher result that means "I could not read the source", as opposed to a
+ * positive claim about it.
+ *
+ * The distinction matters because the two read identically as strings but are
+ * opposite in evidential weight. `- No ongoing projects` asserts something the
+ * fetcher actually observed; `- (projects unavailable)` asserts only that the
+ * fetcher failed. A degraded marker must therefore never be written over
+ * content that is already in the entry -- the existing list is better evidence
+ * about the world than a marker saying we couldn't look.
+ *
+ * `projects.js` documented exactly this contract ("the journal treats [it] as a
+ * degraded source and will not write over existing content") and the journal
+ * never implemented it, so one unmounted volume or permissions blip would
+ * rewrite a populated Projects section down to a single placeholder line.
+ */
+function isDegradedSourceMarker(content) {
+  const trimmed = trimOuterBlankLines(String(content == null ? '' : content));
+  if (!trimmed || trimmed.includes('\n')) return false;
+  return /^-\s+\((?:calendar unavailable|reminders unavailable|projects unavailable|Paperclip inbox script not found|Paperclip API unavailable)\)$/i.test(trimmed);
+}
+
+/** Does a section body carry anything beyond the empty `-` placeholder? */
+function hasRenderedContent(content) {
+  const trimmed = trimOuterBlankLines(String(content == null ? '' : content));
+  return Boolean(trimmed) && trimmed !== '-';
+}
+
 function sectionCountFromBody(body) {
   return parseSections(body).sections.length;
 }
@@ -879,7 +907,14 @@ function normalizeSections(original, date, config, opts = {}) {
       // back-written onto an older entry. Projects are current-state, not
       // day-scoped, so they render on backfilled dates too.
       if (isToday || section.source === 'projects') {
-        content = fetched || existingContent || '-';
+        // ...but a DEGRADED read is not a fact about the world, only about our
+        // ability to read it, so it must never overwrite content already in
+        // the entry. Without this, one unmounted volume rewrote a populated
+        // Projects list down to `- (projects unavailable)` on every date in
+        // the run, and burned an audit backup doing it.
+        content = isDegradedSourceMarker(fetched) && hasRenderedContent(existingContent)
+          ? existingContent
+          : (fetched || existingContent || '-');
       } else {
         content = existingContent || '-';
       }
@@ -959,7 +994,6 @@ function syncOneDate(date, config, opts = {}) {
   const original = existed ? fs.readFileSync(journalPath, 'utf8') : '';
   const state = loadJournalState(journalDir);
   const knownGood = state.dates?.[date];
-  const contract = contractSignature(config);
   const healthBefore = classifyJournalHealth({ existed, markdown: original, knownGood, config });
   const restoreSource = (healthBefore.status === 'missing'
     || healthBefore.status === 'stub'
@@ -1010,34 +1044,42 @@ function syncOneDate(date, config, opts = {}) {
     };
   }
 
-  // The known-good snapshot must also refresh across a section-contract change,
-  // not only when the entry reads `healthy`.
+  // The known-good snapshot must refresh on more than `healthy`, or it freezes.
   //
-  // Retiring a section shrinks every entry, so the first pass after the change
-  // reports `stale` against the old snapshot. If refresh only ran on `healthy`,
-  // the snapshot would stay pinned to pre-migration content and every later pass
-  // would repeat the same comparison — permanently frozen. A genuine truncation
-  // afterwards would then restore the pre-migration entry over whatever the user
-  // had written since.
+  // A journal entry legitimately SHRINKS for reasons that are not damage, and
+  // `classifyJournalHealth` reads any shrink as `stale`
+  // (metrics.size < knownGood.size). Two ways that happens:
   //
-  // Gated on the entry's structure matching the current contract, so this cannot
-  // become a blanket bypass: an entry MISSING configured sections is real damage,
-  // stays `stale`, and keeps its old snapshot for the restore path. Health
-  // classification itself is deliberately untouched — only the refresh decision
-  // knows about contract migrations.
-  // Gated on authored content surviving, NOT on the entry's structure: the
+  //   1. A section-contract change. Retiring a section shrinks every entry, so
+  //      the first pass after the change reports `stale` against the old
+  //      snapshot.
+  //   2. Ordinary generated-section churn. Generated sections are current-state,
+  //      and Projects renders on backfilled dates by design ("Projects is
+  //      refreshed on a backfilled date, unlike day-scoped sources"), so marking
+  //      one project done drops a line from every past entry.
+  //
+  // In both cases, refusing to refresh pins the entry to an older, larger
+  // snapshot PERMANENTLY: the next pass makes the same comparison and reaches
+  // the same answer. The run then reports `STALE detected` for that date
+  // forever, and — worse — a genuine truncation later would restore that stale
+  // snapshot over everything authored since.
+  //
+  // The gate is authored content surviving, NOT the entry's structure: the
   // candidate here is freshly rendered output, so a structure check would be
   // true on every write path and this would become a blanket bypass that
-  // overwrites a good snapshot with a damaged entry.
+  // overwrites a good snapshot with a damaged entry. Authored survival is also
+  // exactly the condition the snapshot exists to protect — if every authored
+  // line is still present there is nothing catastrophic left to restore, while
+  // a truncated or gutted entry drops authored lines, fails this check, and
+  // correctly keeps its old snapshot for the restore path.
   const knownGoodMarkdown = knownGood ? readKnownGoodContent(journalDir, date, knownGood) : null;
-  const contractMigrated = Boolean(
+  const authoredContentIntact = Boolean(
     knownGood
-    && knownGood.contractSignature !== contract
     && knownGoodMarkdown
     && authoredContentPreserved(changed ? updated : original, knownGoodMarkdown, config)
   );
 
-  if (!opts.dryRun && (healthAfter.status === 'healthy' || contractMigrated)) {
+  if (!opts.dryRun && (healthAfter.status === 'healthy' || authoredContentIntact)) {
     const updatedKnownGoodPath = knownGoodPath(journalDir, date);
     fs.mkdirSync(path.dirname(updatedKnownGoodPath), { recursive: true });
     fs.writeFileSync(updatedKnownGoodPath, changed ? updated : original, 'utf8');

@@ -178,6 +178,64 @@ test('generated blank-template placeholders are recoverable', () => {
   }), true);
 });
 
+/**
+ * Generated sections are current-state, and Projects renders on backfilled
+ * dates by design, so closing a project shrinks every past entry.
+ * `classifyJournalHealth` reads any shrink as `stale`, and the snapshot refresh
+ * used to require `healthy` (or a contract-signature change). Once the
+ * signature matched, a shrunken past entry could never refresh its snapshot:
+ * every later pass made the same comparison, reported `stale` forever, and left
+ * a genuine truncation able to restore the stale snapshot over anything
+ * authored since.
+ */
+test('generated-section churn does not freeze the known-good snapshot', () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-journal-churn-'));
+  const journalDir = path.join(tmp, 'Vault', 'Journal');
+  fs.mkdirSync(journalDir, { recursive: true });
+
+  const PAST_DATE = '2025-12-01';
+  const manyProjects = { projects: () => '- [[Alpha]]\n- [[Beta]]\n- [[Gamma]]' };
+  const oneProject = { projects: () => '- [[Alpha]]' };
+
+  const previousJournalDir = process.env.JARVOS_JOURNAL_DIR;
+  process.env.JARVOS_JOURNAL_DIR = journalDir;
+  try {
+    const config = loadConfig();
+    const journalPath = path.join(journalDir, `${PAST_DATE}.md`);
+
+    const first = syncOneDate(PAST_DATE, config, { dryRun: false, fetchers: manyProjects });
+    assert.equal(first.healthAfter.status, 'healthy');
+
+    // Author a line -- this is what the snapshot exists to protect.
+    const before = fs.readFileSync(journalPath, 'utf8');
+    const authored = before.replace('## 💡 Ideas\n-', '## 💡 Ideas\n- an idea I typed myself');
+    assert.notEqual(authored, before, 'test fixture must actually author a line');
+    fs.writeFileSync(journalPath, authored, 'utf8');
+    syncOneDate(PAST_DATE, config, { dryRun: false, fetchers: manyProjects });
+
+    // Two projects close. The entry shrinks -- churn, not damage.
+    syncOneDate(PAST_DATE, config, { dryRun: false, fetchers: oneProject });
+    assert.match(
+      fs.readFileSync(journalPath, 'utf8'),
+      /an idea I typed myself/,
+      'authored content must survive the churn',
+    );
+
+    // The freeze is only visible on the NEXT pass: with a refreshed snapshot the
+    // entry reads healthy; with a frozen one it is compared against the larger
+    // old snapshot and reports stale in perpetuity.
+    const settled = syncOneDate(PAST_DATE, config, { dryRun: false, fetchers: oneProject });
+    assert.equal(
+      settled.healthBefore.status,
+      'healthy',
+      'the snapshot must have refreshed after generated-section churn',
+    );
+  } finally {
+    if (previousJournalDir === undefined) delete process.env.JARVOS_JOURNAL_DIR;
+    else process.env.JARVOS_JOURNAL_DIR = previousJournalDir;
+  }
+});
+
 test('syncOneDate restores a frontmatter-only stub from known-good content and writes an audit backup', () => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-journal-stub-'));
   const journalDir = path.join(tmp, 'Vault', 'Journal');
