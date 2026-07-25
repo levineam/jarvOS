@@ -267,3 +267,25 @@ test('JARVOS_PROJECTS_DIR wins over the configured directory', () => {
   );
   assert.equal(resolved, dir);
 });
+
+test('an unreadable projects directory is not reported as "no projects"', () => {
+  // An unmounted vault or a mistyped JARVOS_PROJECTS_DIR must not render as a
+  // confident empty list. The Projects section renders on every date, so a
+  // positive "no ongoing projects" would overwrite it everywhere; the
+  // unavailable marker is what the journal treats as a degraded source.
+  assert.equal(projects.readProjectsDir({ dir: '/definitely/not/a/directory' }), null);
+  assert.equal(
+    projects.journalProjectLines(projects.readProjectsDir({ dir: '/definitely/not/a/directory' })),
+    '- (projects unavailable)',
+  );
+});
+
+test('a genuinely empty projects directory still reports no projects', () => {
+  const dir = tmpDir();
+  assert.deepEqual(projects.readProjectsDir({ dir }), []);
+  assert.equal(projects.journalProjectLines(projects.readProjectsDir({ dir })), '- No ongoing projects');
+});
+
+test('listProjects still flattens an unreadable directory to an empty list', () => {
+  assert.deepEqual(projects.listProjects({ dir: '/definitely/not/a/directory' }), []);
+});

@@ -204,14 +204,39 @@ const GENERATED_SECTION_HEADINGS = new Set([
   '## 🗂️ Notes Created',
 ]);
 
+/**
+ * Headings whose content is machine-rendered, resolved from the live config
+ * rather than only the literals above.
+ *
+ * Headings are a configurable contract — renaming the Projects heading in
+ * journal-module.json is a supported edit. If the exclusion matched literals
+ * only, a renamed generated section would start counting as authored content
+ * and a populated project list would once again mask a wiped journal. The
+ * literal set is retained for retired headings, which are no longer in config.
+ */
+function generatedHeadings(config) {
+  const out = new Set(GENERATED_SECTION_HEADINGS);
+  const declared = [
+    ...((config && config.sections && config.sections.required) || []),
+    ...((config && config.sections && config.sections.optional) || []),
+  ];
+  for (const section of declared) {
+    if (section && section.heading && section.source && section.source !== 'manual') {
+      out.add(String(section.heading).trim());
+    }
+  }
+  return out;
+}
+
 /** Body lines that could be the user's own writing — generated sections excluded. */
-function authoredBodyLines(body) {
+function authoredBodyLines(body, config) {
+  const generatedSet = generatedHeadings(config);
   const lines = [];
   let generated = false;
   for (const raw of trimOuterBlankLines(body).split(/\r?\n/)) {
     const line = raw.trim();
     if (/^##\s+/.test(line)) {
-      generated = GENERATED_SECTION_HEADINGS.has(line);
+      generated = generatedSet.has(line);
       continue;
     }
     if (generated) continue;
@@ -222,12 +247,12 @@ function authoredBodyLines(body) {
   return lines;
 }
 
-function journalMetrics(markdown) {
+function journalMetrics(markdown, config) {
   const text = String(markdown || '');
   const { body } = splitFrontmatter(text);
   const sections = parseSections(body).sections.map((section) => section.heading);
   const hasBodyText = trimOuterBlankLines(body).length > 0;
-  const meaningfulBodyChars = authoredBodyLines(body).join('\n').length;
+  const meaningfulBodyChars = authoredBodyLines(body, config).join('\n').length;
   return {
     size: Buffer.byteLength(text, 'utf8'),
     hash: contentHash(text),
@@ -255,17 +280,38 @@ function hasMeaningfulBodyText(body) {
     .some((line) => line !== SIGNATURE && line !== '-');
 }
 
-function classifyJournalHealth({ existed, markdown, knownGood }) {
+/**
+ * Fingerprint of the configured section contract.
+ *
+ * The known-good shrink guard compares a journal against its own past self.
+ * That comparison is only meaningful while the section contract is unchanged:
+ * the moment a section is added or retired, every entry legitimately changes
+ * size and section count, and a shrink is expected rather than suspicious.
+ *
+ * Without this, retiring a section wedges the guard permanently. The first pass
+ * after the change reports `stale` (fewer sections than known-good), the
+ * known-good refresh is skipped because it only runs on `healthy`, and every
+ * later pass repeats the same comparison against the same frozen snapshot. The
+ * restore path then holds pre-migration content indefinitely, so a genuine
+ * truncation later restores a stale entry over the user's newer writing — the
+ * exact loss this machinery exists to prevent.
+ */
+function contractSignature(config) {
+  const headings = buildDesiredSections(config || {}).map((section) => section.heading);
+  return contentHash(headings.join('\u0000'));
+}
+
+function classifyJournalHealth({ existed, markdown, knownGood, contract, config }) {
   if (!existed) {
     return {
       status: 'missing',
       degraded: false,
       reason: 'Journal file is missing',
-      metrics: journalMetrics(''),
+      metrics: journalMetrics('', config),
     };
   }
 
-  const metrics = journalMetrics(markdown);
+  const metrics = journalMetrics(markdown, config);
   if (metrics.isFrontmatterOnly) {
     return {
       status: 'stub',
@@ -275,8 +321,18 @@ function classifyJournalHealth({ existed, markdown, knownGood }) {
     };
   }
 
+  // A recorded signature that no longer matches means the section contract
+  // itself changed since the snapshot; the shrink comparison is not valid across
+  // that boundary. Treat the entry as healthy so the snapshot is refreshed to the
+  // new shape on this pass rather than frozen at the old one. Snapshots written
+  // before signatures existed carry none, and are trusted as before.
+  const contractChanged = Boolean(
+    contract && knownGood && knownGood.contractSignature && knownGood.contractSignature !== contract,
+  );
+
   if (
-    knownGood
+    !contractChanged
+    && knownGood
     && knownGood.size
     && knownGood.sectionCount
     && metrics.hash !== knownGood.hash
@@ -544,7 +600,11 @@ function buildSourceFetchers() {
         // eslint-disable-next-line global-require
         const projects = require('../../jarvos-secondbrain-projects/src/projects');
         const config = projects.loadConfig();
-        return projects.journalProjectLines(projects.listProjects({ config }), config);
+        // readProjectsDir, not listProjects: null means the directory could not
+        // be read, which must render the unavailable marker rather than a
+        // positive "no ongoing projects". The Projects section renders on every
+        // date, so an unmounted vault would otherwise rewrite them all.
+        return projects.journalProjectLines(projects.readProjectsDir({ config }), config);
       } catch {
         return '- (projects unavailable)';
       }
@@ -865,7 +925,8 @@ function syncOneDate(date, config, opts = {}) {
   const original = existed ? fs.readFileSync(journalPath, 'utf8') : '';
   const state = loadJournalState(journalDir);
   const knownGood = state.dates?.[date];
-  const healthBefore = classifyJournalHealth({ existed, markdown: original, knownGood });
+  const contract = contractSignature(config);
+  const healthBefore = classifyJournalHealth({ existed, markdown: original, knownGood, contract, config });
   const restoreSource = (healthBefore.status === 'missing'
     || healthBefore.status === 'stub'
     || (healthBefore.status === 'stale' && isCatastrophicJournalShrink(healthBefore.metrics, knownGood)))
@@ -895,6 +956,8 @@ function syncOneDate(date, config, opts = {}) {
     existed: true,
     markdown: changed ? updated : original,
     knownGood,
+    contract,
+    config,
   });
 
   // Intentional opt-in section transforms may shrink content (e.g. scaffold strip).
@@ -910,7 +973,7 @@ function syncOneDate(date, config, opts = {}) {
       status: 'healthy',
       degraded: false,
       reason: 'Journal updated via intentional section transform',
-      metrics: journalMetrics(updated),
+      metrics: journalMetrics(updated, config),
     };
   }
 
@@ -918,7 +981,7 @@ function syncOneDate(date, config, opts = {}) {
     const updatedKnownGoodPath = knownGoodPath(journalDir, date);
     fs.mkdirSync(path.dirname(updatedKnownGoodPath), { recursive: true });
     fs.writeFileSync(updatedKnownGoodPath, changed ? updated : original, 'utf8');
-    const metrics = journalMetrics(changed ? updated : original);
+    const metrics = journalMetrics(changed ? updated : original, config);
     state.version = 1;
     state.dates = state.dates || {};
     state.dates[date] = {
@@ -927,6 +990,7 @@ function syncOneDate(date, config, opts = {}) {
       hash: metrics.hash,
       sectionCount: metrics.sectionCount,
       sections: metrics.sections,
+      contractSignature: contractSignature(config),
       knownGoodPath: updatedKnownGoodPath,
       updatedAt: new Date().toISOString(),
     };
@@ -981,6 +1045,7 @@ module.exports = {
   applySectionTransforms,
   main,
   classifyJournalHealth,
+  contractSignature,
   isCatastrophicJournalShrink,
   detectConflictingJournalWriters,
   journalMetrics,

@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 
 const {
   classifyJournalHealth,
+  contractSignature,
   loadConfig,
   normalizeSections,
   renderJournal,
@@ -220,4 +221,93 @@ test('an entry already in the new shape is left alone', () => {
   assert.match(sectionBody(output, '## 📝 Notes'), /\[\[Note\]\]/);
   assert.equal(sectionBody(output, '## 💡 Ideas'), '- idea');
   assert.ok(!output.includes('migrated'));
+});
+
+test('retiring a section does not freeze the known-good snapshot', () => {
+  // The shrink guard compares an entry against its own past self. Across a
+  // contract change every entry legitimately loses sections, so without a
+  // signature the first post-migration pass reports `stale`, the known-good
+  // refresh (which only runs on `healthy`) is skipped, and the snapshot stays
+  // pinned to pre-migration content forever. A later truncation would then
+  // restore that stale entry over the user's newer writing.
+  const config = loadConfig();
+  const current = renderJournal(TEST_DATE, config, normalizeSections('', TEST_DATE, config, {
+    fetchers: stubFetchers,
+  }));
+
+  // A snapshot taken under the old six-section contract: bigger, more sections.
+  const oldContractKnownGood = {
+    size: Buffer.byteLength(current, 'utf8') * 3,
+    sectionCount: 6,
+    hash: 'old-contract-hash',
+    contractSignature: 'signature-of-the-retired-contract',
+  };
+
+  const contract = contractSignature(config);
+  assert.notEqual(contract, oldContractKnownGood.contractSignature);
+
+  const healed = classifyJournalHealth({
+    existed: true,
+    markdown: current,
+    knownGood: oldContractKnownGood,
+    contract,
+    config,
+  });
+  assert.equal(healed.status, 'healthy', 'a contract change must not read as a shrink');
+
+  // Same numbers, same contract -> a genuine shrink must still be caught.
+  const sameContract = { ...oldContractKnownGood, contractSignature: contract };
+  const stale = classifyJournalHealth({
+    existed: true,
+    markdown: current,
+    knownGood: sameContract,
+    contract,
+    config,
+  });
+  assert.equal(stale.status, 'stale', 'a real shrink under one contract must still be flagged');
+});
+
+test('a snapshot predating signatures is still trusted', () => {
+  const config = loadConfig();
+  const current = renderJournal(TEST_DATE, config, normalizeSections('', TEST_DATE, config, {
+    fetchers: stubFetchers,
+  }));
+  const legacyKnownGood = {
+    size: Buffer.byteLength(current, 'utf8') * 3,
+    sectionCount: 6,
+    hash: 'legacy-hash',
+    // no contractSignature — written before the field existed
+  };
+  const health = classifyJournalHealth({
+    existed: true,
+    markdown: current,
+    knownGood: legacyKnownGood,
+    contract: contractSignature(config),
+    config,
+  });
+  assert.equal(health.status, 'stale');
+});
+
+test('a renamed generated heading is still excluded from authored content', () => {
+  // Headings are a configurable contract, so the exclusion cannot key on
+  // literals alone — a renamed Projects section would otherwise let a populated
+  // project list mask a wiped journal.
+  const base = loadConfig();
+  const renamed = JSON.parse(JSON.stringify(base));
+  renamed.sections.required = renamed.sections.required.map((section) => (
+    section.id === 'projects' ? { ...section, heading: '## 🚀 Active Projects' } : section
+  ));
+
+  const rendered = renderJournal(TEST_DATE, renamed, normalizeSections('', TEST_DATE, renamed, {
+    fetchers: { projects: () => '- [[Alpha]]\n- [[Beta]]\n- [[Gamma]]' },
+  }));
+  assert.match(rendered, /## 🚀 Active Projects/);
+
+  const health = classifyJournalHealth({
+    existed: true,
+    markdown: rendered,
+    knownGood: null,
+    config: renamed,
+  });
+  assert.equal(health.metrics.meaningfulBodyChars, 0);
 });

@@ -200,13 +200,22 @@ function readProject(filePath, config = loadConfig()) {
   };
 }
 
-function listProjects({ dir, config = loadConfig() } = {}) {
+/**
+ * Read the projects directory.
+ *
+ * Returns null when the directory cannot be read at all, which must stay
+ * distinguishable from an empty directory: an unmounted vault or a mistyped
+ * JARVOS_PROJECTS_DIR would otherwise render as a confident "no ongoing
+ * projects" and overwrite the Projects section of every journal entry it
+ * touches. Callers that cannot express uncertainty use listProjects().
+ */
+function readProjectsDir({ dir, config = loadConfig() } = {}) {
   const projectsDir = dir || resolveProjectsDir(config);
   let entries;
   try {
     entries = fs.readdirSync(projectsDir, { withFileTypes: true });
   } catch {
-    return [];
+    return null;
   }
   const skip = indexFilename(config).toLowerCase();
   return entries
@@ -221,6 +230,10 @@ function listProjects({ dir, config = loadConfig() } = {}) {
     })
     .filter(Boolean)
     .sort((a, b) => a.title.localeCompare(b.title));
+}
+
+function listProjects(opts = {}) {
+  return readProjectsDir(opts) || [];
 }
 
 function isOngoing(project, config = loadConfig()) {
@@ -277,9 +290,17 @@ function createProject({ title, dir, config = loadConfig(), now = new Date(), ..
   return { path: filePath, slug: clean, title: clean, created };
 }
 
-/** Wiki-links for the journal's Projects section. */
+/**
+ * Wiki-links for the journal's Projects section.
+ *
+ * `projects` of null means the directory could not be read. That renders the
+ * unavailable marker, which the journal treats as a degraded source and will
+ * not write over existing content — unlike the empty-state line, which is a
+ * positive claim that there are no projects.
+ */
 function journalProjectLines(projects, config = loadConfig()) {
   const journal = config.journal || {};
+  if (projects === null) return journal.unavailableText || '- (projects unavailable)';
   const allowed = Array.isArray(journal.listStatuses) && journal.listStatuses.length
     ? new Set(journal.listStatuses)
     : ongoingStatuses(config);
@@ -357,6 +378,7 @@ module.exports = {
   CONFIG_PATH,
   loadConfig,
   resolveProjectsDir,
+  readProjectsDir,
   requiredSections,
   ongoingStatuses,
   slugify,
