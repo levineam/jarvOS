@@ -380,18 +380,63 @@ test('a nested MODULE_NOT_FOUND inside the bridge is NOT mistaken for an absent 
 
   const stdout = cp.execFileSync(process.execPath, ['-e', probe], {
     encoding: 'utf8',
-    env: {
-      ...process.env,
-      JARVOS_REQUIRE_CANONICAL_VAULT: path.join(os.tmpdir(), 'required-canonical-vault'),
-      JARVOS_VAULT_DIR: path.join(os.tmpdir(), 'somewhere-else-entirely'),
-      JARVOS_PROJECTS_DIR: '',
-    },
+    timeout: 30000,
+    env: { ...process.env, JARVOS_PROJECTS_DIR: '' },
   });
 
-  // A broken bridge must never yield a path. Either the nested failure
-  // propagates or the vault guard does -- never a silent $HOME fallback.
-  assert.match(stdout, /^THREW:/m, `expected a throw, got: ${stdout.trim()}`);
+  // Assert the NESTED failure specifically. An earlier version pinned
+  // JARVOS_REQUIRE_CANONICAL_VAULT/JARVOS_VAULT_DIR so the vault guard threw
+  // anyway -- meaning the test stayed green even when the hook stopped
+  // intercepting, i.e. it would have testified to nothing. That guard path is
+  // already covered by its own test above; this one must fail if the nested
+  // require failure ever gets swallowed again.
+  assert.match(
+    stdout,
+    /^THREW:Cannot find module \.\/src\/paperclip/m,
+    `expected the nested module failure to propagate, got: ${stdout.trim()}`,
+  );
   assert.doesNotMatch(stdout, /RETURNED:/, 'a broken bridge must not yield a projects directory');
+});
+
+/**
+ * "Absent" must mean the bridge DIRECTORY is missing. A bridge that is present
+ * but whose entry point will not resolve -- index.js missing from a partial
+ * checkout, a package.json `main` pointing nowhere -- is a BROKEN install, and
+ * `require.resolve` reports it with the same MODULE_NOT_FOUND. Tolerating that
+ * put the silent $HOME fallback straight back.
+ */
+test('a present-but-unresolvable bridge is a broken install, not an absent one', () => {
+  const pkgRoot = path.resolve(__dirname, '..');
+  const projectsPath = path.join(pkgRoot, 'packages', 'jarvos-secondbrain-projects', 'src', 'projects.js');
+  const bridgeDir = path.join(pkgRoot, 'bridge', 'config');
+  assert.ok(fs.existsSync(bridgeDir), `fixture precondition: expected a bridge directory at ${bridgeDir}`);
+
+  // Force resolution of the top-level specifier to fail exactly as a missing
+  // index.js does, leaving the directory itself in place.
+  const probe = [
+    'const Module = require("module");',
+    'const resolve = Module._resolveFilename;',
+    'Module._resolveFilename = function (request) {',
+    '  if (String(request).endsWith("bridge/config")) {',
+    '    const err = new Error("Cannot find module " + request);',
+    '    err.code = "MODULE_NOT_FOUND";',
+    '    throw err;',
+    '  }',
+    '  return resolve.apply(this, arguments);',
+    '};',
+    'const projects = require(' + JSON.stringify(projectsPath) + ');',
+    'try { console.log("RETURNED:" + projects.resolveProjectsDir()); }',
+    'catch (err) { console.log("THREW:" + String(err && err.message).slice(0, 120)); }',
+  ].join(String.fromCharCode(10));
+
+  const stdout = cp.execFileSync(process.execPath, ['-e', probe], {
+    encoding: 'utf8',
+    timeout: 30000,
+    env: { ...process.env, JARVOS_PROJECTS_DIR: '' },
+  });
+
+  assert.match(stdout, /^THREW:/m, `expected a broken install to throw, got: ${stdout.trim()}`);
+  assert.doesNotMatch(stdout, /RETURNED:/, 'a broken install must not yield a $HOME-derived projects directory');
 });
 
 test('an absent bridge is still tolerated and falls back', () => {
