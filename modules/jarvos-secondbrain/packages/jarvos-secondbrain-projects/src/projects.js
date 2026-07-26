@@ -42,14 +42,33 @@ const CONFIG_PATH = path.join(__dirname, '..', 'config', 'projects-module.json')
  * `require` is caught.
  */
 function tryResolveSharedConfig() {
-  let resolveConfig;
+  // Resolve the SPECIFIER first, and tolerate only its absence. `bridge/config`
+  // is a directory whose index requires several further modules, so a broken or
+  // partial install raises MODULE_NOT_FOUND for a NESTED module with the same
+  // `err.code` -- indistinguishable from "no bridge here" if the whole
+  // `require` is wrapped. That reinstated the silent `$HOME` fallback this
+  // function exists to close: verified by deleting one nested bridge file, after
+  // which resolveProjectsDir() returned a $HOME path instead of throwing.
+  // "Absent" means the bridge DIRECTORY is not there. If it is there but its
+  // entry point will not resolve -- index.js missing from a partial checkout, a
+  // future package.json `main` pointing at a missing file, an unreadable
+  // directory -- that is a broken install, and `require.resolve` reports it with
+  // the same MODULE_NOT_FOUND as a genuinely absent bridge. Tolerating that put
+  // the silent $HOME fallback straight back (verified: it returned
+  // `/Users/andrew/Vaults/Vault v3/Projects` with resolution forced to fail).
+  // The two states ARE distinguishable, so distinguish them.
+  const bridgeDir = path.join(__dirname, '..', '..', '..', 'bridge', 'config');
+  let modulePath;
   try {
-    // eslint-disable-next-line global-require
-    ({ resolveConfig } = require('../../../bridge/config'));
+    modulePath = require.resolve('../../../bridge/config');
   } catch (err) {
-    if (err && err.code === 'MODULE_NOT_FOUND') return null;
+    if (err && err.code === 'MODULE_NOT_FOUND' && !fs.existsSync(bridgeDir)) return null;
     throw err;
   }
+  // Past this point the bridge exists, so every failure is real and propagates:
+  // a nested require failure, and the deliberate fail-closed vault guards.
+  // eslint-disable-next-line global-require
+  const { resolveConfig } = require(modulePath);
   return resolveConfig();
 }
 
