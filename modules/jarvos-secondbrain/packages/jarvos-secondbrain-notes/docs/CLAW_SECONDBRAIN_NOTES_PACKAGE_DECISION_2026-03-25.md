@@ -306,4 +306,4 @@ The Notes package architecture is working when:
 ## References
 
 - `docs/openclaw/QMD_RETRIEVAL_STACK_DECISION_2026-03-23.md`
-- `$JARVOS_VAULT_NOTES/claw-secondbrain v1 Boundary and Routing Contract.md` (default: `~/Documents/Vault v3/Notes/`)
+- `$JARVOS_VAULT_NOTES/claw-secondbrain v1 Boundary and Routing Contract.md` (default: `~/Vaults/Vault v3/Notes/`)

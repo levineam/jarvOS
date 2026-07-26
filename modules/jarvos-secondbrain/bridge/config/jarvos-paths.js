@@ -3,7 +3,7 @@
  * jarvos-paths.js — shared path/config resolution for all jarvos-secondbrain packages.
  *
  * Canonical env var names (JARVOS_* prefix):
- *   JARVOS_VAULT_DIR   → vault root (default: ~/Documents/Vault v3)
+ *   JARVOS_VAULT_DIR   → vault root (default: ~/Vaults/Vault v3)
  *   JARVOS_JOURNAL_DIR → journal dir (default: $JARVOS_VAULT_DIR/Journal)
  *   JARVOS_NOTES_DIR   → notes dir   (default: $JARVOS_VAULT_DIR/Notes)
  *   JARVOS_CLAWD_DIR   → clawd/workspace root (default: ~/clawd)
@@ -22,9 +22,8 @@
  *   3. jarvos.config.json in JARVOS_CLAWD_DIR (or ~/clawd) → paths.*
  *   4. Default derived from vault root or home dir
  *
- * "Vault v3" as the default vault dir is Andrew's current layout and is preserved
- * for backward compatibility. Override via JARVOS_VAULT_DIR or jarvos.config.json
- * paths.vault to use a different vault root.
+ * Override via JARVOS_VAULT_DIR or jarvos.config.json paths.vault to use a
+ * different vault root.
  */
 
 'use strict';
@@ -34,8 +33,10 @@ const { join, resolve, sep } = require('path');
 const os = require('os');
 
 const DEFAULT_CLAWD_DIR = join(os.homedir(), 'clawd');
-const DEFAULT_VAULT_DIR = join(os.homedir(), 'Documents', 'Vault v3');
-const DEFAULT_CANONICAL_VAULT_DIR = join(os.homedir(), 'Vaults', 'Vault v3');
+const DEFAULT_VAULT_DIR = join(os.homedir(), 'Vaults', 'Vault v3');
+const DEFAULT_CANONICAL_VAULT_DIR = DEFAULT_VAULT_DIR;
+const LEGACY_VAULT_PARENT = 'Documents';
+const LEGACY_VAULT_NAME = 'Vault v3';
 const DEFAULT_TIMEZONE_FALLBACK = 'UTC';
 const DEFAULT_JOURNAL_MAINTENANCE_SCHEDULE = '1 0 * * *';
 
@@ -81,14 +82,12 @@ function resolveDefaultVaultDir({
   read = readFileSync,
 } = {}) {
   const candidateVaults = join(homedir, 'Vaults', 'Vault v3');
-  const candidateDocs = join(homedir, 'Documents', 'Vault v3');
+  const legacyVault = join(homedir, LEGACY_VAULT_PARENT, LEGACY_VAULT_NAME);
 
-  // Prefer the newer ~/Vaults/... location when present.
   if (exists(candidateVaults)) return candidateVaults;
 
-  // If the old default was explicitly marked as stale, try to follow its hint.
   const markerCandidates = [
-    join(candidateDocs, 'DO_NOT_USE.txt'),
+    join(legacyVault, 'DO_NOT_USE.txt'),
     join(homedir, 'Documents', 'REDACTED-Vault v3', 'DO_NOT_USE.txt'),
   ];
   for (const markerPath of markerCandidates) {
@@ -96,7 +95,7 @@ function resolveDefaultVaultDir({
     if (hinted && exists(hinted)) return hinted;
   }
 
-  return candidateDocs;
+  return candidateVaults;
 }
 
 function assertNotStaleVaultPath(value, {
@@ -105,7 +104,7 @@ function assertNotStaleVaultPath(value, {
   read = readFileSync,
   source = 'unknown',
 } = {}) {
-  const docsVault = join(homedir, 'Documents', 'Vault v3');
+  const docsVault = join(homedir, LEGACY_VAULT_PARENT, LEGACY_VAULT_NAME);
   if (!value) return;
 
   const isDocsVault = isSameOrSubPath(docsVault, value);
@@ -129,7 +128,7 @@ function assertNotStaleVaultPath(value, {
   if (source !== 'default' && (recommendation || hinted)) {
     const reason = hinted ? 'DO_NOT_USE marker detected' : 'canonical vault detected';
     const suffix = recommendation ? ` Recommended: ${recommendation}` : '';
-    throw new Error(`Refusing to use stale vault path under ~/Documents/Vault v3 (${reason}). Source: ${source}.${suffix}`);
+    throw new Error(`Refusing to use stale legacy vault path (${reason}). Source: ${source}.${suffix}`);
   }
 }
 
@@ -232,7 +231,7 @@ function getClawdDir() {
 
 /**
  * Resolve the vault root directory.
- * Priority: JARVOS_VAULT_DIR → config paths.vault → ~/Documents/Vault v3
+ * Priority: JARVOS_VAULT_DIR → config paths.vault → default vault root
  * @returns {string}
  */
 function getVaultDir() {

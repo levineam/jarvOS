@@ -85,7 +85,7 @@ that locks the monorepo map and bridge responsibilities.
 ### Canonical location and shape
 
 Current working shape is defined by `config/journal-module.json` and written into the
-Vault journal directory (resolved via `JARVOS_JOURNAL_DIR` env var, or `vault.journalDir` in `config/journal-module.json`, defaulting to `~/Documents/Vault v3/Journal`).
+Vault journal directory (resolved via `JARVOS_JOURNAL_DIR` env var, or `vault.journalDir` in `config/journal-module.json`, defaulting to `~/Vaults/Vault v3/Journal`).
 
 The package contract should preserve that model:
 - one Markdown file per day
@@ -229,7 +229,7 @@ become the canonical task tracker.
 | `scripts/journal-paperclip-inbox.js` | `bridge/paperclip/` | Read-only Paperclip projection into the journal. |
 | `references/heartbeat-procedures.md` (Section 5) | `adapters/openclaw/` | Operational wiring for OpenClaw heartbeat, not the pure package contract. |
 | `scripts/journal-task-sync.js` | compatibility / migration | Still carries legacy `## ✅ Tasks` behavior and should not define the future package boundary. |
-| `$JARVOS_JOURNAL_DIR` (default: `~/Documents/Vault v3/Journal/`) | package data surface | Real working journal artifact store. |
+| `$JARVOS_JOURNAL_DIR` (default: `~/Vaults/Vault v3/Journal/`) | package data surface | Real working journal artifact store. |
 
 ## Implementation / cleanup plan
 

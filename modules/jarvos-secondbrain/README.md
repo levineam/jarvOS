@@ -44,7 +44,7 @@ Path resolution follows: **env var → `jarvos.config.json` → `os.homedir()`-r
 | Env var | Default | Purpose |
 |---------|---------|---------|
 | `JARVOS_CLAWD_DIR` | `~/clawd` | Clawd/workspace root |
-| `JARVOS_VAULT_DIR` | `~/Documents/Vault v3` | Obsidian vault root |
+| `JARVOS_VAULT_DIR` | `~/Vaults/Vault v3` | Obsidian vault root |
 | `JARVOS_JOURNAL_DIR` | `$JARVOS_VAULT_DIR/Journal` | Daily journal directory |
 | `JARVOS_NOTES_DIR` | `$JARVOS_VAULT_DIR/Notes` | Notes directory |
 | `JARVOS_TAGS_DIR` | `$JARVOS_VAULT_DIR/Tags` | Tags directory |
@@ -79,9 +79,9 @@ last-resort fallback.
     }
   },
   "paths": {
-    "vault":   "~/Documents/MyVault",
-    "journal": "~/Documents/MyVault/Journal",
-    "notes":   "~/Documents/MyVault/Notes"
+    "vault":   "~/Vaults/MyVault",
+    "journal": "~/Vaults/MyVault/Journal",
+    "notes":   "~/Vaults/MyVault/Notes"
   }
 }
 ```
@@ -95,6 +95,25 @@ Raw capture (journal/notes)
       → jarvos-ontology (worldview / belief graph)
         → Paperclip (live execution)
 ```
+
+## Vault indexing and provenance
+
+`@jarvos/secondbrain` owns the generic vault indexing contract. Use
+`buildQmdVaultCollectionConfig()` to build one QMD collection over the full
+vault instead of adding one collection per folder. Folder location remains useful
+context, but retrieval covers journals, durable notes, source material, project
+notes, and references by default.
+
+Source material must carry explicit provenance metadata so imported works do not
+collapse into user-authored or AI-authored notes. For external papers and other
+references, validate frontmatter with `validateSourceMaterialProvenance()`:
+
+- `authorship: external`
+- `source_type`
+- `author` or `authors`
+- `source_pdf`, `canonical_url`, or `source_url`
+- `user_authored: false`
+- `ai_generated: false`
 
 ### Capture Your Thoughts contract
 

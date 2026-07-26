@@ -16,16 +16,16 @@
   "paths": {
     "_comment": "All paths support leading ~/ expansion.",
 
-    "vault": "~/Documents/Vault v3",
-    "_vault_doc": "Root of your Obsidian vault (or equivalent). Used as the base for journal and notes dirs when those are not set explicitly. Default: ~/Documents/Vault v3",
+    "vault": "~/Vaults/Vault v3",
+    "_vault_doc": "Root of your Obsidian vault (or equivalent). Used as the base for journal and notes dirs when those are not set explicitly. Default: ~/Vaults/Vault v3",
 
-    "journal": "~/Documents/Vault v3/Journal",
+    "journal": "~/Vaults/Vault v3/Journal",
     "_journal_doc": "Where daily journal files are written. Default: $paths.vault/Journal. Override via JARVOS_JOURNAL_DIR env var.",
 
-    "notes": "~/Documents/Vault v3/Notes",
+    "notes": "~/Vaults/Vault v3/Notes",
     "_notes_doc": "Where durable notes are written. Default: $paths.vault/Notes. Override via JARVOS_NOTES_DIR env var.",
 
-    "tags": "~/Documents/Vault v3/Tags",
+    "tags": "~/Vaults/Vault v3/Tags",
     "_tags_doc": "Tags directory (used by journal-module config). Default: $paths.vault/Tags."
   },
 

@@ -27,7 +27,7 @@ const fs = require('fs');
 // ── Path resolution (mirrors jarvos-paths.js without requiring it) ─────────
 
 const DEFAULT_CLAWD_DIR = path.join(os.homedir(), 'clawd');
-const DEFAULT_VAULT_DIR = path.join(os.homedir(), 'Documents', 'Vault v3');
+const DEFAULT_VAULT_DIR = path.join(os.homedir(), 'Vaults', 'Vault v3');
 
 function expandTilde(p) {
   if (typeof p === 'string' && p.startsWith('~/')) {

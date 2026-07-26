@@ -41,10 +41,10 @@ Path resolution is centralized in `bridge/config/jarvos-paths.js`:
 JARVOS_VAULT_DIR  (env)
   → VAULT_NOTES_DIR / JOURNAL_DIR  (legacy env aliases)
     → jarvos.config.json paths.*  (config file in clawd root)
-      → ~/Documents/Vault v3  (hardcoded fallback — override via env or config)
+      → ~/Vaults/Vault v3  (hardcoded fallback — override via env or config)
 ```
 
-The `~/Documents/Vault v3` fallback is preserved for backward compatibility.
+The `~/Vaults/Vault v3` fallback is preserved for backward compatibility.
 Production uses `jarvos.config.json` (updated to `~/Vaults/Vault v3` per SUP-1041).
 
 ## What not to do

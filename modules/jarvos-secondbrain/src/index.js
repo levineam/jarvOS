@@ -37,11 +37,68 @@ function resolveNotesDir() {
 }
 
 /**
+ * Resolve the vault root directory.
+ */
+function resolveVaultDir() {
+  return getVaultDir();
+}
+
+/**
+ * Resolve the source-material directory. Source material is external/reference
+ * content, not Andrew-authored or AI-authored durable notes.
+ */
+function resolveSourceMaterialDir() {
+  return path.join(getVaultDir(), 'Source Material');
+}
+
+/**
  * Resolve the tags directory.
  */
 function resolveTagsDir() {
   if (process.env.JARVOS_TAGS_DIR) return resolveTilde(process.env.JARVOS_TAGS_DIR);
   return path.join(getVaultDir(), 'Tags');
+}
+
+/**
+ * Build a QMD collection config that indexes the full vault instead of adding
+ * one-off collections for each newly discovered folder. Folder provenance stays
+ * meaningful because Source Material remains under its own path inside the
+ * vault, while retrieval covers the whole knowledge base.
+ */
+function buildQmdVaultCollectionConfig(params = {}) {
+  const vaultDir = params.vaultDir || getVaultDir();
+  return {
+    collections: {
+      vault: {
+        path: vaultDir,
+        pattern: params.pattern || '**/*.md',
+        context: {
+          '': params.context || 'Full vault content for broad knowledge-base retrieval across journals, notes, source material, projects, and references. Preserve folder-level provenance; Source Material is external content and must not be treated as user-authored or AI-authored.',
+        },
+      },
+    },
+  };
+}
+
+function sourceMaterialProvenanceErrors(frontmatter = {}) {
+  const errors = [];
+  const authors = Array.isArray(frontmatter.authors) ? frontmatter.authors.filter(Boolean) : [];
+
+  if (frontmatter.authorship !== 'external') errors.push('authorship must be external');
+  if (!frontmatter.source_type) errors.push('source_type is required');
+  if (!frontmatter.author && authors.length === 0) errors.push('author or authors is required');
+  if (!frontmatter.source_pdf && !frontmatter.canonical_url && !frontmatter.source_url) {
+    errors.push('source_pdf, canonical_url, or source_url is required');
+  }
+  if (frontmatter.user_authored !== false) errors.push('user_authored must be false');
+  if (frontmatter.ai_generated !== false) errors.push('ai_generated must be false');
+
+  return errors;
+}
+
+function validateSourceMaterialProvenance(frontmatter = {}) {
+  const errors = sourceMaterialProvenanceErrors(frontmatter);
+  return { valid: errors.length === 0, errors };
 }
 
 // ── Journal ────────────────────────────────────────────────────────────────
@@ -131,8 +188,13 @@ function notePath(title, notesDir) {
 module.exports = {
   resolveJournalDir,
   resolveNotesDir,
+  resolveVaultDir,
+  resolveSourceMaterialDir,
   resolveTagsDir,
   resolveTilde,
+  buildQmdVaultCollectionConfig,
+  sourceMaterialProvenanceErrors,
+  validateSourceMaterialProvenance,
   createJournalEntry,
   journalEntryPath,
   createNote,

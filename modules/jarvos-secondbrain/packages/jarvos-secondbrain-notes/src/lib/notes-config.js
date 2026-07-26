@@ -8,7 +8,7 @@
  *   1. JARVOS_NOTES_DIR env var
  *   2. VAULT_NOTES_DIR env var (backward compat)
  *   3. jarvos.config.json paths.notes in JARVOS_CLAWD_DIR (or CLAWD_DIR or ~/clawd)
- *   4. $JARVOS_VAULT_DIR/Notes (default: ~/Documents/Vault v3/Notes)
+ *   4. $JARVOS_VAULT_DIR/Notes (default: ~/Vaults/Vault v3/Notes)
  */
 
 'use strict';

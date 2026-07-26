@@ -729,7 +729,7 @@ def build_parser() -> argparse.ArgumentParser:
     _notes_default = (os.environ.get("JARVOS_NOTES_DIR") or
                       os.environ.get("JARVOS_VAULT_NOTES") or
                       os.environ.get("VAULT_NOTES_DIR") or
-                      os.path.join(os.path.expanduser("~"), "Documents", "Vault v3", "Notes"))
+                      os.path.join(os.path.expanduser("~"), "Vaults", "Vault v3", "Notes"))
     ap.add_argument("--notes-dir", default=_notes_default)
     ap.add_argument("--report-dir")
     return ap

@@ -42,8 +42,8 @@ contracts, bridge/adapters, or migration-only surfaces so the future
 | `memory/YYYY-MM-DD.md` | input surface / migration | migration / compatibility | Raw daily operating logs; useful inputs, but not the final package boundary. |
 | `~/.openclaw/openclaw.json` lossless-claw config | `adapters/openclaw/` | adapter | Runtime continuity integration, not memory package ownership. |
 | `references/heartbeat-procedures.md` | `adapters/openclaw/` | adapter | OpenClaw operational wiring around the package surfaces. |
-| `$JARVOS_JOURNAL_DIR` (default: `~/Documents/Vault v3/Journal/`) | package data surface | package data | Current real Journal artifact store. |
-| `$JARVOS_VAULT_NOTES` (default: `~/Documents/Vault v3/Notes/`) | package data surface | package data | Current real Notes artifact store. |
+| `$JARVOS_JOURNAL_DIR` (default: `~/Vaults/Vault v3/Journal/`) | package data surface | package data | Current real Journal artifact store. |
+| `$JARVOS_VAULT_NOTES` (default: `~/Vaults/Vault v3/Notes/`) | package data surface | package data | Current real Notes artifact store. |
 
 ## Practical bootstrap interpretation
 
