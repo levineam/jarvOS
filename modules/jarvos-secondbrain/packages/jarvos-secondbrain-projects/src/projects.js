@@ -42,14 +42,24 @@ const CONFIG_PATH = path.join(__dirname, '..', 'config', 'projects-module.json')
  * `require` is caught.
  */
 function tryResolveSharedConfig() {
-  let resolveConfig;
+  // Resolve the SPECIFIER first, and tolerate only its absence. `bridge/config`
+  // is a directory whose index requires several further modules, so a broken or
+  // partial install raises MODULE_NOT_FOUND for a NESTED module with the same
+  // `err.code` -- indistinguishable from "no bridge here" if the whole
+  // `require` is wrapped. That reinstated the silent `$HOME` fallback this
+  // function exists to close: verified by deleting one nested bridge file, after
+  // which resolveProjectsDir() returned a $HOME path instead of throwing.
+  let modulePath;
   try {
-    // eslint-disable-next-line global-require
-    ({ resolveConfig } = require('../../../bridge/config'));
+    modulePath = require.resolve('../../../bridge/config');
   } catch (err) {
     if (err && err.code === 'MODULE_NOT_FOUND') return null;
     throw err;
   }
+  // Past this point the bridge exists, so every failure is real and propagates:
+  // a nested require failure, and the deliberate fail-closed vault guards.
+  // eslint-disable-next-line global-require
+  const { resolveConfig } = require(modulePath);
   return resolveConfig();
 }
 

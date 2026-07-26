@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const cp = require('node:child_process');
 
 const projects = require('../packages/jarvos-secondbrain-projects/src/projects.js');
 
@@ -333,6 +334,64 @@ test('a fail-closed vault guard rejection is not swallowed into a $HOME fallback
       else process.env[key] = value;
     }
   }
+});
+
+/**
+ * `bridge/config` is a DIRECTORY whose index requires several further modules,
+ * so a broken or partial install raises MODULE_NOT_FOUND for a NESTED module
+ * with the same `err.code` as a genuinely absent bridge. Wrapping the whole
+ * `require` therefore still swallowed a real fault and returned a $HOME path --
+ * the exact silent fallback the guard fix exists to close.
+ *
+ * Runs in a CHILD PROCESS on purpose. In-process, earlier tests in this file
+ * have already loaded the bridge, and clearing `require.cache` by hand proved
+ * unreliable -- the first version of this test passed against the broken
+ * implementation, which is worse than no test. A fresh process has no cache to
+ * contaminate, and it is exactly how the behaviour was confirmed by hand.
+ */
+test('a nested MODULE_NOT_FOUND inside the bridge is NOT mistaken for an absent bridge', () => {
+  const pkgRoot = path.resolve(__dirname, '..');
+  const projectsPath = path.join(pkgRoot, 'packages', 'jarvos-secondbrain-projects', 'src', 'projects.js');
+  const bridgeIndex = path.join(pkgRoot, 'bridge', 'config', 'index.js');
+  const nestedSpecifier = './src/paperclip';
+
+  // Confirm the shape this test depends on: the bridge index really does load
+  // further modules, so a nested resolution failure is possible at all.
+  assert.match(fs.readFileSync(bridgeIndex, 'utf8'), /require\('\.\/src\/paperclip'\)/);
+
+  // Simulated INSIDE the child via a module hook rather than by renaming the
+  // real file: `node --test` runs test files in parallel, and briefly deleting
+  // a shared bridge module made unrelated suites fail. No shared state moves.
+  const probe = [
+    'const Module = require("module");',
+    'const load = Module._load;',
+    'Module._load = function (request) {',
+    '  if (request === ' + JSON.stringify(nestedSpecifier) + ') {',
+    '    const err = new Error("Cannot find module " + ' + JSON.stringify(nestedSpecifier) + ');',
+    '    err.code = "MODULE_NOT_FOUND";',
+    '    throw err;',
+    '  }',
+    '  return load.apply(this, arguments);',
+    '};',
+    'const projects = require(' + JSON.stringify(projectsPath) + ');',
+    'try { console.log("RETURNED:" + projects.resolveProjectsDir()); }',
+    'catch (err) { console.log("THREW:" + String(err && err.message).slice(0, 120)); }',
+  ].join(String.fromCharCode(10));
+
+  const stdout = cp.execFileSync(process.execPath, ['-e', probe], {
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      JARVOS_REQUIRE_CANONICAL_VAULT: path.join(os.tmpdir(), 'required-canonical-vault'),
+      JARVOS_VAULT_DIR: path.join(os.tmpdir(), 'somewhere-else-entirely'),
+      JARVOS_PROJECTS_DIR: '',
+    },
+  });
+
+  // A broken bridge must never yield a path. Either the nested failure
+  // propagates or the vault guard does -- never a silent $HOME fallback.
+  assert.match(stdout, /^THREW:/m, `expected a throw, got: ${stdout.trim()}`);
+  assert.doesNotMatch(stdout, /RETURNED:/, 'a broken bridge must not yield a projects directory');
 });
 
 test('an absent bridge is still tolerated and falls back', () => {
