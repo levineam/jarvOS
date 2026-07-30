@@ -124,6 +124,13 @@ Ideas section; substantive ideas become source-backed notes linked from Ideas.
 The canonical journal path is `Journal/YYYY-MM-DD.md`. Agents must not create
 guessed daily journal files under `Notes/`.
 
+## Journal Backlink Recovery
+
+When a note is written but its daily journal backlink is deferred, use the
+[recovery operations guide](docs/operations/journal-backlink-recovery.md).
+It starts with a non-mutating queue report; applying a retry or manually
+reconciling a moved note requires an explicit `--apply`.
+
 ## Automatic Secondbrain Stack
 
 The public stack is source-backed and rebuildable:
