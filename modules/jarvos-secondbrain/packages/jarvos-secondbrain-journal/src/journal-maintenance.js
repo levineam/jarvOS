@@ -1132,9 +1132,12 @@ function readDeferredBacklinkFlushMetadata(journalDir) {
       summary: queue.lastFlushSummary && typeof queue.lastFlushSummary === 'object'
         ? queue.lastFlushSummary
         : null,
+      entries: queue.entries && typeof queue.entries === 'object'
+        ? Object.entries(queue.entries).map(([key, entry]) => ({ key, ...entry }))
+        : [],
     };
   } catch {
-    return { lastFlushAt: null, summary: null };
+    return { lastFlushAt: null, summary: null, entries: [] };
   }
 }
 
@@ -1162,6 +1165,27 @@ function requiresDeferredBacklinkAttention(summary) {
     || summary.unresolved > 0
     || summary.superseded > 0
     || summary.failed > 0;
+}
+
+function mergeDeferredBacklinkQueueState(summary, entries) {
+  const queueState = {
+    pending: 0,
+    unresolved: 0,
+    superseded: 0,
+    failed: 0,
+  };
+  for (const entry of entries || []) {
+    if (!entry || !Object.hasOwn(queueState, entry.status)) continue;
+    queueState[entry.status] += 1;
+    if (entry.status === 'pending' && entry.lastError) queueState.failed += 1;
+  }
+  return {
+    ...summary,
+    pending: Math.max(summary.pending, queueState.pending),
+    unresolved: Math.max(summary.unresolved, queueState.unresolved),
+    superseded: Math.max(summary.superseded, queueState.superseded),
+    failed: Math.max(summary.failed, queueState.failed),
+  };
 }
 
 function formatDeferredBacklinkStatus(lastFlushAt, summary) {
@@ -1192,7 +1216,10 @@ function runMaintenance(argv = process.argv.slice(2), opts = {}) {
     dryRun: args.dryRun,
   });
   const queueMetadata = readFlushMetadata(journalDir);
-  const summary = flushSummary(rawFlushSummary || queueMetadata.summary || {});
+  const summary = mergeDeferredBacklinkQueueState(
+    flushSummary(rawFlushSummary || queueMetadata.summary || {}),
+    queueMetadata.entries,
+  );
   const lastFlushAt = rawFlushSummary?.lastFlushAt || queueMetadata.lastFlushAt;
 
   const reportable = results.filter((result) => result.changed || result.healthBefore.degraded || result.healthAfter.degraded);

@@ -117,6 +117,29 @@ test('maintenance does not collapse deferred backlog states to NO_REPLY', () => 
   }
 });
 
+test('maintenance reports terminal deferred records that predate this flush', () => {
+  const report = runMaintenance([`--date=${TEST_DATE}`], {
+    loadConfig: () => ({}),
+    syncOneDate: (date) => unchangedSync(date),
+    flushDeferredBacklinks: () => ({
+      checked: 0,
+      linked: 0,
+      pending: 0,
+      unresolved: 0,
+      superseded: 0,
+      entries: [],
+    }),
+    readDeferredBacklinkFlushMetadata: () => ({
+      lastFlushAt: '2026-01-02T01:00:00.000Z',
+      summary: null,
+      entries: [{ key: 'moved', status: 'superseded' }],
+    }),
+  });
+
+  assert.equal(report.summary.superseded, 1);
+  assert.notEqual(report.output, 'NO_REPLY');
+});
+
 function sectionBody(markdown, heading) {
   const escaped = heading.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const pattern = `${escaped}\\n([\\s\\S]*?)(?=\\n## |\\n— Edited by Jarvis|$)`;
