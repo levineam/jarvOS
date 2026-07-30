@@ -7,6 +7,7 @@
 'use strict';
 
 const { existsSync, mkdirSync, readFileSync, writeFileSync } = require('fs');
+const { randomUUID } = require('crypto');
 const { dirname, join } = require('path');
 const { getVaultNotesDir, loadConfig } = require('./lib/notes-config');
 const { repairZeroByteVaultRootDuplicate } = require('./lib/vault-root-duplicate-guard');
@@ -17,7 +18,7 @@ const {
   parseFrontmatter,
   renderFrontmatter,
 } = require('./lib/note-schema');
-const { linkNoteToTodayJournal } = require('../../../bridge/provenance/src/link-to-journal');
+const { linkNoteToJournal } = require('../../../bridge/provenance/src/link-to-journal');
 
 function todayDate() {
   return new Intl.DateTimeFormat('en-CA', {
@@ -57,7 +58,12 @@ function normalizeFrontmatter({ incoming = {}, existing = {} } = {}) {
     throw new Error(`Invalid note frontmatter: ${canonical.errors.join('; ')}`);
   }
 
-  return canonical.frontmatter;
+  // jarvos_note_id is deliberately writer-owned: callers cannot choose it,
+  // while an existing canonical note retains its stable identity.
+  return {
+    ...canonical.frontmatter,
+    jarvos_note_id: canonical.frontmatter.jarvos_note_id || randomUUID(),
+  };
 }
 
 function buildFrontmatter({ incomingFrontmatter = {}, existingFrontmatter = {} } = {}) {
@@ -65,6 +71,46 @@ function buildFrontmatter({ incomingFrontmatter = {}, existingFrontmatter = {} }
     incoming: incomingFrontmatter,
     existing: existingFrontmatter,
   }));
+}
+
+function normalizeJournalResult(result) {
+  if (result?.linked === true) {
+    return { ...result, status: 'linked', linked: true, deferred: false, disabled: false, failed: false };
+  }
+  return {
+    ...result,
+    status: 'failed',
+    linked: false,
+    deferred: false,
+    disabled: false,
+    failed: true,
+    reason: result?.reason || 'journal linker returned an unsuccessful result',
+  };
+}
+
+function journalResultFromError(error) {
+  const deferredBacklink = error?.deferredBacklink;
+  if (deferredBacklink?.deferredPath && deferredBacklink?.key) {
+    return {
+      status: 'deferred',
+      linked: false,
+      deferred: true,
+      disabled: false,
+      failed: false,
+      reason: error.message,
+      deferredBacklink,
+      deferredPath: deferredBacklink.deferredPath,
+      recoveryKey: deferredBacklink.key,
+    };
+  }
+  return {
+    status: 'failed',
+    linked: false,
+    deferred: false,
+    disabled: false,
+    failed: true,
+    reason: error.message,
+  };
 }
 
 function writeNoteFile({ title, content, frontmatter = {} }) {
@@ -94,12 +140,25 @@ function writeNoteFile({ title, content, frontmatter = {} }) {
     notesFilePath: filePath,
   });
 
-  let journal = { linked: false, skipped: true, reason: 'disabled by JARVOS_JOURNAL_BACKLINK=0' };
+  let journal = {
+    status: 'disabled',
+    linked: false,
+    deferred: false,
+    disabled: true,
+    failed: false,
+    skipped: true,
+    reason: 'disabled by JARVOS_JOURNAL_BACKLINK=0',
+  };
   if (process.env.JARVOS_JOURNAL_BACKLINK !== '0') {
     try {
-      journal = linkNoteToTodayJournal(safeName, '📝 Notes');
+      journal = normalizeJournalResult(linkNoteToJournal({
+        noteTitle: safeName,
+        section: '📝 Notes',
+        noteId: normalizedFrontmatter.jarvos_note_id,
+        notePath: filePath,
+      }));
     } catch (error) {
-      journal = { linked: false, skipped: true, reason: error.message };
+      journal = journalResultFromError(error);
     }
   }
 
@@ -143,6 +202,8 @@ module.exports = {
   buildFrontmatter,
   buildNoteBody,
   normalizeFrontmatter,
+  normalizeJournalResult,
+  journalResultFromError,
   sanitizeTitle,
   noteFilePath,
   todayDate,
