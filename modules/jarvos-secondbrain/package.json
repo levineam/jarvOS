@@ -12,6 +12,7 @@
   ],
   "scripts": {
     "onboard:shared-vault": "node bridge/config/src/shared-vault-onboarding.js",
+    "maintain:journal-backlinks": "node scripts/journal-backlink-recovery.js",
     "test": "node --test tests/*.test.js"
   },
   "engines": {
