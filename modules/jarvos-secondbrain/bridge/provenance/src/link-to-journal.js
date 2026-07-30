@@ -425,7 +425,7 @@ function isTodayJournalPath(journalPath) {
 }
 
 function deferredBacklinksPath(journalPath) {
-  return path.join(path.dirname(path.dirname(journalPath)), '.jarvos', 'journal-maintenance', 'deferred-backlinks.json');
+  return deferredQueuePathForJournalDir(path.dirname(journalPath));
 }
 
 function recordDeferredBacklink({
@@ -796,6 +796,7 @@ module.exports = {
   deferredQueuePathForJournalDir,
   ensureJournalFile,
   escapeRegex,
+  isPathInside,
   linkNoteInSection,
   linkNoteToTodayJournal,
   linkNoteToJournal,

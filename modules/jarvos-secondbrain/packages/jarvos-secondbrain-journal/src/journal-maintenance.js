@@ -1124,7 +1124,8 @@ function deferredBacklinkFlush() {
 }
 
 function readDeferredBacklinkFlushMetadata(journalDir) {
-  const deferredPath = path.join(journalStateRoot(journalDir), 'deferred-backlinks.json');
+  const deferredPath = require('../../../bridge/provenance/src/link-to-journal.js')
+    .deferredQueuePathForJournalDir(journalDir);
   try {
     const queue = JSON.parse(fs.readFileSync(deferredPath, 'utf8'));
     return {

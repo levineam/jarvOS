@@ -80,8 +80,9 @@ function verifyContract(result, personality) {
     failures.push(`note path is outside canonical Notes dir: ${result.path}`);
   }
 
-  if (!fs.existsSync(result.path)) failures.push(`note does not exist: ${result.path}`);
-  const noteMd = fs.existsSync(result.path) ? fs.readFileSync(result.path, 'utf8') : '';
+  const noteExists = fs.existsSync(result.path);
+  if (!noteExists) failures.push(`note does not exist: ${result.path}`);
+  const noteMd = noteExists ? fs.readFileSync(result.path, 'utf8') : '';
   const fm = frontmatterToObject(parseFrontmatter(noteMd));
   for (const field of ['status', 'type', 'project', 'created', 'updated', 'author']) {
     if (fm[field] === undefined) failures.push(`missing canonical frontmatter field: ${field}`);

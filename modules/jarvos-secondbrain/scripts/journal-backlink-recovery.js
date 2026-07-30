@@ -18,12 +18,15 @@ function usage() {
 }
 
 function parseArgs(argv) {
-  const args = { dryRun: true, json: true };
+  const args = { dryRun: true };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === '--dry-run') args.dryRun = true;
     else if (arg === '--apply') args.dryRun = false;
-    else if (arg === '--json') args.json = true;
+    else if (arg === '--json') {
+      // JSON is the sole output format; retain this explicit flag for stable
+      // operational transcripts and backwards-compatible examples.
+    }
     else if (arg === '--key' || arg === '--note-path' || arg === '--journal-dir') {
       const value = argv[index + 1];
       if (!value || value.startsWith('--')) throw new Error(`Missing value for ${arg}`);
@@ -33,8 +36,6 @@ function parseArgs(argv) {
     else throw new Error(`Unknown argument: ${arg}`);
   }
   if (args.notePath && !args.key) throw new Error('--note-path requires --key');
-  if (args.notePath && args.dryRun === false) return args;
-  if (args.notePath) return args;
   return args;
 }
 

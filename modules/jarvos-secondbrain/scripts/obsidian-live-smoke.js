@@ -17,6 +17,8 @@ const {
   mutateJournalThroughObsidian,
   readNoteId,
   runObsidianEval,
+  escapeRegex,
+  isPathInside,
 } = require('../bridge/provenance/src/link-to-journal');
 
 const LIVE_GATE = 'JARVOS_LIVE_OBSIDIAN_SMOKE';
@@ -25,11 +27,6 @@ const NOTE_PATH_ENV = 'JARVOS_LIVE_OBSIDIAN_NOTE_PATH';
 const NOTE_TARGET_ENV = 'JARVOS_LIVE_OBSIDIAN_NOTE_TARGET';
 const MINIMUM_OBSIDIAN_VERSION = [1, 12, 7];
 
-function isPathInside(parentDir, candidatePath) {
-  const relative = path.relative(path.resolve(parentDir), path.resolve(candidatePath));
-  return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
-}
-
 function resolveConfiguredPath(value, root, label) {
   if (typeof value !== 'string' || !value.trim()) {
     throw new Error(`${label} is required when ${LIVE_GATE}=1`);
@@ -37,6 +34,15 @@ function resolveConfiguredPath(value, root, label) {
   const resolved = path.resolve(root, value);
   if (!isPathInside(root, resolved)) throw new Error(`${label} must be inside ${root}: ${value}`);
   return resolved;
+}
+
+function assertExistingFile(filePath, label) {
+  try {
+    if (fs.statSync(filePath).isFile()) return;
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+  }
+  throw new Error(`Configured ${label} does not exist: ${filePath}`);
 }
 
 function relativePathFromVault(vaultRoot, filePath) {
@@ -49,10 +55,6 @@ function noteTargetForPath(vaultRoot, notePath, configuredTarget) {
     throw new Error(`${NOTE_TARGET_ENV} must be a non-empty Obsidian link target without brackets or newlines`);
   }
   return target.trim();
-}
-
-function escapeRegex(value) {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 function canonicalLinkCount(journalContent, noteTarget) {
@@ -125,12 +127,8 @@ function resolveLivePair(env = process.env, roots = {}) {
   if (!isPathInside(notesDir, notePath) || path.extname(notePath).toLowerCase() !== '.md') {
     throw new Error(`${NOTE_PATH_ENV} must name a Markdown file inside ${notesDir}`);
   }
-  if (!fs.existsSync(journalPath) || !fs.statSync(journalPath).isFile()) {
-    throw new Error(`Configured journal does not exist: ${journalPath}`);
-  }
-  if (!fs.existsSync(notePath) || !fs.statSync(notePath).isFile()) {
-    throw new Error(`Configured note does not exist: ${notePath}`);
-  }
+  assertExistingFile(journalPath, 'journal');
+  assertExistingFile(notePath, 'note');
   const noteId = readNoteId(notePath);
   if (!noteId) throw new Error(`Configured note has no jarvos_note_id: ${notePath}`);
 

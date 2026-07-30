@@ -202,8 +202,6 @@ module.exports = {
   buildFrontmatter,
   buildNoteBody,
   normalizeFrontmatter,
-  normalizeJournalResult,
-  journalResultFromError,
   sanitizeTitle,
   noteFilePath,
   todayDate,
