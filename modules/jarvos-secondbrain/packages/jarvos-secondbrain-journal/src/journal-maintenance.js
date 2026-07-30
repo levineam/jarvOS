@@ -40,10 +40,12 @@ function parseArgs(argv) {
   const out = {
     dateSpecs: ['today'],
     dryRun: false,
+    json: false,
   };
 
   for (const arg of argv) {
     if (arg === '--dry-run') out.dryRun = true;
+    else if (arg === '--json') out.json = true;
     else if (arg === '--yesterday') out.dateSpecs = ['yesterday'];
     else if (arg.startsWith('--date=')) out.dateSpecs = [arg.split('=').slice(1).join('=')];
     else if (arg.startsWith('--dates=')) {
@@ -65,6 +67,7 @@ function printHelpAndExit(code) {
     '  --dates=today,yesterday,YYYY-MM-DD',
     '  --yesterday',
     '  --dry-run',
+    '  --json',
     '  -h, --help',
   ].join('\n'));
   process.exit(code);
@@ -1113,18 +1116,86 @@ function syncOneDate(date, config, opts = {}) {
   };
 }
 
-function main(argv = process.argv.slice(2)) {
+function deferredBacklinkFlush() {
+  // This stays lazy to avoid a require cycle: the provenance linker imports
+  // this module for journal rendering, while maintenance invokes recovery only
+  // after the journal sync has completed.
+  return require('../../../bridge/provenance/src/link-to-journal.js').flushDeferredBacklinks;
+}
+
+function readDeferredBacklinkFlushMetadata(journalDir) {
+  const deferredPath = path.join(journalStateRoot(journalDir), 'deferred-backlinks.json');
+  try {
+    const queue = JSON.parse(fs.readFileSync(deferredPath, 'utf8'));
+    return {
+      lastFlushAt: typeof queue.lastFlushAt === 'string' ? queue.lastFlushAt : null,
+      summary: queue.lastFlushSummary && typeof queue.lastFlushSummary === 'object'
+        ? queue.lastFlushSummary
+        : null,
+    };
+  } catch {
+    return { lastFlushAt: null, summary: null };
+  }
+}
+
+function flushSummary(summary = {}) {
+  const entries = Array.isArray(summary.entries) ? summary.entries : [];
+  const number = (field) => Number.isFinite(summary[field]) ? summary[field] : 0;
+  return {
+    checked: number('checked'),
+    linked: number('linked'),
+    pending: number('pending'),
+    unresolved: number('unresolved'),
+    superseded: number('superseded'),
+    // Linker failures remain pending for retry. Keeping this distinct from
+    // `pending` makes the retry health visible without changing queue states.
+    failed: Number.isFinite(summary.failed)
+      ? summary.failed
+      : entries.filter((entry) => entry && entry.status === 'pending' && entry.error).length,
+    ...(summary.queuePath ? { queuePath: summary.queuePath } : {}),
+    ...(entries.length ? { entries } : {}),
+  };
+}
+
+function requiresDeferredBacklinkAttention(summary) {
+  return summary.pending > 0
+    || summary.unresolved > 0
+    || summary.superseded > 0
+    || summary.failed > 0;
+}
+
+function formatDeferredBacklinkStatus(lastFlushAt, summary) {
+  return [
+    `Deferred backlinks${lastFlushAt ? ` (last flush: ${lastFlushAt})` : ''}:`,
+    `checked=${summary.checked}`,
+    `linked=${summary.linked}`,
+    `pending=${summary.pending}`,
+    `unresolved=${summary.unresolved}`,
+    `superseded=${summary.superseded}`,
+    `failed=${summary.failed}`,
+  ].join(' ');
+}
+
+function runMaintenance(argv = process.argv.slice(2), opts = {}) {
   const args = parseArgs(argv);
-  const config = loadConfig();
+  const config = (opts.loadConfig || loadConfig)();
+  const sync = opts.syncOneDate || syncOneDate;
+  const flush = opts.flushDeferredBacklinks || deferredBacklinkFlush();
+  const readFlushMetadata = opts.readDeferredBacklinkFlushMetadata || readDeferredBacklinkFlushMetadata;
   const dates = unique(args.dateSpecs.map(resolveDateSpec));
-  const results = dates.map((date) => syncOneDate(date, config, args));
+  const results = dates.map((date) => sync(date, config, args));
+  const journalDir = path.dirname(results[0].journalPath);
+  const rawFlushSummary = flush({
+    journalDir,
+    vaultRoot: path.dirname(journalDir),
+    notesDir: path.join(path.dirname(journalDir), 'Notes'),
+    dryRun: args.dryRun,
+  });
+  const queueMetadata = readFlushMetadata(journalDir);
+  const summary = flushSummary(rawFlushSummary || queueMetadata.summary || {});
+  const lastFlushAt = rawFlushSummary?.lastFlushAt || queueMetadata.lastFlushAt;
 
   const reportable = results.filter((result) => result.changed || result.healthBefore.degraded || result.healthAfter.degraded);
-  if (reportable.length === 0) {
-    console.log('NO_REPLY');
-    return;
-  }
-
   const lines = reportable.map((result) => {
     let verb = result.existed ? 'UPDATED' : 'CREATED';
     if (result.healthBefore.status === 'missing') verb = 'MISSING -> CREATED';
@@ -1140,7 +1211,27 @@ function main(argv = process.argv.slice(2)) {
     if (result.backupPath) suffixes.push(`audit backup: ${result.backupPath}`);
     return `${verb} ${result.journalPath}${suffixes.length ? ` (${suffixes.join('; ')})` : ''}`;
   });
-  console.log(lines.join('\n'));
+  const backlinkAttention = requiresDeferredBacklinkAttention(summary);
+  if (backlinkAttention) lines.push(formatDeferredBacklinkStatus(lastFlushAt, summary));
+
+  const status = lines.length ? 'reported' : 'NO_REPLY';
+  const report = {
+    dates,
+    results,
+    lastFlushAt,
+    summary,
+    // Match the queue's persisted naming for callers that poll freshness.
+    lastFlushSummary: summary,
+    status,
+  };
+  report.output = args.json ? JSON.stringify(report) : (lines.join('\n') || 'NO_REPLY');
+  return report;
+}
+
+function main(argv = process.argv.slice(2)) {
+  const report = runMaintenance(argv);
+  console.log(report.output);
+  return report;
 }
 
 module.exports = {
@@ -1155,9 +1246,11 @@ module.exports = {
   journalMetrics,
   loadConfig,
   normalizeSections,
+  requiresDeferredBacklinkAttention,
   renderJournal,
   resolveDateSpec,
   resolveJournalDir,
+  runMaintenance,
   stripLeadingRecoveryScaffold,
   syncOneDate,
   today,
