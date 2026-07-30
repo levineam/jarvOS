@@ -123,7 +123,8 @@ function verifyContract(result, personality) {
         if (entry.noteTitle !== result.title) failures.push(`deferred backlink note title mismatch: ${entry.noteTitle || '(missing)'}`);
         if (entry.journalPath !== journalPath) failures.push(`deferred backlink journal path mismatch: ${entry.journalPath || '(missing)'}`);
         if (entry.noteId !== fm.jarvos_note_id) failures.push(`deferred backlink note id mismatch: ${entry.noteId || '(missing)'}`);
-        if (entry.notePath !== result.path) failures.push(`deferred backlink note path mismatch: ${entry.notePath || '(missing)'}`);
+        const vaultRelativeNotePath = path.relative(path.dirname(journalDir), result.path).split(path.sep).join('/');
+        if (entry.notePath !== vaultRelativeNotePath) failures.push(`deferred backlink note path mismatch: ${entry.notePath || '(missing)'}`);
       }
     }
   } else {

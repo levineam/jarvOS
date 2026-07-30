@@ -179,6 +179,8 @@ test('failed retry stays pending with attempt audit', () => {
     assert.equal(entry.status, 'pending');
     assert.equal(entry.attempts, 1);
     assert.match(entry.lastError, /Obsidian unavailable/);
+    assert.equal(entry.events.at(-1).type, 'retry-failed');
+    assert.match(entry.events.at(-1).error, /Obsidian unavailable/);
   } finally {
     fs.rmSync(state.root, { recursive: true, force: true });
   }

@@ -138,7 +138,7 @@ test('a verified deferred backlink queue is a successful partial contract result
         noteTitle: title,
         journalPath,
         noteId: '123e4567-e89b-12d3-a456-426614174000',
-        notePath,
+        notePath: `Notes/${title}.md`,
       },
     },
   }));

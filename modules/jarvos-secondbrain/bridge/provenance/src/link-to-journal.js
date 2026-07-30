@@ -540,6 +540,8 @@ function flushDeferredBacklinks({
     for (const [entryKey, outcome] of outcomes) {
       const current = latest.entries[entryKey];
       if (!current) continue; // An operator removed it after the snapshot; never resurrect it.
+      const snapshotEntry = snapshot.entries[entryKey];
+      if (snapshotEntry?.updatedAt && current.updatedAt !== snapshotEntry.updatedAt) continue;
       const base = { ...current, updatedAt: now };
       if (outcome.status === 'pending') {
         latest.entries[entryKey] = {
@@ -547,6 +549,13 @@ function flushDeferredBacklinks({
           attempts: (Number.isInteger(current.attempts) ? current.attempts : 0) + 1,
           lastAttemptAt: now,
           lastError: outcome.error || undefined,
+          events: queueEvent(current, {
+            at: now,
+            type: 'retry-failed',
+            status: 'pending',
+            reason: outcome.reason,
+            error: outcome.error,
+          }),
         };
       } else {
         latest.entries[entryKey] = {
