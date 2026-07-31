@@ -8,10 +8,12 @@ const {
   buildActionKey,
   canonicalResourceKey,
   commandSpecDigest,
+  createManagedSoftwareCatalog,
   createCommand,
   createManagerManifest,
   createRequest,
   toPublicProjection,
+  validateManagedSoftwareEntry,
   validateRecord,
 } = require('../src/index.js');
 const { createPolicyEngine } = require('../src/index.js');
@@ -176,4 +178,56 @@ test('record validation rejects malformed lifecycle records', () => {
 
 test('policy defaults cannot allow unmatched mutations', () => {
   assert.throws(() => createPolicyEngine({ defaultOutcome: 'allow' }), /allow requires an explicit rule/);
+});
+
+test('managed-software entries retain relationship dimensions without local paths', () => {
+  const entry = validateManagedSoftwareEntry({
+    id: 'jarvos',
+    label: 'jarvOS',
+    ownership: 'jarvos-owned',
+    distribution: 'core',
+    canonicalUpstream: { repository: 'https://github.com/levineam/jarvOS' },
+    tracker: { kind: 'github', repository: 'levineam/jarvOS' },
+    defaultVisibility: 'public',
+    localChangePolicy: 'default-public',
+    updatePolicy: 'managed-release',
+    releaseAuthority: 'andrew-approval',
+    integrationImpactPolicy: 'direct',
+    checkoutSelectors: ['jarvos-public'],
+    ignoredPathPolicy: 'git-default',
+    capabilities: { installedVersion: true, developmentCheckout: true },
+  });
+
+  assert.equal(entry.id, 'jarvos');
+  assert.deepEqual(entry.checkoutSelectors, ['jarvos-public']);
+  assert.equal(entry.capabilities.developmentCheckout, true);
+  assert.throws(() => validateManagedSoftwareEntry({ ...entry, checkoutSelectors: ['/Users/andrew/jarvOS'] }), /opaque/i);
+  assert.throws(() => validateManagedSoftwareEntry({ ...entry, ownership: 'third-party', localChangePolicy: 'default-public' }), /third-party/i);
+});
+
+test('managed-software catalog validates revisions and creates privacy-safe reports', () => {
+  const catalog = createManagedSoftwareCatalog({
+    revision: 'managed-software.v1',
+    entries: [{
+      id: 'qmd',
+      label: 'QMD',
+      ownership: 'third-party',
+      distribution: 'managed-integration',
+      canonicalUpstream: { repository: 'https://github.com/tobi/qmd' },
+      tracker: { kind: 'github', repository: 'tobi/qmd' },
+      defaultVisibility: 'internal',
+      localChangePolicy: 'contribute-upstream',
+      updatePolicy: 'watch-only',
+      releaseAuthority: 'upstream',
+      integrationImpactPolicy: 'linked-compatibility',
+      checkoutSelectors: ['qmd-local'],
+      ignoredPathPolicy: 'git-default',
+      capabilities: { installedVersion: true, developmentCheckout: false },
+    }],
+  });
+
+  assert.equal(catalog.revision, 'managed-software.v1');
+  assert.equal(catalog.entries.length, 1);
+  assert.deepEqual(catalog.publicReport.entries[0].checkoutSelectors, undefined);
+  assert.throws(() => createManagedSoftwareCatalog({ revision: 'managed-software.v2', entries: [catalog.entries[0], catalog.entries[0]] }), /duplicate/i);
 });

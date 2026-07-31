@@ -4,8 +4,31 @@ const {
   CONTRACT_VERSION,
   assertCompatibleVersion,
   canonicalMutationKey,
+  clone,
   createManagerManifest,
+  validateManagedSoftwareEntry,
 } = require('../contracts');
+
+function createManagedSoftwareCatalog(input = {}) {
+  const revision = input.revision;
+  if (typeof revision !== 'string' || !/^managed-software\.v\d+$/.test(revision)) {
+    throw new Error('catalog revision must use the managed-software.vN format');
+  }
+  if (!Array.isArray(input.entries) || !input.entries.length) throw new Error('catalog entries are required');
+  const entries = input.entries.map((entry) => validateManagedSoftwareEntry(entry));
+  const byId = new Map();
+  for (const entry of entries) {
+    if (byId.has(entry.id)) throw new Error(`duplicate managed-software entry: ${entry.id}`);
+    byId.set(entry.id, entry);
+  }
+  const publicEntries = entries.map(({ checkoutSelectors, ...entry }) => clone(entry));
+  return {
+    revision,
+    entries: entries.map(clone),
+    find: (id) => byId.has(id) ? clone(byId.get(id)) : null,
+    publicReport: { revision, entries: publicEntries },
+  };
+}
 
 function versionCompatible(manifest) {
   try {
@@ -156,6 +179,7 @@ function createRegistry(options = {}) {
 }
 
 module.exports = {
+  createManagedSoftwareCatalog,
   createRegistry,
   mutationOwnershipKey,
   versionCompatible,

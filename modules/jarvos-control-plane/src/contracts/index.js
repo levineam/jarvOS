@@ -44,6 +44,21 @@ const COMMAND_STATUSES = [
 const POLICY_OUTCOMES = ['allow', 'deny', 'require_approval', 'defer'];
 const ACTOR_KINDS = ['human', 'agent', 'schedule', 'system'];
 const SENSITIVITY_LEVELS = ['public', 'internal', 'private', 'secret'];
+const MANAGED_SOFTWARE_OWNERSHIP = ['jarvos-owned', 'andrew-owned', 'third-party'];
+const MANAGED_SOFTWARE_DISTRIBUTIONS = ['core', 'bundled', 'optional', 'managed-integration', 'independent', 'private-experiment'];
+const MANAGED_SOFTWARE_VISIBILITIES = ['public', 'internal', 'private'];
+const MANAGED_SOFTWARE_LOCAL_CHANGE_POLICIES = [
+  'default-public',
+  'project-default',
+  'contribute-upstream',
+  'maintain-fork',
+  'maintain-patch',
+  'internal-only',
+  'private-only',
+];
+const MANAGED_SOFTWARE_UPDATE_POLICIES = ['managed-release', 'watch-only', 'manual', 'none'];
+const MANAGED_SOFTWARE_RELEASE_AUTHORITIES = ['andrew-approval', 'project-policy', 'upstream', 'none'];
+const MANAGED_SOFTWARE_INTEGRATION_IMPACT_POLICIES = ['direct', 'linked-compatibility', 'none'];
 
 function isObject(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -285,6 +300,61 @@ function validateSensitivity(sensitivity = {}) {
   }
 }
 
+function requireManagedSoftwareEnum(value, field, allowed) {
+  if (!allowed.includes(value)) throw new Error(`${field} must be one of: ${allowed.join(', ')}`);
+}
+
+function validateOpaqueCheckoutSelectors(selectors) {
+  if (!Array.isArray(selectors) || !selectors.length) {
+    throw new Error('checkoutSelectors must contain at least one opaque selector');
+  }
+  const seen = new Set();
+  for (const selector of selectors) {
+    if (typeof selector !== 'string' || !/^[a-z][a-z0-9._:-]{0,127}$/i.test(selector) || selector.includes('..')) {
+      throw new Error('checkoutSelectors must contain opaque selector IDs, not paths');
+    }
+    if (seen.has(selector)) throw new Error(`checkoutSelectors contains duplicate selector: ${selector}`);
+    seen.add(selector);
+  }
+}
+
+function validateManagedSoftwareEntry(input = {}) {
+  if (!isObject(input)) throw new Error('managed-software entry must be an object');
+  const entry = clone(input);
+  if (typeof entry.id !== 'string' || !/^[a-z][a-z0-9_-]{0,63}$/i.test(entry.id)) {
+    throw new Error('managed-software entry id must be a safe identifier');
+  }
+  if (typeof entry.label !== 'string' || !entry.label.trim()) throw new Error('managed-software entry label is required');
+  requireManagedSoftwareEnum(entry.ownership, 'ownership', MANAGED_SOFTWARE_OWNERSHIP);
+  requireManagedSoftwareEnum(entry.distribution, 'distribution', MANAGED_SOFTWARE_DISTRIBUTIONS);
+  requireManagedSoftwareEnum(entry.defaultVisibility, 'defaultVisibility', MANAGED_SOFTWARE_VISIBILITIES);
+  requireManagedSoftwareEnum(entry.localChangePolicy, 'localChangePolicy', MANAGED_SOFTWARE_LOCAL_CHANGE_POLICIES);
+  requireManagedSoftwareEnum(entry.updatePolicy, 'updatePolicy', MANAGED_SOFTWARE_UPDATE_POLICIES);
+  requireManagedSoftwareEnum(entry.releaseAuthority, 'releaseAuthority', MANAGED_SOFTWARE_RELEASE_AUTHORITIES);
+  requireManagedSoftwareEnum(entry.integrationImpactPolicy, 'integrationImpactPolicy', MANAGED_SOFTWARE_INTEGRATION_IMPACT_POLICIES);
+  if (!isObject(entry.canonicalUpstream) || typeof entry.canonicalUpstream.repository !== 'string' || !/^https:\/\//.test(entry.canonicalUpstream.repository)) {
+    throw new Error('canonicalUpstream.repository must be an HTTPS URL');
+  }
+  if (!isObject(entry.tracker) || typeof entry.tracker.kind !== 'string' || typeof entry.tracker.repository !== 'string' || !entry.tracker.repository) {
+    throw new Error('tracker.kind and tracker.repository are required');
+  }
+  if (typeof entry.ignoredPathPolicy !== 'string' || !entry.ignoredPathPolicy) throw new Error('ignoredPathPolicy is required');
+  validateOpaqueCheckoutSelectors(entry.checkoutSelectors);
+  if (!isObject(entry.capabilities) || typeof entry.capabilities.installedVersion !== 'boolean' || typeof entry.capabilities.developmentCheckout !== 'boolean') {
+    throw new Error('capabilities must declare installedVersion and developmentCheckout booleans');
+  }
+  if (!entry.capabilities.installedVersion && !entry.capabilities.developmentCheckout) {
+    throw new Error('capabilities must enable installedVersion or developmentCheckout');
+  }
+  if (entry.ownership === 'third-party' && entry.localChangePolicy === 'default-public') {
+    throw new Error('third-party entries may not use default-public localChangePolicy');
+  }
+  if (entry.distribution === 'private-experiment' && entry.defaultVisibility === 'public') {
+    throw new Error('private-experiment entries may not default to public visibility');
+  }
+  return entry;
+}
+
 function validateActor(actor = {}) {
   if (!isObject(actor)) throw new Error('actor must be an object');
   if (!ACTOR_KINDS.includes(actor.kind)) {
@@ -407,6 +477,13 @@ module.exports = {
   COMMAND_STATUSES,
   CONTRACT_VERSION,
   MANAGER_SCHEMA_VERSION,
+  MANAGED_SOFTWARE_DISTRIBUTIONS,
+  MANAGED_SOFTWARE_INTEGRATION_IMPACT_POLICIES,
+  MANAGED_SOFTWARE_LOCAL_CHANGE_POLICIES,
+  MANAGED_SOFTWARE_OWNERSHIP,
+  MANAGED_SOFTWARE_RELEASE_AUTHORITIES,
+  MANAGED_SOFTWARE_UPDATE_POLICIES,
+  MANAGED_SOFTWARE_VISIBILITIES,
   POLICY_OUTCOMES,
   RECORD_SCHEMA_VERSION,
   RECORD_TYPES,
@@ -430,6 +507,7 @@ module.exports = {
   lifecycleTransition,
   stableStringify,
   toPublicProjection,
+  validateManagedSoftwareEntry,
   validateManagerManifest,
   validateRecord,
 };
