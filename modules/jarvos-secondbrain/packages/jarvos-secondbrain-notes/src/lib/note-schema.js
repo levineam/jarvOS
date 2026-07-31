@@ -1,6 +1,7 @@
 'use strict';
 
 const REQUIRED_FIELDS = ['status', 'type', 'project', 'created', 'updated', 'author'];
+const WRITER_OWNED_FIELDS = ['jarvos_note_id'];
 
 const ALLOWED_STATUS = new Set(['active', 'draft', 'archived', 'abandoned']);
 const ALLOWED_TYPE = new Set(['project-note', 'draft', 'research', 'decision', 'reference', 'article', 'chapter']);
@@ -412,6 +413,9 @@ function splitIncomingFrontmatter(frontmatter) {
   const optional = {};
   for (const [key, value] of Object.entries(frontmatter)) {
     if (REQUIRED_FIELDS.includes(key)) required[key] = value;
+    // A note id is assigned by the canonical writer. Ignore caller-provided
+    // values so writes cannot forge an id or replace an existing one.
+    else if (WRITER_OWNED_FIELDS.includes(key)) continue;
     else optional[key] = value;
   }
   return { required, optional };
@@ -423,8 +427,10 @@ function canonicalizeFrontmatter({ incomingFrontmatter = {}, existingFrontmatter
 
   const existingRequired = {};
   const existingOptional = {};
+  const existingWriterOwned = {};
   for (const [key, value] of Object.entries(existingFrontmatter || {})) {
     if (REQUIRED_FIELDS.includes(key)) existingRequired[key] = value;
+    else if (WRITER_OWNED_FIELDS.includes(key)) existingWriterOwned[key] = value;
     else existingOptional[key] = value;
   }
 
@@ -434,7 +440,7 @@ function canonicalizeFrontmatter({ incomingFrontmatter = {}, existingFrontmatter
     today,
   });
 
-  const optional = { ...existingOptional, ...split.optional };
+  const optional = { ...existingOptional, ...split.optional, ...existingWriterOwned };
   for (const key of REQUIRED_FIELDS) delete optional[key];
 
   return {
@@ -459,6 +465,7 @@ function renderFrontmatter(frontmatter) {
 
 module.exports = {
   REQUIRED_FIELDS,
+  WRITER_OWNED_FIELDS,
   ALLOWED_STATUS,
   ALLOWED_TYPE,
   ALLOWED_AUTHOR,

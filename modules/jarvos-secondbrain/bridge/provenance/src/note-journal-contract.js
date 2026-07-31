@@ -8,7 +8,7 @@ const path = require('path');
 const { writeNoteFile, todayDate } = require('../../../packages/jarvos-secondbrain-notes/src/write-to-vault');
 const { sourcePathFor } = require('../../../packages/jarvos-secondbrain-notes/src/knowledge-optimizer');
 const { getVaultNotesDir, getVaultJournalDir } = require('./lib/provenance-config');
-const { frontmatterToObject, parseFrontmatter } = require('../../../../scripts/lib/note-schema');
+const { frontmatterToObject, parseFrontmatter } = require('../../../packages/jarvos-secondbrain-notes/src/lib/note-schema');
 
 const SUPPORTED_PERSONALITIES = new Set(['michael', 'claude-code', 'hermes', 'codex']);
 const LIGHTWEIGHT_IDEA_RE = /^\s*idea\s*[:\-]/i;
@@ -70,25 +70,65 @@ function verifyContract(result, personality) {
   const journalDir = getVaultJournalDir();
   const journalPath = path.join(journalDir, `${todayDate()}.md`);
   const failures = [];
+  const journal = result.journal || {};
+  let journalComplete = false;
+  let deferred = false;
+  let recoveryKey = null;
+  let deferredBacklinkPath = null;
 
   if (!isInsideDir(notesDir, result.path)) {
     failures.push(`note path is outside canonical Notes dir: ${result.path}`);
   }
 
-  const noteMd = fs.existsSync(result.path) ? fs.readFileSync(result.path, 'utf8') : '';
+  const noteExists = fs.existsSync(result.path);
+  if (!noteExists) failures.push(`note does not exist: ${result.path}`);
+  const noteMd = noteExists ? fs.readFileSync(result.path, 'utf8') : '';
   const fm = frontmatterToObject(parseFrontmatter(noteMd));
   for (const field of ['status', 'type', 'project', 'created', 'updated', 'author']) {
     if (fm[field] === undefined) failures.push(`missing canonical frontmatter field: ${field}`);
   }
   if (fm.source_personality !== personality) failures.push(`frontmatter source_personality mismatch: ${fm.source_personality || '(missing)'}`);
   if (fm.contract !== 'obsidian-note-journal-v1') failures.push(`frontmatter contract mismatch: ${fm.contract || '(missing)'}`);
+  if (!fm.jarvos_note_id) failures.push('missing writer-owned frontmatter field: jarvos_note_id');
 
-  if (!fs.existsSync(journalPath)) {
-    failures.push(`journal does not exist: ${journalPath}`);
+  if (journal.status === 'linked') {
+    if (!fs.existsSync(journalPath)) {
+      failures.push(`journal does not exist: ${journalPath}`);
+    } else {
+      const journalMd = fs.readFileSync(journalPath, 'utf8');
+      const backlinkCount = countJournalBacklinks(journalMd, result.title);
+      if (backlinkCount !== 1) failures.push(`expected exactly one journal backlink for [[${result.title}]], found ${backlinkCount}`);
+      else journalComplete = true;
+    }
+  } else if (journal.status === 'deferred') {
+    deferred = true;
+    const receipt = journal.deferredBacklink || {};
+    deferredBacklinkPath = receipt.deferredPath || journal.deferredPath || null;
+    recoveryKey = receipt.key || journal.recoveryKey || null;
+    if (!deferredBacklinkPath || !recoveryKey) {
+      failures.push('missing deferred backlink queue receipt');
+    } else if (!fs.existsSync(deferredBacklinkPath)) {
+      failures.push(`deferred backlink queue does not exist: ${deferredBacklinkPath}`);
+    } else {
+      let deferredQueue;
+      try {
+        deferredQueue = readJson(deferredBacklinkPath);
+      } catch (error) {
+        failures.push(`invalid deferred backlink queue: ${error.message}`);
+      }
+      const entry = deferredQueue?.entries?.[recoveryKey];
+      if (!entry) failures.push(`missing deferred backlink queue record: ${recoveryKey}`);
+      else {
+        if (entry.status !== 'pending') failures.push(`deferred backlink status is ${entry.status || '(missing)'}, expected pending`);
+        if (entry.noteTitle !== result.title) failures.push(`deferred backlink note title mismatch: ${entry.noteTitle || '(missing)'}`);
+        if (entry.journalPath !== journalPath) failures.push(`deferred backlink journal path mismatch: ${entry.journalPath || '(missing)'}`);
+        if (entry.noteId !== fm.jarvos_note_id) failures.push(`deferred backlink note id mismatch: ${entry.noteId || '(missing)'}`);
+        const vaultRelativeNotePath = path.relative(path.dirname(journalDir), result.path).split(path.sep).join('/');
+        if (entry.notePath !== vaultRelativeNotePath) failures.push(`deferred backlink note path mismatch: ${entry.notePath || '(missing)'}`);
+      }
+    }
   } else {
-    const journalMd = fs.readFileSync(journalPath, 'utf8');
-    const backlinkCount = countJournalBacklinks(journalMd, result.title);
-    if (backlinkCount !== 1) failures.push(`expected exactly one journal backlink for [[${result.title}]], found ${backlinkCount}`);
+    failures.push(`journal backlink ${journal.status || 'failure'}: ${journal.reason || 'no durable journal result'}`);
   }
 
   const qmdPendingPath = result.knowledge?.qmdPendingPath;
@@ -113,6 +153,10 @@ function verifyContract(result, personality) {
     journalPath,
     qmdPendingPath,
     frontmatter: fm,
+    journalComplete,
+    deferred,
+    recoveryKey,
+    deferredBacklinkPath,
   };
 }
 
@@ -139,6 +183,8 @@ function writeNoteThroughContract(rawInput) {
     journalPath: verification.journalPath,
     qmdPendingPath: verification.qmdPendingPath,
     journalBacklink: `[[${result.title}]]`,
+    noteId: verification.frontmatter.jarvos_note_id,
+    journalStatus: result.journal.status,
     qmdStatus: result.knowledge.qmdStatus,
     verification,
   };

@@ -11,11 +11,134 @@ const {
   loadConfig,
   normalizeSections,
   renderJournal,
+  runMaintenance,
   stripLeadingRecoveryScaffold,
   syncOneDate,
 } = require('../packages/jarvos-secondbrain-journal/src/journal-maintenance.js');
 
 const TEST_DATE = '2026-01-02';
+
+function unchangedSync(date, journalPath = '/tmp/test-vault/Journal/2026-01-02.md') {
+  return {
+    date,
+    journalPath,
+    changed: false,
+    healthBefore: { status: 'healthy', degraded: false },
+    healthAfter: { status: 'healthy', degraded: false },
+  };
+}
+
+test('maintenance flushes deferred backlinks after journal sync and exposes JSON status', () => {
+  const calls = [];
+  const report = runMaintenance([`--date=${TEST_DATE}`, '--json'], {
+    loadConfig: () => ({}),
+    syncOneDate: (date) => {
+      calls.push(`sync:${date}`);
+      return unchangedSync(date);
+    },
+    flushDeferredBacklinks: (options) => {
+      calls.push('flush');
+      assert.deepEqual(options, {
+        journalDir: '/tmp/test-vault/Journal',
+        vaultRoot: '/tmp/test-vault',
+        notesDir: '/tmp/test-vault/Notes',
+        dryRun: false,
+      });
+      return {
+        lastFlushAt: '2026-01-02T00:00:00.000Z',
+        checked: 2,
+        linked: 0,
+        pending: 1,
+        unresolved: 1,
+        superseded: 0,
+        entries: [{ key: 'retry', status: 'pending', error: 'Obsidian unavailable' }],
+      };
+    },
+  });
+
+  assert.deepEqual(calls, [`sync:${TEST_DATE}`, 'flush']);
+  assert.equal(report.lastFlushAt, '2026-01-02T00:00:00.000Z');
+  assert.equal(report.summary.pending, 1);
+  assert.equal(report.summary.unresolved, 1);
+  assert.equal(report.summary.failed, 1);
+  assert.notEqual(report.output, 'NO_REPLY');
+  assert.deepEqual(JSON.parse(report.output).summary, report.summary);
+});
+
+test('maintenance dry-run classifies deferred backlinks without mutating them', () => {
+  let flushOptions;
+  const report = runMaintenance([`--date=${TEST_DATE}`, '--dry-run', '--json'], {
+    loadConfig: () => ({}),
+    syncOneDate: (date) => unchangedSync(date),
+    flushDeferredBacklinks: (options) => {
+      flushOptions = options;
+      return {
+        lastFlushAt: '2026-01-01T00:00:00.000Z',
+        checked: 1,
+        linked: 0,
+        pending: 1,
+        unresolved: 0,
+        superseded: 0,
+        entries: [{ key: 'retry', status: 'pending', proposed: 'retry' }],
+        dryRun: true,
+      };
+    },
+  });
+
+  assert.equal(flushOptions.dryRun, true);
+  assert.equal(report.summary.pending, 1);
+  assert.equal(report.output === 'NO_REPLY', false);
+});
+
+test('maintenance does not collapse deferred backlog states to NO_REPLY', () => {
+  for (const [field, lastFlushAt] of [
+    ['pending', '2026-01-02T00:00:00.000Z'],
+    ['unresolved', '2026-01-02T00:01:00.000Z'],
+    ['superseded', '2026-01-02T00:02:00.000Z'],
+    ['failed', '2026-01-02T00:03:00.000Z'],
+  ]) {
+    const report = runMaintenance([`--date=${TEST_DATE}`], {
+      loadConfig: () => ({}),
+      syncOneDate: (date) => unchangedSync(date),
+      flushDeferredBacklinks: () => ({
+        lastFlushAt,
+        checked: 1,
+        linked: 0,
+        pending: field === 'pending' || field === 'failed' ? 1 : 0,
+        unresolved: field === 'unresolved' ? 1 : 0,
+        superseded: field === 'superseded' ? 1 : 0,
+        failed: field === 'failed' ? 1 : 0,
+        entries: [],
+      }),
+    });
+
+    assert.notEqual(report.output, 'NO_REPLY', `${field} must be reported`);
+    assert.match(report.output, /Deferred backlinks/);
+  }
+});
+
+test('maintenance reports terminal deferred records that predate this flush', () => {
+  const report = runMaintenance([`--date=${TEST_DATE}`], {
+    loadConfig: () => ({}),
+    syncOneDate: (date) => unchangedSync(date),
+    flushDeferredBacklinks: () => ({
+      checked: 0,
+      linked: 0,
+      pending: 0,
+      unresolved: 0,
+      superseded: 0,
+      entries: [],
+    }),
+    readDeferredBacklinkFlushMetadata: () => ({
+      lastFlushAt: '2026-01-02T01:00:00.000Z',
+      summary: null,
+      entries: [{ key: 'moved', status: 'superseded' }],
+    }),
+  });
+
+  assert.equal(report.summary.superseded, 1);
+  assert.notEqual(report.output, 'NO_REPLY');
+});
 
 function sectionBody(markdown, heading) {
   const escaped = heading.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
