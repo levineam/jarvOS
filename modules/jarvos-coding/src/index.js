@@ -132,14 +132,23 @@ const {
   inspectRepository,
   parseGitStatus,
 } = require('./worktree-ownership');
+const {
+  DEFAULT_IGNORED_PATH_SEGMENTS,
+  LOCAL_CHANGE_INTAKE_SCHEMA_VERSION,
+  assessLocalChange,
+  privacyOutcome,
+  visiblePaths,
+} = require('./features/local-change-intake');
 
 module.exports = {
   ACTIVE_STATUSES,
+  DEFAULT_IGNORED_PATH_SEGMENTS,
   BRANCH_SCHEMA_VERSION,
   COUPLED_STAGES,
   FIXER_SCHEMA_VERSION,
   HOLISTIC_REVIEW_SCHEMA_VERSION,
   LIVE_ADAPTERS_SCHEMA_VERSION,
+  LOCAL_CHANGE_INTAKE_SCHEMA_VERSION,
   PULL_REQUEST_SCHEMA_VERSION,
   POST_MERGE_SCHEMA_VERSION,
   TRACKER_SCHEMA_VERSION,
@@ -179,6 +188,7 @@ module.exports = {
   TERMINAL_STATUSES,
   TRIAGE_SCHEMA_VERSION,
   assertReviewEngineAdapter,
+  assessLocalChange,
   buildGateEquivalentCommands,
   buildDecision,
   buildCodeThreadCheckpoint,
@@ -229,6 +239,7 @@ module.exports = {
   normalizeHost,
   normalizeLabels,
   parseGitStatus,
+  privacyOutcome,
   readJarvosSessionState,
   releaseFitFromPaperclipReleaseIntake,
   releaseGateState,
@@ -239,5 +250,6 @@ module.exports = {
   routeCodingWork,
   triageCodingWork,
   validateSubmissionEvidence,
+  visiblePaths,
   writeJarvosSessionState,
 };
