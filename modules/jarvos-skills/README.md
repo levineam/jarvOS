@@ -15,8 +15,10 @@ describe richer default experiences.
 | `context-management` | Keep always-loaded context compact, coherent, and routed to the right durable store. |
 | `cron-hygiene` | Validate, audit, and maintain scheduled automation safely. |
 
-These are markdown skills. They are portable by design: copy the skill folders
-into the runtime's skill directory, or use the installer helper below.
+These are markdown skills. They are portable by design: project the canonical
+sources into the runtime's skill directory with the installer helper below. The
+projection record stores source, base, and observed target digests, so a local
+edit is reported and preserved rather than overwritten.
 
 ## Default Experience Pack
 
@@ -55,6 +57,19 @@ node scripts/install-skills.js --dest /path/to/skills --skill workflow-execution
 
 Use `--force` only when intentionally replacing an existing local copy.
 
+For managed runtime projections, inspect first and apply only the exact
+generation you inspected:
+
+```bash
+node scripts/install-skills.js projection-plan --harness hermes --dest ~/.hermes/skills --json
+node scripts/install-skills.js project --harness hermes --dest ~/.hermes/skills --apply --json
+```
+
+`project` creates missing targets and updates only clean managed targets. It
+preserves unknown, locally modified, incompatible, and conflicting targets.
+Projection state is stored under `.jarvos-projections/` in the chosen skills
+root; it contains only public source/revision/digest metadata.
+
 Run the pack doctor to inspect optional tool availability:
 
 ```bash
@@ -80,8 +95,10 @@ the experience until installed.
 
 ## Manifest
 
-`manifest.json` is the source of truth for the default bundle. Runtimes and setup
-scripts should read it instead of hardcoding the skill list.
+`manifest.json` is the source of truth for the default bundle. Each skill has
+reviewed source revision, SHA-256 digest, license/provenance, supported-harness,
+and target-rendering metadata. Runtimes and setup scripts should use the
+projection commands instead of hardcoding copies or replacing local files.
 
 ## QMD decision
 

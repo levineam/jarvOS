@@ -20,6 +20,7 @@
     "lib/",
     "bootstrap.js",
     "bootstrap.sh",
+    "runtime-contract.json",
     "jarvos.config.schema.json",
     "docs/architecture/secondbrain-external-integrations.md",
     "modules/jarvos-agent-context/README.md",

@@ -4,6 +4,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { spawnSync } = require('child_process');
+const crypto = require('crypto');
 
 const MODULE_ROOT = path.resolve(__dirname, '..');
 const MANIFEST_PATH = path.join(MODULE_ROOT, 'manifest.json');
@@ -22,7 +23,7 @@ function getManifest() {
 
 function loadPack(name = DEFAULT_PACK_NAME) {
   const normalized = String(name || '').trim();
-  if (!/^[a-z][a-z0-9-]*$/.test(normalized)) {
+  if (!isSafeSkillName(normalized)) {
     throw new Error(`Invalid jarvOS skill pack name: ${name}`);
   }
 
@@ -55,11 +56,76 @@ function getSkill(name) {
   };
 }
 
+function sha256(value) {
+  return crypto.createHash('sha256').update(value).digest('hex');
+}
+
+function isSafeSkillName(name) {
+  return typeof name === 'string' && /^[a-z][a-z0-9-]*$/.test(name);
+}
+
+function manifestSkillPath(skill) {
+  if (!skill || typeof skill.path !== 'string' || skill.path.startsWith('/') || skill.path.split('/').includes('..')) {
+    throw new Error(`Skill ${skill?.name || 'unknown'} has an unsafe source path`);
+  }
+  return path.join(MODULE_ROOT, skill.path);
+}
+
+function projectionMetadata(skill, harness) {
+  const target = skill?.projection?.targets?.[harness];
+  if (!target) return null;
+  return target;
+}
+
+function assertProjectionManifest(manifest, options = {}) {
+  if (!manifest || !Array.isArray(manifest.skills)) throw new Error('jarvOS skill manifest must declare skills');
+  const captureSourceNames = options.captureSourceNames instanceof Set
+    ? options.captureSourceNames
+    : new Set(Array.isArray(options.captureSourceNames) ? options.captureSourceNames : []);
+  const capturedSources = new Map();
+  for (const skill of manifest.skills) {
+    if (!isSafeSkillName(skill.name)) throw new Error(`Invalid skill name: ${skill.name}`);
+    const sourcePath = manifestSkillPath(skill);
+    if (!skill.source || typeof skill.source !== 'object') throw new Error(`Skill ${skill.name} missing source metadata`);
+    for (const key of ['revision', 'digest', 'license', 'provenance']) {
+      if (typeof skill.source[key] !== 'string' || skill.source[key].trim() === '') {
+        throw new Error(`Skill ${skill.name} source missing ${key}`);
+      }
+    }
+    if (!/^[a-f0-9]{64}$/i.test(skill.source.digest)) throw new Error(`Skill ${skill.name} source digest must be SHA-256`);
+    const sourceContent = fs.readFileSync(sourcePath);
+    if (sha256(sourceContent) !== skill.source.digest) throw new Error(`Skill ${skill.name} source digest does not match ${skill.path}`);
+    if (captureSourceNames.has(skill.name)) capturedSources.set(skill.name, sourceContent);
+    if (!Array.isArray(skill.supportedHarnesses) || skill.supportedHarnesses.length === 0) {
+      throw new Error(`Skill ${skill.name} missing supportedHarnesses`);
+    }
+    if (!skill.projection || typeof skill.projection !== 'object' || typeof skill.projection.mode !== 'string' || !skill.projection.targets || typeof skill.projection.targets !== 'object') {
+      throw new Error(`Skill ${skill.name} missing projection metadata`);
+    }
+    for (const harness of skill.supportedHarnesses) {
+      const target = projectionMetadata(skill, harness);
+      if (!target || typeof target.path !== 'string' || typeof target.renderer !== 'string') {
+        throw new Error(`Skill ${skill.name} missing target metadata for ${harness}`);
+      }
+      if (!target.path.startsWith('{skillsRoot}/') || target.path.includes('..') || path.isAbsolute(target.path)) {
+        throw new Error(`Skill ${skill.name} has unsafe target metadata for ${harness}`);
+      }
+    }
+  }
+  return captureSourceNames.size > 0 ? capturedSources : true;
+}
+
 function validateBundle() {
   const manifest = getManifest();
   const errors = [];
   const defaultSet = new Set(manifest.defaultSkills || []);
   const declaredSkillNames = new Set((manifest.skills || []).map((skill) => skill.name));
+
+  try {
+    assertProjectionManifest(manifest);
+  } catch (error) {
+    errors.push(error.message);
+  }
 
   for (const expected of ['workflow-execution', 'rule-creation', 'context-management', 'cron-hygiene']) {
     if (!defaultSet.has(expected)) errors.push(`Missing default skill: ${expected}`);
@@ -76,7 +142,7 @@ function validateBundle() {
   }
 
   for (const skill of manifest.skills || []) {
-    const skillPath = path.join(MODULE_ROOT, skill.path || '');
+    const skillPath = manifestSkillPath(skill);
     if (!fs.existsSync(skillPath)) {
       errors.push(`Missing skill file: ${skill.path}`);
       continue;
@@ -816,6 +882,15 @@ function copyFileSync(source, destination) {
   fs.copyFileSync(source, destination);
 }
 
+const { createProjectionApi } = require('./projection');
+
+const projection = createProjectionApi({
+  assertProjectionManifest,
+  getManifest,
+  projectionMetadata,
+  sha256,
+});
+
 function installSkills(destinationDir, options = {}) {
   if (!destinationDir) {
     throw new Error('destinationDir is required');
@@ -856,6 +931,8 @@ module.exports = {
   MANIFEST_PATH,
   PACKS_DIR,
   assertPackManifest,
+  assertProjectionManifest,
+  applySkillProjection: projection.applySkillProjection,
   buildInstallPlan,
   detectPackEnvironment,
   enableLosslessClawInOpenClawConfig,
@@ -866,6 +943,7 @@ module.exports = {
   loadPack,
   listPacks,
   listSkills,
+  planSkillProjection: projection.planSkillProjection,
   getSkill,
   validateBundle,
   installSkills,

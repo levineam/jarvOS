@@ -10,7 +10,6 @@ CORE_DIR="$REPO_ROOT/core"
 TEMPLATES_DIR="$REPO_ROOT/templates"
 PMS_DIR="$REPO_ROOT/core/pms"
 GOV_DIR="$REPO_ROOT/core/governance"
-SKILL_DIR="$SCRIPT_DIR/skills/jarvos"
 
 # Default workspace is this clone root, override with first argument
 WORKSPACE_INPUT="${1:-$REPO_ROOT}"
@@ -221,24 +220,19 @@ else
 fi
 echo ""
 
-# ── Install jarvOS skill for Hermes ──
-echo "→ Installing jarvOS skill..."
-HERMES_SKILLS="$HOME/.hermes/skills/jarvos"
-mkdir -p "$HERMES_SKILLS"
-if [ -f "$HERMES_SKILLS/SKILL.md" ]; then
-  if cmp -s "$SKILL_DIR/SKILL.md" "$HERMES_SKILLS/SKILL.md"; then
-    echo "  ✓ SKILL.md already up to date"
-  else
-    backup="$HERMES_SKILLS/SKILL.md.bak.$(date +%Y%m%d%H%M%S).$$"
-    cp "$HERMES_SKILLS/SKILL.md" "$backup"
-    cp "$SKILL_DIR/SKILL.md" "$HERMES_SKILLS/SKILL.md"
-    echo "  • Updated SKILL.md (backup: $backup)"
-  fi
+# ── Install portable jarvOS skills for Hermes ──
+echo "→ Reconciling portable jarvOS skills..."
+HERMES_SKILLS="$HOME/.hermes/skills"
+SKILL_INSTALLER="$REPO_ROOT/modules/jarvos-skills/scripts/install-skills.js"
+if [ -f "$SKILL_INSTALLER" ]; then
+  # The projection contract creates missing/clean targets and preserves unknown,
+  # locally modified, or conflicting targets. It never replaces a user edit.
+  node "$SKILL_INSTALLER" project --harness hermes --dest "$HERMES_SKILLS" --apply
+  echo "  ✓ portable skills reconciled at ~/.hermes/skills/"
+  echo "  i Existing ~/.hermes/skills/jarvos/SKILL.md is not managed or overwritten by this setup."
 else
-  cp "$SKILL_DIR/SKILL.md" "$HERMES_SKILLS/SKILL.md"
-  echo "  + SKILL.md installed"
+  echo "  ⚠ @jarvos/skills installer not found — portable skills were not changed"
 fi
-echo "  ✓ jarvos skill ready at ~/.hermes/skills/"
 
 # ── Configure Hermes workspace ──
 echo ""
@@ -246,6 +240,31 @@ echo "→ Configuring Hermes..."
 if command -v hermes >/dev/null 2>&1; then
   HERMES_CONFIG="$HOME/.hermes/config.yaml"
   if [ -f "$HERMES_CONFIG" ]; then
+    MCP_SERVER="$REPO_ROOT/modules/jarvos-agent-context/scripts/jarvos-mcp.js"
+    if [ -f "$MCP_SERVER" ]; then
+      if hermes mcp list 2>/dev/null | awk 'tolower($1) == "jarvos" { found=1 } END { exit(found ? 0 : 1) }'; then
+        echo "  ✓ Hermes MCP entry 'jarvos' already exists — keeping it"
+      else
+        mcp_backup="$HERMES_CONFIG.bak.$(date +%Y%m%d%H%M%S).$$"
+        cp "$HERMES_CONFIG" "$mcp_backup"
+        echo "  • Backup saved to $mcp_backup"
+        # Hermes probes a new stdio server before saving it. A local checkout
+        # may not have its optional backing services configured yet, so accept
+        # the entry after the probe and leave `hermes mcp test jarvos` as the
+        # operator-visible verification command.
+        if printf 'y\n' | hermes mcp add jarvos --command node --args "$MCP_SERVER" >/dev/null 2>&1; then
+          echo "  ✓ Hermes MCP entry 'jarvos' registered"
+          if ! hermes mcp test jarvos >/dev/null 2>&1; then
+            echo "  ⚠ Hermes MCP entry was saved but its test is not healthy yet"
+            echo "    Run: hermes mcp test jarvos"
+          fi
+        else
+          echo "  ⚠ Hermes MCP registration failed; restore from $mcp_backup if needed"
+        fi
+      fi
+    else
+      echo "  ⚠ shared jarvOS MCP server not found — skipping Hermes MCP registration"
+    fi
     if grep -qE '^terminal:[[:space:]]*(#.*)?$' "$HERMES_CONFIG"; then
       yaml_workspace=$(printf "%s" "$WORKSPACE" | sed "s/'/''/g")
 
