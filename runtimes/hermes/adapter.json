@@ -17,13 +17,15 @@
       "id": "hermes-agent",
       "kind": "agent-runtime",
       "mcp": {
-        "supported": false,
-        "reason": "Current Hermes setup installs workspace files and a jarvOS skill, but does not register the shared jarvOS MCP server yet.",
-        "registration": "future Hermes MCP adapter pass"
+        "supported": true,
+        "transport": "stdio",
+        "registration": "hermes mcp add jarvos --command node --args <mcp-server>",
+        "verification": "hermes mcp test jarvos"
       },
       "hydration": {
         "mode": "manual",
-        "reason": "Existing Hermes adapter uses a jarvOS skill and native Hermes memory loops; automatic startup hydration is reserved for a future Hermes pass."
+        "command": "Call the jarvos_hydrate MCP tool at session start.",
+        "reason": "Hermes exposes MCP registration, but this adapter does not claim an automatic startup hook until the native hook contract is verified."
       }
     }
   ],
@@ -40,7 +42,7 @@
   "unsupportedCapabilities": [
     {
       "capability": "automatic-startup-hydration",
-      "reason": "Deferred until the Hermes Agent integration pass can verify the native startup hook surface."
+      "reason": "Hermes MCP registration is supported; automatic startup hydration remains deferred until the native startup hook surface is verified."
     }
   ],
   "verification": [

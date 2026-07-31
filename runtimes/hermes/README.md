@@ -41,11 +41,27 @@ Hermes has built-in systems for things jarvOS custom-builds on OpenClaw:
 - **Communication style** — conversational clarity, no corporate speak
 - **Alignment map** (ONTOLOGY.md) — what the user cares about
 
+## Shared context and skill projection
+
+The setup script registers the shared jarvOS MCP server with Hermes using the
+native stdio transport, then verifies the connection with `hermes mcp test
+jarvos`. Registration is idempotent: an existing `jarvos` entry is preserved
+and never overwritten. The setup script backs up `~/.hermes/config.yaml` before
+any configuration write.
+
+At the start of a session, call the `jarvos_hydrate` MCP tool to load the
+bounded jarvOS Working Context Packet. Hermes automatic startup hydration is
+intentionally not claimed until its native startup-hook contract is verified;
+there is no hidden polling or duplicate scheduler.
+
+The portable skills are projected through the manifest-driven installer. A
+projection is dry-run by default and only writes with `--apply`; unknown,
+locally modified, conflicting, or symlinked targets are preserved.
+
 ## Runtime Adapter Status
 
 Target: `hermes-agent`.
 
-The current Hermes adapter does not register the shared jarvOS MCP server yet.
-Hydration is manual/unsupported in v1; this manifest intentionally exposes that
-gap so the future Hermes adapter pass can add MCP registration and
-`jarvos_hydrate` support without drifting from the shared runtime contract.
+The shared MCP context and verified skill projection are supported. Hydration is
+manual in v1 because the adapter does not yet have a verified native startup
+hook; call `jarvos_hydrate` explicitly at session start.
