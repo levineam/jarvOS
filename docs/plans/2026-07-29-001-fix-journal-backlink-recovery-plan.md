@@ -1,5 +1,4 @@
 ---
-title: Journal Backlink Recovery Hardening - Plan
 type: fix
 date: 2026-07-29
 artifact_contract: ce-unified-plan/v1
