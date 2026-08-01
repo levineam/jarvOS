@@ -22,6 +22,7 @@ function isSha256(value) {
 }
 
 function hasCodingExecutionAuthority(authorities = []) {
+  if (!Array.isArray(authorities)) return undefined;
   return authorities.find((authority) => CODING_EXECUTION_AUTHORITIES.includes(String(authority).toLowerCase()));
 }
 
@@ -145,10 +146,18 @@ function endpointAllowed(endpoint, configuredEndpoints) {
   }
 }
 
-function buildEgressPacket(request, destination = {}) {
+function buildEgressPacket(request, destination = {}, options = {}) {
   const validation = validateDispatchRequest(request);
   if (!validation.ok) return { ok: false, code: 'invalid_dispatch_request', errors: validation.errors };
-  const egress = request.capabilityProfile.egress;
+  if (typeof options.resolveAuthorizedProfile !== 'function') {
+    return { ok: false, code: 'identity_not_authorized' };
+  }
+  const authorizedProfile = options.resolveAuthorizedProfile(request.identity, request);
+  const authorizedProfileValidation = validateCapabilityProfile(authorizedProfile);
+  if (!authorizedProfileValidation.ok || authorizedProfile.harness !== request.harness) {
+    return { ok: false, code: 'identity_not_authorized' };
+  }
+  const egress = authorizedProfile.egress;
   if (!egress.providers.includes(destination.provider) || !endpointAllowed(destination.endpoint, egress.endpoints)) {
     return { ok: false, code: 'egress_not_allowed' };
   }
@@ -173,7 +182,8 @@ function createLifecycleReceipt(input = {}) {
   if (!DISPATCH_MODES.includes(input.mode)) errors.push(`lifecycle receipt.mode must be one of: ${DISPATCH_MODES.join(', ')}`);
   if (!LIFECYCLE_STATUSES.includes(input.status)) errors.push(`lifecycle receipt.status must be one of: ${LIFECYCLE_STATUSES.join(', ')}`);
   if (input.contentDigest && !isSha256(input.contentDigest)) errors.push('lifecycle receipt.contentDigest must be a SHA-256 digest');
-  if (input.mode === 'split' && (input.transportMessageId || input.routeIdentity || input.gatewayIdentity)) {
+  if (input.mode === 'split' && (input.transportMessageId || input.providerMessageIds || input.canonicalParentMessageId
+    || input.routeIdentity || input.gatewayIdentity)) {
     errors.push('split lifecycle receipt must not contain transport authority');
   }
   if (input.mode === 'split' && input.status === 'delivered') errors.push('split lifecycle receipt cannot be delivered');
@@ -216,7 +226,6 @@ function createLifecycleReceipt(input = {}) {
       routeIdentity: input.routeIdentity || null,
       gatewayIdentity: input.gatewayIdentity || null,
       routeCredentialRevision: input.routeCredentialRevision || null,
-      diagnostics: redactDiagnostics(input.diagnostics),
     },
   };
 }

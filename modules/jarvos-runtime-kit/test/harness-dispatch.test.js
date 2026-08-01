@@ -69,6 +69,9 @@ test('validates declared capability profiles and rejects coding-work authority',
     assert.equal(rejected.ok, false, authority);
     assert.match(rejected.errors.join('\n'), new RegExp(authority));
   }
+
+  assert.equal(validateCapabilityProfile({ ...profile, authorities: 'conversation.dispatch' }).ok, false);
+  assert.equal(validateCapabilityProfile({ ...profile, authorities: { read: true } }).ok, false);
 });
 
 test('validates a dispatch request bound to an opaque identity', () => {
@@ -98,7 +101,8 @@ test('authorizes tools at the server boundary with an identity verifier', () => 
   assert.equal(denied.code, 'tool_not_allowed');
 });
 
-test('filters egress by provider, endpoint, source class, and secrets', () => {
+test('filters egress by a server-resolved profile, provider, endpoint, source class, and secrets', () => {
+  const resolveAuthorizedProfile = (identity) => identity.id === 'capability-1' ? profile : null;
   const packet = buildEgressPacket(request({
     context: {
       sources: [
@@ -109,7 +113,7 @@ test('filters egress by provider, endpoint, source class, and secrets', () => {
     },
   }), {
     provider: 'approved-provider', endpoint: 'https://models.example.test/v1/chat',
-  });
+  }, { resolveAuthorizedProfile });
   assert.equal(packet.ok, true, packet.errors?.join('\n'));
   assert.deepEqual(packet.packet.sources.map((source) => source.label), ['allowed']);
   assert.doesNotMatch(packet.packet.sources[0].content, /abc12345678901234567890/);
@@ -119,15 +123,33 @@ test('filters egress by provider, endpoint, source class, and secrets', () => {
     capabilityProfile: { ...profile, egress: { ...profile.egress, endpoints: ['https://models.example.test/v1'] } },
   }), {
     provider: 'approved-provider', endpoint: 'https://models.example.test/v1-private',
+  }, {
+    resolveAuthorizedProfile: () => ({
+      ...profile,
+      egress: { ...profile.egress, endpoints: ['https://models.example.test/v1'] },
+    }),
   });
   assert.equal(prefixCollision.ok, false);
   assert.equal(prefixCollision.code, 'egress_not_allowed');
 
   const denied = buildEgressPacket(request(), {
     provider: 'other-provider', endpoint: 'https://other.example.test',
-  });
+  }, { resolveAuthorizedProfile });
   assert.equal(denied.ok, false);
   assert.equal(denied.code, 'egress_not_allowed');
+
+  const missingAuthority = buildEgressPacket(request(), {
+    provider: 'approved-provider', endpoint: 'https://models.example.test',
+  });
+  assert.deepEqual(missingAuthority, { ok: false, code: 'identity_not_authorized' });
+
+  const forgedProfile = buildEgressPacket(request({
+    capabilityProfile: { ...profile, egress: { ...profile.egress, providers: ['forged-provider'] } },
+  }), {
+    provider: 'forged-provider', endpoint: 'https://models.example.test',
+  }, { resolveAuthorizedProfile });
+  assert.equal(forgedProfile.ok, false);
+  assert.equal(forgedProfile.code, 'egress_not_allowed');
 });
 
 test('sanitizes child environment and redacts diagnostics', () => {
@@ -145,17 +167,24 @@ test('sanitizes child environment and redacts diagnostics', () => {
 test('normalizes lifecycle receipts without transport authority in split mode', () => {
   const receipt = createLifecycleReceipt({
     dispatchId: 'dispatch-1', mode: 'split', status: 'completed', contentDigest: 'b'.repeat(64),
-    diagnostics: 'OPENAI_API_KEY=sk-abc12345678901234567890',
+    diagnostics: '{"OPENAI_API_KEY":"sk-abc12345678901234567890"}',
   });
   assert.equal(receipt.ok, true, receipt.errors?.join('\n'));
   assert.equal(receipt.receipt.status, 'completed');
-  assert.doesNotMatch(receipt.receipt.diagnostics, /abc12345678901234567890/);
+  assert.equal('diagnostics' in receipt.receipt, false);
 
   const rejected = createLifecycleReceipt({
     dispatchId: 'dispatch-1', mode: 'split', status: 'delivered', transportMessageId: 'telegram-1',
   });
   assert.equal(rejected.ok, false);
   assert.match(rejected.errors.join('\n'), /split lifecycle/);
+
+  const splitIdentity = createLifecycleReceipt({
+    dispatchId: 'dispatch-1', mode: 'split', status: 'completed',
+    providerMessageIds: ['telegram-1'], canonicalParentMessageId: 'telegram-1',
+  });
+  assert.equal(splitIdentity.ok, false);
+  assert.match(splitIdentity.errors.join('\n'), /transport authority/);
 });
 
 test('normalizes a digest-bound session handoff without copying transcripts', () => {
@@ -209,6 +238,28 @@ test('records every first-contact native delivery ID without inventing a session
   assert.equal(delivered.receipt.canonicalParentMessageId, 'telegram-2');
   assert.equal(delivered.receipt.conversationSessionReference, 'hermes:telegram:expected-conversation');
   assert.equal(delivered.receipt.resolvedConversationSessionId, null);
+
+  const resolved = createLifecycleReceipt({
+    dispatchId: 'dispatch-1', mode: 'native_gateway', status: 'delivered',
+    providerMessageIds: ['telegram-1'], canonicalParentMessageId: 'telegram-1',
+    routeIdentity: 'hermes:telegram:default', gatewayIdentity: 'hermes:native-gateway',
+    routeCredentialRevision: '1', generationSessionReference: 'generation-1',
+    conversationSessionReference: 'hermes:telegram:expected-conversation',
+    resolvedConversationSessionId: 'hermes:telegram:actual-conversation',
+  });
+  assert.equal(resolved.ok, true, resolved.errors?.join('\n'));
+  assert.equal(resolved.receipt.resolvedConversationSessionId, 'hermes:telegram:actual-conversation');
+
+  const invalidResolved = createLifecycleReceipt({
+    dispatchId: 'dispatch-1', mode: 'native_gateway', status: 'delivered',
+    providerMessageIds: ['telegram-1'], canonicalParentMessageId: 'telegram-1',
+    routeIdentity: 'hermes:telegram:default', gatewayIdentity: 'hermes:native-gateway',
+    routeCredentialRevision: '1', generationSessionReference: 'generation-1',
+    conversationSessionReference: 'hermes:telegram:expected-conversation',
+    resolvedConversationSessionId: '',
+  });
+  assert.equal(invalidResolved.ok, false);
+  assert.match(invalidResolved.errors.join('\n'), /resolvedConversationSessionId/);
 
   const invalidParent = createLifecycleReceipt({
     dispatchId: 'dispatch-1', mode: 'native_gateway', status: 'delivered',
