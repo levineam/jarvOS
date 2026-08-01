@@ -10,7 +10,6 @@ CORE_DIR="$REPO_ROOT/core"
 TEMPLATES_DIR="$REPO_ROOT/templates"
 PMS_DIR="$REPO_ROOT/core/pms"
 GOV_DIR="$REPO_ROOT/core/governance"
-SKILL_DIR="$SCRIPT_DIR/skills/jarvos"
 
 # Default workspace is this clone root, override with first argument
 WORKSPACE_INPUT="${1:-$REPO_ROOT}"
@@ -221,30 +220,66 @@ else
 fi
 echo ""
 
-# ── Install jarvOS skill for Hermes ──
-echo "→ Installing jarvOS skill..."
-HERMES_SKILLS="$HOME/.hermes/skills/jarvos"
-mkdir -p "$HERMES_SKILLS"
-if [ -f "$HERMES_SKILLS/SKILL.md" ]; then
-  if cmp -s "$SKILL_DIR/SKILL.md" "$HERMES_SKILLS/SKILL.md"; then
-    echo "  ✓ SKILL.md already up to date"
-  else
-    backup="$HERMES_SKILLS/SKILL.md.bak.$(date +%Y%m%d%H%M%S).$$"
-    cp "$HERMES_SKILLS/SKILL.md" "$backup"
-    cp "$SKILL_DIR/SKILL.md" "$HERMES_SKILLS/SKILL.md"
-    echo "  • Updated SKILL.md (backup: $backup)"
-  fi
+# ── Install portable jarvOS skills for Hermes ──
+echo "→ Reconciling portable jarvOS skills..."
+HERMES_SKILLS="$HOME/.hermes/skills"
+SKILL_INSTALLER="$REPO_ROOT/modules/jarvos-skills/scripts/install-skills.js"
+if [ -f "$SKILL_INSTALLER" ]; then
+  # The projection contract creates missing/clean targets and preserves unknown,
+  # locally modified, or conflicting targets. It never replaces a user edit.
+  node "$SKILL_INSTALLER" project --harness hermes --dest "$HERMES_SKILLS" --apply
+  echo "  ✓ portable skills reconciled at ~/.hermes/skills/"
+  echo "  i Existing ~/.hermes/skills/jarvos/SKILL.md is not managed or overwritten by this setup."
 else
-  cp "$SKILL_DIR/SKILL.md" "$HERMES_SKILLS/SKILL.md"
-  echo "  + SKILL.md installed"
+  echo "  ⚠ @jarvos/skills installer not found — portable skills were not changed"
 fi
-echo "  ✓ jarvos skill ready at ~/.hermes/skills/"
 
 # ── Configure Hermes workspace ──
 echo ""
 echo "→ Configuring Hermes..."
+HERMES_MCP_STATUS=0
 if command -v hermes >/dev/null 2>&1; then
   HERMES_CONFIG="$HOME/.hermes/config.yaml"
+  MCP_SERVER="$REPO_ROOT/modules/jarvos-agent-context/scripts/jarvos-mcp.js"
+  if [ -f "$MCP_SERVER" ]; then
+    mcp_added=0
+    mcp_backup=""
+    if hermes mcp list 2>/dev/null | awk 'tolower($1) == "jarvos" { found=1 } END { exit(found ? 0 : 1) }'; then
+      echo "  ✓ Hermes MCP entry 'jarvos' already exists — keeping it"
+    else
+      if [ -f "$HERMES_CONFIG" ]; then
+        mcp_backup="$HERMES_CONFIG.bak.$(date +%Y%m%d%H%M%S).$$"
+        cp "$HERMES_CONFIG" "$mcp_backup"
+        echo "  • Backup saved to $mcp_backup"
+      fi
+      if printf 'y\n' | hermes mcp add jarvos --command node --args "$MCP_SERVER" >/dev/null 2>&1; then
+        mcp_added=1
+        echo "  ✓ Hermes MCP entry 'jarvos' registered"
+      else
+        HERMES_MCP_STATUS=1
+        echo "  ✗ Hermes MCP registration failed"
+      fi
+    fi
+    if [ "$HERMES_MCP_STATUS" -eq 0 ]; then
+      if hermes mcp test jarvos >/dev/null 2>&1; then
+        echo "  ✓ Hermes MCP entry 'jarvos' is healthy"
+      else
+        HERMES_MCP_STATUS=1
+        if [ "$mcp_added" -eq 1 ] && [ -n "$mcp_backup" ]; then
+          cp "$mcp_backup" "$HERMES_CONFIG"
+          echo "  ✗ Hermes MCP health check failed; restored the prior config"
+        elif [ "$mcp_added" -eq 1 ]; then
+          hermes mcp remove jarvos >/dev/null 2>&1 || true
+          echo "  ✗ Hermes MCP health check failed; removed the new entry"
+        else
+          echo "  ✗ Existing Hermes MCP entry 'jarvos' failed its health check"
+        fi
+      fi
+    fi
+  else
+    HERMES_MCP_STATUS=1
+    echo "  ✗ shared jarvOS MCP server not found"
+  fi
   if [ -f "$HERMES_CONFIG" ]; then
     if grep -qE '^terminal:[[:space:]]*(#.*)?$' "$HERMES_CONFIG"; then
       yaml_workspace=$(printf "%s" "$WORKSPACE" | sed "s/'/''/g")
@@ -336,14 +371,20 @@ if command -v hermes >/dev/null 2>&1; then
       echo "    cwd: '$WORKSPACE'"
     fi
   else
-    echo "  ⚠ Config not found at $HERMES_CONFIG"
-    echo "    Run 'hermes setup' first, then re-run this script"
+    HERMES_MCP_STATUS=1
+    echo "  ✗ Config was not created at $HERMES_CONFIG"
   fi
 else
-  echo "  ⚠ hermes not found — install it first, then set terminal.cwd to $WORKSPACE"
+  HERMES_MCP_STATUS=1
+  echo "  ✗ hermes not found — install it first, then set terminal.cwd to $WORKSPACE"
 fi
 
 echo ""
+if [ "$HERMES_MCP_STATUS" -ne 0 ]; then
+  echo "✗ jarvOS setup did not establish a healthy Hermes MCP connection."
+  exit "$HERMES_MCP_STATUS"
+fi
+
 echo "┌─────────────────────────────────────────────────┐"
 echo "│  ✓ jarvOS installed!                            │"
 echo "│                                                 │"

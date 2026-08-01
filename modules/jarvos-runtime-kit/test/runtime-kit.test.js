@@ -1,7 +1,7 @@
 'use strict';
 
 const assert = require('assert');
-const { execFileSync } = require('child_process');
+const { execFileSync, spawnSync } = require('child_process');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -15,6 +15,73 @@ const {
 } = require('../src/index.js');
 
 const ROOT = path.resolve(__dirname, '..', '..', '..');
+
+function runHermesSetup({ healthy = true } = {}) {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-hermes-setup-'));
+  const home = path.join(tmp, 'home');
+  const workspace = path.join(tmp, 'workspace');
+  const binDir = path.join(tmp, 'bin');
+  const logPath = path.join(tmp, 'hermes.log');
+  fs.mkdirSync(home, { recursive: true });
+  fs.mkdirSync(binDir, { recursive: true });
+  const fakeHermes = [
+    '#!/usr/bin/env bash',
+    'set -euo pipefail',
+    `printf '%s\\n' "$*" >> ${JSON.stringify(logPath)}`,
+    'if [ "${1:-}" = "mcp" ] && [ "${2:-}" = "list" ]; then exit 1; fi',
+    'if [ "${1:-}" = "mcp" ] && [ "${2:-}" = "add" ]; then',
+    '  mkdir -p "$HOME/.hermes"',
+    "  printf 'terminal:\\n' > \"$HOME/.hermes/config.yaml\"",
+    '  exit 0',
+    'fi',
+    `if [ "\${1:-}" = "mcp" ] && [ "\${2:-}" = "test" ]; then exit ${healthy ? 0 : 1}; fi`,
+    'if [ "${1:-}" = "mcp" ] && [ "${2:-}" = "remove" ]; then exit 0; fi',
+    'exit 0',
+    '',
+  ].join('\n');
+  const fakePath = path.join(binDir, 'hermes');
+  fs.writeFileSync(fakePath, fakeHermes, { encoding: 'utf8', mode: 0o755 });
+  fs.chmodSync(fakePath, 0o755);
+  const result = spawnSync('bash', [path.join(ROOT, 'runtimes', 'hermes', 'setup.sh'), workspace], {
+    cwd: ROOT,
+    encoding: 'utf8',
+    env: { ...process.env, HOME: home, PATH: `${binDir}${path.delimiter}${process.env.PATH || ''}` },
+    maxBuffer: 8 * 1024 * 1024,
+  });
+  return {
+    tmp,
+    logPath,
+    result,
+    cleanup() { fs.rmSync(tmp, { recursive: true, force: true }); },
+  };
+}
+
+test('Hermes setup registers and verifies MCP for a fresh config', () => {
+  const run = runHermesSetup();
+  try {
+    assert.equal(run.result.status, 0, run.result.stderr || run.result.stdout);
+    const log = fs.readFileSync(run.logPath, 'utf8');
+    assert.match(log, /mcp add jarvos --command node --args/);
+    assert.match(log, /mcp test jarvos/);
+    assert.match(run.result.stdout, /Hermes MCP entry 'jarvos' is healthy/);
+  } finally {
+    run.cleanup();
+  }
+});
+
+test('Hermes setup fails closed when a newly registered MCP is unhealthy', () => {
+  const run = runHermesSetup({ healthy: false });
+  try {
+    assert.notEqual(run.result.status, 0);
+    const log = fs.readFileSync(run.logPath, 'utf8');
+    assert.match(log, /mcp add jarvos --command node --args/);
+    assert.match(log, /mcp test jarvos/);
+    assert.match(log, /mcp remove jarvos/);
+    assert.match(run.result.stdout, /did not establish a healthy Hermes MCP connection/);
+  } finally {
+    run.cleanup();
+  }
+});
 
 test('validateManifest accepts the Codex runtime manifest', () => {
   const manifest = JSON.parse(fs.readFileSync(path.join(ROOT, 'runtimes/codex/adapter.json'), 'utf8'));

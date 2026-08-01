@@ -7,6 +7,8 @@ const {
   installSkills,
   listPacks,
   loadPack,
+  planSkillProjection,
+  applySkillProjection,
   validateBundle,
 } = require('../src');
 
@@ -20,6 +22,8 @@ function parseArgs(argv) {
     check: false,
     json: false,
     packName: 'obsidian-default',
+    harness: 'generic',
+    apply: false,
   };
 
   if (args[0] && !args[0].startsWith('-')) {
@@ -43,6 +47,11 @@ function parseArgs(argv) {
       if (!args[i + 1]) throw new Error('--pack requires a pack name');
       opts.packName = args[++i];
     }
+    else if (arg === '--harness') {
+      if (!args[i + 1]) throw new Error('--harness requires a harness name');
+      opts.harness = args[++i];
+    }
+    else if (arg === '--apply') opts.apply = true;
     else if (arg === '--help' || arg === '-h') opts.help = true;
     else throw new Error(`Unknown argument: ${arg}`);
   }
@@ -58,6 +67,8 @@ function printHelp() {
   jarvos-skills list [--json]
   jarvos-skills doctor [--pack obsidian-default] [--json]
   jarvos-skills install-plan [--pack obsidian-default] [--json]
+  jarvos-skills projection-plan --harness hermes --dest /path/to/skills [--json]
+  jarvos-skills project --harness hermes --dest /path/to/skills --apply [--json]
 
 Installs the default jarvOS operating-system skill bundle:
 workflow-execution, rule-creation, context-management, cron-hygiene.
@@ -117,6 +128,31 @@ function main() {
       const pack = loadPack(opts.packName);
       const plan = buildInstallPlan({ pack });
       printPlan(plan, opts.json);
+      return;
+    } catch (error) {
+      printError(error, opts.json);
+      process.exit(1);
+    }
+  }
+
+  if (opts.command === 'projection-plan' || opts.command === 'project') {
+    if (!opts.destination) {
+      printError(new Error('--dest is required for skill projection'), opts.json);
+      process.exit(1);
+    }
+    if (opts.command === 'project' && !opts.apply) {
+      printError(new Error('project requires --apply; use projection-plan to inspect'), opts.json);
+      process.exit(1);
+    }
+    try {
+      const plan = planSkillProjection({
+        harness: opts.harness,
+        skillsRoot: path.resolve(opts.destination),
+        skills: opts.skills || undefined,
+      });
+      const result = opts.apply ? applySkillProjection(plan) : plan;
+      process.stdout.write(opts.json ? `${JSON.stringify(result, null, 2)}\n` : `${JSON.stringify(result)}\n`);
+      if (!result.ok) process.exitCode = 2;
       return;
     } catch (error) {
       printError(error, opts.json);

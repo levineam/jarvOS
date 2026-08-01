@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "compatibility": "jarvos-runtime-kit.v1",
+  "packageName": "jarvos-bootstrap",
+  "contractSurfaces": [
+    "@jarvos/runtime-kit",
+    "@jarvos/agent-context",
+    "@jarvos/skills",
+    "runtimes/hermes"
+  ],
+  "privacy": "public-only"
+}
