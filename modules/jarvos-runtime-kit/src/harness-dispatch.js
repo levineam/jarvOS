@@ -165,6 +165,10 @@ function buildEgressPacket(request, destination = {}) {
 
 function createLifecycleReceipt(input = {}) {
   const errors = [];
+  const providerMessageIds = input.providerMessageIds === undefined
+    ? (input.transportMessageId ? [input.transportMessageId] : [])
+    : input.providerMessageIds;
+  const canonicalParentMessageId = input.canonicalParentMessageId || input.transportMessageId || null;
   if (!input.dispatchId || typeof input.dispatchId !== 'string') errors.push('lifecycle receipt.dispatchId is required');
   if (!DISPATCH_MODES.includes(input.mode)) errors.push(`lifecycle receipt.mode must be one of: ${DISPATCH_MODES.join(', ')}`);
   if (!LIFECYCLE_STATUSES.includes(input.status)) errors.push(`lifecycle receipt.status must be one of: ${LIFECYCLE_STATUSES.join(', ')}`);
@@ -174,9 +178,25 @@ function createLifecycleReceipt(input = {}) {
   }
   if (input.mode === 'split' && input.status === 'delivered') errors.push('split lifecycle receipt cannot be delivered');
   if (input.mode === 'native_gateway' && input.status === 'delivered') {
-    for (const field of ['transportMessageId', 'routeIdentity', 'gatewayIdentity', 'routeCredentialRevision', 'generationSessionReference', 'conversationSessionReference']) {
+    for (const field of ['routeIdentity', 'gatewayIdentity', 'routeCredentialRevision', 'generationSessionReference', 'conversationSessionReference']) {
       if (!input[field] || typeof input[field] !== 'string') errors.push(`native gateway delivered receipt.${field} is required`);
     }
+    if (!Array.isArray(providerMessageIds) || providerMessageIds.length === 0
+      || providerMessageIds.some((messageId) => typeof messageId !== 'string' || !messageId)) {
+      errors.push('native gateway delivered receipt.providerMessageIds must be a non-empty array of strings');
+    }
+    if (!canonicalParentMessageId || typeof canonicalParentMessageId !== 'string') {
+      errors.push('native gateway delivered receipt.canonicalParentMessageId is required');
+    } else if (Array.isArray(providerMessageIds) && !providerMessageIds.includes(canonicalParentMessageId)) {
+      errors.push('native gateway delivered receipt.canonicalParentMessageId must be one of providerMessageIds');
+    }
+    if (input.transportMessageId && input.transportMessageId !== canonicalParentMessageId) {
+      errors.push('native gateway delivered receipt.transportMessageId must match canonicalParentMessageId');
+    }
+  }
+  if (input.resolvedConversationSessionId !== undefined && input.resolvedConversationSessionId !== null
+    && (typeof input.resolvedConversationSessionId !== 'string' || !input.resolvedConversationSessionId)) {
+    errors.push('lifecycle receipt.resolvedConversationSessionId must be a non-empty string when provided');
   }
   if (errors.length > 0) return { ok: false, errors };
   return {
@@ -189,7 +209,10 @@ function createLifecycleReceipt(input = {}) {
       contentDigest: input.contentDigest || null,
       generationSessionReference: input.generationSessionReference || null,
       conversationSessionReference: input.conversationSessionReference || null,
-      transportMessageId: input.transportMessageId || null,
+      resolvedConversationSessionId: input.resolvedConversationSessionId || null,
+      providerMessageIds: Array.isArray(providerMessageIds) ? [...providerMessageIds] : [],
+      canonicalParentMessageId,
+      transportMessageId: canonicalParentMessageId,
       routeIdentity: input.routeIdentity || null,
       gatewayIdentity: input.gatewayIdentity || null,
       routeCredentialRevision: input.routeCredentialRevision || null,

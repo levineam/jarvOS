@@ -193,3 +193,31 @@ test('requires native transport identity before a lifecycle receipt can be deliv
     transportMessageId: 'telegram-1', routeIdentity: 'hermes:telegram:default', gatewayIdentity: 'hermes:native-gateway',
   }).ok, false);
 });
+
+test('records every first-contact native delivery ID without inventing a session', () => {
+  const delivered = createLifecycleReceipt({
+    dispatchId: 'dispatch-1', mode: 'native_gateway', status: 'delivered',
+    providerMessageIds: ['telegram-1', 'telegram-2'],
+    canonicalParentMessageId: 'telegram-2',
+    routeIdentity: 'hermes:telegram:default', gatewayIdentity: 'hermes:native-gateway',
+    routeCredentialRevision: '1', generationSessionReference: 'generation-1',
+    conversationSessionReference: 'hermes:telegram:expected-conversation',
+  });
+  assert.equal(delivered.ok, true, delivered.errors?.join('\n'));
+  assert.deepEqual(delivered.receipt.providerMessageIds, ['telegram-1', 'telegram-2']);
+  assert.equal(delivered.receipt.transportMessageId, 'telegram-2');
+  assert.equal(delivered.receipt.canonicalParentMessageId, 'telegram-2');
+  assert.equal(delivered.receipt.conversationSessionReference, 'hermes:telegram:expected-conversation');
+  assert.equal(delivered.receipt.resolvedConversationSessionId, null);
+
+  const invalidParent = createLifecycleReceipt({
+    dispatchId: 'dispatch-1', mode: 'native_gateway', status: 'delivered',
+    providerMessageIds: ['telegram-1', 'telegram-2'],
+    canonicalParentMessageId: 'telegram-3',
+    routeIdentity: 'hermes:telegram:default', gatewayIdentity: 'hermes:native-gateway',
+    routeCredentialRevision: '1', generationSessionReference: 'generation-1',
+    conversationSessionReference: 'hermes:telegram:expected-conversation',
+  });
+  assert.equal(invalidParent.ok, false);
+  assert.match(invalidParent.errors.join('\n'), /canonicalParentMessageId/);
+});
