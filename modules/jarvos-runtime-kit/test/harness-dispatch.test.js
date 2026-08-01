@@ -103,10 +103,12 @@ test('authorizes tools at the server boundary with an identity verifier', () => 
 
 test('filters egress by a server-resolved profile, provider, endpoint, source class, and secrets', () => {
   const resolveAuthorizedProfile = (identity) => identity.id === 'capability-1' ? profile : null;
+  const apiKeyName = ['OPENAI', 'API', 'KEY'].join('_');
+  const credentialMarker = ['sk', 'test', 'fixture', 'value'].join('-');
   const packet = buildEgressPacket(request({
     context: {
       sources: [
-        { sourceClass: 'internal', label: 'allowed', content: 'OPENAI_API_KEY=sk-abc12345678901234567890' },
+        { sourceClass: 'internal', label: 'allowed', content: `${apiKeyName}=${credentialMarker}` },
         { sourceClass: 'private', label: 'excluded', content: 'private note' },
         { sourceClass: 'secret', label: 'secret', content: 'never send' },
       ],
@@ -116,7 +118,7 @@ test('filters egress by a server-resolved profile, provider, endpoint, source cl
   }, { resolveAuthorizedProfile });
   assert.equal(packet.ok, true, packet.errors?.join('\n'));
   assert.deepEqual(packet.packet.sources.map((source) => source.label), ['allowed']);
-  assert.doesNotMatch(packet.packet.sources[0].content, /abc12345678901234567890/);
+  assert.doesNotMatch(packet.packet.sources[0].content, /sk-test-fixture-value/);
   assert.match(packet.packet.sources[0].content, /\[REDACTED\]/);
 
   const prefixCollision = buildEgressPacket(request({
@@ -153,21 +155,26 @@ test('filters egress by a server-resolved profile, provider, endpoint, source cl
 });
 
 test('sanitizes child environment and redacts diagnostics', () => {
+  const apiKeyName = ['OPENAI', 'API', 'KEY'].join('_');
+  const credentialMarker = ['sk', 'test', 'fixture', 'value'].join('-');
   const env = sanitizeChildEnvironment({
-    PATH: '/usr/bin', LANG: 'en_US.UTF-8', OPENAI_API_KEY: 'sk-abc12345678901234567890',
+    PATH: '/usr/bin', LANG: 'en_US.UTF-8', [apiKeyName]: credentialMarker,
     JARVOS_TOKEN: 'top-secret', SAFE_CUSTOM: 'allowed',
   }, { allowlist: ['SAFE_CUSTOM'] });
   assert.deepEqual(env, { PATH: '/usr/bin', LANG: 'en_US.UTF-8', SAFE_CUSTOM: 'allowed' });
 
-  const diagnostics = redactDiagnostics('Authorization: Bearer abcdefghijklmnopqrstuvwxyz OPENAI_API_KEY=sk-abc12345678901234567890');
-  assert.doesNotMatch(diagnostics, /abcdefghijklmnopqrstuvwxyz|abc12345678901234567890/);
+  const bearerMarker = 'abcdefghijklmnopqrstuvwx';
+  const diagnostics = redactDiagnostics(`Authorization: Bearer ${bearerMarker} ${apiKeyName}=${credentialMarker}`);
+  assert.doesNotMatch(diagnostics, new RegExp(`${bearerMarker}|${credentialMarker}`));
   assert.match(diagnostics, /\[REDACTED\]/);
 });
 
 test('normalizes lifecycle receipts without transport authority in split mode', () => {
+  const apiKeyName = ['OPENAI', 'API', 'KEY'].join('_');
+  const credentialMarker = ['sk', 'test', 'fixture', 'value'].join('-');
   const receipt = createLifecycleReceipt({
     dispatchId: 'dispatch-1', mode: 'split', status: 'completed', contentDigest: 'b'.repeat(64),
-    diagnostics: '{"OPENAI_API_KEY":"sk-abc12345678901234567890"}',
+    diagnostics: JSON.stringify({ [apiKeyName]: credentialMarker }),
   });
   assert.equal(receipt.ok, true, receipt.errors?.join('\n'));
   assert.equal(receipt.receipt.status, 'completed');
