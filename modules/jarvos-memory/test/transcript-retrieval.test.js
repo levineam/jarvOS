@@ -480,17 +480,19 @@ test('async preflight is shared and keeps synchronous retrieval paths separate',
 test('CLI returns the same normalized packet shape and stable usage errors', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-cass-cli-'));
   const fakeCass = path.join(root, 'cass');
+  const configDir = path.join(root, 'cass-config');
+  fs.mkdirSync(configDir, { recursive: true, mode: 0o700 });
   fs.writeFileSync(fakeCass, `#!/usr/bin/env node
 const args = process.argv.slice(2);
 const command = args[0];
 if (command === 'api-version') process.stdout.write(JSON.stringify({ version: '0.6.23', contract_version: 1 }));
 else if (command === 'capabilities') process.stdout.write(JSON.stringify({ contract_version: 1, commands: ['pack'], modes: ['lexical'], connectors: ['codex'] }));
-else if (command === 'pack') process.stdout.write(JSON.stringify({ results: [{ agent: 'codex', session_id: 'cli-session', timestamp: '2026-07-20T12:00:00.000Z', citation: 'turn:1', snippet: 'CLI evidence' }] }));
+else if (command === 'pack' && process.env.XDG_CONFIG_HOME === ${JSON.stringify(configDir)}) process.stdout.write(JSON.stringify({ results: [{ agent: 'codex', session_id: 'cli-session', timestamp: '2026-07-20T12:00:00.000Z', citation: 'turn:1', snippet: 'CLI evidence' }] }));
 else process.exit(1);
 `, { mode: 0o700 });
 
   const cliPath = path.resolve(__dirname, '..', 'scripts', 'search-transcripts.js');
-  const child = spawnSync(process.execPath, [cliPath, 'deployment decision', '--connector', 'codex', '--cass-bin', fakeCass, '--json'], {
+  const child = spawnSync(process.execPath, [cliPath, 'deployment decision', '--connector', 'codex', '--cass-bin', fakeCass, '--config-dir', configDir, '--json'], {
     cwd: root,
     encoding: 'utf8',
     env: { PATH: process.env.PATH || '', HOME: root },

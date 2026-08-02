@@ -56,6 +56,12 @@ function parseArgs(argv) {
     } else if (arg === '--data-dir') {
       adapterOptions.dataDir = valueFor(argv, index, arg);
       index += 1;
+    } else if (arg === '--config-dir') {
+      adapterOptions.env = {
+        ...(adapterOptions.env || {}),
+        XDG_CONFIG_HOME: valueFor(argv, index, arg),
+      };
+      index += 1;
     } else if (arg === '--source-root') {
       if (!adapterOptions.sourceRoots) adapterOptions.sourceRoots = [];
       adapterOptions.sourceRoots.push(valueFor(argv, index, arg));
