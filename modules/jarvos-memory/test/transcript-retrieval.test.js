@@ -135,6 +135,13 @@ test('keeps a configured data directory off CASS global introspection but suppli
   ]);
 });
 
+test('uses the documented CASS pack JSON flags without unsupported robot metadata', () => {
+  const adapter = new CassTranscriptAdapter();
+  const args = adapter.buildPackArgs(request(), 'codex');
+  assert.equal(args.includes('--json'), true);
+  assert.equal(args.includes('--robot-meta'), false);
+});
+
 test('retrieves bounded, cited evidence with deterministic de-duplication', () => {
   const calls = [];
   const adapter = new CassTranscriptAdapter({

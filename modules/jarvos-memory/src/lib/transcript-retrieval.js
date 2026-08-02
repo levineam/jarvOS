@@ -556,14 +556,13 @@ class CassTranscriptAdapter {
   buildPackArgs(request, cassSlug) {
     const args = [
       request.query,
-      '--robot',
+      '--json',
       '--mode', 'lexical',
       '--agent', cassSlug,
       '--max-tokens', String(request.maxTokens),
       '--max-evidence', String(request.maxEvidence),
       '--max-sessions', String(request.maxSessions),
       '--max-excerpt-chars', String(request.maxExcerptChars),
-      '--robot-meta',
       '--request-id', request.requestId,
     ];
     if (request.freshness.mode === 'strict') {
