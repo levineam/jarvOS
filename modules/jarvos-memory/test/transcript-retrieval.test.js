@@ -225,6 +225,38 @@ test('normalizes the documented CASS pack evidence citation shape without exposi
   assert.equal(Object.prototype.hasOwnProperty.call(packet.evidence[0], 'path'), false);
 });
 
+test('accepts only verified CASS-redacted source labels, never arbitrary relative paths', () => {
+  const row = {
+    excerpt: 'A bounded, untrusted transcript excerpt.',
+    citation: {
+      agent: 'codex',
+      conversation_id: 'codex-session-redacted',
+      created_at_ms: Date.parse('2026-07-20T12:00:00.000Z'),
+      source_path: '[REDACTED_PATH]/session.jsonl',
+      message_index: 9,
+      line_start: 90,
+      verified: true,
+    },
+    redactions: [{ kind: 'private_path' }],
+  };
+  const adapter = new CassTranscriptAdapter({
+    sourceRoots: ['/safe/codex'],
+    runner: preflightRunner([], () => ok({ evidence: [row] })),
+  });
+
+  const accepted = adapter.retrieve(request({ connectors: ['codex'] }));
+  assert.equal(accepted.status, TRANSCRIPT_STATUS.EVIDENCE_FOUND);
+  assert.equal(accepted.evidence.length, 1);
+
+  row.citation.verified = false;
+  const denied = new CassTranscriptAdapter({
+    sourceRoots: ['/safe/codex'],
+    runner: preflightRunner([], () => ok({ evidence: [row] })),
+  }).retrieve(request({ connectors: ['codex'] }));
+  assert.equal(denied.evidence.length, 0);
+  assert.match(denied.omissions.join(' '), /unverified_redacted_path/);
+});
+
 test('reports partial coverage when one source succeeds without hits and another fails', () => {
   const calls = [];
   const adapter = new CassTranscriptAdapter({

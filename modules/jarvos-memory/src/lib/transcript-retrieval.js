@@ -263,6 +263,22 @@ function safePathForProvenance(candidate, sourceRoots) {
   return { valid: true, path: resolved };
 }
 
+function safeCassRedactedPath(candidate, citation) {
+  // CASS pack redacts private absolute paths to this exact marker. It is a
+  // citation label, not a path to resolve or expose. Require both CASS's
+  // verification bit and its private-path redaction receipt so arbitrary
+  // relative paths remain invalid provenance.
+  const hasPrivatePathRedaction = Array.isArray(citation?.redactions)
+    && citation.redactions.some((item) => item && item.kind === 'private_path');
+  if (citation?.verified !== true || !hasPrivatePathRedaction) {
+    return { valid: false, reason: 'unverified_redacted_path' };
+  }
+  if (typeof candidate !== 'string' || !/^\[REDACTED_PATH\]\/[A-Za-z0-9._-]{1,255}$/.test(candidate)) {
+    return { valid: false, reason: 'invalid_redacted_path' };
+  }
+  return { valid: true, path: null };
+}
+
 function validSessionId(value) {
   return typeof value === 'string' && SAFE_IDENTIFIER.test(value) && !value.includes('..');
 }
@@ -615,6 +631,12 @@ class CassTranscriptAdapter {
     const pathCandidate = nestedValue(row, ['source_path', 'sourcePath', 'path', 'transcript_path', 'transcriptPath'])
       ?? objectValue(cassCitation, ['source_path']);
     const provenancePath = safePathForProvenance(pathCandidate, this.sourceRoots);
+    if (!provenancePath.valid && cassCitation) {
+      Object.assign(provenancePath, safeCassRedactedPath(pathCandidate, {
+        ...cassCitation,
+        redactions: row.redactions,
+      }));
+    }
     if (!provenancePath.valid) return { valid: false, reason: provenancePath.reason };
 
     const excerptRaw = nestedValue(row, ['excerpt', 'snippet', 'text', 'content', 'body']);
