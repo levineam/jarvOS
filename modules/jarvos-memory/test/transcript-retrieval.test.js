@@ -195,6 +195,36 @@ test('retrieves bounded, cited evidence with deterministic de-duplication', () =
   assert.equal(calls.filter((call) => call.args.includes('api-version')).length, 1);
 });
 
+test('normalizes the documented CASS pack evidence citation shape without exposing source paths', () => {
+  const adapter = new CassTranscriptAdapter({
+    sourceRoots: ['/safe/codex'],
+    runner: preflightRunner([], () => ok({
+      evidence: [{
+        excerpt: 'A bounded, untrusted transcript excerpt.',
+        rank: 1,
+        citation: {
+          agent: 'codex',
+          conversation_id: 'codex-session-42',
+          created_at_ms: Date.parse('2026-07-20T12:00:00.000Z'),
+          source_path: '/safe/codex/sessions/session.jsonl',
+          message_index: 7,
+          line_start: 120,
+          line_end: 124,
+        },
+      }],
+    })),
+  });
+
+  const packet = adapter.retrieve(request({ connectors: ['codex'] }));
+  assert.equal(packet.status, TRANSCRIPT_STATUS.EVIDENCE_FOUND);
+  assert.equal(packet.evidence.length, 1);
+  assert.equal(packet.evidence[0].connector, 'codex');
+  assert.equal(packet.evidence[0].sessionId, 'codex-session-42');
+  assert.equal(packet.evidence[0].observedAt, '2026-07-20T12:00:00.000Z');
+  assert.equal(packet.evidence[0].citation, 'message:7');
+  assert.equal(Object.prototype.hasOwnProperty.call(packet.evidence[0], 'path'), false);
+});
+
 test('reports partial coverage when one source succeeds without hits and another fails', () => {
   const calls = [];
   const adapter = new CassTranscriptAdapter({

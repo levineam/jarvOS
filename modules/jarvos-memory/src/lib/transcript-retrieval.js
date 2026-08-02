@@ -340,6 +340,19 @@ function nestedValue(row, keys) {
   return null;
 }
 
+function objectValue(object, keys) {
+  if (!object || typeof object !== 'object' || Array.isArray(object)) return null;
+  return nestedValue(object, keys);
+}
+
+function parseEpochMilliseconds(value) {
+  if (typeof value !== 'number' && typeof value !== 'string') return null;
+  const milliseconds = Number(value);
+  if (!Number.isFinite(milliseconds) || !Number.isInteger(milliseconds) || milliseconds < 946684800000) return null;
+  const parsed = new Date(milliseconds);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
 function freshnessFromPayload(payload) {
   const freshness = payload && (payload.freshness || payload._meta?.freshness || payload.meta?.freshness);
   const staleCount = Number(freshness && (freshness.stale_evidence_count ?? freshness.staleEvidenceCount));
@@ -573,20 +586,34 @@ class CassTranscriptAdapter {
 
   normalizeRow(row, request, logicalConnector, cassSlug) {
     if (!row || typeof row !== 'object') return { valid: false, reason: 'row_not_object' };
-    const reportedConnector = normalizeConnector(nestedValue(row, ['agent', 'connector', 'provider', 'source', 'tool']));
+    const cassCitation = objectValue(row, ['citation']);
+    const reportedConnector = normalizeConnector(
+      nestedValue(row, ['agent', 'connector', 'provider', 'source', 'tool'])
+      ?? objectValue(cassCitation, ['agent']),
+    );
     if (reportedConnector && reportedConnector !== logicalConnector) return { valid: false, reason: 'connector_mismatch' };
-    const sessionId = String(nestedValue(row, ['session_id', 'sessionId', 'conversation_id', 'conversationId', 'session', 'id']) || '').trim();
+    const sessionId = String(
+      nestedValue(row, ['session_id', 'sessionId', 'conversation_id', 'conversationId', 'session', 'id'])
+      ?? objectValue(cassCitation, ['conversation_id'])
+      ?? '',
+    ).trim();
     if (!validSessionId(sessionId)) return { valid: false, reason: 'invalid_session_id' };
 
     const timestampRaw = nestedValue(row, ['timestamp', 'observed_at', 'observedAt', 'created_at', 'createdAt', 'date', 'time']);
-    const timestamp = parseDate(timestampRaw, this.clock());
+    // CASS pack v0.6+ places its verified event time in citation.created_at_ms.
+    // Deliberately do not generalize numeric timestamp parsing for arbitrary
+    // providers: this accepts only that contract-named field.
+    const timestamp = cassCitation && cassCitation.created_at_ms !== undefined
+      ? parseEpochMilliseconds(cassCitation.created_at_ms)
+      : parseDate(timestampRaw, this.clock());
     if (!timestamp) return { valid: false, reason: 'invalid_timestamp' };
     const now = this.clock();
     if (timestamp.getTime() > now.getTime() + 5 * 60 * 1000) return { valid: false, reason: 'future_timestamp' };
     if (request.since && timestamp < new Date(request.since)) return { valid: false, reason: 'before_requested_window' };
     if (request.until && timestamp > new Date(request.until)) return { valid: false, reason: 'after_requested_window' };
 
-    const pathCandidate = nestedValue(row, ['source_path', 'sourcePath', 'path', 'transcript_path', 'transcriptPath']);
+    const pathCandidate = nestedValue(row, ['source_path', 'sourcePath', 'path', 'transcript_path', 'transcriptPath'])
+      ?? objectValue(cassCitation, ['source_path']);
     const provenancePath = safePathForProvenance(pathCandidate, this.sourceRoots);
     if (!provenancePath.valid) return { valid: false, reason: provenancePath.reason };
 
@@ -598,9 +625,17 @@ class CassTranscriptAdapter {
       return { valid: false, reason: redaction?.reason || 'redaction_denied' };
     }
     const safeExcerpt = String(redaction.text).trim().slice(0, request.maxExcerptChars);
-    const line = nestedValue(row, ['line_number', 'lineNumber', 'line']);
-    const citationRaw = nestedValue(row, ['citation', 'locator', 'ref', 'message_id', 'messageId']);
-    const citation = String(citationRaw || (line != null ? `line:${line}` : 'excerpt')).trim();
+    const line = nestedValue(row, ['line_number', 'lineNumber', 'line'])
+      ?? objectValue(cassCitation, ['line_start']);
+    const citationRaw = nestedValue(row, ['locator', 'ref', 'message_id', 'messageId']);
+    const messageIndex = objectValue(cassCitation, ['message_index']);
+    const lineEnd = objectValue(cassCitation, ['line_end']);
+    const fallbackCitation = Number.isInteger(Number(messageIndex))
+      ? `message:${Number(messageIndex)}`
+      : (Number.isInteger(Number(line))
+        ? `line:${Number(line)}${Number.isInteger(Number(lineEnd)) ? `-${Number(lineEnd)}` : ''}`
+        : 'excerpt');
+    const citation = String(citationRaw || fallbackCitation).trim();
     if (!citation || citation.length > 512 || /[\u0000-\u001f\u007f]/.test(citation)) return { valid: false, reason: 'invalid_citation' };
 
     return {
