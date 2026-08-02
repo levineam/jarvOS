@@ -467,7 +467,13 @@ class CassTranscriptAdapter {
 
   buildArgs(subcommand, args = []) {
     const output = [subcommand, ...args];
-    if (this.dataDir) output.push('--data-dir', this.dataDir);
+    // CASS global introspection commands deliberately do not expose
+    // --data-dir. The configured data directory still applies to all
+    // stateful retrieval commands, while api-version/capabilities remain
+    // portable across CASS contract versions.
+    if (this.dataDir && !['api-version', 'capabilities'].includes(subcommand)) {
+      output.push('--data-dir', this.dataDir);
+    }
     return output;
   }
 

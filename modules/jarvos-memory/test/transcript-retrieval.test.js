@@ -115,6 +115,26 @@ test('preflight discovers documented CASS connector slugs and capabilities', () 
   assert.deepEqual(calls.map((call) => call.args[0]), ['api-version', 'capabilities']);
 });
 
+test('keeps a configured data directory off CASS global introspection but supplies it to retrieval', () => {
+  const calls = [];
+  const dataDir = '/private/cass-data';
+  const adapter = new CassTranscriptAdapter({
+    cassBin: 'cass',
+    dataDir,
+    runner: preflightRunner(calls),
+  });
+
+  const preflight = adapter.preflight();
+  assert.equal(preflight.ok, true);
+  assert.deepEqual(calls.map((call) => call.args), [
+    ['api-version', '--json'],
+    ['capabilities', '--json'],
+  ]);
+  assert.deepEqual(adapter.buildArgs('pack', ['query', '--json']), [
+    'pack', 'query', '--json', '--data-dir', dataDir,
+  ]);
+});
+
 test('retrieves bounded, cited evidence with deterministic de-duplication', () => {
   const calls = [];
   const adapter = new CassTranscriptAdapter({
