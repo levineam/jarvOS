@@ -36,6 +36,12 @@ published release. Publication still requires Andrew approval and a green
   never rewritten in bulk.
 
 ### Fixed
+- Make daily journal creation a portable, explicit-configuration lifecycle:
+  missing current-date files are created exclusively and verified, existing
+  authored journals are left byte-for-byte unchanged, note/Obsidian callers
+  share the same seam, and bounded MCP health/ensure actions preserve the
+  canonical-versus-derived ownership boundary. This remains unreleased until
+  the separate host burn-in and release approval are complete.
 - Run the full `npm test` suite in CI (with `npm ci`) so module unit tests,
   release-readiness, and unreleased-drift gates actually execute on every PR
   and on `main`, instead of only lint/link/secret-scan and the thin smoke

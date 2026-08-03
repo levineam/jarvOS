@@ -29,6 +29,14 @@ function packedFiles() {
 function advertisedRuntimeAssets() {
   const runtimesDir = path.join(ROOT, 'runtimes');
   const required = [
+    'PUBLIC_BASELINE.md',
+    'docs/journal-install-contract.md',
+    'jarvos.config.schema.json',
+    'modules/jarvos-agent-context/scripts/jarvos-mcp.js',
+    'modules/jarvos-agent-context/src/index.js',
+    'modules/jarvos-secondbrain/scripts/journal-health.js',
+    'modules/jarvos-secondbrain/packages/jarvos-secondbrain-journal/config/journal-module.json',
+    'modules/jarvos-secondbrain/packages/jarvos-secondbrain-journal/src/journal-lifecycle.js',
     'modules/jarvos-runtime-kit/package.json',
     'modules/jarvos-runtime-kit/src/index.js',
     'modules/jarvos-runtime-kit/src/stewardship-bootstrap.js',
