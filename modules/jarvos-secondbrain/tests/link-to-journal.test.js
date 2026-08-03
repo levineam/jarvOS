@@ -15,11 +15,17 @@ const {
 } = require('../bridge/provenance/src/link-to-journal.js');
 
 function withVaultEnv(root, fn) {
-  const keys = ['JARVOS_VAULT_DIR', 'JARVOS_JOURNAL_DIR', 'JARVOS_NOTES_DIR'];
+  const keys = [
+    'JARVOS_VAULT_DIR',
+    'JARVOS_JOURNAL_DIR',
+    'JARVOS_NOTES_DIR',
+    'JARVOS_TIMEZONE',
+  ];
   const previous = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
   process.env.JARVOS_VAULT_DIR = root;
   process.env.JARVOS_JOURNAL_DIR = path.join(root, 'Journal');
   process.env.JARVOS_NOTES_DIR = path.join(root, 'Notes');
+  process.env.JARVOS_TIMEZONE = 'America/New_York';
   try {
     return fn();
   } finally {
@@ -106,20 +112,28 @@ test('linkNoteInSection creates canonical Notes section and removes duplicate le
   assert.doesNotMatch(content, /## 🗂️ Notes Created\n- \[\[Legacy Duplicate\]\]/);
 });
 
-test('linkNoteToJournal creates a missing journal from the configured template and links the note once', () => {
+test('linkNoteToJournal creates today\'s missing journal through the lifecycle and links the note once', () => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-link-to-journal-'));
-  const journalPath = path.join(tmpDir, '2030-02-03.md');
+  const journalDir = path.join(tmpDir, 'Journal');
+  fs.mkdirSync(journalDir, { recursive: true });
+  const date = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+  const journalPath = path.join(journalDir, `${date}.md`);
 
   try {
-    const first = linkNoteToJournal({ noteTitle: 'Fresh Durable Note', journalPath });
-    const second = linkNoteToJournal({ noteTitle: 'Fresh Durable Note', journalPath });
+    const ownedJournalMutator = ({ journalPath: target, noteTitle, section }) => {
+      const mutation = linkNoteInSection(fs.readFileSync(target, 'utf8'), noteTitle, section);
+      fs.writeFileSync(target, mutation.content, 'utf8');
+      return { ...mutation, mutationOwner: 'obsidian-vault-process' };
+    };
+    const first = withVaultEnv(tmpDir, () => linkNoteToJournal({ noteTitle: 'Fresh Durable Note', journalPath, ownedJournalMutator }));
+    const second = withVaultEnv(tmpDir, () => linkNoteToJournal({ noteTitle: 'Fresh Durable Note', journalPath, ownedJournalMutator }));
     const content = fs.readFileSync(journalPath, 'utf8');
     const matches = content.match(/- \[\[Fresh Durable Note\]\]/g) || [];
 
     assert.equal(first.alreadyPresent, false);
     assert.equal(second.alreadyPresent, true);
     assert.equal(matches.length, 1);
-    assert.match(content, /journal-date: 2030-02-03/);
+    assert.match(content, new RegExp(`journal-date: ${date}`));
     assert.match(content, /## 📝 Notes\n- \[\[Fresh Durable Note\]\]/);
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
@@ -159,7 +173,7 @@ test('today journal mutations run through Obsidian-owned current content', () =>
   }
 });
 
-test('a missing today journal is created inside the owned mutation without overwriting concurrent content', () => {
+test('a missing today journal is created through lifecycle before owned mutation', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-owned-journal-create-'));
   const journalDir = path.join(root, 'Journal');
   fs.mkdirSync(journalDir, { recursive: true });
@@ -173,10 +187,8 @@ test('a missing today journal is created inside the owned mutation without overw
       journalPath,
       ownedJournalMutator: ({ journalPath: target, noteTitle, section, initialContent }) => {
         calls += 1;
-        assert.equal(fs.existsSync(target), false);
-        assert.match(initialContent, /journal-date:/);
-        const concurrentlyCreated = '## 📝 Notes\n-\n\n## Scratch\n- Concurrent mobile creation\n';
-        fs.writeFileSync(target, concurrentlyCreated, 'utf8');
+        assert.equal(fs.existsSync(target), true);
+        assert.equal(initialContent, undefined);
         const mutation = linkNoteInSection(fs.readFileSync(target, 'utf8'), noteTitle, section);
         fs.writeFileSync(target, mutation.content, 'utf8');
         return { ...mutation, mutationOwner: 'obsidian-vault-process' };
@@ -187,7 +199,7 @@ test('a missing today journal is created inside the owned mutation without overw
     assert.equal(result.mutationOwner, 'obsidian-vault-process');
     const written = fs.readFileSync(journalPath, 'utf8');
     assert.match(written, /\[\[Owned Creation Backlink\]\]/);
-    assert.match(written, /Concurrent mobile creation/);
+    assert.match(written, /journal-date:/);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

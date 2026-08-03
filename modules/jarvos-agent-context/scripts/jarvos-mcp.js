@@ -6,6 +6,8 @@ const {
   createNote,
   controlPlane,
   currentWork,
+  ensureTodayJournal,
+  healthTodayJournal,
   hydrate,
   loadControlPlaneManager,
   recall,
@@ -177,6 +179,24 @@ const TOOLS = [
       },
     },
   },
+  {
+    name: 'jarvos_journal_health',
+    description: 'Return a bounded, read-only health projection for today\'s configured journal.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {},
+    },
+  },
+  {
+    name: 'jarvos_ensure_today_journal',
+    description: 'Ensure today\'s configured journal through the shared lifecycle.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {},
+    },
+  },
 ];
 
 const BOOT_JARVOS_PROMPT_TEXT = [
@@ -283,7 +303,25 @@ function noteCaptureArgs(args = {}) {
   };
 }
 
+function requireEmptyObjectArguments(args) {
+  if (!args || typeof args !== 'object' || Array.isArray(args) || Object.keys(args).length !== 0) {
+    const error = new Error('Journal action accepts only an empty object');
+    error.code = -32602;
+    throw error;
+  }
+}
+
 async function callTool(name, args = {}) {
+  if (name === 'jarvos_journal_health') {
+    requireEmptyObjectArguments(args);
+    const result = healthTodayJournal();
+    return textResult(JSON.stringify(result), result.status !== 'ok');
+  }
+  if (name === 'jarvos_ensure_today_journal') {
+    requireEmptyObjectArguments(args);
+    const result = ensureTodayJournal();
+    return textResult(JSON.stringify(result), result.status !== 'ok');
+  }
   if (name === 'jarvos_control_plane') {
     // The credential is bound to this MCP session server-side by the installed
     // host, never taken as model-visible tool input (it would persist in
@@ -475,5 +513,6 @@ module.exports.noteCaptureArgs = noteCaptureArgs;
 module.exports.withToolTimeout = withToolTimeout;
 module.exports.resolveHostCredential = resolveHostCredential;
 module.exports.readCredentialFile = readCredentialFile;
+module.exports.requireEmptyObjectArguments = requireEmptyObjectArguments;
 module.exports.CREDENTIAL_ENV = CREDENTIAL_ENV;
 module.exports.CREDENTIAL_FILE_ENV = CREDENTIAL_FILE_ENV;

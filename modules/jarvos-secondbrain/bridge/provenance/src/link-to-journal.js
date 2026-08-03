@@ -21,6 +21,7 @@ const { mkdirSync } = require('node:fs');
 const crypto = require('node:crypto');
 const { execFileSync } = require('node:child_process');
 const path = require('path');
+const { resolveJournalConfig } = require('../../../bridge/config');
 const {
   getTimeZone,
   getVaultDir,
@@ -29,10 +30,9 @@ const {
 } = require('./lib/provenance-config');
 const { repairZeroByteVaultRootDuplicate } = require('../../../packages/jarvos-secondbrain-notes/src/lib/vault-root-duplicate-guard');
 const {
-  loadConfig,
-  normalizeSections,
-  renderJournal,
-} = require('../../../packages/jarvos-secondbrain-journal/src/journal-maintenance.js');
+  ensureTodayJournal,
+  mutateExistingJournal,
+} = require('../../../packages/jarvos-secondbrain-journal/src/journal-lifecycle.js');
 
 const OBSIDIAN_MUTATION_RESULT_STORE = '__jarvosJournalMutationResults';
 const OBSIDIAN_MUTATION_TIMEOUT_MS = 10 * 1000;
@@ -49,17 +49,19 @@ function dateFromJournalPath(journalPath) {
   return new Date().toLocaleDateString('en-CA', { timeZone: getTimeZone() });
 }
 
-function renderInitialJournal(journalPath, date = dateFromJournalPath(journalPath)) {
-  const config = loadConfig();
-  const normalized = normalizeSections('', date, config);
-  return renderJournal(date, config, normalized);
-}
-
 function ensureJournalFile(journalPath, date = dateFromJournalPath(journalPath)) {
-  if (existsSync(journalPath)) return;
-  const rendered = renderInitialJournal(journalPath, date);
-  mkdirSync(path.dirname(journalPath), { recursive: true });
-  writeFileSync(journalPath, rendered, 'utf8');
+  const configured = resolveJournalConfig();
+  if (path.resolve(configured.journalDir) !== path.resolve(path.dirname(journalPath))) {
+    throw new Error('journal ensure target does not match configured journal directory');
+  }
+  const result = ensureTodayJournal({
+    journalDir: configured.journalDir,
+    timeZone: configured.timeZone,
+  });
+  if (!result.ok || result.date !== date || !existsSync(journalPath)) {
+    throw new Error(`journal ensure ${result.outcome || 'failed'}`);
+  }
+  return result;
 }
 
 function readJsonSafe(filePath, fallback) {
@@ -470,7 +472,15 @@ function recordDeferredBacklink({
     };
     writeJson(deferredPath, data);
   });
-  return { deferredPath, key };
+  return {
+    deferredPath,
+    key,
+    journalPath,
+    noteTitle,
+    section,
+    ...(noteId ? { noteId } : {}),
+    ...(normalizedNotePath ? { notePath: normalizedNotePath } : {}),
+  };
 }
 
 function outcomeSummary(outcomes, deferredPath) {
@@ -655,7 +665,7 @@ function linkNoteToJournal({
   const normalizedSection = normalizeSectionName(section);
   const useObsidianOwnedMutation = isTodayJournalPath(journalPath)
     && process.env.JARVOS_ALLOW_UNSAFE_TEST_JOURNAL_WRITE !== '1';
-  if (!existedBefore && !useObsidianOwnedMutation) ensureJournalFile(journalPath);
+  if (!existedBefore) ensureJournalFile(journalPath);
   const original = existsSync(journalPath) ? readFileSync(journalPath, 'utf8') : '';
   const existing = linkNoteInSection(original, noteTitle, normalizedSection);
   let mutation;
@@ -667,10 +677,13 @@ function linkNoteToJournal({
         journalPath,
         noteTitle,
         section: normalizedSection,
-        initialContent: existedBefore ? undefined : renderInitialJournal(journalPath),
       });
     } else {
-      writeFileSync(journalPath, existing.content, 'utf8');
+      mutateExistingJournal({
+        journalPath,
+        expectedContent: original,
+        nextContent: existing.content,
+      });
       mutation = { alreadyPresent: false, mutationOwner: 'jarvos-filesystem' };
     }
   } catch (error) {

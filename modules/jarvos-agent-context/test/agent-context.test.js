@@ -13,6 +13,8 @@ const {
   controlPlane,
   currentWork,
   defaultFrontmatter,
+  ensureTodayJournal,
+  healthTodayJournal,
   hydrate,
   readSessionThread,
   redactObviousSecrets,
@@ -375,11 +377,289 @@ test('MCP tool list includes jarvOS tools', () => {
     'jarvos_session_thread_write',
     'jarvos_startup_brief',
     'jarvos_hydrate',
+    'jarvos_journal_health',
+    'jarvos_ensure_today_journal',
   ]);
   assert.match(
     TOOLS.find((tool) => tool.name === 'jarvos_hydrate').description,
     /boot jarvOS/,
   );
+});
+
+test('MCP journal actions expose closed empty-object schemas and safe lifecycle results', () => {
+  withTempVault(({ journal }) => {
+    const listed = mcpRequest({
+      jsonrpc: '2.0',
+      id: 51,
+      method: 'tools/list',
+      params: {},
+    }, process.env);
+    const tools = listed.result.tools.filter((tool) => ['jarvos_journal_health', 'jarvos_ensure_today_journal'].includes(tool.name));
+    assert.deepEqual(tools.map((tool) => tool.name), ['jarvos_journal_health', 'jarvos_ensure_today_journal']);
+    for (const tool of tools) {
+      assert.deepEqual(tool.inputSchema, {
+        type: 'object',
+        additionalProperties: false,
+        properties: {},
+      });
+    }
+
+    const health = mcpRequest({
+      jsonrpc: '2.0',
+      id: 52,
+      method: 'tools/call',
+      params: { name: 'jarvos_journal_health', arguments: {} },
+    }, process.env);
+    const healthBody = JSON.parse(health.result.content[0].text);
+    assert.equal(healthBody.status, 'ok');
+    assert.equal(healthBody.outcome, 'health');
+    assert.equal(typeof healthBody.date, 'string');
+    assert.deepEqual(Object.keys(healthBody).sort(), [
+      'canonicalStatus',
+      'date',
+      'derivedIndexStatus',
+      'outcome',
+      'status',
+    ]);
+
+    const ensured = mcpRequest({
+      jsonrpc: '2.0',
+      id: 53,
+      method: 'tools/call',
+      params: { name: 'jarvos_ensure_today_journal', arguments: {} },
+    }, process.env);
+    const ensuredBody = JSON.parse(ensured.result.content[0].text);
+    assert.equal(ensuredBody.status, 'ok');
+    assert.equal(ensuredBody.outcome, 'created');
+    assert.equal(typeof ensuredBody.date, 'string');
+    assert.deepEqual(Object.keys(ensuredBody).sort(), ['date', 'outcome', 'status']);
+
+    const journalPath = path.join(journal, `${ensuredBody.date}.md`);
+    const beforeRetry = fs.readFileSync(journalPath, 'utf8');
+    const retry = mcpRequest({
+      jsonrpc: '2.0',
+      id: 54,
+      method: 'tools/call',
+      params: { name: 'jarvos_ensure_today_journal', arguments: {} },
+    }, process.env);
+    assert.equal(JSON.parse(retry.result.content[0].text).outcome, 'healthy-existing');
+    assert.equal(fs.readFileSync(journalPath, 'utf8'), beforeRetry);
+
+    const serialized = `${JSON.stringify(healthBody)}${JSON.stringify(ensuredBody)}`;
+    for (const forbidden of [
+      journal,
+      'receiptPath',
+      'indexPath',
+      'sha256',
+      'checksum',
+      'timestamp',
+      'provenance',
+      'runId',
+      'trigger',
+      'private authored text',
+    ]) {
+      assert.equal(serialized.includes(forbidden), false, `public journal DTO leaked ${forbidden}`);
+    }
+
+    const rejected = mcpRequest({
+      jsonrpc: '2.0',
+      id: 55,
+      method: 'tools/call',
+      params: { name: 'jarvos_ensure_today_journal', arguments: { path: journalPath } },
+    }, process.env);
+    assert.equal(rejected.error.code, -32602);
+    assert.match(rejected.error.message, /empty object/);
+  });
+});
+
+test('public journal actions reject arguments before lifecycle access', async () => {
+  await assert.rejects(
+    () => callTool('jarvos_journal_health', { date: '2030-01-01' }),
+    /empty object/,
+  );
+  await assert.rejects(
+    () => callTool('jarvos_ensure_today_journal', { repair: true }),
+    /empty object/,
+  );
+});
+
+test('public journal actions fail closed without configuration and do not create fallback files', () => {
+  const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-journal-mcp-no-config-'));
+  fs.mkdirSync(path.join(tempHome, 'config'), { recursive: true });
+  const env = { ...process.env, HOME: tempHome, XDG_CONFIG_HOME: path.join(tempHome, 'config'), TZ: 'Pacific/Auckland' };
+  for (const key of Object.keys(env)) {
+    if (/^(?:JARVOS_|CLAWD_DIR$|JOURNAL_DIR$|VAULT_NOTES_DIR$|TZ$)/.test(key)) delete env[key];
+  }
+  env.HOME = tempHome;
+  env.XDG_CONFIG_HOME = path.join(tempHome, 'config');
+  env.TZ = 'Pacific/Auckland';
+
+  try {
+    const health = mcpRequest({
+      jsonrpc: '2.0',
+      id: 61,
+      method: 'tools/call',
+      params: { name: 'jarvos_journal_health', arguments: {} },
+    }, env);
+    const ensure = mcpRequest({
+      jsonrpc: '2.0',
+      id: 62,
+      method: 'tools/call',
+      params: { name: 'jarvos_ensure_today_journal', arguments: {} },
+    }, env);
+    const healthBody = JSON.parse(health.result.content[0].text);
+    const ensureBody = JSON.parse(ensure.result.content[0].text);
+    assert.equal(healthBody.status, 'error');
+    assert.equal(ensureBody.status, 'error');
+    assert.equal(healthBody.date, null);
+    assert.equal(ensureBody.date, null);
+    assert.doesNotMatch(JSON.stringify(healthBody), /Pacific\/Auckland|Vault v3|jarvOS/);
+    assert.doesNotMatch(JSON.stringify(ensureBody), /Pacific\/Auckland|Vault v3|jarvOS/);
+    assert.deepEqual(fs.readdirSync(tempHome), ['config']);
+  } finally {
+    fs.rmSync(tempHome, { recursive: true, force: true });
+  }
+});
+
+test('transcript recall tool is absent when disabled or incompatible', () => {
+  resetTranscriptRecallState();
+  assert.equal(getTools({ enabled: false }).some((tool) => tool.name === 'jarvos_transcript_recall'), false);
+
+  const incompatible = {
+    preflight: () => ({ ok: false, reason: 'incompatible_contract' }),
+    retrieve: () => ({ status: 'unavailable' }),
+  };
+  assert.equal(getTools({ enabled: true, adapter: incompatible, force: true }).some((tool) => tool.name === 'jarvos_transcript_recall'), false);
+  resetTranscriptRecallState();
+});
+
+test('CASS path configuration does not opt into transcript recall by itself', () => {
+  const previous = {
+    JARVOS_TRANSCRIPT_RECALL_ENABLED: process.env.JARVOS_TRANSCRIPT_RECALL_ENABLED,
+    JARVOS_CASS_ENABLED: process.env.JARVOS_CASS_ENABLED,
+    JARVOS_CASS_BIN: process.env.JARVOS_CASS_BIN,
+    JARVOS_CASS_DATA_DIR: process.env.JARVOS_CASS_DATA_DIR,
+  };
+  try {
+    delete process.env.JARVOS_TRANSCRIPT_RECALL_ENABLED;
+    delete process.env.JARVOS_CASS_ENABLED;
+    process.env.JARVOS_CASS_BIN = '/tmp/cass';
+    process.env.JARVOS_CASS_DATA_DIR = '/tmp/cass-data';
+    resetTranscriptRecallState();
+    assert.equal(getTools({ force: true }).some((tool) => tool.name === 'jarvos_transcript_recall'), false);
+  } finally {
+    for (const [key, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    resetTranscriptRecallState();
+  }
+});
+
+test('async CASS preflight does not block synchronous tool discovery', async () => {
+  resetTranscriptRecallState();
+  let resolvePreflight;
+  const adapter = {
+    preflightAsync: () => new Promise((resolve) => { resolvePreflight = resolve; }),
+    retrieveAsync: () => Promise.resolve({ status: 'no_evidence', evidence: [] }),
+  };
+
+  assert.equal(getTools({ enabled: true, adapter, force: true }).some((tool) => tool.name === 'jarvos_transcript_recall'), false);
+  let settled = false;
+  const pendingTools = getToolsAsync().then((tools) => {
+    settled = true;
+    return tools;
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(settled, false);
+  resolvePreflight({
+    ok: true,
+    status: 'available',
+    contractVersion: 1,
+    connectors: [{ id: 'codex', cassSlug: 'codex' }],
+  });
+  const tools = await pendingTools;
+  assert.equal(tools.some((tool) => tool.name === 'jarvos_transcript_recall'), true);
+  resetTranscriptRecallState();
+});
+
+test('transcript recall tool appears after compatible preflight and returns packet evidence', async () => {
+  resetTranscriptRecallState();
+  const calls = [];
+  const adapter = {
+    preflight: () => ({
+      ok: true,
+      status: 'available',
+      contractVersion: 1,
+      connectors: [{ id: 'codex', cassSlug: 'codex' }, { id: 'claude_code', cassSlug: 'claude' }],
+    }),
+    retrieve: (input) => {
+      calls.push(input);
+      return {
+        schema: 'jarvos-transcript-packet/v1',
+        requestId: 'test-request',
+        status: 'evidence_found',
+        requestedConnectors: input.connectors,
+        searchedConnectors: input.connectors,
+        connectorOutcomes: [],
+        evidence: [{ connector: 'codex', sessionId: 's1', citation: 'turn:1', excerpt: 'bounded evidence', untrustedContent: true }],
+        truncated: false,
+        omissions: [],
+        warnings: [],
+        renderedTokenCount: 42,
+      };
+    },
+  };
+
+  const tools = getTools({ enabled: true, adapter, force: true });
+  const tool = tools.find((item) => item.name === 'jarvos_transcript_recall');
+  assert.ok(tool);
+  assert.deepEqual(tool.inputSchema.required, ['query']);
+
+  const result = await callTool('jarvos_transcript_recall', {
+    query: 'deployment decision',
+    connectors: ['codex'],
+    maxEvidence: 3,
+  });
+  assert.equal(result.isError, false);
+  const packet = JSON.parse(result.content[0].text);
+  assert.equal(packet.status, 'evidence_found');
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].destinationClass, 'on_demand_agent');
+  assert.deepEqual(calls[0].connectors, ['codex']);
+  resetTranscriptRecallState();
+});
+
+test('transcript recall returns structured unavailable after runtime loss', async () => {
+  resetTranscriptRecallState();
+  const adapter = {
+    preflight: () => ({ ok: true, status: 'available', contractVersion: 1, connectors: [{ id: 'codex', cassSlug: 'codex' }] }),
+    retrieve: () => ({
+      schema: 'jarvos-transcript-packet/v1',
+      status: 'unavailable',
+      omissions: ['connector_failed:codex:unavailable'],
+      evidence: [],
+    }),
+  };
+  getTools({ enabled: true, adapter, force: true });
+  const result = await callTool('jarvos_transcript_recall', { query: 'anything' });
+  assert.equal(result.isError, false);
+  assert.equal(JSON.parse(result.content[0].text).status, 'unavailable');
+  resetTranscriptRecallState();
+});
+
+test('transcript recall async retrieval remains interruptible by the MCP timeout', async () => {
+  resetTranscriptRecallState();
+  const adapter = {
+    preflight: () => ({ ok: true, status: 'available', contractVersion: 1, connectors: [{ id: 'codex', cassSlug: 'codex' }] }),
+    retrieveAsync: () => new Promise((resolve) => setTimeout(() => resolve({ status: 'no_evidence', evidence: [] }), 20)),
+  };
+  getTools({ enabled: true, adapter, force: true });
+  await assert.rejects(
+    withToolTimeout('jarvos_transcript_recall', () => callTool('jarvos_transcript_recall', { query: 'slow query' }), 1),
+    /jarvos_transcript_recall timed out after 1ms/,
+  );
+  resetTranscriptRecallState();
 });
 
 test('control-plane MCP tool never takes a model-visible credential', () => {
@@ -710,18 +990,38 @@ test('control-plane MCP tool binds credential from file at runtime', async () =>
   });
 });
 
-function mcpRequest(message) {
+function mcpRequest(message, env = process.env) {
   const result = spawnSync(process.execPath, [
     path.join(__dirname, '..', 'scripts', 'jarvos-mcp.js'),
   ], {
     input: `${JSON.stringify(message)}\n`,
     encoding: 'utf8',
+    env,
   });
   assert.equal(result.status, 0, result.stderr);
   const lines = result.stdout.trim().split(/\r?\n/).filter(Boolean);
   assert.equal(lines.length, 1, result.stdout);
   return JSON.parse(lines[0]);
 }
+
+test('createNote retains a deferred journal receipt without retrying mutation', () => {
+  withTempVault(({ notes }) => {
+    delete process.env.JARVOS_ALLOW_UNSAFE_TEST_JOURNAL_WRITE;
+    const result = createNote({
+      title: 'Deferred Agent Context Note',
+      content: 'The note must remain durable while backlink recovery is pending.',
+    });
+
+    assert.equal(result.ok, true);
+    assert.equal(result.note.journal.status, 'deferred');
+    assert.equal(result.journal, result.note.journal);
+    assert.equal(result.verification.deferred, true);
+    assert.ok(fs.existsSync(result.note.path));
+    assert.ok(result.note.path.startsWith(notes));
+    const queue = JSON.parse(fs.readFileSync(result.journal.deferredBacklink.deferredPath, 'utf8'));
+    assert.equal(Object.keys(queue.entries).length, 1);
+  });
+});
 
 test('MCP initialize advertises tool and prompt capabilities', () => {
   const response = mcpRequest({

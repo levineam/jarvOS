@@ -161,6 +161,27 @@ function healthToday(options = {}) {
   return { ok: true, date, canonical: canonicalHealth(path.join(inputs.journalDir, `${date}.md`), fsImpl), derivedIndex: detectDerivedIndexHealth(inputs.journalDir, fsImpl) };
 }
 
+// Backlink and append callers may update an already-existing canonical journal,
+// but creation callers must remain on ensureTodayJournal's creation-only path.
+function mutateExistingJournal({ journalPath, expectedContent, nextContent, fsImpl = fs } = {}) {
+  if (typeof journalPath !== 'string' || !journalPath) throw new Error('journalPath is required');
+  if (typeof expectedContent !== 'string' || typeof nextContent !== 'string') {
+    throw new Error('expectedContent and nextContent are required');
+  }
+  const current = fsImpl.readFileSync(journalPath, 'utf8');
+  if (current !== expectedContent) throw new Error('canonical journal changed before mutation');
+  if (current === nextContent) return { changed: false };
+  const temporary = path.join(path.dirname(journalPath), `.${path.basename(journalPath)}.${process.pid}.${Date.now()}.tmp`);
+  try {
+    fsImpl.writeFileSync(temporary, nextContent, { encoding: 'utf8', mode: 0o600 });
+    fsImpl.renameSync(temporary, journalPath);
+  } catch (error) {
+    try { fsImpl.unlinkSync(temporary); } catch { /* best effort */ }
+    throw error;
+  }
+  return { changed: true };
+}
+
 function runCreationMaintenance(args = {}, options = {}) {
   const requested = args.dateSpecs || ['today'];
   if (requested.length !== 1 || requested[0] !== 'today') {
@@ -174,4 +195,4 @@ function runCreationMaintenance(args = {}, options = {}) {
   };
 }
 
-module.exports = { canonicalHealth, detectDerivedIndexHealth, detectWriterGuard, ensureTodayJournal, healthToday, localDate, runCreationMaintenance, safeProvenance };
+module.exports = { canonicalHealth, detectDerivedIndexHealth, detectWriterGuard, ensureTodayJournal, healthToday, localDate, mutateExistingJournal, runCreationMaintenance, safeProvenance };
