@@ -22,94 +22,18 @@ const {
 const {
   writeNoteFile,
 } = require('../../../packages/jarvos-secondbrain-notes/src/write-to-vault.js');
-const {
-  getVaultJournalDir,
-} = require('../../../bridge/provenance/src/lib/provenance-config.js');
 const { resolveJournalConfig } = require('../../../bridge/config');
-const { mutateJournalThroughObsidian } = require('../../../bridge/provenance/src/link-to-journal.js');
+const { mutateJournalThroughObsidian } = require('../../../bridge/provenance/src/obsidian-mutation.js');
 const IDEAS_HEADING = '## 💡 Ideas';
 const NOTES_HEADING = '## 📝 Notes';
 const FLAGGED_HEADING = '## 📌 Flagged';
-const SIGNATURE = '— Edited by Jarvis';
-const NOTES_PLACEHOLDER_RE = /^-\s+(?:No notes created(?: on .*)?|No notes today|No notes yet)$/i;
 
 function journalConfig() {
   return resolveJournalConfig();
 }
 
-function todayDate(now = new Date()) {
-  return localDate(now, journalConfig().timeZone);
-}
-
-function trimOuterBlankLines(text) {
-  const lines = String(text || '').split(/\r?\n/);
-  while (lines.length && lines[0].trim() === '') lines.shift();
-  while (lines.length && lines[lines.length - 1].trim() === '') lines.pop();
-  return lines.join('\n');
-}
-
-function findSectionRange(lines, heading) {
-  let sectionLineStart = -1;
-  let sectionLineEnd = lines.length;
-
-  for (let i = 0; i < lines.length; i += 1) {
-    const trimmed = lines[i].trim();
-    if (trimmed === heading) {
-      sectionLineStart = i;
-      continue;
-    }
-    if (sectionLineStart !== -1 && i > sectionLineStart) {
-      if (/^##\s/.test(lines[i]) || trimmed === SIGNATURE) {
-        sectionLineEnd = i;
-        break;
-      }
-    }
-  }
-
-  return { sectionLineStart, sectionLineEnd };
-}
-
-function ensureJournalFile(journalPath, date, config = journalConfig()) {
-  if (path.resolve(config.journalDir) !== path.resolve(path.dirname(journalPath))) {
-    throw new Error('journal ensure target does not match configured journal directory');
-  }
-  const lifecycle = ensureTodayJournal(config);
-  if (!lifecycle.ok || lifecycle.date !== date || !fs.existsSync(journalPath)) {
-    throw new Error(`journal ensure ${lifecycle.outcome || 'failed'}`);
-  }
-  return lifecycle;
-}
-
-function appendLineToSectionContent(contentLines, line) {
-  const trimmedLine = String(line || '').trim();
-  const existingTrimmed = contentLines.map((entry) => entry.trim()).filter(Boolean);
-  if (existingTrimmed.includes(trimmedLine)) {
-    return { contentLines, alreadyPresent: true };
-  }
-
-  const materialized = contentLines.filter((entry) => {
-    const trimmed = entry.trim();
-    return trimmed !== '' && trimmed !== '-' && !NOTES_PLACEHOLDER_RE.test(trimmed);
-  });
-  materialized.push(trimmedLine);
-
-  return {
-    contentLines: materialized.length ? materialized : ['-'],
-    alreadyPresent: false,
-  };
-}
-
-function insertMissingSection(lines, heading) {
-  const insertAt = lines.findIndex((line) => line.trim() === SIGNATURE);
-  const insertion = [heading, '-', ''];
-  if (insertAt === -1) {
-    return [...lines, '', ...insertion];
-  }
-  return [
-    ...lines.slice(0, insertAt),
-    ...insertion,
-    ...lines.slice(insertAt),
-  ];
+function todayDate(now = new Date(), config = journalConfig()) {
+  return localDate(now, config.timeZone);
 }
 
 // Serialized into the Obsidian eval request. Keep this function self-contained
@@ -179,50 +103,47 @@ function createVaultStorageAdapter(options = {}) {
     || process.env.JARVOS_ALLOW_UNSAFE_TEST_JOURNAL_WRITE === '1';
 
   return {
-    ensureJournal({ date = todayDate() } = {}) {
-      const config = journalConfig();
-      const journalDir = config.journalDir || getVaultJournalDir();
-      const journalPath = path.join(journalDir, `${date}.md`);
+    ensureJournal({ date, now, config: suppliedConfig } = {}) {
+      const config = suppliedConfig || journalConfig();
+      const operationNow = now instanceof Date ? now : new Date(now || Date.now());
+      const effectiveDate = date || todayDate(operationNow, config);
+      const journalDir = config.journalDir;
+      const journalPath = path.join(journalDir, `${effectiveDate}.md`);
+      if (effectiveDate !== todayDate(operationNow, config)) {
+        throw new Error('journal ensure supports only the current local date');
+      }
       const existed = fs.existsSync(journalPath);
-      const lifecycle = ensureJournalFile(journalPath, date, config);
-      return { journalPath, existed, lifecycle };
+      const lifecycle = ensureTodayJournal({ ...config, journalPath, now: operationNow });
+      if (!lifecycle.ok || lifecycle.date !== effectiveDate || !lifecycle.journalPath || !fs.existsSync(lifecycle.journalPath)) {
+        throw new Error(`journal ensure ${lifecycle.outcome || 'failed'}`);
+      }
+      return { journalPath: lifecycle.journalPath, existed, lifecycle };
     },
 
-    appendLineToJournalSection({ heading, line, date = todayDate() }) {
+    appendLineToJournalSection({ heading, line, date, now } = {}) {
       if (!heading) throw new Error('heading is required');
       if (!line || !String(line).trim()) throw new Error('line is required');
 
-      const { journalPath } = this.ensureJournal({ date });
-      const current = fs.readFileSync(journalPath, 'utf8');
-      let lines = current.split(/\r?\n/);
-      let range = findSectionRange(lines, heading);
-
-      if (range.sectionLineStart === -1) {
-        lines = insertMissingSection(lines, heading);
-        range = findSectionRange(lines, heading);
+      const config = journalConfig();
+      const operationNow = now instanceof Date ? now : new Date(now || Date.now());
+      const effectiveDate = date || todayDate(operationNow, config);
+      const journalPath = path.join(config.journalDir, `${effectiveDate}.md`);
+      if (effectiveDate === todayDate(operationNow, config)) {
+        this.ensureJournal({ date: effectiveDate, now: operationNow, config });
+      } else if (!fs.existsSync(journalPath)) {
+        throw new Error('journal append supports past dates only when the journal already exists');
       }
-
-      const existingSection = lines.slice(range.sectionLineStart + 1, range.sectionLineEnd);
-      const appended = appendLineToSectionContent(existingSection, line);
-      const rebuilt = [
-        ...lines.slice(0, range.sectionLineStart + 1),
-        ...appended.contentLines,
-        '',
-        ...lines.slice(range.sectionLineEnd),
-      ].join('\n');
-      const finalContent = trimOuterBlankLines(rebuilt) + '\n';
+      const current = fs.readFileSync(journalPath, 'utf8');
+      const mutationInput = { heading, line: String(line).trim() };
+      const appended = appendLineMutation(current, mutationInput);
 
       if (!appended.alreadyPresent) {
-        const config = journalConfig();
-        if (date === localDate(new Date(), config.timeZone) && !allowUnsafeFilesystemWrites) {
+        if (effectiveDate === localDate(operationNow, config.timeZone) && !allowUnsafeFilesystemWrites) {
           const mutation = ownedJournalMutator({
             journalPath,
             mutation: appendLineMutation,
-            mutationPayload: { heading, line: String(line).trim() },
-            verifyCommitted: (committed) => appendLineMutation(committed, {
-              heading,
-              line: String(line).trim(),
-            }).content === committed,
+            mutationPayload: mutationInput,
+            verifyCommitted: (committed) => appendLineMutation(committed, mutationInput).content === committed,
           });
           return {
             journalPath,
@@ -232,14 +153,14 @@ function createVaultStorageAdapter(options = {}) {
             mutationOwner: mutation.mutationOwner || 'obsidian-vault-process',
           };
         }
-        mutateExistingJournal({ journalPath, expectedContent: current, nextContent: finalContent });
+        mutateExistingJournal({ journalPath, expectedContent: current, nextContent: appended.content });
       }
 
       return {
         journalPath,
         heading,
         line: String(line).trim(),
-        alreadyPresent: appended.alreadyPresent,
+        alreadyPresent: Boolean(appended.alreadyPresent),
         mutationOwner: appended.alreadyPresent ? 'existing-journal-content' : 'jarvos-filesystem',
       };
     },
@@ -255,12 +176,13 @@ function createVaultStorageAdapter(options = {}) {
       }
     },
 
-    linkNoteToJournal({ noteTitle, date = todayDate(), heading = NOTES_HEADING }) {
+    linkNoteToJournal({ noteTitle, date, now, heading = NOTES_HEADING }) {
       if (!noteTitle) throw new Error('noteTitle is required');
       return this.appendLineToJournalSection({
         heading,
         line: `- [[${noteTitle}]]`,
         date,
+        now,
       });
     },
   };

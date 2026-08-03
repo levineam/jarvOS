@@ -19,6 +19,16 @@ const {
 
 const CREDENTIAL_ENV = 'JARVOS_CONTROL_PLANE_CREDENTIAL';
 const CREDENTIAL_FILE_ENV = 'JARVOS_CONTROL_PLANE_CREDENTIAL_FILE';
+const STRICT_EMPTY_ARGUMENT_TOOLS = new Set([
+  'jarvos_journal_health',
+  'jarvos_ensure_today_journal',
+]);
+
+function normalizeToolArguments(name, args) {
+  return STRICT_EMPTY_ARGUMENT_TOOLS.has(name)
+    ? (args === undefined ? {} : args)
+    : (args || {});
+}
 
 // Strict host-credential file binding for persisted MCP sessions. Shared with
 // the human CLI and runtime setup: absolute path, owner-only leaf, trusted
@@ -190,7 +200,7 @@ const TOOLS = [
   },
   {
     name: 'jarvos_ensure_today_journal',
-    description: 'Ensure today\'s configured journal through the shared lifecycle.',
+    description: 'Mutating action: ensure today\'s configured journal only after an explicit user request to create/ensure it or a trusted host-declared maintenance trigger. Health is the default read-only status action; do not run this during startup housekeeping.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -312,6 +322,7 @@ function requireEmptyObjectArguments(args) {
 }
 
 async function callTool(name, args = {}) {
+  args = normalizeToolArguments(name, args);
   if (name === 'jarvos_journal_health') {
     requireEmptyObjectArguments(args);
     const result = healthTodayJournal();
@@ -434,15 +445,17 @@ async function handle(message) {
     }
 
     if (method === 'prompts/get') {
-      const result = promptResult(params?.name, params?.arguments || {});
+      const promptArguments = params?.arguments || {};
+      const result = promptResult(params?.name, promptArguments);
       write({ jsonrpc: '2.0', id, result });
       return;
     }
 
     if (method === 'tools/call') {
+      const toolArguments = normalizeToolArguments(params?.name, params?.arguments);
       const result = await withToolTimeout(
         params?.name,
-        () => callTool(params?.name, params?.arguments || {}),
+        () => callTool(params?.name, toolArguments),
       );
       write({ jsonrpc: '2.0', id, result });
       return;

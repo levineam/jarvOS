@@ -384,6 +384,12 @@ test('MCP tool list includes jarvOS tools', () => {
     TOOLS.find((tool) => tool.name === 'jarvos_hydrate').description,
     /boot jarvOS/,
   );
+  const healthDescription = TOOLS.find((tool) => tool.name === 'jarvos_journal_health').description;
+  const ensureDescription = TOOLS.find((tool) => tool.name === 'jarvos_ensure_today_journal').description;
+  assert.match(healthDescription, /read-only health/);
+  assert.match(ensureDescription, /explicit user request/);
+  assert.match(ensureDescription, /trusted host-declared maintenance trigger/);
+  assert.match(ensureDescription, /do not run this during startup/);
 });
 
 test('MCP journal actions expose closed empty-object schemas and safe lifecycle results', () => {
@@ -469,6 +475,17 @@ test('MCP journal actions expose closed empty-object schemas and safe lifecycle 
     }, process.env);
     assert.equal(rejected.error.code, -32602);
     assert.match(rejected.error.message, /empty object/);
+
+    for (const invalidArguments of [null, false]) {
+      const invalid = mcpRequest({
+        jsonrpc: '2.0',
+        id: 56,
+        method: 'tools/call',
+        params: { name: 'jarvos_journal_health', arguments: invalidArguments },
+      }, process.env);
+      assert.equal(invalid.error.code, -32602);
+      assert.match(invalid.error.message, /empty object/);
+    }
   });
 });
 
@@ -481,6 +498,17 @@ test('public journal actions reject arguments before lifecycle access', async ()
     () => callTool('jarvos_ensure_today_journal', { repair: true }),
     /empty object/,
   );
+});
+
+test('MCP keeps legacy null-argument normalization for non-journal tools', () => {
+  const prompt = mcpRequest({
+    jsonrpc: '2.0',
+    id: 57,
+    method: 'prompts/get',
+    params: { name: 'boot_jarvos', arguments: null },
+  });
+  assert.equal(prompt.error, undefined);
+  assert.match(prompt.result.messages[0].content.text, /Boot jarvOS/);
 });
 
 test('public journal actions fail closed without configuration and do not create fallback files', () => {

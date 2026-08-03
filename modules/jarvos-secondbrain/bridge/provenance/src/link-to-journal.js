@@ -19,9 +19,7 @@ const {
 } = require('fs');
 const { mkdirSync } = require('node:fs');
 const crypto = require('node:crypto');
-const { execFileSync } = require('node:child_process');
 const path = require('path');
-const { resolveJournalConfig } = require('../../../bridge/config');
 const {
   getTimeZone,
   getVaultDir,
@@ -33,35 +31,26 @@ const {
   ensureTodayJournal,
   mutateExistingJournal,
 } = require('../../../packages/jarvos-secondbrain-journal/src/journal-lifecycle.js');
+const {
+  isPathInside,
+  mutateJournalThroughObsidian: runObsidianMutationTransport,
+  obsidianMutationScript,
+  parseObsidianEvalResult,
+  resolveVaultRootForJournal,
+  runObsidianEval,
+} = require('./obsidian-mutation.js');
 
-const OBSIDIAN_MUTATION_RESULT_STORE = '__jarvosJournalMutationResults';
-const OBSIDIAN_MUTATION_TIMEOUT_MS = 10 * 1000;
 const DEFERRED_QUEUE_LOCK_MAX_AGE_MS = 30 * 1000;
 
-function todayPath() {
-  const today = new Date().toLocaleDateString('en-CA', { timeZone: getTimeZone() });
+function todayPath(now = new Date()) {
+  const today = new Date(now).toLocaleDateString('en-CA', { timeZone: getTimeZone() });
   return path.join(getVaultJournalDir(), `${today}.md`);
 }
 
-function dateFromJournalPath(journalPath) {
+function dateFromJournalPath(journalPath, now = new Date()) {
   const fromName = path.basename(journalPath, '.md');
   if (/^\d{4}-\d{2}-\d{2}$/.test(fromName)) return fromName;
-  return new Date().toLocaleDateString('en-CA', { timeZone: getTimeZone() });
-}
-
-function ensureJournalFile(journalPath, date = dateFromJournalPath(journalPath)) {
-  const configured = resolveJournalConfig();
-  if (path.resolve(configured.journalDir) !== path.resolve(path.dirname(journalPath))) {
-    throw new Error('journal ensure target does not match configured journal directory');
-  }
-  const result = ensureTodayJournal({
-    journalDir: configured.journalDir,
-    timeZone: configured.timeZone,
-  });
-  if (!result.ok || result.date !== date || !existsSync(journalPath)) {
-    throw new Error(`journal ensure ${result.outcome || 'failed'}`);
-  }
-  return result;
+  return new Date(now).toLocaleDateString('en-CA', { timeZone: getTimeZone() });
 }
 
 function readJsonSafe(filePath, fallback) {
@@ -277,152 +266,8 @@ function withDeferredQueueLock(deferredPath, fn, { maxAttempts = 40, retryMs = 2
   }
 }
 
-function parseObsidianEvalResult(output) {
-  const matches = [...String(output || '').matchAll(/^=>\s*(.+)$/gm)];
-  if (!matches.length) return null;
-  try {
-    return JSON.parse(matches[matches.length - 1][1]);
-  } catch (error) {
-    throw new Error(`Obsidian CLI returned invalid JSON: ${error.message}`);
-  }
-}
-
-function runObsidianEval(code, {
-  vaultName = path.basename(getVaultDir()),
-  command = process.env.OBSIDIAN_CLI || 'obsidian',
-  timeoutMs = OBSIDIAN_MUTATION_TIMEOUT_MS,
-  execute = execFileSync,
-} = {}) {
-  let output;
-  try {
-    output = execute(command, [`vault=${vaultName}`, 'eval', `code=${code}`], {
-      encoding: 'utf8',
-      timeout: timeoutMs,
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
-  } catch (error) {
-    const detail = String(error.stderr || error.stdout || error.message || '').trim();
-    throw new Error(`Obsidian CLI eval failed${detail ? `: ${detail}` : ''}`);
-  }
-  return parseObsidianEvalResult(output);
-}
-
-function isPathInside(parentDir, candidatePath) {
-  const relativePath = path.relative(path.resolve(parentDir), path.resolve(candidatePath));
-  return relativePath === '' || (!relativePath.startsWith('..') && !path.isAbsolute(relativePath));
-}
-
-function resolveVaultRootForJournal(journalPath) {
-  const configuredVaultRoot = path.resolve(getVaultDir());
-  if (isPathInside(configuredVaultRoot, journalPath)) return configuredVaultRoot;
-
-  const configuredJournalDir = path.resolve(getVaultJournalDir());
-  if (isPathInside(configuredJournalDir, journalPath)) return path.dirname(configuredJournalDir);
-  return configuredVaultRoot;
-}
-
-function journalPathRelativeToVault(journalPath) {
-  const vaultRoot = resolveVaultRootForJournal(journalPath);
-  const relativePath = path.relative(vaultRoot, path.resolve(journalPath));
-  if (!relativePath || relativePath.startsWith('..') || path.isAbsolute(relativePath)) {
-    throw new Error(`Journal is outside the active Obsidian vault: ${journalPath}`);
-  }
-  return relativePath.split(path.sep).join('/');
-}
-
-function obsidianMutationScript({ journalPath, noteTitle, section, token, initialContent }) {
-  const payload = Buffer.from(JSON.stringify({
-    journalPath: journalPathRelativeToVault(journalPath),
-    noteTitle,
-    section,
-    token,
-    initialContent,
-  }), 'utf8').toString('base64');
-  const helpers = [escapeRegex, normalizeSectionName, findSectionRange, linkLineRegex, linkNoteInSection]
-    .map((fn) => fn.toString())
-    .join('\n');
-
-  return `(() => {
-    ${helpers}
-    const bytes = Uint8Array.from(atob('${payload}'), (char) => char.charCodeAt(0));
-    const input = JSON.parse(new TextDecoder().decode(bytes));
-    const store = globalThis.${OBSIDIAN_MUTATION_RESULT_STORE} ||= {};
-    store[input.token] = { status: 'pending' };
-    const processFile = (file) => app.vault.process(file, (current) => {
-        const mutation = linkNoteInSection(current, input.noteTitle, input.section);
-        store[input.token] = { status: 'writing', alreadyPresent: mutation.alreadyPresent };
-        return mutation.content;
-      }).then(() => {
-        store[input.token] = { ...store[input.token], status: 'done' };
-      }).catch((error) => {
-        store[input.token] = { status: 'error', error: error?.message || String(error) };
-      });
-    const existing = app.vault.getFileByPath(input.journalPath);
-    if (existing) {
-      processFile(existing);
-    } else if (typeof input.initialContent === 'string') {
-      app.vault.create(input.journalPath, input.initialContent)
-        .then(processFile)
-        .catch((error) => {
-          const concurrentlyCreated = app.vault.getFileByPath(input.journalPath);
-          if (concurrentlyCreated) processFile(concurrentlyCreated);
-          else store[input.token] = { status: 'error', error: error?.message || String(error) };
-        });
-    } else {
-      store[input.token] = { status: 'error', error: 'Journal not found in Obsidian vault: ' + input.journalPath };
-    }
-    return JSON.stringify({ queued: true, token: input.token });
-  })()`;
-}
-
-function mutateJournalThroughObsidian({
-  journalPath,
-  noteTitle,
-  section,
-  initialContent,
-  evaluate,
-  maxPollAttempts = 40,
-  pollIntervalMs = 50,
-} = {}) {
-  const runEvaluate = evaluate || ((code) => runObsidianEval(code, {
-    vaultName: path.basename(resolveVaultRootForJournal(journalPath)),
-  }));
-  const token = crypto.randomUUID();
-  const queued = runEvaluate(obsidianMutationScript({ journalPath, noteTitle, section, token, initialContent }));
-  if (!queued?.queued || queued.token !== token) {
-    throw new Error('Obsidian did not acknowledge the journal mutation');
-  }
-
-  let result = null;
-  try {
-    for (let attempt = 0; attempt < maxPollAttempts; attempt += 1) {
-      if (attempt > 0) sleepSync(pollIntervalMs);
-      result = runEvaluate(`JSON.stringify(globalThis.${OBSIDIAN_MUTATION_RESULT_STORE}?.['${token}'] || null)`);
-      if (result?.status === 'done') break;
-      if (result?.status === 'error') throw new Error(`Obsidian journal mutation failed: ${result.error}`);
-    }
-    if (result?.status !== 'done') throw new Error('Timed out waiting for Obsidian to commit the journal mutation');
-  } finally {
-    try {
-      runEvaluate(`delete globalThis.${OBSIDIAN_MUTATION_RESULT_STORE}?.['${token}']; JSON.stringify(true)`);
-    } catch {
-      // Cleanup is best-effort and must not mask the mutation result.
-    }
-  }
-
-  const committed = readFileSync(journalPath, 'utf8');
-  const verification = linkNoteInSection(committed, noteTitle, section);
-  if (verification.content !== committed) {
-    throw new Error(`Obsidian completed without committing [[${noteTitle}]]`);
-  }
-  return {
-    alreadyPresent: Boolean(result.alreadyPresent),
-    mutationOwner: 'obsidian-vault-process',
-  };
-}
-
-function isTodayJournalPath(journalPath) {
-  const today = new Date().toLocaleDateString('en-CA', { timeZone: getTimeZone() });
+function isTodayJournalPath(journalPath, now = new Date()) {
+  const today = new Date(now).toLocaleDateString('en-CA', { timeZone: getTimeZone() });
   return path.basename(journalPath, '.md') === today;
 }
 
@@ -642,34 +487,43 @@ function reconcileDeferredBacklink({
   return { ...result, dryRun: false };
 }
 
-function linkNoteToTodayJournal(noteTitle, section = '📝 Notes') {
-  return linkNoteToJournal({ noteTitle, section, journalPath: todayPath() });
+function linkNoteToTodayJournal(noteTitle, section = '📝 Notes', now = new Date()) {
+  return linkNoteToJournal({ noteTitle, section, journalPath: todayPath(now), now });
 }
 
 // Compatibility wrapper for the jarvos-agent-context MCP, which calls
 // linkNoteToJournal({ noteTitle, section, createIfMissing }) (WS7 cross-tool unification).
-function linkNoteToJournal({
-  noteTitle,
-  section = '📝 Notes',
-  journalPath = todayPath(),
-  createIfMissing = true,
-  ownedJournalMutator = mutateJournalThroughObsidian,
-  noteId,
-  notePath,
-  deferOnFailure = true,
-} = {}) {
+function linkNoteToJournal(options = {}) {
+  const operationNow = options.now instanceof Date ? options.now : new Date(options.now || Date.now());
+  const {
+    noteTitle,
+    section = '📝 Notes',
+    createIfMissing = true,
+    ownedJournalMutator = mutateJournalThroughObsidian,
+    noteId,
+    notePath,
+    deferOnFailure = true,
+  } = options;
+  const journalPath = options.journalPath === undefined ? todayPath(operationNow) : options.journalPath;
   if (!noteTitle) throw new Error('noteTitle is required');
 
   const existedBefore = existsSync(journalPath);
   if (!existedBefore && !createIfMissing) throw new Error(`Journal not found: ${journalPath}`);
   const normalizedSection = normalizeSectionName(section);
-  const useObsidianOwnedMutation = isTodayJournalPath(journalPath)
+  const useObsidianOwnedMutation = isTodayJournalPath(journalPath, operationNow)
     && process.env.JARVOS_ALLOW_UNSAFE_TEST_JOURNAL_WRITE !== '1';
-  if (!existedBefore) ensureJournalFile(journalPath);
-  const original = existsSync(journalPath) ? readFileSync(journalPath, 'utf8') : '';
-  const existing = linkNoteInSection(original, noteTitle, normalizedSection);
+  let original = '';
+  let existing;
   let mutation;
   try {
+    if (!existedBefore) {
+      const ensured = ensureTodayJournal({ journalPath, now: operationNow });
+      if (!ensured.ok || ensured.date !== dateFromJournalPath(journalPath, operationNow) || !existsSync(ensured.journalPath)) {
+        throw new Error(`journal ensure ${ensured.outcome || 'failed'}`);
+      }
+    }
+    original = existsSync(journalPath) ? readFileSync(journalPath, 'utf8') : '';
+    existing = linkNoteInSection(original, noteTitle, normalizedSection);
     if (existing.alreadyPresent) {
       mutation = { alreadyPresent: true, mutationOwner: 'existing-journal-content' };
     } else if (useObsidianOwnedMutation) {
@@ -810,13 +664,33 @@ function linkNoteInSection(journalMd, noteTitle, section = '📝 Notes') {
   };
 }
 
+// Compatibility wrapper: backlink callers may omit a mutation function, while
+// the neutral transport remains generic for other Obsidian-owned transforms.
+function mutateJournalThroughObsidian(options = {}) {
+  const usesDefaultMutation = !options.mutation;
+  const helperFunctions = options.helperFunctions || [
+    escapeRegex,
+    normalizeSectionName,
+    findSectionRange,
+    linkLineRegex,
+    linkNoteInSection,
+  ];
+  return runObsidianMutationTransport({
+    ...options,
+    mutation: options.mutation || ((current, input) => linkNoteInSection(current, input.noteTitle, input.section)),
+    helperFunctions,
+    verifyCommitted: options.verifyCommitted || (usesDefaultMutation
+      ? (committed) => linkNoteInSection(committed, options.noteTitle, options.section).content === committed
+      : undefined),
+  });
+}
+
 module.exports = {
   main,
   todayPath,
   dateFromJournalPath,
   deferredBacklinksPath,
   deferredQueuePathForJournalDir,
-  ensureJournalFile,
   escapeRegex,
   isPathInside,
   linkNoteInSection,

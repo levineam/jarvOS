@@ -140,6 +140,34 @@ test('linkNoteToJournal creates today\'s missing journal through the lifecycle a
   }
 });
 
+test('linkNoteToJournal keeps one operation clock across a local-midnight boundary', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-link-rollover-'));
+  const journalDir = path.join(root, 'Journal');
+  fs.mkdirSync(journalDir, { recursive: true });
+  const now = new Date('2026-08-04T04:00:00.000Z');
+  const journalPath = path.join(journalDir, '2026-08-04.md');
+
+  try {
+    const ownedJournalMutator = ({ journalPath: target, noteTitle, section }) => {
+      const mutation = linkNoteInSection(fs.readFileSync(target, 'utf8'), noteTitle, section);
+      fs.writeFileSync(target, mutation.content, 'utf8');
+      return { ...mutation, mutationOwner: 'obsidian-vault-process' };
+    };
+    const result = withVaultEnv(root, () => linkNoteToJournal({
+      noteTitle: 'Rollover Durable Note',
+      journalPath,
+      now,
+      ownedJournalMutator,
+    }));
+
+    assert.equal(result.alreadyPresent, false);
+    assert.equal(fs.existsSync(journalPath), true);
+    assert.match(fs.readFileSync(journalPath, 'utf8'), /\[\[Rollover Durable Note\]\]/);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('today journal mutations run through Obsidian-owned current content', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-obsidian-owned-journal-'));
   const journalDir = path.join(root, 'Journal');
@@ -200,6 +228,38 @@ test('a missing today journal is created through lifecycle before owned mutation
     const written = fs.readFileSync(journalPath, 'utf8');
     assert.match(written, /\[\[Owned Creation Backlink\]\]/);
     assert.match(written, /journal-date:/);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('journal ensure failures are queued as deferred backlinks', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-link-ensure-failure-'));
+  const journalDir = path.join(root, 'Journal');
+  const today = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+  const journalPath = path.join(journalDir, `${today}.md`);
+  try {
+    fs.mkdirSync(path.join(root, '.obsidian'), { recursive: true });
+    fs.mkdirSync(journalDir, { recursive: true });
+    fs.writeFileSync(path.join(root, '.obsidian', 'core-plugins.json'), JSON.stringify({ 'daily-notes': true }));
+    fs.writeFileSync(path.join(root, '.obsidian', 'daily-notes.json'), JSON.stringify({ folder: 'Journal' }));
+
+    withVaultEnv(root, () => {
+      assert.throws(
+        () => linkNoteToJournal({ noteTitle: 'Queued Ensure Failure', journalPath }),
+        (error) => {
+          assert.ok(error.deferredBacklink);
+          assert.match(error.message, /backlink queued/);
+          return true;
+        },
+      );
+    });
+
+    assert.equal(fs.existsSync(journalPath), false);
+    const queuePath = path.join(root, '.jarvos', 'journal-maintenance', 'deferred-backlinks.json');
+    const queue = JSON.parse(fs.readFileSync(queuePath, 'utf8'));
+    assert.equal(Object.keys(queue.entries).length, 1);
+    assert.equal(Object.values(queue.entries)[0].status, 'pending');
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
