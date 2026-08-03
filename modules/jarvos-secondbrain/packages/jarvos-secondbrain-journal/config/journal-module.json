@@ -1,13 +1,6 @@
 {
   "$schema": "journal-module-v1",
-  "$doc": "Canonical package-owned journal contract. Controls which sections appear in daily journal entries and their order. The root clawd/config/journal-module.json file remains a compatibility mirror during the extraction phase.",
-
-  "vault": {
-    "journalDir": "~/Vaults/Vault v3/Journal",
-    "notesDir": "~/Vaults/Vault v3/Notes",
-    "tagsDir": "~/Vaults/Vault v3/Tags",
-    "$doc": "Paths support ~/... (resolved at runtime via os.homedir()). Override with JARVOS_JOURNAL_DIR, JARVOS_NOTES_DIR, JARVOS_TAGS_DIR env vars."
-  },
+  "$doc": "Canonical package-owned journal structure. Configure a journal directory and IANA timezone in jarvos.config.json or the documented environment variables before creating a journal.",
 
   "frontmatter": {
     "journal": "Journal",

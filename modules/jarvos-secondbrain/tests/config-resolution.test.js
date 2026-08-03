@@ -10,6 +10,7 @@ const {
   discoverExistingVault,
   parseEnvFile,
   resolveConfig,
+  resolveJournalConfig,
   resolvePaperclipConfig,
   writeSharedVaultConfig,
 } = require('../bridge/config');
@@ -120,6 +121,29 @@ test('resolveConfig prefers configured timezone over generic TZ env fallback', (
   });
 
   assert.equal(config.user.timezone, 'America/Los_Angeles');
+});
+
+test('resolveJournalConfig requires an explicit journal target and valid configured timezone', () => {
+  const root = tempDir();
+  const journalDir = path.join(root, 'Journal');
+  const configPath = path.join(root, 'jarvos.config.json');
+  fs.writeFileSync(configPath, JSON.stringify({
+    paths: { journal: journalDir },
+    user: { timezone: 'Europe/London' },
+  }));
+
+  const config = resolveJournalConfig({ configPath, homeDir: '/home/tester', env: { TZ: 'UTC' } });
+  assert.equal(config.journalDir, journalDir);
+  assert.equal(config.timeZone, 'Europe/London');
+
+  assert.throws(
+    () => resolveJournalConfig({ configPath: path.join(root, 'missing.json'), homeDir: '/home/tester', env: {} }),
+    /explicit journal directory/i,
+  );
+  assert.throws(
+    () => resolveJournalConfig({ configPath, homeDir: '/home/tester', env: { JARVOS_TIMEZONE: 'Not/AZone' } }),
+    /invalid.*timezone/i,
+  );
 });
 
 test('resolveConfig rejects non-string, empty, and relative path overrides', () => {

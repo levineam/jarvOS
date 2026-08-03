@@ -120,6 +120,16 @@ function validTimezone(value) {
   }
 }
 
+function isValidTimezone(value) {
+  if (typeof value !== 'string' || !value.trim()) return false;
+  try {
+    Intl.DateTimeFormat(undefined, { timeZone: value });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function resolveUserTimezone(rest = {}, env = process.env) {
   return validTimezone(
     env.JARVOS_TIMEZONE
@@ -129,6 +139,43 @@ function resolveUserTimezone(rest = {}, env = process.env) {
     || rest.timeZone
     || env.TZ,
   );
+}
+
+/**
+ * Resolve only the inputs that a portable journal mutation needs.  This is
+ * deliberately separate from resolveConfig(): the latter preserves the
+ * workspace's historical defaults for non-journal consumers, while journal
+ * creation must never manufacture a home-directory target or timezone.
+ */
+function resolveJournalConfig(options = {}) {
+  const env = options.env || process.env;
+  const home = homeDir(options);
+  const configPath = discoverConfigPath({ ...options, env, homeDir: home });
+  const raw = options.config && typeof options.config === 'object' ? options.config : readJsonFile(configPath);
+  const paths = raw?.paths && typeof raw.paths === 'object' ? raw.paths : {};
+  const explicitJournal = firstEnvPath(PATH_ENV_KEYS.journal, env, home)
+    || (isUsablePath(paths.journal, home) ? expandTilde(paths.journal.trim(), home) : null)
+    || (() => {
+      const vault = firstEnvPath(PATH_ENV_KEYS.vault, env, home)
+        || (isUsablePath(paths.vault, home) ? expandTilde(paths.vault.trim(), home) : null);
+      return vault ? path.join(vault, 'Journal') : null;
+    })();
+  if (!explicitJournal) throw new Error('Journal mutation requires an explicit journal directory');
+
+  const configuredTimezone = env.JARVOS_TIMEZONE
+    ?? raw?.user?.timezone
+    ?? raw?.user?.timeZone
+    ?? raw?.timezone
+    ?? raw?.timeZone;
+  if (!isValidTimezone(configuredTimezone)) {
+    throw new Error('Journal mutation has an invalid configured IANA timezone');
+  }
+
+  return {
+    journalDir: explicitJournal,
+    timeZone: configuredTimezone,
+    configPath,
+  };
 }
 
 // --- Vault-drift guardrails (SUP-1307 / SUP-1884) ---------------------------
@@ -291,6 +338,8 @@ module.exports = {
   discoverConfigPath,
   expandTilde,
   resolveConfig,
+  resolveJournalConfig,
   resolveUserTimezone,
+  isValidTimezone,
   xdgConfigPath,
 };
