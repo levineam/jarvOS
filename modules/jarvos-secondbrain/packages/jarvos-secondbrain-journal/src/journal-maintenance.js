@@ -39,6 +39,7 @@ const JOURNAL_STATE_DIR = '.jarvos/journal-maintenance';
 function parseArgs(argv) {
   const out = {
     dateSpecs: ['today'],
+    createIfMissing: false,
     dryRun: false,
     json: false,
   };
@@ -46,6 +47,7 @@ function parseArgs(argv) {
   for (const arg of argv) {
     if (arg === '--dry-run') out.dryRun = true;
     else if (arg === '--json') out.json = true;
+    else if (arg === '--create-if-missing') out.createIfMissing = true;
     else if (arg === '--yesterday') out.dateSpecs = ['yesterday'];
     else if (arg.startsWith('--date=')) out.dateSpecs = [arg.split('=').slice(1).join('=')];
     else if (arg.startsWith('--dates=')) {
@@ -1203,6 +1205,7 @@ function formatDeferredBacklinkStatus(lastFlushAt, summary) {
 
 function runMaintenance(argv = process.argv.slice(2), opts = {}) {
   const args = parseArgs(argv);
+  if (args.createIfMissing) return require('./journal-lifecycle.js').runCreationMaintenance(args, opts);
   const config = (opts.loadConfig || loadConfig)();
   const sync = opts.syncOneDate || syncOneDate;
   const flush = opts.flushDeferredBacklinks || deferredBacklinkFlush();

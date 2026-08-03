@@ -516,3 +516,17 @@ test('syncOneDate sectionTransforms strip recovery scaffold via maintenance writ
     fs.rmSync(tmp, { recursive: true, force: true });
   }
 });
+
+test('create-if-missing dispatches to the creation-only lifecycle', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-create-only-'));
+  try {
+    const report = runMaintenance(['--create-if-missing', '--json'], {
+      config: { paths: { journal: path.join(root, 'Journal') }, user: { timezone: 'UTC' } },
+      now: new Date('2026-08-03T12:00:00.000Z'),
+    });
+    assert.equal(report.status, 'ok');
+    assert.equal(report.results[0].outcome, 'created');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
