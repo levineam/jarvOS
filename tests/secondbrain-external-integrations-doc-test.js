@@ -63,6 +63,9 @@ test('secondbrain external integration inventory preserves authority boundaries'
     'must not auto-promote into GBrain, Vault notes, Paperclip, ontology, or durable memory',
     'Not production-integrated',
     'No automatic ingestion of every AI conversation',
+    'explicit configured directory and valid IANA timezone',
+    'creates only a missing current-date file',
+    'health is read-only, ensure is an empty-input today-only action',
   ];
 
   for (const claim of requiredClaims) {

@@ -1,86 +1,131 @@
 # Journal Install Contract
 
-jarvOS keeps a daily **journal** as its raw capture surface — the running log
-your agents append to as they work. This document is the install-time contract
-for that journal: where it lives, who is allowed to write it, and how to keep a
-second tool from silently clobbering it.
-
-It exists because of a real incident (SUP-2269): an Obsidian journaling plugin
-was enabled on the same vault jarvOS journals into, the two writers fought over
-the same dated files, and jarvOS journal content was overwritten with empty
-stubs. The rules below — and the `jarvos doctor` checks that enforce them — are
-the durable fix.
-
-## Where the journal lives
-
-The journal is a folder of dated Markdown files inside your Obsidian vault:
-
-```
-<vaultPath>/Journal/YYYY-MM-DD.md
-```
-
-- `vaultPath` is the value in your `jarvos.config.json`.
-- The journal directory is `<vaultPath>/Journal` (override with the
-  `JARVOS_JOURNAL_DIR` environment variable if you must).
-- Each day is a single file named by ISO date.
-
-## The single-writer rule
-
-**jarvOS must be the only automated writer of the `Journal/` folder.**
-
-You can read, hand-edit, and link to journal files freely in Obsidian. What you
-must **not** do is point a *second automation* at the same folder, because both
-tools assume they own the dated file and will overwrite each other:
-
-- ❌ Do **not** enable the Obsidian **`journals`** community plugin on this vault.
-- ❌ Do **not** enable the Obsidian core **Daily notes** plugin with its *New file
-  location* set to `Journal/` (or to the vault root, which also lands daily notes
-  on top of the journal).
-- ❌ Do **not** point the **Periodic Notes** community plugin's daily notes at
-  `Journal/` (or the vault root).
-- ✅ It is fine to keep Daily notes / Periodic Notes / journaling plugins enabled if
-  they write to a **different** folder that does not overlap `Journal/`.
-
-If you want Obsidian's daily-note convenience, give it its own folder (for
-example `Daily/`) and leave `Journal/` to jarvOS.
-
-## How `jarvos doctor` enforces it
-
-Two checks in the public `jarvos doctor` (the `minimal` profile runs both) catch
-the failure modes before they cost you journal content:
-
-| Check | Fails when | Why it matters |
-| --- | --- | --- |
-| `vault-path-stale` | the configured `vaultPath` root no longer exists | a moved/renamed vault means journal writes silently land in the wrong place |
-| `journal-conflict` | the `journals` plugin is enabled, or core Daily notes / Periodic Notes write into a folder overlapping `Journal/` | a second writer can overwrite jarvOS journal entries with stubs (SUP-2269) |
-
-Run it after install and any time you change vault or Obsidian settings:
-
-```bash
-jarvos doctor --profile minimal --workspace /path/to/jarvos-workspace
-```
-
-A clean vault reports:
+jarvOS stores durable thoughts in one canonical Markdown file per local day:
 
 ```text
-PASS vault-path-stale — vault path freshness (...)
-PASS journal-conflict — journal writer conflict (jarvOS is the single journal writer)
+<configured-journal-dir>/YYYY-MM-DD.md
 ```
 
-If `journal-conflict` fails, the detail line names the offending plugin. Disable
-it (or repoint it at a non-overlapping folder), then re-run `jarvos doctor` to
-confirm `READY`.
+The file is a human-owned record. Automation may create a missing scaffold and
+may add an explicitly authorized backlink or section entry, but the creation
+path never repairs, normalizes, replaces, or overwrites an existing journal.
 
-## Recovering from a conflict
+## Configure before mutation
 
-If a second writer has already stubbed out journal entries:
+Journal mutation is fail-closed. Configure both a journal target and an IANA
+timezone before using the ensure, note, or Obsidian paths.
 
-1. Disable the conflicting Obsidian plugin (`journals`, or Daily notes pointed at
-   `Journal/`).
-2. Restore the affected dated files from Obsidian file recovery, your vault's
-   version history, or a backup.
-3. Re-run `jarvos doctor`; both checks should pass.
+| Input | Precedence | Accepted values | If absent or invalid |
+| --- | ---: | --- | --- |
+| `JARVOS_JOURNAL_DIR` | 1 | Absolute path (a `~` path is expanded against the host home) | Continue |
+| `JOURNAL_DIR` | 2 | Legacy explicit journal-directory environment variable | Continue |
+| `paths.journal` in the discovered config | 3 | Absolute or `~` path | Continue |
+| `JARVOS_VAULT_DIR` / `paths.vault` | 4 | Explicit vault path; the journal target is `<vault>/Journal` | Continue |
+| none | — | — | Reject before filesystem mutation |
 
-The core path layer also refuses a stale vault path at write time
-(`assertNotStaleVaultPath`), so a misconfigured `vaultPath` fails loudly rather
-than writing journal entries into a dead location.
+The configuration file is discovered from `JARVOS_CONFIG_PATH` or
+`JARVOS_CONFIG_FILE`, then an explicitly configured workspace, then the XDG
+jarvOS config location. A missing file is not a permission to invent a vault.
+
+Timezone precedence is:
+
+1. `JARVOS_TIMEZONE`
+2. `user.timezone` or `user.timeZone` in the config
+3. top-level `timezone` or `timeZone` in the config
+
+The value must be a valid IANA timezone. The process `TZ` value is not used as
+an implicit journal-mutation fallback. Conflicting explicit values resolve by
+the order above; malformed higher-precedence values fail closed rather than
+silently falling through.
+
+Example portable config:
+
+```json
+{
+  "assistantName": "jarvOS",
+  "userName": "your-name",
+  "coachName": "your-coach",
+  "vaultPath": "~/Documents/MyVault",
+  "workspacePath": "~/Documents/jarvos-workspace",
+  "runtime": "your-host",
+  "paths": {
+    "vault": "~/Documents/MyVault",
+    "journal": "~/Documents/MyVault/Journal",
+    "notes": "~/Documents/MyVault/Notes"
+  },
+  "user": {
+    "timezone": "Europe/London"
+  }
+}
+```
+
+The public schema is [jarvos.config.schema.json](../jarvos.config.schema.json).
+Use `JARVOS_JOURNAL_DIR` and `JARVOS_TIMEZONE` for a host-injected setup when a
+config file is not appropriate.
+
+## Supported checks and creation commands
+
+The read-only health command reports canonical and derived-index state without
+repairing either one:
+
+```bash
+node modules/jarvos-secondbrain/scripts/journal-health.js --json
+```
+
+The creation-only path is available through the package maintenance entrypoint:
+
+```bash
+node modules/jarvos-secondbrain/packages/jarvos-secondbrain-journal/src/journal-maintenance.js \
+  --create-if-missing --json
+```
+
+It creates only the configured current date. The outcome is idempotent: a
+verified existing journal is reported as existing, and a concurrent winner is
+reported as such. It never repairs `Journaling.md` or an authored dated file.
+
+The older maintenance/repair command remains a separate, human-approved
+compatibility operation. It is not the agent ensure path and should not be
+scheduled as a replacement for the creation-only lifecycle.
+
+## Single-writer ownership
+
+jarvOS is the only automated creator of files in the configured `Journal/`
+directory. Humans may edit the Markdown, and Obsidian may sync or display it,
+but another daily-note automation must not create the same dated files.
+
+Do not point a second writer at the journal directory, including:
+
+- the Obsidian Journals community plugin
+- core Daily Notes
+- Periodic Notes daily notes
+- startup or template scripts that create a dated file there
+
+If those tools are useful, configure them to a different folder. The lifecycle
+also checks for the configured Obsidian Daily Notes writer before creating a
+missing journal and reports a writer conflict instead of racing it.
+
+## Agent and host-adapter boundary
+
+The stdio MCP server exposes two bounded actions:
+
+- `jarvos_journal_health` is read-only and is the default status check.
+- `jarvos_ensure_today_journal` accepts an empty object and should be called
+  only for an explicit user request or a host-declared journal-maintenance
+  trigger. It is not startup boilerplate.
+
+Both actions use the same package lifecycle and return only status, local date,
+and a bounded outcome. They do not expose paths, journal content, hashes,
+timestamps, receipt locations, or host provenance. Arbitrary paths, dates,
+repair flags, provenance, and unknown fields are rejected before filesystem
+access.
+
+Host schedulers and runtime adapters own their own delivery, retry, and
+operational evidence. They inject the public configuration; they do not become
+part of this package's canonical journal or release contract.
+
+## Recovery principle
+
+If health reports a missing or invalid canonical file, stop and inspect the
+configuration and writer ownership first. Do not use an automated repair to
+make an authored journal look healthy. Restore authored content from the
+vault's own history or backup, then run the read-only health check again.

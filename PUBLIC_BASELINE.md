@@ -26,20 +26,20 @@ This document defines what is and is not included in the public jarvOS repositor
 ## What is NOT in this repo (private — stays local)
 
 ### Personal ontology content
-- `ontology/*.md` — Andrew's actual beliefs, predictions, goals, projects (highly personal)
-- `bridge-state.json` — Paperclip entity ID mappings for Andrew's ontology sync
+- `ontology/*.md` — a maintainer's actual beliefs, predictions, goals, projects (highly personal)
+- `bridge-state.json` — Paperclip entity ID mappings for a maintainer's ontology sync
 
 ### Personal memory
-- `MEMORY.md` — Andrew's curated long-term agent memory
+- `MEMORY.md` — a maintainer's curated long-term agent memory
 - `memory/` — daily session logs and notes
 
 ### Personal configuration
-- `jarvos.config.json` — actual paths to Andrew's vault, workspace, etc.
-- Any file with hardcoded absolute paths to `/Users/andrew/`
+- `jarvos.config.json` — a user's actual paths to their vault and workspace
+- Any file with hardcoded absolute paths to a developer's machine
 
 ### Vault content
 - Obsidian vault notes and journal entries
-- `~/Documents/Vault v3/` or any user-specific vault path
+- Any user-specific vault path
 
 ### GBrain content
 - `~/brain/` or any user's generated GBrain pages
@@ -60,7 +60,7 @@ The modules in `modules/` contain generic, configurable code. They use environme
 
 When you clone this repo and use it:
 1. The code runs against **your** vault, **your** workspace, **your** ontology
-2. None of Andrew's data is included
+2. None of a maintainer's personal data is included
 3. The templates give you blank starting points to fill in
 
 ---
@@ -76,4 +76,20 @@ If yes to any: keep it local, add it to `.gitignore`, document it here.
 
 ---
 
-_Last updated: SUP-1469 (2026-05-08). Branch: sup-1469-gbrain-module_
+## Journal reliability boundary
+
+The public journal contract is portable and configuration-driven:
+
+- journal mutation requires an explicit journal directory and valid IANA timezone;
+  it never falls back to a home-directory vault or an implicit local timezone
+- the package-owned lifecycle creates only the missing current-date file and
+  never repairs or rewrites an existing authored journal on the creation path
+- canonical dated journals and derived indexes have separate health and
+  ownership rules
+- host schedulers, runtime identities, receipts, and live-vault evidence stay
+  outside this repository
+
+See [`docs/journal-install-contract.md`](docs/journal-install-contract.md) for
+the install and host-adapter contract.
+
+_Last updated: 2026-08-03._

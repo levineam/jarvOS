@@ -1,76 +1,78 @@
 # jarvos-secondbrain-journal
 
-Package-owned Journal contract and maintenance logic for the `jarvos-secondbrain` monorepo.
+Package-owned journal lifecycle and health contract for the public
+`jarvos-secondbrain` monorepo.
 
-## What lives here
+## Canonical ownership
 
-- `config/journal-module.json` — canonical daily journal structure contract
-- `src/journal-maintenance.js` — journal creation/repair entrypoint with stub regression repair
-- `docs/` — package boundary and contract decisions
+`Journal/YYYY-MM-DD.md` is the canonical daily thought record. The lifecycle
+has one creation path:
 
-## Single-writer contract
+1. resolve an explicitly configured journal directory and valid IANA timezone
+2. calculate the configured local date
+3. create the missing file with exclusive creation
+4. re-read and verify the winner
 
-JarvOS is the automated writer for generated `Journal/YYYY-MM-DD.md` sections.
-Obsidian Sync can sync the vault across devices, and humans can keep editing the
-markdown file, but Obsidian daily-note plugins should not independently create
-or populate the same journal path.
+If the file already exists, the creation path does not normalize, repair,
+replace, or rewrite it. An authorized note/backlink caller may use the separate
+active-day mutation seam after existence has been ensured; that seam is not a
+repair authority.
 
-Disable or de-scope automated daily-note creation in:
+Canonical journal health and the derived `Journaling.md` index are reported
+separately. Health and ensure never repair the derived index.
 
-- the Journals community plugin
-- the core Daily Notes plugin
-- Periodic Notes
-- Templater startup scripts that create daily notes
+## Configuration boundary
 
-`jarvos doctor --obsidian-vault /path/to/vault` and the journal maintenance pass
-report those conflicts when an Obsidian `.obsidian` directory is available. The
-portable pattern is: one automated process owns creation/population; other tools
-may sync or let humans edit, but they should not create the same dated file.
+Journal mutation requires explicit configuration. The supported precedence is:
 
-## Stub and shrink repair
+1. `JARVOS_JOURNAL_DIR`, then legacy `JOURNAL_DIR`
+2. `paths.journal` in the discovered `jarvos.config.json`
+3. `JARVOS_VAULT_DIR` or `paths.vault`, deriving `<vault>/Journal`
+4. fail closed when no explicit journal target exists
 
-Maintenance records known-good daily journal snapshots under:
+Timezone precedence is `JARVOS_TIMEZONE`, then `user.timezone`/
+`user.timeZone`, then top-level `timezone`/`timeZone`. Every selected value must
+be a valid IANA timezone. The process `TZ` value is not a mutation fallback.
 
-```text
-<vault>/.jarvos/journal-maintenance/
-```
+The package does not contain a user-specific vault, home-directory, scheduler,
+runtime, or provenance default. Host adapters inject configuration and own
+delivery/retry evidence outside this package.
 
-Before any repair, the current file is copied into `audit-backups/`. If a
-frontmatter-only stub replaces a populated journal, the next maintenance pass
-restores the known-good content, normalizes the configured sections, and updates
-the known-good snapshot. Section-shrinking regressions are detected and reported,
-but they are normalized from the current file unless they are concrete stubs, so
-legitimate shorter human edits remain the source of truth.
+## Single-writer rule
 
-Cron/default runtime installs should run maintenance for both `today` and
-`yesterday`, including a post-startup morning pass:
+JarvOS is the only automated creator for the configured journal directory.
+Humans may edit the Markdown and Obsidian may sync or display it, but automated
+Daily Notes, Periodic Notes, Journals, template startup scripts, and similar
+writers must target another folder. The lifecycle reports a configured Daily
+Notes writer as a conflict before creating a missing file.
+
+## Human commands
+
+Read-only health:
 
 ```bash
-node scripts/journal-maintenance.js --dates=today,yesterday
+node modules/jarvos-secondbrain/scripts/journal-health.js --json
 ```
 
-The default cron manifest runs this at 00:01 and again at 09:07
-America/New_York so device or Obsidian startup stubs get caught after sync.
+Creation-only ensure:
 
-## What stays outside the package core
+```bash
+node modules/jarvos-secondbrain/packages/jarvos-secondbrain-journal/src/journal-maintenance.js \
+  --create-if-missing --json
+```
 
-These remain outside the package because they are bridge/provenance or adapter wiring, not core journal ownership:
+The older maintenance command can still perform human-approved repair and
+deferred-backlink reconciliation for compatibility. It is intentionally not
+the scheduled or agent creation path.
 
-- `~/clawd/scripts/journal-paperclip-inbox.js` — Paperclip bridge projection into the journal
-- `~/clawd/scripts/journal-note-audit.js` — provenance audit across journal and notes
-- `~/clawd/scripts/lobster-utils/link-to-journal.js` — provenance helper for note backlinks
-- `~/clawd/references/heartbeat-procedures.md` — OpenClaw heartbeat wiring
+## Agent access
 
-## Compatibility shims
+The stdio MCP server exposes:
 
-Current `clawd` automation still expects these root paths:
+- `jarvos_journal_health`: read-only status for today
+- `jarvos_ensure_today_journal`: empty-input, today-only ensure
 
-- `~/clawd/config/journal-module.json`
-- `~/clawd/scripts/journal-maintenance.js`
-
-For this extraction pass:
-
-- the root config remains as a compatibility mirror for existing heartbeat wiring
-- the root maintenance script becomes a thin shim that delegates to the package-owned implementation
-
-That keeps the current journal creation/repair flow working while making the package boundary real in code/layout.
+Health is the default agent action. Ensure is reserved for an explicit user
+request or a host-declared journal-maintenance trigger, not ambient startup.
+Both tools return a bounded status/date/outcome projection and reject paths,
+dates, repair flags, provenance, and unknown fields before filesystem access.
