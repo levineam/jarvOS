@@ -80,6 +80,27 @@ function firstEnvPath(keys = [], env = process.env, home = os.homedir()) {
   return null;
 }
 
+function firstConfiguredJournalPath(keys = [], env = process.env, home = os.homedir()) {
+  for (const key of keys) {
+    if (!Object.prototype.hasOwnProperty.call(env, key)) continue;
+    if (env[key] === undefined || env[key] === null || (typeof env[key] === 'string' && env[key].trim() === '')) continue;
+    if (!isUsablePath(env[key], home)) {
+      throw new Error(`Journal mutation has an invalid configured ${key} path`);
+    }
+    return expandTilde(env[key].trim(), home);
+  }
+  return null;
+}
+
+function configuredJournalPath(rawPaths, key, home) {
+  if (!Object.prototype.hasOwnProperty.call(rawPaths, key)) return null;
+  if (rawPaths[key] === undefined || rawPaths[key] === null || (typeof rawPaths[key] === 'string' && rawPaths[key].trim() === '')) return null;
+  if (!isUsablePath(rawPaths[key], home)) {
+    throw new Error(`Journal mutation has an invalid configured paths.${key} path`);
+  }
+  return expandTilde(rawPaths[key].trim(), home);
+}
+
 function xdgConfigPath(env = process.env, home = os.homedir()) {
   const configHome = isUsablePath(env.XDG_CONFIG_HOME, home)
     ? expandTilde(env.XDG_CONFIG_HOME.trim(), home)
@@ -153,20 +174,23 @@ function resolveJournalConfig(options = {}) {
   const configPath = discoverConfigPath({ ...options, env, homeDir: home });
   const raw = options.config && typeof options.config === 'object' ? options.config : readJsonFile(configPath);
   const paths = raw?.paths && typeof raw.paths === 'object' ? raw.paths : {};
-  const explicitJournal = firstEnvPath(PATH_ENV_KEYS.journal, env, home)
-    || (isUsablePath(paths.journal, home) ? expandTilde(paths.journal.trim(), home) : null)
+  const explicitJournal = firstConfiguredJournalPath(PATH_ENV_KEYS.journal, env, home)
+    || configuredJournalPath(paths, 'journal', home)
     || (() => {
-      const vault = firstEnvPath(PATH_ENV_KEYS.vault, env, home)
-        || (isUsablePath(paths.vault, home) ? expandTilde(paths.vault.trim(), home) : null);
+      const vault = firstConfiguredJournalPath(PATH_ENV_KEYS.vault, env, home)
+        || configuredJournalPath(paths, 'vault', home);
       return vault ? path.join(vault, 'Journal') : null;
     })();
   if (!explicitJournal) throw new Error('Journal mutation requires an explicit journal directory');
 
-  const configuredTimezone = env.JARVOS_TIMEZONE
-    ?? raw?.user?.timezone
-    ?? raw?.user?.timeZone
-    ?? raw?.timezone
-    ?? raw?.timeZone;
+  const emptyStringAsAbsent = (value) => (
+    typeof value === 'string' && value.trim() === '' ? undefined : value
+  );
+  const configuredTimezone = emptyStringAsAbsent(env.JARVOS_TIMEZONE)
+    ?? emptyStringAsAbsent(raw?.user?.timezone)
+    ?? emptyStringAsAbsent(raw?.user?.timeZone)
+    ?? emptyStringAsAbsent(raw?.timezone)
+    ?? emptyStringAsAbsent(raw?.timeZone);
   if (!isValidTimezone(configuredTimezone)) {
     throw new Error('Journal mutation has an invalid configured IANA timezone');
   }

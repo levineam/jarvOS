@@ -61,6 +61,10 @@ node modules/jarvos-secondbrain/packages/jarvos-secondbrain-journal/src/journal-
   --create-if-missing --json
 ```
 
+If deferred note backlinks are queued, this command reports the backlog and
+returns a failure status for host alerting; it does not flush or rewrite
+authored journals.
+
 The older maintenance command can still perform human-approved repair and
 deferred-backlink reconciliation for compatibility. It is intentionally not
 the scheduled or agent creation path.

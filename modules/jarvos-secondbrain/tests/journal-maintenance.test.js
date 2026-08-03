@@ -140,6 +140,33 @@ test('maintenance reports terminal deferred records that predate this flush', ()
   assert.notEqual(report.output, 'NO_REPLY');
 });
 
+test('creation-only maintenance reports deferred backlog without flushing authored journals', () => {
+  let flushCalls = 0;
+  const report = runMaintenance(['--create-if-missing', '--json'], {
+    runCreationMaintenance: () => ({
+      status: 'ok',
+      results: [{ ok: true, outcome: 'healthy-existing', date: TEST_DATE, journalPath: '/tmp/test-vault/Journal/2026-01-02.md' }],
+      output: 'HEALTHY-EXISTING',
+    }),
+    flushDeferredBacklinks: () => {
+      flushCalls += 1;
+      return {};
+    },
+    readDeferredBacklinkFlushMetadata: () => ({
+      lastFlushAt: '2026-01-02T00:00:00.000Z',
+      summary: null,
+      entries: [{ key: 'retry', status: 'pending', lastError: 'Obsidian unavailable' }],
+    }),
+  });
+
+  assert.equal(flushCalls, 0);
+  assert.equal(report.status, 'failed');
+  assert.equal(report.summary.pending, 1);
+  assert.equal(report.deferredBacklinks.pending, 1);
+  assert.equal(JSON.parse(report.output).status, 'failed');
+  assert.deepEqual(JSON.parse(report.output).deferredBacklinks, report.summary);
+});
+
 function sectionBody(markdown, heading) {
   const escaped = heading.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const pattern = `${escaped}\\n([\\s\\S]*?)(?=\\n## |\\n— Edited by Jarvis|$)`;
@@ -526,6 +553,23 @@ test('create-if-missing dispatches to the creation-only lifecycle', () => {
     });
     assert.equal(report.status, 'ok');
     assert.equal(report.results[0].outcome, 'created');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('create-if-missing dry-run reports a missing journal without writing it', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-create-only-dry-run-'));
+  const journalDir = path.join(root, 'Journal');
+  try {
+    const report = runMaintenance(['--create-if-missing', '--dry-run', '--json'], {
+      config: { paths: { journal: journalDir }, user: { timezone: 'UTC' } },
+      now: new Date('2026-08-03T12:00:00.000Z'),
+    });
+    assert.equal(report.status, 'ok');
+    assert.equal(report.results[0].outcome, 'would-create');
+    assert.equal(fs.existsSync(path.join(journalDir, '2026-08-03.md')), false);
+    assert.equal(fs.existsSync(path.join(root, '.jarvos')), false);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

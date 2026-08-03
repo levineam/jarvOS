@@ -7,7 +7,10 @@ function parseArgs(argv) {
   const args = { json: false, date: 'today' };
   for (const arg of argv) {
     if (arg === '--json') args.json = true;
-    else if (arg.startsWith('--date=')) args.date = arg.slice('--date='.length);
+    else if (arg.startsWith('--date=')) {
+      args.date = arg.slice('--date='.length);
+      if (args.date !== 'today') throw new Error('--date only supports today');
+    }
     else throw new Error(`Unknown option: ${arg}`);
   }
   return args;
@@ -22,4 +25,7 @@ function main(argv = process.argv.slice(2)) {
 }
 
 module.exports = { main, parseArgs };
-if (require.main === module) main();
+if (require.main === module) {
+  const result = main();
+  if (result?.ok === false) process.exitCode = 1;
+}

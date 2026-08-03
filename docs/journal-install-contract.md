@@ -17,10 +17,10 @@ timezone before using the ensure, note, or Obsidian paths.
 
 | Input | Precedence | Accepted values | If absent or invalid |
 | --- | ---: | --- | --- |
-| `JARVOS_JOURNAL_DIR` | 1 | Absolute path (a `~` path is expanded against the host home) | Continue |
-| `JOURNAL_DIR` | 2 | Legacy explicit journal-directory environment variable | Continue |
-| `paths.journal` in the discovered config | 3 | Absolute or `~` path | Continue |
-| `JARVOS_VAULT_DIR` / `paths.vault` | 4 | Explicit vault path; the journal target is `<vault>/Journal` | Continue |
+| `JARVOS_JOURNAL_DIR` | 1 | Absolute path (a `~` path is expanded against the host home) | Skip if absent or empty; reject if nonempty but malformed |
+| `JOURNAL_DIR` | 2 | Legacy explicit journal-directory environment variable | Skip if absent or empty; reject if nonempty but malformed |
+| `paths.journal` in the discovered config | 3 | Absolute or `~` path | Skip if absent or empty; reject if nonempty but malformed |
+| `JARVOS_VAULT_DIR` / `paths.vault` | 4 | Explicit vault path; the journal target is `<vault>/Journal` | Skip if absent or empty; reject if nonempty but malformed |
 | none | — | — | Reject before filesystem mutation |
 
 The configuration file is discovered from `JARVOS_CONFIG_PATH` or
@@ -35,8 +35,9 @@ Timezone precedence is:
 
 The value must be a valid IANA timezone. The process `TZ` value is not used as
 an implicit journal-mutation fallback. Conflicting explicit values resolve by
-the order above; malformed higher-precedence values fail closed rather than
-silently falling through.
+the order above; nonempty malformed higher-precedence values fail closed rather
+than silently falling through. Empty shell/config values are treated as
+absent so an injected-but-unset variable does not mask valid configuration.
 
 Example portable config:
 
@@ -82,6 +83,10 @@ node modules/jarvos-secondbrain/packages/jarvos-secondbrain-journal/src/journal-
 It creates only the configured current date. The outcome is idempotent: a
 verified existing journal is reported as existing, and a concurrent winner is
 reported as such. It never repairs `Journaling.md` or an authored dated file.
+If deferred note backlinks are queued, the command reports that backlog and
+returns a failure status so a host can alert; it does not mutate authored
+journals while flushing it. Use the separate human-approved maintenance
+command to reconcile those backlinks.
 
 The older maintenance/repair command remains a separate, human-approved
 compatibility operation. It is not the agent ensure path and should not be
