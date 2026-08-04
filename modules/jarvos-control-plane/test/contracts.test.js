@@ -282,7 +282,11 @@ test('managed-software catalog separates runtime capability, strategy evidence, 
     publicationAdapter: 'github-release', strategyEvidence: { adapter: 'jarvos-strategy', authority: 'draft-unratified' },
     credentialRef: 'credential:jarvos-publication', notificationPreferenceRef: 'preference:andrew',
     approvalPrincipalRefs: ['principal:andrew-telegram'],
-    runtime: { serviceId: 'service:jarvos', stagingRootSelector: 'staging:jarvos', recoveryAuthorityRef: 'ref:jarvos-main', activationPointerSelector: 'activation:jarvos', mode: 'production' },
+    runtime: {
+      serviceId: 'service:jarvos', stagingRootSelector: 'staging:jarvos', recoveryAuthorityRef: 'ref:jarvos-main', activationPointerSelector: 'activation:jarvos',
+      verifierPolicyRef: 'policy:jarvos-runtime-provenance', developmentIdentityRef: 'identity:jarvos-development', developmentStateSelector: 'state:jarvos-development',
+      developmentCredentialScopeRef: 'credential-scope:jarvos-development', developmentDestinationScopeRef: 'destination-scope:jarvos-development', mode: 'production',
+    },
     capabilities: { installedVersion: true, developmentCheckout: true, productionRuntime: true },
   });
 
@@ -290,7 +294,7 @@ test('managed-software catalog separates runtime capability, strategy evidence, 
   const report = JSON.stringify(catalog.publicReport);
   assert.equal(entry.strategyEvidence.authority, 'draft-unratified');
   assert.equal(entry.capabilities.productionRuntime, true);
-  assert.doesNotMatch(report, /credential:|principal:|preference:|staging:|activation:/);
+  assert.doesNotMatch(report, /credential:|principal:|preference:|staging:|activation:|policy:|identity:|state:|destination-scope:/);
   assert.throws(() => validateManagedSoftwareEntry({ ...entry, capabilities: { installedVersion: true, developmentCheckout: true } }), /productionRuntime/);
   assert.throws(() => validateManagedSoftwareEntry({ ...entry, runtime: { ...entry.runtime, stagingRootSelector: 'jarvos-public' } }), /distinct/i);
 });

@@ -31,6 +31,11 @@ function createManagedSoftwareCatalog(input = {}) {
       delete publicEntry.runtime.stagingRootSelector;
       delete publicEntry.runtime.recoveryAuthorityRef;
       delete publicEntry.runtime.activationPointerSelector;
+      delete publicEntry.runtime.verifierPolicyRef;
+      delete publicEntry.runtime.developmentIdentityRef;
+      delete publicEntry.runtime.developmentStateSelector;
+      delete publicEntry.runtime.developmentCredentialScopeRef;
+      delete publicEntry.runtime.developmentDestinationScopeRef;
     }
     return publicEntry;
   });

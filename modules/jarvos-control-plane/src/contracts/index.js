@@ -346,7 +346,11 @@ function validateRuntime(entry) {
   }
   if (!isObject(runtime)) throw new Error('production runtime entries require runtime configuration');
   if (runtime.mode !== 'production') throw new Error('production runtime must use production mode');
-  for (const field of ['serviceId', 'stagingRootSelector', 'recoveryAuthorityRef', 'activationPointerSelector']) {
+  for (const field of [
+    'serviceId', 'stagingRootSelector', 'recoveryAuthorityRef', 'activationPointerSelector',
+    'verifierPolicyRef', 'developmentIdentityRef', 'developmentStateSelector',
+    'developmentCredentialScopeRef', 'developmentDestinationScopeRef',
+  ]) {
     validateOpaqueReference(runtime[field], `runtime.${field}`);
   }
   if (new Set([runtime.stagingRootSelector, runtime.activationPointerSelector, ...entry.checkoutSelectors]).size !== entry.checkoutSelectors.length + 2) {
