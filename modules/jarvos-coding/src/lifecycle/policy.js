@@ -195,6 +195,7 @@ function codingLifecyclePolicy(options = {}) {
       adapterBoundary: 'trackers-map-to-portable-triage-shape',
       submissionGate: 'agent-agnostic-pr-first-review-before-completion',
       executionEntrypoint: 'workflow-execution-for-all-ai-personalities',
+      localChangeIntake: 'portable-tracker-neutral-privacy-fail-closed-for-public-routing',
     },
   };
 }

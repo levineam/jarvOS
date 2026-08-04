@@ -134,8 +134,10 @@ const {
 } = require('./worktree-ownership');
 const {
   DEFAULT_IGNORED_PATH_SEGMENTS,
+  LOCAL_CHANGE_EVENT_TYPES,
   LOCAL_CHANGE_INTAKE_SCHEMA_VERSION,
   assessLocalChange,
+  normalizeLocalRefInventory,
   privacyOutcome,
   visiblePaths,
 } = require('./features/local-change-intake');
@@ -149,6 +151,7 @@ module.exports = {
   HOLISTIC_REVIEW_SCHEMA_VERSION,
   LIVE_ADAPTERS_SCHEMA_VERSION,
   LOCAL_CHANGE_INTAKE_SCHEMA_VERSION,
+  LOCAL_CHANGE_EVENT_TYPES,
   PULL_REQUEST_SCHEMA_VERSION,
   POST_MERGE_SCHEMA_VERSION,
   TRACKER_SCHEMA_VERSION,
@@ -238,6 +241,7 @@ module.exports = {
   normalizeGoalAlignmentReview,
   normalizeHost,
   normalizeLabels,
+  normalizeLocalRefInventory,
   parseGitStatus,
   privacyOutcome,
   readJarvosSessionState,
