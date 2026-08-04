@@ -75,3 +75,24 @@ test('required secret scanning fails closed with bounded reason codes', () => {
   assert.equal(assessment.publicRouting.reason, 'privacy-scan-match');
   assert.deepEqual(assessment.privacy.reasonCodes, ['secret-pattern']);
 });
+
+test('unmerged local branches are part of the intake without exposing checkout paths', () => {
+  const assessment = assessLocalChange({
+    repository: repository({
+      changedPaths: [],
+      integrationBranch: 'main',
+      unmergedBranches: [
+        { name: 'feat/one', commits: ['a1', 'a2'] },
+        { name: 'fix/two', commits: ['b1'] },
+      ],
+    }),
+    catalogEntry: catalogEntry(),
+  });
+
+  assert.equal(assessment.eventType, 'local_change_detected');
+  assert.equal(assessment.repository.integrationBranch, 'main');
+  assert.equal(assessment.evidence.unmergedBranchCount, 2);
+  assert.equal(assessment.evidence.unmergedCommitCount, 3);
+  assert.ok(assessment.changeSet.id.startsWith('change-set:'));
+  assert.equal(JSON.stringify(assessment).includes('worktree-a'), false);
+});

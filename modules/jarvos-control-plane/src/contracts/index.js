@@ -59,6 +59,7 @@ const MANAGED_SOFTWARE_LOCAL_CHANGE_POLICIES = [
 const MANAGED_SOFTWARE_UPDATE_POLICIES = ['managed-release', 'watch-only', 'manual', 'none'];
 const MANAGED_SOFTWARE_RELEASE_AUTHORITIES = ['andrew-approval', 'project-policy', 'upstream', 'none'];
 const MANAGED_SOFTWARE_INTEGRATION_IMPACT_POLICIES = ['direct', 'linked-compatibility', 'none'];
+const MANAGED_SOFTWARE_EXECUTION_ADAPTERS = ['beads', 'paperclip-handoff', 'none'];
 
 function isObject(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -318,6 +319,13 @@ function validateOpaqueCheckoutSelectors(selectors) {
   }
 }
 
+function validateIntegrationBranch(value) {
+  if (typeof value !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._/-]{0,254}$/.test(value) ||
+      value === 'HEAD' || value.includes('..') || value.includes('@{') || value.endsWith('/') || value.endsWith('.lock')) {
+    throw new Error('integrationBranch must be a safe configured branch name');
+  }
+}
+
 function validateManagedSoftwareEntry(input = {}) {
   if (!isObject(input)) throw new Error('managed-software entry must be an object');
   const entry = clone(input);
@@ -332,6 +340,8 @@ function validateManagedSoftwareEntry(input = {}) {
   requireManagedSoftwareEnum(entry.updatePolicy, 'updatePolicy', MANAGED_SOFTWARE_UPDATE_POLICIES);
   requireManagedSoftwareEnum(entry.releaseAuthority, 'releaseAuthority', MANAGED_SOFTWARE_RELEASE_AUTHORITIES);
   requireManagedSoftwareEnum(entry.integrationImpactPolicy, 'integrationImpactPolicy', MANAGED_SOFTWARE_INTEGRATION_IMPACT_POLICIES);
+  validateIntegrationBranch(entry.integrationBranch);
+  requireManagedSoftwareEnum(entry.executionAdapter, 'executionAdapter', MANAGED_SOFTWARE_EXECUTION_ADAPTERS);
   if (!isObject(entry.canonicalUpstream) || typeof entry.canonicalUpstream.repository !== 'string' || !/^https:\/\//.test(entry.canonicalUpstream.repository)) {
     throw new Error('canonicalUpstream.repository must be an HTTPS URL');
   }
@@ -478,6 +488,7 @@ module.exports = {
   CONTRACT_VERSION,
   MANAGER_SCHEMA_VERSION,
   MANAGED_SOFTWARE_DISTRIBUTIONS,
+  MANAGED_SOFTWARE_EXECUTION_ADAPTERS,
   MANAGED_SOFTWARE_INTEGRATION_IMPACT_POLICIES,
   MANAGED_SOFTWARE_LOCAL_CHANGE_POLICIES,
   MANAGED_SOFTWARE_OWNERSHIP,

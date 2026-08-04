@@ -26,6 +26,20 @@ function visiblePaths(paths) {
   return normalizedPaths(paths).filter((filePath) => !isIgnoredPath(filePath));
 }
 
+function normalizedUnmergedBranches(branches) {
+  const records = Array.isArray(branches) ? branches : [];
+  return records
+    .filter((branch) => branch && typeof branch.name === 'string' && branch.name.trim())
+    .map((branch) => ({
+      name: branch.name.trim(),
+      commits: [...new Set((Array.isArray(branch.commits) ? branch.commits : [])
+        .filter((commit) => typeof commit === 'string' && /^[a-f0-9]{1,64}$/i.test(commit)))]
+        .sort(),
+    }))
+    .filter((branch) => branch.commits.length)
+    .sort((left, right) => left.name.localeCompare(right.name));
+}
+
 function privacyOutcome(input = {}) {
   const scan = input && typeof input === 'object' ? input : {};
   const required = scan.required === true;
@@ -38,12 +52,12 @@ function privacyOutcome(input = {}) {
   return { required, status, blocked, reason, reasonCodes };
 }
 
-function changeSet(repository, paths) {
+function changeSet(repository, paths, unmergedBranches) {
   if (!repository || typeof repository.canonicalId !== 'string' || !repository.canonicalId) {
     throw new Error('repository.canonicalId is required');
   }
   const baseRef = typeof repository.baseRef === 'string' && repository.baseRef ? repository.baseRef : 'unknown';
-  const id = `change-set:${sha256({ canonicalId: repository.canonicalId, baseRef, paths })}`;
+  const id = `change-set:${sha256({ canonicalId: repository.canonicalId, baseRef, paths, unmergedBranches })}`;
   const aliases = [
     `repository:${sha256(repository.canonicalId)}`,
     ...(typeof repository.branch === 'string' && repository.branch ? [`branch:${sha256(repository.branch)}`] : []),
@@ -54,7 +68,8 @@ function changeSet(repository, paths) {
 
 function assessLocalChange({ repository, catalogEntry = null, privacyScan = null } = {}) {
   const changedPaths = visiblePaths(repository && repository.changedPaths);
-  if (!changedPaths.length) {
+  const unmergedBranches = normalizedUnmergedBranches(repository && repository.unmergedBranches);
+  if (!changedPaths.length && !unmergedBranches.length) {
     return {
       schemaVersion: LOCAL_CHANGE_INTAKE_SCHEMA_VERSION,
       eventType: 'no_local_change',
@@ -68,10 +83,18 @@ function assessLocalChange({ repository, catalogEntry = null, privacyScan = null
   return {
     schemaVersion: LOCAL_CHANGE_INTAKE_SCHEMA_VERSION,
     eventType: 'local_change_detected',
-    changeSet: changeSet(repository, changedPaths),
-    repository: { canonicalId: repository.canonicalId, baseRef: repository.baseRef || 'unknown' },
+    changeSet: changeSet(repository, changedPaths, unmergedBranches),
+    repository: {
+      canonicalId: repository.canonicalId,
+      baseRef: repository.baseRef || 'unknown',
+      integrationBranch: repository.integrationBranch || repository.baseRef || 'unknown',
+    },
     catalogEntryId: catalogEntry && catalogEntry.id || null,
-    evidence: { changedPaths },
+    evidence: {
+      changedPaths,
+      unmergedBranchCount: unmergedBranches.length,
+      unmergedCommitCount: unmergedBranches.reduce((total, branch) => total + branch.commits.length, 0),
+    },
     privacy,
     route: { kind: route.kind },
     publicRouting: route.publicRouting,
@@ -82,6 +105,7 @@ module.exports = {
   DEFAULT_IGNORED_PATH_SEGMENTS,
   LOCAL_CHANGE_INTAKE_SCHEMA_VERSION,
   assessLocalChange,
+  normalizedUnmergedBranches,
   privacyOutcome,
   visiblePaths,
 };

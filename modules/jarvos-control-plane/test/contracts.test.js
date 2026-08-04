@@ -187,6 +187,8 @@ test('managed-software entries retain relationship dimensions without local path
     ownership: 'jarvos-owned',
     distribution: 'core',
     canonicalUpstream: { repository: 'https://github.com/levineam/jarvOS' },
+    integrationBranch: 'main',
+    executionAdapter: 'beads',
     tracker: { kind: 'github', repository: 'levineam/jarvOS' },
     defaultVisibility: 'public',
     localChangePolicy: 'default-public',
@@ -205,6 +207,31 @@ test('managed-software entries retain relationship dimensions without local path
   assert.throws(() => validateManagedSoftwareEntry({ ...entry, ownership: 'third-party', localChangePolicy: 'default-public' }), /third-party/i);
 });
 
+test('managed-software entries require an integration branch and execution adapter', () => {
+  const entry = {
+    id: 'jarvos',
+    label: 'jarvOS',
+    ownership: 'jarvos-owned',
+    distribution: 'core',
+    canonicalUpstream: { repository: 'https://github.com/levineam/jarvOS' },
+    tracker: { kind: 'github', repository: 'levineam/jarvOS' },
+    defaultVisibility: 'public',
+    localChangePolicy: 'default-public',
+    updatePolicy: 'managed-release',
+    releaseAuthority: 'andrew-approval',
+    integrationImpactPolicy: 'direct',
+    checkoutSelectors: ['jarvos-public'],
+    ignoredPathPolicy: 'git-default',
+    capabilities: { installedVersion: true, developmentCheckout: true },
+  };
+
+  assert.throws(() => validateManagedSoftwareEntry(entry), /integrationBranch/);
+  assert.throws(() => validateManagedSoftwareEntry({ ...entry, integrationBranch: 'main' }), /executionAdapter/);
+  assert.throws(() => validateManagedSoftwareEntry({ ...entry, integrationBranch: '../main', executionAdapter: 'beads' }), /integrationBranch/);
+  assert.throws(() => validateManagedSoftwareEntry({ ...entry, integrationBranch: 'main', executionAdapter: 'shell' }), /executionAdapter/);
+  assert.deepEqual(validateManagedSoftwareEntry({ ...entry, integrationBranch: 'main', executionAdapter: 'beads' }).executionAdapter, 'beads');
+});
+
 test('managed-software catalog validates revisions and creates privacy-safe reports', () => {
   const catalog = createManagedSoftwareCatalog({
     revision: 'managed-software.v1',
@@ -214,6 +241,8 @@ test('managed-software catalog validates revisions and creates privacy-safe repo
       ownership: 'third-party',
       distribution: 'managed-integration',
       canonicalUpstream: { repository: 'https://github.com/tobi/qmd' },
+      integrationBranch: 'main',
+      executionAdapter: 'beads',
       tracker: { kind: 'github', repository: 'tobi/qmd' },
       defaultVisibility: 'internal',
       localChangePolicy: 'contribute-upstream',
