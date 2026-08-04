@@ -197,13 +197,17 @@ test('managed-software entries retain relationship dimensions without local path
     integrationImpactPolicy: 'direct',
     checkoutSelectors: ['jarvos-public'],
     ignoredPathPolicy: 'git-default',
-    capabilities: { installedVersion: true, developmentCheckout: true },
+    versioningPolicy: 'semantic', releaseAdapter: 'jarvos-release-plan', publicationAdapter: 'github-release',
+    strategyEvidence: { adapter: 'jarvos-strategy', authority: 'draft-unratified' }, credentialRef: 'credential:jarvos-publication',
+    notificationPreferenceRef: 'preference:andrew', approvalPrincipalRefs: ['principal:andrew-telegram'],
+    capabilities: { installedVersion: true, developmentCheckout: true, productionRuntime: false },
   });
 
   assert.equal(entry.id, 'jarvos');
   assert.deepEqual(entry.checkoutSelectors, ['jarvos-public']);
   assert.equal(entry.capabilities.developmentCheckout, true);
   assert.throws(() => validateManagedSoftwareEntry({ ...entry, checkoutSelectors: ['/Users/andrew/jarvOS'] }), /opaque/i);
+  assert.throws(() => validateManagedSoftwareEntry({ ...entry, localPath: '/Users/andrew/jarvOS' }), /unknown/i);
   assert.throws(() => validateManagedSoftwareEntry({ ...entry, ownership: 'third-party', localChangePolicy: 'default-public' }), /third-party/i);
 });
 
@@ -222,7 +226,10 @@ test('managed-software entries require an integration branch and execution adapt
     integrationImpactPolicy: 'direct',
     checkoutSelectors: ['jarvos-public'],
     ignoredPathPolicy: 'git-default',
-    capabilities: { installedVersion: true, developmentCheckout: true },
+    versioningPolicy: 'semantic', releaseAdapter: 'jarvos-release-plan', publicationAdapter: 'github-release',
+    strategyEvidence: { adapter: 'jarvos-strategy', authority: 'draft-unratified' }, credentialRef: 'credential:jarvos-publication',
+    notificationPreferenceRef: 'preference:andrew', approvalPrincipalRefs: ['principal:andrew-telegram'],
+    capabilities: { installedVersion: true, developmentCheckout: true, productionRuntime: false },
   };
 
   assert.throws(() => validateManagedSoftwareEntry(entry), /integrationBranch/);
@@ -251,7 +258,10 @@ test('managed-software catalog validates revisions and creates privacy-safe repo
       integrationImpactPolicy: 'linked-compatibility',
       checkoutSelectors: ['qmd-local'],
       ignoredPathPolicy: 'git-default',
-      capabilities: { installedVersion: true, developmentCheckout: false },
+      versioningPolicy: 'upstream', releaseAdapter: 'external-integration', publicationAdapter: 'none',
+      strategyEvidence: { adapter: 'upstream-release-notes', authority: 'ratified' }, credentialRef: 'credential:qmd-maintenance',
+      notificationPreferenceRef: 'preference:andrew', approvalPrincipalRefs: ['principal:andrew-telegram'],
+      capabilities: { installedVersion: true, developmentCheckout: false, productionRuntime: false },
     }],
   });
 
@@ -259,4 +269,51 @@ test('managed-software catalog validates revisions and creates privacy-safe repo
   assert.equal(catalog.entries.length, 1);
   assert.deepEqual(catalog.publicReport.entries[0].checkoutSelectors, undefined);
   assert.throws(() => createManagedSoftwareCatalog({ revision: 'managed-software.v2', entries: [catalog.entries[0], catalog.entries[0]] }), /duplicate/i);
+});
+
+test('managed-software catalog separates runtime capability, strategy evidence, and host-private bindings', () => {
+  const entry = validateManagedSoftwareEntry({
+    id: 'jarvos', label: 'jarvOS', ownership: 'jarvos-owned', distribution: 'core',
+    canonicalUpstream: { repository: 'https://github.com/levineam/jarvOS' }, integrationBranch: 'main',
+    executionAdapter: 'beads', tracker: { kind: 'github', repository: 'levineam/jarvOS' },
+    defaultVisibility: 'public', localChangePolicy: 'default-public', updatePolicy: 'managed-release',
+    releaseAuthority: 'andrew-approval', integrationImpactPolicy: 'direct', checkoutSelectors: ['jarvos-public'],
+    ignoredPathPolicy: 'git-default', versioningPolicy: 'semantic', releaseAdapter: 'jarvos-release-plan',
+    publicationAdapter: 'github-release', strategyEvidence: { adapter: 'jarvos-strategy', authority: 'draft-unratified' },
+    credentialRef: 'credential:jarvos-publication', notificationPreferenceRef: 'preference:andrew',
+    approvalPrincipalRefs: ['principal:andrew-telegram'],
+    runtime: { serviceId: 'service:jarvos', stagingRootSelector: 'staging:jarvos', recoveryAuthorityRef: 'ref:jarvos-main', activationPointerSelector: 'activation:jarvos', mode: 'production' },
+    capabilities: { installedVersion: true, developmentCheckout: true, productionRuntime: true },
+  });
+
+  const catalog = createManagedSoftwareCatalog({ revision: 'managed-software.v1', entries: [entry] });
+  const report = JSON.stringify(catalog.publicReport);
+  assert.equal(entry.strategyEvidence.authority, 'draft-unratified');
+  assert.equal(entry.capabilities.productionRuntime, true);
+  assert.doesNotMatch(report, /credential:|principal:|preference:|staging:|activation:/);
+  assert.throws(() => validateManagedSoftwareEntry({ ...entry, capabilities: { installedVersion: true, developmentCheckout: true } }), /productionRuntime/);
+  assert.throws(() => validateManagedSoftwareEntry({ ...entry, runtime: { ...entry.runtime, stagingRootSelector: 'jarvos-public' } }), /distinct/i);
+});
+
+test('sensitive catalog revisions require authenticated Andrew authority and invalidate pending approvals', () => {
+  const entry = validateManagedSoftwareEntry({
+    id: 'jarvos', label: 'jarvOS', ownership: 'jarvos-owned', distribution: 'core',
+    canonicalUpstream: { repository: 'https://github.com/levineam/jarvOS' }, integrationBranch: 'main', executionAdapter: 'beads',
+    tracker: { kind: 'github', repository: 'levineam/jarvOS' }, defaultVisibility: 'public', localChangePolicy: 'default-public',
+    updatePolicy: 'managed-release', releaseAuthority: 'andrew-approval', integrationImpactPolicy: 'direct', checkoutSelectors: ['jarvos-public'],
+    ignoredPathPolicy: 'git-default', versioningPolicy: 'semantic', releaseAdapter: 'jarvos-release-plan', publicationAdapter: 'github-release',
+    strategyEvidence: { adapter: 'jarvos-strategy', authority: 'draft-unratified' }, credentialRef: 'credential:jarvos-publication',
+    notificationPreferenceRef: 'preference:andrew', approvalPrincipalRefs: ['principal:andrew-telegram'],
+    capabilities: { installedVersion: true, developmentCheckout: true, productionRuntime: false },
+  });
+  const catalog = createManagedSoftwareCatalog({ revision: 'managed-software.v1', entries: [entry] });
+
+  assert.throws(() => catalog.revise({ entryId: 'jarvos', patch: { credentialRef: 'credential:next' }, actor: { id: 'andrew', authenticated: false } }), /authenticated/i);
+  const revised = catalog.revise({
+    entryId: 'jarvos', patch: { credentialRef: 'credential:next' },
+    actor: { id: 'andrew', authenticated: true, role: 'andrew' }, pendingApprovals: [{ id: 'approval-1' }],
+  });
+  assert.equal(revised.revision, 'managed-software.v2');
+  assert.equal(revised.provenance.actor.id, 'andrew');
+  assert.deepEqual(revised.invalidatedApprovalIds, ['approval-1']);
 });

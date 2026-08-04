@@ -60,6 +60,9 @@ const MANAGED_SOFTWARE_UPDATE_POLICIES = ['managed-release', 'watch-only', 'manu
 const MANAGED_SOFTWARE_RELEASE_AUTHORITIES = ['andrew-approval', 'project-policy', 'upstream', 'none'];
 const MANAGED_SOFTWARE_INTEGRATION_IMPACT_POLICIES = ['direct', 'linked-compatibility', 'none'];
 const MANAGED_SOFTWARE_EXECUTION_ADAPTERS = ['beads', 'paperclip-handoff', 'none'];
+const MANAGED_SOFTWARE_VERSIONING_POLICIES = ['semantic', 'upstream', 'manual', 'none'];
+const MANAGED_SOFTWARE_STRATEGY_AUTHORITIES = ['ratified', 'draft-unratified', 'unavailable'];
+const MANAGED_SOFTWARE_RUNTIME_MODES = ['production', 'development'];
 
 function isObject(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -326,9 +329,44 @@ function validateIntegrationBranch(value) {
   }
 }
 
+function validateOpaqueReference(value, field) {
+  if (typeof value !== 'string' || !/^[a-z][a-z0-9._:-]{0,127}$/i.test(value) || value.includes('..') || /[\\/]/.test(value)) {
+    throw new Error(`${field} must be an opaque reference, not a path or value`);
+  }
+}
+
+function validateRuntime(entry) {
+  const runtime = entry.runtime;
+  if (typeof entry.capabilities.productionRuntime !== 'boolean') {
+    throw new Error('capabilities must declare productionRuntime boolean');
+  }
+  if (!entry.capabilities.productionRuntime) {
+    if (runtime != null) throw new Error('runtime requires capabilities.productionRuntime');
+    return;
+  }
+  if (!isObject(runtime)) throw new Error('production runtime entries require runtime configuration');
+  if (runtime.mode !== 'production') throw new Error('production runtime must use production mode');
+  for (const field of ['serviceId', 'stagingRootSelector', 'recoveryAuthorityRef', 'activationPointerSelector']) {
+    validateOpaqueReference(runtime[field], `runtime.${field}`);
+  }
+  if (new Set([runtime.stagingRootSelector, runtime.activationPointerSelector, ...entry.checkoutSelectors]).size !== entry.checkoutSelectors.length + 2) {
+    throw new Error('runtime selectors must be distinct from checkout selectors');
+  }
+}
+
 function validateManagedSoftwareEntry(input = {}) {
   if (!isObject(input)) throw new Error('managed-software entry must be an object');
   const entry = clone(input);
+  const allowedFields = new Set([
+    'id', 'label', 'ownership', 'distribution', 'canonicalUpstream', 'integrationBranch', 'executionAdapter',
+    'tracker', 'defaultVisibility', 'localChangePolicy', 'updatePolicy', 'releaseAuthority',
+    'integrationImpactPolicy', 'checkoutSelectors', 'ignoredPathPolicy', 'versioningPolicy', 'releaseAdapter',
+    'publicationAdapter', 'strategyEvidence', 'credentialRef', 'notificationPreferenceRef',
+    'approvalPrincipalRefs', 'runtime', 'capabilities',
+  ]);
+  for (const field of Object.keys(entry)) {
+    if (!allowedFields.has(field)) throw new Error(`managed-software entry contains unknown field: ${field}`);
+  }
   if (typeof entry.id !== 'string' || !/^[a-z][a-z0-9_-]{0,63}$/i.test(entry.id)) {
     throw new Error('managed-software entry id must be a safe identifier');
   }
@@ -342,6 +380,7 @@ function validateManagedSoftwareEntry(input = {}) {
   requireManagedSoftwareEnum(entry.integrationImpactPolicy, 'integrationImpactPolicy', MANAGED_SOFTWARE_INTEGRATION_IMPACT_POLICIES);
   validateIntegrationBranch(entry.integrationBranch);
   requireManagedSoftwareEnum(entry.executionAdapter, 'executionAdapter', MANAGED_SOFTWARE_EXECUTION_ADAPTERS);
+  requireManagedSoftwareEnum(entry.versioningPolicy, 'versioningPolicy', MANAGED_SOFTWARE_VERSIONING_POLICIES);
   if (!isObject(entry.canonicalUpstream) || typeof entry.canonicalUpstream.repository !== 'string' || !/^https:\/\//.test(entry.canonicalUpstream.repository)) {
     throw new Error('canonicalUpstream.repository must be an HTTPS URL');
   }
@@ -362,6 +401,17 @@ function validateManagedSoftwareEntry(input = {}) {
   if (entry.distribution === 'private-experiment' && entry.defaultVisibility === 'public') {
     throw new Error('private-experiment entries may not default to public visibility');
   }
+  for (const field of ['releaseAdapter', 'publicationAdapter', 'credentialRef', 'notificationPreferenceRef']) {
+    validateOpaqueReference(entry[field], field);
+  }
+  if (!isObject(entry.strategyEvidence)) throw new Error('strategyEvidence is required');
+  validateOpaqueReference(entry.strategyEvidence.adapter, 'strategyEvidence.adapter');
+  requireManagedSoftwareEnum(entry.strategyEvidence.authority, 'strategyEvidence.authority', MANAGED_SOFTWARE_STRATEGY_AUTHORITIES);
+  if (!Array.isArray(entry.approvalPrincipalRefs) || !entry.approvalPrincipalRefs.length) {
+    throw new Error('approvalPrincipalRefs must contain at least one opaque reference');
+  }
+  entry.approvalPrincipalRefs.forEach((ref) => validateOpaqueReference(ref, 'approvalPrincipalRefs'));
+  validateRuntime(entry);
   return entry;
 }
 
@@ -493,8 +543,11 @@ module.exports = {
   MANAGED_SOFTWARE_LOCAL_CHANGE_POLICIES,
   MANAGED_SOFTWARE_OWNERSHIP,
   MANAGED_SOFTWARE_RELEASE_AUTHORITIES,
+  MANAGED_SOFTWARE_RUNTIME_MODES,
+  MANAGED_SOFTWARE_STRATEGY_AUTHORITIES,
   MANAGED_SOFTWARE_UPDATE_POLICIES,
   MANAGED_SOFTWARE_VISIBILITIES,
+  MANAGED_SOFTWARE_VERSIONING_POLICIES,
   POLICY_OUTCOMES,
   RECORD_SCHEMA_VERSION,
   RECORD_TYPES,
