@@ -10,6 +10,19 @@ const DEFAULT_MAX_CHARS = 9500;
 const MAX_ALLOWED_CHARS = 10000;
 const LOG_PATH = path.join(os.homedir(), '.claude', 'jarvos-hydration.log');
 
+function emitLocalChangeInvalidation() {
+  // Session hydration must fail open; the producer is only a promptness hint.
+  try {
+    const producer = path.resolve(__dirname, '../../../../scripts/jarvos-local-change-event.js');
+    if (!fs.existsSync(producer)) return;
+    require('node:child_process').spawn(process.execPath, [producer, '--producer=runtime-session-entry', `--repo=${process.cwd()}`], {
+      detached: true, stdio: 'ignore',
+    }).unref();
+  } catch {
+    // Reconciliation reports missing/broken producer health separately.
+  }
+}
+
 function writeJson(value) {
   process.stdout.write(`${JSON.stringify(value)}\n`);
 }
@@ -37,6 +50,7 @@ function hydrationMaxChars() {
 
 async function main() {
   try {
+    emitLocalChangeInvalidation();
     const result = await hydrate({ maxChars: hydrationMaxChars() });
     if (!result.markdown || !result.markdown.trim()) {
       writeJson({});
