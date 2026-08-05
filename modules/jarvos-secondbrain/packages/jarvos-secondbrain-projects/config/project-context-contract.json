@@ -4,7 +4,7 @@
   "purpose": "managed-software-stewardship",
   "audience": "jarvos-projects",
   "inputFields": ["findingId", "executionReference", "releaseReference", "visibility"],
-  "receiptFields": ["type", "purpose", "audience", "contextKey", "visibility", "destinationSelectors", "capabilityRevision", "issuedAt", "expiresAt", "signature"],
+  "receiptFields": ["type", "purpose", "audience", "contextKey", "visibility", "destinationSelectors", "capabilityRevision", "activationEnvelopeDigest", "issuedAt", "expiresAt", "signature"],
   "projectionOutcomes": ["projected", "deduped", "denied", "unavailable"],
   "boundary": "The issuer and signer are external. This portable package exposes no signing material, private paths, source content, task state, or activation authorization."
 }

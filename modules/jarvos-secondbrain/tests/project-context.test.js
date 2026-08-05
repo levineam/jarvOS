@@ -18,6 +18,7 @@ function issue(overrides = {}) {
     authorization: { allowed: true },
     destinationSelectors: ['projects:stewardship'],
     capabilityRevision: 'projects-r1',
+    activationEnvelopeDigest: 'sha256:immutable-envelope',
     issuedAt: '2026-08-05T12:00:00.000Z',
     expiresAt: '2026-08-05T13:00:00.000Z',
     sign: (payload) => `sig_${payload.contextKey}`,
@@ -33,8 +34,9 @@ test('issues a portable fixed-field project context capability', () => {
   assert.equal(receipt.contextKey, context.deriveContextKey(input));
   assert.deepEqual(receipt.destinationSelectors, ['projects:stewardship']);
   assert.equal(receipt.visibility, 'private');
+  assert.equal(receipt.activationEnvelopeDigest, 'sha256:immutable-envelope');
   assert.deepEqual(Object.keys(receipt).sort(), [
-    'audience', 'capabilityRevision', 'contextKey', 'destinationSelectors', 'expiresAt',
+    'activationEnvelopeDigest', 'audience', 'capabilityRevision', 'contextKey', 'destinationSelectors', 'expiresAt',
     'issuedAt', 'purpose', 'signature', 'type', 'visibility',
   ]);
   assert.doesNotMatch(JSON.stringify(receipt), /finding-42|execution-42|release-42/);
@@ -68,6 +70,16 @@ test('public verifier rejects expired, revoked, and forged receipts', () => {
   assert.deepEqual(context.verifyProjectContext(receipt, { ...base, now: '2026-08-05T13:00:00.000Z' }), { ok: false, reason: 'expired' });
   assert.deepEqual(context.verifyProjectContext(receipt, { ...base, isRevoked: () => true }), { ok: false, reason: 'revoked' });
   assert.deepEqual(context.verifyProjectContext(receipt, { ...base, verify: () => false }), { ok: false, reason: 'forged' });
+});
+
+test('public verifier binds each receipt to its immutable activation envelope', () => {
+  const receipt = issue();
+  const options = { now: '2026-08-05T12:30:00.000Z', verify: () => true, activationEnvelopeDigest: 'sha256:immutable-envelope' };
+  assert.equal(context.verifyProjectContext(receipt, options).ok, true);
+  assert.deepEqual(
+    context.verifyProjectContext(receipt, { ...options, activationEnvelopeDigest: 'sha256:other-envelope' }),
+    { ok: false, reason: 'activation-envelope-mismatch' },
+  );
 });
 
 test('projection port makes an idempotent context-only outcome', () => {

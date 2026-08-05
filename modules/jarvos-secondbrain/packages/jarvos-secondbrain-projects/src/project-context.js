@@ -7,7 +7,7 @@ const PURPOSE = 'managed-software-stewardship';
 const AUDIENCE = 'jarvos-projects';
 const INPUT_FIELDS = Object.freeze(['findingId', 'executionReference', 'releaseReference', 'visibility']);
 const RECEIPT_FIELDS = Object.freeze([
-  'audience', 'capabilityRevision', 'contextKey', 'destinationSelectors', 'expiresAt',
+  'activationEnvelopeDigest', 'audience', 'capabilityRevision', 'contextKey', 'destinationSelectors', 'expiresAt',
   'issuedAt', 'purpose', 'signature', 'type', 'visibility',
 ]);
 
@@ -62,6 +62,7 @@ function issueProjectContext({
   authorization,
   destinationSelectors,
   capabilityRevision,
+  activationEnvelopeDigest,
   issuedAt,
   expiresAt,
   sign,
@@ -79,6 +80,7 @@ function issueProjectContext({
     visibility: requiredString(input.visibility, 'visibility'),
     destinationSelectors: validateSelectors(destinationSelectors),
     capabilityRevision: requiredString(capabilityRevision, 'capabilityRevision'),
+    activationEnvelopeDigest: requiredString(activationEnvelopeDigest, 'activationEnvelopeDigest'),
     issuedAt: timestamp(issuedAt, 'issuedAt'),
     expiresAt: timestamp(expiresAt, 'expiresAt'),
   };
@@ -96,7 +98,7 @@ function issueProjectContext({
  * The verifier owns cryptography and revocation material; this package only
  * defines the portable boundary and never loads keys or revocation files.
  */
-function verifyProjectContext(receipt, { now = new Date().toISOString(), verify, isRevoked } = {}) {
+function verifyProjectContext(receipt, { now = new Date().toISOString(), verify, isRevoked, activationEnvelopeDigest } = {}) {
   if (!exactKeys(receipt, RECEIPT_FIELDS)
     || receipt.type !== CAPABILITY_TYPE
     || receipt.purpose !== PURPOSE
@@ -107,10 +109,12 @@ function verifyProjectContext(receipt, { now = new Date().toISOString(), verify,
     || receipt.destinationSelectors.some((selector) => typeof selector !== 'string' || selector.includes('/') || selector.includes('\\'))
     || typeof receipt.visibility !== 'string'
     || typeof receipt.capabilityRevision !== 'string'
+    || typeof receipt.activationEnvelopeDigest !== 'string'
     || typeof receipt.signature !== 'string'
     || !/^[A-Za-z0-9_-]+={0,2}$/.test(receipt.signature)
     || Number.isNaN(Date.parse(receipt.issuedAt))
     || Number.isNaN(Date.parse(receipt.expiresAt))) return { ok: false, reason: 'invalid-contract' };
+  if (activationEnvelopeDigest !== undefined && receipt.activationEnvelopeDigest !== activationEnvelopeDigest) return { ok: false, reason: 'activation-envelope-mismatch' };
   if (Date.parse(now) >= Date.parse(receipt.expiresAt)) return { ok: false, reason: 'expired' };
   if (typeof isRevoked === 'function' && isRevoked(receipt) === true) return { ok: false, reason: 'revoked' };
   if (typeof verify !== 'function' || verify(receipt) !== true) return { ok: false, reason: 'forged' };
