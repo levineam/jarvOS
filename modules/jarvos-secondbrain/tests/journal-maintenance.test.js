@@ -5,15 +5,140 @@ const os = require('node:os');
 const path = require('node:path');
 
 const {
+  applySectionTransforms,
   classifyJournalHealth,
   isCatastrophicJournalShrink,
   loadConfig,
   normalizeSections,
   renderJournal,
+  runMaintenance,
+  stripLeadingRecoveryScaffold,
   syncOneDate,
 } = require('../packages/jarvos-secondbrain-journal/src/journal-maintenance.js');
 
 const TEST_DATE = '2026-01-02';
+
+function unchangedSync(date, journalPath = '/tmp/test-vault/Journal/2026-01-02.md') {
+  return {
+    date,
+    journalPath,
+    changed: false,
+    healthBefore: { status: 'healthy', degraded: false },
+    healthAfter: { status: 'healthy', degraded: false },
+  };
+}
+
+test('maintenance flushes deferred backlinks after journal sync and exposes JSON status', () => {
+  const calls = [];
+  const report = runMaintenance([`--date=${TEST_DATE}`, '--json'], {
+    loadConfig: () => ({}),
+    syncOneDate: (date) => {
+      calls.push(`sync:${date}`);
+      return unchangedSync(date);
+    },
+    flushDeferredBacklinks: (options) => {
+      calls.push('flush');
+      assert.deepEqual(options, {
+        journalDir: '/tmp/test-vault/Journal',
+        vaultRoot: '/tmp/test-vault',
+        notesDir: '/tmp/test-vault/Notes',
+        dryRun: false,
+      });
+      return {
+        lastFlushAt: '2026-01-02T00:00:00.000Z',
+        checked: 2,
+        linked: 0,
+        pending: 1,
+        unresolved: 1,
+        superseded: 0,
+        entries: [{ key: 'retry', status: 'pending', error: 'Obsidian unavailable' }],
+      };
+    },
+  });
+
+  assert.deepEqual(calls, [`sync:${TEST_DATE}`, 'flush']);
+  assert.equal(report.lastFlushAt, '2026-01-02T00:00:00.000Z');
+  assert.equal(report.summary.pending, 1);
+  assert.equal(report.summary.unresolved, 1);
+  assert.equal(report.summary.failed, 1);
+  assert.notEqual(report.output, 'NO_REPLY');
+  assert.deepEqual(JSON.parse(report.output).summary, report.summary);
+});
+
+test('maintenance dry-run classifies deferred backlinks without mutating them', () => {
+  let flushOptions;
+  const report = runMaintenance([`--date=${TEST_DATE}`, '--dry-run', '--json'], {
+    loadConfig: () => ({}),
+    syncOneDate: (date) => unchangedSync(date),
+    flushDeferredBacklinks: (options) => {
+      flushOptions = options;
+      return {
+        lastFlushAt: '2026-01-01T00:00:00.000Z',
+        checked: 1,
+        linked: 0,
+        pending: 1,
+        unresolved: 0,
+        superseded: 0,
+        entries: [{ key: 'retry', status: 'pending', proposed: 'retry' }],
+        dryRun: true,
+      };
+    },
+  });
+
+  assert.equal(flushOptions.dryRun, true);
+  assert.equal(report.summary.pending, 1);
+  assert.equal(report.output === 'NO_REPLY', false);
+});
+
+test('maintenance does not collapse deferred backlog states to NO_REPLY', () => {
+  for (const [field, lastFlushAt] of [
+    ['pending', '2026-01-02T00:00:00.000Z'],
+    ['unresolved', '2026-01-02T00:01:00.000Z'],
+    ['superseded', '2026-01-02T00:02:00.000Z'],
+    ['failed', '2026-01-02T00:03:00.000Z'],
+  ]) {
+    const report = runMaintenance([`--date=${TEST_DATE}`], {
+      loadConfig: () => ({}),
+      syncOneDate: (date) => unchangedSync(date),
+      flushDeferredBacklinks: () => ({
+        lastFlushAt,
+        checked: 1,
+        linked: 0,
+        pending: field === 'pending' || field === 'failed' ? 1 : 0,
+        unresolved: field === 'unresolved' ? 1 : 0,
+        superseded: field === 'superseded' ? 1 : 0,
+        failed: field === 'failed' ? 1 : 0,
+        entries: [],
+      }),
+    });
+
+    assert.notEqual(report.output, 'NO_REPLY', `${field} must be reported`);
+    assert.match(report.output, /Deferred backlinks/);
+  }
+});
+
+test('maintenance reports terminal deferred records that predate this flush', () => {
+  const report = runMaintenance([`--date=${TEST_DATE}`], {
+    loadConfig: () => ({}),
+    syncOneDate: (date) => unchangedSync(date),
+    flushDeferredBacklinks: () => ({
+      checked: 0,
+      linked: 0,
+      pending: 0,
+      unresolved: 0,
+      superseded: 0,
+      entries: [],
+    }),
+    readDeferredBacklinkFlushMetadata: () => ({
+      lastFlushAt: '2026-01-02T01:00:00.000Z',
+      summary: null,
+      entries: [{ key: 'moved', status: 'superseded' }],
+    }),
+  });
+
+  assert.equal(report.summary.superseded, 1);
+  assert.notEqual(report.output, 'NO_REPLY');
+});
 
 function sectionBody(markdown, heading) {
   const escaped = heading.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -176,6 +301,64 @@ test('generated blank-template placeholders are recoverable', () => {
   }), true);
 });
 
+/**
+ * Generated sections are current-state, and Projects renders on backfilled
+ * dates by design, so closing a project shrinks every past entry.
+ * `classifyJournalHealth` reads any shrink as `stale`, and the snapshot refresh
+ * used to require `healthy` (or a contract-signature change). Once the
+ * signature matched, a shrunken past entry could never refresh its snapshot:
+ * every later pass made the same comparison, reported `stale` forever, and left
+ * a genuine truncation able to restore the stale snapshot over anything
+ * authored since.
+ */
+test('generated-section churn does not freeze the known-good snapshot', () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-journal-churn-'));
+  const journalDir = path.join(tmp, 'Vault', 'Journal');
+  fs.mkdirSync(journalDir, { recursive: true });
+
+  const PAST_DATE = '2025-12-01';
+  const manyProjects = { projects: () => '- [[Alpha]]\n- [[Beta]]\n- [[Gamma]]' };
+  const oneProject = { projects: () => '- [[Alpha]]' };
+
+  const previousJournalDir = process.env.JARVOS_JOURNAL_DIR;
+  process.env.JARVOS_JOURNAL_DIR = journalDir;
+  try {
+    const config = loadConfig();
+    const journalPath = path.join(journalDir, `${PAST_DATE}.md`);
+
+    const first = syncOneDate(PAST_DATE, config, { dryRun: false, fetchers: manyProjects });
+    assert.equal(first.healthAfter.status, 'healthy');
+
+    // Author a line -- this is what the snapshot exists to protect.
+    const before = fs.readFileSync(journalPath, 'utf8');
+    const authored = before.replace('## 💡 Ideas\n-', '## 💡 Ideas\n- an idea I typed myself');
+    assert.notEqual(authored, before, 'test fixture must actually author a line');
+    fs.writeFileSync(journalPath, authored, 'utf8');
+    syncOneDate(PAST_DATE, config, { dryRun: false, fetchers: manyProjects });
+
+    // Two projects close. The entry shrinks -- churn, not damage.
+    syncOneDate(PAST_DATE, config, { dryRun: false, fetchers: oneProject });
+    assert.match(
+      fs.readFileSync(journalPath, 'utf8'),
+      /an idea I typed myself/,
+      'authored content must survive the churn',
+    );
+
+    // The freeze is only visible on the NEXT pass: with a refreshed snapshot the
+    // entry reads healthy; with a frozen one it is compared against the larger
+    // old snapshot and reports stale in perpetuity.
+    const settled = syncOneDate(PAST_DATE, config, { dryRun: false, fetchers: oneProject });
+    assert.equal(
+      settled.healthBefore.status,
+      'healthy',
+      'the snapshot must have refreshed after generated-section churn',
+    );
+  } finally {
+    if (previousJournalDir === undefined) delete process.env.JARVOS_JOURNAL_DIR;
+    else process.env.JARVOS_JOURNAL_DIR = previousJournalDir;
+  }
+});
+
 test('syncOneDate restores a frontmatter-only stub from known-good content and writes an audit backup', () => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-journal-stub-'));
   const journalDir = path.join(tmp, 'Vault', 'Journal');
@@ -240,6 +423,93 @@ test('syncOneDate restores a deleted journal from known-good content', () => {
     assert.equal(repaired.healthBefore.status, 'missing');
     assert.equal(repaired.restoredKnownGood, true);
     assert.equal(fs.readFileSync(journalPath, 'utf8'), before);
+  } finally {
+    if (previousJournalDir === undefined) delete process.env.JARVOS_JOURNAL_DIR;
+    else process.env.JARVOS_JOURNAL_DIR = previousJournalDir;
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('stripLeadingRecoveryScaffold removes only the incident scaffold', () => {
+  const bulletA = '- Created the **AAF Management Module** — first standalone AAF module';
+  const bulletB = '- Kicked off the **AAF Cycle Monitor Module** — second standalone module';
+  const withScaffold = [
+    '**Recovered content**',
+    `# ${TEST_DATE}`,
+    '',
+    bulletA,
+    bulletB,
+    '### Still legitimate',
+  ].join('\n');
+
+  const cleaned = stripLeadingRecoveryScaffold(withScaffold, TEST_DATE);
+  assert.doesNotMatch(cleaned, /\*\*Recovered content\*\*/);
+  assert.doesNotMatch(cleaned, new RegExp(`^# ${TEST_DATE}$`, 'm'));
+  assert.match(cleaned, /AAF Management Module/);
+  assert.match(cleaned, /### Still legitimate/);
+});
+
+test('applySectionTransforms is opt-in and section-scoped', () => {
+  const normalized = {
+    frontmatter: '---\njournal: Journal\n---',
+    sections: [
+      { id: 'notes', heading: '## 📝 Notes', content: '**Recovered content**\n# x\n- keep' },
+      { id: 'ideas', heading: '## 💡 Ideas', content: '- idea stays' },
+    ],
+  };
+  assert.equal(applySectionTransforms(normalized, null), normalized);
+  const transformed = applySectionTransforms(normalized, [
+    {
+      sectionId: 'notes',
+      transform: (content) => content.replace('**Recovered content**\n# x\n', ''),
+    },
+  ], { date: TEST_DATE });
+  assert.equal(transformed.sections[0].content, '- keep');
+  assert.equal(transformed.sections[1].content, '- idea stays');
+});
+
+test('syncOneDate sectionTransforms strip recovery scaffold via maintenance write path', () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-journal-scaffold-'));
+  const journalDir = path.join(tmp, 'Vault', 'Journal');
+  fs.mkdirSync(journalDir, { recursive: true });
+  const previousJournalDir = process.env.JARVOS_JOURNAL_DIR;
+  process.env.JARVOS_JOURNAL_DIR = journalDir;
+  try {
+    const config = loadConfig();
+    const bulletA = '- Created the **AAF Management Module** — first standalone AAF module';
+    const bulletB = '- Kicked off the **AAF Cycle Monitor Module** — second standalone module';
+    const original = renderJournal(TEST_DATE, config, normalizeSections([
+      '## 📝 Notes',
+      '**Recovered content**',
+      `# ${TEST_DATE}`,
+      bulletA,
+      bulletB,
+      '### Keep this heading',
+    ].join('\n'), TEST_DATE, config, {
+      fetchers: { calendar: () => '-', reminders: () => '-', paperclip: () => '-' },
+    }));
+    const journalPath = path.join(journalDir, `${TEST_DATE}.md`);
+    fs.writeFileSync(journalPath, original, 'utf8');
+
+    const result = syncOneDate(TEST_DATE, config, {
+      dryRun: false,
+      fetchers: { calendar: () => '-', reminders: () => '-', paperclip: () => '-' },
+      sectionTransforms: [
+        {
+          sectionId: 'notes',
+          transform: (content, ctx) => stripLeadingRecoveryScaffold(content, ctx.date),
+        },
+      ],
+    });
+    const notes = sectionBody(fs.readFileSync(journalPath, 'utf8'), '## 📝 Notes');
+
+    assert.equal(result.written, true);
+    assert.ok(result.backupPath);
+    assert.match(fs.readFileSync(result.backupPath, 'utf8'), /\*\*Recovered content\*\*/);
+    assert.doesNotMatch(notes, /\*\*Recovered content\*\*/);
+    assert.match(notes, /AAF Management Module/);
+    assert.match(notes, /### Keep this heading/);
+    assert.equal(result.healthAfter.status, 'healthy');
   } finally {
     if (previousJournalDir === undefined) delete process.env.JARVOS_JOURNAL_DIR;
     else process.env.JARVOS_JOURNAL_DIR = previousJournalDir;

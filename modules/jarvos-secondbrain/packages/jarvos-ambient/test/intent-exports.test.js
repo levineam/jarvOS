@@ -229,7 +229,7 @@ test('capture contract rejects invalid v2 source actor privacy and evidence valu
       kind: 'database',
     },
   }), [
-    'Unknown source.tool: "unsupported-tool". Expected one of: openclaw, codex, claude-code, hermes, manual, journal, note, paperclip, discord, telegram, unknown, other, or custom:<slug>',
+    'Unknown source.tool: "unsupported-tool". Expected one of: openclaw, codex, claude-code, chatgpt, claude-app, manual, journal, note, paperclip, discord, telegram, unknown, other, or custom:<slug>',
     'source.sessionId must be a string',
     'Unknown actor: "bot". Expected one of: human, assistant, tool, system, mixed, unknown',
     'Unknown origin.kind: "database". Expected one of: session, journal, note, transcript, prompt, file, url, manual',

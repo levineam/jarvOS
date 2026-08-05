@@ -1,6 +1,6 @@
 # adapters/openclaw
 
-OpenClaw session source adapter for the jarvOS automatic secondbrain pipeline.
+OpenClaw session source adapter for the JarvOS automatic secondbrain pipeline.
 
 `createOpenClawSessionAdapter()` accepts parsed OpenClaw session records and
 normalizes them into source-backed `CaptureEvent` v2 objects. Runtime code should

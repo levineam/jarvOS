@@ -40,10 +40,12 @@ function parseArgs(argv) {
   const out = {
     dateSpecs: ['today'],
     dryRun: false,
+    json: false,
   };
 
   for (const arg of argv) {
     if (arg === '--dry-run') out.dryRun = true;
+    else if (arg === '--json') out.json = true;
     else if (arg === '--yesterday') out.dateSpecs = ['yesterday'];
     else if (arg.startsWith('--date=')) out.dateSpecs = [arg.split('=').slice(1).join('=')];
     else if (arg.startsWith('--dates=')) {
@@ -65,6 +67,7 @@ function printHelpAndExit(code) {
     '  --dates=today,yesterday,YYYY-MM-DD',
     '  --yesterday',
     '  --dry-run',
+    '  --json',
     '  -h, --help',
   ].join('\n'));
   process.exit(code);
@@ -186,17 +189,73 @@ function writeJournalState(journalDir, state) {
   fs.writeFileSync(statePath, `${JSON.stringify(state, null, 2)}\n`, 'utf8');
 }
 
-function journalMetrics(markdown) {
+/**
+ * Sections whose entire body is machine-rendered on every maintenance pass.
+ *
+ * Nothing under these headings is evidence that the user's own writing is
+ * still intact, so they are excluded wholesale from `meaningfulBodyChars`.
+ * Excluding only their empty-state placeholder is not enough: a populated
+ * Projects list would otherwise make a journal whose Notes, Ideas, and
+ * Journal Entry had been wiped still look populated, and suppress the
+ * known-good restore that exists to catch exactly that.
+ */
+const GENERATED_SECTION_HEADINGS = new Set([
+  '## 🚀 Projects',
+  "## 📅 Today's Calendar",
+  '## 🔔 Apple Reminders',
+  '## 📎 Paperclip Inbox',
+  '## 🗂️ Notes Created',
+]);
+
+/**
+ * Headings whose content is machine-rendered, resolved from the live config
+ * rather than only the literals above.
+ *
+ * Headings are a configurable contract — renaming the Projects heading in
+ * journal-module.json is a supported edit. If the exclusion matched literals
+ * only, a renamed generated section would start counting as authored content
+ * and a populated project list would once again mask a wiped journal. The
+ * literal set is retained for retired headings, which are no longer in config.
+ */
+function generatedHeadings(config) {
+  const out = new Set(GENERATED_SECTION_HEADINGS);
+  const declared = [
+    ...((config && config.sections && config.sections.required) || []),
+    ...((config && config.sections && config.sections.optional) || []),
+  ];
+  for (const section of declared) {
+    if (section && section.heading && section.source && section.source !== 'manual') {
+      out.add(String(section.heading).trim());
+    }
+  }
+  return out;
+}
+
+/** Body lines that could be the user's own writing — generated sections excluded. */
+function authoredBodyLines(body, config) {
+  const generatedSet = generatedHeadings(config);
+  const lines = [];
+  let generated = false;
+  for (const raw of trimOuterBlankLines(body).split(/\r?\n/)) {
+    const line = raw.trim();
+    if (/^##\s+/.test(line)) {
+      generated = generatedSet.has(line);
+      continue;
+    }
+    if (generated) continue;
+    if (!line || line === SIGNATURE || line === '-') continue;
+    if (isGeneratedPlaceholderLine(line)) continue;
+    lines.push(line);
+  }
+  return lines;
+}
+
+function journalMetrics(markdown, config) {
   const text = String(markdown || '');
   const { body } = splitFrontmatter(text);
   const sections = parseSections(body).sections.map((section) => section.heading);
   const hasBodyText = trimOuterBlankLines(body).length > 0;
-  const meaningfulBodyChars = trimOuterBlankLines(body)
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter((line) => line && line !== SIGNATURE && line !== '-' && !/^##\s+/.test(line))
-    .filter((line) => !isGeneratedPlaceholderLine(line))
-    .join('\n').length;
+  const meaningfulBodyChars = authoredBodyLines(body, config).join('\n').length;
   return {
     size: Buffer.byteLength(text, 'utf8'),
     hash: contentHash(text),
@@ -209,7 +268,35 @@ function journalMetrics(markdown) {
 }
 
 function isGeneratedPlaceholderLine(line) {
-  return /^-\s+(?:No events today|No reminders due today|No blocked Paperclip issues|No notes created(?: on .*)?|No notes today|No notes yet|\((?:calendar unavailable|reminders unavailable|Paperclip inbox script not found|Paperclip API unavailable)\))$/i.test(line);
+  return /^-\s+(?:No events today|No reminders due today|No blocked Paperclip issues|No notes created(?: on .*)?|No notes today|No notes yet|No ongoing projects|\((?:calendar unavailable|reminders unavailable|projects unavailable|Paperclip inbox script not found|Paperclip API unavailable)\))$/i.test(line);
+}
+
+/**
+ * A fetcher result that means "I could not read the source", as opposed to a
+ * positive claim about it.
+ *
+ * The distinction matters because the two read identically as strings but are
+ * opposite in evidential weight. `- No ongoing projects` asserts something the
+ * fetcher actually observed; `- (projects unavailable)` asserts only that the
+ * fetcher failed. A degraded marker must therefore never be written over
+ * content that is already in the entry -- the existing list is better evidence
+ * about the world than a marker saying we couldn't look.
+ *
+ * `projects.js` documented exactly this contract ("the journal treats [it] as a
+ * degraded source and will not write over existing content") and the journal
+ * never implemented it, so one unmounted volume or permissions blip would
+ * rewrite a populated Projects section down to a single placeholder line.
+ */
+function isDegradedSourceMarker(content) {
+  const trimmed = trimOuterBlankLines(String(content == null ? '' : content));
+  if (!trimmed || trimmed.includes('\n')) return false;
+  return /^-\s+\((?:calendar unavailable|reminders unavailable|projects unavailable|Paperclip inbox script not found|Paperclip API unavailable)\)$/i.test(trimmed);
+}
+
+/** Does a section body carry anything beyond the empty `-` placeholder? */
+function hasRenderedContent(content) {
+  const trimmed = trimOuterBlankLines(String(content == null ? '' : content));
+  return Boolean(trimmed) && trimmed !== '-';
 }
 
 function sectionCountFromBody(body) {
@@ -224,17 +311,82 @@ function hasMeaningfulBodyText(body) {
     .some((line) => line !== SIGNATURE && line !== '-');
 }
 
-function classifyJournalHealth({ existed, markdown, knownGood }) {
+/**
+ * Fingerprint of the configured section contract.
+ *
+ * The known-good shrink guard compares a journal against its own past self.
+ * That comparison is only meaningful while the section contract is unchanged:
+ * the moment a section is added or retired, every entry legitimately changes
+ * size and section count, and a shrink is expected rather than suspicious.
+ *
+ * Without this, retiring a section wedges the guard permanently. The first pass
+ * after the change reports `stale` (fewer sections than known-good), the
+ * known-good refresh is skipped because it only runs on `healthy`, and every
+ * later pass repeats the same comparison against the same frozen snapshot. The
+ * restore path then holds pre-migration content indefinitely, so a genuine
+ * truncation later restores a stale entry over the user's newer writing — the
+ * exact loss this machinery exists to prevent.
+ */
+function contractSignature(config) {
+  const headings = buildDesiredSections(config || {}).map((section) => section.heading);
+  return contentHash(headings.join('\u0000'));
+}
+
+/**
+ * True when an entry's headings are exactly the currently-configured contract,
+ * in order.
+ *
+ * This is what makes the guard safe for snapshots written before signatures
+ * existed — i.e. every snapshot already on disk when this shipped, which is the
+ * only population the migration wedge could ever affect. A signature cannot be
+ * compared against a snapshot that has none, so the shape of the entry is used
+ * instead: if it holds precisely the sections the contract now asks for, then a
+ * shrink against the older snapshot is explained by the contract change and the
+ * snapshot should be refreshed. If the entry is missing configured sections it
+ * is genuinely damaged, and the shrink guard and restore path must still fire.
+ */
+function structureMatchesContract(sections, config) {
+  const desired = buildDesiredSections(config || {}).map((section) => String(section.heading).trim());
+  if (!desired.length) return false;
+  const have = (sections || []).map((heading) => String(heading).trim());
+  if (have.length !== desired.length) return false;
+  return desired.every((heading, index) => have[index] === heading);
+}
+
+/**
+ * True when every authored line in `priorMarkdown` still appears in
+ * `currentMarkdown`.
+ *
+ * This is the safety property that makes refreshing the known-good snapshot
+ * across a contract migration sound. Checking the entry's *structure* is
+ * useless here: the candidate is always freshly rendered output, which by
+ * construction carries exactly the configured sections, so a structure check is
+ * vacuously true on every write path.
+ *
+ * Content is what actually distinguishes the two cases. A contract migration
+ * drops machine-rendered sections, which `authoredBodyLines` already ignores,
+ * so every authored line survives. Real damage — a bad mobile sync gutting
+ * Notes and Journal Entry — loses authored lines, and must leave the old
+ * snapshot untouched so the restore path can still recover it.
+ */
+function authoredContentPreserved(currentMarkdown, priorMarkdown, config) {
+  const prior = authoredBodyLines(splitFrontmatter(String(priorMarkdown || '')).body, config);
+  if (!prior.length) return true;
+  const current = new Set(authoredBodyLines(splitFrontmatter(String(currentMarkdown || '')).body, config));
+  return prior.every((line) => current.has(line));
+}
+
+function classifyJournalHealth({ existed, markdown, knownGood, config }) {
   if (!existed) {
     return {
       status: 'missing',
       degraded: false,
       reason: 'Journal file is missing',
-      metrics: journalMetrics(''),
+      metrics: journalMetrics('', config),
     };
   }
 
-  const metrics = journalMetrics(markdown);
+  const metrics = journalMetrics(markdown, config);
   if (metrics.isFrontmatterOnly) {
     return {
       status: 'stub',
@@ -385,6 +537,69 @@ function formatMigratedBlock(label, content) {
   return `**${label}**\n${trimmed}`;
 }
 
+/**
+ * Strip the exact one-shot recovery scaffold from section content:
+ * optional leading `**Recovered content**` marker and optional leading H1
+ * exactly matching `# <date>`. Leaves all other content/headings untouched.
+ */
+function stripLeadingRecoveryScaffold(content, date) {
+  const expectedDate = String(date || '').trim();
+  const expectedH1 = expectedDate ? `# ${expectedDate}` : null;
+  const lines = String(content || '').split(/\r?\n/);
+  let i = 0;
+
+  while (i < lines.length && lines[i].trim() === '') i += 1;
+
+  if (i < lines.length && lines[i].trim() === '**Recovered content**') {
+    i += 1;
+    while (i < lines.length && lines[i].trim() === '') i += 1;
+  }
+
+  if (expectedH1 && i < lines.length && lines[i].trim() === expectedH1) {
+    i += 1;
+    while (i < lines.length && lines[i].trim() === '') i += 1;
+  }
+
+  return trimOuterBlankLines(lines.slice(i).join('\n')) || '-';
+}
+
+/**
+ * Opt-in section content transforms applied to already-normalized sections.
+ * Ordinary maintenance leaves transforms unset so behavior is unchanged.
+ *
+ * Each transform: { sectionId?: string, heading?: string, transform(content, ctx) }
+ */
+function applySectionTransforms(normalized, transforms, context = {}) {
+  if (!Array.isArray(transforms) || transforms.length === 0) return normalized;
+  if (!normalized || !Array.isArray(normalized.sections)) return normalized;
+
+  const sections = normalized.sections.map((section) => {
+    const match = transforms.find((entry) => {
+      if (!entry || typeof entry.transform !== 'function') return false;
+      if (entry.sectionId && section.id && entry.sectionId === section.id) return true;
+      if (entry.heading && entry.heading === section.heading) return true;
+      return false;
+    });
+    if (!match) return section;
+
+    const next = match.transform(section.content, {
+      ...context,
+      sectionId: section.id,
+      heading: section.heading,
+      date: context.date,
+    });
+    return {
+      ...section,
+      content: trimOuterBlankLines(String(next ?? '')) || '-',
+    };
+  });
+
+  return {
+    ...normalized,
+    sections,
+  };
+}
+
 function appendUniqueLines(existing, additions) {
   const lines = String(existing || '')
     .split(/\r?\n/)
@@ -438,6 +653,28 @@ function filterLegacyNotesCreatedContent(content) {
 
 function buildSourceFetchers() {
   return {
+    /**
+     * Ongoing projects from the vault Projects record, as wiki-links.
+     *
+     * Unlike the other sources this is not time-bound — the projects you have
+     * are the projects you have, whichever day's entry is being written — so it
+     * renders for backfilled dates too rather than returning null for !isToday.
+     */
+    projects: () => {
+      try {
+        // eslint-disable-next-line global-require
+        const projects = require('../../jarvos-secondbrain-projects/src/projects');
+        const config = projects.loadConfig();
+        // readProjectsDir, not listProjects: null means the directory could not
+        // be read, which must render the unavailable marker rather than a
+        // positive "no ongoing projects". The Projects section renders on every
+        // date, so an unmounted vault would otherwise rewrite them all.
+        return projects.journalProjectLines(projects.readProjectsDir({ config }), config);
+      } catch {
+        return '- (projects unavailable)';
+      }
+    },
+
     'google-calendar': ({ isToday }) => {
       if (!isToday) return null;
       try {
@@ -561,12 +798,12 @@ function detectConflictingJournalWriters(journalDir) {
   return conflicts;
 }
 
-function normalizeSections(original, date, config) {
+function normalizeSections(original, date, config, opts = {}) {
   const desiredSections = buildDesiredSections(config);
   const desiredByHeading = new Map(desiredSections.map((section) => [section.heading, section]));
   const configuredHeadingMap = buildConfiguredHeadingMap(config);
   const configuredById = new Map(desiredSections.map((section) => [section.id, section]));
-  const fetchers = buildSourceFetchers();
+  const fetchers = opts.fetchers || buildSourceFetchers();
   const isToday = date === today();
 
   const withoutSignature = stripSignature(original);
@@ -594,6 +831,12 @@ function normalizeSections(original, date, config) {
     const legacySection = legacySections.find((entry) => entry.heading === section.heading);
 
     if (legacySection) {
+      // 'drop' discards the section outright. Reserved for sections whose
+      // content was a regenerated daily snapshot (calendar, reminders, tracker
+      // inbox) — preserving those under Notes would bury real notes under
+      // stale machine output. Never use it for anything the user typed.
+      if (legacySection.action === 'drop') continue;
+
       const targetSection = configuredById.get(legacySection.migrateContentTo || 'notes');
       if (legacySection.action === 'rename' && targetSection) {
         const filteredContent = filterLegacyNotesCreatedContent(section.content);
@@ -651,9 +894,30 @@ function normalizeSections(original, date, config) {
       if (!trimOuterBlankLines(content)) content = '-';
     } else if (section.source !== 'manual') {
       const fetcher = fetchers[section.source];
-      const fetched = fetcher ? fetcher({ date, isToday, config, section }) : null;
-      if (isToday) {
-        content = fetched || existingContent || '-';
+      // A source that throws must cost its own section, never the whole entry.
+      // The bundled fetchers catch internally, but an injected or future one
+      // may not — and losing a day's journal to a flaky data source is exactly
+      // the silent loss this package exists to prevent.
+      let fetched = null;
+      if (fetcher) {
+        try {
+          fetched = fetcher({ date, isToday, config, section });
+        } catch {
+          fetched = null;
+        }
+      }
+      // Most sources are a snapshot of *that day* and must never be
+      // back-written onto an older entry. Projects are current-state, not
+      // day-scoped, so they render on backfilled dates too.
+      if (isToday || section.source === 'projects') {
+        // ...but a DEGRADED read is not a fact about the world, only about our
+        // ability to read it, so it must never overwrite content already in
+        // the entry. Without this, one unmounted volume rewrote a populated
+        // Projects list down to `- (projects unavailable)` on every date in
+        // the run, and burned an audit backup doing it.
+        content = isDegradedSourceMarker(fetched) && hasRenderedContent(existingContent)
+          ? existingContent
+          : (fetched || existingContent || '-');
       } else {
         content = existingContent || '-';
       }
@@ -662,15 +926,27 @@ function normalizeSections(original, date, config) {
     }
 
     renderedSections.push({
+      id: section.id,
       heading: section.heading,
       content: trimOuterBlankLines(content) || '-',
     });
   }
 
-  return {
+  const base = {
     frontmatter: renderFrontmatter(date, config, frontmatter),
     sections: renderedSections,
   };
+
+  // Opt-in only: ordinary callers never pass sectionTransforms.
+  if (opts.sectionTransforms) {
+    return applySectionTransforms(base, opts.sectionTransforms, {
+      date,
+      config,
+      isToday,
+    });
+  }
+
+  return base;
 }
 
 function renderJournal(date, config, normalized) {
@@ -721,14 +997,17 @@ function syncOneDate(date, config, opts = {}) {
   const original = existed ? fs.readFileSync(journalPath, 'utf8') : '';
   const state = loadJournalState(journalDir);
   const knownGood = state.dates?.[date];
-  const healthBefore = classifyJournalHealth({ existed, markdown: original, knownGood });
+  const healthBefore = classifyJournalHealth({ existed, markdown: original, knownGood, config });
   const restoreSource = (healthBefore.status === 'missing'
     || healthBefore.status === 'stub'
     || (healthBefore.status === 'stale' && isCatastrophicJournalShrink(healthBefore.metrics, knownGood)))
     ? readKnownGoodContent(journalDir, date, knownGood)
     : null;
   const source = restoreSource || original;
-  const normalized = normalizeSections(source, date, config);
+  const normalized = normalizeSections(source, date, config, {
+    fetchers: opts.fetchers,
+    sectionTransforms: opts.sectionTransforms,
+  });
   const updated = renderJournal(date, config, normalized);
   const changed = updated !== original;
   const backupReason = restoreSource ? 'stub-restore' : healthBefore.status;
@@ -744,17 +1023,70 @@ function syncOneDate(date, config, opts = {}) {
     fs.writeFileSync(journalPath, updated, 'utf8');
   }
 
-  const healthAfter = classifyJournalHealth({
+  let healthAfter = classifyJournalHealth({
     existed: true,
     markdown: changed ? updated : original,
     knownGood,
+    config,
   });
 
-  if (!opts.dryRun && healthAfter.status === 'healthy') {
+  // Intentional opt-in section transforms may shrink content (e.g. scaffold strip).
+  // That shrink is the new known-good, not a stale regression against prior state.
+  const intentionalTransformWrite = Boolean(
+    !opts.dryRun
+    && changed
+    && Array.isArray(opts.sectionTransforms)
+    && opts.sectionTransforms.length > 0,
+  );
+  if (intentionalTransformWrite && healthAfter.status === 'stale') {
+    healthAfter = {
+      status: 'healthy',
+      degraded: false,
+      reason: 'Journal updated via intentional section transform',
+      metrics: journalMetrics(updated, config),
+    };
+  }
+
+  // The known-good snapshot must refresh on more than `healthy`, or it freezes.
+  //
+  // A journal entry legitimately SHRINKS for reasons that are not damage, and
+  // `classifyJournalHealth` reads any shrink as `stale`
+  // (metrics.size < knownGood.size). Two ways that happens:
+  //
+  //   1. A section-contract change. Retiring a section shrinks every entry, so
+  //      the first pass after the change reports `stale` against the old
+  //      snapshot.
+  //   2. Ordinary generated-section churn. Generated sections are current-state,
+  //      and Projects renders on backfilled dates by design ("Projects is
+  //      refreshed on a backfilled date, unlike day-scoped sources"), so marking
+  //      one project done drops a line from every past entry.
+  //
+  // In both cases, refusing to refresh pins the entry to an older, larger
+  // snapshot PERMANENTLY: the next pass makes the same comparison and reaches
+  // the same answer. The run then reports `STALE detected` for that date
+  // forever, and — worse — a genuine truncation later would restore that stale
+  // snapshot over everything authored since.
+  //
+  // The gate is authored content surviving, NOT the entry's structure: the
+  // candidate here is freshly rendered output, so a structure check would be
+  // true on every write path and this would become a blanket bypass that
+  // overwrites a good snapshot with a damaged entry. Authored survival is also
+  // exactly the condition the snapshot exists to protect — if every authored
+  // line is still present there is nothing catastrophic left to restore, while
+  // a truncated or gutted entry drops authored lines, fails this check, and
+  // correctly keeps its old snapshot for the restore path.
+  const knownGoodMarkdown = knownGood ? readKnownGoodContent(journalDir, date, knownGood) : null;
+  const authoredContentIntact = Boolean(
+    knownGood
+    && knownGoodMarkdown
+    && authoredContentPreserved(changed ? updated : original, knownGoodMarkdown, config)
+  );
+
+  if (!opts.dryRun && (healthAfter.status === 'healthy' || authoredContentIntact)) {
     const updatedKnownGoodPath = knownGoodPath(journalDir, date);
     fs.mkdirSync(path.dirname(updatedKnownGoodPath), { recursive: true });
     fs.writeFileSync(updatedKnownGoodPath, changed ? updated : original, 'utf8');
-    const metrics = journalMetrics(changed ? updated : original);
+    const metrics = journalMetrics(changed ? updated : original, config);
     state.version = 1;
     state.dates = state.dates || {};
     state.dates[date] = {
@@ -763,6 +1095,7 @@ function syncOneDate(date, config, opts = {}) {
       hash: metrics.hash,
       sectionCount: metrics.sectionCount,
       sections: metrics.sections,
+      contractSignature: contractSignature(config),
       knownGoodPath: updatedKnownGoodPath,
       updatedAt: new Date().toISOString(),
     };
@@ -774,6 +1107,8 @@ function syncOneDate(date, config, opts = {}) {
     journalPath,
     existed,
     changed,
+    written: Boolean(changed && !opts.dryRun),
+    writeStatus: opts.dryRun ? 'dry-run' : (changed ? 'written' : 'unchanged'),
     healthBefore,
     healthAfter,
     backupPath,
@@ -781,18 +1116,114 @@ function syncOneDate(date, config, opts = {}) {
   };
 }
 
-function main(argv = process.argv.slice(2)) {
+function deferredBacklinkFlush() {
+  // This stays lazy to avoid a require cycle: the provenance linker imports
+  // this module for journal rendering, while maintenance invokes recovery only
+  // after the journal sync has completed.
+  return require('../../../bridge/provenance/src/link-to-journal.js').flushDeferredBacklinks;
+}
+
+function readDeferredBacklinkFlushMetadata(journalDir) {
+  const deferredPath = require('../../../bridge/provenance/src/link-to-journal.js')
+    .deferredQueuePathForJournalDir(journalDir);
+  try {
+    const queue = JSON.parse(fs.readFileSync(deferredPath, 'utf8'));
+    return {
+      lastFlushAt: typeof queue.lastFlushAt === 'string' ? queue.lastFlushAt : null,
+      summary: queue.lastFlushSummary && typeof queue.lastFlushSummary === 'object'
+        ? queue.lastFlushSummary
+        : null,
+      entries: queue.entries && typeof queue.entries === 'object'
+        ? Object.entries(queue.entries).map(([key, entry]) => ({ key, ...entry }))
+        : [],
+    };
+  } catch {
+    return { lastFlushAt: null, summary: null, entries: [] };
+  }
+}
+
+function flushSummary(summary = {}) {
+  const entries = Array.isArray(summary.entries) ? summary.entries : [];
+  const number = (field) => Number.isFinite(summary[field]) ? summary[field] : 0;
+  return {
+    checked: number('checked'),
+    linked: number('linked'),
+    pending: number('pending'),
+    unresolved: number('unresolved'),
+    superseded: number('superseded'),
+    // Linker failures remain pending for retry. Keeping this distinct from
+    // `pending` makes the retry health visible without changing queue states.
+    failed: Number.isFinite(summary.failed)
+      ? summary.failed
+      : entries.filter((entry) => entry && entry.status === 'pending' && entry.error).length,
+    ...(summary.queuePath ? { queuePath: summary.queuePath } : {}),
+    ...(entries.length ? { entries } : {}),
+  };
+}
+
+function requiresDeferredBacklinkAttention(summary) {
+  return summary.pending > 0
+    || summary.unresolved > 0
+    || summary.superseded > 0
+    || summary.failed > 0;
+}
+
+function mergeDeferredBacklinkQueueState(summary, entries) {
+  const queueState = {
+    pending: 0,
+    unresolved: 0,
+    superseded: 0,
+    failed: 0,
+  };
+  for (const entry of entries || []) {
+    if (!entry || !Object.hasOwn(queueState, entry.status)) continue;
+    queueState[entry.status] += 1;
+    if (entry.status === 'pending' && entry.lastError) queueState.failed += 1;
+  }
+  return {
+    ...summary,
+    pending: Math.max(summary.pending, queueState.pending),
+    unresolved: Math.max(summary.unresolved, queueState.unresolved),
+    superseded: Math.max(summary.superseded, queueState.superseded),
+    failed: Math.max(summary.failed, queueState.failed),
+  };
+}
+
+function formatDeferredBacklinkStatus(lastFlushAt, summary) {
+  return [
+    `Deferred backlinks${lastFlushAt ? ` (last flush: ${lastFlushAt})` : ''}:`,
+    `checked=${summary.checked}`,
+    `linked=${summary.linked}`,
+    `pending=${summary.pending}`,
+    `unresolved=${summary.unresolved}`,
+    `superseded=${summary.superseded}`,
+    `failed=${summary.failed}`,
+  ].join(' ');
+}
+
+function runMaintenance(argv = process.argv.slice(2), opts = {}) {
   const args = parseArgs(argv);
-  const config = loadConfig();
+  const config = (opts.loadConfig || loadConfig)();
+  const sync = opts.syncOneDate || syncOneDate;
+  const flush = opts.flushDeferredBacklinks || deferredBacklinkFlush();
+  const readFlushMetadata = opts.readDeferredBacklinkFlushMetadata || readDeferredBacklinkFlushMetadata;
   const dates = unique(args.dateSpecs.map(resolveDateSpec));
-  const results = dates.map((date) => syncOneDate(date, config, args));
+  const results = dates.map((date) => sync(date, config, args));
+  const journalDir = path.dirname(results[0].journalPath);
+  const rawFlushSummary = flush({
+    journalDir,
+    vaultRoot: path.dirname(journalDir),
+    notesDir: path.join(path.dirname(journalDir), 'Notes'),
+    dryRun: args.dryRun,
+  });
+  const queueMetadata = readFlushMetadata(journalDir);
+  const summary = mergeDeferredBacklinkQueueState(
+    flushSummary(rawFlushSummary || queueMetadata.summary || {}),
+    queueMetadata.entries,
+  );
+  const lastFlushAt = rawFlushSummary?.lastFlushAt || queueMetadata.lastFlushAt;
 
   const reportable = results.filter((result) => result.changed || result.healthBefore.degraded || result.healthAfter.degraded);
-  if (reportable.length === 0) {
-    console.log('NO_REPLY');
-    return;
-  }
-
   const lines = reportable.map((result) => {
     let verb = result.existed ? 'UPDATED' : 'CREATED';
     if (result.healthBefore.status === 'missing') verb = 'MISSING -> CREATED';
@@ -808,20 +1239,47 @@ function main(argv = process.argv.slice(2)) {
     if (result.backupPath) suffixes.push(`audit backup: ${result.backupPath}`);
     return `${verb} ${result.journalPath}${suffixes.length ? ` (${suffixes.join('; ')})` : ''}`;
   });
-  console.log(lines.join('\n'));
+  const backlinkAttention = requiresDeferredBacklinkAttention(summary);
+  if (backlinkAttention) lines.push(formatDeferredBacklinkStatus(lastFlushAt, summary));
+
+  const status = lines.length ? 'reported' : 'NO_REPLY';
+  const report = {
+    dates,
+    results,
+    lastFlushAt,
+    summary,
+    // Match the queue's persisted naming for callers that poll freshness.
+    lastFlushSummary: summary,
+    status,
+  };
+  report.output = args.json ? JSON.stringify(report) : (lines.join('\n') || 'NO_REPLY');
+  return report;
+}
+
+function main(argv = process.argv.slice(2)) {
+  const report = runMaintenance(argv);
+  console.log(report.output);
+  return report;
 }
 
 module.exports = {
+  applySectionTransforms,
   main,
   classifyJournalHealth,
+  contractSignature,
+  structureMatchesContract,
+  authoredContentPreserved,
   isCatastrophicJournalShrink,
   detectConflictingJournalWriters,
   journalMetrics,
   loadConfig,
   normalizeSections,
+  requiresDeferredBacklinkAttention,
   renderJournal,
   resolveDateSpec,
   resolveJournalDir,
+  runMaintenance,
+  stripLeadingRecoveryScaffold,
   syncOneDate,
   today,
 };

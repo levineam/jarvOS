@@ -23,6 +23,12 @@ const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-cli-'));
 try {
   const workspace = path.join(tmp, 'workspace');
   const vault = path.join(tmp, 'vault');
+  const controlPlaneHost = path.join(tmp, 'control-plane-host.js');
+  const controlPlaneSource = path.join(ROOT, 'modules', 'jarvos-control-plane', 'src', 'index.js');
+  fs.writeFileSync(controlPlaneHost, [
+    `const { createApplicationService, createMemoryApplicationStore } = require(${JSON.stringify(controlPlaneSource)});`,
+    "module.exports = () => createApplicationService({ store: createMemoryApplicationStore(), resolveCredential: () => null, canRead: () => false, policy: () => ({ outcome: 'deny' }) });",
+  ].join('\n'), 'utf8');
   const env = {
     ...process.env,
     JARVOS_YES: '1',
@@ -32,7 +38,12 @@ try {
     JARVOS_VAULT_PATH: vault,
     JARVOS_WORKSPACE_PATH: workspace,
     JARVOS_RUNTIME: 'minimal',
+    JARVOS_CONTROL_PLANE_SERVICE_MODULE: controlPlaneHost,
   };
+  assert.equal(
+    require(path.join(ROOT, 'modules', 'jarvos-control-plane', 'scripts', 'jarvos-manager.js')).verifyHostService(controlPlaneHost).ok,
+    true,
+  );
 
   const help = run(['--help']);
   assert.equal(help.status, 0, help.stderr || help.stdout);
@@ -91,6 +102,15 @@ try {
   assert.equal(legacyInit.status, 0, legacyInit.stderr || legacyInit.stdout);
   assert.ok(fs.existsSync(path.join(legacyWorkspace, 'jarvos.config.json')));
 
+  // Fresh generic minimal install: no private host service configured.
+  const envWithoutHost = { ...env };
+  delete envWithoutHost.JARVOS_CONTROL_PLANE_SERVICE_MODULE;
+  const doctorNoHost = run(['doctor', '--profile', 'minimal', '--workspace', workspace], { env: envWithoutHost });
+  assert.equal(doctorNoHost.status, 0, doctorNoHost.stderr || doctorNoHost.stdout);
+  assert.match(doctorNoHost.stdout, /PASS control-plane-module/);
+  assert.match(doctorNoHost.stdout, /host service not configured/);
+  assert.match(doctorNoHost.stdout, /READY/);
+
   const doctor = run(['doctor', '--profile', 'minimal', '--workspace', workspace], { env });
   assert.equal(doctor.status, 0, doctor.stderr || doctor.stdout);
   assert.match(doctor.stdout, /PASS node-version/);
@@ -99,6 +119,8 @@ try {
   assert.match(doctor.stdout, /PASS vault-path/);
   assert.match(doctor.stdout, /PASS vault-path-stale/);
   assert.match(doctor.stdout, /PASS journal-conflict/);
+  assert.match(doctor.stdout, /PASS control-plane-module/);
+  assert.match(doctor.stdout, /authenticated host service/);
   assert.match(doctor.stdout, /READY/);
 
   const jsonDoctor = run(['doctor', '--profile=minimal', '--workspace', workspace, '--json'], { env });
@@ -106,6 +128,17 @@ try {
   const report = JSON.parse(jsonDoctor.stdout);
   assert.equal(report.ok, true);
   assert.equal(report.profile.id, 'minimal');
+
+  // A configured but unusable host fails doctor without leaking the module path.
+  const badHostEnv = {
+    ...env,
+    JARVOS_CONTROL_PLANE_SERVICE_MODULE: path.join(tmp, 'missing-host.js'),
+  };
+  const doctorBadHost = run(['doctor', '--profile', 'minimal', '--workspace', workspace], { env: badHostEnv });
+  assert.notEqual(doctorBadHost.status, 0);
+  assert.match(doctorBadHost.stdout, /FAIL control-plane-module/);
+  assert.match(doctorBadHost.stdout, /configure a usable JARVOS_CONTROL_PLANE_SERVICE_MODULE/);
+  assert.doesNotMatch(doctorBadHost.stdout, /missing-host\.js/);
 
   console.log('CLI smoke tests passed.');
 } finally {

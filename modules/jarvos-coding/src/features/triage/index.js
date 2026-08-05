@@ -9,16 +9,24 @@ const {
 } = require('../../lifecycle/policy');
 const { classifyProductFit } = require('./product-fit');
 
+// No default active release parent/version: per docs/release-process.md,
+// "v0.3-era release parents are historical and should not receive new
+// candidates" and "If no parent exists yet, create one before claiming
+// release readiness." A stale hardcoded parent here previously caused
+// unconfigured callers to silently auto-attach new candidates to the
+// long-closed v0.3 lane (SUP-1957) instead of visibly failing closed.
+// Callers MUST supply `activeVersion`/`activeReleaseIssue` for the current
+// lane; omitting them is treated as missing release-intake configuration.
 const DEFAULT_CONFIG = {
   enabled: true,
-  activeVersion: 'v0.3.0',
-  activeReleaseIssue: 'SUP-1957',
+  activeVersion: null,
+  activeReleaseIssue: null,
   labels: {
     base: 'jarvos',
     candidate: 'jarvos-release-candidate',
     future: 'jarvos-future-release',
     ops: 'jarvos-release-ops',
-    release: 'release-v0.3.0',
+    release: null,
   },
   productMarkers: [
     '/Users/andrew/jarvOS',

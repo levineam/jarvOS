@@ -95,9 +95,55 @@ await codex.register();
 await codex.runTakeIssueToDone({ issueIdentifier: 'SUP-2214' });
 ```
 
-`codingHostAdapterContract('claude-code' | 'codex')` remains the descriptor-only
+`codingHostAdapterContract('claude-code' | 'openclaw' | 'codex')` remains the descriptor-only
 contract for registries, docs, and setup tools that need to inspect support
 without instantiating a runtime adapter.
+
+## Control-plane compatibility
+
+`createCodingControlPlanePort(...)` is the public, fenced compatibility port
+for a control-plane manager. It accepts only the scoped
+`coding.take-issue-to-done` command, invokes a selected portable host adapter,
+and returns the orchestrator's final checkpoint plus pull-request,
+post-merge, and close evidence. It does not create extra PR lifecycle states or
+import any private host behavior.
+
+```js
+const { createCodingControlPlanePort } = require('@jarvos/coding');
+
+const port = createCodingControlPlanePort({ host: 'openclaw', hostAdapter });
+const execution = await port.executeFenced(command, {
+  fence: 7,
+  assertCurrentFence: () => leaseIsCurrent(),
+});
+const verification = await port.verify(command, { execution });
+```
+
+The port is fail-closed at both execute and verify:
+
+- `verify` returns `satisfied` only for successful terminal close evidence
+  (`closed` / `verified` / `done`), never for `deferred`, `failed`, or missing
+  close stages
+- execute rejects unless the host finished with successful close evidence and a
+  ready complete-phase submission gate
+- repeated delivery of an already-completed command id returns the original
+  evidence **before** fence assertion (redelivery after lease release stays
+  idempotent)
+- the fence is asserted before dispatch, at final side-effect stage boundaries
+  (`pullRequest`, `postMergeSweep`, `verifyClose`), and again before returning
+
+Session-loss recovery is pointer-first and **reattachment-only**. A command
+checkpoint is passed as `resumeFrom`, and `runTakeIssueToDone` treats it solely
+as a branch/PR/session reattachment hint so adapters can reuse worktrees and
+open PRs when they support it. Resume/checkpoint is **never** proof of reviews,
+cleanliness, submission readiness, merge, or issue close:
+
+- stages always re-run or are authoritatively revalidated through live adapters
+- the orchestrator does **not** synthesize successful skipped-stage evidence
+- terminal close must come from the live tracker/adapter under a current fence
+- `verify` independently recomputes the complete-phase submission gate from
+  durable stage evidence and ignores any caller-cached `submissionGate.ready`
+- gate input never hardcodes success fields such as `git.clean: true`
 
 ```js
 const gate = evaluateSubmissionGate({
@@ -190,6 +236,8 @@ The module boundary is intentionally future-feature friendly:
 - `src/features/orchestrator/` owns the executable take-an-issue-to-done loop.
 - `src/features/session-state/` owns pointer-first continuity state for live
   artifact handoff and code-thread checkpoints.
+- `src/adapters/hosts.js` owns host selection plus the narrow control-plane
+  compatibility port; the control plane never imports coding internals.
 - `src/adapters/` translates external systems into portable shapes. The current
   Paperclip adapter maps SUP-1956 release-intake classifications into
   `releaseFit` without changing the release-intake source of truth.

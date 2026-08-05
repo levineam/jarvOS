@@ -4,16 +4,125 @@ Release sections describe user-facing jarvOS changes. Historical public-doc sync
 
 ## [Unreleased]
 
+Staging area for the active v1.0.0 clean-machine confidence lane (Paperclip
+SUP-3548). These entries are merged on `main` after v0.7.0 and are **not** a
+published release. Publication still requires Andrew approval and a green
+`npm run release:check` after `package.json` is intentionally bumped.
+
 ### Added
-- Make generated LLM-wiki buildable as a visible, managed Markdown surface from
+- Land the orphaned 2026-07-09 `STRATEGY.md` and recommendable public-release
+  plan as durable, reviewable drafts (not ratified work queues), with
+  cold-install and CI premises re-verified against shipped v0.7.0 (#116).
+- Add `jarvos-secondbrain-projects`: the Projects record, one markdown page per
+  project holding a Goal, a High-level plan, and a Definition of Done. Projects
+  are plain files in `<vault>/Projects/` so they stay readable without the
+  tooling and can be handed to an assistant as context wholesale. Ships a
+  `jarvos-projects` CLI (`new`, `list`, `check`, `index`); `check` exits
+  non-zero when an ongoing project is missing a section, so it can gate a
+  routine.
+- Add a `## 🚀 Projects` section to the daily journal, listing ongoing projects
+  as wiki-links. It renders first, as the orientation surface, and stays
+  current on backfilled entries because projects are current-state rather than
+  day-scoped.
+
+### Changed
+- Simplify the daily journal to what the user actually writes: remove
+  `Today's Calendar`, `Apple Reminders`, and `Paperclip Inbox`. The contract is
+  now Projects, Notes, Ideas, Journal Entry.
+- Add a `drop` migration action for retired journal sections. The existing
+  `remove` action preserves content under Notes, which is right for authored
+  text but wrong for regenerated daily snapshots — folding stale calendar and
+  reminder lists into Notes would bury real notes. Existing journal files are
+  never rewritten in bulk.
+
+### Fixed
+- Run the full `npm test` suite in CI (with `npm ci`) so module unit tests,
+  release-readiness, and unreleased-drift gates actually execute on every PR
+  and on `main`, instead of only lint/link/secret-scan and the thin smoke
+  script (#115).
+- Stop a single failing journal data source from taking down a whole journal
+  entry. Section fetchers are now called defensively, so a flaky source costs
+  its own section instead of the day's writing.
+- Stop machine-rendered journal sections from counting as authored content in
+  the data-integrity guards. A populated Projects list would otherwise make a
+  journal whose Notes, Ideas, and Journal Entry had been wiped still look
+  populated, suppressing the known-good restore.
+- Add the journal and projects suites to `npm test`, so the journal contract is
+  covered by the CI run added in #115 rather than merely asserted.
+
+## v0.7.0 — 2026-07-19
+
+Control-plane release (SUP-3497): authenticated control-plane application
+service, protected-resource mutation policy, and public human/agent parity.
+
+### Added
+- Add the core authenticated control-plane application-service boundary for
+  adapter request envelopes: approvals bind to action key, capability,
+  expiry, and fence, and fail closed on replay or staleness; list/inspect
+  projections filter by principal sensitivity (SUP-3478, #103).
+- Add a portable protected-resource mutation policy layer to
+  `@jarvos/control-plane`: resource identity, owning adapter, and allowed
+  named operations resolve to structured allow/deny/fail-closed decisions
+  with evidence digests, including a Daily Journal identity matcher pattern
+  (SUP-3493, #107).
+- Add an opt-in section-transform seam to `jarvos-secondbrain-journal` so
+  hosts can surgically clean recovered Notes scaffold through maintenance
+  APIs instead of raw writes (SUP-3493, #108).
+- Expose public control-plane parity so humans and supported agent harnesses
+  share the same authenticated, capability-filtered application-service path:
+  `jarvos-manager` (CLI) and `jarvos_control_plane` (MCP via
+  `@jarvos/agent-context`), with host-provided service-module binding,
+  server-side credential resolution, and doctor/setup readiness checks
+  (SUP-3466, #106; merged as `03ea5df597`).
+- Add public `@jarvos/coding` control-plane compatibility for Claude Code,
+  Codex, and OpenClaw host adapters. Coding lifecycles now resume from durable
+  checkpoints, reassert fences at pull-request and closeout boundaries, and
+  fail closed when submission evidence or the final issue-close result is
+  deferred, failed, or incomplete (SUP-3470, #112).
+
+### Fixed
+- Treat placeholder-only `[Unreleased]` bullets as empty release tracking and
+  remove the historical v0.3/SUP-1957 default from unconfigured coding triage,
+  so release drift and missing active-parent state fail visibly instead of
+  silently attaching or reporting success (SUP-3496).
+
+### Known Limitations
+- Public CLI/MCP control-plane surfaces still require an installed host that
+  configures `JARVOS_CONTROL_PLANE_SERVICE_MODULE` and binds credentials;
+  public/minimal installs do not ship private host state or multi-manager
+  dogfood.
+- `@jarvos/coding` provides the portable manager and host contracts; live
+  repository credentials, private Paperclip wiring, and host-specific session
+  stores remain the responsibility of the installed host.
+
+## v0.6.3 — 2026-07-16
+
+Patch release for the GBrain-first provider lane and reconciled public
+secondbrain surfaces.
+
+### Added
+- Add the reviewed `@jarvos/ontology` provider pipeline so coding agents can
+  consume a bounded hierarchy-of-meaning context packet rather than parse
+  private ontology files directly. Source-backed secondbrain evidence now enters
+  through reviewable candidate and inquiry records before promotion.
+- Make the generated LLM-wiki a visible, managed Markdown surface built from
   source-backed secondbrain sidecars, with safe rebuild guards and documented
   vault/output defaults.
 
 ### Fixes
-- Prefer explicit jarvOS timezone config over ambient `TZ` so journal and note
-  dates do not drift when shells or CI set generic timezone environment.
+- Prefer explicit jarvOS timezone configuration over ambient `TZ` so journal
+  and note dates do not drift when shells or CI set a generic timezone.
 - Keep live `@jarvos/ontology` data out of publish allowlists; public sample
   ontology files now live under `schema/examples/public-ontology/`.
+- Isolate release smoke journal writes so public release verification does not
+  contaminate a caller's configured journal location.
+
+### Known Limitations
+- `@jarvos/gbrain` remains a GBrain-first resolver integration: it prepares
+  curated local content and recall workflows, but does not implement GBrain or
+  ship a private graph.
+- This patch does not add automatic ingestion of private vault content or AI
+  conversations; curated imports and reviewed promotion remain explicit.
 
 ## v0.6.2 — 2026-06-23
 

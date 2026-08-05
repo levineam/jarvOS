@@ -15,6 +15,7 @@ const {
   closeSync,
   unlinkSync,
   statSync,
+  readdirSync,
 } = require('fs');
 const { mkdirSync } = require('node:fs');
 const crypto = require('node:crypto');
@@ -80,6 +81,142 @@ function readDeferredQueue(filePath) {
   if (data.entries === undefined) data.entries = {};
   if (!isPlainObject(data.entries)) throw new Error(`Invalid deferred backlink queue entries: ${filePath}`);
   return data;
+}
+
+function deferredQueuePathForJournalDir(journalDir = getVaultJournalDir()) {
+  return path.join(path.dirname(journalDir), '.jarvos', 'journal-maintenance', 'deferred-backlinks.json');
+}
+
+function queueEvent(entry, event) {
+  const events = Array.isArray(entry.events) ? entry.events : [];
+  return [...events, event];
+}
+
+function readNoteId(notePath) {
+  let content;
+  try {
+    content = readFileSync(notePath, 'utf8');
+  } catch {
+    return null;
+  }
+  const frontmatter = content.match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/);
+  if (!frontmatter) return null;
+  const match = frontmatter[1].match(/^jarvos_note_id:\s*(?:["']([^"']+)["']|([^\s#]+))\s*(?:#.*)?$/m);
+  return (match?.[1] || match?.[2] || '').trim() || null;
+}
+
+function normalizeVaultRelativeNotePath(notePath, vaultRoot = getVaultDir(), notesDir = getVaultNotesDir()) {
+  if (typeof notePath !== 'string' || !notePath.trim()) return null;
+  const candidate = notePath.replace(/\\/g, '/');
+  if (path.isAbsolute(candidate)) return null;
+  const resolved = path.resolve(vaultRoot, candidate);
+  if (!isPathInside(notesDir, resolved) || path.extname(resolved).toLowerCase() !== '.md') return null;
+  const relative = path.relative(vaultRoot, resolved);
+  if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) return null;
+  return relative.split(path.sep).join('/');
+}
+
+function normalizeQueuedNotePath(notePath, journalPath) {
+  if (typeof notePath !== 'string' || !notePath.trim()) return null;
+  const configuredRoot = resolveVaultRootForJournal(journalPath);
+  const journalRoot = path.dirname(path.dirname(path.resolve(journalPath)));
+  const roots = [...new Set([configuredRoot, journalRoot].map((root) => path.resolve(root)))];
+  if (path.isAbsolute(notePath)) {
+    for (const vaultRoot of roots) {
+      const configuredNotesDir = getVaultNotesDir();
+      const notesDir = isPathInside(vaultRoot, configuredNotesDir) ? configuredNotesDir : path.join(vaultRoot, 'Notes');
+      if (!isPathInside(notesDir, notePath) || !isPathInside(vaultRoot, notePath)) continue;
+      const relative = path.relative(vaultRoot, path.resolve(notePath));
+      if (path.extname(relative).toLowerCase() === '.md') return relative.split(path.sep).join('/');
+    }
+    return null;
+  }
+  for (const vaultRoot of roots) {
+    const configuredNotesDir = getVaultNotesDir();
+    const notesDir = isPathInside(vaultRoot, configuredNotesDir) ? configuredNotesDir : path.join(vaultRoot, 'Notes');
+    const normalized = normalizeVaultRelativeNotePath(notePath, vaultRoot, notesDir);
+    if (normalized) return normalized;
+  }
+  return null;
+}
+
+function wikilinkTargetFromNotePath(notePath) {
+  return notePath.replace(/\.md$/i, '').split(path.sep).join('/');
+}
+
+function recursivelyFindNotesById(notesDir, noteId) {
+  const matches = [];
+  function visit(dir) {
+    let entries;
+    try {
+      entries = readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      const candidate = path.join(dir, entry.name);
+      if (entry.isDirectory()) visit(candidate);
+      else if (entry.isFile() && entry.name.toLowerCase().endsWith('.md') && readNoteId(candidate) === noteId) matches.push(candidate);
+    }
+  }
+  visit(notesDir);
+  return matches;
+}
+
+function canonicalLegacyNotePath(notesDir, noteTitle) {
+  if (typeof noteTitle !== 'string' || !noteTitle || noteTitle.includes('/') || noteTitle.includes('\\') || noteTitle.includes('\0')) return null;
+  const candidate = path.join(notesDir, `${noteTitle}.md`);
+  return isPathInside(notesDir, candidate) ? candidate : null;
+}
+
+function classifyDeferredBacklink(entry, {
+  vaultRoot = getVaultDir(),
+  notesDir = getVaultNotesDir(),
+  journalDir,
+} = {}) {
+  if (!isPlainObject(entry)) return { status: 'unresolved', reason: 'invalid-entry' };
+  if (typeof entry.journalPath !== 'string' || !entry.journalPath
+    || (journalDir && !isPathInside(journalDir, entry.journalPath))) {
+    return { status: 'unresolved', reason: 'journal-path-unsafe' };
+  }
+  const isV2 = Boolean(entry.noteId || entry.notePath);
+  if (!isV2) {
+    if (typeof entry.noteTitle !== 'string' || !entry.noteTitle || typeof entry.journalPath !== 'string') {
+      return { status: 'unresolved', reason: 'legacy-entry-missing-title-or-journal' };
+    }
+    try {
+      const journal = existsSync(entry.journalPath) ? readFileSync(entry.journalPath, 'utf8') : '';
+      if (journal.split(/\r?\n/).some((line) => linkLineRegex(entry.noteTitle).test(line))) {
+        return { status: 'linked', reason: 'legacy-exact-link-present', noteTitle: entry.noteTitle };
+      }
+    } catch {
+      return { status: 'unresolved', reason: 'legacy-journal-unreadable' };
+    }
+    const canonical = canonicalLegacyNotePath(notesDir, entry.noteTitle);
+    if (!canonical) return { status: 'unresolved', reason: 'legacy-note-title-unsafe' };
+    return existsSync(canonical)
+      ? { status: 'retry', reason: 'legacy-exact-note-present', noteTitle: entry.noteTitle, notePath: path.relative(vaultRoot, canonical).split(path.sep).join('/') }
+      : { status: 'unresolved', reason: 'legacy-exact-note-missing' };
+  }
+
+  if (typeof entry.noteId !== 'string' || !entry.noteId || typeof entry.notePath !== 'string' || !entry.notePath || typeof entry.journalPath !== 'string') {
+    return { status: 'unresolved', reason: 'v2-entry-missing-identity-or-path' };
+  }
+  const normalizedPath = normalizeVaultRelativeNotePath(entry.notePath, vaultRoot, notesDir);
+  if (!normalizedPath) return { status: 'unresolved', reason: 'v2-note-path-unsafe' };
+  const exactPath = path.resolve(vaultRoot, normalizedPath);
+  if (existsSync(exactPath)) {
+    return readNoteId(exactPath) === entry.noteId
+      ? { status: 'retry', reason: 'v2-exact-identity-present', notePath: normalizedPath, noteTitle: wikilinkTargetFromNotePath(normalizedPath) }
+      : { status: 'unresolved', reason: 'v2-note-identity-mismatch' };
+  }
+  const matches = recursivelyFindNotesById(notesDir, entry.noteId);
+  if (matches.length === 1) {
+    return { status: 'superseded', reason: 'v2-note-moved', notePath: path.relative(vaultRoot, matches[0]).split(path.sep).join('/') };
+  }
+  return matches.length === 0
+    ? { status: 'unresolved', reason: 'v2-note-identity-missing' }
+    : { status: 'unresolved', reason: 'v2-note-identity-conflict', matches: matches.map((match) => path.relative(vaultRoot, match).split(path.sep).join('/')) };
 }
 
 function writeJson(filePath, data) {
@@ -288,32 +425,211 @@ function isTodayJournalPath(journalPath) {
 }
 
 function deferredBacklinksPath(journalPath) {
-  return path.join(path.dirname(path.dirname(journalPath)), '.jarvos', 'journal-maintenance', 'deferred-backlinks.json');
+  return deferredQueuePathForJournalDir(path.dirname(journalPath));
 }
 
-function recordDeferredBacklink({ journalPath, noteTitle, section, reason }) {
+function recordDeferredBacklink({
+  journalPath,
+  noteTitle,
+  section,
+  reason,
+  noteId,
+  notePath,
+  auditState,
+}) {
   const deferredPath = deferredBacklinksPath(journalPath);
+  const normalizedNotePath = normalizeQueuedNotePath(notePath, journalPath);
   const key = crypto.createHash('sha256')
-    .update(`${journalPath}\0${section}\0${noteTitle}`)
+    .update(`${journalPath}\0${section}\0${noteId || normalizedNotePath || noteTitle}`)
     .digest('hex')
     .slice(0, 16);
   withDeferredQueueLock(deferredPath, () => {
     const data = readDeferredQueue(deferredPath);
     const now = new Date().toISOString();
-    data.version = 1;
+    const existing = data.entries[key];
+    data.version = 2;
     data.updatedAt = now;
     data.entries[key] = {
+      ...existing,
       status: 'pending',
       reason,
       noteTitle,
       section,
       journalPath,
-      recordedAt: data.entries[key]?.recordedAt || now,
+      ...(noteId ? { noteId } : {}),
+      ...(normalizedNotePath ? { notePath: normalizedNotePath } : {}),
+      auditState: auditState || existing?.auditState || 'recorded',
+      recordedAt: existing?.recordedAt || now,
       updatedAt: now,
+      events: queueEvent(existing || {}, {
+        at: now,
+        type: 'recorded',
+        status: 'pending',
+        reason,
+      }),
     };
     writeJson(deferredPath, data);
   });
   return { deferredPath, key };
+}
+
+function outcomeSummary(outcomes, deferredPath) {
+  const summary = {
+    checked: 0,
+    linked: 0,
+    pending: 0,
+    unresolved: 0,
+    superseded: 0,
+    queuePath: deferredPath,
+    entries: [],
+  };
+  for (const outcome of outcomes.values()) {
+    summary.checked += 1;
+    summary[outcome.status] += 1;
+    summary.entries.push({ key: outcome.key, status: outcome.status, reason: outcome.reason, ...(outcome.error ? { error: outcome.error } : {}) });
+  }
+  return summary;
+}
+
+function flushDeferredBacklinks({
+  journalDir = getVaultJournalDir(),
+  ownedJournalMutator,
+  dryRun = false,
+  key,
+  vaultRoot = path.dirname(journalDir),
+  notesDir = path.join(path.dirname(journalDir), 'Notes'),
+} = {}) {
+  const deferredPath = deferredQueuePathForJournalDir(journalDir);
+  const snapshot = readDeferredQueue(deferredPath);
+  const outcomes = new Map();
+  for (const [entryKey, entry] of Object.entries(snapshot.entries)) {
+    if (key && entryKey !== key) continue;
+    if (!entry || entry.status !== 'pending') continue;
+    const classification = classifyDeferredBacklink(entry, { vaultRoot, notesDir, journalDir });
+    if (classification.status === 'linked' || classification.status === 'unresolved' || classification.status === 'superseded') {
+      outcomes.set(entryKey, { key: entryKey, ...classification });
+      continue;
+    }
+    if (dryRun) {
+      outcomes.set(entryKey, { key: entryKey, status: 'pending', reason: classification.reason, proposed: 'retry' });
+      continue;
+    }
+    try {
+      const result = linkNoteToJournal({
+        noteTitle: classification.noteTitle,
+        section: entry.section || '📝 Notes',
+        journalPath: entry.journalPath,
+        createIfMissing: true,
+        ownedJournalMutator,
+        deferOnFailure: false,
+        noteId: entry.noteId,
+        notePath: classification.notePath,
+      });
+      outcomes.set(entryKey, { key: entryKey, status: 'linked', reason: result.alreadyPresent ? 'exact-link-present' : 'linked', result });
+    } catch (error) {
+      outcomes.set(entryKey, { key: entryKey, status: 'pending', reason: classification.reason, error: error.message });
+    }
+  }
+
+  const summary = outcomeSummary(outcomes, deferredPath);
+  if (dryRun) return { ...summary, dryRun: true };
+
+  const now = new Date().toISOString();
+  withDeferredQueueLock(deferredPath, () => {
+    const latest = readDeferredQueue(deferredPath);
+    for (const [entryKey, outcome] of outcomes) {
+      const current = latest.entries[entryKey];
+      if (!current) continue; // An operator removed it after the snapshot; never resurrect it.
+      const snapshotEntry = snapshot.entries[entryKey];
+      if (snapshotEntry?.updatedAt && current.updatedAt !== snapshotEntry.updatedAt) continue;
+      const base = { ...current, updatedAt: now };
+      if (outcome.status === 'pending') {
+        latest.entries[entryKey] = {
+          ...base,
+          attempts: (Number.isInteger(current.attempts) ? current.attempts : 0) + 1,
+          lastAttemptAt: now,
+          lastError: outcome.error || undefined,
+          events: queueEvent(current, {
+            at: now,
+            type: 'retry-failed',
+            status: 'pending',
+            reason: outcome.reason,
+            error: outcome.error,
+          }),
+        };
+      } else {
+        latest.entries[entryKey] = {
+          ...base,
+          status: outcome.status,
+          ...(outcome.status === 'linked' ? { linkedAt: now, result: outcome.result && { alreadyPresent: Boolean(outcome.result.alreadyPresent) } } : {}),
+          terminalAt: outcome.status === 'linked' ? undefined : now,
+          terminalReason: outcome.status === 'linked' ? undefined : outcome.reason,
+          events: queueEvent(current, {
+            at: now,
+            type: outcome.status === 'linked' ? 'linked' : 'terminal',
+            status: outcome.status,
+            reason: outcome.reason,
+          }),
+        };
+      }
+    }
+    latest.version = 2;
+    latest.updatedAt = now;
+    latest.lastFlushAt = now;
+    latest.lastFlushSummary = summary;
+    writeJson(deferredPath, latest);
+  });
+  return summary;
+}
+
+function reconcileDeferredBacklink({
+  journalDir = getVaultJournalDir(),
+  key,
+  notePath,
+  vaultRoot = path.dirname(journalDir),
+  notesDir = path.join(path.dirname(journalDir), 'Notes'),
+  dryRun = false,
+} = {}) {
+  if (!key || !notePath) throw new Error('key and notePath are required for manual reconciliation');
+  const deferredPath = deferredQueuePathForJournalDir(journalDir);
+  const queue = readDeferredQueue(deferredPath);
+  const entry = queue.entries[key];
+  if (!entry) throw new Error(`Deferred backlink key not found: ${key}`);
+  const normalizedPath = normalizeVaultRelativeNotePath(notePath, vaultRoot, notesDir);
+  if (!normalizedPath) throw new Error(`Note path is not a safe Notes-relative Markdown path: ${notePath}`);
+  const actualPath = path.resolve(vaultRoot, normalizedPath);
+  const noteId = readNoteId(actualPath);
+  if (!noteId) throw new Error(`Selected note has no jarvos_note_id: ${normalizedPath}`);
+  if (entry.noteId && entry.noteId !== noteId) throw new Error(`Selected note identity does not match deferred backlink ${key}`);
+  const result = { key, status: 'pending', noteId, notePath: normalizedPath, adoptedIdentity: !entry.noteId, dryRun };
+  if (dryRun) return result;
+  const now = new Date().toISOString();
+  withDeferredQueueLock(deferredPath, () => {
+    const latest = readDeferredQueue(deferredPath);
+    const current = latest.entries[key];
+    if (!current) throw new Error(`Deferred backlink key disappeared during reconciliation: ${key}`);
+    if (current.noteId && current.noteId !== noteId) throw new Error(`Selected note identity does not match deferred backlink ${key}`);
+    latest.entries[key] = {
+      ...current,
+      status: 'pending',
+      noteId,
+      notePath: normalizedPath,
+      updatedAt: now,
+      reopenedAt: now,
+      events: queueEvent(current, {
+        at: now,
+        type: 'manual-reconciliation',
+        status: 'pending',
+        previousStatus: current.status,
+        notePath: normalizedPath,
+        adoptedIdentity: !current.noteId,
+      }),
+    };
+    latest.version = 2;
+    latest.updatedAt = now;
+    writeJson(deferredPath, latest);
+  });
+  return { ...result, dryRun: false };
 }
 
 function linkNoteToTodayJournal(noteTitle, section = '📝 Notes') {
@@ -328,6 +644,9 @@ function linkNoteToJournal({
   journalPath = todayPath(),
   createIfMissing = true,
   ownedJournalMutator = mutateJournalThroughObsidian,
+  noteId,
+  notePath,
+  deferOnFailure = true,
 } = {}) {
   if (!noteTitle) throw new Error('noteTitle is required');
 
@@ -355,11 +674,14 @@ function linkNoteToJournal({
       mutation = { alreadyPresent: false, mutationOwner: 'jarvos-filesystem' };
     }
   } catch (error) {
+    if (!deferOnFailure) throw error;
     const deferred = recordDeferredBacklink({
       journalPath,
       noteTitle,
       section: normalizedSection,
       reason: 'journal-mutation-failed',
+      noteId,
+      notePath,
     });
     const wrapped = new Error(`${error.message}; backlink queued at ${deferred.deferredPath}`);
     wrapped.cause = error;
@@ -480,11 +802,18 @@ module.exports = {
   todayPath,
   dateFromJournalPath,
   deferredBacklinksPath,
+  deferredQueuePathForJournalDir,
   ensureJournalFile,
   escapeRegex,
+  isPathInside,
   linkNoteInSection,
   linkNoteToTodayJournal,
   linkNoteToJournal,
+  flushDeferredBacklinks,
+  reconcileDeferredBacklink,
+  classifyDeferredBacklink,
+  normalizeVaultRelativeNotePath,
+  readNoteId,
   mutateJournalThroughObsidian,
   normalizeSectionName,
   obsidianMutationScript,

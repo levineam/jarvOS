@@ -30,7 +30,6 @@ const IDEAS_HEADING = '## 💡 Ideas';
 const NOTES_HEADING = '## 📝 Notes';
 const DECISIONS_HEADING = '## ✅ Decisions';
 const REMEMBERED_HEADING = '## 🧠 Remembered';
-const FLAGGED_HEADING = '## 📌 Flagged';
 
 function inferTitle(capture = {}, fallbackPrefix = 'Captured Note', options = {}) {
   const explicit = String(capture.title || '').trim();
@@ -79,15 +78,17 @@ function buildNoteContent(capture = {}, route = NOTE) {
 }
 
 function isSubstantiveIdea(capture = {}) {
+  if (
+    capture.createNote === true
+    || capture.createDurableNote === true
+    || capture.durable === true
+    || capture.durableNote === true
+    || capture.standaloneNote === true
+  ) {
+    return true;
+  }
   if (typeof capture.substantive === 'boolean') return capture.substantive;
-
-  const text = primaryText(capture);
-  const nonEmptyLines = text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
-
   if (String(capture.title || '').trim()) return true;
-  if (nonEmptyLines.length >= 2) return true;
-  if (text.length >= 140) return true;
-  if (/\b(?:because|connects?|relates?|depends on|similar to|linked to|searchable)\b/i.test(text)) return true;
   return false;
 }
 
@@ -158,21 +159,10 @@ function buildKeywordRoutingPlan(capture = {}, options = {}) {
   };
 }
 
-function shouldFlagForReview({ keywordPlan, capture, salienceClass, confidence }) {
-  if (!keywordPlan.ignored) return false;
-  if (typeof confidence !== 'number') return false;
-  if (confidence < REVIEW_CONFIDENCE_MIN || confidence >= REVIEW_CONFIDENCE_MAX) return false;
-
-  const text = primaryText(capture);
-  if (text.length < 20) return false;
-
-  const signals = Array.isArray(capture.signals) ? capture.signals : [];
-  if (signals.some((signal) => ['casual', 'question_only', 'too_short'].includes(signal))) {
-    return false;
-  }
-
-  return salienceClass === 'nothing' || Boolean(salienceClass);
+function shouldFlagForReview() {
+  return false;
 }
+
 
 function buildJournalAction(plan) {
   if (plan.ignored || !plan.journalSection || !plan.journalLine) return null;
@@ -287,19 +277,6 @@ function buildSkillInvocations(plan) {
     ));
   }
 
-  if (plan.route === 'flagged' && actionsByKind.has('journal')) {
-    invocations.push(buildSkillInvocation(
-      'idea-parking',
-      actionsByKind.get('journal'),
-      {
-        text: primaryText(plan.capture),
-        salienceClass: plan.salienceClass || undefined,
-        confidence: plan.confidence ?? undefined,
-        date: plan.date,
-      },
-      'Medium-confidence capture candidates are parked for review.',
-    ));
-  }
 
   if (actionsByKind.has(MEMORY)) {
     invocations.push(buildSkillInvocation(
@@ -365,18 +342,6 @@ function buildThreePackagePlan(capture = {}, options = {}) {
         created_from: capture.date ? `journal/${capture.date}` : 'journal',
       };
     }
-  } else if (shouldFlagForReview({ keywordPlan, capture, salienceClass, confidence })) {
-    const text = primaryText(capture);
-    keywordPlan.ignored = false;
-    keywordPlan.route = 'flagged';
-    keywordPlan.defaultedToNoteBias = false;
-    keywordPlan.flaggedForReview = true;
-    keywordPlan.journalSection = FLAGGED_HEADING;
-    keywordPlan.journalLine = `- ${text}`;
-    keywordPlan.createNote = false;
-    keywordPlan.noteTitle = '';
-    keywordPlan.noteContent = '';
-    keywordPlan.noteFrontmatter = null;
   }
 
   if (keywordPlan.ignored && (capture.workIntake || capture.routeToWork || capture.createIssue)) {
@@ -475,7 +440,6 @@ module.exports = {
   NOTES_HEADING,
   DECISIONS_HEADING,
   REMEMBERED_HEADING,
-  FLAGGED_HEADING,
   buildKeywordRoutingPlan,
   buildNoteContent,
   buildRoutingPlan: buildKeywordRoutingPlan,

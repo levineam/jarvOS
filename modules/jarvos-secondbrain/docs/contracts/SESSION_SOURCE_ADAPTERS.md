@@ -10,7 +10,18 @@ about a specific person's vault, machine paths, Paperclip state, or credentials.
 - `openclaw`
 - `codex`
 - `claude-code`
-- `hermes`
+
+Each source may also have an optional GBrain MCP connection. That connection is
+runtime configuration, not part of the captured session payload. The setup smoke
+for a runtime should prove:
+
+- `gbrain --version` reports 0.42.52.0 or newer;
+- `gbrain status --fast --json` returns structured status without secrets;
+- `gbrain advisor --json` is available;
+- the target runtime has been connected with the current GBrain connect flow,
+  using an explicit MCP URL, such as
+  `gbrain connect <https://brain.example.com/mcp> --agent codex --install --yes`
+  or the same command with `--agent claude-code`.
 
 Future tools should add a thin adapter around the same common normalizer when
 their local session format is available.
@@ -49,3 +60,21 @@ Public adapters may carry caller-provided paths as source pointers, but fixtures
 and docs must use portable synthetic examples. Andrew's vault content, real raw
 transcripts, credentials, private issue state, and machine-specific config belong
 outside public jarvOS packages.
+
+GBrain tokens, bearer credentials, OAuth state, and MCP config paths must never
+be embedded in public fixtures or session captures. Adapters may report a
+connection state such as `connected`, `missing`, or `unknown`, but they should not
+print token values or provider secret material.
+
+## Capture Boundary
+
+Agents can use GBrain for brain-native lookup and writeback before or after a
+session capture. They must not use that as a shortcut around `jarvos-secondbrain`
+when the user asks for a note, journal entry, source-material capture, or
+provenance-preserving artifact. The canonical capture path remains:
+
+1. Normalize the tool session into a `CaptureEvent` v2.
+2. Route through the shared capture contract.
+3. Write notes and journal backlinks through `jarvos-secondbrain`.
+4. Queue GBrain or memory-wiki downstream work from the generated knowledge
+   artifact when privacy rules allow it.

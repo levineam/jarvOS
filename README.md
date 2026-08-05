@@ -315,10 +315,11 @@ is private.**
 
 ## Release Status
 
-`v0.6.2` is the current public preview release. It is a patch on the focused
-v0.6.0 secondbrain cut for AI coding-tool capture determinism, intentional note
-and idea capture, canonical Obsidian routing, source-backed provenance,
-generated knowledge surfaces, and retrieval status.
+`v0.7.0` is the current public preview release. It is the post-v0.6.3
+control-plane release: an authenticated control-plane application service, a
+protected-resource mutation policy layer, public human/agent parity for that
+service (`jarvos-manager` CLI and `jarvos_control_plane` MCP), and a portable
+`@jarvos/coding` control-plane compatibility layer for supported agent hosts.
 
 Useful release files:
 

@@ -478,8 +478,22 @@ function optimizeNoteKnowledge({ filePath, notesDir, knowledgeDir: providedKnowl
   };
 }
 
+function clearAutomaticPromotionQueues({ filePath, notesDir, knowledgeDir: providedKnowledgeDir = null }) {
+  const knowledgeDir = path.resolve(providedKnowledgeDir || defaultKnowledgeDir(notesDir));
+  const sourcePath = sourcePathFor(filePath, notesDir);
+  const queuePaths = [
+    path.join(knowledgeDir, 'gbrain-import-queue.json'),
+    path.join(knowledgeDir, 'memory-wiki-queue.json'),
+  ];
+  for (const queuePath of queuePaths) {
+    if (fs.existsSync(queuePath)) removeBySource(queuePath, sourcePath);
+  }
+  return { sourcePath };
+}
+
 module.exports = {
   buildArtifact,
+  clearAutomaticPromotionQueues,
   defaultKnowledgeDir,
   exclusionReasons,
   optimizeNoteKnowledge,

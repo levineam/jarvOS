@@ -11,7 +11,12 @@ const os = require('os');
 const path = require('path');
 const test = require('node:test');
 
-const { checkVaultPathStale, checkJournalConflict } = require('../lib/jarvos-cli');
+const {
+  assessControlPlaneDoctor,
+  checkControlPlaneModule,
+  checkVaultPathStale,
+  checkJournalConflict,
+} = require('../lib/jarvos-cli');
 
 function scratch() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-doctor-'));
@@ -168,6 +173,96 @@ test('journal-conflict ignores Periodic Notes when its daily section is disabled
     const configPath = writeConfig(tmp, { vaultPath: vault });
     const res = checkJournalConflict(configPath);
     assert.equal(res.ok, true, res.detail);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('assessControlPlaneDoctor distinguishes export, runtime, dependency, and host failures', () => {
+  const base = {
+    hasCreateService: true,
+    hasContextControlPlane: true,
+    hasVerifyHost: true,
+    compatible: true,
+    dependency: true,
+    hostConfigured: false,
+    hostReady: false,
+  };
+
+  assert.deepEqual(assessControlPlaneDoctor(base), {
+    ok: true,
+    detail: 'public module exports, package dependency, and shared CLI/MCP runtime declarations validated (host service not configured)',
+  });
+
+  assert.match(
+    assessControlPlaneDoctor({ ...base, hasCreateService: false }).detail,
+    /missing public exports \(createControlPlaneService\)/,
+  );
+  assert.match(
+    assessControlPlaneDoctor({ ...base, compatible: false }).detail,
+    /Codex runtime must declare the control-plane module/,
+  );
+  assert.match(
+    assessControlPlaneDoctor({ ...base, dependency: false }).detail,
+    /@jarvos\/agent-context must depend on @jarvos\/control-plane@0\.1\.0/,
+  );
+  assert.match(
+    assessControlPlaneDoctor({ ...base, hostConfigured: true, hostReady: false }).detail,
+    /configure a usable JARVOS_CONTROL_PLANE_SERVICE_MODULE/,
+  );
+  assert.doesNotMatch(
+    assessControlPlaneDoctor({ ...base, compatible: false, hostConfigured: true, hostReady: false }).detail,
+    /JARVOS_CONTROL_PLANE_SERVICE_MODULE \(doctor/,
+  );
+  assert.deepEqual(assessControlPlaneDoctor({ ...base, hostConfigured: true, hostReady: true }), {
+    ok: true,
+    detail: 'authenticated host service, package dependency, and shared CLI/MCP runtime declarations validated',
+  });
+});
+
+test('checkControlPlaneModule passes a fresh minimal install without a private host service', () => {
+  const previous = process.env.JARVOS_CONTROL_PLANE_SERVICE_MODULE;
+  try {
+    delete process.env.JARVOS_CONTROL_PLANE_SERVICE_MODULE;
+    const res = checkControlPlaneModule({ env: { ...process.env } });
+    assert.equal(res.ok, true, res.detail);
+    assert.match(res.detail, /host service not configured/);
+  } finally {
+    if (previous === undefined) delete process.env.JARVOS_CONTROL_PLANE_SERVICE_MODULE;
+    else process.env.JARVOS_CONTROL_PLANE_SERVICE_MODULE = previous;
+  }
+});
+
+test('checkControlPlaneModule fails when a configured host service is unusable', () => {
+  const tmp = scratch();
+  try {
+    const decoy = path.join(tmp, 'not-a-host.js');
+    fs.writeFileSync(decoy, 'module.exports = { hello: true };\n', 'utf8');
+    const res = checkControlPlaneModule({
+      env: { ...process.env, JARVOS_CONTROL_PLANE_SERVICE_MODULE: decoy },
+    });
+    assert.equal(res.ok, false);
+    assert.match(res.detail, /configure a usable JARVOS_CONTROL_PLANE_SERVICE_MODULE/);
+    assert.equal(res.detail.includes(decoy), false);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('checkControlPlaneModule passes when a configured host service is ready', () => {
+  const tmp = scratch();
+  try {
+    const controlPlaneSource = path.join(__dirname, '..', 'modules', 'jarvos-control-plane', 'src', 'index.js');
+    const host = path.join(tmp, 'ready-host.js');
+    fs.writeFileSync(host, [
+      `const { createApplicationService, createMemoryApplicationStore } = require(${JSON.stringify(controlPlaneSource)});`,
+      "module.exports = () => createApplicationService({ store: createMemoryApplicationStore(), resolveCredential: () => null, canRead: () => false, policy: () => ({ outcome: 'deny' }) });",
+    ].join('\n'), 'utf8');
+    const res = checkControlPlaneModule({
+      env: { ...process.env, JARVOS_CONTROL_PLANE_SERVICE_MODULE: host },
+    });
+    assert.equal(res.ok, true, res.detail);
+    assert.match(res.detail, /authenticated host service/);
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
   }

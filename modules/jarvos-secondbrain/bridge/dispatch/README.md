@@ -13,7 +13,7 @@ Current capture skills:
 
 - `journal-entry` writes idea captures to the journal package.
 - `note-creation` creates durable notes through the storage adapter and links them from the journal.
-- `flagged-review` writes medium-confidence captures to the journal `## 📌 Flagged` review section.
+- Medium-confidence captures are ignored by default; they no longer create a journal review section.
 - `memory-promotion` promotes high-confidence durable salience through a memory adapter.
 - `work-intake` prepares commitment/work candidates for a tracker adapter such as Paperclip.
 

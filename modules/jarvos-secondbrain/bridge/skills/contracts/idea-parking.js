@@ -2,8 +2,8 @@
 
 module.exports = {
   name: 'idea-parking',
-  version: '0.2.0',
-  description: 'Park low-confidence capture candidates for review instead of promoting them as canonical notes.',
+  version: '0.3.0',
+  description: 'Optional contract for parking low-confidence capture candidates in a caller-provided review queue instead of promoting them as canonical notes.',
   triggers: [
     {
       source: 'classifier',
@@ -14,8 +14,8 @@ module.exports = {
           max: 0.799,
         },
       },
-      action: 'append the candidate to the journal Flagged section for human review',
-      reason: 'Medium-confidence ideas should remain visible without polluting durable notes.',
+      action: 'park the candidate only when a caller explicitly provides a review queue',
+      reason: 'Medium-confidence ideas can remain reviewable for opt-in workflows without adding an unclear default journal section.',
     },
     {
       source: 'capture-router',
@@ -24,7 +24,7 @@ module.exports = {
         captured: false,
       },
       action: 'park the ignored candidate in review state when the capture caller opts into parking',
-      reason: 'The capture hook already exposes the advisory medium-confidence path.',
+      reason: 'The default capture route ignores medium-confidence candidates; opt-in callers can still review them elsewhere.',
     },
     {
       source: 'capture-router',
@@ -39,7 +39,7 @@ module.exports = {
   input: {
     type: 'object',
     additionalProperties: true,
-    required: ['text', 'confidence'],
+    required: ['text', 'confidence', 'reviewQueue'],
     properties: {
       text: { type: 'string', minLength: 1 },
       content: { type: 'string' },
@@ -54,6 +54,11 @@ module.exports = {
         type: 'array',
         items: { type: 'string' },
       },
+      reviewQueue: {
+        type: 'string',
+        minLength: 1,
+        description: 'Caller-owned queue or surface. The default journal no longer supplies one.',
+      },
     },
   },
   output: {
@@ -64,9 +69,9 @@ module.exports = {
       reviewEntry: {
         type: 'object',
         additionalProperties: true,
-        required: ['section', 'line', 'status'],
+        required: ['queue', 'line', 'status'],
         properties: {
-          section: { type: 'string', const: '## 📌 Flagged' },
+          queue: { type: 'string' },
           line: { type: 'string' },
           status: { type: 'string', enum: ['parked-for-review'] },
         },
@@ -76,21 +81,21 @@ module.exports = {
   capabilities: [
     {
       name: 'park-review-candidate',
-      description: 'Append a low-confidence capture candidate to a review queue without creating a canonical note.',
+      description: 'Append a low-confidence capture candidate to an explicit review queue without creating a canonical note.',
       writes: [
         {
-          adapter: 'obsidian',
-          operation: 'appendLineToJournalSection',
-          target: '## 📌 Flagged',
+          adapter: 'review-queue',
+          operation: 'parkReviewCandidate',
+          target: 'caller-provided review queue',
         },
       ],
     },
   ],
   adapters: [
     {
-      name: 'obsidian',
-      module: 'jarvos-secondbrain/adapters/obsidian/src/vault-storage-adapter.js',
-      role: 'journal review queue writer',
+      name: 'review-queue',
+      module: 'caller-provided',
+      role: 'optional review queue writer; not the default journal',
       required: true,
     },
   ],

@@ -1,0 +1,59 @@
+{
+  "$schema": "projects-module-v1",
+  "$doc": "Contract for the Projects record. Projects are plain markdown files in the vault so they stay readable without this tooling, and so an assistant can be handed the whole directory as context. This file controls where they live, what every project page must contain, and which ones the daily journal lists.",
+
+  "vault": {
+    "_comment": "Legacy fallback only: shared path inputs win first (JARVOS_PROJECTS_DIR, then <vault>/Projects derived from JARVOS_VAULT_DIR or jarvos.config.json paths.vault). This value is used only when no shared path input is configured. The '~/...' tilde form is supported.",
+    "projectsDir": "~/Vaults/Vault v3/Projects"
+  },
+
+  "index": {
+    "filename": "index.md",
+    "title": "Projects",
+    "doc": "Generated overview of every project, grouped by status. Regenerated from the project pages; it is a view, not a source of truth. Never hand-edit — edits are overwritten on the next write."
+  },
+
+  "frontmatter": {
+    "type": "project",
+    "defaultStatus": "active",
+    "doc": "Every project page carries `type: project` so vault tooling can find them, plus a status and a created date."
+  },
+
+  "statuses": {
+    "ongoing": ["active", "paused"],
+    "closed": ["done", "abandoned"],
+    "doc": "Only `ongoing` statuses appear in the daily journal. `paused` counts as ongoing on purpose — a paused project is still something to stay aware of, and hiding it is how projects get silently dropped."
+  },
+
+  "sections": {
+    "required": [
+      {
+        "id": "goal",
+        "heading": "## Goal",
+        "prompt": "What outcome does this project produce, and why does it matter?",
+        "description": "The point of the project in plain language."
+      },
+      {
+        "id": "plan",
+        "heading": "## High-level plan",
+        "prompt": "What are the main steps, in rough order?",
+        "description": "Enough of a shape to tell whether the project is on track. Not a task list."
+      },
+      {
+        "id": "definition-of-done",
+        "heading": "## Definition of Done",
+        "prompt": "How will you know this is finished?",
+        "description": "The check that decides whether the project is complete. A project without this cannot be judged on track or off track, which is the main thing `projects check` looks for."
+      }
+    ],
+    "doc": "All three are required on every project page. Order is the render order in the template."
+  },
+
+  "journal": {
+    "sectionId": "projects",
+    "listStatuses": ["active", "paused"],
+    "maxItems": 25,
+    "emptyText": "- No ongoing projects",
+    "doc": "How the daily journal's Projects section is rendered. Titles are emitted as wiki-links so they are clickable in the vault."
+  }
+}

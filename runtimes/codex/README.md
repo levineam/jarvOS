@@ -14,11 +14,45 @@ From the jarvOS repo root:
 The script registers a local stdio MCP server named `jarvos`, enables a Codex
 `SessionStart` hook in `~/.codex/config.toml`, backs up the config before any
 write, and persists the hook's current trusted hash through Codex's app-server
-config path so the hook is runnable in Codex app Local sessions:
+config path so the hook is runnable in Codex app Local sessions.
+
+On a public or minimal install with no private host configured, that command is
+enough: setup registers the shared MCP server without control-plane host
+bindings. `jarvos_control_plane` remains declared on the tool surface; live
+authenticated host operations require the optional bindings below.
+
+### Optional authenticated control-plane host
+
+Private installs that supply an authenticated host service and credential file
+can pass both together. Setup verifies the pair, then registers two non-secret
+environment bindings for the stdio MCP process:
 
 ```bash
-codex mcp add jarvos -- node "$PWD/modules/jarvos-agent-context/scripts/jarvos-mcp.js"
+# Credential file must be absolute, owner-only (mode 0600/0400), and under a
+# trusted non-writable ancestry (same fail-closed bar as CLI/MCP).
+# Setup registers the *path* only — never the secret value.
+umask 077
+printf '%s' "$HOST_CREDENTIAL" > /absolute/path/to/control-plane.credential
+chmod 600 /absolute/path/to/control-plane.credential
+
+JARVOS_CONTROL_PLANE_SERVICE_MODULE=/absolute/path/to/authenticated-host-service.js \
+JARVOS_CONTROL_PLANE_CREDENTIAL_FILE=/absolute/path/to/control-plane.credential \
+  ./runtimes/codex/setup.sh
 ```
+
+- `JARVOS_CONTROL_PLANE_SERVICE_MODULE` — absolute path of the host service module
+- `JARVOS_CONTROL_PLANE_CREDENTIAL_FILE` — absolute path of the owner-only credential file
+
+If either variable is set, both must be present, absolute, and usable. Relative
+paths are rejected. Setup never puts the credential value on `codex mcp add`
+argv and never persists it in `~/.codex/config.toml`. The MCP server (and human
+CLI `--credential-file`) read the credential file at runtime with the same
+strict permission, ownership, and ancestry checks and fail closed if the binding
+is missing, empty, world-readable, untrusted, or under an unsafe writable
+parent. Errors never echo the path or secret. Ambient
+`JARVOS_CONTROL_PLANE_CREDENTIAL` remains valid for non-persisted host sessions
+(for example tests), but setup must not register that variable. The host service
+enforces authorization.
 
 The repo also includes an equivalent hook manifest template for review/reference:
 
@@ -40,6 +74,11 @@ result so Codex startup is not blocked.
 - `jarvos_hydrate` — bounded Codex startup packet with Paperclip current work,
   today's journal, linked notes, the jarvOS ontology context packet, redaction, and a
   hydration report.
+- `jarvos_control_plane` — authenticated request, inspection, evidence, and
+  approval access through the installed host application service. Requires
+  `JARVOS_CONTROL_PLANE_SERVICE_MODULE` (and a credential binding) on the MCP
+  process; without those host bindings the tool is present but not ready for
+  live host operations.
 
 ## Hydration Scope
 

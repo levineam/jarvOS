@@ -1,5 +1,29 @@
 # jarvOS Control Plane
 
+## Authenticated application-service boundary
+
+Public transports are adapters, not authorization authorities. They submit a
+credential and a structured `createRequest` envelope to the core application
+service. The service resolves that credential to an opaque trusted principal,
+then overwrites caller-supplied principal and capability fields before policy or
+projection work. Read/list/inspect/evidence projections invoke the configured
+per-record disclosure policy and are filtered by that principal's capabilities
+and sensitivity ceiling; adapter extensions never appear in public projections.
+Sensitive field paths are validated against the record and redacted structurally
+(including nested command arguments), not treated as literal top-level keys.
+
+Approvals are one-time attestations bound to the exact action key, required
+approver capability, expiry, and that action's keyed fence. They default to the
+independent `control-plane.approve` capability and prohibit creator approval
+unless policy explicitly delegates it. A replay, replacement command, expired
+approval, or stale same-action fence fails closed and must start a fresh
+authorization path; unrelated intake does not invalidate it.
+
+The application service owns only identity, capability/sensitivity policy,
+approval attestations, and projections. It never dispatches a mutation or
+writes `satisfied`, `failed`, or `unverifiable`: those verified terminal
+transitions remain exclusively reconciler-owned.
+
 The jarvOS Control Plane is the portable coordination layer for machine-wide AI
 operations. It discovers resources, compares desired and observed state, applies
 policy, arbitrates mutation ownership, dispatches bounded commands to domain

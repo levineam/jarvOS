@@ -22,9 +22,6 @@ const {
 const {
   createClaudeCodeSessionAdapter,
 } = require('./claude-code');
-const {
-  createHermesSessionAdapter,
-} = require('./hermes');
 
 function createStorageAdapter(options = {}) {
   const kind = String(options.kind || process.env.JARVOS_SECONDBRAIN_ADAPTER || 'obsidian').trim().toLowerCase();
@@ -46,7 +43,6 @@ module.exports = {
   createOpenClawSessionAdapter,
   createCodexSessionAdapter,
   createClaudeCodeSessionAdapter,
-  createHermesSessionAdapter,
   FLAGGED_HEADING,
   IDEAS_HEADING,
   NOTES_HEADING,

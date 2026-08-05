@@ -40,14 +40,14 @@ function createLivePullRequest(options = {}) {
     return String(ref || baseDefault).replace(/^origin\//, '') || baseDefault;
   }
 
-  function findExistingPr(repo, branch) {
-    if (!branch) return null;
-    const args = ['pr', 'view', branch, '--json', 'number,url,title,state,headRefName'];
+  function findPr(repo, ref, options = {}) {
+    if (!ref) return null;
+    const args = ['pr', 'view', String(ref), '--json', 'number,url,title,state,headRefName'];
     if (repo) args.push('--repo', repo);
     const result = run('gh', args, { allowFail: true, timeoutMs: 60000 });
     if (result.status !== 0) return null;
     const parsed = parseJson(result.stdout);
-    if (!parsed || parsed.state !== 'OPEN') return null;
+    if (!parsed || (options.openOnly && parsed.state !== 'OPEN')) return null;
     return parsed;
   }
 
@@ -59,7 +59,28 @@ function createLivePullRequest(options = {}) {
       const branch = input.branch || input.headRefName;
       if (!branch) throw new Error('live openPullRequest requires a branch');
 
-      const existing = findExistingPr(repo, branch);
+      const pointer = input.existingPullRequest || null;
+      const pointerRef = pointer?.number || pointer?.url || null;
+      const revalidated = pointerRef ? findPr(repo, pointerRef) : null;
+      if (revalidated) {
+        const state = String(revalidated.state || '').toUpperCase();
+        const status = state === 'MERGED' ? 'merged' : (state === 'OPEN' ? 'exists' : 'closed');
+        return {
+          schemaVersion: PULL_REQUEST_SCHEMA_VERSION,
+          status,
+          state,
+          ok: state === 'OPEN' || state === 'MERGED',
+          repo,
+          branch: revalidated.headRefName || branch,
+          number: revalidated.number,
+          url: revalidated.url,
+          title: revalidated.title,
+          reattached: true,
+          liveConfirmed: true,
+        };
+      }
+
+      const existing = findPr(repo, branch, { openOnly: true });
       if (existing) {
         return {
           schemaVersion: PULL_REQUEST_SCHEMA_VERSION,
@@ -70,6 +91,7 @@ function createLivePullRequest(options = {}) {
           number: existing.number,
           url: existing.url,
           title: existing.title,
+          state: existing.state,
         };
       }
 
@@ -103,7 +125,7 @@ function createLivePullRequest(options = {}) {
 
       // gh pr create prints the PR URL; re-read to resolve the number reliably.
       const url = (created.stdout || '').trim().split(/\s+/u).find((t) => /\/pull\/\d+/u.test(t)) || null;
-      const opened = findExistingPr(repo, branch);
+      const opened = findPr(repo, branch, { openOnly: true });
       return {
         schemaVersion: PULL_REQUEST_SCHEMA_VERSION,
         status: 'created',

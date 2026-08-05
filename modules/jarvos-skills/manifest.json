@@ -21,22 +21,78 @@
     {
       "name": "workflow-execution",
       "path": "skills/workflow-execution/SKILL.md",
-      "purpose": "Plan, track, package, execute, and verify non-trivial work."
+      "purpose": "Plan, track, package, execute, and verify non-trivial work.",
+      "source": {
+        "revision": "jarvos-skills-v0.3.0",
+        "digest": "e9e0ac2b488fb8b8666fdc3aef095732f5ecba344381988a28ae505abac50e0e",
+        "license": "MIT",
+        "provenance": "jarvOS reviewed source"
+      },
+      "supportedHarnesses": ["generic", "hermes"],
+      "projection": {
+        "mode": "copy",
+        "targets": {
+          "generic": { "path": "{skillsRoot}/workflow-execution/SKILL.md", "renderer": "raw-skill-md" },
+          "hermes": { "path": "{skillsRoot}/workflow-execution/SKILL.md", "renderer": "raw-skill-md" }
+        }
+      }
     },
     {
       "name": "rule-creation",
       "path": "skills/rule-creation/SKILL.md",
-      "purpose": "Wire new behavioral rules into the right governance surface with enforcement assessment."
+      "purpose": "Wire new behavioral rules into the right governance surface with enforcement assessment.",
+      "source": {
+        "revision": "jarvos-skills-v0.3.0",
+        "digest": "7fd80f88977670721adbbbd95f64327474100fb4bc46b51813ce2195cdc678d5",
+        "license": "MIT",
+        "provenance": "jarvOS reviewed source"
+      },
+      "supportedHarnesses": ["generic", "hermes"],
+      "projection": {
+        "mode": "copy",
+        "targets": {
+          "generic": { "path": "{skillsRoot}/rule-creation/SKILL.md", "renderer": "raw-skill-md" },
+          "hermes": { "path": "{skillsRoot}/rule-creation/SKILL.md", "renderer": "raw-skill-md" }
+        }
+      }
     },
     {
       "name": "context-management",
       "path": "skills/context-management/SKILL.md",
-      "purpose": "Maintain compact, coherent always-loaded context and durable memory routing."
+      "purpose": "Maintain compact, coherent always-loaded context and durable memory routing.",
+      "source": {
+        "revision": "jarvos-skills-v0.3.0",
+        "digest": "a29f774811f08581069c2fbaab10bc8055183d4b5e609c974b92f0837c51f0f9",
+        "license": "MIT",
+        "provenance": "jarvOS reviewed source"
+      },
+      "supportedHarnesses": ["generic", "hermes"],
+      "projection": {
+        "mode": "copy",
+        "targets": {
+          "generic": { "path": "{skillsRoot}/context-management/SKILL.md", "renderer": "raw-skill-md" },
+          "hermes": { "path": "{skillsRoot}/context-management/SKILL.md", "renderer": "raw-skill-md" }
+        }
+      }
     },
     {
       "name": "cron-hygiene",
       "path": "skills/cron-hygiene/SKILL.md",
-      "purpose": "Validate, audit, and maintain scheduled automation safely."
+      "purpose": "Validate, audit, and maintain scheduled automation safely.",
+      "source": {
+        "revision": "jarvos-skills-v0.3.0",
+        "digest": "e412aa1571831b3f2a1fb0de16e0d4315321423a1c7800e48aa1cf36e5a8d451",
+        "license": "MIT",
+        "provenance": "jarvOS reviewed source"
+      },
+      "supportedHarnesses": ["generic", "hermes"],
+      "projection": {
+        "mode": "copy",
+        "targets": {
+          "generic": { "path": "{skillsRoot}/cron-hygiene/SKILL.md", "renderer": "raw-skill-md" },
+          "hermes": { "path": "{skillsRoot}/cron-hygiene/SKILL.md", "renderer": "raw-skill-md" }
+        }
+      }
     }
   ]
 }

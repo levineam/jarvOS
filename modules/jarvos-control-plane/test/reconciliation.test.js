@@ -98,6 +98,101 @@ test('reconciler requires atomic action-key reservation from injected stores', (
   assert.throws(() => createReconciler(fixture), /putCommandIfAbsent is required/);
 });
 
+test('reconciler dispatching checkpoint merges phase without masking reattachment hints', async () => {
+  const fixture = buildFixture();
+  let seenCommand;
+  fixture.managers['workspace-manager'].executeFenced = async (command, context) => {
+    seenCommand = command;
+    assert.ok(context.fence > 0);
+    return { applied: true, commandId: command.id, fence: context.fence };
+  };
+  const reconciler = createReconciler(fixture);
+  const reattachment = {
+    branch: 'SUP-2214/existing',
+    pr: 'https://example.test/pr/42',
+    codeThread: { issueIdentifier: 'SUP-2214', branch: 'SUP-2214/existing' },
+  };
+
+  const result = await reconciler.reconcileRequest(fixtureRequest({
+    id: 'request-reattach',
+    commandSpec: {
+      operation: 'cleanup-worktree',
+      arguments: {
+        pathToken: 'repo-1',
+        resumeFrom: reattachment,
+      },
+      constraints: { reversible: true },
+      lifecycle: { idempotent: true },
+    },
+  }));
+
+  assert.equal(result.ok, true);
+  assert.ok(seenCommand, 'executeFenced must observe the command');
+  // Phase is updated, but branch/PR reattachment hints must survive.
+  assert.equal(seenCommand.checkpoint.phase, 'dispatching');
+  assert.equal(seenCommand.checkpoint.branch, 'SUP-2214/existing');
+  assert.equal(seenCommand.checkpoint.pr, 'https://example.test/pr/42');
+  assert.equal(seenCommand.checkpoint.codeThread.issueIdentifier, 'SUP-2214');
+});
+
+test('lifecycleTransition merges phase checkpoints onto existing reattachment hints', () => {
+  const { lifecycleTransition, createCommand } = require('../src/index.js');
+  const command = createCommand({
+    requestId: 'req-1',
+    managerId: 'workspace-manager',
+    resource: { machineId: 'machine-a', type: 'git-repository', id: 'repo-1' },
+    mutationClass: 'workspace.cleanup',
+    desiredGeneration: 'desired-1',
+    commandSpec: { operation: 'cleanup-worktree', arguments: {} },
+    checkpoint: {
+      branch: 'SUP-2214/existing',
+      pr: 'https://example.test/pr/7',
+      sessionId: 'session-reattach',
+    },
+  });
+
+  const dispatched = lifecycleTransition(command, 'dispatching', {
+    checkpoint: { phase: 'dispatching' },
+  });
+
+  assert.equal(dispatched.checkpoint.phase, 'dispatching');
+  assert.equal(dispatched.checkpoint.branch, 'SUP-2214/existing');
+  assert.equal(dispatched.checkpoint.pr, 'https://example.test/pr/7');
+  assert.equal(dispatched.checkpoint.sessionId, 'session-reattach');
+  // Lifecycle history records the phase patch as provided (not the merge).
+  assert.deepEqual(dispatched.lifecycle.at(-1).checkpoint, { phase: 'dispatching' });
+});
+
+test('lifecycleTransition drops transient execution after the verifier phase advances', () => {
+  const { lifecycleTransition, createCommand } = require('../src/index.js');
+  const command = createCommand({
+    requestId: 'req-execution',
+    managerId: 'workspace-manager',
+    resource: { machineId: 'machine-a', type: 'git-repository', id: 'repo-1' },
+    mutationClass: 'workspace.cleanup',
+    desiredGeneration: 'desired-execution',
+    commandSpec: { operation: 'cleanup-worktree', arguments: {} },
+    checkpoint: { branch: 'SUP-2214/existing', pr: 'https://example.test/pr/7' },
+  });
+  const executed = lifecycleTransition(command, 'executed', {
+    checkpoint: { phase: 'post-side-effect', execution: { large: 'manager-output' } },
+  });
+  assert.deepEqual(executed.checkpoint.execution, { large: 'manager-output' });
+
+  const verifying = lifecycleTransition(executed, 'verifying', {
+    checkpoint: { phase: 'verifying' },
+  });
+  assert.equal(Object.prototype.hasOwnProperty.call(verifying.checkpoint, 'execution'), false);
+  assert.equal(verifying.checkpoint.branch, 'SUP-2214/existing');
+  assert.equal(verifying.checkpoint.pr, 'https://example.test/pr/7');
+
+  const terminal = lifecycleTransition(verifying, 'satisfied', {
+    checkpoint: { phase: 'terminal', evidenceId: 'evidence-1' },
+  });
+  assert.equal(Object.prototype.hasOwnProperty.call(terminal.checkpoint, 'execution'), false);
+  assert.equal(terminal.checkpoint.evidenceId, 'evidence-1');
+});
+
 test('unavailable manager port releases the acquired lease', async () => {
   const fixture = buildFixture();
   delete fixture.managers['workspace-manager'];

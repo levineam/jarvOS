@@ -27,8 +27,8 @@ the same small contract without depending on local implementation details.
   daily journal.
 - `note-creation` captures note intents into an Obsidian markdown note and adds
   a `[[wikilink]]` under the journal Notes section.
-- `idea-parking` parks medium-confidence candidates in `## 📌 Flagged` for
-  review instead of promoting them as canonical notes.
+- `idea-parking` remains available for explicit caller-owned review queues, but
+  medium-confidence candidates are ignored by the default journal flow.
 
 ## Import
 
@@ -42,3 +42,24 @@ const {
 
 Validate `contracts` against `skillContractSchema` with any draft-07 JSON Schema
 validator before loading them into a runtime.
+
+## GBrain Skillpack Boundary
+
+GBrain 0.42.52.0+ gives jarvOS three useful skill surfaces:
+
+- **Scaffolded skills:** generated starting points that become jarvOS-owned files
+  after review.
+- **Reference skills:** upstream GBrain skill content that jarvOS can diff against
+  without copying automatically.
+- **Brain-resident skills:** skills discovered from a connected GBrain brain at
+  runtime.
+
+This bridge reports those surfaces as provider evidence. It does not silently
+install, overwrite, or delete `SKILL.md` files. Any change to a jarvOS-owned skill
+still needs a tracked execution issue, local review, and the same capture
+contract checks as a manually-authored change.
+
+GBrain can help an agent find brain-native context before capture. Intentional
+note or journal capture still routes through `jarvos-secondbrain` unless the
+GBrain path supplies the same provenance, backlink, privacy, and QMD pending
+guarantees.

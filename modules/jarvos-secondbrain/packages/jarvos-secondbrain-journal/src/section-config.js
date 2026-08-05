@@ -17,17 +17,25 @@ const fs = require('fs');
 const path = require('path');
 
 const DEFAULT_SECTIONS = [
-  { id: 'todays-calendar', heading: "## 📅 Today's Calendar" },
+  { id: 'projects', heading: '## 🚀 Projects' },
   { id: 'notes', heading: '## 📝 Notes' },
   { id: 'ideas', heading: '## 💡 Ideas' },
-  { id: 'flagged', heading: '## 📌 Flagged' },
   { id: 'journal-entry', heading: '## 📓 Journal Entry' },
   { id: 'decisions', heading: '## ✅ Decisions' },
 ];
 
+// Headings that were part of the contract historically. Writers that still hold
+// one hardcoded must still be able to map it to a logical id, so removing a
+// section from DEFAULT_SECTIONS does not make its heading unresolvable.
+const RETIRED_SECTIONS = [
+  { id: 'todays-calendar', heading: "## 📅 Today's Calendar" },
+  { id: 'apple-reminders', heading: '## 🔔 Apple Reminders' },
+  { id: 'paperclip-inbox', heading: '## 📎 Paperclip Inbox' },
+];
+
 // Well-known default heading -> logical id, so writers that still hold a hardcoded
 // default heading can be mapped onto the currently-configured heading.
-const DEFAULT_HEADING_TO_ID = DEFAULT_SECTIONS.reduce((acc, s) => {
+const DEFAULT_HEADING_TO_ID = [...DEFAULT_SECTIONS, ...RETIRED_SECTIONS].reduce((acc, s) => {
   acc[s.heading] = s.id;
   return acc;
 }, {});

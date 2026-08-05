@@ -302,6 +302,49 @@ function validateSensitivity(sensitivity = {}) {
   if (!SENSITIVITY_LEVELS.includes(sensitivity.level)) {
     throw new Error(`sensitivity.level must be one of: ${SENSITIVITY_LEVELS.join(', ')}`);
   }
+  if (sensitivity.fields != null && !Array.isArray(sensitivity.fields)) {
+    throw new Error('sensitivity.fields must be an array');
+  }
+}
+
+function pathParts(path) {
+  if (typeof path !== 'string' || !path || path.startsWith('.') || path.endsWith('.')) {
+    throw new Error('sensitive field path must be a non-empty dot path');
+  }
+  const parts = path.split('.');
+  if (parts.some((part) => !part || ['__proto__', 'prototype', 'constructor'].includes(part))) {
+    throw new Error(`invalid sensitive field path: ${path}`);
+  }
+  return parts;
+}
+
+function sensitivePathParent(record, path, requireLeaf = true) {
+  const parts = pathParts(path);
+  let parent = record;
+  for (let index = 0; index < parts.length - 1; index += 1) {
+    const part = parts[index];
+    if (!isObject(parent) && !Array.isArray(parent) || !Object.prototype.hasOwnProperty.call(parent, part)) {
+      if (!requireLeaf) return null;
+      throw new Error(`sensitive field path does not exist: ${path}`);
+    }
+    parent = parent[part];
+  }
+  const leaf = parts[parts.length - 1];
+  if (requireLeaf && (!isObject(parent) && !Array.isArray(parent) || !Object.prototype.hasOwnProperty.call(parent, leaf))) {
+    throw new Error(`sensitive field path does not exist: ${path}`);
+  }
+  return { parent, leaf };
+}
+
+function validateSensitivePaths(record) {
+  const fields = record.sensitivity && record.sensitivity.fields;
+  if (!fields) return;
+  for (const field of fields) {
+    if (!isObject(field) || !SENSITIVITY_LEVELS.includes(field.level)) {
+      throw new Error('sensitivity.fields entries require a valid level');
+    }
+    sensitivePathParent(record, field.path);
+  }
 }
 
 function requireManagedSoftwareEnum(value, field, allowed) {
@@ -463,6 +506,7 @@ function validateRecord(record = {}) {
   if (record.type === 'evidence') {
     if (!record.outcome) throw new Error('evidence.outcome is required');
   }
+  validateSensitivePaths(record);
   return { ok: true, record };
 }
 
@@ -505,12 +549,43 @@ function toPublicProjection(record, options = {}) {
   if (!options.includeAdapterExtensions) delete projection.adapterExtensions;
   if (projection.sensitivity && projection.sensitivity.fields) {
     for (const field of projection.sensitivity.fields) {
-      if (field.level === 'secret' || field.level === 'private') {
-        delete projection[field.path];
+      if (order.get(field.level) > order.get(maxLevel)) {
+        const target = sensitivePathParent(projection, field.path, false);
+        if (target && (isObject(target.parent) || Array.isArray(target.parent)) && Object.prototype.hasOwnProperty.call(target.parent, target.leaf)) {
+          delete target.parent[target.leaf];
+        }
       }
     }
   }
   return projection;
+}
+
+/**
+ * Merge a phase/status checkpoint onto an existing command checkpoint so
+ * reconciler phase updates (dispatching, verifying, …) do not erase
+ * reattachment hints such as branch/PR/session pointers.
+ *
+ * Lifecycle history still records the phase patch as provided; only the
+ * durable command.checkpoint field merges.
+ */
+function mergeCommandCheckpoint(existing, incoming) {
+  if (incoming === undefined) return existing || null;
+  if (incoming === null) return null;
+  const prev = existing && typeof existing === 'object' && !Array.isArray(existing)
+    ? existing
+    : {};
+  if (typeof incoming !== 'object' || Array.isArray(incoming)) {
+    return { ...prev, value: incoming };
+  }
+  const next = { ...prev, ...incoming };
+  // Execution output is transient verifier input, not a durable reattachment
+  // hint. Once the reconciler advances beyond post-side-effect, evidenceId is
+  // the compact durable pointer and the full manager payload must be dropped.
+  if (incoming.phase && incoming.phase !== 'post-side-effect'
+    && !Object.prototype.hasOwnProperty.call(incoming, 'execution')) {
+    delete next.execution;
+  }
+  return next;
 }
 
 function lifecycleTransition(command, status, patch = {}) {
@@ -529,7 +604,9 @@ function lifecycleTransition(command, status, patch = {}) {
     checkpoint: patch.checkpoint || null,
     reason: patch.reason || null,
   });
-  if (patch.checkpoint) next.checkpoint = patch.checkpoint;
+  if (Object.prototype.hasOwnProperty.call(patch, 'checkpoint')) {
+    next.checkpoint = mergeCommandCheckpoint(next.checkpoint, patch.checkpoint);
+  }
   if (patch.leaseId) next.leaseId = patch.leaseId;
   if (patch.fence) next.fence = patch.fence;
   validateRecord(next);
@@ -564,6 +641,7 @@ module.exports = {
   canonicalResourceKey,
   clone,
   commandSpecDigest,
+  mergeCommandCheckpoint,
   createCommand,
   createDesiredState,
   createEvidence,

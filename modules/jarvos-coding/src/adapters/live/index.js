@@ -99,6 +99,7 @@ function buildLiveCodingAdapters(options = {}) {
     env: options.env,
     repo: options.repo,
     repoRootDir: options.repoRootDir,
+    run: options.run,
   });
 
   return {

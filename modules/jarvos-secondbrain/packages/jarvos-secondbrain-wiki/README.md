@@ -1,6 +1,6 @@
 # jarvos-secondbrain-wiki
 
-Generated Markdown wiki compiler for jarvOS secondbrain sidecars.
+Generated Markdown wiki compiler for JarvOS secondbrain sidecars.
 
 The generated wiki is a derived retrieval layer, not canonical truth. Source
 notes, journals, and sidecar artifacts remain authoritative; generated pages can

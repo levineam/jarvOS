@@ -12,6 +12,10 @@ const DEFAULT_VAULT_DIR = path.join(os.homedir(), 'Documents', 'Vault v3');
 const DEFAULT_BRAIN_DIR = path.join(os.homedir(), 'brain');
 const DEFAULT_GBRAIN_DIR = path.join(os.homedir(), 'gbrain');
 const DEFAULT_QMD_BIN = 'qmd';
+const DEFAULT_GBRAIN_BIN_CANDIDATES = [
+  'gbrain',
+  path.join(os.homedir(), '.bun', 'bin', 'gbrain'),
+];
 const DEFAULT_RETRIEVAL_LIMIT = 5;
 const DEFAULT_RETRIEVAL_TIMEOUT_MS = 15000;
 const JARVOS_PATHS_PACKAGE = '@jarvos/secondbrain/bridge/config/jarvos-paths.js';
@@ -139,7 +143,9 @@ function resolveConfig(overrides = {}) {
     process.env.JARVOS_GBRAIN_EVAL_QUESTIONS,
     DEFAULT_EVAL_PATH,
   ));
-  const gbrainBin = expandTilde(firstString(overrides.gbrainBin, process.env.JARVOS_GBRAIN_BIN, 'gbrain'));
+  const gbrainBin = expandTilde(
+    firstString(overrides.gbrainBin, process.env.JARVOS_GBRAIN_BIN) || resolveDefaultGbrainBin(),
+  );
   const qmdBin = expandTilde(firstString(overrides.qmdBin, process.env.JARVOS_QMD_BIN, DEFAULT_QMD_BIN));
   const qmdMode = firstString(overrides.qmdMode, process.env.JARVOS_QMD_MODE, 'search');
   const qmdCollection = firstString(overrides.qmdCollection, process.env.JARVOS_QMD_COLLECTION);
@@ -1140,6 +1146,16 @@ function commandExists(command) {
     ? String(process.env.PATHEXT || '.EXE;.CMD;.BAT;.COM').split(';')
     : [''];
   return pathDirs.some((dir) => extensions.some((ext) => isExecutable(path.join(dir, `${expanded}${ext}`))));
+}
+
+// The `gbrain` CLI is commonly installed via `bun install -g`, which places
+// it under ~/.bun/bin. That directory is not on PATH in every process that
+// runs this doctor check (e.g. cron/agent sessions with a minimal PATH), so
+// a bare PATH lookup for 'gbrain' spuriously reports the CLI as missing.
+// Fall back to the known bun-link location before giving up.
+function resolveDefaultGbrainBin() {
+  return DEFAULT_GBRAIN_BIN_CANDIDATES.find((candidate) => commandExists(candidate))
+    || DEFAULT_GBRAIN_BIN_CANDIDATES[0];
 }
 
 function isExecutable(filePath) {

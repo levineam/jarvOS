@@ -17,6 +17,7 @@ const crypto = require('crypto');
 const { getVaultNotesDir } = require('./lib/notes-config');
 const {
   buildArtifact,
+  clearAutomaticPromotionQueues,
   defaultKnowledgeDir,
   optimizeNoteKnowledge,
   sourcePathFor,
@@ -30,11 +31,11 @@ const {
 const {
   frontmatterToObject,
   parseFrontmatter,
-} = require('./lib/note-schema');
+} = require('../../../../scripts/lib/note-schema.js');
 
 const DEFAULT_INTERVAL_SECONDS = 300;
 const DEFAULT_LIMIT = 0;
-const DEFAULT_MAX_RUNS = 0;
+const DEFAULT_MAX_RUNS = 1;
 
 function usage() {
   return `manual-notes-maintenance
@@ -48,14 +49,16 @@ Options:
   --notes-dir <path>            Notes directory. Default: configured vault Notes path.
   --knowledge-dir <path>        .jarvos knowledge artifact directory.
   --state <path>                Watch/backfill state path.
+  --summary-path <path>         Write a private-safe JSON summary with counts only.
   --since-state                 Process files missing audit coverage or changed since prior state.
   --update-state                Update state even in dry-run mode.
   --limit <count>               Limit candidate files processed. Default: unlimited.
   --path <relative-or-absolute> Process one note path.
   --json                        Emit JSON only.
   --watch                       Poll repeatedly. Use with --since-state for maintenance.
+                               Use --max-runs to control bounded behavior.
   --interval-sec <seconds>      Watch polling interval. Default: ${DEFAULT_INTERVAL_SECONDS}.
-  --max-runs <count>            Stop watch after N runs. Default: unlimited.
+  --max-runs <count>            Stop watch after N runs. Default: ${DEFAULT_MAX_RUNS} (0 means unlimited).
   --help                        Show this help.
 
 Safe defaults:
@@ -89,6 +92,7 @@ function parseArgs(argv) {
     notesDir: getVaultNotesDir(),
     knowledgeDir: null,
     statePath: null,
+    summaryPath: null,
     sinceState: false,
     updateState: false,
     limit: DEFAULT_LIMIT,
@@ -109,6 +113,7 @@ function parseArgs(argv) {
     else if (arg === '--notes-dir') flags.notesDir = requiredValue(args, ++i, arg);
     else if (arg === '--knowledge-dir') flags.knowledgeDir = requiredValue(args, ++i, arg);
     else if (arg === '--state') flags.statePath = requiredValue(args, ++i, arg);
+    else if (arg === '--summary-path') flags.summaryPath = requiredValue(args, ++i, arg);
     else if (arg === '--since-state') flags.sinceState = true;
     else if (arg === '--update-state') flags.updateState = true;
     else if (arg === '--limit') flags.limit = positiveInteger(requiredValue(args, ++i, arg), arg, { allowZero: true });
@@ -123,6 +128,7 @@ function parseArgs(argv) {
   flags.notesDir = path.resolve(flags.notesDir);
   flags.knowledgeDir = path.resolve(flags.knowledgeDir || defaultKnowledgeDir(flags.notesDir));
   flags.statePath = path.resolve(flags.statePath || path.join(flags.knowledgeDir, 'manual-notes-maintenance-state.json'));
+  flags.summaryPath = flags.summaryPath ? path.resolve(flags.summaryPath) : null;
   flags.dryRun = flags.dryRun === null ? !flags.apply : flags.dryRun;
   if (flags.apply && flags.dryRun) throw new Error('--apply and --dry-run cannot be used together');
   return flags;
@@ -335,7 +341,16 @@ function processOnce(flags) {
       const unfixableFrontmatter = frontmatterDryRun.violations.some((violation) => !violation.fixable);
       fileResult.frontmatterEligible = frontmatterFix.changed && !unfixableFrontmatter;
 
-      if (flags.apply && frontmatterFix.changed && !unfixableFrontmatter) {
+      if (flags.apply && unfixableFrontmatter) {
+        fileResult.frontmatterSkippedReason = 'unfixable frontmatter violation present; apply mode avoids partial normalization';
+        fileResult.optimizedSkippedReason = 'unfixable frontmatter violation present; note parked for review';
+        clearAutomaticPromotionQueues({
+          filePath,
+          notesDir: flags.notesDir,
+          knowledgeDir: flags.knowledgeDir,
+        });
+        report.frontmatter.filesSkippedUnfixable += 1;
+      } else if (flags.apply && frontmatterFix.changed) {
         fs.writeFileSync(filePath, frontmatterFix.updatedText, 'utf8');
         const updatedNote = readNote(filePath);
         frontmatterForOptimization = updatedNote.frontmatter;
@@ -347,12 +362,11 @@ function processOnce(flags) {
         currentFrontmatterViolationCount = 0;
         report.frontmatter.filesChanged += 1;
         report.frontmatter.fieldUpdates += frontmatterFix.fixedCount;
-      } else if (flags.apply && frontmatterFix.changed && unfixableFrontmatter) {
-        fileResult.frontmatterSkippedReason = 'unfixable frontmatter violation present; apply mode avoids partial normalization';
-        report.frontmatter.filesSkippedUnfixable += 1;
       }
 
-      if (flags.apply) {
+      if (flags.apply && unfixableFrontmatter) {
+        fileResult.optimized = false;
+      } else if (flags.apply) {
         const optimized = optimizeNoteKnowledge({
           filePath,
           notesDir: flags.notesDir,
@@ -401,7 +415,7 @@ function processOnce(flags) {
           bodySha256: bodyShaForState,
           mtimeMs: stateStat.mtimeMs,
           checkedAt: nextState.updatedAt,
-          auditCovered: flags.apply ? true : auditCoversNote(auditEntry, note),
+          auditCovered: flags.apply && !unfixableFrontmatter ? true : auditCoversNote(auditEntry, note),
           frontmatterViolations: currentFrontmatterViolationCount,
         };
       }
@@ -418,6 +432,41 @@ function processOnce(flags) {
   }
 
   return report;
+}
+
+function privateSafeSummary(report) {
+  const sensitive = report.files.filter((item) => item.sensitivity?.excluded);
+  const frontmatterEligible = report.files.filter((item) => item.frontmatterEligible);
+  const unfixable = report.files.filter((item) => item.frontmatterViolations.some((violation) => !violation.fixable));
+  const auditMissing = report.files.filter((item) => !item.auditCovered);
+
+  return {
+    version: 1,
+    generatedAt: new Date().toISOString(),
+    ok: report.ok,
+    dryRun: report.dryRun,
+    applied: report.applied,
+    sinceState: report.sinceState,
+    scanned: report.scanned,
+    candidates: report.candidates,
+    skippedUnchanged: report.skippedUnchanged,
+    frontmatter: { ...report.frontmatter },
+    optimization: { ...report.optimization },
+    errors: report.errors.length,
+    gates: {
+      applyAllowed: report.ok && report.errors.length === 0 && unfixable.length === 0,
+      qmdRefreshRequired: report.optimization.qmdPending > 0,
+      queueReviewRequired: report.optimization.gbrainQueued > 0 || report.optimization.memoryWikiQueued > 0,
+      sensitiveNotesExcludedFromAutomaticQueues: sensitive.length === report.optimization.sensitiveSkipped,
+    },
+    cohorts: {
+      auditMissing: auditMissing.length,
+      frontmatterEligible: frontmatterEligible.length,
+      frontmatterUnfixable: unfixable.length,
+      sensitiveExcluded: sensitive.length,
+    },
+    next: [...report.next],
+  };
 }
 
 function summarizeHuman(report) {
@@ -459,6 +508,7 @@ async function runWatch(flags) {
     const report = processOnce(flags);
     report.watchRun = run;
     reports.push(report);
+    if (flags.summaryPath) writeJson(flags.summaryPath, privateSafeSummary(report));
     if (flags.json) {
       process.stdout.write(`${JSON.stringify(report)}\n`);
     } else {
@@ -484,6 +534,7 @@ async function main() {
       return;
     }
     const report = processOnce(flags);
+    if (flags.summaryPath) writeJson(flags.summaryPath, privateSafeSummary(report));
     if (flags.json) console.log(JSON.stringify(report, null, 2));
     else process.stdout.write(summarizeHuman(report));
     process.exitCode = report.ok ? 0 : 1;
@@ -503,6 +554,7 @@ module.exports = {
   main,
   parseArgs,
   processOnce,
+  privateSafeSummary,
   readNote,
   auditCoversNote,
   stateCoversNote,
