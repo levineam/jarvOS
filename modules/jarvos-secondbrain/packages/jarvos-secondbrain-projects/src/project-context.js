@@ -7,8 +7,8 @@ const PURPOSE = 'managed-software-stewardship';
 const AUDIENCE = 'jarvos-projects';
 const INPUT_FIELDS = Object.freeze(['findingId', 'executionReference', 'releaseReference', 'visibility']);
 const RECEIPT_FIELDS = Object.freeze([
-  'activationEnvelopeDigest', 'audience', 'capabilityRevision', 'contextKey', 'destinationSelectors', 'expiresAt',
-  'issuedAt', 'purpose', 'signature', 'type', 'visibility',
+  'activationEnvelopeDigest', 'allowedVisibilities', 'audience', 'capabilityRevision', 'destinationSelectors', 'expiresAt',
+  'issuedAt', 'purpose', 'signature', 'type',
 ]);
 
 function isPlainObject(value) {
@@ -53,14 +53,21 @@ function validateSelectors(selectors) {
   return [...new Set(selectors)];
 }
 
+function validateVisibilities(visibilities) {
+  if (!Array.isArray(visibilities) || !visibilities.length || visibilities.some((visibility) => !['private', 'mixed'].includes(visibility))) {
+    throw new TypeError('allowedVisibilities must be a non-empty private or mixed array');
+  }
+  return [...new Set(visibilities)].sort();
+}
+
 /**
  * Build the fixed, portable portion passed to an external signer. `sign` is an
  * injected boundary: this package neither reads nor retains signing material.
  */
 function issueProjectContext({
-  input,
   authorization,
   destinationSelectors,
+  allowedVisibilities,
   capabilityRevision,
   activationEnvelopeDigest,
   issuedAt,
@@ -76,9 +83,8 @@ function issueProjectContext({
     type: CAPABILITY_TYPE,
     purpose: PURPOSE,
     audience: AUDIENCE,
-    contextKey: deriveContextKey(input),
-    visibility: requiredString(input.visibility, 'visibility'),
     destinationSelectors: validateSelectors(destinationSelectors),
+    allowedVisibilities: validateVisibilities(allowedVisibilities),
     capabilityRevision: requiredString(capabilityRevision, 'capabilityRevision'),
     activationEnvelopeDigest: requiredString(activationEnvelopeDigest, 'activationEnvelopeDigest'),
     issuedAt: timestamp(issuedAt, 'issuedAt'),
@@ -103,11 +109,10 @@ function verifyProjectContext(receipt, { now = new Date().toISOString(), verify,
     || receipt.type !== CAPABILITY_TYPE
     || receipt.purpose !== PURPOSE
     || receipt.audience !== AUDIENCE
-    || typeof receipt.contextKey !== 'string'
-    || !receipt.contextKey.startsWith('pcx_')
     || !Array.isArray(receipt.destinationSelectors)
     || receipt.destinationSelectors.some((selector) => typeof selector !== 'string' || selector.includes('/') || selector.includes('\\'))
-    || typeof receipt.visibility !== 'string'
+    || !Array.isArray(receipt.allowedVisibilities)
+    || receipt.allowedVisibilities.some((visibility) => !['private', 'mixed'].includes(visibility))
     || typeof receipt.capabilityRevision !== 'string'
     || typeof receipt.activationEnvelopeDigest !== 'string'
     || typeof activationEnvelopeDigest !== 'string' || !activationEnvelopeDigest.trim()
@@ -123,14 +128,21 @@ function verifyProjectContext(receipt, { now = new Date().toISOString(), verify,
 }
 
 /** Run the context-only public projection port; it is never a task lifecycle. */
-function projectContextProjection(receipt, { project } = {}) {
+function projectContextProjection(receipt, input, { project } = {}) {
   if (typeof project !== 'function') return { status: 'unavailable' };
+  let contextKey;
   try {
-    const result = project(receipt);
+    contextKey = deriveContextKey(input);
+  } catch {
+    return { status: 'unavailable' };
+  }
+  if (!receipt?.allowedVisibilities?.includes(input.visibility)) return { status: 'denied' };
+  try {
+    const result = project({ capability: receipt, context: { contextKey, visibility: input.visibility } });
     const status = result && result.status;
     if (!['projected', 'deduped', 'denied', 'unavailable'].includes(status)) return { status: 'unavailable' };
     return status === 'projected' || status === 'deduped'
-      ? { status, contextKey: receipt.contextKey }
+      ? { status, contextKey }
       : { status };
   } catch {
     return { status: 'unavailable' };

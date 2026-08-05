@@ -14,30 +14,29 @@ const input = {
 
 function issue(overrides = {}) {
   return context.issueProjectContext({
-    input,
     authorization: { allowed: true },
     destinationSelectors: ['projects:stewardship'],
+    allowedVisibilities: ['private', 'mixed'],
     capabilityRevision: 'projects-r1',
     activationEnvelopeDigest: 'sha256:immutable-envelope',
     issuedAt: '2026-08-05T12:00:00.000Z',
     expiresAt: '2026-08-05T13:00:00.000Z',
-    sign: (payload) => `sig_${payload.contextKey}`,
+    sign: (payload) => `sig_${payload.capabilityRevision}`,
     ...overrides,
   });
 }
 
-test('issues a portable fixed-field project context capability', () => {
+test('issues a portable reusable project context capability', () => {
   const receipt = issue();
   assert.equal(receipt.type, 'jarvos.project-context/v1');
   assert.equal(receipt.purpose, 'managed-software-stewardship');
   assert.equal(receipt.audience, 'jarvos-projects');
-  assert.equal(receipt.contextKey, context.deriveContextKey(input));
   assert.deepEqual(receipt.destinationSelectors, ['projects:stewardship']);
-  assert.equal(receipt.visibility, 'private');
+  assert.deepEqual(receipt.allowedVisibilities, ['mixed', 'private']);
   assert.equal(receipt.activationEnvelopeDigest, 'sha256:immutable-envelope');
   assert.deepEqual(Object.keys(receipt).sort(), [
-    'activationEnvelopeDigest', 'audience', 'capabilityRevision', 'contextKey', 'destinationSelectors', 'expiresAt',
-    'issuedAt', 'purpose', 'signature', 'type', 'visibility',
+    'activationEnvelopeDigest', 'allowedVisibilities', 'audience', 'capabilityRevision', 'destinationSelectors', 'expiresAt',
+    'issuedAt', 'purpose', 'signature', 'type',
   ]);
   assert.doesNotMatch(JSON.stringify(receipt), /finding-42|execution-42|release-42/);
 });
@@ -86,14 +85,20 @@ test('public verifier binds each receipt to its immutable activation envelope', 
   );
 });
 
-test('projection port makes an idempotent context-only outcome', () => {
+test('projection port binds each authorized activity without reissuing the capability', () => {
   const receipt = issue();
+  const request = { capability: receipt, context: { contextKey: context.deriveContextKey(input), visibility: input.visibility } };
   assert.deepEqual(
-    context.projectContextProjection(receipt, { project: () => ({ status: 'projected' }) }),
-    { status: 'projected', contextKey: receipt.contextKey },
+    context.projectContextProjection(receipt, input, { project: (value) => { assert.deepEqual(value, request); return { status: 'projected' }; } }),
+    { status: 'projected', contextKey: context.deriveContextKey(input) },
   );
   assert.deepEqual(
-    context.projectContextProjection(receipt, { project: () => ({ status: 'deduped' }) }),
-    { status: 'deduped', contextKey: receipt.contextKey },
+    context.projectContextProjection(receipt, input, { project: () => ({ status: 'deduped' }) }),
+    { status: 'deduped', contextKey: context.deriveContextKey(input) },
   );
+});
+
+test('capability denies an activity outside its signed visibility scope', () => {
+  const receipt = issue({ allowedVisibilities: ['mixed'] });
+  assert.deepEqual(context.projectContextProjection(receipt, input, { project: () => ({ status: 'projected' }) }), { status: 'denied' });
 });
