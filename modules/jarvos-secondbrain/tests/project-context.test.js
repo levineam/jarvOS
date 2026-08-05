@@ -66,7 +66,7 @@ test('rejects private path selectors and signer output that cannot stay portable
 
 test('public verifier rejects expired, revoked, and forged receipts', () => {
   const receipt = issue();
-  const base = { now: '2026-08-05T12:30:00.000Z', verify: () => true };
+  const base = { now: '2026-08-05T12:30:00.000Z', verify: () => true, activationEnvelopeDigest: 'sha256:immutable-envelope' };
   assert.deepEqual(context.verifyProjectContext(receipt, { ...base, now: '2026-08-05T13:00:00.000Z' }), { ok: false, reason: 'expired' });
   assert.deepEqual(context.verifyProjectContext(receipt, { ...base, isRevoked: () => true }), { ok: false, reason: 'revoked' });
   assert.deepEqual(context.verifyProjectContext(receipt, { ...base, verify: () => false }), { ok: false, reason: 'forged' });
@@ -79,6 +79,10 @@ test('public verifier binds each receipt to its immutable activation envelope', 
   assert.deepEqual(
     context.verifyProjectContext(receipt, { ...options, activationEnvelopeDigest: 'sha256:other-envelope' }),
     { ok: false, reason: 'activation-envelope-mismatch' },
+  );
+  assert.deepEqual(
+    context.verifyProjectContext(receipt, { now: options.now, verify: options.verify }),
+    { ok: false, reason: 'invalid-contract' },
   );
 });
 
