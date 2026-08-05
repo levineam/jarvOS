@@ -66,8 +66,8 @@ test('one Touch ID identity and one recovery credential protect separate signer 
   assert.equal(tools.calls.filter(([command, args]) => command === 'age-keygen' && args.length === 0).length, 1);
   assert.equal(tools.calls.filter(([command, args]) => command === 'age' && args.includes('--encrypt')).length, 2);
   assert.equal((await fs.stat(files.secureEnclaveIdentity)).mode & 0o777, 0o600);
-  assert.doesNotMatch(await fs.readFile(files.activationPrivateKey, 'utf8'), /PRIVATE KEY/);
-  assert.doesNotMatch(await fs.readFile(files.projectsPrivateKey, 'utf8'), /PRIVATE KEY/);
+  assert.doesNotMatch(await fs.readFile(files.activationSigner, 'utf8'), /PRIVATE KEY/);
+  assert.doesNotMatch(await fs.readFile(files.projectsSigner, 'utf8'), /PRIVATE KEY/);
   assert.doesNotMatch(JSON.stringify(result), /PRIVATE KEY|passphrase/i);
   assert.equal((await fs.readdir(root)).some((entry) => /plain/i.test(entry)), false);
 });
@@ -138,8 +138,8 @@ test('a concurrent setup cannot clean up or overwrite the active setup', async (
 
   const files = vaultPaths(root);
   await assert.doesNotReject(fs.access(files.manifest));
-  await assert.doesNotReject(fs.access(files.activationPrivateKey));
-  await assert.doesNotReject(fs.access(files.projectsPrivateKey));
+  await assert.doesNotReject(fs.access(files.activationSigner));
+  await assert.doesNotReject(fs.access(files.projectsSigner));
 });
 
 test('a setup can safely replace a lock left by a dead process', async () => {

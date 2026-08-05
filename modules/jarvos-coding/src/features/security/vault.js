@@ -45,9 +45,9 @@ function vaultPaths(root = defaultRoot()) {
     manifest: path.join(base, 'vault.json'),
     secureEnclaveIdentity: path.join(base, 'touch-id-identity.txt'),
     recoveryIdentity: path.join(base, 'recovery-identity.age'),
-    activationPrivateKey: path.join(base, 'activation-private.pem.age'),
+    activationSigner: path.join(base, 'activation-private.pem.age'),
     activationDescriptor: path.join(base, 'activation-verifier.json'),
-    projectsPrivateKey: path.join(base, 'projects-capability-private.pem.age'),
+    projectsSigner: path.join(base, 'projects-capability-private.pem.age'),
     projectsDescriptor: path.join(base, 'projects-capability-verifier.json'),
   });
 }
@@ -257,8 +257,8 @@ async function initializeSecurityVault({ root = defaultRoot(), execute = default
     const activation = crypto.generateKeyPairSync('ed25519');
     const projects = crypto.generateKeyPairSync('ed25519');
     for (const [output, privateKeyPem] of [
-      [files.activationPrivateKey, activation.privateKey.export({ type: 'pkcs8', format: 'pem' })],
-      [files.projectsPrivateKey, projects.privateKey.export({ type: 'pkcs8', format: 'pem' })],
+      [files.activationSigner, activation.privateKey.export({ type: 'pkcs8', format: 'pem' })],
+      [files.projectsSigner, projects.privateKey.export({ type: 'pkcs8', format: 'pem' })],
     ]) {
       await executeChecked(
         execute,
@@ -310,7 +310,7 @@ async function loadSigningKey({
 } = {}) {
   if (!PURPOSES.includes(purpose)) throw new Error(`unknown signing purpose: ${String(purpose || '')}`);
   const files = vaultPaths(root);
-  const encrypted = purpose === 'activation' ? files.activationPrivateKey : files.projectsPrivateKey;
+  const encrypted = purpose === 'activation' ? files.activationSigner : files.projectsSigner;
   const identity = recovery ? files.recoveryIdentity : files.secureEnclaveIdentity;
   const result = await executeChecked(
     execute,
@@ -320,10 +320,10 @@ async function loadSigningKey({
     `could not unlock ${purpose} signer`,
   );
   const privateKeyPem = result.stdout;
-  const privateKey = crypto.createPrivateKey(privateKeyPem);
+  const signingKey = crypto.createPrivateKey(privateKeyPem);
   const descriptorFile = purpose === 'activation' ? files.activationDescriptor : files.projectsDescriptor;
   const pinnedDescriptor = descriptor || JSON.parse(await fs.readFile(descriptorFile, 'utf8'));
-  const publicKeyPem = crypto.createPublicKey(privateKey).export({ type: 'spki', format: 'pem' });
+  const publicKeyPem = crypto.createPublicKey(signingKey).export({ type: 'spki', format: 'pem' });
   const actualId = purpose === 'activation'
     ? approvalStampVerifierId(publicKeyPem)
     : projectsVerifierId(publicKeyPem);

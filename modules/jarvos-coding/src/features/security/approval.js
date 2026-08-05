@@ -79,13 +79,13 @@ async function issueApprovedRequest({
   } catch (_) {
     throw new Error('approval request expired during unlock');
   }
-  const privateKey = crypto.createPrivateKey(privateKeyPem);
+  const signingKey = crypto.createPrivateKey(privateKeyPem);
   const payload = purpose === 'activation'
     ? activationReceiptPayload(approved)
     : receiptPayload(approved);
   const receipt = Object.freeze({
     ...approved,
-    signature: crypto.sign(null, payload, privateKey).toString('base64url'),
+    signature: crypto.sign(null, payload, signingKey).toString('base64url'),
   });
 
   if (purpose === 'activation') {
