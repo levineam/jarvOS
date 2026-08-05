@@ -7,6 +7,40 @@ jarvOS product lane, a release lane, a ready execution lane, or manual triage.
 It is intentionally separate from Paperclip so the same shape can be adapted to
 other issue trackers or AI execution systems.
 
+## One approval setup
+
+The public jarvOS CLI includes a single owner-facing security setup for the
+managed-software pipeline:
+
+```bash
+brew install age age-plugin-se
+jarvos security setup
+```
+
+Setup asks for one recovery passphrase to save in a password manager. After
+that, normal approvals use Touch ID (or the Mac login passcode) and do not ask
+the user to manage separate passwords for different internal permissions.
+jarvOS still keeps separate Ed25519 signing keys for activation and Projects
+context, so a simpler interface does not collapse those security boundaries.
+
+The encrypted vault defaults to `~/.jarvos/security`; override it with
+`JARVOS_SECURITY_ROOT` or `--root`. Private signing keys are encrypted to both
+the Secure Enclave identity and the one recovery identity. Only public verifier
+descriptors are intended for an automated runtime.
+
+To approve a request created by a managed-software host:
+
+```bash
+jarvos security approve --request request.json --output receipt.json
+```
+
+jarvOS displays the exact bounded request, requires the user to type `APPROVE`,
+and then opens Touch ID. `--recovery` is reserved for loss of Secure Enclave
+access. This feature currently requires macOS, `age`, and `age-plugin-se`.
+`@jarvos/coding` exports the portable request and verification protocols, while
+vault setup and signing remain behind the owner-facing `jarvos security` command.
+That lets other hosts verify approvals without granting an agent approval power.
+
 `triageCodingWork` is an assessment, not a tracker lifecycle. It is
 tracker-neutral and does not require Paperclip, create an issue, or make a
 release claim. In the managed-software stewardship profile, Projects supplies

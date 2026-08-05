@@ -65,6 +65,7 @@
     "modules/jarvos-skills/src/",
     "profiles/",
     "scripts/jarvos.js",
+    "scripts/jarvos-security.js",
     "scripts/manual-notes-maintenance.js",
     "templates/"
   ],

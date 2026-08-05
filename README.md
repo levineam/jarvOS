@@ -75,6 +75,22 @@ structured recall. Completed work becomes durable context.
 
 The longer you use jarvOS, the more leverage your assistants have.
 
+## Your Local Improvements Can Become Public Software
+
+`@jarvos/coding` includes the portable foundation for a managed-software
+pipeline: it can inventory local repository work, identify bounded release
+opportunities, route them toward the appropriate public project, and carry the
+evidence needed by the issue-to-PR workflow. This is designed to work across
+Claude Code, Codex, OpenClaw, and other host adapters, so you can improve your
+own system without continually tracking which changes also belong upstream.
+
+Publication authority remains with you. The public `jarvos security` command
+uses one owner-facing setup, Touch ID for normal approvals, and one recovery
+passphrase. Approvals are narrow, signed, and time-limited; automated hosts get
+public verification material, not your signing keys. Paperclip can add a
+durable project record, but it is optional and is not required to detect,
+package, review, or verify software work.
+
 ## Your Knowledge Base Builds Itself
 
 This is the part that matters most: every useful interaction can make your
