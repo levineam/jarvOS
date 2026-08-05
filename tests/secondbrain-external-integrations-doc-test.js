@@ -8,6 +8,7 @@ const test = require('node:test');
 
 const ROOT = path.resolve(__dirname, '..');
 const INVENTORY = path.join(ROOT, 'docs/architecture/secondbrain-external-integrations.md');
+const CODING_README = path.join(ROOT, 'modules/jarvos-coding/README.md');
 
 function read(filePath) {
   return fs.readFileSync(path.join(ROOT, filePath), 'utf8');
@@ -96,4 +97,13 @@ test('package allowlist includes the linked secondbrain integration inventory', 
     pkg.files.includes('docs/architecture/secondbrain-external-integrations.md'),
     'package files should include the README-linked integration inventory',
   );
+});
+
+test('coding assessment documentation keeps stewardship execution tracker-neutral', () => {
+  const doc = fs.readFileSync(CODING_README, 'utf8').replace(/\s+/g, ' ');
+
+  assert.ok(doc.includes('tracker-neutral'));
+  assert.ok(doc.includes('Projects supplies identity and context'));
+  assert.ok(doc.includes('Beads is the default owner of local executable work, claims, dependencies, and evidence'));
+  assert.ok(doc.includes('explicitly authenticated, committed handoff with its bound receipt'));
 });

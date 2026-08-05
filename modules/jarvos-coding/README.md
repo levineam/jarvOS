@@ -7,6 +7,14 @@ jarvOS product lane, a release lane, a ready execution lane, or manual triage.
 It is intentionally separate from Paperclip so the same shape can be adapted to
 other issue trackers or AI execution systems.
 
+`triageCodingWork` is an assessment, not a tracker lifecycle. It is
+tracker-neutral and does not require Paperclip, create an issue, or make a
+release claim. In the managed-software stewardship profile, Projects supplies
+identity and context, while Beads is the default owner of local executable
+work, claims, dependencies, and evidence. A tracker adapter is optional; a
+Paperclip record is authoritative only for an explicitly authenticated,
+committed handoff with its bound receipt.
+
 ## Public Interface
 
 ```js
@@ -164,7 +172,7 @@ const gate = evaluateSubmissionGate({
 });
 ```
 
-The submit phase requires issue linkage, issue-named branch hygiene, tests,
+The submit phase requires the host's durable execution linkage, issue-named branch hygiene, tests,
 clawpatch, autoreview, pull request evidence, and durable tracker evidence. The
 complete phase adds post-merge clawsweeper evidence or an explicit
 `not_applicable` deferral reason. Accepted statuses are stage-specific:
@@ -173,7 +181,7 @@ tests, clawpatch, or pull request creation; `not_applicable` is valid only for
 the post-merge clawsweeper completion stage. Tool responsibilities are
 deliberately non-overlapping: clawpatch is the pre-submit slice reviewer/fix
 loop, autoreview is a separate automated review signal, pull requests are the
-durable code-review surface, Paperclip is the source of truth for evidence, and
+durable code-review surface, the selected execution authority owns evidence, and
 clawsweeper is the post-merge follow-up sweep.
 
 `runtimeCheckoutPreflight(input, options)` returns a separate execution gate for
@@ -252,16 +260,16 @@ work. Release-fit comes from the release-intake adapter. Support/local ops marke
 route operational work away from release lanes. Unrelated markers skip jarvOS
 coding triage entirely.
 
-## Paperclip Adapter
+## Historical/Optional Paperclip Adapter
 
-Paperclip consumes this module through `scripts/lib/jarvos-coding-paperclip.js`.
-That adapter writes the durable `coding-triage` document on issue create/update
-and keeps the historical `release-intake` behavior as a compatibility layer.
+`scripts/lib/jarvos-coding-paperclip.js` is a compatibility adapter for the
+historical Paperclip flow. It may write a `coding-triage` document only after an
+explicit authenticated, committed handoff. It is not a prerequisite for local
+assessment or execution, and it does not replace Projects identity/context or
+the default Beads claim/dependency/evidence lifecycle.
 
-Runtime adapters should compose this with the canonical Paperclip intake/origin
-contract: first create or ensure the Paperclip work with its origin envelope,
-then run checkout preflight before execution. The checkout side of that adapter
-should:
+When that optional adapter is selected, run checkout preflight before execution.
+The checkout side should:
 
 1. Use a dedicated runtime execution checkout, not the shared dev/state checkout.
 2. Fetch the remote and update only with fast-forward semantics.
@@ -316,7 +324,7 @@ Use `buildLiveArtifactPointer(...)`, `buildSessionCheckpoint(...)`,
 `writeJarvosSessionState(...)` to expose the same shape through MCP, a vault
 handoff note, or another host-local store.
 
-Current Paperclip flow:
+Historical Paperclip compatibility flow (not the default lifecycle):
 
 1. `scripts/paperclip-api.js create` builds the issue payload, asks
    `jarvos-release-intake` for the authoritative release classification, passes
