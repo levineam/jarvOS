@@ -1020,20 +1020,37 @@ function syncOneDate(date, config, opts = {}) {
   const changed = updated !== original;
   const backupReason = restoreSource ? 'stub-restore' : healthBefore.status;
   let backupPath = null;
+  let mutationReceipt = null;
 
   if (changed && !opts.dryRun) {
-    fs.mkdirSync(journalDir, { recursive: true });
+    const mutate = existed ? opts.applyMarkdownMutation : opts.createMarkdownFile;
+    if (typeof mutate !== 'function') {
+      throw new Error('Canonical vault mutation composition is required; journal maintenance cannot modify Markdown directly');
+    }
     if (existed) {
       backupPath = auditBackupPath(journalDir, date, backupReason);
       fs.mkdirSync(path.dirname(backupPath), { recursive: true });
       fs.writeFileSync(backupPath, original, 'utf8');
     }
-    fs.writeFileSync(journalPath, updated, 'utf8');
+    mutationReceipt = mutate({
+      filePath: journalPath,
+      expectedContent: original,
+      nextContent: updated,
+      source: 'journal.maintenance',
+    });
   }
 
+  const persisted = !changed || opts.dryRun || [
+    'committed',
+    'already_satisfied',
+    'saved_locally_sync_pending',
+  ].includes(mutationReceipt?.status);
+  const acknowledged = !changed || ['committed', 'already_satisfied'].includes(mutationReceipt?.status);
+  const effectiveContent = changed && persisted ? updated : original;
+
   let healthAfter = classifyJournalHealth({
-    existed: true,
-    markdown: changed ? updated : original,
+    existed: existed || persisted,
+    markdown: effectiveContent,
     knownGood,
     config,
   });
@@ -1043,6 +1060,7 @@ function syncOneDate(date, config, opts = {}) {
   const intentionalTransformWrite = Boolean(
     !opts.dryRun
     && changed
+    && persisted
     && Array.isArray(opts.sectionTransforms)
     && opts.sectionTransforms.length > 0,
   );
@@ -1087,14 +1105,14 @@ function syncOneDate(date, config, opts = {}) {
   const authoredContentIntact = Boolean(
     knownGood
     && knownGoodMarkdown
-    && authoredContentPreserved(changed ? updated : original, knownGoodMarkdown, config)
+    && authoredContentPreserved(effectiveContent, knownGoodMarkdown, config)
   );
 
-  if (!opts.dryRun && (healthAfter.status === 'healthy' || authoredContentIntact)) {
+  if (!opts.dryRun && persisted && (healthAfter.status === 'healthy' || authoredContentIntact)) {
     const updatedKnownGoodPath = knownGoodPath(journalDir, date);
     fs.mkdirSync(path.dirname(updatedKnownGoodPath), { recursive: true });
-    fs.writeFileSync(updatedKnownGoodPath, changed ? updated : original, 'utf8');
-    const metrics = journalMetrics(changed ? updated : original, config);
+    fs.writeFileSync(updatedKnownGoodPath, effectiveContent, 'utf8');
+    const metrics = journalMetrics(effectiveContent, config);
     state.version = 1;
     state.dates = state.dates || {};
     state.dates[date] = {
@@ -1115,8 +1133,10 @@ function syncOneDate(date, config, opts = {}) {
     journalPath,
     existed,
     changed,
-    written: Boolean(changed && !opts.dryRun),
-    writeStatus: opts.dryRun ? 'dry-run' : (changed ? 'written' : 'unchanged'),
+    written: Boolean(changed && !opts.dryRun && acknowledged),
+    savedLocally: mutationReceipt?.status === 'saved_locally_sync_pending',
+    writeStatus: opts.dryRun ? 'dry-run' : (changed ? (mutationReceipt?.status || 'failed') : 'unchanged'),
+    mutationReceipt,
     healthBefore,
     healthAfter,
     backupPath,
@@ -1262,7 +1282,12 @@ function runMaintenance(argv = process.argv.slice(2), opts = {}) {
   const flush = opts.flushDeferredBacklinks || deferredBacklinkFlush();
   const readFlushMetadata = opts.readDeferredBacklinkFlushMetadata || readDeferredBacklinkFlushMetadata;
   const dates = unique(args.dateSpecs.map(resolveDateSpec));
-  const results = dates.map((date) => sync(date, config, args));
+  const mutationOptions = {
+    ...args,
+    ...(opts.applyMarkdownMutation ? { applyMarkdownMutation: opts.applyMarkdownMutation } : {}),
+    ...(opts.createMarkdownFile ? { createMarkdownFile: opts.createMarkdownFile } : {}),
+  };
+  const results = dates.map((date) => sync(date, config, mutationOptions));
   const journalDir = path.dirname(results[0].journalPath);
   const rawFlushSummary = flush({
     journalDir,

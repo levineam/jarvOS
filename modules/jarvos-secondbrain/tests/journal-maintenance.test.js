@@ -13,10 +13,51 @@ const {
   renderJournal,
   runMaintenance,
   stripLeadingRecoveryScaffold,
-  syncOneDate,
+  syncOneDate: rawSyncOneDate,
 } = require('../packages/jarvos-secondbrain-journal/src/journal-maintenance.js');
 
 const TEST_DATE = '2026-01-02';
+
+function fakeOwnedMutation({ filePath, expectedContent, nextContent }) {
+  const exists = fs.existsSync(filePath);
+  if (exists && fs.readFileSync(filePath, 'utf8') !== expectedContent) return { status: 'conflict' };
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, nextContent, 'utf8');
+  return { status: 'committed' };
+}
+
+function syncOneDate(date, config, options = {}) {
+  return rawSyncOneDate(date, config, {
+    applyMarkdownMutation: fakeOwnedMutation,
+    createMarkdownFile: fakeOwnedMutation,
+    ...options,
+  });
+}
+
+test('journal maintenance fails closed without composition and withholds success on conflict', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-journal-owned-'));
+  const journalDir = path.join(root, 'Journal');
+  const journalPath = path.join(journalDir, `${TEST_DATE}.md`);
+  const previous = process.env.JARVOS_JOURNAL_DIR;
+  fs.mkdirSync(journalDir, { recursive: true });
+  fs.writeFileSync(journalPath, '## 📝 Notes\n- keep me\n', 'utf8');
+  process.env.JARVOS_JOURNAL_DIR = journalDir;
+  try {
+    const config = loadConfig();
+    assert.throws(() => rawSyncOneDate(TEST_DATE, config, {}), /Canonical vault mutation composition/);
+    assert.equal(fs.readFileSync(journalPath, 'utf8'), '## 📝 Notes\n- keep me\n');
+    const result = rawSyncOneDate(TEST_DATE, config, {
+      applyMarkdownMutation: () => ({ status: 'conflict' }),
+    });
+    assert.equal(result.written, false);
+    assert.equal(result.writeStatus, 'conflict');
+    assert.equal(fs.readFileSync(journalPath, 'utf8'), '## 📝 Notes\n- keep me\n');
+  } finally {
+    if (previous === undefined) delete process.env.JARVOS_JOURNAL_DIR;
+    else process.env.JARVOS_JOURNAL_DIR = previous;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
 
 function unchangedSync(date, journalPath = '/tmp/test-vault/Journal/2026-01-02.md') {
   return {
@@ -550,6 +591,13 @@ test('create-if-missing dispatches to the creation-only lifecycle', () => {
     const report = runMaintenance(['--create-if-missing', '--json'], {
       config: { paths: { journal: path.join(root, 'Journal') }, user: { timezone: 'UTC' } },
       now: new Date('2026-08-03T12:00:00.000Z'),
+      mutationContext: { vaultId: 'test-vault', vaultRoot: root },
+      mutationExecutor(operation) {
+        const filePath = path.join(root, operation.vaultRelativePath);
+        fs.mkdirSync(path.dirname(filePath), { recursive: true });
+        fs.writeFileSync(filePath, operation.content, 'utf8');
+        return { status: 'committed' };
+      },
     });
     assert.equal(report.status, 'ok');
     assert.equal(report.results[0].outcome, 'created');

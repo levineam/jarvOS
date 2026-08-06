@@ -12,6 +12,19 @@ const {
 
 const TEST_DATE = '2026-01-02';
 
+function fakeOwnedMutation({ filePath, expectedContent, nextContent }) {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  if (fs.existsSync(filePath) && fs.readFileSync(filePath, 'utf8') !== expectedContent) return { status: 'conflict' };
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, nextContent, 'utf8');
+  return { status: 'committed' };
+}
+
+function ownedMutationOptions(options = {}) {
+  return { applyMarkdownMutation: fakeOwnedMutation, createMarkdownFile: fakeOwnedMutation, ...options };
+}
+
 function sectionBody(markdown, heading) {
   const escaped = heading.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const pattern = `${escaped}\\n([\\s\\S]*?)(?=\\n## |\\n— Edited by Jarvis|$)`;
@@ -409,7 +422,7 @@ test('the known-good snapshot refreshes across a contract migration', () => {
       },
     }, null, 2), 'utf8');
 
-    syncOneDate(date, config, { dryRun: false, fetchers: { projects: () => '- [[Alpha]]' } });
+    syncOneDate(date, config, ownedMutationOptions({ dryRun: false, fetchers: { projects: () => '- [[Alpha]]' } }));
 
     const after = JSON.parse(fs.readFileSync(path.join(stateDir, 'state.json'), 'utf8'));
     const entry = after.dates[date];
@@ -492,7 +505,7 @@ test('a damaged entry must not overwrite a good pre-migration snapshot', () => {
       },
     }, null, 2), 'utf8');
 
-    syncOneDate(date, config, { dryRun: false, fetchers: { projects: () => '- [[Alpha]]' } });
+    syncOneDate(date, config, ownedMutationOptions({ dryRun: false, fetchers: { projects: () => '- [[Alpha]]' } }));
 
     const snapshot = fs.readFileSync(kgPath, 'utf8');
     assert.match(snapshot, /Note one/, 'the intact snapshot must survive a damaged entry');

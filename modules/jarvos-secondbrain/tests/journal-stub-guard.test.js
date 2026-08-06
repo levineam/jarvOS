@@ -61,7 +61,24 @@ function withEnv(vars, fn) {
 
 function journalModule() {
   delete require.cache[require.resolve(JOURNAL_MODULE)];
-  return require(JOURNAL_MODULE);
+  const loaded = require(JOURNAL_MODULE);
+  return {
+    ...loaded,
+    syncOneDate(date, config, options = {}) {
+      const fakeOwnedMutation = ({ filePath, expectedContent, nextContent }) => {
+        const exists = fs.existsSync(filePath);
+        if (exists && fs.readFileSync(filePath, 'utf8') !== expectedContent) return { status: 'conflict' };
+        fs.mkdirSync(path.dirname(filePath), { recursive: true });
+        fs.writeFileSync(filePath, nextContent, 'utf8');
+        return { status: 'committed' };
+      };
+      return loaded.syncOneDate(date, config, {
+        applyMarkdownMutation: fakeOwnedMutation,
+        createMarkdownFile: fakeOwnedMutation,
+        ...options,
+      });
+    },
+  };
 }
 
 function makeVault() {
