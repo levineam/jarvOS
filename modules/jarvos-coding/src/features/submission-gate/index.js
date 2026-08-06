@@ -4,9 +4,9 @@ const SUBMISSION_GATE_SCHEMA_VERSION = 'jarvos-coding-submission-gate/v1';
 
 const REQUIRED_EVIDENCE = Object.freeze([
   {
-    key: 'issue',
-    label: 'Paperclip issue',
-    description: 'A durable issue identifier exists before code work starts.',
+    key: 'workIdentity',
+    label: 'Work identity',
+    description: 'A Git-backed work identifier exists before code work starts; a historical tracker reference is optional compatibility data.',
   },
   {
     key: 'branch',
@@ -102,6 +102,10 @@ function issueSatisfiesIdentifier(issueEvidence, identifier = '') {
   return candidateFields.some((candidate) => normalizeIdentifier(candidate) === normalizedIdentifier);
 }
 
+function workIdentitySatisfiesIdentifier(evidence = {}, identifier = '') {
+  return issueSatisfiesIdentifier(evidence.workIdentity || evidence.issue, identifier);
+}
+
 function validateSubmissionEvidence(evidence = {}, options = {}) {
   const gate = buildSubmissionGate(options);
 
@@ -121,7 +125,10 @@ function validateSubmissionEvidence(evidence = {}, options = {}) {
   const reasons = [];
 
   for (const key of gate.evidenceKeys) {
-    if (!evidenceValuePresent(evidence[key])) {
+    const value = key === 'workIdentity'
+      ? evidence.workIdentity || evidence.issue
+      : evidence[key];
+    if (!evidenceValuePresent(value)) {
       missing.push(key);
       reasons.push(`${key} evidence is missing`);
     }
@@ -132,9 +139,9 @@ function validateSubmissionEvidence(evidence = {}, options = {}) {
     reasons.push(`branch must include ${gate.identifier} and must not be main/master/HEAD`);
   }
 
-  if (!issueSatisfiesIdentifier(evidence.issue, gate.identifier)) {
-    if (!missing.includes('issue')) missing.push('issue');
-    reasons.push(`issue evidence must match ${gate.identifier}`);
+  if (!workIdentitySatisfiesIdentifier(evidence, gate.identifier)) {
+    if (!missing.includes('workIdentity')) missing.push('workIdentity');
+    reasons.push(`work identity must match ${gate.identifier}`);
   }
 
   return {
@@ -162,7 +169,7 @@ Decision mode: \`${gate.decision}\`
 This is an agent-agnostic OpenClaw code submission gate. It applies to every AI personality that produces code: Michael, Charlie, Codex-native subagents, Hermes-hosted executors, and future code-producing agents.
 
 Execution entrypoint:
-- Start from workflow-execution/Paperclip intake. The issue plan/goal is the source of truth for scope, done criteria, and autonomous merge alignment.
+- Start from the supported Git and Agent Mail lifecycle. Git is the code authority; Agent Mail is live coordination. A historical tracker reference may be projected only after the authoritative outcome exists.
 
 Required evidence before reporting code work complete:
 ${requirementLines.join('\n')}
@@ -170,13 +177,13 @@ ${requirementLines.join('\n')}
 Tool roles:
 - \`clawpatch\`: slice-scoped advisory review and bounded fix loop before PR creation. Equivalent allowed only when it is explicitly documented and provides pre-PR slice review plus bounded fix evidence.
 - \`autoreview\`: local branch gate before PR creation; accepted/actionable findings block submission until fixed. Equivalent allowed only when it records a holistic AI branch review against the PR diff.
-- Goal alignment: AI reviewer checks the PR against the issue plan/goal and vault/project plan context. If aligned and gates are clean, autonomous merge is allowed; if alignment is ambiguous, escalate only with the specific goal-clarity question.
+- Goal alignment: AI reviewer checks the PR against the work goal/plan context. If aligned and gates are clean, autonomous merge is allowed; if alignment is ambiguous, escalate only with the specific goal-clarity question.
 - Tests: focused command output or explicit no-test rationale tied to the changed surface.
 - Pull request: durable PR URL/number and branch evidence for review/CI.
 - \`clawsweeper\`: post-merge sweep only; equivalent allowed only when merged commits feed a documented follow-up audit queue. It must not replace pre-submit clawpatch, autoreview, tests, goal-alignment, or PR evidence.
 - Surface equivalents: use \`scripts/jarvos-gate-equivalents.js\` or the \`@jarvos/coding\` equivalent registry for jarvOS-repo PRs, Codex-native workers, and Hermes-hosted executors.
 
-If any required evidence is missing, fail closed and update the Paperclip issue as blocked or mark the task \`intake-only\` with the reason no code was submitted.`;
+If any required evidence is missing, fail closed or mark the task \`intake-only\` with the reason no code was submitted. A Paperclip record, when enabled, is a one-way status/reference projection and cannot admit, block, or close out work.`;
 }
 
 module.exports = {
@@ -188,4 +195,5 @@ module.exports = {
   issueSatisfiesIdentifier,
   normalizeIdentifier,
   validateSubmissionEvidence,
+  workIdentitySatisfiesIdentifier,
 };
