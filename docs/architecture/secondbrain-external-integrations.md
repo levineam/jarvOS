@@ -58,6 +58,26 @@ integrations and the canonical Markdown record:
   an empty-input today-only action, and both return bounded projections without
   paths, content, hashes, timestamps, receipts, or provenance.
 
+## Vault Mutation Ownership
+
+User-visible Markdown in a configured vault is mutation-owned. Callers submit
+serialized operations with a stable identity, a normalized vault-relative
+Markdown target, and a fixed transform name/version; they never submit source
+code for evaluation. The Obsidian adapter owns transport and acknowledgement.
+Packages define domain policies and must not depend on adapter or bridge code,
+apart from an explicitly named temporary shim with a removal criterion.
+
+The operation receipt is private. Agent-facing/public results contain only a
+schema version plus persistence, Obsidian, Sync, and stable status projections;
+they never expose paths, content, hashes, timestamps, operation records,
+adapter evidence, or host identity. Unknown transform versions and malformed or
+oversized replay payloads are quarantined without a mutation.
+
+The checked writer inventory covers note, journal, backlink, project,
+session-thread, maintenance, normalizer, audit, wiki, and index producers.
+These are authored-Markdown migration candidates. Hidden operational metadata
+and outputs outside the vault are the only direct-write classifications.
+
 ## Operating Model
 
 The active secondbrain path is:
