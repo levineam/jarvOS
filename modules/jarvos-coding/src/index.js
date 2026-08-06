@@ -148,10 +148,12 @@ const {
   visiblePaths,
 } = require('./features/local-change-intake');
 const stewardshipContract = require('./stewardship/contract');
+const stewardshipJudgment = require('./stewardship/judgment');
 const stewardshipPolicy = require('./stewardship/policy');
 const reconcilePolicy = require('./stewardship/reconcile-policy');
 module.exports = {
   ...stewardshipContract,
+  ...stewardshipJudgment,
   ...stewardshipPolicy,
   ...reconcilePolicy,
   ACTIVE_STATUSES,
