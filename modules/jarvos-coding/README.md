@@ -9,11 +9,10 @@ other issue trackers or AI execution systems.
 
 `triageCodingWork` is an assessment, not a tracker lifecycle. It is
 tracker-neutral and does not require Paperclip, create an issue, or make a
-release claim. In the managed-software stewardship profile, Projects supplies
-identity and context, while Beads is the default owner of local executable
-work, claims, dependencies, and evidence. A tracker adapter is optional; a
-Paperclip record is authoritative only for an explicitly authenticated,
-committed handoff with its bound receipt.
+release claim. In the managed-software stewardship profile, Git supplies the
+work facts and authority. Projects can add context, while Beads or Paperclip
+can add downstream records; all three integrations are optional and cannot
+admit, block, or change the core stewardship result.
 
 ## Public Interface
 

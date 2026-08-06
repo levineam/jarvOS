@@ -84,11 +84,12 @@ evidence needed by the issue-to-PR workflow. This is designed to work across
 Claude Code, Codex, OpenClaw, and other host adapters, so you can improve your
 own system without continually tracking which changes also belong upstream.
 
-Routine stewardship uses a bounded, delivery-disabled Projects context contract.
-It can project only to an owner-configured private/internal destination; public
-or external destinations are publication and remain outside this capability.
-Paperclip can add a durable project record, but it is optional and is not
-required to detect, package, review, or verify software work.
+Routine stewardship uses Git as the work authority and a local coordination
+adapter to keep concurrent coding sessions from losing or duplicating work.
+Projects, Beads, and Paperclip can each add a useful record when configured,
+but none is required to detect, package, review, or verify software work. Public
+merge, tagging, release, and upstream submission remain separate approval
+boundaries.
 
 ## Your Knowledge Base Builds Itself
 
