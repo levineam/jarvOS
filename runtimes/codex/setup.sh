@@ -3,11 +3,13 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 MCP_SERVER="$ROOT/modules/jarvos-agent-context/scripts/jarvos-mcp.js"
-HOOKS_JSON="$ROOT/runtimes/codex/hooks.json"
+MANAGED_HOOKS_JSON="$ROOT/runtimes/codex/hooks.json"
 HOOK_SCRIPT="$ROOT/runtimes/codex/jarvos-session-start-hook.js"
 TURN_HOOK_SCRIPT="$ROOT/runtimes/codex/jarvos-session-turn-hook.js"
 TRUST_SCRIPT="$ROOT/runtimes/codex/trust-session-start-hook.js"
-CODEX_CONFIG="${CODEX_CONFIG:-$HOME/.codex/config.toml}"
+CODEX_HOME="${CODEX_HOME:-$HOME/.codex}"
+CODEX_CONFIG="${CODEX_CONFIG:-$CODEX_HOME/config.toml}"
+LEGACY_HOOKS_JSON="$CODEX_HOME/hooks.json"
 CONTROL_PLANE_SERVICE_MODULE="${JARVOS_CONTROL_PLANE_SERVICE_MODULE:-}"
 # Setup registers only a non-secret file path. Never pass the credential value
 # through `codex mcp add --env` — that puts it on argv and persists it in config.
@@ -31,8 +33,8 @@ if [ ! -f "$MCP_SERVER" ]; then
   exit 1
 fi
 
-if [ ! -f "$HOOKS_JSON" ]; then
-  echo "jarvOS Codex hooks config not found: $HOOKS_JSON" >&2
+if [ ! -f "$MANAGED_HOOKS_JSON" ]; then
+  echo "jarvOS Codex hooks config not found: $MANAGED_HOOKS_JSON" >&2
   exit 1
 fi
 
@@ -143,20 +145,239 @@ if [ ! -f "$CODEX_CONFIG" ]; then
   touch "$CODEX_CONFIG"
 fi
 
-node - "$CODEX_CONFIG" "$HOOK_SCRIPT" "$TURN_HOOK_SCRIPT" <<'NODE'
+node - "$CODEX_CONFIG" "$LEGACY_HOOKS_JSON" "$HOOK_SCRIPT" "$TURN_HOOK_SCRIPT" "${JARVOS_MANAGED_HARNESS_ROLLBACK:-0}" <<'NODE'
 const fs = require('fs');
+const path = require('path');
 
-const [configPath, hookScript, turnHookScript] = process.argv.slice(2);
-const commandHook = (script, matcher) => {
-  const parts = [];
-  if (matcher) parts.push(`matcher = ${JSON.stringify(matcher)}`);
-  parts.push(`hooks = [{ type = "command", command = ${JSON.stringify(`node ${JSON.stringify(script)}`)}, async = false, timeout = 30 }]`);
-  return `{ ${parts.join(', ')} }`;
-};
-const sessionStartHook = commandHook(hookScript, 'startup');
-const turnHook = commandHook(turnHookScript);
+const [configPath, legacyHooksPath, hookScript, turnHookScript, rollback] = process.argv.slice(2);
 const original = fs.readFileSync(configPath, 'utf8');
 let next = original;
+
+function fail(message) {
+  throw new Error(`refusing Codex hook migration: ${message}`);
+}
+
+function tomlKey(key) {
+  return /^[A-Za-z0-9_-]+$/.test(key) ? key : JSON.stringify(key);
+}
+
+function isScalar(value) {
+  return typeof value === 'string' || typeof value === 'boolean' || (typeof value === 'number' && Number.isFinite(value));
+}
+
+function tomlScalar(value) {
+  if (typeof value === 'string') return JSON.stringify(value);
+  if (typeof value === 'boolean') return String(value);
+  if (typeof value === 'number' && Number.isFinite(value)) return String(value);
+  fail('hook fields must be string, boolean, or finite number scalars');
+}
+
+function tomlHookEntry(entry) {
+  return `{ ${Object.entries(entry).map(([key, value]) => {
+    if (key === 'hooks') return `${tomlKey(key)} = [${value.map(tomlCommandHook).join(', ')}]`;
+    return `${tomlKey(key)} = ${tomlScalar(value)}`;
+  }).join(', ')} }`;
+}
+
+function tomlCommandHook(hook) {
+  return `{ ${Object.entries(hook).map(([key, value]) => `${tomlKey(key)} = ${tomlScalar(value)}`).join(', ')} }`;
+}
+
+function validateHookEntry(entry, label) {
+  if (!entry || Array.isArray(entry) || typeof entry !== 'object') fail(`${label} must be an object`);
+  if (!Array.isArray(entry.hooks) || entry.hooks.length === 0) fail(`${label}.hooks must be a non-empty array`);
+  for (const [key, value] of Object.entries(entry)) {
+    if (key === 'hooks') continue;
+    if (!isScalar(value)) fail(`${label}.${key} is unsupported`);
+  }
+  entry.hooks.forEach((hook, index) => {
+    if (!hook || Array.isArray(hook) || typeof hook !== 'object') fail(`${label}.hooks[${index}] must be an object`);
+    if (typeof hook.type !== 'string' || typeof hook.command !== 'string') fail(`${label}.hooks[${index}] requires string type and command`);
+    for (const [key, value] of Object.entries(hook)) if (!isScalar(value)) fail(`${label}.hooks[${index}].${key} is unsupported`);
+  });
+  return entry;
+}
+
+function validateHookMap(hooks, label) {
+  if (!hooks || Array.isArray(hooks) || typeof hooks !== 'object') fail(`${label} must be an object`);
+  const validated = {};
+  for (const [event, entries] of Object.entries(hooks)) {
+    if (!event || !Array.isArray(entries)) fail(`${label}.${event} must be an array`);
+    validated[event] = entries.map((entry, index) => validateHookEntry(entry, `${label}.${event}[${index}]`));
+  }
+  return validated;
+}
+
+function parseLegacyHooks(file) {
+  let parsed;
+  try {
+    parsed = JSON.parse(fs.readFileSync(file, 'utf8'));
+  } catch (error) {
+    fail(`cannot parse ${file}: ${error.message}`);
+  }
+  if (!parsed || Array.isArray(parsed) || typeof parsed !== 'object' || Object.keys(parsed).length !== 1 || !Object.prototype.hasOwnProperty.call(parsed, 'hooks')) {
+    fail(`${file} must contain only a hooks object`);
+  }
+  return validateHookMap(parsed.hooks, 'hooks');
+}
+
+function dedupe(entries) {
+  const seen = new Set();
+  return entries.filter((entry) => {
+    const key = JSON.stringify(canonicalize(entry));
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function canonicalize(value) {
+  if (Array.isArray(value)) return value.map(canonicalize);
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(Object.keys(value).sort().map((key) => [key, canonicalize(value[key])]));
+  }
+  return value;
+}
+
+function skipWhitespace(value, index) {
+  while (index < value.length && /\s/.test(value[index])) index += 1;
+  return index;
+}
+
+function parseTomlString(value, index) {
+  const quote = value[index];
+  let cursor = index + 1;
+  let escaped = false;
+  while (cursor < value.length) {
+    const character = value[cursor];
+    if (quote === '"' && escaped) escaped = false;
+    else if (quote === '"' && character === '\\') escaped = true;
+    else if (character === quote) break;
+    cursor += 1;
+  }
+  if (cursor >= value.length) fail('unterminated TOML string in hooks table');
+  const raw = value.slice(index, cursor + 1);
+  try {
+    return { value: quote === '"' ? JSON.parse(raw) : raw.slice(1, -1), end: cursor + 1 };
+  } catch (error) {
+    fail(`unsupported TOML string in hooks table: ${error.message}`);
+  }
+}
+
+function parseTomlKey(value, index) {
+  index = skipWhitespace(value, index);
+  if (value[index] === '"' || value[index] === "'") return parseTomlString(value, index);
+  const match = /^[A-Za-z0-9_-]+/.exec(value.slice(index));
+  if (!match) fail('unsupported TOML key in hooks table');
+  return { value: match[0], end: index + match[0].length };
+}
+
+function parseTomlValue(value, index) {
+  index = skipWhitespace(value, index);
+  if (value[index] === '"' || value[index] === "'") return parseTomlString(value, index);
+  if (value[index] === '[') {
+    const result = []; let cursor = skipWhitespace(value, index + 1);
+    if (value[cursor] === ']') return { value: result, end: cursor + 1 };
+    while (true) {
+      const item = parseTomlValue(value, cursor); result.push(item.value); cursor = skipWhitespace(value, item.end);
+      if (value[cursor] === ']') return { value: result, end: cursor + 1 };
+      if (value[cursor] !== ',') fail('invalid TOML array in hooks table');
+      cursor = skipWhitespace(value, cursor + 1);
+    }
+  }
+  if (value[index] === '{') {
+    const result = {}; let cursor = skipWhitespace(value, index + 1);
+    if (value[cursor] === '}') return { value: result, end: cursor + 1 };
+    while (true) {
+      const key = parseTomlKey(value, cursor); cursor = skipWhitespace(value, key.end);
+      if (value[cursor] !== '=') fail('invalid TOML inline table in hooks table');
+      const item = parseTomlValue(value, cursor + 1);
+      if (Object.prototype.hasOwnProperty.call(result, key.value)) fail('duplicate TOML key in hooks table');
+      result[key.value] = item.value; cursor = skipWhitespace(value, item.end);
+      if (value[cursor] === '}') return { value: result, end: cursor + 1 };
+      if (value[cursor] !== ',') fail('invalid TOML inline table in hooks table');
+      cursor = skipWhitespace(value, cursor + 1);
+    }
+  }
+  const token = /^[^\s,}\]]+/.exec(value.slice(index));
+  if (!token) fail('unsupported TOML value in hooks table');
+  if (token[0] === 'true' || token[0] === 'false') return { value: token[0] === 'true', end: index + token[0].length };
+  const number = Number(token[0]);
+  if (Number.isFinite(number)) return { value: number, end: index + token[0].length };
+  fail(`unsupported TOML value in hooks table: ${token[0]}`);
+}
+
+function tableRange(content, name) {
+  const header = new RegExp(`^\\s*\\[${name.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\$&')}\\]\\s*(?:#.*)?$`, 'm');
+  const match = header.exec(content);
+  if (!match) return null;
+  const start = match.index + match[0].length + (content[match.index + match[0].length] === '\n' ? 1 : 0);
+  const nextTable = /^\s*\[/gm; nextTable.lastIndex = start;
+  const next = nextTable.exec(content);
+  return { start, end: next ? next.index : content.length };
+}
+
+function hookAssignment(content, event) {
+  const range = tableRange(content, 'hooks');
+  if (!range) return null;
+  const assignments = /^[ \t]*(?:[A-Za-z0-9_-]+|"(?:\\.|[^"\\])*"|'[^']*')[ \t]*=/gm;
+  const table = content.slice(range.start, range.end);
+  let match;
+  while ((match = assignments.exec(table))) {
+    const assignmentStart = range.start + match.index;
+    const key = parseTomlKey(content, assignmentStart);
+    if (key.value !== event) continue;
+    const equals = skipWhitespace(content, key.end);
+    const valueStart = equals + 1;
+    const parsed = parseTomlValue(content, valueStart);
+    const lineEnd = content.indexOf('\n', parsed.end);
+    const trailing = content.slice(parsed.end, lineEnd < 0 ? range.end : lineEnd).trim();
+    if (trailing && !trailing.startsWith('#')) fail(`unexpected text after ${event} hook list`);
+    return { range, valueStart, valueEnd: parsed.end, entries: validateHookMap({ [event]: parsed.value }, 'config hooks')[event] };
+  }
+  return { range };
+}
+
+function mergeHookEntries(content, event, additions, removeManaged) {
+  const assignment = hookAssignment(content, event);
+  const existing = assignment && assignment.entries ? assignment.entries : [];
+  const retained = removeManaged ? existing.filter((entry) => !isManagedJarvosHook(entry)) : existing;
+  const entries = dedupe([...retained, ...additions]);
+  const rendered = `[${entries.map(tomlHookEntry).join(', ')}]`;
+  if (!assignment) {
+    const suffix = content.endsWith('\n') || content.length === 0 ? '' : '\n';
+    return `${content}${suffix}\n[hooks]\n${tomlKey(event)} = ${rendered}\n`;
+  }
+  if (!assignment.entries) return `${content.slice(0, assignment.range.end)}${tomlKey(event)} = ${rendered}\n${content.slice(assignment.range.end)}`;
+  return `${content.slice(0, assignment.valueStart)}${rendered}${content.slice(assignment.valueEnd)}`;
+}
+
+function isManagedJarvosHook(entry) {
+  return entry.hooks.some((hook) => typeof hook.command === 'string' && /jarvos-(?:session-start|session-turn)-hook\.js\b/.test(hook.command));
+}
+
+function stamp() {
+  return new Date().toISOString().replace(/[:.]/g, '').replace('T', '-').replace('Z', 'Z');
+}
+
+function backup(file, suffix) {
+  const target = `${file}.bak-jarvos-${suffix}`;
+  fs.copyFileSync(file, target);
+  fs.chmodSync(target, fs.statSync(file).mode);
+  return target;
+}
+
+function writeAtomically(file, content) {
+  const mode = fs.statSync(file).mode;
+  const temporary = path.join(path.dirname(file), `.${path.basename(file)}.jarvos-${process.pid}-${Date.now()}.tmp`);
+  try {
+    fs.writeFileSync(temporary, content, { encoding: 'utf8', mode });
+    fs.chmodSync(temporary, mode);
+    fs.renameSync(temporary, file);
+  } finally {
+    if (fs.existsSync(temporary)) fs.unlinkSync(temporary);
+  }
+}
 
 function setFeature(content, key, value) {
   const headerRe = /^\[features\]\s*$/m;
@@ -206,80 +427,31 @@ function removeFeature(content, key) {
   }).join('\n');
 }
 
-function topLevelHookEntries(value) {
-  const entries = []; let start = 0; let braces = 0; let brackets = 0; let quote = null; let escaped = false;
-  for (let index = 0; index < value.length; index += 1) {
-    const char = value[index];
-    if (quote) {
-      if (escaped) escaped = false;
-      else if (char === '\\') escaped = true;
-      else if (char === quote) quote = null;
-      continue;
-    }
-    if (char === '"' || char === "'") { quote = char; continue; }
-    if (char === '{') braces += 1;
-    else if (char === '}') braces -= 1;
-    else if (char === '[') brackets += 1;
-    else if (char === ']') brackets -= 1;
-    else if (char === ',' && braces === 0 && brackets === 0) { entries.push(value.slice(start, index).trim()); start = index + 1; }
-  }
-  const tail = value.slice(start).trim(); if (tail) entries.push(tail); return entries;
+let migrated = null;
+if (fs.existsSync(legacyHooksPath)) {
+  migrated = parseLegacyHooks(legacyHooksPath);
+  for (const [event, entries] of Object.entries(migrated)) next = mergeHookEntries(next, event, entries, false);
 }
 
-function setHook(content, event, hookScript, hook) {
-  const lines = content.split(/\n/);
-  const hookLine = `${event} = [${hook}]`;
-  let start = lines.findIndex((line) => /^\[hooks\]\s*$/.test(line));
-  if (start < 0) {
-    const suffix = content.endsWith('\n') || content.length === 0 ? '' : '\n';
-    return `${content}${suffix}\n[hooks]\n${hookLine}\n`;
-  }
-
-  let end = lines.length;
-  for (let i = start + 1; i < lines.length; i += 1) {
-    if (/^\s*\[/.test(lines[i])) {
-      end = i;
-      break;
-    }
-  }
-
-  for (let i = start + 1; i < end; i += 1) {
-    if (!new RegExp(`^\\s*${event}\\s*=`).test(lines[i])) continue;
-    const managedHookName = hookScript.split(/[\\/]/).pop();
-    if (lines[i].includes(managedHookName)) {
-      const open = lines[i].indexOf('['); const close = lines[i].lastIndexOf(']');
-      if (open < 0 || close <= open) throw new Error(`invalid ${event} hook list`);
-      const preserved = topLevelHookEntries(lines[i].slice(open + 1, close))
-        .filter((entry) => !entry.includes(managedHookName));
-      lines[i] = `${lines[i].slice(0, open + 1)}${[...preserved, hook].join(', ')}${lines[i].slice(close)}`;
-      return lines.join('\n');
-    }
-
-    const close = lines[i].lastIndexOf(']');
-    if (close >= 0) {
-      const before = lines[i].slice(0, close).trimEnd();
-      const separator = before.endsWith('[') ? '' : ',';
-      lines[i] = `${before}${separator} ${hook}${lines[i].slice(close)}`;
-      return lines.join('\n');
-    }
-  }
-
-  lines.splice(end, 0, hookLine);
-  return lines.join('\n');
+if (rollback === '1') {
+  next = mergeHookEntries(next, 'SessionStart', [], true);
+  next = mergeHookEntries(next, 'UserPromptSubmit', [], true);
+} else {
+  next = mergeHookEntries(next, 'SessionStart', [validateHookEntry({ matcher: 'startup', hooks: [{ type: 'command', command: `node ${JSON.stringify(hookScript)}`, async: false, timeout: 30 }] }, 'jarvOS SessionStart')], true);
+  next = mergeHookEntries(next, 'UserPromptSubmit', [validateHookEntry({ hooks: [{ type: 'command', command: `node ${JSON.stringify(turnHookScript)}`, async: false, timeout: 30 }] }, 'jarvOS UserPromptSubmit')], true);
 }
-
-next = setHook(next, 'SessionStart', hookScript, sessionStartHook);
-next = setHook(next, 'UserPromptSubmit', turnHookScript, turnHook);
 next = setFeature(next, 'hooks', 'true');
 next = removeFeature(next, 'codex_hooks');
 
-if (next !== original) {
-  const stamp = new Date().toISOString().replace(/[:.]/g, '').replace('T', '-').replace('Z', 'Z');
-  const backupPath = `${configPath}.bak-jarvos-${stamp}`;
-  fs.copyFileSync(configPath, backupPath);
-  fs.writeFileSync(configPath, next, 'utf8');
+if (next !== original || migrated) {
+  const backupStamp = stamp();
+  const backupPath = next !== original ? backup(configPath, backupStamp) : null;
+  const legacyBackupPath = migrated ? backup(legacyHooksPath, backupStamp) : null;
+  writeAtomically(configPath, next);
+  if (migrated) fs.unlinkSync(legacyHooksPath);
   console.log(`Updated Codex config for jarvOS hooks: ${configPath}`);
-  console.log(`Backup: ${backupPath}`);
+  if (backupPath) console.log(`Backup: ${backupPath}`);
+  if (legacyBackupPath) console.log(`Migrated legacy Codex hooks with backup: ${legacyBackupPath}`);
 } else {
   console.log(`Codex config already has jarvOS hooks enabled: ${configPath}`);
 }

@@ -253,8 +253,12 @@ test('OpenClaw and Hermes package bounded per-turn stewardship bridge artifacts 
 });
 
 function runSetup(script, env) {
-  const result = spawnSync('bash', [script], { cwd: ROOT, encoding: 'utf8', env });
+  const result = runSetupResult(script, env);
   assert.equal(result.status, 0, result.stderr || result.stdout);
+}
+
+function runSetupResult(script, env) {
+  return spawnSync('bash', [script], { cwd: ROOT, encoding: 'utf8', env });
 }
 
 function count(content, pattern) {
@@ -398,6 +402,116 @@ test('Codex setup merges both jarvOS lifecycle hooks without replacing user hook
     assert.doesNotMatch(second, new RegExp(`${ROOT.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}/runtimes/codex/jarvos-session`));
     assert.match(second, /\[unrelated\]\nvalue = true/);
     assert.equal(fs.readdirSync(temp).filter((name) => name.startsWith('config.toml.bak-jarvos-')).length, 1);
+  } finally {
+    fs.rmSync(temp, { recursive: true, force: true });
+  }
+});
+
+test('Codex stewardship setup migrates legacy hooks.json without losing unrelated hooks', () => {
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-codex-hooks-migration-'));
+  const bin = path.join(temp, 'bin');
+  const home = path.join(temp, 'home');
+  const codexHome = path.join(temp, 'codex-home');
+  const config = path.join(codexHome, 'config.toml');
+  const hooksJson = path.join(codexHome, 'hooks.json');
+  const staged = path.join(temp, 'staged-public');
+  try {
+    fs.mkdirSync(path.join(staged, 'runtimes', 'codex'), { recursive: true });
+    for (const file of ['jarvos-session-start-hook.js', 'jarvos-session-turn-hook.js']) fs.copyFileSync(path.join(ROOT, 'runtimes', 'codex', file), path.join(staged, 'runtimes', 'codex', file));
+    fs.mkdirSync(bin, { recursive: true });
+    const codex = path.join(bin, 'codex');
+    fs.writeFileSync(codex, '#!/usr/bin/env sh\nif [ "$1" = "mcp" ] && [ "$2" = "get" ]; then exit 1; fi\nexit 0\n', { mode: 0o755 });
+    fs.chmodSync(codex, 0o755);
+    fs.mkdirSync(codexHome, { recursive: true });
+    fs.writeFileSync(config, [
+      '[hooks]',
+      'PreToolUse = [{ matcher = "Bash", hooks = [{ timeout = 9, command = "dcg --check", type = "command", async = true }] }]',
+      'UserPromptSubmit = [{ hooks = [{ type = "command", command = "model-routing" }] }]',
+      '',
+      '[unrelated]',
+      'value = true',
+      '',
+    ].join('\n'), 'utf8');
+    const originalConfig = fs.readFileSync(config, 'utf8');
+    const originalHooks = JSON.stringify({ hooks: {
+      PreToolUse: [{ matcher: 'Bash', hooks: [{ type: 'command', command: 'dcg --check', async: true, timeout: 9 }] }],
+      SessionStart: [{ matcher: 'resume', hooks: [{ type: 'command', command: 'unrelated-session-hook', timeout: 12 }] }],
+    } }, null, 2);
+    fs.writeFileSync(hooksJson, `${originalHooks}\n`, { mode: 0o600 });
+    fs.chmodSync(hooksJson, 0o600);
+    const env = {
+      ...process.env,
+      HOME: home,
+      CODEX_HOME: codexHome,
+      PATH: `${bin}${path.delimiter}${process.env.PATH || ''}`,
+      JARVOS_STEWARDSHIP_ONLY: '1',
+      JARVOS_MANAGED_REPOSITORIES: '/managed/repository',
+      JARVOS_STAGED_PUBLIC_RUNTIME_ROOT: staged,
+    };
+    const script = path.join(ROOT, 'runtimes', 'codex', 'setup.sh');
+    runSetup(script, env);
+    const first = fs.readFileSync(config, 'utf8');
+    assert.equal(fs.existsSync(hooksJson), false);
+    assert.equal(count(first, /dcg --check/g), 1);
+    assert.equal(count(first, /jarvos-session-start-hook\.js/g), 1);
+    assert.equal(count(first, /jarvos-session-turn-hook\.js/g), 1);
+    assert.match(first, /model-routing/);
+    assert.match(first, /unrelated-session-hook/);
+    assert.match(first, /\[unrelated\]\nvalue = true/);
+    const configBackups = fs.readdirSync(codexHome).filter((name) => name.startsWith('config.toml.bak-jarvos-'));
+    const hooksBackups = fs.readdirSync(codexHome).filter((name) => name.startsWith('hooks.json.bak-jarvos-'));
+    assert.equal(configBackups.length, 1);
+    assert.equal(hooksBackups.length, 1);
+    assert.equal(fs.readFileSync(path.join(codexHome, configBackups[0]), 'utf8'), originalConfig);
+    assert.equal(fs.readFileSync(path.join(codexHome, hooksBackups[0]), 'utf8'), `${originalHooks}\n`);
+    assert.equal(fs.statSync(path.join(codexHome, hooksBackups[0])).mode & 0o777, 0o600);
+    runSetup(script, env);
+    assert.equal(fs.readFileSync(config, 'utf8'), first);
+    assert.equal(fs.readdirSync(codexHome).filter((name) => name.startsWith('hooks.json.bak-jarvos-')).length, 1);
+    runSetup(script, { ...env, JARVOS_MANAGED_HARNESS_ROLLBACK: '1' });
+    const rolledBack = fs.readFileSync(config, 'utf8');
+    assert.doesNotMatch(rolledBack, /jarvos-session-(?:start|turn)-hook\.js/);
+    assert.match(rolledBack, /dcg --check/);
+    assert.match(rolledBack, /model-routing/);
+    assert.equal(fs.existsSync(hooksJson), false);
+  } finally {
+    fs.rmSync(temp, { recursive: true, force: true });
+  }
+});
+
+test('Codex hooks migration fails closed for malformed legacy hooks.json', () => {
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-codex-hooks-malformed-'));
+  const bin = path.join(temp, 'bin');
+  const codexHome = path.join(temp, 'codex-home');
+  const config = path.join(codexHome, 'config.toml');
+  const hooksJson = path.join(codexHome, 'hooks.json');
+  const staged = path.join(temp, 'staged-public');
+  try {
+    fs.mkdirSync(path.join(staged, 'runtimes', 'codex'), { recursive: true });
+    for (const file of ['jarvos-session-start-hook.js', 'jarvos-session-turn-hook.js']) fs.copyFileSync(path.join(ROOT, 'runtimes', 'codex', file), path.join(staged, 'runtimes', 'codex', file));
+    fs.mkdirSync(bin, { recursive: true });
+    const codex = path.join(bin, 'codex');
+    fs.writeFileSync(codex, '#!/usr/bin/env sh\nexit 0\n', { mode: 0o755 });
+    fs.chmodSync(codex, 0o755);
+    fs.mkdirSync(codexHome, { recursive: true });
+    const originalConfig = '[hooks]\nPreToolUse = [{ hooks = [{ type = "command", command = "keep-me" }] }]\n';
+    const originalHooks = '{"hooks":{"PreToolUse":[{"hooks":[{"type":"command","command":{"unsupported":true}}]}]}}\n';
+    fs.writeFileSync(config, originalConfig);
+    fs.writeFileSync(hooksJson, originalHooks);
+    const result = runSetupResult(path.join(ROOT, 'runtimes', 'codex', 'setup.sh'), {
+      ...process.env,
+      HOME: path.join(temp, 'home'),
+      CODEX_HOME: codexHome,
+      PATH: `${bin}${path.delimiter}${process.env.PATH || ''}`,
+      JARVOS_STEWARDSHIP_ONLY: '1',
+      JARVOS_MANAGED_REPOSITORIES: '/managed/repository',
+      JARVOS_STAGED_PUBLIC_RUNTIME_ROOT: staged,
+    });
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /refusing Codex hook migration/);
+    assert.equal(fs.readFileSync(config, 'utf8'), originalConfig);
+    assert.equal(fs.readFileSync(hooksJson, 'utf8'), originalHooks);
+    assert.deepEqual(fs.readdirSync(codexHome).filter((name) => name.includes('.bak-jarvos-')), []);
   } finally {
     fs.rmSync(temp, { recursive: true, force: true });
   }
