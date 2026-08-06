@@ -14,6 +14,7 @@
     "onboard:shared-vault": "node bridge/config/src/shared-vault-onboarding.js",
     "maintain:journal-backlinks": "node scripts/journal-backlink-recovery.js",
     "maintain:vault-mutations": "node scripts/vault-mutation-reconcile.js",
+    "health:vault-mutations": "node scripts/vault-mutation-health.js",
     "test:obsidian-live": "node scripts/obsidian-live-smoke.js",
     "test": "node --test tests/*.test.js"
   },
