@@ -4,8 +4,10 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const vm = require('node:vm');
 const test = require('node:test');
 const { createNoteMutationOperation, writeNoteFile } = require('../packages/jarvos-secondbrain-notes/src/write-to-vault');
+const { createConfiguredVaultMutationService } = require('../src/vault-mutation-service');
 
 function withVault(run) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-note-mutation-'));
@@ -67,4 +69,130 @@ test('injected writer reports the identity carried by the submitted operation', 
     });
     assert.equal(result.noteId, submitted.noteId);
   });
+});
+
+function settled(value) {
+  return {
+    then(fn) { try { fn(value); return this; } catch (error) { this.error = error; return this; } },
+    catch(fn) { if (this.error) fn(this.error); return this; },
+  };
+}
+
+function fakeObsidianEvaluator(root) {
+  const files = new Map();
+  const calls = { create: 0, process: 0, read: 0 };
+  const vault = {
+    getFileByPath(target) { return files.get(target) || null; },
+    create(target, content) {
+      calls.create += 1;
+      const file = { path: target, content };
+      files.set(target, file);
+      fs.mkdirSync(path.dirname(path.join(root, target)), { recursive: true });
+      fs.writeFileSync(path.join(root, target), content, 'utf8');
+      return settled(file);
+    },
+    process(file, transform) {
+      calls.process += 1;
+      file.content = transform(file.content);
+      fs.writeFileSync(path.join(root, file.path), file.content, 'utf8');
+      return settled(file);
+    },
+    read(file) { calls.read += 1; return settled(file.content); },
+  };
+  const context = { app: { vault }, TextDecoder, Uint8Array, atob: (value) => Buffer.from(value, 'base64').toString('binary'), JSON };
+  context.globalThis = context;
+  return {
+    calls,
+    files,
+    evaluate(code) {
+      const raw = vm.runInNewContext(code, context);
+      return typeof raw === 'string' ? JSON.parse(raw) : raw;
+    },
+  };
+}
+
+test('configured composition creates through Obsidian and acknowledges with app-owned readback', () => {
+  withVault(({ root }) => {
+    const fake = fakeObsidianEvaluator(root);
+    const service = createConfiguredVaultMutationService({
+      vaultRoot: root,
+      vaultId: 'vault-note-composition',
+      source: 'bridge.test-note',
+      adapterOptions: {
+        ledgerPath: path.join(root, '.state', 'ledger.json'),
+        probe: () => ({ state: 'available', vaultId: 'vault-note-composition' }),
+        evaluate: fake.evaluate,
+        maxPollAttempts: 2,
+      },
+    });
+    const context = service.createWriteContext({ vaultRelativePath: 'Notes/App Owned.md', intentId: 'note-app-owned-intent-0001' });
+    const result = writeNoteFile({ title: 'App Owned', content: 'Created through the app.', ...context });
+    assert.equal(result.receipt.status, 'committed');
+    assert.equal(result.receipt.obsidian, 'acknowledged');
+    assert.equal(fake.calls.create, 1);
+    assert.ok(fake.calls.read >= 1);
+    assert.match(fs.readFileSync(result.path, 'utf8'), /Created through the app\./);
+  });
+});
+
+test('existing note transform preserves the latest app content and stable identity', () => {
+  withVault(({ root }) => {
+    const fake = fakeObsidianEvaluator(root);
+    const service = createConfiguredVaultMutationService({
+      vaultRoot: root,
+      vaultId: 'vault-note-update',
+      source: 'bridge.test-note',
+      adapterOptions: { ledgerPath: path.join(root, '.state', 'ledger.json'), probe: () => ({ state: 'available', vaultId: 'vault-note-update' }), evaluate: fake.evaluate, maxPollAttempts: 2 },
+    });
+    const first = writeNoteFile({ title: 'Concurrent', content: 'First agent prose.', ...service.createWriteContext({ vaultRelativePath: 'Notes/Concurrent.md', intentId: 'note-concurrent-intent-01' }) });
+    const file = fake.files.get('Notes/Concurrent.md');
+    file.content = `${file.content.trimEnd()}\n\nMobile prose survives.\n`;
+    fs.writeFileSync(first.path, file.content, 'utf8');
+    const second = writeNoteFile({ title: 'Concurrent', content: 'Second agent prose.', ...service.createWriteContext({ vaultRelativePath: 'Notes/Concurrent.md', intentId: 'note-concurrent-intent-02' }) });
+    assert.equal(second.receipt.status, 'committed');
+    assert.equal(fake.calls.process, 1);
+    const content = fs.readFileSync(second.path, 'utf8');
+    assert.match(content, /Mobile prose survives\./);
+    assert.match(content, /Second agent prose\./);
+    assert.equal((content.match(/jarvos_note_id:/g) || []).length, 1);
+  });
+});
+
+test('wrong-vault capability retains a durable plan and never raw-writes', () => {
+  withVault(({ root }) => {
+    const service = createConfiguredVaultMutationService({
+      vaultRoot: root,
+      vaultId: 'vault-note-unavailable',
+      source: 'bridge.test-note',
+      adapterOptions: { ledgerPath: path.join(root, '.state', 'ledger.json'), probe: () => ({ state: 'wrong_vault' }) },
+    });
+    const result = writeNoteFile({ title: 'Offline', content: 'Must not bypass Obsidian.', ...service.createWriteContext({ vaultRelativePath: 'Notes/Offline.md', intentId: 'note-unavailable-intent' }) });
+    assert.equal(result.written, false);
+    assert.equal(result.receipt.status, 'unavailable');
+    assert.equal(fs.existsSync(result.path), false);
+    assert.equal(service.adapter.ledger.get('note-unavailable-intent').status, 'planned');
+  });
+});
+
+test('host-owned absence proof permits only a durable offline create pending reconciliation', () => {
+  withVault(({ root }) => {
+    const service = createConfiguredVaultMutationService({
+      vaultRoot: root,
+      vaultId: 'vault-note-offline',
+      source: 'bridge.test-note',
+      proveObsidianAbsent: () => true,
+      adapterOptions: { ledgerPath: path.join(root, '.state', 'ledger.json'), probe: () => ({ state: 'app_stopped' }) },
+    });
+    const result = writeNoteFile({ title: 'Offline Create', content: 'Queue this for Sync.', ...service.createWriteContext({ vaultRelativePath: 'Notes/Offline Create.md', intentId: 'note-offline-create-01' }) });
+    assert.equal(result.written, false);
+    assert.equal(result.savedLocally, true);
+    assert.equal(result.receipt.status, 'saved_locally_sync_pending');
+    assert.equal(service.adapter.ledger.get('note-offline-create-01').status, 'local_applied');
+    assert.match(fs.readFileSync(result.path, 'utf8'), /Queue this for Sync\./);
+  });
+});
+
+test('package note writer contains no direct Markdown write primitive', () => {
+  const source = fs.readFileSync(path.join(__dirname, '..', 'packages', 'jarvos-secondbrain-notes', 'src', 'write-to-vault.js'), 'utf8');
+  assert.doesNotMatch(source, /\b(?:writeFileSync|writeFile|appendFileSync|appendFile)\s*\(/);
 });

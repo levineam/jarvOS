@@ -71,3 +71,15 @@ test('local write-ahead states and auditable operator resolution survive restart
     assert.equal(restarted.get('op-00000006').history.at(-1).evidence.reason, 'user selected recovery');
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
+
+test('per-file sequence reservations are durable across ledger instances', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-ledger-sequence-'));
+  try {
+    const filePath = path.join(root, 'ledger.json');
+    const first = createVaultMutationLedger({ filePath });
+    const second = createVaultMutationLedger({ filePath });
+    assert.equal(first.nextSequence('vault', 'Notes/A.md'), 1);
+    assert.equal(second.nextSequence('vault', 'Notes/A.md'), 2);
+    assert.equal(first.nextSequence('vault', 'Notes/B.md'), 1);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});

@@ -9,6 +9,8 @@ const { writeNoteFile, todayDate } = require('../../../packages/jarvos-secondbra
 const { sourcePathFor } = require('../../../packages/jarvos-secondbrain-notes/src/knowledge-optimizer');
 const { getVaultNotesDir, getVaultJournalDir } = require('./lib/provenance-config');
 const { frontmatterToObject, parseFrontmatter } = require('../../../packages/jarvos-secondbrain-notes/src/lib/note-schema');
+const { createObsidianOwnedMutationService } = require('./obsidian-mutation');
+const { linkNoteToJournal } = require('./link-to-journal');
 
 const SUPPORTED_PERSONALITIES = new Set(['michael', 'claude-code', 'hermes', 'codex']);
 const LIGHTWEIGHT_IDEA_RE = /^\s*idea\s*[:\-]/i;
@@ -160,13 +162,59 @@ function verifyContract(result, personality) {
   };
 }
 
-function writeNoteThroughContract(rawInput) {
+function normalizeJournalResult(result) {
+  return result?.linked === true
+    ? { ...result, status: 'linked', linked: true, deferred: false, disabled: false, failed: false }
+    : { ...result, status: 'failed', linked: false, deferred: false, disabled: false, failed: true, reason: result?.reason || 'journal linker returned an unsuccessful result' };
+}
+
+function journalResultFromError(error) {
+  const deferredBacklink = error?.deferredBacklink;
+  return deferredBacklink?.deferredPath && deferredBacklink?.key
+    ? { status: 'deferred', linked: false, deferred: true, disabled: false, failed: false, reason: error.message, deferredBacklink, deferredPath: deferredBacklink.deferredPath, recoveryKey: deferredBacklink.key }
+    : { status: 'failed', linked: false, deferred: false, disabled: false, failed: true, reason: error.message };
+}
+
+function dispatchBacklink({ result, section = '📝 Notes', createIfMissing = true, link = linkNoteToJournal } = {}) {
+  if (!result.written) return result.journal;
+  try {
+    return normalizeJournalResult(link({
+      noteTitle: result.title,
+      section,
+      createIfMissing,
+      noteId: result.noteId,
+      notePath: result.path,
+    }));
+  } catch (error) {
+    return journalResultFromError(error);
+  }
+}
+
+function writeNoteThroughContract(rawInput, { mutationService, link } = {}) {
   const input = parseInput(rawInput);
-  const result = writeNoteFile({
+  const service = mutationService || createObsidianOwnedMutationService({ source: 'bridge.note-journal-contract' });
+  const filePath = path.join(getVaultNotesDir(), `${String(input.title).trim().replace(/[/\\:*?"<>|]/g, '-')}.md`);
+  const vaultRelativePath = path.relative(service.vaultRoot, filePath).split(path.sep).join('/');
+  const writeContext = service.createWriteContext({
+    vaultRelativePath,
+    intentId: rawInput.intentId,
+    operationSource: 'bridge.note-journal-contract',
+  });
+  const noteResult = writeNoteFile({
     title: input.title,
     content: input.content,
     frontmatter: input.frontmatter,
+    ...writeContext,
   });
+  const result = {
+    ...noteResult,
+    journal: dispatchBacklink({ result: noteResult, section: rawInput.section || '📝 Notes', createIfMissing: rawInput.createJournalIfMissing !== false, link }),
+  };
+  if (!result.written) {
+    const error = new Error(`note mutation is pending: ${result.receipt?.status || 'unavailable'}`);
+    error.result = result;
+    throw error;
+  }
   const verification = verifyContract(result, input.personality);
   if (!verification.ok) {
     const err = new Error(`note/journal contract failed: ${verification.failures.join('; ')}`);
@@ -212,6 +260,7 @@ function main() {
 module.exports = {
   SUPPORTED_PERSONALITIES,
   countJournalBacklinks,
+  dispatchBacklink,
   main,
   parseInput,
   verifyContract,

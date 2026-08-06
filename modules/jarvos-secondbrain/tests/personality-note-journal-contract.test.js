@@ -9,7 +9,7 @@ const { spawnSync } = require('child_process');
 
 const REPO_ROOT = path.resolve(__dirname, '..');
 const CONTRACT_CLI = path.join(REPO_ROOT, 'scripts', 'obsidian-note-journal-contract.js');
-const { verifyContract } = require('../bridge/provenance/src/note-journal-contract.js');
+const { verifyContract, writeNoteThroughContract } = require('../bridge/provenance/src/note-journal-contract.js');
 
 function runContract({ root, personality, frontmatter = {} }) {
   const input = {
@@ -56,50 +56,86 @@ function withEnv(nextEnv, fn) {
   }
 }
 
+function makeTestMutationService(vaultRoot) {
+  let sequence = 0;
+  return {
+    vaultRoot,
+    createWriteContext({ vaultRelativePath, intentId, operationSource }) {
+      sequence += 1;
+      return {
+        vaultRoot,
+        vaultId: 'test-vault',
+        operationId: intentId || `test-note-intent-${String(sequence).padStart(4, '0')}`,
+        sequence,
+        source: operationSource,
+        mutationExecutor(operation) {
+          const target = path.join(vaultRoot, operation.vaultRelativePath);
+          fs.mkdirSync(path.dirname(target), { recursive: true });
+          if (operation.operationKind === 'create') fs.writeFileSync(target, operation.content, 'utf8');
+          else {
+            const current = fs.readFileSync(target, 'utf8');
+            const body = operation.replayPayload.body.trim();
+            if (!current.includes(body)) fs.writeFileSync(target, `${current.trimEnd()}\n\n${body}\n`, 'utf8');
+          }
+          return { status: 'committed', obsidian: 'acknowledged' };
+        },
+      };
+    },
+  };
+}
+
 test('supported AI personalities can execute the Obsidian note/journal contract', () => {
   for (const personality of ['michael', 'claude-code', 'hermes', 'codex']) {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), `sup-2229-${personality}-`));
-    const first = runContract({ root, personality });
-    assert.equal(first.status, 0, `${personality} first write failed: ${first.stderr}`);
-    const parsedFirst = JSON.parse(first.stdout);
-    assert.equal(parsedFirst.personality, personality);
-    assert.equal(parsedFirst.created, true);
-    assert.equal(parsedFirst.qmdStatus, 'pending-refresh');
-    assert.equal(parsedFirst.verification.ok, true);
-    assert.ok(parsedFirst.notePath.startsWith(path.join(root, 'Notes')));
-    assert.equal(parsedFirst.journalPath, path.join(root, 'Journal', `${new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' })}.md`));
+    const env = {
+      VAULT_NOTES_DIR: path.join(root, 'Notes'),
+      JOURNAL_DIR: path.join(root, 'Journal'),
+      JARVOS_KNOWLEDGE_DIR: path.join(root, '.jarvos', 'knowledge'),
+      JARVOS_ALLOW_UNSAFE_TEST_JOURNAL_WRITE: '1',
+    };
+    withEnv(env, () => {
+      const mutationService = makeTestMutationService(root);
+      const input = {
+        personality,
+        title: `SUP-2229 ${personality} smoke`,
+        content: `# SUP-2229 ${personality} smoke\n\nContract smoke for ${personality}.`,
+        frontmatter: { status: 'draft', type: 'reference', project: 'SUP-2229', author: 'jarvis' },
+      };
+      const first = writeNoteThroughContract(input, { mutationService });
+      assert.equal(first.personality, personality);
+      assert.equal(first.created, true);
+      assert.equal(first.qmdStatus, 'pending-refresh');
+      assert.equal(first.verification.ok, true);
+      assert.ok(first.notePath.startsWith(path.join(root, 'Notes')));
+      assert.equal(first.journalPath, path.join(root, 'Journal', `${new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' })}.md`));
 
-    const second = runContract({ root, personality });
-    assert.equal(second.status, 0, `${personality} update failed: ${second.stderr}`);
-    const parsedSecond = JSON.parse(second.stdout);
-    assert.equal(parsedSecond.created, false);
-    assert.equal(parsedSecond.verification.ok, true);
+      const second = writeNoteThroughContract(input, { mutationService });
+      assert.equal(second.created, false);
+      assert.equal(second.verification.ok, true);
 
-    const journalMd = fs.readFileSync(parsedSecond.journalPath, 'utf8');
-    const backlink = `- [[${parsedSecond.title}]]`;
-    assert.equal(journalMd.split(backlink).length - 1, 1, `${personality} should have exactly one journal backlink`);
+      const journalMd = fs.readFileSync(second.journalPath, 'utf8');
+      const backlink = `- [[${second.title}]]`;
+      assert.equal(journalMd.split(backlink).length - 1, 1, `${personality} should have exactly one journal backlink`);
 
-    const qmd = JSON.parse(fs.readFileSync(parsedSecond.qmdPendingPath, 'utf8'));
-    assert.equal(qmd.entries[`Notes/${parsedSecond.title}.md`].status, 'pending-refresh');
+      const qmd = JSON.parse(fs.readFileSync(second.qmdPendingPath, 'utf8'));
+      assert.equal(qmd.entries[`Notes/${second.title}.md`].status, 'pending-refresh');
+    });
   }
 });
 
 test('canonical writer owns jarvos_note_id and preserves it across caller-supplied rewrites', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sup-note-id-'));
-  const first = runContract({ root, personality: 'codex' });
-  assert.equal(first.status, 0, first.stderr);
-  const firstResult = JSON.parse(first.stdout);
-  assert.match(firstResult.noteId, /^[0-9a-f-]{36}$/i);
-
-  const second = runContract({
-    root,
-    personality: 'codex',
-    frontmatter: { jarvos_note_id: 'caller-controlled-id' },
+  withEnv({
+    VAULT_NOTES_DIR: path.join(root, 'Notes'), JOURNAL_DIR: path.join(root, 'Journal'), JARVOS_KNOWLEDGE_DIR: path.join(root, '.jarvos', 'knowledge'), JARVOS_ALLOW_UNSAFE_TEST_JOURNAL_WRITE: '1',
+  }, () => {
+    const mutationService = makeTestMutationService(root);
+    const base = { personality: 'codex', title: 'Stable identity', content: 'A durable note.', frontmatter: { status: 'draft', type: 'reference', project: 'SUP-2229', author: 'jarvis' } };
+    const firstResult = writeNoteThroughContract(base, { mutationService });
+    assert.match(firstResult.noteId, /^[0-9a-f-]{36}$/i);
+    const secondResult = writeNoteThroughContract({ ...base, frontmatter: { ...base.frontmatter, jarvos_note_id: 'caller-controlled-id' } }, { mutationService });
+    assert.equal(secondResult.noteId, firstResult.noteId);
+    assert.doesNotMatch(fs.readFileSync(secondResult.notePath, 'utf8'), /caller-controlled-id/);
   });
-  assert.equal(second.status, 0, second.stderr);
-  const secondResult = JSON.parse(second.stdout);
-  assert.equal(secondResult.noteId, firstResult.noteId);
-  assert.doesNotMatch(fs.readFileSync(secondResult.notePath, 'utf8'), /caller-controlled-id/);
 });
 
 test('a verified deferred backlink queue is a successful partial contract result', () => {

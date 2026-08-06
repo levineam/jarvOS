@@ -133,6 +133,28 @@ function loadJournalLifecycle() {
   ));
 }
 
+function loadObsidianMutationService() {
+  return require(path.join(
+    secondbrainDir(),
+    'bridge',
+    'provenance',
+    'src',
+    'obsidian-mutation.js',
+  ));
+}
+
+function noteMutationContext({ title, input = {}, jarvosPaths, source = 'agent-context.note' } = {}) {
+  const vaultRoot = jarvosPaths.getVaultDir();
+  const notesDir = jarvosPaths.getNotesDir();
+  const filePath = path.join(notesDir, `${sanitizeTitle(title)}.md`);
+  const service = input.mutationService || loadObsidianMutationService().createObsidianOwnedMutationService({ vaultRoot, source });
+  return service.createWriteContext({
+    vaultRelativePath: path.relative(vaultRoot, filePath).split(path.sep).join('/'),
+    intentId: input.intentId,
+    operationSource: source,
+  });
+}
+
 function loadGbrain() {
   return loadModule('@jarvos/gbrain', path.join(JARVOS_ROOT, 'modules', 'jarvos-gbrain', 'src', 'index.js'));
 }
@@ -1243,6 +1265,7 @@ function createNote(input = {}) {
   const section = firstString(input.section, DEFAULT_NOTES_SECTION);
   const safeTitle = sanitizeTitle(title);
   const frontmatter = defaultFrontmatter(input.frontmatter || {});
+  const mutationContext = noteMutationContext({ title, input, jarvosPaths });
 
   const noteResult = noteWriter.writeNoteFile({
     title,
@@ -1250,7 +1273,17 @@ function createNote(input = {}) {
     frontmatter,
     section,
     createJournalIfMissing: input.createJournalIfMissing !== false,
+    ...mutationContext,
   });
+  if (!noteResult.written) {
+    return {
+      ok: false,
+      note: noteResult,
+      journal: noteResult.journal,
+      verification: null,
+      markdown: `# jarvOS Note Pending\n\n- Note: ${noteResult.path}\n- Status: ${noteResult.receipt?.status || 'unavailable'}`,
+    };
+  }
   const isDeferred = noteResult.journal?.status === 'deferred';
   const linkResult = noteResult.journal?.linked || isDeferred
     ? noteResult.journal

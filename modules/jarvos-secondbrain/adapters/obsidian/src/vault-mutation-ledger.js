@@ -72,14 +72,15 @@ function createVaultMutationLedger({ filePath, fsImpl = fs, now = () => Date.now
       if (unsafeMode(stat)) throw new Error('ledger permissions are unsafe');
       data = JSON.parse(fsImpl.readFileSync(filePath, 'utf8'));
     } catch (error) {
-      if (error.code === 'ENOENT') return { schemaVersion: 1, operations: {}, claims: {} };
-      if (repair) { quarantineUnlocked({ rawLedger: true }, error.message); return { schemaVersion: 1, operations: {}, claims: {} }; }
+      if (error.code === 'ENOENT') return { schemaVersion: 1, operations: {}, claims: {}, sequences: {} };
+      if (repair) { quarantineUnlocked({ rawLedger: true }, error.message); return { schemaVersion: 1, operations: {}, claims: {}, sequences: {} }; }
       throw error;
     }
     if (data?.schemaVersion !== 1 || !data.operations || !data.claims || typeof data.operations !== 'object') {
-      if (repair) { quarantineUnlocked(data, 'malformed_ledger'); return { schemaVersion: 1, operations: {}, claims: {} }; }
+      if (repair) { quarantineUnlocked(data, 'malformed_ledger'); return { schemaVersion: 1, operations: {}, claims: {}, sequences: {} }; }
       throw new Error('Invalid vault mutation ledger');
     }
+    if (!data.sequences || typeof data.sequences !== 'object' || Array.isArray(data.sequences)) data.sequences = {};
     let changed = false;
     for (const [id, record] of Object.entries(data.operations)) {
       try {
@@ -110,6 +111,18 @@ function createVaultMutationLedger({ filePath, fsImpl = fs, now = () => Date.now
     if (evidence !== undefined) record.evidence = evidence;
   }
   function ensure(operation) { return transaction(() => { const data = readUnlocked({ repair: true }); const { record, created } = ensureUnlocked(data, operation); if (created) writeAtomic(filePath, data, fsImpl); return record; }); }
+  function nextSequence(vaultId, vaultRelativePath) { return transaction(() => {
+    if (typeof vaultId !== 'string' || !vaultId || typeof vaultRelativePath !== 'string' || !vaultRelativePath) throw new Error('vaultId and vaultRelativePath are required');
+    const data = readUnlocked({ repair: true });
+    const sequenceKey = `${vaultId}\0${vaultRelativePath}`;
+    const observed = Object.values(data.operations)
+      .filter((record) => key(record.operation) === sequenceKey)
+      .reduce((maximum, record) => Math.max(maximum, record.operation.sequence), 0);
+    const sequence = Math.max(Number(data.sequences[sequenceKey]) || 0, observed) + 1;
+    data.sequences[sequenceKey] = sequence;
+    writeAtomic(filePath, data, fsImpl);
+    return sequence;
+  }); }
   function claim(operation, ownerId, { allowAmbiguousRetry = false, local = false } = {}) { return transaction(() => {
     if (!ownerId) throw new Error('claim ownerId is required');
     const data = readUnlocked({ repair: true }); const ensured = ensureUnlocked(data, operation); const { record, created } = ensured; const claimKey = key(record.operation); const stamp = now();
@@ -140,6 +153,6 @@ function createVaultMutationLedger({ filePath, fsImpl = fs, now = () => Date.now
   function read() { return transaction(() => readUnlocked({ repair: true })); }
   function active() { return Object.values(read().operations).filter((record) => !TERMINAL.has(record.status) && record.status !== 'quarantined').sort((a, b) => key(a.operation).localeCompare(key(b.operation)) || a.operation.sequence - b.operation.sequence); }
   function pruneRetained() { return transaction(() => { const data = readUnlocked({ repair: true }); let changed = false; for (const [id, record] of Object.entries(data.operations)) if (TERMINAL.has(record.status) && now() - record.updatedAt > retentionMs) { delete data.operations[id]; changed = true; } if (changed) writeAtomic(filePath, data, fsImpl); }); }
-  return Object.freeze({ active, acknowledgeFromObsidianRead, claim, ensure, get: (id) => read().operations[id] || null, read, resolve, transition, quarantine, pruneRetained, filePath });
+  return Object.freeze({ active, acknowledgeFromObsidianRead, claim, ensure, get: (id) => read().operations[id] || null, nextSequence, read, resolve, transition, quarantine, pruneRetained, filePath });
 }
 module.exports = { BLOCKING, STATES, TERMINAL, createVaultMutationLedger };
