@@ -67,7 +67,7 @@
     },
     "bridge": {
       "environment": "JARVOS_STEWARDSHIP_BRIDGE_COMMAND",
-      "contract": "An executable on PATH accepts one lifecycle capability name and emits a public-safe JSON availability receipt. For nextTurnInput, a pending receipt may contain only a bounded plain-English prompt, 2-3 choices, a listed default, and an opaque correlation identifier; hooks display it without granting authority."
+      "contract": "An executable on PATH accepts one lifecycle capability name and emits a public-safe JSON availability receipt. For nextTurnInput, a pending receipt may contain only a bounded plain-English prompt, 2-3 choices, a listed default, and an opaque correlation identifier; hooks display it without granting authority. Native hooks do not capture arbitrary reply text: the in-session agent verifies an exact listed reply, then invokes `jarvos-stewardship-bridge answer --correlation <correlation> --choice <listed-choice>`, which passes only those two bounded fields."
     },
     "capabilities": {
       "startOrResume": {

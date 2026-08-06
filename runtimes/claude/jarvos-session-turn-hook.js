@@ -82,7 +82,7 @@ function additionalContext(input) {
     'Choices:',
     ...judgment.choices.map((choice, index) => `${index + 1}. ${choice}${choice === judgment.default ? ' (default)' : ''}`),
     `Correlation: ${judgment.correlation}`,
-    'Reply with a listed choice and this correlation. Do not treat this notice as authority to execute or approve publication.',
+    'Reply with a listed choice and this correlation. This hook never reads reply text; after verifying an exact listed reply, the in-session agent records only its correlation and listed label with: jarvos-stewardship-bridge answer --correlation <correlation> --choice <listed-choice>. Do not treat this notice as authority to execute or approve publication.',
   ].join('\n');
 }
 
