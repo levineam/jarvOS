@@ -14,6 +14,8 @@ CONTROL_PLANE_SERVICE_MODULE="${JARVOS_CONTROL_PLANE_SERVICE_MODULE:-}"
 # Setup registers only a non-secret file path. Never pass the credential value
 # through `codex mcp add --env` — that puts it on argv and persists it in config.
 CONTROL_PLANE_CREDENTIAL_FILE="${JARVOS_CONTROL_PLANE_CREDENTIAL_FILE:-}"
+STEWARDSHIP_BRIDGE_COMMAND="${JARVOS_STEWARDSHIP_BRIDGE_COMMAND:-}"
+STEWARDSHIP_CODEX_SESSION_MAP_ROOT="${JARVOS_STEWARDSHIP_CODEX_SESSION_MAP_ROOT:-}"
 
 # A quiet managed-launcher install supplies reviewed public hook bytes here.
 # Refuse to activate configured managed roots with checkout-resident hooks.
@@ -145,11 +147,11 @@ if [ ! -f "$CODEX_CONFIG" ]; then
   touch "$CODEX_CONFIG"
 fi
 
-node - "$CODEX_CONFIG" "$LEGACY_HOOKS_JSON" "$HOOK_SCRIPT" "$TURN_HOOK_SCRIPT" "${JARVOS_MANAGED_HARNESS_ROLLBACK:-0}" <<'NODE'
+node - "$CODEX_CONFIG" "$LEGACY_HOOKS_JSON" "$HOOK_SCRIPT" "$TURN_HOOK_SCRIPT" "${JARVOS_MANAGED_HARNESS_ROLLBACK:-0}" "$STEWARDSHIP_BRIDGE_COMMAND" "$STEWARDSHIP_CODEX_SESSION_MAP_ROOT" <<'NODE'
 const fs = require('fs');
 const path = require('path');
 
-const [configPath, legacyHooksPath, hookScript, turnHookScript, rollback] = process.argv.slice(2);
+const [configPath, legacyHooksPath, hookScript, turnHookScript, rollback, bridgeCommand, codexSessionMapRoot] = process.argv.slice(2);
 const original = fs.readFileSync(configPath, 'utf8');
 let next = original;
 
@@ -377,6 +379,70 @@ function removeFeature(content, key) {
   }).join('\n');
 }
 
+function environmentPolicyTableRange(lines) {
+  const start = lines.findIndex((line) => /^\[shell_environment_policy\]\s*$/.test(line));
+  if (start < 0) return { start, end: lines.length };
+  let end = lines.length;
+  for (let index = start + 1; index < lines.length; index += 1) if (/^\s*\[/.test(lines[index])) { end = index; break; }
+  return { start, end };
+}
+
+function parseEnvironmentSet(value) {
+  if (!value.startsWith('{') || !value.endsWith('}')) fail('shell_environment_policy.set must use a one-line inline table');
+  const entries = topLevelHookEntries(`[${value.slice(1, -1)}]`);
+  const result = {};
+  for (const entry of entries) {
+    const match = /^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*("(?:\\.|[^"\\])*")\s*$/.exec(entry);
+    if (!match) fail('shell_environment_policy.set supports only string environment values');
+    try { result[match[1]] = JSON.parse(match[2]); } catch { fail('shell_environment_policy.set contains an invalid string'); }
+  }
+  return result;
+}
+
+function renderEnvironmentSet(entries) {
+  return `{ ${Object.entries(entries).map(([key, value]) => `${key} = ${JSON.stringify(value)}`).join(', ')} }`;
+}
+
+function setStewardshipBridgeEnvironment(content, bridge) {
+  if (bridge === undefined) return content;
+  const lines = content.split(/\n/); const { start, end } = environmentPolicyTableRange(lines);
+  if (start < 0) {
+    if (!bridge) return content;
+    const suffix = content.endsWith('\n') || content.length === 0 ? '' : '\n';
+    return `${content}${suffix}\n[shell_environment_policy]\nset = ${renderEnvironmentSet(bridge)}\n`;
+  }
+  let setIndex = -1; let entries = {};
+  for (let index = start + 1; index < end; index += 1) {
+    const match = /^\s*set\s*=\s*(\{.*\})\s*(?:#.*)?$/.exec(lines[index]);
+    if (!match) continue;
+    if (setIndex >= 0) fail('shell_environment_policy must contain at most one set assignment');
+    setIndex = index; entries = parseEnvironmentSet(match[1]);
+  }
+  for (const key of ['JARVOS_STEWARDSHIP_BRIDGE_COMMAND', 'JARVOS_STEWARDSHIP_CODEX_SESSION_MAP_ROOT', 'JARVOS_STEWARDSHIP_BRIDGE_CONTEXT_FILE']) delete entries[key];
+  if (bridge) Object.assign(entries, bridge);
+  if (Object.keys(entries).length) {
+    const line = `set = ${renderEnvironmentSet(entries)}`;
+    if (setIndex >= 0) lines[setIndex] = line;
+    else lines.splice(end, 0, line);
+    return lines.join('\n');
+  }
+  if (setIndex >= 0) lines.splice(setIndex, 1);
+  const nextRange = environmentPolicyTableRange(lines);
+  const hasContent = lines.slice(nextRange.start + 1, nextRange.end).some((line) => !/^\s*(?:#.*)?$/.test(line));
+  if (!hasContent) lines.splice(nextRange.start, nextRange.end - nextRange.start);
+  return lines.join('\n');
+}
+
+function stewardshipBridgeEnvironment(command, codexMapRoot) {
+  if (!command && !codexMapRoot) return undefined;
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(command || '')) fail('JARVOS_STEWARDSHIP_BRIDGE_COMMAND must be a bounded executable name');
+  if (!path.isAbsolute(codexMapRoot || '')) fail('JARVOS_STEWARDSHIP_CODEX_SESSION_MAP_ROOT must be an absolute path');
+  return {
+    JARVOS_STEWARDSHIP_BRIDGE_COMMAND: command,
+    JARVOS_STEWARDSHIP_CODEX_SESSION_MAP_ROOT: codexMapRoot,
+  };
+}
+
 let migrated = null;
 if (fs.existsSync(legacyHooksPath)) {
   migrated = parseLegacyHooks(legacyHooksPath);
@@ -384,14 +450,18 @@ if (fs.existsSync(legacyHooksPath)) {
   for (const [event, entries] of Object.entries(migrated)) for (const entry of entries) next = setHook(next, event, renderHookEntry(entry), false);
 }
 
+const bridgeEnvironment = stewardshipBridgeEnvironment(bridgeCommand, codexSessionMapRoot);
+
 if (rollback === '1') {
   validateHookTable(next);
   next = setHook(next, 'SessionStart', null, true);
   next = setHook(next, 'UserPromptSubmit', null, true);
+  next = setStewardshipBridgeEnvironment(next, null);
 } else {
   validateHookTable(next);
-  next = setHook(next, 'SessionStart', renderHookEntry({ matcher: 'startup', hooks: [{ type: 'command', command: `node ${JSON.stringify(hookScript)}`, async: false, timeout: 30 }] }), true);
+  next = setHook(next, 'SessionStart', renderHookEntry({ matcher: 'startup|resume', hooks: [{ type: 'command', command: `node ${JSON.stringify(hookScript)}`, async: false, timeout: 30 }] }), true);
   next = setHook(next, 'UserPromptSubmit', renderHookEntry({ hooks: [{ type: 'command', command: `node ${JSON.stringify(turnHookScript)}`, async: false, timeout: 30 }] }), true);
+  next = setStewardshipBridgeEnvironment(next, bridgeEnvironment);
 }
 next = setFeature(next, 'hooks', 'true');
 next = removeFeature(next, 'codex_hooks');

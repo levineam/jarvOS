@@ -6,8 +6,19 @@ const { spawnSync } = require('node:child_process');
 const { createHash } = require('node:crypto');
 const fs = require('node:fs'); const path = require('node:path');
 
-function mapping(event, config) {
-  const token = typeof event?.sessionKey === 'string' ? event.sessionKey : typeof event?.sessionId === 'string' ? event.sessionId : null;
+function sessionToken(event, context) {
+  // In OpenClaw 2026.7.1, before_prompt_build receives prompt/messages in the
+  // event and carries the active session identity on the typed hook context.
+  // Preserve the event lookup as a narrow compatibility fallback for direct
+  // callers from older runtimes.
+  return typeof context?.sessionKey === 'string' ? context.sessionKey
+    : typeof context?.sessionId === 'string' ? context.sessionId
+      : typeof event?.sessionKey === 'string' ? event.sessionKey
+        : typeof event?.sessionId === 'string' ? event.sessionId : null;
+}
+
+function mapping(event, config, context) {
+  const token = sessionToken(event, context);
   if (!token || typeof config?.mappingRoot !== 'string' || !path.isAbsolute(config.mappingRoot)) return null;
   const file = path.join(config.mappingRoot, `${createHash('sha256').update(token).digest('hex')}.json`);
   try {
@@ -16,8 +27,8 @@ function mapping(event, config) {
     return value?.schemaVersion === 1 && typeof value.contextFile === 'string' && typeof value.bridgeExecutable === 'string' ? value : null;
   } catch (_) { return null; }
 }
-function nextTurnContext(event, config) {
-  const entry = mapping(event, config); if (!entry) return null;
+function nextTurnContext(event, config, context) {
+  const entry = mapping(event, config, context); if (!entry) return null;
   const result = spawnSync(entry.bridgeExecutable, ['nextTurnInput'], { encoding: 'utf8', timeout: 5000, env: { ...process.env, JARVOS_STEWARDSHIP_BRIDGE_CONTEXT_FILE: entry.contextFile } });
   if (result.status !== 0) return null;
   try {
@@ -33,7 +44,7 @@ function nextTurnContext(event, config) {
 }
 
 function before_prompt_build(event, context) {
-  const prependContext = nextTurnContext(event, context?.pluginConfig);
+  const prependContext = nextTurnContext(event, context?.pluginConfig, context);
   return prependContext ? { prependContext } : {};
 }
 

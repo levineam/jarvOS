@@ -137,6 +137,7 @@ module.exports = {
   HARNESS,
   BRIDGE_COMMAND_ENV,
   availability,
+  additionalContext,
   hasVerifiedLinkedWorktree,
   heartbeat,
   invokeBridge,

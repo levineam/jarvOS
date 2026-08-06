@@ -154,6 +154,41 @@ test('native hooks display a validated public judgment on the next turn', () => 
   }
 });
 
+test('Codex SessionStart exposes a pending public judgment for both fresh and resumed sessions', () => {
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-codex-session-start-'));
+  const bin = path.join(temp, 'bin');
+  const bridge = path.join(bin, 'jarvos-stewardship-bridge');
+  const oldPath = process.env.PATH;
+  const oldBridge = process.env.JARVOS_STEWARDSHIP_BRIDGE_COMMAND;
+  try {
+    fs.mkdirSync(bin, { recursive: true });
+    fs.writeFileSync(bridge, [
+      '#!/usr/bin/env sh',
+      'if [ "$1" = "nextTurnInput" ]; then',
+      "  printf '%s\\n' '{\"available\":true,\"pendingInSessionInput\":true,\"prompt\":\"Choose the safe recovery step.\",\"choices\":[\"Wait\",\"Prepare a dry run\"],\"default\":\"Wait\",\"correlation\":\"resume-42\"}'",
+      'else',
+      "  printf '%s\\n' '{\"available\":true}'",
+      'fi',
+      '',
+    ].join('\n'), { mode: 0o755 });
+    fs.chmodSync(bridge, 0o755);
+    process.env.PATH = `${bin}${path.delimiter}${oldPath || ''}`;
+    process.env.JARVOS_STEWARDSHIP_BRIDGE_COMMAND = 'jarvos-stewardship-bridge';
+
+    const hook = require(path.join(ROOT, 'runtimes', 'codex', 'jarvos-session-start-hook.js'));
+    const context = hook.stewardshipContext({ cwd: temp });
+    assert.match(context, /Choose the safe recovery step\./);
+    assert.match(context, /resume-42/);
+    assert.match(context, /jarvos-stewardship-bridge answer --correlation <correlation> --choice <listed-choice>/);
+    assert.doesNotMatch(context, new RegExp(temp.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+  } finally {
+    if (oldBridge === undefined) delete process.env.JARVOS_STEWARDSHIP_BRIDGE_COMMAND;
+    else process.env.JARVOS_STEWARDSHIP_BRIDGE_COMMAND = oldBridge;
+    process.env.PATH = oldPath;
+    fs.rmSync(temp, { recursive: true, force: true });
+  }
+});
+
 test('Claude SessionStart persists only a validated bridge command for later hooks', () => {
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-claude-env-file-'));
   const bin = path.join(temp, 'bin');
@@ -280,8 +315,11 @@ test('OpenClaw and Hermes package bounded per-turn stewardship bridge artifacts 
     fs.writeFileSync(path.join(mappings, `${createHash('sha256').update(sessionKey).digest('hex')}.json`), `${JSON.stringify({ schemaVersion: 1, contextFile: path.join(temp, 'context.json'), bridgeExecutable: bridge })}\n`, { mode: 0o600 });
     fs.chmodSync(path.join(mappings, `${createHash('sha256').update(sessionKey).digest('hex')}.json`), 0o600);
     const plugin = require(path.join(ROOT, 'runtimes', 'openclaw', 'jarvos-next-turn-plugin.js'));
-    assert.match(plugin.before_prompt_build({ sessionKey }, { pluginConfig: { mappingRoot: mappings } }).prependContext, /Choose a safe next step/);
-    assert.deepEqual(plugin.before_prompt_build({ sessionKey: 'unmapped' }, { pluginConfig: { mappingRoot: mappings } }), {});
+    // OpenClaw 2026.7.1 places the session identity on the typed hook
+    // context, not the before_prompt_build event. Keep the event shape
+    // faithful so this regression proves delivery on a normal agent turn.
+    assert.match(plugin.before_prompt_build({ prompt: 'Continue', messages: [] }, { sessionKey, pluginConfig: { mappingRoot: mappings } }).prependContext, /Choose a safe next step/);
+    assert.deepEqual(plugin.before_prompt_build({ prompt: 'Continue', messages: [] }, { sessionKey: 'unmapped', pluginConfig: { mappingRoot: mappings } }), {});
     const registrations = []; plugin({ on: (...args) => registrations.push(args) });
     assert.equal(registrations.length, 1); assert.equal(registrations[0][0], 'before_prompt_build'); assert.equal(registrations[0][2].timeoutMs, 5000);
   } finally {
@@ -408,6 +446,9 @@ test('Codex setup merges both jarvOS lifecycle hooks without replacing user hook
       'SessionStart = [{ matcher = "startup", hooks = [{ type = "command", command = "user-session-start" }] }]',
       'UserPromptSubmit = [{ hooks = [{ type = "command", command = "user-prompt-submit" }] }]',
       '',
+      '[shell_environment_policy]',
+      'set = { EXISTING = "keep" }',
+      '',
       '[unrelated]',
       'value = true',
       '',
@@ -424,6 +465,8 @@ test('Codex setup merges both jarvOS lifecycle hooks without replacing user hook
       JARVOS_STEWARDSHIP_ONLY: '1',
       JARVOS_MANAGED_REPOSITORIES: '/managed/repository',
       JARVOS_STAGED_PUBLIC_RUNTIME_ROOT: staged,
+      JARVOS_STEWARDSHIP_BRIDGE_COMMAND: 'jarvos-stewardship-bridge',
+      JARVOS_STEWARDSHIP_CODEX_SESSION_MAP_ROOT: path.join(temp, 'codex-session-map'),
     };
     const script = path.join(ROOT, 'runtimes', 'codex', 'setup.sh');
     runSetup(script, env);
@@ -431,14 +474,30 @@ test('Codex setup merges both jarvOS lifecycle hooks without replacing user hook
     runSetup(script, env);
     const second = fs.readFileSync(config, 'utf8');
     assert.equal(first, second);
+    assert.equal(count(second, /^\[hooks\]$/gm), 1);
     assert.equal(count(second, /jarvos-session-start-hook\.js/g), 1);
     assert.equal(count(second, /jarvos-session-turn-hook\.js/g), 1);
+    assert.match(second, /matcher = "startup\|resume"/);
     assert.match(second, /user-session-start/);
     assert.match(second, /user-prompt-submit/);
+    assert.match(second, /EXISTING = "keep"/);
+    assert.match(second, /JARVOS_STEWARDSHIP_BRIDGE_COMMAND = "jarvos-stewardship-bridge"/);
+    assert.match(second, /JARVOS_STEWARDSHIP_CODEX_SESSION_MAP_ROOT = ".*codex-session-map"/);
+    assert.doesNotMatch(second, /JARVOS_STEWARDSHIP_BRIDGE_CONTEXT_FILE/);
     assert.match(second, new RegExp(staged.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
     assert.doesNotMatch(second, new RegExp(`${ROOT.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}/runtimes/codex/jarvos-session`));
     assert.match(second, /\[unrelated\]\nvalue = true/);
     assert.equal(fs.readdirSync(temp).filter((name) => name.startsWith('config.toml.bak-jarvos-')).length, 1);
+    const withoutBridge = { ...env };
+    delete withoutBridge.JARVOS_STEWARDSHIP_BRIDGE_COMMAND;
+    delete withoutBridge.JARVOS_STEWARDSHIP_CODEX_SESSION_MAP_ROOT;
+    runSetup(script, withoutBridge);
+    assert.equal(fs.readFileSync(config, 'utf8'), second);
+    runSetup(script, { ...env, JARVOS_MANAGED_HARNESS_ROLLBACK: '1' });
+    const rolledBack = fs.readFileSync(config, 'utf8');
+    assert.doesNotMatch(rolledBack, /jarvos-session-(?:start|turn)-hook\.js/);
+    assert.doesNotMatch(rolledBack, /JARVOS_STEWARDSHIP_(?:BRIDGE_COMMAND|CODEX_SESSION_MAP_ROOT)/);
+    assert.match(rolledBack, /EXISTING = "keep"/);
   } finally {
     fs.rmSync(temp, { recursive: true, force: true });
   }
