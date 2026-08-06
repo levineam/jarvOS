@@ -7,7 +7,7 @@ const path = require('node:path');
 const test = require('node:test');
 const {
   initializeSecurityVault,
-  loadSigningKey,
+  withSigningKey,
   vaultPaths,
 } = require('../src/features/security/vault');
 
@@ -72,14 +72,30 @@ test('one Touch ID identity and one recovery credential protect separate signer 
   assert.equal((await fs.readdir(root)).some((entry) => /plain/i.test(entry)), false);
 });
 
-test('the same unlock surface loads either purpose but keys remain purpose-bound', async () => {
+test('the same unlock surface uses either purpose without exposing raw signing material', async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'jarvos-security-load-'));
   const tools = fakeTools();
   await initializeSecurityVault({ root, execute: tools.execute });
-  assert.match(await loadSigningKey({ root, purpose: 'activation', execute: tools.execute }), /PRIVATE KEY/);
-  assert.match(await loadSigningKey({ root, purpose: 'projects', execute: tools.execute }), /PRIVATE KEY/);
+  assert.equal(
+    await withSigningKey({
+      root,
+      purpose: 'activation',
+      execute: tools.execute,
+      useSigningKey: (key) => key.type,
+    }),
+    'private',
+  );
+  assert.equal(
+    await withSigningKey({
+      root,
+      purpose: 'projects',
+      execute: tools.execute,
+      useSigningKey: (key) => key.asymmetricKeyType,
+    }),
+    'ed25519',
+  );
   await assert.rejects(
-    loadSigningKey({ root, purpose: 'publication', execute: tools.execute }),
+    withSigningKey({ root, purpose: 'publication', execute: tools.execute, useSigningKey: () => {} }),
     /unknown signing purpose/,
   );
 });
@@ -88,7 +104,13 @@ test('recovery can prompt while decrypted signer output remains internal', async
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'jarvos-security-recovery-'));
   const tools = fakeTools();
   await initializeSecurityVault({ root, execute: tools.execute });
-  await loadSigningKey({ root, purpose: 'activation', recovery: true, execute: tools.execute });
+  await withSigningKey({
+    root,
+    purpose: 'activation',
+    recovery: true,
+    execute: tools.execute,
+    useSigningKey: () => {},
+  });
   const recoveryCall = tools.calls.find(([command, args]) => command === 'age' && args.includes('--decrypt'));
   assert.deepEqual(recoveryCall[2], { interactive: true, captureStdout: true });
   assert.ok(recoveryCall[1].includes(vaultPaths(root).recoveryIdentity));

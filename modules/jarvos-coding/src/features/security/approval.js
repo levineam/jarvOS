@@ -15,7 +15,7 @@ const {
   receiptPayload,
   validReceiptShape,
 } = require('./projects-capability');
-const { defaultRoot, loadSigningKey, vaultPaths } = require('./vault');
+const { defaultRoot, vaultPaths, withSigningKey } = require('./vault');
 
 async function readVaultDescriptor(purpose, root = defaultRoot()) {
   const files = vaultPaths(root);
@@ -55,7 +55,15 @@ async function issueApprovedRequest({
   now = Date.now(),
   clock = Date.now,
   recovery = false,
-  loadKey = loadSigningKey,
+  signReceipt = ({ root: vaultRoot, purpose: signingPurpose, recovery: useRecovery, descriptor, payload }) => (
+    withSigningKey({
+      root: vaultRoot,
+      purpose: signingPurpose,
+      recovery: useRecovery,
+      descriptor,
+      useSigningKey: (signingKey) => crypto.sign(null, payload, signingKey).toString('base64url'),
+    })
+  ),
   readDescriptor = readVaultDescriptor,
 } = {}) {
   let purpose;
@@ -71,21 +79,25 @@ async function issueApprovedRequest({
   }
 
   const descriptor = await readDescriptor(purpose, root);
-  const privateKeyPem = await loadKey({ root, purpose, recovery, descriptor });
-  const signingNow = clock();
-  try {
-    if (purpose === 'activation') activationRequest(approved, signingNow);
-    else projectsRequest(approved, signingNow);
-  } catch (_) {
-    throw new Error('approval request expired during unlock');
-  }
-  const signingKey = crypto.createPrivateKey(privateKeyPem);
+  let signingNow;
+  const assertCurrent = () => {
+    signingNow = clock();
+    try {
+      if (purpose === 'activation') activationRequest(approved, signingNow);
+      else projectsRequest(approved, signingNow);
+    } catch (_) {
+      throw new Error('approval request expired during unlock');
+    }
+  };
+  assertCurrent();
   const payload = purpose === 'activation'
     ? activationReceiptPayload(approved)
     : receiptPayload(approved);
+  const signature = await signReceipt({ root, purpose, recovery, descriptor, payload });
+  assertCurrent();
   const receipt = Object.freeze({
     ...approved,
-    signature: crypto.sign(null, payload, signingKey).toString('base64url'),
+    signature,
   });
 
   if (purpose === 'activation') {

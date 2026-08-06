@@ -301,14 +301,16 @@ async function initializeSecurityVault({ root = defaultRoot(), execute = default
   }
 }
 
-async function loadSigningKey({
+async function withSigningKey({
   root = defaultRoot(),
   purpose,
   recovery = false,
   execute = defaultExecute,
   descriptor,
+  useSigningKey,
 } = {}) {
   if (!PURPOSES.includes(purpose)) throw new Error(`unknown signing purpose: ${String(purpose || '')}`);
+  if (typeof useSigningKey !== 'function') throw new Error('signing key use callback is required');
   const files = vaultPaths(root);
   const encrypted = purpose === 'activation' ? files.activationSigner : files.projectsSigner;
   const identity = recovery ? files.recoveryIdentity : files.secureEnclaveIdentity;
@@ -330,7 +332,7 @@ async function loadSigningKey({
   if (actualId !== pinnedDescriptor.pinnedVerifierId) {
     throw new Error(`${purpose} signer does not match its pinned public verifier`);
   }
-  return privateKeyPem;
+  return useSigningKey(signingKey);
 }
 
 module.exports = {
@@ -339,7 +341,7 @@ module.exports = {
   defaultExecute,
   defaultRoot,
   initializeSecurityVault,
-  loadSigningKey,
+  withSigningKey,
   recipientFrom,
   vaultPaths,
 };

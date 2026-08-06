@@ -1,7 +1,7 @@
 'use strict';
 
 const assert = require('node:assert/strict');
-const { generateKeyPairSync } = require('node:crypto');
+const crypto = require('node:crypto');
 const test = require('node:test');
 const {
   ACTIVATION_AUDIENCE,
@@ -14,11 +14,15 @@ const {
 } = require('../src');
 const { issueApprovedRequest } = require('../src/features/security/approval');
 
-const now = Date.parse('2026-08-05T12:00:00.000Z');
+const now = Date.now();
 const envelope = `sha256:${'a'.repeat(64)}`;
 
+function timestamp(offsetMs) {
+  return new Date(now + offsetMs).toISOString();
+}
+
 function signer(purpose) {
-  const { privateKey, publicKey } = generateKeyPairSync('ed25519');
+  const { privateKey, publicKey } = crypto.generateKeyPairSync('ed25519');
   const privateKeyPem = privateKey.export({ type: 'pkcs8', format: 'pem' });
   const publicKeyPem = publicKey.export({ type: 'spki', format: 'pem' });
   const pinnedVerifierId = purpose === 'activation'
@@ -48,9 +52,10 @@ test('one vault API signs both protocols with distinct purpose-specific keys', a
   const activation = signer('activation');
   const projects = signer('projects');
   const loaded = [];
-  const loadKey = async ({ purpose, descriptor }) => {
+  const signReceipt = async ({ purpose, descriptor, payload }) => {
     loaded.push({ purpose, descriptor });
-    return purpose === 'activation' ? activation.privateKeyPem : projects.privateKeyPem;
+    const privateKeyPem = purpose === 'activation' ? activation.privateKeyPem : projects.privateKeyPem;
+    return crypto.sign(null, payload, crypto.createPrivateKey(privateKeyPem)).toString('base64url');
   };
   const readDescriptor = async (purpose) => (
     purpose === 'activation' ? activation.descriptor : projects.descriptor
@@ -67,12 +72,12 @@ test('one vault API signs both protocols with distinct purpose-specific keys', a
       mode: 'shadow',
       activationEnvelopeDigest: envelope,
       opportunityKeys: ['window:one'],
-      issuedAt: '2026-08-05T12:00:00.000Z',
-      expiresAt: '2026-08-06T12:00:00.000Z',
+      issuedAt: timestamp(-60_000),
+      expiresAt: timestamp(60 * 60 * 1000),
     },
     now,
     clock: () => now,
-    loadKey,
+    signReceipt,
     readDescriptor,
   });
   assert.equal(createActivationVerifier(activation.descriptor, { now: () => now }).verify(activationReceipt), true);
@@ -86,12 +91,12 @@ test('one vault API signs both protocols with distinct purpose-specific keys', a
       allowedVisibilities: ['private', 'mixed'],
       capabilityRevision: 'projects:one',
       activationEnvelopeDigest: envelope,
-      issuedAt: '2026-08-05T12:00:00.000Z',
-      expiresAt: '2026-08-05T13:00:00.000Z',
+      issuedAt: timestamp(-60_000),
+      expiresAt: timestamp(60 * 60 * 1000),
     },
     now,
     clock: () => now,
-    loadKey,
+    signReceipt,
     readDescriptor,
   });
   assert.equal(createProjectsCapabilityVerifier(projects.descriptor, { now: () => now }).verify(projectsReceipt), true);
@@ -103,20 +108,20 @@ test('one vault API signs both protocols with distinct purpose-specific keys', a
 });
 
 test('unsupported protocols are rejected before the vault is unlocked', async () => {
-  let loaded = false;
+  let signed = false;
   await assert.rejects(
     issueApprovedRequest({
       request: { type: 'jarvos.release-publication/v1' },
-      loadKey: async () => { loaded = true; },
+      signReceipt: async () => { signed = true; },
     }),
     /unsupported jarvOS approval request/,
   );
-  assert.equal(loaded, false);
+  assert.equal(signed, false);
 });
 
 test('expired bounded requests are rejected before the vault is unlocked', async () => {
-  let loaded = false;
-  const loadKey = async () => { loaded = true; };
+  let signed = false;
+  const signReceipt = async () => { signed = true; };
   await assert.rejects(
     issueApprovedRequest({
       request: {
@@ -129,11 +134,11 @@ test('expired bounded requests are rejected before the vault is unlocked', async
         mode: 'shadow',
         activationEnvelopeDigest: envelope,
         opportunityKeys: ['window:expired'],
-        issuedAt: '2026-08-04T10:00:00.000Z',
-        expiresAt: '2026-08-05T11:00:00.000Z',
+        issuedAt: timestamp(-2 * 60 * 60 * 1000),
+        expiresAt: timestamp(-60_000),
       },
       now,
-      loadKey,
+      signReceipt,
     }),
     /not a current bounded shadow approval/,
   );
@@ -147,15 +152,15 @@ test('expired bounded requests are rejected before the vault is unlocked', async
         allowedVisibilities: ['private'],
         capabilityRevision: 'projects:expired',
         activationEnvelopeDigest: envelope,
-        issuedAt: '2026-08-04T10:00:00.000Z',
-        expiresAt: '2026-08-05T11:00:00.000Z',
+        issuedAt: timestamp(-2 * 60 * 60 * 1000),
+        expiresAt: timestamp(-60_000),
       },
       now,
-      loadKey,
+      signReceipt,
     }),
     /not a current bounded receipt/,
   );
-  assert.equal(loaded, false);
+  assert.equal(signed, false);
 });
 
 test('Projects verifier rejects a correctly signed receipt after it expires', async () => {
@@ -169,15 +174,17 @@ test('Projects verifier rejects a correctly signed receipt after it expires', as
       allowedVisibilities: ['private'],
       capabilityRevision: 'projects:expiry-test',
       activationEnvelopeDigest: envelope,
-      issuedAt: '2026-08-05T12:00:00.000Z',
-      expiresAt: '2026-08-05T13:00:00.000Z',
+      issuedAt: timestamp(-60_000),
+      expiresAt: timestamp(60 * 60 * 1000),
     },
     now,
     clock: () => now,
-    loadKey: async () => projects.privateKeyPem,
+    signReceipt: async ({ payload }) => (
+      crypto.sign(null, payload, crypto.createPrivateKey(projects.privateKeyPem)).toString('base64url')
+    ),
     readDescriptor: async () => projects.descriptor,
   });
-  const afterExpiry = Date.parse('2026-08-05T13:00:00.000Z');
+  const afterExpiry = now + 60 * 60 * 1000;
   assert.equal(
     createProjectsCapabilityVerifier(projects.descriptor, { now: () => afterExpiry }).verify(receipt),
     false,
@@ -191,9 +198,16 @@ test('privileged vault and signing operations are not part of the public agent A
     'initializeSecurityVault',
     'issueApprovedRequest',
     'loadSigningKey',
+    'withSigningKey',
     'readVaultDescriptor',
     'securityVaultPaths',
   ]) {
     assert.equal(Object.hasOwn(publicApi, name), false, `${name} must remain internal`);
+  }
+  for (const subpath of [
+    '@jarvos/coding/features/security/approval',
+    '@jarvos/coding/src/features/security/vault',
+  ]) {
+    assert.throws(() => require(subpath), { code: 'ERR_PACKAGE_PATH_NOT_EXPORTED' });
   }
 });
