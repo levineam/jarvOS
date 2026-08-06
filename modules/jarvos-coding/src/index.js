@@ -147,7 +147,13 @@ const {
   privacyOutcome,
   visiblePaths,
 } = require('./features/local-change-intake');
+const stewardshipContract = require('./stewardship/contract');
+const stewardshipPolicy = require('./stewardship/policy');
+const reconcilePolicy = require('./stewardship/reconcile-policy');
 module.exports = {
+  ...stewardshipContract,
+  ...stewardshipPolicy,
+  ...reconcilePolicy,
   ACTIVE_STATUSES,
   DEFAULT_IGNORED_PATH_SEGMENTS,
   BRANCH_SCHEMA_VERSION,
