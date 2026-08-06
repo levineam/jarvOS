@@ -10,15 +10,15 @@ const { createJarvosVaultTransforms } = require('./vault-transform-registry');
 
 const PENDING = 'mutation-owned-pending-migration';
 const WRITER_INVENTORY = Object.freeze([
-  ['secondbrain', 'adapters/obsidian/src/vault-storage-adapter.js', PENDING, 'U4'],
+  ['secondbrain', 'adapters/obsidian/src/vault-storage-adapter.js', 'mutation-owned', 'U4', 'Composes only create and reviewed journal transform operations through the configured service.'],
   ['secondbrain', 'adapters/obsidian/src/vault-mutation-ledger.js', 'operational-out-of-vault', 'U2', 'Writes the owner-only reconciliation ledger under the host state directory, never vault Markdown.'],
   ['secondbrain', 'adapters/obsidian/src/vault-mutation-reconciler.js', 'mutation-owned', 'U3', 'Performs the explicitly authorized offline fallback and bounded Obsidian reconciliation.'],
   ['secondbrain', 'bridge/config/src/shared-vault-onboarding.js', 'operational-out-of-vault', 'U1', 'Writes jarvos.config.json, never vault Markdown.'],
   ['secondbrain', 'bridge/provenance/src/journal-note-audit.js', PENDING, 'U4'],
-  ['secondbrain', 'bridge/provenance/src/link-to-journal.js', PENDING, 'U4'],
+  ['secondbrain', 'bridge/provenance/src/link-to-journal.js', 'mutation-owned-with-operational-queue', 'U4', 'Journal Markdown dispatches through the configured service; only the deferred backlink JSON queue is written directly outside the vault.'],
   ['secondbrain', 'bridge/provenance/src/notes-section-normalizer.js', PENDING, 'U4'],
   ['secondbrain', 'bridge/synthesis/src/journal-spine-synthesis.js', PENDING, 'U4'],
-  ['secondbrain', 'packages/jarvos-secondbrain-journal/src/journal-lifecycle.js', PENDING, 'U4'],
+  ['secondbrain', 'packages/jarvos-secondbrain-journal/src/journal-lifecycle.js', 'mutation-owned-with-operational-receipts', 'U4', 'Journal Markdown creation is an injected canonical create operation; receipt JSON remains an operational out-of-vault record.'],
   ['secondbrain', 'packages/jarvos-secondbrain-journal/src/journal-maintenance.js', PENDING, 'U4'],
   ['secondbrain', 'packages/jarvos-secondbrain-notes/src/knowledge-optimizer.js', 'operational-out-of-vault', 'U1', 'Writes protected JSON sidecars, never vault Markdown.'],
   ['secondbrain', 'packages/jarvos-secondbrain-notes/src/lint-frontmatter.js', PENDING, 'U4'],

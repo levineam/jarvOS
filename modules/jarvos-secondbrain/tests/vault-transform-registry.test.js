@@ -41,10 +41,21 @@ test('U4 authored-content transforms have deterministic Node and Obsidian confor
       content: '---\njarvos_note_id: "stable-note-id"\nstatus: active\n---\n\n# Existing\n\nmobile prose\n',
       operation: { transformName: 'note-append-body', transformVersion: 1, replayPayload: { noteId: 'stable-note-id', body: '# Existing\n\nagent prose' } },
     },
+    {
+      content: '## 💡 Ideas\n-\n\n## Scratch\n- mobile prose\n',
+      operation: { transformName: 'journal-section-line', transformVersion: 1, replayPayload: { heading: '## 💡 Ideas', line: '- New idea' } },
+    },
+    {
+      content: '## 📝 Notes\n- [[Notes/C++ (Draft)]]\n\n## Scratch\n- [[Notes/C++ (Draft)]]\n- mobile prose\n',
+      operation: { transformName: 'journal-backlink', transformVersion: 1, replayPayload: { linkTarget: 'Notes/C++ (Draft)', section: '📝 Notes', noteId: 'stable-note-id' } },
+    },
   ];
   transforms.assertConformance(cases);
   const appended = transforms.applyNode(cases[1].content, cases[1].operation);
   assert.match(appended, /mobile prose/);
   assert.match(appended, /agent prose/);
   assert.match(appended, /jarvos_note_id: "stable-note-id"/);
+  const linked = transforms.applyNode(cases[3].content, cases[3].operation);
+  assert.equal((linked.match(/\[\[Notes\/C\+\+ \(Draft\)\]\]/g) || []).length, 1);
+  assert.equal(transforms.isSatisfied(linked, cases[3].operation), true);
 });

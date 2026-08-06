@@ -1,197 +1,74 @@
 #!/usr/bin/env node
-/**
- * Obsidian/vault-backed storage adapter for jarvos-secondbrain routing flows.
- *
- * Adapter contract:
- * - ensureJournal({ date? })
- * - appendLineToJournalSection({ heading, line, date? })
- * - writeNote({ title, content, frontmatter? })
- * - linkNoteToJournal({ noteTitle, date? })
- */
-
 'use strict';
 
-const fs = require('fs');
-const path = require('path');
+// Obsidian-facing composition adapter. It turns storage requests into the
+// reviewed operations understood by vault-mutation-adapter; it never edits
+// vault Markdown itself.
+const path = require('node:path');
+const crypto = require('node:crypto');
+const fs = require('node:fs');
+const { loadConfig, normalizeSections, renderJournal } = require('../../../packages/jarvos-secondbrain-journal/src/journal-maintenance.js');
+const { noteFilePath, writeNoteFile } = require('../../../packages/jarvos-secondbrain-notes/src/write-to-vault.js');
+const { getVaultDir, getVaultJournalDir } = require('../../../bridge/provenance/src/lib/provenance-config.js');
 
-const {
-  ensureTodayJournal,
-  localDate,
-  mutateExistingJournal,
-} = require('../../../packages/jarvos-secondbrain-journal/src/journal-lifecycle.js');
-const {
-  writeNoteFile,
-} = require('../../../packages/jarvos-secondbrain-notes/src/write-to-vault.js');
-const { resolveJournalConfig } = require('../../../bridge/config');
-const { mutateJournalThroughObsidian } = require('../../../bridge/provenance/src/obsidian-mutation.js');
 const IDEAS_HEADING = '## 💡 Ideas';
 const NOTES_HEADING = '## 📝 Notes';
 const FLAGGED_HEADING = '## 📌 Flagged';
 
-function journalConfig() {
-  return resolveJournalConfig();
+function todayDate() {
+  return new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
 }
-
-function todayDate(now = new Date(), config = journalConfig()) {
-  return localDate(now, config.timeZone);
+function relativeToVault(vaultRoot, absolutePath) {
+  const relative = path.relative(path.resolve(vaultRoot), path.resolve(absolutePath)).split(path.sep).join('/');
+  if (!relative || relative.startsWith('../') || path.isAbsolute(relative)) throw new Error('Journal path is outside the configured vault');
+  return relative;
 }
+function renderJournalScaffold(date) {
+  const config = loadConfig();
+  return renderJournal(date, config, normalizeSections('', date, config));
+}
+function receiptIsAcknowledged(receipt) { return ['committed', 'already_satisfied'].includes(receipt?.status); }
 
-// Serialized into the Obsidian eval request. Keep this function self-contained
-// so editor-owned mutation uses the latest vault content rather than a stale
-// Node-side snapshot.
-function appendLineMutation(current, input) {
-  const heading = String(input.heading || '').trim();
-  const line = String(input.line || '').trim();
-  const signature = '— Edited by Jarvis';
-  const placeholder = /^-\s+(?:No notes created(?: on .*)?|No notes today|No notes yet)$/i;
-  const trim = (text) => {
-    const lines = String(text || '').split(/\r?\n/);
-    while (lines.length && lines[0].trim() === '') lines.shift();
-    while (lines.length && lines[lines.length - 1].trim() === '') lines.pop();
-    return lines.join('\n');
-  };
-  const range = (lines) => {
-    let start = -1;
-    let end = lines.length;
-    for (let index = 0; index < lines.length; index += 1) {
-      const trimmed = lines[index].trim();
-      if (trimmed === heading) {
-        start = index;
-        continue;
-      }
-      if (start !== -1 && index > start && (/^##\s/.test(lines[index]) || trimmed === signature)) {
-        end = index;
-        break;
-      }
-    }
-    return { start, end };
-  };
-  const insert = (lines) => {
-    const insertAt = lines.findIndex((entry) => entry.trim() === signature);
-    const section = [heading, '-', ''];
-    return insertAt === -1
-      ? [...lines, '', ...section]
-      : [...lines.slice(0, insertAt), ...section, ...lines.slice(insertAt)];
-  };
-
-  let lines = String(current || '').split(/\r?\n/);
-  let found = range(lines);
-  if (found.start === -1) {
-    lines = insert(lines);
-    found = range(lines);
+function createVaultStorageAdapter({ mutationService, vaultRoot = getVaultDir(), journalDir = getVaultJournalDir(), source = 'obsidian.vault-storage-adapter' } = {}) {
+  if (!mutationService || typeof mutationService.execute !== 'function' || typeof mutationService.createWriteContext !== 'function') throw new Error('vault storage adapter requires the configured mutation service');
+  function contextFor(vaultRelativePath, intentId) { return mutationService.createWriteContext({ vaultRelativePath, intentId, operationSource: source }); }
+  function executeTransform({ date, transformName, replayPayload, intentId }) {
+    const journalPath = path.join(journalDir, `${date}.md`);
+    const vaultRelativePath = relativeToVault(vaultRoot, journalPath);
+    const context = contextFor(vaultRelativePath, intentId);
+    const receipt = mutationService.execute({ schemaVersion: 1, operationId: context.operationId, vaultId: context.vaultId, vaultRelativePath, sequence: context.sequence, operationKind: 'transform', transformName, transformVersion: 1, replayPayload, source });
+    return { journalPath, receipt };
   }
-  const sectionLines = lines.slice(found.start + 1, found.end);
-  const existing = sectionLines.map((entry) => entry.trim()).filter(Boolean);
-  if (existing.includes(line)) return { content: String(current || ''), alreadyPresent: true };
-  const materialized = sectionLines.filter((entry) => {
-    const trimmed = entry.trim();
-    return trimmed !== '' && trimmed !== '-' && !placeholder.test(trimmed);
-  });
-  materialized.push(line);
-  const rebuilt = [
-    ...lines.slice(0, found.start + 1),
-    ...(materialized.length ? materialized : ['-']),
-    '',
-    ...lines.slice(found.end),
-  ].join('\n');
-  return { content: `${trim(rebuilt)}\n`, alreadyPresent: false };
-}
-
-function createVaultStorageAdapter(options = {}) {
-  const ownedJournalMutator = options.ownedJournalMutator || mutateJournalThroughObsidian;
-  const allowUnsafeFilesystemWrites = options.allowUnsafeFilesystemWrites === true
-    || process.env.JARVOS_ALLOW_UNSAFE_TEST_JOURNAL_WRITE === '1';
-
-  return {
-    ensureJournal({ date, now, config: suppliedConfig } = {}) {
-      const config = suppliedConfig || journalConfig();
-      const operationNow = now instanceof Date ? now : new Date(now || Date.now());
-      const effectiveDate = date || todayDate(operationNow, config);
-      const journalDir = config.journalDir;
-      const journalPath = path.join(journalDir, `${effectiveDate}.md`);
-      if (effectiveDate !== todayDate(operationNow, config)) {
-        throw new Error('journal ensure supports only the current local date');
-      }
+  return Object.freeze({
+    ensureJournal({ date = todayDate(), intentId } = {}) {
+      const journalPath = path.join(journalDir, `${date}.md`);
       const existed = fs.existsSync(journalPath);
-      const lifecycle = ensureTodayJournal({ ...config, journalPath, now: operationNow });
-      if (!lifecycle.ok || lifecycle.date !== effectiveDate || !lifecycle.journalPath || !fs.existsSync(lifecycle.journalPath)) {
-        throw new Error(`journal ensure ${lifecycle.outcome || 'failed'}`);
-      }
-      return { journalPath: lifecycle.journalPath, existed, lifecycle };
+      const vaultRelativePath = relativeToVault(vaultRoot, journalPath);
+      const context = contextFor(vaultRelativePath, intentId || `journal-create-${date}-${crypto.randomUUID()}`);
+      const content = existed ? fs.readFileSync(journalPath, 'utf8') : renderJournalScaffold(date);
+      const receipt = mutationService.execute({ schemaVersion: 1, operationId: context.operationId, vaultId: context.vaultId, vaultRelativePath, sequence: context.sequence, operationKind: 'create', content, source });
+      return { journalPath, existed, receipt, acknowledged: receiptIsAcknowledged(receipt) };
     },
-
-    appendLineToJournalSection({ heading, line, date, now } = {}) {
+    appendLineToJournalSection({ heading, line, date = todayDate(), intentId } = {}) {
       if (!heading) throw new Error('heading is required');
       if (!line || !String(line).trim()) throw new Error('line is required');
-
-      const config = journalConfig();
-      const operationNow = now instanceof Date ? now : new Date(now || Date.now());
-      const effectiveDate = date || todayDate(operationNow, config);
-      const journalPath = path.join(config.journalDir, `${effectiveDate}.md`);
-      if (effectiveDate === todayDate(operationNow, config)) {
-        this.ensureJournal({ date: effectiveDate, now: operationNow, config });
-      } else if (!fs.existsSync(journalPath)) {
-        throw new Error('journal append supports past dates only when the journal already exists');
-      }
-      const current = fs.readFileSync(journalPath, 'utf8');
-      const mutationInput = { heading, line: String(line).trim() };
-      const appended = appendLineMutation(current, mutationInput);
-
-      if (!appended.alreadyPresent) {
-        if (effectiveDate === localDate(operationNow, config.timeZone) && !allowUnsafeFilesystemWrites) {
-          const mutation = ownedJournalMutator({
-            journalPath,
-            mutation: appendLineMutation,
-            mutationPayload: mutationInput,
-            verifyCommitted: (committed) => appendLineMutation(committed, mutationInput).content === committed,
-          });
-          return {
-            journalPath,
-            heading,
-            line: String(line).trim(),
-            alreadyPresent: Boolean(mutation.alreadyPresent),
-            mutationOwner: mutation.mutationOwner || 'obsidian-vault-process',
-          };
-        }
-        mutateExistingJournal({ journalPath, expectedContent: current, nextContent: appended.content });
-      }
-
-      return {
-        journalPath,
-        heading,
-        line: String(line).trim(),
-        alreadyPresent: Boolean(appended.alreadyPresent),
-        mutationOwner: appended.alreadyPresent ? 'existing-journal-content' : 'jarvos-filesystem',
-      };
+      const ensured = this.ensureJournal({ date, intentId: intentId ? `${intentId}:create` : undefined });
+      if (!receiptIsAcknowledged(ensured.receipt)) return { journalPath: ensured.journalPath, heading, line: String(line).trim(), receipt: ensured.receipt, acknowledged: false };
+      const outcome = executeTransform({ date, transformName: 'journal-section-line', replayPayload: { heading, line }, intentId: intentId ? `${intentId}:section` : undefined });
+      return { journalPath: outcome.journalPath, heading, line: String(line).trim(), receipt: outcome.receipt, acknowledged: receiptIsAcknowledged(outcome.receipt), alreadyPresent: outcome.receipt.status === 'already_satisfied' };
     },
-
-    writeNote({ title, content, frontmatter = {} }) {
-      const previous = process.env.JARVOS_JOURNAL_BACKLINK;
-      process.env.JARVOS_JOURNAL_BACKLINK = '0';
-      try {
-        return writeNoteFile({ title, content, frontmatter });
-      } finally {
-        if (previous === undefined) delete process.env.JARVOS_JOURNAL_BACKLINK;
-        else process.env.JARVOS_JOURNAL_BACKLINK = previous;
-      }
+    writeNote({ title, content, frontmatter = {}, intentId } = {}) {
+      const filePath = noteFilePath(title);
+      return writeNoteFile({ title, content, frontmatter, ...contextFor(relativeToVault(vaultRoot, filePath), intentId) });
     },
-
-    linkNoteToJournal({ noteTitle, date, now, heading = NOTES_HEADING }) {
+    linkNoteToJournal({ noteTitle, noteId, date = todayDate(), heading = NOTES_HEADING, intentId } = {}) {
       if (!noteTitle) throw new Error('noteTitle is required');
-      return this.appendLineToJournalSection({
-        heading,
-        line: `- [[${noteTitle}]]`,
-        date,
-        now,
-      });
+      const ensured = this.ensureJournal({ date, intentId: intentId ? `${intentId}:create` : undefined });
+      if (!receiptIsAcknowledged(ensured.receipt)) return { journalPath: ensured.journalPath, receipt: ensured.receipt, acknowledged: false };
+      const outcome = executeTransform({ date, transformName: 'journal-backlink', replayPayload: { linkTarget: noteTitle, section: heading, ...(noteId ? { noteId } : {}) }, intentId: intentId ? `${intentId}:backlink` : undefined });
+      return { journalPath: outcome.journalPath, receipt: outcome.receipt, acknowledged: receiptIsAcknowledged(outcome.receipt), alreadyPresent: outcome.receipt.status === 'already_satisfied' };
     },
-  };
+  });
 }
 
-module.exports = {
-  createVaultStorageAdapter,
-  IDEAS_HEADING,
-  NOTES_HEADING,
-  FLAGGED_HEADING,
-  todayDate,
-};
+module.exports = { FLAGGED_HEADING, IDEAS_HEADING, NOTES_HEADING, createVaultStorageAdapter, relativeToVault, renderJournalScaffold, todayDate };

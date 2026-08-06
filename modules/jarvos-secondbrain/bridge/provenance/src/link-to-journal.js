@@ -26,32 +26,33 @@ const {
   getVaultJournalDir,
   getVaultNotesDir,
 } = require('./lib/provenance-config');
-const { repairZeroByteVaultRootDuplicate } = require('../../../packages/jarvos-secondbrain-notes/src/lib/vault-root-duplicate-guard');
+const { createObsidianOwnedMutationService } = require('./obsidian-mutation');
 const {
-  ensureTodayJournal,
-  mutateExistingJournal,
-} = require('../../../packages/jarvos-secondbrain-journal/src/journal-lifecycle.js');
-const {
-  isPathInside,
-  mutateJournalThroughObsidian: runObsidianMutationTransport,
-  obsidianMutationScript,
-  parseObsidianEvalResult,
-  resolveVaultRootForJournal,
-  runObsidianEval,
-} = require('./obsidian-mutation.js');
+  loadConfig,
+  normalizeSections,
+  renderJournal,
+} = require('../../../packages/jarvos-secondbrain-journal/src/journal-maintenance.js');
 
 const DEFERRED_QUEUE_LOCK_MAX_AGE_MS = 30 * 1000;
 
-function todayPath(now = new Date()) {
-  const today = new Date(now).toLocaleDateString('en-CA', { timeZone: getTimeZone() });
+function todayPath() {
+  const today = new Date().toLocaleDateString('en-CA', { timeZone: getTimeZone() });
   return path.join(getVaultJournalDir(), `${today}.md`);
 }
 
-function dateFromJournalPath(journalPath, now = new Date()) {
+function dateFromJournalPath(journalPath) {
   const fromName = path.basename(journalPath, '.md');
   if (/^\d{4}-\d{2}-\d{2}$/.test(fromName)) return fromName;
-  return new Date(now).toLocaleDateString('en-CA', { timeZone: getTimeZone() });
+  return new Date().toLocaleDateString('en-CA', { timeZone: getTimeZone() });
 }
+
+function renderInitialJournal(journalPath, date = dateFromJournalPath(journalPath)) {
+  const config = loadConfig();
+  const normalized = normalizeSections('', date, config);
+  return renderJournal(date, config, normalized);
+}
+
+function ensureJournalFile() { throw new Error('Journal creation must use the canonical Obsidian mutation service'); }
 
 function readJsonSafe(filePath, fallback) {
   try {
@@ -266,8 +267,38 @@ function withDeferredQueueLock(deferredPath, fn, { maxAttempts = 40, retryMs = 2
   }
 }
 
-function isTodayJournalPath(journalPath, now = new Date()) {
-  const today = new Date(now).toLocaleDateString('en-CA', { timeZone: getTimeZone() });
+function parseObsidianEvalResult() { throw new Error('Direct Obsidian evaluation is retired; use the canonical mutation service'); }
+function runObsidianEval() { throw new Error('Direct Obsidian evaluation is retired; use the canonical mutation service'); }
+
+function isPathInside(parentDir, candidatePath) {
+  const relativePath = path.relative(path.resolve(parentDir), path.resolve(candidatePath));
+  return relativePath === '' || (!relativePath.startsWith('..') && !path.isAbsolute(relativePath));
+}
+
+function resolveVaultRootForJournal(journalPath) {
+  const configuredVaultRoot = path.resolve(getVaultDir());
+  if (isPathInside(configuredVaultRoot, journalPath)) return configuredVaultRoot;
+
+  const configuredJournalDir = path.resolve(getVaultJournalDir());
+  if (isPathInside(configuredJournalDir, journalPath)) return path.dirname(configuredJournalDir);
+  return configuredVaultRoot;
+}
+
+function journalPathRelativeToVault(journalPath, vaultRoot = resolveVaultRootForJournal(journalPath)) {
+  const relativePath = path.relative(vaultRoot, path.resolve(journalPath));
+  if (!relativePath || relativePath.startsWith('..') || path.isAbsolute(relativePath)) {
+    throw new Error(`Journal is outside the active Obsidian vault: ${journalPath}`);
+  }
+  return relativePath.split(path.sep).join('/');
+}
+
+function obsidianMutationScript() { throw new Error('Bespoke backlink mutation scripts are retired; use the canonical mutation service'); }
+function mutateJournalThroughObsidian({ journalPath, noteTitle, section = '📝 Notes', noteId, mutationService, vaultRoot } = {}) {
+  return submitBacklinkMutation({ journalPath, linkTarget: noteTitle, section, noteId, mutationService, vaultRoot });
+}
+
+function isTodayJournalPath(journalPath) {
+  const today = new Date().toLocaleDateString('en-CA', { timeZone: getTimeZone() });
   return path.basename(journalPath, '.md') === today;
 }
 
@@ -283,6 +314,7 @@ function recordDeferredBacklink({
   noteId,
   notePath,
   auditState,
+  mutationIntentId,
 }) {
   const deferredPath = deferredBacklinksPath(journalPath);
   const normalizedNotePath = normalizeQueuedNotePath(notePath, journalPath);
@@ -305,6 +337,7 @@ function recordDeferredBacklink({
       journalPath,
       ...(noteId ? { noteId } : {}),
       ...(normalizedNotePath ? { notePath: normalizedNotePath } : {}),
+      mutationIntentId: existing?.mutationIntentId || mutationIntentId || `backlink-${crypto.randomUUID()}`,
       auditState: auditState || existing?.auditState || 'recorded',
       recordedAt: existing?.recordedAt || now,
       updatedAt: now,
@@ -317,15 +350,7 @@ function recordDeferredBacklink({
     };
     writeJson(deferredPath, data);
   });
-  return {
-    deferredPath,
-    key,
-    journalPath,
-    noteTitle,
-    section,
-    ...(noteId ? { noteId } : {}),
-    ...(normalizedNotePath ? { notePath: normalizedNotePath } : {}),
-  };
+  return { deferredPath, key };
 }
 
 function outcomeSummary(outcomes, deferredPath) {
@@ -348,7 +373,7 @@ function outcomeSummary(outcomes, deferredPath) {
 
 function flushDeferredBacklinks({
   journalDir = getVaultJournalDir(),
-  ownedJournalMutator,
+  mutationService,
   dryRun = false,
   key,
   vaultRoot = path.dirname(journalDir),
@@ -369,20 +394,23 @@ function flushDeferredBacklinks({
       outcomes.set(entryKey, { key: entryKey, status: 'pending', reason: classification.reason, proposed: 'retry' });
       continue;
     }
+    const mutationIntentId = entry.mutationIntentId || `backlink-recovery-${entryKey}-${crypto.randomUUID()}`;
     try {
       const result = linkNoteToJournal({
         noteTitle: classification.noteTitle,
         section: entry.section || '📝 Notes',
         journalPath: entry.journalPath,
         createIfMissing: true,
-        ownedJournalMutator,
+        mutationService,
         deferOnFailure: false,
         noteId: entry.noteId,
         notePath: classification.notePath,
+        intentId: mutationIntentId,
+        vaultRoot,
       });
-      outcomes.set(entryKey, { key: entryKey, status: 'linked', reason: result.alreadyPresent ? 'exact-link-present' : 'linked', result });
+      outcomes.set(entryKey, { key: entryKey, status: 'linked', reason: result.alreadyPresent ? 'exact-link-present' : 'linked', result, mutationIntentId });
     } catch (error) {
-      outcomes.set(entryKey, { key: entryKey, status: 'pending', reason: classification.reason, error: error.message });
+      outcomes.set(entryKey, { key: entryKey, status: 'pending', reason: classification.reason, error: error.message, mutationIntentId });
     }
   }
 
@@ -404,6 +432,7 @@ function flushDeferredBacklinks({
           attempts: (Number.isInteger(current.attempts) ? current.attempts : 0) + 1,
           lastAttemptAt: now,
           lastError: outcome.error || undefined,
+          mutationIntentId: current.mutationIntentId || outcome.mutationIntentId,
           events: queueEvent(current, {
             at: now,
             type: 'retry-failed',
@@ -487,59 +516,76 @@ function reconcileDeferredBacklink({
   return { ...result, dryRun: false };
 }
 
-function linkNoteToTodayJournal(noteTitle, section = '📝 Notes', now = new Date()) {
-  return linkNoteToJournal({ noteTitle, section, journalPath: todayPath(now), now });
+function linkNoteToTodayJournal(noteTitle, section = '📝 Notes') {
+  return linkNoteToJournal({ noteTitle, section, journalPath: todayPath() });
+}
+
+function receiptAcknowledged(receipt) { return ['committed', 'already_satisfied'].includes(receipt?.status); }
+function operationContext(service, vaultRelativePath, intentId, source) {
+  return service.createWriteContext({ vaultRelativePath, intentId, operationSource: source });
+}
+function submitBacklinkMutation({ journalPath, linkTarget, section, noteId, mutationService, intentId, vaultRoot: suppliedVaultRoot } = {}) {
+  const vaultRoot = suppliedVaultRoot || mutationService?.vaultRoot || resolveVaultRootForJournal(journalPath);
+  const vaultRelativePath = journalPathRelativeToVault(journalPath, vaultRoot);
+  const service = mutationService || createObsidianOwnedMutationService({ vaultRoot, source: 'bridge.link-to-journal' });
+  const context = operationContext(service, vaultRelativePath, intentId || `journal-backlink-${crypto.randomUUID()}`, 'bridge.link-to-journal');
+  return service.execute({
+    schemaVersion: 1,
+    operationId: context.operationId,
+    vaultId: context.vaultId,
+    vaultRelativePath,
+    sequence: context.sequence,
+    operationKind: 'transform',
+    transformName: 'journal-backlink',
+    transformVersion: 1,
+    replayPayload: { linkTarget, section, ...(noteId ? { noteId } : {}) },
+    source: context.source,
+  });
+}
+
+function submitJournalCreate({ journalPath, mutationService, intentId, vaultRoot: suppliedVaultRoot } = {}) {
+  const vaultRoot = suppliedVaultRoot || mutationService?.vaultRoot || resolveVaultRootForJournal(journalPath);
+  const vaultRelativePath = journalPathRelativeToVault(journalPath, vaultRoot);
+  const service = mutationService || createObsidianOwnedMutationService({ vaultRoot, source: 'bridge.link-to-journal' });
+  const context = operationContext(service, vaultRelativePath, intentId || `journal-create-${crypto.randomUUID()}`, 'bridge.link-to-journal');
+  return service.execute({
+    schemaVersion: 1,
+    operationId: context.operationId,
+    vaultId: context.vaultId,
+    vaultRelativePath,
+    sequence: context.sequence,
+    operationKind: 'create',
+    content: renderInitialJournal(journalPath),
+    source: context.source,
+  });
 }
 
 // Compatibility wrapper for the jarvos-agent-context MCP, which calls
 // linkNoteToJournal({ noteTitle, section, createIfMissing }) (WS7 cross-tool unification).
-function linkNoteToJournal(options = {}) {
-  const operationNow = options.now instanceof Date ? options.now : new Date(options.now || Date.now());
-  const {
-    noteTitle,
-    section = '📝 Notes',
-    createIfMissing = true,
-    ownedJournalMutator = mutateJournalThroughObsidian,
-    noteId,
-    notePath,
-    deferOnFailure = true,
-  } = options;
-  const journalPath = options.journalPath === undefined ? todayPath(operationNow) : options.journalPath;
+function linkNoteToJournal({
+  noteTitle,
+  section = '📝 Notes',
+  journalPath = todayPath(),
+  createIfMissing = true,
+  mutationService,
+  noteId,
+  notePath,
+  deferOnFailure = true,
+  intentId,
+  vaultRoot,
+} = {}) {
   if (!noteTitle) throw new Error('noteTitle is required');
-
-  const existedBefore = existsSync(journalPath);
-  if (!existedBefore && !createIfMissing) throw new Error(`Journal not found: ${journalPath}`);
   const normalizedSection = normalizeSectionName(section);
-  const useObsidianOwnedMutation = isTodayJournalPath(journalPath, operationNow)
-    && process.env.JARVOS_ALLOW_UNSAFE_TEST_JOURNAL_WRITE !== '1';
-  let original = '';
-  let existing;
-  let mutation;
+  const stableIntent = intentId || `backlink-${crypto.randomUUID()}`;
+  let receipt;
   try {
-    if (!existedBefore) {
-      const ensured = ensureTodayJournal({ journalPath, now: operationNow });
-      if (!ensured.ok || ensured.date !== dateFromJournalPath(journalPath, operationNow) || !existsSync(ensured.journalPath)) {
-        throw new Error(`journal ensure ${ensured.outcome || 'failed'}`);
-      }
+    if (!existsSync(journalPath)) {
+      if (!createIfMissing) throw new Error(`Journal not found: ${journalPath}`);
+      const createReceipt = submitJournalCreate({ journalPath, mutationService, intentId: `${stableIntent}:create`, vaultRoot });
+      if (!receiptAcknowledged(createReceipt)) throw Object.assign(new Error('Journal scaffold is not acknowledged by Obsidian'), { receipt: createReceipt });
     }
-    original = existsSync(journalPath) ? readFileSync(journalPath, 'utf8') : '';
-    existing = linkNoteInSection(original, noteTitle, normalizedSection);
-    if (existing.alreadyPresent) {
-      mutation = { alreadyPresent: true, mutationOwner: 'existing-journal-content' };
-    } else if (useObsidianOwnedMutation) {
-      mutation = ownedJournalMutator({
-        journalPath,
-        noteTitle,
-        section: normalizedSection,
-      });
-    } else {
-      mutateExistingJournal({
-        journalPath,
-        expectedContent: original,
-        nextContent: existing.content,
-      });
-      mutation = { alreadyPresent: false, mutationOwner: 'jarvos-filesystem' };
-    }
+    receipt = submitBacklinkMutation({ journalPath, linkTarget: noteTitle, section: normalizedSection, noteId, mutationService, intentId: `${stableIntent}:backlink`, vaultRoot });
+    if (!receiptAcknowledged(receipt)) throw Object.assign(new Error('Journal backlink is not acknowledged by Obsidian'), { receipt });
   } catch (error) {
     if (!deferOnFailure) throw error;
     const deferred = recordDeferredBacklink({
@@ -549,27 +595,20 @@ function linkNoteToJournal(options = {}) {
       reason: 'journal-mutation-failed',
       noteId,
       notePath,
+      mutationIntentId: stableIntent,
     });
     const wrapped = new Error(`${error.message}; backlink queued at ${deferred.deferredPath}`);
     wrapped.cause = error;
     wrapped.deferredBacklink = deferred;
     throw wrapped;
   }
-  const effectiveVaultRoot = resolveVaultRootForJournal(journalPath);
-  const notesDir = getVaultNotesDir();
-  const vaultRootDuplicate = isPathInside(effectiveVaultRoot, notesDir)
-    ? repairZeroByteVaultRootDuplicate({ noteTitle, notesDir, vaultRoot: effectiveVaultRoot })
-    : {
-      checked: false,
-      repaired: false,
-      reason: 'notes directory is outside the journal vault',
-    };
   return {
     linked: true,
     journalPath,
-    alreadyPresent: mutation.alreadyPresent,
-    mutationOwner: mutation.mutationOwner,
-    vaultRootDuplicate,
+    alreadyPresent: receipt.status === 'already_satisfied',
+    mutationOwner: 'obsidian-vault-process',
+    receipt,
+    vaultRootDuplicate: { checked: false, repaired: false, reason: 'duplicate cleanup must not bypass Obsidian' },
   };
 }
 
@@ -664,33 +703,13 @@ function linkNoteInSection(journalMd, noteTitle, section = '📝 Notes') {
   };
 }
 
-// Compatibility wrapper: backlink callers may omit a mutation function, while
-// the neutral transport remains generic for other Obsidian-owned transforms.
-function mutateJournalThroughObsidian(options = {}) {
-  const usesDefaultMutation = !options.mutation;
-  const helperFunctions = options.helperFunctions || [
-    escapeRegex,
-    normalizeSectionName,
-    findSectionRange,
-    linkLineRegex,
-    linkNoteInSection,
-  ];
-  return runObsidianMutationTransport({
-    ...options,
-    mutation: options.mutation || ((current, input) => linkNoteInSection(current, input.noteTitle, input.section)),
-    helperFunctions,
-    verifyCommitted: options.verifyCommitted || (usesDefaultMutation
-      ? (committed) => linkNoteInSection(committed, options.noteTitle, options.section).content === committed
-      : undefined),
-  });
-}
-
 module.exports = {
   main,
   todayPath,
   dateFromJournalPath,
   deferredBacklinksPath,
   deferredQueuePathForJournalDir,
+  ensureJournalFile,
   escapeRegex,
   isPathInside,
   linkNoteInSection,

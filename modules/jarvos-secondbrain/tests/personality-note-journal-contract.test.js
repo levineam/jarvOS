@@ -10,6 +10,7 @@ const { spawnSync } = require('child_process');
 const REPO_ROOT = path.resolve(__dirname, '..');
 const CONTRACT_CLI = path.join(REPO_ROOT, 'scripts', 'obsidian-note-journal-contract.js');
 const { verifyContract, writeNoteThroughContract } = require('../bridge/provenance/src/note-journal-contract.js');
+const { createConfiguredVaultMutationService } = require('../src/vault-mutation-service.js');
 
 function runContract({ root, personality, frontmatter = {} }) {
   const input = {
@@ -58,8 +59,27 @@ function withEnv(nextEnv, fn) {
 
 function makeTestMutationService(vaultRoot) {
   let sequence = 0;
-  return {
+  const service = {
     vaultRoot,
+    execute(operation) {
+      const target = path.join(vaultRoot, operation.vaultRelativePath);
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      if (operation.operationKind === 'create') {
+        if (fs.existsSync(target)) return fs.readFileSync(target, 'utf8') === operation.content ? { status: 'already_satisfied', obsidian: 'acknowledged' } : { status: 'conflict' };
+        fs.writeFileSync(target, operation.content, 'utf8');
+      } else {
+        const current = fs.readFileSync(target, 'utf8');
+        if (operation.transformName === 'journal-backlink') {
+          const { createJarvosVaultTransforms } = require('../src/vault-transform-registry.js');
+          if (createJarvosVaultTransforms().isSatisfied(current, operation)) return { status: 'already_satisfied', obsidian: 'acknowledged' };
+          fs.writeFileSync(target, createJarvosVaultTransforms().applyNode(current, operation), 'utf8');
+        } else {
+          const body = operation.replayPayload.body.trim();
+          if (!current.includes(body)) fs.writeFileSync(target, `${current.trimEnd()}\n\n${body}\n`, 'utf8');
+        }
+      }
+      return { status: 'committed', obsidian: 'acknowledged' };
+    },
     createWriteContext({ vaultRelativePath, intentId, operationSource }) {
       sequence += 1;
       return {
@@ -68,20 +88,11 @@ function makeTestMutationService(vaultRoot) {
         operationId: intentId || `test-note-intent-${String(sequence).padStart(4, '0')}`,
         sequence,
         source: operationSource,
-        mutationExecutor(operation) {
-          const target = path.join(vaultRoot, operation.vaultRelativePath);
-          fs.mkdirSync(path.dirname(target), { recursive: true });
-          if (operation.operationKind === 'create') fs.writeFileSync(target, operation.content, 'utf8');
-          else {
-            const current = fs.readFileSync(target, 'utf8');
-            const body = operation.replayPayload.body.trim();
-            if (!current.includes(body)) fs.writeFileSync(target, `${current.trimEnd()}\n\n${body}\n`, 'utf8');
-          }
-          return { status: 'committed', obsidian: 'acknowledged' };
-        },
+        mutationExecutor: (operation) => service.execute(operation),
       };
     },
   };
+  return service;
 }
 
 test('supported AI personalities can execute the Obsidian note/journal contract', () => {
@@ -207,6 +218,45 @@ test('a verified deferred backlink queue is a successful partial contract result
     assert.equal(missingReceipt.ok, false);
     assert.match(missingReceipt.failures.join('; '), /missing deferred backlink queue record/);
   });
+});
+
+test('offline note save and missing backlink remain two explicit pending outcomes', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sup-offline-note-backlink-'));
+  withEnv({
+    JARVOS_VAULT_DIR: root,
+    VAULT_NOTES_DIR: path.join(root, 'Notes'),
+    JOURNAL_DIR: path.join(root, 'Journal'),
+    JARVOS_KNOWLEDGE_DIR: path.join(root, '.jarvos', 'knowledge'),
+    XDG_STATE_HOME: path.join(root, '.state'),
+  }, () => {
+    const mutationService = createConfiguredVaultMutationService({
+      vaultRoot: root,
+      vaultId: 'offline-note-backlink-test',
+      source: 'bridge.note-journal-contract',
+      adapterOptions: { ledgerPath: path.join(root, '.state', 'ledger.json'), probe: () => ({ state: 'app_stopped' }) },
+    });
+    let failure;
+    try {
+      writeNoteThroughContract({
+        personality: 'codex',
+        title: 'Offline pending note',
+        content: 'Saved on this computer first.',
+        frontmatter: { status: 'draft', type: 'reference', project: 'SUP-OFFLINE', author: 'jarvis' },
+      }, { mutationService });
+    } catch (error) { failure = error; }
+    assert.ok(failure);
+    assert.equal(failure.result.receipt.status, 'saved_locally_sync_pending');
+    assert.equal(failure.result.written, false);
+    assert.equal(failure.result.savedLocally, true);
+    assert.equal(failure.result.journal.status, 'deferred');
+    assert.equal(fs.existsSync(failure.result.path), true);
+    const queue = JSON.parse(fs.readFileSync(failure.result.journal.deferredPath, 'utf8'));
+    const entry = queue.entries[failure.result.journal.recoveryKey];
+    assert.equal(entry.status, 'pending');
+    assert.equal(entry.noteId, failure.result.noteId);
+    assert.ok(entry.mutationIntentId);
+  });
+  fs.rmSync(root, { recursive: true, force: true });
 });
 
 test('unsupported personalities fail closed instead of raw-writing orphaned markdown', () => {

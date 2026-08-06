@@ -164,3 +164,19 @@ test('fixed program preserves quoted note identity for identity-safe note transf
   assert.match(latest.content, /agent prose/);
   assert.equal(runInFakeObsidian({ ...note, replayPayload: { ...note.replayPayload, noteId: 'other-note' } }, { initial: latest.content }).result.status, 'error');
 });
+
+test('fixed program canonicalizes one exact backlink while preserving concurrent journal prose', () => {
+  const backlink = {
+    ...operation(),
+    vaultRelativePath: 'Journal/2030-02-03.md',
+    operationKind: 'transform',
+    transformName: 'journal-backlink',
+    transformVersion: 1,
+    replayPayload: { linkTarget: 'Notes/C++ (Draft)', section: '📝 Notes', noteId: 'note-special' },
+  };
+  const initial = '## 📝 Notes\n- [[Notes/C++ (Draft)]]\n\n## Scratch\n- [[Notes/C++ (Draft)]]\n- concurrent mobile prose\n';
+  const result = runInFakeObsidian(backlink, { initial });
+  assert.equal(result.result.status, 'done');
+  assert.equal((result.content.match(/\[\[Notes\/C\+\+ \(Draft\)\]\]/g) || []).length, 1);
+  assert.match(result.content, /concurrent mobile prose/);
+});

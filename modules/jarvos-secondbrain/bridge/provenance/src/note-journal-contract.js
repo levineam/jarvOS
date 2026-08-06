@@ -175,8 +175,8 @@ function journalResultFromError(error) {
     : { status: 'failed', linked: false, deferred: false, disabled: false, failed: true, reason: error.message };
 }
 
-function dispatchBacklink({ result, section = '📝 Notes', createIfMissing = true, link = linkNoteToJournal } = {}) {
-  if (!result.written) return result.journal;
+function dispatchBacklink({ result, section = '📝 Notes', createIfMissing = true, link = linkNoteToJournal, mutationService } = {}) {
+  if (!result.written && !result.savedLocally) return result.journal;
   try {
     return normalizeJournalResult(link({
       noteTitle: result.title,
@@ -184,6 +184,7 @@ function dispatchBacklink({ result, section = '📝 Notes', createIfMissing = tr
       createIfMissing,
       noteId: result.noteId,
       notePath: result.path,
+      mutationService,
     }));
   } catch (error) {
     return journalResultFromError(error);
@@ -208,7 +209,7 @@ function writeNoteThroughContract(rawInput, { mutationService, link } = {}) {
   });
   const result = {
     ...noteResult,
-    journal: dispatchBacklink({ result: noteResult, section: rawInput.section || '📝 Notes', createIfMissing: rawInput.createJournalIfMissing !== false, link }),
+    journal: dispatchBacklink({ result: noteResult, section: rawInput.section || '📝 Notes', createIfMissing: rawInput.createJournalIfMissing !== false, link, mutationService: service }),
   };
   if (!result.written) {
     const error = new Error(`note mutation is pending: ${result.receipt?.status || 'unavailable'}`);
