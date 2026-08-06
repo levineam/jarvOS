@@ -103,7 +103,8 @@ test('coding assessment documentation keeps stewardship execution tracker-neutra
   const doc = fs.readFileSync(CODING_README, 'utf8').replace(/\s+/g, ' ');
 
   assert.ok(doc.includes('tracker-neutral'));
-  assert.ok(doc.includes('Projects supplies identity and context'));
-  assert.ok(doc.includes('Beads is the default owner of local executable work, claims, dependencies, and evidence'));
-  assert.ok(doc.includes('explicitly authenticated, committed handoff with its bound receipt'));
+  assert.ok(doc.includes('Projects may add context'));
+  assert.ok(doc.includes('Beads is the default durable execution ledger'));
+  assert.ok(doc.includes('Paperclip may receive an optional one-way record'));
+  assert.ok(doc.includes('neither can admit, block, own, or change the core stewardship result'));
 });
