@@ -5,7 +5,24 @@ const os = require('node:os');
 const path = require('node:path');
 const cp = require('node:child_process');
 
-const projects = require('../packages/jarvos-secondbrain-projects/src/projects.js');
+const projectModule = require('../packages/jarvos-secondbrain-projects/src/projects.js');
+
+function fakeOwnedMutation({ filePath, expectedContent, nextContent }) {
+  if (expectedContent !== undefined && fs.existsSync(filePath) && fs.readFileSync(filePath, 'utf8') !== expectedContent) return { status: 'conflict' };
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, nextContent, 'utf8');
+  return { status: 'committed' };
+}
+
+const projects = {
+  ...projectModule,
+  createProject: (input) => projectModule.createProject({ ...input, createMarkdownFile: fakeOwnedMutation }),
+  writeIndex: (input) => projectModule.writeIndex({
+    ...input,
+    createMarkdownFile: fakeOwnedMutation,
+    applyMarkdownMutation: fakeOwnedMutation,
+  }),
+};
 
 function tmpDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-projects-'));
@@ -51,6 +68,20 @@ test('createProject writes a page with all three required sections', () => {
   assert.match(body, /^## Goal$/m);
   assert.match(body, /^## High-level plan$/m);
   assert.match(body, /^## Definition of Done$/m);
+});
+
+test('project Markdown writes fail closed and preserve concurrent index edits', () => {
+  const dir = tmpDir();
+  assert.throws(() => projectModule.createProject({ title: 'No Owner', dir }), /Obsidian-owned/);
+  assert.equal(fs.existsSync(path.join(dir, 'No Owner.md')), false);
+
+  write(dir, 'Good.md', completePage('Good'));
+  const indexPath = write(dir, 'index.md', '# mobile index edit\n');
+  assert.throws(() => projectModule.writeIndex({
+    dir,
+    applyMarkdownMutation: () => ({ status: 'conflict' }),
+  }), /conflict/);
+  assert.equal(fs.readFileSync(indexPath, 'utf8'), '# mobile index edit\n');
 });
 
 test('createProject refuses to overwrite an existing project', () => {

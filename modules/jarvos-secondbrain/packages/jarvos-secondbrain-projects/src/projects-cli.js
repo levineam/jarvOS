@@ -18,7 +18,23 @@
 
 'use strict';
 
+const path = require('node:path');
 const projects = require('./projects');
+const { createConfiguredVaultMutationService } = require('../../../src/vault-mutation-service');
+
+function mutationTools(dir) {
+  const shared = projects.tryResolveSharedConfig();
+  const configuredVault = shared?.paths?.vault ? path.resolve(shared.paths.vault) : null;
+  const resolvedDir = path.resolve(dir);
+  const vaultRoot = configuredVault && (resolvedDir === configuredVault || resolvedDir.startsWith(`${configuredVault}${path.sep}`))
+    ? configuredVault
+    : path.dirname(resolvedDir);
+  const service = createConfiguredVaultMutationService({ vaultRoot, source: 'projects.cli' });
+  return {
+    createMarkdownFile: (input) => service.createMarkdownFile(input),
+    applyMarkdownMutation: (input) => service.applyMarkdownMutation(input),
+  };
+}
 
 function parseArgs(argv) {
   const args = { command: null, rest: [], dir: null, status: null, json: false };
@@ -70,13 +86,15 @@ function main(argv = process.argv.slice(2)) {
       return 1;
     }
     try {
+      const mutations = mutationTools(dir);
       const created = projects.createProject({
         title,
         dir,
         config,
         status: args.status || undefined,
+        createMarkdownFile: mutations.createMarkdownFile,
       });
-      projects.writeIndex({ dir, config });
+      projects.writeIndex({ dir, config, ...mutations });
       if (args.json) console.log(JSON.stringify(created, null, 2));
       else {
         console.log(`created ${created.path}`);
@@ -123,7 +141,7 @@ function main(argv = process.argv.slice(2)) {
   }
 
   if (args.command === 'index') {
-    const written = projects.writeIndex({ dir, config });
+    const written = projects.writeIndex({ dir, config, ...mutationTools(dir) });
     console.log(`wrote ${written.path} (${written.count} project(s))`);
     return 0;
   }

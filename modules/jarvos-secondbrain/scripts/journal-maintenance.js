@@ -5,21 +5,6 @@ const path = require('node:path');
 const maintenance = require('../packages/jarvos-secondbrain-journal/src/journal-maintenance');
 const { createConfiguredVaultMutationService } = require('../src/vault-mutation-service');
 
-function createMarkdownFile(service, { filePath, nextContent, source }) {
-  const vaultRelativePath = path.relative(service.vaultRoot, filePath).split(path.sep).join('/');
-  const context = service.createWriteContext({ vaultRelativePath, operationSource: source });
-  return context.mutationExecutor({
-    schemaVersion: 1,
-    operationId: context.operationId,
-    vaultId: context.vaultId,
-    vaultRelativePath,
-    sequence: context.sequence,
-    operationKind: 'create',
-    content: nextContent,
-    source: context.source,
-  });
-}
-
 function main(argv = process.argv.slice(2)) {
   const config = maintenance.loadConfig();
   const journalDir = maintenance.resolveJournalDir(config);
@@ -30,7 +15,7 @@ function main(argv = process.argv.slice(2)) {
   });
   const report = maintenance.runMaintenance(argv, {
     applyMarkdownMutation: (input) => service.applyMarkdownMutation(input),
-    createMarkdownFile: (input) => createMarkdownFile(service, input),
+    createMarkdownFile: (input) => service.createMarkdownFile(input),
     mutationExecutor: (operation) => service.execute(operation),
     mutationContext: {
       vaultId: service.vaultId,
@@ -42,7 +27,7 @@ function main(argv = process.argv.slice(2)) {
   return report;
 }
 
-module.exports = { createMarkdownFile, main };
+module.exports = { main };
 
 if (require.main === module) {
   const report = main();

@@ -313,7 +313,14 @@ function renderProjectPage({
   return `${lines.join('\n').trimEnd()}\n`;
 }
 
-function createProject({ title, dir, config = loadConfig(), now = new Date(), ...rest } = {}) {
+function assertPersisted(receipt, label) {
+  if (!['committed', 'already_satisfied', 'saved_locally_sync_pending'].includes(receipt?.status)) {
+    throw new Error(`${label} was not persisted through the Obsidian-owned mutation boundary: ${receipt?.status || 'unavailable'}`);
+  }
+  return receipt;
+}
+
+function createProject({ title, dir, config = loadConfig(), now = new Date(), createMarkdownFile, ...rest } = {}) {
   const clean = slugify(title);
   if (!clean) throw new Error('a project needs a title');
 
@@ -332,8 +339,21 @@ function createProject({ title, dir, config = loadConfig(), now = new Date(), ..
 
   const created = now.toISOString().slice(0, 10);
   const page = renderProjectPage({ title: clean, created, config, ...rest });
-  fs.writeFileSync(filePath, page, 'utf8');
-  return { path: filePath, slug: clean, title: clean, created };
+  if (typeof createMarkdownFile !== 'function') throw new Error('Project creation requires an Obsidian-owned Markdown create executor');
+  const receipt = assertPersisted(createMarkdownFile({
+    filePath,
+    nextContent: page,
+    source: 'projects.create',
+  }), 'Project creation');
+  return {
+    path: filePath,
+    slug: clean,
+    title: clean,
+    created,
+    written: ['committed', 'already_satisfied'].includes(receipt.status),
+    savedLocally: receipt.status === 'saved_locally_sync_pending',
+    receipt,
+  };
 }
 
 /**
@@ -392,13 +412,31 @@ function renderIndex(projects, config = loadConfig()) {
   return `${lines.join('\n').trimEnd()}\n`;
 }
 
-function writeIndex({ dir, config = loadConfig(), projects } = {}) {
+function writeIndex({ dir, config = loadConfig(), projects, createMarkdownFile, applyMarkdownMutation } = {}) {
   const projectsDir = dir || resolveProjectsDir(config);
   const list = projects || listProjects({ dir: projectsDir, config });
   fs.mkdirSync(projectsDir, { recursive: true });
   const indexPath = path.join(projectsDir, indexFilename(config));
-  fs.writeFileSync(indexPath, renderIndex(list, config), 'utf8');
-  return { path: indexPath, count: list.length };
+  const nextContent = renderIndex(list, config);
+  const exists = fs.existsSync(indexPath);
+  const expectedContent = exists ? fs.readFileSync(indexPath, 'utf8') : '';
+  if (exists && expectedContent === nextContent) return { path: indexPath, count: list.length, written: false, savedLocally: false, status: 'unchanged' };
+  const mutate = exists ? applyMarkdownMutation : createMarkdownFile;
+  if (typeof mutate !== 'function') throw new Error('Project index generation requires an Obsidian-owned Markdown mutation executor');
+  const receipt = assertPersisted(mutate({
+    filePath: indexPath,
+    ...(exists ? { expectedContent } : {}),
+    nextContent,
+    source: 'projects.index',
+  }), 'Project index generation');
+  return {
+    path: indexPath,
+    count: list.length,
+    written: ['committed', 'already_satisfied'].includes(receipt.status),
+    savedLocally: receipt.status === 'saved_locally_sync_pending',
+    status: receipt.status,
+    receipt,
+  };
 }
 
 /**
@@ -423,6 +461,7 @@ function checkProjects({ dir, config = loadConfig(), projects } = {}) {
 module.exports = {
   CONFIG_PATH,
   loadConfig,
+  tryResolveSharedConfig,
   resolveProjectsDir,
   readProjectsDir,
   requiredSections,

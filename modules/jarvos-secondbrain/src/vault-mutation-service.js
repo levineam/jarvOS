@@ -17,15 +17,15 @@ const WRITER_INVENTORY = Object.freeze([
   ['secondbrain', 'bridge/provenance/src/journal-note-audit.js', 'mutation-owned', 'U4', 'Audit repairs use one exact-content guarded replacement through the configured mutation service.'],
   ['secondbrain', 'bridge/provenance/src/link-to-journal.js', 'mutation-owned-with-operational-queue', 'U4', 'Journal Markdown dispatches through the configured service; only the deferred backlink JSON queue is written directly outside the vault.'],
   ['secondbrain', 'bridge/provenance/src/notes-section-normalizer.js', 'mutation-owned', 'U4', 'Normalizes notes through canonical note operations and applies the journal rewrite through one exact-content guarded replacement.'],
-  ['secondbrain', 'bridge/synthesis/src/journal-spine-synthesis.js', PENDING, 'U4'],
+  ['secondbrain', 'bridge/synthesis/src/journal-spine-synthesis.js', 'operational-hidden-sidecar', 'U4', 'Writes owner-only JSON and Markdown reports under the hidden knowledge sidecar directory; these are rebuildable operational evidence, not authored vault pages.'],
   ['secondbrain', 'packages/jarvos-secondbrain-journal/src/journal-lifecycle.js', 'mutation-owned-with-operational-receipts', 'U4', 'Journal Markdown creation is an injected canonical create operation; receipt JSON remains an operational out-of-vault record.'],
   ['secondbrain', 'packages/jarvos-secondbrain-journal/src/journal-maintenance.js', 'mutation-owned-with-operational-state', 'U4', 'Journal Markdown uses injected create or exact-content replacement operations; audit backups and known-good state remain hidden operational recovery records.'],
   ['secondbrain', 'packages/jarvos-secondbrain-notes/src/knowledge-optimizer.js', 'operational-out-of-vault', 'U1', 'Writes protected JSON sidecars, never vault Markdown.'],
   ['secondbrain', 'packages/jarvos-secondbrain-notes/src/lint-frontmatter.js', 'mutation-owned', 'U4', 'Frontmatter fixes require an injected Obsidian-owned exact-hash replacement executor.'],
   ['secondbrain', 'packages/jarvos-secondbrain-notes/src/manual-notes-maintenance.js', 'mutation-owned-with-operational-sidecars', 'U4', 'Frontmatter fixes require an injected Obsidian-owned exact-hash replacement executor; protected JSON state and knowledge sidecars remain out-of-vault.'],
   ['secondbrain', 'packages/jarvos-secondbrain-notes/src/write-to-vault.js', 'mutation-owned', 'U4', 'Builds only transport-neutral operations; bridge/top-level composition executes them.'],
-  ['secondbrain', 'packages/jarvos-secondbrain-projects/src/projects.js', PENDING, 'U4'],
-  ['secondbrain', 'packages/jarvos-secondbrain-wiki/src/index.js', PENDING, 'U4'],
+  ['secondbrain', 'packages/jarvos-secondbrain-projects/src/projects.js', 'mutation-owned', 'U4', 'Project pages and their visible index require injected create or exact-content replacement operations.'],
+  ['secondbrain', 'packages/jarvos-secondbrain-wiki/src/index.js', 'rebuildable-external-output', 'U4', 'Generated wiki output is explicitly rejected inside a configured vault until an Obsidian-owned deletion lifecycle is available; external derived output remains rebuildable.'],
   ['agent-context', 'src/index.js', PENDING, 'U4'],
 ].map(([root, file, classification, migrationUnit, exceptionReason]) => Object.freeze({ root, file, classification, migrationUnit, exceptionReason })));
 
@@ -141,6 +141,33 @@ function createConfiguredVaultMutationService({
     });
   }
 
+  function createMarkdownFile({ filePath, vaultRelativePath, nextContent, content, source: operationSource = source, operationId, intentId } = {}) {
+    const markdown = nextContent ?? content;
+    if (typeof markdown !== 'string') throw new Error('nextContent is required for a Markdown create');
+    const relativePath = vaultRelativePath || (() => {
+      if (typeof filePath !== 'string' || !path.isAbsolute(filePath)) throw new Error('filePath or vaultRelativePath is required');
+      return path.relative(vaultRoot, path.resolve(filePath)).split(path.sep).join('/');
+    })();
+    validateVaultRelativeMarkdownPath(relativePath);
+    if (filePath && path.resolve(vaultRoot, relativePath) !== path.resolve(filePath)) throw new Error('filePath is outside the configured vault');
+    const context = createWriteContext({
+      vaultRelativePath: relativePath,
+      operationId,
+      intentId,
+      operationSource,
+    });
+    return execute({
+      schemaVersion: 1,
+      operationId: context.operationId,
+      vaultId: context.vaultId,
+      vaultRelativePath: relativePath,
+      sequence: context.sequence,
+      operationKind: 'create',
+      content: markdown,
+      source: context.source,
+    });
+  }
+
   // Whole-file replacement is deliberately a composition concern: packages can
   // ask for it without knowing about Obsidian, while this boundary supplies the
   // durable identity, per-path sequence, and exact-content conflict guard.
@@ -184,7 +211,7 @@ function createConfiguredVaultMutationService({
       : receipt;
   }
 
-  return Object.freeze({ adapter, applyMarkdownMutation, createWriteContext, execute, reconciler, source, transforms, vaultId, vaultRoot });
+  return Object.freeze({ adapter, applyMarkdownMutation, createMarkdownFile, createWriteContext, execute, reconciler, source, transforms, vaultId, vaultRoot });
 }
 
 module.exports = { PACKAGE_TEMPORARY_SHIMS, WRITER_INVENTORY, assertNoUnclassifiedVaultWrites, assertPackageImportBoundary, assertWriterInventory, configuredVaultId, createConfiguredVaultMutationService };
