@@ -2,7 +2,12 @@
 
 const assert = require('assert');
 const test = require('node:test');
-const { assertStewardshipAdapter, STEWARDSHIP_ADAPTER_VERSION, validateStewardshipAdapter } = require('../src');
+const {
+  assertStewardshipAdapter,
+  STEWARDSHIP_ADAPTER_VERSION,
+  validateNextTurnInput,
+  validateStewardshipAdapter,
+} = require('../src');
 
 function adapter(overrides = {}) {
   return {
@@ -41,4 +46,40 @@ test('adapter identity is versioned and bounded without a fixed harness enum', (
     'adapter.harness must be a bounded identifier',
   ]);
   assert.equal(validateStewardshipAdapter(adapter({ harness: 'new-neutral-host.1' })).ok, true);
+});
+
+test('the portable next-turn contract accepts only a bounded public judgment', () => {
+  const input = {
+    prompt: 'A recovery window is ready. Which safe next step should be displayed?',
+    choices: ['Wait for confirmation', 'Prepare a dry run'],
+    default: 'Wait for confirmation',
+    correlation: 'judgment-42',
+  };
+  assert.deepEqual(validateNextTurnInput(input), { ok: true, value: input });
+  assert.equal(validateNextTurnInput({
+    prompt: 'The prepared public candidate passed its checks. Should jarvOS publish it?',
+    choices: ['Keep it prepared', 'Publish the release'],
+    default: 'Keep it prepared',
+    correlation: 'judgment-publication-42',
+  }).ok, true);
+});
+
+test('the portable next-turn contract rejects private or route-bearing data', () => {
+  const base = {
+    prompt: 'A recovery window is ready. Which safe next step should be displayed?',
+    choices: ['Wait for confirmation', 'Prepare a dry run'],
+    default: 'Wait for confirmation',
+    correlation: 'judgment-42',
+  };
+  for (const input of [
+    { ...base, prompt: 'Read /Users/alice/private-router before deciding.' },
+    { ...base, prompt: 'Use the api key from the router.' },
+    { ...base, prompt: 'Paperclip says this is ready.' },
+    { ...base, prompt: 'The raw Agent Mail transcript says this is ready.' },
+    { ...base, route: 'private-router' },
+    { ...base, correlation: 'secret-judgment-42' },
+    { ...base, choices: ['Wait for confirmation', 'Prepare a dry run', 'Escalate', 'Use a local route'] },
+  ]) {
+    assert.equal(validateNextTurnInput(input).ok, false);
+  }
 });

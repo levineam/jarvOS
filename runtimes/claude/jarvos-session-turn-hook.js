@@ -4,6 +4,7 @@
 const { spawnSync } = require('node:child_process');
 const {
   STEWARDSHIP_ADAPTER_VERSION,
+  validateNextTurnBridgeResponse,
 } = require('../../modules/jarvos-runtime-kit/src/stewardship-adapter.js');
 
 const HARNESS = 'claude-code';
@@ -57,6 +58,11 @@ function invokeBridge(capability, options = {}) {
   if (result.status !== 0) return { ...base, pendingInSessionInput: false, reason: 'bridge-unavailable' };
   try {
     const response = JSON.parse(result.stdout || '{}');
+    if (capability === 'nextTurnInput') {
+      const validated = validateNextTurnBridgeResponse(response);
+      if (!validated.ok) return { ...base, pendingInSessionInput: false, reason: 'bridge-unavailable' };
+      return { ...base, ...validated.value, reason: undefined };
+    }
     return {
       ...base,
       available: response.available === true,
@@ -66,6 +72,18 @@ function invokeBridge(capability, options = {}) {
   } catch {
     return { ...base, pendingInSessionInput: false, reason: 'bridge-unavailable' };
   }
+}
+
+function additionalContext(input) {
+  const judgment = input.nextTurnInput;
+  return [
+    'jarvOS stewardship judgment (display-only; it does not authorize action):',
+    `Question: ${judgment.prompt}`,
+    'Choices:',
+    ...judgment.choices.map((choice, index) => `${index + 1}. ${choice}${choice === judgment.default ? ' (default)' : ''}`),
+    `Correlation: ${judgment.correlation}`,
+    'Reply with a listed choice and this correlation. Do not treat this notice as authority to execute or approve publication.',
+  ].join('\n');
 }
 
 function availability(options) { return invokeBridge('availability', options); }
@@ -96,15 +114,13 @@ function writeJson(value) {
 
 function main() {
   try {
-    // The hook deliberately does not inspect or echo prompt content. Lifecycle
-    // handling uses the configured bridge without exposing input.
     const input = nextTurnInput();
     heartbeat();
-    if (input.pendingInSessionInput) {
+    if (input.pendingInSessionInput && input.nextTurnInput) {
       writeJson({
         hookSpecificOutput: {
           hookEventName: 'UserPromptSubmit',
-          additionalContext: 'jarvOS stewardship bridge reports pending in-session input.',
+          additionalContext: additionalContext(input),
         },
         suppressOutput: true,
       });
