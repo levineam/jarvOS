@@ -172,14 +172,14 @@ function tomlScalar(value) {
   fail('hook fields must be string, boolean, or finite number scalars');
 }
 
-function tomlHookEntry(entry) {
+function renderHookEntry(entry) {
   return `{ ${Object.entries(entry).map(([key, value]) => {
-    if (key === 'hooks') return `${tomlKey(key)} = [${value.map(tomlCommandHook).join(', ')}]`;
+    if (key === 'hooks') return `${tomlKey(key)} = [${value.map(renderCommandHook).join(', ')}]`;
     return `${tomlKey(key)} = ${tomlScalar(value)}`;
   }).join(', ')} }`;
 }
 
-function tomlCommandHook(hook) {
+function renderCommandHook(hook) {
   return `{ ${Object.entries(hook).map(([key, value]) => `${tomlKey(key)} = ${tomlScalar(value)}`).join(', ')} }`;
 }
 
@@ -202,7 +202,7 @@ function validateHookMap(hooks, label) {
   if (!hooks || Array.isArray(hooks) || typeof hooks !== 'object') fail(`${label} must be an object`);
   const validated = {};
   for (const [event, entries] of Object.entries(hooks)) {
-    if (!event || !Array.isArray(entries)) fail(`${label}.${event} must be an array`);
+    if (!/^[A-Za-z0-9_-]+$/.test(event) || !Array.isArray(entries)) fail(`${label}.${event} must be a supported event array`);
     validated[event] = entries.map((entry, index) => validateHookEntry(entry, `${label}.${event}[${index}]`));
   }
   return validated;
@@ -221,139 +221,89 @@ function parseLegacyHooks(file) {
   return validateHookMap(parsed.hooks, 'hooks');
 }
 
+function topLevelHookEntries(value) {
+  if (!value.startsWith('[') || !value.endsWith(']')) fail('hooks must use a one-line inline array');
+  const entries = []; let start = 1; let braces = 0; let brackets = 0; let quote = null; let escaped = false;
+  for (let index = 1; index < value.length - 1; index += 1) {
+    const character = value[index];
+    if (quote) {
+      if (escaped) escaped = false;
+      else if (character === '\\' && quote === '"') escaped = true;
+      else if (character === quote) quote = null;
+      continue;
+    }
+    if (character === '"' || character === "'") { quote = character; continue; }
+    if (character === '{') braces += 1;
+    else if (character === '}') braces -= 1;
+    else if (character === '[') brackets += 1;
+    else if (character === ']') brackets -= 1;
+    if (braces < 0 || brackets < 0) fail('invalid hooks inline array');
+    if (character === ',' && braces === 0 && brackets === 0) { entries.push(value.slice(start, index).trim()); start = index + 1; }
+  }
+  if (quote || braces !== 0 || brackets !== 0) fail('unsupported hooks inline array');
+  const tail = value.slice(start, -1).trim(); if (tail) entries.push(tail);
+  return entries;
+}
+
+function hookIdentity(entry) {
+  const matcher = /\bmatcher\s*=\s*("(?:\\.|[^"\\])*"|'[^']*')/.exec(entry);
+  const commands = [...entry.matchAll(/\bcommand\s*=\s*("(?:\\.|[^"\\])*"|'[^']*')/g)].map((match) => match[1]);
+  return commands.length === 1 ? `${matcher ? matcher[1] : ''}\u0000${commands[0]}` : null;
+}
+
 function dedupe(entries) {
   const seen = new Set();
   return entries.filter((entry) => {
-    const key = JSON.stringify(canonicalize(entry));
-    if (seen.has(key)) return false;
-    seen.add(key);
+    const identity = hookIdentity(entry);
+    if (!identity) return true;
+    if (seen.has(identity)) return false;
+    seen.add(identity);
     return true;
   });
 }
 
-function canonicalize(value) {
-  if (Array.isArray(value)) return value.map(canonicalize);
-  if (value && typeof value === 'object') {
-    return Object.fromEntries(Object.keys(value).sort().map((key) => [key, canonicalize(value[key])]));
-  }
-  return value;
-}
-
-function skipWhitespace(value, index) {
-  while (index < value.length && /\s/.test(value[index])) index += 1;
-  return index;
-}
-
-function parseTomlString(value, index) {
-  const quote = value[index];
-  let cursor = index + 1;
-  let escaped = false;
-  while (cursor < value.length) {
-    const character = value[cursor];
-    if (quote === '"' && escaped) escaped = false;
-    else if (quote === '"' && character === '\\') escaped = true;
-    else if (character === quote) break;
-    cursor += 1;
-  }
-  if (cursor >= value.length) fail('unterminated TOML string in hooks table');
-  const raw = value.slice(index, cursor + 1);
-  try {
-    return { value: quote === '"' ? JSON.parse(raw) : raw.slice(1, -1), end: cursor + 1 };
-  } catch (error) {
-    fail(`unsupported TOML string in hooks table: ${error.message}`);
-  }
-}
-
-function parseTomlKey(value, index) {
-  index = skipWhitespace(value, index);
-  if (value[index] === '"' || value[index] === "'") return parseTomlString(value, index);
-  const match = /^[A-Za-z0-9_-]+/.exec(value.slice(index));
-  if (!match) fail('unsupported TOML key in hooks table');
-  return { value: match[0], end: index + match[0].length };
-}
-
-function parseTomlValue(value, index) {
-  index = skipWhitespace(value, index);
-  if (value[index] === '"' || value[index] === "'") return parseTomlString(value, index);
-  if (value[index] === '[') {
-    const result = []; let cursor = skipWhitespace(value, index + 1);
-    if (value[cursor] === ']') return { value: result, end: cursor + 1 };
-    while (true) {
-      const item = parseTomlValue(value, cursor); result.push(item.value); cursor = skipWhitespace(value, item.end);
-      if (value[cursor] === ']') return { value: result, end: cursor + 1 };
-      if (value[cursor] !== ',') fail('invalid TOML array in hooks table');
-      cursor = skipWhitespace(value, cursor + 1);
-    }
-  }
-  if (value[index] === '{') {
-    const result = {}; let cursor = skipWhitespace(value, index + 1);
-    if (value[cursor] === '}') return { value: result, end: cursor + 1 };
-    while (true) {
-      const key = parseTomlKey(value, cursor); cursor = skipWhitespace(value, key.end);
-      if (value[cursor] !== '=') fail('invalid TOML inline table in hooks table');
-      const item = parseTomlValue(value, cursor + 1);
-      if (Object.prototype.hasOwnProperty.call(result, key.value)) fail('duplicate TOML key in hooks table');
-      result[key.value] = item.value; cursor = skipWhitespace(value, item.end);
-      if (value[cursor] === '}') return { value: result, end: cursor + 1 };
-      if (value[cursor] !== ',') fail('invalid TOML inline table in hooks table');
-      cursor = skipWhitespace(value, cursor + 1);
-    }
-  }
-  const token = /^[^\s,}\]]+/.exec(value.slice(index));
-  if (!token) fail('unsupported TOML value in hooks table');
-  if (token[0] === 'true' || token[0] === 'false') return { value: token[0] === 'true', end: index + token[0].length };
-  const number = Number(token[0]);
-  if (Number.isFinite(number)) return { value: number, end: index + token[0].length };
-  fail(`unsupported TOML value in hooks table: ${token[0]}`);
-}
-
-function tableRange(content, name) {
-  const header = new RegExp(`^\\s*\\[${name.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\$&')}\\]\\s*(?:#.*)?$`, 'm');
-  const match = header.exec(content);
-  if (!match) return null;
-  const start = match.index + match[0].length + (content[match.index + match[0].length] === '\n' ? 1 : 0);
-  const nextTable = /^\s*\[/gm; nextTable.lastIndex = start;
-  const next = nextTable.exec(content);
-  return { start, end: next ? next.index : content.length };
-}
-
-function hookAssignment(content, event) {
-  const range = tableRange(content, 'hooks');
-  if (!range) return null;
-  const assignments = /^[ \t]*(?:[A-Za-z0-9_-]+|"(?:\\.|[^"\\])*"|'[^']*')[ \t]*=/gm;
-  const table = content.slice(range.start, range.end);
-  let match;
-  while ((match = assignments.exec(table))) {
-    const assignmentStart = range.start + match.index;
-    const key = parseTomlKey(content, assignmentStart);
-    if (key.value !== event) continue;
-    const equals = skipWhitespace(content, key.end);
-    const valueStart = equals + 1;
-    const parsed = parseTomlValue(content, valueStart);
-    const lineEnd = content.indexOf('\n', parsed.end);
-    const trailing = content.slice(parsed.end, lineEnd < 0 ? range.end : lineEnd).trim();
-    if (trailing && !trailing.startsWith('#')) fail(`unexpected text after ${event} hook list`);
-    return { range, valueStart, valueEnd: parsed.end, entries: validateHookMap({ [event]: parsed.value }, 'config hooks')[event] };
-  }
-  return { range };
-}
-
-function mergeHookEntries(content, event, additions, removeManaged) {
-  const assignment = hookAssignment(content, event);
-  const existing = assignment && assignment.entries ? assignment.entries : [];
-  const retained = removeManaged ? existing.filter((entry) => !isManagedJarvosHook(entry)) : existing;
-  const entries = dedupe([...retained, ...additions]);
-  const rendered = `[${entries.map(tomlHookEntry).join(', ')}]`;
-  if (!assignment) {
-    const suffix = content.endsWith('\n') || content.length === 0 ? '' : '\n';
-    return `${content}${suffix}\n[hooks]\n${tomlKey(event)} = ${rendered}\n`;
-  }
-  if (!assignment.entries) return `${content.slice(0, assignment.range.end)}${tomlKey(event)} = ${rendered}\n${content.slice(assignment.range.end)}`;
-  return `${content.slice(0, assignment.valueStart)}${rendered}${content.slice(assignment.valueEnd)}`;
-}
-
 function isManagedJarvosHook(entry) {
-  return entry.hooks.some((hook) => typeof hook.command === 'string' && /jarvos-(?:session-start|session-turn)-hook\.js\b/.test(hook.command));
+  return /jarvos-(?:session-start|session-turn)-hook\.js\b/.test(entry);
+}
+
+function hookTableRange(lines) {
+  const start = lines.findIndex((line) => /^\[hooks\]\s*$/.test(line));
+  if (start < 0) return { start, end: lines.length };
+  let end = lines.length;
+  for (let index = start + 1; index < lines.length; index += 1) if (/^\s*\[/.test(lines[index])) { end = index; break; }
+  return { start, end };
+}
+
+function validateHookTable(content) {
+  const lines = content.split(/\n/); const { start, end } = hookTableRange(lines);
+  for (let index = start + 1; start >= 0 && index < end; index += 1) {
+    if (/^\s*(?:#.*)?$/.test(lines[index])) continue;
+    const match = /^\s*[A-Za-z0-9_-]+\s*=\s*(\[.*\])\s*(?:#.*)?$/.exec(lines[index]);
+    if (!match) fail('hooks table must use one-line inline-array assignments');
+    topLevelHookEntries(match[1]);
+  }
+}
+
+function setHook(content, event, hook, removeManaged) {
+  const lines = content.split(/\n/); const { start, end } = hookTableRange(lines);
+  if (start < 0) {
+    if (!hook) return content;
+    const suffix = content.endsWith('\n') || content.length === 0 ? '' : '\n';
+    return `${content}${suffix}\n[hooks]\n${tomlKey(event)} = [${hook}]\n`;
+  }
+  const eventLine = new RegExp(`^\\s*${event}\\s*=\\s*(\\[.*\\])\\s*(?:#.*)?$`);
+  for (let index = start + 1; index < end; index += 1) {
+    const match = eventLine.exec(lines[index]);
+    if (!match) continue;
+    const existing = topLevelHookEntries(match[1]);
+    const retained = removeManaged ? existing.filter((entry) => !isManagedJarvosHook(entry)) : existing;
+    const entries = hook ? dedupe([...retained, hook]) : retained;
+    lines[index] = `${event} = [${entries.join(', ')}]`;
+    return lines.join('\n');
+  }
+  if (!hook) return content;
+  lines.splice(end, 0, `${event} = [${hook}]`);
+  return lines.join('\n');
 }
 
 function stamp() {
@@ -430,15 +380,18 @@ function removeFeature(content, key) {
 let migrated = null;
 if (fs.existsSync(legacyHooksPath)) {
   migrated = parseLegacyHooks(legacyHooksPath);
-  for (const [event, entries] of Object.entries(migrated)) next = mergeHookEntries(next, event, entries, false);
+  validateHookTable(next);
+  for (const [event, entries] of Object.entries(migrated)) for (const entry of entries) next = setHook(next, event, renderHookEntry(entry), false);
 }
 
 if (rollback === '1') {
-  next = mergeHookEntries(next, 'SessionStart', [], true);
-  next = mergeHookEntries(next, 'UserPromptSubmit', [], true);
+  validateHookTable(next);
+  next = setHook(next, 'SessionStart', null, true);
+  next = setHook(next, 'UserPromptSubmit', null, true);
 } else {
-  next = mergeHookEntries(next, 'SessionStart', [validateHookEntry({ matcher: 'startup', hooks: [{ type: 'command', command: `node ${JSON.stringify(hookScript)}`, async: false, timeout: 30 }] }, 'jarvOS SessionStart')], true);
-  next = mergeHookEntries(next, 'UserPromptSubmit', [validateHookEntry({ hooks: [{ type: 'command', command: `node ${JSON.stringify(turnHookScript)}`, async: false, timeout: 30 }] }, 'jarvOS UserPromptSubmit')], true);
+  validateHookTable(next);
+  next = setHook(next, 'SessionStart', renderHookEntry({ matcher: 'startup', hooks: [{ type: 'command', command: `node ${JSON.stringify(hookScript)}`, async: false, timeout: 30 }] }), true);
+  next = setHook(next, 'UserPromptSubmit', renderHookEntry({ hooks: [{ type: 'command', command: `node ${JSON.stringify(turnHookScript)}`, async: false, timeout: 30 }] }), true);
 }
 next = setFeature(next, 'hooks', 'true');
 next = removeFeature(next, 'codex_hooks');

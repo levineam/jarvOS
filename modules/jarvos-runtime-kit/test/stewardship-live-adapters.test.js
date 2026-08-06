@@ -512,6 +512,21 @@ test('Codex hooks migration fails closed for malformed legacy hooks.json', () =>
     assert.equal(fs.readFileSync(config, 'utf8'), originalConfig);
     assert.equal(fs.readFileSync(hooksJson, 'utf8'), originalHooks);
     assert.deepEqual(fs.readdirSync(codexHome).filter((name) => name.includes('.bak-jarvos-')), []);
+
+    const multilineConfig = '[hooks]\nPreToolUse = [\n  { hooks = [{ type = "command", command = "keep-me" }] }\n]\n';
+    const validHooks = '{"hooks":{"PreToolUse":[{"hooks":[{"type":"command","command":"dcg --check"}]}]}}\n';
+    fs.writeFileSync(config, multilineConfig);
+    fs.writeFileSync(hooksJson, validHooks);
+    const multilineResult = runSetupResult(path.join(ROOT, 'runtimes', 'codex', 'setup.sh'), {
+      ...process.env,
+      HOME: path.join(temp, 'home'), CODEX_HOME: codexHome,
+      PATH: `${bin}${path.delimiter}${process.env.PATH || ''}`,
+      JARVOS_STEWARDSHIP_ONLY: '1', JARVOS_MANAGED_REPOSITORIES: '/managed/repository', JARVOS_STAGED_PUBLIC_RUNTIME_ROOT: staged,
+    });
+    assert.notEqual(multilineResult.status, 0);
+    assert.match(multilineResult.stderr, /one-line inline-array/);
+    assert.equal(fs.readFileSync(config, 'utf8'), multilineConfig);
+    assert.equal(fs.readFileSync(hooksJson, 'utf8'), validHooks);
   } finally {
     fs.rmSync(temp, { recursive: true, force: true });
   }
