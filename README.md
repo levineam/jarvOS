@@ -84,12 +84,11 @@ evidence needed by the issue-to-PR workflow. This is designed to work across
 Claude Code, Codex, OpenClaw, and other host adapters, so you can improve your
 own system without continually tracking which changes also belong upstream.
 
-Publication authority remains with you. The public `jarvos security` command
-uses one owner-facing setup, Touch ID for normal approvals, and one recovery
-passphrase. Approvals are narrow, signed, and time-limited; automated hosts get
-public verification material, not your signing keys. Paperclip can add a
-durable project record, but it is optional and is not required to detect,
-package, review, or verify software work.
+Routine stewardship uses a bounded, delivery-disabled Projects context contract.
+It can project only to an owner-configured private/internal destination; public
+or external destinations are publication and remain outside this capability.
+Paperclip can add a durable project record, but it is optional and is not
+required to detect, package, review, or verify software work.
 
 ## Your Knowledge Base Builds Itself
 

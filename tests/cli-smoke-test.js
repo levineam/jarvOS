@@ -9,7 +9,6 @@ const { spawnSync } = require('child_process');
 
 const ROOT = path.resolve(__dirname, '..');
 const CLI = path.join(ROOT, 'scripts', 'jarvos.js');
-const { runSecurity } = require(path.join(ROOT, 'lib', 'jarvos-cli.js'));
 
 function run(args, options = {}) {
   return spawnSync(process.execPath, [CLI, ...args], {
@@ -22,11 +21,6 @@ function run(args, options = {}) {
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-cli-'));
 try {
-  assert.equal(
-    runSecurity([], {}, () => ({ status: null, signal: 'SIGTERM' })),
-    1,
-    'a signal-killed security child must not report success',
-  );
   const workspace = path.join(tmp, 'workspace');
   const vault = path.join(tmp, 'vault');
   const controlPlaneHost = path.join(tmp, 'control-plane-host.js');
@@ -55,7 +49,6 @@ try {
   assert.equal(help.status, 0, help.stderr || help.stdout);
   assert.match(help.stdout, /jarvos init/);
   assert.match(help.stdout, /jarvos doctor/);
-  assert.match(help.stdout, /jarvos security setup/);
   assert.match(help.stdout, /minimal\s+Portable jarvOS starter workspace/);
 
   const initHelp = run(['init', '--help']);
@@ -66,12 +59,6 @@ try {
   const doctorHelp = run(['doctor', '--help']);
   assert.equal(doctorHelp.status, 0, doctorHelp.stderr || doctorHelp.stdout);
   assert.match(doctorHelp.stdout, /public profile health checks/);
-
-  const securityHelp = run(['security', '--help']);
-  assert.equal(securityHelp.status, 0, securityHelp.stderr || securityHelp.stdout);
-  assert.match(securityHelp.stdout, /One jarvOS security setup/);
-  assert.match(securityHelp.stdout, /one recovery passphrase/i);
-  assert.match(securityHelp.stdout, /Touch ID/);
 
   const badProfile = run(['init', '--profile', 'full', '--yes']);
   assert.notEqual(badProfile.status, 0);

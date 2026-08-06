@@ -68,15 +68,17 @@ goals still match — is a separate concern built on top of this one.
 
 `src/project-context.js` also defines the portable `jarvos.project-context/v1`
 contract used to authorize bounded stewardship context projection into Projects.
-It is a context-only port, not a project or task ledger: a signed reusable
-capability exposes portable destination selectors, permitted visibility, revision,
-and expiry only. Each projected activity receives its opaque correlation key at
-the projection boundary.
+It is a context-only port, not a project or task ledger: a caller-authorized,
+unsigned capability exposes one private/internal destination selector, permitted
+candidate visibility (`private`, `internal`, or `mixed`), revision, and expiry
+only. Each projected activity receives its opaque correlation key at the
+projection boundary.
 
 The caller supplies the exact input identity (`findingId`, `executionReference`,
 `releaseReference`, and `visibility`) only at projection time. The package hashes
 it into a correlation key and never serializes those source values into the
 capability. A caller that is not authorized receives only `{ status: 'denied' }`,
-so absence and denial do not enumerate destinations. The signer, verifier, and
-revocation source are injected external boundaries. This package contains no
-private key, local path, source content, task status, or activation-signing path.
+so absence and denial do not enumerate destinations. The owner-only host policy
+binds the runtime admission boundary; this package contains no private key,
+local path, source content, task status, activation state, or signing path.
+External/public destinations are publication and are rejected.

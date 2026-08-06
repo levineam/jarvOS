@@ -34,7 +34,6 @@ function advertisedRuntimeAssets() {
     'modules/jarvos-runtime-kit/scripts/jarvos-runtime-kit.js',
     'modules/jarvos-runtime-kit/README.md',
     'modules/jarvos-control-plane/scripts/jarvos-manager.js',
-    'scripts/jarvos-security.js',
     'profiles/minimal.json',
   ];
   for (const name of fs.readdirSync(runtimesDir)) {

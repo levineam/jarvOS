@@ -16,89 +16,93 @@ function issue(overrides = {}) {
   return context.issueProjectContext({
     authorization: { allowed: true },
     destinationSelectors: ['projects:stewardship'],
-    allowedVisibilities: ['private', 'mixed'],
+    allowedVisibilities: ['private', 'internal', 'mixed'],
     capabilityRevision: 'projects-r1',
-    activationEnvelopeDigest: 'sha256:immutable-envelope',
     issuedAt: '2026-08-05T12:00:00.000Z',
     expiresAt: '2026-08-05T13:00:00.000Z',
-    sign: (payload) => `sig_${payload.capabilityRevision}`,
     ...overrides,
   });
 }
 
-test('issues a portable reusable project context capability', () => {
-  const receipt = issue();
-  assert.equal(receipt.type, 'jarvos.project-context/v1');
-  assert.equal(receipt.purpose, 'managed-software-stewardship');
-  assert.equal(receipt.audience, 'jarvos-projects');
-  assert.deepEqual(receipt.destinationSelectors, ['projects:stewardship']);
-  assert.deepEqual(receipt.allowedVisibilities, ['mixed', 'private']);
-  assert.equal(receipt.activationEnvelopeDigest, 'sha256:immutable-envelope');
-  assert.deepEqual(Object.keys(receipt).sort(), [
-    'activationEnvelopeDigest', 'allowedVisibilities', 'audience', 'capabilityRevision', 'destinationSelectors', 'expiresAt',
-    'issuedAt', 'purpose', 'signature', 'type',
+test('issues a caller-authorized, unsigned bounded project context capability', () => {
+  const capability = issue();
+  assert.equal(capability.type, 'jarvos.project-context/v1');
+  assert.equal(capability.purpose, 'managed-software-stewardship');
+  assert.equal(capability.audience, 'jarvos-projects');
+  assert.deepEqual(capability.destinationSelectors, ['projects:stewardship']);
+  assert.deepEqual(capability.allowedVisibilities, ['internal', 'mixed', 'private']);
+  assert.deepEqual(Object.keys(capability).sort(), [
+    'allowedVisibilities', 'audience', 'capabilityRevision', 'destinationSelectors', 'expiresAt',
+    'issuedAt', 'purpose', 'type',
   ]);
-  assert.doesNotMatch(JSON.stringify(receipt), /finding-42|execution-42|release-42/);
+  assert.doesNotMatch(JSON.stringify(capability), /signature|activation|finding-42|execution-42|release-42/i);
 });
 
-test('rejects wrong capability version or purpose at the public verifier boundary', () => {
-  const receipt = issue();
-  for (const changed of [{ type: 'jarvos.project-context/v2' }, { purpose: 'other' }]) {
-    const result = context.verifyProjectContext({ ...receipt, ...changed }, {
-      now: '2026-08-05T12:30:00.000Z',
-      verify: () => true,
-    });
-    assert.equal(result.ok, false);
-    assert.equal(result.reason, 'invalid-contract');
+test('denies an absent or denied caller authorization without enumerating policy', () => {
+  assert.deepEqual(issue({ authorization: undefined }), { status: 'denied' });
+  assert.deepEqual(issue({ authorization: { allowed: false } }), { status: 'denied' });
+});
+
+test('rejects public or external destinations as publication', () => {
+  for (const selector of ['projects:public', 'projects:external', 'public', 'external:projects']) {
+    assert.throws(() => issue({ destinationSelectors: [selector] }), /private\/internal/);
   }
 });
 
-test('denies without revealing whether a destination exists', () => {
-  const denied = issue({ authorization: { allowed: false } });
-  assert.deepEqual(denied, { status: 'denied' });
+test('rejects wrong versions, widened visibility, and expired capability state', () => {
+  const capability = issue();
+  const base = { now: '2026-08-05T12:30:00.000Z' };
+  for (const changed of [
+    { type: 'jarvos.project-context/v2' },
+    { purpose: 'other' },
+    { allowedVisibilities: ['private', 'public'] },
+    { destinationSelectors: ['projects:public'] },
+  ]) assert.deepEqual(context.verifyProjectContext({ ...capability, ...changed }, base), { ok: false, reason: 'invalid-contract' });
+  assert.deepEqual(context.verifyProjectContext(capability, { now: '2026-08-05T13:00:00.000Z' }), { ok: false, reason: 'expired' });
+  assert.deepEqual(context.verifyProjectContext(capability, { now: '2026-08-05T11:59:59.000Z' }), { ok: false, reason: 'not-yet-valid' });
 });
 
-test('rejects private path selectors and signer output that cannot stay portable', () => {
-  assert.throws(() => issue({ destinationSelectors: ['/private/Projects'] }), /local paths/);
-  assert.throws(() => issue({ sign: () => ({ source: 'finding-42' }) }), /portable encoded signature/);
-});
-
-test('public verifier rejects expired, revoked, and forged receipts', () => {
-  const receipt = issue();
-  const base = { now: '2026-08-05T12:30:00.000Z', verify: () => true, activationEnvelopeDigest: 'sha256:immutable-envelope' };
-  assert.deepEqual(context.verifyProjectContext(receipt, { ...base, now: '2026-08-05T13:00:00.000Z' }), { ok: false, reason: 'expired' });
-  assert.deepEqual(context.verifyProjectContext(receipt, { ...base, isRevoked: () => true }), { ok: false, reason: 'revoked' });
-  assert.deepEqual(context.verifyProjectContext(receipt, { ...base, verify: () => false }), { ok: false, reason: 'forged' });
-});
-
-test('public verifier binds each receipt to its immutable activation envelope', () => {
-  const receipt = issue();
-  const options = { now: '2026-08-05T12:30:00.000Z', verify: () => true, activationEnvelopeDigest: 'sha256:immutable-envelope' };
-  assert.equal(context.verifyProjectContext(receipt, options).ok, true);
+test('projection only uses a current private/internal capability and preserves opaque identity', () => {
+  const capability = issue();
+  const request = { capability, context: { contextKey: context.deriveContextKey(input), visibility: input.visibility } };
   assert.deepEqual(
-    context.verifyProjectContext(receipt, { ...options, activationEnvelopeDigest: 'sha256:other-envelope' }),
-    { ok: false, reason: 'activation-envelope-mismatch' },
-  );
-  assert.deepEqual(
-    context.verifyProjectContext(receipt, { now: options.now, verify: options.verify }),
-    { ok: false, reason: 'invalid-contract' },
-  );
-});
-
-test('projection port binds each authorized activity without reissuing the capability', () => {
-  const receipt = issue();
-  const request = { capability: receipt, context: { contextKey: context.deriveContextKey(input), visibility: input.visibility } };
-  assert.deepEqual(
-    context.projectContextProjection(receipt, input, { project: (value) => { assert.deepEqual(value, request); return { status: 'projected' }; } }),
+    context.projectContextProjection(capability, input, {
+      now: '2026-08-05T12:30:00.000Z',
+      project: (value) => { assert.deepEqual(value, request); return { status: 'projected' }; },
+    }),
     { status: 'projected', contextKey: context.deriveContextKey(input) },
   );
   assert.deepEqual(
-    context.projectContextProjection(receipt, input, { project: () => ({ status: 'deduped' }) }),
+    context.projectContextProjection(capability, input, {
+      now: '2026-08-05T12:30:00.000Z', project: () => ({ status: 'deduped' }),
+    }),
     { status: 'deduped', contextKey: context.deriveContextKey(input) },
   );
 });
 
-test('capability denies an activity outside its signed visibility scope', () => {
-  const receipt = issue({ allowedVisibilities: ['mixed'] });
-  assert.deepEqual(context.projectContextProjection(receipt, input, { project: () => ({ status: 'projected' }) }), { status: 'denied' });
+test('a mixed candidate visibility remains delivery-disabled at a private/internal destination', () => {
+  const capability = issue({ allowedVisibilities: ['mixed'] });
+  const mixedInput = { ...input, visibility: 'mixed' };
+  assert.deepEqual(
+    context.projectContextProjection(capability, mixedInput, {
+      now: '2026-08-05T12:30:00.000Z', project: () => ({ status: 'projected' }),
+    }),
+    { status: 'projected', contextKey: context.deriveContextKey(mixedInput) },
+  );
+});
+
+test('projection fails closed for invalid or out-of-scope capability state', () => {
+  const capability = issue();
+  assert.deepEqual(
+    context.projectContextProjection({ ...capability, destinationSelectors: ['projects:public'] }, input, {
+      now: '2026-08-05T12:30:00.000Z', project: () => ({ status: 'projected' }),
+    }),
+    { status: 'unavailable' },
+  );
+  assert.deepEqual(
+    context.projectContextProjection(issue({ allowedVisibilities: ['internal'] }), input, {
+      now: '2026-08-05T12:30:00.000Z', project: () => ({ status: 'projected' }),
+    }),
+    { status: 'denied' },
+  );
 });
