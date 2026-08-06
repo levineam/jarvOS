@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "id": "hermes",
-  "displayName": "Hermes Agent",
+  "id": "openclaw",
+  "displayName": "OpenClaw",
   "sharedAgentContext": {
     "mcpServer": "modules/jarvos-agent-context/scripts/jarvos-mcp.js",
     "requiredTools": [
@@ -14,18 +14,17 @@
   },
   "targets": [
     {
-      "id": "hermes-agent",
+      "id": "openclaw",
       "kind": "agent-runtime",
       "mcp": {
         "supported": true,
         "transport": "stdio",
-        "registration": "hermes mcp add jarvos --command node --args <mcp-server>",
-        "verification": "hermes mcp test jarvos"
+        "registration": "Register modules/jarvos-agent-context/scripts/jarvos-mcp.js with the workspace agent configuration."
       },
       "hydration": {
         "mode": "manual",
         "command": "Call the jarvos_hydrate MCP tool at session start.",
-        "reason": "Hermes exposes MCP registration, but this adapter does not claim an automatic startup hook until the native hook contract is verified."
+        "reason": "This public adapter does not activate a global OpenClaw session hook."
       }
     }
   ],
@@ -34,7 +33,7 @@
   },
   "stewardshipAdapter": {
     "version": "jarvos-stewardship-adapter.v1",
-    "harness": "hermes",
+    "harness": "openclaw",
     "isolation": {
       "preferredMode": "managed-launcher",
       "fallbackMode": "managed-launcher",
@@ -43,7 +42,7 @@
     },
     "activation": {
       "enabledByDefault": false,
-      "reason": "Setup keeps the existing Hermes configuration behavior and leaves lifecycle activation to an explicit managed launcher."
+      "reason": "Setup keeps the existing workspace behavior and leaves lifecycle activation to an explicit managed launcher."
     },
     "bridge": {
       "environment": "JARVOS_STEWARDSHIP_BRIDGE_COMMAND",
@@ -59,19 +58,10 @@
     }
   },
   "configWrites": {
-    "backupBeforeWrite": true,
-    "paths": [
-      "~/.hermes/config.yaml",
-      "~/.hermes/skills/jarvos/SKILL.md"
-    ]
+    "backupBeforeWrite": true
   },
-  "unsupportedCapabilities": [
-    {
-      "capability": "automatic-startup-hydration",
-      "reason": "Hermes MCP registration is supported; automatic startup hydration remains deferred until the native startup hook surface is verified."
-    }
-  ],
+  "unsupportedCapabilities": [],
   "verification": [
-    "node modules/jarvos-runtime-kit/scripts/jarvos-runtime-kit.js check hermes"
+    "node modules/jarvos-runtime-kit/scripts/jarvos-runtime-kit.js check openclaw"
   ]
 }

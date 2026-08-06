@@ -52,6 +52,54 @@
   "setup": {
     "script": "setup.sh"
   },
+  "stewardshipAdapter": {
+    "version": "jarvos-stewardship-adapter.v1",
+    "harness": "claude-code",
+    "isolation": {
+      "preferredMode": "native",
+      "fallbackMode": "managed-launcher",
+      "providesIsolatedWorktrees": true,
+      "requiresVerifiedWorktreeEvidence": true
+    },
+    "activation": {
+      "enabledByDefault": false,
+      "reason": "The lifecycle hooks are packaged for opt-in activation and do not modify user configuration by this declaration."
+    },
+    "bridge": {
+      "environment": "JARVOS_STEWARDSHIP_BRIDGE_COMMAND",
+      "contract": "An executable on PATH accepts one lifecycle capability name and emits a public-safe JSON availability receipt."
+    },
+    "capabilities": {
+      "startOrResume": {
+        "mode": "native-hook",
+        "event": "SessionStart",
+        "script": "jarvos-session-start-hook.js"
+      },
+      "heartbeat": {
+        "mode": "native-hook",
+        "event": "UserPromptSubmit",
+        "script": "jarvos-session-turn-hook.js"
+      },
+      "checkpoint": {
+        "mode": "managed-launcher",
+        "state": "stable-idle",
+        "reason": "Checkpointing remains a managed-launcher responsibility until an enabled bridge is configured."
+      },
+      "stop": {
+        "mode": "managed-launcher",
+        "reason": "Stopping remains a managed-launcher responsibility until an enabled bridge is configured."
+      },
+      "nextTurnInput": {
+        "mode": "native-hook",
+        "event": "UserPromptSubmit",
+        "script": "jarvos-session-turn-hook.js"
+      },
+      "availability": {
+        "mode": "native-hook",
+        "script": "jarvos-session-turn-hook.js"
+      }
+    }
+  },
   "configWrites": {
     "backupBeforeWrite": true,
     "paths": [

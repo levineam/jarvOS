@@ -27,6 +27,8 @@ echo ""
 echo "  Source:     $REPO_ROOT"
 echo "  Workspace:  $WORKSPACE"
 echo ""
+echo "  i Stewardship lifecycle support is declared in adapter.json; managed-launcher activation remains opt-in."
+echo ""
 
 # ── Dependency checks ──────────────────────────────────────────────────────────
 echo "→ Checking dependencies..."

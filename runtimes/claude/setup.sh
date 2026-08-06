@@ -4,6 +4,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 MCP_SERVER="$ROOT/modules/jarvos-agent-context/scripts/jarvos-mcp.js"
 HOOK_SCRIPT="$ROOT/runtimes/claude/jarvos-session-start-hook.js"
+TURN_HOOK_SCRIPT="$ROOT/runtimes/claude/jarvos-session-turn-hook.js"
 CLAUDE_MD_TEMPLATE="$ROOT/runtimes/claude/templates/CLAUDE.md.template"
 CLAUDE_SETTINGS="${CLAUDE_SETTINGS:-$HOME/.claude/settings.json}"
 CLAUDE_DESKTOP_CONFIG="${CLAUDE_DESKTOP_CONFIG:-$HOME/Library/Application Support/Claude/claude_desktop_config.json}"
@@ -16,6 +17,11 @@ fi
 
 if [ ! -f "$HOOK_SCRIPT" ]; then
   echo "jarvOS Claude hook script not found: $HOOK_SCRIPT" >&2
+  exit 1
+fi
+
+if [ ! -f "$TURN_HOOK_SCRIPT" ]; then
+  echo "jarvOS Claude turn hook script not found: $TURN_HOOK_SCRIPT" >&2
   exit 1
 fi
 
@@ -43,12 +49,11 @@ else
   echo "Claude Code CLI not found on PATH; skipping Claude Code MCP registration." >&2
 fi
 
-node - "$CLAUDE_SETTINGS" "$HOOK_SCRIPT" "$CLAUDE_DESKTOP_CONFIG" "$MCP_SERVER" <<'NODE'
+node - "$CLAUDE_SETTINGS" "$HOOK_SCRIPT" "$TURN_HOOK_SCRIPT" "$CLAUDE_DESKTOP_CONFIG" "$MCP_SERVER" <<'NODE'
 const fs = require('fs');
 const path = require('path');
 
-const [settingsPath, hookScript, desktopConfigPath, mcpServer] = process.argv.slice(2);
-const hookCommand = `node ${JSON.stringify(hookScript)}`;
+const [settingsPath, hookScript, turnHookScript, desktopConfigPath, mcpServer] = process.argv.slice(2);
 
 function readJsonFile(filePath, fallback) {
   if (!fs.existsSync(filePath)) return fallback;
@@ -77,22 +82,25 @@ function backupAndWriteJson(filePath, value, label) {
 function upsertClaudeCodeHook(settings) {
   const next = { ...settings };
   const hooks = next.hooks && typeof next.hooks === 'object' && !Array.isArray(next.hooks) ? { ...next.hooks } : {};
-  const sessionStart = Array.isArray(hooks.SessionStart) ? [...hooks.SessionStart] : [];
-  const jarvosEntry = {
-    matcher: 'startup',
-    hooks: [
-      {
-        type: 'command',
-        command: hookCommand,
-        timeout: 30,
-      },
-    ],
-  };
 
-  const index = sessionStart.findIndex((entry) => JSON.stringify(entry).includes(hookScript));
-  if (index >= 0) sessionStart[index] = jarvosEntry;
-  else sessionStart.push(jarvosEntry);
-  hooks.SessionStart = sessionStart;
+  function upsert(event, script, entry) {
+    const entries = Array.isArray(hooks[event]) ? [...hooks[event]] : [];
+    const index = entries.findIndex((candidate) => JSON.stringify(candidate).includes(script));
+    if (index >= 0) entries[index] = entry;
+    else entries.push(entry);
+    hooks[event] = entries;
+  }
+
+  function commandEntry(script, matcher) {
+    const entry = {
+      hooks: [{ type: 'command', command: `node ${JSON.stringify(script)}`, timeout: 30 }],
+    };
+    if (matcher) entry.matcher = matcher;
+    return entry;
+  }
+
+  upsert('SessionStart', hookScript, commandEntry(hookScript, 'startup'));
+  upsert('UserPromptSubmit', turnHookScript, commandEntry(turnHookScript));
   next.hooks = hooks;
   return next;
 }

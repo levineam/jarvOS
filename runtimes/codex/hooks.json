@@ -12,6 +12,18 @@
           }
         ]
       }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$JARVOS_REPO_ROOT/runtimes/codex/jarvos-session-turn-hook.js\"",
+            "async": false,
+            "timeout": 30
+          }
+        ]
+      }
     ]
   }
 }

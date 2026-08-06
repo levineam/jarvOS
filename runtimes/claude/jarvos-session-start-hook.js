@@ -5,6 +5,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { hydrate } = require('../../modules/jarvos-agent-context/src/index.js');
+const { stewardshipAdapter } = require('./jarvos-session-turn-hook.js');
 
 const DEFAULT_MAX_CHARS = 9500;
 const MAX_ALLOWED_CHARS = 10000;
@@ -50,6 +51,7 @@ function hydrationMaxChars() {
 
 async function main() {
   try {
+    stewardshipAdapter.startOrResume();
     emitLocalChangeInvalidation();
     const result = await hydrate({ maxChars: hydrationMaxChars() });
     if (!result.markdown || !result.markdown.trim()) {
@@ -69,7 +71,11 @@ async function main() {
   }
 }
 
-main().catch((error) => {
-  logFailure(error);
-  writeJson({});
-});
+if (require.main === module) {
+  main().catch((error) => {
+    logFailure(error);
+    writeJson({});
+  });
+}
+
+module.exports = { hydrationMaxChars, main, stewardshipAdapter };

@@ -8,6 +8,8 @@ OpenClaw provides powerful scheduling, tool execution, and multi-channel messagi
 
 This folder currently ships as **documentation-only** (this README). The actual starter files live in repo root (`core/` and `templates/`) and are copied into your OpenClaw workspace.
 
+Startup hydration is manual: call the `jarvos_hydrate` MCP tool when a session needs the current context packet.
+
 Use this as an adapter checklist for files you place in your workspace root:
 
 - **HEARTBEAT.md** — start from `templates/HEARTBEAT-template.md`

@@ -5,6 +5,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 MCP_SERVER="$ROOT/modules/jarvos-agent-context/scripts/jarvos-mcp.js"
 HOOKS_JSON="$ROOT/runtimes/codex/hooks.json"
 HOOK_SCRIPT="$ROOT/runtimes/codex/jarvos-session-start-hook.js"
+TURN_HOOK_SCRIPT="$ROOT/runtimes/codex/jarvos-session-turn-hook.js"
 TRUST_SCRIPT="$ROOT/runtimes/codex/trust-session-start-hook.js"
 CODEX_CONFIG="${CODEX_CONFIG:-$HOME/.codex/config.toml}"
 CONTROL_PLANE_SERVICE_MODULE="${JARVOS_CONTROL_PLANE_SERVICE_MODULE:-}"
@@ -29,6 +30,11 @@ fi
 
 if [ ! -f "$HOOK_SCRIPT" ]; then
   echo "jarvOS Codex hook script not found: $HOOK_SCRIPT" >&2
+  exit 1
+fi
+
+if [ ! -f "$TURN_HOOK_SCRIPT" ]; then
+  echo "jarvOS Codex turn hook script not found: $TURN_HOOK_SCRIPT" >&2
   exit 1
 fi
 
@@ -127,13 +133,18 @@ if [ ! -f "$CODEX_CONFIG" ]; then
   touch "$CODEX_CONFIG"
 fi
 
-node - "$CODEX_CONFIG" "$HOOK_SCRIPT" <<'NODE'
+node - "$CODEX_CONFIG" "$HOOK_SCRIPT" "$TURN_HOOK_SCRIPT" <<'NODE'
 const fs = require('fs');
 
-const [configPath, hookScript] = process.argv.slice(2);
-const hookCommand = `node ${JSON.stringify(hookScript)}`;
-const sessionStartHook = `{ matcher = "startup", hooks = [{ type = "command", command = ${JSON.stringify(hookCommand)}, async = false, timeout = 30 }] }`;
-const sessionStartLine = `SessionStart = [${sessionStartHook}]`;
+const [configPath, hookScript, turnHookScript] = process.argv.slice(2);
+const commandHook = (script, matcher) => {
+  const parts = [];
+  if (matcher) parts.push(`matcher = ${JSON.stringify(matcher)}`);
+  parts.push(`hooks = [{ type = "command", command = ${JSON.stringify(`node ${JSON.stringify(script)}`)}, async = false, timeout = 30 }]`);
+  return `{ ${parts.join(', ')} }`;
+};
+const sessionStartHook = commandHook(hookScript, 'startup');
+const turnHook = commandHook(turnHookScript);
 const original = fs.readFileSync(configPath, 'utf8');
 let next = original;
 
@@ -185,12 +196,13 @@ function removeFeature(content, key) {
   }).join('\n');
 }
 
-function setSessionStartHook(content) {
+function setHook(content, event, hookScript, hook) {
   const lines = content.split(/\n/);
+  const hookLine = `${event} = [${hook}]`;
   let start = lines.findIndex((line) => /^\[hooks\]\s*$/.test(line));
   if (start < 0) {
     const suffix = content.endsWith('\n') || content.length === 0 ? '' : '\n';
-    return `${content}${suffix}\n[hooks]\n${sessionStartLine}\n`;
+    return `${content}${suffix}\n[hooks]\n${hookLine}\n`;
   }
 
   let end = lines.length;
@@ -202,9 +214,10 @@ function setSessionStartHook(content) {
   }
 
   for (let i = start + 1; i < end; i += 1) {
-    if (!/^\s*SessionStart\s*=/.test(lines[i])) continue;
+    if (!new RegExp(`^\\s*${event}\\s*=`).test(lines[i])) continue;
     if (lines[i].includes(hookScript)) {
-      lines[i] = sessionStartLine;
+      // This event line can contain user hooks alongside jarvOS. Keeping a
+      // matching entry intact is idempotent and avoids replacing that list.
       return lines.join('\n');
     }
 
@@ -212,16 +225,17 @@ function setSessionStartHook(content) {
     if (close >= 0) {
       const before = lines[i].slice(0, close).trimEnd();
       const separator = before.endsWith('[') ? '' : ',';
-      lines[i] = `${before}${separator} ${sessionStartHook}${lines[i].slice(close)}`;
+      lines[i] = `${before}${separator} ${hook}${lines[i].slice(close)}`;
       return lines.join('\n');
     }
   }
 
-  lines.splice(end, 0, sessionStartLine);
+  lines.splice(end, 0, hookLine);
   return lines.join('\n');
 }
 
-next = setSessionStartHook(next);
+next = setHook(next, 'SessionStart', hookScript, sessionStartHook);
+next = setHook(next, 'UserPromptSubmit', turnHookScript, turnHook);
 next = setFeature(next, 'hooks', 'true');
 next = removeFeature(next, 'codex_hooks');
 
@@ -238,10 +252,10 @@ if (next !== original) {
 NODE
 
 if [ "$CODEX_CONFIG" = "$HOME/.codex/config.toml" ]; then
-  if node "$TRUST_SCRIPT" "$ROOT" "$HOOK_SCRIPT"; then
-    echo "Trusted jarvOS Codex SessionStart hook."
+  if node "$TRUST_SCRIPT" "$ROOT" "$HOOK_SCRIPT" && node "$TRUST_SCRIPT" "$ROOT" "$TURN_HOOK_SCRIPT"; then
+    echo "Trusted jarvOS Codex lifecycle hooks."
   else
-    echo "Could not automatically trust jarvOS Codex SessionStart hook; review it in Codex hooks settings." >&2
+    echo "Could not automatically trust jarvOS Codex lifecycle hooks; review them in Codex hooks settings." >&2
   fi
 else
   echo "Skipping automatic hook trust for custom CODEX_CONFIG: $CODEX_CONFIG"
