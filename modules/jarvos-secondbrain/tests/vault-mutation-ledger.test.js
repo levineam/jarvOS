@@ -42,3 +42,32 @@ test('separate ledger instances fence stale claim owners and reject sequence col
     assert.throws(() => a.transition('op-00000003', 'not-a-state', { ownerId: 'a', fence: 1 }), /Invalid ledger transition/);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
+
+test('malformed and permission-unsafe ledgers are quarantined fail-closed', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-ledger-quarantine-'));
+  try {
+    const filePath = path.join(root, 'ledger.json');
+    fs.writeFileSync(filePath, '{not-json}', { mode: 0o600 });
+    const ledger = createVaultMutationLedger({ filePath });
+    assert.deepEqual(ledger.read().operations, {});
+    assert.equal(fs.readdirSync(`${filePath}.quarantine`).length, 1);
+    fs.writeFileSync(filePath, JSON.stringify({ schemaVersion: 1, operations: {}, claims: {} }), { mode: 0o644 });
+    fs.chmodSync(filePath, 0o644);
+    assert.deepEqual(ledger.read().operations, {});
+    assert.equal(fs.readdirSync(`${filePath}.quarantine`).length, 2);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test('local write-ahead states and auditable operator resolution survive restart', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-ledger-local-'));
+  try {
+    const filePath = path.join(root, 'ledger.json'); const ledger = createVaultMutationLedger({ filePath });
+    const claim = ledger.claim(op('op-00000006'), 'offline', { local: true });
+    assert.equal(ledger.get('op-00000006').status, 'local_mutating');
+    ledger.transition('op-00000006', 'local_applied', { ownerId: 'offline', fence: claim.fence });
+    const restarted = createVaultMutationLedger({ filePath });
+    assert.equal(restarted.get('op-00000006').status, 'local_applied');
+    restarted.resolve('operator', 'op-00000006', 'abandoned', 'user selected recovery');
+    assert.equal(restarted.get('op-00000006').history.at(-1).evidence.reason, 'user selected recovery');
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});

@@ -6,7 +6,7 @@ const path = require('node:path');
 const vm = require('node:vm');
 const test = require('node:test');
 const { createVaultMutationAdapter } = require('../adapters/obsidian/src/vault-mutation-adapter');
-const { buildObsidianMutationProgram } = require('../adapters/obsidian/src/vault-mutation-adapter');
+const { buildObsidianInvariantProgram, buildObsidianMutationProgram } = require('../adapters/obsidian/src/vault-mutation-adapter');
 
 const operation = () => ({ schemaVersion: 1, operationId: 'op-20260806-adapter-test', vaultId: 'vault-a', vaultRelativePath: 'Notes/A.md', sequence: 1, operationKind: 'create', content: 'hello' });
 const ledgerPath = () => path.join(os.tmpdir(), `jarvos-adapter-${Math.random()}.json`);
@@ -46,6 +46,38 @@ test('unavailable capability retains planned intent for reconciliation', () => {
   const adapter = createVaultMutationAdapter({ vaultRoot: '/vault', vaultId: 'vault-a', ledgerPath: ledgerPath(), probe: () => ({ state: 'app_stopped' }) });
   assert.equal(adapter.execute(operation()).status, 'unavailable');
   assert.equal(adapter.ledger.get(operation().operationId).status, 'planned');
+});
+
+test('a successful connection performs only a bounded opportunistic drain', () => {
+  const drained = [];
+  const states = [{ queued: true, token: 'op-20260806-adapter-test' }, { status: 'done', invariant: true, readback: 'hello' }];
+  const adapter = createVaultMutationAdapter({ vaultRoot: '/vault', vaultId: 'vault-a', ledgerPath: ledgerPath(), probe: () => ({ state: 'available', vaultId: 'vault-a' }), evaluate: () => states.shift(), maxPollAttempts: 1, opportunisticDrain: (budget) => drained.push(budget) });
+  assert.equal(adapter.execute(operation()).status, 'committed');
+  assert.deepEqual(drained, [{ limit: 2, timeMs: 100, excludeOperationId: 'op-20260806-adapter-test' }]);
+});
+
+test('read-only invariant inspection returns only Obsidian-owned status evidence', () => {
+  const inspectionToken = (code) => JSON.parse(Buffer.from(code.match(/atob\('([^']+)'\)/)[1], 'base64').toString('utf8')).inspectionToken;
+  let pendingCalls = 0;
+  const pendingAdapter = createVaultMutationAdapter({ vaultRoot: '/vault', vaultId: 'vault-a', probe: () => ({ state: 'available', vaultId: 'vault-a' }), evaluate: (code) => pendingCalls++ === 0 ? { queued: true, token: inspectionToken(code) } : { status: 'pending' }, maxPollAttempts: 1 });
+  assert.deepEqual(pendingAdapter.inspectInvariant(operation()), { status: 'unavailable' });
+  let terminalCalls = 0;
+  const adapter = createVaultMutationAdapter({ vaultRoot: '/vault', vaultId: 'vault-a', probe: () => ({ state: 'available', vaultId: 'vault-a' }), evaluate: (code) => terminalCalls++ === 0 ? { queued: true, token: inspectionToken(code) } : terminalCalls === 2 ? { status: 'satisfied', invariant: true } : true, maxPollAttempts: 1 });
+  assert.deepEqual(adapter.inspectInvariant(operation()), { status: 'satisfied', invariant: true });
+  assert.deepEqual(adapter.inspectInvariant({ ...operation(), vaultId: 'other-vault' }), { status: 'unavailable' });
+  assert.match(buildObsidianInvariantProgram(operation()), /app\.vault\.read/);
+  assert.doesNotMatch(buildObsidianInvariantProgram(operation()), /app\.vault\.create|app\.vault\.process/);
+});
+
+test('inspection uses an opaque result token and leaves an in-flight mutation token intact', () => {
+  const mutation = operation(); const inspection = 'inspection-token';
+  const file = { path: mutation.vaultRelativePath, content: 'hello' };
+  const context = { app: { vault: { getFileByPath: () => file, read: () => settled('hello') } }, TextDecoder, Uint8Array, atob: (value) => Buffer.from(value, 'base64').toString('binary'), JSON, __jarvosVaultMutationResults: { [mutation.operationId]: { status: 'pending' } } };
+  context.globalThis = context;
+  vm.runInNewContext(buildObsidianInvariantProgram(mutation, inspection), context);
+  assert.deepEqual(context.__jarvosVaultMutationResults[mutation.operationId], { status: 'pending' });
+  assert.equal(context.__jarvosVaultMutationResults[inspection].status, 'satisfied');
+  assert.equal(context.__jarvosVaultMutationResults[inspection].invariant, true);
 });
 
 test('default durable ledger path follows XDG state and stays outside the vault', () => {
