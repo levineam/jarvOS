@@ -1,6 +1,8 @@
 'use strict';
 
-const SUBMISSION_GATE_SCHEMA_VERSION = 'jarvos-coding-submission-gate/v1';
+// v2 makes Git-backed work identity the required evidence key. `issue` remains
+// a historical input alias so existing callers can migrate without a rewrite.
+const SUBMISSION_GATE_SCHEMA_VERSION = 'jarvos-coding-submission-gate/v2';
 
 const REQUIRED_EVIDENCE = Object.freeze([
   {

@@ -3,8 +3,10 @@
 const { evaluateGoalAlignment } = require('../features/goal-alignment');
 
 const TRIAGE_SCHEMA_VERSION = 'jarvos-coding-triage/v1';
-const SUBMISSION_GATE_SCHEMA_VERSION = 'jarvos-coding-submission-gate/v1';
-const ISSUE_BRANCH_LIFECYCLE_SCHEMA_VERSION = 'jarvos-coding-issue-branch-lifecycle/v1';
+const SUBMISSION_GATE_SCHEMA_VERSION = 'jarvos-coding-submission-gate/v2';
+// v2 makes cleanup the authoritative closeout result; tracker closure is an
+// optional projection and is therefore reported separately.
+const ISSUE_BRANCH_LIFECYCLE_SCHEMA_VERSION = 'jarvos-coding-issue-branch-lifecycle/v2';
 const CODING_MATURITY_STATES = Object.freeze([
   'experimental',
   'local-dogfood',

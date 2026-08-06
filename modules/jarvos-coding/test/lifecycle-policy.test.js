@@ -4,6 +4,7 @@ const assert = require('assert/strict');
 const test = require('node:test');
 
 const {
+  ISSUE_BRANCH_LIFECYCLE_SCHEMA_VERSION,
   evaluateIssueBranchLifecycle,
   evaluateSubmissionGate,
   issueBranchLifecycleContract,
@@ -53,6 +54,9 @@ test('Paperclip absence does not block supported lifecycle closeout or submissio
   const submission = evaluateSubmissionGate(input);
 
   assert.equal(lifecycle.closeoutReady, true);
+  assert.equal(ISSUE_BRANCH_LIFECYCLE_SCHEMA_VERSION, 'jarvos-coding-issue-branch-lifecycle/v2');
+  assert.equal(lifecycle.schemaVersion, 'jarvos-coding-issue-branch-lifecycle/v2');
+  assert.equal(lifecycle.currentState, 'cleanup_verified');
   assert.deepEqual(lifecycle.trackerProjection, {
     eligible: true,
     recorded: false,

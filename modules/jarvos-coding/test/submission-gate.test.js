@@ -4,6 +4,7 @@ const assert = require('assert/strict');
 const test = require('node:test');
 
 const {
+  SUBMISSION_GATE_SCHEMA_VERSION,
   buildSubmissionGate,
   formatSubmissionGateMarkdown,
   validateSubmissionEvidence,
@@ -29,6 +30,8 @@ test('supported submission admission does not require a Paperclip record', () =>
   }, { identifier: 'SUP-2138' });
 
   assert.equal(withoutPaperclip.ok, true);
+  assert.equal(SUBMISSION_GATE_SCHEMA_VERSION, 'jarvos-coding-submission-gate/v2');
+  assert.equal(withoutPaperclip.schemaVersion, 'jarvos-coding-submission-gate/v2');
   assert.deepEqual(withUnavailablePaperclip, withoutPaperclip);
   assert.equal(buildSubmissionGate({ identifier: 'SUP-2138' }).evidenceKeys.includes('paperclipEvidence'), false);
   assert.equal(formatSubmissionGateMarkdown({ identifier: 'SUP-2138' }).includes('Paperclip intake'), false);
