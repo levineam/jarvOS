@@ -6,6 +6,7 @@ const path = require('node:path');
 const PENDING = 'mutation-owned-pending-migration';
 const WRITER_INVENTORY = Object.freeze([
   ['secondbrain', 'adapters/obsidian/src/vault-storage-adapter.js', PENDING, 'U4'],
+  ['secondbrain', 'adapters/obsidian/src/vault-mutation-ledger.js', 'operational-out-of-vault', 'U2', 'Writes the owner-only reconciliation ledger under the host state directory, never vault Markdown.'],
   ['secondbrain', 'bridge/config/src/shared-vault-onboarding.js', 'operational-out-of-vault', 'U1', 'Writes jarvos.config.json, never vault Markdown.'],
   ['secondbrain', 'bridge/provenance/src/journal-note-audit.js', PENDING, 'U4'],
   ['secondbrain', 'bridge/provenance/src/link-to-journal.js', PENDING, 'U4'],
