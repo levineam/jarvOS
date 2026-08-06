@@ -30,13 +30,14 @@ function renderJournalScaffold(date) {
 function receiptIsAcknowledged(receipt) { return ['committed', 'already_satisfied'].includes(receipt?.status); }
 
 function createVaultStorageAdapter({ mutationService, vaultRoot = getVaultDir(), journalDir = getVaultJournalDir(), source = 'obsidian.vault-storage-adapter' } = {}) {
-  if (!mutationService || typeof mutationService.execute !== 'function' || typeof mutationService.createWriteContext !== 'function') throw new Error('vault storage adapter requires the configured mutation service');
-  function contextFor(vaultRelativePath, intentId) { return mutationService.createWriteContext({ vaultRelativePath, intentId, operationSource: source }); }
+  const service = mutationService || require('../../../src/vault-mutation-service.js').createConfiguredVaultMutationService({ vaultRoot: path.resolve(vaultRoot), source });
+  if (typeof service.execute !== 'function' || typeof service.createWriteContext !== 'function') throw new Error('vault storage adapter requires the configured mutation service');
+  function contextFor(vaultRelativePath, intentId) { return service.createWriteContext({ vaultRelativePath, intentId, operationSource: service.source }); }
   function executeTransform({ date, transformName, replayPayload, intentId }) {
     const journalPath = path.join(journalDir, `${date}.md`);
     const vaultRelativePath = relativeToVault(vaultRoot, journalPath);
     const context = contextFor(vaultRelativePath, intentId);
-    const receipt = mutationService.execute({ schemaVersion: 1, operationId: context.operationId, vaultId: context.vaultId, vaultRelativePath, sequence: context.sequence, operationKind: 'transform', transformName, transformVersion: 1, replayPayload, source });
+    const receipt = context.mutationExecutor({ schemaVersion: 1, operationId: context.operationId, vaultId: context.vaultId, vaultRelativePath, sequence: context.sequence, operationKind: 'transform', transformName, transformVersion: 1, replayPayload, source: context.source });
     return { journalPath, receipt };
   }
   return Object.freeze({
@@ -46,7 +47,7 @@ function createVaultStorageAdapter({ mutationService, vaultRoot = getVaultDir(),
       const vaultRelativePath = relativeToVault(vaultRoot, journalPath);
       const context = contextFor(vaultRelativePath, intentId || `journal-create-${date}-${crypto.randomUUID()}`);
       const content = existed ? fs.readFileSync(journalPath, 'utf8') : renderJournalScaffold(date);
-      const receipt = mutationService.execute({ schemaVersion: 1, operationId: context.operationId, vaultId: context.vaultId, vaultRelativePath, sequence: context.sequence, operationKind: 'create', content, source });
+      const receipt = context.mutationExecutor({ schemaVersion: 1, operationId: context.operationId, vaultId: context.vaultId, vaultRelativePath, sequence: context.sequence, operationKind: 'create', content, source: context.source });
       return { journalPath, existed, receipt, acknowledged: receiptIsAcknowledged(receipt) };
     },
     appendLineToJournalSection({ heading, line, date = todayDate(), intentId } = {}) {

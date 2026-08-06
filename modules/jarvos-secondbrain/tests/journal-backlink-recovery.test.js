@@ -134,7 +134,7 @@ test('legacy entries use only exact title evidence and do not fuzzy-match notes'
     assert.equal(exactNote.status, 'retry');
     fs.writeFileSync(state.journalPath, '## 📝 Notes\n- [[Legacy Title]]\n', 'utf8');
     const exactLink = classifyDeferredBacklink({ journalPath: state.journalPath, noteTitle: 'Legacy Title', section: '📝 Notes' }, { vaultRoot: state.root, notesDir: state.notesDir });
-    assert.equal(exactLink.status, 'linked');
+    assert.equal(exactLink.status, 'retry');
   } finally {
     fs.rmSync(state.root, { recursive: true, force: true });
   }
@@ -228,11 +228,11 @@ test('an entry added during a flush remains pending after the locked latest-stat
       vaultRoot: state.root,
       notesDir: state.notesDir,
       mutationService: fakeMutationService(state, { onExecute: (operation) => {
-        if (!added) {
+        if (operation.operationKind === 'transform' && !added) {
           added = true;
           recordDeferredBacklink({ journalPath: state.journalPath, noteTitle: 'Second', noteId: 'second-id', notePath: 'Notes/Second.md', section: '📝 Notes', reason: 'failed' });
         }
-        assert.equal(operation.transformName, 'journal-backlink');
+        if (operation.operationKind === 'transform') assert.equal(operation.transformName, 'journal-backlink');
       } }),
     });
     assert.equal(flush.linked, 1);

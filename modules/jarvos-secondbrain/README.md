@@ -124,6 +124,29 @@ resolved paths without writing the config.
 
 See `docs/architecture/jarvos-secondbrain-monorepo-spec.md` for the boundary model.
 
+## Vault mutation ownership
+
+Authored Markdown does not count as saved merely because a filesystem write
+completed. The top-level mutation service records the intent, sends live
+creates and latest-content transforms through Obsidian's `app.vault` API, and
+waits for app-owned readback before returning `committed`. Notes, journals,
+backlinks, project pages, session threads, and maintenance repairs all compose
+this same lifecycle.
+
+If Obsidian is unavailable, a host may authorize only a safe exclusive create
+or exact-hash local replacement. The result is
+`saved_locally_sync_pending`, retained outside the vault, and must later be
+reconciled through Obsidian. Use:
+
+```bash
+JARVOS_VAULT_ROOT=/path/to/vault npm run health:vault-mutations
+JARVOS_VAULT_ROOT=/path/to/vault npm run maintain:vault-mutations
+```
+
+Sync verification is a separate, optional status. Obsidian has no supported
+per-file Sync API, so the private inspector is disabled by default and returns
+only bounded `converged`, `pending`, `diverged`, or `unknown` projections.
+
 ## Ambient Package
 
 `packages/jarvos-ambient` exposes `@jarvos/ambient`, the portable intent layer

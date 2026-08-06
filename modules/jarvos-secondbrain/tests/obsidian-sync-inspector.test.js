@@ -45,6 +45,19 @@ test('missing fields, disabled Sync, and wrong vault return unknown without muta
   assert.equal(inspector([sample({ vaultId: 'vault-b' })]).inspect({ expectedHash: expected }).reason, 'wrong_vault');
 });
 
+test('private reader failures and local content mismatches are classified explicitly', () => {
+  const unavailable = createObsidianSyncInspector({
+    vaultId: 'vault-a',
+    vaultRelativePath: target,
+    enabled: true,
+    readPrivateSyncState: () => { throw new Error('private API changed'); },
+  }).inspect({ expectedHash: expected });
+  assert.deepEqual(unavailable, { status: 'unknown', reason: 'inspection_unavailable', attempts: 1 });
+  assert.deepEqual(inspector([sample({ contentHash: stale })]).inspect({ expectedHash: expected }), {
+    status: 'diverged', reason: 'local_content_mismatch', attempts: 1,
+  });
+});
+
 test('attempt and time budgets stop polling deterministically', () => {
   let reads = 0;
   let clock = 0;

@@ -176,14 +176,6 @@ function classifyDeferredBacklink(entry, {
     if (typeof entry.noteTitle !== 'string' || !entry.noteTitle || typeof entry.journalPath !== 'string') {
       return { status: 'unresolved', reason: 'legacy-entry-missing-title-or-journal' };
     }
-    try {
-      const journal = existsSync(entry.journalPath) ? readFileSync(entry.journalPath, 'utf8') : '';
-      if (journal.split(/\r?\n/).some((line) => linkLineRegex(entry.noteTitle).test(line))) {
-        return { status: 'linked', reason: 'legacy-exact-link-present', noteTitle: entry.noteTitle };
-      }
-    } catch {
-      return { status: 'unresolved', reason: 'legacy-journal-unreadable' };
-    }
     const canonical = canonicalLegacyNotePath(notesDir, entry.noteTitle);
     if (!canonical) return { status: 'unresolved', reason: 'legacy-note-title-unsafe' };
     return existsSync(canonical)
@@ -521,15 +513,20 @@ function linkNoteToTodayJournal(noteTitle, section = '📝 Notes') {
 }
 
 function receiptAcknowledged(receipt) { return ['committed', 'already_satisfied'].includes(receipt?.status); }
-function operationContext(service, vaultRelativePath, intentId, source) {
-  return service.createWriteContext({ vaultRelativePath, intentId, operationSource: source });
+function operationContext(service, vaultRelativePath, intentId) {
+  return service.createWriteContext({ vaultRelativePath, intentId, operationSource: service.source });
+}
+function executeContext(service, context, operation) {
+  return typeof context.mutationExecutor === 'function'
+    ? context.mutationExecutor(operation)
+    : service.execute(operation);
 }
 function submitBacklinkMutation({ journalPath, linkTarget, section, noteId, mutationService, intentId, vaultRoot: suppliedVaultRoot } = {}) {
   const vaultRoot = suppliedVaultRoot || mutationService?.vaultRoot || resolveVaultRootForJournal(journalPath);
   const vaultRelativePath = journalPathRelativeToVault(journalPath, vaultRoot);
   const service = mutationService || createObsidianOwnedMutationService({ vaultRoot, source: 'bridge.link-to-journal' });
-  const context = operationContext(service, vaultRelativePath, intentId || `journal-backlink-${crypto.randomUUID()}`, 'bridge.link-to-journal');
-  return service.execute({
+  const context = operationContext(service, vaultRelativePath, intentId || `journal-backlink-${crypto.randomUUID()}`);
+  return executeContext(service, context, {
     schemaVersion: 1,
     operationId: context.operationId,
     vaultId: context.vaultId,
@@ -547,15 +544,16 @@ function submitJournalCreate({ journalPath, mutationService, intentId, vaultRoot
   const vaultRoot = suppliedVaultRoot || mutationService?.vaultRoot || resolveVaultRootForJournal(journalPath);
   const vaultRelativePath = journalPathRelativeToVault(journalPath, vaultRoot);
   const service = mutationService || createObsidianOwnedMutationService({ vaultRoot, source: 'bridge.link-to-journal' });
-  const context = operationContext(service, vaultRelativePath, intentId || `journal-create-${crypto.randomUUID()}`, 'bridge.link-to-journal');
-  return service.execute({
+  const context = operationContext(service, vaultRelativePath, intentId || `journal-create-${crypto.randomUUID()}`);
+  const content = existsSync(journalPath) ? readFileSync(journalPath, 'utf8') : renderInitialJournal(journalPath);
+  return executeContext(service, context, {
     schemaVersion: 1,
     operationId: context.operationId,
     vaultId: context.vaultId,
     vaultRelativePath,
     sequence: context.sequence,
     operationKind: 'create',
-    content: renderInitialJournal(journalPath),
+    content,
     source: context.source,
   });
 }
@@ -579,10 +577,11 @@ function linkNoteToJournal({
   const stableIntent = intentId || `backlink-${crypto.randomUUID()}`;
   let receipt;
   try {
-    if (!existsSync(journalPath)) {
-      if (!createIfMissing) throw new Error(`Journal not found: ${journalPath}`);
+    if (createIfMissing) {
       const createReceipt = submitJournalCreate({ journalPath, mutationService, intentId: `${stableIntent}:create`, vaultRoot });
       if (!receiptAcknowledged(createReceipt)) throw Object.assign(new Error('Journal scaffold is not acknowledged by Obsidian'), { receipt: createReceipt });
+    } else if (!existsSync(journalPath)) {
+      throw new Error(`Journal not found: ${journalPath}`);
     }
     receipt = submitBacklinkMutation({ journalPath, linkTarget: noteTitle, section: normalizedSection, noteId, mutationService, intentId: `${stableIntent}:backlink`, vaultRoot });
     if (!receiptAcknowledged(receipt)) throw Object.assign(new Error('Journal backlink is not acknowledged by Obsidian'), { receipt });

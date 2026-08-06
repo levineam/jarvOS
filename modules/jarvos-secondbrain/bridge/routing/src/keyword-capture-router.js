@@ -49,7 +49,6 @@ const {
 } = require('../../../packages/jarvos-ambient/src/routing');
 
 function applyRoutingPlan(capture = {}, options = {}) {
-  const adapter = options.adapter || createStorageAdapter(options);
   const plan = buildRoutingPlan(capture);
   const date = plan.date;
   const result = {
@@ -62,6 +61,7 @@ function applyRoutingPlan(capture = {}, options = {}) {
   if (plan.ignored) {
     return result;
   }
+  const adapter = options.adapter || createStorageAdapter(options);
 
   if (plan.createNote) {
     result.note = adapter.writeNote({

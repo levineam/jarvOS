@@ -94,8 +94,9 @@ function main(argv = process.argv.slice(2)) {
         status: args.status || undefined,
         createMarkdownFile: mutations.createMarkdownFile,
       });
-      projects.writeIndex({ dir, config, ...mutations });
+      if (!created.savedLocally) projects.writeIndex({ dir, config, ...mutations });
       if (args.json) console.log(JSON.stringify(created, null, 2));
+      else if (created.savedLocally) console.log(`saved locally; Sync pending: ${created.path}`);
       else {
         console.log(`created ${created.path}`);
         console.log('Fill in Goal, High-level plan, and Definition of Done.');
@@ -142,7 +143,9 @@ function main(argv = process.argv.slice(2)) {
 
   if (args.command === 'index') {
     const written = projects.writeIndex({ dir, config, ...mutationTools(dir) });
-    console.log(`wrote ${written.path} (${written.count} project(s))`);
+    console.log(written.savedLocally
+      ? `saved locally; Sync pending: ${written.path}`
+      : `wrote ${written.path} (${written.count} project(s))`);
     return 0;
   }
 

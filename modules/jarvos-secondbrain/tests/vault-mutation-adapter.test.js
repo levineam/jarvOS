@@ -7,9 +7,11 @@ const vm = require('node:vm');
 const test = require('node:test');
 const { createVaultMutationAdapter } = require('../adapters/obsidian/src/vault-mutation-adapter');
 const { buildObsidianInvariantProgram, buildObsidianMutationProgram } = require('../adapters/obsidian/src/vault-mutation-adapter');
+const { createJarvosVaultTransforms } = require('../src/vault-transform-registry');
 
 const operation = () => ({ schemaVersion: 1, operationId: 'op-20260806-adapter-test', vaultId: 'vault-a', vaultRelativePath: 'Notes/A.md', sequence: 1, operationKind: 'create', content: 'hello' });
 const ledgerPath = () => path.join(os.tmpdir(), `jarvos-adapter-${Math.random()}.json`);
+const inspectionToken = (code) => JSON.parse(Buffer.from(code.match(/atob\('([^']+)'\)/)[1], 'base64').toString('utf8')).inspectionToken;
 
 test('a queued response without a terminal app token is never committed', () => {
   const states = [{ queued: true, token: 'op-20260806-adapter-test' }, { status: 'pending' }];
@@ -35,11 +37,21 @@ test('serialized payload does not become executable source', () => {
 
 test('capability failures are explicit and do not dispatch', () => {
   let dispatched = false;
-  for (const state of ['cli_missing', 'app_stopped', 'cli_disabled', 'cli_unsupported', 'wrong_vault', 'api_incompatible']) {
+  for (const state of ['cli_missing', 'app_stopped', 'app_busy', 'app_unreachable', 'cli_disabled', 'cli_unsupported', 'wrong_vault', 'api_incompatible']) {
     const adapter = createVaultMutationAdapter({ vaultRoot: '/vault', vaultId: 'vault-a', ledgerPath: ledgerPath(), probe: () => ({ state }), evaluate: () => { dispatched = true; } });
     assert.equal(adapter.execute(operation()).obsidian, state);
   }
   assert.equal(dispatched, false);
+});
+
+test('timeouts and ambiguous CLI failures never prove that Obsidian is stopped', () => {
+  const timedOut = new Error('operation timed out'); timedOut.code = 'ETIMEDOUT';
+  const timeoutAdapter = createVaultMutationAdapter({ vaultRoot: '/vault', vaultId: 'vault-a', ledgerPath: ledgerPath(), evaluate: () => { throw timedOut; } });
+  assert.equal(timeoutAdapter.capability().state, 'app_busy');
+  const unknownAdapter = createVaultMutationAdapter({ vaultRoot: '/vault', vaultId: 'vault-a', ledgerPath: ledgerPath(), evaluate: () => { throw new Error('opaque transport failure'); } });
+  assert.equal(unknownAdapter.capability().state, 'app_unreachable');
+  const stoppedAdapter = createVaultMutationAdapter({ vaultRoot: '/vault', vaultId: 'vault-a', ledgerPath: ledgerPath(), evaluate: () => { throw new Error('Obsidian is not running'); } });
+  assert.equal(stoppedAdapter.capability().state, 'app_stopped');
 });
 
 test('unavailable capability retains planned intent for reconciliation', () => {
@@ -57,7 +69,6 @@ test('a successful connection performs only a bounded opportunistic drain', () =
 });
 
 test('read-only invariant inspection returns only Obsidian-owned status evidence', () => {
-  const inspectionToken = (code) => JSON.parse(Buffer.from(code.match(/atob\('([^']+)'\)/)[1], 'base64').toString('utf8')).inspectionToken;
   let pendingCalls = 0;
   const pendingAdapter = createVaultMutationAdapter({ vaultRoot: '/vault', vaultId: 'vault-a', probe: () => ({ state: 'available', vaultId: 'vault-a' }), evaluate: (code) => pendingCalls++ === 0 ? { queued: true, token: inspectionToken(code) } : { status: 'pending' }, maxPollAttempts: 1 });
   assert.deepEqual(pendingAdapter.inspectInvariant(operation()), { status: 'unavailable' });
@@ -116,12 +127,49 @@ test('default durable ledger path follows XDG state and stays outside the vault'
   } finally { if (previous === undefined) delete process.env.XDG_STATE_HOME; else process.env.XDG_STATE_HOME = previous; fs.rmSync(root, { recursive: true, force: true }); }
 });
 
-test('acknowledged operation is already satisfied without a second evaluate', () => {
+test('acknowledged operation is returned as satisfied only after a fresh Obsidian read', () => {
   const filePath = ledgerPath(); let calls = 0;
   const first = createVaultMutationAdapter({ vaultRoot: '/vault', vaultId: 'vault-a', ledgerPath: filePath, probe: () => ({ state: 'available', vaultId: 'vault-a' }), evaluate: () => { calls += 1; return calls === 1 ? { queued: true, token: operation().operationId } : { status: 'done', invariant: true, readback: 'hello' }; }, maxPollAttempts: 1 });
   assert.equal(first.execute(operation()).status, 'committed');
-  const second = createVaultMutationAdapter({ vaultRoot: '/vault', vaultId: 'vault-a', ledgerPath: filePath, probe: () => ({ state: 'available', vaultId: 'vault-a' }), evaluate: () => { throw new Error('must not dispatch'); } });
+  let inspectionCalls = 0;
+  const second = createVaultMutationAdapter({
+    vaultRoot: '/vault',
+    vaultId: 'vault-a',
+    ledgerPath: filePath,
+    probe: () => ({ state: 'available', vaultId: 'vault-a' }),
+    evaluate: (code) => {
+      inspectionCalls += 1;
+      if (inspectionCalls === 1) return { queued: true, token: inspectionToken(code) };
+      if (inspectionCalls === 2) return { status: 'satisfied', invariant: true };
+      return true;
+    },
+    maxPollAttempts: 1,
+  });
   assert.equal(second.execute(operation()).status, 'already_satisfied');
+  assert.equal(inspectionCalls, 3);
+});
+
+test('an acknowledged ledger record cannot hide stale Obsidian content', () => {
+  const filePath = ledgerPath(); let calls = 0;
+  const first = createVaultMutationAdapter({ vaultRoot: '/vault', vaultId: 'vault-a', ledgerPath: filePath, probe: () => ({ state: 'available', vaultId: 'vault-a' }), evaluate: () => { calls += 1; return calls === 1 ? { queued: true, token: operation().operationId } : { status: 'done', invariant: true, readback: 'hello' }; }, maxPollAttempts: 1 });
+  assert.equal(first.execute(operation()).status, 'committed');
+  let inspectionCalls = 0;
+  const second = createVaultMutationAdapter({
+    vaultRoot: '/vault',
+    vaultId: 'vault-a',
+    ledgerPath: filePath,
+    probe: () => ({ state: 'available', vaultId: 'vault-a' }),
+    evaluate: (code) => {
+      inspectionCalls += 1;
+      if (inspectionCalls === 1) return { queued: true, token: inspectionToken(code) };
+      if (inspectionCalls === 2) return { status: 'unsatisfied', invariant: false };
+      return true;
+    },
+    maxPollAttempts: 1,
+  });
+  const result = second.execute(operation());
+  assert.equal(result.status, 'conflict');
+  assert.equal(result.obsidian, 'unacknowledged');
 });
 
 test('fixed program uses create, process, and app-owned readback in their respective modes', () => {
@@ -137,7 +185,7 @@ test('fixed program uses create, process, and app-owned readback in their respec
 function settled(value) { return { then(fn) { try { fn(value); return this; } catch (error) { this.error = error; return this; } }, catch(fn) { if (this.error) fn(this.error); return this; } }; }
 function runInFakeObsidian(operation, { initial, readback } = {}) {
   const files = initial === undefined ? new Map() : new Map([[operation.vaultRelativePath, { path: operation.vaultRelativePath, content: initial }]]);
-  const vault = { getFileByPath: (target) => files.get(target) || null, create: (target, content) => { files.set(target, { path: target, content }); return settled(); }, process: (file, transform) => { file.content = transform(file.content); return settled(); }, read: (file) => settled(readback === undefined ? file.content : readback) };
+  const vault = { getFileByPath: (target) => files.get(target) || null, create: (target, content) => { const file = { path: target, content }; files.set(target, file); return settled(file); }, process: (file, transform) => { file.content = transform(file.content); return settled(file); }, delete: (file) => { files.delete(file.path); return settled(); }, read: (file) => settled(readback === undefined ? file.content : readback) };
   const context = { app: { vault }, TextDecoder, Uint8Array, atob: (value) => Buffer.from(value, 'base64').toString('binary'), JSON };
   context.globalThis = context; vm.runInNewContext(buildObsidianMutationProgram(operation), context);
   return { result: context.__jarvosVaultMutationResults[operation.operationId], content: files.get(operation.vaultRelativePath)?.content };
@@ -155,6 +203,25 @@ test('fixed program handles collision identity, latest-content transforms, and s
   assert.equal(runInFakeObsidian(create, { readback: 'stale tracked content' }).result.status, 'error');
 });
 
+test('every registered transform matches the production Obsidian evaluator', () => {
+  const transforms = createJarvosVaultTransforms();
+  const cases = [
+    ['plain\n', 'append-line', { line: '- appended' }],
+    ['---\njarvos_note_id: "note-1"\n---\n\n# Note\n\nmobile\n', 'note-append-body', { noteId: 'note-1', body: '# Note\n\nagent' }],
+    ['---\njarvos_note_id: "thread-1"\n---\n\n# Thread\n\nmobile\n', 'session-thread-append', { noteId: 'thread-1', entry: '## Checkpoint\n\nagent' }],
+    ['## 💡 Ideas\n-\n\n## Scratch\nmobile\n', 'journal-section-line', { heading: '## 💡 Ideas', line: '- New idea' }],
+    ['## 📝 Notes\n-\n\n## Scratch\n- [[Notes/One]]\nmobile\n', 'journal-backlink', { linkTarget: 'Notes/One', section: '📝 Notes', noteId: 'note-1' }],
+  ];
+  for (const [initial, transformName, replayPayload] of cases) {
+    const input = { ...operation(), operationKind: 'transform', transformName, transformVersion: 1, replayPayload };
+    const expected = transforms.applyNode(initial, input);
+    const actual = runInFakeObsidian(input, { initial });
+    assert.equal(actual.result.status, 'done', transformName);
+    assert.equal(actual.content, expected, transformName);
+    assert.equal(transforms.isSatisfied(actual.content, input), true, transformName);
+  }
+});
+
 test('fixed program preserves quoted note identity for identity-safe note transforms', () => {
   const note = { ...operation(), operationKind: 'transform', transformName: 'note-append-body', transformVersion: 1, replayPayload: { noteId: 'note-1', body: '# Note\n\nagent prose' } };
   const latest = runInFakeObsidian(note, { initial: '---\njarvos_note_id: "note-1"\nstatus: active\n---\n\n# Note\n\nmobile prose\n' });
@@ -163,6 +230,13 @@ test('fixed program preserves quoted note identity for identity-safe note transf
   assert.match(latest.content, /mobile prose/);
   assert.match(latest.content, /agent prose/);
   assert.equal(runInFakeObsidian({ ...note, replayPayload: { ...note.replayPayload, noteId: 'other-note' } }, { initial: latest.content }).result.status, 'error');
+});
+
+test('fixed program appends when the requested block exists only as a prose substring', () => {
+  const note = { ...operation(), operationKind: 'transform', transformName: 'note-append-body', transformVersion: 1, replayPayload: { noteId: 'note-1', body: 'next' } };
+  const updated = runInFakeObsidian(note, { initial: '---\njarvos_note_id: "note-1"\n---\n\n# Note\n\nthe next thing\n' });
+  assert.equal(updated.result.status, 'done');
+  assert.match(updated.content, /the next thing\n\nnext\n$/);
 });
 
 test('fixed program appends one session checkpoint without replacing concurrent prose', () => {
@@ -196,4 +270,51 @@ test('fixed program canonicalizes one exact backlink while preserving concurrent
   assert.equal(result.result.status, 'done');
   assert.equal((result.content.match(/\[\[Notes\/C\+\+ \(Draft\)\]\]/g) || []).length, 1);
   assert.match(result.content, /concurrent mobile prose/);
+});
+
+test('fixed program deletes only an exact disposable fixture and confirms absence', () => {
+  const content = 'smoke nonce: one';
+  const deletion = {
+    ...operation(),
+    operationKind: 'delete',
+    expectedContent: content,
+    expectedHash: require('../adapters/obsidian/src/vault-mutation-contract').hashUtf8(content),
+  };
+  const removed = runInFakeObsidian(deletion, { initial: content });
+  assert.equal(removed.result.status, 'done');
+  assert.equal(removed.content, undefined);
+  const conflict = runInFakeObsidian(deletion, { initial: 'mobile changed it' });
+  assert.equal(conflict.result.status, 'error');
+  assert.equal(conflict.content, 'mobile changed it');
+});
+
+test('delete dispatch is denied unless the host grants narrow delete authority', () => {
+  let dispatched = false;
+  const adapter = createVaultMutationAdapter({
+    vaultRoot: '/vault',
+    vaultId: 'vault-a',
+    ledgerPath: ledgerPath(),
+    probe: () => ({ state: 'available', vaultId: 'vault-a' }),
+    evaluate: () => { dispatched = true; },
+  });
+  const content = 'smoke fixture';
+  const deletion = {
+    ...operation(),
+    operationKind: 'delete',
+    expectedContent: content,
+    expectedHash: require('../adapters/obsidian/src/vault-mutation-contract').hashUtf8(content),
+  };
+  assert.equal(adapter.execute(deletion).status, 'failed');
+  assert.equal(adapter.inspectInvariant(deletion).status, 'unavailable');
+  assert.equal(dispatched, false);
+});
+
+test('adapter exposes only a read-only ledger view', () => {
+  const adapter = createVaultMutationAdapter({ vaultRoot: '/vault', vaultId: 'vault-a', ledgerPath: ledgerPath(), probe: () => ({ state: 'app_stopped' }) });
+  adapter.execute(operation());
+  assert.equal(typeof adapter.ledger.read, 'function');
+  assert.equal(typeof adapter.ledger.get, 'function');
+  for (const mutator of ['claim', 'ensure', 'nextSequence', 'planNext', 'transition', 'resolve', 'quarantine', 'acknowledgeFromObsidianRead']) {
+    assert.equal(adapter.ledger[mutator], undefined, mutator);
+  }
 });

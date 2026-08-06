@@ -215,7 +215,7 @@ test('a missing journal is created then linked through separate owned operations
   }
 });
 
-test('an existing backlink succeeds without requiring Obsidian', () => {
+test('an existing backlink is re-acknowledged through the mutation owner', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-existing-owned-journal-'));
   const journalDir = path.join(root, 'Journal');
   fs.mkdirSync(journalDir, { recursive: true });
@@ -235,6 +235,41 @@ test('an existing backlink succeeds without requiring Obsidian', () => {
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
+});
+
+test('disk-only journal bytes are registered through create before backlink transform', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-disk-only-journal-'));
+  const journalDir = path.join(root, 'Journal');
+  const journalPath = path.join(journalDir, '2030-02-03.md');
+  fs.mkdirSync(journalDir, { recursive: true });
+  fs.writeFileSync(journalPath, '## 📝 Notes\n-\n\nOffline prose\n', 'utf8');
+  const transforms = createJarvosVaultTransforms();
+  const order = [];
+  let appContent = null;
+  let sequence = 0;
+  const mutationService = {
+    vaultRoot: root,
+    createWriteContext({ vaultRelativePath, intentId, operationSource }) { return { vaultId: 'disk-only-test', vaultRelativePath, operationId: intentId, sequence: ++sequence, source: operationSource }; },
+    execute(operation) {
+      order.push(operation.operationKind);
+      if (operation.operationKind === 'create') {
+        assert.equal(operation.content, fs.readFileSync(journalPath, 'utf8'));
+        appContent = operation.content;
+        return { status: 'committed' };
+      }
+      assert.notEqual(appContent, null, 'transform must not run before app-owned create');
+      appContent = transforms.applyNode(appContent, operation);
+      fs.writeFileSync(journalPath, appContent, 'utf8');
+      return { status: 'committed' };
+    },
+  };
+  try {
+    const result = linkNoteToJournal({ journalPath, noteTitle: 'Recovered Registration', mutationService, vaultRoot: root });
+    assert.deepEqual(order, ['create', 'transform']);
+    assert.equal(result.linked, true);
+    assert.match(appContent, /Offline prose/);
+    assert.match(appContent, /\[\[Recovered Registration\]\]/);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
 test('canonical transform preserves the latest editor content', () => {

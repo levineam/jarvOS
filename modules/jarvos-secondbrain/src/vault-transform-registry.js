@@ -12,16 +12,22 @@ function hasNoteIdentity(content, noteId) {
   return (match?.[1] || match?.[2] || match?.[3] || '') === noteId;
 }
 
+function hasExactBlock(content, block) {
+  const expected = String(block || '').trim();
+  if (!expected) return false;
+  return `\n\n${String(content).trim()}\n\n`.includes(`\n\n${expected}\n\n`);
+}
+
 function noteAppendTransform(content, { noteId, body }) {
   const source = String(content);
   if (!hasNoteIdentity(source, noteId)) return source;
-  return source.includes(body) ? source : `${source.trimEnd()}\n\n${body.trim()}\n`;
+  return hasExactBlock(source, body) ? source : `${source.trimEnd()}\n\n${body.trim()}\n`;
 }
 
 function sessionThreadAppendTransform(content, { noteId, entry }) {
   const source = String(content);
   const checkpoint = String(entry || '').trim();
-  if (!hasNoteIdentity(source, noteId) || !checkpoint || source.includes(checkpoint)) return source;
+  if (!hasNoteIdentity(source, noteId) || !checkpoint || hasExactBlock(source, checkpoint)) return source;
   return `${source.trimEnd()}\n\n${checkpoint}\n`;
 }
 
@@ -93,8 +99,9 @@ function journalBacklinkSatisfied(content, payload) {
   return sectionCount === 1 && totalCount === 1;
 }
 
-// These are the portable, reviewable transforms used by U4 callers.  The
-// adapter has matching fixed cases; callers never supply executable source.
+// These are the portable, reviewable Node transforms used by reconciliation
+// and deterministic tests. The adapter has matching fixed evaluator cases;
+// callers never supply executable source.
 function createJarvosVaultTransforms() {
   return createVaultTransformRegistry([
     {
@@ -102,7 +109,6 @@ function createJarvosVaultTransforms() {
       validatePayload: (p) => typeof p?.line === 'string' && p.line.trim().startsWith('- '),
       normalizePayload: (p) => ({ line: p.line.trim() }),
       applyNode: (content, payload) => lineTransform(content, payload),
-      applyObsidian: (content, payload) => lineTransform(content, payload),
       invariant: (content, payload) => String(content).includes(payload.line),
     },
     {
@@ -110,23 +116,20 @@ function createJarvosVaultTransforms() {
       validatePayload: (p) => typeof p?.noteId === 'string' && p.noteId.length > 0 && typeof p?.body === 'string' && p.body.trim().length > 0,
       normalizePayload: (p) => ({ noteId: p.noteId.trim(), body: p.body.trim() }),
       applyNode: (content, payload) => noteAppendTransform(content, payload),
-      applyObsidian: (content, payload) => noteAppendTransform(content, payload),
-      invariant: (content, payload) => hasNoteIdentity(content, payload.noteId) && String(content).includes(payload.body),
+      invariant: (content, payload) => hasNoteIdentity(content, payload.noteId) && hasExactBlock(content, payload.body),
     },
     {
       name: 'session-thread-append', version: 1, maxPayloadBytes: 64 * 1024,
       validatePayload: (p) => typeof p?.noteId === 'string' && p.noteId.length > 0 && typeof p?.entry === 'string' && p.entry.trim().length > 0,
       normalizePayload: (p) => ({ noteId: p.noteId.trim(), entry: p.entry.trim() }),
       applyNode: (content, payload) => sessionThreadAppendTransform(content, payload),
-      applyObsidian: (content, payload) => sessionThreadAppendTransform(content, payload),
-      invariant: (content, payload) => hasNoteIdentity(content, payload.noteId) && String(content).includes(payload.entry),
+      invariant: (content, payload) => hasNoteIdentity(content, payload.noteId) && hasExactBlock(content, payload.entry),
     },
     {
       name: 'journal-section-line', version: 1, maxPayloadBytes: 8192,
       validatePayload: (p) => typeof p?.heading === 'string' && typeof p?.line === 'string' && p.line.trim().startsWith('- ') && !/[\r\n]/.test(p.line),
       normalizePayload: (p) => ({ heading: normalizeJournalHeading(p.heading), line: p.line.trim() }),
       applyNode: (content, payload) => journalSectionLineTransform(content, payload),
-      applyObsidian: (content, payload) => journalSectionLineTransform(content, payload),
       invariant: (content, payload) => {
         const lines = String(content).split('\n'); const range = journalSectionRange(lines, normalizeJournalHeading(payload.heading));
         return range.start !== -1 && lines.slice(range.start + 1, range.end).some((line) => line.trim() === payload.line);
@@ -137,7 +140,6 @@ function createJarvosVaultTransforms() {
       validatePayload: (p) => typeof p?.linkTarget === 'string' && p.linkTarget.trim() && !/[\r\n\[\]]/.test(p.linkTarget) && (p.section === undefined || typeof p.section === 'string') && (p.noteId === undefined || typeof p.noteId === 'string'),
       normalizePayload: (p) => ({ linkTarget: p.linkTarget.trim(), section: normalizeJournalHeading(p.section || '📝 Notes'), ...(p.noteId ? { noteId: p.noteId.trim() } : {}) }),
       applyNode: (content, payload) => journalBacklinkTransform(content, payload),
-      applyObsidian: (content, payload) => journalBacklinkTransform(content, payload),
       invariant: journalBacklinkSatisfied,
     },
   ]);
@@ -147,7 +149,7 @@ function createVaultTransformRegistry(descriptors = []) {
   const entries = new Map();
   for (const descriptor of descriptors) {
     if (!descriptor || typeof descriptor.name !== 'string' || !descriptor.name || !Number.isSafeInteger(descriptor.version) || descriptor.version < 1) throw new Error('Invalid transform descriptor');
-    if (typeof descriptor.validatePayload !== 'function' || typeof descriptor.normalizePayload !== 'function' || typeof descriptor.applyNode !== 'function' || typeof descriptor.applyObsidian !== 'function' || descriptor.applyNode === descriptor.applyObsidian || typeof descriptor.invariant !== 'function') throw new Error('Transform descriptor requires distinct fixed Node and Obsidian code functions');
+    if (typeof descriptor.validatePayload !== 'function' || typeof descriptor.normalizePayload !== 'function' || typeof descriptor.applyNode !== 'function' || typeof descriptor.invariant !== 'function') throw new Error('Transform descriptor requires a fixed Node implementation and invariant');
     if (!Number.isSafeInteger(descriptor.maxPayloadBytes) || descriptor.maxPayloadBytes < 1) throw new Error('Transform descriptor requires maxPayloadBytes');
     const key = `${descriptor.name}@${descriptor.version}`;
     if (entries.has(key)) throw new Error(`Duplicate transform ${key}`);
@@ -167,16 +169,9 @@ function createVaultTransformRegistry(descriptors = []) {
     if (!descriptor) return { status: 'quarantined', reason: 'unknown_transform_version' };
     try { prepare(operation); return null; } catch { return { status: 'quarantined', reason: 'invalid_replay_payload' }; }
   }
-  function apply(content, operation, implementation) { const prepared = prepare(operation); return descriptorFor(prepared)[implementation](String(content), prepared.replayPayload); }
+  function applyNode(content, operation) { const prepared = prepare(operation); return descriptorFor(prepared).applyNode(String(content), prepared.replayPayload); }
   function isSatisfied(content, operation) { const prepared = prepare(operation); return descriptorFor(prepared).invariant(String(content), prepared.replayPayload) === true; }
-  function assertConformance(fixtures) {
-    for (const fixture of fixtures) {
-      const node = apply(fixture.content, fixture.operation, 'applyNode');
-      const obsidian = apply(fixture.content, fixture.operation, 'applyObsidian');
-      if (node !== obsidian || isSatisfied(node, fixture.operation) !== isSatisfied(obsidian, fixture.operation)) throw new Error('Node and Obsidian transform conformance failed');
-    }
-  }
-  return Object.freeze({ applyNode: (content, operation) => apply(content, operation, 'applyNode'), applyObsidian: (content, operation) => apply(content, operation, 'applyObsidian'), assertConformance, isSatisfied, prepare, quarantine });
+  return Object.freeze({ applyNode, isSatisfied, prepare, quarantine });
 }
 
 module.exports = { createJarvosVaultTransforms, createVaultTransformRegistry, journalBacklinkSatisfied, journalBacklinkTransform, journalSectionLineTransform, normalizeJournalHeading, sessionThreadAppendTransform };

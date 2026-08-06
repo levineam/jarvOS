@@ -9,18 +9,16 @@ function registry() {
     validatePayload: (payload) => typeof payload?.line === 'string' && payload.line.startsWith('- '),
     normalizePayload: (payload) => ({ line: payload.line.trim() }),
     applyNode: (content, payload) => content.includes(payload.line) ? content : `${content}${content.endsWith('\n') ? '' : '\n'}${payload.line}\n`,
-    applyObsidian: (content, payload) => content.includes(payload.line) ? content : `${content}${content.endsWith('\n') ? '' : '\n'}${payload.line}\n`,
     invariant: (content, payload) => content.includes(payload.line),
   }]);
 }
 
-test('registered transform has bounded normalized replay payload and Node/Obsidian parity', () => {
+test('registered transform has bounded normalized replay payload and invariant', () => {
   const transforms = registry();
   const prepared = transforms.prepare({ transformName: 'append-line', transformVersion: 1, replayPayload: { line: ' - hello  ' } });
   assert.deepEqual(prepared.replayPayload, { line: '- hello' });
-  assert.equal(transforms.applyNode('mobile edit\n', prepared), transforms.applyObsidian('mobile edit\n', prepared));
+  assert.equal(transforms.applyNode('mobile edit\n', prepared), 'mobile edit\n- hello\n');
   assert.equal(transforms.isSatisfied('- hello\n', prepared), true);
-  assert.doesNotThrow(() => transforms.assertConformance([{ content: 'mobile edit\n', operation: prepared }, { content: '- hello\n', operation: prepared }]));
 });
 
 test('invalid payload and unknown version quarantine without substituting code', () => {
@@ -30,7 +28,22 @@ test('invalid payload and unknown version quarantine without substituting code',
   assert.throws(() => transforms.prepare({ transformName: 'append-line', transformVersion: 2, replayPayload: { line: '- hello' } }), /unknown transform/i);
 });
 
-test('U4 authored-content transforms have deterministic Node and Obsidian conformance', () => {
+test('note and session invariants require an exact appended block, not a prose substring', () => {
+  const transforms = createJarvosVaultTransforms();
+  const initial = '---\njarvos_note_id: "note-1"\n---\n\n# Note\n\nthe next thing\n';
+  for (const [transformName, replayPayload] of [
+    ['note-append-body', { noteId: 'note-1', body: 'next' }],
+    ['session-thread-append', { noteId: 'note-1', entry: 'next' }],
+  ]) {
+    const operation = { transformName, transformVersion: 1, replayPayload };
+    assert.equal(transforms.isSatisfied(initial, operation), false, transformName);
+    const updated = transforms.applyNode(initial, operation);
+    assert.match(updated, /the next thing\n\nnext\n$/);
+    assert.equal(transforms.isSatisfied(updated, operation), true, transformName);
+  }
+});
+
+test('U4 authored-content transforms have deterministic Node behavior', () => {
   const transforms = createJarvosVaultTransforms();
   const cases = [
     {
@@ -54,7 +67,6 @@ test('U4 authored-content transforms have deterministic Node and Obsidian confor
       operation: { transformName: 'journal-backlink', transformVersion: 1, replayPayload: { linkTarget: 'Notes/C++ (Draft)', section: '📝 Notes', noteId: 'stable-note-id' } },
     },
   ];
-  transforms.assertConformance(cases);
   const appended = transforms.applyNode(cases[1].content, cases[1].operation);
   assert.match(appended, /mobile prose/);
   assert.match(appended, /agent prose/);

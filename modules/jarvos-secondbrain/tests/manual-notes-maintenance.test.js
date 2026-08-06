@@ -102,7 +102,7 @@ test('frontmatter lint fixes only through its injected app-owned executor', () =
   });
   assert.equal(result.filesChanged, 1);
   assert.equal(received.expectedContent, '# Lint Me\n');
-  assert.equal(received.source, 'notes.lint-frontmatter');
+  assert.equal(received.source, undefined);
   assert.match(fs.readFileSync(filePath, 'utf8'), /^---\nstatus: active\n/m);
 });
 
@@ -125,7 +125,6 @@ test('exact-hash replacement conflicts without overwriting a concurrent app edit
       filePath: path.join(root, 'Notes', 'Concurrent.md'),
       expectedContent: 'old disk content',
       nextContent: 'frontmatter repaired',
-      source: 'notes.manual-maintenance.frontmatter',
     });
     assert.equal(receipt.status, 'conflict');
     assert.equal(fake.files.get('Notes/Concurrent.md').content, 'mobile edit');
@@ -156,7 +155,6 @@ test('a fresh identical replacement is not hidden by an older acknowledged inten
       filePath: path.join(root, 'Notes', 'Concurrent.md'),
       expectedContent: 'old',
       nextContent: 'new',
-      source: 'notes.manual-maintenance.frontmatter',
     };
     assert.equal(service.applyMarkdownMutation(mutation).status, 'committed');
     fake.files.get('Notes/Concurrent.md').content = 'old';

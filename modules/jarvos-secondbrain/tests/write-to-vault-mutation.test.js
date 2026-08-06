@@ -181,7 +181,7 @@ test('host-owned absence proof permits only a durable offline create pending rec
       vaultId: 'vault-note-offline',
       source: 'bridge.test-note',
       proveObsidianAbsent: () => true,
-      adapterOptions: { ledgerPath: path.join(root, '.state', 'ledger.json'), probe: () => ({ state: 'app_stopped' }) },
+      adapterOptions: { ledgerPath: path.join(root, '.state', 'ledger.json'), probe: () => ({ state: 'wrong_vault' }) },
     });
     const result = writeNoteFile({ title: 'Offline Create', content: 'Queue this for Sync.', ...service.createWriteContext({ vaultRelativePath: 'Notes/Offline Create.md', intentId: 'note-offline-create-01' }) });
     assert.equal(result.written, false);
@@ -189,6 +189,79 @@ test('host-owned absence proof permits only a durable offline create pending rec
     assert.equal(result.receipt.status, 'saved_locally_sync_pending');
     assert.equal(service.adapter.ledger.get('note-offline-create-01').status, 'local_applied');
     assert.match(fs.readFileSync(result.path, 'utf8'), /Queue this for Sync\./);
+  });
+});
+
+test('caller source text cannot grant offline-write authority', () => {
+  withVault(({ root }) => {
+    const service = createConfiguredVaultMutationService({
+      vaultRoot: root,
+      vaultId: 'vault-source-boundary',
+      source: 'bridge.trusted-source',
+      proveObsidianAbsent: () => true,
+      adapterOptions: { ledgerPath: path.join(root, '.state', 'ledger.json'), probe: () => ({ state: 'app_stopped' }) },
+    });
+    assert.throws(() => service.execute({
+      schemaVersion: 1,
+      operationId: 'forged-source-operation',
+      vaultId: service.vaultId,
+      vaultRelativePath: 'Notes/Forged.md',
+      sequence: 1,
+      operationKind: 'create',
+      content: 'must not write',
+      source: 'forged.offline-authority',
+    }), /cannot override/);
+    assert.throws(() => service.createWriteContext({
+      vaultRelativePath: 'Notes/Forged Context.md',
+      intentId: 'forged-context-operation',
+      operationSource: 'forged.offline-authority',
+    }), /cannot override/);
+    assert.throws(() => service.createMarkdownFile({
+      vaultRelativePath: 'Notes/Forged High Level.md',
+      nextContent: 'must not write',
+      operationId: 'forged-high-level-operation',
+      source: 'forged.offline-authority',
+    }), /cannot override/);
+    assert.equal(fs.existsSync(path.join(root, 'Notes', 'Forged.md')), false);
+    assert.equal(fs.existsSync(path.join(root, 'Notes', 'Forged High Level.md')), false);
+    assert.equal(service.adapter.ledger.get('forged-source-operation'), null);
+    assert.equal(service.adapter.ledger.get('forged-context-operation'), null);
+    assert.equal(service.adapter.ledger.get('forged-high-level-operation'), null);
+  });
+});
+
+test('a busy or timed-out Obsidian path queues without opening a disk writer', () => {
+  withVault(({ root }) => {
+    const service = createConfiguredVaultMutationService({
+      vaultRoot: root,
+      vaultId: 'vault-busy-boundary',
+      source: 'bridge.busy-boundary',
+      adapterOptions: { ledgerPath: path.join(root, '.state', 'ledger.json'), probe: () => ({ state: 'app_busy' }) },
+    });
+    const result = writeNoteFile({ title: 'Busy', content: 'Do not raw write.', ...service.createWriteContext({ vaultRelativePath: 'Notes/Busy.md', intentId: 'busy-timeout-operation' }) });
+    assert.equal(result.receipt.status, 'unavailable');
+    assert.equal(result.savedLocally, false);
+    assert.equal(fs.existsSync(result.path), false);
+    assert.equal(service.adapter.ledger.get('busy-timeout-operation').status, 'planned');
+  });
+});
+
+test('write contexts do not reserve empty FIFO slots before full submission', () => {
+  withVault(({ root }) => {
+    const service = createConfiguredVaultMutationService({
+      vaultRoot: root,
+      vaultId: 'vault-atomic-submission',
+      source: 'bridge.atomic-submission',
+      adapterOptions: { ledgerPath: path.join(root, '.state', 'ledger.json'), probe: () => ({ state: 'wrong_vault' }) },
+    });
+    const firstContext = service.createWriteContext({ vaultRelativePath: 'Notes/Ordered.md', operationId: 'ordered-context-first' });
+    const secondContext = service.createWriteContext({ vaultRelativePath: 'Notes/Ordered.md', operationId: 'ordered-context-second' });
+    assert.equal(Object.keys(service.adapter.ledger.read().operations).length, 0);
+    const operation = (context, content) => ({ schemaVersion: 1, operationId: context.operationId, vaultId: context.vaultId, vaultRelativePath: 'Notes/Ordered.md', sequence: context.sequence, operationKind: 'create', content, source: context.source });
+    secondContext.mutationExecutor(operation(secondContext, 'submitted first'));
+    firstContext.mutationExecutor(operation(firstContext, 'submitted second'));
+    assert.equal(service.adapter.ledger.get('ordered-context-second').operation.sequence, 1);
+    assert.equal(service.adapter.ledger.get('ordered-context-first').operation.sequence, 2);
   });
 });
 

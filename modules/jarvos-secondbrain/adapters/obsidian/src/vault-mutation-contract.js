@@ -54,11 +54,12 @@ function validateOperation(input, { identityPolicy } = {}) {
   if (!isOperationId(input.operationId)) fail('Invalid operationId');
   if (typeof input.vaultId !== 'string' || !input.vaultId.trim()) fail('Invalid vaultId');
   if (!Number.isSafeInteger(input.sequence) || input.sequence < 1) fail('Invalid operation sequence');
-  if (!['create', 'transform', 'replace'].includes(input.operationKind)) fail('Invalid operation kind');
+  if (!['create', 'transform', 'replace', 'delete'].includes(input.operationKind)) fail('Invalid operation kind');
   const operation = { ...input, vaultRelativePath: validateVaultRelativeMarkdownPath(input.vaultRelativePath) };
   if (operation.expectedHash !== undefined && !isHash(operation.expectedHash)) fail('Invalid expectedHash');
   if (operation.intendedHash !== undefined && !isHash(operation.intendedHash)) fail('Invalid intendedHash');
   if (operation.operationKind === 'transform' && (!Number.isSafeInteger(operation.transformVersion) || typeof operation.transformName !== 'string' || !operation.transformName)) fail('Transform operation requires name and version');
+  if (operation.operationKind === 'delete' && (typeof operation.expectedContent !== 'string' || !isHash(operation.expectedHash) || hashUtf8(operation.expectedContent) !== operation.expectedHash)) fail('Delete operation requires matching expected content and hash');
   if (identityPolicy !== undefined && typeof identityPolicy !== 'function') fail('identity policy must be a function');
   if (identityPolicy && identityPolicy(operation) !== true) fail('Operation rejected by identity policy');
   return operation;

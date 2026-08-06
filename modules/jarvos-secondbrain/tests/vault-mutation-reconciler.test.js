@@ -13,7 +13,18 @@ function fixture() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-reconcile-'));
   const ledger = createVaultMutationLedger({ filePath: path.join(root, 'ledger.json') });
   let calls = 0;
-  const adapter = { inspectInvariant: () => ({ status: 'unsatisfied', invariant: false }), execute(operation) { calls += 1; ledger.acknowledgeFromObsidianRead(operation.operationId, { acknowledgedBy: 'app.vault.read', invariant: true }); return { status: 'committed' }; } };
+  const adapter = {
+    inspectInvariant: () => ({ status: 'unsatisfied', invariant: false }),
+    acknowledgeIfSatisfied(operation) {
+      const inspection = this.inspectInvariant(operation);
+      if (inspection.status !== 'satisfied' || inspection.invariant !== true) return false;
+      const claim = ledger.claim(operation, 'fake-adapter', { allowAmbiguousRetry: true });
+      if (!claim.granted) return claim.reason === 'already_acknowledged';
+      ledger.transition(operation.operationId, 'acknowledged', { ownerId: 'fake-adapter', fence: claim.fence, evidence: { acknowledgedBy: 'app.vault.read' } });
+      return true;
+    },
+    execute() { calls += 1; return { status: 'committed' }; },
+  };
   return { root, ledger, adapter, calls: () => calls };
 }
 
@@ -34,10 +45,12 @@ test('reconciler accepts delayed post-timeout commit once without a duplicate di
 test('offline fallback only writes an absence-asserted exclusive create', () => {
   const f = fixture();
   try {
-    const reconciler = createVaultMutationReconciler({ adapter: f.adapter, ledger: f.ledger, vaultRoot: f.root, offlineSourceAllowlist: ['trusted-offline'], proveObsidianAbsent: () => true });
-    assert.equal(reconciler.safeOfflineSave(op('op-00000018', 1, { source: 'untrusted', vaultRelativePath: 'Notes/Untrusted.md' })).localMutation, 'queued');
+    const capability = Object.freeze({});
+    const reconciler = createVaultMutationReconciler({ adapter: f.adapter, ledger: f.ledger, vaultRoot: f.root, offlineSourceAllowlist: ['trusted-offline'], proveObsidianAbsent: () => true, offlineWriteCapability: capability });
+    assert.equal(reconciler.safeOfflineSave(op('op-00000018', 1, { source: 'trusted-offline', vaultRelativePath: 'Notes/Untrusted.md' }), Object.freeze({})).localMutation, 'queued');
+    assert.equal(f.ledger.get('op-00000018'), null);
     assert.equal(fs.existsSync(path.join(f.root, 'Notes/A.md')), false);
-    assert.equal(reconciler.safeOfflineSave(op('op-00000012')).localMutation, 'applied');
+    assert.equal(reconciler.safeOfflineSave(op('op-00000012'), capability).localMutation, 'applied');
     assert.equal(fs.readFileSync(path.join(f.root, 'Notes/A.md'), 'utf8'), 'hello');
   } finally { fs.rmSync(f.root, { recursive: true, force: true }); }
 });
@@ -46,16 +59,17 @@ test('existing replace never writes without exclusive proof and mismatched proof
   const f = fixture();
   try {
     fs.mkdirSync(path.join(f.root, 'Notes')); fs.writeFileSync(path.join(f.root, 'Notes/A.md'), 'mobile');
-    const reconciler = createVaultMutationReconciler({ adapter: f.adapter, ledger: f.ledger, vaultRoot: f.root, offlineSourceAllowlist: ['trusted-offline'], proveObsidianAbsent: () => true });
+    const capability = Object.freeze({});
+    const reconciler = createVaultMutationReconciler({ adapter: f.adapter, ledger: f.ledger, vaultRoot: f.root, offlineSourceAllowlist: ['trusted-offline'], proveObsidianAbsent: () => true, offlineWriteCapability: capability });
     const replace = op('op-00000013', 1, { operationKind: 'replace', content: 'agent', expectedHash: hashUtf8('old') });
-    const deferred = reconciler.safeOfflineSave(replace);
+    const deferred = reconciler.safeOfflineSave(replace, capability);
     assert.equal(deferred.localMutation, 'not_written');
     assert.equal(deferred.status, 'unavailable');
     assert.equal(fs.readFileSync(path.join(f.root, 'Notes/A.md'), 'utf8'), 'mobile');
     const other = op('op-00000014', 1, { vaultRelativePath: 'Notes/B.md', operationKind: 'replace', content: 'agent', expectedHash: hashUtf8('old') });
     fs.writeFileSync(path.join(f.root, 'Notes/B.md'), 'mobile');
-    const exclusive = createVaultMutationReconciler({ adapter: f.adapter, ledger: f.ledger, vaultRoot: f.root, offlineSourceAllowlist: ['trusted-offline'], proveObsidianAbsent: () => true, exclusiveWriterCapability: () => true });
-    assert.equal(exclusive.safeOfflineSave(other).status, 'conflict');
+    const exclusive = createVaultMutationReconciler({ adapter: f.adapter, ledger: f.ledger, vaultRoot: f.root, offlineSourceAllowlist: ['trusted-offline'], proveObsidianAbsent: () => true, exclusiveWriterCapability: () => true, offlineWriteCapability: capability });
+    assert.equal(exclusive.safeOfflineSave(other, capability).status, 'conflict');
   } finally { fs.rmSync(f.root, { recursive: true, force: true }); }
 });
 

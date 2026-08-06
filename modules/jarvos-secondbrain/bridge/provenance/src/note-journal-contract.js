@@ -199,7 +199,7 @@ function writeNoteThroughContract(rawInput, { mutationService, link } = {}) {
   const writeContext = service.createWriteContext({
     vaultRelativePath,
     intentId: rawInput.intentId,
-    operationSource: 'bridge.note-journal-contract',
+    operationSource: service.source,
   });
   const noteResult = writeNoteFile({
     title: input.title,

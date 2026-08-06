@@ -111,6 +111,29 @@ function createVaultMutationLedger({ filePath, fsImpl = fs, now = () => Date.now
     if (evidence !== undefined) record.evidence = evidence;
   }
   function ensure(operation) { return transaction(() => { const data = readUnlocked({ repair: true }); const { record, created } = ensureUnlocked(data, operation); if (created) writeAtomic(filePath, data, fsImpl); return record; }); }
+  // Allocate the FIFO sequence and persist the complete operation in one
+  // transaction. Callers may use any positive placeholder sequence; an
+  // existing operationId keeps its original durable sequence on retry.
+  function planNext(input) { return transaction(() => {
+    const candidate = validateOperation(input);
+    const data = readUnlocked({ repair: true });
+    const existing = data.operations[candidate.operationId];
+    if (existing) {
+      const retried = validateOperation({ ...candidate, sequence: existing.operation.sequence });
+      if (JSON.stringify(existing.operation) !== JSON.stringify(retried)) throw new Error('operationId already belongs to a different mutation');
+      return existing;
+    }
+    const sequenceKey = key(candidate);
+    const observed = Object.values(data.operations)
+      .filter((record) => key(record.operation) === sequenceKey)
+      .reduce((maximum, record) => Math.max(maximum, record.operation.sequence), 0);
+    const sequence = Math.max(Number(data.sequences[sequenceKey]) || 0, observed) + 1;
+    const operation = validateOperation({ ...candidate, sequence });
+    data.sequences[sequenceKey] = sequence;
+    const { record } = ensureUnlocked(data, operation);
+    writeAtomic(filePath, data, fsImpl);
+    return record;
+  }); }
   function nextSequence(vaultId, vaultRelativePath) { return transaction(() => {
     if (typeof vaultId !== 'string' || !vaultId || typeof vaultRelativePath !== 'string' || !vaultRelativePath) throw new Error('vaultId and vaultRelativePath are required');
     const data = readUnlocked({ repair: true });
@@ -144,15 +167,11 @@ function createVaultMutationLedger({ filePath, fsImpl = fs, now = () => Date.now
     if (!ownerId || !Number.isSafeInteger(fence) || !claim || claim.operationId !== operationId || claim.ownerId !== ownerId || claim.fence !== fence) throw new Error('Lost mutation claim ownership or fence');
     recordTransition(record, status, evidence); if (TERMINAL.has(status) || ['planned', 'conflict', 'quarantined', 'local_applied', 'unknown_after_dispatch'].includes(status)) delete data.claims[claimKey]; writeAtomic(filePath, data, fsImpl); return record;
   }); }
-  function acknowledgeFromObsidianRead(operationId, receipt) { return transaction(() => {
-    if (!receipt || receipt.acknowledgedBy !== 'app.vault.read' || receipt.invariant !== true) throw new Error('Obsidian readback invariant receipt is required');
-    const data = readUnlocked({ repair: true }); const record = data.operations[operationId]; if (!record) throw new Error('Unknown operationId'); recordTransition(record, 'acknowledged', receipt); delete data.claims[key(record.operation)]; writeAtomic(filePath, data, fsImpl); return record;
-  }); }
   function quarantine(operationId, reason) { return transaction(() => { const data = readUnlocked({ repair: true }); const record = data.operations[operationId]; if (!record) throw new Error('Unknown operationId'); quarantineUnlocked(record, reason); recordTransition(record, 'quarantined', { reason }); delete data.claims[key(record.operation)]; writeAtomic(filePath, data, fsImpl); return record; }); }
   function resolve(operatorId, operationId, status, reason) { if (!operatorId || !reason || !['superseded', 'abandoned'].includes(status)) throw new Error('operator, reason, and terminal resolution are required'); return transaction(() => { const data = readUnlocked({ repair: true }); const record = data.operations[operationId]; if (!record) throw new Error('Unknown operationId'); recordTransition(record, status, { operatorId, reason }); delete data.claims[key(record.operation)]; writeAtomic(filePath, data, fsImpl); return record; }); }
   function read() { return transaction(() => readUnlocked({ repair: true })); }
   function active() { return Object.values(read().operations).filter((record) => !TERMINAL.has(record.status) && record.status !== 'quarantined').sort((a, b) => key(a.operation).localeCompare(key(b.operation)) || a.operation.sequence - b.operation.sequence); }
   function pruneRetained() { return transaction(() => { const data = readUnlocked({ repair: true }); let changed = false; for (const [id, record] of Object.entries(data.operations)) if (TERMINAL.has(record.status) && now() - record.updatedAt > retentionMs) { delete data.operations[id]; changed = true; } if (changed) writeAtomic(filePath, data, fsImpl); }); }
-  return Object.freeze({ active, acknowledgeFromObsidianRead, claim, ensure, get: (id) => read().operations[id] || null, nextSequence, read, resolve, transition, quarantine, pruneRetained, filePath });
+  return Object.freeze({ active, claim, ensure, get: (id) => read().operations[id] || null, nextSequence, planNext, read, resolve, transition, quarantine, pruneRetained, filePath });
 }
 module.exports = { BLOCKING, STATES, TERMINAL, createVaultMutationLedger };

@@ -343,7 +343,6 @@ function createProject({ title, dir, config = loadConfig(), now = new Date(), cr
   const receipt = assertPersisted(createMarkdownFile({
     filePath,
     nextContent: page,
-    source: 'projects.create',
   }), 'Project creation');
   return {
     path: filePath,
@@ -427,7 +426,6 @@ function writeIndex({ dir, config = loadConfig(), projects, createMarkdownFile, 
     filePath: indexPath,
     ...(exists ? { expectedContent } : {}),
     nextContent,
-    source: 'projects.index',
   }), 'Project index generation');
   return {
     path: indexPath,

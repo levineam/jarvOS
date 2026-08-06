@@ -80,3 +80,8 @@ test('public projection is an allowlist even when an untrusted receipt contains 
   assert.equal(contract.projectPublicResult({ status: 'blocked', persistence: 'pending', obsidian: 'pending', sync: 'unknown' }).status, 'blocked');
   assert.equal(contract.LIFECYCLE_STATES.has('unknown_after_dispatch'), true);
 });
+
+test('guarded delete is a distinct validated operation kind', () => {
+  const deletion = { ...operation(), operationKind: 'delete', expectedContent: 'fixture', expectedHash: contract.hashUtf8('fixture') };
+  assert.equal(contract.validateOperation(deletion).operationKind, 'delete');
+});

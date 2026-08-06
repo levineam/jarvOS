@@ -366,7 +366,6 @@ function applyAuditRepair({ journalPath, expectedContent, nextContent, applyMark
     filePath: journalPath,
     expectedContent,
     nextContent,
-    source: 'journal.note-audit',
   });
 }
 

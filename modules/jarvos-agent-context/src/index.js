@@ -168,7 +168,7 @@ function noteMutationContext({ title, input = {}, jarvosPaths, service, source =
   return owner.createWriteContext({
     vaultRelativePath: path.relative(vaultRoot, filePath).split(path.sep).join('/'),
     intentId: input.intentId,
-    operationSource: source,
+    operationSource: owner.source,
   });
 }
 

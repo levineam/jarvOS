@@ -359,7 +359,6 @@ function processOnce(flags, { applyMarkdownMutation } = {}) {
           filePath,
           expectedContent: note.content,
           nextContent: frontmatterFix.updatedText,
-          source: 'notes.manual-maintenance.frontmatter',
         });
         if (!['committed', 'already_satisfied', 'saved_locally_sync_pending'].includes(receipt?.status)) {
           throw new Error(`Frontmatter maintenance was not applied through Obsidian: ${receipt?.status || 'unavailable'}`);

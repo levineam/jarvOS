@@ -5,14 +5,14 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { hashUtf8, resolveVaultTarget } = require('./vault-mutation-contract');
 
-function createVaultMutationReconciler({ adapter, ledger, vaultRoot, transforms, fsImpl = fs, now = () => Date.now(), ownerId = crypto.randomUUID(), offlineSourceAllowlist = [], proveObsidianAbsent, exclusiveWriterCapability } = {}) {
+function createVaultMutationReconciler({ adapter, ledger, vaultRoot, transforms, fsImpl = fs, now = () => Date.now(), ownerId = crypto.randomUUID(), offlineSourceAllowlist = [], proveObsidianAbsent, exclusiveWriterCapability, offlineWriteCapability } = {}) {
   if (!ledger || typeof ledger.active !== 'function') throw new Error('ledger is required');
   if (!adapter || typeof adapter.execute !== 'function') throw new Error('adapter is required');
   if (typeof vaultRoot !== 'string' || !path.isAbsolute(vaultRoot)) throw new Error('vaultRoot must be absolute');
-  function safeOfflineSave(operation) {
-    ledger.ensure(operation);
+  function safeOfflineSave(operation, capability) {
     // These are host-owned capabilities, never booleans accepted from callers.
-    if (!offlineSourceAllowlist.includes(operation.source) || typeof proveObsidianAbsent !== 'function' || proveObsidianAbsent(operation) !== true) return { status: 'unavailable', persistence: 'durable', localMutation: 'queued' };
+    if (!offlineWriteCapability || capability !== offlineWriteCapability || (offlineSourceAllowlist.length > 0 && !offlineSourceAllowlist.includes(operation.source)) || typeof proveObsidianAbsent !== 'function' || proveObsidianAbsent(operation) !== true) return { status: 'unavailable', persistence: 'durable', localMutation: 'queued' };
+    ledger.ensure(operation);
     const claim = ledger.claim(operation, ownerId, { local: true });
     if (!claim.granted) return { status: 'blocked', reason: claim.reason };
     let target;
@@ -54,11 +54,7 @@ function createVaultMutationReconciler({ adapter, ledger, vaultRoot, transforms,
       if (!transforms) return 'blocked';
       if (transforms.quarantine(operation)) { ledger.quarantine(operation.operationId, 'unknown_transform_or_replay_payload'); return 'quarantined'; }
     }
-    const inspection = adapter.inspectInvariant(operation);
-    if (inspection.status === 'satisfied' && inspection.invariant === true) {
-      ledger.acknowledgeFromObsidianRead(operation.operationId, { acknowledgedBy: 'app.vault.read', invariant: true });
-      return 'acknowledged';
-    }
+    if (typeof adapter.acknowledgeIfSatisfied === 'function' && adapter.acknowledgeIfSatisfied(operation)) return 'acknowledged';
     if (record.status === 'unknown_after_dispatch') return 'blocked'; // ambiguity may not be retried until app readback proves the invariant
     if (record.status === 'local_mutating') return 'blocked'; // crash boundary: no automatic disk retry
     if (record.status === 'conflict' || record.status === 'quarantined') return 'blocked';
@@ -82,7 +78,18 @@ function createVaultMutationReconciler({ adapter, ledger, vaultRoot, transforms,
     }
     return summary;
   }
-  return Object.freeze({ drain, reconcileOne, safeOfflineSave });
+  function health() {
+    const counts = { pending: 0, ambiguous: 0, conflict: 0, quarantined: 0, retainedTerminal: 0 };
+    for (const record of Object.values(ledger.read().operations)) {
+      if (record.status === 'unknown_after_dispatch') counts.ambiguous += 1;
+      else if (record.status === 'conflict') counts.conflict += 1;
+      else if (record.status === 'quarantined') counts.quarantined += 1;
+      else if (['acknowledged', 'superseded', 'abandoned'].includes(record.status)) counts.retainedTerminal += 1;
+      else counts.pending += 1;
+    }
+    return counts;
+  }
+  return Object.freeze({ drain, health, reconcileOne, safeOfflineSave });
 }
 
 module.exports = { createVaultMutationReconciler };

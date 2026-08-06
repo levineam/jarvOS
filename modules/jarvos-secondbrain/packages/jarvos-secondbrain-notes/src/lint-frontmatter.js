@@ -501,7 +501,6 @@ function collectViolations(files, opts = {}) {
         filePath: file,
         expectedContent: content,
         nextContent: result.updatedText,
-        source: 'notes.lint-frontmatter',
       });
       if (!['committed', 'already_satisfied', 'saved_locally_sync_pending'].includes(receipt?.status)) {
         throw new Error(`Frontmatter fix was not applied through Obsidian: ${receipt?.status || 'unavailable'}`);

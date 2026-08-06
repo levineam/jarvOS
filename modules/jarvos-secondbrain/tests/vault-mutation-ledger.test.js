@@ -83,3 +83,18 @@ test('per-file sequence reservations are durable across ledger instances', () =>
     assert.equal(first.nextSequence('vault', 'Notes/B.md'), 1);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
+
+test('complete operations are planned atomically in submission order', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-ledger-plan-'));
+  try {
+    const ledger = createVaultMutationLedger({ filePath: path.join(root, 'ledger.json') });
+    const laterContext = op('op-00000021');
+    const earlierContext = op('op-00000020');
+    const submittedFirst = ledger.planNext(laterContext).operation;
+    const submittedSecond = ledger.planNext(earlierContext).operation;
+    assert.equal(submittedFirst.sequence, 1);
+    assert.equal(submittedSecond.sequence, 2);
+    assert.deepEqual(ledger.planNext({ ...laterContext, sequence: 99 }).operation, submittedFirst);
+    assert.equal(Object.keys(ledger.read().operations).length, 2);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});

@@ -101,7 +101,7 @@ test('canonical writer leaves duplicate cleanup to an Obsidian-owned maintenance
   });
 });
 
-test('journal backlink repairs matching zero-byte vault-root duplicate without deleting orphans', () => {
+test('journal backlink leaves matching zero-byte vault-root duplicate for Obsidian-owned maintenance', () => {
   const vault = makeVault();
   const title = 'Backlinked Durable Note';
   const notesPath = path.join(vault.notesDir, `${title}.md`);
@@ -115,10 +115,12 @@ test('journal backlink repairs matching zero-byte vault-root duplicate without d
     JARVOS_JOURNAL_DIR: vault.journalDir,
   }, () => {
     const { linkNoteToJournal } = require('../bridge/provenance/src/link-to-journal.js');
+    const { createAcknowledgedVaultMutationService } = require('./helpers/acknowledged-vault-mutation-service');
     const journalPath = path.join(vault.journalDir, '2030-02-03.md');
-    const result = linkNoteToJournal({ noteTitle: title, journalPath });
-    assert.equal(result.vaultRootDuplicate.repaired, true);
-    assert.equal(fs.existsSync(rootPath), false);
+    const result = linkNoteToJournal({ noteTitle: title, journalPath, mutationService: createAcknowledgedVaultMutationService(vault.vaultRoot) });
+    assert.equal(result.vaultRootDuplicate.repaired, false);
+    assert.match(result.vaultRootDuplicate.reason, /must not bypass Obsidian/);
+    assert.equal(fs.existsSync(rootPath), true);
     assert.match(fs.readFileSync(journalPath, 'utf8'), /\[\[Backlinked Durable Note\]\]/);
   });
 });

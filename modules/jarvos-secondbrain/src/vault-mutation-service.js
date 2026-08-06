@@ -5,7 +5,6 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const { hashUtf8, validateVaultRelativeMarkdownPath } = require('../adapters/obsidian/src/vault-mutation-contract');
 const { createVaultMutationAdapter } = require('../adapters/obsidian/src/vault-mutation-adapter');
-const { createVaultMutationReconciler } = require('../adapters/obsidian/src/vault-mutation-reconciler');
 const { createJarvosVaultTransforms } = require('./vault-transform-registry');
 
 const WRITER_INVENTORY = Object.freeze([
@@ -25,6 +24,7 @@ const WRITER_INVENTORY = Object.freeze([
   ['secondbrain', 'packages/jarvos-secondbrain-notes/src/write-to-vault.js', 'mutation-owned', 'U4', 'Builds only transport-neutral operations; bridge/top-level composition executes them.'],
   ['secondbrain', 'packages/jarvos-secondbrain-projects/src/projects.js', 'mutation-owned', 'U4', 'Project pages and their visible index require injected create or exact-content replacement operations.'],
   ['secondbrain', 'packages/jarvos-secondbrain-wiki/src/index.js', 'rebuildable-external-output', 'U4', 'Generated wiki output is explicitly rejected inside a configured vault until an Obsidian-owned deletion lifecycle is available; external derived output remains rebuildable.'],
+  ['secondbrain', 'scripts/obsidian-live-smoke.js', 'mutation-owned-with-operational-attestation', 'U7', 'Creates and exact-identity deletes only a disposable vault fixture through the configured service; the owner-only rollout attestation is written outside the vault.'],
   ['agent-context', 'src/index.js', 'mutation-owned-with-operational-locks', 'U5', 'Note and session-thread Markdown use configured create/transform operations; session locks live in the owner-only host state directory outside the vault.'],
 ].map(([root, file, classification, migrationUnit, exceptionReason]) => Object.freeze({ root, file, classification, migrationUnit, exceptionReason })));
 
@@ -99,42 +99,57 @@ function createConfiguredVaultMutationService({
   proveObsidianAbsent,
   exclusiveWriterCapability,
   offlineSourceAllowlist,
+  allowDeleteOperation,
 } = {}) {
   if (typeof vaultRoot !== 'string' || !path.isAbsolute(vaultRoot)) throw new Error('vaultRoot must be absolute');
   if (typeof source !== 'string' || !source) throw new Error('mutation source is required');
-  const adapter = suppliedAdapter || createVaultMutationAdapter({ vaultRoot, vaultId, transforms, ...adapterOptions });
-  const absenceProof = proveObsidianAbsent || (() => ['app_stopped', 'cli_missing'].includes(adapter.capability().state));
-  const reconciler = suppliedReconciler || createVaultMutationReconciler({
-    adapter,
-    ledger: adapter.ledger,
-    vaultRoot,
-    transforms,
+  const adapter = suppliedAdapter || createVaultMutationAdapter({ vaultRoot, vaultId, transforms, ...adapterOptions, allowDeleteOperation });
+  if (typeof adapter.submit !== 'function') throw new Error('vault mutation adapter must support atomic operation planning');
+  // Only an explicit stopped-app signal is a default absence proof. A missing
+  // CLI, timeout, busy app, or generic transport failure cannot establish that
+  // Obsidian is not concurrently mutating the vault.
+  const absenceProof = proveObsidianAbsent || (() => adapter.capability().state === 'app_stopped');
+  const offlineWriteCapability = Object.freeze({});
+  const reconciler = suppliedReconciler || adapter.createReconciler({
     // Offline fallback remains closed unless this composition host supplies a
     // proof that Obsidian is absent. A caller cannot smuggle this authority in
     // operation data.
     proveObsidianAbsent: absenceProof,
     exclusiveWriterCapability,
-    offlineSourceAllowlist: offlineSourceAllowlist || [source],
+    offlineSourceAllowlist,
+    offlineWriteCapability,
   });
 
-  function execute(input) {
-    const operation = { ...input, source: input.source || source };
-    const receipt = adapter.execute(operation);
+  function boundSource(requestedSource) {
+    if (requestedSource !== undefined && requestedSource !== source) throw new Error('Caller cannot override the configured mutation source');
+    return source;
+  }
+
+  function submitAuthorized(input, operationSource) {
+    const operation = { ...input, source: operationSource };
+    const receipt = adapter.submit(operation);
     if (receipt.status !== 'unavailable') return receipt;
-    return reconciler.safeOfflineSave(operation);
+    const planned = receipt.operation || adapter.ledger.get(operation.operationId)?.operation || operation;
+    return reconciler.safeOfflineSave(planned, offlineWriteCapability);
+  }
+
+  function execute(input) {
+    boundSource(input?.source);
+    return submitAuthorized(input, source);
   }
 
   function createWriteContext({ vaultRelativePath, operationId, intentId, operationSource = source } = {}) {
     if (typeof vaultRelativePath !== 'string' || !vaultRelativePath) throw new Error('vaultRelativePath is required');
+    const contextSource = boundSource(operationSource);
     const id = operationId || intentId || `note-${crypto.randomUUID()}`;
-    const existing = adapter.ledger.get(id);
-    if (existing && existing.operation.vaultRelativePath !== vaultRelativePath) throw new Error('operationId belongs to a different vault path');
-    const sequence = existing?.operation.sequence || adapter.ledger.nextSequence(vaultId, vaultRelativePath);
     return Object.freeze({
-      mutationExecutor: execute,
+      mutationExecutor: (operation) => submitAuthorized(operation, contextSource),
       operationId: id,
-      sequence,
-      source: operationSource,
+      // Package operation factories require a positive sequence field. The
+      // adapter replaces this placeholder while atomically persisting the full
+      // operation, so no durable FIFO slot exists without its payload.
+      sequence: 1,
+      source: contextSource,
       vaultId,
       vaultRoot,
     });
@@ -155,16 +170,15 @@ function createConfiguredVaultMutationService({
       intentId,
       operationSource,
     });
-    return execute({
+    return submitAuthorized({
       schemaVersion: 1,
       operationId: context.operationId,
       vaultId: context.vaultId,
       vaultRelativePath: relativePath,
-      sequence: context.sequence,
+      sequence: 1,
       operationKind: 'create',
       content: markdown,
-      source: context.source,
-    });
+    }, context.source);
   }
 
   // Whole-file replacement is deliberately a composition concern: packages can
@@ -172,7 +186,7 @@ function createConfiguredVaultMutationService({
   // durable identity, per-path sequence, and exact-content conflict guard.
   function applyMarkdownMutation({ filePath, vaultRelativePath, expectedContent, nextContent, source: operationSource = source, operationId, intentId } = {}) {
     if (typeof expectedContent !== 'string' || typeof nextContent !== 'string') throw new Error('expectedContent and nextContent are required for an exact Markdown replacement');
-    if (typeof operationSource !== 'string' || !operationSource) throw new Error('mutation source is required');
+    boundSource(operationSource);
     const relativePath = vaultRelativePath || (() => {
       if (typeof filePath !== 'string' || !path.isAbsolute(filePath)) throw new Error('filePath or vaultRelativePath is required');
       return path.relative(vaultRoot, path.resolve(filePath)).split(path.sep).join('/');
@@ -186,22 +200,18 @@ function createConfiguredVaultMutationService({
     // otherwise an old acknowledged ledger entry could mask a newly reverted
     // file as already satisfied.
     const stableIntentId = operationId || intentId || `replace-${crypto.randomUUID()}`;
-    const existing = adapter.ledger.get(stableIntentId);
-    if (existing && existing.operation.vaultRelativePath !== relativePath) throw new Error('operationId belongs to a different vault path');
-    const sequence = existing?.operation.sequence || adapter.ledger.nextSequence(vaultId, relativePath);
-    const receipt = execute({
+    const receipt = submitAuthorized({
       schemaVersion: 1,
       operationId: stableIntentId,
       vaultId,
       vaultRelativePath: relativePath,
-      sequence,
+      sequence: 1,
       operationKind: 'replace',
       expectedContent,
       expectedHash,
       content: nextContent,
       intendedHash,
-      source: operationSource,
-    });
+    }, source);
     // The transport records a rejected guarded write as a conflict lifecycle.
     // Present that distinction to replacement callers without changing the
     // generic adapter outcome for unrelated mutation kinds.
@@ -210,7 +220,36 @@ function createConfiguredVaultMutationService({
       : receipt;
   }
 
-  return Object.freeze({ adapter, applyMarkdownMutation, createMarkdownFile, createWriteContext, execute, reconciler, source, transforms, vaultId, vaultRoot });
+  function deleteMarkdownFile({ filePath, vaultRelativePath, expectedContent, source: operationSource = source, operationId, intentId } = {}) {
+    if (typeof allowDeleteOperation !== 'function') throw new Error('Guarded Markdown deletion is not configured for this mutation service');
+    if (typeof expectedContent !== 'string') throw new Error('expectedContent is required for a guarded Markdown deletion');
+    const relativePath = vaultRelativePath || (() => {
+      if (typeof filePath !== 'string' || !path.isAbsolute(filePath)) throw new Error('filePath or vaultRelativePath is required');
+      return path.relative(vaultRoot, path.resolve(filePath)).split(path.sep).join('/');
+    })();
+    validateVaultRelativeMarkdownPath(relativePath);
+    if (filePath && path.resolve(vaultRoot, relativePath) !== path.resolve(filePath)) throw new Error('filePath is outside the configured vault');
+    const id = operationId || intentId || `delete-${crypto.randomUUID()}`;
+    boundSource(operationSource);
+    const operation = {
+      schemaVersion: 1,
+      operationId: id,
+      vaultId,
+      vaultRelativePath: relativePath,
+      sequence: 1,
+      operationKind: 'delete',
+      expectedContent,
+      expectedHash: hashUtf8(expectedContent),
+      source,
+    };
+    if (allowDeleteOperation(operation) !== true) throw new Error('Guarded Markdown deletion is outside this service authority');
+    const receipt = submitAuthorized(operation, source);
+    return receipt.status === 'failed' && receipt.lifecycleState === 'conflict'
+      ? { ...receipt, status: 'conflict' }
+      : receipt;
+  }
+
+  return Object.freeze({ adapter, applyMarkdownMutation, createMarkdownFile, createWriteContext, deleteMarkdownFile, execute, reconciler, source, transforms, vaultId, vaultRoot });
 }
 
 module.exports = { PACKAGE_TEMPORARY_SHIMS, WRITER_INVENTORY, assertNoUnclassifiedVaultWrites, assertPackageImportBoundary, assertWriterInventory, configuredVaultId, createConfiguredVaultMutationService };

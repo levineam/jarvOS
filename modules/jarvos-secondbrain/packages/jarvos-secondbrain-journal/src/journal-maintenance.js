@@ -1036,7 +1036,6 @@ function syncOneDate(date, config, opts = {}) {
       filePath: journalPath,
       expectedContent: original,
       nextContent: updated,
-      source: 'journal.maintenance',
     });
   }
 
@@ -1060,7 +1059,7 @@ function syncOneDate(date, config, opts = {}) {
   const intentionalTransformWrite = Boolean(
     !opts.dryRun
     && changed
-    && persisted
+    && acknowledged
     && Array.isArray(opts.sectionTransforms)
     && opts.sectionTransforms.length > 0,
   );
@@ -1108,7 +1107,7 @@ function syncOneDate(date, config, opts = {}) {
     && authoredContentPreserved(effectiveContent, knownGoodMarkdown, config)
   );
 
-  if (!opts.dryRun && persisted && (healthAfter.status === 'healthy' || authoredContentIntact)) {
+  if (!opts.dryRun && acknowledged && (healthAfter.status === 'healthy' || authoredContentIntact)) {
     const updatedKnownGoodPath = knownGoodPath(journalDir, date);
     fs.mkdirSync(path.dirname(updatedKnownGoodPath), { recursive: true });
     fs.writeFileSync(updatedKnownGoodPath, effectiveContent, 'utf8');

@@ -78,6 +78,11 @@ Additional provider-neutral APIs are exported as `./migrate` and
 expected-content revision plus a projection manifest; they do not write the
 vault directly.
 
+Version 2 requires Obsidian-owned mutation callbacks for `createProject()` and
+`writeIndex()`. This is an intentional safety boundary: library callers must
+compose callbacks from the canonical jarvOS vault mutation service; the bundled
+CLI no longer falls back to direct Markdown filesystem writes.
+
 ## Not in scope
 
 This package does not talk to any issue tracker. Comparing projects against

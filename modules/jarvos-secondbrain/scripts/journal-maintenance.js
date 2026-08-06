@@ -20,7 +20,7 @@ function main(argv = process.argv.slice(2)) {
     mutationContext: {
       vaultId: service.vaultId,
       vaultRoot: service.vaultRoot,
-      source: 'journal.lifecycle',
+      source: service.source,
     },
   });
   console.log(report.output);

@@ -59,6 +59,30 @@ test('journal maintenance fails closed without composition and withholds success
   }
 });
 
+test('Sync-pending local journal bytes never advance the known-good recovery snapshot', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-journal-pending-known-good-'));
+  const journalDir = path.join(root, 'Vault', 'Journal');
+  const previous = process.env.JARVOS_JOURNAL_DIR;
+  fs.mkdirSync(journalDir, { recursive: true });
+  process.env.JARVOS_JOURNAL_DIR = journalDir;
+  try {
+    const config = loadConfig();
+    const result = rawSyncOneDate(TEST_DATE, config, {
+      createMarkdownFile({ filePath, nextContent }) {
+        fs.writeFileSync(filePath, nextContent, 'utf8');
+        return { status: 'saved_locally_sync_pending' };
+      },
+    });
+    assert.equal(result.writeStatus, 'saved_locally_sync_pending');
+    assert.equal(result.written, false);
+    assert.equal(fs.existsSync(path.join(root, 'Vault', '.jarvos', 'journal-maintenance', 'known-good', `${TEST_DATE}.md`)), false);
+    assert.equal(fs.existsSync(path.join(root, 'Vault', '.jarvos', 'journal-maintenance', 'state.json')), false);
+  } finally {
+    if (previous === undefined) delete process.env.JARVOS_JOURNAL_DIR; else process.env.JARVOS_JOURNAL_DIR = previous;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 function unchangedSync(date, journalPath = '/tmp/test-vault/Journal/2026-01-02.md') {
   return {
     date,

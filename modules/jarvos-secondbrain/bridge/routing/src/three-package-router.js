@@ -34,7 +34,6 @@ const {
 
 const {
   createMemoryRecord,
-  checkMemoryDedup,
 } = require('../../../../jarvos-memory/src');
 
 const {
@@ -135,7 +134,9 @@ function applyThreePackagePlan(capture = {}, options = {}) {
   // Step 2: Apply memory routing
   let memoryResult = null;
   if (plan.routeToMemory && plan.memoryParams) {
-    const dedupResult = checkMemoryDedup(plan.memoryParams.content, plan.memoryParams.class);
+    const dedupResult = typeof options.checkMemoryDedup === 'function'
+      ? options.checkMemoryDedup(plan.memoryParams.content, plan.memoryParams.class)
+      : { isDuplicate: false, reason: 'dedup_adapter_not_configured' };
     plan.memoryDedup = dedupResult;
     if (dedupResult && dedupResult.isDuplicate) {
       return {
@@ -153,7 +154,7 @@ function applyThreePackagePlan(capture = {}, options = {}) {
     const params = { ...plan.memoryParams };
 
     // If a note was created, add the reference
-    if (keywordResult.note) {
+    if (keywordResult.note && keywordResult.note.written !== false && keywordResult.note.error == null) {
       params.noteRef = keywordResult.note.title || keywordResult.note.path || undefined;
     }
 

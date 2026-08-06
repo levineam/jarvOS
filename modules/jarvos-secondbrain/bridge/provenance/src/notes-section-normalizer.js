@@ -336,7 +336,7 @@ function main() {
     const vaultRelativePath = path.relative(mutationService.vaultRoot, filePath).split(path.sep).join('/');
     const context = mutationService.createWriteContext({
       vaultRelativePath,
-      operationSource: 'notes.normalizer',
+      operationSource: mutationService.source,
     });
     return writeNoteFile({ ...input, ...context });
   };
@@ -353,7 +353,6 @@ function main() {
       filePath: journalPath,
       expectedContent: journalContent,
       nextContent: result.normalizedContent,
-      source: 'journal.notes-section-normalizer',
     });
     if (!['committed', 'already_satisfied', 'saved_locally_sync_pending'].includes(journalMutation?.status)) {
       throw new Error(`Journal normalization was not applied through Obsidian: ${journalMutation?.status || 'unavailable'}`);
