@@ -8,7 +8,7 @@
 
 const { existsSync, mkdirSync, readFileSync, writeFileSync } = require('fs');
 const { randomUUID } = require('crypto');
-const { dirname, join } = require('path');
+const { dirname, join, relative } = require('path');
 const { getVaultNotesDir, loadConfig } = require('./lib/notes-config');
 const { repairZeroByteVaultRootDuplicate } = require('./lib/vault-root-duplicate-guard');
 const { optimizeNoteKnowledge } = require('./knowledge-optimizer');
@@ -114,7 +114,31 @@ function journalResultFromError(error) {
   };
 }
 
-function writeNoteFile({ title, content, frontmatter = {} }) {
+// Pure operation factory.  The package deliberately does not know which
+// transport executes it; bridge and agent composition inject that executor.
+function createNoteMutationOperation({ operationId, vaultId, vaultRelativePath, title, content, frontmatter = {}, existingContent = '', existingFrontmatter = {}, sequence = 1 } = {}) {
+  if (typeof operationId !== 'string' || !operationId.trim()) throw new Error('operationId is required for a note mutation');
+  if (!vaultId || !vaultRelativePath) throw new Error('vaultId and vaultRelativePath are required for a note mutation');
+  const normalizedFrontmatter = normalizeFrontmatter({ incoming: frontmatter, existing: existingFrontmatter });
+  const body = buildNoteBody(title, content);
+  const rendered = renderFrontmatter(normalizedFrontmatter) + body;
+  const created = !existingContent;
+  const replayPayload = created
+    ? null
+    : { noteId: normalizedFrontmatter.jarvos_note_id, body };
+  return {
+    schemaVersion: 1,
+    operationId: operationId.trim(),
+    vaultId,
+    vaultRelativePath,
+    sequence,
+    operationKind: created ? 'create' : 'transform',
+    ...(created ? { content: rendered } : { transformName: 'note-append-body', transformVersion: 1, replayPayload }),
+    noteId: normalizedFrontmatter.jarvos_note_id,
+  };
+}
+
+function writeNoteFile({ title, content, frontmatter = {}, mutationExecutor, operationId, vaultId, vaultRoot, sequence = 1 }) {
   if (!title) throw new Error('title is required');
   if (content === undefined || content === null) throw new Error('content is required');
   if (!frontmatter || typeof frontmatter !== 'object' || Array.isArray(frontmatter)) {
@@ -132,6 +156,35 @@ function writeNoteFile({ title, content, frontmatter = {} }) {
     existing: existingFrontmatter,
   });
   const fileContent = renderFrontmatter(normalizedFrontmatter) + body;
+
+  if (mutationExecutor !== undefined) {
+    if (typeof mutationExecutor !== 'function') throw new Error('mutationExecutor must be a function');
+    if (!vaultId || !vaultRoot) throw new Error('vaultId and vaultRoot are required with mutationExecutor');
+    const vaultRelativePath = relative(vaultRoot, filePath).split(require('path').sep).join('/');
+    const operation = createNoteMutationOperation({
+      operationId,
+      vaultId,
+      vaultRelativePath,
+      title,
+      content,
+      frontmatter,
+      existingContent: created ? '' : readFileSync(filePath, 'utf8'),
+      existingFrontmatter,
+      sequence,
+    });
+    const receipt = mutationExecutor(operation);
+    return {
+      written: receipt?.status === 'committed' || receipt?.status === 'already_satisfied',
+      path: filePath,
+      title: safeName,
+      created,
+      noteId: operation.noteId,
+      receipt,
+      journal: { status: 'pending', linked: false, deferred: true, disabled: false, failed: false, reason: 'backlink dispatch is composed separately' },
+      knowledge: null,
+      vaultRootDuplicate: null,
+    };
+  }
 
   mkdirSync(dirname(filePath), { recursive: true });
   writeFileSync(filePath, fileContent, 'utf8');
@@ -203,6 +256,7 @@ module.exports = {
   buildFrontmatter,
   buildNoteBody,
   normalizeFrontmatter,
+  createNoteMutationOperation,
   sanitizeTitle,
   noteFilePath,
   todayDate,

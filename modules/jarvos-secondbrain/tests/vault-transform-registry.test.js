@@ -2,7 +2,7 @@
 
 const assert = require('node:assert/strict');
 const test = require('node:test');
-const { createVaultTransformRegistry } = require('../src/vault-transform-registry');
+const { createJarvosVaultTransforms, createVaultTransformRegistry } = require('../src/vault-transform-registry');
 
 function registry() {
   return createVaultTransformRegistry([{ name: 'append-line', version: 1, maxPayloadBytes: 64,
@@ -28,4 +28,23 @@ test('invalid payload and unknown version quarantine without substituting code',
   assert.equal(transforms.quarantine({ transformName: 'append-line', transformVersion: 2, replayPayload: { line: '- hello' } }).reason, 'unknown_transform_version');
   assert.equal(transforms.quarantine({ transformName: 'append-line', transformVersion: 1, replayPayload: { line: 'bad' } }).reason, 'invalid_replay_payload');
   assert.throws(() => transforms.prepare({ transformName: 'append-line', transformVersion: 2, replayPayload: { line: '- hello' } }), /unknown transform/i);
+});
+
+test('U4 authored-content transforms have deterministic Node and Obsidian conformance', () => {
+  const transforms = createJarvosVaultTransforms();
+  const cases = [
+    {
+      content: '## 📝 Notes\n-\n',
+      operation: { transformName: 'append-line', transformVersion: 1, replayPayload: { line: '- [[Notes/One]]' } },
+    },
+    {
+      content: '---\njarvos_note_id: "stable-note-id"\nstatus: active\n---\n\n# Existing\n\nmobile prose\n',
+      operation: { transformName: 'note-append-body', transformVersion: 1, replayPayload: { noteId: 'stable-note-id', body: '# Existing\n\nagent prose' } },
+    },
+  ];
+  transforms.assertConformance(cases);
+  const appended = transforms.applyNode(cases[1].content, cases[1].operation);
+  assert.match(appended, /mobile prose/);
+  assert.match(appended, /agent prose/);
+  assert.match(appended, /jarvos_note_id: "stable-note-id"/);
 });

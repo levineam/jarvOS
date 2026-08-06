@@ -154,3 +154,13 @@ test('fixed program handles collision identity, latest-content transforms, and s
   assert.equal(latest.result.status, 'done'); assert.match(latest.content, /mobile edit/); assert.match(latest.content, /- agent/);
   assert.equal(runInFakeObsidian(create, { readback: 'stale tracked content' }).result.status, 'error');
 });
+
+test('fixed program preserves quoted note identity for identity-safe note transforms', () => {
+  const note = { ...operation(), operationKind: 'transform', transformName: 'note-append-body', transformVersion: 1, replayPayload: { noteId: 'note-1', body: '# Note\n\nagent prose' } };
+  const latest = runInFakeObsidian(note, { initial: '---\njarvos_note_id: "note-1"\nstatus: active\n---\n\n# Note\n\nmobile prose\n' });
+  assert.equal(latest.result.status, 'done');
+  assert.match(latest.content, /status: active/);
+  assert.match(latest.content, /mobile prose/);
+  assert.match(latest.content, /agent prose/);
+  assert.equal(runInFakeObsidian({ ...note, replayPayload: { ...note.replayPayload, noteId: 'other-note' } }, { initial: latest.content }).result.status, 'error');
+});

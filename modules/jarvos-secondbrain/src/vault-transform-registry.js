@@ -2,6 +2,45 @@
 
 function payloadBytes(value) { return Buffer.byteLength(JSON.stringify(value), 'utf8'); }
 
+function lineTransform(content, { line }) {
+  const source = String(content);
+  return source.includes(line) ? source : `${source}${source.endsWith('\n') ? '' : '\n'}${line}\n`;
+}
+
+function hasNoteIdentity(content, noteId) {
+  const match = String(content).match(/^---\r?\n[\s\S]*?^jarvos_note_id:\s*(?:"([^"]+)"|'([^']+)'|([^\s#]+))[\s\S]*?^---/m);
+  return (match?.[1] || match?.[2] || match?.[3] || '') === noteId;
+}
+
+function noteAppendTransform(content, { noteId, body }) {
+  const source = String(content);
+  if (!hasNoteIdentity(source, noteId)) return source;
+  return source.includes(body) ? source : `${source.trimEnd()}\n\n${body.trim()}\n`;
+}
+
+// These are the portable, reviewable transforms used by U4 callers.  The
+// adapter has matching fixed cases; callers never supply executable source.
+function createJarvosVaultTransforms() {
+  return createVaultTransformRegistry([
+    {
+      name: 'append-line', version: 1, maxPayloadBytes: 4096,
+      validatePayload: (p) => typeof p?.line === 'string' && p.line.trim().startsWith('- '),
+      normalizePayload: (p) => ({ line: p.line.trim() }),
+      applyNode: (content, payload) => lineTransform(content, payload),
+      applyObsidian: (content, payload) => lineTransform(content, payload),
+      invariant: (content, payload) => String(content).includes(payload.line),
+    },
+    {
+      name: 'note-append-body', version: 1, maxPayloadBytes: 256 * 1024,
+      validatePayload: (p) => typeof p?.noteId === 'string' && p.noteId.length > 0 && typeof p?.body === 'string' && p.body.trim().length > 0,
+      normalizePayload: (p) => ({ noteId: p.noteId.trim(), body: p.body.trim() }),
+      applyNode: (content, payload) => noteAppendTransform(content, payload),
+      applyObsidian: (content, payload) => noteAppendTransform(content, payload),
+      invariant: (content, payload) => hasNoteIdentity(content, payload.noteId) && String(content).includes(payload.body),
+    },
+  ]);
+}
+
 function createVaultTransformRegistry(descriptors = []) {
   const entries = new Map();
   for (const descriptor of descriptors) {
@@ -38,4 +77,4 @@ function createVaultTransformRegistry(descriptors = []) {
   return Object.freeze({ applyNode: (content, operation) => apply(content, operation, 'applyNode'), applyObsidian: (content, operation) => apply(content, operation, 'applyObsidian'), assertConformance, isSatisfied, prepare, quarantine });
 }
 
-module.exports = { createVaultTransformRegistry };
+module.exports = { createJarvosVaultTransforms, createVaultTransformRegistry };
