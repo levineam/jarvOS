@@ -42,23 +42,28 @@
     },
     "activation": {
       "enabledByDefault": false,
-      "reason": "Setup keeps the existing workspace behavior and leaves lifecycle activation to an explicit managed launcher."
+      "reason": "Configured managed roots activate the reversible launcher; all other repositories and administrative commands stay on the bound original binary."
     },
     "bridge": {
       "environment": "JARVOS_STEWARDSHIP_BRIDGE_COMMAND",
-      "contract": "An executable on PATH accepts one lifecycle capability name and emits a public-safe JSON availability receipt."
+      "route": "owner-only hashed session mapping",
+      "contract": "The managed launcher uses the private bridge environment for lifecycle calls and records only the staged bridge executable and context paths under a SHA-256 key derived from the explicit OpenClaw session key or ID. The separate gateway process uses its own session context to select that exact mapping and may inject only a bounded public-safe judgment receipt."
     },
     "capabilities": {
       "startOrResume": { "mode": "managed-launcher" },
       "heartbeat": { "mode": "managed-launcher" },
       "checkpoint": { "mode": "managed-launcher", "state": "stable-idle" },
       "stop": { "mode": "managed-launcher" },
-      "nextTurnInput": { "mode": "managed-launcher" },
+      "nextTurnInput": { "mode": "native-hook", "event": "before_prompt_build", "script": "jarvos-next-turn-plugin.js" },
       "availability": { "mode": "managed-launcher" }
     }
   },
   "configWrites": {
-    "backupBeforeWrite": true
+    "backupBeforeWrite": true,
+    "transactionalPreserveUnrelatedConfiguration": true,
+    "paths": [
+      "~/.openclaw/openclaw.json"
+    ]
   },
   "unsupportedCapabilities": [],
   "verification": [

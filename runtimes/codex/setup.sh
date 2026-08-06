@@ -13,6 +13,14 @@ CONTROL_PLANE_SERVICE_MODULE="${JARVOS_CONTROL_PLANE_SERVICE_MODULE:-}"
 # through `codex mcp add --env` — that puts it on argv and persists it in config.
 CONTROL_PLANE_CREDENTIAL_FILE="${JARVOS_CONTROL_PLANE_CREDENTIAL_FILE:-}"
 
+# A quiet managed-launcher install supplies reviewed public hook bytes here.
+# Refuse to activate configured managed roots with checkout-resident hooks.
+if [ -n "${JARVOS_MANAGED_REPOSITORIES:-}" ]; then
+  : "${JARVOS_STAGED_PUBLIC_RUNTIME_ROOT:?stage the reviewed launcher tuple before enabling managed repositories}"
+  HOOK_SCRIPT="$JARVOS_STAGED_PUBLIC_RUNTIME_ROOT/runtimes/codex/jarvos-session-start-hook.js"
+  TURN_HOOK_SCRIPT="$JARVOS_STAGED_PUBLIC_RUNTIME_ROOT/runtimes/codex/jarvos-session-turn-hook.js"
+fi
+
 if ! command -v codex >/dev/null 2>&1; then
   echo "codex CLI not found on PATH" >&2
   exit 1
@@ -116,16 +124,18 @@ readTrustedCredentialFile(process.argv[2]);
   )
 fi
 
-if codex mcp get jarvos >/dev/null 2>&1; then
-  codex mcp remove jarvos >/dev/null
-fi
+if [ "${JARVOS_STEWARDSHIP_ONLY:-0}" != "1" ]; then
+  if codex mcp get jarvos >/dev/null 2>&1; then
+    codex mcp remove jarvos >/dev/null
+  fi
 
-if [ ${#MCP_ENV_ARGS[@]} -gt 0 ]; then
-  codex mcp add "${MCP_ENV_ARGS[@]}" jarvos -- node "$MCP_SERVER"
-  echo "Registered jarvOS MCP server for Codex with control-plane host bindings: $MCP_SERVER"
-else
-  codex mcp add jarvos -- node "$MCP_SERVER"
-  echo "Registered jarvOS MCP server for Codex: $MCP_SERVER"
+  if [ ${#MCP_ENV_ARGS[@]} -gt 0 ]; then
+    codex mcp add "${MCP_ENV_ARGS[@]}" jarvos -- node "$MCP_SERVER"
+    echo "Registered jarvOS MCP server for Codex with control-plane host bindings: $MCP_SERVER"
+  else
+    codex mcp add jarvos -- node "$MCP_SERVER"
+    echo "Registered jarvOS MCP server for Codex: $MCP_SERVER"
+  fi
 fi
 
 mkdir -p "$(dirname "$CODEX_CONFIG")"
@@ -196,6 +206,26 @@ function removeFeature(content, key) {
   }).join('\n');
 }
 
+function topLevelHookEntries(value) {
+  const entries = []; let start = 0; let braces = 0; let brackets = 0; let quote = null; let escaped = false;
+  for (let index = 0; index < value.length; index += 1) {
+    const char = value[index];
+    if (quote) {
+      if (escaped) escaped = false;
+      else if (char === '\\') escaped = true;
+      else if (char === quote) quote = null;
+      continue;
+    }
+    if (char === '"' || char === "'") { quote = char; continue; }
+    if (char === '{') braces += 1;
+    else if (char === '}') braces -= 1;
+    else if (char === '[') brackets += 1;
+    else if (char === ']') brackets -= 1;
+    else if (char === ',' && braces === 0 && brackets === 0) { entries.push(value.slice(start, index).trim()); start = index + 1; }
+  }
+  const tail = value.slice(start).trim(); if (tail) entries.push(tail); return entries;
+}
+
 function setHook(content, event, hookScript, hook) {
   const lines = content.split(/\n/);
   const hookLine = `${event} = [${hook}]`;
@@ -215,9 +245,13 @@ function setHook(content, event, hookScript, hook) {
 
   for (let i = start + 1; i < end; i += 1) {
     if (!new RegExp(`^\\s*${event}\\s*=`).test(lines[i])) continue;
-    if (lines[i].includes(hookScript)) {
-      // This event line can contain user hooks alongside jarvOS. Keeping a
-      // matching entry intact is idempotent and avoids replacing that list.
+    const managedHookName = hookScript.split(/[\\/]/).pop();
+    if (lines[i].includes(managedHookName)) {
+      const open = lines[i].indexOf('['); const close = lines[i].lastIndexOf(']');
+      if (open < 0 || close <= open) throw new Error(`invalid ${event} hook list`);
+      const preserved = topLevelHookEntries(lines[i].slice(open + 1, close))
+        .filter((entry) => !entry.includes(managedHookName));
+      lines[i] = `${lines[i].slice(0, open + 1)}${[...preserved, hook].join(', ')}${lines[i].slice(close)}`;
       return lines.join('\n');
     }
 

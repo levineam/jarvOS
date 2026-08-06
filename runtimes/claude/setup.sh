@@ -10,6 +10,14 @@ CLAUDE_SETTINGS="${CLAUDE_SETTINGS:-$HOME/.claude/settings.json}"
 CLAUDE_DESKTOP_CONFIG="${CLAUDE_DESKTOP_CONFIG:-$HOME/Library/Application Support/Claude/claude_desktop_config.json}"
 CLAUDE_MD_PATH="${CLAUDE_MD_PATH:-$HOME/.claude/CLAUDE.md}"
 
+# A quiet managed-launcher install supplies reviewed public hook bytes here.
+# Refuse to activate configured managed roots with checkout-resident hooks.
+if [ -n "${JARVOS_MANAGED_REPOSITORIES:-}" ]; then
+  : "${JARVOS_STAGED_PUBLIC_RUNTIME_ROOT:?stage the reviewed launcher tuple before enabling managed repositories}"
+  HOOK_SCRIPT="$JARVOS_STAGED_PUBLIC_RUNTIME_ROOT/runtimes/claude/jarvos-session-start-hook.js"
+  TURN_HOOK_SCRIPT="$JARVOS_STAGED_PUBLIC_RUNTIME_ROOT/runtimes/claude/jarvos-session-turn-hook.js"
+fi
+
 if [ ! -f "$MCP_SERVER" ]; then
   echo "jarvOS MCP server not found: $MCP_SERVER" >&2
   exit 1
@@ -49,11 +57,11 @@ else
   echo "Claude Code CLI not found on PATH; skipping Claude Code MCP registration." >&2
 fi
 
-node - "$CLAUDE_SETTINGS" "$HOOK_SCRIPT" "$TURN_HOOK_SCRIPT" "$CLAUDE_DESKTOP_CONFIG" "$MCP_SERVER" <<'NODE'
+node - "$CLAUDE_SETTINGS" "$HOOK_SCRIPT" "$TURN_HOOK_SCRIPT" "$CLAUDE_DESKTOP_CONFIG" "$MCP_SERVER" "${JARVOS_STEWARDSHIP_ONLY:-0}" <<'NODE'
 const fs = require('fs');
 const path = require('path');
 
-const [settingsPath, hookScript, turnHookScript, desktopConfigPath, mcpServer] = process.argv.slice(2);
+const [settingsPath, hookScript, turnHookScript, desktopConfigPath, mcpServer, stewardshipOnly] = process.argv.slice(2);
 
 function readJsonFile(filePath, fallback) {
   if (!fs.existsSync(filePath)) return fallback;
@@ -85,10 +93,8 @@ function upsertClaudeCodeHook(settings) {
 
   function upsert(event, script, entry) {
     const entries = Array.isArray(hooks[event]) ? [...hooks[event]] : [];
-    const index = entries.findIndex((candidate) => JSON.stringify(candidate).includes(script));
-    if (index >= 0) entries[index] = entry;
-    else entries.push(entry);
-    hooks[event] = entries;
+    const managedHookName = script.split(/[\\/]/).pop();
+    hooks[event] = [...entries.filter((candidate) => !JSON.stringify(candidate).includes(managedHookName)), entry];
   }
 
   function commandEntry(script, matcher) {
@@ -118,7 +124,7 @@ function upsertClaudeDesktopMcp(config) {
 }
 
 backupAndWriteJson(settingsPath, upsertClaudeCodeHook(readJsonFile(settingsPath, {})), 'Claude Code settings');
-backupAndWriteJson(desktopConfigPath, upsertClaudeDesktopMcp(readJsonFile(desktopConfigPath, {})), 'Claude Desktop MCP config');
+if (stewardshipOnly !== '1') backupAndWriteJson(desktopConfigPath, upsertClaudeDesktopMcp(readJsonFile(desktopConfigPath, {})), 'Claude Desktop MCP config');
 NODE
 
 if [ "${JARVOS_SKIP_CLAUDE_MD:-0}" = "1" ]; then

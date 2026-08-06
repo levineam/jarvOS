@@ -43,7 +43,7 @@
     },
     "activation": {
       "enabledByDefault": false,
-      "reason": "Setup keeps the existing Hermes configuration behavior and leaves lifecycle activation to an explicit managed launcher."
+      "reason": "Configured managed roots activate the reversible launcher; all other repositories and administrative commands stay on the bound original binary."
     },
     "bridge": {
       "environment": "JARVOS_STEWARDSHIP_BRIDGE_COMMAND",
@@ -54,14 +54,16 @@
       "heartbeat": { "mode": "managed-launcher" },
       "checkpoint": { "mode": "managed-launcher", "state": "stable-idle" },
       "stop": { "mode": "managed-launcher" },
-      "nextTurnInput": { "mode": "managed-launcher" },
+      "nextTurnInput": { "mode": "native-hook", "event": "pre_llm_call", "script": "jarvos-pre-llm-hook.js", "reason": "The staged executable is recorded in Hermes's exact shell-hook allowlist with its staged mtime." },
       "availability": { "mode": "managed-launcher" }
     }
   },
   "configWrites": {
     "backupBeforeWrite": true,
+    "transactionalPreserveUnrelatedConfiguration": true,
     "paths": [
       "~/.hermes/config.yaml",
+      "~/.hermes/shell-hooks-allowlist.json",
       "~/.hermes/skills/jarvos/SKILL.md"
     ]
   },

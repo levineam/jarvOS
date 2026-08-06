@@ -19,6 +19,54 @@ WORKSPACE_INPUT="${1:-$(pwd)}"
 mkdir -p "$WORKSPACE_INPUT"
 WORKSPACE="$(cd "$WORKSPACE_INPUT" && pwd)"
 
+# This mode is intentionally limited to the staged stewardship plugin.  It is
+# used by the managed launcher and must never copy workspace templates.
+if [ "${JARVOS_STEWARDSHIP_ONLY:-0}" = "1" ] || [ "${JARVOS_MANAGED_HARNESS_ROLLBACK:-0}" = "1" ]; then
+  : "${JARVOS_STAGED_PUBLIC_RUNTIME_ROOT:?the staged public runtime root is required}"
+  : "${JARVOS_MANAGED_HARNESS_STATE_ROOT:?the managed launcher state root is required}"
+  OPENCLAW_CONFIG="${OPENCLAW_CONFIG:-$HOME/.openclaw/openclaw.json}"
+  node - "$OPENCLAW_CONFIG" "$JARVOS_STAGED_PUBLIC_RUNTIME_ROOT/runtimes/openclaw" "$JARVOS_MANAGED_HARNESS_STATE_ROOT/stewardship-bridge/openclaw-sessions" "${JARVOS_MANAGED_HARNESS_ROLLBACK:-0}" <<'NODE'
+const fs = require('fs'); const path = require('path');
+const [configPath, pluginPath, mappingRoot, rollback] = process.argv.slice(2);
+const original = fs.existsSync(configPath) ? fs.readFileSync(configPath, 'utf8') : '{}\n';
+const config = JSON.parse(original || '{}');
+const plugins = config.plugins && typeof config.plugins === 'object' ? config.plugins : {};
+if (rollback === '1') {
+  if (plugins.load && Array.isArray(plugins.load.paths)) plugins.load.paths = plugins.load.paths.filter((value) => value !== pluginPath);
+  if (Array.isArray(plugins.allow)) plugins.allow = plugins.allow.filter((value) => value !== 'jarvos-stewardship');
+  if (plugins.entries && typeof plugins.entries === 'object') delete plugins.entries['jarvos-stewardship'];
+  config.plugins = plugins;
+} else {
+  config.plugins = plugins;
+  plugins.load = plugins.load && typeof plugins.load === 'object' ? plugins.load : {};
+  plugins.load.paths = Array.isArray(plugins.load.paths) ? plugins.load.paths : [];
+  plugins.load.paths = plugins.load.paths.filter((value) => !(typeof value === 'string' && value.includes('/managed-harness/') && value.endsWith('/public/runtimes/openclaw')));
+  if (!plugins.load.paths.includes(pluginPath)) plugins.load.paths.push(pluginPath);
+  if (Array.isArray(plugins.allow) && !plugins.allow.includes('jarvos-stewardship')) plugins.allow.push('jarvos-stewardship');
+  plugins.entries = plugins.entries && typeof plugins.entries === 'object' ? plugins.entries : {};
+  const entry = plugins.entries['jarvos-stewardship'] || {};
+  plugins.entries['jarvos-stewardship'] = { ...entry, enabled: true, config: { ...(entry.config || {}), mappingRoot }, hooks: { ...(entry.hooks || {}), allowPromptInjection: true } };
+}
+const next = `${JSON.stringify(config, null, 2)}\n`;
+if (next !== original) {
+  fs.mkdirSync(path.dirname(configPath), { recursive: true });
+  const mode = fs.existsSync(configPath) ? fs.statSync(configPath).mode & 0o777 : 0o600;
+  if (fs.existsSync(configPath)) {
+    const stamp = new Date().toISOString().replace(/[:.]/g, '');
+    fs.copyFileSync(configPath, `${configPath}.bak-jarvos-stewardship-${stamp}-${process.pid}`);
+  }
+  const temp = path.join(path.dirname(configPath), `.${path.basename(configPath)}.${process.pid}.${Date.now()}`);
+  fs.writeFileSync(temp, next, { mode }); fs.chmodSync(temp, mode); fs.renameSync(temp, configPath);
+}
+NODE
+  if [ "${JARVOS_MANAGED_HARNESS_ROLLBACK:-0}" = "1" ]; then
+    echo "Removed only the staged jarvOS OpenClaw stewardship plugin configuration."
+  else
+    echo "Installed the staged jarvOS OpenClaw stewardship plugin configuration."
+  fi
+  exit 0
+fi
+
 echo "┌──────────────────────────────────────────────────┐"
 echo "│          jarvOS — OpenClaw Setup                 │"
 echo "│    Personal AI Operating System                  │"
@@ -27,7 +75,7 @@ echo ""
 echo "  Source:     $REPO_ROOT"
 echo "  Workspace:  $WORKSPACE"
 echo ""
-echo "  i Stewardship lifecycle support is declared in adapter.json; managed-launcher activation remains opt-in."
+echo "  i Managed-launcher activation requires explicit managed repository roots and a staged private runtime tuple."
 echo ""
 
 # ── Dependency checks ──────────────────────────────────────────────────────────

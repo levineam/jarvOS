@@ -57,7 +57,7 @@
     },
     "activation": {
       "enabledByDefault": false,
-      "reason": "The lifecycle hooks are packaged for opt-in activation and do not modify user configuration by this declaration."
+      "reason": "Configured managed roots activate the reversible launcher while verified native worktrees remain adopted."
     },
     "bridge": {
       "environment": "JARVOS_STEWARDSHIP_BRIDGE_COMMAND",

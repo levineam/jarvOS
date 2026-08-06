@@ -1,0 +1,19 @@
+{
+  "id": "jarvos-stewardship",
+  "name": "jarvOS Stewardship",
+  "version": "1.0.0",
+  "description": "Injects bounded jarvOS stewardship judgments into the active turn.",
+  "main": "jarvos-next-turn-plugin.js",
+  "hooks": ["before_prompt_build"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "mappingRoot": {
+        "type": "string",
+        "pattern": "^/"
+      }
+    },
+    "required": ["mappingRoot"]
+  }
+}

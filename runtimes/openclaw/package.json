@@ -1,0 +1,9 @@
+{
+  "name": "jarvos-stewardship-openclaw",
+  "private": true,
+  "version": "1.0.0",
+  "main": "jarvos-next-turn-plugin.js",
+  "openclaw": {
+    "extensions": ["jarvos-next-turn-plugin.js"]
+  }
+}
