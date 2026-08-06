@@ -53,6 +53,7 @@
     "modules/jarvos-ontology/src/",
     "modules/jarvos-secondbrain/README.md",
     "modules/jarvos-secondbrain/package.json",
+    "modules/jarvos-secondbrain/adapters/",
     "modules/jarvos-secondbrain/bridge/",
     "modules/jarvos-secondbrain/packages/",
     "modules/jarvos-secondbrain/scripts/",

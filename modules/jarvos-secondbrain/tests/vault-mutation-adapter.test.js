@@ -165,6 +165,23 @@ test('fixed program preserves quoted note identity for identity-safe note transf
   assert.equal(runInFakeObsidian({ ...note, replayPayload: { ...note.replayPayload, noteId: 'other-note' } }, { initial: latest.content }).result.status, 'error');
 });
 
+test('fixed program appends one session checkpoint without replacing concurrent prose', () => {
+  const checkpoint = {
+    ...operation(),
+    operationKind: 'transform',
+    transformName: 'session-thread-append',
+    transformVersion: 1,
+    replayPayload: { noteId: 'thread-1', entry: '## Agent checkpoint\n\nnext action' },
+  };
+  const initial = '---\njarvos_note_id: "thread-1"\n---\n\n# Thread\n\nmobile checkpoint\n';
+  const first = runInFakeObsidian(checkpoint, { initial });
+  assert.equal(first.result.status, 'done');
+  assert.match(first.content, /mobile checkpoint/);
+  assert.match(first.content, /Agent checkpoint/);
+  const second = runInFakeObsidian(checkpoint, { initial: first.content });
+  assert.equal((second.content.match(/Agent checkpoint/g) || []).length, 1);
+});
+
 test('fixed program canonicalizes one exact backlink while preserving concurrent journal prose', () => {
   const backlink = {
     ...operation(),

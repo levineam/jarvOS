@@ -74,7 +74,7 @@ function buildFrontmatter({ incomingFrontmatter = {}, existingFrontmatter = {} }
 
 // Pure operation factory.  The package deliberately does not know which
 // transport executes it; bridge and agent composition inject that executor.
-function createNoteMutationOperation({ operationId, vaultId, vaultRelativePath, title, content, frontmatter = {}, existingContent = '', existingFrontmatter = {}, sequence = 1, source } = {}) {
+function createNoteMutationOperation({ operationId, vaultId, vaultRelativePath, title, content, frontmatter = {}, existingContent = '', existingFrontmatter = {}, appendEntry, sequence = 1, source } = {}) {
   if (typeof operationId !== 'string' || !operationId.trim()) throw new Error('operationId is required for a note mutation');
   if (!vaultId || !vaultRelativePath) throw new Error('vaultId and vaultRelativePath are required for a note mutation');
   const normalizedFrontmatter = normalizeFrontmatter({ incoming: frontmatter, existing: existingFrontmatter });
@@ -83,7 +83,9 @@ function createNoteMutationOperation({ operationId, vaultId, vaultRelativePath, 
   const created = !existingContent;
   const replayPayload = created
     ? null
-    : { noteId: normalizedFrontmatter.jarvos_note_id, body };
+    : appendEntry
+      ? { noteId: normalizedFrontmatter.jarvos_note_id, entry: String(appendEntry).trim() }
+      : { noteId: normalizedFrontmatter.jarvos_note_id, body };
   return {
     schemaVersion: 1,
     operationId: operationId.trim(),
@@ -91,7 +93,7 @@ function createNoteMutationOperation({ operationId, vaultId, vaultRelativePath, 
     vaultRelativePath,
     sequence,
     operationKind: created ? 'create' : 'transform',
-    ...(created ? { content: rendered } : { transformName: 'note-append-body', transformVersion: 1, replayPayload }),
+    ...(created ? { content: rendered } : { transformName: appendEntry ? 'session-thread-append' : 'note-append-body', transformVersion: 1, replayPayload }),
     noteId: normalizedFrontmatter.jarvos_note_id,
     ...(source ? { source } : {}),
   };
@@ -104,7 +106,7 @@ function hasPersistedNoteBytes(filePath, receipt) {
   );
 }
 
-function writeNoteFile({ title, content, frontmatter = {}, mutationExecutor, operationId, vaultId, vaultRoot, sequence = 1, source }) {
+function writeNoteFile({ title, content, frontmatter = {}, appendEntry, mutationExecutor, operationId, vaultId, vaultRoot, sequence = 1, source }) {
   if (!title) throw new Error('title is required');
   if (content === undefined || content === null) throw new Error('content is required');
   if (!frontmatter || typeof frontmatter !== 'object' || Array.isArray(frontmatter)) {
@@ -134,6 +136,7 @@ function writeNoteFile({ title, content, frontmatter = {}, mutationExecutor, ope
     frontmatter,
     existingContent: created ? '' : readFileSync(filePath, 'utf8'),
     existingFrontmatter,
+    appendEntry,
     sequence,
     source,
   });

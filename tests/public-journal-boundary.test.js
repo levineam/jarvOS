@@ -72,7 +72,7 @@ test('writer inventory covers each user-visible vault writer with a migration or
   };
   assert.doesNotThrow(() => service.assertWriterInventory(inventory, { roots }));
   assert.doesNotThrow(() => service.assertNoUnclassifiedVaultWrites({ roots, inventory, excludeTestFixtures: true }));
-  assert.throws(() => service.assertWriterInventory(inventory, { roots, strictMigrated: true }), /not migrated/i);
+  assert.doesNotThrow(() => service.assertWriterInventory(inventory, { roots, strictMigrated: true }));
   assert.equal(inventory.some((entry) => entry.root === 'agent-context' && entry.file === 'src/index.js'), true);
   assert.equal(inventory.some((entry) => entry.file.endsWith('lint-frontmatter.js')), true);
   assert.equal(inventory.some((entry) => entry.file.endsWith('vault-storage-adapter.js')), true);

@@ -8,7 +8,6 @@ const { createVaultMutationAdapter } = require('../adapters/obsidian/src/vault-m
 const { createVaultMutationReconciler } = require('../adapters/obsidian/src/vault-mutation-reconciler');
 const { createJarvosVaultTransforms } = require('./vault-transform-registry');
 
-const PENDING = 'mutation-owned-pending-migration';
 const WRITER_INVENTORY = Object.freeze([
   ['secondbrain', 'adapters/obsidian/src/vault-storage-adapter.js', 'mutation-owned', 'U4', 'Composes only create and reviewed journal transform operations through the configured service.'],
   ['secondbrain', 'adapters/obsidian/src/vault-mutation-ledger.js', 'operational-out-of-vault', 'U2', 'Writes the owner-only reconciliation ledger under the host state directory, never vault Markdown.'],
@@ -26,7 +25,7 @@ const WRITER_INVENTORY = Object.freeze([
   ['secondbrain', 'packages/jarvos-secondbrain-notes/src/write-to-vault.js', 'mutation-owned', 'U4', 'Builds only transport-neutral operations; bridge/top-level composition executes them.'],
   ['secondbrain', 'packages/jarvos-secondbrain-projects/src/projects.js', 'mutation-owned', 'U4', 'Project pages and their visible index require injected create or exact-content replacement operations.'],
   ['secondbrain', 'packages/jarvos-secondbrain-wiki/src/index.js', 'rebuildable-external-output', 'U4', 'Generated wiki output is explicitly rejected inside a configured vault until an Obsidian-owned deletion lifecycle is available; external derived output remains rebuildable.'],
-  ['agent-context', 'src/index.js', PENDING, 'U4'],
+  ['agent-context', 'src/index.js', 'mutation-owned-with-operational-locks', 'U5', 'Note and session-thread Markdown use configured create/transform operations; session locks live in the owner-only host state directory outside the vault.'],
 ].map(([root, file, classification, migrationUnit, exceptionReason]) => Object.freeze({ root, file, classification, migrationUnit, exceptionReason })));
 
 const PACKAGE_TEMPORARY_SHIMS = Object.freeze([

@@ -42,6 +42,10 @@ test('U4 authored-content transforms have deterministic Node and Obsidian confor
       operation: { transformName: 'note-append-body', transformVersion: 1, replayPayload: { noteId: 'stable-note-id', body: '# Existing\n\nagent prose' } },
     },
     {
+      content: '---\njarvos_note_id: "stable-note-id"\nstatus: active\n---\n\n# Thread\n\nmobile checkpoint\n',
+      operation: { transformName: 'session-thread-append', transformVersion: 1, replayPayload: { noteId: 'stable-note-id', entry: '## Agent checkpoint\n\nagent prose' } },
+    },
+    {
       content: '## 💡 Ideas\n-\n\n## Scratch\n- mobile prose\n',
       operation: { transformName: 'journal-section-line', transformVersion: 1, replayPayload: { heading: '## 💡 Ideas', line: '- New idea' } },
     },
@@ -55,7 +59,11 @@ test('U4 authored-content transforms have deterministic Node and Obsidian confor
   assert.match(appended, /mobile prose/);
   assert.match(appended, /agent prose/);
   assert.match(appended, /jarvos_note_id: "stable-note-id"/);
-  const linked = transforms.applyNode(cases[3].content, cases[3].operation);
+  const thread = transforms.applyNode(cases[2].content, cases[2].operation);
+  assert.match(thread, /mobile checkpoint/);
+  assert.match(thread, /Agent checkpoint/);
+  assert.equal((thread.match(/# Thread/g) || []).length, 1);
+  const linked = transforms.applyNode(cases[4].content, cases[4].operation);
   assert.equal((linked.match(/\[\[Notes\/C\+\+ \(Draft\)\]\]/g) || []).length, 1);
-  assert.equal(transforms.isSatisfied(linked, cases[3].operation), true);
+  assert.equal(transforms.isSatisfied(linked, cases[4].operation), true);
 });

@@ -18,6 +18,13 @@ function noteAppendTransform(content, { noteId, body }) {
   return source.includes(body) ? source : `${source.trimEnd()}\n\n${body.trim()}\n`;
 }
 
+function sessionThreadAppendTransform(content, { noteId, entry }) {
+  const source = String(content);
+  const checkpoint = String(entry || '').trim();
+  if (!hasNoteIdentity(source, noteId) || !checkpoint || source.includes(checkpoint)) return source;
+  return `${source.trimEnd()}\n\n${checkpoint}\n`;
+}
+
 function normalizeJournalHeading(heading) {
   const value = String(heading || '').trim().replace(/^##\s*/, '').trim();
   if (!value || /[\r\n]/.test(value)) throw new Error('Invalid journal section heading');
@@ -107,6 +114,14 @@ function createJarvosVaultTransforms() {
       invariant: (content, payload) => hasNoteIdentity(content, payload.noteId) && String(content).includes(payload.body),
     },
     {
+      name: 'session-thread-append', version: 1, maxPayloadBytes: 64 * 1024,
+      validatePayload: (p) => typeof p?.noteId === 'string' && p.noteId.length > 0 && typeof p?.entry === 'string' && p.entry.trim().length > 0,
+      normalizePayload: (p) => ({ noteId: p.noteId.trim(), entry: p.entry.trim() }),
+      applyNode: (content, payload) => sessionThreadAppendTransform(content, payload),
+      applyObsidian: (content, payload) => sessionThreadAppendTransform(content, payload),
+      invariant: (content, payload) => hasNoteIdentity(content, payload.noteId) && String(content).includes(payload.entry),
+    },
+    {
       name: 'journal-section-line', version: 1, maxPayloadBytes: 8192,
       validatePayload: (p) => typeof p?.heading === 'string' && typeof p?.line === 'string' && p.line.trim().startsWith('- ') && !/[\r\n]/.test(p.line),
       normalizePayload: (p) => ({ heading: normalizeJournalHeading(p.heading), line: p.line.trim() }),
@@ -164,4 +179,4 @@ function createVaultTransformRegistry(descriptors = []) {
   return Object.freeze({ applyNode: (content, operation) => apply(content, operation, 'applyNode'), applyObsidian: (content, operation) => apply(content, operation, 'applyObsidian'), assertConformance, isSatisfied, prepare, quarantine });
 }
 
-module.exports = { createJarvosVaultTransforms, createVaultTransformRegistry, journalBacklinkSatisfied, journalBacklinkTransform, journalSectionLineTransform, normalizeJournalHeading };
+module.exports = { createJarvosVaultTransforms, createVaultTransformRegistry, journalBacklinkSatisfied, journalBacklinkTransform, journalSectionLineTransform, normalizeJournalHeading, sessionThreadAppendTransform };

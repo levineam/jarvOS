@@ -143,16 +143,75 @@ function loadObsidianMutationService() {
   ));
 }
 
-function noteMutationContext({ title, input = {}, jarvosPaths, source = 'agent-context.note' } = {}) {
+function loadVaultMutationContract() {
+  return require(path.join(
+    secondbrainDir(),
+    'adapters',
+    'obsidian',
+    'src',
+    'vault-mutation-contract.js',
+  ));
+}
+
+function mutationServiceFor(input, jarvosPaths, source) {
+  return input.mutationService || loadObsidianMutationService().createObsidianOwnedMutationService({
+    vaultRoot: jarvosPaths.getVaultDir(),
+    source,
+  });
+}
+
+function noteMutationContext({ title, input = {}, jarvosPaths, service, source = 'agent-context.note' } = {}) {
   const vaultRoot = jarvosPaths.getVaultDir();
   const notesDir = jarvosPaths.getNotesDir();
   const filePath = path.join(notesDir, `${sanitizeTitle(title)}.md`);
-  const service = input.mutationService || loadObsidianMutationService().createObsidianOwnedMutationService({ vaultRoot, source });
-  return service.createWriteContext({
+  const owner = service || mutationServiceFor(input, jarvosPaths, source);
+  return owner.createWriteContext({
     vaultRelativePath: path.relative(vaultRoot, filePath).split(path.sep).join('/'),
     intentId: input.intentId,
     operationSource: source,
   });
+}
+
+function publicMutationResult(receipt) {
+  return loadVaultMutationContract().projectPublicResult(receipt || {
+    status: 'unavailable', persistence: 'unknown', obsidian: 'unknown', sync: 'unknown',
+  });
+}
+
+function publicBacklinkResult(journal) {
+  const status = journal?.linked ? 'linked' : journal?.deferred ? 'deferred' : 'failed';
+  return { status, linked: status === 'linked', deferred: status === 'deferred' };
+}
+
+function publicCaptureOutcome(note, journal) {
+  const noteResult = publicMutationResult(note?.receipt);
+  const backlink = publicBacklinkResult(journal);
+  return {
+    schemaVersion: 1,
+    note: noteResult,
+    backlink,
+    sync: { status: noteResult.sync },
+  };
+}
+
+function linkWrittenNote({ noteResult, section, createJournalIfMissing, mutationService }) {
+  if (!noteResult.written && !noteResult.savedLocally) return noteResult.journal;
+  try {
+    const linked = loadJournalLinker().linkNoteToJournal({
+      noteTitle: noteResult.title,
+      section,
+      createIfMissing: createJournalIfMissing,
+      mutationService,
+      noteId: noteResult.noteId,
+      notePath: noteResult.path,
+    });
+    return { ...linked, status: 'linked', linked: true, deferred: false, failed: false };
+  } catch (error) {
+    const deferred = error?.deferredBacklink;
+    return deferred
+      ? { status: 'deferred', linked: false, deferred: true, failed: false }
+      : { status: 'failed', linked: false, deferred: false, failed: true };
+  }
 }
 
 function loadGbrain() {
@@ -598,6 +657,15 @@ function acquireLockFile(lockPath, options = {}) {
   throw new Error(`Timed out acquiring session thread lock: ${lockPath}${lastError ? ` (${lastError.message})` : ''}`);
 }
 
+function sessionThreadLockPath(notePath, options = {}) {
+  const stateRoot = expandTilde(firstString(
+    options.sessionThreadStateDir,
+    process.env.XDG_STATE_HOME && path.join(process.env.XDG_STATE_HOME, 'jarvos', 'session-thread-locks'),
+    path.join(os.homedir(), '.local', 'state', 'jarvos', 'session-thread-locks'),
+  ));
+  return path.join(stateRoot, `${crypto.createHash('sha256').update(path.resolve(notePath)).digest('hex')}.lock`);
+}
+
 function normalizeThreadKey(input = {}) {
   const raw = firstString(
     input.threadId,
@@ -683,14 +751,12 @@ function renderSessionThreadRead(result) {
       '# jarvOS Session Thread',
       '',
       `No session thread found for ${result.title}.`,
-      `Note path: ${result.notePath}`,
     ].join('\n');
   }
   return [
     '# jarvOS Session Thread',
     '',
     `- Thread: [[${result.title}]]`,
-    `- Note: ${result.notePath}`,
     '',
     result.content,
   ].join('\n');
@@ -715,7 +781,9 @@ function readSessionThread(input = {}) {
 function writeSessionThread(input = {}) {
   const thread = resolveSessionThread(input);
   const noteWriter = loadNoteWriter();
-  const releaseLock = acquireLockFile(`${thread.notePath}.lock`, input);
+  const jarvosPaths = loadJarvosPaths();
+  const mutationService = mutationServiceFor(input, jarvosPaths, 'agent-context.session-thread');
+  const releaseLock = acquireLockFile(sessionThreadLockPath(thread.notePath, input), input);
 
   let noteResult;
   let readBack;
@@ -729,34 +797,45 @@ function writeSessionThread(input = {}) {
       '',
       'Rolling live working thread for cross-host AI continuity. Hosts should read this note on entry and append checkpoints at task switches, decisions, artifact changes, and pre-compaction flushes.',
     ].join('\n');
-    const content = existingBody
-      ? `${existingBody.trimEnd()}\n\n${entry}`
-      : `${header}\n\n${entry}`;
+    const content = existingBody ? existingBody : `${header}\n\n${entry}`;
     noteResult = noteWriter.writeNoteFile({
       title: thread.title,
       content,
       frontmatter: sessionThreadFrontmatter(input, thread),
       section: firstString(input.section, DEFAULT_SESSION_THREAD_SECTION),
       createJournalIfMissing: input.createJournalIfMissing !== false,
+      ...(existing ? { appendEntry: entry } : {}),
+      ...noteMutationContext({ title: thread.title, input, jarvosPaths, service: mutationService, source: 'agent-context.session-thread' }),
     });
-    readBack = readSessionThread({ ...input, title: thread.title, maxChars: input.maxChars });
+    noteResult.journal = linkWrittenNote({
+      noteResult,
+      section: firstString(input.section, DEFAULT_SESSION_THREAD_SECTION),
+      createJournalIfMissing: input.createJournalIfMissing !== false,
+      mutationService,
+    });
+    if (noteResult.written) readBack = readSessionThread({ ...input, title: thread.title, maxChars: input.maxChars });
   } finally {
     releaseLock();
   }
 
+  const outcome = publicCaptureOutcome(noteResult, noteResult.journal);
+  const complete = noteResult.written && noteResult.journal?.linked === true;
   return {
-    ok: true,
-    status: 'written',
+    ok: complete,
+    status: complete ? 'written' : 'pending',
     ...thread,
     note: noteResult,
     journal: noteResult.journal,
-    readOnEntry: readBack.markdown,
+    outcome,
+    readOnEntry: readBack?.markdown || null,
     markdown: [
-      '# jarvOS Session Thread Written',
+      complete ? '# jarvOS Session Thread Written' : '# jarvOS Session Thread Pending',
       '',
       `- Thread: [[${thread.title}]]`,
-      `- Note: ${noteResult.path}`,
-      `- Journal: ${noteResult.journal?.journalPath || 'not linked'}`,
+      `- Note persistence: ${outcome.note.status}`,
+      `- Obsidian acknowledgement: ${outcome.note.obsidian}`,
+      `- Journal backlink: ${outcome.backlink.status}`,
+      `- Sync: ${outcome.sync.status}`,
       `- Event: ${firstString(input.event, input.kind, 'checkpoint')}`,
     ].join('\n'),
   };
@@ -1261,11 +1340,11 @@ function createNote(input = {}) {
 
   const jarvosPaths = loadJarvosPaths();
   const noteWriter = loadNoteWriter();
-  const journalLinker = loadJournalLinker();
   const section = firstString(input.section, DEFAULT_NOTES_SECTION);
   const safeTitle = sanitizeTitle(title);
   const frontmatter = defaultFrontmatter(input.frontmatter || {});
-  const mutationContext = noteMutationContext({ title, input, jarvosPaths });
+  const mutationService = mutationServiceFor(input, jarvosPaths, 'agent-context.create-note');
+  const mutationContext = noteMutationContext({ title, input, jarvosPaths, service: mutationService, source: 'agent-context.create-note' });
 
   const noteResult = noteWriter.writeNoteFile({
     title,
@@ -1275,46 +1354,40 @@ function createNote(input = {}) {
     createJournalIfMissing: input.createJournalIfMissing !== false,
     ...mutationContext,
   });
-  if (!noteResult.written) {
-    return {
-      ok: false,
-      note: noteResult,
-      journal: noteResult.journal,
-      verification: null,
-      markdown: `# jarvOS Note Pending\n\n- Note: ${noteResult.path}\n- Status: ${noteResult.receipt?.status || 'unavailable'}`,
-    };
-  }
-  const isDeferred = noteResult.journal?.status === 'deferred';
-  const linkResult = noteResult.journal?.linked || isDeferred
-    ? noteResult.journal
-    : journalLinker.linkNoteToJournal({
-      noteTitle: noteResult.title || safeTitle,
-      section,
-      createIfMissing: input.createJournalIfMissing !== false,
-    });
-  const verification = verifyNoteCaptureContract({
-    notePath: noteResult.path,
-    noteTitle: noteResult.title || safeTitle,
-    notesDir: jarvosPaths.getNotesDir(),
-    journalPath: linkResult.journalPath,
+  const linkResult = linkWrittenNote({
+    noteResult,
     section,
-    requireJournalLink: !isDeferred,
+    createJournalIfMissing: input.createJournalIfMissing !== false,
+    mutationService,
   });
-  if (isDeferred) verification.deferred = true;
-  const journalLinked = !isDeferred;
+  noteResult.journal = linkResult;
+  const verification = noteResult.written && linkResult.linked
+    ? verifyNoteCaptureContract({
+      notePath: noteResult.path,
+      noteTitle: noteResult.title || safeTitle,
+      notesDir: jarvosPaths.getNotesDir(),
+      journalPath: linkResult.journalPath,
+      section,
+    })
+    : null;
+  const outcome = publicCaptureOutcome(noteResult, linkResult);
+  const complete = noteResult.written && linkResult.linked === true && verification?.ok === true;
 
   return {
-    ok: true,
+    ok: complete,
     note: noteResult,
     journal: linkResult,
     journalLinked,
     verification,
+    outcome,
     markdown: [
-      '# jarvOS Note Created',
+      complete ? '# jarvOS Note Created' : '# jarvOS Note Pending',
       '',
-      `- Note: ${noteResult.path}`,
-      `- Journal: ${linkResult.journalPath}`,
-      `- Link: ${journalLinked ? verification.link : 'deferred (queued for reconciliation)'}`,
+      `- Note: [[${noteResult.title || safeTitle}]]`,
+      `- Note persistence: ${outcome.note.status}`,
+      `- Obsidian acknowledgement: ${outcome.note.obsidian}`,
+      `- Journal backlink: ${outcome.backlink.status}`,
+      `- Sync: ${outcome.sync.status}`,
       `- Knowledge: ${noteResult.knowledge?.optimized ? noteResult.knowledge.qmdStatus : 'not optimized'}`,
     ].join('\n'),
   };
