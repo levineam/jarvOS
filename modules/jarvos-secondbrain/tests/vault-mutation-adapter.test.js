@@ -80,6 +80,29 @@ test('inspection uses an opaque result token and leaves an in-flight mutation to
   assert.equal(context.__jarvosVaultMutationResults[inspection].invariant, true);
 });
 
+test('a cleaned-up inspection token cannot be recreated by a late app read', () => {
+  const mutation = operation();
+  const inspection = 'late-inspection-token';
+  const nonce = 'late-inspection-nonce';
+  let finishRead;
+  const pendingRead = {
+    then(callback) { finishRead = callback; return this; },
+    catch() { return this; },
+  };
+  const context = {
+    app: { vault: { getFileByPath: () => ({ path: mutation.vaultRelativePath }), read: () => pendingRead } },
+    TextDecoder,
+    Uint8Array,
+    atob: (value) => Buffer.from(value, 'base64').toString('binary'),
+    JSON,
+  };
+  context.globalThis = context;
+  vm.runInNewContext(buildObsidianInvariantProgram(mutation, inspection, nonce), context);
+  delete context.__jarvosVaultMutationResults[inspection];
+  finishRead('hello');
+  assert.equal(context.__jarvosVaultMutationResults[inspection], undefined);
+});
+
 test('default durable ledger path follows XDG state and stays outside the vault', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-xdg-'));
   const previous = process.env.XDG_STATE_HOME;
@@ -122,7 +145,9 @@ function runInFakeObsidian(operation, { initial, readback } = {}) {
 
 test('fixed program handles collision identity, latest-content transforms, and stale app readback', () => {
   const create = operation();
-  assert.equal(runInFakeObsidian(create, { initial: 'hello' }).result.status, 'done');
+  const identical = runInFakeObsidian(create, { initial: 'hello' }).result;
+  assert.equal(identical.status, 'done');
+  assert.equal(Object.hasOwn(identical, 'readback'), false);
   assert.equal(runInFakeObsidian(create, { initial: 'different' }).result.status, 'error');
   const transform = { ...create, operationKind: 'transform', transformName: 'append-line', transformVersion: 1, replayPayload: { line: '- agent' } };
   const latest = runInFakeObsidian(transform, { initial: 'mobile edit\n' });

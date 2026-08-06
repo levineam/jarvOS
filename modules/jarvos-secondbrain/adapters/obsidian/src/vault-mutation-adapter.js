@@ -10,6 +10,10 @@ const { createVaultMutationLedger } = require('./vault-mutation-ledger');
 const RESULT_STORE = '__jarvosVaultMutationResults';
 const CAPABILITY_STATES = Object.freeze(['available', 'cli_missing', 'app_stopped', 'cli_disabled', 'cli_unsupported', 'wrong_vault', 'api_incompatible']);
 
+function sleepSync(milliseconds) {
+  if (milliseconds > 0) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, milliseconds);
+}
+
 function parseEvalResult(output) { const match = [...String(output || '').matchAll(/^=>\s*(.+)$/gm)].at(-1); return match ? JSON.parse(match[1]) : null; }
 function runObsidianEval(code, { vaultName, command = process.env.OBSIDIAN_CLI || 'obsidian', timeoutMs = 10_000, execute = execFileSync } = {}) {
   try { return parseEvalResult(execute(command, [`vault=${vaultName}`, 'eval', `code=${code}`], { encoding: 'utf8', timeout: timeoutMs, stdio: ['ignore', 'pipe', 'pipe'] })); }
@@ -20,18 +24,18 @@ function payload(operation) { return Buffer.from(JSON.stringify(operation), 'utf
 // transform implementation is this reviewed switch, never a caller global.
 function buildObsidianMutationProgram(operation) {
   const encoded = payload(operation);
-  return `(() => { const input = JSON.parse(new TextDecoder().decode(Uint8Array.from(atob('${encoded}'), c => c.charCodeAt(0)))); const store = globalThis.${RESULT_STORE} ||= {}; const token = input.operationId; store[token] = { status: 'pending' }; const transform = (() => { if (input.transformName === 'append-line' && input.transformVersion === 1 && typeof input.replayPayload?.line === 'string' && input.replayPayload.line.startsWith('- ')) { const line = input.replayPayload.line.trim(); return { apply: current => current.includes(line) ? current : current + (current.endsWith('\\n') ? '' : '\\n') + line + '\\n', invariant: current => current.includes(line) }; } return null; })(); if (!globalThis.app?.vault?.read || !app.vault.getFileByPath) { store[token] = { status: 'error', errorClass: 'api_incompatible' }; return JSON.stringify({ queued: true, token }); } const finish = (file) => app.vault.read(file).then((readback) => { const exact = input.operationKind === 'create' || input.operationKind === 'replace' ? readback === input.content : transform?.invariant(readback) === true; store[token] = { status: exact ? 'done' : 'error', invariant: exact, readback: exact ? readback : undefined, errorClass: exact ? undefined : 'readback_mismatch' }; }).catch((e) => { store[token] = { status: 'error', errorClass: 'readback_failed', error: String(e?.message || e) }; }); const existing = app.vault.getFileByPath(input.vaultRelativePath); if (input.operationKind === 'create') { if (existing) finish(existing); else app.vault.create(input.vaultRelativePath, input.content).then(finish).catch((e) => { const raced = app.vault.getFileByPath(input.vaultRelativePath); if (raced) finish(raced); else store[token] = { status: 'error', errorClass: 'create_failed', error: String(e?.message || e) }; }); } else if (input.operationKind === 'transform') { if (!existing || !transform) store[token] = { status: 'error', errorClass: 'api_incompatible' }; else app.vault.process(existing, current => transform.apply(current)).then(() => finish(existing)).catch((e) => { store[token] = { status: 'error', errorClass: 'process_failed', error: String(e?.message || e) }; }); } else if (input.operationKind === 'replace') { if (!existing) store[token] = { status: 'error', errorClass: 'missing_target' }; else app.vault.process(existing, current => current === input.expectedContent ? input.content : current).then(() => finish(existing)).catch((e) => { store[token] = { status: 'error', errorClass: 'replace_failed', error: String(e?.message || e) }; }); } else store[token] = { status: 'error', errorClass: 'invalid_operation' }; return JSON.stringify({ queued: true, token }); })()`;
+  return `(() => { const input = JSON.parse(new TextDecoder().decode(Uint8Array.from(atob('${encoded}'), c => c.charCodeAt(0)))); const store = globalThis.${RESULT_STORE} ||= {}; const token = input.operationId; store[token] = { status: 'pending' }; const transform = (() => { if (input.transformName === 'append-line' && input.transformVersion === 1 && typeof input.replayPayload?.line === 'string' && input.replayPayload.line.startsWith('- ')) { const line = input.replayPayload.line.trim(); return { apply: current => current.includes(line) ? current : current + (current.endsWith('\\n') ? '' : '\\n') + line + '\\n', invariant: current => current.includes(line) }; } return null; })(); if (!globalThis.app?.vault?.read || !app.vault.getFileByPath) { store[token] = { status: 'error', errorClass: 'api_incompatible' }; return JSON.stringify({ queued: true, token }); } const finish = (file) => app.vault.read(file).then((readback) => { const exact = input.operationKind === 'create' || input.operationKind === 'replace' ? readback === input.content : transform?.invariant(readback) === true; store[token] = { status: exact ? 'done' : 'error', invariant: exact, errorClass: exact ? undefined : 'readback_mismatch' }; }).catch((e) => { store[token] = { status: 'error', errorClass: 'readback_failed', error: String(e?.message || e) }; }); const existing = app.vault.getFileByPath(input.vaultRelativePath); if (input.operationKind === 'create') { if (existing) finish(existing); else app.vault.create(input.vaultRelativePath, input.content).then(finish).catch((e) => { const raced = app.vault.getFileByPath(input.vaultRelativePath); if (raced) finish(raced); else store[token] = { status: 'error', errorClass: 'create_failed', error: String(e?.message || e) }; }); } else if (input.operationKind === 'transform') { if (!existing || !transform) store[token] = { status: 'error', errorClass: 'api_incompatible' }; else app.vault.process(existing, current => transform.apply(current)).then(() => finish(existing)).catch((e) => { store[token] = { status: 'error', errorClass: 'process_failed', error: String(e?.message || e) }; }); } else if (input.operationKind === 'replace') { if (!existing) store[token] = { status: 'error', errorClass: 'missing_target' }; else app.vault.process(existing, current => current === input.expectedContent ? input.content : current).then(() => finish(existing)).catch((e) => { store[token] = { status: 'error', errorClass: 'replace_failed', error: String(e?.message || e) }; }); } else store[token] = { status: 'error', errorClass: 'invalid_operation' }; return JSON.stringify({ queued: true, token }); })()`;
 }
 // Read-only companion to the mutation program.  Node-visible disk bytes are
 // intentionally not consulted: acknowledgement belongs to Obsidian's vault.
-function buildObsidianInvariantProgram(operation, inspectionToken) {
-  const encoded = payload({ ...operation, inspectionToken });
-  return `(() => { const input = JSON.parse(new TextDecoder().decode(Uint8Array.from(atob('${encoded}'), c => c.charCodeAt(0)))); const store = globalThis.${RESULT_STORE} ||= {}; const token = input.inspectionToken; store[token] = { status: 'pending' }; const transform = (() => { if (input.transformName === 'append-line' && input.transformVersion === 1 && typeof input.replayPayload?.line === 'string' && input.replayPayload.line.startsWith('- ')) { const line = input.replayPayload.line.trim(); return current => current.includes(line); } return null; })(); if (!globalThis.app?.vault?.read || !app.vault.getFileByPath) { store[token] = { status: 'unavailable' }; return JSON.stringify({ queued: true, token }); } const file = app.vault.getFileByPath(input.vaultRelativePath); if (!file) { store[token] = { status: 'missing' }; return JSON.stringify({ queued: true, token }); } app.vault.read(file).then(content => { const satisfied = input.operationKind === 'create' || input.operationKind === 'replace' ? content === input.content : transform?.(content) === true; store[token] = { status: satisfied ? 'satisfied' : 'unsatisfied', invariant: satisfied === true }; }).catch(() => { store[token] = { status: 'unavailable' }; }); return JSON.stringify({ queued: true, token }); })()`;
+function buildObsidianInvariantProgram(operation, inspectionToken, inspectionNonce) {
+  const encoded = payload({ ...operation, inspectionToken, inspectionNonce });
+  return `(() => { const input = JSON.parse(new TextDecoder().decode(Uint8Array.from(atob('${encoded}'), c => c.charCodeAt(0)))); const store = globalThis.${RESULT_STORE} ||= {}; const token = input.inspectionToken; const publish = value => { if (store[token]?.nonce === input.inspectionNonce) store[token] = { ...value, nonce: input.inspectionNonce }; }; store[token] = { status: 'pending', nonce: input.inspectionNonce }; const transform = (() => { if (input.transformName === 'append-line' && input.transformVersion === 1 && typeof input.replayPayload?.line === 'string' && input.replayPayload.line.startsWith('- ')) { const line = input.replayPayload.line.trim(); return current => current.includes(line); } return null; })(); if (!globalThis.app?.vault?.read || !app.vault.getFileByPath) { publish({ status: 'unavailable' }); return JSON.stringify({ queued: true, token }); } const file = app.vault.getFileByPath(input.vaultRelativePath); if (!file) { publish({ status: 'missing' }); return JSON.stringify({ queued: true, token }); } app.vault.read(file).then(content => { const satisfied = input.operationKind === 'create' || input.operationKind === 'replace' ? content === input.content : transform?.(content) === true; publish({ status: satisfied ? 'satisfied' : 'unsatisfied', invariant: satisfied === true }); }).catch(() => { publish({ status: 'unavailable' }); }); return JSON.stringify({ queued: true, token }); })()`;
 }
 function tokenProgram(operationId) { return `JSON.stringify(globalThis.${RESULT_STORE}?.[${JSON.stringify(operationId)}] || null)`; }
 function cleanupProgram(operationId) { return `delete globalThis.${RESULT_STORE}?.[${JSON.stringify(operationId)}]; JSON.stringify(true)`; }
 
-function createVaultMutationAdapter({ vaultRoot, vaultId, vaultName = path.basename(vaultRoot || ''), ledger, ledgerPath, transforms, evaluate, maxPollAttempts = 40, probe, ownerId = crypto.randomUUID(), opportunisticDrain } = {}) {
+function createVaultMutationAdapter({ vaultRoot, vaultId, vaultName = path.basename(vaultRoot || ''), ledger, ledgerPath, transforms, evaluate, maxPollAttempts = 40, pollIntervalMs = 50, pollTimeoutMs = 2_500, probe, ownerId = crypto.randomUUID(), opportunisticDrain } = {}) {
   if (typeof vaultRoot !== 'string' || !path.isAbsolute(vaultRoot)) throw new Error('vaultRoot must be absolute');
   if (typeof vaultId !== 'string' || !vaultId) throw new Error('vaultId is required');
   // Keep operational intent outside authored vault content. Hosts normally supply
@@ -39,7 +43,7 @@ function createVaultMutationAdapter({ vaultRoot, vaultId, vaultName = path.basen
   const stateHome = process.env.XDG_STATE_HOME || path.join(os.homedir(), '.local', 'state');
   const defaultLedgerPath = path.join(stateHome, 'jarvos', 'vault-mutations', `${hashUtf8(`${vaultId}\0${vaultRoot}`)}.json`);
   const mutationLedger = ledger || createVaultMutationLedger({ filePath: ledgerPath || defaultLedgerPath });
-  const run = evaluate || ((code) => runObsidianEval(code, { vaultName }));
+  const run = evaluate || ((code, timeoutMs = pollTimeoutMs) => runObsidianEval(code, { vaultName, timeoutMs }));
   let draining = false;
   function capability() { if (probe) return probe(); try { const inspected = run(`JSON.stringify({ vaultName: app?.vault?.getName?.(), hasVault: Boolean(app?.vault?.create && app?.vault?.process && app?.vault?.read) })`); if (!inspected?.hasVault) return { state: 'api_incompatible' }; return inspected.vaultName && inspected.vaultName !== vaultName ? { state: 'wrong_vault' } : { state: 'available', vaultId }; } catch (error) { const message = String(error.message || ''); if (error.code === 'ENOENT') return { state: 'cli_missing' }; if (/disabled/i.test(message)) return { state: 'cli_disabled' }; if (/unsupported|unknown command|eval/i.test(message)) return { state: 'cli_unsupported' }; return { state: 'app_stopped' }; } }
   function inspectInvariant(input) {
@@ -50,14 +54,20 @@ function createVaultMutationAdapter({ vaultRoot, vaultId, vaultName = path.basen
     if (operation.operationKind === 'transform' && (!transforms || transforms.quarantine(operation))) return { status: 'unavailable' };
     try {
       const inspectionToken = `${operation.operationId}:inspect:${crypto.randomUUID()}`;
-      const queued = run(buildObsidianInvariantProgram(operation, inspectionToken));
+      const inspectionNonce = crypto.randomUUID();
+      const deadline = Date.now() + pollTimeoutMs;
+      const queued = run(buildObsidianInvariantProgram(operation, inspectionToken, inspectionNonce), Math.max(1, deadline - Date.now()));
       if (!queued?.queued || queued.token !== inspectionToken) return { status: 'unavailable' };
       let result = null;
       for (let attempt = 0; attempt < maxPollAttempts; attempt += 1) {
-        result = run(tokenProgram(inspectionToken));
+        const remaining = deadline - Date.now();
+        if (remaining <= 0) break;
+        result = run(tokenProgram(inspectionToken), remaining);
         if (['satisfied', 'unsatisfied', 'missing', 'unavailable'].includes(result?.status)) break;
+        if (attempt + 1 < maxPollAttempts) sleepSync(Math.min(pollIntervalMs, Math.max(0, deadline - Date.now())));
       }
-      if (['satisfied', 'unsatisfied', 'missing', 'unavailable'].includes(result?.status)) { try { run(cleanupProgram(inspectionToken)); } catch {} return result; }
+      if (['satisfied', 'unsatisfied', 'missing', 'unavailable'].includes(result?.status)) { try { run(cleanupProgram(inspectionToken), Math.max(1, deadline - Date.now())); } catch {} return { status: result.status, ...(typeof result.invariant === 'boolean' ? { invariant: result.invariant } : {}) }; }
+      try { run(cleanupProgram(inspectionToken), Math.max(1, deadline - Date.now())); } catch {}
       return { status: 'unavailable' };
     } catch { return { status: 'unavailable' }; }
   }
@@ -80,12 +90,19 @@ function createVaultMutationAdapter({ vaultRoot, vaultId, vaultName = path.basen
     if (!claim.granted && claim.reason === 'already_acknowledged') return createInternalReceipt({ operation, status: 'already_satisfied', lifecycleState: 'acknowledged', persistence: 'durable', obsidian: 'acknowledged' });
     if (!claim.granted) return createInternalReceipt({ operation, status: 'blocked', lifecycleState: 'blocked', persistence: 'durable', obsidian: 'unacknowledged', adapterEvidence: { reason: claim.reason } });
     try {
-      const queued = run(buildObsidianMutationProgram(operation));
+      const deadline = Date.now() + pollTimeoutMs;
+      const queued = run(buildObsidianMutationProgram(operation), Math.max(1, deadline - Date.now()));
       if (!queued?.queued || queued.token !== operation.operationId) throw new Error('invalid queued acknowledgement');
       let result = null;
-      for (let attempt = 0; attempt < maxPollAttempts; attempt += 1) { result = run(tokenProgram(operation.operationId)); if (result?.status === 'done' || result?.status === 'error') break; }
+      for (let attempt = 0; attempt < maxPollAttempts; attempt += 1) {
+        const remaining = deadline - Date.now();
+        if (remaining <= 0) break;
+        result = run(tokenProgram(operation.operationId), remaining);
+        if (result?.status === 'done' || result?.status === 'error') break;
+        if (attempt + 1 < maxPollAttempts) sleepSync(Math.min(pollIntervalMs, Math.max(0, deadline - Date.now())));
+      }
       if (result?.status === 'done' && result.invariant === true) {
-        mutationLedger.transition(operation.operationId, 'acknowledged', { ownerId, fence: claim.fence, evidence: { acknowledgedBy: 'app.vault.read', readbackHash: result.readback ? hashUtf8(result.readback) : undefined } });
+        mutationLedger.transition(operation.operationId, 'acknowledged', { ownerId, fence: claim.fence, evidence: { acknowledgedBy: 'app.vault.read' } });
         try { run(cleanupProgram(operation.operationId)); } catch { /* acknowledgement is already durable */ }
         return createInternalReceipt({ operation, status: 'committed', persistence: 'durable', obsidian: 'acknowledged' });
       }

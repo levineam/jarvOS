@@ -98,25 +98,28 @@ function createVaultMutationLedger({ filePath, fsImpl = fs, now = () => Date.now
     if (old && JSON.stringify(old.operation) !== JSON.stringify(operation)) throw new Error('operationId already belongs to a different mutation');
     const collision = Object.values(data.operations).find((entry) => entry.operation.operationId !== operation.operationId && key(entry.operation) === key(operation) && entry.operation.sequence === operation.sequence);
     if (collision) throw new Error('Duplicate same-file operation sequence');
-    if (!old) data.operations[operation.operationId] = { operation, status: 'planned', createdAt: now(), updatedAt: now(), attempts: 0, history: [{ status: 'planned', at: now() }] };
-    return data.operations[operation.operationId];
+    const created = !old;
+    if (created) data.operations[operation.operationId] = { operation, status: 'planned', createdAt: now(), updatedAt: now(), attempts: 0, history: [{ status: 'planned', at: now() }] };
+    return { record: data.operations[operation.operationId], created };
   }
   function recordTransition(record, status, evidence) {
     if (!STATES.has(status)) throw new Error('Invalid ledger transition');
     record.status = status; record.updatedAt = now();
-    record.history = [...(record.history || []), { status, at: record.updatedAt, evidence }];
+    record.history ||= [];
+    record.history.push({ status, at: record.updatedAt, evidence });
     if (evidence !== undefined) record.evidence = evidence;
   }
-  function ensure(operation) { return transaction(() => { const data = readUnlocked({ repair: true }); const record = ensureUnlocked(data, operation); writeAtomic(filePath, data, fsImpl); return record; }); }
+  function ensure(operation) { return transaction(() => { const data = readUnlocked({ repair: true }); const { record, created } = ensureUnlocked(data, operation); if (created) writeAtomic(filePath, data, fsImpl); return record; }); }
   function claim(operation, ownerId, { allowAmbiguousRetry = false, local = false } = {}) { return transaction(() => {
     if (!ownerId) throw new Error('claim ownerId is required');
-    const data = readUnlocked({ repair: true }); const record = ensureUnlocked(data, operation); const claimKey = key(record.operation); const stamp = now();
+    const data = readUnlocked({ repair: true }); const ensured = ensureUnlocked(data, operation); const { record, created } = ensured; const claimKey = key(record.operation); const stamp = now();
+    const persistCreated = () => { if (created) writeAtomic(filePath, data, fsImpl); };
     const prior = Object.values(data.operations).filter((entry) => key(entry.operation) === claimKey && entry.operation.sequence < record.operation.sequence && !TERMINAL.has(entry.status));
-    if (prior.length) { writeAtomic(filePath, data, fsImpl); return { granted: false, reason: prior.some((entry) => ['unknown_after_dispatch', 'conflict', 'quarantined'].includes(entry.status)) ? 'prior_operation_blocked' : 'prior_operation_pending', record }; }
-    if (TERMINAL.has(record.status)) { writeAtomic(filePath, data, fsImpl); return { granted: false, reason: record.status === 'acknowledged' ? 'already_acknowledged' : 'already_terminal', record }; }
-    if (record.status === 'quarantined' || record.status === 'conflict' || (record.status === 'unknown_after_dispatch' && !allowAmbiguousRetry)) { writeAtomic(filePath, data, fsImpl); return { granted: false, reason: 'operation_blocked', record }; }
+    if (prior.length) { persistCreated(); return { granted: false, reason: prior.some((entry) => ['unknown_after_dispatch', 'conflict', 'quarantined'].includes(entry.status)) ? 'prior_operation_blocked' : 'prior_operation_pending', record }; }
+    if (TERMINAL.has(record.status)) { persistCreated(); return { granted: false, reason: record.status === 'acknowledged' ? 'already_acknowledged' : 'already_terminal', record }; }
+    if (record.status === 'quarantined' || record.status === 'conflict' || (record.status === 'unknown_after_dispatch' && !allowAmbiguousRetry)) { persistCreated(); return { granted: false, reason: 'operation_blocked', record }; }
     const existing = data.claims[claimKey];
-    if (existing && existing.expiresAt > stamp) { writeAtomic(filePath, data, fsImpl); return { granted: false, reason: 'claim_active', record }; }
+    if (existing && existing.expiresAt > stamp) { persistCreated(); return { granted: false, reason: 'claim_active', record }; }
     const fence = (existing?.fence || 0) + 1;
     data.claims[claimKey] = { operationId: record.operation.operationId, ownerId, fence, expiresAt: stamp + leaseMs };
     record.attempts += 1; recordTransition(record, local ? 'local_mutating' : 'dispatched'); writeAtomic(filePath, data, fsImpl);
@@ -136,7 +139,7 @@ function createVaultMutationLedger({ filePath, fsImpl = fs, now = () => Date.now
   function resolve(operatorId, operationId, status, reason) { if (!operatorId || !reason || !['superseded', 'abandoned'].includes(status)) throw new Error('operator, reason, and terminal resolution are required'); return transaction(() => { const data = readUnlocked({ repair: true }); const record = data.operations[operationId]; if (!record) throw new Error('Unknown operationId'); recordTransition(record, status, { operatorId, reason }); delete data.claims[key(record.operation)]; writeAtomic(filePath, data, fsImpl); return record; }); }
   function read() { return transaction(() => readUnlocked({ repair: true })); }
   function active() { return Object.values(read().operations).filter((record) => !TERMINAL.has(record.status) && record.status !== 'quarantined').sort((a, b) => key(a.operation).localeCompare(key(b.operation)) || a.operation.sequence - b.operation.sequence); }
-  function pruneRetained() { return transaction(() => { const data = readUnlocked({ repair: true }); for (const [id, record] of Object.entries(data.operations)) if (TERMINAL.has(record.status) && now() - record.updatedAt > retentionMs) delete data.operations[id]; writeAtomic(filePath, data, fsImpl); }); }
+  function pruneRetained() { return transaction(() => { const data = readUnlocked({ repair: true }); let changed = false; for (const [id, record] of Object.entries(data.operations)) if (TERMINAL.has(record.status) && now() - record.updatedAt > retentionMs) { delete data.operations[id]; changed = true; } if (changed) writeAtomic(filePath, data, fsImpl); }); }
   return Object.freeze({ active, acknowledgeFromObsidianRead, claim, ensure, get: (id) => read().operations[id] || null, read, resolve, transition, quarantine, pruneRetained, filePath });
 }
 module.exports = { BLOCKING, STATES, TERMINAL, createVaultMutationLedger };

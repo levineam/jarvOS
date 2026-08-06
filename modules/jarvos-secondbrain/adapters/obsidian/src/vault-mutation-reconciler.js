@@ -5,12 +5,6 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { hashUtf8, resolveVaultTarget } = require('./vault-mutation-contract');
 
-function invariantSatisfied(operation, content, transforms) {
-  if (operation.operationKind === 'create') return typeof operation.content === 'string' && content === operation.content;
-  if (operation.operationKind === 'replace') return typeof operation.content === 'string' && content === operation.content;
-  return Boolean(transforms && transforms.isSatisfied(content, operation));
-}
-
 function createVaultMutationReconciler({ adapter, ledger, vaultRoot, transforms, fsImpl = fs, now = () => Date.now(), ownerId = crypto.randomUUID(), offlineSourceAllowlist = [], proveObsidianAbsent, exclusiveWriterCapability } = {}) {
   if (!ledger || typeof ledger.active !== 'function') throw new Error('ledger is required');
   if (!adapter || typeof adapter.execute !== 'function') throw new Error('adapter is required');
@@ -91,4 +85,4 @@ function createVaultMutationReconciler({ adapter, ledger, vaultRoot, transforms,
   return Object.freeze({ drain, reconcileOne, safeOfflineSave });
 }
 
-module.exports = { createVaultMutationReconciler, invariantSatisfied };
+module.exports = { createVaultMutationReconciler };
