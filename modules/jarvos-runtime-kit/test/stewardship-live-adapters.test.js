@@ -154,6 +154,43 @@ test('native hooks display a validated public judgment on the next turn', () => 
   }
 });
 
+test('Claude SessionStart persists only a validated bridge command for later hooks', () => {
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-claude-env-file-'));
+  const bin = path.join(temp, 'bin');
+  const envFile = path.join(temp, 'claude.env');
+  try {
+    fs.mkdirSync(bin, { recursive: true });
+    const bridge = path.join(bin, 'jarvos-stewardship-bridge');
+    fs.writeFileSync(bridge, '#!/usr/bin/env sh\nexit 0\n', { mode: 0o700 });
+    fs.chmodSync(bridge, 0o700);
+    fs.writeFileSync(envFile, 'export UNRELATED=value\n', { mode: 0o600 });
+    fs.chmodSync(envFile, 0o600);
+    const hook = require(path.join(ROOT, 'runtimes', 'claude', 'jarvos-session-start-hook.js'));
+    const env = {
+      CLAUDE_ENV_FILE: envFile,
+      JARVOS_STEWARDSHIP_BRIDGE_COMMAND: 'jarvos-stewardship-bridge',
+      PATH: bin,
+    };
+    assert.equal(hook.persistBridgeEnvironment({ env }), true);
+    const expected = [
+      'export UNRELATED=value',
+      "export JARVOS_STEWARDSHIP_BRIDGE_COMMAND='jarvos-stewardship-bridge'",
+      `export PATH='${bin}':\"$PATH\"`,
+      '',
+    ].join('\n');
+    assert.equal(fs.readFileSync(envFile, 'utf8'), expected);
+    assert.equal(hook.persistBridgeEnvironment({ env }), true);
+    assert.equal(fs.readFileSync(envFile, 'utf8'), expected);
+    assert.equal(hook.persistBridgeEnvironment({ env: { ...env, JARVOS_STEWARDSHIP_BRIDGE_COMMAND: '../invalid' } }), false);
+    assert.equal(fs.readFileSync(envFile, 'utf8'), expected);
+    fs.chmodSync(envFile, 0o644);
+    assert.equal(hook.persistBridgeEnvironment({ env }), false);
+    assert.equal(fs.readFileSync(envFile, 'utf8'), expected);
+  } finally {
+    fs.rmSync(temp, { recursive: true, force: true });
+  }
+});
+
 test('native turn hooks reject malicious bridge payloads and stay quiet without public input', () => {
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-stewardship-turn-reject-'));
   const bin = path.join(temp, 'bin');

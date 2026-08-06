@@ -5,11 +5,62 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { hydrate } = require('../../modules/jarvos-agent-context/src/index.js');
-const { stewardshipAdapter } = require('./jarvos-session-turn-hook.js');
+const { BRIDGE_COMMAND_ENV, stewardshipAdapter } = require('./jarvos-session-turn-hook.js');
 
 const DEFAULT_MAX_CHARS = 9500;
 const MAX_ALLOWED_CHARS = 10000;
 const LOG_PATH = path.join(os.homedir(), '.claude', 'jarvos-hydration.log');
+const BRIDGE_COMMAND = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+
+function shellQuote(value) {
+  return `'${value.replace(/'/g, "'\\\"'\\\"'")}'`;
+}
+
+function bridgeDirectory(command, searchPath) {
+  if (typeof searchPath !== 'string') return null;
+  for (const directory of searchPath.split(path.delimiter)) {
+    if (!path.isAbsolute(directory)) continue;
+    const candidate = path.join(directory, command);
+    try {
+      const stat = fs.statSync(candidate);
+      if (stat.isFile() && (stat.mode & 0o111) !== 0) return directory;
+    } catch {
+      // Try the next PATH entry.
+    }
+  }
+  return null;
+}
+
+function persistBridgeEnvironment(options = {}) {
+  const env = options.env || process.env;
+  const envFile = env.CLAUDE_ENV_FILE;
+  const command = env[BRIDGE_COMMAND_ENV];
+  if (!path.isAbsolute(envFile || '') || !BRIDGE_COMMAND.test(command || '')) return false;
+
+  let stat;
+  try {
+    stat = fs.statSync(envFile);
+  } catch {
+    return false;
+  }
+  const uid = typeof process.getuid === 'function' ? process.getuid() : null;
+  if (!stat.isFile() || uid === null || stat.uid !== uid || (stat.mode & 0o077) !== 0) return false;
+  const directory = bridgeDirectory(command, env.PATH);
+  if (!directory) return false;
+
+  const lines = [
+    `export ${BRIDGE_COMMAND_ENV}=${shellQuote(command)}`,
+    `export PATH=${shellQuote(directory)}:\"$PATH\"`,
+  ];
+  try {
+    const current = fs.readFileSync(envFile, 'utf8');
+    const missing = lines.filter((line) => !current.split(/\n/).includes(line));
+    if (missing.length) fs.appendFileSync(envFile, `${current.endsWith('\n') || current.length === 0 ? '' : '\n'}${missing.join('\n')}\n`, 'utf8');
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 function emitLocalChangeInvalidation() {
   // Session hydration must fail open; the producer is only a promptness hint.
@@ -51,6 +102,7 @@ function hydrationMaxChars() {
 
 async function main() {
   try {
+    persistBridgeEnvironment();
     stewardshipAdapter.startOrResume();
     emitLocalChangeInvalidation();
     const result = await hydrate({ maxChars: hydrationMaxChars() });
@@ -78,4 +130,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { hydrationMaxChars, main, stewardshipAdapter };
+module.exports = { hydrationMaxChars, main, persistBridgeEnvironment, stewardshipAdapter };
