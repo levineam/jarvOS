@@ -319,6 +319,7 @@ test('OpenClaw and Hermes package bounded per-turn stewardship bridge artifacts 
     // context, not the before_prompt_build event. Keep the event shape
     // faithful so this regression proves delivery on a normal agent turn.
     assert.match(plugin.before_prompt_build({ prompt: 'Continue', messages: [] }, { sessionKey, pluginConfig: { mappingRoot: mappings } }).prependContext, /Choose a safe next step/);
+    assert.match(plugin.before_prompt_build({ prompt: 'Continue', messages: [] }, { sessionKey: `agent:main:explicit:${sessionKey}`, pluginConfig: { mappingRoot: mappings } }).prependContext, /Choose a safe next step/);
     assert.deepEqual(plugin.before_prompt_build({ prompt: 'Continue', messages: [] }, { sessionKey: 'unmapped', pluginConfig: { mappingRoot: mappings } }), {});
     const registrations = []; plugin({ on: (...args) => registrations.push(args) });
     assert.equal(registrations.length, 1); assert.equal(registrations[0][0], 'before_prompt_build'); assert.equal(registrations[0][2].timeoutMs, 5000);

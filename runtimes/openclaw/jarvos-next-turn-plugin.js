@@ -17,15 +17,28 @@ function sessionToken(event, context) {
         : typeof event?.sessionId === 'string' ? event.sessionId : null;
 }
 
-function mapping(event, config, context) {
+function sessionTokens(event, context) {
   const token = sessionToken(event, context);
-  if (!token || typeof config?.mappingRoot !== 'string' || !path.isAbsolute(config.mappingRoot)) return null;
-  const file = path.join(config.mappingRoot, `${createHash('sha256').update(token).digest('hex')}.json`);
-  try {
-    const stat = fs.lstatSync(file); if (stat.isSymbolicLink() || !stat.isFile() || (stat.mode & 0o777) !== 0o600) return null;
-    const value = JSON.parse(fs.readFileSync(file, 'utf8'));
-    return value?.schemaVersion === 1 && typeof value.contextFile === 'string' && typeof value.bridgeExecutable === 'string' ? value : null;
-  } catch (_) { return null; }
+  if (!token) return [];
+  // `openclaw agent --session-id X` is exposed to hooks as
+  // `agent:<agent>:explicit:X`, while the launcher necessarily records X
+  // before the gateway normalizes it. Prefer the exact key, then the narrowly
+  // defined explicit-session suffix used by OpenClaw 2026.7.1.
+  const explicit = token.match(/^agent:[^:]+:explicit:(.+)$/);
+  return explicit?.[1] ? [token, explicit[1]] : [token];
+}
+
+function mapping(event, config, context) {
+  if (typeof config?.mappingRoot !== 'string' || !path.isAbsolute(config.mappingRoot)) return null;
+  for (const token of sessionTokens(event, context)) {
+    const file = path.join(config.mappingRoot, `${createHash('sha256').update(token).digest('hex')}.json`);
+    try {
+      const stat = fs.lstatSync(file); if (stat.isSymbolicLink() || !stat.isFile() || (stat.mode & 0o777) !== 0o600) continue;
+      const value = JSON.parse(fs.readFileSync(file, 'utf8'));
+      if (value?.schemaVersion === 1 && typeof value.contextFile === 'string' && typeof value.bridgeExecutable === 'string') return value;
+    } catch (_) { /* try the normalized CLI-session fallback */ }
+  }
+  return null;
 }
 function nextTurnContext(event, config, context) {
   const entry = mapping(event, config, context); if (!entry) return null;
