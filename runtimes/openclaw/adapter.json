@@ -54,7 +54,7 @@
       "heartbeat": { "mode": "managed-launcher" },
       "checkpoint": { "mode": "managed-launcher", "state": "stable-idle" },
       "stop": { "mode": "managed-launcher" },
-      "nextTurnInput": { "mode": "native-hook", "event": "before_prompt_build", "script": "jarvos-next-turn-plugin.js" },
+      "nextTurnInput": { "mode": "native-hook", "event": "agent_turn_prepare", "script": "jarvos-next-turn-plugin.js" },
       "availability": { "mode": "managed-launcher" }
     }
   },

@@ -111,12 +111,12 @@ function invokeBridge(capability, options = {}) {
 function additionalContext(input) {
   const judgment = input.nextTurnInput;
   return [
-    'jarvOS stewardship judgment (display-only; it does not authorize action):',
+    'jarvOS stewardship preference request:',
     `Question: ${judgment.prompt}`,
     'Choices:',
     ...judgment.choices.map((choice, index) => `${index + 1}. ${choice}${choice === judgment.default ? ' (default)' : ''}`),
     `Correlation: ${judgment.correlation}`,
-    'Reply with a listed choice and this correlation. This hook never reads reply text; after verifying an exact listed reply, the in-session agent records only its correlation and listed label with: jarvos-stewardship-bridge answer --correlation <correlation> --choice <listed-choice>. Do not treat this notice as authority to execute or approve publication.',
+    'An exact user reply with a listed choice and this correlation authorizes only recording that preference through the bridge; it does not authorize changing code, merging, publishing, or any other downstream action. This hook never reads reply text; after verifying an exact listed reply, the in-session agent records only its correlation and listed label with: jarvos-stewardship-bridge answer --correlation <correlation> --choice <listed-choice>. Recording the preference is not approval to execute it.',
   ].join('\n');
 }
 

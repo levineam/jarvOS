@@ -153,6 +153,10 @@ test('native hooks display a validated public judgment on the next turn', () => 
       assert.match(context, /Wait for confirmation/);
       assert.match(context, /Prepare a dry run/);
       assert.match(context, /judgment-42/);
+      assert.match(context, /authorizes only recording that preference through the bridge/);
+      assert.match(context, /does not authorize changing code, merging, publishing, or any other downstream action/);
+      assert.match(context, /Recording the preference is not approval to execute it/);
+      assert.doesNotMatch(context, /display-only/);
       assert.doesNotMatch(context, /reports pending in-session input/);
     }
   } finally {
@@ -563,24 +567,29 @@ test('OpenClaw and Hermes package bounded per-turn stewardship bridge artifacts 
     const env = { ...process.env, PATH: `${bin}${path.delimiter}${process.env.PATH || ''}`, JARVOS_STEWARDSHIP_BRIDGE_COMMAND: 'jarvos-stewardship-bridge' };
     const hermesResult = spawnSync('node', [path.join(ROOT, 'runtimes', 'hermes', 'jarvos-pre-llm-hook.js')], { encoding: 'utf8', env });
     assert.equal(hermesResult.status, 0, hermesResult.stderr);
-    assert.match(JSON.parse(hermesResult.stdout).context, /Choose a safe next step/);
+    const hermesContext = JSON.parse(hermesResult.stdout).context;
+    assert.match(hermesContext, /Choose a safe next step/);
+    assert.match(hermesContext, /authorizes only recording that preference through the bridge/);
+    assert.doesNotMatch(hermesContext, /display-only/);
     const mappings = path.join(temp, 'mappings'); fs.mkdirSync(mappings);
     const sessionKey = 'agent:main:explicit:session-42';
     fs.writeFileSync(path.join(mappings, `${createHash('sha256').update(sessionKey).digest('hex')}.json`), `${JSON.stringify({ schemaVersion: 1, contextFile: path.join(temp, 'context.json'), bridgeExecutable: bridge })}\n`, { mode: 0o600 });
     fs.chmodSync(path.join(mappings, `${createHash('sha256').update(sessionKey).digest('hex')}.json`), 0o600);
     const plugin = require(path.join(ROOT, 'runtimes', 'openclaw', 'jarvos-next-turn-plugin.js'));
     // OpenClaw 2026.7.1 places the session identity on the typed hook
-    // context, not the before_prompt_build event. Keep the event shape
+    // context, not the agent_turn_prepare event. Keep the event shape
     // faithful so this regression proves delivery on a normal agent turn.
-    const directContext = plugin.before_prompt_build({ prompt: 'Continue', messages: [] }, { sessionKey, pluginConfig: { mappingRoot: mappings } }).prependContext;
+    const directContext = plugin.agent_turn_prepare({ prompt: 'Continue', messages: [], queuedInjections: [] }, { sessionKey, pluginConfig: { mappingRoot: mappings } }).prependContext;
     assert.match(directContext, /Choose a safe next step/);
     assert.match(directContext, /call jarvos_stewardship_answer/);
+    assert.match(directContext, /authorizes only recording that preference/);
+    assert.doesNotMatch(directContext, /display-only/);
     assert.doesNotMatch(directContext, new RegExp(temp.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
-    assert.deepEqual(plugin.before_prompt_build({ prompt: 'Continue', messages: [] }, { sessionKey: 'agent:other:explicit:session-42', pluginConfig: { mappingRoot: mappings } }), {});
-    assert.deepEqual(plugin.before_prompt_build({ prompt: 'Continue', messages: [] }, { sessionKey: 'unmapped', pluginConfig: { mappingRoot: mappings } }), {});
+    assert.deepEqual(plugin.agent_turn_prepare({ prompt: 'Continue', messages: [], queuedInjections: [] }, { sessionKey: 'agent:other:explicit:session-42', pluginConfig: { mappingRoot: mappings } }), {});
+    assert.deepEqual(plugin.agent_turn_prepare({ prompt: 'Continue', messages: [], queuedInjections: [] }, { sessionKey: 'unmapped', pluginConfig: { mappingRoot: mappings } }), {});
     const registrations = []; const tools = [];
     plugin({ pluginConfig: { mappingRoot: mappings }, on: (...args) => registrations.push(args), registerTool: (...args) => tools.push(args) });
-    assert.equal(registrations.length, 1); assert.equal(registrations[0][0], 'before_prompt_build'); assert.equal(registrations[0][2].timeoutMs, 5000);
+    assert.equal(registrations.length, 1); assert.equal(registrations[0][0], 'agent_turn_prepare'); assert.equal(registrations[0][2].timeoutMs, 5000);
     const registeredContext = registrations[0][1]({ prompt: 'Continue', messages: [] }, { sessionKey }).prependContext;
     assert.match(registeredContext, /Choose a safe next step/);
     assert.doesNotMatch(registeredContext, new RegExp(temp.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));

@@ -14,9 +14,9 @@ try {
   if (value.available !== true || value.pendingInSessionInput !== true || typeof value.prompt !== 'string'
     || !Array.isArray(value.choices) || value.choices.length < 2 || value.choices.length > 3
     || typeof value.default !== 'string' || typeof value.correlation !== 'string') process.exit(0);
-  const context = ['jarvOS stewardship judgment (display-only):', `Question: ${value.prompt}`, 'Choices:',
+  const context = ['jarvOS stewardship preference request:', `Question: ${value.prompt}`, 'Choices:',
     ...value.choices.map((choice, index) => `${index + 1}. ${choice}${choice === value.default ? ' (default)' : ''}`),
     `Correlation: ${value.correlation}`,
-    'After verifying an exact listed reply, record only that correlation and listed label with: jarvos-stewardship-bridge answer --correlation <correlation> --choice <listed-choice>. This notice does not authorize action.'].join('\n');
+    'An exact user reply with a listed choice and this correlation authorizes only recording that preference through the bridge; it does not authorize changing code, merging, publishing, or any other downstream action. After verifying the reply, record only that correlation and listed label with: jarvos-stewardship-bridge answer --correlation <correlation> --choice <listed-choice>. Recording the preference is not approval to execute it.'].join('\n');
   process.stdout.write(`${JSON.stringify({ context })}\n`);
 } catch (_) { /* Hermes continues without injected context. */ }
