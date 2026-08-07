@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "id": "hermes",
-  "displayName": "Hermes Agent",
+  "id": "openclaw",
+  "displayName": "OpenClaw",
   "sharedAgentContext": {
     "mcpServer": "modules/jarvos-agent-context/scripts/jarvos-mcp.js",
     "requiredTools": [
@@ -14,18 +14,17 @@
   },
   "targets": [
     {
-      "id": "hermes-agent",
+      "id": "openclaw",
       "kind": "agent-runtime",
       "mcp": {
         "supported": true,
         "transport": "stdio",
-        "registration": "hermes mcp add jarvos --command node --args <mcp-server>",
-        "verification": "hermes mcp test jarvos"
+        "registration": "Register modules/jarvos-agent-context/scripts/jarvos-mcp.js with the workspace agent configuration."
       },
       "hydration": {
         "mode": "manual",
         "command": "Call the jarvos_hydrate MCP tool at session start.",
-        "reason": "Hermes exposes MCP registration, but this adapter does not claim an automatic startup hook until the native hook contract is verified."
+        "reason": "This public adapter does not activate a global OpenClaw session hook."
       }
     }
   ],
@@ -34,7 +33,7 @@
   },
   "stewardshipAdapter": {
     "version": "jarvos-stewardship-adapter.v1",
-    "harness": "hermes",
+    "harness": "openclaw",
     "isolation": {
       "preferredMode": "managed-launcher",
       "fallbackMode": "managed-launcher",
@@ -47,14 +46,15 @@
     },
     "bridge": {
       "environment": "JARVOS_STEWARDSHIP_BRIDGE_COMMAND",
-      "contract": "An executable on PATH accepts one lifecycle capability name and emits a public-safe JSON availability receipt."
+      "route": "owner-only hashed session mapping",
+      "contract": "The managed launcher uses the private bridge environment for lifecycle calls and records only the staged bridge executable and context paths under a SHA-256 key derived from the explicit OpenClaw session key or ID. The separate gateway process uses its own session context to select that exact mapping and may inject only a bounded public-safe judgment receipt."
     },
     "capabilities": {
       "startOrResume": { "mode": "managed-launcher" },
       "heartbeat": { "mode": "managed-launcher" },
       "checkpoint": { "mode": "managed-launcher", "state": "stable-idle" },
       "stop": { "mode": "managed-launcher" },
-      "nextTurnInput": { "mode": "native-hook", "event": "pre_llm_call", "script": "jarvos-pre-llm-hook.js", "reason": "The staged executable is recorded in Hermes's exact shell-hook allowlist with its staged mtime." },
+      "nextTurnInput": { "mode": "native-hook", "event": "agent_turn_prepare", "script": "jarvos-next-turn-plugin.js" },
       "availability": { "mode": "managed-launcher" }
     }
   },
@@ -62,18 +62,11 @@
     "backupBeforeWrite": true,
     "transactionalPreserveUnrelatedConfiguration": true,
     "paths": [
-      "~/.hermes/config.yaml",
-      "~/.hermes/shell-hooks-allowlist.json",
-      "~/.hermes/skills/jarvos/SKILL.md"
+      "~/.openclaw/openclaw.json"
     ]
   },
-  "unsupportedCapabilities": [
-    {
-      "capability": "automatic-startup-hydration",
-      "reason": "Hermes MCP registration is supported; automatic startup hydration remains deferred until the native startup hook surface is verified."
-    }
-  ],
+  "unsupportedCapabilities": [],
   "verification": [
-    "node modules/jarvos-runtime-kit/scripts/jarvos-runtime-kit.js check hermes"
+    "node modules/jarvos-runtime-kit/scripts/jarvos-runtime-kit.js check openclaw"
   ]
 }

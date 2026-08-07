@@ -46,9 +46,10 @@ edit, search, sync, and back up.
 companies, concepts, meetings, and source material can become a queryable
 knowledge base your assistant can use before it acts.
 
-**Paperclip** gives real work a real system. Agent tasks can become tracked
-issues with owners, blockers, status, and verification evidence instead of
-disappearing into chat.
+**Beads** gives managed software work a durable local execution ledger with
+claims, dependencies, retries, and verification evidence. **Paperclip** can
+optionally mirror that work as a convenient human-facing record; it is not
+required to run the stewardship pipeline.
 
 **jarvOS skills and adapters** are the webbing. They connect the tools, install
 sane defaults, route context, define workflows, and make the system feel like
@@ -74,6 +75,23 @@ knowledge. Repeated preferences become memory. Important entities become
 structured recall. Completed work becomes durable context.
 
 The longer you use jarvOS, the more leverage your assistants have.
+
+## Your Local Improvements Can Become Public Software
+
+`@jarvos/coding` includes the portable foundation for a managed-software
+pipeline: it can inventory local repository work, identify bounded release
+opportunities, route them toward the appropriate public project, and carry the
+evidence needed by the issue-to-PR workflow. This is designed to work across
+Claude Code, Codex, OpenClaw, and other host adapters, so you can improve your
+own system without continually tracking which changes also belong upstream.
+
+Routine stewardship uses Git as the work authority and a local coordination
+adapter to keep concurrent coding sessions from losing or duplicating work.
+Beads is the required durable execution ledger for the supported stewardship
+profile. Projects can add context, and Paperclip can add a one-way record, but
+both are optional. If Beads is unavailable, work stays preserved and visibly
+pending for retry instead of being treated as completed. Public merge, tagging,
+release, and upstream submission remain separate approval boundaries.
 
 ## Your Knowledge Base Builds Itself
 
@@ -149,7 +167,7 @@ jarvOS is a set of layers, not a monolith:
 | Structured knowledge | `@jarvos/gbrain` and local knowledge tools | People, companies, projects, concepts, meetings, sources |
 | Runtime context | `@jarvos/agent-context` | Current work, recall bundles, startup briefs, note creation |
 | Behavior | `core/` | Identity, tone, rules, governance |
-| Execution | Paperclip | Issues, tasks, status, blockers, verification |
+| Execution | Beads; optional Paperclip projection | Claims, dependencies, status, retries, verification |
 | Runtime | OpenClaw, Hermes, Codex, Claude, etc. | Tools, messaging, sessions, model calls |
 
 Each layer has one job. Notes do not become project boards. Project tasks do not

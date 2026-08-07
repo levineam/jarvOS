@@ -19,6 +19,93 @@ WORKSPACE_INPUT="${1:-$(pwd)}"
 mkdir -p "$WORKSPACE_INPUT"
 WORKSPACE="$(cd "$WORKSPACE_INPUT" && pwd)"
 
+# This mode is intentionally limited to the staged stewardship plugin.  It is
+# used by the managed launcher and must never copy workspace templates.
+if [ "${JARVOS_STEWARDSHIP_ONLY:-0}" = "1" ] || [ "${JARVOS_MANAGED_HARNESS_ROLLBACK:-0}" = "1" ]; then
+  : "${JARVOS_STAGED_PUBLIC_RUNTIME_ROOT:?the staged public runtime root is required}"
+  : "${JARVOS_MANAGED_HARNESS_STATE_ROOT:?the managed launcher state root is required}"
+  OPENCLAW_CONFIG="${OPENCLAW_CONFIG:-$HOME/.openclaw/openclaw.json}"
+  node - "$OPENCLAW_CONFIG" "$JARVOS_STAGED_PUBLIC_RUNTIME_ROOT/runtimes/openclaw" "$JARVOS_MANAGED_HARNESS_STATE_ROOT/stewardship-bridge/openclaw-sessions" "${JARVOS_MANAGED_HARNESS_ROLLBACK:-0}" <<'NODE'
+const fs = require('fs'); const path = require('path');
+const [configPath, pluginPath, mappingRoot, rollback] = process.argv.slice(2);
+const original = fs.existsSync(configPath) ? fs.readFileSync(configPath, 'utf8') : '{}\n';
+const config = JSON.parse(original || '{}');
+const plugins = config.plugins && typeof config.plugins === 'object' ? config.plugins : {};
+const tools = config.tools && typeof config.tools === 'object' ? config.tools : null;
+const stewardshipEntry = plugins.entries && typeof plugins.entries === 'object' ? plugins.entries['jarvos-stewardship'] : null;
+const existingToolOwnership = stewardshipEntry?.config?.toolAllowAddedByJarvos;
+const toolAllowAddedByJarvos = typeof existingToolOwnership === 'boolean'
+  ? existingToolOwnership
+  : Array.isArray(tools?.allow) && !tools.allow.includes('jarvos_stewardship_answer');
+const existingAgentGrant = stewardshipEntry?.config?.agentToolGrantByJarvos;
+let agentToolGrantByJarvos = existingAgentGrant && typeof existingAgentGrant === 'object' ? existingAgentGrant : null;
+const requestedAgentId = process.env.JARVOS_OPENCLAW_AGENT_ID || 'main';
+const targetAgentId = rollback === '1' && typeof agentToolGrantByJarvos?.agentId === 'string' ? agentToolGrantByJarvos.agentId : requestedAgentId;
+if (!/^[A-Za-z0-9._-]{1,64}$/.test(targetAgentId)) throw new Error('invalid stewardship OpenClaw agent id');
+function targetAgent(create) {
+  if (!config.agents || typeof config.agents !== 'object') { if (!create) return null; config.agents = {}; }
+  if (!Array.isArray(config.agents.list)) { if (!create) return null; config.agents.list = []; }
+  let agent = config.agents.list.find((value) => value && typeof value === 'object' && value.id === targetAgentId);
+  if (!agent && create) { agent = { id: targetAgentId }; config.agents.list.push(agent); }
+  return agent;
+}
+if (rollback === '1') {
+  if (plugins.load && Array.isArray(plugins.load.paths)) plugins.load.paths = plugins.load.paths.filter((value) => value !== pluginPath);
+  if (Array.isArray(plugins.allow)) plugins.allow = plugins.allow.filter((value) => value !== 'jarvos-stewardship');
+  if (plugins.entries && typeof plugins.entries === 'object') delete plugins.entries['jarvos-stewardship'];
+  if (toolAllowAddedByJarvos && Array.isArray(tools?.allow)) tools.allow = tools.allow.filter((value) => value !== 'jarvos_stewardship_answer');
+  if (agentToolGrantByJarvos?.added === true) {
+    const agent = targetAgent(false);
+    if (agent?.tools && Array.isArray(agent.tools.alsoAllow)) agent.tools.alsoAllow = agent.tools.alsoAllow.filter((value) => value !== 'jarvos_stewardship_answer');
+    if (agentToolGrantByJarvos.createdAlsoAllow === true && agent?.tools?.alsoAllow?.length === 0) delete agent.tools.alsoAllow;
+    if (agentToolGrantByJarvos.createdTools === true && agent?.tools && Object.keys(agent.tools).length === 0) delete agent.tools;
+    if (agentToolGrantByJarvos.createdAgent === true && agent && Object.keys(agent).length === 1 && agent.id === targetAgentId) config.agents.list = config.agents.list.filter((value) => value !== agent);
+  }
+  config.plugins = plugins;
+} else {
+  config.plugins = plugins;
+  plugins.load = plugins.load && typeof plugins.load === 'object' ? plugins.load : {};
+  plugins.load.paths = Array.isArray(plugins.load.paths) ? plugins.load.paths : [];
+  plugins.load.paths = plugins.load.paths.filter((value) => !(typeof value === 'string' && value.includes('/managed-harness/') && value.endsWith('/public/runtimes/openclaw')));
+  if (!plugins.load.paths.includes(pluginPath)) plugins.load.paths.push(pluginPath);
+  if (Array.isArray(plugins.allow) && !plugins.allow.includes('jarvos-stewardship')) plugins.allow.push('jarvos-stewardship');
+  if (Array.isArray(tools?.allow) && !tools.allow.includes('jarvos_stewardship_answer')) tools.allow.push('jarvos_stewardship_answer');
+  const existingAgent = targetAgent(false);
+  const effectiveProfile = existingAgent?.tools?.profile || tools?.profile;
+  if (effectiveProfile && effectiveProfile !== 'full') {
+    if (!existingAgent) throw new Error(`stewardship OpenClaw agent is not configured: ${targetAgentId}`);
+    const agent = existingAgent; const createdAgent = false;
+    const createdTools = !agent.tools; agent.tools = agent.tools && typeof agent.tools === 'object' ? agent.tools : {};
+    if (Array.isArray(agent.tools.allow)) throw new Error('stewardship requires an additive OpenClaw agent tool policy');
+    const createdAlsoAllow = !Array.isArray(agent.tools.alsoAllow);
+    agent.tools.alsoAllow = Array.isArray(agent.tools.alsoAllow) ? agent.tools.alsoAllow : [];
+    if (!agentToolGrantByJarvos) agentToolGrantByJarvos = { agentId: targetAgentId, added: !agent.tools.alsoAllow.includes('jarvos_stewardship_answer'), createdAgent, createdTools, createdAlsoAllow };
+    if (!agent.tools.alsoAllow.includes('jarvos_stewardship_answer')) agent.tools.alsoAllow.push('jarvos_stewardship_answer');
+  }
+  plugins.entries = plugins.entries && typeof plugins.entries === 'object' ? plugins.entries : {};
+  const entry = plugins.entries['jarvos-stewardship'] || {};
+  plugins.entries['jarvos-stewardship'] = { ...entry, enabled: true, config: { ...(entry.config || {}), mappingRoot, toolAllowAddedByJarvos, ...(agentToolGrantByJarvos ? { agentToolGrantByJarvos } : {}) }, hooks: { ...(entry.hooks || {}), allowPromptInjection: true } };
+}
+const next = `${JSON.stringify(config, null, 2)}\n`;
+if (next !== original) {
+  fs.mkdirSync(path.dirname(configPath), { recursive: true });
+  const mode = fs.existsSync(configPath) ? fs.statSync(configPath).mode & 0o777 : 0o600;
+  if (fs.existsSync(configPath)) {
+    const stamp = new Date().toISOString().replace(/[:.]/g, '');
+    fs.copyFileSync(configPath, `${configPath}.bak-jarvos-stewardship-${stamp}-${process.pid}`);
+  }
+  const temp = path.join(path.dirname(configPath), `.${path.basename(configPath)}.${process.pid}.${Date.now()}`);
+  fs.writeFileSync(temp, next, { mode }); fs.chmodSync(temp, mode); fs.renameSync(temp, configPath);
+}
+NODE
+  if [ "${JARVOS_MANAGED_HARNESS_ROLLBACK:-0}" = "1" ]; then
+    echo "Removed only the staged jarvOS OpenClaw stewardship plugin configuration."
+  else
+    echo "Installed the staged jarvOS OpenClaw stewardship plugin configuration."
+  fi
+  exit 0
+fi
+
 echo "┌──────────────────────────────────────────────────┐"
 echo "│          jarvOS — OpenClaw Setup                 │"
 echo "│    Personal AI Operating System                  │"
@@ -26,6 +113,8 @@ echo "└───────────────────────�
 echo ""
 echo "  Source:     $REPO_ROOT"
 echo "  Workspace:  $WORKSPACE"
+echo ""
+echo "  i Managed-launcher activation requires explicit managed repository roots and a staged private runtime tuple."
 echo ""
 
 # ── Dependency checks ──────────────────────────────────────────────────────────

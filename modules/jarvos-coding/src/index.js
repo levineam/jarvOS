@@ -138,14 +138,33 @@ const {
   inspectRepository,
   parseGitStatus,
 } = require('./worktree-ownership');
-
+const {
+  DEFAULT_IGNORED_PATH_SEGMENTS,
+  LOCAL_CHANGE_EVENT_TYPES,
+  LOCAL_CHANGE_INTAKE_SCHEMA_VERSION,
+  assessLocalChange,
+  normalizeLocalRefInventory,
+  privacyOutcome,
+  visiblePaths,
+} = require('./features/local-change-intake');
+const stewardshipContract = require('./stewardship/contract');
+const stewardshipJudgment = require('./stewardship/judgment');
+const stewardshipPolicy = require('./stewardship/policy');
+const reconcilePolicy = require('./stewardship/reconcile-policy');
 module.exports = {
+  ...stewardshipContract,
+  ...stewardshipJudgment,
+  ...stewardshipPolicy,
+  ...reconcilePolicy,
   ACTIVE_STATUSES,
+  DEFAULT_IGNORED_PATH_SEGMENTS,
   BRANCH_SCHEMA_VERSION,
   COUPLED_STAGES,
   FIXER_SCHEMA_VERSION,
   HOLISTIC_REVIEW_SCHEMA_VERSION,
   LIVE_ADAPTERS_SCHEMA_VERSION,
+  LOCAL_CHANGE_INTAKE_SCHEMA_VERSION,
+  LOCAL_CHANGE_EVENT_TYPES,
   PULL_REQUEST_SCHEMA_VERSION,
   POST_MERGE_SCHEMA_VERSION,
   TRACKER_SCHEMA_VERSION,
@@ -185,6 +204,7 @@ module.exports = {
   TERMINAL_STATUSES,
   TRIAGE_SCHEMA_VERSION,
   assertReviewEngineAdapter,
+  assessLocalChange,
   buildGateEquivalentCommands,
   buildDecision,
   buildCodeThreadCheckpoint,
@@ -237,7 +257,9 @@ module.exports = {
   normalizeGoalAlignmentReview,
   normalizeHost,
   normalizeLabels,
+  normalizeLocalRefInventory,
   parseGitStatus,
+  privacyOutcome,
   readJarvosSessionState,
   releaseFitFromPaperclipReleaseIntake,
   releaseGateState,
@@ -248,5 +270,6 @@ module.exports = {
   routeCodingWork,
   triageCodingWork,
   validateSubmissionEvidence,
+  visiblePaths,
   writeJarvosSessionState,
 };

@@ -52,6 +52,54 @@
   "setup": {
     "script": "setup.sh"
   },
+  "stewardshipAdapter": {
+    "version": "jarvos-stewardship-adapter.v1",
+    "harness": "claude-code",
+    "isolation": {
+      "preferredMode": "native",
+      "fallbackMode": "managed-launcher",
+      "providesIsolatedWorktrees": true,
+      "requiresVerifiedWorktreeEvidence": true
+    },
+    "activation": {
+      "enabledByDefault": false,
+      "reason": "Configured managed roots activate the reversible launcher while verified native worktrees remain adopted."
+    },
+    "bridge": {
+      "environment": "JARVOS_STEWARDSHIP_BRIDGE_COMMAND",
+      "contract": "An executable on PATH accepts one lifecycle capability name and emits a public-safe JSON availability receipt. For nextTurnInput, a pending receipt may contain only a bounded plain-English prompt, 2-3 choices, a listed default, and an opaque correlation identifier; hooks display it without granting authority. Claude resolves private bridge state only through its hook stdin session_id and a session-neutral private mapping root; hooks never preserve or display a private context-file path. Native hooks do not capture arbitrary reply text: the in-session agent verifies an exact listed reply, then invokes `jarvos-stewardship-bridge answer --correlation <correlation> --choice <listed-choice>`, which passes only those two bounded fields."
+    },
+    "capabilities": {
+      "startOrResume": {
+        "mode": "native-hook",
+        "event": "SessionStart",
+        "script": "jarvos-session-start-hook.js"
+      },
+      "heartbeat": {
+        "mode": "native-hook",
+        "event": "UserPromptSubmit",
+        "script": "jarvos-session-turn-hook.js"
+      },
+      "checkpoint": {
+        "mode": "managed-launcher",
+        "state": "stable-idle",
+        "reason": "Checkpointing remains a managed-launcher responsibility until an enabled bridge is configured."
+      },
+      "stop": {
+        "mode": "managed-launcher",
+        "reason": "Stopping remains a managed-launcher responsibility until an enabled bridge is configured."
+      },
+      "nextTurnInput": {
+        "mode": "native-hook",
+        "event": "UserPromptSubmit",
+        "script": "jarvos-session-turn-hook.js"
+      },
+      "availability": {
+        "mode": "native-hook",
+        "script": "jarvos-session-turn-hook.js"
+      }
+    }
+  },
   "configWrites": {
     "backupBeforeWrite": true,
     "paths": [

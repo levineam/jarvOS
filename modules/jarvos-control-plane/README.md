@@ -30,8 +30,10 @@ Paperclip, OpenClaw, Codex, Claude Code, cron, or a private machine path.
 
 ## What It Is Not
 
-- It is not a task tracker. Paperclip or another tracker remains the execution
-  authority.
+- It is not a task tracker. In the managed-software stewardship profile, Git is
+  the work authority. Projects, Beads, and Paperclip are optional downstream
+  context or record adapters; none is required for admission or lifecycle
+  truth.
 - It is not a scheduler. Scheduler authorities create mediated requests through
   the same command path.
 - It is not a private host. Machine credentials, absolute paths, runtime

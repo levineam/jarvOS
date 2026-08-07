@@ -2,11 +2,23 @@
   "hooks": {
     "SessionStart": [
       {
-        "matcher": "startup",
+        "matcher": "startup|resume",
         "hooks": [
           {
             "type": "command",
             "command": "node \"$JARVOS_REPO_ROOT/runtimes/codex/jarvos-session-start-hook.js\"",
+            "async": false,
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$JARVOS_REPO_ROOT/runtimes/codex/jarvos-session-turn-hook.js\"",
             "async": false,
             "timeout": 30
           }

@@ -3,8 +3,10 @@
 const { evaluateGoalAlignment } = require('../features/goal-alignment');
 
 const TRIAGE_SCHEMA_VERSION = 'jarvos-coding-triage/v1';
-const SUBMISSION_GATE_SCHEMA_VERSION = 'jarvos-coding-submission-gate/v1';
-const ISSUE_BRANCH_LIFECYCLE_SCHEMA_VERSION = 'jarvos-coding-issue-branch-lifecycle/v1';
+const SUBMISSION_GATE_SCHEMA_VERSION = 'jarvos-coding-submission-gate/v2';
+// v2 makes cleanup the authoritative closeout result; tracker closure is an
+// optional projection and is therefore reported separately.
+const ISSUE_BRANCH_LIFECYCLE_SCHEMA_VERSION = 'jarvos-coding-issue-branch-lifecycle/v2';
 const CODING_MATURITY_STATES = Object.freeze([
   'experimental',
   'local-dogfood',
@@ -68,13 +70,13 @@ const ISSUE_BRANCH_LIFECYCLE_TRANSITIONS = Object.freeze([
   {
     from: 'cleanup_verified',
     to: 'tracker_closed',
-    gate: 'tracker issue closeout references merge, review, and cleanup evidence',
+    gate: 'optional tracker projection records the already-authoritative merge, review, and cleanup outcome',
   },
 ]);
 const ISSUE_BRANCH_METADATA_REQUIREMENTS = Object.freeze([
   {
     key: 'issueIdentifier',
-    role: 'durable tracker issue identifier that names the work',
+    role: 'durable work identifier that names the work; a historical tracker identifier is one compatible form',
   },
   {
     key: 'owner',
@@ -117,15 +119,14 @@ const SUBMISSION_GATE_STATUS_POLICIES = Object.freeze({
   autoreview: Object.freeze(['recorded', 'passed', 'approved', 'completed']),
   goal_alignment: Object.freeze(['aligned', 'passed', 'approved', 'completed']),
   pull_request: Object.freeze(['created', 'approved', 'passed']),
-  paperclip_evidence: Object.freeze(['recorded', 'completed', 'passed']),
   post_merge_clawsweeper: Object.freeze(['completed', 'passed', 'not_applicable']),
 });
 const SUBMISSION_GATE_STAGES = Object.freeze([
   {
     key: 'issue_linkage',
     phase: 'submit',
-    role: 'Tie every code change to a tracker issue before implementation starts.',
-    evidence: 'issue.identifier or issue.id',
+    role: 'Tie every code change to a durable work identity without making a tracker authoritative.',
+    evidence: 'workIdentity.identifier, issue.identifier (historical compatibility), or Git branch identity',
   },
   {
     key: 'branch_hygiene',
@@ -164,12 +165,6 @@ const SUBMISSION_GATE_STAGES = Object.freeze([
     evidence: 'checks.pullRequest.url or checks.pullRequest.number with created/approved status',
   },
   {
-    key: 'paperclip_evidence',
-    phase: 'submit',
-    role: 'Record commands, diff scope, PR link, and review artifacts on the tracker issue.',
-    evidence: 'checks.paperclipEvidence.status and issue identifier',
-  },
-  {
     key: 'post_merge_clawsweeper',
     phase: 'complete',
     role: 'Run or explicitly defer post-merge clawsweeper so merged commits feed the follow-up queue.',
@@ -194,7 +189,11 @@ function codingLifecyclePolicy(options = {}) {
       publicApi: 'export-only-supported-boundary',
       adapterBoundary: 'trackers-map-to-portable-triage-shape',
       submissionGate: 'agent-agnostic-pr-first-review-before-completion',
+      codeAuthority: 'git',
+      coordinationAuthority: 'agent-mail',
+      trackerProjection: 'optional-one-way-after-authoritative-outcome',
       executionEntrypoint: 'workflow-execution-for-all-ai-personalities',
+      localChangeIntake: 'portable-tracker-neutral-privacy-fail-closed-for-public-routing',
     },
   };
 }
@@ -234,13 +233,30 @@ function evidencePassed(value, allowedStatuses = ['passed']) {
 }
 
 function hasIssueLinkage(input = {}) {
+  const workIdentity = input.workIdentity || {};
   const issue = input.issue || {};
-  return Boolean(issue.identifier || issue.id || input.issueIdentifier || input.issueId);
+  return Boolean(
+    workIdentity.identifier
+      || workIdentity.id
+      || input.workIdentifier
+      || input.workId
+      || issue.identifier
+      || issue.id
+      || input.issueIdentifier
+      || input.issueId
+      || input.git?.branch,
+  );
 }
 
 function branchMentionsIssue(branch, input = {}) {
+  const workIdentity = input.workIdentity || {};
   const issue = input.issue || {};
-  const identifier = issue.identifier || input.issueIdentifier;
+  const identifier = workIdentity.identifier
+    || workIdentity.id
+    || input.workIdentifier
+    || input.workId
+    || issue.identifier
+    || input.issueIdentifier;
   if (!identifier || !branch) return false;
   return String(branch).toLowerCase().includes(String(identifier).toLowerCase());
 }
@@ -289,6 +305,7 @@ function firstValue(...values) {
 }
 
 function normalizeIssueBranchMetadata(input = {}) {
+  const workIdentity = input.workIdentity || {};
   const issue = input.issue || {};
   const git = input.git || {};
   const repo = input.repo || input.repository || {};
@@ -296,7 +313,16 @@ function normalizeIssueBranchMetadata(input = {}) {
   const cleanupEvidence = input.cleanupEvidence || input.cleanup || {};
 
   return {
-    issueIdentifier: firstValue(issue.identifier, issue.id, input.issueIdentifier, input.issueId),
+    issueIdentifier: firstValue(
+      workIdentity.identifier,
+      workIdentity.id,
+      input.workIdentifier,
+      input.workId,
+      issue.identifier,
+      issue.id,
+      input.issueIdentifier,
+      input.issueId,
+    ),
     owner: firstValue(input.owner, input.assignee, issue.owner, issue.assignee, input.ownerAgent, input.ownerUser),
     repo: firstValue(repo.slug, repo.url, repo.name, repo.id, input.repo, input.repository),
     baseBranch: firstValue(git.baseBranch, git.baseRef, input.baseBranch, input.baseRef),
@@ -312,10 +338,15 @@ function issueBranchLifecycleContract() {
   return {
     schemaVersion: ISSUE_BRANCH_LIFECYCLE_SCHEMA_VERSION,
     scope: 'portable-ai-operating-system',
-    trackerPolicy: 'generic-issue-before-branch',
+    trackerPolicy: 'optional-record-only-after-authoritative-closeout',
+    authority: {
+      code: 'git',
+      coordination: 'agent-mail',
+      trackerProjection: 'optional-one-way',
+    },
     branchPolicy: 'issue-named-feature-branch-from-declared-base',
     reviewPolicy: 'local-autoreview-or-equivalent-structured-review-before-merge',
-    closeoutPolicy: 'merge-then-cleanup-then-tracker-close',
+    closeoutPolicy: 'merge-then-cleanup; tracker close is an optional non-authoritative projection',
     states: ISSUE_BRANCH_LIFECYCLE_STATES.map((state) => ({ key: state })),
     transitions: ISSUE_BRANCH_LIFECYCLE_TRANSITIONS.map((transition) => ({ ...transition })),
     metadata: ISSUE_BRANCH_METADATA_REQUIREMENTS.map((requirement) => ({ ...requirement })),
@@ -506,7 +537,12 @@ function evaluateIssueBranchLifecycle(input = {}) {
     schemaVersion: ISSUE_BRANCH_LIFECYCLE_SCHEMA_VERSION,
     currentState,
     mergeEligible,
-    closeoutReady: trackerClosed,
+    closeoutReady: cleanupReady,
+    trackerProjection: {
+      eligible: cleanupReady,
+      recorded: trackerClosed,
+      authority: 'none',
+    },
     missingMetadata: metadataMissing,
     reviewEvidence: review,
     missing: [
@@ -516,12 +552,6 @@ function evaluateIssueBranchLifecycle(input = {}) {
     blockers: review.blockers,
     milestones,
   };
-}
-
-function hasPaperclipEvidence(input = {}) {
-  const evidence = input.checks?.paperclipEvidence || input.paperclipEvidence;
-  return hasIssueLinkage(input)
-    && evidencePassed(evidence, SUBMISSION_GATE_STATUS_POLICIES.paperclip_evidence);
 }
 
 function stageSatisfied(stageKey, input = {}) {
@@ -550,8 +580,6 @@ function stageSatisfied(stageKey, input = {}) {
       }).mergeAllowed;
     case 'pull_request':
       return hasPullRequest(input);
-    case 'paperclip_evidence':
-      return hasPaperclipEvidence(input);
     case 'post_merge_clawsweeper':
       return evidencePassed(
         checks.postMergeClawsweeper,
@@ -571,8 +599,11 @@ function submissionGateContract(options = {}) {
     phase,
     agentScope: 'agent-agnostic',
     personalityScope: 'all-ai-personalities',
-    requiredTracker: 'issue',
-    executionEntrypoint: 'workflow-execution',
+    codeAuthority: 'git',
+    coordinationAuthority: 'agent-mail',
+    trackerProjection: 'optional-one-way-after-authoritative-outcome',
+    workIdentityPolicy: 'git-backed-work-identity-with-optional-historical-tracker-reference',
+    executionEntrypoint: 'supported-git-and-agent-mail-lifecycle',
     branchPolicy: 'issue-named-branch-from-current-main-or-declared-base',
     reviewPolicy: 'clawpatch-before-pr-autoreview-goal-alignment-as-separate-signals',
     equivalentPolicy: 'equivalent-gates-must-document-pre-pr-slice-review-holistic-review-goal-alignment-and-post-merge-audit',

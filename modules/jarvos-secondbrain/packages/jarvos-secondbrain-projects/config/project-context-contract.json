@@ -1,0 +1,10 @@
+{
+  "$schema": "jarvos.project-context/v1",
+  "type": "jarvos.project-context/v1",
+  "purpose": "managed-software-stewardship",
+  "audience": "jarvos-projects",
+  "inputFields": ["findingId", "executionReference", "releaseReference", "visibility"],
+  "capabilityFields": ["type", "purpose", "audience", "destinationSelectors", "allowedVisibilities", "capabilityRevision", "issuedAt", "expiresAt"],
+  "projectionOutcomes": ["projected", "deduped", "denied", "unavailable"],
+  "boundary": "Caller authorization and owner-controlled policy shape one expiring capability. A capability authorizes only its one private/internal destination and an allowed candidate visibility (private, internal, or mixed); each activity receives a derived opaque context key at projection time. This portable package exposes no signing material, activation authorization, private paths, source content, or task state. External or public destinations are publication and are rejected."
+}

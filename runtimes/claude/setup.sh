@@ -4,10 +4,22 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 MCP_SERVER="$ROOT/modules/jarvos-agent-context/scripts/jarvos-mcp.js"
 HOOK_SCRIPT="$ROOT/runtimes/claude/jarvos-session-start-hook.js"
+TURN_HOOK_SCRIPT="$ROOT/runtimes/claude/jarvos-session-turn-hook.js"
 CLAUDE_MD_TEMPLATE="$ROOT/runtimes/claude/templates/CLAUDE.md.template"
 CLAUDE_SETTINGS="${CLAUDE_SETTINGS:-$HOME/.claude/settings.json}"
 CLAUDE_DESKTOP_CONFIG="${CLAUDE_DESKTOP_CONFIG:-$HOME/Library/Application Support/Claude/claude_desktop_config.json}"
 CLAUDE_MD_PATH="${CLAUDE_MD_PATH:-$HOME/.claude/CLAUDE.md}"
+STEWARDSHIP_BRIDGE_COMMAND="${JARVOS_STEWARDSHIP_BRIDGE_COMMAND:-}"
+STEWARDSHIP_CLAUDE_SESSION_MAP_ROOT="${JARVOS_STEWARDSHIP_CLAUDE_SESSION_MAP_ROOT:-}"
+STEWARDSHIP_BRIDGE_PATH="${JARVOS_STEWARDSHIP_BRIDGE_PATH:-}"
+
+# A quiet managed-launcher install supplies reviewed public hook bytes here.
+# Refuse to activate configured managed roots with checkout-resident hooks.
+if [ -n "${JARVOS_MANAGED_REPOSITORIES:-}" ]; then
+  : "${JARVOS_STAGED_PUBLIC_RUNTIME_ROOT:?stage the reviewed launcher tuple before enabling managed repositories}"
+  HOOK_SCRIPT="$JARVOS_STAGED_PUBLIC_RUNTIME_ROOT/runtimes/claude/jarvos-session-start-hook.js"
+  TURN_HOOK_SCRIPT="$JARVOS_STAGED_PUBLIC_RUNTIME_ROOT/runtimes/claude/jarvos-session-turn-hook.js"
+fi
 
 if [ ! -f "$MCP_SERVER" ]; then
   echo "jarvOS MCP server not found: $MCP_SERVER" >&2
@@ -16,6 +28,11 @@ fi
 
 if [ ! -f "$HOOK_SCRIPT" ]; then
   echo "jarvOS Claude hook script not found: $HOOK_SCRIPT" >&2
+  exit 1
+fi
+
+if [ ! -f "$TURN_HOOK_SCRIPT" ]; then
+  echo "jarvOS Claude turn hook script not found: $TURN_HOOK_SCRIPT" >&2
   exit 1
 fi
 
@@ -43,12 +60,11 @@ else
   echo "Claude Code CLI not found on PATH; skipping Claude Code MCP registration." >&2
 fi
 
-node - "$CLAUDE_SETTINGS" "$HOOK_SCRIPT" "$CLAUDE_DESKTOP_CONFIG" "$MCP_SERVER" <<'NODE'
+node - "$CLAUDE_SETTINGS" "$HOOK_SCRIPT" "$TURN_HOOK_SCRIPT" "$CLAUDE_DESKTOP_CONFIG" "$MCP_SERVER" "${JARVOS_STEWARDSHIP_ONLY:-0}" "${JARVOS_MANAGED_HARNESS_ROLLBACK:-0}" "$STEWARDSHIP_BRIDGE_COMMAND" "$STEWARDSHIP_CLAUDE_SESSION_MAP_ROOT" "$STEWARDSHIP_BRIDGE_PATH" <<'NODE'
 const fs = require('fs');
 const path = require('path');
 
-const [settingsPath, hookScript, desktopConfigPath, mcpServer] = process.argv.slice(2);
-const hookCommand = `node ${JSON.stringify(hookScript)}`;
+const [settingsPath, hookScript, turnHookScript, desktopConfigPath, mcpServer, stewardshipOnly, rollback, bridgeCommand, claudeSessionMapRoot, bridgePath] = process.argv.slice(2);
 
 function readJsonFile(filePath, fallback) {
   if (!fs.existsSync(filePath)) return fallback;
@@ -74,25 +90,68 @@ function backupAndWriteJson(filePath, value, label) {
   console.log(`Updated ${label}: ${filePath}`);
 }
 
-function upsertClaudeCodeHook(settings) {
+function shellQuote(value) {
+  return `'${value.replace(/'/g, "'\\\"'\\\"'")}'`;
+}
+
+function privateDirectory(value, name) {
+  if (!path.isAbsolute(value || '')) throw new Error(`${name} must be an absolute path`);
+  const stat = fs.lstatSync(value);
+  const uid = typeof process.getuid === 'function' ? process.getuid() : null;
+  if (stat.isSymbolicLink() || !stat.isDirectory() || (stat.mode & 0o077) !== 0 || (uid !== null && stat.uid !== uid)) {
+    throw new Error(`${name} must be an owner-only directory`);
+  }
+  return fs.realpathSync(value);
+}
+
+function stewardshipBridgeEnvironment() {
+  if (!bridgeCommand && !claudeSessionMapRoot && !bridgePath) return null;
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(bridgeCommand || '')) throw new Error('JARVOS_STEWARDSHIP_BRIDGE_COMMAND must be a bounded executable name');
+  const mapRoot = privateDirectory(claudeSessionMapRoot, 'JARVOS_STEWARDSHIP_CLAUDE_SESSION_MAP_ROOT');
+  const bin = privateDirectory(bridgePath, 'JARVOS_STEWARDSHIP_BRIDGE_PATH');
+  const executable = path.join(bin, bridgeCommand);
+  const stat = fs.lstatSync(executable);
+  if (stat.isSymbolicLink() || !stat.isFile() || (stat.mode & 0o077) !== 0 || (stat.mode & 0o111) === 0) throw new Error('JARVOS_STEWARDSHIP_BRIDGE_PATH must contain an owner-only bridge executable');
+  return { command: bridgeCommand, mapRoot, bin };
+}
+
+function upsertClaudeCodeHook(settings, bridge) {
   const next = { ...settings };
   const hooks = next.hooks && typeof next.hooks === 'object' && !Array.isArray(next.hooks) ? { ...next.hooks } : {};
-  const sessionStart = Array.isArray(hooks.SessionStart) ? [...hooks.SessionStart] : [];
-  const jarvosEntry = {
-    matcher: 'startup',
-    hooks: [
-      {
-        type: 'command',
-        command: hookCommand,
-        timeout: 30,
-      },
-    ],
-  };
 
-  const index = sessionStart.findIndex((entry) => JSON.stringify(entry).includes(hookScript));
-  if (index >= 0) sessionStart[index] = jarvosEntry;
-  else sessionStart.push(jarvosEntry);
-  hooks.SessionStart = sessionStart;
+  function upsert(event, script, entry) {
+    const entries = Array.isArray(hooks[event]) ? [...hooks[event]] : [];
+    const managedHookName = script.split(/[\\/]/).pop();
+    const managedPath = new RegExp(`(?:^|[\\s/'\"])runtimes[\\\\/]claude[\\\\/]${managedHookName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?:$|[\\s'\"])`);
+    const retained = entries.map((candidate) => {
+      if (!Array.isArray(candidate?.hooks)) return candidate;
+      const retainedHooks = candidate.hooks.filter((hook) => typeof hook?.command !== 'string' || !managedPath.test(hook.command));
+      if (retainedHooks.length === candidate.hooks.length) return candidate;
+      return retainedHooks.length ? { ...candidate, hooks: retainedHooks } : null;
+    }).filter(Boolean);
+    if (entry) hooks[event] = [...retained, entry];
+    else if (retained.length) hooks[event] = retained;
+    else delete hooks[event];
+  }
+
+  function commandEntry(script, matcher) {
+    const command = bridge
+      ? `env JARVOS_STEWARDSHIP_BRIDGE_COMMAND=${shellQuote(bridge.command)} JARVOS_STEWARDSHIP_CLAUDE_SESSION_MAP_ROOT=${shellQuote(bridge.mapRoot)} PATH=${shellQuote(bridge.bin)}:\"$PATH\" node ${shellQuote(script)}`
+      : `node ${JSON.stringify(script)}`;
+    const entry = {
+      hooks: [{ type: 'command', command, timeout: 30 }],
+    };
+    if (matcher) entry.matcher = matcher;
+    return entry;
+  }
+
+  if (rollback === '1') {
+    upsert('SessionStart', hookScript, null);
+    upsert('UserPromptSubmit', turnHookScript, null);
+  } else {
+    upsert('SessionStart', hookScript, commandEntry(hookScript, 'startup'));
+    upsert('UserPromptSubmit', turnHookScript, commandEntry(turnHookScript));
+  }
   next.hooks = hooks;
   return next;
 }
@@ -109,8 +168,8 @@ function upsertClaudeDesktopMcp(config) {
   return next;
 }
 
-backupAndWriteJson(settingsPath, upsertClaudeCodeHook(readJsonFile(settingsPath, {})), 'Claude Code settings');
-backupAndWriteJson(desktopConfigPath, upsertClaudeDesktopMcp(readJsonFile(desktopConfigPath, {})), 'Claude Desktop MCP config');
+backupAndWriteJson(settingsPath, upsertClaudeCodeHook(readJsonFile(settingsPath, {}), rollback === '1' ? null : stewardshipBridgeEnvironment()), 'Claude Code settings');
+if (stewardshipOnly !== '1') backupAndWriteJson(desktopConfigPath, upsertClaudeDesktopMcp(readJsonFile(desktopConfigPath, {})), 'Claude Desktop MCP config');
 NODE
 
 if [ "${JARVOS_SKIP_CLAUDE_MD:-0}" = "1" ]; then

@@ -7,6 +7,15 @@ jarvOS product lane, a release lane, a ready execution lane, or manual triage.
 It is intentionally separate from Paperclip so the same shape can be adapted to
 other issue trackers or AI execution systems.
 
+`triageCodingWork` is an assessment, not a tracker lifecycle. It is
+tracker-neutral and does not require Paperclip, create an issue, or make a
+release claim. In the managed-software stewardship profile, Git supplies the
+work facts and authority, Agent Mail supplies live coordination, and Beads is
+the default durable execution ledger. A Beads outage becomes an explicit,
+retryable degraded state rather than a reason to strand Git work. Projects may
+add context, and Paperclip may receive an optional one-way record; neither can
+admit, block, own, or change the core stewardship result.
+
 ## Public Interface
 
 ```js
@@ -140,7 +149,8 @@ cleanliness, submission readiness, merge, or issue close:
 
 - stages always re-run or are authoritatively revalidated through live adapters
 - the orchestrator does **not** synthesize successful skipped-stage evidence
-- terminal close must come from the live tracker/adapter under a current fence
+- terminal close is established by the authoritative Git-backed lifecycle under
+  a current fence; a tracker may receive only an optional one-way projection
 - `verify` independently recomputes the complete-phase submission gate from
   durable stage evidence and ignores any caller-cached `submissionGate.ready`
 - gate input never hardcodes success fields such as `git.clean: true`
@@ -159,21 +169,22 @@ const gate = evaluateSubmissionGate({
     clawpatch: { status: 'passed', artifact: '.clawpatch/runs/latest.json' },
     autoreview: { status: 'recorded', artifact: 'PR review summary' },
     pullRequest: { status: 'created', url: 'https://github.com/owner/repo/pull/1' },
-    paperclipEvidence: { status: 'recorded', issueIdentifier: 'SUP-2138' },
   },
 });
 ```
 
-The submit phase requires issue linkage, issue-named branch hygiene, tests,
-clawpatch, autoreview, pull request evidence, and durable tracker evidence. The
+The submit phase requires the host's Git-backed work identity, issue-named branch hygiene, tests,
+clawpatch, autoreview, and pull request evidence. A Paperclip record is optional
+one-way reference/status projection after the authoritative outcome; it cannot
+admit, block, own, or close out supported work. The
 complete phase adds post-merge clawsweeper evidence or an explicit
 `not_applicable` deferral reason. Accepted statuses are stage-specific:
-`recorded` is valid for autoreview and tracker evidence, but not for required
+`recorded` is valid for autoreview, but not for required
 tests, clawpatch, or pull request creation; `not_applicable` is valid only for
 the post-merge clawsweeper completion stage. Tool responsibilities are
 deliberately non-overlapping: clawpatch is the pre-submit slice reviewer/fix
 loop, autoreview is a separate automated review signal, pull requests are the
-durable code-review surface, Paperclip is the source of truth for evidence, and
+durable code-review surface, the default Beads ledger owns execution evidence, and
 clawsweeper is the post-merge follow-up sweep.
 
 `runtimeCheckoutPreflight(input, options)` returns a separate execution gate for
@@ -252,16 +263,16 @@ work. Release-fit comes from the release-intake adapter. Support/local ops marke
 route operational work away from release lanes. Unrelated markers skip jarvOS
 coding triage entirely.
 
-## Paperclip Adapter
+## Historical/Optional Paperclip Adapter
 
-Paperclip consumes this module through `scripts/lib/jarvos-coding-paperclip.js`.
-That adapter writes the durable `coding-triage` document on issue create/update
-and keeps the historical `release-intake` behavior as a compatibility layer.
+`scripts/lib/jarvos-coding-paperclip.js` is a compatibility adapter for the
+historical Paperclip flow. It may write a `coding-triage` document only after an
+explicit authenticated, committed handoff. It is not a prerequisite for local
+assessment or execution, and it does not replace Projects identity/context or
+the default Beads claim/dependency/evidence lifecycle.
 
-Runtime adapters should compose this with the canonical Paperclip intake/origin
-contract: first create or ensure the Paperclip work with its origin envelope,
-then run checkout preflight before execution. The checkout side of that adapter
-should:
+When that optional adapter is selected, run checkout preflight before execution.
+The checkout side should:
 
 1. Use a dedicated runtime execution checkout, not the shared dev/state checkout.
 2. Fetch the remote and update only with fast-forward semantics.
@@ -284,7 +295,9 @@ before code work can be reported complete.
 
 The required evidence keys are:
 
-- `issue`: durable tracker issue exists before code starts.
+- `workIdentity`: Git-backed work identity exists before code starts. A
+  historical `issue` field is accepted only as compatibility data and does not
+  make its tracker authoritative.
 - `branch`: issue-named feature branch, not `main`, `master`, or detached HEAD.
 - `tests`: focused test/lint/build/smoke output, or an explicit no-test rationale.
 - `clawpatch`: pre-PR clawpatch advisory or a documented kill-switch/intake-only exception.
@@ -296,6 +309,14 @@ required evidence is missing. Use `mode: 'intake-only'` only for routing or
 planning packets that intentionally do not submit code. `clawsweeper` remains a
 post-merge sweep and must not replace pre-submit clawpatch, autoreview, tests,
 or PR evidence.
+
+The supported lifecycle has fixed authority boundaries: Git is code truth and
+Agent Mail provides live coordination. Paperclip is optional record-only
+projection after an authoritative result. Its absence, outage, or supplied
+handoff data cannot change session admission, reconciliation, release
+classification, candidate preparation, supported closeout, ownership, or
+completion. Merge, tag, release, and upstream-submission approval boundaries
+remain unchanged.
 
 ## Continuity Contract
 
@@ -316,7 +337,7 @@ Use `buildLiveArtifactPointer(...)`, `buildSessionCheckpoint(...)`,
 `writeJarvosSessionState(...)` to expose the same shape through MCP, a vault
 handoff note, or another host-local store.
 
-Current Paperclip flow:
+Historical Paperclip compatibility flow (not the default lifecycle):
 
 1. `scripts/paperclip-api.js create` builds the issue payload, asks
    `jarvos-release-intake` for the authoritative release classification, passes

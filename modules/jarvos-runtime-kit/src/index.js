@@ -3,6 +3,7 @@
 const fs = require('fs');
 const path = require('path');
 const harnessDispatch = require('./harness-dispatch.js');
+const stewardshipAdapter = require('./stewardship-adapter.js');
 
 const DEFAULT_AGENT_CONTEXT_MCP = 'modules/jarvos-agent-context/scripts/jarvos-mcp.js';
 const REQUIRED_MCP_TOOL = 'jarvos_hydrate';
@@ -275,6 +276,7 @@ function scaffoldRuntime(runtimeId, outDir) {
 
 module.exports = {
   ...harnessDispatch,
+  ...stewardshipAdapter,
   DEFAULT_AGENT_CONTEXT_MCP,
   HYDRATION_MODES,
   REQUIRED_MCP_TOOL,

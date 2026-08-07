@@ -1,0 +1,37 @@
+{
+  "id": "jarvos-stewardship",
+  "name": "jarvOS Stewardship",
+  "version": "1.0.0",
+  "description": "Injects bounded jarvOS stewardship judgments into the active turn.",
+  "main": "jarvos-next-turn-plugin.js",
+  "hooks": ["agent_turn_prepare"],
+  "contracts": {
+    "tools": ["jarvos_stewardship_answer"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "mappingRoot": {
+        "type": "string",
+        "pattern": "^/"
+      },
+      "toolAllowAddedByJarvos": {
+        "type": "boolean"
+      },
+      "agentToolGrantByJarvos": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "agentId": { "type": "string", "pattern": "^[A-Za-z0-9._-]{1,64}$" },
+          "added": { "type": "boolean" },
+          "createdAgent": { "type": "boolean" },
+          "createdTools": { "type": "boolean" },
+          "createdAlsoAllow": { "type": "boolean" }
+        },
+        "required": ["agentId", "added", "createdAgent", "createdTools", "createdAlsoAllow"]
+      }
+    },
+    "required": ["mappingRoot"]
+  }
+}

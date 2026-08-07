@@ -5,10 +5,84 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { hydrate } = require('../../modules/jarvos-agent-context/src/index.js');
+const {
+  additionalContext,
+  BRIDGE_COMMAND_ENV,
+  hookSessionId,
+  readHookInput,
+  stewardshipAdapter,
+} = require('./jarvos-session-turn-hook.js');
 
 const DEFAULT_MAX_CHARS = 9500;
 const MAX_ALLOWED_CHARS = 10000;
 const LOG_PATH = path.join(os.homedir(), '.claude', 'jarvos-hydration.log');
+const BRIDGE_COMMAND = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+const CLAUDE_SESSION_MAP_ROOT_ENV = 'JARVOS_STEWARDSHIP_CLAUDE_SESSION_MAP_ROOT';
+
+function shellQuote(value) {
+  return `'${value.replace(/'/g, "'\\\"'\\\"'")}'`;
+}
+
+function bridgeDirectory(command, searchPath) {
+  if (typeof searchPath !== 'string') return null;
+  for (const directory of searchPath.split(path.delimiter)) {
+    if (!path.isAbsolute(directory)) continue;
+    const candidate = path.join(directory, command);
+    try {
+      const stat = fs.statSync(candidate);
+      if (stat.isFile() && (stat.mode & 0o111) !== 0) return directory;
+    } catch {
+      // Try the next PATH entry.
+    }
+  }
+  return null;
+}
+
+function persistBridgeEnvironment(options = {}) {
+  const env = options.env || process.env;
+  const envFile = env.CLAUDE_ENV_FILE;
+  const command = env[BRIDGE_COMMAND_ENV];
+  const mapRoot = env[CLAUDE_SESSION_MAP_ROOT_ENV];
+  if (!path.isAbsolute(envFile || '') || !BRIDGE_COMMAND.test(command || '') || !path.isAbsolute(mapRoot || '')) return false;
+
+  let stat;
+  try {
+    stat = fs.statSync(envFile);
+  } catch {
+    return false;
+  }
+  const uid = typeof process.getuid === 'function' ? process.getuid() : null;
+  if (!stat.isFile() || uid === null || stat.uid !== uid || (stat.mode & 0o077) !== 0) return false;
+  const directory = bridgeDirectory(command, env.PATH);
+  if (!directory) return false;
+
+  const lines = [
+    `export ${BRIDGE_COMMAND_ENV}=${shellQuote(command)}`,
+    `export ${CLAUDE_SESSION_MAP_ROOT_ENV}=${shellQuote(mapRoot)}`,
+    `export PATH=${shellQuote(directory)}:\"$PATH\"`,
+  ];
+  try {
+    const current = fs.readFileSync(envFile, 'utf8');
+    const missing = lines.filter((line) => !current.split(/\n/).includes(line));
+    if (missing.length) fs.appendFileSync(envFile, `${current.endsWith('\n') || current.length === 0 ? '' : '\n'}${missing.join('\n')}\n`, 'utf8');
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function emitLocalChangeInvalidation() {
+  // Session hydration must fail open; the producer is only a promptness hint.
+  try {
+    const producer = path.resolve(__dirname, '../../../../scripts/jarvos-local-change-event.js');
+    if (!fs.existsSync(producer)) return;
+    require('node:child_process').spawn(process.execPath, [producer, '--producer=runtime-session-entry', `--repo=${process.cwd()}`], {
+      detached: true, stdio: 'ignore',
+    }).unref();
+  } catch {
+    // Reconciliation reports missing/broken producer health separately.
+  }
+}
 
 function writeJson(value) {
   process.stdout.write(`${JSON.stringify(value)}\n`);
@@ -35,17 +109,34 @@ function hydrationMaxChars() {
   return Math.min(parsed, MAX_ALLOWED_CHARS);
 }
 
-async function main() {
+function stewardshipContext(options = {}) {
+  const input = stewardshipAdapter.nextTurnInput(options);
+  return input.pendingInSessionInput && input.nextTurnInput ? additionalContext(input) : '';
+}
+
+async function main(hookInput = readHookInput()) {
   try {
-    const result = await hydrate({ maxChars: hydrationMaxChars() });
-    if (!result.markdown || !result.markdown.trim()) {
+    persistBridgeEnvironment();
+    const bridgeOptions = { sessionId: hookSessionId(hookInput) };
+    stewardshipAdapter.startOrResume(bridgeOptions);
+    emitLocalChangeInvalidation();
+    const judgment = stewardshipContext(bridgeOptions);
+    let hydration = '';
+    try {
+      const result = await hydrate({ maxChars: hydrationMaxChars() });
+      hydration = result.markdown;
+    } catch (error) {
+      logFailure(error);
+    }
+    const context = [judgment, hydration].filter((value) => typeof value === 'string' && value.trim()).join('\n\n');
+    if (!context) {
       writeJson({});
       return;
     }
     writeJson({
       hookSpecificOutput: {
         hookEventName: 'SessionStart',
-        additionalContext: result.markdown,
+        additionalContext: context,
       },
       suppressOutput: true,
     });
@@ -55,7 +146,11 @@ async function main() {
   }
 }
 
-main().catch((error) => {
-  logFailure(error);
-  writeJson({});
-});
+if (require.main === module) {
+  main().catch((error) => {
+    logFailure(error);
+    writeJson({});
+  });
+}
+
+module.exports = { CLAUDE_SESSION_MAP_ROOT_ENV, hydrationMaxChars, main, persistBridgeEnvironment, stewardshipAdapter, stewardshipContext };

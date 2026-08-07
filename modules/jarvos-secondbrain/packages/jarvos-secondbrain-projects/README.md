@@ -63,3 +63,22 @@ truth; edits to it are overwritten.
 This package does not talk to any issue tracker. Comparing projects against
 tracker state — whether a tracked project has a definition of done, whether the
 goals still match — is a separate concern built on top of this one.
+
+## Stewardship project-context capability
+
+`src/project-context.js` also defines the portable `jarvos.project-context/v1`
+contract used to authorize bounded stewardship context projection into Projects.
+It is a context-only port, not a project or task ledger: a caller-authorized,
+unsigned capability exposes one private/internal destination selector, permitted
+candidate visibility (`private`, `internal`, or `mixed`), revision, and expiry
+only. Each projected activity receives its opaque correlation key at the
+projection boundary.
+
+The caller supplies the exact input identity (`findingId`, `executionReference`,
+`releaseReference`, and `visibility`) only at projection time. The package hashes
+it into a correlation key and never serializes those source values into the
+capability. A caller that is not authorized receives only `{ status: 'denied' }`,
+so absence and denial do not enumerate destinations. The owner-only host policy
+binds the runtime admission boundary; this package contains no private key,
+local path, source content, task status, activation state, or signing path.
+External/public destinations are publication and are rejected.

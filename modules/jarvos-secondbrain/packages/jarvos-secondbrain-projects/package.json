@@ -23,6 +23,7 @@
   },
   "exports": {
     ".": "./src/projects.js",
+    "./project-context": "./src/project-context.js",
     "./cli": "./src/projects-cli.js"
   }
 }

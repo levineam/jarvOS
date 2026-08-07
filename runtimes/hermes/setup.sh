@@ -16,6 +16,81 @@ WORKSPACE_INPUT="${1:-$REPO_ROOT}"
 mkdir -p "$WORKSPACE_INPUT"
 WORKSPACE="$(cd "$WORKSPACE_INPUT" && pwd)"
 
+# The launcher calls this narrow mode to install only the staged hook and its
+# exact consent.  Do not run normal workspace onboarding from this path.
+if [ "${JARVOS_STEWARDSHIP_ONLY:-0}" = "1" ] && [ "${JARVOS_MANAGED_HARNESS_ROLLBACK:-0}" != "1" ]; then
+  : "${JARVOS_STAGED_PUBLIC_RUNTIME_ROOT:?the staged public runtime root is required}"
+  HERMES_CONFIG="${HERMES_CONFIG:-$HOME/.hermes/config.yaml}"
+  python3 - "$HERMES_CONFIG" "$HOME/.hermes/shell-hooks-allowlist.json" "$JARVOS_STAGED_PUBLIC_RUNTIME_ROOT/runtimes/hermes/jarvos-pre-llm-hook.js" <<'PY'
+import datetime, json, os, shutil, stat, sys, tempfile, yaml
+config_path, allowlist_path, command = sys.argv[1:]
+def atomic(path, data, mode):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    if os.path.exists(path):
+        with open(path, encoding='utf-8') as source:
+            if source.read() == data: return
+        stamp = datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%d%H%M%S%f')
+        shutil.copy2(path, path + '.bak-jarvos-stewardship-' + stamp)
+    fd, temp = tempfile.mkstemp(prefix='.' + os.path.basename(path) + '.', dir=os.path.dirname(path))
+    with os.fdopen(fd, 'w', encoding='utf-8') as target: target.write(data); target.flush(); os.fsync(target.fileno())
+    os.chmod(temp, mode); os.replace(temp, path)
+if not os.path.isfile(command) or os.path.islink(command): raise SystemExit('staged Hermes hook is missing or unsafe')
+config = {}
+if os.path.exists(config_path):
+    with open(config_path, encoding='utf-8') as source: config = yaml.safe_load(source) or {}
+hooks = config.setdefault('hooks', {}); entries = hooks.setdefault('pre_llm_call', [])
+entries[:] = [item for item in entries if not (isinstance(item, dict) and os.path.basename(str(item.get('command') or '')) == 'jarvos-pre-llm-hook.js')]
+entries.append({'command': command, 'timeout': 5})
+atomic(config_path, yaml.safe_dump(config, sort_keys=False), stat.S_IMODE(os.stat(config_path).st_mode) if os.path.exists(config_path) else 0o600)
+allowlist = {'approvals': []}
+if os.path.exists(allowlist_path):
+    with open(allowlist_path, encoding='utf-8') as source: allowlist = json.load(source)
+if not isinstance(allowlist, dict): raise SystemExit('invalid Hermes shell-hook allowlist')
+allowlist.setdefault('approvals', [])
+existing_approval = next((item for item in allowlist['approvals'] if isinstance(item, dict) and item.get('event') == 'pre_llm_call' and item.get('command') == command), None)
+allowlist['approvals'] = [item for item in allowlist['approvals'] if not (isinstance(item, dict) and item.get('event') == 'pre_llm_call' and os.path.basename(str(item.get('command') or '')) == 'jarvos-pre-llm-hook.js')]
+allowlist['approvals'].append(existing_approval or {'event': 'pre_llm_call', 'command': command, 'approved_at': datetime.datetime.now(datetime.timezone.utc).isoformat().replace('+00:00', 'Z'), 'script_mtime_at_approval': datetime.datetime.fromtimestamp(os.path.getmtime(command), datetime.timezone.utc).isoformat().replace('+00:00', 'Z')})
+atomic(allowlist_path, json.dumps(allowlist, indent=2) + '\n', stat.S_IMODE(os.stat(allowlist_path).st_mode) if os.path.exists(allowlist_path) else 0o600)
+PY
+  echo "Installed the staged jarvOS Hermes stewardship hook and exact consent record."
+  exit 0
+fi
+
+if [ "${JARVOS_MANAGED_HARNESS_ROLLBACK:-0}" = "1" ]; then
+  : "${JARVOS_STAGED_PUBLIC_RUNTIME_ROOT:?the staged public runtime root is required for rollback}"
+  HERMES_CONFIG="${HERMES_CONFIG:-$HOME/.hermes/config.yaml}"
+  python3 - "$HERMES_CONFIG" "$HOME/.hermes/shell-hooks-allowlist.json" "$JARVOS_STAGED_PUBLIC_RUNTIME_ROOT/runtimes/hermes/jarvos-pre-llm-hook.js" <<'PY'
+import datetime, json, os, shutil, stat, sys, tempfile, yaml
+config_path, allowlist_path, command = sys.argv[1:]
+def atomic(path, data, mode):
+    if os.path.exists(path):
+        with open(path, encoding='utf-8') as source:
+            if source.read() == data: return
+        stamp = datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%d%H%M%S%f')
+        shutil.copy2(path, path + '.bak-jarvos-stewardship-' + stamp)
+    fd, temp = tempfile.mkstemp(prefix='.' + os.path.basename(path) + '.', dir=os.path.dirname(path))
+    with os.fdopen(fd, 'w', encoding='utf-8') as target: target.write(data); target.flush(); os.fsync(target.fileno())
+    os.chmod(temp, mode); os.replace(temp, path)
+if os.path.exists(config_path):
+    with open(config_path, encoding='utf-8') as source: config = yaml.safe_load(source) or {}
+    hooks = config.get('hooks') or {}; entries = hooks.get('pre_llm_call') or []
+    kept = [item for item in entries if not (isinstance(item, dict) and os.path.basename(str(item.get('command') or '')) == 'jarvos-pre-llm-hook.js')]
+    if len(kept) != len(entries):
+        hooks['pre_llm_call'] = kept; config['hooks'] = hooks
+        atomic(config_path, yaml.safe_dump(config, sort_keys=False), stat.S_IMODE(os.stat(config_path).st_mode))
+if os.path.exists(allowlist_path):
+    with open(allowlist_path, encoding='utf-8') as source: allowlist = json.load(source)
+    approvals = allowlist.get('approvals') if isinstance(allowlist, dict) else None
+    if isinstance(approvals, list):
+        kept = [item for item in approvals if not (isinstance(item, dict) and item.get('event') == 'pre_llm_call' and os.path.basename(str(item.get('command') or '')) == 'jarvos-pre-llm-hook.js')]
+        if len(kept) != len(approvals):
+            allowlist['approvals'] = kept
+            atomic(allowlist_path, json.dumps(allowlist, indent=2) + '\n', stat.S_IMODE(os.stat(allowlist_path).st_mode))
+PY
+  echo "Removed only the staged jarvOS Hermes stewardship hook and consent record."
+  exit 0
+fi
+
 echo "┌─────────────────────────────────────────────────┐"
 echo "│            jarvOS — Hermes Setup                 │"
 echo "│     Personal AI Operating System                 │"
@@ -23,6 +98,8 @@ echo "└───────────────────────�
 echo ""
 echo "  Source:     $REPO_ROOT"
 echo "  Workspace:  $WORKSPACE"
+echo ""
+echo "  i Managed-launcher activation requires explicit managed repository roots and a staged private runtime tuple."
 echo ""
 
 # ── Dependency checks ──

@@ -12,7 +12,8 @@ From the jarvOS repo root:
 ```
 
 The script registers a local stdio MCP server named `jarvos`, enables a Codex
-`SessionStart` hook in `~/.codex/config.toml`, backs up the config before any
+`SessionStart` hook in `~/.codex/config.toml` for both fresh and resumed
+sessions, backs up the config before any
 write, and persists the hook's current trusted hash through Codex's app-server
 config path so the hook is runnable in Codex app Local sessions.
 
@@ -64,6 +65,17 @@ It runs `runtimes/codex/jarvos-session-start-hook.js`, which emits
 `hookSpecificOutput.additionalContext` for `SessionStart`. Hook failures are
 logged to `~/.codex/jarvos-hydration.log` and fail open with an empty hook
 result so Codex startup is not blocked.
+
+When managed stewardship supplies both
+`JARVOS_STEWARDSHIP_BRIDGE_COMMAND` and
+`JARVOS_STEWARDSHIP_CODEX_SESSION_MAP_ROOT`, setup persists those
+session-neutral inputs in
+Codex's shell environment policy. This lets the session hook display a
+validated, bounded pending judgment and lets the in-session agent run the
+listed bridge answer command without locating private runtime state. The
+private bridge resolves its context by the current `CODEX_THREAD_ID`; setup
+never persists a session-specific context path. Setup does not print either
+value, and rollback removes only these two entries.
 
 ## Available Tools
 
