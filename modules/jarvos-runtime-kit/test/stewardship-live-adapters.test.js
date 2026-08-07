@@ -525,6 +525,86 @@ test('Claude setup merges both jarvOS lifecycle hooks without replacing user hoo
     assert.doesNotMatch(second, new RegExp(`${ROOT.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}/runtimes/claude/jarvos-session`));
     assert.equal(fs.readdirSync(temp).filter((name) => name.startsWith('settings.json.bak-jarvos-')).length, 1);
     assert.equal(fs.existsSync(desktop), false);
+    runSetup(script, { ...env, JARVOS_MANAGED_HARNESS_ROLLBACK: '1' });
+    const rolledBack = JSON.parse(fs.readFileSync(settings, 'utf8'));
+    assert.equal(rolledBack.hooks.SessionStart.length, 1);
+    assert.equal(rolledBack.hooks.UserPromptSubmit.length, 1);
+    assert.match(JSON.stringify(rolledBack), /user-session-start/);
+    assert.match(JSON.stringify(rolledBack), /user-prompt-submit/);
+    assert.doesNotMatch(JSON.stringify(rolledBack), /jarvos-session-(?:start|turn)-hook\.js/);
+  } finally {
+    fs.rmSync(temp, { recursive: true, force: true });
+  }
+});
+
+test('Claude setup injects a private bridge command environment without retaining a context-file path', () => {
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-claude-bridge-setup-'));
+  const settings = path.join(temp, 'settings.json'); const desktop = path.join(temp, 'desktop.json');
+  const bin = path.join(temp, 'bridge-bin'); const mapRoot = path.join(temp, 'claude-map'); const contextFile = path.join(temp, 'private-context.json');
+  try {
+    fs.mkdirSync(bin, { mode: 0o700 }); fs.chmodSync(bin, 0o700);
+    fs.mkdirSync(mapRoot, { mode: 0o700 }); fs.chmodSync(mapRoot, 0o700);
+    fs.writeFileSync(contextFile, '{"private":"context"}\n', { mode: 0o600 }); fs.chmodSync(contextFile, 0o600);
+    const bridge = path.join(bin, 'jarvos-stewardship-bridge');
+    fs.writeFileSync(bridge, [
+      '#!/usr/bin/env sh',
+      'state=none',
+      '[ "$JARVOS_STEWARDSHIP_BRIDGE_COMMAND" = "jarvos-stewardship-bridge" ] && state=command',
+      `[ "$JARVOS_STEWARDSHIP_CLAUDE_SESSION_MAP_ROOT" = ${JSON.stringify(mapRoot)} ] && state=map`,
+      '[ "$JARVOS_STEWARDSHIP_CLAUDE_SESSION_ID" = "claude-session-42" ] && state=session',
+      '[ "$state" = "session" ] && state=ready',
+      'if [ "$1" = "nextTurnInput" ]; then',
+      "  printf '%s\\n' \"{\\\"available\\\":true,\\\"pendingInSessionInput\\\":true,\\\"prompt\\\":\\\"Bridge configuration $state.\\\",\\\"choices\\\":[\\\"Wait\\\",\\\"Prepare a dry run\\\"],\\\"default\\\":\\\"Wait\\\",\\\"correlation\\\":\\\"configured-42\\\"}\"",
+      'else',
+      "  printf '%s\\n' '{\"available\":true,\"pendingInSessionInput\":false}'",
+      'fi',
+      '',
+    ].join('\n'), { mode: 0o700 });
+    fs.chmodSync(bridge, 0o700);
+    const env = {
+      ...process.env, HOME: path.join(temp, 'home'), CLAUDE_SETTINGS: settings, CLAUDE_DESKTOP_CONFIG: desktop,
+      JARVOS_SKIP_CLAUDE_CODE_MCP: '1', JARVOS_SKIP_CLAUDE_MD: '1', JARVOS_STEWARDSHIP_ONLY: '1',
+      JARVOS_STEWARDSHIP_BRIDGE_COMMAND: 'jarvos-stewardship-bridge',
+      JARVOS_STEWARDSHIP_CLAUDE_SESSION_MAP_ROOT: mapRoot, JARVOS_STEWARDSHIP_BRIDGE_PATH: bin,
+    };
+    runSetup(path.join(ROOT, 'runtimes', 'claude', 'setup.sh'), env);
+    const configured = JSON.parse(fs.readFileSync(settings, 'utf8'));
+    const command = configured.hooks.SessionStart[0].hooks[0].command;
+    const turnCommand = configured.hooks.UserPromptSubmit[0].hooks[0].command;
+    assert.match(command, /JARVOS_STEWARDSHIP_BRIDGE_COMMAND='jarvos-stewardship-bridge'/);
+    assert.match(turnCommand, /JARVOS_STEWARDSHIP_BRIDGE_COMMAND='jarvos-stewardship-bridge'/);
+    assert.match(command, new RegExp(mapRoot.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+    assert.match(command, new RegExp(bin.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+    assert.doesNotMatch(JSON.stringify(configured), new RegExp(contextFile.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+
+    const result = spawnSync('/bin/sh', ['-c', command], {
+      cwd: ROOT, encoding: 'utf8', input: JSON.stringify({ session_id: 'claude-session-42', hook_event_name: 'SessionStart' }),
+      env: { PATH: process.env.PATH || '', HOME: path.join(temp, 'clean-home') },
+    });
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+    const output = JSON.parse(result.stdout);
+    assert.match(output.hookSpecificOutput.additionalContext, /Bridge configuration ready\./);
+    assert.doesNotMatch(JSON.stringify(output), new RegExp(contextFile.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+  } finally {
+    fs.rmSync(temp, { recursive: true, force: true });
+  }
+});
+
+test('Claude setup rollback removes only the managed command from a mixed hook entry', () => {
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-claude-hook-rollback-'));
+  const settings = path.join(temp, 'settings.json'); const desktop = path.join(temp, 'desktop.json');
+  const userCommand = 'node "/user/hooks/jarvos-session-start-hook.js"';
+  try {
+    fs.writeFileSync(settings, `${JSON.stringify({ hooks: { SessionStart: [{ matcher: 'startup', hooks: [
+      { type: 'command', command: userCommand },
+      { type: 'command', command: 'node "/old/stage/runtimes/claude/jarvos-session-start-hook.js"' },
+    ] }] } }, null, 2)}\n`);
+    const env = { ...process.env, HOME: path.join(temp, 'home'), CLAUDE_SETTINGS: settings, CLAUDE_DESKTOP_CONFIG: desktop, JARVOS_SKIP_CLAUDE_CODE_MCP: '1', JARVOS_SKIP_CLAUDE_MD: '1', JARVOS_STEWARDSHIP_ONLY: '1' };
+    const script = path.join(ROOT, 'runtimes', 'claude', 'setup.sh');
+    runSetup(script, env);
+    runSetup(script, { ...env, JARVOS_MANAGED_HARNESS_ROLLBACK: '1' });
+    const rolledBack = JSON.parse(fs.readFileSync(settings, 'utf8'));
+    assert.deepEqual(rolledBack.hooks.SessionStart, [{ matcher: 'startup', hooks: [{ type: 'command', command: userCommand }] }]);
   } finally {
     fs.rmSync(temp, { recursive: true, force: true });
   }
