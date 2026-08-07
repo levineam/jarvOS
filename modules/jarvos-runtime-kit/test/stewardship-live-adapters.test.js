@@ -291,6 +291,7 @@ test('OpenClaw and Hermes package bounded per-turn stewardship bridge artifacts 
   const manifest = JSON.parse(fs.readFileSync(path.join(ROOT, 'runtimes', 'openclaw', 'openclaw.plugin.json'), 'utf8'));
   const packageJson = JSON.parse(fs.readFileSync(path.join(ROOT, 'runtimes', 'openclaw', 'package.json'), 'utf8'));
   assert.equal(manifest.id, 'jarvos-stewardship');
+  assert.deepEqual(manifest.contracts, { tools: ['jarvos_stewardship_answer'] });
   assert.deepEqual(manifest.configSchema, {
     type: 'object', additionalProperties: false,
     properties: { mappingRoot: { type: 'string', pattern: '^/' } }, required: ['mappingRoot'],

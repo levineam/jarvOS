@@ -5,6 +5,9 @@
   "description": "Injects bounded jarvOS stewardship judgments into the active turn.",
   "main": "jarvos-next-turn-plugin.js",
   "hooks": ["before_prompt_build"],
+  "contracts": {
+    "tools": ["jarvos_stewardship_answer"]
+  },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
