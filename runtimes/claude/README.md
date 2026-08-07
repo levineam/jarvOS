@@ -44,6 +44,11 @@ Claude Code caps hook-injected context at 10,000 characters. This adapter uses a
 `~/.claude/jarvos-hydration.log` and fail open with an empty hook result so
 Claude startup is not blocked.
 
+When the optional stewardship bridge is enabled by the managed launcher, Claude
+hooks resolve a pending judgment from the hook's `session_id` and an owner-only,
+hashed session map. The durable Claude hook environment retains only the bridge
+command and a neutral map root—never the private context-file path.
+
 ## Claude Code CLAUDE.md bootstrap
 
 Claude Code loads `~/.claude/CLAUDE.md` into every session as the user-scope

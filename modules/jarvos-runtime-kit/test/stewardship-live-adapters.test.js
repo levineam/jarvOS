@@ -189,12 +189,14 @@ test('Codex SessionStart exposes a pending public judgment for both fresh and re
   }
 });
 
-test('Claude SessionStart persists only a validated bridge command for later hooks', () => {
+test('Claude SessionStart persists only a validated bridge command and neutral map root for later hooks', () => {
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-claude-env-file-'));
   const bin = path.join(temp, 'bin');
+  const mappingRoot = path.join(temp, 'claude-session-map');
   const envFile = path.join(temp, 'claude.env');
   try {
     fs.mkdirSync(bin, { recursive: true });
+    fs.mkdirSync(mappingRoot, { mode: 0o700 });
     const bridge = path.join(bin, 'jarvos-stewardship-bridge');
     fs.writeFileSync(bridge, '#!/usr/bin/env sh\nexit 0\n', { mode: 0o700 });
     fs.chmodSync(bridge, 0o700);
@@ -204,12 +206,14 @@ test('Claude SessionStart persists only a validated bridge command for later hoo
     const env = {
       CLAUDE_ENV_FILE: envFile,
       JARVOS_STEWARDSHIP_BRIDGE_COMMAND: 'jarvos-stewardship-bridge',
+      JARVOS_STEWARDSHIP_CLAUDE_SESSION_MAP_ROOT: mappingRoot,
       PATH: bin,
     };
     assert.equal(hook.persistBridgeEnvironment({ env }), true);
     const expected = [
       'export UNRELATED=value',
       "export JARVOS_STEWARDSHIP_BRIDGE_COMMAND='jarvos-stewardship-bridge'",
+      `export JARVOS_STEWARDSHIP_CLAUDE_SESSION_MAP_ROOT='${mappingRoot}'`,
       `export PATH='${bin}':\"$PATH\"`,
       '',
     ].join('\n');
@@ -217,6 +221,7 @@ test('Claude SessionStart persists only a validated bridge command for later hoo
     assert.equal(hook.persistBridgeEnvironment({ env }), true);
     assert.equal(fs.readFileSync(envFile, 'utf8'), expected);
     assert.equal(hook.persistBridgeEnvironment({ env: { ...env, JARVOS_STEWARDSHIP_BRIDGE_COMMAND: '../invalid' } }), false);
+    assert.equal(hook.persistBridgeEnvironment({ env: { ...env, JARVOS_STEWARDSHIP_CLAUDE_SESSION_MAP_ROOT: 'relative-map' } }), false);
     assert.equal(fs.readFileSync(envFile, 'utf8'), expected);
     fs.chmodSync(envFile, 0o644);
     assert.equal(hook.persistBridgeEnvironment({ env }), false);

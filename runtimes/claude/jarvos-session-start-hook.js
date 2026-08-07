@@ -5,12 +5,19 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { hydrate } = require('../../modules/jarvos-agent-context/src/index.js');
-const { additionalContext, BRIDGE_COMMAND_ENV, stewardshipAdapter } = require('./jarvos-session-turn-hook.js');
+const {
+  additionalContext,
+  BRIDGE_COMMAND_ENV,
+  hookSessionId,
+  readHookInput,
+  stewardshipAdapter,
+} = require('./jarvos-session-turn-hook.js');
 
 const DEFAULT_MAX_CHARS = 9500;
 const MAX_ALLOWED_CHARS = 10000;
 const LOG_PATH = path.join(os.homedir(), '.claude', 'jarvos-hydration.log');
 const BRIDGE_COMMAND = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+const CLAUDE_SESSION_MAP_ROOT_ENV = 'JARVOS_STEWARDSHIP_CLAUDE_SESSION_MAP_ROOT';
 
 function shellQuote(value) {
   return `'${value.replace(/'/g, "'\\\"'\\\"'")}'`;
@@ -35,7 +42,8 @@ function persistBridgeEnvironment(options = {}) {
   const env = options.env || process.env;
   const envFile = env.CLAUDE_ENV_FILE;
   const command = env[BRIDGE_COMMAND_ENV];
-  if (!path.isAbsolute(envFile || '') || !BRIDGE_COMMAND.test(command || '')) return false;
+  const mapRoot = env[CLAUDE_SESSION_MAP_ROOT_ENV];
+  if (!path.isAbsolute(envFile || '') || !BRIDGE_COMMAND.test(command || '') || !path.isAbsolute(mapRoot || '')) return false;
 
   let stat;
   try {
@@ -50,6 +58,7 @@ function persistBridgeEnvironment(options = {}) {
 
   const lines = [
     `export ${BRIDGE_COMMAND_ENV}=${shellQuote(command)}`,
+    `export ${CLAUDE_SESSION_MAP_ROOT_ENV}=${shellQuote(mapRoot)}`,
     `export PATH=${shellQuote(directory)}:\"$PATH\"`,
   ];
   try {
@@ -105,12 +114,13 @@ function stewardshipContext(options = {}) {
   return input.pendingInSessionInput && input.nextTurnInput ? additionalContext(input) : '';
 }
 
-async function main() {
+async function main(hookInput = readHookInput()) {
   try {
     persistBridgeEnvironment();
-    stewardshipAdapter.startOrResume();
+    const bridgeOptions = { sessionId: hookSessionId(hookInput) };
+    stewardshipAdapter.startOrResume(bridgeOptions);
     emitLocalChangeInvalidation();
-    const judgment = stewardshipContext();
+    const judgment = stewardshipContext(bridgeOptions);
     let hydration = '';
     try {
       const result = await hydrate({ maxChars: hydrationMaxChars() });
@@ -143,4 +153,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { hydrationMaxChars, main, persistBridgeEnvironment, stewardshipAdapter, stewardshipContext };
+module.exports = { CLAUDE_SESSION_MAP_ROOT_ENV, hydrationMaxChars, main, persistBridgeEnvironment, stewardshipAdapter, stewardshipContext };
