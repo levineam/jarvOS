@@ -48,9 +48,9 @@ function writeOwnership(value) {
   fs.chmodSync(temporary, 0o600); fs.renameSync(temporary, ownershipPath);
 }
 let ownership = readOwnership();
-if (rollback !== '1' && !ownership) {
+const ownershipCreated = rollback !== '1' && !ownership;
+if (ownershipCreated) {
   ownership = { schemaVersion: 1, toolAllowAdded: Array.isArray(tools?.allow) && !tools.allow.includes('jarvos_stewardship_answer') };
-  writeOwnership(ownership);
 }
 if (rollback === '1') {
   if (plugins.load && Array.isArray(plugins.load.paths)) plugins.load.paths = plugins.load.paths.filter((value) => value !== pluginPath);
@@ -81,6 +81,7 @@ if (next !== original) {
   const temp = path.join(path.dirname(configPath), `.${path.basename(configPath)}.${process.pid}.${Date.now()}`);
   fs.writeFileSync(temp, next, { mode }); fs.chmodSync(temp, mode); fs.renameSync(temp, configPath);
 }
+if (ownershipCreated) writeOwnership(ownership);
 if (rollback === '1' && ownership && fs.existsSync(ownershipPath)) fs.unlinkSync(ownershipPath);
 NODE
   if [ "${JARVOS_MANAGED_HARNESS_ROLLBACK:-0}" = "1" ]; then

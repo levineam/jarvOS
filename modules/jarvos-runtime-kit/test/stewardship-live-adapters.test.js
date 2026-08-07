@@ -387,6 +387,18 @@ test('OpenClaw rollback preserves a stewardship tool grant that predated jarvOS 
   } finally { fs.rmSync(temp, { recursive: true, force: true }); }
 });
 
+test('OpenClaw setup does not claim permission ownership when its configuration update fails', () => {
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-openclaw-stewardship-config-failure-'));
+  const configRoot = path.join(temp, 'config'); const config = path.join(configRoot, 'openclaw.json'); const staged = path.join(temp, 'stage'); const state = path.join(temp, 'state');
+  try {
+    fs.mkdirSync(configRoot, { recursive: true }); fs.mkdirSync(path.join(staged, 'runtimes', 'openclaw'), { recursive: true });
+    fs.writeFileSync(config, `${JSON.stringify({ tools: { allow: ['read'] } }, null, 2)}\n`); fs.chmodSync(configRoot, 0o500);
+    const env = { ...process.env, HOME: path.join(temp, 'home'), OPENCLAW_CONFIG: config, JARVOS_STEWARDSHIP_ONLY: '1', JARVOS_MANAGED_REPOSITORIES: '/managed/repo', JARVOS_STAGED_PUBLIC_RUNTIME_ROOT: staged, JARVOS_MANAGED_HARNESS_STATE_ROOT: state };
+    const result = runSetupResult(path.join(ROOT, 'runtimes', 'openclaw', 'setup.sh'), env);
+    assert.notEqual(result.status, 0); assert.equal(fs.existsSync(path.join(state, 'openclaw-stewardship-install.json')), false);
+  } finally { fs.chmodSync(configRoot, 0o700); fs.rmSync(temp, { recursive: true, force: true }); }
+});
+
 test('Hermes stewardship-only setup records exact consent idempotently and removes only that consent on rollback', () => {
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-hermes-stewardship-setup-'));
   const home = path.join(temp, 'home'); const config = path.join(temp, 'config.yaml'); const staged = path.join(temp, 'stage'); const hook = path.join(staged, 'runtimes', 'hermes', 'jarvos-pre-llm-hook.js'); const allowlist = path.join(home, '.hermes', 'shell-hooks-allowlist.json');
