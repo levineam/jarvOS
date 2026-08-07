@@ -25,18 +25,38 @@ if [ "${JARVOS_STEWARDSHIP_ONLY:-0}" = "1" ] || [ "${JARVOS_MANAGED_HARNESS_ROLL
   : "${JARVOS_STAGED_PUBLIC_RUNTIME_ROOT:?the staged public runtime root is required}"
   : "${JARVOS_MANAGED_HARNESS_STATE_ROOT:?the managed launcher state root is required}"
   OPENCLAW_CONFIG="${OPENCLAW_CONFIG:-$HOME/.openclaw/openclaw.json}"
-  node - "$OPENCLAW_CONFIG" "$JARVOS_STAGED_PUBLIC_RUNTIME_ROOT/runtimes/openclaw" "$JARVOS_MANAGED_HARNESS_STATE_ROOT/stewardship-bridge/openclaw-sessions" "${JARVOS_MANAGED_HARNESS_ROLLBACK:-0}" <<'NODE'
+  node - "$OPENCLAW_CONFIG" "$JARVOS_STAGED_PUBLIC_RUNTIME_ROOT/runtimes/openclaw" "$JARVOS_MANAGED_HARNESS_STATE_ROOT/stewardship-bridge/openclaw-sessions" "${JARVOS_MANAGED_HARNESS_ROLLBACK:-0}" "$JARVOS_MANAGED_HARNESS_STATE_ROOT" <<'NODE'
 const fs = require('fs'); const path = require('path');
-const [configPath, pluginPath, mappingRoot, rollback] = process.argv.slice(2);
+const [configPath, pluginPath, mappingRoot, rollback, stateRoot] = process.argv.slice(2);
 const original = fs.existsSync(configPath) ? fs.readFileSync(configPath, 'utf8') : '{}\n';
 const config = JSON.parse(original || '{}');
 const plugins = config.plugins && typeof config.plugins === 'object' ? config.plugins : {};
 const tools = config.tools && typeof config.tools === 'object' ? config.tools : null;
+const ownershipPath = path.join(stateRoot, 'openclaw-stewardship-install.json');
+function readOwnership() {
+  if (!fs.existsSync(ownershipPath)) return null;
+  const stat = fs.lstatSync(ownershipPath);
+  if (!stat.isFile() || stat.isSymbolicLink() || (stat.mode & 0o777) !== 0o600 || (typeof process.getuid === 'function' && stat.uid !== process.getuid())) throw new Error('invalid stewardship install receipt');
+  const value = JSON.parse(fs.readFileSync(ownershipPath, 'utf8'));
+  if (value?.schemaVersion !== 1 || typeof value.toolAllowAdded !== 'boolean') throw new Error('invalid stewardship install receipt');
+  return value;
+}
+function writeOwnership(value) {
+  fs.mkdirSync(stateRoot, { recursive: true, mode: 0o700 });
+  const temporary = `${ownershipPath}.${process.pid}.${Date.now()}.tmp`;
+  fs.writeFileSync(temporary, `${JSON.stringify(value)}\n`, { mode: 0o600, flag: 'wx' });
+  fs.chmodSync(temporary, 0o600); fs.renameSync(temporary, ownershipPath);
+}
+let ownership = readOwnership();
+if (rollback !== '1' && !ownership) {
+  ownership = { schemaVersion: 1, toolAllowAdded: Array.isArray(tools?.allow) && !tools.allow.includes('jarvos_stewardship_answer') };
+  writeOwnership(ownership);
+}
 if (rollback === '1') {
   if (plugins.load && Array.isArray(plugins.load.paths)) plugins.load.paths = plugins.load.paths.filter((value) => value !== pluginPath);
   if (Array.isArray(plugins.allow)) plugins.allow = plugins.allow.filter((value) => value !== 'jarvos-stewardship');
   if (plugins.entries && typeof plugins.entries === 'object') delete plugins.entries['jarvos-stewardship'];
-  if (Array.isArray(tools?.allow)) tools.allow = tools.allow.filter((value) => value !== 'jarvos_stewardship_answer');
+  if (ownership?.toolAllowAdded === true && Array.isArray(tools?.allow)) tools.allow = tools.allow.filter((value) => value !== 'jarvos_stewardship_answer');
   config.plugins = plugins;
 } else {
   config.plugins = plugins;
@@ -61,6 +81,7 @@ if (next !== original) {
   const temp = path.join(path.dirname(configPath), `.${path.basename(configPath)}.${process.pid}.${Date.now()}`);
   fs.writeFileSync(temp, next, { mode }); fs.chmodSync(temp, mode); fs.renameSync(temp, configPath);
 }
+if (rollback === '1' && ownership && fs.existsSync(ownershipPath)) fs.unlinkSync(ownershipPath);
 NODE
   if [ "${JARVOS_MANAGED_HARNESS_ROLLBACK:-0}" = "1" ]; then
     echo "Removed only the staged jarvOS OpenClaw stewardship plugin configuration."
