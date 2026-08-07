@@ -43,13 +43,16 @@ function nextTurnContext(event, config, context) {
   } catch (_) { return null; }
 }
 
-function before_prompt_build(event, context) {
-  const prependContext = nextTurnContext(event, context?.pluginConfig, context);
+function before_prompt_build(event, context, config = context?.pluginConfig) {
+  const prependContext = nextTurnContext(event, config, context);
   return prependContext ? { prependContext } : {};
 }
 
 function register(api) {
-  api.on('before_prompt_build', (event, context) => before_prompt_build(event, context), { timeoutMs: 5000 });
+  // OpenClaw supplies extension configuration on the registration API. Typed
+  // hook contexts describe the active turn and do not repeat pluginConfig.
+  const config = api.pluginConfig;
+  api.on('before_prompt_build', (event, context) => before_prompt_build(event, context, config), { timeoutMs: 5000 });
 }
 
 module.exports = register;
