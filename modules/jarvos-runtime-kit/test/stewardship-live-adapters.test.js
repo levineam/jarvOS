@@ -311,7 +311,7 @@ test('OpenClaw and Hermes package bounded per-turn stewardship bridge artifacts 
     assert.equal(hermesResult.status, 0, hermesResult.stderr);
     assert.match(JSON.parse(hermesResult.stdout).context, /Choose a safe next step/);
     const mappings = path.join(temp, 'mappings'); fs.mkdirSync(mappings);
-    const sessionKey = 'agent:session-42';
+    const sessionKey = 'agent:main:explicit:session-42';
     fs.writeFileSync(path.join(mappings, `${createHash('sha256').update(sessionKey).digest('hex')}.json`), `${JSON.stringify({ schemaVersion: 1, contextFile: path.join(temp, 'context.json'), bridgeExecutable: bridge })}\n`, { mode: 0o600 });
     fs.chmodSync(path.join(mappings, `${createHash('sha256').update(sessionKey).digest('hex')}.json`), 0o600);
     const plugin = require(path.join(ROOT, 'runtimes', 'openclaw', 'jarvos-next-turn-plugin.js'));
@@ -319,7 +319,7 @@ test('OpenClaw and Hermes package bounded per-turn stewardship bridge artifacts 
     // context, not the before_prompt_build event. Keep the event shape
     // faithful so this regression proves delivery on a normal agent turn.
     assert.match(plugin.before_prompt_build({ prompt: 'Continue', messages: [] }, { sessionKey, pluginConfig: { mappingRoot: mappings } }).prependContext, /Choose a safe next step/);
-    assert.match(plugin.before_prompt_build({ prompt: 'Continue', messages: [] }, { sessionKey: `agent:main:explicit:${sessionKey}`, pluginConfig: { mappingRoot: mappings } }).prependContext, /Choose a safe next step/);
+    assert.deepEqual(plugin.before_prompt_build({ prompt: 'Continue', messages: [] }, { sessionKey: 'agent:other:explicit:session-42', pluginConfig: { mappingRoot: mappings } }), {});
     assert.deepEqual(plugin.before_prompt_build({ prompt: 'Continue', messages: [] }, { sessionKey: 'unmapped', pluginConfig: { mappingRoot: mappings } }), {});
     const registrations = []; plugin({ on: (...args) => registrations.push(args) });
     assert.equal(registrations.length, 1); assert.equal(registrations[0][0], 'before_prompt_build'); assert.equal(registrations[0][2].timeoutMs, 5000);
