@@ -294,7 +294,17 @@ test('OpenClaw and Hermes package bounded per-turn stewardship bridge artifacts 
   assert.deepEqual(manifest.contracts, { tools: ['jarvos_stewardship_answer'] });
   assert.deepEqual(manifest.configSchema, {
     type: 'object', additionalProperties: false,
-    properties: { mappingRoot: { type: 'string', pattern: '^/' }, toolAllowAddedByJarvos: { type: 'boolean' } }, required: ['mappingRoot'],
+    properties: {
+      mappingRoot: { type: 'string', pattern: '^/' }, toolAllowAddedByJarvos: { type: 'boolean' },
+      agentToolGrantByJarvos: {
+        type: 'object', additionalProperties: false,
+        properties: {
+          agentId: { type: 'string', pattern: '^[A-Za-z0-9._-]{1,64}$' }, added: { type: 'boolean' },
+          createdAgent: { type: 'boolean' }, createdTools: { type: 'boolean' }, createdAlsoAllow: { type: 'boolean' },
+        },
+        required: ['agentId', 'added', 'createdAgent', 'createdTools', 'createdAlsoAllow'],
+      },
+    }, required: ['mappingRoot'],
   });
   assert.deepEqual(packageJson.openclaw.extensions, ['jarvos-next-turn-plugin.js']);
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-stewardship-public-turn-hook-'));
@@ -360,17 +370,19 @@ test('OpenClaw stewardship-only setup preserves unrelated configuration and roll
   const config = path.join(temp, 'openclaw.json'); const staged = path.join(temp, 'stage'); const state = path.join(temp, 'state');
   try {
     fs.mkdirSync(path.join(staged, 'runtimes', 'openclaw'), { recursive: true });
-    fs.writeFileSync(config, `${JSON.stringify({ plugins: { load: { paths: ['/user/plugin', '/old/managed-harness/old/public/runtimes/openclaw'] }, allow: ['unrelated'], entries: { unrelated: { enabled: true } } }, tools: { allow: ['read'] }, unrelated: { keep: true } }, null, 2)}\n`);
+    fs.writeFileSync(config, `${JSON.stringify({ plugins: { load: { paths: ['/user/plugin', '/old/managed-harness/old/public/runtimes/openclaw'] }, allow: ['unrelated'], entries: { unrelated: { enabled: true } } }, tools: { profile: 'coding', allow: ['read'] }, agents: { list: [{ id: 'main', tools: { alsoAllow: ['browser'] } }] }, unrelated: { keep: true } }, null, 2)}\n`);
     const env = { ...process.env, HOME: path.join(temp, 'home'), OPENCLAW_CONFIG: config, JARVOS_STEWARDSHIP_ONLY: '1', JARVOS_MANAGED_REPOSITORIES: '/managed/repo', JARVOS_STAGED_PUBLIC_RUNTIME_ROOT: staged, JARVOS_MANAGED_HARNESS_STATE_ROOT: state };
     const script = path.join(ROOT, 'runtimes', 'openclaw', 'setup.sh');
     runSetup(script, env); const first = fs.readFileSync(config, 'utf8'); runSetup(script, env); assert.equal(fs.readFileSync(config, 'utf8'), first);
     let parsed = JSON.parse(first); assert.deepEqual(parsed.plugins.load.paths, ['/user/plugin', path.join(staged, 'runtimes', 'openclaw')]); assert.equal(parsed.unrelated.keep, true); assert.equal(parsed.plugins.entries.unrelated.enabled, true); assert.equal(parsed.plugins.entries['jarvos-stewardship'].config.mappingRoot, path.join(state, 'stewardship-bridge', 'openclaw-sessions')); assert.deepEqual(parsed.tools.allow, ['read', 'jarvos_stewardship_answer']);
     assert.equal(parsed.plugins.entries['jarvos-stewardship'].config.toolAllowAddedByJarvos, true);
+    assert.deepEqual(parsed.agents.list[0].tools.alsoAllow, ['browser', 'jarvos_stewardship_answer']);
+    assert.deepEqual(parsed.plugins.entries['jarvos-stewardship'].config.agentToolGrantByJarvos, { agentId: 'main', added: true, createdAgent: false, createdTools: false, createdAlsoAllow: false });
     const pluginSchema = JSON.parse(fs.readFileSync(path.join(ROOT, 'runtimes', 'openclaw', 'openclaw.plugin.json'), 'utf8')).configSchema;
     for (const key of Object.keys(parsed.plugins.entries['jarvos-stewardship'].config)) assert.ok(pluginSchema.properties[key], `${key} must be declared in the plugin config schema`);
     assert.equal(pluginSchema.properties.toolAllowAddedByJarvos.type, 'boolean');
     runSetup(script, { ...env, JARVOS_MANAGED_HARNESS_ROLLBACK: '1' }); parsed = JSON.parse(fs.readFileSync(config, 'utf8'));
-    assert.deepEqual(parsed.plugins.load.paths, ['/user/plugin']); assert.deepEqual(parsed.plugins.allow, ['unrelated']); assert.equal(parsed.plugins.entries['jarvos-stewardship'], undefined); assert.equal(parsed.plugins.entries.unrelated.enabled, true); assert.deepEqual(parsed.tools.allow, ['read']);
+    assert.deepEqual(parsed.plugins.load.paths, ['/user/plugin']); assert.deepEqual(parsed.plugins.allow, ['unrelated']); assert.equal(parsed.plugins.entries['jarvos-stewardship'], undefined); assert.equal(parsed.plugins.entries.unrelated.enabled, true); assert.deepEqual(parsed.tools.allow, ['read']); assert.deepEqual(parsed.agents.list[0].tools.alsoAllow, ['browser']);
   } finally { fs.rmSync(temp, { recursive: true, force: true }); }
 });
 
@@ -379,12 +391,12 @@ test('OpenClaw rollback preserves a stewardship tool grant that predated jarvOS 
   const config = path.join(temp, 'openclaw.json'); const staged = path.join(temp, 'stage'); const state = path.join(temp, 'state');
   try {
     fs.mkdirSync(path.join(staged, 'runtimes', 'openclaw'), { recursive: true });
-    fs.writeFileSync(config, `${JSON.stringify({ tools: { allow: ['read', 'jarvos_stewardship_answer'] } }, null, 2)}\n`);
+    fs.writeFileSync(config, `${JSON.stringify({ tools: { profile: 'coding', allow: ['read', 'jarvos_stewardship_answer'] }, agents: { list: [{ id: 'main', tools: { alsoAllow: ['jarvos_stewardship_answer'] } }] } }, null, 2)}\n`);
     const env = { ...process.env, HOME: path.join(temp, 'home'), OPENCLAW_CONFIG: config, JARVOS_STEWARDSHIP_ONLY: '1', JARVOS_MANAGED_REPOSITORIES: '/managed/repo', JARVOS_STAGED_PUBLIC_RUNTIME_ROOT: staged, JARVOS_MANAGED_HARNESS_STATE_ROOT: state };
     const script = path.join(ROOT, 'runtimes', 'openclaw', 'setup.sh');
-    runSetup(script, env); assert.equal(JSON.parse(fs.readFileSync(config, 'utf8')).plugins.entries['jarvos-stewardship'].config.toolAllowAddedByJarvos, false);
+    runSetup(script, env); const installed = JSON.parse(fs.readFileSync(config, 'utf8')); assert.equal(installed.plugins.entries['jarvos-stewardship'].config.toolAllowAddedByJarvos, false); assert.equal(installed.plugins.entries['jarvos-stewardship'].config.agentToolGrantByJarvos.added, false);
     runSetup(script, { ...env, JARVOS_MANAGED_HARNESS_ROLLBACK: '1' });
-    assert.deepEqual(JSON.parse(fs.readFileSync(config, 'utf8')).tools.allow, ['read', 'jarvos_stewardship_answer']);
+    const rolledBack = JSON.parse(fs.readFileSync(config, 'utf8')); assert.deepEqual(rolledBack.tools.allow, ['read', 'jarvos_stewardship_answer']); assert.deepEqual(rolledBack.agents.list[0].tools.alsoAllow, ['jarvos_stewardship_answer']);
   } finally { fs.rmSync(temp, { recursive: true, force: true }); }
 });
 

@@ -37,11 +37,30 @@ const existingToolOwnership = stewardshipEntry?.config?.toolAllowAddedByJarvos;
 const toolAllowAddedByJarvos = typeof existingToolOwnership === 'boolean'
   ? existingToolOwnership
   : Array.isArray(tools?.allow) && !tools.allow.includes('jarvos_stewardship_answer');
+const existingAgentGrant = stewardshipEntry?.config?.agentToolGrantByJarvos;
+let agentToolGrantByJarvos = existingAgentGrant && typeof existingAgentGrant === 'object' ? existingAgentGrant : null;
+const requestedAgentId = process.env.JARVOS_OPENCLAW_AGENT_ID || 'main';
+const targetAgentId = rollback === '1' && typeof agentToolGrantByJarvos?.agentId === 'string' ? agentToolGrantByJarvos.agentId : requestedAgentId;
+if (!/^[A-Za-z0-9._-]{1,64}$/.test(targetAgentId)) throw new Error('invalid stewardship OpenClaw agent id');
+function targetAgent(create) {
+  if (!config.agents || typeof config.agents !== 'object') { if (!create) return null; config.agents = {}; }
+  if (!Array.isArray(config.agents.list)) { if (!create) return null; config.agents.list = []; }
+  let agent = config.agents.list.find((value) => value && typeof value === 'object' && value.id === targetAgentId);
+  if (!agent && create) { agent = { id: targetAgentId }; config.agents.list.push(agent); }
+  return agent;
+}
 if (rollback === '1') {
   if (plugins.load && Array.isArray(plugins.load.paths)) plugins.load.paths = plugins.load.paths.filter((value) => value !== pluginPath);
   if (Array.isArray(plugins.allow)) plugins.allow = plugins.allow.filter((value) => value !== 'jarvos-stewardship');
   if (plugins.entries && typeof plugins.entries === 'object') delete plugins.entries['jarvos-stewardship'];
   if (toolAllowAddedByJarvos && Array.isArray(tools?.allow)) tools.allow = tools.allow.filter((value) => value !== 'jarvos_stewardship_answer');
+  if (agentToolGrantByJarvos?.added === true) {
+    const agent = targetAgent(false);
+    if (agent?.tools && Array.isArray(agent.tools.alsoAllow)) agent.tools.alsoAllow = agent.tools.alsoAllow.filter((value) => value !== 'jarvos_stewardship_answer');
+    if (agentToolGrantByJarvos.createdAlsoAllow === true && agent?.tools?.alsoAllow?.length === 0) delete agent.tools.alsoAllow;
+    if (agentToolGrantByJarvos.createdTools === true && agent?.tools && Object.keys(agent.tools).length === 0) delete agent.tools;
+    if (agentToolGrantByJarvos.createdAgent === true && agent && Object.keys(agent).length === 1 && agent.id === targetAgentId) config.agents.list = config.agents.list.filter((value) => value !== agent);
+  }
   config.plugins = plugins;
 } else {
   config.plugins = plugins;
@@ -51,9 +70,21 @@ if (rollback === '1') {
   if (!plugins.load.paths.includes(pluginPath)) plugins.load.paths.push(pluginPath);
   if (Array.isArray(plugins.allow) && !plugins.allow.includes('jarvos-stewardship')) plugins.allow.push('jarvos-stewardship');
   if (Array.isArray(tools?.allow) && !tools.allow.includes('jarvos_stewardship_answer')) tools.allow.push('jarvos_stewardship_answer');
+  const existingAgent = targetAgent(false);
+  const effectiveProfile = existingAgent?.tools?.profile || tools?.profile;
+  if (effectiveProfile && effectiveProfile !== 'full') {
+    if (!existingAgent) throw new Error(`stewardship OpenClaw agent is not configured: ${targetAgentId}`);
+    const agent = existingAgent; const createdAgent = false;
+    const createdTools = !agent.tools; agent.tools = agent.tools && typeof agent.tools === 'object' ? agent.tools : {};
+    if (Array.isArray(agent.tools.allow)) throw new Error('stewardship requires an additive OpenClaw agent tool policy');
+    const createdAlsoAllow = !Array.isArray(agent.tools.alsoAllow);
+    agent.tools.alsoAllow = Array.isArray(agent.tools.alsoAllow) ? agent.tools.alsoAllow : [];
+    if (!agentToolGrantByJarvos) agentToolGrantByJarvos = { agentId: targetAgentId, added: !agent.tools.alsoAllow.includes('jarvos_stewardship_answer'), createdAgent, createdTools, createdAlsoAllow };
+    if (!agent.tools.alsoAllow.includes('jarvos_stewardship_answer')) agent.tools.alsoAllow.push('jarvos_stewardship_answer');
+  }
   plugins.entries = plugins.entries && typeof plugins.entries === 'object' ? plugins.entries : {};
   const entry = plugins.entries['jarvos-stewardship'] || {};
-  plugins.entries['jarvos-stewardship'] = { ...entry, enabled: true, config: { ...(entry.config || {}), mappingRoot, toolAllowAddedByJarvos }, hooks: { ...(entry.hooks || {}), allowPromptInjection: true } };
+  plugins.entries['jarvos-stewardship'] = { ...entry, enabled: true, config: { ...(entry.config || {}), mappingRoot, toolAllowAddedByJarvos, ...(agentToolGrantByJarvos ? { agentToolGrantByJarvos } : {}) }, hooks: { ...(entry.hooks || {}), allowPromptInjection: true } };
 }
 const next = `${JSON.stringify(config, null, 2)}\n`;
 if (next !== original) {

@@ -18,6 +18,18 @@
       },
       "toolAllowAddedByJarvos": {
         "type": "boolean"
+      },
+      "agentToolGrantByJarvos": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "agentId": { "type": "string", "pattern": "^[A-Za-z0-9._-]{1,64}$" },
+          "added": { "type": "boolean" },
+          "createdAgent": { "type": "boolean" },
+          "createdTools": { "type": "boolean" },
+          "createdAlsoAllow": { "type": "boolean" }
+        },
+        "required": ["agentId", "added", "createdAgent", "createdTools", "createdAlsoAllow"]
       }
     },
     "required": ["mappingRoot"]
