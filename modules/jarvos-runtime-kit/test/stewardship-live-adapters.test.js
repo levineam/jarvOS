@@ -294,7 +294,7 @@ test('OpenClaw and Hermes package bounded per-turn stewardship bridge artifacts 
   assert.deepEqual(manifest.contracts, { tools: ['jarvos_stewardship_answer'] });
   assert.deepEqual(manifest.configSchema, {
     type: 'object', additionalProperties: false,
-    properties: { mappingRoot: { type: 'string', pattern: '^/' } }, required: ['mappingRoot'],
+    properties: { mappingRoot: { type: 'string', pattern: '^/' }, toolAllowAddedByJarvos: { type: 'boolean' } }, required: ['mappingRoot'],
   });
   assert.deepEqual(packageJson.openclaw.extensions, ['jarvos-next-turn-plugin.js']);
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-stewardship-public-turn-hook-'));
@@ -366,6 +366,9 @@ test('OpenClaw stewardship-only setup preserves unrelated configuration and roll
     runSetup(script, env); const first = fs.readFileSync(config, 'utf8'); runSetup(script, env); assert.equal(fs.readFileSync(config, 'utf8'), first);
     let parsed = JSON.parse(first); assert.deepEqual(parsed.plugins.load.paths, ['/user/plugin', path.join(staged, 'runtimes', 'openclaw')]); assert.equal(parsed.unrelated.keep, true); assert.equal(parsed.plugins.entries.unrelated.enabled, true); assert.equal(parsed.plugins.entries['jarvos-stewardship'].config.mappingRoot, path.join(state, 'stewardship-bridge', 'openclaw-sessions')); assert.deepEqual(parsed.tools.allow, ['read', 'jarvos_stewardship_answer']);
     assert.equal(parsed.plugins.entries['jarvos-stewardship'].config.toolAllowAddedByJarvos, true);
+    const pluginSchema = JSON.parse(fs.readFileSync(path.join(ROOT, 'runtimes', 'openclaw', 'openclaw.plugin.json'), 'utf8')).configSchema;
+    for (const key of Object.keys(parsed.plugins.entries['jarvos-stewardship'].config)) assert.ok(pluginSchema.properties[key], `${key} must be declared in the plugin config schema`);
+    assert.equal(pluginSchema.properties.toolAllowAddedByJarvos.type, 'boolean');
     runSetup(script, { ...env, JARVOS_MANAGED_HARNESS_ROLLBACK: '1' }); parsed = JSON.parse(fs.readFileSync(config, 'utf8'));
     assert.deepEqual(parsed.plugins.load.paths, ['/user/plugin']); assert.deepEqual(parsed.plugins.allow, ['unrelated']); assert.equal(parsed.plugins.entries['jarvos-stewardship'], undefined); assert.equal(parsed.plugins.entries.unrelated.enabled, true); assert.deepEqual(parsed.tools.allow, ['read']);
   } finally { fs.rmSync(temp, { recursive: true, force: true }); }

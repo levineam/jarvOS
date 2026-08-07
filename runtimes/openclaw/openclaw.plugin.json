@@ -15,6 +15,9 @@
       "mappingRoot": {
         "type": "string",
         "pattern": "^/"
+      },
+      "toolAllowAddedByJarvos": {
+        "type": "boolean"
       }
     },
     "required": ["mappingRoot"]
