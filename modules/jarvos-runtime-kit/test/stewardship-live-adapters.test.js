@@ -318,12 +318,16 @@ test('OpenClaw and Hermes package bounded per-turn stewardship bridge artifacts 
     // OpenClaw 2026.7.1 places the session identity on the typed hook
     // context, not the before_prompt_build event. Keep the event shape
     // faithful so this regression proves delivery on a normal agent turn.
-    assert.match(plugin.before_prompt_build({ prompt: 'Continue', messages: [] }, { sessionKey, pluginConfig: { mappingRoot: mappings } }).prependContext, /Choose a safe next step/);
+    const directContext = plugin.before_prompt_build({ prompt: 'Continue', messages: [] }, { sessionKey, pluginConfig: { mappingRoot: mappings } }).prependContext;
+    assert.match(directContext, /Choose a safe next step/);
+    assert.ok(directContext.includes(`'${bridge}' answer --correlation`));
     assert.deepEqual(plugin.before_prompt_build({ prompt: 'Continue', messages: [] }, { sessionKey: 'agent:other:explicit:session-42', pluginConfig: { mappingRoot: mappings } }), {});
     assert.deepEqual(plugin.before_prompt_build({ prompt: 'Continue', messages: [] }, { sessionKey: 'unmapped', pluginConfig: { mappingRoot: mappings } }), {});
     const registrations = []; plugin({ pluginConfig: { mappingRoot: mappings }, on: (...args) => registrations.push(args) });
     assert.equal(registrations.length, 1); assert.equal(registrations[0][0], 'before_prompt_build'); assert.equal(registrations[0][2].timeoutMs, 5000);
-    assert.match(registrations[0][1]({ prompt: 'Continue', messages: [] }, { sessionKey }).prependContext, /Choose a safe next step/);
+    const registeredContext = registrations[0][1]({ prompt: 'Continue', messages: [] }, { sessionKey }).prependContext;
+    assert.match(registeredContext, /Choose a safe next step/);
+    assert.ok(registeredContext.includes(`'${bridge}' answer --correlation`));
     assert.deepEqual(registrations[0][1]({ prompt: 'Continue', messages: [] }, { sessionKey: 'agent:other:explicit:session-42' }), {});
   } finally {
     fs.rmSync(temp, { recursive: true, force: true });

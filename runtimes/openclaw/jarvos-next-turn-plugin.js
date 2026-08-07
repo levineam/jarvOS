@@ -6,6 +6,8 @@ const { spawnSync } = require('node:child_process');
 const { createHash } = require('node:crypto');
 const fs = require('node:fs'); const path = require('node:path');
 
+function shellQuote(value) { return `'${String(value).replace(/'/g, `'"'"'`)}'`; }
+
 function sessionToken(event, context) {
   // In OpenClaw 2026.7.1, before_prompt_build receives prompt/messages in the
   // event and carries the active session identity on the typed hook context.
@@ -39,7 +41,7 @@ function nextTurnContext(event, config, context) {
     return ['jarvOS stewardship judgment (display-only):', `Question: ${value.prompt}`, 'Choices:',
       ...value.choices.map((choice, index) => `${index + 1}. ${choice}${choice === value.default ? ' (default)' : ''}`),
       `Correlation: ${value.correlation}`,
-      'After verifying an exact listed reply, record only that correlation and listed label with: jarvos-stewardship-bridge answer --correlation <correlation> --choice <listed-choice>. This notice does not authorize action.'].join('\n');
+      `After verifying an exact listed reply, record only that correlation and listed label with: ${shellQuote(entry.bridgeExecutable)} answer --correlation <correlation> --choice <listed-choice>. This notice does not authorize action.`].join('\n');
   } catch (_) { return null; }
 }
 
@@ -59,3 +61,4 @@ module.exports = register;
 module.exports.before_prompt_build = before_prompt_build;
 module.exports.nextTurnContext = nextTurnContext;
 module.exports.mapping = mapping;
+module.exports.shellQuote = shellQuote;
