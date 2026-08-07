@@ -11,8 +11,10 @@ appropriate public repository.
 - A local coordination adapter reports which sessions are active. The initial
   host implementation uses a pinned, localhost-only Agent Mail runtime.
 - Claude Code, Codex, OpenClaw, and Hermes use the same lifecycle contract.
-- Projects, Beads, and Paperclip are optional downstream records. Disabling or
-  omitting them does not disable stewardship or release classification.
+- Beads is the required durable execution ledger for the supported profile. If
+  it is unavailable, preserved work remains visibly pending and retries safely.
+- Projects is optional context. Paperclip is an optional one-way record only;
+  neither can admit, block, or own stewardship execution.
 - Public merge, tag, release, and upstream submission still require approval
   for the exact action.
 

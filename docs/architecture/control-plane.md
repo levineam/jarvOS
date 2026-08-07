@@ -30,8 +30,10 @@ policy, arbitrates mutation ownership, dispatches bounded commands to domain
 managers, and records independently verified evidence.
 
 It is not a second task tracker or a private host. Domain authorities stay in
-their source systems. Paperclip, when installed, remains execution truth. Private
-machine paths, credentials, and adapter mappings stay outside the public module.
+their source systems. Managed-software stewardship uses Beads as its durable
+execution ledger; Paperclip, when installed, is an optional one-way record.
+Private machine paths, credentials, and adapter mappings stay outside the
+public module.
 
 ## Boundary
 

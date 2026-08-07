@@ -27,7 +27,8 @@ command that proves the local system is understandable after setup.
 - SUP-1765 recommends the category "portable personal-AI operating layer."
 - OpenClaw is a runtime adapter, not the jarvOS product boundary.
 - Markdown files remain the human-owned control plane.
-- Paperclip owns live execution state when enabled.
+- Beads owns durable execution state for the managed-software stewardship
+  profile. Paperclip is an optional one-way record when enabled.
 - GBrain and graph recall are optional structured-knowledge subsystems.
 - Obsidian is a first-class markdown client, not a hard dependency.
 - `lossless-claw` belongs inside the OpenClaw profile because it is an OpenClaw

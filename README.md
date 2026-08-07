@@ -46,9 +46,10 @@ edit, search, sync, and back up.
 companies, concepts, meetings, and source material can become a queryable
 knowledge base your assistant can use before it acts.
 
-**Paperclip** gives real work a real system. Agent tasks can become tracked
-issues with owners, blockers, status, and verification evidence instead of
-disappearing into chat.
+**Beads** gives managed software work a durable local execution ledger with
+claims, dependencies, retries, and verification evidence. **Paperclip** can
+optionally mirror that work as a convenient human-facing record; it is not
+required to run the stewardship pipeline.
 
 **jarvOS skills and adapters** are the webbing. They connect the tools, install
 sane defaults, route context, define workflows, and make the system feel like
@@ -86,10 +87,11 @@ own system without continually tracking which changes also belong upstream.
 
 Routine stewardship uses Git as the work authority and a local coordination
 adapter to keep concurrent coding sessions from losing or duplicating work.
-Projects, Beads, and Paperclip can each add a useful record when configured,
-but none is required to detect, package, review, or verify software work. Public
-merge, tagging, release, and upstream submission remain separate approval
-boundaries.
+Beads is the required durable execution ledger for the supported stewardship
+profile. Projects can add context, and Paperclip can add a one-way record, but
+both are optional. If Beads is unavailable, work stays preserved and visibly
+pending for retry instead of being treated as completed. Public merge, tagging,
+release, and upstream submission remain separate approval boundaries.
 
 ## Your Knowledge Base Builds Itself
 
@@ -165,7 +167,7 @@ jarvOS is a set of layers, not a monolith:
 | Structured knowledge | `@jarvos/gbrain` and local knowledge tools | People, companies, projects, concepts, meetings, sources |
 | Runtime context | `@jarvos/agent-context` | Current work, recall bundles, startup briefs, note creation |
 | Behavior | `core/` | Identity, tone, rules, governance |
-| Execution | Paperclip | Issues, tasks, status, blockers, verification |
+| Execution | Beads; optional Paperclip projection | Claims, dependencies, status, retries, verification |
 | Runtime | OpenClaw, Hermes, Codex, Claude, etc. | Tools, messaging, sessions, model calls |
 
 Each layer has one job. Notes do not become project boards. Project tasks do not

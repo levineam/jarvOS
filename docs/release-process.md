@@ -18,8 +18,9 @@ jarvOS releases are milestone-driven. Ship when the active release scope is veri
 - `v1.0.0` is the active target lane (SUP-3548): clean-machine confidence.
   Draft notes live at `docs/releases/v1.0.0.md`; post-v0.7.0 merged work is
   tracked under `CHANGELOG.md` `[Unreleased]` until Andrew approves a cut.
-- Future release lanes should name their active Paperclip release parent and
-  target version before release readiness is claimed.
+- Future release lanes should name their selected release plan and target
+  version before release readiness is claimed. Beads carries the durable work;
+  Paperclip may mirror it as an optional record.
 - Before `v1.0.0` is published, minor releases may include breaking changes, but the release notes must call them out plainly.
 
 ## Unreleased Work and Drift
@@ -46,8 +47,9 @@ healthy "ready to tag" state and is advisory — intentionally not part of
 
 ## Release Checklist
 
-1. Confirm the active release issue in Paperclip lists the intended scope and blockers.
-2. Confirm every included issue has evidence for the user-facing change, verification performed, and documentation impact.
+1. Confirm the selected release plan lists the intended scope and blockers.
+2. Confirm every included Beads work item has evidence for the user-facing
+   change, verification performed, and documentation impact.
 3. Confirm `package.json` version matches the intended tag.
 4. Update `CHANGELOG.md` with the version, date, user-facing changes, fixes, and known limitations.
 5. Prepare the GitHub Release notes at `docs/releases/<version>.md` using `.github/release-template.md`.
@@ -79,7 +81,9 @@ healthy "ready to tag" state and is advisory — intentionally not part of
    Example: `<version>` is `v0.1.0` for the first public preview.
 
 11. Publish a GitHub Release using `docs/releases/<version>.md`.
-12. Record the release URL, final verification evidence, and documentation-impact evidence on the Paperclip release issue.
+12. Record the release URL, final verification evidence, and documentation
+    impact in the release evidence and its Beads work item. An enabled
+    Paperclip adapter may mirror that record afterward.
 
 ## Release Gates
 
@@ -91,8 +95,9 @@ A release is not ready while any of these are true:
 - `docs/releases/<version>.md` is missing or still contains placeholders.
 - README or release-process prose still describes a prior current release or the target release as an active candidate after finalization.
 - Install or update instructions do not match the shipped files.
-- Any release-blocking Paperclip issue lacks documentation-impact evidence or a follow-up issue for deferred documentation work.
-- Any release-blocking Paperclip issue lacks verification evidence.
+- Any release-blocking Beads work item lacks documentation-impact evidence or
+  a follow-up item for deferred documentation work.
+- Any release-blocking Beads work item lacks verification evidence.
 - Andrew has not approved public publication.
 
 ## Documentation Impact Closeout
@@ -113,8 +118,9 @@ Use `README` only when a front-door claim changes: current version,
 install/update path, first-run story, module inventory, core capabilities,
 limitations, or the public/private boundary.
 
-`follow-up` must name the Paperclip issue or blocker carrying the deferred
-documentation work. `none` must include a short rationale.
+`follow-up` must name the Beads work item or blocker carrying the deferred
+documentation work. An optional Paperclip record may also be named. `none`
+must include a short rationale.
 
 Closeout evidence should use this shape:
 
@@ -124,9 +130,13 @@ Evidence: README release-status section updated; docs/releases/vX.Y.Z.md updated
 Follow-up: none.
 ```
 
-## Paperclip Intake
+## Optional Paperclip Projection
 
-Paperclip is the release source of truth. Issues related to the public `levineam/jarvOS` repo should carry:
+Git and the selected release plan define the candidate; Beads carries durable
+execution state. Paperclip is an optional, one-way human-facing record. It
+cannot admit work, choose release scope, block execution, or authorize public
+publication. If enabled, mirrored issues related to the public
+`levineam/jarvOS` repo should carry:
 
 - `jarvos`
 - `jarvos-release-candidate`
@@ -138,11 +148,16 @@ Internal release process work should carry:
 - `jarvos-release-ops`
 - the current active release label, such as `release-v1.0.0`
 
-Candidate issues enter release review automatically. Jarvis promotes each candidate to included, release-blocking, post-release, or internal-only during release review.
+Only an already-authoritative candidate may be mirrored. The Paperclip record
+reflects its included, release-blocking, post-release, or internal-only status;
+editing that record does not change the candidate.
 
-If the active Paperclip instance does not expose labels on issue reads, Jarvis writes a `release-intake` document on the issue with the same classification. That document is the durable fallback marker.
+If the optional Paperclip instance is unavailable or cannot expose labels, the
+authoritative Git, release-plan, and Beads records continue unchanged. No
+Paperclip fallback is required for the supported path.
 
 As of the v0.6.1 ship, v0.3-era release parents are historical and should not
-receive new candidates. New jarvOS public-release candidates should use the
-current active release label and the live Paperclip release parent for that
-lane. If no parent exists yet, create one before claiming release readiness.
+receive new records. A new jarvOS public-release candidate uses the selected
+release plan and its Beads work item. If Paperclip projection is enabled, it may
+mirror the current release label and parent, but a missing parent does not
+block candidate preparation or readiness checks.

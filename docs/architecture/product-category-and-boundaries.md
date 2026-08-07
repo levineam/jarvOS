@@ -36,7 +36,7 @@ jarvOS is organized as layers:
 - ontology for worldview and project meaning
 - structured knowledge for graph-style recall
 - skills for portable operating procedures
-- Paperclip or another configured tracker for execution state
+- Beads for managed-software execution state, with optional tracker projections
 - runtime adapters for OpenClaw, Hermes, Codex, Claude, and future clients
 
 The runtime owns model calls, shell execution, sandboxing, scheduling,
