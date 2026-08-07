@@ -2,6 +2,7 @@
 'use strict';
 
 const fs = require('node:fs');
+const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const {
   STEWARDSHIP_ADAPTER_VERSION,
@@ -12,7 +13,7 @@ const HARNESS = 'claude-code';
 const BRIDGE_COMMAND_ENV = 'JARVOS_STEWARDSHIP_BRIDGE_COMMAND';
 const CLAUDE_SESSION_ID_ENV = 'JARVOS_STEWARDSHIP_CLAUDE_SESSION_ID';
 const BRIDGE_COMMAND = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
-const CLAUDE_SESSION_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
+const CLAUDE_SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 function gitOutput(cwd, args) {
   const result = spawnSync('git', ['-C', cwd, ...args], { encoding: 'utf8' });
@@ -47,15 +48,44 @@ function bridgeCommand(options = {}) {
   return typeof command === 'string' && BRIDGE_COMMAND.test(command) ? command : null;
 }
 
+function suppliedInputValue(input, key) {
+  if (!input || typeof input !== 'object' || Array.isArray(input) || !Object.hasOwn(input, key)) return { supplied: false };
+  return { supplied: true, value: input[key] };
+}
+
+function transcriptSessionId(value) {
+  if (typeof value !== 'string' || !path.isAbsolute(value) || !value.endsWith('.jsonl')) return null;
+  const match = path.basename(value).match(/^([0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})\.jsonl$/i);
+  return match ? match[1] : null;
+}
+
+// Claude supplies the session UUID under different field spellings across its
+// hook paths.  A transcript basename is a narrowly-scoped fallback, never a
+// general path-derived identity.  Conflicting inputs fail closed.
 function hookSessionId(input) {
-  return input && typeof input === 'object' && !Array.isArray(input) && CLAUDE_SESSION_ID.test(input.session_id || '')
-    ? input.session_id : null;
+  const sessionId = suppliedInputValue(input, 'session_id');
+  const camelSessionId = suppliedInputValue(input, 'sessionId');
+  const transcriptPath = suppliedInputValue(input, 'transcript_path');
+  const identities = [];
+
+  for (const candidate of [sessionId, camelSessionId]) {
+    if (!candidate.supplied) continue;
+    if (typeof candidate.value !== 'string' || !CLAUDE_SESSION_ID.test(candidate.value)) return null;
+    identities.push(candidate.value);
+  }
+  if (transcriptPath.supplied) {
+    const transcriptId = transcriptSessionId(transcriptPath.value);
+    if (!transcriptId) return null;
+    identities.push(transcriptId);
+  }
+  if (identities.length === 0 || identities.some((identity) => identity !== identities[0])) return null;
+  return identities[0];
 }
 
 function bridgeEnvironment(options = {}) {
   const env = { ...process.env, ...(options.env || {}) };
-  const sessionId = options.sessionId || hookSessionId(options.hookInput);
-  if (sessionId) env[CLAUDE_SESSION_ID_ENV] = sessionId;
+  const sessionId = options.sessionId === undefined ? hookSessionId(options.hookInput) : options.sessionId;
+  if (typeof sessionId === 'string' && CLAUDE_SESSION_ID.test(sessionId)) env[CLAUDE_SESSION_ID_ENV] = sessionId;
   return env;
 }
 
@@ -64,12 +94,17 @@ function invokeBridge(capability, options = {}) {
   const command = bridgeCommand(options);
   const base = { capability, available: false, ...isolation };
   if (!command) return { ...base, pendingInSessionInput: false, reason: 'bridge-not-configured' };
+  const env = bridgeEnvironment(options);
+  const sessionId = options.sessionId === undefined ? env[CLAUDE_SESSION_ID_ENV] : options.sessionId;
+  if (typeof sessionId !== 'string' || !CLAUDE_SESSION_ID.test(sessionId)) {
+    return { ...base, pendingInSessionInput: false, reason: 'bridge-unavailable' };
+  }
 
   const result = spawnSync(command, [capability], {
     cwd: options.cwd || process.cwd(),
     encoding: 'utf8',
     timeout: 5000,
-    env: bridgeEnvironment(options),
+    env,
   });
   if (result.status !== 0) return { ...base, pendingInSessionInput: false, reason: 'bridge-unavailable' };
   try {
@@ -141,7 +176,12 @@ function readHookInput() {
 
 function main(input = readHookInput()) {
   try {
-    const bridgeOptions = { sessionId: hookSessionId(input) };
+    const sessionId = hookSessionId(input);
+    if (!sessionId) {
+      writeJson({});
+      return;
+    }
+    const bridgeOptions = { sessionId };
     const nextInput = nextTurnInput(bridgeOptions);
     heartbeat(bridgeOptions);
     if (nextInput.pendingInSessionInput && nextInput.nextTurnInput) {

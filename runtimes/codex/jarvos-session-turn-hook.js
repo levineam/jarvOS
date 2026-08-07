@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 'use strict';
 
+const fs = require('node:fs');
 const { spawnSync } = require('node:child_process');
 const {
   STEWARDSHIP_ADAPTER_VERSION,
@@ -10,6 +11,8 @@ const {
 const HARNESS = 'codex';
 const BRIDGE_COMMAND_ENV = 'JARVOS_STEWARDSHIP_BRIDGE_COMMAND';
 const BRIDGE_COMMAND = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+const MAX_HOOK_INPUT_CHARS = 4096;
+const CODEX_THREAD_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 function gitOutput(cwd, args) {
   const result = spawnSync('git', ['-C', cwd, ...args], { encoding: 'utf8' });
@@ -40,8 +43,31 @@ function isolationState(options = {}) {
 }
 
 function bridgeCommand(options = {}) {
-  const command = options.bridgeCommand === undefined ? process.env[BRIDGE_COMMAND_ENV] : options.bridgeCommand;
+  const env = { ...process.env, ...(options.env || {}) };
+  const command = options.bridgeCommand === undefined ? env[BRIDGE_COMMAND_ENV] : options.bridgeCommand;
   return typeof command === 'string' && BRIDGE_COMMAND.test(command) ? command : null;
+}
+
+function hookSessionId(input, hookEventName) {
+  if (!input || Array.isArray(input) || typeof input !== 'object' || input.hook_event_name !== hookEventName) return null;
+  return typeof input.session_id === 'string' && CODEX_THREAD_ID.test(input.session_id) ? input.session_id : null;
+}
+
+function readHookInput(hookEventName) {
+  try {
+    const raw = fs.readFileSync(0, 'utf8');
+    if (raw.length === 0 || raw.length > MAX_HOOK_INPUT_CHARS) return null;
+    return hookSessionId(JSON.parse(raw), hookEventName);
+  } catch {
+    return null;
+  }
+}
+
+function bridgeEnvironment(sessionId, env = process.env) {
+  const inherited = env.CODEX_THREAD_ID;
+  if (typeof sessionId !== 'string' || !CODEX_THREAD_ID.test(sessionId)) return null;
+  if (typeof inherited === 'string' && inherited && (!CODEX_THREAD_ID.test(inherited) || inherited !== sessionId)) return null;
+  return typeof inherited === 'string' && inherited ? env : { ...env, CODEX_THREAD_ID: sessionId };
 }
 
 function invokeBridge(capability, options = {}) {
@@ -49,11 +75,19 @@ function invokeBridge(capability, options = {}) {
   const command = bridgeCommand(options);
   const base = { capability, available: false, ...isolation };
   if (!command) return { ...base, pendingInSessionInput: false, reason: 'bridge-not-configured' };
+  const env = options.env || process.env;
+  if (typeof env.CODEX_THREAD_ID !== 'string' || !CODEX_THREAD_ID.test(env.CODEX_THREAD_ID)) {
+    return { ...base, pendingInSessionInput: false, reason: 'bridge-unavailable' };
+  }
 
   const result = spawnSync(command, [capability], {
     cwd: options.cwd || process.cwd(),
     encoding: 'utf8',
     timeout: 5000,
+    // A SessionStart hook may receive its thread identity on stdin rather than
+    // in its inherited environment. Callers pass a short-lived environment
+    // copy so that identity is visible only to this bridge child process.
+    env,
   });
   if (result.status !== 0) return { ...base, pendingInSessionInput: false, reason: 'bridge-unavailable' };
   try {
@@ -110,10 +144,15 @@ function writeJson(value) {
   process.stdout.write(`${JSON.stringify(value)}\n`);
 }
 
-function main() {
+function main(sessionId = readHookInput('UserPromptSubmit')) {
   try {
-    const input = nextTurnInput();
-    heartbeat();
+    const env = bridgeEnvironment(sessionId);
+    if (!env) {
+      writeJson({});
+      return;
+    }
+    const input = nextTurnInput({ env });
+    heartbeat({ env });
     if (input.pendingInSessionInput && input.nextTurnInput) {
       writeJson({
         hookSpecificOutput: {
@@ -136,11 +175,16 @@ if (require.main === module) main();
 module.exports = {
   HARNESS,
   BRIDGE_COMMAND_ENV,
+  CODEX_THREAD_ID,
+  MAX_HOOK_INPUT_CHARS,
   availability,
   additionalContext,
+  bridgeEnvironment,
   hasVerifiedLinkedWorktree,
   heartbeat,
   invokeBridge,
+  hookSessionId,
   main,
+  readHookInput,
   stewardshipAdapter,
 };

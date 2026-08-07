@@ -1,11 +1,18 @@
 #!/usr/bin/env node
 'use strict';
 
-const fs = require('fs');
+const fs = require('node:fs');
 const os = require('os');
 const path = require('path');
 const { hydrate } = require('../../modules/jarvos-agent-context/src/index.js');
-const { additionalContext, stewardshipAdapter } = require('./jarvos-session-turn-hook.js');
+const {
+  additionalContext,
+  bridgeEnvironment,
+  hookSessionId,
+  MAX_HOOK_INPUT_CHARS,
+  readHookInput,
+  stewardshipAdapter,
+} = require('./jarvos-session-turn-hook.js');
 
 const DEFAULT_MAX_CHARS = 12000;
 const MAX_ALLOWED_CHARS = 50000;
@@ -41,10 +48,21 @@ function stewardshipContext(options = {}) {
   return input.pendingInSessionInput && input.nextTurnInput ? additionalContext(input) : '';
 }
 
+function sessionStartInput(raw) {
+  if (typeof raw !== 'string' || raw.length === 0 || raw.length > MAX_HOOK_INPUT_CHARS) return null;
+  try { return hookSessionId(JSON.parse(raw), 'SessionStart'); } catch { return null; }
+}
+
+function readSessionStartInput() {
+  return readHookInput('SessionStart');
+}
+
 async function main() {
   try {
-    stewardshipAdapter.startOrResume();
-    const judgment = stewardshipContext();
+    const env = bridgeEnvironment(readSessionStartInput());
+    const judgment = env
+      ? (stewardshipAdapter.startOrResume({ env }), stewardshipContext({ env }))
+      : '';
     let hydration = '';
     try {
       const result = await hydrate({ maxChars: hydrationMaxChars() });
@@ -77,4 +95,12 @@ if (require.main === module) {
   });
 }
 
-module.exports = { hydrationMaxChars, main, stewardshipAdapter, stewardshipContext };
+module.exports = {
+  bridgeEnvironment,
+  hydrationMaxChars,
+  main,
+  readSessionStartInput,
+  sessionStartInput,
+  stewardshipAdapter,
+  stewardshipContext,
+};
