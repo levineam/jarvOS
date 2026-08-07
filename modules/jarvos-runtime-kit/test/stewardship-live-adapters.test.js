@@ -414,6 +414,18 @@ function count(content, pattern) {
   return (content.match(pattern) || []).length;
 }
 
+function assertCodexParsesConfig(config) {
+  const result = spawnSync('codex', ['features', 'list'], {
+    encoding: 'utf8',
+    env: { ...process.env, CODEX_HOME: path.dirname(config) },
+  });
+  // The unit suite also runs where the Codex executable is intentionally not
+  // installed. The setup-specific assertions below still prove there is one
+  // TOML representation; exercise Codex's own parser whenever it is present.
+  if (result.error && result.error.code === 'ENOENT') return;
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+}
+
 test('OpenClaw stewardship-only setup preserves unrelated configuration and rolls back only its staged plugin', () => {
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-openclaw-stewardship-setup-'));
   const config = path.join(temp, 'openclaw.json'); const staged = path.join(temp, 'stage'); const state = path.join(temp, 'state');
@@ -684,6 +696,79 @@ test('Codex setup merges both jarvOS lifecycle hooks without replacing user hook
     assert.doesNotMatch(rolledBack, /jarvos-session-(?:start|turn)-hook\.js/);
     assert.doesNotMatch(rolledBack, /JARVOS_STEWARDSHIP_(?:BRIDGE_COMMAND|CODEX_SESSION_MAP_ROOT)/);
     assert.match(rolledBack, /EXISTING = "keep"/);
+  } finally {
+    fs.rmSync(temp, { recursive: true, force: true });
+  }
+});
+
+test('Codex setup repairs the nested shell environment table without losing user variables', () => {
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-codex-nested-environment-'));
+  const bin = path.join(temp, 'bin');
+  const codexHome = path.join(temp, 'codex-home');
+  const config = path.join(codexHome, 'config.toml');
+  const staged = path.join(temp, 'staged-public');
+  try {
+    fs.mkdirSync(path.join(staged, 'runtimes', 'codex'), { recursive: true });
+    for (const file of ['jarvos-session-start-hook.js', 'jarvos-session-turn-hook.js']) fs.copyFileSync(path.join(ROOT, 'runtimes', 'codex', file), path.join(staged, 'runtimes', 'codex', file));
+    fs.mkdirSync(bin, { recursive: true });
+    fs.writeFileSync(path.join(bin, 'codex'), '#!/usr/bin/env sh\nif [ "$1" = "mcp" ] && [ "$2" = "get" ]; then exit 1; fi\nexit 0\n', { mode: 0o755 });
+    fs.chmodSync(path.join(bin, 'codex'), 0o755);
+    fs.mkdirSync(codexHome, { recursive: true });
+    fs.writeFileSync(config, [
+      '[hooks]',
+      'SessionStart = [{ hooks = [{ type = "command", command = "user-session-start" }] }]',
+      '',
+      '[shell_environment_policy.set]',
+      'BROWSER_USE_AVAILABLE_BACKENDS = "chrome,iab"',
+      'NODE_REPL_TRUSTED_CODE_PATHS = "/trusted/code"',
+      '',
+      // This is the real drift shape: a nested table plus a stale inline set.
+      '[shell_environment_policy]',
+      'set = { JARVOS_STEWARDSHIP_BRIDGE_COMMAND = "old-bridge", JARVOS_STEWARDSHIP_CODEX_SESSION_MAP_ROOT = "/old/map" } # Preserve this trailing user note.',
+      '# Keep this note for the person maintaining the environment policy.',
+      '',
+      '[unrelated]',
+      'value = true',
+      '',
+    ].join('\n'), 'utf8');
+    const env = {
+      ...process.env,
+      HOME: path.join(temp, 'home'),
+      CODEX_HOME: codexHome,
+      CODEX_CONFIG: config,
+      PATH: `${bin}${path.delimiter}${process.env.PATH || ''}`,
+      JARVOS_STEWARDSHIP_ONLY: '1',
+      JARVOS_MANAGED_REPOSITORIES: '/managed/repository',
+      JARVOS_STAGED_PUBLIC_RUNTIME_ROOT: staged,
+      JARVOS_STEWARDSHIP_BRIDGE_COMMAND: 'jarvos-stewardship-bridge',
+      JARVOS_STEWARDSHIP_CODEX_SESSION_MAP_ROOT: path.join(temp, 'codex-session-map'),
+    };
+    const script = path.join(ROOT, 'runtimes', 'codex', 'setup.sh');
+    runSetup(script, env);
+    const configured = fs.readFileSync(config, 'utf8');
+    assert.equal(count(configured, /^\[shell_environment_policy\.set\]$/gm), 1);
+    assert.equal(count(configured, /^\[shell_environment_policy\]$/gm), 0);
+    assert.doesNotMatch(configured, /^set\s*=/m);
+    assert.match(configured, /BROWSER_USE_AVAILABLE_BACKENDS = "chrome,iab"/);
+    assert.match(configured, /NODE_REPL_TRUSTED_CODE_PATHS = "\/trusted\/code"/);
+    assert.match(configured, /JARVOS_STEWARDSHIP_BRIDGE_COMMAND = "jarvos-stewardship-bridge"/);
+    assert.match(configured, /JARVOS_STEWARDSHIP_CODEX_SESSION_MAP_ROOT = ".*codex-session-map"/);
+    assert.match(configured, /# Keep this note for the person maintaining the environment policy\./);
+    assert.match(configured, /# Preserve this trailing user note\./);
+    assertCodexParsesConfig(config);
+
+    runSetup(script, { ...env, JARVOS_MANAGED_HARNESS_ROLLBACK: '1' });
+    const rolledBack = fs.readFileSync(config, 'utf8');
+    assert.equal(count(rolledBack, /^\[shell_environment_policy\.set\]$/gm), 1);
+    assert.equal(count(rolledBack, /^\[shell_environment_policy\]$/gm), 0);
+    assert.doesNotMatch(rolledBack, /^set\s*=/m);
+    assert.doesNotMatch(rolledBack, /JARVOS_STEWARDSHIP_(?:BRIDGE_COMMAND|CODEX_SESSION_MAP_ROOT|BRIDGE_CONTEXT_FILE)/);
+    assert.match(rolledBack, /BROWSER_USE_AVAILABLE_BACKENDS = "chrome,iab"/);
+    assert.match(rolledBack, /NODE_REPL_TRUSTED_CODE_PATHS = "\/trusted\/code"/);
+    assert.match(rolledBack, /\[unrelated\]\nvalue = true/);
+    assert.match(rolledBack, /# Keep this note for the person maintaining the environment policy\./);
+    assert.match(rolledBack, /# Preserve this trailing user note\./);
+    assertCodexParsesConfig(config);
   } finally {
     fs.rmSync(temp, { recursive: true, force: true });
   }

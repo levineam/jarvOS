@@ -379,8 +379,11 @@ function removeFeature(content, key) {
   }).join('\n');
 }
 
-function environmentPolicyTableRange(lines) {
-  const start = lines.findIndex((line) => /^\[shell_environment_policy\]\s*$/.test(line));
+function tomlTableRange(lines, header) {
+  const headerRe = new RegExp(`^\\[${header.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\]\\s*$`);
+  const matches = lines.map((line, index) => headerRe.test(line) ? index : -1).filter((index) => index >= 0);
+  if (matches.length > 1) fail(`${header} must be declared at most once`);
+  const start = matches[0] ?? -1;
   if (start < 0) return { start, end: lines.length };
   let end = lines.length;
   for (let index = start + 1; index < lines.length; index += 1) if (/^\s*\[/.test(lines[index])) { end = index; break; }
@@ -403,33 +406,105 @@ function renderEnvironmentSet(entries) {
   return `{ ${Object.entries(entries).map(([key, value]) => `${key} = ${JSON.stringify(value)}`).join(', ')} }`;
 }
 
+const STEWARDSHIP_ENVIRONMENT_KEYS = [
+  'JARVOS_STEWARDSHIP_BRIDGE_COMMAND',
+  'JARVOS_STEWARDSHIP_CODEX_SESSION_MAP_ROOT',
+  'JARVOS_STEWARDSHIP_BRIDGE_CONTEXT_FILE',
+];
+
+function environmentSetAssignment(lines, range) {
+  let index = -1; let entries = {}; let comment = '';
+  for (let candidate = range.start + 1; candidate < range.end; candidate += 1) {
+    const match = /^\s*set\s*=\s*(\{.*\})\s*(#.*)?\s*$/.exec(lines[candidate]);
+    if (!match) continue;
+    if (index >= 0) fail('shell_environment_policy must contain at most one set assignment');
+    index = candidate; entries = parseEnvironmentSet(match[1]); comment = match[2] || '';
+  }
+  return { index, entries, comment };
+}
+
+function environmentSubtableEntries(lines, range) {
+  const entries = new Map();
+  for (let index = range.start + 1; index < range.end; index += 1) {
+    if (/^\s*(?:#.*)?$/.test(lines[index])) continue;
+    const match = /^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*("(?:\\.|[^"\\])*")\s*(?:#.*)?$/.exec(lines[index]);
+    if (!match) fail('shell_environment_policy.set supports only string environment values');
+    if (entries.has(match[1])) fail(`shell_environment_policy.set contains duplicate ${match[1]} assignments`);
+    try { entries.set(match[1], { value: JSON.parse(match[2]), index }); } catch { fail('shell_environment_policy.set contains an invalid string'); }
+  }
+  return entries;
+}
+
 function setStewardshipBridgeEnvironment(content, bridge) {
   if (bridge === undefined) return content;
-  const lines = content.split(/\n/); const { start, end } = environmentPolicyTableRange(lines);
-  if (start < 0) {
+  let lines = content.split(/\n/);
+  const policyRange = tomlTableRange(lines, 'shell_environment_policy');
+  const subtableRange = tomlTableRange(lines, 'shell_environment_policy.set');
+  if (policyRange.start < 0 && subtableRange.start < 0) {
     if (!bridge) return content;
     const suffix = content.endsWith('\n') || content.length === 0 ? '' : '\n';
     return `${content}${suffix}\n[shell_environment_policy]\nset = ${renderEnvironmentSet(bridge)}\n`;
   }
-  let setIndex = -1; let entries = {};
-  for (let index = start + 1; index < end; index += 1) {
-    const match = /^\s*set\s*=\s*(\{.*\})\s*(?:#.*)?$/.exec(lines[index]);
-    if (!match) continue;
-    if (setIndex >= 0) fail('shell_environment_policy must contain at most one set assignment');
-    setIndex = index; entries = parseEnvironmentSet(match[1]);
-  }
-  for (const key of ['JARVOS_STEWARDSHIP_BRIDGE_COMMAND', 'JARVOS_STEWARDSHIP_CODEX_SESSION_MAP_ROOT', 'JARVOS_STEWARDSHIP_BRIDGE_CONTEXT_FILE']) delete entries[key];
-  if (bridge) Object.assign(entries, bridge);
-  if (Object.keys(entries).length) {
-    const line = `set = ${renderEnvironmentSet(entries)}`;
-    if (setIndex >= 0) lines[setIndex] = line;
-    else lines.splice(end, 0, line);
+
+  const inline = policyRange.start >= 0 ? environmentSetAssignment(lines, policyRange) : { index: -1, entries: {}, comment: '' };
+  if (subtableRange.start < 0) {
+    const entries = { ...inline.entries };
+    for (const key of STEWARDSHIP_ENVIRONMENT_KEYS) delete entries[key];
+    if (bridge) Object.assign(entries, bridge);
+    if (Object.keys(entries).length) {
+      const line = `set = ${renderEnvironmentSet(entries)}${inline.comment ? ` ${inline.comment}` : ''}`;
+      if (inline.index >= 0) lines[inline.index] = line;
+      else lines.splice(policyRange.end, 0, line);
+      return lines.join('\n');
+    }
+    if (inline.index >= 0) {
+      if (inline.comment) lines[inline.index] = inline.comment;
+      else lines.splice(inline.index, 1);
+    }
     return lines.join('\n');
   }
-  if (setIndex >= 0) lines.splice(setIndex, 1);
-  const nextRange = environmentPolicyTableRange(lines);
-  const hasContent = lines.slice(nextRange.start + 1, nextRange.end).some((line) => !/^\s*(?:#.*)?$/.test(line));
-  if (!hasContent) lines.splice(nextRange.start, nextRange.end - nextRange.start);
+
+  // TOML permits either `set = { ... }` or `[shell_environment_policy.set]`,
+  // but never both. Prefer the existing nested table and repair a stale inline
+  // representation by moving its unrelated values into that table.
+  const nested = environmentSubtableEntries(lines, subtableRange);
+  for (const [key, value] of Object.entries(inline.entries)) {
+    const existing = nested.get(key);
+    if (existing && existing.value !== value) fail(`shell_environment_policy.set conflicts with inline set for ${key}`);
+  }
+  const remove = [];
+  if (inline.index >= 0) {
+    // A trailing comment belongs to the user, not the invalid inline table.
+    // Keep it as a standalone comment while removing only the assignment.
+    if (inline.comment) lines[inline.index] = inline.comment;
+    else remove.push(inline.index);
+  }
+  for (const key of STEWARDSHIP_ENVIRONMENT_KEYS) {
+    const existing = nested.get(key);
+    if (existing) remove.push(existing.index);
+  }
+  for (const index of remove.sort((a, b) => b - a)) lines.splice(index, 1);
+
+  // An empty parent header is not useful, and is invalid when it follows the
+  // nested table it implicitly defined. Remove only that header: comments in
+  // an otherwise-empty user section remain useful documentation and must not
+  // be swept up with jarvOS's stale inline assignment.
+  const repairedPolicyRange = tomlTableRange(lines, 'shell_environment_policy');
+  if (repairedPolicyRange.start >= 0 && !lines.slice(repairedPolicyRange.start + 1, repairedPolicyRange.end).some((line) => !/^\s*(?:#.*)?$/.test(line))) {
+    lines.splice(repairedPolicyRange.start, 1);
+  }
+
+  // Re-find the nested table after removals, then append only values absent
+  // from it. This keeps unrelated nested-table lines and their comments intact.
+  const repairedRange = tomlTableRange(lines, 'shell_environment_policy.set');
+  const repaired = environmentSubtableEntries(lines, repairedRange);
+  const additions = [];
+  for (const [key, value] of Object.entries(inline.entries)) {
+    if (STEWARDSHIP_ENVIRONMENT_KEYS.includes(key) || repaired.has(key)) continue;
+    additions.push(`${key} = ${JSON.stringify(value)}`);
+  }
+  if (bridge) for (const [key, value] of Object.entries(bridge)) additions.push(`${key} = ${JSON.stringify(value)}`);
+  if (additions.length) lines.splice(repairedRange.end, 0, ...additions);
   return lines.join('\n');
 }
 
