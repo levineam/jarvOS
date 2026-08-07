@@ -364,11 +364,10 @@ test('OpenClaw stewardship-only setup preserves unrelated configuration and roll
     const env = { ...process.env, HOME: path.join(temp, 'home'), OPENCLAW_CONFIG: config, JARVOS_STEWARDSHIP_ONLY: '1', JARVOS_MANAGED_REPOSITORIES: '/managed/repo', JARVOS_STAGED_PUBLIC_RUNTIME_ROOT: staged, JARVOS_MANAGED_HARNESS_STATE_ROOT: state };
     const script = path.join(ROOT, 'runtimes', 'openclaw', 'setup.sh');
     runSetup(script, env); const first = fs.readFileSync(config, 'utf8'); runSetup(script, env); assert.equal(fs.readFileSync(config, 'utf8'), first);
-    const ownership = path.join(state, 'openclaw-stewardship-install.json');
     let parsed = JSON.parse(first); assert.deepEqual(parsed.plugins.load.paths, ['/user/plugin', path.join(staged, 'runtimes', 'openclaw')]); assert.equal(parsed.unrelated.keep, true); assert.equal(parsed.plugins.entries.unrelated.enabled, true); assert.equal(parsed.plugins.entries['jarvos-stewardship'].config.mappingRoot, path.join(state, 'stewardship-bridge', 'openclaw-sessions')); assert.deepEqual(parsed.tools.allow, ['read', 'jarvos_stewardship_answer']);
-    assert.deepEqual(JSON.parse(fs.readFileSync(ownership, 'utf8')), { schemaVersion: 1, toolAllowAdded: true }); assert.equal(fs.statSync(ownership).mode & 0o777, 0o600);
+    assert.equal(parsed.plugins.entries['jarvos-stewardship'].config.toolAllowAddedByJarvos, true);
     runSetup(script, { ...env, JARVOS_MANAGED_HARNESS_ROLLBACK: '1' }); parsed = JSON.parse(fs.readFileSync(config, 'utf8'));
-    assert.deepEqual(parsed.plugins.load.paths, ['/user/plugin']); assert.deepEqual(parsed.plugins.allow, ['unrelated']); assert.equal(parsed.plugins.entries['jarvos-stewardship'], undefined); assert.equal(parsed.plugins.entries.unrelated.enabled, true); assert.deepEqual(parsed.tools.allow, ['read']); assert.equal(fs.existsSync(ownership), false);
+    assert.deepEqual(parsed.plugins.load.paths, ['/user/plugin']); assert.deepEqual(parsed.plugins.allow, ['unrelated']); assert.equal(parsed.plugins.entries['jarvos-stewardship'], undefined); assert.equal(parsed.plugins.entries.unrelated.enabled, true); assert.deepEqual(parsed.tools.allow, ['read']);
   } finally { fs.rmSync(temp, { recursive: true, force: true }); }
 });
 
@@ -380,10 +379,9 @@ test('OpenClaw rollback preserves a stewardship tool grant that predated jarvOS 
     fs.writeFileSync(config, `${JSON.stringify({ tools: { allow: ['read', 'jarvos_stewardship_answer'] } }, null, 2)}\n`);
     const env = { ...process.env, HOME: path.join(temp, 'home'), OPENCLAW_CONFIG: config, JARVOS_STEWARDSHIP_ONLY: '1', JARVOS_MANAGED_REPOSITORIES: '/managed/repo', JARVOS_STAGED_PUBLIC_RUNTIME_ROOT: staged, JARVOS_MANAGED_HARNESS_STATE_ROOT: state };
     const script = path.join(ROOT, 'runtimes', 'openclaw', 'setup.sh');
-    const ownership = path.join(state, 'openclaw-stewardship-install.json');
-    runSetup(script, env); assert.deepEqual(JSON.parse(fs.readFileSync(ownership, 'utf8')), { schemaVersion: 1, toolAllowAdded: false });
+    runSetup(script, env); assert.equal(JSON.parse(fs.readFileSync(config, 'utf8')).plugins.entries['jarvos-stewardship'].config.toolAllowAddedByJarvos, false);
     runSetup(script, { ...env, JARVOS_MANAGED_HARNESS_ROLLBACK: '1' });
-    assert.deepEqual(JSON.parse(fs.readFileSync(config, 'utf8')).tools.allow, ['read', 'jarvos_stewardship_answer']); assert.equal(fs.existsSync(ownership), false);
+    assert.deepEqual(JSON.parse(fs.readFileSync(config, 'utf8')).tools.allow, ['read', 'jarvos_stewardship_answer']);
   } finally { fs.rmSync(temp, { recursive: true, force: true }); }
 });
 
@@ -395,7 +393,7 @@ test('OpenClaw setup does not claim permission ownership when its configuration 
     fs.writeFileSync(config, `${JSON.stringify({ tools: { allow: ['read'] } }, null, 2)}\n`); fs.chmodSync(configRoot, 0o500);
     const env = { ...process.env, HOME: path.join(temp, 'home'), OPENCLAW_CONFIG: config, JARVOS_STEWARDSHIP_ONLY: '1', JARVOS_MANAGED_REPOSITORIES: '/managed/repo', JARVOS_STAGED_PUBLIC_RUNTIME_ROOT: staged, JARVOS_MANAGED_HARNESS_STATE_ROOT: state };
     const result = runSetupResult(path.join(ROOT, 'runtimes', 'openclaw', 'setup.sh'), env);
-    assert.notEqual(result.status, 0); assert.equal(fs.existsSync(path.join(state, 'openclaw-stewardship-install.json')), false);
+    assert.notEqual(result.status, 0); assert.deepEqual(JSON.parse(fs.readFileSync(config, 'utf8')).tools.allow, ['read']);
   } finally { fs.chmodSync(configRoot, 0o700); fs.rmSync(temp, { recursive: true, force: true }); }
 });
 
