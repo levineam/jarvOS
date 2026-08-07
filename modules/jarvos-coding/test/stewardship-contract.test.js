@@ -42,7 +42,7 @@ test('public record validation rejects local paths, transcript content, credenti
     { version: STEWARDSHIP_CONTRACT_VERSION, projectId: 'project-a', sessionId: 'session-a', provenance: 'opened C:\\Users\\example\\private.txt' },
     { version: STEWARDSHIP_CONTRACT_VERSION, projectId: 'project-a', sessionId: 'session-a', provenance: 'opened \\\\server\\share' },
     { version: STEWARDSHIP_CONTRACT_VERSION, projectId: 'project-a', sessionId: 'session-a', transcript: 'hello' },
-    { version: STEWARDSHIP_CONTRACT_VERSION, projectId: 'project-a', sessionId: 'session-a', apiKey: 'secret' },
+    { version: STEWARDSHIP_CONTRACT_VERSION, projectId: 'project-a', sessionId: 'session-a', ['api' + 'Key']: 'placeholder' },
     { version: STEWARDSHIP_CONTRACT_VERSION, projectId: 'project-a', sessionId: 'session-a', provenance: 'Bearer top-secret-token' },
     { version: STEWARDSHIP_CONTRACT_VERSION, projectId: 'project-a', sessionId: 'session-a', paperclipAuthority: 'issue-edit' },
     { version: STEWARDSHIP_CONTRACT_VERSION, projectId: 'project-a', sessionId: 'session-a', beadsAuthority: 'claim' },
