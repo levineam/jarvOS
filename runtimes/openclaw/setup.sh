@@ -31,10 +31,12 @@ const [configPath, pluginPath, mappingRoot, rollback] = process.argv.slice(2);
 const original = fs.existsSync(configPath) ? fs.readFileSync(configPath, 'utf8') : '{}\n';
 const config = JSON.parse(original || '{}');
 const plugins = config.plugins && typeof config.plugins === 'object' ? config.plugins : {};
+const tools = config.tools && typeof config.tools === 'object' ? config.tools : null;
 if (rollback === '1') {
   if (plugins.load && Array.isArray(plugins.load.paths)) plugins.load.paths = plugins.load.paths.filter((value) => value !== pluginPath);
   if (Array.isArray(plugins.allow)) plugins.allow = plugins.allow.filter((value) => value !== 'jarvos-stewardship');
   if (plugins.entries && typeof plugins.entries === 'object') delete plugins.entries['jarvos-stewardship'];
+  if (Array.isArray(tools?.allow)) tools.allow = tools.allow.filter((value) => value !== 'jarvos_stewardship_answer');
   config.plugins = plugins;
 } else {
   config.plugins = plugins;
@@ -43,6 +45,7 @@ if (rollback === '1') {
   plugins.load.paths = plugins.load.paths.filter((value) => !(typeof value === 'string' && value.includes('/managed-harness/') && value.endsWith('/public/runtimes/openclaw')));
   if (!plugins.load.paths.includes(pluginPath)) plugins.load.paths.push(pluginPath);
   if (Array.isArray(plugins.allow) && !plugins.allow.includes('jarvos-stewardship')) plugins.allow.push('jarvos-stewardship');
+  if (Array.isArray(tools?.allow) && !tools.allow.includes('jarvos_stewardship_answer')) tools.allow.push('jarvos_stewardship_answer');
   plugins.entries = plugins.entries && typeof plugins.entries === 'object' ? plugins.entries : {};
   const entry = plugins.entries['jarvos-stewardship'] || {};
   plugins.entries['jarvos-stewardship'] = { ...entry, enabled: true, config: { ...(entry.config || {}), mappingRoot }, hooks: { ...(entry.hooks || {}), allowPromptInjection: true } };

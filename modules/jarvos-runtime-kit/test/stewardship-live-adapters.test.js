@@ -360,13 +360,13 @@ test('OpenClaw stewardship-only setup preserves unrelated configuration and roll
   const config = path.join(temp, 'openclaw.json'); const staged = path.join(temp, 'stage'); const state = path.join(temp, 'state');
   try {
     fs.mkdirSync(path.join(staged, 'runtimes', 'openclaw'), { recursive: true });
-    fs.writeFileSync(config, `${JSON.stringify({ plugins: { load: { paths: ['/user/plugin', '/old/managed-harness/old/public/runtimes/openclaw'] }, allow: ['unrelated'], entries: { unrelated: { enabled: true } } }, unrelated: { keep: true } }, null, 2)}\n`);
+    fs.writeFileSync(config, `${JSON.stringify({ plugins: { load: { paths: ['/user/plugin', '/old/managed-harness/old/public/runtimes/openclaw'] }, allow: ['unrelated'], entries: { unrelated: { enabled: true } } }, tools: { allow: ['read'] }, unrelated: { keep: true } }, null, 2)}\n`);
     const env = { ...process.env, HOME: path.join(temp, 'home'), OPENCLAW_CONFIG: config, JARVOS_STEWARDSHIP_ONLY: '1', JARVOS_MANAGED_REPOSITORIES: '/managed/repo', JARVOS_STAGED_PUBLIC_RUNTIME_ROOT: staged, JARVOS_MANAGED_HARNESS_STATE_ROOT: state };
     const script = path.join(ROOT, 'runtimes', 'openclaw', 'setup.sh');
     runSetup(script, env); const first = fs.readFileSync(config, 'utf8'); runSetup(script, env); assert.equal(fs.readFileSync(config, 'utf8'), first);
-    let parsed = JSON.parse(first); assert.deepEqual(parsed.plugins.load.paths, ['/user/plugin', path.join(staged, 'runtimes', 'openclaw')]); assert.equal(parsed.unrelated.keep, true); assert.equal(parsed.plugins.entries.unrelated.enabled, true); assert.equal(parsed.plugins.entries['jarvos-stewardship'].config.mappingRoot, path.join(state, 'stewardship-bridge', 'openclaw-sessions'));
+    let parsed = JSON.parse(first); assert.deepEqual(parsed.plugins.load.paths, ['/user/plugin', path.join(staged, 'runtimes', 'openclaw')]); assert.equal(parsed.unrelated.keep, true); assert.equal(parsed.plugins.entries.unrelated.enabled, true); assert.equal(parsed.plugins.entries['jarvos-stewardship'].config.mappingRoot, path.join(state, 'stewardship-bridge', 'openclaw-sessions')); assert.deepEqual(parsed.tools.allow, ['read', 'jarvos_stewardship_answer']);
     runSetup(script, { ...env, JARVOS_MANAGED_HARNESS_ROLLBACK: '1' }); parsed = JSON.parse(fs.readFileSync(config, 'utf8'));
-    assert.deepEqual(parsed.plugins.load.paths, ['/user/plugin']); assert.deepEqual(parsed.plugins.allow, ['unrelated']); assert.equal(parsed.plugins.entries['jarvos-stewardship'], undefined); assert.equal(parsed.plugins.entries.unrelated.enabled, true);
+    assert.deepEqual(parsed.plugins.load.paths, ['/user/plugin']); assert.deepEqual(parsed.plugins.allow, ['unrelated']); assert.equal(parsed.plugins.entries['jarvos-stewardship'], undefined); assert.equal(parsed.plugins.entries.unrelated.enabled, true); assert.deepEqual(parsed.tools.allow, ['read']);
   } finally { fs.rmSync(temp, { recursive: true, force: true }); }
 });
 
