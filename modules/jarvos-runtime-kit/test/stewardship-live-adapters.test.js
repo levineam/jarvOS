@@ -226,6 +226,50 @@ test('Claude SessionStart persists only a validated bridge command for later hoo
   }
 });
 
+test('Claude SessionStart exposes a pending stewardship judgment even when hydration is unavailable', () => {
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-claude-start-judgment-'));
+  const bin = path.join(temp, 'bin');
+  const oldPath = process.env.PATH;
+  const oldBridge = process.env.JARVOS_STEWARDSHIP_BRIDGE_COMMAND;
+  try {
+    fs.mkdirSync(bin, { recursive: true });
+    const bridge = path.join(bin, 'jarvos-stewardship-bridge');
+    fs.writeFileSync(bridge, [
+      '#!/usr/bin/env sh',
+      'if [ "$1" = "nextTurnInput" ]; then',
+      "  printf '%s\\n' '{\"available\":true,\"pendingInSessionInput\":true,\"prompt\":\"Choose the safe recovery step.\",\"choices\":[\"Wait\",\"Prepare a dry run\"],\"default\":\"Wait\",\"correlation\":\"claude-start-42\"}'",
+      'else',
+      "  printf '%s\\n' '{\"available\":true}'",
+      'fi',
+      '',
+    ].join('\n'), { mode: 0o700 });
+    process.env.PATH = `${bin}${path.delimiter}${oldPath || ''}`;
+    process.env.JARVOS_STEWARDSHIP_BRIDGE_COMMAND = 'jarvos-stewardship-bridge';
+    const hook = require(path.join(ROOT, 'runtimes', 'claude', 'jarvos-session-start-hook.js'));
+    const context = hook.stewardshipContext({ cwd: temp });
+    assert.match(context, /Choose the safe recovery step\./);
+    assert.match(context, /claude-start-42/);
+    assert.match(context, /jarvos-stewardship-bridge answer --correlation <correlation> --choice <listed-choice>/);
+    const started = spawnSync(process.execPath, [path.join(ROOT, 'runtimes', 'claude', 'jarvos-session-start-hook.js')], {
+      cwd: temp,
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        JARVOS_SECONDBRAIN_DIR: path.join(temp, 'missing-secondbrain'),
+      },
+    });
+    assert.equal(started.status, 0, started.stderr);
+    const startupOutput = JSON.parse(started.stdout);
+    assert.match(startupOutput.hookSpecificOutput.additionalContext, /Choose the safe recovery step\./);
+    assert.match(startupOutput.hookSpecificOutput.additionalContext, /claude-start-42/);
+  } finally {
+    if (oldBridge === undefined) delete process.env.JARVOS_STEWARDSHIP_BRIDGE_COMMAND;
+    else process.env.JARVOS_STEWARDSHIP_BRIDGE_COMMAND = oldBridge;
+    process.env.PATH = oldPath;
+    fs.rmSync(temp, { recursive: true, force: true });
+  }
+});
+
 test('native turn hooks reject malicious bridge payloads and stay quiet without public input', () => {
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-stewardship-turn-reject-'));
   const bin = path.join(temp, 'bin');

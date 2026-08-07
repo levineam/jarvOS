@@ -138,6 +138,7 @@ if (require.main === module) main();
 module.exports = {
   HARNESS,
   BRIDGE_COMMAND_ENV,
+  additionalContext,
   availability,
   hasVerifiedLinkedWorktree,
   heartbeat,
