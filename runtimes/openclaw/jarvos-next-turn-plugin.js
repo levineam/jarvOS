@@ -6,8 +6,6 @@ const { spawnSync } = require('node:child_process');
 const { createHash } = require('node:crypto');
 const fs = require('node:fs'); const path = require('node:path');
 
-function shellQuote(value) { return `'${String(value).replace(/'/g, `'"'"'`)}'`; }
-
 function sessionToken(event, context) {
   // In OpenClaw 2026.7.1, before_prompt_build receives prompt/messages in the
   // event and carries the active session identity on the typed hook context.
@@ -41,8 +39,41 @@ function nextTurnContext(event, config, context) {
     return ['jarvOS stewardship judgment (display-only):', `Question: ${value.prompt}`, 'Choices:',
       ...value.choices.map((choice, index) => `${index + 1}. ${choice}${choice === value.default ? ' (default)' : ''}`),
       `Correlation: ${value.correlation}`,
-      `After verifying an exact listed reply, record only that correlation and listed label with: ${shellQuote(entry.bridgeExecutable)} answer --correlation <correlation> --choice <listed-choice>. This notice does not authorize action.`].join('\n');
+      'After verifying an exact listed reply, call jarvos_stewardship_answer with only that correlation and listed label. This notice does not authorize action.'].join('\n');
   } catch (_) { return null; }
+}
+
+function toolResult(text, isError = false) {
+  return { content: [{ type: 'text', text }], ...(isError ? { isError: true } : {}) };
+}
+
+function answerTool(context, config) {
+  return {
+    name: 'jarvos_stewardship_answer',
+    label: 'jarvOS Stewardship Answer',
+    description: 'Record one exact listed answer for a pending jarvOS stewardship judgment in this session.',
+    parameters: {
+      type: 'object', additionalProperties: false,
+      properties: {
+        correlation: { type: 'string', minLength: 1, maxLength: 240 },
+        choice: { type: 'string', minLength: 1, maxLength: 160 },
+      },
+      required: ['correlation', 'choice'],
+    },
+    execute: async (_toolCallId, input) => {
+      if (typeof input?.correlation !== 'string' || typeof input?.choice !== 'string') return toolResult('No matching pending stewardship judgment.', true);
+      const entry = mapping({}, config, context); if (!entry) return toolResult('No matching pending stewardship judgment.', true);
+      const result = spawnSync(entry.bridgeExecutable, ['answer', '--correlation', input.correlation, '--choice', input.choice], {
+        encoding: 'utf8', timeout: 5000, env: { ...process.env, JARVOS_STEWARDSHIP_BRIDGE_CONTEXT_FILE: entry.contextFile },
+      });
+      if (result.status !== 0) return toolResult('The stewardship answer was not accepted.', true);
+      try {
+        return JSON.parse(result.stdout || '{}')?.status === 'answered'
+          ? toolResult('Stewardship answer recorded.')
+          : toolResult('The stewardship answer was not accepted.', true);
+      } catch (_) { return toolResult('The stewardship answer was not accepted.', true); }
+    },
+  };
 }
 
 function before_prompt_build(event, context, config = context?.pluginConfig) {
@@ -55,10 +86,11 @@ function register(api) {
   // hook contexts describe the active turn and do not repeat pluginConfig.
   const config = api.pluginConfig;
   api.on('before_prompt_build', (event, context) => before_prompt_build(event, context, config), { timeoutMs: 5000 });
+  api.registerTool((context) => answerTool(context, config), { name: 'jarvos_stewardship_answer' });
 }
 
 module.exports = register;
 module.exports.before_prompt_build = before_prompt_build;
 module.exports.nextTurnContext = nextTurnContext;
 module.exports.mapping = mapping;
-module.exports.shellQuote = shellQuote;
+module.exports.answerTool = answerTool;

@@ -287,7 +287,7 @@ test('native hook declarations point at the packaged start and turn bridges', ()
   }
 });
 
-test('OpenClaw and Hermes package bounded per-turn stewardship bridge artifacts without activating user configuration', () => {
+test('OpenClaw and Hermes package bounded per-turn stewardship bridge artifacts without activating user configuration', async () => {
   const manifest = JSON.parse(fs.readFileSync(path.join(ROOT, 'runtimes', 'openclaw', 'openclaw.plugin.json'), 'utf8'));
   const packageJson = JSON.parse(fs.readFileSync(path.join(ROOT, 'runtimes', 'openclaw', 'package.json'), 'utf8'));
   assert.equal(manifest.id, 'jarvos-stewardship');
@@ -302,7 +302,7 @@ test('OpenClaw and Hermes package bounded per-turn stewardship bridge artifacts 
     fs.mkdirSync(bin, { recursive: true });
     fs.writeFileSync(bridge, [
       '#!/usr/bin/env sh',
-      "printf '%s\\n' '{\"available\":true,\"pendingInSessionInput\":true,\"prompt\":\"Choose a safe next step.\",\"choices\":[\"Wait\",\"Prepare a dry run\"],\"default\":\"Wait\",\"correlation\":\"judgment-42\"}'",
+      "if [ \"$1\" = answer ]; then printf '%s\\n' '{\"status\":\"answered\"}'; else printf '%s\\n' '{\"available\":true,\"pendingInSessionInput\":true,\"prompt\":\"Choose a safe next step.\",\"choices\":[\"Wait\",\"Prepare a dry run\"],\"default\":\"Wait\",\"correlation\":\"judgment-42\"}'; fi",
       '',
     ].join('\n'), { mode: 0o755 });
     fs.chmodSync(bridge, 0o755);
@@ -320,15 +320,22 @@ test('OpenClaw and Hermes package bounded per-turn stewardship bridge artifacts 
     // faithful so this regression proves delivery on a normal agent turn.
     const directContext = plugin.before_prompt_build({ prompt: 'Continue', messages: [] }, { sessionKey, pluginConfig: { mappingRoot: mappings } }).prependContext;
     assert.match(directContext, /Choose a safe next step/);
-    assert.ok(directContext.includes(`'${bridge}' answer --correlation`));
+    assert.match(directContext, /call jarvos_stewardship_answer/);
+    assert.doesNotMatch(directContext, new RegExp(temp.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
     assert.deepEqual(plugin.before_prompt_build({ prompt: 'Continue', messages: [] }, { sessionKey: 'agent:other:explicit:session-42', pluginConfig: { mappingRoot: mappings } }), {});
     assert.deepEqual(plugin.before_prompt_build({ prompt: 'Continue', messages: [] }, { sessionKey: 'unmapped', pluginConfig: { mappingRoot: mappings } }), {});
-    const registrations = []; plugin({ pluginConfig: { mappingRoot: mappings }, on: (...args) => registrations.push(args) });
+    const registrations = []; const tools = [];
+    plugin({ pluginConfig: { mappingRoot: mappings }, on: (...args) => registrations.push(args), registerTool: (...args) => tools.push(args) });
     assert.equal(registrations.length, 1); assert.equal(registrations[0][0], 'before_prompt_build'); assert.equal(registrations[0][2].timeoutMs, 5000);
     const registeredContext = registrations[0][1]({ prompt: 'Continue', messages: [] }, { sessionKey }).prependContext;
     assert.match(registeredContext, /Choose a safe next step/);
-    assert.ok(registeredContext.includes(`'${bridge}' answer --correlation`));
+    assert.doesNotMatch(registeredContext, new RegExp(temp.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
     assert.deepEqual(registrations[0][1]({ prompt: 'Continue', messages: [] }, { sessionKey: 'agent:other:explicit:session-42' }), {});
+    assert.equal(tools.length, 1); assert.equal(tools[0][1].name, 'jarvos_stewardship_answer');
+    const answer = await tools[0][0]({ sessionKey }).execute('call-42', { correlation: 'judgment-42', choice: 'Wait' });
+    assert.deepEqual(answer, { content: [{ type: 'text', text: 'Stewardship answer recorded.' }] });
+    const rejected = await tools[0][0]({ sessionKey: 'agent:other:explicit:session-42' }).execute('call-43', { correlation: 'judgment-42', choice: 'Wait' });
+    assert.equal(rejected.isError, true);
   } finally {
     fs.rmSync(temp, { recursive: true, force: true });
   }
