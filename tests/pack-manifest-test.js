@@ -31,6 +31,7 @@ function advertisedRuntimeAssets() {
   const required = [
     'modules/jarvos-runtime-kit/package.json',
     'modules/jarvos-runtime-kit/src/index.js',
+    'modules/jarvos-runtime-kit/src/stewardship-bootstrap.js',
     'modules/jarvos-runtime-kit/scripts/jarvos-runtime-kit.js',
     'modules/jarvos-runtime-kit/README.md',
     'modules/jarvos-control-plane/scripts/jarvos-manager.js',
@@ -44,6 +45,8 @@ function advertisedRuntimeAssets() {
     if (fs.existsSync(setup)) required.push(`runtimes/${name}/setup.sh`);
     const readme = path.join(runtimesDir, name, 'README.md');
     if (fs.existsSync(readme)) required.push(`runtimes/${name}/README.md`);
+    const bootstrapAssets = JSON.parse(fs.readFileSync(adapter, 'utf8')).stewardshipAdapter?.bootstrap?.selectedRuntimeAssets || [];
+    required.push(...bootstrapAssets);
   }
   return required;
 }
