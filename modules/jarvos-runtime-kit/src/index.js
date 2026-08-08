@@ -5,6 +5,7 @@ const path = require('path');
 const harnessDispatch = require('./harness-dispatch.js');
 const stewardshipAdapter = require('./stewardship-adapter.js');
 const stewardshipBootstrap = require('./stewardship-bootstrap.js');
+const openclawPluginPersistence = require('./openclaw-plugin-persistence.js');
 
 const DEFAULT_AGENT_CONTEXT_MCP = 'modules/jarvos-agent-context/scripts/jarvos-mcp.js';
 const REQUIRED_MCP_TOOL = 'jarvos_hydrate';
@@ -283,6 +284,7 @@ module.exports = {
   ...harnessDispatch,
   ...stewardshipAdapter,
   ...stewardshipBootstrap,
+  ...openclawPluginPersistence,
   DEFAULT_AGENT_CONTEXT_MCP,
   HYDRATION_MODES,
   REQUIRED_MCP_TOOL,
