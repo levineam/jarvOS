@@ -132,8 +132,10 @@ jarvos doctor --profile local-openclaw --workspace /path/to/workspace
 This creates missing portable workspace files, registers the local OpenClaw
 adapter in `jarvos.config.json`, records installed JarvOS skills, and writes
 workspace state under the OpenClaw state directory. Existing JarvOS JSON files
-are backed up before merge writes, and `openclaw.json` is never created or
-overwritten by JarvOS.
+are backed up before merge writes, and `jarvOS init` does not create or
+overwrite `openclaw.json`. The separate explicitly activated managed OpenClaw
+setup may write a narrow, backed-up plugin registration and validates its
+staged adapter before considering the setup successful.
 
 The doctor uses explicit dependency states: `ok` for healthy dependencies,
 `fail` for missing required dependencies such as the `openclaw` command, and
@@ -183,6 +185,11 @@ What this does:
 - writes OpenClaw workspace state under the configured OpenClaw state directory
 - preserves existing OpenClaw runtime config instead of rewriting it
 - reports optional tools, such as `lossless-claw`, without making them required
+
+If the managed launcher is explicitly enabled later, use
+`runtimes/openclaw/setup.sh` for its owned plugin registration. That path is
+transactional and rollback-aware; it is not part of `jarvOS init` or the
+portable workspace merge.
 
 This is intentionally not a secret one-machine setup. The reusable pattern is:
 describe the workspace contract in Markdown and JSON, register runtime adapters

@@ -19,6 +19,14 @@ before replacing it.
 The command does not create or overwrite `openclaw.json`. Existing OpenClaw
 runtime config is detected and preserved.
 
+This guarantee applies to `jarvos init` and the ordinary local profile. The
+separate explicitly activated managed runtime setup in
+`runtimes/openclaw/setup.sh` may perform a narrow OpenClaw plugin registration:
+it backs up before writing, preserves unrelated configuration, verifies the
+staged jarvOS adapter through OpenClaw's read-only inspection surface, and
+restores the exact prior bytes, mode, and presence if its own new registration
+fails. It never copies the staged adapter into OpenClaw's managed npm root.
+
 For isolated tests, pass an explicit OpenClaw state directory:
 
 ```bash
@@ -68,6 +76,18 @@ The doctor reports three kinds of dependency state:
 This means a fresh workspace can show a partial result before optional
 continuity tooling such as `lossless-claw` is installed, while still failing
 clearly when the local OpenClaw runtime itself is missing.
+
+For `local-openclaw`, doctor also performs a bounded plugin-persistence check.
+It reads the supported OpenClaw version, registry, and inspection surfaces
+without editing configuration. Missing user-managed records, paths, manifests,
+or unavailable plugins are warnings. A missing enabled jarvOS staged adapter is
+a failure because jarvOS owns that adapter. Unsupported or changing evidence
+is reported as skipped or warning rather than treated as healthy.
+
+Recovery is deliberate: inspect the affected plugin and confirm scope, use the
+official OpenClaw install/enable command only for that confirmed plugin, and
+rerun doctor. Do not edit generated registry state, run broad `doctor --fix`
+from cleanup, or ask jarvOS to reinstall arbitrary user plugins.
 
 Doctor also reports:
 

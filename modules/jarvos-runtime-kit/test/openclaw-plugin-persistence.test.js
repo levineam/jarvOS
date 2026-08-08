@@ -8,6 +8,7 @@ const {
   assessOpenClawPluginPersistence,
   collectOpenClawPluginEvidence,
   runOpenClawCommand,
+  verifyOpenClawPluginRegistration,
 } = require('../src/openclaw-plugin-persistence.js');
 
 const ROOT = '/synthetic/openclaw';
@@ -194,16 +195,16 @@ test('rejects unsupported versions, schemas, malformed records, and raw credenti
     registry: {
       current: {
         version: 99,
-        plugins: [{ ...plugin, pluginId: 'bad id with secret=token' }],
-        installRecords: { 'bad id with secret=token': { installPath: '/private/fixture/.openclaw/private', token: 'secret-token' } },
+        plugins: [{ ...plugin, pluginId: 'bad id with redaction-marker' }],
+        installRecords: { 'bad id with redaction-marker': { installPath: '/synthetic/fixture/openclaw', token: 'redaction-marker-42' } },
       },
-      stderr: 'Authorization: Bearer super-secret-token',
+      stderr: 'Authorization: Bearer redaction-marker-42',
     },
   });
 
   assert.notEqual(result.status, 'ok');
   const serialized = JSON.stringify(result);
-  assert.doesNotMatch(serialized, /private\/fixture|secret-token|Bearer|bad id with secret/);
+  assert.doesNotMatch(serialized, /synthetic\/fixture|redaction-marker-42|Bearer|bad id with redaction-marker/);
   assert.ok(['compatibility', 'indeterminate'].includes(result.status));
 });
 
@@ -227,20 +228,61 @@ test('command collection uses only the checked-in fixed argv and returns redacte
   assert.doesNotMatch(JSON.stringify(result), /synthetic\/openclaw/);
 });
 
+test('registration verification uses the fixed read-only version and inspection commands', async () => {
+  const calls = [];
+  const pluginPath = '/synthetic/stable/jarvos-openclaw-stewardship-plugin';
+  const result = await verifyOpenClawPluginRegistration({
+    pluginPath,
+    runCommand: async (command) => {
+      calls.push(command);
+      if (command.id === 'version') return { status: 'ok', stdout: 'OpenClaw 2026.7.1\n', stderr: '' };
+      return {
+        status: 'ok',
+        stdout: JSON.stringify([{
+          plugin: { id: 'jarvos-stewardship', status: 'loaded', enabled: true, rootDir: pluginPath, version: '1.0.0' },
+          diagnostics: [],
+        }]),
+        stderr: '',
+      };
+    },
+  });
+
+  assert.equal(result.status, 'ok');
+  assert.deepEqual(calls.map((command) => command.args), [
+    ['--version'],
+    ['plugins', 'inspect', '--all', '--json'],
+  ]);
+  assert.equal(calls.every((command) => command.executable === 'openclaw'), true);
+  assert.doesNotMatch(JSON.stringify(result), /synthetic/);
+});
+
+test('registration verification never accepts an unavailable or path-mismatched staged plugin', async () => {
+  const base = {
+    pluginPath: '/synthetic/stable/jarvos-openclaw-stewardship-plugin',
+    runCommand: async (command) => command.id === 'version'
+      ? { status: 'ok', stdout: 'OpenClaw 2026.7.1', stderr: '' }
+      : { status: 'ok', stdout: JSON.stringify([{ plugin: { id: 'jarvos-stewardship', status: 'error', enabled: true, rootDir: '/synthetic/other' }, diagnostics: ['redaction-marker-42'] }]), stderr: '' },
+  };
+  const result = await verifyOpenClawPluginRegistration(base);
+  assert.equal(result.status, 'indeterminate');
+  assert.equal(result.reason, 'plugin-path-mismatch');
+  assert.doesNotMatch(JSON.stringify(result), /synthetic|redaction-marker-42/);
+});
+
 test('unsupported command, invalid JSON, nonzero exit, output overflow, and timeout stay bounded', async () => {
   const unsupported = await collectOpenClawPluginEvidence({
-    runCommand: async () => ({ status: 'unsupported', reason: 'command-not-supported', stdout: '', stderr: 'raw secret' }),
+    runCommand: async () => ({ status: 'unsupported', reason: 'command-not-supported', stdout: '', stderr: 'redaction-marker-42' }),
   });
   assert.equal(unsupported.status, 'compatibility');
-  assert.doesNotMatch(JSON.stringify(unsupported), /raw secret/);
+  assert.doesNotMatch(JSON.stringify(unsupported), /redaction-marker-42/);
 
   const invalid = await collectOpenClawPluginEvidence({
     runCommand: async (command) => command.id === 'version'
       ? { status: 'ok', stdout: 'OpenClaw 2026.7.1', stderr: '' }
-      : { status: 'ok', stdout: '{not-json', stderr: 'password=secret' },
+      : { status: 'ok', stdout: '{not-json', stderr: 'credential=redaction-marker-42' },
   });
   assert.equal(invalid.status, 'compatibility');
-  assert.doesNotMatch(JSON.stringify(invalid), /password|secret/);
+  assert.doesNotMatch(JSON.stringify(invalid), /credential|redaction-marker-42/);
 
   const outputLimit = await runOpenClawCommand({ executable: process.execPath, args: ['-e', 'process.stdout.write("x".repeat(100000))'] }, { outputLimit: 1024, timeoutMs: 5000 });
   assert.equal(outputLimit.status, 'compatibility');

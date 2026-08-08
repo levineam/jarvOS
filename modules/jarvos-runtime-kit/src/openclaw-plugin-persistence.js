@@ -7,10 +7,11 @@ const CAPABILITY_VERSION = '2026.7.1';
 const REGISTRY_SCHEMA = 'openclaw-plugin-registry.v1';
 const INSPECTION_SCHEMA = 'openclaw-plugin-inspection-array.v1';
 const VERSION_SCHEMA = 'openclaw-version-text.v1';
-const DEFAULT_TIMEOUT_MS = 10_000;
+const DEFAULT_TIMEOUT_MS = 15_000;
 const DEFAULT_OUTPUT_LIMIT = 512 * 1024;
 const MAX_IDENTIFIER_LENGTH = 128;
 const MAX_VERSION_LENGTH = 64;
+const STEWARDSHIP_PLUGIN_ID = 'jarvos-stewardship';
 
 const OPENCLAW_PERSISTENCE_CAPABILITIES = Object.freeze({
   version: CAPABILITY_VERSION,
@@ -361,6 +362,52 @@ async function collectOpenClawPluginEvidence(options = {}) {
   });
 }
 
+async function verifyOpenClawPluginRegistration(options = {}) {
+  const pluginId = safeIdentifier(options.pluginId || STEWARDSHIP_PLUGIN_ID);
+  const pluginPath = internalPath(options.pluginPath);
+  if (!pluginId || !pluginPath) return compatibility('invalid-plugin-registration-target');
+
+  const executable = options.executable || 'openclaw';
+  const runCommand = options.runCommand || ((command) => runOpenClawCommand(command, options));
+  const versionResult = await runCommand({
+    id: 'version',
+    executable,
+    args: ['--version'],
+  });
+  const versionFailure = commandFailure(versionResult);
+  if (versionFailure) return versionFailure;
+  const version = extractVersion({ stdout: versionResult.stdout });
+  if (version !== CAPABILITY_VERSION) return compatibility('unsupported-version', { evidence: { version: version || 'unknown' } });
+
+  const inspectionResult = await runCommand({
+    id: 'inspection',
+    executable,
+    args: ['plugins', 'inspect', '--all', '--json'],
+  });
+  const inspectionFailure = commandFailure(inspectionResult);
+  if (inspectionFailure) return inspectionFailure;
+  const inspections = parseJsonOutput(inspectionResult.stdout);
+  if (!inspections) return compatibility('invalid-inspection-output');
+  const normalized = normalizeInspections(inspections);
+  if (!normalized) return compatibility('unsupported-inspection-schema');
+
+  const plugin = normalized.get(pluginId);
+  if (!plugin) return indeterminate('plugin-not-inspected');
+  if (!plugin.enabled) return indeterminate('plugin-disabled');
+  if (!plugin.rootDir || plugin.rootDir !== pluginPath) return indeterminate('plugin-path-mismatch');
+  if (!HEALTHY_INSPECTION_STATUSES.has(plugin.status)) return indeterminate('plugin-unavailable');
+  if (isUncertainVersion(plugin.version)) return indeterminate('plugin-version-uncertain');
+
+  return {
+    status: 'ok',
+    evidence: {
+      version,
+      inspection: INSPECTION_SCHEMA,
+      plugin: 'verified',
+    },
+  };
+}
+
 function killProcessGroup(child, signal) {
   if (!child?.pid) return;
   try {
@@ -445,5 +492,6 @@ module.exports = {
   OPENCLAW_PERSISTENCE_CAPABILITIES,
   assessOpenClawPluginPersistence,
   collectOpenClawPluginEvidence,
+  verifyOpenClawPluginRegistration,
   runOpenClawCommand,
 };

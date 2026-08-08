@@ -40,6 +40,44 @@ try {
     JARVOS_RUNTIME: 'minimal',
     JARVOS_CONTROL_PLANE_SERVICE_MODULE: controlPlaneHost,
   };
+  const fakeOpenClaw = path.join(tmp, 'openclaw');
+  const fakePluginRoot = path.join(ROOT, 'runtimes', 'openclaw');
+  const fakePluginManifest = path.join(fakePluginRoot, 'adapter.json');
+  const fakeRegistry = JSON.stringify({
+    current: {
+      version: 1,
+      hostContractVersion: '2026.7.1',
+      plugins: [{
+        pluginId: 'cli-fixture',
+        origin: 'path',
+        source: fakePluginManifest,
+        rootDir: fakePluginRoot,
+        manifestPath: fakePluginManifest,
+        enabled: true,
+        packageVersion: '1.0.0',
+      }],
+      installRecords: {},
+    },
+  });
+  const fakeInspection = JSON.stringify([{
+    plugin: { id: 'cli-fixture', status: 'loaded', enabled: true, rootDir: fakePluginRoot, version: '1.0.0' },
+    diagnostics: [],
+  }]);
+  fs.writeFileSync(fakeOpenClaw, [
+    '#!/bin/sh',
+    'if [ "$1" = "--version" ]; then',
+    '  printf \'%s\\n\' "OpenClaw 2026.7.1"',
+    'elif [ "$1" = "plugins" ] && [ "$2" = "registry" ]; then',
+    `  printf '%s\\n' ${JSON.stringify(fakeRegistry)}`,
+    'elif [ "$1" = "plugins" ] && [ "$2" = "inspect" ]; then',
+    `  printf '%s\\n' ${JSON.stringify(fakeInspection)}`,
+    'else',
+    '  exit 2',
+    'fi',
+  ].join('\n'), 'utf8');
+  fs.chmodSync(fakeOpenClaw, 0o755);
+  const openclawStateDir = path.join(tmp, 'openclaw-state');
+  fs.mkdirSync(openclawStateDir);
   assert.equal(
     require(path.join(ROOT, 'modules', 'jarvos-control-plane', 'scripts', 'jarvos-manager.js')).verifyHostService(controlPlaneHost).ok,
     true,
@@ -128,6 +166,30 @@ try {
   const report = JSON.parse(jsonDoctor.stdout);
   assert.equal(report.ok, true);
   assert.equal(report.profile.id, 'minimal');
+
+  const localDoctorEnv = {
+    ...env,
+    PATH: `${tmp}${path.delimiter}${process.env.PATH || ''}`,
+  };
+  fs.copyFileSync(path.join(ROOT, 'jarvos.config.schema.json'), path.join(workspace, 'jarvos.config.schema.json'));
+  const localDoctor = run([
+    'doctor',
+    '--profile',
+    'local-openclaw',
+    '--workspace',
+    workspace,
+    '--openclaw-dir',
+    openclawStateDir,
+    '--staged-runtime-root',
+    ROOT,
+    '--json',
+  ], { env: localDoctorEnv });
+  assert.notEqual(localDoctor.status, 0, 'local profile should report the incomplete minimal fixture as not ready');
+  const localReport = JSON.parse(localDoctor.stdout);
+  assert.equal(localReport.profile, 'local-openclaw');
+  const persistence = localReport.checks.find((check) => check.component === 'openclaw.pluginPersistence');
+  assert.equal(persistence.status, 'ok');
+  assert.equal(persistence.driftCount, 0);
 
   // A configured but unusable host fails doctor without leaking the module path.
   const badHostEnv = {

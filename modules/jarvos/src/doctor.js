@@ -905,7 +905,11 @@ function defaultInstalledSkillsManifestPath(workspace, profile) {
 
 function resolveOpenClawStateDir(options = {}, config) {
   const configured = config?.runtimeAdapters?.openclaw?.stateDir;
-  return path.resolve(expandHome(options.openclawStateDir || configured || path.join(os.homedir(), '.openclaw')));
+  const envConfigPath = process.env.OPENCLAW_CONFIG_PATH;
+  const envStateDir = typeof envConfigPath === 'string' && envConfigPath.trim()
+    ? path.dirname(expandHome(envConfigPath))
+    : null;
+  return path.resolve(expandHome(options.openclawStateDir || configured || envStateDir || path.join(os.homedir(), '.openclaw')));
 }
 
 function resolveStagedOpenClawRuntimeRoot(options = {}, config) {
@@ -914,7 +918,7 @@ function resolveStagedOpenClawRuntimeRoot(options = {}, config) {
     options.stagedRuntimeRoot
       || configured
       || process.env.JARVOS_STAGED_PUBLIC_RUNTIME_ROOT
-      || path.join(__dirname, '..', '..'),
+      || path.join(__dirname, '..', '..', '..'),
   ));
 }
 

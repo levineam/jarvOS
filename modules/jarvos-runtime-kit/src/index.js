@@ -109,6 +109,26 @@ function validateManifest(manifest) {
   if (manifest.stewardshipAdapter) {
     const bootstrap = stewardshipBootstrap.validateStewardshipBootstrap(manifest.stewardshipAdapter.bootstrap, manifest.id);
     if (!bootstrap.ok) for (const error of bootstrap.errors) add(errors, error);
+    const persistence = manifest.stewardshipAdapter.persistence;
+    if (persistence !== undefined) {
+      if (!isObject(persistence)) {
+        add(errors, 'stewardshipAdapter.persistence must be an object');
+      } else {
+        if (typeof persistence.owner !== 'string' || persistence.owner.length === 0) add(errors, 'stewardshipAdapter.persistence.owner is required');
+        const validationContract = persistence.validation;
+        if (!isObject(validationContract)) {
+          add(errors, 'stewardshipAdapter.persistence.validation is required');
+        } else {
+          if (!Array.isArray(validationContract.command) || validationContract.command.length === 0 || validationContract.command.some((part) => typeof part !== 'string' || part.length === 0)) {
+            add(errors, 'stewardshipAdapter.persistence.validation.command must be a non-empty argv array');
+          }
+          if (typeof validationContract.schema !== 'string' || validationContract.schema.length === 0) add(errors, 'stewardshipAdapter.persistence.validation.schema is required');
+          if (validationContract.readOnly !== true) add(errors, 'stewardshipAdapter.persistence.validation.readOnly must be true');
+          if (validationContract.activatesPluginCode !== false) add(errors, 'stewardshipAdapter.persistence.validation.activatesPluginCode must be false');
+          if (typeof validationContract.targetPluginId !== 'string' || validationContract.targetPluginId.length === 0) add(errors, 'stewardshipAdapter.persistence.validation.targetPluginId is required');
+        }
+      }
+    }
   }
   if (manifest.unsupportedCapabilities && !Array.isArray(manifest.unsupportedCapabilities)) {
     add(errors, 'unsupportedCapabilities must be an array');

@@ -1,12 +1,15 @@
 # jarvOS — OpenClaw Runtime
 
-This directory contains OpenClaw-specific implementation files for jarvOS.
+This directory contains the public OpenClaw adapter declaration, setup contract,
+and stable jarvOS stewardship plugin tuple for jarvOS.
 
 ## What's Here
 
 OpenClaw provides powerful scheduling, tool execution, and multi-channel messaging — but ships with blank templates. jarvOS fills the behavioral layer.
 
-This folder currently ships as **documentation-only** (this README). The actual starter files live in repo root (`core/` and `templates/`) and are copied into your OpenClaw workspace.
+The starter files live in repo root (`core/` and `templates/`) and are copied
+into your OpenClaw workspace. The managed stewardship plugin is a separate,
+durable runtime asset; it is not copied into OpenClaw's managed npm project.
 
 Startup hydration is manual: call the `jarvos_hydrate` MCP tool when a session needs the current context packet.
 
@@ -27,6 +30,57 @@ Use this as an adapter checklist for files you place in your workspace root:
 4. Copy templates and fill in your personal details
 5. Create/apply the OpenClaw adapter files in your workspace (HEARTBEAT.md, TOOLS.md, CONSTITUTION.md, scripts/, workflows/)
 6. Run `openclaw gateway start`
+
+The ordinary setup path prepares a workspace. An explicitly activated managed
+launcher may also run this adapter's `setup.sh` in stewardship-only mode. That
+path registers the stable jarvOS plugin with a backed-up, atomic configuration
+merge, verifies the registration with OpenClaw's read-only inspection command,
+and restores the exact prior configuration if its new registration cannot be
+verified. It does not install the staged jarvOS plugin into an OpenClaw-managed
+npm root.
+
+## Plugin persistence and cleanup
+
+OpenClaw-managed plugin projects are durable software, not cache. A cleanup job
+must not delete a managed npm project, a configured path-loaded plugin, or a
+jarvOS staged adapter because a package inventory looks stale.
+
+Use OpenClaw's supported structured surfaces to discover what must be preserved:
+
+```bash
+openclaw plugins registry --json
+openclaw plugins inspect --all --json
+```
+
+Treat the registry's current plugin roots, install-record paths, sources, and
+manifest paths as the protected set for that observation. The paths are
+installation-specific, so do not assume one home-directory layout. Keep the
+raw output local; summaries and issue reports should contain counts and
+classification only.
+
+Before cleanup, record a bounded plugin count and run the local jarvOS doctor.
+After cleanup, run the same read-only commands and doctor again. A cleanup
+allowlist may cover only its own temporary/cache roots; it must explicitly
+exclude registry-derived protected roots and the jarvOS staged runtime root.
+Never edit OpenClaw's generated registry database or index by hand, and do not
+run a broad automatic repair from a scheduled job.
+
+When drift is reported, inspect the affected plugin id and package/path first.
+Use the official OpenClaw command appropriate to the confirmed scope, such as
+`openclaw plugins install <package-or-path>` or
+`openclaw plugins enable <plugin-id>`, then rerun inspection. For the jarvOS
+adapter, rerun the supported setup path; do not repair unrelated plugins on
+jarvOS's authority.
+
+The jarvOS doctor uses these bounded states:
+
+- `ok`: the observed registry, inspection, filesystem, and version evidence is
+  coherent and the staged jarvOS adapter is present.
+- `warn`: unrelated plugin drift or incomplete/uncertain evidence needs review.
+- `fail`: the enabled jarvOS staged adapter is missing or the required local
+  runtime cannot be used.
+- `skipped`: the installed OpenClaw version does not expose the supported
+  structured capability, so no repair or rollback was attempted.
 
 ## Bootstrap Budget Management
 
@@ -57,7 +111,10 @@ workspace/
 
 ## Session Lifecycle — OpenClaw Reference Pattern
 
-This repo does **not** ship OpenClaw runtime scripts in `runtimes/openclaw/` yet. Use the [PMS session lifecycle pattern](../../core/pms/session-lifecycle.md) as a reference when you build your own workspace scripts.
+Use the [PMS session lifecycle pattern](../../core/pms/session-lifecycle.md) as
+a reference when you build workspace scripts. The checked-in setup and
+stewardship plugin files define only the portable adapter boundary; your
+workspace remains responsible for any additional lifecycle wiring.
 
 ### Suggested Wiring (for your workspace)
 
