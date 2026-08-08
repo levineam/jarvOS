@@ -44,6 +44,17 @@
       "enabledByDefault": false,
       "reason": "Configured managed roots activate the reversible launcher; all other repositories and administrative commands stay on the bound original binary."
     },
+    "bootstrap": {
+      "version": "jarvos-stewardship-bootstrap.v1",
+      "harness": "openclaw",
+      "rootEnvironment": "JARVOS_STEWARDSHIP_STABLE_ROOT",
+      "dispatcher": "jarvos-stewardship-dispatcher",
+      "entrypoint": { "kind": "openclawPlugin", "path": "jarvos-openclaw-stewardship-plugin" },
+      "actions": ["harness-launch", "session-start", "session-turn", "bridge", "provenance-probe"],
+      "selectedRuntimeAssets": ["runtimes/openclaw/jarvos-next-turn-plugin.js", "runtimes/openclaw/openclaw.plugin.json", "runtimes/openclaw/package.json"],
+      "installedConfig": { "inspection": "stable-entrypoint-only", "prepare": "reversible", "rollback": "exact-owned-state" },
+      "provenance": { "action": "provenance-probe", "sideEffectFree": true }
+    },
     "bridge": {
       "environment": "JARVOS_STEWARDSHIP_BRIDGE_COMMAND",
       "route": "owner-only hashed session mapping",

@@ -16,13 +16,18 @@ CONTROL_PLANE_SERVICE_MODULE="${JARVOS_CONTROL_PLANE_SERVICE_MODULE:-}"
 CONTROL_PLANE_CREDENTIAL_FILE="${JARVOS_CONTROL_PLANE_CREDENTIAL_FILE:-}"
 STEWARDSHIP_BRIDGE_COMMAND="${JARVOS_STEWARDSHIP_BRIDGE_COMMAND:-}"
 STEWARDSHIP_CODEX_SESSION_MAP_ROOT="${JARVOS_STEWARDSHIP_CODEX_SESSION_MAP_ROOT:-}"
+STEWARDSHIP_STABLE_ROOT="${JARVOS_STEWARDSHIP_STABLE_ROOT:-}"
+STEWARDSHIP_DISPATCHER=""
 
-# A quiet managed-launcher install supplies reviewed public hook bytes here.
-# Refuse to activate configured managed roots with checkout-resident hooks.
+# The private installer materializes this owner-controlled bundle once. Native
+# configuration must refer to it, never to a selected immutable runtime stage.
 if [ -n "${JARVOS_MANAGED_REPOSITORIES:-}" ]; then
-  : "${JARVOS_STAGED_PUBLIC_RUNTIME_ROOT:?stage the reviewed launcher tuple before enabling managed repositories}"
-  HOOK_SCRIPT="$JARVOS_STAGED_PUBLIC_RUNTIME_ROOT/runtimes/codex/jarvos-session-start-hook.js"
-  TURN_HOOK_SCRIPT="$JARVOS_STAGED_PUBLIC_RUNTIME_ROOT/runtimes/codex/jarvos-session-turn-hook.js"
+  : "${JARVOS_STEWARDSHIP_STABLE_ROOT:?materialize the stable stewardship bundle before enabling managed repositories}"
+  STEWARDSHIP_DISPATCHER="$STEWARDSHIP_STABLE_ROOT/jarvos-stewardship-dispatcher"
+  if [ ! -f "$STEWARDSHIP_DISPATCHER" ] || [ -L "$STEWARDSHIP_DISPATCHER" ] || [ ! -x "$STEWARDSHIP_DISPATCHER" ]; then
+    echo "stable jarvOS stewardship dispatcher is missing or unsafe" >&2
+    exit 1
+  fi
 fi
 
 if ! command -v codex >/dev/null 2>&1; then
@@ -147,11 +152,11 @@ if [ ! -f "$CODEX_CONFIG" ]; then
   touch "$CODEX_CONFIG"
 fi
 
-node - "$CODEX_CONFIG" "$LEGACY_HOOKS_JSON" "$HOOK_SCRIPT" "$TURN_HOOK_SCRIPT" "${JARVOS_MANAGED_HARNESS_ROLLBACK:-0}" "$STEWARDSHIP_BRIDGE_COMMAND" "$STEWARDSHIP_CODEX_SESSION_MAP_ROOT" <<'NODE'
+node - "$CODEX_CONFIG" "$LEGACY_HOOKS_JSON" "$HOOK_SCRIPT" "$TURN_HOOK_SCRIPT" "$STEWARDSHIP_DISPATCHER" "${JARVOS_MANAGED_HARNESS_ROLLBACK:-0}" "$STEWARDSHIP_BRIDGE_COMMAND" "$STEWARDSHIP_CODEX_SESSION_MAP_ROOT" <<'NODE'
 const fs = require('fs');
 const path = require('path');
 
-const [configPath, legacyHooksPath, hookScript, turnHookScript, rollback, bridgeCommand, codexSessionMapRoot] = process.argv.slice(2);
+const [configPath, legacyHooksPath, hookScript, turnHookScript, dispatcher, rollback, bridgeCommand, codexSessionMapRoot] = process.argv.slice(2);
 const original = fs.readFileSync(configPath, 'utf8');
 let next = original;
 
@@ -265,7 +270,8 @@ function dedupe(entries) {
 }
 
 function isManagedJarvosHook(entry) {
-  return /jarvos-(?:session-start|session-turn)-hook\.js\b/.test(entry);
+  return /jarvos-(?:session-start|session-turn)-hook\.js\b/.test(entry)
+    || /jarvos-stewardship-dispatcher\b/.test(entry);
 }
 
 function hookTableRange(lines) {
@@ -534,8 +540,14 @@ if (rollback === '1') {
   next = setStewardshipBridgeEnvironment(next, null);
 } else {
   validateHookTable(next);
-  next = setHook(next, 'SessionStart', renderHookEntry({ matcher: 'startup|resume', hooks: [{ type: 'command', command: `node ${JSON.stringify(hookScript)}`, async: false, timeout: 30 }] }), true);
-  next = setHook(next, 'UserPromptSubmit', renderHookEntry({ hooks: [{ type: 'command', command: `node ${JSON.stringify(turnHookScript)}`, async: false, timeout: 30 }] }), true);
+  const startCommand = dispatcher
+    ? `${JSON.stringify(dispatcher)} --harness codex --action session-start`
+    : `node ${JSON.stringify(hookScript)}`;
+  const turnCommand = dispatcher
+    ? `${JSON.stringify(dispatcher)} --harness codex --action session-turn`
+    : `node ${JSON.stringify(turnHookScript)}`;
+  next = setHook(next, 'SessionStart', renderHookEntry({ matcher: 'startup|resume', hooks: [{ type: 'command', command: startCommand, async: false, timeout: 30 }] }), true);
+  next = setHook(next, 'UserPromptSubmit', renderHookEntry({ hooks: [{ type: 'command', command: turnCommand, async: false, timeout: 30 }] }), true);
   next = setStewardshipBridgeEnvironment(next, bridgeEnvironment);
 }
 next = setFeature(next, 'hooks', 'true');

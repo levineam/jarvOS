@@ -44,6 +44,8 @@ function advertisedRuntimeAssets() {
     if (fs.existsSync(setup)) required.push(`runtimes/${name}/setup.sh`);
     const readme = path.join(runtimesDir, name, 'README.md');
     if (fs.existsSync(readme)) required.push(`runtimes/${name}/README.md`);
+    const bootstrapAssets = JSON.parse(fs.readFileSync(adapter, 'utf8')).stewardshipAdapter?.bootstrap?.selectedRuntimeAssets || [];
+    required.push(...bootstrapAssets);
   }
   return required;
 }

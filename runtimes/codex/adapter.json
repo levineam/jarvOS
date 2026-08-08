@@ -59,6 +59,17 @@
       "enabledByDefault": false,
       "reason": "Configured managed roots activate the reversible launcher while verified native worktrees remain adopted."
     },
+    "bootstrap": {
+      "version": "jarvos-stewardship-bootstrap.v1",
+      "harness": "codex",
+      "rootEnvironment": "JARVOS_STEWARDSHIP_STABLE_ROOT",
+      "dispatcher": "jarvos-stewardship-dispatcher",
+      "entrypoint": { "kind": "dispatcher", "path": "jarvos-stewardship-dispatcher" },
+      "actions": ["harness-launch", "session-start", "session-turn", "bridge", "provenance-probe"],
+      "selectedRuntimeAssets": ["runtimes/codex/jarvos-session-start-hook.js", "runtimes/codex/jarvos-session-turn-hook.js"],
+      "installedConfig": { "inspection": "stable-entrypoint-only", "prepare": "reversible", "rollback": "exact-owned-state" },
+      "provenance": { "action": "provenance-probe", "sideEffectFree": true }
+    },
     "bridge": {
       "environment": "JARVOS_STEWARDSHIP_BRIDGE_COMMAND",
       "contract": "An executable on PATH accepts one lifecycle capability name and emits a public-safe JSON availability receipt. For nextTurnInput, a pending receipt may contain only a bounded plain-English prompt, 2-3 choices, a listed default, and an opaque correlation identifier; hooks display it without granting authority. Codex resolves private bridge state only through the current CODEX_THREAD_ID and a session-neutral private mapping root. Native hooks do not capture arbitrary reply text: the in-session agent verifies an exact listed reply, then invokes `jarvos-stewardship-bridge answer --correlation <correlation> --choice <listed-choice>`, which passes only those two bounded fields."

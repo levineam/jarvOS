@@ -19,15 +19,18 @@ WORKSPACE_INPUT="${1:-$(pwd)}"
 mkdir -p "$WORKSPACE_INPUT"
 WORKSPACE="$(cd "$WORKSPACE_INPUT" && pwd)"
 
-# This mode is intentionally limited to the staged stewardship plugin.  It is
+# This mode is intentionally limited to the stable stewardship plugin. It is
 # used by the managed launcher and must never copy workspace templates.
 if [ "${JARVOS_STEWARDSHIP_ONLY:-0}" = "1" ] || [ "${JARVOS_MANAGED_HARNESS_ROLLBACK:-0}" = "1" ]; then
-  : "${JARVOS_STAGED_PUBLIC_RUNTIME_ROOT:?the staged public runtime root is required}"
   : "${JARVOS_MANAGED_HARNESS_STATE_ROOT:?the managed launcher state root is required}"
+  if [ "${JARVOS_MANAGED_HARNESS_ROLLBACK:-0}" != "1" ]; then
+    : "${JARVOS_STEWARDSHIP_STABLE_ROOT:?the stable stewardship bundle root is required}"
+  fi
   OPENCLAW_CONFIG="${OPENCLAW_CONFIG:-$HOME/.openclaw/openclaw.json}"
-  node - "$OPENCLAW_CONFIG" "$JARVOS_STAGED_PUBLIC_RUNTIME_ROOT/runtimes/openclaw" "$JARVOS_MANAGED_HARNESS_STATE_ROOT/stewardship-bridge/openclaw-sessions" "${JARVOS_MANAGED_HARNESS_ROLLBACK:-0}" <<'NODE'
+  node - "$OPENCLAW_CONFIG" "${JARVOS_STEWARDSHIP_STABLE_ROOT:-}" "$JARVOS_MANAGED_HARNESS_STATE_ROOT/stewardship-bridge/openclaw-sessions" "${JARVOS_MANAGED_HARNESS_ROLLBACK:-0}" <<'NODE'
 const fs = require('fs'); const path = require('path');
-const [configPath, pluginPath, mappingRoot, rollback] = process.argv.slice(2);
+const [configPath, stableRoot, mappingRoot, rollback] = process.argv.slice(2);
+const pluginPath = stableRoot ? path.join(stableRoot, 'jarvos-openclaw-stewardship-plugin') : null;
 const original = fs.existsSync(configPath) ? fs.readFileSync(configPath, 'utf8') : '{}\n';
 const config = JSON.parse(original || '{}');
 const plugins = config.plugins && typeof config.plugins === 'object' ? config.plugins : {};
@@ -50,7 +53,7 @@ function targetAgent(create) {
   return agent;
 }
 if (rollback === '1') {
-  if (plugins.load && Array.isArray(plugins.load.paths)) plugins.load.paths = plugins.load.paths.filter((value) => value !== pluginPath);
+  if (plugins.load && Array.isArray(plugins.load.paths)) plugins.load.paths = plugins.load.paths.filter((value) => value !== pluginPath && !(typeof value === 'string' && value.includes('/managed-harness/') && value.endsWith('/public/runtimes/openclaw')) && !(typeof value === 'string' && value.endsWith('/jarvos-openclaw-stewardship-plugin')));
   if (Array.isArray(plugins.allow)) plugins.allow = plugins.allow.filter((value) => value !== 'jarvos-stewardship');
   if (plugins.entries && typeof plugins.entries === 'object') delete plugins.entries['jarvos-stewardship'];
   if (toolAllowAddedByJarvos && Array.isArray(tools?.allow)) tools.allow = tools.allow.filter((value) => value !== 'jarvos_stewardship_answer');
@@ -66,7 +69,8 @@ if (rollback === '1') {
   config.plugins = plugins;
   plugins.load = plugins.load && typeof plugins.load === 'object' ? plugins.load : {};
   plugins.load.paths = Array.isArray(plugins.load.paths) ? plugins.load.paths : [];
-  plugins.load.paths = plugins.load.paths.filter((value) => !(typeof value === 'string' && value.includes('/managed-harness/') && value.endsWith('/public/runtimes/openclaw')));
+  if (!pluginPath || !path.isAbsolute(pluginPath)) throw new Error('stable OpenClaw plugin path is required');
+  plugins.load.paths = plugins.load.paths.filter((value) => !(typeof value === 'string' && value.includes('/managed-harness/') && value.endsWith('/public/runtimes/openclaw')) && !(typeof value === 'string' && value.endsWith('/jarvos-openclaw-stewardship-plugin')));
   if (!plugins.load.paths.includes(pluginPath)) plugins.load.paths.push(pluginPath);
   if (Array.isArray(plugins.allow) && !plugins.allow.includes('jarvos-stewardship')) plugins.allow.push('jarvos-stewardship');
   if (Array.isArray(tools?.allow) && !tools.allow.includes('jarvos_stewardship_answer')) tools.allow.push('jarvos_stewardship_answer');
@@ -99,9 +103,9 @@ if (next !== original) {
 }
 NODE
   if [ "${JARVOS_MANAGED_HARNESS_ROLLBACK:-0}" = "1" ]; then
-    echo "Removed only the staged jarvOS OpenClaw stewardship plugin configuration."
+    echo "Removed only the stable jarvOS OpenClaw stewardship plugin configuration."
   else
-    echo "Installed the staged jarvOS OpenClaw stewardship plugin configuration."
+    echo "Installed the stable jarvOS OpenClaw stewardship plugin configuration."
   fi
   exit 0
 fi

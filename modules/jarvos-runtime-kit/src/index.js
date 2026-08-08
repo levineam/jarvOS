@@ -4,6 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const harnessDispatch = require('./harness-dispatch.js');
 const stewardshipAdapter = require('./stewardship-adapter.js');
+const stewardshipBootstrap = require('./stewardship-bootstrap.js');
 
 const DEFAULT_AGENT_CONTEXT_MCP = 'modules/jarvos-agent-context/scripts/jarvos-mcp.js';
 const REQUIRED_MCP_TOOL = 'jarvos_hydrate';
@@ -103,6 +104,10 @@ function validateManifest(manifest) {
 
   if (manifest.configWrites && !manifest.configWrites.backupBeforeWrite) {
     add(errors, 'configWrites.backupBeforeWrite must be true when configWrites is declared');
+  }
+  if (manifest.stewardshipAdapter) {
+    const bootstrap = stewardshipBootstrap.validateStewardshipBootstrap(manifest.stewardshipAdapter.bootstrap, manifest.id);
+    if (!bootstrap.ok) for (const error of bootstrap.errors) add(errors, error);
   }
   if (manifest.unsupportedCapabilities && !Array.isArray(manifest.unsupportedCapabilities)) {
     add(errors, 'unsupportedCapabilities must be an array');
@@ -277,6 +282,7 @@ function scaffoldRuntime(runtimeId, outDir) {
 module.exports = {
   ...harnessDispatch,
   ...stewardshipAdapter,
+  ...stewardshipBootstrap,
   DEFAULT_AGENT_CONTEXT_MCP,
   HYDRATION_MODES,
   REQUIRED_MCP_TOOL,

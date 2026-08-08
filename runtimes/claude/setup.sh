@@ -12,13 +12,18 @@ CLAUDE_MD_PATH="${CLAUDE_MD_PATH:-$HOME/.claude/CLAUDE.md}"
 STEWARDSHIP_BRIDGE_COMMAND="${JARVOS_STEWARDSHIP_BRIDGE_COMMAND:-}"
 STEWARDSHIP_CLAUDE_SESSION_MAP_ROOT="${JARVOS_STEWARDSHIP_CLAUDE_SESSION_MAP_ROOT:-}"
 STEWARDSHIP_BRIDGE_PATH="${JARVOS_STEWARDSHIP_BRIDGE_PATH:-}"
+STEWARDSHIP_STABLE_ROOT="${JARVOS_STEWARDSHIP_STABLE_ROOT:-}"
+STEWARDSHIP_DISPATCHER=""
 
-# A quiet managed-launcher install supplies reviewed public hook bytes here.
-# Refuse to activate configured managed roots with checkout-resident hooks.
+# The private installer materializes this owner-controlled bundle once. Native
+# configuration must refer to it, never to a selected immutable runtime stage.
 if [ -n "${JARVOS_MANAGED_REPOSITORIES:-}" ]; then
-  : "${JARVOS_STAGED_PUBLIC_RUNTIME_ROOT:?stage the reviewed launcher tuple before enabling managed repositories}"
-  HOOK_SCRIPT="$JARVOS_STAGED_PUBLIC_RUNTIME_ROOT/runtimes/claude/jarvos-session-start-hook.js"
-  TURN_HOOK_SCRIPT="$JARVOS_STAGED_PUBLIC_RUNTIME_ROOT/runtimes/claude/jarvos-session-turn-hook.js"
+  : "${JARVOS_STEWARDSHIP_STABLE_ROOT:?materialize the stable stewardship bundle before enabling managed repositories}"
+  STEWARDSHIP_DISPATCHER="$STEWARDSHIP_STABLE_ROOT/jarvos-stewardship-dispatcher"
+  if [ ! -f "$STEWARDSHIP_DISPATCHER" ] || [ -L "$STEWARDSHIP_DISPATCHER" ] || [ ! -x "$STEWARDSHIP_DISPATCHER" ]; then
+    echo "stable jarvOS stewardship dispatcher is missing or unsafe" >&2
+    exit 1
+  fi
 fi
 
 if [ ! -f "$MCP_SERVER" ]; then
@@ -60,11 +65,11 @@ else
   echo "Claude Code CLI not found on PATH; skipping Claude Code MCP registration." >&2
 fi
 
-node - "$CLAUDE_SETTINGS" "$HOOK_SCRIPT" "$TURN_HOOK_SCRIPT" "$CLAUDE_DESKTOP_CONFIG" "$MCP_SERVER" "${JARVOS_STEWARDSHIP_ONLY:-0}" "${JARVOS_MANAGED_HARNESS_ROLLBACK:-0}" "$STEWARDSHIP_BRIDGE_COMMAND" "$STEWARDSHIP_CLAUDE_SESSION_MAP_ROOT" "$STEWARDSHIP_BRIDGE_PATH" <<'NODE'
+node - "$CLAUDE_SETTINGS" "$HOOK_SCRIPT" "$TURN_HOOK_SCRIPT" "$STEWARDSHIP_DISPATCHER" "$CLAUDE_DESKTOP_CONFIG" "$MCP_SERVER" "${JARVOS_STEWARDSHIP_ONLY:-0}" "${JARVOS_MANAGED_HARNESS_ROLLBACK:-0}" "$STEWARDSHIP_BRIDGE_COMMAND" "$STEWARDSHIP_CLAUDE_SESSION_MAP_ROOT" "$STEWARDSHIP_BRIDGE_PATH" <<'NODE'
 const fs = require('fs');
 const path = require('path');
 
-const [settingsPath, hookScript, turnHookScript, desktopConfigPath, mcpServer, stewardshipOnly, rollback, bridgeCommand, claudeSessionMapRoot, bridgePath] = process.argv.slice(2);
+const [settingsPath, hookScript, turnHookScript, dispatcher, desktopConfigPath, mcpServer, stewardshipOnly, rollback, bridgeCommand, claudeSessionMapRoot, bridgePath] = process.argv.slice(2);
 
 function readJsonFile(filePath, fallback) {
   if (!fs.existsSync(filePath)) return fallback;
@@ -123,9 +128,10 @@ function upsertClaudeCodeHook(settings, bridge) {
     const entries = Array.isArray(hooks[event]) ? [...hooks[event]] : [];
     const managedHookName = script.split(/[\\/]/).pop();
     const managedPath = new RegExp(`(?:^|[\\s/'\"])runtimes[\\\\/]claude[\\\\/]${managedHookName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?:$|[\\s'\"])`);
+    const managedDispatcher = /(?:^|[\\s/'\"])jarvos-stewardship-dispatcher(?:$|[\\s'\"])/;
     const retained = entries.map((candidate) => {
       if (!Array.isArray(candidate?.hooks)) return candidate;
-      const retainedHooks = candidate.hooks.filter((hook) => typeof hook?.command !== 'string' || !managedPath.test(hook.command));
+      const retainedHooks = candidate.hooks.filter((hook) => typeof hook?.command !== 'string' || (!managedPath.test(hook.command) && !managedDispatcher.test(hook.command)));
       if (retainedHooks.length === candidate.hooks.length) return candidate;
       return retainedHooks.length ? { ...candidate, hooks: retainedHooks } : null;
     }).filter(Boolean);
@@ -134,10 +140,13 @@ function upsertClaudeCodeHook(settings, bridge) {
     else delete hooks[event];
   }
 
-  function commandEntry(script, matcher) {
+  function commandEntry(script, action, matcher) {
+    const target = dispatcher
+      ? `${shellQuote(dispatcher)} --harness claude --action ${action}`
+      : `node ${shellQuote(script)}`;
     const command = bridge
-      ? `env JARVOS_STEWARDSHIP_BRIDGE_COMMAND=${shellQuote(bridge.command)} JARVOS_STEWARDSHIP_CLAUDE_SESSION_MAP_ROOT=${shellQuote(bridge.mapRoot)} PATH=${shellQuote(bridge.bin)}:\"$PATH\" node ${shellQuote(script)}`
-      : `node ${JSON.stringify(script)}`;
+      ? `env JARVOS_STEWARDSHIP_BRIDGE_COMMAND=${shellQuote(bridge.command)} JARVOS_STEWARDSHIP_CLAUDE_SESSION_MAP_ROOT=${shellQuote(bridge.mapRoot)} PATH=${shellQuote(bridge.bin)}:\"$PATH\" ${target}`
+      : target;
     const entry = {
       hooks: [{ type: 'command', command, timeout: 30 }],
     };
@@ -149,8 +158,8 @@ function upsertClaudeCodeHook(settings, bridge) {
     upsert('SessionStart', hookScript, null);
     upsert('UserPromptSubmit', turnHookScript, null);
   } else {
-    upsert('SessionStart', hookScript, commandEntry(hookScript, 'startup'));
-    upsert('UserPromptSubmit', turnHookScript, commandEntry(turnHookScript));
+    upsert('SessionStart', hookScript, commandEntry(hookScript, 'session-start', 'startup'));
+    upsert('UserPromptSubmit', turnHookScript, commandEntry(turnHookScript, 'session-turn'));
   }
   next.hooks = hooks;
   return next;
