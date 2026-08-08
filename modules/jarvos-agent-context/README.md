@@ -21,6 +21,8 @@ The bundled stdio MCP server exposes:
 | `jarvos_recall` | GBrain/QMD/graph recall bundle rendered as Markdown; pass `synthesize: true` or `mode: "synthesis"` for WS5 synthesis |
 | `jarvos_synthesize` | Concise WS5 synthesis over WS4 retrieval evidence with the source bundle preserved |
 | `jarvos_create_note` | Obsidian note creation + today journal wikilink + KB sidecars + verification |
+| `jarvos_journal_health` | Read-only health projection for today's configured journal |
+| `jarvos_ensure_today_journal` | Empty-input, today-only ensure through the shared journal lifecycle |
 | `jarvos_session_thread_read` | Read the rolling live working thread for an issue, artifact, project, or host session |
 | `jarvos_session_thread_write` | Append a checkpoint to that thread as a normal secondbrain note linked from today's journal |
 | `jarvos_startup_brief` | Bounded startup context for agent sessions |
@@ -31,6 +33,28 @@ The bundled stdio MCP server exposes:
 `JARVOS_CONTROL_PLANE_SERVICE_MODULE`. `@jarvos/agent-context` declares
 `@jarvos/control-plane` as a runtime dependency so this boundary resolves from
 an installed package, not from a repository-relative path.
+
+## Journal actions
+
+Journal mutation requires an explicit configured journal directory and valid
+IANA timezone. The MCP server does not invent a home-directory vault or use
+the process `TZ` value as a mutation fallback. Configure `JARVOS_JOURNAL_DIR`
+and `JARVOS_TIMEZONE`, or provide the documented `jarvos.config.json` path and
+timezone fields, before calling the journal actions.
+
+`jarvos_journal_health` is the default agent check and is read-only.
+`jarvos_ensure_today_journal` accepts only `{}` and should run only for an
+explicit user request or a host-declared journal-maintenance/creation trigger;
+it should not be called as ambient startup boilerplate. Both actions use the
+same lifecycle as the human CLI and host adapters. Their response is limited
+to status, local date, and bounded outcome/health fields—never journal content,
+paths, hashes, timestamps, receipt data, or provenance. Unknown fields and
+arbitrary path/date/repair inputs are rejected before filesystem access.
+
+The same packet boundary is intended for future proof-gated nightly synthesis.
+That private scheduled collector is separate from MCP startup and must not be
+added to an active assistant session until its reliability/usefulness gate is
+complete.
 
 ## Ontology Context
 

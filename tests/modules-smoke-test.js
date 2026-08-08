@@ -331,8 +331,17 @@ try {
     toolNames.includes('jarvos_recall')
     && toolNames.includes('jarvos_synthesize')
     && toolNames.includes('jarvos_create_note')
+    && toolNames.includes('jarvos_journal_health')
+    && toolNames.includes('jarvos_ensure_today_journal')
   ) {
-    ok('jarvos MCP server exposes recall, synthesis, and note tools');
+    const journalTools = mcp.TOOLS.filter((tool) => tool.name.startsWith('jarvos_') && tool.name.includes('journal'));
+    const boundedSchemas = journalTools.every((tool) => (
+      tool.inputSchema?.type === 'object'
+      && tool.inputSchema.additionalProperties === false
+      && Object.keys(tool.inputSchema.properties || {}).length === 0
+    ));
+    if (boundedSchemas) ok('jarvos MCP server exposes recall, synthesis, note, and bounded journal tools');
+    else bad('jarvos MCP journal schemas', new Error(JSON.stringify(journalTools)));
   } else {
     bad('jarvos MCP tools', new Error(JSON.stringify(toolNames)));
   }

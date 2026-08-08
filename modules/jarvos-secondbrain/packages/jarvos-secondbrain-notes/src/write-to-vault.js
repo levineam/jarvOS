@@ -99,6 +99,7 @@ function journalResultFromError(error) {
       failed: false,
       reason: error.message,
       deferredBacklink,
+      journalPath: deferredBacklink.journalPath,
       deferredPath: deferredBacklink.deferredPath,
       recoveryKey: deferredBacklink.key,
     };

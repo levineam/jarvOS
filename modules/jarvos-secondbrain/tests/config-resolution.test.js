@@ -10,6 +10,7 @@ const {
   discoverExistingVault,
   parseEnvFile,
   resolveConfig,
+  resolveJournalConfig,
   resolvePaperclipConfig,
   writeSharedVaultConfig,
 } = require('../bridge/config');
@@ -120,6 +121,69 @@ test('resolveConfig prefers configured timezone over generic TZ env fallback', (
   });
 
   assert.equal(config.user.timezone, 'America/Los_Angeles');
+});
+
+test('resolveJournalConfig requires an explicit journal target and valid configured timezone', () => {
+  const root = tempDir();
+  const journalDir = path.join(root, 'Journal');
+  const configPath = path.join(root, 'jarvos.config.json');
+  fs.writeFileSync(configPath, JSON.stringify({
+    paths: { journal: journalDir },
+    user: { timezone: 'Europe/London' },
+  }));
+
+  const config = resolveJournalConfig({ configPath, homeDir: '/home/tester', env: { TZ: 'UTC' } });
+  assert.equal(config.journalDir, journalDir);
+  assert.equal(config.timeZone, 'Europe/London');
+
+  assert.throws(
+    () => resolveJournalConfig({ configPath: path.join(root, 'missing.json'), homeDir: '/home/tester', env: {} }),
+    /explicit journal directory/i,
+  );
+  assert.throws(
+    () => resolveJournalConfig({ configPath, homeDir: '/home/tester', env: { JARVOS_TIMEZONE: 'Not/AZone' } }),
+    /invalid.*timezone/i,
+  );
+});
+
+test('resolveJournalConfig fails closed on malformed higher-precedence path values', () => {
+  const root = tempDir();
+  const configPath = path.join(root, 'jarvos.config.json');
+  fs.writeFileSync(configPath, JSON.stringify({
+    paths: { journal: path.join(root, 'configured-journal'), vault: path.join(root, 'configured-vault') },
+    user: { timezone: 'UTC' },
+  }));
+
+  assert.throws(
+    () => resolveJournalConfig({ configPath, homeDir: '/home/tester', env: { JARVOS_JOURNAL_DIR: 'relative-journal' } }),
+    /invalid configured JARVOS_JOURNAL_DIR path/i,
+  );
+  assert.throws(
+    () => resolveJournalConfig({ configPath, homeDir: '/home/tester', env: { JOURNAL_DIR: 'relative-journal' } }),
+    /invalid configured JOURNAL_DIR path/i,
+  );
+  assert.throws(
+    () => resolveJournalConfig({ configPath: path.join(root, 'missing.json'), config: { paths: { journal: 'relative-journal' }, user: { timezone: 'UTC' } }, homeDir: '/home/tester', env: {} }),
+    /invalid configured paths\.journal path/i,
+  );
+});
+
+test('resolveJournalConfig ignores empty injected values and uses valid lower-precedence configuration', () => {
+  const root = tempDir();
+  const journal = path.join(root, 'configured-journal');
+  const configPath = path.join(root, 'jarvos.config.json');
+  fs.writeFileSync(configPath, JSON.stringify({
+    paths: { journal },
+    user: { timezone: 'UTC' },
+  }));
+
+  const config = resolveJournalConfig({
+    configPath,
+    homeDir: '/home/tester',
+    env: { JARVOS_JOURNAL_DIR: '', JARVOS_TIMEZONE: '' },
+  });
+  assert.equal(config.journalDir, journal);
+  assert.equal(config.timeZone, 'UTC');
 });
 
 test('resolveConfig rejects non-string, empty, and relative path overrides', () => {

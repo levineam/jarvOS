@@ -1,12 +1,21 @@
 {
   "$schema": "journal-module-v1",
-  "$doc": "Canonical package-owned journal contract. Controls which sections appear in daily journal entries and their order. The root clawd/config/journal-module.json file remains a compatibility mirror during the extraction phase.",
+  "$doc": "Canonical package-owned journal structure. Configure a journal directory and IANA timezone in jarvos.config.json or the documented environment variables before creating a journal.",
 
-  "vault": {
-    "journalDir": "~/Vaults/Vault v3/Journal",
-    "notesDir": "~/Vaults/Vault v3/Notes",
-    "tagsDir": "~/Vaults/Vault v3/Tags",
-    "$doc": "Paths support ~/... (resolved at runtime via os.homedir()). Override with JARVOS_JOURNAL_DIR, JARVOS_NOTES_DIR, JARVOS_TAGS_DIR env vars."
+  "ownership": {
+    "version": 1,
+    "owner": "jarvos-secondbrain-journal",
+    "automatedWriters": ["jarvOS:journal-maintenance"],
+    "derivedIndexWriters": ["jarvOS:journal-maintenance"],
+    "reviewedAt": "2026-08-08T00:00:00.000Z",
+    "maxAgeDays": 30,
+    "$doc": "journal-lifecycle.js exclusively creates a missing dated file. Obsidian-owned mutation is reserved for authorized active-day backlink and section updates. The derived Journaling.md page has one additive writer; other configured daily-note writers block scheduled creation rather than racing it."
+  },
+
+  "derivedIndex": {
+    "enabled": true,
+    "fileName": "Journaling.md",
+    "$doc": "The navigation page people actually read. Maintenance adds one embed for a created day in reverse-chronological position, refuses human-authored or actively edited files, and keeps backups outside the synced Journal folder."
   },
 
   "frontmatter": {

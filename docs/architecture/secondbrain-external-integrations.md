@@ -34,6 +34,30 @@ Status values:
 | Obsidian Linter | guarded | Manual cleanup inside Obsidian if a user chooses it. | Rejected for core automation. The note contract stays plain YAML plus Markdown and must not depend on GUI plugins. |
 | Obsidian Bases and JSON Canvas | optional | Reading, review, and visual artifact surfaces through the Obsidian experience pack. | Presentation/review surfaces only. They are not live project management, canonical memory, or retrieval authority. |
 
+## Journal ownership and host boundary
+
+The public journal lifecycle is the package-owned boundary between these
+integrations and the canonical Markdown record:
+
+- `Journal/YYYY-MM-DD.md` is the canonical human thought record.
+- An explicit configured directory and valid IANA timezone are required for
+  journal mutation; absent or malformed configuration fails closed.
+- The lifecycle creates only a missing current-date file. In the same run it
+  may add missing embeds for the current date and previously created dates to
+  an existing, pure generated `Journaling.md` index; it never rebuilds/reorders
+  that page or touches an index containing human-authored content, and it never
+  repairs an existing authored daily file.
+- Obsidian remains a human editing/client surface. Its active-day backlink seam
+  may append an authorized entry after lifecycle existence is ensured, while
+  Daily Notes, Periodic Notes, Journals, and template automations must not own
+  creation of the same dated files.
+- Host schedulers and runtimes inject configuration and own delivery/retry
+  evidence. They are not part of the public package's journal truth or release
+  evidence.
+- The public MCP surface is intentionally small: health is read-only, ensure is
+  an empty-input today-only action, and both return bounded projections without
+  paths, content, hashes, timestamps, receipts, or provenance.
+
 ## Operating Model
 
 The active secondbrain path is:
