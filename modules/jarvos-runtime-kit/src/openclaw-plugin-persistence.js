@@ -83,7 +83,11 @@ function safeIdentifier(value) {
 
 function safeVersion(value) {
   const version = boundedString(value, MAX_VERSION_LENGTH);
-  return version && /^\d+\.\d+\.\d+$/.test(version) ? version : null;
+  return version && /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(version) ? version : null;
+}
+
+function isUncertainVersion(version) {
+  return typeof version === 'string' && version.includes('-');
 }
 
 function isAbsoluteLocalPath(value) {
@@ -270,6 +274,11 @@ function assessOpenClawPluginPersistence(input = {}) {
     if (plugin.packageVersion && inspection.version && plugin.packageVersion !== inspection.version) {
       hasDrift = true;
       resultPlugins.push(publicPlugin(plugin, 'version-drift'));
+      continue;
+    }
+    if (isUncertainVersion(plugin.packageVersion) || isUncertainVersion(inspection.version) || isUncertainVersion(record?.version)) {
+      hasIndeterminate = true;
+      resultPlugins.push(publicPlugin(plugin, 'indeterminate'));
       continue;
     }
     if (plugin.enabled && !HEALTHY_INSPECTION_STATUSES.has(inspection.status)) {

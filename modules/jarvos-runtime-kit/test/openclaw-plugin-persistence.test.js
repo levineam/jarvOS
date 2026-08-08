@@ -175,6 +175,15 @@ test('incomplete or changing evidence is indeterminate rather than healthy', () 
     inspections: [{ plugin: { id: 'partial', status: 'loaded', enabled: true, rootDir: `${ROOT}/changed` }, diagnostics: [] }],
   }));
   assert.equal(changing.status, 'indeterminate');
+
+  const prerelease = npmPlugin('prerelease');
+  prerelease.packageVersion = '1.2.3-beta.1';
+  const prereleaseResult = assessOpenClawPluginPersistence(snapshot({
+    plugins: [prerelease],
+    installRecords: { prerelease: { source: 'npm', installPath: prerelease.rootDir, version: '1.2.3-beta.1' } },
+  }));
+  assert.equal(prereleaseResult.status, 'indeterminate');
+  assert.equal(prereleaseResult.plugins[0].classification, 'indeterminate');
 });
 
 test('rejects unsupported versions, schemas, malformed records, and raw credential-bearing fields', () => {
