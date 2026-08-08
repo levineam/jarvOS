@@ -17,6 +17,10 @@ const {
   checkVaultPathStale,
   checkJournalConflict,
 } = require('../lib/jarvos-cli');
+const {
+  validateJarvosProfile,
+  validateOpenClawProfile,
+} = require('../modules/jarvos/src/doctor');
 
 function scratch() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-doctor-'));
@@ -265,5 +269,76 @@ test('checkControlPlaneModule passes when a configured host service is ready', (
     assert.match(res.detail, /authenticated host service/);
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+function persistenceEvidence(overrides = {}) {
+  return {
+    status: 'ok',
+    evidence: { version: '2026.7.1' },
+    summary: { pluginCount: 2, protectedRootCount: 2, driftCount: 0 },
+    jarvosAdapter: { status: 'healthy' },
+    ...overrides,
+  };
+}
+
+function persistenceCheck(result) {
+  return result.checks.find((check) => check.component === 'openclaw.pluginPersistence');
+}
+
+test('local OpenClaw doctor maps healthy, drifted, compatibility, and missing adapter states', async () => {
+  const workspaces = [scratch(), scratch(), scratch(), scratch()];
+  try {
+    const healthy = await validateOpenClawProfile({
+      workspace: workspaces[0],
+      openclawPluginEvidence: persistenceEvidence(),
+    });
+    assert.equal(persistenceCheck(healthy).status, 'ok');
+    assert.equal(persistenceCheck(healthy).ok, true);
+
+    const drifted = await validateOpenClawProfile({
+      workspace: workspaces[1],
+      openclawPluginEvidence: persistenceEvidence({
+        status: 'warn',
+        summary: { pluginCount: 2, protectedRootCount: 2, driftCount: 1 },
+      }),
+    });
+    assert.equal(persistenceCheck(drifted).status, 'warn');
+    assert.equal(persistenceCheck(drifted).ok, true);
+    assert.match(persistenceCheck(drifted).message, /supported OpenClaw commands/);
+
+    const compatibility = await validateOpenClawProfile({
+      workspace: workspaces[2],
+      openclawPluginEvidence: { status: 'compatibility', reason: 'unsupported-version' },
+    });
+    assert.equal(persistenceCheck(compatibility).status, 'skipped');
+    assert.doesNotMatch(persistenceCheck(compatibility).message, /unsupported-version/);
+
+    const missingAdapter = await validateOpenClawProfile({
+      workspace: workspaces[3],
+      openclawPluginEvidence: persistenceEvidence({
+        status: 'warn',
+        summary: { pluginCount: 2, protectedRootCount: 2, driftCount: 1 },
+        jarvosAdapter: { status: 'missing-staged-adapter' },
+      }),
+    });
+    assert.equal(persistenceCheck(missingAdapter).status, 'fail');
+    assert.equal(persistenceCheck(missingAdapter).ok, false);
+  } finally {
+    for (const workspace of workspaces) fs.rmSync(workspace, { recursive: true, force: true });
+  }
+});
+
+test('non-local profiles do not invoke OpenClaw plugin persistence assessment', async () => {
+  const workspace = scratch();
+  try {
+    const result = await validateJarvosProfile({
+      profile: 'v0-5-0',
+      workspace,
+      openclawPluginEvidence: persistenceEvidence(),
+    });
+    assert.equal(result.checks.some((check) => check.component === 'openclaw.pluginPersistence'), false);
+  } finally {
+    fs.rmSync(workspace, { recursive: true, force: true });
   }
 });
