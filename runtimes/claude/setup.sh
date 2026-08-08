@@ -17,13 +17,26 @@ STEWARDSHIP_DISPATCHER=""
 
 # The private installer materializes this owner-controlled bundle once. Native
 # configuration must refer to it, never to a selected immutable runtime stage.
-if [ -n "${JARVOS_MANAGED_REPOSITORIES:-}" ]; then
+if [ -n "${JARVOS_MANAGED_REPOSITORIES:-}" ] && [ "${JARVOS_MANAGED_HARNESS_ROLLBACK:-0}" != "1" ]; then
   : "${JARVOS_STEWARDSHIP_STABLE_ROOT:?materialize the stable stewardship bundle before enabling managed repositories}"
   STEWARDSHIP_DISPATCHER="$STEWARDSHIP_STABLE_ROOT/jarvos-stewardship-dispatcher"
-  if [ ! -f "$STEWARDSHIP_DISPATCHER" ] || [ -L "$STEWARDSHIP_DISPATCHER" ] || [ ! -x "$STEWARDSHIP_DISPATCHER" ]; then
-    echo "stable jarvOS stewardship dispatcher is missing or unsafe" >&2
-    exit 1
-  fi
+  node - "$STEWARDSHIP_STABLE_ROOT" "$STEWARDSHIP_DISPATCHER" <<'NODE'
+const fs = require('fs'); const path = require('path');
+const [root, dispatcher] = process.argv.slice(2);
+function trustedDirectory(value) {
+  const stat = fs.lstatSync(value); const uid = typeof process.getuid === 'function' ? process.getuid() : null;
+  return path.isAbsolute(value) && !stat.isSymbolicLink() && stat.isDirectory() && (stat.mode & 0o077) === 0 && (uid === null || stat.uid === uid);
+}
+function trustedExecutable(value) {
+  const stat = fs.lstatSync(value); const uid = typeof process.getuid === 'function' ? process.getuid() : null;
+  return !stat.isSymbolicLink() && stat.isFile() && (stat.mode & 0o077) === 0 && (stat.mode & 0o111) !== 0 && (uid === null || stat.uid === uid);
+}
+if (!trustedDirectory(root) || !trustedExecutable(dispatcher)) throw new Error('stable jarvOS stewardship dispatcher is missing or unsafe');
+NODE
+elif [ "${JARVOS_MANAGED_HARNESS_ROLLBACK:-0}" = "1" ] && [ -n "$STEWARDSHIP_STABLE_ROOT" ] && [ "${STEWARDSHIP_STABLE_ROOT#/}" != "$STEWARDSHIP_STABLE_ROOT" ]; then
+  # The bundle may already be gone. Its absolute former path is still the only
+  # dispatcher path rollback is allowed to remove.
+  STEWARDSHIP_DISPATCHER="$STEWARDSHIP_STABLE_ROOT/jarvos-stewardship-dispatcher"
 fi
 
 if [ ! -f "$MCP_SERVER" ]; then
@@ -65,11 +78,11 @@ else
   echo "Claude Code CLI not found on PATH; skipping Claude Code MCP registration." >&2
 fi
 
-node - "$CLAUDE_SETTINGS" "$HOOK_SCRIPT" "$TURN_HOOK_SCRIPT" "$STEWARDSHIP_DISPATCHER" "$CLAUDE_DESKTOP_CONFIG" "$MCP_SERVER" "${JARVOS_STEWARDSHIP_ONLY:-0}" "${JARVOS_MANAGED_HARNESS_ROLLBACK:-0}" "$STEWARDSHIP_BRIDGE_COMMAND" "$STEWARDSHIP_CLAUDE_SESSION_MAP_ROOT" "$STEWARDSHIP_BRIDGE_PATH" <<'NODE'
+node - "$CLAUDE_SETTINGS" "$HOOK_SCRIPT" "$TURN_HOOK_SCRIPT" "$STEWARDSHIP_DISPATCHER" "$CLAUDE_DESKTOP_CONFIG" "$MCP_SERVER" "${JARVOS_STEWARDSHIP_ONLY:-0}" "${JARVOS_MANAGED_HARNESS_ROLLBACK:-0}" "$STEWARDSHIP_BRIDGE_COMMAND" "$STEWARDSHIP_CLAUDE_SESSION_MAP_ROOT" "$STEWARDSHIP_BRIDGE_PATH" "${JARVOS_STAGED_PUBLIC_RUNTIME_ROOT:-}" <<'NODE'
 const fs = require('fs');
 const path = require('path');
 
-const [settingsPath, hookScript, turnHookScript, dispatcher, desktopConfigPath, mcpServer, stewardshipOnly, rollback, bridgeCommand, claudeSessionMapRoot, bridgePath] = process.argv.slice(2);
+const [settingsPath, hookScript, turnHookScript, dispatcher, desktopConfigPath, mcpServer, stewardshipOnly, rollback, bridgeCommand, claudeSessionMapRoot, bridgePath, stagedRoot] = process.argv.slice(2);
 
 function readJsonFile(filePath, fallback) {
   if (!fs.existsSync(filePath)) return fallback;
@@ -96,7 +109,7 @@ function backupAndWriteJson(filePath, value, label) {
 }
 
 function shellQuote(value) {
-  return `'${value.replace(/'/g, "'\\\"'\\\"'")}'`;
+  return `'${value.replace(/'/g, "'\"'\"'")}'`;
 }
 
 function privateDirectory(value, name) {
@@ -124,14 +137,19 @@ function upsertClaudeCodeHook(settings, bridge) {
   const next = { ...settings };
   const hooks = next.hooks && typeof next.hooks === 'object' && !Array.isArray(next.hooks) ? { ...next.hooks } : {};
 
+  const ownedPaths = [hookScript, turnHookScript, dispatcher].filter(Boolean);
+  if (path.isAbsolute(stagedRoot || '')) {
+    ownedPaths.push(path.join(stagedRoot, 'runtimes', 'claude', 'jarvos-session-start-hook.js'));
+    ownedPaths.push(path.join(stagedRoot, 'runtimes', 'claude', 'jarvos-session-turn-hook.js'));
+  }
+  const escapeRegex = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const hasOwnedPath = (command, target) => new RegExp(`(?:^|[\\s'\"])${escapeRegex(target)}(?=$|[\\s'\"])`).test(command);
+
   function upsert(event, script, entry) {
     const entries = Array.isArray(hooks[event]) ? [...hooks[event]] : [];
-    const managedHookName = script.split(/[\\/]/).pop();
-    const managedPath = new RegExp(`(?:^|[\\s/'\"])runtimes[\\\\/]claude[\\\\/]${managedHookName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?:$|[\\s'\"])`);
-    const managedDispatcher = /(?:^|[\\s/'\"])jarvos-stewardship-dispatcher(?:$|[\\s'\"])/;
     const retained = entries.map((candidate) => {
       if (!Array.isArray(candidate?.hooks)) return candidate;
-      const retainedHooks = candidate.hooks.filter((hook) => typeof hook?.command !== 'string' || (!managedPath.test(hook.command) && !managedDispatcher.test(hook.command)));
+      const retainedHooks = candidate.hooks.filter((hook) => typeof hook?.command !== 'string' || !ownedPaths.some((target) => hasOwnedPath(hook.command, target)));
       if (retainedHooks.length === candidate.hooks.length) return candidate;
       return retainedHooks.length ? { ...candidate, hooks: retainedHooks } : null;
     }).filter(Boolean);

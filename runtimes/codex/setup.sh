@@ -21,13 +21,24 @@ STEWARDSHIP_DISPATCHER=""
 
 # The private installer materializes this owner-controlled bundle once. Native
 # configuration must refer to it, never to a selected immutable runtime stage.
-if [ -n "${JARVOS_MANAGED_REPOSITORIES:-}" ]; then
+if [ -n "${JARVOS_MANAGED_REPOSITORIES:-}" ] && [ "${JARVOS_MANAGED_HARNESS_ROLLBACK:-0}" != "1" ]; then
   : "${JARVOS_STEWARDSHIP_STABLE_ROOT:?materialize the stable stewardship bundle before enabling managed repositories}"
   STEWARDSHIP_DISPATCHER="$STEWARDSHIP_STABLE_ROOT/jarvos-stewardship-dispatcher"
-  if [ ! -f "$STEWARDSHIP_DISPATCHER" ] || [ -L "$STEWARDSHIP_DISPATCHER" ] || [ ! -x "$STEWARDSHIP_DISPATCHER" ]; then
-    echo "stable jarvOS stewardship dispatcher is missing or unsafe" >&2
-    exit 1
-  fi
+  node - "$STEWARDSHIP_STABLE_ROOT" "$STEWARDSHIP_DISPATCHER" <<'NODE'
+const fs = require('fs'); const path = require('path');
+const [root, dispatcher] = process.argv.slice(2);
+function trustedDirectory(value) {
+  const stat = fs.lstatSync(value); const uid = typeof process.getuid === 'function' ? process.getuid() : null;
+  return path.isAbsolute(value) && !stat.isSymbolicLink() && stat.isDirectory() && (stat.mode & 0o077) === 0 && (uid === null || stat.uid === uid);
+}
+function trustedExecutable(value) {
+  const stat = fs.lstatSync(value); const uid = typeof process.getuid === 'function' ? process.getuid() : null;
+  return !stat.isSymbolicLink() && stat.isFile() && (stat.mode & 0o077) === 0 && (stat.mode & 0o111) !== 0 && (uid === null || stat.uid === uid);
+}
+if (!trustedDirectory(root) || !trustedExecutable(dispatcher)) throw new Error('stable jarvOS stewardship dispatcher is missing or unsafe');
+NODE
+elif [ "${JARVOS_MANAGED_HARNESS_ROLLBACK:-0}" = "1" ] && [ -n "$STEWARDSHIP_STABLE_ROOT" ] && [ "${STEWARDSHIP_STABLE_ROOT#/}" != "$STEWARDSHIP_STABLE_ROOT" ]; then
+  STEWARDSHIP_DISPATCHER="$STEWARDSHIP_STABLE_ROOT/jarvos-stewardship-dispatcher"
 fi
 
 if ! command -v codex >/dev/null 2>&1; then
@@ -152,11 +163,11 @@ if [ ! -f "$CODEX_CONFIG" ]; then
   touch "$CODEX_CONFIG"
 fi
 
-node - "$CODEX_CONFIG" "$LEGACY_HOOKS_JSON" "$HOOK_SCRIPT" "$TURN_HOOK_SCRIPT" "$STEWARDSHIP_DISPATCHER" "${JARVOS_MANAGED_HARNESS_ROLLBACK:-0}" "$STEWARDSHIP_BRIDGE_COMMAND" "$STEWARDSHIP_CODEX_SESSION_MAP_ROOT" <<'NODE'
+node - "$CODEX_CONFIG" "$LEGACY_HOOKS_JSON" "$HOOK_SCRIPT" "$TURN_HOOK_SCRIPT" "$STEWARDSHIP_DISPATCHER" "${JARVOS_MANAGED_HARNESS_ROLLBACK:-0}" "$STEWARDSHIP_BRIDGE_COMMAND" "$STEWARDSHIP_CODEX_SESSION_MAP_ROOT" "${JARVOS_STAGED_PUBLIC_RUNTIME_ROOT:-}" <<'NODE'
 const fs = require('fs');
 const path = require('path');
 
-const [configPath, legacyHooksPath, hookScript, turnHookScript, dispatcher, rollback, bridgeCommand, codexSessionMapRoot] = process.argv.slice(2);
+const [configPath, legacyHooksPath, hookScript, turnHookScript, dispatcher, rollback, bridgeCommand, codexSessionMapRoot, stagedRoot] = process.argv.slice(2);
 const original = fs.readFileSync(configPath, 'utf8');
 let next = original;
 
@@ -177,6 +188,10 @@ function tomlScalar(value) {
   if (typeof value === 'boolean') return String(value);
   if (typeof value === 'number' && Number.isFinite(value)) return String(value);
   fail('hook fields must be string, boolean, or finite number scalars');
+}
+
+function shellQuote(value) {
+  return `'${value.replace(/'/g, "'\"'\"'")}'`;
 }
 
 function renderHookEntry(entry) {
@@ -269,9 +284,13 @@ function dedupe(entries) {
   });
 }
 
+const ownedHookPaths = [hookScript, turnHookScript, dispatcher].filter(Boolean);
+if (path.isAbsolute(stagedRoot || '')) {
+  ownedHookPaths.push(path.join(stagedRoot, 'runtimes', 'codex', 'jarvos-session-start-hook.js'));
+  ownedHookPaths.push(path.join(stagedRoot, 'runtimes', 'codex', 'jarvos-session-turn-hook.js'));
+}
 function isManagedJarvosHook(entry) {
-  return /jarvos-(?:session-start|session-turn)-hook\.js\b/.test(entry)
-    || /jarvos-stewardship-dispatcher\b/.test(entry);
+  return ownedHookPaths.some((target) => new RegExp(`(?:^|[^A-Za-z0-9._/-])${target.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?=$|[^A-Za-z0-9._/-])`).test(entry));
 }
 
 function hookTableRange(lines) {
@@ -541,11 +560,11 @@ if (rollback === '1') {
 } else {
   validateHookTable(next);
   const startCommand = dispatcher
-    ? `${JSON.stringify(dispatcher)} --harness codex --action session-start`
-    : `node ${JSON.stringify(hookScript)}`;
+    ? `${shellQuote(dispatcher)} --harness codex --action session-start`
+    : `node ${shellQuote(hookScript)}`;
   const turnCommand = dispatcher
-    ? `${JSON.stringify(dispatcher)} --harness codex --action session-turn`
-    : `node ${JSON.stringify(turnHookScript)}`;
+    ? `${shellQuote(dispatcher)} --harness codex --action session-turn`
+    : `node ${shellQuote(turnHookScript)}`;
   next = setHook(next, 'SessionStart', renderHookEntry({ matcher: 'startup|resume', hooks: [{ type: 'command', command: startCommand, async: false, timeout: 30 }] }), true);
   next = setHook(next, 'UserPromptSubmit', renderHookEntry({ hooks: [{ type: 'command', command: turnCommand, async: false, timeout: 30 }] }), true);
   next = setStewardshipBridgeEnvironment(next, bridgeEnvironment);

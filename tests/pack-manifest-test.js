@@ -31,6 +31,7 @@ function advertisedRuntimeAssets() {
   const required = [
     'modules/jarvos-runtime-kit/package.json',
     'modules/jarvos-runtime-kit/src/index.js',
+    'modules/jarvos-runtime-kit/src/stewardship-bootstrap.js',
     'modules/jarvos-runtime-kit/scripts/jarvos-runtime-kit.js',
     'modules/jarvos-runtime-kit/README.md',
     'modules/jarvos-control-plane/scripts/jarvos-manager.js',

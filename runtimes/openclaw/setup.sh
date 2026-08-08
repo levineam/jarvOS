@@ -27,21 +27,40 @@ if [ "${JARVOS_STEWARDSHIP_ONLY:-0}" = "1" ] || [ "${JARVOS_MANAGED_HARNESS_ROLL
     : "${JARVOS_STEWARDSHIP_STABLE_ROOT:?the stable stewardship bundle root is required}"
   fi
   OPENCLAW_CONFIG="${OPENCLAW_CONFIG:-$HOME/.openclaw/openclaw.json}"
-  node - "$OPENCLAW_CONFIG" "${JARVOS_STEWARDSHIP_STABLE_ROOT:-}" "$JARVOS_MANAGED_HARNESS_STATE_ROOT/stewardship-bridge/openclaw-sessions" "${JARVOS_MANAGED_HARNESS_ROLLBACK:-0}" <<'NODE'
+  node - "$OPENCLAW_CONFIG" "${JARVOS_STEWARDSHIP_STABLE_ROOT:-}" "$JARVOS_MANAGED_HARNESS_STATE_ROOT/stewardship-bridge/openclaw-sessions" "${JARVOS_MANAGED_HARNESS_ROLLBACK:-0}" "${JARVOS_STAGED_PUBLIC_RUNTIME_ROOT:-}" <<'NODE'
 const fs = require('fs'); const path = require('path');
-const [configPath, stableRoot, mappingRoot, rollback] = process.argv.slice(2);
+const [configPath, stableRoot, mappingRoot, rollback, stagedRoot] = process.argv.slice(2);
 const pluginPath = stableRoot ? path.join(stableRoot, 'jarvos-openclaw-stewardship-plugin') : null;
+function trustedDirectory(value) {
+  const stat = fs.lstatSync(value); const uid = typeof process.getuid === 'function' ? process.getuid() : null;
+  return path.isAbsolute(value) && !stat.isSymbolicLink() && stat.isDirectory() && (stat.mode & 0o077) === 0 && (uid === null || stat.uid === uid);
+}
+function trustedFile(value) {
+  const stat = fs.lstatSync(value); const uid = typeof process.getuid === 'function' ? process.getuid() : null;
+  return !stat.isSymbolicLink() && stat.isFile() && (stat.mode & 0o077) === 0 && (uid === null || stat.uid === uid);
+}
+// Keep the installed bundle aligned with the public OpenClaw adapter contract:
+// the package manifest, OpenClaw plugin manifest, and hook implementation are
+// all required before touching user configuration.
+const requiredPluginFiles = ['package.json', 'openclaw.plugin.json', 'jarvos-next-turn-plugin.js'];
+if (rollback !== '1' && (!trustedDirectory(stableRoot) || !trustedDirectory(pluginPath) || !requiredPluginFiles.every((file) => trustedFile(path.join(pluginPath, file))))) {
+  throw new Error('stable OpenClaw plugin is missing or unsafe');
+}
 const original = fs.existsSync(configPath) ? fs.readFileSync(configPath, 'utf8') : '{}\n';
 const config = JSON.parse(original || '{}');
 const plugins = config.plugins && typeof config.plugins === 'object' ? config.plugins : {};
 const tools = config.tools && typeof config.tools === 'object' ? config.tools : null;
 const stewardshipEntry = plugins.entries && typeof plugins.entries === 'object' ? plugins.entries['jarvos-stewardship'] : null;
+const ownsStewardshipEntry = stewardshipEntry?.config?.mappingRoot === mappingRoot;
+if (rollback !== '1' && stewardshipEntry && !ownsStewardshipEntry) throw new Error('refusing to replace an unrelated OpenClaw stewardship plugin entry');
 const existingToolOwnership = stewardshipEntry?.config?.toolAllowAddedByJarvos;
 const toolAllowAddedByJarvos = typeof existingToolOwnership === 'boolean'
   ? existingToolOwnership
   : Array.isArray(tools?.allow) && !tools.allow.includes('jarvos_stewardship_answer');
 const existingAgentGrant = stewardshipEntry?.config?.agentToolGrantByJarvos;
 let agentToolGrantByJarvos = existingAgentGrant && typeof existingAgentGrant === 'object' ? existingAgentGrant : null;
+const ownedPluginPaths = [pluginPath];
+if (path.isAbsolute(stagedRoot || '')) ownedPluginPaths.push(path.join(stagedRoot, 'runtimes', 'openclaw'));
 const requestedAgentId = process.env.JARVOS_OPENCLAW_AGENT_ID || 'main';
 const targetAgentId = rollback === '1' && typeof agentToolGrantByJarvos?.agentId === 'string' ? agentToolGrantByJarvos.agentId : requestedAgentId;
 if (!/^[A-Za-z0-9._-]{1,64}$/.test(targetAgentId)) throw new Error('invalid stewardship OpenClaw agent id');
@@ -53,9 +72,9 @@ function targetAgent(create) {
   return agent;
 }
 if (rollback === '1') {
-  if (plugins.load && Array.isArray(plugins.load.paths)) plugins.load.paths = plugins.load.paths.filter((value) => value !== pluginPath && !(typeof value === 'string' && value.includes('/managed-harness/') && value.endsWith('/public/runtimes/openclaw')) && !(typeof value === 'string' && value.endsWith('/jarvos-openclaw-stewardship-plugin')));
-  if (Array.isArray(plugins.allow)) plugins.allow = plugins.allow.filter((value) => value !== 'jarvos-stewardship');
-  if (plugins.entries && typeof plugins.entries === 'object') delete plugins.entries['jarvos-stewardship'];
+  if (plugins.load && Array.isArray(plugins.load.paths)) plugins.load.paths = plugins.load.paths.filter((value) => !ownedPluginPaths.includes(value));
+  if (ownsStewardshipEntry && Array.isArray(plugins.allow)) plugins.allow = plugins.allow.filter((value) => value !== 'jarvos-stewardship');
+  if (ownsStewardshipEntry && plugins.entries && typeof plugins.entries === 'object') delete plugins.entries['jarvos-stewardship'];
   if (toolAllowAddedByJarvos && Array.isArray(tools?.allow)) tools.allow = tools.allow.filter((value) => value !== 'jarvos_stewardship_answer');
   if (agentToolGrantByJarvos?.added === true) {
     const agent = targetAgent(false);
@@ -70,7 +89,7 @@ if (rollback === '1') {
   plugins.load = plugins.load && typeof plugins.load === 'object' ? plugins.load : {};
   plugins.load.paths = Array.isArray(plugins.load.paths) ? plugins.load.paths : [];
   if (!pluginPath || !path.isAbsolute(pluginPath)) throw new Error('stable OpenClaw plugin path is required');
-  plugins.load.paths = plugins.load.paths.filter((value) => !(typeof value === 'string' && value.includes('/managed-harness/') && value.endsWith('/public/runtimes/openclaw')) && !(typeof value === 'string' && value.endsWith('/jarvos-openclaw-stewardship-plugin')));
+  plugins.load.paths = plugins.load.paths.filter((value) => !ownedPluginPaths.includes(value));
   if (!plugins.load.paths.includes(pluginPath)) plugins.load.paths.push(pluginPath);
   if (Array.isArray(plugins.allow) && !plugins.allow.includes('jarvos-stewardship')) plugins.allow.push('jarvos-stewardship');
   if (Array.isArray(tools?.allow) && !tools.allow.includes('jarvos_stewardship_answer')) tools.allow.push('jarvos_stewardship_answer');

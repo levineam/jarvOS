@@ -11,6 +11,12 @@ const STABLE_ENTRYPOINTS = {
   hermesShell: 'jarvos-hermes-pre-llm-hook.js',
   openclawPlugin: 'jarvos-openclaw-stewardship-plugin',
 };
+const HARNESS_ENTRYPOINT_KINDS = {
+  claude: 'dispatcher',
+  codex: 'dispatcher',
+  hermes: 'hermesShell',
+  openclaw: 'openclawPlugin',
+};
 
 function isPlainObject(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -46,9 +52,11 @@ function validateStewardshipBootstrap(declaration, runtimeId) {
   if (declaration.rootEnvironment !== STEWARDSHIP_STABLE_ROOT_ENV) errors.push(`stewardship bootstrap rootEnvironment must be ${STEWARDSHIP_STABLE_ROOT_ENV}`);
   if (declaration.dispatcher !== STEWARDSHIP_DISPATCHER) errors.push(`stewardship bootstrap dispatcher must be ${STEWARDSHIP_DISPATCHER}`);
   if (runtimeId && declaration.harness !== runtimeId) errors.push(`stewardship bootstrap harness must be ${runtimeId}`);
+  if (!Object.prototype.hasOwnProperty.call(HARNESS_ENTRYPOINT_KINDS, declaration.harness)) errors.push('stewardship bootstrap harness must name a supported runtime');
   if (!sameStrings(declaration.actions, STEWARDSHIP_ACTIONS)) errors.push('stewardship bootstrap actions must declare the versioned action ABI in order');
   if (!Array.isArray(declaration.selectedRuntimeAssets) || declaration.selectedRuntimeAssets.length === 0
     || declaration.selectedRuntimeAssets.some((asset) => !isRelativeAsset(asset))
+    || declaration.selectedRuntimeAssets.some((asset) => !asset.startsWith(`runtimes/${declaration.harness}/`))
     || new Set(declaration.selectedRuntimeAssets).size !== declaration.selectedRuntimeAssets.length) {
     errors.push('stewardship bootstrap selectedRuntimeAssets must be unique safe relative paths');
   }
@@ -65,6 +73,7 @@ function validateStewardshipBootstrap(declaration, runtimeId) {
   }
   const entrypoint = declaration.entrypoint;
   if (!isPlainObject(entrypoint) || !['dispatcher', 'hermesShell', 'openclawPlugin'].includes(entrypoint.kind)
+    || entrypoint.kind !== HARNESS_ENTRYPOINT_KINDS[declaration.harness]
     || entrypoint.path !== STABLE_ENTRYPOINTS[entrypoint.kind]) {
     errors.push('stewardship bootstrap entrypoint must name a known stable bundle asset');
   }
