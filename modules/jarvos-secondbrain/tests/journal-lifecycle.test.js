@@ -282,6 +282,125 @@ test('health keeps canonical and derived index state separate without repair', (
   }
 });
 
+test('derived index writer adds today without touching authored journal files', () => {
+  const { vault, journalDir } = tempVault();
+  const now = new Date('2026-08-08T12:00:00.000Z');
+  const config = {
+    paths: { journal: journalDir },
+    user: { timezone: 'UTC' },
+    derivedIndex: { enabled: true, fileName: 'Journaling.md' },
+  };
+  try {
+    fs.mkdirSync(journalDir, { recursive: true });
+    fs.writeFileSync(path.join(journalDir, '2026-08-07.md'), '## 📝 Notes\n- keep me\n', 'utf8');
+    fs.writeFileSync(path.join(journalDir, '2026-08-08.md'), '## 📝 Notes\n- today\n', 'utf8');
+    const indexPath = path.join(journalDir, 'Journaling.md');
+    fs.writeFileSync(indexPath, '![[Journal/2026-08-07.md]]\n', 'utf8');
+    const old = new Date(now.getTime() - (10 * 60 * 1000));
+    fs.utimesSync(indexPath, old, old);
+
+    const result = lifecycle.ensureIndexEntry({ config, date: '2026-08-08', now, observedMtimeMs: old.getTime() });
+
+    assert.equal(result.ok, true);
+    assert.equal(result.outcome, 'index-updated');
+    assert.match(fs.readFileSync(indexPath, 'utf8'), /^!\[\[Journal\/2026-08-08\.md\]\]/);
+    assert.match(fs.readFileSync(indexPath, 'utf8'), /!\[\[Journal\/2026-08-07\.md\]\]/);
+    const backupDir = path.join(vault, '.jarvos', 'journal-maintenance', 'index-backups');
+    assert.equal(fs.readdirSync(backupDir).length, 1);
+    assert.deepEqual(
+      fs.readdirSync(journalDir).filter((name) => /(?:\.bak|\.tmp|\.partial)$/.test(name)),
+      [],
+      'generated index staging must remain outside the authored Journal folder',
+    );
+  } finally {
+    fs.rmSync(vault, { recursive: true, force: true });
+  }
+});
+
+test('derived index writer refuses missing or human-authored indexes and defers active edits', () => {
+  const { vault, journalDir } = tempVault();
+  const now = new Date('2026-08-08T12:00:00.000Z');
+  const config = {
+    paths: { journal: journalDir },
+    user: { timezone: 'UTC' },
+    derivedIndex: { enabled: true, fileName: 'Journaling.md' },
+  };
+  try {
+    fs.mkdirSync(journalDir, { recursive: true });
+    fs.writeFileSync(path.join(journalDir, '2026-08-08.md'), '## 📝 Notes\n- today\n', 'utf8');
+    assert.equal(lifecycle.ensureIndexEntry({ config, date: '2026-08-08', now }).outcome, 'index-unmanaged');
+
+    const indexPath = path.join(journalDir, 'Journaling.md');
+    const prose = '# My Journal Index\n\nThis is authored content.\n';
+    fs.writeFileSync(indexPath, prose, 'utf8');
+    assert.equal(lifecycle.ensureIndexEntry({ config, date: '2026-08-08', now }).outcome, 'index-unmanaged');
+    assert.equal(fs.readFileSync(indexPath, 'utf8'), prose);
+
+    fs.writeFileSync(indexPath, '![[Journal/2026-08-07.md]]\n', 'utf8');
+    const fresh = lifecycle.ensureIndexEntry({ config, date: '2026-08-08', now });
+    assert.equal(fresh.outcome, 'index-deferred');
+    assert.equal(fs.readFileSync(indexPath, 'utf8'), '![[Journal/2026-08-07.md]]\n');
+  } finally {
+    fs.rmSync(vault, { recursive: true, force: true });
+  }
+});
+
+test('derived index shape accepts nested Journal embeds and treats a listed date as a no-op', () => {
+  const { vault, journalDir } = tempVault();
+  const config = {
+    paths: { journal: journalDir },
+    user: { timezone: 'UTC' },
+    derivedIndex: { enabled: true, fileName: 'Journaling.md' },
+  };
+  try {
+    fs.mkdirSync(path.join(journalDir, 'Daily notes'), { recursive: true });
+    fs.writeFileSync(path.join(journalDir, '2026-08-08.md'), '## 📝 Notes\n- today\n', 'utf8');
+    const indexPath = path.join(journalDir, 'Journaling.md');
+    fs.writeFileSync(indexPath, '![[Journal/Daily notes/2026-08-08.md]]\n', 'utf8');
+    const result = lifecycle.ensureIndexEntry({ config, date: '2026-08-08', now: new Date('2026-08-08T12:00:00.000Z') });
+    assert.equal(result.outcome, 'index-healthy');
+    assert.equal(fs.readFileSync(indexPath, 'utf8'), '![[Journal/Daily notes/2026-08-08.md]]\n');
+  } finally {
+    fs.rmSync(vault, { recursive: true, force: true });
+  }
+});
+
+test('creation maintenance repairs visibility in the same scheduled pass', () => {
+  const { vault, journalDir } = tempVault();
+  const now = new Date('2026-08-08T12:00:00.000Z');
+  const config = {
+    paths: { journal: journalDir },
+    user: { timezone: 'UTC' },
+    derivedIndex: { enabled: true, fileName: 'Journaling.md' },
+  };
+  try {
+    fs.mkdirSync(journalDir, { recursive: true });
+    const indexPath = path.join(journalDir, 'Journaling.md');
+    fs.writeFileSync(indexPath, '![[Journal/2026-08-07.md]]\n', 'utf8');
+    const old = new Date(now.getTime() - (10 * 60 * 1000));
+    fs.utimesSync(indexPath, old, old);
+    const report = lifecycle.runCreationMaintenance(
+      { dateSpecs: ['today'] },
+      {
+        config,
+        now,
+        mutationExecutor(operation) {
+          const target = path.join(vault, operation.vaultRelativePath);
+          fs.mkdirSync(path.dirname(target), { recursive: true });
+          fs.writeFileSync(target, operation.content, { encoding: 'utf8', flag: 'wx' });
+          return { status: 'committed' };
+        },
+      },
+    );
+    assert.equal(report.status, 'ok');
+    assert.equal(report.results[0].outcome, 'created');
+    assert.equal(report.indexResults[0].outcome, 'index-updated');
+    assert.match(fs.readFileSync(indexPath, 'utf8'), /!\[\[Journal\/2026-08-08\.md\]\]/);
+  } finally {
+    fs.rmSync(vault, { recursive: true, force: true });
+  }
+});
+
 test('filesystem mutation lock preserves compare-before-write semantics', () => {
   const { vault, journalDir } = tempVault();
   const journalPath = path.join(journalDir, '2026-08-03.md');

@@ -35,6 +35,7 @@ function advertisedRuntimeAssets() {
     'modules/jarvos-agent-context/scripts/jarvos-mcp.js',
     'modules/jarvos-agent-context/src/index.js',
     'modules/jarvos-secondbrain/scripts/journal-health.js',
+    'modules/jarvos-secondbrain/scripts/journal-health-alarm.js',
     'modules/jarvos-secondbrain/packages/jarvos-secondbrain-journal/config/journal-module.json',
     'modules/jarvos-secondbrain/packages/jarvos-secondbrain-journal/src/journal-lifecycle.js',
     'modules/jarvos-runtime-kit/package.json',

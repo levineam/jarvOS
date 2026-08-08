@@ -19,7 +19,10 @@ active-day mutation seam after existence has been ensured; that seam is not a
 repair authority.
 
 Canonical journal health and the derived `Journaling.md` index are reported
-separately. Health and ensure never repair the derived index.
+separately. When enabled, the scheduled pass may add one missing embed to an
+existing pure-generated index; it never creates, rebuilds, reorders, or edits
+an index containing human-authored prose. Health remains read-only, and active
+index edits are deferred.
 
 ## Configuration boundary
 
@@ -52,6 +55,7 @@ Read-only health:
 
 ```bash
 node modules/jarvos-secondbrain/scripts/journal-health.js --json
+node modules/jarvos-secondbrain/scripts/journal-health-alarm.js
 ```
 
 Creation-only ensure:

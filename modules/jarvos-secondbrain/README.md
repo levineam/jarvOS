@@ -75,13 +75,16 @@ for the full precedence table and compatibility rules.
 ## Journal lifecycle and agent access
 
 The package-owned lifecycle creates only the missing current-date file with
-exclusive creation, re-reads it, and reports a verified idempotent outcome. It
-does not repair an existing daily file or the derived `Journaling.md` index.
+exclusive creation, re-reads it, and reports a verified idempotent outcome. In
+the same scheduled pass it may add one missing embed to an existing pure
+generated `Journaling.md` index. It never rewrites an existing daily file,
+rebuilds or reorders the index, or touches an index containing human prose.
 
 Human CLI checks:
 
 ```bash
 node modules/jarvos-secondbrain/scripts/journal-health.js --json
+node modules/jarvos-secondbrain/scripts/journal-health-alarm.js
 node modules/jarvos-secondbrain/packages/jarvos-secondbrain-journal/src/journal-maintenance.js \
   --create-if-missing --json
 ```

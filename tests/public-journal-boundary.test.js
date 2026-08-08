@@ -14,6 +14,7 @@ const PUBLIC_JOURNAL_SURFACE = [
   'modules/jarvos-agent-context/README.md',
   'modules/jarvos-agent-context/scripts/jarvos-mcp.js',
   'modules/jarvos-agent-context/src/index.js',
+  'modules/jarvos-secondbrain/scripts/journal-health-alarm.js',
   'modules/jarvos-secondbrain/README.md',
   'modules/jarvos-secondbrain/packages/jarvos-secondbrain-journal/README.md',
   'modules/jarvos-secondbrain/packages/jarvos-secondbrain-journal/config/journal-module.json',

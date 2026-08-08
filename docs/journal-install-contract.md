@@ -66,11 +66,11 @@ config file is not appropriate.
 
 ## Supported checks and creation commands
 
-The read-only health command reports canonical and derived-index state without
-repairing either one:
+The health command reports canonical and derived-index state independently:
 
 ```bash
 node modules/jarvos-secondbrain/scripts/journal-health.js --json
+node modules/jarvos-secondbrain/scripts/journal-health-alarm.js
 ```
 
 The creation-only path is available through the package maintenance entrypoint:
@@ -82,7 +82,12 @@ node modules/jarvos-secondbrain/packages/jarvos-secondbrain-journal/src/journal-
 
 It creates only the configured current date. The outcome is idempotent: a
 verified existing journal is reported as existing, and a concurrent winner is
-reported as such. It never repairs `Journaling.md` or an authored dated file.
+reported as such. When `derivedIndex.enabled` is true, the same run may add the
+one missing embed for that date to an existing, pure generated `Journaling.md`
+file. It never creates, rebuilds, reorders, or edits an index containing
+human-authored content, and it never rewrites an authored dated file. Active
+edits are deferred and reported for the next window; backups and staging files
+stay outside the synced Journal folder.
 If deferred note backlinks are queued, the command reports that backlog and
 returns a failure status so a host can alert; it does not mutate authored
 journals while flushing it. Use the separate human-approved maintenance
@@ -95,8 +100,10 @@ scheduled as a replacement for the creation-only lifecycle.
 ## Single-writer ownership
 
 jarvOS is the only automated creator of files in the configured `Journal/`
-directory. Humans may edit the Markdown, and Obsidian may sync or display it,
-but another daily-note automation must not create the same dated files.
+directory and the only automated additive writer of the generated
+`Journaling.md` navigation page. Humans may edit the Markdown, and Obsidian may
+sync or display it, but another daily-note automation must not create the same
+dated files or compete for the index.
 
 Do not point a second writer at the journal directory, including:
 
@@ -107,7 +114,9 @@ Do not point a second writer at the journal directory, including:
 
 If those tools are useful, configure them to a different folder. The lifecycle
 also checks for the configured Obsidian Daily Notes writer before creating a
-missing journal and reports a writer conflict instead of racing it.
+missing journal and reports a writer conflict instead of racing it. If a person
+adds prose to `Journaling.md`, the shape gate makes the index unmanaged and the
+writer stops rather than risking that content.
 
 ## Agent and host-adapter boundary
 

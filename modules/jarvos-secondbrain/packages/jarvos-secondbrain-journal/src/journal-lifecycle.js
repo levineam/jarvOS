@@ -8,6 +8,9 @@ const { resolveJournalConfig, isValidTimezone } = require('../../../bridge/confi
 
 const SUCCESS_OUTCOMES = new Set(['created', 'healthy-existing', 'created-concurrently', 'recovered-after-unrecorded-create']);
 const JOURNAL_MUTATION_LOCK_MAX_AGE_MS = 30 * 1000;
+const JOURNALING_INDEX_FILE = 'Journaling.md';
+const ACTIVE_INDEX_QUIET_WINDOW_MS = 5 * 60 * 1000;
+const INDEX_BACKUP_RETENTION_DAYS = 90;
 
 function localDate(now, timeZone) {
   return new Intl.DateTimeFormat('en-CA', {
@@ -36,6 +39,10 @@ function renderScaffold(date, config) {
 
 function receiptDirectory(journalDir) {
   return path.join(path.dirname(journalDir), '.jarvos', 'journal-maintenance', 'receipts');
+}
+
+function journalStateRoot(journalDir) {
+  return path.dirname(receiptDirectory(journalDir));
 }
 
 function receiptSentinelPath(journalDir, date) {
@@ -140,7 +147,7 @@ function detectWriterGuard(journalDir, fsImpl = fs) {
   const obsidianDir = path.join(vaultRoot, '.obsidian');
   try {
     const communityPlugins = readJsonOptional(path.join(obsidianDir, 'community-plugins.json'), [], fsImpl);
-    if (Array.isArray(communityPlugins) && communityPlugins.includes('journals')) {
+    if (Array.isArray(communityPlugins) && ['journals', 'obsidian-journals', 'journaling'].some((plugin) => communityPlugins.includes(plugin))) {
       return { ok: false, reason: 'configured journals writer' };
     }
 
@@ -240,24 +247,180 @@ function ensureTodayJournal(options = {}) {
   return after.status === 'healthy' ? finish('created', after) : finish('failed', after);
 }
 
-function detectDerivedIndexHealth(journalDir, fsImpl = fs) {
-  const indexPath = path.join(journalDir, 'Journaling.md');
+function classifyDerivedIndexShape(markdown) {
+  const entries = [];
+  for (const line of String(markdown).split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    const match = trimmed.match(/^!\[\[Journal\/(?:[^\[\]|]+\/)*(\d{4}-\d{2}-\d{2})\.md\]\]$/);
+    if (!match) return { managed: false, reason: 'index contains content jarvOS did not generate', entries: [] };
+    entries.push({ date: match[1], line: trimmed });
+  }
+  return { managed: true, entries };
+}
+
+function loadDerivedIndexConfig(options = {}) {
+  let packageConfig = {};
+  try { packageConfig = loadTemplateConfig(); } catch { /* shared config may be sufficient in tests */ }
+  const supplied = options.config && typeof options.config === 'object' ? options.config : {};
+  return {
+    ...packageConfig,
+    ...supplied,
+    derivedIndex: { ...(packageConfig.derivedIndex || {}), ...(supplied.derivedIndex || {}) },
+  };
+}
+
+function resolveDateSpec(spec, now, timeZone) {
+  const value = String(spec || 'today').trim();
+  if (value === 'today') return localDate(now, timeZone);
+  if (value === 'yesterday') {
+    const current = localDate(now, timeZone).split('-').map(Number);
+    return new Date(Date.UTC(current[0], current[1] - 1, current[2] - 1)).toISOString().slice(0, 10);
+  }
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) throw new Error(`Invalid journal date: ${value}`);
+  return value;
+}
+
+/**
+ * Add one date to the generated Journaling.md index without taking ownership
+ * of authored prose. The file must already exist and contain only embeds.
+ */
+function ensureIndexEntry(options = {}) {
+  const fsImpl = options.fs || fs;
+  let inputs;
+  try { inputs = resolveInputs(options); } catch (error) {
+    return { ok: false, outcome: 'index-failed', reason: error.message };
+  }
+  const config = loadDerivedIndexConfig(options);
+  const indexConfig = config.derivedIndex || {};
+  const enabled = options.enabled !== undefined ? options.enabled === true : indexConfig.enabled === true;
+  const fileName = options.indexFileName || indexConfig.fileName || JOURNALING_INDEX_FILE;
+  const baseResult = (outcome, reason, date, indexPath) => ({
+    ok: !['index-unmanaged', 'index-conflict', 'index-failed'].includes(outcome),
+    outcome,
+    reason,
+    date,
+    indexPath,
+  });
+  let date;
+  try { date = resolveDateSpec(options.date || options.dateSpec || 'today', options.now instanceof Date ? options.now : new Date(options.now || Date.now()), inputs.timeZone); } catch (error) {
+    return baseResult('index-failed', error.message, undefined, undefined);
+  }
+  if (path.basename(fileName) !== fileName || fileName.includes('\\')) {
+    return baseResult('index-failed', 'derived index file name must stay inside the journal directory', date, path.join(inputs.journalDir, fileName));
+  }
+  const indexPath = path.join(inputs.journalDir, fileName);
+  if (!enabled) return baseResult('index-disabled', 'derived index maintenance is disabled for this vault', date, indexPath);
+
+  let stat;
+  try { stat = fsImpl.lstatSync(indexPath); } catch (error) {
+    if (error.code === 'ENOENT') return baseResult('index-unmanaged', 'derived index does not exist; automation does not create it', date, indexPath);
+    return baseResult('index-failed', `derived index could not be inspected: ${error.message}`, date, indexPath);
+  }
+  if (stat.isSymbolicLink() || !stat.isFile()) return baseResult('index-unmanaged', 'derived index is not a regular file', date, indexPath);
+
+  let current;
+  try { current = fsImpl.readFileSync(indexPath, 'utf8'); } catch (error) {
+    return baseResult('index-failed', `derived index could not be read: ${error.message}`, date, indexPath);
+  }
+  const shape = classifyDerivedIndexShape(current);
+  if (!shape.managed) return baseResult('index-unmanaged', shape.reason, date, indexPath);
+  if (shape.entries.some((entry) => entry.date === date)) {
+    return baseResult('index-healthy', 'derived index already lists this date', date, indexPath);
+  }
+
+  const now = options.now instanceof Date ? options.now : new Date(options.now || Date.now());
+  const idleMtimeMs = typeof options.observedMtimeMs === 'number' ? options.observedMtimeMs : stat.mtimeMs;
+  if (now.getTime() - idleMtimeMs < ACTIVE_INDEX_QUIET_WINDOW_MS) {
+    return baseResult('index-deferred', 'derived index was edited moments ago; deferring to the next window', date, indexPath);
+  }
+
+  const lines = current.split(/\r?\n/);
+  const embed = `![[Journal/${date}.md]]`;
+  const olderEntry = shape.entries.find((entry) => entry.date < date);
+  const anchor = olderEntry || shape.entries[shape.entries.length - 1];
+  let insertAt = lines.length;
+  let addition = [embed, ''];
+  if (anchor) {
+    const anchorAt = lines.findIndex((line) => line.trim() === anchor.line);
+    if (anchorAt < 0) return baseResult('index-failed', 'derived index insertion point could not be resolved', date, indexPath);
+    if (olderEntry) {
+      insertAt = anchorAt;
+    } else {
+      insertAt = Math.min(anchorAt + 2, lines.length);
+      addition = lines[anchorAt + 1] === undefined || lines[anchorAt + 1].trim() ? ['', embed] : [embed, ''];
+    }
+  } else {
+    insertAt = 0;
+  }
+  lines.splice(insertAt, 0, ...addition);
+  const next = lines.join('\n');
+  const stamp = now.toISOString().replace(/[-:]/g, '').replace(/\.\d{3}Z$/, 'Z');
+  const backupDir = path.join(journalStateRoot(inputs.journalDir), 'index-backups');
+  const backupPath = path.join(backupDir, `${fileName}.${stamp}.${crypto.randomBytes(3).toString('hex')}.bak`);
+  const temporary = path.join(backupDir, `.${fileName}.${process.pid}.${crypto.randomBytes(4).toString('hex')}.tmp`);
+  try {
+    fsImpl.mkdirSync(backupDir, { recursive: true, mode: 0o700 });
+    // Re-read before publishing the swap so a concurrent Sync/client edit is
+    // reported rather than overwritten.
+    if (fsImpl.readFileSync(indexPath, 'utf8') !== current) {
+      return baseResult('index-conflict', 'derived index changed while the entry was being composed', date, indexPath);
+    }
+    fsImpl.writeFileSync(backupPath, current, { encoding: 'utf8', mode: 0o600 });
+    fsImpl.writeFileSync(temporary, next, { encoding: 'utf8', mode: 0o600 });
+    fsImpl.renameSync(temporary, indexPath);
+  } catch (error) {
+    try { fsImpl.unlinkSync(temporary); } catch { /* cleanup only */ }
+    return baseResult('index-failed', `derived index could not be updated: ${error.message}`, date, indexPath);
+  }
+  try {
+    if (fsImpl.readFileSync(indexPath, 'utf8') !== next) {
+      return baseResult('index-conflict', 'derived index did not match the written content after the write', date, indexPath);
+    }
+  } catch (error) {
+    return baseResult('index-conflict', `derived index could not be verified after the write: ${error.message}`, date, indexPath);
+  }
+  try {
+    const cutoff = now.getTime() - INDEX_BACKUP_RETENTION_DAYS * 24 * 60 * 60 * 1000;
+    for (const name of fsImpl.readdirSync(backupDir)) {
+      if (!name.startsWith(`${fileName}.`) || !name.endsWith('.bak')) continue;
+      const candidate = path.join(backupDir, name);
+      if (fsImpl.statSync(candidate).mtimeMs < cutoff) fsImpl.unlinkSync(candidate);
+    }
+  } catch { /* pruning is best effort */ }
+  return { ...baseResult('index-updated', 'derived index now lists this date', date, indexPath), backupPath };
+}
+
+function detectDerivedIndexHealth(journalDir, fsImpl = fs, fileName = JOURNALING_INDEX_FILE) {
+  const indexPath = path.join(journalDir, fileName);
   let index;
-  try { index = fsImpl.readFileSync(indexPath, 'utf8'); } catch { return { status: 'missing-derived' }; }
-  const dates = fsImpl.readdirSync(journalDir).filter((name) => /^\d{4}-\d{2}-\d{2}\.md$/.test(name));
-  const listed = [...String(index).matchAll(/\[\[Journal\/(\d{4}-\d{2}-\d{2})/g)].map((match) => match[1]);
+  try { index = fsImpl.readFileSync(indexPath, 'utf8'); } catch { return { status: 'missing-derived', indexPath }; }
+  let dates;
+  try { dates = fsImpl.readdirSync(journalDir).filter((name) => /^\d{4}-\d{2}-\d{2}\.md$/.test(name)); } catch { return { status: 'unavailable', indexPath }; }
+  const listed = [...String(index).matchAll(/\[\[Journal\/(?:[^\[\]|]+\/)*(\d{4}-\d{2}-\d{2})(?:\.md)?(?:\|[^\]]+)?\]\]/g)].map((match) => match[1]);
   const listedDates = new Set(listed);
-  return { status: dates.length === listed.length && dates.every((name) => listedDates.has(name.slice(0, -3))) ? 'healthy-derived' : 'stale-derived' };
+  const shape = classifyDerivedIndexShape(index);
+  return {
+    status: dates.length === listed.length && dates.every((name) => listedDates.has(name.slice(0, -3))) ? 'healthy-derived' : 'stale-derived',
+    indexPath,
+    expectedCount: dates.length,
+    listedCount: listed.length,
+    managedShape: shape.managed,
+  };
 }
 
 function healthToday(options = {}) {
   let inputs;
   try { inputs = resolveInputs(options); } catch (error) { return { ok: false, outcome: 'invalid-configuration', reason: error.message }; }
   const now = options.now instanceof Date ? options.now : new Date(options.now || Date.now());
-  const date = localDate(now, inputs.timeZone);
+  let date;
+  try { date = resolveDateSpec(options.date || options.dateSpec || 'today', now, inputs.timeZone); } catch (error) {
+    return { ok: false, outcome: 'invalid-date', reason: error.message };
+  }
   const fsImpl = options.fs || fs;
   const journalPath = path.join(inputs.journalDir, `${date}.md`);
-  return { ok: true, date, journalPath, canonical: canonicalHealth(journalPath, fsImpl), derivedIndex: detectDerivedIndexHealth(inputs.journalDir, fsImpl) };
+  const indexFileName = loadDerivedIndexConfig(options).derivedIndex?.fileName || JOURNALING_INDEX_FILE;
+  return { ok: true, date, journalPath, canonical: canonicalHealth(journalPath, fsImpl), derivedIndex: detectDerivedIndexHealth(inputs.journalDir, fsImpl, indexFileName) };
 }
 
 function sleepSync(ms) {
@@ -340,11 +503,37 @@ function runCreationMaintenance(args = {}, options = {}) {
     };
   }
   const result = ensureTodayJournal({ ...options, now: options.now });
-  return {
+  let indexResults = [];
+  if (result.ok) {
+    let journalDir;
+    try { journalDir = resolveInputs(options).journalDir; } catch { /* canonical result already carries the useful failure */ }
+    const indexName = loadDerivedIndexConfig(options).derivedIndex?.fileName || JOURNALING_INDEX_FILE;
+    let observedMtimeMs;
+    if (journalDir) {
+      try { observedMtimeMs = fs.statSync(path.join(journalDir, indexName)).mtimeMs; } catch { /* missing/unreadable index is reported by ensureIndexEntry */ }
+    }
+    indexResults = [ensureIndexEntry({
+      ...options,
+      now: options.now,
+      date: result.date,
+      observedMtimeMs,
+    })];
+  }
+  const report = {
     status: result.ok ? 'ok' : 'failed',
     results: [result],
-    output: args.json ? JSON.stringify({ status: result.ok ? 'ok' : 'failed', results: [result] }) : result.outcome.toUpperCase(),
+    indexResults,
   };
+  const indexProblems = indexResults.filter((entry) => !entry.ok && entry.outcome !== 'index-disabled');
+  if (indexProblems.length) report.indexProblems = indexProblems;
+  const quietCapture = ['healthy-existing', 'recovered-after-unrecorded-create'].includes(result.outcome);
+  const indexPrinted = indexResults
+    .filter((entry) => !['index-healthy', 'index-disabled'].includes(entry.outcome))
+    .map((entry) => `${entry.outcome.toUpperCase()} ${entry.indexPath}${entry.reason ? ` (${entry.reason})` : ''}`);
+  report.output = args.json
+    ? JSON.stringify(report)
+    : (quietCapture && !indexPrinted.length ? 'NO_REPLY' : [result.outcome.toUpperCase(), ...indexPrinted].join('\n'));
+  return report;
 }
 
-module.exports = { canonicalHealth, detectDerivedIndexHealth, detectWriterGuard, ensureTodayJournal, healthToday, localDate, mutateExistingJournal, runCreationMaintenance, safeProvenance };
+module.exports = { canonicalHealth, classifyDerivedIndexShape, detectDerivedIndexHealth, detectWriterGuard, ensureIndexEntry, ensureTodayJournal, healthToday, localDate, mutateExistingJournal, runCreationMaintenance, safeProvenance };
