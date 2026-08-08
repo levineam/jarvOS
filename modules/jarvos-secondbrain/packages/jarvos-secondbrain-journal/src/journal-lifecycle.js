@@ -7,6 +7,7 @@ const path = require('node:path');
 const { resolveJournalConfig, isValidTimezone } = require('../../../bridge/config');
 
 const SUCCESS_OUTCOMES = new Set(['created', 'healthy-existing', 'created-concurrently', 'recovered-after-unrecorded-create']);
+const SCHEDULED_TRIGGERS = new Set(['scheduled', 'catch-up']);
 const JOURNAL_MUTATION_LOCK_MAX_AGE_MS = 30 * 1000;
 const JOURNALING_INDEX_FILE = 'Journaling.md';
 const ACTIVE_INDEX_QUIET_WINDOW_MS = 5 * 60 * 1000;
@@ -14,6 +15,12 @@ const INDEX_BACKUP_RETENTION_DAYS = 90;
 
 function isSuccessfulJournalOutcome(value) {
   return SUCCESS_OUTCOMES.has(value);
+}
+
+function isScheduledJournalReceipt(receipt) {
+  if (!isSuccessfulJournalOutcome(receipt?.outcome)) return false;
+  const trigger = receipt?.trigger ?? receipt?.provenance?.trigger;
+  return SCHEDULED_TRIGGERS.has(String(trigger || '').trim());
 }
 
 function localDate(now, timeZone) {
@@ -27,9 +34,27 @@ function localDate(now, timeZone) {
 
 function safeProvenance(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
-  return Object.fromEntries(['source', 'runtime', 'runId']
+  return Object.fromEntries(['source', 'runtime', 'runId', 'trigger']
     .filter((key) => typeof value[key] === 'string' && value[key].trim())
     .map((key) => [key, value[key].trim()]));
+}
+
+function firstNonBlank(...values) {
+  return values.find((value) => typeof value === 'string' && value.trim());
+}
+
+function resolveProvenance(options = {}) {
+  const env = options.env && typeof options.env === 'object' ? options.env : {};
+  const explicit = options.provenance && typeof options.provenance === 'object' && !Array.isArray(options.provenance)
+    ? options.provenance
+    : {};
+  return safeProvenance({
+    ...explicit,
+    source: firstNonBlank(explicit.source, env.JARVOS_SOURCE_REVISION, env.OPENCLAW_SOURCE_REVISION),
+    runtime: firstNonBlank(explicit.runtime, env.JARVOS_RUNTIME_REVISION, env.OPENCLAW_RUNTIME_REVISION),
+    runId: firstNonBlank(explicit.runId, env.OPENCLAW_EXTERNAL_CRON_RUN_ID, env.OPENCLAW_EXTERNAL_CRON_SCHEDULED_WINDOW_KEY),
+    trigger: firstNonBlank(explicit.trigger, options.trigger, env.OPENCLAW_EXTERNAL_CRON_EXECUTION_PROVENANCE),
+  });
 }
 
 function loadTemplateConfig() {
@@ -53,20 +78,21 @@ function receiptSentinelPath(journalDir, date) {
   return path.join(receiptDirectory(journalDir), `${date}.receipt`);
 }
 
-function hasReceiptForDate(journalDir, date, fsImpl = fs) {
+function readReceiptForDate(journalDir, date, fsImpl = fs) {
   try {
     const receipt = JSON.parse(fsImpl.readFileSync(receiptSentinelPath(journalDir, date), 'utf8'));
-    return isSuccessfulJournalOutcome(receipt?.outcome);
+    return receipt?.date === date ? receipt : null;
   } catch (error) {
-    if (error.code === 'ENOENT') return false;
+    if (error.code === 'ENOENT') return null;
     throw error;
   }
 }
 
-function writeReceipt({ journalDir, date, timeZone, outcome, before, after, provenance, fsImpl = fs, now = new Date() }) {
+function writeReceipt({ journalDir, date, timeZone, outcome, before, after, provenance, priorReceipt = null, fsImpl = fs, now = new Date() }) {
   const directory = receiptDirectory(journalDir);
   fsImpl.mkdirSync(directory, { recursive: true, mode: 0o700 });
-  const file = path.join(directory, `${new Date(now).toISOString().replace(/[-:.]/g, '')}-${crypto.randomBytes(4).toString('hex')}.json`);
+  const normalizedProvenance = safeProvenance(provenance);
+  const trigger = normalizedProvenance.trigger || 'manual';
   const receipt = {
     version: 1,
     date,
@@ -74,31 +100,60 @@ function writeReceipt({ journalDir, date, timeZone, outcome, before, after, prov
     outcome,
     healthBefore: before.status,
     healthAfter: after.status,
-    provenance: safeProvenance(provenance),
+    trigger,
+    provenance: normalizedProvenance,
   };
   const serialized = `${JSON.stringify(receipt)}\n`;
-  const temporary = `${file}.tmp`;
+  let temporary = null;
   try {
-    // Idempotent health confirmations only refresh the date-addressable
-    // marker; state-changing attempts retain an immutable audit record.
-    if (outcome !== 'healthy-existing') {
+    // Scheduled idempotent health confirmations only refresh the
+    // date-addressable marker; explicit manual/forced checks retain an
+    // immutable audit record without becoming scheduled proof.
+    const retainImmutable = outcome !== 'healthy-existing'
+      || (normalizedProvenance.trigger && !SCHEDULED_TRIGGERS.has(normalizedProvenance.trigger));
+    if (retainImmutable) {
+      const file = path.join(directory, `${new Date(now).toISOString().replace(/[-:.]/g, '')}-${crypto.randomBytes(4).toString('hex')}.json`);
+      temporary = `${file}.tmp`;
       fsImpl.writeFileSync(temporary, serialized, { encoding: 'utf8', mode: 0o600 });
       fsImpl.renameSync(temporary, file);
     }
 
-    // Publish a date-addressable marker so existing-file checks never scan or
-    // parse the immutable history.
-    const sentinel = receiptSentinelPath(journalDir, date);
-    const sentinelTemporary = `${sentinel}.${process.pid}.${Date.now()}.tmp`;
-    try {
-      fsImpl.writeFileSync(sentinelTemporary, serialized, { encoding: 'utf8', mode: 0o600 });
-      fsImpl.renameSync(sentinelTemporary, sentinel);
-    } catch (error) {
-      try { fsImpl.unlinkSync(sentinelTemporary); } catch { /* cleanup only */ }
-      throw error;
+    // Publish scheduled/legacy attempts as the date-addressable marker. A
+    // forced or manual check must not overwrite the last scheduled proof, or
+    // the morning alarm could mistake operator activity for scheduler health.
+    // Untagged legacy callers may still publish a marker, but only when there
+    // is no current scheduled proof to preserve.
+    let publishSentinel = !normalizedProvenance.trigger || SCHEDULED_TRIGGERS.has(normalizedProvenance.trigger);
+    if (publishSentinel && !normalizedProvenance.trigger && isSuccessfulJournalOutcome(priorReceipt?.outcome)) {
+      publishSentinel = false;
+    }
+    if (publishSentinel) {
+      const sentinel = receiptSentinelPath(journalDir, date);
+      const publish = () => {
+        const sentinelTemporary = `${sentinel}.${process.pid}.${Date.now()}.tmp`;
+        try {
+          fsImpl.writeFileSync(sentinelTemporary, serialized, { encoding: 'utf8', mode: 0o600 });
+          fsImpl.renameSync(sentinelTemporary, sentinel);
+        } catch (error) {
+          try { fsImpl.unlinkSync(sentinelTemporary); } catch { /* cleanup only */ }
+          throw error;
+        }
+      };
+      withJournalMutationLock(sentinel, fsImpl, () => {
+        // A legacy/untagged caller may have read an empty or failed marker
+        // before a scheduled attempt published its proof. Re-read under the
+        // same lock used by scheduled publication before deciding to replace.
+        if (!normalizedProvenance.trigger) {
+          const latest = readReceiptForDate(journalDir, date, fsImpl);
+          if (isSuccessfulJournalOutcome(latest?.outcome)) return;
+        }
+        publish();
+      });
     }
   } catch (error) {
-    try { fsImpl.unlinkSync(temporary); } catch { /* cleanup only */ }
+    if (temporary) {
+      try { fsImpl.unlinkSync(temporary); } catch { /* cleanup only */ }
+    }
     throw error;
   }
   return receipt;
@@ -196,7 +251,8 @@ function resolveInputs(options) {
 
 function ensureTodayJournal(options = {}) {
   const fsImpl = options.fs || fs;
-  const provenance = safeProvenance(options.provenance);
+  const provenance = resolveProvenance(options);
+  let priorReceipt = null;
   let inputs;
   try { inputs = resolveInputs(options); } catch (error) {
     return { ok: false, outcome: 'invalid-configuration', reason: error.message, provenance };
@@ -220,7 +276,7 @@ function ensureTodayJournal(options = {}) {
   const finish = (outcome, after) => {
     try {
       if (typeof options.beforeReceipt === 'function') options.beforeReceipt();
-      writeReceipt({ journalDir: inputs.journalDir, date, timeZone: inputs.timeZone, outcome, before, after, provenance, fsImpl, now });
+      writeReceipt({ journalDir: inputs.journalDir, date, timeZone: inputs.timeZone, outcome, before, after, provenance, priorReceipt, fsImpl, now });
       return { ok: SUCCESS_OUTCOMES.has(outcome), outcome, date, journalPath, provenance };
     } catch (error) {
       return { ok: false, outcome: 'receipt-failed', date, journalPath, reason: error.message, provenance };
@@ -228,13 +284,13 @@ function ensureTodayJournal(options = {}) {
   };
   if (!guard.ok) return finish('blocked-writer-conflict', before);
   if (before.status !== 'missing') {
-    let prior;
     try {
-      prior = hasReceiptForDate(inputs.journalDir, date, fsImpl);
+      priorReceipt = readReceiptForDate(inputs.journalDir, date, fsImpl);
+      const prior = isSuccessfulJournalOutcome(priorReceipt?.outcome);
+      return finish(before.status === 'healthy' ? (prior ? 'healthy-existing' : 'recovered-after-unrecorded-create') : 'invalid-existing', before);
     } catch (error) {
       return { ok: false, outcome: 'receipt-failed', date, journalPath, reason: error.message, provenance };
     }
-    return finish(before.status === 'healthy' ? (prior ? 'healthy-existing' : 'recovered-after-unrecorded-create') : 'invalid-existing', before);
   }
   let scaffold;
   try { scaffold = renderScaffold(date, options.templateConfig || loadTemplateConfig()); } catch (error) {
@@ -647,11 +703,13 @@ module.exports = {
   ensureTodayJournal,
   healthToday,
   isSuccessfulJournalOutcome,
+  isScheduledJournalReceipt,
   localDate,
   mutateExistingJournal,
   receiptDirectory,
   receiptSentinelPath,
   resolveJournalLinkPrefix,
   runCreationMaintenance,
+  resolveProvenance,
   safeProvenance,
 };

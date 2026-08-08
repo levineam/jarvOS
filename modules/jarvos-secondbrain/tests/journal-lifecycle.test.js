@@ -71,6 +71,63 @@ test('journal lifecycle uses generic caller provenance without host defaults', (
   }
 });
 
+test('blank explicit provenance falls back to scheduler environment values', () => {
+  assert.deepEqual(
+    lifecycle.resolveProvenance({
+      provenance: { trigger: ' ', source: '\t' },
+      env: {
+        OPENCLAW_EXTERNAL_CRON_EXECUTION_PROVENANCE: ' scheduled ',
+        OPENCLAW_SOURCE_REVISION: 'source-1',
+      },
+    }),
+    { source: 'source-1', trigger: 'scheduled' },
+  );
+});
+
+test('scheduled provenance is recorded and forced checks cannot replace scheduled proof', () => {
+  const { vault, journalDir } = tempVault();
+  const config = { paths: { journal: journalDir }, user: { timezone: 'UTC' } };
+  const now = new Date('2026-08-03T12:00:00.000Z');
+  const scheduledEnv = {
+    JARVOS_SOURCE_REVISION: 'source-1',
+    JARVOS_RUNTIME_REVISION: 'runtime-1',
+    OPENCLAW_EXTERNAL_CRON_RUN_ID: 'journal-maintenance:2026-08-03:primary',
+    OPENCLAW_EXTERNAL_CRON_EXECUTION_PROVENANCE: 'scheduled',
+  };
+  try {
+    const scheduled = lifecycle.ensureTodayJournal({ config, env: scheduledEnv, now });
+    assert.equal(scheduled.outcome, 'created');
+    assert.deepEqual(scheduled.provenance, {
+      source: 'source-1',
+      runtime: 'runtime-1',
+      runId: 'journal-maintenance:2026-08-03:primary',
+      trigger: 'scheduled',
+    });
+
+    const sentinelPath = path.join(vault, '.jarvos', 'journal-maintenance', 'receipts', '2026-08-03.receipt');
+    assert.equal(JSON.parse(fs.readFileSync(sentinelPath, 'utf8')).trigger, 'scheduled');
+
+    const untaggedManual = lifecycle.ensureTodayJournal({ config, env: {}, now });
+    assert.equal(untaggedManual.outcome, 'healthy-existing');
+    assert.equal(JSON.parse(fs.readFileSync(sentinelPath, 'utf8')).trigger, 'scheduled');
+
+    const forced = lifecycle.ensureTodayJournal({
+      config,
+      env: { ...scheduledEnv, OPENCLAW_EXTERNAL_CRON_EXECUTION_PROVENANCE: 'forced' },
+      now,
+    });
+    assert.equal(forced.outcome, 'healthy-existing');
+    assert.equal(JSON.parse(fs.readFileSync(sentinelPath, 'utf8')).trigger, 'scheduled');
+    assert.equal(
+      fs.readdirSync(path.dirname(sentinelPath)).filter((name) => name.endsWith('.json')).length,
+      2,
+      'explicit forced checks retain an immutable audit receipt without replacing scheduled proof',
+    );
+  } finally {
+    fs.rmSync(vault, { recursive: true, force: true });
+  }
+});
+
 test('creation is exclusive, re-read verified, and existing authored files stay untouched', () => {
   const { vault, journalDir } = tempVault();
   const config = { paths: { journal: journalDir }, user: { timezone: 'Pacific/Auckland' } };

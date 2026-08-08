@@ -49,7 +49,7 @@ function readIndexVisibility(journalDir, date, fileName = 'Journaling.md', fsImp
 }
 
 function buildAlarmMessage({ date, timeZone, canonical = {}, receipts = [], receiptStatus = 'available', visibility = {} } = {}) {
-  const healthyReceipt = receipts.some((receipt) => lifecycle.isSuccessfulJournalOutcome(receipt?.outcome));
+  const healthyReceipt = receipts.some((receipt) => lifecycle.isScheduledJournalReceipt(receipt));
   const indexName = visibility.fileName || 'Journaling.md';
   if (receiptStatus === 'unavailable') return `🚨 Journal receipt evidence for ${date} is unavailable; scheduled-capture status cannot be verified.`;
   if (canonical.status === 'healthy' && healthyReceipt) {

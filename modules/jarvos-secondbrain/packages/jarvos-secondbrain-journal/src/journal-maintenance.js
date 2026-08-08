@@ -1310,8 +1310,8 @@ function runMaintenance(argv = process.argv.slice(2), opts = {}) {
   return report;
 }
 
-function main(argv = process.argv.slice(2)) {
-  const report = runMaintenance(argv);
+function main(argv = process.argv.slice(2), env = process.env) {
+  const report = runMaintenance(argv, { env });
   console.log(report.output);
   return report;
 }

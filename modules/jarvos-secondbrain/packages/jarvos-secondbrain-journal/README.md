@@ -42,6 +42,12 @@ The package does not contain a user-specific vault, home-directory, scheduler,
 runtime, or provenance default. Host adapters inject configuration and own
 delivery/retry evidence outside this package.
 
+The manifest-owned OpenClaw scheduler must inject
+`OPENCLAW_EXTERNAL_CRON_EXECUTION_PROVENANCE=scheduled` (or `catch-up`), plus
+its run ID and source/runtime revisions. A creation run without that trusted
+trigger is recorded as manual evidence and cannot quiet the scheduled health
+alarm.
+
 ## Single-writer rule
 
 JarvOS is the only automated creator for the configured journal directory.

@@ -138,6 +138,13 @@ Host schedulers and runtime adapters own their own delivery, retry, and
 operational evidence. They inject the public configuration; they do not become
 part of this package's canonical journal or release contract.
 
+The manifest-owned OpenClaw scheduler also injects
+`OPENCLAW_EXTERNAL_CRON_EXECUTION_PROVENANCE=scheduled` (or `catch-up`),
+`OPENCLAW_EXTERNAL_CRON_RUN_ID`, and the source/runtime revision variables. The
+health alarm accepts only those explicit scheduled/catch-up receipts as proof
+of scheduler health; a direct or untagged ensure remains visible as manual
+evidence.
+
 ## Recovery principle
 
 If health reports a missing or invalid canonical file, stop and inspect the
