@@ -28,6 +28,7 @@ function runContract({ root, personality, frontmatter = {} }) {
     ...process.env,
     VAULT_NOTES_DIR: path.join(root, 'Notes'),
     JOURNAL_DIR: path.join(root, 'Journal'),
+    JARVOS_TIMEZONE: 'America/New_York',
     JARVOS_KNOWLEDGE_DIR: path.join(root, '.jarvos', 'knowledge'),
     JARVOS_ALLOW_UNSAFE_TEST_JOURNAL_WRITE: '1',
   };
