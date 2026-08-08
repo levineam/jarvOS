@@ -324,6 +324,16 @@ test('local OpenClaw doctor maps healthy, drifted, compatibility, and missing ad
     });
     assert.equal(persistenceCheck(missingAdapter).status, 'fail');
     assert.equal(persistenceCheck(missingAdapter).ok, false);
+
+    const indeterminateMissingAdapter = await validateOpenClawProfile({
+      workspace: workspaces[3],
+      openclawPluginEvidence: persistenceEvidence({
+        status: 'indeterminate',
+        jarvosAdapter: { status: 'missing-staged-adapter' },
+      }),
+    });
+    assert.equal(persistenceCheck(indeterminateMissingAdapter).status, 'fail');
+    assert.equal(persistenceCheck(indeterminateMissingAdapter).ok, false);
   } finally {
     for (const workspace of workspaces) fs.rmSync(workspace, { recursive: true, force: true });
   }
@@ -340,5 +350,29 @@ test('non-local profiles do not invoke OpenClaw plugin persistence assessment', 
     assert.equal(result.checks.some((check) => check.component === 'openclaw.pluginPersistence'), false);
   } finally {
     fs.rmSync(workspace, { recursive: true, force: true });
+  }
+});
+
+test('profile doctor honors an explicit config path', async () => {
+  const workspace = scratch();
+  const externalConfig = path.join(scratch(), 'custom-config.json');
+  try {
+    writeConfig(workspace, { runtimeAdapters: {} });
+    fs.writeFileSync(externalConfig, JSON.stringify({
+      runtimeAdapters: { openclaw: { kind: 'openclaw' } },
+      skillPacks: { installed: ['local-openclaw'] },
+    }, null, 2));
+
+    const result = await validateJarvosProfile({
+      profile: 'local-openclaw',
+      workspace,
+      configPath: externalConfig,
+      openclawPluginEvidence: persistenceEvidence(),
+    });
+    const adapter = result.checks.find((check) => check.component === 'jarvos.openclawAdapter');
+    assert.equal(adapter.status, 'ok');
+  } finally {
+    fs.rmSync(workspace, { recursive: true, force: true });
+    fs.rmSync(path.dirname(externalConfig), { recursive: true, force: true });
   }
 });

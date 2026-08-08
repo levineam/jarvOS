@@ -179,9 +179,16 @@ function createStatusCheck(component, status, message, details = {}) {
   };
 }
 
-function validateWorkspaceFiles(workspace) {
+function resolveDoctorConfigPath(workspace, options = {}) {
+  return path.resolve(expandHome(options.configPath || path.join(workspace, 'jarvos.config.json')));
+}
+
+function validateWorkspaceFiles(workspace, configPath = path.join(workspace, 'jarvos.config.json')) {
   const missing = MINIMAL_WORKSPACE_FILES.filter((relativePath) => {
-    return !fileExists(path.join(workspace, relativePath));
+    const filePath = relativePath === 'jarvos.config.json'
+      ? configPath
+      : path.join(workspace, relativePath);
+    return !fileExists(filePath);
   });
 
   if (missing.length > 0) {
@@ -251,8 +258,7 @@ function validateAgentContextHydration(workspace) {
   });
 }
 
-function validateConfigSchema(workspace) {
-  const configPath = path.join(workspace, 'jarvos.config.json');
+function validateConfigSchema(workspace, configPath = path.join(workspace, 'jarvos.config.json')) {
   const schemaPath = path.join(workspace, 'jarvos.config.schema.json');
 
   const configResult = readJson(configPath);
@@ -533,6 +539,7 @@ function validateObsidianPaths(workspace, config, options = {}) {
 
 function runMinimalDoctor(options = {}) {
   const workspace = path.resolve(options.workspace || process.cwd());
+  const configPath = resolveDoctorConfigPath(workspace, options);
   const checks = [];
 
   if (!directoryExists(workspace)) {
@@ -551,9 +558,9 @@ function runMinimalDoctor(options = {}) {
   checks.push(createCheck('workspace.root', true, `Found workspace directory: ${workspace}`, {
     path: workspace,
   }));
-  checks.push(validateWorkspaceFiles(workspace));
+  checks.push(validateWorkspaceFiles(workspace, configPath));
 
-  const configSchemaCheck = validateConfigSchema(workspace);
+  const configSchemaCheck = validateConfigSchema(workspace, configPath);
   checks.push(configSchemaCheck);
   for (const key of REQUIRED_PATH_KEYS) {
     checks.push(validateConfiguredDirectory(workspace, configSchemaCheck.config, key));
@@ -569,6 +576,7 @@ function runMinimalDoctor(options = {}) {
   return {
     profile: 'minimal',
     workspace,
+    configPath,
     ok,
     status: ok ? 'ok' : 'failed',
     checks: checks.map(({ config, ...check }) => check),
@@ -597,10 +605,11 @@ function profileNeedsOpenClawAdapter(profile) {
 
 async function validateJarvosProfile(options = {}) {
   const workspace = path.resolve(options.workspace || process.cwd());
+  const configPath = resolveDoctorConfigPath(workspace, options);
   const profile = normalizeProfile(options.profile || 'minimal');
   const packName = options.packName || (profile === 'local-openclaw' ? 'local-openclaw' : 'v0-5-0');
-  const checks = runMinimalDoctor({ workspace }).checks;
-  const config = readWorkspaceConfig(workspace);
+  const checks = runMinimalDoctor({ ...options, workspace, configPath }).checks;
+  const config = readWorkspaceConfig(workspace, configPath);
   const pack = loadPack(packName);
   const plan = buildInstallPlan({
     pack,
@@ -961,21 +970,21 @@ function mapOpenClawPersistenceResult(result) {
   }
 
   const details = persistenceSummaryDetails(result);
-  if (result.status === 'indeterminate') {
-    return createStatusCheck(
-      'openclaw.pluginPersistence',
-      'warn',
-      'OpenClaw plugin persistence is indeterminate because its evidence was incomplete or changed during inspection',
-      { reason: 'indeterminate', ...details },
-    );
-  }
-
   if (result.jarvosAdapter?.status === 'missing-staged-adapter') {
     return createStatusCheck(
       'openclaw.pluginPersistence',
       'fail',
       'jarvOS staged OpenClaw adapter is missing; rerun the supported local-openclaw setup',
       { reason: 'missing-staged-adapter', ...details },
+    );
+  }
+
+  if (result.status === 'indeterminate') {
+    return createStatusCheck(
+      'openclaw.pluginPersistence',
+      'warn',
+      'OpenClaw plugin persistence is indeterminate because its evidence was incomplete or changed during inspection',
+      { reason: 'indeterminate', ...details },
     );
   }
 
@@ -1028,17 +1037,17 @@ async function validateOpenClawPluginPersistence(options = {}, config, command) 
   return mapOpenClawPersistenceResult(evidence);
 }
 
-function readWorkspaceConfig(workspace) {
-  const configPath = path.join(workspace, 'jarvos.config.json');
+function readWorkspaceConfig(workspace, configPath = path.join(workspace, 'jarvos.config.json')) {
   const result = readJson(configPath);
   return result.ok ? result.value : null;
 }
 
 async function validateOpenClawProfile(options = {}) {
   const workspace = path.resolve(options.workspace || process.cwd());
+  const configPath = resolveDoctorConfigPath(workspace, options);
   const profile = normalizeProfile(options.profile || 'local-openclaw');
-  const checks = runMinimalDoctor({ workspace }).checks;
-  const config = readWorkspaceConfig(workspace);
+  const checks = runMinimalDoctor({ ...options, workspace, configPath }).checks;
+  const config = readWorkspaceConfig(workspace, configPath);
   const openclawStateDir = resolveOpenClawStateDir(options, config);
   const pack = loadPack('local-openclaw');
   const plan = buildInstallPlan({
@@ -1186,6 +1195,7 @@ async function initProfile(options = {}) {
   const doctor = await runProfileDoctor({
     profile,
     workspace: result.workspaceRoot,
+    configPath: options.configPath,
     openclawStateDir: result.openclawStateDir,
     commandsPresent: options.commandsPresent,
     filesPresent: options.filesPresent,
