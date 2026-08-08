@@ -12,6 +12,10 @@ const JOURNALING_INDEX_FILE = 'Journaling.md';
 const ACTIVE_INDEX_QUIET_WINDOW_MS = 5 * 60 * 1000;
 const INDEX_BACKUP_RETENTION_DAYS = 90;
 
+function isSuccessfulJournalOutcome(value) {
+  return SUCCESS_OUTCOMES.has(value);
+}
+
 function localDate(now, timeZone) {
   return new Intl.DateTimeFormat('en-CA', {
     timeZone,
@@ -51,7 +55,8 @@ function receiptSentinelPath(journalDir, date) {
 
 function hasReceiptForDate(journalDir, date, fsImpl = fs) {
   try {
-    return fsImpl.lstatSync(receiptSentinelPath(journalDir, date)).isFile();
+    const receipt = JSON.parse(fsImpl.readFileSync(receiptSentinelPath(journalDir, date), 'utf8'));
+    return isSuccessfulJournalOutcome(receipt?.outcome);
   } catch (error) {
     if (error.code === 'ENOENT') return false;
     throw error;
@@ -247,12 +252,36 @@ function ensureTodayJournal(options = {}) {
   return after.status === 'healthy' ? finish('created', after) : finish('failed', after);
 }
 
-function classifyDerivedIndexShape(markdown) {
+function normalizeJournalLinkPrefix(prefix = 'Journal') {
+  const normalized = String(prefix || '').replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
+  return normalized || 'Journal';
+}
+
+function escapeRegex(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function resolveJournalLinkPrefix(journalDir, options = {}) {
+  const fsImpl = options.fs || fs;
+  const configuredVault = options.vaultDir
+    || options.config?.paths?.vault
+    || options.env?.JARVOS_VAULT_DIR;
+  const vaultRoot = typeof configuredVault === 'string' && path.isAbsolute(configuredVault)
+    ? configuredVault
+    : inferVaultRoot(journalDir, fsImpl);
+  const relative = path.relative(path.resolve(vaultRoot), path.resolve(journalDir));
+  if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) return null;
+  return normalizeJournalLinkPrefix(relative.split(path.sep).join('/'));
+}
+
+function classifyDerivedIndexShape(markdown, linkPrefix = 'Journal') {
   const entries = [];
+  const prefix = normalizeJournalLinkPrefix(linkPrefix);
+  const pattern = new RegExp(`^!\\[\\[${escapeRegex(prefix)}\\/(?:[^\\[\\]|]+\\/)*(\\d{4}-\\d{2}-\\d{2})\\.md\\]\\]$`);
   for (const line of String(markdown).split(/\r?\n/)) {
     const trimmed = line.trim();
     if (!trimmed) continue;
-    const match = trimmed.match(/^!\[\[Journal\/(?:[^\[\]|]+\/)*(\d{4}-\d{2}-\d{2})\.md\]\]$/);
+    const match = trimmed.match(pattern);
     if (!match) return { managed: false, reason: 'index contains content jarvOS did not generate', entries: [] };
     entries.push({ date: match[1], line: trimmed });
   }
@@ -311,6 +340,8 @@ function ensureIndexEntry(options = {}) {
   }
   const indexPath = path.join(inputs.journalDir, fileName);
   if (!enabled) return baseResult('index-disabled', 'derived index maintenance is disabled for this vault', date, indexPath);
+  const linkPrefix = options.indexLinkPrefix || resolveJournalLinkPrefix(inputs.journalDir, options);
+  if (!linkPrefix) return baseResult('index-unmanaged', 'journal directory is not safely addressable from the vault root', date, indexPath);
 
   let stat;
   try { stat = fsImpl.lstatSync(indexPath); } catch (error) {
@@ -323,9 +354,21 @@ function ensureIndexEntry(options = {}) {
   try { current = fsImpl.readFileSync(indexPath, 'utf8'); } catch (error) {
     return baseResult('index-failed', `derived index could not be read: ${error.message}`, date, indexPath);
   }
-  const shape = classifyDerivedIndexShape(current);
+  const shape = classifyDerivedIndexShape(current, linkPrefix);
   if (!shape.managed) return baseResult('index-unmanaged', shape.reason, date, indexPath);
-  if (shape.entries.some((entry) => entry.date === date)) {
+  let journalDates;
+  try {
+    journalDates = fsImpl.readdirSync(inputs.journalDir)
+      .filter((name) => /^\d{4}-\d{2}-\d{2}\.md$/.test(name))
+      .map((name) => name.slice(0, -3));
+  } catch (error) {
+    return baseResult('index-failed', `journal directory could not be inspected: ${error.message}`, date, indexPath);
+  }
+  const listedDates = new Set(shape.entries.map((entry) => entry.date));
+  const missingDates = [...new Set([...journalDates, date])]
+    .filter((entryDate) => !listedDates.has(entryDate))
+    .sort((left, right) => right.localeCompare(left));
+  if (missingDates.length === 0) {
     return baseResult('index-healthy', 'derived index already lists this date', date, indexPath);
   }
 
@@ -336,39 +379,46 @@ function ensureIndexEntry(options = {}) {
   }
 
   const lines = current.split(/\r?\n/);
-  const embed = `![[Journal/${date}.md]]`;
-  const olderEntry = shape.entries.find((entry) => entry.date < date);
-  const anchor = olderEntry || shape.entries[shape.entries.length - 1];
-  let insertAt = lines.length;
-  let addition = [embed, ''];
-  if (anchor) {
-    const anchorAt = lines.findIndex((line) => line.trim() === anchor.line);
-    if (anchorAt < 0) return baseResult('index-failed', 'derived index insertion point could not be resolved', date, indexPath);
-    if (olderEntry) {
-      insertAt = anchorAt;
-    } else {
-      insertAt = Math.min(anchorAt + 2, lines.length);
-      addition = lines[anchorAt + 1] === undefined || lines[anchorAt + 1].trim() ? ['', embed] : [embed, ''];
+  const entries = [...shape.entries];
+  for (const missingDate of missingDates) {
+    const embed = `![[${linkPrefix}/${missingDate}.md]]`;
+    const orderedEntries = [...entries].sort((left, right) => right.date.localeCompare(left.date));
+    const olderEntry = orderedEntries.find((entry) => entry.date < missingDate);
+    const anchor = olderEntry || orderedEntries[orderedEntries.length - 1];
+    let insertAt = lines.length;
+    let addition = [embed, ''];
+    if (anchor) {
+      const anchorAt = lines.findIndex((line) => line.trim() === anchor.line);
+      if (anchorAt < 0) return baseResult('index-failed', 'derived index insertion point could not be resolved', date, indexPath);
+      if (olderEntry) {
+        insertAt = anchorAt;
+      } else {
+        insertAt = Math.min(anchorAt + 2, lines.length);
+        addition = lines[anchorAt + 1] === undefined || lines[anchorAt + 1].trim() ? ['', embed] : [embed, ''];
+      }
     }
-  } else {
-    insertAt = 0;
+    lines.splice(insertAt, 0, ...addition);
+    entries.push({ date: missingDate, line: embed });
   }
-  lines.splice(insertAt, 0, ...addition);
   const next = lines.join('\n');
   const stamp = now.toISOString().replace(/[-:]/g, '').replace(/\.\d{3}Z$/, 'Z');
   const backupDir = path.join(journalStateRoot(inputs.journalDir), 'index-backups');
   const backupPath = path.join(backupDir, `${fileName}.${stamp}.${crypto.randomBytes(3).toString('hex')}.bak`);
   const temporary = path.join(backupDir, `.${fileName}.${process.pid}.${crypto.randomBytes(4).toString('hex')}.tmp`);
+  let publishedBackupPath;
   try {
     fsImpl.mkdirSync(backupDir, { recursive: true, mode: 0o700 });
-    // Re-read before publishing the swap so a concurrent Sync/client edit is
-    // reported rather than overwritten.
-    if (fsImpl.readFileSync(indexPath, 'utf8') !== current) {
-      return baseResult('index-conflict', 'derived index changed while the entry was being composed', date, indexPath);
-    }
-    fsImpl.writeFileSync(backupPath, current, { encoding: 'utf8', mode: 0o600 });
-    fsImpl.writeFileSync(temporary, next, { encoding: 'utf8', mode: 0o600 });
-    fsImpl.renameSync(temporary, indexPath);
+    const update = withJournalMutationLock(indexPath, fsImpl, () => {
+      // Re-read before publishing the swap so a concurrent Sync/client edit is
+      // reported rather than overwritten.
+      if (fsImpl.readFileSync(indexPath, 'utf8') !== current) return { conflict: true };
+      fsImpl.writeFileSync(backupPath, current, { encoding: 'utf8', mode: 0o600 });
+      fsImpl.writeFileSync(temporary, next, { encoding: 'utf8', mode: 0o600 });
+      fsImpl.renameSync(temporary, indexPath);
+      return { backupPath };
+    });
+    if (update?.conflict) return baseResult('index-conflict', 'derived index changed while the entry was being composed', date, indexPath);
+    publishedBackupPath = update?.backupPath;
   } catch (error) {
     try { fsImpl.unlinkSync(temporary); } catch { /* cleanup only */ }
     return baseResult('index-failed', `derived index could not be updated: ${error.message}`, date, indexPath);
@@ -388,18 +438,19 @@ function ensureIndexEntry(options = {}) {
       if (fsImpl.statSync(candidate).mtimeMs < cutoff) fsImpl.unlinkSync(candidate);
     }
   } catch { /* pruning is best effort */ }
-  return { ...baseResult('index-updated', 'derived index now lists this date', date, indexPath), backupPath };
+  return { ...baseResult('index-updated', 'derived index now lists this date', date, indexPath), backupPath: publishedBackupPath };
 }
 
-function detectDerivedIndexHealth(journalDir, fsImpl = fs, fileName = JOURNALING_INDEX_FILE) {
+function detectDerivedIndexHealth(journalDir, fsImpl = fs, fileName = JOURNALING_INDEX_FILE, linkPrefix) {
   const indexPath = path.join(journalDir, fileName);
   let index;
   try { index = fsImpl.readFileSync(indexPath, 'utf8'); } catch { return { status: 'missing-derived', indexPath }; }
   let dates;
   try { dates = fsImpl.readdirSync(journalDir).filter((name) => /^\d{4}-\d{2}-\d{2}\.md$/.test(name)); } catch { return { status: 'unavailable', indexPath }; }
-  const listed = [...String(index).matchAll(/\[\[Journal\/(?:[^\[\]|]+\/)*(\d{4}-\d{2}-\d{2})(?:\.md)?(?:\|[^\]]+)?\]\]/g)].map((match) => match[1]);
+  const shape = classifyDerivedIndexShape(index, linkPrefix || resolveJournalLinkPrefix(journalDir, { fs: fsImpl }) || 'Journal');
+  if (!shape.managed) return { status: 'unmanaged-derived', indexPath, expectedCount: dates.length, listedCount: 0, managedShape: false };
+  const listed = shape.entries.map((entry) => entry.date);
   const listedDates = new Set(listed);
-  const shape = classifyDerivedIndexShape(index);
   return {
     status: dates.length === listed.length && dates.every((name) => listedDates.has(name.slice(0, -3))) ? 'healthy-derived' : 'stale-derived',
     indexPath,
@@ -420,7 +471,8 @@ function healthToday(options = {}) {
   const fsImpl = options.fs || fs;
   const journalPath = path.join(inputs.journalDir, `${date}.md`);
   const indexFileName = loadDerivedIndexConfig(options).derivedIndex?.fileName || JOURNALING_INDEX_FILE;
-  return { ok: true, date, journalPath, canonical: canonicalHealth(journalPath, fsImpl), derivedIndex: detectDerivedIndexHealth(inputs.journalDir, fsImpl, indexFileName) };
+  const linkPrefix = options.indexLinkPrefix || resolveJournalLinkPrefix(inputs.journalDir, options);
+  return { ok: true, date, journalPath, canonical: canonicalHealth(journalPath, fsImpl), derivedIndex: detectDerivedIndexHealth(inputs.journalDir, fsImpl, indexFileName, linkPrefix) };
 }
 
 function sleepSync(ms) {
@@ -430,16 +482,62 @@ function sleepSync(ms) {
 
 function withJournalMutationLock(journalPath, fsImpl, fn, { maxAttempts = 40, retryMs = 25 } = {}) {
   const lockPath = `${journalPath}.lock`;
+  const lockToken = crypto.randomBytes(16).toString('hex');
   fsImpl.mkdirSync(path.dirname(lockPath), { recursive: true });
-  let fd = null;
+  const lockOwner = JSON.stringify({ pid: process.pid, token: lockToken });
+  const reclaimStaleLock = () => {
+    let stat;
+    try { stat = fsImpl.statSync(lockPath); } catch (error) {
+      if (error.code === 'ENOENT') return false;
+      throw error;
+    }
+    if (Date.now() - stat.mtimeMs <= JOURNAL_MUTATION_LOCK_MAX_AGE_MS) return false;
+
+    let owner;
+    try { owner = JSON.parse(fsImpl.readFileSync(lockPath, 'utf8')); } catch { owner = null; }
+    let ownerAlive = false;
+    if (Number.isInteger(owner?.pid) && owner.pid > 0) {
+      try { process.kill(owner.pid, 0); ownerAlive = true; } catch (probeError) { ownerAlive = probeError.code !== 'ESRCH'; }
+    }
+    if (ownerAlive) return false;
+
+    // Claim the stale pathname atomically before removing it. Multiple
+    // reclaimers can race here, but only one rename can move this pathname;
+    // a replacement lock is restored rather than accidentally unlinked.
+    const stalePath = `${lockPath}.stale.${process.pid}.${crypto.randomBytes(6).toString('hex')}`;
+    try { fsImpl.renameSync(lockPath, stalePath); } catch (error) {
+      if (error.code === 'ENOENT') return false;
+      throw error;
+    }
+    let movedOwner;
+    try { movedOwner = JSON.parse(fsImpl.readFileSync(stalePath, 'utf8')); } catch { movedOwner = null; }
+    const sameOwner = owner?.token
+      ? movedOwner?.token === owner.token
+      : !movedOwner?.token;
+    if (!sameOwner) {
+      try { fsImpl.linkSync(stalePath, lockPath); } catch (error) {
+        if (error.code !== 'EEXIST') throw error;
+      }
+    }
+    try { fsImpl.unlinkSync(stalePath); } catch { /* cleanup only */ }
+    return sameOwner;
+  };
+
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    const temporary = `${lockPath}.${process.pid}.${lockToken}.tmp`;
     try {
-      fd = fsImpl.openSync(lockPath, 'wx', 0o600);
+      // Fully write metadata before atomically publishing the lock pathname.
+      // A stale reclaimer can never observe an empty, partially initialized
+      // owner record.
+      fsImpl.writeFileSync(temporary, lockOwner, { encoding: 'utf8', mode: 0o600, flag: 'wx' });
+      fsImpl.linkSync(temporary, lockPath);
+      try { fsImpl.unlinkSync(temporary); } catch { /* cleanup only */ }
       break;
     } catch (error) {
+      try { fsImpl.unlinkSync(temporary); } catch { /* cleanup only */ }
       if (error.code !== 'EEXIST') throw error;
       try {
-        if (Date.now() - fsImpl.statSync(lockPath).mtimeMs > JOURNAL_MUTATION_LOCK_MAX_AGE_MS) fsImpl.unlinkSync(lockPath);
+        reclaimStaleLock();
       } catch {
         // The lock may disappear between attempts.
       }
@@ -451,8 +549,10 @@ function withJournalMutationLock(journalPath, fsImpl, fn, { maxAttempts = 40, re
   try {
     return fn();
   } finally {
-    if (fd !== null) fsImpl.closeSync(fd);
-    try { fsImpl.unlinkSync(lockPath); } catch { /* stale-lock cleanup may have removed it */ }
+    try {
+      const owner = JSON.parse(fsImpl.readFileSync(lockPath, 'utf8'));
+      if (owner?.token === lockToken) fsImpl.unlinkSync(lockPath);
+    } catch { /* stale-lock cleanup or a failed lock write may have removed it */ }
   }
 }
 
@@ -503,6 +603,7 @@ function runCreationMaintenance(args = {}, options = {}) {
     };
   }
   const result = ensureTodayJournal({ ...options, now: options.now });
+  const fsImpl = options.fs || fs;
   let indexResults = [];
   if (result.ok) {
     let journalDir;
@@ -510,7 +611,7 @@ function runCreationMaintenance(args = {}, options = {}) {
     const indexName = loadDerivedIndexConfig(options).derivedIndex?.fileName || JOURNALING_INDEX_FILE;
     let observedMtimeMs;
     if (journalDir) {
-      try { observedMtimeMs = fs.statSync(path.join(journalDir, indexName)).mtimeMs; } catch { /* missing/unreadable index is reported by ensureIndexEntry */ }
+      try { observedMtimeMs = fsImpl.statSync(path.join(journalDir, indexName)).mtimeMs; } catch { /* missing/unreadable index is reported by ensureIndexEntry */ }
     }
     indexResults = [ensureIndexEntry({
       ...options,
@@ -519,12 +620,13 @@ function runCreationMaintenance(args = {}, options = {}) {
       observedMtimeMs,
     })];
   }
+  const indexProblems = indexResults.filter((entry) => !entry.ok && entry.outcome !== 'index-disabled');
+  const fatalIndexProblem = indexProblems.some((entry) => ['index-failed', 'index-conflict'].includes(entry.outcome));
   const report = {
-    status: result.ok ? 'ok' : 'failed',
+    status: result.ok && !fatalIndexProblem ? 'ok' : 'failed',
     results: [result],
     indexResults,
   };
-  const indexProblems = indexResults.filter((entry) => !entry.ok && entry.outcome !== 'index-disabled');
   if (indexProblems.length) report.indexProblems = indexProblems;
   const quietCapture = ['healthy-existing', 'recovered-after-unrecorded-create'].includes(result.outcome);
   const indexPrinted = indexResults
@@ -536,4 +638,20 @@ function runCreationMaintenance(args = {}, options = {}) {
   return report;
 }
 
-module.exports = { canonicalHealth, classifyDerivedIndexShape, detectDerivedIndexHealth, detectWriterGuard, ensureIndexEntry, ensureTodayJournal, healthToday, localDate, mutateExistingJournal, runCreationMaintenance, safeProvenance };
+module.exports = {
+  canonicalHealth,
+  classifyDerivedIndexShape,
+  detectDerivedIndexHealth,
+  detectWriterGuard,
+  ensureIndexEntry,
+  ensureTodayJournal,
+  healthToday,
+  isSuccessfulJournalOutcome,
+  localDate,
+  mutateExistingJournal,
+  receiptDirectory,
+  receiptSentinelPath,
+  resolveJournalLinkPrefix,
+  runCreationMaintenance,
+  safeProvenance,
+};

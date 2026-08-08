@@ -8,7 +8,7 @@ const os = require('node:os');
 const path = require('node:path');
 
 const { parseArgs } = require('../scripts/journal-health.js');
-const { buildAlarmMessage, readIndexVisibility } = require('../scripts/journal-health-alarm.js');
+const { buildAlarmMessage, main: alarmMain, readIndexVisibility, readReceiptStateForDate } = require('../scripts/journal-health-alarm.js');
 
 test('journal-health accepts only read-only date and JSON options', () => {
   assert.deepEqual(parseArgs(['--json', '--date=today']), { json: true, date: 'today' });
@@ -29,6 +29,25 @@ test('journal health and ensure commands return nonzero on invalid configuration
     const ensure = spawnSync(process.execPath, [ensureScript, '--create-if-missing', '--json'], { encoding: 'utf8', env });
     assert.equal(health.status, 1, health.stderr);
     assert.equal(ensure.status, 1, ensure.stderr);
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test('journal-health exits nonzero when configured canonical journal is missing', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-journal-cli-missing-'));
+  const journal = path.join(home, 'vault', 'Journal');
+  const env = {
+    ...process.env,
+    HOME: home,
+    JARVOS_JOURNAL_DIR: journal,
+    JARVOS_TIMEZONE: 'UTC',
+  };
+  const healthScript = path.resolve(__dirname, '../scripts/journal-health.js');
+  try {
+    const health = spawnSync(process.execPath, [healthScript, '--json'], { encoding: 'utf8', env });
+    assert.equal(health.status, 1, health.stderr);
+    assert.equal(JSON.parse(health.stdout).canonical.status, 'missing');
   } finally {
     fs.rmSync(home, { recursive: true, force: true });
   }
@@ -61,4 +80,32 @@ test('journal-health-alarm stays quiet only when capture and visibility both pas
   assert.match(buildAlarmMessage({ ...healthy, visibility: { status: 'not-listed', fileName: 'Journaling.md' } }), /not listed/);
   assert.match(buildAlarmMessage({ ...healthy, visibility: { status: 'unmanaged', fileName: 'Journaling.md' } }), /does not manage/);
   assert.match(buildAlarmMessage({ ...healthy, receipts: [], visibility: { status: 'listed' } }), /no healthy scheduled receipt/);
+  assert.match(buildAlarmMessage({ ...healthy, receiptStatus: 'unavailable', visibility: { status: 'listed' } }), /receipt evidence.*unavailable/);
+  assert.match(buildAlarmMessage({ ...healthy, visibility: { status: 'unavailable', fileName: 'Journaling.md' } }), /visibility is unknown/);
+  assert.match(buildAlarmMessage({ date: healthy.date, timeZone: healthy.timeZone, canonical: { status: 'missing' }, receipts: [] }), /needs investigation/);
+});
+
+test('journal-health-alarm reads one date-addressable receipt and reports its real state', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-journal-alarm-receipt-'));
+  const journalDir = path.join(root, 'Journal');
+  const env = { ...process.env, JARVOS_JOURNAL_DIR: journalDir, JARVOS_TIMEZONE: 'UTC', JOURNAL_HEALTH_ALARM_DATE: '2026-08-08' };
+  try {
+    fs.mkdirSync(journalDir, { recursive: true });
+    fs.writeFileSync(path.join(journalDir, '2026-08-08.md'), '## 📝 Notes\n- today\n', 'utf8');
+    fs.writeFileSync(path.join(journalDir, 'Journaling.md'), '![[Journal/2026-08-08.md]]\n', 'utf8');
+    const receiptDir = path.join(root, '.jarvos', 'journal-maintenance', 'receipts');
+    fs.mkdirSync(receiptDir, { recursive: true });
+    fs.writeFileSync(path.join(receiptDir, '2026-08-08.receipt'), JSON.stringify({ date: '2026-08-08', outcome: 'created' }), 'utf8');
+    for (let i = 0; i < 50; i += 1) fs.writeFileSync(path.join(receiptDir, `history-${i}.json`), '{malformed', 'utf8');
+
+    const state = readReceiptStateForDate(journalDir, '2026-08-08');
+    assert.equal(state.status, 'available');
+    assert.deepEqual(state.receipts.map((receipt) => receipt.outcome), ['created']);
+    assert.equal(alarmMain([], env), 'NO_REPLY');
+
+    fs.writeFileSync(path.join(receiptDir, '2026-08-08.receipt'), JSON.stringify({ date: '2026-08-08', outcome: 'receipt-failed' }), 'utf8');
+    assert.match(alarmMain([], env), /no healthy scheduled receipt/);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });

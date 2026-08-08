@@ -196,7 +196,7 @@ test('existing-journal receipt lookup is date-addressable instead of scanning au
 
     assert.equal(result.outcome, 'healthy-existing');
     assert.equal(receiptListings, 0);
-    assert.equal(receiptReads, 0);
+    assert.equal(receiptReads, 1, 'existing-file checks read only the date-addressable sentinel, not audit history');
     assert.equal(
       fs.readdirSync(receiptDir).filter((name) => name.endsWith('.json')).length,
       historyBefore,
@@ -275,7 +275,7 @@ test('health keeps canonical and derived index state separate without repair', (
     const before = fs.readFileSync(indexPath, 'utf8');
     const health = lifecycle.healthToday({ config, now });
     assert.equal(health.canonical.status, 'healthy');
-    assert.equal(health.derivedIndex.status, 'stale-derived');
+    assert.equal(health.derivedIndex.status, 'unmanaged-derived');
     assert.equal(fs.readFileSync(indexPath, 'utf8'), before);
   } finally {
     fs.rmSync(vault, { recursive: true, force: true });
@@ -312,6 +312,81 @@ test('derived index writer adds today without touching authored journal files', 
       [],
       'generated index staging must remain outside the authored Journal folder',
     );
+  } finally {
+    fs.rmSync(vault, { recursive: true, force: true });
+  }
+});
+
+test('derived index follows the configured journal folder and backfills missed dates', () => {
+  const vault = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-journal-derived-folder-'));
+  const journalDir = path.join(vault, 'Daily');
+  const now = new Date('2026-08-08T12:00:00.000Z');
+  const config = {
+    paths: { vault, journal: journalDir },
+    user: { timezone: 'UTC' },
+    derivedIndex: { enabled: true, fileName: 'Journaling.md' },
+  };
+  try {
+    fs.mkdirSync(journalDir, { recursive: true });
+    for (const date of ['2026-08-06', '2026-08-07', '2026-08-08']) {
+      fs.writeFileSync(path.join(journalDir, `${date}.md`), '## 📝 Notes\n- entry\n', 'utf8');
+    }
+    const indexPath = path.join(journalDir, 'Journaling.md');
+    fs.writeFileSync(indexPath, '![[Daily/2026-08-07.md]]\n', 'utf8');
+    const old = new Date(now.getTime() - (10 * 60 * 1000));
+    fs.utimesSync(indexPath, old, old);
+
+    const result = lifecycle.ensureIndexEntry({ config, date: '2026-08-08', now, observedMtimeMs: old.getTime() });
+
+    assert.equal(result.outcome, 'index-updated');
+    assert.deepEqual(
+      fs.readFileSync(indexPath, 'utf8').trim().split('\n'),
+      [
+        '![[Daily/2026-08-08.md]]',
+        '',
+        '![[Daily/2026-08-07.md]]',
+        '',
+        '![[Daily/2026-08-06.md]]',
+      ],
+    );
+  } finally {
+    fs.rmSync(vault, { recursive: true, force: true });
+  }
+});
+
+test('derived index conflict preserves an edit seen before publish', () => {
+  const { vault, journalDir } = tempVault();
+  const now = new Date('2026-08-08T12:00:00.000Z');
+  const config = {
+    paths: { journal: journalDir },
+    user: { timezone: 'UTC' },
+    derivedIndex: { enabled: true, fileName: 'Journaling.md' },
+  };
+  try {
+    fs.mkdirSync(journalDir, { recursive: true });
+    fs.writeFileSync(path.join(journalDir, '2026-08-08.md'), '## 📝 Notes\n- today\n', 'utf8');
+    const indexPath = path.join(journalDir, 'Journaling.md');
+    const original = '![[Journal/2026-08-07.md]]\n';
+    const edited = '![[Journal/2026-08-07.md]]\n![[Journal/2026-08-06.md]]\n';
+    fs.writeFileSync(indexPath, original, 'utf8');
+    const old = new Date(now.getTime() - (10 * 60 * 1000));
+    fs.utimesSync(indexPath, old, old);
+    let reads = 0;
+    const racingFs = {
+      ...fs,
+      readFileSync(target, ...args) {
+        if (path.resolve(target) === path.resolve(indexPath)) {
+          reads += 1;
+          if (reads === 2) fs.writeFileSync(indexPath, edited, 'utf8');
+        }
+        return fs.readFileSync(target, ...args);
+      },
+    };
+
+    const result = lifecycle.ensureIndexEntry({ config, date: '2026-08-08', now, observedMtimeMs: old.getTime(), fs: racingFs });
+
+    assert.equal(result.outcome, 'index-conflict');
+    assert.equal(fs.readFileSync(indexPath, 'utf8'), edited);
   } finally {
     fs.rmSync(vault, { recursive: true, force: true });
   }
@@ -401,6 +476,58 @@ test('creation maintenance repairs visibility in the same scheduled pass', () =>
   }
 });
 
+test('failed receipt sentinel does not suppress a later recovery receipt', () => {
+  const { vault, journalDir } = tempVault();
+  const config = { paths: { journal: journalDir }, user: { timezone: 'UTC' } };
+  const now = new Date('2026-08-08T12:00:00.000Z');
+  const journalPath = path.join(journalDir, '2026-08-08.md');
+  try {
+    fs.mkdirSync(journalDir, { recursive: true });
+    fs.writeFileSync(journalPath, '# invalid\n', 'utf8');
+    assert.equal(lifecycle.ensureTodayJournal({ config, now }).outcome, 'invalid-existing');
+    fs.writeFileSync(journalPath, '## 📝 Notes\n- repaired\n', 'utf8');
+    const recovered = lifecycle.ensureTodayJournal({ config, now });
+    assert.equal(recovered.outcome, 'recovered-after-unrecorded-create');
+    const sentinelPath = path.join(vault, '.jarvos', 'journal-maintenance', 'receipts', '2026-08-08.receipt');
+    assert.equal(JSON.parse(fs.readFileSync(sentinelPath, 'utf8')).outcome, 'recovered-after-unrecorded-create');
+  } finally {
+    fs.rmSync(vault, { recursive: true, force: true });
+  }
+});
+
+test('creation maintenance fails when derived index publication fails', () => {
+  const { vault, journalDir } = tempVault();
+  const now = new Date('2026-08-08T12:00:00.000Z');
+  const config = {
+    paths: { journal: journalDir },
+    user: { timezone: 'UTC' },
+    derivedIndex: { enabled: true, fileName: 'Journaling.md' },
+  };
+  try {
+    fs.mkdirSync(journalDir, { recursive: true });
+    const indexPath = path.join(journalDir, 'Journaling.md');
+    fs.writeFileSync(indexPath, '![[Journal/2026-08-07.md]]\n', 'utf8');
+    const old = new Date(now.getTime() - (10 * 60 * 1000));
+    fs.utimesSync(indexPath, old, old);
+    const failingFs = {
+      ...fs,
+      renameSync(source, target) {
+        if (path.resolve(target) === path.resolve(indexPath)) {
+          const error = new Error('index unavailable');
+          error.code = 'EIO';
+          throw error;
+        }
+        return fs.renameSync(source, target);
+      },
+    };
+    const report = lifecycle.runCreationMaintenance({ dateSpecs: ['today'] }, { config, now, fs: failingFs });
+    assert.equal(report.status, 'failed');
+    assert.equal(report.indexResults[0].outcome, 'index-failed');
+  } finally {
+    fs.rmSync(vault, { recursive: true, force: true });
+  }
+});
+
 test('filesystem mutation lock preserves compare-before-write semantics', () => {
   const { vault, journalDir } = tempVault();
   const journalPath = path.join(journalDir, '2026-08-03.md');
@@ -418,6 +545,66 @@ test('filesystem mutation lock preserves compare-before-write semantics', () => 
       /changed before mutation/,
     );
     assert.equal(fs.readFileSync(journalPath, 'utf8'), '## 📝 Notes\n- next\n');
+  } finally {
+    fs.rmSync(vault, { recursive: true, force: true });
+  }
+});
+
+test('stale mutation lock is reclaimed only after its owner is gone', () => {
+  const { vault, journalDir } = tempVault();
+  const journalPath = path.join(journalDir, '2026-08-03.md');
+  const lockPath = `${journalPath}.lock`;
+  const original = '## 📝 Notes\n- original\n';
+  try {
+    fs.mkdirSync(journalDir, { recursive: true });
+    fs.writeFileSync(journalPath, original, 'utf8');
+    fs.writeFileSync(lockPath, JSON.stringify({ pid: 2147483647, token: 'dead-owner' }), 'utf8');
+    const stale = new Date(Date.now() - 60 * 1000);
+    fs.utimesSync(lockPath, stale, stale);
+
+    assert.deepEqual(
+      lifecycle.mutateExistingJournal({ journalPath, expectedContent: original, nextContent: '## 📝 Notes\n- recovered\n' }),
+      { changed: true },
+    );
+    assert.equal(fs.existsSync(lockPath), false);
+    assert.equal(fs.readFileSync(journalPath, 'utf8'), '## 📝 Notes\n- recovered\n');
+  } finally {
+    fs.rmSync(vault, { recursive: true, force: true });
+  }
+});
+
+test('stale-lock reclaim never removes a replacement lock installed during takeover', () => {
+  const { vault, journalDir } = tempVault();
+  const journalPath = path.join(journalDir, '2026-08-03.md');
+  const lockPath = `${journalPath}.lock`;
+  const original = '## 📝 Notes\n- original\n';
+  try {
+    fs.mkdirSync(journalDir, { recursive: true });
+    fs.writeFileSync(journalPath, original, 'utf8');
+    fs.writeFileSync(lockPath, JSON.stringify({ pid: 2147483647, token: 'dead-owner' }), 'utf8');
+    const stale = new Date(Date.now() - 60 * 1000);
+    fs.utimesSync(lockPath, stale, stale);
+    let interleaved = false;
+    const racingFs = {
+      ...fs,
+      renameSync(source, target, ...args) {
+        const claimedStaleLock = path.resolve(source) === path.resolve(lockPath)
+          && path.basename(target).includes('.stale.');
+        const result = fs.renameSync(source, target, ...args);
+        if (claimedStaleLock && !interleaved) {
+          interleaved = true;
+          fs.writeFileSync(lockPath, JSON.stringify({ pid: process.pid, token: 'replacement-owner' }), 'utf8');
+        }
+        return result;
+      },
+    };
+
+    assert.throws(
+      () => lifecycle.mutateExistingJournal({ journalPath, expectedContent: original, nextContent: '## 📝 Notes\n- lost\n', fsImpl: racingFs }),
+      /Timed out locking canonical journal mutation/,
+    );
+    assert.equal(JSON.parse(fs.readFileSync(lockPath, 'utf8')).token, 'replacement-owner');
+    assert.equal(fs.readFileSync(journalPath, 'utf8'), original);
   } finally {
     fs.rmSync(vault, { recursive: true, force: true });
   }

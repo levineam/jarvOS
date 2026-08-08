@@ -394,6 +394,10 @@ test('MCP tool list includes jarvOS tools', () => {
 
 test('MCP journal actions expose closed empty-object schemas and safe lifecycle results', () => {
   withTempVault(({ journal }) => {
+    const indexPath = path.join(journal, 'Journaling.md');
+    fs.writeFileSync(indexPath, '![[Journal/2026-08-07.md]]\n', 'utf8');
+    const old = new Date(Date.now() - (10 * 60 * 1000));
+    fs.utimesSync(indexPath, old, old);
     const listed = mcpRequest({
       jsonrpc: '2.0',
       id: 51,
@@ -438,7 +442,9 @@ test('MCP journal actions expose closed empty-object schemas and safe lifecycle 
     assert.equal(ensuredBody.status, 'ok');
     assert.equal(ensuredBody.outcome, 'created');
     assert.equal(typeof ensuredBody.date, 'string');
-    assert.deepEqual(Object.keys(ensuredBody).sort(), ['date', 'outcome', 'status']);
+    assert.equal(ensuredBody.derivedIndexOutcome, 'index-updated');
+    assert.deepEqual(Object.keys(ensuredBody).sort(), ['date', 'derivedIndexOutcome', 'outcome', 'status']);
+    assert.match(fs.readFileSync(indexPath, 'utf8'), new RegExp(`!\\[\\[Journal/${ensuredBody.date}\\.md\\]\\]`));
 
     const journalPath = path.join(journal, `${ensuredBody.date}.md`);
     const beforeRetry = fs.readFileSync(journalPath, 'utf8');
@@ -498,6 +504,34 @@ test('public journal actions reject arguments before lifecycle access', async ()
     () => callTool('jarvos_ensure_today_journal', { repair: true }),
     /empty object/,
   );
+});
+
+test('MCP journal ensure preserves a configured nested journal folder prefix', () => {
+  withTempVault(({ vault }) => {
+    const nestedJournal = path.join(vault, 'Notes', 'Journal');
+    fs.mkdirSync(nestedJournal, { recursive: true });
+    const indexPath = path.join(nestedJournal, 'Journaling.md');
+    fs.writeFileSync(indexPath, '![[Notes/Journal/2026-08-07.md]]\n', 'utf8');
+    const old = new Date(Date.now() - (10 * 60 * 1000));
+    fs.utimesSync(indexPath, old, old);
+    process.env.JARVOS_JOURNAL_DIR = nestedJournal;
+
+    const response = mcpRequest({
+      jsonrpc: '2.0',
+      id: 58,
+      method: 'tools/call',
+      params: { name: 'jarvos_ensure_today_journal', arguments: {} },
+    }, process.env);
+
+    assert.equal(response.error, undefined);
+    const body = JSON.parse(response.result.content[0].text);
+    assert.equal(body.status, 'ok');
+    assert.equal(body.derivedIndexOutcome, 'index-updated');
+    assert.match(
+      fs.readFileSync(indexPath, 'utf8'),
+      new RegExp(`!\\[\\[Notes/Journal/${body.date}\\.md\\]\\]`),
+    );
+  });
 });
 
 test('MCP keeps legacy null-argument normalization for non-journal tools', () => {
@@ -902,7 +936,9 @@ test('createNote retains a deferred journal receipt without retrying mutation', 
     assert.equal(result.ok, true);
     assert.equal(result.note.journal.status, 'deferred');
     assert.equal(result.journal, result.note.journal);
+    assert.equal(result.journalLinked, false);
     assert.equal(result.verification.deferred, true);
+    assert.match(result.markdown, /Link: deferred \(queued for reconciliation\)/);
     assert.ok(fs.existsSync(result.note.path));
     assert.ok(result.note.path.startsWith(notes));
     const queue = JSON.parse(fs.readFileSync(result.journal.deferredBacklink.deferredPath, 'utf8'));

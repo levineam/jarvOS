@@ -43,9 +43,10 @@ integrations and the canonical Markdown record:
 - An explicit configured directory and valid IANA timezone are required for
   journal mutation; absent or malformed configuration fails closed.
 - The lifecycle creates only a missing current-date file. In the same run it
-  may add one missing embed to an existing, pure generated `Journaling.md`
-  index; it never rebuilds/reorders that page or touches an index containing
-  human-authored content, and it never repairs an existing authored daily file.
+  may add missing embeds for the current date and previously created dates to
+  an existing, pure generated `Journaling.md` index; it never rebuilds/reorders
+  that page or touches an index containing human-authored content, and it never
+  repairs an existing authored daily file.
 - Obsidian remains a human editing/client surface. Its active-day backlink seam
   may append an authorized entry after lifecycle existence is ensured, while
   Daily Notes, Periodic Notes, Journals, and template automations must not own

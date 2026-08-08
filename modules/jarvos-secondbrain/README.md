@@ -76,9 +76,10 @@ for the full precedence table and compatibility rules.
 
 The package-owned lifecycle creates only the missing current-date file with
 exclusive creation, re-reads it, and reports a verified idempotent outcome. In
-the same scheduled pass it may add one missing embed to an existing pure
-generated `Journaling.md` index. It never rewrites an existing daily file,
-rebuilds or reorders the index, or touches an index containing human prose.
+the same scheduled pass it may add missing embeds for the current date and
+previously created dates to an existing pure-generated `Journaling.md` index.
+It never rewrites an existing daily file, rebuilds or reorders the index, or
+touches an index containing human prose.
 
 Human CLI checks:
 

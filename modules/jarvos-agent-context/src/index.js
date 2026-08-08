@@ -927,12 +927,30 @@ const PUBLIC_JOURNAL_OUTCOMES = new Set([
   'receipt-failed',
   'failed',
 ]);
+const PUBLIC_DERIVED_INDEX_OUTCOMES = new Set([
+  'index-disabled',
+  'index-healthy',
+  'index-updated',
+  'index-unmanaged',
+  'index-deferred',
+  'index-conflict',
+  'index-failed',
+]);
 
 function journalLifecycleOptions() {
   // The lifecycle owns the mutation configuration boundary. Do not resolve
   // through the legacy path shim here: it intentionally preserves historical
-  // home-directory and timezone defaults for non-journal consumers.
-  return {};
+  // home-directory and timezone defaults for non-journal consumers. The vault
+  // root is safe to pass through separately because it only determines the
+  // configured folder prefix for derived-index links.
+  try {
+    const vaultDir = loadJarvosPaths().getVaultDir();
+    return typeof vaultDir === 'string' && path.isAbsolute(vaultDir)
+      ? { vaultDir: path.resolve(vaultDir) }
+      : {};
+  } catch {
+    return {};
+  }
 }
 
 function safeJournalDate(value) {
@@ -941,6 +959,10 @@ function safeJournalDate(value) {
 
 function safeJournalOutcome(value) {
   return PUBLIC_JOURNAL_OUTCOMES.has(value) ? value : 'failed';
+}
+
+function safeDerivedIndexOutcome(value) {
+  return PUBLIC_DERIVED_INDEX_OUTCOMES.has(value) ? value : 'index-failed';
 }
 
 function publicJournalFailure() {
@@ -965,12 +987,15 @@ function healthTodayJournal() {
 
 function ensureTodayJournal() {
   try {
-    const result = loadJournalLifecycle().ensureTodayJournal(journalLifecycleOptions());
+    const report = loadJournalLifecycle().runCreationMaintenance({ dateSpecs: ['today'], json: true }, journalLifecycleOptions());
+    const result = report?.results?.[0];
+    const index = report?.indexResults?.[0];
     return {
-      status: result?.ok ? 'ok' : 'error',
+      status: report?.status === 'ok' && result?.ok ? 'ok' : 'error',
       outcome: safeJournalOutcome(result?.outcome),
       date: safeJournalDate(result?.date),
-      ...(result?.ok ? {} : { reason: 'journal ensure unavailable' }),
+      ...(index ? { derivedIndexOutcome: safeDerivedIndexOutcome(index.outcome) } : {}),
+      ...(report?.status === 'ok' && result?.ok ? {} : { reason: 'journal ensure unavailable' }),
     };
   } catch {
     return publicJournalFailure();
@@ -1014,18 +1039,20 @@ function createNote(input = {}) {
     requireJournalLink: !isDeferred,
   });
   if (isDeferred) verification.deferred = true;
+  const journalLinked = !isDeferred;
 
   return {
     ok: true,
     note: noteResult,
     journal: linkResult,
+    journalLinked,
     verification,
     markdown: [
       '# jarvOS Note Created',
       '',
       `- Note: ${noteResult.path}`,
       `- Journal: ${linkResult.journalPath}`,
-      `- Link: ${verification.link}`,
+      `- Link: ${journalLinked ? verification.link : 'deferred (queued for reconciliation)'}`,
       `- Knowledge: ${noteResult.knowledge?.optimized ? noteResult.knowledge.qmdStatus : 'not optimized'}`,
     ].join('\n'),
   };

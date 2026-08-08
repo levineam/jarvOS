@@ -8,7 +8,6 @@ const maintenance = require('../packages/jarvos-secondbrain-journal/src/journal-
 const { resolveJournalConfig } = require('../bridge/config');
 
 const QUIET = 'NO_REPLY';
-const HEALTHY_RECEIPT_OUTCOMES = new Set(['created', 'healthy-existing', 'created-concurrently', 'recovered-after-unrecorded-create']);
 
 function parseDateArg(argv = [], env = process.env) {
   for (const arg of argv) {
@@ -18,18 +17,23 @@ function parseDateArg(argv = [], env = process.env) {
 }
 
 function receiptDirectory(journalDir) {
-  return path.join(path.dirname(path.resolve(journalDir)), '.jarvos', 'journal-maintenance', 'receipts');
+  return lifecycle.receiptDirectory(journalDir);
+}
+
+function readReceiptStateForDate(journalDir, date, fsImpl = fs) {
+  try {
+    const receipt = JSON.parse(fsImpl.readFileSync(lifecycle.receiptSentinelPath(journalDir, date), 'utf8'));
+    return receipt?.date === date
+      ? { status: 'available', receipts: [receipt] }
+      : { status: 'available', receipts: [] };
+  } catch (error) {
+    if (error.code === 'ENOENT') return { status: 'missing', receipts: [] };
+    return { status: 'unavailable', receipts: [] };
+  }
 }
 
 function readReceiptsForDate(journalDir, date, fsImpl = fs) {
-  let names;
-  try { names = fsImpl.readdirSync(receiptDirectory(journalDir)); } catch { return []; }
-  return names.filter((name) => name.endsWith('.json')).flatMap((name) => {
-    try {
-      const receipt = JSON.parse(fsImpl.readFileSync(path.join(receiptDirectory(journalDir), name), 'utf8'));
-      return receipt?.date === date ? [receipt] : [];
-    } catch { return []; }
-  });
+  return readReceiptStateForDate(journalDir, date, fsImpl).receipts;
 }
 
 function readIndexVisibility(journalDir, date, fileName = 'Journaling.md', fsImpl = fs, enabled = true) {
@@ -38,21 +42,24 @@ function readIndexVisibility(journalDir, date, fileName = 'Journaling.md', fsImp
   try { markdown = fsImpl.readFileSync(path.join(journalDir, fileName), 'utf8'); } catch (error) {
     return { status: error.code === 'ENOENT' ? 'missing-index' : 'unavailable', fileName };
   }
-  const shape = lifecycle.classifyDerivedIndexShape(markdown);
+  const linkPrefix = lifecycle.resolveJournalLinkPrefix(journalDir, { fs: fsImpl }) || 'Journal';
+  const shape = lifecycle.classifyDerivedIndexShape(markdown, linkPrefix);
   if (!shape.managed) return { status: 'unmanaged', fileName };
   return { status: shape.entries.some((entry) => entry.date === date) ? 'listed' : 'not-listed', fileName };
 }
 
-function buildAlarmMessage({ date, timeZone, canonical = {}, receipts = [], visibility = {} } = {}) {
-  const healthyReceipt = receipts.some((receipt) => HEALTHY_RECEIPT_OUTCOMES.has(receipt?.outcome));
+function buildAlarmMessage({ date, timeZone, canonical = {}, receipts = [], receiptStatus = 'available', visibility = {} } = {}) {
+  const healthyReceipt = receipts.some((receipt) => lifecycle.isSuccessfulJournalOutcome(receipt?.outcome));
   const indexName = visibility.fileName || 'Journaling.md';
+  if (receiptStatus === 'unavailable') return `🚨 Journal receipt evidence for ${date} is unavailable; scheduled-capture status cannot be verified.`;
   if (canonical.status === 'healthy' && healthyReceipt) {
     if (visibility.status === 'not-listed') return `⚠️ The journal for ${date} was captured but is not listed in ${indexName}, so it will look missing in Obsidian.`;
     if (visibility.status === 'missing-index') return `⚠️ The journal for ${date} was captured, but ${indexName} is missing, so the daily entries have no navigation page in Obsidian.`;
     if (visibility.status === 'unmanaged') return `⚠️ The journal for ${date} was captured, but ${indexName} contains content jarvOS does not manage, so automatic visibility updates stopped.`;
+    if (visibility.status === 'unavailable') return `⚠️ The journal for ${date} was captured, but ${indexName} could not be read, so its visibility is unknown.`;
     return QUIET;
   }
-  if (canonical.status === 'missing') return `🚨 No journal for ${date} (${timeZone}): both scheduled windows failed to create it.`;
+  if (canonical.status === 'missing') return `🚨 No journal for ${date} (${timeZone}): the canonical file is missing and needs investigation.`;
   if (canonical.status === 'healthy') return `⚠️ The journal for ${date} exists but no healthy scheduled receipt claims it.`;
   return `🚨 The journal for ${date} is ${canonical.status || 'unreadable'} and needs manual inspection.`;
 }
@@ -72,11 +79,13 @@ function main(argv = process.argv.slice(2), env = process.env) {
   const health = lifecycle.healthToday({ journalDir, timeZone, date: requestedDate });
   const resolvedDate = health.date || requestedDate;
   const visibilityConfig = config.derivedIndex || {};
+  const receiptState = readReceiptStateForDate(journalDir, resolvedDate);
   const message = buildAlarmMessage({
     date: resolvedDate,
     timeZone,
     canonical: health.canonical || {},
-    receipts: readReceiptsForDate(journalDir, resolvedDate),
+    receipts: receiptState.receipts,
+    receiptStatus: receiptState.status,
     visibility: readIndexVisibility(journalDir, resolvedDate, visibilityConfig.fileName || 'Journaling.md', fs, visibilityConfig.enabled),
   });
   console.log(message);
@@ -85,4 +94,4 @@ function main(argv = process.argv.slice(2), env = process.env) {
 
 if (require.main === module) main();
 
-module.exports = { QUIET, buildAlarmMessage, main, parseDateArg, readIndexVisibility, readReceiptsForDate };
+module.exports = { QUIET, buildAlarmMessage, main, parseDateArg, readIndexVisibility, readReceiptStateForDate, readReceiptsForDate, receiptDirectory };

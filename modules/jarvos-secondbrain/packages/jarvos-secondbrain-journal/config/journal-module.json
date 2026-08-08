@@ -9,7 +9,7 @@
     "derivedIndexWriters": ["jarvOS:journal-maintenance"],
     "reviewedAt": "2026-08-08T00:00:00.000Z",
     "maxAgeDays": 30,
-    "$doc": "Canonical daily entries are created through the configured Obsidian-owned mutation service. The derived Journaling.md page has one additive writer; other configured daily-note writers block scheduled creation rather than racing it."
+    "$doc": "journal-lifecycle.js exclusively creates a missing dated file. Obsidian-owned mutation is reserved for authorized active-day backlink and section updates. The derived Journaling.md page has one additive writer; other configured daily-note writers block scheduled creation rather than racing it."
   },
 
   "derivedIndex": {

@@ -82,12 +82,13 @@ node modules/jarvos-secondbrain/packages/jarvos-secondbrain-journal/src/journal-
 
 It creates only the configured current date. The outcome is idempotent: a
 verified existing journal is reported as existing, and a concurrent winner is
-reported as such. When `derivedIndex.enabled` is true, the same run may add the
-one missing embed for that date to an existing, pure generated `Journaling.md`
-file. It never creates, rebuilds, reorders, or edits an index containing
-human-authored content, and it never rewrites an authored dated file. Active
-edits are deferred and reported for the next window; backups and staging files
-stay outside the synced Journal folder.
+reported as such. When `derivedIndex.enabled` is true, the same run may add
+missing embeds for the current date and any previously created dates absent
+from an existing, pure generated `Journaling.md` file. It never creates,
+rebuilds, reorders, or edits an index containing human-authored content, and it
+never rewrites an authored dated file. Active edits are deferred and reported
+for the next window; backups and staging files stay outside the synced Journal
+folder.
 If deferred note backlinks are queued, the command reports that backlog and
 returns a failure status so a host can alert; it does not mutate authored
 journals while flushing it. Use the separate human-approved maintenance

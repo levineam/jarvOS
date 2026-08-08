@@ -27,5 +27,5 @@ function main(argv = process.argv.slice(2)) {
 module.exports = { main, parseArgs };
 if (require.main === module) {
   const result = main();
-  if (result?.ok === false) process.exitCode = 1;
+  if (result?.ok === false || result?.canonical?.status !== 'healthy') process.exitCode = 1;
 }
