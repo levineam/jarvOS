@@ -8,7 +8,8 @@
   },
   "scripts": {
     "start": "node src/projects-cli.js list",
-    "check": "node src/projects-cli.js check"
+    "check": "node src/projects-cli.js check",
+    "test": "node --test test/*.test.js"
   },
   "keywords": [
     "jarvos",
@@ -24,6 +25,9 @@
   "exports": {
     ".": "./src/projects.js",
     "./project-context": "./src/project-context.js",
-    "./cli": "./src/projects-cli.js"
+    "./cli": "./src/projects-cli.js",
+    "./records": "./src/records.js",
+    "./priority": "./src/priority.js",
+    "./registry": "./src/registry.js"
   }
 }
