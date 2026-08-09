@@ -21,6 +21,10 @@ const DEFAULT_SESSION_THREAD_SECTION = DEFAULT_NOTES_SECTION;
 const DEFAULT_SESSION_THREAD_LOCK_RETRY_DELAY_MS = 25;
 const DEFAULT_SESSION_THREAD_LOCK_STALE_MS = 30000;
 const DEFAULT_SESSION_THREAD_LOCK_TIMEOUT_MS = 30000;
+const PROJECTS_CONTEXT_CONTRACT = 'jarvos.projects-context/v1';
+const DEFAULT_PROJECTS_CONTEXT_INCLUDE = ['hierarchy', 'activity', 'currentWork', 'attention'];
+const DEFAULT_PROJECTS_CONTEXT_LIMITS = Object.freeze({ maxItems: 12, maxBytes: 9000, maxProviderAgeSeconds: 3600 });
+let configuredProjectsContextProvider = null;
 
 function loadControlPlaneManager() {
   // The control-plane manager supplies the authenticated service to the MCP
@@ -203,6 +207,200 @@ function normalizeStatusList(value, fallback) {
     return value.split(',').map((item) => item.trim()).filter(Boolean);
   }
   return fallback.slice();
+}
+
+function stableContextValue(value) {
+  if (Array.isArray(value)) return value.map(stableContextValue);
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(Object.keys(value).sort().map((key) => [key, stableContextValue(value[key])]));
+  }
+  return value;
+}
+
+function projectsContextFingerprint(packet) {
+  return crypto.createHash('sha256')
+    .update(JSON.stringify(stableContextValue(packet)))
+    .digest('hex');
+}
+
+function safeProjectsReason(value, fallback = 'provider unavailable') {
+  const reason = firstString(value, fallback) || fallback;
+  return reason.replace(/[\r\n]+/g, ' ').slice(0, 180);
+}
+
+function normalizeProjectsQuery(options = {}) {
+  if (options.query && typeof options.query === 'object' && !Array.isArray(options.query)) return options.query;
+  const scope = options.scope && typeof options.scope === 'object' ? options.scope : {
+    projectIds: Array.isArray(options.projectIds) ? options.projectIds : [],
+    outcomeIds: Array.isArray(options.outcomeIds) ? options.outcomeIds : [],
+    includeDescendants: options.includeDescendants === true,
+  };
+  const include = Array.isArray(options.include) && options.include.length
+    ? options.include
+    : DEFAULT_PROJECTS_CONTEXT_INCLUDE;
+  const suppliedLimits = options.limits && typeof options.limits === 'object' ? options.limits : {};
+  return {
+    scope: {
+      projectIds: Array.isArray(scope.projectIds) ? [...scope.projectIds] : [],
+      outcomeIds: Array.isArray(scope.outcomeIds) ? [...scope.outcomeIds] : [],
+      includeDescendants: scope.includeDescendants === true,
+    },
+    include: [...include],
+    limits: {
+      maxItems: Number(suppliedLimits.maxItems ?? options.maxItems ?? DEFAULT_PROJECTS_CONTEXT_LIMITS.maxItems),
+      maxBytes: Number(suppliedLimits.maxBytes ?? options.maxBytes ?? DEFAULT_PROJECTS_CONTEXT_LIMITS.maxBytes),
+      maxProviderAgeSeconds: Number(suppliedLimits.maxProviderAgeSeconds ?? options.maxProviderAgeSeconds ?? DEFAULT_PROJECTS_CONTEXT_LIMITS.maxProviderAgeSeconds),
+    },
+  };
+}
+
+function renderProjectsContextMarkdown(result, maxChars = 3600) {
+  if (!result || result.status !== 'ok' || !result.packet) {
+    return `## Projects Context\nUnavailable: ${safeProjectsReason(result?.reason, 'Projects provider is not configured')}.`;
+  }
+  const packet = result.packet;
+  const lines = ['## Projects Context', '', `- Contract: ${PROJECTS_CONTEXT_CONTRACT}`, `- Fingerprint: ${result.fingerprint}`, ''];
+  const records = Array.isArray(packet.canonical?.records) ? packet.canonical.records : [];
+  if (records.length) {
+    lines.push('### Canonical projects and outcomes');
+    for (const record of records) {
+      const priority = record.effectivePriority && record.effectivePriority !== 'unset' ? ` [${record.effectivePriority}]` : '';
+      lines.push(`- ${record.breadcrumb || record.title || record.id}${priority} — ${record.lifecycle || 'unknown'}`);
+    }
+  } else {
+    lines.push('No canonical projects or outcomes were returned.');
+  }
+  const appendSummaries = (heading, values) => {
+    if (!Array.isArray(values) || !values.length) return;
+    lines.push('', heading);
+    for (const summary of values) {
+      lines.push(`- ${summary.title || summary.id}${summary.status ? ` [${summary.status}]` : ''}`);
+    }
+  };
+  appendSummaries('### Current work', packet.currentWork);
+  appendSummaries('### Attention', packet.attention);
+  if (Array.isArray(packet.omissions) && packet.omissions.length) {
+    lines.push('', '### Projects context omissions');
+    for (const omission of packet.omissions.slice(0, 12)) lines.push(`- ${omission}`);
+  }
+  let markdown = redactObviousSecrets(lines.join('\n'));
+  const budget = Number(maxChars);
+  if (Number.isFinite(budget) && budget > 0 && markdown.length > budget) {
+    markdown = `${markdown.slice(0, Math.max(0, budget - 42)).trimEnd()}\n\n[Projects context trimmed to ${budget} characters]`;
+  }
+  return markdown;
+}
+
+function normalizeProjectsContextResult(value, request = {}) {
+  const raw = value && value.packet ? value.packet : value;
+  const status = value?.status || (raw && raw.contract === PROJECTS_CONTEXT_CONTRACT ? 'ok' : 'unavailable');
+  if (status !== 'ok') {
+    return {
+      ok: false,
+      status: 'unavailable',
+      contract: PROJECTS_CONTEXT_CONTRACT,
+      code: value?.code || 'PROJECTS_CONTEXT_UNAVAILABLE',
+      reason: safeProjectsReason(value?.reason || value?.error),
+      query: request.query || null,
+      packet: null,
+      fingerprint: null,
+      markdown: renderProjectsContextMarkdown({ status: 'unavailable', reason: value?.reason || value?.error }),
+    };
+  }
+  const requiredPacketFields = [
+    'contract', 'packetId', 'capturedAt', 'expiresAt', 'query', 'canonical', 'activity', 'currentWork', 'attention',
+    'evidence', 'providers', 'omissions', 'truncation', 'redactionClass', 'capability',
+  ];
+  const validPacket = raw && typeof raw === 'object'
+    && Object.keys(raw).length === requiredPacketFields.length
+    && requiredPacketFields.every((field) => Object.prototype.hasOwnProperty.call(raw, field))
+    && raw.contract === PROJECTS_CONTEXT_CONTRACT
+    && /^ctx_[a-f0-9]{32}$/.test(raw.packetId)
+    && !Number.isNaN(Date.parse(raw.capturedAt))
+    && !Number.isNaN(Date.parse(raw.expiresAt))
+    && Array.isArray(raw.activity)
+    && Array.isArray(raw.currentWork)
+    && Array.isArray(raw.attention)
+    && Array.isArray(raw.evidence)
+    && raw.canonical && typeof raw.canonical === 'object'
+    && Array.isArray(raw.canonical.records)
+    && raw.providers && typeof raw.providers === 'object'
+    && Array.isArray(raw.omissions)
+    && raw.truncation && typeof raw.truncation === 'object'
+    && raw.capability && typeof raw.capability === 'object';
+  if (!validPacket) {
+    return {
+      ok: false,
+      status: 'unavailable',
+      contract: PROJECTS_CONTEXT_CONTRACT,
+      code: 'PROJECTS_CONTEXT_INVALID',
+      reason: 'provider returned an invalid Projects context packet',
+      query: request.query || null,
+      packet: null,
+      fingerprint: null,
+      markdown: renderProjectsContextMarkdown({ status: 'unavailable', reason: 'provider returned an invalid Projects context packet' }),
+    };
+  }
+  const fingerprint = projectsContextFingerprint(raw);
+  const result = {
+    ok: true,
+    status: 'ok',
+    contract: PROJECTS_CONTEXT_CONTRACT,
+    query: raw.query || request.query || null,
+    packet: raw,
+    fingerprint,
+    markdown: '',
+  };
+  result.markdown = renderProjectsContextMarkdown(result, request.maxChars || 3600);
+  return result;
+}
+
+function setProjectsContextProvider(provider) {
+  if (provider !== null && provider !== undefined && typeof provider !== 'function' && (typeof provider !== 'object' || (typeof provider.read !== 'function' && typeof provider.propose !== 'function'))) {
+    throw new TypeError('Projects context provider must be a function or an object with read() or propose()');
+  }
+  configuredProjectsContextProvider = provider || null;
+  return configuredProjectsContextProvider;
+}
+
+async function readProjectsContext(options = {}) {
+  const provider = Object.prototype.hasOwnProperty.call(options, 'provider')
+    ? options.provider
+    : (options.projectsProvider || configuredProjectsContextProvider);
+  const query = normalizeProjectsQuery(options);
+  const request = {
+    contract: PROJECTS_CONTEXT_CONTRACT,
+    query,
+    subject: firstString(options.subject, 'active-assistant') || 'active-assistant',
+    hostId: firstString(options.hostId, 'agent-context') || 'agent-context',
+    redactionClass: firstString(options.redactionClass, 'private') || 'private',
+    maxChars: Number(options.maxChars || 3600),
+  };
+  if (!provider) return normalizeProjectsContextResult({ status: 'unavailable', code: 'PROJECTS_PROVIDER_UNAVAILABLE', reason: 'Projects provider is not configured' }, request);
+  const reader = typeof provider === 'function' ? provider : provider.read;
+  try {
+    const result = await reader(request);
+    return normalizeProjectsContextResult(result, request);
+  } catch (error) {
+    return normalizeProjectsContextResult({ status: 'unavailable', code: 'PROJECTS_PROVIDER_ERROR', reason: error?.message }, request);
+  }
+}
+
+async function proposeProjectsContext(options = {}) {
+  const provider = Object.prototype.hasOwnProperty.call(options, 'provider')
+    ? options.provider
+    : (options.projectsProvider || configuredProjectsContextProvider);
+  if (!provider || typeof provider.propose !== 'function') {
+    return { ok: false, status: 'unavailable', contract: PROJECTS_CONTEXT_CONTRACT, code: 'PROJECTS_PROPOSAL_UNAVAILABLE', reason: 'Projects proposal provider is not configured' };
+  }
+  const proposal = options.proposal || options.input || {};
+  try {
+    const result = await provider.propose({ contract: PROJECTS_CONTEXT_CONTRACT, proposal, subject: firstString(options.subject, 'active-assistant') || 'active-assistant' });
+    if (!result || result.status !== 'proposed') return { ok: false, status: 'unavailable', contract: PROJECTS_CONTEXT_CONTRACT, code: 'PROJECTS_PROPOSAL_INVALID', reason: 'provider did not return a proposal' };
+    return { ok: true, status: 'proposed', contract: PROJECTS_CONTEXT_CONTRACT, proposal: result.proposal || result };
+  } catch (error) {
+    return { ok: false, status: 'unavailable', contract: PROJECTS_CONTEXT_CONTRACT, code: 'PROJECTS_PROPOSAL_ERROR', reason: safeProjectsReason(error?.message) };
+  }
 }
 
 function issueHasConcreteReviewSignal(issue = {}) {
@@ -712,9 +910,35 @@ function refreshFinalSize(markdown, report) {
 
 async function hydrate(options = {}) {
   const maxChars = Number(options.maxChars || DEFAULT_HYDRATION_MAX_CHARS);
-  const report = { sources: [], omissions: [], handles: [], finalChars: 0 };
+  const report = {
+    sources: [], omissions: [], handles: [], finalChars: 0,
+    projectsContext: { status: 'unavailable', fingerprint: null },
+  };
   const jarvosPaths = loadJarvosPaths();
   const parts = ['# jarvOS Working Context Packet', ''];
+
+  const projectsOptions = options.projectsContext && typeof options.projectsContext === 'object'
+    ? options.projectsContext
+    : {};
+  const projects = await readProjectsContext({
+    ...projectsOptions,
+    provider: projectsOptions.provider || options.projectsProvider,
+    maxChars: Number(options.projectsContextMaxChars || projectsOptions.maxChars || 3600),
+    maxItems: Number(projectsOptions.maxItems || options.maxItems || DEFAULT_PROJECTS_CONTEXT_LIMITS.maxItems),
+  });
+  report.projectsContext = {
+    status: projects.status,
+    fingerprint: projects.fingerprint || null,
+    code: projects.code || null,
+  };
+  parts.push(projects.markdown, '');
+  if (projects.status === 'ok') {
+    report.sources.push(`${PROJECTS_CONTEXT_CONTRACT} (${projects.packet?.canonical?.records?.length || 0} records)`);
+    report.handles.push(`Projects context fingerprint: ${projects.fingerprint}`);
+  } else {
+    report.omissions.push(`Projects context unavailable: ${projects.reason}`);
+    report.handles.push('Projects context: provider unavailable (shadow mode)');
+  }
 
   try {
     const work = await currentWork({
@@ -1087,6 +1311,7 @@ async function startupBrief(options = {}) {
 }
 
 module.exports = {
+  PROJECTS_CONTEXT_CONTRACT,
   controlPlane,
   loadControlPlaneManager,
   createNote,
@@ -1097,9 +1322,13 @@ module.exports = {
   hydrate,
   healthTodayJournal,
   loadPaperclipAuth,
+  normalizeProjectsQuery,
+  proposeProjectsContext,
   recall,
   redactObviousSecrets,
+  readProjectsContext,
   readSessionThread,
+  setProjectsContextProvider,
   startupBrief,
   synthesizeRecall,
   verifyNoteCaptureContract,
