@@ -77,6 +77,10 @@ test('outcomes are leaves and lifecycle/status combinations are closed', () => {
   assert.throws(() => registry.update(outcome.record.id, {
     lifecycle: 'paused',
   }, { expectedGeneration: outcome.generation, expectedRevision: outcome.record.revision }), /invalid lifecycle/);
+
+  assert.throws(() => registry.update(project.record.id, {
+    parentId: project.record.id,
+  }, { expectedGeneration: outcome.generation, expectedRevision: project.record.revision }), /hierarchy contains a cycle/);
 });
 
 test('priority inheritance reports declared, effective, and source values', () => {

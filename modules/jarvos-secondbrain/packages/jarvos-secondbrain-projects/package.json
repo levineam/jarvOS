@@ -28,6 +28,10 @@
     "./cli": "./src/projects-cli.js",
     "./records": "./src/records.js",
     "./priority": "./src/priority.js",
-    "./registry": "./src/registry.js"
+    "./registry": "./src/registry.js",
+    "./project-context": "./src/project-context.js",
+    "./projects-context": "./src/projects-context.js",
+    "./projects-context-capability": "./src/projects-context-capability.js",
+    "./provider-contracts": "./src/provider-contracts.js"
   }
 }

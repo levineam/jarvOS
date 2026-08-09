@@ -76,6 +76,13 @@ function validateRecord(input, { records = {} } = {}) {
     const parent = records[parentId];
     if (!parent) throw new TypeError(`parent record not found: ${parentId}`);
     if (parent.kind !== 'project') throw new TypeError('parent must be a project');
+    const ancestors = new Set([id]);
+    let ancestor = parent;
+    while (ancestor) {
+      if (ancestors.has(ancestor.id)) throw new TypeError('project hierarchy contains a cycle');
+      ancestors.add(ancestor.id);
+      ancestor = ancestor.parentId ? records[ancestor.parentId] : null;
+    }
   }
 
   const record = {
