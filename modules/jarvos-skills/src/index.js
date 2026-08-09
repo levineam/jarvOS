@@ -944,6 +944,8 @@ module.exports = {
   listPacks,
   listSkills,
   planSkillProjection: projection.planSkillProjection,
+  stageProjectionPackage: projection.stageProjectionPackage,
+  validateProjectionAdapter: projection.validateProjectionAdapter,
   getSkill,
   validateBundle,
   installSkills,
