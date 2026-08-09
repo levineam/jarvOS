@@ -4,7 +4,7 @@
 const assert = require('assert/strict');
 const test = require('node:test');
 
-const { checkFrontDoorReleaseProse } = require('../scripts/release-readiness-check');
+const { checkFrontDoorReleaseProse, checkReleaseReadiness } = require('../scripts/release-readiness-check');
 
 function runFrontDoorCheck(files, options = {}) {
   return checkFrontDoorReleaseProse({
@@ -162,4 +162,18 @@ test('front-door release prose allows candidate wording in candidate mode', () =
   assert.deepEqual(failedLabels(results), []);
   const releaseProcessResult = results.find((result) => result.label === 'release-process final-version prose');
   assert.equal(releaseProcessResult.ok, true);
+});
+
+test('candidate release gate passes as unreleased work without authorizing a versioned release', () => {
+  const report = checkReleaseReadiness({
+    allowDirty: true,
+    allowUnreleased: true,
+    allowExistingTag: true,
+    skipSmoke: true,
+  });
+
+  assert.equal(report.ok, true);
+  assert.equal(report.version, 'v0.7.0');
+  assert.equal(report.results.find((result) => result.label === 'CHANGELOG.md version section').ok, true);
+  assert.equal(report.results.find((result) => result.label === 'git tag preflight').ok, true);
 });

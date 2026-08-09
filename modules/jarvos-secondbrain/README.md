@@ -2,13 +2,16 @@
 
 Canonical local content layer for the `jarvos-secondbrain` architecture.
 
-Current local state:
-- package, bridge, adapter, and docs directories exist
-- root `clawd` entrypoints for journal maintenance, note writing/linting, and related routing/provenance flows delegate into `jarvos-secondbrain`
+Public package state:
+- package, bridge, adapter, and docs directories provide the portable secondbrain
+  contract
+- host entrypoints may delegate journal, note, routing, and provenance work into
+  this package without changing its ownership rules
 - package contract docs are maintained under package-local `docs/`
-- root canonical architecture/migration/contracts docs live under `clawd/docs/`
-- Paperclip remains the execution system of record
-- automatic secondbrain capture, generated wiki, retrieval evals, promotion gates, and watch status are generic/public JarvOS surfaces; private vault content and raw transcripts are not part of this package
+- Paperclip remains an optional execution-state integration
+- automatic capture, generated wiki, retrieval evals, promotion gates, and
+  watch status are generic jarvOS surfaces; private vault content and raw
+  transcripts are not part of this package
 
 ## Layout
 
@@ -39,15 +42,19 @@ jarvos-secondbrain/
 
 ## Environment Variables
 
-Path resolution is centralized in `bridge/config` through `resolveConfig()`.
-The portable pattern is: **env var → `jarvos.config.json` / XDG config → homedir-relative default**.
+Path resolution is centralized in `bridge/config`. Non-mutating consumers may
+retain compatibility defaults, but journal mutation uses the stricter
+`resolveJournalConfig()` boundary: **explicit environment/configuration →
+fail closed**.
 
 | Env var | Description | Default |
 |---|---|---|
-| `JARVOS_JOURNAL_DIR` | Journal markdown files | `~/Vaults/<vault>/Journal` |
-| `JARVOS_NOTES_DIR` / `VAULT_NOTES_DIR` | Notes vault directory | `~/Vaults/<vault>/Notes` |
-| `JARVOS_TAGS_DIR` | Tags directory | `~/Vaults/<vault>/Tags` |
-| `CLAWD_DIR` | Root clawd workspace (for config discovery) | `~/clawd` |
+| `JARVOS_JOURNAL_DIR` | Explicit journal Markdown directory for mutation | none; required unless configured below |
+| `JOURNAL_DIR` | Legacy explicit journal-directory alias | none |
+| `JARVOS_TIMEZONE` | Explicit IANA timezone for journal dates | none; required for mutation |
+| `JARVOS_VAULT_DIR` | Explicit vault root; derives `<vault>/Journal` when no journal path is set | none |
+| `JARVOS_NOTES_DIR` / `VAULT_NOTES_DIR` | Notes directory for note capture | host/configured |
+| `JARVOS_TAGS_DIR` | Tags directory | host/configured |
 | `JARVOS_CONFIG_PATH` / `JARVOS_CONFIG_FILE` | Explicit config file path | unset |
 
 Alternatively, set paths under `paths.*` in `jarvos.config.json`:
@@ -59,6 +66,34 @@ Alternatively, set paths under `paths.*` in `jarvos.config.json`:
   }
 }
 ```
+
+For journal mutation, timezone may be `user.timezone`, `user.timeZone`,
+`timezone`, or `timeZone` in that config. The process `TZ` value is not an
+implicit journal fallback. See the [journal install contract](../../docs/journal-install-contract.md)
+for the full precedence table and compatibility rules.
+
+## Journal lifecycle and agent access
+
+The package-owned lifecycle creates only the missing current-date file with
+exclusive creation, re-reads it, and reports a verified idempotent outcome. In
+the same scheduled pass it may add missing embeds for the current date and
+previously created dates to an existing pure-generated `Journaling.md` index.
+It never rewrites an existing daily file, rebuilds or reorders the index, or
+touches an index containing human prose.
+
+Human CLI checks:
+
+```bash
+node modules/jarvos-secondbrain/scripts/journal-health.js --json
+node modules/jarvos-secondbrain/scripts/journal-health-alarm.js
+node modules/jarvos-secondbrain/packages/jarvos-secondbrain-journal/src/journal-maintenance.js \
+  --create-if-missing --json
+```
+
+Host schedulers may invoke the creation-only command after injecting explicit
+configuration, but scheduler delivery and operational evidence stay outside
+this package. The stdio MCP health action is read-only; MCP ensure is reserved
+for an explicit user request or host-declared journal-maintenance trigger.
 
 ## Shared-Vault Runtime Onboarding
 
@@ -78,14 +113,14 @@ The helper validates that the vault contains `Notes/` and `Journal/`, then write
 a `jarvos.config.json` whose `paths.vault`, `paths.notes`, and `paths.journal`
 all point at the existing vault. After that, any runtime using
 `resolveConfig()` writes through the same Journal and Notes surfaces as the
-current OpenClaw setup. Use `--dry-run` first when you want to inspect the
+configured host. Use `--dry-run` first when you want to inspect the
 resolved paths without writing the config.
 
 ## Bootstrap choices
 
-- Docs were copied from `clawd/docs/...` instead of moved, to avoid breaking current references during the bootstrap phase.
 - Empty implementation areas are represented with tracked placeholders only.
-- Bridge and adapter directories are present but intentionally contain no logic yet.
+- Bridge and adapter directories contain the portable routing seams; host
+  integrations remain injectable and optional.
 
 See `docs/architecture/jarvos-secondbrain-monorepo-spec.md` for the boundary model.
 

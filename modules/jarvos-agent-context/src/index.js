@@ -118,6 +118,16 @@ function loadJournalLinker() {
   ));
 }
 
+function loadJournalLifecycle() {
+  return require(path.join(
+    secondbrainDir(),
+    'packages',
+    'jarvos-secondbrain-journal',
+    'src',
+    'journal-lifecycle.js',
+  ));
+}
+
 function loadGbrain() {
   return loadModule('@jarvos/gbrain', path.join(JARVOS_ROOT, 'modules', 'jarvos-gbrain', 'src', 'index.js'));
 }
@@ -906,6 +916,92 @@ function defaultFrontmatter(frontmatter = {}) {
   };
 }
 
+const PUBLIC_JOURNAL_OUTCOMES = new Set([
+  'created',
+  'healthy-existing',
+  'created-concurrently',
+  'recovered-after-unrecorded-create',
+  'invalid-configuration',
+  'invalid-existing',
+  'blocked-writer-conflict',
+  'receipt-failed',
+  'failed',
+]);
+const PUBLIC_DERIVED_INDEX_OUTCOMES = new Set([
+  'index-disabled',
+  'index-healthy',
+  'index-updated',
+  'index-unmanaged',
+  'index-deferred',
+  'index-conflict',
+  'index-failed',
+]);
+
+function journalLifecycleOptions() {
+  // The lifecycle owns the mutation configuration boundary. Do not resolve
+  // through the legacy path shim here: it intentionally preserves historical
+  // home-directory and timezone defaults for non-journal consumers. The vault
+  // root is safe to pass through separately because it only determines the
+  // configured folder prefix for derived-index links.
+  try {
+    const vaultDir = loadJarvosPaths().getVaultDir();
+    return typeof vaultDir === 'string' && path.isAbsolute(vaultDir)
+      ? { vaultDir: path.resolve(vaultDir) }
+      : {};
+  } catch {
+    return {};
+  }
+}
+
+function safeJournalDate(value) {
+  return /^\d{4}-\d{2}-\d{2}$/.test(String(value || '')) ? String(value) : null;
+}
+
+function safeJournalOutcome(value) {
+  return PUBLIC_JOURNAL_OUTCOMES.has(value) ? value : 'failed';
+}
+
+function safeDerivedIndexOutcome(value) {
+  return PUBLIC_DERIVED_INDEX_OUTCOMES.has(value) ? value : 'index-failed';
+}
+
+function publicJournalFailure() {
+  return { status: 'error', outcome: 'failed', date: null, reason: 'journal operation unavailable' };
+}
+
+function healthTodayJournal() {
+  try {
+    const result = loadJournalLifecycle().healthToday(journalLifecycleOptions());
+    if (!result?.ok) return { status: 'error', outcome: safeJournalOutcome(result?.outcome), date: safeJournalDate(result?.date), reason: 'journal configuration unavailable' };
+    return {
+      status: 'ok',
+      outcome: 'health',
+      date: safeJournalDate(result.date),
+      canonicalStatus: typeof result.canonical?.status === 'string' ? result.canonical.status : 'unknown',
+      derivedIndexStatus: typeof result.derivedIndex?.status === 'string' ? result.derivedIndex.status : 'unknown',
+    };
+  } catch {
+    return publicJournalFailure();
+  }
+}
+
+function ensureTodayJournal() {
+  try {
+    const report = loadJournalLifecycle().runCreationMaintenance({ dateSpecs: ['today'], json: true }, journalLifecycleOptions());
+    const result = report?.results?.[0];
+    const index = report?.indexResults?.[0];
+    return {
+      status: report?.status === 'ok' && result?.ok ? 'ok' : 'error',
+      outcome: safeJournalOutcome(result?.outcome),
+      date: safeJournalDate(result?.date),
+      ...(index ? { derivedIndexOutcome: safeDerivedIndexOutcome(index.outcome) } : {}),
+      ...(report?.status === 'ok' && result?.ok ? {} : { reason: 'journal ensure unavailable' }),
+    };
+  } catch {
+    return publicJournalFailure();
+  }
+}
+
 function createNote(input = {}) {
   const title = firstString(input.title);
   const content = input.content;
@@ -926,7 +1022,8 @@ function createNote(input = {}) {
     section,
     createJournalIfMissing: input.createJournalIfMissing !== false,
   });
-  const linkResult = noteResult.journal?.linked
+  const isDeferred = noteResult.journal?.status === 'deferred';
+  const linkResult = noteResult.journal?.linked || isDeferred
     ? noteResult.journal
     : journalLinker.linkNoteToJournal({
       noteTitle: noteResult.title || safeTitle,
@@ -939,19 +1036,23 @@ function createNote(input = {}) {
     notesDir: jarvosPaths.getNotesDir(),
     journalPath: linkResult.journalPath,
     section,
+    requireJournalLink: !isDeferred,
   });
+  if (isDeferred) verification.deferred = true;
+  const journalLinked = !isDeferred;
 
   return {
     ok: true,
     note: noteResult,
     journal: linkResult,
+    journalLinked,
     verification,
     markdown: [
       '# jarvOS Note Created',
       '',
       `- Note: ${noteResult.path}`,
       `- Journal: ${linkResult.journalPath}`,
-      `- Link: ${verification.link}`,
+      `- Link: ${journalLinked ? verification.link : 'deferred (queued for reconciliation)'}`,
       `- Knowledge: ${noteResult.knowledge?.optimized ? noteResult.knowledge.qmdStatus : 'not optimized'}`,
     ].join('\n'),
   };
@@ -991,8 +1092,10 @@ module.exports = {
   createNote,
   currentWork,
   defaultFrontmatter,
+  ensureTodayJournal,
   expandTilde,
   hydrate,
+  healthTodayJournal,
   loadPaperclipAuth,
   recall,
   redactObviousSecrets,

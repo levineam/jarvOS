@@ -214,6 +214,31 @@ try {
   const explicitConfigAdapter = explicitConfigReport.checks.find((check) => check.component === 'jarvos.openclawAdapter');
   assert.equal(explicitConfigAdapter.status, 'ok');
 
+  const v050ConfigPath = path.join(tmp, 'v0-5-0-config.json');
+  const v050Config = {
+    ...localConfig,
+    skillPacks: { installed: ['v0-5-0'] },
+  };
+  fs.writeFileSync(v050ConfigPath, `${JSON.stringify(v050Config, null, 2)}\n`, 'utf8');
+  const explicitV050ConfigDoctor = run([
+    'doctor',
+    '--profile',
+    'v0-5-0',
+    '--workspace',
+    workspace,
+    '--config',
+    v050ConfigPath,
+    '--openclaw-dir',
+    openclawStateDir,
+    '--staged-runtime-root',
+    ROOT,
+    '--json',
+  ], { env: localDoctorEnv });
+  const explicitV050ConfigReport = JSON.parse(explicitV050ConfigDoctor.stdout);
+  const explicitV050ConfigAdapter = explicitV050ConfigReport.checks.find((check) => check.component === 'jarvos.openclawAdapter');
+  assert.equal(explicitV050ConfigAdapter.status, 'warn');
+  assert.match(explicitV050ConfigAdapter.message, /adapter is present/i);
+
   // A configured but unusable host fails doctor without leaking the module path.
   const badHostEnv = {
     ...env,

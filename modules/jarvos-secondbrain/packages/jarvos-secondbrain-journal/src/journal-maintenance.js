@@ -39,6 +39,7 @@ const JOURNAL_STATE_DIR = '.jarvos/journal-maintenance';
 function parseArgs(argv) {
   const out = {
     dateSpecs: ['today'],
+    createIfMissing: false,
     dryRun: false,
     json: false,
   };
@@ -46,6 +47,7 @@ function parseArgs(argv) {
   for (const arg of argv) {
     if (arg === '--dry-run') out.dryRun = true;
     else if (arg === '--json') out.json = true;
+    else if (arg === '--create-if-missing') out.createIfMissing = true;
     else if (arg === '--yesterday') out.dateSpecs = ['yesterday'];
     else if (arg.startsWith('--date=')) out.dateSpecs = [arg.split('=').slice(1).join('=')];
     else if (arg.startsWith('--dates=')) {
@@ -75,11 +77,17 @@ function printHelpAndExit(code) {
 
 function loadConfig() {
   try {
-    return JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'));
+    return readConfig();
   } catch (err) {
     console.error(`Failed to load journal config: ${err.message}`);
     process.exit(1);
   }
+}
+
+// Library callers (including the MCP server) need a throwable read rather
+// than a process exit; the CLI wrapper above keeps its historical exit code.
+function readConfig() {
+  return JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'));
 }
 
 function nyDate(offsetDays = 0) {
@@ -1201,8 +1209,54 @@ function formatDeferredBacklinkStatus(lastFlushAt, summary) {
   ].join(' ');
 }
 
+function creationOnlyReportWithDeferredStatus(report, args, opts) {
+  const result = report.results?.[0];
+  const journalDir = result?.journalPath ? path.dirname(result.journalPath) : null;
+  if (!journalDir) return report;
+
+  const readFlushMetadata = opts.readDeferredBacklinkFlushMetadata || readDeferredBacklinkFlushMetadata;
+  const queueMetadata = readFlushMetadata(journalDir);
+  const summary = mergeDeferredBacklinkQueueState(
+    flushSummary(queueMetadata.summary || {}),
+    queueMetadata.entries,
+  );
+  const lastFlushAt = queueMetadata.lastFlushAt || null;
+  const attention = requiresDeferredBacklinkAttention(summary);
+  const status = report.status === 'failed' || attention ? 'failed' : report.status;
+  const output = args.json
+    ? JSON.stringify({
+      ...report,
+      lastFlushAt,
+      summary,
+      lastFlushSummary: summary,
+      deferredBacklinks: summary,
+      status,
+    })
+    : [report.output, ...(attention ? [formatDeferredBacklinkStatus(lastFlushAt, summary)] : [])]
+      .filter(Boolean)
+      .join('\n');
+  return {
+    ...report,
+    lastFlushAt,
+    summary,
+    lastFlushSummary: summary,
+    deferredBacklinks: summary,
+    status,
+    output,
+  };
+}
+
 function runMaintenance(argv = process.argv.slice(2), opts = {}) {
   const args = parseArgs(argv);
+  if (args.createIfMissing) {
+    const lifecycle = require('./journal-lifecycle.js');
+    const create = opts.runCreationMaintenance || lifecycle.runCreationMaintenance;
+    const report = create(args, opts);
+    // Creation remains creation-only: do not mutate authored journals while
+    // flushing backlinks. Surface queued work so a host can alert or run the
+    // separate human-approved reconciliation command.
+    return creationOnlyReportWithDeferredStatus(report, args, opts);
+  }
   const config = (opts.loadConfig || loadConfig)();
   const sync = opts.syncOneDate || syncOneDate;
   const flush = opts.flushDeferredBacklinks || deferredBacklinkFlush();
@@ -1256,8 +1310,8 @@ function runMaintenance(argv = process.argv.slice(2), opts = {}) {
   return report;
 }
 
-function main(argv = process.argv.slice(2)) {
-  const report = runMaintenance(argv);
+function main(argv = process.argv.slice(2), env = process.env) {
+  const report = runMaintenance(argv, { env });
   console.log(report.output);
   return report;
 }
@@ -1273,6 +1327,7 @@ module.exports = {
   detectConflictingJournalWriters,
   journalMetrics,
   loadConfig,
+  readConfig,
   normalizeSections,
   requiresDeferredBacklinkAttention,
   renderJournal,
@@ -1285,5 +1340,6 @@ module.exports = {
 };
 
 if (require.main === module) {
-  main();
+  const report = main();
+  if (report?.status === 'failed') process.exitCode = 1;
 }

@@ -3,6 +3,8 @@
 
 const assert = require('assert/strict');
 const test = require('node:test');
+const fs = require('node:fs');
+const path = require('node:path');
 
 const { unreleasedSection, changelogVersionSection } = require('../scripts/unreleased-drift-check');
 
@@ -51,4 +53,17 @@ test('changelogVersionSection reports undated when still marked Unreleased', () 
   const result = changelogVersionSection(changelog, '0.7.0');
   assert.equal(result.present, true);
   assert.equal(result.dated, false);
+});
+
+test('public journal landing stays unreleased without a package version bump', () => {
+  const root = path.resolve(__dirname, '..');
+  const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
+  const changelog = fs.readFileSync(path.join(root, 'CHANGELOG.md'), 'utf8');
+  const unreleased = unreleasedSection(changelog);
+
+  assert.equal(pkg.version, '0.7.0');
+  assert.equal(unreleased.present, true);
+  assert.equal(unreleased.nonEmpty, true);
+  assert.match(changelog, /daily journal creation/i);
+  assert.doesNotMatch(changelog, /^##\s+v0\.7\.1\b/m);
 });

@@ -17,7 +17,22 @@
     "coachName": { "type": "string" },
     "vaultPath": { "type": "string" },
     "workspacePath": { "type": "string" },
-    "runtime": { "type": "string" }
+    "runtime": { "type": "string" },
+    "paths": {
+      "type": "object",
+      "properties": {
+        "vault": { "type": "string" },
+        "journal": { "type": "string" }
+      },
+      "additionalProperties": true
+    },
+    "user": {
+      "type": "object",
+      "properties": {
+        "timezone": { "type": "string" }
+      },
+      "additionalProperties": true
+    }
   },
   "additionalProperties": true
 }
