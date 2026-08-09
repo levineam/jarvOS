@@ -8,9 +8,11 @@
     ".": "./src/index.js",
     "./schema": "./src/lib/memory-schema.js",
     "./config": "./src/lib/memory-config.js",
-    "./audit": "./src/lib/audit-memory.js"
+    "./audit": "./src/lib/audit-memory.js",
+    "./transcript": "./src/lib/transcript-retrieval.js"
   },
   "scripts": {
+    "test": "node --test test/transcript-retrieval.test.js",
     "audit": "node scripts/audit-memory.js",
     "audit:json": "node scripts/audit-memory.js --json"
   },

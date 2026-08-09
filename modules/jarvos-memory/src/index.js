@@ -8,6 +8,7 @@
  */
 
 const crypto = require('crypto');
+const transcriptRetrieval = require('./lib/transcript-retrieval');
 
 const SCHEMA_VERSION = 'jarvos-memory/v1';
 
@@ -128,4 +129,5 @@ module.exports = {
   getMemoryClassDef,
   createMemoryRecord,
   validateMemoryRecord,
+  ...transcriptRetrieval,
 };

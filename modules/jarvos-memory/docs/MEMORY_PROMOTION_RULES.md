@@ -56,6 +56,16 @@ raw transcripts. A knowledge unit must have source evidence, a non-sensitive
 privacy decision, and `downstreamEligibility.memoryPromotion !== false`.
 Sensitive/private or uncited units stay in the secondbrain sidecar layer.
 
+### Transcript evidence -> reviewed memory
+
+Transcript evidence is source material, not durable memory. A bounded
+`jarvos-transcript-packet/v1` result may help an agent recover context, but raw
+transcript text must not be promoted directly. Promotion requires a compact
+`knowledgeUnit` with source evidence, an explicit privacy decision, and a
+reviewed promotion decision that passes the same downstream eligibility gates
+as other secondbrain material. A failed, stale, redacted, uncited, or
+privacy-sensitive excerpt remains evidence only.
+
 ### Paperclip -> Memory
 Paperclip may produce a Memory artifact when a completed issue leaves behind:
 - a durable decision

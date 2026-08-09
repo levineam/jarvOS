@@ -2,7 +2,8 @@
 
 **Defect:** `D7` — Transcript search exists as a bolt-on QMD feature, not as a first-class jarvos-memory capability.
 
-**Status:** Spec complete. Current QMD bolt-on remains in use pending first-class integration.
+**Status:** First-class contract and optional CASS adapter implemented. QMD remains a
+supported additive backend in hosts that already use it.
 
 ---
 
@@ -55,40 +56,66 @@ Session transcripts hold the raw record of every agent-user exchange. They conta
 
 ### Search interface
 
-Current path (QMD bolt-on, to be formalized):
+The existing QMD path remains useful for markdown-first recall:
 ```bash
 # Via QMD skill
 qmd search --index session-transcripts "<query>"
 ```
 
-Future path (first-class, pending implementation):
+The first-class jarvOS path is a bounded JSON packet. It uses CASS when the local
+binary is configured and compatible, and returns an explicit `unavailable` packet
+when it is not:
 ```bash
 # Via jarvos-memory module
 node jarvos-memory/scripts/search-transcripts.js "<query>"
 node jarvos-memory/scripts/search-transcripts.js "<query>" --since 7d
-node jarvos-memory/scripts/search-transcripts.js "<query>" --json
+node jarvos-memory/scripts/search-transcripts.js "<query>" --connector codex --json
+node jarvos-memory/scripts/search-transcripts.js "<query>" --strict --max-evidence 8
 ```
 
-The first-class script should:
-- Accept a query string
-- Search indexed session transcripts via QMD or a compatible index
-- Return ranked results with session date, snippet, and a path to the full transcript
-- Support `--since <period>` to limit scope
-- Support `--json` for machine-readable output
+The script always emits the same JSON shape as the library boundary; `--json` is
+accepted for parity with CASS. It never prints raw CASS stderr or transcript paths.
+
+The contract is provider-neutral, but the current adapter supports the local CASS
+connectors `codex` and `claude_code` (CASS's `claude` alias is normalized). Retrieval
+uses `cass api-version --json`, `cass capabilities --json`, and a lexical-only
+`cass pack ... --json --mode lexical` call. It does not run `index`, `--watch`, refresh, semantic
+model installation, export, support-bundle, or remote-source commands.
+
+Each packet includes:
+
+- `status`: `evidence_found`, `no_evidence`, `partial`, or `unavailable`
+- searched/requested connectors and per-connector freshness/error outcomes
+- bounded evidence with session identifier, timestamp, citation, excerpt, and an
+  `untrustedContent: true` marker
+- `truncated`, `omissions`, and a deterministic `renderedTokenCount`
+
+The default aggregate packet budget is 3,000 estimated tokens; requested budgets are
+normalized to a minimum of 512 estimated tokens so the packet envelope can be
+returned without exceeding its own bound. Excerpts are locally redacted for common
+credential-shaped values before they enter the packet. Paths are used only for local
+provenance validation and are not returned in the ordinary agent packet. Transcript
+evidence is source material, not a durable memory record.
 
 ---
 
 ## Transcript index
 
-Transcripts are indexed by the QMD session indexing pipeline. Index location and query
-semantics are defined by the QMD skill (`~/clawd/skills/qmd/SKILL.md`).
+Transcripts may be indexed by QMD, CASS, or another compatible local provider. The
+provider owns its own derived index; the jarvOS adapter owns only request validation,
+bounded subprocess policy, provenance checks, redaction, status aggregation, and the
+packet contract.
 
-The jarvos-memory module treats the transcript index as an external dependency — it
-queries the index but does not own or rebuild it.
+The jarvos-memory module treats every transcript index as an external dependency — it
+queries the index but does not own or rebuild it during retrieval. CASS's explicit
+index maintenance is a separate private-host operation, not part of an agent recall
+request.
 
-**Index freshness:** The transcript index must be updated after each session ends. This is
-currently a manual step or a cron job. The session-end flush (see `FLUSH_TIMING.md`)
-should also trigger an index update.
+**Index freshness:** Freshness is reported by the provider and surfaced in the packet.
+Strict consumers (such as a future nightly collector) must request strict freshness
+and treat stale or failed connectors as partial/unavailable rather than silently
+claiming exhaustive coverage. Index maintenance belongs to the host's bounded
+post-session or scheduled workflow.
 
 ---
 
@@ -113,8 +140,9 @@ This closes the loop: transcripts → search → promote → memory → search (
 |---|---|---|
 | 1 | QMD session indexing as bolt-on | ✅ Done |
 | 2 | Document first-class contract (this file) | ✅ Done |
-| 3 | `search-transcripts.js` script in jarvos-memory/scripts/ | ⬜ Pending |
-| 4 | Wire session-end flush to also trigger index update | ⬜ Pending (depends on D3) |
+| 3 | `search-transcripts.js` plus the versioned provider-neutral packet | ✅ Done |
+| 4 | Add conditional on-demand agent recall over the packet | 🔄 In progress in the agent-context adapter |
+| 5 | Add proof-gated private index maintenance/nightly collection | ⬜ Pending host proof gate |
 
 ---
 
