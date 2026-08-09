@@ -106,6 +106,7 @@ try {
   };
   assert.equal(validateProjectionAdapter(adapter, '2.4.0').status, 'compatible');
   assert.equal(validateProjectionAdapter(adapter, '3.0.0').status, 'unsupported');
+  assert.equal(validateProjectionAdapter(adapter, '2.4.0-beta.1').status, 'unsupported');
   assert.equal(validateProjectionAdapter(adapter, 'not-a-version').status, 'unsupported');
   assert.throws(() => validateProjectionAdapter({ ...adapter, discovery: {} }, '2.4.0'), /discovery command/);
 
@@ -121,6 +122,20 @@ try {
   });
   assert.notEqual(transformed.entries[0].outputDigest, transformed.entries[0].sourceDigest);
   assert.deepEqual(transformed.entries[0].adapter, { id: adapter.id, version: adapter.version, harness: 'hermes' });
+  assert.throws(
+    () => applySkillProjection(transformed, { adapter: { ...adapter, harness: 'hermes' }, harnessVersion: '2.4.0-beta.1', transform }),
+    /projection adapter is unsupported/,
+  );
+  assert.throws(
+    () => applySkillProjection(transformed, { adapter: { ...adapter, harness: 'hermes' }, harnessVersion: '3.0.0', transform }),
+    /projection adapter is unsupported/,
+  );
+  assert.equal(fs.existsSync(transformed.entries[0].targetPath), false);
+  assert.equal(fs.existsSync(transformed.entries[0].statePath), false);
+  assert.throws(
+    () => applySkillProjection(transformed, { adapter: { ...adapter, harness: 'hermes' }, harnessVersion: '2.5.0', transform }),
+    /Projection changed since planning/,
+  );
   applySkillProjection(transformed, { adapter: { ...adapter, harness: 'hermes' }, harnessVersion: '2.4.0', transform });
   const transformedReceipt = JSON.parse(fs.readFileSync(path.join(transformedRoot, '.jarvos-projections', 'workflow-execution.json'), 'utf8'));
   assert.equal(transformedReceipt.sourceDigest, transformed.entries[0].sourceDigest);
@@ -131,6 +146,17 @@ try {
     /Projection changed since planning/,
   );
   fs.rmSync(transformedRoot, { recursive: true, force: true });
+
+  for (const harness of ['claude-code', 'codex', 'openclaw', 'hermes']) {
+    const harnessRoot = fs.mkdtempSync(path.join(os.tmpdir(), `jarvos-skills-${harness}-`));
+    const fixturePlan = planSkillProjection({ harness, skillsRoot: harnessRoot, skills: ['explore-unknowns'] });
+    assert.equal(fixturePlan.entries[0].status, 'missing');
+    assert.equal(fixturePlan.entries[0].outputDigest, fixturePlan.entries[0].sourceDigest);
+    applySkillProjection(fixturePlan);
+    fs.unlinkSync(fixturePlan.entries[0].targetPath);
+    assert.equal(planSkillProjection({ harness, skillsRoot: harnessRoot, skills: ['explore-unknowns'] }).entries[0].status, 'missing');
+    fs.rmSync(harnessRoot, { recursive: true, force: true });
+  }
 
   const packageRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-skills-package-'));
   const stagingRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-skills-staging-'));

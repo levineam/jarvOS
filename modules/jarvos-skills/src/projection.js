@@ -84,14 +84,35 @@ function createProjectionApi({ assertProjectionManifest, getManifest, projection
     return {
       status: compatible ? 'compatible' : 'unsupported',
       adapter: { id: adapter.id, version: adapter.version, harness: adapter.harness },
-      ...(compatible ? {} : { reason: version ? 'harness version is outside supported range' : 'harness version is missing or unparseable' }),
+      ...(compatible ? {} : {
+        reason: isPrereleaseSemver(harnessVersion)
+          ? 'harness prerelease versions are unsupported'
+          : version ? 'harness version is outside supported range' : 'harness version is missing or unparseable',
+      }),
     };
   }
 
   function parseSemver(value) {
     if (typeof value !== 'string') return null;
-    const match = value.trim().match(SEMVER_RE);
+    const normalized = value.trim();
+    const match = normalized.match(SEMVER_RE);
+    if (isPrereleaseSemver(normalized)) return null;
     return match ? match.slice(1, 4).map(Number) : null;
+  }
+
+  function isPrereleaseSemver(value) {
+    if (typeof value !== 'string') return false;
+    const normalized = value.trim();
+    return SEMVER_RE.test(normalized) && normalized.split('+', 1)[0].includes('-');
+  }
+
+  function projectionAdapterCompatibility(adapterResult, adapter, harnessVersion) {
+    if (!adapterResult) return null;
+    return {
+      status: adapterResult.status,
+      harnessVersion: typeof harnessVersion === 'string' ? harnessVersion.trim() : null,
+      supportedVersions: adapter.supportedVersions,
+    };
   }
 
   function satisfiesRange(version, range) {
@@ -178,12 +199,22 @@ function createProjectionApi({ assertProjectionManifest, getManifest, projection
     return sha256(fs.readFileSync(target));
   }
 
-  function projectionStatus({ sourceDigest, outputDigest, targetDigest, state, compatibility }) {
+  function projectionStatus({ sourceDigest, outputDigest, targetDigest, state, targetPath, compatibility }) {
     if (compatibility === 'unsupported') return 'unsupported';
     if (compatibility !== 'compatible') return 'incompatible';
-    if (!targetDigest) return state ? 'conflict' : 'missing';
+    if (!targetDigest) {
+      // A missing file with a valid JarvOS state receipt is repairable: the
+      // owner may have removed its managed copy. An invalid receipt remains a
+      // conflict so reconciliation never guesses ownership.
+      if (!state) return 'missing';
+      if (state.targetDigest && SHA256_RE.test(state.targetDigest)
+        && state.sourceDigest === sourceDigest
+        && (!state.targetPath || path.resolve(state.targetPath) === path.resolve(targetPath))) return 'missing';
+      return 'conflict';
+    }
     if (!state) return 'unknown';
     if (!SHA256_RE.test(state.targetDigest || '')) return 'conflict';
+    if (state.targetPath && path.resolve(state.targetPath) !== path.resolve(targetPath)) return 'conflict';
     if (targetDigest === outputDigest && state.sourceDigest === sourceDigest && state.targetDigest === outputDigest) return 'clean';
     if (targetDigest === state.targetDigest) return 'outdated';
     return 'local_modified';
@@ -211,6 +242,7 @@ function createProjectionApi({ assertProjectionManifest, getManifest, projection
       stateRevision: record.state?.sourceRevision || null,
       renderer: record.renderer,
       adapter: record.adapter || null,
+      adapterCompatibility: record.adapterCompatibility || null,
     }));
   }
 
@@ -223,6 +255,7 @@ function createProjectionApi({ assertProjectionManifest, getManifest, projection
     const adapterResult = options.adapter ? validateProjectionAdapter(options.adapter, options.harnessVersion) : null;
     if (adapterResult && options.adapter.harness !== harness) throw new Error(`projection adapter harness does not match ${harness}`);
     if (typeof options.transform === 'function' && !adapterResult) throw new Error('a transformed projection requires an adapter');
+    const adapterCompatibility = projectionAdapterCompatibility(adapterResult, options.adapter, options.harnessVersion);
     const root = assertSafeProjectionRoot(options.skillsRoot || options.destinationDir);
     const entries = requested.map((name) => {
       const skill = manifest.skills.find((item) => item.name === name);
@@ -240,7 +273,7 @@ function createProjectionApi({ assertProjectionManifest, getManifest, projection
       const output = compatible ? renderProjectionOutput(sourceContent, { skill, harness, adapter: adapterResult?.adapter || null }, options.transform) : null;
       const outputDigest = output ? sha256(output) : null;
       const targetDigest = target ? observedDigest(target) : null;
-      const status = projectionStatus({ sourceDigest, outputDigest, targetDigest, state, compatibility });
+      const status = projectionStatus({ sourceDigest, outputDigest, targetDigest, state, targetPath: target, compatibility });
       const entry = {
         name: skill.name,
         harness,
@@ -253,6 +286,7 @@ function createProjectionApi({ assertProjectionManifest, getManifest, projection
         outputDigest,
         renderer: targetMeta?.renderer || null,
         adapter: adapterResult?.adapter || { id: targetMeta?.renderer || 'raw-skill-md', version: '1.0.0', harness },
+        adapterCompatibility,
         targetPath: target,
         statePath,
         observedDigest: targetDigest,
@@ -289,6 +323,11 @@ function createProjectionApi({ assertProjectionManifest, getManifest, projection
 
   function applySkillProjection(plan, options = {}) {
     if (!plan || !Array.isArray(plan.entries)) throw new Error('projection plan is required');
+    const adapterResult = options.adapter ? validateProjectionAdapter(options.adapter, options.harnessVersion) : null;
+    if (adapterResult && options.adapter.harness !== plan.harness) throw new Error(`projection adapter harness does not match ${plan.harness}`);
+    if (adapterResult && adapterResult.status !== 'compatible') throw new Error(`projection adapter is unsupported: ${adapterResult.reason}`);
+    if (typeof options.transform === 'function' && !adapterResult) throw new Error('a transformed projection requires an adapter');
+    const adapterCompatibility = projectionAdapterCompatibility(adapterResult, options.adapter, options.harnessVersion);
     const manifest = options.manifest || getManifest();
     const entriesToApply = plan.entries.filter((entry) => ['missing', 'outdated'].includes(entry.status));
     const validatedSources = assertProjectionManifest(manifest, { captureSourceNames: entriesToApply.map((entry) => entry.name) });
@@ -303,9 +342,6 @@ function createProjectionApi({ assertProjectionManifest, getManifest, projection
       if (!skill || !skill.supportedHarnesses.includes(plan.harness)) throw new Error(`Skill ${entry.name} is no longer compatible with ${plan.harness}`);
       const target = projectionTargetPath(root, skill, plan.harness);
       const statePath = projectionStatePath(root, skill.name);
-      const adapterResult = options.adapter ? validateProjectionAdapter(options.adapter, options.harnessVersion) : null;
-      if (adapterResult && options.adapter.harness !== plan.harness) throw new Error(`projection adapter harness does not match ${plan.harness}`);
-      if (typeof options.transform === 'function' && !adapterResult) throw new Error('a transformed projection requires an adapter');
       const sourceContent = validatedSources.get(skill.name);
       const output = renderProjectionOutput(sourceContent, { skill, harness: plan.harness, adapter: adapterResult?.adapter || null }, options.transform);
       const outputDigest = sha256(output);
@@ -317,6 +353,7 @@ function createProjectionApi({ assertProjectionManifest, getManifest, projection
         outputDigest,
         renderer: projectionMetadata(skill, plan.harness).renderer,
         adapter: adapterResult?.adapter || { id: projectionMetadata(skill, plan.harness).renderer, version: '1.0.0', harness: plan.harness },
+        adapterCompatibility,
       };
       current.generation = projectionGeneration(current);
       if (current.generation !== entry.generation) throw new Error(`Projection changed since planning: ${entry.name}`);
@@ -326,6 +363,7 @@ function createProjectionApi({ assertProjectionManifest, getManifest, projection
         version: 1,
         harness: plan.harness,
         name: skill.name,
+        targetPath: target,
         sourceRevision: skill.source.revision,
         sourceDigest: skill.source.digest,
         targetDigest: outputDigest,

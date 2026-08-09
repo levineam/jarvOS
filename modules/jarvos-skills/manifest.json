@@ -93,6 +93,28 @@
           "hermes": { "path": "{skillsRoot}/cron-hygiene/SKILL.md", "renderer": "raw-skill-md" }
         }
       }
+    },
+    {
+      "name": "explore-unknowns",
+      "path": "skills/explore-unknowns/SKILL.md",
+      "purpose": "Harmless fixture for proving that a harness can discover and load a managed skill.",
+      "source": {
+        "revision": "jarvos-skills-v0.3.0",
+        "digest": "83e07aedd81f7e298f56af7c2eb14b1475d4726bf41d0ec8810aa7cfe723134e",
+        "license": "MIT",
+        "provenance": "jarvOS reviewed source"
+      },
+      "supportedHarnesses": ["generic", "claude-code", "codex", "openclaw", "hermes"],
+      "projection": {
+        "mode": "copy",
+        "targets": {
+          "generic": { "path": "{skillsRoot}/explore-unknowns/SKILL.md", "renderer": "raw-skill-md" },
+          "claude-code": { "path": "{skillsRoot}/explore-unknowns/SKILL.md", "renderer": "raw-skill-md" },
+          "codex": { "path": "{skillsRoot}/explore-unknowns/SKILL.md", "renderer": "raw-skill-md" },
+          "openclaw": { "path": "{skillsRoot}/explore-unknowns/SKILL.md", "renderer": "raw-skill-md" },
+          "hermes": { "path": "{skillsRoot}/explore-unknowns/SKILL.md", "renderer": "raw-skill-md" }
+        }
+      }
     }
   ]
 }
