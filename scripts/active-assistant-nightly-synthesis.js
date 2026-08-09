@@ -46,6 +46,8 @@ function resolveImplementationEntrypoint({
   ownerPath(resolvedRuntime, { directory: true, fsImpl });
 
   const resolvedPublic = fsImpl.realpathSync(publicRoot);
+  const derivedRuntime = path.resolve(resolvedPublic, '..', '..');
+  if (resolvedRuntime !== derivedRuntime) throw bridgeError('active_assistant_public_runtime_mismatch');
   const expectedPublic = fsImpl.realpathSync(path.join(resolvedRuntime, PUBLIC_RELATIVE_PATH));
   if (resolvedPublic !== expectedPublic) throw bridgeError('active_assistant_public_runtime_mismatch');
 
@@ -59,10 +61,11 @@ function resolveImplementationEntrypoint({
   return resolvedEntrypoint;
 }
 
-function loadImplementation({ env = process.env, fsImpl = fs } = {}) {
+function loadImplementation({ env = process.env, fsImpl = fs, publicRoot } = {}) {
   const entrypoint = resolveImplementationEntrypoint({
     runtimeRoot: env[ROOT_ENV],
     fsImpl,
+    publicRoot,
   });
   // The resolved file is owner-controlled and pinned inside the verified
   // managed runtime; caller input never supplies a module path directly.
@@ -74,6 +77,11 @@ function loadImplementation({ env = process.env, fsImpl = fs } = {}) {
   return implementation;
 }
 
+function safeRuntimeErrorCode(error) {
+  const code = typeof error?.code === 'string' ? error.code : '';
+  return /^active_assistant_[a-z0-9_]+$/.test(code) ? code : 'active_assistant_runtime_failure';
+}
+
 const bridgeApi = {
   IMPLEMENTATION_RELATIVE_PATH,
   PUBLIC_RELATIVE_PATH,
@@ -82,6 +90,7 @@ const bridgeApi = {
   loadImplementation,
   ownerPath,
   resolveImplementationEntrypoint,
+  safeRuntimeErrorCode,
 };
 
 module.exports = new Proxy(bridgeApi, {
@@ -89,26 +98,17 @@ module.exports = new Proxy(bridgeApi, {
     if (Reflect.has(target, property)) return Reflect.get(target, property, receiver);
     return loadImplementation()[property];
   },
-  has(target, property) {
-    return Reflect.has(target, property) || property in loadImplementation();
-  },
-  ownKeys(target) {
-    return [...new Set([...Reflect.ownKeys(target), ...Reflect.ownKeys(loadImplementation())])];
-  },
-  getOwnPropertyDescriptor(target, property) {
-    return Reflect.getOwnPropertyDescriptor(target, property)
-      || Object.getOwnPropertyDescriptor(loadImplementation(), property)
-      || { configurable: true, enumerable: true, writable: false, value: undefined };
-  },
 });
 
 if (require.main === module) {
-  try {
-    const implementation = loadImplementation();
-    if (typeof implementation.main !== 'function') throw bridgeError('active_assistant_runtime_contract_invalid');
-    implementation.main();
-  } catch (error) {
-    process.stderr.write(`Active Assistant runtime unavailable: ${error?.code || error?.message || 'unknown'}\n`);
-    process.exitCode = 1;
-  }
+  void (async () => {
+    try {
+      const implementation = loadImplementation();
+      if (typeof implementation.main !== 'function') throw bridgeError('active_assistant_runtime_contract_invalid');
+      await implementation.main();
+    } catch (error) {
+      process.stderr.write(`Active Assistant runtime unavailable: ${safeRuntimeErrorCode(error)}\n`);
+      process.exitCode = 1;
+    }
+  })();
 }

@@ -79,7 +79,7 @@ accepted for parity with CASS. It never prints raw CASS stderr or transcript pat
 The contract is provider-neutral, but the current adapter supports the local CASS
 connectors `codex` and `claude_code` (CASS's `claude` alias is normalized). Retrieval
 uses `cass api-version --json`, `cass capabilities --json`, and a lexical-only
-`cass pack ... --robot` call. It does not run `index`, `--watch`, refresh, semantic
+`cass pack ... --json --mode lexical` call. It does not run `index`, `--watch`, refresh, semantic
 model installation, export, support-bundle, or remote-source commands.
 
 Each packet includes:

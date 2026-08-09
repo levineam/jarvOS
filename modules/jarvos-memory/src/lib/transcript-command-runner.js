@@ -105,7 +105,12 @@ function defaultAsyncRunner(command, args, options = {}) {
         try { child.kill('SIGKILL'); } catch (_) { /* close/error settles the result */ }
       }, options.timeoutMs);
     }
-    child.stdin.end(options.input === undefined ? '' : options.input);
+    child.stdin.on('error', (error) => finish({ status: null, signal: null, error }));
+    try {
+      child.stdin.end(options.input === undefined ? '' : options.input);
+    } catch (error) {
+      finish({ status: null, signal: null, error });
+    }
   });
 }
 

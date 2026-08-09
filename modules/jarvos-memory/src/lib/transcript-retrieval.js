@@ -48,6 +48,7 @@ const CONNECTOR_ALIASES = Object.freeze({
 const DESTINATION_CLASSES = new Set(['on_demand_agent', 'nightly_synthesis']);
 const SAFE_IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/;
 const SAFE_REQUEST_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
+const SAFE_CITATION = /^[A-Za-z0-9][A-Za-z0-9._:#-]{0,127}$/;
 const MAX_QUERY_CHARS = 2000;
 // The packet envelope itself is part of the aggregate budget. This floor is
 // deliberately above the largest normal no-evidence envelope, so every
@@ -170,8 +171,8 @@ function createTranscriptRequest(input = {}, options = {}) {
   const normalizedSessionRefs = sessionRefs
     .filter((item) => typeof item === 'string' && item.trim())
     .map((item) => item.trim())
-    .filter((item) => item.length <= 1024);
-  if (normalizedSessionRefs.length !== sessionRefs.length) errors.push('sessionRefs must be non-empty strings of at most 1024 characters');
+    .filter((item) => SAFE_IDENTIFIER.test(item) && !item.includes('..'));
+  if (normalizedSessionRefs.length !== sessionRefs.length) errors.push('sessionRefs must be safe session identifiers');
 
   const maxTokens = safeInteger(input.maxTokens, DEFAULT_TRANSCRIPT_BUDGET.maxTokens, MIN_TOKEN_BUDGET, DEFAULT_TRANSCRIPT_BUDGET.maxTokens);
   const maxEvidence = safeInteger(input.maxEvidence, DEFAULT_TRANSCRIPT_BUDGET.maxEvidence, 1, 50);
@@ -244,7 +245,11 @@ function redactTranscriptText(value, options = {}) {
 }
 
 function safePathForProvenance(candidate, sourceRoots) {
-  if (!candidate) return { valid: true, path: null };
+  if (!candidate) {
+    return sourceRoots.length > 0
+      ? { valid: false, reason: 'missing_source_path' }
+      : { valid: true, path: null };
+  }
   if (typeof candidate !== 'string' || candidate.includes('\0') || candidate.includes('://')) {
     return { valid: false, reason: 'path_not_local' };
   }
@@ -371,13 +376,14 @@ function parseEpochMilliseconds(value) {
 
 function freshnessFromPayload(payload) {
   const freshness = payload && (payload.freshness || payload._meta?.freshness || payload.meta?.freshness);
+  const hasFreshness = payload?.stale !== undefined || freshness !== undefined;
   const staleCount = Number(freshness && (freshness.stale_evidence_count ?? freshness.staleEvidenceCount));
   const stale = payload?.stale === true
     || freshness?.stale === true
     || (Number.isFinite(staleCount) && staleCount > 0);
   return {
     stale,
-    state: stale ? 'stale' : 'fresh',
+    state: stale ? 'stale' : (hasFreshness ? 'fresh' : 'unknown'),
     staleEvidenceCount: Number.isFinite(staleCount) ? staleCount : 0,
   };
 }
@@ -566,22 +572,6 @@ class CassTranscriptAdapter {
     }
   }
 
-  listSessions(input = {}) {
-    const normalizedInput = input && typeof input === 'object' ? input : {};
-    const validation = normalizedInput.schema === TRANSCRIPT_REQUEST_SCHEMA ? validateTranscriptRequest(normalizedInput) : null;
-    const requestResult = validation
-      ? validation
-      : createTranscriptRequest({ ...normalizedInput, query: normalizedInput.query || 'session' });
-    if (!requestResult.valid) return { ok: false, status: TRANSCRIPT_STATUS.UNAVAILABLE, errors: requestResult.errors };
-    const request = requestResult.request;
-    const args = ['--json', '--limit', String(Math.min(request.maxSessions * 10, 100))];
-    if (request.since) args.push('--since', request.since);
-    if (request.until) args.push('--until', request.until);
-    const result = this.parseResponse(this.run('sessions', args));
-    if (!result.ok) return { ok: false, status: TRANSCRIPT_STATUS.UNAVAILABLE, errorKind: result.errorKind };
-    return { ok: true, status: 'available', sessions: extractRows(result.payload) };
-  }
-
   buildPackArgs(request, cassSlug) {
     const args = [
       request.query,
@@ -602,11 +592,14 @@ class CassTranscriptAdapter {
 
   normalizeRow(row, request, logicalConnector, cassSlug) {
     if (!row || typeof row !== 'object') return { valid: false, reason: 'row_not_object' };
-    const cassCitation = objectValue(row, ['citation']);
-    const reportedConnector = normalizeConnector(
-      nestedValue(row, ['agent', 'connector', 'provider', 'source', 'tool'])
-      ?? objectValue(cassCitation, ['agent']),
-    );
+    const cassCitationValue = objectValue(row, ['citation']);
+    const cassCitation = cassCitationValue && typeof cassCitationValue === 'object' && !Array.isArray(cassCitationValue)
+      ? cassCitationValue
+      : null;
+    const rawConnector = nestedValue(row, ['agent', 'connector', 'provider', 'source', 'tool'])
+      ?? objectValue(cassCitation, ['agent']);
+    const reportedConnector = normalizeConnector(rawConnector);
+    if (rawConnector != null && !reportedConnector) return { valid: false, reason: 'unsupported_connector' };
     if (reportedConnector && reportedConnector !== logicalConnector) return { valid: false, reason: 'connector_mismatch' };
     const sessionId = String(
       nestedValue(row, ['session_id', 'sessionId', 'conversation_id', 'conversationId', 'session', 'id'])
@@ -649,7 +642,8 @@ class CassTranscriptAdapter {
     const safeExcerpt = String(redaction.text).trim().slice(0, request.maxExcerptChars);
     const line = nestedValue(row, ['line_number', 'lineNumber', 'line'])
       ?? objectValue(cassCitation, ['line_start']);
-    const citationRaw = nestedValue(row, ['locator', 'ref', 'message_id', 'messageId']);
+    const citationRaw = nestedValue(row, ['locator', 'ref', 'message_id', 'messageId'])
+      ?? (typeof row.citation === 'string' ? row.citation : null);
     const messageIndex = objectValue(cassCitation, ['message_index']);
     const lineEnd = objectValue(cassCitation, ['line_end']);
     const fallbackCitation = Number.isInteger(Number(messageIndex))
@@ -658,7 +652,7 @@ class CassTranscriptAdapter {
         ? `line:${Number(line)}${Number.isInteger(Number(lineEnd)) ? `-${Number(lineEnd)}` : ''}`
         : 'excerpt');
     const citation = String(citationRaw || fallbackCitation).trim();
-    if (!citation || citation.length > 512 || /[\u0000-\u001f\u007f]/.test(citation)) return { valid: false, reason: 'invalid_citation' };
+    if (!SAFE_CITATION.test(citation)) return { valid: false, reason: 'invalid_citation' };
 
     return {
       valid: true,
@@ -799,9 +793,10 @@ class CassTranscriptAdapter {
     }
 
     const stale = freshness.stale;
-    const strictStale = stale && request.freshness.mode === 'strict';
-    if (strictStale) {
-      omissions.push('stale:' + logicalConnector);
+    const strictFreshnessFailure = request.freshness.mode === 'strict'
+      && (stale || freshness.state === 'unknown');
+    if (strictFreshnessFailure) {
+      omissions.push((stale ? 'stale:' : 'freshness_unknown:') + logicalConnector);
       return {
         connector: logicalConnector,
         cassConnector: connector.cassSlug,
@@ -814,7 +809,7 @@ class CassTranscriptAdapter {
         outcome: {
           connector: logicalConnector,
           cassConnector: connector.cassSlug,
-          status: 'stale',
+          status: stale ? 'stale' : 'freshness_unknown',
           evidenceCount: 0,
           invalidCount,
           freshness,
@@ -835,7 +830,9 @@ class CassTranscriptAdapter {
       outcome: {
         connector: logicalConnector,
         cassConnector: connector.cassSlug,
-        status: stale ? 'stale_best_effort' : evidence.length ? 'fresh_evidence' : 'fresh_no_evidence',
+        status: invalidCount > 0
+          ? 'fresh_partial'
+          : (stale ? 'stale_best_effort' : evidence.length ? 'fresh_evidence' : 'fresh_no_evidence'),
         evidenceCount: evidence.length,
         invalidCount,
         freshness,
@@ -871,7 +868,13 @@ class CassTranscriptAdapter {
     else if (
       failed > 0
       || budgetDegraded
-      || packet.connectorOutcomes.some((item) => ['incompatible', 'stale', 'stale_best_effort'].includes(item.status))
+      || packet.connectorOutcomes.some((item) => [
+        'fresh_partial',
+        'freshness_unknown',
+        'incompatible',
+        'stale',
+        'stale_best_effort',
+      ].includes(item.status))
     ) packet.status = TRANSCRIPT_STATUS.PARTIAL;
     else if (evidenceCount > 0) packet.status = TRANSCRIPT_STATUS.EVIDENCE_FOUND;
     else packet.status = TRANSCRIPT_STATUS.NO_EVIDENCE;

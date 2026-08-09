@@ -15,6 +15,7 @@ const {
   createTranscriptRequest,
   redactTranscriptText,
 } = require('../src/lib/transcript-retrieval.js');
+const { defaultAsyncRunner } = require('../src/lib/transcript-command-runner.js');
 
 function ok(stdout, extra = {}) {
   return {
@@ -98,6 +99,11 @@ test('defines a versioned request contract and rejects unsafe modes', () => {
     const rejected = createTranscriptRequest({ query: 'x', ...unsafe });
     assert.equal(rejected.valid, false, JSON.stringify(unsafe));
   }
+
+  for (const unsafeRef of ['session-a\nsession-b', '../session', '/tmp/session']) {
+    const rejected = createTranscriptRequest({ query: 'x', sessionRefs: [unsafeRef] });
+    assert.equal(rejected.valid, false, unsafeRef);
+  }
 });
 
 test('preflight discovers documented CASS connector slugs and capabilities', () => {
@@ -162,6 +168,14 @@ test('retrieves bounded, cited evidence with deterministic de-duplication', () =
             {
               source: 'codex',
               session_id: 'codex-session-1',
+              timestamp: '2026-07-20T12:01:00.000Z',
+              score: 0.94,
+              citation: 'turn:13',
+              snippet: 'Keep distinct cited evidence from the same session.',
+            },
+            {
+              source: 'codex',
+              session_id: 'codex-session-1',
               timestamp: '2026-07-20T12:00:00.000Z',
               score: 0.95,
               citation: 'turn:12',
@@ -187,11 +201,15 @@ test('retrieves bounded, cited evidence with deterministic de-duplication', () =
   const second = adapter.retrieve(request());
   assert.equal(first.schema, TRANSCRIPT_PACKET_SCHEMA);
   assert.equal(first.status, TRANSCRIPT_STATUS.EVIDENCE_FOUND);
-  assert.equal(first.evidence.length, 2);
+  assert.equal(first.evidence.length, 3);
   assert.deepEqual(first.evidence.map((item) => item.id), second.evidence.map((item) => item.id));
   assert.equal(first.evidence.every((item) => item.untrustedContent === true), true);
   assert.equal(first.evidence.some((item) => Object.prototype.hasOwnProperty.call(item, 'path')), false);
-  assert.equal(first.connectorOutcomes.find((item) => item.connector === 'codex').evidenceCount, 1);
+  assert.deepEqual(
+    first.evidence.filter((item) => item.connector === 'codex').map((item) => item.citation).sort(),
+    ['turn:12', 'turn:13'],
+  );
+  assert.equal(first.connectorOutcomes.find((item) => item.connector === 'codex').evidenceCount, 2);
   assert.equal(calls.filter((call) => call.args.includes('api-version')).length, 1);
 });
 
@@ -308,6 +326,33 @@ test('omits stale and malformed evidence as unavailable or invalid provenance', 
   const malformedPacket = malformed.retrieve(request({ connectors: ['codex'] }));
   assert.equal(malformedPacket.evidence.length, 0);
   assert.ok(malformedPacket.omissions.some((item) => /invalid_provenance/.test(item)));
+  assert.equal(malformedPacket.status, TRANSCRIPT_STATUS.PARTIAL);
+});
+
+test('fails closed on missing provenance, unsupported connectors, and unsafe citations', () => {
+  const baseRow = {
+    source: 'codex',
+    session_id: 'codex-session-safe',
+    timestamp: '2026-07-20T12:00:00.000Z',
+    snippet: 'bounded evidence',
+    citation: 'turn:1',
+  };
+  const rows = [
+    baseRow,
+    { ...baseRow, source: 'gemini-cli', path: '/safe/codex/one.jsonl' },
+    { ...baseRow, path: '/safe/codex/two.jsonl', message_id: '/private/transcript.jsonl' },
+  ];
+  const adapter = new CassTranscriptAdapter({
+    sourceRoots: ['/safe/codex'],
+    runner: preflightRunner([], () => ok({ results: rows, freshness: { stale: false } })),
+  });
+  const packet = adapter.retrieve(request({ connectors: ['codex'] }));
+  assert.equal(packet.evidence.length, 0);
+  assert.equal(packet.status, TRANSCRIPT_STATUS.PARTIAL);
+  assert.match(packet.omissions.join(' '), /missing_source_path/);
+  assert.match(packet.omissions.join(' '), /unsupported_connector/);
+  assert.match(packet.omissions.join(' '), /invalid_citation/);
+  assert.equal(JSON.stringify(packet).includes('/private/transcript.jsonl'), false);
 });
 
 test('uses fixed argv, no shell, minimal environment, and bounded output', () => {
@@ -356,7 +401,8 @@ test('normalizes schema-tagged requests before retrieval and preserves bounded d
   assert.equal(packCall.args[packCall.args.indexOf('--max-sessions') + 1], '6');
   assert.equal(packCall.args[packCall.args.indexOf('--max-excerpt-chars') + 1], '4000');
   assert.equal(packCall.args.includes('--freshness-policy'), true);
-  assert.ok([TRANSCRIPT_STATUS.NO_EVIDENCE, TRANSCRIPT_STATUS.EVIDENCE_FOUND].includes(packet.status));
+  assert.equal(packet.status, TRANSCRIPT_STATUS.UNAVAILABLE);
+  assert.match(packet.omissions.join(' '), /freshness_unknown/);
 });
 
 test('degrades safely on timeout and oversized output without leaking stderr or paths', () => {
@@ -519,6 +565,15 @@ test('async retrieval runs independent connector packs concurrently', async () =
   assert.equal(peak, 2);
   assert.equal(packet.status, TRANSCRIPT_STATUS.EVIDENCE_FOUND);
   assert.equal(packet.evidence.length, 2);
+});
+
+test('default async runner contains child stdin failures', async () => {
+  const result = await defaultAsyncRunner(process.execPath, ['-e', 'process.exit(0)'], {
+    input: 'x'.repeat(4 * 1024 * 1024),
+    timeoutMs: 1000,
+  });
+  assert.equal(typeof result.ok, 'boolean');
+  assert.equal(result.stderr, '');
 });
 
 test('async preflight is shared and keeps synchronous retrieval paths separate', async () => {
