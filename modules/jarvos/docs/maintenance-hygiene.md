@@ -1,6 +1,6 @@
 # Maintenance Hygiene
 
-Three patterns every OpenClaw deployment should have from day one. They keep the system cheap, responsive, and inspectable without turning local machine inventory into shared project data.
+Five patterns every OpenClaw deployment should have from day one. They keep the system cheap, responsive, and inspectable without turning local machine inventory into shared project data.
 
 ---
 
@@ -194,6 +194,49 @@ After that, switch to failure-only Paperclip updates plus release/check evidence
 If any check fails, the issue comment should include the smallest next action and
 the owner lane. Do not post raw tokens, MCP bearer credentials, or full provider
 config.
+
+---
+
+## Pattern 5: OpenClaw Plugin Persistence
+
+### The problem
+
+OpenClaw plugin projects and the generated registry are durable runtime state.
+They are not disposable caches, even when a package manager or cleanup report
+describes the directory as old. Deleting a registry-managed install path can
+leave the configured plugin present but unavailable, while deleting a staged
+jarvOS adapter breaks the adapter that jarvOS itself owns.
+
+### The safe boundary
+
+Discover protected paths from the supported OpenClaw registry and inspection
+surfaces for the same observation:
+
+```bash
+openclaw plugins registry --json
+openclaw plugins inspect --all --json
+jarvos doctor --profile local-openclaw --workspace /path/to/workspace --json
+```
+
+Preserve every current plugin root, install-record path, source, and manifest
+path reported by the registry. Also preserve the staged jarvOS runtime root.
+The current default directory is only an example; registry output is the
+authority for an installation's actual paths.
+
+A nightly cleanup may remove only roots it created and explicitly classifies as
+temporary. It must not sweep an entire OpenClaw npm/project tree, edit the
+generated registry database or index, or run broad plugin repair. Run a
+bounded preflight and post-cleanup inspection; if counts or plugin health
+change unexpectedly, stop and leave the state for manual review.
+
+### Recovery
+
+When doctor reports unrelated plugin drift, inspect the plugin id and confirm
+the intended package or path before using the official OpenClaw install or
+enable command for that one plugin. When the jarvOS staged adapter is missing,
+rerun the supported jarvOS managed setup after confirming its stable bundle.
+Do not ask jarvOS to reinstall arbitrary user plugins, and do not edit generated
+state by hand.
 
 ---
 

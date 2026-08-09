@@ -91,6 +91,16 @@ test('validateManifest accepts the Codex runtime manifest', () => {
   assert.equal(manifest.controlPlane.module, 'modules/jarvos-control-plane/scripts/jarvos-manager.js');
 });
 
+test('validateManifest accepts the OpenClaw persistence ownership and validation contract', () => {
+  const manifest = JSON.parse(fs.readFileSync(path.join(ROOT, 'runtimes/openclaw/adapter.json'), 'utf8'));
+  const result = validateManifest(manifest);
+  assert.equal(result.ok, true, result.errors.join('\n'));
+  assert.equal(manifest.stewardshipAdapter.persistence.owner, 'openclaw-plugin-registry');
+  assert.deepEqual(manifest.stewardshipAdapter.persistence.validation.command, ['plugins', 'inspect', '--all', '--json']);
+  assert.equal(manifest.stewardshipAdapter.persistence.validation.readOnly, true);
+  assert.equal(manifest.stewardshipAdapter.persistence.validation.activatesPluginCode, false);
+});
+
 test('validateManifest rejects incomplete control-plane parity declarations', () => {
   const result = validateManifest({
     schemaVersion: 1, id: 'bad-runtime', displayName: 'Bad Runtime', setup: { script: 'setup.sh' },

@@ -26,10 +26,10 @@ if [ "${JARVOS_STEWARDSHIP_ONLY:-0}" = "1" ] || [ "${JARVOS_MANAGED_HARNESS_ROLL
   if [ "${JARVOS_MANAGED_HARNESS_ROLLBACK:-0}" != "1" ]; then
     : "${JARVOS_STEWARDSHIP_STABLE_ROOT:?the stable stewardship bundle root is required}"
   fi
-  OPENCLAW_CONFIG="${OPENCLAW_CONFIG:-$HOME/.openclaw/openclaw.json}"
-  node - "$OPENCLAW_CONFIG" "${JARVOS_STEWARDSHIP_STABLE_ROOT:-}" "$JARVOS_MANAGED_HARNESS_STATE_ROOT/stewardship-bridge/openclaw-sessions" "${JARVOS_MANAGED_HARNESS_ROLLBACK:-0}" "${JARVOS_STAGED_PUBLIC_RUNTIME_ROOT:-}" <<'NODE'
-const fs = require('fs'); const path = require('path');
-const [configPath, stableRoot, mappingRoot, rollback, stagedRoot] = process.argv.slice(2);
+  OPENCLAW_CONFIG="${OPENCLAW_CONFIG:-${OPENCLAW_CONFIG_PATH:-$HOME/.openclaw/openclaw.json}}"
+  node - "$OPENCLAW_CONFIG" "${JARVOS_STEWARDSHIP_STABLE_ROOT:-}" "$JARVOS_MANAGED_HARNESS_STATE_ROOT/stewardship-bridge/openclaw-sessions" "${JARVOS_MANAGED_HARNESS_ROLLBACK:-0}" "${JARVOS_STAGED_PUBLIC_RUNTIME_ROOT:-}" "$REPO_ROOT/modules/jarvos-runtime-kit/src/openclaw-plugin-persistence.js" <<'NODE'
+const fs = require('fs'); const os = require('os'); const path = require('path');
+const [configPath, stableRoot, mappingRoot, rollback, stagedRoot, runtimeKitPath] = process.argv.slice(2);
 const pluginPath = stableRoot ? path.join(stableRoot, 'jarvos-openclaw-stewardship-plugin') : null;
 function trustedDirectory(value) {
   const stat = fs.lstatSync(value); const uid = typeof process.getuid === 'function' ? process.getuid() : null;
@@ -39,6 +39,60 @@ function trustedFile(value) {
   const stat = fs.lstatSync(value); const uid = typeof process.getuid === 'function' ? process.getuid() : null;
   return !stat.isSymbolicLink() && stat.isFile() && (stat.mode & 0o077) === 0 && (uid === null || stat.uid === uid);
 }
+function snapshot(filePath) {
+  let stat;
+  try { stat = fs.lstatSync(filePath); } catch (error) {
+    if (error.code === 'ENOENT') return { exists: false, bytes: null, mode: null };
+    throw error;
+  }
+  if (stat.isSymbolicLink()) throw new Error('refusing symlinked OpenClaw configuration');
+  if (!stat.isFile()) throw new Error('OpenClaw configuration is not a regular file');
+  return { exists: true, bytes: fs.readFileSync(filePath), mode: stat.mode & 0o7777 };
+}
+function rejectSymlink(filePath, label) {
+  try {
+    if (fs.lstatSync(filePath).isSymbolicLink()) throw new Error(`refusing symlinked ${label}`);
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+  }
+}
+function sameSnapshot(filePath, expected) {
+  const current = snapshot(filePath);
+  return current.exists === expected.exists
+    && (!current.exists || (current.mode === expected.mode && current.bytes.equals(expected.bytes)));
+}
+function assertUnchanged(filePath, expected) {
+  try {
+    if (!sameSnapshot(filePath, expected)) throw new Error('configuration changed');
+  } catch (error) {
+    throw new Error('OpenClaw configuration changed; manual reconciliation may be required');
+  }
+}
+function temporaryPath(filePath) {
+  return path.join(path.dirname(filePath), `.${path.basename(filePath)}.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2)}.tmp`);
+}
+function atomicReplace(filePath, bytes, mode, expected) {
+  if (expected) assertUnchanged(filePath, expected);
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  const tempPath = temporaryPath(filePath);
+  try {
+    fs.writeFileSync(tempPath, bytes, { flag: 'wx', mode });
+    fs.chmodSync(tempPath, mode);
+    if (expected) assertUnchanged(filePath, expected);
+    fs.renameSync(tempPath, filePath);
+  } catch (error) {
+    try { fs.unlinkSync(tempPath); } catch { /* best effort cleanup of our temp file */ }
+    throw error;
+  }
+}
+function restorePrior(filePath, prior, written) {
+  assertUnchanged(filePath, written);
+  if (!prior.exists) {
+    fs.unlinkSync(filePath);
+    return;
+  }
+  atomicReplace(filePath, prior.bytes, prior.mode, written);
+}
 // Keep the installed bundle aligned with the public OpenClaw adapter contract:
 // the package manifest, OpenClaw plugin manifest, and hook implementation are
 // all required before touching user configuration.
@@ -46,7 +100,8 @@ const requiredPluginFiles = ['package.json', 'openclaw.plugin.json', 'jarvos-nex
 if (rollback !== '1' && (!trustedDirectory(stableRoot) || !trustedDirectory(pluginPath) || !requiredPluginFiles.every((file) => trustedFile(path.join(pluginPath, file))))) {
   throw new Error('stable OpenClaw plugin is missing or unsafe');
 }
-const original = fs.existsSync(configPath) ? fs.readFileSync(configPath, 'utf8') : '{}\n';
+const prior = snapshot(configPath);
+const original = prior.exists ? prior.bytes.toString('utf8') : '{}\n';
 const config = JSON.parse(original || '{}');
 const plugins = config.plugins && typeof config.plugins === 'object' ? config.plugins : {};
 const tools = config.tools && typeof config.tools === 'object' ? config.tools : null;
@@ -59,7 +114,7 @@ const toolAllowAddedByJarvos = typeof existingToolOwnership === 'boolean'
   : Array.isArray(tools?.allow) && !tools.allow.includes('jarvos_stewardship_answer');
 const existingAgentGrant = stewardshipEntry?.config?.agentToolGrantByJarvos;
 let agentToolGrantByJarvos = existingAgentGrant && typeof existingAgentGrant === 'object' ? existingAgentGrant : null;
-const ownedPluginPaths = [pluginPath];
+const ownedPluginPaths = pluginPath ? [pluginPath] : [];
 if (path.isAbsolute(stagedRoot || '')) ownedPluginPaths.push(path.join(stagedRoot, 'runtimes', 'openclaw'));
 const requestedAgentId = process.env.JARVOS_OPENCLAW_AGENT_ID || 'main';
 const targetAgentId = rollback === '1' && typeof agentToolGrantByJarvos?.agentId === 'string' ? agentToolGrantByJarvos.agentId : requestedAgentId;
@@ -110,16 +165,60 @@ if (rollback === '1') {
   plugins.entries['jarvos-stewardship'] = { ...entry, enabled: true, config: { ...(entry.config || {}), mappingRoot, toolAllowAddedByJarvos, ...(agentToolGrantByJarvos ? { agentToolGrantByJarvos } : {}) }, hooks: { ...(entry.hooks || {}), allowPromptInjection: true } };
 }
 const next = `${JSON.stringify(config, null, 2)}\n`;
-if (next !== original) {
-  fs.mkdirSync(path.dirname(configPath), { recursive: true });
-  const mode = fs.existsSync(configPath) ? fs.statSync(configPath).mode & 0o777 : 0o600;
-  if (fs.existsSync(configPath)) {
+const nextBytes = Buffer.from(next, 'utf8');
+const changed = !prior.exists || !prior.bytes.equals(nextBytes);
+if (changed) {
+  const mode = prior.exists ? prior.mode : 0o600;
+  if (prior.exists) {
     const stamp = new Date().toISOString().replace(/[:.]/g, '');
-    fs.copyFileSync(configPath, `${configPath}.bak-jarvos-stewardship-${stamp}-${process.pid}`);
+    const backupPath = `${configPath}.bak-jarvos-stewardship-${stamp}-${process.pid}`;
+    rejectSymlink(backupPath, 'OpenClaw configuration backup');
+    fs.copyFileSync(configPath, backupPath, fs.constants.COPYFILE_EXCL);
+    fs.chmodSync(backupPath, prior.mode);
   }
-  const temp = path.join(path.dirname(configPath), `.${path.basename(configPath)}.${process.pid}.${Date.now()}`);
-  fs.writeFileSync(temp, next, { mode }); fs.chmodSync(temp, mode); fs.renameSync(temp, configPath);
+  atomicReplace(configPath, nextBytes, mode, prior);
 }
+
+async function verifyRegistration() {
+  const { verifyOpenClawPluginRegistration } = require(runtimeKitPath);
+  const validationEnv = { ...process.env };
+  const defaultConfigPath = path.join(process.env.HOME || os.homedir(), '.openclaw', 'openclaw.json');
+  if (path.resolve(configPath) === path.resolve(defaultConfigPath) && !process.env.OPENCLAW_CONFIG_PATH) {
+    delete validationEnv.OPENCLAW_CONFIG_PATH;
+  } else {
+    validationEnv.OPENCLAW_CONFIG_PATH = configPath;
+  }
+  return verifyOpenClawPluginRegistration({
+    executable: 'openclaw',
+    pluginId: 'jarvos-stewardship',
+    pluginPath,
+    timeoutMs: 30000,
+    env: validationEnv,
+  });
+}
+
+(async () => {
+  if (rollback === '1' || !pluginPath) return;
+  let verification;
+  try {
+    verification = await verifyRegistration();
+  } catch {
+    verification = { status: 'compatibility', reason: 'verification-failed' };
+  }
+  if (verification.status === 'ok') return;
+  if (!changed) throw new Error(`staged OpenClaw plugin registration verification failed: ${verification.reason}`);
+  const written = { exists: true, bytes: nextBytes, mode: prior.exists ? prior.mode : 0o600 };
+  try {
+    restorePrior(configPath, prior, written);
+  } catch (error) {
+    if (/manual reconciliation/i.test(error.message)) throw error;
+    throw new Error('staged OpenClaw plugin registration verification failed and rollback could not be completed');
+  }
+  throw new Error(`staged OpenClaw plugin registration verification failed; prior configuration restored: ${verification.reason}`);
+})().catch((error) => {
+  process.stderr.write(`${error.message || 'OpenClaw setup failed'}\n`);
+  process.exitCode = 1;
+});
 NODE
   if [ "${JARVOS_MANAGED_HARNESS_ROLLBACK:-0}" = "1" ]; then
     echo "Removed only the stable jarvOS OpenClaw stewardship plugin configuration."

@@ -659,6 +659,38 @@ function prepareStableStewardshipBundle(temp, rootName = 'managed-harness-bin') 
   return root;
 }
 
+function prepareFakeOpenClaw(temp) {
+  const bin = path.join(temp, 'openclaw-bin');
+  fs.mkdirSync(bin, { recursive: true });
+  const executable = path.join(bin, 'openclaw');
+  fs.writeFileSync(executable, `#!/usr/bin/env node
+'use strict';
+const fs = require('fs');
+const args = process.argv.slice(2);
+if (args.length === 1 && args[0] === '--version') {
+  process.stdout.write('OpenClaw 2026.7.1\\n');
+  process.exit(0);
+}
+if (args.join(' ') !== 'plugins inspect --all --json') process.exit(2);
+if (process.env.JARVOS_FAKE_OPENCLAW_MODE === 'timeout') setInterval(() => {}, 1000);
+if (process.env.JARVOS_FAKE_OPENCLAW_MODE === 'fail') process.exit(1);
+if (process.env.JARVOS_FAKE_OPENCLAW_MODE === 'concurrent-fail') {
+  const configPath = process.env.OPENCLAW_CONFIG_PATH || process.env.OPENCLAW_CONFIG;
+  const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+  config.concurrentUserChange = true;
+  fs.writeFileSync(configPath, JSON.stringify(config, null, 2) + '\\n');
+  process.exit(1);
+}
+const mode = process.env.JARVOS_FAKE_OPENCLAW_MODE || 'healthy';
+const rootDir = mode === 'mismatch' ? '/synthetic/openclaw/other-plugin' : process.env.JARVOS_FAKE_OPENCLAW_PLUGIN_PATH;
+const status = mode === 'unavailable' ? 'error' : 'loaded';
+const enabled = mode !== 'disabled';
+process.stdout.write(JSON.stringify([{ plugin: { id: 'jarvos-stewardship', status, enabled, rootDir, version: '1.0.0' }, diagnostics: [] }]));
+`, { mode: 0o755 });
+  fs.chmodSync(executable, 0o755);
+  return bin;
+}
+
 function count(content, pattern) {
   return (content.match(pattern) || []).length;
 }
@@ -682,7 +714,8 @@ test('OpenClaw stewardship-only setup preserves unrelated configuration and roll
     const stable = prepareStableStewardshipBundle(temp);
     fs.mkdirSync(path.join(staged, 'runtimes', 'openclaw'), { recursive: true });
     fs.writeFileSync(config, `${JSON.stringify({ plugins: { load: { paths: ['/user/jarvos-openclaw-stewardship-plugin', path.join(staged, 'runtimes', 'openclaw')] }, allow: ['unrelated'], entries: { unrelated: { enabled: true } } }, tools: { profile: 'coding', allow: ['read'] }, agents: { list: [{ id: 'main', tools: { alsoAllow: ['browser'] } }] }, unrelated: { keep: true } }, null, 2)}\n`);
-    const env = { ...process.env, HOME: path.join(temp, 'home'), OPENCLAW_CONFIG: config, JARVOS_STEWARDSHIP_ONLY: '1', JARVOS_MANAGED_REPOSITORIES: '/managed/repo', JARVOS_STAGED_PUBLIC_RUNTIME_ROOT: staged, JARVOS_STEWARDSHIP_STABLE_ROOT: stable, JARVOS_MANAGED_HARNESS_STATE_ROOT: state };
+    const fakeOpenClaw = prepareFakeOpenClaw(temp);
+    const env = { ...process.env, HOME: path.join(temp, 'home'), PATH: `${fakeOpenClaw}${path.delimiter}${process.env.PATH || ''}`, OPENCLAW_CONFIG: config, JARVOS_FAKE_OPENCLAW_PLUGIN_PATH: path.join(stable, 'jarvos-openclaw-stewardship-plugin'), JARVOS_STEWARDSHIP_ONLY: '1', JARVOS_MANAGED_REPOSITORIES: '/managed/repo', JARVOS_STAGED_PUBLIC_RUNTIME_ROOT: staged, JARVOS_STEWARDSHIP_STABLE_ROOT: stable, JARVOS_MANAGED_HARNESS_STATE_ROOT: state };
     const script = path.join(ROOT, 'runtimes', 'openclaw', 'setup.sh');
     runSetup(script, env); const first = fs.readFileSync(config, 'utf8'); runSetup(script, env); assert.equal(fs.readFileSync(config, 'utf8'), first);
     let parsed = JSON.parse(first); assert.deepEqual(parsed.plugins.load.paths, ['/user/jarvos-openclaw-stewardship-plugin', path.join(stable, 'jarvos-openclaw-stewardship-plugin')]); assert.equal(parsed.unrelated.keep, true); assert.equal(parsed.plugins.entries.unrelated.enabled, true); assert.equal(parsed.plugins.entries['jarvos-stewardship'].config.mappingRoot, path.join(state, 'stewardship-bridge', 'openclaw-sessions')); assert.deepEqual(parsed.tools.allow, ['read', 'jarvos_stewardship_answer']);
@@ -704,7 +737,8 @@ test('OpenClaw rollback preserves a stewardship tool grant that predated jarvOS 
     const stable = prepareStableStewardshipBundle(temp);
     fs.mkdirSync(path.join(staged, 'runtimes', 'openclaw'), { recursive: true });
     fs.writeFileSync(config, `${JSON.stringify({ tools: { profile: 'coding', allow: ['read', 'jarvos_stewardship_answer'] }, agents: { list: [{ id: 'main', tools: { alsoAllow: ['jarvos_stewardship_answer'] } }] } }, null, 2)}\n`);
-    const env = { ...process.env, HOME: path.join(temp, 'home'), OPENCLAW_CONFIG: config, JARVOS_STEWARDSHIP_ONLY: '1', JARVOS_MANAGED_REPOSITORIES: '/managed/repo', JARVOS_STAGED_PUBLIC_RUNTIME_ROOT: staged, JARVOS_STEWARDSHIP_STABLE_ROOT: stable, JARVOS_MANAGED_HARNESS_STATE_ROOT: state };
+    const fakeOpenClaw = prepareFakeOpenClaw(temp);
+    const env = { ...process.env, HOME: path.join(temp, 'home'), PATH: `${fakeOpenClaw}${path.delimiter}${process.env.PATH || ''}`, OPENCLAW_CONFIG: config, JARVOS_FAKE_OPENCLAW_PLUGIN_PATH: path.join(stable, 'jarvos-openclaw-stewardship-plugin'), JARVOS_STEWARDSHIP_ONLY: '1', JARVOS_MANAGED_REPOSITORIES: '/managed/repo', JARVOS_STAGED_PUBLIC_RUNTIME_ROOT: staged, JARVOS_STEWARDSHIP_STABLE_ROOT: stable, JARVOS_MANAGED_HARNESS_STATE_ROOT: state };
     const script = path.join(ROOT, 'runtimes', 'openclaw', 'setup.sh');
     runSetup(script, env); const installed = JSON.parse(fs.readFileSync(config, 'utf8')); assert.equal(installed.plugins.entries['jarvos-stewardship'].config.toolAllowAddedByJarvos, false); assert.equal(installed.plugins.entries['jarvos-stewardship'].config.agentToolGrantByJarvos.added, false);
     fs.rmSync(stable, { recursive: true, force: true });
@@ -724,6 +758,67 @@ test('OpenClaw setup does not claim permission ownership when its configuration 
     const result = runSetupResult(path.join(ROOT, 'runtimes', 'openclaw', 'setup.sh'), env);
     assert.notEqual(result.status, 0); assert.deepEqual(JSON.parse(fs.readFileSync(config, 'utf8')).tools.allow, ['read']);
   } finally { fs.chmodSync(configRoot, 0o700); fs.rmSync(temp, { recursive: true, force: true }); }
+});
+
+test('OpenClaw setup restores exact prior bytes and mode when staged registration verification fails', () => {
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-openclaw-stewardship-rollback-'));
+  const config = path.join(temp, 'openclaw.json'); const staged = path.join(temp, 'stage'); const state = path.join(temp, 'state');
+  try {
+    const stable = prepareStableStewardshipBundle(temp);
+    const fakeOpenClaw = prepareFakeOpenClaw(temp);
+    fs.mkdirSync(path.join(staged, 'runtimes', 'openclaw'), { recursive: true });
+    const original = Buffer.from('{"unrelated":true}\n');
+    fs.writeFileSync(config, original); fs.chmodSync(config, 0o640);
+    const env = { ...process.env, HOME: path.join(temp, 'home'), PATH: `${fakeOpenClaw}${path.delimiter}${process.env.PATH || ''}`, OPENCLAW_CONFIG: config, JARVOS_FAKE_OPENCLAW_MODE: 'fail', JARVOS_FAKE_OPENCLAW_PLUGIN_PATH: path.join(stable, 'jarvos-openclaw-stewardship-plugin'), JARVOS_STEWARDSHIP_ONLY: '1', JARVOS_MANAGED_REPOSITORIES: '/managed/repo', JARVOS_STAGED_PUBLIC_RUNTIME_ROOT: staged, JARVOS_STEWARDSHIP_STABLE_ROOT: stable, JARVOS_MANAGED_HARNESS_STATE_ROOT: state };
+    const result = runSetupResult(path.join(ROOT, 'runtimes', 'openclaw', 'setup.sh'), env);
+    assert.notEqual(result.status, 0);
+    assert.deepEqual(fs.readFileSync(config), original);
+    assert.equal(fs.statSync(config).mode & 0o777, 0o640);
+    assert.match(`${result.stdout}\n${result.stderr}`, /verification|registration/i);
+  } finally { fs.rmSync(temp, { recursive: true, force: true }); }
+});
+
+test('OpenClaw setup removes only a newly created config when verification fails', () => {
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-openclaw-stewardship-absent-config-'));
+  const config = path.join(temp, 'config', 'openclaw.json'); const staged = path.join(temp, 'stage'); const state = path.join(temp, 'state');
+  try {
+    const stable = prepareStableStewardshipBundle(temp); const fakeOpenClaw = prepareFakeOpenClaw(temp);
+    fs.mkdirSync(path.join(staged, 'runtimes', 'openclaw'), { recursive: true });
+    const env = { ...process.env, HOME: path.join(temp, 'home'), PATH: `${fakeOpenClaw}${path.delimiter}${process.env.PATH || ''}`, OPENCLAW_CONFIG: config, JARVOS_FAKE_OPENCLAW_MODE: 'fail', JARVOS_FAKE_OPENCLAW_PLUGIN_PATH: path.join(stable, 'jarvos-openclaw-stewardship-plugin'), JARVOS_STEWARDSHIP_ONLY: '1', JARVOS_MANAGED_REPOSITORIES: '/managed/repo', JARVOS_STAGED_PUBLIC_RUNTIME_ROOT: staged, JARVOS_STEWARDSHIP_STABLE_ROOT: stable, JARVOS_MANAGED_HARNESS_STATE_ROOT: state };
+    const result = runSetupResult(path.join(ROOT, 'runtimes', 'openclaw', 'setup.sh'), env);
+    assert.notEqual(result.status, 0);
+    assert.equal(fs.existsSync(config), false);
+  } finally { fs.rmSync(temp, { recursive: true, force: true }); }
+});
+
+test('OpenClaw setup preserves a concurrent config edit instead of rolling it back', () => {
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-openclaw-stewardship-concurrent-'));
+  const config = path.join(temp, 'openclaw.json'); const staged = path.join(temp, 'stage'); const state = path.join(temp, 'state');
+  try {
+    const stable = prepareStableStewardshipBundle(temp); const fakeOpenClaw = prepareFakeOpenClaw(temp);
+    fs.mkdirSync(path.join(staged, 'runtimes', 'openclaw'), { recursive: true });
+    fs.writeFileSync(config, `${JSON.stringify({ unrelated: true }, null, 2)}\n`);
+    const env = { ...process.env, HOME: path.join(temp, 'home'), PATH: `${fakeOpenClaw}${path.delimiter}${process.env.PATH || ''}`, OPENCLAW_CONFIG: config, JARVOS_FAKE_OPENCLAW_MODE: 'concurrent-fail', JARVOS_FAKE_OPENCLAW_PLUGIN_PATH: path.join(stable, 'jarvos-openclaw-stewardship-plugin'), JARVOS_STEWARDSHIP_ONLY: '1', JARVOS_MANAGED_REPOSITORIES: '/managed/repo', JARVOS_STAGED_PUBLIC_RUNTIME_ROOT: staged, JARVOS_STEWARDSHIP_STABLE_ROOT: stable, JARVOS_MANAGED_HARNESS_STATE_ROOT: state };
+    const result = runSetupResult(path.join(ROOT, 'runtimes', 'openclaw', 'setup.sh'), env);
+    assert.notEqual(result.status, 0);
+    assert.equal(JSON.parse(fs.readFileSync(config, 'utf8')).concurrentUserChange, true);
+    assert.match(`${result.stdout}\n${result.stderr}`, /manual reconciliation/i);
+  } finally { fs.rmSync(temp, { recursive: true, force: true }); }
+});
+
+test('OpenClaw setup rejects a symlinked config before any write', () => {
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-openclaw-stewardship-config-symlink-'));
+  const target = path.join(temp, 'target.json'); const config = path.join(temp, 'openclaw.json'); const staged = path.join(temp, 'stage'); const state = path.join(temp, 'state');
+  try {
+    const stable = prepareStableStewardshipBundle(temp); const fakeOpenClaw = prepareFakeOpenClaw(temp);
+    fs.mkdirSync(path.join(staged, 'runtimes', 'openclaw'), { recursive: true });
+    const original = '{"unrelated":true}\n'; fs.writeFileSync(target, original); fs.symlinkSync(target, config);
+    const env = { ...process.env, HOME: path.join(temp, 'home'), PATH: `${fakeOpenClaw}${path.delimiter}${process.env.PATH || ''}`, OPENCLAW_CONFIG: config, JARVOS_FAKE_OPENCLAW_PLUGIN_PATH: path.join(stable, 'jarvos-openclaw-stewardship-plugin'), JARVOS_STEWARDSHIP_ONLY: '1', JARVOS_MANAGED_REPOSITORIES: '/managed/repo', JARVOS_STAGED_PUBLIC_RUNTIME_ROOT: staged, JARVOS_STEWARDSHIP_STABLE_ROOT: stable, JARVOS_MANAGED_HARNESS_STATE_ROOT: state };
+    const result = runSetupResult(path.join(ROOT, 'runtimes', 'openclaw', 'setup.sh'), env);
+    assert.notEqual(result.status, 0);
+    assert.equal(fs.readFileSync(target, 'utf8'), original);
+    assert.equal(fs.lstatSync(config).isSymbolicLink(), true);
+  } finally { fs.rmSync(temp, { recursive: true, force: true }); }
 });
 
 test('OpenClaw rejects relative, missing, and unsafe stable plugin bundles without mutating configuration', () => {

@@ -10,6 +10,9 @@ const {
   initJarvosWorkspace,
   loadPack,
 } = require('../../jarvos-skills/src');
+const {
+  collectOpenClawPluginEvidence,
+} = require('../../jarvos-runtime-kit/src');
 
 const MINIMAL_WORKSPACE_FILES = [
   'MEMORY.md',
@@ -176,9 +179,16 @@ function createStatusCheck(component, status, message, details = {}) {
   };
 }
 
-function validateWorkspaceFiles(workspace) {
+function resolveDoctorConfigPath(workspace, options = {}) {
+  return path.resolve(expandHome(options.configPath || path.join(workspace, 'jarvos.config.json')));
+}
+
+function validateWorkspaceFiles(workspace, configPath = path.join(workspace, 'jarvos.config.json')) {
   const missing = MINIMAL_WORKSPACE_FILES.filter((relativePath) => {
-    return !fileExists(path.join(workspace, relativePath));
+    const filePath = relativePath === 'jarvos.config.json'
+      ? configPath
+      : path.join(workspace, relativePath);
+    return !fileExists(filePath);
   });
 
   if (missing.length > 0) {
@@ -248,8 +258,7 @@ function validateAgentContextHydration(workspace) {
   });
 }
 
-function validateConfigSchema(workspace) {
-  const configPath = path.join(workspace, 'jarvos.config.json');
+function validateConfigSchema(workspace, configPath = path.join(workspace, 'jarvos.config.json')) {
   const schemaPath = path.join(workspace, 'jarvos.config.schema.json');
 
   const configResult = readJson(configPath);
@@ -530,6 +539,7 @@ function validateObsidianPaths(workspace, config, options = {}) {
 
 function runMinimalDoctor(options = {}) {
   const workspace = path.resolve(options.workspace || process.cwd());
+  const configPath = resolveDoctorConfigPath(workspace, options);
   const checks = [];
 
   if (!directoryExists(workspace)) {
@@ -548,9 +558,9 @@ function runMinimalDoctor(options = {}) {
   checks.push(createCheck('workspace.root', true, `Found workspace directory: ${workspace}`, {
     path: workspace,
   }));
-  checks.push(validateWorkspaceFiles(workspace));
+  checks.push(validateWorkspaceFiles(workspace, configPath));
 
-  const configSchemaCheck = validateConfigSchema(workspace);
+  const configSchemaCheck = validateConfigSchema(workspace, configPath);
   checks.push(configSchemaCheck);
   for (const key of REQUIRED_PATH_KEYS) {
     checks.push(validateConfiguredDirectory(workspace, configSchemaCheck.config, key));
@@ -566,6 +576,7 @@ function runMinimalDoctor(options = {}) {
   return {
     profile: 'minimal',
     workspace,
+    configPath,
     ok,
     status: ok ? 'ok' : 'failed',
     checks: checks.map(({ config, ...check }) => check),
@@ -592,12 +603,13 @@ function profileNeedsOpenClawAdapter(profile) {
   return normalizeProfile(profile) === 'local-openclaw';
 }
 
-function validateJarvosProfile(options = {}) {
+async function validateJarvosProfile(options = {}) {
   const workspace = path.resolve(options.workspace || process.cwd());
+  const configPath = resolveDoctorConfigPath(workspace, options);
   const profile = normalizeProfile(options.profile || 'minimal');
   const packName = options.packName || (profile === 'local-openclaw' ? 'local-openclaw' : 'v0-5-0');
-  const checks = runMinimalDoctor({ workspace }).checks;
-  const config = readWorkspaceConfig(workspace);
+  const checks = runMinimalDoctor({ ...options, workspace, configPath }).checks;
+  const config = readWorkspaceConfig(workspace, configPath);
   const pack = loadPack(packName);
   const plan = buildInstallPlan({
     pack,
@@ -643,6 +655,7 @@ function validateJarvosProfile(options = {}) {
       : createStatusCheck('openclaw.runtimeConfig', 'skipped', 'OpenClaw runtime config is absent; jarvOS init will not create or overwrite it', {
         path: runtimeConfig?.resolvedPath || path.join(options.openclawStateDir || path.join(os.homedir(), '.openclaw'), 'openclaw.json'),
       }));
+    checks.push(await validateOpenClawPluginPersistence(options, config, openclawCommand));
   }
 
   const hasPack = Boolean(config?.skillPacks?.installed?.includes(pack.name));
@@ -901,20 +914,140 @@ function defaultInstalledSkillsManifestPath(workspace, profile) {
 
 function resolveOpenClawStateDir(options = {}, config) {
   const configured = config?.runtimeAdapters?.openclaw?.stateDir;
-  return path.resolve(expandHome(options.openclawStateDir || configured || path.join(os.homedir(), '.openclaw')));
+  const envConfigPath = process.env.OPENCLAW_CONFIG_PATH;
+  const envStateDir = typeof envConfigPath === 'string' && envConfigPath.trim()
+    ? path.dirname(expandHome(envConfigPath))
+    : null;
+  return path.resolve(expandHome(options.openclawStateDir || configured || envStateDir || path.join(os.homedir(), '.openclaw')));
 }
 
-function readWorkspaceConfig(workspace) {
-  const configPath = path.join(workspace, 'jarvos.config.json');
+function resolveStagedOpenClawRuntimeRoot(options = {}, config) {
+  const configured = config?.runtimeAdapters?.openclaw?.stagedRuntimeRoot;
+  return path.resolve(expandHome(
+    options.stagedRuntimeRoot
+      || configured
+      || process.env.JARVOS_STAGED_PUBLIC_RUNTIME_ROOT
+      || path.join(__dirname, '..', '..', '..'),
+  ));
+}
+
+function stagedOpenClawAdapterEvidence(options = {}, config) {
+  const runtimeDir = path.join(resolveStagedOpenClawRuntimeRoot(options, config), 'runtimes', 'openclaw');
+  return {
+    path: path.join(runtimeDir, 'jarvos-next-turn-plugin.js'),
+    exists: fileExists(path.join(runtimeDir, 'jarvos-next-turn-plugin.js')),
+    manifestExists: fileExists(path.join(runtimeDir, 'openclaw.plugin.json'))
+      && fileExists(path.join(runtimeDir, 'package.json')),
+  };
+}
+
+function persistenceSummaryDetails(result) {
+  const summary = result && typeof result.summary === 'object' ? result.summary : {};
+  const boundedCount = (value) => Number.isInteger(value) && value >= 0 && value <= 100000 ? value : 0;
+  return {
+    pluginCount: boundedCount(summary.pluginCount),
+    protectedRootCount: boundedCount(summary.protectedRootCount),
+    driftCount: boundedCount(summary.driftCount),
+    evidenceVersion: result?.evidence?.version === '2026.7.1' ? '2026.7.1' : 'unknown',
+    recoveryCommands: [
+      'openclaw plugins inspect --all --json',
+      'openclaw plugins list --json',
+      'openclaw plugins doctor',
+      'openclaw plugins install <approved-spec>',
+      'openclaw plugins update <id>',
+    ],
+  };
+}
+
+function mapOpenClawPersistenceResult(result) {
+  if (!result || result.status === 'compatibility') {
+    return createStatusCheck(
+      'openclaw.pluginPersistence',
+      'skipped',
+      'OpenClaw plugin persistence check skipped because supported structured CLI evidence is unavailable',
+      { reason: 'compatibility', ...persistenceSummaryDetails(result) },
+    );
+  }
+
+  const details = persistenceSummaryDetails(result);
+  if (result.jarvosAdapter?.status === 'missing-staged-adapter') {
+    return createStatusCheck(
+      'openclaw.pluginPersistence',
+      'fail',
+      'jarvOS staged OpenClaw adapter is missing; rerun the supported local-openclaw setup',
+      { reason: 'missing-staged-adapter', ...details },
+    );
+  }
+
+  if (result.status === 'indeterminate') {
+    return createStatusCheck(
+      'openclaw.pluginPersistence',
+      'warn',
+      'OpenClaw plugin persistence is indeterminate because its evidence was incomplete or changed during inspection',
+      { reason: 'indeterminate', ...details },
+    );
+  }
+
+  if (result.status === 'warn') {
+    return createStatusCheck(
+      'openclaw.pluginPersistence',
+      'warn',
+      'OpenClaw plugin persistence drift detected; review the supported OpenClaw commands before recovery',
+      { reason: 'plugin-drift', ...details },
+    );
+  }
+
+  if (result.status === 'ok') {
+    return createStatusCheck(
+      'openclaw.pluginPersistence',
+      'ok',
+      'OpenClaw managed plugin persistence is healthy',
+      { reason: 'healthy', ...details },
+    );
+  }
+
+  return createStatusCheck(
+    'openclaw.pluginPersistence',
+    'warn',
+    'OpenClaw plugin persistence could not be classified safely',
+    { reason: 'unknown-result', ...details },
+  );
+}
+
+async function validateOpenClawPluginPersistence(options = {}, config, command) {
+  if (!options.openclawPluginEvidence && command && command.present === false) {
+    return createStatusCheck(
+      'openclaw.pluginPersistence',
+      'skipped',
+      'OpenClaw plugin persistence check skipped because the OpenClaw command is not installed',
+      { reason: 'command-missing', recoveryCommands: ['Install OpenClaw, then rerun jarvos doctor'] },
+    );
+  }
+
+  const evidence = options.openclawPluginEvidence || await collectOpenClawPluginEvidence({
+    executable: options.openclawCommand || 'openclaw',
+    timeoutMs: options.openclawPluginTimeoutMs,
+    outputLimit: options.openclawPluginOutputLimit,
+    filesystem: {
+      exists: (filePath) => fileExists(filePath) || directoryExists(filePath),
+      isFile: (filePath) => fileExists(filePath),
+    },
+    stagedAdapter: stagedOpenClawAdapterEvidence(options, config),
+  });
+  return mapOpenClawPersistenceResult(evidence);
+}
+
+function readWorkspaceConfig(workspace, configPath = path.join(workspace, 'jarvos.config.json')) {
   const result = readJson(configPath);
   return result.ok ? result.value : null;
 }
 
-function validateOpenClawProfile(options = {}) {
+async function validateOpenClawProfile(options = {}) {
   const workspace = path.resolve(options.workspace || process.cwd());
+  const configPath = resolveDoctorConfigPath(workspace, options);
   const profile = normalizeProfile(options.profile || 'local-openclaw');
-  const checks = runMinimalDoctor({ workspace }).checks;
-  const config = readWorkspaceConfig(workspace);
+  const checks = runMinimalDoctor({ ...options, workspace, configPath }).checks;
+  const config = readWorkspaceConfig(workspace, configPath);
   const openclawStateDir = resolveOpenClawStateDir(options, config);
   const pack = loadPack('local-openclaw');
   const plan = buildInstallPlan({
@@ -959,6 +1092,7 @@ function validateOpenClawProfile(options = {}) {
     : createStatusCheck('openclaw.runtimeConfig', 'skipped', 'OpenClaw runtime config is absent; jarvOS init will not create or overwrite it', {
       path: runtimeConfig?.resolvedPath || path.join(openclawStateDir, 'openclaw.json'),
     }));
+  checks.push(await validateOpenClawPluginPersistence(options, config, openclawCommand));
 
   const adapter = config?.runtimeAdapters?.openclaw;
   checks.push(adapter?.kind === 'openclaw'
@@ -1000,7 +1134,7 @@ function validateOpenClawProfile(options = {}) {
   };
 }
 
-function runProfileDoctor(options = {}) {
+async function runProfileDoctor(options = {}) {
   const profile = normalizeProfile(options.profile || 'minimal');
   if (profile === 'minimal') {
     return runMinimalDoctor(options);
@@ -1043,7 +1177,7 @@ function ensurePortableWorkspaceFiles(workspace) {
   return writes;
 }
 
-function initProfile(options = {}) {
+async function initProfile(options = {}) {
   const profile = assertLocalOpenClawProfile(options.profile || 'local-openclaw');
   const packName = profile === 'local-openclaw' ? 'local-openclaw' : 'v0-5-0';
   const result = initJarvosWorkspace({
@@ -1058,9 +1192,10 @@ function initProfile(options = {}) {
     providerStatuses: options.providerStatuses,
   });
   const portableWorkspaceWrites = ensurePortableWorkspaceFiles(result.workspaceRoot);
-  const doctor = runProfileDoctor({
+  const doctor = await runProfileDoctor({
     profile,
     workspace: result.workspaceRoot,
+    configPath: options.configPath,
     openclawStateDir: result.openclawStateDir,
     commandsPresent: options.commandsPresent,
     filesPresent: options.filesPresent,
@@ -1070,6 +1205,10 @@ function initProfile(options = {}) {
     gbrainCommandResults: options.gbrainCommandResults,
     gbrainRuntimeConnections: options.gbrainRuntimeConnections,
     gbrainCommandTimeoutMs: options.gbrainCommandTimeoutMs,
+    openclawPluginEvidence: options.openclawPluginEvidence,
+    openclawPluginTimeoutMs: options.openclawPluginTimeoutMs,
+    openclawPluginOutputLimit: options.openclawPluginOutputLimit,
+    stagedRuntimeRoot: options.stagedRuntimeRoot,
   });
 
   return {
@@ -1105,8 +1244,11 @@ module.exports = {
   formatDoctorResult,
   defaultKnowledgeDirectory,
   initProfile,
+  mapOpenClawPersistenceResult,
   runProfileDoctor,
   runMinimalDoctor,
+  validateJarvosProfile,
+  validateOpenClawProfile,
   validateObsidianPaths,
   validateObsidianSingleWriter,
 };

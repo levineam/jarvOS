@@ -70,8 +70,10 @@ test('creation CLI records the host scheduler provenance contract', () => {
   try {
     const ensure = spawnSync(process.execPath, [ensureScript, '--create-if-missing', '--json'], { encoding: 'utf8', env });
     assert.equal(ensure.status, 0, ensure.stderr);
-    assert.equal(JSON.parse(ensure.stdout).results[0].provenance.trigger, 'scheduled');
-    const sentinelPath = path.join(home, 'vault', '.jarvos', 'journal-maintenance', 'receipts', '2026-08-08.receipt');
+    const result = JSON.parse(ensure.stdout).results[0];
+    assert.equal(result.provenance.trigger, 'scheduled');
+    assert.match(result.date, /^\d{4}-\d{2}-\d{2}$/);
+    const sentinelPath = path.join(home, 'vault', '.jarvos', 'journal-maintenance', 'receipts', `${result.date}.receipt`);
     assert.equal(JSON.parse(fs.readFileSync(sentinelPath, 'utf8')).trigger, 'scheduled');
   } finally {
     fs.rmSync(home, { recursive: true, force: true });

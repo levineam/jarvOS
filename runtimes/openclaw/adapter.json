@@ -55,6 +55,16 @@
       "installedConfig": { "inspection": "stable-entrypoint-only", "prepare": "reversible", "rollback": "exact-owned-state" },
       "provenance": { "action": "provenance-probe", "sideEffectFree": true }
     },
+    "persistence": {
+      "owner": "openclaw-plugin-registry",
+      "validation": {
+        "command": ["plugins", "inspect", "--all", "--json"],
+        "schema": "openclaw-plugin-inspection-array.v1",
+        "readOnly": true,
+        "activatesPluginCode": false,
+        "targetPluginId": "jarvos-stewardship"
+      }
+    },
     "bridge": {
       "environment": "JARVOS_STEWARDSHIP_BRIDGE_COMMAND",
       "route": "owner-only hashed session mapping",
