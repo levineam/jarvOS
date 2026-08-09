@@ -756,7 +756,6 @@ class CassTranscriptAdapter {
       if (!packet.omissions.includes('aggregate_budget')) packet.omissions.push('aggregate_budget');
       measured = measure();
     }
-    measured = measure();
     packet.evidence = selected;
     packet.renderedTokenCount = measured.tokenCount;
     return packet;
