@@ -15,6 +15,7 @@ and boundary documentation at the JarVOS layer.
 | --- | --- | --- | --- |
 | `jarvos-secondbrain` | `jarvos-secondbrain/`, Journal, Notes | Human-readable chronology, raw capture, source notes, long-form research | Compact durable memory registry, live task status |
 | `qmd` | OpenClaw QMD backend, standalone `qmd` CLI | Fast markdown lookup, note retrieval, transcript/session evidence search | Curated durable records, semantic graph truth |
+| `cass` | Optional local CASS binary behind the transcript adapter | Cross-agent Codex/Claude Code transcript indexing and bounded lexical evidence packs | JarvOS policy, durable memory authority, remote synchronization, raw promotion |
 | `gbrain` | GBrain and memory-wiki checks | Structured graph memory, graph-backed recall, promotion-candidate review evidence | Markdown source of truth, automatic promotion into memory |
 | `@jarvos/memory` | `jarvos-memory/`, `MEMORY.md`, `memory/decisions/`, `memory/lessons/`, `memory/projects/` | Compact durable agent memory, schema vocabulary, promotion rules, lightweight audit helpers | Content authoring, runtime compaction, live project management |
 | agentmemory via jarVOS adapter | Optional local agentmemory sidecar behind `jarvos-memory/docs/EXPERIENCE_MEMORY_AGENTMEMORY_CONTRACT.md` | Shared recent experience observations across personalities during dogfood | Durable truth, direct host access, automatic promotion, live task state |
@@ -47,6 +48,11 @@ Use this as a plain-English boundary guide, not as a programmatic classifier.
   holds durable snapshots, not current board state.
 - QMD retrieves source material and transcript evidence. It does not decide what
   becomes durable memory.
+- CASS is an optional additive transcript layer. Retrieval is read-only and
+  lexical-only through the versioned jarvOS packet; CASS index maintenance is a
+  separate private-host concern and is never triggered by an agent recall request.
+- The transcript packet is evidence, not memory. Raw transcript excerpts must pass
+  the cited knowledge-unit and privacy gates before any durable promotion.
 - Generated LLM-wiki pages are a derived retrieval layer over secondbrain
   sidecars and source notes. They can improve QMD recall, but source notes and
   journals remain authoritative.
