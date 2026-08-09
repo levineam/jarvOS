@@ -364,7 +364,7 @@ test('degrades safely on timeout and oversized output without leaking stderr or 
     runner: (command, args) => {
       if (args[0] === 'api-version') return ok({ version: '0.6.23', contract_version: 1 });
       if (args[0] === 'capabilities') return ok({ contract_version: 1, commands: ['pack'], modes: ['lexical'], sources: ['codex'] });
-      return failed('private error /Users/andrew/private.jsonl', { timedOut: true, stderr: 'secret stderr' });
+      return failed('private error /Users/example/private.jsonl', { timedOut: true, stderr: 'secret stderr' });
     },
   });
   const timeoutPacket = timeoutAdapter.retrieve(request({ connectors: ['codex'] }));

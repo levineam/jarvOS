@@ -10,6 +10,9 @@ published release. Publication still requires Andrew approval and a green
 `npm run release:check` after `package.json` is intentionally bumped.
 
 ### Added
+- Add a fail-closed public Active Assistant runtime bridge and optional bounded
+  CASS transcript retrieval. Personal coach configuration, notes, messages,
+  credentials, and runtime state remain host-owned and are not distributed.
 - Land the orphaned 2026-07-09 `STRATEGY.md` and recommendable public-release
   plan as durable, reviewable drafts (not ratified work queues), with
   cold-install and CI premises re-verified against shipped v0.7.0 (#116).
