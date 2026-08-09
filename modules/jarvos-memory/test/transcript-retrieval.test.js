@@ -43,6 +43,14 @@ function failed(error = 'command failed', extra = {}) {
   };
 }
 
+function fakeGithubToken() {
+  return ['ghp', '12345678901234567890'].join('_');
+}
+
+function fakeModelToken() {
+  return ['sk', '12345678901234567890'].join('-');
+}
+
 function preflightRunner(calls, pack = () => ok({ results: [] })) {
   return (command, args, options = {}) => {
     calls.push({ command, args: [...args], options });
@@ -432,11 +440,13 @@ test('degrades safely on timeout and oversized output without leaking stderr or 
 });
 
 test('redacts credential-shaped transcript text before it enters evidence', () => {
-  const redacted = redactTranscriptText('Authorization: Bearer super-secret-token OPENAI_API_KEY=sk-12345678901234567890 GITHUB_TOKEN=ghp_12345678901234567890 CLIENT_SECRET=super-secret-value');
+  const modelToken = fakeModelToken();
+  const githubToken = fakeGithubToken();
+  const redacted = redactTranscriptText(`Authorization: Bearer super-secret-token MODEL_TOKEN=${modelToken} GITHUB_TOKEN=${githubToken} CLIENT_SECRET=super-secret-value`);
   assert.equal(redacted.allowed, true);
   assert.equal(redacted.text.includes('super-secret-token'), false);
-  assert.equal(redacted.text.includes('sk-12345678901234567890'), false);
-  assert.equal(redacted.text.includes('ghp_12345678901234567890'), false);
+  assert.equal(redacted.text.includes(modelToken), false);
+  assert.equal(redacted.text.includes(githubToken), false);
   assert.equal(redacted.text.includes('super-secret-value'), false);
   assert.equal(redacted.redacted, true);
 });
@@ -455,7 +465,7 @@ test('keeps low requested budgets renderable and marks evidence dropped by the e
           session_id: `${source}-${index}`,
           timestamp: '2026-07-20T12:00:00.000Z',
           citation: `turn:${index}`,
-          snippet: `GITHUB_TOKEN=ghp_12345678901234567890 ${'evidence '.repeat(500)}`,
+          snippet: `GITHUB_TOKEN=${fakeGithubToken()} ${'evidence '.repeat(500)}`,
         })),
       });
     }),
