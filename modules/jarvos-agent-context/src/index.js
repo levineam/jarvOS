@@ -436,7 +436,11 @@ async function currentWork(options = {}) {
   if (!auth.companyId || !auth.apiKey) {
     return {
       ok: false,
-      markdown: 'Paperclip is not configured for jarvOS current-work lookup.',
+      markdown: [
+        '# jarvOS Current Work',
+        '',
+        'Paperclip is not configured for jarvOS current-work lookup.',
+      ].join('\n'),
       issues: [],
     };
   }

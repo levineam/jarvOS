@@ -69,11 +69,12 @@ function withTempContextEnv(fn) {
   const journal = path.join(vault, 'Journal');
   fs.mkdirSync(notes, { recursive: true });
   fs.mkdirSync(journal, { recursive: true });
-  const previous = Object.fromEntries(['JARVOS_VAULT_DIR', 'JARVOS_NOTES_DIR', 'JARVOS_JOURNAL_DIR', 'JARVOS_TIMEZONE'].map((key) => [key, process.env[key]]));
+  const previous = Object.fromEntries(['JARVOS_VAULT_DIR', 'JARVOS_NOTES_DIR', 'JARVOS_JOURNAL_DIR', 'JARVOS_TIMEZONE', 'JARVOS_PAPERCLIP_ENV_FILE'].map((key) => [key, process.env[key]]));
   process.env.JARVOS_VAULT_DIR = vault;
   process.env.JARVOS_NOTES_DIR = notes;
   process.env.JARVOS_JOURNAL_DIR = journal;
   process.env.JARVOS_TIMEZONE = 'UTC';
+  process.env.JARVOS_PAPERCLIP_ENV_FILE = path.join(root, 'missing-paperclip-env.sh');
   return Promise.resolve().then(fn).finally(() => {
     for (const [key, value] of Object.entries(previous)) {
       if (value === undefined) delete process.env[key];
