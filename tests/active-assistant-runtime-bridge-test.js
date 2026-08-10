@@ -90,6 +90,11 @@ test('loads the paired implementation and keeps module introspection local', (t)
   assert.equal(Object.keys(bridge).includes('runSynthesis'), false);
 });
 
+test('publishes the typed synthesis contract version without exposing host evidence', () => {
+  assert.equal(bridge.SYNTHESIS_CONTRACT_VERSION, 'active-assistant-synthesis/v1');
+  assert.equal(Object.keys(bridge).includes('coachMessage'), false);
+});
+
 test('CLI awaits main and redacts implementation failures', (t) => {
   const f = fixture();
   t.after(() => fs.rmSync(f.runtimeRoot, { recursive: true, force: true }));

@@ -16,6 +16,7 @@ const path = require('node:path');
 const IMPLEMENTATION_RELATIVE_PATH = 'scripts/active-assistant-nightly-synthesis.js';
 const PUBLIC_RELATIVE_PATH = 'repos/jarvOS';
 const ROOT_ENV = 'ACTIVE_ASSISTANT_IMPLEMENTATION_ROOT';
+const SYNTHESIS_CONTRACT_VERSION = 'active-assistant-synthesis/v1';
 
 function bridgeError(code) {
   const error = new Error(code);
@@ -74,6 +75,9 @@ function loadImplementation({ env = process.env, fsImpl = fs, publicRoot } = {})
   if (!implementation || typeof implementation.runSynthesis !== 'function') {
     throw bridgeError('active_assistant_runtime_contract_invalid');
   }
+  if (implementation.synthesisContractVersion != null && implementation.synthesisContractVersion !== SYNTHESIS_CONTRACT_VERSION) {
+    throw bridgeError('active_assistant_synthesis_contract_mismatch');
+  }
   return implementation;
 }
 
@@ -86,6 +90,7 @@ const bridgeApi = {
   IMPLEMENTATION_RELATIVE_PATH,
   PUBLIC_RELATIVE_PATH,
   ROOT_ENV,
+  SYNTHESIS_CONTRACT_VERSION,
   bridgeError,
   loadImplementation,
   ownerPath,
