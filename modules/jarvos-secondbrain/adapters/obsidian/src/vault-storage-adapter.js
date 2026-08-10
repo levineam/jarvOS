@@ -9,7 +9,7 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const { loadConfig, normalizeSections, renderJournal } = require('../../../packages/jarvos-secondbrain-journal/src/journal-maintenance.js');
 const { noteFilePath, writeNoteFile } = require('../../../packages/jarvos-secondbrain-notes/src/write-to-vault.js');
-const { getVaultDir, getVaultJournalDir } = require('../../../bridge/provenance/src/lib/provenance-config.js');
+const { getTimeZone, getVaultDir, getVaultJournalDir } = require('../../../bridge/provenance/src/lib/provenance-config.js');
 const {
   artifactFromMutationResult,
   createArtifactReceipt,
@@ -20,7 +20,7 @@ const NOTES_HEADING = '## 📝 Notes';
 const FLAGGED_HEADING = '## 📌 Flagged';
 
 function todayDate() {
-  return new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+  return new Intl.DateTimeFormat('en-CA', { timeZone: getTimeZone(), year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
 }
 function relativeToVault(vaultRoot, absolutePath) {
   const relative = path.relative(path.resolve(vaultRoot), path.resolve(absolutePath)).split(path.sep).join('/');

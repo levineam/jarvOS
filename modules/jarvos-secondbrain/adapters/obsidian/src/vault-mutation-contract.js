@@ -148,7 +148,7 @@ function projectPublicCaptureResult(result = {}) {
   if (!result || typeof result !== 'object' || Array.isArray(result)) return { schemaVersion: 1, ok: false, error: 'invalid result' };
   return {
     schemaVersion: 1,
-    ok: result.ok === true || result.captured === true,
+    ok: typeof result.ok === 'boolean' ? result.ok : result.captured === true,
     captured: result.captured === true,
     title: publicText(result.title, 160),
     sourceRole: publicText(result.sourceRole, 40),

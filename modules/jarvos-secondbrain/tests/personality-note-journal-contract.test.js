@@ -199,6 +199,8 @@ test('a verified deferred backlink queue is a successful partial contract result
   const result = {
     path: notePath,
     title,
+    receipt: { status: 'committed' },
+    written: true,
     journal: {
       status: 'deferred',
       deferredBacklink: { deferredPath, key: recoveryKey },
@@ -235,25 +237,21 @@ test('offline note save and missing backlink remain two explicit pending outcome
       source: 'bridge.note-journal-contract',
       adapterOptions: { ledgerPath: path.join(root, '.state', 'ledger.json'), probe: () => ({ state: 'app_stopped' }) },
     });
-    let failure;
-    try {
-      writeNoteThroughContract({
-        personality: 'codex',
-        title: 'Offline pending note',
-        content: 'Saved on this computer first.',
-        frontmatter: { status: 'draft', type: 'reference', project: 'SUP-OFFLINE', author: 'jarvis' },
-      }, { mutationService });
-    } catch (error) { failure = error; }
-    assert.ok(failure);
-    assert.equal(failure.result.receipt.status, 'saved_locally_sync_pending');
-    assert.equal(failure.result.written, false);
-    assert.equal(failure.result.savedLocally, true);
-    assert.equal(failure.result.journal.status, 'deferred');
-    assert.equal(fs.existsSync(failure.result.path), true);
-    const queue = JSON.parse(fs.readFileSync(failure.result.journal.deferredPath, 'utf8'));
-    const entry = queue.entries[failure.result.journal.recoveryKey];
+    const result = writeNoteThroughContract({
+      personality: 'codex',
+      title: 'Offline pending note',
+      content: 'Saved on this computer first.',
+      frontmatter: { status: 'draft', type: 'reference', project: 'SUP-OFFLINE', author: 'jarvis' },
+    }, { mutationService });
+    assert.equal(result.mutationStatus, 'saved_locally_sync_pending');
+    assert.equal(result.written, false);
+    assert.equal(result.savedLocally, true);
+    assert.equal(result.journalStatus, 'deferred');
+    assert.equal(fs.existsSync(result.notePath), true);
+    const queue = JSON.parse(fs.readFileSync(result.verification.deferredBacklinkPath, 'utf8'));
+    const entry = queue.entries[result.verification.recoveryKey];
     assert.equal(entry.status, 'pending');
-    assert.equal(entry.noteId, failure.result.noteId);
+    assert.equal(entry.noteId, result.noteId);
     assert.ok(entry.mutationIntentId);
   });
   fs.rmSync(root, { recursive: true, force: true });

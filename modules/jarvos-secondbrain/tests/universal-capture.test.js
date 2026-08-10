@@ -162,7 +162,7 @@ test('triggerless title+content capture defaults to note intent for library call
   });
 });
 
-test('triggerless capture CLI defaults to note capture instead of ignored', () => {
+test('triggerless capture CLI does not claim a disk write without Obsidian acknowledgement', () => {
   const vault = makeTempVault();
   const env = {
     ...process.env,
@@ -188,12 +188,12 @@ test('triggerless capture CLI defaults to note capture instead of ignored', () =
   });
 
   assert.equal(result.status, 0);
-  assert.equal(result.stderr, '');
   const parsed = JSON.parse(result.stdout);
-  assert.equal(parsed.ok, true);
   assert.equal(parsed.routing.plan.ignored, false);
   assert.equal(parsed.routing.plan.route, 'note');
-  assert.equal(fs.readdirSync(vault.notesDir).length, 1);
+  assert.equal(parsed.note.written, false);
+  assert.notEqual(parsed.artifactReceipt.artifacts.find((artifact) => artifact.kind === 'note')?.outcome, 'committed');
+  assert.equal(fs.readdirSync(vault.notesDir).filter((name) => name.endsWith('.md')).length, 0);
 });
 test('long raw Idea capture stays journal-only without note backlink or QMD artifact', () => {
   const vault = makeTempVault();

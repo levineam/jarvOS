@@ -73,12 +73,29 @@ function createArtifactRecord(input = {}) {
   }
   if (!ARTIFACT_KINDS.includes(input.kind)) throw new Error(`Unsupported artifact kind: ${input.kind}`);
   const vaultRelativePath = normalizeVaultRelativeMarkdownPath(input.vaultRelativePath);
+  const expectedPrefix = input.kind === 'note' ? 'Notes/' : 'Journal/';
+  if (!vaultRelativePath.startsWith(expectedPrefix)) {
+    throw new Error(`${input.kind} artifact must be under ${expectedPrefix}`);
+  }
   return Object.freeze({
     schemaVersion: ARTIFACT_RECEIPT_SCHEMA_VERSION,
     kind: input.kind,
     vaultRelativePath,
     outcome: normalizeArtifactOutcome(input.outcome),
   });
+}
+
+function isAcknowledgedArtifactOutcome(value) {
+  return value === 'committed' || value === 'already_satisfied';
+}
+
+function receiptIsAcknowledged(receipt) {
+  return Boolean(
+    receipt
+    && Array.isArray(receipt.artifacts)
+    && receipt.artifacts.length > 0
+    && receipt.artifacts.every((artifact) => isAcknowledgedArtifactOutcome(artifact.outcome)),
+  );
 }
 
 function outcomeFromMutationResult(result = {}) {
@@ -151,8 +168,10 @@ module.exports = {
   artifactFromMutationResult,
   createArtifactRecord,
   createArtifactReceipt,
+  isAcknowledgedArtifactOutcome,
   normalizeArtifactOutcome,
   normalizeVaultRelativeMarkdownPath,
   outcomeFromMutationResult,
+  receiptIsAcknowledged,
   validateArtifactReceipt,
 };

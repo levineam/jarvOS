@@ -140,7 +140,7 @@ test('linkNoteInSection creates canonical Notes section and removes duplicate le
 
 test('linkNoteToJournal creates a missing journal from the configured template and links the note once', () => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-link-to-journal-'));
-  const journalPath = path.join(tmpDir, '2030-02-03.md');
+  const journalPath = path.join(tmpDir, 'Journal', '2030-02-03.md');
 
   try {
     const first = linkNoteToJournal({ noteTitle: 'Fresh Durable Note', journalPath });

@@ -78,21 +78,36 @@ function verifyContract(result, personality) {
   let deferred = false;
   let recoveryKey = null;
   let deferredBacklinkPath = null;
+  const noteStatus = result.receipt?.status;
+  const noteAcknowledged = ['committed', 'already_satisfied'].includes(noteStatus);
+  const notePending = !noteAcknowledged && [
+    'saved_locally_sync_pending',
+    'deferred',
+    'unknown_after_dispatch',
+    'unavailable',
+    'blocked',
+    'conflict',
+    'failed',
+  ].includes(noteStatus);
+
+  if (!noteStatus) failures.push('missing canonical note mutation receipt');
 
   if (!isInsideDir(notesDir, result.path)) {
     failures.push(`note path is outside canonical Notes dir: ${result.path}`);
   }
 
   const noteExists = fs.existsSync(result.path);
-  if (!noteExists) failures.push(`note does not exist: ${result.path}`);
+  if (!noteExists && !notePending) failures.push(`note does not exist: ${result.path}`);
   const noteMd = noteExists ? fs.readFileSync(result.path, 'utf8') : '';
   const fm = frontmatterToObject(parseFrontmatter(noteMd));
-  for (const field of ['status', 'type', 'project', 'created', 'updated', 'author']) {
-    if (fm[field] === undefined) failures.push(`missing canonical frontmatter field: ${field}`);
+  if (noteExists) {
+    for (const field of ['status', 'type', 'project', 'created', 'updated', 'author']) {
+      if (fm[field] === undefined) failures.push(`missing canonical frontmatter field: ${field}`);
+    }
+    if (fm.source_personality !== personality) failures.push(`frontmatter source_personality mismatch: ${fm.source_personality || '(missing)'}`);
+    if (fm.contract !== 'obsidian-note-journal-v1') failures.push(`frontmatter contract mismatch: ${fm.contract || '(missing)'}`);
+    if (!fm.jarvos_note_id) failures.push('missing writer-owned frontmatter field: jarvos_note_id');
   }
-  if (fm.source_personality !== personality) failures.push(`frontmatter source_personality mismatch: ${fm.source_personality || '(missing)'}`);
-  if (fm.contract !== 'obsidian-note-journal-v1') failures.push(`frontmatter contract mismatch: ${fm.contract || '(missing)'}`);
-  if (!fm.jarvos_note_id) failures.push('missing writer-owned frontmatter field: jarvos_note_id');
 
   if (journal.status === 'linked') {
     if (!fs.existsSync(journalPath)) {
@@ -130,14 +145,17 @@ function verifyContract(result, personality) {
         if (entry.notePath !== vaultRelativeNotePath) failures.push(`deferred backlink note path mismatch: ${entry.notePath || '(missing)'}`);
       }
     }
+  } else if (notePending && ['pending', 'failed'].includes(journal.status)) {
+    // Preserve a valid pending/failed mutation receipt without claiming that
+    // a backlink was acknowledged by Obsidian.
   } else {
     failures.push(`journal backlink ${journal.status || 'failure'}: ${journal.reason || 'no durable journal result'}`);
   }
 
   const qmdPendingPath = result.knowledge?.qmdPendingPath;
-  if (!qmdPendingPath || !fs.existsSync(qmdPendingPath)) {
+  if (noteExists && (!qmdPendingPath || !fs.existsSync(qmdPendingPath))) {
     failures.push('missing QMD pending-refresh queue');
-  } else {
+  } else if (noteExists) {
     const qmd = readJson(qmdPendingPath);
     const sourcePath = sourcePathFor(result.path, notesDir);
     const pending = qmd.entries?.[sourcePath];
@@ -145,7 +163,7 @@ function verifyContract(result, personality) {
     else if (pending.status !== 'pending-refresh') failures.push(`QMD status is ${pending.status}, expected pending-refresh`);
   }
 
-  if (result.knowledge?.qmdStatus !== 'pending-refresh') {
+  if (noteExists && result.knowledge?.qmdStatus !== 'pending-refresh') {
     failures.push(`writer returned QMD status ${result.knowledge?.qmdStatus || '(missing)'}, expected pending-refresh`);
   }
 
@@ -157,6 +175,7 @@ function verifyContract(result, personality) {
     qmdPendingPath,
     frontmatter: fm,
     journalComplete,
+    notePending,
     deferred,
     recoveryKey,
     deferredBacklinkPath,
@@ -216,11 +235,6 @@ function writeNoteThroughContract(rawInput, { mutationService, link } = {}) {
     ...(noteResult.artifactReceipt?.artifacts || []),
     ...(result.journal?.artifactReceipt?.artifacts || []),
   ] });
-  if (!result.written) {
-    const error = new Error(`note mutation is pending: ${result.receipt?.status || 'unavailable'}`);
-    error.result = result;
-    throw error;
-  }
   const verification = verifyContract(result, input.personality);
   if (!verification.ok) {
     const err = new Error(`note/journal contract failed: ${verification.failures.join('; ')}`);
@@ -231,6 +245,7 @@ function writeNoteThroughContract(rawInput, { mutationService, link } = {}) {
   return {
     personality: input.personality,
     written: result.written,
+    savedLocally: result.savedLocally,
     title: result.title,
     created: result.created,
     notePath: verification.notePath,
@@ -239,7 +254,8 @@ function writeNoteThroughContract(rawInput, { mutationService, link } = {}) {
     journalBacklink: `[[${result.title}]]`,
     noteId: verification.frontmatter.jarvos_note_id,
     journalStatus: result.journal.status,
-    qmdStatus: result.knowledge.qmdStatus,
+    qmdStatus: result.knowledge?.qmdStatus || null,
+    mutationStatus: result.receipt?.status || 'unknown',
     artifactReceipt: result.artifactReceipt,
     verification,
   };

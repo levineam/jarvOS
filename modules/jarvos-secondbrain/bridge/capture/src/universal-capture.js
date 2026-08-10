@@ -11,6 +11,7 @@ const {
 const {
   createStorageAdapter,
 } = require('../../../adapters');
+const { receiptIsAcknowledged } = require('../../../src/artifact-receipt');
 
 function compact(value) {
   const out = {};
@@ -165,7 +166,11 @@ function captureWithJarvos(rawInput = {}, options = {}) {
   const routing = applyRoutingPlan(routingInput, { ...options, adapter });
 
   return {
-    ok: !routing.plan.ignored,
+    // A routed operation is successful only when every artifact it promised
+    // is acknowledged by the canonical storage owner.  A locally-pending,
+    // deferred, conflict, or failed receipt remains visible but is not a
+    // successful write claim.
+    ok: !routing.plan.ignored && receiptIsAcknowledged(routing.artifactReceipt),
     captureEvent,
     routing,
     artifactReceipt: routing.artifactReceipt,

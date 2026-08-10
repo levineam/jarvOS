@@ -72,3 +72,16 @@ test('receipt validation rejects unknown schema and duplicate normalized paths',
     ],
   }), /duplicate/);
 });
+
+test('artifact kind is constrained to its public vault directory', () => {
+  assert.throws(() => receipt.createArtifactRecord({ kind: 'note', vaultRelativePath: 'Journal/wrong-kind.md', outcome: 'committed' }), /Notes/);
+  assert.throws(() => receipt.createArtifactRecord({ kind: 'journal', vaultRelativePath: 'Notes/wrong-kind.md', outcome: 'committed' }), /Journal/);
+  assert.equal(receipt.receiptIsAcknowledged({
+    schemaVersion: receipt.ARTIFACT_RECEIPT_SCHEMA_VERSION,
+    artifacts: [{ kind: 'note', vaultRelativePath: 'Notes/ok.md', outcome: 'already_satisfied' }],
+  }), true);
+  assert.equal(receipt.receiptIsAcknowledged({
+    schemaVersion: receipt.ARTIFACT_RECEIPT_SCHEMA_VERSION,
+    artifacts: [{ kind: 'note', vaultRelativePath: 'Notes/pending.md', outcome: 'saved_locally_sync_pending' }],
+  }), false);
+});
