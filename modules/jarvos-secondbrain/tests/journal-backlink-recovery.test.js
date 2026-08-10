@@ -36,6 +36,7 @@ function fakeMutationService(state, { failMessage, onExecute } = {}) {
   const transforms = createJarvosVaultTransforms();
   let sequence = 0;
   return {
+    source: 'bridge.note-journal-contract',
     vaultRoot: state.root,
     createWriteContext({ vaultRelativePath, intentId, operationSource }) {
       return { vaultId: 'backlink-recovery-test', vaultRelativePath, operationId: intentId || `backlink-test-${++sequence}`, sequence: ++sequence, source: operationSource };
@@ -183,6 +184,7 @@ test('linker accepts optional v2 identity fields and records them on deferred mu
     assert.equal(entry.noteId, 'identity-failure-id');
     assert.equal(entry.notePath, 'Notes/Identity Failure.md');
     assert.equal(entry.auditState, 'recorded');
+    assert.equal(entry.mutationSource, 'bridge.note-journal-contract');
   } finally {
     fs.rmSync(state.root, { recursive: true, force: true });
   }

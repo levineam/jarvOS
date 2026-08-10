@@ -311,6 +311,7 @@ function recordDeferredBacklink({
   notePath,
   auditState,
   mutationIntentId,
+  mutationSource,
 }) {
   const deferredPath = deferredBacklinksPath(journalPath);
   const normalizedNotePath = normalizeQueuedNotePath(notePath, journalPath);
@@ -334,6 +335,7 @@ function recordDeferredBacklink({
       ...(noteId ? { noteId } : {}),
       ...(normalizedNotePath ? { notePath: normalizedNotePath } : {}),
       mutationIntentId: existing?.mutationIntentId || mutationIntentId || `backlink-${crypto.randomUUID()}`,
+      ...((mutationSource || existing?.mutationSource) ? { mutationSource: existing?.mutationSource || mutationSource } : {}),
       auditState: auditState || existing?.auditState || 'recorded',
       recordedAt: existing?.recordedAt || now,
       updatedAt: now,
@@ -392,12 +394,15 @@ function flushDeferredBacklinks({
     }
     const mutationIntentId = entry.mutationIntentId || `backlink-recovery-${entryKey}-${crypto.randomUUID()}`;
     try {
+      const retryMutationService = mutationService || (entry.mutationSource
+        ? createObsidianOwnedMutationService({ vaultRoot, source: entry.mutationSource })
+        : undefined);
       const result = linkNoteToJournal({
         noteTitle: classification.noteTitle,
         section: entry.section || '📝 Notes',
         journalPath: entry.journalPath,
         createIfMissing: true,
-        mutationService,
+        mutationService: retryMutationService,
         deferOnFailure: false,
         noteId: entry.noteId,
         notePath: classification.notePath,
@@ -599,6 +604,7 @@ function linkNoteToJournal({
       noteId,
       notePath,
       mutationIntentId: stableIntent,
+      mutationSource: mutationService?.source || 'bridge.link-to-journal',
     });
     const wrapped = new Error(`${error.message}; backlink queued at ${deferred.deferredPath}`);
     wrapped.cause = error;
