@@ -370,6 +370,8 @@ test('MCP tool list includes jarvOS tools', () => {
   assert.deepEqual(names, [
     'jarvos_control_plane',
     'jarvos_current_work',
+    'jarvos_projects_context',
+    'jarvos_projects_propose',
     'jarvos_recall',
     'jarvos_synthesize',
     'jarvos_create_note',

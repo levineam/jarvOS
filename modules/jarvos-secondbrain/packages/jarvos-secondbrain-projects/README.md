@@ -22,6 +22,19 @@ you are actually trying to do.
 The daily journal lists the ongoing ones, so the vault stays the one surface
 where you and your assistants get aligned.
 
+The canonical Projects context contract is the assistant-facing read model:
+`jarvOS` is a durable Project and `v1.0.0 release` is a child Outcome. Legacy
+pages can be inspected with the dry-run migration API without changing source
+files. Applying a migration requires an explicit mapping, field-disposition
+table, source digest, and approval; the migration ledger makes reruns,
+conflicts, and rollback visible.
+
+The touched-only journal projection is separate from the legacy all-ongoing
+list. It renders only canonical parent Projects with accepted activity on the
+requested local date. A fresh empty activity result removes a stale generated
+Projects section; partial or unavailable activity preserves it. Reading a
+Projects context packet is not activity.
+
 ## Usage
 
 ```bash
@@ -57,6 +70,13 @@ silently dropped.
 
 `index.md` is generated from the project pages. It is a view, not a source of
 truth; edits to it are overwritten.
+
+## Programmatic context APIs
+
+Additional provider-neutral APIs are exported as `./migrate` and
+`./journal-projection`. Their mutation callbacks are injected and receive an
+expected-content revision plus a projection manifest; they do not write the
+vault directly.
 
 ## Not in scope
 

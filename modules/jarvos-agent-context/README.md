@@ -10,6 +10,7 @@ modules rather than replacing them:
 - `@jarvos/secondbrain` for note writing and journal linking.
 - `@jarvos/ontology` for bounded hierarchy-of-meaning context packets.
 - Paperclip for current execution state.
+- An injected Projects context provider for canonical project/outcome identity and bounded cross-provider context.
 
 ## Tools
 
@@ -18,6 +19,8 @@ The bundled stdio MCP server exposes:
 | Tool | Purpose |
 |---|---|
 | `jarvos_current_work` | Compact Paperclip current-work summary |
+| `jarvos_projects_context` | Canonical `jarvos.projects-context/v1` read packet from the injected Projects provider |
+| `jarvos_projects_propose` | Provider-neutral, uncommitted Projects proposal through the injected provider |
 | `jarvos_recall` | GBrain/QMD/graph recall bundle rendered as Markdown; pass `synthesize: true` or `mode: "synthesis"` for WS5 synthesis |
 | `jarvos_synthesize` | Concise WS5 synthesis over WS4 retrieval evidence with the source bundle preserved |
 | `jarvos_create_note` | Obsidian note creation + today journal wikilink + KB sidecars + verification |
@@ -33,6 +36,21 @@ The bundled stdio MCP server exposes:
 `JARVOS_CONTROL_PLANE_SERVICE_MODULE`. `@jarvos/agent-context` declares
 `@jarvos/control-plane` as a runtime dependency so this boundary resolves from
 an installed package, not from a repository-relative path.
+
+## Projects context
+
+Projects is the assistant-facing source of truth for project and outcome identity,
+hierarchy, priority, activity context, and bounded provider coverage. The
+agent-context module does not import Todo, Beads, Paperclip, or release clients
+to assemble this packet. A host injects a provider with
+`setProjectsContextProvider(provider)` (or `setMcpProjectsContextProvider` for
+the stdio MCP wrapper); the provider implements `read(request)` and may
+implement `propose(request)`. The read path returns a normalized
+`jarvos.projects-context/v1` packet and deterministic fingerprint. A missing
+provider is an explicit, non-enumerating `unavailable` result, so legacy
+Paperclip orientation remains available while the Projects reader is in shadow
+mode. Proposals are reviewable outputs only and never create tasks, releases,
+or external handoffs directly.
 
 ## Journal actions
 

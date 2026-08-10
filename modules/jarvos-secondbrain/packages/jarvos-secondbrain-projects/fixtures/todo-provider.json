@@ -1,0 +1,24 @@
+{
+  "$schema": "jarvos.todo-provider-fixture/v1",
+  "canonicalReference": {
+    "contract": "jarvos.canonical-reference/v1",
+    "kind": "outcome",
+    "id": "out_000001",
+    "revision": 2,
+    "breadcrumb": "jarvOS › v1.0.0 release"
+  },
+  "promotionRequest": {
+    "operationId": "promote_000001",
+    "todoId": "todo_000001",
+    "todoRevision": 3,
+    "target": {
+      "contract": "jarvos.canonical-reference/v1",
+      "kind": "outcome",
+      "id": "out_000001",
+      "revision": 2,
+      "breadcrumb": "jarvOS › v1.0.0 release"
+    },
+    "executionIntent": "repair release readiness blocker",
+    "requestedAt": "2026-08-08T12:00:00.000Z"
+  }
+}

@@ -1,0 +1,57 @@
+{
+  "$schema": "jarvos.beads-provider-fixture/v1",
+  "executionReference": {
+    "contract": "jarvos.execution-reference/v1",
+    "authority": "beads",
+    "provider": "beads",
+    "workspaceId": "workspace-release",
+    "itemId": "bd_000001",
+    "itemRevision": "7",
+    "status": "in_progress",
+    "canonical": {
+      "contract": "jarvos.canonical-reference/v1",
+      "kind": "outcome",
+      "id": "out_000001",
+      "revision": 2,
+      "breadcrumb": "jarvOS › v1.0.0 release"
+    },
+    "capturedAt": "2026-08-08T12:04:00.000Z",
+    "sourceRevision": "beads-7"
+  },
+  "explicitHandoff": {
+    "contract": "jarvos.explicit-handoff/v1",
+    "operationId": "handoff_000001",
+    "fromAuthority": "beads",
+    "toAuthority": "paperclip",
+    "state": "external-owned",
+    "canonical": {
+      "contract": "jarvos.canonical-reference/v1",
+      "kind": "outcome",
+      "id": "out_000001",
+      "revision": 2,
+      "breadcrumb": "jarvOS › v1.0.0 release"
+    },
+    "executionReference": {
+      "contract": "jarvos.execution-reference/v1",
+      "authority": "beads",
+      "provider": "beads",
+      "workspaceId": "workspace-release",
+      "itemId": "bd_000001",
+      "itemRevision": "7",
+      "status": "in_progress",
+      "canonical": {
+        "contract": "jarvos.canonical-reference/v1",
+        "kind": "outcome",
+        "id": "out_000001",
+        "revision": 2,
+        "breadcrumb": "jarvOS › v1.0.0 release"
+      },
+      "capturedAt": "2026-08-08T12:04:00.000Z",
+      "sourceRevision": "beads-7"
+    },
+    "externalReference": "paperclip:pc_000001",
+    "requestedAt": "2026-08-08T12:04:30.000Z",
+    "confirmedAt": "2026-08-08T12:05:00.000Z",
+    "evidenceRefs": ["handoff:pc_000001"]
+  }
+}

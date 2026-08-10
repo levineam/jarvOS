@@ -11,7 +11,10 @@ const {
   hydrate,
   loadControlPlaneManager,
   recall,
+  proposeProjectsContext,
+  readProjectsContext,
   readSessionThread,
+  setProjectsContextProvider,
   startupBrief,
   synthesizeRecall,
   writeSessionThread,
@@ -23,6 +26,8 @@ const STRICT_EMPTY_ARGUMENT_TOOLS = new Set([
   'jarvos_journal_health',
   'jarvos_ensure_today_journal',
 ]);
+
+let mcpProjectsContextProvider = null;
 
 function normalizeToolArguments(name, args) {
   return STRICT_EMPTY_ARGUMENT_TOOLS.has(name)
@@ -77,6 +82,35 @@ const TOOLS = [
       properties: {
         maxItems: { type: 'number', description: 'Maximum issue count to include.' },
         includeAllAgents: { type: 'boolean', description: 'Include issues assigned to any agent.' },
+      },
+    },
+  },
+  {
+    name: 'jarvos_projects_context',
+    description: 'Return the canonical jarvOS Projects context packet through the injected Projects provider. This is the assistant-facing read model; optional Todo, Beads, Paperclip, release, and journal sources remain behind that provider.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        projectIds: { type: 'array', items: { type: 'string' }, description: 'Optional canonical project IDs to expand.' },
+        outcomeIds: { type: 'array', items: { type: 'string' }, description: 'Optional canonical outcome IDs to expand.' },
+        includeDescendants: { type: 'boolean', description: 'Include descendants of selected projects.' },
+        include: { type: 'array', items: { type: 'string', enum: ['hierarchy', 'activity', 'currentWork', 'attention'] } },
+        maxItems: { type: 'number', description: 'Maximum bounded packet items.' },
+        maxBytes: { type: 'number', description: 'Maximum bounded packet bytes.' },
+        maxProviderAgeSeconds: { type: 'number', description: 'Maximum provider evidence age.' },
+      },
+    },
+  },
+  {
+    name: 'jarvos_projects_propose',
+    description: 'Submit a reviewable Projects proposal through the injected provider. This never creates a project, task, release, or external handoff directly.',
+    inputSchema: {
+      type: 'object',
+      required: ['proposal'],
+      additionalProperties: false,
+      properties: {
+        proposal: { type: 'object', description: 'Provider-neutral proposal payload.' },
       },
     },
   },
@@ -209,6 +243,11 @@ const TOOLS = [
   },
 ];
 
+function setMcpProjectsContextProvider(provider) {
+  mcpProjectsContextProvider = provider || null;
+  setProjectsContextProvider(mcpProjectsContextProvider);
+  return mcpProjectsContextProvider;
+}
 const BOOT_JARVOS_PROMPT_TEXT = [
   'Boot jarvOS for this chat.',
   '',
@@ -361,6 +400,14 @@ async function callTool(name, args = {}) {
     const result = await currentWork(args);
     return textResult(result.markdown, !result.ok);
   }
+  if (name === 'jarvos_projects_context') {
+    const result = await readProjectsContext({ ...args, provider: mcpProjectsContextProvider });
+    return textResult(JSON.stringify(result, null, 2), false);
+  }
+  if (name === 'jarvos_projects_propose') {
+    const result = await proposeProjectsContext({ ...args, provider: mcpProjectsContextProvider });
+    return textResult(JSON.stringify(result, null, 2), false);
+  }
   if (name === 'jarvos_recall') {
     const result = recall(args);
     return textResult(result.markdown, !result.ok);
@@ -386,7 +433,10 @@ async function callTool(name, args = {}) {
     return textResult(result.markdown, !result.ok);
   }
   if (name === 'jarvos_hydrate') {
-    const result = await hydrate(args);
+    const result = await hydrate({
+      ...args,
+      projectsContext: { ...(args.projectsContext || {}), provider: mcpProjectsContextProvider },
+    });
     return textResult(result.markdown, !result.ok);
   }
   throw new Error(`Unknown tool: ${name}`);
@@ -518,7 +568,7 @@ if (require.main === module) {
   });
 }
 
-module.exports = { TOOLS, callTool, handle, textResult };
+module.exports = { TOOLS, callTool, handle, setMcpProjectsContextProvider, textResult };
 module.exports.BOOT_JARVOS_PROMPT_TEXT = BOOT_JARVOS_PROMPT_TEXT;
 module.exports.PROMPTS = PROMPTS;
 module.exports.promptResult = promptResult;
