@@ -11,6 +11,8 @@ const {
   assertProjectionManifest,
   getManifest,
   planSkillProjection,
+  stageProjectionPackage,
+  validateProjectionAdapter,
 } = require('../src');
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-skills-projection-'));
@@ -83,6 +85,102 @@ try {
     /unsafe symbolic link/,
   );
   fs.rmSync(unsafeRoot, { recursive: true, force: true });
+
+  const escapedRootLink = `${root}-escaped-link`;
+  fs.symlinkSync(root, escapedRootLink);
+  assert.throws(() => planSkillProjection({ harness: 'hermes', skillsRoot: escapedRootLink, skills: ['workflow-execution'] }), /real directory/);
+  fs.unlinkSync(escapedRootLink);
+  const writableRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-skills-projection-writable-'));
+  fs.chmodSync(writableRoot, 0o777);
+  assert.throws(() => planSkillProjection({ harness: 'hermes', skillsRoot: writableRoot, skills: ['workflow-execution'] }), /must not be group- or world-writable/);
+  fs.chmodSync(writableRoot, 0o700);
+  fs.rmSync(writableRoot, { recursive: true, force: true });
+
+  const adapter = {
+    id: 'test-harness-agent-skills',
+    version: '1.2.3',
+    harness: 'test-harness',
+    supportedVersions: '>=2.0.0 <3.0.0',
+    rootDetection: { kind: 'configured-path' },
+    discovery: { command: ['test-harness', 'skills', 'list'], fixture: 'explore-unknowns' },
+  };
+  assert.equal(validateProjectionAdapter(adapter, '2.4.0').status, 'compatible');
+  assert.equal(validateProjectionAdapter(adapter, '3.0.0').status, 'unsupported');
+  assert.equal(validateProjectionAdapter(adapter, '2.4.0-beta.1').status, 'unsupported');
+  assert.equal(validateProjectionAdapter(adapter, 'not-a-version').status, 'unsupported');
+  assert.throws(() => validateProjectionAdapter({ ...adapter, discovery: {} }, '2.4.0'), /discovery command/);
+
+  const transformedRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-skills-transformed-'));
+  const transform = (content) => Buffer.concat([content, Buffer.from('\n<!-- adapted -->\n')]);
+  const transformed = planSkillProjection({
+    harness: 'hermes',
+    skillsRoot: transformedRoot,
+    skills: ['workflow-execution'],
+    adapter: { ...adapter, harness: 'hermes' },
+    harnessVersion: '2.4.0',
+    transform,
+  });
+  assert.notEqual(transformed.entries[0].outputDigest, transformed.entries[0].sourceDigest);
+  assert.deepEqual(transformed.entries[0].adapter, { id: adapter.id, version: adapter.version, harness: 'hermes' });
+  assert.throws(
+    () => applySkillProjection(transformed, { adapter: { ...adapter, harness: 'hermes' }, harnessVersion: '2.4.0-beta.1', transform }),
+    /projection adapter is unsupported/,
+  );
+  assert.throws(
+    () => applySkillProjection(transformed, { adapter: { ...adapter, harness: 'hermes' }, harnessVersion: '3.0.0', transform }),
+    /projection adapter is unsupported/,
+  );
+  assert.equal(fs.existsSync(transformed.entries[0].targetPath), false);
+  assert.equal(fs.existsSync(transformed.entries[0].statePath), false);
+  assert.throws(
+    () => applySkillProjection(transformed, { adapter: { ...adapter, harness: 'hermes' }, harnessVersion: '2.5.0', transform }),
+    /Projection changed since planning/,
+  );
+  applySkillProjection(transformed, { adapter: { ...adapter, harness: 'hermes' }, harnessVersion: '2.4.0', transform });
+  const transformedReceipt = JSON.parse(fs.readFileSync(path.join(transformedRoot, '.jarvos-projections', 'workflow-execution.json'), 'utf8'));
+  assert.equal(transformedReceipt.sourceDigest, transformed.entries[0].sourceDigest);
+  assert.equal(transformedReceipt.targetDigest, transformed.entries[0].outputDigest);
+  assert.deepEqual(transformedReceipt.adapter, transformed.entries[0].adapter);
+  assert.throws(
+    () => applySkillProjection(transformed, { adapter: { ...adapter, harness: 'hermes' }, harnessVersion: '2.4.0', transform: (content) => content }),
+    /Projection changed since planning/,
+  );
+  fs.rmSync(transformedRoot, { recursive: true, force: true });
+
+  for (const harness of ['claude-code', 'codex', 'openclaw', 'hermes']) {
+    const harnessRoot = fs.mkdtempSync(path.join(os.tmpdir(), `jarvos-skills-${harness}-`));
+    const fixturePlan = planSkillProjection({ harness, skillsRoot: harnessRoot, skills: ['explore-unknowns'] });
+    assert.equal(fixturePlan.entries[0].status, 'missing');
+    assert.equal(fixturePlan.entries[0].outputDigest, fixturePlan.entries[0].sourceDigest);
+    applySkillProjection(fixturePlan);
+    fs.unlinkSync(fixturePlan.entries[0].targetPath);
+    assert.equal(planSkillProjection({ harness, skillsRoot: harnessRoot, skills: ['explore-unknowns'] }).entries[0].status, 'missing');
+    fs.rmSync(harnessRoot, { recursive: true, force: true });
+  }
+
+  const packageRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-skills-package-'));
+  const stagingRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-skills-staging-'));
+  fs.mkdirSync(path.join(packageRoot, 'skill'));
+  fs.writeFileSync(path.join(packageRoot, 'skill', 'SKILL.md'), 'staged skill\n');
+  const staged = stageProjectionPackage({
+    packageRoot,
+    stagingRoot,
+    entries: [{ path: 'skill/SKILL.md', digest: digest('staged skill\n') }],
+  });
+  assert.equal(fs.readFileSync(path.join(staged.path, 'skill', 'SKILL.md'), 'utf8'), 'staged skill\n');
+  assert.equal((fs.statSync(staged.path).mode & 0o077), 0);
+  assert.throws(() => stageProjectionPackage({ packageRoot, stagingRoot, entries: [{ path: '/tmp/escape', digest: digest('x') }] }), /relative/);
+  assert.throws(() => stageProjectionPackage({ packageRoot, stagingRoot, entries: [{ path: '../escape', digest: digest('x') }] }), /traversal/);
+  assert.throws(() => stageProjectionPackage({ packageRoot, stagingRoot, entries: [
+    { path: 'skill/SKILL.md', digest: digest('staged skill\n') },
+    { path: 'skill/./SKILL.md', digest: digest('staged skill\n') },
+  ] }), /duplicate/);
+  fs.symlinkSync(path.join(packageRoot, 'skill', 'SKILL.md'), path.join(packageRoot, 'link.md'));
+  assert.throws(() => stageProjectionPackage({ packageRoot, stagingRoot, entries: [{ path: 'link.md', digest: digest('staged skill\n') }] }), /symbolic link/);
+  fs.mkdirSync(path.join(packageRoot, 'directory-entry'));
+  assert.throws(() => stageProjectionPackage({ packageRoot, stagingRoot, entries: [{ path: 'directory-entry', digest: digest('') }] }), /regular file/);
+  fs.rmSync(packageRoot, { recursive: true, force: true });
+  fs.rmSync(stagingRoot, { recursive: true, force: true });
 } finally {
   fs.rmSync(root, { recursive: true, force: true });
 }

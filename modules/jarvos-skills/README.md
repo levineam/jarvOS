@@ -70,6 +70,12 @@ preserves unknown, locally modified, incompatible, and conflicting targets.
 Projection state is stored under `.jarvos-projections/` in the chosen skills
 root; it contains only public source/revision/digest metadata.
 
+The neutral `explore-unknowns` skill is a harmless fixture for verifying a
+runtime adapter. Its projection metadata covers Claude Code, Codex, OpenClaw,
+and Hermes. A private jarvOS control-plane manager may use the public
+`planSkillProjection` and `applySkillProjection` functions only after verifying
+the reviewed release tuple and the adapter's supported version.
+
 Run the pack doctor to inspect optional tool availability:
 
 ```bash

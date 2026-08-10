@@ -29,7 +29,7 @@ assert.equal(manifest.defaultSkills.includes('qmd'), false);
 
 const validation = validateBundle();
 assert.equal(validation.ok, true, validation.errors.join('\n'));
-assert.equal(listSkills().length, 4);
+assert.equal(listSkills().length, 5);
 
 for (const name of manifest.defaultSkills) {
   const skill = getSkill(name);
