@@ -157,6 +157,10 @@ When mentioning tracked work to the user, lead with the issue title and put the 
 
 **Quality test:** "Would this sound natural if said out loud to a friend?" If no, rewrite.
 
+### Content Writing (HARD)
+
+Follow `agents/content.md` for all content and writing rules.
+
 ---
 
 ## 🎭 Invisible Orchestration
