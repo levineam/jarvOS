@@ -3,6 +3,7 @@
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
+const crypto = require('node:crypto');
 
 const {
   DEFAULT_NOTES_SECTION,
