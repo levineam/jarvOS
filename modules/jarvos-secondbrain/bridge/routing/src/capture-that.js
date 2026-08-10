@@ -40,6 +40,7 @@ const {
   messageContent,
   scoreCapturability,
 } = require('../../../packages/jarvos-ambient/src/intent');
+const { createArtifactReceipt } = require('../../../src/artifact-receipt');
 
 /**
  * Execute "capture that" — find the best recent content and route it.
@@ -59,6 +60,7 @@ function captureThat(input = {}, options = {}) {
       title: '',
       content: '',
       routing: null,
+      artifactReceipt: createArtifactReceipt(),
       error: 'No recent messages to capture from',
     };
   }
@@ -70,6 +72,7 @@ function captureThat(input = {}, options = {}) {
       title: '',
       content: '',
       routing: null,
+      artifactReceipt: createArtifactReceipt(),
       error: 'No substantive content found in recent messages',
     };
   }
@@ -101,6 +104,7 @@ function captureThat(input = {}, options = {}) {
     salienceClass: classification.salienceClass,
     confidence: classification.confidence,
     routing,
+    artifactReceipt: routing.artifactReceipt,
     error: null,
   };
 }

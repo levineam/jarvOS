@@ -81,6 +81,40 @@ test('public projection is an allowlist even when an untrusted receipt contains 
   assert.equal(contract.LIFECYCLE_STATES.has('unknown_after_dispatch'), true);
 });
 
+test('capture projection rebuilds nested results without receipts, paths, or resolver details', () => {
+  const projected = contract.projectPublicCaptureResult({
+    ok: true,
+    title: 'Safe title',
+    note: {
+      title: 'Safe title',
+      path: '/Users/andrew/Vaults/Private/Notes/Safe title.md',
+      written: true,
+      receipt: {
+        status: 'committed',
+        persistence: 'durable',
+        obsidian: 'acknowledged',
+        adapterEvidence: { path: '/private/secret.md', href: 'https://obsid.net/?vault=secret' },
+      },
+      artifactReceipt: { artifacts: [{ vaultRelativePath: 'Notes/Safe title.md' }] },
+      journal: { status: 'linked', journalPath: '/private/Journal/2026-08-10.md' },
+    },
+    routing: {
+      plan: { route: 'note', createNote: true, noteTitle: 'Safe title', notePath: '/private/secret.md' },
+      note: { path: '/private/nested.md', receipt: { status: 'committed' } },
+      journal: { status: 'linked', journalPath: '/private/journal.md' },
+      artifactReceipt: { artifacts: [{ vaultRelativePath: 'Journal/2026-08-10.md' }] },
+    },
+    artifactReceipt: { artifacts: [{ vaultRelativePath: 'Notes/Safe title.md' }] },
+    vaultRelativePath: 'Notes/Safe title.md',
+  });
+  const serialized = JSON.stringify(projected);
+  assert.equal(projected.note.status, 'committed');
+  assert.equal(projected.routing.plan.route, 'note');
+  for (const forbidden of ['/Users/andrew', 'vaultRelativePath', 'artifactReceipt', 'receipt', 'obsid.net', 'href', 'journalPath', 'notePath']) {
+    assert.equal(serialized.includes(forbidden), false, `projection leaked ${forbidden}`);
+  }
+});
+
 test('guarded delete is a distinct validated operation kind', () => {
   const deletion = { ...operation(), operationKind: 'delete', expectedContent: 'fixture', expectedHash: contract.hashUtf8('fixture') };
   assert.equal(contract.validateOperation(deletion).operationKind, 'delete');

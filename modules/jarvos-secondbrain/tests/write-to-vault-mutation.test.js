@@ -128,6 +128,12 @@ test('configured composition creates through Obsidian and acknowledges with app-
     const context = service.createWriteContext({ vaultRelativePath: 'Notes/App Owned.md', intentId: 'note-app-owned-intent-0001' });
     const result = writeNoteFile({ title: 'App Owned', content: 'Created through the app.', ...context });
     assert.equal(result.receipt.status, 'committed');
+    assert.deepEqual(result.artifactReceipt.artifacts, [{
+      schemaVersion: 'jarvos.artifact-receipt.v1',
+      kind: 'note',
+      vaultRelativePath: 'Notes/App Owned.md',
+      outcome: 'committed',
+    }]);
     assert.equal(result.receipt.obsidian, 'acknowledged');
     assert.equal(fake.calls.create, 1);
     assert.ok(fake.calls.read >= 1);
@@ -187,6 +193,8 @@ test('host-owned absence proof permits only a durable offline create pending rec
     assert.equal(result.written, false);
     assert.equal(result.savedLocally, true);
     assert.equal(result.receipt.status, 'saved_locally_sync_pending');
+    assert.equal(result.artifactReceipt.artifacts[0].outcome, 'saved_locally_sync_pending');
+    assert.equal(result.artifactReceipt.artifacts[0].vaultRelativePath, 'Notes/Offline Create.md');
     assert.equal(service.adapter.ledger.get('note-offline-create-01').status, 'local_applied');
     assert.match(fs.readFileSync(result.path, 'utf8'), /Queue this for Sync\./);
   });

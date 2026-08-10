@@ -93,6 +93,10 @@ test('explicit note capture writes canonical note journal backlink and sidecars 
       assert.equal(result.ok, true);
       assert.equal(result.routing.plan.route, 'note');
       assert.ok(result.note.path.startsWith(vault.notesDir));
+      assert.deepEqual(result.artifactReceipt.artifacts.map(({ kind, vaultRelativePath, outcome }) => ({ kind, vaultRelativePath, outcome })), [
+        { kind: 'note', vaultRelativePath: `Notes/${result.note.title}.md`, outcome: 'committed' },
+        { kind: 'journal', vaultRelativePath: `Journal/${TEST_DATE}.md`, outcome: 'committed' },
+      ]);
       assert.equal(result.journalEntry.journalPath, path.join(vault.journalDir, `${TEST_DATE}.md`));
       assert.equal(fs.existsSync(path.join(vault.notesDir, `Daily Journal — ${TEST_DATE}.md`)), false);
 

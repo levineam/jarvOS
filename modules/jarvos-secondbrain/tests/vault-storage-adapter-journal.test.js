@@ -59,6 +59,12 @@ test('existing journal creation is acknowledged without rewriting authored bytes
     const result = createVaultStorageAdapter({ mutationService: service, vaultRoot: root, journalDir }).ensureJournal({ date: '2030-02-03' });
     assert.equal(result.existed, true);
     assert.equal(result.receipt.status, 'already_satisfied');
+    assert.deepEqual(result.artifactReceipt.artifacts, [{
+      schemaVersion: 'jarvos.artifact-receipt.v1',
+      kind: 'journal',
+      vaultRelativePath: 'Journal/2030-02-03.md',
+      outcome: 'already_satisfied',
+    }]);
     assert.equal(fs.readFileSync(journalPath, 'utf8'), authored);
     assert.equal(service.operations[0].operationKind, 'create');
   });
@@ -70,6 +76,12 @@ test('missing journal creates before its acknowledged section transform', () => 
     const adapter = createVaultStorageAdapter({ mutationService: service, vaultRoot: root, journalDir });
     const result = adapter.appendLineToJournalSection({ date: '2030-02-03', heading: '## 💡 Ideas', line: '- New idea', intentId: 'idea-intent' });
     assert.equal(result.acknowledged, true);
+    assert.deepEqual(result.artifactReceipt.artifacts, [{
+      schemaVersion: 'jarvos.artifact-receipt.v1',
+      kind: 'journal',
+      vaultRelativePath: 'Journal/2030-02-03.md',
+      outcome: 'committed',
+    }]);
     assert.deepEqual(service.operations.map((operation) => operation.operationKind), ['create', 'transform']);
     assert.match(fs.readFileSync(result.journalPath, 'utf8'), /## 💡 Ideas[\s\S]*- New idea/);
   });
@@ -81,6 +93,7 @@ test('unavailable service never falls back to a raw journal write', () => {
     const result = createVaultStorageAdapter({ mutationService: service, vaultRoot: root, journalDir }).ensureJournal({ date: '2030-02-03' });
     assert.equal(result.acknowledged, false);
     assert.equal(result.receipt.status, 'unavailable');
+    assert.equal(result.artifactReceipt.artifacts[0].outcome, 'failed');
     assert.equal(fs.existsSync(result.journalPath), false);
   });
 });

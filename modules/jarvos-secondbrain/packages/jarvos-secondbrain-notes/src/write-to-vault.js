@@ -10,6 +10,10 @@
 const { existsSync, readFileSync } = require('fs');
 const { randomUUID } = require('crypto');
 const { join, relative, sep } = require('path');
+const {
+  artifactFromMutationResult,
+  createArtifactReceipt,
+} = require('../../../src/artifact-receipt');
 const { getVaultNotesDir, loadConfig } = require('./lib/notes-config');
 const { optimizeNoteKnowledge } = require('./knowledge-optimizer');
 const {
@@ -142,6 +146,16 @@ function writeNoteFile({ title, content, frontmatter = {}, appendEntry, mutation
   });
   const receipt = mutationExecutor(operation);
   const hasBytes = hasPersistedNoteBytes(filePath, receipt);
+  const artifactReceipt = createArtifactReceipt({
+    artifacts: [{
+      record: artifactFromMutationResult({
+        kind: 'note',
+        vaultRelativePath,
+        result: receipt,
+      }),
+      intent: 'user_requested',
+    }],
+  });
   const journal = { status: 'pending', linked: false, deferred: false, disabled: false, failed: false, reason: 'backlink dispatch is composed separately' };
   const knowledge = hasBytes
     ? optimizeNoteKnowledge({ filePath, notesDir, title: safeName, body, frontmatter: { ...normalizedFrontmatter, jarvos_note_id: operation.noteId }, created, journal })
@@ -155,6 +169,7 @@ function writeNoteFile({ title, content, frontmatter = {}, appendEntry, mutation
     created,
     noteId: operation.noteId,
     receipt,
+    artifactReceipt,
     journal,
     knowledge,
     vaultRootDuplicate: null,

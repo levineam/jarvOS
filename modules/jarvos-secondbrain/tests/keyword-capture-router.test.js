@@ -75,6 +75,10 @@ test('substantive idea creates a note linked from the Ideas section', () => {
     assert.ok(result.note);
     assert.equal(result.note.title, 'Bridge routing architecture');
     assert.ok(result.noteLink);
+    assert.deepEqual(result.artifactReceipt.artifacts.map(({ kind, vaultRelativePath, outcome }) => ({ kind, vaultRelativePath, outcome })), [
+      { kind: 'note', vaultRelativePath: 'Notes/Bridge routing architecture.md', outcome: 'committed' },
+      { kind: 'journal', vaultRelativePath: 'Journal/2026-01-02.md', outcome: 'committed' },
+    ]);
     assert.equal(fs.readdirSync(vault.notesDir).length, 1);
 
     const journal = readDirFile(vault.journalDir, `${TEST_DATE}.md`);

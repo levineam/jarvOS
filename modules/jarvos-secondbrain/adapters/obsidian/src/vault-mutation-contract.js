@@ -88,4 +88,78 @@ function projectPublicResult(receipt) {
   };
 }
 
-module.exports = { LIFECYCLE_STATES, PUBLIC_OBSIDIAN, PUBLIC_PERSISTENCE, PUBLIC_STATUSES, SYNC_STATES, createInternalReceipt, hashUtf8, projectPublicResult, resolveVaultTarget, validateOperation, validateVaultRelativeMarkdownPath };
+function publicText(value, max = 200) {
+  if (typeof value !== 'string') return null;
+  const text = value.replace(/[\0-\x1f\x7f]/g, ' ').replace(/\s+/g, ' ').trim();
+  return text ? text.slice(0, max) : null;
+}
+
+function projectPublicJournalResult(result) {
+  if (!result || typeof result !== 'object') return null;
+  const status = ['linked', 'deferred', 'failed'].includes(result.status)
+    ? result.status
+    : (result.linked === true ? 'linked' : result.deferred === true ? 'deferred' : 'failed');
+  return {
+    status,
+    linked: status === 'linked',
+    deferred: status === 'deferred',
+    alreadyPresent: result.alreadyPresent === true,
+    failed: status === 'failed',
+  };
+}
+
+function projectPublicNoteResult(result) {
+  if (!result || typeof result !== 'object') return null;
+  const mutation = projectPublicResult(result.receipt || result);
+  return {
+    ...mutation,
+    written: result.written === true,
+    savedLocally: result.savedLocally === true,
+    created: result.created === true,
+    title: publicText(result.title, 160),
+    journal: projectPublicJournalResult(result.journal),
+  };
+}
+
+function projectPublicRoutingResult(routing) {
+  if (!routing || typeof routing !== 'object') return null;
+  const plan = routing.plan && typeof routing.plan === 'object' ? routing.plan : {};
+  return {
+    plan: {
+      route: publicText(plan.route, 40),
+      ignored: plan.ignored === true,
+      createNote: plan.createNote === true,
+      noteTitle: publicText(plan.noteTitle, 160),
+      date: /^\d{4}-\d{2}-\d{2}$/.test(String(plan.date || '')) ? plan.date : null,
+    },
+    note: projectPublicNoteResult(routing.note),
+    journal: projectPublicJournalResult(routing.journal || routing.journalEntry),
+    noteLink: projectPublicJournalResult(routing.noteLink),
+    memory: routing.memory && typeof routing.memory === 'object'
+      ? { class: publicText(routing.memory.class, 40), created: true }
+      : null,
+  };
+}
+
+// Public/MCP boundaries receive a deliberately rebuilt shape.  Do not spread
+// trusted-looking input here: routing, receipts, absolute paths, resolver
+// links, and nested operation evidence are all private deployment data.
+function projectPublicCaptureResult(result = {}) {
+  if (!result || typeof result !== 'object' || Array.isArray(result)) return { schemaVersion: 1, ok: false, error: 'invalid result' };
+  return {
+    schemaVersion: 1,
+    ok: result.ok === true || result.captured === true,
+    captured: result.captured === true,
+    title: publicText(result.title, 160),
+    sourceRole: publicText(result.sourceRole, 40),
+    salienceClass: publicText(result.salienceClass, 40),
+    confidence: Number.isFinite(Number(result.confidence)) ? Number(result.confidence) : null,
+    note: projectPublicNoteResult(result.note),
+    journal: projectPublicJournalResult(result.journal || result.journalEntry),
+    noteLink: projectPublicJournalResult(result.noteLink),
+    routing: projectPublicRoutingResult(result.routing),
+    error: result.error ? 'capture failed' : null,
+  };
+}
+
+module.exports = { LIFECYCLE_STATES, PUBLIC_OBSIDIAN, PUBLIC_PERSISTENCE, PUBLIC_STATUSES, SYNC_STATES, createInternalReceipt, hashUtf8, projectPublicCaptureResult, projectPublicResult, resolveVaultTarget, validateOperation, validateVaultRelativeMarkdownPath };

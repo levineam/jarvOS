@@ -49,6 +49,7 @@ const {
 const {
   resolveConfiguredHeading,
 } = require('../../../packages/jarvos-secondbrain-journal/src/section-config');
+const { createArtifactReceipt } = require('../../../src/artifact-receipt');
 
 function applyStoragePlan(plan, capture = {}, options = {}) {
   const adapter = options.adapter || createStorageAdapter(options);
@@ -57,6 +58,7 @@ function applyStoragePlan(plan, capture = {}, options = {}) {
     journalEntry: null,
     note: null,
     noteLink: null,
+    artifactReceipt: createArtifactReceipt(),
   };
 
   if (plan.ignored) {
@@ -112,8 +114,13 @@ function applyStoragePlan(plan, capture = {}, options = {}) {
       result.noteLink = result.journalEntry;
     }
   } else {
-    adapter.ensureJournal({ date });
+    result.journalEntry = adapter.ensureJournal({ date });
   }
+
+  result.artifactReceipt = createArtifactReceipt({ artifacts: [
+    ...(result.note?.artifactReceipt?.artifacts || []),
+    ...(result.journalEntry?.artifactReceipt?.artifacts || []),
+  ] });
 
   return result;
 }
@@ -147,6 +154,7 @@ function applyThreePackagePlan(capture = {}, options = {}) {
         journal: keywordResult.journalEntry,
         note: keywordResult.note,
         noteLink: keywordResult.noteLink,
+        artifactReceipt: keywordResult.artifactReceipt,
         memory: null,
       };
     }
@@ -166,6 +174,7 @@ function applyThreePackagePlan(capture = {}, options = {}) {
     journal: keywordResult.journalEntry,
     note: keywordResult.note,
     noteLink: keywordResult.noteLink,
+    artifactReceipt: keywordResult.artifactReceipt,
     memory: memoryResult,
   };
 }

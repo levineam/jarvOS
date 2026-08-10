@@ -168,6 +168,7 @@ function captureWithJarvos(rawInput = {}, options = {}) {
     ok: !routing.plan.ignored,
     captureEvent,
     routing,
+    artifactReceipt: routing.artifactReceipt,
     note: routing.note,
     journalEntry: routing.journalEntry,
     noteLink: routing.noteLink,

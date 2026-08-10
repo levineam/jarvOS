@@ -41,6 +41,7 @@ test('dispatcher invokes journal-entry skill for natural-language ideas', () => 
   assert.equal(result.skillId, 'journal-entry');
   assert.equal(result.trigger, 'idea');
   assert.deepEqual(result.destinations, ['journal']);
+  assert.deepEqual(result.artifactReceipt, { schemaVersion: 'jarvos.artifact-receipt.v1', artifacts: [] });
   assert.deepEqual(mock.calls[0], [
     'appendLineToJournalSection',
     '## 💡 Ideas',
@@ -177,5 +178,6 @@ test('dispatcher ignores medium-confidence salience instead of writing a Flagged
   assert.equal(result.skillId, null);
   assert.equal(result.path, 'salience_medium_ignored');
   assert.deepEqual(result.destinations, []);
+  assert.deepEqual(result.artifactReceipt, { schemaVersion: 'jarvos.artifact-receipt.v1', artifacts: [] });
   assert.deepEqual(mock.calls, []);
 });

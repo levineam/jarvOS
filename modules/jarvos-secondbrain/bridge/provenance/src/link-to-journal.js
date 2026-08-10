@@ -28,6 +28,10 @@ const {
 } = require('./lib/provenance-config');
 const { createObsidianOwnedMutationService } = require('./obsidian-mutation');
 const {
+  artifactFromMutationResult,
+  createArtifactReceipt,
+} = require('../../../src/artifact-receipt');
+const {
   loadConfig,
   normalizeSections,
   renderJournal,
@@ -599,14 +603,36 @@ function linkNoteToJournal({
     const wrapped = new Error(`${error.message}; backlink queued at ${deferred.deferredPath}`);
     wrapped.cause = error;
     wrapped.deferredBacklink = deferred;
+    try {
+      const activeVaultRoot = vaultRoot || mutationService?.vaultRoot || resolveVaultRootForJournal(journalPath);
+      wrapped.artifactReceipt = createArtifactReceipt({ artifacts: [{
+        record: artifactFromMutationResult({
+          kind: 'journal',
+          vaultRelativePath: journalPathRelativeToVault(journalPath, activeVaultRoot),
+          outcome: 'deferred',
+        }),
+        intent: 'auxiliary',
+      }] });
+    } catch {
+      // A deferred receipt is best-effort metadata; queue durability remains authoritative.
+    }
     throw wrapped;
   }
+  const activeVaultRoot = vaultRoot || mutationService?.vaultRoot || resolveVaultRootForJournal(journalPath);
   return {
     linked: true,
     journalPath,
     alreadyPresent: receipt.status === 'already_satisfied',
     mutationOwner: 'obsidian-vault-process',
     receipt,
+    artifactReceipt: createArtifactReceipt({ artifacts: [{
+      record: artifactFromMutationResult({
+        kind: 'journal',
+        vaultRelativePath: journalPathRelativeToVault(journalPath, activeVaultRoot),
+        result: receipt,
+      }),
+      intent: 'auxiliary',
+    }] }),
     vaultRootDuplicate: { checked: false, repaired: false, reason: 'duplicate cleanup must not bypass Obsidian' },
   };
 }

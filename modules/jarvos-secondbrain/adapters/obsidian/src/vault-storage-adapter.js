@@ -10,6 +10,10 @@ const fs = require('node:fs');
 const { loadConfig, normalizeSections, renderJournal } = require('../../../packages/jarvos-secondbrain-journal/src/journal-maintenance.js');
 const { noteFilePath, writeNoteFile } = require('../../../packages/jarvos-secondbrain-notes/src/write-to-vault.js');
 const { getVaultDir, getVaultJournalDir } = require('../../../bridge/provenance/src/lib/provenance-config.js');
+const {
+  artifactFromMutationResult,
+  createArtifactReceipt,
+} = require('../../../src/artifact-receipt');
 
 const IDEAS_HEADING = '## 💡 Ideas';
 const NOTES_HEADING = '## 📝 Notes';
@@ -28,6 +32,19 @@ function renderJournalScaffold(date) {
   return renderJournal(date, config, normalizeSections('', date, config));
 }
 function receiptIsAcknowledged(receipt) { return ['committed', 'already_satisfied'].includes(receipt?.status); }
+function artifactReceiptFor(entries = []) {
+  return createArtifactReceipt({ artifacts: entries.filter(Boolean) });
+}
+function journalArtifact({ journalPath, vaultRoot, receipt, intent = 'auxiliary' }) {
+  return {
+    record: artifactFromMutationResult({
+      kind: 'journal',
+      vaultRelativePath: relativeToVault(vaultRoot, journalPath),
+      result: receipt,
+    }),
+    intent,
+  };
+}
 
 function createVaultStorageAdapter({ mutationService, vaultRoot = getVaultDir(), journalDir = getVaultJournalDir(), source = 'obsidian.vault-storage-adapter' } = {}) {
   const service = mutationService || require('../../../src/vault-mutation-service.js').createConfiguredVaultMutationService({ vaultRoot: path.resolve(vaultRoot), source });
@@ -48,15 +65,32 @@ function createVaultStorageAdapter({ mutationService, vaultRoot = getVaultDir(),
       const context = contextFor(vaultRelativePath, intentId || `journal-create-${date}-${crypto.randomUUID()}`);
       const content = existed ? fs.readFileSync(journalPath, 'utf8') : renderJournalScaffold(date);
       const receipt = context.mutationExecutor({ schemaVersion: 1, operationId: context.operationId, vaultId: context.vaultId, vaultRelativePath, sequence: context.sequence, operationKind: 'create', content, source: context.source });
-      return { journalPath, existed, receipt, acknowledged: receiptIsAcknowledged(receipt) };
+      return {
+        journalPath,
+        existed,
+        receipt,
+        acknowledged: receiptIsAcknowledged(receipt),
+        artifactReceipt: artifactReceiptFor([journalArtifact({ journalPath, vaultRoot, receipt })]),
+      };
     },
     appendLineToJournalSection({ heading, line, date = todayDate(), intentId } = {}) {
       if (!heading) throw new Error('heading is required');
       if (!line || !String(line).trim()) throw new Error('line is required');
       const ensured = this.ensureJournal({ date, intentId: intentId ? `${intentId}:create` : undefined });
-      if (!receiptIsAcknowledged(ensured.receipt)) return { journalPath: ensured.journalPath, heading, line: String(line).trim(), receipt: ensured.receipt, acknowledged: false };
+      if (!receiptIsAcknowledged(ensured.receipt)) return { journalPath: ensured.journalPath, heading, line: String(line).trim(), receipt: ensured.receipt, acknowledged: false, artifactReceipt: ensured.artifactReceipt };
       const outcome = executeTransform({ date, transformName: 'journal-section-line', replayPayload: { heading, line }, intentId: intentId ? `${intentId}:section` : undefined });
-      return { journalPath: outcome.journalPath, heading, line: String(line).trim(), receipt: outcome.receipt, acknowledged: receiptIsAcknowledged(outcome.receipt), alreadyPresent: outcome.receipt.status === 'already_satisfied' };
+      return {
+        journalPath: outcome.journalPath,
+        heading,
+        line: String(line).trim(),
+        receipt: outcome.receipt,
+        acknowledged: receiptIsAcknowledged(outcome.receipt),
+        alreadyPresent: outcome.receipt.status === 'already_satisfied',
+        artifactReceipt: artifactReceiptFor([
+          ...(ensured.artifactReceipt?.artifacts || []),
+          journalArtifact({ journalPath: outcome.journalPath, vaultRoot, receipt: outcome.receipt, intent: 'user_requested' }),
+        ]),
+      };
     },
     writeNote({ title, content, frontmatter = {}, intentId } = {}) {
       const filePath = noteFilePath(title);
@@ -65,9 +99,18 @@ function createVaultStorageAdapter({ mutationService, vaultRoot = getVaultDir(),
     linkNoteToJournal({ noteTitle, noteId, date = todayDate(), heading = NOTES_HEADING, intentId } = {}) {
       if (!noteTitle) throw new Error('noteTitle is required');
       const ensured = this.ensureJournal({ date, intentId: intentId ? `${intentId}:create` : undefined });
-      if (!receiptIsAcknowledged(ensured.receipt)) return { journalPath: ensured.journalPath, receipt: ensured.receipt, acknowledged: false };
+      if (!receiptIsAcknowledged(ensured.receipt)) return { journalPath: ensured.journalPath, receipt: ensured.receipt, acknowledged: false, artifactReceipt: ensured.artifactReceipt };
       const outcome = executeTransform({ date, transformName: 'journal-backlink', replayPayload: { linkTarget: noteTitle, section: heading, ...(noteId ? { noteId } : {}) }, intentId: intentId ? `${intentId}:backlink` : undefined });
-      return { journalPath: outcome.journalPath, receipt: outcome.receipt, acknowledged: receiptIsAcknowledged(outcome.receipt), alreadyPresent: outcome.receipt.status === 'already_satisfied' };
+      return {
+        journalPath: outcome.journalPath,
+        receipt: outcome.receipt,
+        acknowledged: receiptIsAcknowledged(outcome.receipt),
+        alreadyPresent: outcome.receipt.status === 'already_satisfied',
+        artifactReceipt: artifactReceiptFor([
+          ...(ensured.artifactReceipt?.artifacts || []),
+          journalArtifact({ journalPath: outcome.journalPath, vaultRoot, receipt: outcome.receipt, intent: 'auxiliary' }),
+        ]),
+      };
     },
   });
 }

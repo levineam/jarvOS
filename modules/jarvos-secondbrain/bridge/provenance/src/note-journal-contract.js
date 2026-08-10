@@ -11,6 +11,7 @@ const { getVaultNotesDir, getVaultJournalDir } = require('./lib/provenance-confi
 const { frontmatterToObject, parseFrontmatter } = require('../../../packages/jarvos-secondbrain-notes/src/lib/note-schema');
 const { createObsidianOwnedMutationService } = require('./obsidian-mutation');
 const { linkNoteToJournal } = require('./link-to-journal');
+const { createArtifactReceipt } = require('../../../src/artifact-receipt');
 
 const SUPPORTED_PERSONALITIES = new Set(['michael', 'claude-code', 'hermes', 'codex']);
 const LIGHTWEIGHT_IDEA_RE = /^\s*idea\s*[:\-]/i;
@@ -171,7 +172,7 @@ function normalizeJournalResult(result) {
 function journalResultFromError(error) {
   const deferredBacklink = error?.deferredBacklink;
   return deferredBacklink?.deferredPath && deferredBacklink?.key
-    ? { status: 'deferred', linked: false, deferred: true, disabled: false, failed: false, reason: error.message, deferredBacklink, deferredPath: deferredBacklink.deferredPath, recoveryKey: deferredBacklink.key }
+    ? { status: 'deferred', linked: false, deferred: true, disabled: false, failed: false, reason: error.message, deferredBacklink, deferredPath: deferredBacklink.deferredPath, recoveryKey: deferredBacklink.key, artifactReceipt: error.artifactReceipt }
     : { status: 'failed', linked: false, deferred: false, disabled: false, failed: true, reason: error.message };
 }
 
@@ -211,6 +212,10 @@ function writeNoteThroughContract(rawInput, { mutationService, link } = {}) {
     ...noteResult,
     journal: dispatchBacklink({ result: noteResult, section: rawInput.section || '📝 Notes', createIfMissing: rawInput.createJournalIfMissing !== false, link, mutationService: service }),
   };
+  result.artifactReceipt = createArtifactReceipt({ artifacts: [
+    ...(noteResult.artifactReceipt?.artifacts || []),
+    ...(result.journal?.artifactReceipt?.artifacts || []),
+  ] });
   if (!result.written) {
     const error = new Error(`note mutation is pending: ${result.receipt?.status || 'unavailable'}`);
     error.result = result;
@@ -235,6 +240,7 @@ function writeNoteThroughContract(rawInput, { mutationService, link } = {}) {
     noteId: verification.frontmatter.jarvos_note_id,
     journalStatus: result.journal.status,
     qmdStatus: result.knowledge.qmdStatus,
+    artifactReceipt: result.artifactReceipt,
     verification,
   };
 }

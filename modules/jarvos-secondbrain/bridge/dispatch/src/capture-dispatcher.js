@@ -6,6 +6,7 @@ const {
 const {
   detectTrigger,
 } = require('../../routing/src/keyword-capture-router');
+const { createArtifactReceipt } = require('../../../src/artifact-receipt');
 
 const HIGH_CONFIDENCE = 0.8;
 const MEDIUM_CONFIDENCE = 0.5;
@@ -91,6 +92,7 @@ const CAPTURE_SKILLS = [
         destinations: destinationsFromRouting(routing),
         title: routing.plan?.noteTitle || routing.note?.title || null,
         routing,
+        artifactReceipt: routing.artifactReceipt,
       };
     },
   },
@@ -115,6 +117,7 @@ const CAPTURE_SKILLS = [
         destinations: destinationsFromRouting(routing),
         title: routing.plan?.noteTitle || routing.note?.title || null,
         routing,
+        artifactReceipt: routing.artifactReceipt,
       };
     },
   },
@@ -130,6 +133,7 @@ function noCaptureResult(capture, path = 'no_capture') {
     confidence: capture.classification.confidence,
     destinations: [],
     title: null,
+    artifactReceipt: createArtifactReceipt(),
   };
 }
 
