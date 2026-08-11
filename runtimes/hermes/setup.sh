@@ -309,6 +309,19 @@ else
 fi
 echo ""
 
+# A runtime install is valid only when skills, the U2 context plugin, and the
+# coding host entrypoint are from the descriptor's single pinned generation.
+GENERATION_VERIFIER="$REPO_ROOT/runtimes/hermes/scripts/verify-artifact-generation.js"
+if [ -f "$GENERATION_VERIFIER" ]; then
+  if ! node "$GENERATION_VERIFIER"; then
+    echo "  ✗ Hermes artifact generation does not match adapter.json; refusing mixed install"
+    exit 1
+  fi
+else
+  echo "  ✗ Hermes artifact generation verifier is missing"
+  exit 1
+fi
+
 # ── Install portable jarvOS skills for Hermes ──
 echo "→ Reconciling portable jarvOS skills..."
 HERMES_SKILLS="$HOME/.hermes/skills"

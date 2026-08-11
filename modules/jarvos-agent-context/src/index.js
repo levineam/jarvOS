@@ -90,6 +90,34 @@ function loadModule(packageName, fallbackPath) {
   }
 }
 
+function loadRuntimeRouteContract() {
+  try {
+    return require(require.resolve('@jarvos/runtime-kit', { paths: [MODULE_ROOT] }));
+  } catch {
+    const fallback = path.join(JARVOS_ROOT, 'modules', 'jarvos-runtime-kit', 'src', 'index.js');
+    if (fs.existsSync(fallback)) return require(fallback);
+    return null;
+  }
+}
+
+function routeThreadKey(input = {}) {
+  const token = firstString(input.routeCapability);
+  const required = process.env.JARVOS_REQUIRE_ROUTE_CAPABILITY === '1';
+  if (!token) {
+    if (required) throw new Error('session thread route capability is required');
+    return null;
+  }
+  const secret = firstString(process.env.JARVOS_ROUTE_BINDING_SECRET);
+  const generation = firstString(process.env.JARVOS_ROUTE_BINDING_GENERATION);
+  const contract = loadRuntimeRouteContract();
+  if (!secret || !generation || !contract || typeof contract.validateRouteCapability !== 'function') {
+    throw new Error('session thread route capability is unavailable');
+  }
+  const validation = contract.validateRouteCapability(token, { secret, expectedGeneration: generation });
+  if (!validation.ok) throw new Error(`session thread route capability denied: ${validation.code}`);
+  return `route-${validation.routeDigest}`;
+}
+
 // WS7 cross-tool unification: let every runtime (OpenClaw / Claude / Codex) share
 // ONE canonical jarvos-secondbrain pipeline, so fixes apply to notes from any tool.
 // Defaults to the bundled modules copy; set JARVOS_SECONDBRAIN_DIR to an absolute
@@ -788,6 +816,8 @@ function sessionThreadLockPath(notePath, options = {}) {
 }
 
 function normalizeThreadKey(input = {}) {
+  const boundRoute = routeThreadKey(input);
+  if (boundRoute) return boundRoute;
   const raw = firstString(
     input.threadId,
     input.threadKey,
@@ -1599,6 +1629,7 @@ module.exports = {
   projectsContextCutoverEnabled,
   readSessionThread,
   setProjectsContextProvider,
+  routeThreadKey,
   startupBrief,
   synthesizeRecall,
   verifyNoteCaptureContract,

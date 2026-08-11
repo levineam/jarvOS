@@ -2,6 +2,17 @@
   "schemaVersion": 1,
   "id": "hermes",
   "displayName": "Hermes Agent",
+  "artifactGeneration": {
+    "version": "jarvos-hermes-artifact-generation.v1",
+    "releaseRevision": "291c334",
+    "generationDigest": "a08b572d838fa3fd57942c2987435dd69fbafd2606c5c1e7e1dc439520fdfd4c",
+    "components": [
+      { "name": "skills-manifest", "path": "modules/jarvos-skills/manifest.json", "digest": "92e67ca818bc869f1002000b7ba2d5c213ccfb6c0a1db6581d8863b938338aeb" },
+      { "name": "context-plugin-metadata", "path": "runtimes/hermes/plugins/jarvos-context/plugin.yaml", "digest": "74f3bc53308a43b119773cf0a0fa5f47019761038d1bada4cc2fd5a1b13370bb" },
+      { "name": "context-plugin-code", "path": "runtimes/hermes/plugins/jarvos-context/__init__.py", "digest": "7eb6ad78edfd87c45d09db76b178fe3bd21eb955dedd06255c91c8c10e043b99" },
+      { "name": "coding-host-adapter", "path": "modules/jarvos-coding/src/adapters/hosts.js", "digest": "f92f226826ffb8c034955d962b6b1b270eae2a210677ee8fbf5514ab5e71d941" }
+    ]
+  },
   "capabilityDescriptor": {
     "version": "jarvos-runtime-capability-descriptor.v1", "harness": "hermes",
     "capabilities": {
@@ -14,7 +25,7 @@
       "inboundDispatch": { "receive": { "status": "unsupported", "reason": "No public Hermes inbound dispatch bridge is declared." }, "validate": { "status": "unsupported", "reason": "No public Hermes inbound dispatch bridge is declared." } },
       "lifecycle": { "receipt": { "status": "unsupported", "reason": "No public Hermes lifecycle receipt bridge is declared." } },
       "scheduledWork": { "participate": { "status": "unsupported", "reason": "Hermes scheduling remains host-native." } },
-      "codingEntrypoint": { "invoke": { "status": "unsupported", "reason": "Hermes is not declared as a jarvOS coding entrypoint." } }
+      "codingEntrypoint": { "invoke": { "status": "supported", "transport": "jarvos_coding_take_issue_to_done MCP tool", "evidence": "modules/jarvos-coding/src/adapters/hosts.js#createHermesHostAdapter" } }
     }
   },
   "sharedAgentContext": {
