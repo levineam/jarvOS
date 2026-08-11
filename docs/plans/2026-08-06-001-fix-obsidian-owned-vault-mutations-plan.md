@@ -9,7 +9,7 @@ execution: code
 deepened: 2026-08-06
 ---
 
-# Obsidian-Owned Vault Mutations - Plan
+## Obsidian-Owned Vault Mutations - Plan
 
 ## Goal Capsule
 
