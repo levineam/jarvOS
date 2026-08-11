@@ -209,7 +209,16 @@ function linkWrittenNote({ noteResult, section, createJournalIfMissing, mutation
   } catch (error) {
     const deferred = error?.deferredBacklink;
     return deferred
-      ? { status: 'deferred', linked: false, deferred: true, failed: false }
+      ? {
+        status: 'deferred',
+        linked: false,
+        deferred: true,
+        failed: false,
+        deferredBacklink: deferred,
+        journalPath: deferred.journalPath,
+        deferredPath: deferred.deferredPath,
+        recoveryKey: deferred.key,
+      }
       : { status: 'failed', linked: false, deferred: false, failed: true };
   }
 }
@@ -1377,7 +1386,6 @@ function createNote(input = {}) {
     ok: complete,
     note: noteResult,
     journal: linkResult,
-    journalLinked,
     verification,
     outcome,
     markdown: [

@@ -1022,19 +1022,26 @@ function mcpRequest(message, env = process.env) {
 }
 
 test('createNote retains a deferred journal receipt without retrying mutation', () => {
-  withTempVault(({ notes }) => {
-    delete process.env.JARVOS_ALLOW_UNSAFE_TEST_JOURNAL_WRITE;
+  withTempVault(({ notes, mutationService: baseMutationService }) => {
+    const mutationService = {
+      ...baseMutationService,
+      execute(operation) {
+        if (operation.vaultRelativePath.startsWith('Journal/')) return fakeReceipt(operation, 'unavailable');
+        return baseMutationService.execute(operation);
+      },
+    };
     const result = createNote({
       title: 'Deferred Agent Context Note',
       content: 'The note must remain durable while backlink recovery is pending.',
+      mutationService,
     });
 
-    assert.equal(result.ok, true);
+    assert.equal(result.ok, false);
     assert.equal(result.note.journal.status, 'deferred');
     assert.equal(result.journal, result.note.journal);
-    assert.equal(result.journalLinked, false);
-    assert.equal(result.verification.deferred, true);
-    assert.match(result.markdown, /Link: deferred \(queued for reconciliation\)/);
+    assert.equal(result.verification, null);
+    assert.equal(result.outcome.backlink.deferred, true);
+    assert.match(result.markdown, /Journal backlink: deferred/);
     assert.ok(fs.existsSync(result.note.path));
     assert.ok(result.note.path.startsWith(notes));
     const queue = JSON.parse(fs.readFileSync(result.journal.deferredBacklink.deferredPath, 'utf8'));
