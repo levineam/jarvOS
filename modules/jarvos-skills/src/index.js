@@ -126,7 +126,7 @@ function ensureOwnerOnlyEventRoot(root) {
   const pending = path.join(absolute, 'pending');
   fs.mkdirSync(pending, { recursive: true, mode: 0o700 });
   const pendingStat = fs.lstatSync(pending);
-  if (pendingStat.isSymbolicLink() || !pendingStat.isDirectory() || (pendingStat.mode & 0o077) !== 0) throw new Error('skill install event inbox must be owner-only');
+  if (pendingStat.isSymbolicLink() || !pendingStat.isDirectory() || (typeof process.getuid === 'function' && pendingStat.uid !== process.getuid()) || (pendingStat.mode & 0o077) !== 0) throw new Error('skill install event inbox must be owner-only');
   return { root: fs.realpathSync(absolute), pending: fs.realpathSync(pending) };
 }
 
