@@ -17,6 +17,7 @@ const {
   installSkills,
   sourceCodeDigest,
   manifestDigest,
+  triggerSkillProjection,
 } = require('../src');
 
 const manifest = getManifest();
@@ -91,6 +92,30 @@ const secondEventInstall = installSkills(eventDestination, {
 });
 assert.notEqual(secondEventInstall.event.eventId, eventInstall.event.eventId);
 assert.equal(fs.readdirSync(path.join(eventRoot, 'pending')).filter((file) => file.endsWith('.json')).length, 2);
+
+// An explicitly configured private trigger is validated before invocation and
+// receives only the event-root path and fixed event/apply flags. Trigger
+// failure is represented as a quiet deferred result; the event remains the
+// durable fallback for the daily reconciler.
+const triggerPath = path.join(eventRoot, 'jarvos-skill-projection.js');
+fs.writeFileSync(triggerPath, '#!/usr/bin/env node\n', { mode: 0o600 });
+let triggerInvocation;
+assert.deepEqual(triggerSkillProjection(eventRoot, {
+  projectionTrigger: triggerPath,
+  spawn(command, args, options) {
+    triggerInvocation = { command, args, options };
+    return { status: 0 };
+  },
+}), { status: 'triggered' });
+assert.equal(triggerInvocation.args[1], '--event');
+assert.equal(triggerInvocation.args[2], '--apply');
+assert.equal(triggerInvocation.args[3], '--event-root');
+assert.equal(triggerInvocation.args[4], fs.realpathSync(eventRoot));
+assert.equal(triggerInvocation.options.env.JARVOS_SKILL_PROJECTION_EVENT_ROOT, fs.realpathSync(eventRoot));
+assert.deepEqual(triggerSkillProjection(eventRoot, {
+  projectionTrigger: triggerPath,
+  spawn: () => ({ status: 1 }),
+}), { status: 'failed', reason: 'projection_trigger_failed' });
 
 // Preflight overwrite check: if any selected target already exists and force is false,
 // no skill should be copied — destination must remain unchanged.

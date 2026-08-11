@@ -16,6 +16,8 @@ const UNSAFE_LOSSLESS_SUMMARY_MODELS = new Set(['flash']);
 const CANONICAL_REPOSITORY = 'https://github.com/levineam/jarvOS.git';
 const SKILL_INSTALL_EVENT_VERSION = 'jarvos.skill-install.v1';
 const SKILL_INSTALL_EVENT_ROOT_ENV = 'JARVOS_SKILL_PROJECTION_EVENT_ROOT';
+const SKILL_PROJECTION_TRIGGER_ENV = 'JARVOS_SKILL_PROJECTION_TRIGGER';
+const SKILL_PROJECTION_TRIGGER_TIMEOUT_MS = 10000;
 
 function readJson(filePath) {
   return JSON.parse(fs.readFileSync(filePath, 'utf8'));
@@ -207,6 +209,54 @@ function writeInstallEvent(event, eventRoot, options = {}) {
     try { fs.unlinkSync(temporary); } catch (_) { /* best effort cleanup of our temp file */ }
     throw error;
   }
+}
+
+function resolveProjectionTrigger(value) {
+  if (typeof value !== 'string' || !value.trim() || !path.isAbsolute(value)) {
+    throw new Error('skill projection trigger must be an absolute path');
+  }
+  const absolute = path.resolve(value);
+  const stat = fs.lstatSync(absolute);
+  if (stat.isSymbolicLink() || !stat.isFile()) throw new Error('skill projection trigger must be a regular file');
+  if (typeof process.getuid === 'function' && stat.uid !== process.getuid()) throw new Error('skill projection trigger must be owned by the current user');
+  if ((stat.mode & 0o022) !== 0) throw new Error('skill projection trigger must not be group- or world-writable');
+  const real = fs.realpathSync(absolute);
+  const realStat = fs.statSync(real);
+  if (!realStat.isFile() || (typeof process.getuid === 'function' && realStat.uid !== process.getuid()) || (realStat.mode & 0o022) !== 0) {
+    throw new Error('skill projection trigger changed during validation');
+  }
+  return real;
+}
+
+function triggerSkillProjection(eventRoot, options = {}) {
+  const configured = options.projectionTrigger || process.env[SKILL_PROJECTION_TRIGGER_ENV];
+  if (!configured) return null;
+  let trigger;
+  let root;
+  try {
+    trigger = resolveProjectionTrigger(configured);
+    root = fs.realpathSync(expandInstallEventRoot(eventRoot));
+  } catch (_) {
+    return { status: 'failed', reason: 'projection_trigger_invalid' };
+  }
+  const run = options.spawn || spawnSync;
+  let result;
+  try {
+    result = run(process.execPath, [trigger, '--event', '--apply', '--event-root', root], {
+      cwd: MODULE_ROOT,
+      env: {
+        ...process.env,
+        [SKILL_INSTALL_EVENT_ROOT_ENV]: root,
+      },
+      stdio: 'ignore',
+      timeout: SKILL_PROJECTION_TRIGGER_TIMEOUT_MS,
+      maxBuffer: 4096,
+    });
+  } catch (_) {
+    return { status: 'failed', reason: 'projection_trigger_failed' };
+  }
+  if (result?.error || result?.status !== 0) return { status: 'failed', reason: 'projection_trigger_failed' };
+  return { status: 'triggered' };
 }
 
 function emitInstallEvent({ manifest = getManifest(), names, destinationDir, installed, options = {} } = {}) {
@@ -1083,7 +1133,10 @@ function installSkills(destinationDir, options = {}) {
   // usable in standalone/project-local installs; the machine-wide launcher
   // supplies JARVOS_SKILL_PROJECTION_EVENT_ROOT when it wants reconciliation.
   const event = emitInstallEvent({ manifest, names, destinationDir, installed, options });
+  const eventRoot = options.eventRoot || process.env[SKILL_INSTALL_EVENT_ROOT_ENV];
+  const eventTrigger = event && eventRoot ? triggerSkillProjection(eventRoot, options) : null;
   Object.defineProperty(installed, 'event', { value: event, enumerable: false, configurable: false });
+  Object.defineProperty(installed, 'eventTrigger', { value: eventTrigger, enumerable: false, configurable: false });
 
   return installed;
 }
@@ -1095,6 +1148,7 @@ module.exports = {
   PACKS_DIR,
   SKILL_INSTALL_EVENT_ROOT_ENV,
   SKILL_INSTALL_EVENT_VERSION,
+  SKILL_PROJECTION_TRIGGER_ENV,
   assertPackManifest,
   assertProjectionManifest,
   applySkillProjection: projection.applySkillProjection,
@@ -1114,6 +1168,8 @@ module.exports = {
   getSkill,
   validateBundle,
   emitInstallEvent,
+  triggerSkillProjection,
+  resolveProjectionTrigger,
   installEventPayload,
   releaseTupleForInstall,
   manifestDigest,
