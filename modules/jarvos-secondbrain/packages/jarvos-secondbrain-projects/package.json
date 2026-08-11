@@ -33,6 +33,7 @@
     "./projects-context-capability": "./src/projects-context-capability.js",
     "./provider-contracts": "./src/provider-contracts.js",
     "./migrate": "./src/migrate.js",
-    "./journal-projection": "./src/journal-projection.js"
+    "./journal-projection": "./src/journal-projection.js",
+    "./activity-store": "./src/activity-store.js"
   }
 }
