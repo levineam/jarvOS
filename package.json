@@ -70,6 +70,7 @@
     "scripts/jarvos.js",
     "scripts/manual-notes-maintenance.js",
     "scripts/active-assistant-nightly-synthesis.js",
+    "scripts/lib/active-assistant-ripeness-contract.js",
     "scripts/lib/active-assistant-synthesis-contract.js",
     "scripts/lib/active-assistant-semantic-policy.js",
     "templates/"
