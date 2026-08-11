@@ -7,6 +7,7 @@ This directory contains Hermes-specific setup for jarvOS.
 Hermes Agent has built-in learning loops, memory nudges, skill auto-creation, session search, and Honcho user modeling. jarvOS on Hermes is deliberately lean — it provides the behavioral backbone and lets Hermes handle the mechanism.
 
 - **setup.sh** — Workspace setup script (copies core files, configures Hermes)
+- **plugins/jarvos-context/** — Bounded first-turn context hydration plugin
 - **cron/** — Briefing and proactive check job definitions (coming soon; optional)
 
 ## Setup
@@ -49,10 +50,14 @@ jarvos`. Registration is idempotent: an existing `jarvos` entry is preserved
 and never overwritten. The setup script backs up `~/.hermes/config.yaml` before
 any configuration write.
 
-At the start of a session, call the `jarvos_hydrate` MCP tool to load the
-bounded jarvOS Working Context Packet. Hermes automatic startup hydration is
-intentionally not claimed until its native startup-hook contract is verified;
-there is no hidden polling or duplicate scheduler.
+The setup installs an opt-in Hermes plugin that uses the documented
+`on_session_start` and `pre_llm_call` hooks. On the first turn for each
+platform/session pair it calls `jarvos_hydrate` through the registered MCP
+tool and injects at most 6000 characters into that turn only. Timeout, tool
+errors, malformed packets, and oversized packets fail open without logging
+packet content or delaying the turn. There is no polling or duplicate
+scheduler. If the plugin is not installed or enabled, call `jarvos_hydrate`
+manually at session start.
 
 The portable skills are projected through the manifest-driven installer. A
 projection is dry-run by default and only writes with `--apply`; unknown,
@@ -62,6 +67,7 @@ locally modified, conflicting, or symlinked targets are preserved.
 
 Target: `hermes-agent`.
 
-The shared MCP context and verified skill projection are supported. Hydration is
-manual in v1 because the adapter does not yet have a verified native startup
-hook; call `jarvos_hydrate` explicitly at session start.
+The shared MCP context, verified skill projection, and bounded first-turn
+hydration plugin are supported on Hermes versions that expose these plugin
+hooks. Manual `jarvos_hydrate` remains the fallback when the plugin is not
+installed or enabled.
