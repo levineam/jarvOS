@@ -246,12 +246,20 @@ function applyMigration(plan, { registry, ledgerDir, approved = false, actor = '
         if (resumed) {
           projectRecord = resumed;
         } else {
-          const result = registry.resolve(target.project.title);
-          if (result.status === 'resolved' || result.status === 'ambiguous') throw new Error(`target already exists or is ambiguous: ${target.project.title}`);
-          const created = registry.create({ ...target.project, kind: 'project', aliases: [...new Set(target.project.aliases || [])], links: { ...(target.project.links || {}), migrationId: plan.migrationId, sourcePath: target.sourcePath } }, { expectedGeneration: registry.generation, actor, session });
-          projectRecord = created.record;
+          if (target.project.id) {
+            const existing = registry.get(target.project.id);
+            if (!existing || existing.kind !== 'project' || existing.title !== target.project.title) {
+              throw new Error(`canonical project identity is not an exact match: ${target.project.id}`);
+            }
+            projectRecord = existing;
+          } else {
+            const result = registry.resolve(target.project.title);
+            if (result.status === 'resolved' || result.status === 'ambiguous') throw new Error(`target already exists or is ambiguous: ${target.project.title}`);
+            const created = registry.create({ ...target.project, kind: 'project', aliases: [...new Set(target.project.aliases || [])], links: { ...(target.project.links || {}), migrationId: plan.migrationId, sourcePath: target.sourcePath } }, { expectedGeneration: registry.generation, actor, session });
+            projectRecord = created.record;
+          }
           ledger.targetIds[targetKey] = projectRecord.id;
-          ledger.state = 'project-created';
+          ledger.state = 'project-reconciled';
           ledger.updatedAt = now;
           writeMigrationLedger(ledgerDir, ledger);
         }
@@ -263,11 +271,21 @@ function applyMigration(plan, { registry, ledgerDir, approved = false, actor = '
         const resumed = ledger.targetIds[targetKey] ? registry.get(ledger.targetIds[targetKey]) : null;
         if (ledger.targetIds[targetKey] && !resumed) throw new Error(`migration ledger target is missing: ${ledger.targetIds[targetKey]}`);
         if (!resumed) {
-          const result = registry.resolve(target.outcome.title);
-          if (result.status === 'resolved' || result.status === 'ambiguous') throw new Error(`target already exists or is ambiguous: ${target.outcome.title}`);
-          const created = registry.create({ ...target.outcome, kind: 'outcome', parentId, aliases: [...new Set(target.outcome.aliases || [])], links: { ...(target.outcome.links || {}), migrationId: plan.migrationId, sourcePath: target.sourcePath } }, { expectedGeneration: registry.generation, actor, session });
-          ledger.targetIds[targetKey] = created.record.id;
-          ledger.state = 'outcome-created';
+          let outcomeRecord = null;
+          if (target.outcome.id) {
+            const existing = registry.get(target.outcome.id);
+            if (!existing || existing.kind !== 'outcome' || existing.title !== target.outcome.title || existing.parentId !== parentId) {
+              throw new Error(`canonical outcome identity is not an exact match: ${target.outcome.id}`);
+            }
+            outcomeRecord = existing;
+          } else {
+            const result = registry.resolve(target.outcome.title);
+            if (result.status === 'resolved' || result.status === 'ambiguous') throw new Error(`target already exists or is ambiguous: ${target.outcome.title}`);
+            const created = registry.create({ ...target.outcome, kind: 'outcome', parentId, aliases: [...new Set(target.outcome.aliases || [])], links: { ...(target.outcome.links || {}), migrationId: plan.migrationId, sourcePath: target.sourcePath } }, { expectedGeneration: registry.generation, actor, session });
+            outcomeRecord = created.record;
+          }
+          ledger.targetIds[targetKey] = outcomeRecord.id;
+          ledger.state = 'outcome-reconciled';
           ledger.updatedAt = now;
           writeMigrationLedger(ledgerDir, ledger);
         }

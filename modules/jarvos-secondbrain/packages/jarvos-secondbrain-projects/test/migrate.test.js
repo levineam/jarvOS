@@ -80,6 +80,29 @@ test('approved mapping creates jarvOS and its release Outcome, then reruns idemp
   assert.equal(migration.applyMigration(plan, { registry, ledgerDir, approved: true }).status, 'already_satisfied');
 });
 
+test('approved mapping can reconcile explicitly identified canonical records without creating duplicates', () => {
+  const registry = makeRegistry();
+  const project = registry.create({ title: 'jarvOS', declaredPriority: 'high' }).record;
+  const outcome = registry.create({ kind: 'outcome', title: 'v1.0.0 release', parentId: project.id }).record;
+  const sourceDigest = migration.digest(SOURCE);
+  const plan = migration.buildMigrationPlan({
+    sources: [{ path: SOURCE_PATH, content: SOURCE }],
+    mapping: {
+      ...mapping({ sourceDigest }),
+      entries: [{
+        ...mapping({ sourceDigest }).entries[0],
+        project: { id: project.id, title: 'jarvOS' },
+        outcome: { id: outcome.id, title: 'v1.0.0 release', parentId: project.id },
+      }],
+    },
+    migrationId: 'reconcile-canonical-projects',
+  });
+  const ledgerDir = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-migration-ledger-'));
+  const applied = migration.applyMigration(plan, { registry, ledgerDir, approved: true });
+  assert.equal(applied.status, 'committed');
+  assert.deepEqual(registry.list().map((record) => record.id), [project.id, outcome.id]);
+});
+
 test('source drift and incomplete dispositions fail closed before apply', () => {
   assert.throws(() => migration.buildMigrationPlan({ sources: [{ path: SOURCE_PATH, content: SOURCE }], mapping: { version: '1', entries: [{ sourcePath: SOURCE_PATH, project: { title: 'jarvOS' }, fieldDispositions: { title: 'project.title' } }] } }), /field dispositions/);
   const plan = migration.buildMigrationPlan({ sources: [{ path: SOURCE_PATH, content: SOURCE }], mapping: mapping({ sourceDigest: '0'.repeat(64) }) });

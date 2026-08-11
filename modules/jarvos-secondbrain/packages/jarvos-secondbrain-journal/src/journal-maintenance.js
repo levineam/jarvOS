@@ -276,7 +276,7 @@ function journalMetrics(markdown, config) {
 }
 
 function isGeneratedPlaceholderLine(line) {
-  return /^-\s+(?:No events today|No reminders due today|No blocked Paperclip issues|No notes created(?: on .*)?|No notes today|No notes yet|No ongoing projects|\((?:calendar unavailable|reminders unavailable|projects unavailable|Paperclip inbox script not found|Paperclip API unavailable)\))$/i.test(line);
+  return /^-\s+(?:No events today|No reminders due today|No blocked Paperclip issues|No notes created(?: on .*)?|No notes today|No notes yet|No ongoing projects|\((?:calendar unavailable|reminders unavailable|projects unavailable(?:\s+—\s+[^)]+)?|Paperclip inbox script not found|Paperclip API unavailable)\))$/i.test(line);
 }
 
 /**
@@ -298,7 +298,7 @@ function isGeneratedPlaceholderLine(line) {
 function isDegradedSourceMarker(content) {
   const trimmed = trimOuterBlankLines(String(content == null ? '' : content));
   if (!trimmed || trimmed.includes('\n')) return false;
-  return /^-\s+\((?:calendar unavailable|reminders unavailable|projects unavailable|Paperclip inbox script not found|Paperclip API unavailable)\)$/i.test(trimmed);
+  return /^-\s+\((?:calendar unavailable|reminders unavailable|projects unavailable(?:\s+—\s+[^)]+)?|Paperclip inbox script not found|Paperclip API unavailable)\)$/i.test(trimmed);
 }
 
 /** Does a section body carry anything beyond the empty `-` placeholder? */
@@ -811,7 +811,7 @@ function normalizeSections(original, date, config, opts = {}) {
   const desiredByHeading = new Map(desiredSections.map((section) => [section.heading, section]));
   const configuredHeadingMap = buildConfiguredHeadingMap(config);
   const configuredById = new Map(desiredSections.map((section) => [section.id, section]));
-  const fetchers = opts.fetchers || buildSourceFetchers();
+  const fetchers = { ...buildSourceFetchers(), ...(opts.fetchers || {}) };
   const isToday = date === today();
 
   const withoutSignature = stripSignature(original);
@@ -1334,14 +1334,15 @@ function runMaintenance(argv = process.argv.slice(2), opts = {}) {
   return report;
 }
 
-function main(argv = process.argv.slice(2), env = process.env) {
-  const report = runMaintenance(argv, { env });
+function main(argv = process.argv.slice(2), env = process.env, options = {}) {
+  const report = runMaintenance(argv, { env, ...options });
   console.log(report.output);
   return report;
 }
 
 module.exports = {
   applySectionTransforms,
+  buildSourceFetchers,
   main,
   classifyJournalHealth,
   contractSignature,
