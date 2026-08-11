@@ -15,6 +15,9 @@ const {
   loadPack,
   validateBundle,
   installSkills,
+  sourceCodeDigest,
+  manifestDigest,
+  triggerSkillProjection,
 } = require('../src');
 
 const manifest = getManifest();
@@ -43,6 +46,76 @@ const tempDir = path.join(os.tmpdir(), `jarvos-skills-test-${process.pid}`);
 const installed = installSkills(tempDir, { skills: ['workflow-execution'], force: true });
 assert.equal(installed.length, 1);
 assert.ok(installed[0].path.endsWith(path.join('workflow-execution', 'SKILL.md')));
+assert.equal(installed.event, null);
+
+// A machine-wide install emits one owner-only, digest-bound event only after
+// all target bytes are present. A second install gets a fresh nonce/event ID;
+// replaying the same file is therefore a private consumer concern, not a
+// public installer side effect.
+const eventRoot = path.join(os.tmpdir(), `jarvos-skill-events-${process.pid}`);
+fs.rmSync(eventRoot, { recursive: true, force: true });
+const eventDestination = path.join(os.tmpdir(), `jarvos-skills-event-target-${process.pid}`);
+fs.rmSync(eventDestination, { recursive: true, force: true });
+const eventInstall = installSkills(eventDestination, {
+  skills: ['explore-unknowns'],
+  force: true,
+  eventRoot,
+  occurredAt: '2026-08-10T12:00:00.000Z',
+  nonce: 'a'.repeat(48),
+  release: {
+    repository: 'https://github.com/levineam/jarvOS.git',
+    commit: 'd'.repeat(40),
+    manifestDigest: manifestDigest(),
+    sourceCodeDigest: sourceCodeDigest(),
+  },
+});
+assert.equal(eventInstall.length, 1);
+assert.ok(eventInstall.event);
+assert.equal(eventInstall.event.version, 'jarvos.skill-install.v1');
+assert.equal(eventInstall.event.targetRoot, fs.realpathSync(eventDestination));
+assert.equal(eventInstall.event.installed[0].outputDigest, eventInstall.event.installed[0].sourceDigest);
+assert.equal(fs.statSync(eventInstall.event.path).mode & 0o077, 0);
+assert.equal(JSON.parse(fs.readFileSync(eventInstall.event.path, 'utf8')).eventDigest, eventInstall.event.eventDigest);
+assert.match(eventInstall.event.path, /pending\/skill-install-[a-f0-9]+\.json$/);
+const secondEventInstall = installSkills(eventDestination, {
+  skills: ['explore-unknowns'],
+  force: true,
+  eventRoot,
+  occurredAt: '2026-08-10T12:00:01.000Z',
+  nonce: 'b'.repeat(48),
+  release: {
+    repository: 'https://github.com/levineam/jarvOS.git',
+    commit: 'd'.repeat(40),
+    manifestDigest: manifestDigest(),
+    sourceCodeDigest: sourceCodeDigest(),
+  },
+});
+assert.notEqual(secondEventInstall.event.eventId, eventInstall.event.eventId);
+assert.equal(fs.readdirSync(path.join(eventRoot, 'pending')).filter((file) => file.endsWith('.json')).length, 2);
+
+// An explicitly configured private trigger is validated before invocation and
+// receives only the event-root path and fixed event/apply flags. Trigger
+// failure is represented as a quiet deferred result; the event remains the
+// durable fallback for the daily reconciler.
+const triggerPath = path.join(eventRoot, 'jarvos-skill-projection.js');
+fs.writeFileSync(triggerPath, '#!/usr/bin/env node\n', { mode: 0o600 });
+let triggerInvocation;
+assert.deepEqual(triggerSkillProjection(eventRoot, {
+  projectionTrigger: triggerPath,
+  spawn(command, args, options) {
+    triggerInvocation = { command, args, options };
+    return { status: 0 };
+  },
+}), { status: 'triggered' });
+assert.equal(triggerInvocation.args[1], '--event');
+assert.equal(triggerInvocation.args[2], '--apply');
+assert.equal(triggerInvocation.args[3], '--event-root');
+assert.equal(triggerInvocation.args[4], fs.realpathSync(eventRoot));
+assert.equal(triggerInvocation.options.env.JARVOS_SKILL_PROJECTION_EVENT_ROOT, fs.realpathSync(eventRoot));
+assert.deepEqual(triggerSkillProjection(eventRoot, {
+  projectionTrigger: triggerPath,
+  spawn: () => ({ status: 1 }),
+}), { status: 'failed', reason: 'projection_trigger_failed' });
 
 // Preflight overwrite check: if any selected target already exists and force is false,
 // no skill should be copied — destination must remain unchanged.

@@ -57,6 +57,19 @@ node scripts/install-skills.js --dest /path/to/skills --skill workflow-execution
 
 Use `--force` only when intentionally replacing an existing local copy.
 
+For a machine-wide jarvOS install, set
+`JARVOS_SKILL_PROJECTION_EVENT_ROOT` or pass `--event-root` to write one
+owner-only `jarvos.skill-install.v1` receipt after the selected files have
+been verified. The receipt binds the installed release tuple, target root,
+target digests, timestamp, nonce, and event digest; it contains no skill text
+or secrets. The private control plane consumes each event once and treats the
+daily reconciliation as its safety fallback. To request immediate
+reconciliation, also set `JARVOS_SKILL_PROJECTION_TRIGGER` or pass
+`--projection-trigger` with the absolute, owner-only path to the private
+`jarvos-skill-projection.js` entrypoint. The trigger is best-effort: if it is
+missing or fails, the verified event remains pending for the daily safety run.
+Leaving the event root unset keeps project-local installs standalone.
+
 For managed runtime projections, inspect first and apply only the exact
 generation you inspected:
 

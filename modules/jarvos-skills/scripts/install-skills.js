@@ -24,6 +24,8 @@ function parseArgs(argv) {
     packName: 'obsidian-default',
     harness: 'generic',
     apply: false,
+    eventRoot: '',
+    projectionTrigger: '',
   };
 
   if (args[0] && !args[0].startsWith('-')) {
@@ -52,6 +54,14 @@ function parseArgs(argv) {
       opts.harness = args[++i];
     }
     else if (arg === '--apply') opts.apply = true;
+    else if (arg === '--event-root') {
+      if (!args[i + 1]) throw new Error('--event-root requires a path');
+      opts.eventRoot = args[++i];
+    }
+    else if (arg === '--projection-trigger') {
+      if (!args[i + 1]) throw new Error('--projection-trigger requires a path');
+      opts.projectionTrigger = args[++i];
+    }
     else if (arg === '--help' || arg === '-h') opts.help = true;
     else throw new Error(`Unknown argument: ${arg}`);
   }
@@ -62,7 +72,7 @@ function parseArgs(argv) {
 function printHelp() {
   console.log(`Usage:
   jarvos-skills --check
-  jarvos-skills --dest /path/to/openclaw-workspace/skills [--force]
+  jarvos-skills --dest /path/to/openclaw-workspace/skills [--force] [--event-root /path/to/jarvos/events] [--projection-trigger /absolute/path/to/jarvos-skill-projection.js]
   jarvos-skills --dest /path/to/skills --skill workflow-execution --skill cron-hygiene
   jarvos-skills list [--json]
   jarvos-skills doctor [--pack obsidian-default] [--json]
@@ -183,10 +193,17 @@ function main() {
   }
 
   const destination = path.resolve(opts.destination);
-  const installed = installSkills(destination, { force: opts.force, skills: opts.skills });
+  const installed = installSkills(destination, {
+    force: opts.force,
+    skills: opts.skills,
+    ...(opts.eventRoot ? { eventRoot: opts.eventRoot } : {}),
+    ...(opts.projectionTrigger ? { projectionTrigger: opts.projectionTrigger } : {}),
+  });
   for (const item of installed) {
     console.log(`installed ${item.name} -> ${item.path}`);
   }
+  if (installed.event) console.log(`event ${installed.event.eventId} -> ${installed.event.path}`);
+  if (installed.eventTrigger?.status === 'failed') console.error('projection trigger failed; the event remains pending for the daily safety run');
 }
 
 if (require.main === module) main();
