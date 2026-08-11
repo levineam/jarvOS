@@ -9,9 +9,13 @@ const crypto = require('crypto');
 const MODULE_ROOT = path.resolve(__dirname, '..');
 const MANIFEST_PATH = path.join(MODULE_ROOT, 'manifest.json');
 const PACKS_DIR = path.join(MODULE_ROOT, 'packs');
+const PACKAGE_JSON_PATH = path.join(MODULE_ROOT, 'package.json');
 const DEFAULT_PACK_NAME = 'obsidian-default';
 const LOSSLESS_CLAW_PLUGIN_ID = 'lossless-claw';
 const UNSAFE_LOSSLESS_SUMMARY_MODELS = new Set(['flash']);
+const CANONICAL_REPOSITORY = 'https://github.com/levineam/jarvOS.git';
+const SKILL_INSTALL_EVENT_VERSION = 'jarvos.skill-install.v1';
+const SKILL_INSTALL_EVENT_ROOT_ENV = 'JARVOS_SKILL_PROJECTION_EVENT_ROOT';
 
 function readJson(filePath) {
   return JSON.parse(fs.readFileSync(filePath, 'utf8'));
@@ -58,6 +62,158 @@ function getSkill(name) {
 
 function sha256(value) {
   return crypto.createHash('sha256').update(value).digest('hex');
+}
+
+function readInstallerVersion() {
+  try {
+    const packageJson = readJson(PACKAGE_JSON_PATH);
+    return typeof packageJson.version === 'string' && packageJson.version.trim()
+      ? packageJson.version.trim()
+      : 'unknown';
+  } catch (_) {
+    return 'unknown';
+  }
+}
+
+function sourceCodeDigest(root = MODULE_ROOT) {
+  const sourceRoot = path.join(root, 'src');
+  const files = [];
+  function walk(directory, relative) {
+    for (const name of fs.readdirSync(directory).sort()) {
+      const absolute = path.join(directory, name);
+      const childRelative = path.posix.join(relative, name);
+      const stat = fs.lstatSync(absolute);
+      if (stat.isSymbolicLink()) throw new Error(`source code path is a symbolic link: ${childRelative}`);
+      if (stat.isDirectory()) walk(absolute, childRelative);
+      else if (stat.isFile()) files.push(`${childRelative}\0${sha256(fs.readFileSync(absolute))}`);
+      else throw new Error(`source code path is not a regular file: ${childRelative}`);
+    }
+  }
+  walk(sourceRoot, 'src');
+  return sha256(files.join('\n'));
+}
+
+function manifestDigest() {
+  return sha256(fs.readFileSync(MANIFEST_PATH));
+}
+
+function currentGitCommit(root = MODULE_ROOT) {
+  const result = spawnSync('git', ['-C', root, 'rev-parse', 'HEAD'], {
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'ignore'],
+    env: { PATH: process.env.PATH || '/usr/bin:/bin', HOME: process.env.HOME || os.homedir(), LANG: 'C', LC_ALL: 'C' },
+  });
+  const commit = result.status === 0 ? String(result.stdout || '').trim() : '';
+  return /^[a-f0-9]{40}$/i.test(commit) ? commit.toLowerCase() : null;
+}
+
+function expandInstallEventRoot(value) {
+  if (typeof value !== 'string' || !value.trim()) throw new Error('skill install event root must be configured');
+  const expanded = value === '~'
+    ? os.homedir()
+    : value.startsWith('~/') ? path.join(os.homedir(), value.slice(2)) : value;
+  if (!path.isAbsolute(expanded)) throw new Error('skill install event root must be absolute');
+  return path.resolve(expanded);
+}
+
+function ensureOwnerOnlyEventRoot(root) {
+  const absolute = expandInstallEventRoot(root);
+  fs.mkdirSync(absolute, { recursive: true, mode: 0o700 });
+  const stat = fs.lstatSync(absolute);
+  if (stat.isSymbolicLink() || !stat.isDirectory()) throw new Error('skill install event root must be a real directory');
+  if (typeof process.getuid === 'function' && stat.uid !== process.getuid()) throw new Error('skill install event root must be owned by the current user');
+  if ((stat.mode & 0o077) !== 0) throw new Error('skill install event root must be owner-only');
+  const pending = path.join(absolute, 'pending');
+  fs.mkdirSync(pending, { recursive: true, mode: 0o700 });
+  const pendingStat = fs.lstatSync(pending);
+  if (pendingStat.isSymbolicLink() || !pendingStat.isDirectory() || (pendingStat.mode & 0o077) !== 0) throw new Error('skill install event inbox must be owner-only');
+  return { root: fs.realpathSync(absolute), pending: fs.realpathSync(pending) };
+}
+
+function releaseTupleForInstall(manifest, names, options = {}) {
+  const supplied = options.release && typeof options.release === 'object' ? options.release : {};
+  const repository = supplied.repository || manifest.release?.repository || process.env.JARVOS_SKILLS_REPOSITORY || CANONICAL_REPOSITORY;
+  const commit = supplied.commit || manifest.release?.commit || process.env.JARVOS_SKILLS_COMMIT || currentGitCommit();
+  const actualManifestDigest = manifestDigest();
+  const actualCodeDigest = sourceCodeDigest();
+  const manifestDigestValue = supplied.manifestDigest || manifest.release?.manifestDigest || process.env.JARVOS_SKILLS_MANIFEST_DIGEST || actualManifestDigest;
+  const codeDigest = supplied.sourceCodeDigest || manifest.release?.sourceCodeDigest || process.env.JARVOS_SKILLS_SOURCE_CODE_DIGEST || actualCodeDigest;
+  const skills = (manifest.skills || []).map((skill) => ({ name: skill.name, digest: String(skill.source?.digest || '').toLowerCase() }));
+  if (Array.isArray(supplied.skills) && supplied.skills.length > 0) {
+    const suppliedByName = new Map(supplied.skills.map((skill) => [skill?.name, String(skill?.digest || '').toLowerCase()]));
+    for (const skill of skills) {
+      if (suppliedByName.get(skill.name) !== skill.digest) throw new Error(`release skill digest does not match manifest: ${skill.name}`);
+    }
+  }
+  if (!/^https:\/\/github\.com\/[^/]+\/[^/]+\.git$/.test(repository)) throw new Error('release repository is invalid');
+  if (!/^[a-f0-9]{40}$/i.test(commit || '')) throw new Error('release commit is required for install event');
+  if (!/^[a-f0-9]{64}$/i.test(manifestDigestValue || '') || !/^[a-f0-9]{64}$/i.test(codeDigest || '')) throw new Error('release digests are required for install event');
+  if (manifestDigestValue.toLowerCase() !== actualManifestDigest || codeDigest.toLowerCase() !== actualCodeDigest) throw new Error('release digests do not match installed jarvOS bytes');
+  if (skills.length === 0 || skills.some((skill) => !/^[a-z][a-z0-9-]*$/.test(skill.name) || !/^[a-f0-9]{64}$/.test(skill.digest))) throw new Error('release skills are invalid');
+  return {
+    repository,
+    commit: commit.toLowerCase(),
+    manifestDigest: manifestDigestValue.toLowerCase(),
+    sourceCodeDigest: codeDigest.toLowerCase(),
+    skills,
+  };
+}
+
+function installEventPayload({ manifest, names, destinationDir, installed, options = {} }) {
+  const release = releaseTupleForInstall(manifest, names, options);
+  const targetRoot = fs.realpathSync(path.resolve(destinationDir));
+  const occurredAt = options.occurredAt || new Date().toISOString();
+  if (Number.isNaN(Date.parse(occurredAt))) throw new Error('install event timestamp is invalid');
+  const nonce = options.nonce || crypto.randomBytes(24).toString('hex');
+  if (!/^[a-f0-9]{32,128}$/i.test(nonce)) throw new Error('install event nonce is invalid');
+  const installerVersion = options.installerVersion || readInstallerVersion();
+  const installedSkills = installed.map((item) => ({
+    name: item.name,
+    target: path.posix.join(item.name, 'SKILL.md'),
+    sourceDigest: sha256(fs.readFileSync(path.join(MODULE_ROOT, manifest.skills.find((skill) => skill.name === item.name).path))),
+    outputDigest: sha256(fs.readFileSync(item.path)),
+  }));
+  const base = {
+    version: SKILL_INSTALL_EVENT_VERSION,
+    installerVersion: String(installerVersion),
+    release,
+    targetRoot,
+    installed: installedSkills,
+    occurredAt,
+    nonce,
+  };
+  const eventId = `skill-install-${sha256(JSON.stringify(base)).slice(0, 48)}`;
+  const eventDigest = sha256(JSON.stringify({ ...base, eventId }));
+  return { ...base, eventId, eventDigest };
+}
+
+function writeInstallEvent(event, eventRoot, options = {}) {
+  const roots = ensureOwnerOnlyEventRoot(eventRoot);
+  const filePath = path.join(roots.pending, `${event.eventId}.json`);
+  const temporary = path.join(roots.pending, `.${event.eventId}.${process.pid}.${crypto.randomBytes(6).toString('hex')}.tmp`);
+  const bytes = Buffer.from(`${JSON.stringify(event, null, 2)}\n`, 'utf8');
+  let fd;
+  try {
+    fd = fs.openSync(temporary, 'wx', 0o600);
+    fs.writeFileSync(fd, bytes);
+    fs.fsyncSync(fd);
+    fs.closeSync(fd);
+    fd = undefined;
+    fs.chmodSync(temporary, 0o600);
+    fs.renameSync(temporary, filePath);
+    return { ...event, path: filePath };
+  } catch (error) {
+    if (fd !== undefined) fs.closeSync(fd);
+    try { fs.unlinkSync(temporary); } catch (_) { /* best effort cleanup of our temp file */ }
+    throw error;
+  }
+}
+
+function emitInstallEvent({ manifest = getManifest(), names, destinationDir, installed, options = {} } = {}) {
+  const eventRoot = options.eventRoot || process.env[SKILL_INSTALL_EVENT_ROOT_ENV];
+  if (!eventRoot) return null;
+  const event = installEventPayload({ manifest, names, destinationDir, installed, options });
+  return writeInstallEvent(event, eventRoot, options);
 }
 
 function isSafeSkillName(name) {
@@ -922,6 +1078,13 @@ function installSkills(destinationDir, options = {}) {
     installed.push({ name: entry.name, path: entry.target });
   }
 
+  // The event is emitted only after every selected target has been copied and
+  // its bytes can be re-read. A missing event root keeps the public package
+  // usable in standalone/project-local installs; the machine-wide launcher
+  // supplies JARVOS_SKILL_PROJECTION_EVENT_ROOT when it wants reconciliation.
+  const event = emitInstallEvent({ manifest, names, destinationDir, installed, options });
+  Object.defineProperty(installed, 'event', { value: event, enumerable: false, configurable: false });
+
   return installed;
 }
 
@@ -930,6 +1093,8 @@ module.exports = {
   MODULE_ROOT,
   MANIFEST_PATH,
   PACKS_DIR,
+  SKILL_INSTALL_EVENT_ROOT_ENV,
+  SKILL_INSTALL_EVENT_VERSION,
   assertPackManifest,
   assertProjectionManifest,
   applySkillProjection: projection.applySkillProjection,
@@ -948,5 +1113,10 @@ module.exports = {
   validateProjectionAdapter: projection.validateProjectionAdapter,
   getSkill,
   validateBundle,
+  emitInstallEvent,
+  installEventPayload,
+  releaseTupleForInstall,
+  manifestDigest,
+  sourceCodeDigest,
   installSkills,
 };
