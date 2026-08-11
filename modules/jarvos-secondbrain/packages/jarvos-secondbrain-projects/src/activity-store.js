@@ -136,10 +136,11 @@ function normalizeQuery(query = {}, now = new Date()) {
 }
 
 class ActivityStore {
-  constructor({ stateDir, now = () => new Date().toISOString() } = {}) {
+  constructor({ stateDir, now = () => new Date().toISOString(), admission = null } = {}) {
     if (typeof stateDir !== 'string' || !stateDir.trim()) throw new TypeError('stateDir is required');
     this.stateDir = path.resolve(stateDir);
     this.now = now;
+    this.admission = admission;
     fs.mkdirSync(this.stateDir, { recursive: true, mode: 0o700 });
     try { fs.chmodSync(this.stateDir, 0o700); } catch (_) { /* best effort on platforms without chmod */ }
     this.state = stateFile(this.stateDir);
@@ -162,9 +163,12 @@ class ActivityStore {
     return { generation: next.generation };
   }
 
-  admit(receipt, { derivedFrom = null, provenanceClass = 'direct', expectedGeneration } = {}) {
+  admit(receipt, { derivedFrom = null, provenanceClass = 'direct', expectedGeneration, admission = this.admission } = {}) {
     if (expectedGeneration !== undefined && expectedGeneration !== this.state.generation) throw new Error('stale activity store generation');
-    const incoming = activityEnvelope(receipt, { derivedFrom, provenanceClass });
+    if (!admission || typeof admission.verifyVerifiedReceipt !== 'function') throw new Error('activity receipt admission verifier required');
+    const verified = admission.verifyVerifiedReceipt(receipt);
+    if (!verified || verified.ok !== true || !verified.receipt) throw new Error('activity receipt admission invalid');
+    const incoming = activityEnvelope(verified.receipt, { derivedFrom, provenanceClass });
     const existingId = this.state.causalIndex[incoming.causalIdentity];
     if (existingId) {
       const existing = this.state.activities[existingId];

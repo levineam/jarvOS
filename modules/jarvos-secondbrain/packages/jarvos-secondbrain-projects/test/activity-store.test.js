@@ -10,6 +10,7 @@ const { ActivityStore } = require('../src/activity-store');
 const { createHostAdmission } = require('../src/provider-contracts');
 
 const NOW = '2026-08-10T12:00:00.000Z';
+const AUTHORITY = createHostAdmission({ producerId: 'notes', secret: 'activity-test-secret', allowedKinds: ['note_revision'] });
 
 function tmpDir() { return fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-activity-store-')); }
 
@@ -27,11 +28,11 @@ function receipt({ eventId = 'event-1', dedupeKey = 'causal-1', occurredAt = NOW
     sensitivity: 'private',
     dedupeKey,
   };
-  return createHostAdmission({ producerId: 'notes', secret: 'activity-test-secret', allowedKinds: ['note_revision'] }).admitVerifiedReceipt(base);
+  return AUTHORITY.admitVerifiedReceipt(base);
 }
 
 test('admits a verified receipt once and replays it by exact causal identity', () => {
-  const store = new ActivityStore({ stateDir: tmpDir(), now: () => NOW });
+  const store = new ActivityStore({ stateDir: tmpDir(), now: () => NOW, admission: AUTHORITY });
   const first = store.admit(receipt());
   assert.equal(first.status, 'admitted');
   const second = store.admit(receipt({ eventId: 'event-1-retry' }));
@@ -40,8 +41,16 @@ test('admits a verified receipt once and replays it by exact causal identity', (
   assert.equal(store.generation, 2);
 });
 
+test('rejects shape-valid activity without a trusted host admission', () => {
+  const store = new ActivityStore({ stateDir: tmpDir(), now: () => NOW, admission: AUTHORITY });
+  const unsigned = { ...receipt(), admission: { producerId: 'notes', digest: '0'.repeat(64), signature: '0'.repeat(64) } };
+  assert.throws(() => store.admit(unsigned), /activity receipt admission invalid/);
+  const unconfigured = new ActivityStore({ stateDir: tmpDir(), now: () => NOW });
+  assert.throws(() => unconfigured.admit(receipt()), /activity receipt admission verifier required/);
+});
+
 test('exact derived identity collapses direct and derived evidence while preserving refs', () => {
-  const store = new ActivityStore({ stateDir: tmpDir(), now: () => NOW });
+  const store = new ActivityStore({ stateDir: tmpDir(), now: () => NOW, admission: AUTHORITY });
   store.admit(receipt({ evidenceRefs: ['cass:session-1'] }));
   const derived = receipt({ eventId: 'activity-derived', dedupeKey: 'derived-record', evidenceRefs: ['projects:activity-1'] });
   const result = store.admit(derived, {
@@ -54,7 +63,7 @@ test('exact derived identity collapses direct and derived evidence while preserv
 });
 
 test('same-looking observations without exact identity remain separate', () => {
-  const store = new ActivityStore({ stateDir: tmpDir(), now: () => NOW });
+  const store = new ActivityStore({ stateDir: tmpDir(), now: () => NOW, admission: AUTHORITY });
   store.admit(receipt({ dedupeKey: 'causal-a', eventId: 'event-a' }));
   store.admit(receipt({ dedupeKey: 'causal-b', eventId: 'event-b' }));
   assert.equal(store.query({ from: NOW, to: NOW }).activities.length, 2);
@@ -62,7 +71,7 @@ test('same-looking observations without exact identity remain separate', () => {
 
 test('unattributed observations are quarantined and cannot assert a canonical project', () => {
   const stateDir = tmpDir();
-  const store = new ActivityStore({ stateDir, now: () => NOW });
+  const store = new ActivityStore({ stateDir, now: () => NOW, admission: AUTHORITY });
   const result = store.observeUnattributed({
     observationId: 'obs-1',
     sourceId: 'cass:session-unknown',
@@ -79,7 +88,7 @@ test('unattributed observations are quarantined and cannot assert a canonical pr
 });
 
 test('occurrence-time query is bounded, cursorable, and returns a stable watermark', () => {
-  const store = new ActivityStore({ stateDir: tmpDir(), now: () => NOW });
+  const store = new ActivityStore({ stateDir: tmpDir(), now: () => NOW, admission: AUTHORITY });
   store.admit(receipt({ eventId: 'event-1', dedupeKey: 'causal-1', occurredAt: '2026-08-09T10:00:00.000Z' }));
   store.admit(receipt({ eventId: 'event-2', dedupeKey: 'causal-2', occurredAt: '2026-08-10T10:00:00.000Z' }));
   const first = store.query({ from: '2026-08-09T00:00:00.000Z', to: NOW, limit: 1 });
@@ -93,7 +102,7 @@ test('occurrence-time query is bounded, cursorable, and returns a stable waterma
 
 test('state generations are owner-only and durable across reload', () => {
   const stateDir = tmpDir();
-  const store = new ActivityStore({ stateDir, now: () => NOW });
+  const store = new ActivityStore({ stateDir, now: () => NOW, admission: AUTHORITY });
   store.admit(receipt());
   const reloaded = new ActivityStore({ stateDir, now: () => NOW });
   assert.equal(reloaded.generation, 1);
