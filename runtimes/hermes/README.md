@@ -14,7 +14,8 @@ Hermes Agent has built-in learning loops, memory nudges, skill auto-creation, se
 
 1. Install [Hermes Agent](https://github.com/NousResearch/hermes-agent)
 2. Clone this repo
-3. Run `hermes setup` first to configure your model/API keys and create `~/.hermes/config.yaml`
+3. Run `hermes setup` first to configure your model/API keys and create
+   `$HERMES_HOME/config.yaml` (defaults to `~/.hermes`)
 4. Run `./runtimes/hermes/setup.sh` (or manually copy core/ files to your Hermes workspace)
 5. Fill in your personal details in `USER.md` and `ONTOLOGY.md`
 6. Start chatting: `hermes`
@@ -47,8 +48,10 @@ Hermes has built-in systems for things jarvOS custom-builds on OpenClaw:
 The setup script registers the shared jarvOS MCP server with Hermes using the
 native stdio transport, then verifies the connection with `hermes mcp test
 jarvos`. Registration is idempotent: an existing `jarvos` entry is preserved
-and never overwritten. The setup script backs up `~/.hermes/config.yaml` before
-any configuration write.
+and never overwritten. The setup script backs up `$HERMES_HOME/config.yaml`
+before any configuration write. Set `HERMES_HOME` to a disposable directory
+for a rehearsal so skills, plugins, and config stay isolated from the installed
+profile.
 
 The setup installs an opt-in Hermes plugin that uses the documented
 `on_session_start` and `pre_llm_call` hooks. On the first turn for each
@@ -66,10 +69,14 @@ projection, setup verifies the single artifact generation in `adapter.json`:
 the skills manifest, bounded context plugin, and Hermes `@jarvos/coding` host
 adapter must all match their pinned digests. A mixed generation refuses setup.
 
-Hermes exposes `jarvos_coding_take_issue_to_done` as the existing
-`@jarvos/coding` entrypoint. Its continuity input is pointer-and-digest only;
-the host does not receive copied transcripts, allocate worktrees, or own coding
-leases, pull requests, or completion state.
+The Hermes host adapter can register `jarvos_coding_take_issue_to_done` as the
+existing `@jarvos/coding` entrypoint. Its continuity input is
+pointer-and-digest only; the host does not receive copied transcripts,
+allocate worktrees, or own coding leases, pull requests, or completion state.
+The base shared-context MCP server does not invent a live coding controller: a
+host integration must inject the existing `@jarvos/coding` controller, and an
+unregistered or unavailable provider is reported as blocked rather than
+falling back to a second execution path.
 
 ## Runtime Adapter Status
 

@@ -16,9 +16,10 @@ const {
 
 const ROOT = path.resolve(__dirname, '..', '..', '..');
 
-function runHermesSetup({ healthy = true } = {}) {
+function runHermesSetup({ healthy = true, isolatedHermesHome = false } = {}) {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-hermes-setup-'));
   const home = path.join(tmp, 'home');
+  const hermesHome = isolatedHermesHome ? path.join(tmp, 'hermes-home') : path.join(home, '.hermes');
   const workspace = path.join(tmp, 'workspace');
   const binDir = path.join(tmp, 'bin');
   const logPath = path.join(tmp, 'hermes.log');
@@ -30,8 +31,8 @@ function runHermesSetup({ healthy = true } = {}) {
     `printf '%s\\n' "$*" >> ${JSON.stringify(logPath)}`,
     'if [ "${1:-}" = "mcp" ] && [ "${2:-}" = "list" ]; then exit 1; fi',
     'if [ "${1:-}" = "mcp" ] && [ "${2:-}" = "add" ]; then',
-    '  mkdir -p "$HOME/.hermes"',
-    "  printf 'terminal:\\n' > \"$HOME/.hermes/config.yaml\"",
+    '  mkdir -p "$HERMES_HOME"',
+    "  printf 'terminal:\\n' > \"$HERMES_HOME/config.yaml\"",
     '  exit 0',
     'fi',
     `if [ "\${1:-}" = "mcp" ] && [ "\${2:-}" = "test" ]; then exit ${healthy ? 0 : 1}; fi`,
@@ -45,11 +46,12 @@ function runHermesSetup({ healthy = true } = {}) {
   const result = spawnSync('bash', [path.join(ROOT, 'runtimes', 'hermes', 'setup.sh'), workspace], {
     cwd: ROOT,
     encoding: 'utf8',
-    env: { ...process.env, HOME: home, PATH: `${binDir}${path.delimiter}${process.env.PATH || ''}` },
+    env: { ...process.env, HOME: home, ...(isolatedHermesHome ? { HERMES_HOME: hermesHome } : {}), PATH: `${binDir}${path.delimiter}${process.env.PATH || ''}` },
     maxBuffer: 8 * 1024 * 1024,
   });
   return {
     tmp,
+    hermesHome,
     logPath,
     result,
     cleanup() { fs.rmSync(tmp, { recursive: true, force: true }); },
@@ -66,6 +68,19 @@ test('Hermes setup registers and verifies MCP for a fresh config', () => {
     assert.match(log, /mcp test jarvos/);
     assert.match(run.result.stdout, /Hermes MCP entry 'jarvos' is healthy/);
     assert.ok(fs.existsSync(path.join(run.tmp, 'home', '.hermes', 'plugins', 'jarvos-context', 'plugin.yaml')));
+  } finally {
+    run.cleanup();
+  }
+});
+
+test('Hermes setup keeps MCP, plugin, and skills in an explicitly requested home', () => {
+  const run = runHermesSetup({ isolatedHermesHome: true });
+  try {
+    assert.equal(run.result.status, 0, run.result.stderr || run.result.stdout);
+    assert.ok(fs.existsSync(path.join(run.hermesHome, 'config.yaml')));
+    assert.ok(fs.existsSync(path.join(run.hermesHome, 'plugins', 'jarvos-context', 'plugin.yaml')));
+    assert.ok(fs.existsSync(path.join(run.hermesHome, 'skills')));
+    assert.equal(fs.existsSync(path.join(run.tmp, 'home', '.hermes', 'config.yaml')), false);
   } finally {
     run.cleanup();
   }
