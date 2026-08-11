@@ -15,6 +15,10 @@ GOV_DIR="$REPO_ROOT/core/governance"
 WORKSPACE_INPUT="${1:-$REPO_ROOT}"
 mkdir -p "$WORKSPACE_INPUT"
 WORKSPACE="$(cd "$WORKSPACE_INPUT" && pwd)"
+# The Hermes CLI honors HERMES_HOME. Keeping the setup script on the same
+# boundary makes disposable parity rehearsals safe and avoids touching the
+# installed profile when a temporary home is requested.
+export HERMES_HOME="${HERMES_HOME:-$HOME/.hermes}"
 
 # The launcher calls this narrow mode to install one stable hook shell and its
 # exact consent. Do not run normal workspace onboarding from this path.
@@ -324,14 +328,14 @@ fi
 
 # ── Install portable jarvOS skills for Hermes ──
 echo "→ Reconciling portable jarvOS skills..."
-HERMES_SKILLS="$HOME/.hermes/skills"
+HERMES_SKILLS="$HERMES_HOME/skills"
 SKILL_INSTALLER="$REPO_ROOT/modules/jarvos-skills/scripts/install-skills.js"
 if [ -f "$SKILL_INSTALLER" ]; then
   # The projection contract creates missing/clean targets and preserves unknown,
   # locally modified, or conflicting targets. It never replaces a user edit.
   node "$SKILL_INSTALLER" project --harness hermes --dest "$HERMES_SKILLS" --apply
-  echo "  ✓ portable skills reconciled at ~/.hermes/skills/"
-  echo "  i Existing ~/.hermes/skills/jarvos/SKILL.md is not managed or overwritten by this setup."
+  echo "  ✓ portable skills reconciled at $HERMES_SKILLS/"
+  echo "  i Existing $HERMES_SKILLS/jarvos/SKILL.md is not managed or overwritten by this setup."
 else
   echo "  ⚠ @jarvos/skills installer not found — portable skills were not changed"
 fi
@@ -339,10 +343,10 @@ fi
 # ── Install the bounded first-turn context plugin ──
 JARVOS_CONTEXT_PLUGIN_INSTALLED=0
 JARVOS_CONTEXT_PLUGIN_SOURCE="$REPO_ROOT/runtimes/hermes/plugins/jarvos-context"
-JARVOS_CONTEXT_PLUGIN_TARGET="$HOME/.hermes/plugins/jarvos-context"
+JARVOS_CONTEXT_PLUGIN_TARGET="$HERMES_HOME/plugins/jarvos-context"
 if [ -f "$JARVOS_CONTEXT_PLUGIN_SOURCE/plugin.yaml" ] && [ -f "$JARVOS_CONTEXT_PLUGIN_SOURCE/__init__.py" ]; then
   if [ -e "$JARVOS_CONTEXT_PLUGIN_TARGET" ]; then
-    echo "  i Existing ~/.hermes/plugins/jarvos-context is preserved; automatic hydration was not changed."
+    echo "  i Existing $HERMES_HOME/plugins/jarvos-context is preserved; automatic hydration was not changed."
   else
     mkdir -p "$(dirname "$JARVOS_CONTEXT_PLUGIN_TARGET")"
     cp -R "$JARVOS_CONTEXT_PLUGIN_SOURCE" "$JARVOS_CONTEXT_PLUGIN_TARGET"
@@ -358,20 +362,8 @@ echo ""
 echo "→ Configuring Hermes..."
 HERMES_MCP_STATUS=0
 if command -v hermes >/dev/null 2>&1; then
-  HERMES_CONFIG="$HOME/.hermes/config.yaml"
+  HERMES_CONFIG="$HERMES_HOME/config.yaml"
   MCP_SERVER="$REPO_ROOT/modules/jarvos-agent-context/scripts/jarvos-mcp.js"
-  if [ "$JARVOS_CONTEXT_PLUGIN_INSTALLED" -eq 1 ]; then
-    if [ -f "$HERMES_CONFIG" ]; then
-      plugin_backup="$HERMES_CONFIG.bak.$(date +%Y%m%d%H%M%S).$$"
-      cp "$HERMES_CONFIG" "$plugin_backup"
-      echo "  • Backup saved to $plugin_backup"
-    fi
-    if hermes plugins enable jarvos-context --no-allow-tool-override >/dev/null 2>&1; then
-      echo "  ✓ bounded jarvOS context plugin enabled"
-    else
-      echo "  ⚠ bounded jarvOS context plugin could not be enabled; call jarvos_hydrate manually"
-    fi
-  fi
   if [ -f "$MCP_SERVER" ]; then
     mcp_added=0
     mcp_backup=""
@@ -410,6 +402,33 @@ if command -v hermes >/dev/null 2>&1; then
   else
     HERMES_MCP_STATUS=1
     echo "  ✗ shared jarvOS MCP server not found"
+  fi
+  # `hermes plugins enable` needs a config file. Registering the MCP server
+  # first creates that file for a disposable home, while existing homes keep
+  # their prior config and still receive a backup before this mutation.
+  if [ "$JARVOS_CONTEXT_PLUGIN_INSTALLED" -eq 1 ]; then
+    if [ -f "$HERMES_CONFIG" ]; then
+      plugin_backup="$HERMES_CONFIG.bak.$(date +%Y%m%d%H%M%S).$$"
+      cp "$HERMES_CONFIG" "$plugin_backup"
+      echo "  • Backup saved to $plugin_backup"
+    fi
+    # Older Hermes builds exposed the explicit tool-override guard; current
+    # builds make plugin tool ownership a command-level default. Try the
+    # guarded spelling first and fall back to the current CLI shape.
+    plugin_enable_error="$(mktemp "${TMPDIR:-/tmp}/jarvos-hermes-plugin.XXXXXX")"
+    plugin_enabled=0
+    if hermes plugins enable jarvos-context --no-allow-tool-override > /dev/null 2> "$plugin_enable_error"; then
+      plugin_enabled=1
+    elif grep -qiE 'unknown option|unrecognized option|no such option|unexpected argument' "$plugin_enable_error" \
+      && hermes plugins enable jarvos-context >/dev/null 2>&1; then
+      plugin_enabled=1
+    fi
+    rm -f "$plugin_enable_error"
+    if [ "$plugin_enabled" -eq 1 ]; then
+      echo "  ✓ bounded jarvOS context plugin enabled"
+    else
+      echo "  ⚠ bounded jarvOS context plugin could not be enabled; call jarvos_hydrate manually"
+    fi
   fi
   if [ -f "$HERMES_CONFIG" ]; then
     if grep -qE '^terminal:[[:space:]]*(#.*)?$' "$HERMES_CONFIG"; then
