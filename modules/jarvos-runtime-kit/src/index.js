@@ -3,6 +3,7 @@
 const fs = require('fs');
 const path = require('path');
 const harnessDispatch = require('./harness-dispatch.js');
+const capabilityDescriptor = require('./capability-descriptor.js');
 
 const DEFAULT_AGENT_CONTEXT_MCP = 'modules/jarvos-agent-context/scripts/jarvos-mcp.js';
 const REQUIRED_MCP_TOOL = 'jarvos_hydrate';
@@ -105,6 +106,13 @@ function validateManifest(manifest) {
   }
   if (manifest.unsupportedCapabilities && !Array.isArray(manifest.unsupportedCapabilities)) {
     add(errors, 'unsupportedCapabilities must be an array');
+  }
+  if (manifest.capabilityDescriptor) {
+    const descriptor = capabilityDescriptor.validateCapabilityDescriptor(manifest.capabilityDescriptor);
+    errors.push(...descriptor.errors.map((error) => `capabilityDescriptor: ${error}`));
+    if (manifest.capabilityDescriptor.harness && manifest.id && manifest.capabilityDescriptor.harness !== manifest.id) {
+      add(errors, 'capabilityDescriptor.harness must match manifest.id');
+    }
   }
   if (!Array.isArray(manifest.verification) || manifest.verification.length === 0) {
     warnings.push('verification commands are recommended');
@@ -275,6 +283,7 @@ function scaffoldRuntime(runtimeId, outDir) {
 
 module.exports = {
   ...harnessDispatch,
+  ...capabilityDescriptor,
   DEFAULT_AGENT_CONTEXT_MCP,
   HYDRATION_MODES,
   REQUIRED_MCP_TOOL,

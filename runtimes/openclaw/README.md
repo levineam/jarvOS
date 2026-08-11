@@ -1,5 +1,11 @@
 # jarvOS — OpenClaw Runtime
 
+## Checked-in adapter status
+
+`openclaw-workspace` uses manual hydration. This repository provides the public
+adapter checklist below, but does not ship an OpenClaw MCP registration or a
+startup hook; local workspace adapters remain responsible for that integration.
+
 This directory contains OpenClaw-specific implementation files for jarvOS.
 
 ## What's Here
