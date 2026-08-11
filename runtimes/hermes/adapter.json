@@ -5,12 +5,12 @@
   "capabilityDescriptor": {
     "version": "jarvos-runtime-capability-descriptor.v1", "harness": "hermes",
     "capabilities": {
-      "context": { "currentWork": { "status": "supported", "transport": "jarvos MCP", "evidence": "sharedAgentContext required tools" }, "recall": { "status": "supported", "transport": "jarvos MCP", "evidence": "sharedAgentContext required tools" }, "startupHydration": { "status": "manual", "transport": "jarvos_hydrate MCP tool", "reason": "Hermes startup hooks are not verified." } },
+      "context": { "currentWork": { "status": "supported", "transport": "jarvos MCP", "evidence": "sharedAgentContext required tools" }, "recall": { "status": "supported", "transport": "jarvos MCP", "evidence": "sharedAgentContext required tools" }, "startupHydration": { "status": "supported", "transport": "Hermes on_session_start + pre_llm_call plugin hooks", "evidence": "plugins/jarvos-context/__init__.py" } },
       "notes": { "create": { "status": "supported", "transport": "jarvos_create_note MCP tool", "evidence": "sharedAgentContext required tools" }, "read": { "status": "unsupported", "reason": "No public Hermes note-read bridge is declared." }, "update": { "status": "unsupported", "reason": "No public Hermes note-update bridge is declared." }, "journalLink": { "status": "unsupported", "reason": "No public Hermes journal-link bridge is declared." } },
       "skills": { "discover": { "status": "manual", "transport": "Hermes skill directory", "reason": "The public adapter installs guidance but does not claim skill discovery integration." }, "invoke": { "status": "manual", "transport": "Hermes skill directory", "reason": "Hermes owns skill invocation." } },
       "toolAuthorization": { "declare": { "status": "unsupported", "reason": "No public Hermes authorization contract is installed." }, "enforce": { "status": "unsupported", "reason": "Hermes owns tool authorization." } },
       "egress": { "declare": { "status": "unsupported", "reason": "No public Hermes egress declaration is installed." }, "enforce": { "status": "unsupported", "reason": "Hermes owns egress enforcement." } },
-      "session": { "startupHook": { "status": "manual", "transport": "jarvos_hydrate MCP tool", "reason": "No verified Hermes startup hook exists." }, "handoff": { "status": "unsupported", "reason": "No public Hermes handoff adapter is declared." } },
+      "session": { "startupHook": { "status": "supported", "transport": "Hermes on_session_start + pre_llm_call plugin hooks", "evidence": "plugins/jarvos-context/__init__.py" }, "handoff": { "status": "unsupported", "reason": "No public Hermes handoff adapter is declared." } },
       "inboundDispatch": { "receive": { "status": "unsupported", "reason": "No public Hermes inbound dispatch bridge is declared." }, "validate": { "status": "unsupported", "reason": "No public Hermes inbound dispatch bridge is declared." } },
       "lifecycle": { "receipt": { "status": "unsupported", "reason": "No public Hermes lifecycle receipt bridge is declared." } },
       "scheduledWork": { "participate": { "status": "unsupported", "reason": "Hermes scheduling remains host-native." } },
@@ -38,9 +38,11 @@
         "verification": "hermes mcp test jarvos"
       },
       "hydration": {
-        "mode": "manual",
-        "command": "Call the jarvos_hydrate MCP tool at session start.",
-        "reason": "Hermes exposes MCP registration, but this adapter does not claim an automatic startup hook until the native hook contract is verified."
+        "mode": "hook",
+        "event": "on_session_start + pre_llm_call",
+        "script": "plugins/jarvos-context/__init__.py",
+        "defaultMaxChars": 6000,
+        "fallback": "Call the jarvos_hydrate MCP tool at session start if the plugin is not installed or enabled."
       }
     }
   ],
@@ -54,12 +56,7 @@
       "~/.hermes/skills/jarvos/SKILL.md"
     ]
   },
-  "unsupportedCapabilities": [
-    {
-      "capability": "automatic-startup-hydration",
-      "reason": "Hermes MCP registration is supported; automatic startup hydration remains deferred until the native startup hook surface is verified."
-    }
-  ],
+  "unsupportedCapabilities": [],
   "verification": [
     "node modules/jarvos-runtime-kit/scripts/jarvos-runtime-kit.js check hermes"
   ]

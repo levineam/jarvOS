@@ -61,9 +61,11 @@ test('Hermes setup registers and verifies MCP for a fresh config', () => {
   try {
     assert.equal(run.result.status, 0, run.result.stderr || run.result.stdout);
     const log = fs.readFileSync(run.logPath, 'utf8');
+    assert.match(log, /plugins enable jarvos-context --no-allow-tool-override/);
     assert.match(log, /mcp add jarvos --command node --args/);
     assert.match(log, /mcp test jarvos/);
     assert.match(run.result.stdout, /Hermes MCP entry 'jarvos' is healthy/);
+    assert.ok(fs.existsSync(path.join(run.tmp, 'home', '.hermes', 'plugins', 'jarvos-context', 'plugin.yaml')));
   } finally {
     run.cleanup();
   }

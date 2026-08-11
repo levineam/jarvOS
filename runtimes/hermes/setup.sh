@@ -234,6 +234,23 @@ else
   echo "  ⚠ @jarvos/skills installer not found — portable skills were not changed"
 fi
 
+# ── Install the bounded first-turn context plugin ──
+JARVOS_CONTEXT_PLUGIN_INSTALLED=0
+JARVOS_CONTEXT_PLUGIN_SOURCE="$REPO_ROOT/runtimes/hermes/plugins/jarvos-context"
+JARVOS_CONTEXT_PLUGIN_TARGET="$HOME/.hermes/plugins/jarvos-context"
+if [ -f "$JARVOS_CONTEXT_PLUGIN_SOURCE/plugin.yaml" ] && [ -f "$JARVOS_CONTEXT_PLUGIN_SOURCE/__init__.py" ]; then
+  if [ -e "$JARVOS_CONTEXT_PLUGIN_TARGET" ]; then
+    echo "  i Existing ~/.hermes/plugins/jarvos-context is preserved; automatic hydration was not changed."
+  else
+    mkdir -p "$(dirname "$JARVOS_CONTEXT_PLUGIN_TARGET")"
+    cp -R "$JARVOS_CONTEXT_PLUGIN_SOURCE" "$JARVOS_CONTEXT_PLUGIN_TARGET"
+    JARVOS_CONTEXT_PLUGIN_INSTALLED=1
+    echo "  ✓ bounded jarvOS context plugin installed"
+  fi
+else
+  echo "  ⚠ bounded jarvOS context plugin source is missing — manual hydration remains available"
+fi
+
 # ── Configure Hermes workspace ──
 echo ""
 echo "→ Configuring Hermes..."
@@ -241,6 +258,18 @@ HERMES_MCP_STATUS=0
 if command -v hermes >/dev/null 2>&1; then
   HERMES_CONFIG="$HOME/.hermes/config.yaml"
   MCP_SERVER="$REPO_ROOT/modules/jarvos-agent-context/scripts/jarvos-mcp.js"
+  if [ "$JARVOS_CONTEXT_PLUGIN_INSTALLED" -eq 1 ]; then
+    if [ -f "$HERMES_CONFIG" ]; then
+      plugin_backup="$HERMES_CONFIG.bak.$(date +%Y%m%d%H%M%S).$$"
+      cp "$HERMES_CONFIG" "$plugin_backup"
+      echo "  • Backup saved to $plugin_backup"
+    fi
+    if hermes plugins enable jarvos-context --no-allow-tool-override >/dev/null 2>&1; then
+      echo "  ✓ bounded jarvOS context plugin enabled"
+    else
+      echo "  ⚠ bounded jarvOS context plugin could not be enabled; call jarvos_hydrate manually"
+    fi
+  fi
   if [ -f "$MCP_SERVER" ]; then
     mcp_added=0
     mcp_backup=""
