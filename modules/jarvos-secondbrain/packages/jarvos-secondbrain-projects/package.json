@@ -1,6 +1,6 @@
 {
   "name": "jarvos-secondbrain-projects",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "description": "JarvOS secondbrain — the Projects record: one markdown page per project holding Goal, High-level plan, and Definition of Done",
   "main": "src/projects.js",
   "bin": {

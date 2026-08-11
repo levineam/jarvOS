@@ -68,9 +68,10 @@ test('guard leaves zero-byte vault-root orphan untouched', () => {
   assert.equal(fs.existsSync(rootPath), true);
 });
 
-test('canonical writer repairs matching zero-byte vault-root duplicate after writing note', () => {
+test('canonical writer leaves duplicate cleanup to an Obsidian-owned maintenance path', () => {
   const vault = makeVault();
   const title = 'Canonical Durable Note';
+  const notesPath = path.join(vault.notesDir, `${title}.md`);
   const rootPath = path.join(vault.vaultRoot, `${title}.md`);
   fs.closeSync(fs.openSync(rootPath, 'w'));
 
@@ -82,14 +83,25 @@ test('canonical writer repairs matching zero-byte vault-root duplicate after wri
     JARVOS_NOTE_OPTIMIZATION: '0',
   }, () => {
     const { writeNoteFile } = require('../packages/jarvos-secondbrain-notes/src/write-to-vault.js');
-    const result = writeNoteFile({ title, content: 'Canonical body.' });
-    assert.equal(result.vaultRootDuplicate.repaired, true);
-    assert.equal(fs.existsSync(rootPath), false);
+    const result = writeNoteFile({
+      title,
+      content: 'Canonical body.',
+      vaultRoot: vault.vaultRoot,
+      vaultId: 'test-vault',
+      operationId: 'note-duplicate-guard-0001',
+      mutationExecutor(operation) {
+        fs.mkdirSync(path.dirname(notesPath), { recursive: true });
+        fs.writeFileSync(notesPath, operation.content, 'utf8'); // fake app.vault.create
+        return { status: 'committed' };
+      },
+    });
+    assert.equal(result.vaultRootDuplicate, null);
+    assert.equal(fs.existsSync(rootPath), true);
     assert.match(fs.readFileSync(result.path, 'utf8'), /Canonical body\./);
   });
 });
 
-test('journal backlink repairs matching zero-byte vault-root duplicate without deleting orphans', () => {
+test('journal backlink leaves matching zero-byte vault-root duplicate for Obsidian-owned maintenance', () => {
   const vault = makeVault();
   const title = 'Backlinked Durable Note';
   const notesPath = path.join(vault.notesDir, `${title}.md`);
@@ -103,10 +115,12 @@ test('journal backlink repairs matching zero-byte vault-root duplicate without d
     JARVOS_JOURNAL_DIR: vault.journalDir,
   }, () => {
     const { linkNoteToJournal } = require('../bridge/provenance/src/link-to-journal.js');
+    const { createAcknowledgedVaultMutationService } = require('./helpers/acknowledged-vault-mutation-service');
     const journalPath = path.join(vault.journalDir, '2030-02-03.md');
-    const result = linkNoteToJournal({ noteTitle: title, journalPath });
-    assert.equal(result.vaultRootDuplicate.repaired, true);
-    assert.equal(fs.existsSync(rootPath), false);
+    const result = linkNoteToJournal({ noteTitle: title, journalPath, mutationService: createAcknowledgedVaultMutationService(vault.vaultRoot) });
+    assert.equal(result.vaultRootDuplicate.repaired, false);
+    assert.match(result.vaultRootDuplicate.reason, /must not bypass Obsidian/);
+    assert.equal(fs.existsSync(rootPath), true);
     assert.match(fs.readFileSync(journalPath, 'utf8'), /\[\[Backlinked Durable Note\]\]/);
   });
 });

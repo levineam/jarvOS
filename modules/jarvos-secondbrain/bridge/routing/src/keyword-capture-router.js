@@ -47,9 +47,9 @@ const {
   inferTitle,
   isSubstantiveIdea,
 } = require('../../../packages/jarvos-ambient/src/routing');
+const { createArtifactReceipt } = require('../../../src/artifact-receipt');
 
 function applyRoutingPlan(capture = {}, options = {}) {
-  const adapter = options.adapter || createStorageAdapter(options);
   const plan = buildRoutingPlan(capture);
   const date = plan.date;
   const result = {
@@ -57,11 +57,13 @@ function applyRoutingPlan(capture = {}, options = {}) {
     journalEntry: null,
     note: null,
     noteLink: null,
+    artifactReceipt: createArtifactReceipt(),
   };
 
   if (plan.ignored) {
     return result;
   }
+  const adapter = options.adapter || createStorageAdapter(options);
 
   if (plan.createNote) {
     result.note = adapter.writeNote({
@@ -86,8 +88,13 @@ function applyRoutingPlan(capture = {}, options = {}) {
     });
     result.noteLink = result.journalEntry;
   } else {
-    adapter.ensureJournal({ date });
+    result.journalEntry = adapter.ensureJournal({ date });
   }
+
+  result.artifactReceipt = createArtifactReceipt({ artifacts: [
+    ...(result.note?.artifactReceipt?.artifacts || []),
+    ...(result.journalEntry?.artifactReceipt?.artifacts || []),
+  ] });
 
   return result;
 }

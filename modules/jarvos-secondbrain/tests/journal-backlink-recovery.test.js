@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { createJarvosVaultTransforms } = require('../src/vault-transform-registry.js');
 
 const {
   classifyDeferredBacklink,
@@ -31,6 +32,33 @@ function note(root, relativePath, noteId) {
   return target;
 }
 
+function fakeMutationService(state, { failMessage, onExecute } = {}) {
+  const transforms = createJarvosVaultTransforms();
+  let sequence = 0;
+  return {
+    source: 'bridge.note-journal-contract',
+    vaultRoot: state.root,
+    createWriteContext({ vaultRelativePath, intentId, operationSource }) {
+      return { vaultId: 'backlink-recovery-test', vaultRelativePath, operationId: intentId || `backlink-test-${++sequence}`, sequence: ++sequence, source: operationSource };
+    },
+    execute(operation) {
+      if (onExecute) onExecute(operation);
+      if (failMessage) throw new Error(failMessage);
+      const target = path.join(state.root, operation.vaultRelativePath);
+      if (operation.operationKind === 'create') {
+        if (fs.existsSync(target)) return fs.readFileSync(target, 'utf8') === operation.content ? { status: 'already_satisfied' } : { status: 'conflict' };
+        fs.mkdirSync(path.dirname(target), { recursive: true });
+        fs.writeFileSync(target, operation.content, 'utf8');
+        return { status: 'committed' };
+      }
+      const current = fs.readFileSync(target, 'utf8');
+      if (transforms.isSatisfied(current, operation)) return { status: 'already_satisfied' };
+      fs.writeFileSync(target, transforms.applyNode(current, operation), 'utf8');
+      return { status: 'committed' };
+    },
+  };
+}
+
 test('v2 recovery validates identity and derives the journal target from the validated path', () => {
   const state = fixture();
   try {
@@ -48,6 +76,7 @@ test('v2 recovery validates identity and derives the journal target from the val
       journalDir: state.journalDir,
       vaultRoot: state.root,
       notesDir: state.notesDir,
+      mutationService: fakeMutationService(state),
     });
     assert.equal(flushed.linked, 1);
     assert.match(fs.readFileSync(state.journalPath, 'utf8'), /\[\[Notes\/Projects\/Actual Name\]\]/);
@@ -106,7 +135,7 @@ test('legacy entries use only exact title evidence and do not fuzzy-match notes'
     assert.equal(exactNote.status, 'retry');
     fs.writeFileSync(state.journalPath, '## 📝 Notes\n- [[Legacy Title]]\n', 'utf8');
     const exactLink = classifyDeferredBacklink({ journalPath: state.journalPath, noteTitle: 'Legacy Title', section: '📝 Notes' }, { vaultRoot: state.root, notesDir: state.notesDir });
-    assert.equal(exactLink.status, 'linked');
+    assert.equal(exactLink.status, 'retry');
   } finally {
     fs.rmSync(state.root, { recursive: true, force: true });
   }
@@ -149,12 +178,13 @@ test('linker accepts optional v2 identity fields and records them on deferred mu
       noteTitle: 'Identity Failure',
       noteId: 'identity-failure-id',
       notePath,
-      ownedJournalMutator: () => { throw new Error('Obsidian unavailable'); },
+      mutationService: fakeMutationService(state, { failMessage: 'Obsidian unavailable' }),
     }));
     const entry = Object.values(JSON.parse(fs.readFileSync(deferredQueuePathForJournalDir(state.journalDir), 'utf8')).entries)[0];
     assert.equal(entry.noteId, 'identity-failure-id');
     assert.equal(entry.notePath, 'Notes/Identity Failure.md');
     assert.equal(entry.auditState, 'recorded');
+    assert.equal(entry.mutationSource, 'bridge.note-journal-contract');
   } finally {
     fs.rmSync(state.root, { recursive: true, force: true });
   }
@@ -171,7 +201,7 @@ test('failed retry stays pending with attempt audit', () => {
       journalDir: state.journalDir,
       vaultRoot: state.root,
       notesDir: state.notesDir,
-      ownedJournalMutator: () => { throw new Error('Obsidian unavailable'); },
+      mutationService: fakeMutationService(state, { failMessage: 'Obsidian unavailable' }),
     });
     assert.equal(result.pending, 1);
     const queuePath = deferredQueuePathForJournalDir(state.journalDir);
@@ -199,15 +229,13 @@ test('an entry added during a flush remains pending after the locked latest-stat
       journalDir: state.journalDir,
       vaultRoot: state.root,
       notesDir: state.notesDir,
-      ownedJournalMutator: ({ journalPath, noteTitle, section }) => {
-        if (!added) {
+      mutationService: fakeMutationService(state, { onExecute: (operation) => {
+        if (operation.operationKind === 'transform' && !added) {
           added = true;
-          recordDeferredBacklink({ journalPath, noteTitle: 'Second', noteId: 'second-id', notePath: 'Notes/Second.md', section, reason: 'failed' });
+          recordDeferredBacklink({ journalPath: state.journalPath, noteTitle: 'Second', noteId: 'second-id', notePath: 'Notes/Second.md', section: '📝 Notes', reason: 'failed' });
         }
-        const source = fs.readFileSync(journalPath, 'utf8');
-        fs.writeFileSync(journalPath, `${source.replace(/-\n$/, '')}- [[${noteTitle}]]\n`, 'utf8');
-        return { alreadyPresent: false, mutationOwner: 'test' };
-      },
+        if (operation.operationKind === 'transform') assert.equal(operation.transformName, 'journal-backlink');
+      } }),
     });
     assert.equal(flush.linked, 1);
     const entries = Object.values(JSON.parse(fs.readFileSync(deferredQueuePathForJournalDir(state.journalDir), 'utf8')).entries);

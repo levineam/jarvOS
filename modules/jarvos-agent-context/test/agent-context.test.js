@@ -1,13 +1,14 @@
 'use strict';
 
 const assert = require('assert');
-const { spawn, spawnSync } = require('child_process');
+const { spawnSync } = require('child_process');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const test = require('node:test');
 
 const jarvosPaths = require('../../jarvos-secondbrain/bridge/config/jarvos-paths.js');
+const { createJarvosVaultTransforms } = require('../../jarvos-secondbrain/src/vault-transform-registry.js');
 const {
   createNote,
   controlPlane,
@@ -66,6 +67,7 @@ function withTempVault(fn) {
     JARVOS_TIMEZONE: process.env.JARVOS_TIMEZONE,
     JARVOS_SESSION_THREAD_ID: process.env.JARVOS_SESSION_THREAD_ID,
     JARVOS_ALLOW_UNSAFE_TEST_JOURNAL_WRITE: process.env.JARVOS_ALLOW_UNSAFE_TEST_JOURNAL_WRITE,
+    XDG_STATE_HOME: process.env.XDG_STATE_HOME,
   };
 
   process.env.JARVOS_VAULT_DIR = vault;
@@ -73,11 +75,12 @@ function withTempVault(fn) {
   process.env.JARVOS_JOURNAL_DIR = journal;
   process.env.JARVOS_TIMEZONE = 'UTC';
   process.env.JARVOS_ALLOW_UNSAFE_TEST_JOURNAL_WRITE = '1';
+  process.env.XDG_STATE_HOME = path.join(tmp, 'state');
   jarvosPaths.resetConfigCache();
 
   let result;
   try {
-    result = fn({ tmp, vault, notes, journal });
+    result = fn({ tmp, vault, notes, journal, mutationService: fakeMutationService(vault) });
   } catch (error) {
     for (const [key, value] of Object.entries(oldEnv)) {
       if (value === undefined) delete process.env[key];
@@ -102,6 +105,59 @@ function withTempVault(fn) {
   }
   cleanup();
   return result;
+}
+
+function fakeMutationService(vaultRoot) {
+  const transforms = createJarvosVaultTransforms();
+  const vaultId = 'test-agent-context-vault';
+  let sequence = 0;
+  return {
+    vaultRoot,
+    vaultId,
+    createWriteContext({ vaultRelativePath, intentId, operationSource }) {
+      sequence += 1;
+      return {
+        mutationExecutor: (operation) => this.execute(operation),
+        operationId: intentId || `test-operation-${String(sequence).padStart(8, '0')}`,
+        sequence,
+        source: operationSource,
+        vaultId,
+        vaultRoot,
+      };
+    },
+    execute(operation) {
+      const filePath = path.join(vaultRoot, operation.vaultRelativePath);
+      const exists = fs.existsSync(filePath);
+      if (operation.operationKind === 'create') {
+        if (exists && fs.readFileSync(filePath, 'utf8') !== operation.content) return fakeReceipt(operation, 'conflict');
+        if (!exists) {
+          fs.mkdirSync(path.dirname(filePath), { recursive: true });
+          fs.writeFileSync(filePath, operation.content, 'utf8');
+        }
+        return fakeReceipt(operation, exists ? 'already_satisfied' : 'committed');
+      }
+      if (operation.operationKind === 'transform' && exists) {
+        const current = fs.readFileSync(filePath, 'utf8');
+        const next = transforms.applyNode(current, operation);
+        if (!transforms.isSatisfied(next, operation)) return fakeReceipt(operation, 'failed');
+        fs.writeFileSync(filePath, next, 'utf8');
+        return fakeReceipt(operation, next === current ? 'already_satisfied' : 'committed');
+      }
+      return fakeReceipt(operation, 'unavailable');
+    },
+  };
+}
+
+function fakeReceipt(operation, status) {
+  return {
+    schemaVersion: 1,
+    operation,
+    status,
+    lifecycleState: ['committed', 'already_satisfied'].includes(status) ? 'acknowledged' : status,
+    persistence: 'durable',
+    obsidian: ['committed', 'already_satisfied'].includes(status) ? 'acknowledged' : 'unavailable',
+    sync: 'unknown',
+  };
 }
 
 async function withControlPlaneHost(fn) {
@@ -196,7 +252,7 @@ test('published agent-context resolves its declared control-plane dependency in 
 });
 
 test('createNote writes note, links journal, and verifies contract', () => {
-  withTempVault(({ notes, journal }) => {
+  withTempVault(({ notes, journal, mutationService }) => {
     const date = new Date().toLocaleDateString('en-CA', { timeZone: 'UTC' });
     const journalPath = path.join(journal, `${date}.md`);
     fs.writeFileSync(journalPath, `# ${date}\n\n## 📝 Notes\n`, 'utf8');
@@ -205,6 +261,7 @@ test('createNote writes note, links journal, and verifies contract', () => {
       title: 'Codex jarvOS Adapter Test',
       content: 'Research notes for Codex.',
       frontmatter: { project: 'codex' },
+      mutationService,
     });
 
     assert.equal(result.ok, true);
@@ -229,10 +286,11 @@ test('createNote writes note, links journal, and verifies contract', () => {
 });
 
 test('createNote creates today journal when missing', () => {
-  withTempVault(({ journal }) => {
+  withTempVault(({ journal, mutationService }) => {
     const result = createNote({
       title: 'Missing Journal Test',
       content: 'Create the journal if needed.',
+      mutationService,
     });
 
     assert.equal(result.ok, true);
@@ -241,8 +299,61 @@ test('createNote creates today journal when missing', () => {
   });
 });
 
+test('agent note outcome separates committed note, deferred backlink, and unknown Sync without leaking paths', async () => {
+  await withTempVault(async ({ vault, journal, mutationService }) => {
+    const date = new Date().toLocaleDateString('en-CA', { timeZone: 'UTC' });
+    fs.writeFileSync(path.join(journal, `${date}.md`), `# ${date}\n\n## 📝 Notes\n`, 'utf8');
+    const execute = mutationService.execute.bind(mutationService);
+    mutationService.execute = (operation) => operation.vaultRelativePath.startsWith('Journal/')
+      ? fakeReceipt(operation, 'unavailable')
+      : execute(operation);
+
+    const result = createNote({
+      title: 'Deferred Link Test',
+      content: 'The note persists even while its journal backlink waits.',
+      mutationService,
+    });
+    assert.equal(result.ok, false);
+    assert.equal(result.outcome.note.status, 'committed');
+    assert.equal(result.outcome.backlink.status, 'deferred');
+    assert.equal(result.outcome.sync.status, 'unknown');
+    assert.doesNotMatch(result.markdown, new RegExp(vault.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+    assert.doesNotMatch(result.markdown, /operationId|expectedHash|intendedHash|createdAt/);
+
+    const mcp = await callTool('jarvos_create_note', {
+      title: 'Deferred Link MCP Test',
+      content: 'MCP must expose only the bounded status.',
+      mutationService,
+    });
+    assert.equal(mcp.isError, true);
+    assert.match(mcp.content[0].text, /Journal backlink: deferred/);
+    assert.doesNotMatch(mcp.content[0].text, new RegExp(vault.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+  });
+});
+
+test('saved-locally note is pending rather than written or fully synced', () => {
+  withTempVault(({ journal, mutationService }) => {
+    const date = new Date().toLocaleDateString('en-CA', { timeZone: 'UTC' });
+    fs.writeFileSync(path.join(journal, `${date}.md`), `# ${date}\n\n## 📝 Notes\n`, 'utf8');
+    const execute = mutationService.execute.bind(mutationService);
+    mutationService.execute = (operation) => {
+      if (operation.vaultRelativePath.startsWith('Notes/')) {
+        const committed = execute(operation);
+        return { ...committed, status: 'saved_locally_sync_pending', lifecycleState: 'local_applied', persistence: 'pending', obsidian: 'pending', sync: 'pending' };
+      }
+      return fakeReceipt(operation, 'unavailable');
+    };
+    const result = createNote({ title: 'Offline Note Test', content: 'Local only for now.', mutationService });
+    assert.equal(result.ok, false);
+    assert.equal(result.outcome.note.status, 'saved_locally_sync_pending');
+    assert.equal(result.outcome.note.obsidian, 'pending');
+    assert.equal(result.outcome.sync.status, 'pending');
+    assert.match(result.markdown, /jarvOS Note Pending/);
+  });
+});
+
 test('session thread writes a note, links today journal, and reads across hosts', () => {
-  withTempVault(({ notes, journal }) => {
+  withTempVault(({ notes, journal, mutationService }) => {
     const date = new Date().toLocaleDateString('en-CA', { timeZone: 'UTC' });
     const write = writeSessionThread({
       threadId: 'SUP-2219',
@@ -254,6 +365,7 @@ test('session thread writes a note, links today journal, and reads across hosts'
       event: 'decision',
       summary: 'Read side works; write side needs the shared session thread.',
       nextStep: 'Have Codex read this on entry and continue the implementation.',
+      mutationService,
     });
 
     assert.equal(write.ok, true);
@@ -272,50 +384,30 @@ test('session thread writes a note, links today journal, and reads across hosts'
   });
 });
 
-test('session thread writes serialize concurrent checkpoints', async () => {
-  await withTempVault(async () => {
-    const script = `
-      const { writeSessionThread } = require(${JSON.stringify(path.join(__dirname, '..', 'src', 'index.js'))});
-      const worker = process.argv[1];
-      writeSessionThread({
+test('session thread appends checkpoints through latest-content transforms', () => {
+  withTempVault(({ mutationService }) => {
+    for (let index = 0; index < 6; index += 1) {
+      const result = writeSessionThread({
         threadId: 'race-thread',
-        actor: worker,
+        actor: `worker-${index}`,
         event: 'checkpoint',
-        summary: 'summary from ' + worker,
-        lockTimeoutMs: 30000,
-        lockRetryDelayMs: 25
+        summary: `summary from worker-${index}`,
+        timestamp: `2026-08-06T12:00:0${index}.000Z`,
+        mutationService,
       });
-    `;
-
-    const children = Array.from({ length: 6 }, (_, index) => {
-      return spawn(process.execPath, ['-e', script, `worker-${index}`], {
-        cwd: path.join(__dirname, '..'),
-        env: { ...process.env },
-        stdio: ['ignore', 'pipe', 'pipe'],
-      });
-    });
-
-    const results = await Promise.all(children.map((child) => new Promise((resolve) => {
-      let stderr = '';
-      child.stderr.on('data', (chunk) => {
-        stderr += chunk;
-      });
-      child.on('close', (code) => resolve({ code, stderr }));
-    })));
-
-    for (const result of results) {
-      assert.equal(result.code, 0, result.stderr);
+      assert.equal(result.ok, true);
     }
 
     const read = readSessionThread({ threadId: 'race-thread', maxChars: 12000 });
-    for (let index = 0; index < children.length; index += 1) {
+    for (let index = 0; index < 6; index += 1) {
       assert.match(read.content, new RegExp(`summary from worker-${index}`));
     }
+    assert.equal((read.content.match(/Rolling live working thread/g) || []).length, 1);
   });
 });
 
 test('session thread defaults prefer current Paperclip task over global host thread', () => {
-  withTempVault(() => {
+  withTempVault(({ mutationService }) => {
     const oldPaperclipTaskId = process.env.PAPERCLIP_TASK_ID;
     const oldSessionThreadId = process.env.JARVOS_SESSION_THREAD_ID;
     process.env.PAPERCLIP_TASK_ID = 'SUP-2219';
@@ -325,6 +417,7 @@ test('session thread defaults prefer current Paperclip task over global host thr
         actor: 'Codex',
         event: 'checkpoint',
         summary: 'Issue-specific handoff.',
+        mutationService,
       });
       assert.match(write.title, /SUP-2219/);
       assert.doesNotMatch(write.title, /global-host-thread/);
@@ -340,7 +433,7 @@ test('session thread defaults prefer current Paperclip task over global host thr
 });
 
 test('MCP session thread tools round-trip through the shared note and journal path', async () => {
-  await withTempVault(async ({ journal }) => {
+  await withTempVault(async ({ journal, mutationService }) => {
     const date = new Date().toLocaleDateString('en-CA', { timeZone: 'UTC' });
     const write = await callTool('jarvos_session_thread_write', {
       threadId: 'artifact-a',
@@ -350,6 +443,7 @@ test('MCP session thread tools round-trip through the shared note and journal pa
       event: 'artifact-change',
       summary: 'Artifact moved from draft to review.',
       nextStep: 'Review the linked artifact before editing.',
+      mutationService,
     });
     assert.equal(write.isError, false);
     assert.match(write.content[0].text, /jarvOS Session Thread Written/);
@@ -928,19 +1022,26 @@ function mcpRequest(message, env = process.env) {
 }
 
 test('createNote retains a deferred journal receipt without retrying mutation', () => {
-  withTempVault(({ notes }) => {
-    delete process.env.JARVOS_ALLOW_UNSAFE_TEST_JOURNAL_WRITE;
+  withTempVault(({ notes, mutationService: baseMutationService }) => {
+    const mutationService = {
+      ...baseMutationService,
+      execute(operation) {
+        if (operation.vaultRelativePath.startsWith('Journal/')) return fakeReceipt(operation, 'unavailable');
+        return baseMutationService.execute(operation);
+      },
+    };
     const result = createNote({
       title: 'Deferred Agent Context Note',
       content: 'The note must remain durable while backlink recovery is pending.',
+      mutationService,
     });
 
-    assert.equal(result.ok, true);
+    assert.equal(result.ok, false);
     assert.equal(result.note.journal.status, 'deferred');
     assert.equal(result.journal, result.note.journal);
-    assert.equal(result.journalLinked, false);
-    assert.equal(result.verification.deferred, true);
-    assert.match(result.markdown, /Link: deferred \(queued for reconciliation\)/);
+    assert.equal(result.verification, null);
+    assert.equal(result.outcome.backlink.deferred, true);
+    assert.match(result.markdown, /Journal backlink: deferred/);
     assert.ok(fs.existsSync(result.note.path));
     assert.ok(result.note.path.startsWith(notes));
     const queue = JSON.parse(fs.readFileSync(result.journal.deferredBacklink.deferredPath, 'utf8'));
@@ -1007,13 +1108,14 @@ test('MCP prompt get reports unknown prompts as JSON-RPC errors', () => {
 });
 
 test('MCP jarvos_create_note returns text content', async () => {
-  await withTempVault(async ({ journal }) => {
+  await withTempVault(async ({ journal, mutationService }) => {
     const date = new Date().toLocaleDateString('en-CA', { timeZone: 'UTC' });
     fs.writeFileSync(path.join(journal, `${date}.md`), `# ${date}\n\n## 📝 Notes\n`, 'utf8');
 
     const result = await callTool('jarvos_create_note', {
       title: 'MCP Note Test',
       content: 'Created through the MCP call path.',
+      mutationService,
     });
     assert.equal(result.isError, false);
     assert.match(result.content[0].text, /jarvOS Note Created/);

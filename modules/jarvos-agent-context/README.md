@@ -94,6 +94,17 @@ configured Notes directory, and every write links that note from today's journal
 through the same `@jarvos/secondbrain` note and journal helpers used by
 `jarvos_create_note`.
 
+Write results keep three facts separate:
+
+- **Note persistence** says whether Obsidian acknowledged the note, or whether it is only saved locally with reconciliation pending.
+- **Journal backlink** says `linked`, `deferred`, or `failed` independently of the note.
+- **Sync** says `converged`, `pending`, `diverged`, or `unknown`; an Obsidian acknowledgement alone never proves remote Sync convergence.
+
+MCP write responses expose only these bounded states and the note title. They
+do not include local paths, content hashes, operation identifiers, timestamps,
+or private adapter evidence. Session-thread checkpoints use a latest-content
+append transform so a concurrent Obsidian or mobile edit is preserved.
+
 Host reflex:
 
 1. On entry, call `jarvos_session_thread_read` with the issue, artifact, project,

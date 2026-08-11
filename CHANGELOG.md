@@ -39,6 +39,16 @@ published release. Publication still requires Andrew approval and a green
   never rewritten in bulk.
 
 ### Fixed
+- Route authored vault Markdown through one acknowledged Obsidian mutation
+  lifecycle. Notes, journals, backlinks, project pages, session threads, and
+  maintenance repairs no longer claim success from disk bytes alone; safe
+  offline writes remain explicitly Sync-pending until reconciliation.
+- Preserve note creation and journal-link outcomes independently, retain failed
+  backlinks for identity-safe retry, and apply retries against the latest
+  journal content so concurrent mobile edits are not overwritten.
+- Add bounded, read-only per-file Sync diagnostics and a disposable live smoke
+  gate that verifies source/runtime equality, app acknowledgement, guarded
+  cleanup, and mutation-ledger health without touching authored notes.
 - Make daily journal creation a portable, explicit-configuration lifecycle:
   missing current-date files are created exclusively and verified, existing
   authored journals are left byte-for-byte unchanged, note/Obsidian callers

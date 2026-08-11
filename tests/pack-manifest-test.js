@@ -44,6 +44,10 @@ function advertisedRuntimeAssets() {
     'modules/jarvos-runtime-kit/scripts/jarvos-runtime-kit.js',
     'modules/jarvos-runtime-kit/README.md',
     'modules/jarvos-control-plane/scripts/jarvos-manager.js',
+    'modules/jarvos-secondbrain/adapters/obsidian/src/vault-mutation-adapter.js',
+    'modules/jarvos-secondbrain/adapters/obsidian/src/vault-mutation-contract.js',
+    'modules/jarvos-secondbrain/adapters/obsidian/src/vault-mutation-ledger.js',
+    'modules/jarvos-secondbrain/adapters/obsidian/src/vault-mutation-reconciler.js',
     'profiles/minimal.json',
   ];
   for (const name of fs.readdirSync(runtimesDir)) {

@@ -10,6 +10,7 @@ const {
   detectTrigger,
   hasCaptureIntent,
 } = require('../bridge/routing/src/keyword-capture-router.js');
+const { createAcknowledgedVaultMutationService } = require('./helpers/acknowledged-vault-mutation-service');
 
 const TEST_DATE = '2026-01-02';
 
@@ -28,7 +29,7 @@ function withVaultEnv(vault, fn) {
   process.env.VAULT_NOTES_DIR = vault.notesDir;
   process.env.JOURNAL_DIR = vault.journalDir;
   try {
-    return fn();
+    return fn({ mutationService: createAcknowledgedVaultMutationService(vault.root), vaultRoot: vault.root, journalDir: vault.journalDir });
   } finally {
     if (prevNotes === undefined) delete process.env.VAULT_NOTES_DIR;
     else process.env.VAULT_NOTES_DIR = prevNotes;
@@ -44,11 +45,11 @@ function readDirFile(dir, name) {
 test('idea trigger routes lightweight capture to the journal Ideas section only', () => {
   const vault = makeTempVault();
 
-  withVaultEnv(vault, () => {
+  withVaultEnv(vault, (options) => {
     const result = applyRoutingPlan({
       text: 'I have an idea: build a lighter bridge promotion dashboard',
       date: TEST_DATE,
-    });
+    }, options);
 
     assert.equal(result.plan.route, 'idea');
     assert.equal(result.note, null);
@@ -63,17 +64,21 @@ test('idea trigger routes lightweight capture to the journal Ideas section only'
 test('substantive idea creates a note linked from the Ideas section', () => {
   const vault = makeTempVault();
 
-  withVaultEnv(vault, () => {
+  withVaultEnv(vault, (options) => {
     const result = applyRoutingPlan({
       title: 'Bridge routing architecture',
       text: 'Here is an idea: define a shared routing layer and keep storage-specific writes inside adapters so journal and note behavior stay portable.',
       date: TEST_DATE,
-    });
+    }, options);
 
     assert.equal(result.plan.route, 'idea');
     assert.ok(result.note);
     assert.equal(result.note.title, 'Bridge routing architecture');
     assert.ok(result.noteLink);
+    assert.deepEqual(result.artifactReceipt.artifacts.map(({ kind, vaultRelativePath, outcome }) => ({ kind, vaultRelativePath, outcome })), [
+      { kind: 'note', vaultRelativePath: 'Notes/Bridge routing architecture.md', outcome: 'committed' },
+      { kind: 'journal', vaultRelativePath: 'Journal/2026-01-02.md', outcome: 'committed' },
+    ]);
     assert.equal(fs.readdirSync(vault.notesDir).length, 1);
 
     const journal = readDirFile(vault.journalDir, `${TEST_DATE}.md`);
@@ -85,12 +90,12 @@ test('substantive idea creates a note linked from the Ideas section', () => {
 test('note trigger and ambiguous capture both bias to standalone notes plus journal Notes links', () => {
   const vault = makeTempVault();
 
-  withVaultEnv(vault, () => {
+  withVaultEnv(vault, (options) => {
     const explicit = applyRoutingPlan({
       text: 'note: lock the package map and explain where routing belongs',
       title: 'Secondbrain package map',
       date: TEST_DATE,
-    });
+    }, options);
 
     const defaultPlan = buildRoutingPlan({
       text: 'capture the package naming decision for later reference',
@@ -102,7 +107,7 @@ test('note trigger and ambiguous capture both bias to standalone notes plus jour
     const implicit = applyRoutingPlan({
       text: 'capture the package naming decision for later reference',
       date: TEST_DATE,
-    });
+    }, options);
 
     assert.ok(explicit.note);
     assert.ok(implicit.note);

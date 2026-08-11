@@ -34,7 +34,6 @@ const {
 
 const {
   createMemoryRecord,
-  checkMemoryDedup,
 } = require('../../../../jarvos-memory/src');
 
 const {
@@ -50,6 +49,7 @@ const {
 const {
   resolveConfiguredHeading,
 } = require('../../../packages/jarvos-secondbrain-journal/src/section-config');
+const { createArtifactReceipt } = require('../../../src/artifact-receipt');
 
 function applyStoragePlan(plan, capture = {}, options = {}) {
   const adapter = options.adapter || createStorageAdapter(options);
@@ -58,6 +58,7 @@ function applyStoragePlan(plan, capture = {}, options = {}) {
     journalEntry: null,
     note: null,
     noteLink: null,
+    artifactReceipt: createArtifactReceipt(),
   };
 
   if (plan.ignored) {
@@ -113,8 +114,13 @@ function applyStoragePlan(plan, capture = {}, options = {}) {
       result.noteLink = result.journalEntry;
     }
   } else {
-    adapter.ensureJournal({ date });
+    result.journalEntry = adapter.ensureJournal({ date });
   }
+
+  result.artifactReceipt = createArtifactReceipt({ artifacts: [
+    ...(result.note?.artifactReceipt?.artifacts || []),
+    ...(result.journalEntry?.artifactReceipt?.artifacts || []),
+  ] });
 
   return result;
 }
@@ -135,7 +141,9 @@ function applyThreePackagePlan(capture = {}, options = {}) {
   // Step 2: Apply memory routing
   let memoryResult = null;
   if (plan.routeToMemory && plan.memoryParams) {
-    const dedupResult = checkMemoryDedup(plan.memoryParams.content, plan.memoryParams.class);
+    const dedupResult = typeof options.checkMemoryDedup === 'function'
+      ? options.checkMemoryDedup(plan.memoryParams.content, plan.memoryParams.class)
+      : { isDuplicate: false, reason: 'dedup_adapter_not_configured' };
     plan.memoryDedup = dedupResult;
     if (dedupResult && dedupResult.isDuplicate) {
       return {
@@ -146,6 +154,7 @@ function applyThreePackagePlan(capture = {}, options = {}) {
         journal: keywordResult.journalEntry,
         note: keywordResult.note,
         noteLink: keywordResult.noteLink,
+        artifactReceipt: keywordResult.artifactReceipt,
         memory: null,
       };
     }
@@ -153,7 +162,7 @@ function applyThreePackagePlan(capture = {}, options = {}) {
     const params = { ...plan.memoryParams };
 
     // If a note was created, add the reference
-    if (keywordResult.note) {
+    if (keywordResult.note && keywordResult.note.written !== false && keywordResult.note.error == null) {
       params.noteRef = keywordResult.note.title || keywordResult.note.path || undefined;
     }
 
@@ -165,6 +174,7 @@ function applyThreePackagePlan(capture = {}, options = {}) {
     journal: keywordResult.journalEntry,
     note: keywordResult.note,
     noteLink: keywordResult.noteLink,
+    artifactReceipt: keywordResult.artifactReceipt,
     memory: memoryResult,
   };
 }

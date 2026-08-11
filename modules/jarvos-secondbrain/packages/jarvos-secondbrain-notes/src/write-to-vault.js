@@ -1,16 +1,20 @@
 #!/usr/bin/env node
 // Package-owned canonical note writer for jarvos-secondbrain-notes.
 // Input (stdin): { "title": "...", "content": "...", "frontmatter": {...} }
-// Writes to <vault-notes>/<title>.md.
+// Builds a note mutation for <vault-notes>/<title>.md. Execution is supplied
+// by bridge/top-level composition; this package never writes vault Markdown.
 // Output: { "written": true, "path": "...", "created": true|false, "journal": {...}, "knowledge": {...} }
 
 'use strict';
 
-const { existsSync, mkdirSync, readFileSync, writeFileSync } = require('fs');
+const { existsSync, readFileSync } = require('fs');
 const { randomUUID } = require('crypto');
-const { dirname, join } = require('path');
+const { join, relative, sep } = require('path');
+const {
+  artifactFromMutationResult,
+  createArtifactReceipt,
+} = require('../../../src/artifact-receipt');
 const { getVaultNotesDir, loadConfig } = require('./lib/notes-config');
-const { repairZeroByteVaultRootDuplicate } = require('./lib/vault-root-duplicate-guard');
 const { optimizeNoteKnowledge } = require('./knowledge-optimizer');
 const {
   canonicalizeFrontmatter,
@@ -18,7 +22,6 @@ const {
   parseFrontmatter,
   renderFrontmatter,
 } = require('./lib/note-schema');
-const { linkNoteToJournal } = require('../../../bridge/provenance/src/link-to-journal');
 
 function todayDate() {
   return new Intl.DateTimeFormat('en-CA', {
@@ -73,48 +76,41 @@ function buildFrontmatter({ incomingFrontmatter = {}, existingFrontmatter = {} }
   }));
 }
 
-function normalizeJournalResult(result) {
-  if (result?.linked === true) {
-    return { ...result, status: 'linked', linked: true, deferred: false, disabled: false, failed: false };
-  }
+// Pure operation factory.  The package deliberately does not know which
+// transport executes it; bridge and agent composition inject that executor.
+function createNoteMutationOperation({ operationId, vaultId, vaultRelativePath, title, content, frontmatter = {}, existingContent = '', existingFrontmatter = {}, appendEntry, sequence = 1, source } = {}) {
+  if (typeof operationId !== 'string' || !operationId.trim()) throw new Error('operationId is required for a note mutation');
+  if (!vaultId || !vaultRelativePath) throw new Error('vaultId and vaultRelativePath are required for a note mutation');
+  const normalizedFrontmatter = normalizeFrontmatter({ incoming: frontmatter, existing: existingFrontmatter });
+  const body = buildNoteBody(title, content);
+  const rendered = renderFrontmatter(normalizedFrontmatter) + body;
+  const created = !existingContent;
+  const replayPayload = created
+    ? null
+    : appendEntry
+      ? { noteId: normalizedFrontmatter.jarvos_note_id, entry: String(appendEntry).trim() }
+      : { noteId: normalizedFrontmatter.jarvos_note_id, body };
   return {
-    ...result,
-    status: 'failed',
-    linked: false,
-    deferred: false,
-    disabled: false,
-    failed: true,
-    reason: result?.reason || 'journal linker returned an unsuccessful result',
+    schemaVersion: 1,
+    operationId: operationId.trim(),
+    vaultId,
+    vaultRelativePath,
+    sequence,
+    operationKind: created ? 'create' : 'transform',
+    ...(created ? { content: rendered } : { transformName: appendEntry ? 'session-thread-append' : 'note-append-body', transformVersion: 1, replayPayload }),
+    noteId: normalizedFrontmatter.jarvos_note_id,
+    ...(source ? { source } : {}),
   };
 }
 
-function journalResultFromError(error) {
-  const deferredBacklink = error?.deferredBacklink;
-  if (deferredBacklink?.deferredPath && deferredBacklink?.key) {
-    return {
-      status: 'deferred',
-      linked: false,
-      deferred: true,
-      disabled: false,
-      failed: false,
-      reason: error.message,
-      deferredBacklink,
-      journalPath: deferredBacklink.journalPath,
-      deferredPath: deferredBacklink.deferredPath,
-      recoveryKey: deferredBacklink.key,
-    };
-  }
-  return {
-    status: 'failed',
-    linked: false,
-    deferred: false,
-    disabled: false,
-    failed: true,
-    reason: error.message,
-  };
+function hasPersistedNoteBytes(filePath, receipt) {
+  return Boolean(
+    ['committed', 'already_satisfied', 'saved_locally_sync_pending'].includes(receipt?.status)
+    && existsSync(filePath),
+  );
 }
 
-function writeNoteFile({ title, content, frontmatter = {} }) {
+function writeNoteFile({ title, content, frontmatter = {}, appendEntry, mutationExecutor, operationId, vaultId, vaultRoot, sequence = 1, source }) {
   if (!title) throw new Error('title is required');
   if (content === undefined || content === null) throw new Error('content is required');
   if (!frontmatter || typeof frontmatter !== 'object' || Array.isArray(frontmatter)) {
@@ -131,49 +127,53 @@ function writeNoteFile({ title, content, frontmatter = {} }) {
     incoming: frontmatter,
     existing: existingFrontmatter,
   });
-  const fileContent = renderFrontmatter(normalizedFrontmatter) + body;
-
-  mkdirSync(dirname(filePath), { recursive: true });
-  writeFileSync(filePath, fileContent, 'utf8');
-  const vaultRootDuplicate = repairZeroByteVaultRootDuplicate({
-    noteTitle: safeName,
-    notesDir,
-    notesFilePath: filePath,
-  });
-
-  let journal = {
-    status: 'disabled',
-    linked: false,
-    deferred: false,
-    disabled: true,
-    failed: false,
-    skipped: true,
-    reason: 'disabled by JARVOS_JOURNAL_BACKLINK=0',
-  };
-  if (process.env.JARVOS_JOURNAL_BACKLINK !== '0') {
-    try {
-      journal = normalizeJournalResult(linkNoteToJournal({
-        noteTitle: safeName,
-        section: '📝 Notes',
-        noteId: normalizedFrontmatter.jarvos_note_id,
-        notePath: filePath,
-      }));
-    } catch (error) {
-      journal = journalResultFromError(error);
-    }
+  if (typeof mutationExecutor !== 'function' || !vaultId || !vaultRoot || !operationId) {
+    throw new Error('Canonical vault mutation composition is required; package note writes cannot modify Markdown directly');
   }
-
-  const knowledge = optimizeNoteKnowledge({
-    filePath,
-    notesDir,
-    title: safeName,
-    body,
-    frontmatter: normalizedFrontmatter,
-    created,
-    journal,
+  const vaultRelativePath = relative(vaultRoot, filePath).split(sep).join('/');
+  const operation = createNoteMutationOperation({
+    operationId,
+    vaultId,
+    vaultRelativePath,
+    title,
+    content,
+    frontmatter,
+    existingContent: created ? '' : readFileSync(filePath, 'utf8'),
+    existingFrontmatter,
+    appendEntry,
+    sequence,
+    source,
   });
+  const receipt = mutationExecutor(operation);
+  const hasBytes = hasPersistedNoteBytes(filePath, receipt);
+  const artifactReceipt = createArtifactReceipt({
+    artifacts: [{
+      record: artifactFromMutationResult({
+        kind: 'note',
+        vaultRelativePath,
+        result: receipt,
+      }),
+      intent: 'user_requested',
+    }],
+  });
+  const journal = { status: 'pending', linked: false, deferred: false, disabled: false, failed: false, reason: 'backlink dispatch is composed separately' };
+  const knowledge = hasBytes
+    ? optimizeNoteKnowledge({ filePath, notesDir, title: safeName, body, frontmatter: { ...normalizedFrontmatter, jarvos_note_id: operation.noteId }, created, journal })
+    : null;
 
-  return { written: true, path: filePath, title: safeName, created, journal, knowledge, vaultRootDuplicate };
+  return {
+    written: ['committed', 'already_satisfied'].includes(receipt?.status),
+    savedLocally: receipt?.status === 'saved_locally_sync_pending',
+    path: filePath,
+    title: safeName,
+    created,
+    noteId: operation.noteId,
+    receipt,
+    artifactReceipt,
+    journal,
+    knowledge,
+    vaultRootDuplicate: null,
+  };
 }
 
 function main() {
@@ -203,6 +203,7 @@ module.exports = {
   buildFrontmatter,
   buildNoteBody,
   normalizeFrontmatter,
+  createNoteMutationOperation,
   sanitizeTitle,
   noteFilePath,
   todayDate,

@@ -479,7 +479,7 @@ function validateOneFile(filePath, content, defaults, opts) {
   return { violations, updatedText, changed, fixedCount };
 }
 
-function collectViolations(files, opts) {
+function collectViolations(files, opts = {}) {
   const projectNames = findProjectNames(files);
   const allViolations = [];
   let fixedIssues = 0;
@@ -494,7 +494,17 @@ function collectViolations(files, opts) {
     allViolations.push(...result.violations);
 
     if (opts.fix && result.changed) {
-      fs.writeFileSync(file, result.updatedText, 'utf8');
+      if (typeof opts.applyMarkdownMutation !== 'function') {
+        throw new Error('Cannot apply frontmatter fixes without an Obsidian-owned Markdown mutation executor');
+      }
+      const receipt = opts.applyMarkdownMutation({
+        filePath: file,
+        expectedContent: content,
+        nextContent: result.updatedText,
+      });
+      if (!['committed', 'already_satisfied', 'saved_locally_sync_pending'].includes(receipt?.status)) {
+        throw new Error(`Frontmatter fix was not applied through Obsidian: ${receipt?.status || 'unavailable'}`);
+      }
       filesChanged += 1;
       fixedIssues += result.fixedCount;
     }
@@ -527,7 +537,7 @@ function printHuman(summary, violations, fixStats, notesDir, usedFix) {
   }
 }
 
-function main() {
+function main({ applyMarkdownMutation } = {}) {
   let args;
   try {
     args = parseArgs(process.argv);
@@ -549,7 +559,7 @@ function main() {
   const files = walkMarkdownFiles(args.notesDir);
 
   // First pass (and optional fix pass).
-  const firstPass = collectViolations(files, { fix: args.fix });
+  const firstPass = collectViolations(files, { fix: args.fix, applyMarkdownMutation });
 
   // Final pass should always reflect post-fix state for exit code/reporting.
   const finalPass = collectViolations(files, { fix: false });

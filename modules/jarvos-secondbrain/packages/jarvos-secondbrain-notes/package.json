@@ -4,13 +4,13 @@
   "description": "JarvOS secondbrain — note writer and frontmatter lint for vault notes",
   "main": "src/write-to-vault.js",
   "bin": {
-    "jarvos-write-to-vault": "src/write-to-vault.js",
+    "jarvos-write-to-vault": "bin/write-to-vault.js",
     "jarvos-lint-frontmatter": "src/lint-frontmatter.js",
     "jarvos-manual-notes-maintenance": "src/manual-notes-maintenance.js",
     "jarvos-lint-source-material": "src/lint-source-material.js"
   },
   "scripts": {
-    "start": "node src/write-to-vault.js",
+    "start": "node bin/write-to-vault.js",
     "lint": "node src/lint-frontmatter.js",
     "test": "node --test ../../tests/keyword-capture-router.test.js"
   },
