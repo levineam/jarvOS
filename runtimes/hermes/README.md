@@ -61,7 +61,15 @@ manually at session start.
 
 The portable skills are projected through the manifest-driven installer. A
 projection is dry-run by default and only writes with `--apply`; unknown,
-locally modified, conflicting, or symlinked targets are preserved.
+locally modified, conflicting, or symlinked targets are preserved. Before any
+projection, setup verifies the single artifact generation in `adapter.json`:
+the skills manifest, bounded context plugin, and Hermes `@jarvos/coding` host
+adapter must all match their pinned digests. A mixed generation refuses setup.
+
+Hermes exposes `jarvos_coding_take_issue_to_done` as the existing
+`@jarvos/coding` entrypoint. Its continuity input is pointer-and-digest only;
+the host does not receive copied transcripts, allocate worktrees, or own coding
+leases, pull requests, or completion state.
 
 ## Runtime Adapter Status
 

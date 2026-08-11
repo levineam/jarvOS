@@ -20,6 +20,7 @@ const {
   verifyNoteCaptureContract,
   writeSessionThread,
 } = require('../src/index.js');
+const { issueRouteCapability } = require('../../jarvos-runtime-kit/src/index.js');
 const {
   callTool,
   PROMPTS,
@@ -308,6 +309,52 @@ test('session thread writes serialize concurrent checkpoints', async () => {
     const read = readSessionThread({ threadId: 'race-thread', maxChars: 12000 });
     for (let index = 0; index < children.length; index += 1) {
       assert.match(read.content, new RegExp(`summary from worker-${index}`));
+    }
+  });
+});
+
+test('route-bound session threads ignore caller-selected dimensions and isolate colliding native ids', () => {
+  withTempVault(() => {
+    const previous = {
+      required: process.env.JARVOS_REQUIRE_ROUTE_CAPABILITY,
+      secret: process.env.JARVOS_ROUTE_BINDING_SECRET,
+      generation: process.env.JARVOS_ROUTE_BINDING_GENERATION,
+    };
+    process.env.JARVOS_REQUIRE_ROUTE_CAPABILITY = '1';
+    process.env.JARVOS_ROUTE_BINDING_SECRET = 'agent-context-route-secret';
+    process.env.JARVOS_ROUTE_BINDING_GENERATION = 'hermes-jarvos.v1';
+    const base = {
+      harness: 'hermes', profile: 'default', platform: 'telegram', conversation: 'chat',
+      sender: 'sender', generation: 'hermes-jarvos.v1',
+    };
+    const first = issueRouteCapability({ route: { ...base, nativeSession: 'session/a' }, secret: process.env.JARVOS_ROUTE_BINDING_SECRET });
+    const second = issueRouteCapability({ route: { ...base, nativeSession: 'session-a' }, secret: process.env.JARVOS_ROUTE_BINDING_SECRET });
+    try {
+      const firstWrite = writeSessionThread({
+        routeCapability: first,
+        threadId: 'caller-chosen-collision',
+        actor: 'Hermes',
+        summary: 'first route checkpoint',
+      });
+      const secondWrite = writeSessionThread({
+        routeCapability: second,
+        threadId: 'caller-chosen-collision',
+        actor: 'Hermes',
+        summary: 'second route checkpoint',
+      });
+      assert.notEqual(firstWrite.note.path, secondWrite.note.path);
+      assert.equal(readSessionThread({ routeCapability: first }).content.includes('second route checkpoint'), false);
+      assert.equal(readSessionThread({ routeCapability: second }).content.includes('first route checkpoint'), false);
+      assert.throws(() => readSessionThread({ threadId: 'raw-caller-thread' }), /route capability is required/);
+    } finally {
+      for (const [key, value] of Object.entries({
+        JARVOS_REQUIRE_ROUTE_CAPABILITY: previous.required,
+        JARVOS_ROUTE_BINDING_SECRET: previous.secret,
+        JARVOS_ROUTE_BINDING_GENERATION: previous.generation,
+      })) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
     }
   });
 });
