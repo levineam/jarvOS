@@ -207,6 +207,31 @@ test('provider failure falls back inside the same run and preserves the normaliz
   assert.equal(store.getWorkRun(result.workRunId).events.length, 1);
 });
 
+test('native fallback can accept and execute a plan without a CE provider snapshot', async () => {
+  const currentManifest = manifest();
+  const store = createMemoryWorkRunStore();
+  let nativeWorkCalls = 0;
+  const workflow = createManagedCodingWorkflow({
+    manifest: currentManifest,
+    workRunStore: store,
+    ownerId: 'agent:codex',
+    nativeAdapter: {
+      plan: async () => ({ artifact: 'native-plan' }),
+      work: async () => { nativeWorkCalls += 1; return { artifact: 'native-work' }; },
+    },
+  });
+  const input = { subjectKey: 'levineam/jarvOS:SUP-5007', canonicalWorktree: '/private/jarvos/worktrees/SUP-5007', operationNonce: 'nonce-native-07' };
+  const planned = await workflow.plan(input);
+  assert.equal(planned.route, 'native-fallback');
+  const accepted = await workflow.acceptPlan({ ...input, planDigest: 'd'.repeat(64), packet: packet('d'.repeat(64)), artifact: { reference: 'artifact:plan123456', digest: 'd'.repeat(64) } });
+  assert.equal(accepted.ok, true, JSON.stringify(accepted));
+  const worked = await workflow.work({ ...input, planDigest: 'd'.repeat(64), packet: packet('d'.repeat(64)) });
+  assert.equal(worked.route, 'native-fallback');
+  const replay = await workflow.work({ ...input, planDigest: 'd'.repeat(64), packet: packet('d'.repeat(64)) });
+  assert.equal(replay.deduped, true);
+  assert.equal(nativeWorkCalls, 1);
+});
+
 test('failed provider receipts use a distinct route nonce and native plan fallback', async () => {
   const currentManifest = manifest();
   const currentProvider = provider(currentManifest);
@@ -266,7 +291,7 @@ test('work fallback blocks before native edits when reconciliation is unsafe', a
   assert.equal(store.getWorkRun(claim.workRunId, { public: false }).recovery.state, 'blocked');
 });
 
-test('provider timeout routes plan through native fallback', async () => {
+test('provider timeout blocks plan instead of racing a second native plan', async () => {
   const currentManifest = manifest();
   const currentProvider = provider(currentManifest);
   const workflow = createManagedCodingWorkflow({
@@ -279,5 +304,41 @@ test('provider timeout routes plan through native fallback', async () => {
     nativeAdapter: { plan: async () => ({ artifact: 'native-plan' }) },
   });
   const result = await workflow.plan({ subjectKey: 'levineam/jarvOS:SUP-5005', canonicalWorktree: '/private/jarvos/worktrees/SUP-5005' });
-  assert.equal(result.route, 'native-fallback');
+  assert.equal(result.status, 'blocked');
+  assert.equal(result.reasonCode, 'provider_timeout');
+});
+
+test('timed-out work waits for provider settlement, then reconciles once and replays durably', async () => {
+  const currentManifest = manifest();
+  const currentProvider = provider(currentManifest);
+  const store = createMemoryWorkRunStore();
+  let settleProvider;
+  let nativeWorkCalls = 0;
+  const workflow = createManagedCodingWorkflow({
+    manifest: currentManifest,
+    workRunStore: store,
+    ownerId: 'agent:codex',
+    providerSnapshot: currentProvider,
+    providerTimeoutMs: 5,
+    providerAdapter: { work: async () => new Promise((resolve) => { settleProvider = resolve; }) },
+    nativeAdapter: {
+      reconcileWork: async () => ({ safe: true }),
+      work: async () => { nativeWorkCalls += 1; return { artifact: 'native-work' }; },
+    },
+  });
+  const subjectKey = 'levineam/jarvOS:SUP-5008';
+  const input = { subjectKey, canonicalWorktree: '/private/jarvos/worktrees/SUP-5008', planDigest: 'e'.repeat(64), packet: packet('e'.repeat(64)), operationNonce: 'nonce-work-08' };
+  const claim = store.claimWorkRun({ ...input, ownerId: 'agent:codex', providerSnapshot: currentProvider });
+  store.acceptPlan({ workRunId: claim.workRunId, ownerId: claim.ownerId, fence: claim.fence, planDigest: input.planDigest, packetDigest: require('node:crypto').createHash('sha256').update(JSON.stringify(input.packet)).digest('hex'), providerPinDigest: currentProvider.pinDigest, artifact: { reference: 'artifact:plan123456', digest: input.planDigest } });
+  const timedOut = await workflow.work(input);
+  assert.equal(timedOut.reasonCode, 'provider_timeout');
+  const pending = await workflow.work(input);
+  assert.equal(pending.reasonCode, 'provider_pending');
+  settleProvider({});
+  await new Promise((resolve) => setImmediate(resolve));
+  const recovered = await workflow.work(input);
+  assert.equal(recovered.route, 'native-fallback');
+  const replay = await workflow.work(input);
+  assert.equal(replay.deduped, true);
+  assert.equal(nativeWorkCalls, 1);
 });

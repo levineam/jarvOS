@@ -86,7 +86,7 @@ function normalizeCodingEvidence(input = {}, principal) {
   if (input.provider !== undefined && input.provider !== null) {
     if (!isObject(input.provider)) throw new Error('coding work-run evidence.provider is invalid');
     for (const key of Object.keys(input.provider)) if (!CODING_PROVIDER_FIELDS.has(key)) throw new Error(`coding work-run evidence.provider.${key} is not allowed`);
-    if (!OPAQUE_ID.test(input.provider.id || '') || typeof input.provider.version !== 'string' || input.provider.version.length > 64
+    if (!OPAQUE_ID.test(input.provider.id || '') || !OPAQUE_ID.test(input.provider.version || '')
       || !/^[a-f0-9]{64}$/i.test(input.provider.pinDigest || '') || !OPAQUE_ID.test(input.provider.harness || '')
       || !OPAQUE_ID.test(input.provider.adapterVersion || '') || !CODING_PROVIDER_STATUSES.has(input.provider.status)) {
       throw new Error('coding work-run evidence.provider is invalid');
@@ -108,6 +108,8 @@ function normalizeCodingEvidence(input = {}, principal) {
     ? null
     : Array.isArray(input.detail) ? input.detail : [input.detail];
   if (detail && (detail.length > 10 || detail.some((entry) => typeof entry !== 'string' || entry.length > 500))) throw new Error('coding work-run evidence.detail must contain at most 10 bounded entries');
+  const at = input.at === undefined || input.at === null ? new Date().toISOString() : input.at;
+  if (typeof at !== 'string' || at.length > 64 || Number.isNaN(Date.parse(at))) throw new Error('coding work-run evidence.at is invalid');
   return {
     id: id('coding-evidence'),
     version: 'jarvos-coding-work-run-event/v1',
@@ -125,7 +127,7 @@ function normalizeCodingEvidence(input = {}, principal) {
       harness: input.provider.harness,
       adapterVersion: input.provider.adapterVersion,
       status: input.provider.status,
-      observedAt: input.provider.observedAt || null,
+      observedAt: input.provider.observedAt ? new Date(input.provider.observedAt).toISOString() : null,
     } : null,
     artifact: input.artifact ? {
       kind: input.artifact.kind,
@@ -134,7 +136,7 @@ function normalizeCodingEvidence(input = {}, principal) {
     } : null,
     detail,
     operationNonce: input.operationNonce || null,
-    at: input.at || new Date().toISOString(),
+    at: new Date(at).toISOString(),
   };
 }
 
