@@ -24,7 +24,7 @@
   ],
   "harnesses": {
     "codex": {
-      "status": "unsupported",
+      "status": "supported",
       "adapter": "codex-ce-adapter.v1",
       "capabilityRecord": "runtimes/codex/compound-engineering-capability.json"
     },

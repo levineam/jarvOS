@@ -70,7 +70,7 @@ test('the approved Compound Engineering manifest has one immutable pin and an ex
   assert.equal(result.ok, true, result.errors.join('\n'));
   assert.equal(loaded.manifest.schemaVersion, 'jarvos-managed-workflow-provider/v1');
   assert.equal(loaded.manifest.source.revision, 'e36ddb8cbd4dd902d3b6ddd96165a783b0ac4711');
-  assert.equal(loaded.manifest.harnesses.codex.status, 'unsupported');
+  assert.equal(loaded.manifest.harnesses.codex.status, 'supported');
   assert.equal(loaded.manifest.harnesses.hermes.status, 'unsupported');
 });
 

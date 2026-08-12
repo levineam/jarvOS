@@ -48,12 +48,12 @@
   },
   "managedProviders": {
     "compound-engineering": {
-      "status": "unsupported",
+      "status": "supported",
       "manifest": "modules/jarvos-coding/providers/compound-engineering.json",
       "capabilityRecord": "runtimes/codex/compound-engineering-capability.json",
       "conformanceReceipt": "runtimes/codex/compound-engineering-conformance.json",
       "profileBoundary": "CODEX_HOME",
-      "activation": "candidate-only-until-conformance",
+      "activation": "approved-pinned-after-conformance",
       "discovery": "read-only-codex-plugin-marketplace-and-plugin-list",
       "invocation": "codex-exec-bounded-provider-prompt",
       "fallback": "jarvos-native-workflow"

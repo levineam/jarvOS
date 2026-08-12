@@ -114,11 +114,12 @@ outcome separately from coding completion. Routine work is `not-eligible`, and
 provider failure or absence is `unavailable`/`failed` without reopening or
 downgrading a verified run.
 
-Codex is the first activation target. The shipped pin is CE 3.21.4 with an
-immutable revision and content digest, but its runtime admission remains
-`unsupported` until the disposable-profile invocation and strict receipt proof
-are reviewed. Doctor reports that distinction and the native jarvOS workflow
-continues in the same run/worktree. Other harnesses remain explicitly
+Codex is the first conformance-backed activation target. The shipped pin is CE
+3.21.4 with an immutable revision and content digest, and the checked-in
+disposable-profile receipt proves bounded invocation, strict receipts, denied
+capabilities, restart behavior, and rollback. Doctor reports the active health
+state and the native jarvOS workflow continues in the same run/worktree when CE
+is absent or unavailable. Other harnesses remain explicitly
 unsupported until they provide equivalent discovery, configuration-preservation,
 invocation, rollback, and fallback evidence. Approved updates may be discovered
 and staged automatically; only a reviewed manifest change can activate them.

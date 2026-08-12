@@ -286,6 +286,70 @@ test('native fallback in progress blocks concurrent work retries', async () => {
   assert.equal(completed.ok, true);
 });
 
+test('native fallback reservation is compare-and-set safe for stale concurrent claims', () => {
+  const store = createMemoryWorkRunStore();
+  const subjectKey = 'levineam/jarvOS:SUP-5011';
+  const canonicalWorktree = '/private/jarvos/worktrees/SUP-5011';
+  const first = store.claimWorkRun({ subjectKey, canonicalWorktree, ownerId: 'agent:codex' });
+  const stale = store.claimWorkRun({ subjectKey, canonicalWorktree, ownerId: 'agent:codex' });
+  const firstReservation = store.setRecoveryState({
+    workRunId: first.workRunId,
+    ownerId: first.ownerId,
+    fence: first.fence,
+    state: 'blocked',
+    reasonCode: 'native_fallback_in_progress',
+  });
+  const staleReservation = store.setRecoveryState({
+    workRunId: stale.workRunId,
+    ownerId: stale.ownerId,
+    fence: stale.fence,
+    state: 'blocked',
+    reasonCode: 'native_fallback_in_progress',
+  });
+  assert.equal(firstReservation.ok, true);
+  assert.equal(staleReservation.ok, false);
+  assert.equal(staleReservation.reason, 'recovery_in_progress');
+});
+
+test('native fallback adapter failure records a failed recovery and blocks retries', async () => {
+  const currentManifest = manifest();
+  const store = createMemoryWorkRunStore();
+  let nativeWorkCalls = 0;
+  const workflow = createManagedCodingWorkflow({
+    manifest: currentManifest,
+    workRunStore: store,
+    ownerId: 'agent:codex',
+    nativeAdapter: {
+      work: async () => {
+        nativeWorkCalls += 1;
+        throw new Error('native adapter failed');
+      },
+    },
+  });
+  const input = {
+    subjectKey: 'levineam/jarvOS:SUP-5012',
+    canonicalWorktree: '/private/jarvos/worktrees/SUP-5012',
+    planDigest: '2'.repeat(64),
+    packet: packet('2'.repeat(64)),
+    operationNonce: 'nonce-native-12',
+  };
+  const claim = store.claimWorkRun({ ...input, ownerId: 'agent:codex' });
+  store.acceptPlan({
+    workRunId: claim.workRunId,
+    ownerId: claim.ownerId,
+    fence: claim.fence,
+    planDigest: input.planDigest,
+    packetDigest: require('node:crypto').createHash('sha256').update(JSON.stringify(input.packet)).digest('hex'),
+    artifact: { reference: 'artifact:plan123456', digest: input.planDigest },
+  });
+  const first = await workflow.work(input);
+  const second = await workflow.work(input);
+  assert.equal(first.reasonCode, 'native_fallback_failed');
+  assert.equal(second.reasonCode, 'native_fallback_failed');
+  assert.equal(nativeWorkCalls, 1);
+  assert.equal(store.getWorkRun(claim.workRunId, { public: false }).recovery.state, 'failed');
+});
+
 test('failed provider receipts use a distinct route nonce and native plan fallback', async () => {
   const currentManifest = manifest();
   const currentProvider = provider(currentManifest);

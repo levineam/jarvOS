@@ -155,11 +155,11 @@ work-run store records the accepted plan digest, provider route, artifact
 references, nonces, and recovery state; thin session checkpoints are only
 reattachment hints.
 
-The Codex adapter is currently an explicit candidate/unsupported state. The
-runtime can discover the approved CE 3.21.4 installation, but activation waits
-for a disposable authenticated `codex exec` receipt and denied-capability proof.
-Run `jarvos doctor` to see the approved and discovered versions. Until that
-receipt is reviewed, `plan`, `work`, and `complete` fall back to the native
+The Codex adapter is the first conformance-backed CE route. The runtime accepts
+CE 3.21.4 only when the discovered installation matches the approved immutable
+pin and the reviewed disposable-profile receipt. Run `jarvos doctor` to see the
+approved and discovered versions. If the provider is absent, modified,
+disabled, or unavailable, `plan`, `work`, and `complete` fall back to the native
 jarvOS route in the same work run and worktree. A failed fallback does not make
 a second branch, plan, pull request, or completion claim.
 

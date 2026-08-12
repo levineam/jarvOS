@@ -490,7 +490,12 @@ function createManagedCodingWorkflow(options = {}) {
       state: 'blocked',
       reasonCode: 'native_fallback_in_progress',
     });
-    if (!preparing.ok) return { ok: false, status: 'blocked', route: 'native-fallback', workRunId: claimed.workRunId, reasonCode: 'recovery_state_not_recorded' };
+    if (!preparing.ok) {
+      const reasonCode = preparing.reason === 'recovery_in_progress'
+        ? 'native_fallback_in_progress'
+        : 'recovery_state_not_recorded';
+      return { ok: false, status: 'blocked', route: 'native-fallback', workRunId: claimed.workRunId, reasonCode };
+    }
     let native;
     try {
       native = await nativeAdapter.work(nativeInvocationValue);

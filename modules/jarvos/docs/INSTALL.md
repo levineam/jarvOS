@@ -67,20 +67,19 @@ supplies the planning and implementation loop behind those verbs. If it is
 absent, locally modified, unsupported, or unavailable, jarvOS uses its native
 workflow in the same run and worktree.
 
-The shipped CE pin is immutable and licensed. Candidate discovery is separate
-from activation: doctor may report a discovered CE installation, but only a
-reviewed jarvOS manifest and conformance receipt can enable it. For Codex, run:
+The shipped CE pin is immutable and licensed. Doctor reports whether the
+discovered Codex installation matches the reviewed conformance receipt. For
+Codex, run:
 
 ```bash
 jarvos doctor --profile minimal --workspace /path/to/workspace
 node modules/jarvos-runtime-kit/scripts/jarvos-runtime-kit.js check runtimes/codex/adapter.json
 ```
 
-`unsupported` is an honest health state, not an install failure. It means the
-provider can be identified but the native bounded invocation/receipt and denied
-capability proof have not been reviewed. The native coding path remains
-available. Do not follow upstream `main` or manually enable CE in a live Codex
-profile; use the disposable-profile conformance path documented in
+`not-installed`, `degraded`, `local-modified`, and `incompatible` are honest
+health states, not silent failures. They preserve the native coding path and
+surface a bounded recovery action. Do not follow upstream `main`; use the
+approved immutable pin and the profile-scoped setup/recovery path documented in
 [`runtimes/codex/README.md`](../../runtimes/codex/README.md).
 
 ## Public/Private Boundary

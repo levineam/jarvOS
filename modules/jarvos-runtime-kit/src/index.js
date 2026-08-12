@@ -2,6 +2,7 @@
 
 const fs = require('fs');
 const crypto = require('crypto');
+const os = require('os');
 const path = require('path');
 const { spawnSync } = require('child_process');
 const harnessDispatch = require('./harness-dispatch.js');
@@ -23,6 +24,11 @@ const CAPABILITY_ALLOWED_KEYS = new Set([
   'schemaVersion', 'version', 'provider', 'harness', 'admission', 'operations',
   'activation', 'discovery', 'invocation', 'proof', 'fixtureRoot', 'fixtureFiles',
   'fixtureTreeDigest',
+]);
+const CONFORMANCE_ALLOWED_KEYS = new Set([
+  'schemaVersion', 'provider', 'approvedVersion', 'approvedRevision', 'status',
+  'discovery', 'activation', 'invocation', 'receipt', 'capabilityDenial',
+  'rollback', 'fallback', 'admission', 'reviewedEvidence',
 ]);
 
 function repoRootFrom(start = __dirname) {
@@ -108,7 +114,7 @@ function validateCompoundEngineeringCapability(capability) {
     errors.push('capability.activation is required');
   } else {
     if (capability.activation.mechanism !== 'codex-plugin-marketplace') errors.push('capability.activation.mechanism must be codex-plugin-marketplace');
-    if (capability.activation.candidateOnly !== true) errors.push('capability.activation.candidateOnly must be true until U5 conformance');
+    if (typeof capability.activation.candidateOnly !== 'boolean') errors.push('capability.activation.candidateOnly must be boolean');
     if (capability.activation.requiresRestart !== true) errors.push('capability.activation.requiresRestart must be true');
     for (const field of ['marketplaceArgv', 'pluginArgv']) {
       if (!isSafeArgv(capability.activation[field])) errors.push(`capability.activation.${field} must be a safe argv array`);
@@ -131,7 +137,7 @@ function validateCompoundEngineeringCapability(capability) {
     errors.push('capability.invocation is required');
   } else {
     if (capability.invocation.surface !== 'codex exec') errors.push('capability.invocation.surface must be codex exec');
-    if (capability.invocation.proof !== 'characterized') errors.push('capability.invocation.proof must be characterized before activation');
+    if (!['characterized', 'conformant'].includes(capability.invocation.proof)) errors.push('capability.invocation.proof must be characterized or conformant');
   }
   if (!isObject(capability.proof)) {
     errors.push('capability.proof is required');
@@ -139,7 +145,7 @@ function validateCompoundEngineeringCapability(capability) {
     for (const field of ['artifactBoundary', 'discovery', 'invocation', 'receipt', 'activation']) {
       if (typeof capability.proof[field] !== 'string' || capability.proof[field].length === 0) errors.push(`capability.proof.${field} is required`);
     }
-    if (capability.proof.conformant !== false) errors.push('capability.proof.conformant must remain false until U5 conformance');
+    if (typeof capability.proof.conformant !== 'boolean') errors.push('capability.proof.conformant must be boolean');
   }
   if (!isSafeRelativePath(capability.fixtureRoot)) errors.push('capability.fixtureRoot must be a safe repository-relative path');
   if (!Array.isArray(capability.fixtureFiles) || capability.fixtureFiles.length === 0
@@ -149,10 +155,59 @@ function validateCompoundEngineeringCapability(capability) {
     errors.push('capability.fixtureFiles must not contain duplicates');
   }
   if (!isSha256(capability.fixtureTreeDigest)) errors.push('capability.fixtureTreeDigest must be a SHA-256 digest');
-  if (capability.admission === 'supported' || capability.proof?.conformant === true || capability.activation?.candidateOnly === false) {
-    errors.push('candidate-only capability must remain unsupported until the full Codex conformance packet passes');
+  if (capability.admission === 'unsupported') {
+    if (capability.activation?.candidateOnly !== true) errors.push('unsupported capability must remain candidate-only');
+    if (capability.proof?.conformant !== false) errors.push('unsupported capability cannot claim conformance');
+  } else {
+    if (capability.activation?.candidateOnly !== false) errors.push('supported or disabled capability must not remain candidate-only');
+    if (capability.proof?.conformant !== true) errors.push('supported or disabled capability requires conformance proof');
+    if (capability.invocation?.proof !== 'conformant') errors.push('supported or disabled capability requires a conformant invocation proof');
   }
   return { ok: errors.length === 0, errors };
+}
+
+function validateCodexConformanceReceipt(receipt, { capability } = {}) {
+  const errors = [];
+  if (!isObject(receipt)) return { ok: false, errors: ['Codex conformance receipt must be an object'] };
+  for (const key of Object.keys(receipt)) if (!CONFORMANCE_ALLOWED_KEYS.has(key)) errors.push(`conformance receipt has unknown field: ${key}`);
+  if (receipt.schemaVersion !== 'jarvos-codex-provider-conformance/v1') errors.push('conformance receipt schemaVersion is invalid');
+  if (receipt.provider !== 'compound-engineering') errors.push('conformance receipt provider must be compound-engineering');
+  if (typeof receipt.approvedVersion !== 'string' || receipt.approvedVersion !== capability?.provider?.version) errors.push('conformance receipt approvedVersion is not the shipped pin');
+  if (typeof receipt.approvedRevision !== 'string' || receipt.approvedRevision !== capability?.provider?.revision) errors.push('conformance receipt approvedRevision is not the shipped pin');
+  if (receipt.status !== 'passed') errors.push('conformance receipt status must be passed');
+  if (receipt.admission !== 'supported') errors.push('conformance receipt admission must be supported');
+  const discovery = receipt.discovery;
+  if (!isObject(discovery) || typeof discovery.codexVersion !== 'string' || discovery.marketplaceRevisionObserved !== true || discovery.installedVersionObserved !== true || discovery.profileBoundary !== 'CODEX_HOME'
+    || discovery.marketplaceRevision !== receipt.approvedRevision
+    || discovery.marketplaceSource !== 'https://github.com/EveryInc/compound-engineering-plugin.git') {
+    errors.push('conformance receipt discovery evidence is incomplete');
+  }
+  const activation = receipt.activation;
+  if (!isObject(activation) || activation.mechanism !== 'codex-plugin-marketplace' || activation.pinObserved !== true || activation.configurationPreserved !== true || activation.restartBoundary !== 'verified') {
+    errors.push('conformance receipt activation evidence is incomplete');
+  }
+  const invocation = receipt.invocation;
+  if (!isObject(invocation) || invocation.surface !== 'codex exec' || invocation.status !== 'passed' || invocation.profile !== 'disposable CODEX_HOME' || invocation.restartBoundary !== 'verified' || !Array.isArray(invocation.operations) || !['plan', 'work'].every((operation) => invocation.operations.includes(operation))) {
+    errors.push('conformance receipt invocation evidence is incomplete');
+  }
+  const receiptEvidence = receipt.receipt;
+  if (!isObject(receiptEvidence) || receiptEvidence.status !== 'passed' || receiptEvidence.strictContract !== 'validated' || receiptEvidence.providerIndependentAuthority !== 'validated' || !isSha256(receiptEvidence.planArtifactDigest) || !isSha256(receiptEvidence.workArtifactDigest)) {
+    errors.push('conformance receipt strict receipt evidence is incomplete');
+  }
+  const denial = receipt.capabilityDenial;
+  if (!isObject(denial) || denial.status !== 'passed' || denial.filesystem !== 'worktree-only' || denial.sandbox !== 'read-only denial verified' || !Array.isArray(denial.required) || !['credentials', 'network', 'profile-state', 'privileged-tools'].every((capabilityName) => denial.required.includes(capabilityName))) {
+    errors.push('conformance receipt denied-capability evidence is incomplete');
+  }
+  const rollback = receipt.rollback;
+  if (!isObject(rollback) || rollback.status !== 'passed' || rollback.pluginRemoved !== true || rollback.marketplaceRemoved !== true || rollback.unrelatedConfigPreserved !== true) {
+    errors.push('conformance receipt rollback evidence is incomplete');
+  }
+  const fallback = receipt.fallback;
+  if (!isObject(fallback) || fallback.status !== 'passed' || fallback.route !== 'jarvos-native-workflow' || fallback.sameRun !== true || fallback.sameWorktree !== true) {
+    errors.push('conformance receipt fallback evidence is incomplete');
+  }
+  if (typeof receipt.reviewedEvidence !== 'string' || receipt.reviewedEvidence.length < 1 || receipt.reviewedEvidence.length > 500 || /[\0\r\n]/.test(receipt.reviewedEvidence)) errors.push('conformance receipt reviewedEvidence must be bounded text');
+  return { ok: errors.length === 0, errors, receipt };
 }
 
 function collectCompoundEngineeringFixtureEntries(root, relative = '') {
@@ -266,6 +321,28 @@ function classifyCompoundEngineeringProvider({ capability, capabilityCheck, evid
       recoveryAction: 'preserve local changes, inspect the profile, and explicitly reconcile or disable the provider',
     };
   }
+  const marketplace = Array.isArray(evidence.marketplaces)
+    ? evidence.marketplaces.find((entry) => entry?.name === 'compound-engineering-plugin')
+    : null;
+  if (marketplace && typeof marketplace.source === 'string'
+    && marketplace.source !== 'https://github.com/EveryInc/compound-engineering-plugin.git') {
+    return {
+      status: 'incompatible',
+      reason: 'configured provider marketplace source does not match the approved repository',
+      recoveryAction: 'preserve the profile and reconcile only through the approved jarvOS pin',
+      approvedVersion: capability.provider.version,
+      activeVersion: null,
+    };
+  }
+  if (marketplace && typeof marketplace.revision === 'string' && marketplace.revision !== capability.provider.revision) {
+    return {
+      status: 'incompatible',
+      reason: 'configured provider marketplace revision does not match the approved pin',
+      recoveryAction: 'preserve the profile and reconcile only through the approved jarvOS pin',
+      approvedVersion: capability.provider.version,
+      activeVersion: null,
+    };
+  }
   const active = Array.isArray(evidence.installed)
     ? evidence.installed.find((entry) => entry?.name === 'compound-engineering' || entry?.pluginId === 'compound-engineering@compound-engineering-plugin')
     : null;
@@ -283,6 +360,15 @@ function classifyCompoundEngineeringProvider({ capability, capabilityCheck, evid
       status: 'degraded',
       reason: 'approved provider is installed but disabled',
       recoveryAction: 'enable the jarvOS-owned provider or use the native jarvOS fallback',
+      approvedVersion: capability.provider.version,
+      activeVersion: active.version || null,
+    };
+  }
+  if (!marketplace || marketplace.revision !== capability.provider.revision) {
+    return {
+      status: 'degraded',
+      reason: 'installed provider does not have an independently verified approved marketplace revision',
+      recoveryAction: 'rerun the profile-scoped provider reconciliation before relying on managed CE',
       approvedVersion: capability.provider.version,
       activeVersion: active.version || null,
     };
@@ -332,6 +418,33 @@ function compactCodexPlugin(entry = {}) {
   };
 }
 
+function compactCodexMarketplace(entry = {}) {
+  const compact = {
+    name: typeof entry.name === 'string' ? entry.name : null,
+    source: null,
+    revision: null,
+  };
+  if (typeof entry.root !== 'string' || !path.isAbsolute(entry.root)) return compact;
+  try {
+    const profileRoot = path.resolve(process.env.CODEX_HOME || path.join(os.homedir(), '.codex'));
+    const marketplaceRoot = path.resolve(entry.root);
+    const relative = path.relative(profileRoot, marketplaceRoot);
+    if (!relative || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) return compact;
+    const rootStat = fs.lstatSync(marketplaceRoot);
+    if (rootStat.isSymbolicLink() || !rootStat.isDirectory()) return compact;
+    const metadataPath = path.join(marketplaceRoot, '.codex-marketplace-install.json');
+    const stat = fs.lstatSync(metadataPath);
+    if (stat.isSymbolicLink() || !stat.isFile()) return compact;
+    const metadata = readJson(metadataPath);
+    compact.source = typeof metadata.source === 'string' ? metadata.source : null;
+    compact.revision = typeof metadata.revision === 'string' ? metadata.revision : null;
+  } catch (_) {
+    // A missing or malformed local metadata file is represented as an unverified
+    // marketplace; classification will keep the provider degraded or incompatible.
+  }
+  return compact;
+}
+
 function collectCodexCompoundEngineeringEvidence(options = {}) {
   if (isObject(options.evidence)) return options.evidence;
   const executable = options.executable || 'codex';
@@ -364,7 +477,7 @@ function collectCodexCompoundEngineeringEvidence(options = {}) {
     codexVersion,
     installed: Array.isArray(installedPayload?.installed) ? installedPayload.installed.map(compactCodexPlugin) : [],
     marketplaces: Array.isArray(marketplacePayload?.marketplaces)
-      ? marketplacePayload.marketplaces.map((entry) => ({ name: typeof entry.name === 'string' ? entry.name : null }))
+      ? marketplacePayload.marketplaces.map(compactCodexMarketplace)
       : [],
   };
 }
@@ -391,9 +504,11 @@ function inspectCompoundEngineeringProvider(options = {}) {
   if (fs.existsSync(conformancePath)) {
     try {
       const receipt = readJson(conformancePath);
+      const receiptValidation = validateCodexConformanceReceipt(receipt, { capability: loaded.capability });
       conformance = {
-        status: receipt.status === 'passed' ? 'passed' : 'blocked',
+        status: receiptValidation.ok && receipt.status === 'passed' ? 'passed' : 'invalid',
         providerRevision: typeof receipt.approvedRevision === 'string' ? receipt.approvedRevision : null,
+        errors: receiptValidation.errors,
       };
     } catch (_) {
       conformance = { status: 'invalid', providerRevision: null };
@@ -494,7 +609,9 @@ function validateManifest(manifest) {
       for (const field of ['status', 'manifest', 'capabilityRecord', 'conformanceReceipt', 'profileBoundary', 'activation', 'discovery', 'invocation', 'fallback']) {
         if (typeof managedCompound[field] !== 'string' || managedCompound[field].length === 0) add(errors, `managedProviders.compound-engineering.${field} is required`);
       }
-      if (managedCompound.status !== 'unsupported') add(errors, 'managedProviders.compound-engineering.status must remain unsupported until conformance proof passes');
+      if (!['supported', 'unsupported', 'disabled'].includes(managedCompound.status)) {
+        add(errors, 'managedProviders.compound-engineering.status must be supported, unsupported, or disabled');
+      }
       if (managedCompound.profileBoundary !== 'CODEX_HOME') add(errors, 'managedProviders.compound-engineering.profileBoundary must be CODEX_HOME');
     }
   }
@@ -672,10 +789,10 @@ function checkRuntime(manifestPath, options = {}) {
       if (fs.existsSync(receiptPath)) {
         try {
           const receipt = readJson(receiptPath);
-          if (receipt.provider !== 'compound-engineering') add(errors, 'Codex conformance receipt provider is invalid');
-          if (receipt.approvedVersion !== capabilityRecord?.provider?.version) add(errors, 'Codex conformance receipt approvedVersion is not the shipped pin');
-          if (receipt.approvedRevision !== capabilityRecord?.provider?.revision) add(errors, 'Codex conformance receipt approvedRevision is not the shipped pin');
-          if (receipt.admission !== 'unsupported') add(errors, 'Codex conformance receipt must keep admission unsupported until proof passes');
+          const receiptValidation = validateCodexConformanceReceipt(receipt, { capability: capabilityRecord });
+          if (!receiptValidation.ok) for (const error of receiptValidation.errors) add(errors, `Codex conformance receipt: ${error}`);
+          if (capabilityRecord && receipt.admission !== capabilityRecord.admission) add(errors, 'Codex conformance receipt admission does not match the capability record');
+          if (managedCompound.status === 'supported' && (receipt.status !== 'passed' || capabilityRecord?.admission !== 'supported' || capabilityRecord?.proof?.conformant !== true)) add(errors, 'supported Codex managed provider requires a passed conformance receipt and conformant capability record');
         } catch (error) {
           add(errors, `Codex conformance receipt could not be loaded: ${error.message}`);
         }
@@ -748,5 +865,6 @@ module.exports = {
   repoRootFrom,
   scaffoldRuntime,
   validateCompoundEngineeringCapability,
+  validateCodexConformanceReceipt,
   validateManifest,
 };

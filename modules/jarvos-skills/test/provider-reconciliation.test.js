@@ -135,9 +135,16 @@ test('candidate discovery is separate, age-bearing, and idempotent by provider k
   assert.equal(discoverManagedProviderCandidate({ approvedManifest: manifest, candidateManifest: manifest }).status, 'no-candidate');
 });
 
-test('codex remains explicitly skipped while the approved manifest says unsupported', () => {
+test('an unsupported harness remains explicitly skipped', () => {
   const input = fixture();
-  const plan = planManagedProviderReconciliation({ manifest: providerManifest, harness: 'codex', harnessConfig: {}, targetPath: input.targetPath, statePath: input.statePath });
+  const manifest = {
+    ...providerManifest,
+    harnesses: {
+      ...providerManifest.harnesses,
+      codex: { ...providerManifest.harnesses.codex, status: 'unsupported' },
+    },
+  };
+  const plan = planManagedProviderReconciliation({ manifest, harness: 'codex', harnessConfig: {}, targetPath: input.targetPath, statePath: input.statePath });
   assert.equal(plan.status, 'unsupported');
   assert.equal(managedProviderHealth(plan).doctor, 'skipped');
 });

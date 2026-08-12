@@ -148,10 +148,11 @@ matrix:
 | `local-modified` | jarvOS-owned state changed locally | preserve it; require inspect-then-apply reconciliation |
 | `unsupported` | discovery exists but the harness has not passed conformance | native jarvOS fallback; no activation mutation |
 
-New managed coding profiles may become CE-default only after the checked-in
-Codex conformance receipt is reviewed. Existing profiles remain unchanged during
-migration. Candidate discovery may be automatic, but activation always requires
-a new jarvOS-approved immutable pin and matching evidence.
+New managed coding profiles use CE by default after the checked-in Codex
+conformance receipt is reviewed. Existing profiles preserve their current
+provider state during migration. Candidate discovery may be automatic, but
+activation and updates always require a jarvOS-approved immutable pin and
+matching evidence.
 
 ### `claude`
 

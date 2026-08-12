@@ -167,12 +167,12 @@ plan revision, branch/worktree, review and submission evidence, and terminal
 close. An optional `compound` tail captures one screened reusable lesson after
 verification without changing completion.
 
-Codex discovery is shipped and doctor-visible, but activation remains
-`unsupported` until the disposable authenticated invocation returns a strict
-provider receipt and proves denied capabilities. Missing or failed CE therefore
-uses the native jarvOS workflow in the same run/worktree. Existing profiles do
-not silently change provider state; a reviewed provider pin and conformance
-receipt are required before a future update can enable CE by default.
+Codex is the first conformance-backed CE activation. The checked-in disposable
+authenticated receipt proves the approved pin, strict provider receipts, denied
+capabilities, restart behavior, and rollback. Missing, modified, disabled, or
+failed CE uses the native jarvOS workflow in the same run/worktree. Existing
+profiles preserve their provider state; only the reviewed immutable pin can be
+activated or updated.
 
 Smoke proof for the profile is available as:
 

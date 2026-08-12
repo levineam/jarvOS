@@ -81,8 +81,9 @@ test('managed provider package and public docs agree on pin, fallback, and admis
   assert.equal(provider.source.revision, capability.provider.revision);
   assert.equal(provider.source.contentDigest.length, 64);
   assert.equal(provider.review.status, 'approved');
-  assert.equal(capability.admission, 'unsupported');
-  assert.equal(conformance.admission, 'unsupported');
+  assert.equal(capability.admission, 'supported');
+  assert.equal(conformance.admission, 'supported');
+  assert.equal(conformance.status, 'passed');
 
   const docs = [
     fs.readFileSync(path.join(ROOT, 'README.md'), 'utf8'),
@@ -94,6 +95,6 @@ test('managed provider package and public docs agree on pin, fallback, and admis
     fs.readFileSync(path.join(ROOT, 'docs/architecture/jarvos-architecture.md'), 'utf8'),
   ];
   assert.ok(docs.every((text) => /native jarvOS|same run|same worktree|fallback/i.test(text)), 'public docs must explain native fallback');
-  assert.ok(docs.some((text) => /unsupported.*conformance|conformance.*unsupported/i.test(text)), 'public docs must preserve unsupported admission truth');
+  assert.ok(docs.some((text) => /conformance-backed|healthy.*conformance|conformance.*healthy/i.test(text)), 'public docs must preserve conformance-backed health truth');
   assert.ok(docs.some((text) => /plan.*work.*complete/i.test(text)), 'public docs must lead with jarvOS verbs');
 });

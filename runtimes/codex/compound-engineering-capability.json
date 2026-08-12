@@ -10,7 +10,7 @@
     "license": "MIT"
   },
   "harness": "codex",
-  "admission": "unsupported",
+  "admission": "supported",
   "operations": ["plan", "work", "compound"],
   "activation": {
     "mechanism": "codex-plugin-marketplace",
@@ -31,7 +31,7 @@
       "compound-engineering@compound-engineering-plugin",
       "--json"
     ],
-    "candidateOnly": true,
+    "candidateOnly": false,
     "requiresRestart": true
   },
   "discovery": {
@@ -61,7 +61,7 @@
   },
   "invocation": {
     "surface": "codex exec",
-    "proof": "characterized",
+    "proof": "conformant",
     "argvTemplate": [
       "codex",
       "exec",
@@ -76,12 +76,12 @@
     "receiptTransport": "jarvos-provider-receipt.v1"
   },
   "proof": {
-    "artifactBoundary": "characterized",
-    "discovery": "observed",
-    "invocation": "characterized",
-    "receipt": "jarvos-contract",
-    "activation": "unproven",
-    "conformant": false
+    "artifactBoundary": "verified",
+    "discovery": "verified",
+    "invocation": "verified",
+    "receipt": "verified",
+    "activation": "verified",
+    "conformant": true
   },
   "fixtureRoot": "runtimes/codex/fixtures/compound-engineering",
   "fixtureFiles": [

@@ -38,6 +38,9 @@ try {
     JARVOS_VAULT_PATH: vault,
     JARVOS_WORKSPACE_PATH: workspace,
     JARVOS_RUNTIME: 'minimal',
+    // Keep doctor discovery inside the disposable CLI fixture; never inspect
+    // the developer's live Codex profile during repository tests.
+    CODEX_HOME: path.join(tmp, 'codex-home'),
     JARVOS_CONTROL_PLANE_SERVICE_MODULE: controlPlaneHost,
   };
   const fakeOpenClaw = path.join(tmp, 'openclaw');

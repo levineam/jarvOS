@@ -384,6 +384,12 @@ function createWorkRunStore(options = {}) {
       if (!owner.ok) return noCommit(owner);
       if (!WORK_RUN_STATES.has(input.state) || input.state === 'completed') return noCommit({ ok: false, reason: 'invalid_recovery_state' });
       if (typeof input.reasonCode !== 'string' || !/^[a-z][a-z0-9_-]{1,63}$/.test(input.reasonCode)) return noCommit({ ok: false, reason: 'invalid_reason_code' });
+      if (input.state === 'blocked'
+        && input.reasonCode === 'native_fallback_in_progress'
+        && run.recovery?.state === 'blocked'
+        && run.recovery?.reasonCode === 'native_fallback_in_progress') {
+        return noCommit({ ok: false, reason: 'recovery_in_progress', workRun: clone(run), public: publicRun(run) });
+      }
       const at = nowIso(clock);
       run.state = input.state;
       run.recovery = { state: input.state, reasonCode: input.reasonCode, updatedAt: at };
