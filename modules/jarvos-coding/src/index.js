@@ -158,7 +158,9 @@ const reconcilePolicy = require('./stewardship/reconcile-policy');
 const projectsActivity = require('./projects-activity');
 const compoundEngineeringProvider = require('./providers/compound-engineering');
 const workflowProvider = require('./providers/workflow-provider');
+const learningEligibility = require('./providers/learning-eligibility');
 const workRunStore = require('./features/work-run-store');
+const managedWorkflow = require('./features/workflow');
 module.exports = {
   ...projectsActivity,
   ...stewardshipContract,
@@ -167,7 +169,9 @@ module.exports = {
   ...reconcilePolicy,
   ...compoundEngineeringProvider,
   ...workflowProvider,
+  ...learningEligibility,
   ...workRunStore,
+  ...managedWorkflow,
   ACTIVE_STATUSES,
   DEFAULT_IGNORED_PATH_SEGMENTS,
   BRANCH_SCHEMA_VERSION,

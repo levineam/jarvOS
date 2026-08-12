@@ -200,6 +200,20 @@ function createCodingHostAdapter(host, options = {}) {
 
   async function invoke(input = {}) {
     const adapters = await resolveAdapters(input);
+    const managedWorkflow = adapters.managedWorkflow || options.managedWorkflow || null;
+    const operation = input.operation || input.workflowOperation;
+    if (managedWorkflow && ['plan', 'work', 'complete', 'compound'].includes(operation)) {
+      const handler = managedWorkflow[operation];
+      if (typeof handler !== 'function') throw new Error(`managed coding workflow does not support ${operation}`);
+      const result = await handler(input, adapters);
+      return {
+        schemaVersion: HOST_ADAPTER_SCHEMA_VERSION,
+        host: normalizedHost,
+        operation,
+        status: result.status || (result.ok === false ? 'failed' : 'completed'),
+        result,
+      };
+    }
     const result = await runTakeIssueToDone(input, adapters);
     return {
       schemaVersion: HOST_ADAPTER_SCHEMA_VERSION,
