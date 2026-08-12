@@ -156,6 +156,7 @@ function publicRun(run) {
     acceptedPlan: run.acceptedPlan ? {
       digest: run.acceptedPlan.digest,
       artifactReference: run.acceptedPlan.artifactReference,
+      packetDigest: run.acceptedPlan.packetDigest || null,
       providerPinDigest: run.acceptedPlan.providerPinDigest,
       acceptedAt: run.acceptedPlan.acceptedAt,
     } : null,
@@ -330,7 +331,7 @@ function createWorkRunStore(options = {}) {
       run.eventNonces[input.operationNonce] = event;
       if (event.artifact && !run.artifacts.some((artifact) => artifact.reference === event.artifact.reference)) run.artifacts.push(event.artifact);
       run.updatedAt = event.at;
-      if (evidencePort && typeof evidencePort.append === 'function') evidencePort.append({ workRunId: run.workRunId, event });
+      if (evidencePort && typeof evidencePort.append === 'function') evidencePort.append({ workRunId: run.workRunId, ownerId: input.ownerId, fence: input.fence, event });
       return { ok: true, deduped: false, event: clone(event), workRun: clone(run), public: publicRun(run) };
     });
   }
@@ -359,11 +360,13 @@ function createWorkRunStore(options = {}) {
       const expected = input.expectedPlanDigest === undefined ? null : input.expectedPlanDigest;
       const current = run.acceptedPlan?.digest || null;
       if (current !== expected) return noCommit({ ok: false, reason: 'plan_compare_and_set_conflict', authoritativePlanDigest: current, public: publicRun(run) });
+      if (input.packetDigest !== undefined && !isDigest(input.packetDigest)) return noCommit({ ok: false, reason: 'invalid_packet_digest' });
       const artifact = normalizeArtifact({ ...(input.artifact || {}), kind: 'plan', digest: input.planDigest }, { allowPrivatePath: true });
       if (run.providerSnapshot && input.providerPinDigest && run.providerSnapshot.pinDigest !== input.providerPinDigest) return noCommit({ ok: false, reason: 'provider_pin_conflict' });
       run.acceptedPlan = {
         digest: input.planDigest,
         artifactReference: artifact.reference,
+        packetDigest: input.packetDigest || null,
         providerPinDigest: input.providerPinDigest || run.providerSnapshot?.pinDigest || null,
         acceptedAt: nowIso(clock),
       };
@@ -498,10 +501,12 @@ function createControlPlaneWorkRunEvidencePort(options = {}) {
   if (!options.service || typeof options.service.execute !== 'function') throw new Error('control-plane service is required');
   if (typeof options.credential !== 'string') throw new Error('control-plane credential is required');
   return {
-    append({ workRunId, event }) {
+    append({ workRunId, ownerId, fence, event }) {
       return options.service.execute('recordEvidence', {
         credential: options.credential,
         workRunId,
+        ownerId,
+        fence,
         evidence: event,
       });
     },

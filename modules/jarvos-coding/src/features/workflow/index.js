@@ -19,6 +19,7 @@ const {
 
 const MANAGED_WORKFLOW_SCHEMA_VERSION = 'jarvos-managed-coding-workflow/v1';
 const IMPLEMENTATION_PACKET_VERSION = 'jarvos-implementation-packet/v1';
+const DEFAULT_PROVIDER_TIMEOUT_MS = 120000;
 const SHA256 = /^[a-f0-9]{64}$/i;
 const OPAQUE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 const RELATIVE_PATH = /^(?![\\/])(?!.*(?:^|[\\/])\.\.(?:[\\/]|$))[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)*$/;
@@ -106,24 +107,91 @@ function createManagedCodingWorkflow(options = {}) {
   const providerAdapter = options.providerAdapter || {};
   const nativeAdapter = options.nativeAdapter || {};
   const ownerId = options.ownerId || 'jarvos-coding';
+  const providerSnapshot = options.providerSnapshot || null;
+  const providerSnapshotVerifier = options.providerSnapshotVerifier;
   const manifestValidation = isObject(manifest) && manifest.source ? null : { ok: false, errors: ['provider manifest is required'] };
   if (manifestValidation && !manifestValidation.ok) throw new Error(manifestValidation.errors.join('; '));
+
+  function isTrustedProviderSnapshot(snapshot) {
+    if (!isObject(snapshot)) return false;
+    try {
+      const identityMatches = snapshot.id === manifest.id
+        && snapshot.version === manifest.version
+        && snapshot.pinDigest === manifest.source.contentDigest
+        && typeof snapshot.harness === 'string'
+        && manifest.harnesses?.[snapshot.harness]
+        && snapshot.adapterVersion === manifest.harnesses[snapshot.harness].adapter
+        && ['verified', 'degraded', 'unsupported', 'unavailable'].includes(snapshot.status);
+      if (!identityMatches) return false;
+      if (typeof providerSnapshotVerifier !== 'function') return true;
+      const result = providerSnapshotVerifier({ snapshot: clone(snapshot), manifest: clone(manifest) });
+      return result === true || result?.ok === true;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  const trustedConfiguredSnapshot = isTrustedProviderSnapshot(providerSnapshot) ? providerSnapshot : null;
 
   function claim(input) {
     const subjectKey = input.subjectKey || input.issueIdentifier || input.issue?.identifier;
     if (typeof subjectKey !== 'string' || !subjectKey) throw new Error('coding workflow requires a stable subjectKey');
-    const claimed = options.workRunStore.claimWorkRun({
+    let claimed = options.workRunStore.claimWorkRun({
       subjectKey,
       workRunId: input.workRunId,
       canonicalWorktree: input.canonicalWorktree,
       ownerId: input.ownerId || ownerId,
+      providerSnapshot: trustedConfiguredSnapshot,
     });
     if (!claimed.ok) throw new Error(`coding work-run claim failed: ${claimed.reason}`);
+    if (trustedConfiguredSnapshot && claimed.workRun.providerSnapshot
+      && claimed.workRun.providerSnapshot.pinDigest !== trustedConfiguredSnapshot.pinDigest) {
+      throw new Error('coding provider snapshot failed: provider_pin_conflict');
+    }
+    if (trustedConfiguredSnapshot && !claimed.workRun.providerSnapshot) {
+      const recorded = options.workRunStore.recordProviderSnapshot({
+        workRunId: claimed.workRunId,
+        ownerId: claimed.ownerId,
+        fence: claimed.fence,
+        providerSnapshot: trustedConfiguredSnapshot,
+      });
+      if (!recorded.ok) throw new Error(`coding provider snapshot failed: ${recorded.reason}`);
+      claimed = { ...claimed, workRun: recorded.workRun, public: recorded.public };
+    }
     return claimed;
   }
 
   function providerSnapshotFor(input, claimed) {
-    return input.provider || claimed.workRun.providerSnapshot || options.provider || null;
+    return claimed.workRun.providerSnapshot || null;
+  }
+
+  function nativeInvocation({ operation, claimed, input, packet = null }) {
+    const requestInput = input.input || { kind: `${operation}-input`, digest: digest(input.payload || input.issue || input.subjectKey) };
+    const operationNonce = input.operationNonce || `${operation}-${claimed.workRunId}`;
+    return {
+      version: MANAGED_WORKFLOW_SCHEMA_VERSION,
+      operation,
+      workRunId: claimed.workRunId,
+      operationNonce,
+      idempotencyKey: input.idempotencyKey || `${operation}:${claimed.workRunId}`,
+      provider: null,
+      canonicalWorktree: input.canonicalWorktree || claimed.workRun.canonicalWorktree,
+      input: clone(requestInput),
+      args: [operation, claimed.workRunId, operationNonce],
+      env: {
+        JARVOS_WORK_RUN_ID: claimed.workRunId,
+        JARVOS_PROVIDER_OPERATION: operation,
+      },
+      implementationPacket: packet ? clone(packet) : null,
+    };
+  }
+
+  function nativeFallbackInvocation(invocation) {
+    return {
+      ...invocation,
+      provider: null,
+      route: 'native-fallback',
+    };
   }
 
   function providerIdentity(snapshot) {
@@ -158,46 +226,141 @@ function createManagedCodingWorkflow(options = {}) {
       type: 'route',
       operation: request.operation,
       status,
-      operationNonce: request.operationNonce,
+      operationNonce: `route-${request.operation}-${digest(request.operationNonce).slice(0, 24)}`,
       reasonCode,
       detail: detail ? [detail] : null,
     });
   }
 
+  function providerReceiptRecording(recorded, receipt) {
+    if (!recorded?.ok) return { ok: false, reason: recorded?.reason || 'provider_receipt_not_recorded' };
+    if (!recorded.deduped) return { ok: true };
+    const prior = recorded.event;
+    const matches = prior?.type === 'provider'
+      && prior.operation === receipt.operation
+      && prior.status === receipt.status
+      && prior.provider?.pinDigest === receipt.provider?.pinDigest
+      && prior.artifact?.digest === receipt.artifact?.digest;
+    return matches ? { ok: true } : { ok: false, reason: 'provider_receipt_replay_conflict' };
+  }
+
+  function providerTimeoutMs(input) {
+    const value = input.providerTimeoutMs ?? options.providerTimeoutMs ?? DEFAULT_PROVIDER_TIMEOUT_MS;
+    return Number.isInteger(value) && value > 0 ? value : DEFAULT_PROVIDER_TIMEOUT_MS;
+  }
+
+  async function invokeProvider(operation, invocation, providerFunction, input) {
+    let timer;
+    try {
+      return await Promise.race([
+        providerFunction(invocation),
+        new Promise((_, reject) => {
+          timer = setTimeout(() => {
+            const error = new Error(`provider ${operation} timed out`);
+            error.code = 'PROVIDER_TIMEOUT';
+            reject(error);
+          }, providerTimeoutMs(input));
+        }),
+      ]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
+
+  async function recoverWork(claimed, invocation, reasonCode, detail) {
+    const recovery = options.workRunStore.setRecoveryState({
+      workRunId: claimed.workRunId,
+      ownerId: claimed.ownerId,
+      fence: claimed.fence,
+      state: 'blocked',
+      reasonCode,
+    });
+    if (!recovery.ok || typeof nativeAdapter.reconcileWork !== 'function') {
+      return { ok: false, status: 'blocked', route: 'native-fallback', workRunId: claimed.workRunId, reasonCode, detail };
+    }
+    let reconciled;
+    try {
+      reconciled = await nativeAdapter.reconcileWork({ ...invocation, reasonCode });
+    } catch (error) {
+      return { ok: false, status: 'blocked', route: 'native-fallback', workRunId: claimed.workRunId, reasonCode, detail: error.message };
+    }
+    if (!reconciled || reconciled.safe !== true) {
+      return { ok: false, status: 'blocked', route: 'native-fallback', workRunId: claimed.workRunId, reasonCode, detail };
+    }
+    const resumed = options.workRunStore.setRecoveryState({
+      workRunId: claimed.workRunId,
+      ownerId: claimed.ownerId,
+      fence: claimed.fence,
+      state: 'active',
+      reasonCode: 'provider_work_reconciled',
+    });
+    if (!resumed.ok || typeof nativeAdapter.work !== 'function') {
+      return { ok: false, status: 'blocked', route: 'native-fallback', workRunId: claimed.workRunId, reasonCode, detail };
+    }
+    let native;
+    try {
+      native = await nativeAdapter.work({ ...nativeFallbackInvocation(invocation), reconciliation: reconciled });
+    } catch (error) {
+      options.workRunStore.setRecoveryState({
+        workRunId: claimed.workRunId,
+        ownerId: claimed.ownerId,
+        fence: claimed.fence,
+        state: 'failed',
+        reasonCode: 'native_fallback_failed',
+      });
+      return { ok: false, status: 'blocked', route: 'native-fallback', workRunId: claimed.workRunId, reasonCode: 'native_fallback_failed', detail: error.message };
+    }
+    return { ok: true, status: 'succeeded', route: 'native-fallback', workRunId: claimed.workRunId, work: native };
+  }
+
   async function plan(input = {}) {
     const claimed = claim(input);
-    const request = requestFor('plan', input, claimed);
     const snapshot = providerSnapshotFor(input, claimed);
-    if (providerHealthy(manifest, snapshot, 'plan') && typeof providerAdapter.plan === 'function') {
+    const healthy = isTrustedProviderSnapshot(snapshot) && providerHealthy(manifest, snapshot, 'plan') && typeof providerAdapter.plan === 'function';
+    if (healthy) {
+      const request = requestFor('plan', input, claimed);
       const invocation = buildProviderInvocation({ operation: 'plan', request });
       let receipt;
       try {
-        receipt = await providerAdapter.plan(invocation);
+        receipt = await invokeProvider('plan', invocation, providerAdapter.plan, input);
       } catch (error) {
         appendRoute(claimed, request, 'fallback', 'provider_unavailable', error.message);
         if (typeof nativeAdapter.plan !== 'function') return { ok: false, status: 'blocked', route: 'compound-engineering', workRunId: claimed.workRunId, reasonCode: 'provider_unavailable' };
-        const native = await nativeAdapter.plan({ ...invocation, route: 'native-fallback' });
+        const native = await nativeAdapter.plan(nativeFallbackInvocation(invocation));
         return { ok: true, status: 'succeeded', route: 'native-fallback', workRunId: claimed.workRunId, plan: native };
       }
       const validation = validateWorkflowProviderReceipt(receipt, { manifest, request });
       if (!validation.ok) {
         appendRoute(claimed, request, 'fallback', 'invalid_provider_receipt', validation.errors.join('; '));
         if (typeof nativeAdapter.plan !== 'function') return { ok: false, status: 'blocked', route: 'compound-engineering', workRunId: claimed.workRunId, reasonCode: 'invalid_provider_receipt' };
-        const native = await nativeAdapter.plan({ ...invocation, route: 'native-fallback' });
+        const native = await nativeAdapter.plan(nativeFallbackInvocation(invocation));
         return { ok: true, status: 'succeeded', route: 'native-fallback', workRunId: claimed.workRunId, plan: native };
       }
       const recorded = options.workRunStore.recordProviderReceipt({ ...input, workRunId: claimed.workRunId, ownerId: claimed.ownerId, fence: claimed.fence, receipt, manifest, request });
-      if (!recorded.ok) return { ok: false, status: 'blocked', route: 'compound-engineering', workRunId: claimed.workRunId, reasonCode: recorded.reason, errors: recorded.errors || [] };
-      return { ok: true, status: 'succeeded', route: 'compound-engineering', workRunId: claimed.workRunId, request, receipt: validation.receipt, artifact: validation.receipt.artifact };
+      const recording = providerReceiptRecording(recorded, validation.receipt);
+      if (recording.ok && validation.receipt.status === 'succeeded') {
+        return { ok: true, status: 'succeeded', route: 'compound-engineering', workRunId: claimed.workRunId, request, receipt: validation.receipt, artifact: validation.receipt.artifact };
+      }
+      const reasonCode = recording.ok ? 'provider_failed' : recording.reason;
+      appendRoute(claimed, request, 'fallback', reasonCode, recording.ok ? validation.receipt.status : recording.reason);
+      if (typeof nativeAdapter.plan !== 'function') return { ok: false, status: 'blocked', route: 'native-fallback', workRunId: claimed.workRunId, reasonCode };
+      const native = await nativeAdapter.plan(nativeFallbackInvocation(invocation));
+      return { ok: true, status: 'succeeded', route: 'native-fallback', workRunId: claimed.workRunId, plan: native };
     }
-    appendRoute(claimed, request, 'fallback', 'provider_unsupported', 'provider is not healthy for the active harness');
+    const route = {
+      operation: 'plan',
+      operationNonce: input.operationNonce || `plan-${claimed.workRunId}`,
+    };
+    appendRoute(claimed, route, 'fallback', 'provider_unsupported', 'provider is not healthy for the active harness');
     if (typeof nativeAdapter.plan !== 'function') return { ok: false, status: 'blocked', route: 'native-fallback', workRunId: claimed.workRunId, reasonCode: 'native_route_unavailable' };
-    const native = await nativeAdapter.plan(buildProviderInvocation({ operation: 'plan', request }));
+    const native = await nativeAdapter.plan(nativeInvocation({ operation: 'plan', claimed, input }));
     return { ok: true, status: 'succeeded', route: 'native-fallback', workRunId: claimed.workRunId, plan: native };
   }
 
   async function acceptPlan(input = {}) {
     const claimed = claim(input);
+    const snapshot = providerSnapshotFor(input, claimed);
+    if (!snapshot || !isTrustedProviderSnapshot(snapshot)) return { ok: false, status: 'blocked', workRunId: claimed.workRunId, reasonCode: 'provider_snapshot_untrusted' };
     const packetValidation = validateImplementationPacket(input.packet, input.planDigest);
     if (!packetValidation.ok) return { ok: false, status: 'blocked', workRunId: claimed.workRunId, reasonCode: 'invalid_implementation_packet', errors: packetValidation.errors };
     return options.workRunStore.acceptPlan({
@@ -206,42 +369,61 @@ function createManagedCodingWorkflow(options = {}) {
       fence: claimed.fence,
       expectedPlanDigest: input.expectedPlanDigest,
       planDigest: input.planDigest,
-      providerPinDigest: input.providerPinDigest || claimed.workRun.providerSnapshot?.pinDigest,
+      providerPinDigest: snapshot.pinDigest,
+      packetDigest: digest(packetValidation.packet),
       artifact: input.artifact,
     });
   }
 
   async function work(input = {}) {
     const claimed = claim(input);
+    const snapshot = providerSnapshotFor(input, claimed);
+    if (!snapshot || !isTrustedProviderSnapshot(snapshot)) return { ok: false, status: 'blocked', workRunId: claimed.workRunId, reasonCode: 'provider_snapshot_untrusted' };
     const accepted = claimed.workRun.acceptedPlan;
     if (!accepted || accepted.digest !== input.planDigest) return { ok: false, status: 'blocked', workRunId: claimed.workRunId, reasonCode: 'accepted_plan_mismatch' };
     const packetValidation = validateImplementationPacket(input.packet, accepted.digest);
     if (!packetValidation.ok) return { ok: false, status: 'blocked', workRunId: claimed.workRunId, reasonCode: 'invalid_implementation_packet', errors: packetValidation.errors };
+    if (!accepted.packetDigest || accepted.packetDigest !== digest(packetValidation.packet)) return { ok: false, status: 'blocked', workRunId: claimed.workRunId, reasonCode: 'accepted_plan_mismatch' };
+    if (accepted.providerPinDigest !== snapshot.pinDigest) return { ok: false, status: 'blocked', workRunId: claimed.workRunId, reasonCode: 'provider_pin_conflict' };
     const request = requestFor('work', input, claimed, accepted.digest);
     const invocation = buildProviderInvocation({ operation: 'work', request, packet: packetValidation.packet });
     if (providerHealthy(manifest, providerSnapshotFor(input, claimed), 'work') && typeof providerAdapter.work === 'function') {
       try {
-        const receipt = await providerAdapter.work(invocation);
+        const receipt = await invokeProvider('work', invocation, providerAdapter.work, input);
         const validation = validateWorkflowProviderReceipt(receipt, { manifest, request });
         if (validation.ok) {
           const recorded = options.workRunStore.recordProviderReceipt({ ...input, workRunId: claimed.workRunId, ownerId: claimed.ownerId, fence: claimed.fence, receipt, manifest, request });
-          if (recorded.ok) return { ok: true, status: 'succeeded', route: 'compound-engineering', workRunId: claimed.workRunId, receipt: validation.receipt };
+          const recording = providerReceiptRecording(recorded, validation.receipt);
+          if (recording.ok && validation.receipt.status === 'succeeded') return { ok: true, status: 'succeeded', route: 'compound-engineering', workRunId: claimed.workRunId, receipt: validation.receipt };
+          const reasonCode = recording.ok ? 'provider_failed' : recording.reason;
+          appendRoute(claimed, request, 'fallback', reasonCode, recording.ok ? validation.receipt.status : recording.reason);
+          return recoverWork(claimed, invocation, reasonCode, recording.ok ? validation.receipt.status : recording.reason);
         }
         appendRoute(claimed, request, 'fallback', 'invalid_provider_receipt', validation.errors?.join('; ') || 'provider receipt was not recorded');
+        return recoverWork(claimed, invocation, 'invalid_provider_receipt', validation.errors?.join('; '));
       } catch (error) {
         appendRoute(claimed, request, 'fallback', 'provider_unavailable', error.message);
+        return recoverWork(claimed, invocation, error.code === 'PROVIDER_TIMEOUT' ? 'provider_timeout' : 'provider_unavailable', error.message);
       }
     } else {
       appendRoute(claimed, request, 'fallback', 'provider_unsupported', 'provider is not healthy for the active harness');
     }
     if (typeof nativeAdapter.work !== 'function') return { ok: false, status: 'blocked', route: 'native-fallback', workRunId: claimed.workRunId, reasonCode: 'native_route_unavailable' };
-    const native = await nativeAdapter.work({ ...invocation, route: 'native-fallback' });
+    const native = await nativeAdapter.work(nativeFallbackInvocation(invocation));
     return { ok: true, status: 'succeeded', route: 'native-fallback', workRunId: claimed.workRunId, work: native };
   }
 
   function learningEvent(claimed) {
     const run = options.workRunStore.getWorkRun(claimed.workRunId, { public: false });
-    return run?.events?.find((event) => event.operation === 'compound') || null;
+    return run?.events?.find((event) => event.operation === 'compound'
+      && !(event.type === 'route' && ['unavailable', 'failed'].includes(event.status))
+      && !(event.type === 'provider' && event.status !== 'succeeded')) || null;
+  }
+
+  function learningNonce(claimed) {
+    const run = options.workRunStore.getWorkRun(claimed.workRunId, { public: false });
+    const attempts = run?.events?.filter((event) => event.operation === 'compound').length || 0;
+    return attempts === 0 ? `compound-${claimed.workRunId}` : `compound-${claimed.workRunId}-retry-${attempts}`;
   }
 
   function recordLearningOutcome(claimed, outcome, nonce, detail) {
@@ -290,12 +472,12 @@ function createManagedCodingWorkflow(options = {}) {
       };
     }
 
-    const eligibility = input.learningEligibility || evaluateLearningEligibility({
+    const eligibility = evaluateLearningEligibility({
       verification: input.verification || input.orchestration,
       signals: input.learningSignals ?? input.learning,
       declined: input.declineLearning === true || input.declinedLearning === true,
     });
-    const nonce = `compound-${claimed.workRunId}`;
+    const nonce = learningNonce(claimed);
     if (eligibility.status !== 'eligible') {
       return learningOutcomeResponse({
         claimed,
@@ -317,7 +499,7 @@ function createManagedCodingWorkflow(options = {}) {
 
     let request;
     try {
-      request = requestFor('compound', input, claimed, acceptedPlanDigest);
+      request = requestFor('compound', { ...input, operationNonce: nonce }, claimed, acceptedPlanDigest);
     } catch (error) {
       const outcome = { status: 'unavailable', reasonCode: 'provider_identity_unavailable', rationale: 'approved provider identity is not available for learning capture' };
       return learningOutcomeResponse({ claimed, nonce, ...outcome, ok: true });
@@ -337,7 +519,7 @@ function createManagedCodingWorkflow(options = {}) {
     };
     let receipt;
     try {
-      receipt = await providerAdapter.compound(invocation);
+      receipt = await invokeProvider('compound', invocation, providerAdapter.compound, input);
     } catch (error) {
       const outcome = { status: 'unavailable', reasonCode: 'provider_unavailable', rationale: 'provider did not return a learning receipt' };
       return learningOutcomeResponse({ claimed, nonce, ...outcome, ok: true });
@@ -361,8 +543,9 @@ function createManagedCodingWorkflow(options = {}) {
       manifest,
       request,
     });
-    if (!recorded.ok) {
-      const outcome = { status: 'failed', reasonCode: recorded.reason || 'learning_receipt_not_recorded', rationale: 'learning receipt could not be durably attached to the work run' };
+    const recording = providerReceiptRecording(recorded, validation.receipt);
+    if (!recording.ok) {
+      const outcome = { status: 'failed', reasonCode: recording.reason || 'learning_receipt_not_recorded', rationale: 'learning receipt could not be durably attached to the work run' };
       return { ok: false, ...outcome, learningStatus: outcome.status, route: 'jarvos-learning-gate', workRunId: claimed.workRunId, event: null };
     }
     return {

@@ -121,6 +121,7 @@ test('compound captures one eligible learning without changing coding completion
     subjectKey: 'levineam/jarvOS:SUP-6000',
     canonicalWorktree: '/private/jarvos/worktrees/SUP-6000',
     ownerId: 'agent:codex',
+    providerSnapshot,
   });
   assert.equal(store.acceptPlan({
     workRunId: claim.workRunId,
@@ -134,6 +135,7 @@ test('compound captures one eligible learning without changing coding completion
     manifest,
     workRunStore: store,
     ownerId: 'agent:codex',
+    providerSnapshot,
     providerAdapter: {
       compound: async (invocation) => {
         calls += 1;
@@ -164,9 +166,10 @@ test('compound captures one eligible learning without changing coding completion
 test('unavailable compounding is non-terminal and leaves the verified result untouched', async () => {
   const manifest = supportedManifest();
   const store = createMemoryWorkRunStore();
-  const claim = store.claimWorkRun({ subjectKey: 'levineam/jarvOS:SUP-6001', canonicalWorktree: '/private/jarvos/worktrees/SUP-6001', ownerId: 'agent:codex' });
+  const providerSnapshot = provider(manifest, 'unsupported');
+  const claim = store.claimWorkRun({ subjectKey: 'levineam/jarvOS:SUP-6001', canonicalWorktree: '/private/jarvos/worktrees/SUP-6001', ownerId: 'agent:codex', providerSnapshot });
   store.acceptPlan({ workRunId: claim.workRunId, ownerId: claim.ownerId, fence: claim.fence, planDigest: 'a'.repeat(64), artifact: { reference: 'artifact:plan123456', digest: 'a'.repeat(64) } });
-  const workflow = createManagedCodingWorkflow({ manifest, workRunStore: store, ownerId: 'agent:codex' });
+  const workflow = createManagedCodingWorkflow({ manifest, workRunStore: store, ownerId: 'agent:codex', providerSnapshot });
   const result = await workflow.compound({
     subjectKey: 'levineam/jarvOS:SUP-6001',
     canonicalWorktree: '/private/jarvos/worktrees/SUP-6001',
@@ -178,4 +181,36 @@ test('unavailable compounding is non-terminal and leaves the verified result unt
   assert.equal(result.status, 'unavailable');
   assert.equal(result.ok, true);
   assert.equal(store.getWorkRun(claim.workRunId).state, 'active');
+});
+
+test('compound timeout remains a retryable learning outcome', async () => {
+  const manifest = supportedManifest();
+  const providerSnapshot = provider(manifest);
+  const store = createMemoryWorkRunStore();
+  const claim = store.claimWorkRun({ subjectKey: 'levineam/jarvOS:SUP-6002', canonicalWorktree: '/private/jarvos/worktrees/SUP-6002', ownerId: 'agent:codex', providerSnapshot });
+  store.acceptPlan({
+    workRunId: claim.workRunId,
+    ownerId: claim.ownerId,
+    fence: claim.fence,
+    planDigest: 'a'.repeat(64),
+    artifact: { reference: 'artifact:plan123456', digest: 'a'.repeat(64) },
+  });
+  const workflow = createManagedCodingWorkflow({
+    manifest,
+    workRunStore: store,
+    ownerId: 'agent:codex',
+    providerSnapshot,
+    providerTimeoutMs: 5,
+    providerAdapter: { compound: async () => new Promise(() => {}) },
+  });
+  const result = await workflow.compound({
+    subjectKey: 'levineam/jarvOS:SUP-6002',
+    canonicalWorktree: '/private/jarvos/worktrees/SUP-6002',
+    planDigest: 'a'.repeat(64),
+    verification: verification(),
+    learning: { category: 'operational-lesson', summary: 'Timeouts must remain retryable.' },
+  });
+  assert.equal(result.status, 'unavailable');
+  assert.equal(result.reasonCode, 'provider_unavailable');
+  assert.equal(store.getWorkRun(claim.workRunId, { public: false }).events.filter((event) => event.operation === 'compound').length, 1);
 });

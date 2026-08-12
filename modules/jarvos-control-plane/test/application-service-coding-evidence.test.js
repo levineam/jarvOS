@@ -14,6 +14,7 @@ function fixture() {
     resolveCredential: (credential) => credential === 'writer'
       ? { id: 'principal:writer', capabilities: ['control-plane.read', 'control-plane.mutate'] }
       : null,
+    authorizeCodingEvidence: () => true,
   });
   return { service, store };
 }
@@ -71,4 +72,29 @@ test('coding evidence request bindings cannot diverge from the event work run', 
     workRunId: 'run_OTHER_01',
     evidence: evidence('event_654321'),
   }), /must match the request binding/);
+});
+
+test('coding evidence requires an explicit work-run authorization decision', () => {
+  const store = createMemoryApplicationStore();
+  const service = createApplicationService({
+    store,
+    policy: () => ({ outcome: 'allow' }),
+    canRead: () => true,
+    resolveCredential: () => ({ id: 'principal:writer', capabilities: ['control-plane.mutate'] }),
+    authorizeCodingEvidence: () => false,
+  });
+  assert.throws(() => service.execute('recordEvidence', { credential: 'writer', evidence: evidence('event_999999') }), /not authorized/);
+  assert.equal(store.load().codingEvidence.length, 0);
+});
+
+test('coding evidence rejects forged public contract fields', () => {
+  const { service } = fixture();
+  assert.throws(() => service.execute('recordEvidence', {
+    credential: 'writer',
+    evidence: { ...evidence('event_888888'), operation: 'delete-all' },
+  }), /operation is invalid/);
+  assert.throws(() => service.execute('recordEvidence', {
+    credential: 'writer',
+    evidence: { ...evidence('event_777777'), provider: { ...evidence().provider, status: 'made-up' } },
+  }), /provider is invalid/);
 });
