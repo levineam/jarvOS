@@ -480,9 +480,45 @@ function createManagedCodingWorkflow(options = {}) {
     appendRoute(claimed, route, 'fallback', 'provider_unsupported', 'provider is not healthy for the active harness');
     if (typeof nativeAdapter.work !== 'function') return { ok: false, status: 'blocked', route: 'native-fallback', workRunId: claimed.workRunId, reasonCode: 'native_route_unavailable' };
     const nativeInvocationValue = nativeInvocation({ operation: 'work', claimed, input, packet: packetValidation.packet });
-    const native = await nativeAdapter.work(nativeInvocationValue);
+    const preparing = options.workRunStore.setRecoveryState({
+      workRunId: claimed.workRunId,
+      ownerId: claimed.ownerId,
+      fence: claimed.fence,
+      state: 'blocked',
+      reasonCode: 'native_fallback_in_progress',
+    });
+    if (!preparing.ok) return { ok: false, status: 'blocked', route: 'native-fallback', workRunId: claimed.workRunId, reasonCode: 'recovery_state_not_recorded' };
+    let native;
+    try {
+      native = await nativeAdapter.work(nativeInvocationValue);
+    } catch (error) {
+      options.workRunStore.setRecoveryState({
+        workRunId: claimed.workRunId,
+        ownerId: claimed.ownerId,
+        fence: claimed.fence,
+        state: 'failed',
+        reasonCode: 'native_fallback_failed',
+      });
+      return { ok: false, status: 'blocked', route: 'native-fallback', workRunId: claimed.workRunId, reasonCode: 'native_fallback_failed', detail: error.message };
+    }
     const recorded = recordNativeRecovery(claimed, nativeInvocationValue);
-    if (!recorded.ok) return { ok: false, status: 'blocked', route: 'native-fallback', workRunId: claimed.workRunId, reasonCode: 'recovery_event_not_recorded' };
+    if (!recorded.ok) {
+      options.workRunStore.setRecoveryState({
+        workRunId: claimed.workRunId,
+        ownerId: claimed.ownerId,
+        fence: claimed.fence,
+        state: 'failed',
+        reasonCode: 'recovery_event_not_recorded',
+      });
+      return { ok: false, status: 'blocked', route: 'native-fallback', workRunId: claimed.workRunId, reasonCode: 'recovery_event_not_recorded' };
+    }
+    options.workRunStore.setRecoveryState({
+      workRunId: claimed.workRunId,
+      ownerId: claimed.ownerId,
+      fence: claimed.fence,
+      state: 'active',
+      reasonCode: 'native_fallback_succeeded',
+    });
     return { ok: true, status: 'succeeded', route: 'native-fallback', workRunId: claimed.workRunId, work: native };
   }
 

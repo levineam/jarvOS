@@ -232,6 +232,29 @@ test('native fallback can accept and execute a plan without a CE provider snapsh
   assert.equal(nativeWorkCalls, 1);
 });
 
+test('native fallback failure to record recovery blocks retries before edits repeat', async () => {
+  const currentManifest = manifest();
+  const store = createMemoryWorkRunStore();
+  let nativeWorkCalls = 0;
+  const originalAppendEvent = store.appendEvent;
+  store.appendEvent = (input) => input.type === 'recovery' ? { ok: false, reason: 'evidence_backend_unavailable' } : originalAppendEvent(input);
+  const workflow = createManagedCodingWorkflow({
+    manifest: currentManifest,
+    workRunStore: store,
+    ownerId: 'agent:codex',
+    nativeAdapter: { work: async () => { nativeWorkCalls += 1; return { artifact: 'native-work' }; } },
+  });
+  const subjectKey = 'levineam/jarvOS:SUP-5009';
+  const input = { subjectKey, canonicalWorktree: '/private/jarvos/worktrees/SUP-5009', planDigest: 'f'.repeat(64), packet: packet('f'.repeat(64)), operationNonce: 'nonce-native-09' };
+  const claim = store.claimWorkRun({ subjectKey, canonicalWorktree: input.canonicalWorktree, ownerId: 'agent:codex' });
+  store.acceptPlan({ workRunId: claim.workRunId, ownerId: claim.ownerId, fence: claim.fence, planDigest: input.planDigest, packetDigest: require('node:crypto').createHash('sha256').update(JSON.stringify(input.packet)).digest('hex'), artifact: { reference: 'artifact:plan123456', digest: input.planDigest } });
+  const first = await workflow.work(input);
+  assert.equal(first.reasonCode, 'recovery_event_not_recorded');
+  const second = await workflow.work(input);
+  assert.equal(second.reasonCode, 'recovery_event_not_recorded');
+  assert.equal(nativeWorkCalls, 1);
+});
+
 test('failed provider receipts use a distinct route nonce and native plan fallback', async () => {
   const currentManifest = manifest();
   const currentProvider = provider(currentManifest);

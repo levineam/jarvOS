@@ -103,6 +103,10 @@ test('coding evidence rejects forged public contract fields', () => {
   }), /at is invalid/);
   assert.throws(() => service.execute('recordEvidence', {
     credential: 'writer',
+    evidence: { ...evidence('event_444444'), at: '2026-02-30T00:00:00.000Z' },
+  }), /at is invalid/);
+  assert.throws(() => service.execute('recordEvidence', {
+    credential: 'writer',
     evidence: { ...evidence('event_555555'), provider: { ...evidence().provider, version: 'secret=leak' } },
   }), /provider is invalid/);
 });

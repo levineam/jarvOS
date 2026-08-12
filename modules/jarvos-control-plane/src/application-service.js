@@ -17,6 +17,7 @@ const CODING_PROVIDER_STATUSES = new Set(['verified', 'degraded', 'unsupported',
 const CODING_PROVIDER_FIELDS = new Set(['id', 'version', 'pinDigest', 'harness', 'adapterVersion', 'status', 'observedAt']);
 const CODING_ARTIFACT_FIELDS = new Set(['kind', 'reference', 'digest', 'path']);
 const CODING_ARTIFACT_KINDS = new Set(['plan', 'work', 'compound']);
+const ISO_INSTANT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
 const AUTHORITY_FIELDS = new Set(['branch', 'worktree', 'worktreePath', 'approval', 'submissionReady', 'completion', 'owner', 'authority', 'terminalStatus', 'nextStep', 'pr', 'pullRequest']);
 const id = (prefix) => `${prefix}_${crypto.randomUUID()}`;
 
@@ -37,6 +38,11 @@ function normalizeCodingCode(value, label, { allowNull = true } = {}) {
     throw new Error(`${label} is required`);
   }
   if (typeof value !== 'string' || !CODING_CODE.test(value)) throw new Error(`${label} must be a bounded public code`);
+  return value;
+}
+
+function normalizeIsoInstant(value, label) {
+  if (typeof value !== 'string' || !ISO_INSTANT.test(value) || new Date(value).toISOString() !== value) throw new Error(`${label} is invalid`);
   return value;
 }
 
@@ -91,10 +97,7 @@ function normalizeCodingEvidence(input = {}, principal) {
       || !OPAQUE_ID.test(input.provider.adapterVersion || '') || !CODING_PROVIDER_STATUSES.has(input.provider.status)) {
       throw new Error('coding work-run evidence.provider is invalid');
     }
-    if (input.provider.observedAt !== undefined && input.provider.observedAt !== null
-      && (typeof input.provider.observedAt !== 'string' || Number.isNaN(Date.parse(input.provider.observedAt)))) {
-      throw new Error('coding work-run evidence.provider.observedAt is invalid');
-    }
+    if (input.provider.observedAt !== undefined && input.provider.observedAt !== null) normalizeIsoInstant(input.provider.observedAt, 'coding work-run evidence.provider.observedAt');
   }
   if (input.artifact !== undefined && input.artifact !== null) {
     if (!isObject(input.artifact)) throw new Error('coding work-run evidence.artifact is invalid');
@@ -109,7 +112,7 @@ function normalizeCodingEvidence(input = {}, principal) {
     : Array.isArray(input.detail) ? input.detail : [input.detail];
   if (detail && (detail.length > 10 || detail.some((entry) => typeof entry !== 'string' || entry.length > 500))) throw new Error('coding work-run evidence.detail must contain at most 10 bounded entries');
   const at = input.at === undefined || input.at === null ? new Date().toISOString() : input.at;
-  if (typeof at !== 'string' || at.length > 64 || Number.isNaN(Date.parse(at))) throw new Error('coding work-run evidence.at is invalid');
+  normalizeIsoInstant(at, 'coding work-run evidence.at');
   return {
     id: id('coding-evidence'),
     version: 'jarvos-coding-work-run-event/v1',
@@ -127,7 +130,7 @@ function normalizeCodingEvidence(input = {}, principal) {
       harness: input.provider.harness,
       adapterVersion: input.provider.adapterVersion,
       status: input.provider.status,
-      observedAt: input.provider.observedAt ? new Date(input.provider.observedAt).toISOString() : null,
+      observedAt: input.provider.observedAt || null,
     } : null,
     artifact: input.artifact ? {
       kind: input.artifact.kind,
@@ -136,7 +139,7 @@ function normalizeCodingEvidence(input = {}, principal) {
     } : null,
     detail,
     operationNonce: input.operationNonce || null,
-    at: new Date(at).toISOString(),
+    at,
   };
 }
 
