@@ -71,6 +71,20 @@ test('checked-in runtime adapters expose one opt-in stewardship lifecycle contra
   }
 });
 
+test('Codex managed Compound Engineering declaration preserves the unsupported admission boundary', () => {
+  const manifest = manifestFor('codex');
+  const provider = manifest.managedProviders?.['compound-engineering'];
+  assert.ok(provider);
+  assert.equal(provider.status, 'unsupported');
+  assert.equal(provider.profileBoundary, 'CODEX_HOME');
+  assert.equal(provider.activation, 'candidate-only-until-conformance');
+  const receipt = JSON.parse(fs.readFileSync(path.join(ROOT, provider.conformanceReceipt), 'utf8'));
+  assert.equal(receipt.provider, 'compound-engineering');
+  assert.equal(receipt.admission, 'unsupported');
+  assert.equal(receipt.invocation.status, 'blocked');
+  assert.equal(receipt.capabilityDenial.status, 'unverified');
+});
+
 test('stewardship bootstrap declarations reject a missing action, selected asset, inspection contract, or unknown entrypoint', () => {
   const baseline = manifestFor('codex').stewardshipAdapter.bootstrap;
   for (const [label, mutate] of [

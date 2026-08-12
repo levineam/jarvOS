@@ -1,0 +1,35 @@
+{
+  "schemaVersion": "jarvos-codex-provider-conformance/v1",
+  "provider": "compound-engineering",
+  "approvedVersion": "3.21.4",
+  "approvedRevision": "e36ddb8cbd4dd902d3b6ddd96165a783b0ac4711",
+  "status": "blocked",
+  "discovery": {
+    "codexVersion": "0.146.0",
+    "marketplaceRevisionObserved": true,
+    "installedVersionObserved": true,
+    "profileBoundary": "CODEX_HOME"
+  },
+  "activation": {
+    "mechanism": "codex-plugin-marketplace",
+    "pinObserved": true,
+    "configurationPreserved": true,
+    "restartBoundary": "unverified"
+  },
+  "invocation": {
+    "surface": "codex exec",
+    "status": "blocked",
+    "reasonCode": "temporary-profile-authentication-unavailable"
+  },
+  "receipt": {
+    "status": "unverified",
+    "strictContract": "implemented",
+    "providerIndependentAuthority": "implemented"
+  },
+  "capabilityDenial": {
+    "status": "unverified",
+    "required": ["credentials", "network", "profile-state", "privileged-tools"]
+  },
+  "admission": "unsupported",
+  "nextEvidence": "Run the bounded plan/work fixture in a disposable authenticated Codex profile, then review the strict receipt and denied-capability evidence before changing the admission state."
+}

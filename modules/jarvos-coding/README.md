@@ -133,6 +133,44 @@ await codex.register();
 await codex.runTakeIssueToDone({ issueIdentifier: 'SUP-2214' });
 ```
 
+## Managed coding workflow
+
+`createManagedCodingWorkflow(...)` is the provider-neutral route for natural
+coding verbs. It owns one durable work run and resolves the approved
+Compound Engineering manifest before invoking a provider adapter:
+
+```text
+plan -> validate draft -> accept one implementation packet -> work -> complete
+                                                                      |
+                                                   verified learning -> compound (optional)
+```
+
+The provider is a managed external artifact pinned by
+`providers/compound-engineering.json`; it is not bundled as a JavaScript
+runtime dependency. A provider snapshot is healthy only when its identity,
+version, content digest, adapter, and harness admission all match the approved
+manifest. Provider receipts are strict attributed artifacts: they cannot claim
+branch ownership, approval, submission readiness, or completion. The durable
+work-run store records the accepted plan digest, provider route, artifact
+references, nonces, and recovery state; thin session checkpoints are only
+reattachment hints.
+
+The Codex adapter is currently an explicit candidate/unsupported state. The
+runtime can discover the approved CE 3.21.4 installation, but activation waits
+for a disposable authenticated `codex exec` receipt and denied-capability proof.
+Run `jarvos doctor` to see the approved and discovered versions. Until that
+receipt is reviewed, `plan`, `work`, and `complete` fall back to the native
+jarvOS route in the same work run and worktree. A failed fallback does not make
+a second branch, plan, pull request, or completion claim.
+
+Learning capture is deliberately independent of coding completion. It runs only
+after live review, tests, pull-request, post-merge, and close evidence establish
+a verified result and a bounded signal names a reusable root cause,
+architecture constraint, failed approach, operational lesson, or project term.
+Routine work is recorded as `not-eligible`; decline, provider absence, and
+unsafe/failed receipts remain visible non-terminal outcomes. At most one
+learning artifact is captured per work run, with additional signals deferred.
+
 `codingHostAdapterContract('claude-code' | 'openclaw' | 'codex')` remains the descriptor-only
 contract for registries, docs, and setup tools that need to inspect support
 without instantiating a runtime adapter.

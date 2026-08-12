@@ -23,6 +23,8 @@ state, and explicit adapters for runtime-specific behavior.
 - a local repository checkout
 - optional: an existing OpenClaw config if you want the runtime adapter to detect
   a live OpenClaw installation
+- optional: Codex CLI when you want the Codex adapter and managed-provider
+  doctor checks
 - optional: `lossless-claw` for continuity checks
 - optional: Obsidian and `defuddle` for the Obsidian default experience pack
 
@@ -54,6 +56,32 @@ npm run canary:jarvos-install
 The canary packs `@jarvos/skills`, installs the generated tarball into a fresh
 temporary project, and runs the installed doctor. This proves the install
 artifact works outside the source checkout.
+
+## Coding workflow and Compound Engineering
+
+The coding profile is provider-neutral at the command surface. In a compatible
+jarvOS coding session, ask naturally to `plan`, `work`, or `complete`; jarvOS
+resolves the approved managed provider and keeps the work-run, branch, review,
+submission, and completion authority. A healthy Compound Engineering provider
+supplies the planning and implementation loop behind those verbs. If it is
+absent, locally modified, unsupported, or unavailable, jarvOS uses its native
+workflow in the same run and worktree.
+
+The shipped CE pin is immutable and licensed. Candidate discovery is separate
+from activation: doctor may report a discovered CE installation, but only a
+reviewed jarvOS manifest and conformance receipt can enable it. For Codex, run:
+
+```bash
+jarvos doctor --profile minimal --workspace /path/to/workspace
+node modules/jarvos-runtime-kit/scripts/jarvos-runtime-kit.js check runtimes/codex/adapter.json
+```
+
+`unsupported` is an honest health state, not an install failure. It means the
+provider can be identified but the native bounded invocation/receipt and denied
+capability proof have not been reviewed. The native coding path remains
+available. Do not follow upstream `main` or manually enable CE in a live Codex
+profile; use the disposable-profile conformance path documented in
+[`runtimes/codex/README.md`](../../runtimes/codex/README.md).
 
 ## Public/Private Boundary
 

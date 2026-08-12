@@ -105,6 +105,24 @@ upstream versions are recorded as one review item and never change the active
 provider until a new jarvOS-approved manifest is shipped. Disable and rollback
 remove only exact jarvOS-owned state.
 
+The bundled `workflow-execution` skill maps ordinary `plan`, `work`, and
+`complete` requests to jarvOS-coding's managed workflow when the active harness
+has a healthy approved provider. Users do not need to learn CE command names.
+`compound` is the optional post-verification learning tail: the eligibility gate
+selects one reusable lesson, screens it for private content, and records its
+outcome separately from coding completion. Routine work is `not-eligible`, and
+provider failure or absence is `unavailable`/`failed` without reopening or
+downgrading a verified run.
+
+Codex is the first activation target. The shipped pin is CE 3.21.4 with an
+immutable revision and content digest, but its runtime admission remains
+`unsupported` until the disposable-profile invocation and strict receipt proof
+are reviewed. Doctor reports that distinction and the native jarvOS workflow
+continues in the same run/worktree. Other harnesses remain explicitly
+unsupported until they provide equivalent discovery, configuration-preservation,
+invocation, rollback, and fallback evidence. Approved updates may be discovered
+and staged automatically; only a reviewed manifest change can activate them.
+
 Run the pack doctor to inspect optional tool availability:
 
 ```bash

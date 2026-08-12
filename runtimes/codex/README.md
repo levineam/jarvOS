@@ -5,20 +5,36 @@ the shared `@jarvos/agent-context` MCP server and a Codex `SessionStart` hook.
 
 ## Compound Engineering capability discovery
 
-`compound-engineering-capability.json` is a candidate-only capability record for
-the approved Compound Engineering source revision. Its checked-in fixtures
-capture the Codex marketplace, profile, artifact-cache, and bounded invocation
-surfaces without installing or enabling CE in a developer's profile. The
-runtime-kit check verifies the fixture tree, immutable revision, public-safe
-discovery commands, and candidate-only admission. Codex remains unsupported for
-managed CE activation until a disposable-profile conformance packet proves the
-real `plan` and `work` invocation, receipt/artifact transport, restart boundary,
-capability isolation, and rollback behavior.
+`compound-engineering-capability.json` is the candidate-only capability record
+for the approved Compound Engineering source revision. The runtime manifest
+also declares the managed provider, its `CODEX_HOME` profile boundary, and the
+checked-in `compound-engineering-conformance.json` evidence. The discovery
+fixtures and a disposable profile prove the immutable marketplace install and
+version discovery; the provider remains `unsupported` until authenticated
+bounded `plan` and `work` receipts, restart behavior, capability isolation, and
+rollback are all reviewed.
+
+This is intentional: an installed plugin is not the same thing as a proved
+jarvOS provider. Doctor reports the discovered version and the `unsupported`
+admission, while ordinary jarvOS `plan`, `work`, and `complete` requests use
+the native workflow fallback in the same durable work run. No setup path
+silently activates CE or changes a live profile before the conformance receipt
+is promoted.
 
 Discovery commands are read-only. `codex plugin marketplace add` and
-`codex plugin add` are activation commands recorded as argv arrays for later
-adapter work; they must never be run against a live profile by capability
-discovery.
+`codex plugin add` are activation commands recorded as argv arrays for the
+disposable-profile conformance harness; they must never be run against a live
+profile by capability discovery or doctor.
+
+The durable evidence contract is:
+
+- approved pin: `3.21.4` at the reviewed immutable revision and digest
+- observed installation: Codex `0.146.0`, marketplace and plugin version found
+- invocation: blocked until a disposable authenticated profile can return the
+  strict jarvOS receipt without credential, network, profile-state, or
+  privileged-tool access
+- recovery: continue through native jarvOS coding; rerun doctor after a reviewed
+  conformance receipt is available
 
 ## Setup
 

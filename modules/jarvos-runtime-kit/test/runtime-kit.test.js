@@ -11,7 +11,9 @@ const {
   COMPOUND_ENGINEERING_CAPABILITY_VERSION,
   checkRuntime,
   checkCompoundEngineeringCapability,
+  classifyCompoundEngineeringProvider,
   computeCompoundEngineeringFixtureDigest,
+  inspectCompoundEngineeringProvider,
   listRuntimeManifests,
   loadCompoundEngineeringCapability,
   scaffoldRuntime,
@@ -52,6 +54,49 @@ test('Compound Engineering capability rejects activation without conformance pro
   const result = validateCompoundEngineeringCapability(promoted);
   assert.equal(result.ok, false);
   assert.match(result.errors.join('\n'), /candidate-only capability must remain unsupported|proof\.conformant/);
+});
+
+test('Compound Engineering provider status distinguishes discovery from activation truth', () => {
+  const capabilityPath = path.join(ROOT, 'runtimes/codex/compound-engineering-capability.json');
+  const loaded = loadCompoundEngineeringCapability(capabilityPath, { root: ROOT });
+  const capabilityCheck = checkCompoundEngineeringCapability(capabilityPath, { root: ROOT });
+  const discovered = classifyCompoundEngineeringProvider({
+    capability: loaded.capability,
+    capabilityCheck,
+    evidence: { installed: [{ name: 'compound-engineering', version: '3.21.4', enabled: true }] },
+  });
+  assert.equal(discovered.status, 'unsupported');
+  assert.equal(discovered.activeVersion, '3.21.4');
+
+  const missing = classifyCompoundEngineeringProvider({
+    capability: loaded.capability,
+    capabilityCheck,
+    evidence: { installed: [] },
+  });
+  assert.equal(missing.status, 'not-installed');
+
+  const modified = classifyCompoundEngineeringProvider({
+    capability: loaded.capability,
+    capabilityCheck,
+    evidence: { localModified: true, installed: [{ name: 'compound-engineering', version: '3.21.4', enabled: true }] },
+  });
+  assert.equal(modified.status, 'local-modified');
+});
+
+test('Compound Engineering inspection returns a public-safe unsupported status for an installed candidate', () => {
+  const result = inspectCompoundEngineeringProvider({
+    root: ROOT,
+    evidence: {
+      codexAvailable: true,
+      codexVersion: '0.146.0',
+      marketplaces: [{ name: 'compound-engineering-plugin' }],
+      installed: [{ name: 'compound-engineering', version: '3.21.4', enabled: true }],
+    },
+  });
+  assert.equal(result.status, 'unsupported');
+  assert.equal(result.discovery.activeVersion, '3.21.4');
+  assert.equal(result.discovery.marketplaceFound, true);
+  assert.equal(JSON.stringify(result).includes('/Users/'), false);
 });
 
 test('Compound Engineering capability rejects traversal, symlink, and executable fixture content', () => {

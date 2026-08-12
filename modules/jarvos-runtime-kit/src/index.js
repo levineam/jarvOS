@@ -3,6 +3,7 @@
 const fs = require('fs');
 const crypto = require('crypto');
 const path = require('path');
+const { spawnSync } = require('child_process');
 const harnessDispatch = require('./harness-dispatch.js');
 const stewardshipAdapter = require('./stewardship-adapter.js');
 const stewardshipBootstrap = require('./stewardship-bootstrap.js');
@@ -246,6 +247,184 @@ function checkCompoundEngineeringCapability(capabilityPath, options = {}) {
   };
 }
 
+/**
+ * Classify the active Codex CE installation without granting it admission.
+ * Discovery evidence is deliberately a small public projection; callers must
+ * not pass raw config paths or command output through this boundary.
+ */
+function classifyCompoundEngineeringProvider({ capability, capabilityCheck, evidence = {} } = {}) {
+  if (!capabilityCheck?.ok || !isObject(capability)) {
+    return {
+      status: 'incompatible',
+      reason: 'capability-record-invalid',
+      recoveryAction: 'repair the shipped capability record before retrying provider discovery',
+    };
+  }
+  if (evidence.localModified === true) {
+    return {
+      status: 'local-modified',
+      reason: 'managed provider state differs from the jarvOS-owned projection',
+      recoveryAction: 'preserve local changes, inspect the profile, and explicitly reconcile or disable the provider',
+    };
+  }
+  const active = Array.isArray(evidence.installed)
+    ? evidence.installed.find((entry) => entry?.name === 'compound-engineering' || entry?.pluginId === 'compound-engineering@compound-engineering-plugin')
+    : null;
+  if (!active) {
+    return {
+      status: 'not-installed',
+      reason: 'approved provider is not installed in the inspected Codex profile',
+      recoveryAction: 'install the approved jarvOS provider only after the conformance receipt is reviewed',
+      approvedVersion: capability.provider.version,
+      activeVersion: null,
+    };
+  }
+  if (active.enabled === false) {
+    return {
+      status: 'degraded',
+      reason: 'approved provider is installed but disabled',
+      recoveryAction: 'enable the jarvOS-owned provider or use the native jarvOS fallback',
+      approvedVersion: capability.provider.version,
+      activeVersion: active.version || null,
+    };
+  }
+  if (active.version !== capability.provider.version) {
+    return {
+      status: 'incompatible',
+      reason: 'installed provider version does not match the approved pin',
+      recoveryAction: 'stage a reviewed jarvOS provider pin before updating the active profile',
+      approvedVersion: capability.provider.version,
+      activeVersion: active.version || null,
+    };
+  }
+  if (capability.admission !== 'supported' || capability.proof?.conformant !== true || capability.activation?.candidateOnly === true) {
+    return {
+      status: 'unsupported',
+      reason: 'Codex provider installation is discovered, but the checked-in conformance proof does not admit activation',
+      recoveryAction: 'continue through the jarvOS native workflow and review a Codex conformance receipt before activation',
+      approvedVersion: capability.provider.version,
+      activeVersion: active.version || null,
+    };
+  }
+  if (evidence.conformance?.status !== 'passed' || evidence.conformance?.providerRevision !== capability.provider.revision) {
+    return {
+      status: 'degraded',
+      reason: 'provider discovery passed but the required invocation and receipt conformance evidence is missing or stale',
+      recoveryAction: 'rerun the disposable Codex conformance fixture before relying on managed CE',
+      approvedVersion: capability.provider.version,
+      activeVersion: active.version || null,
+    };
+  }
+  return {
+    status: 'healthy',
+    reason: 'approved provider is installed, discovered, and backed by the reviewed conformance receipt',
+    recoveryAction: 'none',
+    approvedVersion: capability.provider.version,
+    activeVersion: active.version || null,
+  };
+}
+
+function compactCodexPlugin(entry = {}) {
+  return {
+    pluginId: typeof entry.pluginId === 'string' ? entry.pluginId : null,
+    name: typeof entry.name === 'string' ? entry.name : null,
+    version: typeof entry.version === 'string' ? entry.version : null,
+    enabled: entry.enabled !== false,
+  };
+}
+
+function collectCodexCompoundEngineeringEvidence(options = {}) {
+  if (isObject(options.evidence)) return options.evidence;
+  const executable = options.executable || 'codex';
+  const env = options.env || process.env;
+  const run = (args) => {
+    const result = spawnSync(executable, args, {
+      env,
+      encoding: 'utf8',
+      timeout: options.timeoutMs || 5000,
+      maxBuffer: options.maxBuffer || 512 * 1024,
+    });
+    if (result.error || result.status !== 0) return null;
+    try { return JSON.parse(result.stdout || '{}'); } catch (_) { return null; }
+  };
+  let codexVersion = null;
+  const version = spawnSync(executable, ['--version'], {
+    env,
+    encoding: 'utf8',
+    timeout: options.timeoutMs || 5000,
+    maxBuffer: options.maxBuffer || 64 * 1024,
+  });
+  if (!version.error && version.status === 0) {
+    const match = String(version.stdout || '').match(/(?:codex-cli\s+)?([^\s]+)/i);
+    codexVersion = match ? match[1] : null;
+  }
+  const installedPayload = run(['plugin', 'list', '--json']);
+  const marketplacePayload = run(['plugin', 'marketplace', 'list', '--json']);
+  return {
+    codexAvailable: Boolean(codexVersion),
+    codexVersion,
+    installed: Array.isArray(installedPayload?.installed) ? installedPayload.installed.map(compactCodexPlugin) : [],
+    marketplaces: Array.isArray(marketplacePayload?.marketplaces)
+      ? marketplacePayload.marketplaces.map((entry) => ({ name: typeof entry.name === 'string' ? entry.name : null }))
+      : [],
+  };
+}
+
+function inspectCompoundEngineeringProvider(options = {}) {
+  const root = path.resolve(options.root || repoRootFrom());
+  const capabilityPath = options.capabilityPath || path.join(root, 'runtimes', 'codex', 'compound-engineering-capability.json');
+  let loaded;
+  let capabilityCheck;
+  try {
+    loaded = loadCompoundEngineeringCapability(capabilityPath, { root });
+    capabilityCheck = checkCompoundEngineeringCapability(capabilityPath, { root });
+  } catch (error) {
+    return {
+      status: 'incompatible',
+      reason: 'capability-record-unreadable',
+      recoveryAction: 'repair the shipped capability record before retrying provider discovery',
+      error: error.message,
+    };
+  }
+  const evidence = collectCodexCompoundEngineeringEvidence(options);
+  let conformance = null;
+  const conformancePath = options.conformancePath || path.join(root, 'runtimes', 'codex', 'compound-engineering-conformance.json');
+  if (fs.existsSync(conformancePath)) {
+    try {
+      const receipt = readJson(conformancePath);
+      conformance = {
+        status: receipt.status === 'passed' ? 'passed' : 'blocked',
+        providerRevision: typeof receipt.approvedRevision === 'string' ? receipt.approvedRevision : null,
+      };
+    } catch (_) {
+      conformance = { status: 'invalid', providerRevision: null };
+    }
+  }
+  const classification = classifyCompoundEngineeringProvider({
+    capability: loaded.capability,
+    capabilityCheck,
+    evidence: { ...evidence, conformance },
+  });
+  const active = evidence.installed?.find((entry) => entry?.name === 'compound-engineering') || null;
+  return {
+    ...classification,
+    capability: {
+      id: loaded.capability.provider?.id || null,
+      approvedVersion: loaded.capability.provider?.version || null,
+      approvedRevision: loaded.capability.provider?.revision || null,
+      admission: loaded.capability.admission || null,
+    },
+    discovery: {
+      codexVersion: evidence.codexVersion || null,
+      marketplaceFound: Boolean(evidence.marketplaces?.some((entry) => entry.name === 'compound-engineering-plugin')),
+      installed: Boolean(active),
+      activeVersion: active?.version || null,
+      conformance: conformance?.status || 'missing',
+    },
+    errors: capabilityCheck.errors || [],
+  };
+}
+
 function validateManifest(manifest) {
   const errors = [];
   const warnings = [];
@@ -307,6 +486,18 @@ function validateManifest(manifest) {
 
   if (manifest.configWrites && !manifest.configWrites.backupBeforeWrite) {
     add(errors, 'configWrites.backupBeforeWrite must be true when configWrites is declared');
+  }
+  const managedCompound = manifest.managedProviders?.['compound-engineering'];
+  if (managedCompound !== undefined) {
+    if (!isObject(managedCompound)) {
+      add(errors, 'managedProviders.compound-engineering must be an object');
+    } else {
+      for (const field of ['status', 'manifest', 'capabilityRecord', 'conformanceReceipt', 'profileBoundary', 'activation', 'discovery', 'invocation', 'fallback']) {
+        if (typeof managedCompound[field] !== 'string' || managedCompound[field].length === 0) add(errors, `managedProviders.compound-engineering.${field} is required`);
+      }
+      if (managedCompound.status !== 'unsupported') add(errors, 'managedProviders.compound-engineering.status must remain unsupported until conformance proof passes');
+      if (managedCompound.profileBoundary !== 'CODEX_HOME') add(errors, 'managedProviders.compound-engineering.profileBoundary must be CODEX_HOME');
+    }
   }
   if (manifest.stewardshipAdapter) {
     const bootstrap = stewardshipBootstrap.validateStewardshipBootstrap(manifest.stewardshipAdapter.bootstrap, manifest.id);
@@ -462,12 +653,33 @@ function checkRuntime(manifestPath, options = {}) {
 
   if (manifest.id === 'codex') {
     const capabilityPath = path.join(runtimeDir, 'compound-engineering-capability.json');
+    let capabilityRecord = null;
     if (!fs.existsSync(capabilityPath)) {
       add(errors, 'Codex Compound Engineering capability record is missing');
     } else {
+      try { capabilityRecord = loadCompoundEngineeringCapability(capabilityPath, { root }).capability; } catch (_) { capabilityRecord = null; }
       const capabilityCheck = checkCompoundEngineeringCapability(capabilityPath, { root });
       if (!capabilityCheck.ok) {
         for (const error of capabilityCheck.errors) add(errors, `Codex Compound Engineering capability: ${error}`);
+      }
+    }
+    const managedCompound = manifest.managedProviders?.['compound-engineering'];
+    if (managedCompound) {
+      for (const field of ['manifest', 'conformanceReceipt']) {
+        const filePath = path.resolve(root, managedCompound[field]);
+        if (!fs.existsSync(filePath)) add(errors, `Codex managed provider ${field} is missing`);
+      }
+      const receiptPath = path.resolve(root, managedCompound.conformanceReceipt || '');
+      if (fs.existsSync(receiptPath)) {
+        try {
+          const receipt = readJson(receiptPath);
+          if (receipt.provider !== 'compound-engineering') add(errors, 'Codex conformance receipt provider is invalid');
+          if (receipt.approvedVersion !== capabilityRecord?.provider?.version) add(errors, 'Codex conformance receipt approvedVersion is not the shipped pin');
+          if (receipt.approvedRevision !== capabilityRecord?.provider?.revision) add(errors, 'Codex conformance receipt approvedRevision is not the shipped pin');
+          if (receipt.admission !== 'unsupported') add(errors, 'Codex conformance receipt must keep admission unsupported until proof passes');
+        } catch (error) {
+          add(errors, `Codex conformance receipt could not be loaded: ${error.message}`);
+        }
       }
     }
   }
@@ -526,11 +738,14 @@ module.exports = {
   CONTROL_PLANE_TOOL,
   COMPOUND_ENGINEERING_CAPABILITY_VERSION,
   checkCompoundEngineeringCapability,
+  classifyCompoundEngineeringProvider,
+  collectCodexCompoundEngineeringEvidence,
   checkRuntime,
   computeCompoundEngineeringFixtureDigest,
   listRuntimeManifests,
   loadCompoundEngineeringCapability,
   loadManifest,
+  inspectCompoundEngineeringProvider,
   repoRootFrom,
   scaffoldRuntime,
   validateCompoundEngineeringCapability,

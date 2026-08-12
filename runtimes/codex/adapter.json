@@ -46,6 +46,19 @@
   "setup": {
     "script": "setup.sh"
   },
+  "managedProviders": {
+    "compound-engineering": {
+      "status": "unsupported",
+      "manifest": "modules/jarvos-coding/providers/compound-engineering.json",
+      "capabilityRecord": "runtimes/codex/compound-engineering-capability.json",
+      "conformanceReceipt": "runtimes/codex/compound-engineering-conformance.json",
+      "profileBoundary": "CODEX_HOME",
+      "activation": "candidate-only-until-conformance",
+      "discovery": "read-only-codex-plugin-marketplace-and-plugin-list",
+      "invocation": "codex-exec-bounded-provider-prompt",
+      "fallback": "jarvos-native-workflow"
+    }
+  },
   "stewardshipAdapter": {
     "version": "jarvos-stewardship-adapter.v1",
     "harness": "codex",
