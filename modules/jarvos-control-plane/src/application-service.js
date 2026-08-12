@@ -8,7 +8,85 @@ const crypto = require('crypto');
 const { createCommand, createRequest, toPublicProjection } = require('./contracts');
 
 const READ_OPERATIONS = new Set(['list', 'inspect', 'evidence', 'approval-state']);
+const CODING_READ_OPERATIONS = new Set(['listEvidence']);
+const CODING_WORK_RUN_EVIDENCE_VERSION = 'jarvos-control-plane.coding-work-run-evidence.v1';
+const OPAQUE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
+const AUTHORITY_FIELDS = new Set(['branch', 'worktree', 'worktreePath', 'approval', 'submissionReady', 'completion', 'owner', 'authority', 'terminalStatus', 'nextStep', 'pr', 'pullRequest']);
 const id = (prefix) => `${prefix}_${crypto.randomUUID()}`;
+
+function redactCodingText(value) {
+  return String(value)
+    .replace(/(?:\bBearer\s+|\bsk-[A-Za-z0-9_-]{8,}|\bxox[baprs]-)[^\s]+/gi, '[redacted]')
+    .replace(/(api[_-]?key|token|secret|password)\s*[:=]\s*[^\s]+/gi, '$1=[redacted]')
+    .replace(/(?:\/|[A-Za-z]:[\\/])[^\s]+/g, '[private-path]');
+}
+
+function isObject(value) {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function projectCodingEvidence(record) {
+  return {
+    version: CODING_WORK_RUN_EVIDENCE_VERSION,
+    evidenceId: record.id,
+    workRunId: record.workRunId,
+    eventId: record.eventId,
+    type: record.type,
+    operation: record.operation || null,
+    status: record.status || null,
+    reasonCode: record.reasonCode || null,
+    provider: record.provider ? {
+      id: record.provider.id,
+      version: record.provider.version,
+      pinDigest: record.provider.pinDigest,
+      harness: record.provider.harness,
+      adapterVersion: record.provider.adapterVersion,
+      status: record.provider.status,
+    } : null,
+    artifact: record.artifact ? {
+      kind: record.artifact.kind,
+      reference: record.artifact.reference,
+      digest: record.artifact.digest,
+    } : null,
+    detail: Array.isArray(record.detail) ? record.detail.slice(0, 10).map((entry) => redactCodingText(entry).slice(0, 500)) : null,
+    at: record.at,
+  };
+}
+
+function normalizeCodingEvidence(input = {}, principal) {
+  if (!isObject(input)) throw new Error('coding work-run evidence must be an object');
+  for (const key of Object.keys(input)) {
+    if (!['version', 'eventId', 'workRunId', 'type', 'operation', 'status', 'reasonCode', 'provider', 'artifact', 'detail', 'operationNonce', 'at'].includes(key)) {
+      throw new Error(`coding work-run evidence.${key} is not allowed`);
+    }
+    if (AUTHORITY_FIELDS.has(key)) throw new Error(`coding work-run evidence.${key} is an authority-shaped field`);
+  }
+  if (input.version !== undefined && input.version !== 'jarvos-coding-work-run-event/v1') throw new Error('coding work-run evidence.version is incompatible');
+  for (const field of ['eventId', 'workRunId']) if (!OPAQUE_ID.test(input[field] || '')) throw new Error(`coding work-run evidence.${field} must be opaque`);
+  if (!['route', 'provider', 'artifact', 'recovery', 'terminal'].includes(input.type)) throw new Error('coding work-run evidence.type is invalid');
+  if (input.operationNonce !== undefined && !OPAQUE_ID.test(input.operationNonce || '')) throw new Error('coding work-run evidence.operationNonce must be opaque');
+  if (input.artifact !== undefined && (!isObject(input.artifact) || typeof input.artifact.reference !== 'string' || !/^artifact:[A-Za-z0-9._-]{6,160}$/.test(input.artifact.reference) || !/^[a-f0-9]{64}$/i.test(input.artifact.digest || ''))) throw new Error('coding work-run evidence.artifact is invalid');
+  const detail = input.detail === undefined || input.detail === null
+    ? null
+    : Array.isArray(input.detail) ? input.detail : [input.detail];
+  if (detail && (detail.length > 10 || detail.some((entry) => typeof entry !== 'string' || entry.length > 500))) throw new Error('coding work-run evidence.detail must contain at most 10 bounded entries');
+  return {
+    id: id('coding-evidence'),
+    version: 'jarvos-coding-work-run-event/v1',
+    principal: { id: principal.id },
+    workRunId: input.workRunId,
+    eventId: input.eventId,
+    type: input.type,
+    operation: input.operation || null,
+    status: input.status || null,
+    reasonCode: input.reasonCode || null,
+    provider: input.provider || null,
+    artifact: input.artifact || null,
+    detail,
+    operationNonce: input.operationNonce || null,
+    at: input.at || new Date().toISOString(),
+  };
+}
 
 function createApplicationService(options = {}) {
   if (!options.store) throw new Error('store is required');
@@ -75,6 +153,18 @@ function createApplicationService(options = {}) {
     const state = options.store.load();
     state.keyedFences = state.keyedFences || {};
     state.idempotency = state.idempotency || {};
+    state.codingEvidence = state.codingEvidence || [];
+    state.codingEvidenceIndex = state.codingEvidenceIndex || Object.fromEntries(
+      state.codingEvidence.map((item) => [`${item.workRunId}\u0000${item.eventId}`, item.id]),
+    );
+
+    if (CODING_READ_OPERATIONS.has(operation)) {
+      if (!has(principal, 'control-plane.read')) throw new Error('control-plane read is not authorized');
+      const evidence = state.codingEvidence
+        .filter((item) => (!input.workRunId || item.workRunId === input.workRunId) && readable(principal, item))
+        .map(projectCodingEvidence);
+      return { ok: true, evidence };
+    }
 
     if (READ_OPERATIONS.has(operation)) {
       if (!has(principal, 'control-plane.read')) throw new Error('control-plane read is not authorized');
@@ -97,6 +187,21 @@ function createApplicationService(options = {}) {
           usedAt: request.approval.usedAt || null,
         } : null,
       };
+    }
+
+    if (operation === 'recordEvidence') {
+      if (!has(principal, 'control-plane.mutate')) throw new Error('control-plane mutation is not authorized');
+      if (state.paused) throw new Error('control plane is paused');
+      const evidence = normalizeCodingEvidence(input.evidence, principal);
+      if (input.workRunId !== undefined && input.workRunId !== evidence.workRunId) throw new Error('coding work-run evidence.workRunId must match the request binding');
+      const evidenceKey = `${evidence.workRunId}\u0000${evidence.eventId}`;
+      const duplicateId = state.codingEvidenceIndex[evidenceKey];
+      const duplicate = duplicateId && state.codingEvidence.find((item) => item.id === duplicateId);
+      if (duplicate) return { ok: true, deduped: true, evidence: projectCodingEvidence(duplicate) };
+      state.codingEvidence.push(evidence);
+      state.codingEvidenceIndex[evidenceKey] = evidence.id;
+      options.store.save(state, state.revision);
+      return { ok: true, deduped: false, evidence: projectCodingEvidence(evidence) };
     }
 
     if (!['createRequest', 'approve'].includes(operation)) throw new Error(`unknown operation: ${operation}`);
@@ -160,7 +265,7 @@ function createApplicationService(options = {}) {
 }
 
 function createMemoryApplicationStore() {
-  let state = { revision: 0, paused: false, keyedFences: {}, idempotency: {}, requests: [], evidence: [] };
+  let state = { revision: 0, paused: false, keyedFences: {}, idempotency: {}, requests: [], evidence: [], codingEvidence: [], codingEvidenceIndex: {} };
   return {
     load: () => structuredClone(state),
     save(next, expectedRevision) {
@@ -170,4 +275,4 @@ function createMemoryApplicationStore() {
   };
 }
 
-module.exports = { createApplicationService, createMemoryApplicationStore };
+module.exports = { CODING_WORK_RUN_EVIDENCE_VERSION, createApplicationService, createMemoryApplicationStore, projectCodingEvidence };

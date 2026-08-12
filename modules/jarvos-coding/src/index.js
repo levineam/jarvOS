@@ -158,6 +158,7 @@ const reconcilePolicy = require('./stewardship/reconcile-policy');
 const projectsActivity = require('./projects-activity');
 const compoundEngineeringProvider = require('./providers/compound-engineering');
 const workflowProvider = require('./providers/workflow-provider');
+const workRunStore = require('./features/work-run-store');
 module.exports = {
   ...projectsActivity,
   ...stewardshipContract,
@@ -166,6 +167,7 @@ module.exports = {
   ...reconcilePolicy,
   ...compoundEngineeringProvider,
   ...workflowProvider,
+  ...workRunStore,
   ACTIVE_STATUSES,
   DEFAULT_IGNORED_PATH_SEGMENTS,
   BRANCH_SCHEMA_VERSION,
