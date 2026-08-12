@@ -436,6 +436,9 @@ function createManagedCodingWorkflow(options = {}) {
     if (previousRecovery?.state === 'failed' || ['native_fallback_failed', 'recovery_event_not_recorded'].includes(previousRecovery?.reasonCode)) {
       return { ok: false, status: 'blocked', route: 'native-fallback', workRunId: claimed.workRunId, reasonCode: previousRecovery.reasonCode || 'recovery_failed' };
     }
+    if (previousRecovery?.state === 'blocked' && previousRecovery.reasonCode === 'native_fallback_in_progress') {
+      return { ok: false, status: 'blocked', route: 'native-fallback', workRunId: claimed.workRunId, reasonCode: 'native_fallback_in_progress' };
+    }
     if (previousRecovery?.state === 'blocked' && previousRecovery.reasonCode === 'provider_timeout') {
       if (pendingWork(claimed.workRunId)) return { ok: false, status: 'blocked', route: 'native-fallback', workRunId: claimed.workRunId, reasonCode: 'provider_pending' };
       return recoverWork(claimed, nativeInvocation({ operation: 'work', claimed, input, packet: packetValidation.packet }), 'provider_timeout_recovery', 'provider timeout requires reconciliation before retry');

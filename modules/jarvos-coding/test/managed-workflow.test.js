@@ -255,6 +255,37 @@ test('native fallback failure to record recovery blocks retries before edits rep
   assert.equal(nativeWorkCalls, 1);
 });
 
+test('native fallback in progress blocks concurrent work retries', async () => {
+  const currentManifest = manifest();
+  const store = createMemoryWorkRunStore();
+  let nativeWorkCalls = 0;
+  let releaseNative;
+  const workflow = createManagedCodingWorkflow({
+    manifest: currentManifest,
+    workRunStore: store,
+    ownerId: 'agent:codex',
+    nativeAdapter: {
+      work: async () => {
+        nativeWorkCalls += 1;
+        await new Promise((resolve) => { releaseNative = resolve; });
+        return { artifact: 'native-work' };
+      },
+    },
+  });
+  const subjectKey = 'levineam/jarvOS:SUP-5010';
+  const input = { subjectKey, canonicalWorktree: '/private/jarvos/worktrees/SUP-5010', planDigest: '1'.repeat(64), packet: packet('1'.repeat(64)), operationNonce: 'nonce-native-10' };
+  const claim = store.claimWorkRun({ subjectKey, canonicalWorktree: input.canonicalWorktree, ownerId: 'agent:codex' });
+  store.acceptPlan({ workRunId: claim.workRunId, ownerId: claim.ownerId, fence: claim.fence, planDigest: input.planDigest, packetDigest: require('node:crypto').createHash('sha256').update(JSON.stringify(input.packet)).digest('hex'), artifact: { reference: 'artifact:plan123456', digest: input.planDigest } });
+  const first = workflow.work(input);
+  await new Promise((resolve) => setImmediate(resolve));
+  const second = await workflow.work(input);
+  assert.equal(second.reasonCode, 'native_fallback_in_progress');
+  assert.equal(nativeWorkCalls, 1);
+  releaseNative();
+  const completed = await first;
+  assert.equal(completed.ok, true);
+});
+
 test('failed provider receipts use a distinct route nonce and native plan fallback', async () => {
   const currentManifest = manifest();
   const currentProvider = provider(currentManifest);
