@@ -156,12 +156,16 @@ const stewardshipJudgment = require('./stewardship/judgment');
 const stewardshipPolicy = require('./stewardship/policy');
 const reconcilePolicy = require('./stewardship/reconcile-policy');
 const projectsActivity = require('./projects-activity');
+const compoundEngineeringProvider = require('./providers/compound-engineering');
+const workflowProvider = require('./providers/workflow-provider');
 module.exports = {
   ...projectsActivity,
   ...stewardshipContract,
   ...stewardshipJudgment,
   ...stewardshipPolicy,
   ...reconcilePolicy,
+  ...compoundEngineeringProvider,
+  ...workflowProvider,
   ACTIVE_STATUSES,
   DEFAULT_IGNORED_PATH_SEGMENTS,
   BRANCH_SCHEMA_VERSION,
