@@ -1,0 +1,33 @@
+name: Release Please
+
+on:
+  push:
+    branches:
+      - main
+
+# The App installation token is deliberately distinct from the default Actions
+# token so a merged Release Please PR can trigger the trusted release workflow.
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+concurrency:
+  group: release-please-main
+  cancel-in-progress: false
+
+jobs:
+  release-please:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      # v1.0.0 is deliberately requested once by a reviewed conventional
+      # commit on main with this footer; do not set a permanent release-as:
+      #
+      # Release-As: 1.0.0
+      - id: release
+        uses: googleapis/release-please-action@16a9c90856f42705d54a6fda1823352bdc62cf38 # v4.4.0
+        with:
+          token: ${{ secrets.JARVOS_RELEASE_PLEASE_APP_TOKEN }}
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
