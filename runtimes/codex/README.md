@@ -3,6 +3,23 @@
 This adapter connects local Codex CLI and Codex app sessions to jarvOS through
 the shared `@jarvos/agent-context` MCP server and a Codex `SessionStart` hook.
 
+## Compound Engineering capability discovery
+
+`compound-engineering-capability.json` is a candidate-only capability record for
+the approved Compound Engineering source revision. Its checked-in fixtures
+capture the Codex marketplace, profile, artifact-cache, and bounded invocation
+surfaces without installing or enabling CE in a developer's profile. The
+runtime-kit check verifies the fixture tree, immutable revision, public-safe
+discovery commands, and candidate-only admission. Codex remains unsupported for
+managed CE activation until a disposable-profile conformance packet proves the
+real `plan` and `work` invocation, receipt/artifact transport, restart boundary,
+capability isolation, and rollback behavior.
+
+Discovery commands are read-only. `codex plugin marketplace add` and
+`codex plugin add` are activation commands recorded as argv arrays for later
+adapter work; they must never be run against a live profile by capability
+discovery.
+
 ## Setup
 
 From the jarvOS repo root:

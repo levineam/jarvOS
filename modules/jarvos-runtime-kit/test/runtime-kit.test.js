@@ -8,13 +8,97 @@ const path = require('path');
 const test = require('node:test');
 
 const {
+  COMPOUND_ENGINEERING_CAPABILITY_VERSION,
   checkRuntime,
+  checkCompoundEngineeringCapability,
+  computeCompoundEngineeringFixtureDigest,
   listRuntimeManifests,
+  loadCompoundEngineeringCapability,
   scaffoldRuntime,
+  validateCompoundEngineeringCapability,
   validateManifest,
 } = require('../src/index.js');
 
 const ROOT = path.resolve(__dirname, '..', '..', '..');
+
+test('Codex Compound Engineering capability remains a candidate-only, public-safe fixture', () => {
+  const capabilityPath = path.join(ROOT, 'runtimes/codex/compound-engineering-capability.json');
+  const loaded = loadCompoundEngineeringCapability(capabilityPath, { root: ROOT });
+  const validation = validateCompoundEngineeringCapability(loaded.capability);
+  assert.equal(COMPOUND_ENGINEERING_CAPABILITY_VERSION, 'jarvos-codex-ce-capability.v1');
+  assert.equal(validation.ok, true, validation.errors.join('\n'));
+  assert.equal(loaded.capability.admission, 'unsupported');
+  assert.equal(loaded.capability.activation.candidateOnly, true);
+  assert.equal(loaded.capability.proof.conformant, false);
+  assert.deepEqual(loaded.capability.operations, ['plan', 'work', 'compound']);
+
+  const result = checkCompoundEngineeringCapability(capabilityPath, { root: ROOT });
+  assert.equal(result.ok, true, result.errors.join('\n'));
+  assert.equal(result.fixture.treeDigest, loaded.capability.fixtureTreeDigest);
+  assert.ok(result.fixture.files.includes('discovery.json'));
+});
+
+test('Compound Engineering capability rejects activation without conformance proof', () => {
+  const capability = loadCompoundEngineeringCapability(
+    path.join(ROOT, 'runtimes/codex/compound-engineering-capability.json'),
+    { root: ROOT },
+  ).capability;
+  const promoted = {
+    ...capability,
+    admission: 'supported',
+    activation: { ...capability.activation, candidateOnly: false },
+    proof: { ...capability.proof, conformant: true },
+  };
+  const result = validateCompoundEngineeringCapability(promoted);
+  assert.equal(result.ok, false);
+  assert.match(result.errors.join('\n'), /candidate-only capability must remain unsupported|proof\.conformant/);
+});
+
+test('Compound Engineering capability rejects traversal, symlink, and executable fixture content', () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-ce-capability-'));
+  try {
+    const fixtureDir = path.join(tmp, 'fixtures');
+    fs.mkdirSync(fixtureDir, { recursive: true });
+    fs.writeFileSync(path.join(fixtureDir, 'safe.json'), '{}\n', 'utf8');
+    fs.symlinkSync(path.join(fixtureDir, 'safe.json'), path.join(fixtureDir, 'linked.json'));
+    fs.writeFileSync(path.join(fixtureDir, 'executable.json'), '{}\n', { encoding: 'utf8', mode: 0o755 });
+    const capability = {
+      schemaVersion: 1,
+      version: COMPOUND_ENGINEERING_CAPABILITY_VERSION,
+      provider: {
+        id: 'compound-engineering',
+        version: '3.21.4',
+        owner: 'EveryInc',
+        repository: 'https://github.com/EveryInc/compound-engineering-plugin.git',
+        revision: 'e36ddb8cbd4dd902d3b6ddd96165a783b0ac4711',
+        license: 'MIT',
+      },
+      harness: 'codex',
+      admission: 'unsupported',
+      operations: ['plan', 'work', 'compound'],
+      activation: {
+        mechanism: 'codex-plugin-marketplace',
+        marketplaceArgv: ['codex', 'plugin', 'marketplace', 'add', 'EveryInc/compound-engineering-plugin', '--ref', 'e36ddb8cbd4dd902d3b6ddd96165a783b0ac4711'],
+        pluginArgv: ['codex', 'plugin', 'add', 'compound-engineering@compound-engineering-plugin'],
+        candidateOnly: true,
+        requiresRestart: true,
+      },
+      discovery: { commands: [{ id: 'version', argv: ['codex', '--version'], readOnly: true, activatesPluginCode: false }] },
+      invocation: { surface: 'codex exec', proof: 'characterized' },
+      proof: { artifactBoundary: 'characterized', discovery: 'observed', invocation: 'characterized', receipt: 'jarvos-contract', activation: 'unproven', conformant: false },
+      fixtureRoot: 'fixtures',
+      fixtureFiles: ['safe.json', 'linked.json', 'executable.json'],
+      fixtureTreeDigest: computeCompoundEngineeringFixtureDigest(fixtureDir),
+    };
+    const capabilityPath = path.join(tmp, 'capability.json');
+    fs.writeFileSync(capabilityPath, JSON.stringify(capability, null, 2));
+    const result = checkCompoundEngineeringCapability(capabilityPath, { root: tmp });
+    assert.equal(result.ok, false);
+    assert.match(result.errors.join('\n'), /symlink|executable/i);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
 
 function runHermesSetup({ healthy = true } = {}) {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-hermes-setup-'));

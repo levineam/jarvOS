@@ -1,0 +1,28 @@
+{
+  "schemaVersion": "jarvos-codex-ce-discovery-fixture.v1",
+  "harness": "codex",
+  "observations": {
+    "marketplaceAdd": {
+      "source": "EveryInc/compound-engineering-plugin",
+      "ref": "e36ddb8cbd4dd902d3b6ddd96165a783b0ac4711",
+      "resultFields": ["marketplaceName", "installedRoot", "alreadyAdded"]
+    },
+    "availablePlugin": {
+      "pluginId": "compound-engineering@compound-engineering-plugin",
+      "version": "3.21.4",
+      "installPolicy": "AVAILABLE",
+      "authPolicy": "ON_INSTALL"
+    },
+    "installedMetadata": {
+      "file": ".codex-marketplace-install.json",
+      "requiredFields": ["source_type", "source", "revision"],
+      "revisionIsImmutable": true
+    }
+  },
+  "profileBoundary": "CODEX_HOME",
+  "activation": {
+    "profileScoped": true,
+    "executesProviderCode": false,
+    "requiresRestart": true
+  }
+}

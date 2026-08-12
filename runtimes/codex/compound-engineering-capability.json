@@ -1,0 +1,93 @@
+{
+  "schemaVersion": 1,
+  "version": "jarvos-codex-ce-capability.v1",
+  "provider": {
+    "id": "compound-engineering",
+    "version": "3.21.4",
+    "owner": "EveryInc",
+    "repository": "https://github.com/EveryInc/compound-engineering-plugin.git",
+    "revision": "e36ddb8cbd4dd902d3b6ddd96165a783b0ac4711",
+    "license": "MIT"
+  },
+  "harness": "codex",
+  "admission": "unsupported",
+  "operations": ["plan", "work", "compound"],
+  "activation": {
+    "mechanism": "codex-plugin-marketplace",
+    "marketplaceArgv": [
+      "codex",
+      "plugin",
+      "marketplace",
+      "add",
+      "EveryInc/compound-engineering-plugin",
+      "--ref",
+      "e36ddb8cbd4dd902d3b6ddd96165a783b0ac4711",
+      "--json"
+    ],
+    "pluginArgv": [
+      "codex",
+      "plugin",
+      "add",
+      "compound-engineering@compound-engineering-plugin",
+      "--json"
+    ],
+    "candidateOnly": true,
+    "requiresRestart": true
+  },
+  "discovery": {
+    "commands": [
+      {
+        "id": "version",
+        "argv": ["codex", "--version"],
+        "readOnly": true,
+        "activatesPluginCode": false
+      },
+      {
+        "id": "marketplace-list",
+        "argv": ["codex", "plugin", "marketplace", "list", "--json"],
+        "readOnly": true,
+        "activatesPluginCode": false
+      },
+      {
+        "id": "plugin-list",
+        "argv": ["codex", "plugin", "list", "--available", "--json"],
+        "readOnly": true,
+        "activatesPluginCode": false
+      }
+    ],
+    "artifactBoundary": "plugins/cache/<marketplace>/<plugin>/<version>",
+    "revisionMetadata": ".codex-marketplace-install.json",
+    "profileBoundary": "CODEX_HOME"
+  },
+  "invocation": {
+    "surface": "codex exec",
+    "proof": "characterized",
+    "argvTemplate": [
+      "codex",
+      "exec",
+      "--profile",
+      "<disposable-profile>",
+      "--cd",
+      "<canonical-worktree>",
+      "<bounded-provider-prompt>"
+    ],
+    "operationSelector": "provider skill name in bounded prompt",
+    "artifactTransport": "jarvos-private-artifact-reference",
+    "receiptTransport": "jarvos-provider-receipt.v1"
+  },
+  "proof": {
+    "artifactBoundary": "characterized",
+    "discovery": "observed",
+    "invocation": "characterized",
+    "receipt": "jarvos-contract",
+    "activation": "unproven",
+    "conformant": false
+  },
+  "fixtureRoot": "runtimes/codex/fixtures/compound-engineering",
+  "fixtureFiles": [
+    "discovery.json",
+    "invocation.json",
+    "plugin-manifest.json"
+  ],
+  "fixtureTreeDigest": "5ade826c32f4ca14b00bb71be6fce330ae9cd06b28aff8d6816311a6343617a2"
+}
