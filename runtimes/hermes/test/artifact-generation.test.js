@@ -15,3 +15,8 @@ test('Hermes descriptor pins skills, U2 context plugin, and coding entrypoint to
   assert.equal(adapter.capabilityDescriptor.capabilities.codingEntrypoint.invoke.status, 'supported');
   assert.match(adapter.capabilityDescriptor.capabilities.codingEntrypoint.invoke.evidence, /createHermesHostAdapter/);
 });
+
+test('Hermes setup falls back when the installed CLI rejects the guarded plugin flag', () => {
+  const setup = fs.readFileSync(path.resolve(__dirname, '..', 'setup.sh'), 'utf8');
+  assert.match(setup, /unknown option\|unrecognized option\|unrecognized arguments\|no such option\|unexpected argument/);
+});
