@@ -7,6 +7,41 @@ const {
   lifecycleTransition,
 } = require('../contracts');
 
+const PROFILE_RECONCILIATION_MUTATION_CLASS = 'profile.provider-reconcile';
+const PROFILE_RECONCILIATION_SCHEMA_VERSION = 'jarvos-profile-reconciliation/v1';
+
+function createProfileReconciliationPort(options = {}) {
+  if (typeof options.reconcile !== 'function') throw new Error('profile reconciliation callback is required');
+  if (typeof options.verify !== 'function') throw new Error('profile reconciliation verifier is required');
+  return {
+    async executeFenced(command, context = {}) {
+      if (command.mutationClass !== PROFILE_RECONCILIATION_MUTATION_CLASS) throw new Error('profile reconciliation mutation class is invalid');
+      if (typeof context.assertCurrentFence !== 'function') throw new Error('profile reconciliation requires a current fence assertion');
+      context.assertCurrentFence();
+      const input = command.commandSpec?.arguments || {};
+      const result = await options.reconcile(input, { command, fence: context.fence, lease: context.lease });
+      context.assertCurrentFence();
+      return {
+        schemaVersion: PROFILE_RECONCILIATION_SCHEMA_VERSION,
+        mutationClass: PROFILE_RECONCILIATION_MUTATION_CLASS,
+        status: result?.status || (result?.ok ? 'applied' : 'failed'),
+        provider: result?.provider || null,
+        targetDigest: result?.targetDigest || null,
+        applied: result?.applied === true,
+      };
+    },
+    async verify(command, context = {}) {
+      const verification = await options.verify(context.execution, { command });
+      if (!verification || typeof verification.outcome !== 'string') throw new Error('profile reconciliation verifier returned invalid evidence');
+      return {
+        ...verification,
+        schemaVersion: PROFILE_RECONCILIATION_SCHEMA_VERSION,
+        mutationClass: PROFILE_RECONCILIATION_MUTATION_CLASS,
+      };
+    },
+  };
+}
+
 function createReconciler(options = {}) {
   if (!options.registry) throw new Error('registry is required');
   if (!options.policy) throw new Error('policy is required');
@@ -191,5 +226,8 @@ function createReconciler(options = {}) {
 }
 
 module.exports = {
+  PROFILE_RECONCILIATION_MUTATION_CLASS,
+  PROFILE_RECONCILIATION_SCHEMA_VERSION,
+  createProfileReconciliationPort,
   createReconciler,
 };

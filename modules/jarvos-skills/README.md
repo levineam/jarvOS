@@ -89,6 +89,22 @@ and Hermes. A private jarvOS control-plane manager may use the public
 `planSkillProjection` and `applySkillProjection` functions only after verifying
 the reviewed release tuple and the adapter's supported version.
 
+## Managed Compound Engineering provider
+
+The bundle declares Compound Engineering as a managed external provider for
+the coding workflow. Its manifest is pinned to one reviewed upstream commit and
+content digest; it is not followed from a moving branch and is not treated as
+a JavaScript dependency. Provider reconciliation is a separate profile-scoped
+operation from coding work-run execution.
+
+Reconciliation has an inspect-then-apply boundary. It stages only an
+allowlisted, digest-checked, non-executable regular-file fixture, then patches
+only the jarvOS-owned provider entry in a harness profile. Unknown, legacy,
+conflicting, or locally modified entries are reported and preserved. Candidate
+upstream versions are recorded as one review item and never change the active
+provider until a new jarvOS-approved manifest is shipped. Disable and rollback
+remove only exact jarvOS-owned state.
+
 Run the pack doctor to inspect optional tool availability:
 
 ```bash
