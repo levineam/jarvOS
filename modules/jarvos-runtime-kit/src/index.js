@@ -5,6 +5,7 @@ const crypto = require('crypto');
 const path = require('path');
 const { spawnSync } = require('child_process');
 const harnessDispatch = require('./harness-dispatch.js');
+const { isSha256 } = harnessDispatch;
 const stewardshipAdapter = require('./stewardship-adapter.js');
 const stewardshipBootstrap = require('./stewardship-bootstrap.js');
 const openclawPluginPersistence = require('./openclaw-plugin-persistence.js');
@@ -53,10 +54,6 @@ function escapeRegExp(value) {
 
 function add(errors, message) {
   errors.push(message);
-}
-
-function isSha256(value) {
-  return typeof value === 'string' && /^[a-f0-9]{64}$/i.test(value);
 }
 
 function isSafeRelativePath(value) {
@@ -184,9 +181,9 @@ function collectCompoundEngineeringFixtureEntries(root, relative = '') {
   return entries.sort((left, right) => left.path.localeCompare(right.path));
 }
 
-function computeCompoundEngineeringFixtureDigest(root) {
-  const entries = collectCompoundEngineeringFixtureEntries(root);
-  const canonical = entries.map((entry) => `${entry.path}\0${entry.type}\0${entry.mode.toString(8)}\0${entry.digest || ''}\n`).join('');
+function computeCompoundEngineeringFixtureDigest(root, entries = null) {
+  const fixtureEntries = entries || collectCompoundEngineeringFixtureEntries(root);
+  const canonical = fixtureEntries.map((entry) => `${entry.path}\0${entry.type}\0${entry.mode.toString(8)}\0${entry.digest || ''}\n`).join('');
   return crypto.createHash('sha256').update(canonical).digest('hex');
 }
 
@@ -198,7 +195,9 @@ function loadCompoundEngineeringCapability(capabilityPath, options = {}) {
 
 function checkCompoundEngineeringCapability(capabilityPath, options = {}) {
   const root = path.resolve(options.root || repoRootFrom());
-  const loaded = loadCompoundEngineeringCapability(capabilityPath, { root });
+  const loaded = options.capability
+    ? { path: path.resolve(capabilityPath), capability: options.capability }
+    : loadCompoundEngineeringCapability(capabilityPath, { root });
   const capability = loaded.capability;
   const validation = validateCompoundEngineeringCapability(capability);
   const errors = [...validation.errors];
@@ -225,7 +224,7 @@ function checkCompoundEngineeringCapability(capabilityPath, options = {}) {
       if (entry.type !== 'file') errors.push(`capability fixture entry ${entry.path} must be a regular file`);
       if ((entry.mode & 0o111) !== 0) errors.push(`capability fixture entry ${entry.path} must not be executable`);
     }
-    const digest = computeCompoundEngineeringFixtureDigest(fixtureRoot);
+    const digest = computeCompoundEngineeringFixtureDigest(fixtureRoot, entries);
     if (isSha256(capability.fixtureTreeDigest) && digest !== capability.fixtureTreeDigest.toLowerCase()) {
       errors.push('capability fixtureTreeDigest does not match the checked-in fixture tree');
     }
@@ -241,7 +240,7 @@ function checkCompoundEngineeringCapability(capabilityPath, options = {}) {
     },
     fixture: {
       files: entries.filter((entry) => entry.type === 'file').map((entry) => entry.path),
-      treeDigest: entries.length > 0 ? computeCompoundEngineeringFixtureDigest(fixtureRoot) : null,
+      treeDigest: entries.length > 0 ? computeCompoundEngineeringFixtureDigest(fixtureRoot, entries) : null,
     },
     errors,
   };
@@ -377,7 +376,7 @@ function inspectCompoundEngineeringProvider(options = {}) {
   let capabilityCheck;
   try {
     loaded = loadCompoundEngineeringCapability(capabilityPath, { root });
-    capabilityCheck = checkCompoundEngineeringCapability(capabilityPath, { root });
+    capabilityCheck = checkCompoundEngineeringCapability(capabilityPath, { root, capability: loaded.capability });
   } catch (error) {
     return {
       status: 'incompatible',

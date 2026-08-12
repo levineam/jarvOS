@@ -516,5 +516,4 @@ module.exports = {
   resolveResumePlan,
   extractReattachmentHints,
   deriveOrchestratorStatus,
-  evaluateLearningEligibility,
 };

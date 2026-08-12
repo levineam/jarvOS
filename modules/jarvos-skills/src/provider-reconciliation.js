@@ -345,8 +345,7 @@ function discoverManagedProviderCandidate(options = {}) {
 function managedProviderHealth(plan = {}) {
   const status = plan.status;
   const doctor = status === 'installed' && plan.harnessStatus === 'supported' ? 'ok'
-    : status === 'unsupported' ? 'skipped'
-      : ['local-modified', 'unknown', 'conflict'].includes(status) ? 'warn' : 'warn';
+    : status === 'unsupported' ? 'skipped' : 'warn';
   return { doctor, status, provider: plan.provider || null, action: plan.action || 'preserve' };
 }
 

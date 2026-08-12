@@ -1,6 +1,5 @@
 'use strict';
 
-const fs = require('node:fs');
 const path = require('node:path');
 
 const {
@@ -20,7 +19,6 @@ const {
 
 const MANAGED_WORKFLOW_SCHEMA_VERSION = 'jarvos-managed-coding-workflow/v1';
 const IMPLEMENTATION_PACKET_VERSION = 'jarvos-implementation-packet/v1';
-const OPERATIONS = new Set(['plan', 'work', 'compound', 'complete']);
 const SHA256 = /^[a-f0-9]{64}$/i;
 const OPAQUE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 const RELATIVE_PATH = /^(?![\\/])(?!.*(?:^|[\\/])\.\.(?:[\\/]|$))[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)*$/;
@@ -260,6 +258,23 @@ function createManagedCodingWorkflow(options = {}) {
     });
   }
 
+  function learningOutcomeResponse({ claimed, nonce, status, reasonCode, rationale, ok, errors, deferredCount }) {
+    const outcome = { status, reasonCode, rationale };
+    const recorded = recordLearningOutcome(claimed, status, nonce, outcome);
+    return {
+      ok,
+      status,
+      learningStatus: status,
+      route: 'jarvos-learning-gate',
+      workRunId: claimed.workRunId,
+      reasonCode,
+      rationale,
+      ...(errors ? { errors } : {}),
+      ...(deferredCount === undefined ? {} : { deferredCount }),
+      event: recorded.event || null,
+    };
+  }
+
   async function compound(input = {}) {
     const claimed = claim(input);
     const existing = learningEvent(claimed);
@@ -282,25 +297,22 @@ function createManagedCodingWorkflow(options = {}) {
     });
     const nonce = `compound-${claimed.workRunId}`;
     if (eligibility.status !== 'eligible') {
-      const recorded = recordLearningOutcome(claimed, eligibility.status, nonce, eligibility);
-      return {
-        ok: eligibility.status !== 'failed',
+      return learningOutcomeResponse({
+        claimed,
+        nonce,
         status: eligibility.status,
-        learningStatus: eligibility.status,
-        route: 'jarvos-learning-gate',
-        workRunId: claimed.workRunId,
         reasonCode: eligibility.reasonCode,
         rationale: eligibility.rationale,
-        event: recorded.event || null,
-      };
+        ok: eligibility.status !== 'failed',
+        deferredCount: eligibility.deferredCount,
+      });
     }
 
     const run = options.workRunStore.getWorkRun(claimed.workRunId, { public: false });
     const acceptedPlanDigest = input.planDigest || run?.acceptedPlan?.digest;
     if (!acceptedPlanDigest) {
       const outcome = { status: 'unavailable', reasonCode: 'accepted_plan_missing', rationale: 'learning capture requires an accepted provider-independent plan revision' };
-      const recorded = recordLearningOutcome(claimed, outcome.status, nonce, outcome);
-      return { ok: true, ...outcome, learningStatus: outcome.status, route: 'jarvos-learning-gate', workRunId: claimed.workRunId, event: recorded.event || null };
+      return learningOutcomeResponse({ claimed, nonce, ...outcome, ok: true });
     }
 
     let request;
@@ -308,15 +320,13 @@ function createManagedCodingWorkflow(options = {}) {
       request = requestFor('compound', input, claimed, acceptedPlanDigest);
     } catch (error) {
       const outcome = { status: 'unavailable', reasonCode: 'provider_identity_unavailable', rationale: 'approved provider identity is not available for learning capture' };
-      const recorded = recordLearningOutcome(claimed, outcome.status, nonce, outcome);
-      return { ok: true, ...outcome, learningStatus: outcome.status, route: 'jarvos-learning-gate', workRunId: claimed.workRunId, event: recorded.event || null };
+      return learningOutcomeResponse({ claimed, nonce, ...outcome, ok: true });
     }
 
     const snapshot = providerSnapshotFor(input, claimed);
     if (!providerHealthy(manifest, snapshot, 'compound') || typeof providerAdapter.compound !== 'function') {
       const outcome = { status: 'unavailable', reasonCode: 'provider_unsupported', rationale: 'provider is not healthy for the active harness' };
-      const recorded = recordLearningOutcome(claimed, outcome.status, nonce, outcome);
-      return { ok: true, ...outcome, learningStatus: outcome.status, route: 'jarvos-learning-gate', workRunId: claimed.workRunId, event: recorded.event || null };
+      return learningOutcomeResponse({ claimed, nonce, ...outcome, ok: true });
     }
 
     const invocation = buildProviderInvocation({ operation: 'compound', request });
@@ -330,20 +340,17 @@ function createManagedCodingWorkflow(options = {}) {
       receipt = await providerAdapter.compound(invocation);
     } catch (error) {
       const outcome = { status: 'unavailable', reasonCode: 'provider_unavailable', rationale: 'provider did not return a learning receipt' };
-      const recorded = recordLearningOutcome(claimed, outcome.status, nonce, outcome);
-      return { ok: true, ...outcome, learningStatus: outcome.status, route: 'jarvos-learning-gate', workRunId: claimed.workRunId, event: recorded.event || null };
+      return learningOutcomeResponse({ claimed, nonce, ...outcome, ok: true });
     }
     const validation = validateWorkflowProviderReceipt(receipt, { manifest, request });
     if (!validation.ok) {
       const outcome = { status: 'failed', reasonCode: 'invalid_provider_receipt', rationale: 'provider learning receipt failed the strict contract' };
-      const recorded = recordLearningOutcome(claimed, outcome.status, nonce, outcome);
-      return { ok: false, ...outcome, learningStatus: outcome.status, route: 'jarvos-learning-gate', workRunId: claimed.workRunId, errors: validation.errors, event: recorded.event || null };
+      return learningOutcomeResponse({ claimed, nonce, ...outcome, ok: false, errors: validation.errors });
     }
     const screen = screenLearningReceipt(validation.receipt);
     if (!screen.ok) {
       const outcome = { status: 'failed', reasonCode: 'unsafe_learning_artifact', rationale: 'learning receipt contained private or unsafe content' };
-      const recorded = recordLearningOutcome(claimed, outcome.status, nonce, outcome);
-      return { ok: false, ...outcome, learningStatus: outcome.status, route: 'jarvos-learning-gate', workRunId: claimed.workRunId, errors: screen.errors, event: recorded.event || null };
+      return learningOutcomeResponse({ claimed, nonce, ...outcome, ok: false, errors: screen.errors });
     }
     const recorded = options.workRunStore.recordProviderReceipt({
       ...input,
