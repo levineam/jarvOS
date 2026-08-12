@@ -419,7 +419,7 @@ if command -v hermes >/dev/null 2>&1; then
     plugin_enabled=0
     if hermes plugins enable jarvos-context --no-allow-tool-override > /dev/null 2> "$plugin_enable_error"; then
       plugin_enabled=1
-    elif grep -qiE 'unknown option|unrecognized option|no such option|unexpected argument' "$plugin_enable_error" \
+    elif grep -qiE 'unknown option|unrecognized option|unrecognized arguments|no such option|unexpected argument' "$plugin_enable_error" \
       && hermes plugins enable jarvos-context >/dev/null 2>&1; then
       plugin_enabled=1
     fi
