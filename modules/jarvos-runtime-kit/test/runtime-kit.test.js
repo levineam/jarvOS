@@ -24,7 +24,6 @@ const {
 
 const ROOT = path.resolve(__dirname, '..', '..', '..');
 
-<<<<<<< HEAD
 test('Codex Compound Engineering capability is conformance-backed and public-safe', () => {
   const capabilityPath = path.join(ROOT, 'runtimes/codex/compound-engineering-capability.json');
   const loaded = loadCompoundEngineeringCapability(capabilityPath, { root: ROOT });
@@ -298,7 +297,7 @@ test('Compound Engineering capability rejects traversal, symlink, and executable
   }
 });
 
-function runHermesSetup({ healthy = true, isolatedHermesHome = false } = {}) {
+function runHermesSetup({ healthy = true, isolatedHermesHome = false, rejectGuardedPluginFlag = false } = {}) {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-hermes-setup-'));
   const home = path.join(tmp, 'home');
   const hermesHome = isolatedHermesHome ? path.join(tmp, 'hermes-home') : path.join(home, '.hermes');
@@ -319,6 +318,12 @@ function runHermesSetup({ healthy = true, isolatedHermesHome = false } = {}) {
     'fi',
     `if [ "\${1:-}" = "mcp" ] && [ "\${2:-}" = "test" ]; then exit ${healthy ? 0 : 1}; fi`,
     'if [ "${1:-}" = "mcp" ] && [ "${2:-}" = "remove" ]; then exit 0; fi',
+    ...(rejectGuardedPluginFlag ? [
+      'if [ "${1:-}" = "plugins" ] && [ "${2:-}" = "enable" ] && [ "${4:-}" = "--no-allow-tool-override" ]; then',
+      '  printf "%s\\n" "usage: hermes plugins enable [OPTIONS]" "error: unrecognized arguments: --no-allow-tool-override" >&2',
+      '  exit 2',
+      'fi',
+    ] : []),
     'exit 0',
     '',
   ].join('\n');
@@ -350,6 +355,19 @@ test('Hermes setup registers and verifies MCP for a fresh config', () => {
     assert.match(log, /mcp test jarvos/);
     assert.match(run.result.stdout, /Hermes MCP entry 'jarvos' is healthy/);
     assert.ok(fs.existsSync(path.join(run.tmp, 'home', '.hermes', 'plugins', 'jarvos-context', 'plugin.yaml')));
+  } finally {
+    run.cleanup();
+  }
+});
+
+test('Hermes setup retries plugin enablement when the CLI rejects the guarded flag', () => {
+  const run = runHermesSetup({ rejectGuardedPluginFlag: true });
+  try {
+    assert.equal(run.result.status, 0, run.result.stderr || run.result.stdout);
+    const log = fs.readFileSync(run.logPath, 'utf8');
+    assert.match(log, /plugins enable jarvos-context --no-allow-tool-override/);
+    assert.match(log, /plugins enable jarvos-context\n/);
+    assert.match(run.result.stdout, /bounded jarvOS context plugin enabled/);
   } finally {
     run.cleanup();
   }
