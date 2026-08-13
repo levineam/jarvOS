@@ -428,6 +428,7 @@ function renderProjectsContextMarkdown(result, maxChars = 3600) {
       lines.push(`- ${summary.title || summary.id}${summary.status ? ` [${summary.status}]` : ''}`);
     }
   };
+  appendSummaries('### Recent activity', packet.activity);
   appendSummaries('### Current work', packet.currentWork);
   appendSummaries('### Attention', packet.attention);
   if (Array.isArray(packet.omissions) && packet.omissions.length) {

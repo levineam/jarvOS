@@ -132,6 +132,33 @@ test('library and MCP use the same injected Projects packet and fingerprint', as
   assert.equal(mcpPayload.packet.canonical.records[1].breadcrumb, 'jarvOS › v1.0.0 release');
 });
 
+test('recent activity is rendered as bounded assistant context', async () => {
+  const provider = {
+    read: async ({ query }) => ({
+      status: 'ok',
+      packet: {
+        ...packet(),
+        query,
+        activity: [{
+          id: 'activity-1',
+          canonicalId: 'out_000001',
+          category: 'activity',
+          status: 'completed',
+          title: 'Reconciled release readiness',
+          occurredAt: '2026-08-12T18:00:00.000Z',
+          observedAt: '2026-08-12T18:01:00.000Z',
+          evidenceRefs: ['coding:run-1'],
+          source: 'beads',
+        }],
+      },
+    }),
+  };
+  const result = await readProjectsContext({ provider, query: QUERY, maxChars: 2000 });
+  assert.equal(result.status, 'ok');
+  assert.match(result.markdown, /### Recent activity/);
+  assert.match(result.markdown, /Reconciled release readiness \[completed\]/);
+});
+
 test('missing Projects capability leaves legacy hydration available and reports shadow unavailability', async () => {
   setMcpProjectsContextProvider(null);
   await withTempContextEnv(async () => {

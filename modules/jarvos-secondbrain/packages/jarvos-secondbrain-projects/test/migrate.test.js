@@ -38,10 +38,10 @@ function mapping({ sourceDigest, approved = true } = {}) {
       sourcePath: SOURCE_PATH,
       sourceDigest,
       approved,
-      project: { title: 'jarvOS', aliases: ['jarvOS v1.0.0 release'] },
+      project: { title: 'jarvOS', aliases: ['jarvOS v1.0.0 release'], declaredPriority: 'high' },
       outcome: { title: 'v1.0.0 release' },
       fieldDispositions: {
-        title: 'project.title',
+        title: 'discard',
         goal: 'project.goal',
         plan: 'project.goal',
         definitionOfDone: 'outcome.definitionOfDone',
@@ -76,7 +76,16 @@ test('approved mapping creates jarvOS and its release Outcome, then reruns idemp
   const applied = migration.applyMigration(plan, { registry, ledgerDir, approved: true });
   assert.equal(applied.status, 'committed');
   assert.equal(registry.resolve('jarvOS').record.title, 'jarvOS');
-  assert.equal(registry.resolve('v1.0.0 release').record.parentId, registry.resolve('jarvOS').record.id);
+  const project = registry.resolve('jarvOS').record;
+  const outcome = registry.resolve('v1.0.0 release').record;
+  assert.equal(outcome.parentId, project.id);
+  assert.deepEqual(registry.priority(outcome.id), {
+    declared: 'unset',
+    effective: 'high',
+    source: 'inherited',
+    sourceRecordId: project.id,
+    sourceKind: 'project',
+  });
   assert.equal(migration.applyMigration(plan, { registry, ledgerDir, approved: true }).status, 'already_satisfied');
 });
 

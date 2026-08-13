@@ -29,7 +29,7 @@
         "id": "projects",
         "heading": "## 🚀 Projects",
         "source": "projects",
-        "description": "Ongoing projects from the vault Projects record, as wiki-links. The orientation surface: what you are actually working on, and the shared reference point between you and your assistants. Owned by jarvos-secondbrain-projects."
+        "description": "Canonical parent Projects touched by admitted activity on this local date, as wiki-links. This is a concise navigation projection, not an orientation source; Projects context remains the assistant-facing source of truth. Owned by jarvos-secondbrain-projects."
       },
       {
         "id": "notes",
@@ -88,7 +88,7 @@
       "paperclip-inbox": {
         "heading": "## 📎 Paperclip Inbox",
         "action": "drop",
-        "doc": "Removed. Issue-tracker state belongs in the tracker; the journal's job is the human-readable surface. The Projects section is the replacement orientation view."
+        "doc": "Removed. Issue-tracker state belongs in the tracker; the journal's job is a concise human-readable activity navigation surface. Projects context remains the assistant-facing source of truth."
       },
       "current-focus": {
         "heading": "## 🎯 Current Focus",
