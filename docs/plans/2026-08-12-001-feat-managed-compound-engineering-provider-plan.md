@@ -10,7 +10,7 @@ execution: code
 deepened: 2026-08-12
 ---
 
-# Managed Compound Engineering Workflow Provider
+## Managed Compound Engineering Workflow Provider
 
 ## Goal Capsule
 
