@@ -453,6 +453,45 @@ test('route-bound session threads ignore caller-selected dimensions and isolate 
   });
 });
 
+test('route-bound session threads can validate an owner-only injected key file', () => {
+  withTempVault(({ tmp }) => {
+    const secretPath = path.join(tmp, 'route-secret');
+    fs.writeFileSync(secretPath, 'agent-context-route-secret', { mode: 0o600 });
+    fs.chmodSync(secretPath, 0o600);
+    const previous = {
+      required: process.env.JARVOS_REQUIRE_ROUTE_CAPABILITY,
+      secret: process.env.JARVOS_ROUTE_BINDING_SECRET,
+      secretFile: process.env.JARVOS_ROUTE_BINDING_SECRET_FILE,
+      generation: process.env.JARVOS_ROUTE_BINDING_GENERATION,
+    };
+    process.env.JARVOS_REQUIRE_ROUTE_CAPABILITY = '1';
+    delete process.env.JARVOS_ROUTE_BINDING_SECRET;
+    process.env.JARVOS_ROUTE_BINDING_SECRET_FILE = secretPath;
+    process.env.JARVOS_ROUTE_BINDING_GENERATION = 'hermes-jarvos.v1';
+    try {
+      const capability = issueRouteCapability({
+        route: {
+          harness: 'hermes', profile: 'default', platform: 'telegram', conversation: 'chat',
+          sender: 'sender', nativeSession: 'session-file', generation: 'hermes-jarvos.v1',
+        },
+        secret: 'agent-context-route-secret',
+      });
+      const result = writeSessionThread({ routeCapability: capability, summary: 'file-bound route checkpoint' });
+      assert.match(result.markdown, /Session Thread Written/);
+    } finally {
+      for (const [key, value] of Object.entries({
+        JARVOS_REQUIRE_ROUTE_CAPABILITY: previous.required,
+        JARVOS_ROUTE_BINDING_SECRET: previous.secret,
+        JARVOS_ROUTE_BINDING_SECRET_FILE: previous.secretFile,
+        JARVOS_ROUTE_BINDING_GENERATION: previous.generation,
+      })) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+  });
+});
+
 test('session thread defaults prefer current Paperclip task over global host thread', () => {
   withTempVault(({ mutationService }) => {
     const oldPaperclipTaskId = process.env.PAPERCLIP_TASK_ID;

@@ -100,6 +100,33 @@ function loadRuntimeRouteContract() {
   }
 }
 
+function loadRouteBindingSecret() {
+  const secretPath = firstString(process.env.JARVOS_ROUTE_BINDING_SECRET_FILE);
+  if (secretPath) {
+    if (!path.isAbsolute(secretPath)) throw new Error('session thread route capability secret is unavailable');
+    let stat;
+    try {
+      stat = fs.lstatSync(secretPath);
+    } catch {
+      throw new Error('session thread route capability secret is unavailable');
+    }
+    const uid = typeof process.getuid === 'function' ? process.getuid() : null;
+    if (stat.isSymbolicLink() || !stat.isFile() || (uid !== null && stat.uid !== uid) || (stat.mode & 0o077) !== 0) {
+      throw new Error('session thread route capability secret is unavailable');
+    }
+    try {
+      const value = fs.readFileSync(secretPath, 'utf8').trim();
+      if (value.length < 16) throw new Error('short secret');
+      return value;
+    } catch {
+      throw new Error('session thread route capability secret is unavailable');
+    }
+  }
+  const direct = firstString(process.env.JARVOS_ROUTE_BINDING_SECRET);
+  if (direct) return direct;
+  throw new Error('session thread route capability secret is unavailable');
+}
+
 function routeThreadKey(input = {}) {
   const token = firstString(input.routeCapability);
   const required = process.env.JARVOS_REQUIRE_ROUTE_CAPABILITY === '1';
@@ -107,7 +134,7 @@ function routeThreadKey(input = {}) {
     if (required) throw new Error('session thread route capability is required');
     return null;
   }
-  const secret = firstString(process.env.JARVOS_ROUTE_BINDING_SECRET);
+  const secret = loadRouteBindingSecret();
   const generation = firstString(process.env.JARVOS_ROUTE_BINDING_GENERATION);
   const contract = loadRuntimeRouteContract();
   if (!secret || !generation || !contract || typeof contract.validateRouteCapability !== 'function') {

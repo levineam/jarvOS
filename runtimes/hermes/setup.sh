@@ -365,6 +365,27 @@ if command -v hermes >/dev/null 2>&1; then
   HERMES_CONFIG="$HERMES_HOME/config.yaml"
   MCP_SERVER="$REPO_ROOT/modules/jarvos-agent-context/scripts/jarvos-mcp.js"
   if [ -f "$MCP_SERVER" ]; then
+    # Optional private binding values are paths/revisions only. Never persist
+    # the route or adapter secret itself in Hermes configuration or argv.
+    MCP_ENV_ARGS=()
+    append_mcp_env() {
+      local name="$1"
+      local value="${!name:-}"
+      if [ -n "$value" ]; then
+        MCP_ENV_ARGS+=(--env "${name}=${value}")
+      fi
+    }
+    append_mcp_env JARVOS_HERMES_CONTEXT_BRIDGE_SOCKET
+    append_mcp_env JARVOS_HERMES_CONTEXT_BRIDGE_CREDENTIAL_FILE
+    append_mcp_env JARVOS_HERMES_CONTEXT_BRIDGE_CREDENTIAL_REVISION
+    append_mcp_env JARVOS_HERMES_CONTEXT_BRIDGE_GENERATION
+    append_mcp_env JARVOS_ROUTE_BINDING_SECRET_FILE
+    append_mcp_env JARVOS_ROUTE_BINDING_GENERATION
+    if [ -n "${JARVOS_ROUTE_BINDING_SECRET_FILE:-}" ]; then
+      # Once the private key is injected, route-bound tools must not fall back
+      # to caller-selected thread dimensions.
+      MCP_ENV_ARGS+=(--env "JARVOS_REQUIRE_ROUTE_CAPABILITY=1")
+    fi
     mcp_added=0
     mcp_backup=""
     if hermes mcp list 2>/dev/null | awk 'tolower($1) == "jarvos" { found=1 } END { exit(found ? 0 : 1) }'; then
@@ -375,7 +396,7 @@ if command -v hermes >/dev/null 2>&1; then
         cp "$HERMES_CONFIG" "$mcp_backup"
         echo "  • Backup saved to $mcp_backup"
       fi
-      if printf 'y\n' | hermes mcp add jarvos --command node --args "$MCP_SERVER" >/dev/null 2>&1; then
+      if printf 'y\n' | hermes mcp add jarvos --command node --args "$MCP_SERVER" "${MCP_ENV_ARGS[@]}" >/dev/null 2>&1; then
         mcp_added=1
         echo "  ✓ Hermes MCP entry 'jarvos' registered"
       else

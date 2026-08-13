@@ -49,11 +49,18 @@ function routeHmac(secret, payload) {
 /** Issue an opaque, short-lived route binding from trusted native hook fields. */
 function issueRouteCapability({ route, secret, now = Date.now(), ttlMs = DEFAULT_ROUTE_CAPABILITY_TTL_MS } = {}) {
   const tuple = canonicalRouteTuple(route);
+  // The route identity is keyed as well as the capability envelope. This
+  // keeps the canonical session-thread key opaque even if a capability token
+  // is inspected by a local process, while retaining the fixed SHA-256 shape
+  // expected by the public contract.
+  const routeDigest = crypto.createHmac('sha256', secret)
+    .update(`jarvos-route-identity:${tuple}`)
+    .digest('hex');
   const issuedAt = Number(now);
   const expiresAt = issuedAt + Math.max(1000, Math.min(Number(ttlMs) || DEFAULT_ROUTE_CAPABILITY_TTL_MS, 5 * 60_000));
   const payload = {
     version: ROUTE_CAPABILITY_VERSION,
-    routeDigest: crypto.createHash('sha256').update(tuple).digest('hex'),
+    routeDigest,
     generation: route.generation,
     issuedAt,
     expiresAt,

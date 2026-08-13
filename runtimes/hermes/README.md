@@ -60,7 +60,12 @@ tool and injects at most 6000 characters into that turn only. Timeout, tool
 errors, malformed packets, and oversized packets fail open without logging
 packet content or delaying the turn. There is no polling or duplicate
 scheduler. If the plugin is not installed or enabled, call `jarvos_hydrate`
-manually at session start.
+manually at session start. The shared MCP surface also exposes the canonical
+`jarvos_session_thread_read` and `jarvos_session_thread_write` tools. When a
+trusted Hermes route-capability bridge is configured, the plugin supplies an
+opaque short-lived binding for its internal hydration; route-bound thread
+calls without a valid binding fail closed rather than accepting caller-chosen
+thread dimensions.
 
 The portable skills are projected through the manifest-driven installer. A
 projection is dry-run by default and only writes with `--apply`; unknown,

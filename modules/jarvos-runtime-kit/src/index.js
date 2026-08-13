@@ -687,6 +687,7 @@ function checkRuntime(manifestPath, options = {}) {
   const root = path.resolve(options.root || repoRootFrom());
   const loaded = loadManifest(path.isAbsolute(manifestPath) ? manifestPath : path.join(root, manifestPath));
   const { manifest, runtimeDir } = loaded;
+  const shared = manifest.sharedAgentContext || {};
   const validation = validateManifest(manifest);
   const errors = [...validation.errors];
   const warnings = [...validation.warnings];
@@ -706,7 +707,9 @@ function checkRuntime(manifestPath, options = {}) {
     try {
       const mcp = require(mcpServer);
       const tools = Array.isArray(mcp.TOOLS) ? mcp.TOOLS.map((tool) => tool.name) : [];
-      if (!tools.includes(REQUIRED_MCP_TOOL)) add(errors, `shared MCP server does not expose ${REQUIRED_MCP_TOOL}`);
+      for (const requiredTool of shared.requiredTools || []) {
+        if (!tools.includes(requiredTool)) add(errors, `shared MCP server does not expose ${requiredTool}`);
+      }
       // When a runtime declares controlPlane, the live MCP tool surface must
       // include the control-plane tool — not only jarvos_hydrate.
       if (manifest.controlPlane && !tools.includes(CONTROL_PLANE_TOOL)) {
