@@ -4,6 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const crypto = require('node:crypto');
+const { createHostProjectsContextProvider } = require('./projects-context-bootstrap');
 
 const {
   DEFAULT_NOTES_SECTION,
@@ -455,9 +456,11 @@ function setProjectsContextProvider(provider) {
 }
 
 async function readProjectsContext(options = {}) {
+  const hasExplicitProvider = Object.prototype.hasOwnProperty.call(options, 'provider') || Object.prototype.hasOwnProperty.call(options, 'projectsProvider');
+  const hostProvider = !hasExplicitProvider && !configuredProjectsContextProvider ? createHostProjectsContextProvider() : null;
   const provider = Object.prototype.hasOwnProperty.call(options, 'provider')
     ? options.provider
-    : (options.projectsProvider || configuredProjectsContextProvider);
+    : (options.projectsProvider || configuredProjectsContextProvider || hostProvider);
   const query = normalizeProjectsQuery(options);
   const request = {
     contract: PROJECTS_CONTEXT_CONTRACT,
@@ -471,9 +474,16 @@ async function readProjectsContext(options = {}) {
   const reader = typeof provider === 'function' ? provider : provider.read;
   try {
     const result = await reader(request);
-    return normalizeProjectsContextResult(result, request);
+    // A host provider may return implementation diagnostics in an unavailable
+    // result. Treat them as private exactly like a thrown provider error.
+    const publicResult = hostProvider && result?.status !== 'ok'
+      ? { status: 'unavailable', code: 'PROJECTS_PROVIDER_UNAVAILABLE', reason: 'Projects provider is unavailable' }
+      : result;
+    return normalizeProjectsContextResult(publicResult, request);
   } catch (error) {
-    return normalizeProjectsContextResult({ status: 'unavailable', code: 'PROJECTS_PROVIDER_ERROR', reason: error?.message }, request);
+    // Provider errors can contain host paths, secret-bearing diagnostics, or
+    // payload fragments. Public agent output gets a stable, non-sensitive fact.
+    return normalizeProjectsContextResult({ status: 'unavailable', code: 'PROJECTS_PROVIDER_ERROR', reason: 'Projects provider is unavailable' }, request);
   }
 }
 
@@ -1035,12 +1045,14 @@ async function hydrate(options = {}) {
   const projectsOptions = options.projectsContext && typeof options.projectsContext === 'object'
     ? options.projectsContext
     : {};
-  const projects = await readProjectsContext({
+  const projectsRequest = {
     ...projectsOptions,
-    provider: projectsOptions.provider || options.projectsProvider,
     maxChars: Number(options.projectsContextMaxChars || projectsOptions.maxChars || 3600),
     maxItems: Number(projectsOptions.maxItems || options.maxItems || DEFAULT_PROJECTS_CONTEXT_LIMITS.maxItems),
-  });
+  };
+  if (Object.prototype.hasOwnProperty.call(projectsOptions, 'provider')) projectsRequest.provider = projectsOptions.provider;
+  else if (Object.prototype.hasOwnProperty.call(options, 'projectsProvider')) projectsRequest.provider = options.projectsProvider;
+  const projects = await readProjectsContext(projectsRequest);
   report.projectsContext = {
     status: projects.status,
     fingerprint: projects.fingerprint || null,

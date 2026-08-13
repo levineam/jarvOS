@@ -84,6 +84,37 @@ function withTempContextEnv(fn) {
   });
 }
 
+function withHostProjectsProvider(fn) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-projects-context-host-'));
+  const workspaceRoot = path.join(root, 'workspace');
+  const repositoryRoot = path.join(workspaceRoot, 'repository');
+  const stateRoot = path.join(workspaceRoot, 'state');
+  fs.mkdirSync(repositoryRoot, { recursive: true });
+  fs.mkdirSync(path.join(stateRoot, 'registry'), { recursive: true });
+  fs.mkdirSync(path.join(stateRoot, 'release-provider'), { recursive: true });
+  const providerModule = path.join(repositoryRoot, 'provider.js');
+  fs.writeFileSync(providerModule, `const packet = ${JSON.stringify(packet())};\nmodule.exports.read = async ({ query, registryStateDir, releaseProviderStateDir, capabilitySecret, hostSecret }) => { if (!registryStateDir || !releaseProviderStateDir || capabilitySecret !== 'capability-value' || hostSecret !== 'host-secret') throw new Error('private binding missing'); return { status: 'ok', packet: { ...packet, query } }; };\n`);
+  for (const [name, value] of [['capability', 'capability-value'], ['secret', 'host-secret']]) {
+    const target = path.join(stateRoot, name);
+    fs.writeFileSync(target, value);
+    fs.chmodSync(target, 0o600);
+  }
+  const config = path.join(root, 'projects-context.json');
+  fs.writeFileSync(config, JSON.stringify({
+    workspaceRoot, repositoryRoot, providerModule, stateRoot,
+    registryStateDir: path.join(stateRoot, 'registry'), releaseProviderStateDir: path.join(stateRoot, 'release-provider'),
+    capabilitySecret: path.join(stateRoot, 'capability'), hostSecret: path.join(stateRoot, 'secret'),
+  }));
+  fs.chmodSync(config, 0o600);
+  const previous = process.env.JARVOS_PROJECTS_CONTEXT_CONFIG;
+  process.env.JARVOS_PROJECTS_CONTEXT_CONFIG = config;
+  return Promise.resolve().then(() => fn({ root, workspaceRoot, repositoryRoot, stateRoot, config })).finally(() => {
+    if (previous === undefined) delete process.env.JARVOS_PROJECTS_CONTEXT_CONFIG;
+    else process.env.JARVOS_PROJECTS_CONTEXT_CONFIG = previous;
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+}
+
 test.after(() => {
   setMcpProjectsContextProvider(null);
 });
@@ -110,6 +141,64 @@ test('missing Projects capability leaves legacy hydration available and reports 
     assert.match(result.markdown, /Projects Context/);
     assert.match(result.markdown, /jarvOS Current Work/);
     assert.match(result.markdown, /Projects context unavailable/);
+  });
+});
+
+test('host Projects binding is discovered privately with library and MCP parity', async () => {
+  setMcpProjectsContextProvider(null);
+  await withHostProjectsProvider(async () => {
+    const libraryResult = await readProjectsContext({ query: QUERY });
+    const mcpPayload = JSON.parse((await callTool('jarvos_projects_context', {})).content[0].text);
+    const hydration = await hydrate({ sessionThread: false, maxChars: 3000 });
+    assert.equal(libraryResult.status, 'ok');
+    assert.equal(mcpPayload.status, 'ok');
+    assert.equal(mcpPayload.fingerprint, libraryResult.fingerprint);
+    assert.equal(hydration.report.projectsContext.status, 'ok');
+  });
+});
+
+test('invalid host Projects bindings fail closed without exposing host paths', async () => {
+  setMcpProjectsContextProvider(null);
+  await withHostProjectsProvider(async ({ config, root }) => {
+    fs.writeFileSync(config, '{not json');
+    const malformed = await readProjectsContext({ query: QUERY });
+    assert.equal(malformed.status, 'unavailable');
+    assert.doesNotMatch(malformed.reason, new RegExp(root.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+
+    fs.writeFileSync(config, JSON.stringify({ workspaceRoot: root, repositoryRoot: root, stateRoot: root, providerModule: path.join(root, 'escaped.js') }));
+    fs.chmodSync(config, 0o600);
+    const escaped = JSON.parse((await callTool('jarvos_projects_context', {})).content[0].text);
+    assert.equal(escaped.status, 'unavailable');
+    assert.doesNotMatch(escaped.reason, /escaped\.js|projects-context-host/);
+
+    fs.chmodSync(config, 0o666);
+    const untrusted = await readProjectsContext({ query: QUERY });
+    assert.equal(untrusted.status, 'unavailable');
+  });
+});
+
+test('provider failures and omitted host secret stay private', async () => {
+  setMcpProjectsContextProvider(null);
+  await withHostProjectsProvider(async ({ config, repositoryRoot }) => {
+    const bound = JSON.parse(fs.readFileSync(config, 'utf8'));
+    delete bound.hostSecret;
+    fs.writeFileSync(config, JSON.stringify(bound));
+    fs.chmodSync(config, 0o600);
+    fs.writeFileSync(bound.providerModule, `const packet = ${JSON.stringify(packet())};\nmodule.exports.read = async ({ query, hostSecret }) => { if (hostSecret !== null) throw new Error('secret leaked'); return { status: 'ok', packet: { ...packet, query } }; };\n`);
+    const noSecret = await readProjectsContext({ query: QUERY });
+    assert.equal(noSecret.status, 'ok');
+
+    fs.writeFileSync(bound.providerModule, "module.exports.read = async () => ({ status: 'unavailable', reason: 'host-secret /private/provider-payload' });\n");
+    delete require.cache[require.resolve(bound.providerModule)];
+    const failure = await readProjectsContext({ query: QUERY });
+    assert.equal(failure.status, 'unavailable');
+    assert.equal(failure.reason, 'Projects provider is unavailable');
+    assert.doesNotMatch(failure.reason, /host-secret|private|payload/);
+    fs.writeFileSync(bound.providerModule, "module.exports.read = async () => { throw new Error('host-secret /private/provider-payload'); };\n");
+    delete require.cache[require.resolve(bound.providerModule)];
+    const thrown = await readProjectsContext({ query: QUERY });
+    assert.equal(thrown.reason, 'Projects provider is unavailable');
+    assert.ok(repositoryRoot);
   });
 });
 
