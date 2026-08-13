@@ -47,11 +47,13 @@ Hermes has built-in systems for things jarvOS custom-builds on OpenClaw:
 
 The setup script registers the shared jarvOS MCP server with Hermes using the
 native stdio transport, then verifies the connection with `hermes mcp test
-jarvos`. Registration is idempotent: an existing `jarvos` entry is preserved
-and never overwritten. The setup script backs up `$HERMES_HOME/config.yaml`
-before any configuration write. Set `HERMES_HOME` to a disposable directory
-for a rehearsal so skills, plugins, and config stay isolated from the installed
-profile.
+jarvos`. Registration is idempotent for ordinary public setup: an existing
+`jarvos` entry is preserved. When private route-binding paths are supplied, an
+older entry is instead backed up, replaced with the complete binding
+environment, and health-checked; a failed replacement restores the backup. The
+setup script backs up `$HERMES_HOME/config.yaml` before any configuration
+write. Set `HERMES_HOME` to a disposable directory for a rehearsal so skills,
+plugins, and config stay isolated from the installed profile.
 
 The setup installs an opt-in Hermes plugin that uses the documented
 `on_session_start` and `pre_llm_call` hooks. On the first turn for each
@@ -66,6 +68,14 @@ trusted Hermes route-capability bridge is configured, the plugin supplies an
 opaque short-lived binding for its internal hydration; route-bound thread
 calls without a valid binding fail closed rather than accepting caller-chosen
 thread dimensions.
+
+The private `services/hermes-jarvos-context-bridge/` service is the binding
+authority for that mode. It listens on an owner-only Unix socket, authenticates
+the trusted Hermes request, and returns only a short-lived opaque capability;
+the route tuple and secrets never enter the model-visible hydration packet.
+Changing a key epoch by itself is rejected because it would not revoke an
+already-issued capability; rotate the route secret or adapter generation when
+revocation is required.
 
 The portable skills are projected through the manifest-driven installer. A
 projection is dry-run by default and only writes with `--apply`; unknown,

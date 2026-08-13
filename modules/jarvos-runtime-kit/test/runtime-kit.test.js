@@ -297,7 +297,7 @@ test('Compound Engineering capability rejects traversal, symlink, and executable
   }
 });
 
-function runHermesSetup({ healthy = true, isolatedHermesHome = false, rejectGuardedPluginFlag = false } = {}) {
+function runHermesSetup({ healthy = true, isolatedHermesHome = false, rejectGuardedPluginFlag = false, existingMcp = false, routeBinding = false } = {}) {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-hermes-setup-'));
   const home = path.join(tmp, 'home');
   const hermesHome = isolatedHermesHome ? path.join(tmp, 'hermes-home') : path.join(home, '.hermes');
@@ -306,11 +306,18 @@ function runHermesSetup({ healthy = true, isolatedHermesHome = false, rejectGuar
   const logPath = path.join(tmp, 'hermes.log');
   fs.mkdirSync(home, { recursive: true });
   fs.mkdirSync(binDir, { recursive: true });
+  if (existingMcp) {
+    fs.mkdirSync(hermesHome, { recursive: true });
+    fs.writeFileSync(path.join(hermesHome, 'config.yaml'), 'terminal:\n  cwd: /tmp\nmcp_servers:\n  jarvos:\n    command: node\n', 'utf8');
+  }
+  const routeSecretFile = path.join(tmp, 'route.secret');
+  if (routeBinding) fs.writeFileSync(routeSecretFile, 'test-route-secret\n', { encoding: 'utf8', mode: 0o600 });
+  const fakeList = existingMcp ? "printf 'jarvos  node  all  ✓ enabled\\n'; exit 0" : 'exit 1';
   const fakeHermes = [
     '#!/usr/bin/env bash',
     'set -euo pipefail',
     `printf '%s\\n' "$*" >> ${JSON.stringify(logPath)}`,
-    'if [ "${1:-}" = "mcp" ] && [ "${2:-}" = "list" ]; then exit 1; fi',
+    `if [ "\${1:-}" = "mcp" ] && [ "\${2:-}" = "list" ]; then ${fakeList}; fi`,
     'if [ "${1:-}" = "mcp" ] && [ "${2:-}" = "add" ]; then',
     '  mkdir -p "$HERMES_HOME"',
     "  printf 'terminal:\\n' > \"$HERMES_HOME/config.yaml\"",
@@ -333,12 +340,13 @@ function runHermesSetup({ healthy = true, isolatedHermesHome = false, rejectGuar
   const result = spawnSync('bash', [path.join(ROOT, 'runtimes', 'hermes', 'setup.sh'), workspace], {
     cwd: ROOT,
     encoding: 'utf8',
-    env: { ...process.env, HOME: home, ...(isolatedHermesHome ? { HERMES_HOME: hermesHome } : {}), PATH: `${binDir}${path.delimiter}${process.env.PATH || ''}` },
+    env: { ...process.env, HOME: home, ...(isolatedHermesHome ? { HERMES_HOME: hermesHome } : {}), ...(routeBinding ? { JARVOS_ROUTE_BINDING_SECRET_FILE: routeSecretFile } : {}), PATH: `${binDir}${path.delimiter}${process.env.PATH || ''}` },
     maxBuffer: 8 * 1024 * 1024,
   });
   return {
     tmp,
     hermesHome,
+    routeSecretFile,
     logPath,
     result,
     cleanup() { fs.rmSync(tmp, { recursive: true, force: true }); },
@@ -395,6 +403,21 @@ test('Hermes setup fails closed when a newly registered MCP is unhealthy', () =>
     assert.match(log, /mcp test jarvos/);
     assert.match(log, /mcp remove jarvos/);
     assert.match(run.result.stdout, /did not establish a healthy Hermes MCP connection/);
+  } finally {
+    run.cleanup();
+  }
+});
+
+test('Hermes setup reconciles an existing MCP entry when private route binding is requested', () => {
+  const run = runHermesSetup({ existingMcp: true, routeBinding: true });
+  try {
+    assert.equal(run.result.status, 0, run.result.stderr || run.result.stdout);
+    const log = fs.readFileSync(run.logPath, 'utf8');
+    assert.match(log, /mcp remove jarvos/);
+    assert.match(log, /mcp add jarvos --command node --args/);
+    assert.match(log, /JARVOS_ROUTE_BINDING_SECRET_FILE=/);
+    assert.match(log, /JARVOS_REQUIRE_ROUTE_CAPABILITY=1/);
+    assert.match(run.result.stdout, /reconciled with the private binding/);
   } finally {
     run.cleanup();
   }

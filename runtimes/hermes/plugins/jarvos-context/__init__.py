@@ -147,11 +147,12 @@ def _request_route_capability(kwargs: dict[str, Any]) -> str | None:
         return None
 
 
-def _call_bounded(ctx: Any, kwargs: dict[str, Any], capability: str | None = None) -> str | None:
+def _call_bounded(ctx: Any, kwargs: dict[str, Any]) -> str | None:
     result: queue.Queue[object] = queue.Queue(maxsize=1)
 
     def dispatch() -> None:
         try:
+            capability = _request_route_capability(kwargs)
             args: dict[str, Any] = {"maxChars": _MAX_CHARS}
             if capability:
                 # Hydration may include the route-bound live thread without
@@ -200,8 +201,7 @@ def register(ctx: Any) -> None:
             if key not in pending:
                 return None
             pending.remove(key)
-        capability = _request_route_capability(kwargs)
-        packet = _call_bounded(ctx, kwargs, capability)
+        packet = _call_bounded(ctx, kwargs)
         return {"context": packet} if packet is not None else None
 
     ctx.register_hook("on_session_start", on_session_start)

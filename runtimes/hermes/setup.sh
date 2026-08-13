@@ -387,10 +387,38 @@ if command -v hermes >/dev/null 2>&1; then
       MCP_ENV_ARGS+=(--env "JARVOS_REQUIRE_ROUTE_CAPABILITY=1")
     fi
     mcp_added=0
+    mcp_replaced=0
     mcp_backup=""
+    mcp_exists=0
     if hermes mcp list 2>/dev/null | awk 'tolower($1) == "jarvos" { found=1 } END { exit(found ? 0 : 1) }'; then
+      mcp_exists=1
+    fi
+
+    # A pre-existing managed entry may predate the private route-binding
+    # contract.  Keeping it would leave the MCP child without the injected
+    # paths and fail-closed switch, so reconcile it through the Hermes CLI.
+    # The config is backed up first; a failed replacement restores that file.
+    if [ "$mcp_exists" -eq 1 ] && [ "${#MCP_ENV_ARGS[@]}" -gt 0 ]; then
+      if [ ! -f "$HERMES_CONFIG" ]; then
+        HERMES_MCP_STATUS=1
+        echo "  ✗ Existing Hermes MCP entry 'jarvos' cannot be reconciled because $HERMES_CONFIG is missing"
+      else
+        mcp_backup="$HERMES_CONFIG.bak.$(date +%Y%m%d%H%M%S).$$"
+        cp "$HERMES_CONFIG" "$mcp_backup"
+        echo "  • Backup saved to $mcp_backup"
+        if hermes mcp remove jarvos >/dev/null 2>&1 \
+          && printf 'y\n' | hermes mcp add jarvos --command node --args "$MCP_SERVER" "${MCP_ENV_ARGS[@]}" >/dev/null 2>&1; then
+          mcp_replaced=1
+          echo "  ✓ Hermes MCP entry 'jarvos' reconciled with the private binding"
+        else
+          HERMES_MCP_STATUS=1
+          cp "$mcp_backup" "$HERMES_CONFIG"
+          echo "  ✗ Hermes MCP reconciliation failed; restored the prior config"
+        fi
+      fi
+    elif [ "$mcp_exists" -eq 1 ]; then
       echo "  ✓ Hermes MCP entry 'jarvos' already exists — keeping it"
-    else
+    elif [ "$HERMES_MCP_STATUS" -eq 0 ]; then
       if [ -f "$HERMES_CONFIG" ]; then
         mcp_backup="$HERMES_CONFIG.bak.$(date +%Y%m%d%H%M%S).$$"
         cp "$HERMES_CONFIG" "$mcp_backup"
@@ -409,10 +437,10 @@ if command -v hermes >/dev/null 2>&1; then
         echo "  ✓ Hermes MCP entry 'jarvos' is healthy"
       else
         HERMES_MCP_STATUS=1
-        if [ "$mcp_added" -eq 1 ] && [ -n "$mcp_backup" ]; then
+        if { [ "$mcp_added" -eq 1 ] || [ "$mcp_replaced" -eq 1 ]; } && [ -n "$mcp_backup" ]; then
           cp "$mcp_backup" "$HERMES_CONFIG"
           echo "  ✗ Hermes MCP health check failed; restored the prior config"
-        elif [ "$mcp_added" -eq 1 ]; then
+        elif [ "$mcp_added" -eq 1 ] || [ "$mcp_replaced" -eq 1 ]; then
           hermes mcp remove jarvos >/dev/null 2>&1 || true
           echo "  ✗ Hermes MCP health check failed; removed the new entry"
         else
