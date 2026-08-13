@@ -42,7 +42,6 @@ test('consumer parity receipt is metadata-only and deterministic', () => {
   assert.equal(JSON.stringify(receipt).includes('/Users/'), false);
   assert.equal(Object.keys(receipt).some((key) => /path|secret|payload|prompt/i.test(key)), false);
 });
-
 test('fingerprint drift blocks cutover without storing packets', () => {
   const receipt = createConformanceReceipt({
     ...BASE,
@@ -69,4 +68,3 @@ test('unavailable consumer and malformed private-shaped fields fail closed', () 
   assert.equal(validateConformanceReceipt({ ...receipt, privatePath: '/tmp/secret' }).ok, false);
   assert.equal(validateConformanceReceipt({ ...receipt, consumers: { ...receipt.consumers, library: { status: 'ready', fingerprint: null } } }).ok, false);
 });
-
