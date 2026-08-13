@@ -152,12 +152,14 @@ sequenceDiagram
 
 ### Sequencing
 
-1. Diagnose and replace the missing ordinary-runtime bootstrap before changing consumer behavior.
-2. Add profile/query policy and the historical activity contract before asking consumers to answer yesterday-style questions.
-3. Establish the pinned, allowlisted Beads execution transport and migrate Paperclip-shaped tracker/checkpoint assumptions before attaching coding activity or Todo compatibility.
-4. Attach coding/Beads activity and Todo compatibility to the established provider boundary.
-5. Use accepted activity for the Journal projection through the existing vault mutation contract.
-6. Prove cross-runtime parity and select a capability-bound Active Assistant route only after all other consumers pass the same conformance matrix.
+1. Freeze the private dependency and handoff contract (U0).
+2. Diagnose and replace the missing ordinary-runtime bootstrap (U1).
+3. Add profile/query policy and the historical activity contract (U2).
+4. Establish the pinned, allowlisted Beads execution transport (U8).
+5. Attach coding/Beads activity and Todo compatibility (U3), then cut shared hydration over to Projects-only orientation (U4).
+6. Apply the canonical naming and priority migration (U5).
+7. Use accepted activity and canonical mappings for the Journal projection (U6).
+8. Prove cross-runtime parity and select a capability-bound Active Assistant route (U7).
 
 ### System-Wide Impact and Risks
 
@@ -179,27 +181,12 @@ sequenceDiagram
 
 ## Implementation Units
 
-### U1. Establish the host-owned Projects provider bootstrap
-
-- **Goal:** Make the configured private Projects provider discoverable and verifiable by ordinary shared hydration, MCP, coding startup, and the Active Assistant without caller-controlled authority.
-- **Requirements:** R7, R9, R10.
-- **Dependencies:** Implemented Projects package and U0.
-- **Files:** `modules/jarvos-agent-context/src/index.js`, `modules/jarvos-agent-context/scripts/jarvos-mcp.js`, `scripts/lib/jarvos-projects-local-provider.js`, `config/jarvos-project-context.json`, `tests/agent-context.test.js`, `tests/active-assistant-project-context.test.js`.
-- **Approach:** Add one host bootstrap that reads only protected selected-runtime configuration/state and returns a capability-verified reader or classified unavailable result. Remove reliance on in-process-only provider injection for production callers. Bind bootstrap/config/capability/registry revision identifiers into a metadata-only receipt.
-- **Patterns to follow:** Existing capability verification and private local provider admission; current agent-context result normalization.
-- **Test scenarios:**
-  - A valid selected runtime lets direct hydration and MCP construct the same provider without test injection.
-  - Missing bootstrap, malformed configuration, invalid capability, expired receipt, wrong host binding, changed mapping digest, and untrusted provider return distinct unavailable codes.
-  - Caller-supplied module path, state root, producer, capability secret, or scope cannot alter bootstrap behavior.
-  - Bootstrap error persists no raw configuration, secret, provider response, or rendered packet.
-- **Verification:** Focused agent-context and Active Assistant provider tests demonstrate the current “provider is not configured” symptom is replaced by a valid packet or a diagnostic non-enumerating state.
-
 ### U0. Freeze the private integration dependency and handoff contract
 
 - **Goal:** Make the selected private Projects provider and Active Assistant consumer boundary an explicit, reproducible prerequisite rather than ambient local state.
 - **Requirements:** R7, R9, R10, R13.
 - **Dependencies:** Existing private shadow activation and selected-runtime receipt.
-- **Files:** `docs/architecture/projects-context.md`, `docs/ACTIVE_ASSISTANT.md`, `scripts/activate-jarvos-projects-shadow.js`, `scripts/lib/jarvos-projects-local-provider.js`, `config/jarvos-project-context.json`, `tests/active-assistant-project-context.test.js`.
+- **Files (private clawd workspace, pinned by the U0 receipt):** `docs/architecture/projects-context.md`, `docs/ACTIVE_ASSISTANT.md`, `scripts/activate-jarvos-projects-shadow.js`, `scripts/lib/jarvos-projects-local-provider.js`, `config/jarvos-project-context.json`, `tests/active-assistant-project-context.test.js`. Create any missing artifact in that pinned checkout; none is assumed to exist in this public worktree.
 - **Approach:** Record the owning private checkout/session, exact compatible public package revision, non-secret provider/config schema, expected receipt fields, digest inputs, provisioning command boundary, and classified blocked result if the private artifact cannot be reached. Keep secrets, mappings, and state-root paths out of the public artifact.
 - **Patterns to follow:** Existing selected-runtime, capability receipt, and metadata-only semantic-evidence conventions.
 - **Test scenarios:**
@@ -207,6 +194,22 @@ sequenceDiagram
   - Missing, stale, mismatched, or unavailable handoff blocks U1/U7 cutover while preserving public contract tests.
   - A selected runtime whose installed provider digest differs from its handoff fails closed.
 - **Verification:** One redacted dependency receipt is accepted by both public conformance tests and the private activation test, or implementation stops with the documented blocked outcome.
+
+### U1. Establish the host-owned Projects provider bootstrap
+
+- **Goal:** Make the configured private Projects provider discoverable and verifiable by ordinary shared hydration, MCP, coding startup, and the Active Assistant without caller-controlled authority.
+- **Requirements:** R7, R9, R10.
+- **Dependencies:** Implemented Projects package and U0.
+- **Public files:** `modules/jarvos-agent-context/src/index.js`, `modules/jarvos-agent-context/scripts/jarvos-mcp.js`, `modules/jarvos-agent-context/test/agent-context.test.js`.
+- **Private clawd files (pinned by U0; create if missing):** `scripts/lib/jarvos-projects-local-provider.js`, `config/jarvos-project-context.json`, `tests/active-assistant-project-context.test.js`.
+- **Approach:** Add one host bootstrap that reads only protected selected-runtime configuration/state and returns a capability-verified reader or classified unavailable result. Remove reliance on in-process-only provider injection for production callers. Bind bootstrap/config/capability/registry revision identifiers into a metadata-only receipt.
+- **Patterns to follow:** Existing capability verification and private local provider admission; current agent-context result normalization.
+- **Test scenarios:**
+  - A valid selected runtime lets direct hydration and MCP construct the same provider without test injection.
+  - Missing bootstrap, malformed configuration, invalid capability, expired receipt, wrong host binding, changed mapping digest, and untrusted provider return distinct unavailable codes.
+  - Caller-supplied module path, state root, producer, capability secret, or scope cannot alter bootstrap behavior.
+  - Bootstrap error persists no raw configuration, secret, provider response, or rendered packet.
+- **Verification:** The public agent-context suite and private Active Assistant provider suite demonstrate the current “provider is not configured” symptom is replaced by a valid packet or a diagnostic non-enumerating state. The private suite runs only in the checkout identified by the U0 receipt; its absence is a blocked dependency, not a skipped gate.
 
 ### U8. Establish the Beads execution transport before Todo/coding migration
 
@@ -260,7 +263,7 @@ sequenceDiagram
 - **Goal:** Remove direct raw project-state aggregation from normal hydration and make Projects the only eligible orientation input.
 - **Requirements:** R7-R10.
 - **Dependencies:** U1-U3.
-- **Files:** `modules/jarvos-agent-context/src/index.js`, `modules/jarvos-agent-context/scripts/jarvos-mcp.js`, `runtimes/codex/jarvos-session-start-hook.js`, `runtimes/claude/jarvos-session-start-hook.js`, `tests/agent-context.test.js`, `modules/jarvos-agent-context/test/agent-context.test.js`.
+- **Files:** `modules/jarvos-agent-context/src/index.js`, `modules/jarvos-agent-context/scripts/jarvos-mcp.js`, `runtimes/codex/jarvos-session-start-hook.js`, `runtimes/claude/jarvos-session-start-hook.js`, `modules/jarvos-agent-context/test/agent-context.test.js`.
 - **Approach:** Keep non-project Journal and note context separate, but remove the configured Projects section from the Journal payload before it is wrapped and injected. Delete or fence direct Paperclip current-work, raw Todo/Beads, release, and any Journal-project inputs from project orientation. Render a structured Projects-unavailable block when necessary; do not use legacy data to make a project claim.
 - **Patterns to follow:** Shared hydrator budget/redaction reporting and MCP's existing read-only tools.
 - **Test scenarios:**
@@ -276,7 +279,8 @@ sequenceDiagram
 - **Goal:** Finalize the narrow canonical mapping that makes `jarvOS` the parent and `v1.0.0 release` its child, with priority provenance available to all packets.
 - **Requirements:** R1-R3.
 - **Dependencies:** U1, U2.
-- **Files:** `modules/jarvos-secondbrain/packages/jarvos-secondbrain-projects/src/migrate.js`, `src/registry.js`, `src/priority.js`, `config/jarvos-project-context.json`, `tests/projects-migration.test.js`, `modules/jarvos-secondbrain/packages/jarvos-secondbrain-projects/test/records.test.js`.
+- **Public files:** `modules/jarvos-secondbrain/packages/jarvos-secondbrain-projects/src/migrate.js`, `src/registry.js`, `src/priority.js`, `modules/jarvos-secondbrain/packages/jarvos-secondbrain-projects/test/records.test.js`.
+- **Private clawd files (pinned by U0; create if missing):** `config/jarvos-project-context.json`, `tests/projects-migration.test.js`.
 - **Approach:** Use the existing dry-run, conflict, revision, and rollback mechanism. Map legacy release-shaped titles through explicit private configuration and retain source references/aliases. Do not bulk-import all journal or vault project names.
 - **Patterns to follow:** Existing migration ledger and priority inheritance implementation.
 - **Test scenarios:**
@@ -306,7 +310,8 @@ sequenceDiagram
 - **Goal:** Turn the selected-runtime capability receipt into a reproducible, reversible cross-consumer proof and hand the bounded consumer contract to the Active Assistant owner.
 - **Requirements:** R7-R10, R13.
 - **Dependencies:** U0-U6, U8.
-- **Files:** `scripts/activate-jarvos-projects-shadow.js`, `scripts/lib/jarvos-project-context-adapter.js`, `tests/active-assistant-project-context.test.js`, `modules/jarvos-agent-context/test/agent-context.test.js`, `docs/ACTIVE_ASSISTANT.md`, `docs/architecture/projects-context.md`.
+- **Public files:** `modules/jarvos-agent-context/test/agent-context.test.js`.
+- **Private clawd files (pinned by U0; create if missing):** `scripts/activate-jarvos-projects-shadow.js`, `scripts/lib/jarvos-project-context-adapter.js`, `tests/active-assistant-project-context.test.js`, `docs/ACTIVE_ASSISTANT.md`, `docs/architecture/projects-context.md`.
 - **Approach:** Build a metadata-only conformance matrix for all consumers and bind it to source revision, package/bundle digest, selected-runtime selector revision, config/mapping digest, registry generation, capability receipt, provider snapshot digests, profile revision, and packet fingerprint. The Active Assistant branch consumes this contract; this unit does not rewrite that branch.
 - **Patterns to follow:** Existing capability receipt, semantic evidence, shadow activation, and reversible cutover flag patterns.
 - **Test scenarios:**
@@ -322,11 +327,12 @@ sequenceDiagram
 
 | Gate | Proof | Units |
 | --- | --- | --- |
-| Projects contracts | `node --test modules/jarvos-secondbrain/packages/jarvos-secondbrain-projects/test/projects-context.test.js modules/jarvos-secondbrain/packages/jarvos-secondbrain-projects/test/provider-contracts.test.js modules/jarvos-secondbrain/packages/jarvos-secondbrain-projects/test/journal-projection.test.js` | U1-U6 |
+| Projects contracts | `node --test modules/jarvos-secondbrain/packages/jarvos-secondbrain-projects/test/projects-context.test.js modules/jarvos-secondbrain/packages/jarvos-secondbrain-projects/test/provider-contracts.test.js modules/jarvos-secondbrain/packages/jarvos-secondbrain-projects/test/journal-projection.test.js` | U1, U2, U6 |
 | Agent hydration | `node --test modules/jarvos-agent-context/test/agent-context.test.js` | U1, U2, U4, U7 |
 | Coding/Beads integration | `node --test modules/jarvos-coding/test/live-adapters.test.js modules/jarvos-coding/test/session-state.test.js` | U3, U8 |
+| Migration/records | `node --test modules/jarvos-secondbrain/packages/jarvos-secondbrain-projects/test/records.test.js`, plus private-workspace `node --test tests/projects-migration.test.js` in the checkout pinned by U0; unavailable private checkout is blocked | U5 |
 | Journal lifecycle | `node --test modules/jarvos-secondbrain/tests/journal-projects-section.test.js modules/jarvos-secondbrain/tests/journal-maintenance.test.js` | U6 |
-| Active Assistant consumer | `npx vitest run tests/active-assistant-project-context.test.js` | U1, U7 |
+| Active Assistant consumer | Private-workspace suite `tests/active-assistant-project-context.test.js`, executed with the runner declared by the checkout pinned in the U0 handoff receipt; unavailable private checkout is blocked | U1, U7 |
 | Selected-runtime proof | Capability receipt plus cross-consumer conformance artifact and rollback receipt | U7 |
 | Full regression | `npm test` and `git diff --check` | Completion |
 
