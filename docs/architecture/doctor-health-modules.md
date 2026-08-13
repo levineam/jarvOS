@@ -35,16 +35,16 @@ freshness, generation, and the allowed field set before reducing the facts. A
 stale, malformed, symlinked, untrusted, or otherwise unsafe snapshot becomes
 `needs your attention` without exposing the rejected path or value.
 
-The private **Memory Stack Supervisor** writes this public-safe snapshot after
-its authoritative evaluation. It retains detailed component diagnostics and
-repair evidence privately. The public Doctor module never loads Supervisor code
-or invokes a repair operation.
+An optional producer writes this public-safe snapshot after its authoritative
+evaluation. It may retain detailed component diagnostics and repair evidence
+privately. The public Doctor module never loads producer code or invokes a
+repair operation.
 
 The public name and module ID are intentionally separate from legacy private
 identifiers such as `memory-stack-doctor`. Existing private schedules and
 receipts may retain those identifiers through a compatibility migration, but
 they must not appear in routine Doctor output or public JSON.
 
-Documentation impact: module-docs. The generic contract is a public jarvOS
-release candidate; Supervisor scheduling, runtime activation, Telegram
-delivery, and repair adapters remain private to `clawd`.
+Documentation impact: module-docs. This generic contract is a public jarvOS
+release candidate; producer-specific scheduling, runtime activation, delivery,
+and repair adapters remain outside the public contract.
