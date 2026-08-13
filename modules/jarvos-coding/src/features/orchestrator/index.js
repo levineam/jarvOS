@@ -269,7 +269,7 @@ async function checkpointIfConfigured(input, context, stage, result, nextStep) {
 }
 
 function reattachmentPayload(context) {
-  if (!context.reattachment && !context.pullRequest) return null;
+  if (!context.reattachment && !context.pullRequest && !context.workReference) return null;
   return {
     branch: context.branch || null,
     pullRequest: context.pullRequest || null,

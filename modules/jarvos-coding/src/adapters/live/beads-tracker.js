@@ -168,7 +168,7 @@ function createLiveBeadsTracker(options = {}) {
     const existing = await operationStore.read(operationId);
     if (existing && existing.fingerprint !== fingerprint) throw new Error('Beads operation identity conflict');
     if (existing?.state === 'committed' || existing?.state === 'failed') return existing;
-    if (existing?.state === 'indeterminate') {
+    if (existing?.state === 'indeterminate' || existing?.state === 'prepared') {
       const resolved = await reconcile(existing);
       if (resolved.state === 'committed' || resolved.state === 'not-committed') {
         const record = { ...existing, state: resolved.state, result: resolved.result || null, reconciled: true };
@@ -183,6 +183,11 @@ function createLiveBeadsTracker(options = {}) {
     try {
       result = invoke(mappedArgs(method, input, operationId));
     } catch (error) {
+      const indeterminate = { ...prepared, state: 'indeterminate', status: 'indeterminate', retryable: false, errorCode: 'EXECUTION_UNCERTAIN' };
+      await operationStore.write(indeterminate);
+      return indeterminate;
+    }
+    if (result.error || result.status === null || /timed out|timeout|uncertain/i.test(output(result))) {
       const indeterminate = { ...prepared, state: 'indeterminate', status: 'indeterminate', retryable: false, errorCode: 'EXECUTION_UNCERTAIN' };
       await operationStore.write(indeterminate);
       return indeterminate;

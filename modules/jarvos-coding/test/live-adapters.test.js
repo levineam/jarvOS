@@ -78,6 +78,36 @@ test('Beads preflight rejects an unpinned version before mutation', async () => 
   await assert.rejects(() => tracker.createWorkItem({ title: 'must not run', operationId: 'op-version-1' }), /version is unsupported/);
 });
 
+test('prepared Beads operations reconcile before replay after an uncertain launch', async () => {
+  const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-beads-reconcile-'));
+  const operationStore = new Map();
+  const calls = [];
+  let firstMutation = true;
+  const tracker = createLiveBeadsTracker({
+    workspaceRoot,
+    operationStore: {
+      read: async (id) => operationStore.get(id) || null,
+      write: async (record) => { operationStore.set(record.operationId, record); return record; },
+    },
+    run(command, args) {
+      calls.push(args);
+      if (args[0] === '--version') return { status: 0, stdout: 'br v0.2.19', stderr: '' };
+      if (args[0] === 'capabilities') return { status: 0, stdout: JSON.stringify({ capabilities: ['create', 'update', 'dependency', 'checkpoint'] }), stderr: '' };
+      if (args[0] === 'schema') return { status: 0, stdout: JSON.stringify({ schema: 'beads/v1' }), stderr: '' };
+      if (args[0] === 'where') return { status: 0, stdout: workspaceRoot, stderr: '' };
+      if (args[0] === 'show' && args.includes('--external-ref')) return { status: 0, stdout: JSON.stringify({ id: 'bd-9', status: 'open' }), stderr: '' };
+      if (firstMutation) { firstMutation = false; return { status: 1, stdout: '', stderr: 'timed out', error: new Error('timed out') }; }
+      return { status: 0, stdout: JSON.stringify({ id: 'bd-9' }), stderr: '' };
+    },
+  });
+  const uncertain = await tracker.createWorkItem({ title: 'reconcile me', operationId: 'op-reconcile-1' });
+  assert.equal(uncertain.state, 'indeterminate');
+  const replay = await tracker.createWorkItem({ title: 'reconcile me', operationId: 'op-reconcile-1' });
+  assert.equal(replay.state, 'committed');
+  assert.equal(calls.filter((args) => args[0] === 'create').length, 1);
+  assert.ok(calls.some((args) => args[0] === 'show' && args.includes('--external-ref')));
+});
+
 test('Beads close remains deferred until authoritative merge evidence', async () => {
   const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-beads-close-'));
   const tracker = createLiveBeadsTracker({
