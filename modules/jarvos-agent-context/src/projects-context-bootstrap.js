@@ -130,6 +130,9 @@ function createHostProjectsContextProvider(env = process.env) {
       : null,
     async read(request) {
       // Values from the host binding win over all model-visible request keys.
+      const capabilityReceipt = capabilityReceiptPath ? readPrivateJson(capabilityReceiptPath) : null;
+      const capabilitySecret = capabilitySecretPath ? readPrivate(capabilitySecretPath) : null;
+      const hostSecret = hostSecretPath ? readPrivate(hostSecretPath) : null;
       return provider.read({
         ...request,
         workspaceRoot,
@@ -142,10 +145,10 @@ function createHostProjectsContextProvider(env = process.env) {
         projection,
         // These values are selected solely from the validated host binding;
         // request fields cannot smuggle in a capability, secret, or query.
-        capability: capabilityReceiptPath ? readPrivateJson(capabilityReceiptPath) : null,
-        capabilitySecret: capabilitySecretPath ? readPrivate(capabilitySecretPath) : null,
-        hostSecret: hostSecretPath ? readPrivate(hostSecretPath) : null,
-        releaseProviderSecret: hostSecretPath ? readPrivate(hostSecretPath) : null,
+        capability: capabilityReceipt,
+        capabilitySecret,
+        hostSecret,
+        releaseProviderSecret: hostSecret,
         hostId: typeof config.hostId === 'string' && config.hostId.trim() ? config.hostId.trim() : request.hostId,
         subject: typeof config.subject === 'string' && config.subject.trim() ? config.subject.trim() : request.subject,
         query: !request.profile && config.query && typeof config.query === 'object' && !Array.isArray(config.query)

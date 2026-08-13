@@ -1,5 +1,7 @@
 'use strict';
 
+const { localDate: journalLocalDate } = require('./journal-projection');
+
 const PROFILE_CONTRACT = 'jarvos.projects-query-profile/v1';
 const PROFILE_REVISION = 'projects-profiles-1';
 const PROFILE_NAMES = Object.freeze(['orientation', 'recent-activity']);
@@ -35,6 +37,8 @@ function normalizeScope(scope, { required = true } = {}) {
     if (!required) return null;
     throw new TypeError('profile scope is required');
   }
+  const allowedKeys = new Set(['projectIds', 'outcomeIds', 'includeDescendants']);
+  if (Object.keys(scope).some((key) => !allowedKeys.has(key))) throw new TypeError('profile scope has unsupported fields');
   const projectIds = Array.isArray(scope.projectIds) ? scope.projectIds : [];
   const outcomeIds = Array.isArray(scope.outcomeIds) ? scope.outcomeIds : [];
   if (projectIds.some((id) => typeof id !== 'string' || !/^prj_\d{6,}$/.test(id))
@@ -100,6 +104,9 @@ function resolveQueryProfile(name, {
   const profile = requiredString(name, 'profile');
   if (!PROFILE_NAMES.includes(profile)) throw new TypeError(`unknown Projects query profile: ${profile}`);
   const normalizedScope = normalizeScope(scope, { required: !authorizedScope });
+  if (!authorizedScope && normalizedScope && normalizedScope.projectIds.length + normalizedScope.outcomeIds.length === 0) {
+    throw new TypeError('profile scope must identify a project or outcome');
+  }
   const effectiveScope = normalizedScope || { projectIds: [], outcomeIds: [], includeDescendants: true };
   const limits = clone(PROFILE_LIMITS[profile]);
   const query = {
@@ -121,7 +128,7 @@ function resolveQueryProfile(name, {
     const instant = now instanceof Date ? now : new Date(now);
     if (Number.isNaN(instant.getTime())) throw new TypeError('now is invalid');
     const zone = normalizeTimeZone(timeZone);
-    const localToday = localDate(instant, zone);
+    const localToday = journalLocalDate(instant, zone);
     const selectedDate = canonicalDate(date || shiftDate(localToday, -1), 'date');
     const start = from ? new Date(requiredString(from, 'from')) : zonedMidnight(selectedDate, zone);
     const end = to ? new Date(requiredString(to, 'to')) : zonedMidnight(shiftDate(selectedDate, 1), zone);
@@ -159,7 +166,7 @@ module.exports = {
   PROFILE_LIMITS,
   PROFILE_NAMES,
   PROFILE_REVISION,
-  localDate,
+  localDate: journalLocalDate,
   resolveQueryProfile,
   validateQueryProfile,
 };

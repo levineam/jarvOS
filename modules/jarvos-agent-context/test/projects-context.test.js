@@ -187,6 +187,15 @@ test('named profiles require bounded caller scope and carry the temporal window'
   const unscoped = await readProjectsContext({ provider, profile: 'orientation' });
   assert.equal(unscoped.status, 'unavailable');
   assert.equal(unscoped.code, 'PROJECTS_QUERY_UNAVAILABLE');
+  for (const scopeOptions of [
+    { projectIds: [], outcomeIds: [] },
+    { scope: {} },
+    { includeDescendants: true },
+  ]) {
+    const emptyScope = await readProjectsContext({ provider, profile: 'orientation', ...scopeOptions });
+    assert.equal(emptyScope.status, 'unavailable');
+    assert.equal(emptyScope.code, 'PROJECTS_QUERY_UNAVAILABLE');
+  }
   const unknown = await readProjectsContext({ provider, profile: 'portfolio', projectIds: ['prj_000001'] });
   assert.equal(unknown.status, 'unavailable');
   assert.equal(unknown.code, 'PROJECTS_QUERY_UNAVAILABLE');

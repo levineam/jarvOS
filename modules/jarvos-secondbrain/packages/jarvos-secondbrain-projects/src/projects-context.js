@@ -237,8 +237,7 @@ function validateActivityWindow(activityWindow) {
   };
 }
 
-function filterSummariesByWindow(summaries, activityWindow) {
-  const window = validateActivityWindow(activityWindow);
+function filterNormalizedSummariesByWindow(summaries, window) {
   if (!window) return summaries;
   const from = Date.parse(window.from);
   const to = Date.parse(window.to);
@@ -247,6 +246,10 @@ function filterSummariesByWindow(summaries, activityWindow) {
     const occurred = Date.parse(summary.occurredAt);
     return Number.isFinite(occurred) && occurred >= from && occurred < to;
   });
+}
+
+function filterSummariesByWindow(summaries, activityWindow) {
+  return filterNormalizedSummariesByWindow(summaries, validateActivityWindow(activityWindow));
 }
 
 function redactEvidence(summary) {
@@ -404,7 +407,7 @@ function buildContextPacket({ registry, query, providers = {}, providerAuthoriti
       now, maxAgeSeconds: normalizedQuery.limits.maxProviderAgeSeconds, selectedIds, redactionClass, authority: providerAuthorities[provider],
     });
     providerResults[provider] = result.view;
-    const summaries = filterSummariesByWindow(result.summaries, normalizedActivityWindow);
+    const summaries = filterNormalizedSummariesByWindow(result.summaries, normalizedActivityWindow);
     if (normalizedActivityWindow) providerResults[provider] = { ...result.view, itemCount: summaries.length };
     allSummaries.push(...summaries);
     packetOmissions.push(...result.omissions);
