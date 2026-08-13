@@ -63,6 +63,23 @@ test('session checkpoints share a generic shape for code and article work', () =
   }).kind, CODE_THREAD_KIND);
 });
 
+test('session checkpoints can point to a Beads work item without Paperclip-shaped authority', () => {
+  const checkpoint = buildCodeThreadCheckpoint({
+    workReference: { authority: 'beads', itemId: 'bd-42', operationId: 'op-42' },
+    stage: 'claim',
+    nextStep: 'branch',
+  });
+
+  assert.equal(checkpoint.artifact.kind, 'beads-work-item');
+  assert.equal(checkpoint.artifact.authority, 'beads');
+  assert.equal(checkpoint.artifact.itemId, 'bd-42');
+  assert.equal(checkpoint.artifact.ref, 'bd-42');
+  assert.deepEqual(checkpoint.codeThread.workReference, {
+    authority: 'beads', itemId: 'bd-42', operationId: 'op-42',
+  });
+  assert.equal(checkpoint.codeThread.issueIdentifier, null);
+});
+
 test('memory session state checkpoints only the thin code thread', async () => {
   const store = createMemorySessionStateStore();
   const checkpoint = buildCodeThreadCheckpoint({

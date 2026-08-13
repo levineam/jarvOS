@@ -5,11 +5,16 @@ const test = require('node:test');
 
 const {
   buildLiveCodingAdapters,
+  createLiveBeadsTracker,
   createLiveFixer,
   createLivePaperclipTracker,
   createLivePostMergeSweep,
   createLivePullRequest,
 } = require('../src/index.js');
+
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
 
 test('public package declares a registry-safe control-plane dependency', () => {
   const manifest = require('../package.json');
@@ -25,6 +30,70 @@ test('buildLiveCodingAdapters() constructs without clawd present (lazy clawd req
   assert.ok(adapters.postMerge, 'postMerge built');
   assert.ok(adapters.reviewEngine && typeof adapters.reviewEngine.sliceReview === 'function');
   assert.ok(adapters.git && adapters.fixer && adapters.pullRequest);
+});
+
+test('explicit Beads transport works without Paperclip and uses bounded argv', async () => {
+  const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-beads-workspace-'));
+  const calls = [];
+  const tracker = createLiveBeadsTracker({
+    workspaceRoot,
+    approvedRoots: [workspaceRoot],
+    run(command, args, options) {
+      calls.push({ command, args, options });
+      if (args[0] === '--version') return { status: 0, stdout: 'br v0.2.19\n', stderr: '' };
+      if (args[0] === 'capabilities') return { status: 0, stdout: JSON.stringify({ capabilities: ['create', 'update', 'dependency', 'checkpoint'] }), stderr: '' };
+      if (args[0] === 'schema') return { status: 0, stdout: JSON.stringify({ schema: 'beads/v1' }), stderr: '' };
+      if (args[0] === 'where') return { status: 0, stdout: `${workspaceRoot}\n`, stderr: '' };
+      return { status: 0, stdout: JSON.stringify({ id: 'bd-1', status: 'open' }), stderr: '' };
+    },
+  });
+
+  const created = await tracker.createWorkItem({ title: 'Repair release readiness', operationId: 'op-create-1' });
+  const claimed = await tracker.claimIssue({ workReference: { authority: 'beads', itemId: 'bd-1' }, operationId: 'op-claim-1' });
+  const dependency = await tracker.addDependency({ itemId: 'bd-1', dependencyId: 'bd-0', operationId: 'op-dep-1' });
+  const checkpoint = await tracker.writeCheckpoint({ itemId: 'bd-1', stage: 'review', nextStep: 'publish-pr', operationId: 'op-checkpoint-1' });
+
+  assert.equal(created.state, 'committed');
+  assert.equal(claimed.status, 'claimed');
+  assert.equal(claimed.workReference.authority, 'beads');
+  assert.equal(dependency.state, 'committed');
+  assert.equal(checkpoint.state, 'committed');
+  assert.ok(calls.every((call) => call.command === 'br' && call.options.shell === false));
+  assert.ok(calls.some((call) => call.args.includes('--external-ref') && call.args.includes('op-create-1')));
+
+  const adapters = buildLiveCodingAdapters({
+    beads: { workspaceRoot, approvedRoots: [workspaceRoot], run: () => ({ status: 0, stdout: '', stderr: '' }) },
+  });
+  assert.equal(adapters.tracker.authority, 'beads');
+});
+
+test('Beads preflight rejects an unpinned version before mutation', async () => {
+  const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-beads-version-'));
+  const tracker = createLiveBeadsTracker({
+    workspaceRoot,
+    run: (command, args) => args[0] === '--version'
+      ? { status: 0, stdout: 'br v9.9.9', stderr: '' }
+      : { status: 0, stdout: workspaceRoot, stderr: '' },
+  });
+  await assert.rejects(() => tracker.createWorkItem({ title: 'must not run', operationId: 'op-version-1' }), /version is unsupported/);
+});
+
+test('Beads close remains deferred until authoritative merge evidence', async () => {
+  const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-beads-close-'));
+  const tracker = createLiveBeadsTracker({
+    workspaceRoot,
+    run: (command, args) => {
+      if (args[0] === '--version') return { status: 0, stdout: '0.2.19', stderr: '' };
+      if (args[0] === 'capabilities') return { status: 0, stdout: JSON.stringify({ capabilities: ['create', 'update', 'dependency', 'checkpoint'] }), stderr: '' };
+      if (args[0] === 'schema') return { status: 0, stdout: JSON.stringify({ schema: 'beads/v1' }), stderr: '' };
+      if (args[0] === 'where') return { status: 0, stdout: workspaceRoot, stderr: '' };
+      return { status: 0, stdout: JSON.stringify({ id: 'bd-1' }), stderr: '' };
+    },
+  });
+  const deferred = await tracker.verifyAndClose({ itemId: 'bd-1', pullRequest: { state: 'OPEN' } });
+  assert.equal(deferred.status, 'deferred');
+  const closed = await tracker.verifyAndClose({ itemId: 'bd-1', pullRequest: { state: 'MERGED' }, operationId: 'op-close-1' });
+  assert.equal(closed.status, 'closed');
 });
 
 test('pre-PR fixer records real post-fix cleanliness and an explicit no-test rationale', async () => {

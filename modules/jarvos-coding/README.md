@@ -22,6 +22,7 @@ admit, block, own, or change the core stewardship result.
 const {
   triageCodingWork,
   runTakeIssueToDone,
+  createLiveBeadsTracker,
   createClawpatchAutoreviewAdapter,
   runtimeCheckoutPreflight,
   inspectRuntimeCheckout,
@@ -54,6 +55,30 @@ const triage = triageCodingWork({
 
 Adapters should persist this object as evidence, then translate the portable
 decision into their own labels, documents, comments, or workflow state.
+
+### Beads execution transport
+
+Local execution can use the pinned Beads Rust CLI without Paperclip:
+
+```js
+const { buildLiveCodingAdapters } = require('@jarvos/coding');
+
+const adapters = buildLiveCodingAdapters({
+  beads: {
+    executable: '/approved/path/br',
+    workspaceRoot: '/approved/workspace',
+    approvedRoots: ['/approved'],
+    expectedVersion: '0.2.19',
+  },
+});
+```
+
+The adapter verifies the executable, capabilities, schema, and `br where`
+binding before mutation. Each create/claim/transition/dependency/checkpoint
+operation is prepared with an operation identity and reconciled before an
+uncertain retry. It returns only executable work evidence; canonical project
+identity remains in Projects, and Paperclip remains an explicit compatibility
+handoff rather than a prerequisite.
 
 `submissionGateContract(options)` returns the stable agent-agnostic contract for
 submitting coding work. It is not Michael-specific: any code-producing agent can
