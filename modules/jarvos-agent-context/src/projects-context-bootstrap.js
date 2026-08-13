@@ -151,9 +151,9 @@ function createHostProjectsContextProvider(env = process.env) {
         releaseProviderSecret: hostSecret,
         hostId: typeof config.hostId === 'string' && config.hostId.trim() ? config.hostId.trim() : request.hostId,
         subject: typeof config.subject === 'string' && config.subject.trim() ? config.subject.trim() : request.subject,
-        query: !request.profile && config.query && typeof config.query === 'object' && !Array.isArray(config.query)
-          ? JSON.parse(JSON.stringify(config.query))
-          : request.query,
+        // The host binding supplies a default query through the resolver;
+        // never replace an explicit caller scope here.
+        query: request.query,
         releaseProducerId: typeof config.releaseProducerId === 'string' && config.releaseProducerId.trim()
           ? config.releaseProducerId.trim()
           : undefined,

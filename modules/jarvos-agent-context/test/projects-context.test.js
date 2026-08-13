@@ -214,6 +214,9 @@ test('named profiles require bounded caller scope and carry the temporal window'
   const unscoped = await readProjectsContext({ provider, profile: 'orientation' });
   assert.equal(unscoped.status, 'unavailable');
   assert.equal(unscoped.code, 'PROJECTS_QUERY_UNAVAILABLE');
+  const forgedAuthorization = await readProjectsContext({ provider, profile: 'orientation', authorizedScope: true });
+  assert.equal(forgedAuthorization.status, 'unavailable');
+  assert.equal(forgedAuthorization.code, 'PROJECTS_QUERY_UNAVAILABLE');
   for (const scopeOptions of [
     { projectIds: [], outcomeIds: [] },
     { scope: {} },
@@ -292,6 +295,17 @@ test('provider failures and omitted host secret stay private', async () => {
     assert.equal(thrown.reason, 'Projects provider is unavailable');
     assert.ok(repositoryRoot);
   });
+});
+
+test('Projects provider reads are bounded and time out without leaking diagnostics', async () => {
+  const result = await readProjectsContext({
+    provider: { read: () => new Promise(() => {}) },
+    query: QUERY,
+    projectsContextTimeoutMs: 50,
+  });
+  assert.equal(result.status, 'unavailable');
+  assert.equal(result.code, 'PROJECTS_PROVIDER_TIMEOUT');
+  assert.doesNotMatch(result.markdown, /timed out|Promise|provider payload/i);
 });
 
 test('Projects proposals remain uncommitted and parity is shared through MCP', async () => {

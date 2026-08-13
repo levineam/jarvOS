@@ -5,6 +5,9 @@ const { localDate: journalLocalDate } = require('./journal-projection');
 const PROFILE_CONTRACT = 'jarvos.projects-query-profile/v1';
 const PROFILE_REVISION = 'projects-profiles-1';
 const PROFILE_NAMES = Object.freeze(['orientation', 'recent-activity']);
+// A local calendar day is normally 24 hours, but DST transitions can make it
+// 23 or 25. Keep caller-selected windows bounded without rejecting either.
+const MAX_ACTIVITY_WINDOW_MS = 26 * 60 * 60 * 1000;
 
 const PROFILE_LIMITS = Object.freeze({
   orientation: Object.freeze({ maxItems: 24, maxBytes: 16_000, maxProviderAgeSeconds: 3_600 }),
@@ -132,7 +135,10 @@ function resolveQueryProfile(name, {
     const selectedDate = canonicalDate(date || shiftDate(localToday, -1), 'date');
     const start = from ? new Date(requiredString(from, 'from')) : zonedMidnight(selectedDate, zone);
     const end = to ? new Date(requiredString(to, 'to')) : zonedMidnight(shiftDate(selectedDate, 1), zone);
-    if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || start >= end) throw new TypeError('activity window is invalid');
+    const duration = end.getTime() - start.getTime();
+    if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || duration <= 0 || duration > MAX_ACTIVITY_WINDOW_MS) {
+      throw new TypeError('activity window is invalid');
+    }
     result.activityWindow = {
       from: start.toISOString(),
       to: end.toISOString(),
@@ -166,6 +172,7 @@ module.exports = {
   PROFILE_LIMITS,
   PROFILE_NAMES,
   PROFILE_REVISION,
+  MAX_ACTIVITY_WINDOW_MS,
   localDate: journalLocalDate,
   resolveQueryProfile,
   validateQueryProfile,

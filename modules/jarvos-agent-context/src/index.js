@@ -25,6 +25,7 @@ const DEFAULT_SESSION_THREAD_LOCK_STALE_MS = 30000;
 const DEFAULT_SESSION_THREAD_LOCK_TIMEOUT_MS = 30000;
 const PROJECTS_CONTEXT_CONTRACT = 'jarvos.projects-context/v1';
 const PROJECTS_CONTEXT_CUTOVER_ENV = 'JARVOS_PROJECTS_CONTEXT_CUTOVER';
+const DEFAULT_PROJECTS_CONTEXT_TIMEOUT_MS = 5000;
 const DEFAULT_PROJECTS_CONTEXT_INCLUDE = ['hierarchy', 'activity', 'currentWork', 'attention'];
 const DEFAULT_PROJECTS_CONTEXT_LIMITS = Object.freeze({ maxItems: 12, maxBytes: 9000, maxProviderAgeSeconds: 3600 });
 let configuredProjectsContextProvider = null;
@@ -372,7 +373,7 @@ function hasNonEmptyProjectsScope(query) {
       || Array.isArray(query.scope.outcomeIds) && query.scope.outcomeIds.length > 0);
 }
 
-function resolveProjectsRequest(options, hostProvider) {
+function resolveProjectsRequest(options, hostProvider, internalAuthorizedScope = false) {
   const profiles = loadProjectsContextProfiles();
   const hasQuery = Boolean(options.query && typeof options.query === 'object' && !Array.isArray(options.query));
   const hasScope = hasCallerProjectsScope(options);
@@ -380,7 +381,10 @@ function resolveProjectsRequest(options, hostProvider) {
   const hostAuthorizedDefault = Boolean(hostProvider && !hasQuery && !hasScope);
 
   if (profileName || hostAuthorizedDefault) {
-    const authorizedScope = hostAuthorizedDefault || options.authorizedScope === true;
+    // Authorization is never accepted from model-visible request data. The
+    // host binding may authorize its own default, and hydrate may use the
+    // private in-process channel when it intentionally requests orientation.
+    const authorizedScope = hostAuthorizedDefault || internalAuthorizedScope;
     const profile = profiles.resolveQueryProfile(profileName || 'orientation', {
       scope: hasScope ? (options.scope || {
         projectIds: options.projectIds,
@@ -521,7 +525,7 @@ function setProjectsContextProvider(provider) {
   return configuredProjectsContextProvider;
 }
 
-async function readProjectsContext(options = {}) {
+async function readProjectsContext(options = {}, internalAuthorizedScope = false) {
   const hasExplicitProvider = Object.prototype.hasOwnProperty.call(options, 'provider') || Object.prototype.hasOwnProperty.call(options, 'projectsProvider');
   const hostProvider = !hasExplicitProvider && !configuredProjectsContextProvider ? createHostProjectsContextProvider() : null;
   const provider = Object.prototype.hasOwnProperty.call(options, 'provider')
@@ -529,7 +533,7 @@ async function readProjectsContext(options = {}) {
     : (options.projectsProvider || configuredProjectsContextProvider || hostProvider);
   let resolved;
   try {
-    resolved = resolveProjectsRequest(options, hostProvider);
+    resolved = resolveProjectsRequest(options, hostProvider, internalAuthorizedScope);
   } catch (error) {
     const request = {
       contract: PROJECTS_CONTEXT_CONTRACT,
@@ -558,7 +562,17 @@ async function readProjectsContext(options = {}) {
   if (!provider) return normalizeProjectsContextResult({ status: 'unavailable', code: 'PROJECTS_PROVIDER_UNAVAILABLE', reason: 'Projects provider is not configured' }, request);
   const reader = typeof provider === 'function' ? provider : provider.read;
   try {
-    const result = await reader(request);
+    const requestedTimeout = Number(options.projectsContextTimeoutMs || DEFAULT_PROJECTS_CONTEXT_TIMEOUT_MS);
+    const timeoutMs = Number.isFinite(requestedTimeout)
+      ? Math.min(Math.max(requestedTimeout, 50), 15_000)
+      : DEFAULT_PROJECTS_CONTEXT_TIMEOUT_MS;
+    let timer;
+    const result = await Promise.race([
+      Promise.resolve().then(() => reader(request)),
+      new Promise((_, reject) => {
+        timer = setTimeout(() => reject(Object.assign(new Error('Projects provider timed out'), { code: 'PROJECTS_PROVIDER_TIMEOUT' })), timeoutMs);
+      }),
+    ]).finally(() => clearTimeout(timer));
     // A host provider may return implementation diagnostics in an unavailable
     // result. Treat them as private exactly like a thrown provider error.
     const publicResult = hostProvider && result?.status !== 'ok'
@@ -568,7 +582,11 @@ async function readProjectsContext(options = {}) {
   } catch (error) {
     // Provider errors can contain host paths, secret-bearing diagnostics, or
     // payload fragments. Public agent output gets a stable, non-sensitive fact.
-    return normalizeProjectsContextResult({ status: 'unavailable', code: 'PROJECTS_PROVIDER_ERROR', reason: 'Projects provider is unavailable' }, request);
+    return normalizeProjectsContextResult({
+      status: 'unavailable',
+      code: error?.code === 'PROJECTS_PROVIDER_TIMEOUT' ? error.code : 'PROJECTS_PROVIDER_ERROR',
+      reason: 'Projects provider is unavailable',
+    }, request);
   }
 }
 
@@ -1152,15 +1170,16 @@ async function hydrate(options = {}) {
     maxChars: Number(options.projectsContextMaxChars || projectsOptions.maxChars || 3600),
     maxItems: Number(projectsOptions.maxItems || options.maxItems || DEFAULT_PROJECTS_CONTEXT_LIMITS.maxItems),
   };
+  let internalAuthorizedScope = false;
   if (!projectsRequest.profile && !projectsRequest.query && !projectsRequest.scope
     && !Object.prototype.hasOwnProperty.call(projectsRequest, 'projectIds')
     && !Object.prototype.hasOwnProperty.call(projectsRequest, 'outcomeIds')) {
     projectsRequest.profile = 'orientation';
-    projectsRequest.authorizedScope = true;
+    internalAuthorizedScope = true;
   }
   if (Object.prototype.hasOwnProperty.call(projectsOptions, 'provider')) projectsRequest.provider = projectsOptions.provider;
   else if (Object.prototype.hasOwnProperty.call(options, 'projectsProvider')) projectsRequest.provider = options.projectsProvider;
-  const projects = await readProjectsContext(projectsRequest);
+  const projects = await readProjectsContext(projectsRequest, internalAuthorizedScope);
   const projectsCutover = projectsContextCutoverEnabled(options);
   report.projectsContext = {
     status: projects.status,

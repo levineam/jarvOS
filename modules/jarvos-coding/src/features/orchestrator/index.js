@@ -319,6 +319,10 @@ async function runTakeIssueToDone(input = {}, adapters = {}) {
     assertFenceForStage(stage, controlPlane);
     const result = await action();
     assertFenceForStage(stage, controlPlane);
+    // The claim adapter establishes the durable work reference. Install it
+    // before recording the claim milestone so the activity receipt is bound
+    // to Beads rather than the pre-claim context.
+    if (stage === 'claim' && result?.workReference) context.workReference = result.workReference;
 
     const event = buildStageEvent(stage, result, {
       reattached: Boolean(reattach) && Boolean(result?.reattached),

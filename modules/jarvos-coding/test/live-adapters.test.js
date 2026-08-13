@@ -108,6 +108,57 @@ test('prepared Beads operations reconcile before replay after an uncertain launc
   assert.ok(calls.some((args) => args[0] === 'show' && args.includes('--external-ref')));
 });
 
+test('Beads replay reconciles non-create operations by their exact postcondition', async () => {
+  const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-beads-reconcile-claim-'));
+  const operationStore = new Map();
+  const calls = [];
+  let mutationCount = 0;
+  const tracker = createLiveBeadsTracker({
+    workspaceRoot,
+    operationStore: {
+      read: async (id) => operationStore.get(id) || null,
+      write: async (record) => { operationStore.set(record.operationId, record); return record; },
+    },
+    run(command, args) {
+      calls.push(args);
+      if (args[0] === '--version') return { status: 0, stdout: 'br v0.2.19', stderr: '' };
+      if (args[0] === 'capabilities') return { status: 0, stdout: JSON.stringify({ capabilities: ['create', 'update', 'dependency', 'checkpoint'] }), stderr: '' };
+      if (args[0] === 'schema') return { status: 0, stdout: JSON.stringify({ schema: 'beads/v1' }), stderr: '' };
+      if (args[0] === 'where') return { status: 0, stdout: workspaceRoot, stderr: '' };
+      if (args[0] === 'update' && mutationCount++ === 0) return { status: 1, stdout: '', stderr: 'timed out', error: new Error('timed out') };
+      if (args[0] === 'show') return { status: 0, stdout: JSON.stringify({ id: 'bd-claim', status: 'in_progress' }), stderr: '' };
+      return { status: 0, stdout: JSON.stringify({ id: 'bd-claim' }), stderr: '' };
+    },
+  });
+
+  const first = await tracker.claimIssue({ itemId: 'bd-claim', operationId: 'claim-reconcile-1' });
+  assert.equal(first.state, 'indeterminate');
+  const replay = await tracker.claimIssue({ itemId: 'bd-claim', operationId: 'claim-reconcile-1' });
+  assert.equal(replay.status, 'claimed');
+  assert.equal(calls.filter((args) => args[0] === 'update').length, 1);
+  assert.ok(calls.some((args) => args[0] === 'show' && args[1] === 'bd-claim' && !args.includes('--external-ref')));
+});
+
+test('Beads default operation identities distinguish operation inputs', async () => {
+  const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-beads-operation-id-'));
+  const operationIds = [];
+  const tracker = createLiveBeadsTracker({
+    workspaceRoot,
+    run(command, args) {
+      if (args[0] === '--version') return { status: 0, stdout: 'br v0.2.19', stderr: '' };
+      if (args[0] === 'capabilities') return { status: 0, stdout: JSON.stringify({ capabilities: ['create', 'update', 'dependency', 'checkpoint'] }), stderr: '' };
+      if (args[0] === 'schema') return { status: 0, stdout: JSON.stringify({ schema: 'beads/v1' }), stderr: '' };
+      if (args[0] === 'where') return { status: 0, stdout: workspaceRoot, stderr: '' };
+      const index = args.indexOf('--operation-id');
+      if (index >= 0) operationIds.push(args[index + 1]);
+      return { status: 0, stdout: JSON.stringify({ id: 'bd-identity', status: 'open' }), stderr: '' };
+    },
+  });
+  await tracker.addDependency({ itemId: 'bd-identity', dependencyId: 'bd-a' });
+  await tracker.addDependency({ itemId: 'bd-identity', dependencyId: 'bd-b' });
+  assert.equal(new Set(operationIds).size, 2);
+});
+
 test('Beads close remains deferred until authoritative merge evidence', async () => {
   const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-beads-close-'));
   const tracker = createLiveBeadsTracker({

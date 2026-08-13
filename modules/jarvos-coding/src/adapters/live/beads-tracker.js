@@ -2,6 +2,7 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
+const crypto = require('node:crypto');
 const { run: defaultRun } = require('./run');
 
 const BEADS_TRACKER_SCHEMA_VERSION = 'jarvos-coding-live-beads-tracker/v1';
@@ -25,12 +26,55 @@ function output(result) {
   return String(result?.stdout || result?.stderr || '').trim();
 }
 
+function canonicalize(value) {
+  if (Array.isArray(value)) return value.map(canonicalize);
+  if (plain(value)) return Object.fromEntries(Object.keys(value).sort().map((key) => [key, canonicalize(value[key])]));
+  return value;
+}
+
+function operationInputOf(input = {}) {
+  const copy = { ...input };
+  delete copy.operationId;
+  delete copy.idempotencyKey;
+  if (copy.workReference && plain(copy.workReference)) {
+    copy.workReference = { ...copy.workReference };
+    delete copy.workReference.operationId;
+  }
+  if (copy.workRef && plain(copy.workRef)) {
+    copy.workRef = { ...copy.workRef };
+    delete copy.workRef.operationId;
+  }
+  return canonicalize(copy);
+}
+
+function operationFingerprint(method, input) {
+  return JSON.stringify({ method, input: operationInputOf(input) });
+}
+
+function operationExpectation(method, input = {}) {
+  if (method === 'create') return {};
+  const itemId = workIdOf(input, method);
+  if (method === 'claim') return { itemId, status: 'in_progress' };
+  if (method === 'transition') return { itemId, status: requiredString(input.status, 'transition status') };
+  if (method === 'dependency') return { itemId, dependencyId: requiredString(input.dependsOn || input.dependencyId, 'dependency id') };
+  if (method === 'checkpoint') return {
+    itemId,
+    stage: requiredString(input.stage, 'checkpoint stage'),
+    nextStep: requiredString(input.nextStep, 'checkpoint next step'),
+  };
+  return { itemId };
+}
+
 function operationIdOf(input = {}, method = 'operation') {
   const explicit = input.operationId || input.idempotencyKey || input.workReference?.operationId || input.workRef?.operationId;
   if (explicit) return requiredString(explicit, `${method} operationId`);
   const itemId = input.itemId || input.workItemId || input.workReference?.itemId || input.workRef?.itemId
     || input.issueIdentifier || input.issue?.identifier || input.workReference?.id || input.workRef?.id;
-  if (itemId && method !== 'create') return `${method}:${requiredString(itemId, `${method} work item id`)}`;
+  if (itemId && method !== 'create') {
+    const canonical = JSON.stringify(operationInputOf(input));
+    const digest = crypto.createHash('sha256').update(`${method}:${canonical}`).digest('hex').slice(0, 16);
+    return `${method}:${requiredString(itemId, `${method} work item id`)}:${digest}`;
+  }
   throw new Error(`Beads ${method} operationId is required`);
 }
 
@@ -103,6 +147,7 @@ function createLiveBeadsTracker(options = {}) {
   const actor = options.actor || 'jarvos-coding';
   const commandMap = options.commands || {};
   let preflight = null;
+  const operationLocks = new Map();
 
   function invoke(args, extra = {}) {
     return run(executable, args, {
@@ -153,18 +198,50 @@ function createLiveBeadsTracker(options = {}) {
 
   async function reconcile(operation) {
     if (typeof options.reconcile === 'function') return options.reconcile(operation);
-    const result = invoke(['show', '--external-ref', operation.operationId, '--format', 'json']);
+    const expectation = operation.expectation || {};
+    const args = operation.method === 'create'
+      ? ['show', '--external-ref', operation.operationId, '--format', 'json']
+      : ['show', expectation.itemId, '--format', 'json'];
+    const result = invoke(args);
     if (result.status === 0) {
       const found = parseJson(result.stdout);
-      if (found) return { state: 'committed', result: found };
+      if (found && matchesExpectation(operation.method, found, expectation)) return { state: 'committed', result: found };
+      if (found) return { state: 'indeterminate', result: found };
     }
     if (result.status !== 0 && /not found|no matching/i.test(output(result))) return { state: 'not-committed' };
     return { state: 'indeterminate' };
   }
 
-  async function mutate(method, input = {}) {
+  function matchesExpectation(method, value, expectation) {
+    if (method === 'create') return Boolean(value);
+    const found = plain(value?.item) ? value.item : value;
+    if (!plain(found)) return false;
+    if (method === 'claim' || method === 'transition') {
+      return String(found.status || found.state || '').toLowerCase() === String(expectation.status).toLowerCase();
+    }
+    if (method === 'dependency') {
+      const dependencies = Array.isArray(found.dependencies) ? found.dependencies : [];
+      return dependencies.some((dependency) => String(plain(dependency)
+        ? (dependency.id || dependency.identifier || dependency.itemId || dependency.dependsOn || dependency.dependencyId)
+        : dependency) === expectation.dependencyId);
+    }
+    if (method === 'checkpoint') {
+      const checkpoints = [
+        ...(Array.isArray(found.checkpoints) ? found.checkpoints : []),
+        ...(Array.isArray(found.history) ? found.history : []),
+        ...(Array.isArray(found.events) ? found.events : []),
+      ];
+      return checkpoints.some((checkpoint) => plain(checkpoint)
+        && String(checkpoint.stage || '') === expectation.stage
+        && String(checkpoint.nextStep || checkpoint.next_step || '') === expectation.nextStep);
+    }
+    return false;
+  }
+
+  async function mutateUnlocked(method, input = {}) {
     const operationId = operationIdOf(input, method);
-    const fingerprint = JSON.stringify({ method, input: { ...input, operationId: undefined, idempotencyKey: undefined } });
+    const fingerprint = operationFingerprint(method, input);
+    const expectation = operationExpectation(method, input);
     const existing = await operationStore.read(operationId);
     if (existing && existing.fingerprint !== fingerprint) throw new Error('Beads operation identity conflict');
     if (existing?.state === 'committed' || existing?.state === 'failed') return existing;
@@ -177,7 +254,7 @@ function createLiveBeadsTracker(options = {}) {
       } else return { ...existing, status: 'indeterminate', retryable: false };
     }
     await ensureReady();
-    const prepared = { schemaVersion: BEADS_TRACKER_SCHEMA_VERSION, operationId, method, fingerprint, state: 'prepared', actor, workspaceRoot };
+    const prepared = { schemaVersion: BEADS_TRACKER_SCHEMA_VERSION, operationId, method, fingerprint, expectation, state: 'prepared', actor, workspaceRoot };
     await operationStore.write(prepared);
     let result;
     try {
@@ -200,6 +277,22 @@ function createLiveBeadsTracker(options = {}) {
     const committed = { ...prepared, state: 'committed', status: 'committed', retryable: false, result: parseJson(result.stdout) || { output: output(result) } };
     await operationStore.write(committed);
     return committed;
+  }
+
+  async function mutate(method, input = {}) {
+    const operationId = operationIdOf(input, method);
+    const previous = operationLocks.get(operationId) || Promise.resolve();
+    let release;
+    const gate = new Promise((resolve) => { release = resolve; });
+    const tail = previous.then(() => gate);
+    operationLocks.set(operationId, tail);
+    try {
+      await previous;
+      return await mutateUnlocked(method, input);
+    } finally {
+      release();
+      if (operationLocks.get(operationId) === tail) operationLocks.delete(operationId);
+    }
   }
 
   return {
