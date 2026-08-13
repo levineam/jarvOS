@@ -24,6 +24,7 @@ const DEFAULT_SESSION_THREAD_LOCK_RETRY_DELAY_MS = 25;
 const DEFAULT_SESSION_THREAD_LOCK_STALE_MS = 30000;
 const DEFAULT_SESSION_THREAD_LOCK_TIMEOUT_MS = 30000;
 const PROJECTS_CONTEXT_CONTRACT = 'jarvos.projects-context/v1';
+const PROJECTS_CONTEXT_CUTOVER_ENV = 'JARVOS_PROJECTS_CONTEXT_CUTOVER';
 const DEFAULT_PROJECTS_CONTEXT_INCLUDE = ['hierarchy', 'activity', 'currentWork', 'attention'];
 const DEFAULT_PROJECTS_CONTEXT_LIMITS = Object.freeze({ maxItems: 12, maxBytes: 9000, maxProviderAgeSeconds: 3600 });
 let configuredProjectsContextProvider = null;
@@ -379,13 +380,14 @@ function resolveProjectsRequest(options, hostProvider) {
   const hostAuthorizedDefault = Boolean(hostProvider && !hasQuery && !hasScope);
 
   if (profileName || hostAuthorizedDefault) {
+    const authorizedScope = hostAuthorizedDefault || options.authorizedScope === true;
     const profile = profiles.resolveQueryProfile(profileName || 'orientation', {
       scope: hasScope ? (options.scope || {
         projectIds: options.projectIds,
         outcomeIds: options.outcomeIds,
         includeDescendants: options.includeDescendants,
       }) : hostProvider?.defaultQuery?.scope,
-      authorizedScope: hostAuthorizedDefault,
+      authorizedScope,
       now: options.now || new Date(),
       timeZone: firstString(options.timeZone, process.env.JARVOS_TIMEZONE, 'UTC') || 'UTC',
       date: options.date,
@@ -957,6 +959,23 @@ function findTodayJournal(jarvosPaths, options = {}) {
   return { ok: false, date, path: candidates[0], content: '' };
 }
 
+function stripProjectsJournalSection(markdown) {
+  const lines = String(markdown || '').replace(/\r\n/g, '\n').split('\n');
+  const start = lines.findIndex((line) => line.trim() === '## 🚀 Projects');
+  if (start < 0) return String(markdown || '');
+  let end = lines.length;
+  for (let index = start + 1; index < lines.length; index += 1) {
+    if (/^##\s+/.test(lines[index])) { end = index; break; }
+  }
+  return [...lines.slice(0, start), ...lines.slice(end)].join('\n').replace(/\n{3,}/g, '\n\n').trimEnd();
+}
+
+function projectsContextCutoverEnabled(options = {}) {
+  return options.projectsContextCutover === true
+    || options.projectsContext?.cutover === true
+    || process.env[PROJECTS_CONTEXT_CUTOVER_ENV] === '1';
+}
+
 function extractWikilinks(markdown) {
   const links = [];
   const seen = new Set();
@@ -1132,9 +1151,16 @@ async function hydrate(options = {}) {
     maxChars: Number(options.projectsContextMaxChars || projectsOptions.maxChars || 3600),
     maxItems: Number(projectsOptions.maxItems || options.maxItems || DEFAULT_PROJECTS_CONTEXT_LIMITS.maxItems),
   };
+  if (!projectsRequest.profile && !projectsRequest.query && !projectsRequest.scope
+    && !Object.prototype.hasOwnProperty.call(projectsRequest, 'projectIds')
+    && !Object.prototype.hasOwnProperty.call(projectsRequest, 'outcomeIds')) {
+    projectsRequest.profile = 'orientation';
+    projectsRequest.authorizedScope = true;
+  }
   if (Object.prototype.hasOwnProperty.call(projectsOptions, 'provider')) projectsRequest.provider = projectsOptions.provider;
   else if (Object.prototype.hasOwnProperty.call(options, 'projectsProvider')) projectsRequest.provider = options.projectsProvider;
   const projects = await readProjectsContext(projectsRequest);
+  const projectsCutover = projectsContextCutoverEnabled(options);
   report.projectsContext = {
     status: projects.status,
     fingerprint: projects.fingerprint || null,
@@ -1149,24 +1175,31 @@ async function hydrate(options = {}) {
     report.handles.push('Projects context: provider unavailable (shadow mode)');
   }
 
-  try {
-    const work = await currentWork({
-      ...options.currentWork,
-      includeAllAgents: options.includeAllAgents,
-      maxItems: Number(options.maxItems || options.currentWork?.maxItems || 8),
-      statuses: normalizeStatusList(options.statuses || options.currentWork?.statuses, DEFAULT_HYDRATION_STATUSES),
-    });
-    parts.push(truncateText(work.markdown, Number(options.workMaxChars || 3200), 'Paperclip current work', report));
-    report.sources.push(`Paperclip issues (${work.issues.length} included)`);
-    report.handles.push('MCP: jarvos_current_work / jarvos_hydrate');
-  } catch (error) {
-    report.omissions.push(`Paperclip current work unavailable: ${error.message}`);
-    parts.push('## Paperclip Current Work\nUnavailable.');
+  if (projectsCutover) {
+    report.omissions.push('legacy project/task orientation disabled by Projects cutover');
+    report.handles.push('Projects context is the sole project orientation source');
+  } else {
+    try {
+      const work = await currentWork({
+        ...options.currentWork,
+        includeAllAgents: options.includeAllAgents,
+        maxItems: Number(options.maxItems || options.currentWork?.maxItems || 8),
+        statuses: normalizeStatusList(options.statuses || options.currentWork?.statuses, DEFAULT_HYDRATION_STATUSES),
+      });
+      parts.push(truncateText(work.markdown, Number(options.workMaxChars || 3200), 'Paperclip current work', report));
+      report.sources.push(`Paperclip issues (${work.issues.length} included)`);
+      report.handles.push('MCP: jarvos_current_work / jarvos_hydrate');
+    } catch (error) {
+      report.omissions.push(`Paperclip current work unavailable: ${error.message}`);
+      parts.push('## Paperclip Current Work\nUnavailable.');
+    }
   }
 
   const journal = findTodayJournal(jarvosPaths, options.journal || {});
   if (journal.ok) {
-    parts.push('', '# Today Journal', '', truncateText(journal.content, Number(options.journalMaxChars || 3200), 'today journal', report));
+    const journalContent = projectsCutover ? stripProjectsJournalSection(journal.content) : journal.content;
+    if (projectsCutover && journalContent !== journal.content) report.omissions.push('Journal Projects section omitted after Projects cutover');
+    parts.push('', '# Today Journal', '', truncateText(journalContent, Number(options.journalMaxChars || 3200), 'today journal', report));
     report.sources.push(journal.path);
     report.handles.push(`Journal: ${journal.path}`);
   } else {
@@ -1192,7 +1225,8 @@ async function hydrate(options = {}) {
   }
 
   try {
-    const linkedNotes = journal.ok ? collectLinkedNotes(journal.content, jarvosPaths, options.linkedNotes || {}, report) : [];
+    const linkedJournal = journal.ok && projectsCutover ? stripProjectsJournalSection(journal.content) : journal.content;
+    const linkedNotes = journal.ok ? collectLinkedNotes(linkedJournal, jarvosPaths, options.linkedNotes || {}, report) : [];
     if (linkedNotes.length) {
       parts.push('', '# Notes Linked From Today');
       for (const note of linkedNotes) {
@@ -1525,6 +1559,7 @@ async function startupBrief(options = {}) {
 
 module.exports = {
   PROJECTS_CONTEXT_CONTRACT,
+  PROJECTS_CONTEXT_CUTOVER_ENV,
   controlPlane,
   loadControlPlaneManager,
   createNote,
@@ -1540,6 +1575,8 @@ module.exports = {
   recall,
   redactObviousSecrets,
   readProjectsContext,
+  stripProjectsJournalSection,
+  projectsContextCutoverEnabled,
   readSessionThread,
   setProjectsContextProvider,
   startupBrief,

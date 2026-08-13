@@ -201,6 +201,27 @@ test('named profiles require bounded caller scope and carry the temporal window'
   assert.equal(unknown.code, 'PROJECTS_QUERY_UNAVAILABLE');
 });
 
+test('hydration cutover removes raw Paperclip and Journal project orientation', async () => {
+  const provider = { read: async ({ query }) => ({ status: 'ok', packet: { ...packet(), query } }) };
+  setProjectsContextProvider(provider);
+  await withTempContextEnv(async () => {
+    const dateParts = Object.fromEntries(new Intl.DateTimeFormat('en-US', {
+      timeZone: 'UTC', year: 'numeric', month: '2-digit', day: '2-digit',
+    }).formatToParts(new Date()).map((part) => [part.type, part.value]));
+    const date = `${dateParts.year}-${dateParts.month}-${dateParts.day}`;
+    fs.writeFileSync(path.join(process.env.JARVOS_JOURNAL_DIR, `${date}.md`), [
+      '# Journal', '', '## 🚀 Projects', '', '- [[jarvOS v1.0.0 release]]', '', '## Notes', '', 'Worked on the release reconciler.',
+    ].join('\n'));
+    const result = await hydrate({ sessionThread: false, maxChars: 5000, projectsContextCutover: true });
+    assert.equal(result.report.projectsContext.status, 'ok');
+    assert.doesNotMatch(result.markdown, /Paperclip Current Work|jarvOS v1\.0\.0 release/);
+    assert.match(result.markdown, /Worked on the release reconciler/);
+    assert.match(result.markdown, /legacy project\/task orientation disabled/);
+    assert.match(result.markdown, /Journal Projects section omitted/);
+  });
+  setProjectsContextProvider(null);
+});
+
 test('invalid host Projects bindings fail closed without exposing host paths', async () => {
   setMcpProjectsContextProvider(null);
   await withHostProjectsProvider(async ({ config, root }) => {
