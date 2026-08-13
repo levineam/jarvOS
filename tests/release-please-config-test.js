@@ -8,6 +8,7 @@ const test = require('node:test');
 
 const ROOT = join(__dirname, '..');
 const BASELINE = 'd730524c900694c4b375875f4662848720e31778';
+const APP_TOKEN_ACTION_SHA = 'bcd2ba49218906704ab6c1aa796996da409d3eb1';
 const ACTION_SHA = '16a9c90856f42705d54a6fda1823352bdc62cf38';
 
 function readJson(name) {
@@ -30,9 +31,13 @@ test('runs only from trusted main pushes with immutable action and App-token rel
   const workflow = readFileSync(join(ROOT, '.github/workflows/release-please.yml'), 'utf8');
   assert.match(workflow, /push:\s*\n\s+branches:\s*\n\s+- main/);
   assert.doesNotMatch(workflow, /pull_request:/);
+  assert.match(workflow, new RegExp(`actions/create-github-app-token@${APP_TOKEN_ACTION_SHA}`));
   assert.match(workflow, new RegExp(`googleapis/release-please-action@${ACTION_SHA}`));
   assert.doesNotMatch(workflow, /@v\d/);
-  assert.match(workflow, /secrets\.JARVOS_RELEASE_PLEASE_APP_TOKEN/);
+  assert.match(workflow, /secrets\.JARVOS_RELEASE_PLEASE_APP_CLIENT_ID/);
+  assert.match(workflow, /secrets\.JARVOS_RELEASE_PLEASE_APP_PRIVATE_KEY/);
+  assert.match(workflow, /steps\.app-token\.outputs\.token/);
+  assert.doesNotMatch(workflow, /JARVOS_RELEASE_PLEASE_APP_TOKEN/);
   assert.doesNotMatch(workflow, /secrets\.GITHUB_TOKEN/);
   assert.match(workflow, /contents: write/);
   assert.match(workflow, /pull-requests: write/);
