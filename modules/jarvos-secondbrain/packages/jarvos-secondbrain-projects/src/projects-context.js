@@ -221,6 +221,34 @@ function classifySummaries(summaries) {
   return { activity, currentWork, attention };
 }
 
+function validateActivityWindow(activityWindow) {
+  if (activityWindow === null || activityWindow === undefined) return null;
+  if (!exactKeys(activityWindow, ['from', 'to', 'localDate', 'timeZone'])) throw new TypeError('activity window has unsupported fields');
+  if (typeof activityWindow.timeZone !== 'string' || !activityWindow.timeZone.trim()) throw new TypeError('activity window timeZone is required');
+  if (typeof activityWindow.localDate !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(activityWindow.localDate)) throw new TypeError('activity window localDate is invalid');
+  const from = Date.parse(activityWindow.from);
+  const to = Date.parse(activityWindow.to);
+  if (!Number.isFinite(from) || !Number.isFinite(to) || from >= to) throw new TypeError('activity window bounds are invalid');
+  return {
+    from: new Date(from).toISOString(),
+    to: new Date(to).toISOString(),
+    localDate: activityWindow.localDate,
+    timeZone: activityWindow.timeZone,
+  };
+}
+
+function filterSummariesByWindow(summaries, activityWindow) {
+  const window = validateActivityWindow(activityWindow);
+  if (!window) return summaries;
+  const from = Date.parse(window.from);
+  const to = Date.parse(window.to);
+  return summaries.filter((summary) => {
+    if (!summary.occurredAt) return false;
+    const occurred = Date.parse(summary.occurredAt);
+    return Number.isFinite(occurred) && occurred >= from && occurred < to;
+  });
+}
+
 function redactEvidence(summary) {
   return {
     source: summary.source, id: summary.id, canonicalId: summary.canonicalId,
@@ -323,9 +351,11 @@ function validateContextPacket(packet) {
   return { ok: true, packet };
 }
 
-function buildContextPacket({ registry, query, providers = {}, providerAuthorities = {}, capability, capabilitySecret, subject, hostId, now = new Date().toISOString() } = {}) {
+function buildContextPacket({ registry, query, providers = {}, providerAuthorities = {}, capability, capabilitySecret, subject, hostId, activityWindow = null, now = new Date().toISOString() } = {}) {
   let normalizedQuery;
   try { normalizedQuery = validateContextQuery(query); } catch (_) { return { status: 'unavailable', code: 'CONTEXT_UNAVAILABLE' }; }
+  let normalizedActivityWindow;
+  try { normalizedActivityWindow = validateActivityWindow(activityWindow); } catch (_) { return { status: 'unavailable', code: 'CONTEXT_UNAVAILABLE' }; }
   if (typeof hostId !== 'string' || !hostId.trim()) return { status: 'unavailable', code: 'CONTEXT_UNAVAILABLE' };
   const verification = verifyCapability(capability, {
     hostSecret: capabilitySecret,
@@ -374,7 +404,9 @@ function buildContextPacket({ registry, query, providers = {}, providerAuthoriti
       now, maxAgeSeconds: normalizedQuery.limits.maxProviderAgeSeconds, selectedIds, redactionClass, authority: providerAuthorities[provider],
     });
     providerResults[provider] = result.view;
-    allSummaries.push(...result.summaries);
+    const summaries = filterSummariesByWindow(result.summaries, normalizedActivityWindow);
+    if (normalizedActivityWindow) providerResults[provider] = { ...result.view, itemCount: summaries.length };
+    allSummaries.push(...summaries);
     packetOmissions.push(...result.omissions);
   }
   allSummaries.sort(summarySort);
@@ -415,6 +447,8 @@ module.exports = {
   QUERY_FIELDS,
   SUMMARY_FIELDS,
   buildContextPacket,
+  filterSummariesByWindow,
+  validateActivityWindow,
   validateContextPacket,
   validateContextQuery,
 };

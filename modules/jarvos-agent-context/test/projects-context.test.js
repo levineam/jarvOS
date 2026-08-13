@@ -19,7 +19,7 @@ const {
 } = require('../scripts/jarvos-mcp.js');
 
 const QUERY = {
-  scope: { projectIds: [], outcomeIds: [], includeDescendants: false },
+  scope: { projectIds: ['prj_000001'], outcomeIds: ['out_000001'], includeDescendants: false },
   include: ['hierarchy', 'activity', 'currentWork', 'attention'],
   limits: { maxItems: 12, maxBytes: 9000, maxProviderAgeSeconds: 3600 },
 };
@@ -123,7 +123,7 @@ test('library and MCP use the same injected Projects packet and fingerprint', as
   const provider = { read: async ({ query }) => ({ status: 'ok', packet: { ...packet(), query } }) };
   const libraryResult = await readProjectsContext({ provider, query: QUERY });
   setMcpProjectsContextProvider(provider);
-  const mcpResult = await callTool('jarvos_projects_context', {});
+  const mcpResult = await callTool('jarvos_projects_context', { query: QUERY });
   const mcpPayload = JSON.parse(mcpResult.content[0].text);
 
   assert.equal(libraryResult.status, 'ok');
@@ -147,14 +147,49 @@ test('missing Projects capability leaves legacy hydration available and reports 
 test('host Projects binding is discovered privately with library and MCP parity', async () => {
   setMcpProjectsContextProvider(null);
   await withHostProjectsProvider(async () => {
-    const libraryResult = await readProjectsContext({ query: QUERY });
-    const mcpPayload = JSON.parse((await callTool('jarvos_projects_context', {})).content[0].text);
+    const libraryResult = await readProjectsContext({ profile: 'orientation' });
+    const mcpPayload = JSON.parse((await callTool('jarvos_projects_context', { profile: 'orientation' })).content[0].text);
     const hydration = await hydrate({ sessionThread: false, maxChars: 3000 });
     assert.equal(libraryResult.status, 'ok');
     assert.equal(mcpPayload.status, 'ok');
     assert.equal(mcpPayload.fingerprint, libraryResult.fingerprint);
     assert.equal(hydration.report.projectsContext.status, 'ok');
   });
+});
+
+test('named profiles require bounded caller scope and carry the temporal window', async () => {
+  const requests = [];
+  const provider = {
+    read: async (request) => {
+      requests.push(request);
+      return { status: 'ok', packet: { ...packet(), query: request.query } };
+    },
+  };
+  const result = await readProjectsContext({
+    provider,
+    profile: 'recent-activity',
+    projectIds: ['prj_000001'],
+    outcomeIds: ['out_000001'],
+    includeDescendants: true,
+    date: '2026-08-12',
+    timeZone: 'America/New_York',
+    now: '2026-08-13T02:00:00.000Z',
+  });
+  assert.equal(result.status, 'ok');
+  assert.equal(result.profile.name, 'recent-activity');
+  assert.equal(result.activityWindow.from, '2026-08-12T04:00:00.000Z');
+  assert.equal(requests[0].profile.name, 'recent-activity');
+  assert.deepEqual(requests[0].query.scope, {
+    projectIds: ['prj_000001'], outcomeIds: ['out_000001'], includeDescendants: true,
+  });
+  assert.equal(requests[0].activityWindow.to, '2026-08-13T04:00:00.000Z');
+
+  const unscoped = await readProjectsContext({ provider, profile: 'orientation' });
+  assert.equal(unscoped.status, 'unavailable');
+  assert.equal(unscoped.code, 'PROJECTS_QUERY_UNAVAILABLE');
+  const unknown = await readProjectsContext({ provider, profile: 'portfolio', projectIds: ['prj_000001'] });
+  assert.equal(unknown.status, 'unavailable');
+  assert.equal(unknown.code, 'PROJECTS_QUERY_UNAVAILABLE');
 });
 
 test('invalid host Projects bindings fail closed without exposing host paths', async () => {

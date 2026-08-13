@@ -346,6 +346,63 @@ function normalizeProjectsQuery(options = {}) {
   };
 }
 
+function loadProjectsContextProfiles() {
+  return require(path.join(
+    JARVOS_ROOT,
+    'modules',
+    'jarvos-secondbrain',
+    'packages',
+    'jarvos-secondbrain-projects',
+    'src',
+    'projects-context-profiles.js',
+  ));
+}
+
+function hasCallerProjectsScope(options = {}) {
+  if (options.scope && typeof options.scope === 'object' && !Array.isArray(options.scope)) return true;
+  return Object.prototype.hasOwnProperty.call(options, 'projectIds')
+    || Object.prototype.hasOwnProperty.call(options, 'outcomeIds')
+    || Object.prototype.hasOwnProperty.call(options, 'includeDescendants');
+}
+
+function hasNonEmptyProjectsScope(query) {
+  return Boolean(query?.scope)
+    && (Array.isArray(query.scope.projectIds) && query.scope.projectIds.length > 0
+      || Array.isArray(query.scope.outcomeIds) && query.scope.outcomeIds.length > 0);
+}
+
+function resolveProjectsRequest(options, hostProvider) {
+  const profiles = loadProjectsContextProfiles();
+  const hasQuery = Boolean(options.query && typeof options.query === 'object' && !Array.isArray(options.query));
+  const hasScope = hasCallerProjectsScope(options);
+  const profileName = firstString(options.profile);
+  const hostAuthorizedDefault = Boolean(hostProvider && !hasQuery && !hasScope);
+
+  if (profileName || hostAuthorizedDefault) {
+    const profile = profiles.resolveQueryProfile(profileName || 'orientation', {
+      scope: hasScope ? (options.scope || {
+        projectIds: options.projectIds,
+        outcomeIds: options.outcomeIds,
+        includeDescendants: options.includeDescendants,
+      }) : hostProvider?.defaultQuery?.scope,
+      authorizedScope: hostAuthorizedDefault,
+      now: options.now || new Date(),
+      timeZone: firstString(options.timeZone, process.env.JARVOS_TIMEZONE, 'UTC') || 'UTC',
+      date: options.date,
+      from: options.from,
+      to: options.to,
+    });
+    return { query: profile.query, profile, activityWindow: profile.activityWindow };
+  }
+
+  if (!hasQuery && !hasScope) {
+    throw new TypeError('a named Projects profile or canonical scope is required');
+  }
+  const query = normalizeProjectsQuery(options);
+  if (!hasNonEmptyProjectsScope(query)) throw new TypeError('Projects caller scope must identify a project or outcome');
+  return { query, profile: null, activityWindow: null };
+}
+
 function renderProjectsContextMarkdown(result, maxChars = 3600) {
   if (!result || result.status !== 'ok' || !result.packet) {
     return `## Projects Context\nUnavailable: ${safeProjectsReason(result?.reason, 'Projects provider is not configured')}.`;
@@ -394,6 +451,8 @@ function normalizeProjectsContextResult(value, request = {}) {
       code: value?.code || 'PROJECTS_CONTEXT_UNAVAILABLE',
       reason: safeProjectsReason(value?.reason || value?.error),
       query: request.query || null,
+      profile: request.profile || null,
+      activityWindow: request.activityWindow || null,
       packet: null,
       fingerprint: null,
       markdown: renderProjectsContextMarkdown({ status: 'unavailable', reason: value?.reason || value?.error }),
@@ -428,6 +487,8 @@ function normalizeProjectsContextResult(value, request = {}) {
       code: 'PROJECTS_CONTEXT_INVALID',
       reason: 'provider returned an invalid Projects context packet',
       query: request.query || null,
+      profile: request.profile || null,
+      activityWindow: request.activityWindow || null,
       packet: null,
       fingerprint: null,
       markdown: renderProjectsContextMarkdown({ status: 'unavailable', reason: 'provider returned an invalid Projects context packet' }),
@@ -439,6 +500,8 @@ function normalizeProjectsContextResult(value, request = {}) {
     status: 'ok',
     contract: PROJECTS_CONTEXT_CONTRACT,
     query: raw.query || request.query || null,
+    profile: request.profile || null,
+    activityWindow: request.activityWindow || null,
     packet: raw,
     fingerprint,
     markdown: '',
@@ -461,15 +524,34 @@ async function readProjectsContext(options = {}) {
   const provider = Object.prototype.hasOwnProperty.call(options, 'provider')
     ? options.provider
     : (options.projectsProvider || configuredProjectsContextProvider || hostProvider);
-  const query = normalizeProjectsQuery(options);
+  let resolved;
+  try {
+    resolved = resolveProjectsRequest(options, hostProvider);
+  } catch (error) {
+    const request = {
+      contract: PROJECTS_CONTEXT_CONTRACT,
+      query: null,
+      profile: firstString(options.profile) || null,
+      activityWindow: null,
+      subject: firstString(options.subject, 'active-assistant') || 'active-assistant',
+      hostId: firstString(options.hostId, 'agent-context') || 'agent-context',
+      redactionClass: firstString(options.redactionClass, 'private') || 'private',
+      maxChars: Number(options.maxChars || 3600),
+    };
+    return normalizeProjectsContextResult({ status: 'unavailable', code: 'PROJECTS_QUERY_UNAVAILABLE', reason: 'Projects query is unavailable' }, request);
+  }
+  const { query, profile, activityWindow } = resolved;
   const request = {
     contract: PROJECTS_CONTEXT_CONTRACT,
     query,
+    profile,
+    activityWindow,
     subject: firstString(options.subject, 'active-assistant') || 'active-assistant',
     hostId: firstString(options.hostId, 'agent-context') || 'agent-context',
     redactionClass: firstString(options.redactionClass, 'private') || 'private',
     maxChars: Number(options.maxChars || 3600),
   };
+  if (profile) request.profile = profile;
   if (!provider) return normalizeProjectsContextResult({ status: 'unavailable', code: 'PROJECTS_PROVIDER_UNAVAILABLE', reason: 'Projects provider is not configured' }, request);
   const reader = typeof provider === 'function' ? provider : provider.read;
   try {

@@ -35,6 +35,7 @@
     "./migrate": "./src/migrate.js",
     "./journal-projection": "./src/journal-projection.js",
     "./activity-store": "./src/activity-store.js",
-    "./projects-context-handoff": "./src/projects-context-handoff.js"
+    "./projects-context-handoff": "./src/projects-context-handoff.js",
+    "./projects-context-profiles": "./src/projects-context-profiles.js"
   }
 }
