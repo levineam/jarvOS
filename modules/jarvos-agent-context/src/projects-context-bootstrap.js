@@ -125,6 +125,9 @@ function createHostProjectsContextProvider(env = process.env) {
   if (!provider || typeof provider.read !== 'function') return null;
 
   return {
+    defaultQuery: config.query && typeof config.query === 'object' && !Array.isArray(config.query)
+      ? JSON.parse(JSON.stringify(config.query))
+      : null,
     async read(request) {
       // Values from the host binding win over all model-visible request keys.
       return provider.read({
@@ -145,7 +148,7 @@ function createHostProjectsContextProvider(env = process.env) {
         releaseProviderSecret: hostSecretPath ? readPrivate(hostSecretPath) : null,
         hostId: typeof config.hostId === 'string' && config.hostId.trim() ? config.hostId.trim() : request.hostId,
         subject: typeof config.subject === 'string' && config.subject.trim() ? config.subject.trim() : request.subject,
-        query: config.query && typeof config.query === 'object' && !Array.isArray(config.query)
+        query: !request.profile && config.query && typeof config.query === 'object' && !Array.isArray(config.query)
           ? JSON.parse(JSON.stringify(config.query))
           : request.query,
         releaseProducerId: typeof config.releaseProducerId === 'string' && config.releaseProducerId.trim()
