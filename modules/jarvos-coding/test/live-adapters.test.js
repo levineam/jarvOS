@@ -78,6 +78,26 @@ test('Beads preflight rejects an unpinned version before mutation', async () => 
   await assert.rejects(() => tracker.createWorkItem({ title: 'must not run', operationId: 'op-version-1' }), /version is unsupported/);
 });
 
+test('Beads caller validation happens before an operation is prepared', async () => {
+  const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-beads-input-validation-'));
+  const calls = [];
+  const tracker = createLiveBeadsTracker({
+    workspaceRoot,
+    run(command, args) {
+      calls.push(args);
+      if (args[0] === '--version') return { status: 0, stdout: 'br v0.2.19', stderr: '' };
+      if (args[0] === 'capabilities') return { status: 0, stdout: JSON.stringify({ capabilities: ['create', 'update', 'dependency', 'checkpoint'] }), stderr: '' };
+      if (args[0] === 'schema') return { status: 0, stdout: JSON.stringify({ schema: 'beads/v1' }), stderr: '' };
+      if (args[0] === 'where') return { status: 0, stdout: workspaceRoot, stderr: '' };
+      return { status: 0, stdout: JSON.stringify({ id: 'bd-input' }), stderr: '' };
+    },
+  });
+  await assert.rejects(() => tracker.createWorkItem({ title: '', operationId: 'op-input-1' }), /create title is required/);
+  const valid = await tracker.createWorkItem({ title: 'valid after correction', operationId: 'op-input-1' });
+  assert.equal(valid.state, 'committed');
+  assert.equal(calls.filter((args) => args[0] === 'create').length, 1);
+});
+
 test('prepared Beads operations reconcile before replay after an uncertain launch', async () => {
   const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-beads-reconcile-'));
   const operationStore = new Map();

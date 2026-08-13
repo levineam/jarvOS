@@ -558,7 +558,6 @@ async function readProjectsContext(options = {}, internalAuthorizedScope = false
     redactionClass: firstString(options.redactionClass, 'private') || 'private',
     maxChars: Number(options.maxChars || 3600),
   };
-  if (profile) request.profile = profile;
   if (!provider) return normalizeProjectsContextResult({ status: 'unavailable', code: 'PROJECTS_PROVIDER_UNAVAILABLE', reason: 'Projects provider is not configured' }, request);
   const reader = typeof provider === 'function' ? provider : provider.read;
   try {
@@ -1216,10 +1215,12 @@ async function hydrate(options = {}) {
   }
 
   const journal = findTodayJournal(jarvosPaths, options.journal || {});
+  const projectSafeJournal = journal.ok && projectsCutover
+    ? stripProjectsJournalSection(journal.content)
+    : journal.content;
   if (journal.ok) {
-    const journalContent = projectsCutover ? stripProjectsJournalSection(journal.content) : journal.content;
-    if (projectsCutover && journalContent !== journal.content) report.omissions.push('Journal Projects section omitted after Projects cutover');
-    parts.push('', '# Today Journal', '', truncateText(journalContent, Number(options.journalMaxChars || 3200), 'today journal', report));
+    if (projectsCutover && projectSafeJournal !== journal.content) report.omissions.push('Journal Projects section omitted after Projects cutover');
+    parts.push('', '# Today Journal', '', truncateText(projectSafeJournal, Number(options.journalMaxChars || 3200), 'today journal', report));
     report.sources.push(journal.path);
     report.handles.push(`Journal: ${journal.path}`);
   } else {
@@ -1245,8 +1246,7 @@ async function hydrate(options = {}) {
   }
 
   try {
-    const linkedJournal = journal.ok && projectsCutover ? stripProjectsJournalSection(journal.content) : journal.content;
-    const linkedNotes = journal.ok ? collectLinkedNotes(linkedJournal, jarvosPaths, options.linkedNotes || {}, report) : [];
+    const linkedNotes = journal.ok ? collectLinkedNotes(projectSafeJournal, jarvosPaths, options.linkedNotes || {}, report) : [];
     if (linkedNotes.length) {
       parts.push('', '# Notes Linked From Today');
       for (const note of linkedNotes) {

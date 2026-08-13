@@ -4,6 +4,9 @@ const PROJECTS_ACTIVITY_EMITTER_SCHEMA_VERSION = 'jarvos-coding-projects-activit
 const MILESTONE_STAGES = Object.freeze([
   'claim', 'branch', 'sliceReview', 'holisticReview', 'fixRerun', 'pullRequest', 'postMergeSweep', 'verifyClose',
 ]);
+const NON_DURABLE_STAGE_STATUSES = new Set([
+  'failed', 'error', 'not_found', 'skipped', 'deferred', 'blocked', 'pending', 'incomplete', 'indeterminate', 'unavailable',
+]);
 
 function requiredString(value, field) {
   if (typeof value !== 'string' || !value.trim()) throw new Error(`${field} is required`);
@@ -23,7 +26,7 @@ function createProjectsActivityEmitter({ authority, activityStore, producerId = 
     async recordMilestone(input = {}) {
       const stage = requiredString(input.stage, 'activity stage');
       if (!MILESTONE_STAGES.includes(stage)) return { status: 'skipped', reason: 'unsupported-stage', stage };
-      if (input.result?.ok === false || ['failed', 'error', 'not_found'].includes(String(input.result?.status || '').toLowerCase())) {
+      if (input.result?.ok === false || NON_DURABLE_STAGE_STATUSES.has(String(input.result?.status || '').toLowerCase())) {
         return { status: 'skipped', reason: 'stage-not-durable', stage };
       }
       const canonicalId = canonicalIdOf(input);
@@ -31,10 +34,10 @@ function createProjectsActivityEmitter({ authority, activityStore, producerId = 
       if (!authority || typeof authority.admitVerifiedReceipt !== 'function' || !activityStore || typeof activityStore.admit !== 'function') {
         return { status: 'unavailable', reason: 'activity-admission-unavailable', stage };
       }
-      const runId = requiredString(
-        input.runId || input.operationId || input.workReference?.operationId || input.workReference?.itemId || input.issueIdentifier,
-        'activity run identity',
-      );
+      if (typeof input.runId !== 'string' || !input.runId.trim()) {
+        return { status: 'unavailable', reason: 'activity-run-identity-required', stage };
+      }
+      const runId = requiredString(input.runId, 'activity run identity');
       const eventId = `coding:${runId}:${stage}`;
       const receipt = authority.admitVerifiedReceipt({
         contract: 'jarvos.verified-activity/v1',

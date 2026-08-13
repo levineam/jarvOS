@@ -254,11 +254,15 @@ function createLiveBeadsTracker(options = {}) {
       } else return { ...existing, status: 'indeterminate', retryable: false };
     }
     await ensureReady();
+    // Build and validate argv before persisting the prepared record. Caller
+    // input errors are not uncertain I/O and must not poison an idempotency
+    // key with an execution-uncertain state.
+    const args = mappedArgs(method, input, operationId);
     const prepared = { schemaVersion: BEADS_TRACKER_SCHEMA_VERSION, operationId, method, fingerprint, expectation, state: 'prepared', actor, workspaceRoot };
     await operationStore.write(prepared);
     let result;
     try {
-      result = invoke(mappedArgs(method, input, operationId));
+      result = invoke(args);
     } catch (error) {
       const indeterminate = { ...prepared, state: 'indeterminate', status: 'indeterminate', retryable: false, errorCode: 'EXECUTION_UNCERTAIN' };
       await operationStore.write(indeterminate);

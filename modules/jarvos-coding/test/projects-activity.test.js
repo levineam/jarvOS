@@ -75,6 +75,26 @@ test('failed coding stages do not produce verified activity', async () => {
   assert.equal(store.query({}).activities.length, 0);
 });
 
+test('deferred coding stages do not become durable Projects activity', async () => {
+  const { authority, store } = fixture();
+  const emitter = createProjectsActivityEmitter({ authority, activityStore: store });
+  const result = await emitter.recordMilestone({
+    stage: 'verifyClose', canonicalId: 'out_000001', runId: 'run-deferred', result: { status: 'deferred', ok: true },
+  });
+  assert.deepEqual(result, { status: 'skipped', reason: 'stage-not-durable', stage: 'verifyClose' });
+  assert.equal(store.query({}).activities.length, 0);
+});
+
+test('coding activity requires a run-scoped identity instead of guessing from a work item', async () => {
+  const { authority, store } = fixture();
+  const emitter = createProjectsActivityEmitter({ authority, activityStore: store });
+  const result = await emitter.recordMilestone({
+    stage: 'claim', canonicalId: 'out_000001', workReference: { authority: 'beads', itemId: 'bd-1' }, result: { status: 'claimed', ok: true },
+  });
+  assert.deepEqual(result, { status: 'unavailable', reason: 'activity-run-identity-required', stage: 'claim' });
+  assert.equal(store.query({}).activities.length, 0);
+});
+
 test('the coding orchestrator emits activity only after each durable stage', async () => {
   const { authority, store } = fixture();
   const activity = createProjectsActivityEmitter({ authority, activityStore: store });
