@@ -44,6 +44,7 @@ function createCodexRuntime(options = {}) {
       ...(options.managedWorkflow || {}),
       workRunStore: store,
       nativeAdapter,
+      finishAdapters: options.managedWorkflow?.finishAdapters || liveAdapters,
       manifestPath: options.managedWorkflow?.manifestPath || path.resolve(__dirname, '../../providers/compound-engineering.json'),
       acceptancePolicy: repository.acceptancePolicy,
       ownerId: options.ownerId || 'jarvos-coding',

@@ -148,3 +148,19 @@ test('corrupt or incomplete durable state fails closed', () => {
   const store = createFileWorkRunStore(root);
   assert.throws(() => store.getWorkRun('run_bad'), /invalid work-run state/);
 });
+
+test('a contending file-store writer cannot remove the active lock', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-work-run-lock-'));
+  const store = createFileWorkRunStore(root);
+  fs.writeFileSync(store.paths.lockPath, 'active writer');
+  try {
+    assert.throws(() => store.claimWorkRun({
+      subjectKey: 'levineam/jarvOS:SUP-5001',
+      canonicalWorktree: '/private/jarvos/worktrees/SUP-5001',
+      ownerId: 'agent:one',
+    }), /work-run store is busy/);
+    assert.equal(fs.existsSync(store.paths.lockPath), true);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});

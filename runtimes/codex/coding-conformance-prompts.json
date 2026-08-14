@@ -1,0 +1,124 @@
+{
+  "schemaVersion": "jarvos-codex-coding-routing-prompts/v1",
+  "purpose": "Committed, public-safe prompts for measuring implicit Codex selection of the installed jarvOS coding skill.",
+  "thresholds": {
+    "managedIntentSelectionRate": 0.9,
+    "controlFalseManagedRunClaims": 0
+  },
+  "classes": [
+    {
+      "id": "plan",
+      "kind": "managed-intent",
+      "expectedOperation": "plan",
+      "minimumPrompts": 10,
+      "minimumSelectionRate": 0.9,
+      "prompts": [
+        "Plan the next small feature in the configured repository.",
+        "Create an implementation plan for the selected repository issue.",
+        "Help me plan a safe refactor in the configured repository.",
+        "Draft a coding plan for the approved repository work item.",
+        "Plan the requested bug fix using the configured jarvOS repository.",
+        "Start planning the repository task I selected.",
+        "Prepare a technical plan for this repository change.",
+        "I need a plan before implementation begins in the configured repository.",
+        "Make a plan for the current approved coding task.",
+        "Plan this non-trivial change in the jarvOS-managed repository."
+      ]
+    },
+    {
+      "id": "work",
+      "kind": "managed-intent",
+      "expectedOperation": "work",
+      "minimumPrompts": 10,
+      "minimumSelectionRate": 0.9,
+      "prompts": [
+        "Implement the accepted plan in the configured repository.",
+        "Start work on the approved repository plan.",
+        "Carry out the accepted coding packet.",
+        "Do the next step of the approved implementation work.",
+        "Begin the accepted repository change now.",
+        "Work on the accepted plan for this managed repository.",
+        "Apply the approved implementation plan.",
+        "Continue implementation using the accepted plan.",
+        "Execute the accepted coding work item.",
+        "Make the approved repository change."
+      ]
+    },
+    {
+      "id": "resume",
+      "kind": "managed-intent",
+      "expectedOperation": "resume",
+      "minimumPrompts": 10,
+      "minimumSelectionRate": 0.9,
+      "prompts": [
+        "Resume the managed coding run.",
+        "Continue the existing repository work run.",
+        "Pick up the approved implementation after restart.",
+        "Resume the current jarvOS coding task.",
+        "Reattach to the existing accepted-plan run.",
+        "Continue the paused managed repository work.",
+        "Resume work from the durable coding run.",
+        "Pick up where the approved repository plan left off.",
+        "Recover the in-progress jarvOS coding workflow.",
+        "Resume the current implementation run."
+      ]
+    },
+    {
+      "id": "finish",
+      "kind": "managed-intent",
+      "expectedOperation": "finish",
+      "minimumPrompts": 10,
+      "minimumSelectionRate": 0.9,
+      "prompts": [
+        "Finish the managed coding run and verify it.",
+        "Complete the accepted repository work.",
+        "Verify and finish the current coding run.",
+        "Close out the managed implementation after verification.",
+        "Finish this approved jarvOS coding task.",
+        "Complete the current repository work run.",
+        "Run the final verification and finish the accepted work.",
+        "Finalize the managed coding workflow.",
+        "Finish the current implementation run safely.",
+        "Complete the approved repository change."
+      ]
+    },
+    {
+      "id": "unrelated-question",
+      "kind": "control",
+      "expectedOperation": null,
+      "minimumPrompts": 10,
+      "maximumFalseManagedRunClaims": 0,
+      "prompts": [
+        "What is the difference between a map and a set?",
+        "Summarize this paragraph in one sentence.",
+        "What does HTTP status 404 mean?",
+        "Explain a JavaScript closure.",
+        "What is the capital of France?",
+        "Give me a concise meeting agenda.",
+        "How do I rename a Git branch?",
+        "What is a healthy lunch idea?",
+        "Explain the word idempotent.",
+        "Write a friendly thank-you note."
+      ]
+    },
+    {
+      "id": "unmanaged-raw-edit",
+      "kind": "control",
+      "expectedOperation": null,
+      "minimumPrompts": 10,
+      "maximumFalseManagedRunClaims": 0,
+      "prompts": [
+        "Change the typo in the file I have open.",
+        "Add a comment to this code snippet.",
+        "Format this JSON without starting a work run.",
+        "Explain the diff I pasted below.",
+        "Suggest a better variable name for this function.",
+        "Review this standalone code sample.",
+        "Translate this error message into plain English.",
+        "Show me how to write a unit test for this isolated function.",
+        "Rewrite this shell command more clearly.",
+        "List likely edge cases for this code fragment."
+      ]
+    }
+  ]
+}

@@ -21,6 +21,11 @@ const SUBJECT = 'CONFORM-1';
 const packet = { version: 'jarvos-implementation-packet/v1', planDigest: DIGEST, summary: 'Apply the accepted fixture change.', steps: [{ id: 'step_01', description: 'Update the public fixture.', files: ['fixture.txt'] }] };
 
 function sha(value) { return crypto.createHash('sha256').update(value).digest('hex'); }
+function stableJson(value) {
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`;
+  if (value && typeof value === 'object') return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${stableJson(value[key])}`).join(',')}}`;
+  return JSON.stringify(value);
+}
 function run(command, args, cwd) {
   const result = spawnSync(command, args, { cwd, encoding: 'utf8' });
   assert.equal(result.status, 0, result.stderr || result.stdout);
@@ -155,6 +160,37 @@ function receiptValidation(receipt, revision) {
   return null;
 }
 
+function routingConformance(receipt, corpus, revision) {
+  const managed = corpus?.classes?.filter((entry) => entry.kind === 'managed-intent') || [];
+  const controls = corpus?.classes?.filter((entry) => entry.kind === 'control') || [];
+  const errors = [];
+  if (corpus?.schemaVersion !== 'jarvos-codex-coding-routing-prompts/v1') errors.push('prompt corpus schema is invalid');
+  if (managed.length < 1 || controls.length < 1) errors.push('prompt corpus must include managed and control classes');
+  for (const entry of managed) {
+    if (!Array.isArray(entry.prompts) || entry.prompts.length < 10) errors.push(`${entry.id} has fewer than 10 prompts`);
+    if (entry.minimumPrompts !== 10 || entry.minimumSelectionRate !== 0.9) errors.push(`${entry.id} does not declare the 90% threshold`);
+  }
+  for (const entry of controls) {
+    if (!Array.isArray(entry.prompts) || entry.prompts.length < 10) errors.push(`${entry.id} has fewer than 10 prompts`);
+    if (entry.minimumPrompts !== 10 || entry.maximumFalseManagedRunClaims !== 0) errors.push(`${entry.id} does not declare the zero-false threshold`);
+  }
+  if (receipt?.schemaVersion !== 'jarvos-codex-coding-routing-conformance/v1') errors.push('routing receipt schema is invalid');
+  if (receipt?.jarvosRevision !== revision) errors.push('routing receipt is stale');
+  if (receipt?.promptCorpus?.digest !== sha(stableJson(corpus))) errors.push('routing receipt prompt digest is stale');
+  if (receipt?.directInvocation?.status !== 'passed') errors.push('deterministic direct invocation is not proven');
+  const naturalRoutingClaimAllowed = receipt?.status === 'passed'
+    && errors.length === 0
+    && managed.every((entry) => {
+      const result = receipt.results?.find((candidate) => candidate.classId === entry.id);
+      return result && result.promptCount >= entry.minimumPrompts && result.selected / result.promptCount >= entry.minimumSelectionRate;
+    })
+    && controls.every((entry) => {
+      const result = receipt.results?.find((candidate) => candidate.classId === entry.id);
+      return result && result.promptCount >= entry.minimumPrompts && result.falseManagedRunClaims === 0;
+    });
+  return { errors, naturalRoutingClaimAllowed };
+}
+
 test('clean-profile public MCP lifecycle is deterministic, gated, recoverable, and public-safe', async () => {
   const f = fixture();
   try {
@@ -170,7 +206,7 @@ test('clean-profile public MCP lifecycle is deterministic, gated, recoverable, a
     const denied = await tool(f, 'jarvos_coding_accept_plan', { ...base, planDigest: DIGEST, packet });
     assert.equal(denied.status, 'awaiting-plan-acceptance');
 
-    coding.recordOwnerAction({ registryPath: f.registryPath, repositoryId: f.repositoryId, action: 'accept-plan', runId: RUN_ID, revision: DIGEST });
+    coding.recordOwnerAction({ registryPath: f.registryPath, repositoryId: f.repositoryId, action: 'accept-plan', runId: RUN_ID, revision: DIGEST, packetDigest: sha(JSON.stringify(packet)) });
     const accepted = await tool(f, 'jarvos_coding_accept_plan', { ...base, planDigest: DIGEST, packet, artifact: { reference: 'artifact:plan_fixture_001' } });
     assert.equal(accepted.ok, true);
     const worked = await tool(f, 'jarvos_coding_work', { ...base, planDigest: DIGEST, packet });
@@ -208,12 +244,27 @@ test('receipt contract fails closed for stale, incomplete, and status-only claim
   assert.doesNotMatch(JSON.stringify(receipt), /\/Users\/|clawd|Bearer\s|api[_-]?key|token\s*[:=]|secret\s*[:=]/i);
 });
 
+test('routing conformance keeps natural claims behind current live evidence while preserving direct invocation', () => {
+  const corpus = require(path.join(ROOT, 'runtimes/codex/coding-conformance-prompts.json'));
+  const receipt = require(path.join(ROOT, 'runtimes/codex/coding-routing-conformance.json'));
+  const current = routingConformance(receipt, corpus, receipt.jarvosRevision);
+  assert.deepEqual(current.errors, []);
+  assert.equal(current.naturalRoutingClaimAllowed, false, 'an unavailable live receipt cannot support natural-routing claims');
+  assert.equal(receipt.directInvocation.status, 'passed', 'deterministic direct invocation remains a separately proven claim');
+
+  assert.match(routingConformance({ ...receipt, jarvosRevision: '0'.repeat(40) }, corpus, receipt.jarvosRevision).errors.join('\n'), /stale/);
+  assert.match(routingConformance({ ...receipt, status: 'unavailable', promptCorpus: { ...receipt.promptCorpus, digest: '0'.repeat(64) } }, corpus, receipt.jarvosRevision).errors.join('\n'), /prompt digest/);
+  const shortened = { ...corpus, classes: corpus.classes.map((entry) => entry.id === 'plan' ? { ...entry, prompts: entry.prompts.slice(0, 9) } : entry) };
+  assert.match(routingConformance(receipt, shortened, receipt.jarvosRevision).errors.join('\n'), /fewer than 10 prompts|prompt digest/);
+  assert.doesNotMatch(JSON.stringify({ corpus, receipt }), /\/Users\/|clawd|Bearer\s|api[_-]?key|token\s*[:=]|secret\s*[:=]/i);
+});
+
 test('incomplete public finish does not publish a learning', async () => {
   const f = fixture();
   try {
     const base = { repositoryId: f.repositoryId, subjectKey: SUBJECT, workRunId: RUN_ID };
     await tool(f, 'jarvos_coding_plan', { ...base, input: { kind: 'fixture', digest: DIGEST } });
-    coding.recordOwnerAction({ registryPath: f.registryPath, repositoryId: f.repositoryId, action: 'accept-plan', runId: RUN_ID, revision: DIGEST });
+    coding.recordOwnerAction({ registryPath: f.registryPath, repositoryId: f.repositoryId, action: 'accept-plan', runId: RUN_ID, revision: DIGEST, packetDigest: sha(JSON.stringify(packet)) });
     await tool(f, 'jarvos_coding_accept_plan', { ...base, planDigest: DIGEST, packet, artifact: { reference: 'artifact:plan_fixture_001' } });
     const finished = await tool(f, 'jarvos_coding_finish', { ...base, planDigest: DIGEST }, { deferredFinish: true });
     assert.equal(finished.primaryCompletion, 'deferred');

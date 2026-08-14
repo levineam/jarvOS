@@ -12,6 +12,7 @@ const {
   revokeProvisionedRepository,
   recordOwnerAction,
   resolveOwnerPlanAcceptance,
+  resolveOwnerLearningAction,
   loadRepositoryRegistry,
 } = require('../src');
 
@@ -75,10 +76,19 @@ test('owner plan acceptance resolves only a durable matching record', () => {
   const f = fixture();
   const added = provisionRepository({ registryPath: f.registryPath, repository: f.entry });
   const digest = 'a'.repeat(64);
-  recordOwnerAction({ registryPath: f.registryPath, repositoryId: added.repository.repositoryId, action: 'accept-plan', runId: 'run_1', revision: digest });
-  const evidence = resolveOwnerPlanAcceptance({ registryPath: f.registryPath, repositoryId: added.repository.repositoryId, runId: 'run_1', planDigest: digest });
-  assert.deepEqual({ source: evidence.source, planDigest: evidence.planDigest }, { source: 'owner-action-record', planDigest: digest });
-  assert.equal(resolveOwnerPlanAcceptance({ registryPath: f.registryPath, repositoryId: added.repository.repositoryId, runId: 'run_1', planDigest: 'b'.repeat(64) }), null);
+  const packetDigest = 'b'.repeat(64);
+  recordOwnerAction({ registryPath: f.registryPath, repositoryId: added.repository.repositoryId, action: 'accept-plan', runId: 'run_1', revision: digest, packetDigest });
+  const evidence = resolveOwnerPlanAcceptance({ registryPath: f.registryPath, repositoryId: added.repository.repositoryId, runId: 'run_1', planDigest: digest, packetDigest });
+  assert.deepEqual({ source: evidence.source, planDigest: evidence.planDigest, packetDigest: evidence.packetDigest }, { source: 'owner-action-record', planDigest: digest, packetDigest });
+  assert.equal(resolveOwnerPlanAcceptance({ registryPath: f.registryPath, repositoryId: added.repository.repositoryId, runId: 'run_1', planDigest: digest, packetDigest: 'c'.repeat(64) }), null);
+});
+
+test('owner learning actions resolve only for the current generation and fresh run', () => {
+  const f = fixture();
+  const added = provisionRepository({ registryPath: f.registryPath, repository: f.entry });
+  recordOwnerAction({ registryPath: f.registryPath, repositoryId: added.repository.repositoryId, action: 'decline-learning', runId: 'run_1' });
+  assert.equal(resolveOwnerLearningAction({ registryPath: f.registryPath, repositoryId: added.repository.repositoryId, action: 'decline-learning', runId: 'run_1' }).action, 'decline-learning');
+  assert.equal(resolveOwnerLearningAction({ registryPath: f.registryPath, repositoryId: added.repository.repositoryId, action: 'reset-learning-retry', runId: 'run_1' }), null);
 });
 
 test('provisioning fails closed for missing explicit authority and unsafe roots', () => {

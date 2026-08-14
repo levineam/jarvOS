@@ -282,9 +282,14 @@ const {
 } = require('@jarvos/coding');
 ```
 
-Both adapters register the `jarvos_coding_take_issue_to_done` MCP-style tool and
-a `jarvos-coding` skill descriptor when the host supplies a registry. Both call
-the same `runTakeIssueToDone` orchestrator.
+Both adapters can register the `jarvos_coding_take_issue_to_done` compatibility
+tool and a `jarvos-coding` skill descriptor when the host supplies a registry.
+Codex's managed public entry is the lifecycle
+`plan → accept-plan → work → finish/status/resume`; direct invocation is the
+deterministic access path. Natural routing is currently unavailable, so no
+global skill installation claims to intercept arbitrary edits or create a
+managed run automatically. Automatic learning applies only after a verified
+managed run in a configured repository.
 
 ---
 

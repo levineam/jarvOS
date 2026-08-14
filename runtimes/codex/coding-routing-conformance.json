@@ -1,0 +1,25 @@
+{
+  "schemaVersion": "jarvos-codex-coding-routing-conformance/v1",
+  "status": "unavailable",
+  "jarvosRevision": "4887f9cee38227d5984fbcf9db348368be1d82ea",
+  "sourceRevisionStrategy": "source-parent",
+  "reason": "No authenticated disposable Codex harness receipt is available in this public worktree; deterministic direct invocation remains the supported path.",
+  "promptCorpus": {
+    "path": "runtimes/codex/coding-conformance-prompts.json",
+    "digest": "c4ab9f8807f08d38f8cadb0fab2ac00331fbbcb0a9c594f331e61542d5fbae20",
+    "managedIntentMinimumSelectionRate": 0.9,
+    "controlMaximumFalseManagedRunClaims": 0
+  },
+  "harness": {
+    "codexVersion": null,
+    "model": null,
+    "projectedSkillDigest": null,
+    "mcpSchemaVersion": "2024-11-05"
+  },
+  "directInvocation": {
+    "status": "passed",
+    "evidence": "runtimes/codex/coding-lifecycle-conformance.json",
+    "operations": ["plan", "accept-plan", "work", "finish", "status", "resume"]
+  },
+  "results": []
+}

@@ -108,6 +108,7 @@ function createManagedCodingWorkflow(options = {}) {
   const manifest = resolveManifest(options);
   const providerAdapter = options.providerAdapter || {};
   const nativeAdapter = options.nativeAdapter || {};
+  const finishAdapters = options.finishAdapters || {};
   const ownerId = options.ownerId || 'jarvos-coding';
   const providerSnapshot = options.providerSnapshot || null;
   const providerSnapshotVerifier = options.providerSnapshotVerifier;
@@ -179,6 +180,7 @@ function createManagedCodingWorkflow(options = {}) {
       idempotencyKey: input.idempotencyKey || `${operation}:${claimed.workRunId}`,
       provider: null,
       canonicalWorktree: input.canonicalWorktree || claimed.workRun.canonicalWorktree,
+      issueIdentifier: input.issueIdentifier || input.issue?.identifier || input.subjectKey,
       input: clone(requestInput),
       args: [operation, claimed.workRunId, operationNonce],
       env: {
@@ -208,6 +210,61 @@ function createManagedCodingWorkflow(options = {}) {
       operationNonce: `recovery-work-${digest(invocation.operationNonce).slice(0, 24)}`,
       reasonCode: 'native_fallback_succeeded',
     });
+  }
+
+  function compactStage(value) {
+    if (!isObject(value)) return null;
+    const allowed = new Set(['status', 'state', 'ok', 'liveConfirmed', 'reattached', 'alreadyClosed', 'merged', 'url', 'number', 'artifact', 'summary', 'reason', 'reasonCode', 'notApplicable', 'clean', 'baseBranch', 'baseRef', 'intendedFiles', 'tests']);
+    const result = {};
+    for (const key of allowed) {
+      if (value[key] === undefined) continue;
+      if (key === 'tests' && Array.isArray(value[key])) result.tests = value[key].slice(0, 64).map((entry) => compactStage(entry)).filter(Boolean);
+      else if (['artifact', 'summary', 'reason', 'reasonCode', 'url', 'number', 'status', 'state', 'baseBranch', 'baseRef'].includes(key)) {
+        if (typeof value[key] === 'string' && value[key].length <= 500) result[key] = value[key];
+      } else if (key === 'intendedFiles' && Array.isArray(value[key])) result[key] = value[key].filter((entry) => typeof entry === 'string' && entry.length <= 300).slice(0, 128);
+      else if (typeof value[key] === 'boolean') result[key] = value[key];
+    }
+    return result;
+  }
+
+  function nativeCompletionProjection(result) {
+    if (!isObject(result) || result.status !== 'completed') return null;
+    const assessment = assessTerminalSubmission(result);
+    if (!assessment.ok) return null;
+    const evidence = assessment.submissionEvidence;
+    const events = (Array.isArray(result.events) ? result.events : []).slice(0, 256).map((event) => ({
+      stage: typeof event?.stage === 'string' ? event.stage.slice(0, 80) : null,
+      result: compactStage(event?.result),
+    })).filter((event) => event.stage && event.result);
+    const safeEvidence = {
+      issueIdentifier: typeof evidence.issueIdentifier === 'string' ? evidence.issueIdentifier.slice(0, 255) : null,
+      branch: typeof evidence.branch === 'string' ? evidence.branch.slice(0, 255) : null,
+      checkpoint: compactStage(evidence.checkpoint),
+      git: compactStage(evidence.git),
+      pullRequest: compactStage(evidence.pullRequest),
+      postMergeSweep: compactStage(evidence.postMergeSweep),
+      verifyClose: compactStage(evidence.verifyClose),
+      events,
+    };
+    return {
+      result: {
+        ok: true,
+        status: 'completed',
+        issueIdentifier: safeEvidence.issueIdentifier,
+        branch: safeEvidence.branch,
+        baseRef: typeof result.baseRef === 'string' ? result.baseRef.slice(0, 255) : null,
+        intendedFiles: Array.isArray(result.intendedFiles) ? result.intendedFiles.filter((entry) => typeof entry === 'string').slice(0, 128) : [],
+        checkpoints: Array.isArray(result.checkpoints) ? result.checkpoints.slice(-1).map(compactStage).filter(Boolean) : [],
+        events,
+      },
+      evidence: safeEvidence,
+    };
+  }
+
+  function persistNativeCompletion(claimed, result) {
+    const completion = nativeCompletionProjection(result);
+    if (!completion || typeof options.workRunStore.setNativeCompletion !== 'function') return { ok: true, persisted: false };
+    return options.workRunStore.setNativeCompletion({ workRunId: claimed.workRunId, ownerId: claimed.ownerId, fence: claimed.fence, completion });
   }
 
   function providerIdentity(snapshot) {
@@ -321,14 +378,14 @@ function createManagedCodingWorkflow(options = {}) {
     if (!reconciled || reconciled.safe !== true) {
       return { ok: false, status: 'blocked', route: 'native-fallback', workRunId: claimed.workRunId, reasonCode, detail };
     }
-    const resumed = options.workRunStore.setRecoveryState({
+    const preparing = options.workRunStore.setRecoveryState({
       workRunId: claimed.workRunId,
       ownerId: claimed.ownerId,
       fence: claimed.fence,
-      state: 'active',
-      reasonCode: 'provider_work_reconciled',
+      state: 'blocked',
+      reasonCode: 'native_fallback_in_progress',
     });
-    if (!resumed.ok || typeof nativeAdapter.work !== 'function') {
+    if (!preparing.ok || typeof nativeAdapter.work !== 'function') {
       return { ok: false, status: 'blocked', route: 'native-fallback', workRunId: claimed.workRunId, reasonCode, detail };
     }
     let native;
@@ -344,6 +401,11 @@ function createManagedCodingWorkflow(options = {}) {
       });
       return { ok: false, status: 'blocked', route: 'native-fallback', workRunId: claimed.workRunId, reasonCode: 'native_fallback_failed', detail: error.message };
     }
+    const completion = persistNativeCompletion(claimed, native);
+    if (!completion.ok) {
+      options.workRunStore.setRecoveryState({ workRunId: claimed.workRunId, ownerId: claimed.ownerId, fence: claimed.fence, state: 'failed', reasonCode: 'native_completion_not_recorded' });
+      return { ok: false, status: 'blocked', route: 'native-fallback', workRunId: claimed.workRunId, reasonCode: 'native_completion_not_recorded' };
+    }
     const recoveryEvent = recordNativeRecovery(claimed, invocation);
     if (!recoveryEvent.ok) {
       options.workRunStore.setRecoveryState({
@@ -354,6 +416,16 @@ function createManagedCodingWorkflow(options = {}) {
         reasonCode: 'recovery_event_not_recorded',
       });
       return { ok: false, status: 'blocked', route: 'native-fallback', workRunId: claimed.workRunId, reasonCode: 'recovery_event_not_recorded' };
+    }
+    const completed = options.workRunStore.setRecoveryState({
+      workRunId: claimed.workRunId,
+      ownerId: claimed.ownerId,
+      fence: claimed.fence,
+      state: 'active',
+      reasonCode: 'native_fallback_succeeded',
+    });
+    if (!completed.ok) {
+      return { ok: false, status: 'blocked', route: 'native-fallback', workRunId: claimed.workRunId, reasonCode: 'recovery_state_not_recorded' };
     }
     return { ok: true, status: 'succeeded', route: 'native-fallback', workRunId: claimed.workRunId, work: native };
   }
@@ -413,7 +485,7 @@ function createManagedCodingWorkflow(options = {}) {
     // runtime always passes the owner-controlled policy explicitly.
     const policy = input.acceptancePolicy || options.acceptancePolicy || { mode: 'agent-mediated-allowed' };
     const evidence = input.acceptanceEvidence || null;
-    if (policy.mode !== 'agent-mediated-allowed' && (!evidence || evidence.planDigest !== input.planDigest || typeof evidence.source !== 'string')) {
+    if (policy.mode !== 'agent-mediated-allowed' && (!evidence || evidence.planDigest !== input.planDigest || evidence.packetDigest !== digest(packetValidation.packet) || typeof evidence.source !== 'string')) {
       return { ok: false, status: 'awaiting-plan-acceptance', workRunId: claimed.workRunId, reasonCode: 'acceptance_evidence_required' };
     }
     return options.workRunStore.acceptPlan({
@@ -519,6 +591,11 @@ function createManagedCodingWorkflow(options = {}) {
       });
       return { ok: false, status: 'blocked', route: 'native-fallback', workRunId: claimed.workRunId, reasonCode: 'native_fallback_failed', detail: error.message };
     }
+    const completion = persistNativeCompletion(claimed, native);
+    if (!completion.ok) {
+      options.workRunStore.setRecoveryState({ workRunId: claimed.workRunId, ownerId: claimed.ownerId, fence: claimed.fence, state: 'failed', reasonCode: 'native_completion_not_recorded' });
+      return { ok: false, status: 'blocked', route: 'native-fallback', workRunId: claimed.workRunId, reasonCode: 'native_completion_not_recorded' };
+    }
     const recorded = recordNativeRecovery(claimed, nativeInvocationValue);
     if (!recorded.ok) {
       options.workRunStore.setRecoveryState({
@@ -602,7 +679,7 @@ function createManagedCodingWorkflow(options = {}) {
       };
     }
 
-    const eligibility = input.persistLearningSignal === true
+    const eligibility = input.persistLearningSignal === true && input.declineLearning !== true && input.declinedLearning !== true
       ? { status: 'eligible', learning: input.learning, deferredCount: 0 }
       : evaluateLearningEligibility({
         verification: input.verification || input.orchestration,
@@ -710,13 +787,17 @@ function createManagedCodingWorkflow(options = {}) {
     };
   }
 
-  async function complete(input = {}, adapters = {}) {
-    const claimed = claim(input);
+  async function runCompletion(claimed, input = {}, adapters = {}) {
     if (!claimed.workRun.acceptedPlan || claimed.workRun.acceptedPlan.digest !== input.planDigest) {
       return { ok: false, status: 'awaiting-plan-acceptance', workRunId: claimed.workRunId, reasonCode: 'accepted_plan_mismatch' };
     }
-    const result = await runTakeIssueToDone({ ...input, workRunId: claimed.workRunId, branch: input.branch || input.branchName }, adapters);
+    if (claimed.workRun.nativeCompletion?.result) return { ...clone(claimed.workRun.nativeCompletion.result), workRunId: claimed.workRunId, route: 'native-fallback', deduped: true };
+    const result = await runTakeIssueToDone({ ...input, workRunId: claimed.workRunId, branch: input.branch || input.branchName }, Object.keys(adapters).length ? adapters : finishAdapters);
     return { ...result, workRunId: claimed.workRunId, route: 'jarvos-orchestrator' };
+  }
+
+  async function complete(input = {}, adapters = {}) {
+    return runCompletion(claim(input), input, adapters);
   }
 
   async function finish(input = {}, adapters = {}) {
@@ -725,9 +806,9 @@ function createManagedCodingWorkflow(options = {}) {
     if (!run.acceptedPlan || run.acceptedPlan.digest !== input.planDigest) {
       return { ok: false, status: 'awaiting-plan-acceptance', workRunId: claimed.workRunId, reasonCode: 'accepted_plan_mismatch' };
     }
-    const result = await complete(input, adapters);
+    const result = await runCompletion(claimed, input, adapters);
     if (result.ok === false) return result;
-    const assessment = assessTerminalSubmission(result);
+    const assessment = assessTerminalSubmission(result, { submissionEvidence: run.nativeCompletion?.evidence });
     const verification = {
       ...result,
       submissionGate: assessment.submissionGate,
@@ -746,9 +827,11 @@ function createManagedCodingWorkflow(options = {}) {
         },
       };
     }
+    const terminalPayload = verification.submissionGate || verification.events || verification;
+    const terminalDigest = digest(JSON.stringify(terminalPayload));
     const evidence = {
-      reference: `terminal_${digest(JSON.stringify(verification.submissionGate || verification.events || verification)).slice(0, 24)}`,
-      digest: digest(JSON.stringify(verification.submissionGate || verification.events || verification)),
+      reference: `terminal_${terminalDigest.slice(0, 24)}`,
+      digest: terminalDigest,
       status: result.status,
     };
     const terminal = options.workRunStore.setTerminalEvidence({ workRunId: claimed.workRunId, ownerId: claimed.ownerId, fence: claimed.fence, evidence });
@@ -758,8 +841,9 @@ function createManagedCodingWorkflow(options = {}) {
       return { ...result, verification: terminal.ok ? terminal.terminalEvidence : null, primaryCompletion: result.status, learning: { status: derived.status, reasonCode: derived.reasonCode } };
     }
     options.workRunStore.setLearningTail({ workRunId: claimed.workRunId, ownerId: claimed.ownerId, fence: claimed.fence, status: 'eligible', signal: derived.signal, reasonCode: 'reusable_learning_signal' });
-    const learning = await compound({ ...input, workRunId: claimed.workRunId, verification, learning: derived.signal, persistLearningSignal: true });
+    const learning = await compound({ ...input, workRunId: claimed.workRunId, verification, learning: derived.signal, persistLearningSignal: input.declineLearning !== true, declineLearning: input.declineLearning === true });
     if (learning.learningStatus === 'captured' || learning.status === 'succeeded') options.workRunStore.setLearningTail({ workRunId: claimed.workRunId, ownerId: claimed.ownerId, fence: claimed.fence, status: 'captured', artifact: learning.artifact || null });
+    if (learning.learningStatus === 'declined' || learning.status === 'declined') options.workRunStore.setLearningTail({ workRunId: claimed.workRunId, ownerId: claimed.ownerId, fence: claimed.fence, status: 'declined', reasonCode: learning.reasonCode || 'owner_declined_learning' });
     return { ...result, verification: terminal.ok ? terminal.terminalEvidence : null, primaryCompletion: result.status, learning };
   }
 
@@ -768,9 +852,14 @@ function createManagedCodingWorkflow(options = {}) {
     const run = options.workRunStore.getWorkRun(claimed.workRunId, { public: false });
     if (!run?.terminalEvidence) return { ok: true, status: run?.state || 'active', workRunId: claimed.workRunId, learning: null };
     const tail = run.learningTail || { status: 'not-evaluated' };
-    if (!tail.signal || ['captured', 'not-eligible', 'declined', 'unsafe', 'unavailable'].includes(tail.status)) return { ok: true, status: 'verified', workRunId: claimed.workRunId, primaryCompletion: 'completed', learning: tail };
-    if (tail.status === 'finalizing') options.workRunStore.reconcileLearningFinalizer({ workRunId: claimed.workRunId, ownerId: claimed.ownerId, fence: claimed.fence });
-    const learning = await compound({ ...input, workRunId: claimed.workRunId, planDigest: run.acceptedPlan?.digest, verification: { status: 'completed', submissionGate: { ready: true }, events: [] }, learning: tail.signal, persistLearningSignal: true });
+    if (input.resetLearningRetry === true && typeof options.workRunStore.resetLearningFinalizer === 'function') {
+      options.workRunStore.resetLearningFinalizer({ workRunId: claimed.workRunId, ownerId: claimed.ownerId, fence: claimed.fence });
+    }
+    const refreshed = options.workRunStore.getWorkRun(claimed.workRunId, { public: false });
+    const currentTail = refreshed?.learningTail || tail;
+    if (!currentTail.signal || ['captured', 'not-eligible', 'declined', 'unsafe', 'unavailable'].includes(currentTail.status)) return { ok: true, status: 'verified', workRunId: claimed.workRunId, primaryCompletion: 'completed', learning: currentTail };
+    if (currentTail.status === 'finalizing') options.workRunStore.reconcileLearningFinalizer({ workRunId: claimed.workRunId, ownerId: claimed.ownerId, fence: claimed.fence });
+    const learning = await compound({ ...input, workRunId: claimed.workRunId, planDigest: run.acceptedPlan?.digest, verification: { status: 'completed', submissionGate: { ready: true }, events: [] }, learning: currentTail.signal, persistLearningSignal: true });
     if (learning.learningStatus === 'captured' || learning.status === 'succeeded') options.workRunStore.setLearningTail({ workRunId: claimed.workRunId, ownerId: claimed.ownerId, fence: claimed.fence, status: 'captured', artifact: learning.artifact || null });
     return { ok: true, status: 'verified', workRunId: claimed.workRunId, primaryCompletion: 'completed', learning };
   }

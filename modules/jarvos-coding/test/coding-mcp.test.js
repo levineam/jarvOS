@@ -21,7 +21,7 @@ function fixture() {
       return { repositoryId: 'repo_fixture', subjectKey: 'repo_fixture:ORG-1', workRunId: input.workRunId || 'run_fixture', repository: { acceptancePolicy: { mode: 'human-evidence-required' } }, managedWorkflow: workflow };
     },
   };
-  return { calls, options: { registryPath: '/host/registry.json', createRuntime: () => runtime, resolveOwnerAcceptance: () => ({ source: 'owner-action-record', observedAt: '2026-08-14T00:00:00.000Z', planDigest: DIGEST }) } };
+  return { calls, options: { registryPath: '/host/registry.json', createRuntime: () => runtime, resolveOwnerAcceptance: ({ packetDigest }) => ({ source: 'owner-action-record', observedAt: '2026-08-14T00:00:00.000Z', planDigest: DIGEST, packetDigest }) } };
 }
 function result(response) { return JSON.parse(response.content[0].text); }
 
@@ -52,6 +52,21 @@ test('fails closed for malformed, unknown, and model-supplied authority input', 
   await assert.rejects(() => callTool('jarvos_coding_work', { ...base, planDigest: DIGEST, packet: { ...packet, credential: 'x' } }, f.options), /not allowed/);
   await assert.rejects(() => callTool('jarvos_coding_unknown', base, f.options), /Unknown tool/);
   await assert.rejects(() => callTool('jarvos_coding_plan', { ...base, input: { kind: 'issue', digest: 'bad' } }, f.options), /digest/);
+});
+
+test('public finish and resume consume owner learning actions without trusting caller flags', async () => {
+  const f = fixture();
+  const options = {
+    ...f.options,
+    resolveOwnerLearningAction: ({ action }) => ({ action, source: 'owner-action-record' }),
+  };
+  const base = { repositoryId: 'repo_fixture', subjectKey: 'ORG-1', workRunId: 'run_fixture' };
+  await callTool('jarvos_coding_finish', { ...base, planDigest: DIGEST }, options);
+  await callTool('jarvos_coding_resume', base, options);
+  const finishInput = f.calls.find(([operation]) => operation === 'finish')[1];
+  const resumeInput = f.calls.find(([operation]) => operation === 'resume')[1];
+  assert.equal(finishInput.declineLearning, true);
+  assert.equal(resumeInput.resetLearningRetry, true);
 });
 
 test('handles initialize, tools/list, and tools/call with JSON-RPC', async () => {

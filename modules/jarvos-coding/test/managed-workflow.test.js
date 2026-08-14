@@ -9,6 +9,7 @@ const {
   createMemoryWorkRunStore,
   deriveLearningSignal,
   validateImplementationPacket,
+  runTakeIssueToDone,
 } = require('../src');
 
 const baseManifest = require('../providers/compound-engineering.json');
@@ -63,6 +64,23 @@ function packet(planDigest) {
     planDigest,
     summary: 'bounded implementation packet',
     steps: [{ id: 'step-01', description: 'Update the reviewed implementation packet', files: ['src/index.js'] }],
+  };
+}
+
+function terminalAdapters() {
+  return {
+    reviewEngine: {
+      sliceReview: async () => ({ status: 'passed', ok: true }),
+      holisticReview: async () => ({ status: 'passed', ok: true }),
+    },
+    tracker: {
+      claimIssue: async () => ({ status: 'claimed', ok: true, workReference: { authority: 'fixture', itemId: 'SUP-5020' } }),
+      verifyAndClose: async () => ({ status: 'closed', ok: true, liveConfirmed: true }),
+    },
+    git: { createBranch: async ({ branch }) => ({ status: 'created', branch, ok: true }) },
+    fixer: { fixAndRerun: async () => ({ status: 'passed', ok: true, git: { clean: true }, tests: [{ command: 'fixture', status: 'passed' }] }) },
+    pullRequest: { openPullRequest: async () => ({ status: 'created', merged: true, ok: true, liveConfirmed: true, url: 'https://example.test/pr/1' }) },
+    postMerge: { sweep: async () => ({ status: 'completed', ok: true }) },
   };
 }
 
@@ -433,6 +451,9 @@ test('timed-out work waits for provider settlement, then reconciles once and rep
   const store = createMemoryWorkRunStore();
   let settleProvider;
   let nativeWorkCalls = 0;
+  let releaseNative;
+  let signalNativeStarted;
+  const nativeStarted = new Promise((resolve) => { signalNativeStarted = resolve; });
   const workflow = createManagedCodingWorkflow({
     manifest: currentManifest,
     workRunStore: store,
@@ -442,7 +463,12 @@ test('timed-out work waits for provider settlement, then reconciles once and rep
     providerAdapter: { work: async () => new Promise((resolve) => { settleProvider = resolve; }) },
     nativeAdapter: {
       reconcileWork: async () => ({ safe: true }),
-      work: async () => { nativeWorkCalls += 1; return { artifact: 'native-work' }; },
+      work: async () => {
+        nativeWorkCalls += 1;
+        signalNativeStarted();
+        await new Promise((resolve) => { releaseNative = resolve; });
+        return { artifact: 'native-work' };
+      },
     },
   });
   const subjectKey = 'levineam/jarvOS:SUP-5008';
@@ -455,7 +481,12 @@ test('timed-out work waits for provider settlement, then reconciles once and rep
   assert.equal(pending.reasonCode, 'provider_pending');
   settleProvider({});
   await new Promise((resolve) => setImmediate(resolve));
-  const recovered = await workflow.work(input);
+  const recovering = workflow.work(input);
+  await nativeStarted;
+  const concurrent = await workflow.work(input);
+  assert.equal(concurrent.reasonCode, 'native_fallback_in_progress');
+  releaseNative();
+  const recovered = await recovering;
   assert.equal(recovered.route, 'native-fallback');
   const replay = await workflow.work(input);
   assert.equal(replay.deduped, true);
@@ -473,8 +504,38 @@ test('controller acceptance requires owner evidence under the public human-evide
   const input = { subjectKey: 'levineam/jarvOS:SUP-5013', canonicalWorktree: '/private/jarvos/worktrees/SUP-5013', planDigest: '3'.repeat(64), packet: packet('3'.repeat(64)), artifact: { reference: 'artifact:plan123456', digest: '3'.repeat(64) } };
   const blocked = await workflow.acceptPlan(input);
   assert.equal(blocked.status, 'awaiting-plan-acceptance');
-  const accepted = await workflow.acceptPlan({ ...input, acceptanceEvidence: { source: 'owner-cli', planDigest: input.planDigest } });
+  const accepted = await workflow.acceptPlan({ ...input, acceptanceEvidence: { source: 'owner-cli', planDigest: input.planDigest, packetDigest: require('node:crypto').createHash('sha256').update(JSON.stringify(input.packet)).digest('hex') } });
   assert.equal(accepted.ok, true);
+});
+
+test('native terminal work is durably reused by finish instead of running external stages twice', async () => {
+  const store = createMemoryWorkRunStore();
+  let nativeCalls = 0;
+  const workflow = createManagedCodingWorkflow({
+    manifest: manifest(),
+    workRunStore: store,
+    ownerId: 'agent:codex',
+    nativeAdapter: {
+      work: async (invocation) => {
+        nativeCalls += 1;
+        return runTakeIssueToDone({ ...invocation.input, issueIdentifier: invocation.issueIdentifier, canonicalWorktree: invocation.canonicalWorktree }, terminalAdapters());
+      },
+    },
+    finishAdapters: {
+      tracker: { verifyAndClose: async () => { throw new Error('finish must reuse native completion'); } },
+    },
+  });
+  const planDigest = '9'.repeat(64);
+  const input = { subjectKey: 'levineam/jarvOS:SUP-5020', issueIdentifier: 'SUP-5020', canonicalWorktree: '/private/jarvos/worktrees/SUP-5020', planDigest, packet: packet(planDigest) };
+  const accepted = await workflow.acceptPlan({ ...input, artifact: { reference: 'artifact:plan123456', digest: planDigest } });
+  assert.equal(accepted.ok, true);
+  const worked = await workflow.work(input);
+  assert.equal(worked.ok, true);
+  const finished = await workflow.finish({ ...input, nonRoutine: true });
+  assert.equal(finished.primaryCompletion, 'completed');
+  assert.equal(finished.learning.status, 'unavailable');
+  assert.equal(nativeCalls, 1);
+  assert.ok(store.getWorkRun(worked.workRunId, { public: false }).nativeCompletion);
 });
 
 test('legacy complete is fail-closed before accepted plan evidence and never trusts caller learning', async () => {

@@ -55,15 +55,19 @@ required to run the stewardship pipeline.
 sane defaults, route context, define workflows, and make the system feel like
 one assistant instead of a pile of software.
 
-For coding work, jarvOS-coding bundles a managed Compound Engineering provider
-behind the ordinary jarvOS verbs. Say `plan`, `work`, or `complete`; a healthy,
-approved provider supplies the stronger planning and execution loop while
-jarvOS keeps ownership of the work run, branch, review evidence, submission
-gate, and completion decision. Provider learning is a separate, post-verification
-tail: `compound` may capture one reusable lesson, but a skipped or failed lesson
-never changes a verified coding result. If the provider is missing, modified,
-unsupported, or unavailable, jarvOS continues through its native workflow in
-the same run and worktree.
+For coding work, jarvOS-coding provides a managed run through the public
+`plan → accept-plan → work → finish/status/resume` entry. Direct invocation is
+the deterministic path: jarvOS owns the work run, branch, review evidence,
+submission gate, and completion decision. Automatic learning is a separate
+post-verification tail and applies only to verified jarvOS-managed runs in
+configured repositories; it never changes a verified coding result.
+
+Natural routing is currently unavailable: the installed skill is not yet backed
+by a current authenticated Codex routing receipt. It must not be assumed to
+intercept arbitrary Codex edits. Use the direct managed entry until a live
+conformance receipt meets the committed selection and zero-false-claim gates.
+If the provider is unavailable, the native jarvOS fallback continues in the
+same run and same worktree.
 
 Provider installation is managed software, not a JavaScript dependency or a
 moving upstream branch. jarvOS ships one reviewed pin, preserves unrelated

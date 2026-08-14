@@ -35,19 +35,28 @@ function deriveRepositoryId(entry) {
 function publicRepository(entry) {
   return { repositoryId: entry.repositoryId, label: entry.publicLabel, agentSelectable: entry.agentSelectable };
 }
-function normalizeEntry(raw) {
+function assertPrivateDirectory(value, label, ownerUid = process.getuid?.()) {
+  let stat;
+  try { stat = fs.lstatSync(value); } catch { throw new Error(`${label} must exist and resolve canonically`); }
+  if (stat.isSymbolicLink() || !stat.isDirectory()) throw new Error(`${label} must be a real directory`);
+  if (ownerUid !== undefined && stat.uid !== ownerUid) throw new Error(`${label} is not owned by the expected owner`);
+  if ((stat.mode & 0o077) !== 0) throw new Error(`${label} permissions must not grant group or other access`);
+}
+function normalizeEntry(raw, options = {}) {
   if (!isObject(raw)) throw new Error('repository entry must be an object');
   const allowed = new Set(['repositoryId', 'id', 'publicLabel', 'agentSelectable', 'root', 'repositoryRoot', 'stateRoot', 'tracker', 'worktreePolicy', 'acceptancePolicy', 'providerEgressPolicy', 'credentialReferences', 'learning', 'learningPublicationTarget']);
   for (const key of Object.keys(raw)) if (!allowed.has(key)) throw new Error(`repository entry.${key} is not allowed`);
   assertNoSecret(raw);
   const root = canonical(raw.root || raw.repositoryRoot, 'repository root');
   const stateRoot = canonical(raw.stateRoot, 'repository stateRoot');
+  assertPrivateDirectory(raw.stateRoot, 'repository stateRoot', options.ownerUid);
   const repositoryId = raw.repositoryId || raw.id || deriveRepositoryId({ ...raw, root });
   if (!OPAQUE_ID.test(repositoryId)) throw new Error('repositoryId must be an opaque identifier');
   if (typeof raw.publicLabel !== 'string' || !SAFE_LABEL.test(raw.publicLabel) || SECRET.test(raw.publicLabel) || ABSOLUTE_PATH.test(raw.publicLabel)) throw new Error('repository publicLabel must be public-safe text');
   if (typeof raw.agentSelectable !== 'boolean') throw new Error('repository agentSelectable must be boolean');
   if (!isObject(raw.worktreePolicy)) throw new Error('repository worktreePolicy is required');
   const worktreeRoot = canonical(raw.worktreePolicy.root || raw.worktreePolicy.worktreeRoot, 'repository worktreePolicy.root');
+  assertPrivateDirectory(raw.worktreePolicy.root || raw.worktreePolicy.worktreeRoot, 'repository worktreePolicy.root', options.ownerUid);
   if (inside(root, stateRoot) || inside(root, worktreeRoot) || inside(stateRoot, root) || inside(worktreeRoot, root) || inside(stateRoot, worktreeRoot) || inside(worktreeRoot, stateRoot)) throw new Error('repository roots must not overlap');
   const acceptancePolicy = raw.acceptancePolicy || { mode: 'human-evidence-required' };
   if (!isObject(acceptancePolicy) || !ACCEPTANCE_MODES.has(acceptancePolicy.mode)) throw new Error('repository acceptancePolicy.mode is invalid');
@@ -64,7 +73,7 @@ function normalizeEntry(raw) {
     learning: Object.freeze({ ...(raw.learning || {}) }), learningPublicationTarget: raw.learningPublicationTarget || null,
   });
 }
-function validateRepositoryRegistry(registry) {
+function validateRepositoryRegistry(registry, options = {}) {
   const errors = [];
   if (!isObject(registry)) return { ok: false, errors: ['registry must be an object'] };
   for (const key of Object.keys(registry)) if (!new Set(['schemaVersion', 'generation', 'repositories']).has(key)) errors.push(`registry.${key} is not allowed`);
@@ -72,7 +81,7 @@ function validateRepositoryRegistry(registry) {
   if (!Number.isInteger(registry.generation) || registry.generation < 1) errors.push('registry.generation must be a positive integer');
   if (!Array.isArray(registry.repositories)) errors.push('registry.repositories must be an array');
   const entries = [];
-  for (const raw of registry.repositories || []) { try { entries.push(normalizeEntry(raw)); } catch (error) { errors.push(error.message); } }
+  for (const raw of registry.repositories || []) { try { entries.push(normalizeEntry(raw, options)); } catch (error) { errors.push(error.message); } }
   const ids = new Set();
   for (const entry of entries) { if (ids.has(entry.repositoryId)) errors.push(`duplicate repositoryId ${entry.repositoryId}`); ids.add(entry.repositoryId); }
   return { ok: errors.length === 0, errors, entries };
@@ -85,7 +94,7 @@ function loadRepositoryRegistry(registryPath, options = {}) {
   if ((stat.mode & 0o077) !== 0) throw new Error('registryPath permissions must not grant group or other access');
   if (options.ownerUid !== undefined && stat.uid !== options.ownerUid) throw new Error('registryPath is not owned by the expected owner');
   let parsed; try { parsed = JSON.parse(fs.readFileSync(resolvedPath, 'utf8')); } catch (error) { throw new Error(`registryPath contains invalid JSON: ${error.message}`); }
-  const validation = validateRepositoryRegistry(parsed);
+  const validation = validateRepositoryRegistry(parsed, options);
   if (!validation.ok) throw new Error(`invalid repository registry: ${validation.errors.join('; ')}`);
   const byId = new Map(validation.entries.map((entry) => [entry.repositoryId, entry]));
   return Object.freeze({ schemaVersion: REPOSITORY_REGISTRY_SCHEMA_VERSION, generation: parsed.generation, path: resolvedPath, repositories: validation.entries, resolve(repositoryId) {
@@ -205,10 +214,11 @@ function revokeProvisionedRepository({ registryPath, repositoryId, ownerUid } = 
   if (!current) throw new Error('unknown repository');
   return writeProvisionedRegistry(registryPath, { schemaVersion: REPOSITORY_REGISTRY_SCHEMA_VERSION, generation: existing.generation + 1, repositories: existing.repositories.filter((item) => item.repositoryId !== repositoryId) }, 'revoked', current, { ownerUid });
 }
-function recordOwnerAction({ registryPath, repositoryId, action, runId, revision, ownerUid, now = new Date() } = {}) {
+function recordOwnerAction({ registryPath, repositoryId, action, runId, revision, packetDigest, ownerUid, now = new Date() } = {}) {
   if (!new Set(['accept-plan', 'decline-learning', 'reset-learning-retry']).has(action)) throw new Error('owner action is invalid');
   if (typeof runId !== 'string' || !/^[A-Za-z0-9._:-]{1,160}$/.test(runId)) throw new Error('runId is required and must be an opaque identifier');
   if (action === 'accept-plan' && (typeof revision !== 'string' || !revision.trim() || revision.length > 512)) throw new Error('revision is required for accept-plan');
+  if (packetDigest !== undefined && (typeof packetDigest !== 'string' || !/^[a-f0-9]{64}$/i.test(packetDigest))) throw new Error('packetDigest must be a SHA-256 digest');
   const loaded = loadRepositoryRegistry(registryTarget(registryPath, { ownerUid }), { ownerUid });
   const repository = loaded.resolve(repositoryId);
   const actionsPath = path.join(repository.stateRoot, 'owner-actions.json');
@@ -220,6 +230,7 @@ function recordOwnerAction({ registryPath, repositoryId, action, runId, revision
   }
   const record = { action, repositoryId: repository.repositoryId, runId, generation: loaded.generation, observedAt: now.toISOString() };
   if (revision) record.revision = revision;
+  if (packetDigest) record.packetDigest = packetDigest;
   atomicWriteJson(actionsPath, { schemaVersion: OWNER_ACTIONS_SCHEMA_VERSION, generation: loaded.generation, actions: [...actions.actions.filter((item) => !(item.action === action && item.runId === runId)), record] }, { ownerUid });
   return Object.freeze({ schemaVersion: 'jarvos-coding-owner-action-receipt/v1', action, repository: publicRepository(repository), runId, ...(revision ? { revision } : {}) });
 }
@@ -227,9 +238,10 @@ function recordOwnerAction({ registryPath, repositoryId, action, runId, revision
 // This resolver is intentionally separate from the mutation helper above. A
 // model-visible boundary may only derive acceptance evidence from this
 // owner-written record; it must never accept caller-provided evidence.
-function resolveOwnerPlanAcceptance({ registryPath, repositoryId, runId, planDigest, ownerUid, now = new Date() } = {}) {
+function resolveOwnerPlanAcceptance({ registryPath, repositoryId, runId, planDigest, packetDigest, ownerUid, now = new Date() } = {}) {
   if (typeof runId !== 'string' || !/^[A-Za-z0-9._:-]{1,160}$/.test(runId)) throw new Error('runId is required and must be an opaque identifier');
   if (typeof planDigest !== 'string' || !/^[a-f0-9]{64}$/i.test(planDigest)) throw new Error('planDigest must be a SHA-256 digest');
+  if (packetDigest !== undefined && (typeof packetDigest !== 'string' || !/^[a-f0-9]{64}$/i.test(packetDigest))) throw new Error('packetDigest must be a SHA-256 digest');
   const loaded = loadRepositoryRegistry(registryTarget(registryPath, { ownerUid }), { ownerUid });
   const repository = loaded.resolve(repositoryId);
   const actionsPath = path.join(repository.stateRoot, 'owner-actions.json');
@@ -240,11 +252,32 @@ function resolveOwnerPlanAcceptance({ registryPath, repositoryId, runId, planDig
   if (!isObject(actions) || actions.schemaVersion !== OWNER_ACTIONS_SCHEMA_VERSION || actions.generation !== loaded.generation || !Array.isArray(actions.actions)) throw new Error('owner action record is invalid');
   const action = actions.actions.find((entry) => entry && entry.action === 'accept-plan' && entry.repositoryId === repository.repositoryId && entry.runId === runId);
   if (!action || (action.revision !== planDigest && action.revision !== `sha256:${planDigest}`)) return null;
+  if (!packetDigest || action.packetDigest !== packetDigest) return null;
   const observedAt = new Date(action.observedAt);
   if (Number.isNaN(observedAt.getTime())) throw new Error('owner action record is invalid');
   const freshness = repository.acceptancePolicy.evidenceFreshnessMs;
   if (freshness !== undefined && now.getTime() - observedAt.getTime() > freshness) return null;
-  return Object.freeze({ source: 'owner-action-record', observedAt: observedAt.toISOString(), planDigest });
+  return Object.freeze({ source: 'owner-action-record', observedAt: observedAt.toISOString(), planDigest, packetDigest });
 }
 
-module.exports = { REPOSITORY_REGISTRY_SCHEMA_VERSION, OWNER_ACTIONS_SCHEMA_VERSION, deriveRepositoryId, loadRepositoryRegistry, publicRepository, validateRepositoryRegistry, provisionRepository, inspectProvisionedRepositories, updateProvisionedRepository, revokeProvisionedRepository, recordOwnerAction, resolveOwnerPlanAcceptance };
+function resolveOwnerLearningAction({ registryPath, repositoryId, runId, action, ownerUid, now = new Date() } = {}) {
+  if (!['decline-learning', 'reset-learning-retry'].includes(action)) throw new Error('learning owner action is invalid');
+  if (typeof runId !== 'string' || !/^[A-Za-z0-9._:-]{1,160}$/.test(runId)) throw new Error('runId is required and must be an opaque identifier');
+  const loaded = loadRepositoryRegistry(registryTarget(registryPath, { ownerUid }), { ownerUid });
+  const repository = loaded.resolve(repositoryId);
+  const actionsPath = path.join(repository.stateRoot, 'owner-actions.json');
+  if (!fs.existsSync(actionsPath)) return null;
+  assertOwner(fs.statSync(actionsPath), 'owner action record', ownerUid);
+  let actions;
+  try { actions = JSON.parse(fs.readFileSync(actionsPath, 'utf8')); } catch { throw new Error('owner action record is invalid'); }
+  if (!isObject(actions) || actions.schemaVersion !== OWNER_ACTIONS_SCHEMA_VERSION || actions.generation !== loaded.generation || !Array.isArray(actions.actions)) throw new Error('owner action record is invalid');
+  const record = actions.actions.find((entry) => entry && entry.action === action && entry.repositoryId === repository.repositoryId && entry.runId === runId);
+  if (!record) return null;
+  const observedAt = new Date(record.observedAt);
+  if (Number.isNaN(observedAt.getTime())) throw new Error('owner action record is invalid');
+  const freshness = repository.acceptancePolicy.evidenceFreshnessMs;
+  if (freshness !== undefined && now.getTime() - observedAt.getTime() > freshness) return null;
+  return Object.freeze({ action, source: 'owner-action-record', observedAt: observedAt.toISOString(), repositoryId: repository.repositoryId, runId });
+}
+
+module.exports = { REPOSITORY_REGISTRY_SCHEMA_VERSION, OWNER_ACTIONS_SCHEMA_VERSION, deriveRepositoryId, loadRepositoryRegistry, publicRepository, validateRepositoryRegistry, provisionRepository, inspectProvisionedRepositories, updateProvisionedRepository, revokeProvisionedRepository, recordOwnerAction, resolveOwnerPlanAcceptance, resolveOwnerLearningAction };

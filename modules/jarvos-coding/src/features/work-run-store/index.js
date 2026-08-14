@@ -21,6 +21,7 @@ const SUBJECT_KEY = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$/;
 const ABSOLUTE_PATH = /^(?:\/(?!\/)|[A-Za-z]:[\\/]|\\\\)/;
 const SECRET_VALUE = /(?:\bBearer\s+|\bsk-[A-Za-z0-9_-]{8,}|\bxox[baprs]-|(?:api[_-]?key|token|secret|password)\s*[:=])/i;
 const AUTHORITY_KEYS = new Set(['branch', 'worktree', 'worktreePath', 'approval', 'submissionReady', 'completion', 'owner', 'authority', 'terminalStatus', 'nextStep', 'pr', 'pullRequest']);
+const NATIVE_COMPLETION_MAX_BYTES = 512 * 1024;
 
 function clone(value) {
   return value == null ? value : JSON.parse(JSON.stringify(value));
@@ -81,6 +82,10 @@ function validateState(state) {
     if (!Array.isArray(run.events)) errors.push(`workRuns.${id}.events must be an array`);
     if (!Array.isArray(run.artifacts)) errors.push(`workRuns.${id}.artifacts must be an array`);
     if (!isObject(run.recovery)) errors.push(`workRuns.${id}.recovery must be an object`);
+    if (run.nativeCompletion !== undefined && run.nativeCompletion !== null) {
+      if (!isObject(run.nativeCompletion) || !isObject(run.nativeCompletion.result) || !isObject(run.nativeCompletion.evidence)) errors.push(`workRuns.${id}.nativeCompletion is invalid`);
+      else if (JSON.stringify(run.nativeCompletion).length > NATIVE_COMPLETION_MAX_BYTES) errors.push(`workRuns.${id}.nativeCompletion is too large`);
+    }
   }
   return { ok: errors.length === 0, errors };
 }
@@ -251,6 +256,7 @@ function createWorkRunStore(options = {}) {
       eventNonces: {},
       recovery: { state: 'active', reasonCode: null, updatedAt: now },
       terminalEvidence: null,
+      nativeCompletion: null,
       learningTail: { status: 'not-evaluated', attempts: 0, signal: null, reasonCode: null, artifact: null, updatedAt: now },
       createdAt: now,
       updatedAt: now,
@@ -380,7 +386,11 @@ function createWorkRunStore(options = {}) {
       const current = run.acceptedPlan?.digest || null;
       if (current !== expected) return noCommit({ ok: false, reason: 'plan_compare_and_set_conflict', authoritativePlanDigest: current, public: publicRun(run) });
       if (input.packetDigest !== undefined && !isDigest(input.packetDigest)) return noCommit({ ok: false, reason: 'invalid_packet_digest' });
-      const artifact = normalizeArtifact({ ...(input.artifact || {}), kind: 'plan', digest: input.planDigest }, { allowPrivatePath: true });
+      const artifact = normalizeArtifact({
+        ...(input.artifact || { reference: `artifact:plan_${input.planDigest.slice(0, 24)}` }),
+        kind: 'plan',
+        digest: input.planDigest,
+      }, { allowPrivatePath: true });
       if (run.providerSnapshot && input.providerPinDigest && run.providerSnapshot.pinDigest !== input.providerPinDigest) return noCommit({ ok: false, reason: 'provider_pin_conflict' });
       run.acceptedPlan = {
         digest: input.planDigest,
@@ -431,6 +441,25 @@ function createWorkRunStore(options = {}) {
       run.state = input.state === 'failed' ? 'failed' : input.state === 'blocked' ? 'blocked' : 'completed';
       run.updatedAt = evidence.recordedAt;
       return { ok: true, terminalEvidence: clone(evidence), workRun: clone(run), public: publicRun(run) };
+    });
+  }
+
+  function setNativeCompletion(input = {}) {
+    return mutate((state) => {
+      const run = state.workRuns[input.workRunId];
+      if (!run) return noCommit({ ok: false, reason: 'not_found' });
+      const owner = assertRunOwner(run, input.ownerId, input.fence);
+      if (!owner.ok) return noCommit(owner);
+      if (!isObject(input.completion) || !isObject(input.completion.result) || !isObject(input.completion.evidence)) return noCommit({ ok: false, reason: 'invalid_native_completion' });
+      if (JSON.stringify(input.completion).length > NATIVE_COMPLETION_MAX_BYTES) return noCommit({ ok: false, reason: 'native_completion_too_large' });
+      if (run.nativeCompletion) {
+        const same = digest(run.nativeCompletion.result) === digest(input.completion.result)
+          && digest(run.nativeCompletion.evidence) === digest(input.completion.evidence);
+        return same ? noCommit({ ok: true, deduped: true, nativeCompletion: clone(run.nativeCompletion), workRun: clone(run), public: publicRun(run) }) : noCommit({ ok: false, reason: 'native_completion_conflict' });
+      }
+      run.nativeCompletion = { result: clone(input.completion.result), evidence: clone(input.completion.evidence), recordedAt: nowIso(clock) };
+      run.updatedAt = run.nativeCompletion.recordedAt;
+      return { ok: true, nativeCompletion: clone(run.nativeCompletion), workRun: clone(run), public: publicRun(run) };
     });
   }
 
@@ -492,6 +521,21 @@ function createWorkRunStore(options = {}) {
     });
   }
 
+  function resetLearningFinalizer(input = {}) {
+    return mutate((state) => {
+      const run = state.workRuns[input.workRunId];
+      if (!run) return noCommit({ ok: false, reason: 'not_found' });
+      const owner = assertRunOwner(run, input.ownerId, input.fence);
+      if (!owner.ok) return noCommit(owner);
+      const current = run.learningTail || { status: 'not-evaluated', attempts: 0, signal: null, artifact: null };
+      if (!['unavailable', 'failed', 'unsafe', 'retryable-unavailable', 'finalizing'].includes(current.status)) return noCommit({ ok: true, deduped: true, learningTail: clone(current) });
+      const next = { ...current, status: 'retryable-unavailable', attempts: 0, reasonCode: 'owner_retry_reset', updatedAt: nowIso(clock) };
+      run.learningTail = next;
+      run.updatedAt = next.updatedAt;
+      return { ok: true, learningTail: clone(next), workRun: clone(run), public: publicRun(run) };
+    });
+  }
+
   function recordProviderReceipt(input = {}) {
     const validation = validateWorkflowProviderReceipt(input.receipt, { manifest: input.manifest, request: input.request });
     if (!validation.ok) return { ok: false, reason: 'invalid_provider_receipt', errors: validation.errors };
@@ -521,9 +565,11 @@ function createWorkRunStore(options = {}) {
     acceptPlan,
     setRecoveryState,
     setTerminalEvidence,
+    setNativeCompletion,
     setLearningTail,
     reserveLearningFinalizer,
     reconcileLearningFinalizer,
+    resetLearningFinalizer,
     projectPublicWorkRun: (workRun) => publicRun(workRun),
     validateState,
   };
@@ -565,7 +611,9 @@ function createFileWorkRunStore(rootDir, options = {}) {
       throw error;
     } finally {
       if (fd !== undefined) fs.closeSync(fd);
-      try { fs.unlinkSync(lockPath); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+      if (fd !== undefined) {
+        try { fs.unlinkSync(lockPath); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+      }
     }
   }
   const backend = {

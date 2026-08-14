@@ -5,11 +5,12 @@
 // intentionally limited to a private registry binding; no filesystem roots,
 // provider selection, executables, or credentials cross this protocol.
 const readline = require('node:readline');
+const fs = require('node:fs');
 // Import only the public runtime boundary, rather than the package barrel:
 // MCP initialization must work from an unpacked tarball before any repository
 // registry is configured.
 const { createCodexRuntime } = require('../src/runtime/codex');
-const { resolveOwnerPlanAcceptance } = require('../src/runtime/repository-registry');
+const { resolveOwnerPlanAcceptance, resolveOwnerLearningAction } = require('../src/runtime/repository-registry');
 
 const REGISTRY_ENV = 'JARVOS_CODING_REPOSITORY_REGISTRY';
 const SHA256 = /^[a-f0-9]{64}$/i;
@@ -18,6 +19,7 @@ const SUBJECT = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$/;
 const SAFE_TEXT = /^[^\0\r\n]{1,500}$/;
 const PATHISH = /(?:^|[\s"'])\/(?:[^\s"']*)/;
 const SECRET = /(?:\bBearer\s+|\bsk-[A-Za-z0-9_-]{8,}|\bxox[baprs]-|(?:api[_-]?key|token|secret|password)\s*[:=])/i;
+const runtimeCache = new Map();
 
 const TOOLS = [
   ['jarvos_coding_plan', 'Create or route a managed plan for an owner-provisioned repository subject.'],
@@ -56,7 +58,26 @@ function identity(args) { object(args, 'arguments'); known(args, new Set(['repos
 function packet(value, planDigest) { object(value, 'packet'); known(value, new Set(['version', 'planDigest', 'steps', 'summary']), 'packet'); if (value.version !== 'jarvos-implementation-packet/v1') fail('packet.version is invalid'); digest(value.planDigest, 'packet.planDigest'); if (value.planDigest !== planDigest) fail('packet.planDigest must match planDigest'); if (!Array.isArray(value.steps) || value.steps.length < 1 || value.steps.length > 128) fail('packet.steps must contain 1 to 128 steps'); for (const [i, step] of value.steps.entries()) { object(step, `packet.steps[${i}]`); known(step, new Set(['id', 'description', 'files', 'mutation']), `packet.steps[${i}]`); if (!OPAQUE.test(step.id || '')) fail(`packet.steps[${i}].id is invalid`); safeString(step.description, `packet.steps[${i}].description`); if (step.mutation !== undefined) safeString(step.mutation, `packet.steps[${i}].mutation`); if (step.files !== undefined && (!Array.isArray(step.files) || step.files.some((file) => typeof file !== 'string' || file.startsWith('/') || file.includes('..') || !/^[A-Za-z0-9._/-]+$/.test(file)))) fail(`packet.steps[${i}].files is invalid`); } if (value.summary !== undefined) safeString(value.summary, 'packet.summary'); return value; }
 function publicValue(value) { if (value == null || typeof value === 'boolean' || typeof value === 'number') return value; if (typeof value === 'string') return (value.length <= 1000 && !PATHISH.test(value) && !SECRET.test(value)) ? value : '[redacted]'; if (Array.isArray(value)) return value.map(publicValue); if (typeof value === 'object') { const output = {}; for (const [key, entry] of Object.entries(value)) if (!/^(?:root|path|worktree|credential|provider|command|executable|detail)$/i.test(key)) output[key] = publicValue(entry); return output; } return null; }
 function textResult(result, isError = false) { return { content: [{ type: 'text', text: JSON.stringify(publicValue(result)) }], isError }; }
-function hostRuntime(options = {}) { const registryPath = options.registryPath || process.env[REGISTRY_ENV]; if (typeof registryPath !== 'string' || !registryPath) fail('coding MCP host registry binding is not configured', -32000); return (options.createRuntime || createCodexRuntime)({ registryPath, ...(options.runtimeOptions || {}) }); }
+function hostRuntime(options = {}) {
+  const registryPath = options.registryPath || process.env[REGISTRY_ENV];
+  if (typeof registryPath !== 'string' || !registryPath) fail('coding MCP host registry binding is not configured', -32000);
+  const factory = options.createRuntime || createCodexRuntime;
+  // Test and embedding callers may inject a factory/options object whose
+  // lifetime they own. The packaged MCP process uses the default factory and
+  // retains one authority-bound runtime so in-flight guards are shared across
+  // concurrent JSON-RPC calls. Registry metadata changes invalidate it.
+  if (options.createRuntime || options.runtimeOptions || options.ownerUid !== undefined) {
+    return factory({ registryPath, ...(options.runtimeOptions || {}) });
+  }
+  let stat;
+  try { stat = fs.statSync(registryPath); } catch { return factory({ registryPath }); }
+  const signature = [stat.dev, stat.ino, stat.mtimeMs, stat.ctimeMs, stat.size].join(':');
+  const cached = runtimeCache.get(registryPath);
+  if (cached && cached.signature === signature) return cached.runtime;
+  const runtime = factory({ registryPath });
+  runtimeCache.set(registryPath, { signature, runtime });
+  return runtime;
+}
 
 async function callTool(name, args = {}, options = {}) {
   if (name === 'jarvos_coding_repositories') { object(args, 'arguments'); known(args, new Set(), 'arguments'); return textResult({ ok: true, repositories: hostRuntime(options).listRepositories() }); }
@@ -76,19 +97,40 @@ async function callTool(name, args = {}, options = {}) {
   // the original opaque tracker identifier as its bounded work reference.
   const workflowInput = { ...input, subjectKey: context.subjectKey || input.subjectKey, issueIdentifier: args.subjectKey };
   if (name === 'jarvos_coding_plan') { if (args.input !== undefined) { object(args.input, 'input'); known(args.input, new Set(['kind', 'digest']), 'input'); safeString(args.input.kind, 'input.kind', 80); digest(args.input.digest, 'input.digest'); } if (args.operationNonce !== undefined) safeString(args.operationNonce, 'operationNonce', 128); return textResult(await workflow.plan({ ...workflowInput, input: args.input, operationNonce: args.operationNonce })); }
-  if (name === 'jarvos_coding_status' || name === 'jarvos_coding_resume') return textResult(await workflow[name === 'jarvos_coding_status' ? 'status' : 'resume'](workflowInput));
+  if (name === 'jarvos_coding_status' || name === 'jarvos_coding_resume') {
+    let resetLearningRetry = false;
+    if (!options.createRuntime && !options.resolveOwnerLearningAction) {
+      resetLearningRetry = Boolean(resolveOwnerLearningAction({ registryPath: options.registryPath || process.env[REGISTRY_ENV], repositoryId: context.repositoryId, runId: context.workRunId, action: 'reset-learning-retry' }));
+    } else if (options.resolveOwnerLearningAction) {
+      resetLearningRetry = Boolean(options.resolveOwnerLearningAction({ registryPath: options.registryPath || process.env[REGISTRY_ENV], repositoryId: context.repositoryId, runId: context.workRunId, action: 'reset-learning-retry' }));
+    }
+    return textResult(await workflow[name === 'jarvos_coding_status' ? 'status' : 'resume']({ ...workflowInput, resetLearningRetry }));
+  }
   const planDigest = digest(args.planDigest, 'planDigest');
-  if (name === 'jarvos_coding_finish') return textResult(await workflow.finish({ ...workflowInput, planDigest }));
+  if (name === 'jarvos_coding_finish') {
+    let declineLearning = false;
+    if (!options.createRuntime && !options.resolveOwnerLearningAction) {
+      declineLearning = Boolean(resolveOwnerLearningAction({ registryPath: options.registryPath || process.env[REGISTRY_ENV], repositoryId: context.repositoryId, runId: context.workRunId, action: 'decline-learning' }));
+    } else if (options.resolveOwnerLearningAction) {
+      declineLearning = Boolean(options.resolveOwnerLearningAction({ registryPath: options.registryPath || process.env[REGISTRY_ENV], repositoryId: context.repositoryId, runId: context.workRunId, action: 'decline-learning' }));
+    }
+    return textResult(await workflow.finish({ ...workflowInput, planDigest, declineLearning }));
+  }
   const implementationPacket = packet(args.packet, planDigest); if (args.operationNonce !== undefined) safeString(args.operationNonce, 'operationNonce', 128);
   if (name === 'jarvos_coding_accept_plan') {
     if (args.expectedPlanDigest !== undefined && args.expectedPlanDigest !== null) digest(args.expectedPlanDigest, 'expectedPlanDigest');
     if (args.artifact !== undefined) { object(args.artifact, 'artifact'); known(args.artifact, new Set(['reference']), 'artifact'); if (typeof args.artifact.reference !== 'string' || !/^artifact:[A-Za-z0-9._-]{6,160}$/.test(args.artifact.reference)) fail('artifact.reference is invalid'); }
     let acceptanceEvidence = null;
-    if (context.repository.acceptancePolicy.mode !== 'agent-mediated-allowed') acceptanceEvidence = (options.resolveOwnerAcceptance || resolveOwnerPlanAcceptance)({ registryPath: options.registryPath || process.env[REGISTRY_ENV], repositoryId: context.repositoryId, runId: context.workRunId, planDigest, ...(options.ownerUid === undefined ? {} : { ownerUid: options.ownerUid }) });
+    if (context.repository.acceptancePolicy.mode !== 'agent-mediated-allowed') acceptanceEvidence = (options.resolveOwnerAcceptance || resolveOwnerPlanAcceptance)({ registryPath: options.registryPath || process.env[REGISTRY_ENV], repositoryId: context.repositoryId, runId: context.workRunId, planDigest, packetDigest: sha256Json(implementationPacket), ...(options.ownerUid === undefined ? {} : { ownerUid: options.ownerUid }) });
     if (context.repository.acceptancePolicy.mode !== 'agent-mediated-allowed' && !acceptanceEvidence) return textResult({ ok: false, status: 'awaiting-plan-acceptance', workRunId: context.workRunId, reasonCode: 'owner_acceptance_required' }, true);
     return textResult(await workflow.acceptPlan({ ...workflowInput, planDigest, packet: implementationPacket, expectedPlanDigest: args.expectedPlanDigest, artifact: args.artifact, operationNonce: args.operationNonce, acceptanceEvidence }));
   }
   return textResult(await workflow.work({ ...workflowInput, planDigest, packet: implementationPacket, operationNonce: args.operationNonce }));
+}
+
+function sha256Json(value) {
+  const crypto = require('node:crypto');
+  return crypto.createHash('sha256').update(JSON.stringify(value)).digest('hex');
 }
 
 function write(message) { process.stdout.write(`${JSON.stringify(message)}\n`); }
