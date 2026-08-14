@@ -42,7 +42,19 @@ def trusted_executable(value):
     try: info = os.lstat(value)
     except OSError: return False
     return not stat.S_ISLNK(info.st_mode) and stat.S_ISREG(info.st_mode) and (stat.S_IMODE(info.st_mode) & 0o077) == 0 and (stat.S_IMODE(info.st_mode) & 0o111) != 0 and info.st_uid == os.getuid()
-if not trusted_directory(stable_root) or not trusted_executable(command): raise SystemExit('stable Hermes hook is missing or unsafe')
+def trusted_ancestry(value):
+    if not os.path.isabs(value) or os.path.normpath(value) != value or os.path.realpath(value) != value: return False
+    current = value
+    while True:
+        try: info = os.lstat(current)
+        except OSError: return False
+        trusted_owner = info.st_uid in (0, os.getuid())
+        safely_writable = (stat.S_IMODE(info.st_mode) & 0o022) == 0 or bool(info.st_mode & stat.S_ISVTX)
+        if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode) or not trusted_owner or not safely_writable: return False
+        parent = os.path.dirname(current)
+        if parent == current: return True
+        current = parent
+if not trusted_directory(stable_root) or not trusted_ancestry(stable_root) or not trusted_executable(command): raise SystemExit('stable Hermes hook is missing or unsafe')
 owned_commands = {command}
 if os.path.isabs(staged_root): owned_commands.add(os.path.join(staged_root, 'runtimes', 'hermes', 'jarvos-pre-llm-hook.js'))
 config = {}

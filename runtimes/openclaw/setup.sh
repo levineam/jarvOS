@@ -39,6 +39,17 @@ function trustedFile(value) {
   const stat = fs.lstatSync(value); const uid = typeof process.getuid === 'function' ? process.getuid() : null;
   return !stat.isSymbolicLink() && stat.isFile() && (stat.mode & 0o077) === 0 && (uid === null || stat.uid === uid);
 }
+function trustedAncestry(value) {
+  const uid = typeof process.getuid === 'function' ? process.getuid() : null;
+  if (!path.isAbsolute(value) || path.resolve(value) !== value || fs.realpathSync(value) !== value) return false;
+  for (let current = value; ; current = path.dirname(current)) {
+    const stat = fs.lstatSync(current);
+    const trustedOwner = uid === null || stat.uid === uid || stat.uid === 0;
+    const safelyWritable = (stat.mode & 0o022) === 0 || (stat.mode & 0o1000) !== 0;
+    if (stat.isSymbolicLink() || !stat.isDirectory() || !trustedOwner || !safelyWritable) return false;
+    if (path.dirname(current) === current) return true;
+  }
+}
 function snapshot(filePath) {
   let stat;
   try { stat = fs.lstatSync(filePath); } catch (error) {
@@ -97,7 +108,7 @@ function restorePrior(filePath, prior, written) {
 // the package manifest, OpenClaw plugin manifest, and hook implementation are
 // all required before touching user configuration.
 const requiredPluginFiles = ['package.json', 'openclaw.plugin.json', 'jarvos-next-turn-plugin.js'];
-if (rollback !== '1' && (!trustedDirectory(stableRoot) || !trustedDirectory(pluginPath) || !requiredPluginFiles.every((file) => trustedFile(path.join(pluginPath, file))))) {
+if (rollback !== '1' && (!trustedDirectory(stableRoot) || !trustedAncestry(stableRoot) || !trustedDirectory(pluginPath) || !requiredPluginFiles.every((file) => trustedFile(path.join(pluginPath, file))))) {
   throw new Error('stable OpenClaw plugin is missing or unsafe');
 }
 const prior = snapshot(configPath);
