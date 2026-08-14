@@ -2,6 +2,21 @@
   "schemaVersion": 1,
   "id": "openclaw",
   "displayName": "OpenClaw",
+  "capabilityDescriptor": {
+    "version": "jarvos-runtime-capability-descriptor.v1", "harness": "openclaw",
+    "capabilities": {
+      "context": { "currentWork": { "status": "manual", "transport": "workspace adapter", "reason": "This repository ships guidance, not an OpenClaw runtime bridge." }, "recall": { "status": "manual", "transport": "workspace adapter", "reason": "This repository ships guidance, not an OpenClaw runtime bridge." }, "startupHydration": { "status": "manual", "transport": "workspace adapter", "reason": "OpenClaw startup integration is adapter-owned." } },
+      "notes": { "create": { "status": "manual", "transport": "workspace adapter", "reason": "OpenClaw note actions require a local adapter." }, "read": { "status": "manual", "transport": "workspace adapter", "reason": "OpenClaw note actions require a local adapter." }, "update": { "status": "manual", "transport": "workspace adapter", "reason": "OpenClaw note actions require a local adapter." }, "journalLink": { "status": "manual", "transport": "workspace adapter", "reason": "OpenClaw journal links require a local adapter." } },
+      "skills": { "discover": { "status": "manual", "transport": "OpenClaw workspace", "reason": "OpenClaw owns skill discovery." }, "invoke": { "status": "manual", "transport": "OpenClaw workspace", "reason": "OpenClaw owns skill invocation." } },
+      "toolAuthorization": { "declare": { "status": "unsupported", "reason": "No public OpenClaw authorization contract is shipped." }, "enforce": { "status": "unsupported", "reason": "OpenClaw owns tool authorization." } },
+      "egress": { "declare": { "status": "unsupported", "reason": "No public OpenClaw egress declaration is shipped." }, "enforce": { "status": "unsupported", "reason": "OpenClaw owns egress enforcement." } },
+      "session": { "startupHook": { "status": "manual", "transport": "workspace adapter", "reason": "No checked-in OpenClaw hook is shipped." }, "handoff": { "status": "manual", "transport": "workspace adapter", "reason": "OpenClaw handoff remains adapter-owned." } },
+      "inboundDispatch": { "receive": { "status": "unsupported", "reason": "No public OpenClaw inbound dispatch bridge is shipped." }, "validate": { "status": "unsupported", "reason": "No public OpenClaw inbound dispatch bridge is shipped." } },
+      "lifecycle": { "receipt": { "status": "manual", "transport": "workspace adapter", "reason": "OpenClaw lifecycle receipts remain adapter-owned." } },
+      "scheduledWork": { "participate": { "status": "manual", "transport": "OpenClaw workspace", "reason": "OpenClaw scheduling remains workspace-owned." } },
+      "codingEntrypoint": { "invoke": { "status": "unsupported", "reason": "OpenClaw is not declared as a jarvOS coding entrypoint." } }
+    }
+  },
   "sharedAgentContext": {
     "mcpServer": "modules/jarvos-agent-context/scripts/jarvos-mcp.js",
     "requiredTools": [

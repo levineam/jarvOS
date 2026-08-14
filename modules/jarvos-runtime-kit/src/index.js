@@ -10,6 +10,7 @@ const { isSha256 } = harnessDispatch;
 const stewardshipAdapter = require('./stewardship-adapter.js');
 const stewardshipBootstrap = require('./stewardship-bootstrap.js');
 const openclawPluginPersistence = require('./openclaw-plugin-persistence.js');
+const capabilityDescriptor = require('./capability-descriptor.js');
 
 const DEFAULT_AGENT_CONTEXT_MCP = 'modules/jarvos-agent-context/scripts/jarvos-mcp.js';
 const REQUIRED_MCP_TOOL = 'jarvos_hydrate';
@@ -642,6 +643,13 @@ function validateManifest(manifest) {
   if (manifest.unsupportedCapabilities && !Array.isArray(manifest.unsupportedCapabilities)) {
     add(errors, 'unsupportedCapabilities must be an array');
   }
+  if (manifest.capabilityDescriptor) {
+    const descriptor = capabilityDescriptor.validateCapabilityDescriptor(manifest.capabilityDescriptor);
+    errors.push(...descriptor.errors.map((error) => `capabilityDescriptor: ${error}`));
+    if (manifest.capabilityDescriptor.harness && manifest.id && manifest.capabilityDescriptor.harness !== manifest.id) {
+      add(errors, 'capabilityDescriptor.harness must match manifest.id');
+    }
+  }
   if (!Array.isArray(manifest.verification) || manifest.verification.length === 0) {
     warnings.push('verification commands are recommended');
   }
@@ -679,6 +687,7 @@ function checkRuntime(manifestPath, options = {}) {
   const root = path.resolve(options.root || repoRootFrom());
   const loaded = loadManifest(path.isAbsolute(manifestPath) ? manifestPath : path.join(root, manifestPath));
   const { manifest, runtimeDir } = loaded;
+  const shared = manifest.sharedAgentContext || {};
   const validation = validateManifest(manifest);
   const errors = [...validation.errors];
   const warnings = [...validation.warnings];
@@ -698,7 +707,9 @@ function checkRuntime(manifestPath, options = {}) {
     try {
       const mcp = require(mcpServer);
       const tools = Array.isArray(mcp.TOOLS) ? mcp.TOOLS.map((tool) => tool.name) : [];
-      if (!tools.includes(REQUIRED_MCP_TOOL)) add(errors, `shared MCP server does not expose ${REQUIRED_MCP_TOOL}`);
+      for (const requiredTool of shared.requiredTools || []) {
+        if (!tools.includes(requiredTool)) add(errors, `shared MCP server does not expose ${requiredTool}`);
+      }
       // When a runtime declares controlPlane, the live MCP tool surface must
       // include the control-plane tool — not only jarvos_hydrate.
       if (manifest.controlPlane && !tools.includes(CONTROL_PLANE_TOOL)) {
@@ -847,6 +858,7 @@ module.exports = {
   ...stewardshipAdapter,
   ...stewardshipBootstrap,
   ...openclawPluginPersistence,
+  ...capabilityDescriptor,
   DEFAULT_AGENT_CONTEXT_MCP,
   HYDRATION_MODES,
   REQUIRED_MCP_TOOL,

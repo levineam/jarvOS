@@ -45,6 +45,16 @@ try {
   assert.equal(applySkillProjection(local).applied[0].applied, false);
   assert.equal(fs.readFileSync(target, 'utf8'), 'local edit\n');
 
+  const unownedRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-skills-projection-unowned-'));
+  const unownedTarget = path.join(unownedRoot, 'workflow-execution', 'SKILL.md');
+  fs.mkdirSync(path.dirname(unownedTarget), { recursive: true });
+  fs.writeFileSync(unownedTarget, 'unowned skill\n');
+  const unowned = planSkillProjection({ harness: 'hermes', skillsRoot: unownedRoot, skills: ['workflow-execution'] });
+  assert.equal(unowned.entries[0].status, 'unknown');
+  assert.equal(applySkillProjection(unowned).applied[0].applied, false);
+  assert.equal(fs.readFileSync(unownedTarget, 'utf8'), 'unowned skill\n');
+  fs.rmSync(unownedRoot, { recursive: true, force: true });
+
   const oldContent = 'previous reviewed skill\n';
   const oldDigest = digest(oldContent);
   fs.writeFileSync(target, oldContent);

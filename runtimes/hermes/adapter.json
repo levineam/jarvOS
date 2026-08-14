@@ -2,6 +2,32 @@
   "schemaVersion": 1,
   "id": "hermes",
   "displayName": "Hermes Agent",
+  "artifactGeneration": {
+    "version": "jarvos-hermes-artifact-generation.v1",
+    "releaseRevision": "291c334-route-capability",
+    "generationDigest": "09a43f63292a965f6f32271e77e44eef4ef1105fbf465c45a5684b0d654047c8",
+    "components": [
+      { "name": "skills-manifest", "path": "modules/jarvos-skills/manifest.json", "digest": "f1fbc5aff2df772a6e3f00497534f1d1b32d3999e69cd4c4ae2e35970e2cfd00" },
+      { "name": "context-plugin-metadata", "path": "runtimes/hermes/plugins/jarvos-context/plugin.yaml", "digest": "74f3bc53308a43b119773cf0a0fa5f47019761038d1bada4cc2fd5a1b13370bb" },
+      { "name": "context-plugin-code", "path": "runtimes/hermes/plugins/jarvos-context/__init__.py", "digest": "7f05fd28a036af20f26ac46a5d44b60514c51b4da4ad4b01511bc5d6371d3dbf" },
+      { "name": "coding-host-adapter", "path": "modules/jarvos-coding/src/adapters/hosts.js", "digest": "a8e24f668cb39ecf50400b5eaca122fdec93aad6df956446ea5f9def22b0f9af" }
+    ]
+  },
+  "capabilityDescriptor": {
+    "version": "jarvos-runtime-capability-descriptor.v1", "harness": "hermes",
+    "capabilities": {
+      "context": { "currentWork": { "status": "supported", "transport": "jarvos MCP", "evidence": "sharedAgentContext required tools" }, "recall": { "status": "supported", "transport": "jarvos MCP", "evidence": "sharedAgentContext required tools" }, "startupHydration": { "status": "supported", "transport": "Hermes on_session_start + pre_llm_call plugin hooks", "evidence": "plugins/jarvos-context/__init__.py" } },
+      "notes": { "create": { "status": "supported", "transport": "jarvos_create_note MCP tool", "evidence": "sharedAgentContext required tools" }, "read": { "status": "unsupported", "reason": "No public Hermes note-read bridge is declared." }, "update": { "status": "unsupported", "reason": "No public Hermes note-update bridge is declared." }, "journalLink": { "status": "unsupported", "reason": "No public Hermes journal-link bridge is declared." } },
+      "skills": { "discover": { "status": "manual", "transport": "Hermes skill directory", "reason": "The public adapter installs guidance but does not claim skill discovery integration." }, "invoke": { "status": "manual", "transport": "Hermes skill directory", "reason": "Hermes owns skill invocation." } },
+      "toolAuthorization": { "declare": { "status": "unsupported", "reason": "No public Hermes authorization contract is installed." }, "enforce": { "status": "unsupported", "reason": "Hermes owns tool authorization." } },
+      "egress": { "declare": { "status": "unsupported", "reason": "No public Hermes egress declaration is installed." }, "enforce": { "status": "unsupported", "reason": "Hermes owns egress enforcement." } },
+      "session": { "startupHook": { "status": "supported", "transport": "Hermes on_session_start + pre_llm_call plugin hooks", "evidence": "plugins/jarvos-context/__init__.py" }, "handoff": { "status": "unsupported", "reason": "No public Hermes handoff adapter is declared." } },
+      "inboundDispatch": { "receive": { "status": "unsupported", "reason": "No public Hermes inbound dispatch bridge is declared." }, "validate": { "status": "unsupported", "reason": "No public Hermes inbound dispatch bridge is declared." } },
+      "lifecycle": { "receipt": { "status": "supported", "transport": "Hermes gateway lifecycle outbox + private bridge", "evidence": "gateway/lifecycle_events.py@ed13651a30deb6ca5f8902a13eaecada412d6f22" } },
+      "scheduledWork": { "participate": { "status": "unsupported", "reason": "Hermes scheduling remains host-native." } },
+      "codingEntrypoint": { "invoke": { "status": "supported", "transport": "jarvos_coding_take_issue_to_done MCP tool", "evidence": "modules/jarvos-coding/src/adapters/hosts.js#createHermesHostAdapter" } }
+    }
+  },
   "sharedAgentContext": {
     "mcpServer": "modules/jarvos-agent-context/scripts/jarvos-mcp.js",
     "requiredTools": [
@@ -9,7 +35,9 @@
       "jarvos_recall",
       "jarvos_create_note",
       "jarvos_startup_brief",
-      "jarvos_hydrate"
+      "jarvos_hydrate",
+      "jarvos_session_thread_read",
+      "jarvos_session_thread_write"
     ]
   },
   "targets": [
@@ -23,9 +51,11 @@
         "verification": "hermes mcp test jarvos"
       },
       "hydration": {
-        "mode": "manual",
-        "command": "Call the jarvos_hydrate MCP tool at session start.",
-        "reason": "Hermes exposes MCP registration, but this adapter does not claim an automatic startup hook until the native hook contract is verified."
+        "mode": "hook",
+        "event": "on_session_start + pre_llm_call",
+        "script": "plugins/jarvos-context/__init__.py",
+        "defaultMaxChars": 6000,
+        "fallback": "Call the jarvos_hydrate MCP tool at session start if the plugin is not installed or enabled."
       }
     }
   ],
@@ -78,12 +108,7 @@
       "~/.hermes/skills/jarvos/SKILL.md"
     ]
   },
-  "unsupportedCapabilities": [
-    {
-      "capability": "automatic-startup-hydration",
-      "reason": "Hermes MCP registration is supported; automatic startup hydration remains deferred until the native startup hook surface is verified."
-    }
-  ],
+  "unsupportedCapabilities": [],
   "verification": [
     "node modules/jarvos-runtime-kit/scripts/jarvos-runtime-kit.js check hermes"
   ]
