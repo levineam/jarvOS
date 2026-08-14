@@ -6,7 +6,10 @@ const {
   CONTENT_ORIGIN_BASES,
   cleanText,
   humanEvidenceEligible,
+  normalizeContentOriginWithLegacy,
+  parseJournalEntry,
 } = require('./content-origin-contract');
+const { frontmatterToObject, parseFrontmatter } = require('../../../packages/jarvos-secondbrain-notes/src/lib/note-schema');
 
 const EVIDENCE_PROJECTION_VERSION = 'jarvos-content-origin-evidence/v1';
 
@@ -36,7 +39,67 @@ function projectEvidenceRecord(record = {}, options = {}) {
     clean_text,
     content_origin: origin,
     content_origin_basis: basis,
-    human_evidence_eligible: origin === 'human' && humanEvidenceEligible(record, options),
+    human_evidence_eligible: origin === 'human' && (options.prevalidated === true
+      ? record.human_evidence_eligible === true
+      : humanEvidenceEligible(record, options)),
+  };
+}
+
+function projectJournalEntriesFromMarkdown(markdown, { date = null, section = 'ideas' } = {}) {
+  const lines = String(markdown || '').split(/\r?\n/);
+  const entries = [];
+  let inSection = false;
+  for (let index = 0; index < lines.length; index += 1) {
+    const current = lines[index];
+    if (/^##\s/.test(current)) {
+      inSection = section === 'ideas' ? /💡|ideas/i.test(current) : section === 'notes' ? /📝|notes/i.test(current) : true;
+      continue;
+    }
+    if (!inSection || !current.trim().startsWith('- ')) continue;
+    const entry = parseJournalEntry(lines, index);
+    if (!entry) continue;
+    const projected = projectEvidenceRecord({
+      clean_text: entry.clean_text,
+      content_origin: entry.origin.content_origin,
+      content_origin_basis: entry.origin.content_origin_basis,
+      human_evidence_eligible: entry.origin.human_evidence_eligible === true,
+    }, {
+      prevalidated: Boolean(entry.marker && !entry.marker.normalization_reason),
+      manualEntry: !entry.marker_line,
+      allowLegacyFallback: true,
+    });
+    entries.push({
+      ...projected,
+      date: date || null,
+      source_id: `journal:${date || 'unknown'}:${index}`,
+    });
+    index += entry.marker_lines?.length || (entry.marker_line ? 1 : 0);
+  }
+  return entries;
+}
+
+function projectNoteMarkdown(markdown, { sourcePath = null, title = null } = {}) {
+  const parsed = parseFrontmatter(String(markdown || ''));
+  const frontmatter = parsed ? frontmatterToObject(parsed) : {};
+  const normalized = normalizeContentOriginWithLegacy(frontmatter, {
+    allowLegacyFallback: true,
+    allowUnresolvedReceipt: true,
+  });
+  const clean_text = cleanText(parsed?.remainder || markdown);
+  const eligible = normalized.content_origin === 'human'
+    && (normalized.human_evidence_eligible === true
+      || humanEvidenceEligible(normalized, { allowLegacyFallback: true }));
+  const projected = projectEvidenceRecord({
+    clean_text,
+    content_origin: normalized.content_origin,
+    content_origin_basis: normalized.content_origin_basis,
+    human_evidence_eligible: eligible,
+  }, { prevalidated: true, allowLegacyFallback: true });
+  return {
+    ...projected,
+    source_id: `note:${sourcePath || title || 'unknown'}`,
+    source_path: sourcePath || null,
+    title: title || null,
   };
 }
 
@@ -79,5 +142,7 @@ module.exports = {
   EVIDENCE_PROJECTION_VERSION,
   projectEvidenceRecord,
   projectEvidenceBatch,
+  projectJournalEntriesFromMarkdown,
+  projectNoteMarkdown,
   readEvidenceProjection,
 };
