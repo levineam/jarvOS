@@ -5,7 +5,9 @@ const {
 } = require('./adapters/paperclip');
 const {
   BRANCH_SCHEMA_VERSION,
+  BEADS_TRACKER_SCHEMA_VERSION,
   COUPLED_STAGES,
+  DEFAULT_BEADS_VERSION,
   FIXER_SCHEMA_VERSION,
   HOLISTIC_REVIEW_SCHEMA_VERSION,
   LIVE_ADAPTERS_SCHEMA_VERSION,
@@ -15,6 +17,7 @@ const {
   buildLiveCodingAdapters,
   createLiveClawpatchReviewEngine,
   createLiveClawpatchRunner,
+  createLiveBeadsTracker,
   createLiveGitBranch,
   createLiveHolisticReview,
   createLiveFixer,
@@ -22,6 +25,7 @@ const {
   createLivePostMergeSweep,
   createLivePullRequest,
   parseClawpatchCommand,
+  createMemoryOperationStore,
   resolveWorktreeRoot,
 } = require('./adapters/live');
 const {
@@ -40,6 +44,7 @@ const {
   createCodexHostAdapter,
   createCodingHostAdapter,
   createCodingControlPlanePort,
+  createHermesHostAdapter,
   createOpenClawHostAdapter,
   codingControlPlaneManifest,
   normalizeHost,
@@ -151,15 +156,29 @@ const stewardshipContract = require('./stewardship/contract');
 const stewardshipJudgment = require('./stewardship/judgment');
 const stewardshipPolicy = require('./stewardship/policy');
 const reconcilePolicy = require('./stewardship/reconcile-policy');
+const projectsActivity = require('./projects-activity');
+const compoundEngineeringProvider = require('./providers/compound-engineering');
+const workflowProvider = require('./providers/workflow-provider');
+const learningEligibility = require('./providers/learning-eligibility');
+const workRunStore = require('./features/work-run-store');
+const managedWorkflow = require('./features/workflow');
 module.exports = {
+  ...projectsActivity,
   ...stewardshipContract,
   ...stewardshipJudgment,
   ...stewardshipPolicy,
   ...reconcilePolicy,
+  ...compoundEngineeringProvider,
+  ...workflowProvider,
+  ...learningEligibility,
+  ...workRunStore,
+  ...managedWorkflow,
   ACTIVE_STATUSES,
   DEFAULT_IGNORED_PATH_SEGMENTS,
   BRANCH_SCHEMA_VERSION,
+  BEADS_TRACKER_SCHEMA_VERSION,
   COUPLED_STAGES,
+  DEFAULT_BEADS_VERSION,
   FIXER_SCHEMA_VERSION,
   HOLISTIC_REVIEW_SCHEMA_VERSION,
   LIVE_ADAPTERS_SCHEMA_VERSION,
@@ -171,6 +190,7 @@ module.exports = {
   buildLiveCodingAdapters,
   createLiveClawpatchReviewEngine,
   createLiveClawpatchRunner,
+  createLiveBeadsTracker,
   createLiveGitBranch,
   createLiveHolisticReview,
   createLiveFixer,
@@ -178,6 +198,7 @@ module.exports = {
   createLivePostMergeSweep,
   createLivePullRequest,
   parseClawpatchCommand,
+  createMemoryOperationStore,
   resolveWorktreeRoot,
   CODING_MATURITY_STATES,
   CODE_THREAD_KIND,
@@ -233,6 +254,7 @@ module.exports = {
   createCodexHostAdapter,
   createCodingHostAdapter,
   createCodingControlPlanePort,
+  createHermesHostAdapter,
   createOpenClawHostAdapter,
   codingControlPlaneManifest,
   createGateEquivalentReviewEngine,

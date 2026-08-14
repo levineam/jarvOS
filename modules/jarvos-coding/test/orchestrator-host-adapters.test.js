@@ -14,6 +14,7 @@ const {
   createCodexHostAdapter,
   createCodingControlPlanePort,
   createCodingHostAdapter,
+  createHermesHostAdapter,
   createMemorySessionStateStore,
   runTakeIssueToDone,
 } = require('../src/index.js');
@@ -121,6 +122,21 @@ test('orchestrator runs the full stage loop and checkpoints code thread state', 
   const pullRequestCheckpoint = result.checkpoints.find((checkpoint) => checkpoint.codeThread.stage === 'pullRequest');
   assert.equal(pullRequestCheckpoint.artifact.kind, 'pull-request');
   assert.equal(pullRequestCheckpoint.artifact.url, 'https://github.com/example/repo/pull/1');
+});
+
+test('orchestrator exposes an eligible learning tail without changing terminal completion', async () => {
+  const result = await runTakeIssueToDone({
+    issue: { identifier: 'SUP-2214' },
+    branch: 'SUP-2214/jarvos-coding-learning',
+    learningSignals: {
+      category: 'architecture-constraint',
+      summary: 'The durable work run must own provider routing and completion evidence.',
+    },
+  }, buildAdapters([]));
+
+  assert.equal(result.status, 'completed');
+  assert.equal(result.learning.status, 'eligible');
+  assert.equal(result.learning.learning.category, 'architecture-constraint');
 });
 
 test('host contract normalizes Claude Code and Codex aliases', () => {
@@ -780,4 +796,48 @@ test('Codex host adapter can build runtime adapters lazily from each request', a
   assert.equal(result.host, 'codex');
   assert.equal(result.status, 'completed');
   assert.deepEqual(calls, TAKE_ISSUE_TO_DONE_STAGES);
+});
+
+test('host adapters route natural managed coding verbs without changing the compatibility orchestrator', async () => {
+  const calls = [];
+  const adapter = createCodexHostAdapter({
+    adapters: {
+      managedWorkflow: {
+        async plan(input) { calls.push(['plan', input.subjectKey]); return { ok: true, status: 'succeeded', workRunId: 'run_plan_01' }; },
+      },
+    },
+  });
+  const result = await adapter.runTakeIssueToDone({ operation: 'plan', subjectKey: 'levineam/jarvOS:SUP-5003' });
+  assert.equal(result.operation, 'plan');
+  assert.equal(result.status, 'succeeded');
+  assert.deepEqual(calls, [['plan', 'levineam/jarvOS:SUP-5003']]);
+});
+
+test('Hermes host adapter registers the existing coding entrypoint once with pointer-only continuity', async () => {
+  const calls = [];
+  const registrations = [];
+  const adapter = createHermesHostAdapter({
+    adapters: buildAdapters(calls),
+    registry: {
+      async registerMcpTool(tool) { registrations.push(['mcp', tool.name]); },
+      async registerSkill(skill) { registrations.push(['skill', skill.name]); },
+    },
+  });
+
+  const registered = await adapter.register();
+  const result = await adapter.runTakeIssueToDone({
+    issueIdentifier: 'SUP-2214',
+    branch: 'SUP-2214/hermes',
+    continuityReference: { threadId: 'route-thread-1', checkpointDigest: 'a'.repeat(64) },
+  });
+
+  assert.equal(registered.host, 'hermes');
+  assert.deepEqual(registrations, [['mcp', 'jarvos_coding_take_issue_to_done'], ['skill', 'jarvos-coding']]);
+  assert.equal(result.host, 'hermes');
+  assert.equal(result.result.status, 'completed');
+  assert.deepEqual(calls, TAKE_ISSUE_TO_DONE_STAGES);
+  await assert.rejects(
+    () => adapter.runTakeIssueToDone({ issueIdentifier: 'SUP-2214', continuityReference: { threadId: 'route-thread-1', transcript: 'not allowed' } }),
+    /continuityReference may not include transcript/,
+  );
 });

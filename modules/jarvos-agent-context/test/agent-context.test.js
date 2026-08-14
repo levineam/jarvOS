@@ -23,6 +23,7 @@ const {
   verifyNoteCaptureContract,
   writeSessionThread,
 } = require('../src/index.js');
+const { issueRouteCapability } = require('../../jarvos-runtime-kit/src/index.js');
 const {
   callTool,
   PROMPTS,
@@ -406,6 +407,95 @@ test('session thread appends checkpoints through latest-content transforms', () 
   });
 });
 
+test('route-bound session threads ignore caller-selected dimensions and isolate colliding native ids', () => {
+  withTempVault(() => {
+    const previous = {
+      required: process.env.JARVOS_REQUIRE_ROUTE_CAPABILITY,
+      secret: process.env.JARVOS_ROUTE_BINDING_SECRET,
+      generation: process.env.JARVOS_ROUTE_BINDING_GENERATION,
+    };
+    process.env.JARVOS_REQUIRE_ROUTE_CAPABILITY = '1';
+    process.env.JARVOS_ROUTE_BINDING_SECRET = 'agent-context-route-secret';
+    process.env.JARVOS_ROUTE_BINDING_GENERATION = 'hermes-jarvos.v1';
+    const base = {
+      harness: 'hermes', profile: 'default', platform: 'telegram', conversation: 'chat',
+      sender: 'sender', generation: 'hermes-jarvos.v1',
+    };
+    const first = issueRouteCapability({ route: { ...base, nativeSession: 'session/a' }, secret: process.env.JARVOS_ROUTE_BINDING_SECRET });
+    const second = issueRouteCapability({ route: { ...base, nativeSession: 'session-a' }, secret: process.env.JARVOS_ROUTE_BINDING_SECRET });
+    try {
+      const firstWrite = writeSessionThread({
+        routeCapability: first,
+        threadId: 'caller-chosen-collision',
+        actor: 'Hermes',
+        summary: 'first route checkpoint',
+      });
+      const secondWrite = writeSessionThread({
+        routeCapability: second,
+        threadId: 'caller-chosen-collision',
+        actor: 'Hermes',
+        summary: 'second route checkpoint',
+      });
+      assert.notEqual(firstWrite.note.path, secondWrite.note.path);
+      assert.equal(readSessionThread({ routeCapability: first }).content.includes('second route checkpoint'), false);
+      assert.equal(readSessionThread({ routeCapability: second }).content.includes('first route checkpoint'), false);
+      assert.throws(() => readSessionThread({ threadId: 'raw-caller-thread' }), /route capability is required/);
+    } finally {
+      for (const [key, value] of Object.entries({
+        JARVOS_REQUIRE_ROUTE_CAPABILITY: previous.required,
+        JARVOS_ROUTE_BINDING_SECRET: previous.secret,
+        JARVOS_ROUTE_BINDING_GENERATION: previous.generation,
+      })) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+  });
+});
+
+test('route-bound session threads can validate an owner-only injected key file', () => {
+  withTempVault(({ tmp, mutationService }) => {
+    const secretPath = path.join(tmp, 'route-secret');
+    fs.writeFileSync(secretPath, 'agent-context-route-secret', { mode: 0o600 });
+    fs.chmodSync(secretPath, 0o600);
+    const previous = {
+      required: process.env.JARVOS_REQUIRE_ROUTE_CAPABILITY,
+      secret: process.env.JARVOS_ROUTE_BINDING_SECRET,
+      secretFile: process.env.JARVOS_ROUTE_BINDING_SECRET_FILE,
+      generation: process.env.JARVOS_ROUTE_BINDING_GENERATION,
+    };
+    process.env.JARVOS_REQUIRE_ROUTE_CAPABILITY = '1';
+    delete process.env.JARVOS_ROUTE_BINDING_SECRET;
+    process.env.JARVOS_ROUTE_BINDING_SECRET_FILE = secretPath;
+    process.env.JARVOS_ROUTE_BINDING_GENERATION = 'hermes-jarvos.v1';
+    try {
+      const capability = issueRouteCapability({
+        route: {
+          harness: 'hermes', profile: 'default', platform: 'telegram', conversation: 'chat',
+          sender: 'sender', nativeSession: 'session-file', generation: 'hermes-jarvos.v1',
+        },
+        secret: 'agent-context-route-secret',
+      });
+      const result = writeSessionThread({
+        routeCapability: capability,
+        summary: 'file-bound route checkpoint',
+        mutationService,
+      });
+      assert.match(result.markdown, /Session Thread Written/);
+    } finally {
+      for (const [key, value] of Object.entries({
+        JARVOS_REQUIRE_ROUTE_CAPABILITY: previous.required,
+        JARVOS_ROUTE_BINDING_SECRET: previous.secret,
+        JARVOS_ROUTE_BINDING_SECRET_FILE: previous.secretFile,
+        JARVOS_ROUTE_BINDING_GENERATION: previous.generation,
+      })) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+  });
+});
+
 test('session thread defaults prefer current Paperclip task over global host thread', () => {
   withTempVault(({ mutationService }) => {
     const oldPaperclipTaskId = process.env.PAPERCLIP_TASK_ID;
@@ -731,11 +821,17 @@ function runCodexSetup(envOverrides = {}) {
     // Public-only setup: clear private host bindings unless the caller sets them.
     JARVOS_CONTROL_PLANE_SERVICE_MODULE: '',
     JARVOS_CONTROL_PLANE_CREDENTIAL_FILE: '',
+    JARVOS_STEWARDSHIP_BRIDGE_COMMAND: '',
+    JARVOS_STEWARDSHIP_CODEX_SESSION_MAP_ROOT: '',
+    JARVOS_STEWARDSHIP_STABLE_ROOT: '',
     ...envOverrides,
   };
   // Empty string override should delete so setup sees "unset".
   if (!env.JARVOS_CONTROL_PLANE_SERVICE_MODULE) delete env.JARVOS_CONTROL_PLANE_SERVICE_MODULE;
   if (!env.JARVOS_CONTROL_PLANE_CREDENTIAL_FILE) delete env.JARVOS_CONTROL_PLANE_CREDENTIAL_FILE;
+  if (!env.JARVOS_STEWARDSHIP_BRIDGE_COMMAND) delete env.JARVOS_STEWARDSHIP_BRIDGE_COMMAND;
+  if (!env.JARVOS_STEWARDSHIP_CODEX_SESSION_MAP_ROOT) delete env.JARVOS_STEWARDSHIP_CODEX_SESSION_MAP_ROOT;
+  if (!env.JARVOS_STEWARDSHIP_STABLE_ROOT) delete env.JARVOS_STEWARDSHIP_STABLE_ROOT;
 
   const result = spawnSync('bash', [setupPath], {
     encoding: 'utf8',

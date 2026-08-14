@@ -5,8 +5,9 @@ on:
     branches:
       - main
 
-# The App installation token is deliberately distinct from the default Actions
-# token so a merged Release Please PR can trigger the trusted release workflow.
+# Mint a short-lived App installation token rather than storing an expiring token
+# or using the default Actions token, so Release Please can trigger the trusted
+# release workflow after its PR is merged.
 permissions:
   contents: write
   pull-requests: write
@@ -25,9 +26,19 @@ jobs:
       # commit on main with this footer; do not set a permanent release-as:
       #
       # Release-As: 1.0.0
+      - id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ secrets.JARVOS_RELEASE_PLEASE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.JARVOS_RELEASE_PLEASE_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: jarvOS
+          permission-contents: write
+          permission-issues: write
+          permission-pull-requests: write
       - id: release
         uses: googleapis/release-please-action@16a9c90856f42705d54a6fda1823352bdc62cf38 # v4.4.0
         with:
-          token: ${{ secrets.JARVOS_RELEASE_PLEASE_APP_TOKEN }}
+          token: ${{ steps.app-token.outputs.token }}
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json

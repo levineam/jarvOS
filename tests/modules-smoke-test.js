@@ -468,6 +468,23 @@ try {
     })));
   }
 
+  const managedProvider = require(path.join(ROOT, 'modules/jarvos-coding/providers/compound-engineering.json'));
+  if (
+    typeof coding.createManagedCodingWorkflow === 'function'
+    && coding.MANAGED_WORKFLOW_SCHEMA_VERSION === 'jarvos-managed-coding-workflow/v1'
+    && managedProvider.id === 'compound-engineering'
+    && managedProvider.source.revision
+    && managedProvider.source.contentDigest
+    && managedProvider.review.status === 'approved'
+  ) {
+    ok('managed Compound Engineering provider ships with the coding boundary');
+  } else {
+    bad('managed Compound Engineering provider', new Error(JSON.stringify({
+      workflow: typeof coding.createManagedCodingWorkflow,
+      provider: managedProvider,
+    })));
+  }
+
   const smoke = require('child_process').spawnSync(process.execPath, ['-e', `
     const coding = require('./modules/jarvos-coding/src');
     const calls = [];

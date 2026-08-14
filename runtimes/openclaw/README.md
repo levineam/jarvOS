@@ -3,6 +3,12 @@
 This directory contains the public OpenClaw adapter declaration, setup contract,
 and stable jarvOS stewardship plugin tuple for jarvOS.
 
+## Checked-in adapter status
+
+`openclaw-workspace` uses manual hydration. This repository provides the public
+adapter checklist below, but does not ship an OpenClaw MCP registration or a
+startup hook; local workspace adapters remain responsible for that integration.
+
 ## What's Here
 
 OpenClaw provides powerful scheduling, tool execution, and multi-channel messaging — but ships with blank templates. jarvOS fills the behavioral layer.

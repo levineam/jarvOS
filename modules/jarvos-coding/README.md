@@ -22,6 +22,7 @@ admit, block, own, or change the core stewardship result.
 const {
   triageCodingWork,
   runTakeIssueToDone,
+  createLiveBeadsTracker,
   createClawpatchAutoreviewAdapter,
   runtimeCheckoutPreflight,
   inspectRuntimeCheckout,
@@ -55,6 +56,30 @@ const triage = triageCodingWork({
 Adapters should persist this object as evidence, then translate the portable
 decision into their own labels, documents, comments, or workflow state.
 
+### Beads execution transport
+
+Local execution can use the pinned Beads Rust CLI without Paperclip:
+
+```js
+const { buildLiveCodingAdapters } = require('@jarvos/coding');
+
+const adapters = buildLiveCodingAdapters({
+  beads: {
+    executable: '/approved/path/br',
+    workspaceRoot: '/approved/workspace',
+    approvedRoots: ['/approved'],
+    expectedVersion: '0.2.19',
+  },
+});
+```
+
+The adapter verifies the executable, capabilities, schema, and `br where`
+binding before mutation. Each create/claim/transition/dependency/checkpoint
+operation is prepared with an operation identity and reconciled before an
+uncertain retry. It returns only executable work evidence; canonical project
+identity remains in Projects, and Paperclip remains an explicit compatibility
+handoff rather than a prerequisite.
+
 `submissionGateContract(options)` returns the stable agent-agnostic contract for
 submitting coding work. It is not Michael-specific: any code-producing agent can
 provide the same evidence shape before opening or completing a pull request.
@@ -65,6 +90,10 @@ runs the portable loop:
 ```text
 claim -> branch -> sliceReview -> holisticReview -> fixRerun -> pullRequest -> postMergeSweep -> verifyClose
 ```
+
+When a Projects activity adapter is supplied, callers must include a fresh,
+run-scoped `runId`; work-item and issue identifiers are deliberately not used
+as a cross-run fallback.
 
 The orchestrator depends on injected tracker/git/PR/post-merge adapters and a
 generic review-engine interface. The default review engine is
@@ -103,6 +132,44 @@ const codex = createCodexHostAdapter({
 await codex.register();
 await codex.runTakeIssueToDone({ issueIdentifier: 'SUP-2214' });
 ```
+
+## Managed coding workflow
+
+`createManagedCodingWorkflow(...)` is the provider-neutral route for natural
+coding verbs. It owns one durable work run and resolves the approved
+Compound Engineering manifest before invoking a provider adapter:
+
+```text
+plan -> validate draft -> accept one implementation packet -> work -> complete
+                                                                      |
+                                                   verified learning -> compound (optional)
+```
+
+The provider is a managed external artifact pinned by
+`providers/compound-engineering.json`; it is not bundled as a JavaScript
+runtime dependency. A provider snapshot is healthy only when its identity,
+version, content digest, adapter, and harness admission all match the approved
+manifest. Provider receipts are strict attributed artifacts: they cannot claim
+branch ownership, approval, submission readiness, or completion. The durable
+work-run store records the accepted plan digest, provider route, artifact
+references, nonces, and recovery state; thin session checkpoints are only
+reattachment hints.
+
+The Codex adapter is the first conformance-backed CE route. The runtime accepts
+CE 3.21.4 only when the discovered installation matches the approved immutable
+pin and the reviewed disposable-profile receipt. Run `jarvos doctor` to see the
+approved and discovered versions. If the provider is absent, modified,
+disabled, or unavailable, `plan`, `work`, and `complete` fall back to the native
+jarvOS route in the same work run and worktree. A failed fallback does not make
+a second branch, plan, pull request, or completion claim.
+
+Learning capture is deliberately independent of coding completion. It runs only
+after live review, tests, pull-request, post-merge, and close evidence establish
+a verified result and a bounded signal names a reusable root cause,
+architecture constraint, failed approach, operational lesson, or project term.
+Routine work is recorded as `not-eligible`; decline, provider absence, and
+unsafe/failed receipts remain visible non-terminal outcomes. At most one
+learning artifact is captured per work run, with additional signals deferred.
 
 `codingHostAdapterContract('claude-code' | 'openclaw' | 'codex')` remains the descriptor-only
 contract for registries, docs, and setup tools that need to inspect support

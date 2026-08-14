@@ -92,9 +92,14 @@ const TOOLS = [
       type: 'object',
       additionalProperties: false,
       properties: {
+        profile: { type: 'string', enum: ['orientation', 'recent-activity'], description: 'Named bounded Projects read profile.' },
         projectIds: { type: 'array', items: { type: 'string' }, description: 'Optional canonical project IDs to expand.' },
         outcomeIds: { type: 'array', items: { type: 'string' }, description: 'Optional canonical outcome IDs to expand.' },
         includeDescendants: { type: 'boolean', description: 'Include descendants of selected projects.' },
+        date: { type: 'string', description: 'Local calendar date for recent-activity (YYYY-MM-DD).' },
+        timeZone: { type: 'string', description: 'IANA timezone for recent-activity.' },
+        from: { type: 'string', description: 'Optional bounded UTC activity-window start.' },
+        to: { type: 'string', description: 'Optional bounded UTC activity-window end.' },
         include: { type: 'array', items: { type: 'string', enum: ['hierarchy', 'activity', 'currentWork', 'attention'] } },
         maxItems: { type: 'number', description: 'Maximum bounded packet items.' },
         maxBytes: { type: 'number', description: 'Maximum bounded packet bytes.' },
@@ -170,6 +175,7 @@ const TOOLS = [
         artifact: { type: 'string', description: 'Artifact pointer such as an issue, branch, note, URL, or file path.' },
         project: { type: 'string', description: 'Project tag used when no explicit thread id is provided.' },
         title: { type: 'string', description: 'Explicit note title to read.' },
+        routeCapability: { type: 'string', description: 'Opaque short-lived route binding issued by the trusted native adapter.' },
         maxChars: { type: 'number', description: 'Maximum characters of thread content to return.' },
       },
     },
@@ -191,6 +197,7 @@ const TOOLS = [
         decision: { type: 'string', description: 'Latest decision to preserve.' },
         nextStep: { type: 'string', description: 'Concrete next action for the next host.' },
         title: { type: 'string', description: 'Explicit note title to write.' },
+        routeCapability: { type: 'string', description: 'Opaque short-lived route binding issued by the trusted native adapter.' },
       },
     },
   },
@@ -401,7 +408,7 @@ async function callTool(name, args = {}) {
     return textResult(result.markdown, !result.ok);
   }
   if (name === 'jarvos_projects_context') {
-    const result = await readProjectsContext({ ...args, provider: mcpProjectsContextProvider });
+    const result = await readProjectsContext(mcpProjectsContextProvider ? { ...args, provider: mcpProjectsContextProvider } : args);
     return textResult(JSON.stringify(result, null, 2), false);
   }
   if (name === 'jarvos_projects_propose') {
@@ -433,10 +440,9 @@ async function callTool(name, args = {}) {
     return textResult(result.markdown, !result.ok);
   }
   if (name === 'jarvos_hydrate') {
-    const result = await hydrate({
-      ...args,
-      projectsContext: { ...(args.projectsContext || {}), provider: mcpProjectsContextProvider },
-    });
+    const projectsContext = { ...(args.projectsContext || {}) };
+    if (mcpProjectsContextProvider) projectsContext.provider = mcpProjectsContextProvider;
+    const result = await hydrate({ ...args, projectsContext });
     return textResult(result.markdown, !result.ok);
   }
   throw new Error(`Unknown tool: ${name}`);

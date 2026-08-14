@@ -2,6 +2,21 @@
   "schemaVersion": 1,
   "id": "claude",
   "displayName": "Claude",
+  "capabilityDescriptor": {
+    "version": "jarvos-runtime-capability-descriptor.v1", "harness": "claude",
+    "capabilities": {
+      "context": { "currentWork": { "status": "supported", "transport": "jarvos MCP", "evidence": "sharedAgentContext required tools" }, "recall": { "status": "supported", "transport": "jarvos MCP", "evidence": "sharedAgentContext required tools" }, "startupHydration": { "status": "supported", "transport": "Claude Code SessionStart hook", "evidence": "jarvos-session-start-hook.js" } },
+      "notes": { "create": { "status": "supported", "transport": "jarvos_create_note MCP tool", "evidence": "sharedAgentContext required tools" }, "read": { "status": "unsupported", "reason": "No public Claude note-read bridge is declared." }, "update": { "status": "unsupported", "reason": "No public Claude note-update bridge is declared." }, "journalLink": { "status": "unsupported", "reason": "No public Claude journal-link bridge is declared." } },
+      "skills": { "discover": { "status": "manual", "transport": "Claude skill directory", "reason": "Claude owns skill discovery." }, "invoke": { "status": "manual", "transport": "Claude skill directory", "reason": "Claude owns skill invocation." } },
+      "toolAuthorization": { "declare": { "status": "unsupported", "reason": "No public Claude authorization contract is installed." }, "enforce": { "status": "unsupported", "reason": "Claude owns tool authorization." } },
+      "egress": { "declare": { "status": "unsupported", "reason": "No public Claude egress declaration is installed." }, "enforce": { "status": "unsupported", "reason": "Claude owns egress enforcement." } },
+      "session": { "startupHook": { "status": "supported", "transport": "Claude Code SessionStart hook", "evidence": "jarvos-session-start-hook.js" }, "handoff": { "status": "unsupported", "reason": "No public Claude handoff adapter is declared." } },
+      "inboundDispatch": { "receive": { "status": "unsupported", "reason": "No public Claude inbound dispatch bridge is declared." }, "validate": { "status": "unsupported", "reason": "No public Claude inbound dispatch bridge is declared." } },
+      "lifecycle": { "receipt": { "status": "unsupported", "reason": "No public Claude lifecycle receipt bridge is declared." } },
+      "scheduledWork": { "participate": { "status": "unsupported", "reason": "Scheduled work is not part of this public adapter." } },
+      "codingEntrypoint": { "invoke": { "status": "supported", "transport": "Claude Code CLI", "evidence": "public Claude Code adapter" } }
+    }
+  },
   "sharedAgentContext": {
     "mcpServer": "modules/jarvos-agent-context/scripts/jarvos-mcp.js",
     "requiredTools": [

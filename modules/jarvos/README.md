@@ -157,6 +157,23 @@ This profile installs the `v0-5-0` skill pack and wires the autonomy surface:
 - `@jarvos/coding` (including `runTakeIssueToDone` orchestration)
 - `@jarvos/agent-context` (shared-brain continuity via `jarvos_session_state`)
 
+### Managed coding provider
+
+The `v0-5-0` coding surface includes jarvOS-coding's managed Compound
+Engineering boundary. The user-facing verbs stay `plan`, `work`, and
+`complete`; CE supplies implementation discipline only when its approved pin
+is healthy for the active runtime. jarvOS owns the durable work run, accepted
+plan revision, branch/worktree, review and submission evidence, and terminal
+close. An optional `compound` tail captures one screened reusable lesson after
+verification without changing completion.
+
+Codex is the first conformance-backed CE activation. The checked-in disposable
+authenticated receipt proves the approved pin, strict provider receipts, denied
+capabilities, restart behavior, and rollback. Missing, modified, disabled, or
+failed CE uses the native jarvOS workflow in the same run/worktree. Existing
+profiles preserve their provider state; only the reviewed immutable pin can be
+activated or updated.
+
 Smoke proof for the profile is available as:
 
 ```bash

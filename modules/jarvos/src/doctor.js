@@ -12,6 +12,7 @@ const {
 } = require('../../jarvos-skills/src');
 const {
   collectOpenClawPluginEvidence,
+  inspectCompoundEngineeringProvider,
 } = require('../../jarvos-runtime-kit/src');
 
 const MINIMAL_WORKSPACE_FILES = [
@@ -177,6 +178,29 @@ function createStatusCheck(component, status, message, details = {}) {
     message,
     ...details,
   };
+}
+
+function validateCompoundEngineeringProvider(options = {}) {
+  const inspection = inspectCompoundEngineeringProvider({
+    root: options.root,
+    executable: options.codexExecutable,
+    env: options.env,
+    evidence: options.codexProviderEvidence,
+  });
+  const status = inspection.status || 'incompatible';
+  const approved = inspection.capability?.approvedVersion || 'unknown';
+  const active = inspection.discovery?.activeVersion || 'none';
+  const message = status === 'healthy'
+    ? `Compound Engineering ${active} is healthy for Codex`
+    : `Compound Engineering provider is ${status} (approved ${approved}, discovered ${active})`;
+  return createStatusCheck('provider.compound-engineering', status, message, {
+    provider: inspection.capability?.id || 'compound-engineering',
+    approvedVersion: approved,
+    activeVersion: inspection.discovery?.activeVersion || null,
+    admission: inspection.capability?.admission || null,
+    recoveryAction: inspection.recoveryAction,
+    reason: inspection.reason,
+  });
 }
 
 function resolveDoctorConfigPath(workspace, options = {}) {
@@ -571,6 +595,7 @@ function runMinimalDoctor(options = {}) {
   checks.push(validateKnowledgeOutputs(workspace, configSchemaCheck.config));
   checks.push(validateObsidianSingleWriter(workspace, configSchemaCheck.config, options));
   checks.push(validateObsidianPaths(workspace, configSchemaCheck.config, options));
+  checks.push(validateCompoundEngineeringProvider(options));
 
   const ok = checks.every((check) => check.ok);
   return {
@@ -1251,4 +1276,5 @@ module.exports = {
   validateOpenClawProfile,
   validateObsidianPaths,
   validateObsidianSingleWriter,
+  validateCompoundEngineeringProvider,
 };

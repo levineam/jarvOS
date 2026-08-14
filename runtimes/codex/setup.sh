@@ -18,6 +18,7 @@ STEWARDSHIP_BRIDGE_COMMAND="${JARVOS_STEWARDSHIP_BRIDGE_COMMAND:-}"
 STEWARDSHIP_CODEX_SESSION_MAP_ROOT="${JARVOS_STEWARDSHIP_CODEX_SESSION_MAP_ROOT:-}"
 STEWARDSHIP_STABLE_ROOT="${JARVOS_STEWARDSHIP_STABLE_ROOT:-}"
 STEWARDSHIP_DISPATCHER=""
+CODEX_PROVIDER_MODE="${JARVOS_CODEX_PROVIDER_MODE:-}"
 
 # The private installer materializes this owner-controlled bundle once. Native
 # configuration must refer to it, never to a selected immutable runtime stage.
@@ -594,4 +595,14 @@ if [ "$CODEX_CONFIG" = "$HOME/.codex/config.toml" ]; then
   fi
 else
   echo "Skipping automatic hook trust for custom CODEX_CONFIG: $CODEX_CONFIG"
+fi
+
+# Compound Engineering is a managed external provider, not an ambient setup
+# side effect. New managed coding profiles pass `new-managed`; existing
+# profiles must pass `opt-in`. With no explicit mode setup preserves the
+# profile, while rollback removes only a recorded jarvOS-owned activation.
+# Run this after the hook transaction so a provider reconciliation failure
+# cannot prevent jarvOS from rolling back its own lifecycle configuration.
+if [ -n "$CODEX_PROVIDER_MODE" ] || [ "${JARVOS_PROFILE:-}" = "codex" ] || [ "${JARVOS_MANAGED_HARNESS_ROLLBACK:-0}" = "1" ]; then
+  node "$ROOT/runtimes/codex/compound-engineering-activation.js"
 fi

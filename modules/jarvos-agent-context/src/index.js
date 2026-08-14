@@ -4,6 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const crypto = require('node:crypto');
+const { createHostProjectsContextProvider } = require('./projects-context-bootstrap');
 
 const {
   DEFAULT_NOTES_SECTION,
@@ -23,6 +24,8 @@ const DEFAULT_SESSION_THREAD_LOCK_RETRY_DELAY_MS = 25;
 const DEFAULT_SESSION_THREAD_LOCK_STALE_MS = 30000;
 const DEFAULT_SESSION_THREAD_LOCK_TIMEOUT_MS = 30000;
 const PROJECTS_CONTEXT_CONTRACT = 'jarvos.projects-context/v1';
+const PROJECTS_CONTEXT_CUTOVER_ENV = 'JARVOS_PROJECTS_CONTEXT_CUTOVER';
+const DEFAULT_PROJECTS_CONTEXT_TIMEOUT_MS = 5000;
 const DEFAULT_PROJECTS_CONTEXT_INCLUDE = ['hierarchy', 'activity', 'currentWork', 'attention'];
 const DEFAULT_PROJECTS_CONTEXT_LIMITS = Object.freeze({ maxItems: 12, maxBytes: 9000, maxProviderAgeSeconds: 3600 });
 let configuredProjectsContextProvider = null;
@@ -85,6 +88,61 @@ function loadModule(packageName, fallbackPath) {
   } catch {
     return require(fallbackPath);
   }
+}
+
+function loadRuntimeRouteContract() {
+  try {
+    return require(require.resolve('@jarvos/runtime-kit', { paths: [MODULE_ROOT] }));
+  } catch {
+    const fallback = path.join(JARVOS_ROOT, 'modules', 'jarvos-runtime-kit', 'src', 'index.js');
+    if (fs.existsSync(fallback)) return require(fallback);
+    return null;
+  }
+}
+
+function loadRouteBindingSecret() {
+  const secretPath = firstString(process.env.JARVOS_ROUTE_BINDING_SECRET_FILE);
+  if (secretPath) {
+    if (!path.isAbsolute(secretPath)) throw new Error('session thread route capability secret is unavailable');
+    let stat;
+    try {
+      stat = fs.lstatSync(secretPath);
+    } catch {
+      throw new Error('session thread route capability secret is unavailable');
+    }
+    const uid = typeof process.getuid === 'function' ? process.getuid() : null;
+    if (stat.isSymbolicLink() || !stat.isFile() || (uid !== null && stat.uid !== uid) || (stat.mode & 0o077) !== 0) {
+      throw new Error('session thread route capability secret is unavailable');
+    }
+    try {
+      const value = fs.readFileSync(secretPath, 'utf8').trim();
+      if (value.length < 16) throw new Error('short secret');
+      return value;
+    } catch {
+      throw new Error('session thread route capability secret is unavailable');
+    }
+  }
+  const direct = firstString(process.env.JARVOS_ROUTE_BINDING_SECRET);
+  if (direct) return direct;
+  throw new Error('session thread route capability secret is unavailable');
+}
+
+function routeThreadKey(input = {}) {
+  const token = firstString(input.routeCapability);
+  const required = process.env.JARVOS_REQUIRE_ROUTE_CAPABILITY === '1';
+  if (!token) {
+    if (required) throw new Error('session thread route capability is required');
+    return null;
+  }
+  const secret = loadRouteBindingSecret();
+  const generation = firstString(process.env.JARVOS_ROUTE_BINDING_GENERATION);
+  const contract = loadRuntimeRouteContract();
+  if (!secret || !generation || !contract || typeof contract.validateRouteCapability !== 'function') {
+    throw new Error('session thread route capability is unavailable');
+  }
+  const validation = contract.validateRouteCapability(token, { secret, expectedGeneration: generation });
+  if (!validation.ok) throw new Error(`session thread route capability denied: ${validation.code}`);
+  return `route-${validation.routeDigest}`;
 }
 
 // WS7 cross-tool unification: let every runtime (OpenClaw / Claude / Codex) share
@@ -345,6 +403,67 @@ function normalizeProjectsQuery(options = {}) {
   };
 }
 
+function loadProjectsContextProfiles() {
+  return require(path.join(
+    JARVOS_ROOT,
+    'modules',
+    'jarvos-secondbrain',
+    'packages',
+    'jarvos-secondbrain-projects',
+    'src',
+    'projects-context-profiles.js',
+  ));
+}
+
+function hasCallerProjectsScope(options = {}) {
+  if (options.scope && typeof options.scope === 'object' && !Array.isArray(options.scope)) return true;
+  return Object.prototype.hasOwnProperty.call(options, 'projectIds')
+    || Object.prototype.hasOwnProperty.call(options, 'outcomeIds')
+    || Object.prototype.hasOwnProperty.call(options, 'includeDescendants');
+}
+
+function hasNonEmptyProjectsScope(query) {
+  return Boolean(query?.scope)
+    && (Array.isArray(query.scope.projectIds) && query.scope.projectIds.length > 0
+      || Array.isArray(query.scope.outcomeIds) && query.scope.outcomeIds.length > 0);
+}
+
+function resolveProjectsRequest(options, hostProvider, internalAuthorizedScope = false) {
+  const profiles = loadProjectsContextProfiles();
+  const hasQuery = Boolean(options.query && typeof options.query === 'object' && !Array.isArray(options.query));
+  const hasScope = hasCallerProjectsScope(options);
+  const profileName = firstString(options.profile);
+  const hostAuthorizedDefault = Boolean(hostProvider && !hasQuery && !hasScope);
+
+  if (profileName || hostAuthorizedDefault) {
+    // Authorization is never accepted from model-visible request data. The
+    // host binding may authorize its own default, and hydrate may use the
+    // private in-process channel when it intentionally requests orientation.
+    const authorizedScope = hostAuthorizedDefault || internalAuthorizedScope;
+    const profile = profiles.resolveQueryProfile(profileName || 'orientation', {
+      scope: hasScope ? (options.scope || {
+        projectIds: options.projectIds,
+        outcomeIds: options.outcomeIds,
+        includeDescendants: options.includeDescendants,
+      }) : hostProvider?.defaultQuery?.scope,
+      authorizedScope,
+      now: options.now || new Date(),
+      timeZone: firstString(options.timeZone, process.env.JARVOS_TIMEZONE, 'UTC') || 'UTC',
+      date: options.date,
+      from: options.from,
+      to: options.to,
+    });
+    return { query: profile.query, profile, activityWindow: profile.activityWindow };
+  }
+
+  if (!hasQuery && !hasScope) {
+    throw new TypeError('a named Projects profile or canonical scope is required');
+  }
+  const query = normalizeProjectsQuery(options);
+  if (!hasNonEmptyProjectsScope(query)) throw new TypeError('Projects caller scope must identify a project or outcome');
+  return { query, profile: null, activityWindow: null };
+}
+
 function renderProjectsContextMarkdown(result, maxChars = 3600) {
   if (!result || result.status !== 'ok' || !result.packet) {
     return `## Projects Context\nUnavailable: ${safeProjectsReason(result?.reason, 'Projects provider is not configured')}.`;
@@ -368,6 +487,7 @@ function renderProjectsContextMarkdown(result, maxChars = 3600) {
       lines.push(`- ${summary.title || summary.id}${summary.status ? ` [${summary.status}]` : ''}`);
     }
   };
+  appendSummaries('### Recent activity', packet.activity);
   appendSummaries('### Current work', packet.currentWork);
   appendSummaries('### Attention', packet.attention);
   if (Array.isArray(packet.omissions) && packet.omissions.length) {
@@ -393,6 +513,8 @@ function normalizeProjectsContextResult(value, request = {}) {
       code: value?.code || 'PROJECTS_CONTEXT_UNAVAILABLE',
       reason: safeProjectsReason(value?.reason || value?.error),
       query: request.query || null,
+      profile: request.profile || null,
+      activityWindow: request.activityWindow || null,
       packet: null,
       fingerprint: null,
       markdown: renderProjectsContextMarkdown({ status: 'unavailable', reason: value?.reason || value?.error }),
@@ -427,6 +549,8 @@ function normalizeProjectsContextResult(value, request = {}) {
       code: 'PROJECTS_CONTEXT_INVALID',
       reason: 'provider returned an invalid Projects context packet',
       query: request.query || null,
+      profile: request.profile || null,
+      activityWindow: request.activityWindow || null,
       packet: null,
       fingerprint: null,
       markdown: renderProjectsContextMarkdown({ status: 'unavailable', reason: 'provider returned an invalid Projects context packet' }),
@@ -438,6 +562,8 @@ function normalizeProjectsContextResult(value, request = {}) {
     status: 'ok',
     contract: PROJECTS_CONTEXT_CONTRACT,
     query: raw.query || request.query || null,
+    profile: request.profile || null,
+    activityWindow: request.activityWindow || null,
     packet: raw,
     fingerprint,
     markdown: '',
@@ -454,14 +580,34 @@ function setProjectsContextProvider(provider) {
   return configuredProjectsContextProvider;
 }
 
-async function readProjectsContext(options = {}) {
+async function readProjectsContext(options = {}, internalAuthorizedScope = false) {
+  const hasExplicitProvider = Object.prototype.hasOwnProperty.call(options, 'provider') || Object.prototype.hasOwnProperty.call(options, 'projectsProvider');
+  const hostProvider = !hasExplicitProvider && !configuredProjectsContextProvider ? createHostProjectsContextProvider() : null;
   const provider = Object.prototype.hasOwnProperty.call(options, 'provider')
     ? options.provider
-    : (options.projectsProvider || configuredProjectsContextProvider);
-  const query = normalizeProjectsQuery(options);
+    : (options.projectsProvider || configuredProjectsContextProvider || hostProvider);
+  let resolved;
+  try {
+    resolved = resolveProjectsRequest(options, hostProvider, internalAuthorizedScope);
+  } catch (error) {
+    const request = {
+      contract: PROJECTS_CONTEXT_CONTRACT,
+      query: null,
+      profile: firstString(options.profile) || null,
+      activityWindow: null,
+      subject: firstString(options.subject, 'active-assistant') || 'active-assistant',
+      hostId: firstString(options.hostId, 'agent-context') || 'agent-context',
+      redactionClass: firstString(options.redactionClass, 'private') || 'private',
+      maxChars: Number(options.maxChars || 3600),
+    };
+    return normalizeProjectsContextResult({ status: 'unavailable', code: 'PROJECTS_QUERY_UNAVAILABLE', reason: 'Projects query is unavailable' }, request);
+  }
+  const { query, profile, activityWindow } = resolved;
   const request = {
     contract: PROJECTS_CONTEXT_CONTRACT,
     query,
+    profile,
+    activityWindow,
     subject: firstString(options.subject, 'active-assistant') || 'active-assistant',
     hostId: firstString(options.hostId, 'agent-context') || 'agent-context',
     redactionClass: firstString(options.redactionClass, 'private') || 'private',
@@ -470,10 +616,31 @@ async function readProjectsContext(options = {}) {
   if (!provider) return normalizeProjectsContextResult({ status: 'unavailable', code: 'PROJECTS_PROVIDER_UNAVAILABLE', reason: 'Projects provider is not configured' }, request);
   const reader = typeof provider === 'function' ? provider : provider.read;
   try {
-    const result = await reader(request);
-    return normalizeProjectsContextResult(result, request);
+    const requestedTimeout = Number(options.projectsContextTimeoutMs || DEFAULT_PROJECTS_CONTEXT_TIMEOUT_MS);
+    const timeoutMs = Number.isFinite(requestedTimeout)
+      ? Math.min(Math.max(requestedTimeout, 50), 15_000)
+      : DEFAULT_PROJECTS_CONTEXT_TIMEOUT_MS;
+    let timer;
+    const result = await Promise.race([
+      Promise.resolve().then(() => reader(request)),
+      new Promise((_, reject) => {
+        timer = setTimeout(() => reject(Object.assign(new Error('Projects provider timed out'), { code: 'PROJECTS_PROVIDER_TIMEOUT' })), timeoutMs);
+      }),
+    ]).finally(() => clearTimeout(timer));
+    // A host provider may return implementation diagnostics in an unavailable
+    // result. Treat them as private exactly like a thrown provider error.
+    const publicResult = hostProvider && result?.status !== 'ok'
+      ? { status: 'unavailable', code: 'PROJECTS_PROVIDER_UNAVAILABLE', reason: 'Projects provider is unavailable' }
+      : result;
+    return normalizeProjectsContextResult(publicResult, request);
   } catch (error) {
-    return normalizeProjectsContextResult({ status: 'unavailable', code: 'PROJECTS_PROVIDER_ERROR', reason: error?.message }, request);
+    // Provider errors can contain host paths, secret-bearing diagnostics, or
+    // payload fragments. Public agent output gets a stable, non-sensitive fact.
+    return normalizeProjectsContextResult({
+      status: 'unavailable',
+      code: error?.code === 'PROJECTS_PROVIDER_TIMEOUT' ? error.code : 'PROJECTS_PROVIDER_ERROR',
+      reason: 'Projects provider is unavailable',
+    }, request);
   }
 }
 
@@ -676,6 +843,8 @@ function sessionThreadLockPath(notePath, options = {}) {
 }
 
 function normalizeThreadKey(input = {}) {
+  const boundRoute = routeThreadKey(input);
+  if (boundRoute) return boundRoute;
   const raw = firstString(
     input.threadId,
     input.threadKey,
@@ -865,6 +1034,23 @@ function findTodayJournal(jarvosPaths, options = {}) {
   return { ok: false, date, path: candidates[0], content: '' };
 }
 
+function stripProjectsJournalSection(markdown) {
+  const lines = String(markdown || '').replace(/\r\n/g, '\n').split('\n');
+  const start = lines.findIndex((line) => line.trim() === '## 🚀 Projects');
+  if (start < 0) return String(markdown || '');
+  let end = lines.length;
+  for (let index = start + 1; index < lines.length; index += 1) {
+    if (/^##\s+/.test(lines[index])) { end = index; break; }
+  }
+  return [...lines.slice(0, start), ...lines.slice(end)].join('\n').replace(/\n{3,}/g, '\n\n').trimEnd();
+}
+
+function projectsContextCutoverEnabled(options = {}) {
+  return options.projectsContextCutover === true
+    || options.projectsContext?.cutover === true
+    || process.env[PROJECTS_CONTEXT_CUTOVER_ENV] === '1';
+}
+
 function extractWikilinks(markdown) {
   const links = [];
   const seen = new Set();
@@ -1035,12 +1221,22 @@ async function hydrate(options = {}) {
   const projectsOptions = options.projectsContext && typeof options.projectsContext === 'object'
     ? options.projectsContext
     : {};
-  const projects = await readProjectsContext({
+  const projectsRequest = {
     ...projectsOptions,
-    provider: projectsOptions.provider || options.projectsProvider,
     maxChars: Number(options.projectsContextMaxChars || projectsOptions.maxChars || 3600),
     maxItems: Number(projectsOptions.maxItems || options.maxItems || DEFAULT_PROJECTS_CONTEXT_LIMITS.maxItems),
-  });
+  };
+  let internalAuthorizedScope = false;
+  if (!projectsRequest.profile && !projectsRequest.query && !projectsRequest.scope
+    && !Object.prototype.hasOwnProperty.call(projectsRequest, 'projectIds')
+    && !Object.prototype.hasOwnProperty.call(projectsRequest, 'outcomeIds')) {
+    projectsRequest.profile = 'orientation';
+    internalAuthorizedScope = true;
+  }
+  if (Object.prototype.hasOwnProperty.call(projectsOptions, 'provider')) projectsRequest.provider = projectsOptions.provider;
+  else if (Object.prototype.hasOwnProperty.call(options, 'projectsProvider')) projectsRequest.provider = options.projectsProvider;
+  const projects = await readProjectsContext(projectsRequest, internalAuthorizedScope);
+  const projectsCutover = projectsContextCutoverEnabled(options);
   report.projectsContext = {
     status: projects.status,
     fingerprint: projects.fingerprint || null,
@@ -1055,24 +1251,33 @@ async function hydrate(options = {}) {
     report.handles.push('Projects context: provider unavailable (shadow mode)');
   }
 
-  try {
-    const work = await currentWork({
-      ...options.currentWork,
-      includeAllAgents: options.includeAllAgents,
-      maxItems: Number(options.maxItems || options.currentWork?.maxItems || 8),
-      statuses: normalizeStatusList(options.statuses || options.currentWork?.statuses, DEFAULT_HYDRATION_STATUSES),
-    });
-    parts.push(truncateText(work.markdown, Number(options.workMaxChars || 3200), 'Paperclip current work', report));
-    report.sources.push(`Paperclip issues (${work.issues.length} included)`);
-    report.handles.push('MCP: jarvos_current_work / jarvos_hydrate');
-  } catch (error) {
-    report.omissions.push(`Paperclip current work unavailable: ${error.message}`);
-    parts.push('## Paperclip Current Work\nUnavailable.');
+  if (projectsCutover) {
+    report.omissions.push('legacy project/task orientation disabled by Projects cutover');
+    report.handles.push('Projects context is the sole project orientation source');
+  } else {
+    try {
+      const work = await currentWork({
+        ...options.currentWork,
+        includeAllAgents: options.includeAllAgents,
+        maxItems: Number(options.maxItems || options.currentWork?.maxItems || 8),
+        statuses: normalizeStatusList(options.statuses || options.currentWork?.statuses, DEFAULT_HYDRATION_STATUSES),
+      });
+      parts.push(truncateText(work.markdown, Number(options.workMaxChars || 3200), 'Paperclip current work', report));
+      report.sources.push(`Paperclip issues (${work.issues.length} included)`);
+      report.handles.push('MCP: jarvos_current_work / jarvos_hydrate');
+    } catch (error) {
+      report.omissions.push(`Paperclip current work unavailable: ${error.message}`);
+      parts.push('## Paperclip Current Work\nUnavailable.');
+    }
   }
 
   const journal = findTodayJournal(jarvosPaths, options.journal || {});
+  const projectSafeJournal = journal.ok && projectsCutover
+    ? stripProjectsJournalSection(journal.content)
+    : journal.content;
   if (journal.ok) {
-    parts.push('', '# Today Journal', '', truncateText(journal.content, Number(options.journalMaxChars || 3200), 'today journal', report));
+    if (projectsCutover && projectSafeJournal !== journal.content) report.omissions.push('Journal Projects section omitted after Projects cutover');
+    parts.push('', '# Today Journal', '', truncateText(projectSafeJournal, Number(options.journalMaxChars || 3200), 'today journal', report));
     report.sources.push(journal.path);
     report.handles.push(`Journal: ${journal.path}`);
   } else {
@@ -1098,7 +1303,7 @@ async function hydrate(options = {}) {
   }
 
   try {
-    const linkedNotes = journal.ok ? collectLinkedNotes(journal.content, jarvosPaths, options.linkedNotes || {}, report) : [];
+    const linkedNotes = journal.ok ? collectLinkedNotes(projectSafeJournal, jarvosPaths, options.linkedNotes || {}, report) : [];
     if (linkedNotes.length) {
       parts.push('', '# Notes Linked From Today');
       for (const note of linkedNotes) {
@@ -1431,6 +1636,7 @@ async function startupBrief(options = {}) {
 
 module.exports = {
   PROJECTS_CONTEXT_CONTRACT,
+  PROJECTS_CONTEXT_CUTOVER_ENV,
   controlPlane,
   loadControlPlaneManager,
   createNote,
@@ -1446,8 +1652,11 @@ module.exports = {
   recall,
   redactObviousSecrets,
   readProjectsContext,
+  stripProjectsJournalSection,
+  projectsContextCutoverEnabled,
   readSessionThread,
   setProjectsContextProvider,
+  routeThreadKey,
   startupBrief,
   synthesizeRecall,
   verifyNoteCaptureContract,

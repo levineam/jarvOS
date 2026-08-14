@@ -1,5 +1,7 @@
 'use strict';
 
+const crypto = require('node:crypto');
+
 const DISPATCH_CONTRACT_VERSION = 'jarvos-harness-dispatch.v1';
 const CAPABILITY_PROFILE_VERSION = 'jarvos-harness-capability-profile.v1';
 const SESSION_HANDOFF_CONTRACT_VERSION = 'jarvos-harness-session-handoff.v1';
@@ -8,6 +10,8 @@ const DISPATCH_MODES = ['split', 'native_gateway'];
 const LIFECYCLE_STATUSES = ['accepted', 'completed', 'delivered', 'failed', 'timed_out', 'ambiguous', 'cancelled', 'needs_input'];
 const CODING_EXECUTION_AUTHORITIES = ['work-run', 'lease', 'fence', 'worktree', 'pr', 'review'];
 const SAFE_CHILD_ENVIRONMENT = ['PATH', 'LANG', 'LC_ALL', 'TZ', 'TMPDIR', 'TEMP', 'TMP'];
+const ROUTE_CAPABILITY_VERSION = 'jarvos-route-capability.v1';
+const DEFAULT_ROUTE_CAPABILITY_TTL_MS = 30_000;
 
 function isObject(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -19,6 +23,68 @@ function errorResult(errors) {
 
 function isSha256(value) {
   return typeof value === 'string' && /^[a-f0-9]{64}$/i.test(value);
+}
+
+function base64Url(value) {
+  return Buffer.from(value).toString('base64url');
+}
+
+function canonicalRouteTuple(route = {}) {
+  const fields = ['harness', 'profile', 'platform', 'conversation', 'sender', 'nativeSession', 'generation'];
+  const normalized = {};
+  for (const field of fields) {
+    if (typeof route[field] !== 'string' || !route[field].trim() || route[field].length > 512) {
+      throw new Error(`route capability ${field} is required`);
+    }
+    normalized[field] = route[field].trim();
+  }
+  return fields.map((field) => `${field}=${JSON.stringify(normalized[field])}`).join('&');
+}
+
+function routeHmac(secret, payload) {
+  if (typeof secret !== 'string' || secret.length < 16) throw new Error('route capability secret is required');
+  return crypto.createHmac('sha256', secret).update(payload).digest('base64url');
+}
+
+/** Issue an opaque, short-lived route binding from trusted native hook fields. */
+function issueRouteCapability({ route, secret, now = Date.now(), ttlMs = DEFAULT_ROUTE_CAPABILITY_TTL_MS } = {}) {
+  const tuple = canonicalRouteTuple(route);
+  // The route identity is keyed as well as the capability envelope. This
+  // keeps the canonical session-thread key opaque even if a capability token
+  // is inspected by a local process, while retaining the fixed SHA-256 shape
+  // expected by the public contract.
+  const routeDigest = crypto.createHmac('sha256', secret)
+    .update(`jarvos-route-identity:${tuple}`)
+    .digest('hex');
+  const issuedAt = Number(now);
+  const expiresAt = issuedAt + Math.max(1000, Math.min(Number(ttlMs) || DEFAULT_ROUTE_CAPABILITY_TTL_MS, 5 * 60_000));
+  const payload = {
+    version: ROUTE_CAPABILITY_VERSION,
+    routeDigest,
+    generation: route.generation,
+    issuedAt,
+    expiresAt,
+  };
+  const encoded = base64Url(JSON.stringify(payload));
+  return `${encoded}.${routeHmac(secret, encoded)}`;
+}
+
+/** Validate an opaque route binding; callers never need or receive raw route dimensions. */
+function validateRouteCapability(token, { secret, expectedGeneration, now = Date.now() } = {}) {
+  if (typeof token !== 'string') return { ok: false, code: 'route_capability_missing' };
+  const [encoded, signature] = token.split('.');
+  if (!encoded || !signature) return { ok: false, code: 'route_capability_malformed' };
+  let expected;
+  try { expected = routeHmac(secret, encoded); } catch { return { ok: false, code: 'route_capability_secret_unavailable' }; }
+  const actualBuffer = Buffer.from(signature);
+  const expectedBuffer = Buffer.from(expected);
+  if (actualBuffer.length !== expectedBuffer.length || !crypto.timingSafeEqual(actualBuffer, expectedBuffer)) return { ok: false, code: 'route_capability_invalid' };
+  let payload;
+  try { payload = JSON.parse(Buffer.from(encoded, 'base64url').toString('utf8')); } catch { return { ok: false, code: 'route_capability_malformed' }; }
+  if (!payload || payload.version !== ROUTE_CAPABILITY_VERSION || !isSha256(payload.routeDigest)) return { ok: false, code: 'route_capability_invalid' };
+  if (expectedGeneration && payload.generation !== expectedGeneration) return { ok: false, code: 'route_capability_generation_mismatch' };
+  if (!Number.isFinite(payload.issuedAt) || !Number.isFinite(payload.expiresAt) || Number(now) < payload.issuedAt || Number(now) >= payload.expiresAt) return { ok: false, code: 'route_capability_expired' };
+  return { ok: true, routeDigest: payload.routeDigest, generation: payload.generation, issuedAt: payload.issuedAt, expiresAt: payload.expiresAt };
 }
 
 function hasCodingExecutionAuthority(authorities = []) {
@@ -268,8 +334,10 @@ function createSessionHandoff(input = {}) {
 }
 
 module.exports = {
+  isSha256,
   CAPABILITY_PROFILE_VERSION,
   CODING_EXECUTION_AUTHORITIES,
+  DEFAULT_ROUTE_CAPABILITY_TTL_MS,
   DISPATCH_CONTRACT_VERSION,
   DISPATCH_MODES,
   LIFECYCLE_STATUSES,
@@ -279,9 +347,13 @@ module.exports = {
   buildEgressPacket,
   createLifecycleReceipt,
   createSessionHandoff,
+  issueRouteCapability,
   redactDiagnostics,
   sanitizeChildEnvironment,
   validateSessionHandoff,
+  validateRouteCapability,
+  canonicalRouteTuple,
+  ROUTE_CAPABILITY_VERSION,
   validateCapabilityProfile,
   validateDispatchRequest,
 };

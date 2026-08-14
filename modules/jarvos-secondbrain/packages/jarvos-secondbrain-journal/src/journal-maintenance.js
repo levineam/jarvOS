@@ -31,6 +31,13 @@ const PACKAGE_ROOT = path.resolve(__dirname, '..');
 const CLAWD_ROOT = path.resolve(__dirname, '../../../..');
 const CONFIG_PATH = path.join(PACKAGE_ROOT, 'config', 'journal-module.json');
 const PAPERCLIP_BRIDGE_SCRIPT = path.join(CLAWD_ROOT, 'scripts', 'journal-paperclip-inbox.js');
+const PROJECTS_PROJECTION_MODULE = path.join(
+  PACKAGE_ROOT,
+  '..',
+  'jarvos-secondbrain-projects',
+  'src',
+  'journal-projection.js',
+);
 const SIGNATURE = '— Edited by Jarvis';
 const DEFAULT_TIMEZONE = 'America/New_York';
 const LEGACY_SALIENCE_LINE_RE = /^-\s*📌\s*\*\(([^,]+),\s*(\d+)%\)\*\s*(.+)$/i;
@@ -276,7 +283,7 @@ function journalMetrics(markdown, config) {
 }
 
 function isGeneratedPlaceholderLine(line) {
-  return /^-\s+(?:No events today|No reminders due today|No blocked Paperclip issues|No notes created(?: on .*)?|No notes today|No notes yet|No ongoing projects|\((?:calendar unavailable|reminders unavailable|projects unavailable(?:\s+—\s+[^)]+)?|Paperclip inbox script not found|Paperclip API unavailable)\))$/i.test(line);
+  return /^-\s+(?:No events today|No reminders due today|No blocked Paperclip issues|No notes created(?: on .*)?|No notes today|No notes yet|No ongoing projects|No projects touched today|\((?:calendar unavailable|reminders unavailable|projects unavailable(?:\s+—\s+[^)]+)?|Paperclip inbox script not found|Paperclip API unavailable)\))$/i.test(line);
 }
 
 /**
@@ -290,7 +297,7 @@ function isGeneratedPlaceholderLine(line) {
  * content that is already in the entry -- the existing list is better evidence
  * about the world than a marker saying we couldn't look.
  *
- * `projects.js` documented exactly this contract ("the journal treats [it] as a
+ * The Projects projection documents exactly this contract ("the journal treats [it] as a
  * degraded source and will not write over existing content") and the journal
  * never implemented it, so one unmounted volume or permissions blip would
  * rewrite a populated Projects section down to a single placeholder line.
@@ -659,29 +666,107 @@ function filterLegacyNotesCreatedContent(content) {
   );
 }
 
-function buildSourceFetchers() {
-  return {
-    /**
-     * Ongoing projects from the vault Projects record, as wiki-links.
-     *
-     * Unlike the other sources this is not time-bound — the projects you have
-     * are the projects you have, whichever day's entry is being written — so it
-     * renders for backfilled dates too rather than returning null for !isToday.
-     */
-    projects: () => {
-      try {
-        // eslint-disable-next-line global-require
-        const projects = require('../../jarvos-secondbrain-projects/src/projects');
-        const config = projects.loadConfig();
-        // readProjectsDir, not listProjects: null means the directory could not
-        // be read, which must render the unavailable marker rather than a
-        // positive "no ongoing projects". The Projects section renders on every
-        // date, so an unmounted vault would otherwise rewrite them all.
-        return projects.journalProjectLines(projects.readProjectsDir({ config }), config);
-      } catch {
-        return '- (projects unavailable)';
+function loadProjectsProjection() {
+  // The Journal package depends on the public projection contract only. The
+  // host selects the reader over registry/activity state; this module never
+  // reads Beads, Paperclip, or private state roots itself.
+  // eslint-disable-next-line global-require, import/no-dynamic-require
+  return require(PROJECTS_PROJECTION_MODULE);
+}
+
+function activityReceiptForProjection(activity) {
+  if (!activity || typeof activity !== 'object' || Array.isArray(activity)) return null;
+  if (activity.receipt && typeof activity.receipt === 'object') {
+    return { ...activity.receipt, trust: activity.receipt.trust || 'verified', accepted: true };
+  }
+  if (activity.trust === 'verified' || activity.accepted === true) return { ...activity, trust: 'verified', accepted: true };
+  return null;
+}
+
+function normalizeProjectsActivityResult(result, { date, timeZone, maxItems = 25 } = {}) {
+  const projection = loadProjectsProjection();
+  if (result && result.contract === projection.JOURNAL_PROJECTION_CONTRACT) return result;
+
+  const value = result && typeof result === 'object' ? result : {};
+  const state = value.activityProviderState || value.providerState || value.state
+    || (value.status === 'ok' ? 'fresh' : 'unavailable');
+  const packet = value.packet && typeof value.packet === 'object' ? value.packet : value;
+  const projects = Array.isArray(value.projects)
+    ? value.projects
+    : (Array.isArray(packet.projects) ? packet.projects : (Array.isArray(packet.canonical?.records) ? packet.canonical.records : []));
+  const rawActivities = Array.isArray(value.activities)
+    ? value.activities
+    : (Array.isArray(value.activityReceipts) ? value.activityReceipts : (Array.isArray(packet.activities) ? packet.activities : []));
+  let activities = rawActivities.map(activityReceiptForProjection).filter(Boolean);
+
+  // A verified Projects context packet exposes bounded activity summaries
+  // rather than receipt envelopes. They are safe for navigation only when the
+  // host explicitly marks the activity provider as fresh; context reads are
+  // not activity and therefore never reach this fallback.
+  if (!activities.length && value.status === 'ok' && state === 'fresh' && Array.isArray(packet.activity)) {
+    activities = packet.activity
+      .filter((summary) => summary && summary.category === 'activity' && summary.occurredAt)
+      .map((summary) => ({
+        canonicalId: summary.canonicalId,
+        occurredAt: summary.occurredAt,
+        trust: 'verified',
+        accepted: true,
+      }));
+  }
+
+  return projection.buildJournalProjection({
+    date,
+    timeZone,
+    projects,
+    activities,
+    activityProviderState: state,
+    coverageWatermark: value.coverageWatermark || value.watermark || packet.watermark || null,
+    generator: value.generator || 'projects-activity-v1',
+    maxItems,
+  });
+}
+
+function buildProjectsActivityFetcher({ reader, timeZone = DEFAULT_TIMEZONE, onProjection = null } = {}) {
+  return ({ date, config, section }) => {
+    if (typeof reader !== 'function' && !(reader && typeof reader.read === 'function')) {
+      return '- (projects unavailable — activity reader not configured)';
+    }
+    try {
+      const read = typeof reader === 'function' ? reader : reader.read.bind(reader);
+      const result = read({
+        profile: 'recent-activity',
+        date,
+        timeZone: timeZone || config?.timeZone || DEFAULT_TIMEZONE,
+        maxItems: Number(config?.journal?.maxItems || 25),
+        section,
+      });
+      if (result && typeof result.then === 'function') {
+        throw new Error('asynchronous Projects activity readers are not supported by synchronous journal maintenance');
       }
-    },
+      const projection = normalizeProjectsActivityResult(result, {
+        date,
+        timeZone: timeZone || config?.timeZone || DEFAULT_TIMEZONE,
+        maxItems: Number(config?.journal?.maxItems || 25),
+      });
+      if (typeof onProjection === 'function') onProjection(projection);
+      if (projection.preserve) return '- (projects unavailable — activity evidence degraded)';
+      return projection.content || '- No projects touched today';
+    } catch {
+      return '- (projects unavailable — activity reader failed)';
+    }
+  };
+}
+
+function buildSourceFetchers({ projectsActivityReader = null, timeZone = DEFAULT_TIMEZONE, onProjectProjection = null } = {}) {
+  return {
+    // Projects is now a touched-parent navigation projection. The host must
+    // supply a reader over admitted activity; there is no all-project
+    // filesystem fallback here.
+    projects: buildProjectsActivityFetcher({
+      reader: projectsActivityReader,
+      timeZone,
+      onProjection: onProjectProjection,
+    }),
 
     'google-calendar': ({ isToday }) => {
       if (!isToday) return null;
@@ -811,7 +896,14 @@ function normalizeSections(original, date, config, opts = {}) {
   const desiredByHeading = new Map(desiredSections.map((section) => [section.heading, section]));
   const configuredHeadingMap = buildConfiguredHeadingMap(config);
   const configuredById = new Map(desiredSections.map((section) => [section.id, section]));
-  const fetchers = { ...buildSourceFetchers(), ...(opts.fetchers || {}) };
+  const fetchers = {
+    ...buildSourceFetchers({
+      projectsActivityReader: opts.projectsActivityReader,
+      timeZone: opts.timeZone || config.timeZone || DEFAULT_TIMEZONE,
+      onProjectProjection: opts.onProjectProjection,
+    }),
+    ...(opts.fetchers || {}),
+  };
   const isToday = date === today();
 
   const withoutSignature = stripSignature(original);
@@ -915,14 +1007,13 @@ function normalizeSections(original, date, config, opts = {}) {
         }
       }
       // Most sources are a snapshot of *that day* and must never be
-      // back-written onto an older entry. Projects are current-state, not
-      // day-scoped, so they render on backfilled dates too.
+      // back-written onto an older entry. The activity projection is explicitly
+      // date-scoped, so it renders a backfilled date from that date's evidence.
       if (isToday || section.source === 'projects') {
         // ...but a DEGRADED read is not a fact about the world, only about our
         // ability to read it, so it must never overwrite content already in
-        // the entry. Without this, one unmounted volume rewrote a populated
-        // Projects list down to `- (projects unavailable)` on every date in
-        // the run, and burned an audit backup doing it.
+        // the entry. Without this, one unavailable activity source could
+        // rewrite a populated navigation list and burn an audit backup.
         content = isDegradedSourceMarker(fetched) && hasRenderedContent(existingContent)
           ? existingContent
           : (fetched || existingContent || '-');
@@ -1012,8 +1103,15 @@ function syncOneDate(date, config, opts = {}) {
     ? readKnownGoodContent(journalDir, date, knownGood)
     : null;
   const source = restoreSource || original;
+  let projectProjection = null;
   const normalized = normalizeSections(source, date, config, {
     fetchers: opts.fetchers,
+    projectsActivityReader: opts.projectsActivityReader,
+    timeZone: opts.timeZone,
+    onProjectProjection: (projection) => {
+      projectProjection = projection;
+      if (typeof opts.onProjectProjection === 'function') opts.onProjectProjection(projection);
+    },
     sectionTransforms: opts.sectionTransforms,
   });
   const updated = renderJournal(date, config, normalized);
@@ -1036,6 +1134,7 @@ function syncOneDate(date, config, opts = {}) {
       filePath: journalPath,
       expectedContent: original,
       nextContent: updated,
+      projectionReceipt: projectProjection,
     });
   }
 
@@ -1081,10 +1180,8 @@ function syncOneDate(date, config, opts = {}) {
   //   1. A section-contract change. Retiring a section shrinks every entry, so
   //      the first pass after the change reports `stale` against the old
   //      snapshot.
-  //   2. Ordinary generated-section churn. Generated sections are current-state,
-  //      and Projects renders on backfilled dates by design ("Projects is
-  //      refreshed on a backfilled date, unlike day-scoped sources"), so marking
-  //      one project done drops a line from every past entry.
+  //   2. Ordinary generated-section churn. Generated sections are projections,
+  //      and a late activity receipt may legitimately change a backfilled date.
   //
   // In both cases, refusing to refresh pins the entry to an older, larger
   // snapshot PERMANENTLY: the next pass makes the same comparison and reaches
@@ -1140,6 +1237,7 @@ function syncOneDate(date, config, opts = {}) {
     healthAfter,
     backupPath,
     restoredKnownGood: Boolean(restoreSource),
+    projectProjection,
   };
 }
 
@@ -1285,6 +1383,9 @@ function runMaintenance(argv = process.argv.slice(2), opts = {}) {
     ...args,
     ...(opts.applyMarkdownMutation ? { applyMarkdownMutation: opts.applyMarkdownMutation } : {}),
     ...(opts.createMarkdownFile ? { createMarkdownFile: opts.createMarkdownFile } : {}),
+    ...(opts.projectsActivityReader ? { projectsActivityReader: opts.projectsActivityReader } : {}),
+    ...(opts.timeZone ? { timeZone: opts.timeZone } : {}),
+    ...(opts.onProjectProjection ? { onProjectProjection: opts.onProjectProjection } : {}),
   };
   const results = dates.map((date) => sync(date, config, mutationOptions));
   const journalDir = path.dirname(results[0].journalPath);
@@ -1343,6 +1444,7 @@ function main(argv = process.argv.slice(2), env = process.env, options = {}) {
 module.exports = {
   applySectionTransforms,
   buildSourceFetchers,
+  buildProjectsActivityFetcher,
   main,
   classifyJournalHealth,
   contractSignature,
@@ -1354,6 +1456,7 @@ module.exports = {
   loadConfig,
   readConfig,
   normalizeSections,
+  normalizeProjectsActivityResult,
   requiresDeferredBacklinkAttention,
   renderJournal,
   resolveDateSpec,

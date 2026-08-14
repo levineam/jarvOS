@@ -38,6 +38,9 @@ try {
     JARVOS_VAULT_PATH: vault,
     JARVOS_WORKSPACE_PATH: workspace,
     JARVOS_RUNTIME: 'minimal',
+    // Keep doctor discovery inside the disposable CLI fixture; never inspect
+    // the developer's live Codex profile during repository tests.
+    CODEX_HOME: path.join(tmp, 'codex-home'),
     JARVOS_CONTROL_PLANE_SERVICE_MODULE: controlPlaneHost,
   };
   const fakeOpenClaw = path.join(tmp, 'openclaw');
@@ -166,6 +169,33 @@ try {
   const report = JSON.parse(jsonDoctor.stdout);
   assert.equal(report.ok, true);
   assert.equal(report.profile.id, 'minimal');
+  assert.deepEqual(report.modules, []);
+
+  const healthModules = path.join(workspace, '.jarvos', 'health-modules');
+  fs.mkdirSync(healthModules, { recursive: true, mode: 0o700 });
+  const memorySnapshotPath = path.join(healthModules, 'memory.json');
+  fs.writeFileSync(memorySnapshotPath, `${JSON.stringify({
+    schema: 'jarvos-health-module-snapshot/v1',
+    moduleId: 'memory',
+    generation: 1,
+    observedAt: '2026-08-12T23:00:00.000Z',
+    validUntil: '2099-08-13T23:00:00.000Z',
+    trust: 'trusted',
+    repairable: false,
+    updateAvailable: true,
+  })}\n`, 'utf8');
+  fs.chmodSync(memorySnapshotPath, 0o600);
+  const moduleDoctor = run(['doctor', '--profile', 'minimal', '--workspace', workspace, '--json'], { env });
+  assert.equal(moduleDoctor.status, 0, moduleDoctor.stderr || moduleDoctor.stdout);
+  const moduleReport = JSON.parse(moduleDoctor.stdout);
+  assert.deepEqual(moduleReport.modules, [{
+    id: 'memory',
+    state: 'update available',
+    generation: 1,
+    observedAt: '2026-08-12T23:00:00.000Z',
+    validUntil: '2099-08-13T23:00:00.000Z',
+    reasonClass: 'update-available',
+  }]);
 
   const localDoctorEnv = {
     ...env,

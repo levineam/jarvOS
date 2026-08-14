@@ -150,9 +150,28 @@ function buildMcpToolDescriptor(host, options = {}) {
           type: 'object',
           description: 'Optional tracker issue payload. Must remain pointer-first.',
         },
+        continuityReference: {
+          type: 'object',
+          description: 'Optional pointer-only session-thread or handoff reference. Raw transcript or note content is not accepted.',
+        },
       },
     },
   };
+}
+
+function assertPointerOnlyContinuity(reference) {
+  if (reference === undefined || reference === null) return;
+  if (!reference || typeof reference !== 'object' || Array.isArray(reference)) {
+    throw new Error('continuityReference must be a pointer-only object');
+  }
+  for (const field of ['transcript', 'messages', 'rawText', 'content', 'body', 'noteContent']) {
+    if (reference[field] !== undefined) {
+      throw new Error(`continuityReference may not include ${field}; use a pointer and digest`);
+    }
+  }
+  if (!Object.values(reference).some((value) => typeof value === 'string' && value)) {
+    throw new Error('continuityReference requires a non-empty pointer field');
+  }
 }
 
 function buildSkillDescriptor(host, options = {}) {
@@ -199,7 +218,22 @@ function createCodingHostAdapter(host, options = {}) {
   }
 
   async function invoke(input = {}) {
+    assertPointerOnlyContinuity(input.continuityReference);
     const adapters = await resolveAdapters(input);
+    const managedWorkflow = adapters.managedWorkflow || options.managedWorkflow || null;
+    const operation = input.operation || input.workflowOperation;
+    if (managedWorkflow && ['plan', 'work', 'complete', 'compound'].includes(operation)) {
+      const handler = managedWorkflow[operation];
+      if (typeof handler !== 'function') throw new Error(`managed coding workflow does not support ${operation}`);
+      const result = await handler(input, adapters);
+      return {
+        schemaVersion: HOST_ADAPTER_SCHEMA_VERSION,
+        host: normalizedHost,
+        operation,
+        status: result.status || (result.ok === false ? 'failed' : 'completed'),
+        result,
+      };
+    }
     const result = await runTakeIssueToDone(input, adapters);
     return {
       schemaVersion: HOST_ADAPTER_SCHEMA_VERSION,
@@ -238,6 +272,10 @@ function createCodexHostAdapter(options = {}) {
 
 function createOpenClawHostAdapter(options = {}) {
   return createCodingHostAdapter('openclaw', options);
+}
+
+function createHermesHostAdapter(options = {}) {
+  return createCodingHostAdapter('hermes', options);
 }
 
 function codingControlPlaneManifest(options = {}) {
@@ -715,6 +753,7 @@ module.exports = {
   createClaudeCodeHostAdapter,
   createCodexHostAdapter,
   createCodingHostAdapter,
+  createHermesHostAdapter,
   createCodingControlPlanePort,
   createOpenClawHostAdapter,
   codingControlPlaneManifest,

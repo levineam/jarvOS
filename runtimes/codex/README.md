@@ -3,6 +3,39 @@
 This adapter connects local Codex CLI and Codex app sessions to jarvOS through
 the shared `@jarvos/agent-context` MCP server and a Codex `SessionStart` hook.
 
+## Compound Engineering provider
+
+`compound-engineering-capability.json` declares the approved Compound Engineering
+source revision. The runtime manifest also declares the managed provider, its
+`CODEX_HOME` profile boundary, and the checked-in
+`compound-engineering-conformance.json` evidence. A disposable authenticated
+profile proved the immutable marketplace install, fresh-process discovery,
+bounded `plan` and `work` receipts, capability isolation, and exact-owned-state
+rollback.
+
+An installed plugin is healthy only when it matches the approved pin and the
+reviewed conformance receipt. Doctor reports the discovered version and health;
+ordinary jarvOS `plan`, `work`, and `complete` requests use the CE route when
+healthy and the native fallback in the same durable work run when absent,
+modified, disabled, or otherwise unavailable.
+
+Discovery commands are read-only. `codex plugin marketplace add` and
+`codex plugin add` are the exact pinned activation commands; they are scoped to
+the selected `CODEX_HOME`, and rollback removes only the provider marketplace
+and plugin state owned by jarvOS. Capability discovery and doctor never mutate a
+profile.
+
+The durable evidence contract is:
+
+- approved pin: `3.21.4` at the reviewed immutable revision and digest
+- observed installation: Codex `0.146.0`, marketplace and plugin version found
+- invocation: strict `plan` and `work` receipts validated against the jarvOS
+  provider contract
+- denied capabilities: credentials, network, profile state, and privileged
+  tools are not available to the provider operation
+- recovery: continue through native jarvOS coding whenever the provider is not
+  healthy; rerun doctor after profile repair or an approved update
+
 ## Setup
 
 From the jarvOS repo root:
@@ -21,6 +54,35 @@ On a public or minimal install with no private host configured, that command is
 enough: setup registers the shared MCP server without control-plane host
 bindings. `jarvos_control_plane` remains declared on the tool surface; live
 authenticated host operations require the optional bindings below.
+
+### Managed Compound Engineering activation
+
+The setup script preserves an existing Codex profile unless activation is
+explicitly requested. A new managed coding profile enables the reviewed pin by
+running:
+
+```bash
+JARVOS_CODEX_PROVIDER_MODE=new-managed ./runtimes/codex/setup.sh
+```
+
+An existing profile can opt in with `JARVOS_CODEX_PROVIDER_MODE=opt-in`. The
+activation path reads the shipped capability and conformance records, applies
+only their exact pinned marketplace/plugin argv, verifies the fresh profile
+state, and records the provider-owned additions under the selected
+`CODEX_HOME`. It refuses to replace a stale, disabled, locally changed, or
+unverifiable installation. `existing` (the default) and `disabled` modes leave
+the profile untouched and jarvOS uses native fallback when CE is unavailable.
+
+To remove only additions made by jarvOS, use the same profile and explicit
+rollback flag:
+
+```bash
+JARVOS_MANAGED_HARNESS_ROLLBACK=1 ./runtimes/codex/setup.sh
+```
+
+Rollback preserves the marketplace when another plugin now uses it and refuses
+to remove provider state that changed after jarvOS installed it. Restart Codex
+after activation or rollback before relying on the new profile state.
 
 ### Optional authenticated control-plane host
 

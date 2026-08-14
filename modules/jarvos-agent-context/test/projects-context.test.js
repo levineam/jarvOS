@@ -19,7 +19,7 @@ const {
 } = require('../scripts/jarvos-mcp.js');
 
 const QUERY = {
-  scope: { projectIds: [], outcomeIds: [], includeDescendants: false },
+  scope: { projectIds: ['prj_000001'], outcomeIds: ['out_000001'], includeDescendants: false },
   include: ['hierarchy', 'activity', 'currentWork', 'attention'],
   limits: { maxItems: 12, maxBytes: 9000, maxProviderAgeSeconds: 3600 },
 };
@@ -84,6 +84,37 @@ function withTempContextEnv(fn) {
   });
 }
 
+function withHostProjectsProvider(fn) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-projects-context-host-'));
+  const workspaceRoot = path.join(root, 'workspace');
+  const repositoryRoot = path.join(workspaceRoot, 'repository');
+  const stateRoot = path.join(workspaceRoot, 'state');
+  fs.mkdirSync(repositoryRoot, { recursive: true });
+  fs.mkdirSync(path.join(stateRoot, 'registry'), { recursive: true });
+  fs.mkdirSync(path.join(stateRoot, 'release-provider'), { recursive: true });
+  const providerModule = path.join(repositoryRoot, 'provider.js');
+  fs.writeFileSync(providerModule, `const packet = ${JSON.stringify(packet())};\nmodule.exports.read = async ({ query, registryStateDir, releaseProviderStateDir, capabilitySecret, hostSecret }) => { if (!registryStateDir || !releaseProviderStateDir || capabilitySecret !== 'capability-value' || hostSecret !== 'host-secret') throw new Error('private binding missing'); return { status: 'ok', packet: { ...packet, query } }; };\n`);
+  for (const [name, value] of [['capability', 'capability-value'], ['secret', 'host-secret']]) {
+    const target = path.join(stateRoot, name);
+    fs.writeFileSync(target, value);
+    fs.chmodSync(target, 0o600);
+  }
+  const config = path.join(root, 'projects-context.json');
+  fs.writeFileSync(config, JSON.stringify({
+    workspaceRoot, repositoryRoot, providerModule, stateRoot,
+    registryStateDir: path.join(stateRoot, 'registry'), releaseProviderStateDir: path.join(stateRoot, 'release-provider'),
+    capabilitySecret: path.join(stateRoot, 'capability'), hostSecret: path.join(stateRoot, 'secret'),
+  }));
+  fs.chmodSync(config, 0o600);
+  const previous = process.env.JARVOS_PROJECTS_CONTEXT_CONFIG;
+  process.env.JARVOS_PROJECTS_CONTEXT_CONFIG = config;
+  return Promise.resolve().then(() => fn({ root, workspaceRoot, repositoryRoot, stateRoot, config })).finally(() => {
+    if (previous === undefined) delete process.env.JARVOS_PROJECTS_CONTEXT_CONFIG;
+    else process.env.JARVOS_PROJECTS_CONTEXT_CONFIG = previous;
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+}
+
 test.after(() => {
   setMcpProjectsContextProvider(null);
 });
@@ -92,13 +123,40 @@ test('library and MCP use the same injected Projects packet and fingerprint', as
   const provider = { read: async ({ query }) => ({ status: 'ok', packet: { ...packet(), query } }) };
   const libraryResult = await readProjectsContext({ provider, query: QUERY });
   setMcpProjectsContextProvider(provider);
-  const mcpResult = await callTool('jarvos_projects_context', {});
+  const mcpResult = await callTool('jarvos_projects_context', { query: QUERY });
   const mcpPayload = JSON.parse(mcpResult.content[0].text);
 
   assert.equal(libraryResult.status, 'ok');
   assert.equal(mcpPayload.status, 'ok');
   assert.equal(mcpPayload.fingerprint, libraryResult.fingerprint);
   assert.equal(mcpPayload.packet.canonical.records[1].breadcrumb, 'jarvOS › v1.0.0 release');
+});
+
+test('recent activity is rendered as bounded assistant context', async () => {
+  const provider = {
+    read: async ({ query }) => ({
+      status: 'ok',
+      packet: {
+        ...packet(),
+        query,
+        activity: [{
+          id: 'activity-1',
+          canonicalId: 'out_000001',
+          category: 'activity',
+          status: 'completed',
+          title: 'Reconciled release readiness',
+          occurredAt: '2026-08-12T18:00:00.000Z',
+          observedAt: '2026-08-12T18:01:00.000Z',
+          evidenceRefs: ['coding:run-1'],
+          source: 'beads',
+        }],
+      },
+    }),
+  };
+  const result = await readProjectsContext({ provider, query: QUERY, maxChars: 2000 });
+  assert.equal(result.status, 'ok');
+  assert.match(result.markdown, /### Recent activity/);
+  assert.match(result.markdown, /Reconciled release readiness \[completed\]/);
 });
 
 test('missing Projects capability leaves legacy hydration available and reports shadow unavailability', async () => {
@@ -111,6 +169,143 @@ test('missing Projects capability leaves legacy hydration available and reports 
     assert.match(result.markdown, /jarvOS Current Work/);
     assert.match(result.markdown, /Projects context unavailable/);
   });
+});
+
+test('host Projects binding is discovered privately with library and MCP parity', async () => {
+  setMcpProjectsContextProvider(null);
+  await withHostProjectsProvider(async () => {
+    const libraryResult = await readProjectsContext({ profile: 'orientation' });
+    const mcpPayload = JSON.parse((await callTool('jarvos_projects_context', { profile: 'orientation' })).content[0].text);
+    const hydration = await hydrate({ sessionThread: false, maxChars: 3000 });
+    assert.equal(libraryResult.status, 'ok');
+    assert.equal(mcpPayload.status, 'ok');
+    assert.equal(mcpPayload.fingerprint, libraryResult.fingerprint);
+    assert.equal(hydration.report.projectsContext.status, 'ok');
+  });
+});
+
+test('named profiles require bounded caller scope and carry the temporal window', async () => {
+  const requests = [];
+  const provider = {
+    read: async (request) => {
+      requests.push(request);
+      return { status: 'ok', packet: { ...packet(), query: request.query } };
+    },
+  };
+  const result = await readProjectsContext({
+    provider,
+    profile: 'recent-activity',
+    projectIds: ['prj_000001'],
+    outcomeIds: ['out_000001'],
+    includeDescendants: true,
+    date: '2026-08-12',
+    timeZone: 'America/New_York',
+    now: '2026-08-13T02:00:00.000Z',
+  });
+  assert.equal(result.status, 'ok');
+  assert.equal(result.profile.name, 'recent-activity');
+  assert.equal(result.activityWindow.from, '2026-08-12T04:00:00.000Z');
+  assert.equal(requests[0].profile.name, 'recent-activity');
+  assert.deepEqual(requests[0].query.scope, {
+    projectIds: ['prj_000001'], outcomeIds: ['out_000001'], includeDescendants: true,
+  });
+  assert.equal(requests[0].activityWindow.to, '2026-08-13T04:00:00.000Z');
+
+  const unscoped = await readProjectsContext({ provider, profile: 'orientation' });
+  assert.equal(unscoped.status, 'unavailable');
+  assert.equal(unscoped.code, 'PROJECTS_QUERY_UNAVAILABLE');
+  const forgedAuthorization = await readProjectsContext({ provider, profile: 'orientation', authorizedScope: true });
+  assert.equal(forgedAuthorization.status, 'unavailable');
+  assert.equal(forgedAuthorization.code, 'PROJECTS_QUERY_UNAVAILABLE');
+  for (const scopeOptions of [
+    { projectIds: [], outcomeIds: [] },
+    { scope: {} },
+    { includeDescendants: true },
+  ]) {
+    const emptyScope = await readProjectsContext({ provider, profile: 'orientation', ...scopeOptions });
+    assert.equal(emptyScope.status, 'unavailable');
+    assert.equal(emptyScope.code, 'PROJECTS_QUERY_UNAVAILABLE');
+  }
+  const unknown = await readProjectsContext({ provider, profile: 'portfolio', projectIds: ['prj_000001'] });
+  assert.equal(unknown.status, 'unavailable');
+  assert.equal(unknown.code, 'PROJECTS_QUERY_UNAVAILABLE');
+});
+
+test('hydration cutover removes raw Paperclip and Journal project orientation', async () => {
+  const provider = { read: async ({ query }) => ({ status: 'ok', packet: { ...packet(), query } }) };
+  setProjectsContextProvider(provider);
+  await withTempContextEnv(async () => {
+    const dateParts = Object.fromEntries(new Intl.DateTimeFormat('en-US', {
+      timeZone: 'UTC', year: 'numeric', month: '2-digit', day: '2-digit',
+    }).formatToParts(new Date()).map((part) => [part.type, part.value]));
+    const date = `${dateParts.year}-${dateParts.month}-${dateParts.day}`;
+    fs.writeFileSync(path.join(process.env.JARVOS_JOURNAL_DIR, `${date}.md`), [
+      '# Journal', '', '## 🚀 Projects', '', '- [[jarvOS v1.0.0 release]]', '', '## Notes', '', 'Worked on the release reconciler.',
+    ].join('\n'));
+    const result = await hydrate({ sessionThread: false, maxChars: 5000, projectsContextCutover: true });
+    assert.equal(result.report.projectsContext.status, 'ok');
+    assert.doesNotMatch(result.markdown, /Paperclip Current Work|jarvOS v1\.0\.0 release/);
+    assert.match(result.markdown, /Worked on the release reconciler/);
+    assert.match(result.markdown, /legacy project\/task orientation disabled/);
+    assert.match(result.markdown, /Journal Projects section omitted/);
+  });
+  setProjectsContextProvider(null);
+});
+
+test('invalid host Projects bindings fail closed without exposing host paths', async () => {
+  setMcpProjectsContextProvider(null);
+  await withHostProjectsProvider(async ({ config, root }) => {
+    fs.writeFileSync(config, '{not json');
+    const malformed = await readProjectsContext({ query: QUERY });
+    assert.equal(malformed.status, 'unavailable');
+    assert.doesNotMatch(malformed.reason, new RegExp(root.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+
+    fs.writeFileSync(config, JSON.stringify({ workspaceRoot: root, repositoryRoot: root, stateRoot: root, providerModule: path.join(root, 'escaped.js') }));
+    fs.chmodSync(config, 0o600);
+    const escaped = JSON.parse((await callTool('jarvos_projects_context', {})).content[0].text);
+    assert.equal(escaped.status, 'unavailable');
+    assert.doesNotMatch(escaped.reason, /escaped\.js|projects-context-host/);
+
+    fs.chmodSync(config, 0o666);
+    const untrusted = await readProjectsContext({ query: QUERY });
+    assert.equal(untrusted.status, 'unavailable');
+  });
+});
+
+test('provider failures and omitted host secret stay private', async () => {
+  setMcpProjectsContextProvider(null);
+  await withHostProjectsProvider(async ({ config, repositoryRoot }) => {
+    const bound = JSON.parse(fs.readFileSync(config, 'utf8'));
+    delete bound.hostSecret;
+    fs.writeFileSync(config, JSON.stringify(bound));
+    fs.chmodSync(config, 0o600);
+    fs.writeFileSync(bound.providerModule, `const packet = ${JSON.stringify(packet())};\nmodule.exports.read = async ({ query, hostSecret }) => { if (hostSecret !== null) throw new Error('secret leaked'); return { status: 'ok', packet: { ...packet, query } }; };\n`);
+    const noSecret = await readProjectsContext({ query: QUERY });
+    assert.equal(noSecret.status, 'ok');
+
+    fs.writeFileSync(bound.providerModule, "module.exports.read = async () => ({ status: 'unavailable', reason: 'host-secret /private/provider-payload' });\n");
+    delete require.cache[require.resolve(bound.providerModule)];
+    const failure = await readProjectsContext({ query: QUERY });
+    assert.equal(failure.status, 'unavailable');
+    assert.equal(failure.reason, 'Projects provider is unavailable');
+    assert.doesNotMatch(failure.reason, /host-secret|private|payload/);
+    fs.writeFileSync(bound.providerModule, "module.exports.read = async () => { throw new Error('host-secret /private/provider-payload'); };\n");
+    delete require.cache[require.resolve(bound.providerModule)];
+    const thrown = await readProjectsContext({ query: QUERY });
+    assert.equal(thrown.reason, 'Projects provider is unavailable');
+    assert.ok(repositoryRoot);
+  });
+});
+
+test('Projects provider reads are bounded and time out without leaking diagnostics', async () => {
+  const result = await readProjectsContext({
+    provider: { read: () => new Promise(() => {}) },
+    query: QUERY,
+    projectsContextTimeoutMs: 50,
+  });
+  assert.equal(result.status, 'unavailable');
+  assert.equal(result.code, 'PROJECTS_PROVIDER_TIMEOUT');
+  assert.doesNotMatch(result.markdown, /timed out|Promise|provider payload/i);
 });
 
 test('Projects proposals remain uncommitted and parity is shared through MCP', async () => {
