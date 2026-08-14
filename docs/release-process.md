@@ -45,6 +45,33 @@ tag with nothing tracked under `## [Unreleased]` (unlogged work). It reports a
 healthy "ready to tag" state and is advisory — intentionally not part of
 `release:check`'s blocking gates.
 
+## Source-Bound Release Status
+
+To inspect a release without relying on an old message or a task-board status,
+run the on-demand observer against an explicit upstream source revision:
+
+```bash
+npm run release:status -- --version v1.0.0 --source-ref origin/main --verify
+```
+
+The observer resolves the ref to an immutable commit, reads GitHub's published
+release facts, and combines the current drift and readiness checks into one
+machine-readable result. `READY`, `NOT READY`, and `PARTIAL` are successful
+observations with current evidence; `UNAVAILABLE` means the source, GitHub, or
+verification boundary could not be trusted. Use `--json` for an agent-facing
+payload. `--reduced-cost` is available for an explicit bounded check, but it
+reports partial coverage and cannot claim full readiness verification. Verified
+mode confirms the source SHA against GitHub, creates a disposable detached
+checkout, refreshes dependencies from `package-lock.json` with
+`npm ci --ignore-scripts`, and runs the full check there. The caller's working
+tree is never used for verified dependency execution.
+
+This command only observes. It does not choose release scope, create tags,
+approve publication, publish a GitHub Release, or treat Paperclip as a source
+of truth. Beads remains the executable repair ledger; Projects and the Active
+Assistant consume the private reconciler's admitted context rather than this
+human/Telegram rendering.
+
 ## Release Checklist
 
 1. Confirm the selected release plan lists the intended scope and blockers.
