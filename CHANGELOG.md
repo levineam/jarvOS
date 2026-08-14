@@ -10,6 +10,10 @@ published release. Publication still requires Andrew approval and a green
 `npm run release:check` after `package.json` is intentionally bumped.
 
 ### Added
+- Add a data-only optional Memory health module to `jarvos doctor`. The public
+  Doctor owns the four-state health vocabulary and keeps private Supervisor
+  diagnostics, repair commands, runtime paths, and delivery receipts out of
+  user-facing output.
 - Add a fail-closed public Active Assistant runtime bridge and optional bounded
   CASS transcript retrieval. Personal coach configuration, notes, messages,
   credentials, and runtime state remain host-owned and are not distributed.

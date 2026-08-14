@@ -63,9 +63,18 @@ function legacyEntry() {
 
 const stubFetchers = { projects: () => '- [[Alpha]]\n- [[Beta]]' };
 
-function render(original, { fetchers = stubFetchers, date = TEST_DATE } = {}) {
+function render(original, {
+  fetchers = stubFetchers,
+  date = TEST_DATE,
+  projectsActivityReader,
+  timeZone,
+} = {}) {
   const config = loadConfig();
-  const normalized = normalizeSections(original, date, config, { fetchers });
+  const normalized = normalizeSections(original, date, config, {
+    fetchers,
+    projectsActivityReader,
+    timeZone,
+  });
   return renderJournal(date, config, normalized);
 }
 
@@ -123,7 +132,60 @@ test('Projects renders first, ahead of Notes', () => {
   assert.ok(output.indexOf('## 🚀 Projects') < output.indexOf('## 📝 Notes'));
 });
 
-test('Projects is refreshed on a backfilled date, unlike day-scoped sources', () => {
+test('activity-backed projection renders a touched Outcome as its canonical parent', () => {
+  const output = render('', {
+    fetchers: {},
+    timeZone: 'America/New_York',
+    projectsActivityReader: ({ profile, date, timeZone }) => {
+      assert.equal(profile, 'recent-activity');
+      assert.equal(date, TEST_DATE);
+      assert.equal(timeZone, 'America/New_York');
+      return {
+        status: 'ok',
+        coverageWatermark: 'activity:7',
+        projects: [
+          { id: 'prj_000001', kind: 'project', title: 'jarvOS', lifecycle: 'active' },
+          { id: 'out_000001', kind: 'outcome', title: 'v1.0.0 release', parentId: 'prj_000001', lifecycle: 'active' },
+          { id: 'prj_000002', kind: 'project', title: 'Untouched', lifecycle: 'active' },
+        ],
+        activities: [{ canonicalId: 'out_000001', occurredAt: '2026-01-02T15:00:00.000Z', trust: 'verified' }],
+      };
+    },
+  });
+  assert.equal(sectionBody(output, '## 🚀 Projects'), '- [[jarvOS]]');
+  assert.doesNotMatch(output, /v1\.0\.0 release/);
+  assert.doesNotMatch(output, /Untouched/);
+});
+
+test('healthy-empty activity evidence clears stale navigation while degraded evidence preserves it', () => {
+  const entry = [
+    '---',
+    'journal: Journal',
+    `journal-date: ${TEST_DATE}`,
+    '---',
+    '',
+    '## 🚀 Projects',
+    '- [[jarvOS]]',
+    '',
+    '## 📝 Notes',
+    '- [[Note]]',
+    '',
+  ].join('\n');
+
+  const empty = render(entry, {
+    fetchers: {},
+    projectsActivityReader: () => ({ status: 'ok', activityProviderState: 'healthy-empty', projects: [], activities: [] }),
+  });
+  assert.equal(sectionBody(empty, '## 🚀 Projects'), '- No projects touched today');
+
+  const degraded = render(entry, {
+    fetchers: {},
+    projectsActivityReader: () => ({ status: 'partial', activityProviderState: 'partial', projects: [], activities: [] }),
+  });
+  assert.equal(sectionBody(degraded, '## 🚀 Projects'), '- [[jarvOS]]');
+});
+
+test('activity projection can repair a backfilled date from that date\'s evidence', () => {
   const older = [
     '---',
     'journal: Journal',
@@ -138,8 +200,16 @@ test('Projects is refreshed on a backfilled date, unlike day-scoped sources', ()
     '',
   ].join('\n');
 
-  const output = render(older, { date: '2025-12-01' });
-  assert.equal(sectionBody(output, '## 🚀 Projects'), '- [[Alpha]]\n- [[Beta]]');
+  const output = render(older, {
+    date: '2025-12-01',
+    fetchers: {},
+    projectsActivityReader: ({ date }) => ({
+      status: 'ok',
+      projects: [{ id: 'prj_000001', kind: 'project', title: 'Historical', lifecycle: 'active' }],
+      activities: [{ canonicalId: 'prj_000001', occurredAt: `${date}T11:00:00.000Z`, trust: 'verified' }],
+    }),
+  });
+  assert.equal(sectionBody(output, '## 🚀 Projects'), '- [[Historical]]');
 });
 
 /**
