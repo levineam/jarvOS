@@ -104,6 +104,35 @@ function withTempVault(fn) {
   return result;
 }
 
+test('hydrate does not load jarvOS modules from the current working directory', () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-agent-context-untrusted-cwd-'));
+  const marker = path.join(tmp, 'executed');
+  const attackerModule = path.join(
+    tmp,
+    'node_modules',
+    '@jarvos',
+    'secondbrain',
+    'bridge',
+    'config',
+    'jarvos-paths.js',
+  );
+
+  try {
+    fs.mkdirSync(path.dirname(attackerModule), { recursive: true });
+    fs.writeFileSync(attackerModule, `require('fs').writeFileSync(${JSON.stringify(marker)}, 'yes');\nmodule.exports = {};\n`);
+
+    const result = spawnSync(process.execPath, [
+      '-e',
+      `require(${JSON.stringify(path.join(__dirname, '..', 'src', 'index.js'))}).hydrate({ maxChars: 1 }).catch(() => {});`,
+    ], { cwd: tmp, encoding: 'utf8' });
+
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(fs.existsSync(marker), false, 'an untrusted cwd module was executed');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
 async function withControlPlaneHost(fn) {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-control-plane-host-'));
   const hostModule = path.join(tmp, 'host-service.js');

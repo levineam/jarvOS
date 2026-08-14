@@ -76,7 +76,10 @@ function firstString(...values) {
 
 function loadModule(packageName, fallbackPath) {
   try {
-    return require(require.resolve(packageName, { paths: [process.cwd(), MODULE_ROOT] }));
+    // Runtime hooks can execute while the current directory is an untrusted
+    // project. Resolve optional jarvOS packages only from our installed module
+    // tree so a project-local node_modules cannot run code during hydration.
+    return require(require.resolve(packageName, { paths: [MODULE_ROOT] }));
   } catch {
     return require(fallbackPath);
   }
