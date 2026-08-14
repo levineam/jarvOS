@@ -5,6 +5,7 @@
 // policy; consumers pass only a parsed artifact and the effective instant.
 
 const crypto = require('crypto');
+const { CONTENT_ORIGINS } = require('./content-origin-contract');
 
 const RIPENESS_ARTIFACT_SCHEMA_VERSION = 'jarvos-ripeness-artifact/v2';
 const LEGACY_RIPENESS_ARTIFACT_SCHEMA_VERSION = 'jarvos-ripeness-artifact/v1';
@@ -15,7 +16,6 @@ const MAX_THEMES = 3;
 const MAX_FRAGMENTS_PER_THEME = 4;
 const MAX_SUPPORT_PER_THEME = 4;
 const MAX_FRAGMENT_CHARS = 320;
-const CONTENT_ORIGINS = Object.freeze(['human', 'assistant', 'mixed', 'unknown']);
 const HUMAN_ORIGIN_BASES = Object.freeze(['verbatim_user', 'user_derived', 'legacy_author', 'unknown']);
 const CONTEXT_ORIGIN_BASES = Object.freeze(['assistant_generated', 'mixed_composition', 'unknown', 'legacy_author']);
 const CONTEXT_BASIS_BY_ORIGIN = Object.freeze({

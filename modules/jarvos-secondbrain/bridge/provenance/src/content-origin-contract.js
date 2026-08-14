@@ -13,6 +13,10 @@ const CONTENT_ORIGIN_BASES = Object.freeze([
   'legacy_author',
 ]);
 
+function emptyOriginCounts() {
+  return Object.fromEntries(CONTENT_ORIGINS.map((origin) => [origin, 0]));
+}
+
 const BASIS_ORIGIN = Object.freeze({
   verbatim_user: 'human',
   user_derived: 'human',
@@ -340,6 +344,7 @@ module.exports = {
   CONTENT_ORIGIN_SCHEMA_VERSION,
   CONTENT_ORIGINS,
   CONTENT_ORIGIN_BASES,
+  emptyOriginCounts,
   BASIS_ORIGIN,
   LEGACY_AUTHOR_ORIGINS,
   cleanText,
