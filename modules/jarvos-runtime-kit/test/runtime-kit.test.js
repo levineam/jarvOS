@@ -66,7 +66,7 @@ test('Compound Engineering provider status distinguishes discovery from activati
     capabilityCheck,
     evidence: {
       marketplaces: [{ name: 'compound-engineering-plugin', revision: loaded.capability.provider.revision }],
-      installed: [{ name: 'compound-engineering', version: '3.21.4', enabled: true }],
+      installed: [{ pluginId: 'compound-engineering@compound-engineering-plugin', name: 'compound-engineering', marketplaceName: 'compound-engineering-plugin', version: '3.21.4', enabled: true }],
     },
   });
   assert.equal(discovered.status, 'degraded');
@@ -77,11 +77,28 @@ test('Compound Engineering provider status distinguishes discovery from activati
     capabilityCheck,
     evidence: {
       marketplaces: [{ name: 'compound-engineering-plugin', revision: loaded.capability.provider.revision }],
-      installed: [{ name: 'compound-engineering', version: '3.21.4', enabled: true }],
+      installed: [{ pluginId: 'compound-engineering@compound-engineering-plugin', name: 'compound-engineering', marketplaceName: 'compound-engineering-plugin', version: '3.21.4', enabled: true }],
       conformance: { status: 'passed', providerRevision: loaded.capability.provider.revision },
     },
   });
   assert.equal(healthy.status, 'healthy');
+
+  const unbound = classifyCompoundEngineeringProvider({
+    capability: loaded.capability,
+    capabilityCheck,
+    evidence: {
+      marketplaces: [{ name: 'compound-engineering-plugin', revision: loaded.capability.provider.revision }],
+      installed: [{
+        pluginId: 'evil-local@unapproved-marketplace',
+        name: 'compound-engineering',
+        marketplaceName: 'unapproved-marketplace',
+        version: '3.21.4',
+        enabled: true,
+      }],
+      conformance: { status: 'passed', providerRevision: loaded.capability.provider.revision },
+    },
+  });
+  assert.equal(unbound.status, 'not-installed');
 
   const missing = classifyCompoundEngineeringProvider({
     capability: loaded.capability,
@@ -93,7 +110,7 @@ test('Compound Engineering provider status distinguishes discovery from activati
   const modified = classifyCompoundEngineeringProvider({
     capability: loaded.capability,
     capabilityCheck,
-    evidence: { localModified: true, installed: [{ name: 'compound-engineering', version: '3.21.4', enabled: true }] },
+    evidence: { localModified: true, installed: [{ pluginId: 'compound-engineering@compound-engineering-plugin', name: 'compound-engineering', marketplaceName: 'compound-engineering-plugin', version: '3.21.4', enabled: true }] },
   });
   assert.equal(modified.status, 'local-modified');
 
@@ -102,7 +119,7 @@ test('Compound Engineering provider status distinguishes discovery from activati
     capabilityCheck,
     evidence: {
       marketplaces: [{ name: 'compound-engineering-plugin', revision: '1'.repeat(40) }],
-      installed: [{ name: 'compound-engineering', version: '3.21.4', enabled: true }],
+      installed: [{ pluginId: 'compound-engineering@compound-engineering-plugin', name: 'compound-engineering', marketplaceName: 'compound-engineering-plugin', version: '3.21.4', enabled: true }],
     },
   });
   assert.equal(stale.status, 'incompatible');
@@ -115,7 +132,7 @@ test('Compound Engineering inspection returns a public-safe healthy status for a
       codexAvailable: true,
       codexVersion: '0.146.0',
       marketplaces: [{ name: 'compound-engineering-plugin', revision: 'e36ddb8cbd4dd902d3b6ddd96165a783b0ac4711' }],
-      installed: [{ name: 'compound-engineering', version: '3.21.4', enabled: true }],
+      installed: [{ pluginId: 'compound-engineering@compound-engineering-plugin', name: 'compound-engineering', marketplaceName: 'compound-engineering-plugin', version: '3.21.4', enabled: true }],
     },
   });
   assert.equal(result.status, 'healthy');

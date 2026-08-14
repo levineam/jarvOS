@@ -345,7 +345,8 @@ function classifyCompoundEngineeringProvider({ capability, capabilityCheck, evid
     };
   }
   const active = Array.isArray(evidence.installed)
-    ? evidence.installed.find((entry) => entry?.name === 'compound-engineering' || entry?.pluginId === 'compound-engineering@compound-engineering-plugin')
+    ? evidence.installed.find((entry) => entry?.pluginId === 'compound-engineering@compound-engineering-plugin'
+      && entry?.marketplaceName === 'compound-engineering-plugin')
     : null;
   if (!active) {
     return {
@@ -414,12 +415,13 @@ function compactCodexPlugin(entry = {}) {
   return {
     pluginId: typeof entry.pluginId === 'string' ? entry.pluginId : null,
     name: typeof entry.name === 'string' ? entry.name : null,
+    marketplaceName: typeof entry.marketplaceName === 'string' ? entry.marketplaceName : null,
     version: typeof entry.version === 'string' ? entry.version : null,
     enabled: entry.enabled !== false,
   };
 }
 
-function compactCodexMarketplace(entry = {}) {
+function compactCodexMarketplace(entry = {}, profileRoot) {
   const compact = {
     name: typeof entry.name === 'string' ? entry.name : null,
     source: null,
@@ -427,10 +429,10 @@ function compactCodexMarketplace(entry = {}) {
   };
   if (typeof entry.root !== 'string' || !path.isAbsolute(entry.root)) return compact;
   try {
-    const profileRoot = path.resolve(process.env.CODEX_HOME || path.join(os.homedir(), '.codex'));
+    const resolvedProfileRoot = path.resolve(profileRoot || path.join(os.homedir(), '.codex'));
     const marketplaceRoot = path.resolve(entry.root);
-    const relative = path.relative(profileRoot, marketplaceRoot);
-    if (!relative || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) return compact;
+    const relative = path.relative(resolvedProfileRoot, marketplaceRoot);
+    if (!relative || relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) return compact;
     const rootStat = fs.lstatSync(marketplaceRoot);
     if (rootStat.isSymbolicLink() || !rootStat.isDirectory()) return compact;
     const metadataPath = path.join(marketplaceRoot, '.codex-marketplace-install.json');
@@ -473,12 +475,13 @@ function collectCodexCompoundEngineeringEvidence(options = {}) {
   }
   const installedPayload = run(['plugin', 'list', '--json']);
   const marketplacePayload = run(['plugin', 'marketplace', 'list', '--json']);
+  const profileRoot = env.CODEX_HOME || path.join(os.homedir(), '.codex');
   return {
     codexAvailable: Boolean(codexVersion),
     codexVersion,
     installed: Array.isArray(installedPayload?.installed) ? installedPayload.installed.map(compactCodexPlugin) : [],
     marketplaces: Array.isArray(marketplacePayload?.marketplaces)
-      ? marketplacePayload.marketplaces.map(compactCodexMarketplace)
+      ? marketplacePayload.marketplaces.map((entry) => compactCodexMarketplace(entry, profileRoot))
       : [],
   };
 }
