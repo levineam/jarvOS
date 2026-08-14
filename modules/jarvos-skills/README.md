@@ -172,6 +172,8 @@ jarvos-skills enable --harness codex --json
 jarvos-skills disable --harness claude --json
 jarvos-skills rename --id my-skill --name jarvos-my-skill --json
 jarvos-skills scheduler --write --interval-minutes 60 --json
+jarvos-skills doctor-shared --json
+node scripts/live-preflight-checklist.js --json
 ```
 
 `share --scope local` admits private bundles through an owner-controlled overlay

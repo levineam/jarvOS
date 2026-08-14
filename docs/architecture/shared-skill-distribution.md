@@ -16,3 +16,10 @@ unit files. Units stay disabled until the owner enables them. Protected mutation
 that change enrollment or publish overlay admissions require an explicit human
 principal when invoked through the control-plane manager.
 
+## Doctor and preflight
+
+`jarvos-skills doctor-shared` validates config, catalogs, adapter projection
+contracts, source-root requirements, and a non-enabling scheduler plan.
+`scripts/live-preflight-checklist.js` aggregates package tests, runtime-kit,
+isolated dogfood, and doctor evidence while keeping owner live steps pending.
+

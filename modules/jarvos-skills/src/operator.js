@@ -491,10 +491,14 @@ function schedulerOperator(options = {}) {
 
 function initOperator(options = {}) {
   const base = defaultConfig();
-  if (options.controlRoot) {
-    base.controlRoot = options.controlRoot;
-    base.publicCatalogPath = path.join(options.controlRoot, 'public-catalog.json');
-    base.localOverlayPath = path.join(options.controlRoot, 'local-overlay.json');
+  // Prefer an explicit control root. Otherwise isolate beside --config so
+  // doctor/preflight never mutate the owner home control plane by accident.
+  const controlRoot = options.controlRoot
+    || (options.configPath ? path.dirname(path.resolve(expandHome(options.configPath))) : null);
+  if (controlRoot) {
+    base.controlRoot = controlRoot;
+    base.publicCatalogPath = path.join(controlRoot, 'public-catalog.json');
+    base.localOverlayPath = path.join(controlRoot, 'local-overlay.json');
   }
   if (options.publicSourceRoot) base.publicSourceRoot = options.publicSourceRoot;
   if (options.localSourceRoot) base.localSourceRoot = options.localSourceRoot;

@@ -1098,6 +1098,7 @@ const receipts = require('./receipts');
 const operator = require('./operator');
 const config = require('./config');
 const scheduler = require('./scheduler');
+const doctor = require('./doctor');
 const controlPlaneManager = require('./control-plane-manager');
 const overlayAuthoring = require('./overlay-authoring');
 
@@ -1225,4 +1226,5 @@ module.exports = {
   saveConfig: config.saveConfig,
   defaultConfig: config.defaultConfig,
   planSchedulerUnits: scheduler.planSchedulerUnits,
+  doctorSharedSkills: doctor.doctorSharedSkills,
 };

@@ -34,3 +34,15 @@ Scheduler artifacts are planned/written only. Enabling launchd or systemd units
 is an owner action after review. Do not treat unit write success as live
 activation.
 
+## Doctor and live preflight
+
+```sh
+jarvos-skills doctor-shared --json
+node modules/jarvos-skills/scripts/live-preflight-checklist.js --json
+```
+
+`doctor-shared` is read-only. The live-preflight checklist proves package gates and
+isolated matrix dogfood, then leaves Claude interactive probe, private Hermes
+overlay, scheduler enablement, and live harness gates as owner-pending. It never
+auto-enables live activation.
+

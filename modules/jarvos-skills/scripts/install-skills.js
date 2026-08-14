@@ -21,6 +21,7 @@ const {
   repairOperator,
   schedulerOperator,
   initOperator,
+  doctorSharedSkills,
   SUPPORTED_HARNESSES,
 } = require('../src');
 
@@ -36,6 +37,7 @@ const OPERATOR_COMMANDS = new Set([
   'disable',
   'rename',
   'scheduler',
+  'doctor-shared',
 ]);
 
 function parseArgs(argv) {
@@ -146,6 +148,7 @@ Shared skill distribution (catalog/overlay):
   jarvos-skills disable --harness NAME [--config PATH] [--json]
   jarvos-skills rename --id NAME --name EFFECTIVE [--config PATH] [--json]
   jarvos-skills scheduler [--write] [--interval-minutes N] [--config PATH] [--json]
+  jarvos-skills doctor-shared [--config PATH] [--json]
 
 Installs the default jarvOS operating-system skill bundle and operates the
 public shared-skill catalog. Private overlay bodies never enter the package.
@@ -221,6 +224,8 @@ function runOperator(opts) {
       return disableHarness({ harness: opts.harness, configPath });
     case 'rename':
       return renameAlias({ id: opts.id, name: opts.name, configPath });
+    case 'doctor-shared':
+      return doctorSharedSkills({ configPath });
     case 'scheduler':
       return schedulerOperator({
         configPath,
