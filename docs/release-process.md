@@ -1,6 +1,9 @@
 # jarvOS Release Process
 
-jarvOS releases are milestone-driven. Ship when the active release scope is verified, not on a fixed calendar.
+jarvOS releases are prepared from the public `main` history. The Steward
+admits safe changes to the forming batch; Release Please derives the next
+version and prepares the release proposal; publication remains an explicit
+release-level decision.
 
 ## Version Policy
 
@@ -15,13 +18,13 @@ jarvOS releases are milestone-driven. Ship when the active release scope is veri
   layer, public human/agent parity for that service, and a portable
   `@jarvos/coding` control-plane compatibility layer for supported agent
   hosts.
-- `v1.0.0` is the active target lane (SUP-3548): clean-machine confidence.
-  Draft notes live at `docs/releases/v1.0.0.md`; post-v0.7.0 merged work is
-  tracked under `CHANGELOG.md` `[Unreleased]` until Andrew approves a cut.
-- Future release lanes should name their selected release plan and target
-  version before release readiness is claimed. Beads carries the durable work;
-  Paperclip may mirror it as an optional record.
-- Before `v1.0.0` is published, minor releases may include breaking changes, but the release notes must call them out plainly.
+- Post-v0.7.0 work belongs to one versionless forming batch. The batch has no
+  target version or Paperclip parent; Beads carries the durable membership and
+  Paperclip, when enabled, is only a one-way projection.
+- Release Please is the sole version authority. It derives the next SemVer
+  from the immutable last release and conventional commits on `main` (the
+  current unreleased range is expected to produce `v0.8.0`). No routine
+  `Release-As` footer or manually selected target is valid.
 
 ## Unreleased Work and Drift
 
@@ -30,8 +33,9 @@ section at the top of `CHANGELOG.md`. This keeps "merged on `main`" distinct fro
 "shipped in a tagged release" and prevents release-state confusion (for example,
 assuming a version is published when only the version number moved).
 
-Cutting a release means moving the `## [Unreleased]` entries into a dated
-`## v<version>` section and leaving a fresh empty `## [Unreleased]` behind.
+Release Please owns version files, changelog sections, tags, and GitHub Release
+creation. The Steward reconciles its exact proposal, public commit range,
+notes, and workflow provenance before asking for publication approval.
 
 Run the drift check at any time:
 
@@ -74,17 +78,20 @@ human/Telegram rendering.
 
 ## Release Checklist
 
-1. Confirm the selected release plan lists the intended scope and blockers.
-2. Confirm every included Beads work item has evidence for the user-facing
+1. Confirm the forming batch and every included Beads work item have evidence
+   for the user-facing
    change, verification performed, and documentation impact.
-3. Confirm `package.json` version matches the intended tag.
-4. Update `CHANGELOG.md` with the version, date, user-facing changes, fixes, and known limitations.
-5. Prepare the GitHub Release notes at `docs/releases/<version>.md` using `.github/release-template.md`.
+2. Confirm the Release Please workflow, manifest, configuration digest, and
+   trusted App actor are unchanged and pinned.
+3. Reconcile the exact Release Please proposal version, base/head, complete
+   post-tag range, notes, and membership before approval.
+4. Confirm `package.json`, `CHANGELOG.md`, and the GitHub Release are produced
+   by that exact proposal; do not edit them to force a version.
 6. Confirm front-door release prose is current when it changed: `README.md`
    current release status, `docs/release-process.md` active lane wording,
    install/update instructions, module inventory, core capabilities,
    limitations, and the public/private boundary.
-7. Run the release readiness check:
+6. Run the release readiness check:
 
    ```bash
    npm run release:check
@@ -96,19 +103,8 @@ human/Telegram rendering.
    npm run release:check:candidate
    ```
 
-8. Run `npm run release:drift` to confirm there is no release drift (untagged release or unlogged work).
-9. Check for local-only or machine-specific files in the release diff.
-10. Create the git tag only after the release checklist is green:
-
-   ```bash
-   git tag <version>
-   git push origin <version>
-   ```
-
-   Example: `<version>` is `v0.1.0` for the first public preview.
-
-11. Publish a GitHub Release using `docs/releases/<version>.md`.
-12. Record the release URL, final verification evidence, and documentation
+7. Run `npm run release:drift` to confirm there is no release drift.
+8. Record the release URL, final verification evidence, and documentation
     impact in the release evidence and its Beads work item. An enabled
     Paperclip adapter may mirror that record afterward.
 
@@ -120,7 +116,8 @@ A release is not ready while any of these are true:
 - `package.json` and the git tag disagree.
 - `CHANGELOG.md` has no section for the release.
 - `docs/releases/<version>.md` is missing or still contains placeholders.
-- README or release-process prose still describes a prior current release or the target release as an active candidate after finalization.
+- README or release-process prose still describes a prior current release or a
+  guessed target instead of the observed published release/proposal.
 - Install or update instructions do not match the shipped files.
 - Any release-blocking Beads work item lacks documentation-impact evidence or
   a follow-up item for deferred documentation work.
@@ -167,13 +164,12 @@ publication. If enabled, mirrored issues related to the public
 
 - `jarvos`
 - `jarvos-release-candidate`
-- the current active release label, such as `release-v1.0.0`
+- the current forming-batch projection, if one is configured
 
 Internal release process work should carry:
 
 - `jarvos`
 - `jarvos-release-ops`
-- the current active release label, such as `release-v1.0.0`
 
 Only an already-authoritative candidate may be mirrored. The Paperclip record
 reflects its included, release-blocking, post-release, or internal-only status;
@@ -185,6 +181,6 @@ Paperclip fallback is required for the supported path.
 
 As of the v0.6.1 ship, v0.3-era release parents are historical and should not
 receive new records. A new jarvOS public-release candidate uses the selected
-release plan and its Beads work item. If Paperclip projection is enabled, it may
-mirror the current release label and parent, but a missing parent does not
-block candidate preparation or readiness checks.
+forming batch and its Beads work item. If Paperclip projection is enabled, it
+may mirror that status, but a missing parent or label never blocks candidate
+preparation or readiness checks.
