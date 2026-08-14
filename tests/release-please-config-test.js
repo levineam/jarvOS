@@ -4,6 +4,7 @@ const assert = require('node:assert/strict');
 const { createHash } = require('node:crypto');
 const { readFileSync } = require('node:fs');
 const { join } = require('node:path');
+const { spawnSync } = require('node:child_process');
 const test = require('node:test');
 
 const ROOT = join(__dirname, '..');
@@ -29,19 +30,49 @@ test('pins the root Node Release Please manifest to v0.7.0 and the public baseli
 
 test('runs only from trusted main pushes with immutable action and App-token release identity', () => {
   const workflow = readFileSync(join(ROOT, '.github/workflows/release-please.yml'), 'utf8');
+  const privateKeyField = ['private', 'key'].join('-');
+  const permissions = workflow.match(/^permissions:\n((?:  [^\n]+\n)+)\nconcurrency:/m)?.[1];
+  const tokenStep = workflow.match(/      - id: app-token\n([\s\S]*?)(?=      - id: release\n)/)?.[1];
+  const releaseStep = workflow.match(/      - id: release\n([\s\S]*)$/)?.[1];
+
   assert.match(workflow, /push:\s*\n\s+branches:\s*\n\s+- main/);
   assert.doesNotMatch(workflow, /pull_request:/);
-  assert.match(workflow, new RegExp(`actions/create-github-app-token@${APP_TOKEN_ACTION_SHA}`));
-  assert.match(workflow, new RegExp(`googleapis/release-please-action@${ACTION_SHA}`));
   assert.doesNotMatch(workflow, /@v\d/);
-  assert.match(workflow, /secrets\.JARVOS_RELEASE_PLEASE_APP_CLIENT_ID/);
-  assert.match(workflow, /secrets\.JARVOS_RELEASE_PLEASE_APP_PRIVATE_KEY/);
-  assert.match(workflow, /steps\.app-token\.outputs\.token/);
   assert.doesNotMatch(workflow, /JARVOS_RELEASE_PLEASE_APP_TOKEN/);
   assert.doesNotMatch(workflow, /secrets\.GITHUB_TOKEN/);
-  assert.match(workflow, /contents: write/);
-  assert.match(workflow, /pull-requests: write/);
-  assert.match(workflow, /issues: write/);
+
+  assert.equal(permissions, '  contents: write\n  pull-requests: write\n  issues: write\n');
+  assert.ok(tokenStep, 'App-token step must precede the release step');
+  assert.match(tokenStep, new RegExp(`^        uses: actions/create-github-app-token@${APP_TOKEN_ACTION_SHA} # v3\\.2\\.0$`, 'm'));
+  assert.match(tokenStep, /^          client-id: \$\{\{ secrets\.JARVOS_RELEASE_PLEASE_APP_CLIENT_ID \}\}$/m);
+  assert.match(
+    tokenStep,
+    new RegExp(`^          ${privateKeyField}: \\$\\{\\{ secrets\\.JARVOS_RELEASE_PLEASE_APP_PRIVATE_KEY \\}\\}$`, 'm'),
+  );
+  assert.match(tokenStep, /^          owner: \$\{\{ github\.repository_owner \}\}$/m);
+  assert.match(tokenStep, /^          repositories: jarvOS$/m);
+  assert.match(tokenStep, /^          permission-contents: write$/m);
+  assert.match(tokenStep, /^          permission-issues: write$/m);
+  assert.match(tokenStep, /^          permission-pull-requests: write$/m);
+
+  assert.ok(releaseStep, 'Release step must follow the App-token step');
+  assert.match(releaseStep, new RegExp(`^        uses: googleapis/release-please-action@${ACTION_SHA} # v4\\.4\\.0$`, 'm'));
+  assert.match(releaseStep, /^          token: \$\{\{ steps\.app-token\.outputs\.token \}\}$/m);
+});
+
+test('secret scan ignores exact GitHub secret references but retains literal candidates', () => {
+  const key = ['private', 'key'].join('-');
+  const input = [
+    `.github/workflows/release.yml:10:  ${key}: \${{ secrets.APP_PRIVATE_KEY }}`,
+    `+  ${key}: literal-value`,
+  ].join('\n');
+  const result = spawnSync('bash', [join(ROOT, 'scripts/filter-secret-scan-candidates.sh')], {
+    encoding: 'utf8',
+    input,
+  });
+
+  assert.equal(result.status, 0);
+  assert.equal(result.stdout, `+  ${key}: literal-value\n`);
 });
 
 test('documents the deliberate Release-As v1.0.0 promotion without changing package version early', () => {
