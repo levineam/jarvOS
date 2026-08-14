@@ -11,6 +11,7 @@ const {
   hookSessionId,
   MAX_HOOK_INPUT_CHARS,
   readHookInput,
+  sessionWaitContext,
   stewardshipAdapter,
 } = require('./jarvos-session-turn-hook.js');
 
@@ -45,7 +46,12 @@ function hydrationMaxChars() {
 
 function stewardshipContext(options = {}) {
   const input = stewardshipAdapter.nextTurnInput(options);
-  return input.pendingInSessionInput && input.nextTurnInput ? additionalContext(input) : '';
+  const sessionWait = stewardshipAdapter.sessionWaitNextTurn(options);
+  const contexts = [];
+  if (input.pendingInSessionInput && input.nextTurnInput) contexts.push(additionalContext(input));
+  const waitContext = sessionWaitContext(sessionWait);
+  if (waitContext) contexts.push(waitContext);
+  return contexts.join('\n\n');
 }
 
 function sessionStartInput(raw) {
