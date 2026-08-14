@@ -454,7 +454,7 @@ test('route-bound session threads ignore caller-selected dimensions and isolate 
 });
 
 test('route-bound session threads can validate an owner-only injected key file', () => {
-  withTempVault(({ tmp }) => {
+  withTempVault(({ tmp, mutationService }) => {
     const secretPath = path.join(tmp, 'route-secret');
     fs.writeFileSync(secretPath, 'agent-context-route-secret', { mode: 0o600 });
     fs.chmodSync(secretPath, 0o600);
@@ -476,7 +476,11 @@ test('route-bound session threads can validate an owner-only injected key file',
         },
         secret: 'agent-context-route-secret',
       });
-      const result = writeSessionThread({ routeCapability: capability, summary: 'file-bound route checkpoint' });
+      const result = writeSessionThread({
+        routeCapability: capability,
+        summary: 'file-bound route checkpoint',
+        mutationService,
+      });
       assert.match(result.markdown, /Session Thread Written/);
     } finally {
       for (const [key, value] of Object.entries({
@@ -817,11 +821,17 @@ function runCodexSetup(envOverrides = {}) {
     // Public-only setup: clear private host bindings unless the caller sets them.
     JARVOS_CONTROL_PLANE_SERVICE_MODULE: '',
     JARVOS_CONTROL_PLANE_CREDENTIAL_FILE: '',
+    JARVOS_STEWARDSHIP_BRIDGE_COMMAND: '',
+    JARVOS_STEWARDSHIP_CODEX_SESSION_MAP_ROOT: '',
+    JARVOS_STEWARDSHIP_STABLE_ROOT: '',
     ...envOverrides,
   };
   // Empty string override should delete so setup sees "unset".
   if (!env.JARVOS_CONTROL_PLANE_SERVICE_MODULE) delete env.JARVOS_CONTROL_PLANE_SERVICE_MODULE;
   if (!env.JARVOS_CONTROL_PLANE_CREDENTIAL_FILE) delete env.JARVOS_CONTROL_PLANE_CREDENTIAL_FILE;
+  if (!env.JARVOS_STEWARDSHIP_BRIDGE_COMMAND) delete env.JARVOS_STEWARDSHIP_BRIDGE_COMMAND;
+  if (!env.JARVOS_STEWARDSHIP_CODEX_SESSION_MAP_ROOT) delete env.JARVOS_STEWARDSHIP_CODEX_SESSION_MAP_ROOT;
+  if (!env.JARVOS_STEWARDSHIP_STABLE_ROOT) delete env.JARVOS_STEWARDSHIP_STABLE_ROOT;
 
   const result = spawnSync('bash', [setupPath], {
     encoding: 'utf8',
