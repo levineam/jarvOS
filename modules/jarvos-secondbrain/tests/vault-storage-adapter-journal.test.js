@@ -228,3 +228,25 @@ test('past-date append never creates today as a side effect', () => {
     fs.rmSync(vault, { recursive: true, force: true });
   }
 });
+
+test('Obsidian storage adapter rejects journal path traversal dates', () => {
+  const vault = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-storage-adapter-traversal-'));
+  const journalDir = path.join(vault, 'Journal');
+  fs.mkdirSync(journalDir, { recursive: true });
+
+  try {
+    withJournalEnv(journalDir, vault, () => {
+      const adapter = createVaultStorageAdapter({ allowUnsafeFilesystemWrites: true });
+      const date = '../../outside/pwn';
+
+      assert.throws(() => adapter.ensureJournal({ date }), /journal date must be ISO format YYYY-MM-DD/);
+      assert.throws(
+        () => adapter.appendLineToJournalSection({ heading: '## 💡 Ideas', line: '- escaped', date }),
+        /journal date must be ISO format YYYY-MM-DD/,
+      );
+      assert.equal(fs.existsSync(path.join(vault, '..', 'outside', 'pwn.md')), false);
+    });
+  } finally {
+    fs.rmSync(vault, { recursive: true, force: true });
+  }
+});

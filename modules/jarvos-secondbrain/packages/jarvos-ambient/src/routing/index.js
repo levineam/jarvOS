@@ -92,10 +92,18 @@ function isSubstantiveIdea(capture = {}) {
   return false;
 }
 
+function captureDate(value) {
+  const date = String(value || '').trim();
+  if (date && !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    throw new Error('date must be ISO format YYYY-MM-DD');
+  }
+  return date || undefined;
+}
+
 function buildKeywordRoutingPlan(capture = {}, options = {}) {
   const detectedTrigger = detectTrigger(capture);
   const captureIntent = hasCaptureIntent(capture);
-  const date = String(capture.date || '').trim() || undefined;
+  const date = captureDate(capture.date);
 
   if (!captureIntent) {
     return {

@@ -124,6 +124,21 @@ test('anti-trigger phrases do not get captured as idea events', () => {
   assert.equal(result.journalEntry, null);
 });
 
+test('capture dates reject path components before routing performs any writes', () => {
+  let writes = 0;
+  const adapter = {
+    ensureJournal() { writes += 1; },
+    appendLineToJournalSection() { writes += 1; },
+    writeNote() { writes += 1; },
+  };
+
+  assert.throws(
+    () => applyRoutingPlan({ text: 'idea: escape the journal', date: '../../outside/pwn' }, { adapter }),
+    /date must be ISO format YYYY-MM-DD/,
+  );
+  assert.equal(writes, 0);
+});
+
 test('adapter abstraction works with a mock storage adapter', () => {
   const calls = [];
   const mockAdapter = {

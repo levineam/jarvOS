@@ -36,6 +36,12 @@ function todayDate(now = new Date(), config = journalConfig()) {
   return localDate(now, config.timeZone);
 }
 
+function assertJournalDate(date) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    throw new Error('journal date must be ISO format YYYY-MM-DD');
+  }
+}
+
 // Serialized into the Obsidian eval request. Keep this function self-contained
 // so editor-owned mutation uses the latest vault content rather than a stale
 // Node-side snapshot.
@@ -107,6 +113,7 @@ function createVaultStorageAdapter(options = {}) {
       const config = suppliedConfig || journalConfig();
       const operationNow = now instanceof Date ? now : new Date(now || Date.now());
       const effectiveDate = date || todayDate(operationNow, config);
+      assertJournalDate(effectiveDate);
       const journalDir = config.journalDir;
       const journalPath = path.join(journalDir, `${effectiveDate}.md`);
       if (effectiveDate !== todayDate(operationNow, config)) {
@@ -127,6 +134,7 @@ function createVaultStorageAdapter(options = {}) {
       const config = journalConfig();
       const operationNow = now instanceof Date ? now : new Date(now || Date.now());
       const effectiveDate = date || todayDate(operationNow, config);
+      assertJournalDate(effectiveDate);
       const journalPath = path.join(config.journalDir, `${effectiveDate}.md`);
       if (effectiveDate === todayDate(operationNow, config)) {
         this.ensureJournal({ date: effectiveDate, now: operationNow, config });
