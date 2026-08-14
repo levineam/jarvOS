@@ -87,7 +87,7 @@ human/Telegram rendering.
    post-tag range, notes, and membership before approval.
 4. Confirm `package.json`, `CHANGELOG.md`, and the GitHub Release are produced
    by that exact proposal; do not edit them to force a version.
-6. Confirm front-door release prose is current when it changed: `README.md`
+5. Confirm front-door release prose is current when it changed: `README.md`
    current release status, `docs/release-process.md` active lane wording,
    install/update instructions, module inventory, core capabilities,
    limitations, and the public/private boundary.
