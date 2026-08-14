@@ -15,6 +15,7 @@ const {
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const beadsExecutable = fs.realpathSync(process.execPath);
 
 test('public package declares a registry-safe control-plane dependency', () => {
   const manifest = require('../package.json');
@@ -36,6 +37,7 @@ test('explicit Beads transport works without Paperclip and uses bounded argv', a
   const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-beads-workspace-'));
   const calls = [];
   const tracker = createLiveBeadsTracker({
+    executable: beadsExecutable,
     workspaceRoot,
     approvedRoots: [workspaceRoot],
     run(command, args, options) {
@@ -58,18 +60,38 @@ test('explicit Beads transport works without Paperclip and uses bounded argv', a
   assert.equal(claimed.workReference.authority, 'beads');
   assert.equal(dependency.state, 'committed');
   assert.equal(checkpoint.state, 'committed');
-  assert.ok(calls.every((call) => call.command === 'br' && call.options.shell === false));
+  assert.ok(calls.every((call) => call.command === beadsExecutable && call.options.shell === false));
   assert.ok(calls.some((call) => call.args.includes('--external-ref') && call.args.includes('op-create-1')));
 
   const adapters = buildLiveCodingAdapters({
-    beads: { workspaceRoot, approvedRoots: [workspaceRoot], run: () => ({ status: 0, stdout: '', stderr: '' }) },
+    beads: { executable: beadsExecutable, workspaceRoot, approvedRoots: [workspaceRoot], run: () => ({ status: 0, stdout: '', stderr: '' }) },
   });
   assert.equal(adapters.tracker.authority, 'beads');
+});
+
+test('Beads transport rejects PATH-resolved and symbolic-link executables before invocation', () => {
+  const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-beads-executable-'));
+  let invoked = false;
+  const run = () => { invoked = true; return { status: 0, stdout: '', stderr: '' }; };
+
+  assert.throws(
+    () => createLiveBeadsTracker({ executable: 'br', workspaceRoot, run }),
+    /explicit absolute path/,
+  );
+
+  const executableLink = path.join(workspaceRoot, 'br');
+  fs.symlinkSync(beadsExecutable, executableLink);
+  assert.throws(
+    () => createLiveBeadsTracker({ executable: executableLink, workspaceRoot, run }),
+    /must not be a symbolic link/,
+  );
+  assert.equal(invoked, false);
 });
 
 test('Beads preflight rejects an unpinned version before mutation', async () => {
   const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-beads-version-'));
   const tracker = createLiveBeadsTracker({
+    executable: beadsExecutable,
     workspaceRoot,
     run: (command, args) => args[0] === '--version'
       ? { status: 0, stdout: 'br v9.9.9', stderr: '' }
@@ -82,6 +104,7 @@ test('Beads caller validation happens before an operation is prepared', async ()
   const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-beads-input-validation-'));
   const calls = [];
   const tracker = createLiveBeadsTracker({
+    executable: beadsExecutable,
     workspaceRoot,
     run(command, args) {
       calls.push(args);
@@ -104,6 +127,7 @@ test('prepared Beads operations reconcile before replay after an uncertain launc
   const calls = [];
   let firstMutation = true;
   const tracker = createLiveBeadsTracker({
+    executable: beadsExecutable,
     workspaceRoot,
     operationStore: {
       read: async (id) => operationStore.get(id) || null,
@@ -134,6 +158,7 @@ test('Beads replay reconciles non-create operations by their exact postcondition
   const calls = [];
   let mutationCount = 0;
   const tracker = createLiveBeadsTracker({
+    executable: beadsExecutable,
     workspaceRoot,
     operationStore: {
       read: async (id) => operationStore.get(id) || null,
@@ -163,6 +188,7 @@ test('Beads default operation identities distinguish operation inputs', async ()
   const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-beads-operation-id-'));
   const operationIds = [];
   const tracker = createLiveBeadsTracker({
+    executable: beadsExecutable,
     workspaceRoot,
     run(command, args) {
       if (args[0] === '--version') return { status: 0, stdout: 'br v0.2.19', stderr: '' };
@@ -182,6 +208,7 @@ test('Beads default operation identities distinguish operation inputs', async ()
 test('Beads close remains deferred until authoritative merge evidence', async () => {
   const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-beads-close-'));
   const tracker = createLiveBeadsTracker({
+    executable: beadsExecutable,
     workspaceRoot,
     run: (command, args) => {
       if (args[0] === '--version') return { status: 0, stdout: '0.2.19', stderr: '' };

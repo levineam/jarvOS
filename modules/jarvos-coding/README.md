@@ -73,8 +73,9 @@ const adapters = buildLiveCodingAdapters({
 });
 ```
 
-The adapter verifies the executable, capabilities, schema, and `br where`
-binding before mutation. Each create/claim/transition/dependency/checkpoint
+The adapter requires an explicit absolute path to a regular, non-symlinked,
+non-world-writable executable, then verifies its capabilities, schema, and
+`br where` binding before mutation. Each create/claim/transition/dependency/checkpoint
 operation is prepared with an operation identity and reconciled before an
 uncertain retry. It returns only executable work evidence; canonical project
 identity remains in Projects, and Paperclip remains an explicit compatibility

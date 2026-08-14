@@ -110,6 +110,26 @@ function validateWorkspace(workspaceRoot, approvedRoots) {
   return workspace;
 }
 
+function validateExecutable(value) {
+  if (typeof value !== 'string' || !path.isAbsolute(value)) {
+    throw new Error('Beads executable must be an explicit absolute path');
+  }
+  let source;
+  let executable;
+  let stat;
+  try {
+    source = fs.lstatSync(value);
+    executable = fs.realpathSync(value);
+    stat = fs.statSync(executable);
+  } catch {
+    throw new Error('Beads executable is unavailable');
+  }
+  if (source.isSymbolicLink()) throw new Error('Beads executable must not be a symbolic link');
+  if (!stat.isFile()) throw new Error('Beads executable must be a regular file');
+  if ((stat.mode & 0o002) !== 0) throw new Error('Beads executable must not be world-writable');
+  return executable;
+}
+
 function commandArgs(method, input, operationId) {
   const format = ['--format', 'json'];
   if (method === 'create') {
@@ -138,7 +158,7 @@ function createMemoryOperationStore(initial = {}) {
 
 function createLiveBeadsTracker(options = {}) {
   const run = options.run || defaultRun;
-  const executable = options.executable || options.command || 'br';
+  const executable = validateExecutable(options.executable || options.command);
   const expectedVersion = options.expectedVersion || DEFAULT_BEADS_VERSION;
   const workspaceRoot = validateWorkspace(options.workspaceRoot || process.cwd(), options.approvedRoots);
   const timeoutMs = Number(options.timeoutMs || DEFAULT_TIMEOUT_MS);
