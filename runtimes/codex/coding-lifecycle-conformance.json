@@ -1,6 +1,6 @@
 {
   "schemaVersion": "jarvos-codex-coding-lifecycle-conformance/v1",
-  "jarvosRevision": "4887f9cee38227d5984fbcf9db348368be1d82ea",
+  "jarvosRevision": "a665c6fdc0ba13185a2d5b1c6603fabfc3294c22",
   "sourceRevisionStrategy": "source-parent",
   "status": "passed",
   "profileBoundary": "disposable CODEX_HOME",

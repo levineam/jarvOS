@@ -1,7 +1,7 @@
 {
   "schemaVersion": "jarvos-codex-coding-routing-conformance/v1",
   "status": "unavailable",
-  "jarvosRevision": "4887f9cee38227d5984fbcf9db348368be1d82ea",
+  "jarvosRevision": "a665c6fdc0ba13185a2d5b1c6603fabfc3294c22",
   "sourceRevisionStrategy": "source-parent",
   "reason": "No authenticated disposable Codex harness receipt is available in this public worktree; deterministic direct invocation remains the supported path.",
   "promptCorpus": {
