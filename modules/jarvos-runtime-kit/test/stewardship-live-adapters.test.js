@@ -401,7 +401,7 @@ test('Codex SessionStart derives a bridge-only thread identity from resume stdin
 });
 
 test('Claude SessionStart persists only a validated bridge command and neutral map root for later hooks', () => {
-  const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-claude-env-file-'));
+  const temp = fs.mkdtempSync(path.join(os.homedir(), '.jarvos-claude-env-file-'));
   const bin = path.join(temp, 'bin');
   const mappingRoot = path.join(temp, 'claude-session-map');
   const envFile = path.join(temp, 'claude.env');
@@ -434,6 +434,14 @@ test('Claude SessionStart persists only a validated bridge command and neutral m
     assert.equal(hook.persistBridgeEnvironment({ env: { ...env, JARVOS_STEWARDSHIP_BRIDGE_COMMAND: '../invalid' } }), false);
     assert.equal(hook.persistBridgeEnvironment({ env: { ...env, JARVOS_STEWARDSHIP_CLAUDE_SESSION_MAP_ROOT: 'relative-map' } }), false);
     assert.equal(fs.readFileSync(envFile, 'utf8'), expected);
+    fs.chmodSync(bin, 0o777);
+    assert.equal(hook.persistBridgeEnvironment({ env }), false);
+    fs.chmodSync(bin, 0o755);
+    fs.rmSync(bridge);
+    const linkedBridge = path.join(temp, 'linked-bridge');
+    fs.writeFileSync(linkedBridge, '#!/usr/bin/env sh\nexit 0\n', { mode: 0o700 });
+    fs.symlinkSync(linkedBridge, bridge);
+    assert.equal(hook.persistBridgeEnvironment({ env }), false);
     fs.chmodSync(envFile, 0o644);
     assert.equal(hook.persistBridgeEnvironment({ env }), false);
     assert.equal(fs.readFileSync(envFile, 'utf8'), expected);

@@ -23,17 +23,40 @@ function shellQuote(value) {
   return `'${value.replace(/'/g, "'\\\"'\\\"'")}'`;
 }
 
+function isTrustedPathEntry(entry, uid, type) {
+  let stat;
+  try {
+    stat = fs.lstatSync(entry);
+  } catch {
+    return null;
+  }
+  return (!stat.isSymbolicLink()
+    && stat[type]()
+    && (stat.uid === uid || stat.uid === 0)
+    && (stat.mode & 0o022) === 0) ? stat : null;
+}
+
 function bridgeDirectory(command, searchPath) {
-  if (typeof searchPath !== 'string') return null;
+  const uid = typeof process.getuid === 'function' ? process.getuid() : null;
+  if (typeof searchPath !== 'string' || uid === null) return null;
   for (const directory of searchPath.split(path.delimiter)) {
     if (!path.isAbsolute(directory)) continue;
     const candidate = path.join(directory, command);
-    try {
-      const stat = fs.statSync(candidate);
-      if (stat.isFile() && (stat.mode & 0o111) !== 0) return directory;
-    } catch {
-      // Try the next PATH entry.
+    const candidateStat = isTrustedPathEntry(candidate, uid, 'isFile');
+    if (!candidateStat || (candidateStat.mode & 0o111) === 0) continue;
+
+    let ancestor = path.resolve(directory);
+    let trusted = true;
+    while (true) {
+      if (!isTrustedPathEntry(ancestor, uid, 'isDirectory')) {
+        trusted = false;
+        break;
+      }
+      const parent = path.dirname(ancestor);
+      if (parent === ancestor) break;
+      ancestor = parent;
     }
+    if (trusted) return directory;
   }
   return null;
 }
