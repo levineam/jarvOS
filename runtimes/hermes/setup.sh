@@ -4,6 +4,10 @@
 
 set -e
 
+# Workspace files contain personal context. Keep everything created by this
+# script private even when the caller has a permissive default umask.
+umask 077
+
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 CORE_DIR="$REPO_ROOT/core"
@@ -13,7 +17,12 @@ GOV_DIR="$REPO_ROOT/core/governance"
 
 # Default workspace is this clone root, override with first argument
 WORKSPACE_INPUT="${1:-$REPO_ROOT}"
+if [ -L "$WORKSPACE_INPUT" ]; then
+  echo "Refusing to use a symlink as the jarvOS workspace: $WORKSPACE_INPUT" >&2
+  exit 1
+fi
 mkdir -p "$WORKSPACE_INPUT"
+chmod 700 "$WORKSPACE_INPUT"
 WORKSPACE="$(cd "$WORKSPACE_INPUT" && pwd)"
 # The Hermes CLI honors HERMES_HOME. Keeping the setup script on the same
 # boundary makes disposable parity rehearsals safe and avoids touching the
@@ -137,6 +146,15 @@ echo "  ✓ Node.js $(node --version)"
 echo ""
 
 mkdir -p "$WORKSPACE/pms" "$WORKSPACE/governance"
+
+# Never follow an existing link when installing files that can hold private
+# user context (or the behavioral files loaded alongside that context).
+for workspace_file in AGENTS.md SOUL.md IDENTITY.md USER.md MEMORY.md ONTOLOGY.md TOOLS.md; do
+  if [ -L "$WORKSPACE/$workspace_file" ]; then
+    echo "Refusing to write through workspace symlink: $WORKSPACE/$workspace_file" >&2
+    exit 1
+  fi
+done
 
 copy_if_missing() {
   local src="$1"
@@ -294,6 +312,13 @@ EOF
     echo "  + TOOLS.md created"
   fi
 fi
+
+# Harden both newly created files and files retained from an earlier setup.
+for private_file in AGENTS.md SOUL.md IDENTITY.md USER.md MEMORY.md ONTOLOGY.md TOOLS.md; do
+  if [ -f "$WORKSPACE/$private_file" ]; then
+    chmod 600 "$WORKSPACE/$private_file"
+  fi
+done
 
 # ── Shared secondbrain vault onboarding ──
 echo "→ Detecting shared secondbrain vault..."
