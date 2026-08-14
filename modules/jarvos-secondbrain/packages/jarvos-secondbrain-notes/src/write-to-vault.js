@@ -63,10 +63,14 @@ function normalizeFrontmatter({ incoming = {}, existing = {} } = {}) {
 
   // jarvos_note_id is deliberately writer-owned: callers cannot choose it,
   // while an existing canonical note retains its stable identity.
-  return {
+  const normalizedFrontmatter = {
     ...canonical.frontmatter,
     jarvos_note_id: canonical.frontmatter.jarvos_note_id || randomUUID(),
   };
+  // Reserved v1 fields are intentionally not persisted, even if a caller
+  // supplied them through a lower-level adapter.
+  delete normalizedFrontmatter.content_adoption;
+  return normalizedFrontmatter;
 }
 
 function buildFrontmatter({ incomingFrontmatter = {}, existingFrontmatter = {} } = {}) {

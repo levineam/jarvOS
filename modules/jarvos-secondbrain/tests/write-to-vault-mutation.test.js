@@ -71,6 +71,71 @@ test('injected writer reports the identity carried by the submitted operation', 
   });
 });
 
+test('canonical note writes persist origin metadata, default missing declarations to unknown, and strip adoption state', () => {
+  withVault(({ root }) => {
+    const result = writeNoteFile({
+      title: 'Provenance note',
+      content: 'Generated context stays searchable but is not user evidence.',
+      frontmatter: {
+        status: 'draft',
+        type: 'reference',
+        project: 'PROVENANCE',
+        author: 'jarvis',
+        content_origin: 'assistant',
+        content_origin_basis: 'assistant_generated',
+        content_adoption: { state: 'accepted' },
+      },
+      operationId: 'note-provenance-0001',
+      vaultId: 'vault-provenance',
+      vaultRoot: root,
+      mutationExecutor(operation) {
+        const target = path.join(root, operation.vaultRelativePath);
+        fs.mkdirSync(path.dirname(target), { recursive: true });
+        fs.writeFileSync(target, operation.content, 'utf8');
+        return { status: 'committed', obsidian: 'acknowledged' };
+      },
+    });
+
+    const content = fs.readFileSync(result.path, 'utf8');
+    assert.match(content, /content_origin_schema: jarvos-content-origin\/v1/);
+    assert.match(content, /content_origin: assistant/);
+    assert.match(content, /content_origin_basis: assistant_generated/);
+    assert.doesNotMatch(content, /content_adoption/);
+  });
+});
+
+test('note updates preserve an existing explicit origin when the update has no new declaration', () => {
+  withVault(({ root }) => {
+    const execute = (operation) => {
+      const target = path.join(root, operation.vaultRelativePath);
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      if (operation.operationKind === 'create') fs.writeFileSync(target, operation.content, 'utf8');
+      else fs.writeFileSync(target, `${fs.readFileSync(target, 'utf8').trimEnd()}\n\n${operation.replayPayload.body}\n`, 'utf8');
+      return { status: 'committed', obsidian: 'acknowledged' };
+    };
+    const context = (operationId) => ({
+      operationId,
+      vaultId: 'vault-provenance-update',
+      vaultRoot: root,
+      mutationExecutor: execute,
+    });
+    const first = writeNoteFile({
+      title: 'Stable provenance',
+      content: 'Assistant draft.',
+      frontmatter: { status: 'draft', type: 'reference', project: 'PROVENANCE', author: 'jarvis', content_origin: 'assistant', content_origin_basis: 'assistant_generated' },
+      ...context('note-provenance-0002'),
+    });
+    writeNoteFile({
+      title: 'Stable provenance',
+      content: 'A later maintenance update.',
+      ...context('note-provenance-0003'),
+    });
+    const content = fs.readFileSync(first.path, 'utf8');
+    assert.match(content, /content_origin: assistant/);
+    assert.match(content, /content_origin_basis: assistant_generated/);
+  });
+});
+
 function settled(value) {
   return {
     then(fn) { try { fn(value); return this; } catch (error) { this.error = error; return this; } },

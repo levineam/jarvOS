@@ -5,6 +5,10 @@ const {
   CAPTURE_EVENT_SCHEMA_VERSION,
   validateCaptureEvent,
 } = require('../../packages/jarvos-ambient/src/intent/capture-contract');
+const {
+  digestText,
+  normalizeContentOrigin,
+} = require('../../bridge/provenance/src/content-origin-contract');
 
 const TOOL_SOURCE = {
   openclaw: 'openclaw',
@@ -78,6 +82,91 @@ function actorForMessage(message = {}) {
   return ROLE_TO_ACTOR[role] || 'unknown';
 }
 
+function originForMessage({ actorType, text, captureEventId, message = {}, session = {}, options = {} }) {
+  const suppliedOrigin = message.content_origin
+    ?? message.contentOrigin
+    ?? session.content_origin
+    ?? session.contentOrigin
+    ?? options.content_origin
+    ?? options.contentOrigin;
+  const suppliedBasis = message.content_origin_basis
+    ?? message.contentOriginBasis
+    ?? session.content_origin_basis
+    ?? session.contentOriginBasis
+    ?? options.content_origin_basis
+    ?? options.contentOriginBasis;
+  const suppliedSource = message.user_source
+    ?? message.userSource
+    ?? session.user_source
+    ?? session.userSource
+    ?? options.user_source
+    ?? options.userSource;
+
+  let userSourceRecord = message.user_source_record
+    ?? message.userSourceRecord
+    ?? session.user_source_record
+    ?? session.userSourceRecord
+    ?? options.user_source_record
+    ?? options.userSourceRecord;
+
+  if (suppliedOrigin || suppliedBasis || suppliedSource) {
+    const candidate = {
+      content_origin: suppliedOrigin || 'unknown',
+      content_origin_basis: suppliedBasis || 'unknown',
+      ...(suppliedSource ? { user_source: suppliedSource } : {}),
+    };
+    const normalized = normalizeContentOrigin(candidate, {
+      content: text,
+      resolveUserSource: options.resolveUserSource || (userSourceRecord
+        ? (captureEventIdToResolve) => {
+          const id = userSourceRecord.capture_event_id || userSourceRecord.captureEventId || userSourceRecord.id;
+          return id === captureEventIdToResolve ? userSourceRecord : null;
+        }
+        : null),
+      captureEventId,
+    });
+    return {
+      ...normalized,
+      ...(userSourceRecord ? { user_source_record: userSourceRecord } : {}),
+    };
+  }
+
+  if (actorType === 'human') {
+    const userSource = {
+      capture_event_id: captureEventId,
+      actor: 'user',
+      source_digest: digestText(text),
+      content_digest: digestText(text),
+    };
+    userSourceRecord = {
+      capture_event_id: captureEventId,
+      actor: 'user',
+      text,
+    };
+    const normalized = normalizeContentOrigin({
+      content_origin: 'human',
+      content_origin_basis: 'verbatim_user',
+      user_source: userSource,
+    }, {
+      content: text,
+      resolveUserSource: () => userSourceRecord,
+      captureEventId,
+    });
+    return {
+      ...normalized,
+      user_source_record: userSourceRecord,
+    };
+  }
+
+  if (actorType === 'assistant') {
+    return { content_origin: 'assistant', content_origin_basis: 'assistant_generated' };
+  }
+  if (actorType === 'mixed') {
+    return { content_origin: 'mixed', content_origin_basis: 'mixed_composition' };
+  }
+  return { content_origin: 'unknown', content_origin_basis: 'unknown' };
+}
+
 function sessionMessages(session = {}) {
   return [
     ...asArray(session.messages),
@@ -120,6 +209,15 @@ function buildCaptureEvent({ tool, session, message, index, options }) {
   const sourceMessageId = messageId(message, index);
   const path = sourcePath(session, options);
   const actorType = actorForMessage(message);
+  const captureEventId = `capture:${tool}:${sourceId}:${sourceMessageId}`;
+  const contentOrigin = originForMessage({
+    actorType,
+    text,
+    captureEventId,
+    message,
+    session,
+    options,
+  });
   const timestamp = firstString(
     message.timestamp,
     message.createdAt,
@@ -130,7 +228,8 @@ function buildCaptureEvent({ tool, session, message, index, options }) {
   const actorModel = firstString(message.model, session.model);
 
   return {
-    id: `capture:${tool}:${sourceId}:${sourceMessageId}`,
+    id: captureEventId,
+    captureEventId,
     schemaVersion: CAPTURE_EVENT_SCHEMA_VERSION,
     text,
     date: isoDate(timestamp),
@@ -162,6 +261,12 @@ function buildCaptureEvent({ tool, session, message, index, options }) {
       ref: sourceId,
       ...(path ? { path } : {}),
     },
+    content_origin_schema: contentOrigin.schema_version || 'jarvos-content-origin/v1',
+    content_origin: contentOrigin.content_origin,
+    content_origin_basis: contentOrigin.content_origin_basis,
+    ...(contentOrigin.user_source ? { user_source: contentOrigin.user_source } : {}),
+    ...(contentOrigin.user_source_record ? { user_source_record: contentOrigin.user_source_record } : {}),
+    human_evidence_eligible: contentOrigin.human_evidence_eligible === true,
   };
 }
 
