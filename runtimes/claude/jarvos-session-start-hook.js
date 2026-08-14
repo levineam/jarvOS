@@ -16,26 +16,10 @@ const {
 const DEFAULT_MAX_CHARS = 9500;
 const MAX_ALLOWED_CHARS = 10000;
 const LOG_PATH = path.join(os.homedir(), '.claude', 'jarvos-hydration.log');
-const BRIDGE_COMMAND = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 const CLAUDE_SESSION_MAP_ROOT_ENV = 'JARVOS_STEWARDSHIP_CLAUDE_SESSION_MAP_ROOT';
 
 function shellQuote(value) {
   return `'${value.replace(/'/g, "'\\\"'\\\"'")}'`;
-}
-
-function bridgeDirectory(command, searchPath) {
-  if (typeof searchPath !== 'string') return null;
-  for (const directory of searchPath.split(path.delimiter)) {
-    if (!path.isAbsolute(directory)) continue;
-    const candidate = path.join(directory, command);
-    try {
-      const stat = fs.statSync(candidate);
-      if (stat.isFile() && (stat.mode & 0o111) !== 0) return directory;
-    } catch {
-      // Try the next PATH entry.
-    }
-  }
-  return null;
 }
 
 function persistBridgeEnvironment(options = {}) {
@@ -43,7 +27,7 @@ function persistBridgeEnvironment(options = {}) {
   const envFile = env.CLAUDE_ENV_FILE;
   const command = env[BRIDGE_COMMAND_ENV];
   const mapRoot = env[CLAUDE_SESSION_MAP_ROOT_ENV];
-  if (!path.isAbsolute(envFile || '') || !BRIDGE_COMMAND.test(command || '') || !path.isAbsolute(mapRoot || '')) return false;
+  if (!path.isAbsolute(envFile || '') || !path.isAbsolute(command || '') || !path.isAbsolute(mapRoot || '')) return false;
 
   let stat;
   try {
@@ -53,8 +37,11 @@ function persistBridgeEnvironment(options = {}) {
   }
   const uid = typeof process.getuid === 'function' ? process.getuid() : null;
   if (!stat.isFile() || uid === null || stat.uid !== uid || (stat.mode & 0o077) !== 0) return false;
-  const directory = bridgeDirectory(command, env.PATH);
-  if (!directory) return false;
+  const directory = path.dirname(command);
+  try {
+    const executable = fs.statSync(command);
+    if (!executable.isFile() || (executable.mode & 0o111) === 0 || (executable.mode & 0o022) !== 0 || executable.uid !== uid) return false;
+  } catch { return false; }
 
   const lines = [
     `export ${BRIDGE_COMMAND_ENV}=${shellQuote(command)}`,

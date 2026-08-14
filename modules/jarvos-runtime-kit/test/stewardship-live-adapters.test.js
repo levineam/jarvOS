@@ -110,6 +110,26 @@ test('native hook adapters fall back until linked-worktree evidence is present',
   }
 });
 
+test('native hooks never resolve Git or stewardship bridges through a workspace PATH', () => {
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-untrusted-path-'));
+  const marker = path.join(temp, 'executed');
+  try {
+    for (const executable of ['git', 'untrusted-bridge']) {
+      fs.writeFileSync(path.join(temp, executable), `#!/bin/sh\n: > ${JSON.stringify(marker)}\n`, { mode: 0o755 });
+    }
+    const env = { ...process.env, PATH: `${temp}${path.delimiter}${process.env.PATH || ''}`, CODEX_THREAD_ID: CODEX_HOOK_SESSION_ID };
+    delete env.JARVOS_STEWARDSHIP_BRIDGE_COMMAND;
+    for (const runtime of ['claude', 'codex']) {
+      const hook = require(path.join(ROOT, 'runtimes', runtime, 'jarvos-session-turn-hook.js'));
+      assert.equal(hook.stewardshipAdapter.availability({ cwd: temp, env }).reason, 'bridge-not-configured');
+      assert.equal(hook.stewardshipAdapter.availability({ cwd: temp, env, bridgeCommand: 'untrusted-bridge' }).reason, 'bridge-not-configured');
+    }
+    assert.equal(fs.existsSync(marker), false);
+  } finally {
+    fs.rmSync(temp, { recursive: true, force: true });
+  }
+});
+
 function runTurnHook(runtime, env, input) {
   const result = spawnSync('node', [path.join(ROOT, 'runtimes', runtime, 'jarvos-session-turn-hook.js')], {
     cwd: ROOT,
@@ -142,7 +162,7 @@ test('native hooks display a validated public judgment on the next turn', () => 
     ].join('\n'), { encoding: 'utf8', mode: 0o755 });
     fs.chmodSync(bridge, 0o755);
     process.env.PATH = `${bin}${path.delimiter}${oldPath || ''}`;
-    process.env.JARVOS_STEWARDSHIP_BRIDGE_COMMAND = 'jarvos-stewardship-bridge';
+    process.env.JARVOS_STEWARDSHIP_BRIDGE_COMMAND = bridge;
     process.env.JARVOS_STEWARDSHIP_CLAUDE_SESSION_ID = CLAUDE_HOOK_SESSION_ID;
     process.env.CODEX_THREAD_ID = CODEX_HOOK_SESSION_ID;
 
@@ -223,7 +243,7 @@ test('Claude turn hooks accept only a consistent canonical or transcript-derived
     const env = {
       ...process.env,
       PATH: `${bin}${path.delimiter}${oldPath || ''}`,
-      JARVOS_STEWARDSHIP_BRIDGE_COMMAND: 'jarvos-stewardship-bridge',
+      JARVOS_STEWARDSHIP_BRIDGE_COMMAND: bridge,
     };
     const accepted = [
       { session_id: CLAUDE_HOOK_SESSION_ID },
@@ -257,7 +277,7 @@ test('Claude turn hooks accept only a consistent canonical or transcript-derived
       assert.equal(fs.existsSync(invoked), false, `bridge must not run for ${JSON.stringify(input)}`);
     }
     fs.rmSync(invoked, { force: true });
-    assert.equal(hook.stewardshipAdapter.nextTurnInput({ cwd: temp, sessionId: null, bridgeCommand: 'jarvos-stewardship-bridge', env }).reason, 'bridge-unavailable');
+    assert.equal(hook.stewardshipAdapter.nextTurnInput({ cwd: temp, sessionId: null, bridgeCommand: bridge, env }).reason, 'bridge-unavailable');
     assert.equal(fs.existsSync(invoked), false, 'a caller that explicitly lacks a session identity must not run the bridge');
   } finally {
     if (oldBridge === undefined) delete process.env.JARVOS_STEWARDSHIP_BRIDGE_COMMAND;
@@ -286,7 +306,7 @@ test('Codex SessionStart exposes a pending public judgment for both fresh and re
     ].join('\n'), { mode: 0o755 });
     fs.chmodSync(bridge, 0o755);
     process.env.PATH = `${bin}${path.delimiter}${oldPath || ''}`;
-    process.env.JARVOS_STEWARDSHIP_BRIDGE_COMMAND = 'jarvos-stewardship-bridge';
+    process.env.JARVOS_STEWARDSHIP_BRIDGE_COMMAND = bridge;
 
     const hook = require(path.join(ROOT, 'runtimes', 'codex', 'jarvos-session-start-hook.js'));
     const context = hook.stewardshipContext({ cwd: temp, env: { ...process.env, CODEX_THREAD_ID: CODEX_HOOK_SESSION_ID } });
@@ -327,7 +347,7 @@ test('Codex SessionStart derives a bridge-only thread identity from resume stdin
       PATH: `${bin}${path.delimiter}${process.env.PATH || ''}`,
       HOME: path.join(temp, 'clean-home'),
       JARVOS_SECONDBRAIN_DIR: path.join(temp, 'missing-secondbrain'),
-      JARVOS_STEWARDSHIP_BRIDGE_COMMAND: 'jarvos-stewardship-bridge',
+      JARVOS_STEWARDSHIP_BRIDGE_COMMAND: bridge,
       JARVOS_STEWARDSHIP_CODEX_SESSION_MAP_ROOT: path.join(temp, 'private-map'),
     };
     const start = (env, input) => spawnSync(process.execPath, [path.join(ROOT, 'runtimes', 'codex', 'jarvos-session-start-hook.js')], {
@@ -416,14 +436,14 @@ test('Claude SessionStart persists only a validated bridge command and neutral m
     const hook = require(path.join(ROOT, 'runtimes', 'claude', 'jarvos-session-start-hook.js'));
     const env = {
       CLAUDE_ENV_FILE: envFile,
-      JARVOS_STEWARDSHIP_BRIDGE_COMMAND: 'jarvos-stewardship-bridge',
+      JARVOS_STEWARDSHIP_BRIDGE_COMMAND: bridge,
       JARVOS_STEWARDSHIP_CLAUDE_SESSION_MAP_ROOT: mappingRoot,
       PATH: bin,
     };
     assert.equal(hook.persistBridgeEnvironment({ env }), true);
     const expected = [
       'export UNRELATED=value',
-      "export JARVOS_STEWARDSHIP_BRIDGE_COMMAND='jarvos-stewardship-bridge'",
+      `export JARVOS_STEWARDSHIP_BRIDGE_COMMAND='${bridge}'`,
       `export JARVOS_STEWARDSHIP_CLAUDE_SESSION_MAP_ROOT='${mappingRoot}'`,
       `export PATH='${bin}':\"$PATH\"`,
       '',
@@ -461,7 +481,7 @@ test('Claude SessionStart exposes a pending stewardship judgment even when hydra
       '',
     ].join('\n'), { mode: 0o700 });
     process.env.PATH = `${bin}${path.delimiter}${oldPath || ''}`;
-    process.env.JARVOS_STEWARDSHIP_BRIDGE_COMMAND = 'jarvos-stewardship-bridge';
+    process.env.JARVOS_STEWARDSHIP_BRIDGE_COMMAND = bridge;
     const hook = require(path.join(ROOT, 'runtimes', 'claude', 'jarvos-session-start-hook.js'));
     const context = hook.stewardshipContext({ cwd: temp, sessionId: CLAUDE_HOOK_SESSION_ID });
     assert.match(context, /Choose the safe recovery step\./);
@@ -505,7 +525,7 @@ test('native turn hooks reject malicious bridge payloads and stay quiet without 
     ].join('\n'), { encoding: 'utf8', mode: 0o755 });
     fs.chmodSync(bridge, 0o755);
     process.env.PATH = `${bin}${path.delimiter}${oldPath || ''}`;
-    process.env.JARVOS_STEWARDSHIP_BRIDGE_COMMAND = 'jarvos-stewardship-bridge';
+    process.env.JARVOS_STEWARDSHIP_BRIDGE_COMMAND = bridge;
     process.env.JARVOS_STEWARDSHIP_CLAUDE_SESSION_ID = CLAUDE_HOOK_SESSION_ID;
     process.env.CODEX_THREAD_ID = CODEX_HOOK_SESSION_ID;
 
@@ -964,8 +984,8 @@ test('Claude setup injects a private bridge command environment without retainin
     const configured = JSON.parse(fs.readFileSync(settings, 'utf8'));
     const command = configured.hooks.SessionStart[0].hooks[0].command;
     const turnCommand = configured.hooks.UserPromptSubmit[0].hooks[0].command;
-    assert.match(command, /JARVOS_STEWARDSHIP_BRIDGE_COMMAND='jarvos-stewardship-bridge'/);
-    assert.match(turnCommand, /JARVOS_STEWARDSHIP_BRIDGE_COMMAND='jarvos-stewardship-bridge'/);
+    assert.match(command, /JARVOS_STEWARDSHIP_BRIDGE_COMMAND='.*\/jarvos-stewardship-bridge'/);
+    assert.match(turnCommand, /JARVOS_STEWARDSHIP_BRIDGE_COMMAND='.*\/jarvos-stewardship-bridge'/);
     assert.match(command, /JARVOS_STEWARDSHIP_CLAUDE_SESSION_MAP_ROOT=/);
     assert.match(command, /PATH=/);
     assert.doesNotMatch(JSON.stringify(configured), new RegExp(contextFile.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
@@ -1048,7 +1068,7 @@ test('Codex setup merges both jarvOS lifecycle hooks without replacing user hook
       JARVOS_MANAGED_REPOSITORIES: '/managed/repository',
       JARVOS_STAGED_PUBLIC_RUNTIME_ROOT: staged,
       JARVOS_STEWARDSHIP_STABLE_ROOT: stable,
-      JARVOS_STEWARDSHIP_BRIDGE_COMMAND: 'jarvos-stewardship-bridge',
+      JARVOS_STEWARDSHIP_BRIDGE_COMMAND: '/bin/true',
       JARVOS_STEWARDSHIP_CODEX_SESSION_MAP_ROOT: path.join(temp, 'codex-session-map'),
     };
     const script = path.join(ROOT, 'runtimes', 'codex', 'setup.sh');
@@ -1063,7 +1083,7 @@ test('Codex setup merges both jarvOS lifecycle hooks without replacing user hook
     assert.match(second, /user-session-start/);
     assert.match(second, /user-prompt-submit/);
     assert.match(second, /EXISTING = "keep"/);
-    assert.match(second, /JARVOS_STEWARDSHIP_BRIDGE_COMMAND = "jarvos-stewardship-bridge"/);
+    assert.match(second, /JARVOS_STEWARDSHIP_BRIDGE_COMMAND = "\/usr\/bin\/true"/);
     assert.match(second, /JARVOS_STEWARDSHIP_CODEX_SESSION_MAP_ROOT = ".*codex-session-map"/);
     assert.doesNotMatch(second, /JARVOS_STEWARDSHIP_BRIDGE_CONTEXT_FILE/);
     assert.match(second, new RegExp(stable.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
@@ -1159,7 +1179,7 @@ test('Codex setup repairs the nested shell environment table without losing user
       JARVOS_MANAGED_REPOSITORIES: '/managed/repository',
       JARVOS_STAGED_PUBLIC_RUNTIME_ROOT: staged,
       JARVOS_STEWARDSHIP_STABLE_ROOT: stable,
-      JARVOS_STEWARDSHIP_BRIDGE_COMMAND: 'jarvos-stewardship-bridge',
+      JARVOS_STEWARDSHIP_BRIDGE_COMMAND: '/bin/true',
       JARVOS_STEWARDSHIP_CODEX_SESSION_MAP_ROOT: path.join(temp, 'codex-session-map'),
     };
     const script = path.join(ROOT, 'runtimes', 'codex', 'setup.sh');
@@ -1170,7 +1190,7 @@ test('Codex setup repairs the nested shell environment table without losing user
     assert.doesNotMatch(configured, /^set\s*=/m);
     assert.match(configured, /BROWSER_USE_AVAILABLE_BACKENDS = "chrome,iab"/);
     assert.match(configured, /NODE_REPL_TRUSTED_CODE_PATHS = "\/trusted\/code"/);
-    assert.match(configured, /JARVOS_STEWARDSHIP_BRIDGE_COMMAND = "jarvos-stewardship-bridge"/);
+    assert.match(configured, /JARVOS_STEWARDSHIP_BRIDGE_COMMAND = "\/usr\/bin\/true"/);
     assert.match(configured, /JARVOS_STEWARDSHIP_CODEX_SESSION_MAP_ROOT = ".*codex-session-map"/);
     assert.match(configured, /# Keep this note for the person maintaining the environment policy\./);
     assert.match(configured, /# Preserve this trailing user note\./);

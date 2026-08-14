@@ -2,6 +2,7 @@
 'use strict';
 
 const fs = require('node:fs');
+const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const {
   STEWARDSHIP_ADAPTER_VERSION,
@@ -10,12 +11,14 @@ const {
 
 const HARNESS = 'codex';
 const BRIDGE_COMMAND_ENV = 'JARVOS_STEWARDSHIP_BRIDGE_COMMAND';
-const BRIDGE_COMMAND = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 const MAX_HOOK_INPUT_CHARS = 4096;
 const CODEX_THREAD_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const TRUSTED_GIT = process.platform === 'win32'
+  ? path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'git.exe')
+  : '/usr/bin/git';
 
 function gitOutput(cwd, args) {
-  const result = spawnSync('git', ['-C', cwd, ...args], { encoding: 'utf8' });
+  const result = spawnSync(TRUSTED_GIT, ['-C', cwd, ...args], { encoding: 'utf8' });
   return result.status === 0 ? result.stdout.trim() : '';
 }
 
@@ -42,10 +45,19 @@ function isolationState(options = {}) {
   };
 }
 
+function unverifiedIsolationState() {
+  return {
+    preferredIsolationMode: 'native',
+    isolationMode: 'managed-launcher',
+    isolatedWorktree: false,
+    requiresVerifiedWorktreeEvidence: true,
+  };
+}
+
 function bridgeCommand(options = {}) {
   const env = { ...process.env, ...(options.env || {}) };
   const command = options.bridgeCommand === undefined ? env[BRIDGE_COMMAND_ENV] : options.bridgeCommand;
-  return typeof command === 'string' && BRIDGE_COMMAND.test(command) ? command : null;
+  return typeof command === 'string' && path.isAbsolute(command) ? command : null;
 }
 
 function hookSessionId(input, hookEventName) {
@@ -71,10 +83,9 @@ function bridgeEnvironment(sessionId, env = process.env) {
 }
 
 function invokeBridge(capability, options = {}) {
-  const isolation = isolationState(options);
   const command = bridgeCommand(options);
-  const base = { capability, available: false, ...isolation };
-  if (!command) return { ...base, pendingInSessionInput: false, reason: 'bridge-not-configured' };
+  if (!command) return { capability, available: false, ...unverifiedIsolationState(), pendingInSessionInput: false, reason: 'bridge-not-configured' };
+  const base = { capability, available: false, ...isolationState(options) };
   const env = options.env || process.env;
   if (typeof env.CODEX_THREAD_ID !== 'string' || !CODEX_THREAD_ID.test(env.CODEX_THREAD_ID)) {
     return { ...base, pendingInSessionInput: false, reason: 'bridge-unavailable' };

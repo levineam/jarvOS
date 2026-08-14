@@ -535,10 +535,17 @@ function setStewardshipBridgeEnvironment(content, bridge) {
 
 function stewardshipBridgeEnvironment(command, codexMapRoot) {
   if (!command && !codexMapRoot) return undefined;
-  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(command || '')) fail('JARVOS_STEWARDSHIP_BRIDGE_COMMAND must be a bounded executable name');
+  if (!path.isAbsolute(command || '')) fail('JARVOS_STEWARDSHIP_BRIDGE_COMMAND must be an absolute path');
+  let executable;
+  try { executable = fs.realpathSync(command); } catch { fail('JARVOS_STEWARDSHIP_BRIDGE_COMMAND must identify an executable file'); }
+  const stat = fs.lstatSync(executable);
+  const uid = typeof process.getuid === 'function' ? process.getuid() : null;
+  if (!stat.isFile() || (stat.mode & 0o111) === 0 || (stat.mode & 0o022) !== 0 || (uid !== null && stat.uid !== uid)) {
+    fail('JARVOS_STEWARDSHIP_BRIDGE_COMMAND must identify an owner-controlled executable file');
+  }
   if (!path.isAbsolute(codexMapRoot || '')) fail('JARVOS_STEWARDSHIP_CODEX_SESSION_MAP_ROOT must be an absolute path');
   return {
-    JARVOS_STEWARDSHIP_BRIDGE_COMMAND: command,
+    JARVOS_STEWARDSHIP_BRIDGE_COMMAND: executable,
     JARVOS_STEWARDSHIP_CODEX_SESSION_MAP_ROOT: codexMapRoot,
   };
 }
