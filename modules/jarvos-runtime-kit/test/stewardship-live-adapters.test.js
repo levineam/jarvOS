@@ -108,7 +108,10 @@ test('native hook adapters fall back until linked-worktree evidence is present',
     for (const runtime of ['claude', 'codex']) {
       const hook = require(path.join(ROOT, 'runtimes', runtime, 'jarvos-session-start-hook.js'));
       assertStewardshipAdapter(hook.stewardshipAdapter);
-      const state = hook.stewardshipAdapter.availability({ cwd: temp });
+      const state = hook.stewardshipAdapter.availability({
+        cwd: temp,
+        env: { ...process.env, JARVOS_STEWARDSHIP_BRIDGE_COMMAND: '' },
+      });
       assert.deepEqual(state, {
         capability: 'availability',
         available: false,
@@ -365,7 +368,7 @@ test('Codex SessionStart derives a bridge-only thread identity from resume stdin
     assert.match(output.hookSpecificOutput.additionalContext, /codex-resume-42/);
     assert.match(output.hookSpecificOutput.additionalContext, /jarvos-stewardship-bridge answer --correlation <correlation> --choice <listed-choice>/);
     assert.doesNotMatch(JSON.stringify(output), new RegExp(temp.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
-    assert.deepEqual(fs.readFileSync(invoked, 'utf8').trim().split('\n'), ['startOrResume', 'nextTurnInput']);
+    assert.deepEqual(fs.readFileSync(invoked, 'utf8').trim().split('\n'), ['startOrResume', 'nextTurnInput', 'sessionWaitNextTurn']);
 
     fs.rmSync(invoked, { force: true });
     const mismatch = start({ ...baseEnv, CODEX_THREAD_ID: mismatchedId }, { hook_event_name: 'SessionStart', session_id: sessionId });

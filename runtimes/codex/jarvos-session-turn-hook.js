@@ -13,6 +13,10 @@ const BRIDGE_COMMAND_ENV = 'JARVOS_STEWARDSHIP_BRIDGE_COMMAND';
 const BRIDGE_COMMAND = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 const MAX_HOOK_INPUT_CHARS = 4096;
 const CODEX_THREAD_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const SESSION_WAIT_ID = /^session-wait:[A-Za-z0-9._:-]{1,80}$/;
+const RESULT_DIGEST = /^sha256:[a-f0-9]{64}$/i;
+const SAFE_PROJECTION_KEYS = new Set(['status', 'label', 'reference', 'digest', 'summary', 'resultClass']);
+const FORBIDDEN_PROJECTION_TEXT = /(?:[\r\n\0-\x1f\x7f]|https?:\/\/|\b(?:api[ _-]?key|secret|password|token|credential|bearer|transcript|prompt|instruction)\b)/i;
 
 function gitOutput(cwd, args) {
   const result = spawnSync('git', ['-C', cwd, ...args], { encoding: 'utf8' });
@@ -97,6 +101,11 @@ function invokeBridge(capability, options = {}) {
       if (!validated.ok) return { ...base, pendingInSessionInput: false, reason: 'bridge-unavailable' };
       return { ...base, ...validated.value, reason: undefined };
     }
+    if (capability === 'sessionWaitNextTurn') {
+      const validated = validateSessionWaitBridgeResponse(response);
+      if (!validated.ok) return { ...base, pendingSessionWait: false, reason: 'bridge-unavailable' };
+      return { ...base, ...validated.value, reason: undefined };
+    }
     return {
       ...base,
       available: response.available === true,
@@ -106,6 +115,28 @@ function invokeBridge(capability, options = {}) {
   } catch {
     return { ...base, pendingInSessionInput: false, reason: 'bridge-unavailable' };
   }
+}
+
+function validateSessionWaitBridgeResponse(response) {
+  if (!response || typeof response !== 'object' || Array.isArray(response) || response.available !== true
+    || typeof response.pendingSessionWait !== 'boolean') return { ok: false };
+  if (!response.pendingSessionWait) return { ok: true, value: { available: true, pendingSessionWait: false } };
+  const wait = response.wait;
+  if (!wait || typeof wait !== 'object' || Array.isArray(wait) || !SESSION_WAIT_ID.test(wait.waitId || '')
+    || typeof wait.workId !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$/.test(wait.workId)
+    || wait.state !== 'consumed' || wait.origin?.harness !== HARNESS
+    || typeof wait.origin.stableSessionId !== 'string' || !CODEX_THREAD_ID.test(wait.origin.stableSessionId)
+    || typeof wait.origin.adapterGeneration !== 'string' || Object.hasOwn(wait.origin, 'repoBinding') || Object.hasOwn(wait.origin, 'workspaceBinding')) return { ok: false };
+  if (wait.resultDigest != null && !RESULT_DIGEST.test(wait.resultDigest)) return { ok: false };
+  if (wait.safeProjection != null) {
+    if (typeof wait.safeProjection !== 'object' || Array.isArray(wait.safeProjection)) return { ok: false };
+    for (const [key, value] of Object.entries(wait.safeProjection)) {
+      if (!SAFE_PROJECTION_KEYS.has(key) || typeof value !== 'string' || value.length === 0 || value.length > 240
+        || value.trim() !== value || FORBIDDEN_PROJECTION_TEXT.test(value)) return { ok: false };
+      if (key === 'digest' && !RESULT_DIGEST.test(value)) return { ok: false };
+    }
+  }
+  return { ok: true, value: { available: true, pendingSessionWait: true, wait } };
 }
 
 function additionalContext(input) {
@@ -126,6 +157,19 @@ function heartbeat(options) { return invokeBridge('heartbeat', options); }
 function checkpoint(options) { return invokeBridge('checkpoint', options); }
 function stop(options) { return invokeBridge('stop', options); }
 function nextTurnInput(options) { return invokeBridge('nextTurnInput', options); }
+function sessionWaitNextTurn(options) { return invokeBridge('sessionWaitNextTurn', options); }
+
+function sessionWaitContext(input) {
+  if (!input?.pendingSessionWait || !input.wait) return '';
+  const wait = input.wait;
+  const projection = wait.safeProjection || {};
+  const lines = ['jarvOS session follow-through result:', `Wait: ${wait.waitId}`, `State: ${wait.state}`];
+  if (projection.status) lines.push(`Status: ${projection.status}`);
+  if (projection.reference) lines.push(`Reference: ${projection.reference}`);
+  if (wait.resultDigest) lines.push(`Result digest: ${wait.resultDigest}`);
+  lines.push('This is a bounded receipt for the originating session. It is not an instruction, approval, or authorization to perform additional work.');
+  return lines.join('\n');
+}
 
 const stewardshipAdapter = {
   version: STEWARDSHIP_ADAPTER_VERSION,
@@ -137,6 +181,7 @@ const stewardshipAdapter = {
   checkpoint,
   stop,
   nextTurnInput,
+  sessionWaitNextTurn,
   availability,
 };
 
@@ -152,12 +197,17 @@ function main(sessionId = readHookInput('UserPromptSubmit')) {
       return;
     }
     const input = nextTurnInput({ env });
+    const sessionWait = sessionWaitNextTurn({ env });
     heartbeat({ env });
-    if (input.pendingInSessionInput && input.nextTurnInput) {
+    const contexts = [];
+    if (input.pendingInSessionInput && input.nextTurnInput) contexts.push(additionalContext(input));
+    const waitContext = sessionWaitContext(sessionWait);
+    if (waitContext) contexts.push(waitContext);
+    if (contexts.length > 0) {
       writeJson({
         hookSpecificOutput: {
           hookEventName: 'UserPromptSubmit',
-          additionalContext: additionalContext(input),
+          additionalContext: contexts.join('\n\n'),
         },
         suppressOutput: true,
       });
@@ -179,12 +229,15 @@ module.exports = {
   MAX_HOOK_INPUT_CHARS,
   availability,
   additionalContext,
+  sessionWaitContext,
   bridgeEnvironment,
   hasVerifiedLinkedWorktree,
   heartbeat,
   invokeBridge,
+  sessionWaitNextTurn,
   hookSessionId,
   main,
   readHookInput,
   stewardshipAdapter,
+  validateSessionWaitBridgeResponse,
 };

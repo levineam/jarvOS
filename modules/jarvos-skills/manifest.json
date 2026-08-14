@@ -125,6 +125,24 @@
           "hermes": { "path": "{skillsRoot}/explore-unknowns/SKILL.md", "renderer": "raw-skill-md" }
         }
       }
+    },
+    {
+      "name": "session-followthrough",
+      "path": "skills/session-followthrough/SKILL.md",
+      "purpose": "Return one authenticated external result to the exact originating Codex session.",
+      "source": {
+        "revision": "jarvos-skills-v0.4.0",
+        "digest": "e35f8ebdc95e50a04b1749174cd857852228e533e9cc0fda318595299a562263",
+        "license": "MIT",
+        "provenance": "jarvOS reviewed source"
+      },
+      "supportedHarnesses": ["codex"],
+      "projection": {
+        "mode": "copy",
+        "targets": {
+          "codex": { "path": "{skillsRoot}/session-followthrough/SKILL.md", "renderer": "raw-skill-md" }
+        }
+      }
     }
   ]
 }
