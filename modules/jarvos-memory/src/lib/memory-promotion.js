@@ -31,9 +31,9 @@ const {
   CORE_MEMORY_CLASSES,
 } = require('./memory-schema');
 
-const { createMemoryRecord } = require('./memory-record');
+const { createMemoryRecord } = require('../../lib/memory-record');
 const { HindsightAdapter } = require('./hindsight-adapter');
-const { getHindsightConfig } = require('./memory-config');
+const { getHindsightConfig } = require('../../lib/memory-config');
 
 function promotionContent(event = {}) {
   if (event.knowledgeUnit) return String(event.knowledgeUnit.text || '').trim();
@@ -43,6 +43,38 @@ function promotionContent(event = {}) {
 function hasKnowledgeUnitEvidence(unit = {}) {
   return Array.isArray(unit.evidence)
     && unit.evidence.some((entry) => entry?.sourcePath || entry?.quote || entry?.bodySha256 || entry?.ref);
+}
+
+function contentOriginRecord(unit = {}, event = {}) {
+  const candidate = unit.provenance || unit;
+  const eventOrigin = event.content_origin ?? event.contentOrigin;
+  const eventBasis = event.content_origin_basis ?? event.contentOriginBasis;
+  const origin = candidate.content_origin ?? candidate.contentOrigin ?? eventOrigin;
+  const basis = candidate.content_origin_basis ?? candidate.contentOriginBasis ?? eventBasis;
+  const hasDeclaration = origin !== undefined || basis !== undefined
+    || candidate.human_evidence_eligible !== undefined
+    || candidate.humanEvidenceEligible !== undefined;
+  if (!hasDeclaration) return null;
+  return {
+    content_origin: String(origin || 'unknown').trim().toLowerCase(),
+    content_origin_basis: String(basis || 'unknown').trim().toLowerCase(),
+    human_evidence_eligible: candidate.human_evidence_eligible === true
+      || candidate.humanEvidenceEligible === true
+      || event.human_evidence_eligible === true
+      || event.humanEvidenceEligible === true,
+  };
+}
+
+function humanEvidenceGate(unit, event) {
+  const provenance = contentOriginRecord(unit, event);
+  if (!provenance) return null;
+  if (provenance.content_origin !== 'human' || provenance.human_evidence_eligible !== true) {
+    return {
+      provenance,
+      reason: `content origin '${provenance.content_origin}' is context-only for human-memory promotion`,
+    };
+  }
+  return { provenance, reason: null };
 }
 
 function isRawTranscriptSource(source = {}) {
@@ -71,6 +103,10 @@ function reviewKnowledgeUnitCandidate(event = {}) {
   }
   if (!hasKnowledgeUnitEvidence(unit)) {
     return { shouldPromote: false, memoryClass: null, reason: 'knowledgeUnit promotion requires source evidence' };
+  }
+  const evidenceGate = humanEvidenceGate(unit, event);
+  if (evidenceGate?.reason) {
+    return { shouldPromote: false, memoryClass: null, reason: evidenceGate.reason };
   }
   if (unit.privacyDecision?.excludedFromPromotion || unit.privacyDecision?.tier === 'secret' || unit.privacyDecision?.tier === 'sensitive') {
     return { shouldPromote: false, memoryClass: null, reason: `knowledgeUnit privacy tier '${unit.privacyDecision?.tier || 'unknown'}' is not eligible for promotion` };
@@ -122,6 +158,11 @@ function reviewCandidate(event = {}) {
 
   if (isRawCaptureEvent(event)) {
     return { shouldPromote: false, memoryClass: null, reason: 'raw source-backed captures must promote through cited knowledgeUnit references' };
+  }
+
+  const evidenceGate = humanEvidenceGate({}, event);
+  if (evidenceGate?.reason) {
+    return { shouldPromote: false, memoryClass: null, reason: evidenceGate.reason };
   }
 
   const text = promotionContent(event);
@@ -208,6 +249,7 @@ function promoteCandidate(event = {}) {
 
   const content = promotionContent(event);
   const unit = event.knowledgeUnit || null;
+  const provenance = contentOriginRecord(unit || {}, event);
   const result = createMemoryRecord({
     class: review.memoryClass,
     content,
@@ -216,6 +258,7 @@ function promoteCandidate(event = {}) {
     noteRef: event.noteRef || unit?.source?.path,
     confidence: event.confidence || unit?.confidence,
     supersedes: event.supersedes,
+    provenance,
   });
 
   if (result.error) {
