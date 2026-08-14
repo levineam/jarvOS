@@ -4,6 +4,8 @@ const crypto = require('node:crypto');
 
 const SESSION_WAIT_CONTRACT_VERSION = '1.0.0';
 const SESSION_WAIT_SCHEMA_VERSION = 'jarvos.session-wait.v1';
+const DEFAULT_DEADLINE_WAKE_SOURCE = 'jarvos-managed-software-reconcile';
+const DEFAULT_DEADLINE_OBSERVATION_WINDOW_MS = 86400000;
 const SESSION_WAIT_STATES = [
   'registered',
   'waiting',
@@ -45,6 +47,11 @@ function opaque(value, label) {
   if (typeof value !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$/.test(value)) {
     throw new Error(`${label} must be an opaque identifier`);
   }
+  return value;
+}
+
+function observationWindow(value, label = 'deadline observation window') {
+  if (!Number.isSafeInteger(value) || value < 0 || value > 604800000) throw new Error(`${label} is invalid`);
   return value;
 }
 
@@ -143,6 +150,8 @@ function validateSessionWait(value) {
   normalizeTimestamp(value.createdAt);
   normalizeTimestamp(value.updatedAt);
   normalizeTimestamp(value.deadline);
+  opaque(value.deadlineWakeSource, 'deadline wake source');
+  observationWindow(value.deadlineObservationWindowMs);
   if (!SESSION_WAIT_STATES.includes(value.state)) throw new Error('session wait state is invalid');
   validateEventIds(value.eventIds);
   validateDelivery(value.delivery);
@@ -166,6 +175,9 @@ function createSessionWait(input = {}) {
     expectedTerminal: identity.expectedTerminal,
     state: 'registered',
     deadline: normalizeTimestamp(input.deadline),
+    deadlineWakeSource: opaque(input.deadlineWakeSource || DEFAULT_DEADLINE_WAKE_SOURCE, 'deadline wake source'),
+    deadlineObservationWindowMs: observationWindow(input.deadlineObservationWindowMs == null
+      ? DEFAULT_DEADLINE_OBSERVATION_WINDOW_MS : input.deadlineObservationWindowMs),
     createdAt,
     updatedAt: normalizeTimestamp(input.updatedAt, createdAt),
     resultDigest: null,
@@ -268,6 +280,8 @@ function projectSessionWait(current) {
     },
     state: current.state,
     deadline: current.deadline,
+    deadlineWakeSource: current.deadlineWakeSource,
+    deadlineObservationWindowMs: current.deadlineObservationWindowMs,
     resultDigest: current.resultDigest,
     safeProjection: current.safeProjection,
     delivery: current.delivery,
@@ -279,6 +293,8 @@ function projectSessionWait(current) {
 module.exports = {
   SESSION_WAIT_CONTRACT_VERSION,
   SESSION_WAIT_SCHEMA_VERSION,
+  DEFAULT_DEADLINE_WAKE_SOURCE,
+  DEFAULT_DEADLINE_OBSERVATION_WINDOW_MS,
   SESSION_WAIT_STATES,
   TERMINAL_OUTCOMES,
   createSessionWait,

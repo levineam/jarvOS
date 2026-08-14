@@ -55,6 +55,8 @@ test('creates an idempotent, bounded SessionWait record', () => {
   assert.equal(first.state, 'registered');
   assert.equal(first.waitId, second.waitId);
   assert.deepEqual(first.origin, origin());
+  assert.equal(first.deadlineWakeSource, 'jarvos-managed-software-reconcile');
+  assert.equal(first.deadlineObservationWindowMs, 86400000);
   assert.deepEqual(first.delivery, {
     disposition: 'none',
     claimedAt: null,
@@ -152,6 +154,8 @@ test('public projection excludes origin bindings and preserves terminal truth', 
   assert.equal(projection.workspaceBinding, undefined);
   assert.equal(projection.state, 'waiting');
   assert.equal(projection.deadline, current.deadline);
+  assert.equal(projection.deadlineWakeSource, current.deadlineWakeSource);
+  assert.equal(projection.deadlineObservationWindowMs, current.deadlineObservationWindowMs);
 });
 
 test('state constants include explicit uncertainty, cancellation, and supersession', () => {
