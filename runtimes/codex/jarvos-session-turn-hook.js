@@ -102,7 +102,7 @@ function invokeBridge(capability, options = {}) {
       return { ...base, ...validated.value, reason: undefined };
     }
     if (capability === 'sessionWaitNextTurn') {
-      const validated = validateSessionWaitBridgeResponse(response);
+      const validated = validateSessionWaitBridgeResponse(response, env.CODEX_THREAD_ID);
       if (!validated.ok) return { ...base, pendingSessionWait: false, reason: 'bridge-unavailable' };
       return { ...base, ...validated.value, reason: undefined };
     }
@@ -117,7 +117,7 @@ function invokeBridge(capability, options = {}) {
   }
 }
 
-function validateSessionWaitBridgeResponse(response) {
+function validateSessionWaitBridgeResponse(response, expectedSessionId) {
   if (!response || typeof response !== 'object' || Array.isArray(response) || response.available !== true
     || typeof response.pendingSessionWait !== 'boolean') return { ok: false };
   if (!response.pendingSessionWait) return { ok: true, value: { available: true, pendingSessionWait: false } };
@@ -126,6 +126,7 @@ function validateSessionWaitBridgeResponse(response) {
     || typeof wait.workId !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$/.test(wait.workId)
     || wait.state !== 'consumed' || wait.origin?.harness !== HARNESS
     || typeof wait.origin.stableSessionId !== 'string' || !CODEX_THREAD_ID.test(wait.origin.stableSessionId)
+    || wait.origin.stableSessionId !== expectedSessionId
     || typeof wait.origin.adapterGeneration !== 'string' || Object.hasOwn(wait.origin, 'repoBinding') || Object.hasOwn(wait.origin, 'workspaceBinding')) return { ok: false };
   if (wait.resultDigest != null && !RESULT_DIGEST.test(wait.resultDigest)) return { ok: false };
   if (wait.safeProjection != null) {
