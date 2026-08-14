@@ -4,10 +4,10 @@ Release sections describe user-facing jarvOS changes. Historical public-doc sync
 
 ## [Unreleased]
 
-Staging area for the active v1.0.0 clean-machine confidence lane (Paperclip
-SUP-3548). These entries are merged on `main` after v0.7.0 and are **not** a
-published release. Publication still requires Andrew approval and a green
-`npm run release:check` after `package.json` is intentionally bumped.
+These entries are the post-v0.7.0 forming batch. They are merged on `main` but
+are **not** a published release. Release Please derives the next version from
+this public range and prepares the exact proposal; publication still requires
+the Steward's release-level approval and verification.
 
 ### Added
 - Add a data-only optional Memory health module to `jarvos doctor`. The public

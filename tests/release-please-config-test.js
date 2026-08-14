@@ -75,9 +75,10 @@ test('secret scan ignores exact GitHub secret references but retains literal can
   assert.equal(result.stdout, `+  ${key}: literal-value\n`);
 });
 
-test('documents the deliberate Release-As v1.0.0 promotion without changing package version early', () => {
+test('does not force a target version before Release Please observes the public range', () => {
   const packageJson = readJson('package.json');
   const workflow = readFileSync(join(ROOT, '.github/workflows/release-please.yml'), 'utf8');
   assert.equal(packageJson.version, '0.7.0');
-  assert.match(workflow, /Release-As: 1\.0\.0/);
+  assert.doesNotMatch(workflow, /Release-As:\s*1\.0\.0/);
+  assert.doesNotMatch(workflow, /release-as:/i);
 });
