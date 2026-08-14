@@ -125,3 +125,25 @@ test('sensitive notes keep local knowledge units but block downstream promotion'
   assert.equal(artifact.knowledgeUnits[0].downstreamEligibility.gbrain, false);
   assert.equal(artifact.knowledgeUnits[0].downstreamEligibility.memoryPromotion, false);
 });
+
+test('declared private privacy tiers block downstream promotion', () => {
+  for (const privacyTier of ['private', 'sensitive', 'secret']) {
+    const { notesDir, filePath } = noteFixture();
+    const artifact = buildArtifact({
+      filePath,
+      notesDir,
+      title: 'Covert Plan',
+      body: 'This innocuous text does not match a sensitivity heuristic.',
+      frontmatter: { privacy_tier: privacyTier },
+      created: true,
+    });
+
+    assert.equal(artifact.privacyTier, privacyTier);
+    assert.equal(artifact.sensitivity.excluded, true);
+    assert.equal(artifact.gbrain.status, 'skipped');
+    assert.equal(artifact.memoryWiki.status, 'skipped');
+    assert.equal(artifact.knowledgeUnits[0].privacyDecision.tier, privacyTier);
+    assert.equal(artifact.knowledgeUnits[0].downstreamEligibility.gbrain, false);
+    assert.equal(artifact.knowledgeUnits[0].downstreamEligibility.memoryWiki, false);
+  }
+});
