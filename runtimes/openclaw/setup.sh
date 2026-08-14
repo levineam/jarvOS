@@ -27,9 +27,9 @@ if [ "${JARVOS_STEWARDSHIP_ONLY:-0}" = "1" ] || [ "${JARVOS_MANAGED_HARNESS_ROLL
     : "${JARVOS_STEWARDSHIP_STABLE_ROOT:?the stable stewardship bundle root is required}"
   fi
   OPENCLAW_CONFIG="${OPENCLAW_CONFIG:-${OPENCLAW_CONFIG_PATH:-$HOME/.openclaw/openclaw.json}}"
-  node - "$OPENCLAW_CONFIG" "${JARVOS_STEWARDSHIP_STABLE_ROOT:-}" "$JARVOS_MANAGED_HARNESS_STATE_ROOT/stewardship-bridge/openclaw-sessions" "${JARVOS_MANAGED_HARNESS_ROLLBACK:-0}" "${JARVOS_STAGED_PUBLIC_RUNTIME_ROOT:-}" "$REPO_ROOT/modules/jarvos-runtime-kit/src/openclaw-plugin-persistence.js" <<'NODE'
+  node - "$OPENCLAW_CONFIG" "${JARVOS_STEWARDSHIP_STABLE_ROOT:-}" "$JARVOS_MANAGED_HARNESS_STATE_ROOT/stewardship-bridge/openclaw-sessions" "${JARVOS_MANAGED_HARNESS_ROLLBACK:-0}" "${JARVOS_STAGED_PUBLIC_RUNTIME_ROOT:-}" "$JARVOS_MANAGED_HARNESS_STATE_ROOT" "$REPO_ROOT/modules/jarvos-runtime-kit/src/openclaw-plugin-persistence.js" <<'NODE'
 const fs = require('fs'); const os = require('os'); const path = require('path');
-const [configPath, stableRoot, mappingRoot, rollback, stagedRoot, runtimeKitPath] = process.argv.slice(2);
+const [configPath, stableRoot, mappingRoot, rollback, stagedRoot, stateRoot, runtimeKitPath] = process.argv.slice(2);
 const pluginPath = stableRoot ? path.join(stableRoot, 'jarvos-openclaw-stewardship-plugin') : null;
 function trustedDirectory(value) {
   const stat = fs.lstatSync(value); const uid = typeof process.getuid === 'function' ? process.getuid() : null;
@@ -105,13 +105,27 @@ const original = prior.exists ? prior.bytes.toString('utf8') : '{}\n';
 const config = JSON.parse(original || '{}');
 const plugins = config.plugins && typeof config.plugins === 'object' ? config.plugins : {};
 const tools = config.tools && typeof config.tools === 'object' ? config.tools : null;
+const legacyOwnershipPath = path.join(stateRoot, 'openclaw-stewardship-install.json');
+function readLegacyOwnership() {
+  let stat;
+  try { stat = fs.lstatSync(legacyOwnershipPath); } catch (error) {
+    if (error.code === 'ENOENT') return null;
+    throw error;
+  }
+  const uid = typeof process.getuid === 'function' ? process.getuid() : null;
+  if (!stat.isFile() || stat.isSymbolicLink() || (stat.mode & 0o777) !== 0o600 || (uid !== null && stat.uid !== uid)) throw new Error('invalid stewardship install receipt');
+  const value = JSON.parse(fs.readFileSync(legacyOwnershipPath, 'utf8'));
+  if (value?.schemaVersion !== 1 || typeof value.toolAllowAdded !== 'boolean') throw new Error('invalid stewardship install receipt');
+  return value;
+}
+const legacyOwnership = readLegacyOwnership();
 const stewardshipEntry = plugins.entries && typeof plugins.entries === 'object' ? plugins.entries['jarvos-stewardship'] : null;
 const ownsStewardshipEntry = stewardshipEntry?.config?.mappingRoot === mappingRoot;
 if (rollback !== '1' && stewardshipEntry && !ownsStewardshipEntry) throw new Error('refusing to replace an unrelated OpenClaw stewardship plugin entry');
 const existingToolOwnership = stewardshipEntry?.config?.toolAllowAddedByJarvos;
 const toolAllowAddedByJarvos = typeof existingToolOwnership === 'boolean'
   ? existingToolOwnership
-  : Array.isArray(tools?.allow) && !tools.allow.includes('jarvos_stewardship_answer');
+  : legacyOwnership?.toolAllowAdded ?? (Array.isArray(tools?.allow) && !tools.allow.includes('jarvos_stewardship_answer'));
 const existingAgentGrant = stewardshipEntry?.config?.agentToolGrantByJarvos;
 let agentToolGrantByJarvos = existingAgentGrant && typeof existingAgentGrant === 'object' ? existingAgentGrant : null;
 const ownedPluginPaths = pluginPath ? [pluginPath] : [];
@@ -198,14 +212,20 @@ async function verifyRegistration() {
 }
 
 (async () => {
-  if (rollback === '1' || !pluginPath) return;
+  if (rollback === '1' || !pluginPath) {
+    if (legacyOwnership) fs.unlinkSync(legacyOwnershipPath);
+    return;
+  }
   let verification;
   try {
     verification = await verifyRegistration();
   } catch {
     verification = { status: 'compatibility', reason: 'verification-failed' };
   }
-  if (verification.status === 'ok') return;
+  if (verification.status === 'ok') {
+    if (legacyOwnership) fs.unlinkSync(legacyOwnershipPath);
+    return;
+  }
   if (!changed) throw new Error(`staged OpenClaw plugin registration verification failed: ${verification.reason}`);
   const written = { exists: true, bytes: nextBytes, mode: prior.exists ? prior.mode : 0o600 };
   try {
