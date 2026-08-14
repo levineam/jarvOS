@@ -384,6 +384,7 @@ test('MCP tool list includes jarvOS tools', () => {
     TOOLS.find((tool) => tool.name === 'jarvos_hydrate').description,
     /boot jarvOS/,
   );
+  assert.equal(TOOLS.find((tool) => tool.name === 'jarvos_hydrate').inputSchema.additionalProperties, false);
   const healthDescription = TOOLS.find((tool) => tool.name === 'jarvos_journal_health').description;
   const ensureDescription = TOOLS.find((tool) => tool.name === 'jarvos_ensure_today_journal').description;
   assert.match(healthDescription, /read-only health/);
@@ -1273,6 +1274,32 @@ test('MCP jarvos_hydrate returns text content', async () => {
         if (value === undefined) delete process.env[key];
         else process.env[key] = value;
       }
+    }
+  });
+});
+
+test('MCP jarvos_hydrate ignores undocumented filesystem path overrides', async () => {
+  await withTempVault(async () => {
+    const privateRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-hydrate-private-'));
+    const privateJournal = path.join(privateRoot, 'journal');
+    const privateNotes = path.join(privateRoot, 'notes');
+    fs.mkdirSync(privateJournal);
+    fs.mkdirSync(privateNotes);
+    fs.writeFileSync(path.join(privateJournal, 'sensitive.md'), 'PRIVATE_JOURNAL_SECRET\n[[ExternalNote]]\n', 'utf8');
+    fs.writeFileSync(path.join(privateNotes, 'ExternalNote.md'), 'PRIVATE_NOTE_SECRET\n', 'utf8');
+
+    try {
+      const result = await callTool('jarvos_hydrate', {
+        maxChars: 5000,
+        journal: { journalDir: privateJournal, date: 'sensitive' },
+        linkedNotes: { notesDir: privateNotes },
+      });
+
+      assert.equal(result.isError, false);
+      assert.doesNotMatch(result.content[0].text, /PRIVATE_JOURNAL_SECRET|PRIVATE_NOTE_SECRET/);
+      assert.doesNotMatch(result.content[0].text, new RegExp(privateRoot.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+    } finally {
+      fs.rmSync(privateRoot, { recursive: true, force: true });
     }
   });
 });

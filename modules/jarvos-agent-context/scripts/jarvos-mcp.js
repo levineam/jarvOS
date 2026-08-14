@@ -30,6 +30,15 @@ function normalizeToolArguments(name, args) {
     : (args || {});
 }
 
+function hydrationArgs(args = {}) {
+  return {
+    ...(Object.prototype.hasOwnProperty.call(args, 'maxChars') ? { maxChars: args.maxChars } : {}),
+    ...(Object.prototype.hasOwnProperty.call(args, 'maxItems') ? { maxItems: args.maxItems } : {}),
+    ...(Object.prototype.hasOwnProperty.call(args, 'includeAllAgents') ? { includeAllAgents: args.includeAllAgents } : {}),
+    ...(Object.prototype.hasOwnProperty.call(args, 'statuses') ? { statuses: args.statuses } : {}),
+  };
+}
+
 // Strict host-credential file binding for persisted MCP sessions. Shared with
 // the human CLI and runtime setup: absolute path, owner-only leaf, trusted
 // ownership, and trusted non-writable ancestry. Never accept model-visible
@@ -177,6 +186,7 @@ const TOOLS = [
     description: 'Return a bounded jarvOS Working Context Packet. Use this when the user says "boot jarvOS", asks to hydrate jarvOS, or wants current jarvOS working context for a chat or session.',
     inputSchema: {
       type: 'object',
+      additionalProperties: false,
       properties: {
         maxChars: { type: 'number', description: 'Maximum output characters. Defaults to about 12000.' },
         maxItems: { type: 'number', description: 'Maximum Paperclip issue count to include.' },
@@ -386,7 +396,7 @@ async function callTool(name, args = {}) {
     return textResult(result.markdown, !result.ok);
   }
   if (name === 'jarvos_hydrate') {
-    const result = await hydrate(args);
+    const result = await hydrate(hydrationArgs(args));
     return textResult(result.markdown, !result.ok);
   }
   throw new Error(`Unknown tool: ${name}`);
