@@ -15,6 +15,8 @@ const MAX_HOOK_INPUT_CHARS = 4096;
 const CODEX_THREAD_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const SESSION_WAIT_ID = /^session-wait:[A-Za-z0-9._:-]{1,80}$/;
 const RESULT_DIGEST = /^sha256:[a-f0-9]{64}$/i;
+const SAFE_PROJECTION_KEYS = new Set(['status', 'label', 'reference', 'digest', 'summary', 'resultClass']);
+const FORBIDDEN_PROJECTION_TEXT = /(?:[\r\n\0-\x1f\x7f]|https?:\/\/|\b(?:api[ _-]?key|secret|password|token|credential|bearer|transcript|prompt|instruction)\b)/i;
 
 function gitOutput(cwd, args) {
   const result = spawnSync('git', ['-C', cwd, ...args], { encoding: 'utf8' });
@@ -126,7 +128,14 @@ function validateSessionWaitBridgeResponse(response) {
     || typeof wait.origin.stableSessionId !== 'string' || !CODEX_THREAD_ID.test(wait.origin.stableSessionId)
     || typeof wait.origin.adapterGeneration !== 'string' || Object.hasOwn(wait.origin, 'repoBinding') || Object.hasOwn(wait.origin, 'workspaceBinding')) return { ok: false };
   if (wait.resultDigest != null && !RESULT_DIGEST.test(wait.resultDigest)) return { ok: false };
-  if (wait.safeProjection != null && (typeof wait.safeProjection !== 'object' || Array.isArray(wait.safeProjection))) return { ok: false };
+  if (wait.safeProjection != null) {
+    if (typeof wait.safeProjection !== 'object' || Array.isArray(wait.safeProjection)) return { ok: false };
+    for (const [key, value] of Object.entries(wait.safeProjection)) {
+      if (!SAFE_PROJECTION_KEYS.has(key) || typeof value !== 'string' || value.length === 0 || value.length > 240
+        || value.trim() !== value || FORBIDDEN_PROJECTION_TEXT.test(value)) return { ok: false };
+      if (key === 'digest' && !RESULT_DIGEST.test(value)) return { ok: false };
+    }
+  }
   return { ok: true, value: { available: true, pendingSessionWait: true, wait } };
 }
 
