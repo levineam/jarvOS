@@ -1095,6 +1095,11 @@ const catalogReconciliation = require('./reconciliation');
 const harnessVerification = require('./harness-verification');
 const collisionAlias = require('./collision-alias');
 const receipts = require('./receipts');
+const operator = require('./operator');
+const config = require('./config');
+const scheduler = require('./scheduler');
+const controlPlaneManager = require('./control-plane-manager');
+const overlayAuthoring = require('./overlay-authoring');
 
 const projection = createProjectionApi({
   assertProjectionManifest,
@@ -1203,4 +1208,21 @@ module.exports = {
   safeAliasCandidates: collisionAlias.safeAliasCandidates,
   readReceipt: receipts.readReceipt,
   atomicWriteReceipt: receipts.atomicWriteReceipt,
+  createSharedSkillManager: controlPlaneManager.createSharedSkillManager,
+  admitOverlaySkill: overlayAuthoring.admitOverlaySkill,
+  statusOperator: operator.statusOperator,
+  planOperator: operator.planOperator,
+  applyOperator: operator.applyOperator,
+  refreshOperator: operator.refreshOperator,
+  shareOperator: operator.shareOperator,
+  enableHarness: operator.enableHarness,
+  disableHarness: operator.disableHarness,
+  renameAlias: operator.renameAlias,
+  repairOperator: operator.repairOperator,
+  schedulerOperator: operator.schedulerOperator,
+  initOperator: operator.initOperator,
+  loadConfig: config.loadConfig,
+  saveConfig: config.saveConfig,
+  defaultConfig: config.defaultConfig,
+  planSchedulerUnits: scheduler.planSchedulerUnits,
 };

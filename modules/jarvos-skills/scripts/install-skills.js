@@ -10,7 +10,33 @@ const {
   planSkillProjection,
   applySkillProjection,
   validateBundle,
+  statusOperator,
+  planOperator,
+  applyOperator,
+  refreshOperator,
+  shareOperator,
+  enableHarness,
+  disableHarness,
+  renameAlias,
+  repairOperator,
+  schedulerOperator,
+  initOperator,
+  SUPPORTED_HARNESSES,
 } = require('../src');
+
+const OPERATOR_COMMANDS = new Set([
+  'init-config',
+  'share',
+  'refresh',
+  'plan',
+  'apply',
+  'status',
+  'repair',
+  'enable',
+  'disable',
+  'rename',
+  'scheduler',
+]);
 
 function parseArgs(argv) {
   const args = [...argv];
@@ -26,6 +52,15 @@ function parseArgs(argv) {
     apply: false,
     eventRoot: '',
     projectionTrigger: '',
+    configPath: '',
+    id: '',
+    bundlePath: '',
+    scope: 'public',
+    name: '',
+    root: '',
+    intervalMinutes: null,
+    write: false,
+    harnesses: null,
   };
 
   if (args[0] && !args[0].startsWith('-')) {
@@ -37,8 +72,7 @@ function parseArgs(argv) {
     if (arg === '--dest' || arg === '--destination') {
       if (!args[i + 1]) throw new Error(`${arg} requires a destination path`);
       opts.destination = args[++i];
-    }
-    else if (arg === '--force') opts.force = true;
+    } else if (arg === '--force') opts.force = true;
     else if (arg === '--skill') {
       if (!args[i + 1]) throw new Error('--skill requires a skill name');
       opts.skills = opts.skills || [];
@@ -48,21 +82,42 @@ function parseArgs(argv) {
     else if (arg === '--pack') {
       if (!args[i + 1]) throw new Error('--pack requires a pack name');
       opts.packName = args[++i];
-    }
-    else if (arg === '--harness') {
+    } else if (arg === '--harness') {
       if (!args[i + 1]) throw new Error('--harness requires a harness name');
       opts.harness = args[++i];
-    }
-    else if (arg === '--apply') opts.apply = true;
+    } else if (arg === '--apply') opts.apply = true;
     else if (arg === '--event-root') {
       if (!args[i + 1]) throw new Error('--event-root requires a path');
       opts.eventRoot = args[++i];
-    }
-    else if (arg === '--projection-trigger') {
+    } else if (arg === '--projection-trigger') {
       if (!args[i + 1]) throw new Error('--projection-trigger requires a path');
       opts.projectionTrigger = args[++i];
-    }
-    else if (arg === '--help' || arg === '-h') opts.help = true;
+    } else if (arg === '--config') {
+      if (!args[i + 1]) throw new Error('--config requires a path');
+      opts.configPath = args[++i];
+    } else if (arg === '--id') {
+      if (!args[i + 1]) throw new Error('--id requires a skill id');
+      opts.id = args[++i];
+    } else if (arg === '--path') {
+      if (!args[i + 1]) throw new Error('--path requires a bundle path');
+      opts.bundlePath = args[++i];
+    } else if (arg === '--scope') {
+      if (!args[i + 1]) throw new Error('--scope requires public|local');
+      opts.scope = args[++i];
+    } else if (arg === '--name') {
+      if (!args[i + 1]) throw new Error('--name requires an effective name');
+      opts.name = args[++i];
+    } else if (arg === '--root') {
+      if (!args[i + 1]) throw new Error('--root requires a path');
+      opts.root = args[++i];
+    } else if (arg === '--interval-minutes') {
+      if (!args[i + 1]) throw new Error('--interval-minutes requires an integer');
+      opts.intervalMinutes = Number(args[++i]);
+    } else if (arg === '--write') opts.write = true;
+    else if (arg === '--harnesses') {
+      if (!args[i + 1]) throw new Error('--harnesses requires a comma-separated list');
+      opts.harnesses = args[++i].split(',').map((item) => item.trim()).filter(Boolean);
+    } else if (arg === '--help' || arg === '-h') opts.help = true;
     else throw new Error(`Unknown argument: ${arg}`);
   }
 
@@ -72,19 +127,29 @@ function parseArgs(argv) {
 function printHelp() {
   console.log(`Usage:
   jarvos-skills --check
-  jarvos-skills --dest /path/to/openclaw-workspace/skills [--force] [--event-root /path/to/jarvos/events] [--projection-trigger /absolute/path/to/jarvos-skill-projection.js]
-  jarvos-skills --dest /path/to/skills --skill workflow-execution --skill cron-hygiene
+  jarvos-skills --dest /path/to/openclaw-workspace/skills [--force]
   jarvos-skills list [--json]
   jarvos-skills doctor [--pack obsidian-default] [--json]
   jarvos-skills install-plan [--pack obsidian-default] [--json]
   jarvos-skills projection-plan --harness hermes --dest /path/to/skills [--json]
   jarvos-skills project --harness hermes --dest /path/to/skills --apply [--json]
 
-Installs the default jarvOS operating-system skill bundle:
-workflow-execution, rule-creation, context-management, cron-hygiene.
-QMD is intentionally not installed by default; see docs/qmd-adapter.md.
+Shared skill distribution (catalog/overlay):
+  jarvos-skills init-config [--config PATH] [--json]
+  jarvos-skills share --id NAME --path /bundle --scope public|local [--harnesses a,b] [--config PATH] [--json]
+  jarvos-skills refresh [--config PATH] [--json]
+  jarvos-skills plan [--config PATH] [--json]
+  jarvos-skills apply [--config PATH] [--json]
+  jarvos-skills status [--config PATH] [--json]
+  jarvos-skills repair [--config PATH] [--json]
+  jarvos-skills enable --harness NAME [--root PATH] [--config PATH] [--json]
+  jarvos-skills disable --harness NAME [--config PATH] [--json]
+  jarvos-skills rename --id NAME --name EFFECTIVE [--config PATH] [--json]
+  jarvos-skills scheduler [--write] [--interval-minutes N] [--config PATH] [--json]
 
-The doctor reports readiness for optional experience packs such as obsidian-default.`);
+Installs the default jarvOS operating-system skill bundle and operates the
+public shared-skill catalog. Private overlay bodies never enter the package.
+Live harness activation remains an owner decision.`);
 }
 
 function printPlan(plan, json) {
@@ -112,6 +177,59 @@ function printError(error, json) {
     return;
   }
   console.error(`ERROR ${error.message}`);
+}
+
+function printResult(result, json) {
+  if (json) {
+    // Strip internal plan handles before serialization.
+    const { _plan, ...safe } = result || {};
+    process.stdout.write(`${JSON.stringify(safe, null, 2)}\n`);
+    return;
+  }
+  process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+}
+
+function runOperator(opts) {
+  const configPath = opts.configPath || undefined;
+  switch (opts.command) {
+    case 'init-config':
+      return initOperator({ configPath });
+    case 'share':
+      return shareOperator({
+        id: opts.id,
+        bundlePath: opts.bundlePath,
+        scope: opts.scope,
+        harnesses: opts.harnesses || SUPPORTED_HARNESSES.slice(),
+        configPath,
+      });
+    case 'refresh':
+      return refreshOperator({ configPath });
+    case 'plan': {
+      const planned = planOperator({ configPath });
+      const { _plan, ...safe } = planned;
+      return safe;
+    }
+    case 'apply':
+      return applyOperator({ configPath });
+    case 'status':
+      return statusOperator({ configPath });
+    case 'repair':
+      return repairOperator({ configPath });
+    case 'enable':
+      return enableHarness({ harness: opts.harness, root: opts.root || undefined, configPath });
+    case 'disable':
+      return disableHarness({ harness: opts.harness, configPath });
+    case 'rename':
+      return renameAlias({ id: opts.id, name: opts.name, configPath });
+    case 'scheduler':
+      return schedulerOperator({
+        configPath,
+        write: opts.write,
+        intervalMinutes: opts.intervalMinutes || undefined,
+      });
+    default:
+      throw new Error(`Unknown operator command: ${opts.command}`);
+  }
 }
 
 function main() {
@@ -170,6 +288,22 @@ function main() {
     }
   }
 
+  if (OPERATOR_COMMANDS.has(opts.command)) {
+    try {
+      // enable/disable require a real harness id, not the legacy default.
+      if ((opts.command === 'enable' || opts.command === 'disable') && !SUPPORTED_HARNESSES.includes(opts.harness)) {
+        throw new Error(`--harness must be one of: ${SUPPORTED_HARNESSES.join(', ')}`);
+      }
+      const result = runOperator(opts);
+      printResult(result, opts.json || true);
+      if (result && result.ok === false) process.exitCode = 2;
+      return;
+    } catch (error) {
+      printError(error, opts.json || true);
+      process.exit(1);
+    }
+  }
+
   if (opts.command) {
     console.error(`ERROR Unknown command: ${opts.command}`);
     printHelp();
@@ -207,3 +341,5 @@ function main() {
 }
 
 if (require.main === module) main();
+
+module.exports = { parseArgs, runOperator, OPERATOR_COMMANDS };
