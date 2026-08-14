@@ -5,7 +5,7 @@
 const ACTIVE_ASSISTANT_SEMANTIC_POLICY_VERSION = 'active-assistant-semantic-policy/v1';
 const TYPES = Object.freeze(new Set(['quoted_evidence', 'source_backed_observation', 'advisory_question']));
 const GUARDED_CLAIM = /\b(?:can|can't|cannot|available|unavailable|sent|delivered|fulfilled|completed|finished|done|shipped|created|scheduled|drafted)\b/i;
-const ACTIVE_MARKUP = /(?:https?:\/\/|mailto:|data:|javascript:|\[[^\]]+\]\([^)]*\)|<a\b|<img\b|!\[[^\]]*\]\([^)]*\)|\[\[[^\]]+\]\])/i;
+const ACTIVE_MARKUP = /(?:https?:\/\/|mailto:|data:|javascript:|\[[^\]]+\]\([^)]*\)|<\/?[a-z][^>]*>|!\[[^\]]*\]\([^)]*\)|\[\[[^\]]+\]\])/i;
 const APPROVAL_VOICE = /\b(?:prove|earn|deserve|win)\s+(?:my|your|our)?\s*(?:approval|goodness|fairness)\b/i;
 
 function reject(reasonCode) { return { ok: false, reasonCode }; }
