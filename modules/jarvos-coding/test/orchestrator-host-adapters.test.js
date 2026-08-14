@@ -841,3 +841,11 @@ test('Hermes host adapter registers the existing coding entrypoint once with poi
     /continuityReference may not include transcript/,
   );
 });
+
+test('host adapters expose controller finish and never route legacy complete', async () => {
+  const calls = [];
+  const adapter = createCodexHostAdapter({ adapters: { managedWorkflow: { async finish(input) { calls.push(input.subjectKey); return { ok: true, status: 'completed' }; } } } });
+  const result = await adapter.runTakeIssueToDone({ operation: 'finish', subjectKey: 'levineam/jarvOS:SUP-5015' });
+  assert.equal(result.operation, 'finish');
+  assert.deepEqual(calls, ['levineam/jarvOS:SUP-5015']);
+});

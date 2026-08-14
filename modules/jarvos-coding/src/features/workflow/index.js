@@ -16,6 +16,8 @@ const {
 const {
   runTakeIssueToDone,
 } = require('../orchestrator');
+const { deriveLearningSignal } = require('../learning-signal');
+const { assessTerminalSubmission } = require('../../adapters/hosts');
 
 const MANAGED_WORKFLOW_SCHEMA_VERSION = 'jarvos-managed-coding-workflow/v1';
 const IMPLEMENTATION_PACKET_VERSION = 'jarvos-implementation-packet/v1';
@@ -407,6 +409,13 @@ function createManagedCodingWorkflow(options = {}) {
     if (snapshot && !isTrustedProviderSnapshot(snapshot)) return { ok: false, status: 'blocked', workRunId: claimed.workRunId, reasonCode: 'provider_snapshot_untrusted' };
     const packetValidation = validateImplementationPacket(input.packet, input.planDigest);
     if (!packetValidation.ok) return { ok: false, status: 'blocked', workRunId: claimed.workRunId, reasonCode: 'invalid_implementation_packet', errors: packetValidation.errors };
+    // The standalone legacy constructor remains compatible; the public
+    // runtime always passes the owner-controlled policy explicitly.
+    const policy = input.acceptancePolicy || options.acceptancePolicy || { mode: 'agent-mediated-allowed' };
+    const evidence = input.acceptanceEvidence || null;
+    if (policy.mode !== 'agent-mediated-allowed' && (!evidence || evidence.planDigest !== input.planDigest || typeof evidence.source !== 'string')) {
+      return { ok: false, status: 'awaiting-plan-acceptance', workRunId: claimed.workRunId, reasonCode: 'acceptance_evidence_required' };
+    }
     return options.workRunStore.acceptPlan({
       workRunId: claimed.workRunId,
       ownerId: claimed.ownerId,
@@ -416,6 +425,7 @@ function createManagedCodingWorkflow(options = {}) {
       providerPinDigest: snapshot?.pinDigest || null,
       packetDigest: digest(packetValidation.packet),
       artifact: input.artifact,
+      acceptanceEvidence: evidence,
     });
   }
 
@@ -551,7 +561,10 @@ function createManagedCodingWorkflow(options = {}) {
       type: 'route',
       operation: 'compound',
       status: outcome,
-      operationNonce: nonce,
+      // Keep the provider's stable operation nonce separate from route
+      // receipts.  A retry must reuse the provider idempotency identity while
+      // still allowing the ledger to record a new route outcome.
+      operationNonce: `learning-outcome-${nonce}-${outcome}`,
       reasonCode: detail?.reasonCode || null,
       detail: detail?.rationale ? [detail.rationale] : null,
     });
@@ -589,12 +602,16 @@ function createManagedCodingWorkflow(options = {}) {
       };
     }
 
-    const eligibility = evaluateLearningEligibility({
-      verification: input.verification || input.orchestration,
-      signals: input.learningSignals ?? input.learning,
-      declined: input.declineLearning === true || input.declinedLearning === true,
-    });
-    const nonce = learningNonce(claimed);
+    const eligibility = input.persistLearningSignal === true
+      ? { status: 'eligible', learning: input.learning, deferredCount: 0 }
+      : evaluateLearningEligibility({
+        verification: input.verification || input.orchestration,
+        signals: input.learningSignals ?? input.learning,
+        declined: input.declineLearning === true || input.declinedLearning === true,
+      });
+    const nonce = input.persistLearningSignal
+      ? `compound-${claimed.workRunId}`
+      : learningNonce(claimed);
     if (eligibility.status !== 'eligible') {
       return learningOutcomeResponse({
         claimed,
@@ -607,10 +624,17 @@ function createManagedCodingWorkflow(options = {}) {
       });
     }
 
+    const persistedSignal = input.persistLearningSignal === true;
+    if (persistedSignal) {
+      const reserved = options.workRunStore.reserveLearningFinalizer({ workRunId: claimed.workRunId, ownerId: claimed.ownerId, fence: claimed.fence });
+      if (!reserved.ok) return { ok: reserved.deduped === true, status: reserved.learningTail?.status || 'finalizing', learningStatus: reserved.learningTail?.status || 'finalizing', workRunId: claimed.workRunId, reasonCode: reserved.reason, route: 'jarvos-learning-gate' };
+    }
+
     const run = options.workRunStore.getWorkRun(claimed.workRunId, { public: false });
     const acceptedPlanDigest = input.planDigest || run?.acceptedPlan?.digest;
     if (!acceptedPlanDigest) {
       const outcome = { status: 'unavailable', reasonCode: 'accepted_plan_missing', rationale: 'learning capture requires an accepted provider-independent plan revision' };
+      if (persistedSignal) options.workRunStore.setLearningTail({ workRunId: claimed.workRunId, ownerId: claimed.ownerId, fence: claimed.fence, status: 'retryable-unavailable', reasonCode: outcome.reasonCode });
       return learningOutcomeResponse({ claimed, nonce, ...outcome, ok: true });
     }
 
@@ -619,12 +643,14 @@ function createManagedCodingWorkflow(options = {}) {
       request = requestFor('compound', { ...input, operationNonce: nonce }, claimed, acceptedPlanDigest);
     } catch (error) {
       const outcome = { status: 'unavailable', reasonCode: 'provider_identity_unavailable', rationale: 'approved provider identity is not available for learning capture' };
+      if (persistedSignal) options.workRunStore.setLearningTail({ workRunId: claimed.workRunId, ownerId: claimed.ownerId, fence: claimed.fence, status: 'retryable-unavailable', reasonCode: outcome.reasonCode });
       return learningOutcomeResponse({ claimed, nonce, ...outcome, ok: true });
     }
 
     const snapshot = providerSnapshotFor(input, claimed);
     if (!providerHealthy(manifest, snapshot, 'compound') || typeof providerAdapter.compound !== 'function') {
       const outcome = { status: 'unavailable', reasonCode: 'provider_unsupported', rationale: 'provider is not healthy for the active harness' };
+      if (persistedSignal) options.workRunStore.setLearningTail({ workRunId: claimed.workRunId, ownerId: claimed.ownerId, fence: claimed.fence, status: 'retryable-unavailable', reasonCode: outcome.reasonCode });
       return learningOutcomeResponse({ claimed, nonce, ...outcome, ok: true });
     }
 
@@ -639,16 +665,19 @@ function createManagedCodingWorkflow(options = {}) {
       receipt = await invokeProvider('compound', invocation, providerAdapter.compound, input);
     } catch (error) {
       const outcome = { status: 'unavailable', reasonCode: 'provider_unavailable', rationale: 'provider did not return a learning receipt' };
+      if (persistedSignal) options.workRunStore.setLearningTail({ workRunId: claimed.workRunId, ownerId: claimed.ownerId, fence: claimed.fence, status: 'retryable-unavailable', reasonCode: outcome.reasonCode });
       return learningOutcomeResponse({ claimed, nonce, ...outcome, ok: true });
     }
     const validation = validateWorkflowProviderReceipt(receipt, { manifest, request });
     if (!validation.ok) {
       const outcome = { status: 'failed', reasonCode: 'invalid_provider_receipt', rationale: 'provider learning receipt failed the strict contract' };
+      if (persistedSignal) options.workRunStore.setLearningTail({ workRunId: claimed.workRunId, ownerId: claimed.ownerId, fence: claimed.fence, status: 'failed', reasonCode: outcome.reasonCode });
       return learningOutcomeResponse({ claimed, nonce, ...outcome, ok: false, errors: validation.errors });
     }
     const screen = screenLearningReceipt(validation.receipt);
     if (!screen.ok) {
       const outcome = { status: 'failed', reasonCode: 'unsafe_learning_artifact', rationale: 'learning receipt contained private or unsafe content' };
+      if (persistedSignal) options.workRunStore.setLearningTail({ workRunId: claimed.workRunId, ownerId: claimed.ownerId, fence: claimed.fence, status: 'unsafe', reasonCode: outcome.reasonCode });
       return learningOutcomeResponse({ claimed, nonce, ...outcome, ok: false, errors: screen.errors });
     }
     const recorded = options.workRunStore.recordProviderReceipt({
@@ -663,7 +692,11 @@ function createManagedCodingWorkflow(options = {}) {
     const recording = providerReceiptRecording(recorded, validation.receipt);
     if (!recording.ok) {
       const outcome = { status: 'failed', reasonCode: recording.reason || 'learning_receipt_not_recorded', rationale: 'learning receipt could not be durably attached to the work run' };
+      if (persistedSignal) options.workRunStore.setLearningTail({ workRunId: claimed.workRunId, ownerId: claimed.ownerId, fence: claimed.fence, status: 'failed', reasonCode: outcome.reasonCode });
       return { ok: false, ...outcome, learningStatus: outcome.status, route: 'jarvos-learning-gate', workRunId: claimed.workRunId, event: null };
+    }
+    if (persistedSignal && validation.receipt.status !== 'succeeded') {
+      options.workRunStore.setLearningTail({ workRunId: claimed.workRunId, ownerId: claimed.ownerId, fence: claimed.fence, status: 'failed', reasonCode: 'provider_learning_failed' });
     }
     return {
       ok: validation.receipt.status === 'succeeded',
@@ -679,19 +712,67 @@ function createManagedCodingWorkflow(options = {}) {
 
   async function complete(input = {}, adapters = {}) {
     const claimed = claim(input);
-    const result = await runTakeIssueToDone({ ...input, workRunId: claimed.workRunId, branch: input.branch || input.branchName }, adapters);
-    if (result.learning?.status === 'eligible') {
-      const learning = await compound({
-        ...input,
-        workRunId: claimed.workRunId,
-        learning: result.learning.learning,
-        learningEligibility: result.learning,
-        verification: result,
-        planDigest: input.planDigest || claimed.workRun.acceptedPlan?.digest,
-      });
-      return { ...result, learning, workRunId: claimed.workRunId, route: 'jarvos-orchestrator' };
+    if (!claimed.workRun.acceptedPlan || claimed.workRun.acceptedPlan.digest !== input.planDigest) {
+      return { ok: false, status: 'awaiting-plan-acceptance', workRunId: claimed.workRunId, reasonCode: 'accepted_plan_mismatch' };
     }
+    const result = await runTakeIssueToDone({ ...input, workRunId: claimed.workRunId, branch: input.branch || input.branchName }, adapters);
     return { ...result, workRunId: claimed.workRunId, route: 'jarvos-orchestrator' };
+  }
+
+  async function finish(input = {}, adapters = {}) {
+    const claimed = claim(input);
+    const run = claimed.workRun;
+    if (!run.acceptedPlan || run.acceptedPlan.digest !== input.planDigest) {
+      return { ok: false, status: 'awaiting-plan-acceptance', workRunId: claimed.workRunId, reasonCode: 'accepted_plan_mismatch' };
+    }
+    const result = await complete(input, adapters);
+    if (result.ok === false) return result;
+    const assessment = assessTerminalSubmission(result);
+    const verification = {
+      ...result,
+      submissionGate: assessment.submissionGate,
+      submissionEvidence: assessment.submissionEvidence,
+      nonRoutine: input.nonRoutine === true && input.routine !== true,
+    };
+    if (result.status !== 'completed' || !assessment.ok) {
+      return {
+        ...result,
+        verification: null,
+        primaryCompletion: result.status,
+        learning: {
+          status: 'not-eligible',
+          reasonCode: result.status !== 'completed' ? 'coding_outcome_not_verified' : 'submission_gate_not_ready',
+          reasons: assessment.reasons,
+        },
+      };
+    }
+    const evidence = {
+      reference: `terminal_${digest(JSON.stringify(verification.submissionGate || verification.events || verification)).slice(0, 24)}`,
+      digest: digest(JSON.stringify(verification.submissionGate || verification.events || verification)),
+      status: result.status,
+    };
+    const terminal = options.workRunStore.setTerminalEvidence({ workRunId: claimed.workRunId, ownerId: claimed.ownerId, fence: claimed.fence, evidence });
+    const derived = deriveLearningSignal(verification);
+    if (!derived.ok) {
+      options.workRunStore.setLearningTail({ workRunId: claimed.workRunId, ownerId: claimed.ownerId, fence: claimed.fence, status: derived.status === 'unsafe' ? 'unsafe' : 'not-eligible', reasonCode: derived.reasonCode });
+      return { ...result, verification: terminal.ok ? terminal.terminalEvidence : null, primaryCompletion: result.status, learning: { status: derived.status, reasonCode: derived.reasonCode } };
+    }
+    options.workRunStore.setLearningTail({ workRunId: claimed.workRunId, ownerId: claimed.ownerId, fence: claimed.fence, status: 'eligible', signal: derived.signal, reasonCode: 'reusable_learning_signal' });
+    const learning = await compound({ ...input, workRunId: claimed.workRunId, verification, learning: derived.signal, persistLearningSignal: true });
+    if (learning.learningStatus === 'captured' || learning.status === 'succeeded') options.workRunStore.setLearningTail({ workRunId: claimed.workRunId, ownerId: claimed.ownerId, fence: claimed.fence, status: 'captured', artifact: learning.artifact || null });
+    return { ...result, verification: terminal.ok ? terminal.terminalEvidence : null, primaryCompletion: result.status, learning };
+  }
+
+  async function catchUp(input = {}) {
+    const claimed = claim(input);
+    const run = options.workRunStore.getWorkRun(claimed.workRunId, { public: false });
+    if (!run?.terminalEvidence) return { ok: true, status: run?.state || 'active', workRunId: claimed.workRunId, learning: null };
+    const tail = run.learningTail || { status: 'not-evaluated' };
+    if (!tail.signal || ['captured', 'not-eligible', 'declined', 'unsafe', 'unavailable'].includes(tail.status)) return { ok: true, status: 'verified', workRunId: claimed.workRunId, primaryCompletion: 'completed', learning: tail };
+    if (tail.status === 'finalizing') options.workRunStore.reconcileLearningFinalizer({ workRunId: claimed.workRunId, ownerId: claimed.ownerId, fence: claimed.fence });
+    const learning = await compound({ ...input, workRunId: claimed.workRunId, planDigest: run.acceptedPlan?.digest, verification: { status: 'completed', submissionGate: { ready: true }, events: [] }, learning: tail.signal, persistLearningSignal: true });
+    if (learning.learningStatus === 'captured' || learning.status === 'succeeded') options.workRunStore.setLearningTail({ workRunId: claimed.workRunId, ownerId: claimed.ownerId, fence: claimed.fence, status: 'captured', artifact: learning.artifact || null });
+    return { ok: true, status: 'verified', workRunId: claimed.workRunId, primaryCompletion: 'completed', learning };
   }
 
   return {
@@ -701,6 +782,9 @@ function createManagedCodingWorkflow(options = {}) {
     work,
     compound,
     complete,
+    finish,
+    status: catchUp,
+    resume: catchUp,
     validateImplementationPacket,
     buildProviderInvocation,
     providerHealthy: (snapshot, operation) => providerHealthy(manifest, snapshot, operation),

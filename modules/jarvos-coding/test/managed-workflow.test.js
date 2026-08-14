@@ -7,6 +7,7 @@ const {
   IMPLEMENTATION_PACKET_VERSION,
   createManagedCodingWorkflow,
   createMemoryWorkRunStore,
+  deriveLearningSignal,
   validateImplementationPacket,
 } = require('../src');
 
@@ -459,4 +460,109 @@ test('timed-out work waits for provider settlement, then reconciles once and rep
   const replay = await workflow.work(input);
   assert.equal(replay.deduped, true);
   assert.equal(nativeWorkCalls, 1);
+});
+
+test('controller acceptance requires owner evidence under the public human-evidence policy', async () => {
+  const currentManifest = manifest();
+  const workflow = createManagedCodingWorkflow({
+    manifest: currentManifest,
+    workRunStore: createMemoryWorkRunStore(),
+    ownerId: 'agent:codex',
+    acceptancePolicy: { mode: 'human-evidence-required' },
+  });
+  const input = { subjectKey: 'levineam/jarvOS:SUP-5013', canonicalWorktree: '/private/jarvos/worktrees/SUP-5013', planDigest: '3'.repeat(64), packet: packet('3'.repeat(64)), artifact: { reference: 'artifact:plan123456', digest: '3'.repeat(64) } };
+  const blocked = await workflow.acceptPlan(input);
+  assert.equal(blocked.status, 'awaiting-plan-acceptance');
+  const accepted = await workflow.acceptPlan({ ...input, acceptanceEvidence: { source: 'owner-cli', planDigest: input.planDigest } });
+  assert.equal(accepted.ok, true);
+});
+
+test('legacy complete is fail-closed before accepted plan evidence and never trusts caller learning', async () => {
+  const workflow = createManagedCodingWorkflow({ manifest: manifest(), workRunStore: createMemoryWorkRunStore(), ownerId: 'agent:codex' });
+  const result = await workflow.complete({
+    subjectKey: 'levineam/jarvOS:SUP-5014',
+    canonicalWorktree: '/private/jarvos/worktrees/SUP-5014',
+    planDigest: '4'.repeat(64),
+    learning: { category: 'root-cause', summary: 'caller supplied learning must not publish' },
+  });
+  assert.equal(result.status, 'awaiting-plan-acceptance');
+});
+
+test('durable learning-tail reservation survives a restart shape and allows only one finalizer attempt', () => {
+  const store = createMemoryWorkRunStore();
+  const claim = store.claimWorkRun({ subjectKey: 'levineam/jarvOS:SUP-5016', canonicalWorktree: '/private/jarvos/worktrees/SUP-5016', ownerId: 'agent:codex' });
+  store.setLearningTail({ workRunId: claim.workRunId, ownerId: claim.ownerId, fence: claim.fence, status: 'eligible', signal: { category: 'operational-lesson', summary: 'Preserve verified evidence', evidenceDigest: '6'.repeat(64) } });
+  const first = store.reserveLearningFinalizer({ workRunId: claim.workRunId, ownerId: claim.ownerId, fence: claim.fence });
+  const replay = store.reserveLearningFinalizer({ workRunId: claim.workRunId, ownerId: claim.ownerId, fence: claim.fence });
+  assert.equal(first.ok, true);
+  assert.equal(replay.reason, 'learning_finalizer_in_progress');
+  assert.equal(store.getWorkRun(claim.workRunId, { public: false }).learningTail.attempts, 1);
+});
+
+test('status reconciles an interrupted finalizer reservation into the same durable retry tail', async () => {
+  const store = createMemoryWorkRunStore();
+  const workflow = createManagedCodingWorkflow({ manifest: manifest(), workRunStore: store, ownerId: 'agent:codex' });
+  const subjectKey = 'levineam/jarvOS:SUP-5017';
+  const claim = store.claimWorkRun({ subjectKey, canonicalWorktree: '/private/jarvos/worktrees/SUP-5017', ownerId: 'agent:codex' });
+  store.acceptPlan({ workRunId: claim.workRunId, ownerId: claim.ownerId, fence: claim.fence, planDigest: '7'.repeat(64), packetDigest: '8'.repeat(64), artifact: { reference: 'artifact:plan123456', digest: '7'.repeat(64) } });
+  store.setTerminalEvidence({ workRunId: claim.workRunId, ownerId: claim.ownerId, fence: claim.fence, evidence: { reference: 'terminal_123456', digest: '9'.repeat(64), status: 'completed' } });
+  store.setLearningTail({ workRunId: claim.workRunId, ownerId: claim.ownerId, fence: claim.fence, status: 'eligible', signal: { category: 'operational-lesson', summary: 'Preserve verified evidence', evidenceDigest: 'a'.repeat(64) } });
+  store.reserveLearningFinalizer({ workRunId: claim.workRunId, ownerId: claim.ownerId, fence: claim.fence });
+  const resumed = await workflow.status({ subjectKey, canonicalWorktree: '/private/jarvos/worktrees/SUP-5017', planDigest: '7'.repeat(64) });
+  assert.equal(resumed.status, 'verified');
+  assert.equal(store.getWorkRun(claim.workRunId, { public: false }).learningTail.status, 'retryable-unavailable');
+});
+
+test('persisted learning retries reuse one provider operation identity and artifact', async () => {
+  const currentManifest = manifest();
+  const currentProvider = provider(currentManifest);
+  const store = createMemoryWorkRunStore();
+  const invocations = [];
+  const workflow = createManagedCodingWorkflow({
+    manifest: currentManifest,
+    workRunStore: store,
+    ownerId: 'agent:codex',
+    providerSnapshot: currentProvider,
+    providerAdapter: {
+      compound: async (invocation) => {
+        invocations.push(invocation);
+        return receipt(invocation, 'compound', 'b'.repeat(64));
+      },
+    },
+  });
+  const input = {
+    subjectKey: 'levineam/jarvOS:SUP-5018',
+    canonicalWorktree: '/private/jarvos/worktrees/SUP-5018',
+    planDigest: 'b'.repeat(64),
+  };
+  const claim = store.claimWorkRun({ ...input, ownerId: 'agent:codex', providerSnapshot: currentProvider });
+  store.acceptPlan({
+    workRunId: claim.workRunId,
+    ownerId: claim.ownerId,
+    fence: claim.fence,
+    planDigest: input.planDigest,
+    packetDigest: 'c'.repeat(64),
+    providerPinDigest: currentProvider.pinDigest,
+    artifact: { reference: 'artifact:plan123456', digest: input.planDigest },
+  });
+  store.setLearningTail({
+    workRunId: claim.workRunId,
+    ownerId: claim.ownerId,
+    fence: claim.fence,
+    status: 'eligible',
+    signal: { category: 'operational-lesson', summary: 'Preserve the verified operation identity', evidenceDigest: 'd'.repeat(64) },
+  });
+  const first = await workflow.compound({ ...input, learning: store.getWorkRun(claim.workRunId, { public: false }).learningTail.signal, persistLearningSignal: true });
+  const second = await workflow.compound({ ...input, learning: store.getWorkRun(claim.workRunId, { public: false }).learningTail.signal, persistLearningSignal: true });
+  assert.equal(first.learningStatus, 'captured');
+  assert.equal(second.reasonCode, 'one_learning_per_work_run');
+  assert.equal(invocations.length, 1);
+  assert.equal(invocations[0].idempotencyKey, `compound:${claim.workRunId}`);
+});
+
+test('a verified non-routine authoritative result derives a learning candidate without caller signals', () => {
+  const verification = { status: 'completed', submissionGate: { ready: true, nonRoutine: true }, events: ['claim', 'branch', 'sliceReview', 'holisticReview', 'fixRerun', 'pullRequest', 'postMergeSweep', 'verifyClose'].map((stage) => ({ stage, result: stage === 'verifyClose' ? { status: 'closed' } : { status: 'completed' } })) };
+  const derived = deriveLearningSignal(verification);
+  assert.equal(derived.ok, true);
+  assert.equal(derived.signal.category, 'operational-lesson');
 });

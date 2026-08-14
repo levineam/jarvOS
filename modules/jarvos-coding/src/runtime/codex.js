@@ -1,9 +1,12 @@
 'use strict';
 
 const crypto = require('node:crypto');
+const path = require('node:path');
 const { buildLiveCodingAdapters } = require('../adapters/live');
 const { createFileWorkRunStore } = require('../features/work-run-store');
 const { loadRepositoryRegistry } = require('./repository-registry');
+const { createManagedCodingWorkflow } = require('../features/workflow');
+const { createNativeWorkflowAdapter } = require('../adapters/native-workflow');
 
 const CODEX_RUNTIME_SCHEMA_VERSION = 'jarvos-coding-codex-runtime/v1';
 const SUBJECT = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$/;
@@ -35,9 +38,19 @@ function createCodexRuntime(options = {}) {
     const existing = store.getWorkRun(workRunId, { public: false });
     if (existing && existing.subjectKey !== qualifiedSubject) throw new Error('workRunId belongs to a different repository-qualified subject');
     if (existing?.canonicalWorktree && existing.canonicalWorktree !== worktree) throw new Error('work run canonical worktree no longer matches repository authority');
-    return Object.freeze({ repository, repositoryId: repository.repositoryId, subjectKey: qualifiedSubject, workRunId, canonicalWorktree: worktree, store,
+    const liveAdapters = buildLiveCodingAdapters({ ...(options.liveAdapters || {}), repoRootDir: repository.root, worktreeRoot: repository.worktreePolicy.root, repo: repository.tracker.repo });
+    const nativeAdapter = options.nativeAdapter || createNativeWorkflowAdapter({ ...(options.nativeWorkflow || {}), adapters: liveAdapters });
+    const managedWorkflow = createManagedCodingWorkflow({
+      ...(options.managedWorkflow || {}),
+      workRunStore: store,
+      nativeAdapter,
+      manifestPath: options.managedWorkflow?.manifestPath || path.resolve(__dirname, '../../providers/compound-engineering.json'),
+      acceptancePolicy: repository.acceptancePolicy,
+      ownerId: options.ownerId || 'jarvos-coding',
+    });
+    return Object.freeze({ repository, repositoryId: repository.repositoryId, subjectKey: qualifiedSubject, workRunId, canonicalWorktree: worktree, store, managedWorkflow,
       public: Object.freeze({ version: CODEX_RUNTIME_SCHEMA_VERSION, repository: { repositoryId: repository.repositoryId, label: repository.publicLabel }, subjectKey: qualifiedSubject, workRunId }),
-      adapters: buildLiveCodingAdapters({ ...(options.liveAdapters || {}), repoRootDir: repository.root, worktreeRoot: repository.worktreePolicy.root, repo: repository.tracker.repo }),
+      adapters: liveAdapters,
     });
   }
   return Object.freeze({ schemaVersion: CODEX_RUNTIME_SCHEMA_VERSION, resolveRequest, listRepositories: () => registry.listPublic(), health: () => ({ version: CODEX_RUNTIME_SCHEMA_VERSION, status: 'installed-but-unwired', registryGeneration: registry.generation, repositories: registry.listPublic() }) });

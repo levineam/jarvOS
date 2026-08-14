@@ -222,8 +222,9 @@ function createCodingHostAdapter(host, options = {}) {
     const adapters = await resolveAdapters(input);
     const managedWorkflow = adapters.managedWorkflow || options.managedWorkflow || null;
     const operation = input.operation || input.workflowOperation;
-    if (managedWorkflow && ['plan', 'work', 'complete', 'compound'].includes(operation)) {
-      const handler = managedWorkflow[operation];
+    if (managedWorkflow && ['plan', 'accept-plan', 'acceptPlan', 'work', 'finish', 'status', 'resume'].includes(operation)) {
+      const normalizedOperation = operation === 'accept-plan' ? 'acceptPlan' : operation;
+      const handler = managedWorkflow[normalizedOperation];
       if (typeof handler !== 'function') throw new Error(`managed coding workflow does not support ${operation}`);
       const result = await handler(input, adapters);
       return {

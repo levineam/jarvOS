@@ -160,6 +160,8 @@ const projectsActivity = require('./projects-activity');
 const compoundEngineeringProvider = require('./providers/compound-engineering');
 const workflowProvider = require('./providers/workflow-provider');
 const learningEligibility = require('./providers/learning-eligibility');
+const learningSignal = require('./features/learning-signal');
+const nativeWorkflow = require('./adapters/native-workflow');
 const workRunStore = require('./features/work-run-store');
 const managedWorkflow = require('./features/workflow');
 const codexRuntime = require('./runtime/codex');
@@ -173,6 +175,8 @@ module.exports = {
   ...compoundEngineeringProvider,
   ...workflowProvider,
   ...learningEligibility,
+  ...learningSignal,
+  ...nativeWorkflow,
   ...workRunStore,
   ...managedWorkflow,
   ...codexRuntime,
