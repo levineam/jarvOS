@@ -387,7 +387,7 @@ When you discover useful patterns or want to remember something, add it to the a
 
 ## Authorship
 
-**Always sign your work.** Any note, draft, or article you create in the vault gets `- Written by {{ASSISTANT_NAME}}` at the bottom. If you edit an existing note, append `- Edited by {{ASSISTANT_NAME}}`. No exceptions. {{USER_NAME}} needs to know what's theirs and what's yours.
+**Do not append a visible author or edit signature to vault notes or journals.** Canonical capture paths record intellectual origin as structured metadata: use `human` only for {{USER_NAME}}'s supplied words or faithful user-derived copy, `assistant` for generated copy, `mixed` for material contributions from both, and `unknown` when the evidence is insufficient. The writer carries that declaration into note frontmatter or an invisible journal marker so downstream ripeness and retrieval can distinguish the user's evidence from assistant context without cluttering the reading surface. If you are only transcribing or lightly arranging {{USER_NAME}}'s words, preserve the human origin; do not claim human origin for newly generated ideas.
 
 ## 🗂️ Vault & Document Location
 
