@@ -176,7 +176,7 @@ try {
     moduleId: 'memory',
     generation: 1,
     observedAt: '2026-08-12T23:00:00.000Z',
-    validUntil: '2026-08-13T23:00:00.000Z',
+    validUntil: '2099-08-13T23:00:00.000Z',
     trust: 'trusted',
     repairable: false,
     updateAvailable: true,
@@ -190,7 +190,7 @@ try {
     state: 'update available',
     generation: 1,
     observedAt: '2026-08-12T23:00:00.000Z',
-    validUntil: '2026-08-13T23:00:00.000Z',
+    validUntil: '2099-08-13T23:00:00.000Z',
     reasonClass: 'update-available',
   }]);
 

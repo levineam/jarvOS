@@ -226,6 +226,50 @@ test('freshness, capture boundary, redaction, deterministic ordering, and trunca
   assert.equal(result.packet.currentWork.length, 0);
 });
 
+test('bounded activity windows filter before classification and truncation', () => {
+  const { registry, root, outcome } = makeRegistry();
+  const windowNow = '2026-08-13T05:00:00.000Z';
+  const query = queryFor(root, outcome, { limits: { maxItems: 20, maxBytes: 20000, maxProviderAgeSeconds: 3600 } });
+  const providers = {
+    activity: snapshot('activity', 'fresh', {
+      summaries: [{
+        id: 'activity-before', canonicalId: outcome.id, category: 'activity', status: 'done', title: 'before window',
+        occurredAt: '2026-08-12T03:59:59.000Z', observedAt: windowNow, evidenceRefs: ['activity:before'],
+      }, {
+        id: 'activity-inside', canonicalId: outcome.id, category: 'activity', status: 'done', title: 'inside window',
+        occurredAt: '2026-08-12T04:00:00.000Z', observedAt: windowNow, evidenceRefs: ['activity:inside'],
+      }, {
+        id: 'activity-after', canonicalId: outcome.id, category: 'activity', status: 'done', title: 'after window',
+        occurredAt: '2026-08-13T04:00:00.000Z', observedAt: windowNow, evidenceRefs: ['activity:after'],
+      }],
+    }),
+  };
+  const result = buildContextPacket({
+    registry,
+    query,
+    activityWindow: {
+      from: '2026-08-12T04:00:00.000Z',
+      to: '2026-08-13T04:00:00.000Z',
+      localDate: '2026-08-12',
+      timeZone: 'America/New_York',
+    },
+    capability: issue(query, {
+      issuedAt: '2026-08-12T00:00:00.000Z',
+      expiresAt: '2026-08-14T00:00:00.000Z',
+    }),
+    capabilitySecret: SECRET,
+    subject: 'agent:test-session',
+    hostId: 'projects-host',
+    now: windowNow,
+    providers,
+    providerAuthorities: providerAuthorities(providers),
+  });
+  assert.equal(result.status, 'ok');
+  assert.deepEqual(result.packet.activity.map((summary) => summary.id), ['activity-inside']);
+  assert.equal(result.packet.providers.activity.itemCount, 1);
+  assert.equal(result.packet.evidence.length, 1);
+});
+
 test('bounds preserve attention evidence over ordinary activity and reject impossible byte budgets', () => {
   const { registry, root, outcome } = makeRegistry();
   const query = queryFor(root, outcome, { limits: { maxItems: 2, maxBytes: 20000, maxProviderAgeSeconds: 3600 } });

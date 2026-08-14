@@ -104,14 +104,15 @@ function replaceProjectsSection(markdown, content, { heading = PROJECTS_SECTION_
   return `${next.join('\n').replace(/\n{3,}/g, '\n\n').replace(/\s+$/, '')}\n`;
 }
 
-function buildJournalProjection({ date, timeZone = 'UTC', projects = [], activities = [], activityProviderState = 'fresh', generator = 'projects-v1', maxItems = 25 } = {}) {
+function buildJournalProjection({ date, timeZone = 'UTC', projects = [], activities = [], activityProviderState = 'fresh', coverageWatermark = null, generator = 'projects-v1', maxItems = 25 } = {}) {
   const projection = projectLines({ projects, activities, date, timeZone, providerState: activityProviderState, maxItems });
   return {
     ...projection,
     date: requiredString(date, 'projection date'),
     timeZone: requiredString(timeZone, 'projection timezone'),
     generator: requiredString(generator, 'projection generator'),
-    inputDigest: digest({ date, timeZone, projects, activities, activityProviderState }),
+    coverageWatermark: coverageWatermark == null ? null : requiredString(coverageWatermark, 'coverage watermark'),
+    inputDigest: digest({ date, timeZone, projects, activities, activityProviderState, coverageWatermark }),
   };
 }
 
@@ -128,7 +129,7 @@ function applyJournalProjection({ content, expectedRevision, projection, write, 
     generator: projection.generator,
     date: projection.date,
     timeZone: projection.timeZone,
-    coverageWatermark,
+    coverageWatermark: projection.coverageWatermark || coverageWatermark,
     inputDigest: projection.inputDigest,
     priorRevision,
     resultRevision,

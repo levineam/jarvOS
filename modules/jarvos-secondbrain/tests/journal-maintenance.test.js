@@ -59,6 +59,52 @@ test('journal maintenance fails closed without composition and withholds success
   }
 });
 
+test('activity-backed Journal maintenance carries a separate projection receipt into the owned mutation', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-journal-activity-projection-'));
+  const journalDir = path.join(root, 'Journal');
+  const journalPath = path.join(journalDir, `${TEST_DATE}.md`);
+  const previous = process.env.JARVOS_JOURNAL_DIR;
+  fs.mkdirSync(journalDir, { recursive: true });
+  fs.writeFileSync(journalPath, [
+    '---',
+    'journal: Journal',
+    `journal-date: ${TEST_DATE}`,
+    '---',
+    '',
+    '## 🚀 Projects',
+    '- [[old]]',
+    '',
+    '## 📝 Notes',
+    '- [[Note]]',
+    '',
+  ].join('\n'), 'utf8');
+  process.env.JARVOS_JOURNAL_DIR = journalDir;
+  let projectionReceipt = null;
+  try {
+    const config = loadConfig();
+    const result = rawSyncOneDate(TEST_DATE, config, {
+      projectsActivityReader: () => ({
+        status: 'ok',
+        coverageWatermark: 'activity:9',
+        projects: [{ id: 'prj_000001', kind: 'project', title: 'jarvOS', lifecycle: 'active' }],
+        activities: [{ canonicalId: 'prj_000001', occurredAt: '2026-01-02T15:00:00.000Z', trust: 'verified' }],
+      }),
+      applyMarkdownMutation(input) {
+        projectionReceipt = input.projectionReceipt;
+        return fakeOwnedMutation(input);
+      },
+    });
+    assert.equal(result.projectProjection.coverageWatermark, 'activity:9');
+    assert.equal(projectionReceipt.inputDigest, result.projectProjection.inputDigest);
+    assert.equal(projectionReceipt.status, 'fresh');
+    assert.equal(sectionBody(fs.readFileSync(journalPath, 'utf8'), '## 🚀 Projects'), '- [[jarvOS]]');
+  } finally {
+    if (previous === undefined) delete process.env.JARVOS_JOURNAL_DIR;
+    else process.env.JARVOS_JOURNAL_DIR = previous;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('Sync-pending local journal bytes never advance the known-good recovery snapshot', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-journal-pending-known-good-'));
   const journalDir = path.join(root, 'Vault', 'Journal');
