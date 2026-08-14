@@ -7,7 +7,7 @@ const PURPOSE = 'managed-software-stewardship';
 const AUDIENCE = 'jarvos-projects';
 const INPUT_FIELDS = Object.freeze(['findingId', 'executionReference', 'releaseReference', 'visibility']);
 const CAPABILITY_FIELDS = Object.freeze([
-  'allowedVisibilities', 'audience', 'capabilityRevision', 'destinationSelectors', 'expiresAt',
+  'allowedVisibilities', 'audience', 'capabilityRevision', 'contextKey', 'destinationSelectors', 'expiresAt',
   'issuedAt', 'purpose', 'type',
 ]);
 const PRIVATE_VISIBILITIES = Object.freeze(['internal', 'mixed', 'private']);
@@ -37,12 +37,13 @@ function validateVisibilities(visibilities) {
 }
 
 /** Shape a portable capability. No signer, vault, activation, or key state exists here. */
-function issueProjectContext({ authorization, destinationSelectors, allowedVisibilities, capabilityRevision, issuedAt, expiresAt } = {}) {
+function issueProjectContext({ input, authorization, destinationSelectors, allowedVisibilities, capabilityRevision, issuedAt, expiresAt } = {}) {
   if (!authorization || authorization.allowed !== true) return { status: 'denied' };
   const capability = {
     type: CAPABILITY_TYPE,
     purpose: PURPOSE,
     audience: AUDIENCE,
+    contextKey: deriveContextKey(input),
     destinationSelectors: validateSelectors(destinationSelectors),
     allowedVisibilities: validateVisibilities(allowedVisibilities),
     capabilityRevision: requiredString(capabilityRevision, 'capabilityRevision'),
@@ -55,7 +56,7 @@ function issueProjectContext({ authorization, destinationSelectors, allowedVisib
 
 /** Verify portable bounded-policy facts; private host admission binds owner-only material. */
 function verifyProjectContext(capability, { now = new Date().toISOString() } = {}) {
-  if (!exactKeys(capability, CAPABILITY_FIELDS) || capability.type !== CAPABILITY_TYPE || capability.purpose !== PURPOSE || capability.audience !== AUDIENCE || typeof capability.capabilityRevision !== 'string' || Number.isNaN(Date.parse(capability.issuedAt)) || Number.isNaN(Date.parse(capability.expiresAt))) return { ok: false, reason: 'invalid-contract' };
+  if (!exactKeys(capability, CAPABILITY_FIELDS) || capability.type !== CAPABILITY_TYPE || capability.purpose !== PURPOSE || capability.audience !== AUDIENCE || typeof capability.contextKey !== 'string' || !/^pcx_[A-Za-z0-9_-]+$/.test(capability.contextKey) || typeof capability.capabilityRevision !== 'string' || Number.isNaN(Date.parse(capability.issuedAt)) || Number.isNaN(Date.parse(capability.expiresAt))) return { ok: false, reason: 'invalid-contract' };
   try { validateSelectors(capability.destinationSelectors); validateVisibilities(capability.allowedVisibilities); } catch (_) { return { ok: false, reason: 'invalid-contract' }; }
   const current = Date.parse(now);
   if (Number.isNaN(current)) return { ok: false, reason: 'invalid-contract' };
@@ -70,6 +71,7 @@ function projectContextProjection(capability, input, { now, project } = {}) {
   let contextKey;
   try { contextKey = deriveContextKey(input); } catch (_) { return { status: 'unavailable' }; }
   if (!verifyProjectContext(capability, { now }).ok) return { status: 'unavailable' };
+  if (capability.contextKey !== contextKey) return { status: 'denied' };
   if (!capability.allowedVisibilities.includes(input.visibility)) return { status: 'denied' };
   try {
     const result = project({ capability, context: { contextKey, visibility: input.visibility } });
