@@ -87,6 +87,20 @@ test('missing journal creates before its acknowledged section transform', () => 
   });
 });
 
+test('journal dates reject path traversal before performing a mutation', () => {
+  withVault(({ root, journalDir }) => {
+    const service = fakeService(root);
+    const adapter = createVaultStorageAdapter({ mutationService: service, vaultRoot: root, journalDir });
+
+    assert.throws(
+      () => adapter.appendLineToJournalSection({ date: '../../outside/escape', heading: '## 💡 Ideas', line: '- New idea' }),
+      /Journal date must be YYYY-MM-DD/,
+    );
+    assert.deepEqual(service.operations, []);
+    assert.equal(fs.existsSync(path.join(root, 'outside', 'escape.md')), false);
+  });
+});
+
 test('unavailable service never falls back to a raw journal write', () => {
   withVault(({ root, journalDir }) => {
     const service = fakeService(root, { unavailable: true });
