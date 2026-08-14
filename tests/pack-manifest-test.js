@@ -51,6 +51,7 @@ function advertisedRuntimeAssets() {
     'modules/jarvos-skills/src/reconciliation.js',
     'modules/jarvos-skills/scripts/dogfood-skills.js',
     'modules/jarvos-coding/scripts/jarvos-coding-mcp.js',
+    'runtimes/codex/coding-lifecycle-conformance.json',
     'modules/jarvos-control-plane/scripts/jarvos-manager.js',
     'scripts/release-readiness-check.js',
     'scripts/release-status.js',
@@ -108,4 +109,17 @@ test('managed provider package and public docs agree on pin, fallback, and admis
   assert.ok(docs.every((text) => /native jarvOS|same run|same worktree|fallback/i.test(text)), 'public docs must explain native fallback');
   assert.ok(docs.some((text) => /conformance-backed|healthy.*conformance|conformance.*healthy/i.test(text)), 'public docs must preserve conformance-backed health truth');
   assert.ok(docs.some((text) => /plan.*work.*complete/i.test(text)), 'public docs must lead with jarvOS verbs');
+});
+
+test('packaged coding lifecycle receipt is public-safe and records the deterministic boundary', () => {
+  const receipt = JSON.parse(fs.readFileSync(path.join(ROOT, 'runtimes/codex/coding-lifecycle-conformance.json'), 'utf8'));
+  assert.equal(receipt.schemaVersion, 'jarvos-codex-coding-lifecycle-conformance/v1');
+  assert.equal(receipt.status, 'passed');
+  assert.equal(receipt.profileBoundary, 'disposable CODEX_HOME');
+  assert.deepEqual(receipt.operations, ['initialize', 'tools/list', 'plan', 'accept-plan', 'work', 'finish', 'status', 'resume']);
+  assert.equal(receipt.restart.sameRun, true);
+  assert.equal(receipt.verification.authoritative, true);
+  assert.equal(receipt.finalizer.automatic, true);
+  assert.equal(receipt.provider.networkObserved, false);
+  assert.doesNotMatch(JSON.stringify(receipt), /\/Users\/|clawd|Bearer\s|api[_-]?key|token\s*[:=]|secret\s*[:=]/i);
 });

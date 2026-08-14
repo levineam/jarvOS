@@ -1,0 +1,37 @@
+{
+  "schemaVersion": "jarvos-codex-coding-lifecycle-conformance/v1",
+  "jarvosRevision": "4887f9cee38227d5984fbcf9db348368be1d82ea",
+  "sourceRevisionStrategy": "source-parent",
+  "status": "passed",
+  "profileBoundary": "disposable CODEX_HOME",
+  "mcp": {
+    "surface": "public JSON-RPC",
+    "schemaVersion": "2024-11-05",
+    "directInvocation": true
+  },
+  "provider": {
+    "boundary": "deterministic public adapter double",
+    "networkObserved": false
+  },
+  "operations": ["initialize", "tools/list", "plan", "accept-plan", "work", "finish", "status", "resume"],
+  "restart": {
+    "sameRun": true,
+    "sameWorktree": true,
+    "nativeFallback": true,
+    "singleBranchAndWorktree": true
+  },
+  "verification": {
+    "authoritative": true,
+    "evidenceClass": "live-stage adapter evidence",
+    "acceptedPlanRequired": true
+  },
+  "learning": {
+    "eligibleVerifiedCompletion": "captured",
+    "negativeOrIncomplete": "not-published",
+    "atMostOnce": true
+  },
+  "finalizer": {
+    "automatic": true,
+    "restartRecovery": "one terminal outcome"
+  }
+}
