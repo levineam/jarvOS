@@ -1,11 +1,10 @@
 ---
-name: session-followthrough
+name: session-wait
 description: Register a bounded external result and return it once to the originating Codex session.
 triggers:
   - wait for the result
-  - follow this through
   - return the result here
-  - session-followthrough
+  - session-wait
 metadata:
   jarvos:
     bundle: operating-system-skills
@@ -13,7 +12,7 @@ metadata:
     authority: clawd-session-wait-engine
 ---
 
-# Session Follow-Through
+# Session Wait
 
 Use this skill when work must continue outside the current turn and its result
 must come back to this exact Codex session. The skill is a front door to the

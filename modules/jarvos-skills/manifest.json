@@ -127,12 +127,12 @@
       }
     },
     {
-      "name": "session-followthrough",
-      "path": "skills/session-followthrough/SKILL.md",
+      "name": "session-wait",
+      "path": "skills/session-wait/SKILL.md",
       "purpose": "Return one authenticated external result to the exact originating Codex session.",
       "source": {
         "revision": "jarvos-skills-v0.4.0",
-        "digest": "e35f8ebdc95e50a04b1749174cd857852228e533e9cc0fda318595299a562263",
+        "digest": "c38eac882b0f8888c43a1482b3f6fc2f559d8f8b5aad680db051c0251a618e80",
         "license": "MIT",
         "provenance": "jarvOS reviewed source"
       },
@@ -140,7 +140,7 @@
       "projection": {
         "mode": "copy",
         "targets": {
-          "codex": { "path": "{skillsRoot}/session-followthrough/SKILL.md", "renderer": "raw-skill-md" }
+          "codex": { "path": "{skillsRoot}/session-wait/SKILL.md", "renderer": "raw-skill-md" }
         }
       }
     }

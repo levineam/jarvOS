@@ -17,7 +17,7 @@ test('Codex runtime accepts only a redacted consumed wait projection', () => {
     },
   }, threadId);
   assert.equal(response.ok, true);
-  assert.match(sessionWaitContext(response.value), /session follow-through result/);
+  assert.match(sessionWaitContext(response.value), /session-wait result/);
   assert.doesNotMatch(sessionWaitContext(response.value), /repoBinding|workspaceBinding/);
 });
 

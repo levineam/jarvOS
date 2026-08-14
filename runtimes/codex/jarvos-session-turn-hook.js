@@ -164,7 +164,7 @@ function sessionWaitContext(input) {
   if (!input?.pendingSessionWait || !input.wait) return '';
   const wait = input.wait;
   const projection = wait.safeProjection || {};
-  const lines = ['jarvOS session follow-through result:', `Wait: ${wait.waitId}`, `State: ${wait.state}`];
+  const lines = ['jarvOS session-wait result:', `Wait: ${wait.waitId}`, `State: ${wait.state}`];
   if (projection.status) lines.push(`Status: ${projection.status}`);
   if (projection.reference) lines.push(`Reference: ${projection.reference}`);
   if (wait.resultDigest) lines.push(`Result digest: ${wait.resultDigest}`);
