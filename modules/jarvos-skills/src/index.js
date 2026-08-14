@@ -1083,9 +1083,63 @@ function shellQuote(value) {
   return `'${String(value).replace(/'/g, `'\\''`)}'`;
 }
 
-function copyFileSync(source, destination) {
-  fs.mkdirSync(path.dirname(destination), { recursive: true });
-  fs.copyFileSync(source, destination);
+function assertSafeInstallDirectory(directory, label) {
+  const stat = fs.lstatSync(directory);
+  if (stat.isSymbolicLink() || !stat.isDirectory()) {
+    throw new Error(`${label} must be a real directory: ${directory}`);
+  }
+  if (typeof process.getuid === 'function' && stat.uid !== process.getuid()) {
+    throw new Error(`${label} must be owned by the current user: ${directory}`);
+  }
+  if ((stat.mode & 0o022) !== 0) {
+    throw new Error(`${label} must not be group- or other-writable: ${directory}`);
+  }
+  return fs.realpathSync(directory);
+}
+
+function assertNoSymlinkComponents(absolutePath) {
+  const parsed = path.parse(absolutePath);
+  let current = parsed.root;
+  for (const component of absolutePath.slice(parsed.root.length).split(path.sep).filter(Boolean)) {
+    current = path.join(current, component);
+    const stat = fs.lstatSync(current);
+    if (stat.isSymbolicLink()) {
+      throw new Error(`destinationDir must not contain symbolic links: ${current}`);
+    }
+  }
+}
+
+function prepareInstallDirectory(destinationDir) {
+  const destination = path.resolve(destinationDir);
+  fs.mkdirSync(destination, { recursive: true, mode: 0o755 });
+  assertNoSymlinkComponents(destination);
+  return { destination, real: assertSafeInstallDirectory(destination, 'destinationDir') };
+}
+
+function prepareSkillDirectory(root, name) {
+  const directory = path.join(root.destination, name);
+  try {
+    fs.mkdirSync(directory, { mode: 0o755 });
+  } catch (error) {
+    if (error.code !== 'EEXIST') throw error;
+  }
+  const real = assertSafeInstallDirectory(directory, 'skill directory');
+  if (path.dirname(real) !== root.real) {
+    throw new Error(`skill directory escapes destinationDir: ${directory}`);
+  }
+  return directory;
+}
+
+function copySkillFileSync(source, destination, force) {
+  const flags = fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_NOFOLLOW
+    | (force ? fs.constants.O_TRUNC : fs.constants.O_EXCL);
+  const fd = fs.openSync(destination, flags, 0o644);
+  try {
+    fs.writeFileSync(fd, fs.readFileSync(source));
+    fs.fsyncSync(fd);
+  } finally {
+    fs.closeSync(fd);
+  }
 }
 
 const { createProjectionApi } = require('./projection');
@@ -1103,6 +1157,7 @@ function installSkills(destinationDir, options = {}) {
     throw new Error('destinationDir is required');
   }
 
+  const root = prepareInstallDirectory(destinationDir);
   const manifest = getManifest();
   const names = options.skills === undefined
     ? manifest.defaultSkills
@@ -1113,19 +1168,31 @@ function installSkills(destinationDir, options = {}) {
   const plan = names.map((name) => {
     const skill = getSkill(name);
     if (!skill) throw new Error(`Unknown skill: ${name}`);
-    return { name, source: skill.absolutePath, target: path.join(destinationDir, name, 'SKILL.md') };
+    const directory = prepareSkillDirectory(root, name);
+    return { name, source: skill.absolutePath, target: path.join(directory, 'SKILL.md') };
   });
 
-  if (!options.force) {
-    const existing = plan.filter((entry) => fs.existsSync(entry.target)).map((entry) => entry.target);
-    if (existing.length > 0) {
-      throw new Error(`Refusing to overwrite existing skill without force: ${existing.join(', ')}`);
+  const unsafeTargets = plan.filter((entry) => {
+    try {
+      const stat = fs.lstatSync(entry.target);
+      return stat.isSymbolicLink() || !stat.isFile();
+    } catch (error) {
+      if (error.code === 'ENOENT') return false;
+      throw error;
     }
+  }).map((entry) => entry.target);
+  if (unsafeTargets.length > 0) {
+    throw new Error(`Refusing to write a non-regular skill target: ${unsafeTargets.join(', ')}`);
+  }
+
+  const existing = plan.filter((entry) => fs.existsSync(entry.target)).map((entry) => entry.target);
+  if (!options.force && existing.length > 0) {
+    throw new Error(`Refusing to overwrite existing skill without force: ${existing.join(', ')}`);
   }
 
   const installed = [];
   for (const entry of plan) {
-    copyFileSync(entry.source, entry.target);
+    copySkillFileSync(entry.source, entry.target, Boolean(options.force));
     installed.push({ name: entry.name, path: entry.target });
   }
 
@@ -1133,7 +1200,7 @@ function installSkills(destinationDir, options = {}) {
   // its bytes can be re-read. A missing event root keeps the public package
   // usable in standalone/project-local installs; the machine-wide launcher
   // supplies JARVOS_SKILL_PROJECTION_EVENT_ROOT when it wants reconciliation.
-  const event = emitInstallEvent({ manifest, names, destinationDir, installed, options });
+  const event = emitInstallEvent({ manifest, names, destinationDir: root.real, installed, options });
   const eventRoot = options.eventRoot || process.env[SKILL_INSTALL_EVENT_ROOT_ENV];
   const eventTrigger = event && eventRoot ? triggerSkillProjection(eventRoot, options) : null;
   Object.defineProperty(installed, 'event', { value: event, enumerable: false, configurable: false });

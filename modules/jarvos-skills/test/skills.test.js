@@ -136,6 +136,33 @@ assert.throws(
 assert.equal(fs.existsSync(firstTarget), false, 'workflow-execution must not be copied when a later target already exists');
 assert.equal(fs.readFileSync(existingTarget, 'utf8'), 'preexisting content', 'preexisting skill content must be untouched');
 
+// Installation must never follow attacker-controlled links out of its root,
+// including when force would otherwise allow replacement.
+const symlinkFixture = path.join(os.tmpdir(), `jarvos-skills-symlink-${process.pid}`);
+const symlinkRoot = path.join(symlinkFixture, 'root');
+const outsideRoot = path.join(symlinkFixture, 'outside');
+fs.rmSync(symlinkFixture, { recursive: true, force: true });
+fs.mkdirSync(symlinkRoot, { recursive: true });
+fs.mkdirSync(outsideRoot);
+fs.symlinkSync(outsideRoot, path.join(symlinkRoot, 'workflow-execution'), 'dir');
+assert.throws(
+  () => installSkills(symlinkRoot, { skills: ['workflow-execution'], force: true }),
+  /skill directory must be a real directory/,
+);
+assert.equal(fs.existsSync(path.join(outsideRoot, 'SKILL.md')), false, 'symlink must not redirect installation');
+
+fs.rmSync(path.join(symlinkRoot, 'workflow-execution'));
+fs.mkdirSync(path.join(symlinkRoot, 'workflow-execution'));
+const linkedTarget = path.join(symlinkRoot, 'workflow-execution', 'SKILL.md');
+const outsideTarget = path.join(outsideRoot, 'existing.md');
+fs.writeFileSync(outsideTarget, 'outside content');
+fs.symlinkSync(outsideTarget, linkedTarget);
+assert.throws(
+  () => installSkills(symlinkRoot, { skills: ['workflow-execution'], force: true }),
+  /Refusing to write a non-regular skill target/,
+);
+assert.equal(fs.readFileSync(outsideTarget, 'utf8'), 'outside content', 'force must not follow a target symlink');
+
 const obsidianPack = loadPack('obsidian-default');
 assert.equal(obsidianPack.name, 'obsidian-default');
 assert.equal(obsidianPack.source.repo, 'https://github.com/kepano/obsidian-skills');
