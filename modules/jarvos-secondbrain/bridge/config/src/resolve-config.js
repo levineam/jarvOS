@@ -174,14 +174,30 @@ function resolveJournalConfig(options = {}) {
   const configPath = discoverConfigPath({ ...options, env, homeDir: home });
   const raw = options.config && typeof options.config === 'object' ? options.config : readJsonFile(configPath);
   const paths = raw?.paths && typeof raw.paths === 'object' ? raw.paths : {};
-  const explicitJournal = firstConfiguredJournalPath(PATH_ENV_KEYS.journal, env, home)
-    || configuredJournalPath(paths, 'journal', home)
-    || (() => {
-      const vault = firstConfiguredJournalPath(PATH_ENV_KEYS.vault, env, home)
-        || configuredJournalPath(paths, 'vault', home);
-      return vault ? path.join(vault, 'Journal') : null;
-    })();
+  let journalSource = 'env';
+  let explicitJournal = firstConfiguredJournalPath(PATH_ENV_KEYS.journal, env, home);
+  if (!explicitJournal) {
+    journalSource = 'config';
+    explicitJournal = configuredJournalPath(paths, 'journal', home);
+  }
+  if (!explicitJournal) {
+    journalSource = 'env';
+    const envVault = firstConfiguredJournalPath(PATH_ENV_KEYS.vault, env, home);
+    if (envVault) explicitJournal = path.join(envVault, 'Journal');
+  }
+  if (!explicitJournal) {
+    journalSource = 'config';
+    const configVault = configuredJournalPath(paths, 'vault', home);
+    if (configVault) explicitJournal = path.join(configVault, 'Journal');
+  }
   if (!explicitJournal) throw new Error('Journal mutation requires an explicit journal directory');
+
+  assertNotStaleVaultPath(explicitJournal, { home, source: journalSource });
+  assertWithinRequiredVault(
+    explicitJournal,
+    requiredCanonicalVaultRoot(env, home),
+    journalSource,
+  );
 
   const emptyStringAsAbsent = (value) => (
     typeof value === 'string' && value.trim() === '' ? undefined : value

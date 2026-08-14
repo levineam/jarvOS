@@ -186,6 +186,39 @@ test('resolveJournalConfig ignores empty injected values and uses valid lower-pr
   assert.equal(config.timeZone, 'UTC');
 });
 
+test('resolveJournalConfig fails closed when an explicit journal points at a stale vault', () => {
+  const home = tempDir();
+  fs.mkdirSync(path.join(home, 'Vaults', 'Vault v3'), { recursive: true });
+
+  assert.throws(
+    () => resolveJournalConfig({
+      homeDir: home,
+      env: {
+        JARVOS_JOURNAL_DIR: path.join(home, 'Documents', 'Vault v3', 'Journal'),
+        JARVOS_TIMEZONE: 'UTC',
+      },
+    }),
+    /stale vault path under ~\/Documents\/Vault v3/,
+  );
+});
+
+test('resolveJournalConfig enforces the required canonical vault for a vault-derived journal', () => {
+  const requiredRoot = path.join(tempDir(), 'Vaults', 'Vault v3');
+  const outsideVault = path.join(tempDir(), 'attacker-visible-vault');
+
+  assert.throws(
+    () => resolveJournalConfig({
+      homeDir: tempDir(),
+      env: {
+        JARVOS_REQUIRE_CANONICAL_VAULT: requiredRoot,
+        JARVOS_VAULT_DIR: outsideVault,
+        JARVOS_TIMEZONE: 'UTC',
+      },
+    }),
+    /outside the required canonical vault/,
+  );
+});
+
 test('resolveConfig rejects non-string, empty, and relative path overrides', () => {
   const root = tempDir();
   const configPath = path.join(root, 'jarvos.config.json');
