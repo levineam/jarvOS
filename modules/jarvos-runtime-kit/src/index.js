@@ -650,6 +650,28 @@ function validateManifest(manifest) {
       add(errors, 'capabilityDescriptor.harness must match manifest.id');
     }
   }
+  if (manifest.skillProjection !== undefined) {
+    const projection = manifest.skillProjection;
+    if (!isObject(projection)) {
+      add(errors, 'skillProjection must be an object');
+    } else {
+      if (projection.version !== 'jarvos-skill-projection-adapter/v1') add(errors, 'skillProjection.version is invalid');
+      if (typeof projection.managedRoot !== 'string' || projection.managedRoot.length === 0 || path.isAbsolute(projection.managedRoot)) {
+        add(errors, 'skillProjection.managedRoot must be a portable home-relative path');
+      }
+      if (!Array.isArray(projection.orderedScopes) || projection.orderedScopes.length === 0 || projection.orderedScopes.some((scope) => typeof scope !== 'string' || !scope)) {
+        add(errors, 'skillProjection.orderedScopes must be a non-empty string array');
+      }
+      if (projection.renderer !== 'raw-skill-bundle') add(errors, 'skillProjection.renderer must be raw-skill-bundle');
+      if (!['exact-path', 'interactive-smoke'].includes(projection.verificationTier)) add(errors, 'skillProjection.verificationTier is invalid');
+      if (!isObject(projection.alias) || typeof projection.alias.pattern !== 'string' || !Number.isInteger(projection.alias.maxLength) || projection.alias.maxLength < 1 || !Array.isArray(projection.alias.reservedNames)) {
+        add(errors, 'skillProjection.alias must declare pattern, maxLength, and reservedNames');
+      }
+      if (!isObject(projection.probeIsolation) || typeof projection.probeIsolation.unattended !== 'boolean' || typeof projection.probeIsolation.mode !== 'string') {
+        add(errors, 'skillProjection.probeIsolation must declare mode and unattended');
+      }
+    }
+  }
   if (!Array.isArray(manifest.verification) || manifest.verification.length === 0) {
     warnings.push('verification commands are recommended');
   }

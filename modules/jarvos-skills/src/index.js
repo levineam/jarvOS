@@ -1091,6 +1091,10 @@ function copyFileSync(source, destination) {
 const { createProjectionApi } = require('./projection');
 const providerReconciliation = require('./provider-reconciliation');
 const catalog = require('./catalog');
+const catalogReconciliation = require('./reconciliation');
+const harnessVerification = require('./harness-verification');
+const collisionAlias = require('./collision-alias');
+const receipts = require('./receipts');
 
 const projection = createProjectionApi({
   assertProjectionManifest,
@@ -1192,4 +1196,11 @@ module.exports = {
   attestCatalogBundle: catalog.attestCatalogBundle,
   redactEffectiveCatalog: catalog.redactEffectiveCatalog,
   assertPublicOnlyCatalog: catalog.assertPublicOnlyCatalog,
+  planCatalogReconciliation: catalogReconciliation.planCatalogReconciliation,
+  applyCatalogReconciliation: catalogReconciliation.applyCatalogReconciliation,
+  verifyHarnessBundle: harnessVerification.verifyHarnessBundle,
+  resolveCollisionAlias: collisionAlias.resolveCollisionAlias,
+  safeAliasCandidates: collisionAlias.safeAliasCandidates,
+  readReceipt: receipts.readReceipt,
+  atomicWriteReceipt: receipts.atomicWriteReceipt,
 };

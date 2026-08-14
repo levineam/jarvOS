@@ -2,6 +2,16 @@
   "schemaVersion": 1,
   "id": "openclaw",
   "displayName": "OpenClaw",
+  "skillProjection": {
+    "version": "jarvos-skill-projection-adapter/v1",
+    "managedRoot": "~/.openclaw/skills",
+    "orderedScopes": ["workspace", "user", "managed"],
+    "renderer": "raw-skill-bundle",
+    "verificationTier": "exact-path",
+    "bundleAllowlist": ["SKILL.md", "scripts/**", "assets/**", "references/**", "templates/**"],
+    "alias": { "pattern": "^[a-z][a-z0-9-]{0,63}$", "maxLength": 64, "reservedNames": [] },
+    "probeIsolation": { "mode": "receipt-bound-exact-path", "unattended": true }
+  },
   "capabilityDescriptor": {
     "version": "jarvos-runtime-capability-descriptor.v1", "harness": "openclaw",
     "capabilities": {
