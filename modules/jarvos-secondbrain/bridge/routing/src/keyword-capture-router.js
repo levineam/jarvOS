@@ -104,6 +104,7 @@ function applyPlan(capture, plan, options = {}) {
       line: journalLine,
       date,
       ...(intentId ? { intentId: `${intentId}:journal`, requestHash } : {}),
+      ...(plan.route === 'idea' && plan.journalOrigin ? { contentOrigin: plan.journalOrigin } : {}),
     });
     result.noteLink = result.journalEntry;
   } else {

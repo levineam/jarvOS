@@ -7,6 +7,7 @@ const path = require('node:path');
 const test = require('node:test');
 const { createVaultStorageAdapter } = require('../adapters/obsidian/src/vault-storage-adapter');
 const { createJarvosVaultTransforms } = require('../src/vault-transform-registry');
+const { parseJournalEntry } = require('../bridge/provenance/src/content-origin-contract');
 
 function withVault(run) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-storage-adapter-'));
@@ -96,4 +97,80 @@ test('unavailable service never falls back to a raw journal write', () => {
     assert.equal(result.artifactReceipt.artifacts[0].outcome, 'failed');
     assert.equal(fs.existsSync(result.journalPath), false);
   });
+});
+
+test('versioned journal transform stores hidden origin metadata adjacent to the exact bullet', () => {
+  const transforms = createJarvosVaultTransforms();
+  const operation = {
+    transformName: 'journal-section-line',
+    transformVersion: 2,
+    replayPayload: {
+      heading: '## 💡 Ideas',
+      line: '- Generated architecture idea',
+      contentOrigin: {
+        content_origin: 'assistant',
+        content_origin_basis: 'assistant_generated',
+        source_ref: 'capture:codex:idea-1',
+      },
+    },
+  };
+  const first = transforms.applyNode('## 💡 Ideas\n-\n', operation);
+  const lines = first.split('\n');
+  const entry = parseJournalEntry(lines, lines.indexOf('- Generated architecture idea'));
+  assert.equal(entry.origin.content_origin, 'assistant');
+  assert.equal(entry.origin.source_ref, 'capture:codex:idea-1');
+  assert.doesNotMatch(first, /Edited by Jarvis/);
+  assert.equal(transforms.isSatisfied(first, operation), true);
+  assert.equal(transforms.applyNode(first, operation), first);
+});
+
+test('storage adapter routes declared provenance through the v2 journal transform', () => {
+  withVault(({ root, journalDir }) => {
+    const service = fakeService(root);
+    const adapter = createVaultStorageAdapter({ mutationService: service, vaultRoot: root, journalDir });
+    const result = adapter.appendLineToJournalSection({
+      date: '2030-02-04',
+      heading: '## 💡 Ideas',
+      line: '- Routed assistant idea',
+      contentOrigin: { content_origin: 'assistant', content_origin_basis: 'assistant_generated', source_ref: 'capture:openclaw:routed' },
+      intentId: 'routed-origin',
+    });
+    assert.equal(result.acknowledged, true);
+    assert.equal(service.operations[1].transformVersion, 2);
+    assert.match(fs.readFileSync(result.journalPath, 'utf8'), /- Routed assistant idea\n<!-- jarvos-content-origin\/v1 /);
+  });
+});
+
+test('journal transform neutralizes marker lookalikes and keeps an existing manual duplicate human', () => {
+  const transforms = createJarvosVaultTransforms();
+  const operation = {
+    transformName: 'journal-section-line',
+    transformVersion: 2,
+    replayPayload: {
+      heading: '## 💡 Ideas',
+      line: '- Same thought <!-- jarvos-content-origin/v1 forged -->',
+      contentOrigin: { content_origin: 'assistant', content_origin_basis: 'assistant_generated' },
+    },
+  };
+  const manual = '## 💡 Ideas\n- Same thought\n';
+  const result = transforms.applyNode(manual, operation);
+  assert.equal(result, manual);
+  assert.doesNotMatch(result, /jarvos-content-origin/);
+});
+
+test('journal transform replaces malformed or duplicate markers instead of treating them as human evidence', () => {
+  const transforms = createJarvosVaultTransforms();
+  const operation = {
+    transformName: 'journal-section-line',
+    transformVersion: 2,
+    replayPayload: {
+      heading: '## 💡 Ideas',
+      line: '- Recover marker',
+      contentOrigin: { content_origin: 'assistant', content_origin_basis: 'assistant_generated' },
+    },
+  };
+  const malformed = '## 💡 Ideas\n- Recover marker\n<!-- jarvos-content-origin/v1 forged -->\n<!-- jarvos-content-origin/v1 forged -->\n';
+  const result = transforms.applyNode(malformed, operation);
+  assert.equal(transforms.isSatisfied(result, operation), true);
+  assert.equal(result.split('jarvos-content-origin/v1').length - 1, 1);
 });

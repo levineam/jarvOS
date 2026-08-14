@@ -85,6 +85,21 @@ function contentOriginFrontmatter(capture = {}, options = {}) {
   };
 }
 
+function journalOriginForCapture(capture = {}, options = {}) {
+  const normalized = normalizeCaptureProvenance(capture, options);
+  const sourceRef = normalized.user_source?.capture_event_id
+    || normalized.captureEventId
+    || normalized.capture_event_id
+    || normalized.origin?.ref
+    || normalized.origin?.id;
+  return {
+    content_origin: normalized.content_origin,
+    content_origin_basis: normalized.content_origin_basis,
+    human_evidence_eligible: normalized.human_evidence_eligible === true,
+    ...(sourceRef ? { source_ref: String(sourceRef) } : {}),
+  };
+}
+
 function inferTitle(capture = {}, fallbackPrefix = 'Captured Note', options = {}) {
   const explicit = String(capture.title || '').trim();
   if (explicit) return stripLeadingKeyword(explicit);
@@ -184,6 +199,7 @@ function buildKeywordRoutingPlan(capture = {}, options = {}) {
       createNote,
       noteTitle,
       noteContent: createNote ? buildNoteContent(capture, IDEA) : '',
+      journalOrigin: journalOriginForCapture(capture, options),
       noteFrontmatter: createNote ? {
         type: 'draft',
         source: 'idea-capture',
@@ -222,6 +238,7 @@ function buildKeywordRoutingPlan(capture = {}, options = {}) {
     createNote: true,
     noteTitle,
     noteContent: buildNoteContent(capture, NOTE),
+    journalOrigin: journalOriginForCapture(capture, options),
     noteFrontmatter: {
       type: 'draft',
       source: detectedTrigger ? 'note-capture' : 'default-note-bias',
@@ -247,6 +264,7 @@ function buildJournalAction(plan) {
       heading: plan.journalSection,
       line: plan.journalLine,
       date: plan.date,
+      ...(plan.route === IDEA && plan.journalOrigin ? { contentOrigin: plan.journalOrigin } : {}),
     },
   };
 }
@@ -411,6 +429,7 @@ function buildThreePackagePlan(capture = {}, options = {}) {
       keywordPlan.noteTitle = '';
       keywordPlan.noteContent = '';
       keywordPlan.noteFrontmatter = null;
+      keywordPlan.journalOrigin = journalOriginForCapture(normalizedCapture, options);
     } else {
       keywordPlan.route = NOTE;
       keywordPlan.journalSection = salienceClass === 'decision' ? DECISIONS_HEADING : NOTES_HEADING;
@@ -426,6 +445,7 @@ function buildThreePackagePlan(capture = {}, options = {}) {
         created_from: normalizedCapture.date ? `journal/${normalizedCapture.date}` : 'journal',
         ...contentOriginFrontmatter(normalizedCapture, options),
       };
+      keywordPlan.journalOrigin = journalOriginForCapture(normalizedCapture, options);
     }
   }
 
@@ -533,6 +553,7 @@ module.exports = {
   buildThreePackagePlan,
   buildSkillInvocations,
   buildWorkIntakePlan,
+  journalOriginForCapture,
   ideaJournalLine,
   inferTitle,
   isSubstantiveIdea,

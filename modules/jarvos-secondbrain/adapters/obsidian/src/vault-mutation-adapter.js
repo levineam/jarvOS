@@ -30,6 +30,18 @@ function rawInvariantTransformProgram() {
   return `const p = input.replayPayload || {}; const hasNoteIdentity = (current, id) => { const match = current.match(/^---\\r?\\n[\\s\\S]*?^jarvos_note_id:\\s*(?:\"([^\"]+)\"|'([^']+)'|([^\\s#]+))[\\s\\S]*?^---/m); return (match?.[1] || match?.[2] || match?.[3] || '') === id; }; const heading = raw => { const name = String(raw || '').trim().replace(/^##\\s*/, '').trim(); return name ? '## ' + (name === '🗂️ Notes Created' ? '📝 Notes' : name) : null; }; const range = (lines, h) => { const start = lines.findIndex(line => line.trim() === h); let end = lines.length; for (let i = start + 1; start !== -1 && i < lines.length; i += 1) { if (/^##\\s/.test(lines[i])) { end = i; break; } } return { start, end }; }; const escape = value => String(value).replace(/[.*+?^\${}()|[\\]\\\\]/g, '\\\\$&'); const linkRe = target => new RegExp('^\\\\s*-\\\\s*\\\\[\\\\[' + escape(target) + '(?:\\\\|[^\\\\]]+)?\\\\]\\\\]\\\\s*$'); const transform = (() => { if (input.transformName === 'append-line' && input.transformVersion === 1 && typeof p.line === 'string') { const line = p.line.trim(); return current => current.includes(line); } if (input.transformName === 'note-append-body' && input.transformVersion === 1 && typeof p.noteId === 'string' && typeof p.body === 'string') { const id = p.noteId.trim(); const body = p.body.trim(); return current => hasNoteIdentity(current, id) && current.includes(body); } if (input.transformName === 'session-thread-append' && input.transformVersion === 1 && typeof p.noteId === 'string' && typeof p.entry === 'string') { const id = p.noteId.trim(); const entry = p.entry.trim(); return current => hasNoteIdentity(current, id) && current.includes(entry); } if (input.transformName === 'journal-section-line' && input.transformVersion === 1 && typeof p.heading === 'string' && typeof p.line === 'string') { const h = heading(p.heading); const line = p.line.trim(); return current => { const lines = String(current).split('\\n'); const r = range(lines, h); return Boolean(h && r.start !== -1 && lines.slice(r.start + 1, r.end).some(entry => entry.trim() === line)); }; } if (input.transformName === 'journal-backlink' && input.transformVersion === 1 && typeof p.linkTarget === 'string') { const h = heading(p.section || '📝 Notes'); const re = linkRe(p.linkTarget.trim()); return current => { const lines = String(current).split('\\n'); const r = range(lines, h); return Boolean(h && r.start !== -1 && lines.slice(r.start + 1, r.end).filter(entry => re.test(entry)).length === 1 && lines.filter(entry => re.test(entry)).length === 1); }; } return null; })();`;
 }
 
+function journalOriginTransformHelpersProgram() {
+  return "const markerPayload = origin => { const o = origin || {}; const json = JSON.stringify({ schema_version: 'jarvos-content-origin/v1', content_origin: o.content_origin, content_origin_basis: o.content_origin_basis, clean_text_digest: o.clean_text_digest, human_evidence_eligible: o.human_evidence_eligible === true && o.content_origin === 'human', ...(o.source_ref ? { source_ref: String(o.source_ref) } : {}) }); return '<!-- jarvos-content-origin/v1 ' + encodeURIComponent(json) + ' -->'; }; const cleanMarker = value => String(value || '').replace(/<!--\\s*jarvos-content-origin\\/[^>]*-->\\s*/gi, '').trim(); const cleanLine = value => { const clean = cleanMarker(value); return clean.startsWith('- ') ? clean : '- ' + clean.replace(/^[-\\s]+/, ''); }; ";
+}
+
+function journalOriginMutationBranchProgram() {
+  return "if (input.transformName === 'journal-section-line' && input.transformVersion === 2 && typeof p.heading === 'string' && typeof p.line === 'string' && p.contentOrigin) { const h = heading(p.heading); const line = cleanLine(p.line); const marker = markerPayload(p.contentOrigin); return { apply: current => { if (!h || !line.startsWith('- ')) return current; const lines = String(current).split('\\n'); const r = range(lines, h); if (r.start === -1) { const trimmed = String(current).trimEnd(); return trimmed + (trimmed ? '\\n\\n' : '') + h + '\\n' + line + '\\n' + marker + '\\n'; } let match = -1; for (let i = r.start + 1; i < r.end; i += 1) { if (lines[i].trim().startsWith('- ') && cleanMarker(lines[i]) === line) { match = i; break; } } if (match !== -1) { if (!String(lines[match + 1] || '').trim().startsWith('<!-- jarvos-content-origin/')) return current; if (String(lines[match + 1]).trim() === marker) return current; lines[match + 1] = marker; return lines.join('\\n'); } const section = lines.slice(r.start + 1, r.end).filter(entry => entry.trim() !== '-' && entry.trim() !== ''); section.push(line, marker); return [...lines.slice(0, r.start + 1), ...section, '', ...lines.slice(r.end)].join('\\n'); }, invariant: current => { const lines = String(current).split('\\n'); const r = range(lines, h); if (r.start === -1) return false; for (let i = r.start + 1; i < r.end; i += 1) { if (lines[i].trim() === line && String(lines[i + 1] || '').trim() === marker) return true; } return false; } }; } ";
+}
+
+function journalOriginInvariantBranchProgram() {
+  return "if (input.transformName === 'journal-section-line' && input.transformVersion === 2 && typeof p.heading === 'string' && typeof p.line === 'string' && p.contentOrigin) { const h = heading(p.heading); const line = cleanLine(p.line); const marker = markerPayload(p.contentOrigin); return current => { const lines = String(current).split('\\n'); const r = range(lines, h); if (r.start === -1) return false; for (let i = r.start + 1; i < r.end; i += 1) { if (lines[i].trim() === line && String(lines[i + 1] || '').trim() === marker) return true; } return false; }; } ";
+}
+
 function exactBlockTransformProgram(program) {
   const helper = "const hasBlock = (current, block) => { const expected = String(block || '').trim(); return Boolean(expected && ('\\n\\n' + String(current).trim() + '\\n\\n').includes('\\n\\n' + expected + '\\n\\n')); }; ";
   return program
@@ -37,8 +49,16 @@ function exactBlockTransformProgram(program) {
     .replaceAll('current.includes(body)', 'hasBlock(current, body)')
     .replaceAll('current.includes(entry)', 'hasBlock(current, entry)');
 }
-function mutationTransformProgram() { return exactBlockTransformProgram(rawMutationTransformProgram()); }
-function invariantTransformProgram() { return exactBlockTransformProgram(rawInvariantTransformProgram()); }
+function mutationTransformProgram() {
+  const program = rawMutationTransformProgram()
+    .replace('const transform = (() => {', `${journalOriginTransformHelpersProgram()}const transform = (() => {${journalOriginMutationBranchProgram()}`);
+  return exactBlockTransformProgram(program);
+}
+function invariantTransformProgram() {
+  const program = rawInvariantTransformProgram()
+    .replace('const transform = (() => {', `${journalOriginTransformHelpersProgram()}const transform = (() => {${journalOriginInvariantBranchProgram()}`);
+  return exactBlockTransformProgram(program);
+}
 
 function buildObsidianDeleteProgram(operation) {
   const encoded = payload(operation);

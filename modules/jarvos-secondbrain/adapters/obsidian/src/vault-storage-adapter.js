@@ -10,6 +10,7 @@ const fs = require('node:fs');
 const { loadConfig, normalizeSections, renderJournal } = require('../../../packages/jarvos-secondbrain-journal/src/journal-maintenance.js');
 const { noteFilePath, writeNoteFile } = require('../../../packages/jarvos-secondbrain-notes/src/write-to-vault.js');
 const { getTimeZone, getVaultDir, getVaultJournalDir } = require('../../../bridge/provenance/src/lib/provenance-config.js');
+const { cleanJournalEntryText, digestText } = require('../../../bridge/provenance/src/content-origin-contract.js');
 const {
   artifactFromMutationResult,
   createArtifactReceipt,
@@ -50,11 +51,11 @@ function createVaultStorageAdapter({ mutationService, vaultRoot = getVaultDir(),
   const service = mutationService || require('../../../src/vault-mutation-service.js').createConfiguredVaultMutationService({ vaultRoot: path.resolve(vaultRoot), source });
   if (typeof service.execute !== 'function' || typeof service.createWriteContext !== 'function') throw new Error('vault storage adapter requires the configured mutation service');
   function contextFor(vaultRelativePath, intentId, requestHash) { return service.createWriteContext({ vaultRelativePath, intentId, requestHash, operationSource: service.source }); }
-  function executeTransform({ date, transformName, replayPayload, intentId, requestHash }) {
+  function executeTransform({ date, transformName, transformVersion = 1, replayPayload, intentId, requestHash }) {
     const journalPath = path.join(journalDir, `${date}.md`);
     const vaultRelativePath = relativeToVault(vaultRoot, journalPath);
     const context = contextFor(vaultRelativePath, intentId, requestHash);
-    const receipt = context.mutationExecutor({ schemaVersion: 1, operationId: context.operationId, vaultId: context.vaultId, vaultRelativePath, sequence: context.sequence, operationKind: 'transform', transformName, transformVersion: 1, replayPayload, source: context.source });
+    const receipt = context.mutationExecutor({ schemaVersion: 1, operationId: context.operationId, vaultId: context.vaultId, vaultRelativePath, sequence: context.sequence, operationKind: 'transform', transformName, transformVersion, replayPayload, source: context.source });
     return { journalPath, receipt };
   }
   return Object.freeze({
@@ -73,7 +74,7 @@ function createVaultStorageAdapter({ mutationService, vaultRoot = getVaultDir(),
         artifactReceipt: artifactReceiptFor([journalArtifact({ journalPath, vaultRoot, receipt })]),
       };
     },
-    appendLineToJournalSection({ heading, line, date = todayDate(), intentId, requestHash } = {}) {
+    appendLineToJournalSection({ heading, line, date = todayDate(), intentId, requestHash, contentOrigin } = {}) {
       if (!heading) throw new Error('heading is required');
       if (!line || !String(line).trim()) throw new Error('line is required');
       // An existing identified journal needs only the section operation's
@@ -82,7 +83,18 @@ function createVaultStorageAdapter({ mutationService, vaultRoot = getVaultDir(),
       const journalExists = requestHash && fs.existsSync(path.join(journalDir, `${date}.md`));
       const ensured = journalExists ? null : this.ensureJournal({ date, intentId: intentId ? `${intentId}:create` : undefined, requestHash });
       if (ensured && !receiptIsAcknowledged(ensured.receipt)) return { journalPath: ensured.journalPath, heading, line: String(line).trim(), receipt: ensured.receipt, acknowledged: false, artifactReceipt: ensured.artifactReceipt };
-      const outcome = executeTransform({ date, transformName: 'journal-section-line', replayPayload: { heading, line }, intentId: intentId ? `${intentId}:section` : undefined, requestHash });
+      const cleanLine = cleanJournalEntryText(String(line).trim());
+      const contentOriginPayload = contentOrigin
+        ? { ...contentOrigin, clean_text_digest: digestText(cleanLine.slice(2).trim()) }
+        : null;
+      const outcome = executeTransform({
+        date,
+        transformName: 'journal-section-line',
+        transformVersion: contentOriginPayload ? 2 : 1,
+        replayPayload: { heading, line, ...(contentOriginPayload ? { contentOrigin: contentOriginPayload } : {}) },
+        intentId: intentId ? `${intentId}:section` : undefined,
+        requestHash,
+      });
       return {
         journalPath: outcome.journalPath,
         heading,

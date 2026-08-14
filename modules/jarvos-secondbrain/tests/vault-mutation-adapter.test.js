@@ -8,6 +8,7 @@ const test = require('node:test');
 const { createVaultMutationAdapter } = require('../adapters/obsidian/src/vault-mutation-adapter');
 const { buildObsidianInvariantProgram, buildObsidianMutationProgram } = require('../adapters/obsidian/src/vault-mutation-adapter');
 const { createJarvosVaultTransforms } = require('../src/vault-transform-registry');
+const { digestText, parseJournalEntry } = require('../bridge/provenance/src/content-origin-contract');
 
 const operation = () => ({ schemaVersion: 1, operationId: 'op-20260806-adapter-test', vaultId: 'vault-a', vaultRelativePath: 'Notes/A.md', sequence: 1, operationKind: 'create', content: 'hello' });
 const ledgerPath = () => path.join(os.tmpdir(), `jarvos-adapter-${Math.random()}.json`);
@@ -237,6 +238,32 @@ test('fixed program appends when the requested block exists only as a prose subs
   const updated = runInFakeObsidian(note, { initial: '---\njarvos_note_id: "note-1"\n---\n\n# Note\n\nthe next thing\n' });
   assert.equal(updated.result.status, 'done');
   assert.match(updated.content, /the next thing\n\nnext\n$/);
+});
+
+test('fixed Obsidian evaluator accepts the versioned journal origin transform', () => {
+  const line = '- Fixed evaluator provenance';
+  const journalOperation = {
+    ...operation(),
+    operationKind: 'transform',
+    transformName: 'journal-section-line',
+    transformVersion: 2,
+    replayPayload: {
+      heading: '## 💡 Ideas',
+      line,
+      contentOrigin: {
+        content_origin: 'assistant',
+        content_origin_basis: 'assistant_generated',
+        clean_text_digest: digestText(line.slice(2)),
+        source_ref: 'capture:codex:fixed-evaluator',
+      },
+    },
+  };
+  const actual = runInFakeObsidian(journalOperation, { initial: '## 💡 Ideas\n-\n' });
+  assert.equal(actual.result.status, 'done');
+  const lines = actual.content.split('\n');
+  const parsed = parseJournalEntry(lines, lines.indexOf(line));
+  assert.equal(parsed.origin.content_origin, 'assistant');
+  assert.equal(parsed.origin.source_ref, 'capture:codex:fixed-evaluator');
 });
 
 test('fixed program appends one session checkpoint without replacing concurrent prose', () => {
