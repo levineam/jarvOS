@@ -360,7 +360,7 @@ try {
   const manifest = skills.getManifest();
   const names = skills.listSkills().map((skill) => skill.name);
 
-  if (validation.ok && validation.skillCount === 5) {
+  if (validation.ok && validation.skillCount === 6) {
     ok('validateBundle accepts default skill bundle');
   } else {
     bad('validateBundle', new Error(JSON.stringify(validation)));
