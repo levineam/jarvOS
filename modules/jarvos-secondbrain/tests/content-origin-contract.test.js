@@ -12,6 +12,10 @@ const {
   validateUserSourceReceipt,
   humanEvidenceEligible,
   resolveLegacyOrigin,
+  renderJournalOriginMarker,
+  parseJournalOriginMarker,
+  parseJournalEntry,
+  stripJournalOriginMarkers,
 } = require('../bridge/provenance/src/content-origin-contract');
 const {
   EVIDENCE_PROJECTION_VERSION,
@@ -93,6 +97,27 @@ test('accepts verbatim and faithful user-derived content with a receipt-bound so
   assert.equal(derived.content_origin, 'human');
   assert.equal(humanEvidenceEligible(verbatim), true);
   assert.equal(humanEvidenceEligible(derived), true);
+});
+
+test('accepts the canonical note frontmatter source-receipt field', () => {
+  const content = 'A note copied from the user turn';
+  const source = 'The user said this first';
+  const receipt = {
+    capture_event_id: 'capture-frontmatter-1',
+    actor: 'user',
+    source_digest: digestText(source),
+    content_digest: digestText(content),
+  };
+  const normalized = normalizeContentOrigin({
+    content_origin: 'human',
+    content_origin_basis: 'user_derived',
+    content_origin_source: receipt,
+  }, {
+    content,
+    resolveUserSource: () => ({ capture_event_id: receipt.capture_event_id, actor: 'user', text: source }),
+  });
+  assert.equal(normalized.content_origin, 'human');
+  assert.deepEqual(normalized.user_source, receipt);
 });
 
 test('downgrades absent, unresolved, non-user, and digest-mismatched receipts to unknown', () => {
@@ -182,4 +207,38 @@ test('projects clean evidence without marker or source-receipt text', () => {
   assert.equal(batch.length, 1);
   assert.equal(read.ok, true);
   assert.equal(read.record.clean_text, content);
+});
+
+test('journal origin markers are invisible, digest-bound, and round-trip clean text', () => {
+  const cleanText = 'A generated journal idea';
+  const marker = renderJournalOriginMarker({
+    cleanText,
+    content_origin: 'assistant',
+    content_origin_basis: 'assistant_generated',
+    source_ref: 'capture:codex:123',
+  });
+  const parsed = parseJournalOriginMarker(marker, cleanText);
+  assert.equal(parsed.content_origin, 'assistant');
+  assert.equal(parsed.content_origin_basis, 'assistant_generated');
+  assert.equal(parsed.source_ref, 'capture:codex:123');
+  assert.equal(parseJournalOriginMarker(marker, 'tampered text').content_origin, 'unknown');
+  assert.equal(stripJournalOriginMarkers(`- ${cleanText}\n${marker}`), `- ${cleanText}\n`);
+});
+
+test('journal entry parsing treats unmarked bullets as manual human evidence and malformed markers as unknown', () => {
+  const manual = parseJournalEntry(['- A manually typed thought'], 0);
+  assert.equal(manual.origin.content_origin, 'human');
+  assert.equal(manual.origin.human_evidence_eligible, true);
+
+  const malformed = parseJournalEntry(['- Agent thought', '<!-- jarvos-content-origin/v1 not-valid -->'], 0);
+  assert.equal(malformed.origin.content_origin, 'unknown');
+  assert.equal(malformed.clean_text, 'Agent thought');
+
+  const duplicate = parseJournalEntry([
+    '- Duplicate markers',
+    malformed.marker_line,
+    malformed.marker_line,
+  ], 0);
+  assert.equal(duplicate.origin.content_origin, 'unknown');
+  assert.equal(duplicate.origin.normalization_reason, 'duplicate_marker');
 });

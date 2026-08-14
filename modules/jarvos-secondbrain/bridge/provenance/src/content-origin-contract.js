@@ -28,6 +28,8 @@ const LEGACY_AUTHOR_ORIGINS = Object.freeze({
 });
 
 const SHA256_RE = /^[a-f0-9]{64}$/;
+const JOURNAL_MARKER_PREFIX = `<!-- ${CONTENT_ORIGIN_SCHEMA_VERSION} `;
+const JOURNAL_MARKER_RE = /^<!--\s*jarvos-content-origin\/v1\s+([^\s>]+)\s*-->$/;
 
 function isPlainObject(value) {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
@@ -53,7 +55,11 @@ function normalizedCaptureEventId(event) {
 }
 
 function sourceReceipt(input) {
-  const receipt = input?.user_source || input?.userSource || input?.source_reference || input?.sourceReference;
+  const receipt = input?.user_source
+    || input?.userSource
+    || input?.content_origin_source
+    || input?.source_reference
+    || input?.sourceReference;
   return isPlainObject(receipt) ? receipt : null;
 }
 
@@ -157,6 +163,122 @@ function frontmatterForContentOrigin(input = {}, options = {}) {
   };
 }
 
+function contentOriginPairIsValid(contentOrigin, contentOriginBasis) {
+  return CONTENT_ORIGINS.includes(contentOrigin)
+    && CONTENT_ORIGIN_BASES.includes(contentOriginBasis)
+    && contentOriginBasis !== 'legacy_author'
+    && BASIS_ORIGIN[contentOriginBasis] === contentOrigin;
+}
+
+function encodeMarkerPayload(payload) {
+  return Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url');
+}
+
+function decodeMarkerPayload(encoded) {
+  try {
+    const raw = String(encoded);
+    const decoded = raw.startsWith('%7B') || raw.startsWith('%7b')
+      ? JSON.parse(decodeURIComponent(raw))
+      : JSON.parse(Buffer.from(raw, 'base64url').toString('utf8'));
+    return isPlainObject(decoded) ? decoded : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Render an invisible, line-adjacent journal marker. The marker contains no
+ * source text; it binds only the clean bullet digest to the bounded origin
+ * declaration and an opaque source reference.
+ */
+function renderJournalOriginMarker({ cleanText, clean_text_digest, content_origin, content_origin_basis, source_ref, human_evidence_eligible = false } = {}) {
+  const origin = String(content_origin || '').trim().toLowerCase();
+  const basis = String(content_origin_basis || '').trim().toLowerCase();
+  if (!contentOriginPairIsValid(origin, basis)) throw new Error('Invalid journal content-origin declaration');
+  const payload = {
+    schema_version: CONTENT_ORIGIN_SCHEMA_VERSION,
+    content_origin: origin,
+    content_origin_basis: basis,
+    clean_text_digest: clean_text_digest || digestText(cleanText),
+    human_evidence_eligible: origin === 'human' && human_evidence_eligible === true,
+    ...(source_ref ? { source_ref: String(source_ref).trim() } : {}),
+  };
+  return `${JOURNAL_MARKER_PREFIX}${encodeMarkerPayload(payload)} -->`;
+}
+
+function unknownJournalOrigin(reason = 'unknown') {
+  return {
+    content_origin: 'unknown',
+    content_origin_basis: 'unknown',
+    human_evidence_eligible: false,
+    ...(reason ? { normalization_reason: reason } : {}),
+  };
+}
+
+function parseJournalOriginMarker(marker, cleanText) {
+  const match = String(marker || '').trim().match(JOURNAL_MARKER_RE);
+  if (!match) return unknownJournalOrigin('missing_or_malformed_marker');
+  const payload = decodeMarkerPayload(match[1]);
+  if (!payload || payload.schema_version !== CONTENT_ORIGIN_SCHEMA_VERSION) return unknownJournalOrigin('invalid_marker_payload');
+  if (!contentOriginPairIsValid(payload.content_origin, payload.content_origin_basis)) return unknownJournalOrigin('invalid_marker_origin');
+  if (!SHA256_RE.test(String(payload.clean_text_digest || '')) || digestText(cleanText) !== payload.clean_text_digest) {
+    return unknownJournalOrigin('marker_digest_mismatch');
+  }
+  if (payload.source_ref !== undefined && (typeof payload.source_ref !== 'string' || !payload.source_ref.trim())) {
+    return unknownJournalOrigin('invalid_marker_source_ref');
+  }
+  return {
+    schema_version: payload.schema_version,
+    content_origin: payload.content_origin,
+    content_origin_basis: payload.content_origin_basis,
+    clean_text_digest: payload.clean_text_digest,
+    human_evidence_eligible: payload.human_evidence_eligible === true && payload.content_origin === 'human',
+    ...(payload.source_ref ? { source_ref: payload.source_ref } : {}),
+  };
+}
+
+function stripJournalOriginMarkers(text) {
+  return String(text || '')
+    .replace(/<!--\s*jarvos-content-origin\/[^>]*-->\s*/gi, '')
+    .replace(/\n{3,}/g, '\n\n');
+}
+
+function cleanJournalEntryText(line) {
+  return stripJournalOriginMarkers(String(line || '')).trim();
+}
+
+function parseJournalEntry(lines, index) {
+  const source = Array.isArray(lines) ? lines : String(lines || '').split(/\r?\n/);
+  const line = String(source[index] || '').trim();
+  if (!line.startsWith('- ')) return null;
+  const cleanText = cleanJournalEntryText(line);
+  const markerLines = [];
+  for (let markerIndex = index + 1; markerIndex < source.length; markerIndex += 1) {
+    const candidate = String(source[markerIndex] || '').trim();
+    if (!candidate.startsWith('<!-- jarvos-content-origin/')) break;
+    markerLines.push(candidate);
+  }
+  const markerLine = markerLines[0] || null;
+  const marker = markerLines.length === 1
+    ? parseJournalOriginMarker(markerLine, cleanText.slice(2).trim())
+    : markerLines.length > 1
+      ? unknownJournalOrigin('duplicate_marker')
+      : null;
+  return {
+    line,
+    clean_text: cleanText.slice(2).trim(),
+    marker_line: markerLine,
+    marker_lines: markerLines,
+    marker,
+    origin: marker || (markerLines.length > 0 ? unknownJournalOrigin('malformed_or_duplicate_marker') : {
+      content_origin: 'human',
+      content_origin_basis: 'unknown',
+      human_evidence_eligible: true,
+      normalization_reason: 'unmarked_manual_entry',
+    }),
+  };
+}
+
 function resolveLegacyOrigin(input = {}) {
   const author = String(input.author || '').trim().toLowerCase();
   const sourceAgent = String(input.source_agent || input.sourceAgent || '').trim().toLowerCase();
@@ -202,6 +324,12 @@ module.exports = {
   validateUserSourceReceipt,
   normalizeContentOrigin,
   frontmatterForContentOrigin,
+  JOURNAL_MARKER_PREFIX,
+  renderJournalOriginMarker,
+  parseJournalOriginMarker,
+  stripJournalOriginMarkers,
+  cleanJournalEntryText,
+  parseJournalEntry,
   normalizeContentOriginWithLegacy,
   resolveLegacyOrigin,
   humanEvidenceEligible,

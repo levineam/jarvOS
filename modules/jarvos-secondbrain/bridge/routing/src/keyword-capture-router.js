@@ -85,6 +85,7 @@ function applyRoutingPlan(capture = {}, options = {}) {
       heading: plan.journalSection,
       line: journalLine,
       date,
+      ...(plan.route === 'idea' && plan.journalOrigin ? { contentOrigin: plan.journalOrigin } : {}),
     });
     result.noteLink = result.journalEntry;
   } else {

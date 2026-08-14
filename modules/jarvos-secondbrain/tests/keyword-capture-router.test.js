@@ -184,3 +184,18 @@ test('routing carries explicit origin metadata and writes compatibility captures
   assert.equal(calls[1].frontmatter.content_origin, 'assistant');
   assert.equal(calls[1].frontmatter.content_origin_basis, 'assistant_generated');
 });
+
+test('idea journal appends carry origin payloads while note backlinks rely on note frontmatter', () => {
+  const journalCalls = [];
+  const adapter = {
+    ensureJournal() { return { existed: true }; },
+    appendLineToJournalSection(input) { journalCalls.push(input); return input; },
+    writeNote(input) { return { written: true, title: input.title, path: `/tmp/${input.title}.md` }; },
+  };
+
+  applyRoutingPlan({ trigger: 'idea', text: 'A generated idea', content_origin: 'assistant', content_origin_basis: 'assistant_generated', date: TEST_DATE }, { adapter });
+  assert.equal(journalCalls[0].contentOrigin.content_origin, 'assistant');
+
+  applyRoutingPlan({ trigger: 'note', text: 'A generated note', content_origin: 'assistant', content_origin_basis: 'assistant_generated', date: TEST_DATE }, { adapter });
+  assert.equal('contentOrigin' in journalCalls[1], false);
+});
