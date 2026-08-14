@@ -118,6 +118,20 @@ assert.deepEqual(triggerSkillProjection(eventRoot, {
   spawn: () => ({ status: 1 }),
 }), { status: 'failed', reason: 'projection_trigger_failed' });
 
+// A safe leaf is not executable when another local user could replace it by
+// renaming entries in a writable ancestor directory.
+const writableTriggerRoot = path.join(os.tmpdir(), `jarvos-writable-trigger-${process.pid}`);
+fs.mkdirSync(writableTriggerRoot, { mode: 0o700 });
+const writableTriggerPath = path.join(writableTriggerRoot, 'trigger.js');
+fs.writeFileSync(writableTriggerPath, '#!/usr/bin/env node\n', { mode: 0o600 });
+fs.chmodSync(writableTriggerRoot, 0o777);
+assert.deepEqual(triggerSkillProjection(eventRoot, {
+  projectionTrigger: writableTriggerPath,
+  spawn: () => assert.fail('an untrusted trigger must not be executed'),
+}), { status: 'failed', reason: 'projection_trigger_invalid' });
+fs.chmodSync(writableTriggerRoot, 0o700);
+fs.rmSync(writableTriggerRoot, { recursive: true, force: true });
+
 // Preflight overwrite check: if any selected target already exists and force is false,
 // no skill should be copied — destination must remain unchanged.
 const preflightDir = path.join(os.tmpdir(), `jarvos-skills-preflight-${process.pid}`);
