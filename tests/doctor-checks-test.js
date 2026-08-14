@@ -13,6 +13,7 @@ const test = require('node:test');
 
 const {
   assessControlPlaneDoctor,
+  checkCompoundEngineeringProvider,
   checkControlPlaneModule,
   checkVaultPathStale,
   checkJournalConflict,
@@ -235,6 +236,22 @@ test('checkControlPlaneModule passes a fresh minimal install without a private h
     if (previous === undefined) delete process.env.JARVOS_CONTROL_PLANE_SERVICE_MODULE;
     else process.env.JARVOS_CONTROL_PLANE_SERVICE_MODULE = previous;
   }
+});
+
+test('Compound Engineering doctor reports a conformance-backed installed provider', () => {
+  const res = checkCompoundEngineeringProvider({
+    env: { ...process.env },
+    codexProviderEvidence: {
+      codexAvailable: true,
+      codexVersion: '0.146.0',
+      marketplaces: [{ name: 'compound-engineering-plugin', revision: 'e36ddb8cbd4dd902d3b6ddd96165a783b0ac4711' }],
+      installed: [{ name: 'compound-engineering', version: '3.21.4', enabled: true }],
+    },
+  });
+  assert.equal(res.ok, true);
+  assert.match(res.detail, /healthy/);
+  assert.match(res.detail, /approved 3\.21\.4/);
+  assert.doesNotMatch(res.detail, /Users\/|tmp\//);
 });
 
 test('checkControlPlaneModule fails when a configured host service is unusable', () => {

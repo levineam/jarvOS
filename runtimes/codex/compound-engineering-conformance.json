@@ -1,0 +1,55 @@
+{
+  "schemaVersion": "jarvos-codex-provider-conformance/v1",
+  "provider": "compound-engineering",
+  "approvedVersion": "3.21.4",
+  "approvedRevision": "e36ddb8cbd4dd902d3b6ddd96165a783b0ac4711",
+  "status": "passed",
+  "discovery": {
+    "codexVersion": "0.146.0",
+    "marketplaceRevisionObserved": true,
+    "marketplaceRevision": "e36ddb8cbd4dd902d3b6ddd96165a783b0ac4711",
+    "marketplaceSource": "https://github.com/EveryInc/compound-engineering-plugin.git",
+    "installedVersionObserved": true,
+    "profileBoundary": "CODEX_HOME"
+  },
+  "activation": {
+    "mechanism": "codex-plugin-marketplace",
+    "pinObserved": true,
+    "configurationPreserved": true,
+    "restartBoundary": "verified"
+  },
+  "invocation": {
+    "surface": "codex exec",
+    "status": "passed",
+    "operations": ["plan", "work"],
+    "profile": "disposable CODEX_HOME",
+    "restartBoundary": "verified"
+  },
+  "receipt": {
+    "status": "passed",
+    "strictContract": "validated",
+    "providerIndependentAuthority": "validated",
+    "planArtifactDigest": "020929dcc63631b558e070318cf84d0309fcbe6d714f0cf9ca54b40ce1c9cfa8",
+    "workArtifactDigest": "1bc4f6b0c66a5e4db2b1f9c19fbf798a9997733b7c997d56d7e3d9be30588c3f"
+  },
+  "capabilityDenial": {
+    "status": "passed",
+    "required": ["credentials", "network", "profile-state", "privileged-tools"],
+    "filesystem": "worktree-only",
+    "sandbox": "read-only denial verified"
+  },
+  "rollback": {
+    "status": "passed",
+    "pluginRemoved": true,
+    "marketplaceRemoved": true,
+    "unrelatedConfigPreserved": true
+  },
+  "fallback": {
+    "status": "passed",
+    "route": "jarvos-native-workflow",
+    "sameRun": true,
+    "sameWorktree": true
+  },
+  "admission": "supported",
+  "reviewedEvidence": "disposable authenticated Codex profile with exact pinned marketplace metadata, fresh-process plan/work invocations, strict plan/work receipts, denied-capability sandbox, and exact-owned-state rollback"
+}

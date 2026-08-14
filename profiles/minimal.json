@@ -26,6 +26,7 @@
     "vault-path-stale",
     "journal-conflict",
     "agent-context-package",
-    "control-plane-module"
+    "control-plane-module",
+    "compound-engineering-provider"
   ]
 }

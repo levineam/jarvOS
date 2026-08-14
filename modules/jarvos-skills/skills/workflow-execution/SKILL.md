@@ -12,6 +12,7 @@ metadata:
   jarvos:
     bundle: operating-system-skills
     portability: generic
+    managedCodingProvider: compound-engineering
 ---
 
 # Workflow Execution
@@ -49,6 +50,22 @@ The workflow is complete only when:
 7. **Verify.** Run targeted checks, inspect the diff, and record evidence.
 8. **Close or hand off.** Move the issue to done only when no follow-up remains.
    Use in-review only when a real reviewer path exists.
+
+## Managed coding verbs
+
+When this skill is running inside a jarvOS coding profile, the natural verbs
+`plan`, `work`, and `complete` use the jarvOS-managed provider route. A healthy,
+approved Compound Engineering provider supplies the planning and implementation
+discipline behind the scenes; jarvOS still owns the work-run, branch/worktree,
+accepted plan revision, review evidence, submission gate, and completion
+decision. `compound` is an explicit, post-verification learning-capture step,
+not a substitute for completion evidence.
+
+If the provider is unavailable, modified, unsupported, or fails during a run,
+fall back through the generic workflow in the same work run and worktree. Do
+not start a second plan, branch, or pull request. Treat provider checkpoints as
+reattachment hints only and revalidate current Git, review, test, and PR
+evidence before claiming completion.
 
 ## Definition of done template
 

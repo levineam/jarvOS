@@ -6,6 +6,7 @@ const {
   readJarvosSessionState,
   writeJarvosSessionState,
 } = require('../session-state');
+const { evaluateLearningEligibility } = require('../../providers/learning-eligibility');
 
 const ORCHESTRATOR_SCHEMA_VERSION = 'jarvos-coding-orchestrator/v1';
 const TAKE_ISSUE_TO_DONE_STAGES = Object.freeze([
@@ -469,6 +470,24 @@ async function runTakeIssueToDone(input = {}, adapters = {}) {
 
   const status = deriveOrchestratorStatus(events);
 
+  // Learning is an optional, non-terminal tail. It is evaluated from the
+  // live stage results above; callers may use the returned decision to invoke
+  // a provider, but compounding can never change the coding status.
+  const hasLearningInput = input.learningSignals !== undefined
+    || input.learning !== undefined
+    || input.declineLearning === true
+    || input.declinedLearning === true;
+  const learning = hasLearningInput
+    ? evaluateLearningEligibility({
+      verification: {
+        status,
+        events,
+      },
+      signals: input.learningSignals ?? input.learning,
+      declined: input.declineLearning === true || input.declinedLearning === true,
+    })
+    : null;
+
   return {
     schemaVersion: ORCHESTRATOR_SCHEMA_VERSION,
     status,
@@ -484,6 +503,7 @@ async function runTakeIssueToDone(input = {}, adapters = {}) {
     events,
     checkpoints,
     activityEvents,
+    ...(learning ? { learning } : {}),
   };
 }
 

@@ -8,13 +8,294 @@ const path = require('path');
 const test = require('node:test');
 
 const {
+  COMPOUND_ENGINEERING_CAPABILITY_VERSION,
   checkRuntime,
+  checkCompoundEngineeringCapability,
+  classifyCompoundEngineeringProvider,
+  computeCompoundEngineeringFixtureDigest,
+  inspectCompoundEngineeringProvider,
+  validateCodexConformanceReceipt,
   listRuntimeManifests,
+  loadCompoundEngineeringCapability,
   scaffoldRuntime,
+  validateCompoundEngineeringCapability,
   validateManifest,
 } = require('../src/index.js');
 
 const ROOT = path.resolve(__dirname, '..', '..', '..');
+
+test('Codex Compound Engineering capability is conformance-backed and public-safe', () => {
+  const capabilityPath = path.join(ROOT, 'runtimes/codex/compound-engineering-capability.json');
+  const loaded = loadCompoundEngineeringCapability(capabilityPath, { root: ROOT });
+  const validation = validateCompoundEngineeringCapability(loaded.capability);
+  assert.equal(COMPOUND_ENGINEERING_CAPABILITY_VERSION, 'jarvos-codex-ce-capability.v1');
+  assert.equal(validation.ok, true, validation.errors.join('\n'));
+  assert.equal(loaded.capability.admission, 'supported');
+  assert.equal(loaded.capability.activation.candidateOnly, false);
+  assert.equal(loaded.capability.proof.conformant, true);
+  assert.deepEqual(loaded.capability.operations, ['plan', 'work', 'compound']);
+
+  const result = checkCompoundEngineeringCapability(capabilityPath, { root: ROOT });
+  assert.equal(result.ok, true, result.errors.join('\n'));
+  assert.equal(result.fixture.treeDigest, loaded.capability.fixtureTreeDigest);
+  assert.ok(result.fixture.files.includes('discovery.json'));
+});
+
+test('Compound Engineering capability rejects activation without conformance proof', () => {
+  const capability = loadCompoundEngineeringCapability(
+    path.join(ROOT, 'runtimes/codex/compound-engineering-capability.json'),
+    { root: ROOT },
+  ).capability;
+  const promoted = {
+    ...capability,
+    admission: 'supported',
+    activation: { ...capability.activation, candidateOnly: true },
+    proof: { ...capability.proof, conformant: false },
+  };
+  const result = validateCompoundEngineeringCapability(promoted);
+  assert.equal(result.ok, false);
+  assert.match(result.errors.join('\n'), /supported or disabled capability|conformant capability/);
+});
+
+test('Compound Engineering provider status distinguishes discovery from activation truth', () => {
+  const capabilityPath = path.join(ROOT, 'runtimes/codex/compound-engineering-capability.json');
+  const loaded = loadCompoundEngineeringCapability(capabilityPath, { root: ROOT });
+  const capabilityCheck = checkCompoundEngineeringCapability(capabilityPath, { root: ROOT });
+  const discovered = classifyCompoundEngineeringProvider({
+    capability: loaded.capability,
+    capabilityCheck,
+    evidence: {
+      marketplaces: [{ name: 'compound-engineering-plugin', revision: loaded.capability.provider.revision }],
+      installed: [{ name: 'compound-engineering', version: '3.21.4', enabled: true }],
+    },
+  });
+  assert.equal(discovered.status, 'degraded');
+  assert.equal(discovered.activeVersion, '3.21.4');
+
+  const healthy = classifyCompoundEngineeringProvider({
+    capability: loaded.capability,
+    capabilityCheck,
+    evidence: {
+      marketplaces: [{ name: 'compound-engineering-plugin', revision: loaded.capability.provider.revision }],
+      installed: [{ name: 'compound-engineering', version: '3.21.4', enabled: true }],
+      conformance: { status: 'passed', providerRevision: loaded.capability.provider.revision },
+    },
+  });
+  assert.equal(healthy.status, 'healthy');
+
+  const missing = classifyCompoundEngineeringProvider({
+    capability: loaded.capability,
+    capabilityCheck,
+    evidence: { installed: [] },
+  });
+  assert.equal(missing.status, 'not-installed');
+
+  const modified = classifyCompoundEngineeringProvider({
+    capability: loaded.capability,
+    capabilityCheck,
+    evidence: { localModified: true, installed: [{ name: 'compound-engineering', version: '3.21.4', enabled: true }] },
+  });
+  assert.equal(modified.status, 'local-modified');
+
+  const stale = classifyCompoundEngineeringProvider({
+    capability: loaded.capability,
+    capabilityCheck,
+    evidence: {
+      marketplaces: [{ name: 'compound-engineering-plugin', revision: '1'.repeat(40) }],
+      installed: [{ name: 'compound-engineering', version: '3.21.4', enabled: true }],
+    },
+  });
+  assert.equal(stale.status, 'incompatible');
+});
+
+test('Compound Engineering inspection returns a public-safe healthy status for an installed provider', () => {
+  const result = inspectCompoundEngineeringProvider({
+    root: ROOT,
+    evidence: {
+      codexAvailable: true,
+      codexVersion: '0.146.0',
+      marketplaces: [{ name: 'compound-engineering-plugin', revision: 'e36ddb8cbd4dd902d3b6ddd96165a783b0ac4711' }],
+      installed: [{ name: 'compound-engineering', version: '3.21.4', enabled: true }],
+    },
+  });
+  assert.equal(result.status, 'healthy');
+  assert.equal(result.discovery.activeVersion, '3.21.4');
+  assert.equal(result.discovery.marketplaceFound, true);
+  assert.equal(JSON.stringify(result).includes('/Users/'), false);
+});
+
+test('Codex conformance receipt is strict and cannot be promoted by status alone', () => {
+  const capability = loadCompoundEngineeringCapability(
+    path.join(ROOT, 'runtimes/codex/compound-engineering-capability.json'),
+    { root: ROOT },
+  ).capability;
+  const receipt = JSON.parse(fs.readFileSync(path.join(ROOT, 'runtimes/codex/compound-engineering-conformance.json'), 'utf8'));
+  assert.equal(validateCodexConformanceReceipt(receipt, { capability }).ok, true);
+  const forged = { ...receipt, receipt: { ...receipt.receipt, strictContract: 'implemented' } };
+  const invalid = validateCodexConformanceReceipt(forged, { capability });
+  assert.equal(invalid.ok, false);
+  assert.match(invalid.errors.join('\n'), /strict receipt evidence/);
+  const missingRevision = { ...receipt, discovery: { ...receipt.discovery, marketplaceRevision: undefined } };
+  const invalidRevision = validateCodexConformanceReceipt(missingRevision, { capability });
+  assert.equal(invalidRevision.ok, false);
+  assert.match(invalidRevision.errors.join('\n'), /discovery evidence/);
+});
+
+test('Codex provider activation is profile-scoped, pinned, and exactly reversible', () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-codex-provider-activation-'));
+  try {
+    const home = path.join(tmp, 'home');
+    const codexHome = path.join(tmp, 'codex-home');
+    const bin = path.join(tmp, 'bin');
+    const fakeCodex = path.join(bin, 'codex');
+    fs.mkdirSync(bin, { recursive: true });
+    fs.writeFileSync(fakeCodex, `#!/usr/bin/env node
+const fs = require('node:fs');
+const path = require('node:path');
+const home = process.env.CODEX_HOME;
+const statePath = path.join(home, 'fake-codex-state.json');
+fs.mkdirSync(home, { recursive: true });
+let state = fs.existsSync(statePath) ? JSON.parse(fs.readFileSync(statePath, 'utf8')) : { installed: [], marketplaces: [] };
+const save = () => fs.writeFileSync(statePath, JSON.stringify(state));
+const args = process.argv.slice(2);
+if (args[0] === '--version') { process.stdout.write('codex-cli 0.146.0\\n'); process.exit(0); }
+if (args.join(' ') === 'plugin list --json') { process.stdout.write(JSON.stringify({ installed: state.installed })); process.exit(0); }
+if (args.join(' ') === 'plugin marketplace list --json') { process.stdout.write(JSON.stringify({ marketplaces: state.marketplaces })); process.exit(0); }
+if (args[0] === 'plugin' && args[1] === 'marketplace' && args[2] === 'add') {
+  const root = path.join(home, 'marketplace'); fs.mkdirSync(root, { recursive: true });
+  fs.writeFileSync(path.join(root, '.codex-marketplace-install.json'), JSON.stringify({ source_type: 'git', source: 'https://github.com/EveryInc/compound-engineering-plugin.git', revision: 'e36ddb8cbd4dd902d3b6ddd96165a783b0ac4711' }));
+  state.marketplaces = state.marketplaces.filter((entry) => entry.name !== 'compound-engineering-plugin');
+  state.marketplaces.push({ name: 'compound-engineering-plugin', root }); save(); process.exit(0);
+}
+if (args[0] === 'plugin' && args[1] === 'add') {
+  state.installed = state.installed.filter((entry) => entry.pluginId !== 'compound-engineering@compound-engineering-plugin');
+  state.installed.push({ pluginId: 'compound-engineering@compound-engineering-plugin', name: 'compound-engineering', marketplaceName: 'compound-engineering-plugin', version: '3.21.4', enabled: true }); save(); process.exit(0);
+}
+if (args[0] === 'plugin' && args[1] === 'remove') {
+  state.installed = state.installed.filter((entry) => entry.pluginId !== args[2]); save(); process.exit(0);
+}
+if (args[0] === 'plugin' && args[1] === 'marketplace' && args[2] === 'remove') {
+  state.marketplaces = state.marketplaces.filter((entry) => entry.name !== args[3]); save(); process.exit(0);
+}
+process.exit(1);
+`, { encoding: 'utf8', mode: 0o755 });
+    fs.chmodSync(fakeCodex, 0o755);
+    fs.mkdirSync(home, { recursive: true });
+    const unrelatedConfig = path.join(codexHome, 'config.toml');
+    fs.mkdirSync(codexHome, { recursive: true });
+    fs.writeFileSync(unrelatedConfig, '[unrelated]\nvalue = true\n');
+    const manager = path.join(ROOT, 'runtimes/codex/compound-engineering-activation.js');
+    const env = {
+      ...process.env,
+      HOME: home,
+      CODEX_HOME: codexHome,
+      JARVOS_CODEX_EXECUTABLE: fakeCodex,
+      JARVOS_CODEX_PROVIDER_MODE: 'new-managed',
+    };
+    const activated = spawnSync(process.execPath, [manager], { cwd: ROOT, encoding: 'utf8', env });
+    assert.equal(activated.status, 0, activated.stderr || activated.stdout);
+    const state = JSON.parse(fs.readFileSync(path.join(codexHome, 'fake-codex-state.json'), 'utf8'));
+    assert.equal(state.installed[0].version, '3.21.4');
+    assert.equal(state.marketplaces[0].name, 'compound-engineering-plugin');
+    assert.equal(fs.existsSync(path.join(codexHome, 'jarvos-compound-engineering.state.json')), true);
+    assert.equal(fs.readFileSync(unrelatedConfig, 'utf8'), '[unrelated]\nvalue = true\n');
+
+    const rolledBack = spawnSync(process.execPath, [manager], {
+      cwd: ROOT,
+      encoding: 'utf8',
+      env: { ...env, JARVOS_CODEX_PROVIDER_MODE: 'existing', JARVOS_MANAGED_HARNESS_ROLLBACK: '1' },
+    });
+    assert.equal(rolledBack.status, 0, rolledBack.stderr || rolledBack.stdout);
+    const afterRollback = JSON.parse(fs.readFileSync(path.join(codexHome, 'fake-codex-state.json'), 'utf8'));
+    assert.deepEqual(afterRollback.installed, []);
+    assert.deepEqual(afterRollback.marketplaces, []);
+    assert.equal(fs.existsSync(path.join(codexHome, 'jarvos-compound-engineering.state.json')), false);
+    assert.equal(fs.readFileSync(unrelatedConfig, 'utf8'), '[unrelated]\nvalue = true\n');
+
+    const oldRevision = '1'.repeat(40);
+    const oldMarketplaceRoot = path.join(codexHome, 'old-marketplace');
+    fs.mkdirSync(oldMarketplaceRoot, { recursive: true });
+    fs.writeFileSync(path.join(oldMarketplaceRoot, '.codex-marketplace-install.json'), JSON.stringify({
+      source_type: 'git',
+      source: 'https://github.com/EveryInc/compound-engineering-plugin.git',
+      revision: oldRevision,
+    }));
+    fs.writeFileSync(path.join(codexHome, 'fake-codex-state.json'), JSON.stringify({
+      installed: [{
+        pluginId: 'compound-engineering@compound-engineering-plugin',
+        name: 'compound-engineering',
+        marketplaceName: 'compound-engineering-plugin',
+        version: '3.21.3',
+        enabled: true,
+      }],
+      marketplaces: [{ name: 'compound-engineering-plugin', root: oldMarketplaceRoot }],
+    }));
+    fs.writeFileSync(path.join(codexHome, 'jarvos-compound-engineering.state.json'), JSON.stringify({
+      schemaVersion: 'jarvos-codex-provider-state/v1',
+      provider: 'compound-engineering',
+      version: '3.21.3',
+      revision: oldRevision,
+      marketplace: 'compound-engineering-plugin',
+      plugin: 'compound-engineering@compound-engineering-plugin',
+      marketplaceAdded: true,
+      pluginAdded: true,
+    }));
+    const updated = spawnSync(process.execPath, [manager], { cwd: ROOT, encoding: 'utf8', env });
+    assert.equal(updated.status, 0, updated.stderr || updated.stdout);
+    const afterUpdate = JSON.parse(fs.readFileSync(path.join(codexHome, 'fake-codex-state.json'), 'utf8'));
+    assert.equal(afterUpdate.installed[0].version, '3.21.4');
+    assert.equal(fs.existsSync(path.join(codexHome, 'jarvos-compound-engineering.state.json')), true);
+    assert.equal(fs.readFileSync(unrelatedConfig, 'utf8'), '[unrelated]\nvalue = true\n');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('Compound Engineering capability rejects traversal, symlink, and executable fixture content', () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-ce-capability-'));
+  try {
+    const fixtureDir = path.join(tmp, 'fixtures');
+    fs.mkdirSync(fixtureDir, { recursive: true });
+    fs.writeFileSync(path.join(fixtureDir, 'safe.json'), '{}\n', 'utf8');
+    fs.symlinkSync(path.join(fixtureDir, 'safe.json'), path.join(fixtureDir, 'linked.json'));
+    fs.writeFileSync(path.join(fixtureDir, 'executable.json'), '{}\n', { encoding: 'utf8', mode: 0o755 });
+    const capability = {
+      schemaVersion: 1,
+      version: COMPOUND_ENGINEERING_CAPABILITY_VERSION,
+      provider: {
+        id: 'compound-engineering',
+        version: '3.21.4',
+        owner: 'EveryInc',
+        repository: 'https://github.com/EveryInc/compound-engineering-plugin.git',
+        revision: 'e36ddb8cbd4dd902d3b6ddd96165a783b0ac4711',
+        license: 'MIT',
+      },
+      harness: 'codex',
+      admission: 'unsupported',
+      operations: ['plan', 'work', 'compound'],
+      activation: {
+        mechanism: 'codex-plugin-marketplace',
+        marketplaceArgv: ['codex', 'plugin', 'marketplace', 'add', 'EveryInc/compound-engineering-plugin', '--ref', 'e36ddb8cbd4dd902d3b6ddd96165a783b0ac4711'],
+        pluginArgv: ['codex', 'plugin', 'add', 'compound-engineering@compound-engineering-plugin'],
+        candidateOnly: true,
+        requiresRestart: true,
+      },
+      discovery: { commands: [{ id: 'version', argv: ['codex', '--version'], readOnly: true, activatesPluginCode: false }] },
+      invocation: { surface: 'codex exec', proof: 'characterized' },
+      proof: { artifactBoundary: 'characterized', discovery: 'observed', invocation: 'characterized', receipt: 'jarvos-contract', activation: 'unproven', conformant: false },
+      fixtureRoot: 'fixtures',
+      fixtureFiles: ['safe.json', 'linked.json', 'executable.json'],
+      fixtureTreeDigest: computeCompoundEngineeringFixtureDigest(fixtureDir),
+    };
+    const capabilityPath = path.join(tmp, 'capability.json');
+    fs.writeFileSync(capabilityPath, JSON.stringify(capability, null, 2));
+    const result = checkCompoundEngineeringCapability(capabilityPath, { root: tmp });
+    assert.equal(result.ok, false);
+    assert.match(result.errors.join('\n'), /symlink|executable/i);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
 
 function runHermesSetup({ healthy = true } = {}) {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-hermes-setup-'));

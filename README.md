@@ -55,6 +55,24 @@ required to run the stewardship pipeline.
 sane defaults, route context, define workflows, and make the system feel like
 one assistant instead of a pile of software.
 
+For coding work, jarvOS-coding bundles a managed Compound Engineering provider
+behind the ordinary jarvOS verbs. Say `plan`, `work`, or `complete`; a healthy,
+approved provider supplies the stronger planning and execution loop while
+jarvOS keeps ownership of the work run, branch, review evidence, submission
+gate, and completion decision. Provider learning is a separate, post-verification
+tail: `compound` may capture one reusable lesson, but a skipped or failed lesson
+never changes a verified coding result. If the provider is missing, modified,
+unsupported, or unavailable, jarvOS continues through its native workflow in
+the same run and worktree.
+
+Provider installation is managed software, not a JavaScript dependency or a
+moving upstream branch. jarvOS ships one reviewed pin, preserves unrelated
+runtime configuration, and lets doctor distinguish a discovered installation
+from a conformance-proven activation. See
+[`modules/jarvos-coding/README.md`](modules/jarvos-coding/README.md) and
+[`runtimes/codex/README.md`](runtimes/codex/README.md) for the support matrix
+and recovery path.
+
 For the exact external secondbrain integration status -- active, optional,
 dogfood-only, deferred, or guarded -- see
 [`docs/architecture/secondbrain-external-integrations.md`](./docs/architecture/secondbrain-external-integrations.md).

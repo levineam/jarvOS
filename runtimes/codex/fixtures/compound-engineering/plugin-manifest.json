@@ -1,0 +1,9 @@
+{
+  "name": "compound-engineering",
+  "version": "3.21.4",
+  "repository": "https://github.com/EveryInc/compound-engineering-plugin",
+  "license": "MIT",
+  "skills": ["ce-plan", "ce-work", "ce-compound"],
+  "execution": "agent-invoked-skills",
+  "sourceRevision": "e36ddb8cbd4dd902d3b6ddd96165a783b0ac4711"
+}

@@ -1089,6 +1089,7 @@ function copyFileSync(source, destination) {
 }
 
 const { createProjectionApi } = require('./projection');
+const providerReconciliation = require('./provider-reconciliation');
 
 const projection = createProjectionApi({
   assertProjectionManifest,
@@ -1175,4 +1176,5 @@ module.exports = {
   manifestDigest,
   sourceCodeDigest,
   installSkills,
+  ...providerReconciliation,
 };

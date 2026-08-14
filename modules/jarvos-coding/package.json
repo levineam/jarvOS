@@ -4,6 +4,11 @@
   "description": "Portable jarvOS coding orchestrator with thin Claude Code, Codex, and OpenClaw host adapters.",
   "license": "MIT",
   "main": "src/index.js",
+  "files": [
+    "README.md",
+    "src/",
+    "providers/"
+  ],
   "exports": {
     ".": "./src/index.js"
   },

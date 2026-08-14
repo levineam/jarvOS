@@ -89,6 +89,41 @@ and Hermes. A private jarvOS control-plane manager may use the public
 `planSkillProjection` and `applySkillProjection` functions only after verifying
 the reviewed release tuple and the adapter's supported version.
 
+## Managed Compound Engineering provider
+
+The bundle declares Compound Engineering as a managed external provider for
+the coding workflow. Its manifest is pinned to one reviewed upstream commit and
+content digest; it is not followed from a moving branch and is not treated as
+a JavaScript dependency. Provider reconciliation is a separate profile-scoped
+operation from coding work-run execution.
+
+Reconciliation has an inspect-then-apply boundary. It stages only an
+allowlisted, digest-checked, non-executable regular-file fixture, then patches
+only the jarvOS-owned provider entry in a harness profile. Unknown, legacy,
+conflicting, or locally modified entries are reported and preserved. Candidate
+upstream versions are recorded as one review item and never change the active
+provider until a new jarvOS-approved manifest is shipped. Disable and rollback
+remove only exact jarvOS-owned state.
+
+The bundled `workflow-execution` skill maps ordinary `plan`, `work`, and
+`complete` requests to jarvOS-coding's managed workflow when the active harness
+has a healthy approved provider. Users do not need to learn CE command names.
+`compound` is the optional post-verification learning tail: the eligibility gate
+selects one reusable lesson, screens it for private content, and records its
+outcome separately from coding completion. Routine work is `not-eligible`, and
+provider failure or absence is `unavailable`/`failed` without reopening or
+downgrading a verified run.
+
+Codex is the first conformance-backed activation target. The shipped pin is CE
+3.21.4 with an immutable revision and content digest, and the checked-in
+disposable-profile receipt proves bounded invocation, strict receipts, denied
+capabilities, restart behavior, and rollback. Doctor reports the active health
+state and the native jarvOS workflow continues in the same run/worktree when CE
+is absent or unavailable. Other harnesses remain explicitly
+unsupported until they provide equivalent discovery, configuration-preservation,
+invocation, rollback, and fallback evidence. Approved updates may be discovered
+and staged automatically; only a reviewed manifest change can activate them.
+
 Run the pack doctor to inspect optional tool availability:
 
 ```bash

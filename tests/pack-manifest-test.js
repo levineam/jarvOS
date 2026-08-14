@@ -43,6 +43,7 @@ function advertisedRuntimeAssets() {
     'modules/jarvos-runtime-kit/src/stewardship-bootstrap.js',
     'modules/jarvos-runtime-kit/scripts/jarvos-runtime-kit.js',
     'modules/jarvos-runtime-kit/README.md',
+    'modules/jarvos-coding/providers/compound-engineering.json',
     'modules/jarvos-control-plane/scripts/jarvos-manager.js',
     'modules/jarvos-secondbrain/adapters/obsidian/src/vault-mutation-adapter.js',
     'modules/jarvos-secondbrain/adapters/obsidian/src/vault-mutation-contract.js',
@@ -69,4 +70,31 @@ test('published tarball includes every advertised runtime and runtime-kit asset'
   const required = advertisedRuntimeAssets();
   const missing = required.filter((file) => !files.has(file));
   assert.deepEqual(missing, [], `published tarball is missing required files: ${missing.join(', ')}`);
+});
+
+test('managed provider package and public docs agree on pin, fallback, and admission truth', () => {
+  const provider = JSON.parse(fs.readFileSync(path.join(ROOT, 'modules/jarvos-coding/providers/compound-engineering.json'), 'utf8'));
+  const capability = JSON.parse(fs.readFileSync(path.join(ROOT, 'runtimes/codex/compound-engineering-capability.json'), 'utf8'));
+  const conformance = JSON.parse(fs.readFileSync(path.join(ROOT, 'runtimes/codex/compound-engineering-conformance.json'), 'utf8'));
+  assert.equal(provider.id, 'compound-engineering');
+  assert.equal(provider.version, capability.provider.version);
+  assert.equal(provider.source.revision, capability.provider.revision);
+  assert.equal(provider.source.contentDigest.length, 64);
+  assert.equal(provider.review.status, 'approved');
+  assert.equal(capability.admission, 'supported');
+  assert.equal(conformance.admission, 'supported');
+  assert.equal(conformance.status, 'passed');
+
+  const docs = [
+    fs.readFileSync(path.join(ROOT, 'README.md'), 'utf8'),
+    fs.readFileSync(path.join(ROOT, 'modules/jarvos-coding/README.md'), 'utf8'),
+    fs.readFileSync(path.join(ROOT, 'modules/jarvos-skills/README.md'), 'utf8'),
+    fs.readFileSync(path.join(ROOT, 'modules/jarvos/README.md'), 'utf8'),
+    fs.readFileSync(path.join(ROOT, 'modules/jarvos/docs/INSTALL.md'), 'utf8'),
+    fs.readFileSync(path.join(ROOT, 'docs/architecture/packaging-and-install-profiles.md'), 'utf8'),
+    fs.readFileSync(path.join(ROOT, 'docs/architecture/jarvos-architecture.md'), 'utf8'),
+  ];
+  assert.ok(docs.every((text) => /native jarvOS|same run|same worktree|fallback/i.test(text)), 'public docs must explain native fallback');
+  assert.ok(docs.some((text) => /conformance-backed|healthy.*conformance|conformance.*healthy/i.test(text)), 'public docs must preserve conformance-backed health truth');
+  assert.ok(docs.some((text) => /plan.*work.*complete/i.test(text)), 'public docs must lead with jarvOS verbs');
 });

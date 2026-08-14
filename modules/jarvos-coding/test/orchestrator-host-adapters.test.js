@@ -123,6 +123,21 @@ test('orchestrator runs the full stage loop and checkpoints code thread state', 
   assert.equal(pullRequestCheckpoint.artifact.url, 'https://github.com/example/repo/pull/1');
 });
 
+test('orchestrator exposes an eligible learning tail without changing terminal completion', async () => {
+  const result = await runTakeIssueToDone({
+    issue: { identifier: 'SUP-2214' },
+    branch: 'SUP-2214/jarvos-coding-learning',
+    learningSignals: {
+      category: 'architecture-constraint',
+      summary: 'The durable work run must own provider routing and completion evidence.',
+    },
+  }, buildAdapters([]));
+
+  assert.equal(result.status, 'completed');
+  assert.equal(result.learning.status, 'eligible');
+  assert.equal(result.learning.learning.category, 'architecture-constraint');
+});
+
 test('host contract normalizes Claude Code and Codex aliases', () => {
   assert.deepEqual(codingHostAdapterContract('claude').drives, ['runTakeIssueToDone']);
   assert.equal(codingHostAdapterContract('claude').host, 'claude-code');
@@ -780,4 +795,19 @@ test('Codex host adapter can build runtime adapters lazily from each request', a
   assert.equal(result.host, 'codex');
   assert.equal(result.status, 'completed');
   assert.deepEqual(calls, TAKE_ISSUE_TO_DONE_STAGES);
+});
+
+test('host adapters route natural managed coding verbs without changing the compatibility orchestrator', async () => {
+  const calls = [];
+  const adapter = createCodexHostAdapter({
+    adapters: {
+      managedWorkflow: {
+        async plan(input) { calls.push(['plan', input.subjectKey]); return { ok: true, status: 'succeeded', workRunId: 'run_plan_01' }; },
+      },
+    },
+  });
+  const result = await adapter.runTakeIssueToDone({ operation: 'plan', subjectKey: 'levineam/jarvOS:SUP-5003' });
+  assert.equal(result.operation, 'plan');
+  assert.equal(result.status, 'succeeded');
+  assert.deepEqual(calls, [['plan', 'levineam/jarvOS:SUP-5003']]);
 });

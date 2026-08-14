@@ -268,6 +268,7 @@ function createSessionHandoff(input = {}) {
 }
 
 module.exports = {
+  isSha256,
   CAPABILITY_PROFILE_VERSION,
   CODING_EXECUTION_AUTHORITIES,
   DISPATCH_CONTRACT_VERSION,

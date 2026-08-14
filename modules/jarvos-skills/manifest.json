@@ -17,6 +17,16 @@
       "reason": "QMD is underlying markdown-search software, not a default jarvOS operating-system skill."
     }
   ],
+  "managedProviders": [
+    {
+      "id": "compound-engineering",
+      "manifest": "../jarvos-coding/providers/compound-engineering.json",
+      "distribution": "managed-external",
+      "default": true,
+      "updatePolicy": "managed-release",
+      "activation": "harness-specific-approved-pin"
+    }
+  ],
   "skills": [
     {
       "name": "workflow-execution",
@@ -24,7 +34,7 @@
       "purpose": "Plan, track, package, execute, and verify non-trivial work.",
       "source": {
         "revision": "jarvos-skills-v0.3.0",
-        "digest": "e9e0ac2b488fb8b8666fdc3aef095732f5ecba344381988a28ae505abac50e0e",
+        "digest": "32ad169ce1f2296433fd552be6b0c6251d69b9e28ea620b97123e9d9310e7c04",
         "license": "MIT",
         "provenance": "jarvOS reviewed source"
       },

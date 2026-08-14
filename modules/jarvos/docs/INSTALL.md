@@ -23,6 +23,8 @@ state, and explicit adapters for runtime-specific behavior.
 - a local repository checkout
 - optional: an existing OpenClaw config if you want the runtime adapter to detect
   a live OpenClaw installation
+- optional: Codex CLI when you want the Codex adapter and managed-provider
+  doctor checks
 - optional: `lossless-claw` for continuity checks
 - optional: Obsidian and `defuddle` for the Obsidian default experience pack
 
@@ -54,6 +56,31 @@ npm run canary:jarvos-install
 The canary packs `@jarvos/skills`, installs the generated tarball into a fresh
 temporary project, and runs the installed doctor. This proves the install
 artifact works outside the source checkout.
+
+## Coding workflow and Compound Engineering
+
+The coding profile is provider-neutral at the command surface. In a compatible
+jarvOS coding session, ask naturally to `plan`, `work`, or `complete`; jarvOS
+resolves the approved managed provider and keeps the work-run, branch, review,
+submission, and completion authority. A healthy Compound Engineering provider
+supplies the planning and implementation loop behind those verbs. If it is
+absent, locally modified, unsupported, or unavailable, jarvOS uses its native
+workflow in the same run and worktree.
+
+The shipped CE pin is immutable and licensed. Doctor reports whether the
+discovered Codex installation matches the reviewed conformance receipt. For
+Codex, run:
+
+```bash
+jarvos doctor --profile minimal --workspace /path/to/workspace
+node modules/jarvos-runtime-kit/scripts/jarvos-runtime-kit.js check runtimes/codex/adapter.json
+```
+
+`not-installed`, `degraded`, `local-modified`, and `incompatible` are honest
+health states, not silent failures. They preserve the native coding path and
+surface a bounded recovery action. Do not follow upstream `main`; use the
+approved immutable pin and the profile-scoped setup/recovery path documented in
+[`runtimes/codex/README.md`](../../runtimes/codex/README.md).
 
 ## Public/Private Boundary
 
