@@ -50,6 +50,7 @@ function advertisedRuntimeAssets() {
     'modules/jarvos-skills/schemas/local-overlay.schema.json',
     'modules/jarvos-skills/src/reconciliation.js',
     'modules/jarvos-skills/scripts/dogfood-skills.js',
+    'modules/jarvos-coding/scripts/jarvos-coding-mcp.js',
     'modules/jarvos-control-plane/scripts/jarvos-manager.js',
     'scripts/release-readiness-check.js',
     'scripts/release-status.js',

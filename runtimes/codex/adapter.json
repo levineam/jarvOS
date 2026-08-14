@@ -38,6 +38,15 @@
       "jarvos_control_plane"
     ]
   },
+  "codingWorkflow": {
+    "mcpServer": "modules/jarvos-coding/scripts/jarvos-coding-mcp.js",
+    "registration": "codex mcp add --env JARVOS_CODING_REPOSITORY_REGISTRY=<owner-only-registry> jarvos-coding -- node <coding-mcp-server>",
+    "registryBinding": "JARVOS_CODING_REGISTRY is setup input only; setup validates its absolute owner-only path and persists it only as JARVOS_CODING_REPOSITORY_REGISTRY for the jarvos-coding server.",
+    "skill": "workflow-execution",
+    "toolSequence": ["jarvos_coding_plan", "jarvos_coding_accept_plan", "jarvos_coding_work", "jarvos_coding_finish", "jarvos_coding_status", "jarvos_coding_resume"],
+    "fallback": "jarvos-native-workflow",
+    "managedRunBoundary": "Applies only after the jarvOS coding tool creates or resumes a managed run; implicit skill selection does not intercept arbitrary Codex edits."
+  },
   "targets": [
     {
       "id": "codex-cli",
@@ -69,7 +78,9 @@
     }
   ],
   "setup": {
-    "script": "setup.sh"
+    "script": "setup.sh",
+    "states": ["installed-but-unwired", "managed-provider-ready", "native-fallback-ready", "disabled", "outdated", "blocked"],
+    "updatePolicy": "Update jarvOS-owned MCP registrations and projections only; preserve unrelated Codex configuration and locally modified projected skills."
   },
   "managedProviders": {
     "compound-engineering": {

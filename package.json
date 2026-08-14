@@ -37,6 +37,7 @@
     "modules/jarvos-coding/package.json",
     "modules/jarvos-coding/src/",
     "modules/jarvos-coding/providers/",
+    "modules/jarvos-coding/scripts/",
     "modules/jarvos-control-plane/README.md",
     "modules/jarvos-control-plane/package.json",
     "modules/jarvos-control-plane/scripts/",

@@ -224,4 +224,27 @@ function recordOwnerAction({ registryPath, repositoryId, action, runId, revision
   return Object.freeze({ schemaVersion: 'jarvos-coding-owner-action-receipt/v1', action, repository: publicRepository(repository), runId, ...(revision ? { revision } : {}) });
 }
 
-module.exports = { REPOSITORY_REGISTRY_SCHEMA_VERSION, OWNER_ACTIONS_SCHEMA_VERSION, deriveRepositoryId, loadRepositoryRegistry, publicRepository, validateRepositoryRegistry, provisionRepository, inspectProvisionedRepositories, updateProvisionedRepository, revokeProvisionedRepository, recordOwnerAction };
+// This resolver is intentionally separate from the mutation helper above. A
+// model-visible boundary may only derive acceptance evidence from this
+// owner-written record; it must never accept caller-provided evidence.
+function resolveOwnerPlanAcceptance({ registryPath, repositoryId, runId, planDigest, ownerUid, now = new Date() } = {}) {
+  if (typeof runId !== 'string' || !/^[A-Za-z0-9._:-]{1,160}$/.test(runId)) throw new Error('runId is required and must be an opaque identifier');
+  if (typeof planDigest !== 'string' || !/^[a-f0-9]{64}$/i.test(planDigest)) throw new Error('planDigest must be a SHA-256 digest');
+  const loaded = loadRepositoryRegistry(registryTarget(registryPath, { ownerUid }), { ownerUid });
+  const repository = loaded.resolve(repositoryId);
+  const actionsPath = path.join(repository.stateRoot, 'owner-actions.json');
+  if (!fs.existsSync(actionsPath)) return null;
+  assertOwner(fs.statSync(actionsPath), 'owner action record', ownerUid);
+  let actions;
+  try { actions = JSON.parse(fs.readFileSync(actionsPath, 'utf8')); } catch { throw new Error('owner action record is invalid'); }
+  if (!isObject(actions) || actions.schemaVersion !== OWNER_ACTIONS_SCHEMA_VERSION || actions.generation !== loaded.generation || !Array.isArray(actions.actions)) throw new Error('owner action record is invalid');
+  const action = actions.actions.find((entry) => entry && entry.action === 'accept-plan' && entry.repositoryId === repository.repositoryId && entry.runId === runId);
+  if (!action || (action.revision !== planDigest && action.revision !== `sha256:${planDigest}`)) return null;
+  const observedAt = new Date(action.observedAt);
+  if (Number.isNaN(observedAt.getTime())) throw new Error('owner action record is invalid');
+  const freshness = repository.acceptancePolicy.evidenceFreshnessMs;
+  if (freshness !== undefined && now.getTime() - observedAt.getTime() > freshness) return null;
+  return Object.freeze({ source: 'owner-action-record', observedAt: observedAt.toISOString(), planDigest });
+}
+
+module.exports = { REPOSITORY_REGISTRY_SCHEMA_VERSION, OWNER_ACTIONS_SCHEMA_VERSION, deriveRepositoryId, loadRepositoryRegistry, publicRepository, validateRepositoryRegistry, provisionRepository, inspectProvisionedRepositories, updateProvisionedRepository, revokeProvisionedRepository, recordOwnerAction, resolveOwnerPlanAcceptance };

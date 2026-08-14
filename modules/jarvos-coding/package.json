@@ -4,10 +4,14 @@
   "description": "Portable jarvOS coding orchestrator with thin Claude Code, Codex, and OpenClaw host adapters.",
   "license": "MIT",
   "main": "src/index.js",
+  "bin": {
+    "jarvos-coding-mcp": "scripts/jarvos-coding-mcp.js"
+  },
   "files": [
     "README.md",
     "src/",
-    "providers/"
+    "providers/",
+    "scripts/"
   ],
   "exports": {
     ".": "./src/index.js"
