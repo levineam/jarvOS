@@ -385,6 +385,43 @@ test('session thread writes a note, links today journal, and reads across hosts'
   });
 });
 
+test('session thread access cannot be redirected to arbitrary vault notes', () => {
+  withTempVault(({ notes, mutationService }) => {
+    const privateNote = path.join(notes, 'Private Vault Note.md');
+    fs.writeFileSync(privateNote, '---\ntype: private-note\n---\nPrivate medical plan.', 'utf8');
+
+    const read = readSessionThread({ title: 'Private Vault Note', threadId: 'safe-thread' });
+    assert.equal(read.found, false);
+    assert.doesNotMatch(read.markdown, /Private medical plan/);
+
+    writeSessionThread({
+      title: 'Private Vault Note',
+      threadId: 'safe-thread',
+      summary: 'A safe checkpoint.',
+      mutationService,
+    });
+    assert.equal(fs.readFileSync(privateNote, 'utf8').includes('A safe checkpoint.'), false);
+  });
+});
+
+test('session thread access rejects namespace collisions without session-thread frontmatter', () => {
+  withTempVault(({ notes, mutationService }) => {
+    const privateNote = path.join(notes, 'JarvOS Session Thread - collision.md');
+    const original = '---\ntype: private-note\n---\nPrivate collision content.';
+    fs.writeFileSync(privateNote, original, 'utf8');
+
+    assert.throws(
+      () => readSessionThread({ threadId: 'collision' }),
+      /Refusing to access non-session-thread note/,
+    );
+    assert.throws(
+      () => writeSessionThread({ threadId: 'collision', summary: 'Injected checkpoint.', mutationService }),
+      /Refusing to access non-session-thread note/,
+    );
+    assert.equal(fs.readFileSync(privateNote, 'utf8'), original);
+  });
+});
+
 test('session thread appends checkpoints through latest-content transforms', () => {
   withTempVault(({ mutationService }) => {
     for (let index = 0; index < 6; index += 1) {
