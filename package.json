@@ -69,6 +69,8 @@
     "modules/jarvos-skills/skills/",
     "modules/jarvos-skills/src/",
     "modules/jarvos-skills/schemas/",
+    "docs/architecture/shared-skill-distribution.md",
+    "docs/runbooks/shared-skill-distribution.md",
     "profiles/",
     "scripts/jarvos.js",
     "scripts/manual-notes-maintenance.js",
