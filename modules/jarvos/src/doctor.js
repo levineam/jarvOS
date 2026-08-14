@@ -142,6 +142,33 @@ function createCheck(component, ok, message, details = {}) {
   };
 }
 
+const CODEX_CODING_PROFILE_STATES = new Set([
+  'installed-but-unwired', 'managed-provider-ready', 'native-fallback-ready',
+  'disabled', 'outdated', 'blocked',
+]);
+
+function validateCodexCodingWorkflow(evidence = {}) {
+  // This helper intentionally accepts only booleans and returns no host paths,
+  // registry values, credential references, or provider configuration.
+  const state = evidence.disabled === true ? 'disabled'
+    : evidence.outdated === true ? 'outdated'
+      : evidence.blocked === true ? 'blocked'
+        : evidence.registryBound !== true ? 'installed-but-unwired'
+          : evidence.managedProviderReady === true ? 'managed-provider-ready'
+            : evidence.nativeFallbackReady === true ? 'native-fallback-ready'
+              : 'blocked';
+  if (!CODEX_CODING_PROFILE_STATES.has(state)) throw new Error('Codex coding profile state is invalid');
+  const messages = {
+    'installed-but-unwired': 'Codex workflow skill is installed, but no owner-provisioned coding registry is bound.',
+    'managed-provider-ready': 'Codex managed coding workflow is ready with its approved provider route.',
+    'native-fallback-ready': 'Codex managed coding workflow is ready with its native fallback route.',
+    disabled: 'Codex managed coding workflow is disabled by its owner-controlled profile state.',
+    outdated: 'Codex managed coding workflow is outdated; rerun supported setup before starting a managed run.',
+    blocked: 'Codex managed coding workflow is blocked; inspect the public setup and doctor guidance before retrying.',
+  };
+  return createCheck('codex.codingWorkflow', ['installed-but-unwired', 'managed-provider-ready', 'native-fallback-ready', 'disabled'].includes(state), messages[state], { status: state });
+}
+
 function getPathConfig(config, key) {
   if (!config || typeof config !== 'object') return undefined;
   if (!config.paths || typeof config.paths !== 'object') return undefined;
@@ -1277,4 +1304,5 @@ module.exports = {
   validateObsidianPaths,
   validateObsidianSingleWriter,
   validateCompoundEngineeringProvider,
+  validateCodexCodingWorkflow,
 };

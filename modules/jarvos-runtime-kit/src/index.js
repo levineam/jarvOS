@@ -16,6 +16,17 @@ const DEFAULT_AGENT_CONTEXT_MCP = 'modules/jarvos-agent-context/scripts/jarvos-m
 const REQUIRED_MCP_TOOL = 'jarvos_hydrate';
 const CONTROL_PLANE_TOOL = 'jarvos_control_plane';
 const CONTROL_PLANE_MODULE = 'modules/jarvos-control-plane/scripts/jarvos-manager.js';
+const CODEX_CODING_MCP = 'modules/jarvos-coding/scripts/jarvos-coding-mcp.js';
+const CODEX_CODING_TOOLS = [
+  'jarvos_coding_plan', 'jarvos_coding_accept_plan', 'jarvos_coding_work',
+  'jarvos_coding_finish', 'jarvos_coding_status', 'jarvos_coding_resume',
+  'jarvos_coding_repositories', 'jarvos_coding_health',
+];
+const CODEX_CODING_SEQUENCE = CODEX_CODING_TOOLS.slice(0, 6);
+const CODEX_CODING_PROFILE_STATES = [
+  'installed-but-unwired', 'managed-provider-ready', 'native-fallback-ready',
+  'disabled', 'outdated', 'blocked',
+];
 const HYDRATION_MODES = ['hook', 'manual', 'unsupported'];
 const COMPOUND_ENGINEERING_CAPABILITY_VERSION = 'jarvos-codex-ce-capability.v1';
 const COMPOUND_ENGINEERING_OPERATIONS = ['plan', 'work', 'compound'];
@@ -705,6 +716,59 @@ function sourceContains(filePath, patterns) {
   return patterns.some((pattern) => pattern.test(content));
 }
 
+function validateCodexCodingWorkflow(manifest, options = {}) {
+  const root = path.resolve(options.root || repoRootFrom());
+  const setupScript = options.setupScript || path.join(root, 'runtimes', 'codex', 'setup.sh');
+  const errors = [];
+  const workflow = manifest?.codingWorkflow;
+  if (!isObject(workflow)) return { ok: false, errors: ['Codex codingWorkflow is required'] };
+  if (workflow.mcpServer !== CODEX_CODING_MCP) errors.push(`Codex codingWorkflow.mcpServer must be ${CODEX_CODING_MCP}`);
+  const mcpPath = path.join(root, workflow.mcpServer || '');
+  if (!fs.existsSync(mcpPath)) {
+    errors.push('Codex coding MCP server is missing');
+  } else {
+    try {
+      const mcp = require(mcpPath);
+      const names = Array.isArray(mcp.TOOLS) ? mcp.TOOLS.map((tool) => tool.name) : [];
+      if (names.length !== CODEX_CODING_TOOLS.length || names.some((name, index) => name !== CODEX_CODING_TOOLS[index])) {
+        errors.push(`Codex coding MCP tools must be exactly: ${CODEX_CODING_TOOLS.join(', ')}`);
+      }
+    } catch (error) {
+      errors.push(`Codex coding MCP server could not be loaded: ${error.message}`);
+    }
+  }
+  if (typeof workflow.registration !== 'string' || !workflow.registration.includes('JARVOS_CODING_REPOSITORY_REGISTRY')) {
+    errors.push('Codex codingWorkflow.registration must bind JARVOS_CODING_REPOSITORY_REGISTRY');
+  }
+  if (typeof workflow.registration === 'string' && /(?:^|[^A-Z0-9_])JARVOS_CODING_REGISTRY(?:$|[^A-Z0-9_])/.test(workflow.registration)) {
+    errors.push('Codex codingWorkflow.registration must not bind raw JARVOS_CODING_REGISTRY');
+  }
+  if (!Array.isArray(workflow.toolSequence) || workflow.toolSequence.length !== CODEX_CODING_SEQUENCE.length
+    || workflow.toolSequence.some((name, index) => name !== CODEX_CODING_SEQUENCE[index])) {
+    errors.push(`Codex codingWorkflow.toolSequence must be exactly: ${CODEX_CODING_SEQUENCE.join(', ')}`);
+  }
+  const states = manifest?.setup?.states;
+  if (!Array.isArray(states) || states.length !== CODEX_CODING_PROFILE_STATES.length
+    || states.some((state, index) => state !== CODEX_CODING_PROFILE_STATES[index])) {
+    errors.push(`Codex setup.states must be exactly: ${CODEX_CODING_PROFILE_STATES.join(', ')}`);
+  }
+  if (!fs.existsSync(setupScript)) {
+    errors.push('Codex coding setup script is missing');
+  } else {
+    const setup = fs.readFileSync(setupScript, 'utf8');
+    if (!/CODING_REGISTRY="\$\{JARVOS_CODING_REGISTRY:-\}"/.test(setup) || !/loadRepositoryRegistry\(process\.argv\[3\], \{ ownerUid: process\.getuid\?\.\(\) \}\)/.test(setup)) {
+      errors.push('Codex coding setup must validate the owner-bound JARVOS_CODING_REGISTRY input');
+    }
+    if (!/--env "JARVOS_CODING_REPOSITORY_REGISTRY=\$CODING_REGISTRY" jarvos-coding/.test(setup)) {
+      errors.push('Codex coding setup must bind only JARVOS_CODING_REPOSITORY_REGISTRY to jarvos-coding');
+    }
+    if (/--env "JARVOS_CODING_REGISTRY=/.test(setup)) {
+      errors.push('Codex coding setup must not persist raw JARVOS_CODING_REGISTRY');
+    }
+  }
+  return { ok: errors.length === 0, errors };
+}
+
 function checkRuntime(manifestPath, options = {}) {
   const root = path.resolve(options.root || repoRootFrom());
   const loaded = loadManifest(path.isAbsolute(manifestPath) ? manifestPath : path.join(root, manifestPath));
@@ -801,6 +865,8 @@ function checkRuntime(manifestPath, options = {}) {
   }
 
   if (manifest.id === 'codex') {
+    const codingWorkflow = validateCodexCodingWorkflow(manifest, { root, setupScript });
+    if (!codingWorkflow.ok) for (const error of codingWorkflow.errors) add(errors, error);
     const capabilityPath = path.join(runtimeDir, 'compound-engineering-capability.json');
     let capabilityRecord = null;
     if (!fs.existsSync(capabilityPath)) {
@@ -886,6 +952,10 @@ module.exports = {
   REQUIRED_MCP_TOOL,
   CONTROL_PLANE_MODULE,
   CONTROL_PLANE_TOOL,
+  CODEX_CODING_MCP,
+  CODEX_CODING_PROFILE_STATES,
+  CODEX_CODING_SEQUENCE,
+  CODEX_CODING_TOOLS,
   COMPOUND_ENGINEERING_CAPABILITY_VERSION,
   checkCompoundEngineeringCapability,
   classifyCompoundEngineeringProvider,
@@ -900,5 +970,6 @@ module.exports = {
   scaffoldRuntime,
   validateCompoundEngineeringCapability,
   validateCodexConformanceReceipt,
+  validateCodexCodingWorkflow,
   validateManifest,
 };
