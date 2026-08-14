@@ -13,6 +13,14 @@ function shellQuote(value) {
   return `'${String(value).replace(/'/g, `'\\''`)}'`;
 }
 
+function xmlEscape(value) {
+  return String(value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
 function resolveNodeExecutable(explicit) {
   if (explicit) return path.resolve(expandHome(explicit));
   return process.execPath;
@@ -62,7 +70,7 @@ function renderLaunchdPlist({
   <array>
     <string>/bin/zsh</string>
     <string>-lc</string>
-    <string>${command.replace(/&/g, '&').replace(/</g, '<')}</string>
+    <string>${xmlEscape(command)}</string>
   </array>
   <key>StartInterval</key>
   <integer>${seconds}</integer>

@@ -31,7 +31,7 @@ function createSharedSkillManager({ stateRoot, scheduler = null } = {}) {
     const enrolledHarnesses = (harnesses || []).filter((h) => state.enrolled.includes(h.id));
     const plan = catalog ? planCatalogReconciliation({ catalog: catalog.catalog || catalog, publicSourceRoot, localSourceRoot, harnesses: enrolledHarnesses, controlRoot: path.join(path.dirname(stateFile), 'reconciliation') }) : null;
     if (READS.has(operation)) return { operation, state: redact(state), plan: redactPlan(plan) };
-    if (operation === 'share' || operation === 'refresh') return { operation, ...admitOverlaySkill({ overlayPath, skillPath, id, allowedHarnesses: state.enrolled, refresh: operation === 'refresh' }) };
+    if (operation === 'share' || operation === 'refresh') return { operation, ...admitOverlaySkill({ overlayPath, skillPath, id, allowedHarnesses: (state.enrolled && state.enrolled.length ? state.enrolled : ['codex']), refresh: operation === 'refresh' }) };
       if (operation === 'enable') {
         const enrollment = (harnesses || []).map((h) => h.id);
         const registration = scheduler?.register ? scheduler.register({ id: 'jarvos-shared-skills', operation: 'repair' }) : { status: 'scheduler_unsupported' };
