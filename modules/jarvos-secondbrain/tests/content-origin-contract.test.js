@@ -21,6 +21,8 @@ const {
   EVIDENCE_PROJECTION_VERSION,
   projectEvidenceRecord,
   projectEvidenceBatch,
+  projectJournalEntriesFromMarkdown,
+  projectNoteMarkdown,
   readEvidenceProjection,
 } = require('../bridge/provenance/src/content-origin-evidence');
 
@@ -241,4 +243,25 @@ test('journal entry parsing treats unmarked bullets as manual human evidence and
   ], 0);
   assert.equal(duplicate.origin.content_origin, 'unknown');
   assert.equal(duplicate.origin.normalization_reason, 'duplicate_marker');
+});
+
+test('public projections expose clean journal and note evidence without marker parsing in consumers', () => {
+  const marker = renderJournalOriginMarker({
+    cleanText: 'Assistant-generated context',
+    content_origin: 'assistant',
+    content_origin_basis: 'assistant_generated',
+  });
+  const journal = projectJournalEntriesFromMarkdown(`## 💡 Ideas\n- User thought\n- Assistant-generated context\n${marker}\n`, { date: '2026-08-14' });
+  assert.equal(journal.length, 2);
+  assert.equal(journal[0].content_origin, 'human');
+  assert.equal(journal[0].human_evidence_eligible, true);
+  assert.equal(journal[1].content_origin, 'assistant');
+  assert.equal(journal[1].human_evidence_eligible, false);
+  assert.equal(journal[1].clean_text, 'Assistant-generated context');
+  assert.doesNotMatch(JSON.stringify(journal), /<!--\s*jarvos-content-origin\/v1/);
+
+  const note = projectNoteMarkdown('---\nauthor: jarvis\n---\n\nGenerated note body.', { sourcePath: 'Notes/Generated.md' });
+  assert.equal(note.content_origin, 'assistant');
+  assert.equal(note.human_evidence_eligible, false);
+  assert.equal(note.clean_text, 'Generated note body.');
 });
