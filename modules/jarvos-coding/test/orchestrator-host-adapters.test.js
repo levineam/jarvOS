@@ -211,6 +211,67 @@ test('control-plane port selects public hosts and returns canonical submission e
   assert.equal(typeof seen[0].controlPlane.assertCurrentFence, 'function');
 });
 
+test('control-plane port binds every coding issue identity to the authorized resource', async () => {
+  const seen = [];
+  const port = createCodingControlPlanePort({
+    hostAdapter: {
+      runTakeIssueToDone: async (input) => {
+        seen.push(input);
+        return completedOrchestration();
+      },
+    },
+  });
+  const context = { fence: 1, assertCurrentFence: () => true };
+
+  await assert.rejects(
+    () => port.executeFenced(codingCommand({
+      commandSpec: { operation: 'take-issue-to-done', arguments: { issueIdentifier: 'VICTIM-1' } },
+    }), context),
+    /must match command\.resource\.id/,
+  );
+  await assert.rejects(
+    () => port.executeFenced(codingCommand({
+      commandSpec: {
+        operation: 'take-issue-to-done',
+        arguments: { issueIdentifier: 'SUP-2214', issue: { identifier: 'VICTIM-2' } },
+      },
+    }), context),
+    /must match command\.resource\.id/,
+  );
+  await assert.rejects(
+    () => port.executeFenced(codingCommand({
+      checkpoint: { codeThread: { issueIdentifier: 'VICTIM-3' } },
+    }), context),
+    /must match command\.resource\.id/,
+  );
+  assert.equal(seen.length, 0);
+
+  const execution = await port.executeFenced(codingCommand({
+    commandSpec: {
+      operation: 'take-issue-to-done',
+      arguments: {
+        issueIdentifier: 'SUP-2214',
+        issue: { identifier: 'SUP-2214', title: 'Preserved metadata' },
+      },
+    },
+  }), context);
+  assert.equal(execution.status, 'completed');
+  assert.deepEqual(seen[0].issue, { identifier: 'SUP-2214', title: 'Preserved metadata' });
+});
+
+test('control-plane port rejects terminal evidence for a different issue', async () => {
+  const port = createCodingControlPlanePort({
+    hostAdapter: {
+      runTakeIssueToDone: async () => completedOrchestration({ issueIdentifier: 'VICTIM-4' }),
+    },
+  });
+
+  await assert.rejects(
+    () => port.executeFenced(codingCommand(), { fence: 1, assertCurrentFence: () => true }),
+    /submissionEvidence\.issueIdentifier must match command\.resource\.id/,
+  );
+});
+
 test('control-plane port reattaches supplied branch and checkpoint after session loss', async () => {
   let input;
   const port = createCodingControlPlanePort({
