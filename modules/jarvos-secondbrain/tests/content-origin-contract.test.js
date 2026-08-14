@@ -105,8 +105,8 @@ test('accepts the canonical note frontmatter source-receipt field', () => {
   const receipt = {
     capture_event_id: 'capture-frontmatter-1',
     actor: 'user',
-    source_digest: digestText(source),
-    content_digest: digestText(content),
+    source_digest: digest(source),
+    content_digest: digest(content),
   };
   const normalized = normalizeContentOrigin({
     content_origin: 'human',

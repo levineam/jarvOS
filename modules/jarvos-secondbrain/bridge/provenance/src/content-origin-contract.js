@@ -307,10 +307,33 @@ function humanEvidenceEligible(record = {}, options = {}) {
 
 function normalizeContentOriginWithLegacy(input = {}, options = {}) {
   if (input.content_origin || input.contentOrigin || input.content_origin_basis || input.contentOriginBasis) {
+    if (options.allowUnresolvedReceipt === true) return normalizeContentOriginForRead(input);
     return normalizeContentOrigin(input, options);
   }
   if (input.author) return resolveLegacyOrigin(input);
   return unknownRecord('missing_declaration');
+}
+
+function normalizeContentOriginForRead(input = {}) {
+  const source = isPlainObject(input) ? input : {};
+  const origin = String(source.content_origin ?? source.contentOrigin ?? '').trim().toLowerCase();
+  const basis = String(source.content_origin_basis ?? source.contentOriginBasis ?? '').trim().toLowerCase();
+  if (!CONTENT_ORIGINS.includes(origin) || !CONTENT_ORIGIN_BASES.includes(basis) || basis === 'legacy_author' || BASIS_ORIGIN[basis] !== origin) {
+    return unknownRecord('invalid_read_declaration');
+  }
+  const receipt = sourceReceipt(source);
+  if (origin === 'human') {
+    if (!receipt || receipt.actor !== 'user' || !SHA256_RE.test(String(receipt.source_digest || '')) || !SHA256_RE.test(String(receipt.content_digest || ''))) {
+      return unknownRecord('invalid_read_receipt');
+    }
+  }
+  return {
+    schema_version: CONTENT_ORIGIN_SCHEMA_VERSION,
+    content_origin: origin,
+    content_origin_basis: basis,
+    ...(receipt ? { user_source: { ...receipt } } : {}),
+    human_evidence_eligible: origin === 'human' && source.human_evidence_eligible === true,
+  };
 }
 
 module.exports = {
@@ -331,6 +354,7 @@ module.exports = {
   cleanJournalEntryText,
   parseJournalEntry,
   normalizeContentOriginWithLegacy,
+  normalizeContentOriginForRead,
   resolveLegacyOrigin,
   humanEvidenceEligible,
 };
