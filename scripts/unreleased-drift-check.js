@@ -30,14 +30,14 @@ const { spawnSync } = require('child_process');
 
 const ROOT = path.resolve(__dirname, '..');
 
-function git(args) {
-  const r = spawnSync('git', args, { cwd: ROOT, encoding: 'utf8', maxBuffer: 10 * 1024 * 1024 });
+function git(args, root = ROOT, env) {
+  const r = spawnSync('git', args, { cwd: root, encoding: 'utf8', maxBuffer: 10 * 1024 * 1024, ...(env ? { env } : {}) });
   if (r.error) throw new Error(`git ${args.join(' ')} failed: ${r.error.message}`);
   return { status: r.status, out: String(r.stdout || '').trim(), err: String(r.stderr || '').trim() };
 }
 
-function semverTags() {
-  const { out } = git(['tag', '--list']);
+function semverTags(root = ROOT, env) {
+  const { out } = git(['tag', '--list'], root, env);
   return out
     .split(/\r?\n/)
     .map((t) => t.trim())
@@ -83,28 +83,9 @@ function unreleasedSection(changelog) {
   return { present: true, nonEmpty };
 }
 
-function main() {
-  const json = process.argv.slice(2).includes('--json');
-  let pkg;
-  let changelog;
-  try {
-    pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
-    changelog = fs.readFileSync(path.join(ROOT, 'CHANGELOG.md'), 'utf8');
-  } catch (e) {
-    console.error(`[unreleased-drift] Error: ${e.message}`);
-    process.exit(2);
-  }
-
-  const version = String(pkg.version || '').trim();
-  const tags = semverTags();
+function evaluateUnreleasedDrift({ version, tags, commitsSinceTag, changelog }) {
   const latestTag = tags.length ? tags[tags.length - 1] : null;
   const latestTagVersion = latestTag ? latestTag.slice(1) : null;
-
-  let commitsSinceTag = null;
-  try {
-    if (latestTag) commitsSinceTag = parseInt(git(['rev-list', '--count', `${latestTag}..HEAD`]).out, 10);
-  } catch (_) { commitsSinceTag = null; }
-
   const verSection = changelogVersionSection(changelog, version);
   const unreleased = unreleasedSection(changelog);
 
@@ -149,6 +130,34 @@ function main() {
     }
   }
 
+  return result;
+}
+
+function checkUnreleasedDrift({ root = ROOT, env } = {}) {
+  const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
+  const changelog = fs.readFileSync(path.join(root, 'CHANGELOG.md'), 'utf8');
+  const tags = semverTags(root, env);
+  const latestTag = tags.length ? tags[tags.length - 1] : null;
+  let commitsSinceTag = null;
+  if (latestTag) {
+    const count = git(['rev-list', '--count', `${latestTag}..HEAD`], root, env);
+    if (count.status !== 0 || !/^\d+$/.test(count.out)) {
+      throw new Error(`git rev-list failed: ${count.err || 'invalid commit count'}`);
+    }
+    commitsSinceTag = Number(count.out);
+  }
+  return evaluateUnreleasedDrift({ version: String(pkg.version || '').trim(), tags, commitsSinceTag, changelog });
+}
+
+function main() {
+  const json = process.argv.slice(2).includes('--json');
+  let result;
+  try {
+    result = checkUnreleasedDrift();
+  } catch (e) {
+    console.error(`[unreleased-drift] Error: ${e.message}`);
+    process.exit(2);
+  }
   if (json) {
     console.log(JSON.stringify(result, null, 2));
   } else {
@@ -161,4 +170,4 @@ function main() {
 
 if (require.main === module) main();
 
-module.exports = { semverTags, changelogVersionSection, unreleasedSection };
+module.exports = { semverTags, changelogVersionSection, unreleasedSection, evaluateUnreleasedDrift, checkUnreleasedDrift };
