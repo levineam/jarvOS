@@ -66,7 +66,7 @@ test('buildArtifact emits generalized source-backed knowledge units for safe not
   assert.equal(unit.content_origin, 'human');
   assert.equal(unit.content_origin_basis, 'legacy_author');
   assert.equal(unit.human_evidence_eligible, true);
-  assert.equal(unit.provenance.humanEvidenceEligible, true);
+  assert.equal(unit.provenance.human_evidence_eligible, true);
   assert.equal(unit.source.type, 'note');
   assert.equal(unit.source.path, 'Notes/Secondbrain Architecture.md');
   assert.equal(unit.privacyDecision.tier, 'local-private');

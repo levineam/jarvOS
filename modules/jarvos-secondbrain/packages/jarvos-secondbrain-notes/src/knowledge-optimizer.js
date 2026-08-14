@@ -134,7 +134,6 @@ function noteProvenance(frontmatter = {}) {
     content_origin: normalized.content_origin || 'unknown',
     content_origin_basis: normalized.content_origin_basis || 'unknown',
     human_evidence_eligible: eligible,
-    humanEvidenceEligible: eligible,
     ...(normalized.user_source ? { content_origin_source: { ...normalized.user_source } } : {}),
     ...(normalized.normalization_reason ? { normalization_reason: normalized.normalization_reason } : {}),
   };
