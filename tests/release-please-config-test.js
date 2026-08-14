@@ -11,15 +11,50 @@ const ROOT = join(__dirname, '..');
 const BASELINE = 'd730524c900694c4b375875f4662848720e31778';
 const APP_TOKEN_ACTION_SHA = 'bcd2ba49218906704ab6c1aa796996da409d3eb1';
 const ACTION_SHA = '16a9c90856f42705d54a6fda1823352bdc62cf38';
+const SEMVER_PATTERN = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\.(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*))*)?(?:\+[0-9a-zA-Z-]+(?:\.[0-9a-zA-Z-]+)*)?$/;
 
 function readJson(name) {
   return JSON.parse(readFileSync(join(ROOT, name), 'utf8'));
 }
 
-test('pins the root Node Release Please manifest to v0.7.0 and the public baseline', () => {
-  const config = readJson('release-please-config.json');
+function assertReleaseVersionCoherence(manifest, packageJson) {
+  const manifestVersion = manifest['.'];
+  const packageVersion = packageJson.version;
+
+  assert.equal(typeof manifestVersion, 'string', 'Manifest release version must be a string');
+  assert.match(manifestVersion, SEMVER_PATTERN, 'Manifest release version must be valid SemVer');
+  assert.equal(typeof packageVersion, 'string', 'Package release version must be a string');
+  assert.match(packageVersion, SEMVER_PATTERN, 'Package release version must be valid SemVer');
+  assert.equal(manifestVersion, packageVersion, 'Release versions must match');
+}
+
+test('requires matching valid release versions without pinning the current version', () => {
   const manifest = readJson('.release-please-manifest.json');
-  assert.equal(manifest['.'], '0.7.0');
+  const packageJson = readJson('package.json');
+
+  assertReleaseVersionCoherence(manifest, packageJson);
+  assert.doesNotThrow(() => assertReleaseVersionCoherence(
+    { ...manifest, '.': '0.8.0' },
+    { ...packageJson, version: '0.8.0' },
+  ));
+  assert.throws(
+    () => assertReleaseVersionCoherence(
+      { ...manifest, '.': '0.8.1' },
+      { ...packageJson, version: '0.8.0' },
+    ),
+    /Release versions must match/,
+  );
+  assert.throws(
+    () => assertReleaseVersionCoherence(
+      { ...manifest, '.': 'not-semver' },
+      { ...packageJson, version: 'not-semver' },
+    ),
+    /Manifest release version must be valid SemVer/,
+  );
+});
+
+test('pins the Release Please config to the public baseline and root package identity', () => {
+  const config = readJson('release-please-config.json');
   assert.equal(config['bootstrap-sha'], BASELINE);
   assert.equal(config['last-release-sha'], BASELINE);
   assert.equal(config['include-v-in-tag'], true);
@@ -76,9 +111,7 @@ test('secret scan ignores exact GitHub secret references but retains literal can
 });
 
 test('does not force a target version before Release Please observes the public range', () => {
-  const packageJson = readJson('package.json');
   const workflow = readFileSync(join(ROOT, '.github/workflows/release-please.yml'), 'utf8');
-  assert.equal(packageJson.version, '0.7.0');
   assert.doesNotMatch(workflow, /Release-As:\s*1\.0\.0/);
   assert.doesNotMatch(workflow, /release-as:/i);
 });
