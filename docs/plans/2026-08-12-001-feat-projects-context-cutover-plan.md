@@ -8,8 +8,6 @@ product_contract_source: successor-to-2026-08-08-002
 execution: code
 ---
 
-# Projects Context Cutover - Plan
-
 ## Goal Capsule
 
 - **Objective:** Complete the Projects system as the automatic, evidence-backed context layer for jarvOS: every supported coding agent and the Active Assistant can reliably answer what Andrew worked on, is doing, and should attend to without reading raw task boards or journal project lists.
