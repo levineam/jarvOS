@@ -74,14 +74,6 @@ function firstString(...values) {
   return null;
 }
 
-function loadModule(packageName, fallbackPath) {
-  try {
-    return require(require.resolve(packageName, { paths: [process.cwd(), MODULE_ROOT] }));
-  } catch {
-    return require(fallbackPath);
-  }
-}
-
 // WS7 cross-tool unification: let every runtime (OpenClaw / Claude / Codex) share
 // ONE canonical jarvos-secondbrain pipeline, so fixes apply to notes from any tool.
 // Defaults to the bundled modules copy; set JARVOS_SECONDBRAIN_DIR to an absolute
@@ -92,7 +84,7 @@ function secondbrainDir() {
 }
 
 function loadJarvosPaths() {
-  return loadModule(
+  return loadTrustedModule(
     '@jarvos/secondbrain/bridge/config/jarvos-paths.js',
     path.join(secondbrainDir(), 'bridge', 'config', 'jarvos-paths.js'),
   );
@@ -129,11 +121,11 @@ function loadJournalLifecycle() {
 }
 
 function loadGbrain() {
-  return loadModule('@jarvos/gbrain', path.join(JARVOS_ROOT, 'modules', 'jarvos-gbrain', 'src', 'index.js'));
+  return loadTrustedModule('@jarvos/gbrain', path.join(JARVOS_ROOT, 'modules', 'jarvos-gbrain', 'src', 'index.js'));
 }
 
 function loadOntologyProviderModule() {
-  return loadModule('@jarvos/ontology/provider', path.join(JARVOS_ROOT, 'modules', 'jarvos-ontology', 'src', 'provider.js'));
+  return loadTrustedModule('@jarvos/ontology/provider', path.join(JARVOS_ROOT, 'modules', 'jarvos-ontology', 'src', 'provider.js'));
 }
 
 function readShellExports(filePath) {

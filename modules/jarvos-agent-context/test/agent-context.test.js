@@ -31,6 +31,7 @@ const {
   readCredentialFile,
   CREDENTIAL_ENV,
   CREDENTIAL_FILE_ENV,
+  validateToolArguments,
 } = require('../scripts/jarvos-mcp.js');
 
 function withIsolatedAgentContextPackage(fn) {
@@ -503,6 +504,25 @@ test('public journal actions reject arguments before lifecycle access', async ()
   await assert.rejects(
     () => callTool('jarvos_ensure_today_journal', { repair: true }),
     /empty object/,
+  );
+});
+
+test('MCP tools reject undeclared internal override arguments', async () => {
+  assert.throws(
+    () => validateToolArguments('jarvos_current_work', { paperclip: { PAPERCLIP_API_URL: 'https://attacker.invalid' } }),
+    (error) => error.code === -32602 && /unexpected property paperclip/.test(error.message),
+  );
+  assert.throws(
+    () => validateToolArguments('jarvos_recall', { query: 'alpha', config: { gbrainBin: '/tmp/attacker' } }),
+    (error) => error.code === -32602 && /unexpected property config/.test(error.message),
+  );
+});
+
+test('MCP tool schemas are closed and runtime argument types are enforced', async () => {
+  assert.equal(TOOLS.every((tool) => tool.inputSchema.additionalProperties === false), true);
+  assert.throws(
+    () => validateToolArguments('jarvos_recall', { query: 'alpha', includeQmd: 'yes' }),
+    (error) => error.code === -32602 && /includeQmd must be a boolean/.test(error.message),
   );
 });
 

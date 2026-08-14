@@ -209,6 +209,51 @@ const TOOLS = [
   },
 ];
 
+// MCP schemas are a security boundary, not just host-facing documentation.
+// Make every tool closed by default and enforce the same contract at runtime so
+// model-supplied fields cannot reach internal configuration/credential hooks.
+for (const tool of TOOLS) tool.inputSchema.additionalProperties = false;
+
+function invalidArguments(message) {
+  const error = new Error(`Invalid tool arguments: ${message}`);
+  error.code = -32602;
+  return error;
+}
+
+function validateSchemaValue(value, schema, label) {
+  if (schema.type === 'string' && typeof value !== 'string') throw invalidArguments(`${label} must be a string`);
+  if (schema.type === 'number' && (typeof value !== 'number' || !Number.isFinite(value))) {
+    throw invalidArguments(`${label} must be a finite number`);
+  }
+  if (schema.type === 'boolean' && typeof value !== 'boolean') throw invalidArguments(`${label} must be a boolean`);
+  if (schema.type === 'array') {
+    if (!Array.isArray(value)) throw invalidArguments(`${label} must be an array`);
+    if (schema.items) value.forEach((item, index) => validateSchemaValue(item, schema.items, `${label}[${index}]`));
+  }
+  if (schema.type === 'object' && (value === null || typeof value !== 'object' || Array.isArray(value))) {
+    throw invalidArguments(`${label} must be an object`);
+  }
+  if (schema.enum && !schema.enum.includes(value)) throw invalidArguments(`${label} has an unsupported value`);
+}
+
+function validateToolArguments(name, args) {
+  const tool = TOOLS.find((candidate) => candidate.name === name);
+  if (!tool) throw new Error(`Unknown tool: ${name}`);
+  const schema = tool.inputSchema;
+  validateSchemaValue(args, schema, 'arguments');
+  for (const required of schema.required || []) {
+    if (!Object.prototype.hasOwnProperty.call(args, required) || args[required] === undefined) {
+      throw invalidArguments(`${required} is required`);
+    }
+  }
+  for (const [key, value] of Object.entries(args)) {
+    const propertySchema = schema.properties?.[key];
+    if (!propertySchema) throw invalidArguments(`unexpected property ${key}`);
+    validateSchemaValue(value, propertySchema, key);
+  }
+  return args;
+}
+
 const BOOT_JARVOS_PROMPT_TEXT = [
   'Boot jarvOS for this chat.',
   '',
@@ -453,6 +498,8 @@ async function handle(message) {
 
     if (method === 'tools/call') {
       const toolArguments = normalizeToolArguments(params?.name, params?.arguments);
+      if (STRICT_EMPTY_ARGUMENT_TOOLS.has(params?.name)) requireEmptyObjectArguments(toolArguments);
+      validateToolArguments(params?.name, toolArguments);
       const result = await withToolTimeout(
         params?.name,
         () => callTool(params?.name, toolArguments),
@@ -527,5 +574,6 @@ module.exports.withToolTimeout = withToolTimeout;
 module.exports.resolveHostCredential = resolveHostCredential;
 module.exports.readCredentialFile = readCredentialFile;
 module.exports.requireEmptyObjectArguments = requireEmptyObjectArguments;
+module.exports.validateToolArguments = validateToolArguments;
 module.exports.CREDENTIAL_ENV = CREDENTIAL_ENV;
 module.exports.CREDENTIAL_FILE_ENV = CREDENTIAL_FILE_ENV;
