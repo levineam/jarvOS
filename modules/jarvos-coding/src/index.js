@@ -162,6 +162,8 @@ const workflowProvider = require('./providers/workflow-provider');
 const learningEligibility = require('./providers/learning-eligibility');
 const workRunStore = require('./features/work-run-store');
 const managedWorkflow = require('./features/workflow');
+const codexRuntime = require('./runtime/codex');
+const repositoryRegistry = require('./runtime/repository-registry');
 module.exports = {
   ...projectsActivity,
   ...stewardshipContract,
@@ -173,6 +175,8 @@ module.exports = {
   ...learningEligibility,
   ...workRunStore,
   ...managedWorkflow,
+  ...codexRuntime,
+  ...repositoryRegistry,
   ACTIVE_STATUSES,
   DEFAULT_IGNORED_PATH_SEGMENTS,
   BRANCH_SCHEMA_VERSION,
