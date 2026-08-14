@@ -77,6 +77,9 @@ function validateUserSourceReceipt(receipt, options = {}) {
   if (!SHA256_RE.test(receipt.source_digest) || !SHA256_RE.test(receipt.content_digest)) {
     return invalidReceipt('malformed_digest');
   }
+  if (options.captureEventId && receipt.capture_event_id !== options.captureEventId) {
+    return invalidReceipt('capture_event_mismatch');
+  }
 
   const content = cleanText(options.content);
   if (!content || digestText(content) !== receipt.content_digest) {
@@ -143,6 +146,17 @@ function normalizeContentOrigin(input = {}, options = {}) {
   return result;
 }
 
+function frontmatterForContentOrigin(input = {}, options = {}) {
+  const normalized = normalizeContentOrigin(input, options);
+  return {
+    content_origin_schema: normalized.schema_version,
+    content_origin: normalized.content_origin,
+    content_origin_basis: normalized.content_origin_basis,
+    ...(normalized.user_source ? { content_origin_source: { ...normalized.user_source } } : {}),
+    human_evidence_eligible: normalized.human_evidence_eligible,
+  };
+}
+
 function resolveLegacyOrigin(input = {}) {
   const author = String(input.author || '').trim().toLowerCase();
   const sourceAgent = String(input.source_agent || input.sourceAgent || '').trim().toLowerCase();
@@ -187,6 +201,7 @@ module.exports = {
   digestText,
   validateUserSourceReceipt,
   normalizeContentOrigin,
+  frontmatterForContentOrigin,
   normalizeContentOriginWithLegacy,
   resolveLegacyOrigin,
   humanEvidenceEligible,

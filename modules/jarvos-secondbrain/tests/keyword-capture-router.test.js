@@ -160,3 +160,27 @@ test('adapter abstraction works with a mock storage adapter', () => {
   assert.equal(calls[1][1], '## 📝 Notes');
   assert.match(JSON.stringify(calls[0][3]), /journal\/2026-01-02/);
 });
+
+test('routing carries explicit origin metadata and writes compatibility captures as unknown', () => {
+  const calls = [];
+  const adapter = {
+    ensureJournal() { return { existed: true }; },
+    appendLineToJournalSection(input) { return input; },
+    writeNote(input) { calls.push(input); return { written: true, title: input.title, path: `/tmp/${input.title}.md` }; },
+  };
+
+  applyRoutingPlan({ trigger: 'note', text: 'Generated copy', date: TEST_DATE }, { adapter });
+  assert.equal(calls[0].frontmatter.content_origin, 'unknown');
+  assert.equal(calls[0].frontmatter.content_origin_basis, 'unknown');
+  assert.equal(calls[0].frontmatter.human_evidence_eligible, false);
+
+  applyRoutingPlan({
+    trigger: 'note',
+    text: 'Generated copy with an explicit declaration',
+    content_origin: 'assistant',
+    content_origin_basis: 'assistant_generated',
+    date: TEST_DATE,
+  }, { adapter });
+  assert.equal(calls[1].frontmatter.content_origin, 'assistant');
+  assert.equal(calls[1].frontmatter.content_origin_basis, 'assistant_generated');
+});

@@ -117,6 +117,9 @@ test('supported AI personalities can execute the Obsidian note/journal contract'
       assert.equal(first.created, true);
       assert.equal(first.qmdStatus, 'pending-refresh');
       assert.equal(first.verification.ok, true);
+      assert.equal(first.verification.frontmatter.content_origin, 'unknown');
+      assert.equal(first.verification.frontmatter.content_origin_basis, 'unknown');
+      assert.equal(first.verification.frontmatter.human_evidence_eligible, false);
       assert.ok(first.notePath.startsWith(path.join(root, 'Notes')));
       assert.equal(first.journalPath, path.join(root, 'Journal', `${new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' })}.md`));
 
@@ -132,6 +135,33 @@ test('supported AI personalities can execute the Obsidian note/journal contract'
       assert.equal(qmd.entries[`Notes/${second.title}.md`].status, 'pending-refresh');
     });
   }
+});
+
+test('personality contract carries an explicit assistant origin without adopting deferred state', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sup-provenance-contract-'));
+  withEnv({
+    VAULT_NOTES_DIR: path.join(root, 'Notes'),
+    JOURNAL_DIR: path.join(root, 'Journal'),
+    JARVOS_KNOWLEDGE_DIR: path.join(root, '.jarvos', 'knowledge'),
+    JARVOS_ALLOW_UNSAFE_TEST_JOURNAL_WRITE: '1',
+  }, () => {
+    const mutationService = makeTestMutationService(root);
+    const result = writeNoteThroughContract({
+      personality: 'codex',
+      title: 'Assistant provenance contract',
+      content: 'Generated explanation for later retrieval.',
+      content_origin: 'assistant',
+      content_origin_basis: 'assistant_generated',
+      content_adoption: { state: 'accepted' },
+      frontmatter: { status: 'draft', type: 'reference', project: 'SUP-2229', author: 'jarvis' },
+    }, { mutationService });
+
+    assert.equal(result.verification.frontmatter.content_origin, 'assistant');
+    assert.equal(result.verification.frontmatter.content_origin_basis, 'assistant_generated');
+    assert.equal(result.verification.frontmatter.human_evidence_eligible, false);
+    assert.doesNotMatch(fs.readFileSync(result.notePath, 'utf8'), /content_adoption/);
+  });
+  fs.rmSync(root, { recursive: true, force: true });
 });
 
 test('canonical writer owns jarvos_note_id and preserves it across caller-supplied rewrites', () => {

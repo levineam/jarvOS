@@ -183,4 +183,3 @@ test('projects clean evidence without marker or source-receipt text', () => {
   assert.equal(read.ok, true);
   assert.equal(read.record.clean_text, content);
 });
-

@@ -56,14 +56,31 @@ function parseInput(input) {
   ) {
     throw new Error('lightweight Idea: captures must use node scripts/jarvos-capture.js; pass substantive:true or createDurableNote:true only for intentional durable idea notes');
   }
+  const suppliedFrontmatter = input.frontmatter || {};
+  const contentOrigin = input.content_origin ?? input.contentOrigin ?? suppliedFrontmatter.content_origin ?? 'unknown';
+  const contentOriginBasis = input.content_origin_basis
+    ?? input.contentOriginBasis
+    ?? suppliedFrontmatter.content_origin_basis
+    ?? 'unknown';
+  const contentOriginSource = input.user_source
+    ?? input.userSource
+    ?? suppliedFrontmatter.content_origin_source;
+  const humanEvidenceEligible = input.human_evidence_eligible
+    ?? suppliedFrontmatter.human_evidence_eligible
+    ?? false;
+
   return {
     personality,
     title: input.title,
     content: String(input.content),
     frontmatter: {
-      ...(input.frontmatter || {}),
+      ...suppliedFrontmatter,
       source_personality: personality,
       contract: 'obsidian-note-journal-v1',
+      content_origin: contentOrigin,
+      content_origin_basis: contentOriginBasis,
+      ...(contentOriginSource !== undefined ? { content_origin_source: contentOriginSource } : {}),
+      human_evidence_eligible: humanEvidenceEligible,
     },
   };
 }
