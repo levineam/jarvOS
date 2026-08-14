@@ -147,6 +147,15 @@ the experience until installed.
 4. Keep Paperclip as the live task authority. Obsidian Bases and Canvas are
    reading, review, and artifact surfaces only.
 
+## Shared skill catalog contracts
+
+Public portable-skill selection is moving onto explicit catalog contracts in
+`schemas/catalog.schema.json` and `schemas/local-overlay.schema.json`. The
+`composeEffectiveCatalog` helper builds one deterministic effective catalog from
+reviewed public entries plus an optional local overlay. Ambient workspace
+directories are never discovered into the catalog. Local overlay bodies stay on
+the machine; redacted status output exposes only digests and structural facts.
+
 ## Manifest
 
 `manifest.json` is the source of truth for the default bundle. Each skill has
