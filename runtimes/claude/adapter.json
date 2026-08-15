@@ -6,6 +6,7 @@
     "version": "jarvos-skill-projection-adapter/v1",
     "managedRoot": "~/.claude/skills",
     "orderedScopes": ["project", "user", "managed"],
+    "scopeRoots": { "project": "./.claude/skills", "user": "~/.claude/skills" },
     "renderer": "raw-skill-bundle",
     "verificationTier": "interactive-smoke",
     "bundleAllowlist": ["SKILL.md", "scripts/**", "assets/**", "references/**", "templates/**"],

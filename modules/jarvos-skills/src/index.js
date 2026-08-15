@@ -1102,6 +1102,7 @@ const doctor = require('./doctor');
 const controlPlaneManager = require('./control-plane-manager');
 const overlayAuthoring = require('./overlay-authoring');
 const inventoryContract = require('./inventory-contract');
+const inventory = require('./inventory');
 
 const projection = createProjectionApi({
   assertProjectionManifest,
@@ -1225,6 +1226,9 @@ module.exports = {
   repairOperator: operator.repairOperator,
   schedulerOperator: operator.schedulerOperator,
   initOperator: operator.initOperator,
+  inventoryStatusOperator: operator.inventoryStatusOperator,
+  inventoryRegisterRootsOperator: operator.inventoryRegisterRootsOperator,
+  inventoryDeclaredRootsOperator: operator.inventoryDeclaredRootsOperator,
   loadConfig: config.loadConfig,
   saveConfig: config.saveConfig,
   defaultConfig: config.defaultConfig,
@@ -1248,4 +1252,9 @@ module.exports = {
   loadExclusionOverlay: inventoryContract.loadExclusionOverlay,
   saveExclusionOverlay: inventoryContract.saveExclusionOverlay,
   inventoryDigest: inventoryContract.inventoryDigest,
+  observeInventory: inventory.observeInventory,
+  inventoryOperator: inventory.inventoryOperator,
+  declaredAdapterInventoryRoots: inventory.declaredAdapterInventoryRoots,
+  buildRegisteredRootsFromAdapters: inventory.buildRegisteredRootsFromAdapters,
+  registerAdapterRootsOperator: inventory.registerAdapterRootsOperator,
 };

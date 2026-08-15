@@ -22,6 +22,9 @@ const {
   schedulerOperator,
   initOperator,
   doctorSharedSkills,
+  inventoryStatusOperator,
+  inventoryRegisterRootsOperator,
+  inventoryDeclaredRootsOperator,
   SUPPORTED_HARNESSES,
 } = require('../src');
 
@@ -38,6 +41,9 @@ const OPERATOR_COMMANDS = new Set([
   'rename',
   'scheduler',
   'doctor-shared',
+  'inventory',
+  'inventory-register-roots',
+  'inventory-declared-roots',
 ]);
 
 function parseArgs(argv) {
@@ -64,6 +70,7 @@ function parseArgs(argv) {
     write: false,
     harnesses: null,
     controlRoot: '',
+    inspect: false,
   };
 
   if (args[0] && !args[0].startsWith('-')) {
@@ -120,6 +127,7 @@ function parseArgs(argv) {
       if (!args[i + 1]) throw new Error('--interval-minutes requires an integer');
       opts.intervalMinutes = Number(args[++i]);
     } else if (arg === '--write') opts.write = true;
+    else if (arg === '--inspect') opts.inspect = true;
     else if (arg === '--harnesses') {
       if (!args[i + 1]) throw new Error('--harnesses requires a comma-separated list');
       opts.harnesses = args[++i].split(',').map((item) => item.trim()).filter(Boolean);
@@ -153,9 +161,13 @@ Shared skill distribution (catalog/overlay):
   jarvos-skills rename --id NAME --name EFFECTIVE [--config PATH] [--json]
   jarvos-skills scheduler [--write] [--interval-minutes N] [--config PATH] [--json]
   jarvos-skills doctor-shared [--config PATH] [--json]
+  jarvos-skills inventory [--config PATH] [--inspect] [--json]
+  jarvos-skills inventory-register-roots [--config PATH] [--json]
+  jarvos-skills inventory-declared-roots [--json]
 
 Installs the default jarvOS operating-system skill bundle and operates the
 public shared-skill catalog. Private overlay bodies never enter the package.
+Inventory observes registered absolute roots only; discovery is not admission.
 Live harness activation remains an owner decision.`);
 }
 
@@ -236,6 +248,15 @@ function runOperator(opts) {
         write: opts.write,
         intervalMinutes: opts.intervalMinutes || undefined,
       });
+    case 'inventory':
+      return inventoryStatusOperator({
+        configPath,
+        inspect: opts.inspect === true,
+      });
+    case 'inventory-register-roots':
+      return inventoryRegisterRootsOperator({ configPath });
+    case 'inventory-declared-roots':
+      return inventoryDeclaredRootsOperator({});
     default:
       throw new Error(`Unknown operator command: ${opts.command}`);
   }

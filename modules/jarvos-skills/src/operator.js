@@ -30,6 +30,11 @@ const { planCatalogReconciliation, applyCatalogReconciliation } = require('./rec
 const { readReceipt } = require('./receipts');
 const { verifyHarnessBundle, resolveShadowPaths } = require('./harness-verification');
 const { planSchedulerUnits } = require('./scheduler');
+const {
+  inventoryOperator,
+  registerAdapterRootsOperator,
+  declaredAdapterInventoryRoots,
+} = require('./inventory');
 
 const MODULE_ROOT = path.resolve(__dirname, '..');
 
@@ -610,6 +615,34 @@ const _repairOperator = repairOperator;
 const _schedulerOperator = schedulerOperator;
 const _initOperator = initOperator;
 
+function inventoryStatusOperator(options = {}) {
+  return inventoryOperator({
+    configPath: options.configPath,
+    controlRoot: options.controlRoot,
+    persist: options.persist !== false,
+    inspect: options.inspect === true,
+    includeDocument: options.includeDocument === true,
+    observedAt: options.observedAt,
+  });
+}
+
+function inventoryRegisterRootsOperator(options = {}) {
+  return registerAdapterRootsOperator({
+    configPath: options.configPath,
+    trustClass: options.trustClass,
+    persist: options.persist !== false,
+  });
+}
+
+function inventoryDeclaredRootsOperator(options = {}) {
+  return {
+    ok: true,
+    roots: declaredAdapterInventoryRoots({
+      repoRoot: options.repoRoot,
+    }),
+  };
+}
+
 module.exports = {
   MODULE_ROOT,
   statusOperator,
@@ -623,4 +656,7 @@ module.exports = {
   repairOperator: (options = {}) => withMutationLease(options.configPath, 'repair', () => _repairOperator(options)),
   schedulerOperator: (options = {}) => withMutationLease(options.configPath, 'scheduler', () => _schedulerOperator(options)),
   initOperator: (options = {}) => withMutationLease(options.configPath, 'init-config', () => _initOperator(options), options.controlRoot || null),
+  inventoryStatusOperator,
+  inventoryRegisterRootsOperator,
+  inventoryDeclaredRootsOperator,
 };
