@@ -8,6 +8,7 @@ const { ensureDir, expandHome, collapseHome } = require('./config');
 const LAUNCHD_LABEL_PREFIX = 'dev.jarvos.';
 const SYSTEMD_SERVICE_SUFFIX = '.service';
 const SYSTEMD_TIMER_SUFFIX = '.timer';
+const SCHEDULED_COMMAND = 'autonomous-repair';
 
 function shellQuote(value) {
   return `'${String(value).replace(/'/g, `'\\''`)}'`;
@@ -36,7 +37,7 @@ function buildRefreshCommand({ nodeExecutable, cliScript, configPath }) {
     shellQuote(cliScript),
     // This command performs a complete inventory generation before any repair.
     // It refuses mutations for incomplete observations and never enables itself.
-    'autonomous-repair',
+    SCHEDULED_COMMAND,
     '--config',
     shellQuote(configPath),
     '--json',
@@ -264,6 +265,7 @@ function planSchedulerUnits({
     platform,
     unitName,
     intervalMinutes,
+    scheduledCommand: SCHEDULED_COMMAND,
     configPath: collapseHome(resolvedConfig),
     write,
     enabled: false,
@@ -281,6 +283,7 @@ function planSchedulerUnits({
 
 module.exports = {
   LAUNCHD_LABEL_PREFIX,
+  SCHEDULED_COMMAND,
   planSchedulerUnits,
   renderLaunchdPlist,
   renderSystemdUnits,

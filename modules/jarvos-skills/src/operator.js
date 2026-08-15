@@ -35,6 +35,7 @@ const {
   inventoryOperator,
   registerAdapterRootsOperator,
   declaredAdapterInventoryRoots,
+  loadHarnessAdapter,
 } = require('./inventory');
 const {
   loadExclusionOverlay,
@@ -47,16 +48,6 @@ const MODULE_ROOT = path.resolve(__dirname, '..');
 function readJson(filePath, fallback = null) {
   if (!fs.existsSync(filePath)) return fallback;
   return JSON.parse(fs.readFileSync(filePath, 'utf8'));
-}
-
-function loadHarnessAdapter(id) {
-  const adapterPath = path.resolve(MODULE_ROOT, '..', '..', 'runtimes', id, 'adapter.json');
-  if (!fs.existsSync(adapterPath)) return null;
-  try {
-    return JSON.parse(fs.readFileSync(adapterPath, 'utf8'));
-  } catch {
-    return null;
-  }
 }
 
 function loadEffectiveFromConfig(resolved, { includeDisabled = false, readOnly = false } = {}) {
@@ -186,13 +177,8 @@ function statusOperator(options = {}) {
 
 function readInventoryGenerationMeta(resolved) {
   try {
-    const { ensureInventoryStateLayout } = require('./inventory-contract');
     const { readAcceptedGeneration } = require('./source-store');
-    const layout = ensureInventoryStateLayout({
-      controlRoot: resolved.controlRoot,
-      inventory: resolved.config?.inventory,
-    });
-    const accepted = readAcceptedGeneration(layout.acceptedGenerationPath);
+    const accepted = readAcceptedGeneration(resolved.inventory.acceptedGenerationPath);
     if (!accepted) return { inventoryGenerationId: null, sourceIdentities: null, incompleteGeneration: false };
     const sourceIdentities = Object.fromEntries((accepted.identities || []).map((identity) => [
       identity.effectiveName || identity.logicalId,
@@ -219,7 +205,7 @@ function planOperator(options = {}) {
   requireSourceRoots(state.resolved, state.effective);
   const inventoryMeta = options.incompleteGeneration === true
     ? { inventoryGenerationId: options.inventoryGenerationId || null, sourceIdentities: null, incompleteGeneration: true }
-    : readInventoryGenerationMeta({ ...loaded.resolved, config: loaded.config });
+    : readInventoryGenerationMeta(loaded.resolved);
   const plan = planCatalogReconciliation({
     catalog: state.effective.catalog,
     catalogDigest: state.effective.digest,

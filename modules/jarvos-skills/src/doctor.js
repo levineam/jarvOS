@@ -231,7 +231,7 @@ function doctorSharedSkills(options = {}) {
     null,
   ));
   if (schedulerPlan) {
-    const usesAutonomous = schedulerPlan.artifacts?.length >= 0;
+    const usesAutonomous = schedulerPlan.scheduledCommand === 'autonomous-repair';
     checks.push(check(
       'scheduler-command',
       usesAutonomous,

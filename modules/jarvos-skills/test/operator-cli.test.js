@@ -208,6 +208,23 @@ test('repair refuses a catalog generation that was not accepted by apply', () =>
   }
 });
 
+test('read-only plan does not create absent inventory state', () => {
+  const root = temp('jarvos-plan-read-only-');
+  const control = path.join(root, 'control');
+  const configPath = path.join(control, 'config.json');
+  try {
+    initOperator({ configPath, controlRoot: control });
+    const inventoryRoot = path.join(control, 'inventory');
+    assert.equal(fs.existsSync(inventoryRoot), false);
+    const planned = planOperator({ configPath });
+    assert.equal(planned.ok, true);
+    assert.equal(planned.inventoryGenerationId, null);
+    assert.equal(fs.existsSync(inventoryRoot), false);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('scheduler plans launchd and systemd units without enabling them', () => {
   const env = seedEnv();
   try {

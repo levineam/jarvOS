@@ -55,6 +55,15 @@ function nowIso(clock = () => new Date()) {
   return clock().toISOString().replace(/\.\d{3}Z$/, '.000Z');
 }
 
+function readJsonSafe(filePath, fallback = null) {
+  try {
+    if (!fs.existsSync(filePath)) return fallback;
+    return JSON.parse(fs.readFileSync(filePath, 'utf8'));
+  } catch {
+    return fallback;
+  }
+}
+
 function loadHarnessAdapter(id, { repoRoot = REPO_ROOT } = {}) {
   const adapterPath = path.join(repoRoot, 'runtimes', id, 'adapter.json');
   if (!fs.existsSync(adapterPath)) return null;
@@ -1298,20 +1307,6 @@ function observeInventory(options = {}) {
   // U3: optional classify/auto-admit. Default off for pure observation callers.
   if (options.assess === true && layout?.sourceStorePath && layout?.acceptedGenerationPath) {
     const { assessInventory } = require('./skill-assessment');
-    const { inventoryDigest } = require('./inventory-contract');
-    const { readJson } = (() => {
-      // local helper — operator/config already use fs JSON reads elsewhere
-      return {
-        readJson(filePath, fallback = null) {
-          try {
-            if (!fs.existsSync(filePath)) return fallback;
-            return JSON.parse(fs.readFileSync(filePath, 'utf8'));
-          } catch {
-            return fallback;
-          }
-        },
-      };
-    })();
     const harnessRoots = Object.entries(config.harnesses || {}).map(([harness, value]) => ({
       harness,
       root: path.resolve(expandHome(value.root)),
@@ -1322,8 +1317,8 @@ function observeInventory(options = {}) {
       acceptedGenerationPath: layout.acceptedGenerationPath,
       acceptedAt: observedAt,
       harnessRoots,
-      publicCatalog: readJson(resolved.publicCatalogPath, null),
-      localOverlay: readJson(resolved.localOverlayPath, null),
+      publicCatalog: readJsonSafe(resolved.publicCatalogPath, null),
+      localOverlay: readJsonSafe(resolved.localOverlayPath, null),
       reviewer: options.reviewer || null,
       complete,
       autoAdmit: options.autoAdmit !== false && complete,
@@ -1342,7 +1337,7 @@ function observeInventory(options = {}) {
         if (assessment.localSourceRoot || assessment.sourceRoot) {
           config.localSourceRoot = assessment.localSourceRoot || assessment.sourceRoot;
         }
-        const existingOverlay = readJson(resolved.localOverlayPath, {
+        const existingOverlay = readJsonSafe(resolved.localOverlayPath, {
           schemaVersion: require('./catalog').OVERLAY_SCHEMA_VERSION,
           entries: [],
         }) || { schemaVersion: require('./catalog').OVERLAY_SCHEMA_VERSION, entries: [] };

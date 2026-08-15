@@ -28,6 +28,8 @@ test('doctor-shared is ready on a fresh isolated config and never enables gates'
     assert.equal(report.ok, true, JSON.stringify(report.checks.filter((c) => !c.ok), null, 2));
     assert.equal(report.scheduler.enabled, false);
     assert.ok(report.checks.some((c) => c.id === 'adapter-claude'));
+    assert.equal(report.checks.find((c) => c.id === 'scheduler-command')?.ok, true);
+    assert.match(report.checks.find((c) => c.id === 'scheduler-command')?.message || '', /autonomous-repair/);
     assert.ok(report.checks.every((c) => c.id !== 'live-gates' || c.ok));
     assert.equal(JSON.stringify(report).includes('SKILL.md content'), false);
 

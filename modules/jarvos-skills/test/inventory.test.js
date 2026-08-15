@@ -20,6 +20,7 @@ const {
   declaredAdapterInventoryRoots,
   buildRegisteredRootsFromAdapters,
   inventoryOperator,
+  loadHarnessAdapter,
 } = require('../src/inventory');
 const {
   INVENTORY_SCHEMA_VERSION,
@@ -110,6 +111,22 @@ test('adapter declarations cover all four harnesses and keep relative roots non-
   const built = buildRegisteredRootsFromAdapters({ config: defaultConfig() });
   assert.ok(built.every((root) => path.isAbsolute(require('../src/config').expandHome(root.root)) || root.root.startsWith('~/')));
   assert.ok(built.every((root) => ['codex', 'claude', 'openclaw', 'hermes'].includes(root.harness)));
+});
+
+test('adapter loader preserves custom repository-root and null-on-error semantics', () => {
+  const repoRoot = temp('jarvos-adapter-root-');
+  const adapterRoot = path.join(repoRoot, 'runtimes', 'codex');
+  fs.mkdirSync(adapterRoot, { recursive: true, mode: 0o700 });
+  const adapterPath = path.join(adapterRoot, 'adapter.json');
+  try {
+    fs.writeFileSync(adapterPath, JSON.stringify({ id: 'custom-codex' }), { mode: 0o600 });
+    assert.deepEqual(loadHarnessAdapter('codex', { repoRoot }), { id: 'custom-codex' });
+    fs.writeFileSync(adapterPath, '{invalid', { mode: 0o600 });
+    assert.equal(loadHarnessAdapter('codex', { repoRoot }), null);
+    assert.equal(loadHarnessAdapter('missing', { repoRoot }), null);
+  } finally {
+    fs.rmSync(repoRoot, { recursive: true, force: true });
+  }
 });
 
 test('bounded inventory observes bundles across four registered roots and redacts paths in status', () => {
