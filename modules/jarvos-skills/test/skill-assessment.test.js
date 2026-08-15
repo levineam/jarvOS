@@ -40,7 +40,12 @@ const {
   OVERLAY_SCHEMA_VERSION,
 } = require('../src/catalog');
 const { atomicWriteReceipt } = require('../src/receipts');
-const { inventoryAssessOperator, excludeSkillOperator } = require('../src/operator');
+const {
+  inventoryAssessOperator,
+  excludeSkillOperator,
+  planOperator,
+  applyOperator,
+} = require('../src/operator');
 
 const FIXTURE = path.join(__dirname, 'fixtures', 'catalog', 'public-fixture');
 
@@ -87,6 +92,22 @@ function copyFixture(to) {
   };
   walk(to);
   return to;
+}
+
+function manualOverlayEntry(id, tree, allowedHarnesses) {
+  return {
+    id,
+    allowedHarnesses,
+    verification: Object.fromEntries(allowedHarnesses.map((harness) => [
+      harness,
+      { tier: 'manual-fixture', remoteModelProbe: false },
+    ])),
+    bundle: {
+      root: id,
+      allowlist: tree.allowlist,
+      treeDigest: tree.treeDigest,
+    },
+  };
 }
 
 function seedConfig({ roots, controlRoot, trustClass = 'markdown-only' } = {}) {
@@ -657,6 +678,157 @@ test('stable replay keeps second healthy admit idempotent', () => {
   assert.ok(second.assessment.mutate === false || second.assessment.admissions.every((item) => item.created === false));
   const skill = second.assessment.document.skills.find((item) => item.logicalId === 'stable-skill');
   assert.equal(skill.disposition.kind, 'shared');
+});
+
+test('legacy manual overlay migrates with a new admission and replays zero-write', () => {
+  const legacyRoot = temp('jarvos-legacy-manual-');
+  const observedRoot = temp('jarvos-legacy-observed-');
+  const newsletter = writeSkill(path.join(legacyRoot, 'newsletter-generator'), {
+    name: 'newsletter-generator',
+    body: 'Draft a newsletter.\n',
+  });
+  const transcribe = writeSkill(path.join(legacyRoot, 'transcribe'), {
+    name: 'transcribe',
+    body: 'Transcribe a recording.\n',
+  });
+  const generated = writeSkill(path.join(observedRoot, 'new-generated-skill'), {
+    name: 'new-generated-skill',
+    body: 'New portable skill.\n',
+  });
+  const newsletterTree = computeBundleTree(newsletter, { allowlist: DEFAULT_ALLOWED_BUNDLE_GLOBS });
+  const transcribeTree = computeBundleTree(transcribe, { allowlist: DEFAULT_ALLOWED_BUNDLE_GLOBS });
+  const generatedTree = computeBundleTree(generated, { allowlist: DEFAULT_ALLOWED_BUNDLE_GLOBS });
+  const { configPath } = seedConfig({ roots: { codex: observedRoot }, trustClass: 'markdown-only' });
+  let loaded = loadConfig(configPath);
+  saveConfig({ ...loaded.config, localSourceRoot: legacyRoot }, configPath);
+  loaded = loadConfig(configPath);
+  const legacyOverlay = {
+    schemaVersion: OVERLAY_SCHEMA_VERSION,
+    entries: [
+      manualOverlayEntry('newsletter-generator', newsletterTree, ['codex', 'hermes']),
+      manualOverlayEntry('transcribe', transcribeTree, ['claude', 'openclaw']),
+    ],
+  };
+  atomicWriteJson(loaded.resolved.localOverlayPath, legacyOverlay);
+
+  const observedAt = '2026-08-15T18:00:00.000Z';
+  const observation = observeInventory({ configPath, observedAt });
+  const layout = ensureInventoryStateLayout({
+    controlRoot: loaded.resolved.controlRoot,
+    inventory: loaded.config.inventory,
+  });
+  // Simulate a crash after the immutable generation rename but before the
+  // accepted pointer/overlay/config transaction completes.
+  captureAcceptedGeneration({
+    sourceStorePath: layout.sourceStorePath,
+    acceptedGenerationPath: layout.acceptedGenerationPath,
+    generationId: observation.document.generationId,
+    acceptedAt: observedAt,
+    candidates: [
+      { id: 'newsletter-generator', sourcePath: newsletter, treeDigest: newsletterTree.treeDigest, allowlist: newsletterTree.allowlist },
+      { id: 'transcribe', sourcePath: transcribe, treeDigest: transcribeTree.treeDigest, allowlist: transcribeTree.allowlist },
+      { id: 'new-generated-skill', sourcePath: generated, treeDigest: generatedTree.treeDigest, allowlist: generatedTree.allowlist },
+    ],
+  });
+  fs.unlinkSync(layout.acceptedGenerationPath);
+
+  const migrated = inventoryAssessOperator({ configPath, observedAt });
+  assert.equal(migrated.admissions.some((item) => item.logicalId === 'new-generated-skill'), true);
+  loaded = loadConfig(configPath);
+  assert.equal(loaded.resolved.localSourceRoot, layout.sourceStorePath);
+  const overlay = validateLocalOverlay(JSON.parse(fs.readFileSync(loaded.resolved.localOverlayPath, 'utf8'))).overlay;
+  assert.equal(overlay.entries.length, 3);
+  for (const [id, original] of [
+    ['newsletter-generator', legacyOverlay.entries[0]],
+    ['transcribe', legacyOverlay.entries[1]],
+  ]) {
+    const entry = overlay.entries.find((item) => item.id === id);
+    assert.deepEqual(entry.allowedHarnesses, original.allowedHarnesses);
+    assert.deepEqual(entry.verification, original.verification);
+    assert.equal(entry.bundle.root, `${observation.document.generationId}/${id}`);
+    assert.equal(fs.existsSync(path.join(layout.sourceStorePath, entry.bundle.root, 'SKILL.md')), true);
+  }
+  const plan = planOperator({ configPath, readOnly: true });
+  assert.equal(plan.ok, true);
+  assert.equal(plan.pairs.some((pair) => pair.id === 'new-generated-skill'), true);
+  applyOperator({ configPath });
+
+  const durablePaths = [configPath, loaded.resolved.localOverlayPath, layout.acceptedGenerationPath];
+  const before = durablePaths.map((file) => ({ body: fs.readFileSync(file, 'utf8'), mtimeMs: fs.statSync(file).mtimeMs }));
+  const replay = inventoryAssessOperator({ configPath, observedAt });
+  assert.equal(replay.mutate, false);
+  durablePaths.forEach((file, index) => {
+    assert.equal(fs.readFileSync(file, 'utf8'), before[index].body);
+    assert.equal(fs.statSync(file).mtimeMs, before[index].mtimeMs);
+  });
+  assert.equal(planOperator({ configPath, readOnly: true }).ok, true);
+});
+
+test('legacy manual overlay migrates without a new generated admission', () => {
+  const legacyRoot = temp('jarvos-legacy-manual-only-');
+  const manualPath = writeSkill(path.join(legacyRoot, 'transcribe'), {
+    name: 'transcribe',
+    body: 'Transcribe a recording.\n',
+  });
+  const manualTree = computeBundleTree(manualPath, { allowlist: DEFAULT_ALLOWED_BUNDLE_GLOBS });
+  const { configPath } = seedConfig({ roots: {}, trustClass: 'markdown-only' });
+  let loaded = loadConfig(configPath);
+  saveConfig({ ...loaded.config, localSourceRoot: legacyRoot }, configPath);
+  loaded = loadConfig(configPath);
+  atomicWriteJson(loaded.resolved.localOverlayPath, {
+    schemaVersion: OVERLAY_SCHEMA_VERSION,
+    entries: [manualOverlayEntry('transcribe', manualTree, ['codex', 'hermes'])],
+  });
+
+  const migrated = inventoryAssessOperator({ configPath, observedAt: '2026-08-15T18:05:00.000Z' });
+  assert.deepEqual(migrated.admissions, []);
+  loaded = loadConfig(configPath);
+  assert.equal(
+    fs.realpathSync(loaded.resolved.localSourceRoot),
+    fs.realpathSync(loaded.resolved.inventory.sourceStorePath),
+  );
+  const overlay = validateLocalOverlay(JSON.parse(fs.readFileSync(loaded.resolved.localOverlayPath, 'utf8'))).overlay;
+  assert.equal(overlay.entries.length, 1);
+  assert.match(overlay.entries[0].bundle.root, /^gen-[a-f0-9]+\/transcribe$/);
+  assert.equal(
+    fs.existsSync(path.join(loaded.resolved.localSourceRoot, overlay.entries[0].bundle.root, 'SKILL.md')),
+    true,
+  );
+  assert.equal(planOperator({ configPath, readOnly: true }).ok, true);
+});
+
+test('missing or drifted legacy manual bundles fail before config or overlay mutation', () => {
+  for (const scenario of ['missing', 'drifted']) {
+    const legacyRoot = temp(`jarvos-legacy-${scenario}-`);
+    const observedRoot = temp(`jarvos-legacy-${scenario}-observed-`);
+    writeSkill(path.join(observedRoot, 'new-generated-skill'), { name: 'new-generated-skill' });
+    const manualPath = path.join(legacyRoot, 'transcribe');
+    const originalTree = computeBundleTree(
+      writeSkill(manualPath, { name: 'transcribe', body: 'original\n' }),
+      { allowlist: DEFAULT_ALLOWED_BUNDLE_GLOBS },
+    );
+    const { configPath } = seedConfig({ roots: { codex: observedRoot }, trustClass: 'markdown-only' });
+    let loaded = loadConfig(configPath);
+    saveConfig({ ...loaded.config, localSourceRoot: legacyRoot }, configPath);
+    loaded = loadConfig(configPath);
+    const overlay = {
+      schemaVersion: OVERLAY_SCHEMA_VERSION,
+      entries: [manualOverlayEntry('transcribe', originalTree, ['codex', 'hermes'])],
+    };
+    atomicWriteJson(loaded.resolved.localOverlayPath, overlay);
+    if (scenario === 'missing') fs.rmSync(manualPath, { recursive: true, force: true });
+    else fs.appendFileSync(path.join(manualPath, 'SKILL.md'), '\ndrift\n');
+    const configBefore = fs.readFileSync(configPath, 'utf8');
+    const overlayBefore = fs.readFileSync(loaded.resolved.localOverlayPath, 'utf8');
+
+    assert.throws(
+      () => inventoryAssessOperator({ configPath, observedAt: '2026-08-15T18:10:00.000Z' }),
+      scenario === 'missing' ? /missing/ : /digest/i,
+    );
+    assert.equal(fs.readFileSync(configPath, 'utf8'), configBefore);
+    assert.equal(fs.readFileSync(loaded.resolved.localOverlayPath, 'utf8'), overlayBefore);
+    assert.equal(fs.existsSync(loaded.resolved.inventory.acceptedGenerationPath), false);
+  }
 });
 
 test('egress + scripts fails closed to needs_input', () => {
