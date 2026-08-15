@@ -807,11 +807,24 @@ test('missing source retires after required consecutive absences', () => {
     autoAdmit: true,
     configPath,
   });
-  assert.equal(second.document.skills[0].disposition.reasonCode, 'source_retired');
-  assert.deepEqual(second.retirements, ['gone-skill']);
+  assert.equal(second.document.skills[0].disposition.reasonCode, 'source_absent');
+  assert.equal(second.retirements?.length || 0, 0, 'two fast scans must not bypass the retirement grace period');
   const afterSecond = readAcceptedGeneration(layout.acceptedGenerationPath);
-  assert.equal(afterSecond.generatedOverlay.entries.some((e) => e.id === 'gone-skill'), false);
-  assert.ok((afterSecond.tombstones || []).some((t) => t.logicalId === 'gone-skill'));
+  assert.ok(afterSecond.generatedOverlay.entries.some((e) => e.id === 'gone-skill'));
+
+  const third = assessInventory({
+    document: missingDoc('gen-retire-miss03', '2026-08-16T12:00:00.000Z'),
+    sourceStorePath: layout.sourceStorePath,
+    acceptedGenerationPath: layout.acceptedGenerationPath,
+    complete: true,
+    autoAdmit: true,
+    configPath,
+  });
+  assert.equal(third.document.skills[0].disposition.reasonCode, 'source_retired');
+  assert.deepEqual(third.retirements, ['gone-skill']);
+  const afterThird = readAcceptedGeneration(layout.acceptedGenerationPath);
+  assert.equal(afterThird.generatedOverlay.entries.some((e) => e.id === 'gone-skill'), false);
+  assert.ok((afterThird.tombstones || []).some((t) => t.logicalId === 'gone-skill'));
 });
 
 test('reviewer-selected divergent digest is admitted', () => {

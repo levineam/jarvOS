@@ -9,7 +9,7 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 const { DEFAULT_ALLOWED_BUNDLE_GLOBS, OVERLAY_SCHEMA_VERSION, SUPPORTED_HARNESSES, computeBundleTree, validateLocalOverlay, validatePublicCatalog, composeEffectiveCatalog, CATALOG_SCHEMA_VERSION } = require('./catalog');
-const { validateInventoryDocument, serializeOutwardStatus } = require('./inventory-contract');
+const { validateInventoryDocument, serializeOutwardStatus, normalizeRetirementPolicy } = require('./inventory-contract');
 const { captureAcceptedGeneration, readAcceptedGeneration } = require('./source-store');
 const { readReceipt, validateReceipt } = require('./receipts');
 const { loadConfig, resolveConfigPaths, atomicWriteJson, saveConfig } = require('./config');
@@ -139,12 +139,20 @@ function recordAbsence(priorAbsences, logicalId, observedAt, policy) {
   const firstMissingAt = prev?.firstMissingAt || observedAt;
   const lastMissingAt = observedAt;
   const minCount = policy?.minAbsenceObservations || 2;
+  const firstAtMs = Date.parse(firstMissingAt);
+  const lastAtMs = Date.parse(lastMissingAt);
+  const requiredMs = (policy?.effectiveAbsenceIntervalHours || policy?.minAbsenceIntervalHours || 24) * 60 * 60 * 1000;
+  // An invalid timestamp is unsafe evidence: retain rather than retire.
+  const graceElapsed = Number.isFinite(firstAtMs)
+    && Number.isFinite(lastAtMs)
+    && lastAtMs >= firstAtMs
+    && (lastAtMs - firstAtMs) >= requiredMs;
   return {
     logicalId,
     count,
     firstMissingAt,
     lastMissingAt,
-    retireReady: count >= minCount,
+    retireReady: count >= minCount && graceElapsed,
   };
 }
 
@@ -215,8 +223,10 @@ function assessInventory({
   const generatedIds = new Set((prior?.generatedOverlay?.entries || []).map((entry) => entry.id));
   const manualEntries = (manual.localOverlay?.entries || []).filter((entry) => !generatedIds.has(entry.id));
   const manualIds = new Set(manualEntries.map((entry) => entry.id));
-  const retirementPolicy = (config?.inventory?.retirement)
-    || { minAbsenceObservations: 2, minAbsenceIntervalHours: 24, minSchedulerIntervals: 2 };
+  const retirementPolicy = normalizeRetirementPolicy(
+    config?.inventory?.retirement || {},
+    { intervalMinutes: config?.scheduler?.intervalMinutes || 60 },
+  );
   const priorAbsences = (prior && typeof prior.absences === 'object' && prior.absences) || {};
   const nextAbsences = {};
   const retireIds = new Set();
