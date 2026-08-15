@@ -259,6 +259,65 @@ test('multi-harness retirement rolls back every prior pair when a later receipt 
   }
 });
 
+test('committed multi-harness retirement replays remaining backup cleanup without rollback', () => {
+  const control = temp('jarvos-retire-cleanup-control-');
+  const sourceRoot = temp('jarvos-retire-cleanup-source-');
+  const codex = temp('jarvos-retire-cleanup-codex-');
+  const hermes = temp('jarvos-retire-cleanup-hermes-');
+  try {
+    copyFixture(PUBLIC_FIXTURE, path.join(sourceRoot, 'public-fixture'));
+    const selected = buildPublicCatalogFrom(sourceRoot, ['codex', 'hermes']);
+    applyCatalogReconciliation(planCatalogReconciliation({
+      catalog: selected.catalog,
+      catalogDigest: selected.digest,
+      publicSourceRoot: sourceRoot,
+      harnesses: harnesses({ codex, hermes }),
+      controlRoot: control,
+    }));
+    const empty = composeEffectiveCatalog({
+      publicCatalog: { schemaVersion: CATALOG_SCHEMA_VERSION, entries: [] },
+      localOverlay: { schemaVersion: OVERLAY_SCHEMA_VERSION, entries: [] },
+    });
+    const plan = planCatalogReconciliation({
+      catalog: empty.catalog,
+      catalogDigest: empty.digest,
+      publicSourceRoot: sourceRoot,
+      harnesses: harnesses({ codex, hermes }),
+      controlRoot: control,
+    });
+    let cleanups = 0;
+    assert.throws(() => applyCatalogReconciliation(plan, {
+      io: {
+        cleanupRetirementBackup(backup) {
+          cleanups += 1;
+          if (cleanups === 2) throw new Error('fixture later cleanup failed');
+          fs.rmSync(backup, { recursive: true, force: true });
+        },
+      },
+    }), /later cleanup failed/);
+
+    const journal = JSON.parse(fs.readFileSync(plan.journalFile, 'utf8'));
+    assert.equal(journal.phase, 'retirements_committed');
+    assert.equal(journal.retirements.length, 2);
+    assert.equal(fs.existsSync(journal.retirements[0].backup), false);
+    assert.equal(fs.existsSync(journal.retirements[1].backup), true);
+    for (const root of [codex, hermes]) {
+      assert.equal(fs.existsSync(path.join(root, 'public-fixture')), false);
+      assert.equal(validateReceipt(readReceipt(root, 'public-fixture')), null);
+    }
+
+    recoverJournal({ journalFile: plan.journalFile });
+    assert.equal(fs.existsSync(plan.journalFile), false);
+    assert.equal(fs.existsSync(journal.retirements[1].backup), false);
+    for (const root of [codex, hermes]) {
+      assert.equal(fs.existsSync(path.join(root, 'public-fixture')), false);
+      assert.equal(validateReceipt(readReceipt(root, 'public-fixture')), null);
+    }
+  } finally {
+    for (const dir of [control, sourceRoot, codex, hermes]) fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('multiple skills across four harnesses install once and stay clean on second reconcile', () => {
   const control = temp('jarvos-recon-control-');
   const sourceRoot = temp('jarvos-recon-source-');

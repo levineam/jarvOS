@@ -790,6 +790,8 @@ function applyCatalogReconciliation(plan, options = {}) {
     writeReceipt: options.io?.writeReceipt || atomicWriteReceipt,
     removeReceipt: options.io?.removeReceipt || removeReceipt,
     rollbackRenameSync: options.io?.rollbackRenameSync || fs.renameSync,
+    cleanupRetirementBackup: options.io?.cleanupRetirementBackup
+      || ((backup) => fs.rmSync(backup, { recursive: true, force: true })),
   };
 
   const hasActionablePairs = plan.pairs.some((pair) => (
@@ -816,6 +818,7 @@ function applyCatalogReconciliation(plan, options = {}) {
 
   const applied = [];
   const retirements = [];
+  let retirementsCommitted = false;
   try {
     for (const pair of plan.pairs) {
       if (pair.action === 'preserve' || pair.status === 'clean') {
@@ -1046,10 +1049,13 @@ function applyCatalogReconciliation(plan, options = {}) {
         aliasRevision,
         retirements,
       });
+      // Past this durable boundary, target and receipt removal is committed.
+      // Backup cleanup is replayable housekeeping and must never roll back.
+      retirementsCommitted = true;
     }
     for (const retirement of retirements) {
       if (retirement.backup && fs.existsSync(retirement.backup)) {
-        fs.rmSync(retirement.backup, { recursive: true, force: true });
+        io.cleanupRetirementBackup(retirement.backup);
       }
     }
     clearJournal(plan.journalFile);
@@ -1060,6 +1066,11 @@ function applyCatalogReconciliation(plan, options = {}) {
       notices: plan.notices || [],
     };
   } catch (error) {
+    if (retirementsCommitted) {
+      // The committed journal already contains every cleanup pointer. Leave it
+      // intact so the next leased recovery deletes only remaining backups.
+      throw error;
+    }
     const retiredRollbackOk = rollbackRetirements(retirements, io);
     if (!retiredRollbackOk) {
       error.jarvosRecovery = {
