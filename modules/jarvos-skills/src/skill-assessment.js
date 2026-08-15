@@ -176,6 +176,114 @@ function loadManualInputs({ publicCatalog, localOverlay }) {
   return { publicCatalog: publicResult.catalog, localOverlay: localResult.overlay };
 }
 
+function attestOwnedBundle(root, relativeRoot, entry, label, { ownerOnly = false } = {}) {
+  const rootStat = fs.lstatSync(root);
+  if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) throw new Error(`${label} source root is unsafe`);
+  if (typeof process.getuid === 'function' && rootStat.uid !== process.getuid()) {
+    throw new Error(`${label} source root has unsafe ownership`);
+  }
+  if ((rootStat.mode & (ownerOnly ? 0o077 : 0o022)) !== 0) {
+    throw new Error(`${label} source root has unsafe permissions`);
+  }
+  const candidate = path.resolve(root, ...relativeRoot.split('/'));
+  const relative = path.relative(root, candidate);
+  if (!relative || relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+    throw new Error(`${label} bundle escapes its source root: ${entry.id}`);
+  }
+  let current = root;
+  for (const part of relative.split(path.sep)) {
+    current = path.join(current, part);
+    if (!fs.existsSync(current)) throw new Error(`${label} bundle is missing: ${entry.id}`);
+    const stat = fs.lstatSync(current);
+    if (stat.isSymbolicLink()) throw new Error(`${label} bundle contains a symbolic link: ${entry.id}`);
+    if (typeof process.getuid === 'function' && stat.uid !== process.getuid()) {
+      throw new Error(`${label} bundle has unsafe ownership: ${entry.id}`);
+    }
+    if ((stat.mode & (ownerOnly ? 0o077 : 0o022)) !== 0) {
+      throw new Error(`${label} bundle has unsafe permissions: ${entry.id}`);
+    }
+  }
+  const tree = computeBundleTree(candidate, {
+    allowlist: entry.bundle.allowlist,
+    expectedDigest: entry.bundle.treeDigest,
+  });
+  if (ownerOnly) {
+    for (const treeEntry of tree.entries) {
+      const stat = fs.lstatSync(path.join(tree.root, ...treeEntry.path.split('/')));
+      if ((stat.mode & 0o077) !== 0) throw new Error(`${label} bundle file is not owner-only: ${entry.id}`);
+    }
+  }
+  return tree;
+}
+
+function legacyManualMigration({ manualEntries, oldLocalSourceRoot, sourceStorePath, prior, currentGenerationId }) {
+  if (!oldLocalSourceRoot
+    || path.resolve(oldLocalSourceRoot) === path.resolve(sourceStorePath)
+    || manualEntries.length === 0) {
+    return { required: false, candidates: [] };
+  }
+  const capturedEntries = new Map((prior?.entries || []).map((entry) => [entry.id, entry]));
+  const sourceStoreRoot = path.resolve(sourceStorePath);
+  const generationById = new Map();
+  const uncapturedEntries = [];
+  const candidates = [];
+  for (const entry of manualEntries) {
+    const capturedEntry = capturedEntries.get(entry.id);
+    const capturedRelativeRoot = prior?.generationId
+      ? path.posix.join(prior.generationId, entry.id)
+      : null;
+    if (capturedEntry
+      && capturedRelativeRoot
+      && capturedEntry.treeDigest === entry.bundle.treeDigest
+      && JSON.stringify(capturedEntry.allowlist) === JSON.stringify(entry.bundle.allowlist)) {
+      attestOwnedBundle(sourceStoreRoot, capturedRelativeRoot, entry, 'captured manual', { ownerOnly: true });
+      generationById.set(entry.id, prior.generationId);
+      continue;
+    }
+    const orphanRelativeRoot = path.posix.join(currentGenerationId, entry.id);
+    const orphanPath = path.resolve(sourceStoreRoot, ...orphanRelativeRoot.split('/'));
+    if (fs.existsSync(orphanPath)) {
+      const tree = attestOwnedBundle(sourceStoreRoot, orphanRelativeRoot, entry, 'orphaned manual', { ownerOnly: true });
+      generationById.set(entry.id, currentGenerationId);
+      candidates.push({
+        id: entry.id,
+        sourcePath: tree.root,
+        treeDigest: tree.treeDigest,
+        allowlist: tree.allowlist,
+        manualEntry: entry,
+      });
+      continue;
+    }
+    uncapturedEntries.push(entry);
+  }
+  if (uncapturedEntries.length === 0) return { required: true, candidates, generationById };
+
+  const root = path.resolve(oldLocalSourceRoot);
+  if (!fs.existsSync(root)) throw new Error('legacy manual localSourceRoot does not exist');
+  const rootStat = fs.lstatSync(root);
+  if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) {
+    throw new Error('legacy manual localSourceRoot must be a real directory');
+  }
+  if (typeof process.getuid === 'function' && rootStat.uid !== process.getuid()) {
+    throw new Error('legacy manual localSourceRoot must be owned by the current user');
+  }
+  if ((rootStat.mode & 0o022) !== 0) {
+    throw new Error('legacy manual localSourceRoot has unsafe permissions');
+  }
+  const realRoot = fs.realpathSync(root);
+  for (const entry of uncapturedEntries) {
+    const tree = attestOwnedBundle(realRoot, entry.bundle.root, entry, 'legacy manual');
+    candidates.push({
+      id: entry.id,
+      sourcePath: tree.root,
+      treeDigest: tree.treeDigest,
+      allowlist: tree.allowlist,
+      manualEntry: entry,
+    });
+  }
+  return { required: true, candidates, generationById };
+}
+
 function reviewDivergence({ skill, variants, reviewer }) {
   if (variants.size <= 1) return { status: 'single' };
   if (typeof reviewer !== 'function') return { status: 'needs_input', reasonCode: 'semantic_collision' };
@@ -210,6 +318,9 @@ function assessInventory({
   complete = true,
   autoAdmit = true,
   persist = true,
+  captureGeneration = captureAcceptedGeneration,
+  writeJson = atomicWriteJson,
+  writeConfig = saveConfig,
   config: suppliedConfig = null,
   resolved: suppliedResolved = null,
 } = {}) {
@@ -235,6 +346,15 @@ function assessInventory({
   const generatedIds = new Set((prior?.generatedOverlay?.entries || []).map((entry) => entry.id));
   const manualEntries = (manual.localOverlay?.entries || []).filter((entry) => !generatedIds.has(entry.id));
   const manualIds = new Set(manualEntries.map((entry) => entry.id));
+  const manualMigration = manual.error
+    ? { required: false, candidates: [] }
+    : legacyManualMigration({
+      manualEntries,
+      oldLocalSourceRoot: resolved?.localSourceRoot || null,
+      sourceStorePath,
+      prior,
+      currentGenerationId: validated.document.generationId,
+    });
   const retirementPolicy = normalizeRetirementPolicy(
     config?.inventory?.retirement || {},
     { intervalMinutes: config?.scheduler?.intervalMinutes || 60 },
@@ -440,7 +560,7 @@ function assessInventory({
     : [];
 
   const shouldMutate = complete && autoAdmit !== false && persist !== false
-    && (candidates.length > 0 || retireIds.size > 0);
+    && (candidates.length > 0 || retireIds.size > 0 || manualMigration.required);
 
   if (!shouldMutate) {
     // Still persist absence counters on complete generations so retirement can advance.
@@ -455,7 +575,7 @@ function assessInventory({
           delete absenceOnly.absences[logicalId];
         }
       }
-      atomicWriteJson(acceptedGenerationPath, absenceOnly);
+      writeJson(acceptedGenerationPath, absenceOnly);
     }
     const status = serializeOutwardStatus(nextDocument);
     return {
@@ -475,12 +595,13 @@ function assessInventory({
   }
 
   // Capture only skills that need a new immutable generation (new or updated digest).
-  const captureCandidates = candidates.filter((candidate) => {
+  const generatedCaptureCandidates = candidates.filter((candidate) => {
     const priorMeta = priorEntryFor(prior, candidate.logicalId);
     return !priorMeta || priorMeta.treeDigest !== candidate.treeDigest;
   });
+  const captureCandidates = [...generatedCaptureCandidates, ...manualMigration.candidates];
   const captured = captureCandidates.length > 0
-    ? captureAcceptedGeneration({
+    ? captureGeneration({
       sourceStorePath,
       acceptedGenerationPath,
       generationId: validated.document.generationId,
@@ -490,7 +611,7 @@ function assessInventory({
     : { changed: false, generation: prior, sourceRoot: prior?.sourceRoot || null };
 
   const capturedById = new Map(
-    (captureCandidates || []).map((candidate) => [candidate.id, candidate]),
+    generatedCaptureCandidates.map((candidate) => [candidate.id, candidate]),
   );
   const retainedPriorEntries = (prior?.generatedOverlay?.entries || [])
     .filter((entry) => {
@@ -521,7 +642,28 @@ function assessInventory({
     schemaVersion: OVERLAY_SCHEMA_VERSION,
     entries: [...retainedPriorEntries, ...newEntries].sort((left, right) => left.id.localeCompare(right.id)),
   };
-  const compositeOverlay = { schemaVersion: OVERLAY_SCHEMA_VERSION, entries: [...manualEntries, ...generatedOverlay.entries] };
+  const capturedGenerationId = (captured.changed || captured.recoveryNeeded)
+    ? validated.document.generationId
+    : (prior?.generationId || validated.document.generationId);
+  const migratedManualById = new Map(manualMigration.candidates.map((candidate) => [candidate.id, candidate]));
+  const migratedManualEntries = manualEntries.map((entry) => (
+    migratedManualById.has(entry.id) || manualMigration.generationById?.has(entry.id)
+      ? {
+        ...entry,
+        bundle: {
+          ...entry.bundle,
+          root: path.posix.join(
+            manualMigration.generationById?.get(entry.id) || capturedGenerationId,
+            entry.id,
+          ),
+        },
+      }
+      : entry
+  ));
+  const compositeOverlay = {
+    schemaVersion: OVERLAY_SCHEMA_VERSION,
+    entries: [...migratedManualEntries, ...generatedOverlay.entries],
+  };
   const effective = composeEffectiveCatalog({ publicCatalog: manual.publicCatalog, localOverlay: compositeOverlay });
   if (effective.status !== 'valid') throw new Error(effective.reason || 'generated catalog is invalid');
 
@@ -546,11 +688,11 @@ function assessInventory({
 
   const acceptedGeneration = {
     schemaVersion: 'jarvos.skill-source-generation/v1',
-    generationId: (captured.changed || captured.recoveryNeeded) ? validated.document.generationId : (prior?.generationId || validated.document.generationId),
+    generationId: capturedGenerationId,
     acceptedAt: acceptedAt || validated.document.observedAt,
     sourceRoot: captured.sourceRoot || prior?.sourceRoot || null,
     localSourceRoot: sourceStorePath,
-    entries: generatedOverlay.entries.map((entry) => ({
+    entries: compositeOverlay.entries.map((entry) => ({
       id: entry.id,
       treeDigest: entry.bundle.treeDigest,
       allowlist: entry.bundle.allowlist,
@@ -570,12 +712,15 @@ function assessInventory({
 
   // Always rewrite the accepted pointer when we mutate overlay/absences/retirements,
   // even if capture was a no-op (pure retirement).
+  // Publish the fully attested recovery pointer before the overlay. If any
+  // later write fails, replay can finish from immutable captured sources even
+  // when the legacy source has disappeared.
+  writeJson(acceptedGenerationPath, acceptedGeneration);
   if (persist !== false && resolved?.localOverlayPath) {
-    atomicWriteJson(resolved.localOverlayPath, compositeOverlay);
+    writeJson(resolved.localOverlayPath, compositeOverlay);
   }
-  atomicWriteJson(acceptedGenerationPath, acceptedGeneration);
   if (persist !== false && config && resolved && config.localSourceRoot !== sourceStorePath) {
-    saveConfig({ ...config, localSourceRoot: sourceStorePath }, configPath);
+    writeConfig({ ...config, localSourceRoot: sourceStorePath }, configPath);
   }
   const admittedDocument = {
     ...nextDocument,
@@ -597,7 +742,7 @@ function assessInventory({
     admissions: candidates.map((candidate) => ({
       logicalId: candidate.logicalId,
       treeDigest: candidate.treeDigest,
-      created: captureCandidates.some((item) => item.logicalId === candidate.logicalId),
+      created: generatedCaptureCandidates.some((item) => item.logicalId === candidate.logicalId),
       mode: candidate.mode || 'admit',
     })),
     retirements: [...retireIds],

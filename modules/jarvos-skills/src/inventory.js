@@ -1323,6 +1323,7 @@ function observeInventory(options = {}) {
       root: path.resolve(expandHome(value.root)),
     }));
     assessment = assessInventory({
+      configPath: options.configPath,
       config,
       resolved,
       document: validated.document,
