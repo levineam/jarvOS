@@ -3,6 +3,14 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { computeBundleTree } = require('./catalog');
+const { expandHome } = require('./config');
+
+function deriveShadowPaths({ harness = {}, adapter = null, effectiveName } = {}) {
+  const scopes = adapter?.skillProjection?.orderedScopes;
+  if (!Array.isArray(scopes) || !effectiveName) return [];
+  const configured = harness.scopeRoots || {};
+  return scopes.slice(0, -1).map((scope) => configured[scope] ? path.join(path.resolve(expandHome(configured[scope])), effectiveName) : null).filter(Boolean);
+}
 
 /**
  * Report the strongest proof an adapter can safely produce.
@@ -62,4 +70,4 @@ function verifyHarnessBundle({
   }
 }
 
-module.exports = { verifyHarnessBundle };
+module.exports = { verifyHarnessBundle, deriveShadowPaths };

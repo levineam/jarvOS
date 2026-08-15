@@ -70,6 +70,8 @@ if (args.has('--matrix') && args.has('--live')) {
     const harnesses = ['codex', 'claude', 'openclaw', 'hermes'].map((id) => ({
       id,
       root: path.join(temp, id),
+      scopeRoots: id === 'codex' ? { project: path.join(temp, 'codex-project'), user: path.join(temp, 'codex-user') }
+        : id === 'openclaw' ? { workspace: path.join(temp, 'openclaw-workspace'), user: path.join(temp, 'openclaw-user') } : {},
       adapter: JSON.parse(fs.readFileSync(path.join(repoRoot, 'runtimes', id, 'adapter.json'), 'utf8')),
     }));
     const plan = skills.planCatalogReconciliation({
@@ -79,6 +81,14 @@ if (args.has('--matrix') && args.has('--live')) {
       harnesses,
     });
     const applied = skills.applyCatalogReconciliation(plan);
+    const shadowChecks = harnesses.filter((harness) => ['codex', 'openclaw'].includes(harness.id)).map((harness) => {
+      const shadowPaths = skills.deriveShadowPaths({ harness, adapter: harness.adapter, effectiveName: 'public-fixture' });
+      const shadowRoot = shadowPaths[0];
+      if (!shadowRoot) throw new Error(`missing declared higher-precedence scope for ${harness.id}`);
+      fs.mkdirSync(shadowRoot, { recursive: true, mode: 0o700 }); fs.writeFileSync(path.join(shadowRoot, 'SKILL.md'), 'unmanaged shadow\n', { mode: 0o600 });
+      const proof = skills.verifyHarnessBundle({ adapter: harness.adapter, targetPath: path.join(harness.root, 'public-fixture'), expectedName: 'public-fixture', expectedTreeDigest: fixtureTree.treeDigest, shadowPaths });
+      fs.rmSync(path.dirname(shadowRoot), { recursive: true, force: true }); return { harness: harness.id, status: proof.status, reason: proof.reason };
+    });
     const pairs = harnesses.map((harness) => {
       const targetPath = path.join(harness.root, 'public-fixture');
       const proof = skills.verifyHarnessBundle({
@@ -86,6 +96,7 @@ if (args.has('--matrix') && args.has('--live')) {
         targetPath,
         expectedName: 'public-fixture',
         expectedTreeDigest: fixtureTree.treeDigest,
+        shadowPaths: skills.deriveShadowPaths({ harness, adapter: harness.adapter, effectiveName: 'public-fixture' }),
       });
       // Claude's declared interactive proof cannot be fabricated in CI. Its
       // receipt-owned containment is the strongest truthful isolated result.
@@ -93,9 +104,9 @@ if (args.has('--matrix') && args.has('--live')) {
       return { harness: harness.id, installed: fs.existsSync(path.join(targetPath, 'SKILL.md')), verification: proof.status, satisfied };
     });
     const second = skills.planCatalogReconciliation({ catalog: effective.catalog, publicSourceRoot: fixtureRoot, controlRoot: path.join(temp, 'control'), harnesses });
-    const result = { mode: 'isolated', catalogDigest: effective.digest, applied: applied.applied.filter((item) => item.applied).length, pairs, secondRunNoop: second.pairs.every((pair) => pair.status === 'clean') };
+    const result = { mode: 'isolated', catalogDigest: effective.digest, applied: applied.applied.filter((item) => item.applied).length, pairs, shadowChecks, secondRunNoop: second.pairs.every((pair) => pair.status === 'clean') };
     process.stdout.write(`${JSON.stringify(result)}\n`);
-    if (!result.secondRunNoop || pairs.some((pair) => !pair.installed || !pair.satisfied)) process.exitCode = 1;
+    if (!result.secondRunNoop || pairs.some((pair) => !pair.installed || !pair.satisfied) || shadowChecks.some((check) => check.reason !== 'higher_precedence_shadow')) process.exitCode = 1;
   } finally {
     fs.rmSync(temp, { recursive: true, force: true });
   }

@@ -52,6 +52,30 @@ test('preflight CLI accepts an explicit control root, keeping populated default 
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
+test('init-config refuses a concurrent owner lease in its explicit control root', () => {
+  const root = temp('jarvos-init-lock-'); const configPath = path.join(root, 'config.json'); const controlRoot = path.join(root, 'isolated-control');
+  fs.mkdirSync(controlRoot, { recursive: true, mode: 0o700 });
+  fs.writeFileSync(path.join(controlRoot, '.shared-skill-cli.lock'), 'held\n', { mode: 0o600 });
+  try {
+    const result = spawnSync(process.execPath, [CLI, 'init-config', '--config', configPath, '--control-root', controlRoot, '--json'], { encoding: 'utf8' });
+    assert.notEqual(result.status, 0);
+    assert.match(result.stdout, /already running/);
+    assert.equal(fs.existsSync(configPath), false);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test('init-config leases beside a custom config path when --control-root is omitted', () => {
+  const root = temp('jarvos-init-fallback-lock-'); const configPath = path.join(root, 'nested', 'config.json'); const controlRoot = path.dirname(configPath);
+  fs.mkdirSync(controlRoot, { recursive: true, mode: 0o700 });
+  fs.writeFileSync(path.join(controlRoot, '.shared-skill-cli.lock'), 'held\n', { mode: 0o600 });
+  try {
+    const result = spawnSync(process.execPath, [CLI, 'init-config', '--config', configPath, '--json'], { encoding: 'utf8' });
+    assert.notEqual(result.status, 0);
+    assert.match(result.stdout, /already running/);
+    assert.equal(fs.existsSync(configPath), false);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
 test('live-preflight checklist stays non-activating and reports owner-pending steps', () => {
   const result = spawnSync(process.execPath, [PREFLIGHT, '--json'], {
     encoding: 'utf8',

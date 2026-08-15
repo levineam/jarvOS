@@ -6,6 +6,7 @@
     "version": "jarvos-skill-projection-adapter/v1",
     "managedRoot": "~/.codex/skills",
     "orderedScopes": ["project", "user", "managed"],
+    "scopeRoots": { "project": "./.codex/skills", "user": "~/.codex/skills" },
     "renderer": "raw-skill-bundle",
     "verificationTier": "exact-path",
     "bundleAllowlist": ["SKILL.md", "scripts/**", "assets/**", "references/**", "templates/**"],

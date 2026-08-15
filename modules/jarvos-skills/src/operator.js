@@ -27,7 +27,7 @@ const {
   defaultConfig,
 } = require('./config');
 const { planCatalogReconciliation, applyCatalogReconciliation } = require('./reconciliation');
-const { verifyHarnessBundle } = require('./harness-verification');
+const { verifyHarnessBundle, deriveShadowPaths } = require('./harness-verification');
 const { planSchedulerUnits } = require('./scheduler');
 
 const MODULE_ROOT = path.resolve(__dirname, '..');
@@ -129,6 +129,7 @@ function statusOperator(options = {}) {
         expectedTreeDigest: pair.source?.treeDigest || pair.treeDigest || null,
         allowlist: pair.allowlist,
         remoteModelProbe: false,
+        shadowPaths: deriveShadowPaths({ harness: state.harnesses.find((item) => item.id === pair.harness), adapter, effectiveName: pair.effectiveName }),
       });
     }
     return {
@@ -512,9 +513,17 @@ function initOperator(options = {}) {
   };
 }
 
-function withMutationLease(configPath, operation, fn) {
-  const loaded = loadConfig(configPath);
-  const root = loaded.resolved.controlRoot;
+function withMutationLease(configPath, operation, fn, rootOverride = null) {
+  // init-config has no persisted config to read yet; its explicit control
+  // root is authoritative and must be leased before any state is touched.
+  const initRoot = configPath
+    ? path.dirname(path.resolve(expandHome(configPath)))
+    : defaultConfig().controlRoot;
+  const root = rootOverride
+    ? path.resolve(expandHome(rootOverride))
+    : operation === 'init-config'
+      ? path.resolve(expandHome(initRoot))
+      : loadConfig(configPath).resolved.controlRoot;
   ensureDir(root, 'control root');
   const lease = path.join(root, '.shared-skill-cli.lock');
   let fd;
@@ -530,6 +539,7 @@ const _disableHarness = disableHarness;
 const _renameAlias = renameAlias;
 const _repairOperator = repairOperator;
 const _schedulerOperator = schedulerOperator;
+const _initOperator = initOperator;
 
 module.exports = {
   MODULE_ROOT,
@@ -542,8 +552,6 @@ module.exports = {
   disableHarness: (options = {}) => withMutationLease(options.configPath, 'disable', () => _disableHarness(options)),
   renameAlias: (options = {}) => withMutationLease(options.configPath, 'rename', () => _renameAlias(options)),
   repairOperator: (options = {}) => withMutationLease(options.configPath, 'repair', () => _repairOperator(options)),
-  schedulerOperator: (options = {}) => options.write === true
-    ? withMutationLease(options.configPath, 'scheduler', () => _schedulerOperator(options))
-    : _schedulerOperator(options),
-  initOperator,
+  schedulerOperator: (options = {}) => withMutationLease(options.configPath, 'scheduler', () => _schedulerOperator(options)),
+  initOperator: (options = {}) => withMutationLease(options.configPath, 'init-config', () => _initOperator(options), options.controlRoot || null),
 };

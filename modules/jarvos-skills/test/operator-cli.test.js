@@ -201,3 +201,27 @@ test('direct CLI mutation refuses a concurrent owner lease', () => {
     assert.notEqual(result.status, 0); assert.match(result.stdout, /already running/);
   } finally { fs.rmSync(env.home, { recursive: true, force: true }); fs.rmSync(env.sourceRoot, { recursive: true, force: true }); }
 });
+
+test('scheduler planning refuses a concurrent owner lease even without --write', () => {
+  const env = seedEnv();
+  try {
+    const lease = path.join(env.control, '.shared-skill-cli.lock'); fs.writeFileSync(lease, 'held', { mode: 0o600 });
+    const result = spawnSync(process.execPath, [CLI, 'scheduler', '--config', env.configPath, '--json'], { encoding: 'utf8' });
+    assert.notEqual(result.status, 0); assert.match(result.stdout, /already running/);
+  } finally { fs.rmSync(env.home, { recursive: true, force: true }); fs.rmSync(env.sourceRoot, { recursive: true, force: true }); }
+});
+
+test('status marks a managed target unverifiable when a declared higher-precedence shadow exists', () => {
+  const env = seedEnv();
+  try {
+    applyOperator({ configPath: env.configPath });
+    const config = JSON.parse(fs.readFileSync(env.configPath, 'utf8'));
+    const shadowRoot = path.join(env.home, 'codex-project');
+    config.harnesses.codex.scopeRoots = { project: shadowRoot };
+    fs.writeFileSync(env.configPath, JSON.stringify(config));
+    const shadow = path.join(shadowRoot, 'public-fixture'); fs.mkdirSync(shadow, { recursive: true, mode: 0o700 }); fs.writeFileSync(path.join(shadow, 'SKILL.md'), 'shadow\n', { mode: 0o600 });
+    const status = statusOperator({ configPath: env.configPath });
+    const codex = status.pairs.find((pair) => pair.harness === 'codex');
+    assert.equal(codex.verification.reason, 'higher_precedence_shadow');
+  } finally { fs.rmSync(env.home, { recursive: true, force: true }); fs.rmSync(env.sourceRoot, { recursive: true, force: true }); }
+});

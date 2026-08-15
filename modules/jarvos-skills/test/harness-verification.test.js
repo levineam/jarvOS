@@ -5,7 +5,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
-const { computeBundleTree, verifyHarnessBundle } = require('../src');
+const { computeBundleTree, verifyHarnessBundle, deriveShadowPaths } = require('../src');
 
 test('exact-path proof binds name and bundle digest while interactive proof remains pending', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-verify-'));
@@ -21,5 +21,6 @@ test('exact-path proof binds name and bundle digest while interactive proof rema
     assert.equal(verifyHarnessBundle({ adapter: { skillProjection: { verificationTier: 'exact-path' } }, targetPath: bundle, expectedName: 'fixture', expectedTreeDigest: tree.treeDigest, shadowPaths: [shadow] }).reason, 'higher_precedence_shadow');
     assert.equal(verifyHarnessBundle({ adapter: { skillProjection: { verificationTier: 'interactive-smoke' } }, targetPath: bundle, expectedName: 'fixture', expectedTreeDigest: tree.treeDigest }).reason, 'remote_probe_not_authorized');
     assert.equal(verifyHarnessBundle({ adapter: { skillProjection: { verificationTier: 'interactive-smoke' } }, remoteModelProbe: true }).reason, 'interactive_probe_required');
+    assert.equal(deriveShadowPaths({ harness: { scopeRoots: { project: '~/.codex/project-skills' } }, adapter: { skillProjection: { orderedScopes: ['project', 'managed'] } }, effectiveName: 'fixture' })[0], path.join(os.homedir(), '.codex/project-skills', 'fixture'));
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });

@@ -93,6 +93,9 @@ function normalizeConfig(raw) {
     harnesses[id] = {
       enabled: source.enabled,
       root: collapseHome(expandHome(source.root)),
+      scopeRoots: source.scopeRoots && typeof source.scopeRoots === 'object'
+        ? Object.fromEntries(Object.entries(source.scopeRoots).map(([scope, value]) => [scope, collapseHome(expandHome(value))]))
+        : {},
     };
   }
   const scheduler = {
@@ -145,11 +148,13 @@ function resolveConfigPaths(config) {
         id,
         root: path.resolve(expandHome(normalized.harnesses[id].root)),
         enabled: true,
+        scopeRoots: normalized.harnesses[id].scopeRoots,
       })),
     allHarnesses: SUPPORTED_HARNESSES.map((id) => ({
       id,
       root: path.resolve(expandHome(normalized.harnesses[id].root)),
       enabled: normalized.harnesses[id].enabled,
+      scopeRoots: normalized.harnesses[id].scopeRoots,
     })),
   };
 }
