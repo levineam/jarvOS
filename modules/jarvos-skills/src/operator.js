@@ -30,11 +30,17 @@ const { planCatalogReconciliation, applyCatalogReconciliation } = require('./rec
 const { readReceipt } = require('./receipts');
 const { verifyHarnessBundle, resolveShadowPaths } = require('./harness-verification');
 const { planSchedulerUnits } = require('./scheduler');
+const { reconcileAttention, redactedAttention } = require('./attention');
 const {
   inventoryOperator,
   registerAdapterRootsOperator,
   declaredAdapterInventoryRoots,
 } = require('./inventory');
+const {
+  loadExclusionOverlay,
+  saveExclusionOverlay,
+  EXCLUSION_SCHEMA_VERSION,
+} = require('./inventory-contract');
 
 const MODULE_ROOT = path.resolve(__dirname, '..');
 
@@ -542,6 +548,53 @@ function repairOperator(options = {}) {
   };
 }
 
+function autonomousRepairOperator(options = {}) {
+  const loaded = loadConfig(options.configPath);
+  if (loaded.config.inventory.enabled !== true) {
+    return { ok: true, ran: false, reason: 'inventory_disabled', mutationDenied: true };
+  }
+  const assessed = inventoryOperator({
+    configPath: options.configPath,
+    persist: true,
+    assess: true,
+    autoAdmit: true,
+    saveConfig: true,
+    observedAt: options.observedAt,
+    includeDocument: false,
+  });
+  if (assessed.complete !== true || assessed.overflowed === true || assessed.partial === true) {
+    return {
+      ok: true,
+      ran: true,
+      mutationDenied: true,
+      reason: 'incomplete_generation',
+      generationId: assessed.generationId,
+      status: assessed.status,
+    };
+  }
+  const current = loadConfig(options.configPath);
+  const planned = planOperator({ configPath: options.configPath, readOnly: false });
+  const reconciliation = current.config.acceptedCatalogDigest === planned.catalogDigest
+    && current.config.acceptedAliasRevision === planned.aliasRevision
+    ? _repairOperator({ configPath: options.configPath })
+    : _applyOperator({ configPath: options.configPath });
+  const attention = reconcileAttention({
+    attentionPath: current.resolved.inventory.attentionPath,
+    status: assessed.status,
+    observedAt: assessed.status?.observedAt,
+    deliver: options.deliver || null,
+  });
+  return {
+    ok: reconciliation.ok,
+    ran: true,
+    mutationDenied: false,
+    generationId: assessed.generationId,
+    status: assessed.status,
+    reconciliation: reconciliation.repaired === false ? { repaired: false } : { repaired: true, applied: reconciliation.applied || [] },
+    attention,
+  };
+}
+
 function schedulerOperator(options = {}) {
   const loaded = loadConfig(options.configPath);
   const config = { ...loaded.config };
@@ -654,6 +707,7 @@ const _disableHarness = disableHarness;
 const _renameAlias = renameAlias;
 const _repairOperator = repairOperator;
 const _schedulerOperator = schedulerOperator;
+const _autonomousRepairOperator = autonomousRepairOperator;
 const _initOperator = initOperator;
 
 function inventoryStatusOperator(options = {}) {
@@ -721,6 +775,241 @@ function inventoryAssessOperator(options = {}) {
   });
 }
 
+/**
+ * Redacted shared status parity for CLI and agent callers.
+ * Inventory/catalog/attention only — no absolute paths or private bodies.
+ */
+function sharedStatusOperator(options = {}) {
+  const inventory = inventoryStatusOperator({
+    configPath: options.configPath,
+    controlRoot: options.controlRoot,
+    persist: options.persist === true,
+    inspect: false,
+    observedAt: options.observedAt,
+  });
+  let catalog = null;
+  try {
+    catalog = statusOperator({ configPath: options.configPath });
+  } catch (error) {
+    catalog = { ok: false, reason: error.message };
+  }
+  return {
+    ok: inventory.ok !== false,
+    mode: 'shared-status',
+    inventory: {
+      ok: inventory.ok,
+      complete: inventory.complete,
+      unchanged: inventory.unchanged,
+      generationId: inventory.generationId,
+      digest: inventory.digest,
+      mutate: inventory.mutate,
+      status: inventory.status,
+      attention: redactedAttention(inventory.status),
+      meta: inventory.meta,
+    },
+    catalog: catalog && catalog.ok !== false
+      ? {
+        ok: true,
+        catalogDigest: catalog.catalogDigest || null,
+        pairs: (catalog.pairs || []).map((pair) => ({
+          id: pair.id,
+          harness: pair.harness,
+          effectiveName: pair.effectiveName,
+          status: pair.status,
+          action: pair.action || null,
+          verification: pair.verification || null,
+          deselected: pair.deselected === true,
+        })),
+        notices: catalog.notices || [],
+      }
+      : { ok: false, reason: catalog?.reason || 'catalog_unavailable' },
+  };
+}
+
+function explainOperator(options = {}) {
+  const logicalId = options.id || options.logicalId;
+  if (!logicalId || !/^[a-z][a-z0-9-]{0,63}$/.test(logicalId)) {
+    throw new Error('explain requires a canonical skill id');
+  }
+  const inventory = inventoryOperator({
+    configPath: options.configPath,
+    controlRoot: options.controlRoot,
+    persist: options.persist === true,
+    includeDocument: false,
+    observedAt: options.observedAt,
+  });
+  const skill = (inventory.status?.skills || []).find((item) => item.logicalId === logicalId) || null;
+  const exclusion = (inventory.status?.exclusions || []).find((item) => item.logicalId === logicalId) || null;
+  let catalogPair = null;
+  try {
+    const catalog = statusOperator({ configPath: options.configPath });
+    const pairs = (catalog.pairs || []).filter((pair) => pair.id === logicalId);
+    if (pairs.length > 0) {
+      catalogPair = pairs.map((pair) => ({
+        harness: pair.harness,
+        effectiveName: pair.effectiveName,
+        status: pair.status,
+        action: pair.action || null,
+        verification: pair.verification || null,
+      }));
+    }
+  } catch {
+    catalogPair = null;
+  }
+  return {
+    ok: true,
+    mode: 'explain',
+    logicalId,
+    found: Boolean(skill || exclusion || catalogPair),
+    skill: skill
+      ? {
+        logicalId: skill.logicalId,
+        treeDigest: skill.treeDigest,
+        disposition: skill.disposition,
+        attention: skill.attention,
+        matrix: skill.matrix,
+        observationCount: skill.observationCount,
+      }
+      : null,
+    exclusion: exclusion || null,
+    catalog: catalogPair,
+    generationId: inventory.generationId || null,
+    complete: inventory.complete === true,
+  };
+}
+
+function excludeSkillOperator(options = {}) {
+  return withMutationLease(options.configPath, 'exclude', () => {
+    const logicalId = options.id || options.logicalId;
+    if (!logicalId || !/^[a-z][a-z0-9-]{0,63}$/.test(logicalId)) {
+      throw new Error('exclude requires a canonical skill id');
+    }
+    const reasonCode = options.reasonCode || 'owner_excluded';
+    const loaded = loadConfig(options.configPath);
+    const exclusionPath = loaded.resolved.inventory.exclusionOverlayPath;
+    const current = loadExclusionOverlay(exclusionPath);
+    const entries = [...(current.overlay?.entries || [])];
+    const existing = entries.findIndex((entry) => entry.logicalId === logicalId);
+    const record = {
+      logicalId,
+      reasonCode,
+      excludedAt: options.excludedAt || new Date().toISOString(),
+    };
+    if (existing >= 0) entries[existing] = record;
+    else entries.push(record);
+    entries.sort((a, b) => a.logicalId.localeCompare(b.logicalId));
+    const saved = saveExclusionOverlay({
+      schemaVersion: EXCLUSION_SCHEMA_VERSION,
+      entries,
+    }, exclusionPath);
+    return {
+      ok: true,
+      mode: 'exclude',
+      logicalId,
+      reasonCode,
+      digest: saved.digest,
+    };
+  });
+}
+
+function includeSkillOperator(options = {}) {
+  return withMutationLease(options.configPath, 'include', () => {
+    const logicalId = options.id || options.logicalId;
+    if (!logicalId || !/^[a-z][a-z0-9-]{0,63}$/.test(logicalId)) {
+      throw new Error('include requires a canonical skill id');
+    }
+    const loaded = loadConfig(options.configPath);
+    const exclusionPath = loaded.resolved.inventory.exclusionOverlayPath;
+    const current = loadExclusionOverlay(exclusionPath);
+    const before = current.overlay?.entries || [];
+    const entries = before.filter((entry) => entry.logicalId !== logicalId);
+    const saved = saveExclusionOverlay({
+      schemaVersion: EXCLUSION_SCHEMA_VERSION,
+      entries,
+    }, exclusionPath);
+    return {
+      ok: true,
+      mode: 'include',
+      logicalId,
+      removed: before.length !== entries.length,
+      digest: saved.digest,
+    };
+  });
+}
+
+/**
+ * Human-only Claude proof. Evidence is bound to the exact generation and never
+ * includes private skill bodies unless a separate owner egress grant matches.
+ */
+function claudeProofOperator(options = {}) {
+  const logicalId = options.id || options.logicalId;
+  if (!logicalId || !/^[a-z][a-z0-9-]{0,63}$/.test(logicalId)) {
+    throw new Error('claude-proof requires a canonical skill id');
+  }
+  const inventory = inventoryOperator({
+    configPath: options.configPath,
+    persist: false,
+    includeDocument: false,
+    observedAt: options.observedAt,
+  });
+  const generationId = inventory.generationId;
+  if (options.expectedGenerationId && options.expectedGenerationId !== generationId) {
+    return {
+      ok: false,
+      mode: 'claude-proof',
+      reason: 'generation_mismatch',
+      expectedGenerationId: options.expectedGenerationId,
+      generationId,
+    };
+  }
+  const skill = (inventory.status?.skills || []).find((item) => item.logicalId === logicalId) || null;
+  if (!skill) {
+    return {
+      ok: false,
+      mode: 'claude-proof',
+      reason: 'skill_not_found',
+      logicalId,
+      generationId,
+    };
+  }
+  const egressAuthorized = options.authorizeEgress === true
+    && options.egressGenerationId
+    && options.egressGenerationId === generationId;
+  const evidence = {
+    schemaVersion: 'jarvos.skill-claude-proof/v1',
+    logicalId,
+    generationId,
+    treeDigest: skill.treeDigest,
+    disposition: skill.disposition,
+    attention: skill.attention,
+    matrix: skill.matrix,
+    privateBodyIncluded: false,
+    egressAuthorized,
+  };
+  if (egressAuthorized) {
+    // Package boundary still refuses private body publication through this surface.
+    evidence.egressNote = 'private body publish is denied by package boundary; owner egress is recorded only';
+  }
+  if (typeof options.reviewer === 'function') {
+    const review = options.reviewer({
+      logicalId,
+      generationId,
+      treeDigest: skill.treeDigest,
+      disposition: skill.disposition,
+      attention: skill.attention,
+    });
+    evidence.reviewer = {
+      ok: review?.ok !== false,
+      note: typeof review?.note === 'string' ? review.note.slice(0, 200) : null,
+    };
+  }
+  return {
+    ok: true,
+    mode: 'claude-proof',
+    evidence,
+  };
+}
+
 module.exports = {
   MODULE_ROOT,
   statusOperator,
@@ -731,11 +1020,27 @@ module.exports = {
   enableHarness: (options = {}) => withMutationLease(options.configPath, 'enable', () => _enableHarness(options)),
   disableHarness: (options = {}) => withMutationLease(options.configPath, 'disable', () => _disableHarness(options)),
   renameAlias: (options = {}) => withMutationLease(options.configPath, 'rename', () => _renameAlias(options)),
-  repairOperator: (options = {}) => withMutationLease(options.configPath, 'repair', () => _repairOperator(options)),
+  repairOperator: (options = {}) => withMutationLease(options.configPath, 'repair', () => {
+    if (options.incompleteGeneration === true) {
+      return {
+        ok: false,
+        repaired: false,
+        reason: 'incomplete_generation_mutation_denied',
+        incompleteGeneration: true,
+      };
+    }
+    return _repairOperator(options);
+  }),
+  autonomousRepairOperator: (options = {}) => withMutationLease(options.configPath, 'autonomous-repair', () => _autonomousRepairOperator(options)),
   schedulerOperator: (options = {}) => withMutationLease(options.configPath, 'scheduler', () => _schedulerOperator(options)),
   initOperator: (options = {}) => withMutationLease(options.configPath, 'init-config', () => _initOperator(options), options.controlRoot || null),
   inventoryStatusOperator,
   inventoryRegisterRootsOperator,
   inventoryDeclaredRootsOperator,
   inventoryAssessOperator,
+  sharedStatusOperator,
+  explainOperator,
+  excludeSkillOperator,
+  includeSkillOperator,
+  claudeProofOperator,
 };

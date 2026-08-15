@@ -34,13 +34,79 @@ function buildRefreshCommand({ nodeExecutable, cliScript, configPath }) {
   return [
     shellQuote(nodeExecutable),
     shellQuote(cliScript),
-    // Scheduled runs may repair the accepted generation only. Refreshing a
-    // source digest is a human-preview operation and must never be a timer side effect.
-    'repair',
+    // This command performs a complete inventory generation before any repair.
+    // It refuses mutations for incomplete observations and never enables itself.
+    'autonomous-repair',
     '--config',
     shellQuote(configPath),
     '--json',
   ].join(' ');
+}
+
+function pathIsInside(parent, candidate) {
+  const relative = path.relative(path.resolve(parent), path.resolve(candidate));
+  return relative === '' || (!relative.startsWith(`..${path.sep}`) && relative !== '..' && !path.isAbsolute(relative));
+}
+
+/**
+ * Best-effort native watcher. Events only request a future complete cycle;
+ * correctness always comes from the periodic complete inventory scan.
+ */
+function createInventoryWatcher({
+  roots = [],
+  suppressedPaths = [],
+  debounceMs = 1_000,
+  digestStabilityMs = 5_000,
+  maxEvents = 256,
+  onCycle,
+  watch = fs.watch,
+  setTimer = setTimeout,
+  clearTimer = clearTimeout,
+} = {}) {
+  if (typeof onCycle !== 'function') throw new Error('onCycle is required');
+  if (!Number.isInteger(maxEvents) || maxEvents < 1) throw new Error('maxEvents must be positive');
+  const queue = new Set();
+  const watchers = [];
+  let timer = null;
+  let overflowed = false;
+  let closed = false;
+  const isSuppressed = (candidate) => suppressedPaths.some((item) => pathIsInside(item, candidate));
+  const flush = () => {
+    timer = null;
+    if (closed) return;
+    const events = [...queue].sort();
+    queue.clear();
+    const hadOverflow = overflowed;
+    overflowed = false;
+    onCycle({ reason: hadOverflow ? 'watcher_overflow' : 'root_event', events, overflowed: hadOverflow });
+  };
+  const request = (candidate) => {
+    if (closed || (candidate && isSuppressed(candidate))) return false;
+    if (queue.size >= maxEvents) overflowed = true;
+    else if (candidate) queue.add(path.resolve(candidate));
+    if (timer) clearTimer(timer);
+    timer = setTimer(flush, debounceMs + digestStabilityMs);
+    return true;
+  };
+  for (const root of roots) {
+    try {
+      if (!fs.existsSync(root)) continue;
+      watchers.push(watch(root, { persistent: false }, (_event, filename) => request(filename ? path.join(root, filename) : root)));
+    } catch {
+      // A periodic run handles unavailable roots; request one bounded fallback.
+      overflowed = true;
+      request(root);
+    }
+  }
+  return {
+    request,
+    close() {
+      closed = true;
+      if (timer) clearTimer(timer);
+      for (const watcher of watchers) watcher.close();
+    },
+    get pending() { return queue.size; },
+  };
 }
 
 function renderLaunchdPlist({
@@ -219,4 +285,5 @@ module.exports = {
   renderLaunchdPlist,
   renderSystemdUnits,
   buildRefreshCommand,
+  createInventoryWatcher,
 };

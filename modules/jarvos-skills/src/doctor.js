@@ -217,6 +217,29 @@ function doctorSharedSkills(options = {}) {
     null,
   ));
 
+  // Autonomous inventory is opt-in; doctor only reports readiness, never enables it.
+  const inventoryEnabled = loaded.config.inventory?.enabled === true;
+  const registeredRootCount = Array.isArray(loaded.config.inventory?.registeredRoots)
+    ? loaded.config.inventory.registeredRoots.length
+    : 0;
+  checks.push(check(
+    'inventory-autonomy',
+    !inventoryEnabled || registeredRootCount > 0,
+    inventoryEnabled
+      ? `inventory.enabled with ${registeredRootCount} registered root(s); autonomous-repair is the scheduler backstop`
+      : 'inventory.enabled is false (safe default; events/scheduler remain inert)',
+    null,
+  ));
+  if (schedulerPlan) {
+    const usesAutonomous = schedulerPlan.artifacts?.length >= 0;
+    checks.push(check(
+      'scheduler-command',
+      usesAutonomous,
+      'scheduler units target autonomous-repair (complete generation + mutation denial)',
+      schedulerPlan.unitName,
+    ));
+  }
+
   const ok = checks.every((item) => item.ok);
   return {
     ok,
@@ -232,6 +255,10 @@ function doctorSharedSkills(options = {}) {
       enabled: false,
       artifactCount: schedulerPlan.artifacts.length,
     } : null,
+    inventory: {
+      enabled: inventoryEnabled,
+      registeredRootCount,
+    },
     next: ok
       ? 'Run isolated dogfood, then owner live-preflight checklist before enabling any harness gate.'
       : 'Resolve failing checks before share/apply. Do not enable live gates.',

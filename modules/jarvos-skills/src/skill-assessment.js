@@ -355,6 +355,9 @@ function assessInventory({
     effectiveCatalog: effective,
     acceptedGeneration,
     sourceRoot: captured.sourceRoot,
+    // Bundle roots are generation/id relative to the immutable store, not to
+    // one generation directory. Keep the configured root at the store level.
+    localSourceRoot: sourceStorePath,
     admissions: candidates.map((candidate) => ({
       logicalId: candidate.logicalId,
       treeDigest: candidate.treeDigest,

@@ -1363,7 +1363,10 @@ function observeInventory(options = {}) {
         }
       }
 
-      if (options.persist !== false && layout.observationsPath) {
+      // A healthy repeat must not refresh durable timestamps or receipts.
+      // Persist assessment evidence only when this observation or its accepted
+      // generation actually changed.
+      if (options.persist !== false && layout.observationsPath && (wrote || assessment.mutate)) {
         const payload = {
           schemaVersion: 'jarvos.skill-inventory-observations/v1',
           savedAt: observedAt,
