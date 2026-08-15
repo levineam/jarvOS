@@ -176,12 +176,57 @@ function loadManualInputs({ publicCatalog, localOverlay }) {
   return { publicCatalog: publicResult.catalog, localOverlay: localResult.overlay };
 }
 
-function legacyManualMigration({ manualEntries, oldLocalSourceRoot, sourceStorePath }) {
+function attestOwnedBundle(root, relativeRoot, entry, label) {
+  const candidate = path.resolve(root, ...relativeRoot.split('/'));
+  const relative = path.relative(root, candidate);
+  if (!relative || relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+    throw new Error(`${label} bundle escapes its source root: ${entry.id}`);
+  }
+  let current = root;
+  for (const part of relative.split(path.sep)) {
+    current = path.join(current, part);
+    if (!fs.existsSync(current)) throw new Error(`${label} bundle is missing: ${entry.id}`);
+    const stat = fs.lstatSync(current);
+    if (stat.isSymbolicLink()) throw new Error(`${label} bundle contains a symbolic link: ${entry.id}`);
+    if (typeof process.getuid === 'function' && stat.uid !== process.getuid()) {
+      throw new Error(`${label} bundle has unsafe ownership: ${entry.id}`);
+    }
+    if ((stat.mode & 0o022) !== 0) throw new Error(`${label} bundle has unsafe permissions: ${entry.id}`);
+  }
+  return computeBundleTree(candidate, {
+    allowlist: entry.bundle.allowlist,
+    expectedDigest: entry.bundle.treeDigest,
+  });
+}
+
+function legacyManualMigration({ manualEntries, oldLocalSourceRoot, sourceStorePath, prior }) {
   if (!oldLocalSourceRoot
     || path.resolve(oldLocalSourceRoot) === path.resolve(sourceStorePath)
     || manualEntries.length === 0) {
     return { required: false, candidates: [] };
   }
+  const capturedEntries = new Map((prior?.entries || []).map((entry) => [entry.id, entry]));
+  const sourceStoreRoot = path.resolve(sourceStorePath);
+  const generationById = new Map();
+  const uncapturedEntries = [];
+  const candidates = [];
+  for (const entry of manualEntries) {
+    const capturedEntry = capturedEntries.get(entry.id);
+    const capturedRelativeRoot = prior?.generationId
+      ? path.posix.join(prior.generationId, entry.id)
+      : null;
+    if (capturedEntry
+      && capturedRelativeRoot
+      && capturedEntry.treeDigest === entry.bundle.treeDigest
+      && JSON.stringify(capturedEntry.allowlist) === JSON.stringify(entry.bundle.allowlist)) {
+      attestOwnedBundle(sourceStoreRoot, capturedRelativeRoot, entry, 'captured manual');
+      generationById.set(entry.id, prior.generationId);
+      continue;
+    }
+    uncapturedEntries.push(entry);
+  }
+  if (uncapturedEntries.length === 0) return { required: true, candidates, generationById };
+
   const root = path.resolve(oldLocalSourceRoot);
   if (!fs.existsSync(root)) throw new Error('legacy manual localSourceRoot does not exist');
   const rootStat = fs.lstatSync(root);
@@ -195,36 +240,17 @@ function legacyManualMigration({ manualEntries, oldLocalSourceRoot, sourceStoreP
     throw new Error('legacy manual localSourceRoot has unsafe permissions');
   }
   const realRoot = fs.realpathSync(root);
-  const candidates = manualEntries.map((entry) => {
-    const candidate = path.resolve(realRoot, ...entry.bundle.root.split('/'));
-    const relative = path.relative(realRoot, candidate);
-    if (!relative || relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
-      throw new Error(`legacy manual bundle escapes localSourceRoot: ${entry.id}`);
-    }
-    let current = realRoot;
-    for (const part of relative.split(path.sep)) {
-      current = path.join(current, part);
-      if (!fs.existsSync(current)) throw new Error(`legacy manual bundle is missing: ${entry.id}`);
-      const stat = fs.lstatSync(current);
-      if (stat.isSymbolicLink()) throw new Error(`legacy manual bundle contains a symbolic link: ${entry.id}`);
-      if (typeof process.getuid === 'function' && stat.uid !== process.getuid()) {
-        throw new Error(`legacy manual bundle has unsafe ownership: ${entry.id}`);
-      }
-      if ((stat.mode & 0o022) !== 0) throw new Error(`legacy manual bundle has unsafe permissions: ${entry.id}`);
-    }
-    const tree = computeBundleTree(candidate, {
-      allowlist: entry.bundle.allowlist,
-      expectedDigest: entry.bundle.treeDigest,
-    });
-    return {
+  for (const entry of uncapturedEntries) {
+    const tree = attestOwnedBundle(realRoot, entry.bundle.root, entry, 'legacy manual');
+    candidates.push({
       id: entry.id,
       sourcePath: tree.root,
       treeDigest: tree.treeDigest,
       allowlist: tree.allowlist,
       manualEntry: entry,
-    };
-  });
-  return { required: true, candidates };
+    });
+  }
+  return { required: true, candidates, generationById };
 }
 
 function reviewDivergence({ skill, variants, reviewer }) {
@@ -261,6 +287,9 @@ function assessInventory({
   complete = true,
   autoAdmit = true,
   persist = true,
+  captureGeneration = captureAcceptedGeneration,
+  writeJson = atomicWriteJson,
+  writeConfig = saveConfig,
   config: suppliedConfig = null,
   resolved: suppliedResolved = null,
 } = {}) {
@@ -292,6 +321,7 @@ function assessInventory({
       manualEntries,
       oldLocalSourceRoot: resolved?.localSourceRoot || null,
       sourceStorePath,
+      prior,
     });
   const retirementPolicy = normalizeRetirementPolicy(
     config?.inventory?.retirement || {},
@@ -513,7 +543,7 @@ function assessInventory({
           delete absenceOnly.absences[logicalId];
         }
       }
-      atomicWriteJson(acceptedGenerationPath, absenceOnly);
+      writeJson(acceptedGenerationPath, absenceOnly);
     }
     const status = serializeOutwardStatus(nextDocument);
     return {
@@ -539,7 +569,7 @@ function assessInventory({
   });
   const captureCandidates = [...generatedCaptureCandidates, ...manualMigration.candidates];
   const captured = captureCandidates.length > 0
-    ? captureAcceptedGeneration({
+    ? captureGeneration({
       sourceStorePath,
       acceptedGenerationPath,
       generationId: validated.document.generationId,
@@ -585,12 +615,15 @@ function assessInventory({
     : (prior?.generationId || validated.document.generationId);
   const migratedManualById = new Map(manualMigration.candidates.map((candidate) => [candidate.id, candidate]));
   const migratedManualEntries = manualEntries.map((entry) => (
-    migratedManualById.has(entry.id)
+    migratedManualById.has(entry.id) || manualMigration.generationById?.has(entry.id)
       ? {
         ...entry,
         bundle: {
           ...entry.bundle,
-          root: path.posix.join(capturedGenerationId, entry.id),
+          root: path.posix.join(
+            manualMigration.generationById?.get(entry.id) || capturedGenerationId,
+            entry.id,
+          ),
         },
       }
       : entry
@@ -647,12 +680,15 @@ function assessInventory({
 
   // Always rewrite the accepted pointer when we mutate overlay/absences/retirements,
   // even if capture was a no-op (pure retirement).
+  // Publish the fully attested recovery pointer before the overlay. If any
+  // later write fails, replay can finish from immutable captured sources even
+  // when the legacy source has disappeared.
+  writeJson(acceptedGenerationPath, acceptedGeneration);
   if (persist !== false && resolved?.localOverlayPath) {
-    atomicWriteJson(resolved.localOverlayPath, compositeOverlay);
+    writeJson(resolved.localOverlayPath, compositeOverlay);
   }
-  atomicWriteJson(acceptedGenerationPath, acceptedGeneration);
   if (persist !== false && config && resolved && config.localSourceRoot !== sourceStorePath) {
-    saveConfig({ ...config, localSourceRoot: sourceStorePath }, configPath);
+    writeConfig({ ...config, localSourceRoot: sourceStorePath }, configPath);
   }
   const admittedDocument = {
     ...nextDocument,

@@ -831,6 +831,95 @@ test('missing or drifted legacy manual bundles fail before config or overlay mut
   }
 });
 
+test('legacy manual migration replays every durable write boundary', () => {
+  for (const failurePoint of [
+    'after-capture',
+    'after-pointer',
+    'after-overlay',
+    'before-config-save',
+    'after-config-save',
+  ]) {
+    const legacyRoot = temp(`jarvos-legacy-crash-${failurePoint}-`);
+    const observedRoot = temp(`jarvos-observed-crash-${failurePoint}-`);
+    const manualPath = writeSkill(path.join(legacyRoot, 'transcribe'), {
+      name: 'transcribe',
+      body: 'Transcribe a recording.\n',
+    });
+    writeSkill(path.join(observedRoot, 'new-generated-skill'), {
+      name: 'new-generated-skill',
+      body: 'New portable skill.\n',
+    });
+    const manualTree = computeBundleTree(manualPath, { allowlist: DEFAULT_ALLOWED_BUNDLE_GLOBS });
+    const { configPath } = seedConfig({ roots: { codex: observedRoot }, trustClass: 'markdown-only' });
+    let loaded = loadConfig(configPath);
+    saveConfig({ ...loaded.config, localSourceRoot: legacyRoot }, configPath);
+    loaded = loadConfig(configPath);
+    atomicWriteJson(loaded.resolved.localOverlayPath, {
+      schemaVersion: OVERLAY_SCHEMA_VERSION,
+      entries: [manualOverlayEntry('transcribe', manualTree, ['codex', 'hermes'])],
+    });
+    const observedAt = '2026-08-15T18:20:00.000Z';
+    const observation = observeInventory({ configPath, observedAt });
+
+    assert.throws(() => assessInventory({
+      configPath,
+      document: observation.document,
+      complete: true,
+      autoAdmit: true,
+      persist: true,
+      captureGeneration: (options) => {
+        const captured = captureAcceptedGeneration(options);
+        if (failurePoint === 'after-capture') throw new Error('injected after capture');
+        return captured;
+      },
+      writeJson: (file, value) => {
+        const written = atomicWriteJson(file, value);
+        if (failurePoint === 'after-pointer' && file === loaded.resolved.inventory.acceptedGenerationPath) {
+          throw new Error('injected after pointer');
+        }
+        if (failurePoint === 'after-overlay' && file === loaded.resolved.localOverlayPath) {
+          throw new Error('injected after overlay');
+        }
+        return written;
+      },
+      writeConfig: (value, file) => {
+        if (failurePoint === 'before-config-save') throw new Error('injected before config save');
+        const saved = saveConfig(value, file);
+        if (failurePoint === 'after-config-save') throw new Error('injected after config save');
+        return saved;
+      },
+    }), /injected/);
+
+    // Recovery must depend only on the attested immutable capture, not on the
+    // legacy tree surviving the interrupted transaction.
+    fs.rmSync(legacyRoot, { recursive: true, force: true });
+    const replay = inventoryAssessOperator({ configPath, observedAt });
+    assert.equal(replay.ok, true, failurePoint);
+    loaded = loadConfig(configPath);
+    const overlay = validateLocalOverlay(JSON.parse(fs.readFileSync(loaded.resolved.localOverlayPath, 'utf8'))).overlay;
+    assert.equal(overlay.entries.length, 2, failurePoint);
+    assert.equal(overlay.entries.every((entry) => /^gen-[a-f0-9]+\//.test(entry.bundle.root)), true, failurePoint);
+    assert.equal(planOperator({ configPath, readOnly: true }).ok, true, failurePoint);
+    applyOperator({ configPath });
+
+    const durablePaths = [
+      configPath,
+      loaded.resolved.localOverlayPath,
+      loaded.resolved.inventory.acceptedGenerationPath,
+    ];
+    const before = durablePaths.map((file) => ({
+      body: fs.readFileSync(file, 'utf8'),
+      mtimeMs: fs.statSync(file).mtimeMs,
+    }));
+    const secondReplay = inventoryAssessOperator({ configPath, observedAt });
+    assert.equal(secondReplay.mutate, false, failurePoint);
+    durablePaths.forEach((file, index) => {
+      assert.equal(fs.readFileSync(file, 'utf8'), before[index].body, failurePoint);
+      assert.equal(fs.statSync(file).mtimeMs, before[index].mtimeMs, failurePoint);
+    });
+  }
+});
+
 test('egress + scripts fails closed to needs_input', () => {
   const root = temp('jarvos-egress-');
   writeSkill(path.join(root, 'net-skill'), {
