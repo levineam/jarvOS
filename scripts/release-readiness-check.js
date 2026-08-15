@@ -39,6 +39,20 @@ function run(command, args, options = {}) {
   });
 }
 
+function revisionFor(runCommand, ref) {
+  const result = runCommand('git', ['rev-parse', ref]);
+  return result.status === 0 ? String(result.stdout || '').trim() : '';
+}
+
+function resolveReceiptRevisions(runCommand = run) {
+  const revision = revisionFor(runCommand, 'HEAD');
+  const pullRequestHead = revisionFor(runCommand, 'HEAD^2');
+  const sourceParentRevision = pullRequestHead
+    ? revisionFor(runCommand, 'HEAD^2^')
+    : revisionFor(runCommand, 'HEAD^');
+  return { revision, sourceParentRevision };
+}
+
 function normalizeVersion(value) {
   return String(value || '').trim().replace(/^v/i, '');
 }
@@ -249,8 +263,7 @@ function checkReleaseReadiness(opts = {}) {
     results.push({ ok: false, label, detail });
   }
 
-  const revision = String(run('git', ['rev-parse', 'HEAD']).stdout || '').trim();
-  const sourceParentRevision = String(run('git', ['rev-parse', 'HEAD^']).stdout || '').trim();
+  const { revision, sourceParentRevision } = resolveReceiptRevisions(runLocal);
   results.push(...checkCodexRoutingClaims({ readText: read, exists: fileExists, revision, sourceParentRevision }));
 
   if (!/^\d+\.\d+\.\d+$/.test(target)) {
@@ -416,6 +429,7 @@ module.exports = {
   findReleaseProcessCurrentClaims,
   normalizeVersion,
   parseArgs,
+  resolveReceiptRevisions,
 };
 
 if (require.main === module) {

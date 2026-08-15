@@ -6,7 +6,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
 
-const { checkCodexRoutingClaims, checkFrontDoorReleaseProse, checkReleaseReadiness } = require('../scripts/release-readiness-check');
+const { checkCodexRoutingClaims, checkFrontDoorReleaseProse, checkReleaseReadiness, resolveReceiptRevisions } = require('../scripts/release-readiness-check');
 
 function runFrontDoorCheck(files, options = {}) {
   return checkFrontDoorReleaseProse({
@@ -26,6 +26,17 @@ function runFrontDoorCheck(files, options = {}) {
 function failedLabels(results) {
   return results.filter((result) => !result.ok).map((result) => result.label);
 }
+
+test('receipt revisions use the PR head parent when CI checks out a merge commit', () => {
+  const revisions = {
+    HEAD: 'merge',
+    'HEAD^2': 'pr-head',
+    'HEAD^2^': 'receipt-parent',
+    'HEAD^': 'base',
+  };
+  const result = resolveReceiptRevisions((_command, args) => ({ status: 0, stdout: `${revisions[args[1]] || ''}\n` }));
+  assert.deepEqual(result, { revision: 'merge', sourceParentRevision: 'receipt-parent' });
+});
 
 test('front-door release prose passes when README and release-process match the finalized target', () => {
   const results = runFrontDoorCheck({
