@@ -6,7 +6,8 @@
   "type": "commonjs",
   "main": "src/index.js",
   "bin": {
-    "jarvos-skills": "scripts/install-skills.js"
+    "jarvos-skills": "scripts/install-skills.js",
+    "jarvos-skills-scheduled-repair": "scripts/scheduled-repair.js"
   },
   "files": [
     "README.md",
