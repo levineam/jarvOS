@@ -17,6 +17,8 @@ test('exact-path proof binds name and bundle digest while interactive proof rema
     const tree = computeBundleTree(bundle);
     const exact = verifyHarnessBundle({ adapter: { skillProjection: { verificationTier: 'exact-path' } }, targetPath: bundle, expectedName: 'fixture', expectedTreeDigest: tree.treeDigest });
     assert.equal(exact.status, 'model_visible');
+    const shadow = path.join(root, 'higher-precedence-fixture'); fs.mkdirSync(shadow, { mode: 0o700 });
+    assert.equal(verifyHarnessBundle({ adapter: { skillProjection: { verificationTier: 'exact-path' } }, targetPath: bundle, expectedName: 'fixture', expectedTreeDigest: tree.treeDigest, shadowPaths: [shadow] }).reason, 'higher_precedence_shadow');
     assert.equal(verifyHarnessBundle({ adapter: { skillProjection: { verificationTier: 'interactive-smoke' } }, targetPath: bundle, expectedName: 'fixture', expectedTreeDigest: tree.treeDigest }).reason, 'remote_probe_not_authorized');
     assert.equal(verifyHarnessBundle({ adapter: { skillProjection: { verificationTier: 'interactive-smoke' } }, remoteModelProbe: true }).reason, 'interactive_probe_required');
   } finally { fs.rmSync(root, { recursive: true, force: true }); }

@@ -488,12 +488,12 @@ function stageBundleCopy(source, target) {
       if (copiedDigest !== entry.digest) throw new Error(`staged digest mismatch: ${entry.path}`);
     }
     // Replace target only after the complete staged tree is verified.
+    let backup = null;
     if (fs.existsSync(target)) {
-      const backup = `${target}.jarvos-bak-${process.pid}-${crypto.randomBytes(4).toString('hex')}`;
+      backup = `${target}.jarvos-bak-${process.pid}-${crypto.randomBytes(4).toString('hex')}`;
       fs.renameSync(target, backup);
       try {
         fs.renameSync(staging, target);
-        fs.rmSync(backup, { recursive: true, force: true });
       } catch (error) {
         try {
           if (fs.existsSync(target)) fs.rmSync(target, { recursive: true, force: true });
@@ -506,6 +506,7 @@ function stageBundleCopy(source, target) {
     } else {
       fs.renameSync(staging, target);
     }
+    return { backup };
   } catch (error) {
     fs.rmSync(staging, { recursive: true, force: true });
     throw error;
@@ -693,7 +694,8 @@ function applyCatalogReconciliation(plan, options = {}) {
         expectedTreeDigest: pair.treeDigest,
       });
 
-      stageBundleCopy(freshSource, pair.target);
+      const staged = stageBundleCopy(freshSource, pair.target);
+      try {
       atomicWriteReceipt(path.dirname(pair.target), {
         version: 1,
         id: pair.id,
@@ -705,6 +707,18 @@ function applyCatalogReconciliation(plan, options = {}) {
         targetPath: pair.target,
         verificationTier: options.verificationTier || 'receipt-owned',
       });
+      } catch (error) {
+        // A receipt is the ownership boundary. Roll back the replacement when
+        // it cannot be committed, preserving the prior target for retry.
+        if (staged.backup && fs.existsSync(staged.backup)) {
+          if (fs.existsSync(pair.target)) fs.rmSync(pair.target, { recursive: true, force: true });
+          fs.renameSync(staged.backup, pair.target);
+        } else if (!pair.receipt && fs.existsSync(pair.target)) {
+          fs.rmSync(pair.target, { recursive: true, force: true });
+        }
+        throw error;
+      }
+      if (staged.backup && fs.existsSync(staged.backup)) fs.rmSync(staged.backup, { recursive: true, force: true });
 
       applied.push({
         id: pair.id,

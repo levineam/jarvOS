@@ -34,14 +34,9 @@ function buildRefreshCommand({ nodeExecutable, cliScript, configPath }) {
   return [
     shellQuote(nodeExecutable),
     shellQuote(cliScript),
-    'refresh',
-    '--config',
-    shellQuote(configPath),
-    '--json',
-    '&&',
-    shellQuote(nodeExecutable),
-    shellQuote(cliScript),
-    'apply',
+    // Scheduled runs may repair the accepted generation only. Refreshing a
+    // source digest is a human-preview operation and must never be a timer side effect.
+    'repair',
     '--config',
     shellQuote(configPath),
     '--json',

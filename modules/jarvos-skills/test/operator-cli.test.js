@@ -140,6 +140,9 @@ test('scheduler plans launchd and systemd units without enabling them', () => {
     });
     assert.equal(launchd.write, true);
     assert.equal(launchd.artifacts[0].kind, 'launchd-plist');
+    const launchdText = fs.readFileSync(path.join(env.home, 'Library', 'LaunchAgents', 'dev.jarvos.jarvos-shared-skills.plist'), 'utf8');
+    assert.doesNotMatch(launchdText, /install-skills\.js['\"]?\s+refresh/);
+    assert.match(launchdText, /install-skills\.js['\"]?\s+repair/);
     assert.equal(fs.existsSync(path.join(env.home, 'Library', 'LaunchAgents', 'dev.jarvos.jarvos-shared-skills.plist')), true);
 
     const systemd = planSchedulerUnits({

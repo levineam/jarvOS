@@ -74,6 +74,7 @@ function defaultConfig() {
       intervalMinutes: 60,
       unitName: 'jarvos-shared-skills',
     },
+    liveDogfood: { authorized: false, receiptPath: null, egress: {} },
   };
 }
 
@@ -121,6 +122,11 @@ function normalizeConfig(raw) {
     localSourceRoot: raw.localSourceRoot ? collapseHome(expandHome(raw.localSourceRoot)) : null,
     harnesses,
     scheduler,
+    liveDogfood: {
+      authorized: raw.liveDogfood?.authorized === true,
+      receiptPath: raw.liveDogfood?.receiptPath ? collapseHome(expandHome(raw.liveDogfood.receiptPath)) : null,
+      egress: raw.liveDogfood?.egress && typeof raw.liveDogfood.egress === 'object' ? { ...raw.liveDogfood.egress } : {},
+    },
   };
 }
 

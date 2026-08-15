@@ -15,6 +15,7 @@ function verifyHarnessBundle({
   expectedTreeDigest,
   allowlist,
   remoteModelProbe = false,
+  shadowPaths = [],
 } = {}) {
   const projection = adapter?.skillProjection || null;
   const tier = projection?.verificationTier || adapter?.verificationTier || 'exact-path';
@@ -28,6 +29,9 @@ function verifyHarnessBundle({
 
   if (tier !== 'exact-path') {
     return { status: 'unverifiable', reason: 'adapter_verification_tier_unsupported', tier };
+  }
+  if (Array.isArray(shadowPaths) && shadowPaths.some((candidate) => candidate && fs.existsSync(candidate))) {
+    return { status: 'unverifiable', reason: 'higher_precedence_shadow', tier: 'exact-path' };
   }
 
   if (!targetPath || !expectedName || path.basename(targetPath) !== expectedName) {
