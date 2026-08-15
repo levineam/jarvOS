@@ -512,17 +512,38 @@ function initOperator(options = {}) {
   };
 }
 
+function withMutationLease(configPath, operation, fn) {
+  const loaded = loadConfig(configPath);
+  const root = loaded.resolved.controlRoot;
+  ensureDir(root, 'control root');
+  const lease = path.join(root, '.shared-skill-cli.lock');
+  let fd;
+  try { fd = fs.openSync(lease, 'wx', 0o600); } catch (_) { throw new Error(`shared skill ${operation} is already running`); }
+  try { return fn(); } finally { fs.closeSync(fd); try { fs.unlinkSync(lease); } catch (_) {} }
+}
+
+const _applyOperator = applyOperator;
+const _refreshOperator = refreshOperator;
+const _shareOperator = shareOperator;
+const _enableHarness = enableHarness;
+const _disableHarness = disableHarness;
+const _renameAlias = renameAlias;
+const _repairOperator = repairOperator;
+const _schedulerOperator = schedulerOperator;
+
 module.exports = {
   MODULE_ROOT,
   statusOperator,
   planOperator,
-  applyOperator,
-  refreshOperator,
-  shareOperator,
-  enableHarness,
-  disableHarness,
-  renameAlias,
-  repairOperator,
-  schedulerOperator,
+  applyOperator: (options = {}) => withMutationLease(options.configPath, 'apply', () => _applyOperator(options)),
+  refreshOperator: (options = {}) => withMutationLease(options.configPath, 'refresh', () => _refreshOperator(options)),
+  shareOperator: (options = {}) => withMutationLease(options.configPath, 'share', () => _shareOperator(options)),
+  enableHarness: (options = {}) => withMutationLease(options.configPath, 'enable', () => _enableHarness(options)),
+  disableHarness: (options = {}) => withMutationLease(options.configPath, 'disable', () => _disableHarness(options)),
+  renameAlias: (options = {}) => withMutationLease(options.configPath, 'rename', () => _renameAlias(options)),
+  repairOperator: (options = {}) => withMutationLease(options.configPath, 'repair', () => _repairOperator(options)),
+  schedulerOperator: (options = {}) => options.write === true
+    ? withMutationLease(options.configPath, 'scheduler', () => _schedulerOperator(options))
+    : _schedulerOperator(options),
   initOperator,
 };

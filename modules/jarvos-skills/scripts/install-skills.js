@@ -63,6 +63,7 @@ function parseArgs(argv) {
     intervalMinutes: null,
     write: false,
     harnesses: null,
+    controlRoot: '',
   };
 
   if (args[0] && !args[0].startsWith('-')) {
@@ -97,6 +98,9 @@ function parseArgs(argv) {
     } else if (arg === '--config') {
       if (!args[i + 1]) throw new Error('--config requires a path');
       opts.configPath = args[++i];
+    } else if (arg === '--control-root') {
+      if (!args[i + 1]) throw new Error('--control-root requires a path');
+      opts.controlRoot = args[++i];
     } else if (arg === '--id') {
       if (!args[i + 1]) throw new Error('--id requires a skill id');
       opts.id = args[++i];
@@ -137,7 +141,7 @@ function printHelp() {
   jarvos-skills project --harness hermes --dest /path/to/skills --apply [--json]
 
 Shared skill distribution (catalog/overlay):
-  jarvos-skills init-config [--config PATH] [--json]
+  jarvos-skills init-config [--config PATH] [--control-root PATH] [--json]
   jarvos-skills share --id NAME --path /bundle --scope public|local [--harnesses a,b] [--config PATH] [--json]
   jarvos-skills refresh [--config PATH] [--json]
   jarvos-skills plan [--config PATH] [--json]
@@ -196,7 +200,7 @@ function runOperator(opts) {
   const configPath = opts.configPath || undefined;
   switch (opts.command) {
     case 'init-config':
-      return initOperator({ configPath });
+      return initOperator({ configPath, controlRoot: opts.controlRoot || undefined });
     case 'share':
       return shareOperator({
         id: opts.id,

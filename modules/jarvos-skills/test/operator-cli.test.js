@@ -192,3 +192,12 @@ test('CLI status/plan commands return JSON and do not require live harnesses', (
     fs.rmSync(env.sourceRoot, { recursive: true, force: true });
   }
 });
+
+test('direct CLI mutation refuses a concurrent owner lease', () => {
+  const env = seedEnv();
+  try {
+    const lease = path.join(env.control, '.shared-skill-cli.lock'); fs.writeFileSync(lease, 'held', { mode: 0o600 });
+    const result = spawnSync(process.execPath, [CLI, 'repair', '--config', env.configPath, '--json'], { encoding: 'utf8' });
+    assert.notEqual(result.status, 0); assert.match(result.stdout, /already running/);
+  } finally { fs.rmSync(env.home, { recursive: true, force: true }); fs.rmSync(env.sourceRoot, { recursive: true, force: true }); }
+});

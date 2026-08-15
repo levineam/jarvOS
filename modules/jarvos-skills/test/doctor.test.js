@@ -42,6 +42,16 @@ test('doctor-shared is ready on a fresh isolated config and never enables gates'
   }
 });
 
+test('preflight CLI accepts an explicit control root, keeping populated default roots out of isolated config', () => {
+  const root = temp('jarvos-control-root-'); const configPath = path.join(root, 'config.json'); const controlRoot = path.join(root, 'isolated-control');
+  try {
+    const result = spawnSync(process.execPath, [CLI, 'init-config', '--config', configPath, '--control-root', controlRoot, '--json'], { encoding: 'utf8' });
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+    const body = JSON.parse(result.stdout); assert.equal(path.resolve(body.controlRoot), path.resolve(controlRoot));
+    assert.equal(fs.existsSync(path.join(controlRoot, 'public-catalog.json')), true);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
 test('live-preflight checklist stays non-activating and reports owner-pending steps', () => {
   const result = spawnSync(process.execPath, [PREFLIGHT, '--json'], {
     encoding: 'utf8',

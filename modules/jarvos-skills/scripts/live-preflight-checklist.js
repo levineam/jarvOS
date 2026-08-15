@@ -107,12 +107,15 @@ never enables live harness gates or remote model probes.
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-live-preflight-'));
   fs.chmodSync(tmp, 0o700);
   const configPath = path.join(tmp, 'config.json');
+  const controlRoot = path.join(tmp, 'control');
   try {
     const init = run(process.execPath, [
       path.join(MODULE_ROOT, 'scripts/install-skills.js'),
       'init-config',
       '--config',
       configPath,
+      '--control-root',
+      controlRoot,
       '--json',
     ]);
     const doctor = run(process.execPath, [
@@ -120,6 +123,8 @@ never enables live harness gates or remote model probes.
       'doctor-shared',
       '--config',
       configPath,
+      '--control-root',
+      controlRoot,
       '--json',
     ]);
     let doctorBody = null;
