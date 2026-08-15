@@ -158,13 +158,14 @@ function heartbeat(options) { return invokeBridge('heartbeat', options); }
 function checkpoint(options) { return invokeBridge('checkpoint', options); }
 function stop(options) { return invokeBridge('stop', options); }
 function nextTurnInput(options) { return invokeBridge('nextTurnInput', options); }
+function sessionWaitBind(options) { return invokeBridge('sessionWaitBind', options); }
 function sessionWaitNextTurn(options) { return invokeBridge('sessionWaitNextTurn', options); }
 
 function sessionWaitContext(input) {
   if (!input?.pendingSessionWait || !input.wait) return '';
   const wait = input.wait;
   const projection = wait.safeProjection || {};
-  const lines = ['jarvOS session follow-through result:', `Wait: ${wait.waitId}`, `State: ${wait.state}`];
+  const lines = ['jarvOS session-wait result:', `Wait: ${wait.waitId}`, `State: ${wait.state}`];
   if (projection.status) lines.push(`Status: ${projection.status}`);
   if (projection.reference) lines.push(`Reference: ${projection.reference}`);
   if (wait.resultDigest) lines.push(`Result digest: ${wait.resultDigest}`);
@@ -181,6 +182,7 @@ const stewardshipAdapter = {
   heartbeat,
   checkpoint,
   stop,
+  sessionWaitBind,
   nextTurnInput,
   sessionWaitNextTurn,
   availability,

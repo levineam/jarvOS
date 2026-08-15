@@ -1,10 +1,20 @@
 'use strict';
 
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
 const test = require('node:test');
 const { sessionWaitContext, validateSessionWaitBridgeResponse } = require('../runtimes/codex/jarvos-session-turn-hook.js');
 
 const threadId = '11111111-1111-4111-8111-111111111111';
+
+test('public skill documents the managed command contract', () => {
+  const skill = fs.readFileSync(path.join(__dirname, '..', 'modules/jarvos-skills/skills/session-wait/SKILL.md'), 'utf8');
+  assert.match(skill, /jarvos-session-wait register --work-id/);
+  assert.match(skill, /jarvos-session-wait inspect --wait-id/);
+  assert.match(skill, /jarvos-session-wait cancel --wait-id/);
+  assert.match(skill, /Do not supply an origin/);
+});
 
 test('Codex runtime accepts only a redacted consumed wait projection', () => {
   const response = validateSessionWaitBridgeResponse({
@@ -17,7 +27,7 @@ test('Codex runtime accepts only a redacted consumed wait projection', () => {
     },
   }, threadId);
   assert.equal(response.ok, true);
-  assert.match(sessionWaitContext(response.value), /session follow-through result/);
+  assert.match(sessionWaitContext(response.value), /session-wait result/);
   assert.doesNotMatch(sessionWaitContext(response.value), /repoBinding|workspaceBinding/);
 });
 

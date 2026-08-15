@@ -33,7 +33,7 @@ assert.equal(manifest.defaultSkills.includes('qmd'), false);
 const validation = validateBundle();
 assert.equal(validation.ok, true, validation.errors.join('\n'));
 assert.equal(listSkills().length, 6);
-assert.equal(getSkill('session-followthrough').supportedHarnesses.includes('codex'), true);
+assert.equal(getSkill('session-wait').supportedHarnesses.includes('codex'), true);
 
 for (const name of manifest.defaultSkills) {
   const skill = getSkill(name);

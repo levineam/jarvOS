@@ -1,11 +1,10 @@
 ---
-name: session-followthrough
+name: session-wait
 description: Register a bounded external result and return it once to the originating Codex session.
 triggers:
   - wait for the result
-  - follow this through
   - return the result here
-  - session-followthrough
+  - session-wait
 metadata:
   jarvos:
     bundle: operating-system-skills
@@ -13,7 +12,7 @@ metadata:
     authority: clawd-session-wait-engine
 ---
 
-# Session Follow-Through
+# Session Wait
 
 Use this skill when work must continue outside the current turn and its result
 must come back to this exact Codex session. The skill is a front door to the
@@ -48,6 +47,25 @@ The skill may request only these operations through the private engine:
 The skill cannot grant itself event-ingest authority, choose a producer, change
 the repository binding, extend a deadline, start a worker, run `codex exec`, or
 send Telegram, calendar, email, or other external notifications.
+
+## Invocation
+
+The selected managed Codex runtime exposes the private command
+`jarvos-session-wait` on `PATH`. Invoke it only from the originating Codex turn;
+the command derives the session, repository, workspace, and producer bindings
+from trusted runtime context.
+
+```text
+jarvos-session-wait register --work-id <opaque-id> --action-key <opaque-id> \
+  --subject <opaque-id> --revision <opaque-id> --deadline <ISO-8601> [--fence <opaque-id>]
+jarvos-session-wait inspect --wait-id <wait-id>
+jarvos-session-wait cancel --wait-id <wait-id> [--reason <opaque-id>]
+```
+
+Each invocation returns bounded JSON containing only the wait ID, state,
+deadline, safe projection, and delivery disposition. Do not supply an origin,
+state-root, producer, or receipt argument; those fields are runtime-derived or
+owned by the allowlisted producer.
 
 ## Safe result shape
 
