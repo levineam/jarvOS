@@ -251,7 +251,7 @@ function checkReleaseReadiness(opts = {}) {
 
   const revision = String(run('git', ['rev-parse', 'HEAD']).stdout || '').trim();
   const sourceParentRevision = String(run('git', ['rev-parse', 'HEAD^']).stdout || '').trim();
-  results.push(...checkCodexRoutingClaims({ readText, exists, revision, sourceParentRevision }));
+  results.push(...checkCodexRoutingClaims({ readText: read, exists: fileExists, revision, sourceParentRevision }));
 
   if (!/^\d+\.\d+\.\d+$/.test(target)) {
     fail('target version format', `Expected semver like v0.1.0; got ${opts.version || pkg.version}`);
