@@ -135,14 +135,14 @@ await codex.runTakeIssueToDone({ issueIdentifier: 'SUP-2214' });
 
 ## Managed coding workflow
 
-`createManagedCodingWorkflow(...)` is the provider-neutral route for natural
-coding verbs. It owns one durable work run and resolves the approved
-Compound Engineering manifest before invoking a provider adapter:
+`createManagedCodingWorkflow(...)` is the provider-neutral route behind the
+direct managed coding lifecycle. It owns one durable work run and resolves the
+approved Compound Engineering manifest before invoking a provider adapter:
 
 ```text
-plan -> validate draft -> accept one implementation packet -> work -> complete
-                                                                      |
-                                                   verified learning -> compound (optional)
+plan -> validate draft -> accept one implementation packet -> work -> finish
+                                                                    |
+                                                 status/resume -> verified learning -> compound (optional)
 ```
 
 The provider is a managed external artifact pinned by
@@ -158,10 +158,16 @@ reattachment hints.
 The Codex adapter is the first conformance-backed CE route. The runtime accepts
 CE 3.21.4 only when the discovered installation matches the approved immutable
 pin and the reviewed disposable-profile receipt. Run `jarvos doctor` to see the
-approved and discovered versions. If the provider is absent, modified,
-disabled, or unavailable, `plan`, `work`, and `complete` fall back to the native
-jarvOS route in the same work run and worktree. A failed fallback does not make
-a second branch, plan, pull request, or completion claim.
+approved and discovered versions. Use `plan → accept-plan → work →
+finish/status/resume` through the public MCP lifecycle; if the provider is
+absent, modified, disabled, or unavailable, the same managed run may use the
+native route after reconciliation. A failed fallback does not make a second
+branch, plan, pull request, or completion claim.
+
+Natural routing is currently unavailable. Deterministic behavior starts at the
+direct coding invocation, and automatic learning applies only after a verified
+managed run in a configured repository. Arbitrary unmanaged Codex edits do not
+receive automatic learning capture.
 
 Learning capture is deliberately independent of coding completion. It runs only
 after live review, tests, pull-request, post-merge, and close evidence establish

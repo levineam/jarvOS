@@ -19,9 +19,27 @@ const {
   checkJournalConflict,
 } = require('../lib/jarvos-cli');
 const {
+  validateCodexCodingWorkflow,
   validateJarvosProfile,
   validateOpenClawProfile,
 } = require('../modules/jarvos/src/doctor');
+
+test('Codex coding doctor reports only normative public-safe profile states', () => {
+  const cases = [
+    [{}, 'installed-but-unwired', true],
+    [{ registryBound: true, managedProviderReady: true }, 'managed-provider-ready', true],
+    [{ registryBound: true, nativeFallbackReady: true }, 'native-fallback-ready', true],
+    [{ disabled: true }, 'disabled', true],
+    [{ outdated: true }, 'outdated', false],
+    [{ blocked: true }, 'blocked', false],
+  ];
+  for (const [evidence, status, ok] of cases) {
+    const result = validateCodexCodingWorkflow(evidence);
+    assert.equal(result.status, status);
+    assert.equal(result.ok, ok);
+    assert.doesNotMatch(JSON.stringify(result), /\/Users\/|secret|credential|registry\.json/i);
+  }
+});
 
 function scratch() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-doctor-'));

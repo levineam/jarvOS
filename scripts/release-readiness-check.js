@@ -3,6 +3,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const { spawnSync } = require('child_process');
 
 const ROOT = path.resolve(__dirname, '..');
@@ -38,8 +39,103 @@ function run(command, args, options = {}) {
   });
 }
 
+function revisionFor(runCommand, ref) {
+  const result = runCommand('git', ['rev-parse', ref]);
+  return result.status === 0 ? String(result.stdout || '').trim() : '';
+}
+
+function resolveReceiptRevisions(runCommand = run) {
+  const revision = revisionFor(runCommand, 'HEAD');
+  const pullRequestHead = revisionFor(runCommand, 'HEAD^2');
+  const sourceParentRevision = pullRequestHead
+    ? revisionFor(runCommand, 'HEAD^2^')
+    : revisionFor(runCommand, 'HEAD^');
+  return { revision, sourceParentRevision };
+}
+
 function normalizeVersion(value) {
   return String(value || '').trim().replace(/^v/i, '');
+}
+
+function stableJson(value) {
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`;
+  if (value && typeof value === 'object') return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${stableJson(value[key])}`).join(',')}}`;
+  return JSON.stringify(value);
+}
+
+function digest(value) {
+  return crypto.createHash('sha256').update(stableJson(value)).digest('hex');
+}
+
+function checkCodexRoutingClaims({ readText: read, exists: fileExists, revision, sourceParentRevision = '' }) {
+  const results = [];
+  const corpusPath = 'runtimes/codex/coding-conformance-prompts.json';
+  const receiptPath = 'runtimes/codex/coding-routing-conformance.json';
+  const lifecyclePath = 'runtimes/codex/coding-lifecycle-conformance.json';
+  const documentation = ['README.md', 'runtimes/codex/README.md', 'modules/jarvos-coding/README.md', 'modules/jarvos-skills/README.md', 'modules/README.md'];
+  const pass = (label, detail = '') => results.push({ ok: true, label, detail });
+  const fail = (label, detail = '') => results.push({ ok: false, label, detail });
+  if (!fileExists(corpusPath) || !fileExists(receiptPath) || !fileExists(lifecyclePath)) {
+    fail('Codex natural-routing evidence', 'Prompt corpus, routing receipt, or direct lifecycle receipt is missing');
+    return results;
+  }
+  try {
+    const corpus = JSON.parse(read(corpusPath));
+    const receipt = JSON.parse(read(receiptPath));
+    const lifecycle = JSON.parse(read(lifecyclePath));
+    const managed = (corpus.classes || []).filter((entry) => entry.kind === 'managed-intent');
+    const controls = (corpus.classes || []).filter((entry) => entry.kind === 'control');
+    const corpusValid = corpus.schemaVersion === 'jarvos-codex-coding-routing-prompts/v1'
+      && managed.length > 0 && controls.length > 0
+      && managed.every((entry) => entry.minimumPrompts === 10 && entry.minimumSelectionRate === 0.9 && entry.prompts?.length >= 10)
+      && controls.every((entry) => entry.minimumPrompts === 10 && entry.maximumFalseManagedRunClaims === 0 && entry.prompts?.length >= 10);
+    const lifecycleOperations = ['initialize', 'tools/list', 'plan', 'accept-plan', 'work', 'finish', 'status', 'resume'];
+    const lifecycleRevision = lifecycle.sourceRevisionStrategy === 'source-parent' ? sourceParentRevision : revision;
+    const directLifecycleProven = lifecycle.schemaVersion === 'jarvos-codex-coding-lifecycle-conformance/v1'
+      && lifecycle.status === 'passed'
+      && Boolean(lifecycleRevision)
+      && lifecycle.jarvosRevision === lifecycleRevision
+      && lifecycle.mcp?.directInvocation === true
+      && lifecycle.provider?.networkObserved === false
+      && lifecycle.restart?.sameRun === true
+      && lifecycle.restart?.sameWorktree === true
+      && lifecycle.verification?.authoritative === true
+      && lifecycle.finalizer?.automatic === true
+      && lifecycleOperations.every((operation) => lifecycle.operations?.includes(operation));
+    const directProven = receipt.directInvocation?.status === 'passed' && directLifecycleProven;
+    const expectedRevision = receipt.sourceRevisionStrategy === 'source-parent' ? sourceParentRevision : revision;
+    const receiptCurrent = Boolean(expectedRevision) && receipt.jarvosRevision === expectedRevision
+      && receipt.promptCorpus?.digest === digest(corpus);
+    const liveResultsPass = managed.every((entry) => {
+      const result = receipt.results?.find((candidate) => candidate.classId === entry.id);
+      return result && result.promptCount >= entry.minimumPrompts && result.selected / result.promptCount >= entry.minimumSelectionRate;
+    }) && controls.every((entry) => {
+      const result = receipt.results?.find((candidate) => candidate.classId === entry.id);
+      return result && result.promptCount >= entry.minimumPrompts && result.falseManagedRunClaims === 0;
+    });
+    const naturalRoutingProven = receipt.status === 'passed' && corpusValid && receiptCurrent
+      && Boolean(receipt.harness?.codexVersion && receipt.harness?.model && receipt.harness?.projectedSkillDigest && receipt.harness?.mcpSchemaVersion)
+      && liveResultsPass;
+    if (!directProven) fail('Codex direct invocation evidence', 'The deterministic lifecycle receipt is missing, stale, incomplete, or not passed');
+    else pass('Codex direct invocation evidence', 'deterministic managed-run lifecycle remains available');
+
+    const docs = documentation.filter(fileExists).map(read).join('\n');
+    const naturalClaim = /natural coding verbs|ordinary jarvOS .*?(?:plan|work|complete).*?(?:CE|route)|Say `plan`, `work`, or `complete`/i.test(docs);
+    if (naturalRoutingProven) {
+      pass('Codex natural-routing evidence', 'current authenticated routing receipt meets the committed corpus thresholds');
+    } else if (naturalClaim) {
+      fail('Codex natural-routing evidence', 'Natural-routing language is present without a current passed live routing receipt');
+    } else if (!/Natural routing is currently unavailable/i.test(docs)) {
+      fail('Codex natural-routing evidence', 'Docs must state that natural routing is unavailable until a current live receipt passes');
+    } else if (receipt.status !== 'unavailable' || !corpusValid || !directProven) {
+      fail('Codex natural-routing evidence', 'Routing receipt is stale, incomplete, or unavailable without the required direct-only fallback evidence');
+    } else {
+      pass('Codex natural-routing evidence', 'unavailable live routing is documented; claims are limited to direct invocation');
+    }
+  } catch (error) {
+    fail('Codex natural-routing evidence', error.message);
+  }
+  return results;
 }
 
 function findReleaseProcessCurrentClaims(releaseProcess) {
@@ -166,6 +262,9 @@ function checkReleaseReadiness(opts = {}) {
   function fail(label, detail = '') {
     results.push({ ok: false, label, detail });
   }
+
+  const { revision, sourceParentRevision } = resolveReceiptRevisions(runLocal);
+  results.push(...checkCodexRoutingClaims({ readText: read, exists: fileExists, revision, sourceParentRevision }));
 
   if (!/^\d+\.\d+\.\d+$/.test(target)) {
     fail('target version format', `Expected semver like v0.1.0; got ${opts.version || pkg.version}`);
@@ -323,12 +422,14 @@ function main() {
 }
 
 module.exports = {
+  checkCodexRoutingClaims,
   checkFrontDoorReleaseProse,
   checkReleaseReadiness,
   findReadmeCurrentReleaseClaims,
   findReleaseProcessCurrentClaims,
   normalizeVersion,
   parseArgs,
+  resolveReceiptRevisions,
 };
 
 if (require.main === module) {

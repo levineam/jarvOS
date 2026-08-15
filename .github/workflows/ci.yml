@@ -184,6 +184,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Receipt-bound release tests inspect the PR head's parent when
+          # Actions checks out its synthetic merge commit.
+          fetch-depth: 3
 
       - name: Setup Node
         uses: actions/setup-node@v4

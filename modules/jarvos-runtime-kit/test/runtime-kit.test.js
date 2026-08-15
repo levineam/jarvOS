@@ -10,6 +10,7 @@ const test = require('node:test');
 const {
   COMPOUND_ENGINEERING_CAPABILITY_VERSION,
   checkRuntime,
+  validateCodexCodingWorkflow,
   checkCompoundEngineeringCapability,
   classifyCompoundEngineeringProvider,
   computeCompoundEngineeringFixtureDigest,
@@ -567,6 +568,19 @@ test('checkRuntime passes every checked-in adapter manifest', () => {
     const result = checkRuntime(manifest, { root: ROOT });
     assert.equal(result.ok, true, `${result.manifest}\n${result.errors.join('\n')}`);
   }
+});
+
+test('Codex coding workflow requires the public MCP schema and owner-only setup binding', () => {
+  const manifest = JSON.parse(fs.readFileSync(path.join(ROOT, 'runtimes/codex/adapter.json'), 'utf8'));
+  assert.equal(validateCodexCodingWorkflow(manifest, { root: ROOT }).ok, true);
+
+  const unsafeRegistration = JSON.parse(JSON.stringify(manifest));
+  unsafeRegistration.codingWorkflow.registration = 'codex mcp add --env JARVOS_CODING_REGISTRY=<raw> jarvos-coding';
+  assert.match(validateCodexCodingWorkflow(unsafeRegistration, { root: ROOT }).errors.join('\n'), /JARVOS_CODING_REPOSITORY_REGISTRY/);
+
+  const incompleteStates = JSON.parse(JSON.stringify(manifest));
+  incompleteStates.setup.states = ['installed-but-unwired'];
+  assert.match(validateCodexCodingWorkflow(incompleteStates, { root: ROOT }).errors.join('\n'), /setup\.states/);
 });
 
 test('checkRuntime reports unloadable MCP servers without throwing', () => {

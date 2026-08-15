@@ -14,10 +14,16 @@ bounded `plan` and `work` receipts, capability isolation, and exact-owned-state
 rollback.
 
 An installed plugin is healthy only when it matches the approved pin and the
-reviewed conformance receipt. Doctor reports the discovered version and health;
-ordinary jarvOS `plan`, `work`, and `complete` requests use the CE route when
-healthy and the native fallback in the same durable work run when absent,
-modified, disabled, or otherwise unavailable.
+reviewed conformance receipt. Doctor reports the discovered version and health.
+Use the managed coding MCP lifecycle directly:
+`plan` → `accept-plan` → `work` → `finish`, with `status` and `resume` for
+recovery. Provider failure can continue through the native workflow in the same
+durable run only after its normal reconciliation gate succeeds.
+
+Natural routing is currently unavailable: no current authenticated Codex
+selection receipt proves that implicit skill selection enters this lifecycle.
+The managed-run boundary begins only after direct invocation creates or resumes
+a configured-repository run; it does not intercept arbitrary Codex edits.
 
 Discovery commands are read-only. `codex plugin marketplace add` and
 `codex plugin add` are the exact pinned activation commands; they are scoped to

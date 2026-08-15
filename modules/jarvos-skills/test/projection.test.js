@@ -29,7 +29,9 @@ try {
   const first = planSkillProjection({ harness: 'hermes', skillsRoot: root, skills: ['workflow-execution'] });
   assert.equal(first.entries[0].status, 'missing');
   assert.equal(first.entries[0].action, 'create');
-  assert.equal(planSkillProjection({ harness: 'codex', skillsRoot: root, skills: ['workflow-execution'] }).entries[0].status, 'unsupported');
+  const codexWorkflow = planSkillProjection({ harness: 'codex', skillsRoot: root, skills: ['workflow-execution'] });
+  assert.equal(codexWorkflow.entries[0].status, 'missing');
+  assert.equal(codexWorkflow.entries[0].targetPath, path.join(fs.realpathSync(root), 'workflow-execution', 'SKILL.md'));
   assert.equal(planSkillProjection({ harness: 'hermes', skillsRoot: root, skills: ['workflow-execution'], incompatibleSkills: ['workflow-execution'] }).entries[0].status, 'incompatible');
   const initial = applySkillProjection(first);
   assert.equal(initial.applied[0].applied, true);
@@ -167,6 +169,22 @@ try {
     assert.equal(planSkillProjection({ harness, skillsRoot: harnessRoot, skills: ['explore-unknowns'] }).entries[0].status, 'missing');
     fs.rmSync(harnessRoot, { recursive: true, force: true });
   }
+
+  const codexAdapter = JSON.parse(fs.readFileSync(path.join(__dirname, '..', '..', '..', 'runtimes', 'codex', 'adapter.json'), 'utf8'));
+  assert.equal(codexAdapter.codingWorkflow.mcpServer, 'modules/jarvos-coding/scripts/jarvos-coding-mcp.js');
+  assert.deepEqual(codexAdapter.codingWorkflow.toolSequence, [
+    'jarvos_coding_plan', 'jarvos_coding_accept_plan', 'jarvos_coding_work',
+    'jarvos_coding_finish', 'jarvos_coding_status', 'jarvos_coding_resume',
+  ]);
+  assert.ok(codexAdapter.setup.states.includes('installed-but-unwired'));
+  assert.ok(codexAdapter.setup.states.includes('native-fallback-ready'));
+
+  const codexSetup = fs.readFileSync(path.join(__dirname, '..', '..', '..', 'runtimes', 'codex', 'setup.sh'), 'utf8');
+  assert.match(codexSetup, /CODING_REGISTRY="\$\{JARVOS_CODING_REGISTRY:-\}"/);
+  assert.match(codexSetup, /loadRepositoryRegistry\(process\.argv\[3\], \{ ownerUid: process\.getuid\?\.\(\) \}\)/);
+  assert.match(codexSetup, /codex mcp add --env "JARVOS_CODING_REPOSITORY_REGISTRY=\$CODING_REGISTRY" jarvos-coding/);
+  assert.match(codexSetup, /planSkillProjection\(\{ harness: 'codex', skillsRoot, skills: \['workflow-execution'\] \}\)/);
+  assert.doesNotMatch(codexSetup, /--env "JARVOS_CODING_REGISTRY=/);
 
   const packageRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-skills-package-'));
   const stagingRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-skills-staging-'));

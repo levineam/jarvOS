@@ -2,9 +2,11 @@
 'use strict';
 
 const assert = require('assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
 const test = require('node:test');
 
-const { checkFrontDoorReleaseProse, checkReleaseReadiness } = require('../scripts/release-readiness-check');
+const { checkCodexRoutingClaims, checkFrontDoorReleaseProse, checkReleaseReadiness, resolveReceiptRevisions } = require('../scripts/release-readiness-check');
 
 function runFrontDoorCheck(files, options = {}) {
   return checkFrontDoorReleaseProse({
@@ -24,6 +26,17 @@ function runFrontDoorCheck(files, options = {}) {
 function failedLabels(results) {
   return results.filter((result) => !result.ok).map((result) => result.label);
 }
+
+test('receipt revisions use the PR head parent when CI checks out a merge commit', () => {
+  const revisions = {
+    HEAD: 'merge',
+    'HEAD^2': 'pr-head',
+    'HEAD^2^': 'receipt-parent',
+    'HEAD^': 'base',
+  };
+  const result = resolveReceiptRevisions((_command, args) => ({ status: 0, stdout: `${revisions[args[1]] || ''}\n` }));
+  assert.deepEqual(result, { revision: 'merge', sourceParentRevision: 'receipt-parent' });
+});
 
 test('front-door release prose passes when README and release-process match the finalized target', () => {
   const results = runFrontDoorCheck({
@@ -176,4 +189,26 @@ test('candidate release gate passes as unreleased work without authorizing a ver
   assert.equal(report.version, 'v0.7.0');
   assert.equal(report.results.find((result) => result.label === 'CHANGELOG.md version section').ok, true);
   assert.equal(report.results.find((result) => result.label === 'git tag preflight').ok, true);
+});
+
+test('Codex direct routing evidence fails when the referenced lifecycle receipt is stale or incomplete', () => {
+  const root = path.resolve(__dirname, '..');
+  const corpus = fs.readFileSync(path.join(root, 'runtimes/codex/coding-conformance-prompts.json'), 'utf8');
+  const routing = JSON.parse(fs.readFileSync(path.join(root, 'runtimes/codex/coding-routing-conformance.json'), 'utf8'));
+  const lifecycle = JSON.parse(fs.readFileSync(path.join(root, 'runtimes/codex/coding-lifecycle-conformance.json'), 'utf8'));
+  const files = {
+    'runtimes/codex/coding-conformance-prompts.json': corpus,
+    'runtimes/codex/coding-routing-conformance.json': JSON.stringify(routing),
+    'runtimes/codex/coding-lifecycle-conformance.json': JSON.stringify(lifecycle),
+    'README.md': 'Natural routing is currently unavailable until direct evidence is current.\n',
+  };
+  const run = (lifecycleOverride) => checkCodexRoutingClaims({
+    readText: (file) => lifecycleOverride && file.endsWith('coding-lifecycle-conformance.json') ? JSON.stringify(lifecycleOverride) : files[file],
+    exists: (file) => Object.prototype.hasOwnProperty.call(files, file),
+    revision: 'release-revision',
+    sourceParentRevision: lifecycle.jarvosRevision,
+  });
+  assert.equal(run(lifecycle).find((entry) => entry.label === 'Codex direct invocation evidence').ok, true);
+  const failed = run({ ...lifecycle, status: 'failed' }).find((entry) => entry.label === 'Codex direct invocation evidence');
+  assert.equal(failed.ok, false);
 });

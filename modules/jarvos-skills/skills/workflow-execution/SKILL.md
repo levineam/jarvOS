@@ -1,6 +1,6 @@
 ---
 name: workflow-execution
-description: Plan-first workflow for non-trivial work: define the goal, create or reuse a tracker issue, package context, execute on an issue-named branch when code changes, and verify completion with evidence.
+description: Plan-first jarvOS workflow for non-trivial coding work. Use it for planning, implementing, resuming, checking status, or finishing a managed coding run; it calls the jarvOS coding MCP tools and does not require Compound Engineering commands.
 triggers:
   - make a plan
   - plan this
@@ -13,6 +13,8 @@ metadata:
     bundle: operating-system-skills
     portability: generic
     managedCodingProvider: compound-engineering
+    codex:
+      implicitInvocation: managed coding intent only
 ---
 
 # Workflow Execution
@@ -51,21 +53,32 @@ The workflow is complete only when:
 8. **Close or hand off.** Move the issue to done only when no follow-up remains.
    Use in-review only when a real reviewer path exists.
 
-## Managed coding verbs
+## Managed coding workflow (Codex)
 
-When this skill is running inside a jarvOS coding profile, the natural verbs
-`plan`, `work`, and `complete` use the jarvOS-managed provider route. A healthy,
-approved Compound Engineering provider supplies the planning and implementation
-discipline behind the scenes; jarvOS still owns the work-run, branch/worktree,
-accepted plan revision, review evidence, submission gate, and completion
-decision. `compound` is an explicit, post-verification learning-capture step,
-not a substitute for completion evidence.
+In a jarvOS-managed Codex profile, use the `jarvos-coding` MCP tools for ordinary
+coding intent: plan, accept the plan when the repository policy allows it, work,
+finish, check status, or resume. Start with `jarvos_coding_repositories` when a
+repository identifier is needed, then use this sequence for one subject:
 
-If the provider is unavailable, modified, unsupported, or fails during a run,
-fall back through the generic workflow in the same work run and worktree. Do
-not start a second plan, branch, or pull request. Treat provider checkpoints as
-reattachment hints only and revalidate current Git, review, test, and PR
-evidence before claiming completion.
+1. `jarvos_coding_plan`
+2. `jarvos_coding_accept_plan`
+3. `jarvos_coding_work`
+4. `jarvos_coding_finish`
+
+Use `jarvos_coding_status` or `jarvos_coding_resume` to continue an existing
+run. The MCP contract accepts only an owner-provisioned opaque repository ID;
+never supply or infer a repository root, executable, credential, provider, or
+registry path from the request. The deterministic direct invocation is the
+recovery path when implicit skill selection does not occur.
+
+jarvOS owns the durable run, accepted plan revision, canonical worktree,
+verification, and completion decision. If the approved managed provider is
+unavailable, modified, unsupported, or fails, jarvOS uses its bounded native
+coding fallback in that same managed run and worktree. Do not start a second
+plan, branch, or pull request. Compound Engineering is an implementation detail;
+users do not need to invoke it manually. Automatic learning capture is guaranteed
+only after eligible jarvOS-managed runs that reach jarvOS-verified completion,
+not for arbitrary unmanaged Codex edits.
 
 ## Definition of done template
 

@@ -105,13 +105,15 @@ upstream versions are recorded as one review item and never change the active
 provider until a new jarvOS-approved manifest is shipped. Disable and rollback
 remove only exact jarvOS-owned state.
 
-The bundled `workflow-execution` skill maps ordinary `plan`, `work`, and
-`complete` requests to jarvOS-coding's managed workflow when the active harness
-has a healthy approved provider. Users do not need to learn CE command names.
-`compound` is the optional post-verification learning tail: the eligibility gate
-selects one reusable lesson, screens it for private content, and records its
-outcome separately from coding completion. Routine work is `not-eligible`, and
-provider failure or absence is `unavailable`/`failed` without reopening or
+The bundled `workflow-execution` skill documents the direct jarvOS-coding
+lifecycle: `plan` → `accept-plan` → `work` → `finish`, with `status` and
+`resume` for recovery. Natural routing is currently unavailable until a current
+authenticated Codex routing receipt passes the committed corpus thresholds, so
+the skill must not claim to intercept arbitrary work. `compound` is an optional
+post-verification learning tail for verified managed runs only: the eligibility
+gate selects one reusable lesson, screens it for private content, and records
+its outcome separately from coding completion. Routine work is `not-eligible`,
+and provider failure or absence is `unavailable`/`failed` without reopening or
 downgrading a verified run.
 
 Codex is the first conformance-backed activation target. The shipped pin is CE

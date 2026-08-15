@@ -3,11 +3,13 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 MCP_SERVER="$ROOT/modules/jarvos-agent-context/scripts/jarvos-mcp.js"
+CODING_MCP_SERVER="$ROOT/modules/jarvos-coding/scripts/jarvos-coding-mcp.js"
 MANAGED_HOOKS_JSON="$ROOT/runtimes/codex/hooks.json"
 HOOK_SCRIPT="$ROOT/runtimes/codex/jarvos-session-start-hook.js"
 TURN_HOOK_SCRIPT="$ROOT/runtimes/codex/jarvos-session-turn-hook.js"
 TRUST_SCRIPT="$ROOT/runtimes/codex/trust-session-start-hook.js"
 CODEX_HOME="${CODEX_HOME:-$HOME/.codex}"
+SKILLS_ROOT="$CODEX_HOME/skills"
 CODEX_CONFIG="${CODEX_CONFIG:-$CODEX_HOME/config.toml}"
 LEGACY_HOOKS_JSON="$CODEX_HOME/hooks.json"
 CONTROL_PLANE_SERVICE_MODULE="${JARVOS_CONTROL_PLANE_SERVICE_MODULE:-}"
@@ -19,6 +21,10 @@ STEWARDSHIP_CODEX_SESSION_MAP_ROOT="${JARVOS_STEWARDSHIP_CODEX_SESSION_MAP_ROOT:
 STEWARDSHIP_STABLE_ROOT="${JARVOS_STEWARDSHIP_STABLE_ROOT:-}"
 STEWARDSHIP_DISPATCHER=""
 CODEX_PROVIDER_MODE="${JARVOS_CODEX_PROVIDER_MODE:-}"
+# This is setup input only. The coding MCP receives the validated path through
+# its fixed JARVOS_CODING_REPOSITORY_REGISTRY binding; no roots, credentials,
+# providers, or executable configuration are registered from model input.
+CODING_REGISTRY="${JARVOS_CODING_REGISTRY:-}"
 
 # The private installer materializes this owner-controlled bundle once. Native
 # configuration must refer to it, never to a selected immutable runtime stage.
@@ -52,9 +58,25 @@ if [ ! -f "$MCP_SERVER" ]; then
   exit 1
 fi
 
+if [ ! -f "$CODING_MCP_SERVER" ]; then
+  echo "jarvOS coding MCP server not found: $CODING_MCP_SERVER" >&2
+  exit 1
+fi
+
 if [ ! -f "$MANAGED_HOOKS_JSON" ]; then
   echo "jarvOS Codex hooks config not found: $MANAGED_HOOKS_JSON" >&2
   exit 1
+fi
+
+if [ -n "$CODING_REGISTRY" ]; then
+  if ! node - "$ROOT/modules/jarvos-coding/src/runtime/repository-registry.js" "$CODING_REGISTRY" <<'NODE'
+const { loadRepositoryRegistry } = require(process.argv[2]);
+loadRepositoryRegistry(process.argv[3], { ownerUid: process.getuid?.() });
+NODE
+  then
+    echo "JARVOS_CODING_REGISTRY must be a valid absolute owner-only provisioned registry" >&2
+    exit 1
+  fi
 fi
 
 if [ ! -f "$HOOK_SCRIPT" ]; then
@@ -157,6 +179,32 @@ if [ "${JARVOS_STEWARDSHIP_ONLY:-0}" != "1" ]; then
     codex mcp add jarvos -- node "$MCP_SERVER"
     echo "Registered jarvOS MCP server for Codex: $MCP_SERVER"
   fi
+
+  if [ "${JARVOS_MANAGED_HARNESS_ROLLBACK:-0}" = "1" ]; then
+    codex mcp remove jarvos-coding >/dev/null 2>&1 || true
+    echo "Removed jarvOS-owned coding MCP registration for Codex."
+  elif [ -n "$CODING_REGISTRY" ]; then
+    if codex mcp get jarvos-coding >/dev/null 2>&1; then
+      codex mcp remove jarvos-coding >/dev/null
+    fi
+    codex mcp add --env "JARVOS_CODING_REPOSITORY_REGISTRY=$CODING_REGISTRY" jarvos-coding -- node "$CODING_MCP_SERVER"
+    echo "Registered jarvOS coding MCP server for Codex with an owner-bound repository registry."
+  else
+    echo "jarvOS coding MCP remains installed-but-unwired; provision a registry and rerun setup with JARVOS_CODING_REGISTRY."
+  fi
+fi
+
+# Projections own only their receipt and target. A locally modified target is
+# deliberately preserved by applySkillProjection; setup never overwrites it.
+if [ "${JARVOS_MANAGED_HARNESS_ROLLBACK:-0}" != "1" ]; then
+  node - "$ROOT/modules/jarvos-skills" "$SKILLS_ROOT" <<'NODE'
+const { applySkillProjection, planSkillProjection } = require(process.argv[2]);
+const skillsRoot = process.argv[3];
+const plan = planSkillProjection({ harness: 'codex', skillsRoot, skills: ['workflow-execution'] });
+const result = applySkillProjection(plan);
+const entry = result.applied[0];
+console.log(entry.applied ? 'Projected jarvOS workflow-execution skill for Codex.' : `Preserved Codex workflow-execution skill (${entry.status}).`);
+NODE
 fi
 
 mkdir -p "$(dirname "$CODEX_CONFIG")"

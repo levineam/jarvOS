@@ -280,6 +280,37 @@ try {
   assert.match(doctorBadHost.stdout, /configure a usable JARVOS_CONTROL_PLANE_SERVICE_MODULE/);
   assert.doesNotMatch(doctorBadHost.stdout, /missing-host\.js/);
 
+  const provisionedRoot = path.join(tmp, 'provisioned-repository');
+  fs.mkdirSync(provisionedRoot, 0o700);
+  const registryPath = path.join(tmp, 'coding-registry.json');
+  const repository = {
+    publicLabel: 'CLI fixture', agentSelectable: true, root: provisionedRoot,
+    stateRoot: path.join(tmp, 'coding-state'), worktreePolicy: { root: path.join(tmp, 'coding-worktrees') },
+    tracker: { kind: 'fixture' }, acceptancePolicy: { mode: 'human-evidence-required' },
+    providerEgressPolicy: {}, credentialReferences: { tracker: 'keychain:fixture' },
+    learning: { enabled: true }, learningPublicationTarget: 'vault:fixture',
+  };
+  const addedRepository = run(['coding', 'repository', 'add', '--registry', registryPath, '--repository-json', JSON.stringify(repository), '--json']);
+  assert.equal(addedRepository.status, 0, addedRepository.stderr || addedRepository.stdout);
+  const addReceipt = JSON.parse(addedRepository.stdout);
+  assert.equal(addReceipt.generation, 1);
+  assert.doesNotMatch(addedRepository.stdout, new RegExp(tmp.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+  const inspectedRepository = run(['coding', 'repository', 'inspect', '--registry', registryPath, '--json']);
+  assert.equal(inspectedRepository.status, 0, inspectedRepository.stderr || inspectedRepository.stdout);
+  assert.deepEqual(JSON.parse(inspectedRepository.stdout).repositories, [{ repositoryId: addReceipt.repository.repositoryId, label: 'CLI fixture', agentSelectable: true }]);
+  const acceptedPlan = run(['coding', 'accept', '--registry', registryPath, '--repository-id', addReceipt.repository.repositoryId, '--run-id', 'run_cli', '--revision', 'sha256:fixture', '--json']);
+  assert.equal(acceptedPlan.status, 0, acceptedPlan.stderr || acceptedPlan.stdout);
+  assert.equal(JSON.parse(acceptedPlan.stdout).revision, 'sha256:fixture');
+  const declinedLearning = run(['coding', 'learning', 'decline', '--registry', registryPath, '--repository-id', addReceipt.repository.repositoryId, '--run-id', 'run_cli', '--json']);
+  assert.equal(declinedLearning.status, 0, declinedLearning.stderr || declinedLearning.stdout);
+  assert.equal(JSON.parse(declinedLearning.stdout).action, 'decline-learning');
+  const resetLearning = run(['coding', 'learning', 'reset-retry', '--registry', registryPath, '--repository-id', addReceipt.repository.repositoryId, '--run-id', 'run_cli', '--json']);
+  assert.equal(resetLearning.status, 0, resetLearning.stderr || resetLearning.stdout);
+  assert.equal(JSON.parse(resetLearning.stdout).action, 'reset-learning-retry');
+  const noRegistryInference = run(['coding', 'repository', 'inspect', '--json']);
+  assert.notEqual(noRegistryInference.status, 0);
+  assert.match(noRegistryInference.stderr, /registryPath is required/);
+
   console.log('CLI smoke tests passed.');
 } finally {
   fs.rmSync(tmp, { recursive: true, force: true });
