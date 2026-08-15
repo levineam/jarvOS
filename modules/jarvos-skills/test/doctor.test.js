@@ -121,3 +121,12 @@ test('live-preflight checklist stays non-activating and reports owner-pending st
   assert.equal(byId['claude-interactive-probe'].status, 'pending_owner');
   assert.equal(byId['live-harness-gates'].status, 'off');
 });
+
+test('live-preflight rejects write opt-in and remains a read-only release gate', () => {
+  const result = spawnSync(process.execPath, [PREFLIGHT, '--allow-writes', '--json'], {
+    encoding: 'utf8',
+    cwd: path.join(__dirname, '..'),
+  });
+  assert.equal(result.status, 2);
+  assert.match(result.stderr, /permanently read-only/);
+});

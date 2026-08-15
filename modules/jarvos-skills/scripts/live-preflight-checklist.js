@@ -5,7 +5,7 @@
  * Maintainer live-preflight checklist for shared-skill distribution.
  *
  * This script is intentionally non-activating:
- * - never writes into real harness skill roots unless --allow-writes is passed
+ * - never writes into real harness skill roots
  * - never enables launchd/systemd
  * - never sets remoteModelProbe=true
  * - never prints private skill bodies
@@ -42,18 +42,21 @@ function item(id, status, summary, evidence = null) {
 
 function main() {
   const args = new Set(process.argv.slice(2));
-  const allowWrites = args.has('--allow-writes');
   const json = args.has('--json') || !args.has('--text');
 
   if (args.has('--help') || args.has('-h')) {
     process.stdout.write(`Usage:
-  node modules/jarvos-skills/scripts/live-preflight-checklist.js [--json] [--allow-writes]
+  node modules/jarvos-skills/scripts/live-preflight-checklist.js [--json]
 
-Default is read-only package + isolated matrix evidence.
---allow-writes is reserved for future owner-local temp-root dry runs and still
-never enables live harness gates or remote model probes.
+This command is always read-only. It never enables live harness gates or remote
+model probes; use the installed-runtime activation procedure after merge.
 `);
     process.exit(0);
+  }
+
+  if (args.has('--allow-writes')) {
+    process.stderr.write('ERROR live-preflight-checklist is permanently read-only; --allow-writes is not supported\n');
+    process.exit(2);
   }
 
   const items = [];
@@ -160,7 +163,7 @@ never enables live harness gates or remote model probes.
     'scheduler-enable',
     'pending_owner',
     'launchd/systemd units may be written disabled; enabling is an owner action after review',
-    { autoEnable: false, allowWrites },
+    { autoEnable: false, readOnly: true },
   ));
   items.push(item(
     'live-harness-gates',
@@ -174,7 +177,7 @@ never enables live harness gates or remote model probes.
     ok: !blockingFail,
     mode: 'live-preflight-checklist',
     activating: false,
-    allowWrites,
+    readOnly: true,
     generatedAt: new Date().toISOString(),
     items,
     next: blockingFail
