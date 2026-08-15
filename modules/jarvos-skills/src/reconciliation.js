@@ -202,7 +202,19 @@ function classifyPair({ entry, harness, effectiveName, sourceRoot, sourceAttesta
   }
 
   if (!receipt) {
-    // Unmanaged incumbent at the effective name. Never overwrite.
+    // Exact-digest unmanaged copy: adopt in place (ownership evidence only).
+    // Divergent unmanaged copy remains preserved with pair-scoped attention.
+    if (observed === source.treeDigest) {
+      return {
+        status: 'unmanaged_exact',
+        action: 'adopt',
+        target,
+        receipt: null,
+        source,
+        observed,
+        reason: 'exact_digest_unmanaged_adopt',
+      };
+    }
     return {
       status: 'unmanaged',
       action: 'preserve',
@@ -210,6 +222,7 @@ function classifyPair({ entry, harness, effectiveName, sourceRoot, sourceAttesta
       receipt: null,
       source,
       observed,
+      reason: 'divergent_unmanaged_preserve',
     };
   }
 
@@ -273,6 +286,19 @@ function pairGeneration(pair) {
   }));
 }
 
+function exactDigestAtName(harnessRoot, name, entry) {
+  const target = targetDir(harnessRoot, name);
+  if (!fs.existsSync(target)) return false;
+  // Receipt-owned targets are not "exact unmanaged" candidates.
+  if (validateReceipt(readReceipt(harnessRoot, name))) return false;
+  try {
+    const observed = computeBundleTree(target, { allowlist: entry.bundle.allowlist }).treeDigest;
+    return observed === entry.bundle.treeDigest;
+  } catch {
+    return false;
+  }
+}
+
 function resolveAliasesForCatalog({ catalog, harnesses, aliasState, reviewer = null }) {
   const aliases = { ...aliasState.data.aliases };
   const notices = [];
@@ -286,11 +312,20 @@ function resolveAliasesForCatalog({ catalog, harnesses, aliasState, reviewer = n
   for (const entry of catalog.entries) {
     if (aliases[entry.id]) continue;
     const enrolled = harnesses.filter((harness) => entry.allowedHarnesses.includes(harness.id));
+    // Exact-digest unmanaged copies of this entry can keep the canonical name
+    // (U4 adopt-in-place). Only divergent/unsafe occupants force an alias.
+    const exactCanonicalOnAll = enrolled.length > 0 && enrolled.every((harness) => (
+      !occupiedByHarness[harness.id]?.has(entry.id)
+      || exactDigestAtName(harness.root, entry.id, entry)
+    ));
     // Names occupied by unmanaged targets on any enrolled harness block the
     // canonical id and any candidate that is already present somewhere.
     const occupied = new Set();
     for (const harness of enrolled) {
-      for (const name of occupiedByHarness[harness.id] || []) occupied.add(name);
+      for (const name of occupiedByHarness[harness.id] || []) {
+        if (name === entry.id && exactDigestAtName(harness.root, name, entry)) continue;
+        occupied.add(name);
+      }
     }
     // Existing durable aliases for other skills also reserve names.
     for (const [otherId, otherName] of Object.entries(aliases)) {
@@ -306,7 +341,7 @@ function resolveAliasesForCatalog({ catalog, harnesses, aliasState, reviewer = n
         sourceKind: entry.sourceKind,
         harnesses: enrolled.map((harness) => harness.id),
       },
-      forceAlias: occupied.has(entry.id),
+      forceAlias: occupied.has(entry.id) && !exactCanonicalOnAll,
     });
 
     if (!resolution.effectiveName) {
@@ -339,6 +374,30 @@ function planCatalogReconciliation(options = {}) {
   if (!catalog || !Array.isArray(catalog.entries)) throw new Error('effective catalog is required');
   if (!Array.isArray(options.harnesses) || options.harnesses.length === 0) {
     throw new Error('harnesses are required');
+  }
+
+  // U4: incomplete inventory generations may observe but never mutate.
+  if (options.incompleteGeneration === true && options.allowIncompleteMutation !== true) {
+    return {
+      version: 1,
+      catalogDigest: options.catalogDigest || (catalog.digest || null),
+      aliasRevision: null,
+      aliases: {},
+      aliasFile: null,
+      journalFile: null,
+      controlRoot: options.controlRoot || null,
+      harnesses: options.harnesses || [],
+      notices: [{
+        id: '*',
+        level: 'blocked',
+        message: 'incomplete inventory generation refuses admission/update/retirement mutations',
+      }],
+      pairs: [],
+      ok: false,
+      incompleteGeneration: true,
+      inventoryGenerationId: options.inventoryGenerationId || null,
+      mutate: false,
+    };
   }
 
   const readOnly = options.readOnly === true;
@@ -415,6 +474,12 @@ function planCatalogReconciliation(options = {}) {
         treeDigest: entry.bundle.treeDigest,
         catalogDigest,
         aliasRevision: aliasState.data.revision,
+        inventoryGenerationId: options.inventoryGenerationId || null,
+        sourceIdentity: options.sourceIdentities?.[entry.id] || {
+          logicalId: entry.id,
+          sourceKind: entry.sourceKind,
+          profileDigest: null,
+        },
         ...classified,
       };
       pair.generation = pairGeneration(pair);
@@ -489,7 +554,10 @@ function planCatalogReconciliation(options = {}) {
     harnesses,
     notices,
     pairs,
-    ok: pairs.every((pair) => ['clean', 'missing', 'outdated', 'retire'].includes(pair.status)
+    inventoryGenerationId: options.inventoryGenerationId || null,
+    incompleteGeneration: false,
+    mutate: pairs.some((pair) => pair.action === 'install' || pair.action === 'retire' || pair.action === 'adopt'),
+    ok: pairs.every((pair) => ['clean', 'missing', 'outdated', 'retire', 'unmanaged_exact'].includes(pair.status)
       || (pair.action === 'preserve' && ['unmanaged', 'local_modified', 'unsafe', 'conflict'].includes(pair.status))),
   };
 }
@@ -606,14 +674,31 @@ function commitAliasesIfNeeded(plan) {
 }
 
 function applyCatalogReconciliation(plan, options = {}) {
-  if (!plan || !Array.isArray(plan.pairs) || !plan.aliasFile || !plan.journalFile) {
+  if (!plan || !Array.isArray(plan.pairs)) {
+    throw new Error('catalog reconciliation plan is required');
+  }
+
+  if (plan.incompleteGeneration === true) {
+    return {
+      ok: false,
+      noop: true,
+      applied: [],
+      aliasRevision: plan.aliasRevision || null,
+      notices: plan.notices || [],
+      reason: 'incomplete_generation',
+    };
+  }
+
+  if (!plan.aliasFile || !plan.journalFile) {
     throw new Error('catalog reconciliation plan is required');
   }
 
   const aliasCommit = commitAliasesIfNeeded(plan);
   const aliasRevision = aliasCommit.revision;
 
-  const hasActionablePairs = plan.pairs.some((pair) => pair.action === 'install' || pair.action === 'retire');
+  const hasActionablePairs = plan.pairs.some((pair) => (
+    pair.action === 'install' || pair.action === 'retire' || pair.action === 'adopt'
+  ));
   if (!aliasCommit.changed && !hasActionablePairs) {
     return {
       ok: true,
@@ -642,6 +727,56 @@ function applyCatalogReconciliation(plan, options = {}) {
           effectiveName: pair.effectiveName,
           status: pair.status,
           applied: false,
+        });
+        continue;
+      }
+
+      if (pair.action === 'adopt' && pair.status === 'unmanaged_exact') {
+        // Ownership evidence only — never rewrite matching bytes.
+        let observed;
+        try {
+          observed = computeBundleTree(pair.target, { allowlist: pair.allowlist }).treeDigest;
+        } catch (error) {
+          applied.push({
+            id: pair.id,
+            harness: pair.harness,
+            effectiveName: pair.effectiveName,
+            status: 'unsafe',
+            applied: false,
+            reason: error.message,
+          });
+          continue;
+        }
+        if (observed !== pair.treeDigest) {
+          applied.push({
+            id: pair.id,
+            harness: pair.harness,
+            effectiveName: pair.effectiveName,
+            status: 'unmanaged',
+            applied: false,
+            reason: 'adopt_aborted_digest_drift',
+          });
+          continue;
+        }
+        atomicWriteReceipt(path.dirname(pair.target), {
+          version: 1,
+          id: pair.id,
+          effectiveName: pair.effectiveName,
+          harness: pair.harness,
+          treeDigest: pair.treeDigest,
+          catalogDigest: plan.catalogDigest,
+          aliasRevision,
+          targetPath: pair.target,
+          inventoryGenerationId: pair.inventoryGenerationId || plan.inventoryGenerationId || null,
+          sourceIdentity: pair.sourceIdentity || null,
+        });
+        applied.push({
+          id: pair.id,
+          harness: pair.harness,
+          effectiveName: pair.effectiveName,
+          status: 'adopted',
+          applied: true,
+          reason: 'exact_digest_unmanaged_adopt',
         });
         continue;
       }
@@ -759,6 +894,8 @@ function applyCatalogReconciliation(plan, options = {}) {
         aliasRevision,
         targetPath: pair.target,
         verificationTier: options.verificationTier || 'receipt-owned',
+        inventoryGenerationId: pair.inventoryGenerationId || plan.inventoryGenerationId || null,
+        sourceIdentity: pair.sourceIdentity || null,
       });
       } catch (error) {
         // A receipt is the ownership boundary. Roll back the replacement when

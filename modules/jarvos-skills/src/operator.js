@@ -178,11 +178,42 @@ function statusOperator(options = {}) {
   };
 }
 
+function readInventoryGenerationMeta(resolved) {
+  try {
+    const { ensureInventoryStateLayout } = require('./inventory-contract');
+    const { readAcceptedGeneration } = require('./source-store');
+    const layout = ensureInventoryStateLayout({
+      controlRoot: resolved.controlRoot,
+      inventory: resolved.config?.inventory,
+    });
+    const accepted = readAcceptedGeneration(layout.acceptedGenerationPath);
+    if (!accepted) return { inventoryGenerationId: null, sourceIdentities: null, incompleteGeneration: false };
+    const sourceIdentities = Object.fromEntries((accepted.identities || []).map((identity) => [
+      identity.effectiveName || identity.logicalId,
+      {
+        logicalId: identity.logicalId,
+        sourceKind: 'local-overlay',
+        profileDigest: identity.profileDigest || null,
+      },
+    ]));
+    return {
+      inventoryGenerationId: accepted.generationId || null,
+      sourceIdentities,
+      incompleteGeneration: false,
+    };
+  } catch {
+    return { inventoryGenerationId: null, sourceIdentities: null, incompleteGeneration: false };
+  }
+}
+
 function planOperator(options = {}) {
   const loaded = loadConfig(options.configPath);
   const state = loadEffectiveFromConfig(loaded.resolved, { readOnly: options.readOnly !== false });
   if (state.status !== 'valid') throw new Error(state.reason || 'catalog is invalid');
   requireSourceRoots(state.resolved, state.effective);
+  const inventoryMeta = options.incompleteGeneration === true
+    ? { inventoryGenerationId: options.inventoryGenerationId || null, sourceIdentities: null, incompleteGeneration: true }
+    : readInventoryGenerationMeta({ ...loaded.resolved, config: loaded.config });
   const plan = planCatalogReconciliation({
     catalog: state.effective.catalog,
     catalogDigest: state.effective.digest,
@@ -192,6 +223,9 @@ function planOperator(options = {}) {
     controlRoot: state.resolved.controlRoot,
     reviewer: options.reviewer || null,
     readOnly: options.readOnly !== false,
+    inventoryGenerationId: options.inventoryGenerationId || inventoryMeta.inventoryGenerationId,
+    sourceIdentities: options.sourceIdentities || inventoryMeta.sourceIdentities,
+    incompleteGeneration: options.incompleteGeneration === true || inventoryMeta.incompleteGeneration === true,
   });
   return {
     ok: plan.ok,
@@ -200,6 +234,8 @@ function planOperator(options = {}) {
     aliasRevision: plan.aliasRevision,
     aliases: plan.aliases,
     notices: plan.notices,
+    inventoryGenerationId: plan.inventoryGenerationId || null,
+    incompleteGeneration: plan.incompleteGeneration === true,
     pairs: plan.pairs.map((pair) => ({
       id: pair.id,
       harness: pair.harness,
@@ -216,8 +252,12 @@ function planOperator(options = {}) {
 function applyOperator(options = {}) {
   const planned = planOperator({ ...options, readOnly: false });
   const result = applyCatalogReconciliation(planned._plan);
-  const accepted = result.ok && result.applied.every((item) => ['clean', 'missing', 'outdated', 'retire'].includes(item.status));
-  if (accepted) {
+  // Accept when the apply path completed and no pair remains in a hard-failed applied state.
+  const mutationsOk = result.ok && result.applied.every((item) => (
+    item.applied === false
+    || ['clean', 'missing', 'outdated', 'retire', 'adopted'].includes(item.status)
+  ));
+  if (mutationsOk) {
     const loaded = loadConfig(planned.configPath);
     saveConfig({
       ...loaded.config,
@@ -232,8 +272,9 @@ function applyOperator(options = {}) {
     aliasRevision: result.aliasRevision,
     notices: result.notices,
     applied: result.applied,
-    acceptedCatalogDigest: accepted ? planned.catalogDigest : null,
-    acceptedAliasRevision: accepted ? result.aliasRevision : null,
+    acceptedCatalogDigest: mutationsOk ? planned.catalogDigest : null,
+    acceptedAliasRevision: mutationsOk ? result.aliasRevision : null,
+    inventoryGenerationId: planned.inventoryGenerationId || null,
   };
 }
 

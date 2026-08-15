@@ -62,6 +62,21 @@ function validateReceipt(receipt) {
   if (!SHA256_RE.test(receipt.treeDigest || '')) return null;
   if (!SHA256_RE.test(receipt.catalogDigest || '')) return null;
   if (!Number.isInteger(receipt.aliasRevision)) return null;
+  const inventoryGenerationId = typeof receipt.inventoryGenerationId === 'string'
+    && /^gen-[a-z0-9-]+$/i.test(receipt.inventoryGenerationId.trim())
+    ? receipt.inventoryGenerationId.trim()
+    : null;
+  const sourceIdentity = receipt.sourceIdentity && typeof receipt.sourceIdentity === 'object'
+    && !Array.isArray(receipt.sourceIdentity)
+    ? {
+      logicalId: typeof receipt.sourceIdentity.logicalId === 'string' ? receipt.sourceIdentity.logicalId : null,
+      sourceKind: typeof receipt.sourceIdentity.sourceKind === 'string' ? receipt.sourceIdentity.sourceKind : null,
+      profileDigest: typeof receipt.sourceIdentity.profileDigest === 'string'
+        && SHA256_RE.test(receipt.sourceIdentity.profileDigest)
+        ? receipt.sourceIdentity.profileDigest.toLowerCase()
+        : null,
+    }
+    : null;
   return {
     version: RECEIPT_VERSION,
     id: receipt.id,
@@ -72,6 +87,9 @@ function validateReceipt(receipt) {
     aliasRevision: receipt.aliasRevision,
     targetPath: typeof receipt.targetPath === 'string' ? receipt.targetPath : null,
     verificationTier: typeof receipt.verificationTier === 'string' ? receipt.verificationTier : null,
+    // Optional inventory provenance (U4). Absent on pre-inventory receipts.
+    inventoryGenerationId,
+    sourceIdentity,
   };
 }
 
