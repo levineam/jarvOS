@@ -165,7 +165,27 @@ function captureAcceptedGeneration({ sourceStorePath, acceptedGenerationPath, ge
       && JSON.stringify(existing.entries.map((entry) => ({ id: entry.id, treeDigest: entry.treeDigest }))) === JSON.stringify(entries.map((entry) => ({ id: entry.id, treeDigest: entry.treeDigest })))) {
       return { changed: false, generation: existing, sourceRoot: target };
     }
-    throw new Error('existing source generation does not match assessment');
+    const actualIds = fs.readdirSync(target, { withFileTypes: true })
+      .map((entry) => entry.name)
+      .sort();
+    if (JSON.stringify(actualIds) !== JSON.stringify(selected.map((candidate) => candidate.id))) {
+      throw new Error('existing source generation does not match assessment');
+    }
+    // The immutable tree can become visible before the accepted pointer and
+    // overlay are finalized. Verified bytes are safe to reuse; the caller must
+    // publish the enriched pointer/overlay before reconciliation.
+    return {
+      changed: false,
+      recoveryNeeded: true,
+      generation: {
+        schemaVersion: 'jarvos.skill-source-generation/v1',
+        generationId,
+        acceptedAt,
+        sourceRoot: target,
+        entries,
+      },
+      sourceRoot: target,
+    };
   }
 
   const staging = path.join(store, `.${generationId}.${process.pid}.${crypto.randomBytes(8).toString('hex')}.tmp`);
@@ -185,7 +205,7 @@ function captureAcceptedGeneration({ sourceStorePath, acceptedGenerationPath, ge
     // Rename makes every captured tree visible as one immutable generation.
     fs.renameSync(staging, target);
     atomicWriteJson(acceptedGenerationPath, generation);
-    return { changed: true, generation, sourceRoot: target };
+    return { changed: true, recoveryNeeded: false, generation, sourceRoot: target };
   } catch (error) {
     try { fs.rmSync(staging, { recursive: true, force: true }); } catch (_) { /* best effort */ }
     throw error;

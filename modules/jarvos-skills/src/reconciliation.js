@@ -605,12 +605,15 @@ function stageBundleCopy(source, target) {
       try {
         fs.renameSync(staging, target);
       } catch (error) {
+        let restored = false;
         try {
           if (fs.existsSync(target)) fs.rmSync(target, { recursive: true, force: true });
           fs.renameSync(backup, target);
+          restored = true;
         } catch {
-          // Preserve backup path in the thrown error context.
+          // Preserve the only recovery pointer for the next leased plan.
         }
+        if (!restored) error.jarvosRecovery = { target, backup };
         throw error;
       }
     } else {
@@ -634,8 +637,22 @@ function clearJournal(journalFile) {
 function recoverJournal(aliasState) {
   const journal = readJsonIfPresent(aliasState.journalFile, null);
   if (!journal) return { recovered: false };
-  // Incomplete apply: never delete local edits. Drop the journal so the next
-  // plan re-observes live targets and receipts.
+  if (journal.phase === 'failed' && journal.recovery) {
+    const target = path.resolve(journal.recovery.target || '');
+    const backup = path.resolve(journal.recovery.backup || '');
+    const expectedPrefix = `.${path.basename(target)}.jarvos-bak-`;
+    if (path.dirname(target) !== path.dirname(backup) || !path.basename(backup).startsWith(expectedPrefix)) {
+      throw new Error('reconciliation recovery journal is unsafe');
+    }
+    if (!fs.existsSync(target) && fs.existsSync(backup)) {
+      fs.renameSync(backup, target);
+    } else if (!fs.existsSync(target)) {
+      throw new Error('reconciliation backup recovery is unavailable');
+    } else if (fs.existsSync(backup)) {
+      throw new Error('reconciliation backup recovery requires owner attention');
+    }
+  }
+  // Re-observe live targets and receipts after any completed recovery.
   clearJournal(aliasState.journalFile);
   return { recovered: true, journal };
 }
@@ -934,6 +951,7 @@ function applyCatalogReconciliation(plan, options = {}) {
       catalogDigest: plan.catalogDigest,
       aliasRevision,
       error: error.message,
+      ...(error.jarvosRecovery ? { recovery: error.jarvosRecovery } : {}),
     });
     throw error;
   }

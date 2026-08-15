@@ -41,6 +41,7 @@ const {
   loadExclusionOverlay,
   saveExclusionOverlay,
   EXCLUSION_SCHEMA_VERSION,
+  opaqueSkillId,
 } = require('./inventory-contract');
 
 const MODULE_ROOT = path.resolve(__dirname, '..');
@@ -697,14 +698,18 @@ const _autonomousRepairOperator = autonomousRepairOperator;
 const _initOperator = initOperator;
 
 function inventoryStatusOperator(options = {}) {
-  return inventoryOperator({
+  const run = () => inventoryOperator({
     configPath: options.configPath,
     controlRoot: options.controlRoot,
-    persist: options.persist !== false,
+    persist: options.persist === true,
     inspect: options.inspect === true,
+    principal: options.principal || null,
     includeDocument: options.includeDocument === true,
     observedAt: options.observedAt,
   });
+  return options.persist === true
+    ? withMutationLease(options.configPath, 'inventory-status', run, options.controlRoot || null)
+    : run();
 }
 
 function inventoryRegisterRootsOperator(options = {}) {
@@ -798,15 +803,15 @@ function sharedStatusOperator(options = {}) {
         ok: true,
         catalogDigest: catalog.catalogDigest || null,
         pairs: (catalog.pairs || []).map((pair) => ({
-          id: pair.id,
+          id: opaqueSkillId(pair.id),
           harness: pair.harness,
-          effectiveName: pair.effectiveName,
+          effectiveName: pair.effectiveName ? opaqueSkillId(pair.effectiveName) : null,
           status: pair.status,
           action: pair.action || null,
           verification: pair.verification || null,
           deselected: pair.deselected === true,
         })),
-        notices: catalog.notices || [],
+        noticeCount: (catalog.notices || []).length,
       }
       : { ok: false, reason: catalog?.reason || 'catalog_unavailable' },
   };
@@ -824,8 +829,9 @@ function explainOperator(options = {}) {
     includeDocument: false,
     observedAt: options.observedAt,
   });
-  const skill = (inventory.status?.skills || []).find((item) => item.logicalId === logicalId) || null;
-  const exclusion = (inventory.status?.exclusions || []).find((item) => item.logicalId === logicalId) || null;
+  const outwardId = opaqueSkillId(logicalId);
+  const skill = (inventory.status?.skills || []).find((item) => item.logicalId === outwardId) || null;
+  const exclusion = (inventory.status?.exclusions || []).find((item) => item.logicalId === outwardId) || null;
   let catalogPair = null;
   try {
     const catalog = statusOperator({ configPath: options.configPath });
@@ -833,7 +839,7 @@ function explainOperator(options = {}) {
     if (pairs.length > 0) {
       catalogPair = pairs.map((pair) => ({
         harness: pair.harness,
-        effectiveName: pair.effectiveName,
+        effectiveName: pair.effectiveName ? opaqueSkillId(pair.effectiveName) : null,
         status: pair.status,
         action: pair.action || null,
         verification: pair.verification || null,
@@ -845,11 +851,11 @@ function explainOperator(options = {}) {
   return {
     ok: true,
     mode: 'explain',
-    logicalId,
+    logicalId: outwardId,
     found: Boolean(skill || exclusion || catalogPair),
     skill: skill
       ? {
-        logicalId: skill.logicalId,
+        logicalId: outwardId,
         treeDigest: skill.treeDigest,
         disposition: skill.disposition,
         attention: skill.attention,
@@ -874,6 +880,9 @@ function excludeSkillOperator(options = {}) {
     const loaded = loadConfig(options.configPath);
     const exclusionPath = loaded.resolved.inventory.exclusionOverlayPath;
     const current = loadExclusionOverlay(exclusionPath);
+    if (!['valid', 'absent'].includes(current.status)) {
+      throw new Error(current.reason || 'exclusion overlay is unsupported');
+    }
     const entries = [...(current.overlay?.entries || [])];
     const existing = entries.findIndex((entry) => entry.logicalId === logicalId);
     const record = {
@@ -888,14 +897,53 @@ function excludeSkillOperator(options = {}) {
       schemaVersion: EXCLUSION_SCHEMA_VERSION,
       entries,
     }, exclusionPath);
+    const retired = retireGeneratedSkill(loaded, logicalId, record.excludedAt);
     return {
       ok: true,
       mode: 'exclude',
       logicalId,
       reasonCode,
       digest: saved.digest,
+      retiredGeneratedEntry: retired,
     };
   });
+}
+
+function retireGeneratedSkill(loaded, logicalId, retiredAt) {
+  const { readAcceptedGeneration } = require('./source-store');
+  const acceptedPath = loaded.resolved.inventory.acceptedGenerationPath;
+  const accepted = readAcceptedGeneration(acceptedPath);
+  if (!accepted) return false;
+  const identity = (accepted.identities || []).find((item) => item.logicalId === logicalId);
+  const effectiveName = identity?.effectiveName || logicalId;
+  const generatedEntries = accepted.generatedOverlay?.entries || [];
+  if (!generatedEntries.some((entry) => entry.id === effectiveName)) return false;
+
+  const generatedOverlay = {
+    schemaVersion: OVERLAY_SCHEMA_VERSION,
+    entries: generatedEntries.filter((entry) => entry.id !== effectiveName),
+  };
+  const nextAccepted = {
+    ...accepted,
+    entries: (accepted.entries || []).filter((entry) => entry.id !== effectiveName),
+    identities: (accepted.identities || []).filter((item) => item.logicalId !== logicalId),
+    generatedOverlay,
+    absences: Object.fromEntries(Object.entries(accepted.absences || {}).filter(([id]) => id !== logicalId)),
+    tombstones: [
+      ...(accepted.tombstones || []).filter((item) => item.logicalId !== logicalId),
+      { logicalId, retiredAt, reasonCode: 'owner_excluded' },
+    ],
+  };
+  const overlay = readJson(loaded.resolved.localOverlayPath, { schemaVersion: OVERLAY_SCHEMA_VERSION, entries: [] });
+  const nextOverlay = {
+    schemaVersion: OVERLAY_SCHEMA_VERSION,
+    entries: (overlay.entries || []).filter((entry) => entry.id !== effectiveName),
+  };
+  const validated = validateLocalOverlay(nextOverlay);
+  if (validated.status !== 'valid') throw new Error(validated.reason || 'local overlay is invalid');
+  atomicWriteJson(loaded.resolved.localOverlayPath, validated.overlay);
+  atomicWriteJson(acceptedPath, nextAccepted);
+  return true;
 }
 
 function includeSkillOperator(options = {}) {
@@ -907,6 +955,9 @@ function includeSkillOperator(options = {}) {
     const loaded = loadConfig(options.configPath);
     const exclusionPath = loaded.resolved.inventory.exclusionOverlayPath;
     const current = loadExclusionOverlay(exclusionPath);
+    if (!['valid', 'absent'].includes(current.status)) {
+      throw new Error(current.reason || 'exclusion overlay is unsupported');
+    }
     const before = current.overlay?.entries || [];
     const entries = before.filter((entry) => entry.logicalId !== logicalId);
     const saved = saveExclusionOverlay({
@@ -939,6 +990,7 @@ function claudeProofOperator(options = {}) {
     observedAt: options.observedAt,
   });
   const generationId = inventory.generationId;
+  const outwardId = opaqueSkillId(logicalId);
   if (options.expectedGenerationId && options.expectedGenerationId !== generationId) {
     return {
       ok: false,
@@ -948,13 +1000,13 @@ function claudeProofOperator(options = {}) {
       generationId,
     };
   }
-  const skill = (inventory.status?.skills || []).find((item) => item.logicalId === logicalId) || null;
+  const skill = (inventory.status?.skills || []).find((item) => item.logicalId === outwardId) || null;
   if (!skill) {
     return {
       ok: false,
       mode: 'claude-proof',
       reason: 'skill_not_found',
-      logicalId,
+      logicalId: outwardId,
       generationId,
     };
   }
@@ -963,7 +1015,7 @@ function claudeProofOperator(options = {}) {
     && options.egressGenerationId === generationId;
   const evidence = {
     schemaVersion: 'jarvos.skill-claude-proof/v1',
-    logicalId,
+    logicalId: outwardId,
     generationId,
     treeDigest: skill.treeDigest,
     disposition: skill.disposition,

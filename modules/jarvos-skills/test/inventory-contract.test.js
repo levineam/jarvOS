@@ -39,6 +39,7 @@ const {
   validateInventoryDocument,
   validateExclusionOverlay,
   serializeOutwardStatus,
+  opaqueSkillId,
   validateOutwardStatus,
   serializeOwnerInspect,
   validateOwnerInspect,
@@ -305,7 +306,8 @@ test('outward status omits privacy sentinels while owner inspect may reveal name
   assert.equal(statusText.includes(rawParserError), false);
   assert.equal(statusText.includes(credential), false);
   assert.equal(statusText.includes(os.homedir()), false);
-  assert.equal(status.skills[0].logicalId, 'skill-opaque-1');
+  assert.equal(status.skills[0].logicalId, opaqueSkillId('skill-opaque-1'));
+  assert.notEqual(status.skills[0].logicalId, 'skill-opaque-1');
   assert.equal(status.skills[0].treeDigest, DIGEST_A);
   assert.equal(status.skills[0].disposition.reasonCode, 'rule_proven_portable');
 

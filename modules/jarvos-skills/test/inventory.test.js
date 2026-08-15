@@ -28,6 +28,7 @@ const {
   validateOutwardStatus,
   ensureInventoryStateLayout,
 } = require('../src/inventory-contract');
+const { inventoryStatusOperator } = require('../src/operator');
 const { computeBundleTree } = require('../src/catalog');
 const { atomicWriteReceipt, STATE_DIR } = require('../src/receipts');
 
@@ -335,6 +336,33 @@ test('symlinks, unsafe modes, missing SKILL.md, oversized bundles, and unreadabl
   assert.equal(result.complete === false || result.overflowed === true || unsafeOrBlocked.length >= 1, true);
 });
 
+test('one unsafe bundle does not freeze unrelated complete-root repair', () => {
+  const home = temp('jarvos-inv-pair-safety-');
+  const root = path.join(home, 'skills');
+  ensureDir(root, 'root');
+  writeSkill(path.join(root, 'good-skill'), 'good-skill');
+  const unsafe = writeSkill(path.join(root, 'unsafe-skill'), 'unsafe-skill');
+  fs.writeFileSync(path.join(unsafe, 'README.md'), 'ordinary unmanaged extra\n', { mode: 0o600 });
+  const env = seedConfig({ roots: { codex: root, claude: root, openclaw: root, hermes: root } });
+  const result = observeInventory({ configPath: env.configPath, observedAt: '2026-08-15T15:03:30.000Z' });
+  assert.equal(result.complete, true);
+  assert.equal(result.partial, false);
+  assert.equal(result.document.skills.find((skill) => skill.logicalId === 'good-skill').observations.every((item) => item.state !== 'unsafe'), true);
+  assert.equal(result.document.skills.find((skill) => skill.logicalId === 'unsafe-skill').disposition.reasonCode, 'unsafe_source');
+});
+
+test('unsupported exclusions fail the inventory generation closed', () => {
+  const root = temp('jarvos-inv-exclusions-');
+  writeSkill(path.join(root, 'private-skill'), 'private-skill');
+  const env = seedConfig({ roots: { codex: root, claude: root, openclaw: root, hermes: root } });
+  const layout = ensureInventoryStateLayout({ controlRoot: env.control, inventory: loadConfig(env.configPath).config.inventory });
+  fs.writeFileSync(layout.exclusionOverlayPath, `${JSON.stringify({ schemaVersion: 'jarvos.skill-exclusions/v999', entries: [] })}\n`, { mode: 0o600 });
+  const result = observeInventory({ configPath: env.configPath, observedAt: '2026-08-15T15:03:40.000Z' });
+  assert.equal(result.complete, false);
+  assert.equal(result.partial, true);
+  assert.ok(result.reasons.includes('unsupported_exclusion_overlay'));
+});
+
 test('root replacement and partial/overflowed scans preserve completeness semantics', () => {
   const home = temp('jarvos-inv-overflow-');
   const root = path.join(home, 'skills');
@@ -461,6 +489,32 @@ test('healthy second scan is zero-write and CLI inventory status stays path-reda
   const operator = inventoryOperator({ configPath: env.configPath });
   assert.equal(operator.ok, true);
   assert.equal(operator.mode, 'status');
+});
+
+test('operator status is read-only by default and private inspect requires owner capability', () => {
+  const root = temp('jarvos-inv-operator-readonly-');
+  writeSkill(path.join(root, 'secret-transcribe'), 'secret-transcribe');
+  const env = seedConfig({ roots: { codex: root, claude: root, openclaw: root, hermes: root } });
+  const inventoryState = path.join(env.control, 'inventory');
+  const status = inventoryStatusOperator({ configPath: env.configPath });
+  assert.equal(status.mutate, false);
+  assert.equal(fs.existsSync(inventoryState), false);
+  assert.equal(JSON.stringify(status).includes('secret-transcribe'), false);
+  const lease = path.join(env.control, '.shared-skill-cli.lock');
+  fs.writeFileSync(lease, JSON.stringify({ pid: process.pid, operation: 'apply', startedAt: new Date().toISOString() }), { mode: 0o600 });
+  assert.throws(() => inventoryStatusOperator({ configPath: env.configPath, persist: true }), /already running/i);
+  fs.unlinkSync(lease);
+  assert.throws(() => inventoryStatusOperator({ configPath: env.configPath, inspect: true }), /authorized owner principal/i);
+  const inspected = inventoryStatusOperator({
+    configPath: env.configPath,
+    inspect: true,
+    principal: { kind: 'owner', capabilities: ['inventory.inspect_private'] },
+  });
+  assert.equal(inspected.inspect.skills[0].logicalId, 'secret-transcribe');
+
+  const cli = spawnSync(process.execPath, [CLI, 'inventory', '--config', env.configPath, '--inspect', '--json'], { encoding: 'utf8' });
+  assert.equal(cli.status, 1);
+  assert.doesNotMatch(cli.stdout, /secret-transcribe|absolutePath/);
 });
 
 test('hard-link duplicate under one root collapses to one logical observation set', () => {

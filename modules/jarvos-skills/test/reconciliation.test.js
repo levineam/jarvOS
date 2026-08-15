@@ -14,7 +14,7 @@ const {
   composeEffectiveCatalog,
 } = require('../src/catalog');
 const { resolveCollisionAlias, safeAliasCandidates, strictChoice } = require('../src/collision-alias');
-const { planCatalogReconciliation, applyCatalogReconciliation } = require('../src/reconciliation');
+const { planCatalogReconciliation, applyCatalogReconciliation, recoverJournal } = require('../src/reconciliation');
 const { verifyHarnessBundle } = require('../src/harness-verification');
 
 const FIXTURE_ROOT = path.join(__dirname, 'fixtures', 'catalog');
@@ -103,6 +103,28 @@ test('collision alias prefers canonical, then reviewer, then deterministic fallb
   });
   assert.equal(fallback.source, 'fallback');
   assert.equal(fallback.effectiveName, candidates[0]);
+});
+
+test('failed replacement journal restores the preserved backup before replanning', () => {
+  const root = temp('jarvos-recovery-');
+  const target = path.join(root, 'portable-skill');
+  const backup = path.join(root, '.portable-skill.jarvos-bak-1234-abcd');
+  const journalFile = path.join(root, 'shared-skill-reconcile.journal.json');
+  fs.mkdirSync(backup, { mode: 0o700 });
+  fs.writeFileSync(path.join(backup, 'SKILL.md'), '# preserved\n', { mode: 0o600 });
+  fs.writeFileSync(journalFile, `${JSON.stringify({
+    version: 1,
+    phase: 'failed',
+    recovery: { target, backup },
+  })}\n`, { mode: 0o600 });
+
+  const recovered = recoverJournal({ journalFile });
+  assert.equal(recovered.recovered, true);
+  assert.equal(fs.existsSync(target), true);
+  assert.equal(fs.existsSync(backup), false);
+  assert.equal(fs.existsSync(journalFile), false);
+  assert.equal(fs.readFileSync(path.join(target, 'SKILL.md'), 'utf8'), '# preserved\n');
+  fs.rmSync(root, { recursive: true, force: true });
 });
 
 test('multiple skills across four harnesses install once and stay clean on second reconcile', () => {

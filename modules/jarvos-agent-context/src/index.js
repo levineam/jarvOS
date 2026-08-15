@@ -42,6 +42,13 @@ function loadControlPlaneManager() {
   );
 }
 
+function loadSharedSkills() {
+  return loadTrustedModule(
+    '@jarvos/skills',
+    path.join(JARVOS_ROOT, 'modules', 'jarvos-skills', 'src', 'index.js'),
+  );
+}
+
 function loadTrustedModule(packageName, fallbackPath) {
   const trustedRoots = [MODULE_ROOT, JARVOS_ROOT]
     .map((root) => { try { return fs.realpathSync(root); } catch { return path.resolve(root); } });
@@ -1639,6 +1646,7 @@ module.exports = {
   PROJECTS_CONTEXT_CUTOVER_ENV,
   controlPlane,
   loadControlPlaneManager,
+  loadSharedSkills,
   createNote,
   currentWork,
   defaultFrontmatter,

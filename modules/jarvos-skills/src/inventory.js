@@ -858,8 +858,8 @@ function scanRegisteredRoot(rootInfo, {
     }
     if (scanned.unsafe) {
       result.unsafe.push(scanned);
-      result.partial = true;
-      result.root.complete = false;
+      // A bad individual bundle is a blocked observation, not a failed root
+      // listing. Keep unrelated skills eligible for assessment and repair.
       result.reasons.push('unsafe_source');
       continue;
     }
@@ -1215,6 +1215,11 @@ function observeInventory(options = {}) {
           attention: 'quiet',
         };
       });
+    } else {
+      // Owner exclusions are a safety control. An unsupported/corrupt control
+      // must fail the generation closed instead of being treated as empty.
+      partial = true;
+      reasons.add('unsupported_exclusion_overlay');
     }
   }
 
@@ -1312,6 +1317,8 @@ function observeInventory(options = {}) {
       root: path.resolve(expandHome(value.root)),
     }));
     assessment = assessInventory({
+      config,
+      resolved,
       document: validated.document,
       sourceStorePath: layout.sourceStorePath,
       acceptedGenerationPath: layout.acceptedGenerationPath,
@@ -1332,23 +1339,13 @@ function observeInventory(options = {}) {
       finalDocument = revalidated.document;
       finalDigest = revalidated.digest;
 
-      if (options.persist !== false && assessment.mutate && assessment.generatedOverlay?.entries?.length) {
+      if (options.persist !== false && assessment.mutate && assessment.localOverlay) {
         // Point local source root at the immutable generation capture and merge overlay.
         if (assessment.localSourceRoot || assessment.sourceRoot) {
           config.localSourceRoot = assessment.localSourceRoot || assessment.sourceRoot;
         }
-        const existingOverlay = readJsonSafe(resolved.localOverlayPath, {
-          schemaVersion: require('./catalog').OVERLAY_SCHEMA_VERSION,
-          entries: [],
-        }) || { schemaVersion: require('./catalog').OVERLAY_SCHEMA_VERSION, entries: [] };
-        const byId = new Map((existingOverlay.entries || []).map((entry) => [entry.id, entry]));
-        for (const entry of assessment.generatedOverlay.entries) byId.set(entry.id, entry);
-        const merged = {
-          schemaVersion: require('./catalog').OVERLAY_SCHEMA_VERSION,
-          entries: [...byId.values()].sort((a, b) => a.id.localeCompare(b.id)),
-        };
         const { validateLocalOverlay } = require('./catalog');
-        const validatedOverlay = validateLocalOverlay(merged);
+        const validatedOverlay = validateLocalOverlay(assessment.localOverlay);
         if (validatedOverlay.status === 'valid') {
           atomicWriteJson(resolved.localOverlayPath, validatedOverlay.overlay);
         }
@@ -1420,6 +1417,12 @@ function observeInventory(options = {}) {
 }
 
 function inventoryOperator(options = {}) {
+  if (options.inspect === true) {
+    const capabilities = new Set(options.principal?.capabilities || []);
+    if (options.principal?.kind !== 'owner' || !capabilities.has('inventory.inspect_private')) {
+      throw new Error('owner inspect requires an authorized owner principal');
+    }
+  }
   const result = observeInventory({
     configPath: options.configPath,
     controlRoot: options.controlRoot,

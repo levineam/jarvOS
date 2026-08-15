@@ -856,7 +856,7 @@ function serializeOutwardStatus(document, options = {}) {
       complete: root.complete === true,
     })),
     skills: source.skills.map((skill) => ({
-      logicalId: skill.logicalId,
+      logicalId: opaqueSkillId(skill.logicalId),
       treeDigest: skill.treeDigest,
       disposition: {
         kind: skill.disposition.kind,
@@ -871,13 +871,18 @@ function serializeOutwardStatus(document, options = {}) {
       observationCount: skill.observations.length,
     })),
     exclusions: source.exclusions.map((entry) => ({
-      logicalId: entry.logicalId,
+      logicalId: opaqueSkillId(entry.logicalId),
       reasonCode: entry.reasonCode,
       excludedAt: entry.excludedAt,
     })),
   };
   validateOutwardStatus(status);
   return status;
+}
+
+function opaqueSkillId(logicalId) {
+  assertLogicalId(logicalId, 'private skill logicalId');
+  return `skill-${crypto.createHash('sha256').update(`jarvos-private-skill\0${logicalId}`).digest('hex').slice(0, 24)}`;
 }
 
 function validateOutwardStatus(status) {
@@ -1103,6 +1108,7 @@ module.exports = {
   validateInventoryDocument,
   validateExclusionOverlay,
   serializeOutwardStatus,
+  opaqueSkillId,
   validateOutwardStatus,
   serializeOwnerInspect,
   validateOwnerInspect,

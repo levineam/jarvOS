@@ -184,7 +184,7 @@ Shared skill distribution (catalog/overlay):
   jarvos-skills rename --id NAME --name EFFECTIVE [--config PATH] [--json]
   jarvos-skills scheduler [--write] [--interval-minutes N] [--config PATH] [--json]
   jarvos-skills doctor-shared [--config PATH] [--json]
-  jarvos-skills inventory [--config PATH] [--inspect] [--json]
+  jarvos-skills inventory [--config PATH] [--json]
   jarvos-skills inventory-register-roots [--config PATH] [--json]
   jarvos-skills inventory-declared-roots [--json]
   jarvos-skills inventory-assess [--config PATH] [--json]
@@ -285,9 +285,9 @@ function runOperator(opts) {
         intervalMinutes: opts.intervalMinutes || undefined,
       });
     case 'inventory':
+      if (opts.inspect === true) throw new Error('owner inspect is not available through the general CLI');
       return inventoryStatusOperator({
         configPath,
-        inspect: opts.inspect === true,
       });
     case 'inventory-register-roots':
       return inventoryRegisterRootsOperator({ configPath });
