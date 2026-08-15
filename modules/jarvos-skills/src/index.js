@@ -1101,6 +1101,7 @@ const scheduler = require('./scheduler');
 const doctor = require('./doctor');
 const controlPlaneManager = require('./control-plane-manager');
 const overlayAuthoring = require('./overlay-authoring');
+const inventoryContract = require('./inventory-contract');
 
 const projection = createProjectionApi({
   assertProjectionManifest,
@@ -1229,4 +1230,22 @@ module.exports = {
   defaultConfig: config.defaultConfig,
   planSchedulerUnits: scheduler.planSchedulerUnits,
   doctorSharedSkills: doctor.doctorSharedSkills,
+  INVENTORY_SCHEMA_VERSION: inventoryContract.INVENTORY_SCHEMA_VERSION,
+  STATUS_SCHEMA_VERSION: inventoryContract.STATUS_SCHEMA_VERSION,
+  INSPECT_SCHEMA_VERSION: inventoryContract.INSPECT_SCHEMA_VERSION,
+  EXCLUSION_SCHEMA_VERSION: inventoryContract.EXCLUSION_SCHEMA_VERSION,
+  AUTONOMOUS_SERVICE_PRINCIPAL: inventoryContract.AUTONOMOUS_SERVICE_PRINCIPAL,
+  validateInventoryDocument: inventoryContract.validateInventoryDocument,
+  validateExclusionOverlay: inventoryContract.validateExclusionOverlay,
+  serializeOutwardStatus: inventoryContract.serializeOutwardStatus,
+  validateOutwardStatus: inventoryContract.validateOutwardStatus,
+  serializeOwnerInspect: inventoryContract.serializeOwnerInspect,
+  validateOwnerInspect: inventoryContract.validateOwnerInspect,
+  normalizeInventoryPolicy: inventoryContract.normalizeInventoryPolicy,
+  normalizeRetirementPolicy: inventoryContract.normalizeRetirementPolicy,
+  assertAutonomousPrincipal: inventoryContract.assertAutonomousPrincipal,
+  ensureInventoryStateLayout: inventoryContract.ensureInventoryStateLayout,
+  loadExclusionOverlay: inventoryContract.loadExclusionOverlay,
+  saveExclusionOverlay: inventoryContract.saveExclusionOverlay,
+  inventoryDigest: inventoryContract.inventoryDigest,
 };

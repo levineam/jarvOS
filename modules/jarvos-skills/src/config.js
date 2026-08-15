@@ -81,7 +81,14 @@ function atomicWriteJson(filePath, value) {
   return target;
 }
 
+function loadInventoryContract() {
+  // Lazy require avoids a circular dependency: inventory-contract imports path
+  // helpers from this module while config normalizes inventory policy through it.
+  return require('./inventory-contract');
+}
+
 function defaultConfig() {
+  const { defaultInventoryPolicy } = loadInventoryContract();
   return {
     schemaVersion: CONFIG_SCHEMA_VERSION,
     controlRoot: collapseHome(DEFAULT_CONTROL_ROOT),
@@ -103,6 +110,11 @@ function defaultConfig() {
       unitName: 'jarvos-shared-skills',
     },
     liveDogfood: { authorized: false, receiptPath: null, egress: {} },
+    // Inventory policy is configuration only; enabled defaults false so no live
+    // scan/admission/reconcile behavior is activated by loading defaults.
+    // exclusionOverlayPath stays null until normalizeConfig binds it under the
+    // active control root.
+    inventory: defaultInventoryPolicy(),
   };
 }
 
@@ -145,6 +157,58 @@ function normalizeConfig(raw) {
     throw new Error('scheduler.unitName is invalid');
   }
 
+  const { normalizeInventoryPolicy, normalizeRetirementPolicy } = loadInventoryContract();
+  const inventorySource = raw.inventory && typeof raw.inventory === 'object' && !Array.isArray(raw.inventory)
+    ? raw.inventory
+    : defaults.inventory;
+  const inventory = normalizeInventoryPolicy({
+    ...defaults.inventory,
+    ...inventorySource,
+    limits: {
+      ...defaults.inventory.limits,
+      ...(inventorySource.limits && typeof inventorySource.limits === 'object' ? inventorySource.limits : {}),
+    },
+    state: {
+      ...defaults.inventory.state,
+      ...(inventorySource.state && typeof inventorySource.state === 'object' ? inventorySource.state : {}),
+    },
+    retention: {
+      ...defaults.inventory.retention,
+      ...(inventorySource.retention && typeof inventorySource.retention === 'object' ? inventorySource.retention : {}),
+    },
+    eventQuiescence: {
+      ...defaults.inventory.eventQuiescence,
+      ...(inventorySource.eventQuiescence && typeof inventorySource.eventQuiescence === 'object'
+        ? inventorySource.eventQuiescence
+        : {}),
+    },
+    retirement: {
+      ...defaults.inventory.retirement,
+      ...(inventorySource.retirement && typeof inventorySource.retirement === 'object'
+        ? inventorySource.retirement
+        : {}),
+    },
+    autonomousPrincipal: inventorySource.autonomousPrincipal || defaults.inventory.autonomousPrincipal,
+    registeredRoots: Array.isArray(inventorySource.registeredRoots)
+      ? inventorySource.registeredRoots
+      : defaults.inventory.registeredRoots,
+  });
+  // Re-validate retirement against the active scheduler interval so the floor is
+  // never weaker than two complete scheduler intervals.
+  inventory.retirement = {
+    ...inventory.retirement,
+    ...normalizeRetirementPolicy(inventory.retirement, {
+      intervalMinutes: scheduler.intervalMinutes,
+    }),
+  };
+  if (!inventory.exclusionOverlayPath) {
+    inventory.exclusionOverlayPath = collapseHome(path.join(
+      expandHome(raw.controlRoot || defaults.controlRoot),
+      inventory.state.stateRootName,
+      'exclusions.json',
+    ));
+  }
+
   return {
     schemaVersion: CONFIG_SCHEMA_VERSION,
     controlRoot: collapseHome(expandHome(raw.controlRoot || defaults.controlRoot)),
@@ -165,18 +229,37 @@ function normalizeConfig(raw) {
       receiptPath: raw.liveDogfood?.receiptPath ? collapseHome(expandHome(raw.liveDogfood.receiptPath)) : null,
       egress: raw.liveDogfood?.egress && typeof raw.liveDogfood.egress === 'object' ? { ...raw.liveDogfood.egress } : {},
     },
+    inventory,
   };
 }
 
 function resolveConfigPaths(config) {
   const normalized = normalizeConfig(config);
+  const controlRoot = path.resolve(expandHome(normalized.controlRoot));
+  const inventoryStateRoot = path.join(controlRoot, normalized.inventory.state.stateRootName);
   return {
     config: normalized,
-    controlRoot: path.resolve(expandHome(normalized.controlRoot)),
+    controlRoot,
     publicCatalogPath: path.resolve(expandHome(normalized.publicCatalogPath)),
     publicSourceRoot: normalized.publicSourceRoot ? path.resolve(expandHome(normalized.publicSourceRoot)) : null,
     localOverlayPath: normalized.localOverlayPath ? path.resolve(expandHome(normalized.localOverlayPath)) : null,
     localSourceRoot: normalized.localSourceRoot ? path.resolve(expandHome(normalized.localSourceRoot)) : null,
+    inventory: {
+      enabled: normalized.inventory.enabled === true,
+      stateRoot: inventoryStateRoot,
+      sourceStorePath: path.join(inventoryStateRoot, normalized.inventory.state.sourceStoreName),
+      exclusionOverlayPath: normalized.inventory.exclusionOverlayPath
+        ? path.resolve(expandHome(normalized.inventory.exclusionOverlayPath))
+        : path.join(inventoryStateRoot, 'exclusions.json'),
+      observationsPath: path.join(inventoryStateRoot, normalized.inventory.state.observationsName),
+      attentionPath: path.join(inventoryStateRoot, normalized.inventory.state.attentionName),
+      leasePath: path.join(inventoryStateRoot, normalized.inventory.state.leaseName),
+      acceptedGenerationPath: path.join(inventoryStateRoot, normalized.inventory.state.acceptedGenerationName),
+      registeredRoots: normalized.inventory.registeredRoots.map((root) => ({
+        ...root,
+        root: path.resolve(expandHome(root.root)),
+      })),
+    },
     harnesses: SUPPORTED_HARNESSES
       .filter((id) => normalized.harnesses[id].enabled)
       .map((id) => ({
@@ -203,11 +286,12 @@ function defaultConfigPath(controlRoot = DEFAULT_CONTROL_ROOT) {
 function loadConfig(configPath) {
   const file = path.resolve(expandHome(configPath || defaultConfigPath()));
   if (!fs.existsSync(file)) {
+    const config = normalizeConfig(defaultConfig());
     return {
       path: file,
       existed: false,
-      config: defaultConfig(),
-      resolved: resolveConfigPaths(defaultConfig()),
+      config,
+      resolved: resolveConfigPaths(config),
     };
   }
   const stat = fs.lstatSync(file);
