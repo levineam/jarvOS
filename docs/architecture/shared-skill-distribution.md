@@ -1,0 +1,9 @@
+# Shared skill distribution
+
+`@jarvos/skills` distributes only explicitly selected portable skill bundles. The public catalog names reviewed repository bundles; a separate, owner-controlled local overlay may admit private bundles without making their paths or bodies package content.
+
+Each bundle is rooted at `SKILL.md` and carries a recursive digest over its allowlisted scripts, assets, references, and templates. Reconciliation copies real files atomically into each enrolled harness root, records a receipt, and preserves unmanaged or locally modified directories. Native harness skills are never imported or treated as missing jarvOS projections.
+
+Names are catalog-level bindings. When a canonical name is occupied, jarvOS selects one safe alias for the entire enrolled matrix and persists it before pair writes. The catalog engine has no ambient workspace discovery path.
+
+Runtime adapters declare ordered scopes, renderer, alias limits, and their strongest safe verification tier. Exact-path adapters may record a receipt-bound model-visible proof. Interactive-only adapters remain `verification_pending` until an authorized interactive proof occurs; copied bytes alone are not availability proof.

@@ -67,7 +67,7 @@ async function main() {
   try {
     const env = bridgeEnvironment(readSessionStartInput());
     const judgment = env
-      ? (stewardshipAdapter.startOrResume({ env }), stewardshipContext({ env }))
+      ? (stewardshipAdapter.startOrResume({ env }), stewardshipAdapter.sessionWaitBind({ env }), stewardshipContext({ env }))
       : '';
     let hydration = '';
     try {

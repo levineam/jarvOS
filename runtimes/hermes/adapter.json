@@ -2,12 +2,22 @@
   "schemaVersion": 1,
   "id": "hermes",
   "displayName": "Hermes Agent",
+  "skillProjection": {
+    "version": "jarvos-skill-projection-adapter/v1",
+    "managedRoot": "~/.hermes/skills",
+    "orderedScopes": ["workspace", "user", "managed"],
+    "renderer": "raw-skill-bundle",
+    "verificationTier": "exact-path",
+    "bundleAllowlist": ["SKILL.md", "scripts/**", "assets/**", "references/**", "templates/**"],
+    "alias": { "pattern": "^[a-z][a-z0-9-]{0,63}$", "maxLength": 64, "reservedNames": [] },
+    "probeIsolation": { "mode": "receipt-bound-exact-path", "unattended": true }
+  },
   "artifactGeneration": {
     "version": "jarvos-hermes-artifact-generation.v1",
     "releaseRevision": "291c334-route-capability",
-    "generationDigest": "446152bd1571923ef58690bf0daf883b6832e82a5b5c418868b36e3b55e1604a",
+    "generationDigest": "ebd6d6cdae6df814a810d6e73edc7b6a48b709f93a35af9f98c86e39f0d331fc",
     "components": [
-      { "name": "skills-manifest", "path": "modules/jarvos-skills/manifest.json", "digest": "85d58d1a71bf3abf23d70e8a9044341d767eb406a1030f2a8c49d7c316423dd4" },
+      { "name": "skills-manifest", "path": "modules/jarvos-skills/manifest.json", "digest": "c7e3a5897dcc40490b803ba2c404091b7dc9338231e85b2e6cda981e6b0b4bd2" },
       { "name": "context-plugin-metadata", "path": "runtimes/hermes/plugins/jarvos-context/plugin.yaml", "digest": "74f3bc53308a43b119773cf0a0fa5f47019761038d1bada4cc2fd5a1b13370bb" },
       { "name": "context-plugin-code", "path": "runtimes/hermes/plugins/jarvos-context/__init__.py", "digest": "7f05fd28a036af20f26ac46a5d44b60514c51b4da4ad4b01511bc5d6371d3dbf" },
       { "name": "coding-host-adapter", "path": "modules/jarvos-coding/src/adapters/hosts.js", "digest": "a8e24f668cb39ecf50400b5eaca122fdec93aad6df956446ea5f9def22b0f9af" }

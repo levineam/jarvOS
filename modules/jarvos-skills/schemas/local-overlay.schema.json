@@ -1,0 +1,86 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://jarvos.dev/schemas/shared-skill-local-overlay.v1.json",
+  "title": "jarvOS local shared-skill overlay",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "entries"],
+  "properties": {
+    "schemaVersion": {
+      "const": "jarvos.shared-skill-local-overlay/v1"
+    },
+    "entries": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "allowedHarnesses", "bundle"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,63}$"
+          },
+          "allowedHarnesses": {
+            "type": "array",
+            "minItems": 1,
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "enum": ["codex", "claude", "openclaw", "hermes"]
+            }
+          },
+          "requiredTools": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "renderer": {
+            "type": "string",
+            "minLength": 1
+          },
+          "verification": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "tier": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "remoteModelProbe": {
+                  "type": "boolean"
+                }
+              }
+            }
+          },
+          "bundle": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["root", "treeDigest"],
+            "properties": {
+              "root": {
+                "type": "string",
+                "minLength": 1
+              },
+              "allowlist": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "treeDigest": {
+                "type": "string",
+                "pattern": "^[a-f0-9]{64}$"
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

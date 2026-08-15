@@ -15,10 +15,11 @@
     "src/",
     "scripts/",
     "skills/",
-    "docs/"
+    "docs/",
+    "schemas/"
   ],
   "scripts": {
-    "test": "node test/skills.test.js && node test/projection.test.js"
+    "test": "node --test test/*.test.js"
   },
   "engines": {
     "node": ">=18"

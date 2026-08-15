@@ -1090,6 +1090,11 @@ function copyFileSync(source, destination) {
 
 const { createProjectionApi } = require('./projection');
 const providerReconciliation = require('./provider-reconciliation');
+const catalog = require('./catalog');
+const catalogReconciliation = require('./reconciliation');
+const harnessVerification = require('./harness-verification');
+const collisionAlias = require('./collision-alias');
+const receipts = require('./receipts');
 
 const projection = createProjectionApi({
   assertProjectionManifest,
@@ -1177,4 +1182,25 @@ module.exports = {
   sourceCodeDigest,
   installSkills,
   ...providerReconciliation,
+  CATALOG_SCHEMA_VERSION: catalog.CATALOG_SCHEMA_VERSION,
+  OVERLAY_SCHEMA_VERSION: catalog.OVERLAY_SCHEMA_VERSION,
+  EFFECTIVE_CATALOG_SCHEMA_VERSION: catalog.EFFECTIVE_CATALOG_SCHEMA_VERSION,
+  PUBLIC_SOURCE_KIND: catalog.PUBLIC_SOURCE_KIND,
+  LOCAL_OVERLAY_SOURCE_KIND: catalog.LOCAL_OVERLAY_SOURCE_KIND,
+  SUPPORTED_HARNESSES: catalog.SUPPORTED_HARNESSES,
+  catalogDigest: catalog.catalogDigest,
+  computeBundleTree: catalog.computeBundleTree,
+  validatePublicCatalog: catalog.validatePublicCatalog,
+  validateLocalOverlay: catalog.validateLocalOverlay,
+  composeEffectiveCatalog: catalog.composeEffectiveCatalog,
+  attestCatalogBundle: catalog.attestCatalogBundle,
+  redactEffectiveCatalog: catalog.redactEffectiveCatalog,
+  assertPublicOnlyCatalog: catalog.assertPublicOnlyCatalog,
+  planCatalogReconciliation: catalogReconciliation.planCatalogReconciliation,
+  applyCatalogReconciliation: catalogReconciliation.applyCatalogReconciliation,
+  verifyHarnessBundle: harnessVerification.verifyHarnessBundle,
+  resolveCollisionAlias: collisionAlias.resolveCollisionAlias,
+  safeAliasCandidates: collisionAlias.safeAliasCandidates,
+  readReceipt: receipts.readReceipt,
+  atomicWriteReceipt: receipts.atomicWriteReceipt,
 };

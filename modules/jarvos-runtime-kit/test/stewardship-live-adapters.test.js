@@ -368,7 +368,7 @@ test('Codex SessionStart derives a bridge-only thread identity from resume stdin
     assert.match(output.hookSpecificOutput.additionalContext, /codex-resume-42/);
     assert.match(output.hookSpecificOutput.additionalContext, /jarvos-stewardship-bridge answer --correlation <correlation> --choice <listed-choice>/);
     assert.doesNotMatch(JSON.stringify(output), new RegExp(temp.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
-    assert.deepEqual(fs.readFileSync(invoked, 'utf8').trim().split('\n'), ['startOrResume', 'nextTurnInput', 'sessionWaitNextTurn']);
+    assert.deepEqual(fs.readFileSync(invoked, 'utf8').trim().split('\n'), ['startOrResume', 'sessionWaitBind', 'nextTurnInput', 'sessionWaitNextTurn']);
 
     fs.rmSync(invoked, { force: true });
     const mismatch = start({ ...baseEnv, CODEX_THREAD_ID: mismatchedId }, { hook_event_name: 'SessionStart', session_id: sessionId });

@@ -874,3 +874,13 @@ test('scaffoldRuntime creates a valid starter adapter', () => {
     fs.rmSync(tmp, { recursive: true, force: true });
   }
 });
+
+test('shipped shared-skill adapters declare a complete projection contract', () => {
+  for (const harness of ['codex', 'claude', 'openclaw', 'hermes']) {
+    const manifest = JSON.parse(fs.readFileSync(path.join(ROOT, 'runtimes', harness, 'adapter.json'), 'utf8'));
+    assert.equal(validateManifest(manifest).ok, true, `${harness}: ${validateManifest(manifest).errors.join('; ')}`);
+    assert.equal(manifest.skillProjection.version, 'jarvos-skill-projection-adapter/v1');
+    assert.equal(manifest.skillProjection.renderer, 'raw-skill-bundle');
+    assert.ok(['exact-path', 'interactive-smoke'].includes(manifest.skillProjection.verificationTier));
+  }
+});
