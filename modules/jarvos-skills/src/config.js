@@ -15,6 +15,22 @@ const DEFAULT_HARNESS_ROOTS = Object.freeze({
 });
 const SUPPORTED_HARNESSES = Object.freeze(Object.keys(DEFAULT_HARNESS_ROOTS));
 
+function adapterScopeRoots(id) {
+  const adapterPath = path.resolve(__dirname, '..', '..', '..', 'runtimes', id, 'adapter.json');
+  try {
+    const projection = JSON.parse(fs.readFileSync(adapterPath, 'utf8')).skillProjection;
+    const scopes = projection?.orderedScopes;
+    const roots = projection?.scopeRoots;
+    if (!Array.isArray(scopes) || !roots || typeof roots !== 'object') return {};
+    return Object.fromEntries(scopes.slice(0, -1)
+      .filter((scope) => typeof roots[scope] === 'string' && roots[scope])
+      .map((scope) => [scope, roots[scope]]));
+  } catch {
+    // Missing adapter scope metadata leaves visibility checks fail-closed.
+    return {};
+  }
+}
+
 function expandHome(value) {
   if (value === undefined || value === null) return value;
   if (typeof value !== 'string') throw new Error('path value must be a string');
@@ -68,6 +84,10 @@ function defaultConfig() {
     harnesses: Object.fromEntries(SUPPORTED_HARNESSES.map((id) => [id, {
       enabled: true,
       root: collapseHome(DEFAULT_HARNESS_ROOTS[id]),
+      scopeRoots: adapterScopeRoots(id),
+      // Relative adapter declarations only describe this process's cwd; an
+      // operator must explicitly bind them before visibility can be claimed.
+      scopeRootsComplete: false,
     }])),
     scheduler: {
       enabled: false,
@@ -95,7 +115,11 @@ function normalizeConfig(raw) {
       root: collapseHome(expandHome(source.root)),
       scopeRoots: source.scopeRoots && typeof source.scopeRoots === 'object'
         ? Object.fromEntries(Object.entries(source.scopeRoots).map(([scope, value]) => [scope, collapseHome(expandHome(value))]))
+        : defaults.harnesses[id].scopeRoots && typeof defaults.harnesses[id].scopeRoots === 'object'
+          ? Object.fromEntries(Object.entries(defaults.harnesses[id].scopeRoots).map(([scope, value]) => [scope, collapseHome(expandHome(value))]))
         : {},
+      scopeRootsComplete: source.scopeRootsComplete === true
+        || (source.scopeRootsComplete === undefined && source.scopeRoots !== undefined),
     };
   }
   const scheduler = {
@@ -149,12 +173,14 @@ function resolveConfigPaths(config) {
         root: path.resolve(expandHome(normalized.harnesses[id].root)),
         enabled: true,
         scopeRoots: normalized.harnesses[id].scopeRoots,
+        scopeRootsComplete: normalized.harnesses[id].scopeRootsComplete,
       })),
     allHarnesses: SUPPORTED_HARNESSES.map((id) => ({
       id,
       root: path.resolve(expandHome(normalized.harnesses[id].root)),
       enabled: normalized.harnesses[id].enabled,
       scopeRoots: normalized.harnesses[id].scopeRoots,
+      scopeRootsComplete: normalized.harnesses[id].scopeRootsComplete,
     })),
   };
 }

@@ -27,7 +27,7 @@ const {
   defaultConfig,
 } = require('./config');
 const { planCatalogReconciliation, applyCatalogReconciliation } = require('./reconciliation');
-const { verifyHarnessBundle, deriveShadowPaths } = require('./harness-verification');
+const { verifyHarnessBundle, resolveShadowPaths } = require('./harness-verification');
 const { planSchedulerUnits } = require('./scheduler');
 
 const MODULE_ROOT = path.resolve(__dirname, '..');
@@ -122,6 +122,7 @@ function statusOperator(options = {}) {
     }
     let verification = null;
     if (pair.target && fs.existsSync(pair.target) && pair.effectiveName) {
+      const shadowPaths = resolveShadowPaths({ harness: state.harnesses.find((item) => item.id === pair.harness), adapter, effectiveName: pair.effectiveName });
       verification = verifyHarnessBundle({
         adapter,
         targetPath: pair.target,
@@ -129,7 +130,8 @@ function statusOperator(options = {}) {
         expectedTreeDigest: pair.source?.treeDigest || pair.treeDigest || null,
         allowlist: pair.allowlist,
         remoteModelProbe: false,
-        shadowPaths: deriveShadowPaths({ harness: state.harnesses.find((item) => item.id === pair.harness), adapter, effectiveName: pair.effectiveName }),
+        shadowPaths: shadowPaths.paths,
+        shadowPathsComplete: shadowPaths.complete,
       });
     }
     return {

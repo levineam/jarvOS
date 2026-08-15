@@ -1206,6 +1206,7 @@ module.exports = {
   applyCatalogReconciliation: catalogReconciliation.applyCatalogReconciliation,
   verifyHarnessBundle: harnessVerification.verifyHarnessBundle,
   deriveShadowPaths: harnessVerification.deriveShadowPaths,
+  resolveShadowPaths: harnessVerification.resolveShadowPaths,
   resolveCollisionAlias: collisionAlias.resolveCollisionAlias,
   safeAliasCandidates: collisionAlias.safeAliasCandidates,
   readReceipt: receipts.readReceipt,

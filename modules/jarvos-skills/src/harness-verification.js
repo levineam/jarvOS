@@ -5,11 +5,27 @@ const path = require('node:path');
 const { computeBundleTree } = require('./catalog');
 const { expandHome } = require('./config');
 
-function deriveShadowPaths({ harness = {}, adapter = null, effectiveName } = {}) {
+function resolveShadowPaths({ harness = {}, adapter = null, effectiveName } = {}) {
   const scopes = adapter?.skillProjection?.orderedScopes;
-  if (!Array.isArray(scopes) || !effectiveName) return [];
+  if (!Array.isArray(scopes) || !effectiveName) return { paths: [], complete: true };
   const configured = harness.scopeRoots || {};
-  return scopes.slice(0, -1).map((scope) => configured[scope] ? path.join(path.resolve(expandHome(configured[scope])), effectiveName) : null).filter(Boolean);
+  const managedRoot = harness.root ? path.resolve(expandHome(harness.root)) : null;
+  const higherScopes = scopes.slice(0, -1);
+  const missingScopes = higherScopes.filter((scope) => !configured[scope]);
+  return {
+    paths: higherScopes
+      .map((scope) => configured[scope] ? path.resolve(expandHome(configured[scope])) : null)
+      // A declared user scope can coincide with the managed root; it is the
+      // target being verified, not a higher-precedence shadow.
+      .filter((root) => root && root !== managedRoot)
+      .map((root) => path.join(root, effectiveName)),
+    complete: missingScopes.length === 0 && harness.scopeRootsComplete !== false,
+    missingScopes,
+  };
+}
+
+function deriveShadowPaths(options = {}) {
+  return resolveShadowPaths(options).paths;
 }
 
 /**
@@ -24,6 +40,7 @@ function verifyHarnessBundle({
   allowlist,
   remoteModelProbe = false,
   shadowPaths = [],
+  shadowPathsComplete = true,
 } = {}) {
   const projection = adapter?.skillProjection || null;
   const tier = projection?.verificationTier || adapter?.verificationTier || 'exact-path';
@@ -37,6 +54,9 @@ function verifyHarnessBundle({
 
   if (tier !== 'exact-path') {
     return { status: 'unverifiable', reason: 'adapter_verification_tier_unsupported', tier };
+  }
+  if (!shadowPathsComplete) {
+    return { status: 'unverifiable', reason: 'higher_precedence_scope_unknown', tier: 'exact-path' };
   }
   if (Array.isArray(shadowPaths) && shadowPaths.some((candidate) => candidate && fs.existsSync(candidate))) {
     return { status: 'unverifiable', reason: 'higher_precedence_shadow', tier: 'exact-path' };
@@ -70,4 +90,4 @@ function verifyHarnessBundle({
   }
 }
 
-module.exports = { verifyHarnessBundle, deriveShadowPaths };
+module.exports = { verifyHarnessBundle, deriveShadowPaths, resolveShadowPaths };

@@ -217,7 +217,8 @@ test('status marks a managed target unverifiable when a declared higher-preceden
     applyOperator({ configPath: env.configPath });
     const config = JSON.parse(fs.readFileSync(env.configPath, 'utf8'));
     const shadowRoot = path.join(env.home, 'codex-project');
-    config.harnesses.codex.scopeRoots = { project: shadowRoot };
+    config.harnesses.codex.scopeRoots = { project: shadowRoot, user: config.harnesses.codex.root };
+    config.harnesses.codex.scopeRootsComplete = true;
     fs.writeFileSync(env.configPath, JSON.stringify(config));
     const shadow = path.join(shadowRoot, 'public-fixture'); fs.mkdirSync(shadow, { recursive: true, mode: 0o700 }); fs.writeFileSync(path.join(shadow, 'SKILL.md'), 'shadow\n', { mode: 0o600 });
     const status = statusOperator({ configPath: env.configPath });
