@@ -28,6 +28,7 @@ jarvos-skills repair --json
 jarvos-skills inventory --json
 jarvos-skills inventory-assess --json
 jarvos-skills autonomous-repair --json
+jarvos-skills-scheduled-repair --config ~/.jarvos/shared-skills/config.json
 jarvos-skills enable --harness codex --json
 jarvos-skills disable --harness hermes --json
 jarvos-skills rename --id NAME --name EFFECTIVE --json
@@ -46,6 +47,12 @@ Events are merely debounced wake-ups, not proof that a skill is safe to share.
 The full scan and mutation lease are authoritative. Healthy recurring runs are
 quiet and write no durable state. A new actionable transition gets one redacted
 notice; a recovery gets one redacted recovery notice.
+
+Use `jarvos-skills-scheduled-repair` when a scheduler delivers stdout. It emits
+exactly `NO_REPLY` for a healthy replay and only emits a count-only message for
+new attention, recovery, repair, or safe failure. Pass `--announce-convergence`
+once through the configured delivery route after activation, then remove that
+flag so subsequent healthy runs remain quiet.
 
 For an exact-path proof, bind each higher-precedence project or workspace root
 as an absolute `scopeRoots` path and set `scopeRootsComplete: true` in the local
