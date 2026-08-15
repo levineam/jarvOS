@@ -856,11 +856,10 @@ function scanRegisteredRoot(rootInfo, {
       continue;
     }
     if (scanned.overflow) {
-      result.overflowed = true;
       result.unsafe.push(scanned);
-      // Overflow fails closed for completeness: do not claim a complete generation.
-      result.partial = true;
-      result.root.complete = false;
+      // A bounded failure inside one bundle is pair-scoped, like any other
+      // unsafe source. The bundle stays blocked, while the completed root
+      // listing remains usable for unrelated admission and repair.
       result.reasons.push(scanned.reason);
       continue;
     }
@@ -1154,7 +1153,6 @@ function observeInventory(options = {}) {
     for (const skill of scanned.skills) skillRecords.push(skill);
     for (const unsafe of scanned.unsafe) {
       unsafeRecords.push(unsafe);
-      if (unsafe.overflow) overflowed = true;
     }
   }
 
