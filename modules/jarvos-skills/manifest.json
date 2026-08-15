@@ -132,7 +132,7 @@
       "purpose": "Return one authenticated external result to the exact originating Codex session.",
       "source": {
         "revision": "jarvos-skills-v0.4.0",
-        "digest": "c38eac882b0f8888c43a1482b3f6fc2f559d8f8b5aad680db051c0251a618e80",
+        "digest": "1645f9b7e5be3ee30e3fc0dac537f5243f5602c362da77b883985e3fc946fda6",
         "license": "MIT",
         "provenance": "jarvOS reviewed source"
       },
