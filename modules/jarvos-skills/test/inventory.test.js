@@ -429,8 +429,9 @@ test('root replacement and partial/overflowed scans preserve completeness semant
   assert.ok(replaced.reasons.includes('root_replaced') || replaced.mutate === true);
 });
 
-test('bundle traversal fails closed on directory-count and depth limits', () => {
+test('bundle traversal bounds block only the offending skill', () => {
   const manyRoot = temp('jarvos-inv-many-dirs-');
+  writeSkill(path.join(manyRoot, 'safe-skill'), 'safe-skill');
   const manyBundle = writeSkill(path.join(manyRoot, 'many-dirs'), 'many-dirs');
   for (let index = 0; index < 5; index += 1) {
     fs.mkdirSync(path.join(manyBundle, `empty-${index}`), { mode: 0o700 });
@@ -443,11 +444,14 @@ test('bundle traversal fails closed on directory-count and depth limits', () => 
     configPath: manyEnv.configPath,
     observedAt: '2026-08-15T15:04:30.000Z',
   });
-  assert.equal(many.complete, false);
-  assert.equal(many.overflowed, true);
+  assert.equal(many.complete, true);
+  assert.equal(many.overflowed, false);
   assert.ok(many.reasons.includes('max_bundle_directories'));
+  assert.equal(many.document.skills.find((skill) => skill.logicalId === 'safe-skill').observations[0].state, 'new');
+  assert.equal(many.document.skills.find((skill) => skill.logicalId === 'many-dirs').disposition.reasonCode, 'unsafe_source');
 
   const deepRoot = temp('jarvos-inv-deep-dirs-');
+  writeSkill(path.join(deepRoot, 'safe-skill'), 'safe-skill');
   const deepBundle = writeSkill(path.join(deepRoot, 'deep-dirs'), 'deep-dirs');
   let nested = deepBundle;
   for (let depth = 0; depth < 4; depth += 1) {
@@ -462,9 +466,11 @@ test('bundle traversal fails closed on directory-count and depth limits', () => 
     configPath: deepEnv.configPath,
     observedAt: '2026-08-15T15:04:31.000Z',
   });
-  assert.equal(deep.complete, false);
-  assert.equal(deep.overflowed, true);
+  assert.equal(deep.complete, true);
+  assert.equal(deep.overflowed, false);
   assert.ok(deep.reasons.includes('max_bundle_depth'));
+  assert.equal(deep.document.skills.find((skill) => skill.logicalId === 'safe-skill').observations[0].state, 'new');
+  assert.equal(deep.document.skills.find((skill) => skill.logicalId === 'deep-dirs').disposition.reasonCode, 'unsafe_source');
 });
 
 test('healthy second scan is zero-write and CLI inventory status stays path-redacted', () => {

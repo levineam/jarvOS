@@ -40,22 +40,28 @@ function writeSkill(root, name, body = 'body') {
   return bundle;
 }
 
-function seedEnabledInventory({ maxEntriesPerRoot = 8, skills = ['alpha-skill'] } = {}) {
+function seedEnabledInventory({ maxEntriesPerRoot = 8, skills = ['alpha-skill'], limits = {} } = {}) {
   const home = temp('jarvos-auto-home-');
   const control = path.join(home, 'control');
   const codexRoot = path.join(home, 'codex');
   ensureDir(control, 'control');
   ensureDir(codexRoot, 'codex root');
   for (const name of skills) writeSkill(codexRoot, name);
+  const harnesses = Object.fromEntries(['codex', 'claude', 'openclaw', 'hermes'].map((id) => {
+    const root = path.join(home, 'harnesses', id);
+    ensureDir(root, `${id} harness root`);
+    return [id, { enabled: true, root, scopeRoots: {}, scopeRootsComplete: true }];
+  }));
   const config = normalizeConfig({
     ...defaultConfig(),
     controlRoot: control,
     publicCatalogPath: path.join(control, 'public-catalog.json'),
     localOverlayPath: path.join(control, 'local-overlay.json'),
+    harnesses,
     inventory: {
       ...defaultConfig().inventory,
       enabled: true,
-      limits: { ...defaultConfig().inventory.limits, maxEntriesPerRoot },
+      limits: { ...defaultConfig().inventory.limits, maxEntriesPerRoot, ...limits },
       registeredRoots: [
         {
           rootId: 'codex-managed',
@@ -265,6 +271,36 @@ test('autonomous repair continues for safe skills when one sibling bundle is uns
     assert.equal(result.mutationDenied, false);
     assert.equal(result.status.skills.find((skill) => skill.logicalId === opaqueSkillId('unsafe-skill')).disposition.reasonCode, 'unsafe_source');
     assert.equal(result.status.skills.find((skill) => skill.logicalId === opaqueSkillId('safe-skill')).disposition.kind, 'shared');
+  } finally {
+    fs.rmSync(env.home, { recursive: true, force: true });
+  }
+});
+
+test('autonomous repair admits a safe sibling while an oversized bundle stays blocked', () => {
+  const env = seedEnabledInventory({
+    skills: ['safe-skill', 'oversized-skill'],
+    limits: { maxBundleBytes: 128 },
+  });
+  try {
+    fs.appendFileSync(
+      path.join(env.codexRoot, 'oversized-skill', 'SKILL.md'),
+      `\n${'x'.repeat(256)}\n`,
+    );
+    const result = autonomousRepairOperator({
+      configPath: env.configPath,
+      observedAt: '2026-08-15T16:31:00.000Z',
+    });
+    assert.equal(result.mutationDenied, false);
+    assert.equal(
+      result.status.skills.find((skill) => skill.logicalId === opaqueSkillId('safe-skill')).disposition.kind,
+      'shared',
+    );
+    assert.equal(
+      result.status.skills.find((skill) => skill.logicalId === opaqueSkillId('oversized-skill')).disposition.reasonCode,
+      'unsafe_source',
+    );
+    assert.equal(result.reconciliation.applied.some((pair) => pair.id === 'safe-skill' && pair.applied), true);
+    assert.equal(result.reconciliation.applied.some((pair) => pair.id === 'oversized-skill'), false);
   } finally {
     fs.rmSync(env.home, { recursive: true, force: true });
   }
