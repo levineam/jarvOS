@@ -19,9 +19,19 @@ const {
   disableHarness,
   renameAlias,
   repairOperator,
+  autonomousRepairOperator,
   schedulerOperator,
   initOperator,
   doctorSharedSkills,
+  inventoryStatusOperator,
+  inventoryRegisterRootsOperator,
+  inventoryDeclaredRootsOperator,
+  inventoryAssessOperator,
+  sharedStatusOperator,
+  explainOperator,
+  excludeSkillOperator,
+  includeSkillOperator,
+  claudeProofOperator,
   SUPPORTED_HARNESSES,
 } = require('../src');
 
@@ -33,11 +43,21 @@ const OPERATOR_COMMANDS = new Set([
   'apply',
   'status',
   'repair',
+  'autonomous-repair',
   'enable',
   'disable',
   'rename',
   'scheduler',
   'doctor-shared',
+  'inventory',
+  'inventory-register-roots',
+  'inventory-declared-roots',
+  'inventory-assess',
+  'shared-status',
+  'explain',
+  'exclude',
+  'include',
+  'claude-proof',
 ]);
 
 function parseArgs(argv) {
@@ -64,6 +84,9 @@ function parseArgs(argv) {
     write: false,
     harnesses: null,
     controlRoot: '',
+    inspect: false,
+    reasonCode: '',
+    expectedGenerationId: '',
   };
 
   if (args[0] && !args[0].startsWith('-')) {
@@ -120,7 +143,14 @@ function parseArgs(argv) {
       if (!args[i + 1]) throw new Error('--interval-minutes requires an integer');
       opts.intervalMinutes = Number(args[++i]);
     } else if (arg === '--write') opts.write = true;
-    else if (arg === '--harnesses') {
+    else if (arg === '--inspect') opts.inspect = true;
+    else if (arg === '--reason-code') {
+      if (!args[i + 1]) throw new Error('--reason-code requires a value');
+      opts.reasonCode = args[++i];
+    } else if (arg === '--expected-generation') {
+      if (!args[i + 1]) throw new Error('--expected-generation requires a generation id');
+      opts.expectedGenerationId = args[++i];
+    } else if (arg === '--harnesses') {
       if (!args[i + 1]) throw new Error('--harnesses requires a comma-separated list');
       opts.harnesses = args[++i].split(',').map((item) => item.trim()).filter(Boolean);
     } else if (arg === '--help' || arg === '-h') opts.help = true;
@@ -148,15 +178,31 @@ Shared skill distribution (catalog/overlay):
   jarvos-skills apply [--config PATH] [--json]
   jarvos-skills status [--config PATH] [--json]
   jarvos-skills repair [--config PATH] [--json]
+  jarvos-skills autonomous-repair [--config PATH] [--json]
   jarvos-skills enable --harness NAME [--root PATH] [--config PATH] [--json]
   jarvos-skills disable --harness NAME [--config PATH] [--json]
   jarvos-skills rename --id NAME --name EFFECTIVE [--config PATH] [--json]
   jarvos-skills scheduler [--write] [--interval-minutes N] [--config PATH] [--json]
   jarvos-skills doctor-shared [--config PATH] [--json]
+  jarvos-skills inventory [--config PATH] [--inspect] [--json]
+  jarvos-skills inventory-register-roots [--config PATH] [--json]
+  jarvos-skills inventory-declared-roots [--json]
+  jarvos-skills inventory-assess [--config PATH] [--json]
+  jarvos-skills shared-status [--config PATH] [--json]
+  jarvos-skills explain --id NAME [--config PATH] [--json]
+  jarvos-skills exclude --id NAME [--reason-code CODE] [--config PATH] [--json]
+  jarvos-skills include --id NAME [--config PATH] [--json]
+  jarvos-skills claude-proof --id NAME [--expected-generation ID] [--config PATH] [--json]
 
 Installs the default jarvOS operating-system skill bundle and operates the
 public shared-skill catalog. Private overlay bodies never enter the package.
-Live harness activation remains an owner decision.`);
+Inventory observes registered absolute roots only; discovery is not admission.
+inventory-assess classifies and may auto-admit rule-proven portable skills into
+the owner-only source store/local overlay. autonomous-repair is the scheduler
+backstop and refuses incomplete-generation mutations. shared-status/explain/
+exclude/include are redacted agent-parity surfaces. claude-proof is human-only
+and never publishes private bodies. Live harness/scheduler enable remains an
+owner decision.`);
 }
 
 function printPlan(plan, json) {
@@ -222,6 +268,8 @@ function runOperator(opts) {
       return statusOperator({ configPath });
     case 'repair':
       return repairOperator({ configPath });
+    case 'autonomous-repair':
+      return autonomousRepairOperator({ configPath });
     case 'enable':
       return enableHarness({ harness: opts.harness, root: opts.root || undefined, configPath });
     case 'disable':
@@ -235,6 +283,35 @@ function runOperator(opts) {
         configPath,
         write: opts.write,
         intervalMinutes: opts.intervalMinutes || undefined,
+      });
+    case 'inventory':
+      return inventoryStatusOperator({
+        configPath,
+        inspect: opts.inspect === true,
+      });
+    case 'inventory-register-roots':
+      return inventoryRegisterRootsOperator({ configPath });
+    case 'inventory-declared-roots':
+      return inventoryDeclaredRootsOperator({});
+    case 'inventory-assess':
+      return inventoryAssessOperator({ configPath });
+    case 'shared-status':
+      return sharedStatusOperator({ configPath });
+    case 'explain':
+      return explainOperator({ configPath, id: opts.id });
+    case 'exclude':
+      return excludeSkillOperator({
+        configPath,
+        id: opts.id,
+        reasonCode: opts.reasonCode || undefined,
+      });
+    case 'include':
+      return includeSkillOperator({ configPath, id: opts.id });
+    case 'claude-proof':
+      return claudeProofOperator({
+        configPath,
+        id: opts.id,
+        expectedGenerationId: opts.expectedGenerationId || undefined,
       });
     default:
       throw new Error(`Unknown operator command: ${opts.command}`);

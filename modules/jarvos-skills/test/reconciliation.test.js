@@ -472,3 +472,240 @@ test('exact-path harness verification binds digest and never invents model-visib
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+test('exact-digest unmanaged copy is adopted without rewriting bytes', () => {
+  const control = temp('jarvos-recon-adopt-control-');
+  const sourceRoot = temp('jarvos-recon-adopt-source-');
+  const roots = {
+    codex: temp('jarvos-recon-adopt-codex-'),
+  };
+  try {
+    copyFixture(PUBLIC_FIXTURE, path.join(sourceRoot, 'public-fixture'));
+    // Pre-place an unmanaged exact copy in the harness root.
+    copyFixture(PUBLIC_FIXTURE, path.join(roots.codex, 'public-fixture'));
+    const before = computeBundleTree(path.join(roots.codex, 'public-fixture'), {
+      allowlist: ['SKILL.md', 'scripts/**', 'assets/**'],
+    });
+    const mtimeBefore = fs.statSync(path.join(roots.codex, 'public-fixture', 'SKILL.md')).mtimeMs;
+
+    const publicTree = before;
+    const effective = composeEffectiveCatalog({
+      publicCatalog: {
+        schemaVersion: CATALOG_SCHEMA_VERSION,
+        entries: [{
+          id: 'public-fixture',
+          allowedHarnesses: ['codex'],
+          bundle: {
+            root: 'public-fixture',
+            allowlist: ['SKILL.md', 'scripts/**', 'assets/**'],
+            treeDigest: publicTree.treeDigest,
+          },
+        }],
+      },
+      localOverlay: { schemaVersion: OVERLAY_SCHEMA_VERSION, entries: [] },
+    });
+    assert.equal(effective.status, 'valid');
+
+    const plan = planCatalogReconciliation({
+      catalog: effective.catalog,
+      catalogDigest: effective.digest,
+      publicSourceRoot: sourceRoot,
+      localSourceRoot: null,
+      harnesses: harnesses(roots),
+      controlRoot: control,
+      inventoryGenerationId: 'gen-adopt0001',
+    });
+    const pair = plan.pairs.find((item) => item.id === 'public-fixture' && item.harness === 'codex');
+    assert.equal(pair.status, 'unmanaged_exact');
+    assert.equal(pair.action, 'adopt');
+
+    const applied = applyCatalogReconciliation(plan);
+    assert.equal(applied.ok, true);
+    const row = applied.applied.find((item) => item.id === 'public-fixture' && item.harness === 'codex');
+    assert.equal(row.status, 'adopted');
+    assert.equal(row.applied, true);
+
+    const after = computeBundleTree(path.join(roots.codex, 'public-fixture'), {
+      allowlist: ['SKILL.md', 'scripts/**', 'assets/**'],
+    });
+    assert.equal(after.treeDigest, before.treeDigest);
+    const mtimeAfter = fs.statSync(path.join(roots.codex, 'public-fixture', 'SKILL.md')).mtimeMs;
+    assert.equal(mtimeAfter, mtimeBefore);
+
+    const { readReceipt, validateReceipt } = require('../src/receipts');
+    const receipt = validateReceipt(readReceipt(roots.codex, 'public-fixture'));
+    assert.ok(receipt);
+    assert.equal(receipt.treeDigest, before.treeDigest);
+    assert.equal(receipt.inventoryGenerationId, 'gen-adopt0001');
+
+    // Second reconcile is zero-write clean.
+    const plan2 = planCatalogReconciliation({
+      catalog: effective.catalog,
+      catalogDigest: effective.digest,
+      publicSourceRoot: sourceRoot,
+      harnesses: harnesses(roots),
+      controlRoot: control,
+      inventoryGenerationId: 'gen-adopt0001',
+    });
+    assert.equal(plan2.pairs[0].status, 'clean');
+    assert.equal(plan2.pairs[0].action, 'preserve');
+    const applied2 = applyCatalogReconciliation(plan2);
+    assert.equal(applied2.noop, true);
+  } finally {
+    fs.rmSync(control, { recursive: true, force: true });
+    fs.rmSync(sourceRoot, { recursive: true, force: true });
+    for (const root of Object.values(roots)) fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('divergent unmanaged copy stays preserved', () => {
+  const control = temp('jarvos-recon-div-control-');
+  const sourceRoot = temp('jarvos-recon-div-source-');
+  const roots = { codex: temp('jarvos-recon-div-codex-') };
+  try {
+    copyFixture(PUBLIC_FIXTURE, path.join(sourceRoot, 'public-fixture'));
+    copyFixture(PUBLIC_FIXTURE, path.join(roots.codex, 'public-fixture'));
+    fs.writeFileSync(path.join(roots.codex, 'public-fixture', 'SKILL.md'), '---\nname: public-fixture\n---\ndivergent\n', { mode: 0o600 });
+    const publicTree = computeBundleTree(path.join(sourceRoot, 'public-fixture'), {
+      allowlist: ['SKILL.md', 'scripts/**', 'assets/**'],
+    });
+    const effective = composeEffectiveCatalog({
+      publicCatalog: {
+        schemaVersion: CATALOG_SCHEMA_VERSION,
+        entries: [{
+          id: 'public-fixture',
+          allowedHarnesses: ['codex'],
+          bundle: {
+            root: 'public-fixture',
+            allowlist: ['SKILL.md', 'scripts/**', 'assets/**'],
+            treeDigest: publicTree.treeDigest,
+          },
+        }],
+      },
+      localOverlay: { schemaVersion: OVERLAY_SCHEMA_VERSION, entries: [] },
+    });
+    const plan = planCatalogReconciliation({
+      catalog: effective.catalog,
+      catalogDigest: effective.digest,
+      publicSourceRoot: sourceRoot,
+      harnesses: harnesses(roots),
+      controlRoot: control,
+    });
+    // Divergent unmanaged occupant forces an alias; the original name stays put.
+    assert.ok(plan.pairs[0].effectiveName);
+    assert.notEqual(plan.pairs[0].effectiveName, 'public-fixture');
+    assert.equal(plan.pairs[0].status, 'missing');
+    assert.equal(plan.pairs[0].action, 'install');
+    const applied = applyCatalogReconciliation(plan);
+    assert.equal(applied.ok, true);
+    // Original divergent body is preserved at the canonical name.
+    assert.match(fs.readFileSync(path.join(roots.codex, 'public-fixture', 'SKILL.md'), 'utf8'), /divergent/);
+    // Portable copy lands under the alias, not by overwriting the occupant.
+    assert.equal(fs.existsSync(path.join(roots.codex, plan.pairs[0].effectiveName, 'SKILL.md')), true);
+  } finally {
+    fs.rmSync(control, { recursive: true, force: true });
+    fs.rmSync(sourceRoot, { recursive: true, force: true });
+    for (const root of Object.values(roots)) fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('incomplete inventory generation refuses mutations', () => {
+  const control = temp('jarvos-recon-inc-control-');
+  const sourceRoot = temp('jarvos-recon-inc-source-');
+  const roots = { codex: temp('jarvos-recon-inc-codex-') };
+  try {
+    copyFixture(PUBLIC_FIXTURE, path.join(sourceRoot, 'public-fixture'));
+    const publicTree = computeBundleTree(path.join(sourceRoot, 'public-fixture'), {
+      allowlist: ['SKILL.md', 'scripts/**', 'assets/**'],
+    });
+    const effective = composeEffectiveCatalog({
+      publicCatalog: {
+        schemaVersion: CATALOG_SCHEMA_VERSION,
+        entries: [{
+          id: 'public-fixture',
+          allowedHarnesses: ['codex'],
+          bundle: {
+            root: 'public-fixture',
+            allowlist: ['SKILL.md', 'scripts/**', 'assets/**'],
+            treeDigest: publicTree.treeDigest,
+          },
+        }],
+      },
+      localOverlay: { schemaVersion: OVERLAY_SCHEMA_VERSION, entries: [] },
+    });
+    const plan = planCatalogReconciliation({
+      catalog: effective.catalog,
+      catalogDigest: effective.digest,
+      publicSourceRoot: sourceRoot,
+      harnesses: harnesses(roots),
+      controlRoot: control,
+      incompleteGeneration: true,
+      inventoryGenerationId: 'gen-incomplete01',
+    });
+    assert.equal(plan.ok, false);
+    assert.equal(plan.incompleteGeneration, true);
+    assert.equal(plan.pairs.length, 0);
+    assert.equal(plan.mutate, false);
+    const applied = applyCatalogReconciliation(plan);
+    assert.equal(applied.ok, false);
+    assert.equal(applied.reason, 'incomplete_generation');
+    assert.equal(fs.existsSync(path.join(roots.codex, 'public-fixture')), false);
+  } finally {
+    fs.rmSync(control, { recursive: true, force: true });
+    fs.rmSync(sourceRoot, { recursive: true, force: true });
+    for (const root of Object.values(roots)) fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('install receipts carry inventory generation identity', () => {
+  const control = temp('jarvos-recon-igen-control-');
+  const sourceRoot = temp('jarvos-recon-igen-source-');
+  const roots = { codex: temp('jarvos-recon-igen-codex-') };
+  try {
+    copyFixture(PUBLIC_FIXTURE, path.join(sourceRoot, 'public-fixture'));
+    const publicTree = computeBundleTree(path.join(sourceRoot, 'public-fixture'), {
+      allowlist: ['SKILL.md', 'scripts/**', 'assets/**'],
+    });
+    const effective = composeEffectiveCatalog({
+      publicCatalog: {
+        schemaVersion: CATALOG_SCHEMA_VERSION,
+        entries: [{
+          id: 'public-fixture',
+          allowedHarnesses: ['codex'],
+          bundle: {
+            root: 'public-fixture',
+            allowlist: ['SKILL.md', 'scripts/**', 'assets/**'],
+            treeDigest: publicTree.treeDigest,
+          },
+        }],
+      },
+      localOverlay: { schemaVersion: OVERLAY_SCHEMA_VERSION, entries: [] },
+    });
+    const plan = planCatalogReconciliation({
+      catalog: effective.catalog,
+      catalogDigest: effective.digest,
+      publicSourceRoot: sourceRoot,
+      harnesses: harnesses(roots),
+      controlRoot: control,
+      inventoryGenerationId: 'gen-install0001',
+      sourceIdentities: {
+        'public-fixture': {
+          logicalId: 'public-fixture',
+          sourceKind: 'public-catalog',
+          profileDigest: 'a'.repeat(64),
+        },
+      },
+    });
+    const applied = applyCatalogReconciliation(plan);
+    assert.equal(applied.ok, true);
+    const { readReceipt, validateReceipt } = require('../src/receipts');
+    const receipt = validateReceipt(readReceipt(roots.codex, 'public-fixture'));
+    assert.equal(receipt.inventoryGenerationId, 'gen-install0001');
+    assert.equal(receipt.sourceIdentity.logicalId, 'public-fixture');
+    assert.equal(receipt.sourceIdentity.profileDigest, 'a'.repeat(64));
+  } finally {
+    fs.rmSync(control, { recursive: true, force: true });
+    fs.rmSync(sourceRoot, { recursive: true, force: true });
+    for (const root of Object.values(roots)) fs.rmSync(root, { recursive: true, force: true });
+  }
+});

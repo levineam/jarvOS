@@ -49,6 +49,11 @@ function advertisedRuntimeAssets() {
     'modules/jarvos-skills/schemas/catalog.schema.json',
     'modules/jarvos-skills/schemas/local-overlay.schema.json',
     'modules/jarvos-skills/src/reconciliation.js',
+    'modules/jarvos-skills/src/inventory.js',
+    'modules/jarvos-skills/src/inventory-contract.js',
+    'modules/jarvos-skills/src/skill-assessment.js',
+    'modules/jarvos-skills/src/source-store.js',
+    'modules/jarvos-skills/src/attention.js',
     'modules/jarvos-skills/scripts/dogfood-skills.js',
     'modules/jarvos-skills/src/doctor.js',
     'modules/jarvos-skills/scripts/live-preflight-checklist.js',
@@ -84,6 +89,20 @@ test('published tarball includes every advertised runtime and runtime-kit asset'
   const required = advertisedRuntimeAssets();
   const missing = required.filter((file) => !files.has(file));
   assert.deepEqual(missing, [], `published tarball is missing required files: ${missing.join(', ')}`);
+});
+
+test('published shared-skill surface contains no local-path or private-body sentinel', () => {
+  const files = packedFiles();
+  const sentinels = ['/Users/andrew', 'Vault v3', 'JARVOS_TEST_PRIVATE'];
+  for (const name of files) {
+    if (!name.startsWith('modules/jarvos-skills/')) continue;
+    const absolute = path.join(ROOT, name);
+    if (!fs.existsSync(absolute) || !fs.statSync(absolute).isFile()) continue;
+    const text = fs.readFileSync(absolute, 'utf8');
+    for (const sentinel of sentinels) {
+      assert.equal(text.includes(sentinel), false, `${name} leaks private sentinel ${sentinel}`);
+    }
+  }
 });
 
 test('managed provider package and public docs agree on pin, fallback, and admission truth', () => {

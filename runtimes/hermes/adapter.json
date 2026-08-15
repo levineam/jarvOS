@@ -6,6 +6,7 @@
     "version": "jarvos-skill-projection-adapter/v1",
     "managedRoot": "~/.hermes/skills",
     "orderedScopes": ["workspace", "user", "managed"],
+    "scopeRoots": { "workspace": "./skills", "user": "~/.hermes/skills" },
     "renderer": "raw-skill-bundle",
     "verificationTier": "exact-path",
     "bundleAllowlist": ["SKILL.md", "scripts/**", "assets/**", "references/**", "templates/**"],
