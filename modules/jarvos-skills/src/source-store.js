@@ -140,7 +140,14 @@ function readAcceptedGeneration(filePath) {
   return value;
 }
 
-function captureAcceptedGeneration({ sourceStorePath, acceptedGenerationPath, generationId, acceptedAt, candidates }) {
+function captureAcceptedGeneration({
+  sourceStorePath,
+  acceptedGenerationPath,
+  generationId,
+  acceptedAt,
+  candidates,
+  afterGenerationRename = null,
+}) {
   if (typeof generationId !== 'string' || !/^gen-[a-z0-9-]+$/i.test(generationId)) throw new Error('generationId is invalid');
   if (!Array.isArray(candidates) || candidates.length === 0) return { changed: false, generation: readAcceptedGeneration(acceptedGenerationPath), sourceRoot: null };
   const store = ensureSourceStore(sourceStorePath).root;
@@ -204,6 +211,7 @@ function captureAcceptedGeneration({ sourceStorePath, acceptedGenerationPath, ge
     };
     // Rename makes every captured tree visible as one immutable generation.
     fs.renameSync(staging, target);
+    if (typeof afterGenerationRename === 'function') afterGenerationRename({ generation, sourceRoot: target });
     atomicWriteJson(acceptedGenerationPath, generation);
     return { changed: true, recoveryNeeded: false, generation, sourceRoot: target };
   } catch (error) {

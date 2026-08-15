@@ -833,6 +833,7 @@ test('missing or drifted legacy manual bundles fail before config or overlay mut
 
 test('legacy manual migration replays every durable write boundary', () => {
   for (const failurePoint of [
+    'after-rename-before-pointer',
     'after-capture',
     'after-pointer',
     'after-overlay',
@@ -868,7 +869,12 @@ test('legacy manual migration replays every durable write boundary', () => {
       autoAdmit: true,
       persist: true,
       captureGeneration: (options) => {
-        const captured = captureAcceptedGeneration(options);
+        const captured = captureAcceptedGeneration({
+          ...options,
+          afterGenerationRename: failurePoint === 'after-rename-before-pointer'
+            ? () => { throw new Error('injected after generation rename'); }
+            : null,
+        });
         if (failurePoint === 'after-capture') throw new Error('injected after capture');
         return captured;
       },
@@ -917,6 +923,68 @@ test('legacy manual migration replays every durable write boundary', () => {
       assert.equal(fs.readFileSync(file, 'utf8'), before[index].body, failurePoint);
       assert.equal(fs.statSync(file).mtimeMs, before[index].mtimeMs, failurePoint);
     });
+  }
+});
+
+test('orphan recovery ignores unrelated generations and rejects mismatched or non-private captures', () => {
+  for (const scenario of ['unrelated-generation', 'digest-mismatch', 'allowlist-mismatch', 'unsafe-mode']) {
+    const legacyRoot = temp(`jarvos-orphan-${scenario}-`);
+    const manualPath = writeSkill(path.join(legacyRoot, 'transcribe'), {
+      name: 'transcribe',
+      body: 'Transcribe a recording.\n',
+      scripts: scenario === 'allowlist-mismatch',
+    });
+    const manualTree = computeBundleTree(manualPath, { allowlist: DEFAULT_ALLOWED_BUNDLE_GLOBS });
+    const { configPath } = seedConfig({ roots: {}, trustClass: 'portable-bundles' });
+    let loaded = loadConfig(configPath);
+    saveConfig({ ...loaded.config, localSourceRoot: legacyRoot }, configPath);
+    loaded = loadConfig(configPath);
+    const overlayEntry = manualOverlayEntry('transcribe', manualTree, ['codex', 'hermes']);
+    if (scenario === 'digest-mismatch') overlayEntry.bundle.treeDigest = 'f'.repeat(64);
+    if (scenario === 'allowlist-mismatch') overlayEntry.bundle.allowlist = ['SKILL.md'];
+    atomicWriteJson(loaded.resolved.localOverlayPath, {
+      schemaVersion: OVERLAY_SCHEMA_VERSION,
+      entries: [overlayEntry],
+    });
+    const observedAt = '2026-08-15T18:30:00.000Z';
+    const observation = observeInventory({ configPath, observedAt });
+    const orphanGenerationId = scenario === 'unrelated-generation'
+      ? 'gen-unrelated01'
+      : observation.document.generationId;
+    captureAcceptedGeneration({
+      sourceStorePath: loaded.resolved.inventory.sourceStorePath,
+      acceptedGenerationPath: loaded.resolved.inventory.acceptedGenerationPath,
+      generationId: orphanGenerationId,
+      acceptedAt: observedAt,
+      candidates: [{
+        id: 'transcribe',
+        sourcePath: manualPath,
+        treeDigest: manualTree.treeDigest,
+        allowlist: manualTree.allowlist,
+      }],
+    });
+    if (scenario === 'unsafe-mode') {
+      fs.chmodSync(path.join(
+        loaded.resolved.inventory.sourceStorePath,
+        orphanGenerationId,
+        'transcribe',
+        'SKILL.md',
+      ), 0o644);
+    }
+    fs.unlinkSync(loaded.resolved.inventory.acceptedGenerationPath);
+    fs.rmSync(legacyRoot, { recursive: true, force: true });
+    const configBefore = fs.readFileSync(configPath, 'utf8');
+    const overlayBefore = fs.readFileSync(loaded.resolved.localOverlayPath, 'utf8');
+
+    assert.throws(
+      () => inventoryAssessOperator({ configPath, observedAt }),
+      scenario === 'unrelated-generation'
+        ? /legacy manual localSourceRoot does not exist/
+        : /digest|allowlist|unexpected path|owner-only/i,
+    );
+    assert.equal(fs.readFileSync(configPath, 'utf8'), configBefore, scenario);
+    assert.equal(fs.readFileSync(loaded.resolved.localOverlayPath, 'utf8'), overlayBefore, scenario);
+    assert.equal(fs.existsSync(loaded.resolved.inventory.acceptedGenerationPath), false, scenario);
   }
 });
 

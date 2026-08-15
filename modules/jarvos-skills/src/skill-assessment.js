@@ -176,7 +176,15 @@ function loadManualInputs({ publicCatalog, localOverlay }) {
   return { publicCatalog: publicResult.catalog, localOverlay: localResult.overlay };
 }
 
-function attestOwnedBundle(root, relativeRoot, entry, label) {
+function attestOwnedBundle(root, relativeRoot, entry, label, { ownerOnly = false } = {}) {
+  const rootStat = fs.lstatSync(root);
+  if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) throw new Error(`${label} source root is unsafe`);
+  if (typeof process.getuid === 'function' && rootStat.uid !== process.getuid()) {
+    throw new Error(`${label} source root has unsafe ownership`);
+  }
+  if ((rootStat.mode & (ownerOnly ? 0o077 : 0o022)) !== 0) {
+    throw new Error(`${label} source root has unsafe permissions`);
+  }
   const candidate = path.resolve(root, ...relativeRoot.split('/'));
   const relative = path.relative(root, candidate);
   if (!relative || relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
@@ -191,15 +199,24 @@ function attestOwnedBundle(root, relativeRoot, entry, label) {
     if (typeof process.getuid === 'function' && stat.uid !== process.getuid()) {
       throw new Error(`${label} bundle has unsafe ownership: ${entry.id}`);
     }
-    if ((stat.mode & 0o022) !== 0) throw new Error(`${label} bundle has unsafe permissions: ${entry.id}`);
+    if ((stat.mode & (ownerOnly ? 0o077 : 0o022)) !== 0) {
+      throw new Error(`${label} bundle has unsafe permissions: ${entry.id}`);
+    }
   }
-  return computeBundleTree(candidate, {
+  const tree = computeBundleTree(candidate, {
     allowlist: entry.bundle.allowlist,
     expectedDigest: entry.bundle.treeDigest,
   });
+  if (ownerOnly) {
+    for (const treeEntry of tree.entries) {
+      const stat = fs.lstatSync(path.join(tree.root, ...treeEntry.path.split('/')));
+      if ((stat.mode & 0o077) !== 0) throw new Error(`${label} bundle file is not owner-only: ${entry.id}`);
+    }
+  }
+  return tree;
 }
 
-function legacyManualMigration({ manualEntries, oldLocalSourceRoot, sourceStorePath, prior }) {
+function legacyManualMigration({ manualEntries, oldLocalSourceRoot, sourceStorePath, prior, currentGenerationId }) {
   if (!oldLocalSourceRoot
     || path.resolve(oldLocalSourceRoot) === path.resolve(sourceStorePath)
     || manualEntries.length === 0) {
@@ -219,8 +236,22 @@ function legacyManualMigration({ manualEntries, oldLocalSourceRoot, sourceStoreP
       && capturedRelativeRoot
       && capturedEntry.treeDigest === entry.bundle.treeDigest
       && JSON.stringify(capturedEntry.allowlist) === JSON.stringify(entry.bundle.allowlist)) {
-      attestOwnedBundle(sourceStoreRoot, capturedRelativeRoot, entry, 'captured manual');
+      attestOwnedBundle(sourceStoreRoot, capturedRelativeRoot, entry, 'captured manual', { ownerOnly: true });
       generationById.set(entry.id, prior.generationId);
+      continue;
+    }
+    const orphanRelativeRoot = path.posix.join(currentGenerationId, entry.id);
+    const orphanPath = path.resolve(sourceStoreRoot, ...orphanRelativeRoot.split('/'));
+    if (fs.existsSync(orphanPath)) {
+      const tree = attestOwnedBundle(sourceStoreRoot, orphanRelativeRoot, entry, 'orphaned manual', { ownerOnly: true });
+      generationById.set(entry.id, currentGenerationId);
+      candidates.push({
+        id: entry.id,
+        sourcePath: tree.root,
+        treeDigest: tree.treeDigest,
+        allowlist: tree.allowlist,
+        manualEntry: entry,
+      });
       continue;
     }
     uncapturedEntries.push(entry);
@@ -322,6 +353,7 @@ function assessInventory({
       oldLocalSourceRoot: resolved?.localSourceRoot || null,
       sourceStorePath,
       prior,
+      currentGenerationId: validated.document.generationId,
     });
   const retirementPolicy = normalizeRetirementPolicy(
     config?.inventory?.retirement || {},
