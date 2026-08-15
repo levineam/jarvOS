@@ -9,6 +9,7 @@ const test = require('node:test');
 const {
   CATALOG_SCHEMA_VERSION,
   OVERLAY_SCHEMA_VERSION,
+  attestCatalogBundle,
   computeBundleTree,
   composeEffectiveCatalog,
 } = require('../src/catalog');
@@ -155,6 +156,30 @@ test('multiple skills across four harnesses install once and stay clean on secon
   }
 });
 
+test('planning attests one catalog source once across eligible harnesses', () => {
+  const control = temp('jarvos-recon-attestation-control-');
+  const sourceRoot = temp('jarvos-recon-attestation-source-');
+  const roots = { codex: temp('jarvos-recon-attestation-codex-'), claude: temp('jarvos-recon-attestation-claude-'), hermes: temp('jarvos-recon-attestation-hermes-') };
+  try {
+    copyFixture(PUBLIC_FIXTURE, path.join(sourceRoot, 'public-fixture'));
+    const tree = computeBundleTree(path.join(sourceRoot, 'public-fixture'), { allowlist: ['SKILL.md', 'scripts/**', 'assets/**'] });
+    const catalog = { entries: [{ id: 'public-fixture', allowedHarnesses: ['codex', 'claude', 'hermes'], bundle: { root: 'public-fixture', allowlist: ['SKILL.md', 'scripts/**', 'assets/**'], treeDigest: tree.treeDigest } }] };
+    let attestations = 0;
+    const plan = planCatalogReconciliation({
+      catalog,
+      publicSourceRoot: sourceRoot,
+      harnesses: harnesses(roots),
+      controlRoot: control,
+      attestCatalogBundle: (...args) => { attestations += 1; return attestCatalogBundle(...args); },
+    });
+    assert.equal(plan.pairs.length, 3);
+    assert.equal(attestations, 1);
+  } finally {
+    fs.rmSync(control, { recursive: true, force: true }); fs.rmSync(sourceRoot, { recursive: true, force: true });
+    for (const root of Object.values(roots)) fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('unmanaged same-name incumbent is preserved and portable skill gets one durable alias', () => {
   const control = temp('jarvos-recon-alias-control-');
   const sourceRoot = temp('jarvos-recon-alias-source-');
@@ -217,6 +242,50 @@ test('unmanaged same-name incumbent is preserved and portable skill gets one dur
     fs.rmSync(control, { recursive: true, force: true });
     fs.rmSync(sourceRoot, { recursive: true, force: true });
     for (const root of Object.values(roots)) fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('known higher-precedence skill roots reserve names before projection', () => {
+  const control = temp('jarvos-recon-shadow-control-');
+  const sourceRoot = temp('jarvos-recon-shadow-source-');
+  const managedRoot = temp('jarvos-recon-shadow-managed-');
+  const projectRoot = temp('jarvos-recon-shadow-project-');
+  try {
+    copyFixture(PUBLIC_FIXTURE, path.join(sourceRoot, 'public-fixture'));
+    const tree = computeBundleTree(path.join(sourceRoot, 'public-fixture'), {
+      allowlist: ['SKILL.md', 'scripts/**', 'assets/**'],
+    });
+    const catalog = { entries: [{
+      id: 'public-fixture',
+      allowedHarnesses: ['codex'],
+      bundle: { root: 'public-fixture', allowlist: ['SKILL.md', 'scripts/**', 'assets/**'], treeDigest: tree.treeDigest },
+    }] };
+    copyFixture(PUBLIC_FIXTURE, path.join(projectRoot, 'public-fixture'));
+
+    const plan = planCatalogReconciliation({
+      catalog,
+      publicSourceRoot: sourceRoot,
+      controlRoot: control,
+      harnesses: [{
+        id: 'codex',
+        root: managedRoot,
+        adapter: { skillProjection: { orderedScopes: ['project', 'managed'] } },
+        scopeRoots: { project: projectRoot },
+        scopeRootsComplete: true,
+      }],
+      reviewer: (request) => JSON.stringify({ name: request.candidates[0] }),
+    });
+
+    assert.equal(plan.aliases['public-fixture'], 'jarvos-public-fixture');
+    assert.equal(plan.pairs[0].effectiveName, 'jarvos-public-fixture');
+    applyCatalogReconciliation(plan);
+    assert.equal(fs.existsSync(path.join(managedRoot, 'public-fixture')), false);
+    assert.equal(fs.existsSync(path.join(managedRoot, 'jarvos-public-fixture', 'SKILL.md')), true);
+  } finally {
+    fs.rmSync(control, { recursive: true, force: true });
+    fs.rmSync(sourceRoot, { recursive: true, force: true });
+    fs.rmSync(managedRoot, { recursive: true, force: true });
+    fs.rmSync(projectRoot, { recursive: true, force: true });
   }
 });
 

@@ -156,6 +156,32 @@ reviewed public entries plus an optional local overlay. Ambient workspace
 directories are never discovered into the catalog. Local overlay bodies stay on
 the machine; redacted status output exposes only digests and structural facts.
 
+
+## Shared skill operator CLI
+
+Public catalog operations are available on `jarvos-skills`:
+
+```sh
+jarvos-skills init-config --config ~/.jarvos/shared-skills/config.json --json
+jarvos-skills share --id my-skill --path ./skills/my-skill --scope public --json
+jarvos-skills plan --config ~/.jarvos/shared-skills/config.json --json
+jarvos-skills apply --config ~/.jarvos/shared-skills/config.json --json
+jarvos-skills status --config ~/.jarvos/shared-skills/config.json --json
+jarvos-skills repair --config ~/.jarvos/shared-skills/config.json --json
+jarvos-skills enable --harness codex --json
+jarvos-skills disable --harness claude --json
+jarvos-skills rename --id my-skill --name jarvos-my-skill --json
+jarvos-skills scheduler --write --interval-minutes 60 --json
+jarvos-skills doctor-shared --json
+node scripts/live-preflight-checklist.js --json
+```
+
+`share --scope local` admits private bundles through an owner-controlled overlay
+outside the package. Scheduler unit files are written disabled by default and
+never auto-enable live harness gates. Claude interactive proof remains
+`verification_pending` until the owner authorizes a remote model probe.
+
+
 ## Manifest
 
 `manifest.json` is the source of truth for the default bundle. Each skill has

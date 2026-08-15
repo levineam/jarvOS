@@ -29,15 +29,17 @@ function ensureStateDir(skillsRoot) {
   return fs.realpathSync(stateDir);
 }
 
-function receiptPath(skillsRoot, effectiveName) {
+function receiptPath(skillsRoot, effectiveName, { create = true } = {}) {
   if (typeof effectiveName !== 'string' || !/^[a-z][a-z0-9-]{0,63}$/.test(effectiveName)) {
     throw new Error('effectiveName is invalid');
   }
-  return path.join(ensureStateDir(skillsRoot), `${effectiveName}.json`);
+  const root = path.resolve(skillsRoot);
+  const stateDir = create ? ensureStateDir(root) : path.join(root, STATE_DIR);
+  return path.join(stateDir, `${effectiveName}.json`);
 }
 
 function readReceipt(skillsRoot, effectiveName) {
-  const file = receiptPath(skillsRoot, effectiveName);
+  const file = receiptPath(skillsRoot, effectiveName, { create: false });
   if (!fs.existsSync(file)) return null;
   const stat = fs.lstatSync(file);
   if (!stat.isFile() || stat.isSymbolicLink()) throw new Error('receipt must be a regular file');

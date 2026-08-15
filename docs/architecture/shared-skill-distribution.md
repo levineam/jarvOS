@@ -7,3 +7,18 @@ Each bundle is rooted at `SKILL.md` and carries a recursive digest over its allo
 Names are catalog-level bindings. When a canonical name is occupied, jarvOS selects one safe alias for the entire enrolled matrix and persists it before pair writes. The catalog engine has no ambient workspace discovery path.
 
 Runtime adapters declare ordered scopes, renderer, alias limits, and their strongest safe verification tier. Exact-path adapters may record a receipt-bound model-visible proof. Interactive-only adapters remain `verification_pending` until an authorized interactive proof occurs; copied bytes alone are not availability proof.
+
+## Operator CLI and scheduling
+
+The `jarvos-skills` CLI exposes share/refresh/plan/apply/status/repair/enable/disable/rename
+and a scheduler planner that emits launchd (macOS) or systemd user timer (Linux)
+unit files. Units stay disabled until the owner enables them. Protected mutations
+that change enrollment or publish overlay admissions require an explicit human
+principal when invoked through the control-plane manager.
+
+## Doctor and preflight
+
+`jarvos-skills doctor-shared` validates config, catalogs, adapter projection
+contracts, source-root requirements, and a non-enabling scheduler plan.
+`scripts/live-preflight-checklist.js` aggregates package tests, runtime-kit,
+isolated dogfood, and doctor evidence while keeping owner live steps pending.
