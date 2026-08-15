@@ -16,6 +16,7 @@ const {
 const { resolveCollisionAlias, safeAliasCandidates, strictChoice } = require('../src/collision-alias');
 const { planCatalogReconciliation, applyCatalogReconciliation, recoverJournal } = require('../src/reconciliation');
 const { verifyHarnessBundle } = require('../src/harness-verification');
+const { readReceipt, validateReceipt, removeReceipt } = require('../src/receipts');
 
 const FIXTURE_ROOT = path.join(__dirname, 'fixtures', 'catalog');
 const PUBLIC_FIXTURE = path.join(FIXTURE_ROOT, 'public-fixture');
@@ -77,6 +78,27 @@ function buildCatalog() {
   return effective;
 }
 
+function buildPublicCatalogFrom(sourceRoot, allowedHarnesses = ['codex']) {
+  const tree = computeBundleTree(path.join(sourceRoot, 'public-fixture'), {
+    allowlist: ['SKILL.md', 'scripts/**', 'assets/**'],
+  });
+  return composeEffectiveCatalog({
+    publicCatalog: {
+      schemaVersion: CATALOG_SCHEMA_VERSION,
+      entries: [{
+        id: 'public-fixture',
+        allowedHarnesses,
+        bundle: {
+          root: 'public-fixture',
+          allowlist: ['SKILL.md', 'scripts/**', 'assets/**'],
+          treeDigest: tree.treeDigest,
+        },
+      }],
+    },
+    localOverlay: { schemaVersion: OVERLAY_SCHEMA_VERSION, entries: [] },
+  });
+}
+
 function harnesses(roots) {
   return Object.entries(roots).map(([id, root]) => ({ id, root }));
 }
@@ -125,6 +147,116 @@ test('failed replacement journal restores the preserved backup before replanning
   assert.equal(fs.existsSync(journalFile), false);
   assert.equal(fs.readFileSync(path.join(target, 'SKILL.md'), 'utf8'), '# preserved\n');
   fs.rmSync(root, { recursive: true, force: true });
+});
+
+test('receipt failure persists replacement recovery when immediate backup restore also fails', () => {
+  const control = temp('jarvos-receipt-rollback-control-');
+  const sourceRoot = temp('jarvos-receipt-rollback-source-');
+  const codex = temp('jarvos-receipt-rollback-codex-');
+  try {
+    copyFixture(PUBLIC_FIXTURE, path.join(sourceRoot, 'public-fixture'));
+    const firstCatalog = buildPublicCatalogFrom(sourceRoot);
+    applyCatalogReconciliation(planCatalogReconciliation({
+      catalog: firstCatalog.catalog,
+      catalogDigest: firstCatalog.digest,
+      publicSourceRoot: sourceRoot,
+      harnesses: harnesses({ codex }),
+      controlRoot: control,
+    }));
+    const initialTarget = path.join(codex, 'public-fixture');
+    const originalBody = fs.readFileSync(path.join(initialTarget, 'SKILL.md'), 'utf8');
+    fs.appendFileSync(path.join(sourceRoot, 'public-fixture', 'SKILL.md'), '\nupdated\n');
+    const updatedCatalog = buildPublicCatalogFrom(sourceRoot);
+    const plan = planCatalogReconciliation({
+      catalog: updatedCatalog.catalog,
+      catalogDigest: updatedCatalog.digest,
+      publicSourceRoot: sourceRoot,
+      harnesses: harnesses({ codex }),
+      controlRoot: control,
+    });
+    assert.equal(plan.pairs[0].status, 'outdated');
+    const target = plan.pairs[0].target;
+
+    assert.throws(() => applyCatalogReconciliation(plan, {
+      io: {
+        writeReceipt() { throw new Error('fixture receipt write failed'); },
+        rollbackRenameSync() { throw new Error('fixture backup restore failed'); },
+      },
+    }), /receipt write failed/);
+
+    const journal = JSON.parse(fs.readFileSync(plan.journalFile, 'utf8'));
+    assert.equal(journal.phase, 'failed');
+    assert.equal(journal.recovery.target, target);
+    assert.equal(fs.existsSync(journal.recovery.backup), true);
+    assert.equal(fs.existsSync(target), false);
+
+    const heldBackup = `${journal.recovery.backup}.held`;
+    fs.renameSync(journal.recovery.backup, heldBackup);
+    assert.throws(
+      () => recoverJournal({ journalFile: plan.journalFile }),
+      /backup recovery is unavailable/,
+    );
+    assert.equal(fs.existsSync(plan.journalFile), true, 'failed recovery must preserve the journal');
+    fs.renameSync(heldBackup, journal.recovery.backup);
+    recoverJournal({ journalFile: plan.journalFile });
+    assert.equal(fs.existsSync(plan.journalFile), false);
+    assert.equal(fs.readFileSync(path.join(target, 'SKILL.md'), 'utf8'), originalBody);
+  } finally {
+    for (const dir of [control, sourceRoot, codex]) fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('multi-harness retirement rolls back every prior pair when a later receipt removal fails', () => {
+  const control = temp('jarvos-retire-rollback-control-');
+  const sourceRoot = temp('jarvos-retire-rollback-source-');
+  const codex = temp('jarvos-retire-rollback-codex-');
+  const hermes = temp('jarvos-retire-rollback-hermes-');
+  try {
+    copyFixture(PUBLIC_FIXTURE, path.join(sourceRoot, 'public-fixture'));
+    const selected = buildPublicCatalogFrom(sourceRoot, ['codex', 'hermes']);
+    applyCatalogReconciliation(planCatalogReconciliation({
+      catalog: selected.catalog,
+      catalogDigest: selected.digest,
+      publicSourceRoot: sourceRoot,
+      harnesses: harnesses({ codex, hermes }),
+      controlRoot: control,
+    }));
+    const empty = composeEffectiveCatalog({
+      publicCatalog: { schemaVersion: CATALOG_SCHEMA_VERSION, entries: [] },
+      localOverlay: { schemaVersion: OVERLAY_SCHEMA_VERSION, entries: [] },
+    });
+    const plan = planCatalogReconciliation({
+      catalog: empty.catalog,
+      catalogDigest: empty.digest,
+      publicSourceRoot: sourceRoot,
+      harnesses: harnesses({ codex, hermes }),
+      controlRoot: control,
+    });
+    assert.equal(plan.pairs.filter((pair) => pair.action === 'retire').length, 2);
+    let removals = 0;
+    assert.throws(() => applyCatalogReconciliation(plan, {
+      io: {
+        removeReceipt(root, effectiveName) {
+          removals += 1;
+          if (removals === 2) throw new Error('fixture second retirement failed');
+          return removeReceipt(root, effectiveName);
+        },
+      },
+    }), /second retirement failed/);
+
+    for (const root of [codex, hermes]) {
+      assert.equal(fs.existsSync(path.join(root, 'public-fixture', 'SKILL.md')), true);
+      assert.ok(validateReceipt(readReceipt(root, 'public-fixture')));
+      assert.equal(fs.readdirSync(root).some((name) => name.includes('.jarvos-retire-')), false);
+    }
+    const journal = JSON.parse(fs.readFileSync(plan.journalFile, 'utf8'));
+    assert.equal(journal.phase, 'failed');
+    assert.equal(journal.retirements.length, 2);
+    recoverJournal({ journalFile: plan.journalFile });
+    assert.equal(fs.existsSync(plan.journalFile), false);
+  } finally {
+    for (const dir of [control, sourceRoot, codex, hermes]) fs.rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test('multiple skills across four harnesses install once and stay clean on second reconcile', () => {

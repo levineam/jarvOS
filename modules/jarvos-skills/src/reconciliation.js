@@ -637,7 +637,27 @@ function clearJournal(journalFile) {
 function recoverJournal(aliasState) {
   const journal = readJsonIfPresent(aliasState.journalFile, null);
   if (!journal) return { recovered: false };
-  if (journal.phase === 'failed' && journal.recovery) {
+  if (journal.phase === 'retirements_committed') {
+    for (const retirement of journal.retirements || []) {
+      const target = path.resolve(retirement.target || '');
+      const backup = retirement.backup ? path.resolve(retirement.backup) : null;
+      const receipt = validateReceipt(retirement.receipt);
+      const expectedPrefix = `.${path.basename(target)}.jarvos-retire-`;
+      if (!receipt
+        || target !== targetDir(path.dirname(target), receipt.effectiveName)
+        || (backup && (path.dirname(target) !== path.dirname(backup)
+          || !path.basename(backup).startsWith(expectedPrefix)))) {
+        throw new Error('committed retirement journal is unsafe');
+      }
+      if (fs.existsSync(target) || validateReceipt(readReceipt(path.dirname(target), receipt.effectiveName))) {
+        throw new Error('committed retirement cleanup requires owner attention');
+      }
+      if (backup && fs.existsSync(backup)) fs.rmSync(backup, { recursive: true, force: true });
+    }
+    clearJournal(aliasState.journalFile);
+    return { recovered: true, journal };
+  }
+  if (journal.phase === 'failed' && journal.recovery?.target && journal.recovery?.backup) {
     const target = path.resolve(journal.recovery.target || '');
     const backup = path.resolve(journal.recovery.backup || '');
     const expectedPrefix = `.${path.basename(target)}.jarvos-bak-`;
@@ -652,9 +672,63 @@ function recoverJournal(aliasState) {
       throw new Error('reconciliation backup recovery requires owner attention');
     }
   }
+  const retirements = Array.isArray(journal.recovery?.retirements)
+    ? journal.recovery.retirements
+    : (Array.isArray(journal.retirements) ? journal.retirements : []);
+  for (const retirement of retirements) {
+    const target = path.resolve(retirement.target || '');
+    const backup = retirement.backup ? path.resolve(retirement.backup) : null;
+    const receipt = validateReceipt(retirement.receipt);
+    if (!receipt || target !== targetDir(path.dirname(target), receipt.effectiveName)) {
+      throw new Error('retirement recovery journal is invalid');
+    }
+    if (backup) {
+      const expectedPrefix = `.${path.basename(target)}.jarvos-retire-`;
+      if (path.dirname(target) !== path.dirname(backup) || !path.basename(backup).startsWith(expectedPrefix)) {
+        throw new Error('retirement recovery journal is unsafe');
+      }
+      if (!fs.existsSync(target) && fs.existsSync(backup)) {
+        fs.renameSync(backup, target);
+      } else if (fs.existsSync(target) && fs.existsSync(backup)) {
+        throw new Error('retirement recovery requires owner attention');
+      } else if (!fs.existsSync(target)) {
+        throw new Error('retirement backup recovery is unavailable');
+      }
+    }
+    const root = path.dirname(target);
+    const liveReceipt = validateReceipt(readReceipt(root, receipt.effectiveName));
+    if (liveReceipt) {
+      if (liveReceipt.id !== receipt.id || liveReceipt.treeDigest !== receipt.treeDigest) {
+        throw new Error('retirement receipt recovery requires owner attention');
+      }
+    } else {
+      atomicWriteReceipt(root, receipt);
+    }
+  }
   // Re-observe live targets and receipts after any completed recovery.
   clearJournal(aliasState.journalFile);
   return { recovered: true, journal };
+}
+
+function rollbackRetirements(retirements, io) {
+  let failed = false;
+  for (const retirement of [...retirements].reverse()) {
+    try {
+      if (retirement.backup && fs.existsSync(retirement.backup)) {
+        if (fs.existsSync(retirement.target)) throw new Error('retirement rollback target already exists');
+        io.rollbackRenameSync(retirement.backup, retirement.target);
+      }
+      const root = path.dirname(retirement.target);
+      const liveReceipt = validateReceipt(readReceipt(root, retirement.receipt.effectiveName));
+      if (!liveReceipt) io.writeReceipt(root, retirement.receipt);
+      else if (liveReceipt.id !== retirement.receipt.id || liveReceipt.treeDigest !== retirement.receipt.treeDigest) {
+        throw new Error('retirement rollback receipt changed');
+      }
+    } catch {
+      failed = true;
+    }
+  }
+  return !failed;
 }
 
 function commitAliasesIfNeeded(plan) {
@@ -712,6 +786,11 @@ function applyCatalogReconciliation(plan, options = {}) {
 
   const aliasCommit = commitAliasesIfNeeded(plan);
   const aliasRevision = aliasCommit.revision;
+  const io = {
+    writeReceipt: options.io?.writeReceipt || atomicWriteReceipt,
+    removeReceipt: options.io?.removeReceipt || removeReceipt,
+    rollbackRenameSync: options.io?.rollbackRenameSync || fs.renameSync,
+  };
 
   const hasActionablePairs = plan.pairs.some((pair) => (
     pair.action === 'install' || pair.action === 'retire' || pair.action === 'adopt'
@@ -732,9 +811,11 @@ function applyCatalogReconciliation(plan, options = {}) {
     catalogDigest: plan.catalogDigest,
     aliasRevision,
     pairIds: plan.pairs.map((pair) => `${pair.id}:${pair.harness}`),
+    retirements: [],
   });
 
   const applied = [];
+  const retirements = [];
   try {
     for (const pair of plan.pairs) {
       if (pair.action === 'preserve' || pair.status === 'clean') {
@@ -775,7 +856,7 @@ function applyCatalogReconciliation(plan, options = {}) {
           });
           continue;
         }
-        atomicWriteReceipt(path.dirname(pair.target), {
+        io.writeReceipt(path.dirname(pair.target), {
           version: 1,
           id: pair.id,
           effectiveName: pair.effectiveName,
@@ -811,6 +892,7 @@ function applyCatalogReconciliation(plan, options = {}) {
           });
           continue;
         }
+        let backup = null;
         if (fs.existsSync(pair.target)) {
           let observed;
           try {
@@ -838,9 +920,24 @@ function applyCatalogReconciliation(plan, options = {}) {
             });
             continue;
           }
-          fs.rmSync(pair.target, { recursive: true, force: false });
+          backup = path.join(
+            path.dirname(pair.target),
+            `.${path.basename(pair.target)}.jarvos-retire-${process.pid}-${crypto.randomBytes(4).toString('hex')}`,
+          );
         }
-        removeReceipt(path.dirname(pair.target), pair.effectiveName);
+        const retirement = { target: pair.target, backup, receipt: liveReceipt };
+        // Record the rollback pointer before moving the only managed copy.
+        writeJournal(plan.journalFile, {
+          version: 1,
+          phase: 'applying',
+          catalogDigest: plan.catalogDigest,
+          aliasRevision,
+          pairIds: plan.pairs.map((item) => `${item.id}:${item.harness}`),
+          retirements: [...retirements, retirement],
+        });
+        if (backup) fs.renameSync(pair.target, backup);
+        retirements.push(retirement);
+        io.removeReceipt(path.dirname(pair.target), pair.effectiveName);
         applied.push({
           id: pair.id,
           harness: pair.harness,
@@ -901,25 +998,29 @@ function applyCatalogReconciliation(plan, options = {}) {
 
       const staged = stageBundleCopy(freshSource, pair.target);
       try {
-      atomicWriteReceipt(path.dirname(pair.target), {
-        version: 1,
-        id: pair.id,
-        effectiveName: pair.effectiveName,
-        harness: pair.harness,
-        treeDigest: freshSource.treeDigest,
-        catalogDigest: plan.catalogDigest,
-        aliasRevision,
-        targetPath: pair.target,
-        verificationTier: options.verificationTier || 'receipt-owned',
-        inventoryGenerationId: pair.inventoryGenerationId || plan.inventoryGenerationId || null,
-        sourceIdentity: pair.sourceIdentity || null,
-      });
+        io.writeReceipt(path.dirname(pair.target), {
+          version: 1,
+          id: pair.id,
+          effectiveName: pair.effectiveName,
+          harness: pair.harness,
+          treeDigest: freshSource.treeDigest,
+          catalogDigest: plan.catalogDigest,
+          aliasRevision,
+          targetPath: pair.target,
+          verificationTier: options.verificationTier || 'receipt-owned',
+          inventoryGenerationId: pair.inventoryGenerationId || plan.inventoryGenerationId || null,
+          sourceIdentity: pair.sourceIdentity || null,
+        });
       } catch (error) {
         // A receipt is the ownership boundary. Roll back the replacement when
         // it cannot be committed, preserving the prior target for retry.
         if (staged.backup && fs.existsSync(staged.backup)) {
-          if (fs.existsSync(pair.target)) fs.rmSync(pair.target, { recursive: true, force: true });
-          fs.renameSync(staged.backup, pair.target);
+          try {
+            if (fs.existsSync(pair.target)) fs.rmSync(pair.target, { recursive: true, force: true });
+            io.rollbackRenameSync(staged.backup, pair.target);
+          } catch {
+            error.jarvosRecovery = { target: pair.target, backup: staged.backup };
+          }
         } else if (!pair.receipt && fs.existsSync(pair.target)) {
           fs.rmSync(pair.target, { recursive: true, force: true });
         }
@@ -937,6 +1038,20 @@ function applyCatalogReconciliation(plan, options = {}) {
       });
     }
 
+    if (retirements.length > 0) {
+      writeJournal(plan.journalFile, {
+        version: 1,
+        phase: 'retirements_committed',
+        catalogDigest: plan.catalogDigest,
+        aliasRevision,
+        retirements,
+      });
+    }
+    for (const retirement of retirements) {
+      if (retirement.backup && fs.existsSync(retirement.backup)) {
+        fs.rmSync(retirement.backup, { recursive: true, force: true });
+      }
+    }
     clearJournal(plan.journalFile);
     return {
       ok: true,
@@ -945,12 +1060,20 @@ function applyCatalogReconciliation(plan, options = {}) {
       notices: plan.notices || [],
     };
   } catch (error) {
+    const retiredRollbackOk = rollbackRetirements(retirements, io);
+    if (!retiredRollbackOk) {
+      error.jarvosRecovery = {
+        ...(error.jarvosRecovery || {}),
+        retirements,
+      };
+    }
     writeJournal(plan.journalFile, {
       version: 1,
       phase: 'failed',
       catalogDigest: plan.catalogDigest,
       aliasRevision,
       error: error.message,
+      ...(retirements.length > 0 ? { retirements } : {}),
       ...(error.jarvosRecovery ? { recovery: error.jarvosRecovery } : {}),
     });
     throw error;

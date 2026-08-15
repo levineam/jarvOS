@@ -494,8 +494,9 @@ function rootLifecycleStatus(registeredRoot, { observedAt }) {
 // bundle cannot make inventory read an unbounded tree first.
 function inspectBundleBounds(bundleRoot, limits) {
   let files = 0;
+  let directories = 1;
   let bytes = 0;
-  const walk = (directory) => {
+  const walk = (directory, depth = 0) => {
     let entries;
     try {
       entries = fs.readdirSync(directory, { withFileTypes: true });
@@ -518,7 +519,14 @@ function inspectBundleBounds(bundleRoot, limits) {
       }
       if ((stat.mode & 0o022) !== 0) return { kind: 'unsafe', reason: 'unsafe_source' };
       if (stat.isDirectory()) {
-        const nested = walk(candidate);
+        directories += 1;
+        if (directories > limits.maxBundleDirectories) {
+          return { kind: 'overflow', reason: 'max_bundle_directories' };
+        }
+        if (depth + 1 > limits.maxBundleDepth) {
+          return { kind: 'overflow', reason: 'max_bundle_depth' };
+        }
+        const nested = walk(candidate, depth + 1);
         if (nested) return nested;
         continue;
       }
@@ -533,7 +541,7 @@ function inspectBundleBounds(bundleRoot, limits) {
     }
     return null;
   };
-  return walk(bundleRoot) || { kind: 'ok', files, bytes };
+  return walk(bundleRoot) || { kind: 'ok', files, directories, bytes };
 }
 
 function scanBundleCandidate({

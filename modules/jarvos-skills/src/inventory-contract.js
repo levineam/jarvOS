@@ -120,6 +120,8 @@ const DEFAULT_INVENTORY_LIMITS = Object.freeze({
   maxRoots: 32,
   maxEntriesPerRoot: 512,
   maxBundleFiles: 256,
+  maxBundleDirectories: 256,
+  maxBundleDepth: 16,
   maxBundleBytes: 8 * 1024 * 1024,
   maxEventsPerRun: 256,
   maxRollbackGenerations: 8,
@@ -338,6 +340,18 @@ function normalizeInventoryPolicy(raw = {}) {
       'inventory.limits.maxBundleFiles',
       defaults.limits.maxBundleFiles,
       { max: 10_000 },
+    ),
+    maxBundleDirectories: normalizePositiveInt(
+      limitsSource.maxBundleDirectories,
+      'inventory.limits.maxBundleDirectories',
+      defaults.limits.maxBundleDirectories,
+      { max: 10_000 },
+    ),
+    maxBundleDepth: normalizePositiveInt(
+      limitsSource.maxBundleDepth,
+      'inventory.limits.maxBundleDepth',
+      defaults.limits.maxBundleDepth,
+      { max: 64 },
     ),
     maxBundleBytes: normalizePositiveInt(
       limitsSource.maxBundleBytes,

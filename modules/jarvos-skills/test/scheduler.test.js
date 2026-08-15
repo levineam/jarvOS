@@ -6,6 +6,7 @@ const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
 const { spawnSync } = require('node:child_process');
+const { EventEmitter } = require('node:events');
 
 const { createInventoryWatcher, buildRefreshCommand } = require('../src/scheduler');
 const { defaultConfig, normalizeConfig, saveConfig, loadConfig, ensureDir } = require('../src/config');
@@ -141,6 +142,31 @@ test('event watcher requests fallback after watch startup failure and closes act
   active.close();
   assert.equal(closeCount, 1);
   assert.equal(active.request(path.join(root, 'after-close')), false);
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+test('event watcher degrades an async FSWatcher error into one bounded fallback cycle', () => {
+  const root = temp('jarvos-watch-async-error-');
+  let timer = null;
+  let closeCount = 0;
+  const cycles = [];
+  const nativeWatcher = new EventEmitter();
+  nativeWatcher.close = () => { closeCount += 1; };
+  const watcher = createInventoryWatcher({
+    roots: [root],
+    watch() { return nativeWatcher; },
+    setTimer(fn) { timer = fn; return 1; },
+    clearTimer() {},
+    onCycle(cycle) { cycles.push(cycle); },
+  });
+
+  nativeWatcher.emit('error', new Error('fixture async watch failure'));
+  nativeWatcher.emit('error', new Error('duplicate failure is coalesced'));
+  assert.equal(closeCount, 1);
+  assert.equal(typeof timer, 'function');
+  timer();
+  assert.deepEqual(cycles, [{ reason: 'watcher_overflow', events: [root], overflowed: true }]);
+  watcher.close();
   fs.rmSync(root, { recursive: true, force: true });
 });
 

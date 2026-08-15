@@ -429,6 +429,44 @@ test('root replacement and partial/overflowed scans preserve completeness semant
   assert.ok(replaced.reasons.includes('root_replaced') || replaced.mutate === true);
 });
 
+test('bundle traversal fails closed on directory-count and depth limits', () => {
+  const manyRoot = temp('jarvos-inv-many-dirs-');
+  const manyBundle = writeSkill(path.join(manyRoot, 'many-dirs'), 'many-dirs');
+  for (let index = 0; index < 5; index += 1) {
+    fs.mkdirSync(path.join(manyBundle, `empty-${index}`), { mode: 0o700 });
+  }
+  const manyEnv = seedConfig({
+    roots: { codex: manyRoot },
+    limits: { maxBundleDirectories: 4 },
+  });
+  const many = observeInventory({
+    configPath: manyEnv.configPath,
+    observedAt: '2026-08-15T15:04:30.000Z',
+  });
+  assert.equal(many.complete, false);
+  assert.equal(many.overflowed, true);
+  assert.ok(many.reasons.includes('max_bundle_directories'));
+
+  const deepRoot = temp('jarvos-inv-deep-dirs-');
+  const deepBundle = writeSkill(path.join(deepRoot, 'deep-dirs'), 'deep-dirs');
+  let nested = deepBundle;
+  for (let depth = 0; depth < 4; depth += 1) {
+    nested = path.join(nested, `level-${depth}`);
+    fs.mkdirSync(nested, { mode: 0o700 });
+  }
+  const deepEnv = seedConfig({
+    roots: { codex: deepRoot },
+    limits: { maxBundleDepth: 3 },
+  });
+  const deep = observeInventory({
+    configPath: deepEnv.configPath,
+    observedAt: '2026-08-15T15:04:31.000Z',
+  });
+  assert.equal(deep.complete, false);
+  assert.equal(deep.overflowed, true);
+  assert.ok(deep.reasons.includes('max_bundle_depth'));
+});
+
 test('healthy second scan is zero-write and CLI inventory status stays path-redacted', () => {
   const home = temp('jarvos-inv-zero-');
   const root = path.join(home, 'skills');
