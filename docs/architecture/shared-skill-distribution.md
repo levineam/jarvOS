@@ -22,4 +22,3 @@ principal when invoked through the control-plane manager.
 contracts, source-root requirements, and a non-enabling scheduler plan.
 `scripts/live-preflight-checklist.js` aggregates package tests, runtime-kit,
 isolated dogfood, and doctor evidence while keeping owner live steps pending.
-

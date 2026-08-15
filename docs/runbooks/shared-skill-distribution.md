@@ -45,4 +45,3 @@ node modules/jarvos-skills/scripts/live-preflight-checklist.js --json
 isolated matrix dogfood, then leaves Claude interactive probe, private Hermes
 overlay, scheduler enablement, and live harness gates as owner-pending. It never
 auto-enables live activation.
-
