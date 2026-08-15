@@ -643,6 +643,43 @@ function inventoryDeclaredRootsOperator(options = {}) {
   };
 }
 
+function inventoryAssessOperator(options = {}) {
+  return withMutationLease(options.configPath, 'inventory-assess', () => {
+    const result = inventoryOperator({
+      configPath: options.configPath,
+      controlRoot: options.controlRoot,
+      persist: options.persist !== false,
+      assess: true,
+      autoAdmit: options.autoAdmit !== false,
+      observedAt: options.observedAt,
+      reviewer: options.reviewer || null,
+      saveConfig: true,
+      // Load document in-process for redacted classification summary only.
+      includeDocument: true,
+    });
+    const document = result.document;
+    const classifications = (document?.skills || []).map((skill) => ({
+      logicalId: skill.logicalId,
+      disposition: skill.disposition,
+      attention: skill.attention,
+      reasonCode: skill.disposition?.reasonCode || null,
+    }));
+    return {
+      ok: true,
+      mode: 'assess',
+      complete: result.complete,
+      generationId: result.generationId,
+      digest: result.digest,
+      mutate: result.mutate,
+      admissions: result.assessment?.admissions || [],
+      classifications,
+      status: result.status,
+      // Never include private document by default.
+      document: options.includeDocument === true ? document : undefined,
+    };
+  });
+}
+
 module.exports = {
   MODULE_ROOT,
   statusOperator,
@@ -659,4 +696,5 @@ module.exports = {
   inventoryStatusOperator,
   inventoryRegisterRootsOperator,
   inventoryDeclaredRootsOperator,
+  inventoryAssessOperator,
 };

@@ -25,6 +25,7 @@ const {
   inventoryStatusOperator,
   inventoryRegisterRootsOperator,
   inventoryDeclaredRootsOperator,
+  inventoryAssessOperator,
   SUPPORTED_HARNESSES,
 } = require('../src');
 
@@ -44,6 +45,7 @@ const OPERATOR_COMMANDS = new Set([
   'inventory',
   'inventory-register-roots',
   'inventory-declared-roots',
+  'inventory-assess',
 ]);
 
 function parseArgs(argv) {
@@ -164,11 +166,14 @@ Shared skill distribution (catalog/overlay):
   jarvos-skills inventory [--config PATH] [--inspect] [--json]
   jarvos-skills inventory-register-roots [--config PATH] [--json]
   jarvos-skills inventory-declared-roots [--json]
+  jarvos-skills inventory-assess [--config PATH] [--json]
 
 Installs the default jarvOS operating-system skill bundle and operates the
 public shared-skill catalog. Private overlay bodies never enter the package.
 Inventory observes registered absolute roots only; discovery is not admission.
-Live harness activation remains an owner decision.`);
+inventory-assess classifies and may auto-admit rule-proven portable skills into
+the owner-only source store/local overlay. Live harness activation remains an
+owner decision.`);
 }
 
 function printPlan(plan, json) {
@@ -257,6 +262,8 @@ function runOperator(opts) {
       return inventoryRegisterRootsOperator({ configPath });
     case 'inventory-declared-roots':
       return inventoryDeclaredRootsOperator({});
+    case 'inventory-assess':
+      return inventoryAssessOperator({ configPath });
     default:
       throw new Error(`Unknown operator command: ${opts.command}`);
   }

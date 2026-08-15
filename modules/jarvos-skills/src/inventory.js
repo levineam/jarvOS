@@ -34,6 +34,7 @@ const {
 } = require('./inventory-contract');
 const { computeBundleTree } = require('./catalog');
 const { STATE_DIR, readReceipt, validateReceipt } = require('./receipts');
+// Lazy: skill-assessment requires inventory helpers; load only when assessing.
 
 const MODULE_ROOT = path.resolve(__dirname, '..');
 const REPO_ROOT = path.resolve(MODULE_ROOT, '..', '..');
@@ -1290,38 +1291,130 @@ function observeInventory(options = {}) {
     }
   }
 
-  const outward = serializeOutwardStatus(validated.document, {
+  let finalDocument = validated.document;
+  let finalDigest = validated.digest;
+  let assessment = null;
+
+  // U3: optional classify/auto-admit. Default off for pure observation callers.
+  if (options.assess === true && layout?.sourceStorePath && layout?.acceptedGenerationPath) {
+    const { assessInventory } = require('./skill-assessment');
+    const { inventoryDigest } = require('./inventory-contract');
+    const { readJson } = (() => {
+      // local helper — operator/config already use fs JSON reads elsewhere
+      return {
+        readJson(filePath, fallback = null) {
+          try {
+            if (!fs.existsSync(filePath)) return fallback;
+            return JSON.parse(fs.readFileSync(filePath, 'utf8'));
+          } catch {
+            return fallback;
+          }
+        },
+      };
+    })();
+    const harnessRoots = Object.entries(config.harnesses || {}).map(([harness, value]) => ({
+      harness,
+      root: path.resolve(expandHome(value.root)),
+    }));
+    assessment = assessInventory({
+      document: validated.document,
+      sourceStorePath: layout.sourceStorePath,
+      acceptedGenerationPath: layout.acceptedGenerationPath,
+      acceptedAt: observedAt,
+      harnessRoots,
+      publicCatalog: readJson(resolved.publicCatalogPath, null),
+      localOverlay: readJson(resolved.localOverlayPath, null),
+      reviewer: options.reviewer || null,
+      complete,
+      autoAdmit: options.autoAdmit !== false && complete,
+      persist: options.persist !== false,
+    });
+    if (assessment.ok) {
+      const revalidated = validateInventoryDocument(assessment.document);
+      if (revalidated.status !== 'valid') {
+        throw new Error(revalidated.reason || 'inventory document invalid after assessment');
+      }
+      finalDocument = revalidated.document;
+      finalDigest = revalidated.digest;
+
+      if (options.persist !== false && assessment.mutate && assessment.generatedOverlay?.entries?.length) {
+        // Point local source root at the immutable generation capture and merge overlay.
+        if (assessment.localSourceRoot || assessment.sourceRoot) {
+          config.localSourceRoot = assessment.localSourceRoot || assessment.sourceRoot;
+        }
+        const existingOverlay = readJson(resolved.localOverlayPath, {
+          schemaVersion: require('./catalog').OVERLAY_SCHEMA_VERSION,
+          entries: [],
+        }) || { schemaVersion: require('./catalog').OVERLAY_SCHEMA_VERSION, entries: [] };
+        const byId = new Map((existingOverlay.entries || []).map((entry) => [entry.id, entry]));
+        for (const entry of assessment.generatedOverlay.entries) byId.set(entry.id, entry);
+        const merged = {
+          schemaVersion: require('./catalog').OVERLAY_SCHEMA_VERSION,
+          entries: [...byId.values()].sort((a, b) => a.id.localeCompare(b.id)),
+        };
+        const { validateLocalOverlay } = require('./catalog');
+        const validatedOverlay = validateLocalOverlay(merged);
+        if (validatedOverlay.status === 'valid') {
+          atomicWriteJson(resolved.localOverlayPath, validatedOverlay.overlay);
+        }
+        if (options.saveConfig === true) {
+          const { saveConfig } = require('./config');
+          saveConfig(config, options.configPath || undefined);
+        }
+      }
+
+      if (options.persist !== false && layout.observationsPath) {
+        const payload = {
+          schemaVersion: 'jarvos.skill-inventory-observations/v1',
+          savedAt: observedAt,
+          fingerprint,
+          fingerprintDigest,
+          meta: {
+            ...meta,
+            assessedAt: observedAt,
+            admissions: (assessment.admissions || []).length,
+          },
+          document: finalDocument,
+        };
+        atomicWriteJson(layout.observationsPath, payload);
+      }
+    }
+  }
+
+  const outward = serializeOutwardStatus(finalDocument, {
     counts: {
-      skills: validated.document.skills.length,
-      shared: validated.document.skills.filter((skill) => skill.disposition.kind === 'shared').length,
-      already_managed: validated.document.skills.filter((skill) => skill.disposition.kind === 'already_managed').length,
-      harness_local: validated.document.skills.filter((skill) => skill.disposition.kind === 'harness_local').length,
-      blocked: validated.document.skills.filter((skill) => skill.disposition.kind === 'blocked').length,
-      needs_input: validated.document.skills.filter((skill) => skill.disposition.kind === 'needs_input').length,
-      actionable: validated.document.skills.filter((skill) => skill.attention === 'actionable').length,
-      exclusions: validated.document.exclusions.length,
+      skills: finalDocument.skills.length,
+      shared: finalDocument.skills.filter((skill) => skill.disposition.kind === 'shared').length,
+      already_managed: finalDocument.skills.filter((skill) => skill.disposition.kind === 'already_managed').length,
+      harness_local: finalDocument.skills.filter((skill) => skill.disposition.kind === 'harness_local').length,
+      blocked: finalDocument.skills.filter((skill) => skill.disposition.kind === 'blocked').length,
+      needs_input: finalDocument.skills.filter((skill) => skill.disposition.kind === 'needs_input').length,
+      actionable: finalDocument.skills.filter((skill) => skill.attention === 'actionable').length,
+      exclusions: finalDocument.exclusions.length,
     },
   });
 
   return {
     ok: true,
-    mutate: wrote,
-    unchanged,
+    mutate: wrote || Boolean(assessment?.mutate),
+    unchanged: assessment?.mutate ? false : unchanged,
     complete,
     overflowed,
     partial: meta.partial,
     reasons: meta.reasons,
-    generationId: validated.document.generationId,
-    digest: validated.digest,
+    generationId: finalDocument.generationId,
+    digest: finalDigest,
     fingerprintDigest,
-    document: validated.document,
+    document: finalDocument,
     status: outward,
+    assessment,
     meta: {
       ...meta,
       wrote,
       persisted,
       previousGenerationId: previous.document?.generationId || null,
       observationsPath: layout?.observationsPath || null,
+      admitted: assessment?.admissions?.length || 0,
     },
     // Owner-local only; CLI must opt in.
     inspect: null,
@@ -1335,6 +1428,12 @@ function inventoryOperator(options = {}) {
     persist: options.persist !== false,
     observedAt: options.observedAt,
     registeredRoots: options.registeredRoots,
+    // Classification/auto-admit is opt-in (U3). Default inventory status stays
+    // observation-first so discovery never silently mutates accepted state.
+    assess: options.assess === true,
+    autoAdmit: options.autoAdmit !== false,
+    reviewer: options.reviewer || null,
+    saveConfig: options.saveConfig === true,
   });
 
   if (options.inspect === true) {
@@ -1349,6 +1448,39 @@ function inventoryOperator(options = {}) {
   }
 
   // Default operator surface is path-redacted outward status only.
+  // When assess is requested, include redacted assessment metadata + optional document.
+  if (options.assess === true) {
+    return {
+      ok: true,
+      mode: 'assess',
+      unchanged: result.unchanged,
+      complete: result.complete,
+      overflowed: result.overflowed,
+      partial: result.partial,
+      reasons: result.reasons,
+      generationId: result.generationId,
+      digest: result.digest,
+      mutate: result.mutate,
+      status: result.status,
+      assessment: result.assessment
+        ? {
+          ok: result.assessment.ok,
+          mutate: result.assessment.mutate,
+          admissions: result.assessment.admissions || [],
+          // never include sourceRoot/absolute paths here
+        }
+        : null,
+      document: options.includeDocument === true ? result.document : undefined,
+      meta: {
+        wrote: result.meta.wrote,
+        skillCount: result.meta.skillCount,
+        rootCount: result.meta.rootCount,
+        admitted: result.meta.admitted || 0,
+        previousGenerationId: result.meta.previousGenerationId,
+      },
+    };
+  }
+
   return {
     ok: true,
     mode: 'status',
