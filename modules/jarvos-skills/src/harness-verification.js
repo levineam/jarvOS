@@ -11,15 +11,19 @@ function resolveShadowPaths({ harness = {}, adapter = null, effectiveName } = {}
   const configured = harness.scopeRoots || {};
   const managedRoot = harness.root ? path.resolve(expandHome(harness.root)) : null;
   const higherScopes = scopes.slice(0, -1);
-  const missingScopes = higherScopes.filter((scope) => !configured[scope]);
+  const absoluteRoot = (scope) => {
+    const value = configured[scope] ? expandHome(configured[scope]) : null;
+    return value && path.isAbsolute(value) ? path.resolve(value) : null;
+  };
+  const missingScopes = higherScopes.filter((scope) => !absoluteRoot(scope));
   return {
     paths: higherScopes
-      .map((scope) => configured[scope] ? path.resolve(expandHome(configured[scope])) : null)
+      .map(absoluteRoot)
       // A declared user scope can coincide with the managed root; it is the
       // target being verified, not a higher-precedence shadow.
       .filter((root) => root && root !== managedRoot)
       .map((root) => path.join(root, effectiveName)),
-    complete: missingScopes.length === 0 && harness.scopeRootsComplete !== false,
+    complete: missingScopes.length === 0 && harness.scopeRootsComplete === true,
     missingScopes,
   };
 }
@@ -40,7 +44,7 @@ function verifyHarnessBundle({
   allowlist,
   remoteModelProbe = false,
   shadowPaths = [],
-  shadowPathsComplete = true,
+  shadowPathsComplete = null,
 } = {}) {
   const projection = adapter?.skillProjection || null;
   const tier = projection?.verificationTier || adapter?.verificationTier || 'exact-path';
@@ -55,7 +59,7 @@ function verifyHarnessBundle({
   if (tier !== 'exact-path') {
     return { status: 'unverifiable', reason: 'adapter_verification_tier_unsupported', tier };
   }
-  if (!shadowPathsComplete) {
+  if (Array.isArray(projection?.orderedScopes) && shadowPathsComplete !== true) {
     return { status: 'unverifiable', reason: 'higher_precedence_scope_unknown', tier: 'exact-path' };
   }
   if (Array.isArray(shadowPaths) && shadowPaths.some((candidate) => candidate && fs.existsSync(candidate))) {

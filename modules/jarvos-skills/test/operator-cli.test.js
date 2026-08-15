@@ -21,6 +21,7 @@ const {
   schedulerOperator,
 } = require('../src/operator');
 const { planSchedulerUnits } = require('../src/scheduler');
+const { loadConfig, saveConfig } = require('../src/config');
 
 const FIXTURE = path.join(__dirname, 'fixtures', 'catalog', 'public-fixture');
 const CLI = path.join(__dirname, '..', 'scripts', 'install-skills.js');
@@ -103,6 +104,63 @@ test('operator share/plan/apply/status/refresh/repair path is idempotent and red
   }
 });
 
+test('operator aliases a known higher-precedence Codex skill before apply', () => {
+  const env = seedEnv();
+  const projectSkills = path.join(env.home, 'project-skills');
+  try {
+    copyFixture(path.join(projectSkills, 'public-fixture'));
+    const loaded = loadConfig(env.configPath);
+    const config = {
+      ...loaded.config,
+      harnesses: {
+        ...loaded.config.harnesses,
+        codex: {
+          ...loaded.config.harnesses.codex,
+          scopeRoots: { ...loaded.config.harnesses.codex.scopeRoots, project: projectSkills },
+          scopeRootsComplete: true,
+        },
+      },
+    };
+    saveConfig(config, env.configPath);
+
+    const planned = planOperator({ configPath: env.configPath });
+    assert.equal(planned.aliases['public-fixture'], 'jarvos-public-fixture');
+    applyOperator({ configPath: env.configPath });
+    assert.equal(fs.existsSync(path.join(env.harnessRoots.codex, 'public-fixture')), false);
+    assert.equal(fs.existsSync(path.join(env.harnessRoots.codex, 'jarvos-public-fixture', 'SKILL.md')), true);
+  } finally {
+    fs.rmSync(env.home, { recursive: true, force: true });
+    fs.rmSync(env.sourceRoot, { recursive: true, force: true });
+  }
+});
+
+test('operator reserves home-relative higher-precedence scope roots before apply', () => {
+  const env = seedEnv();
+  const projectSkills = fs.mkdtempSync(path.join(os.homedir(), 'jarvos-op-home-scope-'));
+  fs.chmodSync(projectSkills, 0o700);
+  try {
+    copyFixture(path.join(projectSkills, 'public-fixture'));
+    const loaded = loadConfig(env.configPath);
+    const config = {
+      ...loaded.config,
+      harnesses: {
+        ...loaded.config.harnesses,
+        codex: {
+          ...loaded.config.harnesses.codex,
+          scopeRoots: { ...loaded.config.harnesses.codex.scopeRoots, project: `~/${path.basename(projectSkills)}` },
+          scopeRootsComplete: true,
+        },
+      },
+    };
+    saveConfig(config, env.configPath);
+    assert.equal(planOperator({ configPath: env.configPath }).aliases['public-fixture'], 'jarvos-public-fixture');
+  } finally {
+    fs.rmSync(projectSkills, { recursive: true, force: true });
+    fs.rmSync(env.home, { recursive: true, force: true });
+    fs.rmSync(env.sourceRoot, { recursive: true, force: true });
+  }
+});
+
 test('enable/disable and rename mutate config/alias state without writing skill bodies into config', () => {
   const env = seedEnv();
   try {
@@ -111,15 +169,39 @@ test('enable/disable and rename mutate config/alias state without writing skill 
     assert.ok(planned.pairs.every((pair) => pair.harness !== 'claude'));
     enableHarness({ configPath: env.configPath, harness: 'claude', root: env.harnessRoots.claude });
 
-    // Force an alias via rename.
+    applyOperator({ configPath: env.configPath });
+    assert.equal(fs.existsSync(path.join(env.harnessRoots.codex, 'public-fixture', 'SKILL.md')), true);
+
+    // Force an alias via rename and retire the receipt-owned old name.
     const renamed = renameAlias({ configPath: env.configPath, id: 'public-fixture', name: 'jarvos-public-fixture' });
     assert.equal(renamed.effectiveName, 'jarvos-public-fixture');
+    assert.throws(() => repairOperator({ configPath: env.configPath }), /accepted catalog generation/);
     applyOperator({ configPath: env.configPath });
     assert.equal(fs.existsSync(path.join(env.harnessRoots.codex, 'jarvos-public-fixture', 'SKILL.md')), true);
+    assert.equal(fs.existsSync(path.join(env.harnessRoots.codex, 'public-fixture')), false);
 
     const configText = fs.readFileSync(env.configPath, 'utf8');
     assert.equal(configText.includes('Local overlay only'), false);
     assert.equal(configText.includes('console.log'), false);
+  } finally {
+    fs.rmSync(env.home, { recursive: true, force: true });
+    fs.rmSync(env.sourceRoot, { recursive: true, force: true });
+  }
+});
+
+test('repair refuses a catalog generation that was not accepted by apply', () => {
+  const env = seedEnv();
+  try {
+    assert.throws(() => repairOperator({ configPath: env.configPath }), /accepted catalog generation/);
+    const applied = applyOperator({ configPath: env.configPath });
+    assert.ok(applied.acceptedCatalogDigest);
+    const repaired = repairOperator({ configPath: env.configPath });
+    assert.equal(repaired.repaired, false);
+
+    fs.appendFileSync(path.join(env.bundle, 'SKILL.md'), '\nchanged\n');
+    const refreshed = refreshOperator({ configPath: env.configPath });
+    assert.equal(refreshed.publicUpdated, 1);
+    assert.throws(() => repairOperator({ configPath: env.configPath }), /accepted catalog generation/);
   } finally {
     fs.rmSync(env.home, { recursive: true, force: true });
     fs.rmSync(env.sourceRoot, { recursive: true, force: true });
@@ -200,6 +282,35 @@ test('direct CLI mutation refuses a concurrent owner lease', () => {
     const result = spawnSync(process.execPath, [CLI, 'repair', '--config', env.configPath, '--json'], { encoding: 'utf8' });
     assert.notEqual(result.status, 0); assert.match(result.stdout, /already running/);
   } finally { fs.rmSync(env.home, { recursive: true, force: true }); fs.rmSync(env.sourceRoot, { recursive: true, force: true }); }
+});
+
+test('direct CLI mutation recovers a stale owner lease', () => {
+  const env = seedEnv();
+  try {
+    fs.writeFileSync(path.join(env.control, '.shared-skill-cli.lock'), JSON.stringify({ pid: 999999, operation: 'apply', startedAt: '2000-01-01T00:00:00.000Z' }), { mode: 0o600 });
+    const result = spawnSync(process.execPath, [CLI, 'apply', '--config', env.configPath, '--json'], { encoding: 'utf8' });
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+    assert.equal(JSON.parse(result.stdout).ok, true);
+    assert.equal(fs.existsSync(path.join(env.control, '.shared-skill-cli.lock')), false);
+  } finally {
+    fs.rmSync(env.home, { recursive: true, force: true });
+    fs.rmSync(env.sourceRoot, { recursive: true, force: true });
+  }
+});
+
+test('direct CLI mutation recovers an old incomplete owner lease', () => {
+  const env = seedEnv();
+  try {
+    const lease = path.join(env.control, '.shared-skill-cli.lock');
+    fs.writeFileSync(lease, '', { mode: 0o600 });
+    const old = new Date('2000-01-01T00:00:00.000Z'); fs.utimesSync(lease, old, old);
+    const result = spawnSync(process.execPath, [CLI, 'apply', '--config', env.configPath, '--json'], { encoding: 'utf8' });
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+    assert.equal(JSON.parse(result.stdout).ok, true);
+  } finally {
+    fs.rmSync(env.home, { recursive: true, force: true });
+    fs.rmSync(env.sourceRoot, { recursive: true, force: true });
+  }
 });
 
 test('scheduler planning refuses a concurrent owner lease even without --write', () => {

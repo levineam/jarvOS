@@ -245,6 +245,50 @@ test('unmanaged same-name incumbent is preserved and portable skill gets one dur
   }
 });
 
+test('known higher-precedence skill roots reserve names before projection', () => {
+  const control = temp('jarvos-recon-shadow-control-');
+  const sourceRoot = temp('jarvos-recon-shadow-source-');
+  const managedRoot = temp('jarvos-recon-shadow-managed-');
+  const projectRoot = temp('jarvos-recon-shadow-project-');
+  try {
+    copyFixture(PUBLIC_FIXTURE, path.join(sourceRoot, 'public-fixture'));
+    const tree = computeBundleTree(path.join(sourceRoot, 'public-fixture'), {
+      allowlist: ['SKILL.md', 'scripts/**', 'assets/**'],
+    });
+    const catalog = { entries: [{
+      id: 'public-fixture',
+      allowedHarnesses: ['codex'],
+      bundle: { root: 'public-fixture', allowlist: ['SKILL.md', 'scripts/**', 'assets/**'], treeDigest: tree.treeDigest },
+    }] };
+    copyFixture(PUBLIC_FIXTURE, path.join(projectRoot, 'public-fixture'));
+
+    const plan = planCatalogReconciliation({
+      catalog,
+      publicSourceRoot: sourceRoot,
+      controlRoot: control,
+      harnesses: [{
+        id: 'codex',
+        root: managedRoot,
+        adapter: { skillProjection: { orderedScopes: ['project', 'managed'] } },
+        scopeRoots: { project: projectRoot },
+        scopeRootsComplete: true,
+      }],
+      reviewer: (request) => JSON.stringify({ name: request.candidates[0] }),
+    });
+
+    assert.equal(plan.aliases['public-fixture'], 'jarvos-public-fixture');
+    assert.equal(plan.pairs[0].effectiveName, 'jarvos-public-fixture');
+    applyCatalogReconciliation(plan);
+    assert.equal(fs.existsSync(path.join(managedRoot, 'public-fixture')), false);
+    assert.equal(fs.existsSync(path.join(managedRoot, 'jarvos-public-fixture', 'SKILL.md')), true);
+  } finally {
+    fs.rmSync(control, { recursive: true, force: true });
+    fs.rmSync(sourceRoot, { recursive: true, force: true });
+    fs.rmSync(managedRoot, { recursive: true, force: true });
+    fs.rmSync(projectRoot, { recursive: true, force: true });
+  }
+});
+
 test('local modification is preserved while unrelated pairs still reconcile', () => {
   const control = temp('jarvos-recon-mod-control-');
   const sourceRoot = temp('jarvos-recon-mod-source-');

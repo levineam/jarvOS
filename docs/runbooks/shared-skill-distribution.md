@@ -31,8 +31,14 @@ jarvos-skills scheduler --write --interval-minutes 60 --json
 ```
 
 Scheduler artifacts are planned/written only. Enabling launchd or systemd units
-is an owner action after review. Do not treat unit write success as live
-activation.
+is an owner action after review. Run `apply` after reviewing the catalog before
+enabling a scheduler. Scheduled `repair` accepts only that exact catalog digest;
+a later `share` or `refresh` requires another reviewed `apply`.
+
+For an exact-path proof, bind each higher-precedence project or workspace root
+as an absolute `scopeRoots` path and set `scopeRootsComplete: true` in the local
+config. Relative adapter defaults are intentionally not proof of the project
+where a harness is currently running.
 
 ## Doctor and live preflight
 

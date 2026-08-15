@@ -9,7 +9,6 @@ const fs = require('node:fs');
 const path = require('node:path');
 const {
   loadConfig,
-  ensureControlPlane,
   SUPPORTED_HARNESSES,
   expandHome,
 } = require('./config');
@@ -62,7 +61,9 @@ function asOverlay(value) {
 
 function doctorSharedSkills(options = {}) {
   const loaded = loadConfig(options.configPath);
-  const resolved = ensureControlPlane(loaded.config);
+  // This command is an inspection surface. It must report an absent or
+  // incomplete control plane, never create one as a side effect.
+  const resolved = loaded.resolved;
   const checks = [];
 
   checks.push(check(

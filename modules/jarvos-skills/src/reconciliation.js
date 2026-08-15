@@ -14,6 +14,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const { attestCatalogBundle, computeBundleTree, LOCAL_OVERLAY_SOURCE_KIND } = require('./catalog');
+const { expandHome } = require('./config');
 const { resolveCollisionAlias } = require('./collision-alias');
 const {
   STATE_DIR,
@@ -43,7 +44,10 @@ function safeRoot(value, { create = true } = {}) {
   if (!value) throw new Error('root is required');
   const root = path.resolve(value);
   if (create) fs.mkdirSync(root, { recursive: true, mode: 0o700 });
-  if (!fs.existsSync(root)) throw new Error(`root does not exist: ${root}`);
+  if (!fs.existsSync(root)) {
+    if (!create) return root;
+    throw new Error(`root does not exist: ${root}`);
+  }
   const stat = fs.lstatSync(root);
   assertSafeOwnedDirectory(stat, 'managed skill root');
   return fs.realpathSync(root);
@@ -73,8 +77,8 @@ function readJsonIfPresent(filePath, fallback = null) {
   }
 }
 
-function controlPaths(controlRoot) {
-  const root = safeRoot(controlRoot);
+function controlPaths(controlRoot, { create = true } = {}) {
+  const root = safeRoot(controlRoot, { create });
   return {
     root,
     aliasFile: path.join(root, ALIAS_FILE),
@@ -82,8 +86,8 @@ function controlPaths(controlRoot) {
   };
 }
 
-function readAliasState(controlRoot) {
-  const paths = controlPaths(controlRoot);
+function readAliasState(controlRoot, { create = true } = {}) {
+  const paths = controlPaths(controlRoot, { create });
   const raw = readJsonIfPresent(paths.aliasFile, {
     version: ALIAS_STATE_VERSION,
     revision: 0,
@@ -119,6 +123,23 @@ function listOccupiedNames(harnessRoot) {
   return fs.readdirSync(harnessRoot, { withFileTypes: true })
     .filter((entry) => entry.isDirectory() && !entry.name.startsWith('.') && entry.name !== STATE_DIR)
     .map((entry) => entry.name);
+}
+
+function listHigherPrecedenceNames(harness) {
+  const scopes = harness.adapter?.skillProjection?.orderedScopes;
+  if (!Array.isArray(scopes)) return [];
+  const configured = harness.scopeRoots || {};
+  const managedRoot = path.resolve(harness.root);
+  const names = new Set();
+  for (const scope of scopes.slice(0, -1)) {
+    if (!configured[scope]) continue;
+    const configuredRoot = configured[scope] ? expandHome(configured[scope]) : null;
+    if (!configuredRoot || !path.isAbsolute(configuredRoot)) continue;
+    const root = path.resolve(configuredRoot);
+    if (root === managedRoot) continue;
+    for (const name of listOccupiedNames(root)) names.add(name);
+  }
+  return [...names];
 }
 
 function sourceRootFor(entry, { publicSourceRoot, localSourceRoot }) {
@@ -256,7 +277,10 @@ function resolveAliasesForCatalog({ catalog, harnesses, aliasState, reviewer = n
   const aliases = { ...aliasState.data.aliases };
   const notices = [];
   const occupiedByHarness = Object.fromEntries(
-    harnesses.map((harness) => [harness.id, new Set(listOccupiedNames(harness.root))]),
+    harnesses.map((harness) => [
+      harness.id,
+      new Set([...listOccupiedNames(harness.root), ...listHigherPrecedenceNames(harness)]),
+    ]),
   );
 
   for (const entry of catalog.entries) {
@@ -317,18 +341,21 @@ function planCatalogReconciliation(options = {}) {
     throw new Error('harnesses are required');
   }
 
+  const readOnly = options.readOnly === true;
   const harnesses = options.harnesses.map((harness) => {
     if (!harness || typeof harness.id !== 'string') throw new Error('harness id is required');
     return {
       id: harness.id,
-      root: safeRoot(harness.root),
+      root: safeRoot(harness.root, { create: !readOnly }),
       adapter: harness.adapter || null,
+      scopeRoots: harness.scopeRoots || {},
+      scopeRootsComplete: harness.scopeRootsComplete !== false,
     };
   });
 
-  const aliasState = readAliasState(options.controlRoot);
+  const aliasState = readAliasState(options.controlRoot, { create: !readOnly });
   // Recover incomplete journals before planning new work.
-  recoverJournal(aliasState);
+  if (!readOnly) recoverJournal(aliasState);
 
   const { aliases, notices } = resolveAliasesForCatalog({
     catalog,
@@ -395,7 +422,8 @@ function planCatalogReconciliation(options = {}) {
     }
   }
 
-  // De-selection: receipt-owned targets for ids no longer in the catalog.
+  // De-selection also retires a receipt-owned previous alias after an explicit
+  // rename. Locally modified and unsafe copies remain preserved.
   const selectedIds = new Set(catalog.entries.map((entry) => entry.id));
   for (const harness of harnesses) {
     const stateDir = path.join(harness.root, STATE_DIR);
@@ -403,8 +431,15 @@ function planCatalogReconciliation(options = {}) {
     for (const file of fs.readdirSync(stateDir)) {
       if (!file.endsWith('.json')) continue;
       const receipt = validateReceipt(readJsonIfPresent(path.join(stateDir, file), null));
-      if (!receipt || selectedIds.has(receipt.id)) continue;
+      const desiredName = aliases[receipt?.id];
+      if (!receipt || (selectedIds.has(receipt.id) && (!desiredName || desiredName === receipt.effectiveName))) continue;
       if (receipt.harness && receipt.harness !== harness.id) continue;
+      const replacement = pairs.find((pair) => pair.id === receipt.id
+        && pair.harness === harness.id
+        && pair.effectiveName === desiredName);
+      if (selectedIds.has(receipt.id) && (!replacement || !['clean', 'missing', 'outdated'].includes(replacement.status))) {
+        continue;
+      }
       const target = targetDir(harness.root, receipt.effectiveName);
       let observed = null;
       let status = 'retire';
@@ -496,7 +531,8 @@ function stageBundleCopy(source, target) {
     // Replace target only after the complete staged tree is verified.
     let backup = null;
     if (fs.existsSync(target)) {
-      backup = `${target}.jarvos-bak-${process.pid}-${crypto.randomBytes(4).toString('hex')}`;
+      // A leftover backup must never be discovered as a second harness skill.
+      backup = path.join(parent, `.${path.basename(target)}.jarvos-bak-${process.pid}-${crypto.randomBytes(4).toString('hex')}`);
       fs.renameSync(target, backup);
       try {
         fs.renameSync(staging, target);

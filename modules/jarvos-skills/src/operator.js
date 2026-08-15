@@ -27,6 +27,7 @@ const {
   defaultConfig,
 } = require('./config');
 const { planCatalogReconciliation, applyCatalogReconciliation } = require('./reconciliation');
+const { readReceipt } = require('./receipts');
 const { verifyHarnessBundle, resolveShadowPaths } = require('./harness-verification');
 const { planSchedulerUnits } = require('./scheduler');
 
@@ -37,8 +38,18 @@ function readJson(filePath, fallback = null) {
   return JSON.parse(fs.readFileSync(filePath, 'utf8'));
 }
 
-function loadEffectiveFromConfig(resolved, { includeDisabled = false } = {}) {
-  ensureControlPlane(resolved.config);
+function loadHarnessAdapter(id) {
+  const adapterPath = path.resolve(MODULE_ROOT, '..', '..', 'runtimes', id, 'adapter.json');
+  if (!fs.existsSync(adapterPath)) return null;
+  try {
+    return JSON.parse(fs.readFileSync(adapterPath, 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
+function loadEffectiveFromConfig(resolved, { includeDisabled = false, readOnly = false } = {}) {
+  if (!readOnly) ensureControlPlane(resolved.config);
   const publicCatalog = readJson(resolved.publicCatalogPath, {
     schemaVersion: CATALOG_SCHEMA_VERSION,
     entries: [],
@@ -58,9 +69,13 @@ function loadEffectiveFromConfig(resolved, { includeDisabled = false } = {}) {
     };
   }
 
-  const harnesses = includeDisabled
+  const selectedHarnesses = includeDisabled
     ? resolved.allHarnesses.filter((item) => item.enabled)
     : resolved.harnesses;
+  const harnesses = selectedHarnesses.map((harness) => ({
+    ...harness,
+    adapter: loadHarnessAdapter(harness.id),
+  }));
 
   return {
     status: 'valid',
@@ -85,7 +100,7 @@ function requireSourceRoots(resolved, effective) {
 
 function statusOperator(options = {}) {
   const loaded = loadConfig(options.configPath);
-  const state = loadEffectiveFromConfig(loaded.resolved);
+  const state = loadEffectiveFromConfig(loaded.resolved, { readOnly: true });
   if (state.status !== 'valid') {
     return {
       ok: false,
@@ -113,16 +128,14 @@ function statusOperator(options = {}) {
     localSourceRoot: state.resolved.localSourceRoot,
     harnesses: state.harnesses,
     controlRoot: state.resolved.controlRoot,
+    readOnly: true,
   });
   const pairs = plan.pairs.map((pair) => {
-    const adapterPath = path.resolve(MODULE_ROOT, '..', '..', 'runtimes', pair.harness, 'adapter.json');
-    let adapter = null;
-    if (fs.existsSync(adapterPath)) {
-      try { adapter = JSON.parse(fs.readFileSync(adapterPath, 'utf8')); } catch { adapter = null; }
-    }
+    const harness = state.harnesses.find((item) => item.id === pair.harness);
+    const adapter = harness?.adapter || null;
     let verification = null;
     if (pair.target && fs.existsSync(pair.target) && pair.effectiveName) {
-      const shadowPaths = resolveShadowPaths({ harness: state.harnesses.find((item) => item.id === pair.harness), adapter, effectiveName: pair.effectiveName });
+      const shadowPaths = resolveShadowPaths({ harness, adapter, effectiveName: pair.effectiveName });
       verification = verifyHarnessBundle({
         adapter,
         targetPath: pair.target,
@@ -162,7 +175,7 @@ function statusOperator(options = {}) {
 
 function planOperator(options = {}) {
   const loaded = loadConfig(options.configPath);
-  const state = loadEffectiveFromConfig(loaded.resolved);
+  const state = loadEffectiveFromConfig(loaded.resolved, { readOnly: options.readOnly !== false });
   if (state.status !== 'valid') throw new Error(state.reason || 'catalog is invalid');
   requireSourceRoots(state.resolved, state.effective);
   const plan = planCatalogReconciliation({
@@ -173,6 +186,7 @@ function planOperator(options = {}) {
     harnesses: state.harnesses,
     controlRoot: state.resolved.controlRoot,
     reviewer: options.reviewer || null,
+    readOnly: options.readOnly !== false,
   });
   return {
     ok: plan.ok,
@@ -195,8 +209,17 @@ function planOperator(options = {}) {
 }
 
 function applyOperator(options = {}) {
-  const planned = planOperator(options);
+  const planned = planOperator({ ...options, readOnly: false });
   const result = applyCatalogReconciliation(planned._plan);
+  const accepted = result.ok && result.applied.every((item) => ['clean', 'missing', 'outdated', 'retire'].includes(item.status));
+  if (accepted) {
+    const loaded = loadConfig(planned.configPath);
+    saveConfig({
+      ...loaded.config,
+      acceptedCatalogDigest: planned.catalogDigest,
+      acceptedAliasRevision: result.aliasRevision,
+    }, planned.configPath);
+  }
   return {
     ok: result.ok,
     configPath: planned.configPath,
@@ -204,6 +227,8 @@ function applyOperator(options = {}) {
     aliasRevision: result.aliasRevision,
     notices: result.notices,
     applied: result.applied,
+    acceptedCatalogDigest: accepted ? planned.catalogDigest : null,
+    acceptedAliasRevision: accepted ? result.aliasRevision : null,
   };
 }
 
@@ -406,6 +431,9 @@ function renameAlias(options = {}) {
     if (fs.existsSync(path.join(harness.root, name))) {
       throw new Error(`effective name ${name} is occupied in ${harness.id}`);
     }
+    if (readReceipt(harness.root, name)) {
+      throw new Error(`effective name ${name} has an existing projection receipt in ${harness.id}`);
+    }
   }
   const aliasFile = path.join(resolved.controlRoot, 'shared-skill-aliases.json');
   const current = readJson(aliasFile, { version: 1, revision: 0, aliases: {}, notices: {} });
@@ -441,7 +469,12 @@ function renameAlias(options = {}) {
 
 function repairOperator(options = {}) {
   // Repair is plan+apply for missing/outdated only; preserve everything else.
-  const planned = planOperator(options);
+  const loaded = loadConfig(options.configPath);
+  const planned = planOperator({ ...options, readOnly: false });
+  if (loaded.config.acceptedCatalogDigest !== planned.catalogDigest
+    || loaded.config.acceptedAliasRevision !== planned.aliasRevision) {
+    throw new Error('repair requires an accepted catalog generation; run apply after reviewing the current catalog');
+  }
   const actionable = planned._plan.pairs.filter((pair) => ['missing', 'outdated', 'retire'].includes(pair.status));
   if (actionable.length === 0) {
     return {
@@ -528,8 +561,42 @@ function withMutationLease(configPath, operation, fn, rootOverride = null) {
       : loadConfig(configPath).resolved.controlRoot;
   ensureDir(root, 'control root');
   const lease = path.join(root, '.shared-skill-cli.lock');
-  let fd;
-  try { fd = fs.openSync(lease, 'wx', 0o600); } catch (_) { throw new Error(`shared skill ${operation} is already running`); }
+  const staleAfterMs = 6 * 60 * 60 * 1000;
+  const malformedGraceMs = 60 * 1000;
+  const tryAcquire = () => {
+    try {
+      const fd = fs.openSync(lease, 'wx', 0o600);
+      fs.writeFileSync(fd, JSON.stringify({ pid: process.pid, operation, startedAt: new Date().toISOString() }));
+      return fd;
+    } catch (error) {
+      if (error.code !== 'EEXIST') throw error;
+      return null;
+    }
+  };
+  let fd = tryAcquire();
+  if (fd === null) {
+    let stale = false;
+    try {
+      const prior = JSON.parse(fs.readFileSync(lease, 'utf8'));
+      const startedAt = Date.parse(prior.startedAt);
+      const tooOld = Number.isFinite(startedAt) && Date.now() - startedAt > staleAfterMs;
+      let alive = typeof prior.pid === 'number' && prior.pid > 0;
+      if (alive) {
+        try { process.kill(prior.pid, 0); } catch { alive = false; }
+      }
+      stale = tooOld || !alive;
+    } catch {
+      try {
+        stale = Date.now() - fs.statSync(lease).mtimeMs > malformedGraceMs;
+      } catch {
+        stale = true;
+      }
+    }
+    if (!stale) throw new Error(`shared skill ${operation} is already running`);
+    fs.unlinkSync(lease);
+    fd = tryAcquire();
+    if (fd === null) throw new Error(`shared skill ${operation} is already running`);
+  }
   try { return fn(); } finally { fs.closeSync(fd); try { fs.unlinkSync(lease); } catch (_) {} }
 }
 

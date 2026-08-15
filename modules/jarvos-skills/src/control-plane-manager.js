@@ -38,7 +38,10 @@ function createSharedSkillManager({ stateRoot, scheduler = null } = {}) {
     const enrolledHarnesses = (harnesses || []).filter((h) => state.enrolled.includes(h.id));
     const plan = catalog ? planCatalogReconciliation({ catalog: catalog.catalog || catalog, publicSourceRoot, localSourceRoot, harnesses: enrolledHarnesses, controlRoot: path.join(path.dirname(stateFile), 'reconciliation') }) : null;
     if (READS.has(operation)) return { operation, state: redact(state), plan: redactPlan(plan) };
-    if (operation === 'share' || operation === 'refresh') return { operation, ...admitOverlaySkill({ overlayPath, skillPath, id, allowedHarnesses: (state.enrolled && state.enrolled.length ? state.enrolled : ['codex']), refresh: operation === 'refresh' }) };
+    if (operation === 'share' || operation === 'refresh') {
+      if (!state.enrolled?.length) throw new Error('overlay admission requires at least one enrolled harness');
+      return { operation, ...admitOverlaySkill({ overlayPath, skillPath, id, allowedHarnesses: state.enrolled, refresh: operation === 'refresh' }) };
+    }
       if (operation === 'enable') {
         const enrollment = (harnesses || []).map((h) => h.id);
         const registration = scheduler?.register ? scheduler.register({ id: 'jarvos-shared-skills', operation: 'repair' }) : { status: 'scheduler_unsupported' };
@@ -51,11 +54,12 @@ function createSharedSkillManager({ stateRoot, scheduler = null } = {}) {
       if (!plan) throw new Error('catalog is required for reconciliation');
       if (isCleanPlan(plan)) return { operation, status: 'noop', state: redact(state) };
       const result = applyCatalogReconciliation(plan);
-      state.generation += 1; state.lastCatalogDigest = plan.catalogDigest; atomicWriteJson(stateFile, state); return { operation, status: 'applied', result: redact(result), state: redact(state) };
+      state.generation += 1; state.lastCatalogDigest = plan.catalogDigest; atomicWriteJson(stateFile, state); return { operation, status: result.applied.some((item) => item.applied) ? 'applied' : 'preserved', result: redactApply(result), state: redact(state) };
     } finally { if (unlock) unlock(); }
   }
   return { execute };
 }
 function redact(state) { return { generation: state.generation, enabled: state.enabled, enrolled: state.enrolled, acceptedGeneration: state.acceptedGeneration || null, lastCatalogDigest: state.lastCatalogDigest || null }; }
+function redactApply(result) { return { ok: result.ok === true, aliasRevision: result.aliasRevision, notices: result.notices || [], applied: (result.applied || []).map(({ id, harness, effectiveName, status, applied }) => ({ id, harness, effectiveName, status, applied: applied === true })) }; }
 function redactPlan(plan) { return plan ? { catalogDigest: plan.catalogDigest, pairs: plan.pairs.map((p) => ({ id: p.id, harness: p.harness, effectiveName: p.effectiveName, status: p.status, action: p.action })) } : null; }
 module.exports = { createSharedSkillManager };

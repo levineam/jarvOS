@@ -42,6 +42,34 @@ test('doctor-shared is ready on a fresh isolated config and never enables gates'
   }
 });
 
+test('doctor-shared reports an absent control plane without creating it', () => {
+  const root = temp('jarvos-doctor-read-only-');
+  const control = path.join(root, 'absent-control');
+  const configPath = path.join(root, 'config.json');
+  try {
+    fs.writeFileSync(configPath, JSON.stringify({
+      schemaVersion: 'jarvos.shared-skill-config/v1',
+      controlRoot: control,
+      publicCatalogPath: path.join(control, 'public-catalog.json'),
+      localOverlayPath: path.join(control, 'local-overlay.json'),
+      publicSourceRoot: null,
+      localSourceRoot: null,
+      harnesses: Object.fromEntries(['codex', 'claude', 'openclaw', 'hermes'].map((id) => [id, {
+        enabled: false,
+        root: path.join(root, id),
+      }])),
+      scheduler: { enabled: false, intervalMinutes: 60, unitName: 'jarvos-shared-skills' },
+      liveDogfood: { authorized: false, receiptPath: null, egress: {} },
+    }));
+    const report = doctorSharedSkills({ configPath, home: root, platform: 'darwin' });
+    assert.equal(report.ok, false);
+    assert.equal(fs.existsSync(control), false);
+    assert.equal(report.checks.find((item) => item.id === 'control-root').ok, false);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('preflight CLI accepts an explicit control root, keeping populated default roots out of isolated config', () => {
   const root = temp('jarvos-control-root-'); const configPath = path.join(root, 'config.json'); const controlRoot = path.join(root, 'isolated-control');
   try {

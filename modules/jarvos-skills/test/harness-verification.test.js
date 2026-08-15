@@ -23,8 +23,23 @@ test('exact-path proof binds name and bundle digest while interactive proof rema
     assert.equal(verifyHarnessBundle({ adapter: { skillProjection: { verificationTier: 'interactive-smoke' } }, targetPath: bundle, expectedName: 'fixture', expectedTreeDigest: tree.treeDigest }).reason, 'remote_probe_not_authorized');
     assert.equal(verifyHarnessBundle({ adapter: { skillProjection: { verificationTier: 'interactive-smoke' } }, remoteModelProbe: true }).reason, 'interactive_probe_required');
     const explicit = resolveShadowPaths({ harness: { scopeRoots: { project: '~/.codex/project-skills' } }, adapter: { skillProjection: { orderedScopes: ['project', 'managed'] } }, effectiveName: 'fixture' });
-    assert.equal(explicit.complete, true);
+    assert.equal(explicit.complete, false);
     assert.equal(deriveShadowPaths({ harness: { scopeRoots: { project: '~/.codex/project-skills' } }, adapter: { skillProjection: { orderedScopes: ['project', 'managed'] } }, effectiveName: 'fixture' })[0], path.join(os.homedir(), '.codex/project-skills', 'fixture'));
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test('relative scope declarations remain unverifiable until explicitly bound', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-relative-scopes-'));
+  fs.chmodSync(root, 0o700);
+  try {
+    const bundle = path.join(root, 'fixture');
+    fs.mkdirSync(bundle, { recursive: true, mode: 0o700 });
+    fs.writeFileSync(path.join(bundle, 'SKILL.md'), '---\nname: fixture\n---\n', { mode: 0o600 });
+    const tree = computeBundleTree(bundle);
+    const adapter = { skillProjection: { verificationTier: 'exact-path', orderedScopes: ['project', 'managed'] } };
+    const shadows = resolveShadowPaths({ harness: { root, scopeRoots: { project: './.codex/skills' }, scopeRootsComplete: true }, adapter, effectiveName: 'fixture' });
+    assert.equal(shadows.complete, false);
+    assert.equal(verifyHarnessBundle({ adapter, targetPath: bundle, expectedName: 'fixture', expectedTreeDigest: tree.treeDigest, shadowPaths: shadows.paths, shadowPathsComplete: shadows.complete }).reason, 'higher_precedence_scope_unknown');
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
@@ -48,7 +63,7 @@ test('default adapter scope roots detect project and workspace shadows', () => {
       const tree = computeBundleTree(target);
       const shadows = resolveShadowPaths({ harness: { root: path.dirname(target), scopeRoots: config.harnesses[item.id].scopeRoots, scopeRootsComplete: config.harnesses[item.id].scopeRootsComplete }, adapter, effectiveName: 'fixture' });
       assert.equal(shadows.complete, false, `${item.id} current-directory defaults must not claim complete coverage`);
-      assert.ok(shadows.paths.includes(shadow));
+      assert.equal(shadows.paths.includes(shadow), false, `${item.id} relative defaults must not silently bind the current directory`);
       assert.equal(verifyHarnessBundle({ adapter, targetPath: target, expectedName: 'fixture', expectedTreeDigest: tree.treeDigest, shadowPaths: shadows.paths, shadowPathsComplete: shadows.complete }).reason, 'higher_precedence_scope_unknown');
     }
   } finally {

@@ -6,6 +6,7 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 
 const CONFIG_SCHEMA_VERSION = 'jarvos.shared-skill-config/v1';
+const SHA256_RE = /^[a-f0-9]{64}$/i;
 const DEFAULT_CONTROL_ROOT = path.join(os.homedir(), '.jarvos', 'shared-skills');
 const DEFAULT_HARNESS_ROOTS = Object.freeze({
   codex: path.join(os.homedir(), '.codex', 'skills'),
@@ -45,6 +46,13 @@ function collapseHome(value) {
   if (resolved === home) return '~';
   if (resolved.startsWith(`${home}${path.sep}`)) return `~/${resolved.slice(home.length + 1).split(path.sep).join('/')}`;
   return resolved;
+}
+
+function normalizeScopeRoot(value) {
+  const expanded = expandHome(value);
+  // Relative adapter declarations describe a dynamic project/workspace scope.
+  // Keep that marker rather than freezing today's cwd into persisted config.
+  return path.isAbsolute(expanded) ? collapseHome(expanded) : expanded;
 }
 
 function assertSafeOwnedDirectory(stat, label) {
@@ -114,12 +122,11 @@ function normalizeConfig(raw) {
       enabled: source.enabled,
       root: collapseHome(expandHome(source.root)),
       scopeRoots: source.scopeRoots && typeof source.scopeRoots === 'object'
-        ? Object.fromEntries(Object.entries(source.scopeRoots).map(([scope, value]) => [scope, collapseHome(expandHome(value))]))
+        ? Object.fromEntries(Object.entries(source.scopeRoots).map(([scope, value]) => [scope, normalizeScopeRoot(value)]))
         : defaults.harnesses[id].scopeRoots && typeof defaults.harnesses[id].scopeRoots === 'object'
-          ? Object.fromEntries(Object.entries(defaults.harnesses[id].scopeRoots).map(([scope, value]) => [scope, collapseHome(expandHome(value))]))
+          ? Object.fromEntries(Object.entries(defaults.harnesses[id].scopeRoots).map(([scope, value]) => [scope, normalizeScopeRoot(value)]))
         : {},
-      scopeRootsComplete: source.scopeRootsComplete === true
-        || (source.scopeRootsComplete === undefined && source.scopeRoots !== undefined),
+      scopeRootsComplete: source.scopeRootsComplete === true,
     };
   }
   const scheduler = {
@@ -147,6 +154,10 @@ function normalizeConfig(raw) {
       ? defaults.localOverlayPath
       : collapseHome(expandHome(raw.localOverlayPath)),
     localSourceRoot: raw.localSourceRoot ? collapseHome(expandHome(raw.localSourceRoot)) : null,
+    acceptedCatalogDigest: SHA256_RE.test(raw.acceptedCatalogDigest || '') ? raw.acceptedCatalogDigest.toLowerCase() : null,
+    acceptedAliasRevision: Number.isInteger(raw.acceptedAliasRevision) && raw.acceptedAliasRevision >= 0
+      ? raw.acceptedAliasRevision
+      : null,
     harnesses,
     scheduler,
     liveDogfood: {
