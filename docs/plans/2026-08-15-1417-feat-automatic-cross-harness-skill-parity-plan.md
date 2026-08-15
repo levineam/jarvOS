@@ -10,6 +10,7 @@ execution: code
 deepened: 2026-08-15
 ---
 
+<!-- markdownlint-disable-file MD025 -->
 # Automatic Cross-Harness Skill Parity
 
 ## Goal Capsule
