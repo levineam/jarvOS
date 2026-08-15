@@ -132,3 +132,26 @@ test('live-preflight rejects write opt-in and remains a read-only release gate',
   assert.equal(result.status, 2);
   assert.match(result.stderr, /permanently read-only/);
 });
+
+test('doctor-shared redacts absolute paths from outward JSON', () => {
+  const home = temp('jarvos-doctor-redact-');
+  const control = path.join(home, '.jarvos', 'shared-skills');
+  const configPath = path.join(control, 'config.json');
+  try {
+    initOperator({ configPath, controlRoot: control });
+    const report = doctorSharedSkills({ configPath, home, platform: 'darwin' });
+    const encoded = JSON.stringify(report);
+    assert.equal(encoded.includes(home), false, 'raw home path must not appear');
+    assert.equal(Object.prototype.hasOwnProperty.call(report, 'controlRoot'), false);
+    assert.equal(report.controlRootPresent, true);
+    assert.match(String(report.configPath || ''), /^~/);
+    for (const check of report.checks || []) {
+      if (check.detail == null) continue;
+      const detail = JSON.stringify(check.detail);
+      assert.equal(detail.includes(home), false, `check ${check.id} leaked home path`);
+      assert.equal(/"(?:\/Users|\/home)\//.test(detail), false, `check ${check.id} leaked absolute path`);
+    }
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});

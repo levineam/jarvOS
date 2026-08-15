@@ -112,10 +112,40 @@ function receiptOwns(harnessRoots, id) {
   return false;
 }
 
-function compatibleTargets(skill, harnessRoots) {
+function compatibleTargets(skill, harnessRoots, { forUpdate = false } = {}) {
   const sourcePresent = new Set(skill.matrix.filter((row) => row.projection === 'source_present').map((row) => row.harness));
-  return SUPPORTED_HARNESSES.filter((harness) => !sourcePresent.has(harness)
-    && !receiptOwns((harnessRoots || []).filter((root) => root.harness === harness), skill.logicalId));
+  return SUPPORTED_HARNESSES.filter((harness) => {
+    if (sourcePresent.has(harness)) return false;
+    // Updates must keep receipt-owned destinations eligible so reconcile can
+    // refresh outdated projections from a new accepted generation.
+    if (forUpdate) return true;
+    return !receiptOwns((harnessRoots || []).filter((root) => root.harness === harness), skill.logicalId);
+  });
+}
+
+function priorEntryFor(prior, logicalId) {
+  if (!prior) return null;
+  const identity = (prior.identities || []).find((item) => item.logicalId === logicalId);
+  const effectiveName = identity?.effectiveName || logicalId;
+  const entry = (prior.generatedOverlay?.entries || prior.entries || [])
+    .find((item) => item.id === effectiveName);
+  if (!entry) return null;
+  return { identity, effectiveName, entry, treeDigest: entry.treeDigest || entry.bundle?.treeDigest || null };
+}
+
+function recordAbsence(priorAbsences, logicalId, observedAt, policy) {
+  const prev = (priorAbsences && priorAbsences[logicalId]) || null;
+  const count = (prev?.count || 0) + 1;
+  const firstMissingAt = prev?.firstMissingAt || observedAt;
+  const lastMissingAt = observedAt;
+  const minCount = policy?.minAbsenceObservations || 2;
+  return {
+    logicalId,
+    count,
+    firstMissingAt,
+    lastMissingAt,
+    retireReady: count >= minCount,
+  };
 }
 
 function loadManualInputs({ publicCatalog, localOverlay }) {
@@ -185,10 +215,17 @@ function assessInventory({
   const generatedIds = new Set((prior?.generatedOverlay?.entries || []).map((entry) => entry.id));
   const manualEntries = (manual.localOverlay?.entries || []).filter((entry) => !generatedIds.has(entry.id));
   const manualIds = new Set(manualEntries.map((entry) => entry.id));
+  const retirementPolicy = (config?.inventory?.retirement)
+    || { minAbsenceObservations: 2, minAbsenceIntervalHours: 24, minSchedulerIntervals: 2 };
+  const priorAbsences = (prior && typeof prior.absences === 'object' && prior.absences) || {};
+  const nextAbsences = {};
+  const retireIds = new Set();
   const candidates = [];
   const assessed = [];
+  const observedLogicalIds = new Set();
 
   for (const skill of validated.document.skills) {
+    observedLogicalIds.add(skill.logicalId);
     const sources = sourceRootsFor(skill, validated.document.roots);
     let result = { ...skill, ...stableDisposition('needs_input', 'incomplete_observation') };
     // Preserve owner exclusions applied by inventory observation.
@@ -198,6 +235,28 @@ function assessInventory({
     }
     if (manual.error) {
       assessed.push({ ...result, ...stableDisposition('needs_input', 'needs_owner_input', 'actionable') });
+      continue;
+    }
+    const liveObservations = (skill.observations || []).filter((item) => item.state !== 'missing');
+    const onlyMissing = liveObservations.length === 0
+      && (skill.observations || []).length > 0
+      && (skill.observations || []).every((item) => item.state === 'missing');
+    if (onlyMissing) {
+      // Track consecutive complete-generation absences for retirement.
+      if (complete && priorEntryFor(prior, skill.logicalId)) {
+        const absence = recordAbsence(priorAbsences, skill.logicalId, validated.document.observedAt, retirementPolicy);
+        nextAbsences[skill.logicalId] = absence;
+        if (absence.retireReady) {
+          retireIds.add(skill.logicalId);
+          assessed.push({ ...result, ...stableDisposition('already_managed', 'source_retired', 'quiet') });
+        } else {
+          assessed.push({ ...result, ...stableDisposition('needs_input', 'source_absent', 'actionable') });
+        }
+      } else if (skill.observations.some((item) => item.state === 'unsafe')) {
+        assessed.push({ ...result, ...stableDisposition('blocked', 'unsafe_source', 'actionable') });
+      } else {
+        assessed.push({ ...result, ...stableDisposition('needs_input', 'source_absent', 'quiet') });
+      }
       continue;
     }
     if (sources.length === 0 || skill.observations.some((item) => item.state === 'unsafe')) {
@@ -224,10 +283,13 @@ function assessInventory({
     const selectedDigest = reviewed.selectedDigest || skill.treeDigest;
     const feature = featureByDigest.get(selectedDigest);
     const source = sourceByDigest.get(selectedDigest);
-    if (!feature || !source || selectedDigest !== skill.treeDigest) {
+    // Reviewer may select any observed same-purpose variant; prefer that digest.
+    if (!feature || !source || !featureByDigest.has(selectedDigest)) {
       assessed.push({ ...result, ...stableDisposition('needs_input', 'ambiguous_identity', 'actionable') });
       continue;
     }
+    // Collapse the skill identity onto the selected digest for admission.
+    result = { ...result, treeDigest: selectedDigest };
     if (feature.hasSecret) {
       assessed.push({ ...result, ...stableDisposition('blocked', 'privacy_restricted', 'actionable') });
       continue;
@@ -245,23 +307,47 @@ function assessInventory({
       assessed.push({ ...result, ...stableDisposition('blocked', 'trust_class_insufficient', 'actionable') });
       continue;
     }
-    const targets = compatibleTargets(skill, harnessRoots);
-    if (feature.hasNativeSyntax || targets.length === 0) {
-      assessed.push({ ...result, ...stableDisposition(feature.hasNativeSyntax ? 'harness_local' : 'already_managed', feature.hasNativeSyntax ? 'harness_native' : 'already_managed_receipt') });
+    if (feature.hasNativeSyntax) {
+      assessed.push({ ...result, ...stableDisposition('harness_local', 'harness_native') });
       continue;
     }
-    if (receiptOwns(sources.map((item) => ({ root: item.root.root })), skill.logicalId)) {
-      assessed.push({ ...result, ...stableDisposition('already_managed', 'already_managed_receipt') });
-      continue;
-    }
-    const priorIdentity = priorIdentities.get(skill.logicalId);
-    if (priorIdentity && priorIdentity.profileDigest !== feature.profileDigest) {
+    const priorMeta = priorEntryFor(prior, skill.logicalId);
+    const priorIdentity = priorMeta?.identity || priorIdentities.get(skill.logicalId) || null;
+    if (priorIdentity && priorIdentity.profileDigest && priorIdentity.profileDigest !== feature.profileDigest) {
       assessed.push({ ...result, ...stableDisposition('needs_input', 'capability_unsupported', 'actionable') });
       continue;
     }
     const effectiveName = priorIdentity?.effectiveName || skill.logicalId;
     if (publicIds.has(effectiveName) || manualIds.has(effectiveName)) {
       assessed.push({ ...result, ...stableDisposition('blocked', 'ambiguous_identity', 'actionable') });
+      continue;
+    }
+    const isUpdate = Boolean(priorMeta?.treeDigest && priorMeta.treeDigest !== feature.tree.treeDigest);
+    const isSameManaged = Boolean(priorMeta?.treeDigest && priorMeta.treeDigest === feature.tree.treeDigest);
+    // A receipt at a source root means the unchanged source is already managed,
+    // but it must never suppress a safe update from a newer source digest.
+    if (!isUpdate && receiptOwns(sources.map((item) => ({ root: item.root.root })), skill.logicalId)) {
+      assessed.push({ ...result, ...stableDisposition('already_managed', 'already_managed_receipt') });
+      continue;
+    }
+    const targets = compatibleTargets(skill, harnessRoots, { forUpdate: isUpdate });
+    // Prefer prior allowed harnesses on update so the matrix does not shrink.
+    const priorAllowed = priorMeta?.entry?.allowedHarnesses || [];
+    const allowedHarnesses = [...new Set([
+      ...targets,
+      ...(isUpdate || isSameManaged ? priorAllowed : []),
+    ])].filter((harness) => !skill.matrix.some((row) => row.harness === harness && row.projection === 'source_present'));
+
+    if (!isUpdate && targets.length === 0 && isSameManaged) {
+      assessed.push({ ...result, ...stableDisposition('already_managed', 'already_managed_receipt') });
+      continue;
+    }
+    if (!isUpdate && !isSameManaged && targets.length === 0) {
+      assessed.push({ ...result, ...stableDisposition('already_managed', 'already_managed_receipt') });
+      continue;
+    }
+    if (allowedHarnesses.length === 0) {
+      assessed.push({ ...result, ...stableDisposition('already_managed', 'already_managed_receipt') });
       continue;
     }
     // Incomplete generations may classify but must not admit/capture.
@@ -276,8 +362,48 @@ function assessInventory({
       });
       continue;
     }
-    candidates.push({ id: effectiveName, logicalId: skill.logicalId, sourcePath: source.observation.absolutePath, treeDigest: feature.tree.treeDigest, allowlist: feature.tree.allowlist, allowedHarnesses: targets, profileDigest: feature.profileDigest });
-    assessed.push({ ...result, ...stableDisposition('shared', 'rule_proven_portable') });
+    // Same-digest managed skills with no missing destinations stay quiet and
+    // are preserved via prior-overlay merge below (not re-captured).
+    if (isSameManaged && targets.length === 0) {
+      assessed.push({ ...result, ...stableDisposition('already_managed', 'already_managed_receipt') });
+      continue;
+    }
+    candidates.push({
+      id: effectiveName,
+      logicalId: skill.logicalId,
+      sourcePath: source.observation.absolutePath,
+      treeDigest: feature.tree.treeDigest,
+      allowlist: feature.tree.allowlist,
+      allowedHarnesses: allowedHarnesses.length > 0 ? allowedHarnesses : targets,
+      profileDigest: feature.profileDigest,
+      mode: isUpdate ? 'update' : 'admit',
+    });
+    assessed.push({ ...result, ...stableDisposition('shared', isUpdate ? 'rule_proven_update' : 'rule_proven_portable') });
+  }
+
+  // Also retire prior-managed skills that vanished entirely from this complete generation.
+  if (complete && prior) {
+    for (const identity of prior.identities || []) {
+      if (observedLogicalIds.has(identity.logicalId)) continue;
+      if (retireIds.has(identity.logicalId)) continue;
+      const absence = recordAbsence(priorAbsences, identity.logicalId, validated.document.observedAt, retirementPolicy);
+      nextAbsences[identity.logicalId] = absence;
+      if (absence.retireReady) {
+        retireIds.add(identity.logicalId);
+        assessed.push({
+          logicalId: identity.logicalId,
+          observedName: identity.effectiveName || identity.logicalId,
+          treeDigest: priorEntryFor(prior, identity.logicalId)?.treeDigest || '0'.repeat(64),
+          observations: [],
+          matrix: SUPPORTED_HARNESSES.map((harness) => ({
+            harness,
+            projection: 'missing',
+            verification: 'verification_pending',
+          })),
+          ...stableDisposition('already_managed', 'source_retired', 'quiet'),
+        });
+      }
+    }
   }
 
   const nextDocument = { ...validated.document, skills: assessed };
@@ -289,80 +415,168 @@ function assessInventory({
   const skippedAdmissions = !complete
     ? classifications.filter((item) => item.disposition.kind === 'needs_input').map((item) => ({ logicalId: item.logicalId, reason: 'incomplete_generation' }))
     : [];
-  if (candidates.length === 0 || !complete || autoAdmit === false || persist === false) {
+
+  const shouldMutate = complete && autoAdmit !== false && persist !== false
+    && (candidates.length > 0 || retireIds.size > 0);
+
+  if (!shouldMutate) {
+    // Still persist absence counters on complete generations so retirement can advance.
+    if (complete && persist !== false && Object.keys(nextAbsences).length > 0 && prior) {
+      const absenceOnly = {
+        ...prior,
+        absences: { ...priorAbsences, ...nextAbsences },
+      };
+      // Drop cleared absences for skills that reappeared.
+      for (const logicalId of observedLogicalIds) {
+        if (!nextAbsences[logicalId] && absenceOnly.absences[logicalId]) {
+          delete absenceOnly.absences[logicalId];
+        }
+      }
+      atomicWriteJson(acceptedGenerationPath, absenceOnly);
+    }
     const status = serializeOutwardStatus(nextDocument);
     return {
       ok: true,
       mutate: false,
       document: nextDocument,
-      generatedOverlay: { schemaVersion: OVERLAY_SCHEMA_VERSION, entries: [] },
+      generatedOverlay: prior?.generatedOverlay || { schemaVersion: OVERLAY_SCHEMA_VERSION, entries: [] },
       acceptedGeneration: prior,
       sourceRoot: prior?.sourceRoot || null,
       localSourceRoot: sourceStorePath,
       admissions: [],
+      retirements: [...retireIds],
       skippedAdmissions,
       classifications,
       status,
     };
   }
-  const captured = captureAcceptedGeneration({
-    sourceStorePath,
-    acceptedGenerationPath,
-    generationId: validated.document.generationId,
-    acceptedAt: acceptedAt || validated.document.observedAt,
-    candidates,
+
+  // Capture only skills that need a new immutable generation (new or updated digest).
+  const captureCandidates = candidates.filter((candidate) => {
+    const priorMeta = priorEntryFor(prior, candidate.logicalId);
+    return !priorMeta || priorMeta.treeDigest !== candidate.treeDigest;
   });
+  const captured = captureCandidates.length > 0
+    ? captureAcceptedGeneration({
+      sourceStorePath,
+      acceptedGenerationPath,
+      generationId: validated.document.generationId,
+      acceptedAt: acceptedAt || validated.document.observedAt,
+      candidates: captureCandidates,
+    })
+    : { changed: false, generation: prior, sourceRoot: prior?.sourceRoot || null };
+
+  const capturedById = new Map(
+    (captureCandidates || []).map((candidate) => [candidate.id, candidate]),
+  );
+  const retainedPriorEntries = (prior?.generatedOverlay?.entries || [])
+    .filter((entry) => {
+      const identity = (prior.identities || []).find((item) => item.effectiveName === entry.id || item.logicalId === entry.id);
+      const logicalId = identity?.logicalId || entry.id;
+      if (retireIds.has(logicalId)) return false;
+      // Replaced by a fresh capture/candidate with same id.
+      if (capturedById.has(entry.id)) return false;
+      if (candidates.some((candidate) => candidate.id === entry.id)) return false;
+      return true;
+    });
+
+  const newEntries = candidates.map((candidate) => ({
+    id: candidate.id,
+    allowedHarnesses: candidate.allowedHarnesses,
+    verification: Object.fromEntries(candidate.allowedHarnesses.map((harness) => [harness, { tier: 'adapter-declared', remoteModelProbe: false }])),
+    bundle: {
+      root: path.posix.join(
+        (captured.changed ? validated.document.generationId : (prior?.generationId || validated.document.generationId)),
+        candidate.id,
+      ),
+      allowlist: candidate.allowlist,
+      treeDigest: candidate.treeDigest,
+    },
+  }));
+
   const generatedOverlay = {
     schemaVersion: OVERLAY_SCHEMA_VERSION,
-    entries: candidates.map((candidate) => ({
-      id: candidate.id,
-      allowedHarnesses: candidate.allowedHarnesses,
-      verification: Object.fromEntries(candidate.allowedHarnesses.map((harness) => [harness, { tier: 'adapter-declared', remoteModelProbe: false }])),
-      bundle: { root: path.posix.join(validated.document.generationId, candidate.id), allowlist: candidate.allowlist, treeDigest: candidate.treeDigest },
-    })).sort((left, right) => left.id.localeCompare(right.id)),
+    entries: [...retainedPriorEntries, ...newEntries].sort((left, right) => left.id.localeCompare(right.id)),
   };
   const compositeOverlay = { schemaVersion: OVERLAY_SCHEMA_VERSION, entries: [...manualEntries, ...generatedOverlay.entries] };
   const effective = composeEffectiveCatalog({ publicCatalog: manual.publicCatalog, localOverlay: compositeOverlay });
   if (effective.status !== 'valid') throw new Error(effective.reason || 'generated catalog is invalid');
+
+  const retainedIdentities = (prior?.identities || [])
+    .filter((identity) => !retireIds.has(identity.logicalId)
+      && !candidates.some((candidate) => candidate.logicalId === identity.logicalId));
+  const nextIdentities = [
+    ...retainedIdentities,
+    ...candidates.map((candidate) => ({
+      logicalId: candidate.logicalId,
+      effectiveName: candidate.id,
+      profileDigest: candidate.profileDigest,
+    })),
+  ];
+
+  // Drop absence counters for skills that are live again; keep remaining counters.
+  const mergedAbsences = { ...priorAbsences, ...nextAbsences };
+  for (const logicalId of observedLogicalIds) {
+    if (!nextAbsences[logicalId] && mergedAbsences[logicalId]) delete mergedAbsences[logicalId];
+  }
+  for (const logicalId of retireIds) delete mergedAbsences[logicalId];
+
   const acceptedGeneration = {
     schemaVersion: 'jarvos.skill-source-generation/v1',
-    generationId: validated.document.generationId,
+    generationId: captured.changed ? validated.document.generationId : (prior?.generationId || validated.document.generationId),
     acceptedAt: acceptedAt || validated.document.observedAt,
-    sourceRoot: captured.sourceRoot,
+    sourceRoot: captured.sourceRoot || prior?.sourceRoot || null,
     localSourceRoot: sourceStorePath,
-    entries: generatedOverlay.entries.map((entry) => ({ id: entry.id, treeDigest: entry.bundle.treeDigest, allowlist: entry.bundle.allowlist })),
-    identities: candidates.map((candidate) => ({ logicalId: candidate.logicalId, effectiveName: candidate.id, profileDigest: candidate.profileDigest })),
+    entries: generatedOverlay.entries.map((entry) => ({
+      id: entry.id,
+      treeDigest: entry.bundle.treeDigest,
+      allowlist: entry.bundle.allowlist,
+    })),
+    identities: nextIdentities,
     generatedOverlay,
+    absences: mergedAbsences,
+    tombstones: [
+      ...((prior?.tombstones || []).filter((item) => !observedLogicalIds.has(item.logicalId))),
+      ...[...retireIds].map((logicalId) => ({
+        logicalId,
+        retiredAt: acceptedAt || validated.document.observedAt,
+        reasonCode: 'source_absent',
+      })),
+    ],
   };
-  // source-store has committed the immutable bytes; updating its pointer is
-  // intentionally the final mutation and contains no body content.
-  const changed = captured.changed;
-  if (changed) {
-    atomicWriteJson(acceptedGenerationPath, acceptedGeneration);
-  }
-  if (persist !== false && resolved?.localOverlayPath && (changed || !fs.existsSync(resolved.localOverlayPath))) {
+
+  // Always rewrite the accepted pointer when we mutate overlay/absences/retirements,
+  // even if capture was a no-op (pure retirement).
+  atomicWriteJson(acceptedGenerationPath, acceptedGeneration);
+  if (persist !== false && resolved?.localOverlayPath) {
     atomicWriteJson(resolved.localOverlayPath, compositeOverlay);
   }
   if (persist !== false && config && resolved && config.localSourceRoot !== sourceStorePath) {
     saveConfig({ ...config, localSourceRoot: sourceStorePath }, configPath);
   }
-  const admittedDocument = { ...nextDocument, acceptedGenerationId: acceptedGeneration.generationId, acceptedAt: acceptedGeneration.acceptedAt };
+  const admittedDocument = {
+    ...nextDocument,
+    acceptedGenerationId: acceptedGeneration.generationId,
+    acceptedAt: acceptedGeneration.acceptedAt,
+  };
   return {
     ok: true,
-    mutate: changed,
+    mutate: true,
     document: admittedDocument,
     generatedOverlay,
     effectiveCatalog: effective,
     acceptedGeneration,
-    sourceRoot: captured.sourceRoot,
+    sourceRoot: acceptedGeneration.sourceRoot,
     // Bundle roots are generation/id relative to the immutable store, not to
     // one generation directory. Keep the configured root at the store level.
     localSourceRoot: sourceStorePath,
     admissions: candidates.map((candidate) => ({
       logicalId: candidate.logicalId,
       treeDigest: candidate.treeDigest,
-      created: captured.changed,
+      created: captureCandidates.some((item) => item.logicalId === candidate.logicalId),
+      mode: candidate.mode || 'admit',
     })),
+    retirements: [...retireIds],
     skippedAdmissions,
     classifications,
     status: serializeOutwardStatus(admittedDocument),

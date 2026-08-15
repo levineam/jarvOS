@@ -11,6 +11,7 @@ const {
   loadConfig,
   SUPPORTED_HARNESSES,
   expandHome,
+  collapseHome,
 } = require('./config');
 const {
   CATALOG_SCHEMA_VERSION,
@@ -23,8 +24,46 @@ const {
 const { planSchedulerUnits } = require('./scheduler');
 const { MODULE_ROOT } = require('./operator');
 
+function redactDetail(detail) {
+  if (detail == null) return null;
+  if (typeof detail === 'string') {
+    // Collapse home-rooted absolute paths; drop other absolute paths entirely.
+    if (detail.startsWith('/') || /^[A-Za-z]:[\\/]/.test(detail)) {
+      const collapsed = collapseHome(detail);
+      return collapsed.startsWith('~') ? collapsed : '[redacted-path]';
+    }
+    return detail;
+  }
+  if (Array.isArray(detail)) return detail.map((item) => redactDetail(item));
+  if (typeof detail === 'object') {
+    return Object.fromEntries(
+      Object.entries(detail).map(([key, value]) => [key, redactDetail(value)]),
+    );
+  }
+  return detail;
+}
+
 function check(id, ok, message, detail = null) {
-  return { id, ok: Boolean(ok), message, detail };
+  return { id, ok: Boolean(ok), message, detail: redactDetail(detail) };
+}
+
+function redactDoctorReport(report) {
+  if (!report || typeof report !== 'object') return report;
+  const { configPath, controlRoot, checks, ...rest } = report;
+  return {
+    ...rest,
+    // Outward doctor surface: no absolute machine paths.
+    configPath: configPath ? collapseHome(configPath) : null,
+    controlRootPresent: Boolean(controlRoot),
+    checks: Array.isArray(checks)
+      ? checks.map((item) => ({
+        id: item.id,
+        ok: item.ok,
+        message: item.message,
+        detail: redactDetail(item.detail),
+      }))
+      : checks,
+  };
 }
 
 function readJsonSafe(filePath) {
@@ -241,7 +280,7 @@ function doctorSharedSkills(options = {}) {
   }
 
   const ok = checks.every((item) => item.ok);
-  return {
+  return redactDoctorReport({
     ok,
     surface: 'shared-skills',
     configPath: loaded.path,
@@ -262,7 +301,7 @@ function doctorSharedSkills(options = {}) {
     next: ok
       ? 'Run isolated dogfood, then owner live-preflight checklist before enabling any harness gate.'
       : 'Resolve failing checks before share/apply. Do not enable live gates.',
-  };
+  });
 }
 
 module.exports = {

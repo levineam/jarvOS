@@ -11,7 +11,9 @@ const {
   normalizeConfig,
   saveConfig,
   ensureDir,
+  atomicWriteJson,
   CONFIG_SCHEMA_VERSION,
+  SUPPORTED_HARNESSES,
   loadConfig,
   resolveConfigPaths,
 } = require('../src/config');
@@ -31,7 +33,12 @@ const {
   serializeOutwardStatus,
   INVENTORY_SCHEMA_VERSION,
 } = require('../src/inventory-contract');
-const { computeBundleTree, validateLocalOverlay, DEFAULT_ALLOWED_BUNDLE_GLOBS } = require('../src/catalog');
+const {
+  computeBundleTree,
+  validateLocalOverlay,
+  DEFAULT_ALLOWED_BUNDLE_GLOBS,
+  OVERLAY_SCHEMA_VERSION,
+} = require('../src/catalog');
 const { atomicWriteReceipt } = require('../src/receipts');
 const { inventoryAssessOperator } = require('../src/operator');
 
@@ -588,4 +595,310 @@ test('egress + scripts fails closed to needs_input', () => {
   const skill = assessment.document.skills.find((item) => item.logicalId === 'net-skill');
   assert.equal(skill.disposition.kind, 'needs_input');
   assert.equal(skill.disposition.reasonCode, 'needs_owner_input');
+});
+
+test('changed source updates even when destinations already have receipts', () => {
+  const root = temp('jarvos-update-');
+  const bundle = writeSkill(path.join(root, 'update-skill'), { name: 'update-skill', body: 'v1\n' });
+  const tree1 = computeBundleTree(bundle, { allowlist: DEFAULT_ALLOWED_BUNDLE_GLOBS });
+  const { configPath, config } = seedConfig({ roots: { codex: root }, trustClass: 'markdown-only' });
+  const loaded = loadConfig(configPath);
+  const resolved = resolveConfigPaths(loaded.config);
+  const layout = ensureInventoryStateLayout({
+    controlRoot: resolved.controlRoot,
+    inventory: loaded.config.inventory,
+  });
+
+  // Seed prior accepted generation for v1 with all harnesses allowed.
+  const priorGen = {
+    schemaVersion: 'jarvos.skill-source-generation/v1',
+    generationId: 'gen-update-v1xxxx',
+    acceptedAt: '2026-08-15T11:00:00.000Z',
+    sourceRoot: path.join(layout.sourceStorePath, 'gen-update-v1xxxx'),
+    localSourceRoot: layout.sourceStorePath,
+    entries: [{ id: 'update-skill', treeDigest: tree1.treeDigest, allowlist: [...DEFAULT_ALLOWED_BUNDLE_GLOBS] }],
+    identities: [{ logicalId: 'update-skill', effectiveName: 'update-skill', profileDigest: null }],
+    generatedOverlay: {
+      schemaVersion: OVERLAY_SCHEMA_VERSION,
+      entries: [{
+        id: 'update-skill',
+        allowedHarnesses: ['codex', 'claude', 'openclaw', 'hermes'],
+        verification: Object.fromEntries(['codex', 'claude', 'openclaw', 'hermes'].map((h) => [h, { tier: 'adapter-declared', remoteModelProbe: false }])),
+        bundle: { root: 'gen-update-v1xxxx/update-skill', allowlist: [...DEFAULT_ALLOWED_BUNDLE_GLOBS], treeDigest: tree1.treeDigest },
+      }],
+    },
+  };
+  // Capture prior bytes so store is coherent.
+  fs.mkdirSync(path.join(priorGen.sourceRoot, 'update-skill'), { recursive: true, mode: 0o700 });
+  fs.cpSync(bundle, path.join(priorGen.sourceRoot, 'update-skill'), { recursive: true });
+  atomicWriteJson(layout.acceptedGenerationPath, priorGen);
+
+  // Receipts on every harness destination (post first convergence).
+  for (const harness of ['codex', 'claude', 'openclaw', 'hermes']) {
+    const harnessRoot = path.resolve(String(config.harnesses[harness].root).replace(/^~/, os.homedir()));
+    ensureDir(harnessRoot, 'harness root');
+    atomicWriteReceipt(harnessRoot, {
+      version: 1,
+      id: 'update-skill',
+      effectiveName: 'update-skill',
+      harness,
+      treeDigest: tree1.treeDigest,
+      catalogDigest: 'c'.repeat(64),
+      aliasRevision: 0,
+      targetPath: path.join(harnessRoot, 'update-skill'),
+    });
+  }
+
+  // Mutate source to v2.
+  fs.writeFileSync(path.join(bundle, 'SKILL.md'), '---\nname: update-skill\n---\nv2\n', { mode: 0o600 });
+  const tree2 = computeBundleTree(bundle, { allowlist: DEFAULT_ALLOWED_BUNDLE_GLOBS });
+  assert.notEqual(tree2.treeDigest, tree1.treeDigest);
+
+  const document = {
+    schemaVersion: INVENTORY_SCHEMA_VERSION,
+    generationId: 'gen-update-v2xxxx',
+    acceptedGenerationId: priorGen.generationId,
+    acceptedAt: priorGen.acceptedAt,
+    observedAt: '2026-08-15T12:00:00.000Z',
+    roots: [{
+      rootId: 'root-codex-0',
+      harness: 'codex',
+      root,
+      lifecycle: 'available',
+      trustClass: 'markdown-only',
+      complete: true,
+    }],
+    skills: [{
+      logicalId: 'update-skill',
+      observedName: 'update-skill',
+      treeDigest: tree2.treeDigest,
+      observations: [{
+        rootId: 'root-codex-0',
+        relativePath: 'update-skill',
+        absolutePath: bundle,
+        state: 'changed',
+        observedAt: '2026-08-15T12:00:00.000Z',
+      }],
+      disposition: { kind: 'needs_input', reasonCode: 'incomplete_observation' },
+      matrix: [
+        { harness: 'codex', projection: 'source_present', verification: 'model_visible' },
+        { harness: 'claude', projection: 'installed', verification: 'model_visible' },
+        { harness: 'openclaw', projection: 'installed', verification: 'model_visible' },
+        { harness: 'hermes', projection: 'installed', verification: 'model_visible' },
+      ],
+      attention: 'quiet',
+    }],
+    exclusions: [],
+  };
+
+  const harnessRoots = Object.entries(loaded.config.harnesses).map(([harness, value]) => ({
+    harness,
+    root: path.resolve(String(value.root).replace(/^~/, os.homedir())),
+  }));
+  const assessed = assessInventory({
+    document,
+    sourceStorePath: layout.sourceStorePath,
+    acceptedGenerationPath: layout.acceptedGenerationPath,
+    complete: true,
+    autoAdmit: true,
+    harnessRoots,
+    configPath,
+  });
+  const skill = assessed.document.skills.find((item) => item.logicalId === 'update-skill');
+  assert.equal(skill.disposition.kind, 'shared');
+  assert.equal(skill.disposition.reasonCode, 'rule_proven_update');
+  assert.ok(assessed.admissions.some((item) => item.logicalId === 'update-skill' && item.mode === 'update'));
+  const accepted = readAcceptedGeneration(layout.acceptedGenerationPath);
+  assert.equal(accepted.entries.find((e) => e.id === 'update-skill').treeDigest, tree2.treeDigest);
+});
+
+test('missing source retires after required consecutive absences', () => {
+  const root = temp('jarvos-retire-');
+  const bundle = writeSkill(path.join(root, 'gone-skill'), { name: 'gone-skill' });
+  const tree = computeBundleTree(bundle, { allowlist: DEFAULT_ALLOWED_BUNDLE_GLOBS });
+  const { configPath } = seedConfig({ roots: { codex: root }, trustClass: 'markdown-only' });
+  const loaded = loadConfig(configPath);
+  const resolved = resolveConfigPaths(loaded.config);
+  const layout = ensureInventoryStateLayout({
+    controlRoot: resolved.controlRoot,
+    inventory: loaded.config.inventory,
+  });
+  const priorGen = {
+    schemaVersion: 'jarvos.skill-source-generation/v1',
+    generationId: 'gen-retire-v1xxxx',
+    acceptedAt: '2026-08-15T11:00:00.000Z',
+    sourceRoot: path.join(layout.sourceStorePath, 'gen-retire-v1xxxx'),
+    localSourceRoot: layout.sourceStorePath,
+    entries: [{ id: 'gone-skill', treeDigest: tree.treeDigest, allowlist: [...DEFAULT_ALLOWED_BUNDLE_GLOBS] }],
+    identities: [{ logicalId: 'gone-skill', effectiveName: 'gone-skill', profileDigest: null }],
+    generatedOverlay: {
+      schemaVersion: OVERLAY_SCHEMA_VERSION,
+      entries: [{
+        id: 'gone-skill',
+        allowedHarnesses: ['codex'],
+        verification: { codex: { tier: 'adapter-declared', remoteModelProbe: false } },
+        bundle: { root: 'gen-retire-v1xxxx/gone-skill', allowlist: [...DEFAULT_ALLOWED_BUNDLE_GLOBS], treeDigest: tree.treeDigest },
+      }],
+    },
+    absences: {},
+  };
+  fs.mkdirSync(path.join(priorGen.sourceRoot, 'gone-skill'), { recursive: true, mode: 0o700 });
+  fs.cpSync(bundle, path.join(priorGen.sourceRoot, 'gone-skill'), { recursive: true });
+  atomicWriteJson(layout.acceptedGenerationPath, priorGen);
+  fs.rmSync(bundle, { recursive: true, force: true });
+
+  function missingDoc(generationId, observedAt) {
+    return {
+      schemaVersion: INVENTORY_SCHEMA_VERSION,
+      generationId,
+      acceptedGenerationId: priorGen.generationId,
+      acceptedAt: priorGen.acceptedAt,
+      observedAt,
+      roots: [{
+        rootId: 'root-codex-0',
+        harness: 'codex',
+        root,
+        lifecycle: 'available',
+        trustClass: 'markdown-only',
+        complete: true,
+      }],
+      skills: [{
+        logicalId: 'gone-skill',
+        observedName: 'gone-skill',
+        treeDigest: tree.treeDigest,
+        observations: [{
+          rootId: 'root-codex-0',
+          relativePath: 'gone-skill',
+          absolutePath: bundle,
+          state: 'missing',
+          observedAt,
+        }],
+        disposition: { kind: 'needs_input', reasonCode: 'incomplete_observation' },
+        matrix: SUPPORTED_HARNESSES.map((harness) => ({
+          harness,
+          projection: 'missing',
+          verification: 'verification_pending',
+        })),
+        attention: 'quiet',
+      }],
+      exclusions: [],
+    };
+  }
+
+  const first = assessInventory({
+    document: missingDoc('gen-retire-miss01', '2026-08-15T12:00:00.000Z'),
+    sourceStorePath: layout.sourceStorePath,
+    acceptedGenerationPath: layout.acceptedGenerationPath,
+    complete: true,
+    autoAdmit: true,
+    configPath,
+  });
+  assert.equal(first.document.skills[0].disposition.reasonCode, 'source_absent');
+  assert.equal(first.retirements?.length || 0, 0);
+  const afterFirst = readAcceptedGeneration(layout.acceptedGenerationPath);
+  assert.equal(afterFirst.absences['gone-skill'].count, 1);
+  assert.ok(afterFirst.generatedOverlay.entries.some((e) => e.id === 'gone-skill'));
+
+  const second = assessInventory({
+    document: missingDoc('gen-retire-miss02', '2026-08-15T13:00:00.000Z'),
+    sourceStorePath: layout.sourceStorePath,
+    acceptedGenerationPath: layout.acceptedGenerationPath,
+    complete: true,
+    autoAdmit: true,
+    configPath,
+  });
+  assert.equal(second.document.skills[0].disposition.reasonCode, 'source_retired');
+  assert.deepEqual(second.retirements, ['gone-skill']);
+  const afterSecond = readAcceptedGeneration(layout.acceptedGenerationPath);
+  assert.equal(afterSecond.generatedOverlay.entries.some((e) => e.id === 'gone-skill'), false);
+  assert.ok((afterSecond.tombstones || []).some((t) => t.logicalId === 'gone-skill'));
+});
+
+test('reviewer-selected divergent digest is admitted', () => {
+  const root = temp('jarvos-review-select-');
+  const left = writeSkill(path.join(root, 'left-copy'), { name: 'shared-name', body: 'left\n' });
+  const rightDir = temp('jarvos-review-select-b-');
+  const right = writeSkill(path.join(rightDir, 'right-copy'), { name: 'shared-name', body: 'right\n' });
+  const leftTree = computeBundleTree(left, { allowlist: DEFAULT_ALLOWED_BUNDLE_GLOBS });
+  const rightTree = computeBundleTree(right, { allowlist: DEFAULT_ALLOWED_BUNDLE_GLOBS });
+  assert.notEqual(leftTree.treeDigest, rightTree.treeDigest);
+  const { configPath } = seedConfig({ roots: { codex: root }, trustClass: 'markdown-only' });
+  const loaded = loadConfig(configPath);
+  const resolved = resolveConfigPaths(loaded.config);
+  const layout = ensureInventoryStateLayout({
+    controlRoot: resolved.controlRoot,
+    inventory: loaded.config.inventory,
+  });
+  // Register both absolute roots via document roots list.
+  const document = {
+    schemaVersion: INVENTORY_SCHEMA_VERSION,
+    generationId: 'gen-reviewsel0001',
+    acceptedGenerationId: null,
+    acceptedAt: null,
+    observedAt: '2026-08-15T12:00:00.000Z',
+    roots: [
+      {
+        rootId: 'root-a',
+        harness: 'codex',
+        root,
+        lifecycle: 'available',
+        trustClass: 'markdown-only',
+        complete: true,
+      },
+      {
+        rootId: 'root-b',
+        harness: 'codex',
+        root: rightDir,
+        lifecycle: 'available',
+        trustClass: 'markdown-only',
+        complete: true,
+      },
+    ],
+    skills: [{
+      logicalId: 'shared-name',
+      observedName: 'shared-name',
+      treeDigest: leftTree.treeDigest,
+      observations: [
+        {
+          rootId: 'root-a',
+          relativePath: 'left-copy',
+          absolutePath: left,
+          state: 'new',
+          observedAt: '2026-08-15T12:00:00.000Z',
+        },
+        {
+          rootId: 'root-b',
+          relativePath: 'right-copy',
+          absolutePath: right,
+          state: 'new',
+          observedAt: '2026-08-15T12:00:00.000Z',
+        },
+      ],
+      disposition: { kind: 'needs_input', reasonCode: 'incomplete_observation' },
+      matrix: SUPPORTED_HARNESSES.map((harness) => ({
+        harness,
+        projection: harness === 'codex' ? 'source_present' : 'missing',
+        verification: 'verification_pending',
+      })),
+      attention: 'quiet',
+    }],
+    exclusions: [],
+  };
+  const assessed = assessInventory({
+    document,
+    sourceStorePath: layout.sourceStorePath,
+    acceptedGenerationPath: layout.acceptedGenerationPath,
+    complete: true,
+    autoAdmit: true,
+    harnessRoots: Object.entries(loaded.config.harnesses).map(([harness, value]) => ({
+      harness,
+      root: path.resolve(String(value.root).replace(/^~/, os.homedir())),
+    })),
+    reviewer: () => ({ kind: 'same_purpose', selectedDigest: rightTree.treeDigest }),
+    configPath,
+  });
+  const skill = assessed.document.skills.find((item) => item.logicalId === 'shared-name');
+  assert.equal(skill.disposition.kind, 'shared');
+  assert.equal(skill.treeDigest, rightTree.treeDigest);
+  assert.ok(assessed.admissions.some((item) => item.treeDigest === rightTree.treeDigest));
 });

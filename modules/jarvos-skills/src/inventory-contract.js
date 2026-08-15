@@ -51,7 +51,10 @@ const ATTENTION_STATES = Object.freeze(['quiet', 'actionable', 'resolved']);
 
 const ALLOWED_REASON_CODES = Object.freeze([
   'rule_proven_portable',
+  'rule_proven_update',
   'already_managed_receipt',
+  'source_absent',
+  'source_retired',
   'harness_native',
   'vendor_managed',
   'unsafe_source',
