@@ -1,6 +1,6 @@
 'use strict';
 const assert = require('node:assert/strict'); const fs = require('node:fs'); const os = require('node:os'); const path = require('node:path'); const test = require('node:test');
-const { createSharedSkillManager } = require('../src');
+const { computeBundleTree, createSharedSkillManager } = require('../src');
 test('shared manager exposes redacted reads and protects mutations and scheduler scope', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-shared-manager-')); fs.chmodSync(root, 0o700);
   try {
@@ -25,4 +25,29 @@ test('share and refresh write only an explicit local overlay preview', () => {
     const overlay = path.join(root, 'overlay.json'); const result = manager.execute({ operation: 'share', principal, overlayPath: overlay, skillPath: skill, id: 'local-skill' });
     assert.equal(result.status, 'preview_required'); assert.equal(JSON.parse(fs.readFileSync(overlay, 'utf8')).entries[0].id, 'local-skill');
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test('repeated clean repair is a redacted no-op without changing manager state', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-clean-manager-'));
+  const sourceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-clean-source-'));
+  const harnessRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-clean-harness-'));
+  for (const dir of [root, sourceRoot, harnessRoot]) fs.chmodSync(dir, 0o700);
+  try {
+    const skillRoot = path.join(sourceRoot, 'clean-skill'); fs.mkdirSync(skillRoot, { mode: 0o700 });
+    fs.writeFileSync(path.join(skillRoot, 'SKILL.md'), '---\nname: clean-skill\n---\n', { mode: 0o600 });
+    const tree = computeBundleTree(skillRoot, { allowlist: ['SKILL.md'] });
+    const catalog = { entries: [{ id: 'clean-skill', allowedHarnesses: ['codex'], bundle: { root: 'clean-skill', allowlist: ['SKILL.md'], treeDigest: tree.treeDigest } }] };
+    const principal = { kind: 'human', capabilities: ['skills.mutate'] };
+    const manager = createSharedSkillManager({ stateRoot: root, scheduler: { register: () => ({ status: 'registered' }) } });
+    manager.execute({ operation: 'enable', principal, harnesses: [{ id: 'codex', root: harnessRoot }] });
+    const applied = manager.execute({ operation: 'apply', principal, catalog, publicSourceRoot: sourceRoot, harnesses: [{ id: 'codex', root: harnessRoot }] });
+    assert.equal(applied.status, 'applied');
+    const stateFile = path.join(root, 'shared-skills-state.json'); const before = fs.readFileSync(stateFile, 'utf8');
+    const repaired = manager.execute({ operation: 'repair', principal, catalog, publicSourceRoot: sourceRoot, harnesses: [{ id: 'codex', root: harnessRoot }] });
+    assert.deepEqual(repaired, { operation: 'repair', status: 'noop', state: { generation: 2, enabled: true, enrolled: ['codex'], acceptedGeneration: null, lastCatalogDigest: applied.state.lastCatalogDigest } });
+    assert.equal(fs.readFileSync(stateFile, 'utf8'), before);
+    assert.equal(fs.existsSync(path.join(root, 'reconciliation', 'shared-skill-reconcile.journal.json')), false);
+  } finally {
+    for (const dir of [root, sourceRoot, harnessRoot]) fs.rmSync(dir, { recursive: true, force: true });
+  }
 });

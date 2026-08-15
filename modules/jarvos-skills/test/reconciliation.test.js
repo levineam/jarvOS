@@ -9,6 +9,7 @@ const test = require('node:test');
 const {
   CATALOG_SCHEMA_VERSION,
   OVERLAY_SCHEMA_VERSION,
+  attestCatalogBundle,
   computeBundleTree,
   composeEffectiveCatalog,
 } = require('../src/catalog');
@@ -151,6 +152,30 @@ test('multiple skills across four harnesses install once and stay clean on secon
   } finally {
     fs.rmSync(control, { recursive: true, force: true });
     fs.rmSync(sourceRoot, { recursive: true, force: true });
+    for (const root of Object.values(roots)) fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('planning attests one catalog source once across eligible harnesses', () => {
+  const control = temp('jarvos-recon-attestation-control-');
+  const sourceRoot = temp('jarvos-recon-attestation-source-');
+  const roots = { codex: temp('jarvos-recon-attestation-codex-'), claude: temp('jarvos-recon-attestation-claude-'), hermes: temp('jarvos-recon-attestation-hermes-') };
+  try {
+    copyFixture(PUBLIC_FIXTURE, path.join(sourceRoot, 'public-fixture'));
+    const tree = computeBundleTree(path.join(sourceRoot, 'public-fixture'), { allowlist: ['SKILL.md', 'scripts/**', 'assets/**'] });
+    const catalog = { entries: [{ id: 'public-fixture', allowedHarnesses: ['codex', 'claude', 'hermes'], bundle: { root: 'public-fixture', allowlist: ['SKILL.md', 'scripts/**', 'assets/**'], treeDigest: tree.treeDigest } }] };
+    let attestations = 0;
+    const plan = planCatalogReconciliation({
+      catalog,
+      publicSourceRoot: sourceRoot,
+      harnesses: harnesses(roots),
+      controlRoot: control,
+      attestCatalogBundle: (...args) => { attestations += 1; return attestCatalogBundle(...args); },
+    });
+    assert.equal(plan.pairs.length, 3);
+    assert.equal(attestations, 1);
+  } finally {
+    fs.rmSync(control, { recursive: true, force: true }); fs.rmSync(sourceRoot, { recursive: true, force: true });
     for (const root of Object.values(roots)) fs.rmSync(root, { recursive: true, force: true });
   }
 });

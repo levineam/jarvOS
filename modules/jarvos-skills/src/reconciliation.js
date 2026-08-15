@@ -130,11 +130,11 @@ function sourceRootFor(entry, { publicSourceRoot, localSourceRoot }) {
   return publicSourceRoot;
 }
 
-function classifyPair({ entry, harness, effectiveName, sourceRoot, catalogDigest, aliasRevision }) {
+function classifyPair({ entry, harness, effectiveName, sourceRoot, sourceAttestation = null, catalogDigest, aliasRevision }) {
   const target = targetDir(harness.root, effectiveName);
   const receiptRaw = readReceipt(harness.root, effectiveName);
   const receipt = validateReceipt(receiptRaw);
-  const source = attestCatalogBundle(entry, { sourceRoot });
+  const source = sourceAttestation || attestCatalogBundle(entry, { sourceRoot });
 
   if (!fs.existsSync(target)) {
     if (receipt && receipt.id === entry.id && receipt.treeDigest === source.treeDigest) {
@@ -362,12 +362,18 @@ function planCatalogReconciliation(options = {}) {
       localSourceRoot: options.localSourceRoot,
     });
 
-    for (const harness of harnesses.filter((item) => entry.allowedHarnesses.includes(item.id))) {
+    const enrolled = harnesses.filter((item) => entry.allowedHarnesses.includes(item.id));
+    if (enrolled.length === 0) continue;
+    // The source bundle is immutable for the duration of planning. Attest it
+    // once per catalog entry, then retain a fresh attestation in apply.
+    const sourceAttestation = (options.attestCatalogBundle || attestCatalogBundle)(entry, { sourceRoot });
+    for (const harness of enrolled) {
       const classified = classifyPair({
         entry,
         harness,
         effectiveName,
         sourceRoot,
+        sourceAttestation,
         catalogDigest,
         aliasRevision: aliasState.data.revision,
       });
@@ -570,6 +576,17 @@ function applyCatalogReconciliation(plan, options = {}) {
 
   const aliasCommit = commitAliasesIfNeeded(plan);
   const aliasRevision = aliasCommit.revision;
+
+  const hasActionablePairs = plan.pairs.some((pair) => pair.action === 'install' || pair.action === 'retire');
+  if (!aliasCommit.changed && !hasActionablePairs) {
+    return {
+      ok: true,
+      noop: true,
+      applied: [],
+      aliasRevision,
+      notices: plan.notices || [],
+    };
+  }
 
   writeJournal(plan.journalFile, {
     version: 1,

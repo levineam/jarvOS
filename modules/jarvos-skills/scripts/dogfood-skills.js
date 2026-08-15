@@ -10,7 +10,7 @@ const os = require('node:os');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const skills = require('../src');
-const { loadConfig } = require('../src/config');
+const { atomicWriteJson, collapseHome, expandHome, loadConfig } = require('../src/config');
 
 const args = new Set(process.argv.slice(2));
 const configArg = process.argv.slice(2).find((arg) => arg.startsWith('--config='));
@@ -18,8 +18,7 @@ function liveReceipt(payload, receiptPath) {
   const unsigned = { schemaVersion: 'jarvos.shared-skill-live-matrix/v1', ...payload };
   const signature = crypto.createHash('sha256').update(JSON.stringify(unsigned)).digest('hex');
   const receipt = { ...unsigned, signature };
-  fs.mkdirSync(path.dirname(receiptPath), { recursive: true, mode: 0o700 });
-  fs.writeFileSync(receiptPath, `${JSON.stringify(receipt, null, 2)}\n`, { mode: 0o600 });
+  atomicWriteJson(receiptPath, receipt);
   return receipt;
 }
 function runLive() {
@@ -37,10 +36,11 @@ function runLive() {
     if (entry.sourceKind === 'local-overlay' && live.egress?.[harness] !== true) throw new Error(`live dogfood requires explicit egress authorization for private ${entry.id}/${harness}`);
   }
   const dryRun = args.has('--dry-run'); const pairs = effective.catalog.pairs.filter((pair) => selectedHarnesses.some((h) => h.id === pair.harness)).map((pair) => ({ id: pair.id, harness: pair.harness, sourceKind: pair.sourceKind, treeDigest: pair.treeDigest, status: dryRun ? 'preflight_only' : 'verification_pending' }));
-  const receipt = liveReceipt({ mode: 'live', dryRun, catalogDigest: effective.digest, pairCount: pairs.length, pairs, generatedAt: new Date().toISOString() }, path.resolve(live.receiptPath));
-  process.stdout.write(`${JSON.stringify({ mode: 'live', dryRun, catalogDigest: receipt.catalogDigest, pairCount: receipt.pairCount, receiptPath: receiptPathForOutput(live.receiptPath), signature: receipt.signature })}\n`);
+  const receiptPath = path.resolve(expandHome(live.receiptPath));
+  const receipt = liveReceipt({ mode: 'live', dryRun, catalogDigest: effective.digest, pairCount: pairs.length, pairs, generatedAt: new Date().toISOString() }, receiptPath);
+  process.stdout.write(`${JSON.stringify({ mode: 'live', dryRun, catalogDigest: receipt.catalogDigest, pairCount: receipt.pairCount, receiptPath: receiptPathForOutput(receiptPath), signature: receipt.signature })}\n`);
 }
-function receiptPathForOutput(value) { return value.startsWith(os.homedir()) ? `~${value.slice(os.homedir().length)}` : value; }
+function receiptPathForOutput(value) { return collapseHome(expandHome(value)); }
 if (args.has('--matrix') && args.has('--live')) {
   try { runLive(); } catch (error) { process.stderr.write(`${error.message}\n`); process.exitCode = 2; }
 } else if (!args.has('--matrix') || !args.has('--isolated') || args.has('--live')) {
