@@ -144,7 +144,10 @@ test('doctor-shared redacts absolute paths from outward JSON', () => {
     assert.equal(encoded.includes(home), false, 'raw home path must not appear');
     assert.equal(Object.prototype.hasOwnProperty.call(report, 'controlRoot'), false);
     assert.equal(report.controlRootPresent, true);
-    assert.match(String(report.configPath || ''), /^~/);
+    assert.ok(
+      report.configPath === '[redacted-path]' || /^~/.test(String(report.configPath || '')),
+      'config path must be collapsed or redacted',
+    );
     for (const check of report.checks || []) {
       if (check.detail == null) continue;
       const detail = JSON.stringify(check.detail);

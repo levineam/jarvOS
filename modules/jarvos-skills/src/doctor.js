@@ -24,13 +24,17 @@ const {
 const { planSchedulerUnits } = require('./scheduler');
 const { MODULE_ROOT } = require('./operator');
 
+function redactPath(value) {
+  const collapsed = collapseHome(value);
+  return collapsed.startsWith('~') ? collapsed : '[redacted-path]';
+}
+
 function redactDetail(detail) {
   if (detail == null) return null;
   if (typeof detail === 'string') {
     // Collapse home-rooted absolute paths; drop other absolute paths entirely.
     if (detail.startsWith('/') || /^[A-Za-z]:[\\/]/.test(detail)) {
-      const collapsed = collapseHome(detail);
-      return collapsed.startsWith('~') ? collapsed : '[redacted-path]';
+      return redactPath(detail);
     }
     return detail;
   }
@@ -53,7 +57,7 @@ function redactDoctorReport(report) {
   return {
     ...rest,
     // Outward doctor surface: no absolute machine paths.
-    configPath: configPath ? collapseHome(configPath) : null,
+    configPath: configPath ? redactPath(configPath) : null,
     controlRootPresent: Boolean(controlRoot),
     checks: Array.isArray(checks)
       ? checks.map((item) => ({
