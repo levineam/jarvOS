@@ -39,6 +39,7 @@ const {
   validateInventoryDocument,
   validateExclusionOverlay,
   serializeOutwardStatus,
+  opaqueSkillId,
   validateOutwardStatus,
   serializeOwnerInspect,
   validateOwnerInspect,
@@ -305,7 +306,8 @@ test('outward status omits privacy sentinels while owner inspect may reveal name
   assert.equal(statusText.includes(rawParserError), false);
   assert.equal(statusText.includes(credential), false);
   assert.equal(statusText.includes(os.homedir()), false);
-  assert.equal(status.skills[0].logicalId, 'skill-opaque-1');
+  assert.equal(status.skills[0].logicalId, opaqueSkillId('skill-opaque-1'));
+  assert.notEqual(status.skills[0].logicalId, 'skill-opaque-1');
   assert.equal(status.skills[0].treeDigest, DIGEST_A);
   assert.equal(status.skills[0].disposition.reasonCode, 'rule_proven_portable');
 
@@ -382,12 +384,25 @@ test('config inventory policy has finite defaults and retirement floor', () => {
   assert.ok(policy.limits.maxRoots >= 1);
   assert.ok(policy.limits.maxEntriesPerRoot >= 1);
   assert.ok(policy.limits.maxBundleFiles >= 1);
+  assert.ok(policy.limits.maxBundleDirectories >= 1);
+  assert.ok(policy.limits.maxBundleDepth >= 1);
   assert.ok(policy.limits.maxBundleBytes >= 1);
   assert.ok(policy.limits.maxEventsPerRun >= 1);
   assert.ok(policy.limits.maxRollbackGenerations >= 1);
   assert.ok(policy.limits.maxAttentionHistory >= 1);
   assert.equal(Number.isFinite(policy.limits.maxRoots), true);
+  assert.equal(Number.isFinite(policy.limits.maxBundleDirectories), true);
+  assert.equal(Number.isFinite(policy.limits.maxBundleDepth), true);
   assert.equal(Number.isFinite(policy.eventQuiescence.digestStabilityMs), true);
+
+  assert.throws(
+    () => normalizeInventoryPolicy({ limits: { maxBundleDirectories: 10_001 } }),
+    /maxBundleDirectories/,
+  );
+  assert.throws(
+    () => normalizeInventoryPolicy({ limits: { maxBundleDepth: 65 } }),
+    /maxBundleDepth/,
+  );
 
   const retirement = normalizeRetirementPolicy(policy.retirement, {
     intervalMinutes: config.scheduler.intervalMinutes,

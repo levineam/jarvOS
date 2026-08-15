@@ -20,7 +20,8 @@
     "url": "https://github.com/levineam/jarvOS.git"
   },
   "dependencies": {
-    "@jarvos/control-plane": "0.1.0"
+    "@jarvos/control-plane": "0.1.0",
+    "@jarvos/skills": "0.3.0"
   },
   "peerDependencies": {
     "@jarvos/gbrain": "0.1.0",

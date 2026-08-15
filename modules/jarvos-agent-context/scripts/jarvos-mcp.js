@@ -10,6 +10,7 @@ const {
   healthTodayJournal,
   hydrate,
   loadControlPlaneManager,
+  loadSharedSkills,
   recall,
   proposeProjectsContext,
   readProjectsContext,
@@ -22,6 +23,7 @@ const {
 
 const CREDENTIAL_ENV = 'JARVOS_CONTROL_PLANE_CREDENTIAL';
 const CREDENTIAL_FILE_ENV = 'JARVOS_CONTROL_PLANE_CREDENTIAL_FILE';
+const SHARED_SKILLS_CONFIG_ENV = 'JARVOS_SHARED_SKILLS_CONFIG_PATH';
 const STRICT_EMPTY_ARGUMENT_TOOLS = new Set([
   'jarvos_journal_health',
   'jarvos_ensure_today_journal',
@@ -71,6 +73,20 @@ const TOOLS = [
         requestId: { type: 'string' },
         actor: { type: 'object' }, resource: { type: 'object' }, mutationClass: { type: 'string' },
         desiredGeneration: { type: 'string' }, commandSpec: { type: 'object' }, idempotencyKey: { type: 'string' }, fence: { type: 'number' },
+      },
+    },
+  },
+  {
+    name: 'jarvos_shared_skills',
+    description: 'Inspect and manage cross-harness shared-skill parity. Status and explain are redacted reads; all other operations require the host-bound owner session and never reveal private names, paths, or bodies.',
+    inputSchema: {
+      type: 'object',
+      required: ['operation'],
+      additionalProperties: false,
+      properties: {
+        operation: { type: 'string', enum: ['status', 'explain', 'inventory', 'plan', 'repair', 'exclude', 'include'] },
+        id: { type: 'string', description: 'Owner-known canonical skill id for explain, exclude, or include.' },
+        reasonCode: { type: 'string', description: 'Optional exclusion reason code.' },
       },
     },
   },
@@ -367,6 +383,54 @@ function requireEmptyObjectArguments(args) {
   }
 }
 
+function sharedSkillsConfigPath(env = process.env) {
+  const value = env[SHARED_SKILLS_CONFIG_ENV];
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
+function requireSharedSkillsOwnerSession() {
+  const credential = resolveHostCredential();
+  if (!credential) throw new Error('shared-skill owner session is not configured for this MCP session');
+}
+
+function redactSharedSkillPlan(result, opaqueSkillId) {
+  return {
+    ok: result?.ok !== false,
+    mode: 'plan',
+    catalogDigest: result?.catalogDigest || null,
+    aliasRevision: result?.aliasRevision ?? null,
+    pairs: (result?.pairs || []).map((pair) => ({
+      id: opaqueSkillId(pair.id),
+      harness: pair.harness,
+      effectiveName: pair.effectiveName ? opaqueSkillId(pair.effectiveName) : null,
+      status: pair.status,
+      action: pair.action || null,
+      reason: pair.reason || null,
+    })),
+  };
+}
+
+function redactSharedSkillMutation(result, opaqueSkillId) {
+  const safe = {
+    ok: result?.ok !== false,
+    mode: result?.mode || null,
+    repaired: result?.repaired,
+    mutationDenied: result?.mutationDenied,
+    reason: result?.reason || null,
+  };
+  if (result?.logicalId) safe.logicalId = opaqueSkillId(result.logicalId);
+  if (Array.isArray(result?.applied)) {
+    safe.applied = result.applied.map((item) => ({
+      id: opaqueSkillId(item.id),
+      harness: item.harness,
+      effectiveName: item.effectiveName ? opaqueSkillId(item.effectiveName) : null,
+      status: item.status,
+      applied: item.applied === true,
+    }));
+  }
+  return safe;
+}
+
 async function callTool(name, args = {}) {
   args = normalizeToolArguments(name, args);
   if (name === 'jarvos_journal_health') {
@@ -402,6 +466,38 @@ async function callTool(name, args = {}) {
     }
     const result = controlPlane(input.operation, { ...input, credential: hostCredential });
     return textResult(JSON.stringify(result, null, 2), !result.ok);
+  }
+  if (name === 'jarvos_shared_skills') {
+    const skills = loadSharedSkills();
+    const configPath = sharedSkillsConfigPath();
+    const operation = args.operation;
+    if (operation === 'status') {
+      return textResult(JSON.stringify(skills.sharedStatusOperator({ configPath }), null, 2));
+    }
+    if (operation === 'explain') {
+      return textResult(JSON.stringify(skills.explainOperator({ configPath, id: args.id }), null, 2));
+    }
+    try {
+      requireSharedSkillsOwnerSession();
+    } catch (error) {
+      return textResult(error.message, true);
+    }
+    if (operation === 'inventory') {
+      return textResult(JSON.stringify(skills.inventoryStatusOperator({ configPath, persist: false }), null, 2));
+    }
+    if (operation === 'plan') {
+      return textResult(JSON.stringify(redactSharedSkillPlan(skills.planOperator({ configPath }), skills.opaqueSkillId), null, 2));
+    }
+    if (operation === 'repair') {
+      return textResult(JSON.stringify(redactSharedSkillMutation(skills.repairOperator({ configPath }), skills.opaqueSkillId), null, 2));
+    }
+    if (operation === 'exclude') {
+      return textResult(JSON.stringify(redactSharedSkillMutation(skills.excludeSkillOperator({ configPath, id: args.id, reasonCode: args.reasonCode }), skills.opaqueSkillId), null, 2));
+    }
+    if (operation === 'include') {
+      return textResult(JSON.stringify(redactSharedSkillMutation(skills.includeSkillOperator({ configPath, id: args.id }), skills.opaqueSkillId), null, 2));
+    }
+    return textResult('unsupported shared-skill operation', true);
   }
   if (name === 'jarvos_current_work') {
     const result = await currentWork(args);

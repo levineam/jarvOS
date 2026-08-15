@@ -553,6 +553,7 @@ test('MCP tool list includes jarvOS tools', () => {
   const names = TOOLS.map((tool) => tool.name);
   assert.deepEqual(names, [
     'jarvos_control_plane',
+    'jarvos_shared_skills',
     'jarvos_current_work',
     'jarvos_projects_context',
     'jarvos_projects_propose',
@@ -576,6 +577,66 @@ test('MCP tool list includes jarvOS tools', () => {
   assert.match(ensureDescription, /explicit user request/);
   assert.match(ensureDescription, /trusted host-declared maintenance trigger/);
   assert.match(ensureDescription, /do not run this during startup/);
+  const shared = TOOLS.find((tool) => tool.name === 'jarvos_shared_skills');
+  assert.deepEqual(shared.inputSchema.properties.operation.enum, [
+    'status', 'explain', 'inventory', 'plan', 'repair', 'exclude', 'include',
+  ]);
+  assert.equal('credential' in shared.inputSchema.properties, false);
+});
+
+test('shared-skill MCP mutation operations fail closed without a host-bound owner session', async () => {
+  const previous = process.env.JARVOS_CONTROL_PLANE_CREDENTIAL;
+  const previousFile = process.env.JARVOS_CONTROL_PLANE_CREDENTIAL_FILE;
+  delete process.env.JARVOS_CONTROL_PLANE_CREDENTIAL;
+  delete process.env.JARVOS_CONTROL_PLANE_CREDENTIAL_FILE;
+  try {
+    for (const operation of ['inventory', 'plan', 'repair', 'exclude', 'include']) {
+      const result = await callTool('jarvos_shared_skills', { operation, id: 'private-skill' });
+      assert.equal(result.isError, true);
+      assert.match(result.content[0].text, /owner session is not configured/i);
+      assert.doesNotMatch(result.content[0].text, /private-skill|absolutePath/);
+    }
+  } finally {
+    if (previous === undefined) delete process.env.JARVOS_CONTROL_PLANE_CREDENTIAL;
+    else process.env.JARVOS_CONTROL_PLANE_CREDENTIAL = previous;
+    if (previousFile === undefined) delete process.env.JARVOS_CONTROL_PLANE_CREDENTIAL_FILE;
+    else process.env.JARVOS_CONTROL_PLANE_CREDENTIAL_FILE = previousFile;
+  }
+});
+
+test('shared-skill MCP status and explain match redacted operator behavior', async () => {
+  const skills = require('../../jarvos-skills/src');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-mcp-skills-'));
+  fs.chmodSync(root, 0o700);
+  const harnessRoot = path.join(root, 'skills');
+  const bundle = path.join(harnessRoot, 'secret-transcribe');
+  fs.mkdirSync(bundle, { recursive: true, mode: 0o700 });
+  fs.writeFileSync(path.join(bundle, 'SKILL.md'), '---\nname: secret-transcribe\n---\n', { mode: 0o600 });
+  const controlRoot = path.join(root, 'control');
+  const configPath = path.join(controlRoot, 'config.json');
+  const config = skills.defaultConfig();
+  config.controlRoot = controlRoot;
+  config.publicCatalogPath = path.join(controlRoot, 'public-catalog.json');
+  config.localOverlayPath = path.join(controlRoot, 'local-overlay.json');
+  config.inventory.enabled = true;
+  config.inventory.registeredRoots = [{
+    rootId: 'codex-private', harness: 'codex', root: harnessRoot, trustClass: 'markdown-only', lifecycle: 'available',
+  }];
+  skills.saveConfig(config, configPath);
+  const previous = process.env.JARVOS_SHARED_SKILLS_CONFIG_PATH;
+  process.env.JARVOS_SHARED_SKILLS_CONFIG_PATH = configPath;
+  try {
+    for (const [operation, args] of [['status', {}], ['explain', { id: 'secret-transcribe' }]]) {
+      const result = await callTool('jarvos_shared_skills', { operation, ...args });
+      assert.equal(result.isError, false);
+      assert.doesNotMatch(result.content[0].text, /secret-transcribe|absolutePath|SKILL\.md/);
+      assert.match(result.content[0].text, /skill-[a-f0-9]{24}/);
+    }
+  } finally {
+    if (previous === undefined) delete process.env.JARVOS_SHARED_SKILLS_CONFIG_PATH;
+    else process.env.JARVOS_SHARED_SKILLS_CONFIG_PATH = previous;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test('MCP journal actions expose closed empty-object schemas and safe lifecycle results', () => {

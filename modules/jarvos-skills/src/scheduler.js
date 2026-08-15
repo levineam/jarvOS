@@ -68,6 +68,7 @@ function createInventoryWatcher({
   if (!Number.isInteger(maxEvents) || maxEvents < 1) throw new Error('maxEvents must be positive');
   const queue = new Set();
   const watchers = [];
+  const degradedWatchers = new WeakSet();
   let timer = null;
   let overflowed = false;
   let closed = false;
@@ -92,7 +93,24 @@ function createInventoryWatcher({
   for (const root of roots) {
     try {
       if (!fs.existsSync(root)) continue;
-      watchers.push(watch(root, { persistent: false }, (_event, filename) => request(filename ? path.join(root, filename) : root)));
+      const watcher = watch(
+        root,
+        { persistent: false },
+        (_event, filename) => request(filename ? path.join(root, filename) : root),
+      );
+      watchers.push(watcher);
+      if (watcher && typeof watcher.on === 'function') {
+        watcher.on('error', () => {
+          if (closed || degradedWatchers.has(watcher)) return;
+          degradedWatchers.add(watcher);
+          try { watcher.close(); } catch { /* periodic fallback remains authoritative */ }
+          // An async watcher failure must not escape as an uncaught EventEmitter
+          // error. Request one coalesced full cycle; the periodic scheduler remains
+          // the correctness backstop after this watcher is degraded.
+          overflowed = true;
+          request(root);
+        });
+      }
     } catch {
       // A periodic run handles unavailable roots; request one bounded fallback.
       overflowed = true;

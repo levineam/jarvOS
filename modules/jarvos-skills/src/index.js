@@ -1262,6 +1262,7 @@ module.exports = {
   validateInventoryDocument: inventoryContract.validateInventoryDocument,
   validateExclusionOverlay: inventoryContract.validateExclusionOverlay,
   serializeOutwardStatus: inventoryContract.serializeOutwardStatus,
+  opaqueSkillId: inventoryContract.opaqueSkillId,
   validateOutwardStatus: inventoryContract.validateOutwardStatus,
   serializeOwnerInspect: inventoryContract.serializeOwnerInspect,
   validateOwnerInspect: inventoryContract.validateOwnerInspect,

@@ -6,6 +6,7 @@ const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
 const { spawnSync } = require('node:child_process');
+const { EventEmitter } = require('node:events');
 
 const { createInventoryWatcher, buildRefreshCommand } = require('../src/scheduler');
 const { defaultConfig, normalizeConfig, saveConfig, loadConfig, ensureDir } = require('../src/config');
@@ -18,6 +19,7 @@ const {
   claudeProofOperator,
 } = require('../src/operator');
 const { reconcileAttention, redactedAttention } = require('../src/attention');
+const { opaqueSkillId } = require('../src/inventory-contract');
 
 const CLI = path.join(__dirname, '..', 'scripts', 'install-skills.js');
 
@@ -113,6 +115,61 @@ test('event watcher coalesces requests, suppresses projections, and bounds backl
   fs.rmSync(root, { recursive: true, force: true });
 });
 
+test('event watcher requests fallback after watch startup failure and closes active watchers', () => {
+  const root = temp('jarvos-watch-recovery-');
+  let timer = null;
+  const cycles = [];
+  let closeCount = 0;
+  const failed = createInventoryWatcher({
+    roots: [root],
+    watch() { throw new Error('fixture watch unavailable'); },
+    setTimer(fn) { timer = fn; return 1; },
+    clearTimer() {},
+    onCycle(cycle) { cycles.push(cycle); },
+  });
+  timer();
+  assert.equal(cycles[0].reason, 'watcher_overflow');
+  assert.deepEqual(cycles[0].events, [root]);
+  failed.close();
+
+  const active = createInventoryWatcher({
+    roots: [root],
+    watch() { return { close() { closeCount += 1; } }; },
+    setTimer(fn) { timer = fn; return 2; },
+    clearTimer() {},
+    onCycle(cycle) { cycles.push(cycle); },
+  });
+  active.close();
+  assert.equal(closeCount, 1);
+  assert.equal(active.request(path.join(root, 'after-close')), false);
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+test('event watcher degrades an async FSWatcher error into one bounded fallback cycle', () => {
+  const root = temp('jarvos-watch-async-error-');
+  let timer = null;
+  let closeCount = 0;
+  const cycles = [];
+  const nativeWatcher = new EventEmitter();
+  nativeWatcher.close = () => { closeCount += 1; };
+  const watcher = createInventoryWatcher({
+    roots: [root],
+    watch() { return nativeWatcher; },
+    setTimer(fn) { timer = fn; return 1; },
+    clearTimer() {},
+    onCycle(cycle) { cycles.push(cycle); },
+  });
+
+  nativeWatcher.emit('error', new Error('fixture async watch failure'));
+  nativeWatcher.emit('error', new Error('duplicate failure is coalesced'));
+  assert.equal(closeCount, 1);
+  assert.equal(typeof timer, 'function');
+  timer();
+  assert.deepEqual(cycles, [{ reason: 'watcher_overflow', events: [root], overflowed: true }]);
+  watcher.close();
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
 test('attention raises once per stable problem and once on recovery', () => {
   const home = temp('jarvos-attn-');
   const attentionPath = path.join(home, 'attention.json');
@@ -200,6 +257,39 @@ test('autonomous repair denies incomplete inventory and is zero-write when healt
   }
 });
 
+test('autonomous repair continues for safe skills when one sibling bundle is unsafe', () => {
+  const env = seedEnabledInventory({ skills: ['safe-skill', 'unsafe-skill'] });
+  try {
+    fs.writeFileSync(path.join(env.codexRoot, 'unsafe-skill', 'README.md'), 'ordinary unmanaged extra\n', { mode: 0o600 });
+    const result = autonomousRepairOperator({ configPath: env.configPath, observedAt: '2026-08-15T16:30:00.000Z' });
+    assert.equal(result.mutationDenied, false);
+    assert.equal(result.status.skills.find((skill) => skill.logicalId === opaqueSkillId('unsafe-skill')).disposition.reasonCode, 'unsafe_source');
+    assert.equal(result.status.skills.find((skill) => skill.logicalId === opaqueSkillId('safe-skill')).disposition.kind, 'shared');
+  } finally {
+    fs.rmSync(env.home, { recursive: true, force: true });
+  }
+});
+
+test('autonomous repair retires generated overlay after complete absence floor', () => {
+  const env = seedEnabledInventory({ skills: ['departed-skill'] });
+  try {
+    const admitted = autonomousRepairOperator({ configPath: env.configPath, observedAt: '2026-08-15T16:00:00.000Z' });
+    assert.equal(admitted.mutationDenied, false);
+    fs.rmSync(path.join(env.codexRoot, 'departed-skill'), { recursive: true, force: true });
+    autonomousRepairOperator({ configPath: env.configPath, observedAt: '2026-08-15T17:00:00.000Z' });
+    const acceptedPath = loadConfig(env.configPath).resolved.inventory.acceptedGenerationPath;
+    assert.equal(JSON.parse(fs.readFileSync(acceptedPath, 'utf8')).absences['departed-skill'].count, 1);
+    autonomousRepairOperator({ configPath: env.configPath, observedAt: '2026-08-16T17:00:00.000Z' });
+    const accepted = JSON.parse(fs.readFileSync(acceptedPath, 'utf8'));
+    assert.equal(accepted.absences?.['departed-skill']?.count || 0, 0);
+    assert.equal(accepted.generatedOverlay.entries.some((entry) => entry.id === 'departed-skill'), false);
+    const overlay = JSON.parse(fs.readFileSync(path.join(env.control, 'local-overlay.json'), 'utf8'));
+    assert.equal(overlay.entries.some((entry) => entry.id === 'departed-skill'), false);
+  } finally {
+    fs.rmSync(env.home, { recursive: true, force: true });
+  }
+});
+
 test('shared-status/explain/exclude/include/claude-proof stay path-redacted', () => {
   const env = seedEnabledInventory({ skills: ['portable-skill'] });
   try {
@@ -215,7 +305,8 @@ test('shared-status/explain/exclude/include/claude-proof stay path-redacted', ()
     const explained = explainOperator({ configPath: env.configPath, id: 'portable-skill' });
     assert.equal(explained.ok, true);
     assert.equal(explained.found, true);
-    assert.equal(explained.skill.logicalId, 'portable-skill');
+    assert.equal(explained.skill.logicalId, opaqueSkillId('portable-skill'));
+    assert.equal(JSON.stringify(explained).includes('portable-skill'), false);
     assert.equal(JSON.stringify(explained).includes(env.home), false);
 
     const excluded = excludeSkillOperator({
@@ -232,6 +323,7 @@ test('shared-status/explain/exclude/include/claude-proof stay path-redacted', ()
     const included = includeSkillOperator({ configPath: env.configPath, id: 'portable-skill' });
     assert.equal(included.ok, true);
     assert.equal(included.removed, true);
+    autonomousRepairOperator({ configPath: env.configPath });
 
     const proof = claudeProofOperator({
       configPath: env.configPath,
@@ -266,7 +358,8 @@ test('shared-status/explain/exclude/include/claude-proof stay path-redacted', ()
       { encoding: 'utf8' },
     );
     assert.equal(cliExplain.status, 0, cliExplain.stderr || cliExplain.stdout);
-    assert.equal(JSON.parse(cliExplain.stdout).logicalId, 'portable-skill');
+    assert.equal(JSON.parse(cliExplain.stdout).logicalId, opaqueSkillId('portable-skill'));
+    assert.equal(cliExplain.stdout.includes('portable-skill'), false);
 
     const help = spawnSync(process.execPath, [CLI, '--help'], { encoding: 'utf8' });
     assert.equal(help.status, 0);

@@ -494,8 +494,9 @@ function rootLifecycleStatus(registeredRoot, { observedAt }) {
 // bundle cannot make inventory read an unbounded tree first.
 function inspectBundleBounds(bundleRoot, limits) {
   let files = 0;
+  let directories = 1;
   let bytes = 0;
-  const walk = (directory) => {
+  const walk = (directory, depth = 0) => {
     let entries;
     try {
       entries = fs.readdirSync(directory, { withFileTypes: true });
@@ -518,7 +519,14 @@ function inspectBundleBounds(bundleRoot, limits) {
       }
       if ((stat.mode & 0o022) !== 0) return { kind: 'unsafe', reason: 'unsafe_source' };
       if (stat.isDirectory()) {
-        const nested = walk(candidate);
+        directories += 1;
+        if (directories > limits.maxBundleDirectories) {
+          return { kind: 'overflow', reason: 'max_bundle_directories' };
+        }
+        if (depth + 1 > limits.maxBundleDepth) {
+          return { kind: 'overflow', reason: 'max_bundle_depth' };
+        }
+        const nested = walk(candidate, depth + 1);
         if (nested) return nested;
         continue;
       }
@@ -533,7 +541,7 @@ function inspectBundleBounds(bundleRoot, limits) {
     }
     return null;
   };
-  return walk(bundleRoot) || { kind: 'ok', files, bytes };
+  return walk(bundleRoot) || { kind: 'ok', files, directories, bytes };
 }
 
 function scanBundleCandidate({
@@ -858,8 +866,8 @@ function scanRegisteredRoot(rootInfo, {
     }
     if (scanned.unsafe) {
       result.unsafe.push(scanned);
-      result.partial = true;
-      result.root.complete = false;
+      // A bad individual bundle is a blocked observation, not a failed root
+      // listing. Keep unrelated skills eligible for assessment and repair.
       result.reasons.push('unsafe_source');
       continue;
     }
@@ -1215,6 +1223,11 @@ function observeInventory(options = {}) {
           attention: 'quiet',
         };
       });
+    } else {
+      // Owner exclusions are a safety control. An unsupported/corrupt control
+      // must fail the generation closed instead of being treated as empty.
+      partial = true;
+      reasons.add('unsupported_exclusion_overlay');
     }
   }
 
@@ -1312,6 +1325,8 @@ function observeInventory(options = {}) {
       root: path.resolve(expandHome(value.root)),
     }));
     assessment = assessInventory({
+      config,
+      resolved,
       document: validated.document,
       sourceStorePath: layout.sourceStorePath,
       acceptedGenerationPath: layout.acceptedGenerationPath,
@@ -1332,23 +1347,13 @@ function observeInventory(options = {}) {
       finalDocument = revalidated.document;
       finalDigest = revalidated.digest;
 
-      if (options.persist !== false && assessment.mutate && assessment.generatedOverlay?.entries?.length) {
+      if (options.persist !== false && assessment.mutate && assessment.localOverlay) {
         // Point local source root at the immutable generation capture and merge overlay.
         if (assessment.localSourceRoot || assessment.sourceRoot) {
           config.localSourceRoot = assessment.localSourceRoot || assessment.sourceRoot;
         }
-        const existingOverlay = readJsonSafe(resolved.localOverlayPath, {
-          schemaVersion: require('./catalog').OVERLAY_SCHEMA_VERSION,
-          entries: [],
-        }) || { schemaVersion: require('./catalog').OVERLAY_SCHEMA_VERSION, entries: [] };
-        const byId = new Map((existingOverlay.entries || []).map((entry) => [entry.id, entry]));
-        for (const entry of assessment.generatedOverlay.entries) byId.set(entry.id, entry);
-        const merged = {
-          schemaVersion: require('./catalog').OVERLAY_SCHEMA_VERSION,
-          entries: [...byId.values()].sort((a, b) => a.id.localeCompare(b.id)),
-        };
         const { validateLocalOverlay } = require('./catalog');
-        const validatedOverlay = validateLocalOverlay(merged);
+        const validatedOverlay = validateLocalOverlay(assessment.localOverlay);
         if (validatedOverlay.status === 'valid') {
           atomicWriteJson(resolved.localOverlayPath, validatedOverlay.overlay);
         }
@@ -1420,6 +1425,12 @@ function observeInventory(options = {}) {
 }
 
 function inventoryOperator(options = {}) {
+  if (options.inspect === true) {
+    const capabilities = new Set(options.principal?.capabilities || []);
+    if (options.principal?.kind !== 'owner' || !capabilities.has('inventory.inspect_private')) {
+      throw new Error('owner inspect requires an authorized owner principal');
+    }
+  }
   const result = observeInventory({
     configPath: options.configPath,
     controlRoot: options.controlRoot,

@@ -19,6 +19,7 @@ const INJECTION_RE = /(?:ignore\s+(?:all\s+)?previous\s+instructions|system\s+me
 const NETWORK_RE = /(?:https?:\/\/|\b(?:curl|wget|fetch|axios|requests?)\b)/i;
 const PLUGIN_RE = /\b(?:plugin|mcp|credential|interactive|hook)\b/i;
 const NATIVE_RE = /\b(?:codex|claude|openclaw|hermes)[-_ ]?(?:only|native|specific)\b/i;
+const MAX_ANALYSIS_BYTES = 4 * 1024 * 1024;
 
 function digest(value) { return crypto.createHash('sha256').update(value).digest('hex'); }
 
@@ -31,23 +32,32 @@ function safeReadSkillMd(bundlePath) {
 
 function featuresFor(bundlePath, expectedDigest) {
   const tree = computeBundleTree(bundlePath, { allowlist: DEFAULT_ALLOWED_BUNDLE_GLOBS, expectedDigest });
-  const body = safeReadSkillMd(tree.root);
+  safeReadSkillMd(tree.root);
+  let analysisBytes = 0;
+  const analysisText = tree.entries.map((entry) => {
+    const file = path.join(tree.root, entry.path);
+    const stat = fs.lstatSync(file);
+    if (!stat.isFile() || stat.isSymbolicLink()) throw new Error('unsafe_bundle_analysis_file');
+    analysisBytes += stat.size;
+    if (analysisBytes > MAX_ANALYSIS_BYTES) throw new Error('bundle_analysis_too_large');
+    return fs.readFileSync(file, 'utf8');
+  }).join('\n');
   const scripts = tree.entries.some((entry) => entry.path.startsWith('scripts/'));
   const capabilities = [
     ...(scripts ? ['scripts'] : []),
-    ...(NETWORK_RE.test(body) ? ['network'] : []),
-    ...(PLUGIN_RE.test(body) ? ['plugin_or_interactive'] : []),
-    ...(NATIVE_RE.test(body) ? ['native_syntax'] : []),
+    ...(NETWORK_RE.test(analysisText) ? ['network'] : []),
+    ...(PLUGIN_RE.test(analysisText) ? ['plugin_or_interactive'] : []),
+    ...(NATIVE_RE.test(analysisText) ? ['native_syntax'] : []),
   ].sort();
   return {
     tree,
-    hasSecret: SECRET_RE.test(body),
-    hasInjection: INJECTION_RE.test(body),
-    hasNetwork: NETWORK_RE.test(body),
-    hasPluginOrInteractive: PLUGIN_RE.test(body),
-    hasNativeSyntax: NATIVE_RE.test(body),
+    hasSecret: SECRET_RE.test(analysisText),
+    hasInjection: INJECTION_RE.test(analysisText),
+    hasNetwork: NETWORK_RE.test(analysisText),
+    hasPluginOrInteractive: PLUGIN_RE.test(analysisText),
+    hasNativeSyntax: NATIVE_RE.test(analysisText),
     capabilities,
-    profileDigest: digest(JSON.stringify({ capabilities, scripts, native: NATIVE_RE.test(body) })),
+    profileDigest: digest(JSON.stringify({ capabilities, scripts, native: NATIVE_RE.test(analysisText) })),
   };
 }
 
@@ -200,9 +210,11 @@ function assessInventory({
   complete = true,
   autoAdmit = true,
   persist = true,
+  config: suppliedConfig = null,
+  resolved: suppliedResolved = null,
 } = {}) {
-  let resolved = null;
-  let config = null;
+  let resolved = suppliedResolved;
+  let config = suppliedConfig;
   if (configPath || controlRoot) {
     const loaded = loadConfig(configPath);
     config = controlRoot ? { ...loaded.config, controlRoot } : loaded.config;
@@ -240,6 +252,7 @@ function assessInventory({
     let result = { ...skill, ...stableDisposition('needs_input', 'incomplete_observation') };
     // Preserve owner exclusions applied by inventory observation.
     if (skill.disposition?.kind === 'blocked' && skill.disposition?.reasonCode === 'owner_excluded') {
+      if (priorEntryFor(prior, skill.logicalId)) retireIds.add(skill.logicalId);
       assessed.push({ ...result, ...stableDisposition('blocked', 'owner_excluded', 'quiet') });
       continue;
     }
@@ -496,7 +509,7 @@ function assessInventory({
     verification: Object.fromEntries(candidate.allowedHarnesses.map((harness) => [harness, { tier: 'adapter-declared', remoteModelProbe: false }])),
     bundle: {
       root: path.posix.join(
-        (captured.changed ? validated.document.generationId : (prior?.generationId || validated.document.generationId)),
+        ((captured.changed || captured.recoveryNeeded) ? validated.document.generationId : (prior?.generationId || validated.document.generationId)),
         candidate.id,
       ),
       allowlist: candidate.allowlist,
@@ -533,7 +546,7 @@ function assessInventory({
 
   const acceptedGeneration = {
     schemaVersion: 'jarvos.skill-source-generation/v1',
-    generationId: captured.changed ? validated.document.generationId : (prior?.generationId || validated.document.generationId),
+    generationId: (captured.changed || captured.recoveryNeeded) ? validated.document.generationId : (prior?.generationId || validated.document.generationId),
     acceptedAt: acceptedAt || validated.document.observedAt,
     sourceRoot: captured.sourceRoot || prior?.sourceRoot || null,
     localSourceRoot: sourceStorePath,
@@ -557,10 +570,10 @@ function assessInventory({
 
   // Always rewrite the accepted pointer when we mutate overlay/absences/retirements,
   // even if capture was a no-op (pure retirement).
-  atomicWriteJson(acceptedGenerationPath, acceptedGeneration);
   if (persist !== false && resolved?.localOverlayPath) {
     atomicWriteJson(resolved.localOverlayPath, compositeOverlay);
   }
+  atomicWriteJson(acceptedGenerationPath, acceptedGeneration);
   if (persist !== false && config && resolved && config.localSourceRoot !== sourceStorePath) {
     saveConfig({ ...config, localSourceRoot: sourceStorePath }, configPath);
   }
@@ -574,6 +587,7 @@ function assessInventory({
     mutate: true,
     document: admittedDocument,
     generatedOverlay,
+    localOverlay: compositeOverlay,
     effectiveCatalog: effective,
     acceptedGeneration,
     sourceRoot: acceptedGeneration.sourceRoot,

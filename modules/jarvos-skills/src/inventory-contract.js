@@ -120,6 +120,8 @@ const DEFAULT_INVENTORY_LIMITS = Object.freeze({
   maxRoots: 32,
   maxEntriesPerRoot: 512,
   maxBundleFiles: 256,
+  maxBundleDirectories: 256,
+  maxBundleDepth: 16,
   maxBundleBytes: 8 * 1024 * 1024,
   maxEventsPerRun: 256,
   maxRollbackGenerations: 8,
@@ -338,6 +340,18 @@ function normalizeInventoryPolicy(raw = {}) {
       'inventory.limits.maxBundleFiles',
       defaults.limits.maxBundleFiles,
       { max: 10_000 },
+    ),
+    maxBundleDirectories: normalizePositiveInt(
+      limitsSource.maxBundleDirectories,
+      'inventory.limits.maxBundleDirectories',
+      defaults.limits.maxBundleDirectories,
+      { max: 10_000 },
+    ),
+    maxBundleDepth: normalizePositiveInt(
+      limitsSource.maxBundleDepth,
+      'inventory.limits.maxBundleDepth',
+      defaults.limits.maxBundleDepth,
+      { max: 64 },
     ),
     maxBundleBytes: normalizePositiveInt(
       limitsSource.maxBundleBytes,
@@ -856,7 +870,7 @@ function serializeOutwardStatus(document, options = {}) {
       complete: root.complete === true,
     })),
     skills: source.skills.map((skill) => ({
-      logicalId: skill.logicalId,
+      logicalId: opaqueSkillId(skill.logicalId),
       treeDigest: skill.treeDigest,
       disposition: {
         kind: skill.disposition.kind,
@@ -871,13 +885,18 @@ function serializeOutwardStatus(document, options = {}) {
       observationCount: skill.observations.length,
     })),
     exclusions: source.exclusions.map((entry) => ({
-      logicalId: entry.logicalId,
+      logicalId: opaqueSkillId(entry.logicalId),
       reasonCode: entry.reasonCode,
       excludedAt: entry.excludedAt,
     })),
   };
   validateOutwardStatus(status);
   return status;
+}
+
+function opaqueSkillId(logicalId) {
+  assertLogicalId(logicalId, 'private skill logicalId');
+  return `skill-${crypto.createHash('sha256').update(`jarvos-private-skill\0${logicalId}`).digest('hex').slice(0, 24)}`;
 }
 
 function validateOutwardStatus(status) {
@@ -1103,6 +1122,7 @@ module.exports = {
   validateInventoryDocument,
   validateExclusionOverlay,
   serializeOutwardStatus,
+  opaqueSkillId,
   validateOutwardStatus,
   serializeOwnerInspect,
   validateOwnerInspect,
