@@ -143,6 +143,35 @@ function priorEntryFor(prior, logicalId) {
   return { identity, effectiveName, entry, treeDigest: entry.treeDigest || entry.bundle?.treeDigest || null };
 }
 
+function reusableGeneratedBundle({ candidate, prior, sourceStorePath }) {
+  const priorMeta = priorEntryFor(prior, candidate.logicalId);
+  const priorEntry = priorMeta?.entry;
+  const barePriorEntry = (prior?.entries || []).find((entry) => entry.id === candidate.id);
+  const priorBundle = priorEntry?.bundle || (
+    prior?.generationId
+    && priorEntry === barePriorEntry
+    && priorEntry?.treeDigest === candidate.treeDigest
+    && Array.isArray(priorEntry?.allowlist)
+      ? {
+        root: path.posix.join(prior.generationId, candidate.id),
+        treeDigest: priorEntry.treeDigest,
+        allowlist: priorEntry.allowlist,
+      }
+      : null
+  );
+  if (!priorBundle
+    || typeof priorBundle.root !== 'string'
+    || priorBundle.treeDigest !== candidate.treeDigest
+    || !Array.isArray(priorBundle.allowlist)) {
+    throw new Error(`same-digest generated skill lacks an exact prior bundle: ${candidate.logicalId}`);
+  }
+  attestOwnedBundle(sourceStorePath, priorBundle.root, {
+    id: candidate.id,
+    bundle: priorBundle,
+  }, 'prior generated', { ownerOnly: true });
+  return { ...priorBundle };
+}
+
 function recordAbsence(priorAbsences, logicalId, observedAt, policy) {
   const prev = (priorAbsences && priorAbsences[logicalId]) || null;
   const count = (prev?.count || 0) + 1;
@@ -599,6 +628,18 @@ function assessInventory({
     const priorMeta = priorEntryFor(prior, candidate.logicalId);
     return !priorMeta || priorMeta.treeDigest !== candidate.treeDigest;
   });
+  const capturedById = new Map(
+    generatedCaptureCandidates.map((candidate) => [candidate.id, candidate]),
+  );
+  // Validate every reused generated root before manual capture creates a new
+  // immutable generation. Malformed prior state must leave no durable trace.
+  const reusableBundlesById = new Map(candidates
+    .filter((candidate) => !capturedById.has(candidate.id))
+    .map((candidate) => [candidate.id, reusableGeneratedBundle({
+      candidate,
+      prior,
+      sourceStorePath,
+    })]));
   const captureCandidates = [...generatedCaptureCandidates, ...manualMigration.candidates];
   const captured = captureCandidates.length > 0
     ? captureGeneration({
@@ -610,9 +651,6 @@ function assessInventory({
     })
     : { changed: false, generation: prior, sourceRoot: prior?.sourceRoot || null };
 
-  const capturedById = new Map(
-    generatedCaptureCandidates.map((candidate) => [candidate.id, candidate]),
-  );
   const retainedPriorEntries = (prior?.generatedOverlay?.entries || [])
     .filter((entry) => {
       const identity = (prior.identities || []).find((item) => item.effectiveName === entry.id || item.logicalId === entry.id);
@@ -624,27 +662,33 @@ function assessInventory({
       return true;
     });
 
-  const newEntries = candidates.map((candidate) => ({
-    id: candidate.id,
-    allowedHarnesses: candidate.allowedHarnesses,
-    verification: Object.fromEntries(candidate.allowedHarnesses.map((harness) => [harness, { tier: 'adapter-declared', remoteModelProbe: false }])),
-    bundle: {
-      root: path.posix.join(
-        ((captured.changed || captured.recoveryNeeded) ? validated.document.generationId : (prior?.generationId || validated.document.generationId)),
-        candidate.id,
-      ),
-      allowlist: candidate.allowlist,
-      treeDigest: candidate.treeDigest,
-    },
-  }));
+  const capturedGenerationId = (captured.changed || captured.recoveryNeeded)
+    ? validated.document.generationId
+    : (prior?.generationId || validated.document.generationId);
+  const newEntries = candidates.map((candidate) => {
+    let bundle;
+    if (capturedById.has(candidate.id)) {
+      bundle = {
+        root: path.posix.join(capturedGenerationId, candidate.id),
+        allowlist: candidate.allowlist,
+        treeDigest: candidate.treeDigest,
+      };
+    } else {
+      bundle = reusableBundlesById.get(candidate.id);
+      if (!bundle) throw new Error(`same-digest generated skill lacks a validated prior bundle: ${candidate.logicalId}`);
+    }
+    return {
+      id: candidate.id,
+      allowedHarnesses: candidate.allowedHarnesses,
+      verification: Object.fromEntries(candidate.allowedHarnesses.map((harness) => [harness, { tier: 'adapter-declared', remoteModelProbe: false }])),
+      bundle,
+    };
+  });
 
   const generatedOverlay = {
     schemaVersion: OVERLAY_SCHEMA_VERSION,
     entries: [...retainedPriorEntries, ...newEntries].sort((left, right) => left.id.localeCompare(right.id)),
   };
-  const capturedGenerationId = (captured.changed || captured.recoveryNeeded)
-    ? validated.document.generationId
-    : (prior?.generationId || validated.document.generationId);
   const migratedManualById = new Map(manualMigration.candidates.map((candidate) => [candidate.id, candidate]));
   const migratedManualEntries = manualEntries.map((entry) => (
     migratedManualById.has(entry.id) || manualMigration.generationById?.has(entry.id)

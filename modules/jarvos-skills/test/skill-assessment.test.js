@@ -797,6 +797,133 @@ test('legacy manual overlay migrates without a new generated admission', () => {
   assert.equal(planOperator({ configPath, readOnly: true }).ok, true);
 });
 
+test('manual-only capture preserves a same-digest generated bundle root while expanding targets', () => {
+  const observedRoot = temp('jarvos-mixed-generated-');
+  writeSkill(path.join(observedRoot, 'generated-skill'), {
+    name: 'generated-skill',
+    body: 'Portable generated skill.\n',
+  });
+  const { configPath } = seedConfig({ roots: { codex: observedRoot }, trustClass: 'markdown-only' });
+  inventoryAssessOperator({ configPath, observedAt: '2026-08-15T18:06:00.000Z' });
+  let loaded = loadConfig(configPath);
+  const prior = readAcceptedGeneration(loaded.resolved.inventory.acceptedGenerationPath);
+  const priorGenerated = prior.generatedOverlay.entries.find((entry) => entry.id === 'generated-skill');
+  const priorGeneratedRoot = priorGenerated.bundle.root;
+  assert.equal(fs.existsSync(path.join(loaded.resolved.localSourceRoot, priorGeneratedRoot, 'SKILL.md')), true);
+  priorGenerated.allowedHarnesses = ['claude'];
+  priorGenerated.verification = {
+    claude: { tier: 'adapter-declared', remoteModelProbe: false },
+  };
+  atomicWriteJson(loaded.resolved.inventory.acceptedGenerationPath, prior);
+
+  const legacyRoot = temp('jarvos-mixed-legacy-');
+  const newsletterPath = writeSkill(path.join(legacyRoot, 'newsletter-generator'), {
+    name: 'newsletter-generator',
+    body: 'Draft a newsletter.\n',
+  });
+  const transcribePath = writeSkill(path.join(legacyRoot, 'transcribe'), {
+    name: 'transcribe',
+    body: 'Transcribe a recording.\n',
+  });
+  const newsletterTree = computeBundleTree(newsletterPath, { allowlist: DEFAULT_ALLOWED_BUNDLE_GLOBS });
+  const transcribeTree = computeBundleTree(transcribePath, { allowlist: DEFAULT_ALLOWED_BUNDLE_GLOBS });
+  // Change the inventory generation without creating another portable capture
+  // candidate, so the next immutable generation contains only the manuals.
+  writeSkill(path.join(observedRoot, 'codex-native-skill'), {
+    name: 'codex-native-skill',
+    native: 'codex',
+  });
+  const mixedOverlay = {
+    schemaVersion: OVERLAY_SCHEMA_VERSION,
+    entries: [
+      manualOverlayEntry('newsletter-generator', newsletterTree, ['codex', 'hermes']),
+      manualOverlayEntry('transcribe', transcribeTree, ['claude', 'openclaw']),
+      priorGenerated,
+    ],
+  };
+  atomicWriteJson(loaded.resolved.localOverlayPath, mixedOverlay);
+  saveConfig({ ...loaded.config, localSourceRoot: legacyRoot }, configPath);
+
+  const migrated = inventoryAssessOperator({ configPath, observedAt: '2026-08-15T18:07:00.000Z' });
+  assert.equal(migrated.admissions.some((item) => item.logicalId === 'generated-skill'), true);
+  loaded = loadConfig(configPath);
+  const accepted = readAcceptedGeneration(loaded.resolved.inventory.acceptedGenerationPath);
+  const overlay = validateLocalOverlay(JSON.parse(fs.readFileSync(loaded.resolved.localOverlayPath, 'utf8'))).overlay;
+  const generated = overlay.entries.find((entry) => entry.id === 'generated-skill');
+  assert.equal(generated.bundle.root, priorGeneratedRoot);
+  assert.equal(generated.bundle.treeDigest, priorGenerated.bundle.treeDigest);
+  assert.deepEqual(generated.bundle.allowlist, priorGenerated.bundle.allowlist);
+  assert.equal(generated.allowedHarnesses.includes('openclaw'), true);
+  assert.equal(generated.allowedHarnesses.includes('hermes'), true);
+  assert.equal(fs.existsSync(path.join(loaded.resolved.localSourceRoot, generated.bundle.root, 'SKILL.md')), true);
+  const currentGenerationIds = fs.readdirSync(path.join(
+    loaded.resolved.inventory.sourceStorePath,
+    accepted.generationId,
+  )).sort();
+  assert.deepEqual(currentGenerationIds, ['newsletter-generator', 'transcribe']);
+
+  const plan = planOperator({ configPath, readOnly: true });
+  assert.equal(plan.ok, true);
+  assert.deepEqual(
+    [...new Set(plan.pairs.map((pair) => pair.id))].sort(),
+    ['generated-skill', 'newsletter-generator', 'transcribe'],
+  );
+  applyOperator({ configPath });
+  const durablePaths = [configPath, loaded.resolved.localOverlayPath, loaded.resolved.inventory.acceptedGenerationPath];
+  const before = durablePaths.map((file) => ({ body: fs.readFileSync(file, 'utf8'), mtimeMs: fs.statSync(file).mtimeMs }));
+  const replay = inventoryAssessOperator({ configPath, observedAt: '2026-08-15T18:07:00.000Z' });
+  assert.equal(replay.mutate, false);
+  durablePaths.forEach((file, index) => {
+    assert.equal(fs.readFileSync(file, 'utf8'), before[index].body);
+    assert.equal(fs.statSync(file).mtimeMs, before[index].mtimeMs);
+  });
+});
+
+test('malformed same-digest generated root blocks manual capture with zero durable mutation', () => {
+  const observedRoot = temp('jarvos-missing-prior-bundle-');
+  writeSkill(path.join(observedRoot, 'generated-skill'), { name: 'generated-skill' });
+  const { configPath } = seedConfig({ roots: { codex: observedRoot }, trustClass: 'markdown-only' });
+  inventoryAssessOperator({ configPath, observedAt: '2026-08-15T18:08:00.000Z' });
+  let loaded = loadConfig(configPath);
+  const accepted = readAcceptedGeneration(loaded.resolved.inventory.acceptedGenerationPath);
+  const generated = accepted.generatedOverlay.entries.find((entry) => entry.id === 'generated-skill');
+  generated.bundle.root = 'gen-missing/generated-skill';
+  atomicWriteJson(loaded.resolved.inventory.acceptedGenerationPath, accepted);
+
+  const legacyRoot = temp('jarvos-malformed-mixed-legacy-');
+  const newsletterPath = writeSkill(path.join(legacyRoot, 'newsletter-generator'), { name: 'newsletter-generator' });
+  const transcribePath = writeSkill(path.join(legacyRoot, 'transcribe'), { name: 'transcribe' });
+  const newsletterTree = computeBundleTree(newsletterPath, { allowlist: DEFAULT_ALLOWED_BUNDLE_GLOBS });
+  const transcribeTree = computeBundleTree(transcribePath, { allowlist: DEFAULT_ALLOWED_BUNDLE_GLOBS });
+  writeSkill(path.join(observedRoot, 'codex-native-skill'), { name: 'codex-native-skill', native: 'codex' });
+  atomicWriteJson(loaded.resolved.localOverlayPath, {
+    schemaVersion: OVERLAY_SCHEMA_VERSION,
+    entries: [
+      manualOverlayEntry('newsletter-generator', newsletterTree, ['codex', 'hermes']),
+      manualOverlayEntry('transcribe', transcribeTree, ['claude', 'openclaw']),
+      generated,
+    ],
+  });
+  saveConfig({ ...loaded.config, localSourceRoot: legacyRoot }, configPath);
+  loaded = loadConfig(configPath);
+  const observedAt = '2026-08-15T18:09:00.000Z';
+  const observation = observeInventory({ configPath, observedAt });
+  const configBefore = fs.readFileSync(configPath, 'utf8');
+  const overlayBefore = fs.readFileSync(loaded.resolved.localOverlayPath, 'utf8');
+  const pointerBefore = fs.readFileSync(loaded.resolved.inventory.acceptedGenerationPath, 'utf8');
+  const generationsBefore = fs.readdirSync(loaded.resolved.inventory.sourceStorePath).sort();
+
+  assert.throws(
+    () => inventoryAssessOperator({ configPath, observedAt }),
+    /prior generated bundle is missing/,
+  );
+  assert.equal(fs.readFileSync(configPath, 'utf8'), configBefore);
+  assert.equal(fs.readFileSync(loaded.resolved.localOverlayPath, 'utf8'), overlayBefore);
+  assert.equal(fs.readFileSync(loaded.resolved.inventory.acceptedGenerationPath, 'utf8'), pointerBefore);
+  assert.deepEqual(fs.readdirSync(loaded.resolved.inventory.sourceStorePath).sort(), generationsBefore);
+  assert.equal(fs.existsSync(path.join(loaded.resolved.inventory.sourceStorePath, observation.document.generationId)), false);
+});
+
 test('missing or drifted legacy manual bundles fail before config or overlay mutation', () => {
   for (const scenario of ['missing', 'drifted']) {
     const legacyRoot = temp(`jarvos-legacy-${scenario}-`);
