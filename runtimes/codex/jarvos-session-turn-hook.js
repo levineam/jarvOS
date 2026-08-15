@@ -158,6 +158,7 @@ function heartbeat(options) { return invokeBridge('heartbeat', options); }
 function checkpoint(options) { return invokeBridge('checkpoint', options); }
 function stop(options) { return invokeBridge('stop', options); }
 function nextTurnInput(options) { return invokeBridge('nextTurnInput', options); }
+function sessionWaitBind(options) { return invokeBridge('sessionWaitBind', options); }
 function sessionWaitNextTurn(options) { return invokeBridge('sessionWaitNextTurn', options); }
 
 function sessionWaitContext(input) {
@@ -181,6 +182,7 @@ const stewardshipAdapter = {
   heartbeat,
   checkpoint,
   stop,
+  sessionWaitBind,
   nextTurnInput,
   sessionWaitNextTurn,
   availability,
