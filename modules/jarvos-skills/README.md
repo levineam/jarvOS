@@ -186,6 +186,7 @@ jarvos-skills doctor-shared --json
 jarvos-skills inventory --json
 jarvos-skills inventory-assess --json
 jarvos-skills autonomous-repair --json
+jarvos-skills-scheduled-repair --config ~/.jarvos/shared-skills/config.json
 node scripts/live-preflight-checklist.js --json
 ```
 
@@ -196,6 +197,10 @@ never auto-enable live harness gates. Claude interactive proof remains
 
 `autonomous-repair` is the scheduler command. It stays inert until inventory is
 enabled in owner-local configuration and never enables the scheduler itself.
+`jarvos-skills-scheduled-repair` wraps that command for delivery-aware schedulers:
+healthy repeats print `NO_REPLY`, while new attention, repair, or failure prints
+one redacted count-only message. `--announce-convergence` is a one-run activation
+option, not a recurring schedule flag.
 The public preflight is permanently read-only; first live convergence happens
 only through the installed, merged runtime. See the
 [architecture](../../docs/architecture/shared-skill-distribution.md) and

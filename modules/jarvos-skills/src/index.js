@@ -1253,6 +1253,8 @@ module.exports = {
   planSchedulerUnits: scheduler.planSchedulerUnits,
   createInventoryWatcher: scheduler.createInventoryWatcher,
   reconcileAttention: require('./attention').reconcileAttention,
+  scheduledRepairMessage: require('./scheduled-repair').scheduledRepairMessage,
+  runScheduledRepair: require('./scheduled-repair').runScheduledRepair,
   doctorSharedSkills: doctor.doctorSharedSkills,
   INVENTORY_SCHEMA_VERSION: inventoryContract.INVENTORY_SCHEMA_VERSION,
   STATUS_SCHEMA_VERSION: inventoryContract.STATUS_SCHEMA_VERSION,
