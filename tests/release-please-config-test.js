@@ -10,7 +10,9 @@ const test = require('node:test');
 const ROOT = join(__dirname, '..');
 const BASELINE = 'd730524c900694c4b375875f4662848720e31778';
 const APP_TOKEN_ACTION_SHA = 'bcd2ba49218906704ab6c1aa796996da409d3eb1';
-const ACTION_SHA = '16a9c90856f42705d54a6fda1823352bdc62cf38';
+const CHECKOUT_ACTION_SHA = '3d3c42e5aac5ba805825da76410c181273ba90b1';
+const SETUP_NODE_ACTION_SHA = '820762786026740c76f36085b0efc47a31fe5020';
+const ACTION_SHA = '45996ed1f6d02564a971a2fa1b5860e934307cf7';
 const SEMVER_PATTERN = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\.(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*))*)?(?:\+[0-9a-zA-Z-]+(?:\.[0-9a-zA-Z-]+)*)?$/;
 
 function readJson(name) {
@@ -91,8 +93,20 @@ test('runs only from trusted main pushes with immutable action and App-token rel
   assert.match(tokenStep, /^          permission-pull-requests: write$/m);
 
   assert.ok(releaseStep, 'Release step must follow the App-token step');
-  assert.match(releaseStep, new RegExp(`^        uses: googleapis/release-please-action@${ACTION_SHA} # v4\\.4\\.0$`, 'm'));
+  assert.match(releaseStep, new RegExp(`^        uses: googleapis/release-please-action@${ACTION_SHA} # v5\\.0\\.0$`, 'm'));
   assert.match(releaseStep, /^          token: \$\{\{ steps\.app-token\.outputs\.token \}\}$/m);
+});
+
+test('pins CI checkout and Node setup actions to Node 24 releases', () => {
+  const workflow = readFileSync(join(ROOT, '.github/workflows/ci.yml'), 'utf8');
+  const checkoutUses = [...workflow.matchAll(/^\s+- uses: actions\/checkout@([^ ]+) # v7\.0\.1$/gm)];
+  const setupNodeUses = [...workflow.matchAll(/^\s+uses: actions\/setup-node@([^ ]+) # v7\.0\.0$/gm)];
+
+  assert.equal(checkoutUses.length, 6);
+  assert.ok(checkoutUses.every((match) => match[1] === CHECKOUT_ACTION_SHA));
+  assert.equal(setupNodeUses.length, 2);
+  assert.ok(setupNodeUses.every((match) => match[1] === SETUP_NODE_ACTION_SHA));
+  assert.doesNotMatch(workflow, /uses: actions\/(?:checkout|setup-node)@v\d/);
 });
 
 test('secret scan ignores exact GitHub secret references but retains literal candidates', () => {
