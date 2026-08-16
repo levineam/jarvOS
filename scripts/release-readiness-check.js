@@ -139,7 +139,7 @@ Checks:
 
 Development flags:
   --allow-dirty          Allow an in-progress working tree
-  --allow-unreleased     Allow the changelog section to say Unreleased
+  --allow-unreleased     Allow candidate changelog wording and defer target release notes
   --allow-existing-tag   Allow the target tag to already exist
   --skip-smoke           Skip npm test
 `);
@@ -178,7 +178,8 @@ function checkReleaseReadiness(opts = {}) {
 
   try {
     const changelog = read('CHANGELOG.md');
-    const changelogHeading = changelog.match(new RegExp(`^##\\s+${tag.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b([^\\n]*)`, 'm'));
+    const escapedTarget = target.replace(/\./g, '\\.');
+    const changelogHeading = changelog.match(new RegExp(`^##\\s+(?:\\[)?v?${escapedTarget}\\b(?:\\])?([^\\n]*)`, 'm'));
     if (!changelogHeading) {
       fail('CHANGELOG.md version section', `Missing heading for ${tag}`);
     } else if (/unreleased/i.test(changelogHeading[1] || '') && !opts.allowUnreleased) {
@@ -219,6 +220,8 @@ function checkReleaseReadiness(opts = {}) {
     if (missing.length) fail('release notes draft', `Missing sections in ${releaseNotesPath}: ${missing.join(', ')}`);
     else if (/ISSUE\b|VERSION\b/.test(notes)) fail('release notes draft', `${releaseNotesPath} still contains placeholders`);
     else pass('release notes draft', releaseNotesPath);
+  } else if (opts.allowUnreleased) {
+    pass('release notes draft', `${releaseNotesPath} deferred for unreleased candidate`);
   } else {
     fail('release notes draft', `${releaseNotesPath} missing`);
   }
@@ -226,11 +229,11 @@ function checkReleaseReadiness(opts = {}) {
   const gbrainNarrativeFiles = [
     'README.md',
     'CHANGELOG.md',
-    releaseNotesPath,
     'modules/README.md',
     'modules/jarvos-gbrain/README.md',
     'PUBLIC_BASELINE.md',
   ];
+  if (fileExists(releaseNotesPath)) gbrainNarrativeFiles.splice(2, 0, releaseNotesPath);
   try {
     const missingFiles = gbrainNarrativeFiles.filter((filePath) => !fileExists(filePath));
     if (missingFiles.length) {
