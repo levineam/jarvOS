@@ -4,6 +4,9 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 
 const {
+  OPERATOR_NOTIFICATION_TRANSPORT_VERSION,
+  eventFor,
+  scheduledRepairCliOutput,
   scheduledRepairMessage,
   scheduledRepairNotification,
   runScheduledRepair,
@@ -64,6 +67,36 @@ test('missing runner receipt produces an opaque owner-action recovery message', 
   assert.match(message, /Next: jarvOS will continue monitoring safely/);
   assert.match(message, /Reference: [A-Za-z0-9_-]{22,128}\./);
   assert.doesNotMatch(message, /runner_receipt_missing|receipt|missing|\//);
+});
+
+test('action-required CLI output is a strict redacted semantic envelope', () => {
+  const result = healthy({
+    attention: { raised: [{ logicalId: 'private-skill', reasonCode: 'stale_source', sourceRoot: '/Users/andrew/private' }], resolved: [] },
+  });
+  const notification = scheduledRepairNotification(result);
+  const envelope = JSON.parse(scheduledRepairCliOutput(notification));
+  assert.deepEqual(Object.keys(envelope).sort(), ['dedupeIdentity', 'disposition', 'event', 'message', 'schema']);
+  assert.equal(envelope.schema, OPERATOR_NOTIFICATION_TRANSPORT_VERSION);
+  assert.equal(envelope.disposition, 'action-required');
+  assert.equal(envelope.event.schemaVersion, 'jarvos-operator-notification/v1');
+  assert.equal(envelope.message, notification.output);
+  assert.equal(envelope.dedupeIdentity, notification.dedupeIdentity);
+  assert.match(envelope.message, /Action required: Choose how jarvOS should proceed/);
+  assert.doesNotMatch(JSON.stringify(envelope), /private-skill|unsafe_source|\/Users\/andrew/);
+});
+
+test('quiet scheduled repair output remains exactly NO_REPLY', () => {
+  assert.equal(scheduledRepairCliOutput(scheduledRepairNotification(healthy())), 'NO_REPLY');
+});
+
+test('event references are random while the dedupe identity is stable', () => {
+  const result = healthy({ attention: { raised: [{ logicalId: 'private-skill', reasonCode: 'stale_source' }], resolved: [] } });
+  const first = scheduledRepairNotification(result);
+  const second = scheduledRepairNotification(result);
+  assert.notEqual(first.event.eventReference, second.event.eventReference);
+  assert.notEqual(first.event.privateDetailReference, second.event.privateDetailReference);
+  assert.equal(first.dedupeIdentity, second.dedupeIdentity);
+  assert.match(eventFor(result).eventReference, /^[A-Za-z0-9_-]{22,128}$/);
 });
 
 test('incomplete inventory remains a quiet durable safety hold', () => {

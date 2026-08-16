@@ -1,7 +1,11 @@
 #!/usr/bin/env node
 'use strict';
 
-const { runScheduledRepair } = require('../src/scheduled-repair');
+const {
+  scheduledRepairCliOutput,
+  scheduledRepairNotification,
+  runScheduledRepair,
+} = require('../src/scheduled-repair');
 
 function parseArgs(argv) {
   const options = { configPath: undefined, announceConvergence: false };
@@ -29,11 +33,12 @@ function main(argv = process.argv.slice(2)) {
       process.stdout.write('Usage: scheduled-repair.js [--config PATH] [--announce-convergence]\n');
       return 0;
     }
-    const { message, result } = runScheduledRepair(options);
-    process.stdout.write(`${message}\n`);
+    const { notification, result } = runScheduledRepair(options);
+    process.stdout.write(`${scheduledRepairCliOutput(notification)}\n`);
     return result?.ok ? 0 : 1;
   } catch {
-    process.stdout.write('jarvOS skill sync needs attention: scheduled repair failed safely.\n');
+    const notification = scheduledRepairNotification({ ok: false, ran: false });
+    process.stdout.write(`${scheduledRepairCliOutput(notification)}\n`);
     return 1;
   }
 }

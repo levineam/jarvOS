@@ -73,6 +73,7 @@ function validateOperatorNotificationEvent(event) {
   for (const key of Object.keys(event)) if (!EVENT_FIELDS.has(key)) errors.push(`operator notification event has unknown field: ${key}`);
   if (event.schemaVersion !== OPERATOR_NOTIFICATION_SCHEMA_VERSION) errors.push(`event.schemaVersion must be ${OPERATOR_NOTIFICATION_SCHEMA_VERSION}`);
   if (!isBoundedIdentifier(event.code)) errors.push('event.code must be a bounded stable identifier');
+  if (isBoundedIdentifier(event.code) && !EVENT_CODES.has(event.code)) errors.push('event.code is not a supported operator notification code');
   if (!AUDIENCES.has(event.audience)) errors.push('event.audience must be operator');
   if (!SEVERITIES.has(event.severity)) errors.push('event.severity is invalid');
   if (!AUTOMATION_OUTCOMES.has(event.automationOutcome)) errors.push('event.automationOutcome is invalid');
@@ -120,13 +121,10 @@ function eventMessage(event) {
   if (event.code === 'recovery-failed') return 'jarvOS could not complete a safe recovery and preserved the existing state.';
   if (event.code === 'repair-complete') return 'jarvOS completed a safe repair.';
   if (event.code === 'resolution-complete') return 'jarvOS resolved the condition safely.';
-  return 'jarvOS needs a reviewed operator decision and preserved the existing state.';
+  return null;
 }
 
 function renderMessage(event) {
-  if (!EVENT_CODES.has(event.code)) {
-    return `jarvOS needs an operator decision and preserved the existing state. Action required: Review the condition before jarvOS continues. Next: jarvOS will wait for your direction. Reference: ${event.eventReference}.`;
-  }
   const parts = [eventMessage(event)];
   if (event.actionRequired) {
     parts.push(`Action required: ${ACTION_TEXT[event.action]}`);
@@ -141,8 +139,7 @@ function renderMessage(event) {
 
 function evaluateOperatorNotification(event) {
   assertOperatorNotificationEvent(event);
-  const knownCode = EVENT_CODES.has(event.code);
-  const direct = !knownCode || event.actionRequired;
+  const direct = event.actionRequired;
   const message = renderMessage(event);
   if (direct) {
     return {

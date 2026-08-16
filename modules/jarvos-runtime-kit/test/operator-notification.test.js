@@ -78,10 +78,10 @@ test('validation rejects free prose and private or raw diagnostic fields before 
   }
 });
 
-test('unknown codes render reviewed generic action-required text without the code', () => {
-  const output = renderOperatorNotification(event({ code: 'new-private-machine-code', actionRequired: false, action: 'none' }));
-  assert.equal(output, 'jarvOS needs an operator decision and preserved the existing state. Action required: Review the condition before jarvOS continues. Next: jarvOS will wait for your direction. Reference: uTQf8DG1p9Ck5Lm3Nw2RzAqB.');
-  assert.equal(output.includes('new-private-machine-code'), false);
+test('unknown codes are rejected before rendering', () => {
+  const result = validateOperatorNotificationEvent(event({ code: 'new-private-machine-code' }));
+  assert.equal(result.ok, false);
+  assert.match(result.errors.join('\n'), /not a supported operator notification code/);
 });
 
 test('evaluation and dedupe identity are deterministic', () => {

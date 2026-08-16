@@ -18,8 +18,8 @@ const {
   evaluateOperatorNotification,
 } = operatorNotification;
 
-function opaqueReference(value) {
-  return crypto.createHash('sha256').update(JSON.stringify(value)).digest('base64url');
+function opaqueReference() {
+  return crypto.randomBytes(24).toString('base64url');
 }
 
 function observedAt(result, now) {
@@ -38,6 +38,7 @@ function eventFor(result, { now = new Date().toISOString() } = {}) {
     audience: 'operator',
     observedAt: observedAt(result, now),
     freshness: 'current',
+    privateDetailReference: opaqueReference(),
   };
 
   if (!result?.ok || result?.ran === false) {
@@ -49,7 +50,7 @@ function eventFor(result, { now = new Date().toISOString() } = {}) {
       actionRequired: true,
       action: 'choose-recovery',
       nextState: 'continue-monitoring',
-      eventReference: opaqueReference({ kind: 'scheduled-repair-failure', reason: result?.reason || 'unknown' }),
+      eventReference: opaqueReference(),
       dedupeKey: 'scheduled-repair-recovery',
     };
   }
@@ -63,7 +64,7 @@ function eventFor(result, { now = new Date().toISOString() } = {}) {
       actionRequired: false,
       action: 'none',
       nextState: 'continue-monitoring',
-      eventReference: opaqueReference({ kind: 'scheduled-repair-safety-hold', raised, mutationDenied: result.mutationDenied === true }),
+      eventReference: opaqueReference(),
       dedupeKey: 'scheduled-repair-safety-hold',
     };
   }
@@ -77,7 +78,7 @@ function eventFor(result, { now = new Date().toISOString() } = {}) {
       actionRequired: true,
       action: 'choose-recovery',
       nextState: 'continue-monitoring',
-      eventReference: opaqueReference({ kind: 'scheduled-repair-owner-review', raised }),
+      eventReference: opaqueReference(),
       dedupeKey: 'scheduled-repair-owner-review',
     };
   }
@@ -91,7 +92,7 @@ function eventFor(result, { now = new Date().toISOString() } = {}) {
       actionRequired: false,
       action: 'none',
       nextState: 'none',
-      eventReference: opaqueReference({ kind: 'scheduled-repair-resolution', resolved }),
+      eventReference: opaqueReference(),
       dedupeKey: 'scheduled-repair-resolution',
     };
   }
@@ -105,12 +106,26 @@ function eventFor(result, { now = new Date().toISOString() } = {}) {
       actionRequired: false,
       action: 'none',
       nextState: 'none',
-      eventReference: opaqueReference({ kind: 'scheduled-repair-repair', applied: result.reconciliation.applied }),
+      eventReference: opaqueReference(),
       dedupeKey: 'scheduled-repair-repair',
     };
   }
 
   return null;
+}
+
+const OPERATOR_NOTIFICATION_TRANSPORT_VERSION = 'jarvos-operator-notification-transport/v1';
+
+function scheduledRepairCliOutput(notification) {
+  if (!notification || notification.output === NO_REPLY) return NO_REPLY;
+  const event = notification.event;
+  return JSON.stringify({
+    schema: OPERATOR_NOTIFICATION_TRANSPORT_VERSION,
+    disposition: 'action-required',
+    message: notification.output,
+    event,
+    dedupeIdentity: notification.dedupeIdentity,
+  });
 }
 
 function scheduledRepairNotification(result, options = {}) {
@@ -169,4 +184,11 @@ function runScheduledRepair({
   };
 }
 
-module.exports = { eventFor, scheduledRepairMessage, scheduledRepairNotification, runScheduledRepair };
+module.exports = {
+  OPERATOR_NOTIFICATION_TRANSPORT_VERSION,
+  eventFor,
+  scheduledRepairCliOutput,
+  scheduledRepairMessage,
+  scheduledRepairNotification,
+  runScheduledRepair,
+};
