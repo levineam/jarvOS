@@ -178,7 +178,7 @@ function checkReleaseReadiness(opts = {}) {
 
   try {
     const changelog = read('CHANGELOG.md');
-    const escapedTarget = target.replace(/\./g, '\\.');
+    const escapedTarget = target.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const changelogHeading = changelog.match(new RegExp(`^##\\s+(?:\\[)?v?${escapedTarget}\\b(?:\\])?([^\\n]*)`, 'm'));
     if (!changelogHeading) {
       fail('CHANGELOG.md version section', `Missing heading for ${tag}`);
