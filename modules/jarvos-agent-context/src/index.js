@@ -1252,6 +1252,8 @@ async function hydrate(options = {}) {
   delete projectsRequest.include;
   delete projectsRequest.limits;
   delete projectsRequest.maxItems;
+  delete projectsRequest.provider;
+  delete projectsRequest.projectsProvider;
   if (options[HYDRATION_PROJECTS_PROVIDER]) projectsRequest.provider = options[HYDRATION_PROJECTS_PROVIDER];
   const projects = await readProjectsContext(projectsRequest, true);
   const projectsCutover = projectsContextCutoverEnabled(options);
