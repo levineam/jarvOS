@@ -48,11 +48,20 @@ The full scan and mutation lease are authoritative. Healthy recurring runs are
 quiet and write no durable state. A new actionable transition gets one redacted
 notice; a recovery gets one redacted recovery notice.
 
-Use `jarvos-skills-scheduled-repair` when a scheduler delivers stdout. It emits
-exactly `NO_REPLY` for a healthy replay and only emits a count-only message for
-new attention, recovery, repair, or safe failure. Pass `--announce-convergence`
-once through the configured delivery route after activation, then remove that
-flag so subsequent healthy runs remain quiet.
+Use `jarvos-skills-scheduled-repair` when a scheduler delivers stdout. It projects
+each outcome through the public operator-notification contract:
+
+- Healthy replays, safe automatic holds (for example source safety refusals),
+  successful automatic repairs, and automatic resolutions emit exactly `NO_REPLY`.
+- A concrete owner decision or failed recovery emits one plain-English direct
+  message that states what happened, what jarvOS did, the decision needed, the
+  next automatic step, and an opaque event reference.
+- Raw reason codes, skill identities, paths, and stack text never appear in
+  human output. They remain on the shared-skills status/explain surface with
+  first-seen time and occurrence count.
+
+Pass `--announce-convergence` once through the configured delivery route after
+activation, then remove that flag so subsequent healthy runs remain quiet.
 
 For an exact-path proof, bind each higher-precedence project or workspace root
 as an absolute `scopeRoots` path and set `scopeRootsComplete: true` in the local

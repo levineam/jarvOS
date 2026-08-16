@@ -197,10 +197,15 @@ never auto-enable live harness gates. Claude interactive proof remains
 
 `autonomous-repair` is the scheduler command. It stays inert until inventory is
 enabled in owner-local configuration and never enables the scheduler itself.
-`jarvos-skills-scheduled-repair` wraps that command for delivery-aware schedulers:
-healthy repeats print `NO_REPLY`, while new attention, repair, or failure prints
-one redacted count-only message. `--announce-convergence` is a one-run activation
-option, not a recurring schedule flag.
+`jarvos-skills-scheduled-repair` wraps that command for delivery-aware schedulers
+and projects outcomes through the public `@jarvos/runtime-kit` operator-notification
+contract. Healthy repeats, safe automatic holds (including `unsafe_source`),
+successful repairs, and automatic resolutions print `NO_REPLY`. Only a concrete
+owner decision or failed recovery becomes a plain-English direct message with an
+opaque event reference—never a raw reason code, skill id, path, or stack.
+Reason codes remain on the shared-skills durable status/explain surface with
+first-seen time and occurrence count. `--announce-convergence` is a one-run
+activation option, not a recurring schedule flag.
 The public preflight is permanently read-only; first live convergence happens
 only through the installed, merged runtime. See the
 [architecture](../../docs/architecture/shared-skill-distribution.md) and

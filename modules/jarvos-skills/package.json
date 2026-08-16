@@ -22,6 +22,9 @@
   "scripts": {
     "test": "node --test test/*.test.js"
   },
+  "dependencies": {
+    "@jarvos/runtime-kit": "0.1.0"
+  },
   "engines": {
     "node": ">=18"
   }
