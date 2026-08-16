@@ -23,6 +23,13 @@ quiet. Release-state events separately name published, approval-ready, and
 future versions; stale or unknown observations use qualified wording rather
 than claiming current publication or review readiness.
 
+`scripts/operator-notification-lint.js` also exports
+`lintOperatorMessage(input)` and `lintOperatorMessages(inputs)`. They provide a
+bounded local check for messages before a runtime presents them: internal codes,
+paths, stack-like text, source SHAs, ambiguous attention requests, and unsafe
+release wording fail closed. The script's default CLI mode checks the four
+public adapter declarations; it does not send or configure notifications.
+
 ## Commands
 
 ```bash

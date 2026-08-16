@@ -13,12 +13,17 @@
     "alias": { "pattern": "^[a-z][a-z0-9-]{0,63}$", "maxLength": 64, "reservedNames": [] },
     "probeIsolation": { "mode": "receipt-bound-exact-path", "unattended": true }
   },
+  "operatorNotification": {
+    "version": "jarvos-operator-notification-adapter/v1",
+    "contract": "jarvos-operator-notification/v1",
+    "delivery": { "status": "not-configured", "reason": "Local owner configuration chooses a delivery surface; this public adapter does not configure one." }
+  },
   "artifactGeneration": {
     "version": "jarvos-hermes-artifact-generation.v1",
     "releaseRevision": "291c334-route-capability",
-    "generationDigest": "85781875304f9010b19c1f1c20571565a84f0e96bafed889aec29261e2b75118",
+    "generationDigest": "83fa6275c92eb6ff27de28b1f3fefb43d72a01daad40cccc4c43674b526aa66f",
     "components": [
-      { "name": "skills-manifest", "path": "modules/jarvos-skills/manifest.json", "digest": "8eca8860c4d9d90c1a0dfe67f4bf1ea87398b6823caf88e243b7278b00b6ef49" },
+      { "name": "skills-manifest", "path": "modules/jarvos-skills/manifest.json", "digest": "1726888752e8ace7e439b997d131706f9dc1225dbb3791acb628795ff7671deb" },
       { "name": "context-plugin-metadata", "path": "runtimes/hermes/plugins/jarvos-context/plugin.yaml", "digest": "74f3bc53308a43b119773cf0a0fa5f47019761038d1bada4cc2fd5a1b13370bb" },
       { "name": "context-plugin-code", "path": "runtimes/hermes/plugins/jarvos-context/__init__.py", "digest": "7f05fd28a036af20f26ac46a5d44b60514c51b4da4ad4b01511bc5d6371d3dbf" },
       { "name": "coding-host-adapter", "path": "modules/jarvos-coding/src/adapters/hosts.js", "digest": "a8e24f668cb39ecf50400b5eaca122fdec93aad6df956446ea5f9def22b0f9af" }

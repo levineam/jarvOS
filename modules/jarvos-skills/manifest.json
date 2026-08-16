@@ -6,7 +6,8 @@
     "workflow-execution",
     "rule-creation",
     "context-management",
-    "cron-hygiene"
+    "cron-hygiene",
+    "operator-communication"
   ],
   "optionalAdapters": [
     {
@@ -101,6 +102,28 @@
         "targets": {
           "generic": { "path": "{skillsRoot}/cron-hygiene/SKILL.md", "renderer": "raw-skill-md" },
           "hermes": { "path": "{skillsRoot}/cron-hygiene/SKILL.md", "renderer": "raw-skill-md" }
+        }
+      }
+    },
+    {
+      "name": "operator-communication",
+      "path": "skills/operator-communication/SKILL.md",
+      "purpose": "Explain operational conditions safely in plain language without selecting a notification transport.",
+      "source": {
+        "revision": "jarvos-skills-v0.3.0",
+        "digest": "41ffc4ca3b1d363dd8d94a31b23b757a19c78f94e3a1e27b9813d1bcb4ae3938",
+        "license": "MIT",
+        "provenance": "jarvOS reviewed source"
+      },
+      "supportedHarnesses": ["generic", "claude-code", "codex", "openclaw", "hermes"],
+      "projection": {
+        "mode": "copy",
+        "targets": {
+          "generic": { "path": "{skillsRoot}/operator-communication/SKILL.md", "renderer": "raw-skill-md" },
+          "claude-code": { "path": "{skillsRoot}/operator-communication/SKILL.md", "renderer": "raw-skill-md" },
+          "codex": { "path": "{skillsRoot}/operator-communication/SKILL.md", "renderer": "raw-skill-md" },
+          "openclaw": { "path": "{skillsRoot}/operator-communication/SKILL.md", "renderer": "raw-skill-md" },
+          "hermes": { "path": "{skillsRoot}/operator-communication/SKILL.md", "renderer": "raw-skill-md" }
         }
       }
     },
