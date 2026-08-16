@@ -18,6 +18,8 @@ const {
   setMcpProjectsContextProvider,
 } = require('../scripts/jarvos-mcp.js');
 
+const ACTIVE_ASSISTANT_PROVIDER_MODULE_ENV = 'ACTIVE_ASSISTANT_PROJECTS_PROVIDER_MODULE';
+
 const QUERY = {
   scope: { projectIds: ['prj_000001'], outcomeIds: ['out_000001'], includeDescendants: false },
   include: ['hierarchy', 'activity', 'currentWork', 'attention'],
@@ -181,6 +183,36 @@ test('host Projects binding is discovered privately with library and MCP parity'
     assert.equal(mcpPayload.status, 'ok');
     assert.equal(mcpPayload.fingerprint, libraryResult.fingerprint);
     assert.equal(hydration.report.projectsContext.status, 'ok');
+  });
+});
+
+test('selected Active Assistant provider artifact overrides config and fails closed when invalid', async () => {
+  setMcpProjectsContextProvider(null);
+  await withHostProjectsProvider(async ({ root, repositoryRoot }) => {
+    const selectedProvider = path.join(repositoryRoot, 'selected-provider.js');
+    fs.writeFileSync(selectedProvider, `const packet = ${JSON.stringify(packet())};\nmodule.exports.read = async ({ query }) => ({ status: 'ok', packet: { ...packet, query, currentWork: [{ id: 'selected-provider', title: 'Selected runtime provider', status: 'in_progress' }] } });\n`);
+    const previous = process.env[ACTIVE_ASSISTANT_PROVIDER_MODULE_ENV];
+    try {
+      process.env[ACTIVE_ASSISTANT_PROVIDER_MODULE_ENV] = selectedProvider;
+      const selected = await readProjectsContext({ profile: 'orientation' });
+      assert.equal(selected.status, 'ok');
+      assert.equal(selected.packet.currentWork[0].id, 'selected-provider');
+
+      process.env[ACTIVE_ASSISTANT_PROVIDER_MODULE_ENV] = path.join(repositoryRoot, 'missing-provider.js');
+      const missing = await readProjectsContext({ profile: 'orientation' });
+      assert.equal(missing.status, 'unavailable');
+      assert.equal(missing.packet, null);
+
+      const outsideProvider = path.join(root, 'outside-provider.js');
+      fs.writeFileSync(outsideProvider, 'module.exports.read = async () => ({ status: \'unavailable\' });\n');
+      process.env[ACTIVE_ASSISTANT_PROVIDER_MODULE_ENV] = outsideProvider;
+      const outside = await readProjectsContext({ profile: 'orientation' });
+      assert.equal(outside.status, 'unavailable');
+      assert.equal(outside.packet, null);
+    } finally {
+      if (previous === undefined) delete process.env[ACTIVE_ASSISTANT_PROVIDER_MODULE_ENV];
+      else process.env[ACTIVE_ASSISTANT_PROVIDER_MODULE_ENV] = previous;
+    }
   });
 });
 
