@@ -10,6 +10,7 @@ const {
   buildArtifact,
   optimizeNoteKnowledge,
 } = require('../packages/jarvos-secondbrain-notes/src/knowledge-optimizer');
+const { digestText } = require('../bridge/provenance/src/content-origin-contract');
 
 function noteFixture() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-ku-'));
@@ -172,7 +173,7 @@ test('explicit human note provenance requires a syntactically valid source recei
         capture_event_id: 'capture-1',
         actor: 'user',
         source_digest: 'a'.repeat(64),
-        content_digest: 'b'.repeat(64),
+        content_digest: digestText(body),
       },
     },
     created: true,

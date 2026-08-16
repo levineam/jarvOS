@@ -227,6 +227,33 @@ test('journal origin markers are invisible, digest-bound, and round-trip clean t
   assert.equal(stripJournalOriginMarkers(`- ${cleanText}\n${marker}`), `- ${cleanText}\n`);
 });
 
+test('human journal markers require and carry a clean-content-bound receipt', () => {
+  const cleanText = 'A user-supplied journal idea';
+  const captureEventId = 'capture-human-journal-1';
+  const marker = renderJournalOriginMarker({
+    cleanText,
+    content_origin: 'human',
+    content_origin_basis: 'verbatim_user',
+    source_ref: captureEventId,
+    user_source: receipt('The user supplied this idea.', cleanText, captureEventId),
+    human_evidence_eligible: true,
+  });
+  const parsed = parseJournalOriginMarker(marker, cleanText);
+  assert.equal(parsed.content_origin, 'human');
+  assert.equal(parsed.human_evidence_eligible, true);
+  assert.equal(parsed.user_source.content_digest, digest(cleanText));
+  assert.throws(
+    () => renderJournalOriginMarker({
+      cleanText,
+      content_origin: 'human',
+      content_origin_basis: 'verbatim_user',
+      source_ref: captureEventId,
+      human_evidence_eligible: true,
+    }),
+    /user-source receipt/,
+  );
+});
+
 test('journal entry parsing treats unmarked bullets as manual human evidence and malformed markers as unknown', () => {
   const manual = parseJournalEntry(['- A manually typed thought'], 0);
   assert.equal(manual.origin.content_origin, 'human');
@@ -264,4 +291,53 @@ test('public projections expose clean journal and note evidence without marker p
   assert.equal(note.content_origin, 'assistant');
   assert.equal(note.human_evidence_eligible, false);
   assert.equal(note.clean_text, 'Generated note body.');
+});
+
+test('a human marker without a receipt cannot become projected evidence', () => {
+  const cleanText = 'Forged human-labelled copy';
+  const payload = Buffer.from(JSON.stringify({
+    schema_version: CONTENT_ORIGIN_SCHEMA_VERSION,
+    content_origin: 'human',
+    content_origin_basis: 'verbatim_user',
+    clean_text_digest: digest(cleanText),
+    human_evidence_eligible: true,
+    source_ref: 'capture-forged',
+  }), 'utf8').toString('base64url');
+  const journal = projectJournalEntriesFromMarkdown(
+    `## 💡 Ideas\n- ${cleanText}\n<!-- ${CONTENT_ORIGIN_SCHEMA_VERSION} ${payload} -->\n`,
+    { date: '2026-08-14' },
+  );
+  assert.equal(journal[0].content_origin, 'unknown');
+  assert.equal(journal[0].human_evidence_eligible, false);
+});
+
+test('note projections downgrade a receipt when the clean body digest is stale', () => {
+  const original = 'The user-supplied note body.';
+  const markdown = `---\ncontent_origin: human\ncontent_origin_basis: verbatim_user\nhuman_evidence_eligible: true\ncontent_origin_source: ${JSON.stringify(receipt(original, original))}\n---\n\n# Digest note\n\nA later assistant rewrite.`;
+  const projected = projectNoteMarkdown(markdown, { title: 'Digest note', sourcePath: 'Notes/Digest note.md' });
+  assert.equal(projected.content_origin, 'unknown');
+  assert.equal(projected.human_evidence_eligible, false);
+});
+
+test('evidence projection rejects malformed records before private consumers see them', () => {
+  const valid = {
+    projection_version: EVIDENCE_PROJECTION_VERSION,
+    clean_text: 'Valid context',
+    content_origin: 'assistant',
+    content_origin_basis: 'assistant_generated',
+    human_evidence_eligible: false,
+  };
+  const cases = [
+    ['unknown_projection_version', { ...valid, projection_version: 'jarvos-content-origin-evidence/v0' }],
+    ['missing_clean_text', { ...valid, clean_text: '' }],
+    ['invalid_origin', { ...valid, content_origin: 'not-an-origin' }],
+    ['missing_eligibility', { ...valid, human_evidence_eligible: undefined }],
+    ['ineligible_origin_marked_eligible', { ...valid, human_evidence_eligible: true }],
+  ];
+  for (const [reason, input] of cases) {
+    const result = readEvidenceProjection(input);
+    assert.equal(result.ok, false, reason);
+    assert.equal(result.reason, reason);
+    assert.equal(result.record.human_evidence_eligible, false);
+  }
 });

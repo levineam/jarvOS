@@ -43,6 +43,13 @@ function cleanText(value) {
   return String(value ?? '').replace(/\r\n/g, '\n').trim();
 }
 
+function cleanNoteContent(value, title) {
+  const text = cleanText(value);
+  const heading = String(title || '').trim();
+  if (!heading || !text.startsWith(`# ${heading}\n`)) return text;
+  return text.slice(heading.length + 3).trim();
+}
+
 function digestText(value) {
   return crypto.createHash('sha256').update(cleanText(value)).digest('hex');
 }
@@ -192,20 +199,39 @@ function decodeMarkerPayload(encoded) {
 
 /**
  * Render an invisible, line-adjacent journal marker. The marker contains no
- * source text; it binds only the clean bullet digest to the bounded origin
- * declaration and an opaque source reference.
+ * source text; it binds the clean bullet digest to the bounded origin
+ * declaration and, for human evidence, a compact user-source receipt.
  */
-function renderJournalOriginMarker({ cleanText, clean_text_digest, content_origin, content_origin_basis, source_ref, human_evidence_eligible = false } = {}) {
+function renderJournalOriginMarker({ cleanText, clean_text_digest, content_origin, content_origin_basis, source_ref, user_source, human_evidence_eligible = false } = {}) {
   const origin = String(content_origin || '').trim().toLowerCase();
   const basis = String(content_origin_basis || '').trim().toLowerCase();
   if (!contentOriginPairIsValid(origin, basis)) throw new Error('Invalid journal content-origin declaration');
+  const receipt = sourceReceipt({ user_source });
+  if (origin === 'human' && !receipt) throw new Error('Human journal origin requires a user-source receipt');
+  const markerReceipt = receipt
+    ? {
+      capture_event_id: String(receipt.capture_event_id || '').trim(),
+      actor: receipt.actor,
+      source_digest: String(receipt.source_digest || '').trim(),
+      content_digest: digestText(cleanText),
+    }
+    : null;
+  if (markerReceipt) {
+    const validation = validateUserSourceReceipt(markerReceipt, { content: cleanText });
+    if (validation.reason !== 'unresolved') throw new Error(`Invalid journal user-source receipt: ${validation.reason}`);
+  }
+  const markerSourceRef = source_ref ? String(source_ref).trim() : markerReceipt?.capture_event_id;
+  if (markerSourceRef && markerReceipt && markerSourceRef !== markerReceipt.capture_event_id) {
+    throw new Error('Journal source reference must match the user-source capture event');
+  }
   const payload = {
     schema_version: CONTENT_ORIGIN_SCHEMA_VERSION,
     content_origin: origin,
     content_origin_basis: basis,
     clean_text_digest: clean_text_digest || digestText(cleanText),
     human_evidence_eligible: origin === 'human' && human_evidence_eligible === true,
-    ...(source_ref ? { source_ref: String(source_ref).trim() } : {}),
+    ...(markerSourceRef ? { source_ref: markerSourceRef } : {}),
+    ...(markerReceipt ? { user_source: markerReceipt } : {}),
   };
   return `${JOURNAL_MARKER_PREFIX}${encodeMarkerPayload(payload)} -->`;
 }
@@ -231,6 +257,11 @@ function parseJournalOriginMarker(marker, cleanText) {
   if (payload.source_ref !== undefined && (typeof payload.source_ref !== 'string' || !payload.source_ref.trim())) {
     return unknownJournalOrigin('invalid_marker_source_ref');
   }
+  if (payload.content_origin === 'human') {
+    const validation = validateUserSourceReceipt(payload.user_source, { content: cleanText });
+    if (validation.reason !== 'unresolved') return unknownJournalOrigin(`invalid_marker_user_source:${validation.reason}`);
+    if (payload.source_ref !== payload.user_source.capture_event_id) return unknownJournalOrigin('marker_source_ref_mismatch');
+  }
   return {
     schema_version: payload.schema_version,
     content_origin: payload.content_origin,
@@ -238,6 +269,7 @@ function parseJournalOriginMarker(marker, cleanText) {
     clean_text_digest: payload.clean_text_digest,
     human_evidence_eligible: payload.human_evidence_eligible === true && payload.content_origin === 'human',
     ...(payload.source_ref ? { source_ref: payload.source_ref } : {}),
+    ...(payload.user_source ? { user_source: { ...payload.user_source } } : {}),
   };
 }
 
@@ -311,14 +343,14 @@ function humanEvidenceEligible(record = {}, options = {}) {
 
 function normalizeContentOriginWithLegacy(input = {}, options = {}) {
   if (input.content_origin || input.contentOrigin || input.content_origin_basis || input.contentOriginBasis) {
-    if (options.allowUnresolvedReceipt === true) return normalizeContentOriginForRead(input);
+    if (options.allowUnresolvedReceipt === true) return normalizeContentOriginForRead(input, options);
     return normalizeContentOrigin(input, options);
   }
   if (input.author) return resolveLegacyOrigin(input);
   return unknownRecord('missing_declaration');
 }
 
-function normalizeContentOriginForRead(input = {}) {
+function normalizeContentOriginForRead(input = {}, options = {}) {
   const source = isPlainObject(input) ? input : {};
   const origin = String(source.content_origin ?? source.contentOrigin ?? '').trim().toLowerCase();
   const basis = String(source.content_origin_basis ?? source.contentOriginBasis ?? '').trim().toLowerCase();
@@ -329,6 +361,9 @@ function normalizeContentOriginForRead(input = {}) {
   if (origin === 'human') {
     if (!receipt || receipt.actor !== 'user' || !SHA256_RE.test(String(receipt.source_digest || '')) || !SHA256_RE.test(String(receipt.content_digest || ''))) {
       return unknownRecord('invalid_read_receipt');
+    }
+    if (options.content !== undefined && digestText(options.content) !== receipt.content_digest) {
+      return unknownRecord('read_content_digest_mismatch');
     }
   }
   return {
@@ -348,9 +383,11 @@ module.exports = {
   BASIS_ORIGIN,
   LEGACY_AUTHOR_ORIGINS,
   cleanText,
+  cleanNoteContent,
   digestText,
   validateUserSourceReceipt,
   normalizeContentOrigin,
+  contentOriginPairIsValid,
   frontmatterForContentOrigin,
   JOURNAL_MARKER_PREFIX,
   renderJournalOriginMarker,

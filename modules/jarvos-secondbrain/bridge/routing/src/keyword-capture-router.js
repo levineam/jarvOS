@@ -50,7 +50,7 @@ const {
 const { createArtifactReceipt } = require('../../../src/artifact-receipt');
 
 function applyRoutingPlan(capture = {}, options = {}) {
-  const plan = buildRoutingPlan(capture);
+  const plan = buildRoutingPlan(capture, options);
   const date = plan.date;
   const result = {
     plan,

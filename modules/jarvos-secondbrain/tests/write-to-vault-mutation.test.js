@@ -104,12 +104,37 @@ test('canonical note writes persist origin metadata, default missing declaration
   });
 });
 
-test('note updates preserve an existing explicit origin when the update has no new declaration', () => {
+test('canonical note writes make an omitted origin explicit unknown', () => {
+  withVault(({ root }) => {
+    const result = writeNoteFile({
+      title: 'Undeclared note',
+      content: 'A note without a provenance declaration remains context-only.',
+      operationId: 'note-provenance-unknown-0001',
+      vaultId: 'vault-provenance',
+      vaultRoot: root,
+      mutationExecutor(operation) {
+        const target = path.join(root, operation.vaultRelativePath);
+        fs.mkdirSync(path.dirname(target), { recursive: true });
+        fs.writeFileSync(target, operation.content, 'utf8');
+        return { status: 'committed', obsidian: 'acknowledged' };
+      },
+    });
+
+    const content = fs.readFileSync(result.path, 'utf8');
+    assert.match(content, /content_origin_schema: jarvos-content-origin\/v1/);
+    assert.match(content, /content_origin: unknown/);
+    assert.match(content, /content_origin_basis: unknown/);
+    assert.match(content, /human_evidence_eligible: false/);
+  });
+});
+
+test('material note updates without a declaration downgrade inherited provenance to unknown', () => {
   withVault(({ root }) => {
     const execute = (operation) => {
       const target = path.join(root, operation.vaultRelativePath);
       fs.mkdirSync(path.dirname(target), { recursive: true });
       if (operation.operationKind === 'create') fs.writeFileSync(target, operation.content, 'utf8');
+      else if (operation.operationKind === 'replace') fs.writeFileSync(target, operation.content, 'utf8');
       else fs.writeFileSync(target, `${fs.readFileSync(target, 'utf8').trimEnd()}\n\n${operation.replayPayload.body}\n`, 'utf8');
       return { status: 'committed', obsidian: 'acknowledged' };
     };
@@ -131,8 +156,9 @@ test('note updates preserve an existing explicit origin when the update has no n
       ...context('note-provenance-0003'),
     });
     const content = fs.readFileSync(first.path, 'utf8');
-    assert.match(content, /content_origin: assistant/);
-    assert.match(content, /content_origin_basis: assistant_generated/);
+    assert.match(content, /content_origin: unknown/);
+    assert.match(content, /content_origin_basis: unknown/);
+    assert.doesNotMatch(content, /content_origin: assistant/);
   });
 });
 

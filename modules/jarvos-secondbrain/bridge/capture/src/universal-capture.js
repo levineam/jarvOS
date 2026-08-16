@@ -92,13 +92,9 @@ function normalizeCaptureEvent(rawInput = {}, options = {}) {
     || raw.contentOriginBasis != null
     || raw.user_source != null
     || raw.userSource != null;
-  const sourceRecord = raw.user_source_record || raw.userSourceRecord;
-  const resolveUserSource = options.resolveUserSource || raw.resolveUserSource || (sourceRecord
-    ? (captureEventId) => {
-      const id = sourceRecord.capture_event_id || sourceRecord.captureEventId || sourceRecord.id;
-      return id === captureEventId ? sourceRecord : null;
-    }
-    : null);
+  // A serialized source record is not a trusted receipt resolver. The caller
+  // must inject the harness-owned event lookup explicitly.
+  const resolveUserSource = options.resolveUserSource || raw.resolveUserSource || null;
   const captureEventId = raw.captureEventId || raw.capture_event_id || raw.eventId;
   const contentOrigin = normalizeContentOrigin({
     content_origin: raw.content_origin ?? raw.contentOrigin,
@@ -109,9 +105,17 @@ function normalizeCaptureEvent(rawInput = {}, options = {}) {
     resolveUserSource,
     captureEventId,
   });
-  if (options.requireDeclaration === true && !hasOriginDeclaration) {
+  const declaredOrigin = raw.content_origin ?? raw.contentOrigin;
+  const declaredBasis = raw.content_origin_basis ?? raw.contentOriginBasis;
+  if (options.requireDeclaration === true
+    && (!hasOriginDeclaration || typeof declaredOrigin !== 'string' || typeof declaredBasis !== 'string')) {
     const error = new Error('invalid CaptureEvent v2: content_origin declaration is required at the canonical writer boundary');
     error.errors = ['content_origin declaration is required at the canonical writer boundary'];
+    throw error;
+  }
+  if (options.requireDeclaration === true && declaredOrigin === 'human' && contentOrigin.content_origin !== 'human') {
+    const error = new Error('invalid CaptureEvent v2: human content requires a valid user-source receipt');
+    error.errors = ['human content requires a valid user-source receipt'];
     throw error;
   }
   const event = {
@@ -146,7 +150,7 @@ function normalizeCaptureEvent(rawInput = {}, options = {}) {
   };
 
   const normalized = compact(event);
-  const errors = validateCaptureEvent(normalized, { requireDeclaration: false });
+  const errors = validateCaptureEvent(normalized, { requireDeclaration: options.requireDeclaration === true });
   if (errors.length) {
     const error = new Error(`invalid CaptureEvent v2: ${errors.join('; ')}`);
     error.errors = errors;

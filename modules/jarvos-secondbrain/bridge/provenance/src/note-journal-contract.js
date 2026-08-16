@@ -12,6 +12,10 @@ const { frontmatterToObject, parseFrontmatter } = require('../../../packages/jar
 const { createObsidianOwnedMutationService } = require('./obsidian-mutation');
 const { linkNoteToJournal } = require('./link-to-journal');
 const { createArtifactReceipt } = require('../../../src/artifact-receipt');
+const {
+  cleanNoteContent,
+  frontmatterForContentOrigin,
+} = require('./content-origin-contract');
 
 const SUPPORTED_PERSONALITIES = new Set(['michael', 'claude-code', 'hermes', 'codex']);
 const LIGHTWEIGHT_IDEA_RE = /^\s*idea\s*[:\-]/i;
@@ -35,7 +39,7 @@ function countJournalBacklinks(journalMd, title) {
   return matches ? matches.length : 0;
 }
 
-function parseInput(input) {
+function parseInput(input, { resolveUserSource } = {}) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) {
     throw new Error('input must be a JSON object');
   }
@@ -68,6 +72,16 @@ function parseInput(input) {
   const humanEvidenceEligible = input.human_evidence_eligible
     ?? suppliedFrontmatter.human_evidence_eligible
     ?? false;
+  const normalizedOrigin = frontmatterForContentOrigin({
+    content_origin: contentOrigin,
+    content_origin_basis: contentOriginBasis,
+    content_origin_source: contentOriginSource,
+    human_evidence_eligible: humanEvidenceEligible,
+  }, {
+    content: cleanNoteContent(String(input.content), input.title),
+    resolveUserSource,
+    captureEventId: input.captureEventId ?? input.capture_event_id,
+  });
 
   return {
     personality,
@@ -77,10 +91,7 @@ function parseInput(input) {
       ...suppliedFrontmatter,
       source_personality: personality,
       contract: 'obsidian-note-journal-v1',
-      content_origin: contentOrigin,
-      content_origin_basis: contentOriginBasis,
-      ...(contentOriginSource !== undefined ? { content_origin_source: contentOriginSource } : {}),
-      human_evidence_eligible: humanEvidenceEligible,
+      ...normalizedOrigin,
     },
   };
 }
@@ -228,8 +239,8 @@ function dispatchBacklink({ result, section = '📝 Notes', createIfMissing = tr
   }
 }
 
-function writeNoteThroughContract(rawInput, { mutationService, link } = {}) {
-  const input = parseInput(rawInput);
+function writeNoteThroughContract(rawInput, { mutationService, link, resolveUserSource } = {}) {
+  const input = parseInput(rawInput, { resolveUserSource });
   const service = mutationService || createObsidianOwnedMutationService({ source: 'bridge.note-journal-contract' });
   const filePath = path.join(getVaultNotesDir(), `${String(input.title).trim().replace(/[/\\:*?"<>|]/g, '-')}.md`);
   const vaultRelativePath = path.relative(service.vaultRoot, filePath).split(path.sep).join('/');

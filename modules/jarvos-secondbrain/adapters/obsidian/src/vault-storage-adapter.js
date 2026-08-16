@@ -80,8 +80,14 @@ function createVaultStorageAdapter({ mutationService, vaultRoot = getVaultDir(),
       const ensured = this.ensureJournal({ date, intentId: intentId ? `${intentId}:create` : undefined });
       if (!receiptIsAcknowledged(ensured.receipt)) return { journalPath: ensured.journalPath, heading, line: String(line).trim(), receipt: ensured.receipt, acknowledged: false, artifactReceipt: ensured.artifactReceipt };
       const cleanLine = cleanJournalEntryText(String(line).trim());
+      const canonicalCleanText = cleanLine.startsWith('- ')
+        ? cleanLine.slice(2).trim()
+        : cleanLine.replace(/^[-\s]+/, '').trim();
       const contentOriginPayload = contentOrigin
-        ? { ...contentOrigin, clean_text_digest: digestText(cleanLine.slice(2).trim()) }
+        ? {
+          ...contentOrigin,
+          clean_text_digest: digestText(canonicalCleanText),
+        }
         : null;
       const outcome = executeTransform({
         date,
