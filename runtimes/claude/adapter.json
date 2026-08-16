@@ -13,6 +13,11 @@
     "alias": { "pattern": "^[a-z][a-z0-9-]{0,63}$", "maxLength": 64, "reservedNames": [] },
     "probeIsolation": { "mode": "interactive-secret-free-smoke", "unattended": false }
   },
+  "operatorNotification": {
+    "version": "jarvos-operator-notification-adapter/v1",
+    "contract": "jarvos-operator-notification/v1",
+    "delivery": { "status": "not-configured", "reason": "Local owner configuration chooses a delivery surface; this public adapter does not configure one." }
+  },
   "capabilityDescriptor": {
     "version": "jarvos-runtime-capability-descriptor.v1", "harness": "claude",
     "capabilities": {

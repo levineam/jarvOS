@@ -5,6 +5,9 @@
   "license": "MIT",
   "type": "commonjs",
   "main": "src/index.js",
+  "dependencies": {
+    "@jarvos/runtime-kit": "^0.1.0"
+  },
   "bin": {
     "jarvos-skills": "scripts/install-skills.js",
     "jarvos-skills-scheduled-repair": "scripts/scheduled-repair.js"

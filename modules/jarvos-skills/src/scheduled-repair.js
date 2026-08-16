@@ -1,43 +1,154 @@
 'use strict';
 
+const crypto = require('node:crypto');
 const { autonomousRepairOperator, statusOperator } = require('./operator');
-
-function countByReason(items = []) {
-  const counts = new Map();
-  for (const item of items) {
-    const reason = typeof item?.reasonCode === 'string' && /^[a-z0-9_]{1,64}$/.test(item.reasonCode)
-      ? item.reasonCode
-      : 'needs_owner_input';
-    counts.set(reason, (counts.get(reason) || 0) + 1);
-  }
-  return [...counts.entries()]
-    .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))
-    .slice(0, 3)
-    .map(([reason, count]) => `${reason} (${count})`)
-    .join(', ');
+// The package import is the installed public contract. The relative fallback
+// keeps the source distribution runnable before its sibling packages are packed.
+let operatorNotification;
+try {
+  operatorNotification = require('@jarvos/runtime-kit');
+} catch (error) {
+  if (error.code !== 'MODULE_NOT_FOUND' || !error.message.includes('@jarvos/runtime-kit')) throw error;
+  operatorNotification = require('../../jarvos-runtime-kit');
 }
 
-function scheduledRepairMessage(result, { announceConvergence = false, catalogStatus = null } = {}) {
-  if (!result?.ok) return 'jarvOS skill sync needs attention: scheduled repair did not complete.';
-  if (result.ran === false) {
-    return result.reason === 'inventory_disabled'
-      ? 'jarvOS skill sync needs attention: machine-wide inventory is disabled.'
-      : 'jarvOS skill sync needs attention: the scheduled repair did not run.';
-  }
-  if (result.mutationDenied === true) {
-    const count = Number(result.status?.counts?.actionable || 0);
-    return `jarvOS skill sync needs attention: the inventory was incomplete, so no files were changed${count ? `; ${count} item${count === 1 ? '' : 's'} require review` : ''}.`;
+const {
+  NO_REPLY,
+  OPERATOR_NOTIFICATION_SCHEMA_VERSION,
+  evaluateOperatorNotification,
+} = operatorNotification;
+
+function opaqueReference() {
+  return crypto.randomBytes(24).toString('base64url');
+}
+
+function observedAt(result, now) {
+  const value = result?.status?.observedAt;
+  return typeof value === 'string' && !Number.isNaN(Date.parse(value)) ? value : now;
+}
+
+function eventFor(result, { now = new Date().toISOString() } = {}) {
+  const raised = Array.isArray(result?.attention?.raised) ? result.attention.raised : [];
+  const resolved = Array.isArray(result?.attention?.resolved) ? result.attention.resolved : [];
+  const repaired = result?.reconciliation?.repaired === true
+    && Array.isArray(result.reconciliation.applied)
+    && result.reconciliation.applied.some((item) => item?.applied !== false);
+  const common = {
+    schemaVersion: OPERATOR_NOTIFICATION_SCHEMA_VERSION,
+    audience: 'operator',
+    observedAt: observedAt(result, now),
+    freshness: 'current',
+    privateDetailReference: opaqueReference(),
+  };
+
+  if (!result?.ok || result?.ran === false) {
+    return {
+      ...common,
+      code: 'recovery-failed',
+      severity: 'error',
+      automationOutcome: 'failed',
+      actionRequired: true,
+      action: 'choose-recovery',
+      nextState: 'continue-monitoring',
+      eventReference: opaqueReference(),
+      dedupeKey: 'scheduled-repair-recovery',
+    };
   }
 
-  const raised = Array.isArray(result.attention?.raised) ? result.attention.raised : [];
-  const resolved = Array.isArray(result.attention?.resolved) ? result.attention.resolved : [];
-  const repaired = result.reconciliation?.repaired === true
-    ? (Array.isArray(result.reconciliation.applied)
-      ? result.reconciliation.applied.filter((item) => item?.applied !== false).length
-      : 0)
-    : 0;
+  if (result.mutationDenied === true || raised.some((item) => item?.reasonCode === 'unsafe_source')) {
+    return {
+      ...common,
+      code: 'safety-hold',
+      severity: 'warning',
+      automationOutcome: 'safe-hold',
+      actionRequired: false,
+      action: 'none',
+      nextState: 'continue-monitoring',
+      eventReference: opaqueReference(),
+      dedupeKey: 'scheduled-repair-safety-hold',
+    };
+  }
 
-  if (announceConvergence) {
+  if (raised.length) {
+    return {
+      ...common,
+      code: 'recovery-failed',
+      severity: 'warning',
+      automationOutcome: 'failed',
+      actionRequired: true,
+      action: 'choose-recovery',
+      nextState: 'continue-monitoring',
+      eventReference: opaqueReference(),
+      dedupeKey: 'scheduled-repair-owner-review',
+    };
+  }
+
+  if (resolved.length) {
+    return {
+      ...common,
+      code: 'resolution-complete',
+      severity: 'info',
+      automationOutcome: 'resolved',
+      actionRequired: false,
+      action: 'none',
+      nextState: 'none',
+      eventReference: opaqueReference(),
+      dedupeKey: 'scheduled-repair-resolution',
+    };
+  }
+
+  if (repaired) {
+    return {
+      ...common,
+      code: 'repair-complete',
+      severity: 'info',
+      automationOutcome: 'repaired',
+      actionRequired: false,
+      action: 'none',
+      nextState: 'none',
+      eventReference: opaqueReference(),
+      dedupeKey: 'scheduled-repair-repair',
+    };
+  }
+
+  return null;
+}
+
+const OPERATOR_NOTIFICATION_TRANSPORT_VERSION = 'jarvos-operator-notification-transport/v1';
+
+function scheduledRepairCliOutput(notification) {
+  if (!notification || notification.output === NO_REPLY) return NO_REPLY;
+  const event = notification.event;
+  return JSON.stringify({
+    schema: OPERATOR_NOTIFICATION_TRANSPORT_VERSION,
+    disposition: 'action-required',
+    message: notification.output,
+    event,
+    dedupeIdentity: notification.dedupeIdentity,
+  });
+}
+
+function scheduledRepairNotification(result, options = {}) {
+  const event = eventFor(result, options);
+  return event ? { event, ...evaluateOperatorNotification(event) } : {
+    event: null,
+    disposition: 'quiet',
+    output: NO_REPLY,
+    statusMessage: null,
+    dedupeIdentity: null,
+  };
+}
+
+function scheduledRepairMessage(result, {
+  announceConvergence = false,
+  catalogStatus = null,
+  now,
+  notification = scheduledRepairNotification(result, { now }),
+} = {}) {
+  if (notification.output !== NO_REPLY) return notification.output;
+  if (notification.statusMessage) return NO_REPLY;
+
+  if (announceConvergence && result?.ok && result?.ran !== false) {
     const inventoryCount = Number(result.status?.counts?.skills || 0);
     const actionableCount = Number(result.status?.counts?.actionable || 0);
     const pairs = Array.isArray(catalogStatus?.pairs) ? catalogStatus.pairs : [];
@@ -52,18 +163,7 @@ function scheduledRepairMessage(result, { announceConvergence = false, catalogSt
     return `${parts.join('; ')}.`;
   }
 
-  if (raised.length || resolved.length || repaired) {
-    const parts = [];
-    if (raised.length) {
-      const reasons = countByReason(raised);
-      parts.push(`${raised.length} new item${raised.length === 1 ? '' : 's'} need review${reasons ? `: ${reasons}` : ''}`);
-    }
-    if (resolved.length) parts.push(`${resolved.length} prior item${resolved.length === 1 ? '' : 's'} resolved`);
-    if (repaired) parts.push(`${repaired} managed projection${repaired === 1 ? '' : 's'} repaired`);
-    return `jarvOS skill sync: ${parts.join('; ')}.`;
-  }
-
-  return 'NO_REPLY';
+  return NO_REPLY;
 }
 
 function runScheduledRepair({
@@ -76,10 +176,19 @@ function runScheduledRepair({
   const catalogStatus = announceConvergence && result?.ok && result?.ran !== false
     ? readStatus({ configPath })
     : null;
+  const notification = scheduledRepairNotification(result);
   return {
     result,
-    message: scheduledRepairMessage(result, { announceConvergence, catalogStatus }),
+    notification,
+    message: scheduledRepairMessage(result, { announceConvergence, catalogStatus, notification }),
   };
 }
 
-module.exports = { countByReason, scheduledRepairMessage, runScheduledRepair };
+module.exports = {
+  OPERATOR_NOTIFICATION_TRANSPORT_VERSION,
+  eventFor,
+  scheduledRepairCliOutput,
+  scheduledRepairMessage,
+  scheduledRepairNotification,
+  runScheduledRepair,
+};
