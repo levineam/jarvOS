@@ -118,11 +118,26 @@ test('receipt-bound human provenance survives the universal capture-to-note rout
   const captureEventId = 'capture-codex-human-1';
   const calls = [];
   const adapter = {
-    ensureJournal() { return { existed: true }; },
-    appendLineToJournalSection(input) { return input; },
+    ensureJournal() {
+      return {
+        existed: true,
+        artifactReceipt: { artifacts: [{ kind: 'journal', vaultRelativePath: 'Journal/2026-06-22.md', outcome: 'committed' }] },
+      };
+    },
+    appendLineToJournalSection(input) {
+      return {
+        ...input,
+        artifactReceipt: { artifacts: [{ kind: 'journal', vaultRelativePath: 'Journal/2026-06-22.md', outcome: 'committed' }] },
+      };
+    },
     writeNote(input) {
       calls.push(input);
-      return { written: true, title: input.title, path: `/tmp/${input.title}.md` };
+      return {
+        written: true,
+        title: input.title,
+        path: `/tmp/${input.title}.md`,
+        artifactReceipt: { artifacts: [{ kind: 'note', vaultRelativePath: 'Notes/User thought.md', outcome: 'committed' }] },
+      };
     },
   };
   const result = captureWithJarvos({
