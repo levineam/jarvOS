@@ -28,6 +28,10 @@ const PROJECTS_CONTEXT_CUTOVER_ENV = 'JARVOS_PROJECTS_CONTEXT_CUTOVER';
 const DEFAULT_PROJECTS_CONTEXT_TIMEOUT_MS = 5000;
 const DEFAULT_PROJECTS_CONTEXT_INCLUDE = ['hierarchy', 'activity', 'currentWork', 'attention'];
 const DEFAULT_PROJECTS_CONTEXT_LIMITS = Object.freeze({ maxItems: 12, maxBytes: 9000, maxProviderAgeSeconds: 3600 });
+// This symbol is an in-process host bridge, not a model-visible hydration
+// option. It lets the MCP wrapper bind its configured provider without
+// allowing request arguments to replace the host provider.
+const HYDRATION_PROJECTS_PROVIDER = Symbol('jarvos.hydrationProjectsProvider');
 let configuredProjectsContextProvider = null;
 
 function loadControlPlaneManager() {
@@ -595,7 +599,10 @@ async function readProjectsContext(options = {}, internalAuthorizedScope = false
     : (options.projectsProvider || configuredProjectsContextProvider || hostProvider);
   let resolved;
   try {
-    resolved = resolveProjectsRequest(options, hostProvider, internalAuthorizedScope);
+    // Explicit providers are only host-authorized when reached through an
+    // internal consumer (hydration/MCP).  Direct callers still cannot turn a
+    // provider object into broad scope authority.
+    resolved = resolveProjectsRequest(options, internalAuthorizedScope ? provider : hostProvider, internalAuthorizedScope);
   } catch (error) {
     const request = {
       contract: PROJECTS_CONTEXT_CONTRACT,
@@ -1053,9 +1060,10 @@ function stripProjectsJournalSection(markdown) {
 }
 
 function projectsContextCutoverEnabled(options = {}) {
-  return options.projectsContextCutover === true
-    || options.projectsContext?.cutover === true
-    || process.env[PROJECTS_CONTEXT_CUTOVER_ENV] === '1';
+  // Project orientation is fail-closed.  Paperclip current work remains a
+  // diagnostic compatibility tool, but must never re-enter startup context as
+  // a substitute for an unavailable Projects packet.
+  return true;
 }
 
 function extractWikilinks(markdown) {
@@ -1228,21 +1236,24 @@ async function hydrate(options = {}) {
   const projectsOptions = options.projectsContext && typeof options.projectsContext === 'object'
     ? options.projectsContext
     : {};
+  // Hydration is an orientation consumer, not a generic Projects query
+  // surface.  Its host-issued profile is fixed so startup, MCP hydration, and
+  // direct library hydration cannot drift into caller-shaped project reads.
   const projectsRequest = {
     ...projectsOptions,
+    profile: 'orientation',
     maxChars: Number(options.projectsContextMaxChars || projectsOptions.maxChars || 3600),
-    maxItems: Number(projectsOptions.maxItems || options.maxItems || DEFAULT_PROJECTS_CONTEXT_LIMITS.maxItems),
   };
-  let internalAuthorizedScope = false;
-  if (!projectsRequest.profile && !projectsRequest.query && !projectsRequest.scope
-    && !Object.prototype.hasOwnProperty.call(projectsRequest, 'projectIds')
-    && !Object.prototype.hasOwnProperty.call(projectsRequest, 'outcomeIds')) {
-    projectsRequest.profile = 'orientation';
-    internalAuthorizedScope = true;
-  }
-  if (Object.prototype.hasOwnProperty.call(projectsOptions, 'provider')) projectsRequest.provider = projectsOptions.provider;
-  else if (Object.prototype.hasOwnProperty.call(options, 'projectsProvider')) projectsRequest.provider = options.projectsProvider;
-  const projects = await readProjectsContext(projectsRequest, internalAuthorizedScope);
+  delete projectsRequest.query;
+  delete projectsRequest.scope;
+  delete projectsRequest.projectIds;
+  delete projectsRequest.outcomeIds;
+  delete projectsRequest.includeDescendants;
+  delete projectsRequest.include;
+  delete projectsRequest.limits;
+  delete projectsRequest.maxItems;
+  if (options[HYDRATION_PROJECTS_PROVIDER]) projectsRequest.provider = options[HYDRATION_PROJECTS_PROVIDER];
+  const projects = await readProjectsContext(projectsRequest, true);
   const projectsCutover = projectsContextCutoverEnabled(options);
   report.projectsContext = {
     status: projects.status,
@@ -1618,10 +1629,28 @@ async function startupBrief(options = {}) {
   const budget = Number(options.maxChars || 5000);
 
   try {
-    const work = await currentWork({ maxItems: Number(options.maxItems || 6), ...options.currentWork });
-    parts.push(work.markdown);
+    const projectsOptions = options.projectsContext && typeof options.projectsContext === 'object'
+      ? options.projectsContext
+      : {};
+    const request = {
+      ...projectsOptions,
+      profile: 'orientation',
+      maxChars: Number(options.projectsContextMaxChars || projectsOptions.maxChars || 3600),
+    };
+    delete request.query;
+    delete request.scope;
+    delete request.projectIds;
+    delete request.outcomeIds;
+    delete request.includeDescendants;
+    delete request.include;
+    delete request.limits;
+    delete request.maxItems;
+    if (Object.prototype.hasOwnProperty.call(projectsOptions, 'provider')) request.provider = projectsOptions.provider;
+    else if (Object.prototype.hasOwnProperty.call(options, 'projectsProvider')) request.provider = options.projectsProvider;
+    const projects = await readProjectsContext(request, true);
+    parts.push(projects.markdown);
   } catch (error) {
-    parts.push(`Current work unavailable: ${error.message}`);
+    parts.push('Projects context unavailable.');
   }
 
   const query = firstString(options.query);
@@ -1644,6 +1673,7 @@ async function startupBrief(options = {}) {
 module.exports = {
   PROJECTS_CONTEXT_CONTRACT,
   PROJECTS_CONTEXT_CUTOVER_ENV,
+  HYDRATION_PROJECTS_PROVIDER,
   controlPlane,
   loadControlPlaneManager,
   loadSharedSkills,

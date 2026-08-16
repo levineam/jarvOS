@@ -1428,7 +1428,8 @@ test('hydrate includes journal, linked notes, ontology context packet, report, a
       });
 
       assert.equal(result.ok, true);
-      assert.match(result.markdown, /WORK-1558/);
+      assert.doesNotMatch(result.markdown, /WORK-1558|Paperclip Current Work/);
+      assert.match(result.markdown, /Projects Context\nUnavailable/);
       assert.match(result.markdown, /Today Journal/);
       assert.match(result.markdown, /Codex Memory Note/);
       assert.match(result.markdown, /jarvOS Ontology Context Packet/);

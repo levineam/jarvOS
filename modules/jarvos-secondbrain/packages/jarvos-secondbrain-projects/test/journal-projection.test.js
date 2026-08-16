@@ -53,3 +53,20 @@ test('context reads do not count as activity and expected revisions fence projec
   assert.equal(planned.status, 'planned');
   assert.equal(planned.manifest.priorRevision, projection.digest(content));
 });
+
+test('touched-parent projection is idempotent after its acknowledged content is applied', () => {
+  const result = projection.buildJournalProjection({
+    date: '2026-08-08', projects: PROJECTS,
+    activities: [{ canonicalId: 'out_000001', occurredAt: '2026-08-08T11:00:00.000Z', accepted: true }],
+  });
+  let writes = 0;
+  const first = projection.applyJournalProjection({
+    content: '## 📝 Notes\n- [[Note]]\n', projection: result,
+    write: () => { writes += 1; return { status: 'acknowledged' }; },
+  });
+  const retry = projection.applyJournalProjection({ content: first.content, projection: result, write: () => { writes += 1; return { status: 'acknowledged' }; } });
+  assert.equal(first.status, 'acknowledged');
+  assert.equal(retry.status, 'already_satisfied');
+  assert.equal(writes, 1);
+  assert.match(retry.content, /\[\[jarvOS\]\]/);
+});
