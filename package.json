@@ -89,6 +89,9 @@
     "jarvos-bootstrap": "scripts/jarvos.js",
     "jarvos-init": "scripts/jarvos.js"
   },
+  "dependencies": {
+    "@jarvos/runtime-kit": "file:modules/jarvos-runtime-kit"
+  },
   "scripts": {
     "bootstrap": "node bootstrap.js",
     "clawpatch": "node scripts/clawpatch-runner.js",

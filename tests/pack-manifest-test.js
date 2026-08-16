@@ -91,6 +91,13 @@ test('published tarball includes every advertised runtime and runtime-kit asset'
   assert.deepEqual(missing, [], `published tarball is missing required files: ${missing.join(', ')}`);
 });
 
+test('bootstrap package installs the bundled runtime-kit for shared skill repair', () => {
+  const packageJson = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
+  assert.equal(packageJson.dependencies?.['@jarvos/runtime-kit'], 'file:modules/jarvos-runtime-kit');
+  const lock = JSON.parse(fs.readFileSync(path.join(ROOT, 'package-lock.json'), 'utf8'));
+  assert.equal(lock.packages?.['node_modules/@jarvos/runtime-kit']?.resolved, 'modules/jarvos-runtime-kit');
+});
+
 test('published shared-skill surface contains no local-path or private-body sentinel', () => {
   const files = packedFiles();
   const sentinels = ['/Users/andrew', 'Vault v3', 'JARVOS_TEST_PRIVATE'];
