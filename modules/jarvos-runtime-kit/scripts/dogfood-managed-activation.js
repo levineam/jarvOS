@@ -304,14 +304,6 @@ function usage() {
   ].join('\n');
 }
 
-function emit(result, json, exitCode) {
-  if (json || true) {
-    // Always emit machine-readable JSON for this dogfood tool.
-    process.stdout.write(`${JSON.stringify(result)}\n`);
-  }
-  process.exit(exitCode);
-}
-
 function publicPrepareResult({ harness, run, correlation, tupleDigest, baselineAt, generationDigest }) {
   return {
     ok: true,
@@ -815,7 +807,6 @@ function verifyCommand(flags) {
     };
   }
   const ownerRoot = rootCheck.path;
-  sweepExpired(ownerRoot, now);
 
   const loaded = loadChallenge(ownerRoot, flags.run);
   if (!loaded.ok) {
