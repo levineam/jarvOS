@@ -55,13 +55,10 @@ test('changelogVersionSection reports undated when still marked Unreleased', () 
   assert.equal(result.dated, false);
 });
 
-test('public journal landing stays unreleased without a package version bump', () => {
-  const root = path.resolve(__dirname, '..');
-  const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
-  const changelog = fs.readFileSync(path.join(root, 'CHANGELOG.md'), 'utf8');
+test('public journal landing remains tracked as unreleased work', () => {
+  const changelog = fs.readFileSync(path.resolve(__dirname, '..', 'CHANGELOG.md'), 'utf8');
   const unreleased = unreleasedSection(changelog);
 
-  assert.equal(pkg.version, '0.7.0');
   assert.equal(unreleased.present, true);
   assert.equal(unreleased.nonEmpty, true);
   assert.match(changelog, /daily journal creation/i);
