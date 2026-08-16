@@ -295,6 +295,7 @@ async function runTakeIssueToDone(input = {}, adapters = {}) {
     sessionState: adapters.sessionState || null,
     pullRequest: null,
     workReference: input.workReference || input.workRef || null,
+    executionReference: input.executionReference || null,
     reattachment: null,
   };
   const entrySessionState = context.sessionState
@@ -324,6 +325,7 @@ async function runTakeIssueToDone(input = {}, adapters = {}) {
     // before recording the claim milestone so the activity receipt is bound
     // to Beads rather than the pre-claim context.
     if (stage === 'claim' && result?.workReference) context.workReference = result.workReference;
+    if (stage === 'claim' && result?.executionLink) context.executionReference = result.executionLink;
 
     const event = buildStageEvent(stage, result, {
       reattached: Boolean(reattach) && Boolean(result?.reattached),
@@ -351,6 +353,7 @@ async function runTakeIssueToDone(input = {}, adapters = {}) {
           issueIdentifier,
           branch: context.branch,
           workReference: context.workReference,
+          executionReference: context.executionReference,
           pullRequest: context.pullRequest,
         }));
       } catch (_) {

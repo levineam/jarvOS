@@ -92,8 +92,9 @@ claim -> branch -> sliceReview -> holisticReview -> fixRerun -> pullRequest -> p
 ```
 
 When a Projects activity adapter is supplied, callers must include a fresh,
-run-scoped `runId`; work-item and issue identifiers are deliberately not used
-as a cross-run fallback.
+run-scoped `runId` and an exact, protected Beads execution reference. The
+reference binds the canonical revision, workspace, work item, and item revision;
+work-item and issue identifiers are deliberately not used as a cross-run fallback.
 
 The orchestrator depends on injected tracker/git/PR/post-merge adapters and a
 generic review-engine interface. The default review engine is
