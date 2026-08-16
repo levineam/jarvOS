@@ -6,6 +6,23 @@ Runtime adapters should stay thin. Shared jarvOS capabilities live in
 `@jarvos/agent-context`; adapter directories translate those capabilities into a
 host runtime's native surfaces such as MCP, hooks, skills, or desktop config.
 
+## Operator notifications (unstable)
+
+`@jarvos/runtime-kit` also exports an unstable 0.x, transport-neutral operator
+notification contract. Producers submit a versioned semantic event; the contract
+validates reviewed fields and deterministically returns either plain-English
+text or `NO_REPLY`. It never renders caller-supplied diagnostic prose.
+
+Use `evaluateOperatorNotification(event)` when a host needs the attention
+policy, durable-status text, and dedupe identity. Use
+`renderOperatorNotification(event)` when it only needs the direct output.
+Action-required events include an opaque event reference; detailed codes,
+paths, commits, receipts, and process output remain in owner-only evidence.
+Safe holds are durable status, while routine safe repairs and resolutions are
+quiet. Release-state events separately name published, approval-ready, and
+future versions; stale or unknown observations use qualified wording rather
+than claiming current publication or review readiness.
+
 ## Commands
 
 ```bash
