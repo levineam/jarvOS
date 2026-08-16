@@ -80,6 +80,24 @@ test('passing gates remove stale findings and GitHub latest-public facts come fr
   assert.deepEqual(result.findings, []);
 });
 
+test('component-prefixed Release Please tags retain their raw tag and normalize only the semantic version', () => {
+  const result = observe({ version: '0.8.0', verify: true }, {
+    git: { tagForSha: (_sha, tag) => tag === 'jarvos-bootstrap-v0.8.0' ? tag : null },
+    github: {
+      latestRelease: () => ({ tagName: 'jarvos-bootstrap-v0.8.0', publishedAt: '2026-08-16T00:00:00.000Z' }),
+      releaseByTag: () => null,
+    },
+    checks: { readiness: () => ({ ok: true, results: [] }) },
+  });
+
+  assert.equal(result.publication.published, true);
+  assert.equal(result.publication.latestPublicVersion, '0.8.0');
+  assert.equal(result.publication.latestRelease.tag, 'jarvos-bootstrap-v0.8.0');
+  assert.equal(result.publication.targetRelease.tag, 'jarvos-bootstrap-v0.8.0');
+  assert.equal(result.publication.localTag, 'jarvos-bootstrap-v0.8.0');
+  assert.deepEqual(result.findings, []);
+});
+
 test('local and GitHub publication disagreement remains an explicit finding', () => {
   const result = observe({ verify: true }, {
     git: { tagForSha: () => 'v1.0.0' },

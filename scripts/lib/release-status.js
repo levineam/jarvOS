@@ -113,8 +113,13 @@ function assertSourcePolicy({ sourceRef, version, protectedBranch = PROTECTED_BR
 function normalizeRelease(release) {
   if (!release) return null;
   const tagName = String(release.tagName || release.tag_name || '');
-  if (!/^v\d+\.\d+\.\d+$/.test(tagName)) throw new Error('GitHub release response has no valid semver tag');
-  return { tag: tagName, publishedAt: release.publishedAt || release.published_at || null };
+  // Release Please uses component-prefixed tags for this repository (for
+  // example, jarvos-bootstrap-v0.8.0).  Keep that raw tag as the immutable
+  // release identity and expose the semantic version separately; never
+  // synthesize a plain vX.Y.Z tag that GitHub did not publish.
+  const match = tagName.match(/^(?:[A-Za-z0-9][A-Za-z0-9._-]*-)?v(\d+\.\d+\.\d+)$/);
+  if (!match) throw new Error('GitHub release response has no valid semver tag');
+  return { tag: tagName, version: match[1], publishedAt: release.publishedAt || release.published_at || null };
 }
 
 function findingsFrom(readiness, drift, localTag, githubTargetRelease, targetTag) {
@@ -172,6 +177,10 @@ function observeReleaseStatus(options) {
       canonicalSha = options.github.sourceRefSha(repository, canonicalRef);
       latestRelease = normalizeRelease(options.github.latestRelease(repository));
       githubTargetRelease = normalizeRelease(options.github.releaseByTag(repository, targetTag));
+      // The latest-release endpoint is authoritative for the current
+      // component tag.  It also lets a version-targeted observation recognize
+      // a Release Please component tag without guessing its name.
+      if (!githubTargetRelease && latestRelease?.version === version) githubTargetRelease = latestRelease;
     } catch (error) {
       return unavailable({ version, sourceRef, repository, observedAt, code: 'GITHUB_UNAVAILABLE', error });
     }
@@ -189,7 +198,8 @@ function observeReleaseStatus(options) {
       }
     }
 
-    const localTag = options.git.tagForSha(resolvedSha, targetTag);
+    const publicationTag = githubTargetRelease?.tag || targetTag;
+    const localTag = options.git.tagForSha(resolvedSha, publicationTag);
     const commitDistance = options.git.commitDistance ? options.git.commitDistance(resolvedSha) : null;
     const policy = { protectedBranch, approvedReleaseTag: targetTag };
     if (!options.verify) {
@@ -205,11 +215,11 @@ function observeReleaseStatus(options) {
         contract: CONTRACT, availability: 'available', observedAt,
         source: { repository, requestedRef: sourceRef, resolvedSha, commitDistance, policy },
         target: { version, tag: targetTag },
-        publication: { published: Boolean(githubTargetRelease), latestPublicVersion: latestRelease ? latestRelease.tag.slice(1) : null, latestRelease, targetRelease: githubTargetRelease, localTag: localTag || null },
+        publication: { published: Boolean(githubTargetRelease), latestPublicVersion: latestRelease ? latestRelease.version : null, latestRelease, targetRelease: githubTargetRelease, localTag: localTag || null },
         drift,
         readiness: { status: 'not-evaluated', checks: [] },
         verification: { coverage: 'partial' },
-        findings: findingsFrom(null, drift, localTag, githubTargetRelease, targetTag),
+        findings: findingsFrom(null, drift, localTag, githubTargetRelease, publicationTag),
         omissions: ['full candidate verification (npm test) was skipped by reduced-cost mode'],
         evidenceRefs: [`git:${resolvedSha}`, `github:releases/${latestRelease ? latestRelease.tag : 'none'}`],
       };
@@ -239,12 +249,12 @@ function observeReleaseStatus(options) {
       return unavailable({ version, sourceRef, repository, observedAt, code: 'CHECKS_UNAVAILABLE', error });
     }
     cleanupVerification();
-    const findings = findingsFrom(readiness, drift, localTag, githubTargetRelease, targetTag);
+    const findings = findingsFrom(readiness, drift, localTag, githubTargetRelease, publicationTag);
     return {
       contract: CONTRACT, availability: 'available', observedAt,
       source: { repository, requestedRef: sourceRef, resolvedSha, commitDistance, policy },
       target: { version, tag: targetTag },
-      publication: { published: Boolean(githubTargetRelease), latestPublicVersion: latestRelease ? latestRelease.tag.slice(1) : null, latestRelease, targetRelease: githubTargetRelease, localTag: localTag || null },
+      publication: { published: Boolean(githubTargetRelease), latestPublicVersion: latestRelease ? latestRelease.version : null, latestRelease, targetRelease: githubTargetRelease, localTag: localTag || null },
       drift,
       readiness: { status: readiness.ok && findings.length === 0 ? 'ready' : 'not-ready', checks: readiness.results },
       verification: { coverage: 'verified' },
