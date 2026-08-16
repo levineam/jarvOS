@@ -160,6 +160,7 @@
   "verification": [
     "codex mcp get jarvos",
     "node runtimes/codex/jarvos-session-start-hook.js",
-    "node modules/jarvos-runtime-kit/scripts/jarvos-runtime-kit.js check codex"
+    "node modules/jarvos-runtime-kit/scripts/jarvos-runtime-kit.js check codex",
+    "operator-communication skill projection (manifest-backed)"
   ]
 }

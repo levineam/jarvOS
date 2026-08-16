@@ -18,7 +18,7 @@
     "releaseRevision": "291c334-route-capability",
     "generationDigest": "85781875304f9010b19c1f1c20571565a84f0e96bafed889aec29261e2b75118",
     "components": [
-      { "name": "skills-manifest", "path": "modules/jarvos-skills/manifest.json", "digest": "8eca8860c4d9d90c1a0dfe67f4bf1ea87398b6823caf88e243b7278b00b6ef49" },
+      { "name": "skills-manifest", "path": "modules/jarvos-skills/manifest.json", "digest": "3cbc2cf72db7738627d7a7b58bafde2191e09f4d53fa0d33a2a8b75d842cfbd1" },
       { "name": "context-plugin-metadata", "path": "runtimes/hermes/plugins/jarvos-context/plugin.yaml", "digest": "74f3bc53308a43b119773cf0a0fa5f47019761038d1bada4cc2fd5a1b13370bb" },
       { "name": "context-plugin-code", "path": "runtimes/hermes/plugins/jarvos-context/__init__.py", "digest": "7f05fd28a036af20f26ac46a5d44b60514c51b4da4ad4b01511bc5d6371d3dbf" },
       { "name": "coding-host-adapter", "path": "modules/jarvos-coding/src/adapters/hosts.js", "digest": "a8e24f668cb39ecf50400b5eaca122fdec93aad6df956446ea5f9def22b0f9af" }
@@ -121,6 +121,7 @@
   },
   "unsupportedCapabilities": [],
   "verification": [
-    "node modules/jarvos-runtime-kit/scripts/jarvos-runtime-kit.js check hermes"
+    "node modules/jarvos-runtime-kit/scripts/jarvos-runtime-kit.js check hermes",
+    "operator-communication skill projection (manifest-backed)"
   ]
 }

@@ -1,0 +1,1 @@
+jarvOS 0.7.0 is currently published. A proposed 0.8.0 release has passed checks and is ready for Andrew’s review; nothing will publish automatically. The separate v1.0.0 milestone remains future work. Please approve or reject the 0.8.0 candidate when ready.

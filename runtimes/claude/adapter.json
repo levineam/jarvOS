@@ -154,6 +154,7 @@
   "verification": [
     "claude mcp get jarvos",
     "node runtimes/claude/jarvos-session-start-hook.js",
-    "node modules/jarvos-runtime-kit/scripts/jarvos-runtime-kit.js check claude"
+    "node modules/jarvos-runtime-kit/scripts/jarvos-runtime-kit.js check claude",
+    "operator-communication skill projection (manifest-backed)"
   ]
 }
