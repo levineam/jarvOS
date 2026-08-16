@@ -10,6 +10,7 @@ const { isSha256 } = harnessDispatch;
 const stewardshipAdapter = require('./stewardship-adapter.js');
 const stewardshipBootstrap = require('./stewardship-bootstrap.js');
 const openclawPluginPersistence = require('./openclaw-plugin-persistence.js');
+const operatorNotificationLint = require('./operator-notification-lint.js');
 const capabilityDescriptor = require('./capability-descriptor.js');
 
 const DEFAULT_AGENT_CONTEXT_MCP = 'modules/jarvos-agent-context/scripts/jarvos-mcp.js';
@@ -876,6 +877,7 @@ function scaffoldRuntime(runtimeId, outDir) {
 }
 
 module.exports = {
+  ...operatorNotificationLint,
   ...harnessDispatch,
   ...stewardshipAdapter,
   ...stewardshipBootstrap,

@@ -31,3 +31,11 @@ The kit validates the manifest shape and checks the adapter directory for common
 drift: missing shared MCP wiring, undocumented unsupported MCP targets, missing
 `jarvos_hydrate`, setup scripts that edit config without backup behavior, and
 hook-based adapters that do not fail open.
+
+## Operator message lint
+
+`lintOperatorMessage` / `lintOperatorMessages` provide a bounded outbound-message
+lint for fixtures and producers. They reject raw internal codes, absolute paths,
+stack-like text, ambiguous “needs attention” copy, and common release-state
+authoring mistakes. Pair with the public `operator-communication` skill for
+agent guidance; the lint is the deterministic enforcement surface.
