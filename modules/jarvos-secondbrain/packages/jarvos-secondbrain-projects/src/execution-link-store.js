@@ -23,11 +23,60 @@ function createMemoryExecutionLinkStore() {
 function createFileExecutionLinkStore(options = {}) {
   const root = path.resolve(String(options.root || ''));
   if (!path.isAbsolute(root) || root === path.parse(root).root) throw new Error('protected execution link root is required');
-  const memory = createMemoryExecutionLinkStore();
   const file = (workspaceId, itemId) => path.join(root, `${Buffer.from(`${workspaceId}:${itemId}`).toString('base64url')}.json`);
+  const lockPath = path.join(root, '.execution-links.lock');
+  const readRaw = (workspaceId, itemId) => {
+    const target = file(workspaceId, itemId);
+    if (!fs.existsSync(target)) return null;
+    let value;
+    try { value = JSON.parse(fs.readFileSync(target, 'utf8')); } catch { throw new Error('execution link record is invalid'); }
+    return validateExecutionReference(value).reference;
+  };
+  const withLock = (fn) => {
+    fs.mkdirSync(root, { recursive: true, mode: 0o700 });
+    try { fs.chmodSync(root, 0o700); } catch { /* best effort on non-POSIX hosts */ }
+    let fd = null;
+    const deadline = Date.now() + 3000;
+    while (fd === null) {
+      try {
+        fd = fs.openSync(lockPath, 'wx', 0o600);
+        fs.writeFileSync(fd, JSON.stringify({ pid: process.pid, createdAt: Date.now() }), 'utf8');
+        fs.fsyncSync(fd);
+      } catch (error) {
+        if (fd !== null) { try { fs.closeSync(fd); } catch {} fd = null; }
+        if (error.code !== 'EEXIST' || Date.now() >= deadline) throw new Error('execution link store is busy');
+        let stale = false;
+        try {
+          const lock = JSON.parse(fs.readFileSync(lockPath, 'utf8'));
+          stale = !Number.isInteger(lock.pid) || (Date.now() - Number(lock.createdAt || 0) > 30_000);
+          if (!stale && lock.pid !== process.pid) {
+            try { process.kill(lock.pid, 0); } catch (probeError) { stale = probeError.code === 'ESRCH'; }
+          }
+        } catch { stale = true; }
+        if (stale) { try { fs.unlinkSync(lockPath); } catch {} }
+        else Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
+      }
+    }
+    try { return fn(); } finally {
+      try { fs.closeSync(fd); } catch {}
+      try { fs.unlinkSync(lockPath); } catch {}
+    }
+  };
   return {
-    async read(workspaceId, itemId) { const target = file(workspaceId, itemId); if (!fs.existsSync(target)) return null; let value; try { value = JSON.parse(fs.readFileSync(target, 'utf8')); } catch { throw new Error('execution link record is invalid'); } return memory.write(value).then(() => value); },
-    async write(reference, expectedRevision = null) { const link = validateExecutionReference(reference).reference; const current = await this.read(link.workspaceId, link.itemId); if (current && (current.canonical.id !== link.canonical.id || current.canonical.revision !== link.canonical.revision)) throw new Error('execution link canonical conflict'); if (expectedRevision !== null && (!current || current.itemRevision !== String(expectedRevision))) throw new Error('execution link compare-and-swap conflict'); fs.mkdirSync(root, { recursive: true, mode: 0o700 }); const temporary = `${file(link.workspaceId, link.itemId)}.${process.pid}.tmp`; fs.writeFileSync(temporary, `${JSON.stringify(link)}\n`, { mode: 0o600 }); fs.renameSync(temporary, file(link.workspaceId, link.itemId)); return link; },
+    async read(workspaceId, itemId) { return readRaw(workspaceId, itemId); },
+    async write(reference, expectedRevision = null) {
+      const link = validateExecutionReference(reference).reference;
+      return withLock(() => {
+        const current = readRaw(link.workspaceId, link.itemId);
+        if (current && (current.canonical.id !== link.canonical.id || current.canonical.revision !== link.canonical.revision)) throw new Error('execution link canonical conflict');
+        if (expectedRevision !== null && (!current || current.itemRevision !== String(expectedRevision))) throw new Error('execution link compare-and-swap conflict');
+        const temporary = `${file(link.workspaceId, link.itemId)}.${process.pid}.${Date.now()}.tmp`;
+        fs.writeFileSync(temporary, `${JSON.stringify(link)}\n`, { mode: 0o600 });
+        try { fs.chmodSync(temporary, 0o600); } catch { /* best effort on non-POSIX hosts */ }
+        fs.renameSync(temporary, file(link.workspaceId, link.itemId));
+        return link;
+      });
+    },
     contract: EXECUTION_LINK_STORE_CONTRACT,
   };
 }
