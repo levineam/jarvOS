@@ -5,6 +5,7 @@ const path = require('path');
 const fs = require('fs');
 const {
   checkRuntime,
+  getManagedActivationStatus,
   listRuntimeManifests,
   loadManifest,
   repoRootFrom,
@@ -17,6 +18,7 @@ function usage() {
     'Usage:',
     '  jarvos-runtime-kit validate <adapter.json> [--json]',
     '  jarvos-runtime-kit check <runtime|all|adapter.json> [--json]',
+    '  jarvos-runtime-kit activation-status <runtime|all> [--evidence <owner-local-json>] [--json]',
     '  jarvos-runtime-kit scaffold <runtime-id> --out <dir>',
   ].join('\n');
 }
@@ -46,6 +48,33 @@ function printResult(result, json = false) {
   process.stdout.write(`${result.ok ? 'PASS' : 'FAIL'} ${result.manifest || result.path || ''}\n`);
   for (const error of result.errors || []) process.stdout.write(`  - ${error}\n`);
   for (const warning of result.warnings || []) process.stdout.write(`  warning: ${warning}\n`);
+}
+
+function printActivationStatus(result, json = false) {
+  if (json) {
+    process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+    return;
+  }
+  const statuses = Array.isArray(result.results)
+    ? result.results
+    : result.status
+      ? [result.status]
+      : [];
+  for (const status of statuses) {
+    const reasons = Array.isArray(status.reasons) && status.reasons.length > 0
+      ? ` (${status.reasons.join(', ')})`
+      : '';
+    process.stdout.write(`${status.harness}: ${status.state}${reasons}\n`);
+  }
+}
+
+function activationNow() {
+  const raw = process.env.JARVOS_MANAGED_ACTIVATION_NOW;
+  if (raw == null || raw === '') return Date.now();
+  const asNumber = Number(raw);
+  if (Number.isFinite(asNumber)) return asNumber;
+  const asDate = Date.parse(raw);
+  return Number.isFinite(asDate) ? asDate : Date.now();
 }
 
 async function main() {
@@ -90,6 +119,25 @@ async function main() {
     if (json) process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
     else process.stdout.write(`Scaffolded ${runtimeId}: ${result.dir}\n`);
     return;
+  }
+
+  if (command === 'activation-status') {
+    const runtime = args[1];
+    if (!runtime) throw new Error('activation-status requires <runtime|all>');
+    const evidence = flagValue(args, '--evidence');
+    const result = getManagedActivationStatus({
+      runtime,
+      root,
+      evidencePath: evidence,
+      now: activationNow(),
+    });
+    if (!result.ok) {
+      if (json) process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+      else process.stderr.write(`${result.error || 'activation-status failed'}\n`);
+      process.exit(1);
+    }
+    printActivationStatus(result, json);
+    process.exit(0);
   }
 
   throw new Error(`unknown command: ${command}\n${usage()}`);

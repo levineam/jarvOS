@@ -90,6 +90,33 @@
       "fallback": "jarvos-native-workflow"
     }
   },
+  "managedActivation": {
+    "version": "jarvos-managed-activation/v1",
+    "harness": "codex",
+    "executionOwner": "native-hooks",
+    "backgroundProcess": {
+      "owner": "none",
+      "jarvosStartsProcess": false
+    },
+    "preparation": {
+      "requiresExactSetup": true,
+      "requiresSelectedTuple": true
+    },
+    "liveProof": {
+      "qualifyingEventClasses": ["session", "turn"],
+      "freshnessSeconds": 900,
+      "forwardSkewSeconds": 30
+    },
+    "health": {
+      "mayActivate": false,
+      "mayExplainDegradation": true
+    },
+    "rollback": {
+      "ownership": "exact-owned",
+      "invalidatesGeneration": true,
+      "refuseModified": true
+    }
+  },
   "stewardshipAdapter": {
     "version": "jarvos-stewardship-adapter.v1",
     "harness": "codex",
