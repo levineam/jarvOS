@@ -6,6 +6,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const CONFIG_ENV = 'JARVOS_PROJECTS_CONTEXT_CONFIG';
+const ACTIVE_ASSISTANT_PROVIDER_MODULE_ENV = 'ACTIVE_ASSISTANT_PROJECTS_PROVIDER_MODULE';
 
 function inside(root, target) {
   const relative = path.relative(root, target);
@@ -90,7 +91,15 @@ function createHostProjectsContextProvider(env = process.env) {
   if (!workspaceRoot || !repositoryRoot || !stateRoot) return null;
   // The provider is a host-owned adapter. It may live beside the repository
   // (as the private clawd provider does), but never outside the host workspace.
-  const providerModule = resolveAbsoluteFile(config.providerModule, workspaceRoot);
+  // A selected runtime may bind its reviewed provider artifact separately
+  // from the durable host config. Presence is authoritative: a stale or
+  // escaped selected artifact must fail closed rather than falling back to
+  // the config provider from another runtime generation.
+  const hasSelectedProviderModule = Object.prototype.hasOwnProperty.call(env || {}, ACTIVE_ASSISTANT_PROVIDER_MODULE_ENV);
+  const providerModule = resolveAbsoluteFile(
+    hasSelectedProviderModule ? env[ACTIVE_ASSISTANT_PROVIDER_MODULE_ENV] : config.providerModule,
+    workspaceRoot,
+  );
   // The current host contract passes protected state directories and private
   // file contents. The short names remain a bounded compatibility alias for
   // older host configs, never model-supplied input.
@@ -162,4 +171,4 @@ function createHostProjectsContextProvider(env = process.env) {
   };
 }
 
-module.exports = { CONFIG_ENV, createHostProjectsContextProvider };
+module.exports = { ACTIVE_ASSISTANT_PROVIDER_MODULE_ENV, CONFIG_ENV, createHostProjectsContextProvider };

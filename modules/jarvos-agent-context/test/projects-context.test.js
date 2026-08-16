@@ -12,11 +12,16 @@ const {
   proposeProjectsContext,
   readProjectsContext,
   setProjectsContextProvider,
+  startupBrief,
 } = require('../src/index.js');
 const {
   callTool,
   setMcpProjectsContextProvider,
 } = require('../scripts/jarvos-mcp.js');
+const { startupHydration: codexStartupHydration } = require('../../../runtimes/codex/jarvos-session-start-hook.js');
+const { startupHydration: claudeStartupHydration } = require('../../../runtimes/claude/jarvos-session-start-hook.js');
+
+const ACTIVE_ASSISTANT_PROVIDER_MODULE_ENV = 'ACTIVE_ASSISTANT_PROJECTS_PROVIDER_MODULE';
 
 const QUERY = {
   scope: { projectIds: ['prj_000001'], outcomeIds: ['out_000001'], includeDescendants: false },
@@ -103,7 +108,7 @@ function withHostProjectsProvider(fn) {
   fs.writeFileSync(config, JSON.stringify({
     workspaceRoot, repositoryRoot, providerModule, stateRoot,
     registryStateDir: path.join(stateRoot, 'registry'), releaseProviderStateDir: path.join(stateRoot, 'release-provider'),
-    capabilitySecret: path.join(stateRoot, 'capability'), hostSecret: path.join(stateRoot, 'secret'),
+    capabilitySecret: path.join(stateRoot, 'capability'), hostSecret: path.join(stateRoot, 'secret'), query: QUERY,
   }));
   fs.chmodSync(config, 0o600);
   const previous = process.env.JARVOS_PROJECTS_CONTEXT_CONFIG;
@@ -120,10 +125,10 @@ test.after(() => {
 });
 
 test('library and MCP use the same injected Projects packet and fingerprint', async () => {
-  const provider = { read: async ({ query }) => ({ status: 'ok', packet: { ...packet(), query } }) };
-  const libraryResult = await readProjectsContext({ provider, query: QUERY });
+  const provider = { defaultQuery: QUERY, read: async ({ query }) => ({ status: 'ok', packet: { ...packet(), query } }) };
+  const libraryResult = await readProjectsContext({ provider, profile: 'orientation' }, true);
   setMcpProjectsContextProvider(provider);
-  const mcpResult = await callTool('jarvos_projects_context', { query: QUERY });
+  const mcpResult = await callTool('jarvos_projects_context', { profile: 'orientation' });
   const mcpPayload = JSON.parse(mcpResult.content[0].text);
 
   assert.equal(libraryResult.status, 'ok');
@@ -159,14 +164,14 @@ test('recent activity is rendered as bounded assistant context', async () => {
   assert.match(result.markdown, /Reconciled release readiness \[completed\]/);
 });
 
-test('missing Projects capability leaves legacy hydration available and reports shadow unavailability', async () => {
+test('missing Projects capability leaves hydration project orientation unavailable without Paperclip fallback', async () => {
   setMcpProjectsContextProvider(null);
   await withTempContextEnv(async () => {
     const result = await hydrate({ sessionThread: false, maxChars: 3000 });
     assert.equal(result.ok, true);
     assert.equal(result.report.projectsContext.status, 'unavailable');
     assert.match(result.markdown, /Projects Context/);
-    assert.match(result.markdown, /jarvOS Current Work/);
+    assert.doesNotMatch(result.markdown, /jarvOS Current Work|Paperclip Current Work/);
     assert.match(result.markdown, /Projects context unavailable/);
   });
 });
@@ -181,6 +186,72 @@ test('host Projects binding is discovered privately with library and MCP parity'
     assert.equal(mcpPayload.status, 'ok');
     assert.equal(mcpPayload.fingerprint, libraryResult.fingerprint);
     assert.equal(hydration.report.projectsContext.status, 'ok');
+    assert.equal(hydration.report.projectsContext.fingerprint, libraryResult.fingerprint);
+  });
+});
+
+test('Codex and Claude startup use the orientation packet with the library and MCP fingerprint', async () => {
+  const provider = { defaultQuery: QUERY, read: async ({ query }) => ({ status: 'ok', packet: { ...packet(), query } }) };
+  setProjectsContextProvider(provider);
+  setMcpProjectsContextProvider(provider);
+  try {
+    const library = await readProjectsContext({ provider, profile: 'orientation' }, true);
+    const mcp = JSON.parse((await callTool('jarvos_projects_context', { profile: 'orientation' })).content[0].text);
+    const [codex, claude] = await Promise.all([codexStartupHydration(), claudeStartupHydration()]);
+    assert.equal(library.fingerprint, mcp.fingerprint);
+    assert.match(codex, new RegExp(`Fingerprint: ${library.fingerprint}`));
+    assert.match(claude, new RegExp(`Fingerprint: ${library.fingerprint}`));
+    assert.doesNotMatch(codex, /Paperclip Current Work/);
+    assert.doesNotMatch(claude, /Paperclip Current Work/);
+  } finally {
+    setProjectsContextProvider(null);
+    setMcpProjectsContextProvider(null);
+  }
+});
+
+test('startup brief uses Projects orientation and never imports raw Paperclip current work', async () => {
+  const provider = { defaultQuery: QUERY, read: async ({ query }) => ({ status: 'ok', packet: { ...packet(), query } }) };
+  const oldFetch = global.fetch;
+  setProjectsContextProvider(provider);
+  global.fetch = async () => ({ ok: true, json: async () => ([{ identifier: 'WORK-raw', status: 'in_progress', title: 'raw Paperclip task' }]) });
+  try {
+    const result = await startupBrief({ maxChars: 5000, currentWork: { maxItems: 10 } });
+    assert.match(result.markdown, /jarvOS Startup Brief/);
+    assert.match(result.markdown, /jarvOS › v1\.0\.0 release/);
+    assert.doesNotMatch(result.markdown, /WORK-raw|Paperclip Current Work/);
+  } finally {
+    global.fetch = oldFetch;
+    setProjectsContextProvider(null);
+  }
+});
+
+test('selected Active Assistant provider artifact overrides config and fails closed when invalid', async () => {
+  setMcpProjectsContextProvider(null);
+  await withHostProjectsProvider(async ({ root, repositoryRoot }) => {
+    const selectedProvider = path.join(repositoryRoot, 'selected-provider.js');
+    fs.writeFileSync(selectedProvider, `const packet = ${JSON.stringify(packet())};\nmodule.exports.read = async ({ query }) => ({ status: 'ok', packet: { ...packet, query, currentWork: [{ id: 'selected-provider', title: 'Selected runtime provider', status: 'in_progress' }] } });\n`);
+    const previous = process.env[ACTIVE_ASSISTANT_PROVIDER_MODULE_ENV];
+    try {
+      process.env[ACTIVE_ASSISTANT_PROVIDER_MODULE_ENV] = selectedProvider;
+      const selected = await readProjectsContext({ profile: 'orientation' });
+      assert.equal(selected.status, 'ok');
+      assert.equal(selected.packet.currentWork[0].id, 'selected-provider');
+
+      process.env[ACTIVE_ASSISTANT_PROVIDER_MODULE_ENV] = path.join(repositoryRoot, 'missing-provider.js');
+      const missing = await readProjectsContext({ profile: 'orientation' });
+      assert.equal(missing.status, 'unavailable');
+      assert.equal(missing.packet, null);
+
+      const outsideProvider = path.join(root, 'outside-provider.js');
+      fs.writeFileSync(outsideProvider, 'module.exports.read = async () => ({ status: \'unavailable\' });\n');
+      process.env[ACTIVE_ASSISTANT_PROVIDER_MODULE_ENV] = outsideProvider;
+      const outside = await readProjectsContext({ profile: 'orientation' });
+      assert.equal(outside.status, 'unavailable');
+      assert.equal(outside.packet, null);
+    } finally {
+      if (previous === undefined) delete process.env[ACTIVE_ASSISTANT_PROVIDER_MODULE_ENV];
+      else process.env[ACTIVE_ASSISTANT_PROVIDER_MODULE_ENV] = previous;
+    }
   });
 });
 
@@ -232,7 +303,7 @@ test('named profiles require bounded caller scope and carry the temporal window'
 });
 
 test('hydration cutover removes raw Paperclip and Journal project orientation', async () => {
-  const provider = { read: async ({ query }) => ({ status: 'ok', packet: { ...packet(), query } }) };
+  const provider = { defaultQuery: QUERY, read: async ({ query }) => ({ status: 'ok', packet: { ...packet(), query } }) };
   setProjectsContextProvider(provider);
   await withTempContextEnv(async () => {
     const dateParts = Object.fromEntries(new Intl.DateTimeFormat('en-US', {
@@ -250,6 +321,72 @@ test('hydration cutover removes raw Paperclip and Journal project orientation', 
     assert.match(result.markdown, /Journal Projects section omitted/);
   });
   setProjectsContextProvider(null);
+});
+
+test('hydrate ignores model-visible provider and query inputs in favor of its host orientation binding', async () => {
+  const hostProvider = {
+    defaultQuery: QUERY,
+    read: async ({ query }) => ({ status: 'ok', packet: { ...packet(), query, currentWork: [{ id: 'host-bound', title: 'Host-bound work', status: 'in_progress' }] } }),
+  };
+  const callerProvider = {
+    defaultQuery: { ...QUERY, scope: { projectIds: ['prj_999999'], outcomeIds: [], includeDescendants: false } },
+    read: async () => { throw new Error('caller provider must not be read'); },
+  };
+  setProjectsContextProvider(hostProvider);
+  try {
+    const result = await hydrate({
+      sessionThread: false,
+      maxChars: 3000,
+      projectsContext: {
+        provider: callerProvider,
+        query: { scope: { projectIds: ['prj_999999'], outcomeIds: [], includeDescendants: false } },
+      },
+    });
+    assert.equal(result.report.projectsContext.status, 'ok');
+    assert.match(result.markdown, /Host-bound work/);
+    assert.doesNotMatch(result.markdown, /prj_999999/);
+  } finally {
+    setProjectsContextProvider(null);
+  }
+});
+
+test('startup brief ignores model-visible provider inputs in favor of its host orientation binding', async () => {
+  const hostProvider = {
+    defaultQuery: QUERY,
+    read: async ({ query }) => ({ status: 'ok', packet: { ...packet(), query } }),
+  };
+  const callerProvider = {
+    read: async () => ({ status: 'unavailable', reason: 'caller provider must not be read' }),
+  };
+  setProjectsContextProvider(hostProvider);
+  try {
+    const result = await startupBrief({ projectsContext: { provider: callerProvider } });
+    assert.match(result.markdown, /Projects Context/);
+    assert.doesNotMatch(result.markdown, /caller provider/);
+    assert.match(result.markdown, /jarvOS › v1\.0\.0 release/);
+  } finally {
+    setProjectsContextProvider(null);
+  }
+});
+
+test('MCP Projects reads ignore caller-shaped query and scope inputs', async () => {
+  const provider = { defaultQuery: QUERY, read: async ({ query }) => ({ status: 'ok', packet: { ...packet(), query } }) };
+  setMcpProjectsContextProvider(provider);
+  try {
+    const result = JSON.parse((await callTool('jarvos_projects_context', {
+      profile: 'orientation',
+      query: { scope: { projectIds: ['prj_999999'], outcomeIds: [], includeDescendants: false } },
+      projectIds: ['prj_999999'],
+    })).content[0].text);
+    assert.equal(result.status, 'ok');
+    assert.deepEqual(result.packet.query.scope, QUERY.scope);
+    assert.deepEqual(result.packet.query.include, QUERY.include);
+    assert.deepEqual(result.packet.query.limits, {
+      maxItems: 24, maxBytes: 16_000, maxProviderAgeSeconds: 3600,
+    });
+  } finally {
+    setMcpProjectsContextProvider(null);
+  }
 });
 
 test('invalid host Projects bindings fail closed without exposing host paths', async () => {

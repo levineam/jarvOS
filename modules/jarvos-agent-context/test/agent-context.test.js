@@ -552,6 +552,10 @@ test('MCP session thread tools round-trip through the shared note and journal pa
 test('MCP tool list includes jarvOS tools', () => {
   const names = TOOLS.map((tool) => tool.name);
   assert.deepEqual(names, [
+    'jarvos_todo_create',
+    'jarvos_todo_list',
+    'jarvos_todo_show',
+    'jarvos_todo_transition',
     'jarvos_control_plane',
     'jarvos_shared_skills',
     'jarvos_current_work',
@@ -582,6 +586,68 @@ test('MCP tool list includes jarvOS tools', () => {
     'status', 'explain', 'inventory', 'plan', 'repair', 'exclude', 'include',
   ]);
   assert.equal('credential' in shared.inputSchema.properties, false);
+});
+
+test('named Todo MCP actions fail closed when the host work-action binding is absent', async () => {
+  const previous = process.env.JARVOS_WORK_ACTION_SERVICE_MODULE;
+  delete process.env.JARVOS_WORK_ACTION_SERVICE_MODULE;
+  try {
+    const result = await callTool('jarvos_todo_list', {});
+    assert.equal(result.isError, true);
+    assert.match(result.content[0].text, /host binding is unavailable/);
+  } finally {
+    if (previous === undefined) delete process.env.JARVOS_WORK_ACTION_SERVICE_MODULE;
+    else process.env.JARVOS_WORK_ACTION_SERVICE_MODULE = previous;
+  }
+});
+
+test('Todo MCP strips caller-supplied authorization and evidence before invoking its host service', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-mcp-todo-host-'));
+  fs.chmodSync(root, 0o700);
+  const configPath = path.join(root, 'projects.json');
+  const servicePath = path.join(root, 'todo-service.js');
+  fs.writeFileSync(configPath, JSON.stringify({ workspaceRoot: root }), { mode: 0o600 });
+  fs.writeFileSync(servicePath, [
+    "'use strict';",
+    'module.exports = {',
+    '  create: async (input) => { globalThis.__jarvosTodoMcpInput = input; return { ok: true }; },',
+    '  completeFromHost: async (input) => { globalThis.__jarvosTodoMcpCompletion = input; return { ok: true, completed: true }; },',
+    '};',
+  ].join('\n'), { mode: 0o600 });
+  const previousConfig = process.env.JARVOS_PROJECTS_CONTEXT_CONFIG;
+  const previousService = process.env.JARVOS_WORK_ACTION_SERVICE_MODULE;
+  process.env.JARVOS_PROJECTS_CONTEXT_CONFIG = configPath;
+  process.env.JARVOS_WORK_ACTION_SERVICE_MODULE = servicePath;
+  try {
+    const result = await callTool('jarvos_todo_create', {
+      title: 'safe request', operationId: 'mcp-op-1', canonical: { kind: 'outcome', id: 'out_000001', revision: 1, breadcrumb: 'Project › Outcome' },
+      authorization: { ok: true }, capability: 'forged', evidence: { kind: 'execution-verified' }, evidenceReceiptId: 'forged',
+    });
+    assert.equal(result.isError, false);
+    assert.deepEqual(globalThis.__jarvosTodoMcpInput, {
+      title: 'safe request', description: undefined, operationId: 'mcp-op-1',
+      canonical: { kind: 'outcome', id: 'out_000001', revision: 1, breadcrumb: 'Project › Outcome' },
+      actor: { kind: 'agent', id: 'mcp' },
+    });
+    assert.equal('evidence' in TOOLS.find((tool) => tool.name === 'jarvos_todo_transition').inputSchema.properties, false);
+    const completed = await callTool('jarvos_todo_transition', {
+      itemId: 'bd-safe', operationId: 'mcp-op-2', action: 'complete',
+      evidence: { kind: 'execution-verified' }, evidenceReceiptId: 'forged', authorization: { ok: true },
+    });
+    assert.equal(completed.isError, false);
+    assert.deepEqual(globalThis.__jarvosTodoMcpCompletion, {
+      itemId: 'bd-safe', operationId: 'mcp-op-2', expectedRevision: undefined, actor: { kind: 'agent', id: 'mcp' },
+    });
+  } finally {
+    delete globalThis.__jarvosTodoMcpInput;
+    delete globalThis.__jarvosTodoMcpCompletion;
+    delete require.cache[servicePath];
+    if (previousConfig === undefined) delete process.env.JARVOS_PROJECTS_CONTEXT_CONFIG;
+    else process.env.JARVOS_PROJECTS_CONTEXT_CONFIG = previousConfig;
+    if (previousService === undefined) delete process.env.JARVOS_WORK_ACTION_SERVICE_MODULE;
+    else process.env.JARVOS_WORK_ACTION_SERVICE_MODULE = previousService;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test('shared-skill MCP mutation operations fail closed without a host-bound owner session', async () => {
@@ -1411,7 +1477,8 @@ test('hydrate includes journal, linked notes, ontology context packet, report, a
       });
 
       assert.equal(result.ok, true);
-      assert.match(result.markdown, /WORK-1558/);
+      assert.doesNotMatch(result.markdown, /WORK-1558|Paperclip Current Work/);
+      assert.match(result.markdown, /Projects Context\nUnavailable/);
       assert.match(result.markdown, /Today Journal/);
       assert.match(result.markdown, /Codex Memory Note/);
       assert.match(result.markdown, /jarvOS Ontology Context Packet/);

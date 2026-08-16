@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 'use strict';
 
+const fs = require('node:fs');
+const path = require('node:path');
 const readline = require('readline');
 const {
   createNote,
@@ -9,6 +11,7 @@ const {
   ensureTodayJournal,
   healthTodayJournal,
   hydrate,
+  HYDRATION_PROJECTS_PROVIDER,
   loadControlPlaneManager,
   loadSharedSkills,
   recall,
@@ -61,7 +64,66 @@ function resolveHostCredential(env = process.env) {
   return null;
 }
 
+function trustedFile(filePath, root = null) {
+  if (typeof filePath !== 'string' || !path.isAbsolute(filePath)) return null;
+  try {
+    if (fs.lstatSync(filePath).isSymbolicLink()) return null;
+    const real = fs.realpathSync(filePath);
+    const stat = fs.statSync(real);
+    const uid = typeof process.getuid === 'function' ? process.getuid() : null;
+    if (!stat.isFile() || (uid !== null && stat.uid !== uid) || (stat.mode & 0o077) !== 0) return null;
+    if (root) {
+      const relative = path.relative(root, real);
+      if (relative.startsWith('..') || path.isAbsolute(relative)) return null;
+    }
+    let cursor = path.dirname(real);
+    for (;;) {
+      const ancestor = fs.statSync(cursor);
+      if ((ancestor.mode & 0o022) !== 0 && !(ancestor.isDirectory() && (ancestor.mode & 0o1000) !== 0)) return null;
+      if (uid !== null && ancestor.uid !== uid && ancestor.uid !== 0) return null;
+      const parent = path.dirname(cursor);
+      if (parent === cursor) break;
+      cursor = parent;
+    }
+    return real;
+  } catch {
+    return null;
+  }
+}
+
+function selectedWorkspaceRoot(env = process.env) {
+  const configPath = trustedFile(env.JARVOS_PROJECTS_CONTEXT_CONFIG);
+  if (!configPath) return null;
+  try {
+    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    if (typeof config.workspaceRoot !== 'string' || !path.isAbsolute(config.workspaceRoot)) return null;
+    return fs.realpathSync(config.workspaceRoot);
+  } catch {
+    return null;
+  }
+}
+
 const TOOLS = [
+  {
+    name: 'jarvos_todo_create',
+    description: 'Create one canonically linked Beads-backed Todo through the host-authorized work-action service. Agent-discovered work must be submitted as a proposal by the host.',
+    inputSchema: { type: 'object', additionalProperties: false, required: ['title', 'operationId', 'canonical'], properties: { title: { type: 'string' }, description: { type: 'string' }, operationId: { type: 'string' }, canonical: { type: 'object' } } },
+  },
+  {
+    name: 'jarvos_todo_list',
+    description: 'List bounded, canonically linked Beads-backed Todo work through the host-authorized work-action service.',
+    inputSchema: { type: 'object', additionalProperties: false, properties: {} },
+  },
+  {
+    name: 'jarvos_todo_show',
+    description: 'Show one canonically linked Beads-backed Todo work item through the host-authorized work-action service.',
+    inputSchema: { type: 'object', additionalProperties: false, required: ['itemId'], properties: { itemId: { type: 'string' } } },
+  },
+  {
+    name: 'jarvos_todo_transition',
+    description: 'Request a claim, transition, completion, or reopen through the host-authorized work-action service. The MCP caller cannot supply authorization or verification evidence.',
+    inputSchema: { type: 'object', additionalProperties: false, required: ['itemId', 'operationId', 'action'], properties: { itemId: { type: 'string' }, operationId: { type: 'string' }, action: { type: 'string', enum: ['claim', 'transition', 'complete', 'reopen'] }, status: { type: 'string' }, expectedRevision: { type: 'string' } } },
+  },
   {
     name: 'jarvos_control_plane',
     description: 'Use the installed host\'s authenticated jarvOS control-plane application service. It has the same request and approval semantics as the human CLI. The host binds the credential to this MCP session server-side; never pass a credential as a tool argument.',
@@ -92,7 +154,7 @@ const TOOLS = [
   },
   {
     name: 'jarvos_current_work',
-    description: 'Return a compact jarvOS current-work summary from Paperclip.',
+    description: 'Diagnostic compatibility only: return a compact Paperclip current-work summary. This is not Projects orientation context.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -103,23 +165,16 @@ const TOOLS = [
   },
   {
     name: 'jarvos_projects_context',
-    description: 'Return the canonical jarvOS Projects context packet through the injected Projects provider. This is the assistant-facing read model; optional Todo, Beads, Paperclip, release, and journal sources remain behind that provider.',
+    description: 'Return the canonical bounded Projects packet through the host-bound provider. This is the sole project-orientation read model; unavailable or partial provider state is returned without raw-ledger fallback.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
       properties: {
         profile: { type: 'string', enum: ['orientation', 'recent-activity'], description: 'Named bounded Projects read profile.' },
-        projectIds: { type: 'array', items: { type: 'string' }, description: 'Optional canonical project IDs to expand.' },
-        outcomeIds: { type: 'array', items: { type: 'string' }, description: 'Optional canonical outcome IDs to expand.' },
-        includeDescendants: { type: 'boolean', description: 'Include descendants of selected projects.' },
         date: { type: 'string', description: 'Local calendar date for recent-activity (YYYY-MM-DD).' },
         timeZone: { type: 'string', description: 'IANA timezone for recent-activity.' },
         from: { type: 'string', description: 'Optional bounded UTC activity-window start.' },
         to: { type: 'string', description: 'Optional bounded UTC activity-window end.' },
-        include: { type: 'array', items: { type: 'string', enum: ['hierarchy', 'activity', 'currentWork', 'attention'] } },
-        maxItems: { type: 'number', description: 'Maximum bounded packet items.' },
-        maxBytes: { type: 'number', description: 'Maximum bounded packet bytes.' },
-        maxProviderAgeSeconds: { type: 'number', description: 'Maximum provider evidence age.' },
       },
     },
   },
@@ -265,6 +320,41 @@ const TOOLS = [
     },
   },
 ];
+
+function loadHostWorkActionService() {
+  const modulePath = process.env.JARVOS_WORK_ACTION_SERVICE_MODULE;
+  const selectedRoot = selectedWorkspaceRoot();
+  if (!selectedRoot) return null;
+  const trusted = trustedFile(modulePath, selectedRoot);
+  if (!trusted) return null;
+  try {
+    const loaded = require(trusted);
+    const service = typeof loaded === 'function' ? loaded() : (loaded?.service || loaded);
+    return service && typeof service === 'object' ? service : null;
+  } catch {
+    return null;
+  }
+}
+
+async function todoAction(name, args) {
+  const service = loadHostWorkActionService();
+  if (!service) return textResult('Todo work-action host binding is unavailable', true);
+  // Deliberately project only ordinary request fields. Authorization, human
+  // identity, and verification receipts are host-bound service state, never
+  // caller-controlled MCP arguments.
+  const actor = { kind: 'agent', id: 'mcp' };
+  if (name === 'jarvos_todo_create') return textResult(JSON.stringify(await service.create({ title: args.title, description: args.description, operationId: args.operationId, canonical: args.canonical, actor }), null, 2));
+  if (name === 'jarvos_todo_list') return textResult(JSON.stringify(await service.list(), null, 2));
+  if (name === 'jarvos_todo_show') return textResult(JSON.stringify(await service.show(args), null, 2));
+  const request = { itemId: args.itemId, operationId: args.operationId, expectedRevision: args.expectedRevision, actor };
+  if (args.action === 'claim') return textResult(JSON.stringify(await service.claim(request), null, 2));
+  if (args.action === 'transition') return textResult(JSON.stringify(await service.transition({ ...request, status: args.status }), null, 2));
+  if (args.action === 'complete') {
+    if (typeof service.completeFromHost !== 'function') return textResult('Todo host completion binding is unavailable', true);
+    return textResult(JSON.stringify(await service.completeFromHost(request), null, 2));
+  }
+  return textResult(JSON.stringify(await service.reopen(request), null, 2));
+}
 
 function setMcpProjectsContextProvider(provider) {
   mcpProjectsContextProvider = provider || null;
@@ -433,6 +523,7 @@ function redactSharedSkillMutation(result, opaqueSkillId) {
 
 async function callTool(name, args = {}) {
   args = normalizeToolArguments(name, args);
+  if (['jarvos_todo_create', 'jarvos_todo_list', 'jarvos_todo_show', 'jarvos_todo_transition'].includes(name)) return todoAction(name, args);
   if (name === 'jarvos_journal_health') {
     requireEmptyObjectArguments(args);
     const result = healthTodayJournal();
@@ -504,7 +595,15 @@ async function callTool(name, args = {}) {
     return textResult(result.markdown, !result.ok);
   }
   if (name === 'jarvos_projects_context') {
-    const result = await readProjectsContext(mcpProjectsContextProvider ? { ...args, provider: mcpProjectsContextProvider } : args);
+    const request = {
+      profile: args.profile || 'orientation',
+      date: args.date,
+      timeZone: args.timeZone,
+      from: args.from,
+      to: args.to,
+    };
+    if (mcpProjectsContextProvider) request.provider = mcpProjectsContextProvider;
+    const result = await readProjectsContext(request, true);
     return textResult(JSON.stringify(result, null, 2), false);
   }
   if (name === 'jarvos_projects_propose') {
@@ -536,9 +635,7 @@ async function callTool(name, args = {}) {
     return textResult(result.markdown, !result.ok);
   }
   if (name === 'jarvos_hydrate') {
-    const projectsContext = { ...(args.projectsContext || {}) };
-    if (mcpProjectsContextProvider) projectsContext.provider = mcpProjectsContextProvider;
-    const result = await hydrate({ ...args, projectsContext });
+    const result = await hydrate({ ...args, [HYDRATION_PROJECTS_PROVIDER]: mcpProjectsContextProvider });
     return textResult(result.markdown, !result.ok);
   }
   throw new Error(`Unknown tool: ${name}`);

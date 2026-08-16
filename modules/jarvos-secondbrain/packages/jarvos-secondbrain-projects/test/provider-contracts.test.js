@@ -1,6 +1,7 @@
 'use strict';
 
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -25,6 +26,43 @@ test('canonical references and execution links are provider-neutral and exact', 
   assert.equal(beads.executionReference.authority, 'beads');
   assert.throws(() => contracts.validateCanonicalReference({ ...reference, extra: true }), /unsupported fields/);
   assert.throws(() => contracts.validateExecutionReference({ ...beads.executionReference, provider: 'paperclip' }), /authority/);
+});
+
+test('protected execution-link store rejects a canonical rewrite for the same Beads item', async () => {
+  const { createMemoryExecutionLinkStore } = require('../src/execution-link-store');
+  const beads = fixture('beads-provider.json');
+  const store = createMemoryExecutionLinkStore();
+  await store.write(beads.executionReference);
+  assert.equal((await store.read(beads.executionReference.workspaceId, beads.executionReference.itemId)).canonical.id, beads.executionReference.canonical.id);
+  await assert.rejects(() => store.write({ ...beads.executionReference, canonical: { ...beads.executionReference.canonical, id: 'out_000002', breadcrumb: 'other' } }), /canonical conflict/);
+});
+
+test('file execution-link store serializes compare-and-swap updates and recovers stale locks', async () => {
+  const { createFileExecutionLinkStore } = require('../src/execution-link-store');
+  const beads = fixture('beads-provider.json');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-execution-links-'));
+  const store = createFileExecutionLinkStore({ root });
+  await store.write(beads.executionReference);
+  await assert.rejects(() => store.write({ ...beads.executionReference, itemRevision: '8' }, '0'), /compare-and-swap conflict/);
+  await assert.rejects(() => store.write({ ...beads.executionReference, itemRevision: '8' }, '6'), /compare-and-swap conflict/);
+  await store.write({ ...beads.executionReference, itemRevision: '8', sourceRevision: '8', capturedAt: LATER }, '7');
+  assert.equal((await store.read(beads.executionReference.workspaceId, beads.executionReference.itemId)).itemRevision, '8');
+  fs.writeFileSync(path.join(root, '.execution-links.lock'), '', { mode: 0o600 });
+  await store.write({ ...beads.executionReference, itemRevision: '9', sourceRevision: '9', capturedAt: '2026-08-08T12:10:00.000Z' }, '8');
+  assert.equal((await store.read(beads.executionReference.workspaceId, beads.executionReference.itemId)).itemRevision, '9');
+  assert.deepEqual((await store.list()).map((entry) => entry.itemId), [beads.executionReference.itemId]);
+});
+
+test('file execution-link store lists an absent root as empty and preserves colon-bearing workspace identities', async () => {
+  const { createFileExecutionLinkStore } = require('../src/execution-link-store');
+  const beads = fixture('beads-provider.json');
+  const parent = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-execution-links-fresh-'));
+  const root = path.join(parent, 'not-created-yet');
+  const store = createFileExecutionLinkStore({ root });
+  assert.deepEqual(await store.list(), []);
+  const reference = { ...beads.executionReference, workspaceId: 'workspace:local:main', itemId: 'bd-colon' };
+  await store.write(reference);
+  assert.deepEqual((await store.list()).map((entry) => [entry.workspaceId, entry.itemId]), [['workspace:local:main', 'bd-colon']]);
 });
 
 test('Todo to Beads promotion is idempotent, revision-bound, and timeout-safe', () => {

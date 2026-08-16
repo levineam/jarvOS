@@ -141,13 +141,13 @@ value, and rollback removes only these two entries.
 
 ## Available Tools
 
-- `jarvos_current_work` — current Paperclip work summary.
+- `jarvos_current_work` — diagnostic compatibility-only Paperclip work summary.
 - `jarvos_recall` — GBrain/QMD/graph recall.
 - `jarvos_create_note` — Obsidian note creation, journal wikilink, and verification.
 - `jarvos_startup_brief` — bounded startup context for future Codex hooks/wrappers.
-- `jarvos_hydrate` — bounded Codex startup packet with Paperclip current work,
-  today's journal, linked notes, the jarvOS ontology context packet, redaction, and a
-  hydration report.
+- `jarvos_hydrate` — bounded Codex startup packet with a host-issued Projects
+  orientation packet (or explicit unavailable/partial state), today's journal,
+  linked notes, the jarvOS ontology context packet, redaction, and a hydration report.
 - `jarvos_control_plane` — authenticated request, inspection, evidence, and
   approval access through the installed host application service. Requires
   `JARVOS_CONTROL_PLANE_SERVICE_MODULE` (and a credential binding) on the MCP
@@ -159,15 +159,16 @@ value, and rollback removes only these two entries.
 Default budget is 12,000 characters, configurable with
 `JARVOS_HYDRATION_MAX_CHARS`. The packet includes:
 
-- Paperclip issues in `in_progress` and PR-backed `in_review`.
+- A bounded host-issued Projects `orientation` packet, or an explicit
+  unavailable/partial Projects result without raw task-board fallback.
 - Today's journal entry.
 - Notes wikilinked from today's journal entry.
 - A compact `@jarvos/ontology` provider packet for hierarchy-of-meaning context.
 - A report with sources, omissions, budget use, stale/missing data, and handles.
 
 The standalone `jarvos_current_work` tool keeps its broader default status
-filter of `in_progress`, `todo`, and `blocked`; hydration narrows the execution
-packet to active work plus review-backed PRs.
+filter of `in_progress`, `todo`, and `blocked`, but is diagnostic compatibility
+only and never supplies startup project orientation.
 
 ## Operating Rule
 

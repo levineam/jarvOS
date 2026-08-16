@@ -26,8 +26,11 @@ const {
   createLivePullRequest,
   parseClawpatchCommand,
   createMemoryOperationStore,
+  createFileOperationStore,
+  OPERATION_STORE_SCHEMA_VERSION,
   resolveWorktreeRoot,
 } = require('./adapters/live');
+const { WORK_ACTION_CONTRACT, createBeadsWorkActionService, createMemoryExecutionLinkStore } = require('./features/work-actions');
 const {
   DEFAULT_MCP_TOOL_NAME,
   DEFAULT_SKILL_NAME,
@@ -199,6 +202,9 @@ module.exports = {
   createLivePullRequest,
   parseClawpatchCommand,
   createMemoryOperationStore,
+  createFileOperationStore,
+  createBeadsWorkActionService,
+  createMemoryExecutionLinkStore,
   resolveWorktreeRoot,
   CODING_MATURITY_STATES,
   CODE_THREAD_KIND,
@@ -214,6 +220,7 @@ module.exports = {
   ISSUE_BRANCH_LIFECYCLE_TRANSITIONS,
   ISSUE_BRANCH_METADATA_REQUIREMENTS,
   ORCHESTRATOR_SCHEMA_VERSION,
+  OPERATION_STORE_SCHEMA_VERSION,
   REQUIRED_EVIDENCE,
   REVIEW_ENGINE_SCHEMA_VERSION,
   SESSION_STATE_SCHEMA_VERSION,
@@ -224,6 +231,7 @@ module.exports = {
   TAKE_ISSUE_TO_DONE_STAGES,
   TERMINAL_STATUSES,
   TRIAGE_SCHEMA_VERSION,
+  WORK_ACTION_CONTRACT,
   assertReviewEngineAdapter,
   assessLocalChange,
   buildGateEquivalentCommands,

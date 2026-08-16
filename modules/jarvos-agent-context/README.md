@@ -9,7 +9,7 @@ modules rather than replacing them:
 - `@jarvos/gbrain` for recall bundles.
 - `@jarvos/secondbrain` for note writing and journal linking.
 - `@jarvos/ontology` for bounded hierarchy-of-meaning context packets.
-- Paperclip for current execution state.
+- Paperclip only for the separately labelled diagnostic compatibility read.
 - An injected Projects context provider for canonical project/outcome identity and bounded cross-provider context.
 
 ## Tools
@@ -18,7 +18,7 @@ The bundled stdio MCP server exposes:
 
 | Tool | Purpose |
 |---|---|
-| `jarvos_current_work` | Compact Paperclip current-work summary |
+| `jarvos_current_work` | Diagnostic compatibility: compact Paperclip current-work summary, not project orientation |
 | `jarvos_projects_context` | Canonical `jarvos.projects-context/v1` read packet from the injected Projects provider |
 | `jarvos_projects_propose` | Provider-neutral, uncommitted Projects proposal through the injected provider |
 | `jarvos_recall` | GBrain/QMD/graph recall bundle rendered as Markdown; pass `synthesize: true` or `mode: "synthesis"` for WS5 synthesis |
@@ -47,9 +47,9 @@ to assemble this packet. A host injects a provider with
 the stdio MCP wrapper); the provider implements `read(request)` and may
 implement `propose(request)`. The read path returns a normalized
 `jarvos.projects-context/v1` packet and deterministic fingerprint. A missing
-provider is an explicit, non-enumerating `unavailable` result, so legacy
-Paperclip orientation remains available while the Projects reader is in shadow
-mode. Proposals are reviewable outputs only and never create tasks, releases,
+provider is an explicit, non-enumerating `unavailable` or `partial` result;
+hydration and startup do not substitute Paperclip, Todo, Beads, release, or
+Journal project state. Proposals are reviewable outputs only and never create tasks, releases,
 or external handoffs directly.
 
 ## Journal actions
@@ -108,8 +108,8 @@ append transform so a concurrent Obsidian or mobile edit is preserved.
 Host reflex:
 
 1. On entry, call `jarvos_session_thread_read` with the issue, artifact, project,
-   or `JARVOS_SESSION_THREAD_ID`, then call `jarvos_current_work` or
-   `jarvos_hydrate`.
+   or `JARVOS_SESSION_THREAD_ID`, then call `jarvos_hydrate`. Use
+   `jarvos_current_work` only when explicitly diagnosing Paperclip compatibility.
 2. During work, call `jarvos_session_thread_write` at task switches, decisions,
    artifact changes, and pre-compaction flushes.
 3. Keep writes compact: summary, latest decision, and concrete next step. Link

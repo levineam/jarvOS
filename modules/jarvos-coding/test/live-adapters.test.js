@@ -16,6 +16,146 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
+function hostAuthorization({ action, workspaceId, operationId, itemId, canonical }) {
+  return {
+    contract: 'jarvos.work-action-authorization/v1',
+    authorized: true,
+    authority: 'coding-run',
+    fence: 1,
+    actions: [action],
+    workspaceId,
+    operationId,
+    itemId,
+    canonical,
+  };
+}
+
+test('file operation ledger atomically preserves immutable operations across restart', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-operation-ledger-'));
+  const { createFileOperationStore } = require('../src/index.js');
+  const store = createFileOperationStore({ root, maxRecords: 2 });
+  await store.write({ operationId: 'op-1', fingerprint: 'one', state: 'prepared' });
+  assert.equal((await store.read('op-1')).state, 'prepared');
+  await assert.rejects(() => store.write({ operationId: 'op-1', fingerprint: 'two', state: 'prepared' }), /identity conflict/);
+  await store.write({ operationId: 'op-1', fingerprint: 'one', state: 'committed' });
+  const restarted = createFileOperationStore({ root, maxRecords: 2 });
+  assert.equal((await restarted.read('op-1')).state, 'committed');
+});
+
+test('live Beads tracker selects the durable operation ledger when the host supplies its state root', async () => {
+  const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-beads-durable-workspace-'));
+  const ledgerRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-beads-durable-ledger-'));
+  const run = (command, args) => {
+    if (args[0] === '--version') return { status: 0, stdout: 'br v0.2.19' };
+    if (args[0] === 'capabilities') return { status: 0, stdout: JSON.stringify({ capabilities: ['create', 'update', 'dependency', 'checkpoint'] }) };
+    if (args[0] === 'schema') return { status: 0, stdout: '{}' };
+    if (args[0] === 'where') return { status: 0, stdout: workspaceRoot };
+    return { status: 0, stdout: JSON.stringify({ id: 'bd-durable', revision: '1' }) };
+  };
+  await createLiveBeadsTracker({ workspaceRoot, operationStoreRoot: ledgerRoot, run }).createWorkItem({ title: 'durable', operationId: 'durable-op' });
+  assert.ok(fs.readdirSync(ledgerRoot).some((name) => name.endsWith('.json')));
+});
+
+test('Beads Todo action facade requires host authority, exact linkage, and Andrew for human attestation', async () => {
+  const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-todo-action-'));
+  const { createBeadsWorkActionService, createMemoryExecutionLinkStore } = require('../src/index.js');
+  const links = createMemoryExecutionLinkStore();
+  const tracker = {
+    authority: 'beads', workspaceRoot,
+    async createWorkItem(input) { return { state: 'committed', result: { id: 'bd-action', revision: '7', status: 'open' }, operationId: input.operationId }; },
+    async claimIssue(input) { return { state: 'committed', result: { id: input.itemId, revision: '8', status: 'in_progress' } }; },
+    async transition(input) { return { state: 'committed', result: { id: input.itemId, revision: '9', status: input.status } }; },
+    async reconcile() { return { state: 'not-committed' }; },
+  };
+  const canonical = { contract: 'jarvos.canonical-reference/v1', kind: 'outcome', id: 'out_000001', revision: 1, breadcrumb: 'Project › Outcome' };
+  const service = createBeadsWorkActionService({ tracker, executionLinks: links, approvedWorkspaceIds: [workspaceRoot], authorizeMutation: hostAuthorization });
+  await assert.rejects(() => service.create({ title: 'missing link', operationId: 'action-1', actor: { kind: 'human', id: 'andrew' } }), /canonical/);
+  const created = await service.create({ title: 'linked work', operationId: 'action-2', actor: { kind: 'human', id: 'andrew' }, canonical });
+  assert.equal(created.workReference.authority, 'beads');
+  await assert.rejects(() => service.claim({ itemId: 'bd-action', operationId: 'action-stale', expectedRevision: '6', actor: { kind: 'human', id: 'andrew' } }), /stale expected/);
+  await assert.rejects(() => service.completeWithEvidence({ itemId: 'bd-action', operationId: 'action-3', evidence: { kind: 'human-attested' }, actor: { kind: 'agent', id: 'codex' } }), /Andrew/);
+  const completed = await service.completeWithEvidence({ itemId: 'bd-action', operationId: 'action-4', evidence: { kind: 'human-attested' }, actor: { kind: 'human', id: 'andrew' } });
+  assert.equal(completed.status, 'done');
+
+  const unbound = createBeadsWorkActionService({ tracker, approvedWorkspaceIds: [workspaceRoot], executionLinks: links });
+  await assert.rejects(() => unbound.create({ title: 'not authorized', operationId: 'action-5', canonical }), /host mutation authorization/);
+  await assert.rejects(() => unbound.claim({ itemId: 'bd-action', operationId: 'action-6' }), /host mutation authorization/);
+  await assert.rejects(() => unbound.transition({ itemId: 'bd-action', operationId: 'action-7', status: 'review' }), /host mutation authorization/);
+  await assert.rejects(() => unbound.completeWithEvidence({ itemId: 'bd-action', operationId: 'action-8', evidence: { kind: 'human-attested' }, actor: { kind: 'human', id: 'andrew' } }), /host mutation authorization/);
+  await assert.rejects(() => unbound.reopen({ itemId: 'bd-action', operationId: 'action-9' }), /host mutation authorization/);
+});
+
+test('Beads Todo completion accepts only host-resolved immutable verification receipts', async () => {
+  const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-todo-evidence-'));
+  const { createBeadsWorkActionService, createMemoryExecutionLinkStore } = require('../src/index.js');
+  const links = createMemoryExecutionLinkStore();
+  const tracker = {
+    authority: 'beads', workspaceRoot,
+    async createWorkItem(input) { return { state: 'committed', result: { id: 'bd-evidence', revision: '1', status: 'open' }, operationId: input.operationId }; },
+    async transition(input) { return { state: 'committed', result: { id: input.itemId, revision: '2', status: input.status } }; },
+  };
+  const canonical = { kind: 'outcome', id: 'out_000001', revision: 1, breadcrumb: 'Project › Outcome' };
+  const service = createBeadsWorkActionService({
+    tracker, executionLinks: links, approvedWorkspaceIds: [workspaceRoot], authorizeMutation: hostAuthorization,
+    registeredEvidenceProducers: ['ci'],
+    resolveEvidenceReceipt: async (id) => id === 'verified-1' ? {
+      contract: 'jarvos.work-action-evidence-receipt/v1', immutable: true, kind: 'execution-verified', producer: 'ci',
+      operationId: 'evidence-complete-2', itemId: 'bd-evidence', canonical,
+    } : null,
+  });
+  await service.create({ title: 'linked work', operationId: 'evidence-create-1', canonical });
+  await assert.rejects(() => service.completeWithEvidence({ itemId: 'bd-evidence', operationId: 'evidence-complete-1', evidence: { kind: 'execution-verified' } }), /host evidence receipt id/);
+  const completed = await service.completeWithEvidence({ itemId: 'bd-evidence', operationId: 'evidence-complete-2', evidenceReceiptId: 'verified-1' });
+  assert.equal(completed.status, 'done');
+});
+
+test('Beads Todo host completion resolves its receipt without caller evidence', async () => {
+  const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-todo-host-complete-'));
+  const { createBeadsWorkActionService, createMemoryExecutionLinkStore } = require('../src/index.js');
+  const canonical = { kind: 'outcome', id: 'out_000001', revision: 1, breadcrumb: 'Project › Outcome' };
+  const tracker = {
+    authority: 'beads', workspaceRoot,
+    async createWorkItem() { return { state: 'committed', result: { id: 'bd-host-complete', revision: '1', status: 'open' } }; },
+    async transition(input) { return { state: 'committed', result: { id: input.itemId, revision: '2', status: input.status } }; },
+  };
+  let completionRequest = null;
+  const service = createBeadsWorkActionService({
+    tracker, executionLinks: createMemoryExecutionLinkStore(), approvedWorkspaceIds: [workspaceRoot], authorizeMutation: hostAuthorization,
+    registeredEvidenceProducers: ['ci'],
+    resolveCompletionReceipt: async (request) => {
+      completionRequest = request;
+      return { contract: 'jarvos.work-action-evidence-receipt/v1', immutable: true, kind: 'execution-verified', producer: 'ci', operationId: request.operationId, itemId: request.itemId, canonical };
+    },
+  });
+  await service.create({ title: 'host completion', operationId: 'host-create-1', canonical });
+  const completed = await service.completeFromHost({ itemId: 'bd-host-complete', operationId: 'host-complete-1' });
+  assert.equal(completed.status, 'done');
+  assert.deepEqual(completionRequest, { operationId: 'host-complete-1', itemId: 'bd-host-complete', workspaceId: completionRequest.workspaceId });
+});
+
+test('Beads Todo action facade replays a committed operation without a second Beads create', async () => {
+  const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-todo-replay-workspace-'));
+  const ledgerRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-todo-replay-ledger-'));
+  const links = require('../../jarvos-secondbrain/packages/jarvos-secondbrain-projects/src/execution-link-store').createFileExecutionLinkStore({
+    root: fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-todo-replay-links-')),
+  });
+  const operationStore = require('../src/index.js').createFileOperationStore({ root: ledgerRoot });
+  let creates = 0;
+  const tracker = {
+    authority: 'beads', workspaceRoot,
+    async createWorkItem(input) { creates += 1; return { state: 'committed', result: { id: 'bd-replay', revision: '1', status: 'open' }, operationId: input.operationId }; },
+  };
+  const canonical = { kind: 'outcome', id: 'out_000001', revision: 1, breadcrumb: 'Project › Outcome' };
+  const first = await require('../src/index.js').createBeadsWorkActionService({ tracker, operationStore, executionLinks: links, workspaceId: 'workspace-main', approvedWorkspaceIds: ['workspace-main'], authorizeMutation: hostAuthorization }).create({ title: 'replay', operationId: 'replay-1', canonical });
+  const secondService = require('../src/index.js').createBeadsWorkActionService({ tracker, operationStore, executionLinks: links, workspaceId: 'workspace-main', approvedWorkspaceIds: ['workspace-main'], authorizeMutation: hostAuthorization });
+  const replay = await secondService.create({ title: 'replay', operationId: 'replay-1', canonical });
+  assert.equal(creates, 1);
+  assert.equal(replay.workReference.itemId, first.workReference.itemId);
+  assert.equal(replay.executionLink.workspaceId, 'workspace-main');
+  assert.deepEqual((await secondService.list()).items.map((item) => item.itemId), ['bd-replay']);
+  assert.equal(fs.readFileSync(path.join(ledgerRoot, 'replay-1.json'), 'utf8').includes(workspaceRoot), false);
+});
+
 test('public package declares a registry-safe control-plane dependency', () => {
   const manifest = require('../package.json');
   assert.equal(manifest.dependencies['@jarvos/control-plane'], '0.1.0');

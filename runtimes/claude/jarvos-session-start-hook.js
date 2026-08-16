@@ -114,6 +114,11 @@ function stewardshipContext(options = {}) {
   return input.pendingInSessionInput && input.nextTurnInput ? additionalContext(input) : '';
 }
 
+async function startupHydration() {
+  const result = await hydrate({ maxChars: hydrationMaxChars() });
+  return result.markdown;
+}
+
 async function main(hookInput = readHookInput()) {
   try {
     persistBridgeEnvironment();
@@ -123,8 +128,7 @@ async function main(hookInput = readHookInput()) {
     const judgment = stewardshipContext(bridgeOptions);
     let hydration = '';
     try {
-      const result = await hydrate({ maxChars: hydrationMaxChars() });
-      hydration = result.markdown;
+      hydration = await startupHydration();
     } catch (error) {
       logFailure(error);
     }
@@ -153,4 +157,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { CLAUDE_SESSION_MAP_ROOT_ENV, hydrationMaxChars, main, persistBridgeEnvironment, stewardshipAdapter, stewardshipContext };
+module.exports = { CLAUDE_SESSION_MAP_ROOT_ENV, hydrationMaxChars, main, persistBridgeEnvironment, startupHydration, stewardshipAdapter, stewardshipContext };

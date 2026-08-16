@@ -63,6 +63,11 @@ function readSessionStartInput() {
   return readHookInput('SessionStart');
 }
 
+async function startupHydration() {
+  const result = await hydrate({ maxChars: hydrationMaxChars() });
+  return result.markdown;
+}
+
 async function main() {
   try {
     const env = bridgeEnvironment(readSessionStartInput());
@@ -71,8 +76,7 @@ async function main() {
       : '';
     let hydration = '';
     try {
-      const result = await hydrate({ maxChars: hydrationMaxChars() });
-      hydration = result.markdown;
+      hydration = await startupHydration();
     } catch (error) {
       logFailure(error);
     }
@@ -106,6 +110,7 @@ module.exports = {
   hydrationMaxChars,
   main,
   readSessionStartInput,
+  startupHydration,
   sessionStartInput,
   stewardshipAdapter,
   stewardshipContext,

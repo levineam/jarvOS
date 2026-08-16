@@ -128,13 +128,13 @@ does not imply automatic startup context injection for Claude Desktop.
 
 ## Available Tools
 
-- `jarvos_current_work` — current Paperclip work summary.
+- `jarvos_current_work` — diagnostic compatibility-only Paperclip work summary.
 - `jarvos_recall` — GBrain/QMD/graph recall.
 - `jarvos_create_note` — Obsidian note creation, journal wikilink, and verification.
 - `jarvos_startup_brief` — bounded startup context.
-- `jarvos_hydrate` — bounded working-context packet with Paperclip current work,
-  today's journal, linked notes, jarvOS ontology spine, redaction, and a
-  hydration report.
+- `jarvos_hydrate` — bounded working-context packet with a host-issued Projects
+  orientation packet (or explicit unavailable/partial state), today's journal,
+  linked notes, jarvOS ontology spine, redaction, and a hydration report.
 
 ## Secondbrain Capture Rule
 
