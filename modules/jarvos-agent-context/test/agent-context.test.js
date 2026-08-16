@@ -552,6 +552,10 @@ test('MCP session thread tools round-trip through the shared note and journal pa
 test('MCP tool list includes jarvOS tools', () => {
   const names = TOOLS.map((tool) => tool.name);
   assert.deepEqual(names, [
+    'jarvos_todo_create',
+    'jarvos_todo_list',
+    'jarvos_todo_show',
+    'jarvos_todo_transition',
     'jarvos_control_plane',
     'jarvos_shared_skills',
     'jarvos_current_work',
@@ -582,6 +586,19 @@ test('MCP tool list includes jarvOS tools', () => {
     'status', 'explain', 'inventory', 'plan', 'repair', 'exclude', 'include',
   ]);
   assert.equal('credential' in shared.inputSchema.properties, false);
+});
+
+test('named Todo MCP actions fail closed when the host work-action binding is absent', async () => {
+  const previous = process.env.JARVOS_WORK_ACTION_SERVICE_MODULE;
+  delete process.env.JARVOS_WORK_ACTION_SERVICE_MODULE;
+  try {
+    const result = await callTool('jarvos_todo_list', {});
+    assert.equal(result.isError, true);
+    assert.match(result.content[0].text, /host binding is unavailable/);
+  } finally {
+    if (previous === undefined) delete process.env.JARVOS_WORK_ACTION_SERVICE_MODULE;
+    else process.env.JARVOS_WORK_ACTION_SERVICE_MODULE = previous;
+  }
 });
 
 test('shared-skill MCP mutation operations fail closed without a host-bound owner session', async () => {

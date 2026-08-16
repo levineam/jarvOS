@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { run: defaultRun } = require('./run');
+const { createFileOperationStore } = require('./file-operation-store');
 
 const BEADS_TRACKER_SCHEMA_VERSION = 'jarvos-coding-live-beads-tracker/v1';
 const DEFAULT_BEADS_VERSION = '0.2.19';
@@ -143,7 +144,11 @@ function createLiveBeadsTracker(options = {}) {
   const workspaceRoot = validateWorkspace(options.workspaceRoot || process.cwd(), options.approvedRoots);
   const timeoutMs = Number(options.timeoutMs || DEFAULT_TIMEOUT_MS);
   const maxBuffer = Number(options.maxBuffer || DEFAULT_MAX_BUFFER);
-  const operationStore = options.operationStore || createMemoryOperationStore();
+  // A host-selected state root upgrades the exact same operation contract to
+  // durable storage.  No caller path is accepted by the action facade.
+  const operationStore = options.operationStore || (options.operationStoreRoot
+    ? createFileOperationStore({ root: options.operationStoreRoot, maxRecords: options.maxOperationRecords })
+    : createMemoryOperationStore());
   const actor = options.actor || 'jarvos-coding';
   const commandMap = options.commands || {};
   let preflight = null;
@@ -313,6 +318,13 @@ function createLiveBeadsTracker(options = {}) {
     async transition(input = {}) { return mutate('transition', input); },
     async addDependency(input = {}) { return mutate('dependency', input); },
     async writeCheckpoint(input = {}) { return mutate('checkpoint', input); },
+    async showWorkItem(input = {}) {
+      const itemId = workIdOf(input, 'show');
+      await ensureReady();
+      const result = invoke(mappedArgs('show', input, operationIdOf({ ...input, operationId: input.operationId || `show:${itemId}` }, 'show')));
+      if (result.status !== 0) return { state: 'unavailable', status: 'unavailable', errorCode: 'READ_FAILED' };
+      return { state: 'committed', status: 'available', result: parseJson(result.stdout) || null };
+    },
     async verifyAndClose(input = {}) {
       const pullRequest = input.pullRequest || {};
       const merged = input.merged === true || pullRequest.merged === true || String(pullRequest.state || pullRequest.status || '').toLowerCase() === 'merged';

@@ -27,6 +27,15 @@ test('canonical references and execution links are provider-neutral and exact', 
   assert.throws(() => contracts.validateExecutionReference({ ...beads.executionReference, provider: 'paperclip' }), /authority/);
 });
 
+test('protected execution-link store rejects a canonical rewrite for the same Beads item', async () => {
+  const { createMemoryExecutionLinkStore } = require('../src/execution-link-store');
+  const beads = fixture('beads-provider.json');
+  const store = createMemoryExecutionLinkStore();
+  await store.write(beads.executionReference);
+  assert.equal((await store.read(beads.executionReference.workspaceId, beads.executionReference.itemId)).canonical.id, beads.executionReference.canonical.id);
+  await assert.rejects(() => store.write({ ...beads.executionReference, canonical: { ...beads.executionReference.canonical, id: 'out_000002', breadcrumb: 'other' } }), /canonical conflict/);
+});
+
 test('Todo to Beads promotion is idempotent, revision-bound, and timeout-safe', () => {
   const todo = fixture('todo-provider.json');
   const beads = fixture('beads-provider.json');

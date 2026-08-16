@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 'use strict';
 
+const fs = require('node:fs');
+const path = require('node:path');
 const readline = require('readline');
 const {
   createNote,
@@ -61,7 +63,66 @@ function resolveHostCredential(env = process.env) {
   return null;
 }
 
+function trustedFile(filePath, root = null) {
+  if (typeof filePath !== 'string' || !path.isAbsolute(filePath)) return null;
+  try {
+    if (fs.lstatSync(filePath).isSymbolicLink()) return null;
+    const real = fs.realpathSync(filePath);
+    const stat = fs.statSync(real);
+    const uid = typeof process.getuid === 'function' ? process.getuid() : null;
+    if (!stat.isFile() || (uid !== null && stat.uid !== uid) || (stat.mode & 0o077) !== 0) return null;
+    if (root) {
+      const relative = path.relative(root, real);
+      if (relative.startsWith('..') || path.isAbsolute(relative)) return null;
+    }
+    let cursor = path.dirname(real);
+    for (;;) {
+      const ancestor = fs.statSync(cursor);
+      if ((ancestor.mode & 0o022) !== 0 && !(ancestor.isDirectory() && (ancestor.mode & 0o1000) !== 0)) return null;
+      if (uid !== null && ancestor.uid !== uid && ancestor.uid !== 0) return null;
+      const parent = path.dirname(cursor);
+      if (parent === cursor) break;
+      cursor = parent;
+    }
+    return real;
+  } catch {
+    return null;
+  }
+}
+
+function selectedWorkspaceRoot(env = process.env) {
+  const configPath = trustedFile(env.JARVOS_PROJECTS_CONTEXT_CONFIG);
+  if (!configPath) return null;
+  try {
+    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    if (typeof config.workspaceRoot !== 'string' || !path.isAbsolute(config.workspaceRoot)) return null;
+    return fs.realpathSync(config.workspaceRoot);
+  } catch {
+    return null;
+  }
+}
+
 const TOOLS = [
+  {
+    name: 'jarvos_todo_create',
+    description: 'Create one canonically linked Beads-backed Todo through the host-authorized work-action service. Agent-discovered work must be submitted as a proposal by the host.',
+    inputSchema: { type: 'object', additionalProperties: false, required: ['title', 'operationId', 'canonical'], properties: { title: { type: 'string' }, description: { type: 'string' }, operationId: { type: 'string' }, canonical: { type: 'object' } } },
+  },
+  {
+    name: 'jarvos_todo_list',
+    description: 'List bounded, canonically linked Beads-backed Todo work through the host-authorized work-action service.',
+    inputSchema: { type: 'object', additionalProperties: false, properties: {} },
+  },
+  {
+    name: 'jarvos_todo_show',
+    description: 'Show one canonically linked Beads-backed Todo work item through the host-authorized work-action service.',
+    inputSchema: { type: 'object', additionalProperties: false, required: ['itemId'], properties: { itemId: { type: 'string' } } },
+  },
+  {
+    name: 'jarvos_todo_transition',
+    description: 'Claim, transition, complete with evidence, or reopen one Beads-backed Todo through the host-authorized work-action service.',
+    inputSchema: { type: 'object', additionalProperties: false, required: ['itemId', 'operationId', 'action'], properties: { itemId: { type: 'string' }, operationId: { type: 'string' }, action: { type: 'string', enum: ['claim', 'transition', 'complete', 'reopen'] }, status: { type: 'string' }, expectedRevision: { type: 'string' }, evidence: { type: 'object' } } },
+  },
   {
     name: 'jarvos_control_plane',
     description: 'Use the installed host\'s authenticated jarvOS control-plane application service. It has the same request and approval semantics as the human CLI. The host binds the credential to this MCP session server-side; never pass a credential as a tool argument.',
@@ -266,6 +327,34 @@ const TOOLS = [
   },
 ];
 
+function loadHostWorkActionService() {
+  const modulePath = process.env.JARVOS_WORK_ACTION_SERVICE_MODULE;
+  const selectedRoot = selectedWorkspaceRoot();
+  if (!selectedRoot) return null;
+  const trusted = trustedFile(modulePath, selectedRoot);
+  if (!trusted) return null;
+  try {
+    const loaded = require(trusted);
+    const service = typeof loaded === 'function' ? loaded() : (loaded?.service || loaded);
+    return service && typeof service === 'object' ? service : null;
+  } catch {
+    return null;
+  }
+}
+
+async function todoAction(name, args) {
+  const service = loadHostWorkActionService();
+  if (!service) return textResult('Todo work-action host binding is unavailable', true);
+  const actor = { kind: 'agent', id: 'mcp' }; // authenticated human identity is injected only by the private host binding.
+  if (name === 'jarvos_todo_create') return textResult(JSON.stringify(await service.create({ ...args, actor }), null, 2));
+  if (name === 'jarvos_todo_list') return textResult(JSON.stringify(await service.list(), null, 2));
+  if (name === 'jarvos_todo_show') return textResult(JSON.stringify(await service.show(args), null, 2));
+  if (args.action === 'claim') return textResult(JSON.stringify(await service.claim({ ...args, actor }), null, 2));
+  if (args.action === 'transition') return textResult(JSON.stringify(await service.transition({ ...args, actor }), null, 2));
+  if (args.action === 'complete') return textResult(JSON.stringify(await service.completeWithEvidence({ ...args, actor }), null, 2));
+  return textResult(JSON.stringify(await service.reopen({ ...args, actor }), null, 2));
+}
+
 function setMcpProjectsContextProvider(provider) {
   mcpProjectsContextProvider = provider || null;
   setProjectsContextProvider(mcpProjectsContextProvider);
@@ -433,6 +522,7 @@ function redactSharedSkillMutation(result, opaqueSkillId) {
 
 async function callTool(name, args = {}) {
   args = normalizeToolArguments(name, args);
+  if (['jarvos_todo_create', 'jarvos_todo_list', 'jarvos_todo_show', 'jarvos_todo_transition'].includes(name)) return todoAction(name, args);
   if (name === 'jarvos_journal_health') {
     requireEmptyObjectArguments(args);
     const result = healthTodayJournal();
