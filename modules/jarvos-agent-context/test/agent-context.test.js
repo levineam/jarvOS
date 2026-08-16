@@ -601,6 +601,55 @@ test('named Todo MCP actions fail closed when the host work-action binding is ab
   }
 });
 
+test('Todo MCP strips caller-supplied authorization and evidence before invoking its host service', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-mcp-todo-host-'));
+  fs.chmodSync(root, 0o700);
+  const configPath = path.join(root, 'projects.json');
+  const servicePath = path.join(root, 'todo-service.js');
+  fs.writeFileSync(configPath, JSON.stringify({ workspaceRoot: root }), { mode: 0o600 });
+  fs.writeFileSync(servicePath, [
+    "'use strict';",
+    'module.exports = {',
+    '  create: async (input) => { globalThis.__jarvosTodoMcpInput = input; return { ok: true }; },',
+    '  completeFromHost: async (input) => { globalThis.__jarvosTodoMcpCompletion = input; return { ok: true, completed: true }; },',
+    '};',
+  ].join('\n'), { mode: 0o600 });
+  const previousConfig = process.env.JARVOS_PROJECTS_CONTEXT_CONFIG;
+  const previousService = process.env.JARVOS_WORK_ACTION_SERVICE_MODULE;
+  process.env.JARVOS_PROJECTS_CONTEXT_CONFIG = configPath;
+  process.env.JARVOS_WORK_ACTION_SERVICE_MODULE = servicePath;
+  try {
+    const result = await callTool('jarvos_todo_create', {
+      title: 'safe request', operationId: 'mcp-op-1', canonical: { kind: 'outcome', id: 'out_000001', revision: 1, breadcrumb: 'Project › Outcome' },
+      authorization: { ok: true }, capability: 'forged', evidence: { kind: 'execution-verified' }, evidenceReceiptId: 'forged',
+    });
+    assert.equal(result.isError, false);
+    assert.deepEqual(globalThis.__jarvosTodoMcpInput, {
+      title: 'safe request', description: undefined, operationId: 'mcp-op-1',
+      canonical: { kind: 'outcome', id: 'out_000001', revision: 1, breadcrumb: 'Project › Outcome' },
+      actor: { kind: 'agent', id: 'mcp' },
+    });
+    assert.equal('evidence' in TOOLS.find((tool) => tool.name === 'jarvos_todo_transition').inputSchema.properties, false);
+    const completed = await callTool('jarvos_todo_transition', {
+      itemId: 'bd-safe', operationId: 'mcp-op-2', action: 'complete',
+      evidence: { kind: 'execution-verified' }, evidenceReceiptId: 'forged', authorization: { ok: true },
+    });
+    assert.equal(completed.isError, false);
+    assert.deepEqual(globalThis.__jarvosTodoMcpCompletion, {
+      itemId: 'bd-safe', operationId: 'mcp-op-2', expectedRevision: undefined, actor: { kind: 'agent', id: 'mcp' },
+    });
+  } finally {
+    delete globalThis.__jarvosTodoMcpInput;
+    delete globalThis.__jarvosTodoMcpCompletion;
+    delete require.cache[servicePath];
+    if (previousConfig === undefined) delete process.env.JARVOS_PROJECTS_CONTEXT_CONFIG;
+    else process.env.JARVOS_PROJECTS_CONTEXT_CONFIG = previousConfig;
+    if (previousService === undefined) delete process.env.JARVOS_WORK_ACTION_SERVICE_MODULE;
+    else process.env.JARVOS_WORK_ACTION_SERVICE_MODULE = previousService;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('shared-skill MCP mutation operations fail closed without a host-bound owner session', async () => {
   const previous = process.env.JARVOS_CONTROL_PLANE_CREDENTIAL;
   const previousFile = process.env.JARVOS_CONTROL_PLANE_CREDENTIAL_FILE;

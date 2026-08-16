@@ -121,8 +121,8 @@ const TOOLS = [
   },
   {
     name: 'jarvos_todo_transition',
-    description: 'Claim, transition, complete with evidence, or reopen one Beads-backed Todo through the host-authorized work-action service.',
-    inputSchema: { type: 'object', additionalProperties: false, required: ['itemId', 'operationId', 'action'], properties: { itemId: { type: 'string' }, operationId: { type: 'string' }, action: { type: 'string', enum: ['claim', 'transition', 'complete', 'reopen'] }, status: { type: 'string' }, expectedRevision: { type: 'string' }, evidence: { type: 'object' } } },
+    description: 'Request a claim, transition, completion, or reopen through the host-authorized work-action service. The MCP caller cannot supply authorization or verification evidence.',
+    inputSchema: { type: 'object', additionalProperties: false, required: ['itemId', 'operationId', 'action'], properties: { itemId: { type: 'string' }, operationId: { type: 'string' }, action: { type: 'string', enum: ['claim', 'transition', 'complete', 'reopen'] }, status: { type: 'string' }, expectedRevision: { type: 'string' } } },
   },
   {
     name: 'jarvos_control_plane',
@@ -339,14 +339,21 @@ function loadHostWorkActionService() {
 async function todoAction(name, args) {
   const service = loadHostWorkActionService();
   if (!service) return textResult('Todo work-action host binding is unavailable', true);
-  const actor = { kind: 'agent', id: 'mcp' }; // authenticated human identity is injected only by the private host binding.
-  if (name === 'jarvos_todo_create') return textResult(JSON.stringify(await service.create({ ...args, actor }), null, 2));
+  // Deliberately project only ordinary request fields. Authorization, human
+  // identity, and verification receipts are host-bound service state, never
+  // caller-controlled MCP arguments.
+  const actor = { kind: 'agent', id: 'mcp' };
+  if (name === 'jarvos_todo_create') return textResult(JSON.stringify(await service.create({ title: args.title, description: args.description, operationId: args.operationId, canonical: args.canonical, actor }), null, 2));
   if (name === 'jarvos_todo_list') return textResult(JSON.stringify(await service.list(), null, 2));
   if (name === 'jarvos_todo_show') return textResult(JSON.stringify(await service.show(args), null, 2));
-  if (args.action === 'claim') return textResult(JSON.stringify(await service.claim({ ...args, actor }), null, 2));
-  if (args.action === 'transition') return textResult(JSON.stringify(await service.transition({ ...args, actor }), null, 2));
-  if (args.action === 'complete') return textResult(JSON.stringify(await service.completeWithEvidence({ ...args, actor }), null, 2));
-  return textResult(JSON.stringify(await service.reopen({ ...args, actor }), null, 2));
+  const request = { itemId: args.itemId, operationId: args.operationId, expectedRevision: args.expectedRevision, actor };
+  if (args.action === 'claim') return textResult(JSON.stringify(await service.claim(request), null, 2));
+  if (args.action === 'transition') return textResult(JSON.stringify(await service.transition({ ...request, status: args.status }), null, 2));
+  if (args.action === 'complete') {
+    if (typeof service.completeFromHost !== 'function') return textResult('Todo host completion binding is unavailable', true);
+    return textResult(JSON.stringify(await service.completeFromHost(request), null, 2));
+  }
+  return textResult(JSON.stringify(await service.reopen(request), null, 2));
 }
 
 function setMcpProjectsContextProvider(provider) {

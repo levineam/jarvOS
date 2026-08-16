@@ -350,6 +350,25 @@ test('hydrate ignores model-visible provider and query inputs in favor of its ho
   }
 });
 
+test('startup brief ignores model-visible provider inputs in favor of its host orientation binding', async () => {
+  const hostProvider = {
+    defaultQuery: QUERY,
+    read: async ({ query }) => ({ status: 'ok', packet: { ...packet(), query } }),
+  };
+  const callerProvider = {
+    read: async () => ({ status: 'unavailable', reason: 'caller provider must not be read' }),
+  };
+  setProjectsContextProvider(hostProvider);
+  try {
+    const result = await startupBrief({ projectsContext: { provider: callerProvider } });
+    assert.match(result.markdown, /Projects Context/);
+    assert.doesNotMatch(result.markdown, /caller provider/);
+    assert.match(result.markdown, /jarvOS › v1\.0\.0 release/);
+  } finally {
+    setProjectsContextProvider(null);
+  }
+});
+
 test('MCP Projects reads ignore caller-shaped query and scope inputs', async () => {
   const provider = { defaultQuery: QUERY, read: async ({ query }) => ({ status: 'ok', packet: { ...packet(), query } }) };
   setMcpProjectsContextProvider(provider);

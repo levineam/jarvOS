@@ -12,6 +12,7 @@ function createMemoryExecutionLinkStore() {
   const records = new Map();
   return {
     async read(workspaceId, itemId) { return records.get(`${workspaceId}:${itemId}`) || null; },
+    async list() { return [...records.values()]; },
     async write(reference, expectedRevision = null) {
       const link = validateExecutionReference(reference).reference; const key = keyOf(link); const current = records.get(key) || null;
       if (current && (current.canonical.id !== link.canonical.id || current.canonical.revision !== link.canonical.revision)) throw new Error('execution link canonical conflict');
@@ -27,9 +28,12 @@ function createFileExecutionLinkStore(options = {}) {
   const lockPath = path.join(root, '.execution-links.lock');
   const readRaw = (workspaceId, itemId) => {
     const target = file(workspaceId, itemId);
-    if (!fs.existsSync(target)) return null;
     let value;
-    try { value = JSON.parse(fs.readFileSync(target, 'utf8')); } catch { throw new Error('execution link record is invalid'); }
+    try { value = JSON.parse(fs.readFileSync(target, 'utf8')); }
+    catch (error) {
+      if (error.code === 'ENOENT') return null;
+      throw new Error('execution link record is invalid');
+    }
     return validateExecutionReference(value).reference;
   };
   const withLock = (fn) => {
@@ -64,6 +68,21 @@ function createFileExecutionLinkStore(options = {}) {
   };
   return {
     async read(workspaceId, itemId) { return readRaw(workspaceId, itemId); },
+    async list() {
+      const records = [];
+      let names;
+      try { names = fs.readdirSync(root); }
+      catch (error) { if (error.code === 'ENOENT') return records; throw error; }
+      for (const name of names.filter((entry) => entry.endsWith('.json'))) {
+        try {
+          const target = path.join(root, name);
+          const stat = fs.lstatSync(target);
+          if (!stat.isFile() || stat.isSymbolicLink()) throw new Error('invalid');
+          records.push(validateExecutionReference(JSON.parse(fs.readFileSync(target, 'utf8'))).reference);
+        } catch { throw new Error('execution link record is invalid'); }
+      }
+      return records;
+    },
     async write(reference, expectedRevision = null) {
       const link = validateExecutionReference(reference).reference;
       return withLock(() => {

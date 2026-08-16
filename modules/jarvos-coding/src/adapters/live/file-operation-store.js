@@ -71,9 +71,12 @@ function createFileOperationStore(options = {}) {
   const lockPath = path.join(root, '.operations.lock');
   const readFile = (operationId) => {
     const file = fileFor(operationId);
-    if (!fs.existsSync(file)) return null;
     let value;
-    try { value = JSON.parse(fs.readFileSync(file, 'utf8')); } catch { throw new Error('operation ledger record is invalid'); }
+    try { value = JSON.parse(fs.readFileSync(file, 'utf8')); }
+    catch (error) {
+      if (error.code === 'ENOENT') return null;
+      throw new Error('operation ledger record is invalid');
+    }
     if (!value || value.schemaVersion !== OPERATION_STORE_SCHEMA_VERSION || value.operationId !== operationId || typeof value.fingerprint !== 'string' || typeof value.state !== 'string') {
       throw new Error('operation ledger record is invalid');
     }
