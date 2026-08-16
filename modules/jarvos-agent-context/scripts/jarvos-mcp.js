@@ -18,6 +18,7 @@ const {
   proposeProjectsContext,
   readProjectsContext,
   readSessionThread,
+  runtimeActivationStatus,
   setProjectsContextProvider,
   startupBrief,
   synthesizeRecall,
@@ -131,7 +132,8 @@ const TOOLS = [
       type: 'object',
       required: ['operation'],
       properties: {
-        operation: { type: 'string', enum: ['list', 'inspect', 'evidence', 'approval-state', 'request', 'approve'] },
+        operation: { type: 'string', enum: ['list', 'inspect', 'evidence', 'approval-state', 'activation-status', 'request', 'approve'] },
+        runtime: { type: 'string', enum: ['all', 'claude', 'codex', 'hermes', 'openclaw'] },
         requestId: { type: 'string' },
         actor: { type: 'object' }, resource: { type: 'object' }, mutationClass: { type: 'string' },
         desiredGeneration: { type: 'string' }, commandSpec: { type: 'object' }, idempotencyKey: { type: 'string' }, fence: { type: 'number' },
@@ -548,6 +550,18 @@ async function callTool(name, args = {}) {
     }
     if (!hostCredential) {
       return textResult('control-plane host credential is not configured for this MCP session', true);
+    }
+    if (input.operation === 'activation-status') {
+      // Reuse the authenticated control-plane read boundary, then project the
+      // same closed runtime-kit result used by the CLI. The evidence path is a
+      // host binding and is never model-visible.
+      try {
+        controlPlane('list', { credential: hostCredential });
+        const result = runtimeActivationStatus({ runtime: input.runtime || 'all' });
+        return textResult(JSON.stringify(result, null, 2), !result.ok);
+      } catch (error) {
+        return textResult(error.message || 'activation status is unavailable', true);
+      }
     }
     // Match CLI numeric semantics for approve fence comparisons (strict ===).
     try {

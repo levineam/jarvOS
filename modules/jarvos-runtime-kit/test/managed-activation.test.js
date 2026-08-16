@@ -14,6 +14,7 @@ const {
   MANAGED_ACTIVATION_CONTRACT_VERSION,
   MANAGED_ACTIVATION_REASON_CODES,
   MANAGED_ACTIVATION_RECEIPT_EVENT_CLASSES,
+  MANAGED_ACTIVATION_PRODUCER_EVENTS,
   MANAGED_ACTIVATION_RECEIPT_VERSION,
   MANAGED_ACTIVATION_STATES,
   buildSelectedTuple,
@@ -71,6 +72,7 @@ function validContract(overrides = {}) {
     },
     liveProof: {
       qualifyingEventClasses: ['session', 'turn'],
+      producerEvents: MANAGED_ACTIVATION_PRODUCER_EVENTS.codex,
       freshnessSeconds: LIVE_PROOF_FRESHNESS_SECONDS,
       forwardSkewSeconds: LIVE_PROOF_FORWARD_SKEW_SECONDS,
     },
@@ -94,6 +96,7 @@ function dualContract(harness) {
     backgroundProcess: { owner: 'harness', jarvosStartsProcess: false },
     liveProof: {
       requiredSequence: ['session', 'turn'],
+      producerEvents: MANAGED_ACTIVATION_PRODUCER_EVENTS[harness],
       freshnessSeconds: LIVE_PROOF_FRESHNESS_SECONDS,
       forwardSkewSeconds: LIVE_PROOF_FORWARD_SKEW_SECONDS,
     },
@@ -114,11 +117,15 @@ function selectedTuple(overrides = {}) {
 function receipt(overrides = {}) {
   const { tuple: tupleOverrides, ...receiptOverrides } = overrides;
   const tuple = selectedTuple(tupleOverrides || {});
+  const harness = receiptOverrides.harness || 'codex';
+  const eventClass = receiptOverrides.eventClass || 'session';
   return {
     schemaVersion: MANAGED_ACTIVATION_RECEIPT_VERSION,
-    harness: 'codex',
+    harness,
     correlation: CORRELATION,
-    eventClass: 'session',
+    eventClass,
+    producer: 'selected-runtime-bridge',
+    producerEvent: MANAGED_ACTIVATION_PRODUCER_EVENTS[normalizeHarnessId(harness)]?.[eventClass],
     tupleDigest: tuple.tupleDigest,
     producedAt: '2026-08-16T11:55:00.000Z',
     ...receiptOverrides,
@@ -225,6 +232,10 @@ test('validateManagedActivationReceipt enforces schema, classes, and normalized 
 
   const unknownField = validateManagedActivationReceipt({ ...receipt(), sessionId: SENTINEL_SESSION });
   assert.equal(unknownField.ok, false);
+
+  const fixture = receipt({ producer: 'test-fixture' });
+  assert.equal(validateManagedActivationReceipt(fixture).ok, false);
+  assert.equal(validateManagedActivationReceipt(fixture, { allowTestFixture: true }).ok, true);
 });
 
 test('happy path reaches active only with a fresh causal matching receipt', () => {
@@ -352,6 +363,17 @@ test('invalid dates and missing configuration fail closed', () => {
   });
   assert.notEqual(invalidDate.state, 'active');
   assert.ok(invalidDate.reasons.includes('receipt_invalid') || invalidDate.ok === false);
+
+  const valid = receipt();
+  const mixed = evaluateManagedActivation({
+    contract: validContract(),
+    evidence: baselineEvidence({
+      receipts: [valid, { ...valid, producerEvent: 'not-a-real-lifecycle-event' }],
+    }),
+    now: NOW,
+  });
+  assert.equal(mixed.state, 'degraded');
+  assert.ok(mixed.reasons.includes('receipt_invalid'));
 
   const missing = evaluateManagedActivation({
     contract: validContract(),
@@ -508,6 +530,14 @@ test('rollback invalidates generation and modified state refuses with rollback_p
   });
   assert.equal(modified.state, 'rollback_pending');
   assert.ok(modified.reasons.includes('rollback_refused_modified'));
+
+  const unknown = evaluateManagedActivation({
+    contract: validContract(),
+    evidence: baselineEvidence({ rollback: { status: 'partial' } }),
+    now: NOW,
+  });
+  assert.equal(unknown.state, 'rollback_pending');
+  assert.ok(unknown.reasons.includes('invalid_evidence'));
 });
 
 test('dual-receipt contracts require ordered session then turn', () => {
@@ -555,6 +585,29 @@ test('dual-receipt contracts require ordered session then turn', () => {
     now: NOW,
   });
   assert.equal(ordered.state, 'active');
+
+  const equalTimestamp = evaluateManagedActivation({
+    contract,
+    evidence: baselineEvidence({
+      attestation: {
+        ok: true,
+        harness: 'hermes',
+        generation: GENERATION,
+        assetDigest: DIGEST_A,
+        entrypointDigest: DIGEST_B,
+        configBindingDigest: DIGEST_C,
+        tupleDigest: tuple.tupleDigest,
+      },
+      challenges: [{ correlation: CORRELATION, harness: 'hermes', baselineAt: '2026-08-16T11:50:00.000Z' }],
+      receipts: [
+        session,
+        { ...turn, producedAt: session.producedAt },
+      ],
+    }),
+    now: NOW,
+  });
+  assert.notEqual(equalTimestamp.state, 'active');
+  assert.ok(equalTimestamp.reasons.includes('sequence_out_of_order'));
 
   const outOfOrder = evaluateManagedActivation({
     contract,

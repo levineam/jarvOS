@@ -22,6 +22,7 @@ const {
   collectManagedActivationAttestation,
   evaluateManagedActivation,
   loadManagedActivationContractForHarness,
+  MANAGED_ACTIVATION_PRODUCER_EVENTS,
   normalizeHarnessId,
   toPublicActivationStatus,
   validateManagedActivationReceipt,
@@ -49,6 +50,7 @@ const BROAD_ROOTS = new Set([
 ]);
 
 function nowMs() {
+  if (process.env.JARVOS_MANAGED_ACTIVATION_TEST_MODE !== '1') return Date.now();
   const raw = process.env.JARVOS_MANAGED_ACTIVATION_NOW;
   if (raw == null || raw === '') return Date.now();
   const asNumber = Number(raw);
@@ -351,6 +353,7 @@ function challengePaths(ownerRoot, run) {
     challenge: path.join(runDir, 'challenge.json'),
     created: path.join(runDir, 'created-files.json'),
     receiptsDir: path.join(runDir, 'receipts'),
+    consumed: path.join(runDir, 'consumed.json'),
     redacted: path.join(ownerRoot, 'redacted', `${run}.json`),
   };
 }
@@ -472,35 +475,47 @@ function loadChallenge(ownerRoot, run) {
   };
 }
 
-function loadReceipts(receiptsDir) {
+function loadReceipts(ownerRoot, receiptsDir) {
   const receipts = [];
-  if (!fs.existsSync(receiptsDir)) return { ok: true, receipts };
+  const files = [];
+  if (!fs.existsSync(receiptsDir)) return { ok: true, receipts, files };
   let names;
   try {
-    names = fs.readdirSync(receiptsDir).sort();
+    names = fs.readdirSync(receiptsDir).filter((name) => name.endsWith('.json')).sort();
   } catch {
     return { ok: false, reason: 'evidence_unreadable', receipts: [] };
   }
+  if (names.length > 64 || names.some((name) => !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}\.json$/.test(name))) {
+    return { ok: false, reason: 'invalid_evidence', receipts: [] };
+  }
   for (const name of names) {
-    if (!name.endsWith('.json')) continue;
     const filePath = path.join(receiptsDir, name);
     const loaded = readSafeOwnerFile(filePath);
     if (!loaded.ok) return { ok: false, reason: 'evidence_unreadable', receipts: [] };
+    if (loaded.bytes.length > 64 * 1024) return { ok: false, reason: 'invalid_evidence', receipts: [] };
     let parsed;
     try {
       parsed = JSON.parse(loaded.bytes.toString('utf8'));
     } catch {
       return { ok: false, reason: 'invalid_evidence', receipts: [] };
     }
-    const validated = validateManagedActivationReceipt(parsed);
+    const validated = validateManagedActivationReceipt(parsed, {
+      allowTestFixture: process.env.JARVOS_MANAGED_ACTIVATION_TEST_MODE === '1',
+    });
     if (!validated.ok) {
-      // Keep invalid receipts out of evaluation inputs; evaluator still sees empty/invalid via absence.
-      continue;
+      return { ok: false, reason: 'receipt_invalid', receipts: [] };
     }
     // Only validated closed receipt fields enter evaluation.
     receipts.push(validated.value);
+    files.push({
+      relativePath: relativeToRoot(ownerRoot, filePath),
+      digest: loaded.digest,
+      mode: loaded.mode,
+      optional: false,
+      kind: 'receipt',
+    });
   }
-  return { ok: true, receipts };
+  return { ok: true, receipts, files };
 }
 
 function loadCreatedInventory(ownerRoot, run) {
@@ -513,10 +528,45 @@ function loadCreatedInventory(ownerRoot, run) {
   } catch {
     return { ok: false, reason: 'invalid_evidence' };
   }
-  if (!body || body.schemaVersion !== CREATED_SCHEMA || !Array.isArray(body.files)) {
+  if (!body || body.schemaVersion !== CREATED_SCHEMA || body.run !== run
+    || !normalizeHarnessId(body.harness) || !Array.isArray(body.files)
+    || Object.keys(body).some((key) => !['schemaVersion', 'run', 'harness', 'files'].includes(key))) {
     return { ok: false, reason: 'invalid_evidence' };
   }
-  return { ok: true, files: body.files, path: paths.created, digest: loaded.digest };
+  const expected = new Map([
+    [relativeToRoot(ownerRoot, paths.challenge), { kind: null, mode: 0o600, optional: false, requiresDigest: true }],
+    [relativeToRoot(ownerRoot, paths.created), { kind: 'inventory', mode: 0o600, optional: false, requiresDigest: false }],
+    [relativeToRoot(ownerRoot, paths.receiptsDir), { kind: 'directory', mode: 0o700, optional: false, requiresDigest: false }],
+    [relativeToRoot(ownerRoot, paths.runDir), { kind: 'directory', mode: 0o700, optional: false, requiresDigest: false }],
+  ]);
+  if (body.files.length !== expected.size) return { ok: false, reason: 'invalid_evidence' };
+  const seen = new Set();
+  const normalizedFiles = [];
+  for (const entry of body.files) {
+    if (!entry || typeof entry.relativePath !== 'string'
+      || Object.keys(entry).some((key) => !['relativePath', 'digest', 'mode', 'optional', 'kind'].includes(key))
+      || seen.has(entry.relativePath)) {
+      return { ok: false, reason: 'invalid_evidence' };
+    }
+    const rule = expected.get(entry.relativePath);
+    if (!rule || entry.mode !== rule.mode || Boolean(entry.optional) !== rule.optional
+      || (rule.kind === null ? entry.kind !== undefined : entry.kind !== rule.kind)
+      || (rule.requiresDigest ? !/^[a-f0-9]{64}$/.test(entry.digest || '') : entry.digest !== null)) {
+      return { ok: false, reason: 'invalid_evidence' };
+    }
+    seen.add(entry.relativePath);
+    normalizedFiles.push({ ...entry });
+  }
+  if (seen.size !== expected.size) return { ok: false, reason: 'invalid_evidence' };
+
+  // The inventory cannot contain its own digest, so bind that one candidate to
+  // the exact bytes and mode just read after validating its closed shape.
+  const createdRel = relativeToRoot(ownerRoot, paths.created);
+  const createdEntry = normalizedFiles.find((entry) => entry.relativePath === createdRel);
+  createdEntry.digest = loaded.digest;
+  createdEntry.mode = loaded.mode;
+  createdEntry.optional = false;
+  return { ok: true, files: normalizedFiles, path: paths.created, digest: loaded.digest };
 }
 
 function exactOwnedRollback(ownerRoot, inventoryFiles, { alsoRemove = [] } = {}) {
@@ -537,18 +587,30 @@ function exactOwnedRollback(ownerRoot, inventoryFiles, { alsoRemove = [] } = {})
     }
     candidates.push({ ...entry, absolutePath: absolute });
   }
-  for (const absolute of alsoRemove) {
+  for (const entry of alsoRemove) {
+    if (!entry || typeof entry.relativePath !== 'string') {
+      refused.push('ambiguous-entry');
+      continue;
+    }
+    const absolute = path.join(ownerRoot, entry.relativePath.split('/').join(path.sep));
     const rel = relativeToRoot(ownerRoot, absolute);
-    if (!rel) continue;
-    candidates.push({ relativePath: rel, absolutePath: absolute, digest: null, mode: null, optional: true });
+    if (!rel || rel !== entry.relativePath) {
+      refused.push(entry.relativePath);
+      continue;
+    }
+    candidates.push({ ...entry, absolutePath: absolute });
   }
 
   // Remove deepest paths first so directories can be cleaned afterward.
   candidates.sort((a, b) => b.relativePath.length - a.relativePath.length);
+  const candidatePaths = new Set(candidates.map((entry) => entry.relativePath));
+  if (candidatePaths.size !== candidates.length) refused.push('duplicate-entry');
 
+  // Preflight the full set before deleting anything. A known mismatch must not
+  // cause partial cleanup merely because its entry sorts after valid files.
   for (const entry of candidates) {
     if (!fs.existsSync(entry.absolutePath)) {
-      removed.push(entry.relativePath);
+      if (!entry.optional) refused.push(entry.relativePath);
       continue;
     }
     let stat;
@@ -559,12 +621,17 @@ function exactOwnedRollback(ownerRoot, inventoryFiles, { alsoRemove = [] } = {})
       continue;
     }
     if (stat.isDirectory()) {
+      if (entry.kind !== 'directory' || (entry.mode != null && permissionBits(stat.mode) !== entry.mode)) {
+        refused.push(entry.relativePath);
+        continue;
+      }
       try {
-        fs.rmdirSync(entry.absolutePath);
-        removed.push(entry.relativePath);
+        for (const name of fs.readdirSync(entry.absolutePath)) {
+          const child = relativeToRoot(ownerRoot, path.join(entry.absolutePath, name));
+          if (!child || !candidatePaths.has(child)) refused.push(entry.relativePath);
+        }
       } catch {
-        // Non-empty or busy directory is left; not a hard refusal for optional dirs.
-        if (!entry.optional) refused.push(entry.relativePath);
+        refused.push(entry.relativePath);
       }
       continue;
     }
@@ -590,18 +657,59 @@ function exactOwnedRollback(ownerRoot, inventoryFiles, { alsoRemove = [] } = {})
       refused.push(entry.relativePath);
       continue;
     }
-    try {
-      fs.rmSync(entry.absolutePath, { force: false });
-      removed.push(entry.relativePath);
-    } catch {
-      refused.push(entry.relativePath);
-    }
   }
 
   if (refused.length) {
-    return { status: 'rollback_pending', removed, refusedCount: refused.length };
+    return { status: 'rollback_pending', removed: [], refusedCount: [...new Set(refused)].length };
+  }
+
+  for (const entry of candidates) {
+    if (!fs.existsSync(entry.absolutePath)) continue;
+    try {
+      const stat = fs.lstatSync(entry.absolutePath);
+      if (stat.isDirectory()) fs.rmdirSync(entry.absolutePath);
+      else fs.rmSync(entry.absolutePath, { force: false });
+      removed.push(entry.relativePath);
+    } catch {
+      refused.push(entry.relativePath);
+      break;
+    }
+  }
+  if (refused.length) {
+    return { status: 'rollback_pending', removed, refusedCount: [...new Set(refused)].length };
   }
   return { status: 'completed', removed, refusedCount: 0 };
+}
+
+function acquireConsumptionMarker(ownerRoot, paths, challenge, now) {
+  const body = Buffer.from(`${JSON.stringify({
+    schemaVersion: 'jarvos-managed-activation-dogfood-consumed/v1',
+    run: challenge.run,
+    correlation: challenge.correlation,
+    tupleDigest: challenge.tupleDigest,
+    consumedAt: toIso(now),
+  }, null, 2)}\n`, 'utf8');
+  try {
+    fs.writeFileSync(paths.consumed, body, { mode: 0o600, flag: 'wx' });
+    fs.chmodSync(paths.consumed, 0o600);
+  } catch (error) {
+    return {
+      ok: false,
+      reason: error && error.code === 'EEXIST' ? 'receipt_replay' : 'write_failed',
+    };
+  }
+  const relativePath = relativeToRoot(ownerRoot, paths.consumed);
+  if (!relativePath) return { ok: false, reason: 'unsafe_path' };
+  return {
+    ok: true,
+    file: {
+      relativePath,
+      digest: sha256Buffer(body),
+      mode: 0o600,
+      optional: false,
+      kind: 'consumption-marker',
+    },
+  };
 }
 
 function prepareCommand(flags) {
@@ -706,17 +814,17 @@ function prepareCommand(flags) {
   const createdRel = relativeToRoot(ownerRoot, paths.created);
   const receiptsRel = relativeToRoot(ownerRoot, paths.receiptsDir);
   const runRel = relativeToRoot(ownerRoot, paths.runDir);
-  // Inventory file and directories are optional cleanup targets. Only the
-  // challenge (and other attested regular files) require exact digest/mode match.
+  // Every raw-run target is required. The inventory file is bound to the exact
+  // bytes read during verify because it cannot recursively contain its own digest.
   const inventoryBody = {
     schemaVersion: CREATED_SCHEMA,
     run,
     harness,
     files: [
       ...inventoryFiles,
-      { relativePath: createdRel, digest: null, mode: 0o600, optional: true, kind: 'inventory' },
-      { relativePath: receiptsRel, digest: null, mode: 0o700, optional: true, kind: 'directory' },
-      { relativePath: runRel, digest: null, mode: 0o700, optional: true, kind: 'directory' },
+      { relativePath: createdRel, digest: null, mode: 0o600, optional: false, kind: 'inventory' },
+      { relativePath: receiptsRel, digest: null, mode: 0o700, optional: false, kind: 'directory' },
+      { relativePath: runRel, digest: null, mode: 0o700, optional: false, kind: 'directory' },
     ],
   };
   const finalWrite = atomicWriteOwnerFile(paths.created, inventoryBody);
@@ -961,13 +1069,14 @@ function verifyCommand(flags) {
   }
 
   const paths = challengePaths(ownerRoot, flags.run);
-  const receiptLoad = loadReceipts(paths.receiptsDir);
+  const receiptLoad = loadReceipts(ownerRoot, paths.receiptsDir);
   if (!receiptLoad.ok) {
+    const reason = receiptLoad.reason === 'receipt_invalid' ? 'receipt_invalid' : 'evidence_unreadable';
     const status = toPublicActivationStatus({
       state: 'degraded',
       harness,
       generationDigest: challenge.tupleDigest,
-      reasons: ['evidence_unreadable'],
+      reasons: [reason],
       evaluatedAt: toIso(now),
     });
     writeRedactedState(ownerRoot, {
@@ -987,8 +1096,10 @@ function verifyCommand(flags) {
         correlation: challenge.correlation,
         status,
         dogfoodOutcome: 'failed',
-        error: 'evidence_unreadable',
-        summary: 'receipt material is unreadable or unsafe',
+        error: reason,
+        summary: reason === 'receipt_invalid'
+          ? 'receipt material is invalid'
+          : 'receipt material is unreadable or unsafe',
       }),
       code: 1,
     };
@@ -1021,6 +1132,7 @@ function verifyCommand(flags) {
     contract: contractLoaded.contract,
     evidence,
     now,
+    allowTestFixtureReceipts: process.env.JARVOS_MANAGED_ACTIVATION_TEST_MODE === '1',
   });
   const status = toPublicActivationStatus(evaluated);
 
@@ -1085,14 +1197,73 @@ function verifyCommand(flags) {
     };
   }
 
-  // Mark consumed in memory; physical challenge removal is part of rollback.
-  // If any inventory entry was modified (digest/mode mismatch), refuse deletion.
+  // Claim the successful proof once before any cleanup. A concurrent verifier
+  // must fail closed rather than return a second success for the same run.
+  const consumed = acquireConsumptionMarker(ownerRoot, paths, challenge, now);
+  if (!consumed.ok) {
+    const replay = consumed.reason === 'receipt_replay';
+    const blocked = toPublicActivationStatus({
+      state: 'degraded',
+      harness,
+      generationDigest: status.generationDigest,
+      evidenceClasses: ['receipt'],
+      reasons: [replay ? 'receipt_replay' : 'invalid_evidence'],
+      evaluatedAt: toIso(now),
+    });
+    return {
+      result: publicVerifyResult({
+        ok: false,
+        harness,
+        run: flags.run,
+        correlation: challenge.correlation,
+        status: blocked,
+        dogfoodOutcome: 'failed',
+        error: consumed.reason,
+        summary: replay ? 'challenge was already consumed' : 'could not claim challenge consumption',
+      }),
+      code: 1,
+    };
+  }
+
+  const preRollbackStatus = toPublicActivationStatus({
+    state: 'rollback_pending',
+    harness,
+    generationDigest: status.generationDigest,
+    evidenceClasses: ['rollback'],
+    reasons: ['rollback_pending'],
+    evaluatedAt: toIso(now),
+  });
+  const preRollbackWrite = writeRedactedState(ownerRoot, {
+    run: flags.run,
+    harness,
+    correlation: challenge.correlation,
+    status: preRollbackStatus,
+    dogfoodOutcome: 'rollback_pending',
+    rollback: { status: 'requested' },
+    now,
+  });
+  if (!preRollbackWrite.ok) {
+    return {
+      result: publicVerifyResult({
+        ok: false,
+        harness,
+        run: flags.run,
+        correlation: challenge.correlation,
+        status: preRollbackStatus,
+        dogfoodOutcome: 'rollback_pending',
+        rollback: { status: 'rollback_pending' },
+        error: 'write_failed',
+        summary: 'could not persist rollback-pending state',
+      }),
+      code: 1,
+    };
+  }
+
+  // Validate every exact-owned target before deleting any of them. Receipt and
+  // consumption-marker bytes are bound dynamically because they are created
+  // after prepare wrote the immutable inventory.
   const rollback = exactOwnedRollback(ownerRoot, inventory.files, {
-    alsoRemove: [
-      // Receipts planted after prepare are not in the prepare inventory; remove only
-      // owner-only regular files under the receipts dir without inventory match by
-      // treating the receipts directory cleanup as best-effort after exact files.
-    ],
+    alsoRemove: [...receiptLoad.files, consumed.file],
   });
 
   if (rollback.status !== 'completed') {
@@ -1130,30 +1301,38 @@ function verifyCommand(flags) {
     };
   }
 
-  // Remove any residual raw receipt files that were planted after prepare (not in inventory).
-  // Only owner-only regular files under the run receipts dir; never broad recursion beyond that dir.
-  if (fs.existsSync(paths.receiptsDir)) {
-    let names = [];
-    try { names = fs.readdirSync(paths.receiptsDir); } catch { names = []; }
-    for (const name of names) {
-      const filePath = path.join(paths.receiptsDir, name);
-      const inspection = inspectSafeRegularFile(filePath, { ownerOnly: true });
-      if (!inspection.ok) continue;
-      try { fs.rmSync(filePath, { force: true }); } catch { /* ignore */ }
-    }
-    try { fs.rmdirSync(paths.receiptsDir); } catch { /* ignore */ }
-  }
-  try { fs.rmdirSync(paths.runDir); } catch { /* ignore */ }
-
-  writeRedactedState(ownerRoot, {
+  const rolledBackStatus = toPublicActivationStatus(evaluateManagedActivation({
+    contract: contractLoaded.contract,
+    evidence: { rollback: { status: 'completed' } },
+    now,
+  }));
+  const failFinalStateWrite = process.env.JARVOS_MANAGED_ACTIVATION_TEST_MODE === '1'
+    && process.env.JARVOS_MANAGED_ACTIVATION_FAIL_FINAL_STATE_WRITE === '1';
+  const finalStateWrite = failFinalStateWrite ? { ok: false, reason: 'write_failed' } : writeRedactedState(ownerRoot, {
     run: flags.run,
     harness,
     correlation: challenge.correlation,
-    status,
+    status: rolledBackStatus,
     dogfoodOutcome: 'passed',
     rollback,
     now,
   });
+  if (!finalStateWrite.ok) {
+    return {
+      result: publicVerifyResult({
+        ok: false,
+        harness,
+        run: flags.run,
+        correlation: challenge.correlation,
+        status: preRollbackStatus,
+        dogfoodOutcome: 'rollback_pending',
+        rollback: { ...rollback, status: 'rollback_pending' },
+        error: 'write_failed',
+        summary: 'rollback completed but terminal state retention failed closed',
+      }),
+      code: 1,
+    };
+  }
 
   return {
     result: publicVerifyResult({
@@ -1161,7 +1340,7 @@ function verifyCommand(flags) {
       harness,
       run: flags.run,
       correlation: challenge.correlation,
-      status,
+      status: rolledBackStatus,
       dogfoodOutcome: 'passed',
       rollback,
       summary: 'managed activation dogfood passed with exact-owned rollback',

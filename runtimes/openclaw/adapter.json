@@ -76,6 +76,7 @@
     },
     "liveProof": {
       "requiredSequence": ["session", "turn"],
+      "producerEvents": { "session": "managed_session_start", "turn": "agent_turn_prepare" },
       "freshnessSeconds": 900,
       "forwardSkewSeconds": 30
     },

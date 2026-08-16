@@ -9,6 +9,7 @@ const { spawnSync } = require('child_process');
 
 const {
   MANAGED_ACTIVATION_RECEIPT_VERSION,
+  MANAGED_ACTIVATION_PRODUCER_EVENTS,
   MANAGED_ACTIVATION_REASON_CODES,
   MANAGED_ACTIVATION_STATUS_VERSION,
   collectManagedActivationAttestation,
@@ -53,6 +54,7 @@ function runDogfood(args, env = {}) {
     encoding: 'utf8',
     env: {
       ...process.env,
+      JARVOS_MANAGED_ACTIVATION_TEST_MODE: '1',
       JARVOS_MANAGED_ACTIVATION_NOW: String(NOW_MS),
       ...env,
     },
@@ -112,6 +114,8 @@ function makeReceipt({ harness, correlation, tupleDigest, eventClass = 'session'
     harness,
     correlation,
     eventClass,
+    producer: 'test-fixture',
+    producerEvent: MANAGED_ACTIVATION_PRODUCER_EVENTS[harness][eventClass],
     tupleDigest,
     producedAt,
   };
@@ -173,10 +177,11 @@ test('dogfood prepare+verify activates all four fixture harness receipt paths an
       const body = JSON.parse(verified.stdout);
       assert.equal(body.ok, true);
       assert.equal(body.phase, 'verify');
-      assert.equal(body.status.state, 'active');
+      assert.equal(body.status.state, 'rolled_back');
       assert.equal(body.status.harness, harness);
       assert.equal(body.status.schemaVersion, MANAGED_ACTIVATION_STATUS_VERSION);
-      assert.ok(body.status.reasons.includes('live_proof_fresh'));
+      assert.ok(body.status.reasons.includes('rolled_back'));
+      assert.ok(body.status.reasons.includes('generation_invalidated'));
       assert.equal(body.dogfood.outcome, 'passed');
       assert.equal(body.rollback.status, 'completed');
       assertNoRawReceiptFields(body);
@@ -189,6 +194,57 @@ test('dogfood prepare+verify activates all four fixture harness receipt paths an
     } finally {
       fs.rmSync(ownerRoot, { recursive: true, force: true });
     }
+  }
+});
+
+test('production verification rejects test-fixture receipt provenance', () => {
+  const ownerRoot = disposableRoot('jarvos-df-provenance-');
+  const files = tupleFiles(ownerRoot);
+  try {
+    const prepared = JSON.parse(prepare('codex', ownerRoot, files).stdout);
+    const attestation = collectManagedActivationAttestation({
+      harness: 'codex', generation: 'gen-codex-1', assetPaths: [files.asset],
+      entrypointPath: files.entry, configBindingPath: files.config,
+    });
+    plantReceipt(ownerRoot, prepared.run, makeReceipt({
+      harness: 'codex', correlation: prepared.correlation, tupleDigest: attestation.tupleDigest,
+    }));
+    const rejected = verify('codex', ownerRoot, prepared.run, {
+      JARVOS_MANAGED_ACTIVATION_TEST_MODE: '',
+      JARVOS_MANAGED_ACTIVATION_NOW: '',
+    });
+    assert.notEqual(rejected.status, 0);
+    const body = JSON.parse(rejected.stdout);
+    assert.equal(body.ok, false);
+    assert.equal(body.error, 'receipt_invalid');
+    assert.equal(body.status.state, 'degraded');
+    assert.notEqual(body.status.state, 'active');
+  } finally {
+    fs.rmSync(ownerRoot, { recursive: true, force: true });
+  }
+});
+
+test('one malformed receipt makes the complete evidence set fail closed', () => {
+  const ownerRoot = disposableRoot('jarvos-df-invalid-set-');
+  const files = tupleFiles(ownerRoot);
+  try {
+    const prepared = JSON.parse(prepare('codex', ownerRoot, files).stdout);
+    const attestation = collectManagedActivationAttestation({
+      harness: 'codex', generation: 'gen-codex-1', assetPaths: [files.asset],
+      entrypointPath: files.entry, configBindingPath: files.config,
+    });
+    plantReceipt(ownerRoot, prepared.run, makeReceipt({
+      harness: 'codex', correlation: prepared.correlation, tupleDigest: attestation.tupleDigest,
+    }), 'valid.json');
+    plantReceipt(ownerRoot, prepared.run, { schemaVersion: MANAGED_ACTIVATION_RECEIPT_VERSION }, 'invalid.json');
+    const result = verify('codex', ownerRoot, prepared.run);
+    assert.notEqual(result.status, 0);
+    const body = JSON.parse(result.stdout);
+    assert.equal(body.error, 'receipt_invalid');
+    assert.equal(body.status.state, 'degraded');
+    assert.equal(fs.existsSync(path.join(ownerRoot, 'runs', prepared.run, 'challenge.json')), true);
+  } finally {
+    fs.rmSync(ownerRoot, { recursive: true, force: true });
   }
 });
 
@@ -221,12 +277,12 @@ test('overlapping challenges coexist and one challenge cannot consume another', 
     }));
 
     const firstVerify = JSON.parse(verify('codex', ownerRoot, first.run).stdout);
-    assert.equal(firstVerify.status.state, 'active');
+    assert.equal(firstVerify.status.state, 'rolled_back');
     assert.equal(firstVerify.ok, true);
 
     // Second challenge remains independently verifiable.
     const secondVerify = JSON.parse(verify('codex', ownerRoot, second.run).stdout);
-    assert.equal(secondVerify.status.state, 'active');
+    assert.equal(secondVerify.status.state, 'rolled_back');
     assert.equal(secondVerify.ok, true);
   } finally {
     fs.rmSync(ownerRoot, { recursive: true, force: true });
@@ -371,7 +427,8 @@ test('stale mismatch replay pre-baseline and future evidence never activate', ()
     const replayBody = JSON.parse(verify('codex', ownerRoot, replayPrep.run).stdout);
     // Duplicate identity is treated as replay; active only if evaluator accepts one unique identity.
     // With two identical identities the second is replay and first can still activate.
-    assert.ok(replayBody.status.state === 'active' || replayBody.status.reasons.includes('receipt_replay'));
+    assert.notEqual(replayBody.status.state, 'active');
+    assert.ok(replayBody.status.reasons.includes('receipt_replay'));
 
     // Pre-baseline: rewrite challenge baseline after planting an older receipt via a fresh prepare + clock.
     const pre = JSON.parse(prepare('codex', ownerRoot, files).stdout);
@@ -519,7 +576,10 @@ test('24-hour raw expiry removes challenge material while 30-day redacted retent
     assert.notEqual(expired.status, 0);
     const body = JSON.parse(expired.stdout);
     assert.equal(body.ok, false);
-    assert.ok(body.dogfood.outcome === 'expired' || body.reasons?.includes?.('invalid_evidence') || body.status?.state);
+    assert.equal(body.dogfood.outcome, 'expired');
+    assert.equal(body.error, 'expired');
+    assert.equal(body.status.state, 'unconfigured');
+    assert.ok(body.status.reasons.includes('invalid_evidence'));
     assert.equal(fs.existsSync(challengePath), false);
     assert.equal(fs.existsSync(path.join(redactedDir, `${prepared.run}.json`)), false);
     assertNoRawReceiptFields(body);
@@ -565,6 +625,11 @@ test('exact-owned rollback succeeds when digests match and refuses when modified
       tupleDigest: attestation.tupleDigest,
       producedAt: '2026-08-16T11:57:00.000Z',
     }));
+    const receiptPath = path.join(ownerRoot, 'runs', prepared2.run, 'receipts', 'receipt.json');
+    const beforeRefusal = new Map([challengePath, inventoryPath, receiptPath].map((filePath) => [
+      filePath,
+      fs.readFileSync(filePath),
+    ]));
     const refused = JSON.parse(verify('codex', ownerRoot, prepared2.run).stdout);
     // Even if evaluation reaches active, rollback must refuse overwrite of modified material.
     assert.ok(
@@ -574,6 +639,39 @@ test('exact-owned rollback succeeds when digests match and refuses when modified
     );
     // Challenge must not be forcibly overwritten/deleted when inventory no longer matches.
     assert.equal(fs.existsSync(challengePath), true);
+    for (const [filePath, bytes] of beforeRefusal) {
+      assert.equal(fs.existsSync(filePath), true, filePath);
+      assert.deepEqual(fs.readFileSync(filePath), bytes, filePath);
+    }
+  } finally {
+    fs.rmSync(ownerRoot, { recursive: true, force: true });
+  }
+});
+
+test('terminal redacted-state failure never returns a passed dogfood result', () => {
+  const ownerRoot = disposableRoot('jarvos-df-final-write-');
+  const files = tupleFiles(ownerRoot);
+  try {
+    const prepared = JSON.parse(prepare('codex', ownerRoot, files).stdout);
+    const attestation = collectManagedActivationAttestation({
+      harness: 'codex', generation: 'gen-codex-1', assetPaths: [files.asset],
+      entrypointPath: files.entry, configBindingPath: files.config,
+    });
+    plantReceipt(ownerRoot, prepared.run, makeReceipt({
+      harness: 'codex', correlation: prepared.correlation, tupleDigest: attestation.tupleDigest,
+    }));
+    const result = verify('codex', ownerRoot, prepared.run, {
+      JARVOS_MANAGED_ACTIVATION_FAIL_FINAL_STATE_WRITE: '1',
+    });
+    assert.notEqual(result.status, 0);
+    const body = JSON.parse(result.stdout);
+    assert.equal(body.ok, false);
+    assert.equal(body.error, 'write_failed');
+    assert.equal(body.dogfood.outcome, 'rollback_pending');
+    assert.equal(body.status.state, 'rollback_pending');
+    const retained = readJson(path.join(ownerRoot, 'redacted', `${prepared.run}.json`));
+    assert.equal(retained.state, 'rollback_pending');
+    assert.equal(retained.dogfoodOutcome, 'rollback_pending');
   } finally {
     fs.rmSync(ownerRoot, { recursive: true, force: true });
   }
@@ -599,7 +697,7 @@ test('dogfood never mutates host profile paths outside the disposable owner root
       tupleDigest: attestation.tupleDigest,
     }));
     const body = JSON.parse(verify('codex', ownerRoot, prepared.run).stdout);
-    assert.equal(body.status.state, 'active');
+    assert.equal(body.status.state, 'rolled_back');
     assert.equal(fs.existsSync(hostProbe), false);
     // Only owner-root should gain dogfood state; home profile roots stay untouched.
     for (const profile of ['.codex', '.claude', '.hermes', '.openclaw']) {

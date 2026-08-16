@@ -596,6 +596,7 @@ function expectedManagedActivationPolicy(harness) {
       backgroundProcess: { owner: 'none', jarvosStartsProcess: false },
       liveProof: {
         qualifyingEventClasses: ['session', 'turn'],
+        producerEvents: managedActivation.MANAGED_ACTIVATION_PRODUCER_EVENTS[normalized],
         freshnessSeconds: managedActivation.LIVE_PROOF_FRESHNESS_SECONDS,
         forwardSkewSeconds: managedActivation.LIVE_PROOF_FORWARD_SKEW_SECONDS,
       },
@@ -607,6 +608,7 @@ function expectedManagedActivationPolicy(harness) {
     backgroundProcess: { owner: 'harness', jarvosStartsProcess: false },
     liveProof: {
       requiredSequence: ['session', 'turn'],
+      producerEvents: managedActivation.MANAGED_ACTIVATION_PRODUCER_EVENTS[normalized],
       freshnessSeconds: managedActivation.LIVE_PROOF_FRESHNESS_SECONDS,
       forwardSkewSeconds: managedActivation.LIVE_PROOF_FORWARD_SKEW_SECONDS,
     },
@@ -640,6 +642,11 @@ function validateManagedActivationPolicy(contract, expected, errors) {
     || contract.liveProof.requiredSequence.some((value, index) => value !== expected.liveProof.requiredSequence[index])
     || contract.liveProof?.qualifyingEventClasses !== undefined) {
     errors.push('managedActivation.liveProof must declare requiredSequence [session, turn]');
+  }
+  if (!isObject(contract.liveProof?.producerEvents)
+    || contract.liveProof.producerEvents.session !== expected.liveProof.producerEvents.session
+    || contract.liveProof.producerEvents.turn !== expected.liveProof.producerEvents.turn) {
+    errors.push('managedActivation.liveProof.producerEvents must match exact harness lifecycle events');
   }
 }
 
@@ -880,8 +887,14 @@ function getManagedActivationStatus({
   if (isObject(evidence)) {
     ownerEvidence = evidence;
   } else if (typeof evidencePath === 'string' && evidencePath.length > 0) {
-    const absolute = path.isAbsolute(evidencePath) ? evidencePath : path.resolve(evidencePath);
-    const loaded = managedActivation.loadOwnerEvidence(absolute);
+    if (!path.isAbsolute(evidencePath)) {
+      return {
+        ok: false,
+        error: 'evidence_unreadable',
+        results: [],
+      };
+    }
+    const loaded = managedActivation.loadOwnerEvidence(evidencePath);
     if (!loaded.ok) {
       return {
         ok: false,

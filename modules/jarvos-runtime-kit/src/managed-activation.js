@@ -26,6 +26,16 @@ const MANAGED_ACTIVATION_STATES = Object.freeze(new Set([
 ]));
 
 const MANAGED_ACTIVATION_RECEIPT_EVENT_CLASSES = Object.freeze(new Set(['session', 'turn']));
+const MANAGED_ACTIVATION_RECEIPT_PRODUCERS = Object.freeze(new Set([
+  'selected-runtime-bridge',
+  'test-fixture',
+]));
+const MANAGED_ACTIVATION_PRODUCER_EVENTS = Object.freeze({
+  claude: Object.freeze({ session: 'SessionStart', turn: 'UserPromptSubmit' }),
+  codex: Object.freeze({ session: 'SessionStart', turn: 'UserPromptSubmit' }),
+  hermes: Object.freeze({ session: 'managed_session_start', turn: 'pre_llm_call' }),
+  openclaw: Object.freeze({ session: 'managed_session_start', turn: 'agent_turn_prepare' }),
+});
 
 const MANAGED_ACTIVATION_REASON_CODES = Object.freeze(new Set([
   'missing_configuration',
@@ -74,6 +84,8 @@ const RECEIPT_FIELDS = new Set([
   'harness',
   'correlation',
   'eventClass',
+  'producer',
+  'producerEvent',
   'tupleDigest',
   'producedAt',
 ]);
@@ -168,7 +180,7 @@ function validateLiveProof(liveProof, errors) {
   }
   unknownFields(
     liveProof,
-    new Set(['qualifyingEventClasses', 'requiredSequence', 'freshnessSeconds', 'forwardSkewSeconds']),
+    new Set(['qualifyingEventClasses', 'requiredSequence', 'producerEvents', 'freshnessSeconds', 'forwardSkewSeconds']),
     'liveProof',
     errors,
   );
@@ -188,6 +200,19 @@ function validateLiveProof(liveProof, errors) {
     if (liveProof.requiredSequence.length < 2
       || liveProof.requiredSequence.some((value) => !MANAGED_ACTIVATION_RECEIPT_EVENT_CLASSES.has(value))) {
       errors.push('liveProof.requiredSequence must list at least two session|turn classes');
+    }
+  }
+  if (!isObject(liveProof.producerEvents)) {
+    errors.push('liveProof.producerEvents must declare exact session and turn lifecycle events');
+  } else {
+    unknownFields(liveProof.producerEvents, new Set(['session', 'turn']), 'liveProof.producerEvents', errors);
+    // Harness-specific equality is enforced by the parent contract validator;
+    // this structural pass still requires both bounded event names.
+    for (const eventClass of ['session', 'turn']) {
+      if (typeof liveProof.producerEvents[eventClass] !== 'string'
+        || !/^[A-Za-z][A-Za-z0-9._:-]{0,63}$/.test(liveProof.producerEvents[eventClass])) {
+        errors.push(`liveProof.producerEvents.${eventClass} must be a bounded lifecycle event`);
+      }
     }
   }
   if (liveProof.freshnessSeconds !== LIVE_PROOF_FRESHNESS_SECONDS) {
@@ -234,6 +259,13 @@ function validateManagedActivationContract(contract) {
   validateBackgroundProcess(contract.backgroundProcess, errors);
   validatePreparation(contract.preparation, errors);
   validateLiveProof(contract.liveProof, errors);
+  if (harness && isObject(contract.liveProof?.producerEvents)) {
+    for (const eventClass of ['session', 'turn']) {
+      if (contract.liveProof.producerEvents[eventClass] !== MANAGED_ACTIVATION_PRODUCER_EVENTS[harness][eventClass]) {
+        errors.push(`liveProof.producerEvents.${eventClass} must be ${MANAGED_ACTIVATION_PRODUCER_EVENTS[harness][eventClass]} for ${harness}`);
+      }
+    }
+  }
   validateHealth(contract.health, errors);
   validateRollback(contract.rollback, errors);
   if (errors.length) return { ok: false, errors };
@@ -290,7 +322,7 @@ function buildSelectedTuple(input = {}) {
   return tuple;
 }
 
-function validateManagedActivationReceipt(receipt) {
+function validateManagedActivationReceipt(receipt, { allowTestFixture = false } = {}) {
   const errors = [];
   if (!isObject(receipt)) return { ok: false, errors: ['managed activation receipt must be an object'] };
   unknownFields(receipt, RECEIPT_FIELDS, 'managed activation receipt', errors);
@@ -305,6 +337,18 @@ function validateManagedActivationReceipt(receipt) {
   if (!MANAGED_ACTIVATION_RECEIPT_EVENT_CLASSES.has(receipt.eventClass)) {
     errors.push('receipt.eventClass must be session or turn');
   }
+  if (!MANAGED_ACTIVATION_RECEIPT_PRODUCERS.has(receipt.producer)) {
+    errors.push('receipt.producer must be selected-runtime-bridge or test-fixture');
+  } else if (receipt.producer === 'test-fixture' && allowTestFixture !== true) {
+    errors.push('receipt.producer test-fixture is not accepted outside explicit test verification');
+  }
+  const expectedProducerEvent = harness
+    && MANAGED_ACTIVATION_RECEIPT_EVENT_CLASSES.has(receipt.eventClass)
+    ? MANAGED_ACTIVATION_PRODUCER_EVENTS[harness]?.[receipt.eventClass]
+    : null;
+  if (!expectedProducerEvent || receipt.producerEvent !== expectedProducerEvent) {
+    errors.push('receipt.producerEvent must match the harness lifecycle event for eventClass');
+  }
   if (!isSha256(receipt.tupleDigest)) errors.push('receipt.tupleDigest must be a SHA-256 digest');
   if (!Number.isFinite(parseIsoMs(receipt.producedAt))) {
     errors.push('receipt.producedAt must be an ISO-8601 UTC timestamp');
@@ -318,6 +362,8 @@ function validateManagedActivationReceipt(receipt) {
       harness,
       correlation: receipt.correlation,
       eventClass: receipt.eventClass,
+      producer: receipt.producer,
+      producerEvent: receipt.producerEvent,
       tupleDigest: receipt.tupleDigest.toLowerCase(),
       producedAt: receipt.producedAt,
     },
@@ -542,12 +588,12 @@ function normalizeChallenges(challenges, harness) {
   return out;
 }
 
-function normalizeReceipts(receipts, harness) {
+function normalizeReceipts(receipts, harness, { allowTestFixture = false } = {}) {
   if (!Array.isArray(receipts)) return { receipts: [], invalid: receipts == null ? false : true };
   const out = [];
   let invalid = false;
   for (const item of receipts) {
-    const validated = validateManagedActivationReceipt(item);
+    const validated = validateManagedActivationReceipt(item, { allowTestFixture });
     if (!validated.ok) {
       invalid = true;
       continue;
@@ -626,6 +672,13 @@ function selectLiveProof(contract, receipts, challenges, consumedCorrelations, t
     accepted.push(receipt);
   }
 
+  // A proof set containing replayed or consumed material is ambiguous even
+  // when another copy would otherwise qualify. Never let a valid first copy
+  // mask duplicated evidence.
+  if (reasons.includes('receipt_replay')) {
+    return { ok: false, reasons: ['receipt_replay'] };
+  }
+
   if (accepted.length === 0) {
     return {
       ok: false,
@@ -647,6 +700,11 @@ function selectLiveProof(contract, receipts, challenges, consumedCorrelations, t
       const matched = [];
       for (const receipt of group) {
         if (receipt.eventClass === sequence[index]) {
+          const previous = matched[matched.length - 1];
+          if (previous && receipt.producedMs <= previous.producedMs) {
+            reasons.push('sequence_out_of_order');
+            continue;
+          }
           matched.push(receipt);
           index += 1;
           if (index === sequence.length) {
@@ -703,7 +761,12 @@ function uniqueReasons(reasons) {
  * Precedence: rollback → configuration/integrity → attested tuple → causal live proof → health/freshness.
  * Never restarts or repairs; degraded/stale paths remain read-only.
  */
-function evaluateManagedActivation({ contract, evidence = {}, now = Date.now() } = {}) {
+function evaluateManagedActivation({
+  contract,
+  evidence = {},
+  now = Date.now(),
+  allowTestFixtureReceipts = false,
+} = {}) {
   const contractResult = validateManagedActivationContract(contract);
   if (!contractResult.ok) {
     return {
@@ -737,6 +800,19 @@ function evaluateManagedActivation({ contract, evidence = {}, now = Date.now() }
   }
 
   const rollback = isObject(evidence.rollback) ? evidence.rollback : { status: 'none' };
+  const rollbackStatuses = new Set(['none', 'completed', 'requested', 'refused']);
+  if (!rollbackStatuses.has(rollback.status)) {
+    return {
+      ok: true,
+      state: 'rollback_pending',
+      harness,
+      generationDigest: null,
+      evidenceClasses: ['rollback'],
+      freshThrough: null,
+      reasons: uniqueReasons(['invalid_evidence', 'rollback_pending']),
+      evaluatedAt: toIso(nowMs),
+    };
+  }
   if (rollback.status === 'completed') {
     return {
       ok: true,
@@ -860,7 +936,9 @@ function evaluateManagedActivation({ contract, evidence = {}, now = Date.now() }
   }
 
   const challenges = normalizeChallenges(evidence.challenges, harness);
-  const { receipts, invalid: invalidReceipts } = normalizeReceipts(evidence.receipts, harness);
+  const { receipts, invalid: invalidReceipts } = normalizeReceipts(evidence.receipts, harness, {
+    allowTestFixture: allowTestFixtureReceipts,
+  });
   if (invalidReceipts) reasons.push('receipt_invalid');
 
   const live = selectLiveProof(
@@ -871,6 +949,19 @@ function evaluateManagedActivation({ contract, evidence = {}, now = Date.now() }
     attestation.tupleDigest.toLowerCase(),
     nowMs,
   );
+
+  if (invalidReceipts) {
+    return {
+      ok: true,
+      state: 'degraded',
+      harness,
+      generationDigest: attestation.tupleDigest.toLowerCase(),
+      evidenceClasses: ['attestation', 'receipt'],
+      freshThrough: null,
+      reasons: uniqueReasons(['receipt_invalid']),
+      evaluatedAt: toIso(nowMs),
+    };
+  }
 
   if (!live.ok) {
     const liveReasons = uniqueReasons([...reasons, ...live.reasons]);
@@ -956,6 +1047,8 @@ module.exports = {
   MANAGED_ACTIVATION_CONTRACT_VERSION,
   MANAGED_ACTIVATION_REASON_CODES,
   MANAGED_ACTIVATION_RECEIPT_EVENT_CLASSES,
+  MANAGED_ACTIVATION_RECEIPT_PRODUCERS,
+  MANAGED_ACTIVATION_PRODUCER_EVENTS,
   MANAGED_ACTIVATION_RECEIPT_VERSION,
   MANAGED_ACTIVATION_STATES,
   MANAGED_ACTIVATION_STATUS_VERSION,

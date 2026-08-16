@@ -68,13 +68,17 @@ function printActivationStatus(result, json = false) {
   }
 }
 
-function activationNow() {
-  const raw = process.env.JARVOS_MANAGED_ACTIVATION_NOW;
+function activationNow(args) {
+  const raw = flagValue(args, '--test-now');
   if (raw == null || raw === '') return Date.now();
+  if (process.env.JARVOS_MANAGED_ACTIVATION_TEST_MODE !== '1') {
+    throw new Error('--test-now is available only in explicit managed-activation test mode');
+  }
   const asNumber = Number(raw);
   if (Number.isFinite(asNumber)) return asNumber;
   const asDate = Date.parse(raw);
-  return Number.isFinite(asDate) ? asDate : Date.now();
+  if (!Number.isFinite(asDate)) throw new Error('--test-now must be a timestamp or epoch milliseconds');
+  return asDate;
 }
 
 async function main() {
@@ -129,7 +133,7 @@ async function main() {
       runtime,
       root,
       evidencePath: evidence,
-      now: activationNow(),
+      now: activationNow(args),
     });
     if (!result.ok) {
       if (json) process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);

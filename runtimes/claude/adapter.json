@@ -97,6 +97,7 @@
     },
     "liveProof": {
       "qualifyingEventClasses": ["session", "turn"],
+      "producerEvents": { "session": "SessionStart", "turn": "UserPromptSubmit" },
       "freshnessSeconds": 900,
       "forwardSkewSeconds": 30
     },

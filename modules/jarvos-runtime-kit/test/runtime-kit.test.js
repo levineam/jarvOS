@@ -10,6 +10,7 @@ const crypto = require('crypto');
 const {
   COMPOUND_ENGINEERING_CAPABILITY_VERSION,
   MANAGED_ACTIVATION_RECEIPT_VERSION,
+  MANAGED_ACTIVATION_PRODUCER_EVENTS,
   MANAGED_ACTIVATION_STATUS_VERSION,
   buildSelectedTuple,
   checkRuntime,
@@ -981,6 +982,8 @@ test('Hermes requires the ordered session then turn sequence for activation', ()
       harness: 'hermes',
       correlation: 'hermes-challenge-1',
       eventClass: 'session',
+      producer: 'selected-runtime-bridge',
+      producerEvent: MANAGED_ACTIVATION_PRODUCER_EVENTS.hermes.session,
       tupleDigest: tuple.tupleDigest,
       producedAt: '2026-08-16T11:54:00.000Z',
     };
@@ -989,6 +992,8 @@ test('Hermes requires the ordered session then turn sequence for activation', ()
       harness: 'hermes',
       correlation: 'hermes-challenge-1',
       eventClass: 'turn',
+      producer: 'selected-runtime-bridge',
+      producerEvent: MANAGED_ACTIVATION_PRODUCER_EVENTS.hermes.turn,
       tupleDigest: tuple.tupleDigest,
       producedAt: '2026-08-16T11:55:00.000Z',
     };
@@ -1089,11 +1094,11 @@ test('CLI and library activation-status are equivalent and public-safe', () => {
     assert.equal(libraryCodex.schemaVersion, MANAGED_ACTIVATION_STATUS_VERSION);
 
     const cliJson = spawnSync(process.execPath, [
-      cli, 'activation-status', 'all', '--evidence', evidencePath, '--json',
+      cli, 'activation-status', 'all', '--evidence', evidencePath, '--test-now', String(now), '--json',
     ], {
       cwd: ROOT,
       encoding: 'utf8',
-      env: { ...process.env, JARVOS_MANAGED_ACTIVATION_NOW: String(now) },
+      env: { ...process.env, JARVOS_MANAGED_ACTIVATION_TEST_MODE: '1' },
     });
     assert.equal(cliJson.status, 0, cliJson.stderr || cliJson.stdout);
     const cliResult = JSON.parse(cliJson.stdout);
@@ -1113,11 +1118,11 @@ test('CLI and library activation-status are equivalent and public-safe', () => {
     assert.equal(encoded.includes('privatePath'), false);
 
     const human = spawnSync(process.execPath, [
-      cli, 'activation-status', 'codex', '--evidence', evidencePath,
+      cli, 'activation-status', 'codex', '--evidence', evidencePath, '--test-now', String(now),
     ], {
       cwd: ROOT,
       encoding: 'utf8',
-      env: { ...process.env, JARVOS_MANAGED_ACTIVATION_NOW: String(now) },
+      env: { ...process.env, JARVOS_MANAGED_ACTIVATION_TEST_MODE: '1' },
     });
     assert.equal(human.status, 0, human.stderr || human.stdout);
     assert.match(human.stdout, /codex/);
@@ -1160,6 +1165,7 @@ test('activation-status is read-only and never claims active without evidence', 
   const result = spawnSync(process.execPath, [cli, 'activation-status', 'all', '--json'], {
     cwd: ROOT,
     encoding: 'utf8',
+    env: { ...process.env, JARVOS_MANAGED_ACTIVATION_NOW: '0' },
   });
   assert.equal(result.status, 0, result.stderr || result.stdout);
   const payload = JSON.parse(result.stdout);
@@ -1168,8 +1174,29 @@ test('activation-status is read-only and never claims active without evidence', 
   for (const status of payload.results) {
     assert.notEqual(status.state, 'active');
     assert.ok(['unconfigured', 'prepared', 'awaiting_live_proof', 'degraded', 'rollback_pending', 'rolled_back'].includes(status.state));
+    assert.ok(Date.parse(status.evaluatedAt) > Date.parse('2020-01-01T00:00:00.000Z'));
   }
   for (const entry of before) {
     assert.equal(fs.readFileSync(entry.filePath, 'utf8'), entry.body);
   }
+
+  const forbiddenTestClock = spawnSync(process.execPath, [
+    cli, 'activation-status', 'all', '--test-now', '0', '--json',
+  ], { cwd: ROOT, encoding: 'utf8' });
+  assert.notEqual(forbiddenTestClock.status, 0);
+  assert.match(forbiddenTestClock.stderr, /explicit managed-activation test mode/);
+});
+
+test('activation-status rejects a relative evidence path instead of resolving it from cwd', () => {
+  const result = getManagedActivationStatus({
+    runtime: 'codex',
+    root: ROOT,
+    evidencePath: 'owner-evidence.json',
+    now: Date.parse('2026-08-16T12:00:00.000Z'),
+  });
+  assert.deepEqual(result, {
+    ok: false,
+    error: 'evidence_unreadable',
+    results: [],
+  });
 });

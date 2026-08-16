@@ -90,6 +90,13 @@ digest. Freshness is 15 minutes with at most 30 seconds forward skew. Health may
 explain degradation but cannot activate. Public status is redacted (harness,
 state, generation digest, evidence classes, times, allowlisted reasons only).
 
+Production receipts must name the selected-runtime bridge as their producer and
+the exact adapter-declared native event (`SessionStart` / `UserPromptSubmit` for
+Claude and Codex, `managed_session_start` / `pre_llm_call` for Hermes, or
+`managed_session_start` / `agent_turn_prepare` for OpenClaw). Test-fixture
+provenance is accepted only by the explicitly gated package test mode and is
+rejected by production status evaluation.
+
 Disposable dogfood is two-phase and never starts a process on prepare:
 
 ```bash
@@ -118,5 +125,10 @@ Fixture receipts do not prove a live harness. Package skill preflight remains
 redacted status and cannot start or promote a harness. Live local adoption is
 only after a public merge staged through the selected-runtime mechanism — never
 against a dirty root or active real profile.
+
+On a successful disposable verify, the evaluator first proves `active`, then
+exact-owned cleanup consumes the challenge and invalidates that generation's
+test evidence. The returned public state is therefore `rolled_back`, paired
+with `dogfood.outcome: passed`; it is not a durable active claim.
 
 Operator detail: [`docs/runbooks/managed-harness-activation.md`](../../docs/runbooks/managed-harness-activation.md).

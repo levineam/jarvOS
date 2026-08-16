@@ -27,10 +27,10 @@ install flag, skill install, health check, or registration receipt.
 
 | Harness | Execution owner | Background process | Live proof |
 | --- | --- | --- | --- |
-| Claude | `native-hooks` | none; jarvOS does not start a process | Fresh native **session** or **turn** receipt |
-| Codex | `native-hooks` | none; managed launcher is a **per-session fallback**, not a daemon | Fresh native **session** or **turn** receipt |
-| Hermes | `harness-process` | Hermes host/gateway owns lifetime | Ordered harness-owned **session** then **`pre_llm_call` turn** |
-| OpenClaw | `harness-process` | OpenClaw host/gateway owns lifetime | Ordered harness-owned **session** then **`agent_turn_prepare` turn** |
+| Claude | `native-hooks` | none; jarvOS does not start a process | Bridge receipt for native `SessionStart` or `UserPromptSubmit` |
+| Codex | `native-hooks` | none; managed launcher is a **per-session fallback**, not a daemon | Bridge receipt for native `SessionStart` or `UserPromptSubmit` |
+| Hermes | `harness-process` | Hermes host/gateway owns lifetime | Ordered bridge receipts for `managed_session_start` then `pre_llm_call` |
+| OpenClaw | `harness-process` | OpenClaw host/gateway owns lifetime | Ordered bridge receipts for `managed_session_start` then `agent_turn_prepare` |
 
 There is **no symmetry daemon**. Hermes and OpenClaw stay harness-process owned;
 jarvOS must not add a supervisor “for parity” with Claude/Codex.
@@ -71,6 +71,7 @@ The following **cannot** activate, alone or combined:
 - skill visibility or skill install receipts
 - a stale, future, replayed, pre-baseline, or tuple-mismatched receipt
 - fixture receipts that did not come from a real harness lifecycle event
+- receipts with missing, unknown, or harness-inconsistent producer provenance
 
 Health may explain **degradation** (`health_degraded`) but **never** activates.
 
@@ -117,6 +118,11 @@ node modules/jarvos-runtime-kit/scripts/jarvos-runtime-kit.js activation-status 
 
 These commands are **read-only evaluators**. They do not start harnesses, write
 profiles, or promote state.
+
+Agents can request the same redacted result through the already authenticated
+`jarvos_control_plane` tool with operation `activation-status`. The host—not the
+agent—selects the owner-local evidence file. The tool accepts no evidence path
+or receipt input and cannot activate a harness.
 
 ## Disposable dogfood: prepare → real event → verify
 
@@ -179,15 +185,23 @@ Verify re-attests the stored absolute inputs, evaluates the managed-activation
 contract, and on success performs **exact-owned** rollback of files this run
 created (digest + mode must still match). On mismatch it **refuses**, leaves
 material in place, and reports `rollback_pending` / `rollback_refused_modified`.
+The production selected-runtime bridge is the only accepted receipt producer;
+fixture provenance is rejected outside explicitly gated package tests.
 
 ## Exact rollback and refusal
 
 - Rollback ownership is **exact-owned** only: remove only inventory entries whose
   current bytes and modes still match the prepare baseline.
+- Verify preflights the complete inventory and atomically consumes the challenge
+  before mutation. A missing, extra, modified, or concurrently consumed entry
+  refuses the whole planned cleanup before deletion begins.
 - Modified, ambiguous, or unreadable inventory → refuse deletion; state
   `rollback_pending` with reason `rollback_refused_modified`.
 - Successful verify deletes raw challenge/receipt material and may retain only
   redacted status (≤ 30 days).
+- Successful disposable verify returns `dogfood.outcome: passed` with public
+  state `rolled_back`: `active` was proven before cleanup, then the challenge
+  and its generation evidence were invalidated.
 - Disposable dogfood rollback removes only run-owned challenge material. A
   separate installed-runtime rollback must invalidate its selected generation
   before public status can derive `rolled_back`.
@@ -218,7 +232,7 @@ merged and staged through the selected-runtime mechanism.
 | `active` | Fresh causal receipt bound to the exact tuple |
 | `degraded` | Evidence present but stale, mismatched, out of order, replayed, or health-explained |
 | `pending` (dogfood) | Verify ran; still waiting on live proof |
-| `passed` (dogfood) | Active evaluation **and** exact-owned rollback completed |
+| `passed` (dogfood) / `rolled_back` | Active evaluation succeeded, then exact-owned rollback consumed the disposable proof |
 | `rollback_pending` | Active or inventory path refused safe cleanup |
 | `expired` | Raw challenge material past 24h TTL |
 | `failed` | Invalid evidence, tuple drift, or evaluation did not reach active |
