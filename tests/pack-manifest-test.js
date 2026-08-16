@@ -84,6 +84,19 @@ function advertisedRuntimeAssets() {
   return required;
 }
 
+function packedSkillFiles() {
+  const result = spawnSync('npm', ['pack', '--ignore-scripts=false', '--dry-run', '--json'], {
+    cwd: path.join(ROOT, 'modules/jarvos-skills'),
+    encoding: 'utf8',
+    maxBuffer: 32 * 1024 * 1024,
+  });
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  const start = result.stdout.indexOf('[');
+  const parsed = JSON.parse(result.stdout.slice(start));
+  const entry = Array.isArray(parsed) ? parsed[0] : parsed;
+  return new Set((entry.files || []).map((file) => file.path.replace(/\\/g, '/')));
+}
+
 test('published tarball includes every advertised runtime and runtime-kit asset', () => {
   const files = packedFiles();
   const required = advertisedRuntimeAssets();
@@ -96,6 +109,12 @@ test('bootstrap package installs the bundled runtime-kit for shared skill repair
   assert.equal(packageJson.dependencies?.['@jarvos/runtime-kit'], 'file:modules/jarvos-runtime-kit');
   const lock = JSON.parse(fs.readFileSync(path.join(ROOT, 'package-lock.json'), 'utf8'));
   assert.equal(lock.packages?.['node_modules/@jarvos/runtime-kit']?.resolved, 'modules/jarvos-runtime-kit');
+});
+
+test('direct skills package bundles the reviewed runtime-kit dependency', () => {
+  const files = packedSkillFiles();
+  assert.equal(files.has('node_modules/@jarvos/runtime-kit/package.json'), true);
+  assert.equal(files.has('node_modules/@jarvos/runtime-kit/src/index.js'), true);
 });
 
 test('published shared-skill surface contains no local-path or private-body sentinel', () => {

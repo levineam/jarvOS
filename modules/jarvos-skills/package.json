@@ -6,8 +6,11 @@
   "type": "commonjs",
   "main": "src/index.js",
   "dependencies": {
-    "@jarvos/runtime-kit": "^0.1.0"
+    "@jarvos/runtime-kit": "file:../jarvos-runtime-kit"
   },
+  "bundledDependencies": [
+    "@jarvos/runtime-kit"
+  ],
   "bin": {
     "jarvos-skills": "scripts/install-skills.js",
     "jarvos-skills-scheduled-repair": "scripts/scheduled-repair.js"
@@ -23,6 +26,7 @@
     "schemas/"
   ],
   "scripts": {
+    "prepack": "node scripts/bundle-runtime-kit.js",
     "test": "node --test test/*.test.js"
   },
   "engines": {
