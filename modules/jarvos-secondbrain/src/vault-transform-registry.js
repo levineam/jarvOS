@@ -85,6 +85,9 @@ function normalizedJournalOrigin(contentOrigin = {}) {
     human_evidence_eligible: contentOrigin.human_evidence_eligible === true && origin === 'human',
     ...(contentOrigin.clean_text_digest ? { clean_text_digest: String(contentOrigin.clean_text_digest) } : {}),
     ...(contentOrigin.source_ref ? { source_ref: String(contentOrigin.source_ref).trim() } : {}),
+    ...(contentOrigin.user_source && typeof contentOrigin.user_source === 'object'
+      ? { user_source: { ...contentOrigin.user_source } }
+      : {}),
   };
 }
 
@@ -125,6 +128,9 @@ function journalSectionLineOriginTransform(content, { heading, line, contentOrig
   const matchingIndex = matchingJournalBullet(lines, range, canonicalLine);
   if (matchingIndex !== -1) {
     const entry = parseJournalEntry(lines, matchingIndex);
+    // An existing unmarked bullet is the legacy/manual-human convention. It
+    // already represents stronger evidence than a new non-human echo, so keep
+    // it untouched and let the invariant treat the safe no-op as satisfied.
     if (!entry?.marker && !entry?.marker_line) return source;
 
     const existing = entry.origin;
@@ -162,6 +168,7 @@ function journalSectionLineOriginSatisfied(content, { heading, line, contentOrig
   const index = matchingJournalBullet(lines, range, canonicalLine);
   if (index === -1) return false;
   const entry = parseJournalEntry(lines, index);
+  if (entry && !entry.marker && !entry.marker_line) return true;
   const actual = entry?.marker ? parseJournalOriginMarker(entry.marker_line, entry.clean_text) : null;
   return Boolean(actual
     && !actual.normalization_reason

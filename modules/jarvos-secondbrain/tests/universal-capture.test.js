@@ -77,6 +77,24 @@ test('compatibility captures carry explicit unknown provenance and enforcement r
     () => normalizeCaptureEvent(baseCapture('codex', { text: 'note: enforced provenance' }), { requireDeclaration: true }),
     /content_origin declaration is required/,
   );
+  for (const partial of [
+    { content_origin: 'assistant' },
+    { content_origin_basis: 'assistant_generated' },
+    { user_source: { capture_event_id: 'capture-only' } },
+  ]) {
+    assert.throws(
+      () => normalizeCaptureEvent(baseCapture('codex', { text: 'note: partial provenance', ...partial }), { requireDeclaration: true }),
+      /content_origin declaration is required/,
+    );
+  }
+  assert.throws(
+    () => normalizeCaptureEvent(baseCapture('codex', {
+      text: 'note: human without receipt',
+      content_origin: 'human',
+      content_origin_basis: 'verbatim_user',
+    }), { requireDeclaration: true }),
+    /valid user-source receipt/,
+  );
 });
 
 test('declared provenance reaches note frontmatter while deferred adoption is stripped', () => {

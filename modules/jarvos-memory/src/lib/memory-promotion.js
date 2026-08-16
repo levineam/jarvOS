@@ -34,6 +34,7 @@ const {
 const { createMemoryRecord } = require('../../lib/memory-record');
 const { HindsightAdapter } = require('./hindsight-adapter');
 const { getHindsightConfig } = require('../../lib/memory-config');
+const { contentOriginPairIsValid } = require('../../../jarvos-secondbrain/bridge/provenance/src/content-origin-contract');
 
 function promotionContent(event = {}) {
   if (event.knowledgeUnit) return String(event.knowledgeUnit.text || '').trim();
@@ -45,29 +46,76 @@ function hasKnowledgeUnitEvidence(unit = {}) {
     && unit.evidence.some((entry) => entry?.sourcePath || entry?.quote || entry?.bodySha256 || entry?.ref);
 }
 
+function hasUserSourceReceipt(receipt = {}) {
+  return Boolean(receipt
+    && typeof receipt === 'object'
+    && receipt.actor === 'user'
+    && typeof receipt.capture_event_id === 'string'
+    && receipt.capture_event_id.trim()
+    && /^[a-f0-9]{64}$/.test(String(receipt.source_digest || ''))
+    && /^[a-f0-9]{64}$/.test(String(receipt.content_digest || '')));
+}
+
 function contentOriginRecord(unit = {}, event = {}) {
   const candidate = unit.provenance || unit;
   const eventOrigin = event.content_origin ?? event.contentOrigin;
   const eventBasis = event.content_origin_basis ?? event.contentOriginBasis;
-  const origin = candidate.content_origin ?? candidate.contentOrigin ?? eventOrigin;
-  const basis = candidate.content_origin_basis ?? candidate.contentOriginBasis ?? eventBasis;
-  const hasDeclaration = origin !== undefined || basis !== undefined
+  const candidateHasDeclaration = candidate.content_origin !== undefined
+    || candidate.contentOrigin !== undefined
+    || candidate.content_origin_basis !== undefined
+    || candidate.contentOriginBasis !== undefined
     || candidate.human_evidence_eligible !== undefined
     || candidate.humanEvidenceEligible !== undefined;
+  const origin = candidateHasDeclaration
+    ? candidate.content_origin ?? candidate.contentOrigin
+    : eventOrigin;
+  const basis = candidateHasDeclaration
+    ? candidate.content_origin_basis ?? candidate.contentOriginBasis
+    : eventBasis;
+  const hasDeclaration = candidateHasDeclaration || eventOrigin !== undefined || eventBasis !== undefined
+    || event.human_evidence_eligible !== undefined || event.humanEvidenceEligible !== undefined;
   if (!hasDeclaration) return null;
+  const normalizedOrigin = String(origin || 'unknown').trim().toLowerCase();
+  const normalizedBasis = String(basis || 'unknown').trim().toLowerCase();
+  const receipt = candidate.user_source
+    || candidate.userSource
+    || candidate.content_origin_source
+    || candidate.contentOriginSource
+    || event.user_source
+    || event.userSource;
+  const validPair = normalizedBasis === 'legacy_author'
+    ? ['human', 'assistant', 'mixed'].includes(normalizedOrigin)
+    : contentOriginPairIsValid(normalizedOrigin, normalizedBasis);
   return {
-    content_origin: String(origin || 'unknown').trim().toLowerCase(),
-    content_origin_basis: String(basis || 'unknown').trim().toLowerCase(),
-    human_evidence_eligible: candidate.human_evidence_eligible === true
-      || candidate.humanEvidenceEligible === true
-      || event.human_evidence_eligible === true
-      || event.humanEvidenceEligible === true,
+    content_origin: normalizedOrigin,
+    content_origin_basis: normalizedBasis,
+    human_evidence_eligible: candidateHasDeclaration
+      ? candidate.human_evidence_eligible === true || candidate.humanEvidenceEligible === true
+      : event.human_evidence_eligible === true || event.humanEvidenceEligible === true,
+    valid_pair: validPair,
+    receipt_bound: normalizedOrigin !== 'human'
+      || normalizedBasis === 'legacy_author'
+      || hasUserSourceReceipt(receipt),
   };
 }
 
 function humanEvidenceGate(unit, event) {
   const provenance = contentOriginRecord(unit, event);
   if (!provenance) return null;
+  if (!provenance.valid_pair) {
+    return {
+      provenance,
+      reason: `content origin '${provenance.content_origin}' has an invalid basis '${provenance.content_origin_basis}'`,
+    };
+  }
+  if (provenance.content_origin === 'human'
+    && provenance.content_origin_basis !== 'legacy_author'
+    && !provenance.receipt_bound) {
+    return {
+      provenance,
+      reason: 'human evidence requires a user-source receipt',
+    };
+  }
   if (provenance.content_origin !== 'human' || provenance.human_evidence_eligible !== true) {
     return {
       provenance,

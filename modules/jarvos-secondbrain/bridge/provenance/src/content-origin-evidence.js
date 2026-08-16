@@ -5,6 +5,7 @@ const {
   CONTENT_ORIGINS,
   CONTENT_ORIGIN_BASES,
   cleanText,
+  cleanNoteContent,
   humanEvidenceEligible,
   normalizeContentOriginWithLegacy,
   parseJournalEntry,
@@ -62,9 +63,12 @@ function projectJournalEntriesFromMarkdown(markdown, { date = null, section = 'i
       clean_text: entry.clean_text,
       content_origin: entry.origin.content_origin,
       content_origin_basis: entry.origin.content_origin_basis,
+      user_source: entry.origin.user_source,
       human_evidence_eligible: entry.origin.human_evidence_eligible === true,
     }, {
-      prevalidated: Boolean(entry.marker && !entry.marker.normalization_reason),
+      prevalidated: Boolean(entry.marker
+        && !entry.marker.normalization_reason
+        && (entry.origin.content_origin !== 'human' || entry.origin.user_source)),
       manualEntry: !entry.marker_line,
       allowLegacyFallback: true,
     });
@@ -81,11 +85,12 @@ function projectJournalEntriesFromMarkdown(markdown, { date = null, section = 'i
 function projectNoteMarkdown(markdown, { sourcePath = null, title = null } = {}) {
   const parsed = parseFrontmatter(String(markdown || ''));
   const frontmatter = parsed ? frontmatterToObject(parsed) : {};
+  const clean_text = cleanText(parsed?.remainder || markdown);
   const normalized = normalizeContentOriginWithLegacy(frontmatter, {
     allowLegacyFallback: true,
     allowUnresolvedReceipt: true,
+    content: cleanNoteContent(clean_text, title),
   });
-  const clean_text = cleanText(parsed?.remainder || markdown);
   const eligible = normalized.content_origin === 'human'
     && (normalized.human_evidence_eligible === true
       || humanEvidenceEligible(normalized, { allowLegacyFallback: true }));

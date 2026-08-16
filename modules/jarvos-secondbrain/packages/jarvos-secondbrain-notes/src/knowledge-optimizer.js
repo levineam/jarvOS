@@ -18,6 +18,7 @@ const path = require('path');
 const crypto = require('crypto');
 const {
   CONTENT_ORIGIN_SCHEMA_VERSION,
+  cleanNoteContent,
   humanEvidenceEligible,
   normalizeContentOriginWithLegacy,
 } = require('../../../bridge/provenance/src/content-origin-contract');
@@ -121,10 +122,11 @@ function knowledgeUnitId({ sourcePath, bodyHash, kind, text }) {
   return `ku_${sha256(`${sourcePath}:${bodyHash}:${kind}:${text}`).slice(0, 16)}`;
 }
 
-function noteProvenance(frontmatter = {}) {
+function noteProvenance(frontmatter = {}, body = '', title = '') {
   const normalized = normalizeContentOriginWithLegacy(frontmatter, {
     allowLegacyFallback: true,
     allowUnresolvedReceipt: true,
+    content: cleanNoteContent(body, title),
   });
   const eligible = normalized.content_origin === 'human'
     && (normalized.human_evidence_eligible === true
@@ -279,7 +281,7 @@ function buildArtifact({ filePath, notesDir, title, body, frontmatter, created, 
   const now = new Date().toISOString();
   const claims = extractClaims(body);
   const noteSummary = summarize(body);
-  const provenance = noteProvenance(frontmatter);
+  const provenance = noteProvenance(frontmatter, body, title);
 
   const gbrainStatus = sensitivity.excluded ? 'skipped' : 'queued';
   const memoryWikiStatus = sensitivity.excluded ? 'skipped' : 'queued';

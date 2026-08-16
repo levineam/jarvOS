@@ -120,7 +120,7 @@ function applyPlan(capture, plan, options = {}) {
 }
 
 function applyRoutingPlan(capture = {}, options = {}) {
-  return applyPlan(capture, buildRoutingPlan(capture), options);
+  return applyPlan(capture, buildRoutingPlan(capture, options), options);
 }
 
 function applyStrictCommandPlan(capture = {}, options = {}) {
@@ -149,7 +149,7 @@ function applyParsedStrictCommandPlan(capture = {}, command = {}, options = {}) 
   };
   return {
     ...command,
-    ...applyPlan(routedCapture, buildRoutingPlan(routedCapture), options),
+    ...applyPlan(routedCapture, buildRoutingPlan(routedCapture, options), options),
   };
 }
 

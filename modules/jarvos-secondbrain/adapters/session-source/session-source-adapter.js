@@ -102,13 +102,6 @@ function originForMessage({ actorType, text, captureEventId, message = {}, sessi
     ?? options.user_source
     ?? options.userSource;
 
-  let userSourceRecord = message.user_source_record
-    ?? message.userSourceRecord
-    ?? session.user_source_record
-    ?? session.userSourceRecord
-    ?? options.user_source_record
-    ?? options.userSourceRecord;
-
   if (suppliedOrigin || suppliedBasis || suppliedSource) {
     const candidate = {
       content_origin: suppliedOrigin || 'unknown',
@@ -117,31 +110,37 @@ function originForMessage({ actorType, text, captureEventId, message = {}, sessi
     };
     const normalized = normalizeContentOrigin(candidate, {
       content: text,
-      resolveUserSource: options.resolveUserSource || (userSourceRecord
-        ? (captureEventIdToResolve) => {
-          const id = userSourceRecord.capture_event_id || userSourceRecord.captureEventId || userSourceRecord.id;
-          return id === captureEventIdToResolve ? userSourceRecord : null;
-        }
-        : null),
+      resolveUserSource: options.resolveUserSource,
       captureEventId,
     });
-    return {
-      ...normalized,
-      ...(userSourceRecord ? { user_source_record: userSourceRecord } : {}),
-    };
+    return normalized;
   }
 
   if (actorType === 'human') {
+    // A transcript role is an actor hint, not a user-source receipt. Only a
+    // resolver-owned record may establish human evidence; otherwise this
+    // session message remains readable but is deliberately context-only.
+    let userSourceRecord = null;
+    if (typeof options.resolveUserSource === 'function') {
+      try { userSourceRecord = options.resolveUserSource(captureEventId); } catch { userSourceRecord = null; }
+    }
+    const sourceText = userSourceRecord?.text
+      ?? userSourceRecord?.content
+      ?? userSourceRecord?.body;
+    const sourceId = userSourceRecord?.capture_event_id
+      ?? userSourceRecord?.captureEventId
+      ?? userSourceRecord?.id;
+    const sourceActor = typeof userSourceRecord?.actor === 'string'
+      ? userSourceRecord.actor
+      : userSourceRecord?.actor?.type || userSourceRecord?.role || userSourceRecord?.type;
+    if (sourceId !== captureEventId || sourceActor !== 'user' || typeof sourceText !== 'string') {
+      return { content_origin: 'unknown', content_origin_basis: 'unknown' };
+    }
     const userSource = {
-      capture_event_id: captureEventId,
+      capture_event_id: sourceId,
       actor: 'user',
-      source_digest: digestText(text),
+      source_digest: digestText(sourceText),
       content_digest: digestText(text),
-    };
-    userSourceRecord = {
-      capture_event_id: captureEventId,
-      actor: 'user',
-      text,
     };
     const normalized = normalizeContentOrigin({
       content_origin: 'human',
@@ -152,10 +151,7 @@ function originForMessage({ actorType, text, captureEventId, message = {}, sessi
       resolveUserSource: () => userSourceRecord,
       captureEventId,
     });
-    return {
-      ...normalized,
-      user_source_record: userSourceRecord,
-    };
+    return normalized;
   }
 
   if (actorType === 'assistant') {
@@ -265,7 +261,6 @@ function buildCaptureEvent({ tool, session, message, index, options }) {
     content_origin: contentOrigin.content_origin,
     content_origin_basis: contentOrigin.content_origin_basis,
     ...(contentOrigin.user_source ? { user_source: contentOrigin.user_source } : {}),
-    ...(contentOrigin.user_source_record ? { user_source_record: contentOrigin.user_source_record } : {}),
     human_evidence_eligible: contentOrigin.human_evidence_eligible === true,
   };
 }

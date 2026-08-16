@@ -10,7 +10,6 @@ const {
   stripLeadingKeyword,
 } = require('../intent/keyword-capture-router');
 const {
-  CONTENT_ORIGIN_SCHEMA_VERSION,
   normalizeContentOrigin,
 } = require('../../../../bridge/provenance/src/content-origin-contract');
 
@@ -42,27 +41,16 @@ function captureContentForProvenance(capture = {}) {
 }
 
 function normalizeCaptureProvenance(capture = {}, options = {}) {
-  const hasValidatedHumanRecord = capture.content_origin_schema === CONTENT_ORIGIN_SCHEMA_VERSION
-    && capture.content_origin === 'human'
-    && capture.human_evidence_eligible === true
-    && capture.user_source
-    && typeof capture.user_source === 'object';
-  const normalized = hasValidatedHumanRecord
-    ? {
-      schema_version: CONTENT_ORIGIN_SCHEMA_VERSION,
-      content_origin: 'human',
-      content_origin_basis: capture.content_origin_basis,
-      user_source: { ...capture.user_source },
-      human_evidence_eligible: true,
-    }
-    : normalizeContentOrigin({
-      content_origin: capture.content_origin ?? capture.contentOrigin,
-      content_origin_basis: capture.content_origin_basis ?? capture.contentOriginBasis,
-      user_source: capture.user_source ?? capture.userSource,
-    }, {
-      content: captureContentForProvenance(capture),
-      resolveUserSource: options.resolveUserSource || capture.resolveUserSource,
-    });
+  const captureEventId = capture.captureEventId ?? capture.capture_event_id ?? capture.id;
+  const normalized = normalizeContentOrigin({
+    content_origin: capture.content_origin ?? capture.contentOrigin,
+    content_origin_basis: capture.content_origin_basis ?? capture.contentOriginBasis,
+    user_source: capture.user_source ?? capture.userSource,
+  }, {
+    content: captureContentForProvenance(capture),
+    resolveUserSource: options.resolveUserSource || capture.resolveUserSource,
+    captureEventId,
+  });
 
   return {
     ...capture,
@@ -96,6 +84,7 @@ function journalOriginForCapture(capture = {}, options = {}) {
     content_origin: normalized.content_origin,
     content_origin_basis: normalized.content_origin_basis,
     human_evidence_eligible: normalized.human_evidence_eligible === true,
+    ...(normalized.user_source ? { user_source: { ...normalized.user_source } } : {}),
     ...(sourceRef ? { source_ref: String(sourceRef) } : {}),
   };
 }
@@ -269,7 +258,7 @@ function buildJournalAction(plan) {
   };
 }
 
-function buildNoteAction(plan, capture = {}) {
+function buildNoteAction(plan, capture = {}, options = {}) {
   if (plan.ignored || !plan.createNote) return null;
   return {
     kind: 'note',
@@ -281,7 +270,7 @@ function buildNoteAction(plan, capture = {}) {
       frontmatter: {
         ...(capture.frontmatter || {}),
         ...(plan.noteFrontmatter || {}),
-        ...contentOriginFrontmatter(capture),
+        ...contentOriginFrontmatter(capture, options),
       },
     },
   };
@@ -497,7 +486,7 @@ function buildThreePackagePlan(capture = {}, options = {}) {
 
   const actions = [
     buildJournalAction(plan),
-    buildNoteAction(plan, normalizedCapture),
+    buildNoteAction(plan, normalizedCapture, options),
     buildMemoryAction(memoryParams),
   ].filter(Boolean);
 
