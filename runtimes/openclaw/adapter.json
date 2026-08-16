@@ -62,6 +62,34 @@
   "setup": {
     "script": "setup.sh"
   },
+  "managedActivation": {
+    "version": "jarvos-managed-activation/v1",
+    "harness": "openclaw",
+    "executionOwner": "harness-process",
+    "backgroundProcess": {
+      "owner": "harness",
+      "jarvosStartsProcess": false
+    },
+    "preparation": {
+      "requiresExactSetup": true,
+      "requiresSelectedTuple": true
+    },
+    "liveProof": {
+      "requiredSequence": ["session", "turn"],
+      "producerEvents": { "session": "managed_session_start", "turn": "agent_turn_prepare" },
+      "freshnessSeconds": 900,
+      "forwardSkewSeconds": 30
+    },
+    "health": {
+      "mayActivate": false,
+      "mayExplainDegradation": true
+    },
+    "rollback": {
+      "ownership": "exact-owned",
+      "invalidatesGeneration": true,
+      "refuseModified": true
+    }
+  },
   "stewardshipAdapter": {
     "version": "jarvos-stewardship-adapter.v1",
     "harness": "openclaw",

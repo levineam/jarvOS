@@ -116,12 +116,25 @@ test('live-preflight checklist stays non-activating and reports owner-pending st
   const report = JSON.parse(result.stdout);
   assert.equal(report.ok, true);
   assert.equal(report.activating, false);
+  assert.equal(report.readOnly, true);
   const byId = Object.fromEntries(report.items.map((item) => [item.id, item]));
   assert.equal(byId['package-tests'].status, 'pass');
   assert.equal(byId['isolated-matrix-dogfood'].status, 'pass');
   assert.equal(byId['doctor-shared'].status, 'pass');
   assert.equal(byId['claude-interactive-probe'].status, 'pending_owner');
   assert.equal(byId['live-harness-gates'].status, 'off');
+  assert.ok(byId['runtime-activation'], 'runtime-activation item required');
+  assert.ok(['info', 'pass', 'pending', 'pending_owner'].includes(byId['runtime-activation'].status));
+  assert.ok(Array.isArray(byId['runtime-activation'].evidence?.statuses));
+  assert.equal(byId['runtime-activation'].evidence.statuses.length, 4);
+  for (const status of byId['runtime-activation'].evidence.statuses) {
+    assert.equal(status.schemaVersion, 'jarvos-managed-activation-status/v1');
+    assert.ok(['claude', 'codex', 'hermes', 'openclaw'].includes(status.harness));
+    assert.ok(typeof status.state === 'string');
+    assert.equal(Object.prototype.hasOwnProperty.call(status, 'receipts'), false);
+  }
+  // Informational activation status must not fail the package gate when unconfigured.
+  assert.notEqual(byId['runtime-activation'].status, 'fail');
 });
 
 test('live-preflight rejects write opt-in and remains a read-only release gate', () => {

@@ -13,6 +13,7 @@ const openclawPluginPersistence = require('./openclaw-plugin-persistence.js');
 const capabilityDescriptor = require('./capability-descriptor.js');
 const operatorNotification = require('./operator-notification.js');
 const operatorNotificationLint = require('./operator-notification-lint.js');
+const managedActivation = require('./managed-activation.js');
 
 const DEFAULT_AGENT_CONTEXT_MCP = 'modules/jarvos-agent-context/scripts/jarvos-mcp.js';
 const REQUIRED_MCP_TOOL = 'jarvos_hydrate';
@@ -23,6 +24,29 @@ const COMPOUND_ENGINEERING_CAPABILITY_VERSION = 'jarvos-codex-ce-capability.v1';
 const COMPOUND_ENGINEERING_OPERATIONS = ['plan', 'work', 'compound'];
 const COMPOUND_ENGINEERING_ADMISSION_STATES = ['unsupported', 'supported', 'disabled'];
 const COMPOUND_ENGINEERING_REVISION = /^[a-f0-9]{40}$/i;
+const MANAGED_ACTIVATION_OWNER_EVIDENCE_VERSION = 'jarvos-managed-activation-owner-evidence/v1';
+const MANAGED_ACTIVATION_HARNESS_ORDER = Object.freeze(['claude', 'codex', 'hermes', 'openclaw']);
+const MANAGED_ACTIVATION_SESSION_EVENTS = new Set([
+  'SessionStart',
+  'on_session_start',
+  'session-start',
+  'session_start',
+  'start-or-resume',
+  'startOrResume',
+  'launcher',
+]);
+const MANAGED_ACTIVATION_TURN_EVENTS = new Set([
+  'UserPromptSubmit',
+  'pre_llm_call',
+  'agent_turn_prepare',
+  'session-turn',
+  'session_turn',
+  'heartbeat',
+  'user-prompt',
+  'user_prompt',
+]);
+const MANAGED_ACTIVATION_SESSION_CAPABILITIES = new Set(['startOrResume']);
+const MANAGED_ACTIVATION_TURN_CAPABILITIES = new Set(['heartbeat', 'nextTurnInput']);
 const CAPABILITY_ALLOWED_KEYS = new Set([
   'schemaVersion', 'version', 'provider', 'harness', 'admission', 'operations',
   'activation', 'discovery', 'invocation', 'proof', 'fixtureRoot', 'fixtureFiles',
@@ -542,6 +566,377 @@ function inspectCompoundEngineeringProvider(options = {}) {
   };
 }
 
+function mapConcreteEventToPublicClass(event) {
+  if (typeof event !== 'string' || event.length === 0) return null;
+  if (MANAGED_ACTIVATION_SESSION_EVENTS.has(event)) return 'session';
+  if (MANAGED_ACTIVATION_TURN_EVENTS.has(event)) return 'turn';
+  if (/session[_\s-]?start|start[_\s-]?or[_\s-]?resume|^launcher$/i.test(event)) return 'session';
+  if (/heartbeat|pre[_\s-]?llm|agent[_\s-]?turn|user[_\s-]?prompt|session[_\s-]?turn/i.test(event)) return 'turn';
+  return null;
+}
+
+function expectedManagedActivationPolicy(harness) {
+  const normalized = managedActivation.normalizeHarnessId(harness);
+  if (!normalized) return null;
+  const shared = {
+    version: managedActivation.MANAGED_ACTIVATION_CONTRACT_VERSION,
+    harness: normalized,
+    preparation: { requiresExactSetup: true, requiresSelectedTuple: true },
+    health: { mayActivate: false, mayExplainDegradation: true },
+    rollback: {
+      ownership: 'exact-owned',
+      invalidatesGeneration: true,
+      refuseModified: true,
+    },
+  };
+  if (normalized === 'claude' || normalized === 'codex') {
+    return {
+      ...shared,
+      executionOwner: 'native-hooks',
+      backgroundProcess: { owner: 'none', jarvosStartsProcess: false },
+      liveProof: {
+        qualifyingEventClasses: ['session', 'turn'],
+        producerEvents: managedActivation.MANAGED_ACTIVATION_PRODUCER_EVENTS[normalized],
+        freshnessSeconds: managedActivation.LIVE_PROOF_FRESHNESS_SECONDS,
+        forwardSkewSeconds: managedActivation.LIVE_PROOF_FORWARD_SKEW_SECONDS,
+      },
+    };
+  }
+  return {
+    ...shared,
+    executionOwner: 'harness-process',
+    backgroundProcess: { owner: 'harness', jarvosStartsProcess: false },
+    liveProof: {
+      requiredSequence: ['session', 'turn'],
+      producerEvents: managedActivation.MANAGED_ACTIVATION_PRODUCER_EVENTS[normalized],
+      freshnessSeconds: managedActivation.LIVE_PROOF_FRESHNESS_SECONDS,
+      forwardSkewSeconds: managedActivation.LIVE_PROOF_FORWARD_SKEW_SECONDS,
+    },
+  };
+}
+
+function sameStringSet(left, right) {
+  if (!Array.isArray(left) || !Array.isArray(right) || left.length !== right.length) return false;
+  const sortedLeft = [...left].sort();
+  const sortedRight = [...right].sort();
+  return sortedLeft.every((value, index) => value === sortedRight[index]);
+}
+
+function validateManagedActivationPolicy(contract, expected, errors) {
+  if (!expected) return;
+  if (contract.executionOwner !== expected.executionOwner) {
+    errors.push(`managedActivation.executionOwner must be ${expected.executionOwner}`);
+  }
+  if (!isObject(contract.backgroundProcess)
+    || contract.backgroundProcess.owner !== expected.backgroundProcess.owner
+    || contract.backgroundProcess.jarvosStartsProcess !== false) {
+    errors.push(`managedActivation.backgroundProcess must be owner=${expected.backgroundProcess.owner} with jarvosStartsProcess=false`);
+  }
+  if (Array.isArray(expected.liveProof.qualifyingEventClasses)) {
+    if (!sameStringSet(contract.liveProof?.qualifyingEventClasses, expected.liveProof.qualifyingEventClasses)
+      || contract.liveProof?.requiredSequence !== undefined) {
+      errors.push('managedActivation.liveProof must declare qualifyingEventClasses session|turn only');
+    }
+  } else if (!Array.isArray(contract.liveProof?.requiredSequence)
+    || contract.liveProof.requiredSequence.length !== expected.liveProof.requiredSequence.length
+    || contract.liveProof.requiredSequence.some((value, index) => value !== expected.liveProof.requiredSequence[index])
+    || contract.liveProof?.qualifyingEventClasses !== undefined) {
+    errors.push('managedActivation.liveProof must declare requiredSequence [session, turn]');
+  }
+  if (!isObject(contract.liveProof?.producerEvents)
+    || contract.liveProof.producerEvents.session !== expected.liveProof.producerEvents.session
+    || contract.liveProof.producerEvents.turn !== expected.liveProof.producerEvents.turn) {
+    errors.push('managedActivation.liveProof.producerEvents must match exact harness lifecycle events');
+  }
+}
+
+function stewardshipProducesEventClass(stewardshipAdapter, eventClass) {
+  if (!isObject(stewardshipAdapter) || !isObject(stewardshipAdapter.capabilities)) return false;
+  const capabilities = stewardshipAdapter.capabilities;
+  const bootstrapActions = Array.isArray(stewardshipAdapter.bootstrap?.actions)
+    ? stewardshipAdapter.bootstrap.actions
+    : [];
+
+  if (eventClass === 'session') {
+    if (bootstrapActions.includes('session-start') || bootstrapActions.includes('harness-launch')) return true;
+    const start = capabilities.startOrResume;
+    if (!isObject(start)) return false;
+    if (start.mode === 'managed-launcher') return true;
+    if (start.mode === 'native-hook') {
+      if (start.event == null) return true;
+      return mapConcreteEventToPublicClass(start.event) === 'session';
+    }
+    return false;
+  }
+
+  if (eventClass === 'turn') {
+    if (bootstrapActions.includes('session-turn')) return true;
+    for (const name of MANAGED_ACTIVATION_TURN_CAPABILITIES) {
+      const capability = capabilities[name];
+      if (!isObject(capability)) continue;
+      if (capability.mode === 'managed-launcher') return true;
+      if (capability.mode === 'native-hook') {
+        if (capability.event == null) continue;
+        if (mapConcreteEventToPublicClass(capability.event) === 'turn') return true;
+      }
+    }
+    return false;
+  }
+
+  return false;
+}
+
+function collectStewardshipLifecycleContradictions(stewardshipAdapter) {
+  const errors = [];
+  if (!isObject(stewardshipAdapter) || !isObject(stewardshipAdapter.capabilities)) {
+    return ['stewardshipAdapter.capabilities is required for managed activation live-proof validation'];
+  }
+  for (const [name, capability] of Object.entries(stewardshipAdapter.capabilities)) {
+    if (!isObject(capability) || typeof capability.event !== 'string') continue;
+    const mapped = mapConcreteEventToPublicClass(capability.event);
+    if (!mapped) {
+      errors.push(`stewardship capability ${name} event ${capability.event} is not a known public live-proof class`);
+      continue;
+    }
+    if (MANAGED_ACTIVATION_SESSION_CAPABILITIES.has(name) && mapped !== 'session') {
+      errors.push(`stewardship capability ${name} event maps to ${mapped}, which contradicts the session live-proof class`);
+    }
+    if (MANAGED_ACTIVATION_TURN_CAPABILITIES.has(name) && mapped !== 'turn') {
+      errors.push(`stewardship capability ${name} event maps to ${mapped}, which contradicts the turn live-proof class`);
+    }
+  }
+  return errors;
+}
+
+function requiredLiveProofClasses(contract) {
+  if (Array.isArray(contract.liveProof?.requiredSequence)) {
+    return [...new Set(contract.liveProof.requiredSequence)];
+  }
+  if (Array.isArray(contract.liveProof?.qualifyingEventClasses)) {
+    return [...new Set(contract.liveProof.qualifyingEventClasses)];
+  }
+  return [];
+}
+
+/**
+ * Validate a managed activation contract against the adapter's stewardship lifecycle
+ * declarations. Declared live-proof classes must be producible; contradictory concrete
+ * event mappings fail closed.
+ */
+function validateManagedActivationAgainstStewardship(contract, stewardshipAdapter, manifestId) {
+  const errors = [];
+  const contractResult = managedActivation.validateManagedActivationContract(contract);
+  if (!contractResult.ok) {
+    return { ok: false, errors: contractResult.errors.map((error) => `managedActivation: ${error}`) };
+  }
+  const activeContract = contractResult.value;
+  const expectedHarness = managedActivation.normalizeHarnessId(manifestId) || activeContract.harness;
+  if (activeContract.harness !== expectedHarness) {
+    errors.push(`managedActivation.harness must normalize to ${expectedHarness}`);
+  }
+  if (isObject(stewardshipAdapter)) {
+    const stewardshipHarness = managedActivation.normalizeHarnessId(stewardshipAdapter.harness);
+    if (stewardshipHarness && stewardshipHarness !== activeContract.harness) {
+      errors.push('managedActivation.harness must match the canonical stewardship harness');
+    }
+    if (isObject(stewardshipAdapter.bootstrap)) {
+      const bootstrapHarness = managedActivation.normalizeHarnessId(stewardshipAdapter.bootstrap.harness);
+      if (bootstrapHarness && bootstrapHarness !== activeContract.harness) {
+        errors.push('managedActivation.harness must match the stewardship bootstrap harness');
+      }
+    }
+  }
+
+  const expected = expectedManagedActivationPolicy(activeContract.harness);
+  validateManagedActivationPolicy(activeContract, expected, errors);
+  errors.push(...collectStewardshipLifecycleContradictions(stewardshipAdapter));
+
+  for (const eventClass of requiredLiveProofClasses(activeContract)) {
+    if (!stewardshipProducesEventClass(stewardshipAdapter, eventClass)) {
+      errors.push(`managedActivation live-proof class ${eventClass} is not producible by stewardship lifecycle declarations`);
+    }
+  }
+
+  return { ok: errors.length === 0, errors, value: activeContract };
+}
+
+function emptyHarnessEvidence() {
+  return {
+    configured: false,
+    prepared: false,
+    attestation: { ok: false, reasonCode: 'missing_configuration' },
+    challenges: [],
+    receipts: [],
+    health: { available: false },
+    rollback: { status: 'none' },
+    consumedCorrelations: [],
+  };
+}
+
+/**
+ * Materialize evaluation evidence for one harness from owner-local input.
+ * Attestation digests are recomputed from explicit absolute file paths when present;
+ * receipt-supplied digests are never trusted as selected-tuple proof.
+ */
+function materializeHarnessEvidence(entry, harness) {
+  if (!isObject(entry)) return emptyHarnessEvidence();
+
+  const challenges = Array.isArray(entry.challenges) ? entry.challenges : [];
+  const receipts = Array.isArray(entry.receipts) ? entry.receipts : [];
+  const health = isObject(entry.health) ? entry.health : { available: false };
+  const rollback = isObject(entry.rollback) ? entry.rollback : { status: 'none' };
+  const consumedCorrelations = Array.isArray(entry.consumedCorrelations) ? entry.consumedCorrelations : [];
+  const configured = entry.configured === true;
+  const prepared = entry.prepared === true;
+
+  let attestation = { ok: false, reasonCode: 'attestation_unavailable' };
+  const hasAttestationInputs = typeof entry.generation === 'string'
+    && Array.isArray(entry.assetPaths)
+    && entry.assetPaths.length > 0
+    && typeof entry.entrypointPath === 'string'
+    && typeof entry.configBindingPath === 'string';
+  if (hasAttestationInputs) {
+    attestation = managedActivation.collectManagedActivationAttestation({
+      harness,
+      generation: entry.generation,
+      assetPaths: entry.assetPaths,
+      entrypointPath: entry.entrypointPath,
+      configBindingPath: entry.configBindingPath,
+    });
+  }
+
+  return {
+    configured,
+    prepared,
+    attestation,
+    challenges,
+    receipts,
+    health,
+    rollback,
+    consumedCorrelations,
+  };
+}
+
+function extractOwnerEvidenceForHarness(ownerEvidence, harness) {
+  if (!isObject(ownerEvidence)) return null;
+  if (ownerEvidence.schemaVersion !== MANAGED_ACTIVATION_OWNER_EVIDENCE_VERSION) return null;
+  if (!isObject(ownerEvidence.harnesses)) return null;
+  const entry = ownerEvidence.harnesses[harness];
+  return isObject(entry) ? entry : null;
+}
+
+function loadManagedActivationContractForHarness(harness, { root } = {}) {
+  const normalized = managedActivation.normalizeHarnessId(harness);
+  if (!normalized) {
+    return { ok: false, errors: ['unknown harness'], harness: null, contract: null };
+  }
+  const repoRoot = path.resolve(root || repoRootFrom());
+  const manifestPath = path.join(repoRoot, 'runtimes', normalized, 'adapter.json');
+  if (!fs.existsSync(manifestPath)) {
+    return { ok: false, errors: [`runtime adapter missing for ${normalized}`], harness: normalized, contract: null };
+  }
+  let manifest;
+  try {
+    manifest = readJson(manifestPath);
+  } catch (error) {
+    return { ok: false, errors: [`runtime adapter unreadable for ${normalized}`], harness: normalized, contract: null };
+  }
+  const against = validateManagedActivationAgainstStewardship(
+    manifest.managedActivation,
+    manifest.stewardshipAdapter,
+    manifest.id || normalized,
+  );
+  if (!against.ok) {
+    return { ok: false, errors: against.errors, harness: normalized, contract: null, manifestPath };
+  }
+  return {
+    ok: true,
+    errors: [],
+    harness: normalized,
+    contract: against.value,
+    manifestPath,
+    manifest,
+  };
+}
+
+/**
+ * Read-only managed activation status for one harness or all four canonical harnesses.
+ * Missing evidence is a truthful non-active status, not a process failure.
+ */
+function getManagedActivationStatus({
+  runtime = 'all',
+  root,
+  evidencePath,
+  evidence,
+  now = Date.now(),
+} = {}) {
+  const repoRoot = path.resolve(root || repoRootFrom());
+  const requested = runtime === 'all'
+    ? [...MANAGED_ACTIVATION_HARNESS_ORDER]
+    : [managedActivation.normalizeHarnessId(runtime)].filter(Boolean);
+
+  if (runtime !== 'all' && requested.length === 0) {
+    return {
+      ok: false,
+      error: 'unknown runtime',
+      results: [],
+    };
+  }
+
+  let ownerEvidence = null;
+  if (isObject(evidence)) {
+    ownerEvidence = evidence;
+  } else if (typeof evidencePath === 'string' && evidencePath.length > 0) {
+    if (!path.isAbsolute(evidencePath)) {
+      return {
+        ok: false,
+        error: 'evidence_unreadable',
+        results: [],
+      };
+    }
+    const loaded = managedActivation.loadOwnerEvidence(evidencePath);
+    if (!loaded.ok) {
+      return {
+        ok: false,
+        error: 'evidence_unreadable',
+        results: [],
+      };
+    }
+    ownerEvidence = loaded.value;
+  }
+
+  const results = [];
+  for (const harness of requested) {
+    const loadedContract = loadManagedActivationContractForHarness(harness, { root: repoRoot });
+    if (!loadedContract.ok) {
+      results.push(managedActivation.toPublicActivationStatus({
+        state: 'unconfigured',
+        harness,
+        generationDigest: null,
+        evidenceClasses: [],
+        freshThrough: null,
+        reasons: ['invalid_evidence'],
+        evaluatedAt: new Date(Number(now)).toISOString(),
+      }));
+      continue;
+    }
+
+    const harnessEntry = ownerEvidence ? extractOwnerEvidenceForHarness(ownerEvidence, harness) : null;
+    const evaluationEvidence = materializeHarnessEvidence(harnessEntry, harness);
+    const evaluated = managedActivation.evaluateManagedActivation({
+      contract: loadedContract.contract,
+      evidence: evaluationEvidence,
+      now,
+    });
+    results.push(managedActivation.toPublicActivationStatus(evaluated));
+  }
+
+  if (runtime === 'all') {
+    return { ok: true, results };
+  }
+  return { ok: true, status: results[0], results };
+}
+
 function validateManifest(manifest) {
   const errors = [];
   const warnings = [];
@@ -641,6 +1036,18 @@ function validateManifest(manifest) {
         }
       }
     }
+  }
+  const isCanonicalManagedHarness = managedActivation.CANONICAL_HARNESS_IDS.has(manifest.id);
+  if (isCanonicalManagedHarness && manifest.managedActivation === undefined) {
+    add(errors, 'managedActivation is required for canonical runtime adapters');
+  }
+  if (manifest.managedActivation !== undefined) {
+    const against = validateManagedActivationAgainstStewardship(
+      manifest.managedActivation,
+      manifest.stewardshipAdapter,
+      manifest.id,
+    );
+    if (!against.ok) for (const error of against.errors) add(errors, error);
   }
   if (manifest.unsupportedCapabilities && !Array.isArray(manifest.unsupportedCapabilities)) {
     add(errors, 'unsupportedCapabilities must be an array');
@@ -885,24 +1292,32 @@ module.exports = {
   ...capabilityDescriptor,
   ...operatorNotification,
   ...operatorNotificationLint,
+  ...managedActivation,
   DEFAULT_AGENT_CONTEXT_MCP,
   HYDRATION_MODES,
   REQUIRED_MCP_TOOL,
   CONTROL_PLANE_MODULE,
   CONTROL_PLANE_TOOL,
   COMPOUND_ENGINEERING_CAPABILITY_VERSION,
+  MANAGED_ACTIVATION_HARNESS_ORDER,
+  MANAGED_ACTIVATION_OWNER_EVIDENCE_VERSION,
   checkCompoundEngineeringCapability,
   classifyCompoundEngineeringProvider,
   collectCodexCompoundEngineeringEvidence,
   checkRuntime,
   computeCompoundEngineeringFixtureDigest,
+  expectedManagedActivationPolicy,
+  getManagedActivationStatus,
   listRuntimeManifests,
   loadCompoundEngineeringCapability,
+  loadManagedActivationContractForHarness,
   loadManifest,
   inspectCompoundEngineeringProvider,
+  materializeHarnessEvidence,
   repoRootFrom,
   scaffoldRuntime,
   validateCompoundEngineeringCapability,
   validateCodexConformanceReceipt,
+  validateManagedActivationAgainstStewardship,
   validateManifest,
 };

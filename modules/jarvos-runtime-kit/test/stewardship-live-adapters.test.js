@@ -10,12 +10,19 @@ const test = require('node:test');
 
 const {
   assertStewardshipAdapter,
+  LIVE_PROOF_FORWARD_SKEW_SECONDS,
+  LIVE_PROOF_FRESHNESS_SECONDS,
+  MANAGED_ACTIVATION_CONTRACT_VERSION,
   REQUIRED_LIFECYCLE_CAPABILITIES,
   STEWARDSHIP_ADAPTER_VERSION,
   STEWARDSHIP_ACTIONS,
   STEWARDSHIP_BOOTSTRAP_CONTRACT_VERSION,
   STEWARDSHIP_DISPATCHER,
   STEWARDSHIP_STABLE_ROOT_ENV,
+  normalizeHarnessId,
+  validateManagedActivationContract,
+  validateManagedActivationAgainstStewardship,
+  validateManifest,
   validateStewardshipBootstrap,
 } = require('../src');
 
@@ -110,6 +117,7 @@ test('native hook adapters fall back until linked-worktree evidence is present',
       assertStewardshipAdapter(hook.stewardshipAdapter);
       const state = hook.stewardshipAdapter.availability({
         cwd: temp,
+        bridgeCommand: '',
         env: { ...process.env, JARVOS_STEWARDSHIP_BRIDGE_COMMAND: '' },
       });
       assert.deepEqual(state, {
@@ -126,6 +134,112 @@ test('native hook adapters fall back until linked-worktree evidence is present',
   } finally {
     fs.rmSync(temp, { recursive: true, force: true });
   }
+});
+
+test('all four adapters declare the settled managed activation owner/process/live-proof policy', () => {
+  const expected = {
+    claude: {
+      executionOwner: 'native-hooks',
+      backgroundOwner: 'none',
+      liveProofMode: 'qualifying',
+      qualifying: ['session', 'turn'],
+    },
+    codex: {
+      executionOwner: 'native-hooks',
+      backgroundOwner: 'none',
+      liveProofMode: 'qualifying',
+      qualifying: ['session', 'turn'],
+    },
+    hermes: {
+      executionOwner: 'harness-process',
+      backgroundOwner: 'harness',
+      liveProofMode: 'sequence',
+      sequence: ['session', 'turn'],
+    },
+    openclaw: {
+      executionOwner: 'harness-process',
+      backgroundOwner: 'harness',
+      liveProofMode: 'sequence',
+      sequence: ['session', 'turn'],
+    },
+  };
+
+  for (const runtime of RUNTIMES) {
+    const manifest = manifestFor(runtime);
+    const contract = manifest.managedActivation;
+    assert.ok(contract, `${runtime} must declare managedActivation beside stewardshipAdapter`);
+    const validated = validateManagedActivationContract(contract);
+    assert.equal(validated.ok, true, `${runtime}: ${validated.errors.join('; ')}`);
+    assert.equal(validated.value.harness, runtime === 'claude' ? 'claude' : runtime);
+    assert.equal(contract.version, MANAGED_ACTIVATION_CONTRACT_VERSION);
+    assert.equal(contract.executionOwner, expected[runtime].executionOwner);
+    assert.equal(contract.backgroundProcess.owner, expected[runtime].backgroundOwner);
+    assert.equal(contract.backgroundProcess.jarvosStartsProcess, false);
+    assert.equal(contract.preparation.requiresExactSetup, true);
+    assert.equal(contract.preparation.requiresSelectedTuple, true);
+    assert.equal(contract.liveProof.freshnessSeconds, LIVE_PROOF_FRESHNESS_SECONDS);
+    assert.equal(contract.liveProof.forwardSkewSeconds, LIVE_PROOF_FORWARD_SKEW_SECONDS);
+    assert.equal(contract.health.mayActivate, false);
+    assert.equal(contract.health.mayExplainDegradation, true);
+    assert.equal(contract.rollback.ownership, 'exact-owned');
+    assert.equal(contract.rollback.invalidatesGeneration, true);
+    assert.equal(contract.rollback.refuseModified, true);
+    if (expected[runtime].liveProofMode === 'qualifying') {
+      assert.deepEqual([...contract.liveProof.qualifyingEventClasses].sort(), expected[runtime].qualifying.slice().sort());
+      assert.equal(contract.liveProof.requiredSequence, undefined);
+    } else {
+      assert.deepEqual(contract.liveProof.requiredSequence, expected[runtime].sequence);
+      assert.equal(contract.liveProof.qualifyingEventClasses, undefined);
+    }
+    const against = validateManagedActivationAgainstStewardship(contract, manifest.stewardshipAdapter, manifest.id);
+    assert.equal(against.ok, true, `${runtime}: ${against.errors.join('; ')}`);
+    const manifestValidation = validateManifest(manifest);
+    assert.equal(manifestValidation.ok, true, `${runtime}: ${manifestValidation.errors.join('; ')}`);
+  }
+});
+
+test('managed activation rejects jarvosStartsProcess true and contradictory lifecycle mappings', () => {
+  const codex = manifestFor('codex');
+  const starts = validateManagedActivationContract({
+    ...codex.managedActivation,
+    backgroundProcess: { owner: 'none', jarvosStartsProcess: true },
+  });
+  assert.equal(starts.ok, false);
+  assert.match(starts.errors.join('\n'), /jarvosStartsProcess/);
+
+  const missingSession = JSON.parse(JSON.stringify(codex.stewardshipAdapter));
+  delete missingSession.capabilities.startOrResume;
+  missingSession.bootstrap.actions = missingSession.bootstrap.actions.filter((action) => action !== 'session-start' && action !== 'harness-launch');
+  const noSession = validateManagedActivationAgainstStewardship(codex.managedActivation, missingSession, 'codex');
+  assert.equal(noSession.ok, false);
+  assert.match(noSession.errors.join('\n'), /session/);
+
+  const badTurnEvent = JSON.parse(JSON.stringify(codex.stewardshipAdapter));
+  badTurnEvent.capabilities.heartbeat = {
+    mode: 'native-hook',
+    event: 'SessionStart',
+    script: 'jarvos-session-turn-hook.js',
+  };
+  const contradicted = validateManagedActivationAgainstStewardship(codex.managedActivation, badTurnEvent, 'codex');
+  assert.equal(contradicted.ok, false);
+  assert.match(contradicted.errors.join('\n'), /contradict|turn|session/i);
+});
+
+test('Claude managed activation stays on canonical claude even when stewardship uses claude-code', () => {
+  const manifest = manifestFor('claude');
+  assert.equal(manifest.id, 'claude');
+  assert.equal(manifest.stewardshipAdapter.harness, 'claude-code');
+  assert.equal(normalizeHarnessId(manifest.stewardshipAdapter.harness), 'claude');
+  assert.equal(manifest.managedActivation.harness, 'claude');
+  const validated = validateManagedActivationContract(manifest.managedActivation);
+  assert.equal(validated.ok, true, validated.errors.join('; '));
+  assert.equal(validated.value.harness, 'claude');
+  const against = validateManagedActivationAgainstStewardship(
+    manifest.managedActivation,
+    manifest.stewardshipAdapter,
+    manifest.id,
+  );
+  assert.equal(against.ok, true, against.errors.join('; '));
 });
 
 function runTurnHook(runtime, env, input) {
