@@ -9,6 +9,7 @@
  * - never enables launchd/systemd
  * - never sets remoteModelProbe=true
  * - never prints private skill bodies
+ * - never passes write/activation flags to managed-activation status
  *
  * Default mode prints a machine-readable checklist with pass/fail/pending
  * evidence from local package gates only.
@@ -146,11 +147,48 @@ model probes; use the installed-runtime activation procedure after merge.
     fs.rmSync(tmp, { recursive: true, force: true });
   }
 
-  // 5) Owner-only live steps remain pending by design
+  // 5) Read-only managed activation status (no owner evidence, no write/activation flags)
+  const activation = run(process.execPath, [
+    path.join(REPO_ROOT, 'modules/jarvos-runtime-kit/scripts/jarvos-runtime-kit.js'),
+    'activation-status',
+    'all',
+    '--json',
+  ]);
+  let activationBody = null;
+  try { activationBody = JSON.parse(activation.stdout); } catch { activationBody = null; }
+  if (!activation.ok || !activationBody || activationBody.ok !== true || !Array.isArray(activationBody.results)) {
+    items.push(item(
+      'runtime-activation',
+      'fail',
+      'runtime-kit activation-status all failed',
+      { exitCode: activation.status },
+    ));
+  } else {
+    // Pending/unconfigured states are informational and non-blocking. Only the
+    // closed redacted public status array is retained in evidence.
+    const statuses = activationBody.results.map((status) => ({
+      schemaVersion: status.schemaVersion,
+      harness: status.harness,
+      state: status.state,
+      generationDigest: status.generationDigest,
+      evidenceClasses: status.evidenceClasses,
+      freshThrough: status.freshThrough,
+      reasons: status.reasons,
+      evaluatedAt: status.evaluatedAt,
+    }));
+    items.push(item(
+      'runtime-activation',
+      'info',
+      'managed activation status is informational (no owner live proof in package preflight)',
+      { statuses, activating: false, readOnly: true },
+    ));
+  }
+
+  // 6) Owner-only live steps remain pending by design
   items.push(item(
     'claude-interactive-probe',
     'pending_owner',
-    'Claude verificationTier is interactive-smoke; authorize a remote model probe only on the owner machine',
+    'Claude verification tier is interactive-smoke; authorize a remote model probe only on the owner machine',
     { remoteModelProbe: false, liveGates: 'off' },
   ));
   items.push(item(

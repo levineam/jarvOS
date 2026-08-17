@@ -79,6 +79,20 @@ function controlPlane(operation, input = {}, options = {}) {
   return loadControlPlaneManager().createControlPlaneService(options).execute(operation, input);
 }
 
+function runtimeActivationStatus(input = {}, env = process.env) {
+  const runtimeKit = loadRuntimeRouteContract();
+  if (!runtimeKit || typeof runtimeKit.getManagedActivationStatus !== 'function') {
+    return { ok: false, error: 'activation_status_unavailable' };
+  }
+  const configuredEvidencePath = firstString(env.JARVOS_MANAGED_ACTIVATION_EVIDENCE_FILE);
+  return runtimeKit.getManagedActivationStatus({
+    runtime: firstString(input.runtime) || 'all',
+    root: JARVOS_ROOT,
+    evidencePath: configuredEvidencePath || undefined,
+    now: Date.now(),
+  });
+}
+
 function expandTilde(value) {
   if (typeof value !== 'string') return value;
   if (value === '~') return os.homedir();
@@ -1645,6 +1659,7 @@ module.exports = {
   PROJECTS_CONTEXT_CUTOVER_ENV,
   HYDRATION_PROJECTS_PROVIDER,
   controlPlane,
+  runtimeActivationStatus,
   loadControlPlaneManager,
   loadSharedSkills,
   createNote,

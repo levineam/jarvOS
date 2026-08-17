@@ -37,6 +37,12 @@ The bundled stdio MCP server exposes:
 `@jarvos/control-plane` as a runtime dependency so this boundary resolves from
 an installed package, not from a repository-relative path.
 
+The authenticated `jarvos_control_plane` operation `activation-status` returns
+the same closed, redacted managed-harness status as `@jarvos/runtime-kit`.
+Owner-local evidence is supplied only through the host-bound
+`JARVOS_MANAGED_ACTIVATION_EVIDENCE_FILE`; agents cannot choose a path, submit
+receipts, start a harness, or promote activation through this read surface.
+
 ## Projects context
 
 Projects is the assistant-facing source of truth for project and outcome identity,

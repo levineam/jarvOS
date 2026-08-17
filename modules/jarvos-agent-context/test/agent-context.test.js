@@ -984,6 +984,29 @@ test('control-plane MCP tool never takes a model-visible credential', () => {
   assert.ok(!(controlPlaneTool.inputSchema.required || []).includes('credential'));
   assert.ok(!('credential' in (controlPlaneTool.inputSchema.properties || {})));
   assert.deepEqual(controlPlaneTool.inputSchema.required, ['operation']);
+  assert.ok(controlPlaneTool.inputSchema.properties.operation.enum.includes('activation-status'));
+  assert.equal(controlPlaneTool.inputSchema.properties.runtime.enum.includes('all'), true);
+});
+
+test('control-plane MCP exposes the same closed activation status without a model-visible evidence path', async () => {
+  await withControlPlaneHost(async () => {
+    const result = await callTool('jarvos_control_plane', {
+      operation: 'activation-status',
+      runtime: 'all',
+    });
+    assert.equal(result.isError, false, result.content?.[0]?.text);
+    const body = JSON.parse(result.content[0].text);
+    assert.equal(body.ok, true);
+    assert.deepEqual(body.results.map((status) => status.harness), ['claude', 'codex', 'hermes', 'openclaw']);
+    for (const status of body.results) {
+      assert.equal(status.schemaVersion, 'jarvos-managed-activation-status/v1');
+      assert.notEqual(status.state, 'active');
+      assert.equal(Object.prototype.hasOwnProperty.call(status, 'sessionId'), false);
+      assert.equal(Object.prototype.hasOwnProperty.call(status, 'privatePath'), false);
+    }
+    const schema = TOOLS.find((tool) => tool.name === 'jarvos_control_plane').inputSchema.properties;
+    assert.equal(Object.prototype.hasOwnProperty.call(schema, 'evidencePath'), false);
+  });
 });
 
 test('Codex setup registers only credential file path, never the secret value', () => {

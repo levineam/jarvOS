@@ -6,18 +6,26 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const test = require('node:test');
-
+const crypto = require('crypto');
 const {
   COMPOUND_ENGINEERING_CAPABILITY_VERSION,
+  MANAGED_ACTIVATION_RECEIPT_VERSION,
+  MANAGED_ACTIVATION_PRODUCER_EVENTS,
+  MANAGED_ACTIVATION_STATUS_VERSION,
+  buildSelectedTuple,
   checkRuntime,
   checkCompoundEngineeringCapability,
   classifyCompoundEngineeringProvider,
   computeCompoundEngineeringFixtureDigest,
+  evaluateManagedActivation,
+  getManagedActivationStatus,
   inspectCompoundEngineeringProvider,
   validateCodexConformanceReceipt,
   listRuntimeManifests,
   loadCompoundEngineeringCapability,
+  loadOwnerEvidence,
   scaffoldRuntime,
+  toPublicActivationStatus,
   validateCompoundEngineeringCapability,
   validateManifest,
 } = require('../src/index.js');
@@ -883,4 +891,312 @@ test('shipped shared-skill adapters declare a complete projection contract', () 
     assert.equal(manifest.skillProjection.renderer, 'raw-skill-bundle');
     assert.ok(['exact-path', 'interactive-smoke'].includes(manifest.skillProjection.verificationTier));
   }
+});
+
+function writeOwnerEvidenceFile(filePath, body) {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true, mode: 0o700 });
+  fs.chmodSync(path.dirname(filePath), 0o700);
+  fs.writeFileSync(filePath, body, { encoding: 'utf8', mode: 0o600 });
+  fs.chmodSync(filePath, 0o600);
+}
+
+function digestOf(value) {
+  return crypto.createHash('sha256').update(value).digest('hex');
+}
+
+test('registration health or missing evidence cannot activate OpenClaw', () => {
+  const now = Date.parse('2026-08-16T12:00:00.000Z');
+  const missing = getManagedActivationStatus({
+    runtime: 'openclaw',
+    root: ROOT,
+    now,
+  });
+  assert.equal(missing.ok, true);
+  assert.equal(missing.status.state, 'unconfigured');
+  assert.notEqual(missing.status.state, 'active');
+
+  const healthOnly = getManagedActivationStatus({
+    runtime: 'openclaw',
+    root: ROOT,
+    now,
+    evidence: {
+      schemaVersion: 'jarvos-managed-activation-owner-evidence/v1',
+      harnesses: {
+        openclaw: {
+          configured: true,
+          prepared: true,
+          health: { available: true, healthy: true },
+          rollback: { status: 'none' },
+        },
+      },
+    },
+  });
+  assert.equal(healthOnly.status.state, 'prepared');
+  assert.notEqual(healthOnly.status.state, 'active');
+
+  const registeredWithoutLive = getManagedActivationStatus({
+    runtime: 'openclaw',
+    root: ROOT,
+    now,
+    evidence: {
+      schemaVersion: 'jarvos-managed-activation-owner-evidence/v1',
+      harnesses: {
+        openclaw: {
+          configured: true,
+          prepared: true,
+          generation: 'openclaw-gen-1',
+          // paths omitted → attestation unavailable; registration alone is not live proof
+          health: { available: true, healthy: true },
+          challenges: [{ correlation: 'openclaw-challenge-1', harness: 'openclaw', baselineAt: '2026-08-16T11:50:00.000Z' }],
+          receipts: [],
+          rollback: { status: 'none' },
+        },
+      },
+    },
+  });
+  assert.ok(['prepared', 'awaiting_live_proof'].includes(registeredWithoutLive.status.state));
+  assert.notEqual(registeredWithoutLive.status.state, 'active');
+});
+
+test('Hermes requires the ordered session then turn sequence for activation', () => {
+  const now = Date.parse('2026-08-16T12:00:00.000Z');
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-activation-hermes-')));
+  fs.chmodSync(root, 0o700);
+  try {
+    const asset = path.join(root, 'asset.js');
+    const entry = path.join(root, 'entry.js');
+    const config = path.join(root, 'config.json');
+    writeOwnerEvidenceFile(asset, 'hermes-asset');
+    writeOwnerEvidenceFile(entry, 'hermes-entry');
+    writeOwnerEvidenceFile(config, '{"hermes":true}');
+    const generation = 'hermes-gen-1';
+    const tuple = buildSelectedTuple({
+      harness: 'hermes',
+      generation,
+      assetDigest: digestOf('hermes-asset'),
+      entrypointDigest: digestOf('hermes-entry'),
+      configBindingDigest: digestOf('{"hermes":true}'),
+    });
+    const session = {
+      schemaVersion: MANAGED_ACTIVATION_RECEIPT_VERSION,
+      harness: 'hermes',
+      correlation: 'hermes-challenge-1',
+      eventClass: 'session',
+      producer: 'selected-runtime-bridge',
+      producerEvent: MANAGED_ACTIVATION_PRODUCER_EVENTS.hermes.session,
+      tupleDigest: tuple.tupleDigest,
+      producedAt: '2026-08-16T11:54:00.000Z',
+    };
+    const turn = {
+      schemaVersion: MANAGED_ACTIVATION_RECEIPT_VERSION,
+      harness: 'hermes',
+      correlation: 'hermes-challenge-1',
+      eventClass: 'turn',
+      producer: 'selected-runtime-bridge',
+      producerEvent: MANAGED_ACTIVATION_PRODUCER_EVENTS.hermes.turn,
+      tupleDigest: tuple.tupleDigest,
+      producedAt: '2026-08-16T11:55:00.000Z',
+    };
+    const baseHarness = {
+      configured: true,
+      prepared: true,
+      generation,
+      assetPaths: [asset],
+      entrypointPath: entry,
+      configBindingPath: config,
+      challenges: [{ correlation: 'hermes-challenge-1', harness: 'hermes', baselineAt: '2026-08-16T11:50:00.000Z' }],
+      health: { available: false },
+      rollback: { status: 'none' },
+    };
+
+    const incomplete = getManagedActivationStatus({
+      runtime: 'hermes',
+      root: ROOT,
+      now,
+      evidence: {
+        schemaVersion: 'jarvos-managed-activation-owner-evidence/v1',
+        harnesses: { hermes: { ...baseHarness, receipts: [session] } },
+      },
+    });
+    assert.equal(incomplete.status.state, 'awaiting_live_proof');
+
+    const ordered = getManagedActivationStatus({
+      runtime: 'hermes',
+      root: ROOT,
+      now,
+      evidence: {
+        schemaVersion: 'jarvos-managed-activation-owner-evidence/v1',
+        harnesses: { hermes: { ...baseHarness, receipts: [session, turn] } },
+      },
+    });
+    assert.equal(ordered.status.state, 'active');
+
+    const outOfOrder = getManagedActivationStatus({
+      runtime: 'hermes',
+      root: ROOT,
+      now,
+      evidence: {
+        schemaVersion: 'jarvos-managed-activation-owner-evidence/v1',
+        harnesses: {
+          hermes: {
+            ...baseHarness,
+            receipts: [
+              { ...turn, producedAt: '2026-08-16T11:54:00.000Z' },
+              { ...session, producedAt: '2026-08-16T11:55:00.000Z' },
+            ],
+          },
+        },
+      },
+    });
+    assert.notEqual(outOfOrder.status.state, 'active');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('CLI and library activation-status are equivalent and public-safe', () => {
+  const now = Date.parse('2026-08-16T12:00:00.000Z');
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-activation-cli-')));
+  fs.chmodSync(root, 0o700);
+  const cli = path.join(ROOT, 'modules/jarvos-runtime-kit/scripts/jarvos-runtime-kit.js');
+  try {
+    const evidencePath = path.join(root, 'evidence.json');
+    const privatePath = '/Users/andrew/.jarvos/private/state/session-abc123';
+    const privateSession = 'session-abc-xyz-999';
+    const privateProcess = 'pid-4242';
+    const privateDiag = 'raw hook output: SessionStart failed at /tmp/private';
+    writeOwnerEvidenceFile(evidencePath, `${JSON.stringify({
+      schemaVersion: 'jarvos-managed-activation-owner-evidence/v1',
+      harnesses: {
+        codex: {
+          configured: true,
+          prepared: true,
+          privatePath,
+          sessionId: privateSession,
+          processId: privateProcess,
+          diagnostic: privateDiag,
+          health: { available: false },
+          rollback: { status: 'none' },
+        },
+      },
+    }, null, 2)}\n`);
+
+    const libraryAll = getManagedActivationStatus({
+      runtime: 'all',
+      root: ROOT,
+      evidencePath,
+      now,
+    });
+    assert.equal(libraryAll.ok, true);
+    assert.deepEqual(libraryAll.results.map((item) => item.harness), ['claude', 'codex', 'hermes', 'openclaw']);
+    const libraryCodex = libraryAll.results.find((item) => item.harness === 'codex');
+    assert.equal(libraryCodex.state, 'prepared');
+    assert.equal(libraryCodex.schemaVersion, MANAGED_ACTIVATION_STATUS_VERSION);
+
+    const cliJson = spawnSync(process.execPath, [
+      cli, 'activation-status', 'all', '--evidence', evidencePath, '--test-now', String(now), '--json',
+    ], {
+      cwd: ROOT,
+      encoding: 'utf8',
+      env: { ...process.env, JARVOS_MANAGED_ACTIVATION_TEST_MODE: '1' },
+    });
+    assert.equal(cliJson.status, 0, cliJson.stderr || cliJson.stdout);
+    const cliResult = JSON.parse(cliJson.stdout);
+    assert.deepEqual(
+      JSON.parse(JSON.stringify(cliResult)),
+      JSON.parse(JSON.stringify(libraryAll)),
+    );
+
+    const encoded = JSON.stringify(cliResult);
+    assert.equal(encoded.includes(privatePath), false);
+    assert.equal(encoded.includes(privateSession), false);
+    assert.equal(encoded.includes(privateProcess), false);
+    assert.equal(encoded.includes(privateDiag), false);
+    assert.equal(encoded.includes('/Users/'), false);
+    assert.equal(encoded.includes('sessionId'), false);
+    assert.equal(encoded.includes('processId'), false);
+    assert.equal(encoded.includes('privatePath'), false);
+
+    const human = spawnSync(process.execPath, [
+      cli, 'activation-status', 'codex', '--evidence', evidencePath, '--test-now', String(now),
+    ], {
+      cwd: ROOT,
+      encoding: 'utf8',
+      env: { ...process.env, JARVOS_MANAGED_ACTIVATION_TEST_MODE: '1' },
+    });
+    assert.equal(human.status, 0, human.stderr || human.stdout);
+    assert.match(human.stdout, /codex/);
+    assert.match(human.stdout, /prepared/);
+    assert.doesNotMatch(human.stdout, /\/Users\//);
+    assert.doesNotMatch(human.stdout, /session-abc/);
+
+    // Library evaluation must match evaluateManagedActivation + toPublicActivationStatus.
+    const manifest = JSON.parse(fs.readFileSync(path.join(ROOT, 'runtimes/codex/adapter.json'), 'utf8'));
+    const loaded = loadOwnerEvidence(evidencePath);
+    assert.equal(loaded.ok, true);
+    const evaluated = evaluateManagedActivation({
+      contract: manifest.managedActivation,
+      evidence: {
+        configured: true,
+        prepared: true,
+        attestation: { ok: false, reasonCode: 'attestation_unavailable' },
+        challenges: [],
+        receipts: [],
+        health: { available: false },
+        rollback: { status: 'none' },
+      },
+      now,
+    });
+    assert.deepEqual(
+      JSON.parse(JSON.stringify(toPublicActivationStatus(evaluated))),
+      JSON.parse(JSON.stringify(libraryCodex)),
+    );
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('activation-status is read-only and never claims active without evidence', () => {
+  const cli = path.join(ROOT, 'modules/jarvos-runtime-kit/scripts/jarvos-runtime-kit.js');
+  const before = listRuntimeManifests(ROOT).map((filePath) => ({
+    filePath,
+    body: fs.readFileSync(filePath, 'utf8'),
+  }));
+  const result = spawnSync(process.execPath, [cli, 'activation-status', 'all', '--json'], {
+    cwd: ROOT,
+    encoding: 'utf8',
+    env: { ...process.env, JARVOS_MANAGED_ACTIVATION_NOW: '0' },
+  });
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  const payload = JSON.parse(result.stdout);
+  assert.equal(payload.ok, true);
+  assert.equal(payload.results.length, 4);
+  for (const status of payload.results) {
+    assert.notEqual(status.state, 'active');
+    assert.ok(['unconfigured', 'prepared', 'awaiting_live_proof', 'degraded', 'rollback_pending', 'rolled_back'].includes(status.state));
+    assert.ok(Date.parse(status.evaluatedAt) > Date.parse('2020-01-01T00:00:00.000Z'));
+  }
+  for (const entry of before) {
+    assert.equal(fs.readFileSync(entry.filePath, 'utf8'), entry.body);
+  }
+
+  const forbiddenTestClock = spawnSync(process.execPath, [
+    cli, 'activation-status', 'all', '--test-now', '0', '--json',
+  ], { cwd: ROOT, encoding: 'utf8' });
+  assert.notEqual(forbiddenTestClock.status, 0);
+  assert.match(forbiddenTestClock.stderr, /explicit managed-activation test mode/);
+});
+
+test('activation-status rejects a relative evidence path instead of resolving it from cwd', () => {
+  const result = getManagedActivationStatus({
+    runtime: 'codex',
+    root: ROOT,
+    evidencePath: 'owner-evidence.json',
+    now: Date.parse('2026-08-16T12:00:00.000Z'),
+  });
+  assert.deepEqual(result, {
+    ok: false,
+    error: 'evidence_unreadable',
+    results: [],
+  });
 });
