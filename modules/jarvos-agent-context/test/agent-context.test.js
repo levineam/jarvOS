@@ -584,6 +584,7 @@ test('MCP tool list includes jarvOS tools', () => {
   const shared = TOOLS.find((tool) => tool.name === 'jarvos_shared_skills');
   assert.deepEqual(shared.inputSchema.properties.operation.enum, [
     'status', 'explain', 'inventory', 'plan', 'repair', 'exclude', 'include',
+    'decisions', 'explain-decision', 'resolve-decision',
   ]);
   assert.equal('credential' in shared.inputSchema.properties, false);
 });

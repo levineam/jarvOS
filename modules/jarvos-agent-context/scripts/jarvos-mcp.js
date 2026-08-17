@@ -146,8 +146,12 @@ const TOOLS = [
       required: ['operation'],
       additionalProperties: false,
       properties: {
-        operation: { type: 'string', enum: ['status', 'explain', 'inventory', 'plan', 'repair', 'exclude', 'include'] },
+        operation: { type: 'string', enum: ['status', 'explain', 'inventory', 'plan', 'repair', 'exclude', 'include', 'decisions', 'explain-decision', 'resolve-decision'] },
         id: { type: 'string', description: 'Owner-known canonical skill id for explain, exclude, or include.' },
+        decisionId: { type: 'string', description: 'Owner-visible decision reference for decision operations.' },
+        decisionReference: { type: 'string', description: 'Opaque transport correlation reference for an owner decision.' },
+        revision: { type: 'number', description: 'Current decision revision for a resolution.' },
+        option: { type: 'string', description: 'One option listed by explain-decision.' },
         reasonCode: { type: 'string', description: 'Optional exclusion reason code.' },
       },
     },
@@ -587,6 +591,30 @@ async function callTool(name, args = {}) {
     }
     if (operation === 'include') {
       return textResult(JSON.stringify(redactSharedSkillMutation(skills.includeSkillOperator({ configPath, id: args.id }), skills.opaqueSkillId), null, 2));
+    }
+    const principal = { kind: 'owner', capabilities: ['skills.decisions.read', 'skills.decisions.resolve'] };
+    if (operation === 'decisions') {
+      return textResult(JSON.stringify(skills.decisionsOperator({ configPath, principal }), null, 2));
+    }
+    if (operation === 'explain-decision') {
+      return textResult(JSON.stringify(skills.explainDecisionOperator({ configPath, principal, decisionId: args.decisionId, decisionReference: args.decisionReference }), null, 2));
+    }
+    if (operation === 'resolve-decision') {
+      // The decision store verifies the source digest immediately before this
+      // callback. Details is intentionally a no-op; exclusion is delegated to
+      // the established single-skill operator, never a caller-provided path.
+      const inventory = skills.inventoryAssessOperator({ configPath, persist: false, includeDocument: true });
+      const decision = skills.explainDecisionOperator({ configPath, principal, decisionId: args.decisionId, decisionReference: args.decisionReference }).decision;
+      const currentSkill = (inventory.document?.skills || []).find((skill) => skill.logicalId === decision?.skill) || null;
+      const result = skills.resolveDecisionOperator({
+        configPath, principal, decisionId: args.decisionId, decisionReference: args.decisionReference, revision: args.revision, option: args.option, currentSkill,
+        mutate: ({ skill, option }) => {
+          if (option === 'exclude') skills.excludeSkillOperator({ configPath, id: skill, reasonCode: 'owner_excluded' });
+          // share/keep-local record an authorized resolution; reconciliation
+          // performs projection only after the next assessment proves it safe.
+        },
+      });
+      return textResult(JSON.stringify(result, null, 2), result.status === 'invalid_option' || result.status === 'stale');
     }
     return textResult('unsupported shared-skill operation', true);
   }
