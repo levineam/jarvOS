@@ -103,6 +103,84 @@ function harnesses(roots) {
   return Object.entries(roots).map(([id, root]) => ({ id, root }));
 }
 
+test('dependency closure refreshes legacy receipts only after fresh desired/observed tuple equality', () => {
+  const control = temp('jarvos-closure-control-');
+  const sourceRoot = temp('jarvos-closure-source-');
+  const codex = temp('jarvos-closure-codex-');
+  try {
+    copyFixture(PUBLIC_FIXTURE, path.join(sourceRoot, 'public-fixture'));
+    const tree = computeBundleTree(path.join(sourceRoot, 'public-fixture'), { allowlist: ['SKILL.md', 'scripts/**', 'assets/**'] });
+    const effective = composeEffectiveCatalog({
+      publicCatalog: { schemaVersion: CATALOG_SCHEMA_VERSION, release: 'fixture-release', entries: [
+        { id: 'grilling', allowedHarnesses: ['codex'], bundle: { root: 'public-fixture', allowlist: ['SKILL.md', 'scripts/**', 'assets/**'], treeDigest: tree.treeDigest } },
+        { id: 'grill-me', allowedHarnesses: ['codex'], skillDependencies: ['grilling'], bundle: { root: 'public-fixture', allowlist: ['SKILL.md', 'scripts/**', 'assets/**'], treeDigest: tree.treeDigest } },
+      ] },
+      localOverlay: { schemaVersion: OVERLAY_SCHEMA_VERSION, entries: [] },
+    });
+    let plan = planCatalogReconciliation({ catalog: effective.catalog, catalogDigest: effective.digest, catalogRelease: 'fixture-release', publicSourceRoot: sourceRoot, harnesses: harnesses({ codex }), controlRoot: control, desiredSkills: { codex: ['grill-me'] } });
+    assert.deepEqual(plan.pairs.map((pair) => pair.id), ['grill-me', 'grilling']);
+    const tuples = plan.pairs.map((pair) => ({ id: pair.id, catalogRelease: pair.catalogRelease, treeDigest: pair.treeDigest }));
+    applyCatalogReconciliation(plan, { freshDiscovery: () => ({ fresh: true, source: 'fixture-native-session', tuples }) });
+    for (const id of ['grill-me', 'grilling']) {
+      const receipt = validateReceipt(readReceipt(codex, id));
+      assert.equal(receipt.status, 'model_visible');
+      assert.equal(receipt.desiredSetDigest, receipt.observedSetDigest);
+      assert.equal(receipt.dependencyComplete, true);
+    }
+    plan = planCatalogReconciliation({ catalog: effective.catalog, catalogDigest: effective.digest, catalogRelease: 'fixture-release', publicSourceRoot: sourceRoot, harnesses: harnesses({ codex }), controlRoot: control, desiredSkills: { codex: ['grill-me'] } });
+    assert.equal(plan.pairs.every((pair) => pair.status === 'clean'), true);
+    assert.equal(applyCatalogReconciliation(plan).noop, true);
+  } finally { for (const dir of [control, sourceRoot, codex]) fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('runtime prerequisites and mismatched fresh discovery never claim availability', () => {
+  const control = temp('jarvos-prereq-control-'); const sourceRoot = temp('jarvos-prereq-source-'); const codex = temp('jarvos-prereq-codex-');
+  try {
+    copyFixture(PUBLIC_FIXTURE, path.join(sourceRoot, 'public-fixture'));
+    const catalog = buildPublicCatalogFrom(sourceRoot).catalog;
+    catalog.entries[0].runtimePrerequisites = ['fixture-tool'];
+    const blocked = planCatalogReconciliation({ catalog, publicSourceRoot: sourceRoot, harnesses: harnesses({ codex }), controlRoot: control, verifyRuntimePrerequisite: () => ({ available: false }) });
+    assert.equal(blocked.pairs[0].status, 'verification_failed');
+    assert.equal(blocked.pairs[0].reason, 'runtime_prerequisite_unavailable');
+    const permitted = planCatalogReconciliation({ catalog, publicSourceRoot: sourceRoot, harnesses: harnesses({ codex }), controlRoot: control, verifyRuntimePrerequisite: () => true });
+    applyCatalogReconciliation(permitted, { freshDiscovery: () => ({ fresh: true, tuples: [] }) });
+    assert.equal(validateReceipt(readReceipt(codex, 'public-fixture')).status, 'verification_failed');
+  } finally { for (const dir of [control, sourceRoot, codex]) fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('an inactive harness records activation_pending without claiming discovery', () => {
+  const control = temp('jarvos-activation-control-'); const sourceRoot = temp('jarvos-activation-source-'); const codex = temp('jarvos-activation-codex-');
+  try {
+    copyFixture(PUBLIC_FIXTURE, path.join(sourceRoot, 'public-fixture'));
+    const effective = buildPublicCatalogFrom(sourceRoot);
+    const plan = planCatalogReconciliation({ catalog: effective.catalog, publicSourceRoot: sourceRoot, harnesses: harnesses({ codex }), controlRoot: control });
+    applyCatalogReconciliation(plan, { activationReceipt: () => ({ active: false, dependency: 'managed_harness_activation' }) });
+    const receipt = validateReceipt(readReceipt(codex, 'public-fixture'));
+    assert.equal(receipt.status, 'activation_pending');
+    assert.equal(receipt.discovery.activationDependency, 'managed_harness_activation');
+  } finally { for (const dir of [control, sourceRoot, codex]) fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('root-scoped desired state retires only clean receipt-owned orphan wrappers', () => {
+  const control = temp('jarvos-orphan-control-'); const sourceRoot = temp('jarvos-orphan-source-'); const codex = temp('jarvos-orphan-codex-');
+  try {
+    copyFixture(PUBLIC_FIXTURE, path.join(sourceRoot, 'public-fixture'));
+    const tree = computeBundleTree(path.join(sourceRoot, 'public-fixture'), { allowlist: ['SKILL.md', 'scripts/**', 'assets/**'] });
+    const catalog = composeEffectiveCatalog({ publicCatalog: { schemaVersion: CATALOG_SCHEMA_VERSION, entries: [
+      { id: 'grilling', allowedHarnesses: ['codex'], bundle: { root: 'public-fixture', allowlist: ['SKILL.md', 'scripts/**', 'assets/**'], treeDigest: tree.treeDigest } },
+      { id: 'grill-me', allowedHarnesses: ['codex'], skillDependencies: ['grilling'], bundle: { root: 'public-fixture', allowlist: ['SKILL.md', 'scripts/**', 'assets/**'], treeDigest: tree.treeDigest } },
+      { id: 'orphan-wrapper', allowedHarnesses: ['codex'], bundle: { root: 'public-fixture', allowlist: ['SKILL.md', 'scripts/**', 'assets/**'], treeDigest: tree.treeDigest } },
+    ] }, localOverlay: { schemaVersion: OVERLAY_SCHEMA_VERSION, entries: [] } }).catalog;
+    applyCatalogReconciliation(planCatalogReconciliation({ catalog, publicSourceRoot: sourceRoot, harnesses: harnesses({ codex }), controlRoot: control }));
+    const plan = planCatalogReconciliation({ catalog, publicSourceRoot: sourceRoot, harnesses: harnesses({ codex }), controlRoot: control, desiredSkills: { codex: ['grill-me'] } });
+    assert.equal(plan.pairs.find((pair) => pair.id === 'orphan-wrapper').action, 'retire');
+    assert.equal(plan.pairs.find((pair) => pair.id === 'grilling').action, 'preserve');
+    applyCatalogReconciliation(plan);
+    assert.equal(fs.existsSync(path.join(codex, 'orphan-wrapper')), false);
+    assert.equal(fs.existsSync(path.join(codex, 'grilling')), true);
+  } finally { for (const dir of [control, sourceRoot, codex]) fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
 test('collision alias prefers canonical, then reviewer, then deterministic fallback', () => {
   assert.equal(resolveCollisionAlias({ canonicalId: 'transcribe' }).effectiveName, 'transcribe');
   const candidates = safeAliasCandidates('transcribe', { occupiedNames: ['transcribe'] });
