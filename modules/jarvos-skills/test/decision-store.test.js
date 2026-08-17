@@ -6,7 +6,16 @@ const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
 
-const { reconcileDecisions, migrateV1Attention, listDecisions, explainDecision, resolveDecision, claimDelivery, acknowledgeDelivery } = require('../src/decision-store');
+const {
+  reconcileDecisions,
+  migrateV1Attention,
+  reconcileDecisionsWithMigration,
+  listDecisions,
+  explainDecision,
+  resolveDecision,
+  claimDelivery,
+  acknowledgeDelivery,
+} = require('../src/decision-store');
 
 function skill(overrides = {}) {
   return {
@@ -63,6 +72,48 @@ test('delivery outbox is write-ahead, bounded through fallback, and rejects forg
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
+test('a rejected prompt waits for the cooldown, retries once, then stalls safely', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-decision-rejected-delivery-'));
+  const statePath = path.join(root, 'decisions.json');
+  try {
+    const decision = reconcileDecisions({ statePath, skills: [skill()], observedAt: '2026-08-16T16:00:00.000Z' }).pending[0];
+    const initial = claimDelivery({ statePath, decisionId: decision.id, now: '2026-08-16T16:00:00.000Z' });
+    const principal = { kind: 'selected-runtime', capabilities: ['skills.delivery.ack'] };
+    const rejected = acknowledgeDelivery({ statePath, principal, decisionId: decision.id, revision: 1, attemptId: initial.attemptId, outcome: 'rejected' });
+    assert.equal(rejected.deliveryStatus, 'pending');
+    assert.equal(claimDelivery({ statePath, decisionId: decision.id, now: '2026-08-16T17:00:00.000Z' }), null);
+    const fallback = claimDelivery({ statePath, decisionId: decision.id, now: '2026-08-17T16:00:01.000Z' });
+    assert.equal(fallback.kind, 'fallback');
+    const stalled = acknowledgeDelivery({ statePath, principal, decisionId: decision.id, revision: 1, attemptId: fallback.attemptId, outcome: 'rejected' });
+    assert.equal(stalled.deliveryStatus, 'delivery_stalled');
+    assert.equal(claimDelivery({ statePath, decisionId: decision.id, now: '2026-08-18T16:00:01.000Z' }), null);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test('an abandoned claimed prompt becomes one bounded fallback instead of remaining claimed forever', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-decision-abandoned-delivery-'));
+  const statePath = path.join(root, 'decisions.json');
+  try {
+    const decision = reconcileDecisions({ statePath, skills: [skill()], observedAt: '2026-08-16T16:00:00.000Z' }).pending[0];
+    const initial = claimDelivery({ statePath, decisionId: decision.id, now: '2026-08-16T16:00:00.000Z' });
+    const fallback = claimDelivery({ statePath, decisionId: decision.id, now: '2026-08-17T16:00:01.000Z' });
+    assert.equal(fallback.kind, 'fallback');
+    assert.equal(initial.decisionReference, decision.decisionReference);
+    const later = claimDelivery({ statePath, decisionId: decision.id, now: '2026-08-18T16:00:02.000Z' });
+    assert.equal(later, null);
+    const persisted = listDecisions({ statePath, principal: owner() }).decisions;
+    assert.equal(persisted[0].deliveryStatus, 'delivery_stalled');
+    assert.throws(() => acknowledgeDelivery({
+      statePath,
+      principal: { kind: 'selected-runtime', capabilities: ['skills.delivery.ack'] },
+      decisionId: decision.id,
+      revision: decision.revision,
+      attemptId: fallback.attemptId,
+      outcome: 'accepted',
+    }), /delivery acknowledgement is stale/);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
 test('semantic source changes supersede rather than duplicate a pending decision, and details stays non-mutating', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-decision-supersede-'));
   const statePath = path.join(root, 'decisions.json');
@@ -116,6 +167,40 @@ test('v1 attention migration only carries still-actionable holds and is idempote
     assert.equal(replay.replay, true);
     assert.equal(replay.migrated, false);
     assert.equal(reconcileDecisions({ statePath, skills: [skill()] }).created.length, 0);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test('combined migration and reconciliation preserves one-pass decision results', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-decision-combined-'));
+  const statePath = path.join(root, 'decisions.json');
+  const attentionPath = path.join(root, 'attention.json');
+  try {
+    fs.writeFileSync(attentionPath, JSON.stringify({
+      schemaVersion: 'jarvos.skill-attention/v1',
+      active: [{ logicalId: 'newsletter-generator', reasonCode: 'needs_owner_input' }],
+    }), { mode: 0o600 });
+    const first = reconcileDecisionsWithMigration({
+      statePath,
+      attentionPath,
+      skills: [skill()],
+      observedAt: '2026-08-16T16:00:00.000Z',
+      generationId: 'g1',
+    });
+    assert.equal(first.migration.migrated, true);
+    assert.equal(first.migration.summary.migratedCount, 1);
+    assert.equal(first.created.length, 0);
+    assert.equal(first.pending.length, 1);
+
+    const replay = reconcileDecisionsWithMigration({
+      statePath,
+      attentionPath,
+      skills: [skill()],
+      observedAt: '2026-08-16T16:01:00.000Z',
+      generationId: 'g2',
+    });
+    assert.equal(replay.migration.replay, true);
+    assert.equal(replay.created.length, 0);
+    assert.equal(replay.pending.length, 1);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 

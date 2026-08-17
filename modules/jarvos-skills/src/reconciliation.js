@@ -644,6 +644,9 @@ function planCatalogReconciliation(options = {}) {
   // De-selection also retires a receipt-owned previous alias after an explicit
   // rename. Locally modified and unsafe copies remain preserved.
   for (const harness of harnesses) {
+    // A failed dependency closure is not a de-selection. Preserve existing
+    // receipt-owned targets until the closure can be evaluated safely.
+    if (closureFailures.has(harness.id)) continue;
     // The root's desired closure, not catalog membership elsewhere, owns
     // cleanup. This preserves a dependency needed by any retained wrapper.
     const selectedIds = new Set((closureByHarness.get(harness.id) || []).map((entry) => entry.id));

@@ -31,11 +31,15 @@ function optionsFor(skill) {
   const options = OPTION_SETS[skill?.disposition?.reasonCode] || OPTION_SETS.needs_owner_input;
   return [...options];
 }
+function reasonFor(skill) {
+  const reason = skill?.disposition?.reasonCode;
+  return Object.prototype.hasOwnProperty.call(OPTION_SETS, reason) ? reason : 'needs_owner_input';
+}
 function semanticKey(skill, options) {
   return digest({
     skill: skill.logicalId,
     treeDigest: skill.treeDigest,
-    reason: skill.disposition?.reasonCode || 'needs_owner_input',
+    reason: reasonFor(skill),
     policyVersion: 1,
     options,
   });
@@ -80,8 +84,8 @@ function findDecision(state, { decisionId, decisionReference } = {}) {
   return typeof decisionId === 'string' && decisionId ? state.decisions.find((item) => item.id === decisionId) : null;
 }
 
-function reconcileDecisions({ statePath, skills = [], observedAt, generationId } = {}) {
-  const state = load(statePath); const at = nowIso(observedAt); const created = [];
+function reconcileLoadedState(state, { skills = [], observedAt, generationId } = {}) {
+  const at = nowIso(observedAt); const created = [];
   const current = new Map(skills.filter(validSkill).map((skill) => [skill.logicalId, skill]));
   for (const decision of state.decisions) {
     if (decision.status !== 'pending') continue;
@@ -103,13 +107,23 @@ function reconcileDecisions({ statePath, skills = [], observedAt, generationId }
       // semantic id. It is random, base64url, and survives every retry for
       // this decision revision without disclosing the skill or source.
       decisionReference: crypto.randomBytes(18).toString('base64url'),
-      reason: skill.disposition.reasonCode || 'needs_owner_input', options, revision: 1, status: 'pending',
+      reason: reasonFor(skill), options, revision: 1, status: 'pending',
       deliveryStatus: 'pending', attempts: [], generationId: generationId || null, createdAt: at, updatedAt: at,
     };
     state.decisions.push(decision); created.push(publicDecision(decision));
   }
-  if (created.length || state.decisions.some((d) => d.updatedAt === at)) save(statePath, state);
-  return { created, pending: state.decisions.filter((d) => d.status === 'pending').map(publicDecision) };
+  return {
+    created,
+    pending: state.decisions.filter((d) => d.status === 'pending').map(publicDecision),
+    changed: created.length > 0 || state.decisions.some((d) => d.updatedAt === at),
+  };
+}
+
+function reconcileDecisions({ statePath, skills = [], observedAt, generationId } = {}) {
+  const state = load(statePath);
+  const result = reconcileLoadedState(state, { skills, observedAt, generationId });
+  if (result.changed) save(statePath, state);
+  return { created: result.created, pending: result.pending };
 }
 
 function legacyAttention(attentionPath) {
@@ -135,18 +149,45 @@ function migrateV1Attention({ statePath, attentionPath, skills = [], observedAt,
   if (!legacy) return { migrated: false, replay: false, summary: null };
   const eligible = new Map(skills.filter(validSkill).map((skill) => [`${skill.logicalId}:${skill.disposition.reasonCode}`, skill]));
   const current = legacy.map((item) => eligible.get(`${item.logicalId}:${item.reasonCode}`)).filter(Boolean);
-  const result = reconcileDecisions({ statePath, skills: current, observedAt, generationId });
+  const result = reconcileLoadedState(state, { skills: current, observedAt, generationId });
   const summary = {
     reference: `batch-${digest({ legacy: legacy.map((item) => item.fingerprint || digest({ id: item.logicalId, reason: item.reasonCode })).sort(), generationId: generationId || null }).slice(0, 24)}`,
     pendingCount: result.pending.length,
     migratedCount: result.created.length,
   };
-  // reconcileDecisions wrote the current state; reload to avoid dropping its
-  // decisions when recording the one-time migration receipt.
-  const next = load(statePath);
-  next.migrations = { ...next.migrations, attentionV1: { summary, migratedAt: nowIso(observedAt) } };
-  save(statePath, next);
+  state.migrations = { ...state.migrations, attentionV1: { summary, migratedAt: nowIso(observedAt) } };
+  save(statePath, state);
   return { migrated: true, replay: false, summary };
+}
+
+function reconcileDecisionsWithMigration({ statePath, attentionPath, skills = [], observedAt, generationId } = {}) {
+  const state = load(statePath);
+  let migration = { migrated: false, replay: false, summary: null };
+  let changed = false;
+
+  if (state.migrations?.attentionV1) {
+    migration = { migrated: false, replay: true, summary: state.migrations.attentionV1.summary };
+  } else {
+    const legacy = legacyAttention(attentionPath);
+    if (legacy) {
+      const eligible = new Map(skills.filter(validSkill).map((skill) => [`${skill.logicalId}:${skill.disposition.reasonCode}`, skill]));
+      const current = legacy.map((item) => eligible.get(`${item.logicalId}:${item.reasonCode}`)).filter(Boolean);
+      const migrated = reconcileLoadedState(state, { skills: current, observedAt, generationId });
+      const summary = {
+        reference: `batch-${digest({ legacy: legacy.map((item) => item.fingerprint || digest({ id: item.logicalId, reason: item.reasonCode })).sort(), generationId: generationId || null }).slice(0, 24)}`,
+        pendingCount: migrated.pending.length,
+        migratedCount: migrated.created.length,
+      };
+      state.migrations = { ...state.migrations, attentionV1: { summary, migratedAt: nowIso(observedAt) } };
+      migration = { migrated: true, replay: false, summary };
+      changed = true;
+    }
+  }
+
+  const decisions = reconcileLoadedState(state, { skills, observedAt, generationId });
+  if (decisions.changed) changed = true;
+  if (changed) save(statePath, state);
+  return { migration, created: decisions.created, pending: decisions.pending };
 }
 function listDecisions({ statePath, principal } = {}) {
   requireOwner(principal, 'skills.decisions.read');
@@ -177,13 +218,29 @@ function resolveDecision({ statePath, principal, decisionId, decisionReference, 
 function claimDelivery({ statePath, decisionId, now } = {}) {
   const state = load(statePath); const decision = state.decisions.find((item) => item.id === decisionId);
   if (!decision || decision.status !== 'pending' || decision.deliveryStatus === 'delivered' || decision.deliveryStatus === 'delivery_stalled') return null;
-  if (decision.attempts.some((attempt) => attempt.outcome === 'claimed')) return null;
   const at = new Date(nowIso(now)); const previous = decision.attempts.at(-1);
-  if (previous && at.getTime() - new Date(previous.claimedAt).getTime() < FALLBACK_MS) return null;
+  const active = decision.attempts.find((attempt) => attempt.outcome === 'claimed');
+  if (active) {
+    if (at.getTime() - new Date(active.claimedAt).getTime() < FALLBACK_MS) return null;
+    // A sender that disappeared after claiming an attempt must not strand the
+    // decision forever. Treat the abandoned claim as an ambiguous delivery;
+    // the first abandoned attempt may move to the one bounded fallback, while
+    // an abandoned fallback becomes stalled and waits for owner attention.
+    active.outcome = 'ambiguous';
+    active.outcomeAt = at.toISOString();
+    decision.deliveryStatus = decision.attempts.filter((item) => item.outcome !== 'claimed').length >= 2
+      ? 'delivery_stalled' : 'delivery_unknown';
+    decision.updatedAt = at.toISOString();
+    if (decision.deliveryStatus === 'delivery_stalled') {
+      save(statePath, state);
+      return null;
+    }
+  }
+  if (previous && previous.outcome !== 'claimed' && at.getTime() - new Date(previous.claimedAt).getTime() < FALLBACK_MS) return null;
   const kind = decision.attempts.length === 0 ? 'initial' : 'fallback';
   const attempt = { id: `attempt-${crypto.randomUUID()}`, kind, claimedAt: at.toISOString(), outcome: 'claimed' };
   decision.attempts.push(attempt); decision.deliveryStatus = 'claimed'; decision.updatedAt = at.toISOString(); save(statePath, state);
-  return { decisionId: decision.id, revision: decision.revision, attemptId: attempt.id, kind };
+  return { decisionId: decision.id, decisionReference: decision.decisionReference, revision: decision.revision, attemptId: attempt.id, kind };
 }
 function acknowledgeDelivery({ statePath, principal, decisionId, revision, attemptId, outcome, providerMessageId } = {}) {
   requireDeliveryPrincipal(principal);
@@ -191,7 +248,7 @@ function acknowledgeDelivery({ statePath, principal, decisionId, revision, attem
   const state = load(statePath); const decision = state.decisions.find((item) => item.id === decisionId);
   const attempt = decision?.attempts.find((item) => item.id === attemptId);
   if (!decision || decision.status !== 'pending' || decision.revision !== revision || !attempt || attempt.outcome !== 'claimed') throw new Error('delivery acknowledgement is stale');
-  attempt.outcome = outcome; if (typeof providerMessageId === 'string' && providerMessageId) attempt.providerMessageId = providerMessageId;
+  attempt.outcome = outcome; attempt.outcomeAt = new Date().toISOString(); if (typeof providerMessageId === 'string' && providerMessageId) attempt.providerMessageId = providerMessageId;
   decision.updatedAt = new Date().toISOString();
   if (outcome === 'accepted') decision.deliveryStatus = 'delivered';
   else if (decision.attempts.filter((item) => item.outcome !== 'claimed').length >= 2) decision.deliveryStatus = 'delivery_stalled';
@@ -199,4 +256,22 @@ function acknowledgeDelivery({ statePath, principal, decisionId, revision, attem
   save(statePath, state); return publicDecision(decision);
 }
 
-module.exports = { SCHEMA_VERSION, reconcileDecisions, migrateV1Attention, listDecisions, explainDecision, resolveDecision, claimDelivery, acknowledgeDelivery, semanticKey };
+function approvedShareMap({ statePath } = {}) {
+  return new Map(load(statePath).decisions
+    .filter((decision) => decision.status === 'resolved' && decision.receipt?.option === 'share')
+    .map((decision) => [decision.skill, { treeDigest: decision.treeDigest, decisionReference: decision.decisionReference }]));
+}
+
+module.exports = {
+  SCHEMA_VERSION,
+  reconcileDecisions,
+  migrateV1Attention,
+  reconcileDecisionsWithMigration,
+  listDecisions,
+  explainDecision,
+  resolveDecision,
+  claimDelivery,
+  acknowledgeDelivery,
+  approvedShareMap,
+  semanticKey,
+};

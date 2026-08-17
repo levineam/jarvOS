@@ -610,11 +610,26 @@ async function callTool(name, args = {}) {
         configPath, principal, decisionId: args.decisionId, decisionReference: args.decisionReference, revision: args.revision, option: args.option, currentSkill,
         mutate: ({ skill, option }) => {
           if (option === 'exclude') skills.excludeSkillOperator({ configPath, id: skill, reasonCode: 'owner_excluded' });
-          // share/keep-local record an authorized resolution; reconciliation
-          // performs projection only after the next assessment proves it safe.
+          if (option === 'keep-local') skills.excludeSkillOperator({ configPath, id: skill, reasonCode: 'owner_keep_local' });
+          // share is authorized by the resolved decision. The follow-up repair
+          // reads that receipt and admits only the same source digest.
         },
       });
-      return textResult(JSON.stringify(result, null, 2), result.status === 'invalid_option' || result.status === 'stale');
+      if (result.status !== 'resolved') {
+        return textResult(JSON.stringify(result, null, 2), result.status === 'invalid_option' || result.status === 'stale');
+      }
+      let postResolution = { status: 'pending' };
+      try {
+        const followup = skills.autonomousRepairOperator({ configPath });
+        postResolution = {
+          status: followup.ok && followup.mutationDenied !== true ? 'completed' : 'pending',
+          reason: followup.reason || null,
+        };
+      } catch {
+        // The durable resolution receipt is authoritative; a later scheduled
+        // repair can safely retry if this immediate follow-up is unavailable.
+      }
+      return textResult(JSON.stringify({ ...result, postResolution }, null, 2), false);
     }
     return textResult('unsupported shared-skill operation', true);
   }

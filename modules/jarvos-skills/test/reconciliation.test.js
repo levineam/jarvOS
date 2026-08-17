@@ -181,6 +181,98 @@ test('root-scoped desired state retires only clean receipt-owned orphan wrappers
   } finally { for (const dir of [control, sourceRoot, codex]) fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
+test('dependency closure failure preserves existing managed targets', () => {
+  const control = temp('jarvos-closure-failure-control-');
+  const sourceRoot = temp('jarvos-closure-failure-source-');
+  const codex = temp('jarvos-closure-failure-codex-');
+  try {
+    copyFixture(PUBLIC_FIXTURE, path.join(sourceRoot, 'public-fixture'));
+    const tree = computeBundleTree(path.join(sourceRoot, 'public-fixture'), { allowlist: ['SKILL.md', 'scripts/**', 'assets/**'] });
+    const prior = composeEffectiveCatalog({
+      publicCatalog: { schemaVersion: CATALOG_SCHEMA_VERSION, entries: [{
+        id: 'grill-me',
+        allowedHarnesses: ['codex'],
+        bundle: { root: 'public-fixture', allowlist: ['SKILL.md', 'scripts/**', 'assets/**'], treeDigest: tree.treeDigest },
+      }] },
+      localOverlay: { schemaVersion: OVERLAY_SCHEMA_VERSION, entries: [] },
+    }).catalog;
+    const firstPlan = planCatalogReconciliation({ catalog: prior, publicSourceRoot: sourceRoot, harnesses: harnesses({ codex }), controlRoot: control, desiredSkills: { codex: ['grill-me'] } });
+    const tuples = firstPlan.pairs.map((pair) => ({ id: pair.id, catalogRelease: pair.catalogRelease, treeDigest: pair.treeDigest }));
+    applyCatalogReconciliation(firstPlan, { freshDiscovery: () => ({ fresh: true, tuples }) });
+    const target = path.join(codex, 'grill-me');
+    assert.equal(fs.existsSync(target), true);
+    assert.equal(validateReceipt(readReceipt(codex, 'grill-me')).status, 'model_visible');
+
+    const broken = composeEffectiveCatalog({
+      publicCatalog: { schemaVersion: CATALOG_SCHEMA_VERSION, entries: [{
+        id: 'grill-me',
+        allowedHarnesses: ['codex'],
+        skillDependencies: ['grilling'],
+        bundle: { root: 'public-fixture', allowlist: ['SKILL.md', 'scripts/**', 'assets/**'], treeDigest: tree.treeDigest },
+      }] },
+      localOverlay: { schemaVersion: OVERLAY_SCHEMA_VERSION, entries: [] },
+    }).catalog;
+    const blockedPlan = planCatalogReconciliation({ catalog: broken, publicSourceRoot: sourceRoot, harnesses: harnesses({ codex }), controlRoot: control, desiredSkills: { codex: ['grill-me'] } });
+    assert.equal(blockedPlan.pairs[0].status, 'verification_failed');
+    assert.equal(blockedPlan.pairs[0].dependencyComplete, false);
+    assert.equal(blockedPlan.pairs[0].action, 'preserve');
+    applyCatalogReconciliation(blockedPlan);
+    assert.equal(fs.existsSync(target), true);
+    assert.equal(validateReceipt(readReceipt(codex, 'grill-me')).status, 'model_visible');
+  } finally { for (const dir of [control, sourceRoot, codex]) fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('missing, cyclic, excluded, and incompatible dependencies fail closed before projection', () => {
+  const cases = [
+    { name: 'missing', dependencies: { 'grill-me': ['grilling'] } },
+    { name: 'cycle', dependencies: { 'grill-me': ['grilling'], grilling: ['grill-me'] } },
+    { name: 'excluded', dependencies: { 'grill-me': ['grilling'] }, excluded: ['grilling'] },
+    { name: 'incompatible', dependencies: { 'grill-me': ['grilling'] }, grillingHarnesses: ['hermes'] },
+  ];
+  for (const fixture of cases) {
+    const control = temp(`jarvos-closure-${fixture.name}-control-`);
+    const sourceRoot = temp(`jarvos-closure-${fixture.name}-source-`);
+    const codex = temp(`jarvos-closure-${fixture.name}-codex-`);
+    try {
+      copyFixture(PUBLIC_FIXTURE, path.join(sourceRoot, 'public-fixture'));
+      const tree = computeBundleTree(path.join(sourceRoot, 'public-fixture'), { allowlist: ['SKILL.md', 'scripts/**', 'assets/**'] });
+      const entries = [{
+        id: 'grill-me',
+        allowedHarnesses: ['codex'],
+        skillDependencies: fixture.dependencies['grill-me'],
+        bundle: { root: 'public-fixture', allowlist: ['SKILL.md', 'scripts/**', 'assets/**'], treeDigest: tree.treeDigest },
+      }];
+      if (fixture.dependencies.grilling) entries.push({
+        id: 'grilling',
+        allowedHarnesses: fixture.grillingHarnesses || ['codex'],
+        skillDependencies: fixture.dependencies.grilling,
+        bundle: { root: 'public-fixture', allowlist: ['SKILL.md', 'scripts/**', 'assets/**'], treeDigest: tree.treeDigest },
+      });
+      const catalog = composeEffectiveCatalog({
+        publicCatalog: { schemaVersion: CATALOG_SCHEMA_VERSION, entries },
+        localOverlay: { schemaVersion: OVERLAY_SCHEMA_VERSION, entries: [] },
+      }).catalog;
+      const plan = planCatalogReconciliation({
+        catalog,
+        publicSourceRoot: sourceRoot,
+        harnesses: harnesses({ codex }),
+        controlRoot: control,
+        desiredSkills: { codex: ['grill-me'] },
+        excludedSkillIds: { codex: fixture.excluded || [] },
+      });
+      assert.equal(plan.pairs.length, 1, fixture.name);
+      assert.equal(plan.pairs[0].status, 'verification_failed', fixture.name);
+      assert.equal(plan.pairs[0].dependencyComplete, false, fixture.name);
+      assert.equal(plan.pairs[0].action, 'preserve', fixture.name);
+      const applied = applyCatalogReconciliation(plan);
+      assert.equal(applied.applied.some((item) => item.applied === true), false, fixture.name);
+      assert.equal(fs.existsSync(path.join(codex, 'grill-me')), false, fixture.name);
+    } finally {
+      for (const dir of [control, sourceRoot, codex]) fs.rmSync(dir, { recursive: true, force: true });
+    }
+  }
+});
+
 test('collision alias prefers canonical, then reviewer, then deterministic fallback', () => {
   assert.equal(resolveCollisionAlias({ canonicalId: 'transcribe' }).effectiveName, 'transcribe');
   const candidates = safeAliasCandidates('transcribe', { occupiedNames: ['transcribe'] });
