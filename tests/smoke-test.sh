@@ -8,6 +8,8 @@ BOOTSTRAP="$SCRIPT_DIR/bootstrap.js"
 TMPDIR_BASE="$(mktemp -d)"
 WORKSPACE="$TMPDIR_BASE/workspace"
 VAULT="$TMPDIR_BASE/vault"
+UNTRUSTED_BIN="$TMPDIR_BASE/node_modules/.bin"
+EXECUTION_MARKER="$TMPDIR_BASE/untrusted-openclaw-ran"
 
 cleanup() {
   rm -rf "$TMPDIR_BASE"
@@ -16,6 +18,16 @@ trap cleanup EXIT
 
 echo "→ Running bootstrap smoke test in $TMPDIR_BASE"
 
+# Model npm exec's workspace-local PATH prefix and ensure dependency probes do
+# not execute an attacker-controlled binary from node_modules/.bin.
+mkdir -p "$UNTRUSTED_BIN"
+cat > "$UNTRUSTED_BIN/openclaw" <<EOF
+#!/usr/bin/env bash
+touch "$EXECUTION_MARKER"
+exit 0
+EOF
+chmod +x "$UNTRUSTED_BIN/openclaw"
+
 # Run 1: non-interactive via env vars + --yes flag
 JARVOS_YES=1 \
 JARVOS_ASSISTANT_NAME=TestJarvis \
@@ -23,7 +35,13 @@ JARVOS_USER_NAME=TestUser \
 JARVOS_COACH_NAME=TestCoach \
 JARVOS_VAULT_PATH="$VAULT" \
 JARVOS_WORKSPACE_PATH="$WORKSPACE" \
-  node "$BOOTSTRAP" --yes
+  PATH="$UNTRUSTED_BIN:$PATH" node "$BOOTSTRAP" --yes
+
+if [ -e "$EXECUTION_MARKER" ]; then
+  echo "✗ Bootstrap executed an untrusted workspace-local openclaw binary"
+  exit 1
+fi
+echo "✓ Bootstrap ignored the untrusted workspace-local openclaw binary"
 
 # Run 2: verify idempotence — second run must also exit 0
 echo "→ Running bootstrap a second time (idempotence check)"
