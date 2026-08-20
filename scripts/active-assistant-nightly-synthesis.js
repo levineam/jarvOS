@@ -31,6 +31,7 @@ function ownerPath(target, { directory, fsImpl = fs } = {}) {
     throw bridgeError('active_assistant_runtime_path_invalid');
   }
   if (uid != null && stat.uid !== uid) throw bridgeError('active_assistant_runtime_owner_mismatch');
+  if ((stat.mode & 0o022) !== 0) throw bridgeError('active_assistant_runtime_permissions_unsafe');
   return stat;
 }
 
@@ -55,6 +56,7 @@ function resolveImplementationEntrypoint({
   const entrypoint = path.join(resolvedRuntime, IMPLEMENTATION_RELATIVE_PATH);
   const resolvedEntrypoint = fsImpl.realpathSync(entrypoint);
   if (resolvedEntrypoint !== entrypoint) throw bridgeError('active_assistant_runtime_path_invalid');
+  ownerPath(path.dirname(resolvedEntrypoint), { directory: true, fsImpl });
   ownerPath(resolvedEntrypoint, { directory: false, fsImpl });
   if (resolvedEntrypoint === fsImpl.realpathSync(__filename)) {
     throw bridgeError('active_assistant_runtime_recursion');
