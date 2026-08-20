@@ -41,7 +41,7 @@ const PROJECTS_PROJECTION_MODULE = path.join(
 const SIGNATURE = '— Edited by Jarvis';
 const DEFAULT_TIMEZONE = 'America/New_York';
 const LEGACY_SALIENCE_LINE_RE = /^-\s*📌\s*\*\(([^,]+),\s*(\d+)%\)\*\s*(.+)$/i;
-const JOURNAL_STATE_DIR = '.jarvos/journal-maintenance';
+const JOURNAL_STATE_DIR = 'journal-maintenance';
 
 function parseArgs(argv) {
   const out = {
@@ -173,7 +173,39 @@ function safeTimestamp(date = new Date()) {
 }
 
 function journalStateRoot(journalDir) {
-  return path.join(path.dirname(journalDir), JOURNAL_STATE_DIR);
+  const configured = process.env.JARVOS_JOURNAL_STATE_DIR;
+  if (configured) return path.resolve(resolveTilde(configured));
+
+  // Recovery snapshots contain the complete journal and must not live inside
+  // the vault, where sync/index/export tools can retain text the user deleted.
+  // Scope the local state by vault path so multiple vaults do not collide.
+  const stateHome = process.env.XDG_STATE_HOME
+    ? path.resolve(resolveTilde(process.env.XDG_STATE_HOME))
+    : path.join(process.env.HOME || os.homedir(), '.local', 'state');
+  const vaultId = contentHash(path.resolve(path.dirname(journalDir))).slice(0, 16);
+  return path.join(stateHome, 'jarvos', JOURNAL_STATE_DIR, vaultId);
+}
+
+function migrateLegacyJournalSnapshots(journalDir) {
+  const legacyRoot = path.join(path.dirname(journalDir), '.jarvos', JOURNAL_STATE_DIR);
+  const stateRoot = journalStateRoot(journalDir);
+  if (path.resolve(legacyRoot) === path.resolve(stateRoot) || !fs.existsSync(legacyRoot)) return;
+
+  fs.mkdirSync(stateRoot, { recursive: true, mode: 0o700 });
+  for (const name of ['state.json', 'known-good', 'audit-backups']) {
+    const source = path.join(legacyRoot, name);
+    const destination = path.join(stateRoot, name);
+    if (!fs.existsSync(source)) continue;
+    if (!fs.existsSync(destination)) fs.cpSync(source, destination, { recursive: true });
+    const secure = (candidate) => {
+      const stat = fs.statSync(candidate);
+      fs.chmodSync(candidate, stat.isDirectory() ? 0o700 : 0o600);
+      if (stat.isDirectory()) fs.readdirSync(candidate).forEach((entry) => secure(path.join(candidate, entry)));
+    };
+    secure(destination);
+    // Always remove the synced copy, including when local state already exists.
+    fs.rmSync(source, { recursive: true, force: true });
+  }
 }
 
 function journalStatePath(journalDir) {
@@ -200,8 +232,9 @@ function loadJournalState(journalDir) {
 
 function writeJournalState(journalDir, state) {
   const statePath = journalStatePath(journalDir);
-  fs.mkdirSync(path.dirname(statePath), { recursive: true });
-  fs.writeFileSync(statePath, `${JSON.stringify(state, null, 2)}\n`, 'utf8');
+  fs.mkdirSync(path.dirname(statePath), { recursive: true, mode: 0o700 });
+  fs.writeFileSync(statePath, `${JSON.stringify(state, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
+  fs.chmodSync(statePath, 0o600);
 }
 
 /**
@@ -1091,6 +1124,7 @@ function resolveJournalDir(config) {
 
 function syncOneDate(date, config, opts = {}) {
   const journalDir = resolveJournalDir(config);
+  if (!opts.dryRun) migrateLegacyJournalSnapshots(journalDir);
   const journalPath = path.join(journalDir, `${date}.md`);
   const existed = fs.existsSync(journalPath);
   const original = existed ? fs.readFileSync(journalPath, 'utf8') : '';
@@ -1127,8 +1161,9 @@ function syncOneDate(date, config, opts = {}) {
     }
     if (existed) {
       backupPath = auditBackupPath(journalDir, date, backupReason);
-      fs.mkdirSync(path.dirname(backupPath), { recursive: true });
-      fs.writeFileSync(backupPath, original, 'utf8');
+      fs.mkdirSync(path.dirname(backupPath), { recursive: true, mode: 0o700 });
+      fs.writeFileSync(backupPath, original, { encoding: 'utf8', mode: 0o600 });
+      fs.chmodSync(backupPath, 0o600);
     }
     mutationReceipt = mutate({
       filePath: journalPath,
@@ -1206,8 +1241,9 @@ function syncOneDate(date, config, opts = {}) {
 
   if (!opts.dryRun && acknowledged && (healthAfter.status === 'healthy' || authoredContentIntact)) {
     const updatedKnownGoodPath = knownGoodPath(journalDir, date);
-    fs.mkdirSync(path.dirname(updatedKnownGoodPath), { recursive: true });
-    fs.writeFileSync(updatedKnownGoodPath, effectiveContent, 'utf8');
+    fs.mkdirSync(path.dirname(updatedKnownGoodPath), { recursive: true, mode: 0o700 });
+    fs.writeFileSync(updatedKnownGoodPath, effectiveContent, { encoding: 'utf8', mode: 0o600 });
+    fs.chmodSync(updatedKnownGoodPath, 0o600);
     const metrics = journalMetrics(effectiveContent, config);
     state.version = 1;
     state.dates = state.dates || {};
