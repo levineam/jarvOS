@@ -6,6 +6,28 @@ const { spawnSync } = require('node:child_process');
 const { createHash } = require('node:crypto');
 const fs = require('node:fs'); const path = require('node:path');
 
+const PUBLIC_TEXT = /(?:[\r\n\u0000-\u001f\u007f]|(?:^|[\s("'`])(?:\/|~\/|[A-Za-z]:[\\/])|https?:\/\/|\b(?:api[ _-]?key|secret|password|token|credential|bearer)\b|\b(?:paperclip|beads|agent mail|transcript)\b|\b(?:issue|ticket)\s*(?:#|:)?\s*\d+\b|\b(?:private[- ]?router|local[- ]?route|route target)\b)/i;
+const CORRELATION = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
+
+function isPublicText(value, maxLength) {
+  return typeof value === 'string' && value.length > 0 && value.length <= maxLength
+    && value.trim() === value && /[A-Za-z]/.test(value) && !PUBLIC_TEXT.test(value);
+}
+
+function isSafeBridgeResponse(value) {
+  const expected = ['available', 'choices', 'correlation', 'default', 'pendingInSessionInput', 'prompt'];
+  const keys = value && typeof value === 'object' && !Array.isArray(value) ? Object.keys(value).sort() : [];
+  return keys.length === expected.length && keys.every((key, index) => key === expected[index])
+    && value.available === true && value.pendingInSessionInput === true
+    && isPublicText(value.prompt, 600)
+    && Array.isArray(value.choices) && value.choices.length >= 2 && value.choices.length <= 3
+    && value.choices.every((choice) => isPublicText(choice, 160))
+    && new Set(value.choices).size === value.choices.length
+    && isPublicText(value.default, 160) && value.choices.includes(value.default)
+    && typeof value.correlation === 'string' && CORRELATION.test(value.correlation)
+    && !PUBLIC_TEXT.test(value.correlation);
+}
+
 function sessionToken(event, context) {
   // In OpenClaw 2026.7.1, agent_turn_prepare receives prompt/messages in the
   // event and carries the active session identity on the typed hook context.
@@ -33,9 +55,7 @@ function nextTurnContext(event, config, context) {
   if (result.status !== 0) return null;
   try {
     const value = JSON.parse(result.stdout || '{}');
-    if (value.available !== true || value.pendingInSessionInput !== true || typeof value.prompt !== 'string'
-      || !Array.isArray(value.choices) || value.choices.length < 2 || value.choices.length > 3
-      || typeof value.default !== 'string' || typeof value.correlation !== 'string') return null;
+    if (!isSafeBridgeResponse(value)) return null;
     return ['jarvOS stewardship preference request:', `Question: ${value.prompt}`, 'Choices:',
       ...value.choices.map((choice, index) => `${index + 1}. ${choice}${choice === value.default ? ' (default)' : ''}`),
       `Correlation: ${value.correlation}`,
