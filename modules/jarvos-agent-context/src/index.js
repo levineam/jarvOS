@@ -1171,10 +1171,29 @@ function collectLinkedNotes(journalContent, jarvosPaths, options = {}, report) {
   return notes;
 }
 
+// Ontology is workspace content, not shipped code.  The in-tree candidate below
+// only ever exists in a developer checkout: a managed-software runtime bundle
+// ships modules without their content directories, so that candidate can never
+// resolve on a real install.  Consult the configured workspace as well, or
+// hydration reports the ontology provider as unavailable on every install that
+// did not happen to export JARVOS_ONTOLOGY_DIR.
+function workspaceOntologyDir() {
+  try {
+    const workspace = loadJarvosPaths().getClawdDir();
+    if (typeof workspace !== 'string' || !workspace) return null;
+    return path.join(expandTilde(workspace), 'jarvos-ontology', 'ontology');
+  } catch {
+    // Hydration is orientation, never a hard dependency: fail open to the
+    // remaining candidates rather than aborting the packet.
+    return null;
+  }
+}
+
 function ontologyCandidateDirs(options = {}) {
   return [
     expandTilde(options.ontologyDir),
     expandTilde(process.env.JARVOS_ONTOLOGY_DIR),
+    workspaceOntologyDir(),
     path.join(JARVOS_ROOT, 'modules', 'jarvos-ontology', 'ontology'),
   ].filter(Boolean);
 }
