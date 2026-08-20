@@ -22,6 +22,10 @@ const FLAGGED_HEADING = '## 📌 Flagged';
 function todayDate() {
   return new Intl.DateTimeFormat('en-CA', { timeZone: getTimeZone(), year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
 }
+function validateJournalDate(date) {
+  if (typeof date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new Error('Journal date must be YYYY-MM-DD');
+  return date;
+}
 function relativeToVault(vaultRoot, absolutePath) {
   const relative = path.relative(path.resolve(vaultRoot), path.resolve(absolutePath)).split(path.sep).join('/');
   if (!relative || relative.startsWith('../') || path.isAbsolute(relative)) throw new Error('Journal path is outside the configured vault');
@@ -59,6 +63,7 @@ function createVaultStorageAdapter({ mutationService, vaultRoot = getVaultDir(),
   }
   return Object.freeze({
     ensureJournal({ date = todayDate(), intentId } = {}) {
+      validateJournalDate(date);
       const journalPath = path.join(journalDir, `${date}.md`);
       const existed = fs.existsSync(journalPath);
       const vaultRelativePath = relativeToVault(vaultRoot, journalPath);
