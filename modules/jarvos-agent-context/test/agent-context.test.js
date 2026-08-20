@@ -1627,3 +1627,46 @@ test('MCP jarvos_hydrate returns text content', async () => {
     }
   });
 });
+
+test('hydrate resolves ontology from the configured workspace when the bundle ships no ontology directory', async () => {
+  const oldEnv = {
+    JARVOS_WORKSPACE_DIR: process.env.JARVOS_WORKSPACE_DIR,
+    JARVOS_ONTOLOGY_DIR: process.env.JARVOS_ONTOLOGY_DIR,
+  };
+  // A managed-software runtime ships modules without their content directories,
+  // so neither the in-tree candidate nor an explicit override is available.
+  delete process.env.JARVOS_ONTOLOGY_DIR;
+
+  try {
+    await withTempVault(async ({ journal, tmp }) => {
+      fs.writeFileSync(path.join(journal, '2026-05-12.md'), '# 2026-05-12\n\nPlain entry.\n', 'utf8');
+
+      const workspace = path.join(tmp, 'workspace');
+      const ontologyDir = path.join(workspace, 'jarvos-ontology', 'ontology');
+      fs.mkdirSync(ontologyDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(ontologyDir, '1-higher-order.md'),
+        '# Higher\n\n## My Higher Order\n\nWorkspace ontology content.\n',
+        'utf8',
+      );
+      process.env.JARVOS_WORKSPACE_DIR = workspace;
+      jarvosPaths.resetConfigCache();
+
+      const result = await hydrate({
+        maxChars: 9000,
+        journal: { date: '2026-05-12', timeZone: 'UTC' },
+      });
+
+      assert.equal(result.ok, true);
+      assert.match(result.markdown, /Workspace ontology content/);
+      assert.doesNotMatch(result.markdown, /jarvos-ontology provider unavailable/);
+      assert.match(result.markdown, /Ontology provider: .*jarvos-ontology\/ontology/);
+    });
+  } finally {
+    for (const [key, value] of Object.entries(oldEnv)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    jarvosPaths.resetConfigCache();
+  }
+});
