@@ -130,14 +130,15 @@ result so Codex startup is not blocked.
 
 When managed stewardship supplies both
 `JARVOS_STEWARDSHIP_BRIDGE_COMMAND` and
-`JARVOS_STEWARDSHIP_CODEX_SESSION_MAP_ROOT`, setup persists those
-session-neutral inputs in
-Codex's shell environment policy. This lets the session hook display a
-validated, bounded pending judgment and lets the in-session agent run the
-listed bridge answer command without locating private runtime state. The
-private bridge resolves its context by the current `CODEX_THREAD_ID`; setup
-never persists a session-specific context path. Setup does not print either
-value, and rollback removes only these two entries.
+`JARVOS_STEWARDSHIP_CODEX_SESSION_MAP_ROOT`, setup persists only the bounded
+bridge command in Codex's shell environment policy. The private mapping root
+remains confined to the trusted bridge runtime and is never inherited by
+in-session commands. This lets the session hook display a validated, bounded
+pending judgment and lets the in-session agent run the listed bridge answer
+command without locating private runtime state. The private bridge resolves
+its context by the current `CODEX_THREAD_ID`; setup never persists the mapping
+root or a session-specific context path. Setup does not print either input,
+and rollback removes the bridge command plus any stale private-path entries.
 
 ## Available Tools
 
