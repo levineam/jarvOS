@@ -4,6 +4,23 @@ const { run: defaultRun } = require('./run');
 
 const PULL_REQUEST_SCHEMA_VERSION = 'jarvos-coding-live-pull-request/v1';
 const DEFAULT_MERGE_METHOD = 'squash';
+const ALLOWED_MERGE_METHODS = new Set(['merge', 'rebase', 'squash']);
+
+function normalizePullRequestNumber(value) {
+  const number = String(value);
+  if (!/^[1-9]\d*$/u.test(number)) {
+    throw new Error('live merge requires a positive integer pull request number');
+  }
+  return number;
+}
+
+function normalizeMergeMethod(value) {
+  const method = String(value);
+  if (!ALLOWED_MERGE_METHODS.has(method)) {
+    throw new Error('live merge method must be one of: merge, rebase, squash');
+  }
+  return method;
+}
 
 function parseJson(text) {
   try {
@@ -144,8 +161,9 @@ function createLivePullRequest(options = {}) {
       if (!repo) throw new Error('live merge requires a repo');
       if (!prNumber) throw new Error('live merge requires a pull request number');
 
-      const method = input.mergeMethod || mergeMethod;
-      const args = ['pr', 'merge', String(prNumber), '--repo', repo, `--${method}`, '--delete-branch'];
+      const number = normalizePullRequestNumber(prNumber);
+      const method = normalizeMergeMethod(input.mergeMethod || mergeMethod);
+      const args = ['pr', 'merge', number, '--repo', repo, `--${method}`, '--delete-branch'];
       if (dryRun || input.dryRun) {
         return {
           schemaVersion: PULL_REQUEST_SCHEMA_VERSION,
