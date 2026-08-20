@@ -181,6 +181,27 @@ link exactly once from `Journal/YYYY-MM-DD.md`, preserve source-backed
 provenance, and leave QMD/search freshness as `pending-refresh`. Do not create
 guessed daily journal files under `Notes/`.
 
+## jarvOS Tool Doctrine
+
+- `jarvos_recall` — for people, decisions, prior reasoning, and history.
+  Trigger: "why did we choose X", "what did we decide about Y", "who is Z".
+  Not for code or file contents; use grep/read for those. It searches a
+  curated knowledge base, not the repo.
+- `jarvos_session_thread_write` — write a checkpoint when a task switches,
+  when a decision is made, or before a long session compact. A hook can
+  record what changed mechanically; only the agent can record why. This
+  is the surface that carries judgment.
+- `jarvos_create_note` — when a session produces a durable conclusion
+  someone would want months later. Not for routine progress.
+- `jarvos_current_work` / `jarvos_projects_context` — consult at the start
+  of substantive work to orient on what is already in flight, before
+  proposing new work.
+- `jarvos_todo_*` — claim an item before starting work another agent might
+  also pick up. Claiming is what stops two harnesses doing the same job.
+
+If a tool returns unavailable or stale, say so plainly rather than silently
+working around it.
+
 ## Local Extensions
 
 This file is generated from `runtimes/claude/templates/CLAUDE.md.template` in
