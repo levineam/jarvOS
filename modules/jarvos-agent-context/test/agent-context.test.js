@@ -296,6 +296,20 @@ test('createNote writes note, links journal, and verifies contract', () => {
   });
 });
 
+test('createNote rejects an untrusted secondbrain module root before loading code', () => {
+  const previous = process.env.JARVOS_SECONDBRAIN_DIR;
+  process.env.JARVOS_SECONDBRAIN_DIR = 'relative/attacker-controlled-secondbrain';
+  try {
+    assert.throws(
+      () => createNote({ title: 'Unsafe module root', content: 'Must not execute.' }),
+      /JARVOS_SECONDBRAIN_DIR must be an absolute path/,
+    );
+  } finally {
+    if (previous === undefined) delete process.env.JARVOS_SECONDBRAIN_DIR;
+    else process.env.JARVOS_SECONDBRAIN_DIR = previous;
+  }
+});
+
 test('createNote creates today journal when missing', () => {
   withTempVault(({ journal, mutationService }) => {
     const result = createNote({
