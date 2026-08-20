@@ -3,10 +3,56 @@
 // This boundary is intentionally host-owned: an agent can ask for Projects
 // context, but it cannot choose a module, paths, capability, or secret.
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 
 const CONFIG_ENV = 'JARVOS_PROJECTS_CONTEXT_CONFIG';
 const ACTIVE_ASSISTANT_PROVIDER_MODULE_ENV = 'ACTIVE_ASSISTANT_PROJECTS_PROVIDER_MODULE';
+
+const MODULE_ROOT = path.resolve(__dirname, '..');
+const JARVOS_ROOT = path.resolve(MODULE_ROOT, '..', '..');
+
+function expandTilde(value) {
+  if (typeof value !== 'string') return value;
+  if (value === '~') return os.homedir();
+  if (value.startsWith('~/')) return path.join(os.homedir(), value.slice(2));
+  return value;
+}
+
+// Mirrors index.js's secondbrainDir()/loadJarvosPaths(): resolve the
+// canonical jarvos-secondbrain paths helper, defaulting to the bundled
+// modules copy but honoring JARVOS_SECONDBRAIN_DIR like the rest of the
+// host runtime. Kept as a self-contained copy here (rather than importing
+// index.js, which already requires this file) so the two modules do not
+// form a require cycle.
+function secondbrainDir() {
+  return expandTilde(process.env.JARVOS_SECONDBRAIN_DIR)
+    || path.join(JARVOS_ROOT, 'modules', 'jarvos-secondbrain');
+}
+
+function loadJarvosPaths() {
+  const fallbackPath = path.join(secondbrainDir(), 'bridge', 'config', 'jarvos-paths.js');
+  try {
+    return require(require.resolve('@jarvos/secondbrain/bridge/config/jarvos-paths.js', { paths: [process.cwd(), MODULE_ROOT] }));
+  } catch {
+    return require(fallbackPath);
+  }
+}
+
+// The env var remains an explicit override. When it is unset, fall back to
+// the config file a jarvOS workspace ships at a fixed, well-known path so a
+// user who never sets environment variables still gets Projects orientation.
+function workspaceProjectsContextConfigPath() {
+  try {
+    const workspace = loadJarvosPaths().getClawdDir();
+    if (typeof workspace !== 'string' || !workspace) return null;
+    return path.join(expandTilde(workspace), 'config', 'jarvos-project-context.json');
+  } catch {
+    // Hydration is orientation, never a hard dependency: fail open (no
+    // provider) rather than aborting the packet.
+    return null;
+  }
+}
 
 function inside(root, target) {
   const relative = path.relative(root, target);
@@ -73,7 +119,10 @@ function readPrivateJson(filePath) {
 }
 
 function createHostProjectsContextProvider(env = process.env) {
-  const configPath = env && env[CONFIG_ENV];
+  const configuredPath = env && env[CONFIG_ENV];
+  const configPath = typeof configuredPath === 'string' && configuredPath.length > 0
+    ? configuredPath
+    : workspaceProjectsContextConfigPath();
   if (typeof configPath !== 'string' || configPath.length === 0) return null;
   // The configuration is not itself a secret. Ownership, trusted ancestry,
   // and the absence of group/world write bits are the integrity boundary;

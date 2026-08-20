@@ -23,6 +23,10 @@ const {
   verifyNoteCaptureContract,
   writeSessionThread,
 } = require('../src/index.js');
+const {
+  CONFIG_ENV: PROJECTS_CONTEXT_CONFIG_ENV,
+  createHostProjectsContextProvider,
+} = require('../src/projects-context-bootstrap.js');
 const { issueRouteCapability } = require('../../jarvos-runtime-kit/src/index.js');
 const {
   callTool,
@@ -69,6 +73,11 @@ function withTempVault(fn) {
     JARVOS_SESSION_THREAD_ID: process.env.JARVOS_SESSION_THREAD_ID,
     JARVOS_ALLOW_UNSAFE_TEST_JOURNAL_WRITE: process.env.JARVOS_ALLOW_UNSAFE_TEST_JOURNAL_WRITE,
     XDG_STATE_HOME: process.env.XDG_STATE_HOME,
+    // Isolate the workspace default too: without this, config-derived
+    // fallbacks that key off getClawdDir() (e.g. the Projects context config
+    // path) would resolve against whatever real workspace happens to exist
+    // on the machine running the suite, instead of the temp fixture.
+    JARVOS_WORKSPACE_DIR: process.env.JARVOS_WORKSPACE_DIR,
   };
 
   process.env.JARVOS_VAULT_DIR = vault;
@@ -77,6 +86,7 @@ function withTempVault(fn) {
   process.env.JARVOS_TIMEZONE = 'UTC';
   process.env.JARVOS_ALLOW_UNSAFE_TEST_JOURNAL_WRITE = '1';
   process.env.XDG_STATE_HOME = path.join(tmp, 'state');
+  process.env.JARVOS_WORKSPACE_DIR = tmp;
   jarvosPaths.resetConfigCache();
 
   let result;
@@ -1661,6 +1671,119 @@ test('hydrate resolves ontology from the configured workspace when the bundle sh
       assert.match(result.markdown, /Workspace ontology content/);
       assert.doesNotMatch(result.markdown, /jarvos-ontology provider unavailable/);
       assert.match(result.markdown, /Ontology provider: .*jarvos-ontology\/ontology/);
+    });
+  } finally {
+    for (const [key, value] of Object.entries(oldEnv)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    jarvosPaths.resetConfigCache();
+  }
+});
+
+// Minimal, self-contained Projects context config: enough for
+// createHostProjectsContextProvider() to pass every integrity check
+// (trusted workspace/repository/state roots, a requireable provider module)
+// without needing the provider's read() to actually succeed. `marker` is
+// carried through as the config's default query so a test can tell which
+// config file was actually selected.
+function buildProjectsConfigFixture(workspaceRoot, marker) {
+  const repositoryRoot = path.join(workspaceRoot, 'repository');
+  const stateRoot = path.join(workspaceRoot, 'state');
+  fs.mkdirSync(repositoryRoot, { recursive: true });
+  fs.mkdirSync(path.join(stateRoot, 'registry'), { recursive: true });
+  fs.mkdirSync(path.join(stateRoot, 'release-provider'), { recursive: true });
+  fs.writeFileSync(
+    path.join(repositoryRoot, 'provider.js'),
+    "module.exports = { read: async () => ({ status: 'unavailable' }) };\n",
+  );
+  return JSON.stringify({
+    workspaceRoot,
+    repositoryRoot,
+    providerModule: path.join(repositoryRoot, 'provider.js'),
+    stateRoot,
+    registryStateDir: path.join(stateRoot, 'registry'),
+    releaseProviderStateDir: path.join(stateRoot, 'release-provider'),
+    query: { marker },
+  });
+}
+
+test('createHostProjectsContextProvider falls back to the workspace-derived config path when the env var is unset', async () => {
+  const oldEnv = { JARVOS_WORKSPACE_DIR: process.env.JARVOS_WORKSPACE_DIR };
+  try {
+    await withTempVault(async ({ tmp }) => {
+      const workspace = path.join(tmp, 'workspace');
+      fs.mkdirSync(path.join(workspace, 'config'), { recursive: true });
+      fs.writeFileSync(
+        path.join(workspace, 'config', 'jarvos-project-context.json'),
+        buildProjectsConfigFixture(workspace, 'default'),
+      );
+
+      process.env.JARVOS_WORKSPACE_DIR = workspace;
+      jarvosPaths.resetConfigCache();
+
+      const provider = createHostProjectsContextProvider({});
+      assert.notEqual(provider, null);
+      assert.equal(typeof provider.read, 'function');
+      assert.equal(provider.defaultQuery.marker, 'default');
+    });
+  } finally {
+    for (const [key, value] of Object.entries(oldEnv)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    jarvosPaths.resetConfigCache();
+  }
+});
+
+test('JARVOS_PROJECTS_CONTEXT_CONFIG still wins over the workspace-derived default when both are present', async () => {
+  const oldEnv = { JARVOS_WORKSPACE_DIR: process.env.JARVOS_WORKSPACE_DIR };
+  try {
+    await withTempVault(async ({ tmp }) => {
+      const workspace = path.join(tmp, 'workspace');
+      fs.mkdirSync(path.join(workspace, 'config'), { recursive: true });
+      fs.writeFileSync(
+        path.join(workspace, 'config', 'jarvos-project-context.json'),
+        buildProjectsConfigFixture(workspace, 'default'),
+      );
+
+      const overrideRoot = path.join(tmp, 'override');
+      fs.mkdirSync(overrideRoot, { recursive: true });
+      const overrideConfigPath = path.join(overrideRoot, 'projects-context.json');
+      fs.writeFileSync(overrideConfigPath, buildProjectsConfigFixture(overrideRoot, 'override'));
+
+      process.env.JARVOS_WORKSPACE_DIR = workspace;
+      jarvosPaths.resetConfigCache();
+
+      const provider = createHostProjectsContextProvider({ [PROJECTS_CONTEXT_CONFIG_ENV]: overrideConfigPath });
+      assert.notEqual(provider, null);
+      assert.equal(provider.defaultQuery.marker, 'override');
+    });
+  } finally {
+    for (const [key, value] of Object.entries(oldEnv)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    jarvosPaths.resetConfigCache();
+  }
+});
+
+test('createHostProjectsContextProvider fails closed when the workspace-derived config path does not exist', async () => {
+  const oldEnv = { JARVOS_WORKSPACE_DIR: process.env.JARVOS_WORKSPACE_DIR };
+  try {
+    await withTempVault(async ({ tmp }) => {
+      // No config/jarvos-project-context.json under this workspace.
+      const workspace = path.join(tmp, 'workspace-without-config');
+      fs.mkdirSync(workspace, { recursive: true });
+
+      process.env.JARVOS_WORKSPACE_DIR = workspace;
+      jarvosPaths.resetConfigCache();
+
+      let provider;
+      assert.doesNotThrow(() => {
+        provider = createHostProjectsContextProvider({});
+      });
+      assert.equal(provider, null);
     });
   } finally {
     for (const [key, value] of Object.entries(oldEnv)) {
