@@ -888,9 +888,19 @@ function normalizeThreadKey(input = {}) {
 }
 
 function sessionThreadTitle(input = {}) {
-  const explicit = firstString(input.title, input.noteTitle);
-  if (explicit) return sanitizeTitle(explicit);
   return sanitizeTitle(`${DEFAULT_SESSION_THREAD_PREFIX} - ${normalizeThreadKey(input)}`);
+}
+
+function hasSessionThreadFrontmatter(markdown) {
+  const frontmatter = String(markdown || '').match(/^---\n([\s\S]*?)\n---(?:\n|$)/)?.[1];
+  if (!frontmatter) return false;
+  return /^(?:type|subtype):\s*["']?session-thread["']?\s*$/m.test(frontmatter);
+}
+
+function assertSessionThreadNote(markdown, title) {
+  if (!hasSessionThreadFrontmatter(markdown)) {
+    throw new Error(`Refusing to access non-session-thread note: ${title}`);
+  }
 }
 
 function stripFrontmatter(markdown) {
@@ -971,6 +981,7 @@ function renderSessionThreadRead(result) {
 function readSessionThread(input = {}) {
   const thread = resolveSessionThread(input);
   const raw = readIfExists(thread.notePath);
+  if (raw !== null) assertSessionThreadNote(raw, thread.title);
   const content = raw === null ? '' : boundedMarkdown(stripFrontmatter(raw), Number(input.maxChars || 4000));
   const result = {
     ok: true,
@@ -995,6 +1006,7 @@ function writeSessionThread(input = {}) {
   let readBack;
   try {
     const existing = readIfExists(thread.notePath);
+    if (existing !== null) assertSessionThreadNote(existing, thread.title);
     const existingBody = existing ? stripFrontmatter(existing) : '';
     const timestamp = firstString(input.timestamp) || new Date().toISOString();
     const entry = formatThreadEntry(input, timestamp);
@@ -1019,7 +1031,7 @@ function writeSessionThread(input = {}) {
       createJournalIfMissing: input.createJournalIfMissing !== false,
       mutationService,
     });
-    if (noteResult.written) readBack = readSessionThread({ ...input, title: thread.title, maxChars: input.maxChars });
+    if (noteResult.written) readBack = readSessionThread({ ...input, maxChars: input.maxChars });
   } finally {
     releaseLock();
   }
