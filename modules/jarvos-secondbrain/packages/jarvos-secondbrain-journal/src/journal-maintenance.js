@@ -1097,8 +1097,7 @@ function syncOneDate(date, config, opts = {}) {
   const state = loadJournalState(journalDir);
   const knownGood = state.dates?.[date];
   const healthBefore = classifyJournalHealth({ existed, markdown: original, knownGood, config });
-  const restoreSource = (healthBefore.status === 'missing'
-    || healthBefore.status === 'stub'
+  const restoreSource = (healthBefore.status === 'stub'
     || (healthBefore.status === 'stale' && isCatastrophicJournalShrink(healthBefore.metrics, knownGood)))
     ? readKnownGoodContent(journalDir, date, knownGood)
     : null;

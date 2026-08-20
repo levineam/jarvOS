@@ -543,7 +543,7 @@ test('syncOneDate restores a frontmatter-only stub from known-good content and w
   }
 });
 
-test('syncOneDate restores a deleted journal from known-good content', () => {
+test('syncOneDate does not restore a deleted journal from known-good content', () => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-journal-deleted-'));
   const journalDir = path.join(tmp, 'Vault', 'Journal');
   fs.mkdirSync(journalDir, { recursive: true });
@@ -553,14 +553,17 @@ test('syncOneDate restores a deleted journal from known-good content', () => {
     const config = loadConfig();
     syncOneDate(TEST_DATE, config, { dryRun: false });
     const journalPath = path.join(journalDir, `${TEST_DATE}.md`);
-    const before = fs.readFileSync(journalPath, 'utf8');
+    const privateContent = 'PRIVATE_CONTENT_MUST_STAY_DELETED';
+    fs.appendFileSync(journalPath, `\n${privateContent}\n`, 'utf8');
+    syncOneDate(TEST_DATE, config, { dryRun: false });
+    assert.match(fs.readFileSync(journalPath, 'utf8'), new RegExp(privateContent));
     fs.rmSync(journalPath);
 
     const repaired = syncOneDate(TEST_DATE, config, { dryRun: false });
 
     assert.equal(repaired.healthBefore.status, 'missing');
-    assert.equal(repaired.restoredKnownGood, true);
-    assert.equal(fs.readFileSync(journalPath, 'utf8'), before);
+    assert.equal(repaired.restoredKnownGood, false);
+    assert.doesNotMatch(fs.readFileSync(journalPath, 'utf8'), new RegExp(privateContent));
   } finally {
     if (previousJournalDir === undefined) delete process.env.JARVOS_JOURNAL_DIR;
     else process.env.JARVOS_JOURNAL_DIR = previousJournalDir;
