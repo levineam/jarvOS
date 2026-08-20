@@ -14,6 +14,24 @@ function exact(value, fields) { return object(value) && Object.keys(value).lengt
 function deadline(value) { return typeof value === 'string' && /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/.test(value) && Number.isFinite(Date.parse(value)); }
 function safeKeys(value, path, errors) { if (!object(value)) return; for (const [key, child] of Object.entries(value)) { if (FORBIDDEN.test(key)) errors.push(`${path}.${key} is not public`); if (object(child)) safeKeys(child, `${path}.${key}`, errors); } }
 
+function consistentJudgmentState(value) {
+  const ids = value.eventIds;
+  if (!exact(ids, ['delivery', 'acknowledgement', 'answer', 'timeout', 'fallback'])) return false;
+  const present = (slot) => ids[slot] !== null;
+  const hasAnswer = value.answer !== null;
+  const prefixIsValid = !present('acknowledgement') || present('delivery');
+  if (!prefixIsValid || present('answer') !== hasAnswer) return false;
+  if (value.state === 'accepted') return !Object.values(ids).some(presentId) && !hasAnswer;
+  if (value.state === 'delivered_in_session') return present('delivery') && !present('acknowledgement') && !present('answer') && !present('timeout') && !present('fallback');
+  if (value.state === 'acknowledged') return present('delivery') && present('acknowledgement') && !present('answer') && !present('timeout') && !present('fallback');
+  if (value.state === 'timed_out') return present('timeout') && !present('answer') && !present('fallback');
+  if (value.state === 'delivered_fallback') return present('fallback') && !present('answer');
+  if (value.state === 'answered') return hasAnswer && (present('fallback') || (present('delivery') && present('acknowledgement') && !present('timeout')));
+  return false;
+}
+
+function presentId(id) { return id !== null; }
+
 function validateJudgmentEnvelope(value) {
   const errors = [];
   const fields = ['version', 'judgmentId', 'sessionId', 'causalRunId', 'reconcileId', 'owner', 'prompt', 'choices', 'defaultChoiceId', 'acknowledgementDeadline', 'fallback', 'state', 'eventIds', 'answer'];
@@ -36,6 +54,7 @@ function validateJudgmentEnvelope(value) {
   if (!JUDGMENT_STATES.includes(value.state)) errors.push('judgment state is invalid');
   if (!exact(value.eventIds, ['delivery', 'acknowledgement', 'answer', 'timeout', 'fallback']) || Object.values(value.eventIds).some((id) => id !== null && !opaque(id))) errors.push('event IDs are invalid');
   if (value.answer !== null && (!exact(value.answer, ['choiceId']) || !value.choices?.some((choice) => choice.id === value.answer.choiceId))) errors.push('answer is invalid');
+  if (!consistentJudgmentState(value)) errors.push('judgment state is inconsistent with its event history');
   safeKeys(value, 'judgment', errors);
   return { ok: errors.length === 0, errors };
 }
