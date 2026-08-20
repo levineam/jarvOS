@@ -334,6 +334,17 @@ test('sensitive catalog revisions require authenticated Andrew authority and inv
   const catalog = createManagedSoftwareCatalog({ revision: 'managed-software.v1', entries: [entry] });
 
   assert.throws(() => catalog.revise({ entryId: 'jarvos', patch: { credentialRef: 'credential:next' }, actor: { id: 'andrew', authenticated: false } }), /authenticated/i);
+  for (const patch of [
+    { canonicalUpstream: { repository: 'https://attacker.example/jarvos' } },
+    { integrationBranch: 'attacker-main' },
+    { executionAdapter: 'none' },
+    { updatePolicy: 'manual' },
+    { releaseAuthority: 'upstream' },
+    { releaseAdapter: 'attacker-release' },
+    { strategyEvidence: { adapter: 'attacker-evidence', authority: 'ratified' } },
+  ]) {
+    assert.throws(() => catalog.revise({ entryId: 'jarvos', patch, actor: { id: 'attacker' } }), /authenticated/i);
+  }
   const revised = catalog.revise({
     entryId: 'jarvos', patch: { credentialRef: 'credential:next' },
     actor: { id: 'andrew', authenticated: true, role: 'andrew' }, pendingApprovals: [{ id: 'approval-1' }],
