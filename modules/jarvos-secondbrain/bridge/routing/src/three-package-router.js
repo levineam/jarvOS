@@ -110,6 +110,7 @@ function applyStoragePlan(plan, capture = {}, options = {}) {
         heading: resolveConfiguredHeading(plan.journalSection),
         line: journalLine,
         date,
+        ...(plan.route === 'idea' && plan.journalOrigin ? { contentOrigin: plan.journalOrigin } : {}),
       });
       result.noteLink = result.journalEntry;
     }

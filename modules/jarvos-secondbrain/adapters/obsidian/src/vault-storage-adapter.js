@@ -10,6 +10,7 @@ const fs = require('node:fs');
 const { loadConfig, normalizeSections, renderJournal } = require('../../../packages/jarvos-secondbrain-journal/src/journal-maintenance.js');
 const { noteFilePath, writeNoteFile } = require('../../../packages/jarvos-secondbrain-notes/src/write-to-vault.js');
 const { getTimeZone, getVaultDir, getVaultJournalDir } = require('../../../bridge/provenance/src/lib/provenance-config.js');
+const { cleanJournalEntryText, digestText } = require('../../../bridge/provenance/src/content-origin-contract.js');
 const {
   artifactFromMutationResult,
   createArtifactReceipt,
@@ -50,11 +51,11 @@ function createVaultStorageAdapter({ mutationService, vaultRoot = getVaultDir(),
   const service = mutationService || require('../../../src/vault-mutation-service.js').createConfiguredVaultMutationService({ vaultRoot: path.resolve(vaultRoot), source });
   if (typeof service.execute !== 'function' || typeof service.createWriteContext !== 'function') throw new Error('vault storage adapter requires the configured mutation service');
   function contextFor(vaultRelativePath, intentId) { return service.createWriteContext({ vaultRelativePath, intentId, operationSource: service.source }); }
-  function executeTransform({ date, transformName, replayPayload, intentId }) {
+  function executeTransform({ date, transformName, transformVersion = 1, replayPayload, intentId }) {
     const journalPath = path.join(journalDir, `${date}.md`);
     const vaultRelativePath = relativeToVault(vaultRoot, journalPath);
     const context = contextFor(vaultRelativePath, intentId);
-    const receipt = context.mutationExecutor({ schemaVersion: 1, operationId: context.operationId, vaultId: context.vaultId, vaultRelativePath, sequence: context.sequence, operationKind: 'transform', transformName, transformVersion: 1, replayPayload, source: context.source });
+    const receipt = context.mutationExecutor({ schemaVersion: 1, operationId: context.operationId, vaultId: context.vaultId, vaultRelativePath, sequence: context.sequence, operationKind: 'transform', transformName, transformVersion, replayPayload, source: context.source });
     return { journalPath, receipt };
   }
   return Object.freeze({
@@ -73,12 +74,28 @@ function createVaultStorageAdapter({ mutationService, vaultRoot = getVaultDir(),
         artifactReceipt: artifactReceiptFor([journalArtifact({ journalPath, vaultRoot, receipt })]),
       };
     },
-    appendLineToJournalSection({ heading, line, date = todayDate(), intentId } = {}) {
+    appendLineToJournalSection({ heading, line, date = todayDate(), intentId, contentOrigin } = {}) {
       if (!heading) throw new Error('heading is required');
       if (!line || !String(line).trim()) throw new Error('line is required');
       const ensured = this.ensureJournal({ date, intentId: intentId ? `${intentId}:create` : undefined });
       if (!receiptIsAcknowledged(ensured.receipt)) return { journalPath: ensured.journalPath, heading, line: String(line).trim(), receipt: ensured.receipt, acknowledged: false, artifactReceipt: ensured.artifactReceipt };
-      const outcome = executeTransform({ date, transformName: 'journal-section-line', replayPayload: { heading, line }, intentId: intentId ? `${intentId}:section` : undefined });
+      const cleanLine = cleanJournalEntryText(String(line).trim());
+      const canonicalCleanText = cleanLine.startsWith('- ')
+        ? cleanLine.slice(2).trim()
+        : cleanLine.replace(/^[-\s]+/, '').trim();
+      const contentOriginPayload = contentOrigin
+        ? {
+          ...contentOrigin,
+          clean_text_digest: digestText(canonicalCleanText),
+        }
+        : null;
+      const outcome = executeTransform({
+        date,
+        transformName: 'journal-section-line',
+        transformVersion: contentOriginPayload ? 2 : 1,
+        replayPayload: { heading, line, ...(contentOriginPayload ? { contentOrigin: contentOriginPayload } : {}) },
+        intentId: intentId ? `${intentId}:section` : undefined,
+      });
       return {
         journalPath: outcome.journalPath,
         heading,

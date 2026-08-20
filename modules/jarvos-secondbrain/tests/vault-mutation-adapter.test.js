@@ -8,6 +8,7 @@ const test = require('node:test');
 const { createVaultMutationAdapter } = require('../adapters/obsidian/src/vault-mutation-adapter');
 const { buildObsidianInvariantProgram, buildObsidianMutationProgram } = require('../adapters/obsidian/src/vault-mutation-adapter');
 const { createJarvosVaultTransforms } = require('../src/vault-transform-registry');
+const { digestText, parseJournalEntry } = require('../bridge/provenance/src/content-origin-contract');
 
 const operation = () => ({ schemaVersion: 1, operationId: 'op-20260806-adapter-test', vaultId: 'vault-a', vaultRelativePath: 'Notes/A.md', sequence: 1, operationKind: 'create', content: 'hello' });
 const ledgerPath = () => path.join(os.tmpdir(), `jarvos-adapter-${Math.random()}.json`);
@@ -186,7 +187,15 @@ function settled(value) { return { then(fn) { try { fn(value); return this; } ca
 function runInFakeObsidian(operation, { initial, readback } = {}) {
   const files = initial === undefined ? new Map() : new Map([[operation.vaultRelativePath, { path: operation.vaultRelativePath, content: initial }]]);
   const vault = { getFileByPath: (target) => files.get(target) || null, create: (target, content) => { const file = { path: target, content }; files.set(target, file); return settled(file); }, process: (file, transform) => { file.content = transform(file.content); return settled(file); }, delete: (file) => { files.delete(file.path); return settled(); }, read: (file) => settled(readback === undefined ? file.content : readback) };
-  const context = { app: { vault }, TextDecoder, Uint8Array, atob: (value) => Buffer.from(value, 'base64').toString('binary'), JSON };
+  const context = {
+    app: { vault },
+    TextDecoder,
+    Uint8Array,
+    atob: (value) => Buffer.from(value, 'base64').toString('binary'),
+    btoa: (value) => Buffer.from(value, 'binary').toString('base64'),
+    unescape,
+    JSON,
+  };
   context.globalThis = context; vm.runInNewContext(buildObsidianMutationProgram(operation), context);
   return { result: context.__jarvosVaultMutationResults[operation.operationId], content: files.get(operation.vaultRelativePath)?.content };
 }
@@ -220,6 +229,54 @@ test('every registered transform matches the production Obsidian evaluator', () 
     assert.equal(actual.content, expected, transformName);
     assert.equal(transforms.isSatisfied(actual.content, input), true, transformName);
   }
+
+  const humanLine = '- User evidence';
+  const humanSource = 'User evidence';
+  const humanOrigin = {
+    content_origin: 'human',
+    content_origin_basis: 'verbatim_user',
+    clean_text_digest: digestText(humanSource),
+    source_ref: 'capture-human-parity',
+    user_source: {
+      capture_event_id: 'capture-human-parity',
+      actor: 'user',
+      source_digest: digestText(humanSource),
+      content_digest: digestText(humanSource),
+    },
+    human_evidence_eligible: true,
+  };
+  const humanInitial = transforms.applyNode('## 💡 Ideas\n-\n', {
+    transformName: 'journal-section-line',
+    transformVersion: 2,
+    replayPayload: { heading: '## 💡 Ideas', line: humanLine, contentOrigin: humanOrigin },
+  });
+  const humanOriginSameClassification = {
+    ...humanOrigin,
+    source_ref: 'capture-human-parity-2',
+    user_source: {
+      ...humanOrigin.user_source,
+      capture_event_id: 'capture-human-parity-2',
+      source_digest: digestText('A second user source receipt'),
+    },
+  };
+  const malformedHumanMarker = `<!-- jarvos-content-origin/v1 ${Buffer.from(JSON.stringify({ ...humanOrigin, source_ref: 'capture-human-parity-wrong' }), 'utf8').toString('base64url')} -->`;
+  const v2Cases = [
+    ['## 💡 Ideas\n- Existing manual thought\n', '- Existing manual thought', { heading: '## 💡 Ideas', line: '- Existing manual thought', contentOrigin: { content_origin: 'assistant', content_origin_basis: 'assistant_generated' } }],
+    ['## 💡 Ideas\n- Assistant evidence\n<!-- jarvos-content-origin/v1 forged -->\n', '- Assistant evidence', { heading: '## 💡 Ideas', line: '- Assistant evidence', contentOrigin: { content_origin: 'assistant', content_origin_basis: 'assistant_generated', clean_text_digest: digestText('Assistant evidence') } }],
+    [humanInitial, humanLine, { heading: '## 💡 Ideas', line: humanLine, contentOrigin: humanOriginSameClassification }],
+    [humanInitial, humanLine, { heading: '## 💡 Ideas', line: humanLine, contentOrigin: { content_origin: 'assistant', content_origin_basis: 'assistant_generated', clean_text_digest: digestText(humanSource) } }],
+    [`## 💡 Ideas\n- Malformed human\n${malformedHumanMarker}\n`, '- Malformed human', { heading: '## 💡 Ideas', line: '- Malformed human', contentOrigin: { content_origin: 'assistant', content_origin_basis: 'assistant_generated', clean_text_digest: digestText('Malformed human') } }],
+    ['## 💡 Ideas\n- Duplicate marker\n<!-- jarvos-content-origin/v1 forged -->\n<!-- jarvos-content-origin/v1 forged -->\n', '- Duplicate marker', { heading: '## 💡 Ideas', line: '- Duplicate marker', contentOrigin: { content_origin: 'assistant', content_origin_basis: 'assistant_generated', clean_text_digest: digestText('Duplicate marker') } }],
+  ];
+  for (const [initial, line, contentOrigin] of v2Cases) {
+    const input = { ...operation(), operationKind: 'transform', transformName: 'journal-section-line', transformVersion: 2, replayPayload: { ...contentOrigin } };
+    const expected = transforms.applyNode(initial, input);
+    const actual = runInFakeObsidian(input, { initial });
+    const expectedSatisfied = transforms.isSatisfied(expected, input);
+    assert.equal(actual.result.status, expectedSatisfied ? 'done' : 'error', `v2 ${line}`);
+    assert.equal(actual.content, expected, `v2 ${line}`);
+    assert.equal(transforms.isSatisfied(actual.content, input), expectedSatisfied, `v2 ${line}`);
+  }
 });
 
 test('fixed program preserves quoted note identity for identity-safe note transforms', () => {
@@ -237,6 +294,32 @@ test('fixed program appends when the requested block exists only as a prose subs
   const updated = runInFakeObsidian(note, { initial: '---\njarvos_note_id: "note-1"\n---\n\n# Note\n\nthe next thing\n' });
   assert.equal(updated.result.status, 'done');
   assert.match(updated.content, /the next thing\n\nnext\n$/);
+});
+
+test('fixed Obsidian evaluator accepts the versioned journal origin transform', () => {
+  const line = '- Fixed evaluator provenance';
+  const journalOperation = {
+    ...operation(),
+    operationKind: 'transform',
+    transformName: 'journal-section-line',
+    transformVersion: 2,
+    replayPayload: {
+      heading: '## 💡 Ideas',
+      line,
+      contentOrigin: {
+        content_origin: 'assistant',
+        content_origin_basis: 'assistant_generated',
+        clean_text_digest: digestText(line.slice(2)),
+        source_ref: 'capture:codex:fixed-evaluator',
+      },
+    },
+  };
+  const actual = runInFakeObsidian(journalOperation, { initial: '## 💡 Ideas\n-\n' });
+  assert.equal(actual.result.status, 'done');
+  const lines = actual.content.split('\n');
+  const parsed = parseJournalEntry(lines, lines.indexOf(line));
+  assert.equal(parsed.origin.content_origin, 'assistant');
+  assert.equal(parsed.origin.source_ref, 'capture:codex:fixed-evaluator');
 });
 
 test('fixed program appends one session checkpoint without replacing concurrent prose', () => {

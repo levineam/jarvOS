@@ -50,7 +50,7 @@ const {
 const { createArtifactReceipt } = require('../../../src/artifact-receipt');
 
 function applyRoutingPlan(capture = {}, options = {}) {
-  const plan = buildRoutingPlan(capture);
+  const plan = buildRoutingPlan(capture, options);
   const date = plan.date;
   const result = {
     plan,
@@ -85,6 +85,7 @@ function applyRoutingPlan(capture = {}, options = {}) {
       heading: plan.journalSection,
       line: journalLine,
       date,
+      ...(plan.route === 'idea' && plan.journalOrigin ? { contentOrigin: plan.journalOrigin } : {}),
     });
     result.noteLink = result.journalEntry;
   } else {

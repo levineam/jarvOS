@@ -16,6 +16,12 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const {
+  CONTENT_ORIGIN_SCHEMA_VERSION,
+  cleanNoteContent,
+  humanEvidenceEligible,
+  normalizeContentOriginWithLegacy,
+} = require('../../../bridge/provenance/src/content-origin-contract');
 
 const SECRET_TERMS = [
   'password',
@@ -116,7 +122,26 @@ function knowledgeUnitId({ sourcePath, bodyHash, kind, text }) {
   return `ku_${sha256(`${sourcePath}:${bodyHash}:${kind}:${text}`).slice(0, 16)}`;
 }
 
-function buildKnowledgeUnits({ sourcePath, title, bodyHash, frontmatter, claims, summary, sensitivity }) {
+function noteProvenance(frontmatter = {}, body = '', title = '') {
+  const normalized = normalizeContentOriginWithLegacy(frontmatter, {
+    allowLegacyFallback: true,
+    allowUnresolvedReceipt: true,
+    content: cleanNoteContent(body, title),
+  });
+  const eligible = normalized.content_origin === 'human'
+    && (normalized.human_evidence_eligible === true
+      || humanEvidenceEligible(normalized, { allowLegacyFallback: true }));
+  return {
+    content_origin_schema: normalized.schema_version || CONTENT_ORIGIN_SCHEMA_VERSION,
+    content_origin: normalized.content_origin || 'unknown',
+    content_origin_basis: normalized.content_origin_basis || 'unknown',
+    human_evidence_eligible: eligible,
+    ...(normalized.user_source ? { content_origin_source: { ...normalized.user_source } } : {}),
+    ...(normalized.normalization_reason ? { normalization_reason: normalized.normalization_reason } : {}),
+  };
+}
+
+function buildKnowledgeUnits({ sourcePath, title, bodyHash, frontmatter, claims, summary, sensitivity, provenance }) {
   const author = String(frontmatter.author || 'unknown').trim() || 'unknown';
   const source = {
     type: 'note',
@@ -138,12 +163,15 @@ function buildKnowledgeUnits({ sourcePath, title, bodyHash, frontmatter, claims,
     ontologyPromotion: false,
   };
 
+  const unitProvenance = { ...provenance };
   const claimUnits = claims.map((claim, index) => ({
     id: knowledgeUnitId({ sourcePath, bodyHash, kind: 'claim', text: claim.text }),
     kind: 'claim',
     text: claim.text,
     title,
     author,
+    ...unitProvenance,
+    provenance: { ...unitProvenance },
     source,
     confidence: 0.72,
     evidence: [{
@@ -166,6 +194,8 @@ function buildKnowledgeUnits({ sourcePath, title, bodyHash, frontmatter, claims,
     text: summary,
     title,
     author,
+    ...unitProvenance,
+    provenance: { ...unitProvenance },
     source,
     confidence: 0.58,
     evidence: [{
@@ -251,6 +281,7 @@ function buildArtifact({ filePath, notesDir, title, body, frontmatter, created, 
   const now = new Date().toISOString();
   const claims = extractClaims(body);
   const noteSummary = summarize(body);
+  const provenance = noteProvenance(frontmatter, body, title);
 
   const gbrainStatus = sensitivity.excluded ? 'skipped' : 'queued';
   const memoryWikiStatus = sensitivity.excluded ? 'skipped' : 'queued';
@@ -262,6 +293,7 @@ function buildArtifact({ filePath, notesDir, title, body, frontmatter, created, 
     claims,
     summary: noteSummary,
     sensitivity,
+    provenance,
   });
 
   return {
@@ -278,18 +310,20 @@ function buildArtifact({ filePath, notesDir, title, body, frontmatter, created, 
     relationships: wikilinks.map((link) => ({ type: 'wikilink', target: link, targetSlug: slugify(link) })),
     claims,
     privacyTier: sensitivity.privacyTier,
-    knowledgeUnits,
-    sensitivity: {
-      excluded: sensitivity.excluded,
-      reasons: sensitivity.reasons,
-    },
+    ...provenance,
     provenance: {
+      ...provenance,
       sourcePath,
       absolutePath: filePath,
       bodySha256: bodyHash,
       bodyBytes: Buffer.byteLength(String(body || ''), 'utf8'),
       citation: `[[${title}]]`,
       journalBacklink: journal || null,
+    },
+    knowledgeUnits,
+    sensitivity: {
+      excluded: sensitivity.excluded,
+      reasons: sensitivity.reasons,
     },
     summary: noteSummary,
     gbrain: { status: gbrainStatus, slug: sensitivity.excluded ? null : slugify(title), skippedReasons: sensitivity.reasons },

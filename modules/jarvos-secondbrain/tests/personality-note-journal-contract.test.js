@@ -10,6 +10,7 @@ const { spawnSync } = require('child_process');
 const REPO_ROOT = path.resolve(__dirname, '..');
 const CONTRACT_CLI = path.join(REPO_ROOT, 'scripts', 'obsidian-note-journal-contract.js');
 const { verifyContract, writeNoteThroughContract } = require('../bridge/provenance/src/note-journal-contract.js');
+const { digestText } = require('../bridge/provenance/src/content-origin-contract.js');
 const { createConfiguredVaultMutationService } = require('../src/vault-mutation-service.js');
 
 function runContract({ root, personality, frontmatter = {} }) {
@@ -117,6 +118,9 @@ test('supported AI personalities can execute the Obsidian note/journal contract'
       assert.equal(first.created, true);
       assert.equal(first.qmdStatus, 'pending-refresh');
       assert.equal(first.verification.ok, true);
+      assert.equal(first.verification.frontmatter.content_origin, 'unknown');
+      assert.equal(first.verification.frontmatter.content_origin_basis, 'unknown');
+      assert.equal(first.verification.frontmatter.human_evidence_eligible, false);
       assert.ok(first.notePath.startsWith(path.join(root, 'Notes')));
       assert.equal(first.journalPath, path.join(root, 'Journal', `${new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' })}.md`));
 
@@ -132,6 +136,77 @@ test('supported AI personalities can execute the Obsidian note/journal contract'
       assert.equal(qmd.entries[`Notes/${second.title}.md`].status, 'pending-refresh');
     });
   }
+});
+
+test('personality contract carries an explicit assistant origin without adopting deferred state', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sup-provenance-contract-'));
+  withEnv({
+    VAULT_NOTES_DIR: path.join(root, 'Notes'),
+    JOURNAL_DIR: path.join(root, 'Journal'),
+    JARVOS_KNOWLEDGE_DIR: path.join(root, '.jarvos', 'knowledge'),
+    JARVOS_ALLOW_UNSAFE_TEST_JOURNAL_WRITE: '1',
+  }, () => {
+    const mutationService = makeTestMutationService(root);
+    const result = writeNoteThroughContract({
+      personality: 'codex',
+      title: 'Assistant provenance contract',
+      content: 'Generated explanation for later retrieval.',
+      content_origin: 'assistant',
+      content_origin_basis: 'assistant_generated',
+      content_adoption: { state: 'accepted' },
+      frontmatter: { status: 'draft', type: 'reference', project: 'SUP-2229', author: 'jarvis' },
+    }, { mutationService });
+
+    assert.equal(result.verification.frontmatter.content_origin, 'assistant');
+    assert.equal(result.verification.frontmatter.content_origin_basis, 'assistant_generated');
+    assert.equal(result.verification.frontmatter.human_evidence_eligible, false);
+    assert.doesNotMatch(fs.readFileSync(result.notePath, 'utf8'), /content_adoption/);
+  });
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+test('personality contract cannot self-certify human provenance without the capture resolver', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sup-provenance-contract-human-'));
+  withEnv({
+    VAULT_NOTES_DIR: path.join(root, 'Notes'),
+    JOURNAL_DIR: path.join(root, 'Journal'),
+    JARVOS_KNOWLEDGE_DIR: path.join(root, '.jarvos', 'knowledge'),
+    JARVOS_ALLOW_UNSAFE_TEST_JOURNAL_WRITE: '1',
+  }, () => {
+    const mutationService = makeTestMutationService(root);
+    const content = 'User supplied words preserved verbatim.';
+    const captureEventId = 'capture-contract-human-1';
+    const receipt = {
+      capture_event_id: captureEventId,
+      actor: 'user',
+      source_digest: digestText(content),
+      content_digest: digestText(content),
+    };
+    const input = {
+      personality: 'codex',
+      title: 'Resolver-backed human contract',
+      content,
+      captureEventId,
+      content_origin: 'human',
+      content_origin_basis: 'verbatim_user',
+      user_source: receipt,
+      human_evidence_eligible: true,
+      frontmatter: { status: 'draft', type: 'reference', project: 'SUP-2229', author: 'jarvis' },
+    };
+
+    const unresolved = writeNoteThroughContract(input, { mutationService });
+    assert.equal(unresolved.verification.frontmatter.content_origin, 'unknown');
+    assert.equal(unresolved.verification.frontmatter.human_evidence_eligible, false);
+
+    const resolved = writeNoteThroughContract({ ...input, title: 'Resolver-backed human contract (valid)' }, {
+      mutationService: makeTestMutationService(root),
+      resolveUserSource: (id) => id === captureEventId ? { capture_event_id: id, actor: 'user', text: content } : null,
+    });
+    assert.equal(resolved.verification.frontmatter.content_origin, 'human');
+    assert.equal(resolved.verification.frontmatter.content_origin_basis, 'verbatim_user');
+    assert.equal(resolved.verification.frontmatter.human_evidence_eligible, true);
+  });
+  fs.rmSync(root, { recursive: true, force: true });
 });
 
 test('canonical writer owns jarvos_note_id and preserves it across caller-supplied rewrites', () => {

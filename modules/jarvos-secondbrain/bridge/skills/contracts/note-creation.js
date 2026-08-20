@@ -50,6 +50,13 @@ module.exports = {
       confidence: { type: 'number', minimum: 0, maximum: 1 },
       date: { type: 'string', pattern: '^\\d{4}-\\d{2}-\\d{2}$' },
       frontmatter: { type: 'object' },
+      content_origin: { type: 'string', enum: ['human', 'assistant', 'mixed', 'unknown'] },
+      content_origin_basis: {
+        type: 'string',
+        enum: ['verbatim_user', 'user_derived', 'assistant_generated', 'mixed_composition', 'unknown'],
+      },
+      user_source: { type: 'object' },
+      human_evidence_eligible: { type: 'boolean' },
     },
   },
   output: {

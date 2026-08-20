@@ -2,7 +2,7 @@
 
 module.exports = {
   name: 'journal-entry',
-  version: '0.2.0',
+  version: '0.3.0',
   description: 'Capture idea and thought intents as dated journal entries.',
   triggers: [
     {
@@ -47,6 +47,14 @@ module.exports = {
       salienceClass: { type: 'string', enum: ['idea'] },
       confidence: { type: 'number', minimum: 0, maximum: 1 },
       date: { type: 'string', pattern: '^\\d{4}-\\d{2}-\\d{2}$' },
+      content_origin_schema: { type: 'string', const: 'jarvos-content-origin/v1' },
+      content_origin: { type: 'string', enum: ['human', 'assistant', 'mixed', 'unknown'] },
+      content_origin_basis: {
+        type: 'string',
+        enum: ['verbatim_user', 'user_derived', 'assistant_generated', 'mixed_composition', 'unknown'],
+      },
+      user_source: { type: 'object' },
+      human_evidence_eligible: { type: 'boolean' },
     },
   },
   output: {
@@ -62,6 +70,14 @@ module.exports = {
           section: { type: 'string' },
           line: { type: 'string' },
           date: { type: 'string', pattern: '^\\d{4}-\\d{2}-\\d{2}$' },
+          content_origin_schema: { type: 'string', const: 'jarvos-content-origin/v1' },
+          content_origin: { type: 'string', enum: ['human', 'assistant', 'mixed', 'unknown'] },
+          content_origin_basis: {
+            type: 'string',
+            enum: ['verbatim_user', 'user_derived', 'assistant_generated', 'mixed_composition', 'unknown'],
+          },
+          source_ref: { type: 'string' },
+          human_evidence_eligible: { type: 'boolean' },
         },
       },
     },

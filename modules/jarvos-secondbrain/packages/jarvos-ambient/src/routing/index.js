@@ -8,6 +8,9 @@ const {
   primaryText,
   stripLeadingKeyword,
 } = require('../intent/keyword-capture-router');
+const {
+  normalizeContentOrigin,
+} = require('../../../../bridge/provenance/src/content-origin-contract');
 
 const MEMORY = 'memory';
 const WORK_INTAKE = 'work-intake';
@@ -30,6 +33,59 @@ const IDEAS_HEADING = '## 💡 Ideas';
 const NOTES_HEADING = '## 📝 Notes';
 const DECISIONS_HEADING = '## ✅ Decisions';
 const REMEMBERED_HEADING = '## 🧠 Remembered';
+
+function captureContentForProvenance(capture = {}) {
+  return String(capture.content ?? capture.text ?? capture.body ?? '').trim();
+}
+
+function normalizeCaptureProvenance(capture = {}, options = {}) {
+  const captureEventId = capture.captureEventId ?? capture.capture_event_id ?? capture.id;
+  const normalized = normalizeContentOrigin({
+    content_origin: capture.content_origin ?? capture.contentOrigin,
+    content_origin_basis: capture.content_origin_basis ?? capture.contentOriginBasis,
+    user_source: capture.user_source ?? capture.userSource,
+  }, {
+    content: captureContentForProvenance(capture),
+    resolveUserSource: options.resolveUserSource || capture.resolveUserSource,
+    captureEventId,
+  });
+
+  return {
+    ...capture,
+    content_origin_schema: normalized.schema_version,
+    content_origin: normalized.content_origin,
+    content_origin_basis: normalized.content_origin_basis,
+    ...(normalized.user_source ? { user_source: { ...normalized.user_source } } : {}),
+    human_evidence_eligible: normalized.human_evidence_eligible,
+  };
+}
+
+function contentOriginFrontmatter(capture = {}, options = {}) {
+  const normalized = normalizeCaptureProvenance(capture, options);
+  return {
+    content_origin_schema: normalized.content_origin_schema,
+    content_origin: normalized.content_origin,
+    content_origin_basis: normalized.content_origin_basis,
+    ...(normalized.user_source ? { content_origin_source: { ...normalized.user_source } } : {}),
+    human_evidence_eligible: normalized.human_evidence_eligible,
+  };
+}
+
+function journalOriginForCapture(capture = {}, options = {}) {
+  const normalized = normalizeCaptureProvenance(capture, options);
+  const sourceRef = normalized.user_source?.capture_event_id
+    || normalized.captureEventId
+    || normalized.capture_event_id
+    || normalized.origin?.ref
+    || normalized.origin?.id;
+  return {
+    content_origin: normalized.content_origin,
+    content_origin_basis: normalized.content_origin_basis,
+    human_evidence_eligible: normalized.human_evidence_eligible === true,
+    ...(normalized.user_source ? { user_source: { ...normalized.user_source } } : {}),
+    ...(sourceRef ? { source_ref: String(sourceRef) } : {}),
+  };
+}
 
 function inferTitle(capture = {}, fallbackPrefix = 'Captured Note', options = {}) {
   const explicit = String(capture.title || '').trim();
@@ -93,6 +149,7 @@ function isSubstantiveIdea(capture = {}) {
 }
 
 function buildKeywordRoutingPlan(capture = {}, options = {}) {
+  capture = normalizeCaptureProvenance(capture, options);
   const detectedTrigger = detectTrigger(capture);
   const captureIntent = hasCaptureIntent(capture);
   const date = String(capture.date || '').trim() || undefined;
@@ -129,11 +186,13 @@ function buildKeywordRoutingPlan(capture = {}, options = {}) {
       createNote,
       noteTitle,
       noteContent: createNote ? buildNoteContent(capture, IDEA) : '',
+      journalOrigin: journalOriginForCapture(capture, options),
       noteFrontmatter: createNote ? {
         type: 'draft',
         source: 'idea-capture',
         trigger: IDEA,
         created_from: date ? `journal/${date}` : 'journal',
+        ...contentOriginFrontmatter(capture, options),
       } : null,
     };
   }
@@ -150,11 +209,13 @@ function buildKeywordRoutingPlan(capture = {}, options = {}) {
     createNote: true,
     noteTitle,
     noteContent: buildNoteContent(capture, NOTE),
+    journalOrigin: journalOriginForCapture(capture, options),
     noteFrontmatter: {
       type: 'draft',
       source: detectedTrigger ? 'note-capture' : 'default-note-bias',
       trigger: detectedTrigger || NOTE,
       created_from: date ? `journal/${date}` : 'journal',
+      ...contentOriginFrontmatter(capture, options),
     },
   };
 }
@@ -174,11 +235,12 @@ function buildJournalAction(plan) {
       heading: plan.journalSection,
       line: plan.journalLine,
       date: plan.date,
+      ...(plan.route === IDEA && plan.journalOrigin ? { contentOrigin: plan.journalOrigin } : {}),
     },
   };
 }
 
-function buildNoteAction(plan, capture = {}) {
+function buildNoteAction(plan, capture = {}, options = {}) {
   if (plan.ignored || !plan.createNote) return null;
   return {
     kind: 'note',
@@ -190,6 +252,7 @@ function buildNoteAction(plan, capture = {}) {
       frontmatter: {
         ...(capture.frontmatter || {}),
         ...(plan.noteFrontmatter || {}),
+        ...contentOriginFrontmatter(capture, options),
       },
     },
   };
@@ -300,10 +363,11 @@ function buildSkillInvocations(plan) {
 }
 
 function buildThreePackagePlan(capture = {}, options = {}) {
-  const keywordPlan = buildKeywordRoutingPlan(capture, options);
+  const normalizedCapture = normalizeCaptureProvenance(capture, options);
+  const keywordPlan = buildKeywordRoutingPlan(normalizedCapture, options);
 
-  const salienceClass = capture.salienceClass || null;
-  const confidence = typeof capture.confidence === 'number' ? capture.confidence : null;
+  const salienceClass = normalizedCapture.salienceClass || null;
+  const confidence = typeof normalizedCapture.confidence === 'number' ? normalizedCapture.confidence : null;
   const memoryClass = salienceClass ? SALIENCE_TO_MEMORY_CLASS[salienceClass] : null;
 
   const salienceOverridesIgnored = Boolean(
@@ -314,8 +378,8 @@ function buildThreePackagePlan(capture = {}, options = {}) {
   );
 
   if (keywordPlan.ignored && salienceOverridesIgnored) {
-    const text = primaryText(capture);
-    const title = String(capture.title || text.split(/\r?\n/)[0] || '').slice(0, 80).trim();
+    const text = primaryText(normalizedCapture);
+    const title = String(normalizedCapture.title || text.split(/\r?\n/)[0] || '').slice(0, 80).trim();
     keywordPlan.ignored = false;
     keywordPlan.defaultedToNoteBias = true;
 
@@ -327,24 +391,27 @@ function buildThreePackagePlan(capture = {}, options = {}) {
       keywordPlan.noteTitle = '';
       keywordPlan.noteContent = '';
       keywordPlan.noteFrontmatter = null;
+      keywordPlan.journalOrigin = journalOriginForCapture(normalizedCapture, options);
     } else {
       keywordPlan.route = NOTE;
       keywordPlan.journalSection = salienceClass === 'decision' ? DECISIONS_HEADING : NOTES_HEADING;
       keywordPlan.journalLine = title ? `- [[${title}]]` : `- ${text.slice(0, 120)}`;
       keywordPlan.createNote = true;
-      keywordPlan.noteTitle = title || inferTitle(capture, `Captured ${salienceClass}`, options);
+      keywordPlan.noteTitle = title || inferTitle(normalizedCapture, `Captured ${salienceClass}`, options);
       keywordPlan.noteContent = text;
       keywordPlan.noteFrontmatter = {
         type: 'draft',
         source: 'salience-capture',
         salience_class: salienceClass,
         confidence,
-        created_from: capture.date ? `journal/${capture.date}` : 'journal',
+        created_from: normalizedCapture.date ? `journal/${normalizedCapture.date}` : 'journal',
+        ...contentOriginFrontmatter(normalizedCapture, options),
       };
+      keywordPlan.journalOrigin = journalOriginForCapture(normalizedCapture, options);
     }
   }
 
-  if (keywordPlan.ignored && (capture.workIntake || capture.routeToWork || capture.createIssue)) {
+  if (keywordPlan.ignored && (normalizedCapture.workIntake || normalizedCapture.routeToWork || normalizedCapture.createIssue)) {
     keywordPlan.ignored = false;
     keywordPlan.route = WORK_INTAKE;
     keywordPlan.defaultedToNoteBias = false;
@@ -365,16 +432,16 @@ function buildThreePackagePlan(capture = {}, options = {}) {
 
   const memoryParams = shouldRouteToMemory ? {
     class: memoryClass,
-    content: capture.title || primaryText(capture).slice(0, 200),
-    rationale: capture.rationale || undefined,
-    source: capture.date ? `journal/${capture.date}` : 'journal',
+    content: normalizedCapture.title || primaryText(normalizedCapture).slice(0, 200),
+    rationale: normalizedCapture.rationale || undefined,
+    source: normalizedCapture.date ? `journal/${normalizedCapture.date}` : 'journal',
     confidence,
   } : null;
 
   const plan = {
     version: 'ambient-routing-plan/v1',
     ...keywordPlan,
-    capture: { ...capture },
+    capture: { ...normalizedCapture },
     routeToMemory: shouldRouteToMemory,
     memoryClass,
     memoryParams,
@@ -392,11 +459,11 @@ function buildThreePackagePlan(capture = {}, options = {}) {
 
   const actions = [
     buildJournalAction(plan),
-    buildNoteAction(plan, capture),
+    buildNoteAction(plan, normalizedCapture, options),
     buildMemoryAction(memoryParams),
   ].filter(Boolean);
 
-  const workIntake = buildWorkIntakePlan(capture, { salienceClass, confidence });
+  const workIntake = buildWorkIntakePlan(normalizedCapture, { salienceClass, confidence });
   if (workIntake && !plan.ignored) {
     plan.workIntake = workIntake;
     actions.push(workIntake);
@@ -445,6 +512,7 @@ module.exports = {
   buildRoutingPlan: buildKeywordRoutingPlan,
   buildThreePackagePlan,
   buildWorkIntakePlan,
+  journalOriginForCapture,
   ideaJournalLine,
   inferTitle,
   isSubstantiveIdea,

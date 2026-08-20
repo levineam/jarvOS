@@ -9,9 +9,11 @@ const path = require('node:path');
 
 const {
   captureWithJarvos,
+  frontmatterForCaptureEvent,
   normalizeCaptureEvent,
 } = require('../bridge/capture/src/universal-capture');
 const { createAcknowledgedVaultMutationService } = require('./helpers/acknowledged-vault-mutation-service');
+const { digestText } = require('../bridge/provenance/src/content-origin-contract');
 
 const TEST_DATE = '2026-06-22';
 
@@ -62,6 +64,107 @@ function baseCapture(source, overrides = {}) {
     ...overrides,
   };
 }
+
+test('compatibility captures carry explicit unknown provenance and enforcement rejects omissions', () => {
+  const compatibility = normalizeCaptureEvent(baseCapture('codex', {
+    text: 'note: compatibility provenance',
+  }));
+  assert.equal(compatibility.content_origin, 'unknown');
+  assert.equal(compatibility.content_origin_basis, 'unknown');
+  assert.equal(compatibility.human_evidence_eligible, false);
+
+  assert.throws(
+    () => normalizeCaptureEvent(baseCapture('codex', { text: 'note: enforced provenance' }), { requireDeclaration: true }),
+    /content_origin declaration is required/,
+  );
+  for (const partial of [
+    { content_origin: 'assistant' },
+    { content_origin_basis: 'assistant_generated' },
+    { user_source: { capture_event_id: 'capture-only' } },
+  ]) {
+    assert.throws(
+      () => normalizeCaptureEvent(baseCapture('codex', { text: 'note: partial provenance', ...partial }), { requireDeclaration: true }),
+      /content_origin declaration is required/,
+    );
+  }
+  assert.throws(
+    () => normalizeCaptureEvent(baseCapture('codex', {
+      text: 'note: human without receipt',
+      content_origin: 'human',
+      content_origin_basis: 'verbatim_user',
+    }), { requireDeclaration: true }),
+    /valid user-source receipt/,
+  );
+});
+
+test('declared provenance reaches note frontmatter while deferred adoption is stripped', () => {
+  const event = normalizeCaptureEvent(baseCapture('codex', {
+    title: 'Assistant-origin note',
+    content: 'Generated copy that remains searchable context.',
+    content_origin: 'assistant',
+    content_origin_basis: 'assistant_generated',
+    content_adoption: { state: 'accepted' },
+  }));
+  const frontmatter = frontmatterForCaptureEvent(event);
+
+  assert.equal(frontmatter.content_origin, 'assistant');
+  assert.equal(frontmatter.content_origin_basis, 'assistant_generated');
+  assert.equal(frontmatter.human_evidence_eligible, false);
+  assert.equal('content_adoption' in frontmatter, false);
+});
+
+test('receipt-bound human provenance survives the universal capture-to-note route', () => {
+  const content = 'The user supplied this durable thought.';
+  const captureEventId = 'capture-codex-human-1';
+  const calls = [];
+  const adapter = {
+    ensureJournal() {
+      return {
+        existed: true,
+        artifactReceipt: { artifacts: [{ kind: 'journal', vaultRelativePath: 'Journal/2026-06-22.md', outcome: 'committed' }] },
+      };
+    },
+    appendLineToJournalSection(input) {
+      return {
+        ...input,
+        artifactReceipt: { artifacts: [{ kind: 'journal', vaultRelativePath: 'Journal/2026-06-22.md', outcome: 'committed' }] },
+      };
+    },
+    writeNote(input) {
+      calls.push(input);
+      return {
+        written: true,
+        title: input.title,
+        path: `/tmp/${input.title}.md`,
+        artifactReceipt: { artifacts: [{ kind: 'note', vaultRelativePath: 'Notes/User thought.md', outcome: 'committed' }] },
+      };
+    },
+  };
+  const result = captureWithJarvos({
+    ...baseCapture('codex', {
+      captureEventId,
+      title: 'User thought',
+      text: content,
+      content_origin: 'human',
+      content_origin_basis: 'verbatim_user',
+      user_source: {
+        capture_event_id: captureEventId,
+        actor: 'user',
+        source_digest: digestText(content),
+        content_digest: digestText(content),
+      },
+    }),
+  }, {
+    adapter,
+    resolveUserSource: (id) => id === captureEventId ? { capture_event_id: id, actor: 'user', text: content } : null,
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(calls[0].frontmatter.content_origin, 'human');
+  assert.equal(calls[0].frontmatter.content_origin_basis, 'verbatim_user');
+  assert.equal(calls[0].frontmatter.human_evidence_eligible, true);
+  assert.equal(calls[0].frontmatter.content_origin_source.capture_event_id, captureEventId);
+});
 
 test('normalizes supported and custom agents into CaptureEvent v2', () => {
   for (const source of ['codex', 'claude-code', 'openclaw', 'chatgpt', 'custom:future-agent']) {
