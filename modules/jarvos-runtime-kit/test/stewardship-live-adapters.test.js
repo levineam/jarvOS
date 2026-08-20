@@ -879,6 +879,22 @@ test('OpenClaw rollback preserves a stewardship tool grant that predated jarvOS 
   } finally { fs.rmSync(temp, { recursive: true, force: true }); }
 });
 
+test('OpenClaw rollback honors and removes a legacy stewardship ownership receipt', () => {
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-openclaw-stewardship-legacy-receipt-'));
+  const config = path.join(temp, 'openclaw.json'); const staged = path.join(temp, 'stage'); const state = path.join(temp, 'state');
+  try {
+    const mappingRoot = path.join(state, 'stewardship-bridge', 'openclaw-sessions');
+    fs.mkdirSync(state, { recursive: true }); fs.mkdirSync(path.join(staged, 'runtimes', 'openclaw'), { recursive: true });
+    fs.writeFileSync(config, `${JSON.stringify({ plugins: { entries: { 'jarvos-stewardship': { config: { mappingRoot } } } }, tools: { allow: ['read', 'jarvos_stewardship_answer'] } }, null, 2)}\n`);
+    const receipt = path.join(state, 'openclaw-stewardship-install.json');
+    fs.writeFileSync(receipt, `${JSON.stringify({ schemaVersion: 1, toolAllowAdded: true })}\n`, { mode: 0o600 });
+    const env = { ...process.env, HOME: path.join(temp, 'home'), OPENCLAW_CONFIG: config, JARVOS_MANAGED_HARNESS_ROLLBACK: '1', JARVOS_STAGED_PUBLIC_RUNTIME_ROOT: staged, JARVOS_MANAGED_HARNESS_STATE_ROOT: state };
+    runSetup(path.join(ROOT, 'runtimes', 'openclaw', 'setup.sh'), env);
+    const rolledBack = JSON.parse(fs.readFileSync(config, 'utf8'));
+    assert.deepEqual(rolledBack.tools.allow, ['read']); assert.equal(rolledBack.plugins.entries['jarvos-stewardship'], undefined); assert.equal(fs.existsSync(receipt), false);
+  } finally { fs.rmSync(temp, { recursive: true, force: true }); }
+});
+
 test('OpenClaw setup does not claim permission ownership when its configuration update fails', () => {
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-openclaw-stewardship-config-failure-'));
   const configRoot = path.join(temp, 'config'); const config = path.join(configRoot, 'openclaw.json'); const staged = path.join(temp, 'stage'); const state = path.join(temp, 'state');
