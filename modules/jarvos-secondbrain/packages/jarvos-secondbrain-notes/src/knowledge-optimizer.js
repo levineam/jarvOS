@@ -210,12 +210,19 @@ function booleanish(value) {
 
 function sensitivityFor({ filePath, body, frontmatter }) {
   const tags = parseList(frontmatter.tags || frontmatter.tag || '');
+  const declaredPrivacyTier = String(frontmatter.privacy_tier || '').trim().toLowerCase();
+  const privacyTier = ['public', 'local-private', 'private', 'sensitive', 'secret'].includes(declaredPrivacyTier)
+    ? declaredPrivacyTier
+    : null;
   const haystack = [filePath, frontmatter.status, frontmatter.type, frontmatter.project, tags.join(' '), String(body || '')]
     .join('\n')
     .toLowerCase();
   const reasons = [];
   if (booleanish(frontmatter.private) || booleanish(frontmatter.sensitive)) {
     reasons.push('frontmatter marks note private/sensitive');
+  }
+  if (['private', 'sensitive', 'secret'].includes(privacyTier)) {
+    reasons.push(`frontmatter privacy_tier is ${privacyTier}`);
   }
   if (tags.some((tag) => /^(private|sensitive|secret|credentials?|medical|financial|tax)$/i.test(tag))) {
     reasons.push('frontmatter tags exclude automatic import');
@@ -224,7 +231,7 @@ function sensitivityFor({ filePath, body, frontmatter }) {
     if (haystack.includes(term)) reasons.push(`contains excluded term: ${term}`);
   }
   return {
-    privacyTier: reasons.length ? 'sensitive' : 'local-private',
+    privacyTier: privacyTier || (reasons.length ? 'sensitive' : 'local-private'),
     excluded: reasons.length > 0,
     reasons: [...new Set(reasons)],
   };
