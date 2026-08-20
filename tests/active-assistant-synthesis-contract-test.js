@@ -35,6 +35,22 @@ test('public contract rejects model-authored accounting and active links', () =>
   assert.equal(linked.terminalOutcome, 'policy_rejected');
 });
 
+test('public contract rejects raw HTML elements', () => {
+  for (const text of [
+    '<script>alert(1)</script>',
+    '<svg onload=alert(1)>source reflection</svg>',
+    '<iframe srcdoc="hostile content"></iframe>',
+    '<div onmouseover=alert(1)>source reflection</div>',
+  ]) {
+    const result = contract.composeProposal({
+      proposal: { contractVersion: VERSION, kind: 'proposal', segments: [{ id: 'html', type: 'source_backed_observation', text, sourceRefs: [source] }] },
+      eligibleSourceIds: [source],
+    });
+    assert.equal(result.terminalOutcome, 'policy_rejected', text);
+    assert.equal(result.rejected[0].reasonCode, 'active_markup', text);
+  }
+});
+
 test('redacted receipt contains no prose fields', () => {
   const receipt = contract.redactedReceipt({ runId: 'synthetic-run', terminalOutcome: 'rendered', evidenceDigest: 'a'.repeat(64), accepted: [{ id: 'good' }] });
   assert.equal(JSON.stringify(receipt).includes('coachMessage'), false);
