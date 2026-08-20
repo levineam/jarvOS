@@ -91,5 +91,10 @@ test('supported coding runtime docs point at the shared capture path', () => {
     assert.match(text, /jarvos_hydrate|ontology provider/i, docPath);
     assert.match(text, /hierarchy-of-meaning|ontology context packet/i, docPath);
     assert.match(text, /must not directly\s+mutate\s+ontology|do not directly\s+mutate\s+ontology|must not rewrite ONTOLOGY|do not rewrite ONTOLOGY/i, docPath);
+    assert.doesNotMatch(
+      text,
+      /node (?:modules\/jarvos-secondbrain\/)?scripts\/(?:jarvos-capture|obsidian-note-journal-contract)\.js/,
+      `${docPath} must not execute a capture script relative to the workspace`,
+    );
   }
 });

@@ -24,16 +24,17 @@ target is AI coding tools.
 Intentional capture requests include phrases such as `note:`, `make a note`,
 `idea:`, `save this`, and equivalent explicit requests from the user.
 
-For these requests, the coding tool must call the shared jarvOS entrypoint:
+For these requests, the coding tool must call the shared jarvOS entrypoint by
+an absolute path rooted in a trusted jarvOS installation:
 
 ```bash
-node modules/jarvos-secondbrain/scripts/jarvos-capture.js
+node "/absolute/path/to/trusted/jarvOS/modules/jarvos-secondbrain/scripts/jarvos-capture.js"
 ```
 
-The caller may also use the installed `jarvos-capture` binary or the
-compatibility note/journal contract when a host has not wired the capture
-entrypoint yet. The caller must not raw-write Obsidian Markdown files or invent
-daily journal paths.
+The runtime must materialize the real absolute installation path during setup;
+it must not resolve either this script or the compatibility note/journal
+contract relative to the current workspace. The caller must not raw-write
+Obsidian Markdown files or invent daily journal paths.
 
 ## Notes
 
