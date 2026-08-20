@@ -20,7 +20,7 @@ jarvOS combines an autonomous journaling and note-taking system (powered by Obsi
 Management System (powered by Paperclip) as well as a number of other pieces
 of open source software (e.g. GBrain by Garry Tan) to construct a "digital twin" that serves as a unifying "mind" 
 for your AI agents. Not only does it enable your AI agent to understand you and what you're 
-trying to accomplish, but you can seamlessly switch between agents without losing any 
+trying to accomplish, but you can seamlessly switch between agents without losing any context.
 
 You talk to your assistant like normal. jarvOS routes useful information into
 the right place, then brings the right context back when your assistant needs
