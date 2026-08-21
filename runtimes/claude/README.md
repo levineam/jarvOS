@@ -16,7 +16,7 @@ From the jarvOS repo root:
 The setup script:
 
 - registers a user-scoped Claude Code MCP server named `jarvos`
-- installs a Claude Code `SessionStart` hook in `~/.claude/settings.json`
+- installs Claude Code `SessionStart` and `PreCompact` hooks in `~/.claude/settings.json`
 - materializes `~/.claude/CLAUDE.md` from
   `runtimes/claude/templates/CLAUDE.md.template` (see
   [Claude Code CLAUDE.md bootstrap](#claude-code-claudemd-bootstrap) below)
@@ -36,13 +36,21 @@ Target: `claude-code`.
 
 Claude Code supports `SessionStart` hook `additionalContext`, so the adapter
 uses `runtimes/claude/jarvos-session-start-hook.js` to emit the same jarvOS
-Working Context Packet used by Codex.
+Working Context Packet used by Codex. The hook matcher is `startup|resume|compact`
+so a compaction or resume re-orients the session instead of dropping jarvOS
+context. Compact and resume use a 4,000 character packet because the session
+already carries a summary of its own history; startup keeps the 9,500 character
+default. Both budgets are capped by `JARVOS_CLAUDE_HYDRATION_MAX_CHARS` when
+set. Claude Code caps hook-injected context at 10,000 characters.
 
-Claude Code caps hook-injected context at 10,000 characters. This adapter uses a
-9,500 character default budget, configurable with
-`JARVOS_CLAUDE_HYDRATION_MAX_CHARS`. Hook failures are logged to
-`~/.claude/jarvos-hydration.log` and fail open with an empty hook result so
-Claude startup is not blocked.
+Before compaction, `runtimes/claude/jarvos-precompact-hook.js` appends a
+mechanical session-thread checkpoint (cwd, git HEAD, dirty-path count, trigger).
+It does not persist compaction summaries or other prompt-derived content.
+PreCompact cannot inject `additionalContext`; re-orientation happens on the
+following `SessionStart` with `source: compact`.
+
+Hook failures are logged to `~/.claude/jarvos-hydration.log` and fail open with
+an empty hook result so Claude startup and compaction are not blocked.
 
 When the optional stewardship bridge is enabled by the managed launcher, Claude
 hooks resolve a pending judgment from the hook's `session_id` and an owner-only,
@@ -150,5 +158,6 @@ and do not create guessed daily journal files under `Notes/`.
 ```bash
 claude mcp get jarvos
 node runtimes/claude/jarvos-session-start-hook.js
+node runtimes/claude/jarvos-precompact-hook.js
 node modules/jarvos-runtime-kit/scripts/jarvos-runtime-kit.js check claude
 ```

@@ -139,7 +139,8 @@ Every Claude Code session in this workspace starts with a hydrated Working
 Context Packet, injected by the jarvOS `SessionStart` hook (configured in
 `~/.claude/settings.json`). It includes current Paperclip work, today's
 journal, linked notes, the jarvOS ontology context packet, and a Hydration
-Report.
+Report. The same hook re-fires after compact and resume with a smaller packet
+so the session can re-orient without a full re-brief.
 
 ### MCP tools (registered as `jarvos`)
 
