@@ -9,6 +9,7 @@ const GUARDED_CLAIM = /\b(?:can|can't|cannot|available|unavailable|sent|delivere
 const ACTIVE_MARKUP = /(?:https?:\/\/|mailto:|data:|javascript:|\[[^\]]+\]\([^)]*\)|<a\b|<img\b|!\[[^\]]*\]\([^)]*\)|\[\[[^\]]+\]\])/i;
 const APPROVAL_VOICE = /\b(?:prove|earn|deserve|win)\s+(?:my|your|our)?\s*(?:approval|goodness|fairness)\b/i;
 const ASSISTANT_ACTION_CLAIM = /\b(?:I|we|the (?:assistant|system|bot)|Jarvis)\s+(?:sent|delivered|fulfilled|completed|finished|created|scheduled|drafted|wrote|saved)\b/i;
+const DANGLING_SUBJECT = /^(?:that|this|it|those|these)\b/i;
 const NARRATIVE_TYPES = Object.freeze(new Set(['source_backed_observation', 'cross_project_connection']));
 
 function reject(reasonCode) { return { ok: false, reasonCode }; }
@@ -85,6 +86,7 @@ function validateNarrativeRow(row, { eligibleSourceIds = new Set(), question = f
   if (ACTIVE_MARKUP.test(text)) return reject('active_markup');
   if (APPROVAL_VOICE.test(text)) return reject('approval_seeking_voice');
   if (ASSISTANT_ACTION_CLAIM.test(text)) return reject('unsupported_assistant_action');
+  if (DANGLING_SUBJECT.test(text)) return reject('subject_not_named');
   if (!refs.length) return reject('source_ref_required');
   if (new Set(refs).size !== refs.length || refs.some((ref) => !eligibleSourceIds.has(ref))) return reject('source_ref_ineligible');
   if (question) {

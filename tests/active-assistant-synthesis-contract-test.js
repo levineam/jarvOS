@@ -51,7 +51,7 @@ test('v2 renders a grounded multi-sentence narrative and one closing question', 
       kind: 'proposal',
       claims: [
         { id: 'week', type: 'source_backed_observation', text: 'You returned to the manuscript this week.', sourceRefs: [source] },
-        { id: 'connection', type: 'cross_project_connection', text: 'That work sits beside a renewed research thread.', sourceRefs: [source, second] },
+        { id: 'connection', type: 'cross_project_connection', text: 'The manuscript work sits beside a renewed research thread.', sourceRefs: [source, second] },
       ],
       closingQuestion: { id: 'question', text: 'Does the manuscript still deserve the next clear block of attention?', sourceRefs: [source] },
     },
@@ -84,6 +84,23 @@ test('v2 rejects the whole narrative instead of salvaging an invalid sibling', (
   assert.equal(result.accepted.length, 0);
   assert.notEqual(result.terminalOutcome, 'salvaged');
   assert.deepEqual(result.rejected.map((row) => row.reasonCode), ['unsupported_assistant_action']);
+});
+
+test('v2 rejects dangling subjects such as “that work”', () => {
+  const result = contract.composeProposal({
+    proposal: {
+      contractVersion: V2,
+      kind: 'proposal',
+      claims: [
+        { id: 'one', type: 'source_backed_observation', text: 'You returned to the manuscript.', sourceRefs: [source] },
+        { id: 'two', type: 'cross_project_connection', text: 'That work connects to the research.', sourceRefs: [source] },
+      ],
+      closingQuestion: { id: 'question', text: 'Is the manuscript the thread to continue?', sourceRefs: [source] },
+    },
+    eligibleSourceIds: [source],
+  });
+  assert.equal(result.ok, false);
+  assert.deepEqual(result.rejected.map((row) => row.reasonCode), ['subject_not_named']);
 });
 
 test('v2 permits evidence-backed work-state claims and uses no_nudge as its product outcome', () => {
