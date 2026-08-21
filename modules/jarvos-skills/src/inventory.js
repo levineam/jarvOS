@@ -1212,12 +1212,13 @@ function observeInventory(options = {}) {
     const loadedExclusions = loadExclusionOverlay(layout.exclusionOverlayPath);
     if (loadedExclusions.status === 'valid' || loadedExclusions.status === 'absent') {
       exclusions = loadedExclusions.overlay.entries || [];
-      const excludedIds = new Set(exclusions.map((entry) => entry.logicalId));
+      const excludedById = new Map(exclusions.map((entry) => [entry.logicalId, entry]));
       skills = skills.map((skill) => {
-        if (!excludedIds.has(skill.logicalId)) return skill;
+        const exclusion = excludedById.get(skill.logicalId);
+        if (!exclusion) return skill;
         return {
           ...skill,
-          disposition: { kind: 'blocked', reasonCode: 'owner_excluded' },
+          disposition: { kind: 'blocked', reasonCode: exclusion.reasonCode || 'owner_excluded' },
           attention: 'quiet',
         };
       });
@@ -1333,6 +1334,7 @@ function observeInventory(options = {}) {
       harnessRoots,
       publicCatalog: readJsonSafe(resolved.publicCatalogPath, null),
       localOverlay: readJsonSafe(resolved.localOverlayPath, null),
+      ownerApprovedSkills: options.ownerApprovedSkills,
       reviewer: options.reviewer || null,
       complete,
       autoAdmit: options.autoAdmit !== false && complete,
@@ -1440,6 +1442,7 @@ function inventoryOperator(options = {}) {
     // observation-first so discovery never silently mutates accepted state.
     assess: options.assess === true,
     autoAdmit: options.autoAdmit !== false,
+    ownerApprovedSkills: options.ownerApprovedSkills,
     reviewer: options.reviewer || null,
     saveConfig: options.saveConfig === true,
   });
