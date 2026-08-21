@@ -26,6 +26,7 @@ test('ready receipt enumerates every active project with deterministic public-sa
   const result = evaluate();
   assert.deepEqual(result, {
     contractVersion: VERSION,
+    registryGeneration: 42,
     ready: true,
     reasonCodes: [],
     missingProjectIds: [],
@@ -49,6 +50,26 @@ test('identical reordered caller and packet inputs retain the digest', () => {
   });
   assert.equal(left.digest, right.digest);
   assert.equal(right.ready, true);
+});
+
+test('the receipt binds the registry generation used for coverage', () => {
+  const result = coverage.evaluatePortfolioCoverage({
+    registryGeneration: 43,
+    activeProjectIds: ['prj_000001', 'prj_000002'],
+    packet: packet({ generation: 43 }),
+  });
+  assert.equal(result.ready, true);
+  assert.equal(result.registryGeneration, 43);
+  assert.notEqual(result.digest, evaluate().digest);
+});
+
+test('receipt verification rejects semantic tampering', () => {
+  const valid = evaluate();
+  assert.equal(coverage.verifyPortfolioCoverageReceipt(valid).ok, true);
+  assert.deepEqual(coverage.verifyPortfolioCoverageReceipt({ ...valid, registryGeneration: 99 }), {
+    ok: false,
+    reasonCode: 'portfolio_coverage_receipt_invalid',
+  });
 });
 
 test('missing active projects are a fail-closed incomplete enumeration', () => {
