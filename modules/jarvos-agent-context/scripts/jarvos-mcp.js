@@ -8,6 +8,7 @@ const {
   createNote,
   controlPlane,
   currentWork,
+  renderCurrentWorkUnavailable,
   ensureTodayJournal,
   healthTodayJournal,
   hydrate,
@@ -605,8 +606,15 @@ async function callTool(name, args = {}) {
     return textResult('unsupported shared-skill operation', true);
   }
   if (name === 'jarvos_current_work') {
-    const result = await currentWork(args);
-    return textResult(result.markdown, !result.ok);
+    try {
+      const result = await currentWork(args);
+      if (!result || typeof result.markdown !== 'string' || !result.markdown.trim()) {
+        return textResult(renderCurrentWorkUnavailable(), true);
+      }
+      return textResult(result.markdown, !result.ok);
+    } catch {
+      return textResult(renderCurrentWorkUnavailable(), true);
+    }
   }
   if (name === 'jarvos_projects_context') {
     const request = {

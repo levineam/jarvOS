@@ -4,6 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const crypto = require('node:crypto');
+const { spawnSync } = require('child_process');
 const { createHostProjectsContextProvider } = require('./projects-context-bootstrap');
 
 const {
@@ -17,6 +18,8 @@ const JARVOS_ROOT = path.resolve(MODULE_ROOT, '..', '..');
 const DEFAULT_PAPERCLIP_PROJECT_ID = '3ba24079-15f4-48a5-aef3-24aa742d1177';
 const DEFAULT_HYDRATION_MAX_CHARS = 12000;
 const DEFAULT_CURRENT_WORK_STATUSES = ['in_progress', 'todo', 'blocked'];
+const DEFAULT_CURRENT_WORK_FRESH_MS = 60 * 60 * 1000;
+const BRAIN_SYNC_MARKERS = Object.freeze(['last-sync', path.join('.gbrain', 'last-sync')]);
 const DEFAULT_SESSION_THREAD_PREFIX = 'JarvOS Session Thread';
 const DEFAULT_SESSION_THREAD_SECTION = DEFAULT_NOTES_SECTION;
 const DEFAULT_SESSION_THREAD_LOCK_RETRY_DELAY_MS = 25;
@@ -715,48 +718,233 @@ function renderIssuesMarkdown(issues, { maxItems = 8 } = {}) {
   }).join('\n');
 }
 
-async function currentWork(options = {}) {
-  const auth = loadPaperclipAuth(options.paperclip || {});
-  const statuses = normalizeStatusList(options.statuses, DEFAULT_CURRENT_WORK_STATUSES);
-  if (!auth.companyId || !auth.apiKey) {
-    return {
-      ok: false,
-      markdown: [
-        '# jarvOS Current Work',
-        '',
-        'Paperclip is not configured for jarvOS current-work lookup.',
-      ].join('\n'),
-      issues: [],
-    };
+function parseTimestamp(value) {
+  if (value instanceof Date && !Number.isNaN(value.getTime())) return value;
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    const date = new Date(value);
+    return Number.isNaN(date.getTime()) ? null : date;
   }
+  if (typeof value === 'string' && value.trim()) {
+    const date = new Date(value);
+    return Number.isNaN(date.getTime()) ? null : date;
+  }
+  return null;
+}
 
-  const limit = Number(options.limit || 200);
-  const payload = await paperclipJson(`/companies/${auth.companyId}/issues?limit=${limit}`, auth);
-  const issues = normalizeIssueList(payload)
-    .filter((issue) => !issue.hiddenAt)
-    .filter((issue) => statuses.includes(issue.status))
-    .filter((issue) => options.allowUnbackedInReview || issueHasConcreteReviewSignal(issue))
-    .filter((issue) => {
-      if (!options.includeAllAgents && auth.agentId) {
-        return !issue.assigneeAgentId || issue.assigneeAgentId === auth.agentId;
-      }
-      return true;
-    })
-    .sort((a, b) => {
-      const statusRank = { in_progress: 0, in_review: 1, blocked: 2, todo: 3 };
-      const aRank = statusRank[a.status] ?? 9;
-      const bRank = statusRank[b.status] ?? 9;
-      if (aRank !== bRank) return aRank - bRank;
-      return String(b.updatedAt || b.createdAt || '').localeCompare(String(a.updatedAt || a.createdAt || ''));
+function formatAgePhrase(from, now) {
+  const ms = Math.max(0, now.getTime() - from.getTime());
+  const minute = 60 * 1000;
+  const hour = 60 * minute;
+  const day = 24 * hour;
+  if (ms < hour) return `${Math.max(1, Math.round(ms / minute))}m`;
+  if (ms < day) return `${Math.max(1, Math.round(ms / hour))}h`;
+  return `${Math.max(1, Math.round(ms / day))}d`;
+}
+
+function calendarDayUtc(date) {
+  return date.toISOString().slice(0, 10);
+}
+
+// Age labels sit immediately under the heading so head-truncation cannot drop them.
+function prependAfterHeading(markdown, line) {
+  const text = String(markdown || '');
+  const provenance = String(line || '').trim();
+  if (!provenance) return text;
+  const match = text.match(/^(#[^\n]*)\n?/);
+  if (!match) return text ? `${provenance}\n\n${text}` : `${provenance}\n`;
+  const rest = text.slice(match[0].length).replace(/^\n*/, '');
+  return `${match[1]}\n\n${provenance}\n\n${rest}`;
+}
+
+function observeMtimeIso(filePath) {
+  try {
+    if (!filePath || !fs.existsSync(filePath)) return null;
+    return fs.statSync(filePath).mtime.toISOString();
+  } catch {
+    return null;
+  }
+}
+
+function gitToplevel(repoDir) {
+  try {
+    const result = spawnSync('git', ['-C', repoDir, 'rev-parse', '--show-toplevel'], {
+      encoding: 'utf8',
+      timeout: 2000,
+      stdio: ['ignore', 'pipe', 'ignore'],
     });
+    if (result.status !== 0) return null;
+    const top = String(result.stdout || '').trim();
+    if (!top) return null;
+    try {
+      return fs.realpathSync(top);
+    } catch {
+      return path.resolve(top);
+    }
+  } catch {
+    return null;
+  }
+}
 
-  const markdown = [
+// Only trust git metadata when the source dir is the repo root. `git -C`
+// otherwise walks to an ancestor checkout and would label the wrong tree.
+function observeGitCommitIso(repoDir) {
+  try {
+    if (!repoDir || !fs.existsSync(repoDir)) return null;
+    const real = fs.realpathSync(repoDir);
+    const top = gitToplevel(real);
+    if (!top || top !== real) return null;
+    const result = spawnSync('git', ['-C', real, 'log', '-1', '--format=%cI'], {
+      encoding: 'utf8',
+      timeout: 2000,
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
+    if (result.status !== 0) return null;
+    const iso = String(result.stdout || '').trim();
+    return parseTimestamp(iso) ? iso : null;
+  } catch {
+    return null;
+  }
+}
+
+function observeBrainProvenance(config = {}) {
+  try {
+    const brainDir = firstString(config.brainDir);
+    const gbrainDir = firstString(config.gbrainDir);
+    let syncedAt = null;
+    if (gbrainDir) {
+      for (const marker of BRAIN_SYNC_MARKERS) {
+        syncedAt = observeMtimeIso(path.join(gbrainDir, marker));
+        if (syncedAt) break;
+      }
+    }
+    return {
+      commitAt: brainDir ? observeGitCommitIso(brainDir) : null,
+      modifiedAt: brainDir ? observeMtimeIso(brainDir) : null,
+      syncedAt,
+    };
+  } catch {
+    return { commitAt: null, modifiedAt: null, syncedAt: null };
+  }
+}
+
+function formatBrainProvenanceLine(observation, now = new Date()) {
+  try {
+    const commit = parseTimestamp(observation?.commitAt);
+    const modified = parseTimestamp(observation?.modifiedAt);
+    const synced = parseTimestamp(observation?.syncedAt);
+    const source = commit || modified;
+    if (!source && !synced) return 'brain age: unknown';
+    const parts = [];
+    if (source) {
+      parts.push(`${commit ? 'last commit' : 'last modified'} ${calendarDayUtc(source)} (${formatAgePhrase(source, now)} ago)`);
+    } else {
+      parts.push('source unknown');
+    }
+    if (synced) parts.push(`last sync ${calendarDayUtc(synced)} (${formatAgePhrase(synced, now)} ago)`);
+    else parts.push('last sync unknown');
+    return `brain age: ${parts.join('; ')}`;
+  } catch {
+    return 'brain age: unknown';
+  }
+}
+
+function withBrainProvenanceMarkdown(markdown, config, options = {}) {
+  const now = parseTimestamp(options.now) || new Date();
+  return prependAfterHeading(markdown, formatBrainProvenanceLine(observeBrainProvenance(config), now));
+}
+
+function renderCurrentWorkUnavailable() {
+  return [
     '# jarvOS Current Work',
     '',
-    renderIssuesMarkdown(issues, { maxItems: Number(options.maxItems || 8) }),
+    'source: unavailable',
+    '',
+    'Current-work source is unavailable. This is not an empty work list.',
   ].join('\n');
+}
 
-  return { ok: true, markdown, issues };
+function resolveCurrentWorkReconciledAt(payload, options = {}) {
+  if (Object.prototype.hasOwnProperty.call(options, 'reconciledAt')) return options.reconciledAt;
+  if (payload && typeof payload === 'object' && !Array.isArray(payload)) {
+    return firstString(payload.reconciledAt, payload.capturedAt, payload.asOf, payload.syncedAt);
+  }
+  return undefined;
+}
+
+function formatCurrentWorkAgeLabel(reconciledAt, now, freshWindowMs) {
+  try {
+    const at = parseTimestamp(reconciledAt);
+    if (!at) return 'source age: unknown';
+    const windowMs = Number.isFinite(freshWindowMs) && freshWindowMs > 0 ? freshWindowMs : DEFAULT_CURRENT_WORK_FRESH_MS;
+    const ageMs = Math.max(0, now.getTime() - at.getTime());
+    if (ageMs <= windowMs) return `fresh as of ${at.toISOString()}`;
+    return `stale (age ${formatAgePhrase(at, now)}): last reconciled ${at.toISOString()}`;
+  } catch {
+    return 'source age: unknown';
+  }
+}
+
+function renderCurrentWorkMarkdown(label, issues, maxItems) {
+  return [
+    '# jarvOS Current Work',
+    '',
+    label,
+    '',
+    renderIssuesMarkdown(issues, { maxItems }),
+  ].join('\n');
+}
+
+async function currentWork(options = {}) {
+  try {
+    const now = parseTimestamp(options.now) || new Date();
+    const auth = loadPaperclipAuth(options.paperclip || {});
+    const statuses = normalizeStatusList(options.statuses, DEFAULT_CURRENT_WORK_STATUSES);
+    if (!auth.companyId || !auth.apiKey) {
+      return {
+        ok: false,
+        markdown: renderCurrentWorkUnavailable(),
+        issues: [],
+        source: { status: 'unavailable' },
+      };
+    }
+
+    const limit = Number(options.limit || 200);
+    const payload = await paperclipJson(`/companies/${auth.companyId}/issues?limit=${limit}`, auth);
+    const issues = normalizeIssueList(payload)
+      .filter((issue) => !issue.hiddenAt)
+      .filter((issue) => statuses.includes(issue.status))
+      .filter((issue) => options.allowUnbackedInReview || issueHasConcreteReviewSignal(issue))
+      .filter((issue) => {
+        if (!options.includeAllAgents && auth.agentId) {
+          return !issue.assigneeAgentId || issue.assigneeAgentId === auth.agentId;
+        }
+        return true;
+      })
+      .sort((a, b) => {
+        const statusRank = { in_progress: 0, in_review: 1, blocked: 2, todo: 3 };
+        const aRank = statusRank[a.status] ?? 9;
+        const bRank = statusRank[b.status] ?? 9;
+        if (aRank !== bRank) return aRank - bRank;
+        return String(b.updatedAt || b.createdAt || '').localeCompare(String(a.updatedAt || a.createdAt || ''));
+      });
+
+    const resolved = resolveCurrentWorkReconciledAt(payload, options);
+    const reconciledAt = resolved === undefined ? now.toISOString() : resolved;
+    const label = formatCurrentWorkAgeLabel(reconciledAt, now, options.freshWindowMs);
+    return {
+      ok: true,
+      markdown: renderCurrentWorkMarkdown(label, issues, Number(options.maxItems || 8)),
+      issues,
+      source: { status: label.startsWith('stale') ? 'stale' : (label.startsWith('fresh') ? 'fresh' : 'unknown'), reconciledAt },
+    };
+  } catch {
+    return {
+      ok: false,
+      markdown: renderCurrentWorkUnavailable(),
+      issues: [],
+      source: { status: 'unavailable' },
+    };
+  }
 }
 
 function localDateString(timeZone, date = new Date()) {
@@ -1409,10 +1597,11 @@ function recall(options = {}) {
     seeds: Array.isArray(options.seeds) ? options.seeds : undefined,
     dryRun: options.dryRun === true,
   });
+  const markdown = withBrainProvenanceMarkdown(gbrain.renderRecallMarkdown(bundle), bundle.config, options);
   return {
     ok: true,
-    markdown: gbrain.renderRecallMarkdown(bundle),
-    bundle,
+    markdown,
+    bundle: { ...bundle, markdown },
   };
 }
 
@@ -1455,8 +1644,15 @@ function synthesizeRecall(options = {}) {
     .filter(Boolean)
     .slice(0, 8);
 
+  const provenanceLine = formatBrainProvenanceLine(
+    observeBrainProvenance(bundle.config),
+    parseTimestamp(options.now) || new Date(),
+  );
+  const sourceMarkdown = prependAfterHeading(bundle.markdown, provenanceLine);
   const lines = [
     '# jarvOS Retrieval Synthesis',
+    '',
+    provenanceLine,
     '',
     `Query: ${query}`,
     '',
@@ -1478,12 +1674,12 @@ function synthesizeRecall(options = {}) {
     for (const item of graphSeeds) lines.push(`- Related graph node: ${item}`);
   }
 
-  lines.push('', '## Source Bundle', '', bundle.markdown.trim());
+  lines.push('', '## Source Bundle', '', sourceMarkdown.trim());
 
   return {
     ok: bundle.ok,
     markdown: `${lines.join('\n').trim()}\n`,
-    bundle,
+    bundle: { ...bundle, markdown: sourceMarkdown },
     evidence,
     graphSeeds,
   };
@@ -1684,6 +1880,7 @@ module.exports = {
   createNote,
   currentWork,
   defaultFrontmatter,
+  renderCurrentWorkUnavailable,
   ensureTodayJournal,
   expandTilde,
   hydrate,
