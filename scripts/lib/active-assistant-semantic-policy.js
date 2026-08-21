@@ -3,10 +3,15 @@
 // Public, data-only policy helpers. They intentionally receive opaque source
 // IDs and never see source text, provider credentials, or host paths.
 const ACTIVE_ASSISTANT_SEMANTIC_POLICY_VERSION = 'active-assistant-semantic-policy/v1';
+const ACTIVE_ASSISTANT_NARRATIVE_POLICY_VERSION = 'active-assistant-semantic-policy/v2';
 const TYPES = Object.freeze(new Set(['quoted_evidence', 'source_backed_observation', 'advisory_question']));
 const GUARDED_CLAIM = /\b(?:can|can't|cannot|available|unavailable|sent|delivered|fulfilled|completed|finished|done|shipped|created|scheduled|drafted)\b/i;
 const ACTIVE_MARKUP = /(?:https?:\/\/|mailto:|data:|javascript:|\[[^\]]+\]\([^)]*\)|<a\b|<img\b|!\[[^\]]*\]\([^)]*\)|\[\[[^\]]+\]\])/i;
 const APPROVAL_VOICE = /\b(?:prove|earn|deserve|win)\s+(?:my|your|our)?\s*(?:approval|goodness|fairness)\b/i;
+const ASSISTANT_ACTION_CLAIM = /\b(?:I|we|the (?:assistant|system|bot)|Jarvis)\s+(?:sent|delivered|fulfilled|completed|finished|created|scheduled|drafted|wrote|saved)\b/i;
+const DANGLING_SUBJECT = /^(?:that|this|it|those|these)\b/i;
+const ANAPHORIC_QUESTION_SUBJECT = /^(?:is|are|was|were|does|do|did|would|could|should|can|will|has|have|had)\s+(?:that|this|it|those|these)\b/i;
+const NARRATIVE_TYPES = Object.freeze(new Set(['source_backed_observation', 'cross_project_connection']));
 
 function reject(reasonCode) { return { ok: false, reasonCode }; }
 
@@ -70,4 +75,63 @@ function composeSegments(rows, options = {}) {
   return { ok: true, accepted: best.subset.map(({ proposalIndex, ...row }) => row), rejected: rejected.sort((a, b) => a.index - b.index), message: renderSegments(best.subset, options.greeting) };
 }
 
-module.exports = { ACTIVE_ASSISTANT_SEMANTIC_POLICY_VERSION, TYPES, validateSegment, renderSegments, composeSegments };
+function validateNarrativeRow(row, { eligibleSourceIds = new Set(), question = false } = {}) {
+  if (!row || typeof row !== 'object' || Array.isArray(row)) return reject('narrative_row_invalid');
+  const allowed = question ? new Set(['id', 'text', 'sourceRefs']) : new Set(['id', 'type', 'text', 'sourceRefs']);
+  if (Object.keys(row).some((key) => !allowed.has(key))) return reject('narrative_row_invalid');
+  const id = typeof row.id === 'string' ? row.id.trim() : '';
+  const text = typeof row.text === 'string' ? row.text.trim() : '';
+  const type = question ? 'advisory_question' : String(row.type || '').trim();
+  const refs = Array.isArray(row.sourceRefs) ? row.sourceRefs.map((ref) => String(ref || '').trim()).filter(Boolean) : [];
+  if (!id || !text || (!question && !NARRATIVE_TYPES.has(type))) return reject('narrative_row_invalid');
+  if (ACTIVE_MARKUP.test(text)) return reject('active_markup');
+  if (APPROVAL_VOICE.test(text)) return reject('approval_seeking_voice');
+  if (ASSISTANT_ACTION_CLAIM.test(text)) return reject('unsupported_assistant_action');
+  if (DANGLING_SUBJECT.test(text)) return reject('subject_not_named');
+  if (!refs.length) return reject('source_ref_required');
+  if (new Set(refs).size !== refs.length || refs.some((ref) => !eligibleSourceIds.has(ref))) return reject('source_ref_ineligible');
+  if (question) {
+    if (!/[?？]$/.test(text) || (text.match(/[?？]/g) || []).length !== 1) return reject('closing_question_invalid');
+    if (ANAPHORIC_QUESTION_SUBJECT.test(text)) return reject('subject_not_named');
+  } else if (/[?？]/.test(text) || !/[.!。！]$/.test(text)) {
+    return reject('narrative_claim_invalid');
+  }
+  return { ok: true, value: question ? { id, text, sourceRefs: refs } : { id, type, text, sourceRefs: refs } };
+}
+
+function composeNarrative({ claims, closingQuestion }, options = {}) {
+  const eligible = options.eligibleSourceIds instanceof Set ? options.eligibleSourceIds : new Set(options.eligibleSourceIds || []);
+  if (!Array.isArray(claims) || claims.length < 2 || claims.length > 5 || !closingQuestion) {
+    return { ok: false, reasonCode: 'narrative_shape_invalid', accepted: [], rejected: [] };
+  }
+  const rows = [...claims, closingQuestion];
+  const ids = rows.map((row) => row?.id).filter(Boolean);
+  if (new Set(ids).size !== rows.length) return { ok: false, reasonCode: 'narrative_id_duplicate', accepted: [], rejected: [] };
+  const accepted = [];
+  const rejected = [];
+  claims.forEach((row, index) => {
+    const result = validateNarrativeRow(row, { eligibleSourceIds: eligible });
+    if (result.ok) accepted.push(result.value);
+    else rejected.push({ id: row?.id || `claim:${index}`, index, reasonCode: result.reasonCode });
+  });
+  const question = validateNarrativeRow(closingQuestion, { eligibleSourceIds: eligible, question: true });
+  if (!question.ok) rejected.push({ id: closingQuestion?.id || 'closing-question', index: claims.length, reasonCode: question.reasonCode });
+  if (rejected.length) return { ok: false, reasonCode: 'narrative_policy_rejected', accepted: [], rejected };
+  const greeting = options.greeting || 'Good morning, Sir!';
+  const message = [greeting, ...accepted.map((row) => row.text), question.value.text].join(' ');
+  const maxLength = Number.isInteger(options.maxLength) ? options.maxLength : 1500;
+  if (message.length > maxLength) return { ok: false, reasonCode: 'narrative_length_exceeded', accepted: [], rejected: [] };
+  return { ok: true, accepted, closingQuestion: question.value, rejected: [], message };
+}
+
+module.exports = {
+  ACTIVE_ASSISTANT_SEMANTIC_POLICY_VERSION,
+  ACTIVE_ASSISTANT_NARRATIVE_POLICY_VERSION,
+  TYPES,
+  NARRATIVE_TYPES,
+  validateSegment,
+  validateNarrativeRow,
+  renderSegments,
+  composeSegments,
+  composeNarrative,
+};
