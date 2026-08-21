@@ -19,6 +19,7 @@ test('public contract derives dispositions and salvages a guarded sibling determ
       ],
     },
     eligibleSourceIds: [source],
+    expectedContractVersion: VERSION,
   });
   assert.equal(result.ok, true);
   assert.equal(result.terminalOutcome, 'salvaged');
@@ -40,7 +41,7 @@ test('redacted receipt contains no prose fields', () => {
   const receipt = contract.redactedReceipt({ runId: 'synthetic-run', terminalOutcome: 'rendered', evidenceDigest: 'a'.repeat(64), accepted: [{ id: 'good' }] });
   assert.equal(JSON.stringify(receipt).includes('coachMessage'), false);
   assert.equal(JSON.stringify(receipt).includes('sourceText'), false);
-  assert.equal(receipt.contractVersion, VERSION);
+  assert.equal(receipt.contractVersion, V2);
 });
 
 test('v2 renders a grounded multi-sentence narrative and one closing question', () => {
@@ -103,6 +104,37 @@ test('v2 rejects dangling subjects such as “that work”', () => {
   assert.deepEqual(result.rejected.map((row) => row.reasonCode), ['subject_not_named']);
 });
 
+test('v2 rejects an anaphoric closing question but allows a named subject', () => {
+  const rejected = contract.composeProposal({
+    proposal: {
+      contractVersion: V2,
+      kind: 'proposal',
+      claims: [
+        { id: 'one', type: 'source_backed_observation', text: 'You returned to the manuscript.', sourceRefs: [source] },
+        { id: 'two', type: 'source_backed_observation', text: 'The manuscript now has a clearer opening.', sourceRefs: [source] },
+      ],
+      closingQuestion: { id: 'question', text: 'Is that the thread to continue?', sourceRefs: [source] },
+    },
+    eligibleSourceIds: [source],
+  });
+  assert.equal(rejected.ok, false);
+  assert.deepEqual(rejected.rejected.map((row) => row.reasonCode), ['subject_not_named']);
+
+  const named = contract.composeProposal({
+    proposal: {
+      contractVersion: V2,
+      kind: 'proposal',
+      claims: [
+        { id: 'one', type: 'source_backed_observation', text: 'You returned to the manuscript.', sourceRefs: [source] },
+        { id: 'two', type: 'source_backed_observation', text: 'The manuscript now has a clearer opening.', sourceRefs: [source] },
+      ],
+      closingQuestion: { id: 'question', text: 'Is the manuscript the thread to continue?', sourceRefs: [source] },
+    },
+    eligibleSourceIds: [source],
+  });
+  assert.equal(named.ok, true);
+});
+
 test('v2 permits evidence-backed work-state claims and uses no_nudge as its product outcome', () => {
   const rendered = contract.composeProposal({
     proposal: {
@@ -112,7 +144,7 @@ test('v2 permits evidence-backed work-state claims and uses no_nudge as its prod
         { id: 'draft', type: 'source_backed_observation', text: 'You drafted a new manuscript passage.', sourceRefs: [source] },
         { id: 'return', type: 'source_backed_observation', text: 'You also returned to the underlying research.', sourceRefs: [source] },
       ],
-      closingQuestion: { id: 'question', text: 'Is that the thread to continue?', sourceRefs: [source] },
+      closingQuestion: { id: 'question', text: 'Is the manuscript the thread to continue?', sourceRefs: [source] },
     },
     eligibleSourceIds: [source],
   });
@@ -124,6 +156,24 @@ test('v2 permits evidence-backed work-state claims and uses no_nudge as its prod
   });
   assert.equal(quiet.terminalOutcome, 'no_nudge');
   assert.equal(quiet.message, null);
+  assert.equal(quiet.dispositions[source].disposition, 'appropriately_silent');
+});
+
+test('v2 baseline rejects a legacy v1 proposal unless its compatibility mode is explicit', () => {
+  const proposal = {
+    contractVersion: VERSION,
+    kind: 'proposal',
+    segments: [
+      { id: 'good', type: 'source_backed_observation', text: 'You returned to the manuscript this week.', sourceRefs: [source] },
+    ],
+  };
+  const baseline = contract.composeProposal({ proposal, eligibleSourceIds: [source] });
+  assert.equal(baseline.ok, false);
+  assert.equal(baseline.reasonCode, 'contract_version_mismatch');
+
+  const legacy = contract.composeProposal({ proposal, eligibleSourceIds: [source], expectedContractVersion: VERSION });
+  assert.equal(legacy.ok, true);
+  assert.equal(legacy.terminalOutcome, 'rendered');
 });
 
 test('v2 receipt cannot publish salvaged as a terminal outcome', () => {

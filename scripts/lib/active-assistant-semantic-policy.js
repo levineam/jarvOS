@@ -10,6 +10,7 @@ const ACTIVE_MARKUP = /(?:https?:\/\/|mailto:|data:|javascript:|\[[^\]]+\]\([^)]
 const APPROVAL_VOICE = /\b(?:prove|earn|deserve|win)\s+(?:my|your|our)?\s*(?:approval|goodness|fairness)\b/i;
 const ASSISTANT_ACTION_CLAIM = /\b(?:I|we|the (?:assistant|system|bot)|Jarvis)\s+(?:sent|delivered|fulfilled|completed|finished|created|scheduled|drafted|wrote|saved)\b/i;
 const DANGLING_SUBJECT = /^(?:that|this|it|those|these)\b/i;
+const ANAPHORIC_QUESTION_SUBJECT = /^(?:is|are|was|were|does|do|did|would|could|should|can|will|has|have|had)\s+(?:that|this|it|those|these)\b/i;
 const NARRATIVE_TYPES = Object.freeze(new Set(['source_backed_observation', 'cross_project_connection']));
 
 function reject(reasonCode) { return { ok: false, reasonCode }; }
@@ -91,6 +92,7 @@ function validateNarrativeRow(row, { eligibleSourceIds = new Set(), question = f
   if (new Set(refs).size !== refs.length || refs.some((ref) => !eligibleSourceIds.has(ref))) return reject('source_ref_ineligible');
   if (question) {
     if (!/[?？]$/.test(text) || (text.match(/[?？]/g) || []).length !== 1) return reject('closing_question_invalid');
+    if (ANAPHORIC_QUESTION_SUBJECT.test(text)) return reject('subject_not_named');
   } else if (/[?？]/.test(text) || !/[.!。！]$/.test(text)) {
     return reject('narrative_claim_invalid');
   }

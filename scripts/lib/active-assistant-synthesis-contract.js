@@ -41,15 +41,30 @@ function deriveDispositions({ eligibleSourceIds = [], retainedSegments = [], ret
   return Object.fromEntries(eligible.map((id) => [id, { disposition: referenced.has(id) ? 'reflected' : 'appropriately_silent', reasonCode: referenced.has(id) ? 'accepted' : 'not_selected' }]));
 }
 
-function composeProposal({ proposal, eligibleSourceIds = [], greeting = 'Good morning, Sir!', maxLength = 2000 } = {}) {
+function composeProposal({
+  proposal,
+  eligibleSourceIds = [],
+  greeting = 'Good morning, Sir!',
+  maxLength = 2000,
+  // The narrative contract is the only baseline product path. Callers that
+  // still need to read historical v1 proposals must opt into that compatibility
+  // route explicitly instead of allowing a legacy salvage to reach delivery.
+  expectedContractVersion = ACTIVE_ASSISTANT_NARRATIVE_CONTRACT_VERSION,
+} = {}) {
   const validation = validateProposal(proposal);
   if (!validation.ok) return validation.terminalOutcome ? validation : { ok: false, terminalOutcome: 'model_output_invalid', reasonCode: validation.reasonCode };
+  if (validation.value.contractVersion !== expectedContractVersion) {
+    return { ok: false, terminalOutcome: 'policy_rejected', reasonCode: 'contract_version_mismatch', accepted: [], rejected: [], dispositions: deriveDispositions({ eligibleSourceIds }) };
+  }
   const eligible = new Set(eligibleSourceIds);
   if (validation.value.kind === 'no_nudge') {
     const refs = validation.value.sourceRefs.map((ref) => String(ref || '').trim()).filter(Boolean);
     if (!refs.length || new Set(refs).size !== refs.length || refs.some((ref) => !eligible.has(ref))) return { ok: false, terminalOutcome: 'policy_rejected', reasonCode: 'no_nudge_missing_source' };
     const narrative = validation.value.contractVersion === ACTIVE_ASSISTANT_NARRATIVE_CONTRACT_VERSION;
-    return { ok: true, terminalOutcome: narrative ? 'no_nudge' : 'intentional_silence', reasonCode: 'intentional_no_nudge', accepted: [], rejected: [], message: null, dispositions: deriveDispositions({ eligibleSourceIds: eligible, retainedSourceRefs: refs }) };
+    // References prove which evidence was considered; they are not retained
+    // message claims. A no-nudge outcome must therefore remain silent for every
+    // eligible source while still requiring all cited refs to validate above.
+    return { ok: true, terminalOutcome: narrative ? 'no_nudge' : 'intentional_silence', reasonCode: 'intentional_no_nudge', accepted: [], rejected: [], message: null, dispositions: deriveDispositions({ eligibleSourceIds: eligible }) };
   }
   if (validation.value.contractVersion === ACTIVE_ASSISTANT_NARRATIVE_CONTRACT_VERSION) {
     const composed = composeNarrative({ claims: validation.value.claims, closingQuestion: validation.value.closingQuestion }, {
@@ -74,7 +89,7 @@ function composeProposal({ proposal, eligibleSourceIds = [], greeting = 'Good mo
   return { ok: true, terminalOutcome: composed.rejected.length ? 'salvaged' : 'rendered', reasonCode: 'accepted', accepted: composed.accepted, rejected: composed.rejected, message: composed.message, dispositions: deriveDispositions({ eligibleSourceIds: eligible, retainedSegments: composed.accepted }) };
 }
 
-function redactedReceipt({ runId, terminalOutcome, evidenceDigest, artifactDigest = null, accepted = [], rejected = [], contractVersion = ACTIVE_ASSISTANT_SYNTHESIS_CONTRACT_VERSION } = {}) {
+function redactedReceipt({ runId, terminalOutcome, evidenceDigest, artifactDigest = null, accepted = [], rejected = [], contractVersion = ACTIVE_ASSISTANT_NARRATIVE_CONTRACT_VERSION } = {}) {
   const outcomes = contractVersion === ACTIVE_ASSISTANT_NARRATIVE_CONTRACT_VERSION ? NARRATIVE_TERMINAL_OUTCOMES : TERMINAL_OUTCOMES;
   if (!outcomes.includes(terminalOutcome)) return { ok: false, reasonCode: 'unknown_terminal_outcome' };
   return {
