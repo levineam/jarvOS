@@ -41,6 +41,7 @@
     "./projects-context-conformance": "./src/projects-context-conformance.js",
     "./project-inference-contracts": "./src/project-inference-contracts.js",
     "./project-inference-ledger": "./src/project-inference-ledger.js",
-    "./project-inference-evaluation": "./src/project-inference-evaluation.js"
+    "./project-inference-evaluation": "./src/project-inference-evaluation.js",
+    "./project-inference-reconciler": "./src/project-inference-reconciler.js"
   }
 }
