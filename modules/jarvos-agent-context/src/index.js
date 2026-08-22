@@ -787,6 +787,14 @@ function gitToplevel(repoDir) {
 
 // Only trust git metadata when the source dir is the repo root. `git -C`
 // otherwise walks to an ancestor checkout and would label the wrong tree.
+// Sentinel: the git measurement was attempted and did not succeed, as opposed to
+// null meaning "this source is not a git repository".
+const UNAVAILABLE = Symbol('git-age-unavailable');
+
+function normalizeGitObservation(value) {
+  return value === UNAVAILABLE ? null : value;
+}
+
 function observeGitCommitIso(repoDir) {
   try {
     if (!repoDir || !fs.existsSync(repoDir)) return null;
@@ -798,11 +806,17 @@ function observeGitCommitIso(repoDir) {
       timeout: 2000,
       stdio: ['ignore', 'pipe', 'ignore'],
     });
-    if (result.status !== 0) return null;
+    // Distinguish "not a git repo" from "git was asked and failed". Both used to
+    // return null, after which the caller falls back to filesystem mtime and the
+    // label reads "last modified" -- so a timed-out measurement became
+    // indistinguishable from a source that simply has no commits. A label whose
+    // whole job is provenance must not quietly downgrade a failure into a
+    // different, confident-sounding fact.
+    if (result.error || result.signal || result.status !== 0) return UNAVAILABLE;
     const iso = String(result.stdout || '').trim();
-    return parseTimestamp(iso) ? iso : null;
+    return parseTimestamp(iso) ? iso : UNAVAILABLE;
   } catch {
-    return null;
+    return UNAVAILABLE;
   }
 }
 
@@ -872,7 +886,11 @@ function listGbrainSourcesFromCli(config = {}) {
         // Missing cwd is not fatal; gbrain may still answer from its own config.
       }
     }
-    const result = spawnSync(bin, ['sources', 'list', '--json'], spawnOptions);
+    // The index can be busy (a long embed drain holds it), and gbrain's own default
+    // connect timeout is 10s -- far too long to make a recall answer wait on a label.
+    // Ask for a short one explicitly; a busy index means fall back to the single-source
+    // reading, not stall the caller.
+    const result = spawnSync(bin, ['sources', 'list', '--json', '--timeout=3'], spawnOptions);
     if (result.error || result.status !== 0) return null;
     const parsed = parseJsonPayload(result.stdout);
     if (!parsed) return null;
@@ -914,8 +932,10 @@ function observeSingleBrainProvenance(config = {}) {
         if (syncedAt) break;
       }
     }
+    const commitProbe = brainDir ? observeGitCommitIso(brainDir) : null;
     return {
-      commitAt: brainDir ? observeGitCommitIso(brainDir) : null,
+      commitAt: normalizeGitObservation(commitProbe),
+      commitProbeFailed: commitProbe === UNAVAILABLE,
       modifiedAt: brainDir ? observeMtimeIso(brainDir) : null,
       syncedAt,
     };
@@ -1028,7 +1048,10 @@ function formatBrainProvenanceLine(observation, now = new Date()) {
     if (!source && !synced) return 'brain age: unknown';
     const parts = [];
     if (source) {
-      parts.push(`${commit ? 'last commit' : 'last modified'} ${calendarDayUtc(source)} (${formatAgePhrase(source, now)} ago)`);
+      const basis = commit
+        ? 'last commit'
+        : (observation?.commitProbeFailed ? 'last modified (commit age unavailable)' : 'last modified');
+      parts.push(`${basis} ${calendarDayUtc(source)} (${formatAgePhrase(source, now)} ago)`);
     } else {
       parts.push('source unknown');
     }

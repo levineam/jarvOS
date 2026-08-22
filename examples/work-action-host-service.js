@@ -57,7 +57,9 @@ function readHostOptions() {
   const operationStoreRoot = absolutePath(config.workActionOperationStoreRoot);
   let authorizeMutation;
   if (typeof config.workActionAuthorizationModule === 'string' && config.workActionAuthorizationModule) {
-    const loaded = require(config.workActionAuthorizationModule);
+    const trusted = trustedModulePath(config.workActionAuthorizationModule, workspaceRoot);
+    if (!trusted) throw new Error('workActionAuthorizationModule must be an owner-only regular file contained under workspaceRoot');
+    const loaded = require(trusted);
     authorizeMutation = typeof loaded === 'function' ? loaded : loaded.authorizeMutation;
   }
   return {
@@ -69,9 +71,32 @@ function readHostOptions() {
   };
 }
 
+// Mirrors the containment gate in jarvos-mcp.js. The MCP server validates the path
+// it was handed, but everything this file loads afterwards is invisible to that check:
+// a hostile value in the config JSON or the environment would otherwise reach require()
+// through a module the host has already trusted. Widening a trust boundary one hop past
+// the gate is how gates stop meaning anything.
+function trustedModulePath(candidate, workspaceRoot) {
+  if (typeof candidate !== 'string' || !path.isAbsolute(candidate)) return null;
+  try {
+    if (fs.lstatSync(candidate).isSymbolicLink()) return null;
+    const real = fs.realpathSync(candidate);
+    const stat = fs.statSync(real);
+    const uid = typeof process.getuid === 'function' ? process.getuid() : null;
+    if (!stat.isFile() || (uid !== null && stat.uid !== uid) || (stat.mode & 0o077) !== 0) return null;
+    const relative = path.relative(fs.realpathSync(workspaceRoot), real);
+    if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) return null;
+    return real;
+  } catch {
+    return null;
+  }
+}
+
 function createHostWorkActionService() {
-  const coding = require(resolveCodingModule());
   const host = readHostOptions();
+  const codingPath = trustedModulePath(resolveCodingModule(), host.workspaceRoot);
+  if (!codingPath) throw new Error('jarvos-coding module must be an owner-only regular file contained under workspaceRoot');
+  const coding = require(codingPath);
   const tracker = coding.createLiveBeadsTracker({
     workspaceRoot: host.beadsWorkspace,
     approvedRoots: [host.workspaceRoot, host.beadsWorkspace],
