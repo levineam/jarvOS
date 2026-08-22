@@ -26,7 +26,7 @@
       "skills": { "discover": { "status": "manual", "transport": "Claude skill directory", "reason": "Claude owns skill discovery." }, "invoke": { "status": "manual", "transport": "Claude skill directory", "reason": "Claude owns skill invocation." } },
       "toolAuthorization": { "declare": { "status": "unsupported", "reason": "No public Claude authorization contract is installed." }, "enforce": { "status": "unsupported", "reason": "Claude owns tool authorization." } },
       "egress": { "declare": { "status": "unsupported", "reason": "No public Claude egress declaration is installed." }, "enforce": { "status": "unsupported", "reason": "Claude owns egress enforcement." } },
-      "session": { "startupHook": { "status": "supported", "transport": "Claude Code SessionStart hook", "evidence": "jarvos-session-start-hook.js" }, "handoff": { "status": "unsupported", "reason": "No public Claude handoff adapter is declared." } },
+      "session": { "startupHook": { "status": "supported", "transport": "Claude Code SessionStart hook", "evidence": "jarvos-session-start-hook.js" }, "handoff": { "status": "unsupported", "reason": "No public Claude handoff adapter is declared." }, "preCompactHook": { "status": "supported", "transport": "Claude Code PreCompact hook", "evidence": "jarvos-precompact-hook.js" } },
       "inboundDispatch": { "receive": { "status": "unsupported", "reason": "No public Claude inbound dispatch bridge is declared." }, "validate": { "status": "unsupported", "reason": "No public Claude inbound dispatch bridge is declared." } },
       "lifecycle": { "receipt": { "status": "unsupported", "reason": "No public Claude lifecycle receipt bridge is declared." } },
       "scheduledWork": { "participate": { "status": "unsupported", "reason": "Scheduled work is not part of this public adapter." } },
@@ -54,8 +54,15 @@
       "hydration": {
         "mode": "hook",
         "event": "SessionStart",
+        "matcher": "startup|resume|compact",
         "script": "jarvos-session-start-hook.js",
-        "defaultMaxChars": 9500
+        "defaultMaxChars": 9500,
+        "reorientMaxChars": 4000
+      },
+      "precompact": {
+        "mode": "hook",
+        "event": "PreCompact",
+        "script": "jarvos-precompact-hook.js"
       },
       "bootstrap": {
         "claudeMd": {
@@ -131,7 +138,7 @@
       "dispatcher": "jarvos-stewardship-dispatcher",
       "entrypoint": { "kind": "dispatcher", "path": "jarvos-stewardship-dispatcher" },
       "actions": ["harness-launch", "session-start", "session-turn", "bridge", "provenance-probe"],
-      "selectedRuntimeAssets": ["runtimes/claude/jarvos-session-start-hook.js", "runtimes/claude/jarvos-session-turn-hook.js"],
+      "selectedRuntimeAssets": ["runtimes/claude/jarvos-session-start-hook.js", "runtimes/claude/jarvos-session-turn-hook.js", "runtimes/claude/jarvos-precompact-hook.js"],
       "installedConfig": { "inspection": "stable-entrypoint-only", "prepare": "reversible", "rollback": "exact-owned-state" },
       "provenance": { "action": "provenance-probe", "sideEffectFree": true }
     },
@@ -187,6 +194,7 @@
   "verification": [
     "claude mcp get jarvos",
     "node runtimes/claude/jarvos-session-start-hook.js",
+    "node runtimes/claude/jarvos-precompact-hook.js",
     "node modules/jarvos-runtime-kit/scripts/jarvos-runtime-kit.js check claude"
   ]
 }

@@ -30,7 +30,25 @@ The bundled stdio MCP server exposes:
 | `jarvos_session_thread_write` | Append a checkpoint to that thread as a normal secondbrain note linked from today's journal |
 | `jarvos_startup_brief` | Bounded startup context for agent sessions |
 | `jarvos_hydrate` | Bounded working-context packet for startup hydration, including ontology context when configured |
+| `jarvos_todo_create` | Create one canonically linked Beads-backed Todo through the host-authorized work-action service |
+| `jarvos_todo_list` | List bounded, canonically linked Beads-backed Todo work |
+| `jarvos_todo_show` | Show one canonically linked Beads-backed Todo work item |
+| `jarvos_todo_transition` | Request a claim, transition, completion, or reopen through the host-authorized work-action service |
 | `jarvos_control_plane` | Authenticated request, inspection, evidence, and approval access through the installed host application service |
+
+`jarvos_todo_*` tools are available only after the host binds two optional
+non-secret paths on the MCP child:
+
+- `JARVOS_WORK_ACTION_SERVICE_MODULE` — absolute owner-only host service module
+  contained under the selected workspace root. Copy
+  `examples/work-action-host-service.js` into that workspace; the public clone
+  cannot be the live binding when Projects `workspaceRoot` is elsewhere.
+- `JARVOS_PROJECTS_CONTEXT_CONFIG` — absolute trusted Projects context config
+  whose `workspaceRoot` contains that module.
+
+Unset keeps the tools present but unavailable. A set but untrusted module path
+is refused and never loaded. Runtime setup scripts pass these through when set
+and never require them for a public/minimal install.
 
 `jarvos_control_plane` is available only after the host has configured
 `JARVOS_CONTROL_PLANE_SERVICE_MODULE`. `@jarvos/agent-context` declares

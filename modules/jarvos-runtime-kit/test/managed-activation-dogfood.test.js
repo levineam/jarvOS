@@ -720,6 +720,7 @@ test('hooks and plugins remain fail-open lifecycle bridges without activation au
     'runtimes/codex/jarvos-session-turn-hook.js',
     'runtimes/claude/jarvos-session-start-hook.js',
     'runtimes/claude/jarvos-session-turn-hook.js',
+    'runtimes/claude/jarvos-precompact-hook.js',
     'runtimes/hermes/jarvos-pre-llm-hook.js',
     'runtimes/openclaw/jarvos-next-turn-plugin.js',
   ];

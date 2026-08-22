@@ -574,6 +574,94 @@ test('Claude SessionStart persists only a validated bridge command and neutral m
   }
 });
 
+test('Claude SessionStart uses a smaller hydration budget after compact or resume', () => {
+  const hook = require(path.join(ROOT, 'runtimes', 'claude', 'jarvos-session-start-hook.js'));
+  const previous = {
+    claude: process.env.JARVOS_CLAUDE_HYDRATION_MAX_CHARS,
+    shared: process.env.JARVOS_HYDRATION_MAX_CHARS,
+  };
+  delete process.env.JARVOS_CLAUDE_HYDRATION_MAX_CHARS;
+  delete process.env.JARVOS_HYDRATION_MAX_CHARS;
+  try {
+    assert.equal(hook.hydrationMaxChars({ source: 'startup' }), hook.DEFAULT_MAX_CHARS);
+    assert.equal(hook.hydrationMaxChars({ source: 'compact' }), hook.REORIENT_MAX_CHARS);
+    assert.equal(hook.hydrationMaxChars({ source: 'resume' }), hook.REORIENT_MAX_CHARS);
+    assert.equal(hook.hydrationMaxChars({}), hook.DEFAULT_MAX_CHARS);
+    process.env.JARVOS_CLAUDE_HYDRATION_MAX_CHARS = '2000';
+    assert.equal(hook.hydrationMaxChars({ source: 'startup' }), 2000);
+    assert.equal(hook.hydrationMaxChars({ source: 'compact' }), 2000);
+  } finally {
+    for (const [key, value] of Object.entries({
+      JARVOS_CLAUDE_HYDRATION_MAX_CHARS: previous.claude,
+      JARVOS_HYDRATION_MAX_CHARS: previous.shared,
+    })) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+});
+
+test('Claude PreCompact hook flushes mechanical session-thread state and fails open', () => {
+  const hook = require(path.join(ROOT, 'runtimes', 'claude', 'jarvos-precompact-hook.js'));
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-precompact-'));
+  try {
+    const summary = hook.mechanicalSummary({
+      cwd,
+      trigger: 'manual',
+      session_id: CLAUDE_HOOK_SESSION_ID,
+      custom_instructions: 'SECRET COMPACTION PROMPT MUST NEVER PERSIST',
+      transcript_path: path.join(cwd, `${CLAUDE_HOOK_SESSION_ID}.jsonl`),
+    });
+    assert.match(summary, /Pre-compaction flush \(manual\)/);
+    assert.match(summary, new RegExp(`cwd: ${cwd.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
+    assert.match(summary, /dirty paths: 0/);
+    assert.match(summary, new RegExp(`session: ${CLAUDE_HOOK_SESSION_ID}`));
+    assert.doesNotMatch(summary, /SECRET COMPACTION PROMPT/);
+    assert.doesNotMatch(summary, /transcript_path/);
+    assert.doesNotMatch(summary, /\.jsonl/);
+
+    const result = spawnSync(process.execPath, [path.join(ROOT, 'runtimes', 'claude', 'jarvos-precompact-hook.js')], {
+      cwd,
+      encoding: 'utf8',
+      input: JSON.stringify({
+        session_id: CLAUDE_HOOK_SESSION_ID,
+        hook_event_name: 'PreCompact',
+        trigger: 'auto',
+        custom_instructions: 'SECRET COMPACTION PROMPT MUST NEVER PERSIST',
+        cwd,
+      }),
+      env: {
+        ...process.env,
+        HOME: path.join(cwd, 'home'),
+        JARVOS_SECONDBRAIN_DIR: path.join(cwd, 'missing-secondbrain'),
+        JARVOS_VAULT_DIR: path.join(cwd, 'missing-vault'),
+        JARVOS_WORKSPACE_DIR: cwd,
+      },
+    });
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+    assert.deepEqual(JSON.parse(result.stdout || '{}'), {});
+    assert.doesNotMatch(result.stdout, /SECRET COMPACTION PROMPT/);
+    assert.doesNotMatch(result.stderr || '', /SECRET COMPACTION PROMPT/);
+
+    const empty = spawnSync(process.execPath, [path.join(ROOT, 'runtimes', 'claude', 'jarvos-precompact-hook.js')], {
+      cwd,
+      encoding: 'utf8',
+      input: '',
+      env: {
+        ...process.env,
+        HOME: path.join(cwd, 'home'),
+        JARVOS_SECONDBRAIN_DIR: path.join(cwd, 'missing-secondbrain'),
+        JARVOS_VAULT_DIR: path.join(cwd, 'missing-vault'),
+        JARVOS_WORKSPACE_DIR: cwd,
+      },
+    });
+    assert.equal(empty.status, 0, empty.stderr || empty.stdout);
+    assert.deepEqual(JSON.parse(empty.stdout || '{}'), {});
+  } finally {
+    fs.rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
 test('Claude SessionStart exposes a pending stewardship judgment even when hydration is unavailable', () => {
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-claude-start-judgment-'));
   const bin = path.join(temp, 'bin');
@@ -691,6 +779,11 @@ test('native hook declarations point at the packaged start and turn bridges', ()
     }
     assert.ok(fs.existsSync(path.join(ROOT, 'runtimes', runtime, 'jarvos-session-turn-hook.js')));
   }
+  assert.equal(
+    manifestFor('claude').capabilityDescriptor.capabilities.session.preCompactHook.evidence,
+    'jarvos-precompact-hook.js',
+  );
+  assert.ok(fs.existsSync(path.join(ROOT, 'runtimes', 'claude', 'jarvos-precompact-hook.js')));
 });
 
 test('OpenClaw and Hermes package bounded per-turn stewardship bridge artifacts without activating user configuration', async () => {
@@ -1004,7 +1097,7 @@ test('Claude setup merges both jarvOS lifecycle hooks without replacing user hoo
   try {
     fs.mkdirSync(path.join(staged, 'runtimes', 'claude'), { recursive: true });
     fs.mkdirSync(stable, { recursive: true, mode: 0o700 }); fs.chmodSync(stable, 0o700);
-    for (const file of ['jarvos-session-start-hook.js', 'jarvos-session-turn-hook.js']) fs.copyFileSync(path.join(ROOT, 'runtimes', 'claude', file), path.join(staged, 'runtimes', 'claude', file));
+    for (const file of ['jarvos-session-start-hook.js', 'jarvos-session-turn-hook.js', 'jarvos-precompact-hook.js']) fs.copyFileSync(path.join(ROOT, 'runtimes', 'claude', file), path.join(staged, 'runtimes', 'claude', file));
     fs.writeFileSync(path.join(stable, 'jarvos-stewardship-dispatcher'), '#!/usr/bin/env sh\nexit 0\n', { mode: 0o700 });
     fs.chmodSync(path.join(stable, 'jarvos-stewardship-dispatcher'), 0o700);
     fs.writeFileSync(settings, `${JSON.stringify({
@@ -1038,13 +1131,16 @@ test('Claude setup merges both jarvOS lifecycle hooks without replacing user hoo
     assert.equal(first, second);
     assert.equal(parsed.hooks.SessionStart.length, 2);
     assert.equal(parsed.hooks.UserPromptSubmit.length, 2);
-    assert.equal(count(second, /jarvos-stewardship-dispatcher/g), 2);
-    assert.doesNotMatch(second, /jarvos-session-(?:start|turn)-hook\.js/);
+    assert.equal(parsed.hooks.PreCompact.length, 1);
+    assert.equal(parsed.hooks.SessionStart[1].matcher, 'startup|resume|compact');
+    assert.equal(count(second, /jarvos-stewardship-dispatcher/g), 3);
+    assert.doesNotMatch(second, /jarvos-(?:session-(?:start|turn)|precompact)-hook\.js/);
     assert.match(second, /user-session-start/);
     assert.match(second, /user-prompt-submit/);
     assert.match(second, new RegExp(stable.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
     assert.match(second, /--harness claude --action session-start/);
     assert.match(second, /--harness claude --action session-turn/);
+    assert.match(second, /--harness claude --action session-precompact/);
     assert.doesNotMatch(second, new RegExp(staged.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
     assert.doesNotMatch(second, new RegExp(`${ROOT.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}/runtimes/claude/jarvos-session`));
     assert.equal(fs.readdirSync(temp).filter((name) => name.startsWith('settings.json.bak-jarvos-')).length, 1);
@@ -1054,6 +1150,7 @@ test('Claude setup merges both jarvOS lifecycle hooks without replacing user hoo
     const rolledBack = JSON.parse(fs.readFileSync(settings, 'utf8'));
     assert.equal(rolledBack.hooks.SessionStart.length, 1);
     assert.equal(rolledBack.hooks.UserPromptSubmit.length, 1);
+    assert.equal(rolledBack.hooks.PreCompact, undefined);
     assert.match(JSON.stringify(rolledBack), /user-session-start/);
     assert.match(JSON.stringify(rolledBack), /user-prompt-submit/);
     assert.doesNotMatch(JSON.stringify(rolledBack), /jarvos-stewardship-dispatcher/);

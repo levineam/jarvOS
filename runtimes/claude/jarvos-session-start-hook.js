@@ -14,7 +14,9 @@ const {
 } = require('./jarvos-session-turn-hook.js');
 
 const DEFAULT_MAX_CHARS = 9500;
+const REORIENT_MAX_CHARS = 4000;
 const MAX_ALLOWED_CHARS = 10000;
+const REORIENT_SOURCES = new Set(['compact', 'resume']);
 const LOG_PATH = path.join(os.homedir(), '.claude', 'jarvos-hydration.log');
 const BRIDGE_COMMAND = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 const CLAUDE_SESSION_MAP_ROOT_ENV = 'JARVOS_STEWARDSHIP_CLAUDE_SESSION_MAP_ROOT';
@@ -101,12 +103,18 @@ function logFailure(error) {
   }
 }
 
-function hydrationMaxChars() {
+function hookSource(input) {
+  return input && typeof input.source === 'string' ? input.source : '';
+}
+
+function hydrationMaxChars(input = {}) {
+  // compact/resume already carry a summary of the session; re-orient, don't re-brief.
+  const fallback = REORIENT_SOURCES.has(hookSource(input)) ? REORIENT_MAX_CHARS : DEFAULT_MAX_CHARS;
   const value = process.env.JARVOS_CLAUDE_HYDRATION_MAX_CHARS || process.env.JARVOS_HYDRATION_MAX_CHARS;
-  if (!value) return DEFAULT_MAX_CHARS;
+  if (!value) return fallback;
   const parsed = Number.parseInt(value, 10);
-  if (!Number.isFinite(parsed) || parsed <= 0) return DEFAULT_MAX_CHARS;
-  return Math.min(parsed, MAX_ALLOWED_CHARS);
+  if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
+  return Math.min(parsed, MAX_ALLOWED_CHARS, fallback);
 }
 
 function stewardshipContext(options = {}) {
@@ -114,8 +122,8 @@ function stewardshipContext(options = {}) {
   return input.pendingInSessionInput && input.nextTurnInput ? additionalContext(input) : '';
 }
 
-async function startupHydration() {
-  const result = await hydrate({ maxChars: hydrationMaxChars() });
+async function startupHydration(hookInput = {}) {
+  const result = await hydrate({ maxChars: hydrationMaxChars(hookInput) });
   return result.markdown;
 }
 
@@ -128,7 +136,7 @@ async function main(hookInput = readHookInput()) {
     const judgment = stewardshipContext(bridgeOptions);
     let hydration = '';
     try {
-      hydration = await startupHydration();
+      hydration = await startupHydration(hookInput);
     } catch (error) {
       logFailure(error);
     }
@@ -157,4 +165,14 @@ if (require.main === module) {
   });
 }
 
-module.exports = { CLAUDE_SESSION_MAP_ROOT_ENV, hydrationMaxChars, main, persistBridgeEnvironment, startupHydration, stewardshipAdapter, stewardshipContext };
+module.exports = {
+  CLAUDE_SESSION_MAP_ROOT_ENV,
+  DEFAULT_MAX_CHARS,
+  REORIENT_MAX_CHARS,
+  hydrationMaxChars,
+  main,
+  persistBridgeEnvironment,
+  startupHydration,
+  stewardshipAdapter,
+  stewardshipContext,
+};
