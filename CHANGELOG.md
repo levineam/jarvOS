@@ -2,6 +2,25 @@
 
 Release sections describe user-facing jarvOS changes. Historical public-doc sync entries are preserved below for traceability.
 
+## [0.9.0](https://github.com/levineam/jarvOS/compare/jarvos-bootstrap-v0.8.0...jarvos-bootstrap-v0.9.0) (2026-08-22)
+
+
+### Features
+
+* **active-assistant:** add strict cycle runtime bridge ([#220](https://github.com/levineam/jarvOS/issues/220)) ([8c06627](https://github.com/levineam/jarvOS/commit/8c0662734a3c8aad263536213e3eb0859490a8f0))
+* **active-assistant:** restore portfolio coaching contract ([#222](https://github.com/levineam/jarvOS/issues/222)) ([4e812e9](https://github.com/levineam/jarvOS/commit/4e812e9a9db9a2e16618b81350c6d37dab10771c))
+* **projects:** infer canonical project structure autonomously ([#224](https://github.com/levineam/jarvOS/issues/224)) ([a9a6761](https://github.com/levineam/jarvOS/commit/a9a6761f7290ca9128a6657d058a7649977147aa))
+* **projects:** integrate Beads-backed Todo context ([#212](https://github.com/levineam/jarvOS/issues/212)) ([aede083](https://github.com/levineam/jarvOS/commit/aede08330d793f7a6f09eb220f72e8654268a2f7))
+* **runtime-kit:** prove managed harness activation ([#218](https://github.com/levineam/jarvOS/issues/218)) ([e898af8](https://github.com/levineam/jarvOS/commit/e898af8ce6611cd1cdbc87d1c5ec3fd2af9c4e1d))
+
+
+### Bug Fixes
+
+* **agent-context:** resolve ontology and Projects config from the workspace ([#221](https://github.com/levineam/jarvOS/issues/221)) ([124502d](https://github.com/levineam/jarvOS/commit/124502daf8339e514dbc0ebfac08f9ed5ed13165))
+* **package:** bundle runtime-kit in direct skills tarball ([#216](https://github.com/levineam/jarvOS/issues/216)) ([3682993](https://github.com/levineam/jarvOS/commit/3682993872ab5a3eb924498c6ed0ed1b4f8e342f))
+* **package:** install bundled runtime-kit dependency ([#215](https://github.com/levineam/jarvOS/issues/215)) ([72532cd](https://github.com/levineam/jarvOS/commit/72532cd14f2aa2e6c4856696d94bb2dc4aea45a4))
+* **release:** preserve component-prefixed release tags ([#209](https://github.com/levineam/jarvOS/issues/209)) ([f40483a](https://github.com/levineam/jarvOS/commit/f40483abbe47740c7d903bb217ef9d1c605bee0b))
+
 ## [0.8.0](https://github.com/levineam/jarvOS/compare/jarvos-bootstrap-v0.7.0...jarvos-bootstrap-v0.8.0) (2026-08-16)
 
 
