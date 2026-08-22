@@ -26,6 +26,10 @@ const SNAPSHOT_FIELDS = Object.freeze([
 ]);
 const SNAPSHOT_INPUT_FIELDS = Object.freeze(SNAPSHOT_FIELDS.filter((field) => field !== 'admission'));
 const SUMMARY_FIELDS = Object.freeze(['id', 'canonicalId', 'category', 'status', 'title', 'occurredAt', 'observedAt', 'evidenceRefs']);
+const SUMMARY_ADMISSION_FIELDS = Object.freeze([...SUMMARY_FIELDS, 'canonicalAtAdmission']);
+const CANONICAL_AT_ADMISSION_FIELDS = Object.freeze([
+  'canonicalId', 'canonicalKind', 'canonicalRevision', 'rootProjectId', 'rootProjectRevision', 'rootProjectLifecycle', 'registryGeneration',
+]);
 const ACTIVITY_FIELDS = Object.freeze([
   'contract', 'eventId', 'canonicalId', 'producerId', 'kind', 'occurredAt', 'observedAt', 'evidenceRefs', 'sourceRevision', 'sensitivity', 'dedupeKey',
 ]);
@@ -116,8 +120,25 @@ function validateScope(scope) {
   return { projectIds: [...scope.projectIds].sort(), outcomeIds: [...scope.outcomeIds].sort() };
 }
 
+function validateCanonicalAtAdmission(value) {
+  if (!exactKeys(value, CANONICAL_AT_ADMISSION_FIELDS)) throw new TypeError('summary.canonicalAtAdmission has unsupported fields');
+  const canonicalId = validateId(value.canonicalId, 'summary.canonicalAtAdmission.canonicalId');
+  const rootProjectId = validateId(value.rootProjectId, 'summary.canonicalAtAdmission.rootProjectId');
+  if (!rootProjectId.startsWith('prj_')) throw new TypeError('summary.canonicalAtAdmission.rootProjectId must identify a Project');
+  if (!['project', 'outcome'].includes(value.canonicalKind)) throw new TypeError('summary.canonicalAtAdmission.canonicalKind is unsupported');
+  if ((value.canonicalKind === 'project') !== canonicalId.startsWith('prj_')) throw new TypeError('summary.canonicalAtAdmission kind and id do not agree');
+  if (!Number.isInteger(value.canonicalRevision) || value.canonicalRevision < 1
+    || !Number.isInteger(value.rootProjectRevision) || value.rootProjectRevision < 1
+    || !Number.isInteger(value.registryGeneration) || value.registryGeneration < 0) {
+    throw new TypeError('summary.canonicalAtAdmission revisions are invalid');
+  }
+  if (!['active', 'paused', 'archived'].includes(value.rootProjectLifecycle)) throw new TypeError('summary.canonicalAtAdmission lifecycle is invalid');
+  return { ...value, canonicalId, rootProjectId };
+}
+
 function validateSummary(summary) {
-  if (!exactKeys(summary, SUMMARY_FIELDS)) throw new TypeError('provider summary has unsupported fields');
+  const hasAdmission = isPlainObject(summary) && Object.prototype.hasOwnProperty.call(summary, 'canonicalAtAdmission');
+  if (!exactKeys(summary, hasAdmission ? SUMMARY_ADMISSION_FIELDS : SUMMARY_FIELDS)) throw new TypeError('provider summary has unsupported fields');
   const normalized = {
     id: requiredString(summary.id, 'summary.id'),
     canonicalId: validateId(summary.canonicalId, 'summary.canonicalId'),
@@ -128,6 +149,7 @@ function validateSummary(summary) {
     observedAt: timestamp(summary.observedAt, 'summary.observedAt'),
     evidenceRefs: Array.isArray(summary.evidenceRefs) ? summary.evidenceRefs.map((ref) => requiredString(ref, 'summary.evidenceRefs[]')) : (() => { throw new TypeError('summary.evidenceRefs must be an array'); })(),
   };
+  if (hasAdmission) normalized.canonicalAtAdmission = validateCanonicalAtAdmission(summary.canonicalAtAdmission);
   if (!SUMMARY_CATEGORIES.includes(normalized.category)) throw new TypeError(`unsupported summary category: ${normalized.category}`);
   return normalized;
 }
@@ -818,6 +840,7 @@ module.exports = {
   RELEASE_EVIDENCE_CONTRACT,
   SNAPSHOT_FIELDS,
   SUMMARY_FIELDS,
+  SUMMARY_ADMISSION_FIELDS,
   TRUST_LEVELS,
   UNKNOWN_LINK_PROPOSAL_CONTRACT,
   VERIFIED_ACTIVITY_CONTRACT,

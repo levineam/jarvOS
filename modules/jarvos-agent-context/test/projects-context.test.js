@@ -32,6 +32,7 @@ const QUERY = {
 function packet() {
   return {
     contract: PROJECTS_CONTEXT_CONTRACT,
+    schemaVersion: 2,
     packetId: 'ctx_0123456789abcdef0123456789abcdef',
     capturedAt: '2026-08-08T12:00:00.000Z',
     expiresAt: '2026-08-08T13:00:00.000Z',
@@ -45,6 +46,7 @@ function packet() {
         breadcrumb: 'jarvOS',
         lifecycle: 'active',
         effectivePriority: 'high',
+        inference: null,
       }, {
         id: 'out_000001',
         kind: 'outcome',
@@ -52,6 +54,7 @@ function packet() {
         breadcrumb: 'jarvOS › v1.0.0 release',
         lifecycle: 'active',
         effectivePriority: 'high',
+        inference: null,
       }],
       revisions: { prj_000001: 2, out_000001: 1 },
     },
@@ -60,6 +63,15 @@ function packet() {
     attention: [],
     evidence: [],
     providers: { beads: { state: 'fresh' } },
+    inference: {
+      policyRevision: 'jarvos.project-inference-policy-v1',
+      engineRevision: 'deterministic-baseline-v1',
+      candidates: [],
+      coverage: [],
+      watermark: null,
+      watermarks: {},
+    },
+    watermarks: { registry: 'registry:4', inference: null, activity: null },
     omissions: [],
     truncation: { truncated: false, maxItems: 12, maxBytes: 9000, omittedItems: 0, sections: [] },
     redactionClass: 'private',
