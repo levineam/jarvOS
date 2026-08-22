@@ -10,6 +10,7 @@ deepened: 2026-08-21
 independent_review: claude-fable-5
 ---
 
+<!-- markdownlint-disable-file MD025 -->
 # Autonomous Project Inference - Plan
 
 ## Goal Capsule
