@@ -87,7 +87,8 @@ test('activity-backed Journal maintenance carries a separate projection receipt 
         status: 'ok',
         coverageWatermark: 'activity:9',
         projects: [{ id: 'prj_000001', kind: 'project', title: 'jarvOS', lifecycle: 'active' }],
-        activities: [{ canonicalId: 'prj_000001', occurredAt: '2026-01-02T15:00:00.000Z', trust: 'verified' }],
+        noteMappings: { prj_000001: { target: 'Projects/jarvOS' } },
+        activities: [{ canonicalId: 'prj_000001', canonicalAtAdmission: { rootProjectId: 'prj_000001' }, occurredAt: '2026-01-02T15:00:00.000Z', trust: 'verified' }],
       }),
       applyMarkdownMutation(input) {
         projectionReceipt = input.projectionReceipt;
@@ -97,7 +98,7 @@ test('activity-backed Journal maintenance carries a separate projection receipt 
     assert.equal(result.projectProjection.coverageWatermark, 'activity:9');
     assert.equal(projectionReceipt.inputDigest, result.projectProjection.inputDigest);
     assert.equal(projectionReceipt.status, 'fresh');
-    assert.equal(sectionBody(fs.readFileSync(journalPath, 'utf8'), '## 🚀 Projects'), '- [[jarvOS]]');
+    assert.equal(sectionBody(fs.readFileSync(journalPath, 'utf8'), '## 🚀 Projects'), '- [[Projects/jarvOS]]');
   } finally {
     if (previous === undefined) delete process.env.JARVOS_JOURNAL_DIR;
     else process.env.JARVOS_JOURNAL_DIR = previous;

@@ -1,0 +1,79 @@
+{
+  "$schema": "jarvos.project-inference-baseline/v1",
+  "contract": "jarvos.project-inference-baseline/v1",
+  "engineRevision": null,
+  "policyRevision": "jarvos.project-inference-policy/v1",
+  "caseCount": 9,
+  "corpusObservationCount": 13,
+  "uniqueSourceClassCounts": {
+    "note": 3,
+    "chat": 4,
+    "execution": 2,
+    "release": 2,
+    "stewardship": 2
+  },
+  "coverage": {
+    "byState": {
+      "fresh": 9,
+      "stale": 2,
+      "partial": 2,
+      "unknown": 1,
+      "unavailable": 1,
+      "healthy-empty": 1
+    },
+    "bySourceClass": {
+      "note": {
+        "fresh": 4,
+        "stale": 0,
+        "partial": 0,
+        "unknown": 0,
+        "unavailable": 0,
+        "healthy-empty": 0
+      },
+      "chat": {
+        "fresh": 2,
+        "stale": 0,
+        "partial": 1,
+        "unknown": 1,
+        "unavailable": 1,
+        "healthy-empty": 0
+      },
+      "execution": {
+        "fresh": 1,
+        "stale": 0,
+        "partial": 1,
+        "unknown": 0,
+        "unavailable": 0,
+        "healthy-empty": 0
+      },
+      "release": {
+        "fresh": 1,
+        "stale": 1,
+        "partial": 0,
+        "unknown": 0,
+        "unavailable": 0,
+        "healthy-empty": 1
+      },
+      "stewardship": {
+        "fresh": 1,
+        "stale": 1,
+        "partial": 0,
+        "unknown": 0,
+        "unavailable": 0,
+        "healthy-empty": 0
+      }
+    }
+  },
+  "caseIndex": [
+    { "caseId": "book", "observationCount": 2, "contentDigest": "936429700262e9f94e51f3bcf1dd06ff09cdaeea934b9270e2395999c59d94aa" },
+    { "caseId": "portfolio", "observationCount": 3, "contentDigest": "2f480f051ed48bf8fc8e34cf2fc8a37c9b423b4696080e69ee1c4396abd1ee60" },
+    { "caseId": "software", "observationCount": 3, "contentDigest": "12358b179515b974b03be94cc4967f6b636196f3a9b4037e342f7844ba2dc4cc" },
+    { "caseId": "ambiguity", "observationCount": 2, "contentDigest": "e72cad6c14bf41a7eec9f74c123cc17e0e8c867563ae231e92ea6cd963a61265" },
+    { "caseId": "correction-verified", "observationCount": 1, "contentDigest": "6ca60c79a594f4f5286c71bec160ff89093bb6cff16d30eaad45bf28aef86241" },
+    { "caseId": "correction-unverified", "observationCount": 1, "contentDigest": "3a565b8eac927c9e86c14e10102b77765f42680df7a0122a1642e89d5f09b2f2" },
+    { "caseId": "duplicate", "observationCount": 1, "contentDigest": "5285da37b3496044b85ceac90d2bd9b3e2d5e5d4ca725f537082a13ee3dc3801" },
+    { "caseId": "unavailable-source", "observationCount": 0, "contentDigest": "d696b52848127f6d97f86b09254f99814c3f2ce3ca59375933356390999b3b00" },
+    { "caseId": "prompt-injection", "observationCount": 1, "contentDigest": "b4c51824e86b54276ea0b3354636c90f41f231b7eb3957a76a13709795832e59" }
+  ],
+  "stableDigest": "b19cca716d94734f9be6b20c7bf03a94d9b5d48b9ce3c32caacc4190ff830e4d"
+}

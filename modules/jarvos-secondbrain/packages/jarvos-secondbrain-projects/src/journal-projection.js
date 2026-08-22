@@ -4,6 +4,8 @@ const crypto = require('node:crypto');
 
 const JOURNAL_PROJECTION_CONTRACT = 'jarvos.project-journal-projection/v1';
 const PROJECTS_SECTION_HEADING = '## 🚀 Projects';
+const BLOCKED_DISPOSITIONS = new Set(['provisional', 'quarantined', 'rejected', 'superseded', 'not-evaluable']);
+const PROJECT_ID_PATTERN = /^prj_[0-9]{6,}$/;
 
 function isPlainObject(value) { return Boolean(value) && typeof value === 'object' && !Array.isArray(value); }
 function requiredString(value, field) { if (typeof value !== 'string' || !value.trim()) throw new TypeError(`${field} must be a non-empty string`); return value.trim(); }
@@ -23,8 +25,36 @@ function localDate(value, timeZone = 'UTC') {
   return `${values.year}-${values.month}-${values.day}`;
 }
 
+function activityPayload(activity) {
+  if (!isPlainObject(activity)) return null;
+  if (!isPlainObject(activity.receipt)) return activity;
+  // ActivityStore returns an envelope while the Journal reader may return the
+  // admitted receipt directly.  Keep envelope metadata (notably the
+  // admission-time root) while using receipt fields as the activity identity.
+  return { ...activity.receipt, ...activity };
+}
+
+function activityDisposition(activity) {
+  const value = activityPayload(activity) || {};
+  const candidates = [
+    value.disposition,
+    value.status,
+    value.inferenceDisposition,
+    value.candidateDisposition,
+    value.inference && value.inference.disposition,
+    value.candidate && value.candidate.disposition,
+    value.inferenceDecision && value.inferenceDecision.disposition,
+    value.decision && value.decision.disposition,
+    value.admission && value.admission.disposition,
+  ];
+  const selected = candidates.find((candidate) => typeof candidate === 'string' && candidate.trim());
+  return selected ? selected.trim().toLowerCase() : null;
+}
+
 function acceptedActivity(activity) {
-  return isPlainObject(activity) && (activity.accepted === true || activity.trust === 'verified');
+  const value = activityPayload(activity);
+  if (!value || !(value.accepted === true || value.trust === 'verified')) return false;
+  return !BLOCKED_DISPOSITIONS.has(activityDisposition(value));
 }
 
 function projectIdForRecord(record, recordsById) {
@@ -39,20 +69,102 @@ function projectIdForRecord(record, recordsById) {
   return null;
 }
 
+function canonicalProjectId(value) {
+  return typeof value === 'string' && PROJECT_ID_PATTERN.test(value) ? value : null;
+}
+
+function admissionRootProjectId(activity) {
+  const value = activityPayload(activity) || {};
+  const pinned = isPlainObject(value.canonicalAtAdmission)
+    ? canonicalProjectId(value.canonicalAtAdmission.rootProjectId)
+    : null;
+  if (pinned) return pinned;
+  // A direct Project activity is already rooted by its canonical identity.
+  return canonicalProjectId(value.canonicalId);
+}
+
+function projectIdForActivity(activity, recordsById) {
+  const value = activityPayload(activity) || {};
+  const pinned = admissionRootProjectId(value);
+  if (pinned) return pinned;
+
+  // An Outcome without an admission-time root is not safe to resolve through
+  // today's hierarchy: a later reparent would rewrite historical navigation.
+  // Keep direct Project receipts usable, but fail closed for unpinned children.
+  const record = recordsById[value.canonicalId];
+  return record && record.kind === 'project' ? record.id : null;
+}
+
 function touchedProjectIds({ activities = [], projects = [], date, timeZone = 'UTC' } = {}) {
   const targetDate = requiredString(date, 'projection date');
-  const recordsById = Object.fromEntries(projects.filter((record) => record && record.id).map((record) => [record.id, record]));
+  const records = Array.isArray(projects) ? projects : [];
+  const recordsById = Object.fromEntries(records.filter((record) => record && record.id).map((record) => [record.id, record]));
   const touched = new Set();
-  for (const activity of activities) {
-    if (!acceptedActivity(activity) || !activity.canonicalId || localDate(activity.occurredAt, timeZone) !== targetDate) continue;
-    const record = recordsById[activity.canonicalId];
-    const projectId = record ? projectIdForRecord(record, recordsById) : (String(activity.canonicalId).startsWith('prj_') ? activity.canonicalId : null);
+  for (const activity of Array.isArray(activities) ? activities : []) {
+    const value = activityPayload(activity);
+    if (!acceptedActivity(value) || !value.canonicalId || localDate(value.occurredAt, timeZone) !== targetDate) continue;
+    const projectId = projectIdForActivity(value, recordsById);
     if (projectId) touched.add(projectId);
   }
   return [...touched].sort();
 }
 
-function projectLines({ projects = [], activities = [], date, timeZone = 'UTC', providerState = 'fresh', maxItems = 25 } = {}) {
+function mappingTarget(mapping) {
+  if (typeof mapping === 'string') return mapping.trim();
+  if (!isPlainObject(mapping)) return null;
+  if (BLOCKED_DISPOSITIONS.has(String(mapping.status || mapping.disposition || '').trim().toLowerCase())) return null;
+  return typeof mapping.target === 'string' && mapping.target.trim() ? mapping.target.trim() : null;
+}
+
+function mappingId(mapping) {
+  if (!isPlainObject(mapping)) return null;
+  return mapping.projectId || null;
+}
+
+function normalizeNoteMappings(noteMappings) {
+  if (noteMappings instanceof Map) {
+    return new Map([...noteMappings.entries()]
+      .map(([id, mapping]) => [id, mappingTarget(mapping)])
+      .filter(([id, target]) => canonicalProjectId(id) && target));
+  }
+  if (Array.isArray(noteMappings)) {
+    return new Map(noteMappings
+      .map((mapping) => [mappingId(mapping), mappingTarget(mapping)])
+      .filter(([id, target]) => canonicalProjectId(id) && target));
+  }
+  if (isPlainObject(noteMappings)) {
+    return new Map(Object.entries(noteMappings)
+      .map(([id, mapping]) => [id, mappingTarget(mapping)])
+      .filter(([id, target]) => canonicalProjectId(id) && target));
+  }
+  return new Map();
+}
+
+function noteMappingsSnapshot(noteMappings) {
+  return [...normalizeNoteMappings(noteMappings).entries()]
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([id, target]) => ({ projectId: id, target }));
+}
+
+function normalizeLinkTarget(target) {
+  const value = String(target || '').trim();
+  if (!value) return null;
+  const wrapped = value.match(/^\[\[([\s\S]+)\]\]$/);
+  const unwrapped = (wrapped ? wrapped[1] : value).trim();
+  if (!unwrapped || /[\r\n]/.test(unwrapped)) return null;
+  return unwrapped;
+}
+
+function projectLines({
+  projects = [],
+  activities = [],
+  date,
+  timeZone = 'UTC',
+  providerState = 'fresh',
+  maxItems = 25,
+  noteMappings,
+  canonicalNoteMappings,
+} = {}) {
   const state = requiredString(providerState, 'activity providerState');
   if (!['fresh', 'healthy-empty'].includes(state)) {
     return {
@@ -64,19 +176,32 @@ function projectLines({ projects = [], activities = [], date, timeZone = 'UTC', 
       omissions: [`activity-provider:${state}`],
     };
   }
-  const byId = Object.fromEntries(projects.filter((record) => record && record.id).map((record) => [record.id, record]));
+  const byId = Object.fromEntries((Array.isArray(projects) ? projects : []).filter((record) => record && record.id).map((record) => [record.id, record]));
   const touchedIds = touchedProjectIds({ activities, projects, date, timeZone });
-  const ongoing = new Set(['active', 'paused']);
-  const touched = touchedIds.map((id) => byId[id]).filter((record) => record && ongoing.has(String(record.lifecycle || record.status || '').toLowerCase()));
-  const lines = touched.slice(0, maxItems).map((record) => `- [[${record.title}]]`);
-  if (touched.length > maxItems) lines.push(`- _...and ${touched.length - maxItems} more_`);
+  const mappings = normalizeNoteMappings(noteMappings === undefined ? canonicalNoteMappings : noteMappings);
+  const omissions = [];
+  const mapped = [];
+  for (const id of touchedIds) {
+    const target = normalizeLinkTarget(mappings.get(id));
+    if (!target) {
+      omissions.push(`canonical-note-mapping:${id}`);
+      continue;
+    }
+    mapped.push({ id, target });
+  }
+  const limited = mapped.slice(0, maxItems);
+  const lines = limited.map(({ target }) => `- [[${target}]]`);
+  if (mapped.length > maxItems) lines.push(`- _...and ${mapped.length - maxItems} more_`);
+  const uniqueOmissions = [...new Set(omissions)].sort();
+  const preserve = uniqueOmissions.some((omission) => omission.startsWith('canonical-note-mapping:'));
   return {
     contract: JOURNAL_PROJECTION_CONTRACT,
-    status: lines.length ? 'fresh' : 'fresh-empty',
-    preserve: false,
+    status: preserve ? 'degraded' : (lines.length ? 'fresh' : 'fresh-empty'),
+    preserve,
     content: lines.length ? lines.join('\n') : null,
-    touchedProjectIds: touched.slice(0, maxItems).map((record) => record.id),
-    omissions: [],
+    touchedProjectIds: touchedIds,
+    mappedProjectIds: limited.map(({ id }) => id),
+    omissions: uniqueOmissions,
   };
 }
 
@@ -104,15 +229,35 @@ function replaceProjectsSection(markdown, content, { heading = PROJECTS_SECTION_
   return `${next.join('\n').replace(/\n{3,}/g, '\n\n').replace(/\s+$/, '')}\n`;
 }
 
-function buildJournalProjection({ date, timeZone = 'UTC', projects = [], activities = [], activityProviderState = 'fresh', coverageWatermark = null, generator = 'projects-v1', maxItems = 25 } = {}) {
-  const projection = projectLines({ projects, activities, date, timeZone, providerState: activityProviderState, maxItems });
+function buildJournalProjection({
+  date,
+  timeZone = 'UTC',
+  projects = [],
+  activities = [],
+  activityProviderState = 'fresh',
+  coverageWatermark = null,
+  generator = 'projects-v1',
+  maxItems = 25,
+  noteMappings,
+  canonicalNoteMappings,
+} = {}) {
+  const mappings = noteMappings === undefined ? canonicalNoteMappings : noteMappings;
+  const projection = projectLines({
+    projects,
+    activities,
+    date,
+    timeZone,
+    providerState: activityProviderState,
+    maxItems,
+    noteMappings: mappings,
+  });
   return {
     ...projection,
     date: requiredString(date, 'projection date'),
     timeZone: requiredString(timeZone, 'projection timezone'),
     generator: requiredString(generator, 'projection generator'),
     coverageWatermark: coverageWatermark == null ? null : requiredString(coverageWatermark, 'coverage watermark'),
-    inputDigest: digest({ date, timeZone, projects, activities, activityProviderState, coverageWatermark }),
+    inputDigest: digest({ date, timeZone, projects, activities, activityProviderState, coverageWatermark, noteMappings: noteMappingsSnapshot(mappings) }),
   };
 }
 
@@ -147,10 +292,14 @@ module.exports = {
   JOURNAL_PROJECTION_CONTRACT,
   PROJECTS_SECTION_HEADING,
   acceptedActivity,
+  admissionRootProjectId,
   applyJournalProjection,
   buildJournalProjection,
   digest,
   localDate,
+  normalizeNoteMappings,
+  noteMappingsSnapshot,
+  projectIdForActivity,
   projectIdForRecord,
   projectLines,
   replaceProjectsSection,
