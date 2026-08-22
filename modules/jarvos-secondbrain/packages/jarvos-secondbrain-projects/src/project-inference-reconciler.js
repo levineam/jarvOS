@@ -19,8 +19,11 @@ const POLICY_REVISION = 'jarvos.project-inference-policy-v1';
 // The U3 bakeoff selected the deterministic arm.  This is intentionally an
 // opaque revision, not a provider or model selector.
 const ENGINE_REVISION = 'deterministic-baseline-v1';
-const MIN_SPAN_MS = 24 * 60 * 60 * 1000;
+const MIN_CALENDAR_DAY_SPAN = 2;
 const MUTATING_DISPOSITIONS = Object.freeze(new Set(['established', 'associated', 'corrected']));
+const REPLAY_TERMINAL_DISPOSITIONS = Object.freeze(new Set([
+  ...MUTATING_DISPOSITIONS, 'rejected', 'superseded',
+]));
 const NON_MUTATING_DISPOSITIONS = Object.freeze(new Set([
   'provisional', 'quarantined', 'rejected', 'superseded', 'not-evaluable', 'unchanged',
 ]));
@@ -88,10 +91,10 @@ function normalizeCoverage(value, evidence) {
   return normalized;
 }
 
-function normalizeInput(input) {
+function normalizeInput(input, { correctionAttestor = null } = {}) {
   exactObject(input, 'reconciliation input');
   const allowed = new Set([
-    'candidate', 'evidence', 'coverage', 'correction', 'correctionAttestor', 'attestor',
+    'candidate', 'evidence', 'coverage', 'correction',
     'canonicalId', 'expectedRegistryGeneration', 'expectedRegistryRevision',
   ]);
   const unsupported = Object.keys(input).filter((key) => !allowed.has(key));
@@ -106,9 +109,11 @@ function normalizeInput(input) {
   const coverage = normalizeCoverage(input.coverage, selected);
   let correction = null;
   if (input.correction !== undefined && input.correction !== null) {
-    const attestor = input.correctionAttestor || input.attestor || null;
     try {
-      correction = contracts.createCorrectionEvidence(input.correction, attestor ? { attestor } : {});
+      correction = contracts.createCorrectionEvidence(
+        input.correction,
+        correctionAttestor ? { attestor: correctionAttestor } : {},
+      );
     } catch (error) {
       throw new TypeError(`correction is invalid: ${error.message}`);
     }
@@ -119,7 +124,6 @@ function normalizeInput(input) {
     selectedEvidence: selected,
     coverage,
     correction,
-    correctionAttestor: input.correctionAttestor || input.attestor || null,
     canonicalId: input.canonicalId === undefined ? null : input.canonicalId,
     expectedRegistryGeneration: input.expectedRegistryGeneration,
     expectedRegistryRevision: input.expectedRegistryRevision,
@@ -144,13 +148,16 @@ function coverageAssessment(selectedEvidence, coverage) {
 function corroborationAssessment(selectedEvidence, coverageInfo) {
   const sourceClasses = new Set(selectedEvidence.map((item) => item.sourceClass));
   const dates = new Set(selectedEvidence.map((item) => isoDate(item.occurredAt)));
-  const times = selectedEvidence.map((item) => Date.parse(item.occurredAt));
-  const span = Math.max(...times) - Math.min(...times);
+  const sortedDates = [...dates].sort();
+  const calendarDaySpan = Math.round(
+    (Date.parse(`${sortedDates.at(-1)}T00:00:00.000Z`) - Date.parse(`${sortedDates[0]}T00:00:00.000Z`))
+      / (24 * 60 * 60 * 1000),
+  );
   return {
     sourceDiverse: sourceClasses.size >= 2,
     distinctDates: dates.size >= 2,
-    spanAtLeast24Hours: span >= MIN_SPAN_MS,
-    spanMs: span,
+    spansThreeCalendarDays: calendarDaySpan >= MIN_CALENDAR_DAY_SPAN,
+    calendarDaySpan,
     sourceClassCount: sourceClasses.size,
     dateCount: dates.size,
     coverageSufficient: coverageInfo.sufficient,
@@ -268,7 +275,8 @@ class ProjectInferenceReconciler {
     const decisions = this._events()
       .filter((event) => event.eventType === 'decision' && event.payload.candidateId === candidateId)
       .map((event) => event.payload)
-      .filter((decision) => correctionId === null || decision.lineage.includes(correctionId));
+      .filter((decision) => correctionId === null || decision.lineage.includes(correctionId))
+      .filter((decision) => REPLAY_TERMINAL_DISPOSITIONS.has(decision.disposition));
     return decisions.sort((left, right) => left.decisionId.localeCompare(right.decisionId))[0] || null;
   }
 
@@ -333,8 +341,7 @@ class ProjectInferenceReconciler {
 
   _policy(input) {
     const { candidate, selectedEvidence, coverage, correction } = input;
-    const attestor = input.correctionAttestor || this.correctionAttestor;
-    const verifiedCorrection = this._verifiedCorrection(correction, attestor);
+    const verifiedCorrection = this._verifiedCorrection(correction, this.correctionAttestor);
     const lineage = [...candidate.lineage, ...(correction ? [correction.correctionId] : [])];
     const suppressionKey = candidateSuppressionKey(candidate);
 
@@ -425,14 +432,14 @@ class ProjectInferenceReconciler {
       suppressionKey: null, lineage,
     };
     if (!corroboration.sourceDiverse) return { disposition: 'provisional', reasonCodes: ['source-diversity-insufficient'], canonical: existing ? canonicalRef(existing) : null, suppressionKey: null, lineage };
-    if (!corroboration.distinctDates || !corroboration.spanAtLeast24Hours) return { disposition: 'provisional', reasonCodes: ['temporal-span-insufficient'], canonical: existing ? canonicalRef(existing) : null, suppressionKey: null, lineage };
+    if (!corroboration.distinctDates || !corroboration.spansThreeCalendarDays) return { disposition: 'provisional', reasonCodes: ['temporal-span-insufficient'], canonical: existing ? canonicalRef(existing) : null, suppressionKey: null, lineage };
     if (existing) return { disposition: 'associated', reasonCodes: ['policy-qualified'], canonical: canonicalRef(existing), suppressionKey: null, lineage };
     return { disposition: 'established', reasonCodes: ['policy-qualified'], canonical: null, suppressionKey: null, lineage };
   }
 
   _registryInput(input, policy, decision) {
     const { candidate, correction } = input;
-    const verifiedCorrection = correction && this._verifiedCorrection(correction, input.correctionAttestor || this.correctionAttestor);
+    const verifiedCorrection = correction && this._verifiedCorrection(correction, this.correctionAttestor);
     const asserted = verifiedCorrection ? correction.assertedChange : {};
     const kind = asserted.kind || candidate.kind;
     const title = asserted.title || candidate.title;
@@ -460,6 +467,106 @@ class ProjectInferenceReconciler {
       throw error;
     }
     const generation = expectedGeneration === undefined ? this.registry.generation : expectedGeneration;
+    if (input.correction?.operation === 'merge') {
+      if (!existing) throw new Error('merge correction requires an existing source record');
+      const survivorId = normalizeCanonicalId(input.correction.assertedChange.canonicalId);
+      if (!survivorId || survivorId === existing.id) throw new Error('merge correction requires a distinct surviving canonical record');
+      const survivor = this.registry.get(survivorId);
+      if (!survivor || survivor.kind !== existing.kind) throw new Error('merge correction survivor must exist with the same kind');
+      const sourceMetadata = {
+        ...metadata,
+        candidateId: `cand_${stableDigest({ mergedSource: existing.id, decisionId: decision.decisionId }).slice(0, 32)}`,
+        disposition: 'superseded',
+        supersededBy: decision.decisionId,
+        reasonCodes: reasons([...decision.reasonCodes, 'correction-merged']),
+      };
+      return this.registry.mutate((transaction) => {
+        const currentSource = transaction.get(existing.id);
+        const currentSurvivor = transaction.get(survivorId);
+        if (expectedRevision !== undefined && currentSource.revision !== expectedRevision) {
+          throw new Error(`stale project revision: expected ${expectedRevision}, current ${currentSource.revision}`);
+        }
+        let survivorDescendsFromSource = false;
+        for (let ancestor = currentSurvivor; ancestor?.parentId;) {
+          if (ancestor.parentId === currentSource.id) {
+            survivorDescendsFromSource = true;
+            break;
+          }
+          ancestor = transaction.get(ancestor.parentId);
+        }
+        const mergedAliases = mergeAliases(
+          currentSurvivor,
+          [...currentSource.aliases, currentSource.title, ...values.aliases],
+          null,
+          values.assertedAliases,
+        );
+        transaction.update(survivorId, {
+          aliases: mergedAliases,
+          ...(survivorDescendsFromSource ? { parentId: currentSource.parentId } : {}),
+          inference: metadata,
+        }, { expectedRevision: currentSurvivor.revision });
+        for (const child of transaction.list().filter((record) => record.parentId === existing.id && record.id !== survivorId)) {
+          transaction.update(child.id, { parentId: survivorId }, { expectedRevision: child.revision });
+        }
+        transaction.update(existing.id, {
+          lifecycle: 'archived',
+          inference: sourceMetadata,
+        }, { expectedRevision: currentSource.revision });
+        return { recordId: survivorId, mergedFrom: existing.id };
+      }, {
+        expectedGeneration: generation,
+        actor: 'project-inference',
+        session: 'project-inference',
+        operation: 'merge',
+        recordId: survivorId,
+        decisionId: decision.decisionId,
+        reasonCodes: decision.reasonCodes,
+      });
+    }
+    if (input.correction?.operation === 'split') {
+      if (!existing) throw new Error('split correction requires an existing source record');
+      const asserted = input.correction.assertedChange;
+      const splitId = normalizeCanonicalId(asserted.canonicalId);
+      if (splitId === existing.id) throw new Error('split correction target must differ from its source');
+      return this.registry.mutate((transaction) => {
+        const currentSource = transaction.get(existing.id);
+        if (expectedRevision !== undefined && currentSource.revision !== expectedRevision) {
+          throw new Error(`stale project revision: expected ${expectedRevision}, current ${currentSource.revision}`);
+        }
+        let splitRecord;
+        if (splitId) {
+          const current = transaction.get(splitId);
+          if (!current) throw new Error('split correction target does not exist');
+          const splitKind = asserted.kind || current.kind;
+          if (splitKind !== current.kind) throw new Error('split correction cannot change canonical record kind');
+          splitRecord = transaction.update(splitId, {
+            ...(asserted.title ? { title: asserted.title } : {}),
+            aliases: mergeAliases(current, values.aliases, asserted.title && asserted.title !== current.title ? current.title : null, values.assertedAliases),
+            ...(asserted.parentId !== null ? { parentId: asserted.parentId } : {}),
+            inference: metadata,
+          }, { expectedRevision: current.revision });
+        } else {
+          const splitKind = asserted.kind || values.kind;
+          const splitParentId = asserted.parentId !== null ? asserted.parentId : existing.parentId;
+          splitRecord = transaction.create({
+            kind: splitKind,
+            title: asserted.title || values.title,
+            aliases: mergeAliases(null, values.aliases, null, values.assertedAliases),
+            parentId: splitParentId,
+            inference: metadata,
+          });
+        }
+        return { recordId: splitRecord.id, splitFrom: existing.id };
+      }, {
+        expectedGeneration: generation,
+        actor: 'project-inference',
+        session: 'project-inference',
+        operation: 'split',
+        recordId: splitId || undefined,
+        decisionId: decision.decisionId,
+        reasonCodes: decision.reasonCodes,
+      });
+    }
     if (existing) {
       if (values.kind !== existing.kind) {
         const error = new Error('inference cannot change canonical record kind');
@@ -470,7 +577,7 @@ class ProjectInferenceReconciler {
         aliases: mergeAliases(existing, values.aliases, values.title !== existing.title ? existing.title : null, values.assertedAliases),
         inference: metadata,
       };
-      if (input.correction && this._verifiedCorrection(input.correction, input.correctionAttestor || this.correctionAttestor)) {
+      if (input.correction && this._verifiedCorrection(input.correction, this.correctionAttestor)) {
         if (input.correction.operation === 'rename' || values.title !== existing.title) patch.title = values.title;
         if (input.correction.operation === 'reparent'
           || (input.correction.assertedChange.parentId !== null && values.parentId !== existing.parentId)) {
@@ -550,20 +657,20 @@ class ProjectInferenceReconciler {
   }
 
   reconcile(rawInput, options = {}) {
-    const input = normalizeInput(rawInput);
+    const input = normalizeInput(rawInput, { correctionAttestor: this.correctionAttestor });
     if (input.candidate.engineRevision !== this.engineRevision) {
       throw new Error(`candidate engine revision mismatch: expected ${this.engineRevision}`);
     }
     if (input.candidate.policyRevision !== this.policyRevision) {
       throw new Error(`candidate policy revision mismatch: expected ${this.policyRevision}`);
     }
-    const attestor = input.correctionAttestor || this.correctionAttestor;
     // A normalized correction that carries an admission is never silently
     // trusted.  The host attestor has to verify it at this boundary.
-    if (input.correction && input.correction.trustTier === 'verified' && !this._verifiedCorrection(input.correction, attestor)) {
+    if (input.correction && input.correction.trustTier === 'verified' && !this._verifiedCorrection(input.correction, this.correctionAttestor)) {
       throw new Error('verified correction requires a trusted host attestor');
     }
     for (const item of input.evidence) this.ledger.appendEvidence(item);
+    for (const item of input.coverage) this.ledger.appendCoverage(item);
     if (input.correction) this.ledger.appendCorrection(input.correction);
     this.ledger.appendCandidate(input.candidate);
 
@@ -628,7 +735,6 @@ class ProjectInferenceReconciler {
     } catch (error) {
       if (/stale registry generation|stale project revision/i.test(error.message) || error.code === 'STALE_REGISTRY') {
         const blocked = contracts.createInferenceDecision({ ...decision, disposition: 'not-evaluable', canonical: null, reasonCodes: reasons([...decision.reasonCodes, 'stale-registry']) });
-        this.ledger.appendDecision(blocked);
         return this._result({ status: 'blocked', decision: blocked, reasonCodes: blocked.reasonCodes, error });
       }
       throw error;
@@ -643,7 +749,7 @@ function createProjectInferenceReconciler(options) { return new ProjectInference
 
 module.exports = {
   ENGINE_REVISION,
-  MIN_SPAN_MS,
+  MIN_CALENDAR_DAY_SPAN,
   MUTATING_DISPOSITIONS: [...MUTATING_DISPOSITIONS],
   NON_MUTATING_DISPOSITIONS: [...NON_MUTATING_DISPOSITIONS],
   POLICY_REVISION,

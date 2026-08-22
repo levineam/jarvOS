@@ -6,6 +6,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const crypto = require('node:crypto');
+const { spawn } = require('node:child_process');
 const { ActivityStore } = require('../src/activity-store');
 const {
   createHostAdmission,
@@ -21,6 +22,28 @@ const INFERENCE_AUTHORITY = createInferenceHostAuthority({
 });
 
 function tmpDir() { return fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-activity-store-')); }
+
+function waitForFile(filePath, timeoutMs = 5000) {
+  return new Promise((resolve, reject) => {
+    const deadline = Date.now() + timeoutMs;
+    const check = () => {
+      if (fs.existsSync(filePath)) return resolve();
+      if (Date.now() >= deadline) return reject(new Error(`timed out waiting for ${filePath}`));
+      setTimeout(check, 10);
+    };
+    check();
+  });
+}
+
+function runWorker(worker, role, stateDir, controlDir) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, ['-e', worker, role, stateDir, controlDir], { stdio: ['ignore', 'ignore', 'pipe'] });
+    let stderr = '';
+    child.stderr.on('data', (chunk) => { stderr += chunk; });
+    child.on('error', reject);
+    child.on('exit', (code, signal) => resolve({ code, signal, stderr }));
+  });
+}
 
 function receipt({ eventId = 'event-1', dedupeKey = 'causal-1', occurredAt = NOW, evidenceRefs = ['note:rev-1'], canonicalId = 'prj_000001' } = {}) {
   const base = {
@@ -158,6 +181,66 @@ test('unattributed observations are quarantined and cannot assert a canonical pr
   assert.equal(store.listUnattributed()[0].trust, 'unattributed');
   assert.throws(() => store.observeUnattributed({ observationId: 'bad', canonicalId: 'prj_000001', receivedAt: NOW }), /cannot carry canonicalId/);
   assert.equal((fs.statSync(path.join(stateDir, 'unattributed.jsonl')).mode & 0o777), 0o600);
+});
+
+test('legacy unattributed observations cannot be lost during a concurrent evidence rewrite', async () => {
+  const stateDir = tmpDir();
+  const controlDir = tmpDir();
+  const activityStorePath = path.resolve(__dirname, '../src/activity-store.js');
+  const providerContractsPath = path.resolve(__dirname, '../src/provider-contracts.js');
+  const worker = `
+    const fs = require('node:fs');
+    const path = require('node:path');
+    const { ActivityStore } = require(${JSON.stringify(activityStorePath)});
+    const { createInferenceHostAuthority } = require(${JSON.stringify(providerContractsPath)});
+    const role = process.argv[1];
+    const stateDir = process.argv[2];
+    const controlDir = process.argv[3];
+    const now = '2026-08-10T12:00:00.000Z';
+    const store = new ActivityStore({ stateDir, now: () => now, inferenceVerifier: createInferenceHostAuthority({
+      producerId: 'notes-adapter', secret: 'inference-test-secret', allowedSourceClasses: ['note', 'chat'],
+    }) });
+    if (role === 'admitter') {
+      const authority = createInferenceHostAuthority({
+        producerId: 'notes-adapter', secret: 'inference-test-secret', allowedSourceClasses: ['note', 'chat'],
+      });
+      const envelope = authority.admitEvidenceUnit({
+        contract: 'jarvos.project-inference-evidence/v1', observationId: 'obs_race', evidenceId: 'ev_race',
+        sourceClass: 'note', occurredAt: now, observedAt: now, sourceRevision: 'note-rev-race',
+        sensitivity: 'public-fixture', coverageState: 'fresh', contentDigest: 'a'.repeat(64),
+      });
+      const write = store._writeUnattributedRows.bind(store);
+      store._writeUnattributedRows = (rows) => {
+        fs.writeFileSync(path.join(controlDir, 'rewrite-ready'), 'ready');
+        const deadline = Date.now() + 5000;
+        while (!fs.existsSync(path.join(controlDir, 'release'))) {
+          if (Date.now() >= deadline) throw new Error('timed out waiting for release');
+          Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
+        }
+        return write(rows);
+      };
+      store.admitUnattributedEvidence(envelope);
+    } else {
+      fs.writeFileSync(path.join(controlDir, 'observe-started'), 'started');
+      store.observeUnattributed({
+        observationId: 'legacy_race', sourceId: 'cass:session-race', sourceRevision: 'rev-race',
+        receivedAt: now, evidenceRefs: ['cass:session-race'], reason: 'mapping_ambiguous',
+      });
+    }
+  `;
+
+  const admitter = runWorker(worker, 'admitter', stateDir, controlDir);
+  await waitForFile(path.join(controlDir, 'rewrite-ready'));
+  const observer = runWorker(worker, 'observer', stateDir, controlDir);
+  await waitForFile(path.join(controlDir, 'observe-started'));
+  fs.writeFileSync(path.join(controlDir, 'release'), 'release');
+  const [admitterResult, observerResult] = await Promise.all([admitter, observer]);
+  assert.equal(admitterResult.code, 0, admitterResult.stderr);
+  assert.equal(observerResult.code, 0, observerResult.stderr);
+
+  const rows = new ActivityStore({ stateDir }).listUnattributed();
+  assert.deepEqual(rows.map((row) => row.observationId).sort(), ['legacy_race', 'obs_race']);
+  assert.equal(rows.find((row) => row.evidenceId === 'ev_race')?.trust, 'admitted-inference');
 });
 
 test('occurrence-time query is bounded, cursorable, and returns a stable watermark', () => {

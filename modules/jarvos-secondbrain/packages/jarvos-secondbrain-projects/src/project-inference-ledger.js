@@ -125,7 +125,13 @@ function normalizeEvent(input, { eventId, attestor = null } = {}) {
   const entityDigest = digestFor(eventType, payload, { attestor });
   const sourceClass = payload.sourceClass || null;
   const watermark = normalizeWatermark(watermarkFor(eventType, payload));
-  const derivedEventId = `evt_${stableDigest({ eventType, entityId }).slice(0, 32)}`;
+  // A correction may gain a host admission after it was first observed as
+  // support-only text. Preserve both append-only states under one logical
+  // correctionId while keeping exact retries idempotent.
+  const eventIdentity = eventType === 'correction'
+    ? { eventType, entityId, entityDigest }
+    : { eventType, entityId };
+  const derivedEventId = `evt_${stableDigest(eventIdentity).slice(0, 32)}`;
   const normalized = {
     contract: LEDGER_EVENT_CONTRACT,
     eventId: eventId || input.eventId || derivedEventId,

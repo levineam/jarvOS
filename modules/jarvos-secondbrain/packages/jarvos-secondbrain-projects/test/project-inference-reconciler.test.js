@@ -29,12 +29,14 @@ function fixture({ registryDir = stateRoot(), ledgerDir = stateRoot(), now = '20
   return {
     registry,
     ledger,
+    attestor,
     make: () => new ProjectInferenceReconciler({
       registry,
       ledger,
       now: clock,
       engineRevision: ENGINE_REVISION,
       policyRevision: POLICY_REVISION,
+      correctionAttestor: attestor,
     }),
   };
 }
@@ -133,18 +135,25 @@ test('one source and two same-day sources remain provisional without registry mu
   assert.equal(two.registry.generation, 0);
 });
 
-test('source-diverse evidence across two dates and 24 hours establishes a root Project', () => {
+test('source-diverse evidence must span three calendar days to establish a root Project', () => {
   const f = fixture();
-  const evidenceUnits = [
+  const tooSoon = [
     evidence('ev_root_note', '2026-08-01T09:00:00.000Z', 'note'),
     evidence('ev_root_chat', '2026-08-02T09:00:00.000Z', 'chat'),
   ];
-  const result = f.make().reconcile(reconcileInput(candidate(['ev_root_note', 'ev_root_chat']), evidenceUnits));
+  assert.equal(f.make().reconcile(reconcileInput(candidate(['ev_root_note', 'ev_root_chat']), tooSoon)).status, 'provisional');
+
+  const qualified = fixture();
+  const evidenceUnits = [
+    evidence('ev_qualified_note', '2026-08-01T23:59:00.000Z', 'note'),
+    evidence('ev_qualified_chat', '2026-08-03T00:01:00.000Z', 'chat'),
+  ];
+  const result = qualified.make().reconcile(reconcileInput(candidate(['ev_qualified_note', 'ev_qualified_chat']), evidenceUnits));
   assert.equal(result.status, 'established');
   assert.equal(result.record.kind, 'project');
   assert.equal(result.record.parentId, null);
   assert.equal(result.decision.canonical.recordId, result.record.id);
-  assert.equal(f.registry.generation, 1);
+  assert.equal(qualified.registry.generation, 1);
 });
 
 test('verified Correction establishes immediately and a rename preserves the canonical ID and old alias', () => {
@@ -165,7 +174,7 @@ test('verified Correction establishes immediately and a rename preserves the can
     assertedChange: { title: 'Verified Portfolio', aliases: [], parentId: null, kind: 'project', canonicalId: null },
     attestation: { method: 'telegram-owner' },
   });
-  const established = f.make().reconcile(reconcileInput(c, [e], { correction, correctionAttestor: attestor }));
+  const established = f.make().reconcile(reconcileInput(c, [e], { correction }));
   assert.equal(established.status, 'corrected');
   const canonicalId = established.record.id;
   assert.equal(established.record.title, 'Verified Portfolio');
@@ -182,12 +191,135 @@ test('verified Correction establishes immediately and a rename preserves the can
   const renamed = f.make().reconcile(reconcileInput(
     c,
     [e],
-    { correction: renameCorrection, correctionAttestor: attestor },
+    { correction: renameCorrection },
   ));
   assert.equal(renamed.status, 'corrected');
   assert.equal(renamed.record.id, canonicalId);
   assert.equal(renamed.record.title, 'Portfolio Thesis');
   assert.deepEqual(renamed.record.aliases, ['Old Working Name', 'Verified Portfolio']);
+});
+
+test('verified merge correction atomically preserves the survivor, children, aliases, and replay', () => {
+  const attestor = contracts.createCorrectionAttestor({
+    issuerId: 'owner-host', secret: 'merge-secret', allowedMethods: ['telegram-owner'], allowedSourceClasses: ['chat'],
+  });
+  const f = fixture({ attestor });
+  const source = f.registry.create({ title: 'Research Observatory' });
+  const survivor = f.registry.create({ title: 'Amazing Abundance Portfolio' }, { expectedGeneration: source.generation });
+  const child = f.registry.create({ title: 'Portfolio Memo', parentId: source.record.id }, { expectedGeneration: survivor.generation });
+  const e = evidence('ev_merge', '2026-08-03T10:00:00.000Z', 'chat');
+  const c = candidate([e.evidenceId], { title: 'Research Observatory' });
+  const correction = attestor.attest({
+    ...e,
+    contract: contracts.CORRECTION_EVIDENCE_CONTRACT,
+    target: { candidateId: null, canonicalId: source.record.id, alias: null },
+    operation: 'merge',
+    assertedChange: { title: null, aliases: ['AAF Observatory'], parentId: null, kind: 'project', canonicalId: survivor.record.id },
+    attestation: { method: 'telegram-owner' },
+  });
+  const merged = f.make().reconcile(reconcileInput(c, [e], { correction }));
+  assert.equal(merged.status, 'corrected');
+  assert.equal(merged.record.id, survivor.record.id);
+  assert.deepEqual(merged.record.aliases, ['AAF Observatory', 'Research Observatory']);
+  assert.equal(f.registry.get(source.record.id).lifecycle, 'archived');
+  assert.equal(f.registry.get(source.record.id).inference.disposition, 'superseded');
+  assert.equal(f.registry.get(child.record.id).parentId, survivor.record.id);
+  const generation = f.registry.generation;
+  const replay = f.make().reconcile(reconcileInput(c, [e], { correction }));
+  assert.equal(replay.replayed, true);
+  assert.equal(replay.record.id, survivor.record.id);
+  assert.equal(f.registry.generation, generation);
+});
+
+test('verified split correction atomically creates a new canonical record and preserves its source', () => {
+  const attestor = contracts.createCorrectionAttestor({
+    issuerId: 'owner-host', secret: 'split-secret', allowedMethods: ['telegram-owner'], allowedSourceClasses: ['chat'],
+  });
+  const f = fixture({ attestor });
+  const source = f.registry.create({ title: 'Combined Research' });
+  const e = evidence('ev_split', '2026-08-03T10:00:00.000Z', 'chat');
+  const c = candidate([e.evidenceId], { title: 'Macro Research' });
+  const correction = attestor.attest({
+    ...e,
+    contract: contracts.CORRECTION_EVIDENCE_CONTRACT,
+    target: { candidateId: null, canonicalId: source.record.id, alias: null },
+    operation: 'split',
+    assertedChange: { title: 'Macro Research', aliases: [], parentId: null, kind: 'project', canonicalId: null },
+    attestation: { method: 'telegram-owner' },
+  });
+  const split = f.make().reconcile(reconcileInput(c, [e], { correction }));
+  assert.equal(split.status, 'corrected');
+  assert.notEqual(split.record.id, source.record.id);
+  assert.equal(split.record.title, 'Macro Research');
+  assert.equal(f.registry.get(source.record.id).title, 'Combined Research');
+  assert.equal(f.registry.get(source.record.id).lifecycle, 'active');
+});
+
+test('merge and split corrections reject stale source revisions without mutation', () => {
+  const attestor = contracts.createCorrectionAttestor({
+    issuerId: 'owner-host', secret: 'stale-correction-secret', allowedMethods: ['telegram-owner'], allowedSourceClasses: ['chat'],
+  });
+  for (const operation of ['merge', 'split']) {
+    const f = fixture({ attestor });
+    const source = f.registry.create({ title: `${operation} source` });
+    const survivor = operation === 'merge'
+      ? f.registry.create({ title: 'merge survivor' }, { expectedGeneration: source.generation })
+      : null;
+    const currentGeneration = survivor?.generation || source.generation;
+    const e = evidence(`ev_${operation}_stale`, '2026-08-03T10:00:00.000Z', 'chat');
+    const c = candidate([e.evidenceId], { title: `${operation} candidate` });
+    const correction = attestor.attest({
+      ...e,
+      contract: contracts.CORRECTION_EVIDENCE_CONTRACT,
+      target: { candidateId: null, canonicalId: source.record.id, alias: null },
+      operation,
+      assertedChange: {
+        title: operation === 'split' ? 'split result' : null,
+        aliases: [],
+        parentId: null,
+        kind: 'project',
+        canonicalId: survivor?.record.id || null,
+      },
+      attestation: { method: 'telegram-owner' },
+    });
+    const result = f.make().reconcile(reconcileInput(c, [e], {
+      correction,
+      expectedRegistryGeneration: currentGeneration,
+      expectedRegistryRevision: source.record.revision + 1,
+    }));
+    assert.equal(result.status, 'blocked');
+    assert.match(result.reasonCodes.join(','), /stale-registry/);
+    assert.equal(f.registry.generation, currentGeneration);
+    assert.equal(f.registry.get(source.record.id).lifecycle, 'active');
+    assert.equal(f.registry.list().length, operation === 'merge' ? 2 : 1);
+  }
+});
+
+test('merging a source into its descendant survivor repairs the hierarchy without a cycle', () => {
+  const attestor = contracts.createCorrectionAttestor({
+    issuerId: 'owner-host', secret: 'descendant-merge-secret', allowedMethods: ['telegram-owner'], allowedSourceClasses: ['chat'],
+  });
+  const f = fixture({ attestor });
+  const source = f.registry.create({ title: 'Parent Research' });
+  const survivor = f.registry.create({ title: 'Focused Research', parentId: source.record.id }, { expectedGeneration: source.generation });
+  const grandchild = f.registry.create({ title: 'Research Memo', parentId: survivor.record.id }, { expectedGeneration: survivor.generation });
+  const sibling = f.registry.create({ title: 'Adjacent Research', parentId: source.record.id }, { expectedGeneration: grandchild.generation });
+  const e = evidence('ev_descendant_merge', '2026-08-03T10:00:00.000Z', 'chat');
+  const c = candidate([e.evidenceId], { title: source.record.title });
+  const correction = attestor.attest({
+    ...e,
+    contract: contracts.CORRECTION_EVIDENCE_CONTRACT,
+    target: { candidateId: null, canonicalId: source.record.id, alias: null },
+    operation: 'merge',
+    assertedChange: { title: null, aliases: [], parentId: null, kind: 'project', canonicalId: survivor.record.id },
+    attestation: { method: 'telegram-owner' },
+  });
+  const result = f.make().reconcile(reconcileInput(c, [e], { correction }));
+  assert.equal(result.status, 'corrected');
+  assert.equal(f.registry.get(survivor.record.id).parentId, null);
+  assert.equal(f.registry.get(sibling.record.id).parentId, survivor.record.id);
+  assert.equal(f.registry.get(grandchild.record.id).parentId, survivor.record.id);
+  assert.equal(f.registry.integrity().ok, true);
 });
 
 test('unverified correction cannot mutate the registry', () => {
@@ -208,11 +340,89 @@ test('unverified correction cannot mutate the registry', () => {
   assert.match(result.reasonCodes.join(','), /correction-unverified/);
 });
 
+test('a caller cannot supply its own correction authority', () => {
+  const trusted = contracts.createCorrectionAttestor({
+    issuerId: 'trusted-owner', secret: 'trusted-secret', allowedMethods: ['telegram-owner'], allowedSourceClasses: ['chat'],
+  });
+  const attacker = contracts.createCorrectionAttestor({
+    issuerId: 'caller-controlled', secret: 'attacker-secret', allowedMethods: ['telegram-owner'], allowedSourceClasses: ['chat'],
+  });
+  const f = fixture({ attestor: trusted });
+  const e = evidence('ev_forged_authority', '2026-08-03T10:00:00.000Z', 'chat');
+  const c = candidate([e.evidenceId]);
+  const correction = attacker.attest({
+    ...e,
+    contract: contracts.CORRECTION_EVIDENCE_CONTRACT,
+    target: { candidateId: c.candidateId, canonicalId: null, alias: null },
+    operation: 'establish',
+    assertedChange: { title: 'Attacker Project', aliases: [], parentId: null, kind: 'project', canonicalId: null },
+    attestation: { method: 'telegram-owner' },
+  });
+  assert.throws(
+    () => f.make().reconcile(reconcileInput(c, [e], { correction, correctionAttestor: attacker })),
+    /unsupported fields|signature|claim|admission/i,
+  );
+  assert.equal(f.registry.generation, 0);
+});
+
+test('fresh coverage can advance a previously provisional candidate', () => {
+  const f = fixture();
+  const evidenceUnits = [
+    evidence('ev_advancing_note', '2026-08-01T09:00:00.000Z', 'note'),
+    evidence('ev_advancing_chat', '2026-08-03T09:00:00.000Z', 'chat'),
+  ];
+  const c = candidate(evidenceUnits.map((item) => item.evidenceId));
+  const incomplete = f.make().reconcile(reconcileInput(c, evidenceUnits, {
+    coverage: [
+      coverage('note', '2026-08-03T12:00:00.000Z'),
+      coverage('chat', '2026-08-03T12:00:00.000Z', 'unavailable'),
+    ],
+  }));
+  assert.equal(incomplete.status, 'provisional');
+  const established = f.make().reconcile(reconcileInput(c, evidenceUnits, {
+    coverage: [
+      coverage('note', '2026-08-03T13:00:00.000Z'),
+      coverage('chat', '2026-08-03T13:00:00.000Z'),
+    ],
+  }));
+  assert.equal(established.status, 'established');
+  assert.equal(f.registry.generation, 1);
+  assert.equal(f.ledger.latestWatermarks().chat.state, 'fresh');
+});
+
+test('a later host attestation advances the same logical correction', () => {
+  const attestor = contracts.createCorrectionAttestor({
+    issuerId: 'owner-host', secret: 'upgrade-secret', allowedMethods: ['telegram-owner'], allowedSourceClasses: ['chat'],
+  });
+  const f = fixture({ attestor });
+  const e = evidence('ev_correction_upgrade', '2026-08-03T10:00:00.000Z', 'chat');
+  const c = candidate([e.evidenceId], { title: 'Working Name' });
+  const base = {
+    ...e,
+    contract: contracts.CORRECTION_EVIDENCE_CONTRACT,
+    target: { candidateId: c.candidateId, canonicalId: null, alias: null },
+    operation: 'establish',
+    assertedChange: { title: 'Confirmed Name', aliases: [], parentId: null, kind: 'project', canonicalId: null },
+  };
+  const supportOnly = contracts.createCorrectionEvidence({
+    ...base,
+    attestation: { method: 'conversation-text', admission: null },
+  });
+  assert.equal(f.make().reconcile(reconcileInput(c, [e], { correction: supportOnly })).status, 'provisional');
+
+  const verified = attestor.attest({ ...base, attestation: { method: 'telegram-owner' } });
+  assert.equal(verified.correctionId, supportOnly.correctionId);
+  const result = f.make().reconcile(reconcileInput(c, [e], { correction: verified }));
+  assert.equal(result.status, 'corrected');
+  assert.equal(result.record.title, 'Confirmed Name');
+  assert.equal(f.registry.generation, 1);
+});
+
 test('missing coverage cannot demote an established Project or write a second registry record', () => {
   const f = fixture();
   const initialEvidence = [
     evidence('ev_coverage_note', '2026-08-01T09:00:00.000Z', 'note'),
-    evidence('ev_coverage_chat', '2026-08-02T09:00:00.000Z', 'chat'),
+    evidence('ev_coverage_chat', '2026-08-03T09:00:00.000Z', 'chat'),
   ];
   const c = candidate(['ev_coverage_note', 'ev_coverage_chat']);
   const established = f.make().reconcile(reconcileInput(c, initialEvidence));
@@ -220,7 +430,7 @@ test('missing coverage cannot demote an established Project or write a second re
   const before = f.registry.generation;
   const unavailableEvidence = [
     evidence('ev_coverage_note', '2026-08-01T09:00:00.000Z', 'note'),
-    evidence('ev_coverage_chat_unavailable', '2026-08-02T09:00:00.000Z', 'chat', { coverageState: 'unavailable', contentDigest: null }),
+    evidence('ev_coverage_chat_unavailable', '2026-08-03T09:00:00.000Z', 'chat', { coverageState: 'unavailable', contentDigest: null }),
   ];
   const result = f.make().reconcile(reconcileInput(
     candidate(['ev_coverage_note', 'ev_coverage_chat_unavailable'], { title: c.title }),
@@ -277,7 +487,7 @@ test('restart and reordered replay return the prior result without duplicate reg
   const f = fixture();
   const e = [
     evidence('ev_replay_note', '2026-08-01T09:00:00.000Z', 'note'),
-    evidence('ev_replay_chat', '2026-08-02T09:00:00.000Z', 'chat'),
+    evidence('ev_replay_chat', '2026-08-03T09:00:00.000Z', 'chat'),
   ];
   const c = candidate(e.map((item) => item.evidenceId));
   const first = f.make().reconcile(reconcileInput(c, e));
@@ -299,7 +509,7 @@ test('restart recovers a registry commit that preceded the final decision append
   const f = fixture();
   const evidenceUnits = [
     evidence('ev_crash_note', '2026-08-01T09:00:00.000Z', 'note'),
-    evidence('ev_crash_chat', '2026-08-02T09:00:00.000Z', 'chat'),
+    evidence('ev_crash_chat', '2026-08-03T09:00:00.000Z', 'chat'),
   ];
   const c = candidate(evidenceUnits.map((item) => item.evidenceId));
   const originalAppendDecision = f.ledger.appendDecision.bind(f.ledger);
@@ -344,11 +554,16 @@ test('stale registry CAS fails closed without creating a record', () => {
   const f = fixture();
   const e = [
     evidence('ev_stale_note', '2026-08-01T09:00:00.000Z', 'note'),
-    evidence('ev_stale_chat', '2026-08-02T09:00:00.000Z', 'chat'),
+    evidence('ev_stale_chat', '2026-08-03T09:00:00.000Z', 'chat'),
   ];
   const c = candidate(e.map((item) => item.evidenceId));
   const result = f.make().reconcile(reconcileInput(c, e), { expectedRegistryGeneration: 42 });
   assert.equal(result.status, 'blocked');
   assert.match(result.reasonCodes.join(','), /stale-registry/);
   assert.equal(f.registry.generation, 0);
+
+  const retry = f.make().reconcile(reconcileInput(c, e), { expectedRegistryGeneration: 0 });
+  assert.equal(retry.status, 'established');
+  assert.equal(retry.replayed, false);
+  assert.equal(f.registry.generation, 1);
 });

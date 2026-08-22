@@ -14,7 +14,7 @@ const INFERENCE_DECISION_CONTRACT = 'jarvos.project-inference-decision/v1';
 const COVERAGE_CONTRACT = 'jarvos.project-inference-coverage/v1';
 
 const SOURCE_CLASSES = Object.freeze(['note', 'chat', 'execution', 'release', 'stewardship']);
-const COVERAGE_STATES = Object.freeze(['fresh', 'stale', 'partial', 'unknown', 'unavailable', 'healthy-empty']);
+const COVERAGE_STATES = Object.freeze(['fresh', 'stale', 'partial', 'unknown', 'unavailable', 'healthy-empty', 'policy-omitted']);
 const SENSITIVITY_CLASSES = Object.freeze(['public-fixture', 'owner-private', 'restricted']);
 const PROJECT_KINDS = Object.freeze(['project', 'outcome']);
 const CANDIDATE_DISPOSITIONS = Object.freeze(['provisional', 'quarantined', 'established', 'rejected', 'superseded']);
@@ -307,7 +307,10 @@ function normalizeCandidate(input) {
   const disposition = enumValue(input.disposition === undefined ? 'provisional' : input.disposition, 'disposition', CANDIDATE_DISPOSITIONS);
   const reasonCodes = normalizeReasonCodes(input.reasonCodes === undefined ? [] : input.reasonCodes, 'reasonCodes');
   const lineage = normalizeIdList(input.lineage === undefined ? [] : input.lineage, 'lineage');
-  const identity = { origin, evidenceIds };
+  // Origin describes how an adapter observed the candidate. It is not part of
+  // identity: retries and replay adapters must converge on the same candidate
+  // for the same frozen evidence set.
+  const identity = { evidenceIds };
   const candidateId = input.candidateId === undefined
     ? `cand_${stableDigest(identity).slice(0, 32)}`
     : opaque(input.candidateId, 'candidateId');
@@ -347,7 +350,9 @@ function validateProjectCandidate(input) {
 
 function projectCandidateDigest(input) {
   const candidate = createProjectCandidate(input);
-  return stableDigest(without(candidate, 'contract'));
+  // `origin` is descriptive adapter metadata. The same frozen evidence must
+  // retain one candidate digest across inference and replay delivery.
+  return stableDigest(without(candidate, 'contract', 'origin'));
 }
 
 function normalizeCanonical(value) {

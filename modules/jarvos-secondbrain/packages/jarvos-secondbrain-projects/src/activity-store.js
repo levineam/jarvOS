@@ -465,10 +465,16 @@ class ActivityStore {
       reason: typeof candidate.reason === 'string' && candidate.reason.trim() ? candidate.reason.trim().slice(0, 160) : 'canonical_mapping_unavailable',
       trust: 'unattributed',
     };
-    const filePath = this._unattributedPath();
-    fs.appendFileSync(filePath, `${JSON.stringify(safe)}\n`, { encoding: 'utf8', mode: 0o600 });
-    try { fs.chmodSync(filePath, 0o600); } catch (_) { /* best effort */ }
-    return { status: 'quarantined', observation: clone(safe) };
+    return this._withUnattributedLock(() => {
+      // Legacy observations predate the admitted-evidence lane, so preserve
+      // their append-and-return shape while using the same read-modify-write
+      // critical section as locked inference evidence. Otherwise a legacy
+      // append racing an evidence rewrite can be overwritten by that rewrite.
+      const rows = readJsonl(this._unattributedPath());
+      rows.push(safe);
+      this._writeUnattributedRows(rows);
+      return { status: 'quarantined', observation: clone(safe) };
+    });
   }
 
   listUnattributed() {

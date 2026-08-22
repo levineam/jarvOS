@@ -74,7 +74,7 @@ test('evidence units normalize portable metadata and derive stable IDs', () => {
   assert.equal(contracts.evidenceUnitDigest(first), contracts.evidenceUnitDigest(second));
   assert.deepEqual(contracts.validateEvidenceUnit(first), { ok: true, evidence: first });
   assert.deepEqual(contracts.SOURCE_CLASSES, ['note', 'chat', 'execution', 'release', 'stewardship']);
-  assert.deepEqual(contracts.COVERAGE_STATES, ['fresh', 'stale', 'partial', 'unknown', 'unavailable', 'healthy-empty']);
+  assert.deepEqual(contracts.COVERAGE_STATES, ['fresh', 'stale', 'partial', 'unknown', 'unavailable', 'healthy-empty', 'policy-omitted']);
 });
 
 test('evidence units preserve distinct coverage states and reject raw or extra fields', () => {
@@ -88,11 +88,33 @@ test('evidence units preserve distinct coverage states and reject raw or extra f
   assert.throws(() => evidence({ sourceRevision: '/Users/andrew/private-note.md' }), /opaque|sourceRevision/);
 });
 
+test('policy-omitted coverage remains distinct through evidence and coverage validation round trips', () => {
+  const unit = evidence({ coverageState: 'policy-omitted', contentDigest: null });
+  assert.equal(unit.coverageState, 'policy-omitted');
+  assert.deepEqual(contracts.validateEvidenceUnit(unit), { ok: true, evidence: unit });
+
+  const status = contracts.createCoverageStatus({
+    sourceClass: 'chat',
+    state: 'policy-omitted',
+    observedAt: '2026-08-01T15:00:00.000Z',
+    sourceRevision: 'chat-policy-v1',
+  });
+  assert.equal(status.state, 'policy-omitted');
+  assert.deepEqual(contracts.validateCoverageStatus(status), { ok: true, coverage: status });
+  assert.notEqual(status.state, 'unavailable');
+  assert.notEqual(status.state, 'healthy-empty');
+});
+
 test('candidates are deterministic, support provisional and quarantined states, and enforce outcome leaf semantics', () => {
   const first = candidate({ evidenceIds: ['ev_002', 'ev_001'] });
   const second = candidate({ evidenceIds: ['ev_001', 'ev_002'] });
   assert.equal(first.candidateId, second.candidateId);
+  assert.equal(first.candidateId, candidate({ origin: 'replay' }).candidateId);
   assert.equal(contracts.projectCandidateDigest(first), contracts.projectCandidateDigest(second));
+  assert.equal(
+    contracts.projectCandidateDigest(first),
+    contracts.projectCandidateDigest(candidate({ origin: 'replay' })),
+  );
   assert.equal(candidate({ disposition: 'quarantined' }).disposition, 'quarantined');
   assert.throws(() => candidate({ kind: 'outcome', parentId: null }), /outcome.*parent/i);
   assert.throws(() => candidate({ confidence: { ...candidate().confidence, identityMatch: 2 } }), /confidence/);

@@ -56,6 +56,37 @@ test('reordered replay converges to deterministic events, coverage, and latest w
   assert.equal(first.latestWatermarks().release.state, 'healthy-empty');
 });
 
+test('candidate replay from another adapter keeps one immutable ledger identity', () => {
+  const ledger = ledgerModule.createMemoryInferenceLedger();
+  const base = {
+    evidenceIds: ['ev_001', 'ev_002'],
+    engineRevision: 'engine-v1',
+    policyRevision: 'policy-v1',
+    kind: 'project',
+    title: 'Swarm Theory Book',
+    aliases: [],
+    parentId: null,
+    parentAlternatives: [],
+    confidence: {
+      identityMatch: 0.8,
+      novelty: 0.7,
+      sourceDiversity: 0.6,
+      temporalContinuity: 0.8,
+      parentFit: 0.5,
+      sourceCoverage: 1,
+    },
+    disposition: 'provisional',
+    reasonCodes: [],
+    lineage: [],
+  };
+  const inferred = contracts.createProjectCandidate({ ...base, origin: 'inference' });
+  const replayed = contracts.createProjectCandidate({ ...base, origin: 'replay' });
+  assert.equal(inferred.candidateId, replayed.candidateId);
+  assert.equal(ledger.appendCandidate(inferred).status, 'appended');
+  assert.equal(ledger.appendCandidate(replayed).status, 'duplicate');
+  assert.equal(ledger.listEvents().length, 1);
+});
+
 test('file ledger survives restart and keeps an unavailable source distinct from healthy-empty', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-inference-ledger-'));
   try {

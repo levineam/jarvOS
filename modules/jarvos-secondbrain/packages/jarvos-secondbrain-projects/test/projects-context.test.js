@@ -167,6 +167,7 @@ test('inference is versioned, provisional candidates are explicitly non-actionab
         coverage('chat', 'healthy-empty'),
         coverage('execution', 'partial'),
         coverage('release', 'unavailable'),
+        coverage('stewardship', 'policy-omitted'),
       ],
       watermark: 'b'.repeat(64),
       watermarks: {},
@@ -179,7 +180,7 @@ test('inference is versioned, provisional candidates are explicitly non-actionab
   assert.equal(result.packet.inference.candidates[0].disposition, 'provisional');
   assert.equal(result.packet.inference.candidates[0].actionable, false);
   assert.deepEqual(result.packet.inference.candidates[0].parentAlternatives, [root.id]);
-  assert.deepEqual(result.packet.inference.coverage.map((entry) => entry.state), ['healthy-empty', 'partial', 'fresh', 'unavailable']);
+  assert.deepEqual(result.packet.inference.coverage.map((entry) => entry.state), ['healthy-empty', 'partial', 'fresh', 'unavailable', 'policy-omitted']);
   assert.equal(result.packet.inference.watermark, 'b'.repeat(64));
   assert.equal(result.packet.watermarks.registry, `registry:${registry.generation}`);
   assert.equal(validateContextPacket(result.packet).ok, true);

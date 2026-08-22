@@ -2,6 +2,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const { spawn } = require('node:child_process');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
@@ -334,6 +335,111 @@ test('stale graph generations cannot overwrite newer mutations', () => {
   }), /stale registry generation/);
   assert.equal(firstUpdate.record.title, 'jarvOS core');
   assert.equal(new ProjectRegistry({ stateDir }).get(created.record.id).title, 'jarvOS core');
+});
+
+test('transaction commits multiple record mutations as one registry generation', () => {
+  const registry = makeRegistry();
+  const parent = registry.create({ title: 'Parent' });
+  const child = registry.create({ title: 'Child', parentId: parent.record.id }, { expectedGeneration: parent.generation });
+
+  const committed = registry.mutate((transaction) => {
+    const updatedParent = transaction.update(parent.record.id, { title: 'Renamed parent' }, {
+      expectedRevision: parent.record.revision,
+    });
+    const updatedChild = transaction.update(child.record.id, { title: 'Renamed child' }, {
+      expectedRevision: child.record.revision,
+    });
+    return { recordId: updatedParent.id, updatedIds: [updatedParent.id, updatedChild.id] };
+  }, {
+    expectedGeneration: child.generation,
+    operation: 'reconcile',
+    actor: 'project-inference',
+    session: 'project-inference',
+    recordId: parent.record.id,
+  });
+
+  assert.equal(committed.generation, child.generation + 1);
+  assert.deepEqual(committed.result.updatedIds.sort(), [parent.record.id, child.record.id].sort());
+  assert.equal(committed.record.title, 'Renamed parent');
+  assert.equal(registry.get(parent.record.id).revision, 2);
+  assert.equal(registry.get(child.record.id).revision, 2);
+  assert.equal(registry.list().length, 2);
+});
+
+test('independent registry processes serialize allocation without sharing an ID', async () => {
+  const stateDir = tempState();
+  const registryPath = require.resolve('../src/registry');
+  const goPath = path.join(stateDir, '.go');
+  const readyPaths = [path.join(stateDir, '.ready-a'), path.join(stateDir, '.ready-b')];
+  const childScript = [
+    "const fs = require('node:fs');",
+    "const { ProjectRegistry } = require(process.argv[1]);",
+    "const [stateDir, readyPath, goPath, title] = process.argv.slice(2);",
+    "const registry = new ProjectRegistry({ stateDir });",
+    "fs.writeFileSync(readyPath, String(process.pid), { mode: 0o600 });",
+    "const deadline = Date.now() + 5000;",
+    "while (!fs.existsSync(goPath)) { if (Date.now() >= deadline) process.exit(2); Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5); }",
+    "try { const result = registry.create({ title }); process.stdout.write(JSON.stringify({ ok: true, id: result.record.id })); }",
+    "catch (error) { process.stdout.write(JSON.stringify({ ok: false, error: error.message })); process.exitCode = 1; }",
+  ].join('\n');
+  const children = ['first process', 'second process'].map((title, index) => spawn(process.execPath, [
+    '-e', childScript, registryPath, stateDir, readyPaths[index], goPath, title,
+  ], { stdio: ['ignore', 'pipe', 'pipe'] }));
+  const output = children.map(() => '');
+  const errors = children.map(() => '');
+  children.forEach((child, index) => {
+    child.stdout.setEncoding('utf8');
+    child.stderr.setEncoding('utf8');
+    child.stdout.on('data', (chunk) => { output[index] += chunk; });
+    child.stderr.on('data', (chunk) => { errors[index] += chunk; });
+  });
+  const readyDeadline = Date.now() + 5000;
+  while (!readyPaths.every((readyPath) => fs.existsSync(readyPath))) {
+    if (Date.now() >= readyDeadline) {
+      children.forEach((child) => child.kill());
+      throw new Error(`registry concurrency children did not become ready: ${errors.join(' ')}`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  fs.writeFileSync(goPath, 'go\n', { mode: 0o600 });
+  const exits = await Promise.all(children.map((child) => new Promise((resolve) => child.on('close', (code, signal) => resolve({ code, signal })))));
+  assert.deepEqual(exits.map((exit) => exit.code), [0, 0]);
+  const results = output.map((value) => JSON.parse(value));
+  assert.deepEqual(results.map((result) => result.ok), [true, true]);
+  assert.notEqual(results[0].id, results[1].id);
+  const finalRegistry = new ProjectRegistry({ stateDir });
+  assert.equal(finalRegistry.generation, 2);
+  assert.deepEqual(finalRegistry.list().map((record) => record.id).sort(), ['prj_000001', 'prj_000002']);
+});
+
+test('stale-lock takeover never removes a replacement owner lock', () => {
+  const stateDir = tempState();
+  const lockPath = path.join(stateDir, '.registry.lock');
+  const stale = JSON.stringify({ pid: 999999999, createdAt: 0, token: 'stale-owner' });
+  const replacement = JSON.stringify({ pid: process.pid, createdAt: Date.now(), token: 'replacement-owner' });
+  fs.writeFileSync(lockPath, stale, { mode: 0o600 });
+
+  const originalRenameSync = fs.renameSync;
+  const originalWait = Atomics.wait;
+  let injected = false;
+  try {
+    fs.renameSync = function replaceBeforeTakeover(from, to) {
+      if (!injected && from === lockPath && String(to).includes('.stale.')) {
+        injected = true;
+        fs.writeFileSync(lockPath, replacement, { mode: 0o600 });
+      }
+      return originalRenameSync.call(fs, from, to);
+    };
+    Atomics.wait = function stopAfterRestore() {
+      throw new Error('stop-after-lock-restore');
+    };
+    const registry = new ProjectRegistry({ stateDir });
+    assert.throws(() => registry.create({ title: 'must not acquire' }), /stop-after-lock-restore/);
+    assert.equal(fs.readFileSync(lockPath, 'utf8'), replacement);
+  } finally {
+    fs.renameSync = originalRenameSync;
+    Atomics.wait = originalWait;
+  }
 });
 
 test('incomplete generation files are ignored while the committed generation remains readable', () => {
