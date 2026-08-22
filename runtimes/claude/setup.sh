@@ -15,6 +15,31 @@ STEWARDSHIP_CLAUDE_SESSION_MAP_ROOT="${JARVOS_STEWARDSHIP_CLAUDE_SESSION_MAP_ROO
 STEWARDSHIP_BRIDGE_PATH="${JARVOS_STEWARDSHIP_BRIDGE_PATH:-}"
 STEWARDSHIP_STABLE_ROOT="${JARVOS_STEWARDSHIP_STABLE_ROOT:-}"
 STEWARDSHIP_DISPATCHER=""
+# Optional Todo work-action host bindings. Unset keeps public/minimal behavior.
+# When set, persist the non-secret absolute paths on the MCP child. Trust
+# checks stay in the MCP server (fail closed on an untrusted path).
+WORK_ACTION_SERVICE_MODULE="${JARVOS_WORK_ACTION_SERVICE_MODULE:-}"
+PROJECTS_CONTEXT_CONFIG="${JARVOS_PROJECTS_CONTEXT_CONFIG:-}"
+MCP_ENV_ARGS=()
+
+append_optional_mcp_env() {
+  local name="$1"
+  local value="${2:-}"
+  if [ -z "$value" ]; then
+    return 0
+  fi
+  case "$value" in
+    /*) ;;
+    *)
+      echo "${name} must be an absolute path when set" >&2
+      exit 1
+      ;;
+  esac
+  MCP_ENV_ARGS+=(--env "${name}=${value}")
+}
+
+append_optional_mcp_env JARVOS_WORK_ACTION_SERVICE_MODULE "$WORK_ACTION_SERVICE_MODULE"
+append_optional_mcp_env JARVOS_PROJECTS_CONTEXT_CONFIG "$PROJECTS_CONTEXT_CONFIG"
 
 # The private installer materializes this owner-controlled bundle once. Native
 # configuration must refer to it, never to a selected immutable runtime stage.
@@ -77,7 +102,11 @@ if [ "${JARVOS_SKIP_CLAUDE_CODE_MCP:-0}" = "1" ]; then
   echo "Skipping Claude Code MCP registration because JARVOS_SKIP_CLAUDE_CODE_MCP=1."
 elif command -v claude >/dev/null 2>&1; then
   claude mcp remove --scope user jarvos >/dev/null 2>&1 || true
-  claude mcp add --scope user jarvos -- node "$MCP_SERVER" >/dev/null
+  if [ ${#MCP_ENV_ARGS[@]} -gt 0 ]; then
+    claude mcp add --scope user "${MCP_ENV_ARGS[@]}" jarvos -- node "$MCP_SERVER" >/dev/null
+  else
+    claude mcp add --scope user jarvos -- node "$MCP_SERVER" >/dev/null
+  fi
   warn_if_claude_mcp_shadowed
   echo "Registered jarvOS MCP server for Claude Code: $MCP_SERVER"
 else
@@ -192,15 +221,26 @@ function upsertClaudeCodeHook(settings, bridge) {
   return next;
 }
 
+function optionalMcpHostEnv() {
+  const env = {};
+  for (const name of ['JARVOS_WORK_ACTION_SERVICE_MODULE', 'JARVOS_PROJECTS_CONTEXT_CONFIG']) {
+    const value = process.env[name];
+    if (typeof value === 'string' && value.trim()) env[name] = value.trim();
+  }
+  return env;
+}
+
 function upsertClaudeDesktopMcp(config) {
   const next = { ...config };
   next.mcpServers = next.mcpServers && typeof next.mcpServers === 'object' && !Array.isArray(next.mcpServers)
     ? { ...next.mcpServers }
     : {};
+  const hostEnv = optionalMcpHostEnv();
   next.mcpServers.jarvos = {
     command: 'node',
     args: [mcpServer],
   };
+  if (Object.keys(hostEnv).length > 0) next.mcpServers.jarvos.env = hostEnv;
   return next;
 }
 

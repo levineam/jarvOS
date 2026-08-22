@@ -37,6 +37,7 @@ const {
   readCredentialFile,
   CREDENTIAL_ENV,
   CREDENTIAL_FILE_ENV,
+  WORK_ACTION_HOST_UNAVAILABLE,
 } = require('../scripts/jarvos-mcp.js');
 
 function withIsolatedAgentContextPackage(fn) {
@@ -599,15 +600,21 @@ test('MCP tool list includes jarvOS tools', () => {
 });
 
 test('named Todo MCP actions fail closed when the host work-action binding is absent', async () => {
-  const previous = process.env.JARVOS_WORK_ACTION_SERVICE_MODULE;
+  const previousModule = process.env.JARVOS_WORK_ACTION_SERVICE_MODULE;
+  const previousConfig = process.env.JARVOS_PROJECTS_CONTEXT_CONFIG;
   delete process.env.JARVOS_WORK_ACTION_SERVICE_MODULE;
+  delete process.env.JARVOS_PROJECTS_CONTEXT_CONFIG;
   try {
     const result = await callTool('jarvos_todo_list', {});
     assert.equal(result.isError, true);
-    assert.match(result.content[0].text, /host binding is unavailable/);
+    assert.equal(result.content[0].text, WORK_ACTION_HOST_UNAVAILABLE);
+    assert.match(result.content[0].text, /JARVOS_WORK_ACTION_SERVICE_MODULE/);
+    assert.match(result.content[0].text, /JARVOS_PROJECTS_CONTEXT_CONFIG/);
   } finally {
-    if (previous === undefined) delete process.env.JARVOS_WORK_ACTION_SERVICE_MODULE;
-    else process.env.JARVOS_WORK_ACTION_SERVICE_MODULE = previous;
+    if (previousModule === undefined) delete process.env.JARVOS_WORK_ACTION_SERVICE_MODULE;
+    else process.env.JARVOS_WORK_ACTION_SERVICE_MODULE = previousModule;
+    if (previousConfig === undefined) delete process.env.JARVOS_PROJECTS_CONTEXT_CONFIG;
+    else process.env.JARVOS_PROJECTS_CONTEXT_CONFIG = previousConfig;
   }
 });
 
@@ -981,6 +988,8 @@ function runCodexSetup(envOverrides = {}) {
     // Public-only setup: clear private host bindings unless the caller sets them.
     JARVOS_CONTROL_PLANE_SERVICE_MODULE: '',
     JARVOS_CONTROL_PLANE_CREDENTIAL_FILE: '',
+    JARVOS_WORK_ACTION_SERVICE_MODULE: '',
+    JARVOS_PROJECTS_CONTEXT_CONFIG: '',
     JARVOS_STEWARDSHIP_BRIDGE_COMMAND: '',
     JARVOS_STEWARDSHIP_CODEX_SESSION_MAP_ROOT: '',
     JARVOS_STEWARDSHIP_STABLE_ROOT: '',
@@ -989,6 +998,8 @@ function runCodexSetup(envOverrides = {}) {
   // Empty string override should delete so setup sees "unset".
   if (!env.JARVOS_CONTROL_PLANE_SERVICE_MODULE) delete env.JARVOS_CONTROL_PLANE_SERVICE_MODULE;
   if (!env.JARVOS_CONTROL_PLANE_CREDENTIAL_FILE) delete env.JARVOS_CONTROL_PLANE_CREDENTIAL_FILE;
+  if (!env.JARVOS_WORK_ACTION_SERVICE_MODULE) delete env.JARVOS_WORK_ACTION_SERVICE_MODULE;
+  if (!env.JARVOS_PROJECTS_CONTEXT_CONFIG) delete env.JARVOS_PROJECTS_CONTEXT_CONFIG;
   if (!env.JARVOS_STEWARDSHIP_BRIDGE_COMMAND) delete env.JARVOS_STEWARDSHIP_BRIDGE_COMMAND;
   if (!env.JARVOS_STEWARDSHIP_CODEX_SESSION_MAP_ROOT) delete env.JARVOS_STEWARDSHIP_CODEX_SESSION_MAP_ROOT;
   if (!env.JARVOS_STEWARDSHIP_STABLE_ROOT) delete env.JARVOS_STEWARDSHIP_STABLE_ROOT;
@@ -1021,10 +1032,49 @@ test('Codex setup succeeds publicly with no control-plane host pair', () => {
     assert.doesNotMatch(log, /JARVOS_CONTROL_PLANE_SERVICE_MODULE=/);
     assert.doesNotMatch(log, /JARVOS_CONTROL_PLANE_CREDENTIAL_FILE=/);
     assert.doesNotMatch(log, /JARVOS_CONTROL_PLANE_CREDENTIAL=/);
+    assert.doesNotMatch(log, /JARVOS_WORK_ACTION_SERVICE_MODULE=/);
+    assert.doesNotMatch(log, /JARVOS_PROJECTS_CONTEXT_CONFIG=/);
     // Real user config must not be touched; only the temp CODEX_CONFIG may change.
     assert.ok(fs.existsSync(run.configPath));
   } finally {
     run.cleanup();
+  }
+});
+
+test('Codex setup optionally binds work-action host env without requiring it', () => {
+  const hostTmp = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-setup-todo-host-'));
+  try {
+    const configPath = path.join(hostTmp, 'projects.json');
+    const servicePath = path.join(hostTmp, 'todo-service.js');
+    fs.writeFileSync(configPath, '{}\n', { encoding: 'utf8', mode: 0o600 });
+    fs.writeFileSync(servicePath, "'use strict';\nmodule.exports = {};\n", { encoding: 'utf8', mode: 0o600 });
+
+    const bound = runCodexSetup({
+      JARVOS_WORK_ACTION_SERVICE_MODULE: servicePath,
+      JARVOS_PROJECTS_CONTEXT_CONFIG: configPath,
+    });
+    try {
+      assert.equal(bound.result.status, 0, bound.result.stderr || bound.result.stdout);
+      const log = fs.existsSync(bound.codexLog) ? fs.readFileSync(bound.codexLog, 'utf8') : '';
+      assert.match(log, /JARVOS_WORK_ACTION_SERVICE_MODULE=/);
+      assert.match(log, /JARVOS_PROJECTS_CONTEXT_CONFIG=/);
+    } finally {
+      bound.cleanup();
+    }
+
+    const relative = runCodexSetup({
+      JARVOS_WORK_ACTION_SERVICE_MODULE: 'relative/todo-service.js',
+    });
+    try {
+      assert.notEqual(relative.result.status, 0);
+      assert.match(relative.result.stderr, /JARVOS_WORK_ACTION_SERVICE_MODULE must be an absolute path when set/);
+      assert.doesNotMatch(relative.result.stderr, /relative\/todo-service/);
+      assert.ok(!fs.existsSync(relative.codexLog) || !fs.readFileSync(relative.codexLog, 'utf8').includes('mcp add'));
+    } finally {
+      relative.cleanup();
+    }
+  } finally {
+    fs.rmSync(hostTmp, { recursive: true, force: true });
   }
 });
 

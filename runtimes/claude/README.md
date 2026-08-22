@@ -30,6 +30,19 @@ Claude Code MCP registration uses:
 claude mcp add --scope user jarvos -- node "$PWD/modules/jarvos-agent-context/scripts/jarvos-mcp.js"
 ```
 
+Optional Todo work-action host bindings are passed through when set, and never
+required for setup to succeed:
+
+```bash
+JARVOS_WORK_ACTION_SERVICE_MODULE=/absolute/path/in/workspace/work-action-host-service.js \
+JARVOS_PROJECTS_CONTEXT_CONFIG=/absolute/path/to/jarvos-project-context.json \
+  ./runtimes/claude/setup.sh
+```
+
+Copy `examples/work-action-host-service.js` into the Projects `workspaceRoot`
+as an owner-only file. The MCP server refuses any module outside that root.
+Leave both variables unset on a public/minimal install.
+
 ## Claude Code Hydration
 
 Target: `claude-code`.
@@ -143,6 +156,10 @@ does not imply automatic startup context injection for Claude Desktop.
 - `jarvos_hydrate` — bounded working-context packet with a host-issued Projects
   orientation packet (or explicit unavailable/partial state), today's journal,
   linked notes, jarvOS ontology spine, redaction, and a hydration report.
+- `jarvos_todo_*` — claim-based Beads Todo tools through the host work-action
+  service. Requires `JARVOS_WORK_ACTION_SERVICE_MODULE` and
+  `JARVOS_PROJECTS_CONTEXT_CONFIG` on the MCP process; without those host
+  bindings the tools are present but unavailable.
 
 ## Secondbrain Capture Rule
 

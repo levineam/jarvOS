@@ -324,24 +324,40 @@ const TOOLS = [
   },
 ];
 
+const WORK_ACTION_HOST_UNAVAILABLE = 'Todo work-action host binding is unavailable. Set JARVOS_WORK_ACTION_SERVICE_MODULE to an absolute owner-only host service module and JARVOS_PROJECTS_CONTEXT_CONFIG to an absolute trusted Projects context config whose workspaceRoot contains that module.';
+const WORK_ACTION_HOST_REFUSED = 'Todo work-action host binding was refused. JARVOS_WORK_ACTION_SERVICE_MODULE must be an owner-only regular file contained under the workspaceRoot selected by JARVOS_PROJECTS_CONTEXT_CONFIG.';
+
+function envBinding(name, env = process.env) {
+  const value = env[name];
+  return typeof value === 'string' && value.length > 0 ? value : null;
+}
+
 function loadHostWorkActionService() {
-  const modulePath = process.env.JARVOS_WORK_ACTION_SERVICE_MODULE;
+  const modulePath = envBinding('JARVOS_WORK_ACTION_SERVICE_MODULE');
+  const configPath = envBinding('JARVOS_PROJECTS_CONTEXT_CONFIG');
+  if (!modulePath || !configPath) {
+    return { service: null, error: WORK_ACTION_HOST_UNAVAILABLE };
+  }
   const selectedRoot = selectedWorkspaceRoot();
-  if (!selectedRoot) return null;
-  const trusted = trustedFile(modulePath, selectedRoot);
-  if (!trusted) return null;
+  const trusted = selectedRoot ? trustedFile(modulePath, selectedRoot) : null;
+  if (!trusted) {
+    return { service: null, error: WORK_ACTION_HOST_REFUSED };
+  }
   try {
     const loaded = require(trusted);
     const service = typeof loaded === 'function' ? loaded() : (loaded?.service || loaded);
-    return service && typeof service === 'object' ? service : null;
+    if (!service || typeof service !== 'object') {
+      return { service: null, error: WORK_ACTION_HOST_REFUSED };
+    }
+    return { service, error: null };
   } catch {
-    return null;
+    return { service: null, error: WORK_ACTION_HOST_REFUSED };
   }
 }
 
 async function todoAction(name, args) {
-  const service = loadHostWorkActionService();
-  if (!service) return textResult('Todo work-action host binding is unavailable', true);
+  const { service, error } = loadHostWorkActionService();
+  if (!service) return textResult(error, true);
   // Deliberately project only ordinary request fields. Authorization, human
   // identity, and verification receipts are host-bound service state, never
   // caller-controlled MCP arguments.
@@ -789,7 +805,9 @@ if (require.main === module) {
   });
 }
 
-module.exports = { TOOLS, callTool, handle, setMcpProjectsContextProvider, textResult };
+module.exports = { TOOLS, callTool, handle, setMcpProjectsContextProvider, textResult, loadHostWorkActionService };
+module.exports.WORK_ACTION_HOST_UNAVAILABLE = WORK_ACTION_HOST_UNAVAILABLE;
+module.exports.WORK_ACTION_HOST_REFUSED = WORK_ACTION_HOST_REFUSED;
 module.exports.BOOT_JARVOS_PROMPT_TEXT = BOOT_JARVOS_PROMPT_TEXT;
 module.exports.PROMPTS = PROMPTS;
 module.exports.promptResult = promptResult;
