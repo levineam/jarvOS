@@ -5,8 +5,20 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { spawnSync } = require('child_process');
-const { writeSessionThread } = require('../../modules/jarvos-agent-context/src/index.js');
-const { hookSessionId, readHookInput } = require('./jarvos-session-turn-hook.js');
+// Deliberately NOT required at module scope. PreCompact's only output channel is
+// block/allow, so a throw during load exits non-zero with no payload -- the one
+// thing this hook promises it cannot do. A failed or missing import must degrade
+// to a clean no-op, never to a blocked compaction.
+function lazyDeps() {
+  return {
+    writeSessionThread: require('../../modules/jarvos-agent-context/src/index.js').writeSessionThread,
+    readHookInput: require('./jarvos-session-turn-hook.js').readHookInput,
+  };
+}
+
+// The session-thread writer defaults to a 30s lock wait. Compaction must not be
+// held that long for a best-effort checkpoint; a contended lock means skip, not stall.
+const SESSION_THREAD_LOCK_TIMEOUT_MS = 400;
 
 const LOG_PATH = path.join(os.homedir(), '.claude', 'jarvos-hydration.log');
 
@@ -66,14 +78,17 @@ function isPreCompactInput(input) {
     || input.trigger === 'auto';
 }
 
-function main(hookInput = readHookInput()) {
+function main(hookInput) {
   try {
-    if (isPreCompactInput(hookInput)) {
+    const { writeSessionThread, readHookInput } = lazyDeps();
+    const input = hookInput === undefined ? readHookInput() : hookInput;
+    if (isPreCompactInput(input)) {
       writeSessionThread({
         host: 'claude-code',
         actor: 'claude-code',
         event: 'pre-compaction',
-        summary: mechanicalSummary(hookInput),
+        summary: mechanicalSummary(input),
+        lockTimeoutMs: SESSION_THREAD_LOCK_TIMEOUT_MS,
       });
     }
   } catch (error) {
