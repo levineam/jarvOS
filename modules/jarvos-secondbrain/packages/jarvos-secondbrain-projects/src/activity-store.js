@@ -14,13 +14,19 @@ const fs = require('node:fs');
 const path = require('node:path');
 const {
   validateVerifiedReceipt,
+  validateAdmittedInferenceEvidence,
+  ADMITTED_INFERENCE_EVIDENCE_CONTRACT,
   digest,
 } = require('./provider-contracts');
 
 const STORE_CONTRACT = 'jarvos.project-activity-store/v1';
+const UNATTRIBUTED_INFERENCE_CONTRACT = 'jarvos.project-activity-unattributed-inference/v1';
+const UNATTRIBUTED_CONFLICT_CONTRACT = 'jarvos.project-activity-unattributed-conflict/v1';
 const GENERATION_FILE = /^generation-[0-9]{10}\.json$/;
 const DEFAULT_LIMIT = 100;
 const MAX_LIMIT = 1000;
+const LOCK_TIMEOUT_MS = 3000;
+const STALE_LOCK_MS = 30_000;
 
 function clone(value) {
   return JSON.parse(JSON.stringify(value));
@@ -29,6 +35,24 @@ function clone(value) {
 function timestamp(value, field) {
   if (typeof value !== 'string' || Number.isNaN(Date.parse(value))) throw new TypeError(`${field} must be an ISO timestamp`);
   return value;
+}
+
+function opaqueReference(value, field, { nullable = false } = {}) {
+  if (value === null || value === undefined) {
+    if (nullable) return null;
+    throw new TypeError(`${field} must be an opaque identifier`);
+  }
+  if (typeof value !== 'string' || !value.trim() || value.length > 256) throw new TypeError(`${field} must be an opaque identifier`);
+  const normalized = value.trim();
+  if (/\s|[\\/]|:\/\//.test(normalized) || normalized.startsWith('~') || !/^[A-Za-z0-9][A-Za-z0-9_.:-]*$/.test(normalized)) {
+    throw new TypeError(`${field} must be an opaque identifier`);
+  }
+  return normalized;
+}
+
+function reasonCode(value) {
+  const normalized = value === null || value === undefined ? 'canonical_mapping_unavailable' : value;
+  return opaqueReference(normalized, 'reason').toLocaleLowerCase('en-US');
 }
 
 function canonicalId(value) {
@@ -78,6 +102,25 @@ function writeDurably(filePath, content) {
     fs.closeSync(fd);
   }
   fs.renameSync(temp, filePath);
+}
+
+function inferenceEvidenceIdentity(row) {
+  return typeof row.evidenceId === 'string' && row.evidenceId.trim()
+    ? row.evidenceId.trim()
+    : null;
+}
+
+function sortUnattributedRows(rows) {
+  return [...rows].sort((left, right) => {
+    const leftKey = [inferenceEvidenceIdentity(left) || left.observationId || '', left.observedAt || left.receivedAt || '', left.evidenceDigest || ''].join('\u0000');
+    const rightKey = [inferenceEvidenceIdentity(right) || right.observationId || '', right.observedAt || right.receivedAt || '', right.evidenceDigest || ''].join('\u0000');
+    return leftKey.localeCompare(rightKey);
+  });
+}
+
+function readJsonl(filePath) {
+  if (!fs.existsSync(filePath)) return [];
+  return fs.readFileSync(filePath, 'utf8').split('\n').filter(Boolean).map((line) => JSON.parse(line));
 }
 
 function normalizeDerivedFrom(value) {
@@ -136,13 +179,26 @@ function normalizeQuery(query = {}, now = new Date()) {
 }
 
 class ActivityStore {
-  constructor({ stateDir, now = () => new Date().toISOString(), admission = null } = {}) {
+  constructor({
+    stateDir,
+    now = () => new Date().toISOString(),
+    admission = null,
+    inferenceVerifier = null,
+    inferenceAdmission = null,
+    inferenceAdmissionVerifier = null,
+  } = {}) {
     if (typeof stateDir !== 'string' || !stateDir.trim()) throw new TypeError('stateDir is required');
     this.stateDir = path.resolve(stateDir);
     this.now = now;
     this.admission = admission;
+    this.inferenceVerifier = inferenceVerifier || inferenceAdmission || inferenceAdmissionVerifier || null;
     fs.mkdirSync(this.stateDir, { recursive: true, mode: 0o700 });
     try { fs.chmodSync(this.stateDir, 0o700); } catch (_) { /* best effort on platforms without chmod */ }
+    for (const filePath of [this._unattributedPath(), this._unattributedConflictPath()]) {
+      if (fs.existsSync(filePath)) {
+        try { fs.chmodSync(filePath, 0o600); } catch (_) { /* best effort on platforms without chmod */ }
+      }
+    }
     this.state = stateFile(this.stateDir);
   }
 
@@ -191,8 +247,183 @@ class ActivityStore {
     return { status: 'admitted', ...committed, activity: clone(incoming) };
   }
 
-  observeUnattributed(observation) {
+  _unattributedPath() {
+    return path.join(this.stateDir, 'unattributed.jsonl');
+  }
+
+  _unattributedConflictPath() {
+    return path.join(this.stateDir, 'unattributed-conflicts.jsonl');
+  }
+
+  _withUnattributedLock(fn) {
+    const lockPath = path.join(this.stateDir, '.unattributed.lock');
+    const deadline = Date.now() + LOCK_TIMEOUT_MS;
+    let fd = null;
+    while (fd === null) {
+      try {
+        fd = fs.openSync(lockPath, 'wx', 0o600);
+        fs.writeFileSync(fd, JSON.stringify({ pid: process.pid, createdAt: Date.now() }), 'utf8');
+        fs.fsyncSync(fd);
+      } catch (error) {
+        if (fd !== null) { try { fs.closeSync(fd); } catch (_) {} fd = null; }
+        if (error.code !== 'EEXIST' || Date.now() >= deadline) throw new Error('unattributed evidence store is busy');
+        let stale = false;
+        try {
+          const lock = JSON.parse(fs.readFileSync(lockPath, 'utf8'));
+          stale = !Number.isInteger(lock.pid) || Date.now() - Number(lock.createdAt || 0) > STALE_LOCK_MS;
+          if (!stale && lock.pid !== process.pid) {
+            try { process.kill(lock.pid, 0); } catch (probeError) { stale = probeError.code === 'ESRCH'; }
+          }
+        } catch (_) { stale = true; }
+        if (stale) { try { fs.unlinkSync(lockPath); } catch (_) {} }
+        else Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
+      }
+    }
+    try {
+      return fn();
+    } finally {
+      try { fs.closeSync(fd); } catch (_) {}
+      try { fs.unlinkSync(lockPath); } catch (_) {}
+    }
+  }
+
+  _writeUnattributedRows(rows) {
+    const filePath = this._unattributedPath();
+    const normalized = sortUnattributedRows(rows);
+    writeDurably(filePath, normalized.length ? `${normalized.map((row) => JSON.stringify(row)).join('\n')}\n` : '');
+    try { fs.chmodSync(filePath, 0o600); } catch (_) { /* best effort */ }
+  }
+
+  _recordUnattributedConflict(conflict) {
+    const filePath = this._unattributedConflictPath();
+    const rows = readJsonl(filePath);
+    const identity = `${conflict.evidenceId}\u0000${conflict.attemptedDigest}`;
+    if (!rows.some((row) => `${row.evidenceId}\u0000${row.attemptedDigest}` === identity)) rows.push(conflict);
+    writeDurably(filePath, `${sortUnattributedRows(rows).map((row) => JSON.stringify(row)).join('\n')}\n`);
+    try { fs.chmodSync(filePath, 0o600); } catch (_) { /* best effort */ }
+  }
+
+  _findUnattributedEvidence(rows, evidenceId) {
+    return rows.find((row) => row.contract === UNATTRIBUTED_INFERENCE_CONTRACT && row.evidenceId === evidenceId) || null;
+  }
+
+  _verifyInferenceEvidence(envelope, verifier) {
+    if (!verifier) throw new Error('inference evidence admission verifier required');
+    const verifierFunction = typeof verifier === 'function'
+      ? verifier
+      : verifier.verifyAdmittedInferenceEvidence || verifier.verifyInferenceEvidence || verifier.verifyEvidenceUnit;
+    if (typeof verifierFunction !== 'function') throw new Error('inference evidence admission verifier required');
+    const result = verifierFunction.call(typeof verifier === 'function' ? null : verifier, envelope);
+    if (!result || result.ok !== true) return result || { ok: false, reason: 'invalid-signature' };
+    const normalized = validateAdmittedInferenceEvidence(envelope);
+    return {
+      ...result,
+      envelope: normalized,
+      evidence: normalized.evidence,
+      admission: normalized.admission,
+    };
+  }
+
+  admitUnattributedEvidence(envelope, {
+    candidateId = null,
+    decisionId = null,
+    reason = undefined,
+    reasonCode: explicitReasonCode = undefined,
+    verifier = this.inferenceVerifier,
+    inferenceVerifier = null,
+    inferenceAdmission = null,
+  } = {}) {
+    verifier = inferenceVerifier || inferenceAdmission || verifier;
+    const verified = this._verifyInferenceEvidence(envelope, verifier);
+    if (verified.ok !== true) {
+      if (verified.reason !== 'evidence-conflict') throw new Error('inference evidence admission invalid');
+      const normalized = validateAdmittedInferenceEvidence(envelope);
+      const rows = readJsonl(this._unattributedPath());
+      const prior = this._findUnattributedEvidence(rows, normalized.evidence.evidenceId);
+      if (!prior) throw new Error('inference evidence admission invalid');
+      return this._withUnattributedLock(() => {
+        this._recordUnattributedConflict({
+          contract: UNATTRIBUTED_CONFLICT_CONTRACT,
+          evidenceId: normalized.evidence.evidenceId,
+          observationId: normalized.evidence.observationId,
+          sourceClass: normalized.evidence.sourceClass,
+          observedAt: normalized.evidence.observedAt,
+          existingDigest: prior.evidenceDigest,
+          attemptedDigest: normalized.admission.evidenceDigest,
+          reason: 'evidence_digest_conflict',
+          trust: 'quarantined',
+        });
+        return { status: 'quarantined', reason: 'evidence_digest_conflict', observation: clone(prior) };
+      });
+    }
+
+    const evidence = verified.evidence;
+    const admission = verified.admission;
+    const normalizedCandidateId = opaqueReference(candidateId, 'candidateId', { nullable: true });
+    const normalizedDecisionId = opaqueReference(decisionId, 'decisionId', { nullable: true });
+    const selectedReason = explicitReasonCode !== undefined ? explicitReasonCode : reason;
+    if (explicitReasonCode !== undefined && reason !== undefined && explicitReasonCode !== reason) {
+      throw new TypeError('reason and reasonCode must agree');
+    }
+    const safe = {
+      contract: UNATTRIBUTED_INFERENCE_CONTRACT,
+      observationId: evidence.observationId,
+      evidenceId: evidence.evidenceId,
+      sourceClass: evidence.sourceClass,
+      occurredAt: evidence.occurredAt,
+      observedAt: evidence.observedAt,
+      sourceRevision: evidence.sourceRevision,
+      sensitivity: evidence.sensitivity,
+      coverageState: evidence.coverageState,
+      contentDigest: evidence.contentDigest,
+      evidenceDigest: admission.evidenceDigest,
+      producerId: admission.producerId,
+      authorityDigest: admission.authorityDigest,
+      candidateId: normalizedCandidateId,
+      decisionId: normalizedDecisionId,
+      reason: reasonCode(selectedReason),
+      trust: 'admitted-inference',
+    };
+
+    return this._withUnattributedLock(() => {
+      const rows = readJsonl(this._unattributedPath());
+      const prior = this._findUnattributedEvidence(rows, safe.evidenceId);
+      if (prior) {
+        if (prior.evidenceDigest !== safe.evidenceDigest) {
+          this._recordUnattributedConflict({
+            contract: UNATTRIBUTED_CONFLICT_CONTRACT,
+            evidenceId: safe.evidenceId,
+            observationId: safe.observationId,
+            sourceClass: safe.sourceClass,
+            observedAt: safe.observedAt,
+            existingDigest: prior.evidenceDigest,
+            attemptedDigest: safe.evidenceDigest,
+            reason: 'evidence_digest_conflict',
+            trust: 'quarantined',
+          });
+          return { status: 'quarantined', reason: 'evidence_digest_conflict', observation: clone(prior) };
+        }
+        return { status: 'deduped', observation: clone(prior), generation: this.state.generation };
+      }
+      rows.push(safe);
+      this._writeUnattributedRows(rows);
+      return { status: 'admitted', observation: clone(safe), generation: this.state.generation };
+    });
+  }
+
+  admitUnresolvedEvidence(envelope, options = {}) {
+    return this.admitUnattributedEvidence(envelope, options);
+  }
+
+  observeAdmittedUnattributed(envelope, options = {}) {
+    return this.admitUnattributedEvidence(envelope, options);
+  }
+
+  observeUnattributed(observation, options = {}) {
     const candidate = observation && typeof observation === 'object' ? observation : {};
+    if (candidate.contract === ADMITTED_INFERENCE_EVIDENCE_CONTRACT) {
+      return this.admitUnattributedEvidence(observation, options);
+    }
     if (candidate.canonicalId != null) throw new TypeError('unattributed observations cannot carry canonicalId');
     const safe = {
       observationId: typeof candidate.observationId === 'string' && candidate.observationId.trim()
@@ -205,16 +436,18 @@ class ActivityStore {
       reason: typeof candidate.reason === 'string' && candidate.reason.trim() ? candidate.reason.trim().slice(0, 160) : 'canonical_mapping_unavailable',
       trust: 'unattributed',
     };
-    const filePath = path.join(this.stateDir, 'unattributed.jsonl');
+    const filePath = this._unattributedPath();
     fs.appendFileSync(filePath, `${JSON.stringify(safe)}\n`, { encoding: 'utf8', mode: 0o600 });
     try { fs.chmodSync(filePath, 0o600); } catch (_) { /* best effort */ }
     return { status: 'quarantined', observation: clone(safe) };
   }
 
   listUnattributed() {
-    const filePath = path.join(this.stateDir, 'unattributed.jsonl');
-    if (!fs.existsSync(filePath)) return [];
-    return fs.readFileSync(filePath, 'utf8').split('\n').filter(Boolean).map((line) => JSON.parse(line));
+    return readJsonl(this._unattributedPath());
+  }
+
+  listUnattributedConflicts() {
+    return readJsonl(this._unattributedConflictPath());
   }
 
   query(query = {}, { now = new Date() } = {}) {
@@ -246,6 +479,8 @@ class ActivityStore {
 
 module.exports = {
   ActivityStore,
+  UNATTRIBUTED_CONFLICT_CONTRACT,
+  UNATTRIBUTED_INFERENCE_CONTRACT,
   STORE_CONTRACT,
   activityEnvelope,
   normalizeQuery,

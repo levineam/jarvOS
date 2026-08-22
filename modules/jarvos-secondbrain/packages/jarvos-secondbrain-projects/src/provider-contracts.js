@@ -1,6 +1,7 @@
 'use strict';
 
 const crypto = require('node:crypto');
+const inferenceContracts = require('./project-inference-contracts');
 
 const PROVIDER_SNAPSHOT_CONTRACT = 'jarvos.provider-snapshot/v1';
 const VERIFIED_ACTIVITY_CONTRACT = 'jarvos.verified-activity/v1';
@@ -11,6 +12,8 @@ const HANDOFF_CONTRACT = 'jarvos.explicit-handoff/v1';
 const PROMOTION_OPERATION_CONTRACT = 'jarvos.todo-beads-promotion/v1';
 const RELEASE_EVIDENCE_CONTRACT = 'jarvos.release-evidence/v1';
 const UNKNOWN_LINK_PROPOSAL_CONTRACT = 'jarvos.project-link-proposal/v1';
+const ADMITTED_INFERENCE_EVIDENCE_CONTRACT = 'jarvos.project-inference-admitted-evidence/v1';
+const INFERENCE_EVIDENCE_ADMISSION_CONTRACT = ADMITTED_INFERENCE_EVIDENCE_CONTRACT;
 const PROVIDER_STATES = Object.freeze(['fresh', 'stale', 'partial', 'unknown', 'unavailable', 'healthy-empty']);
 const TRUST_LEVELS = Object.freeze(['verified', 'unverified']);
 const SUMMARY_CATEGORIES = Object.freeze(['activity', 'intent', 'execution', 'attention', 'work']);
@@ -32,6 +35,8 @@ const OBSERVATION_FIELDS = Object.freeze([
   'contract', 'observationId', 'canonicalId', 'caller', 'sessionId', 'sourcePacket', 'summary', 'evidenceRefs', 'receivedAt', 'trust',
 ]);
 const OBSERVATION_INPUT_FIELDS = Object.freeze(OBSERVATION_FIELDS.filter((field) => field !== 'trust'));
+const INFERENCE_EVIDENCE_ADMISSION_FIELDS = Object.freeze(['producerId', 'authorityDigest', 'evidenceDigest', 'signature']);
+const ADMITTED_INFERENCE_EVIDENCE_FIELDS = Object.freeze(['contract', 'evidence', 'admission']);
 
 function isPlainObject(value) {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
@@ -520,7 +525,201 @@ function paperclipProjection(handoff) {
   return { state: normalized.state, reference: normalized.externalReference };
 }
 
-function createHostAdmission({ producerId, secret, allowedKinds = [], allowedProviders = [] } = {}) {
+function validateDigest(value, field) {
+  if (typeof value !== 'string' || !/^[a-f0-9]{64}$/.test(value)) throw new TypeError(`${field} must be a sha256 digest`);
+  return value;
+}
+
+function validateInferenceAdmission(admission) {
+  if (!exactKeys(admission, INFERENCE_EVIDENCE_ADMISSION_FIELDS)) {
+    throw new TypeError('inference evidence admission has unsupported fields');
+  }
+  return {
+    producerId: producerIdentity(admission.producerId),
+    authorityDigest: validateDigest(admission.authorityDigest, 'inference admission authorityDigest'),
+    evidenceDigest: validateDigest(admission.evidenceDigest, 'inference admission evidenceDigest'),
+    signature: requiredString(admission.signature, 'inference admission signature'),
+  };
+}
+
+function inferenceSigningPayload(evidence, admission) {
+  return {
+    contract: ADMITTED_INFERENCE_EVIDENCE_CONTRACT,
+    producerId: admission.producerId,
+    authorityDigest: admission.authorityDigest,
+    evidenceDigest: admission.evidenceDigest,
+    evidence,
+  };
+}
+
+function validateAdmittedInferenceEvidence(input) {
+  if (!exactKeys(input, ADMITTED_INFERENCE_EVIDENCE_FIELDS)) {
+    throw new TypeError('admitted inference evidence has unsupported fields');
+  }
+  if (input.contract !== ADMITTED_INFERENCE_EVIDENCE_CONTRACT) {
+    throw new TypeError('admitted inference evidence has an unsupported contract');
+  }
+  const evidence = inferenceContracts.createEvidenceUnit(input.evidence);
+  if (stableStringify(evidence) !== stableStringify(input.evidence)) {
+    throw new TypeError('admitted inference evidence must carry a normalized Evidence Unit');
+  }
+  const admission = validateInferenceAdmission(input.admission);
+  const expectedEvidenceDigest = inferenceContracts.evidenceUnitDigest(evidence);
+  if (admission.evidenceDigest !== expectedEvidenceDigest) {
+    throw new TypeError('inference evidence admission digest does not match Evidence Unit');
+  }
+  const normalized = {
+    contract: ADMITTED_INFERENCE_EVIDENCE_CONTRACT,
+    evidence,
+    admission,
+  };
+  // Keep the provider-contract validators' normalized-object shape while
+  // offering the inference-contracts-style success marker to callers that
+  // use validation as a predicate. Both properties are non-enumerable so the
+  // envelope remains an exact-key persisted value.
+  Object.defineProperty(normalized, 'ok', { value: true, enumerable: false });
+  Object.defineProperty(normalized, 'envelope', { value: normalized, enumerable: false });
+  return normalized;
+}
+
+function normalizeInferenceSourceClasses(value) {
+  const sourceClasses = value === undefined
+    ? [...inferenceContracts.SOURCE_CLASSES]
+    : value;
+  if (!Array.isArray(sourceClasses) || sourceClasses.length === 0) {
+    throw new TypeError('allowedSourceClasses must be a non-empty array');
+  }
+  const normalized = sourceClasses.map((sourceClass) => {
+    if (!inferenceContracts.SOURCE_CLASSES.includes(sourceClass)) {
+      throw new TypeError(`inference source class is not admitted: ${sourceClass}`);
+    }
+    return sourceClass;
+  });
+  if (new Set(normalized).size !== normalized.length) throw new TypeError('allowedSourceClasses must not contain duplicates');
+  return normalized.sort();
+}
+
+function secretBytes(value, field = 'secret') {
+  if (typeof value === 'string') {
+    if (!value) throw new TypeError(`${field} must not be empty`);
+    return Buffer.from(value, 'utf8');
+  }
+  if (Buffer.isBuffer(value) || value instanceof Uint8Array) {
+    if (value.length === 0) throw new TypeError(`${field} must not be empty`);
+    return Buffer.from(value);
+  }
+  throw new TypeError(`${field} must be a non-empty string or byte array`);
+}
+
+function producerIdentity(value) {
+  const normalized = requiredString(value, 'producerId');
+  if (normalized.length > 256 || /[\\/]|:\/\//.test(normalized)) throw new TypeError('producerId must be an opaque identifier');
+  return normalized;
+}
+
+function createInferenceHostAuthority({ producerId, secret, allowedSourceClasses } = {}) {
+  const issuer = producerIdentity(producerId);
+  const secretValue = secretBytes(secret, 'inference authority secret');
+  if (allowedSourceClasses === undefined) throw new TypeError('allowedSourceClasses is required for inference authority');
+  const sourceClasses = normalizeInferenceSourceClasses(allowedSourceClasses);
+  const authorityDigest = digest({
+    contract: ADMITTED_INFERENCE_EVIDENCE_CONTRACT,
+    producerId: issuer,
+    allowedSourceClasses: sourceClasses,
+  });
+  const seenEvidence = new Map();
+
+  function checkSourceClass(evidence) {
+    if (!sourceClasses.includes(evidence.sourceClass)) {
+      throw new Error(`inference source class is not admitted: ${evidence.sourceClass}`);
+    }
+  }
+
+  function checkReplay(evidence) {
+    const evidenceDigest = inferenceContracts.evidenceUnitDigest(evidence);
+    const prior = seenEvidence.get(evidence.evidenceId);
+    if (prior && prior !== evidenceDigest) throw new Error('inference evidence replay conflict');
+    seenEvidence.set(evidence.evidenceId, evidenceDigest);
+    return evidenceDigest;
+  }
+
+  function admitEvidenceUnit(input) {
+    const evidence = inferenceContracts.createEvidenceUnit(input);
+    checkSourceClass(evidence);
+    const evidenceDigest = checkReplay(evidence);
+    const admission = {
+      producerId: issuer,
+      authorityDigest,
+      evidenceDigest,
+      signature: sign(inferenceSigningPayload(evidence, {
+        producerId: issuer,
+        authorityDigest,
+        evidenceDigest,
+      }), secretValue),
+    };
+    const normalized = validateAdmittedInferenceEvidence({
+      contract: ADMITTED_INFERENCE_EVIDENCE_CONTRACT,
+      evidence,
+      admission,
+    });
+    return {
+      contract: normalized.contract,
+      evidence: normalized.evidence,
+      admission: normalized.admission,
+    };
+  }
+
+  function verifyAdmittedInferenceEvidence(input) {
+    try {
+      const normalized = validateAdmittedInferenceEvidence(input);
+      const { evidence, admission } = normalized;
+      if (admission.producerId !== issuer) return { ok: false, reason: 'wrong-producer' };
+      if (admission.authorityDigest !== authorityDigest) return { ok: false, reason: 'wrong-authority' };
+      if (!sourceClasses.includes(evidence.sourceClass)) return { ok: false, reason: 'wrong-source-class' };
+      const prior = seenEvidence.get(evidence.evidenceId);
+      if (prior && prior !== admission.evidenceDigest) return { ok: false, reason: 'evidence-conflict' };
+      const expected = sign(inferenceSigningPayload(evidence, admission), secretValue);
+      if (!constantTimeEqual(expected, admission.signature)) return { ok: false, reason: 'invalid-signature' };
+      seenEvidence.set(evidence.evidenceId, admission.evidenceDigest);
+      return {
+        ok: true,
+        evidence,
+        envelope: {
+          contract: normalized.contract,
+          evidence: normalized.evidence,
+          admission: normalized.admission,
+        },
+        admission,
+      };
+    } catch (_) {
+      return { ok: false, reason: 'invalid-contract' };
+    }
+  }
+
+  const authority = {
+    producerId: issuer,
+    authorityDigest,
+    capabilityDigest: authorityDigest,
+    allowedSourceClasses: Object.freeze([...sourceClasses]),
+    admitEvidenceUnit,
+    admitInferenceEvidenceUnit: admitEvidenceUnit,
+    admitInferenceEvidence: admitEvidenceUnit,
+    admitAdmittedInferenceEvidence: admitEvidenceUnit,
+    admitEvidence: admitEvidenceUnit,
+    verifyAdmittedInferenceEvidence,
+    verifyInferenceEvidenceUnit: verifyAdmittedInferenceEvidence,
+    verifyInferenceEvidence: verifyAdmittedInferenceEvidence,
+    verifyEvidenceUnit: verifyAdmittedInferenceEvidence,
+  };
+  return Object.freeze(authority);
+}
+
+const createInferenceAuthority = createInferenceHostAuthority;
+const createInferenceEvidenceAuthority = createInferenceHostAuthority;
+const createInferenceAdmissionAuthority = createInferenceHostAuthority;
+const createInferenceHostAdmission = createInferenceHostAuthority;
+
+function createHostAdmission({ producerId, secret, allowedKinds = [], allowedProviders = [], allowedSourceClasses } = {}) {
   producerId = requiredString(producerId, 'producerId');
   if (typeof secret !== 'string' && !Buffer.isBuffer(secret)) throw new TypeError('secret is required');
   const kinds = new Set(allowedKinds.map((kind) => requiredString(kind, 'allowedKinds[]')));
@@ -572,18 +771,44 @@ function createHostAdmission({ producerId, secret, allowedKinds = [], allowedPro
       return { ok: false, reason: 'invalid-contract' };
     }
   }
-  return Object.freeze({ admitVerifiedReceipt, admitProviderSnapshot, verifyVerifiedReceipt, verifyProviderSnapshot });
+  const inferenceAuthority = createInferenceHostAuthority({
+    producerId,
+    secret,
+    allowedSourceClasses: allowedSourceClasses === undefined ? inferenceContracts.SOURCE_CLASSES : allowedSourceClasses,
+  });
+  return Object.freeze({
+    admitVerifiedReceipt,
+    admitProviderSnapshot,
+    verifyVerifiedReceipt,
+    verifyProviderSnapshot,
+    admitEvidenceUnit: inferenceAuthority.admitEvidenceUnit,
+    admitInferenceEvidenceUnit: inferenceAuthority.admitInferenceEvidenceUnit,
+    admitInferenceEvidence: inferenceAuthority.admitInferenceEvidence,
+    admitAdmittedInferenceEvidence: inferenceAuthority.admitAdmittedInferenceEvidence,
+    admitEvidence: inferenceAuthority.admitEvidence,
+    verifyAdmittedInferenceEvidence: inferenceAuthority.verifyAdmittedInferenceEvidence,
+    verifyInferenceEvidenceUnit: inferenceAuthority.verifyInferenceEvidenceUnit,
+    verifyInferenceEvidence: inferenceAuthority.verifyInferenceEvidence,
+    verifyEvidenceUnit: inferenceAuthority.verifyEvidenceUnit,
+    authorityDigest: inferenceAuthority.authorityDigest,
+    capabilityDigest: inferenceAuthority.capabilityDigest,
+    allowedSourceClasses: inferenceAuthority.allowedSourceClasses,
+  });
 }
 
 module.exports = {
   ACTIVITY_FIELDS,
   ADMISSION_FIELDS,
+  ADMITTED_INFERENCE_EVIDENCE_CONTRACT,
+  ADMITTED_INFERENCE_EVIDENCE_FIELDS,
+  INFERENCE_EVIDENCE_ADMISSION_CONTRACT,
   AGENT_OBSERVATION_CONTRACT,
   CANONICAL_REFERENCE_CONTRACT,
   EXECUTION_REFERENCE_CONTRACT,
   EXECUTION_AUTHORITIES,
   HANDOFF_CONTRACT,
   HANDOFF_STATES,
+  INFERENCE_EVIDENCE_ADMISSION_FIELDS,
   OBSERVATION_FIELDS,
   PROMOTION_OPERATION_CONTRACT,
   PROMOTION_OUTCOMES,
@@ -600,6 +825,11 @@ module.exports = {
   createExplicitHandoff,
   createExecutionReference,
   createHostAdmission,
+  createInferenceAuthority,
+  createInferenceAdmissionAuthority,
+  createInferenceEvidenceAuthority,
+  createInferenceHostAdmission,
+  createInferenceHostAuthority,
   createPromotionOperation,
   createReleaseEvidence,
   createUnknownLinkProposal,
@@ -609,8 +839,10 @@ module.exports = {
   resolvePromotionOperation,
   submitAgentObservation,
   validateActivityReceipt,
+  validateAdmittedInferenceEvidence,
   validateAgentObservation,
   validateAdmission,
+  validateInferenceAdmission,
   validateCanonicalReference,
   validateExplicitHandoff,
   validateExecutionReference,

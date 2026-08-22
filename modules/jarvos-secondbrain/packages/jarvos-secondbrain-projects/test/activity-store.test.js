@@ -7,10 +7,18 @@ const os = require('node:os');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { ActivityStore } = require('../src/activity-store');
-const { createHostAdmission } = require('../src/provider-contracts');
+const {
+  createHostAdmission,
+  createInferenceHostAuthority,
+} = require('../src/provider-contracts');
 
 const NOW = '2026-08-10T12:00:00.000Z';
 const AUTHORITY = createHostAdmission({ producerId: 'notes', secret: 'activity-test-secret', allowedKinds: ['note_revision'] });
+const INFERENCE_AUTHORITY = createInferenceHostAuthority({
+  producerId: 'notes-adapter',
+  secret: 'inference-test-secret',
+  allowedSourceClasses: ['note', 'chat'],
+});
 
 function tmpDir() { return fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-activity-store-')); }
 
@@ -29,6 +37,26 @@ function receipt({ eventId = 'event-1', dedupeKey = 'causal-1', occurredAt = NOW
     dedupeKey,
   };
   return AUTHORITY.admitVerifiedReceipt(base);
+}
+
+function inferenceEvidence(overrides = {}) {
+  return {
+    contract: 'jarvos.project-inference-evidence/v1',
+    observationId: 'obs_unresolved_001',
+    evidenceId: 'ev_unresolved_001',
+    sourceClass: 'note',
+    occurredAt: NOW,
+    observedAt: NOW,
+    sourceRevision: 'note-rev-1',
+    sensitivity: 'public-fixture',
+    coverageState: 'fresh',
+    contentDigest: 'a'.repeat(64),
+    ...overrides,
+  };
+}
+
+function admittedInference(overrides = {}, authority = INFERENCE_AUTHORITY) {
+  return authority.admitEvidenceUnit(inferenceEvidence(overrides));
 }
 
 test('admits a verified receipt once and replays it by exact causal identity', () => {
@@ -109,4 +137,83 @@ test('state generations are owner-only and durable across reload', () => {
   assert.equal(reloaded.query({ from: NOW, to: NOW }).activities.length, 1);
   assert.equal((fs.statSync(path.join(stateDir, 'CURRENT')).mode & 0o777), 0o600);
   assert.ok(crypto.createHash('sha256').update(fs.readFileSync(path.join(stateDir, 'CURRENT'))).digest('hex'));
+});
+
+test('admitted unresolved evidence requires an injected verifier and never writes canonical activity', () => {
+  const stateDir = tmpDir();
+  const unconfigured = new ActivityStore({ stateDir, now: () => NOW });
+  assert.throws(() => unconfigured.admitUnattributedEvidence(admittedInference()), /inference.*verifier required/i);
+
+  const store = new ActivityStore({ stateDir, now: () => NOW, inferenceVerifier: INFERENCE_AUTHORITY });
+  const result = store.admitUnattributedEvidence(admittedInference(), {
+    candidateId: 'cand_0123456789abcdef0123456789abcdef',
+    decisionId: 'dec_0123456789abcdef0123456789abcdef',
+    reason: 'identity_unresolved',
+  });
+  assert.equal(result.status, 'admitted');
+  assert.equal(store.query({ from: NOW, to: NOW }).activities.length, 0);
+  assert.equal(store.listUnattributed().length, 1);
+  assert.equal(store.listUnattributed()[0].candidateId, 'cand_0123456789abcdef0123456789abcdef');
+  assert.equal(store.listUnattributed()[0].decisionId, 'dec_0123456789abcdef0123456789abcdef');
+  assert.equal(store.listUnattributed()[0].reason, 'identity_unresolved');
+  assert.equal(Object.prototype.hasOwnProperty.call(store.listUnattributed()[0], 'sourceContent'), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(store.listUnattributed()[0], 'path'), false);
+  assert.equal((fs.statSync(path.join(stateDir, 'unattributed.jsonl')).mode & 0o777), 0o600);
+});
+
+test('observeUnattributed recognizes only the versioned admitted envelope as the opt-in path', () => {
+  const store = new ActivityStore({ stateDir: tmpDir(), now: () => NOW, inferenceVerifier: INFERENCE_AUTHORITY });
+  const result = store.observeUnattributed(admittedInference(), { reasonCode: 'Identity_Unresolved' });
+  assert.equal(result.status, 'admitted');
+  assert.equal(result.observation.reason, 'identity_unresolved');
+  assert.throws(() => store.observeUnattributed({
+    ...admittedInference(),
+    extra: 'raw transcript',
+  }), /unsupported|invalid/i);
+});
+
+test('admitted unresolved evidence is idempotent across retries and restart, with digest conflicts quarantined', () => {
+  const stateDir = tmpDir();
+  const firstStore = new ActivityStore({ stateDir, now: () => NOW, inferenceVerifier: INFERENCE_AUTHORITY });
+  const envelope = admittedInference();
+  const first = firstStore.admitUnattributedEvidence(envelope, { reason: 'mapping_ambiguous' });
+  assert.equal(first.status, 'admitted');
+  const second = firstStore.admitUnattributedEvidence(envelope, { reason: 'different_retry_reason' });
+  assert.equal(second.status, 'deduped');
+
+  const reloaded = new ActivityStore({ stateDir, now: () => NOW, inferenceVerifier: INFERENCE_AUTHORITY });
+  const restarted = reloaded.admitUnattributedEvidence(envelope, { reason: 'mapping_ambiguous' });
+  assert.equal(restarted.status, 'deduped');
+
+  const conflictAuthority = createInferenceHostAuthority({
+    producerId: 'notes-adapter',
+    secret: 'inference-test-secret',
+    allowedSourceClasses: ['note', 'chat'],
+  });
+  const conflict = reloaded.admitUnattributedEvidence(admittedInference({ contentDigest: 'b'.repeat(64) }, conflictAuthority));
+  assert.equal(conflict.status, 'quarantined');
+  assert.match(conflict.reason, /conflict/i);
+  assert.equal(reloaded.listUnattributed().length, 1);
+});
+
+test('admitted unresolved evidence retains source coverage modes and converges out of order', () => {
+  const modes = ['unavailable', 'healthy-empty', 'partial'];
+  const oneDir = tmpDir();
+  const twoDir = tmpDir();
+  const one = new ActivityStore({ stateDir: oneDir, now: () => NOW, inferenceVerifier: INFERENCE_AUTHORITY });
+  const two = new ActivityStore({ stateDir: twoDir, now: () => NOW, inferenceVerifier: INFERENCE_AUTHORITY });
+  const envelopes = modes.map((coverageState, index) => admittedInference({
+    observationId: `obs_mode_${index}`,
+    evidenceId: `ev_mode_${index}`,
+    coverageState,
+    contentDigest: coverageState === 'partial' ? 'c'.repeat(64) : null,
+  }));
+  for (const envelope of envelopes) one.admitUnattributedEvidence(envelope);
+  for (const envelope of [...envelopes].reverse()) two.admitUnattributedEvidence(envelope);
+  const summarize = (store) => store.listUnattributed().map((entry) => ({
+    evidenceId: entry.evidenceId,
+    coverageState: entry.coverageState,
+  })).sort((left, right) => left.evidenceId.localeCompare(right.evidenceId));
+  assert.deepEqual(summarize(one), summarize(two));
+  assert.deepEqual(summarize(one).map((entry) => entry.coverageState), ['unavailable', 'healthy-empty', 'partial']);
 });
