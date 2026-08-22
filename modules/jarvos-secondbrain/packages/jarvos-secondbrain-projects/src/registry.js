@@ -5,9 +5,12 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const {
+  RECORD_CONTRACT,
+  RECORD_CONTRACT_V2,
   STATUS_BY_KIND,
   cloneRecord,
   normalizeName,
+  validateInferenceMetadata,
   validateRecord,
 } = require('./records');
 const { resolvePriority } = require('./priority');
@@ -115,6 +118,30 @@ function idFor(kind, allocator) {
   return `${prefix}${String(allocator[kind]).padStart(6, '0')}`;
 }
 
+function receiptClaims({ decisionId, reasonCodes } = {}, inference) {
+  const hasDecisionId = decisionId !== undefined;
+  const hasReasonCodes = reasonCodes !== undefined;
+  if (!hasDecisionId && !hasReasonCodes) return {};
+  if (!inference) throw new TypeError('receipt inference claims require inference metadata');
+
+  const normalized = validateInferenceMetadata({
+    ...inference,
+    ...(hasDecisionId ? { decisionId } : {}),
+    ...(hasReasonCodes ? { reasonCodes } : {}),
+  });
+  if (hasDecisionId && normalized.decisionId !== inference.decisionId) {
+    throw new TypeError('receipt decisionId must match inference metadata');
+  }
+  if (hasReasonCodes && JSON.stringify(normalized.reasonCodes) !== JSON.stringify([...inference.reasonCodes].sort())) {
+    throw new TypeError('receipt reasonCodes must match inference metadata');
+  }
+
+  const claims = {};
+  if (hasDecisionId) claims.decisionId = normalized.decisionId;
+  if (hasReasonCodes) claims.reasonCodes = normalized.reasonCodes;
+  return claims;
+}
+
 class ProjectRegistry {
   constructor({ stateDir, now = () => new Date().toISOString() } = {}) {
     if (typeof stateDir !== 'string' || !stateDir.trim()) throw new TypeError('stateDir is required');
@@ -175,7 +202,13 @@ class ProjectRegistry {
     return resolvePriority(id, this.state.records);
   }
 
-  create(input, { expectedGeneration, actor = 'system', session = 'unknown' } = {}) {
+  create(input, {
+    expectedGeneration,
+    actor = 'system',
+    session = 'unknown',
+    decisionId,
+    reasonCodes,
+  } = {}) {
     this.assertGeneration(expectedGeneration);
     const next = cloneState(this.state);
     const kind = input.kind || 'project';
@@ -192,10 +225,19 @@ class ProjectRegistry {
       updatedAt: input.updatedAt || timestamp,
     }, { records: next.records });
     next.records[id] = record;
-    return this.commit(next, { operation: 'create', actor, session, recordId: id });
+    return this.commit(next, {
+      operation: 'create', actor, session, recordId: id, decisionId, reasonCodes,
+    });
   }
 
-  update(id, patch, { expectedGeneration, expectedRevision, actor = 'system', session = 'unknown' } = {}) {
+  update(id, patch, {
+    expectedGeneration,
+    expectedRevision,
+    actor = 'system',
+    session = 'unknown',
+    decisionId,
+    reasonCodes,
+  } = {}) {
     this.assertGeneration(expectedGeneration);
     const current = this.state.records[id];
     if (!current) throw new Error(`project record not found: ${id}`);
@@ -203,11 +245,19 @@ class ProjectRegistry {
     if (patch.id !== undefined || patch.kind !== undefined || patch.createdAt !== undefined || patch.revision !== undefined) {
       throw new TypeError('immutable project fields cannot be updated');
     }
+    const suppliesInference = Object.prototype.hasOwnProperty.call(patch, 'inference');
+    if (current.inference !== undefined && (!suppliesInference || patch.inference === undefined || patch.inference === null)) {
+      if (suppliesInference) throw new TypeError('inference metadata cannot be removed');
+    }
+    if (suppliesInference && patch.inference === undefined) {
+      throw new TypeError('inference metadata cannot be removed');
+    }
     const next = cloneState(this.state);
     const timestamp = this.now();
     const { record } = validateRecord({
       ...current,
       ...patch,
+      contract: suppliesInference ? RECORD_CONTRACT_V2 : current.contract,
       id: current.id,
       kind: current.kind,
       revision: current.revision + 1,
@@ -215,7 +265,9 @@ class ProjectRegistry {
       updatedAt: patch.updatedAt || timestamp,
     }, { records: next.records });
     next.records[id] = record;
-    return this.commit(next, { operation: 'update', actor, session, recordId: id });
+    return this.commit(next, {
+      operation: 'update', actor, session, recordId: id, decisionId, reasonCodes,
+    });
   }
 
   integrity() {
@@ -235,12 +287,12 @@ class ProjectRegistry {
     }
   }
 
-  commit(next, { operation, actor, session, recordId }) {
+  commit(next, { operation, actor, session, recordId, decisionId, reasonCodes }) {
     next.generation = this.state.generation + 1;
     const indexes = buildIndexes(next.records);
     next.aliases = indexes.aliases;
     next.parents = indexes.parents;
-    next.receipts.push({
+    const receipt = {
       id: `rcpt_${next.generation}_${crypto.randomUUID()}`,
       operation,
       recordId,
@@ -248,7 +300,9 @@ class ProjectRegistry {
       session,
       generation: next.generation,
       observedAt: this.now(),
-    });
+      ...receiptClaims({ decisionId, reasonCodes }, next.records[recordId].inference),
+    };
+    next.receipts.push(receipt);
     validateState(next);
     const generationFile = path.join(this.stateDir, generationName(next.generation));
     writeDurably(generationFile, `${JSON.stringify(next, null, 2)}\n`);
@@ -260,9 +314,12 @@ class ProjectRegistry {
 
 module.exports = {
   ProjectRegistry,
+  RECORD_CONTRACT,
+  RECORD_CONTRACT_V2,
   REGISTRY_CONTRACT,
   STATUS_BY_KIND,
   buildIndexes,
+  cloneRecord,
   validateState,
   validateRecord,
 };
