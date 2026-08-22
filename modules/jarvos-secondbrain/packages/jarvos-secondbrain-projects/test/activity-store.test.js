@@ -22,11 +22,11 @@ const INFERENCE_AUTHORITY = createInferenceHostAuthority({
 
 function tmpDir() { return fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-activity-store-')); }
 
-function receipt({ eventId = 'event-1', dedupeKey = 'causal-1', occurredAt = NOW, evidenceRefs = ['note:rev-1'] } = {}) {
+function receipt({ eventId = 'event-1', dedupeKey = 'causal-1', occurredAt = NOW, evidenceRefs = ['note:rev-1'], canonicalId = 'prj_000001' } = {}) {
   const base = {
     contract: 'jarvos.verified-activity/v1',
     eventId,
-    canonicalId: 'prj_000001',
+    canonicalId,
     producerId: 'notes',
     kind: 'note_revision',
     occurredAt,
@@ -37,6 +37,15 @@ function receipt({ eventId = 'event-1', dedupeKey = 'causal-1', occurredAt = NOW
     dedupeKey,
   };
   return AUTHORITY.admitVerifiedReceipt(base);
+}
+
+function canonicalRegistry() {
+  const records = new Map([
+    ['prj_000001', { id: 'prj_000001', kind: 'project', parentId: null, revision: 4, lifecycle: 'active' }],
+    ['prj_000002', { id: 'prj_000002', kind: 'project', parentId: 'prj_000001', revision: 2, lifecycle: 'paused' }],
+    ['out_000001', { id: 'out_000001', kind: 'outcome', parentId: 'prj_000002', revision: 3, lifecycle: 'active' }],
+  ]);
+  return { generation: 7, get: (id) => records.get(id) || null, records };
 }
 
 function inferenceEvidence(overrides = {}) {
@@ -66,6 +75,42 @@ test('admits a verified receipt once and replays it by exact causal identity', (
   const second = store.admit(receipt({ eventId: 'event-1-retry' }));
   assert.equal(second.status, 'deduped');
   assert.equal(store.query({ from: NOW, to: NOW }).activities.length, 1);
+  assert.equal(store.generation, 2);
+});
+
+test('pins the authority-resolved root Project and lifecycle when activity is admitted', () => {
+  const registry = canonicalRegistry();
+  const store = new ActivityStore({ stateDir: tmpDir(), now: () => NOW, admission: AUTHORITY, registry });
+  const first = store.admit(receipt({ canonicalId: 'out_000001' }));
+  assert.deepEqual(first.activity.canonicalAtAdmission, {
+    canonicalId: 'out_000001',
+    canonicalKind: 'outcome',
+    canonicalRevision: 3,
+    rootProjectId: 'prj_000001',
+    rootProjectRevision: 4,
+    rootProjectLifecycle: 'active',
+    registryGeneration: 7,
+  });
+
+  registry.records.get('out_000001').parentId = 'prj_000001';
+  registry.records.get('prj_000001').lifecycle = 'archived';
+  registry.generation = 8;
+  const historical = store.query({ from: NOW, to: NOW }).activities[0];
+  assert.equal(historical.canonicalAtAdmission.rootProjectId, 'prj_000001');
+  assert.equal(historical.canonicalAtAdmission.rootProjectLifecycle, 'active');
+  assert.equal(historical.canonicalAtAdmission.registryGeneration, 7);
+});
+
+test('replay preserves the original admission-time canonical snapshot', () => {
+  const registry = canonicalRegistry();
+  const store = new ActivityStore({ stateDir: tmpDir(), now: () => NOW, admission: AUTHORITY, registry });
+  store.admit(receipt({ canonicalId: 'out_000001' }));
+  registry.records.get('out_000001').parentId = 'prj_000001';
+  registry.generation = 8;
+  const replay = store.admit(receipt({ eventId: 'event-retry', canonicalId: 'out_000001' }));
+  assert.equal(replay.status, 'deduped');
+  assert.equal(replay.activity.canonicalAtAdmission.rootProjectRevision, 4);
+  assert.equal(replay.activity.canonicalAtAdmission.registryGeneration, 7);
   assert.equal(store.generation, 2);
 });
 

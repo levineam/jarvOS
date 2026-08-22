@@ -135,7 +135,31 @@ function normalizeDerivedFrom(value) {
   };
 }
 
-function activityEnvelope(receipt, { derivedFrom = null, provenanceClass = 'direct' } = {}) {
+function canonicalAtAdmission(receipt, registry) {
+  if (!registry || typeof registry.get !== 'function') return null;
+  const record = registry.get(receipt.canonicalId);
+  if (!record) throw new Error('canonical activity record is unavailable');
+  let root = record;
+  const visited = new Set();
+  while (root.parentId) {
+    if (visited.has(root.id)) throw new Error('canonical activity hierarchy contains a cycle');
+    visited.add(root.id);
+    root = registry.get(root.parentId);
+    if (!root) throw new Error('canonical activity parent is unavailable');
+  }
+  if (root.kind !== 'project') throw new Error('canonical activity root must be a Project');
+  return {
+    canonicalId: record.id,
+    canonicalKind: record.kind,
+    canonicalRevision: record.revision,
+    rootProjectId: root.id,
+    rootProjectRevision: root.revision,
+    rootProjectLifecycle: root.lifecycle,
+    registryGeneration: Number.isInteger(registry.generation) ? registry.generation : null,
+  };
+}
+
+function activityEnvelope(receipt, { derivedFrom = null, provenanceClass = 'direct', registry = null } = {}) {
   const normalized = validateVerifiedReceipt(receipt);
   const relation = normalizeDerivedFrom(derivedFrom);
   const causalIdentity = stableIdentity({ dedupeKey: normalized.dedupeKey, derivedFrom: relation });
@@ -145,6 +169,7 @@ function activityEnvelope(receipt, { derivedFrom = null, provenanceClass = 'dire
     causalIdentity,
     provenanceClass: typeof provenanceClass === 'string' && provenanceClass.trim() ? provenanceClass.trim() : 'direct',
     derivedFrom: relation,
+    canonicalAtAdmission: canonicalAtAdmission(normalized, registry),
   };
 }
 
@@ -163,6 +188,7 @@ function mergeEnvelope(existing, incoming) {
       ? existing.provenanceClass
       : 'direct_and_derived',
     derivedFrom: existing.derivedFrom || incoming.derivedFrom || null,
+    canonicalAtAdmission: existing.canonicalAtAdmission || incoming.canonicalAtAdmission || null,
   };
 }
 
@@ -186,12 +212,15 @@ class ActivityStore {
     inferenceVerifier = null,
     inferenceAdmission = null,
     inferenceAdmissionVerifier = null,
+    registry = null,
+    canonicalRegistry = null,
   } = {}) {
     if (typeof stateDir !== 'string' || !stateDir.trim()) throw new TypeError('stateDir is required');
     this.stateDir = path.resolve(stateDir);
     this.now = now;
     this.admission = admission;
     this.inferenceVerifier = inferenceVerifier || inferenceAdmission || inferenceAdmissionVerifier || null;
+    this.registry = registry || canonicalRegistry || null;
     fs.mkdirSync(this.stateDir, { recursive: true, mode: 0o700 });
     try { fs.chmodSync(this.stateDir, 0o700); } catch (_) { /* best effort on platforms without chmod */ }
     for (const filePath of [this._unattributedPath(), this._unattributedConflictPath()]) {
@@ -224,7 +253,7 @@ class ActivityStore {
     if (!admission || typeof admission.verifyVerifiedReceipt !== 'function') throw new Error('activity receipt admission verifier required');
     const verified = admission.verifyVerifiedReceipt(receipt);
     if (!verified || verified.ok !== true || !verified.receipt) throw new Error('activity receipt admission invalid');
-    const incoming = activityEnvelope(verified.receipt, { derivedFrom, provenanceClass });
+    const incoming = activityEnvelope(verified.receipt, { derivedFrom, provenanceClass, registry: this.registry });
     const existingId = this.state.causalIndex[incoming.causalIdentity];
     if (existingId) {
       const existing = this.state.activities[existingId];
@@ -479,6 +508,7 @@ class ActivityStore {
 
 module.exports = {
   ActivityStore,
+  canonicalAtAdmission,
   UNATTRIBUTED_CONFLICT_CONTRACT,
   UNATTRIBUTED_INFERENCE_CONTRACT,
   STORE_CONTRACT,
