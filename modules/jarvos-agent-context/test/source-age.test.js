@@ -59,13 +59,40 @@ function initBrainRepo(brainDir, commitDate) {
   run(['commit', '--no-gpg-sign', '-m', 'seed', '--date', commitDate]);
 }
 
-function recallConfig(brainDir, gbrainDir) {
+function recallConfig(brainDir, gbrainDir, extra = {}) {
   return {
     brainDir,
     gbrainDir: gbrainDir || brainDir,
     vaultDir: brainDir,
     notesDir: brainDir,
+    ...extra,
   };
+}
+
+function writeGbrainSourcesStub(dir, payload) {
+  const jsonPath = path.join(dir, 'sources.json');
+  const bin = path.join(dir, 'gbrain-stub');
+  fs.writeFileSync(jsonPath, `${JSON.stringify(payload)}\n`);
+  fs.writeFileSync(
+    bin,
+    `#!/usr/bin/env node
+const fs = require('fs');
+const args = process.argv.slice(2);
+if (args[0] === 'sources' && args[1] === 'list') {
+  process.stdout.write(fs.readFileSync(${JSON.stringify(jsonPath)}, 'utf8'));
+  process.exit(0);
+}
+process.exit(1);
+`,
+    { mode: 0o755 },
+  );
+  fs.chmodSync(bin, 0o755);
+  return bin;
+}
+
+function setDirMtime(dir, iso) {
+  const at = new Date(iso);
+  fs.utimesSync(dir, at, at);
 }
 
 function recallOptions(config, extra = {}) {
@@ -137,6 +164,148 @@ test('recall labels unknown brain age when the source cannot be observed', () =>
     const result = recall(recallOptions(recallConfig(missing)));
     assert.match(result.markdown, /^# jarvOS Recall Bundle\n\nbrain age: unknown\n/);
     assert.doesNotMatch(result.markdown, /brain age: unknown\nbrain age:/);
+  });
+});
+
+test('a single GBrain source keeps the current provenance line byte-identical', () => {
+  withTempDir((tmp) => {
+    const brainDir = path.join(tmp, 'brain');
+    initBrainRepo(brainDir, STALE_AT);
+    const config = recallConfig(brainDir);
+    const expected = '# jarvOS Recall Bundle\n\nbrain age: last commit 2026-05-01 (112d ago); last sync unknown\n';
+    const without = recall(recallOptions(config));
+    const withList = recall(recallOptions(config, {
+      brainSources: [{ id: 'default', local_path: brainDir, last_sync_at: '2026-08-21T11:00:00.000Z' }],
+    }));
+    assert.equal(without.markdown.slice(0, expected.length), expected);
+    assert.equal(withList.markdown, without.markdown);
+  });
+});
+
+test('recall labels both GBrain sources when their ages differ', () => {
+  withTempDir((tmp) => {
+    const brainDir = path.join(tmp, 'brain');
+    const vaultDir = path.join(tmp, 'vault');
+    initBrainRepo(brainDir, STALE_AT);
+    fs.mkdirSync(vaultDir, { recursive: true });
+    fs.writeFileSync(path.join(vaultDir, 'note.md'), 'live\n');
+    setDirMtime(vaultDir, '2026-08-21T11:00:00.000Z');
+    const result = recall(recallOptions(recallConfig(brainDir), {
+      brainSources: [
+        { id: 'default', local_path: brainDir },
+        { id: 'vault', local_path: vaultDir },
+      ],
+    }));
+    assert.match(
+      result.markdown,
+      /^# jarvOS Recall Bundle\n\nbrain age: default last commit 2026-05-01 \(112d ago\); vault last modified 2026-08-21 \(1h ago\); last sync unknown\n/,
+    );
+    assert.equal(result.markdown.includes(tmp), false);
+  });
+});
+
+test('recall keeps other sources when one GBrain source age is unknown', () => {
+  withTempDir((tmp) => {
+    const brainDir = path.join(tmp, 'brain');
+    initBrainRepo(brainDir, STALE_AT);
+    const result = recall(recallOptions(recallConfig(brainDir), {
+      brainSources: [
+        { id: 'default', local_path: brainDir },
+        { id: 'vault', local_path: path.join(tmp, 'missing-vault') },
+      ],
+    }));
+    assert.match(
+      result.markdown,
+      /^# jarvOS Recall Bundle\n\nbrain age: default last commit 2026-05-01 \(112d ago\); vault unknown; last sync unknown\n/,
+    );
+  });
+});
+
+test('recall falls back to the configured path when the GBrain source list is unavailable', () => {
+  withTempDir((tmp) => {
+    const brainDir = path.join(tmp, 'brain');
+    initBrainRepo(brainDir, STALE_AT);
+    const expected = /^# jarvOS Recall Bundle\n\nbrain age: last commit 2026-05-01 \(112d ago\); last sync unknown\n/;
+    const missingBin = recall(recallOptions(recallConfig(brainDir, brainDir, {
+      gbrainBin: path.join(tmp, 'missing-gbrain'),
+    })));
+    assert.match(missingBin.markdown, expected);
+    const thrown = recall(recallOptions(recallConfig(brainDir), {
+      listBrainSources: () => {
+        throw new Error('source list unavailable');
+      },
+    }));
+    assert.match(thrown.markdown, expected);
+  });
+});
+
+test('multi-source brain age sits under the heading so truncation cannot drop it', () => {
+  withTempDir((tmp) => {
+    const brainDir = path.join(tmp, 'brain');
+    const vaultDir = path.join(tmp, 'vault');
+    initBrainRepo(brainDir, STALE_AT);
+    fs.mkdirSync(vaultDir, { recursive: true });
+    fs.writeFileSync(path.join(vaultDir, 'note.md'), 'live\n');
+    setDirMtime(vaultDir, '2026-08-21T11:00:00.000Z');
+    const result = recall(recallOptions(recallConfig(brainDir), {
+      brainSources: [
+        { id: 'default', local_path: brainDir },
+        { id: 'vault', local_path: vaultDir },
+      ],
+    }));
+    const truncated = result.markdown.slice(0, 120);
+    assert.match(truncated, /^# jarvOS Recall Bundle\n\nbrain age: default last commit 2026-05-01 \(112d ago\); vault last modified/);
+    assert.match(result.markdown.slice(0, 80), /brain age:/);
+  });
+});
+
+test('recall reads multiple sources from gbrain sources list --json', () => {
+  withTempDir((tmp) => {
+    const brainDir = path.join(tmp, 'brain');
+    const vaultDir = path.join(tmp, 'vault');
+    const gbrainDir = path.join(tmp, 'gbrain');
+    fs.mkdirSync(gbrainDir, { recursive: true });
+    initBrainRepo(brainDir, STALE_AT);
+    fs.mkdirSync(vaultDir, { recursive: true });
+    fs.writeFileSync(path.join(vaultDir, 'note.md'), 'live\n');
+    setDirMtime(vaultDir, '2026-08-21T11:00:00.000Z');
+    const gbrainBin = writeGbrainSourcesStub(gbrainDir, {
+      sources: [
+        { id: 'default', local_path: brainDir, last_sync_at: null },
+        { id: 'vault', local_path: vaultDir, last_sync_at: '2026-08-21T11:00:00.000Z' },
+      ],
+    });
+    const result = recall(recallOptions(recallConfig(brainDir, gbrainDir, { gbrainBin })));
+    assert.match(
+      result.markdown,
+      /^# jarvOS Recall Bundle\n\nbrain age: default last commit 2026-05-01 \(112d ago\); vault last modified 2026-08-21 \(1h ago\)\nlast sync: default unknown, vault 2026-08-21 \(1h ago\)\n/,
+    );
+    assert.equal(result.markdown.includes(brainDir), false);
+    assert.equal(result.markdown.includes(vaultDir), false);
+  });
+});
+
+test('recall summarises many GBrain sources and names the oldest', () => {
+  withTempDir((tmp) => {
+    const brainDir = path.join(tmp, 'brain');
+    const vaultDir = path.join(tmp, 'vault');
+    const wikiDir = path.join(tmp, 'wiki');
+    initBrainRepo(brainDir, STALE_AT);
+    initBrainRepo(wikiDir, '2026-01-01T12:00:00.000Z');
+    fs.mkdirSync(vaultDir, { recursive: true });
+    fs.writeFileSync(path.join(vaultDir, 'note.md'), 'live\n');
+    setDirMtime(vaultDir, '2026-08-21T11:00:00.000Z');
+    const result = recall(recallOptions(recallConfig(brainDir), {
+      brainSources: [
+        { id: 'default', local_path: brainDir },
+        { id: 'vault', local_path: vaultDir },
+        { id: 'wiki', local_path: wikiDir },
+      ],
+    }));
+    assert.match(
+      result.markdown,
+      /^# jarvOS Recall Bundle\n\nbrain age: 3 sources, newest vault 1h ago, oldest wiki last commit 2026-01-01 \(232d ago\); last sync unknown\n/,
+    );
   });
 });
 

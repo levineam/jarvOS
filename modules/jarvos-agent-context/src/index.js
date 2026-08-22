@@ -806,7 +806,104 @@ function observeGitCommitIso(repoDir) {
   }
 }
 
-function observeBrainProvenance(config = {}) {
+function parseJsonPayload(text) {
+  const raw = String(text || '').trim();
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw);
+  } catch {
+    const brace = raw.indexOf('{');
+    const bracket = raw.indexOf('[');
+    const start = [brace, bracket].filter((index) => index >= 0).sort((a, b) => a - b)[0];
+    if (start === undefined) return null;
+    try {
+      return JSON.parse(raw.slice(start));
+    } catch {
+      return null;
+    }
+  }
+}
+
+function sourceLocalPath(source) {
+  return firstString(source?.local_path, source?.localPath, source?.path);
+}
+
+function displaySourceId(value, index = 0) {
+  const raw = firstString(value) || `source${index + 1}`;
+  const base = /[\\/]/.test(raw) ? path.basename(raw) : raw;
+  const cleaned = String(base)
+    .replace(/[\r\n]+/g, ' ')
+    .replace(/[^A-Za-z0-9._-]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 24);
+  return cleaned || `source${index + 1}`;
+}
+
+function realPathOrResolved(value) {
+  const resolved = firstString(value);
+  if (!resolved) return null;
+  try {
+    return fs.realpathSync(resolved);
+  } catch {
+    return path.resolve(resolved);
+  }
+}
+
+function sourcesMatchConfig(sources, config) {
+  const brainReal = realPathOrResolved(config.brainDir);
+  if (!brainReal) return false;
+  return sources.some((source) => realPathOrResolved(sourceLocalPath(source)) === brainReal);
+}
+
+function listGbrainSourcesFromCli(config = {}) {
+  try {
+    const bin = firstString(config.gbrainBin, 'gbrain');
+    if (!bin) return null;
+    const spawnOptions = {
+      encoding: 'utf8',
+      timeout: 2000,
+      stdio: ['ignore', 'pipe', 'ignore'],
+    };
+    const cwd = firstString(config.gbrainDir);
+    if (cwd) {
+      try {
+        if (fs.existsSync(cwd)) spawnOptions.cwd = cwd;
+      } catch {
+        // Missing cwd is not fatal; gbrain may still answer from its own config.
+      }
+    }
+    const result = spawnSync(bin, ['sources', 'list', '--json'], spawnOptions);
+    if (result.error || result.status !== 0) return null;
+    const parsed = parseJsonPayload(result.stdout);
+    if (!parsed) return null;
+    if (Array.isArray(parsed)) return parsed;
+    if (Array.isArray(parsed.sources)) return parsed.sources;
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+function resolveListedBrainSources(config = {}, options = {}) {
+  try {
+    if (Array.isArray(options.brainSources)) return options.brainSources;
+    if (Array.isArray(config.brainSources)) return config.brainSources;
+    const lister = options.listBrainSources || config.listBrainSources;
+    if (typeof lister === 'function') {
+      const listed = lister();
+      return Array.isArray(listed) ? listed : null;
+    }
+    const listed = listGbrainSourcesFromCli(config);
+    // One source keeps today's single-path format. A host gbrain that does
+    // not include this config's brainDir must not relabel a different tree.
+    if (!Array.isArray(listed) || listed.length < 2) return null;
+    return sourcesMatchConfig(listed, config) ? listed : null;
+  } catch {
+    return null;
+  }
+}
+
+function observeSingleBrainProvenance(config = {}) {
   try {
     const brainDir = firstString(config.brainDir);
     const gbrainDir = firstString(config.gbrainDir);
@@ -827,8 +924,103 @@ function observeBrainProvenance(config = {}) {
   }
 }
 
+function observeListedSource(source, index) {
+  try {
+    const sourceDir = sourceLocalPath(source);
+    const synced = parseTimestamp(source?.last_sync_at || source?.lastSyncAt || source?.syncedAt);
+    return {
+      id: displaySourceId(source?.id || source?.name, index),
+      commitAt: sourceDir ? observeGitCommitIso(sourceDir) : null,
+      modifiedAt: sourceDir ? observeMtimeIso(sourceDir) : null,
+      syncedAt: synced ? synced.toISOString() : null,
+    };
+  } catch {
+    return {
+      id: displaySourceId(source?.id || source?.name, index),
+      commitAt: null,
+      modifiedAt: null,
+      syncedAt: null,
+    };
+  }
+}
+
+function observeBrainProvenance(config = {}, options = {}) {
+  const single = observeSingleBrainProvenance(config);
+  try {
+    const listed = resolveListedBrainSources(config, options);
+    if (!Array.isArray(listed) || listed.length < 2) return single;
+    return { ...single, sources: listed.map((source, index) => observeListedSource(source, index)) };
+  } catch {
+    return single;
+  }
+}
+
+function formatSourceAgeClause(observation, now) {
+  const commit = parseTimestamp(observation?.commitAt);
+  const modified = parseTimestamp(observation?.modifiedAt);
+  const source = commit || modified;
+  if (!source) return null;
+  return `${commit ? 'last commit' : 'last modified'} ${calendarDayUtc(source)} (${formatAgePhrase(source, now)} ago)`;
+}
+
+function formatSyncDayClause(syncedAt, now) {
+  const synced = parseTimestamp(syncedAt);
+  if (!synced) return null;
+  return `${calendarDayUtc(synced)} (${formatAgePhrase(synced, now)} ago)`;
+}
+
+function formatSyncSuffix(sources, now) {
+  const clauses = sources.map((source, index) => ({
+    id: displaySourceId(source.id, index),
+    clause: formatSyncDayClause(source.syncedAt, now),
+  }));
+  if (clauses.every((item) => !item.clause)) return 'last sync unknown';
+  const shared = clauses[0].clause;
+  if (shared && clauses.every((item) => item.clause === shared)) return `last sync ${shared}`;
+  if (clauses.length >= 3) return 'last sync mixed';
+  return `last sync ${clauses.map((item) => `${item.id} ${item.clause || 'unknown'}`).join(', ')}`;
+}
+
+function formatMultiSourceAgeLine(sources, now) {
+  if (sources.length >= 3) {
+    const dated = sources
+      .map((source, index) => ({
+        source,
+        index,
+        at: parseTimestamp(source.commitAt) || parseTimestamp(source.modifiedAt),
+      }))
+      .filter((item) => item.at)
+      .sort((a, b) => a.at.getTime() - b.at.getTime());
+    if (!dated.length) return `brain age: ${sources.length} sources unknown`;
+    const oldest = dated[0];
+    const newest = dated[dated.length - 1];
+    const oldestId = displaySourceId(oldest.source.id, oldest.index);
+    const newestId = displaySourceId(newest.source.id, newest.index);
+    const oldestClause = formatSourceAgeClause(oldest.source, now);
+    const newestAge = formatAgePhrase(newest.at, now);
+    const unknownCount = sources.length - dated.length;
+    const unknown = unknownCount > 0 ? `; ${unknownCount} unknown` : '';
+    return `brain age: ${sources.length} sources, newest ${newestId} ${newestAge} ago, oldest ${oldestId} ${oldestClause}${unknown}`;
+  }
+  const ages = sources.map((source, index) => {
+    const id = displaySourceId(source.id, index);
+    const clause = formatSourceAgeClause(source, now);
+    return clause ? `${id} ${clause}` : `${id} unknown`;
+  });
+  return `brain age: ${ages.join('; ')}`;
+}
+
+function formatMultiSourceBrainProvenanceLine(sources, now) {
+  const ageLine = formatMultiSourceAgeLine(sources, now);
+  const sync = formatSyncSuffix(sources, now);
+  if (sync === 'last sync unknown' || !sync.includes(',')) return `${ageLine}; ${sync}`;
+  return `${ageLine}\n${sync.replace(/^last sync /, 'last sync: ')}`;
+}
+
 function formatBrainProvenanceLine(observation, now = new Date()) {
   try {
+    const sources = Array.isArray(observation?.sources) ? observation.sources : [];
+    if (sources.length >= 2) return formatMultiSourceBrainProvenanceLine(sources, now);
     const commit = parseTimestamp(observation?.commitAt);
     const modified = parseTimestamp(observation?.modifiedAt);
     const synced = parseTimestamp(observation?.syncedAt);
@@ -850,7 +1042,7 @@ function formatBrainProvenanceLine(observation, now = new Date()) {
 
 function withBrainProvenanceMarkdown(markdown, config, options = {}) {
   const now = parseTimestamp(options.now) || new Date();
-  return prependAfterHeading(markdown, formatBrainProvenanceLine(observeBrainProvenance(config), now));
+  return prependAfterHeading(markdown, formatBrainProvenanceLine(observeBrainProvenance(config, options), now));
 }
 
 function renderCurrentWorkUnavailable() {
@@ -1645,7 +1837,7 @@ function synthesizeRecall(options = {}) {
     .slice(0, 8);
 
   const provenanceLine = formatBrainProvenanceLine(
-    observeBrainProvenance(bundle.config),
+    observeBrainProvenance(bundle.config, options),
     parseTimestamp(options.now) || new Date(),
   );
   const sourceMarkdown = prependAfterHeading(bundle.markdown, provenanceLine);
