@@ -13,7 +13,19 @@ function lazyDeps() {
   return {
     writeSessionThread: require('../../modules/jarvos-agent-context/src/index.js').writeSessionThread,
     readHookInput: require('./jarvos-session-turn-hook.js').readHookInput,
+    hookSessionId: require('./jarvos-session-turn-hook.js').hookSessionId,
   };
+}
+
+// mechanicalSummary is exported and called directly by tests, so it cannot rely on a
+// caller having loaded the deps. Resolve the session id defensively: an unavailable
+// id degrades the checkpoint, it does not fail it.
+function safeSessionId(input) {
+  try {
+    return lazyDeps().hookSessionId(input);
+  } catch {
+    return null;
+  }
 }
 
 // The session-thread writer defaults to a 30s lock wait. Compaction must not be
@@ -55,7 +67,7 @@ function gitOutput(cwd, args) {
 function mechanicalSummary(input = {}) {
   const cwd = typeof input.cwd === 'string' && input.cwd.trim() ? input.cwd.trim() : process.cwd();
   const trigger = input.trigger === 'manual' || input.trigger === 'auto' ? input.trigger : 'unknown';
-  const sessionId = hookSessionId(input);
+  const sessionId = safeSessionId(input);
   const branch = gitOutput(cwd, ['rev-parse', '--abbrev-ref', 'HEAD']);
   const head = gitOutput(cwd, ['rev-parse', '--short', 'HEAD']);
   const porcelain = gitOutput(cwd, ['status', '--porcelain']);
