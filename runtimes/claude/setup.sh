@@ -180,7 +180,16 @@ function upsertClaudeCodeHook(settings, bridge) {
     ownedPaths.push(path.join(stagedRoot, 'runtimes', 'claude', 'jarvos-precompact-hook.js'));
   }
   const escapeRegex = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const hasOwnedPath = (command, target) => new RegExp(`(?:^|[\\s'\"])${escapeRegex(target)}(?=$|[\\s'\"])`).test(command);
+  // A path is written into the command shell-quoted, and shellQuote renders an
+  // apostrophe as '"'"' -- so the raw path is not a substring of the command for
+  // any user whose path contains one. Matching only the raw form made re-running
+  // setup duplicate hooks and rollback silently leave them behind. Check the
+  // quoted rendering too.
+  const hasOwnedPath = (command, target) => {
+    const raw = new RegExp(`(?:^|[\\s'\"])${escapeRegex(target)}(?=$|[\\s'\"])`);
+    if (raw.test(command)) return true;
+    return command.includes(shellQuote(target));
+  };
 
   function upsert(event, script, entry) {
     const entries = Array.isArray(hooks[event]) ? [...hooks[event]] : [];
@@ -201,24 +210,41 @@ function upsertClaudeCodeHook(settings, bridge) {
   // the contract declares, the receipt says what this binary implements. A
   // dispatcher predating capability advertising reports nothing, which reads as
   // unsupported rather than as permission to guess.
+  // Distinguish "this dispatcher does not offer the capability" from "we could
+  // not find out". Both degrade to registering nothing, but only the second is a
+  // symptom -- a probe that raced a runtime promotion leaves an install with no
+  // compaction checkpoint, and setup is one-shot, so it never self-heals. Saying
+  // which happened is the difference between a known limitation and a silent one.
+  function unsupported(reason) {
+    process.stderr.write(`jarvOS: PreCompact not registered -- ${reason}. Re-run setup once the dispatcher is reachable to enable it.\n`);
+    return [];
+  }
+
   function dispatcherActions() {
     if (!dispatcher) return [];
     let probe;
     try {
-      probe = spawnSync(dispatcher, ['--harness', 'claude', '--action', 'provenance-probe'], { encoding: 'utf8' });
-    } catch (_) {
-      return [];
+      // Bounded: the dispatcher fences itself while a runtime promotion is in
+      // flight, so an unbounded probe can hang setup with no output under
+      // `set -euo pipefail`. A stall is treated as "cannot answer" -> unsupported.
+      probe = spawnSync(dispatcher, ['--harness', 'claude', '--action', 'provenance-probe'], { encoding: 'utf8', timeout: 10000, maxBuffer: 1024 * 1024 });
+    } catch (error) {
+      return unsupported(`probe could not be started (${error && error.message ? error.message : 'unknown error'})`);
     }
-    if (!probe || probe.error || probe.status !== 0) return [];
+    if (!probe) return unsupported('probe returned no result');
+    if (probe.error) return unsupported(`probe did not complete (${probe.error.message})`);
+    if (probe.status !== 0) return unsupported(`probe exited ${probe.status}`);
     let receipt;
     try {
       receipt = JSON.parse(String(probe.stdout || ''));
     } catch (_) {
-      return [];
+      return unsupported('probe output was not a JSON receipt');
     }
-    if (!receipt || typeof receipt !== 'object' || Array.isArray(receipt)) return [];
+    if (!receipt || typeof receipt !== 'object' || Array.isArray(receipt)) return unsupported('probe receipt was not an object');
     const actions = receipt.actions;
-    if (!Array.isArray(actions) || actions.some((value) => typeof value !== 'string')) return [];
+    if (!Array.isArray(actions) || actions.some((value) => typeof value !== 'string')) {
+      return unsupported('probe receipt did not advertise an actions list');
+    }
     return actions;
   }
 
@@ -230,7 +256,12 @@ function upsertClaudeCodeHook(settings, bridge) {
   // registered command absorbs a dispatcher failure and emits the empty
   // directive the harness reads as "proceed", exactly as the hook itself would.
   function failOpenCommand(inner) {
-    return `${inner} || printf '%s' '{}'`;
+    // Capture and replace rather than append. `cmd || printf '{}'` concatenates:
+    // a dispatcher that emits partial output and then fails would produce that
+    // output followed by `{}`, which is not valid JSON, so the directive is lost
+    // rather than defaulted. Substituting the whole stdout keeps the fallback
+    // exact -- the harness sees either the hook's real output or `{}`.
+    return `if jarvos_out=$(${inner}); then printf '%s' "$jarvos_out"; else printf '%s' '{}'; fi`;
   }
 
   function commandEntry(script, action, matcher, failOpen) {

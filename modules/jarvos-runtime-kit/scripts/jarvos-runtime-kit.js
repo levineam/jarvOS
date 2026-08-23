@@ -19,7 +19,7 @@ function usage() {
     'Usage:',
     '  jarvos-runtime-kit validate <adapter.json> [--json]',
     '  jarvos-runtime-kit check <runtime|all|adapter.json> [--json]',
-    '  jarvos-runtime-kit check-dispatcher <path> [--harness <h>] [--json]',
+    '  jarvos-runtime-kit check-dispatcher <path> [--harness <h>] [--json] [-- <dispatcher-arg>...]',
     '  jarvos-runtime-kit activation-status <runtime|all> [--evidence <owner-local-json>] [--json]',
     '  jarvos-runtime-kit scaffold <runtime-id> --out <dir>',
   ].join('\n');
@@ -121,7 +121,13 @@ async function main() {
     const binPath = args[1];
     if (!binPath) throw new Error('check-dispatcher requires <path>');
     const harness = flagValue(args, '--harness') || 'claude';
-    const checkResult = checkDispatcher(binPath, { harness });
+    // Everything after `--` is forwarded to the dispatcher. A real one needs its
+    // own arguments (--selector, --staging-root) to resolve a runtime before it
+    // can answer a probe at all, so without this the only dispatcher the CLI
+    // could check is a fake -- which is the gap the checker exists to close.
+    const separator = args.indexOf('--');
+    const extraArgs = separator === -1 ? [] : args.slice(separator + 1);
+    const checkResult = checkDispatcher(binPath, { harness, extraArgs });
     const result = { path: binPath, ...checkResult };
     printResult(result, json);
     process.exit(result.ok ? 0 : 1);

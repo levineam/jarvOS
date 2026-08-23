@@ -38,6 +38,7 @@ const action = actionOf(args);
 if (action === 'provenance-probe') {
   if (mode === 'missing-actions') { process.stdout.write(JSON.stringify({ ok: true })); process.exit(0); }
   if (mode === 'superset-actions') { process.stdout.write(receipt([...ACTIONS, 'extra-action'])); process.exit(0); }
+  if (mode === 'missing-action') { process.stdout.write(receipt(ACTIONS.filter((a) => a !== 'session-precompact'))); process.exit(0); }
   if (mode === 'wrong-order-actions') { process.stdout.write(receipt([ACTIONS[1], ACTIONS[0], ...ACTIONS.slice(2)])); process.exit(0); }
   if (mode === 'not-parseable') { process.stdout.write('not json'); process.exit(0); }
   process.stdout.write(receipt(ACTIONS));
@@ -81,21 +82,36 @@ test('receipt omitting actions fails and names the missing advertisement', () =>
   });
 });
 
-test('receipt advertising a superset of actions fails and names the mismatch', () => {
+test('a dispatcher advertising more actions than this contract knows about passes', () => {
+  // Forward compatibility, not a defect. The ABI is extended additively and the
+  // two halves ship on different schedules, so a dispatcher that already serves a
+  // newer action is strictly better than one that does not -- failing it would
+  // make the checker unusable during exactly the window it is meant to cover.
   withTempDir((temp) => {
     const binPath = writeFakeDispatcher(temp);
     const result = checkDispatcher(binPath, { env: { ...process.env, JARVOS_FAKE_DISPATCHER_MODE: 'superset-actions' } });
-    assert.equal(result.ok, false);
-    assert.match(result.errors.join('\n'), /actions/i);
+    assert.equal(result.ok, true, result.errors.join('\n'));
   });
 });
 
-test('receipt advertising actions in the wrong order fails and names the mismatch', () => {
+test('advertisement order does not matter, unlike a declaration', () => {
+  // An adapter *declaring* the ABI must list it in order -- that is a contract
+  // statement the bootstrap validator checks. A dispatcher *advertising* what it
+  // implements is reporting a set; ordering it carries no meaning.
   withTempDir((temp) => {
     const binPath = writeFakeDispatcher(temp);
     const result = checkDispatcher(binPath, { env: { ...process.env, JARVOS_FAKE_DISPATCHER_MODE: 'wrong-order-actions' } });
+    assert.equal(result.ok, true, result.errors.join('\n'));
+  });
+});
+
+test('a dispatcher missing a declared action fails and names what it cannot serve', () => {
+  withTempDir((temp) => {
+    const binPath = writeFakeDispatcher(temp);
+    const result = checkDispatcher(binPath, { env: { ...process.env, JARVOS_FAKE_DISPATCHER_MODE: 'missing-action' } });
     assert.equal(result.ok, false);
-    assert.match(result.errors.join('\n'), /actions/i);
+    assert.match(result.errors.join('\n'), /does not implement/i);
+    assert.match(result.errors.join('\n'), /session-precompact/);
   });
 });
 

@@ -3,10 +3,17 @@
 const { spawnSync } = require('child_process');
 const { STEWARDSHIP_ACTIONS } = require('./stewardship-bootstrap.js');
 
-function sameStrings(actual, expected) {
-  return Array.isArray(actual)
-    && actual.length === expected.length
-    && actual.every((value, index) => value === expected[index]);
+// Declarations and advertisements are different things. An adapter *declaring*
+// the ABI must list it exactly and in order -- that is a contract statement, and
+// stewardship-bootstrap validates it with an ordered comparison. A dispatcher
+// *advertising* what it implements is a capability set: order carries no meaning,
+// and a dispatcher supporting more than this checkout's contract knows about is
+// forward-compatible, not broken. Requiring exact equality here would fail a
+// strictly better dispatcher every time the two halves ship out of step -- which
+// is the situation an additively extended ABI exists to allow.
+function missingActions(advertised, required) {
+  if (!Array.isArray(advertised)) return null;
+  return required.filter((action) => !advertised.includes(action));
 }
 
 function tryParseReceipt(stdout) {
@@ -20,20 +27,48 @@ function tryParseReceipt(stdout) {
   return parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null;
 }
 
-function runDispatcher(binPath, args, { spawn, env } = {}) {
+// A dispatcher can legitimately block: the real one fences itself while a runtime
+// promotion is in flight. Without a bound, checking one mid-transition hangs the
+// caller with no output and no diagnostic, so a stall is reported as a failure to
+// answer rather than waited on indefinitely.
+const PROBE_TIMEOUT_MS = 10000;
+
+function runDispatcher(binPath, args, { spawn, env, timeout } = {}) {
   const runner = typeof spawn === 'function' ? spawn : spawnSync;
   try {
-    return runner(binPath, args, { encoding: 'utf8', env: env || process.env });
+    const result = runner(binPath, args, {
+      encoding: 'utf8',
+      env: env || process.env,
+      timeout: typeof timeout === 'number' ? timeout : PROBE_TIMEOUT_MS,
+    });
+    // An injected spawn may return nothing; treat that as a failure to answer
+    // rather than dereferencing undefined and breaking the never-throws contract.
+    return result || { error: new Error('dispatcher produced no spawn result') };
   } catch (error) {
     return { error };
   }
 }
 
 /**
- * Check whether the dispatcher binary at binPath conforms to the versioned
- * stewardship action ABI (STEWARDSHIP_ACTIONS). Side-effect-free: this only
- * spawns the binary with the side-effect-free provenance-probe action and a
- * deliberately unknown action, and never mutates anything the binary owns.
+ * Check a dispatcher binary against the versioned stewardship action ABI.
+ *
+ * What a pass means, precisely: the binary ADVERTISES every action in
+ * STEWARDSHIP_ACTIONS, and it REJECTS an unknown action without emitting a
+ * receipt. It does NOT mean the binary implements those actions. Proving that
+ * would require invoking them, and the probe is the only action specified
+ * side-effect-free -- dispatching session-start or bridge from a checker would
+ * itself break the contract being checked.
+ *
+ * So a dispatcher that copies the action list into its receipt while its
+ * dispatch switch still lacks one of them passes here. That is the same
+ * advertised-but-not-implemented shape this checker exists to surface, one level
+ * down, and it is why the installer does not treat a pass as permission to
+ * assume anything at runtime: the hook it registers is wrapped to fail open.
+ * Behavioural proof belongs to the implementation's own suite, where invoking a
+ * real action against a fixture runtime is legitimate.
+ *
+ * Side-effect-free: only the probe and one deliberately unknown action are
+ * spawned, and nothing the binary owns is mutated.
  *
  * extraArgs are appended to both invocations. A real dispatcher needs flags
  * like --selector/--staging-root to resolve a runtime before it can answer a
@@ -58,18 +93,25 @@ function checkDispatcher(binPath, options = {}) {
     return { ok: false, errors: [`dispatcher provenance-probe failed to spawn: ${probeResult.error.message}`], receipt: null };
   }
 
-  let receipt = null;
-  if (probeResult.status !== 0) {
+  const probeFailed = probeResult.status !== 0;
+  if (probeFailed) {
     errors.push(`dispatcher provenance-probe must exit 0, got ${probeResult.status}`);
   }
-  receipt = tryParseReceipt(probeResult.stdout);
-  if (!receipt) {
+  const parsed = tryParseReceipt(probeResult.stdout);
+  if (!parsed) {
     errors.push('dispatcher provenance-probe stdout did not parse as a JSON receipt');
-  } else if (!Array.isArray(receipt.actions)) {
-    errors.push('dispatcher provenance-probe receipt is missing the actions advertisement');
-  } else if (!sameStrings(receipt.actions, STEWARDSHIP_ACTIONS)) {
-    errors.push(`dispatcher provenance-probe receipt.actions must equal ${JSON.stringify(STEWARDSHIP_ACTIONS)} in order, got ${JSON.stringify(receipt.actions)}`);
+  } else {
+    const missing = missingActions(parsed.actions, STEWARDSHIP_ACTIONS);
+    if (missing === null) {
+      errors.push('dispatcher provenance-probe receipt is missing the actions advertisement');
+    } else if (missing.length > 0) {
+      errors.push(`dispatcher does not implement ${JSON.stringify(missing)}; its advertisement is ${JSON.stringify(parsed.actions)}`);
+    }
   }
+  // Only a receipt from a probe that actually succeeded is safe to hand back: a
+  // caller reading result.receipt.actions for capability gating must not act on
+  // an advertisement the dispatcher itself reported as failed.
+  const receipt = probeFailed ? null : parsed;
 
   const rejectArgs = ['--harness', harness, '--action', 'not-a-real-action', ...extraArgs];
   const rejectResult = runDispatcher(binPath, rejectArgs, { spawn, env });

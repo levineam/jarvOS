@@ -891,7 +891,10 @@ function conformantDispatcherScript(advertise = STEWARDSHIP_ACTIONS) {
     'done',
     'case "$action" in',
     `  provenance-probe) printf '%s' '${JSON.stringify(receipt)}'; exit 0 ;;`,
-    `  ${known.join('|')}) exit 0 ;;`,
+    // An empty list would emit `) exit 0 ;;` -- a shell syntax error that makes
+    // the fixture reject everything including the probe, so a test using it
+    // would pass for the wrong reason.
+    ...(known.length ? [`  ${known.join('|')}) exit 0 ;;`] : []),
     '  *) exit 1 ;;',
     'esac',
     '',
@@ -1188,7 +1191,9 @@ test('Claude setup merges both jarvOS lifecycle hooks without replacing user hoo
     assert.equal(parsed.hooks.PreCompact.length, 1);
     const precompactCommand = parsed.hooks.PreCompact[0].hooks[0].command;
     assert.match(precompactCommand, /--action session-precompact/);
-    assert.match(precompactCommand, /\|\| printf/);
+    // Assert the property, not the shell idiom: whatever form the wrapper takes,
+    // it must be able to emit the empty directive when the dispatcher fails.
+    assert.match(precompactCommand, /printf '%s' '\{\}'/);
     assert.equal(parsed.hooks.SessionStart[1].matcher, 'startup|resume|compact');
     assert.equal(count(second, /jarvos-stewardship-dispatcher/g), 3);
     assert.doesNotMatch(second, /jarvos-(?:session-(?:start|turn)|precompact)-hook\.js/);
@@ -1253,6 +1258,42 @@ test('Claude managed setup registers no PreCompact hook when the dispatcher does
   }
 });
 
+test('Claude managed setup distrusts an advertisement from a probe that failed', () => {
+  // The whole point of probing is that an advertisement is only worth as much as
+  // the probe that carried it. A dispatcher that is stale, mid-fence, or degraded
+  // can still print a well-formed receipt naming every action while exiting
+  // non-zero -- trusting that would wire PreCompact to an action the binary does
+  // not serve, which is the advertised-but-not-implemented failure this change
+  // exists to prevent. Mutation testing found this check had no coverage.
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-precompact-badprobe-'));
+  try {
+    const settings = path.join(temp, 'settings.json'); const desktop = path.join(temp, 'desktop.json'); const staged = path.join(temp, 'staged-public');
+    const stable = prepareStableStewardshipBundle(temp);
+    const receipt = JSON.stringify({ schema: 'jarvos.managed-harness-dispatcher/v1', actions: STEWARDSHIP_ACTIONS });
+    const cases = [
+      ['valid receipt but non-zero exit', `#!/usr/bin/env sh\nprintf '%s' '${receipt}'\nexit 1\n`],
+      ['receipt is a JSON array, not an object', "#!/usr/bin/env sh\nprintf '%s' '[\"session-precompact\"]'\nexit 0\n"],
+      ['actions contains a non-string entry', '#!/usr/bin/env sh\nprintf \'%s\' \'{"actions":["session-precompact",7]}\'\nexit 0\n'],
+    ];
+    for (const [name, script] of cases) {
+      fs.rmSync(settings, { force: true });
+      fs.writeFileSync(path.join(stable, 'jarvos-stewardship-dispatcher'), script, { mode: 0o700 });
+      fs.chmodSync(path.join(stable, 'jarvos-stewardship-dispatcher'), 0o700);
+      const env = {
+        ...cleanEnv(), HOME: path.join(temp, 'home'), CLAUDE_SETTINGS: settings, CLAUDE_DESKTOP_CONFIG: desktop,
+        JARVOS_SKIP_CLAUDE_CODE_MCP: '1', JARVOS_SKIP_CLAUDE_MD: '1', JARVOS_STEWARDSHIP_ONLY: '1',
+        JARVOS_MANAGED_REPOSITORIES: '/managed/repository', JARVOS_STAGED_PUBLIC_RUNTIME_ROOT: staged,
+        JARVOS_STEWARDSHIP_STABLE_ROOT: stable,
+      };
+      runSetup(path.join(ROOT, 'runtimes', 'claude', 'setup.sh'), env);
+      const parsed = JSON.parse(fs.readFileSync(settings, 'utf8'));
+      assert.equal(parsed.hooks.PreCompact, undefined, `${name}: must not register PreCompact`);
+    }
+  } finally {
+    fs.rmSync(temp, { recursive: true, force: true });
+  }
+});
+
 test('the registered PreCompact command survives a dispatcher that fails at invocation', () => {
   // The setup-time probe gates registration; it cannot protect invocation. A
   // dispatcher fenced mid-promotion, pointed at a mismatched tuple, or rolled
@@ -1272,9 +1313,25 @@ test('the registered PreCompact command survives a dispatcher that fails at invo
     runSetup(path.join(ROOT, 'runtimes', 'claude', 'setup.sh'), env);
     const command = JSON.parse(fs.readFileSync(settings, 'utf8')).hooks.PreCompact[0].hooks[0].command;
 
-    // Healthy dispatcher: the hook's own output passes through unchanged.
+    // Healthy dispatcher: the hook's own output passes through UNCHANGED. The
+    // stdout assertion is the load-bearing half -- checking only the exit code
+    // leaves a wrapper that appends `{}` to real output indistinguishable from
+    // one that substitutes on failure, which is exactly the regression that
+    // would corrupt a real directive.
+    const speaking = path.join(stable, 'jarvos-stewardship-dispatcher');
+    fs.writeFileSync(speaking, '#!/usr/bin/env sh\nprintf \'%s\' \'{"hookSpecificOutput":{"kept":true}}\'\nexit 0\n', { mode: 0o700 });
+    fs.chmodSync(speaking, 0o700);
     const healthy = spawnSync('/bin/sh', ['-c', command], { encoding: 'utf8', env: { PATH: process.env.PATH || '' } });
     assert.equal(healthy.status, 0);
+    assert.equal(healthy.stdout, '{"hookSpecificOutput":{"kept":true}}', 'a healthy dispatcher\'s output must reach the harness unmodified');
+
+    // Partial output then failure must be REPLACED, not appended to: concatenation
+    // yields invalid JSON and silently loses the directive.
+    fs.writeFileSync(speaking, '#!/usr/bin/env sh\nprintf \'%s\' \'{"partial\'\nexit 1\n', { mode: 0o700 });
+    fs.chmodSync(speaking, 0o700);
+    const partial = spawnSync('/bin/sh', ['-c', command], { encoding: 'utf8', env: { PATH: process.env.PATH || '' } });
+    assert.equal(partial.status, 0);
+    assert.equal(partial.stdout, '{}', 'partial output from a failed dispatcher must be replaced, not appended to');
 
     // Now break it the way a fenced or rolled-back dispatcher breaks: non-zero
     // exit, nothing on stdout. Compaction must still be allowed to proceed.

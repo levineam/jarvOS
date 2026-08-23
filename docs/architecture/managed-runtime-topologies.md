@@ -79,9 +79,22 @@ Check any dispatcher against that contract:
 node modules/jarvos-runtime-kit/scripts/jarvos-runtime-kit.js check-dispatcher <path-to-dispatcher>
 ```
 
+Pass any arguments the dispatcher needs to resolve a runtime after `--`; a real
+dispatcher cannot answer a probe without them.
+
 The same check is available as a library call (`checkDispatcher`) so an
 installer's own test suite can hold its real dispatcher to the public contract
 rather than to a local copy of it.
+
+**What a pass does not prove.** The check confirms a dispatcher *advertises* the
+contract and rejects unknown actions. It cannot confirm it *implements* them:
+only the probe is specified side-effect-free, so a checker that invoked
+`session-start` or `bridge` to find out would break the contract it is checking.
+A dispatcher that copies the action list into its receipt while its dispatch
+switch still lacks one of them passes here. Proving implementation is the
+implementation's own job — invoking a real action against a fixture runtime is
+legitimate in its suite and not in this one — and it is why the installer wraps
+the hook it registers rather than trusting the advertisement at runtime.
 
 ### Why capabilities are advertised rather than assumed
 
