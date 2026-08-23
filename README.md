@@ -243,6 +243,9 @@ tooling, not a single vendor's memory system.
 
 For the product-category boundary, see
 [`docs/architecture/product-category-and-boundaries.md`](./docs/architecture/product-category-and-boundaries.md).
+For how adapters install in a direct clone versus a managed, promotion-backed
+runtime — and the dispatcher contract the managed shape depends on — see
+[`docs/architecture/managed-runtime-topologies.md`](./docs/architecture/managed-runtime-topologies.md).
 For the secondbrain external integration inventory, see
 [`docs/architecture/secondbrain-external-integrations.md`](./docs/architecture/secondbrain-external-integrations.md).
 
