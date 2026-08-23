@@ -978,9 +978,15 @@ function observeListedSource(source, index) {
   try {
     const sourceDir = sourceLocalPath(source);
     const synced = parseTimestamp(source?.last_sync_at || source?.lastSyncAt || source?.syncedAt);
+    // Mirror the single-source path: a git probe that could not answer must be
+    // reported as such, never silently downgraded to directory mtime. Sync bumps
+    // mtime, so an unnormalized failure reads as "last modified" today on a tree
+    // whose last commit was months ago.
+    const commitProbe = sourceDir ? observeGitCommitIso(sourceDir) : null;
     return {
       id: displaySourceId(source?.id || source?.name, index),
-      commitAt: sourceDir ? observeGitCommitIso(sourceDir) : null,
+      commitAt: normalizeGitObservation(commitProbe),
+      commitProbeFailed: commitProbe === UNAVAILABLE,
       modifiedAt: sourceDir ? observeMtimeIso(sourceDir) : null,
       syncedAt: synced ? synced.toISOString() : null,
     };
@@ -988,6 +994,7 @@ function observeListedSource(source, index) {
     return {
       id: displaySourceId(source?.id || source?.name, index),
       commitAt: null,
+      commitProbeFailed: false,
       modifiedAt: null,
       syncedAt: null,
     };
@@ -1010,7 +1017,12 @@ function formatSourceAgeClause(observation, now) {
   const modified = parseTimestamp(observation?.modifiedAt);
   const source = commit || modified;
   if (!source) return null;
-  return `${commit ? 'last commit' : 'last modified'} ${calendarDayUtc(source)} (${formatAgePhrase(source, now)} ago)`;
+  // Mirror the single-source basis: a git probe that failed must say so rather
+  // than present directory mtime as a plain "last modified" reading.
+  const basis = commit
+    ? 'last commit'
+    : (observation?.commitProbeFailed ? 'last modified (commit age unavailable)' : 'last modified');
+  return `${basis} ${calendarDayUtc(source)} (${formatAgePhrase(source, now)} ago)`;
 }
 
 function formatSyncDayClause(syncedAt, now) {

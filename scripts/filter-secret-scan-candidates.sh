@@ -1,49 +1,58 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Known-safe shapes the secret pattern matches but which cannot carry a credential.
-# Each rule must be narrow enough that a real secret still trips the scan: these
-# filter on the *shape of the value*, never on the file it appears in, because a
-# path-based exemption is how a scanner quietly stops scanning.
+# Filters the secret scan's candidate lines down to ones that could actually carry
+# a credential. Two invariants govern every rule here:
+#
+#   1. Rules match on the *shape of the value*, never on the file it appears in.
+#      A path-based exemption is how a scanner quietly stops scanning.
+#   2. A safe value only excuses the line when it is the value of the very key that
+#      tripped the scan. Matching a safe shape anywhere on the line is not enough:
+#      `api_key: "sk-live-..." || process.env.KEY` ends in an env reference and
+#      `api_key: "sk-live-...", mode: 'test'` ends in a placeholder, yet both carry
+#      a live credential. Anchoring each rule to the secret-shaped key closes that.
+#
+# Backstop for both: a line holding a credential-shaped literal is never filtered,
+# whatever else it contains.
+#
+# Exit status is the signal CI reads -- 0 means at least one candidate survived and
+# the scan must fail. It is decided explicitly below rather than inherited from a
+# pipeline, because the final stage exits 0 whether or not it printed.
 
-# 1. GitHub Actions secret references: KEY: ${{ secrets.NAME }} -- the value is a
-#    reference resolved at runtime, never a literal.
-safe_github_secret_reference='^([^:]+:[0-9]+:|\+)[[:space:]]*[A-Za-z0-9_-]+[[:space:]]*:[[:space:]]*\$\{\{[[:space:]]*secrets\.[A-Za-z_][A-Za-z0-9_]*[[:space:]]*\}\}[[:space:]]*$'
-
-# 2. Environment-variable indirection: the value is process.env.NAME (or a bracket
-#    lookup), i.e. the line names where a secret comes from without containing one.
-safe_env_indirection='(process\.env(\.[A-Za-z_][A-Za-z0-9_]*|\[[^]]+\])|\$\{?[A-Z_][A-Z0-9_]*\}?)[[:space:]]*,?[[:space:]]*$'
-
-# 3. Obvious test placeholders: a short quoted literal that is self-evidently not a
-#    credential. Deliberately an explicit allowlist of placeholder words rather than
-#    a length or entropy heuristic -- 'test-key' is safe, an actual key is not, and
-#    only an exact-match list can tell them apart reliably.
-safe_test_placeholder="[:=][[:space:]]*['\"](test|test-key|test-secret|dummy|placeholder|example|fake|redacted|xxx+|changeme|not-a-real-[a-z-]+)['\"][[:space:]]*[,;)]?[[:space:]]*\$"
-
-# The exit status is the signal the CI job reads: 0 means at least one candidate
-# survived filtering and the scan should fail. Because the final stage is awk (which
-# exits 0 whether or not it printed), the status is decided here rather than
-# inherited from the pipeline.
 survivors="$(
-  grep -Eiv "$safe_github_secret_reference" \
-  | grep -Eiv "$safe_env_indirection" \
-  | grep -Eiv "$safe_test_placeholder" \
-  | awk '
-    # 4. Empty string literals: KEY: "" carries nothing by construction. Unlike
-    #    rules 1-3 this is judged across the whole line, because these appear
-    #    mid-line in object literals ({ A_API_KEY: "", B_TOKEN: "" }). It drops a
-    #    line only when it holds such a pair AND no non-empty one, so a single real
-    #    value anywhere on the line still reports. The credential-shaped literals
-    #    below are never filtered by this rule whatever else the line contains.
+  awk '
+    BEGIN {
+      # A key whose name alone trips the scan.
+      key = "(api[_-]?key|private[_-]?key|access[_-]?token|bearer[_-]?token|password|secret[_-]?key|auth[_-]?token)[[:space:]]*[:=][[:space:]]*"
+
+      # Credential-shaped literals. Bracketed single characters (ghp[_], sk[-]) are
+      # regex-identical to the plain text but stop this file from matching the scan
+      # pattern it feeds. Do not "simplify" them back -- the scanner reads its own
+      # source.
+      credential = "(ghp[_]|sk[-][a-z0-9]{20,}|xox[baprs][-][a-z0-9-]{10,}|begin[ a-z]*key)"
+
+      # 1. GitHub Actions secret reference: resolved at runtime, never a literal.
+      gh_ref = "^([^:]+:[0-9]+:|\\+)[[:space:]]*[a-z0-9_-]+[[:space:]]*:[[:space:]]*\\$\\{\\{[[:space:]]*secrets\\.[a-z_][a-z0-9_]*[[:space:]]*\\}\\}[[:space:]]*$"
+
+      # 2. Environment indirection: the key names where a secret comes from.
+      env_ref = key "(process\\.env(\\.[a-z_][a-z0-9_]*|\\[[^]]+\\])|\\$\\{?[a-z_][a-z0-9_]*\\}?)[[:space:]]*,?[[:space:]]*$"
+
+      # 3. Explicit placeholder allowlist. An exact-match list, not a length or
+      #    entropy heuristic -- only that can tell 'test-key' from a real key.
+      placeholder = key "[\047\"](test|test-key|test-secret|dummy|placeholder|example|fake|redacted|xxx+|changeme|not-a-real-[a-z-]+)[\047\"][[:space:]]*[,;)]?[[:space:]]*$"
+
+      # 4. Empty literals carry nothing. Judged across the whole line, because these
+      #    appear mid-line in object literals ({ A_API_KEY: "", B_TOKEN: "" }); the
+      #    line is dropped only when no non-empty secret assignment appears anywhere.
+      nonempty = key "([\047][^\047]|\"[^\"]|[^\047\"[:space:]])"
+    }
     {
-      line = tolower($0)
-      key_assignment = "(api[_-]?key|private[_-]?key|access[_-]?token|bearer[_-]?token|password|secret[_-]?key|auth[_-]?token)[[:space:]]*[:=]"
-      nonempty = key_assignment "[[:space:]]*(\047[^\047]|\"[^\"]|[^\047\"[:space:]])"
-      # Bracketed single characters below (ghp[_], sk[-]) are regex-identical to the
-      # plain literals but keep this file from matching the scan pattern it feeds.
-      # Do not "simplify" them back -- the scanner reads its own source.
-      credential_literal = "(ghp[_]|sk[-]|xox[baprs][-]|begin[^\"]*key)"
-      if (line ~ key_assignment && line !~ nonempty && line !~ credential_literal) next
+      low = tolower($0)
+      if (low ~ credential) { print; next }
+      if (low ~ gh_ref)      next
+      if (low ~ env_ref)     next
+      if (low ~ placeholder) next
+      if (low ~ key && low !~ nonempty) next
       print
     }
   ' || true

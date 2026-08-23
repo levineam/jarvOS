@@ -215,7 +215,18 @@ function upsertClaudeCodeHook(settings, bridge) {
   } else {
     upsert('SessionStart', hookScript, commandEntry(hookScript, 'session-start', 'startup|resume|compact'));
     upsert('UserPromptSubmit', turnHookScript, commandEntry(turnHookScript, 'session-turn'));
-    upsert('PreCompact', precompactHookScript, commandEntry(precompactHookScript, 'session-precompact'));
+    // PreCompact is registered only on an unmanaged install. The stewardship
+    // dispatcher's v1 ABI is ['harness-launch','session-start','session-turn',
+    // 'bridge','provenance-probe'] and it exits 1 with empty stdout on anything
+    // else, so there is no action to route compaction through; pointing the hook
+    // at the staged script instead is not an option either, because a managed
+    // settings.json must only reference the stable bundle, which does not carry
+    // this hook. Registering nothing is the honest state: on a managed install the
+    // harness invokes the dispatcher, not the hook, so the hook's fail-open
+    // guarantee would not protect a block/allow channel. Delivering managed
+    // PreCompact needs the dispatcher to learn the action first.
+    if (!dispatcher) upsert('PreCompact', precompactHookScript, commandEntry(precompactHookScript, 'session-precompact'));
+    else upsert('PreCompact', precompactHookScript, null);
   }
   next.hooks = hooks;
   return next;

@@ -1131,16 +1131,23 @@ test('Claude setup merges both jarvOS lifecycle hooks without replacing user hoo
     assert.equal(first, second);
     assert.equal(parsed.hooks.SessionStart.length, 2);
     assert.equal(parsed.hooks.UserPromptSubmit.length, 2);
-    assert.equal(parsed.hooks.PreCompact.length, 1);
+    // A managed install registers no PreCompact hook: the dispatcher's v1 action
+    // ABI has no compaction action and rejects unknown ones with exit 1 and empty
+    // stdout, which on a block/allow channel would block compaction outright.
+    assert.equal(parsed.hooks.PreCompact, undefined);
     assert.equal(parsed.hooks.SessionStart[1].matcher, 'startup|resume|compact');
-    assert.equal(count(second, /jarvos-stewardship-dispatcher/g), 3);
+    assert.equal(count(second, /jarvos-stewardship-dispatcher/g), 2);
     assert.doesNotMatch(second, /jarvos-(?:session-(?:start|turn)|precompact)-hook\.js/);
     assert.match(second, /user-session-start/);
     assert.match(second, /user-prompt-submit/);
     assert.match(second, new RegExp(stable.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
     assert.match(second, /--harness claude --action session-start/);
     assert.match(second, /--harness claude --action session-turn/);
-    assert.match(second, /--harness claude --action session-precompact/);
+    // No compaction action may reach the dispatcher -- it is not on the v1 ABI.
+    assert.doesNotMatch(second, /--action session-precompact/);
+    for (const action of second.matchAll(/--action ([a-z-]+)/g)) {
+      assert.ok(STEWARDSHIP_ACTIONS.includes(action[1]), `managed hook uses off-ABI action: ${action[1]}`);
+    }
     assert.doesNotMatch(second, new RegExp(staged.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
     assert.doesNotMatch(second, new RegExp(`${ROOT.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}/runtimes/claude/jarvos-session`));
     assert.equal(fs.readdirSync(temp).filter((name) => name.startsWith('settings.json.bak-jarvos-')).length, 1);

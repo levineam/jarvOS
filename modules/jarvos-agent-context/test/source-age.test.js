@@ -204,6 +204,34 @@ test('recall labels both GBrain sources when their ages differ', () => {
   });
 });
 
+test('recall marks a listed source whose git probe fails, never as last modified', () => {
+  withTempDir((tmp) => {
+    const brainDir = path.join(tmp, 'brain');
+    initBrainRepo(brainDir, STALE_AT);
+    // A git toplevel with no commits: `git log -1` exits non-zero, which is the
+    // same observation a timeout produces. Sync bumps mtime, so without the
+    // failure flag this source would read as freshly "last modified" while its
+    // real commit age is unknown -- the provenance lie the single-source path
+    // already closed.
+    const probeFails = path.join(tmp, 'probe-fails');
+    fs.mkdirSync(probeFails, { recursive: true });
+    fs.writeFileSync(path.join(probeFails, 'note.md'), 'live\n');
+    spawnSync('git', ['-C', probeFails, 'init', '--quiet'], { stdio: 'ignore' });
+    setDirMtime(probeFails, '2026-08-21T11:00:00.000Z');
+    const result = recall(recallOptions(recallConfig(brainDir), {
+      brainSources: [
+        { id: 'default', local_path: brainDir },
+        { id: 'vault', local_path: probeFails },
+      ],
+    }));
+    assert.match(result.markdown, /vault last modified \(commit age unavailable\) 2026-08-21 \(1h ago\)/);
+    // The bare wording is what a successful probe produces; it must not appear
+    // for a source whose commit age was never actually read.
+    assert.doesNotMatch(result.markdown, /vault last modified 2026-08-21/);
+    assert.equal(result.markdown.includes(tmp), false);
+  });
+});
+
 test('recall keeps other sources when one GBrain source age is unknown', () => {
   withTempDir((tmp) => {
     const brainDir = path.join(tmp, 'brain');
