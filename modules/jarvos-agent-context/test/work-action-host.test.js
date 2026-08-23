@@ -129,3 +129,70 @@ test('Claude and Codex setup scripts pass optional work-action env and never req
   assert.match(claude, /claude mcp add --scope user "\$\{MCP_ENV_ARGS\[@\]\}" jarvos -- node/);
   assert.match(codex, /codex mcp add "\$\{MCP_ENV_ARGS\[@\]\}" jarvos -- node/);
 });
+
+test('the documented host binding actually starts from a workspace copy', async () => {
+  // The published setup is: copy examples/work-action-host-service.js into the
+  // Projects workspaceRoot as an owner-only file and point the env var at it.
+  // That flow could not bind while the example vetted its own coding module the
+  // way it vets caller-supplied ones -- the module ships inside the install tree,
+  // which is neither under workspaceRoot nor owner-only, so every call refused.
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-documented-host-'));
+  try {
+    const workspaceRoot = path.join(temp, 'workspace');
+    fs.mkdirSync(workspaceRoot, { recursive: true });
+    fs.chmodSync(workspaceRoot, 0o700);
+    const hostModule = path.join(workspaceRoot, 'work-action-host-service.js');
+    fs.copyFileSync(path.join(REPO_ROOT, 'examples', 'work-action-host-service.js'), hostModule);
+    fs.chmodSync(hostModule, 0o600);
+    const configPath = path.join(workspaceRoot, 'projects.json');
+    writeOwnerFile(configPath, JSON.stringify({ workspaceRoot, beadsWorkspace: workspaceRoot }));
+
+    await withWorkActionEnv({
+      JARVOS_WORK_ACTION_SERVICE_MODULE: hostModule,
+      JARVOS_PROJECTS_CONTEXT_CONFIG: configPath,
+    }, () => {
+      const { error } = loadHostWorkActionService();
+      // Standing up a real Beads workspace is out of scope for a unit test, so
+      // this pins the part that regressed: the documented copy gets past module
+      // resolution. Any remaining failure must name a downstream cause, never the
+      // containment refusal -- that message sent operators to check file modes
+      // that were never the problem.
+      assert.notEqual(error, WORK_ACTION_HOST_REFUSED);
+      if (error !== null) {
+        assert.doesNotMatch(error, /contained under/);
+        assert.doesNotMatch(error, /owner-only regular file/);
+        assert.match(error, /failed to load/);
+      }
+    });
+  } finally {
+    fs.rmSync(temp, { recursive: true, force: true });
+  }
+});
+
+test('a host module that fails to load is not reported as a containment refusal', async () => {
+  // The module passed containment; saying otherwise names the wrong cause and
+  // sends the operator to check file modes that were never the problem.
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-host-load-error-'));
+  try {
+    const workspaceRoot = path.join(temp, 'workspace');
+    fs.mkdirSync(workspaceRoot, { recursive: true });
+    fs.chmodSync(workspaceRoot, 0o700);
+    const hostModule = path.join(workspaceRoot, 'broken-host.js');
+    writeOwnerFile(hostModule, "throw new Error('beads tracker unreachable');\n");
+    const configPath = path.join(workspaceRoot, 'projects.json');
+    writeOwnerFile(configPath, JSON.stringify({ workspaceRoot, beadsWorkspace: workspaceRoot }));
+
+    await withWorkActionEnv({
+      JARVOS_WORK_ACTION_SERVICE_MODULE: hostModule,
+      JARVOS_PROJECTS_CONTEXT_CONFIG: configPath,
+    }, () => {
+      const { service, error } = loadHostWorkActionService();
+      assert.equal(service, null);
+      assert.notEqual(error, WORK_ACTION_HOST_REFUSED);
+      assert.match(error, /failed to load/);
+      assert.match(error, /beads tracker unreachable/);
+    });
+  } finally {
+    fs.rmSync(temp, { recursive: true, force: true });
+  }
+});

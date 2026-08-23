@@ -343,15 +343,19 @@ function loadHostWorkActionService() {
   if (!trusted) {
     return { service: null, error: WORK_ACTION_HOST_REFUSED };
   }
+  // Past this point the module passed the containment check, so reporting the
+  // containment message would name the wrong cause -- the failure is inside the
+  // host module, and the operator needs to see which.
   try {
     const loaded = require(trusted);
     const service = typeof loaded === 'function' ? loaded() : (loaded?.service || loaded);
     if (!service || typeof service !== 'object') {
-      return { service: null, error: WORK_ACTION_HOST_REFUSED };
+      return { service: null, error: 'Todo work-action host module loaded but exported no service object.' };
     }
     return { service, error: null };
-  } catch {
-    return { service: null, error: WORK_ACTION_HOST_REFUSED };
+  } catch (error) {
+    const detail = error && error.message ? error.message : 'unknown error';
+    return { service: null, error: `Todo work-action host module failed to load: ${detail}` };
   }
 }
 

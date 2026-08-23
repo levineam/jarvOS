@@ -15,9 +15,15 @@
 const fs = require('node:fs');
 const path = require('node:path');
 
+// Where the coding module came from decides how far it has to be vetted. A value
+// read from the environment is caller input and gets the full containment check;
+// a path derived from the MCP that loaded this file is part of the same install
+// and is trusted by provenance instead. Checking both against workspaceRoot was
+// wrong: the install tree is a different tree, and its files are mode 644 by
+// design, so the documented setup could never bind.
 function resolveCodingModule() {
   const explicit = process.env.JARVOS_CODING_MODULE;
-  if (typeof explicit === 'string' && explicit.trim()) return explicit.trim();
+  if (typeof explicit === 'string' && explicit.trim()) return { specifier: explicit.trim(), source: 'configured' };
   const parentFile = module.parent && module.parent.filename;
   if (typeof parentFile === 'string') {
     const fromMcp = [
@@ -26,13 +32,25 @@ function resolveCodingModule() {
     ];
     for (const candidate of fromMcp) {
       try {
-        if (fs.statSync(candidate).isFile()) return candidate;
+        if (fs.statSync(candidate).isFile()) return { specifier: candidate, source: 'install' };
       } catch {
         // Keep looking; the packaged name is a fallback.
       }
     }
   }
-  return '@jarvos/coding';
+  return { specifier: '@jarvos/coding', source: 'package' };
+}
+
+// An install-relative module still may not be a symlink into somewhere else, but
+// it is not required to sit under workspaceRoot or to be owner-only.
+function installModulePath(candidate) {
+  try {
+    if (fs.lstatSync(candidate).isSymbolicLink()) return null;
+    const real = fs.realpathSync(candidate);
+    return fs.statSync(real).isFile() ? real : null;
+  } catch {
+    return null;
+  }
 }
 
 function absolutePath(value) {
@@ -94,9 +112,16 @@ function trustedModulePath(candidate, workspaceRoot) {
 
 function createHostWorkActionService() {
   const host = readHostOptions();
-  const codingPath = trustedModulePath(resolveCodingModule(), host.workspaceRoot);
-  if (!codingPath) throw new Error('jarvos-coding module must be an owner-only regular file contained under workspaceRoot');
-  const coding = require(codingPath);
+  const resolved = resolveCodingModule();
+  let codingRequest = resolved.specifier;
+  if (resolved.source === 'configured') {
+    codingRequest = trustedModulePath(resolved.specifier, host.workspaceRoot);
+    if (!codingRequest) throw new Error('JARVOS_CODING_MODULE must be an owner-only regular file contained under workspaceRoot');
+  } else if (resolved.source === 'install') {
+    codingRequest = installModulePath(resolved.specifier);
+    if (!codingRequest) throw new Error('the jarvOS coding module beside this MCP install is not a regular file');
+  }
+  const coding = require(codingRequest);
   const tracker = coding.createLiveBeadsTracker({
     workspaceRoot: host.beadsWorkspace,
     approvedRoots: [host.workspaceRoot, host.beadsWorkspace],
