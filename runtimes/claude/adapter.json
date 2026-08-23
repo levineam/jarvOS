@@ -5,32 +5,160 @@
   "skillProjection": {
     "version": "jarvos-skill-projection-adapter/v1",
     "managedRoot": "~/.claude/skills",
-    "orderedScopes": ["project", "user", "managed"],
-    "scopeRoots": { "project": "./.claude/skills", "user": "~/.claude/skills" },
+    "orderedScopes": [
+      "project",
+      "user",
+      "managed"
+    ],
+    "scopeRoots": {
+      "project": "./.claude/skills",
+      "user": "~/.claude/skills"
+    },
     "renderer": "raw-skill-bundle",
     "verificationTier": "interactive-smoke",
-    "bundleAllowlist": ["SKILL.md", "scripts/**", "assets/**", "references/**", "templates/**"],
-    "alias": { "pattern": "^[a-z][a-z0-9-]{0,63}$", "maxLength": 64, "reservedNames": [] },
-    "probeIsolation": { "mode": "interactive-secret-free-smoke", "unattended": false }
+    "bundleAllowlist": [
+      "SKILL.md",
+      "scripts/**",
+      "assets/**",
+      "references/**",
+      "templates/**"
+    ],
+    "alias": {
+      "pattern": "^[a-z][a-z0-9-]{0,63}$",
+      "maxLength": 64,
+      "reservedNames": []
+    },
+    "probeIsolation": {
+      "mode": "interactive-secret-free-smoke",
+      "unattended": false
+    }
   },
   "operatorNotification": {
     "version": "jarvos-operator-notification-adapter/v1",
     "contract": "jarvos-operator-notification/v1",
-    "delivery": { "status": "not-configured", "reason": "Local owner configuration chooses a delivery surface; this public adapter does not configure one." }
+    "delivery": {
+      "status": "not-configured",
+      "reason": "Local owner configuration chooses a delivery surface; this public adapter does not configure one."
+    }
   },
   "capabilityDescriptor": {
-    "version": "jarvos-runtime-capability-descriptor.v1", "harness": "claude",
+    "version": "jarvos-runtime-capability-descriptor.v1",
+    "harness": "claude",
     "capabilities": {
-      "context": { "currentWork": { "status": "supported", "transport": "jarvos MCP", "evidence": "sharedAgentContext required tools" }, "recall": { "status": "supported", "transport": "jarvos MCP", "evidence": "sharedAgentContext required tools" }, "startupHydration": { "status": "supported", "transport": "Claude Code SessionStart hook", "evidence": "jarvos-session-start-hook.js" } },
-      "notes": { "create": { "status": "supported", "transport": "jarvos_create_note MCP tool", "evidence": "sharedAgentContext required tools" }, "read": { "status": "unsupported", "reason": "No public Claude note-read bridge is declared." }, "update": { "status": "unsupported", "reason": "No public Claude note-update bridge is declared." }, "journalLink": { "status": "unsupported", "reason": "No public Claude journal-link bridge is declared." } },
-      "skills": { "discover": { "status": "manual", "transport": "Claude skill directory", "reason": "Claude owns skill discovery." }, "invoke": { "status": "manual", "transport": "Claude skill directory", "reason": "Claude owns skill invocation." } },
-      "toolAuthorization": { "declare": { "status": "unsupported", "reason": "No public Claude authorization contract is installed." }, "enforce": { "status": "unsupported", "reason": "Claude owns tool authorization." } },
-      "egress": { "declare": { "status": "unsupported", "reason": "No public Claude egress declaration is installed." }, "enforce": { "status": "unsupported", "reason": "Claude owns egress enforcement." } },
-      "session": { "startupHook": { "status": "supported", "transport": "Claude Code SessionStart hook", "evidence": "jarvos-session-start-hook.js" }, "handoff": { "status": "unsupported", "reason": "No public Claude handoff adapter is declared." } },
-      "inboundDispatch": { "receive": { "status": "unsupported", "reason": "No public Claude inbound dispatch bridge is declared." }, "validate": { "status": "unsupported", "reason": "No public Claude inbound dispatch bridge is declared." } },
-      "lifecycle": { "receipt": { "status": "unsupported", "reason": "No public Claude lifecycle receipt bridge is declared." } },
-      "scheduledWork": { "participate": { "status": "unsupported", "reason": "Scheduled work is not part of this public adapter." } },
-      "codingEntrypoint": { "invoke": { "status": "supported", "transport": "Claude Code CLI", "evidence": "public Claude Code adapter" } }
+      "context": {
+        "currentWork": {
+          "status": "supported",
+          "transport": "jarvos MCP",
+          "evidence": "sharedAgentContext required tools"
+        },
+        "recall": {
+          "status": "supported",
+          "transport": "jarvos MCP",
+          "evidence": "sharedAgentContext required tools"
+        },
+        "startupHydration": {
+          "status": "supported",
+          "transport": "Claude Code SessionStart hook",
+          "evidence": "jarvos-session-start-hook.js"
+        }
+      },
+      "notes": {
+        "create": {
+          "status": "supported",
+          "transport": "jarvos_create_note MCP tool",
+          "evidence": "sharedAgentContext required tools"
+        },
+        "read": {
+          "status": "unsupported",
+          "reason": "No public Claude note-read bridge is declared."
+        },
+        "update": {
+          "status": "unsupported",
+          "reason": "No public Claude note-update bridge is declared."
+        },
+        "journalLink": {
+          "status": "unsupported",
+          "reason": "No public Claude journal-link bridge is declared."
+        }
+      },
+      "skills": {
+        "discover": {
+          "status": "manual",
+          "transport": "Claude skill directory",
+          "reason": "Claude owns skill discovery."
+        },
+        "invoke": {
+          "status": "manual",
+          "transport": "Claude skill directory",
+          "reason": "Claude owns skill invocation."
+        }
+      },
+      "toolAuthorization": {
+        "declare": {
+          "status": "unsupported",
+          "reason": "No public Claude authorization contract is installed."
+        },
+        "enforce": {
+          "status": "unsupported",
+          "reason": "Claude owns tool authorization."
+        }
+      },
+      "egress": {
+        "declare": {
+          "status": "unsupported",
+          "reason": "No public Claude egress declaration is installed."
+        },
+        "enforce": {
+          "status": "unsupported",
+          "reason": "Claude owns egress enforcement."
+        }
+      },
+      "session": {
+        "startupHook": {
+          "status": "supported",
+          "transport": "Claude Code SessionStart hook",
+          "evidence": "jarvos-session-start-hook.js"
+        },
+        "handoff": {
+          "status": "unsupported",
+          "reason": "No public Claude handoff adapter is declared."
+        },
+        "preCompactHook": {
+          "status": "supported",
+          "transport": "Claude Code PreCompact hook",
+          "evidence": "jarvos-precompact-hook.js",
+          "reason": "Registered on unmanaged installs. The stewardship dispatcher v1 action ABI carries no compaction action, so a managed install registers no PreCompact hook rather than route a block/allow channel through an action the dispatcher rejects."
+        }
+      },
+      "inboundDispatch": {
+        "receive": {
+          "status": "unsupported",
+          "reason": "No public Claude inbound dispatch bridge is declared."
+        },
+        "validate": {
+          "status": "unsupported",
+          "reason": "No public Claude inbound dispatch bridge is declared."
+        }
+      },
+      "lifecycle": {
+        "receipt": {
+          "status": "unsupported",
+          "reason": "No public Claude lifecycle receipt bridge is declared."
+        }
+      },
+      "scheduledWork": {
+        "participate": {
+          "status": "unsupported",
+          "reason": "Scheduled work is not part of this public adapter."
+        }
+      },
+      "codingEntrypoint": {
+        "invoke": {
+          "status": "supported",
+          "transport": "Claude Code CLI",
+          "evidence": "public Claude Code adapter"
+        }
+      }
     }
   },
   "sharedAgentContext": {
@@ -54,8 +182,15 @@
       "hydration": {
         "mode": "hook",
         "event": "SessionStart",
+        "matcher": "startup|resume|compact",
         "script": "jarvos-session-start-hook.js",
-        "defaultMaxChars": 9500
+        "defaultMaxChars": 9500,
+        "reorientMaxChars": 4000
+      },
+      "precompact": {
+        "mode": "hook",
+        "event": "PreCompact",
+        "script": "jarvos-precompact-hook.js"
       },
       "bootstrap": {
         "claudeMd": {
@@ -96,8 +231,14 @@
       "requiresSelectedTuple": true
     },
     "liveProof": {
-      "qualifyingEventClasses": ["session", "turn"],
-      "producerEvents": { "session": "SessionStart", "turn": "UserPromptSubmit" },
+      "qualifyingEventClasses": [
+        "session",
+        "turn"
+      ],
+      "producerEvents": {
+        "session": "SessionStart",
+        "turn": "UserPromptSubmit"
+      },
       "freshnessSeconds": 900,
       "forwardSkewSeconds": 30
     },
@@ -129,11 +270,31 @@
       "harness": "claude",
       "rootEnvironment": "JARVOS_STEWARDSHIP_STABLE_ROOT",
       "dispatcher": "jarvos-stewardship-dispatcher",
-      "entrypoint": { "kind": "dispatcher", "path": "jarvos-stewardship-dispatcher" },
-      "actions": ["harness-launch", "session-start", "session-turn", "bridge", "provenance-probe"],
-      "selectedRuntimeAssets": ["runtimes/claude/jarvos-session-start-hook.js", "runtimes/claude/jarvos-session-turn-hook.js"],
-      "installedConfig": { "inspection": "stable-entrypoint-only", "prepare": "reversible", "rollback": "exact-owned-state" },
-      "provenance": { "action": "provenance-probe", "sideEffectFree": true }
+      "entrypoint": {
+        "kind": "dispatcher",
+        "path": "jarvos-stewardship-dispatcher"
+      },
+      "actions": [
+        "harness-launch",
+        "session-start",
+        "session-turn",
+        "bridge",
+        "provenance-probe"
+      ],
+      "selectedRuntimeAssets": [
+        "runtimes/claude/jarvos-session-start-hook.js",
+        "runtimes/claude/jarvos-session-turn-hook.js",
+        "runtimes/claude/jarvos-precompact-hook.js"
+      ],
+      "installedConfig": {
+        "inspection": "stable-entrypoint-only",
+        "prepare": "reversible",
+        "rollback": "exact-owned-state"
+      },
+      "provenance": {
+        "action": "provenance-probe",
+        "sideEffectFree": true
+      }
     },
     "bridge": {
       "environment": "JARVOS_STEWARDSHIP_BRIDGE_COMMAND",
@@ -187,6 +348,7 @@
   "verification": [
     "claude mcp get jarvos",
     "node runtimes/claude/jarvos-session-start-hook.js",
+    "node runtimes/claude/jarvos-precompact-hook.js",
     "node modules/jarvos-runtime-kit/scripts/jarvos-runtime-kit.js check claude"
   ]
 }

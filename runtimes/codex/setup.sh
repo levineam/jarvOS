@@ -145,6 +145,28 @@ readTrustedCredentialFile(process.argv[2]);
   )
 fi
 
+# Optional Todo work-action host bindings. Unset keeps public/minimal behavior.
+# When set, persist the non-secret absolute paths on the MCP child. Trust
+# checks stay in the MCP server (fail closed on an untrusted path).
+append_optional_mcp_env() {
+  local name="$1"
+  local value="${2:-}"
+  if [ -z "$value" ]; then
+    return 0
+  fi
+  case "$value" in
+    /*) ;;
+    *)
+      echo "${name} must be an absolute path when set" >&2
+      exit 1
+      ;;
+  esac
+  MCP_ENV_ARGS+=(--env "${name}=${value}")
+}
+
+append_optional_mcp_env JARVOS_WORK_ACTION_SERVICE_MODULE "${JARVOS_WORK_ACTION_SERVICE_MODULE:-}"
+append_optional_mcp_env JARVOS_PROJECTS_CONTEXT_CONFIG "${JARVOS_PROJECTS_CONTEXT_CONFIG:-}"
+
 if [ "${JARVOS_STEWARDSHIP_ONLY:-0}" != "1" ]; then
   if codex mcp get jarvos >/dev/null 2>&1; then
     codex mcp remove jarvos >/dev/null
@@ -152,7 +174,7 @@ if [ "${JARVOS_STEWARDSHIP_ONLY:-0}" != "1" ]; then
 
   if [ ${#MCP_ENV_ARGS[@]} -gt 0 ]; then
     codex mcp add "${MCP_ENV_ARGS[@]}" jarvos -- node "$MCP_SERVER"
-    echo "Registered jarvOS MCP server for Codex with control-plane host bindings: $MCP_SERVER"
+    echo "Registered jarvOS MCP server for Codex with host bindings: $MCP_SERVER"
   else
     codex mcp add jarvos -- node "$MCP_SERVER"
     echo "Registered jarvOS MCP server for Codex: $MCP_SERVER"

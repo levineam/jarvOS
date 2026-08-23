@@ -8,6 +8,7 @@ const {
   createNote,
   controlPlane,
   currentWork,
+  renderCurrentWorkUnavailable,
   ensureTodayJournal,
   healthTodayJournal,
   hydrate,
@@ -323,24 +324,44 @@ const TOOLS = [
   },
 ];
 
+const WORK_ACTION_HOST_UNAVAILABLE = 'Todo work-action host binding is unavailable. Set JARVOS_WORK_ACTION_SERVICE_MODULE to an absolute owner-only host service module and JARVOS_PROJECTS_CONTEXT_CONFIG to an absolute trusted Projects context config whose workspaceRoot contains that module.';
+const WORK_ACTION_HOST_REFUSED = 'Todo work-action host binding was refused. JARVOS_WORK_ACTION_SERVICE_MODULE must be an owner-only regular file contained under the workspaceRoot selected by JARVOS_PROJECTS_CONTEXT_CONFIG.';
+
+function envBinding(name, env = process.env) {
+  const value = env[name];
+  return typeof value === 'string' && value.length > 0 ? value : null;
+}
+
 function loadHostWorkActionService() {
-  const modulePath = process.env.JARVOS_WORK_ACTION_SERVICE_MODULE;
+  const modulePath = envBinding('JARVOS_WORK_ACTION_SERVICE_MODULE');
+  const configPath = envBinding('JARVOS_PROJECTS_CONTEXT_CONFIG');
+  if (!modulePath || !configPath) {
+    return { service: null, error: WORK_ACTION_HOST_UNAVAILABLE };
+  }
   const selectedRoot = selectedWorkspaceRoot();
-  if (!selectedRoot) return null;
-  const trusted = trustedFile(modulePath, selectedRoot);
-  if (!trusted) return null;
+  const trusted = selectedRoot ? trustedFile(modulePath, selectedRoot) : null;
+  if (!trusted) {
+    return { service: null, error: WORK_ACTION_HOST_REFUSED };
+  }
+  // Past this point the module passed the containment check, so reporting the
+  // containment message would name the wrong cause -- the failure is inside the
+  // host module, and the operator needs to see which.
   try {
     const loaded = require(trusted);
     const service = typeof loaded === 'function' ? loaded() : (loaded?.service || loaded);
-    return service && typeof service === 'object' ? service : null;
-  } catch {
-    return null;
+    if (!service || typeof service !== 'object') {
+      return { service: null, error: 'Todo work-action host module loaded but exported no service object.' };
+    }
+    return { service, error: null };
+  } catch (error) {
+    const detail = error && error.message ? error.message : 'unknown error';
+    return { service: null, error: `Todo work-action host module failed to load: ${detail}` };
   }
 }
 
 async function todoAction(name, args) {
-  const service = loadHostWorkActionService();
-  if (!service) return textResult('Todo work-action host binding is unavailable', true);
+  const { service, error } = loadHostWorkActionService();
+  if (!service) return textResult(error, true);
   // Deliberately project only ordinary request fields. Authorization, human
   // identity, and verification receipts are host-bound service state, never
   // caller-controlled MCP arguments.
@@ -605,8 +626,15 @@ async function callTool(name, args = {}) {
     return textResult('unsupported shared-skill operation', true);
   }
   if (name === 'jarvos_current_work') {
-    const result = await currentWork(args);
-    return textResult(result.markdown, !result.ok);
+    try {
+      const result = await currentWork(args);
+      if (!result || typeof result.markdown !== 'string' || !result.markdown.trim()) {
+        return textResult(renderCurrentWorkUnavailable(), true);
+      }
+      return textResult(result.markdown, !result.ok);
+    } catch {
+      return textResult(renderCurrentWorkUnavailable(), true);
+    }
   }
   if (name === 'jarvos_projects_context') {
     const request = {
@@ -781,7 +809,9 @@ if (require.main === module) {
   });
 }
 
-module.exports = { TOOLS, callTool, handle, setMcpProjectsContextProvider, textResult };
+module.exports = { TOOLS, callTool, handle, setMcpProjectsContextProvider, textResult, loadHostWorkActionService };
+module.exports.WORK_ACTION_HOST_UNAVAILABLE = WORK_ACTION_HOST_UNAVAILABLE;
+module.exports.WORK_ACTION_HOST_REFUSED = WORK_ACTION_HOST_REFUSED;
 module.exports.BOOT_JARVOS_PROMPT_TEXT = BOOT_JARVOS_PROMPT_TEXT;
 module.exports.PROMPTS = PROMPTS;
 module.exports.promptResult = promptResult;

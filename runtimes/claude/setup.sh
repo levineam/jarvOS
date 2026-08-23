@@ -5,6 +5,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 MCP_SERVER="$ROOT/modules/jarvos-agent-context/scripts/jarvos-mcp.js"
 HOOK_SCRIPT="$ROOT/runtimes/claude/jarvos-session-start-hook.js"
 TURN_HOOK_SCRIPT="$ROOT/runtimes/claude/jarvos-session-turn-hook.js"
+PRECOMPACT_HOOK_SCRIPT="$ROOT/runtimes/claude/jarvos-precompact-hook.js"
 CLAUDE_MD_TEMPLATE="$ROOT/runtimes/claude/templates/CLAUDE.md.template"
 CLAUDE_SETTINGS="${CLAUDE_SETTINGS:-$HOME/.claude/settings.json}"
 CLAUDE_DESKTOP_CONFIG="${CLAUDE_DESKTOP_CONFIG:-$HOME/Library/Application Support/Claude/claude_desktop_config.json}"
@@ -14,6 +15,31 @@ STEWARDSHIP_CLAUDE_SESSION_MAP_ROOT="${JARVOS_STEWARDSHIP_CLAUDE_SESSION_MAP_ROO
 STEWARDSHIP_BRIDGE_PATH="${JARVOS_STEWARDSHIP_BRIDGE_PATH:-}"
 STEWARDSHIP_STABLE_ROOT="${JARVOS_STEWARDSHIP_STABLE_ROOT:-}"
 STEWARDSHIP_DISPATCHER=""
+# Optional Todo work-action host bindings. Unset keeps public/minimal behavior.
+# When set, persist the non-secret absolute paths on the MCP child. Trust
+# checks stay in the MCP server (fail closed on an untrusted path).
+WORK_ACTION_SERVICE_MODULE="${JARVOS_WORK_ACTION_SERVICE_MODULE:-}"
+PROJECTS_CONTEXT_CONFIG="${JARVOS_PROJECTS_CONTEXT_CONFIG:-}"
+MCP_ENV_ARGS=()
+
+append_optional_mcp_env() {
+  local name="$1"
+  local value="${2:-}"
+  if [ -z "$value" ]; then
+    return 0
+  fi
+  case "$value" in
+    /*) ;;
+    *)
+      echo "${name} must be an absolute path when set" >&2
+      exit 1
+      ;;
+  esac
+  MCP_ENV_ARGS+=(--env "${name}=${value}")
+}
+
+append_optional_mcp_env JARVOS_WORK_ACTION_SERVICE_MODULE "$WORK_ACTION_SERVICE_MODULE"
+append_optional_mcp_env JARVOS_PROJECTS_CONTEXT_CONFIG "$PROJECTS_CONTEXT_CONFIG"
 
 # The private installer materializes this owner-controlled bundle once. Native
 # configuration must refer to it, never to a selected immutable runtime stage.
@@ -54,6 +80,11 @@ if [ ! -f "$TURN_HOOK_SCRIPT" ]; then
   exit 1
 fi
 
+if [ ! -f "$PRECOMPACT_HOOK_SCRIPT" ]; then
+  echo "jarvOS Claude precompact hook script not found: $PRECOMPACT_HOOK_SCRIPT" >&2
+  exit 1
+fi
+
 warn_if_claude_mcp_shadowed() {
   local details
   details="$(claude mcp get jarvos 2>/dev/null || true)"
@@ -71,18 +102,22 @@ if [ "${JARVOS_SKIP_CLAUDE_CODE_MCP:-0}" = "1" ]; then
   echo "Skipping Claude Code MCP registration because JARVOS_SKIP_CLAUDE_CODE_MCP=1."
 elif command -v claude >/dev/null 2>&1; then
   claude mcp remove --scope user jarvos >/dev/null 2>&1 || true
-  claude mcp add --scope user jarvos -- node "$MCP_SERVER" >/dev/null
+  if [ ${#MCP_ENV_ARGS[@]} -gt 0 ]; then
+    claude mcp add --scope user "${MCP_ENV_ARGS[@]}" jarvos -- node "$MCP_SERVER" >/dev/null
+  else
+    claude mcp add --scope user jarvos -- node "$MCP_SERVER" >/dev/null
+  fi
   warn_if_claude_mcp_shadowed
   echo "Registered jarvOS MCP server for Claude Code: $MCP_SERVER"
 else
   echo "Claude Code CLI not found on PATH; skipping Claude Code MCP registration." >&2
 fi
 
-node - "$CLAUDE_SETTINGS" "$HOOK_SCRIPT" "$TURN_HOOK_SCRIPT" "$STEWARDSHIP_DISPATCHER" "$CLAUDE_DESKTOP_CONFIG" "$MCP_SERVER" "${JARVOS_STEWARDSHIP_ONLY:-0}" "${JARVOS_MANAGED_HARNESS_ROLLBACK:-0}" "$STEWARDSHIP_BRIDGE_COMMAND" "$STEWARDSHIP_CLAUDE_SESSION_MAP_ROOT" "$STEWARDSHIP_BRIDGE_PATH" "${JARVOS_STAGED_PUBLIC_RUNTIME_ROOT:-}" <<'NODE'
+node - "$CLAUDE_SETTINGS" "$HOOK_SCRIPT" "$TURN_HOOK_SCRIPT" "$PRECOMPACT_HOOK_SCRIPT" "$STEWARDSHIP_DISPATCHER" "$CLAUDE_DESKTOP_CONFIG" "$MCP_SERVER" "${JARVOS_STEWARDSHIP_ONLY:-0}" "${JARVOS_MANAGED_HARNESS_ROLLBACK:-0}" "$STEWARDSHIP_BRIDGE_COMMAND" "$STEWARDSHIP_CLAUDE_SESSION_MAP_ROOT" "$STEWARDSHIP_BRIDGE_PATH" "${JARVOS_STAGED_PUBLIC_RUNTIME_ROOT:-}" <<'NODE'
 const fs = require('fs');
 const path = require('path');
 
-const [settingsPath, hookScript, turnHookScript, dispatcher, desktopConfigPath, mcpServer, stewardshipOnly, rollback, bridgeCommand, claudeSessionMapRoot, bridgePath, stagedRoot] = process.argv.slice(2);
+const [settingsPath, hookScript, turnHookScript, precompactHookScript, dispatcher, desktopConfigPath, mcpServer, stewardshipOnly, rollback, bridgeCommand, claudeSessionMapRoot, bridgePath, stagedRoot] = process.argv.slice(2);
 
 function readJsonFile(filePath, fallback) {
   if (!fs.existsSync(filePath)) return fallback;
@@ -137,10 +172,11 @@ function upsertClaudeCodeHook(settings, bridge) {
   const next = { ...settings };
   const hooks = next.hooks && typeof next.hooks === 'object' && !Array.isArray(next.hooks) ? { ...next.hooks } : {};
 
-  const ownedPaths = [hookScript, turnHookScript, dispatcher].filter(Boolean);
+  const ownedPaths = [hookScript, turnHookScript, precompactHookScript, dispatcher].filter(Boolean);
   if (path.isAbsolute(stagedRoot || '')) {
     ownedPaths.push(path.join(stagedRoot, 'runtimes', 'claude', 'jarvos-session-start-hook.js'));
     ownedPaths.push(path.join(stagedRoot, 'runtimes', 'claude', 'jarvos-session-turn-hook.js'));
+    ownedPaths.push(path.join(stagedRoot, 'runtimes', 'claude', 'jarvos-precompact-hook.js'));
   }
   const escapeRegex = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const hasOwnedPath = (command, target) => new RegExp(`(?:^|[\\s'\"])${escapeRegex(target)}(?=$|[\\s'\"])`).test(command);
@@ -175,12 +211,34 @@ function upsertClaudeCodeHook(settings, bridge) {
   if (rollback === '1') {
     upsert('SessionStart', hookScript, null);
     upsert('UserPromptSubmit', turnHookScript, null);
+    upsert('PreCompact', precompactHookScript, null);
   } else {
-    upsert('SessionStart', hookScript, commandEntry(hookScript, 'session-start', 'startup'));
+    upsert('SessionStart', hookScript, commandEntry(hookScript, 'session-start', 'startup|resume|compact'));
     upsert('UserPromptSubmit', turnHookScript, commandEntry(turnHookScript, 'session-turn'));
+    // PreCompact is registered only on an unmanaged install. The stewardship
+    // dispatcher's v1 ABI is ['harness-launch','session-start','session-turn',
+    // 'bridge','provenance-probe'] and it exits 1 with empty stdout on anything
+    // else, so there is no action to route compaction through; pointing the hook
+    // at the staged script instead is not an option either, because a managed
+    // settings.json must only reference the stable bundle, which does not carry
+    // this hook. Registering nothing is the honest state: on a managed install the
+    // harness invokes the dispatcher, not the hook, so the hook's fail-open
+    // guarantee would not protect a block/allow channel. Delivering managed
+    // PreCompact needs the dispatcher to learn the action first.
+    if (!dispatcher) upsert('PreCompact', precompactHookScript, commandEntry(precompactHookScript, 'session-precompact'));
+    else upsert('PreCompact', precompactHookScript, null);
   }
   next.hooks = hooks;
   return next;
+}
+
+function optionalMcpHostEnv() {
+  const env = {};
+  for (const name of ['JARVOS_WORK_ACTION_SERVICE_MODULE', 'JARVOS_PROJECTS_CONTEXT_CONFIG']) {
+    const value = process.env[name];
+    if (typeof value === 'string' && value.trim()) env[name] = value.trim();
+  }
+  return env;
 }
 
 function upsertClaudeDesktopMcp(config) {
@@ -188,10 +246,12 @@ function upsertClaudeDesktopMcp(config) {
   next.mcpServers = next.mcpServers && typeof next.mcpServers === 'object' && !Array.isArray(next.mcpServers)
     ? { ...next.mcpServers }
     : {};
+  const hostEnv = optionalMcpHostEnv();
   next.mcpServers.jarvos = {
     command: 'node',
     args: [mcpServer],
   };
+  if (Object.keys(hostEnv).length > 0) next.mcpServers.jarvos.env = hostEnv;
   return next;
 }
 
