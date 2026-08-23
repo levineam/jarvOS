@@ -236,9 +236,11 @@ jarvOS deliberately separates portable behavior from runtime-specific glue.
 - **Codex and Claude** can use jarvOS context through local adapters and
   hydration flows.
 - **Grok Bot** is an optional remote runtime. The vault stays on the vault
-  host; Grok Bot connects with a URL and token to an authenticated HTTP/SSE
-  MCP gateway. Stdio MCP on the Grok Bot disk hydrates the wrong machine.
-  Native Grok memory, routines, and CloudAgent stay host-owned.
+  host; Grok Bot connects with a URL and token to an authenticated Streamable
+  HTTP MCP gateway. Stdio MCP on the Grok Bot disk hydrates the wrong machine.
+  Native Grok memory, routines, and CloudAgent stay host-owned. The connector
+  is operator-supervised and sits outside conformance; loopback is the vault
+  host, so Grok Bot needs a tunnel (see `runtimes/grok-bot/README.md`).
 
 jarvOS is not the runtime. It is the user-owned context and governance layer that
 runtimes hydrate from and write back to. The same core files and knowledge base
@@ -328,7 +330,8 @@ current-work, and note-capture tools.
 ### Grok Bot
 
 Grok Bot has a separate computer from the vault. Run setup on the **vault
-host**, start the HTTP/SSE gateway there, and give Grok Bot only the URL and
+host**, start the Streamable HTTP gateway there, and give Grok Bot only a
+reachable URL (SSH tunnel or `JARVOS_MCP_HTTP_ALLOW_NON_LOOPBACK=1`) and
 token. Do not register `jarvos-mcp.js` as stdio on Grok Bot.
 
 ```bash
