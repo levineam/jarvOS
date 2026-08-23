@@ -5,51 +5,117 @@
   "operatorNotification": {
     "version": "jarvos-operator-notification-adapter/v1",
     "contract": "jarvos-operator-notification/v1",
-    "delivery": { "status": "not-configured", "reason": "Local owner configuration chooses a delivery surface; this public adapter does not configure one." }
+    "delivery": {
+      "status": "not-configured",
+      "reason": "Local owner configuration chooses a delivery surface; this public adapter does not configure one."
+    }
   },
   "capabilityDescriptor": {
     "version": "jarvos-runtime-capability-descriptor.v1",
     "harness": "grok-bot",
     "capabilities": {
       "context": {
-        "currentWork": { "status": "supported", "transport": "vault-host remote MCP", "evidence": "sharedAgentContext required tools over HTTP/SSE" },
-        "recall": { "status": "supported", "transport": "vault-host remote MCP", "evidence": "sharedAgentContext required tools over HTTP/SSE" },
-        "startupHydration": { "status": "unsupported", "reason": "Grok Bot has a separate computer; automatic startup hydration would target the wrong machine. Use boot_jarvos or jarvos_hydrate after connecting to the vault-host URL." }
+        "currentWork": {
+          "status": "supported",
+          "transport": "vault-host remote MCP",
+          "evidence": "sharedAgentContext required tools over HTTP/SSE"
+        },
+        "recall": {
+          "status": "supported",
+          "transport": "vault-host remote MCP",
+          "evidence": "sharedAgentContext required tools over HTTP/SSE"
+        },
+        "startupHydration": {
+          "status": "unsupported",
+          "reason": "Grok Bot has a separate computer; automatic startup hydration would target the wrong machine. Use boot_jarvos or jarvos_hydrate after connecting to the vault-host URL."
+        }
       },
       "notes": {
-        "create": { "status": "supported", "transport": "jarvos_create_note MCP tool", "evidence": "sharedAgentContext required tools over HTTP/SSE" },
-        "read": { "status": "unsupported", "reason": "No public Grok Bot note-read bridge is declared." },
-        "update": { "status": "unsupported", "reason": "No public Grok Bot note-update bridge is declared." },
-        "journalLink": { "status": "unsupported", "reason": "No public Grok Bot journal-link bridge is declared." }
+        "create": {
+          "status": "supported",
+          "transport": "jarvos_create_note MCP tool",
+          "evidence": "sharedAgentContext required tools over HTTP/SSE"
+        },
+        "read": {
+          "status": "unsupported",
+          "reason": "No public Grok Bot note-read bridge is declared."
+        },
+        "update": {
+          "status": "unsupported",
+          "reason": "No public Grok Bot note-update bridge is declared."
+        },
+        "journalLink": {
+          "status": "unsupported",
+          "reason": "No public Grok Bot journal-link bridge is declared."
+        }
       },
       "skills": {
-        "discover": { "status": "unsupported", "reason": "Skill projection is out of scope for this adapter." },
-        "invoke": { "status": "unsupported", "reason": "Skill projection is out of scope for this adapter." }
+        "discover": {
+          "status": "unsupported",
+          "reason": "Skill projection is out of scope for this adapter."
+        },
+        "invoke": {
+          "status": "unsupported",
+          "reason": "Skill projection is out of scope for this adapter."
+        }
       },
       "toolAuthorization": {
-        "declare": { "status": "unsupported", "reason": "No public Grok Bot authorization contract is shipped." },
-        "enforce": { "status": "unsupported", "reason": "Grok Bot owns native tool authorization." }
+        "declare": {
+          "status": "unsupported",
+          "reason": "No public Grok Bot authorization contract is shipped."
+        },
+        "enforce": {
+          "status": "unsupported",
+          "reason": "Grok Bot owns native tool authorization."
+        }
       },
       "egress": {
-        "declare": { "status": "unsupported", "reason": "No public Grok Bot egress declaration is shipped." },
-        "enforce": { "status": "unsupported", "reason": "Grok Bot owns native egress." }
+        "declare": {
+          "status": "unsupported",
+          "reason": "No public Grok Bot egress declaration is shipped."
+        },
+        "enforce": {
+          "status": "unsupported",
+          "reason": "Grok Bot owns native egress."
+        }
       },
       "session": {
-        "startupHook": { "status": "unsupported", "reason": "startupHydration is unsupported; there is no Grok Bot startup hook on the vault host." },
-        "handoff": { "status": "unsupported", "reason": "No public Grok Bot handoff adapter is declared." }
+        "startupHook": {
+          "status": "unsupported",
+          "reason": "startupHydration is unsupported; there is no Grok Bot startup hook on the vault host."
+        },
+        "handoff": {
+          "status": "unsupported",
+          "reason": "No public Grok Bot handoff adapter is declared."
+        }
       },
       "inboundDispatch": {
-        "receive": { "status": "unsupported", "reason": "jarvOS does not expose SendMessage or CloudAgent from this adapter." },
-        "validate": { "status": "unsupported", "reason": "jarvOS does not expose SendMessage or CloudAgent from this adapter." }
+        "receive": {
+          "status": "unsupported",
+          "reason": "jarvOS does not expose SendMessage or CloudAgent from this adapter."
+        },
+        "validate": {
+          "status": "unsupported",
+          "reason": "jarvOS does not expose SendMessage or CloudAgent from this adapter."
+        }
       },
       "lifecycle": {
-        "receipt": { "status": "unsupported", "reason": "No public Grok Bot lifecycle receipt bridge is declared." }
+        "receipt": {
+          "status": "unsupported",
+          "reason": "No public Grok Bot lifecycle receipt bridge is declared."
+        }
       },
       "scheduledWork": {
-        "participate": { "status": "unsupported", "reason": "Grok Bot routines stay host-owned." }
+        "participate": {
+          "status": "unsupported",
+          "reason": "Grok Bot routines stay host-owned."
+        }
       },
       "codingEntrypoint": {
-        "invoke": { "status": "unsupported", "reason": "CloudAgent coding host is out of scope; Grok Bot is not a jarvOS coding entrypoint." }
+        "invoke": {
+          "status": "unsupported",
+          "reason": "CloudAgent coding host is out of scope; Grok Bot is not a jarvOS coding entrypoint."
+        }
       }
     }
   },
@@ -70,7 +136,7 @@
       "mcp": {
         "supported": true,
         "transport": "http",
-        "registration": "On the VAULT HOST run modules/jarvos-agent-context/scripts/jarvos-mcp-http.js (authenticated HTTP/SSE in front of jarvos-mcp.js). On Grok Bot register only the URL plus bearer token. Do not register stdio MCP on the Grok Bot disk; that hydrates the wrong machine."
+        "registration": "On the VAULT HOST run modules/jarvos-agent-context/scripts/jarvos-mcp-http.js (authenticated Streamable HTTP in front of jarvos-mcp.js; Mcp-Session-Id per initialize). On Grok Bot register only the tunneled URL plus bearer token. Do not register stdio MCP on the Grok Bot disk; that hydrates the wrong machine. The token grants the full MCP surface, not only requiredTools."
       },
       "hydration": {
         "mode": "manual",
