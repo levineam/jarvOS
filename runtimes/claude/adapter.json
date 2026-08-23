@@ -127,7 +127,7 @@
           "status": "supported",
           "transport": "Claude Code PreCompact hook",
           "evidence": "jarvos-precompact-hook.js",
-          "reason": "Registered on unmanaged installs. The stewardship dispatcher v1 action ABI carries no compaction action, so a managed install registers no PreCompact hook rather than route a block/allow channel through an action the dispatcher rejects."
+          "reason": "Registered directly on an unmanaged install. On a managed install setup probes the stewardship dispatcher and registers only when it advertises session-precompact, wrapped so a dispatcher failure still yields an empty directive rather than blocking compaction."
         }
       },
       "inboundDispatch": {

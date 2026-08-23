@@ -116,6 +116,7 @@ fi
 node - "$CLAUDE_SETTINGS" "$HOOK_SCRIPT" "$TURN_HOOK_SCRIPT" "$PRECOMPACT_HOOK_SCRIPT" "$STEWARDSHIP_DISPATCHER" "$CLAUDE_DESKTOP_CONFIG" "$MCP_SERVER" "${JARVOS_STEWARDSHIP_ONLY:-0}" "${JARVOS_MANAGED_HARNESS_ROLLBACK:-0}" "$STEWARDSHIP_BRIDGE_COMMAND" "$STEWARDSHIP_CLAUDE_SESSION_MAP_ROOT" "$STEWARDSHIP_BRIDGE_PATH" "${JARVOS_STAGED_PUBLIC_RUNTIME_ROOT:-}" <<'NODE'
 const fs = require('fs');
 const path = require('path');
+const { spawnSync } = require('child_process');
 
 const [settingsPath, hookScript, turnHookScript, precompactHookScript, dispatcher, desktopConfigPath, mcpServer, stewardshipOnly, rollback, bridgeCommand, claudeSessionMapRoot, bridgePath, stagedRoot] = process.argv.slice(2);
 
@@ -194,13 +195,52 @@ function upsertClaudeCodeHook(settings, bridge) {
     else delete hooks[event];
   }
 
-  function commandEntry(script, action, matcher) {
+  // Ask the dispatcher what it can actually do. The probe action is
+  // side-effect-free by contract, so calling it during setup is safe, and the
+  // answer is authoritative in a way the public ABI is not: the ABI says what
+  // the contract declares, the receipt says what this binary implements. A
+  // dispatcher predating capability advertising reports nothing, which reads as
+  // unsupported rather than as permission to guess.
+  function dispatcherActions() {
+    if (!dispatcher) return [];
+    let probe;
+    try {
+      probe = spawnSync(dispatcher, ['--harness', 'claude', '--action', 'provenance-probe'], { encoding: 'utf8' });
+    } catch (_) {
+      return [];
+    }
+    if (!probe || probe.error || probe.status !== 0) return [];
+    let receipt;
+    try {
+      receipt = JSON.parse(String(probe.stdout || ''));
+    } catch (_) {
+      return [];
+    }
+    if (!receipt || typeof receipt !== 'object' || Array.isArray(receipt)) return [];
+    const actions = receipt.actions;
+    if (!Array.isArray(actions) || actions.some((value) => typeof value !== 'string')) return [];
+    return actions;
+  }
+
+  // The probe gates registration; it cannot protect invocation. Once the hook is
+  // in settings.json the dispatcher can still fail before it ever spawns the
+  // hook -- fenced mid-promotion, a selector or tuple mismatch, a missing asset,
+  // or a rollback to a build that no longer knows the action. On PreCompact,
+  // which is a block/allow channel, any of those would block compaction. So the
+  // registered command absorbs a dispatcher failure and emits the empty
+  // directive the harness reads as "proceed", exactly as the hook itself would.
+  function failOpenCommand(inner) {
+    return `${inner} || printf '%s' '{}'`;
+  }
+
+  function commandEntry(script, action, matcher, failOpen) {
     const target = dispatcher
       ? `${shellQuote(dispatcher)} --harness claude --action ${action}`
       : `node ${shellQuote(script)}`;
-    const command = bridge
+    const invocation = bridge
       ? `env JARVOS_STEWARDSHIP_BRIDGE_COMMAND=${shellQuote(bridge.command)} JARVOS_STEWARDSHIP_CLAUDE_SESSION_MAP_ROOT=${shellQuote(bridge.mapRoot)} PATH=${shellQuote(bridge.bin)}:\"$PATH\" ${target}`
       : target;
+    const command = failOpen ? failOpenCommand(invocation) : invocation;
     const entry = {
       hooks: [{ type: 'command', command, timeout: 30 }],
     };
@@ -215,18 +255,20 @@ function upsertClaudeCodeHook(settings, bridge) {
   } else {
     upsert('SessionStart', hookScript, commandEntry(hookScript, 'session-start', 'startup|resume|compact'));
     upsert('UserPromptSubmit', turnHookScript, commandEntry(turnHookScript, 'session-turn'));
-    // PreCompact is registered only on an unmanaged install. The stewardship
-    // dispatcher's v1 ABI is ['harness-launch','session-start','session-turn',
-    // 'bridge','provenance-probe'] and it exits 1 with empty stdout on anything
-    // else, so there is no action to route compaction through; pointing the hook
-    // at the staged script instead is not an option either, because a managed
-    // settings.json must only reference the stable bundle, which does not carry
-    // this hook. Registering nothing is the honest state: on a managed install the
-    // harness invokes the dispatcher, not the hook, so the hook's fail-open
-    // guarantee would not protect a block/allow channel. Delivering managed
-    // PreCompact needs the dispatcher to learn the action first.
-    if (!dispatcher) upsert('PreCompact', precompactHookScript, commandEntry(precompactHookScript, 'session-precompact'));
-    else upsert('PreCompact', precompactHookScript, null);
+    // An unmanaged install runs the hook directly and inherits its fail-open
+    // behaviour. A managed install routes through the dispatcher, but only if
+    // this dispatcher says it implements the action -- the public ABI declaring
+    // it is not evidence that the installed binary does, and those two live in
+    // different repositories on different release schedules. Unsupported, or
+    // any probe that cannot be trusted, registers nothing rather than a hook
+    // that would reject at runtime on a block/allow channel.
+    if (!dispatcher) {
+      upsert('PreCompact', precompactHookScript, commandEntry(precompactHookScript, 'session-precompact'));
+    } else if (dispatcherActions().includes('session-precompact')) {
+      upsert('PreCompact', precompactHookScript, commandEntry(precompactHookScript, 'session-precompact', null, true));
+    } else {
+      upsert('PreCompact', precompactHookScript, null);
+    }
   }
   next.hooks = hooks;
   return next;
