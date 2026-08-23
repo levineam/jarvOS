@@ -2,11 +2,16 @@
 'use strict';
 
 /**
- * Authenticated HTTP/SSE gateway in front of jarvos-mcp.js.
+ * Authenticated Streamable HTTP gateway in front of jarvos-mcp.js.
  * Runs on the VAULT HOST. Grok Bot clients send URL + bearer token only.
  * Stdio MCP on the Grok Bot disk hydrates the wrong machine.
+ *
+ * Transport: MCP Streamable HTTP. Responses return in the POST body.
+ * Each initialize issues a Mcp-Session-Id and a dedicated stdio child so
+ * clients do not share one MCP session or JSON-RPC id space.
  */
 
+const { randomUUID } = require('node:crypto');
 const fs = require('node:fs');
 const http = require('node:http');
 const path = require('node:path');
@@ -21,6 +26,8 @@ const ALLOW_NON_LOOPBACK_ENV = 'JARVOS_MCP_HTTP_ALLOW_NON_LOOPBACK';
 const DEFAULT_HOST = '127.0.0.1';
 const DEFAULT_PORT = 8765;
 const MCP_PATH = '/mcp';
+const TOMBSTONE_TTL_MS = 60_000;
+const DEFAULT_REQUEST_TIMEOUT_MS = 15_000;
 
 function failClosed(message) {
   process.stderr.write(`${message}\n`);
@@ -76,52 +83,144 @@ function extractBearer(req) {
   return typeof alt === 'string' ? alt : '';
 }
 
-function startStdioBridge() {
-  const serverPath = path.join(__dirname, 'jarvos-mcp.js');
-  const child = spawn(process.execPath, [serverPath], {
-    stdio: ['pipe', 'pipe', 'inherit'],
-    env: process.env,
-  });
+function childEnvFrom(env = process.env) {
+  const next = { ...env };
+  delete next[TOKEN_ENV];
+  delete next[TOKEN_FILE_ENV];
+  return next;
+}
+
+function startStdioBridge(options = {}) {
+  const spawnImpl = options.spawn || spawn;
+  const serverPath = options.serverPath || path.join(__dirname, 'jarvos-mcp.js');
+  const args = options.args || [serverPath];
+  const restart = options.restart !== false;
+  const backoffMs = options.backoffMs ?? 250;
+  const maxRestarts = options.maxRestarts ?? 8;
+  const tombstoneTtlMs = options.tombstoneTtlMs ?? TOMBSTONE_TTL_MS;
+
+  let child = null;
   let buffer = '';
+  let alive = false;
+  let restarts = 0;
+  let lastExitCode = null;
+  let disposed = false;
+  let restartTimer = null;
   const waiters = new Map();
+  const tombstones = new Map();
   const sseClients = new Set();
 
-  child.stdout.setEncoding('utf8');
-  child.stdout.on('data', (chunk) => {
-    buffer += chunk;
-    let newline;
-    while ((newline = buffer.indexOf('\n')) !== -1) {
-      const line = buffer.slice(0, newline).trim();
-      buffer = buffer.slice(newline + 1);
-      if (!line) continue;
-      let message;
-      try {
-        message = JSON.parse(line);
-      } catch {
-        continue;
-      }
-      const waiter = message && message.id != null ? waiters.get(String(message.id)) : null;
-      if (waiter) {
-        waiters.delete(String(message.id));
-        waiter.resolve(message);
-      } else {
-        for (const client of sseClients) client.write(`event: message\ndata: ${JSON.stringify(message)}\n\n`);
-      }
+  function pruneTombstones(now = Date.now()) {
+    for (const [id, expires] of tombstones) {
+      if (expires <= now) tombstones.delete(id);
     }
-  });
+  }
 
-  child.on('exit', (code) => {
-    const error = new Error(`jarvos-mcp.js exited with code ${code}`);
+  function rejectWaiters(error) {
     for (const waiter of waiters.values()) waiter.reject(error);
     waiters.clear();
-    for (const client of sseClients) client.end();
-    sseClients.clear();
-  });
+  }
+
+  function handleChildMessage(message) {
+    pruneTombstones();
+    const hasId = message && message.id != null;
+    if (hasId) {
+      const id = String(message.id);
+      const waiter = waiters.get(id);
+      if (waiter) {
+        waiters.delete(id);
+        waiter.resolve(message);
+        return;
+      }
+      if (tombstones.has(id)) {
+        tombstones.delete(id);
+        return;
+      }
+      return;
+    }
+    for (const client of sseClients) {
+      client.write(`event: message\ndata: ${JSON.stringify(message)}\n\n`);
+    }
+  }
+
+  function attachChild(next) {
+    child = next;
+    buffer = '';
+    alive = true;
+    child.stdout.setEncoding('utf8');
+    child.stdout.on('data', (chunk) => {
+      buffer += chunk;
+      let newline;
+      while ((newline = buffer.indexOf('\n')) !== -1) {
+        const line = buffer.slice(0, newline).trim();
+        buffer = buffer.slice(newline + 1);
+        if (!line) continue;
+        let message;
+        try {
+          message = JSON.parse(line);
+        } catch {
+          continue;
+        }
+        handleChildMessage(message);
+      }
+    });
+    if (child.stdin) {
+      child.stdin.on('error', (error) => {
+        process.stderr.write(`jarvos-mcp stdin: ${error.message}\n`);
+      });
+    }
+    child.on('exit', (code) => {
+      lastExitCode = code;
+      alive = false;
+      const error = new Error(`jarvos-mcp.js exited with code ${code}`);
+      rejectWaiters(error);
+      for (const client of sseClients) client.end();
+      sseClients.clear();
+      if (disposed || !restart || restarts >= maxRestarts) return;
+      restarts += 1;
+      restartTimer = setTimeout(() => {
+        restartTimer = null;
+        if (disposed) return;
+        spawnChild();
+      }, backoffMs * restarts);
+    });
+  }
+
+  function spawnChild() {
+    const next = spawnImpl(process.execPath, args, {
+      stdio: ['pipe', 'pipe', 'inherit'],
+      env: childEnvFrom(options.env || process.env),
+    });
+    attachChild(next);
+    return next;
+  }
+
+  spawnChild();
 
   return {
-    child,
+    get child() { return child; },
     sseClients,
-    send(message, timeoutMs = 15000) {
+    get alive() { return alive; },
+    health() {
+      return {
+        alive,
+        pid: child && child.pid ? child.pid : null,
+        restarts,
+        lastExitCode,
+      };
+    },
+    dispose() {
+      disposed = true;
+      if (restartTimer) clearTimeout(restartTimer);
+      rejectWaiters(new Error('bridge disposed'));
+      if (child && !child.killed) child.kill();
+      for (const client of sseClients) client.end();
+      sseClients.clear();
+    },
+    send(message, timeoutMs = DEFAULT_REQUEST_TIMEOUT_MS) {
+      if (!alive || !child || !child.stdin || child.stdin.destroyed) {
+        return Promise.reject(new Error('MCP child is not alive'));
+      }
       if (message && message.id == null) {
         child.stdin.write(`${JSON.stringify(message)}\n`);
         return Promise.resolve(null);
@@ -130,6 +229,7 @@ function startStdioBridge() {
       return new Promise((resolve, reject) => {
         const timer = setTimeout(() => {
           waiters.delete(id);
+          tombstones.set(id, Date.now() + tombstoneTtlMs);
           reject(new Error(`MCP request ${id} timed out`));
         }, timeoutMs);
         waiters.set(id, {
@@ -142,7 +242,13 @@ function startStdioBridge() {
             reject(error);
           },
         });
-        child.stdin.write(`${JSON.stringify(message)}\n`);
+        try {
+          child.stdin.write(`${JSON.stringify(message)}\n`);
+        } catch (error) {
+          clearTimeout(timer);
+          waiters.delete(id);
+          reject(error);
+        }
       });
     },
   };
@@ -171,12 +277,57 @@ function unauthorized(res) {
   res.end(JSON.stringify({ error: 'unauthorized' }));
 }
 
-function createServer({ token, host, port, bridge }) {
+function isJsonRpcObject(value) {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function createServer({ token, host, port, bridge, createBridge, requestTimeoutMs = DEFAULT_REQUEST_TIMEOUT_MS }) {
+  const sessions = new Map();
+  const factory = createBridge || (bridge ? () => bridge : () => startStdioBridge());
+
+  function sessionHeader(req) {
+    return req.headers['mcp-session-id'] || req.headers['Mcp-Session-Id'] || null;
+  }
+
+  function resolveSession(req, message) {
+    const existing = sessionHeader(req);
+    if (existing) {
+      const found = sessions.get(String(existing));
+      if (!found) return { errorStatus: 404, error: { error: 'unknown session' } };
+      return { id: String(existing), bridge: found, created: false };
+    }
+    if (message && message.method === 'initialize') {
+      const id = randomUUID();
+      const next = factory();
+      sessions.set(id, next);
+      return { id, bridge: next, created: true };
+    }
+    return { errorStatus: 400, error: { error: 'missing mcp-session-id' } };
+  }
+
+  function healthPayload() {
+    const list = [...sessions.values()].map((item) => (typeof item.health === 'function'
+      ? item.health()
+      : { alive: true }));
+    const childAlive = list.filter((item) => item.alive !== false).length;
+    const childDead = list.length - childAlive;
+    return {
+      ok: childDead === 0,
+      bind: `${host}:${port}`,
+      transport: 'streamable-http',
+      sessions: list.length,
+      childAlive,
+      childDead,
+      restarts: list.reduce((sum, item) => sum + (item.restarts || 0), 0),
+    };
+  }
+
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url || '/', `http://${req.headers.host || '127.0.0.1'}`);
     if (url.pathname === '/health') {
-      res.writeHead(200, { 'content-type': 'application/json' });
-      res.end(JSON.stringify({ ok: true, bind: `${host}:${port}` }));
+      const payload = healthPayload();
+      res.writeHead(payload.ok ? 200 : 503, { 'content-type': 'application/json' });
+      res.end(JSON.stringify(payload));
       return;
     }
     if (url.pathname !== MCP_PATH) {
@@ -189,20 +340,42 @@ function createServer({ token, host, port, bridge }) {
       return;
     }
 
+    if (req.method === 'DELETE') {
+      const id = sessionHeader(req);
+      const found = id ? sessions.get(String(id)) : null;
+      if (!found) {
+        res.writeHead(404, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ error: 'unknown session' }));
+        return;
+      }
+      if (typeof found.dispose === 'function') found.dispose();
+      sessions.delete(String(id));
+      res.writeHead(204);
+      res.end();
+      return;
+    }
+
     if (req.method === 'GET') {
+      const resolved = resolveSession(req, { method: 'notifications/sse' });
+      if (resolved.errorStatus) {
+        res.writeHead(resolved.errorStatus, { 'content-type': 'application/json' });
+        res.end(JSON.stringify(resolved.error));
+        return;
+      }
       res.writeHead(200, {
         'content-type': 'text/event-stream',
         'cache-control': 'no-cache',
         connection: 'keep-alive',
+        'mcp-session-id': resolved.id,
       });
-      res.write(`event: endpoint\ndata: ${MCP_PATH}\n\n`);
-      bridge.sseClients.add(res);
-      req.on('close', () => bridge.sseClients.delete(res));
+      res.write(`: connected\n\n`);
+      resolved.bridge.sseClients.add(res);
+      req.on('close', () => resolved.bridge.sseClients.delete(res));
       return;
     }
 
     if (req.method !== 'POST') {
-      res.writeHead(405, { allow: 'GET, POST', 'content-type': 'application/json' });
+      res.writeHead(405, { allow: 'GET, POST, DELETE', 'content-type': 'application/json' });
       res.end(JSON.stringify({ error: 'method not allowed' }));
       return;
     }
@@ -217,20 +390,41 @@ function createServer({ token, host, port, bridge }) {
       return;
     }
 
+    if (!isJsonRpcObject(message)) {
+      res.writeHead(400, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ jsonrpc: '2.0', error: { code: -32600, message: 'Invalid Request' } }));
+      return;
+    }
+
+    const resolved = resolveSession(req, message);
+    if (resolved.errorStatus) {
+      res.writeHead(resolved.errorStatus, { 'content-type': 'application/json' });
+      res.end(JSON.stringify(resolved.error));
+      return;
+    }
+
     try {
-      const result = await bridge.send(message);
+      const result = await resolved.bridge.send(message, requestTimeoutMs);
       if (result == null) {
-        res.writeHead(202);
+        res.writeHead(202, { 'mcp-session-id': resolved.id });
         res.end();
         return;
       }
-      res.writeHead(200, { 'content-type': 'application/json' });
+      res.writeHead(200, {
+        'content-type': 'application/json',
+        'mcp-session-id': resolved.id,
+      });
       res.end(JSON.stringify(result));
     } catch (error) {
-      res.writeHead(504, { 'content-type': 'application/json' });
+      res.writeHead(504, {
+        'content-type': 'application/json',
+        'mcp-session-id': resolved.id,
+      });
       res.end(JSON.stringify({ jsonrpc: '2.0', id: message?.id ?? null, error: { code: -32000, message: error.message } }));
     }
   });
+  server.sessions = sessions;
+  server.healthPayload = healthPayload;
   return server;
 }
 
@@ -251,17 +445,29 @@ async function main(env = process.env) {
     failClosed('refusing non-loopback bind; set JARVOS_MCP_HTTP_ALLOW_NON_LOOPBACK=1 to override');
   }
 
-  const bridge = startStdioBridge();
-  const server = createServer({ token, host, port, bridge });
+  const bridges = [];
+  const server = createServer({
+    token,
+    host,
+    port,
+    createBridge: () => {
+      const next = startStdioBridge({ env });
+      bridges.push(next);
+      return next;
+    },
+  });
   await listen(server, host, port);
-  process.stderr.write(`jarvos MCP HTTP/SSE listening on http://${host}:${port}${MCP_PATH}\n`);
+  process.stderr.write(`jarvos MCP Streamable HTTP listening on http://${host}:${port}${MCP_PATH}\n`);
+  if (!isLoopbackHost(host)) {
+    process.stderr.write('WARNING: non-loopback bind carries the bearer token in cleartext HTTP unless a TLS terminator sits in front.\n');
+  }
   const shutdown = () => {
     server.close();
-    if (bridge.child && !bridge.child.killed) bridge.child.kill();
+    for (const item of bridges) item.dispose();
   };
   process.on('SIGINT', () => { shutdown(); process.exit(0); });
   process.on('SIGTERM', () => { shutdown(); process.exit(0); });
-  return { server, bridge };
+  return { server, bridges };
 }
 
 if (require.main === module) {
@@ -274,6 +480,7 @@ if (require.main === module) {
 module.exports = {
   TOKEN_ENV,
   TOKEN_FILE_ENV,
+  ALLOW_NON_LOOPBACK_ENV,
   resolveToken,
   safeEqual,
   extractBearer,
