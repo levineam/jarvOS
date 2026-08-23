@@ -481,7 +481,8 @@ const GROK_SUBSCRIPTION_ADAPTER_DESCRIPTOR = deepFreeze({
   displayName: 'Grok CLI subscription',
   distribution: {
     name: 'grok-cli',
-    version: 'capability-pending',
+    version: '1.0.3',
+    revision: 'b5eef73b94fdc72b8c67218f19abe2b2728db38f1f0e66903de8fb931948bd26',
   },
   capabilityVersion: 'jarvos-grok-cli-capability/v1',
   models: ['grok-4.5'],
@@ -495,7 +496,7 @@ const GROK_SUBSCRIPTION_ADAPTER_DESCRIPTOR = deepFreeze({
     disclosureRevision: 'v1',
   },
   support: 'unsupported',
-  reasonCode: 'capability_proof_pending',
+  reasonCode: 'capability_unsupported',
   deterministic: false,
   portable: true,
 });

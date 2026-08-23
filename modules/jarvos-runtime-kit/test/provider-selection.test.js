@@ -91,12 +91,14 @@ test('rejects unknown and authority-shaped provider fields, paths, credentials, 
   assert.match(pathLikeId.errors.join('\n'), /safe non-empty string/i);
 });
 
-test('built-in Claude and deterministic descriptors are portable and deterministic while Grok is typed unsupported', () => {
+test('built-in descriptors remain portable while Grok reports the proved host blockers', () => {
   assert.deepEqual(kit.PORTABLE_CLAUDE_ADAPTER_DESCRIPTOR, kit.getBuiltInAdapterDescriptors().claude);
   assert.deepEqual(kit.DETERMINISTIC_ADAPTER_DESCRIPTOR, kit.getBuiltInAdapterDescriptors().deterministic);
   assert.deepEqual(kit.GROK_SUBSCRIPTION_ADAPTER_DESCRIPTOR, kit.getBuiltInAdapterDescriptors().grok);
   assert.equal(kit.GROK_SUBSCRIPTION_ADAPTER_DESCRIPTOR.support, 'unsupported');
-  assert.equal(kit.GROK_SUBSCRIPTION_ADAPTER_DESCRIPTOR.reasonCode, 'capability_proof_pending');
+  assert.equal(kit.GROK_SUBSCRIPTION_ADAPTER_DESCRIPTOR.reasonCode, 'capability_unsupported');
+  assert.equal(kit.GROK_SUBSCRIPTION_ADAPTER_DESCRIPTOR.distribution.version, '1.0.3');
+  assert.match(kit.GROK_SUBSCRIPTION_ADAPTER_DESCRIPTOR.distribution.revision, /^[a-f0-9]{64}$/);
   assert.equal(kit.validateManagedAdapterDescriptor(kit.GROK_SUBSCRIPTION_ADAPTER_DESCRIPTOR).ok, true);
 
   const serialized = JSON.stringify(kit.getBuiltInAdapterDescriptors());
