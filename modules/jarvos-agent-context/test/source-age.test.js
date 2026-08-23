@@ -232,6 +232,30 @@ test('recall marks a listed source whose git probe fails, never as last modified
   });
 });
 
+test('recall carries the probe caveat into the compact three-source line', () => {
+  withTempDir((tmp) => {
+    const brainDir = path.join(tmp, 'brain');
+    initBrainRepo(brainDir, STALE_AT);
+    const wiki = path.join(tmp, 'wiki');
+    initBrainRepo(wiki, '2026-01-01T00:00:00.000Z');
+    // Newest source is a git toplevel with no commits, so `git log -1` fails and
+    // its only timestamp is a sync-bumped mtime.
+    const probeFails = path.join(tmp, 'probe-fails');
+    fs.mkdirSync(probeFails, { recursive: true });
+    spawnSync('git', ['-C', probeFails, 'init', '--quiet'], { stdio: 'ignore' });
+    setDirMtime(probeFails, '2026-08-21T11:00:00.000Z');
+    const result = recall(recallOptions(recallConfig(brainDir), {
+      brainSources: [
+        { id: 'default', local_path: brainDir },
+        { id: 'wiki', local_path: wiki },
+        { id: 'vault', local_path: probeFails },
+      ],
+    }));
+    assert.match(result.markdown, /newest vault 1h \(commit age unavailable\) ago|newest vault 1h ago \(commit age unavailable\)/);
+    assert.equal(result.markdown.includes(tmp), false);
+  });
+});
+
 test('recall keeps other sources when one GBrain source age is unknown', () => {
   withTempDir((tmp) => {
     const brainDir = path.join(tmp, 'brain');

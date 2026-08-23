@@ -2,57 +2,64 @@
 set -euo pipefail
 
 # Filters the secret scan's candidate lines down to ones that could actually carry
-# a credential. Two invariants govern every rule here:
+# a credential.
 #
-#   1. Rules match on the *shape of the value*, never on the file it appears in.
-#      A path-based exemption is how a scanner quietly stops scanning.
-#   2. A safe value only excuses the line when it is the value of the very key that
-#      tripped the scan. Matching a safe shape anywhere on the line is not enough:
-#      `api_key: "sk-live-..." || process.env.KEY` ends in an env reference and
-#      `api_key: "sk-live-...", mode: 'test'` ends in a placeholder, yet both carry
-#      a live credential. Anchoring each rule to the secret-shaped key closes that.
+# The rule is per-assignment, not per-line. Earlier versions asked "does a safe
+# shape appear on this line?" and dropped the whole line when one did, which threw
+# away real credentials sitting beside a safe-looking key:
 #
-# Backstop for both: a line holding a credential-shaped literal is never filtered,
-# whatever else it contains.
+# a live key followed by an env fallback, or a real password followed by a second
+# key whose value is an env reference. In both, the last thing on the line looks
+# safe while an actual credential sits earlier on it. (Those examples are described
+# rather than written out, because this file is itself scanned by the pattern it
+# filters -- spelling them literally would make the scanner flag its own source.)
 #
-# Exit status is the signal CI reads -- 0 means at least one candidate survived and
-# the scan must fail. It is decided explicitly below rather than inherited from a
-# pipeline, because the final stage exits 0 whether or not it printed.
+# So instead: walk every secret-shaped assignment on the line and require that
+# *each* one's own value is a known-safe form. One unexplained value anywhere and
+# the line is reported. A line with no such assignment is always reported, which is
+# what keeps bare vendor-prefixed tokens and private-key headers visible.
+#
+# Rules match on the shape of the value, never on the file it appears in -- a
+# path-based exemption is how a scanner quietly stops scanning.
+#
+# Exit status is the signal CI reads: 0 means at least one candidate survived and
+# the scan must fail. It is decided explicitly, not inherited from a pipeline.
 
 survivors="$(
   awk '
     BEGIN {
-      # A key whose name alone trips the scan.
-      key = "(api[_-]?key|private[_-]?key|access[_-]?token|bearer[_-]?token|password|secret[_-]?key|auth[_-]?token)[[:space:]]*[:=][[:space:]]*"
+      assign = "(api[_-]?key|private[_-]?key|access[_-]?token|bearer[_-]?token|password|secret[_-]?key|auth[_-]?token)[[:space:]]*[:=][[:space:]]*"
 
-      # Credential-shaped literals. Bracketed single characters (ghp[_], sk[-]) are
-      # regex-identical to the plain text but stop this file from matching the scan
-      # pattern it feeds. Do not "simplify" them back -- the scanner reads its own
-      # source.
+      # Credential-shaped literals are never filtered, whatever else the line holds.
+      # Bracketed single characters (ghp[_], sk[-]) are regex-identical to the plain
+      # text but stop this file from matching the scan pattern it feeds. Do not
+      # "simplify" them back -- the scanner reads its own source.
       credential = "(ghp[_]|sk[-][a-z0-9]{20,}|xox[baprs][-][a-z0-9-]{10,}|begin[ a-z]*key)"
 
-      # 1. GitHub Actions secret reference: resolved at runtime, never a literal.
-      gh_ref = "^([^:]+:[0-9]+:|\\+)[[:space:]]*[a-z0-9_-]+[[:space:]]*:[[:space:]]*\\$\\{\\{[[:space:]]*secrets\\.[a-z_][a-z0-9_]*[[:space:]]*\\}\\}[[:space:]]*$"
-
-      # 2. Environment indirection: the key names where a secret comes from.
-      env_ref = key "(process\\.env(\\.[a-z_][a-z0-9_]*|\\[[^]]+\\])|\\$\\{?[a-z_][a-z0-9_]*\\}?)[[:space:]]*,?[[:space:]]*$"
-
-      # 3. Explicit placeholder allowlist. An exact-match list, not a length or
-      #    entropy heuristic -- only that can tell 'test-key' from a real key.
-      placeholder = key "[\047\"](test|test-key|test-secret|dummy|placeholder|example|fake|redacted|xxx+|changeme|not-a-real-[a-z-]+)[\047\"][[:space:]]*[,;)]?[[:space:]]*$"
-
-      # 4. Empty literals carry nothing. Judged across the whole line, because these
-      #    appear mid-line in object literals ({ A_API_KEY: "", B_TOKEN: "" }); the
-      #    line is dropped only when no non-empty secret assignment appears anywhere.
-      nonempty = key "([\047][^\047]|\"[^\"]|[^\047\"[:space:]])"
+      # Safe value forms, each tested against the start of the value that follows an
+      # assignment. Placeholders are an explicit allowlist rather than a length or
+      # entropy heuristic: only an exact list separates test-key from a real key.
+      placeholder = "^[\047\"](test|test-key|test-secret|dummy|placeholder|example|fake|redacted|xxx+|changeme|not-a-real-[a-z-]+)[\047\"]"
+      empty_lit   = "^([\047][\047]|\"\")"
+      env_lit     = "^(process\\.env(\\.[a-z_][a-z0-9_]*|\\[[^]]+\\])|\\$\\{?[a-z_][a-z0-9_]*\\}?)"
+      gh_secret   = "^\\$\\{\\{[[:space:]]*secrets\\.[a-z_][a-z0-9_]*[[:space:]]*\\}\\}"
+    }
+    function value_is_safe(v) {
+      return (v ~ placeholder) || (v ~ empty_lit) || (v ~ gh_secret) || (v ~ env_lit)
     }
     {
       low = tolower($0)
       if (low ~ credential) { print; next }
-      if (low ~ gh_ref)      next
-      if (low ~ env_ref)     next
-      if (low ~ placeholder) next
-      if (low ~ key && low !~ nonempty) next
+
+      rest = low
+      seen = 0
+      all_safe = 1
+      while (match(rest, assign)) {
+        seen = 1
+        rest = substr(rest, RSTART + RLENGTH)
+        if (!value_is_safe(rest)) { all_safe = 0; break }
+      }
+      if (seen && all_safe) next
       print
     }
   ' || true

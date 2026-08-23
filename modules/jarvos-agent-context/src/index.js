@@ -1059,7 +1059,11 @@ function formatMultiSourceAgeLine(sources, now) {
     const oldestId = displaySourceId(oldest.source.id, oldest.index);
     const newestId = displaySourceId(newest.source.id, newest.index);
     const oldestClause = formatSourceAgeClause(oldest.source, now);
-    const newestAge = formatAgePhrase(newest.at, now);
+    // The compact line states the newest source's age without a basis, so a failed
+    // git probe would read as a confident mtime figure. Carry the caveat here too;
+    // the two-source path and the oldest clause already do.
+    const newestFromFailedProbe = !parseTimestamp(newest.source.commitAt) && newest.source.commitProbeFailed;
+    const newestAge = `${formatAgePhrase(newest.at, now)}${newestFromFailedProbe ? ' (commit age unavailable)' : ''}`;
     const unknownCount = sources.length - dated.length;
     const unknown = unknownCount > 0 ? `; ${unknownCount} unknown` : '';
     return `brain age: ${sources.length} sources, newest ${newestId} ${newestAge} ago, oldest ${oldestId} ${oldestClause}${unknown}`;
