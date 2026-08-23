@@ -10,6 +10,7 @@ const assert = require('node:assert/strict');
 const { ProjectRegistry } = require('../src/registry');
 const { CONTEXT_CONTRACT, buildContextPacket, validateContextPacket, validateContextQuery } = require('../src/projects-context');
 const { CAPABILITY_CONTRACT, issueCapability, verifyCapability } = require('../src/projects-context-capability');
+const inferenceContracts = require('../src/project-inference-contracts');
 const {
   PROVIDER_STATES,
   createHostAdmission,
@@ -82,6 +83,38 @@ function providerAuthorities(providers) {
   ]));
 }
 
+function candidate(overrides = {}) {
+  return inferenceContracts.createProjectCandidate({
+    evidenceIds: ['ev_000001'],
+    evidenceSetWatermark: 'a'.repeat(64),
+    engineRevision: 'deterministic-baseline-v1',
+    policyRevision: 'jarvos.project-inference-policy-v1',
+    kind: 'project',
+    title: 'A provisional project',
+    aliases: [],
+    parentId: null,
+    parentAlternatives: [],
+    confidence: {
+      identityMatch: 0.5,
+      novelty: 0.5,
+      sourceDiversity: 0.5,
+      temporalContinuity: 0.5,
+      parentFit: 0.5,
+      sourceCoverage: 0.5,
+    },
+    disposition: 'provisional',
+    reasonCodes: ['needs-review'],
+    lineage: [],
+    ...overrides,
+  });
+}
+
+function coverage(sourceClass, state) {
+  return inferenceContracts.createCoverageStatus({
+    sourceClass, state, observedAt: NOW, sourceRevision: `${sourceClass}-revision-1`,
+  });
+}
+
 test('canonical-only packet is useful and optional providers are visibly omitted', () => {
   const { registry, root, outcome } = makeRegistry();
   const query = queryFor(root, outcome);
@@ -112,6 +145,149 @@ test('canonical-only packet is useful and optional providers are visibly omitted
   assert.deepEqual(result.packet.currentWork, []);
   assert.deepEqual(result.packet.attention, []);
   assert.equal(validateContextPacket(result.packet).ok, true);
+});
+
+test('inference is versioned, provisional candidates are explicitly non-actionable, and coverage remains typed', () => {
+  const { registry, root, outcome } = makeRegistry();
+  const query = queryFor(root, outcome);
+  const provisional = candidate({ parentId: root.id, parentAlternatives: [root.id, 'prj_999999'] });
+  const result = buildContextPacket({
+    registry,
+    query,
+    capability: issue(query),
+    capabilitySecret: SECRET,
+    subject: 'agent:test-session',
+    hostId: 'projects-host',
+    now: NOW,
+    providers: {},
+    inference: {
+      candidates: [provisional],
+      coverage: [
+        coverage('note', 'fresh'),
+        coverage('chat', 'healthy-empty'),
+        coverage('execution', 'partial'),
+        coverage('release', 'unavailable'),
+        coverage('stewardship', 'policy-omitted'),
+      ],
+      watermark: 'b'.repeat(64),
+      watermarks: {},
+    },
+  });
+
+  assert.equal(result.status, 'ok');
+  assert.equal(result.packet.schemaVersion, 2);
+  assert.equal(result.packet.inference.candidates.length, 1);
+  assert.equal(result.packet.inference.candidates[0].disposition, 'provisional');
+  assert.equal(result.packet.inference.candidates[0].actionable, false);
+  assert.deepEqual(result.packet.inference.candidates[0].parentAlternatives, [root.id]);
+  assert.deepEqual(result.packet.inference.coverage.map((entry) => entry.state), ['healthy-empty', 'partial', 'fresh', 'unavailable', 'policy-omitted']);
+  assert.equal(result.packet.inference.watermark, 'b'.repeat(64));
+  assert.equal(result.packet.watermarks.registry, `registry:${registry.generation}`);
+  assert.equal(validateContextPacket(result.packet).ok, true);
+
+  const forged = {
+    ...result.packet,
+    inference: {
+      ...result.packet.inference,
+      candidates: [{ ...result.packet.inference.candidates[0], privateEvidence: 'must-not-cross' }],
+    },
+  };
+  assert.equal(validateContextPacket(forged).ok, false);
+});
+
+test('narrow Projects scope excludes unbound candidates and does not enumerate alternative parents', () => {
+  const { registry, root, outcome } = makeRegistry();
+  const query = queryFor(root, outcome, { scope: { projectIds: [root.id], outcomeIds: [], includeDescendants: false } });
+  const inScope = candidate({ parentId: root.id, parentAlternatives: [root.id, 'prj_999999'] });
+  const outOfScope = candidate({
+    candidateId: 'cand_22222222222222222222222222222222',
+    title: 'Unbound candidate',
+    evidenceIds: ['ev_000002'],
+    parentId: 'prj_999999',
+  });
+  const result = buildContextPacket({
+    registry,
+    query,
+    capability: issue(query, { nonce: 'nonce-narrow' }),
+    capabilitySecret: SECRET,
+    subject: 'agent:test-session',
+    hostId: 'projects-host',
+    now: NOW,
+    providers: {},
+    inference: { candidates: [inScope, outOfScope] },
+  });
+  assert.equal(result.status, 'ok');
+  assert.deepEqual(result.packet.canonical.records.map((record) => record.id), [root.id]);
+  assert.deepEqual(result.packet.inference.candidates.map((entry) => entry.title), ['A provisional project']);
+  assert.deepEqual(result.packet.inference.candidates[0].parentAlternatives, [root.id]);
+});
+
+test('public context redacts provisional candidate identities', () => {
+  const { registry, root, outcome } = makeRegistry();
+  const query = queryFor(root, outcome);
+  const result = buildContextPacket({
+    registry,
+    query,
+    capability: issue(query, { nonce: 'nonce-public-inference', redactionClass: 'public' }),
+    capabilitySecret: SECRET,
+    subject: 'agent:test-session',
+    hostId: 'projects-host',
+    now: NOW,
+    providers: {},
+    inference: { candidates: [candidate({ parentId: root.id })] },
+  });
+
+  assert.equal(result.status, 'ok');
+  assert.deepEqual(result.packet.inference.candidates, []);
+  assert.ok(result.packet.omissions.includes('inference:candidates:redacted'));
+  assert.equal(JSON.stringify(result.packet).includes('A provisional project'), false);
+  assert.equal(validateContextPacket(result.packet).ok, true);
+});
+
+test('activity summaries carry the admission-time canonical root tuple', () => {
+  const { registry, root, outcome } = makeRegistry();
+  const query = queryFor(root, outcome);
+  const activity = snapshot('activity', 'fresh', {
+    summaries: [{
+      id: 'activity-admission', canonicalId: outcome.id, category: 'activity', status: 'done', title: 'admitted activity',
+      occurredAt: NOW, observedAt: NOW, evidenceRefs: ['activity:admission'],
+      canonicalAtAdmission: {
+        canonicalId: outcome.id,
+        canonicalKind: 'outcome',
+        canonicalRevision: 1,
+        rootProjectId: root.id,
+        rootProjectRevision: 1,
+        rootProjectLifecycle: 'active',
+        registryGeneration: registry.generation,
+      },
+    }],
+  });
+  const result = buildContextPacket({
+    registry, query, capability: issue(query, { nonce: 'nonce-admission' }), capabilitySecret: SECRET,
+    subject: 'agent:test-session', hostId: 'projects-host', now: NOW, providers: { activity },
+    providerAuthorities: providerAuthorities({ activity }),
+  });
+  assert.equal(result.status, 'ok');
+  assert.deepEqual(result.packet.activity[0].canonicalAtAdmission, {
+    canonicalId: outcome.id,
+    canonicalKind: 'outcome',
+    canonicalRevision: 1,
+    rootProjectId: root.id,
+    rootProjectRevision: 1,
+    rootProjectLifecycle: 'active',
+    registryGeneration: registry.generation,
+  });
+  assert.equal(validateContextPacket(result.packet).ok, true);
+
+  const tampered = structuredClone(activity);
+  tampered.summaries[0].canonicalAtAdmission.rootProjectRevision += 1;
+  const rejected = buildContextPacket({
+    registry, query, capability: issue(query, { nonce: 'nonce-admission-tamper' }), capabilitySecret: SECRET,
+    subject: 'agent:test-session', hostId: 'projects-host', now: NOW, providers: { activity: tampered },
+    providerAuthorities: providerAuthorities({ activity: tampered }),
+  });
+  assert.equal(rejected.packet.providers.activity.state, 'unknown');
+  assert.deepEqual(rejected.packet.activity, []);
 });
 
 test('provider states remain distinct and verified summaries feed bounded sections', () => {
@@ -369,4 +545,6 @@ test('packet identity is stable for the same bounded input', () => {
   assert.equal(first.packet.packetId, second.packet.packetId);
   assert.match(first.packet.packetId, /^ctx_[a-f0-9]{32}$/);
   assert.equal(crypto.createHash('sha256').update(JSON.stringify(first.packet.canonical.revisions)).digest('hex').length, 64);
+  assert.deepEqual(first.packet.inference, second.packet.inference);
+  assert.deepEqual(first.packet.watermarks, second.packet.watermarks);
 });

@@ -1,0 +1,54 @@
+{
+  "contract": "jarvos.project-inference-case/v1",
+  "caseId": "software",
+  "engineRevision": null,
+  "coverage": [
+    { "sourceClass": "execution", "state": "fresh" },
+    { "sourceClass": "release", "state": "stale" },
+    { "sourceClass": "stewardship", "state": "fresh" }
+  ],
+  "observations": [
+    {
+      "observationId": "obs_public_software_execution_001",
+      "evidenceId": "ev_public_software_execution_001",
+      "sourceClass": "execution",
+      "occurredAt": "2026-08-02T10:00:00.000Z",
+      "observedAt": "2026-08-03T10:00:00.000Z",
+      "sourceRevision": "fixture-execution-r1",
+      "sensitivity": "public-fixture",
+      "coverageState": "fresh",
+      "contentDigest": "0239076083f9edc666e758a3b8069955bb3691d46660dc9dfaf29b0fc0093f38"
+    },
+    {
+      "observationId": "obs_public_software_release_001",
+      "evidenceId": "ev_public_software_release_001",
+      "sourceClass": "release",
+      "occurredAt": "2026-07-28T12:00:00.000Z",
+      "observedAt": "2026-08-03T11:00:00.000Z",
+      "sourceRevision": "fixture-release-r1",
+      "sensitivity": "public-fixture",
+      "coverageState": "stale",
+      "contentDigest": "6d1d9d83a6d692315f668ebc71f7aa49a31efa65382d3300ba5b1357a7be4018"
+    },
+    {
+      "observationId": "obs_public_software_stewardship_001",
+      "evidenceId": "ev_public_software_stewardship_001",
+      "sourceClass": "stewardship",
+      "occurredAt": "2026-08-03T13:00:00.000Z",
+      "observedAt": "2026-08-03T14:00:00.000Z",
+      "sourceRevision": "fixture-stewardship-r1",
+      "sensitivity": "public-fixture",
+      "coverageState": "fresh",
+      "contentDigest": "8f495f4f31917a1f3b772a45039317abbaebbfc42f7bf95ce3f150c308dcdf7d"
+    }
+  ],
+  "correction": null,
+  "expected": {
+    "decision": "associate",
+    "kind": "project",
+    "canonicalName": "jarvOS",
+    "aliases": [],
+    "parentCanonicalName": null
+  },
+  "contentDigest": "12358b179515b974b03be94cc4967f6b636196f3a9b4037e342f7844ba2dc4cc"
+}

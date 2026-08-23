@@ -38,6 +38,10 @@
     "./activity-store": "./src/activity-store.js",
     "./projects-context-handoff": "./src/projects-context-handoff.js",
     "./projects-context-profiles": "./src/projects-context-profiles.js",
-    "./projects-context-conformance": "./src/projects-context-conformance.js"
+    "./projects-context-conformance": "./src/projects-context-conformance.js",
+    "./project-inference-contracts": "./src/project-inference-contracts.js",
+    "./project-inference-ledger": "./src/project-inference-ledger.js",
+    "./project-inference-evaluation": "./src/project-inference-evaluation.js",
+    "./project-inference-reconciler": "./src/project-inference-reconciler.js"
   }
 }

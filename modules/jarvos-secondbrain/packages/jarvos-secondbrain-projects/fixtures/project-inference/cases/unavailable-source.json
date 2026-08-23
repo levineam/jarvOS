@@ -1,0 +1,18 @@
+{
+  "contract": "jarvos.project-inference-case/v1",
+  "caseId": "unavailable-source",
+  "engineRevision": null,
+  "coverage": [
+    { "sourceClass": "chat", "state": "unavailable" },
+    { "sourceClass": "release", "state": "healthy-empty" }
+  ],
+  "observations": [],
+  "correction": null,
+  "expected": {
+    "decision": "not-evaluable",
+    "sourceState": "unavailable",
+    "negativeEvidenceAllowed": false,
+    "emptyCorpusMeansNoEvidence": false
+  },
+  "contentDigest": "d696b52848127f6d97f86b09254f99814c3f2ce3ca59375933356390999b3b00"
+}

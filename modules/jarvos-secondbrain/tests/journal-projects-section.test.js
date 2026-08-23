@@ -148,11 +148,12 @@ test('activity-backed projection renders a touched Outcome as its canonical pare
           { id: 'out_000001', kind: 'outcome', title: 'v1.0.0 release', parentId: 'prj_000001', lifecycle: 'active' },
           { id: 'prj_000002', kind: 'project', title: 'Untouched', lifecycle: 'active' },
         ],
-        activities: [{ canonicalId: 'out_000001', occurredAt: '2026-01-02T15:00:00.000Z', trust: 'verified' }],
+        noteMappings: { prj_000001: { target: 'Projects/jarvOS' } },
+        activities: [{ canonicalId: 'out_000001', canonicalAtAdmission: { rootProjectId: 'prj_000001' }, occurredAt: '2026-01-02T15:00:00.000Z', trust: 'verified' }],
       };
     },
   });
-  assert.equal(sectionBody(output, '## 🚀 Projects'), '- [[jarvOS]]');
+  assert.equal(sectionBody(output, '## 🚀 Projects'), '- [[Projects/jarvOS]]');
   assert.doesNotMatch(output, /v1\.0\.0 release/);
   assert.doesNotMatch(output, /Untouched/);
 });
@@ -206,10 +207,11 @@ test('activity projection can repair a backfilled date from that date\'s evidenc
     projectsActivityReader: ({ date }) => ({
       status: 'ok',
       projects: [{ id: 'prj_000001', kind: 'project', title: 'Historical', lifecycle: 'active' }],
-      activities: [{ canonicalId: 'prj_000001', occurredAt: `${date}T11:00:00.000Z`, trust: 'verified' }],
+      noteMappings: { prj_000001: { target: 'Projects/Historical' } },
+      activities: [{ canonicalId: 'prj_000001', canonicalAtAdmission: { rootProjectId: 'prj_000001' }, occurredAt: `${date}T11:00:00.000Z`, trust: 'verified' }],
     }),
   });
-  assert.equal(sectionBody(output, '## 🚀 Projects'), '- [[Historical]]');
+  assert.equal(sectionBody(output, '## 🚀 Projects'), '- [[Projects/Historical]]');
 });
 
 /**
