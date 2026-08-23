@@ -4,6 +4,7 @@
 # the remote connector. Does not register stdio MCP on a Grok Bot disk.
 
 set -euo pipefail
+umask 077
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
@@ -56,11 +57,19 @@ Next steps (vault host):
 
 Grok Bot client (URL + token only):
 
-  URL:  http://$HOST:$PORT/mcp
-  Auth: Bearer $(cat "$TOKEN_FILE")
+  Token file (do not print the token): $TOKEN_FILE
+  Vault-host bind: http://$HOST:$PORT/mcp
+  That loopback URL is this machine, not Grok Bot. Tunnel or set
+  JARVOS_MCP_HTTP_ALLOW_NON_LOOPBACK=1 (cleartext HTTP) as described in
+  runtimes/grok-bot/README.md.
+
+  Example tunnel: ssh -N -L $PORT:127.0.0.1:$PORT user@vault-host
 
 If that URL is unreachable, Grok Bot should fail open and continue without
 jarvOS context. Hydration is manual: boot_jarvos or jarvos_hydrate.
+
+The bearer token grants the full MCP surface of jarvos-mcp.js, not only the
+adapter requiredTools list.
 
 This script does not write Grok Bot stdio MCP config.
 EOF
