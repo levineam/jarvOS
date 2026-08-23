@@ -97,6 +97,7 @@ test('stewardship bootstrap declarations reject a missing action, selected asset
   const baseline = manifestFor('codex').stewardshipAdapter.bootstrap;
   for (const [label, mutate] of [
     ['action', (value) => { value.actions = value.actions.slice(1); }],
+    ['stale five-action list missing session-precompact', (value) => { value.actions = ['harness-launch', 'session-start', 'session-turn', 'bridge', 'provenance-probe']; }],
     ['asset', (value) => { value.selectedRuntimeAssets = []; }],
     ['inspection', (value) => { delete value.installedConfig.inspection; }],
     ['entrypoint', (value) => { value.entrypoint = { kind: 'unknown', path: 'unknown' }; }],

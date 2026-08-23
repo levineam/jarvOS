@@ -109,7 +109,7 @@
       "rootEnvironment": "JARVOS_STEWARDSHIP_STABLE_ROOT",
       "dispatcher": "jarvos-stewardship-dispatcher",
       "entrypoint": { "kind": "openclawPlugin", "path": "jarvos-openclaw-stewardship-plugin" },
-      "actions": ["harness-launch", "session-start", "session-turn", "bridge", "provenance-probe"],
+      "actions": ["harness-launch", "session-start", "session-turn", "bridge", "provenance-probe", "session-precompact"],
       "selectedRuntimeAssets": ["runtimes/openclaw/jarvos-next-turn-plugin.js", "runtimes/openclaw/openclaw.plugin.json", "runtimes/openclaw/package.json"],
       "installedConfig": { "inspection": "stable-entrypoint-only", "prepare": "reversible", "rollback": "exact-owned-state" },
       "provenance": { "action": "provenance-probe", "sideEffectFree": true }

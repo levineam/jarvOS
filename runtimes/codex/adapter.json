@@ -137,7 +137,7 @@
       "rootEnvironment": "JARVOS_STEWARDSHIP_STABLE_ROOT",
       "dispatcher": "jarvos-stewardship-dispatcher",
       "entrypoint": { "kind": "dispatcher", "path": "jarvos-stewardship-dispatcher" },
-      "actions": ["harness-launch", "session-start", "session-turn", "bridge", "provenance-probe"],
+      "actions": ["harness-launch", "session-start", "session-turn", "bridge", "provenance-probe", "session-precompact"],
       "selectedRuntimeAssets": ["runtimes/codex/jarvos-session-start-hook.js", "runtimes/codex/jarvos-session-turn-hook.js"],
       "installedConfig": { "inspection": "stable-entrypoint-only", "prepare": "reversible", "rollback": "exact-owned-state" },
       "provenance": { "action": "provenance-probe", "sideEffectFree": true }

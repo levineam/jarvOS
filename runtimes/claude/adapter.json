@@ -279,7 +279,8 @@
         "session-start",
         "session-turn",
         "bridge",
-        "provenance-probe"
+        "provenance-probe",
+        "session-precompact"
       ],
       "selectedRuntimeAssets": [
         "runtimes/claude/jarvos-session-start-hook.js",
