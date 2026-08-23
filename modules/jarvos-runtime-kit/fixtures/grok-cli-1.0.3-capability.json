@@ -1,0 +1,47 @@
+{
+  "schemaVersion": "jarvos-grok-cli-capability-proof/v1",
+  "provider": "grok",
+  "model": "grok-4.5",
+  "support": "unsupported",
+  "reasonCode": "capability_unsupported",
+  "cli": {
+    "version": "1.0.3",
+    "build": "1a29d5bc12d45",
+    "executableDigest": "b5eef73b94fdc72b8c67218f19abe2b2728db38f1f0e66903de8fb931948bd26"
+  },
+  "auth": {
+    "mode": "oidc-subscription",
+    "issuerHost": "auth.x.ai",
+    "isolatedCredentialRoot": true,
+    "ownerPrivate": true,
+    "apiKeyFallbackDenied": true
+  },
+  "invocation": {
+    "promptTransport": "owner-private-file",
+    "outputFormat": "streaming-messages-json",
+    "effectiveModelSource": "modelUsage-single-key",
+    "tools": "advertised-despite-empty-allowlist",
+    "memory": "disabled",
+    "subagents": "disabled",
+    "webSearch": "disabled",
+    "autoUpdate": "disabled"
+  },
+  "processBoundary": {
+    "platform": "darwin",
+    "architecture": "x86_64",
+    "profile": "macos-strict-v1",
+    "workspace": "staged-scope-only",
+    "ambientHome": "not-mounted-by-adapter",
+    "network": "unenforced-on-macos"
+  },
+  "terminalProof": {
+    "servedModel": "grok-4.5-build",
+    "advertisedToolCount": 24,
+    "toolUseCount": 0,
+    "webSearchRequests": 0
+  },
+  "blockingCapabilities": [
+    "terminal-tool-surface-not-empty",
+    "provider-endpoint-network-boundary-unenforced"
+  ]
+}
