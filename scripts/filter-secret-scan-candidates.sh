@@ -39,10 +39,17 @@ survivors="$(
       # Safe value forms, each tested against the start of the value that follows an
       # assignment. Placeholders are an explicit allowlist rather than a length or
       # entropy heuristic: only an exact list separates test-key from a real key.
-      placeholder = "^[\047\"](test|test-key|test-secret|dummy|placeholder|example|fake|redacted|xxx+|changeme|not-a-real-[a-z-]+)[\047\"]"
-      empty_lit   = "^([\047][\047]|\"\")"
-      env_lit     = "^(process\\.env(\\.[a-z_][a-z0-9_]*|\\[[^]]+\\])|\\$\\{?[a-z_][a-z0-9_]*\\}?)"
-      gh_secret   = "^\\$\\{\\{[[:space:]]*secrets\\.[a-z_][a-z0-9_]*[[:space:]]*\\}\\}"
+      # A safe form must be the WHOLE value, not merely how it starts. Without the
+      # terminator, a safe prefix excuses whatever follows it, and a fallback
+      # literal after an env reference or a concatenated placeholder is never
+      # inspected -- `process.env.PASSWORD || "<literal>"` reads as safe on the
+      # env reference alone. Braces must also balance, so a `${VAR:-default}`
+      # default value cannot pass as a bare `${VAR`.
+      term        = "[[:space:]]*([],;)}]|$)"
+      placeholder = "^[\047\"](test|test-key|test-secret|dummy|placeholder|example|fake|redacted|xxx+|changeme|not-a-real-[a-z-]+)[\047\"]" term
+      empty_lit   = "^([\047][\047]|\"\")" term
+      env_lit     = "^(process\\.env(\\.[a-z_][a-z0-9_]*|\\[[^]]+\\])|\\$\\{[a-z_][a-z0-9_]*\\}|\\$[a-z_][a-z0-9_]*)" term
+      gh_secret   = "^\\$\\{\\{[[:space:]]*secrets\\.[a-z_][a-z0-9_]*[[:space:]]*\\}\\}" term
     }
     function value_is_safe(v) {
       return (v ~ placeholder) || (v ~ empty_lit) || (v ~ gh_secret) || (v ~ env_lit)
