@@ -17,7 +17,8 @@ location, provider output, or authority field.
 Managed descriptors use `jarvos-managed-adapter/v1`. The portable runtime kit
 ships a Claude CLI descriptor and a deterministic fixture descriptor. The Grok
 subscription descriptor is intentionally `unsupported` with
-`capability_proof_pending` until its separate capability proof is accepted.
+`capability_unsupported` until a separate capability proof establishes both
+tool-less execution and an enforceable provider-endpoint network boundary.
 
 The built-in registry has no default profile and no active profile. A fresh
 installation is therefore `unconfigured`; registering a descriptor does not
@@ -45,9 +46,11 @@ public view.
 Changing any egress-policy identity field changes the profile identity and
 requires fresh qualification. Owner acceptance is explicit in the profile.
 
-## Public inspection and proposal CLI
+## Public contract demonstration CLI
 
-These commands are read-only and use the same contract as an agent caller:
+These commands are read-only fixtures for inspecting the portable contract.
+They create a fresh in-memory registry and therefore do not inspect or modify an
+installed owner's provider configuration:
 
 ```bash
 node scripts/active-assistant-provider.js list --json
@@ -56,5 +59,6 @@ node scripts/active-assistant-provider.js propose-switch deterministic-fixture -
 ```
 
 `authorize-and-run` and `rollback` return `owner_authorization_required` from
-this public surface. The local owner operator is the only activation authority.
-
+this demonstration surface. A future local owner operator is the only intended
+activation authority; it is not implemented while the Grok capability gate is
+unsupported.

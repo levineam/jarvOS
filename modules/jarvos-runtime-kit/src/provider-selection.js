@@ -212,8 +212,7 @@ function validateDistribution(value, path, errors, { profile = false } = {}) {
   requireSafe(value[idField], `${path}.${idField}`, errors);
   requireSafe(value.version, `${path}.version`, errors);
   if (profile) requireSafe(value.capabilityVersion, `${path}.capabilityVersion`, errors, { schemaIdentifier: true });
-  if (!profile && value.revision !== undefined) validateDigest(value.revision, `${path}.revision`, errors);
-  if (profile && value.revision !== undefined) validateDigest(value.revision, `${path}.revision`, errors);
+  if (value.revision !== undefined) validateDigest(value.revision, `${path}.revision`, errors);
 }
 
 function validateTransport(value, path, errors) {
@@ -434,7 +433,7 @@ const PORTABLE_CLAUDE_ADAPTER_DESCRIPTOR = deepFreeze({
   capabilityVersion: 'jarvos-claude-cli-capability/v1',
   models: ['claude-sonnet-5'],
   authModes: ['subscription'],
-  promptTransports: ['owner-private-file'],
+  promptTransports: ['stdin'],
   toolPolicy: { mode: 'deny-all', version: 'v1' },
   egressPolicy: {
     digest: descriptorPolicyDigest(['source_excerpt', 'project_context']),
@@ -635,7 +634,6 @@ function publicProfile(profile, { state } = {}) {
 }
 
 function renderProviderReadView({ generation = 'fresh-generation', operatorState = {} } = {}) {
-  requireOpaque(generation, 'generation', []); // keep the public error below deterministic
   if (!isOpaque(generation)) throw providerError('invalid_generation', 'generation must be opaque');
   const state = operatorState.state || 'unconfigured';
   if (!PROVIDER_PROFILE_STATES.includes(state)) throw providerError('invalid_runtime_state', `state must be one of: ${PROVIDER_PROFILE_STATES.join(', ')}`);
@@ -860,6 +858,7 @@ function providerProfileIdentity(profile) {
     promptTransport: profile.promptTransport,
     toolPolicy: profile.toolPolicy,
     egressPolicy: profile.egressPolicy,
+    runtimeTuple: profile.runtimeTuple || null,
   });
 }
 

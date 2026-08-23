@@ -22,7 +22,7 @@ function profile(overrides = {}) {
       capabilityVersion: 'jarvos-claude-cli-capability/v1',
     },
     authMode: 'subscription',
-    promptTransport: { mode: 'owner-private-file', version: 'v1' },
+    promptTransport: { mode: 'stdin', version: 'v1' },
     toolPolicy: { mode: 'deny-all', version: 'v1' },
     egressPolicy: {
       digest: '1'.repeat(64),
@@ -237,6 +237,23 @@ test('egress policy is bound to provider identity and policy changes require fre
     schemaVersion: first.schemaVersion,
   };
   assert.equal(kit.providerProfileIdentity(first), kit.providerProfileIdentity(reordered));
+});
+
+test('managed runtime tuple changes require fresh qualification', () => {
+  const prior = profile({
+    state: 'active',
+    qualificationState: 'current',
+    egressPolicy: { ownerAcceptance: 'accepted' },
+    runtimeTuple: { tupleDigest: TUPLE_A, generation: 'generation-a' },
+  });
+  const next = profile({
+    state: 'active',
+    qualificationState: 'current',
+    egressPolicy: { ownerAcceptance: 'accepted' },
+    runtimeTuple: { tupleDigest: TUPLE_B, generation: 'generation-b' },
+  });
+  assert.notEqual(kit.providerProfileIdentity(prior), kit.providerProfileIdentity(next));
+  assert.equal(kit.qualificationRequiresFreshMatrix(prior, next), true);
 });
 
 test('registry rejects duplicate identities and proposals require a registered profile', () => {
