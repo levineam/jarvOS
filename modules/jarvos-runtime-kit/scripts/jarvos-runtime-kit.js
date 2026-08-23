@@ -4,6 +4,7 @@
 const path = require('path');
 const fs = require('fs');
 const {
+  checkDispatcher,
   checkRuntime,
   getManagedActivationStatus,
   listRuntimeManifests,
@@ -18,6 +19,7 @@ function usage() {
     'Usage:',
     '  jarvos-runtime-kit validate <adapter.json> [--json]',
     '  jarvos-runtime-kit check <runtime|all|adapter.json> [--json]',
+    '  jarvos-runtime-kit check-dispatcher <path> [--harness <h>] [--json]',
     '  jarvos-runtime-kit activation-status <runtime|all> [--evidence <owner-local-json>] [--json]',
     '  jarvos-runtime-kit scaffold <runtime-id> --out <dir>',
   ].join('\n');
@@ -111,6 +113,16 @@ async function main() {
         : [path.join(root, 'runtimes', runtime, 'adapter.json')];
     const results = manifests.map((manifestPath) => checkRuntime(manifestPath, { root }));
     const result = { ok: results.every((item) => item.ok), results };
+    printResult(result, json);
+    process.exit(result.ok ? 0 : 1);
+  }
+
+  if (command === 'check-dispatcher') {
+    const binPath = args[1];
+    if (!binPath) throw new Error('check-dispatcher requires <path>');
+    const harness = flagValue(args, '--harness') || 'claude';
+    const checkResult = checkDispatcher(binPath, { harness });
+    const result = { path: binPath, ...checkResult };
     printResult(result, json);
     process.exit(result.ok ? 0 : 1);
   }

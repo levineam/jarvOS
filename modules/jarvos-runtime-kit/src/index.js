@@ -9,6 +9,7 @@ const harnessDispatch = require('./harness-dispatch.js');
 const { isSha256 } = harnessDispatch;
 const stewardshipAdapter = require('./stewardship-adapter.js');
 const stewardshipBootstrap = require('./stewardship-bootstrap.js');
+const dispatcherConformance = require('./dispatcher-conformance.js');
 const openclawPluginPersistence = require('./openclaw-plugin-persistence.js');
 const capabilityDescriptor = require('./capability-descriptor.js');
 const operatorNotification = require('./operator-notification.js');
@@ -1288,6 +1289,7 @@ module.exports = {
   ...harnessDispatch,
   ...stewardshipAdapter,
   ...stewardshipBootstrap,
+  ...dispatcherConformance,
   ...openclawPluginPersistence,
   ...capabilityDescriptor,
   ...operatorNotification,
