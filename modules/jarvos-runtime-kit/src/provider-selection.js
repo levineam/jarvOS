@@ -103,6 +103,7 @@ const EGRESS_FIELDS = new Set([
   'allowedDataClasses',
   'minimizationRevision',
   'disclosureRevision',
+  'byteBudget',
   'ownerAcceptance',
 ]);
 const DESCRIPTOR_EGRESS_FIELDS = new Set([
@@ -110,7 +111,9 @@ const DESCRIPTOR_EGRESS_FIELDS = new Set([
   'allowedDataClasses',
   'minimizationRevision',
   'disclosureRevision',
+  'byteBudget',
 ]);
+const BYTE_BUDGET_FIELDS = new Set(['maxBytes', 'revision']);
 const RUNTIME_TUPLE_FIELDS = new Set(['tupleDigest', 'generation']);
 const HEALTH_FIELDS = new Set([
   'schemaVersion',
@@ -120,6 +123,9 @@ const HEALTH_FIELDS = new Set([
   'observedAt',
   'descriptorVersion',
   'generation',
+  'executableDigest',
+  'tupleDigest',
+  'policyDigest',
 ]);
 const VIEW_FIELDS = new Set([
   'schemaVersion',
@@ -169,7 +175,7 @@ function isOpaque(value) {
 function addUnknownAndForbidden(value, allowed, path, errors) {
   if (!isObject(value)) return;
   for (const key of Object.keys(value)) {
-    if (FORBIDDEN_FIELD.test(key)) errors.push(`${path}.${key} is a forbidden authority or private field`);
+    if (!allowed.has(key) && FORBIDDEN_FIELD.test(key)) errors.push(`${path}.${key} is a forbidden authority or private field`);
     if (!allowed.has(key)) errors.push(`${path} has unknown field: ${key}`);
   }
 }
@@ -238,6 +244,15 @@ function validateDataClasses(value, path, errors) {
   for (const dataClass of value) requireEnum(dataClass, `${path}[]`, PROVIDER_ALLOWED_DATA_CLASSES, errors);
 }
 
+function validateByteBudget(value, path, errors) {
+  if (!requireObject(value, path, errors)) return;
+  addUnknownAndForbidden(value, BYTE_BUDGET_FIELDS, path, errors);
+  if (!Number.isInteger(value.maxBytes) || value.maxBytes < 1 || value.maxBytes > 1_000_000) {
+    errors.push(`${path}.maxBytes must be an integer between 1 and 1000000`);
+  }
+  requireSafe(value.revision, `${path}.revision`, errors, { identifier: true });
+}
+
 function validateEgressPolicy(value, path, errors, { descriptor = false } = {}) {
   const fields = descriptor ? DESCRIPTOR_EGRESS_FIELDS : EGRESS_FIELDS;
   if (!requireObject(value, path, errors)) return;
@@ -246,6 +261,7 @@ function validateEgressPolicy(value, path, errors, { descriptor = false } = {}) 
   validateDataClasses(value.allowedDataClasses, `${path}.allowedDataClasses`, errors);
   requireSafe(value.minimizationRevision, `${path}.minimizationRevision`, errors, { identifier: true });
   requireSafe(value.disclosureRevision, `${path}.disclosureRevision`, errors, { identifier: true });
+  if (value.byteBudget !== undefined) validateByteBudget(value.byteBudget, `${path}.byteBudget`, errors);
   if (!descriptor) requireEnum(value.ownerAcceptance, `${path}.ownerAcceptance`, ['required', 'accepted'], errors);
 }
 
@@ -288,6 +304,9 @@ function validateProviderProfile(profile) {
   if (profile.state === 'active' && profile.egressPolicy.ownerAcceptance !== 'accepted') {
     errors.push('active provider profile requires accepted egressPolicy');
   }
+  if (profile.provider === 'grok' && profile.state === 'active' && profile.egressPolicy.byteBudget === undefined) {
+    errors.push('active Grok provider profile requires a versioned egressPolicy.byteBudget');
+  }
   return { ok: errors.length === 0, errors };
 }
 
@@ -310,6 +329,9 @@ function validateManagedAdapterDescriptor(descriptor) {
   else descriptor.promptTransports.forEach((mode) => requireEnum(mode, 'managed adapter descriptor.promptTransports[]', PROVIDER_PROMPT_TRANSPORTS, errors));
   validateToolPolicy(descriptor.toolPolicy, 'managed adapter descriptor.toolPolicy', errors);
   validateEgressPolicy(descriptor.egressPolicy, 'managed adapter descriptor.egressPolicy', errors, { descriptor: true });
+  if (descriptor.provider === 'grok' && descriptor.egressPolicy?.byteBudget === undefined) {
+    errors.push('Grok managed adapter descriptor requires a versioned egressPolicy.byteBudget');
+  }
   requireEnum(descriptor.support, 'managed adapter descriptor.support', PROVIDER_SUPPORT_STATES, errors);
   if (descriptor.support === 'unsupported') requireEnum(descriptor.reasonCode, 'managed adapter descriptor.reasonCode', PROVIDER_REASON_CODES, errors);
   else if (descriptor.reasonCode !== undefined) requireEnum(descriptor.reasonCode, 'managed adapter descriptor.reasonCode', PROVIDER_REASON_CODES, errors);
@@ -329,6 +351,9 @@ function validateProviderHealth(health) {
   if (health.observedAt !== undefined) requireIso(health.observedAt, 'provider health.observedAt', errors);
   if (health.descriptorVersion !== undefined) requireSafe(health.descriptorVersion, 'provider health.descriptorVersion', errors, { schemaIdentifier: true });
   if (health.generation !== undefined) requireOpaque(health.generation, 'provider health.generation', errors);
+  if (health.executableDigest !== undefined) validateDigest(health.executableDigest, 'provider health.executableDigest', errors);
+  if (health.tupleDigest !== undefined) validateDigest(health.tupleDigest, 'provider health.tupleDigest', errors);
+  if (health.policyDigest !== undefined) validateDigest(health.policyDigest, 'provider health.policyDigest', errors);
   return { ok: errors.length === 0, errors };
 }
 
@@ -410,8 +435,13 @@ function createProviderProfile(input = {}) {
   };
 }
 
-function descriptorPolicyDigest(dataClasses = PROVIDER_ALLOWED_DATA_CLASSES) {
-  return canonicalDigest({ allowedDataClasses: [...dataClasses].sort(), minimizationRevision: 'v1', disclosureRevision: 'v1' });
+function descriptorPolicyDigest(dataClasses = PROVIDER_ALLOWED_DATA_CLASSES, byteBudget) {
+  return canonicalDigest({
+    allowedDataClasses: [...dataClasses].sort(),
+    minimizationRevision: 'v1',
+    disclosureRevision: 'v1',
+    ...(byteBudget === undefined ? {} : { byteBudget }),
+  });
 }
 
 function deepFreeze(value) {
@@ -489,13 +519,13 @@ const GROK_SUBSCRIPTION_ADAPTER_DESCRIPTOR = deepFreeze({
   promptTransports: ['owner-private-file'],
   toolPolicy: { mode: 'deny-all', version: 'v1' },
   egressPolicy: {
-    digest: descriptorPolicyDigest(['source_excerpt', 'project_context']),
+    digest: descriptorPolicyDigest(['source_excerpt', 'project_context'], { maxBytes: 16_384, revision: 'v1' }),
     allowedDataClasses: ['source_excerpt', 'project_context'],
     minimizationRevision: 'v1',
     disclosureRevision: 'v1',
+    byteBudget: { maxBytes: 16_384, revision: 'v1' },
   },
-  support: 'unsupported',
-  reasonCode: 'capability_unsupported',
+  support: 'supported',
   deterministic: false,
   portable: true,
 });
@@ -530,6 +560,9 @@ function profileFromDescriptor(descriptor, overrides = {}) {
       allowedDataClasses: dataClasses,
       minimizationRevision: descriptor.egressPolicy.minimizationRevision,
       disclosureRevision: descriptor.egressPolicy.disclosureRevision,
+      ...(descriptor.egressPolicy.byteBudget === undefined ? {} : {
+        byteBudget: { ...descriptor.egressPolicy.byteBudget },
+      }),
       ownerAcceptance: 'required',
     },
     ...overrides,
@@ -624,6 +657,9 @@ function publicProfile(profile, { state } = {}) {
       allowedDataClasses: [...profile.egressPolicy.allowedDataClasses],
       minimizationRevision: profile.egressPolicy.minimizationRevision,
       disclosureRevision: profile.egressPolicy.disclosureRevision,
+      ...(profile.egressPolicy.byteBudget === undefined ? {} : {
+        byteBudget: { ...profile.egressPolicy.byteBudget },
+      }),
       ownerAcceptance: profile.egressPolicy.ownerAcceptance,
     },
     qualificationState: profile.qualificationState,
@@ -681,8 +717,30 @@ function isProviderViewPreparationEligible(view, { operatorGeneration, selectedT
   if (view.readOnly !== true || view.state !== 'active' || view.generation !== operatorGeneration) return false;
   const profile = view.activeProfile;
   if (!profile || !profile.runtimeTuple || !['legacy', 'current'].includes(profile.qualificationState)) return false;
-  return profile.runtimeTuple.tupleDigest.toLowerCase() === selectedTupleDigest.toLowerCase()
-    && profile.runtimeTuple.generation === operatorGeneration;
+  if (profile.runtimeTuple.tupleDigest.toLowerCase() !== selectedTupleDigest.toLowerCase()
+    || profile.runtimeTuple.generation !== operatorGeneration) return false;
+
+  // Grok support is portable, but host readiness remains bound to a redacted
+  // capability observation. The private receipt that produces this health
+  // record belongs to the host adapter (U2), not this public package.
+  if (profile.provider === 'grok') {
+    const health = view.health;
+    if (profile.egressPolicy.ownerAcceptance !== 'accepted' || !profile.egressPolicy.byteBudget) return false;
+    if (!health
+      || health.profileId !== profile.profileId
+      || health.status !== 'active'
+      || health.reasonCode !== 'active'
+      || health.descriptorVersion !== profile.adapterDistribution.capabilityVersion
+      || health.generation !== operatorGeneration
+      || !isSha256(profile.adapterDistribution.revision)
+      || typeof health.executableDigest !== 'string'
+      || health.executableDigest.toLowerCase() !== profile.adapterDistribution.revision.toLowerCase()
+      || typeof health.tupleDigest !== 'string'
+      || health.tupleDigest.toLowerCase() !== selectedTupleDigest.toLowerCase()
+      || typeof health.policyDigest !== 'string'
+      || health.policyDigest.toLowerCase() !== profile.egressPolicy.digest.toLowerCase()) return false;
+  }
+  return true;
 }
 
 function canPrepareProviderView(view, options = {}) {
@@ -695,7 +753,17 @@ function canDeliverProviderView() {
   return false;
 }
 
-function redactedProviderHealth({ profileId, status, reasonCode, observedAt, descriptorVersion, generation } = {}) {
+function redactedProviderHealth({
+  profileId,
+  status,
+  reasonCode,
+  observedAt,
+  descriptorVersion,
+  generation,
+  executableDigest,
+  tupleDigest,
+  policyDigest,
+} = {}) {
   const health = {
     schemaVersion: PROVIDER_HEALTH_SCHEMA_VERSION,
     ...(profileId === undefined ? {} : { profileId }),
@@ -704,6 +772,9 @@ function redactedProviderHealth({ profileId, status, reasonCode, observedAt, des
     ...(observedAt === undefined ? {} : { observedAt }),
     ...(descriptorVersion === undefined ? {} : { descriptorVersion }),
     ...(generation === undefined ? {} : { generation }),
+    ...(executableDigest === undefined ? {} : { executableDigest }),
+    ...(tupleDigest === undefined ? {} : { tupleDigest }),
+    ...(policyDigest === undefined ? {} : { policyDigest }),
   };
   const validation = validateProviderHealth(health);
   if (!validation.ok) throw providerError('invalid_provider_health', validation.errors.join('; '));
@@ -715,7 +786,16 @@ function classifyProviderHealth({ descriptor, evidence = {} } = {}) {
   if (!descriptorResult.ok) throw providerError('invalid_adapter_descriptor', descriptorResult.errors.join('; '));
   let status = 'available';
   let reasonCode = 'ready';
-  if (descriptor.support === 'unsupported' || evidence.capability === 'unsupported') {
+  const capability = evidence.capability;
+  const capabilitySupported = capability === 'supported'
+    || capability?.support === 'supported'
+    || capability?.status === 'supported'
+    || capability?.state === 'supported';
+  const capabilityUnsupported = capability === 'unsupported'
+    || capability?.support === 'unsupported'
+    || capability?.status === 'unsupported'
+    || capability?.state === 'unsupported';
+  if (descriptor.support === 'unsupported' || capabilityUnsupported) {
     status = 'unsupported';
     reasonCode = descriptor.reasonCode || 'capability_unsupported';
   } else if (evidence.executable === 'missing') {
@@ -724,6 +804,9 @@ function classifyProviderHealth({ descriptor, evidence = {} } = {}) {
   } else if (evidence.unhealthy === true) {
     status = 'unhealthy';
     reasonCode = 'provider_unhealthy';
+  } else if (descriptor.provider === 'grok' && !capabilitySupported) {
+    status = 'unsupported';
+    reasonCode = 'capability_proof_pending';
   } else if (!descriptor.authModes.includes('none') && evidence.authenticated !== true) {
     status = 'auth_required';
     reasonCode = 'auth_missing';
@@ -737,6 +820,9 @@ function classifyProviderHealth({ descriptor, evidence = {} } = {}) {
     reasonCode,
     descriptorVersion: descriptor.capabilityVersion,
     ...(evidence.generation === undefined ? {} : { generation: evidence.generation }),
+    ...(evidence.executableDigest === undefined ? {} : { executableDigest: evidence.executableDigest }),
+    ...(evidence.tupleDigest === undefined ? {} : { tupleDigest: evidence.tupleDigest }),
+    ...(evidence.policyDigest === undefined ? {} : { policyDigest: evidence.policyDigest }),
   });
 }
 
@@ -744,11 +830,11 @@ function listProviderProfiles({ registry = createProviderRegistry() } = {}) {
   const descriptors = new Map(registry.descriptors.map((descriptor) => [descriptor.profileId, descriptor]));
   const profiles = registry.profiles.map((profile) => {
     const descriptor = descriptors.get(profile.profileId);
-    const status = descriptor.support === 'unsupported'
-      ? 'unsupported'
-      : profile.state === 'active'
-        ? 'active'
-        : 'unconfigured';
+    const status = profile.state === 'active'
+      ? 'active'
+      : descriptor.support === 'supported'
+        ? 'available'
+        : 'unsupported';
     return {
       profileId: profile.profileId,
       provider: profile.provider,

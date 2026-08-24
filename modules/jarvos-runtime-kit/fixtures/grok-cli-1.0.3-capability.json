@@ -2,8 +2,7 @@
   "schemaVersion": "jarvos-grok-cli-capability-proof/v1",
   "provider": "grok",
   "model": "grok-4.5",
-  "support": "unsupported",
-  "reasonCode": "capability_unsupported",
+  "support": "supported",
   "cli": {
     "version": "1.0.3",
     "build": "1a29d5bc12d45",
@@ -20,7 +19,8 @@
     "promptTransport": "owner-private-file",
     "outputFormat": "streaming-messages-json",
     "effectiveModelSource": "modelUsage-single-key",
-    "tools": "advertised-despite-empty-allowlist",
+    "tools": "deny-all",
+    "toolCatalog": "observation-only",
     "memory": "disabled",
     "subagents": "disabled",
     "webSearch": "disabled",
@@ -32,7 +32,7 @@
     "profile": "macos-strict-v1",
     "workspace": "staged-scope-only",
     "ambientHome": "not-mounted-by-adapter",
-    "network": "unenforced-on-macos"
+    "network": "provider-control-plane-only"
   },
   "terminalProof": {
     "servedModel": "grok-4.5-build",
@@ -40,8 +40,22 @@
     "toolUseCount": 0,
     "webSearchRequests": 0
   },
+  "egressPolicy": {
+    "posture": "accepted-provider-control-plane",
+    "ownerAcceptance": "accepted",
+    "allowedDataClasses": [
+      "project_context",
+      "source_excerpt"
+    ],
+    "minimizationRevision": "v1",
+    "disclosureRevision": "v1",
+    "byteBudget": {
+      "maxBytes": 16384,
+      "revision": "v1"
+    },
+    "endpointFirewallAttestation": "not-required"
+  },
   "blockingCapabilities": [
-    "terminal-tool-surface-not-empty",
-    "provider-endpoint-network-boundary-unenforced"
+    "host-capability-evidence-required"
   ]
 }
