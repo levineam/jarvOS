@@ -91,14 +91,18 @@ test('rejects unknown and authority-shaped provider fields, paths, credentials, 
   assert.match(pathLikeId.errors.join('\n'), /safe non-empty string/i);
 });
 
-test('built-in descriptors remain portable while Grok reports the proved host blockers', () => {
+test('built-in descriptors remain portable while Grok advertises optional support', () => {
   assert.deepEqual(kit.PORTABLE_CLAUDE_ADAPTER_DESCRIPTOR, kit.getBuiltInAdapterDescriptors().claude);
   assert.deepEqual(kit.DETERMINISTIC_ADAPTER_DESCRIPTOR, kit.getBuiltInAdapterDescriptors().deterministic);
   assert.deepEqual(kit.GROK_SUBSCRIPTION_ADAPTER_DESCRIPTOR, kit.getBuiltInAdapterDescriptors().grok);
-  assert.equal(kit.GROK_SUBSCRIPTION_ADAPTER_DESCRIPTOR.support, 'unsupported');
-  assert.equal(kit.GROK_SUBSCRIPTION_ADAPTER_DESCRIPTOR.reasonCode, 'capability_unsupported');
+  assert.equal(kit.GROK_SUBSCRIPTION_ADAPTER_DESCRIPTOR.support, 'supported');
+  assert.equal(Object.hasOwn(kit.GROK_SUBSCRIPTION_ADAPTER_DESCRIPTOR, 'reasonCode'), false);
   assert.equal(kit.GROK_SUBSCRIPTION_ADAPTER_DESCRIPTOR.distribution.version, '1.0.3');
   assert.match(kit.GROK_SUBSCRIPTION_ADAPTER_DESCRIPTOR.distribution.revision, /^[a-f0-9]{64}$/);
+  assert.deepEqual(kit.GROK_SUBSCRIPTION_ADAPTER_DESCRIPTOR.egressPolicy.byteBudget, {
+    maxBytes: 65_536,
+    revision: 'v1',
+  });
   assert.equal(kit.validateManagedAdapterDescriptor(kit.GROK_SUBSCRIPTION_ADAPTER_DESCRIPTOR).ok, true);
 
   const serialized = JSON.stringify(kit.getBuiltInAdapterDescriptors());
@@ -116,6 +120,7 @@ test('fresh installation is unconfigured and never picks a paid default', () => 
   const registry = kit.createProviderRegistry();
   const view = kit.createFreshProviderView();
   const listed = kit.listProviderProfiles({ registry });
+  const grok = registry.profiles.find((item) => item.profileId === 'grok-subscription');
 
   assert.equal(view.state, 'unconfigured');
   assert.equal(view.activeProfile, null);
@@ -124,7 +129,12 @@ test('fresh installation is unconfigured and never picks a paid default', () => 
   assert.equal(listed.activeProfileId, null);
   assert.equal(listed.profiles.some((item) => item.state === 'active'), false);
   assert.equal(listed.defaultProfileId, null);
-  assert.equal(listed.profiles.find((item) => item.profileId === 'grok-subscription').status, 'unsupported');
+  assert.equal(listed.profiles.find((item) => item.profileId === 'grok-subscription').status, 'available');
+  assert.equal(listed.profiles.find((item) => item.profileId === 'grok-subscription').support, 'supported');
+  assert.equal(listed.profiles.find((item) => item.profileId === 'grok-subscription').state, 'unconfigured');
+  assert.equal(listed.profiles.find((item) => item.profileId === 'grok-subscription').qualificationState, 'absent');
+  assert.equal(grok.egressPolicy.ownerAcceptance, 'required');
+  assert.deepEqual(grok.egressPolicy.byteBudget, { maxBytes: 65_536, revision: 'v1' });
   assert.equal(JSON.stringify(view).includes('XAI_API_KEY'), false);
 });
 
@@ -136,6 +146,110 @@ test('health distinguishes missing executable, missing auth, unsupported capabil
   assert.equal(kit.classifyProviderHealth({ descriptor, evidence: { executable: 'present', authenticated: true, unhealthy: true } }).status, 'unhealthy');
   assert.equal(kit.classifyProviderHealth({ descriptor, evidence: { executable: 'present', authenticated: true, active: true } }).status, 'active');
   assert.equal(kit.classifyProviderHealth({ descriptor: kit.DETERMINISTIC_ADAPTER_DESCRIPTOR }).status, 'available');
+});
+
+test('Grok health requires host capability evidence and an active view cannot prepare without it', () => {
+  const descriptor = kit.GROK_SUBSCRIPTION_ADAPTER_DESCRIPTOR;
+  const absent = kit.classifyProviderHealth({ descriptor });
+  assert.equal(absent.status, 'unsupported');
+  assert.equal(absent.reasonCode, 'capability_proof_pending');
+
+  const stale = kit.classifyProviderHealth({
+    descriptor,
+    evidence: { executable: 'present', authenticated: true, active: true, capability: 'unsupported' },
+  });
+  assert.equal(stale.status, 'unsupported');
+  assert.equal(stale.reasonCode, 'capability_unsupported');
+
+  const profile = kit.profileFromDescriptor(descriptor, {
+    state: 'active',
+    qualificationState: 'current',
+    egressPolicy: {
+      ...kit.profileFromDescriptor(descriptor).egressPolicy,
+      ownerAcceptance: 'accepted',
+    },
+    runtimeTuple: { tupleDigest: TUPLE_A, generation: 'grok-generation' },
+  });
+  const view = kit.renderProviderReadView({
+    generation: 'grok-generation',
+    operatorState: { state: 'active', activeProfile: profile },
+  });
+  assert.equal(kit.canPrepareProviderView(view, {
+    operatorGeneration: 'grok-generation',
+    selectedTupleDigest: TUPLE_A,
+  }), false);
+
+  const fresh = kit.classifyProviderHealth({
+    descriptor,
+    evidence: {
+      executable: 'present',
+      authenticated: true,
+      active: true,
+      capability: 'supported',
+      generation: 'grok-generation',
+      executableDigest: descriptor.distribution.revision,
+      tupleDigest: TUPLE_A,
+      policyDigest: descriptor.egressPolicy.digest,
+    },
+  });
+  const readyView = kit.renderProviderReadView({
+    generation: 'grok-generation',
+    operatorState: { state: 'active', activeProfile: profile, health: fresh },
+  });
+  assert.equal(fresh.status, 'active');
+  assert.equal(kit.canPrepareProviderView(readyView, {
+    operatorGeneration: 'grok-generation',
+    selectedTupleDigest: TUPLE_A,
+  }), true);
+  assert.equal(kit.canPrepareProviderView(readyView, {
+    operatorGeneration: 'stale-generation',
+    selectedTupleDigest: TUPLE_A,
+  }), false);
+
+  for (const [label, mismatch] of [
+    ['executable', { executableDigest: 'f'.repeat(64) }],
+    ['tuple', { tupleDigest: TUPLE_B }],
+    ['policy', { policyDigest: 'f'.repeat(64) }],
+    ['generation', { generation: 'stale-generation' }],
+  ]) {
+    const mismatchedHealth = kit.classifyProviderHealth({
+      descriptor,
+      evidence: {
+        executable: 'present',
+        authenticated: true,
+        active: true,
+        capability: 'supported',
+        generation: 'grok-generation',
+        executableDigest: descriptor.distribution.revision,
+        tupleDigest: TUPLE_A,
+        policyDigest: descriptor.egressPolicy.digest,
+        ...mismatch,
+      },
+    });
+    const mismatchedView = kit.renderProviderReadView({
+      generation: 'grok-generation',
+      operatorState: { state: 'active', activeProfile: profile, health: mismatchedHealth },
+    });
+    assert.equal(kit.canPrepareProviderView(mismatchedView, {
+      operatorGeneration: 'grok-generation',
+      selectedTupleDigest: TUPLE_A,
+    }), false, label);
+  }
+});
+
+test('malformed Grok capability, executable identity, tool policy, and egress policy are rejected', () => {
+  const descriptor = kit.GROK_SUBSCRIPTION_ADAPTER_DESCRIPTOR;
+  const malformed = [
+    ['capability version', { capabilityVersion: '' }],
+    ['executable digest', { distribution: { ...descriptor.distribution, revision: 'not-a-digest' } }],
+    ['tool policy', { toolPolicy: { mode: 'allow-all', version: 'v1' } }],
+    ['egress policy', { egressPolicy: { ...descriptor.egressPolicy, digest: 'not-a-digest' } }],
+  ];
+  for (const [label, overrides] of malformed) {
+    const candidate = { ...descriptor, ...overrides };
+    const result = kit.validateManagedAdapterDescriptor(candidate);
+    assert.equal(result.ok, false, label);
+  }
 });
 
 test('active legacy migration preserves the exact incumbent tuple without false requalification', () => {
