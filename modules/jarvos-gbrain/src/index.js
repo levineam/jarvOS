@@ -3,6 +3,7 @@
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
+const crypto = require('crypto');
 const { spawnSync } = require('child_process');
 
 const MODULE_ROOT = path.resolve(__dirname, '..');
@@ -18,6 +19,7 @@ const DEFAULT_GBRAIN_BIN_CANDIDATES = [
 ];
 const DEFAULT_RETRIEVAL_LIMIT = 5;
 const DEFAULT_RETRIEVAL_TIMEOUT_MS = 15000;
+const RETRIEVAL_EVAL_ARTIFACT_SCHEMA = 'jarvos-gbrain-retrieval-eval-artifact/v1';
 const JARVOS_PATHS_PACKAGE = '@jarvos/secondbrain/bridge/config/jarvos-paths.js';
 const JARVOS_PATHS_SOURCE_MODULE = path.resolve(
   MODULE_ROOT,
@@ -461,6 +463,7 @@ function runCommand(command, args, options = {}) {
     stdout: result.stdout || '',
     stderr: result.stderr || '',
     error: result.error ? result.error.message : null,
+    errorCode: result.error?.code || null,
   };
 }
 
@@ -484,6 +487,188 @@ function readEvalQuestions(config) {
   return Array.isArray(data.questions)
     ? data.questions.filter((question) => !(question && typeof question === 'object' && question.include === false))
     : [];
+}
+
+function digest(value) {
+  const serialized = typeof value === 'string' || Buffer.isBuffer(value)
+    ? value
+    : JSON.stringify(value);
+  return `sha256:${crypto.createHash('sha256').update(serialized).digest('hex')}`;
+}
+
+function stableQuestionId(entry, index) {
+  const ordinal = String(index + 1).padStart(2, '0');
+  return `question-${ordinal}-${digest(entry).slice(7, 19)}`;
+}
+
+function commandCandidateDigests(command, engine) {
+  const output = String(command?.stdout || command?.stdoutSample || '').trim();
+  if (!output) return [];
+  const parsed = parseJsonOutput(output);
+  const parsedRows = parsed.ok
+    ? Array.isArray(parsed.value)
+      ? parsed.value
+      : Array.isArray(parsed.value?.results)
+        ? parsed.value.results
+        : Array.isArray(parsed.value?.items)
+          ? parsed.value.items
+          : Array.isArray(parsed.value?.matches)
+            ? parsed.value.matches
+            : parsed.value && typeof parsed.value === 'object' ? [parsed.value] : []
+    : [];
+  const rows = parsedRows.length ? parsedRows : output.split(/\r?\n/).filter(Boolean);
+  return rows.slice(0, 50).map((row, index) => {
+    const identity = row && typeof row === 'object'
+      ? {
+        file: row.file || row.path || row.uri || null,
+        title: row.title || null,
+        docid: row.docid || row.id || null,
+        slug: row.slug || null,
+      }
+      : String(row);
+    return { rank: index + 1, candidateDigest: digest({ engine, identity }) };
+  });
+}
+
+function graphCandidateDigests(graph) {
+  return (graph?.results || []).flatMap((result) => (result.nodes || []).map((node, index) => ({
+    rank: index + 1,
+    candidateDigest: digest({
+      engine: 'gbrain_graph',
+      seed: result.seed || null,
+      slug: node.slug || null,
+      title: node.title || null,
+      type: node.type || null,
+      depth: node.depth ?? null,
+    }),
+  })));
+}
+
+function actualCandidateDigests(engineName, engineResult) {
+  if (!engineResult || typeof engineResult !== 'object') return [];
+  if (engineName === 'gbrain_graph') return graphCandidateDigests(engineResult.recall);
+  if (engineName === 'gbrain_recall') {
+    const bundle = engineResult.bundle || {};
+    return [
+      ...commandCandidateDigests(bundle.engines?.gbrain?.command, 'gbrain'),
+      ...commandCandidateDigests(bundle.engines?.qmd?.command, 'qmd'),
+      ...graphCandidateDigests(bundle.graph),
+    ];
+  }
+  return commandCandidateDigests(engineResult.command, engineName);
+}
+
+function expectedCandidateDigests(engineName, engineResult) {
+  if (!engineResult || typeof engineResult !== 'object') return [];
+  const values = engineName === 'gbrain_recall'
+    ? engineResult.expectedCandidates
+    : engineResult.expected === undefined ? [] : [engineResult.expected];
+  return (values || []).map((value) => digest(value));
+}
+
+function engineFailureReason(engineName, engineResult) {
+  if (!engineResult || typeof engineResult !== 'object') return 'missing-engine';
+  if (engineResult.failureReason) return engineResult.failureReason;
+  if (engineName === 'gbrain_recall') {
+    const nestedReason = engineResult.bundle?.engines?.gbrain?.failureReason
+      || engineResult.bundle?.engines?.qmd?.failureReason;
+    if (nestedReason) return nestedReason;
+  }
+  const commands = engineName === 'gbrain_recall'
+    ? [engineResult.bundle?.engines?.gbrain?.command, engineResult.bundle?.engines?.qmd?.command]
+    : engineName === 'gbrain_graph'
+      ? (engineResult.recall?.results || []).map((result) => result.command)
+      : [engineResult.command];
+  if (commands.some((command) => command?.errorCode === 'ENOENT')) return 'missing-engine';
+  if (commands.some((command) => command?.timedOut)) return 'timeout';
+  if (commands.some((command) => command && command.ok === false)) return 'engine-command-failed';
+  if (engineResult.parseError || engineResult.recall?.results?.some((result) => result.parseError)) return 'malformed-result';
+  if (actualCandidateDigests(engineName, engineResult).length === 0) return 'empty-candidate-set';
+  if (engineResult.expectedMatched === false) return 'expected-candidate-missing';
+  return 'engine-failed';
+}
+
+function healthBearingEngines(result, { compareQmd, compareGraph, compareRecall }) {
+  if (compareRecall) {
+    return [
+      'gbrain_recall',
+      ...(compareQmd ? ['qmd'] : []),
+      ...(compareGraph && result.engines?.gbrain_graph ? ['gbrain_graph'] : []),
+    ];
+  }
+  return ['gbrain', ...(compareQmd ? ['qmd'] : []), ...(compareGraph && result.engines?.gbrain_graph ? ['gbrain_graph'] : [])];
+}
+
+function sourceRevision() {
+  const result = spawnSync('git', ['rev-parse', '--verify', 'HEAD'], {
+    cwd: path.resolve(MODULE_ROOT, '../..'),
+    encoding: 'utf8',
+    timeout: 10_000,
+  });
+  const revision = String(result.stdout || '').trim().toLowerCase();
+  return result.status === 0 && /^[0-9a-f]{40}$/.test(revision) ? revision : null;
+}
+
+function buildRetrievalEvalArtifact({ questions, results, summary, compareQmd, compareGraph, compareRecall, now = new Date(), publicRevision = null, runtimeRevision = null }) {
+  const failures = [];
+  for (const [index, result] of results.entries()) {
+    if (result.skipped || !result.query) {
+      failures.push({
+        questionId: stableQuestionId(questions[index], index),
+        engine: 'evaluation',
+        failureReason: result.reason || 'missing-query',
+        expectedCandidateDigests: [],
+        actualCandidateDigests: [],
+      });
+      continue;
+    }
+    for (const engine of healthBearingEngines(result, { compareQmd, compareGraph, compareRecall })) {
+      const engineResult = result.engines?.[engine];
+      if (engineResult?.ok === true) continue;
+      failures.push({
+        questionId: stableQuestionId(questions[index], index),
+        engine,
+        failureReason: engineFailureReason(engine, engineResult),
+        expectedCandidateDigests: expectedCandidateDigests(engine, engineResult),
+        actualCandidateDigests: actualCandidateDigests(engine, engineResult),
+      });
+    }
+  }
+  const artifact = {
+    schema: RETRIEVAL_EVAL_ARTIFACT_SCHEMA,
+    generatedAt: (now instanceof Date ? now : new Date(now)).toISOString(),
+    corpusDigest: digest({ questions }),
+    questionCount: questions.length,
+    publicRevision,
+    runtimeRevision,
+    compareQmd,
+    compareGraph,
+    compareRecall,
+    summary,
+    failures,
+  };
+  return { ...artifact, artifactDigest: digest(artifact) };
+}
+
+function writePrivateArtifact(filePath, artifact, fsImpl = fs) {
+  const resolved = path.resolve(filePath);
+  fsImpl.mkdirSync(path.dirname(resolved), { recursive: true, mode: 0o700 });
+  try {
+    if (fsImpl.lstatSync(resolved).isSymbolicLink()) throw new Error('artifact-target-symlinked');
+  } catch (error) {
+    if (error?.code !== 'ENOENT') throw error;
+  }
+  const temporary = path.join(path.dirname(resolved), `.${path.basename(resolved)}.${process.pid}.${crypto.randomBytes(6).toString('hex')}.tmp`);
+  try {
+    fsImpl.writeFileSync(temporary, `${JSON.stringify(artifact, null, 2)}\n`, { mode: 0o600 });
+    fsImpl.chmodSync?.(temporary, 0o600);
+    fsImpl.renameSync(temporary, resolved);
+    fsImpl.chmodSync?.(resolved, 0o600);
+  } catch (error) {
+    try { fsImpl.unlinkSync(temporary); } catch (_) {}
+    throw error;
+  }
+  return resolved;
 }
 
 function asStringList(value) {
@@ -565,9 +750,16 @@ function matchExpected(output, expected) {
   if (!clauses) return { checked: false, matched: true, missing: [] };
 
   const haystack = String(output || '').toLowerCase();
-  const missingAll = clauses.all.filter((needle) => !haystack.includes(needle.toLowerCase()));
+  const canonicalHaystack = canonicalMatchText(output);
+  const includesNeedle = (needle) => {
+    const rawNeedle = String(needle || '').toLowerCase();
+    if (rawNeedle && haystack.includes(rawNeedle)) return true;
+    const canonicalNeedle = canonicalMatchText(needle);
+    return Boolean(canonicalNeedle) && canonicalHaystack.includes(canonicalNeedle);
+  };
+  const missingAll = clauses.all.filter((needle) => !includesNeedle(needle));
   const anyMatched = clauses.any.length === 0
-    || clauses.any.some((needle) => haystack.includes(needle.toLowerCase()));
+    || clauses.any.some((needle) => includesNeedle(needle));
   const missingAny = anyMatched || clauses.any.length === 0 ? [] : clauses.any;
 
   return {
@@ -575,6 +767,16 @@ function matchExpected(output, expected) {
     matched: missingAll.length === 0 && anyMatched,
     missing: [...missingAll, ...missingAny],
   };
+}
+
+function canonicalMatchText(value) {
+  return String(value || '')
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim()
+    .replace(/\s+/g, ' ');
 }
 
 function positiveInteger(value, fallback) {
@@ -610,7 +812,12 @@ function runGbrainEval(config, query, expected, dryRun, limit) {
     dryRun,
     timeoutMs: config.retrievalTimeoutMs,
   });
-  return evalCommandResult(command, expected, dryRun);
+  const result = evalCommandResult(command, expected, dryRun);
+  if (!dryRun && command.ok && !String(command.stdout || '').trim()) {
+    return { ...result, ok: false, failureReason: 'empty-candidate-set' };
+  }
+  if (!command.ok) return { ...result, failureReason: command.errorCode === 'ENOENT' ? 'missing-engine' : command.timedOut ? 'timeout' : 'engine-command-failed' };
+  return result;
 }
 
 function runQmdEval(config, query, expected, dryRun, limit) {
@@ -618,7 +825,9 @@ function runQmdEval(config, query, expected, dryRun, limit) {
     dryRun,
     timeoutMs: config.retrievalTimeoutMs,
   });
-  return evalCommandResult(command, expected, dryRun);
+  const result = evalCommandResult(command, expected, dryRun);
+  const admission = qmdCommandAdmission(command, dryRun);
+  return { ...result, ...admission, ok: result.ok && admission.ok };
 }
 
 function parseJsonOutput(output) {
@@ -627,6 +836,26 @@ function parseJsonOutput(output) {
   } catch (error) {
     return { ok: false, value: null, error: error.message };
   }
+}
+
+function qmdCommandAdmission(command, dryRun = false) {
+  if (dryRun) return { ok: true, resultCount: null };
+  if (!command.ok) return { ok: false, failureReason: command.errorCode === 'ENOENT' ? 'missing-engine' : command.timedOut ? 'timeout' : 'engine-command-failed', resultCount: 0 };
+  if (!String(command.stdout || '').trim()) return { ok: false, failureReason: 'empty-candidate-set', resultCount: 0 };
+  const parsed = parseJsonOutput(command.stdout);
+  if (!parsed.ok) return { ok: false, failureReason: 'malformed-result', resultCount: 0 };
+  const rows = Array.isArray(parsed.value)
+    ? parsed.value
+    : Array.isArray(parsed.value?.results)
+      ? parsed.value.results
+      : Array.isArray(parsed.value?.items)
+        ? parsed.value.items
+        : Array.isArray(parsed.value?.matches)
+          ? parsed.value.matches
+          : parsed.value && typeof parsed.value === 'object' ? [parsed.value] : [];
+  return rows.length > 0
+    ? { ok: true, resultCount: rows.length }
+    : { ok: false, failureReason: 'empty-candidate-set', resultCount: 0 };
 }
 
 function parseGraphQueryOutput(output, seed) {
@@ -682,6 +911,7 @@ function summarizeCommand(command) {
     stdoutSample: command.stdout ? command.stdout.slice(0, 500) : '',
     stderrSample: command.stderr ? command.stderr.slice(0, 1000) : '',
     error: command.error,
+    errorCode: command.errorCode || null,
   };
 }
 
@@ -945,9 +1175,11 @@ function recallBundle(overrides = {}, options = {}) {
   });
   const engines = {
     gbrain: {
-      ok: gbrainCommand.ok,
+      ok: gbrainCommand.ok && (dryRun || Boolean(String(gbrainCommand.stdout || '').trim())),
       text: truncateText(`${gbrainCommand.stdout || ''}\n${gbrainCommand.stderr || ''}`, maxChars),
       command: summarizeCommand(gbrainCommand),
+      ...(!dryRun && gbrainCommand.ok && !String(gbrainCommand.stdout || '').trim() ? { failureReason: 'empty-candidate-set' } : {}),
+      ...(!gbrainCommand.ok ? { failureReason: gbrainCommand.errorCode === 'ENOENT' ? 'missing-engine' : gbrainCommand.timedOut ? 'timeout' : 'engine-command-failed' } : {}),
     },
   };
 
@@ -956,10 +1188,13 @@ function recallBundle(overrides = {}, options = {}) {
       dryRun,
       timeoutMs: config.retrievalTimeoutMs,
     });
+    const qmdAdmission = qmdCommandAdmission(qmdCommand, dryRun);
     engines.qmd = {
-      ok: qmdCommand.ok,
+      ok: qmdAdmission.ok,
       text: truncateText(`${qmdCommand.stdout || ''}\n${qmdCommand.stderr || ''}`, maxChars),
       command: summarizeCommand(qmdCommand),
+      resultCount: qmdAdmission.resultCount,
+      ...(qmdAdmission.failureReason ? { failureReason: qmdAdmission.failureReason } : {}),
     };
   }
 
@@ -974,7 +1209,7 @@ function recallBundle(overrides = {}, options = {}) {
 
   const bundle = {
     config,
-    ok: gbrainCommand.ok && (!includeQmd || engines.qmd.ok) && (!graph || graph.ok),
+    ok: engines.gbrain.ok && (!includeQmd || engines.qmd.ok) && (!graph || graph.ok),
     dryRun,
     query,
     limit,
@@ -1120,6 +1355,35 @@ function runRetrievalEval(overrides = {}, options = {}) {
       engines,
     };
   });
+  const summary = summarizeEvalResults(results);
+  const evaluationOk = results.every((result) => result.ok || result.skipped);
+  const artifactPath = firstString(options.artifactPath, overrides.artifactPath);
+  const publicRevision = firstString(options.publicRevision, overrides.publicRevision) || sourceRevision();
+  const runtimeRevision = firstString(options.runtimeRevision, overrides.runtimeRevision, process.env.OPENCLAW_RUNTIME_REVISION);
+  let artifact = null;
+  if (artifactPath) {
+    if (!/^[0-9a-f]{40}$/i.test(String(publicRevision || '')) || !/^[0-9a-f]{40}$/i.test(String(runtimeRevision || ''))) {
+      artifact = { ok: false, path: path.resolve(artifactPath), reason: 'artifact-revision-unavailable' };
+    } else {
+      const record = buildRetrievalEvalArtifact({
+        questions,
+        results,
+        summary,
+        compareQmd,
+        compareGraph,
+        compareRecall,
+        now: options.now || new Date(),
+        publicRevision: publicRevision.toLowerCase(),
+        runtimeRevision: runtimeRevision.toLowerCase(),
+      });
+      try {
+        const writtenPath = writePrivateArtifact(artifactPath, record, options.fsImpl || fs);
+        artifact = { ok: true, path: writtenPath, digest: record.artifactDigest, failureCount: record.failures.length };
+      } catch (_) {
+        artifact = { ok: false, path: path.resolve(artifactPath), reason: 'artifact-write-failed' };
+      }
+    }
+  }
   return {
     config,
     dryRun,
@@ -1130,9 +1394,13 @@ function runRetrievalEval(overrides = {}, options = {}) {
     graphDepth,
     graphSeedLimit,
     questionCount: questions.length,
-    summary: summarizeEvalResults(results),
+    corpusDigest: digest({ questions }),
+    publicRevision,
+    runtimeRevision,
+    summary,
     results,
-    ok: results.every((result) => result.ok || result.skipped),
+    artifact,
+    ok: evaluationOk && (!artifact || artifact.ok),
   };
 }
 
@@ -1192,6 +1460,7 @@ module.exports = {
   DEFAULT_EVAL_PATH,
   DEFAULT_QMD_BIN,
   DEFAULT_RETRIEVAL_TIMEOUT_MS,
+  RETRIEVAL_EVAL_ARTIFACT_SCHEMA,
   expandTilde,
   resolveConfig,
   slugify,

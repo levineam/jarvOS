@@ -228,6 +228,21 @@ the recall engine treats the GBrain, QMD, and graph expectations as acceptable
 evidence candidates. This lets the eval distinguish direct-search gaps from
 runtime recall failures.
 
+With `--compare-recall`, direct `gbrain` remains an explicit diagnostic
+comparator; the health-bearing result is `gbrain_recall` together with any
+requested QMD and graph checks. A direct-search miss is therefore visible but
+does not override a successful combined recall result. Expected phrases compare
+after Unicode, punctuation, and whitespace normalization while preserving word
+order and adjacency.
+
+For durable private diagnostics, add `--result-artifact <path>`. The 0600 JSON
+artifact records the corpus digest, public and runtime revisions, engine
+summaries, and only sanitized failed-question evidence: stable question IDs and
+expected/actual candidate digests. It never stores query, answer, candidate, or
+path text. Use `--public-revision` and `--runtime-revision` when the surrounding
+runner has stronger revision authority than the evaluator's local Git checkout
+and `OPENCLAW_RUNTIME_REVISION` environment.
+
 ## Graph Recall
 
 Use graph recall when a planner or runtime already has a likely GBrain seed page
