@@ -855,6 +855,26 @@ test('OpenClaw and Hermes package bounded per-turn stewardship bridge artifacts 
     assert.deepEqual(answer, { content: [{ type: 'text', text: 'Stewardship answer recorded.' }] });
     const rejected = await tools[0][0]({ sessionKey: 'agent:other:explicit:session-42' }).execute('call-43', { correlation: 'judgment-42', choice: 'Wait' });
     assert.equal(rejected.isError, true);
+
+    const validResponse = { available: true, pendingInSessionInput: true, prompt: 'Choose a safe next step.', choices: ['Wait', 'Prepare a dry run'], default: 'Wait', correlation: 'judgment-42' };
+    const unsafeResponses = [
+      { ...validResponse, route: 'private' },
+      { ...validResponse, prompt: 'Read /Users/alice/private-router before choosing.' },
+      { ...validResponse, choices: ['Wait', 'Wait'] },
+      { ...validResponse, default: 'Proceed' },
+      { ...validResponse, correlation: `judgment-${'x'.repeat(128)}` },
+    ];
+    for (const response of unsafeResponses) {
+      fs.writeFileSync(bridge, `#!/usr/bin/env sh\nprintf '%s\\n' '${JSON.stringify(response)}'\n`, { mode: 0o755 });
+      fs.chmodSync(bridge, 0o755);
+      const rejectedHermes = spawnSync('node', [path.join(ROOT, 'runtimes', 'hermes', 'jarvos-pre-llm-hook.js')], { encoding: 'utf8', env });
+      assert.equal(rejectedHermes.status, 0, rejectedHermes.stderr);
+      assert.equal(rejectedHermes.stdout, '');
+      assert.deepEqual(plugin.agent_turn_prepare(
+        { prompt: 'Continue', messages: [], queuedInjections: [] },
+        { sessionKey, pluginConfig: { mappingRoot: mappings } },
+      ), {});
+    }
   } finally {
     fs.rmSync(temp, { recursive: true, force: true });
   }
