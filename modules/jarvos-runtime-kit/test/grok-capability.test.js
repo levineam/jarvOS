@@ -34,7 +34,7 @@ test('redacted Grok capability fixture describes bounded subscription egress wit
     allowedDataClasses: ['project_context', 'source_excerpt'],
     minimizationRevision: 'v1',
     disclosureRevision: 'v1',
-    byteBudget: { maxBytes: 16_384, revision: 'v1' },
+    byteBudget: { maxBytes: 65_536, revision: 'v1' },
     endpointFirewallAttestation: 'not-required',
   });
   assert.equal(fixture.processBoundary.network, 'provider-control-plane-only');

@@ -519,11 +519,11 @@ const GROK_SUBSCRIPTION_ADAPTER_DESCRIPTOR = deepFreeze({
   promptTransports: ['owner-private-file'],
   toolPolicy: { mode: 'deny-all', version: 'v1' },
   egressPolicy: {
-    digest: descriptorPolicyDigest(['source_excerpt', 'project_context'], { maxBytes: 16_384, revision: 'v1' }),
+    digest: descriptorPolicyDigest(['source_excerpt', 'project_context'], { maxBytes: 65_536, revision: 'v1' }),
     allowedDataClasses: ['source_excerpt', 'project_context'],
     minimizationRevision: 'v1',
     disclosureRevision: 'v1',
-    byteBudget: { maxBytes: 16_384, revision: 'v1' },
+    byteBudget: { maxBytes: 65_536, revision: 'v1' },
   },
   support: 'supported',
   deterministic: false,

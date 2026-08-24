@@ -50,7 +50,7 @@
     "minimizationRevision": "v1",
     "disclosureRevision": "v1",
     "byteBudget": {
-      "maxBytes": 16384,
+      "maxBytes": 65536,
       "revision": "v1"
     },
     "endpointFirewallAttestation": "not-required"

@@ -100,7 +100,7 @@ test('built-in descriptors remain portable while Grok advertises optional suppor
   assert.equal(kit.GROK_SUBSCRIPTION_ADAPTER_DESCRIPTOR.distribution.version, '1.0.3');
   assert.match(kit.GROK_SUBSCRIPTION_ADAPTER_DESCRIPTOR.distribution.revision, /^[a-f0-9]{64}$/);
   assert.deepEqual(kit.GROK_SUBSCRIPTION_ADAPTER_DESCRIPTOR.egressPolicy.byteBudget, {
-    maxBytes: 16_384,
+    maxBytes: 65_536,
     revision: 'v1',
   });
   assert.equal(kit.validateManagedAdapterDescriptor(kit.GROK_SUBSCRIPTION_ADAPTER_DESCRIPTOR).ok, true);
@@ -134,7 +134,7 @@ test('fresh installation is unconfigured and never picks a paid default', () => 
   assert.equal(listed.profiles.find((item) => item.profileId === 'grok-subscription').state, 'unconfigured');
   assert.equal(listed.profiles.find((item) => item.profileId === 'grok-subscription').qualificationState, 'absent');
   assert.equal(grok.egressPolicy.ownerAcceptance, 'required');
-  assert.deepEqual(grok.egressPolicy.byteBudget, { maxBytes: 16_384, revision: 'v1' });
+  assert.deepEqual(grok.egressPolicy.byteBudget, { maxBytes: 65_536, revision: 'v1' });
   assert.equal(JSON.stringify(view).includes('XAI_API_KEY'), false);
 });
 
