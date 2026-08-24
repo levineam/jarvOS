@@ -843,6 +843,7 @@ function qmdCommandAdmission(command, dryRun = false) {
   if (dryRun) return { ok: true, resultCount: null };
   if (!command.ok) return { ok: false, failureReason: command.errorCode === 'ENOENT' ? 'missing-engine' : command.timedOut ? 'timeout' : 'engine-command-failed', resultCount: 0 };
   if (!String(command.stdout || '').trim()) return { ok: false, failureReason: 'empty-candidate-set', resultCount: 0 };
+  if (/^No results found\.?$/i.test(String(command.stdout).trim())) return { ok: false, failureReason: 'empty-candidate-set', resultCount: 0 };
   const parsed = parseJsonOutput(command.stdout);
   if (!parsed.ok) return { ok: false, failureReason: 'malformed-result', resultCount: 0 };
   const rows = Array.isArray(parsed.value)
@@ -1210,7 +1211,9 @@ function recallBundle(overrides = {}, options = {}) {
 
   const bundle = {
     config,
-    ok: engines.gbrain.ok && (!includeQmd || engines.qmd.ok) && (!graph || graph.ok),
+    ok: engines.gbrain.ok
+      && (!includeQmd || engines.qmd.ok || engines.qmd.failureReason === 'empty-candidate-set')
+      && (!graph || graph.ok),
     dryRun,
     query,
     limit,

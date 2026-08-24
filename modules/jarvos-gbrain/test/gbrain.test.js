@@ -695,6 +695,28 @@ test('runRetrievalEval recall candidates ignore omitted engine expectations', ()
   assert.deepEqual(result.results[0].engines.gbrain_recall.missingExpected, ['qmd://notes/expected.md']);
 });
 
+test('combined recall records an empty QMD subpath without hiding valid GBrain evidence', () => {
+  const root = tempDir();
+  const evalPath = path.join(root, 'eval.json');
+  const gbrainBin = path.join(root, 'fake-gbrain');
+  const qmdBin = path.join(root, 'fake-qmd');
+  fs.writeFileSync(evalPath, JSON.stringify({
+    version: 1,
+    questions: [{ query: 'structured answer', expected: { gbrain: 'projects/structured-answer' } }],
+  }), 'utf8');
+  fs.writeFileSync(gbrainBin, '#!/bin/sh\nif [ "$1" = "graph-query" ]; then printf "%s\\n" "No edges found"; else printf "%s\\n" "[0.9] projects/structured-answer -- useful evidence"; fi\n', 'utf8');
+  fs.writeFileSync(qmdBin, '#!/bin/sh\nprintf "%s\\n" "No results found."\n', 'utf8');
+  fs.chmodSync(gbrainBin, 0o755);
+  fs.chmodSync(qmdBin, 0o755);
+
+  const result = gbrain.runRetrievalEval({ evalPath, gbrainBin, gbrainDir: root, qmdBin }, { compareRecall: true });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.results[0].engines.gbrain_recall.ok, true);
+  assert.equal(result.results[0].engines.gbrain_recall.bundle.engines.qmd.ok, false);
+  assert.equal(result.results[0].engines.gbrain_recall.bundle.engines.qmd.failureReason, 'empty-candidate-set');
+});
+
 test('runRetrievalEval preserves generic expectations alongside recall overrides', () => {
   const root = tempDir();
   const evalPath = path.join(root, 'eval.json');
