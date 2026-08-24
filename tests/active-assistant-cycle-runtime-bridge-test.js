@@ -178,3 +178,41 @@ test('exposes only metadata from the selected runtime identity and rejects malfo
   fs.writeFileSync(f.selectorPath, JSON.stringify({ schema: 'wrong/v1', runtimeRoot: f.runtimeRoot }), { mode: 0o600 });
   assert.throws(() => bridge.readRuntimeSelection({ selectorPath: f.selectorPath }), { code: 'active_assistant_runtime_selector_invalid' });
 });
+
+test('accepts the bounded nested CI receipt shape emitted by the managed selector', (t) => {
+  const f = fixture();
+  t.after(() => cleanup(f));
+  const selection = JSON.parse(fs.readFileSync(f.selectorPath, 'utf8'));
+  selection.ciQualification = {
+    reviewedTupleDigest: `sha256:${'c'.repeat(64)}`,
+    private: {
+      policy: {
+        requiredChecks: [{ name: 'CI summary', producer: 'github-actions', workflow: 'ci' }],
+        authorizedIssuers: [{ principal: 'principal:andrew', role: 'owner' }],
+      },
+      checks: [{ name: 'CI summary', bucket: 'pass' }],
+    },
+    public: {
+      policy: {
+        requiredChecks: [{ name: 'Smoke test', producer: 'github-actions', workflow: 'ci' }],
+        authorizedIssuers: [{ principal: 'principal:andrew', role: 'owner' }],
+      },
+      checks: [{ name: 'Smoke test', bucket: 'pass' }],
+    },
+  };
+  fs.writeFileSync(f.selectorPath, `${JSON.stringify(selection)}\n`, { mode: 0o600 });
+
+  assert.equal(bridge.readRuntimeSelection({ selectorPath: f.selectorPath }).runtimeRoot, f.runtimeRoot);
+});
+
+test('still rejects selector content nested beyond the bounded receipt shape', (t) => {
+  const f = fixture();
+  t.after(() => cleanup(f));
+  const selection = JSON.parse(fs.readFileSync(f.selectorPath, 'utf8'));
+  let nested = 'too-deep';
+  for (let index = 0; index < 9; index += 1) nested = { value: nested };
+  selection.ciPolicy = nested;
+  fs.writeFileSync(f.selectorPath, `${JSON.stringify(selection)}\n`, { mode: 0o600 });
+
+  assert.throws(() => bridge.readRuntimeSelection({ selectorPath: f.selectorPath }), { code: 'active_assistant_runtime_selector_invalid' });
+});
