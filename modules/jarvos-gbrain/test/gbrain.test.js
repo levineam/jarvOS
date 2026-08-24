@@ -762,7 +762,12 @@ process.stdout.write(JSON.stringify([{ file: canonical ? 'qmd://notes/canonical.
 
   assert.equal(result.results[0].engines.gbrain_recall.ok, true);
   assert.equal(result.results[1].engines.gbrain_recall.ok, false);
+  assert.equal(result.limit, 10);
+  assert.equal(result.results[0].engines.gbrain_recall.bundle.limit, 10);
   assert.equal(result.ok, false);
+
+  const runtimeRecall = gbrain.recallBundle({ gbrainBin, gbrainDir: root, qmdBin }, { query: 'canonical match', autoGraph: false });
+  assert.equal(runtimeRecall.limit, 5);
 });
 
 test('QMD comparison classifies malformed, empty, and missing engine results explicitly', () => {

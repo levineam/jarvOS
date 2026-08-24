@@ -233,7 +233,8 @@ comparator; the health-bearing result is `gbrain_recall` together with any
 requested QMD and graph checks. A direct-search miss is therefore visible but
 does not override a successful combined recall result. Expected phrases compare
 after Unicode, punctuation, and whitespace normalization while preserving word
-order and adjacency.
+order and adjacency. Evaluation uses a top-10 candidate depth by default; the
+interactive runtime recall bundle keeps its compact top-5 default.
 
 For durable private diagnostics, add `--result-artifact <path>`. The 0600 JSON
 artifact records the corpus digest, public and runtime revisions, engine

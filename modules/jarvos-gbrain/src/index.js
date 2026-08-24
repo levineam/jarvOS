@@ -18,6 +18,7 @@ const DEFAULT_GBRAIN_BIN_CANDIDATES = [
   path.join(os.homedir(), '.bun', 'bin', 'gbrain'),
 ];
 const DEFAULT_RETRIEVAL_LIMIT = 5;
+const DEFAULT_EVAL_LIMIT = 10;
 const DEFAULT_RETRIEVAL_TIMEOUT_MS = 15000;
 const RETRIEVAL_EVAL_ARTIFACT_SCHEMA = 'jarvos-gbrain-retrieval-eval-artifact/v1';
 const JARVOS_PATHS_PACKAGE = '@jarvos/secondbrain/bridge/config/jarvos-paths.js';
@@ -1279,7 +1280,7 @@ function runRetrievalEval(overrides = {}, options = {}) {
   const compareQmd = options.compareQmd === true;
   const compareGraph = options.compareGraph === true;
   const compareRecall = options.compareRecall === true;
-  const limit = positiveInteger(options.limit || overrides.limit || process.env.JARVOS_GBRAIN_EVAL_LIMIT, DEFAULT_RETRIEVAL_LIMIT);
+  const limit = positiveInteger(options.limit || overrides.limit || process.env.JARVOS_GBRAIN_EVAL_LIMIT, DEFAULT_EVAL_LIMIT);
   const graphDepth = positiveInteger(
     options.graphDepth || overrides.graphDepth || process.env.JARVOS_GBRAIN_GRAPH_DEPTH,
     2,
@@ -1459,6 +1460,7 @@ module.exports = {
   DEFAULT_MANIFEST_PATH,
   DEFAULT_EVAL_PATH,
   DEFAULT_QMD_BIN,
+  DEFAULT_EVAL_LIMIT,
   DEFAULT_RETRIEVAL_TIMEOUT_MS,
   RETRIEVAL_EVAL_ARTIFACT_SCHEMA,
   expandTilde,
