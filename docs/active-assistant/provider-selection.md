@@ -1,64 +1,92 @@
 # Active Assistant provider selection
 
-The public runtime kit defines the provider-neutral contract. It describes
-portable adapter distributions, owner-private profiles, redacted health, and a
-generation-bound read view. It does not store credentials, resolve host
-executables, call a provider, select a runtime, schedule a cycle, or deliver a
-message.
+The public runtime kit defines a provider-neutral, data-driven contract for
+choosing a provider. It describes a catalog of possible choices, an explicit
+preference/proposal flow, a generation-bound preview outcome, and a closed
+safe status projection. It does not store credentials, resolve a host
+executable, call a provider, authenticate a choice, or deliver a message.
 
-## Profiles and adapters
+## Catalog
 
-Profiles use `jarvos-provider-profile/v1`. A profile identifies its provider and
-concrete model, adapter distribution and capability revision, explicit auth
-mode, prompt transport, deny-all tool policy, egress-policy digest and
-qualification state. The profile has no credential, host path, executable
-location, provider output, or authority field.
+Catalog entries use `jarvos-provider-catalog-entry/v1`. An entry identifies
+its provider and model, a closed, non-secret `authCategory`
+(`none`, `subscription`, or `usage_metered`), and the reasoning-effort
+vocabulary it accepts (`low`, `medium`, `high`, `max`). An entry has no
+credential, host path, executable location, or provider-output field.
 
-Managed descriptors use `jarvos-managed-adapter/v1`. The portable runtime kit
-ships a Claude CLI descriptor and a deterministic fixture descriptor. The Grok
-subscription descriptor is intentionally `unsupported` with
-`capability_unsupported` until a separate capability proof establishes both
-tool-less execution and an enforceable provider-endpoint network boundary.
+The built-in default catalog (`getDefaultProviderCatalogEntries`,
+`createProviderCatalog()`) contains exactly one entry: a deterministic,
+non-paid fixture with `authCategory: 'none'`. A fresh public installation
+never hard-codes or advertises a paid Claude, OpenAI, or Grok choice as
+authenticated or admitted. A private host supplies its own catalog — which
+may be empty, or may include real `subscription`/`usage_metered` entries —
+via `createProviderCatalog({ entries })`.
 
-The built-in registry has no default profile and no active profile. A fresh
-installation is therefore `unconfigured`; registering a descriptor does not
-authenticate it or make a paid call. `auth_required`, `unsupported`,
-`unhealthy`, `available`, and `active` health classifications are separate,
-redacted observations.
+The `authCategory` on a catalog entry, and on the `selected` field of a safe
+status, is the only signal a user or agent needs to tell a subscription- or
+usage-metered choice apart from a free one. It never carries profile
+identity or credentials.
 
-## Read-only lifecycle view
+## Preference, proposal, and preview
 
-`renderProviderReadView()` reconstructs an allowlisted public view from an
-owner-private operator snapshot. The view is marked `runtime-rendered` and
-`readOnly`; it contains only public profile fields, opaque generation and tuple
-references, redacted health, qualification, and rollback references. It does
-not contain authority booleans, credentials, paths, capability bodies, raw
-provider output, or generated repository state.
+A preference (`jarvos-provider-preference/v1`) is the current, explicit,
+generation-bound choice: `entryId` (or `null` when unselected), an opaque
+`generation`, and a bounded `lastPreview` record. `createInitialProviderPreference()`
+starts unselected.
 
-The public view cannot authorize preparation or delivery. Private operator code
-must check `isProviderViewPreparationEligible(view, { operatorGeneration,
-selectedTupleDigest })`; that check requires the view generation, private
-operator generation, selected tuple, and profile tuple to match exactly. An
-`active` profile with `qualificationState: legacy` remains eligible only on its
-exact incumbent tuple. Delivery remains private and is never authorized by a
-public view.
+A proposal (`jarvos-provider-proposal/v1`) is an explicit request to switch
+to a catalog entry, bound to the preference generation it expects
+(`createProviderProposal({ catalog, entryId, expectedGeneration })`).
 
-Changing any egress-policy identity field changes the profile identity and
-requires fresh qualification. Owner acceptance is explicit in the profile.
+`previewProviderProposal({ catalog, preference, proposal, result })` applies
+a generation-bound preview outcome:
+
+- If `proposal.expectedGeneration` does not exactly match
+  `preference.generation`, the call returns `{ ok: false, code:
+  'stale_generation' }` and leaves the preference untouched. This rejects a
+  stale or replayed proposal.
+- A `'failed'` result never selects or advances the candidate: it preserves
+  the incumbent `entryId` and `generation` exactly, and only records a
+  bounded `lastPreview: { entryId, generation, result: 'failed' }`.
+- A `'passed'` result advances the preference to the proposed entry and
+  computes a fresh generation, so a subsequent replay of the same proposal is
+  stale rather than silently re-applied.
+
+## Safe status
+
+`renderProviderSafeStatus({ catalog, preference })` produces a closed,
+allowlisted projection (`jarvos-provider-status/v1`): opaque `generation`,
+`state` (`unselected` or `selected`), a `selected` summary (`entryId`,
+`provider`, `model`, `authCategory`, `reasoningEffort`) when selected, and
+the last `lastPreview` record. It contains no credential, path, capability
+body, or raw provider output, and rejects any unknown or authority-shaped
+field.
+
+## Legacy classifier
+
+`classifyLegacyProviderRecord(record)` is a narrow, inert classifier for a
+record left over from an earlier public host schema. It requires an exact
+recognized old schema version (`jarvos-provider-profile/v1` or
+`jarvos-provider-runtime-view/v1`) **and** a recognized old provider
+identifier (`claude`, `grok`, `deterministic`). A missing or unknown provider
+always returns `null` — it never grants rollback authority. An exact active
+incumbent old profile (or an active old runtime view exposing an active
+profile) classifies as `'rollback_only'`; any other recognized record
+classifies as `'migration_required'`. The classifier only classifies; it is
+inert and never mutates state or grants authority on its own.
 
 ## Public contract demonstration CLI
 
 These commands are read-only fixtures for inspecting the portable contract.
-They create a fresh in-memory registry and therefore do not inspect or modify an
-installed owner's provider configuration:
+They run against a fresh in-memory catalog and preference, so they never
+inspect or modify an installed owner's provider configuration:
 
 ```bash
-node scripts/active-assistant-provider.js list --json
+node scripts/active-assistant-provider.js catalog --json
 node scripts/active-assistant-provider.js status --json
-node scripts/active-assistant-provider.js propose-switch deterministic-fixture --tuple <sha256> --json
+node scripts/active-assistant-provider.js propose <entry-id> --json
+node scripts/active-assistant-provider.js preview <entry-id> --result passed --json
 ```
 
-`authorize-and-run` and `rollback` return `owner_authorization_required` from
-this demonstration surface. A future local owner operator is the only intended
-activation authority; it is not implemented while the Grok capability gate is
-unsupported.
+Selecting and delivering with a real, paid provider is a private owner-side
+operator concern; it is not implemented on this public surface.
