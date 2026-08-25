@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://jarvos.dev/schemas/instruction-projection/role-receipt-redacted.v1.json",
+  "title": "jarvOS redacted instruction role receipt",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion", "contractVersion", "harness", "adapterVersion", "harnessVersion",
+    "catalogGeneration", "renderedDigest", "targetIdentity", "observedPrecedence",
+    "states", "projectionStatus", "loadStatus", "parityStatus", "checkedAt"
+  ],
+  "properties": {
+    "schemaVersion": { "const": "jarvos.instruction-role-receipt-redacted/v1" },
+    "contractVersion": { "const": "1.0.0" },
+    "harness": { "enum": ["claude", "codex", "openclaw", "hermes"] },
+    "adapterVersion": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9.+_-]{0,79}$" },
+    "harnessVersion": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9.+_-]{0,79}$" },
+    "catalogGeneration": { "$ref": "#/$defs/digest" },
+    "renderedDigest": { "oneOf": [{ "$ref": "#/$defs/digest" }, { "type": "null" }] },
+    "targetIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "digest"],
+      "properties": {
+        "kind": { "const": "digest" },
+        "digest": { "$ref": "#/$defs/digest" }
+      }
+    },
+    "observedPrecedence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "digest"],
+      "properties": {
+        "status": { "enum": ["proved", "pending", "not_evaluable"] },
+        "digest": { "oneOf": [{ "$ref": "#/$defs/digest" }, { "type": "null" }] }
+      },
+      "allOf": [{
+        "if": { "properties": { "status": { "const": "proved" } }, "required": ["status"] },
+        "then": { "properties": { "digest": { "$ref": "#/$defs/digest" } } },
+        "else": { "properties": { "digest": { "type": "null" } } }
+      }]
+    },
+    "states": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["desired", "projected", "installed", "loaded", "parity"],
+      "properties": {
+        "desired": { "oneOf": [{ "$ref": "#/$defs/digest" }, { "type": "null" }] },
+        "projected": { "oneOf": [{ "$ref": "#/$defs/digest" }, { "type": "null" }] },
+        "installed": { "oneOf": [{ "$ref": "#/$defs/digest" }, { "type": "null" }] },
+        "loaded": { "oneOf": [{ "$ref": "#/$defs/digest" }, { "type": "null" }] },
+        "parity": { "oneOf": [{ "$ref": "#/$defs/digest" }, { "type": "null" }] }
+      }
+    },
+    "projectionStatus": { "enum": ["unsupported", "incompatible", "missing", "unknown", "conflict", "clean", "outdated", "local_modified"] },
+    "loadStatus": { "enum": ["load_pending", "loaded", "not_evaluable", "stale", "partial", "failed"] },
+    "parityStatus": { "enum": ["pending", "equivalent", "not_evaluable", "failed"] },
+    "checkedAt": { "type": "string", "format": "date-time" }
+  },
+  "$defs": {
+    "digest": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+  }
+}

@@ -43,6 +43,10 @@ function advertisedRuntimeAssets() {
     'modules/jarvos-runtime-kit/src/stewardship-bootstrap.js',
     'modules/jarvos-runtime-kit/scripts/jarvos-runtime-kit.js',
     'modules/jarvos-runtime-kit/README.md',
+    'modules/jarvos-instruction-projection/package.json',
+    'modules/jarvos-instruction-projection/src/contracts.js',
+    'modules/jarvos-instruction-projection/schemas/role-catalog.schema.json',
+    'modules/jarvos-instruction-projection/schemas/role-receipt.schema.json',
     'modules/jarvos-coding/providers/compound-engineering.json',
     'docs/architecture/shared-skill-distribution.md',
     'docs/runbooks/shared-skill-distribution.md',
@@ -117,11 +121,11 @@ test('direct skills package bundles the reviewed runtime-kit dependency', () => 
   assert.equal(files.has('node_modules/@jarvos/runtime-kit/src/index.js'), true);
 });
 
-test('published shared-skill surface contains no local-path or private-body sentinel', () => {
+test('published portable projection surfaces contain no local-path or private-body sentinel', () => {
   const files = packedFiles();
   const sentinels = ['/Users/andrew', 'Vault v3', 'JARVOS_TEST_PRIVATE'];
   for (const name of files) {
-    if (!name.startsWith('modules/jarvos-skills/')) continue;
+    if (!name.startsWith('modules/jarvos-skills/') && !name.startsWith('modules/jarvos-instruction-projection/')) continue;
     const absolute = path.join(ROOT, name);
     if (!fs.existsSync(absolute) || !fs.statSync(absolute).isFile()) continue;
     const text = fs.readFileSync(absolute, 'utf8');

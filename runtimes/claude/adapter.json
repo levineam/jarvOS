@@ -33,6 +33,14 @@
       "unattended": false
     }
   },
+  "instructionProjection": {
+    "version": "jarvos-instruction-projection-adapter/v1",
+    "status": "discovery-pending",
+    "loader": null,
+    "supportedVersions": null,
+    "precedence": null,
+    "reason": "Native instruction loader discovery is required before compatibility can be declared."
+  },
   "operatorNotification": {
     "version": "jarvos-operator-notification-adapter/v1",
     "contract": "jarvos-operator-notification/v1",
