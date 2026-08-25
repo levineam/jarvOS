@@ -20,6 +20,10 @@ const PUBLIC_ROOT_ENV = 'ACTIVE_ASSISTANT_PUBLIC_RUNTIME_ROOT';
 const SELECTOR_ENV = 'OPENCLAW_MANAGED_SOFTWARE_RUNTIME_SELECTOR';
 const SELECTION_SCHEMA = 'jarvos.managed-software-runtime-selection/v1';
 const CYCLE_CONTRACT_VERSION = 'active-assistant-cycle/v1';
+// CI qualification receipts contain policy -> checks/issuers arrays -> rows.
+// Keep the selector bounded, but admit the versioned receipt shape written by
+// the managed-runtime selector instead of rejecting the live authority.
+const MAX_SELECTION_DEPTH = 8;
 
 const SELECTION_KEYS = new Set([
   'schema', 'runtimeRoot', 'commit', 'publicCommit', 'reviewedTupleDigest',
@@ -42,7 +46,7 @@ function validDigest(value) {
 }
 
 function boundedSelectionValue(value, depth = 0) {
-  if (depth > 5) return false;
+  if (depth > MAX_SELECTION_DEPTH) return false;
   if (value == null || typeof value === 'boolean' || typeof value === 'number') return true;
   if (typeof value === 'string') return value.length <= 512;
   if (Array.isArray(value)) return value.length <= 64 && value.every((item) => boundedSelectionValue(item, depth + 1));
