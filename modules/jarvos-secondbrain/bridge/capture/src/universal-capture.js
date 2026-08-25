@@ -6,7 +6,9 @@ const {
 } = require('../../../packages/jarvos-ambient/src/intent/capture-contract');
 const {
   applyRoutingPlan,
+  applyParsedStrictCommandPlan,
   detectTrigger,
+  parseHardCaptureCommand,
 } = require('../../routing/src/keyword-capture-router');
 const {
   createStorageAdapter,
@@ -153,6 +155,7 @@ function ignoredCaptureMessage() {
 
 function captureWithJarvos(rawInput = {}, options = {}) {
   const captureEvent = normalizeCaptureEvent(rawInput);
+  const hardCommand = parseHardCaptureCommand(captureEvent);
   const adapter = options.adapter || createStorageAdapter(options);
   const frontmatter = {
     ...frontmatterForCaptureEvent(captureEvent),
@@ -160,25 +163,33 @@ function captureWithJarvos(rawInput = {}, options = {}) {
   };
   const routingInput = {
     ...captureEvent,
-    trigger: defaultProgrammaticTrigger(captureEvent),
+    trigger: hardCommand.matched
+      ? hardCommand.route
+      : defaultProgrammaticTrigger(captureEvent),
     frontmatter,
   };
-  const routing = applyRoutingPlan(routingInput, { ...options, adapter });
+  const routing = hardCommand.matched
+    ? applyParsedStrictCommandPlan(routingInput, hardCommand, { ...options, adapter })
+    : applyRoutingPlan(routingInput, { ...options, adapter });
+  const ignored = hardCommand.matched ? false : routing.plan.ignored;
 
   return {
     // A routed operation is successful only when every artifact it promised
     // is acknowledged by the canonical storage owner.  A locally-pending,
     // deferred, conflict, or failed receipt remains visible but is not a
     // successful write claim.
-    ok: !routing.plan.ignored && receiptIsAcknowledged(routing.artifactReceipt),
+    ok: hardCommand.disposition === 'capture'
+      ? receiptIsAcknowledged(routing.artifactReceipt)
+      : !ignored && receiptIsAcknowledged(routing.artifactReceipt),
     captureEvent,
+    hardCommand,
     routing,
     artifactReceipt: routing.artifactReceipt,
     note: routing.note,
     journalEntry: routing.journalEntry,
     noteLink: routing.noteLink,
     knowledge: routing.note?.knowledge || null,
-    error: routing.plan.ignored ? ignoredCaptureMessage() : null,
+    error: ignored ? ignoredCaptureMessage() : null,
   };
 }
 

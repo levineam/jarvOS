@@ -4,9 +4,17 @@ const {
   applyThreePackagePlan,
 } = require('../../routing/src/three-package-router');
 const {
+  HARD_COMMAND_RESPONSES,
+  IDEA,
+  JOURNAL,
   detectTrigger,
+  parseHardCaptureCommand,
 } = require('../../routing/src/keyword-capture-router');
-const { createArtifactReceipt } = require('../../../src/artifact-receipt');
+const {
+  createArtifactReceipt,
+  receiptIsAcknowledged,
+  validateArtifactReceipt,
+} = require('../../../src/artifact-receipt');
 
 const HIGH_CONFIDENCE = 0.8;
 const MEDIUM_CONFIDENCE = 0.5;
@@ -60,6 +68,7 @@ function buildCaptureEvent(capture, trigger) {
     durable: capture.durable,
     durableNote: capture.durableNote,
     standaloneNote: capture.standaloneNote,
+    hardCommand: capture.hardCommand,
   };
 
   if (classification.salienceClass !== 'nothing' && classification.confidence >= HIGH_CONFIDENCE) {
@@ -73,14 +82,15 @@ function buildCaptureEvent(capture, trigger) {
 const CAPTURE_SKILLS = [
   {
     id: 'journal-entry',
-    description: 'Write idea-class captures into the journal package.',
+    description: 'Write idea and journal-entry captures into the journal package.',
     matches(capture) {
-      if (capture.trigger === 'idea') return true;
+      if (capture.trigger === IDEA || capture.trigger === JOURNAL) return true;
       return capture.classification.salienceClass === 'idea'
         && capture.classification.confidence >= HIGH_CONFIDENCE;
     },
     invoke(capture, options = {}) {
-      const routing = applyThreePackagePlan(buildCaptureEvent(capture, 'idea'), options);
+      const trigger = capture.trigger === JOURNAL ? JOURNAL : IDEA;
+      const routing = applyThreePackagePlan(buildCaptureEvent(capture, trigger), options);
       const createsNote = Boolean(routing?.note);
       return {
         captured: true,
@@ -93,6 +103,7 @@ const CAPTURE_SKILLS = [
         title: routing.plan?.noteTitle || routing.note?.title || null,
         routing,
         artifactReceipt: routing.artifactReceipt,
+        hardCommand: capture.hardCommand || null,
       };
     },
   },
@@ -118,6 +129,7 @@ const CAPTURE_SKILLS = [
         title: routing.plan?.noteTitle || routing.note?.title || null,
         routing,
         artifactReceipt: routing.artifactReceipt,
+        hardCommand: capture.hardCommand || null,
       };
     },
   },
@@ -149,8 +161,47 @@ function ignoredPathForCapture(capture) {
   return 'no_capture';
 }
 
+function responseForHardCaptureReceipt(hardCommand, receipt) {
+  if (!hardCommand?.matched) return null;
+  if (hardCommand.disposition !== 'capture') return hardCommand.response;
+
+  try {
+    validateArtifactReceipt(receipt);
+  } catch {
+    return HARD_COMMAND_RESPONSES.failure;
+  }
+
+  if (receiptIsAcknowledged(receipt)) return hardCommand.response;
+
+  const outcomes = receipt.artifacts.map((artifact) => artifact.outcome);
+  const locallyPending = outcomes.length > 0
+    && outcomes.includes('saved_locally_sync_pending')
+    && outcomes.every((outcome) => (
+      outcome === 'committed'
+      || outcome === 'already_satisfied'
+      || outcome === 'saved_locally_sync_pending'
+    ));
+  return locallyPending
+    ? HARD_COMMAND_RESPONSES.savedLocallySyncPending
+    : HARD_COMMAND_RESPONSES.failure;
+}
+
 function dispatchCapture(input = {}, options = {}) {
-  const capture = normalizeInput(input);
+  const hardCommand = parseHardCaptureCommand(input);
+  if (hardCommand.disposition === 'needs_input') {
+    const result = noCaptureResult(normalizeInput(input), 'hard_command_needs_input');
+    result.hardCommand = hardCommand;
+    return result;
+  }
+
+  const capture = normalizeInput(hardCommand.disposition === 'capture' ? {
+    ...input,
+    text: hardCommand.content,
+    content: hardCommand.content,
+    body: undefined,
+    trigger: hardCommand.route,
+    hardCommand,
+  } : input);
 
   if (!capture.text) {
     return noCaptureResult(capture, 'empty_input');
@@ -172,4 +223,5 @@ module.exports = {
   ignoredPathForCapture,
   normalizeClassification,
   normalizeInput,
+  responseForHardCaptureReceipt,
 };

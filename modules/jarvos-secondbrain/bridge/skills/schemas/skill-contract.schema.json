@@ -75,7 +75,7 @@
             },
             "trigger": {
               "type": "string",
-              "enum": ["idea", "note", "decision", "preference", "fact", "lesson"]
+              "enum": ["idea", "note", "journal", "decision", "preference", "fact", "lesson"]
             },
             "salienceClass": {
               "type": "string",

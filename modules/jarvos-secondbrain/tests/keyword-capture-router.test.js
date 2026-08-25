@@ -6,10 +6,13 @@ const path = require('path');
 
 const {
   applyRoutingPlan,
+  applyStrictCommandPlan,
   buildRoutingPlan,
   detectTrigger,
   hasCaptureIntent,
+  parseHardCaptureCommand,
 } = require('../bridge/routing/src/keyword-capture-router.js');
+const { receiptIsAcknowledged } = require('../src/artifact-receipt.js');
 const { createAcknowledgedVaultMutationService } = require('./helpers/acknowledged-vault-mutation-service');
 
 const TEST_DATE = '2026-01-02';
@@ -159,4 +162,101 @@ test('adapter abstraction works with a mock storage adapter', () => {
   assert.equal(calls[1][0], 'appendLineToJournalSection');
   assert.equal(calls[1][1], '## 📝 Notes');
   assert.match(JSON.stringify(calls[0][3]), /journal\/2026-01-02/);
+});
+
+test('strict hard commands are anchored, preserve payload colons, and expose public responses', () => {
+  assert.deepEqual(parseHardCaptureCommand(' Idea: The Next Pandemic: AI Addiction '), {
+    disposition: 'capture',
+    matched: true,
+    command: 'idea',
+    route: 'idea',
+    content: 'The Next Pandemic: AI Addiction',
+    response: 'Captured to Ideas.',
+  });
+  assert.deepEqual(parseHardCaptureCommand('Note: Capture command: contract'), {
+    disposition: 'capture',
+    matched: true,
+    command: 'note',
+    route: 'note',
+    content: 'Capture command: contract',
+    response: 'Captured as a note.',
+  });
+  assert.deepEqual(parseHardCaptureCommand('Journal: Reviewed the capture bug'), {
+    disposition: 'capture',
+    matched: true,
+    command: 'journal',
+    route: 'journal',
+    content: 'Reviewed the capture bug',
+    response: 'Captured to Journal.',
+  });
+  assert.deepEqual(parseHardCaptureCommand('Add to Journal: Filed SUP-1: follow-up'), {
+    disposition: 'capture',
+    matched: true,
+    command: 'add-to-journal',
+    route: 'journal',
+    content: 'Filed SUP-1: follow-up',
+    response: 'Captured to Journal.',
+  });
+
+  for (const text of [
+    'She said "Idea: fix the router" during standup.',
+    'Could you help shape this idea: AI addiction?',
+    'note to self: this remains ambient capture',
+    'Let us journal: capture the highlights later',
+  ]) {
+    assert.equal(parseHardCaptureCommand(text).disposition, 'continue');
+  }
+});
+
+test('bare strict commands request content without touching storage', () => {
+  const explodingAdapter = {
+    writeNote() { throw new Error('bare command must not write a note'); },
+    appendLineToJournalSection() { throw new Error('bare command must not write a journal'); },
+    ensureJournal() { throw new Error('bare command must not ensure a journal'); },
+  };
+
+  const cases = [
+    ['Idea:', 'What idea should I capture?'],
+    ['Note:   ', 'What note should I capture?'],
+    ['Journal:', 'What should I add to your journal?'],
+    ['  Add to Journal:  ', 'What should I add to your journal?'],
+  ];
+
+  for (const [text, response] of cases) {
+    const parsed = parseHardCaptureCommand(text);
+    assert.equal(parsed.disposition, 'needs_input');
+    assert.equal(parsed.response, response);
+
+    const result = applyStrictCommandPlan({ text, date: TEST_DATE }, { adapter: explodingAdapter });
+    assert.equal(result.disposition, 'needs_input');
+    assert.equal(result.response, response);
+    assert.deepEqual(result.artifactReceipt.artifacts, []);
+  }
+});
+
+test('all populated strict commands use the expected canonical writer route', () => {
+  const vault = makeTempVault();
+
+  withVaultEnv(vault, (options) => {
+    const idea = applyStrictCommandPlan({ text: 'Idea: ship the router: keep it simple', date: TEST_DATE }, options);
+    assert.equal(idea.route, 'idea');
+    assert.equal(idea.noteLink.heading, '## 💡 Ideas');
+    assert.equal(receiptIsAcknowledged(idea.artifactReceipt), true);
+
+    const note = applyStrictCommandPlan({ text: 'Note: Capture command contract', date: TEST_DATE }, options);
+    assert.equal(note.route, 'note');
+    assert.ok(note.note);
+    assert.equal(receiptIsAcknowledged(note.artifactReceipt), true);
+
+    const journal = applyStrictCommandPlan({ text: 'Journal: paid rent: $2,400', date: TEST_DATE }, options);
+    assert.equal(journal.route, 'journal');
+    assert.equal(journal.noteLink.heading, '## 📓 Journal Entry');
+    assert.equal(journal.noteLink.line, '- paid rent: $2,400');
+    assert.equal(receiptIsAcknowledged(journal.artifactReceipt), true);
+
+    const add = applyStrictCommandPlan({ text: 'Add to Journal: closed SUP-1: filed follow-up', date: TEST_DATE }, options);
+    assert.equal(add.route, 'journal');
+    assert.equal(add.noteLink.heading, '## 📓 Journal Entry');
+    assert.equal(receiptIsAcknowledged(add.artifactReceipt), true);
+  });
 });
