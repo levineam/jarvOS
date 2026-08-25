@@ -592,6 +592,74 @@ if (args[0] === 'graph-query') {
   assert.equal(result.results[0].engines.gbrain_recall.ok, true);
 });
 
+test('runRetrievalEval writes only sanitized health-bearing failure evidence', () => {
+  const root = tempDir();
+  const evalPath = path.join(root, 'private-eval.json');
+  const artifactPath = path.join(root, 'state', 'combined-recall-latest.json');
+  const gbrainBin = path.join(root, 'fake-gbrain');
+  const qmdBin = path.join(root, 'fake-qmd');
+  const privateQuery = 'private punctuation-sensitive question';
+  const privateExpected = 'Gamma—Delta';
+  const privatePath = 'qmd://notes/private-alpha-beta.md';
+  fs.writeFileSync(evalPath, JSON.stringify({
+    version: 1,
+    questions: [{
+      query: privateQuery,
+      expected: {
+        gbrain: 'projects/intentionally-missing-direct-result',
+        qmd: privatePath,
+        recall: { any: [privateExpected] },
+      },
+    }],
+  }), 'utf8');
+  fs.writeFileSync(gbrainBin, '#!/bin/sh\nif [ "$1" = "graph-query" ]; then printf "%s\\n" "No edges found"; else printf "%s\\n" "[0.5] projects/other -- unrelated"; fi\n', 'utf8');
+  fs.writeFileSync(qmdBin, `#!/bin/sh
+printf "%s\\n" '[{"file":"${privatePath}","snippet":"Alpha - Beta"}]'
+`, 'utf8');
+  fs.chmodSync(gbrainBin, 0o755);
+  fs.chmodSync(qmdBin, 0o755);
+
+  const result = gbrain.runRetrievalEval({
+    evalPath,
+    gbrainBin,
+    gbrainDir: root,
+    qmdBin,
+  }, {
+    compareQmd: true,
+    compareRecall: true,
+    artifactPath,
+    publicRevision: 'a'.repeat(40),
+    runtimeRevision: 'b'.repeat(40),
+    now: new Date('2026-08-24T12:00:00.000Z'),
+  });
+
+  assert.equal(result.ok, false);
+  assert.deepEqual(result.summary.engines.gbrain, { passed: 0, failed: 1 });
+  assert.deepEqual(result.artifact, {
+    ok: true,
+    path: artifactPath,
+    digest: result.artifact.digest,
+    failureCount: 1,
+  });
+  const artifact = JSON.parse(fs.readFileSync(artifactPath, 'utf8'));
+  assert.equal(artifact.schema, gbrain.RETRIEVAL_EVAL_ARTIFACT_SCHEMA);
+  assert.equal(artifact.generatedAt, '2026-08-24T12:00:00.000Z');
+  assert.equal(artifact.publicRevision, 'a'.repeat(40));
+  assert.equal(artifact.runtimeRevision, 'b'.repeat(40));
+  assert.match(artifact.corpusDigest, /^sha256:[0-9a-f]{64}$/);
+  assert.deepEqual(artifact.failures.map((failure) => ({ engine: failure.engine, reason: failure.failureReason })), [
+    { engine: 'gbrain_recall', reason: 'expected-candidate-missing' },
+  ]);
+  assert.match(artifact.failures[0].questionId, /^question-01-[0-9a-f]{12}$/);
+  assert.ok(artifact.failures[0].expectedCandidateDigests.every((value) => /^sha256:[0-9a-f]{64}$/.test(value)));
+  assert.ok(artifact.failures[0].actualCandidateDigests.every((value) => value.rank > 0 && /^sha256:[0-9a-f]{64}$/.test(value.candidateDigest)));
+  assert.equal(fs.statSync(artifactPath).mode & 0o777, 0o600);
+  const serialized = fs.readFileSync(artifactPath, 'utf8');
+  for (const privateValue of [privateQuery, privateExpected, privatePath, 'Alpha - Beta', 'projects/other']) {
+    assert.equal(serialized.includes(privateValue), false);
+  }
+});
+
 test('runRetrievalEval recall candidates ignore omitted engine expectations', () => {
   const root = tempDir();
   const evalPath = path.join(root, 'eval.json');
@@ -625,6 +693,28 @@ test('runRetrievalEval recall candidates ignore omitted engine expectations', ()
   assert.deepEqual(result.results[0].engines.gbrain_recall.expectedCandidates, ['qmd://notes/expected.md']);
   assert.equal(result.results[0].engines.gbrain_recall.ok, false);
   assert.deepEqual(result.results[0].engines.gbrain_recall.missingExpected, ['qmd://notes/expected.md']);
+});
+
+test('combined recall records an empty QMD subpath without hiding valid GBrain evidence', () => {
+  const root = tempDir();
+  const evalPath = path.join(root, 'eval.json');
+  const gbrainBin = path.join(root, 'fake-gbrain');
+  const qmdBin = path.join(root, 'fake-qmd');
+  fs.writeFileSync(evalPath, JSON.stringify({
+    version: 1,
+    questions: [{ query: 'structured answer', expected: { gbrain: 'projects/structured-answer' } }],
+  }), 'utf8');
+  fs.writeFileSync(gbrainBin, '#!/bin/sh\nif [ "$1" = "graph-query" ]; then printf "%s\\n" "No edges found"; else printf "%s\\n" "[0.9] projects/structured-answer -- useful evidence"; fi\n', 'utf8');
+  fs.writeFileSync(qmdBin, '#!/bin/sh\nprintf "%s\\n" "No results found."\n', 'utf8');
+  fs.chmodSync(gbrainBin, 0o755);
+  fs.chmodSync(qmdBin, 0o755);
+
+  const result = gbrain.runRetrievalEval({ evalPath, gbrainBin, gbrainDir: root, qmdBin }, { compareRecall: true });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.results[0].engines.gbrain_recall.ok, true);
+  assert.equal(result.results[0].engines.gbrain_recall.bundle.engines.qmd.ok, false);
+  assert.equal(result.results[0].engines.gbrain_recall.bundle.engines.qmd.failureReason, 'empty-candidate-set');
 });
 
 test('runRetrievalEval preserves generic expectations alongside recall overrides', () => {
@@ -667,6 +757,69 @@ if (args[0] === 'graph-query') {
   assert.equal(result.results[0].engines.gbrain.expectedMatched, true);
   assert.deepEqual(result.results[0].engines.gbrain_recall.expectedCandidates, ['qmd://notes/foo.md']);
   assert.equal(result.results[0].engines.gbrain_recall.ok, true);
+});
+
+test('combined recall canonicalizes punctuation and whitespace without accepting a wrong phrase', () => {
+  const root = tempDir();
+  const evalPath = path.join(root, 'eval.json');
+  const gbrainBin = path.join(root, 'fake-gbrain');
+  const qmdBin = path.join(root, 'fake-qmd');
+  fs.writeFileSync(evalPath, JSON.stringify({
+    version: 1,
+    questions: [
+      { query: 'canonical match', expected: { qmd: 'qmd://notes/canonical.md', recall: { any: ['Alpha—Beta'] } } },
+      { query: 'genuine wrong candidate', expected: { qmd: 'qmd://notes/wrong.md', recall: { any: ['Alpha—Beta'] } } },
+    ],
+  }), 'utf8');
+  fs.writeFileSync(gbrainBin, '#!/bin/sh\nif [ "$1" = "graph-query" ]; then printf "%s\\n" "No edges found"; else printf "%s\\n" "[0.5] projects/other -- unrelated"; fi\n', 'utf8');
+  fs.writeFileSync(qmdBin, `#!/usr/bin/env node
+const query = process.argv.join(' ');
+const canonical = query.includes('canonical match');
+process.stdout.write(JSON.stringify([{ file: canonical ? 'qmd://notes/canonical.md' : 'qmd://notes/wrong.md', snippet: canonical ? 'Alpha -   Beta' : 'Alpha Gamma Beta' }]));
+`, 'utf8');
+  fs.chmodSync(gbrainBin, 0o755);
+  fs.chmodSync(qmdBin, 0o755);
+
+  const result = gbrain.runRetrievalEval({ evalPath, gbrainBin, gbrainDir: root, qmdBin }, { compareQmd: true, compareRecall: true });
+
+  assert.equal(result.results[0].engines.gbrain_recall.ok, true);
+  assert.equal(result.results[1].engines.gbrain_recall.ok, false);
+  assert.equal(result.limit, 10);
+  assert.equal(result.results[0].engines.gbrain_recall.bundle.limit, 10);
+  assert.equal(result.ok, false);
+
+  const runtimeRecall = gbrain.recallBundle({ gbrainBin, gbrainDir: root, qmdBin }, { query: 'canonical match', autoGraph: false });
+  assert.equal(runtimeRecall.limit, 5);
+});
+
+test('QMD comparison classifies malformed, empty, and missing engine results explicitly', () => {
+  const root = tempDir();
+  const evalPath = path.join(root, 'eval.json');
+  const gbrainBin = path.join(root, 'fake-gbrain');
+  const qmdBin = path.join(root, 'fake-qmd');
+  fs.writeFileSync(evalPath, JSON.stringify({
+    version: 1,
+    questions: [
+      { query: 'malformed qmd', expected: { gbrain: 'projects/ok', qmd: 'not-json' } },
+      { query: 'empty qmd', expected: { gbrain: 'projects/ok' } },
+    ],
+  }), 'utf8');
+  fs.writeFileSync(gbrainBin, '#!/bin/sh\nprintf "%s\\n" "projects/ok"\n', 'utf8');
+  fs.writeFileSync(qmdBin, `#!/usr/bin/env node
+if (process.argv.join(' ').includes('malformed qmd')) process.stdout.write('not-json');
+`, 'utf8');
+  fs.chmodSync(gbrainBin, 0o755);
+  fs.chmodSync(qmdBin, 0o755);
+
+  const result = gbrain.runRetrievalEval({ evalPath, gbrainBin, gbrainDir: root, qmdBin }, { compareQmd: true });
+  assert.equal(result.results[0].engines.qmd.ok, false);
+  assert.equal(result.results[0].engines.qmd.failureReason, 'malformed-result');
+  assert.equal(result.results[1].engines.qmd.ok, false);
+  assert.equal(result.results[1].engines.qmd.failureReason, 'empty-candidate-set');
+
+  const missing = gbrain.runRetrievalEval({ evalPath, gbrainBin, gbrainDir: root, qmdBin: path.join(root, 'missing-qmd') }, { compareQmd: true });
+  assert.equal(missing.results[0].engines.qmd.ok, false);
+  assert.equal(missing.results[0].engines.qmd.failureReason, 'missing-engine');
 });
 
 test('recallBundle combines GBrain search, QMD lookup, and graph expansion', () => {
