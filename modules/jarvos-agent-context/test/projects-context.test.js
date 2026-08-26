@@ -22,6 +22,7 @@ const { startupHydration: codexStartupHydration } = require('../../../runtimes/c
 const { startupHydration: claudeStartupHydration } = require('../../../runtimes/claude/jarvos-session-start-hook.js');
 
 const ACTIVE_ASSISTANT_PROVIDER_MODULE_ENV = 'ACTIVE_ASSISTANT_PROJECTS_PROVIDER_MODULE';
+const ACTIVE_ASSISTANT_PUBLIC_RUNTIME_ROOT_ENV = 'ACTIVE_ASSISTANT_PUBLIC_RUNTIME_ROOT';
 
 const QUERY = {
   scope: { projectIds: ['prj_000001'], outcomeIds: ['out_000001'], includeDescendants: false },
@@ -306,6 +307,45 @@ test('selected Active Assistant provider artifact overrides config and fails clo
     } finally {
       if (previous === undefined) delete process.env[ACTIVE_ASSISTANT_PROVIDER_MODULE_ENV];
       else process.env[ACTIVE_ASSISTANT_PROVIDER_MODULE_ENV] = previous;
+    }
+  });
+});
+
+test('selected runtime public contracts and provider identities override stale config as one host binding', async () => {
+  setMcpProjectsContextProvider(null);
+  await withHostProjectsProvider(async ({ config, workspaceRoot }) => {
+    const selectedPublicRoot = path.join(workspaceRoot, 'selected-public');
+    const selectedPrivateRoot = path.join(workspaceRoot, 'selected-private');
+    fs.mkdirSync(selectedPublicRoot, { recursive: true });
+    fs.mkdirSync(selectedPrivateRoot, { recursive: true });
+    const selectedProvider = path.join(selectedPrivateRoot, 'provider.js');
+    fs.writeFileSync(selectedProvider, `const packet = ${JSON.stringify(packet())};\nmodule.exports.read = async ({ query, repositoryRoot, beadsProviderProducerId, todoProviderProducerId }) => ({ status: 'ok', packet: { ...packet, query, currentWork: [{ id: repositoryRoot.endsWith('selected-public') && beadsProviderProducerId === 'host.beads' && todoProviderProducerId === 'host.todo' ? 'selected-binding' : 'wrong-binding', title: 'Selected binding', status: 'in_progress' }] } });\n`);
+    const bound = JSON.parse(fs.readFileSync(config, 'utf8'));
+    fs.writeFileSync(config, JSON.stringify({
+      ...bound,
+      repositoryRoot: path.join(workspaceRoot, 'missing-stale-public'),
+      providerModule: path.join(workspaceRoot, 'missing-stale-provider.js'),
+      beadsProviderProducerId: 'host.beads',
+      todoProviderProducerId: 'host.todo',
+    }));
+    const previousProvider = process.env[ACTIVE_ASSISTANT_PROVIDER_MODULE_ENV];
+    const previousPublic = process.env[ACTIVE_ASSISTANT_PUBLIC_RUNTIME_ROOT_ENV];
+    try {
+      process.env[ACTIVE_ASSISTANT_PROVIDER_MODULE_ENV] = selectedProvider;
+      process.env[ACTIVE_ASSISTANT_PUBLIC_RUNTIME_ROOT_ENV] = selectedPublicRoot;
+      const selected = await readProjectsContext({ profile: 'orientation' });
+      assert.equal(selected.status, 'ok');
+      assert.equal(selected.packet.currentWork[0].id, 'selected-binding');
+
+      process.env[ACTIVE_ASSISTANT_PUBLIC_RUNTIME_ROOT_ENV] = path.join(workspaceRoot, 'missing-selected-public');
+      const missing = await readProjectsContext({ profile: 'orientation' });
+      assert.equal(missing.status, 'unavailable');
+      assert.equal(missing.packet, null);
+    } finally {
+      if (previousProvider === undefined) delete process.env[ACTIVE_ASSISTANT_PROVIDER_MODULE_ENV];
+      else process.env[ACTIVE_ASSISTANT_PROVIDER_MODULE_ENV] = previousProvider;
+      if (previousPublic === undefined) delete process.env[ACTIVE_ASSISTANT_PUBLIC_RUNTIME_ROOT_ENV];
+      else process.env[ACTIVE_ASSISTANT_PUBLIC_RUNTIME_ROOT_ENV] = previousPublic;
     }
   });
 });
