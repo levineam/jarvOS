@@ -8,6 +8,7 @@ product_contract_source: ce-plan-bootstrap
 execution: code
 ---
 
+<!-- markdownlint-disable-file MD025 -->
 # Hard Capture Commands - Plan
 
 ## Goal Capsule
@@ -61,7 +62,7 @@ The missing stop decision is the practical defect. The absence of an always-load
 - AE1. Covers R1, R2, R4, R6, R10. `Idea: The Next Pandemic: AI Addiction` writes one bullet under Ideas and returns `Captured to Ideas.` exactly once without a model response.
 - AE2. Covers R1, R2, R4, R6, R10. `Journal: Reviewed the capture bug` writes one bullet under Journal Entry and returns `Captured to Journal.` exactly once without a model response.
 - AE3. Covers R1, R2, R4, R6, R10. `Note: Capture command contract` uses the existing standalone-note route and returns `Captured as a note.` exactly once without a model response.
-- AE4. Covers R3, R6, R10. `Idea:   ` writes nothing, returns `What idea should I capture?` exactly once, and does not reach the model.
+- AE4. Covers R3, R6, R10. `Idea:` with trailing whitespace writes nothing, returns `What idea should I capture?` exactly once, and does not reach the model.
 - AE5. Covers R5, R6, R10. A valid `saved_locally_sync_pending` receipt returns `Saved locally; sync pending.` exactly once and does not reach the model.
 - AE6. Covers R5, R6, R10. A canonical writer failure or invalid receipt returns `I couldn't confirm that capture. Please try again.` exactly once and does not reach the model.
 - AE7. Covers R7. `Could you help shape this idea: AI addiction?` passes to the model unchanged.
