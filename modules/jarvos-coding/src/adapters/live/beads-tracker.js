@@ -132,7 +132,7 @@ function commandArgs(method, input, operationId) {
   if (method === 'transition') {
     const status = requiredString(input.status, 'transition status').toLowerCase();
     if (['done', 'closed'].includes(status)) return ['close', itemId, '--reason', 'Completed by jarvOS work action', '--json'];
-    if (status === 'open') return ['reopen', itemId, '--reason', 'Reopened by jarvOS work action', '--json'];
+    if (status === 'open' && input.reopen === true) return ['reopen', itemId, '--reason', 'Reopened by jarvOS work action', '--json'];
     return ['update', itemId, '--status', status, '--json'];
   }
   if (method === 'dependency') return ['dep', 'add', itemId, requiredString(input.dependsOn || input.dependencyId, 'dependency id'), '--json'];

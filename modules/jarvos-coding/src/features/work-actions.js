@@ -225,7 +225,9 @@ function createBeadsWorkActionService(options = {}) {
     const prior = await replay(action, input);
     if (prior && !['new', 'resume'].includes(prior.state)) return prior;
     const completionEvidence = preflight ? (prior?.result?.completionEvidence || await preflight(current)) : null;
-    const result = method === 'claim' ? await tracker.claimIssue({ ...input, itemId }) : await tracker.transition({ ...input, itemId, status });
+    const result = method === 'claim'
+      ? await tracker.claimIssue({ ...input, itemId })
+      : await tracker.transition({ ...input, itemId, status, ...(action === 'reopen' ? { reopen: true } : {}) });
     if (result.state === 'indeterminate') return record(action, input, { contract: WORK_ACTION_CONTRACT, ok: false, status: 'indeterminate', operationId: input.operationId, retryable: false, completionEvidence }, 'indeterminate');
     if (result.state !== 'committed') return record(action, input, { contract: WORK_ACTION_CONTRACT, ok: false, status: 'failed', operationId: input.operationId, retryable: false }, 'failed');
     const item = itemFrom(result, itemId);

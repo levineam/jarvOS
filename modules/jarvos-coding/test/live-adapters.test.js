@@ -143,6 +143,32 @@ test('Beads Todo authorization is bound to the complete mutation request', async
   assert.equal(dispatches, 0);
 });
 
+test('Beads Todo distinguishes resuming blocked work from reopening closed work', async () => {
+  const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-todo-resume-reopen-'));
+  const { createBeadsWorkActionService, createMemoryExecutionLinkStore } = require('../src/index.js');
+  const transitions = [];
+  let revision = 1;
+  const tracker = {
+    authority: 'beads', workspaceRoot,
+    async createWorkItem() { return { state: 'committed', result: { id: 'bd-resume', revision: String(revision), status: 'open' } }; },
+    async transition(input) {
+      transitions.push(input);
+      revision += 1;
+      return { state: 'committed', result: { id: input.itemId, revision: String(revision), status: input.status } };
+    },
+  };
+  const canonical = { contract: 'jarvos.canonical-reference/v1', kind: 'outcome', id: 'out_000001', revision: 1, breadcrumb: 'Project › Outcome' };
+  const service = createBeadsWorkActionService({ tracker, executionLinks: createMemoryExecutionLinkStore(), approvedWorkspaceIds: [workspaceRoot], authorizeMutation: hostAuthorization });
+  await service.create({ title: 'Resume semantics', operationId: 'resume-create', canonical, actor: { kind: 'human', id: 'andrew' } });
+  await service.transition({ itemId: 'bd-resume', operationId: 'resume-blocked', status: 'open', actor: { kind: 'human', id: 'andrew' } });
+  await service.reopen({ itemId: 'bd-resume', operationId: 'reopen-closed', actor: { kind: 'human', id: 'andrew' } });
+
+  assert.equal(transitions[0].status, 'open');
+  assert.equal(transitions[0].reopen, undefined);
+  assert.equal(transitions[1].status, 'open');
+  assert.equal(transitions[1].reopen, true);
+});
+
 test('Beads Todo completion accepts only host-resolved immutable verification receipts', async () => {
   const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-todo-evidence-'));
   const { createBeadsWorkActionService, createMemoryExecutionLinkStore } = require('../src/index.js');
@@ -759,6 +785,7 @@ test('Beads adapter emits exact argv for every live operation without a command-
         const status = args.includes('--claim') ? 'in_progress' : args[args.indexOf('--status') + 1];
         return { status: 0, stdout: JSON.stringify([{ id: 'bd-argv', status, updated_at: '2026-08-26T00:00:00Z' }]), stderr: '' };
       }
+      if (args[0] === 'reopen') return { status: 0, stdout: JSON.stringify([{ id: 'bd-argv', status: 'open', updated_at: '2026-08-26T00:00:01Z' }]), stderr: '' };
       return { status: 0, stdout: JSON.stringify({ id: 'bd-argv', status: 'open' }), stderr: '' };
     },
   });
@@ -766,6 +793,8 @@ test('Beads adapter emits exact argv for every live operation without a command-
   await tracker.createWorkItem({ title: 'Argv item', description: 'desc', priority: 2, operationId: 'op-argv-create' });
   await tracker.claimIssue({ itemId: 'bd-argv', operationId: 'op-argv-claim' });
   await tracker.transition({ itemId: 'bd-argv', status: 'review', operationId: 'op-argv-transition' });
+  await tracker.transition({ itemId: 'bd-argv', status: 'open', operationId: 'op-argv-resume' });
+  await tracker.transition({ itemId: 'bd-argv', status: 'open', reopen: true, operationId: 'op-argv-reopen' });
   await tracker.addDependency({ itemId: 'bd-argv', dependencyId: 'bd-dep', operationId: 'op-argv-dependency' });
   await tracker.writeCheckpoint({ itemId: 'bd-argv', stage: 'review', nextStep: 'publish-pr', operationId: 'op-argv-checkpoint' });
   await tracker.showWorkItem({ itemId: 'bd-argv' });
@@ -780,12 +809,16 @@ test('Beads adapter emits exact argv for every live operation without a command-
   assert.deepEqual(calls[7], ['where']);
   assert.deepEqual(calls[8], ['update', 'bd-argv', '--status', 'review', '--json']);
   assert.deepEqual(calls[9], ['where']);
-  assert.deepEqual(calls[10], ['dep', 'add', 'bd-argv', 'bd-dep', '--json']);
+  assert.deepEqual(calls[10], ['update', 'bd-argv', '--status', 'open', '--json']);
   assert.deepEqual(calls[11], ['where']);
-  assert.deepEqual(calls[12], ['comments', 'add', 'bd-argv', '--message', '[jarvos-checkpoint/v1] {"operationId":"op-argv-checkpoint","stage":"review","nextStep":"publish-pr"}', '--json']);
+  assert.deepEqual(calls[12], ['reopen', 'bd-argv', '--reason', 'Reopened by jarvOS work action', '--json']);
   assert.deepEqual(calls[13], ['where']);
-  assert.deepEqual(calls[14], ['show', 'bd-argv', '--format', 'json']);
-  assert.equal(calls.length, 15);
+  assert.deepEqual(calls[14], ['dep', 'add', 'bd-argv', 'bd-dep', '--json']);
+  assert.deepEqual(calls[15], ['where']);
+  assert.deepEqual(calls[16], ['comments', 'add', 'bd-argv', '--message', '[jarvos-checkpoint/v1] {"operationId":"op-argv-checkpoint","stage":"review","nextStep":"publish-pr"}', '--json']);
+  assert.deepEqual(calls[17], ['where']);
+  assert.deepEqual(calls[18], ['show', 'bd-argv', '--format', 'json']);
+  assert.equal(calls.length, 19);
 });
 
 test('Beads preflight fails closed when a required capability is missing before any mutation runs', async () => {
