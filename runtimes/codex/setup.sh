@@ -80,8 +80,15 @@ fi
 
 # The stable entrypoint is what setup registers with Codex, so it must be
 # validated to the same bar as the stable stewardship dispatcher: absolute,
-# not a symlink, an owner-only executable file. Reject without echoing the
-# path -- an unsafe binding is refused before it is ever persisted.
+# not a symlink, an owner-only executable file. An owner-only leaf is not
+# enough on its own -- an unprivileged co-tenant of a writable *ancestor*
+# directory can delete and replace that "trusted" file at will, so every
+# directory from the entrypoint's parent up to the filesystem root ("/",
+# a boundary public setup can name without inventing a private path) must
+# also be owned by us (or root) and not group/world-writable, mirroring the
+# stewardship dispatcher and control-plane credential-file checks. Reject
+# without echoing the path -- an unsafe binding is refused before it is ever
+# persisted.
 MCP_COMMAND=(node "$MCP_SERVER")
 if [ -n "$STABLE_MCP_ENTRYPOINT" ]; then
   case "$STABLE_MCP_ENTRYPOINT" in
@@ -93,13 +100,30 @@ if [ -n "$STABLE_MCP_ENTRYPOINT" ]; then
   esac
   if ! node -e '
 const fs = require("fs");
+const path = require("path");
 const value = process.argv[1];
 let stat;
 try { stat = fs.lstatSync(value); } catch { process.exit(1); }
 const uid = typeof process.getuid === "function" ? process.getuid() : null;
 if (stat.isSymbolicLink() || !stat.isFile() || (stat.mode & 0o077) !== 0 || (stat.mode & 0o111) === 0 || (uid !== null && stat.uid !== uid)) process.exit(1);
+function trustedAncestor(dirStat) {
+  if (!dirStat.isDirectory()) return false;
+  if (uid !== null && dirStat.uid !== 0 && dirStat.uid !== uid) return false;
+  const writable = (dirStat.mode & 0o022) !== 0;
+  const sticky = (dirStat.mode & 0o1000) !== 0;
+  return !writable || sticky;
+}
+let dir = path.dirname(value);
+for (;;) {
+  let dirStat;
+  try { dirStat = fs.statSync(dir); } catch { process.exit(1); }
+  if (!trustedAncestor(dirStat)) process.exit(1);
+  const parent = path.dirname(dir);
+  if (parent === dir) break;
+  dir = parent;
+}
 ' "$STABLE_MCP_ENTRYPOINT"; then
-    echo "JARVOS_MCP_STABLE_ENTRYPOINT must be an absolute, owner-only executable file" >&2
+    echo "JARVOS_MCP_STABLE_ENTRYPOINT must be an absolute, owner-only executable file with trusted, non-writable ancestry up to the filesystem root" >&2
     exit 1
   fi
   MCP_COMMAND=("$STABLE_MCP_ENTRYPOINT")

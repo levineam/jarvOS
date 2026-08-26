@@ -538,6 +538,79 @@ test('an unsafe stable entrypoint binding is rejected without echoing the path',
   }
 });
 
+test('an entrypoint file mode of 0700 does not excuse unsafe ancestry, for both Codex and Claude setup', () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-mcp-unsafe-ancestry-'));
+  try {
+    const bin = path.join(tmp, 'bin');
+    fs.mkdirSync(bin, { recursive: true });
+
+    // The leaf file is exactly as owner-only as a trusted entrypoint: 0700,
+    // owned by us, not a symlink. Only its parent directory is unsafe -- group
+    // and world writable, non-sticky -- which lets an unprivileged co-tenant of
+    // that directory delete and replace the "trusted" file at will.
+    const trustedRoot = path.join(tmp, 'trusted-root');
+    fs.mkdirSync(trustedRoot, { recursive: true });
+    fs.chmodSync(trustedRoot, 0o700);
+    const unsafeAncestor = path.join(trustedRoot, 'world-writable-subdir');
+    fs.mkdirSync(unsafeAncestor, { recursive: true });
+    fs.chmodSync(unsafeAncestor, 0o777);
+    const entrypoint = path.join(unsafeAncestor, 'jarvos-mcp-shim');
+    fs.writeFileSync(entrypoint, '#!/usr/bin/env node\n', { encoding: 'utf8', mode: 0o700 });
+    fs.chmodSync(entrypoint, 0o700);
+
+    const baseEnv = { ...process.env, PATH: `${bin}:${process.env.PATH}` };
+    for (const key of [
+      'JARVOS_MANAGED_REPOSITORIES', 'JARVOS_STEWARDSHIP_STABLE_ROOT', 'JARVOS_STEWARDSHIP_ONLY',
+      'JARVOS_MANAGED_HARNESS_ROLLBACK', 'JARVOS_CODEX_PROVIDER_MODE', 'JARVOS_PROFILE',
+      'JARVOS_WORK_ACTION_SERVICE_MODULE', 'JARVOS_PROJECTS_CONTEXT_CONFIG',
+    ]) delete baseEnv[key];
+
+    // -- Codex --
+    const codexRecord = path.join(tmp, 'codex-mcp-add.json');
+    writeFakeMcpCli(path.join(bin, 'codex'), codexRecord);
+    const codexHome = path.join(tmp, 'codex-home');
+    fs.mkdirSync(codexHome, { recursive: true });
+    const codexResult = spawnSync('bash', [path.join(REPO_ROOT, 'runtimes', 'codex', 'setup.sh')], {
+      encoding: 'utf8',
+      env: {
+        ...baseEnv,
+        HOME: path.join(tmp, 'home-codex'),
+        CODEX_HOME: codexHome,
+        CODEX_CONFIG: path.join(codexHome, 'config.toml'),
+        JARVOS_MCP_STABLE_ENTRYPOINT: entrypoint,
+      },
+    });
+    assert.notEqual(codexResult.status, 0, 'Codex setup must reject an owner-only file behind unsafe ancestry');
+    assert.match(codexResult.stderr, /JARVOS_MCP_STABLE_ENTRYPOINT/);
+    assert.doesNotMatch(codexResult.stderr, /jarvos-mcp-shim|world-writable-subdir/);
+    assert.equal(fs.existsSync(codexRecord), false, 'Codex setup must not register an MCP server for unsafe ancestry');
+
+    // -- Claude --
+    const claudeRecord = path.join(tmp, 'claude-mcp-add.json');
+    writeFakeMcpCli(path.join(bin, 'claude'), claudeRecord);
+    const claudeDesktopConfig = path.join(tmp, 'claude-desktop', 'claude_desktop_config.json');
+    const claudeResult = spawnSync('bash', [path.join(REPO_ROOT, 'runtimes', 'claude', 'setup.sh')], {
+      encoding: 'utf8',
+      env: {
+        ...baseEnv,
+        HOME: path.join(tmp, 'home-claude'),
+        CLAUDE_SETTINGS: path.join(tmp, 'claude-settings', 'settings.json'),
+        CLAUDE_DESKTOP_CONFIG: claudeDesktopConfig,
+        CLAUDE_MD_PATH: path.join(tmp, 'claude-md', 'CLAUDE.md'),
+        JARVOS_MCP_STABLE_ENTRYPOINT: entrypoint,
+        JARVOS_SKIP_CLAUDE_MD: '1',
+      },
+    });
+    assert.notEqual(claudeResult.status, 0, 'Claude setup must reject an owner-only file behind unsafe ancestry');
+    assert.match(claudeResult.stderr, /JARVOS_MCP_STABLE_ENTRYPOINT/);
+    assert.doesNotMatch(claudeResult.stderr, /jarvos-mcp-shim|world-writable-subdir/);
+    assert.equal(fs.existsSync(claudeRecord), false, 'Claude setup must not register an MCP server for unsafe ancestry');
+    assert.equal(fs.existsSync(claudeDesktopConfig), false, 'Claude setup must not persist Desktop config for unsafe ancestry');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
 test('the documented host binding actually starts from a workspace copy', async () => {
   // The published setup is: copy examples/work-action-host-service.js into the
   // Projects workspaceRoot as an owner-only file and point the env var at it.
