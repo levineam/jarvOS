@@ -53,7 +53,7 @@ function operationFingerprint(method, input) {
 }
 
 function operationExpectation(method, input = {}) {
-  if (method === 'create') return {};
+  if (method === 'create') return { externalReference: String(input.externalReference || operationIdOf(input, method)) };
   const itemId = workIdOf(input, method);
   if (method === 'claim') return { itemId, status: 'in_progress' };
   if (method === 'transition') return { itemId, status: requiredString(input.status, 'transition status') };
@@ -117,7 +117,7 @@ function commandArgs(method, input, operationId) {
     const args = ['create', '--title', requiredString(input.title, 'create title')];
     if (input.description) args.push('--description', String(input.description));
     if (input.priority !== undefined) args.push('--priority', String(input.priority));
-    args.push('--external-ref', operationId, ...format);
+    args.push('--external-ref', String(input.externalReference || operationId), ...format);
     return args;
   }
   const itemId = workIdOf(input, method);
@@ -146,9 +146,14 @@ function createLiveBeadsTracker(options = {}) {
   const maxBuffer = Number(options.maxBuffer || DEFAULT_MAX_BUFFER);
   // A host-selected state root upgrades the exact same operation contract to
   // durable storage.  No caller path is accepted by the action facade.
+  const live = options.mode === 'live';
   const operationStore = options.operationStore || (options.operationStoreRoot
     ? createFileOperationStore({ root: options.operationStoreRoot, maxRecords: options.maxOperationRecords })
     : createMemoryOperationStore());
+  if (live && (operationStore?.schemaVersion !== 'jarvos-coding-operation-store/v1'
+    || operationStore?.storage !== 'file' || typeof operationStore?.root !== 'string')) {
+    throw new Error('live Beads tracker requires a durable tracker operation ledger');
+  }
   const actor = options.actor || 'jarvos-coding';
   const commandMap = options.commands || {};
   let preflight = null;
@@ -205,7 +210,7 @@ function createLiveBeadsTracker(options = {}) {
     if (typeof options.reconcile === 'function') return options.reconcile(operation);
     const expectation = operation.expectation || {};
     const args = operation.method === 'create'
-      ? ['show', '--external-ref', operation.operationId, '--format', 'json']
+      ? ['show', '--external-ref', String(expectation.externalReference || operation.operationId), '--format', 'json']
       : ['show', expectation.itemId, '--format', 'json'];
     const result = invoke(args);
     if (result.status === 0) {
@@ -218,7 +223,12 @@ function createLiveBeadsTracker(options = {}) {
   }
 
   function matchesExpectation(method, value, expectation) {
-    if (method === 'create') return Boolean(value);
+    if (method === 'create') {
+      const found = plain(value?.item) ? value.item : value;
+      if (!plain(found)) return false;
+      const externalReference = found.external_ref || found.externalRef || found.externalReference || found.external_reference;
+      return typeof externalReference === 'string' && externalReference === expectation.externalReference;
+    }
     const found = plain(value?.item) ? value.item : value;
     if (!plain(found)) return false;
     if (method === 'claim' || method === 'transition') {
@@ -283,7 +293,17 @@ function createLiveBeadsTracker(options = {}) {
       await operationStore.write(failed);
       return failed;
     }
-    const committed = { ...prepared, state: 'committed', status: 'committed', retryable: false, result: parseJson(result.stdout) || { output: output(result) } };
+    const parsed = parseJson(result.stdout);
+    // A create is only committed when the returned Beads item carries the
+    // operation identity we will use to reconcile a timeout after I/O.  A
+    // syntactically valid but unrelated JSON response must remain explicit
+    // uncertainty rather than being linked to the wrong canonical work.
+    if (method === 'create' && !matchesExpectation(method, parsed, expectation)) {
+      const indeterminate = { ...prepared, state: 'indeterminate', status: 'indeterminate', retryable: false, errorCode: 'CREATE_REFERENCE_UNCONFIRMED' };
+      await operationStore.write(indeterminate);
+      return indeterminate;
+    }
+    const committed = { ...prepared, state: 'committed', status: 'committed', retryable: false, result: parsed || { output: output(result) } };
     await operationStore.write(committed);
     return committed;
   }
@@ -308,6 +328,9 @@ function createLiveBeadsTracker(options = {}) {
     schemaVersion: BEADS_TRACKER_SCHEMA_VERSION,
     authority: 'beads',
     workspaceRoot,
+    operationStoreRoot: operationStore.root || null,
+    operationStoreContract: operationStore.schemaVersion || null,
+    operationStoreStorage: operationStore.storage || null,
     async preflight() { return ensureReady(); },
     async createWorkItem(input = {}) { return mutate('create', input); },
     async claimIssue(input = {}) {

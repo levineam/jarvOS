@@ -15,6 +15,13 @@ STEWARDSHIP_CLAUDE_SESSION_MAP_ROOT="${JARVOS_STEWARDSHIP_CLAUDE_SESSION_MAP_ROO
 STEWARDSHIP_BRIDGE_PATH="${JARVOS_STEWARDSHIP_BRIDGE_PATH:-}"
 STEWARDSHIP_STABLE_ROOT="${JARVOS_STEWARDSHIP_STABLE_ROOT:-}"
 STEWARDSHIP_DISPATCHER=""
+# Optional owner-controlled stable selector-aware entrypoint. When set, this
+# is what gets persisted in Claude Code and Claude Desktop config instead of
+# this immutable install's own MCP script -- so a later selected-runtime
+# transition does not require rewriting persisted client config. Unset
+# preserves the current portable behavior: register this run's own
+# $MCP_SERVER directly.
+STABLE_MCP_ENTRYPOINT="${JARVOS_MCP_STABLE_ENTRYPOINT:-}"
 # Optional Todo work-action host bindings. Unset keeps public/minimal behavior.
 # When set, persist the non-secret absolute paths on the MCP child. Trust
 # checks stay in the MCP server (fail closed on an untrusted path).
@@ -85,6 +92,58 @@ if [ ! -f "$PRECOMPACT_HOOK_SCRIPT" ]; then
   exit 1
 fi
 
+# The stable entrypoint is what setup registers with Claude, so it must be
+# validated to the same bar as the stable stewardship dispatcher: absolute,
+# not a symlink, an owner-only executable file. An owner-only leaf is not
+# enough on its own -- an unprivileged co-tenant of a writable *ancestor*
+# directory can delete and replace that "trusted" file at will, so every
+# directory from the entrypoint's parent up to the filesystem root ("/",
+# a boundary public setup can name without inventing a private path) must
+# also be owned by us (or root) and not group/world-writable, mirroring the
+# stewardship dispatcher and control-plane credential-file checks. Reject
+# without echoing the path -- an unsafe binding is refused before it is ever
+# persisted.
+MCP_COMMAND=(node "$MCP_SERVER")
+if [ -n "$STABLE_MCP_ENTRYPOINT" ]; then
+  case "$STABLE_MCP_ENTRYPOINT" in
+    /*) ;;
+    *)
+      echo "JARVOS_MCP_STABLE_ENTRYPOINT must be an absolute path" >&2
+      exit 1
+      ;;
+  esac
+  if ! node -e '
+const fs = require("fs");
+const path = require("path");
+const value = process.argv[1];
+let stat;
+try { stat = fs.lstatSync(value); } catch { process.exit(1); }
+const uid = typeof process.getuid === "function" ? process.getuid() : null;
+if (stat.isSymbolicLink() || !stat.isFile() || (stat.mode & 0o077) !== 0 || (stat.mode & 0o111) === 0 || (uid !== null && stat.uid !== uid)) process.exit(1);
+function trustedAncestor(dirStat) {
+  if (!dirStat.isDirectory()) return false;
+  if (uid !== null && dirStat.uid !== 0 && dirStat.uid !== uid) return false;
+  const writable = (dirStat.mode & 0o022) !== 0;
+  const sticky = (dirStat.mode & 0o1000) !== 0;
+  return !writable || sticky;
+}
+let dir = path.dirname(value);
+for (;;) {
+  let dirStat;
+  try { dirStat = fs.statSync(dir); } catch { process.exit(1); }
+  if (!trustedAncestor(dirStat)) process.exit(1);
+  const parent = path.dirname(dir);
+  if (parent === dir) break;
+  dir = parent;
+}
+' "$STABLE_MCP_ENTRYPOINT"; then
+    echo "JARVOS_MCP_STABLE_ENTRYPOINT must be an absolute, owner-only executable file with trusted, non-writable ancestry up to the filesystem root" >&2
+    exit 1
+  fi
+  MCP_COMMAND=("$STABLE_MCP_ENTRYPOINT")
+fi
+EFFECTIVE_MCP_TARGET="${STABLE_MCP_ENTRYPOINT:-$MCP_SERVER}"
+
 warn_if_claude_mcp_shadowed() {
   local details
   details="$(claude mcp get jarvos 2>/dev/null || true)"
@@ -92,8 +151,8 @@ warn_if_claude_mcp_shadowed() {
     echo "Warning: Claude Code could not resolve the jarvOS MCP server after user-scope registration." >&2
     return
   fi
-  if ! printf "%s\n" "$details" | grep -F "$MCP_SERVER" >/dev/null; then
-    echo "Warning: the effective Claude Code jarvOS MCP entry does not point at $MCP_SERVER." >&2
+  if ! printf "%s\n" "$details" | grep -F "$EFFECTIVE_MCP_TARGET" >/dev/null; then
+    echo "Warning: the effective Claude Code jarvOS MCP entry does not point at $EFFECTIVE_MCP_TARGET." >&2
     echo "A local or project scoped Claude MCP server named jarvos may be shadowing the user-scoped jarvOS server." >&2
   fi
 }
@@ -103,22 +162,22 @@ if [ "${JARVOS_SKIP_CLAUDE_CODE_MCP:-0}" = "1" ]; then
 elif command -v claude >/dev/null 2>&1; then
   claude mcp remove --scope user jarvos >/dev/null 2>&1 || true
   if [ ${#MCP_ENV_ARGS[@]} -gt 0 ]; then
-    claude mcp add --scope user "${MCP_ENV_ARGS[@]}" jarvos -- node "$MCP_SERVER" >/dev/null
+    claude mcp add --scope user "${MCP_ENV_ARGS[@]}" jarvos -- "${MCP_COMMAND[@]}" >/dev/null
   else
-    claude mcp add --scope user jarvos -- node "$MCP_SERVER" >/dev/null
+    claude mcp add --scope user jarvos -- "${MCP_COMMAND[@]}" >/dev/null
   fi
   warn_if_claude_mcp_shadowed
-  echo "Registered jarvOS MCP server for Claude Code: $MCP_SERVER"
+  echo "Registered jarvOS MCP server for Claude Code: $EFFECTIVE_MCP_TARGET"
 else
   echo "Claude Code CLI not found on PATH; skipping Claude Code MCP registration." >&2
 fi
 
-node - "$CLAUDE_SETTINGS" "$HOOK_SCRIPT" "$TURN_HOOK_SCRIPT" "$PRECOMPACT_HOOK_SCRIPT" "$STEWARDSHIP_DISPATCHER" "$CLAUDE_DESKTOP_CONFIG" "$MCP_SERVER" "${JARVOS_STEWARDSHIP_ONLY:-0}" "${JARVOS_MANAGED_HARNESS_ROLLBACK:-0}" "$STEWARDSHIP_BRIDGE_COMMAND" "$STEWARDSHIP_CLAUDE_SESSION_MAP_ROOT" "$STEWARDSHIP_BRIDGE_PATH" "${JARVOS_STAGED_PUBLIC_RUNTIME_ROOT:-}" <<'NODE'
+node - "$CLAUDE_SETTINGS" "$HOOK_SCRIPT" "$TURN_HOOK_SCRIPT" "$PRECOMPACT_HOOK_SCRIPT" "$STEWARDSHIP_DISPATCHER" "$CLAUDE_DESKTOP_CONFIG" "$MCP_SERVER" "${JARVOS_STEWARDSHIP_ONLY:-0}" "${JARVOS_MANAGED_HARNESS_ROLLBACK:-0}" "$STEWARDSHIP_BRIDGE_COMMAND" "$STEWARDSHIP_CLAUDE_SESSION_MAP_ROOT" "$STEWARDSHIP_BRIDGE_PATH" "${JARVOS_STAGED_PUBLIC_RUNTIME_ROOT:-}" "$STABLE_MCP_ENTRYPOINT" <<'NODE'
 const fs = require('fs');
 const path = require('path');
 const { spawnSync } = require('child_process');
 
-const [settingsPath, hookScript, turnHookScript, precompactHookScript, dispatcher, desktopConfigPath, mcpServer, stewardshipOnly, rollback, bridgeCommand, claudeSessionMapRoot, bridgePath, stagedRoot] = process.argv.slice(2);
+const [settingsPath, hookScript, turnHookScript, precompactHookScript, dispatcher, desktopConfigPath, mcpServer, stewardshipOnly, rollback, bridgeCommand, claudeSessionMapRoot, bridgePath, stagedRoot, stableMcpEntrypoint] = process.argv.slice(2);
 
 function readJsonFile(filePath, fallback) {
   if (!fs.existsSync(filePath)) return fallback;
@@ -320,10 +379,9 @@ function upsertClaudeDesktopMcp(config) {
     ? { ...next.mcpServers }
     : {};
   const hostEnv = optionalMcpHostEnv();
-  next.mcpServers.jarvos = {
-    command: 'node',
-    args: [mcpServer],
-  };
+  next.mcpServers.jarvos = stableMcpEntrypoint
+    ? { command: stableMcpEntrypoint }
+    : { command: 'node', args: [mcpServer] };
   if (Object.keys(hostEnv).length > 0) next.mcpServers.jarvos.env = hostEnv;
   return next;
 }

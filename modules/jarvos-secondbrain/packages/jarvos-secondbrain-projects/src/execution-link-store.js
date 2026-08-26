@@ -67,6 +67,10 @@ function createFileExecutionLinkStore(options = {}) {
     }
   };
   return {
+    storage: 'file',
+    // Host-only composition metadata; execution references never contain this
+    // private state location.
+    root,
     async read(workspaceId, itemId) { return readRaw(workspaceId, itemId); },
     async list() {
       const records = [];
