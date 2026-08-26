@@ -10,8 +10,6 @@ origin:
   - docs/plans/2026-08-12-001-feat-projects-context-cutover-plan.md
 ---
 
-# Projects and Todo Live Unlock - Plan
-
 ## Goal Capsule
 
 - **Objective:** Make Projects orientation and Beads-backed Todo behavior visible and trustworthy in Andrew's ordinary agent conversations, starting with Codex and the Active Assistant.
