@@ -7,6 +7,8 @@ const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
 const { spawnSync } = require('node:child_process');
+const { EventEmitter } = require('node:events');
+const { PassThrough } = require('node:stream');
 
 const { checkRuntime, listRuntimeManifests, validateManifest } = require('../src/index.js');
 const { CANONICAL_HARNESS_IDS } = require('../src/managed-activation.js');
@@ -70,7 +72,7 @@ test('HTTP gateway fails closed without a token and rejects bad auth', async () 
   const gateway = require(GATEWAY);
   const bridge = {
     sseClients: new Set(),
-    send: async (message) => ({ jsonrpc: '2.0', id: message.id, result: { protocolVersion: '2024-11-05', serverInfo: { name: 'jarvos' } } }),
+    send: async (message) => ({ jsonrpc: '2.0', id: message.id, result: { protocolVersion: '2025-06-18', serverInfo: { name: 'jarvos' } } }),
     health: () => ({ alive: true, restarts: 0 }),
   };
   const server = gateway.createServer({ token, host: '127.0.0.1', port: 0, bridge });
@@ -88,7 +90,7 @@ test('HTTP gateway fails closed without a token and rejects bad auth', async () 
       body: '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}',
     });
     assert.equal(ok.status, 200);
-    assert.equal(JSON.parse(ok.body).result.protocolVersion, '2024-11-05');
+    assert.equal(JSON.parse(ok.body).result.protocolVersion, '2025-06-18');
     assert.ok(ok.headers['mcp-session-id']);
     assert.doesNotMatch(ok.body, /event: endpoint/);
 
@@ -186,10 +188,12 @@ test('stdio bridge isolates JSON-RPC ids across MCP sessions', async () => {
     assert.equal(b.status, 200);
     const tagA = JSON.parse(a.body).result.tag;
     const tagB = JSON.parse(b.body).result.tag;
+    assert.equal(JSON.parse(a.body).result.protocolVersion, '2025-06-18');
+    assert.equal(JSON.parse(b.body).result.protocolVersion, '2025-06-18');
     assert.notEqual(a.headers['mcp-session-id'], b.headers['mcp-session-id']);
     assert.deepEqual(new Set([tagA, tagB]), new Set(['A', 'B']));
   } finally {
-    disposeServer(server);
+    await disposeServer(server);
   }
 });
 
@@ -198,7 +202,7 @@ test('timed-out child replies are tombstoned and not SSE-broadcast', async () =>
   const fake = writeFakeMcp();
   const token = 'grok-bot-test-token-32chars-min';
   const createBridge = () => gateway.startStdioBridge({ args: [fake], restart: false, env: process.env });
-  const server = gateway.createServer({ token, host: '127.0.0.1', port: 0, createBridge, requestTimeoutMs: 80 });
+  const server = gateway.createServer({ token, host: '127.0.0.1', port: 0, createBridge, requestTimeoutMs: 700 });
   await listen(server);
   const { port } = server.address();
   try {
@@ -224,7 +228,6 @@ test('timed-out child replies are tombstoned and not SSE-broadcast', async () =>
     sseReq.on('error', () => {});
     sseReq.end();
     await delay(50);
-
     const timed = await httpRequest({
       port,
       path: '/mcp',
@@ -242,7 +245,7 @@ test('timed-out child replies are tombstoned and not SSE-broadcast', async () =>
     assert.doesNotMatch(sseBody.text, /"id":9/);
     sseReq.destroy();
   } finally {
-    disposeServer(server);
+    await disposeServer(server);
   }
 });
 
@@ -251,7 +254,7 @@ test('health reports child death after a live stdio session exits', async () => 
   const fake = writeFakeMcp();
   const token = 'grok-bot-test-token-32chars-min';
   const createBridge = () => gateway.startStdioBridge({ args: [fake], restart: false, env: process.env });
-  const server = gateway.createServer({ token, host: '127.0.0.1', port: 0, createBridge });
+  const server = gateway.createServer({ token, host: '127.0.0.1', port: 0, createBridge, maxSessions: 1 });
   await listen(server);
   const { port } = server.address();
   try {
@@ -287,8 +290,534 @@ test('health reports child death after a live stdio session exits', async () => 
     assert.equal(payload.ok, false);
     assert.equal(payload.childDead, 1);
     assert.equal(payload.childAlive, 0);
+    const replacement = await httpRequest({
+      port,
+      path: '/mcp',
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
+      body: '{"jsonrpc":"2.0","id":3,"method":"initialize","params":{}}',
+    });
+    assert.equal(replacement.status, 200);
+    assert.notEqual(replacement.headers['mcp-session-id'], sessionId);
   } finally {
-    disposeServer(server);
+    await disposeServer(server);
+  }
+});
+
+test('gateway gives same-client-id retries distinct child ids and ignores the late first reply', async () => {
+  const gateway = require(GATEWAY);
+  const child = fakeChild();
+  const childIds = [];
+  const responseOrder = [];
+  child.stdin.setEncoding('utf8');
+  child.stdin.on('data', (chunk) => {
+    for (const line of chunk.trim().split('\n')) {
+      if (!line) continue;
+      const message = JSON.parse(line);
+      childIds.push(message.id);
+      const isFirst = childIds.length === 1;
+      setTimeout(() => {
+        responseOrder.push(isFirst ? 'first' : 'second');
+        child.stdout.write(`${JSON.stringify({
+          jsonrpc: '2.0',
+          id: message.id,
+          result: { tag: isFirst ? 'first-late' : 'second-early' },
+        })}\n`);
+      }, isFirst ? 80 : 5);
+    }
+  });
+  const bridge = gateway.startStdioBridge({ spawn: () => child, restart: false, tombstoneTtlMs: 20 });
+  try {
+    await assert.rejects(
+      bridge.send({ jsonrpc: '2.0', id: 9, method: 'retry', params: {} }, 20),
+      /timed out/,
+    );
+    const retry = await bridge.send({ jsonrpc: '2.0', id: 9, method: 'retry', params: {} }, 120);
+    assert.equal(retry.id, 9);
+    assert.equal(retry.result.tag, 'second-early');
+    assert.notEqual(childIds[0], childIds[1]);
+    await delay(100);
+    assert.deepEqual(responseOrder, ['second', 'first']);
+  } finally {
+    bridge.dispose();
+  }
+});
+
+test('tombstones expire without later child output', async () => {
+  const gateway = require(GATEWAY);
+  const child = fakeChild();
+  const bridge = gateway.startStdioBridge({ spawn: () => child, restart: false, tombstoneTtlMs: 20 });
+  try {
+    await assert.rejects(
+      bridge.send({ jsonrpc: '2.0', id: 9, method: 'never-reply', params: {} }, 5),
+      /timed out/,
+    );
+    assert.equal(bridge.health().tombstones, 1);
+    await delay(30);
+    assert.equal(bridge.health().tombstones, 0);
+  } finally {
+    bridge.dispose();
+  }
+});
+
+test('gateway routes notifications and child server requests to one SSE stream', () => {
+  const gateway = require(GATEWAY);
+  const child = fakeChild();
+  const bridge = gateway.startStdioBridge({ spawn: () => child, restart: false });
+  const firstStream = { messages: [], write(value) { this.messages.push(value); } };
+  const secondStream = { messages: [], write(value) { this.messages.push(value); } };
+  bridge.sseClients.add(firstStream);
+  bridge.sseClients.add(secondStream);
+  try {
+    child.stdout.write(`${JSON.stringify({ jsonrpc: '2.0', method: 'notifications/progress', params: {} })}\n`);
+    child.stdout.write(`${JSON.stringify({ jsonrpc: '2.0', id: 'child-request-1', method: 'roots/list', params: {} })}\n`);
+    const messages = [...firstStream.messages, ...secondStream.messages];
+    assert.equal(messages.length, 2);
+    assert.equal(firstStream.messages.length, 0);
+    assert.equal(secondStream.messages.length, 2);
+    assert.ok(messages.some((message) => message.includes('child-request-1')));
+    assert.ok(messages.some((message) => message.includes('roots/list')));
+
+    let activityCount = 0;
+    const stalledStream = {
+      messages: [],
+      destroyedByPolicy: false,
+      write(value) { this.messages.push(value); return false; },
+      destroy() { this.destroyedByPolicy = true; },
+    };
+    bridge.sseClients.clear();
+    bridge.sseClients.add(stalledStream);
+    bridge.setSseActivityHandler(() => { activityCount += 1; });
+    child.stdout.write('{"jsonrpc":"2.0","method":"notifications/stalled"}\n');
+    child.stdout.write('{"jsonrpc":"2.0","method":"notifications/after-stall"}\n');
+    assert.equal(stalledStream.destroyedByPolicy, true);
+    assert.equal(stalledStream.messages.length, 1);
+    assert.equal(bridge.sseClients.size, 0);
+    assert.equal(activityCount, 0);
+  } finally {
+    bridge.dispose();
+  }
+});
+
+test('server-initiated requests round-trip through live SSE and HTTP', async () => {
+  const gateway = require(GATEWAY);
+  const token = 'grok-bot-test-token-32chars-min';
+  const child = fakeChild();
+  const childMessages = [];
+  child.stdin.setEncoding('utf8');
+  child.stdin.on('data', (chunk) => {
+    for (const line of chunk.trim().split('\n')) {
+      if (!line) continue;
+      const message = JSON.parse(line);
+      childMessages.push(message);
+      if (message.method === 'initialize') {
+        child.stdout.write(`${JSON.stringify({
+          jsonrpc: '2.0',
+          id: message.id,
+          result: { protocolVersion: '2025-06-18' },
+        })}\n`);
+      }
+    }
+  });
+  const bridge = gateway.startStdioBridge({ spawn: () => child, restart: false });
+  const server = gateway.createServer({
+    token, host: '127.0.0.1', port: 0, bridge, requestTimeoutMs: 50, idleSessionMs: 60,
+  });
+  await listen(server);
+  const { port } = server.address();
+  let sseRequest;
+  try {
+    const common = { 'content-type': 'application/json', authorization: `Bearer ${token}` };
+    const initialized = await httpRequest({
+      port, path: '/mcp', method: 'POST', headers: common,
+      body: '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}',
+    });
+    assert.equal(initialized.status, 200);
+    const sessionId = initialized.headers['mcp-session-id'];
+
+    let resolveConnected;
+    let resolveServerRequest;
+    const connected = new Promise((resolve) => { resolveConnected = resolve; });
+    const serverRequest = new Promise((resolve) => { resolveServerRequest = resolve; });
+    sseRequest = http.request({
+      host: '127.0.0.1',
+      port,
+      path: '/mcp',
+      method: 'GET',
+      headers: { authorization: `Bearer ${token}`, accept: 'text/event-stream', 'mcp-session-id': sessionId },
+    }, (res) => {
+      res.setEncoding('utf8');
+      let body = '';
+      res.on('data', (chunk) => {
+        body += chunk;
+        if (body.includes(': connected')) resolveConnected();
+        if (body.includes('"method":"roots/list"')) resolveServerRequest(body);
+      });
+    });
+    sseRequest.on('error', () => {});
+    sseRequest.end();
+    await Promise.race([connected, delay(1000).then(() => { throw new Error('SSE did not connect'); })]);
+    await delay(40);
+    child.stdout.write('{"jsonrpc":"2.0","method":"notifications/progress","params":{}}\n');
+    await delay(40);
+    assert.equal(server.sessions.size, 1);
+
+    child.stdout.write('{"jsonrpc":"2.0","id":"child-request-1","method":"roots/list","params":{}}\n');
+    const sseBody = await Promise.race([serverRequest, delay(1000).then(() => { throw new Error('server request was not delivered'); })]);
+    assert.match(sseBody, /"id":"child-request-1"/);
+
+    const forwarded = await httpRequest({
+      port, path: '/mcp', method: 'POST',
+      headers: { ...common, 'mcp-session-id': sessionId, 'mcp-protocol-version': '2025-06-18' },
+      body: '{"jsonrpc":"2.0","id":"child-request-1","result":{"roots":[]}}',
+    });
+    assert.equal(forwarded.status, 202);
+    assert.deepEqual(childMessages.at(-1), {
+      jsonrpc: '2.0', id: 'child-request-1', result: { roots: [] },
+    });
+
+    child.stdin.write = (_chunk, callback) => {
+      process.nextTick(() => callback(new Error('async child write failed')));
+      return true;
+    };
+    const failedForward = await httpRequest({
+      port, path: '/mcp', method: 'POST',
+      headers: { ...common, 'mcp-session-id': sessionId, 'mcp-protocol-version': '2025-06-18' },
+      body: '{"jsonrpc":"2.0","id":"child-request-2","result":{"roots":[]}}',
+    });
+    assert.equal(failedForward.status, 502);
+
+    child.stdin.write = () => true;
+    const stalledForward = await httpRequest({
+      port, path: '/mcp', method: 'POST',
+      headers: { ...common, 'mcp-session-id': sessionId, 'mcp-protocol-version': '2025-06-18' },
+      body: '{"jsonrpc":"2.0","id":"child-request-3","result":{"roots":[]}}',
+    });
+    assert.equal(stalledForward.status, 502);
+    assert.match(stalledForward.body, /write timed out/);
+
+    await Promise.race([
+      new Promise((resolve) => server.close(resolve)),
+      delay(1000).then(() => { throw new Error('server close hung on active SSE'); }),
+    ]);
+    assert.equal(child.killed, true);
+  } finally {
+    sseRequest?.destroy();
+    if (server.listening) await disposeServer(server);
+  }
+});
+
+test('stdio bridge handles child process errors without uncaught failure', async () => {
+  const gateway = require(GATEWAY);
+  const child = fakeChild();
+  const bridge = gateway.startStdioBridge({ spawn: () => child, restart: false });
+  try {
+    assert.doesNotThrow(() => child.emit('error', new Error('spawn failed')));
+    assert.equal(bridge.alive, false);
+    await assert.rejects(bridge.send({ jsonrpc: '2.0', id: 1, method: 'x' }, 10), /not alive/);
+  } finally {
+    bridge.dispose();
+  }
+});
+
+test('a child error followed by exit schedules only one bridge restart', async () => {
+  const gateway = require(GATEWAY);
+  const first = fakeChild();
+  const second = fakeChild();
+  let spawned = 0;
+  const bridge = gateway.startStdioBridge({
+    spawn: () => (spawned += 1) === 1 ? first : second,
+    backoffMs: 5,
+    restart: true,
+  });
+  try {
+    first.emit('error', new Error('spawn failed'));
+    first.emit('exit', 1);
+    await delay(25);
+    assert.equal(spawned, 2);
+    const stream = { messages: [], write(value) { this.messages.push(value); } };
+    bridge.sseClients.add(stream);
+    first.stdout.write('{"jsonrpc":"2.0","method":"notifications/stale"}\n');
+    second.stdout.write('{"jsonrpc":"2.0","method":"notifications/current"}\n');
+    assert.equal(stream.messages.length, 1);
+    assert.match(stream.messages[0], /notifications\/current/);
+  } finally {
+    bridge.dispose();
+  }
+});
+
+test('gateway validates origin and protocol before session work, bounds idle sessions, and accepts client responses', async () => {
+  const gateway = require(GATEWAY);
+  const token = 'grok-bot-test-token-32chars-min';
+  const bridges = [];
+  const createBridge = () => {
+    const bridge = {
+      sseClients: new Set(),
+      sent: [],
+      disposed: false,
+      send: async (message) => ({ jsonrpc: '2.0', id: message.id, result: { protocolVersion: '2025-06-18' } }),
+      post: async (message) => {
+        if (message.id === 78) throw new Error('child unavailable');
+        bridge.sent.push(message);
+      },
+      dispose: () => {
+        bridge.disposed = true;
+        for (const client of bridge.sseClients) client.end();
+        bridge.sseClients.clear();
+      },
+      health: () => ({ alive: true, restarts: 0 }),
+    };
+    bridges.push(bridge);
+    return bridge;
+  };
+  const server = gateway.createServer({
+    token,
+    host: '127.0.0.1',
+    port: 0,
+    createBridge,
+    maxSessions: 1,
+    idleSessionMs: 30,
+    supportedProtocolVersions: ['2025-06-18'],
+  });
+  await listen(server);
+  const { port } = server.address();
+  let idleSseRequest;
+  try {
+    const common = { 'content-type': 'application/json', authorization: `Bearer ${token}` };
+    const originDenied = await httpRequest({
+      port, path: '/mcp', method: 'POST', headers: { ...common, origin: 'https://evil.example' },
+      body: '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}',
+    });
+    assert.equal(originDenied.status, 403);
+    assert.equal(bridges.length, 0);
+
+    const badVersion = await httpRequest({
+      port, path: '/mcp', method: 'POST', headers: { ...common, 'mcp-protocol-version': '2099-01-01' },
+      body: '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}',
+    });
+    assert.equal(badVersion.status, 400);
+    assert.equal(bridges.length, 0);
+
+    const initialized = await httpRequest({
+      port, path: '/mcp', method: 'POST', headers: { ...common, origin: `http://127.0.0.1:${port}` },
+      body: '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}',
+    });
+    assert.equal(initialized.status, 200);
+    const sessionId = initialized.headers['mcp-session-id'];
+    assert.equal(bridges.length, 1);
+
+    const response = await httpRequest({
+      port, path: '/mcp', method: 'POST',
+      headers: { ...common, 'mcp-session-id': sessionId },
+      body: '{"jsonrpc":"2.0","id":77,"result":{"ok":true}}',
+    });
+    assert.equal(response.status, 202);
+    assert.equal(response.body, '');
+    assert.deepEqual(bridges[0].sent, [{ jsonrpc: '2.0', id: 77, result: { ok: true } }]);
+
+    const responseFailure = await httpRequest({
+      port, path: '/mcp', method: 'POST',
+      headers: { ...common, 'mcp-session-id': sessionId },
+      body: '{"jsonrpc":"2.0","id":78,"result":{"ok":true}}',
+    });
+    assert.equal(responseFailure.status, 502);
+
+    let resolveIdleSse;
+    const idleSseConnected = new Promise((resolve) => { resolveIdleSse = resolve; });
+    idleSseRequest = http.request({
+      host: '127.0.0.1', port, path: '/mcp', method: 'GET',
+      headers: { authorization: `Bearer ${token}`, accept: 'text/event-stream', 'mcp-session-id': sessionId },
+    }, (res) => {
+      res.setEncoding('utf8');
+      res.on('data', (chunk) => {
+        if (chunk.includes(': connected')) resolveIdleSse();
+      });
+    });
+    idleSseRequest.on('error', () => {});
+    idleSseRequest.end();
+    await Promise.race([idleSseConnected, delay(1000).then(() => { throw new Error('idle SSE did not connect'); })]);
+
+    const admissionDenied = await httpRequest({
+      port, path: '/mcp', method: 'POST', headers: common,
+      body: '{"jsonrpc":"2.0","id":2,"method":"initialize","params":{}}',
+    });
+    assert.equal(admissionDenied.status, 429);
+    await delay(45);
+    const reinitialized = await httpRequest({
+      port, path: '/mcp', method: 'POST', headers: common,
+      body: '{"jsonrpc":"2.0","id":3,"method":"initialize","params":{}}',
+    });
+    assert.equal(reinitialized.status, 200);
+    assert.equal(bridges[0].disposed, true);
+  } finally {
+    idleSseRequest?.destroy();
+    await disposeServer(server);
+  }
+});
+
+test('gateway records the initialization result protocol and requires exact local origins', async () => {
+  const gateway = require(GATEWAY);
+  const token = 'grok-bot-test-token-32chars-min';
+  const bridge = {
+    sseClients: new Set(),
+    send: async (message) => message.method === 'initialize'
+      ? { jsonrpc: '2.0', id: message.id, result: { protocolVersion: '2025-06-18' } }
+      : { jsonrpc: '2.0', id: message.id, result: {} },
+    dispose() {},
+    health: () => ({ alive: true, restarts: 0 }),
+  };
+  const server = gateway.createServer({ token, host: '127.0.0.1', port: 0, bridge });
+  await listen(server);
+  const { port } = server.address();
+  try {
+    const common = { 'content-type': 'application/json', authorization: `Bearer ${token}` };
+    const wrongPortOrigin = await httpRequest({
+      port, path: '/mcp', method: 'POST',
+      headers: { ...common, origin: `http://127.0.0.1:${port + 1}` },
+      body: '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}',
+    });
+    assert.equal(wrongPortOrigin.status, 403);
+
+    const initialized = await httpRequest({
+      port, path: '/mcp', method: 'POST', headers: common,
+      body: '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}',
+    });
+    assert.equal(initialized.status, 200);
+    const sessionId = initialized.headers['mcp-session-id'];
+    const wrongVersion = await httpRequest({
+      port, path: '/mcp', method: 'POST',
+      headers: { ...common, 'mcp-session-id': sessionId, 'mcp-protocol-version': '2025-03-26' },
+      body: '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}',
+    });
+    assert.equal(wrongVersion.status, 400);
+    const negotiatedVersion = await httpRequest({
+      port, path: '/mcp', method: 'POST',
+      headers: { ...common, 'mcp-session-id': sessionId, 'mcp-protocol-version': '2025-06-18' },
+      body: '{"jsonrpc":"2.0","id":3,"method":"tools/list","params":{}}',
+    });
+    assert.equal(negotiatedVersion.status, 200);
+  } finally {
+    await disposeServer(server);
+  }
+});
+
+test('gateway safely rejects malformed Host and disposes a failed initialization', async () => {
+  const gateway = require(GATEWAY);
+  const token = 'grok-bot-test-token-32chars-min';
+  let disposed = false;
+  const bridge = {
+    sseClients: new Set(),
+    send: async () => { throw new Error('initialization failed'); },
+    dispose: () => { disposed = true; },
+    health: () => ({ alive: true, restarts: 0 }),
+  };
+  const server = gateway.createServer({
+    token,
+    host: '127.0.0.1',
+    port: 0,
+    bridge,
+    requestTimeoutMs: 20,
+  });
+  await listen(server);
+  const { port } = server.address();
+  try {
+    const malformedHost = {
+      status: null,
+      writeHead(status) { this.status = status; },
+      end() {},
+    };
+    server.emit('request', { headers: { host: '[' }, url: '/health', method: 'GET' }, malformedHost);
+    assert.equal(malformedHost.status, 400);
+
+    const failed = await httpRequest({
+      port, path: '/mcp', method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
+      body: '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}',
+    });
+    assert.equal(failed.status, 504);
+    assert.equal(failed.headers['mcp-session-id'], undefined);
+    assert.equal(server.sessions.size, 0);
+    assert.equal(disposed, true);
+  } finally {
+    await disposeServer(server);
+  }
+});
+
+test('gateway rejects and disposes an initialization that negotiates an unsupported version', async () => {
+  const gateway = require(GATEWAY);
+  const token = 'grok-bot-test-token-32chars-min';
+  let disposed = false;
+  const bridge = {
+    sseClients: new Set(),
+    send: async (message) => ({ jsonrpc: '2.0', id: message.id, result: { protocolVersion: '2099-01-01' } }),
+    dispose: () => { disposed = true; },
+    health: () => ({ alive: true, restarts: 0 }),
+  };
+  const server = gateway.createServer({ token, host: '127.0.0.1', port: 0, bridge });
+  await listen(server);
+  const { port } = server.address();
+  try {
+    const response = await httpRequest({
+      port, path: '/mcp', method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
+      body: '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}',
+    });
+    assert.equal(response.status, 502);
+    assert.equal(response.headers['mcp-session-id'], undefined);
+    assert.equal(server.sessions.size, 0);
+    assert.equal(disposed, true);
+  } finally {
+    await disposeServer(server);
+  }
+});
+
+test('closing the gateway disposes every active session bridge', async () => {
+  const gateway = require(GATEWAY);
+  const token = 'grok-bot-test-token-32chars-min';
+  let disposed = false;
+  const bridge = {
+    sseClients: new Set(),
+    send: async (message) => ({ jsonrpc: '2.0', id: message.id, result: { protocolVersion: '2025-06-18' } }),
+    dispose: () => {
+      disposed = true;
+      for (const client of bridge.sseClients) client.end();
+      bridge.sseClients.clear();
+    },
+    health: () => ({ alive: true, restarts: 0 }),
+  };
+  const server = gateway.createServer({ token, host: '127.0.0.1', port: 0, bridge });
+  await listen(server);
+  const { port } = server.address();
+  try {
+    const initialized = await httpRequest({
+      port, path: '/mcp', method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
+      body: '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}',
+    });
+    assert.equal(initialized.status, 200);
+    assert.equal(server.sessions.size, 1);
+    let resolveConnected;
+    const connected = new Promise((resolve) => { resolveConnected = resolve; });
+    const sseRequest = http.request({
+      host: '127.0.0.1', port, path: '/mcp', method: 'GET',
+      headers: { authorization: `Bearer ${token}`, accept: 'text/event-stream', 'mcp-session-id': initialized.headers['mcp-session-id'] },
+    }, (res) => {
+      res.setEncoding('utf8');
+      res.on('data', (chunk) => {
+        if (chunk.includes(': connected')) resolveConnected();
+      });
+    });
+    sseRequest.on('error', () => {});
+    sseRequest.end();
+    await Promise.race([connected, delay(1000).then(() => { throw new Error('SSE did not connect'); })]);
+    await Promise.race([
+      new Promise((resolve) => server.close(resolve)),
+      delay(1000).then(() => { throw new Error('server close hung on active SSE'); }),
+    ]);
+    assert.equal(disposed, true);
+    assert.equal(server.sessions.size, 0);
+  } finally {
+    if (server.listening) await disposeServer(server);
   }
 });
 
@@ -311,10 +840,17 @@ process.stdin.on('data', (chunk) => {
     if (msg.method === 'slow') {
       setTimeout(() => {
         process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: msg.id, result: { tag: 'SENSITIVE-VAULT-CONTENT' } }) + '\\n');
-      }, 400);
+      }, 1000);
       return;
     }
-    process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: msg.id, result: { tag: process.env.FAKE_TAG || 'ok' } }) + '\\n');
+    process.stdout.write(JSON.stringify({
+      jsonrpc: '2.0',
+      id: msg.id,
+      result: {
+        tag: process.env.FAKE_TAG || 'ok',
+        ...(msg.method === 'initialize' ? { protocolVersion: msg.params.protocolVersion } : {}),
+      },
+    }) + '\\n');
   }
 });
 `);
@@ -329,10 +865,17 @@ function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function fakeChild() {
+  const child = new EventEmitter();
+  child.stdout = new PassThrough();
+  child.stdin = new PassThrough();
+  child.pid = process.pid;
+  child.killed = false;
+  child.kill = () => { child.killed = true; };
+  return child;
+}
+
 function disposeServer(server) {
-  for (const bridge of server.sessions ? server.sessions.values() : []) {
-    if (bridge && typeof bridge.dispose === 'function') bridge.dispose();
-  }
   return new Promise((resolve) => server.close(resolve));
 }
 
