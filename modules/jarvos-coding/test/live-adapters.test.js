@@ -417,8 +417,8 @@ test('live Todo create reconciles both durable ledgers after timeout and restart
     if (args[0] === 'capabilities') return { status: 0, stdout: JSON.stringify({ capabilities: ['create', 'update', 'dependency', 'checkpoint'] }) };
     if (args[0] === 'schema') return { status: 0, stdout: '{}' };
     if (args[0] === 'where') return { status: 0, stdout: workspaceRoot };
-    if (args[0] === 'show' && args[1] === '--external-ref') {
-      return { status: 0, stdout: JSON.stringify({ id: 'bd-reconciled', revision: '1', status: 'open', external_ref: externalReference }) };
+    if (args[0] === 'list') {
+      return { status: 0, stdout: JSON.stringify({ issues: [{ id: 'bd-reconciled', revision: '1', status: 'open', external_ref: externalReference }] }) };
     }
     if (args[0] === 'create') {
       createDispatches += 1;
@@ -499,6 +499,7 @@ test('explicit Beads transport works without Paperclip and uses bounded argv', a
       if (args[0] === 'capabilities') return { status: 0, stdout: JSON.stringify({ capabilities: ['create', 'update', 'dependency', 'checkpoint'] }), stderr: '' };
       if (args[0] === 'schema') return { status: 0, stdout: JSON.stringify({ schema: 'beads/v1' }), stderr: '' };
       if (args[0] === 'where') return { status: 0, stdout: `${workspaceRoot}\n`, stderr: '' };
+      if (args[0] === 'update' && args.includes('--claim')) return { status: 0, stdout: JSON.stringify([{ id: 'bd-1', status: 'in_progress', updated_at: '2026-08-26T00:00:00Z' }]), stderr: '' };
       return { status: 0, stdout: JSON.stringify({ id: 'bd-1', status: 'open', external_ref: args.includes('--external-ref') ? args[args.indexOf('--external-ref') + 1] : undefined }), stderr: '' };
     },
   });
@@ -520,6 +521,48 @@ test('explicit Beads transport works without Paperclip and uses bounded argv', a
     beads: { workspaceRoot, approvedRoots: [workspaceRoot], run: () => ({ status: 0, stdout: '', stderr: '' }) },
   });
   assert.equal(adapters.tracker.authority, 'beads');
+});
+
+test('Beads preflight derives logical capabilities from the real v0.2.19 command inventory', async () => {
+  const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-beads-real-capabilities-'));
+  const externalReference = 'real-capability-create';
+  const tracker = createLiveBeadsTracker({
+    workspaceRoot,
+    run(command, args) {
+      if (args[0] === '--version') return { status: 0, stdout: 'br 0.2.19', stderr: '' };
+      if (args[0] === 'capabilities') return { status: 0, stdout: JSON.stringify({
+        tool: 'br',
+        version: '0.2.19',
+        contract_version: 'br.capabilities.v1',
+        commands: ['create', 'update', 'show', 'close', 'reopen', 'dep', 'comments'].map((name) => ({ name })),
+      }), stderr: '' };
+      if (args[0] === 'schema') return { status: 0, stdout: JSON.stringify({ tool: 'br', schemas: {}, commands: {} }), stderr: '' };
+      if (args[0] === 'where') return { status: 0, stdout: `${workspaceRoot}\n  prefix: bd\n`, stderr: '' };
+      if (args[0] === 'create') return { status: 0, stdout: JSON.stringify({ id: 'bd-real', status: 'open', external_ref: externalReference }), stderr: '' };
+      throw new Error(`unexpected command: ${args.join(' ')}`);
+    },
+  });
+  const result = await tracker.createWorkItem({ title: 'real capability shape', operationId: externalReference });
+  assert.equal(result.state, 'committed');
+  assert.equal(result.result.id, 'bd-real');
+});
+
+test('Beads workspace proof accepts only the exact discovered .beads directory when initialized', async () => {
+  const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-beads-where-shape-'));
+  const beadsRoot = path.join(workspaceRoot, '.beads');
+  fs.mkdirSync(beadsRoot);
+  const tracker = createLiveBeadsTracker({
+    workspaceRoot,
+    run(command, args) {
+      if (args[0] === '--version') return { status: 0, stdout: 'br 0.2.19', stderr: '' };
+      if (args[0] === 'capabilities') return { status: 0, stdout: JSON.stringify({ capabilities: ['create', 'update', 'dependency', 'checkpoint'] }), stderr: '' };
+      if (args[0] === 'schema') return { status: 0, stdout: '{}', stderr: '' };
+      if (args[0] === 'where') return { status: 0, stdout: `${beadsRoot}\n  database: ${beadsRoot}/beads.db\n`, stderr: '' };
+      if (args[0] === 'create') return { status: 0, stdout: JSON.stringify({ id: 'bd-where', status: 'open', external_ref: 'where-create' }), stderr: '' };
+      throw new Error(`unexpected command: ${args.join(' ')}`);
+    },
+  });
+  assert.equal((await tracker.createWorkItem({ title: 'where proof', operationId: 'where-create' })).state, 'committed');
 });
 
 test('Beads preflight rejects an unpinned version before mutation', async () => {
@@ -570,7 +613,7 @@ test('prepared Beads operations reconcile before replay after an uncertain launc
       if (args[0] === 'capabilities') return { status: 0, stdout: JSON.stringify({ capabilities: ['create', 'update', 'dependency', 'checkpoint'] }), stderr: '' };
       if (args[0] === 'schema') return { status: 0, stdout: JSON.stringify({ schema: 'beads/v1' }), stderr: '' };
       if (args[0] === 'where') return { status: 0, stdout: workspaceRoot, stderr: '' };
-      if (args[0] === 'show' && args.includes('--external-ref')) return { status: 0, stdout: JSON.stringify({ id: 'bd-9', status: 'open', external_ref: args[args.indexOf('--external-ref') + 1] }), stderr: '' };
+      if (args[0] === 'list') return { status: 0, stdout: JSON.stringify({ issues: [{ id: 'bd-9', status: 'open', external_ref: 'op-reconcile-1' }] }), stderr: '' };
       if (firstMutation) { firstMutation = false; return { status: 1, stdout: '', stderr: 'timed out', error: new Error('timed out') }; }
       return { status: 0, stdout: JSON.stringify({ id: 'bd-9', external_ref: args.includes('--external-ref') ? args[args.indexOf('--external-ref') + 1] : undefined }), stderr: '' };
     },
@@ -580,7 +623,7 @@ test('prepared Beads operations reconcile before replay after an uncertain launc
   const replay = await tracker.createWorkItem({ title: 'reconcile me', operationId: 'op-reconcile-1' });
   assert.equal(replay.state, 'committed');
   assert.equal(calls.filter((args) => args[0] === 'create').length, 1);
-  assert.ok(calls.some((args) => args[0] === 'show' && args.includes('--external-ref')));
+  assert.ok(calls.some((args) => args[0] === 'list' && args.includes('--all') && args.includes('1001')));
 });
 
 test('derived create references survive timeout and restart reconciliation without duplicate dispatch', async () => {
@@ -595,8 +638,8 @@ test('derived create references survive timeout and restart reconciliation witho
     if (args[0] === 'capabilities') return { status: 0, stdout: JSON.stringify({ capabilities: ['create', 'update', 'dependency', 'checkpoint'] }) };
     if (args[0] === 'schema') return { status: 0, stdout: '{}' };
     if (args[0] === 'where') return { status: 0, stdout: workspaceRoot };
-    if (args[0] === 'show' && args.includes('--external-ref')) {
-      return { status: 0, stdout: JSON.stringify({ id: 'bd-derived', status: 'open', external_ref: externalReference }) };
+    if (args[0] === 'list') {
+      return { status: 0, stdout: JSON.stringify({ issues: [{ id: 'bd-derived', status: 'open', external_ref: externalReference }] }) };
     }
     createCount += 1;
     return { status: 1, stdout: '', stderr: 'timed out', error: new Error('timed out') };
@@ -608,8 +651,7 @@ test('derived create references survive timeout and restart reconciliation witho
   const reconciled = await restarted.createWorkItem(input);
   assert.equal(reconciled.state, 'committed');
   assert.equal(createCount, 1);
-  const show = calls.find((args) => args[0] === 'show' && args.includes('--external-ref'));
-  assert.equal(show[show.indexOf('--external-ref') + 1], externalReference);
+  assert.ok(calls.some((args) => args[0] === 'list' && args.includes('--all') && args.includes('1001')));
 });
 
 test('Beads create treats empty or unrelated external references as indeterminate', async () => {
@@ -665,13 +707,15 @@ test('Beads default operation identities distinguish operation inputs', async ()
   const operationIds = [];
   const tracker = createLiveBeadsTracker({
     workspaceRoot,
+    operationStore: {
+      async read() { return null; },
+      async write(record) { operationIds.push(record.operationId); return record; },
+    },
     run(command, args) {
       if (args[0] === '--version') return { status: 0, stdout: 'br v0.2.19', stderr: '' };
       if (args[0] === 'capabilities') return { status: 0, stdout: JSON.stringify({ capabilities: ['create', 'update', 'dependency', 'checkpoint'] }), stderr: '' };
       if (args[0] === 'schema') return { status: 0, stdout: JSON.stringify({ schema: 'beads/v1' }), stderr: '' };
       if (args[0] === 'where') return { status: 0, stdout: workspaceRoot, stderr: '' };
-      const index = args.indexOf('--operation-id');
-      if (index >= 0) operationIds.push(args[index + 1]);
       return { status: 0, stdout: JSON.stringify({ id: 'bd-identity', status: 'open' }), stderr: '' };
     },
   });
@@ -689,6 +733,8 @@ test('Beads close remains deferred until authoritative merge evidence', async ()
       if (args[0] === 'capabilities') return { status: 0, stdout: JSON.stringify({ capabilities: ['create', 'update', 'dependency', 'checkpoint'] }), stderr: '' };
       if (args[0] === 'schema') return { status: 0, stdout: JSON.stringify({ schema: 'beads/v1' }), stderr: '' };
       if (args[0] === 'where') return { status: 0, stdout: workspaceRoot, stderr: '' };
+      if (args[0] === 'close') return { status: 0, stdout: JSON.stringify([{ id: 'bd-1', status: 'closed' }]), stderr: '' };
+      if (args[0] === 'show') return { status: 0, stdout: JSON.stringify([{ id: 'bd-1', status: 'closed', updated_at: '2026-08-26T00:00:00Z' }]), stderr: '' };
       return { status: 0, stdout: JSON.stringify({ id: 'bd-1' }), stderr: '' };
     },
   });
@@ -709,6 +755,10 @@ test('Beads adapter emits exact argv for every live operation without a command-
       if (args[0] === 'capabilities') return { status: 0, stdout: JSON.stringify({ capabilities: ['create', 'update', 'dependency', 'checkpoint'] }), stderr: '' };
       if (args[0] === 'schema') return { status: 0, stdout: JSON.stringify({ schema: 'beads/v1' }), stderr: '' };
       if (args[0] === 'where') return { status: 0, stdout: workspaceRoot, stderr: '' };
+      if (args[0] === 'update') {
+        const status = args.includes('--claim') ? 'in_progress' : args[args.indexOf('--status') + 1];
+        return { status: 0, stdout: JSON.stringify([{ id: 'bd-argv', status, updated_at: '2026-08-26T00:00:00Z' }]), stderr: '' };
+      }
       return { status: 0, stdout: JSON.stringify({ id: 'bd-argv', status: 'open' }), stderr: '' };
     },
   });
@@ -724,15 +774,15 @@ test('Beads adapter emits exact argv for every live operation without a command-
   assert.deepEqual(calls[1], ['capabilities', '--format', 'json']);
   assert.deepEqual(calls[2], ['schema', 'all', '--format', 'json']);
   assert.deepEqual(calls[3], ['where']);
-  assert.deepEqual(calls[4], ['create', '--title', 'Argv item', '--description', 'desc', '--priority', '2', '--external-ref', 'op-argv-create', '--format', 'json']);
+  assert.deepEqual(calls[4], ['create', '--title', 'Argv item', '--description', 'desc', '--priority', '2', '--external-ref', 'op-argv-create', '--json']);
   assert.deepEqual(calls[5], ['where']);
-  assert.deepEqual(calls[6], ['update', 'bd-argv', '--status', 'in_progress', '--operation-id', 'op-argv-claim', '--format', 'json']);
+  assert.deepEqual(calls[6], ['update', 'bd-argv', '--claim', '--json']);
   assert.deepEqual(calls[7], ['where']);
-  assert.deepEqual(calls[8], ['update', 'bd-argv', '--status', 'review', '--operation-id', 'op-argv-transition', '--format', 'json']);
+  assert.deepEqual(calls[8], ['update', 'bd-argv', '--status', 'review', '--json']);
   assert.deepEqual(calls[9], ['where']);
-  assert.deepEqual(calls[10], ['dep', 'add', 'bd-argv', 'bd-dep', '--operation-id', 'op-argv-dependency', '--format', 'json']);
+  assert.deepEqual(calls[10], ['dep', 'add', 'bd-argv', 'bd-dep', '--json']);
   assert.deepEqual(calls[11], ['where']);
-  assert.deepEqual(calls[12], ['checkpoint', 'bd-argv', '--stage', 'review', '--next-step', 'publish-pr', '--operation-id', 'op-argv-checkpoint', '--format', 'json']);
+  assert.deepEqual(calls[12], ['comments', 'add', 'bd-argv', '--message', '[jarvos-checkpoint/v1] {"operationId":"op-argv-checkpoint","stage":"review","nextStep":"publish-pr"}', '--json']);
   assert.deepEqual(calls[13], ['where']);
   assert.deepEqual(calls[14], ['show', 'bd-argv', '--format', 'json']);
   assert.equal(calls.length, 15);
