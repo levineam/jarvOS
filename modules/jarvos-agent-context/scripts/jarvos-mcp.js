@@ -131,7 +131,22 @@ const TOOLS = [
   {
     name: 'jarvos_todo_transition',
     description: 'Request a claim, transition, completion, or reopen through the host-authorized work-action service. The MCP caller cannot supply authorization or verification evidence.',
-    inputSchema: { type: 'object', additionalProperties: false, required: ['itemId', 'operationId', 'action'], properties: { itemId: { type: 'string' }, operationId: { type: 'string' }, action: { type: 'string', enum: ['claim', 'transition', 'complete', 'reopen'] }, status: { type: 'string' }, expectedRevision: { type: 'string' } } },
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['itemId', 'operationId', 'action'],
+      properties: {
+        itemId: { type: 'string' },
+        operationId: { type: 'string' },
+        action: { type: 'string', enum: ['claim', 'transition', 'complete', 'reopen'] },
+        status: { type: 'string', minLength: 1 },
+        expectedRevision: { type: 'string' },
+      },
+      oneOf: [
+        { properties: { action: { const: 'transition' } }, required: ['status'] },
+        { properties: { action: { enum: ['claim', 'complete', 'reopen'] } }, not: { required: ['status'] } },
+      ],
+    },
   },
   {
     name: 'jarvos_control_plane',
@@ -378,12 +393,16 @@ async function todoAction(name, args) {
   if (name === 'jarvos_todo_show') return textResult(JSON.stringify(await service.show(args), null, 2));
   const request = { itemId: args.itemId, operationId: args.operationId, expectedRevision: args.expectedRevision, actor };
   if (args.action === 'claim') return textResult(JSON.stringify(await service.claim(request), null, 2));
-  if (args.action === 'transition') return textResult(JSON.stringify(await service.transition({ ...request, status: args.status }), null, 2));
+  if (args.action === 'transition') {
+    if (typeof args.status !== 'string' || !args.status.trim()) return textResult('Todo transition status is required', true);
+    return textResult(JSON.stringify(await service.transition({ ...request, status: args.status }), null, 2));
+  }
   if (args.action === 'complete') {
     if (typeof service.completeFromHost !== 'function') return textResult('Todo host completion binding is unavailable', true);
     return textResult(JSON.stringify(await service.completeFromHost(request), null, 2));
   }
-  return textResult(JSON.stringify(await service.reopen(request), null, 2));
+  if (args.action === 'reopen') return textResult(JSON.stringify(await service.reopen(request), null, 2));
+  return textResult('Unsupported Todo transition action', true);
 }
 
 function setMcpProjectsContextProvider(provider) {

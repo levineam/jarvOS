@@ -8,6 +8,7 @@ const test = require('node:test');
 const { spawnSync } = require('child_process');
 
 const {
+  TOOLS,
   callTool,
   loadHostWorkActionService,
   WORK_ACTION_HOST_UNAVAILABLE,
@@ -232,6 +233,72 @@ test('Todo mutation tools stay unavailable and refused the same way reads do, wi
     delete require.cache[untrustedPath];
     fs.rmSync(workspace, { recursive: true, force: true });
     fs.rmSync(outside, { recursive: true, force: true });
+  });
+});
+
+test('Todo transition schema tells agents exactly when status is required', () => {
+  const tool = TOOLS.find((candidate) => candidate.name === 'jarvos_todo_transition');
+  assert.ok(tool);
+  assert.equal(tool.inputSchema.oneOf[0].properties.action.const, 'transition');
+  assert.deepEqual(tool.inputSchema.oneOf[0].required, ['status']);
+  assert.deepEqual(tool.inputSchema.oneOf[1].properties.action.enum, ['claim', 'complete', 'reopen']);
+  assert.deepEqual(tool.inputSchema.oneOf[1].not.required, ['status']);
+});
+
+test('Todo transition rejects a missing status before calling the host service', async () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-todo-transition-status-'));
+  fs.chmodSync(workspace, 0o700);
+  const configPath = path.join(workspace, 'projects.json');
+  const servicePath = path.join(workspace, 'todo-service.js');
+  writeOwnerFile(configPath, JSON.stringify({ workspaceRoot: workspace }));
+  writeOwnerFile(servicePath, [
+    "'use strict';",
+    'module.exports = { transition: async () => { throw new Error("must not run"); } };',
+    '',
+  ].join('\n'));
+  await withWorkActionEnv({
+    JARVOS_PROJECTS_CONTEXT_CONFIG: configPath,
+    JARVOS_WORK_ACTION_SERVICE_MODULE: servicePath,
+  }, async () => {
+    const result = await callTool('jarvos_todo_transition', {
+      itemId: 'bd-1', operationId: 'missing-status-1', action: 'transition',
+    });
+    assert.equal(result.isError, true);
+    assert.equal(result.content[0].text, 'Todo transition status is required');
+  }).finally(() => {
+    delete require.cache[servicePath];
+    fs.rmSync(workspace, { recursive: true, force: true });
+  });
+});
+
+test('Todo transition rejects an unknown action instead of reopening work', async () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-todo-transition-action-'));
+  fs.chmodSync(workspace, 0o700);
+  const configPath = path.join(workspace, 'projects.json');
+  const servicePath = path.join(workspace, 'todo-service.js');
+  writeOwnerFile(configPath, JSON.stringify({ workspaceRoot: workspace }));
+  writeOwnerFile(servicePath, [
+    "'use strict';",
+    'let reopens = 0;',
+    'module.exports = {',
+    '  reopen: async () => { reopens += 1; return { ok: true }; },',
+    '  __reopens: () => reopens,',
+    '};',
+    '',
+  ].join('\n'));
+  await withWorkActionEnv({
+    JARVOS_PROJECTS_CONTEXT_CONFIG: configPath,
+    JARVOS_WORK_ACTION_SERVICE_MODULE: servicePath,
+  }, async () => {
+    const result = await callTool('jarvos_todo_transition', {
+      itemId: 'bd-1', operationId: 'unknown-action-1', action: 'typo',
+    });
+    assert.equal(result.isError, true);
+    assert.equal(result.content[0].text, 'Unsupported Todo transition action');
+    assert.equal(loadHostWorkActionService().service.__reopens(), 0);
+  }).finally(() => {
+    delete require.cache[servicePath];
+    fs.rmSync(workspace, { recursive: true, force: true });
   });
 });
 
@@ -626,27 +693,212 @@ test('the documented host binding actually starts from a workspace copy', async 
     fs.copyFileSync(path.join(REPO_ROOT, 'examples', 'work-action-host-service.js'), hostModule);
     fs.chmodSync(hostModule, 0o600);
     const configPath = path.join(workspaceRoot, 'projects.json');
-    writeOwnerFile(configPath, JSON.stringify({ workspaceRoot, beadsWorkspace: workspaceRoot }));
+    const authorizationModule = path.join(workspaceRoot, 'authorize.js');
+    const completionModule = path.join(workspaceRoot, 'completion.js');
+    writeOwnerFile(authorizationModule, 'module.exports.authorizeMutation = async () => ({ authorized: true });\n');
+    writeOwnerFile(completionModule, 'module.exports.resolveCompletionReceipt = async () => null;\n');
+    const trackerOperationStoreRoot = path.join(workspaceRoot, 'tracker-operations');
+    const workActionOperationStoreRoot = path.join(workspaceRoot, 'work-action-operations');
+    const executionLinkStoreRoot = path.join(workspaceRoot, 'execution-links');
+    for (const root of [trackerOperationStoreRoot, workActionOperationStoreRoot, executionLinkStoreRoot]) {
+      fs.mkdirSync(root, { mode: 0o700 });
+    }
+    writeOwnerFile(configPath, JSON.stringify({
+      workspaceRoot,
+      beadsWorkspace: workspaceRoot,
+      beadsWorkspaceId: 'test-beads-workspace',
+      trackerOperationStoreRoot,
+      workActionOperationStoreRoot,
+      executionLinkStoreRoot,
+      workActionAuthorizationModule: authorizationModule,
+      workActionCompletionModule: completionModule,
+      registeredCompletionProducers: ['andrew-owner-attestation'],
+    }));
 
     await withWorkActionEnv({
       JARVOS_WORK_ACTION_SERVICE_MODULE: hostModule,
       JARVOS_PROJECTS_CONTEXT_CONFIG: configPath,
-    }, () => {
-      const { error } = loadHostWorkActionService();
-      // Standing up a real Beads workspace is out of scope for a unit test, so
-      // this pins the part that regressed: the documented copy gets past module
-      // resolution. Any remaining failure must name a downstream cause, never the
-      // containment refusal -- that message sent operators to check file modes
-      // that were never the problem.
-      assert.notEqual(error, WORK_ACTION_HOST_REFUSED);
-      if (error !== null) {
-        assert.doesNotMatch(error, /contained under/);
-        assert.doesNotMatch(error, /owner-only regular file/);
-        assert.match(error, /failed to load/);
-      }
+    }, async () => {
+      const { service, error } = loadHostWorkActionService();
+      assert.equal(error, null);
+      assert.ok(service);
+      assert.deepEqual((await service.list()).items, []);
+      const roots = [trackerOperationStoreRoot, workActionOperationStoreRoot, executionLinkStoreRoot].map((entry) => fs.realpathSync(entry));
+      assert.equal(new Set(roots).size, 3);
+      assert.ok(roots.every((entry) => (fs.statSync(entry).mode & 0o077) === 0));
     });
   } finally {
     fs.rmSync(temp, { recursive: true, force: true });
+  }
+});
+
+test('the live host fails closed when terminal-authority configuration is incomplete', async () => {
+  const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-work-action-terminal-config-'));
+  const hostModule = path.join(workspaceRoot, 'work-action-host-service.js');
+  const authorizationModule = path.join(workspaceRoot, 'authorize.js');
+  const completionModule = path.join(workspaceRoot, 'completion.js');
+  const invalidCompletionModule = path.join(workspaceRoot, 'invalid-completion.js');
+  const configPath = path.join(workspaceRoot, 'projects.json');
+  try {
+    fs.copyFileSync(path.join(REPO_ROOT, 'examples', 'work-action-host-service.js'), hostModule);
+    fs.chmodSync(hostModule, 0o600);
+    writeOwnerFile(authorizationModule, 'module.exports.authorizeMutation = async () => ({ authorized: true });\n');
+    writeOwnerFile(completionModule, 'module.exports.resolveCompletionReceipt = async () => null;\n');
+    writeOwnerFile(invalidCompletionModule, 'module.exports = {};\n');
+    const roots = ['tracker', 'actions', 'links'].map((name) => path.join(workspaceRoot, name));
+    for (const root of roots) fs.mkdirSync(root, { mode: 0o700 });
+    const base = {
+      workspaceRoot,
+      beadsWorkspace: workspaceRoot,
+      beadsWorkspaceId: 'test-beads-workspace',
+      trackerOperationStoreRoot: roots[0],
+      workActionOperationStoreRoot: roots[1],
+      executionLinkStoreRoot: roots[2],
+      workActionAuthorizationModule: authorizationModule,
+      workActionCompletionModule: completionModule,
+      registeredCompletionProducers: ['andrew-owner-attestation'],
+    };
+    const cases = [
+      { ...base, beadsWorkspaceId: undefined },
+      { ...base, workActionCompletionModule: invalidCompletionModule },
+      { ...base, registeredCompletionProducers: [] },
+    ];
+    await withWorkActionEnv({
+      JARVOS_WORK_ACTION_SERVICE_MODULE: hostModule,
+      JARVOS_PROJECTS_CONTEXT_CONFIG: configPath,
+    }, () => {
+      for (const config of cases) {
+        writeOwnerFile(configPath, JSON.stringify(config));
+        const { service, error } = loadHostWorkActionService();
+        assert.equal(service, null);
+        assert.match(error, /failed to load/);
+        assert.ok(roots.every((root) => (fs.statSync(root).mode & 0o077) === 0));
+      }
+    });
+  } finally {
+    delete require.cache[hostModule];
+    delete require.cache[invalidCompletionModule];
+    fs.rmSync(workspaceRoot, { recursive: true, force: true });
+  }
+});
+
+test('loading the live host never provisions or chmods configured state roots', async () => {
+  const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-work-action-read-only-load-'));
+  const hostModule = path.join(workspaceRoot, 'work-action-host-service.js');
+  const authorizationModule = path.join(workspaceRoot, 'authorize.js');
+  const completionModule = path.join(workspaceRoot, 'completion.js');
+  const configPath = path.join(workspaceRoot, 'projects.json');
+  const missingRoot = path.join(workspaceRoot, 'must-not-be-created');
+  try {
+    fs.copyFileSync(path.join(REPO_ROOT, 'examples', 'work-action-host-service.js'), hostModule);
+    fs.chmodSync(hostModule, 0o600);
+    writeOwnerFile(authorizationModule, 'module.exports.authorizeMutation = async () => ({ authorized: true });\n');
+    writeOwnerFile(completionModule, 'module.exports.resolveCompletionReceipt = async () => null;\n');
+    writeOwnerFile(configPath, JSON.stringify({
+      workspaceRoot,
+      beadsWorkspace: workspaceRoot,
+      beadsWorkspaceId: 'test-beads-workspace',
+      trackerOperationStoreRoot: missingRoot,
+      workActionOperationStoreRoot: path.join(workspaceRoot, 'also-missing'),
+      executionLinkStoreRoot: path.join(workspaceRoot, 'still-missing'),
+      workActionAuthorizationModule: authorizationModule,
+      workActionCompletionModule: completionModule,
+      registeredCompletionProducers: ['andrew-owner-attestation'],
+    }));
+    await withWorkActionEnv({
+      JARVOS_WORK_ACTION_SERVICE_MODULE: hostModule,
+      JARVOS_PROJECTS_CONTEXT_CONFIG: configPath,
+    }, () => {
+      const { service, error } = loadHostWorkActionService();
+      assert.equal(service, null);
+      assert.match(error, /failed to load/);
+      assert.equal(fs.existsSync(missingRoot), false);
+    });
+  } finally {
+    fs.rmSync(workspaceRoot, { recursive: true, force: true });
+  }
+});
+
+test('the live host rejects owner-only state below non-sticky writable ancestry', async () => {
+  const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-work-action-safe-workspace-'));
+  const unsafeParent = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-work-action-unsafe-parent-'));
+  const hostModule = path.join(workspaceRoot, 'work-action-host-service.js');
+  const authorizationModule = path.join(workspaceRoot, 'authorize.js');
+  const completionModule = path.join(workspaceRoot, 'completion.js');
+  const configPath = path.join(workspaceRoot, 'projects.json');
+  try {
+    fs.chmodSync(unsafeParent, 0o777);
+    const roots = ['tracker', 'actions', 'links'].map((name) => path.join(unsafeParent, name));
+    for (const root of roots) fs.mkdirSync(root, { mode: 0o700 });
+    fs.copyFileSync(path.join(REPO_ROOT, 'examples', 'work-action-host-service.js'), hostModule);
+    fs.chmodSync(hostModule, 0o600);
+    writeOwnerFile(authorizationModule, 'module.exports.authorizeMutation = async () => ({ authorized: true });\n');
+    writeOwnerFile(completionModule, 'module.exports.resolveCompletionReceipt = async () => null;\n');
+    writeOwnerFile(configPath, JSON.stringify({
+      workspaceRoot,
+      beadsWorkspace: workspaceRoot,
+      beadsWorkspaceId: 'test-beads-workspace',
+      trackerOperationStoreRoot: roots[0],
+      workActionOperationStoreRoot: roots[1],
+      executionLinkStoreRoot: roots[2],
+      workActionAuthorizationModule: authorizationModule,
+      workActionCompletionModule: completionModule,
+      registeredCompletionProducers: ['andrew-owner-attestation'],
+    }));
+    await withWorkActionEnv({
+      JARVOS_WORK_ACTION_SERVICE_MODULE: hostModule,
+      JARVOS_PROJECTS_CONTEXT_CONFIG: configPath,
+    }, () => {
+      const { service, error } = loadHostWorkActionService();
+      assert.equal(service, null);
+      assert.match(error, /failed to load/);
+      assert.equal(fs.statSync(unsafeParent).mode & 0o777, 0o777);
+    });
+  } finally {
+    fs.rmSync(workspaceRoot, { recursive: true, force: true });
+    fs.rmSync(unsafeParent, { recursive: true, force: true });
+  }
+});
+
+test('the live host rejects executable authorization modules below unsafe nested ancestry', async () => {
+  const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-work-action-module-ancestry-'));
+  const hostModule = path.join(workspaceRoot, 'work-action-host-service.js');
+  const unsafeDirectory = path.join(workspaceRoot, 'unsafe-modules');
+  const authorizationModule = path.join(unsafeDirectory, 'authorize.js');
+  const completionModule = path.join(workspaceRoot, 'completion.js');
+  const configPath = path.join(workspaceRoot, 'projects.json');
+  try {
+    fs.mkdirSync(unsafeDirectory, { mode: 0o777 });
+    fs.chmodSync(unsafeDirectory, 0o777);
+    fs.copyFileSync(path.join(REPO_ROOT, 'examples', 'work-action-host-service.js'), hostModule);
+    fs.chmodSync(hostModule, 0o600);
+    writeOwnerFile(authorizationModule, 'module.exports.authorizeMutation = async () => ({ authorized: true });\n');
+    writeOwnerFile(completionModule, 'module.exports.resolveCompletionReceipt = async () => null;\n');
+    const roots = ['tracker', 'actions', 'links'].map((name) => path.join(workspaceRoot, name));
+    for (const root of roots) fs.mkdirSync(root, { mode: 0o700 });
+    writeOwnerFile(configPath, JSON.stringify({
+      workspaceRoot,
+      beadsWorkspace: workspaceRoot,
+      beadsWorkspaceId: 'test-beads-workspace',
+      trackerOperationStoreRoot: roots[0],
+      workActionOperationStoreRoot: roots[1],
+      executionLinkStoreRoot: roots[2],
+      workActionAuthorizationModule: authorizationModule,
+      workActionCompletionModule: completionModule,
+      registeredCompletionProducers: ['andrew-owner-attestation'],
+    }));
+    await withWorkActionEnv({
+      JARVOS_WORK_ACTION_SERVICE_MODULE: hostModule,
+      JARVOS_PROJECTS_CONTEXT_CONFIG: configPath,
+    }, () => {
+      const { service, error } = loadHostWorkActionService();
+      assert.equal(service, null);
+      assert.match(error, /failed to load/);
+      assert.doesNotMatch(error, /unsafe-modules|authorize\.js/);
+    });
+  } finally {
+    delete require.cache[hostModule];
+    fs.rmSync(workspaceRoot, { recursive: true, force: true });
   }
 });
 

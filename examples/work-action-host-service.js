@@ -66,27 +66,109 @@ function readHostOptions() {
   if (!config || typeof config !== 'object' || Array.isArray(config)) {
     throw new Error('Projects context config is invalid');
   }
-  const workspaceRoot = absolutePath(config.workspaceRoot);
-  if (!workspaceRoot) throw new Error('Projects context workspaceRoot must be an absolute path');
-  const beadsWorkspace = absolutePath(config.beadsWorkspace) || workspaceRoot;
+  const workspaceRoot = protectedDirectory(config.workspaceRoot, 'Projects context workspaceRoot');
+  const beadsWorkspace = config.beadsWorkspace
+    ? protectedDirectory(config.beadsWorkspace, 'Projects context beadsWorkspace')
+    : workspaceRoot;
+  const workspaceId = opaqueWorkspaceId(config.beadsWorkspaceId);
   const approvedWorkspaceIds = Array.isArray(config.approvedWorkspaceIds) && config.approvedWorkspaceIds.length > 0
     ? config.approvedWorkspaceIds
-    : [workspaceRoot, beadsWorkspace];
-  const operationStoreRoot = absolutePath(config.workActionOperationStoreRoot);
-  let authorizeMutation;
-  if (typeof config.workActionAuthorizationModule === 'string' && config.workActionAuthorizationModule) {
-    const trusted = trustedModulePath(config.workActionAuthorizationModule, workspaceRoot);
-    if (!trusted) throw new Error('workActionAuthorizationModule must be an owner-only regular file contained under workspaceRoot');
-    const loaded = require(trusted);
-    authorizeMutation = typeof loaded === 'function' ? loaded : loaded.authorizeMutation;
+    : [workspaceId];
+  const trackerOperationStoreRoot = protectedRoot(config.trackerOperationStoreRoot, 'trackerOperationStoreRoot');
+  const operationStoreRoot = protectedRoot(config.workActionOperationStoreRoot, 'workActionOperationStoreRoot');
+  const executionLinkStoreRoot = protectedRoot(config.executionLinkStoreRoot, 'executionLinkStoreRoot');
+  if (rootsOverlap([trackerOperationStoreRoot, operationStoreRoot, executionLinkStoreRoot])) {
+    throw new Error('live work-action store roots must be distinct and non-overlapping');
   }
+  const authorizationModule = trustedModulePath(config.workActionAuthorizationModule, workspaceRoot);
+  if (!authorizationModule) throw new Error('workActionAuthorizationModule must be an owner-only regular file contained under workspaceRoot');
+  const authorization = require(authorizationModule);
+  const authorizeMutation = typeof authorization === 'function' ? authorization : authorization.authorizeMutation;
+  if (typeof authorizeMutation !== 'function') throw new Error('workActionAuthorizationModule must export authorizeMutation');
+  const completionModule = trustedModulePath(config.workActionCompletionModule, workspaceRoot);
+  if (!completionModule) throw new Error('workActionCompletionModule must be an owner-only regular file contained under workspaceRoot');
+  const completion = require(completionModule);
+  const resolveCompletionReceipt = typeof completion === 'function' ? completion : completion.resolveCompletionReceipt;
+  if (typeof resolveCompletionReceipt !== 'function') throw new Error('workActionCompletionModule must export resolveCompletionReceipt');
+  const registeredEvidenceProducers = Array.isArray(config.registeredCompletionProducers)
+    ? config.registeredCompletionProducers.filter((value) => typeof value === 'string' && value.trim())
+    : [];
+  if (!registeredEvidenceProducers.length) throw new Error('registeredCompletionProducers is required');
   return {
     workspaceRoot,
     beadsWorkspace,
+    workspaceId,
     approvedWorkspaceIds,
+    trackerOperationStoreRoot,
     operationStoreRoot,
+    executionLinkStoreRoot,
     authorizeMutation,
+    resolveCompletionReceipt,
+    registeredEvidenceProducers,
   };
+}
+
+function opaqueWorkspaceId(value) {
+  if (typeof value !== 'string' || !value.trim() || /[\\/\0]/.test(value)) {
+    throw new Error('beadsWorkspaceId must be a pinned opaque workspace identity');
+  }
+  return value.trim();
+}
+
+function protectedDirectory(value, field) {
+  const candidate = absolutePath(value);
+  if (!candidate) throw new Error(`${field} must be an absolute path`);
+  try {
+    const resolved = fs.realpathSync(candidate);
+    if (!fs.statSync(resolved).isDirectory()) throw new Error('not a directory');
+    return resolved;
+  } catch {
+    throw new Error(`${field} must be an absolute path`);
+  }
+}
+
+// Loading a service is not authorization to create or chmod state. Provisioning
+// is an explicit host setup action; ordinary reads only validate existing roots.
+function protectedRoot(value, field) {
+  const candidate = absolutePath(value);
+  if (!candidate) throw new Error(`${field} must be an absolute owner-only root`);
+  try {
+    if (fs.lstatSync(candidate).isSymbolicLink()) throw new Error('symbolic link');
+    const root = fs.realpathSync(candidate);
+    const stat = fs.statSync(root);
+    const uid = typeof process.getuid === 'function' ? process.getuid() : null;
+    if (root === path.parse(root).root || !stat.isDirectory() || (uid !== null && stat.uid !== uid)) throw new Error('untrusted root');
+    if ((stat.mode & 0o077) !== 0) throw new Error('root is not owner-only');
+    assertProtectedAncestry(path.dirname(root));
+    return root;
+  } catch {
+    throw new Error(`${field} must be an absolute owner-only root`);
+  }
+}
+
+function assertProtectedAncestry(start) {
+  const uid = typeof process.getuid === 'function' ? process.getuid() : null;
+  let current = start;
+  while (true) {
+    const stat = fs.statSync(current);
+    const writable = (stat.mode & 0o022) !== 0;
+    const sticky = (stat.mode & 0o1000) !== 0;
+    const trustedOwner = uid === null || stat.uid === uid || stat.uid === 0;
+    if (!stat.isDirectory() || (writable && !sticky) || !trustedOwner) throw new Error('unsafe root ancestry');
+    const parent = path.dirname(current);
+    if (parent === current) return;
+    current = parent;
+  }
+}
+
+function rootsOverlap(roots) {
+  return roots.some((left, index) => roots.slice(index + 1).some((right) => {
+    const relative = path.relative(left, right);
+    const reverse = path.relative(right, left);
+    return relative === ''
+      || (relative && !relative.startsWith('..') && !path.isAbsolute(relative))
+      || (reverse && !reverse.startsWith('..') && !path.isAbsolute(reverse));
+  }));
 }
 
 // Mirrors the containment gate in jarvos-mcp.js. The MCP server validates the path
@@ -104,10 +186,35 @@ function trustedModulePath(candidate, workspaceRoot) {
     if (!stat.isFile() || (uid !== null && stat.uid !== uid) || (stat.mode & 0o077) !== 0) return null;
     const relative = path.relative(fs.realpathSync(workspaceRoot), real);
     if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) return null;
+    assertProtectedAncestry(path.dirname(real));
     return real;
   } catch {
     return null;
   }
+}
+
+function resolveExecutionLinkModule(codingRequest, source, workspaceRoot) {
+  let codingFile;
+  try {
+    codingFile = require.resolve(codingRequest);
+  } catch {
+    throw new Error('the selected jarvOS coding module cannot be resolved');
+  }
+  const candidate = path.resolve(
+    path.dirname(codingFile),
+    '..',
+    '..',
+    'jarvos-secondbrain',
+    'packages',
+    'jarvos-secondbrain-projects',
+    'src',
+    'execution-link-store.js',
+  );
+  const selected = source === 'configured'
+    ? trustedModulePath(candidate, workspaceRoot)
+    : installModulePath(candidate);
+  if (!selected) throw new Error('the Projects execution-link module beside jarvOS coding is unavailable');
+  return selected;
 }
 
 function createHostWorkActionService() {
@@ -122,16 +229,26 @@ function createHostWorkActionService() {
     if (!codingRequest) throw new Error('the jarvOS coding module beside this MCP install is not a regular file');
   }
   const coding = require(codingRequest);
+  const projects = require(resolveExecutionLinkModule(codingRequest, resolved.source, host.workspaceRoot));
+  if (typeof projects.createFileExecutionLinkStore !== 'function') {
+    throw new Error('the Projects execution-link module is invalid');
+  }
   const tracker = coding.createLiveBeadsTracker({
     workspaceRoot: host.beadsWorkspace,
     approvedRoots: [host.workspaceRoot, host.beadsWorkspace],
-    operationStoreRoot: host.operationStoreRoot || undefined,
+    operationStoreRoot: host.trackerOperationStoreRoot,
+    mode: 'live',
   });
   return coding.createBeadsWorkActionService({
     tracker,
-    executionLinks: coding.createMemoryExecutionLinkStore(),
+    mode: 'live',
+    operationStore: coding.createFileOperationStore({ root: host.operationStoreRoot }),
+    executionLinks: projects.createFileExecutionLinkStore({ root: host.executionLinkStoreRoot }),
+    workspaceId: host.workspaceId,
     approvedWorkspaceIds: host.approvedWorkspaceIds,
     authorizeMutation: host.authorizeMutation,
+    resolveCompletionReceipt: host.resolveCompletionReceipt,
+    registeredEvidenceProducers: host.registeredEvidenceProducers,
   });
 }
 

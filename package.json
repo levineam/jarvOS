@@ -22,6 +22,7 @@
     "bootstrap.sh",
     "runtime-contract.json",
     "jarvos.config.schema.json",
+    "examples/work-action-host-service.js",
     "PUBLIC_BASELINE.md",
     "docs/journal-install-contract.md",
     "docs/architecture/doctor-health-modules.md",
