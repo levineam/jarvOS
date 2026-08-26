@@ -38,7 +38,7 @@ const PROJECTS_PROJECTION_MODULE = path.join(
   'src',
   'journal-projection.js',
 );
-const SIGNATURE = '— Edited by Jarvis';
+const LEGACY_SIGNATURES = new Set(['— Edited by Jarvis', '— Written by Jarvis']);
 const DEFAULT_TIMEZONE = 'America/New_York';
 const LEGACY_SALIENCE_LINE_RE = /^-\s*📌\s*\*\(([^,]+),\s*(\d+)%\)\*\s*(.+)$/i;
 const JOURNAL_STATE_DIR = '.jarvos/journal-maintenance';
@@ -145,8 +145,9 @@ function trimOuterBlankLines(text) {
 }
 
 function stripSignature(md) {
+  const signaturePattern = [...LEGACY_SIGNATURES].map(escapeRegex).join('|');
   return String(md || '')
-    .replace(new RegExp(`^${escapeRegex(SIGNATURE)}\\s*$`, 'gm'), '')
+    .replace(new RegExp(`^(?:${signaturePattern})\\s*$`, 'gm'), '')
     .replace(/\n{3,}/g, '\n\n');
 }
 
@@ -258,7 +259,7 @@ function authoredBodyLines(body, config) {
       continue;
     }
     if (generated) continue;
-    if (!line || line === SIGNATURE || line === '-') continue;
+    if (!line || LEGACY_SIGNATURES.has(line) || line === '-') continue;
     if (isGeneratedPlaceholderLine(line)) continue;
     lines.push(line);
   }
@@ -323,7 +324,7 @@ function hasMeaningfulBodyText(body) {
     .split(/\r?\n/)
     .map((line) => line.trim())
     .filter(Boolean)
-    .some((line) => line !== SIGNATURE && line !== '-');
+    .some((line) => !LEGACY_SIGNATURES.has(line) && line !== '-');
 }
 
 /**
@@ -1075,8 +1076,6 @@ function renderJournal(date, config, normalized) {
     parts.push(section.content || '-');
     parts.push('');
   }
-  parts.push(SIGNATURE);
-  parts.push('');
   return trimOuterBlankLines(parts.join('\n')) + '\n';
 }
 

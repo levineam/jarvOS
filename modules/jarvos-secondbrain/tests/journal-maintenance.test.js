@@ -15,8 +15,43 @@ const {
   stripLeadingRecoveryScaffold,
   syncOneDate: rawSyncOneDate,
 } = require('../packages/jarvos-secondbrain-journal/src/journal-maintenance.js');
+const { renderJournalOriginMarker } = require('../bridge/provenance/src/content-origin-contract');
 
 const TEST_DATE = '2026-01-02';
+
+test('ordinary maintenance removes legacy signatures without adding a replacement and preserves hidden markers', () => {
+  const marker = renderJournalOriginMarker({
+    cleanText: 'assistant thought',
+    content_origin: 'assistant',
+    content_origin_basis: 'assistant_generated',
+    source_ref: 'capture:codex:maintenance',
+  });
+  const original = [
+    '---',
+    'journal: Journal',
+    `journal-date: ${TEST_DATE}`,
+    '---',
+    '',
+    '## 📝 Notes',
+    '-',
+    '',
+    '## 💡 Ideas',
+    '- assistant thought',
+    marker,
+    '',
+    '## 📓 Journal Entry',
+    '-',
+    '',
+    '— Edited by Jarvis',
+    '',
+  ].join('\n');
+
+  const config = loadConfig();
+  const normalized = normalizeSections(original, TEST_DATE, config, { fetchers: { projects: () => '-' } });
+  const output = renderJournal(TEST_DATE, config, normalized);
+  assert.doesNotMatch(output, /Written by Jarvis|Edited by Jarvis/);
+  assert.match(output, /- assistant thought\n<!-- jarvos-content-origin\/v1 /);
+});
 
 function fakeOwnedMutation({ filePath, expectedContent, nextContent }) {
   const exists = fs.existsSync(filePath);
@@ -660,7 +695,11 @@ test('create-if-missing dispatches to the creation-only lifecycle', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-create-only-'));
   try {
     const report = runMaintenance(['--create-if-missing', '--json'], {
-      config: { paths: { journal: path.join(root, 'Journal') }, user: { timezone: 'UTC' } },
+      config: {
+        paths: { journal: path.join(root, 'Journal') },
+        user: { timezone: 'UTC' },
+        derivedIndex: { enabled: false },
+      },
       now: new Date('2026-08-03T12:00:00.000Z'),
       mutationContext: { vaultId: 'test-vault', vaultRoot: root },
       mutationExecutor(operation) {

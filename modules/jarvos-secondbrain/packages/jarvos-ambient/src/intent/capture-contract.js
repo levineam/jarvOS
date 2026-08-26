@@ -1,5 +1,11 @@
 'use strict';
 
+const {
+  CONTENT_ORIGINS,
+  CONTENT_ORIGIN_BASES,
+  validateUserSourceReceipt,
+} = require('../../../../bridge/provenance/src/content-origin-contract');
+
 /**
  * Canonical CaptureEvent schema for the ambient intent layer.
  *
@@ -26,6 +32,10 @@
  * @property {string} [privacyTier] - Public/private handling tier.
  * @property {object[]} [evidence] - Source-backed evidence spans.
  * @property {string|object} [origin] - Origin pointer for the capture.
+ * @property {string} [captureEventId] - Stable ID used by provenance receipts.
+ * @property {string} [content_origin] - Intellectual origin declaration.
+ * @property {string} [content_origin_basis] - Intellectual origin basis.
+ * @property {object} [user_source] - Receipt binding generated content to user input.
  */
 
 const CAPTURE_EVENT_SCHEMA_VERSION = '2.0';
@@ -255,7 +265,34 @@ function validateEvidence(event, errors) {
   event.evidence.forEach((entry, index) => validateEvidenceEntry(entry, index, errors));
 }
 
-function validateCaptureEvent(event = {}) {
+function validateContentOriginDeclaration(event = {}, errors, options = {}) {
+  const origin = event.content_origin ?? event.contentOrigin;
+  const basis = event.content_origin_basis ?? event.contentOriginBasis;
+  const hasDeclaration = origin != null || basis != null || event.user_source != null || event.userSource != null;
+
+  if (!hasDeclaration) {
+    if (options.requireDeclaration === true) errors.push('content_origin declaration is required at the canonical writer boundary');
+    return;
+  }
+
+  if (typeof origin !== 'string' || !CONTENT_ORIGINS.includes(origin)) {
+    errors.push(`Unknown content_origin: "${origin}". Expected one of: ${CONTENT_ORIGINS.join(', ')}`);
+  }
+  if (typeof basis !== 'string' || !CONTENT_ORIGIN_BASES.includes(basis)) {
+    errors.push(`Unknown content_origin_basis: "${basis}". Expected one of: ${CONTENT_ORIGIN_BASES.join(', ')}`);
+  }
+  if (basis === 'legacy_author') errors.push('content_origin_basis legacy_author is read-time-only');
+  if (origin === 'human' && basis !== 'legacy_author') {
+    const receipt = event.user_source || event.userSource;
+    const shape = validateUserSourceReceipt(receipt, {
+      content: event.content || event.text,
+    });
+    if (shape.reason !== 'unresolved') errors.push(`Invalid user-source receipt: ${shape.reason}`);
+  }
+  if (event.content_adoption != null) errors.push('content_adoption is reserved and cannot be supplied during v1');
+}
+
+function validateCaptureEvent(event = {}, options = {}) {
   const errors = [];
 
   if (event.schemaVersion != null && !SUPPORTED_CAPTURE_EVENT_SCHEMA_VERSIONS.includes(String(event.schemaVersion))) {
@@ -312,6 +349,7 @@ function validateCaptureEvent(event = {}) {
   }
 
   validateEvidence(event, errors);
+  validateContentOriginDeclaration(event, errors, options);
 
   return errors;
 }
@@ -329,5 +367,6 @@ module.exports = {
   EVIDENCE_TYPES,
   ORIGIN_KINDS,
   EVIDENCE_REQUIRED_CAPTURE_MODES,
+  validateContentOriginDeclaration,
   validateCaptureEvent,
 };

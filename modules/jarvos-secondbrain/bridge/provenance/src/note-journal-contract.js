@@ -12,6 +12,10 @@ const { frontmatterToObject, parseFrontmatter } = require('../../../packages/jar
 const { createObsidianOwnedMutationService } = require('./obsidian-mutation');
 const { linkNoteToJournal } = require('./link-to-journal');
 const { createArtifactReceipt } = require('../../../src/artifact-receipt');
+const {
+  cleanNoteContent,
+  frontmatterForContentOrigin,
+} = require('./content-origin-contract');
 
 const SUPPORTED_PERSONALITIES = new Set(['michael', 'claude-code', 'hermes', 'codex']);
 const LIGHTWEIGHT_IDEA_RE = /^\s*idea\s*[:\-]/i;
@@ -35,7 +39,7 @@ function countJournalBacklinks(journalMd, title) {
   return matches ? matches.length : 0;
 }
 
-function parseInput(input) {
+function parseInput(input, { resolveUserSource } = {}) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) {
     throw new Error('input must be a JSON object');
   }
@@ -61,15 +65,39 @@ function parseInput(input) {
   ) {
     throw new Error('lightweight Idea: captures must use node scripts/jarvos-capture.js; pass substantive:true or createDurableNote:true only for intentional durable idea notes');
   }
+  const suppliedFrontmatter = input.frontmatter || {};
+  const contentOrigin = input.content_origin ?? input.contentOrigin ?? suppliedFrontmatter.content_origin ?? 'unknown';
+  const contentOriginBasis = input.content_origin_basis
+    ?? input.contentOriginBasis
+    ?? suppliedFrontmatter.content_origin_basis
+    ?? 'unknown';
+  const contentOriginSource = input.user_source
+    ?? input.userSource
+    ?? suppliedFrontmatter.content_origin_source;
+  const humanEvidenceEligible = input.human_evidence_eligible
+    ?? suppliedFrontmatter.human_evidence_eligible
+    ?? false;
+  const normalizedOrigin = frontmatterForContentOrigin({
+    content_origin: contentOrigin,
+    content_origin_basis: contentOriginBasis,
+    content_origin_source: contentOriginSource,
+    human_evidence_eligible: humanEvidenceEligible,
+  }, {
+    content: cleanNoteContent(String(input.content), input.title),
+    resolveUserSource,
+    captureEventId: input.captureEventId ?? input.capture_event_id,
+  });
+
   return {
     personality,
     operationId,
     title: input.title,
     content: String(input.content),
     frontmatter: {
-      ...(input.frontmatter || {}),
+      ...suppliedFrontmatter,
       source_personality: personality,
       contract: 'obsidian-note-journal-v1',
+      ...normalizedOrigin,
     },
   };
 }
@@ -245,8 +273,8 @@ function dispatchBacklink({ result, section = '📝 Notes', createIfMissing = tr
   }
 }
 
-function writeNoteThroughContract(rawInput, { mutationService, link } = {}) {
-  const input = parseInput(rawInput);
+function writeNoteThroughContract(rawInput, { mutationService, link, resolveUserSource } = {}) {
+  const input = parseInput(rawInput, { resolveUserSource });
   const service = mutationService || createObsidianOwnedMutationService({ source: 'bridge.note-journal-contract' });
   const filePath = path.join(getVaultNotesDir(), `${String(input.title).trim().replace(/[/\\:*?"<>|]/g, '-')}.md`);
   const vaultRelativePath = path.relative(service.vaultRoot, filePath).split(path.sep).join('/');

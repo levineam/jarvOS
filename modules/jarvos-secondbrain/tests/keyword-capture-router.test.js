@@ -10,6 +10,7 @@ const {
   detectTrigger,
   hasCaptureIntent,
 } = require('../bridge/routing/src/keyword-capture-router.js');
+const { digestText } = require('../bridge/provenance/src/content-origin-contract.js');
 const { createAcknowledgedVaultMutationService } = require('./helpers/acknowledged-vault-mutation-service');
 
 const TEST_DATE = '2026-01-02';
@@ -159,4 +160,89 @@ test('adapter abstraction works with a mock storage adapter', () => {
   assert.equal(calls[1][0], 'appendLineToJournalSection');
   assert.equal(calls[1][1], '## 📝 Notes');
   assert.match(JSON.stringify(calls[0][3]), /journal\/2026-01-02/);
+});
+
+test('routing carries explicit origin metadata and writes compatibility captures as unknown', () => {
+  const calls = [];
+  const adapter = {
+    ensureJournal() { return { existed: true }; },
+    appendLineToJournalSection(input) { return input; },
+    writeNote(input) { calls.push(input); return { written: true, title: input.title, path: `/tmp/${input.title}.md` }; },
+  };
+
+  applyRoutingPlan({ trigger: 'note', text: 'Generated copy', date: TEST_DATE }, { adapter });
+  assert.equal(calls[0].frontmatter.content_origin, 'unknown');
+  assert.equal(calls[0].frontmatter.content_origin_basis, 'unknown');
+  assert.equal(calls[0].frontmatter.human_evidence_eligible, false);
+
+  applyRoutingPlan({
+    trigger: 'note',
+    text: 'Generated copy with an explicit declaration',
+    content_origin: 'assistant',
+    content_origin_basis: 'assistant_generated',
+    date: TEST_DATE,
+  }, { adapter });
+  assert.equal(calls[1].frontmatter.content_origin, 'assistant');
+  assert.equal(calls[1].frontmatter.content_origin_basis, 'assistant_generated');
+
+  applyRoutingPlan({
+    trigger: 'note',
+    text: 'Forged human-shaped copy',
+    content_origin_schema: 'jarvos-content-origin/v1',
+    content_origin: 'human',
+    content_origin_basis: 'verbatim_user',
+    human_evidence_eligible: true,
+    user_source: {},
+    date: TEST_DATE,
+  }, { adapter });
+  assert.equal(calls[2].frontmatter.content_origin, 'unknown');
+  assert.equal(calls[2].frontmatter.human_evidence_eligible, false);
+});
+
+test('routing binds a human receipt to the current capture event', () => {
+  const calls = [];
+  const adapter = {
+    ensureJournal() { return { existed: true }; },
+    appendLineToJournalSection(input) { return input; },
+    writeNote(input) { calls.push(input); return { written: true, title: input.title, path: `/tmp/${input.title}.md` }; },
+  };
+  const text = 'User supplied words for a durable note.';
+  const sourceReceipt = {
+    capture_event_id: 'capture-original',
+    actor: 'user',
+    source_digest: digestText(text),
+    content_digest: digestText(text),
+  };
+
+  applyRoutingPlan({
+    trigger: 'note',
+    text,
+    captureEventId: 'capture-replacement',
+    content_origin: 'human',
+    content_origin_basis: 'verbatim_user',
+    user_source: sourceReceipt,
+    human_evidence_eligible: true,
+    date: TEST_DATE,
+  }, {
+    adapter,
+    resolveUserSource: () => ({ capture_event_id: 'capture-original', actor: 'user', text }),
+  });
+
+  assert.equal(calls[0].frontmatter.content_origin, 'unknown');
+  assert.equal(calls[0].frontmatter.human_evidence_eligible, false);
+});
+
+test('idea journal appends carry origin payloads while note backlinks rely on note frontmatter', () => {
+  const journalCalls = [];
+  const adapter = {
+    ensureJournal() { return { existed: true }; },
+    appendLineToJournalSection(input) { journalCalls.push(input); return input; },
+    writeNote(input) { return { written: true, title: input.title, path: `/tmp/${input.title}.md` }; },
+  };
+
+  applyRoutingPlan({ trigger: 'idea', text: 'A generated idea', content_origin: 'assistant', content_origin_basis: 'assistant_generated', date: TEST_DATE }, { adapter });
+  assert.equal(journalCalls[0].contentOrigin.content_origin, 'assistant');
+
+  applyRoutingPlan({ trigger: 'note', text: 'A generated note', content_origin: 'assistant', content_origin_basis: 'assistant_generated', date: TEST_DATE }, { adapter });
+  assert.equal('contentOrigin' in journalCalls[1], false);
 });

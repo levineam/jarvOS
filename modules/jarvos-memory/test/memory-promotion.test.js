@@ -274,6 +274,9 @@ describe('knowledgeUnit promotion gates', () => {
       downstreamEligibility: {
         memoryPromotion: true,
       },
+      content_origin: 'human',
+      content_origin_basis: 'legacy_author',
+      human_evidence_eligible: true,
       ...overrides,
     };
   }
@@ -360,6 +363,68 @@ describe('knowledgeUnit promotion gates', () => {
 
     assert.equal(review.shouldPromote, false);
     assert.match(review.reason, /memoryPromotion is false/);
+  });
+
+  it('rejects assistant-generated knowledge units from human memory', () => {
+    const review = reviewCandidate({
+      knowledgeUnit: knowledgeUnit({
+        content_origin: 'assistant',
+        content_origin_basis: 'assistant_generated',
+        human_evidence_eligible: false,
+      }),
+    });
+    assert.equal(review.shouldPromote, false);
+    assert.match(review.reason, /context-only/);
+  });
+
+  it('rejects explicit human knowledge units that omit their source receipt', () => {
+    const review = reviewCandidate({
+      knowledgeUnit: knowledgeUnit({
+        content_origin: 'human',
+        content_origin_basis: 'user_derived',
+        human_evidence_eligible: true,
+        content_origin_source: undefined,
+      }),
+    });
+    assert.equal(review.shouldPromote, false);
+    assert.match(review.reason, /user-source receipt/);
+  });
+
+  it('rejects mixed and unknown knowledge units from human memory', () => {
+    for (const provenance of [
+      { content_origin: 'mixed', content_origin_basis: 'mixed_composition', human_evidence_eligible: false },
+      { content_origin: 'unknown', content_origin_basis: 'unknown', human_evidence_eligible: false },
+    ]) {
+      const review = reviewCandidate({ knowledgeUnit: knowledgeUnit(provenance) });
+      assert.equal(review.shouldPromote, false);
+      assert.match(review.reason, /context-only/);
+    }
+  });
+
+  it('does not let an event envelope override an ineligible unit decision', () => {
+    const review = reviewCandidate({
+      human_evidence_eligible: true,
+      knowledgeUnit: knowledgeUnit({ human_evidence_eligible: false }),
+    });
+    assert.equal(review.shouldPromote, false);
+    assert.match(review.reason, /context-only/);
+  });
+
+  it('rejects a human unit whose basis does not match its origin', () => {
+    const review = reviewCandidate({
+      knowledgeUnit: knowledgeUnit({
+        content_origin: 'human',
+        content_origin_basis: 'assistant_generated',
+        human_evidence_eligible: true,
+      }),
+    });
+    assert.equal(review.shouldPromote, false);
+    assert.match(review.reason, /invalid basis/);
+  });
+
+  it('rejects an explicitly non-human direct event while preserving legacy undeclared events during compatibility', () => {
+    assert.equal(reviewCandidate({ text: 'Assistant preference', salienceClass: 'preference', content_origin: 'assistant', content_origin_basis: 'assistant_generated' }).shouldPromote, false);
+    assert.equal(reviewCandidate({ text: 'Legacy preference', salienceClass: 'preference' }).shouldPromote, true);
   });
 
   it('promotes cited knowledge units through the local file path', () => {

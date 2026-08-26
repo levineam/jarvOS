@@ -56,6 +56,14 @@ raw transcripts. A knowledge unit must have source evidence, a non-sensitive
 privacy decision, and `downstreamEligibility.memoryPromotion !== false`.
 Sensitive/private or uncited units stay in the secondbrain sidecar layer.
 
+Intellectual origin is a separate gate from privacy and search eligibility. A
+knowledge unit marked `human` must also carry `human_evidence_eligible: true`
+before it can establish a user fact, preference, decision, belief, or lesson in
+durable Memory. `assistant`, `mixed`, and `unknown` units remain searchable and
+usable as context, but are rejected by the human-memory promotion gate. Legacy
+notes may use the constrained `legacy_author` fallback during the compatibility
+period; new programmatic human records require a validated user-source receipt.
+
 ### Transcript evidence -> reviewed memory
 
 Transcript evidence is source material, not durable memory. A bounded
