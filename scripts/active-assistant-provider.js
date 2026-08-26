@@ -1,25 +1,24 @@
 #!/usr/bin/env node
 'use strict';
 
-// Public, read-only provider catalog inspection and proposal surface.  It
-// intentionally has no file, credential, scheduler, network, or activation
-// access.  It runs every command against a fresh in-memory catalog and
-// preference, so it never inspects or mutates an installed owner's provider
-// configuration.  Only a private owner-side operator may select a paid
-// provider or deliver a message.
+// Public, read-only provider inspection and proposal surface.  It intentionally
+// has no file, credential, scheduler, network, or activation access.  The
+// owner-private operator is the only place that may authorize spend or mutate
+// selection.
 const {
-  createInitialProviderPreference,
-  createProviderCatalog,
-  createProviderSelectionControl,
-} = require('../modules/jarvos-runtime-kit/src/provider-selection.js');
+  createFreshProviderView,
+  createProviderControl,
+  createProviderRegistry,
+} = require('../modules/jarvos-runtime-kit/src/index.js');
 
 function usage() {
   return [
     'Usage:',
-    '  active-assistant-provider.js catalog [--json]',
+    '  active-assistant-provider.js list [--json]',
     '  active-assistant-provider.js status [--json]',
-    '  active-assistant-provider.js propose <entry-id> [--json]',
-    '  active-assistant-provider.js preview <entry-id> --result <passed|failed> [--json]',
+    '  active-assistant-provider.js propose-switch <profile-id> --tuple <sha256> [--json]',
+    '  active-assistant-provider.js authorize-and-run [--json]  (owner surface required)',
+    '  active-assistant-provider.js rollback [--json]             (owner surface required)',
   ].join('\n');
 }
 
@@ -38,38 +37,41 @@ function print(value, json) {
 }
 
 function main(argv = process.argv.slice(2)) {
-  const [command, entryId] = argv;
+  const [command, profileId] = argv;
   const json = hasFlag(argv, '--json');
   if (!command || command === '--help' || command === '-h') {
     process.stdout.write(`${usage()}\n`);
     return 0;
   }
 
-  const catalog = createProviderCatalog();
-  const preference = createInitialProviderPreference();
-  const control = createProviderSelectionControl({ catalog, preference });
+  const registry = createProviderRegistry();
+  const view = createFreshProviderView();
+  const control = createProviderControl({ registry, view });
 
-  if (command === 'catalog') {
-    print(control.catalog(), json);
+  if (command === 'list') {
+    print(control.list(), json);
     return 0;
   }
   if (command === 'status') {
     print(control.status(), json);
     return 0;
   }
-  if (command === 'propose') {
-    if (!entryId) throw new Error('propose requires <entry-id>');
-    const result = control.propose({ entryId });
+  if (command === 'propose-switch') {
+    if (!profileId) throw new Error('propose-switch requires <profile-id>');
+    const tupleDigest = flagValue(argv, '--tuple');
+    if (!tupleDigest) throw new Error('propose-switch requires --tuple <sha256>');
+    const result = control.proposeSwitch({ profileId, tupleDigest });
     print(result, json);
     return result.ok ? 0 : 1;
   }
-  if (command === 'preview') {
-    if (!entryId) throw new Error('preview requires <entry-id>');
-    const result = flagValue(argv, '--result');
-    if (!result) throw new Error('preview requires --result <passed|failed>');
-    const outcome = control.preview({ entryId, result });
-    print(outcome, json);
-    return outcome.ok ? 0 : 1;
+  if (command === 'authorize-and-run' || command === 'rollback') {
+    try {
+      control[command === 'authorize-and-run' ? 'authorizeAndRun' : 'rollback']();
+    } catch (error) {
+      const result = { ok: false, code: error.code || 'owner_authorization_required', message: error.message };
+      print(result, json);
+      return 1;
+    }
   }
   throw new Error(`unknown command: ${command}\n${usage()}`);
 }

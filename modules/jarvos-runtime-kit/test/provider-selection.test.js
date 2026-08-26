@@ -7,207 +7,436 @@ const test = require('node:test');
 
 const kit = require('../src/index.js');
 
-function subscriptionEntry(overrides = {}) {
-  return {
-    schemaVersion: kit.CATALOG_ENTRY_SCHEMA_VERSION,
-    entryId: 'host-subscription',
+const TUPLE_A = 'a'.repeat(64);
+const TUPLE_B = 'b'.repeat(64);
+
+function profile(overrides = {}) {
+  const { egressPolicy: egressOverrides, ...profileOverrides } = overrides;
+  return kit.createProviderProfile({
+    profileId: 'claude-subscription',
     provider: 'claude',
     model: 'claude-sonnet-5',
-    authCategory: 'subscription',
-    reasoningEfforts: ['low', 'medium', 'high', 'max'],
-    defaultReasoningEffort: 'max',
-    ...overrides,
-  };
+    adapterDistribution: {
+      id: 'jarvos-claude-cli',
+      version: '1.0.0',
+      capabilityVersion: 'jarvos-claude-cli-capability/v1',
+    },
+    authMode: 'subscription',
+    promptTransport: { mode: 'stdin', version: 'v1' },
+    toolPolicy: { mode: 'deny-all', version: 'v1' },
+    egressPolicy: {
+      digest: '1'.repeat(64),
+      allowedDataClasses: ['source_excerpt', 'project_context'],
+      minimizationRevision: 'v1',
+      disclosureRevision: 'v1',
+      ownerAcceptance: egressOverrides?.ownerAcceptance || 'required',
+    },
+    ...profileOverrides,
+    ...(egressOverrides ? { egressPolicy: {
+      digest: '1'.repeat(64),
+      allowedDataClasses: ['source_excerpt', 'project_context'],
+      minimizationRevision: 'v1',
+      disclosureRevision: 'v1',
+      ownerAcceptance: 'required',
+      ...egressOverrides,
+    } } : {}),
+  });
 }
 
-test('a fresh installation never hard-codes or advertises a paid provider as authenticated or admitted', () => {
-  const defaults = kit.getDefaultProviderCatalogEntries();
-  assert.equal(defaults.length, 1);
-  assert.deepEqual(defaults[0], kit.DETERMINISTIC_CATALOG_ENTRY);
-  assert.equal(defaults[0].authCategory, 'none');
-  assert.notEqual(defaults[0].provider, 'claude');
-  assert.notEqual(defaults[0].provider, 'openai');
-  assert.notEqual(defaults[0].provider, 'grok');
+test('exports strict versioned profile, adapter, health, view, and intent validators', () => {
+  assert.equal(kit.PROVIDER_PROFILE_SCHEMA_VERSION, 'jarvos-provider-profile/v1');
+  assert.equal(kit.MANAGED_ADAPTER_DESCRIPTOR_SCHEMA_VERSION, 'jarvos-managed-adapter/v1');
+  assert.equal(kit.PROVIDER_HEALTH_SCHEMA_VERSION, 'jarvos-provider-health/v1');
+  assert.equal(kit.PROVIDER_RUNTIME_VIEW_SCHEMA_VERSION, 'jarvos-provider-runtime-view/v1');
+  assert.equal(kit.PROVIDER_SWITCH_INTENT_SCHEMA_VERSION, 'jarvos-provider-switch-intent/v1');
 
-  const catalog = kit.createProviderCatalog();
-  assert.equal(kit.validateProviderCatalog(catalog).ok, true);
-  assert.equal(catalog.entries.every((entry) => entry.authCategory === 'none'), true);
-
-  const preference = kit.createInitialProviderPreference();
-  const status = kit.renderProviderSafeStatus({ catalog, preference });
-  assert.equal(status.state, 'unselected');
-  assert.equal(status.selected, null);
-
-  // Even an empty, host-supplied catalog is a legal provider-neutral catalog.
-  const empty = kit.createProviderCatalog({ entries: [] });
-  assert.equal(kit.validateProviderCatalog(empty).ok, true);
-  assert.equal(empty.entries.length, 0);
+  const candidate = profile();
+  assert.equal(kit.validateProviderProfile(candidate).ok, true);
+  assert.equal(kit.validateManagedAdapterDescriptor(kit.PORTABLE_CLAUDE_ADAPTER_DESCRIPTOR).ok, true);
+  assert.equal(kit.validateProviderHealth(kit.redactedProviderHealth({ status: 'auth_required', reasonCode: 'auth_missing' })).ok, true);
+  assert.equal(kit.validateProviderRuntimeView(kit.createFreshProviderView()).ok, true);
+  assert.equal(kit.validateProviderSwitchIntent(kit.createProviderSwitchIntent({
+    profileId: candidate.profileId,
+    tupleDigest: TUPLE_B,
+    expectedGeneration: 'fresh-generation',
+  })).ok, true);
 });
-
-test('keeps max in the reasoning-effort vocabulary and accepts a host-supplied subscription choice at max', () => {
-  assert.deepEqual(kit.PROVIDER_REASONING_EFFORTS, ['low', 'medium', 'high', 'max']);
-
-  const entry = subscriptionEntry();
-  assert.equal(kit.validateProviderCatalogEntry(entry).ok, true);
-
-  const catalog = kit.createProviderCatalog({ entries: [entry] });
-  const proposal = kit.createProviderProposal({ catalog, entryId: entry.entryId, expectedGeneration: 'initial-generation' });
-  const preference = kit.createInitialProviderPreference({ generation: 'initial-generation' });
-  const outcome = kit.previewProviderProposal({ catalog, preference, proposal, result: 'passed' });
-
-  assert.equal(outcome.ok, true);
-  assert.equal(outcome.preference.entryId, entry.entryId);
-
-  const status = kit.renderProviderSafeStatus({ catalog, preference: outcome.preference });
-  assert.equal(status.selected.authCategory, 'subscription');
-  assert.equal(status.selected.reasoningEffort, 'max');
-});
-
-test('safe status is a closed, non-secret projection that exposes auth category without profile identity or credentials', () => {
-  const catalog = kit.createProviderCatalog({ entries: [subscriptionEntry()] });
-  const preference = kit.createInitialProviderPreference();
-  const status = kit.renderProviderSafeStatus({ catalog, preference });
-  assert.equal(kit.validateProviderSafeStatus(status).ok, true);
-
-  const unknown = kit.validateProviderSafeStatus({ ...status, credentialPath: '/Users/andrew/.config/private' });
+test('rejects unknown and authority-shaped provider fields, paths, credentials, and raw output', () => {
+  const unknown = kit.validateProviderProfile({ ...profile(), unexpected: true });
   assert.equal(unknown.ok, false);
-  assert.match(unknown.errors.join('\n'), /forbidden|unknown/i);
+  assert.match(unknown.errors.join('\n'), /unknown field/i);
 
-  const serialized = JSON.stringify(status);
-  assert.equal(serialized.includes('credential'), false);
-  assert.equal(serialized.includes('token'), false);
-  assert.equal(serialized.includes('/Users/'), false);
-
-  for (const field of ['authorization', 'credential', 'privateKey', 'executablePath', 'accountId']) {
-    const invalid = kit.validateProviderSafeStatus({ ...status, [field]: 'private' });
+  for (const field of ['authorization', 'credential', 'privateKey', 'executablePath', 'providerOutput']) {
+    const invalid = kit.validateProviderProfile({ ...profile(), [field]: 'private' });
     assert.equal(invalid.ok, false, field);
+    assert.match(invalid.errors.join('\n'), /forbidden|authority|unknown/i, field);
+  }
+
+  const badDescriptor = kit.validateManagedAdapterDescriptor({
+    ...kit.PORTABLE_CLAUDE_ADAPTER_DESCRIPTOR,
+    distribution: { ...kit.PORTABLE_CLAUDE_ADAPTER_DESCRIPTOR.distribution, executablePath: '/Users/andrew/bin/claude' },
+  });
+  assert.equal(badDescriptor.ok, false);
+  assert.match(badDescriptor.errors.join('\n'), /forbidden|path|unknown/i);
+
+  const badIntent = kit.validateProviderSwitchIntent({
+    ...kit.createProviderSwitchIntent({ profileId: 'deterministic-fixture', tupleDigest: TUPLE_B, expectedGeneration: 'fresh-generation' }),
+    authorization: { signature: 'secret' },
+  });
+  assert.equal(badIntent.ok, false);
+
+  const pathLikeId = kit.validateProviderProfile({ ...profile(), profileId: 'private/profile' });
+  assert.equal(pathLikeId.ok, false);
+  assert.match(pathLikeId.errors.join('\n'), /safe non-empty string/i);
+});
+
+test('built-in descriptors remain portable while Grok advertises optional support', () => {
+  assert.deepEqual(kit.PORTABLE_CLAUDE_ADAPTER_DESCRIPTOR, kit.getBuiltInAdapterDescriptors().claude);
+  assert.deepEqual(kit.DETERMINISTIC_ADAPTER_DESCRIPTOR, kit.getBuiltInAdapterDescriptors().deterministic);
+  assert.deepEqual(kit.GROK_SUBSCRIPTION_ADAPTER_DESCRIPTOR, kit.getBuiltInAdapterDescriptors().grok);
+  assert.equal(kit.GROK_SUBSCRIPTION_ADAPTER_DESCRIPTOR.support, 'supported');
+  assert.equal(Object.hasOwn(kit.GROK_SUBSCRIPTION_ADAPTER_DESCRIPTOR, 'reasonCode'), false);
+  assert.equal(kit.GROK_SUBSCRIPTION_ADAPTER_DESCRIPTOR.distribution.version, '1.0.3');
+  assert.match(kit.GROK_SUBSCRIPTION_ADAPTER_DESCRIPTOR.distribution.revision, /^[a-f0-9]{64}$/);
+  assert.deepEqual(kit.GROK_SUBSCRIPTION_ADAPTER_DESCRIPTOR.egressPolicy.byteBudget, {
+    maxBytes: 65_536,
+    revision: 'v1',
+  });
+  assert.equal(kit.validateManagedAdapterDescriptor(kit.GROK_SUBSCRIPTION_ADAPTER_DESCRIPTOR).ok, true);
+
+  const serialized = JSON.stringify(kit.getBuiltInAdapterDescriptors());
+  assert.equal(serialized.includes('/Users/'), false);
+  assert.equal(serialized.includes('/home/'), false);
+  assert.equal(serialized.includes('XAI_API_KEY'), false);
+  assert.equal(serialized.includes('credential'), false);
+  assert.deepEqual(
+    JSON.stringify(kit.PORTABLE_CLAUDE_ADAPTER_DESCRIPTOR),
+    JSON.stringify(kit.PORTABLE_CLAUDE_ADAPTER_DESCRIPTOR),
+  );
+});
+
+test('fresh installation is unconfigured and never picks a paid default', () => {
+  const registry = kit.createProviderRegistry();
+  const view = kit.createFreshProviderView();
+  const listed = kit.listProviderProfiles({ registry });
+  const grok = registry.profiles.find((item) => item.profileId === 'grok-subscription');
+
+  assert.equal(view.state, 'unconfigured');
+  assert.equal(view.activeProfile, null);
+  assert.equal(view.readOnly, true);
+  assert.equal(listed.ok, true);
+  assert.equal(listed.activeProfileId, null);
+  assert.equal(listed.profiles.some((item) => item.state === 'active'), false);
+  assert.equal(listed.defaultProfileId, null);
+  assert.equal(listed.profiles.find((item) => item.profileId === 'grok-subscription').status, 'available');
+  assert.equal(listed.profiles.find((item) => item.profileId === 'grok-subscription').support, 'supported');
+  assert.equal(listed.profiles.find((item) => item.profileId === 'grok-subscription').state, 'unconfigured');
+  assert.equal(listed.profiles.find((item) => item.profileId === 'grok-subscription').qualificationState, 'absent');
+  assert.equal(grok.egressPolicy.ownerAcceptance, 'required');
+  assert.deepEqual(grok.egressPolicy.byteBudget, { maxBytes: 65_536, revision: 'v1' });
+  assert.equal(JSON.stringify(view).includes('XAI_API_KEY'), false);
+});
+
+test('health distinguishes missing executable, missing auth, unsupported capability, outage, and active state', () => {
+  const descriptor = kit.PORTABLE_CLAUDE_ADAPTER_DESCRIPTOR;
+  assert.equal(kit.classifyProviderHealth({ descriptor, evidence: { executable: 'missing' } }).status, 'unhealthy');
+  assert.equal(kit.classifyProviderHealth({ descriptor, evidence: { executable: 'present', authenticated: false } }).status, 'auth_required');
+  assert.equal(kit.classifyProviderHealth({ descriptor, evidence: { executable: 'present', authenticated: true, capability: 'unsupported' } }).status, 'unsupported');
+  assert.equal(kit.classifyProviderHealth({ descriptor, evidence: { executable: 'present', authenticated: true, unhealthy: true } }).status, 'unhealthy');
+  assert.equal(kit.classifyProviderHealth({ descriptor, evidence: { executable: 'present', authenticated: true, active: true } }).status, 'active');
+  assert.equal(kit.classifyProviderHealth({ descriptor: kit.DETERMINISTIC_ADAPTER_DESCRIPTOR }).status, 'available');
+});
+
+test('Grok health requires host capability evidence and an active view cannot prepare without it', () => {
+  const descriptor = kit.GROK_SUBSCRIPTION_ADAPTER_DESCRIPTOR;
+  const absent = kit.classifyProviderHealth({ descriptor });
+  assert.equal(absent.status, 'unsupported');
+  assert.equal(absent.reasonCode, 'capability_proof_pending');
+
+  const stale = kit.classifyProviderHealth({
+    descriptor,
+    evidence: { executable: 'present', authenticated: true, active: true, capability: 'unsupported' },
+  });
+  assert.equal(stale.status, 'unsupported');
+  assert.equal(stale.reasonCode, 'capability_unsupported');
+
+  const profile = kit.profileFromDescriptor(descriptor, {
+    state: 'active',
+    qualificationState: 'current',
+    egressPolicy: {
+      ...kit.profileFromDescriptor(descriptor).egressPolicy,
+      ownerAcceptance: 'accepted',
+    },
+    runtimeTuple: { tupleDigest: TUPLE_A, generation: 'grok-generation' },
+  });
+  const view = kit.renderProviderReadView({
+    generation: 'grok-generation',
+    operatorState: { state: 'active', activeProfile: profile },
+  });
+  assert.equal(kit.canPrepareProviderView(view, {
+    operatorGeneration: 'grok-generation',
+    selectedTupleDigest: TUPLE_A,
+  }), false);
+
+  const fresh = kit.classifyProviderHealth({
+    descriptor,
+    evidence: {
+      executable: 'present',
+      authenticated: true,
+      active: true,
+      capability: 'supported',
+      generation: 'grok-generation',
+      executableDigest: descriptor.distribution.revision,
+      tupleDigest: TUPLE_A,
+      policyDigest: descriptor.egressPolicy.digest,
+    },
+  });
+  const readyView = kit.renderProviderReadView({
+    generation: 'grok-generation',
+    operatorState: { state: 'active', activeProfile: profile, health: fresh },
+  });
+  assert.equal(fresh.status, 'active');
+  assert.equal(kit.canPrepareProviderView(readyView, {
+    operatorGeneration: 'grok-generation',
+    selectedTupleDigest: TUPLE_A,
+  }), true);
+  assert.equal(kit.canPrepareProviderView(readyView, {
+    operatorGeneration: 'stale-generation',
+    selectedTupleDigest: TUPLE_A,
+  }), false);
+
+  for (const [label, mismatch] of [
+    ['executable', { executableDigest: 'f'.repeat(64) }],
+    ['tuple', { tupleDigest: TUPLE_B }],
+    ['policy', { policyDigest: 'f'.repeat(64) }],
+    ['generation', { generation: 'stale-generation' }],
+  ]) {
+    const mismatchedHealth = kit.classifyProviderHealth({
+      descriptor,
+      evidence: {
+        executable: 'present',
+        authenticated: true,
+        active: true,
+        capability: 'supported',
+        generation: 'grok-generation',
+        executableDigest: descriptor.distribution.revision,
+        tupleDigest: TUPLE_A,
+        policyDigest: descriptor.egressPolicy.digest,
+        ...mismatch,
+      },
+    });
+    const mismatchedView = kit.renderProviderReadView({
+      generation: 'grok-generation',
+      operatorState: { state: 'active', activeProfile: profile, health: mismatchedHealth },
+    });
+    assert.equal(kit.canPrepareProviderView(mismatchedView, {
+      operatorGeneration: 'grok-generation',
+      selectedTupleDigest: TUPLE_A,
+    }), false, label);
   }
 });
 
-test('a failed preview preserves the incumbent preference and generation, recording only a bounded lastPreview: failed status', () => {
-  const catalog = kit.createProviderCatalog({ entries: [subscriptionEntry()] });
-  const preference = kit.createInitialProviderPreference({ generation: 'incumbent-generation' });
-  const proposal = kit.createProviderProposal({ catalog, entryId: 'host-subscription', expectedGeneration: 'incumbent-generation' });
+test('malformed Grok capability, executable identity, tool policy, and egress policy are rejected', () => {
+  const descriptor = kit.GROK_SUBSCRIPTION_ADAPTER_DESCRIPTOR;
+  const malformed = [
+    ['capability version', { capabilityVersion: '' }],
+    ['executable digest', { distribution: { ...descriptor.distribution, revision: 'not-a-digest' } }],
+    ['tool policy', { toolPolicy: { mode: 'allow-all', version: 'v1' } }],
+    ['egress policy', { egressPolicy: { ...descriptor.egressPolicy, digest: 'not-a-digest' } }],
+  ];
+  for (const [label, overrides] of malformed) {
+    const candidate = { ...descriptor, ...overrides };
+    const result = kit.validateManagedAdapterDescriptor(candidate);
+    assert.equal(result.ok, false, label);
+  }
+});
 
-  const outcome = kit.previewProviderProposal({ catalog, preference, proposal, result: 'failed' });
-
-  assert.equal(outcome.ok, true);
-  assert.equal(outcome.preference.entryId, null);
-  assert.equal(outcome.preference.generation, 'incumbent-generation');
-  assert.deepEqual(outcome.preference.lastPreview, {
-    entryId: 'host-subscription',
-    generation: 'incumbent-generation',
-    result: 'failed',
+test('active legacy migration preserves the exact incumbent tuple without false requalification', () => {
+  const incumbent = profile({
+    state: 'active',
+    qualificationState: 'legacy',
+    runtimeTuple: { tupleDigest: TUPLE_A, generation: 'incumbent-generation' },
+    egressPolicy: { ownerAcceptance: 'accepted' },
   });
-
-  const status = kit.renderProviderSafeStatus({ catalog, preference: outcome.preference });
-  assert.equal(status.state, 'unselected');
-  assert.equal(status.selected, null);
-  assert.equal(status.lastPreview.result, 'failed');
+  assert.equal(kit.validateProviderProfile(incumbent).ok, true);
+  const view = kit.renderProviderReadView({
+    generation: 'incumbent-generation',
+    operatorState: { state: 'active', activeProfile: incumbent },
+  });
+  assert.equal(view.state, 'active');
+  assert.equal(view.activeProfile.qualificationState, 'legacy');
+  assert.deepEqual(view.activeProfile.runtimeTuple, incumbent.runtimeTuple);
+  assert.notEqual(view.activeProfile.qualificationState, 'current');
+  assert.equal(kit.canPrepareProviderView(view, {
+    operatorGeneration: 'incumbent-generation',
+    selectedTupleDigest: TUPLE_A,
+  }), true);
+  assert.equal(kit.canPrepareProviderView(view, {
+    operatorGeneration: 'different-generation',
+    selectedTupleDigest: TUPLE_A,
+  }), false);
+  assert.equal(kit.canPrepareProviderView(view, {
+    operatorGeneration: 'incumbent-generation',
+    selectedTupleDigest: TUPLE_B,
+  }), false);
+  assert.equal(kit.canDeliverProviderView(view, {
+    operatorGeneration: 'incumbent-generation',
+    selectedTupleDigest: TUPLE_A,
+  }), false);
 });
 
-test('a passed preview advances only on the matching generation; a stale replay conflicts', () => {
-  const catalog = kit.createProviderCatalog({ entries: [subscriptionEntry()] });
-  const preference = kit.createInitialProviderPreference({ generation: 'generation-a' });
-  const proposal = kit.createProviderProposal({ catalog, entryId: 'host-subscription', expectedGeneration: 'generation-a' });
-
-  const passed = kit.previewProviderProposal({ catalog, preference, proposal, result: 'passed' });
-  assert.equal(passed.ok, true);
-  assert.equal(passed.preference.entryId, 'host-subscription');
-  assert.notEqual(passed.preference.generation, 'generation-a');
-
-  // Replaying the same proposal against the advanced preference is stale.
-  const replay = kit.previewProviderProposal({ catalog, preference: passed.preference, proposal, result: 'passed' });
-  assert.equal(replay.ok, false);
-  assert.equal(replay.code, 'stale_generation');
-  assert.deepEqual(replay.preference, passed.preference);
-
-  // A failed replay against the advanced preference conflicts the same way.
-  const failedReplay = kit.previewProviderProposal({ catalog, preference: passed.preference, proposal, result: 'failed' });
-  assert.equal(failedReplay.ok, false);
-  assert.equal(failedReplay.code, 'stale_generation');
-  assert.deepEqual(failedReplay.preference, passed.preference);
+test('runtime-rendered views are opaque, generation-bound, read-only, and never expose private state', () => {
+  const privateState = {
+    state: 'candidate',
+    activeProfile: null,
+    candidateProfile: profile({
+      profileId: 'deterministic-fixture',
+      provider: 'deterministic',
+      model: 'deterministic-v1',
+      authMode: 'none',
+      promptTransport: { mode: 'deterministic-memory', version: 'v1' },
+      adapterDistribution: {
+        id: 'jarvos-deterministic',
+        version: '1.0.0',
+        capabilityVersion: 'jarvos-deterministic-capability/v1',
+      },
+    }),
+    credentialPath: '/Users/andrew/.config/private-credentials',
+    providerOutput: 'never publish this',
+  };
+  const view = kit.renderProviderReadView({ generation: 'candidate-generation', operatorState: privateState });
+  const validation = kit.validateProviderRuntimeView(view);
+  assert.equal(validation.ok, true, validation.errors?.join('\n'));
+  assert.equal(view.readOnly, true);
+  assert.equal(view.source, 'runtime-rendered');
+  assert.equal(view.generation, 'candidate-generation');
+  assert.equal(Object.hasOwn(view, 'canPrepare'), false);
+  assert.equal(Object.hasOwn(view, 'canDeliver'), false);
+  assert.equal(JSON.stringify(view).includes('credentialPath'), false);
+  assert.equal(JSON.stringify(view).includes('private-credentials'), false);
+  assert.equal(JSON.stringify(view).includes('providerOutput'), false);
+  assert.equal(kit.canPrepareProviderView(view, {
+    operatorGeneration: 'candidate-generation',
+    selectedTupleDigest: TUPLE_B,
+  }), false);
+  assert.equal(kit.canDeliverProviderView(view), false);
 });
 
-test('legacy classification requires an exact recognized old schema and a recognized old provider', () => {
-  assert.equal(kit.classifyLegacyProviderRecord(null), null);
-  assert.equal(kit.classifyLegacyProviderRecord({}), null);
-  assert.equal(kit.classifyLegacyProviderRecord({ schemaVersion: 'unknown/v1', provider: 'claude', state: 'active' }), null);
+test('egress policy is bound to provider identity and policy changes require fresh qualification', () => {
+  const first = profile({ egressPolicy: { ownerAcceptance: 'accepted' } });
+  const second = profile({ egressPolicy: { ownerAcceptance: 'accepted', minimizationRevision: 'v2' } });
+  assert.notEqual(kit.providerProfileIdentity(first), kit.providerProfileIdentity(second));
+  assert.equal(kit.qualificationRequiresFreshMatrix(first, second), true);
+  assert.equal(kit.qualificationRequiresFreshMatrix(first, first), false);
 
-  const missingProvider = { schemaVersion: kit.LEGACY_PROVIDER_PROFILE_SCHEMA_VERSION, state: 'active' };
-  assert.equal(kit.classifyLegacyProviderRecord(missingProvider), null);
+  const reordered = {
+    runtimeTuple: first.runtimeTuple,
+    state: first.state,
+    qualificationState: first.qualificationState,
+    egressPolicy: {
+      ownerAcceptance: first.egressPolicy.ownerAcceptance,
+      disclosureRevision: first.egressPolicy.disclosureRevision,
+      minimizationRevision: first.egressPolicy.minimizationRevision,
+      allowedDataClasses: first.egressPolicy.allowedDataClasses,
+      digest: first.egressPolicy.digest,
+    },
+    toolPolicy: first.toolPolicy,
+    promptTransport: first.promptTransport,
+    authMode: first.authMode,
+    adapterDistribution: first.adapterDistribution,
+    model: first.model,
+    provider: first.provider,
+    profileId: first.profileId,
+    schemaVersion: first.schemaVersion,
+  };
+  assert.equal(kit.providerProfileIdentity(first), kit.providerProfileIdentity(reordered));
+});
 
-  const unknownProvider = { schemaVersion: kit.LEGACY_PROVIDER_PROFILE_SCHEMA_VERSION, provider: 'unknown-vendor', state: 'active' };
-  assert.equal(kit.classifyLegacyProviderRecord(unknownProvider), null);
-
-  const activeIncumbentProfile = { schemaVersion: kit.LEGACY_PROVIDER_PROFILE_SCHEMA_VERSION, provider: 'claude', state: 'active' };
-  assert.equal(kit.classifyLegacyProviderRecord(activeIncumbentProfile), 'rollback_only');
-
-  const candidateProfile = { schemaVersion: kit.LEGACY_PROVIDER_PROFILE_SCHEMA_VERSION, provider: 'grok', state: 'candidate' };
-  assert.equal(kit.classifyLegacyProviderRecord(candidateProfile), 'migration_required');
-
-  const activeIncumbentView = {
-    schemaVersion: kit.LEGACY_PROVIDER_RUNTIME_VIEW_SCHEMA_VERSION,
+test('managed runtime tuple changes require fresh qualification', () => {
+  const prior = profile({
     state: 'active',
-    activeProfile: { provider: 'deterministic', state: 'active' },
-  };
-  assert.equal(kit.classifyLegacyProviderRecord(activeIncumbentView), 'rollback_only');
-
-  const unconfiguredView = {
-    schemaVersion: kit.LEGACY_PROVIDER_RUNTIME_VIEW_SCHEMA_VERSION,
-    state: 'unconfigured',
-    activeProfile: { provider: 'claude', state: 'candidate' },
-  };
-  assert.equal(kit.classifyLegacyProviderRecord(unconfiguredView), 'migration_required');
-
-  const viewWithUnknownProvider = {
-    schemaVersion: kit.LEGACY_PROVIDER_RUNTIME_VIEW_SCHEMA_VERSION,
+    qualificationState: 'current',
+    egressPolicy: { ownerAcceptance: 'accepted' },
+    runtimeTuple: { tupleDigest: TUPLE_A, generation: 'generation-a' },
+  });
+  const next = profile({
     state: 'active',
-    activeProfile: { provider: 'unknown-vendor', state: 'active' },
-  };
-  assert.equal(kit.classifyLegacyProviderRecord(viewWithUnknownProvider), null);
+    qualificationState: 'current',
+    egressPolicy: { ownerAcceptance: 'accepted' },
+    runtimeTuple: { tupleDigest: TUPLE_B, generation: 'generation-b' },
+  });
+  assert.notEqual(kit.providerProfileIdentity(prior), kit.providerProfileIdentity(next));
+  assert.equal(kit.qualificationRequiresFreshMatrix(prior, next), true);
 });
 
-test('registry rejects duplicate identities and a proposal requires a registered catalog entry', () => {
+test('registry rejects duplicate identities and proposals require a registered profile', () => {
   assert.throws(
-    () => kit.createProviderCatalog({ entries: [kit.DETERMINISTIC_CATALOG_ENTRY, kit.DETERMINISTIC_CATALOG_ENTRY] }),
-    (error) => error.code === 'duplicate_catalog_entry',
+    () => kit.createProviderRegistry({
+      descriptors: [kit.DETERMINISTIC_ADAPTER_DESCRIPTOR, kit.DETERMINISTIC_ADAPTER_DESCRIPTOR],
+    }),
+    (error) => error.code === 'duplicate_adapter_profile',
   );
-  const catalog = kit.createProviderCatalog();
   assert.throws(
-    () => kit.createProviderProposal({ catalog, entryId: 'never-registered', expectedGeneration: 'initial-generation' }),
-    (error) => error.code === 'entry_not_registered',
+    () => kit.createProviderRegistry({
+      descriptors: [kit.DETERMINISTIC_ADAPTER_DESCRIPTOR],
+      profiles: [
+        kit.createProviderProfile({
+          ...profile(),
+          profileId: 'deterministic-fixture',
+          provider: 'deterministic',
+          model: 'deterministic-v1',
+          authMode: 'none',
+          promptTransport: { mode: 'deterministic-memory', version: 'v1' },
+          adapterDistribution: {
+            id: 'jarvos-deterministic',
+            version: 'portable-v1',
+            capabilityVersion: 'jarvos-deterministic-capability/v1',
+          },
+        }),
+        kit.createProviderProfile({
+          ...profile(),
+          profileId: 'deterministic-fixture',
+          provider: 'deterministic',
+          model: 'deterministic-v1',
+          authMode: 'none',
+          promptTransport: { mode: 'deterministic-memory', version: 'v1' },
+          adapterDistribution: {
+            id: 'jarvos-deterministic',
+            version: 'portable-v1',
+            capabilityVersion: 'jarvos-deterministic-capability/v1',
+          },
+        }),
+      ],
+    }),
+    (error) => error.code === 'duplicate_provider_profile',
   );
+
+  const registry = kit.createProviderRegistry({
+    descriptors: [kit.DETERMINISTIC_ADAPTER_DESCRIPTOR],
+    profiles: [],
+  });
+  const control = kit.createProviderControl({ registry, view: kit.createFreshProviderView() });
+  assert.equal(control.proposeSwitch({ profileId: 'deterministic-fixture', tupleDigest: TUPLE_B }).code, 'profile_not_registered');
 });
 
-test('provider-neutral control contract keeps proposal/preview read-only and the CLI equivalent to the library', () => {
-  const catalog = kit.createProviderCatalog();
-  const preference = kit.createInitialProviderPreference();
-  const control = kit.createProviderSelectionControl({ catalog, preference });
-
-  const proposal = control.propose({ entryId: 'deterministic-fixture' });
+test('provider-neutral control contract keeps proposal read-only and agent/CLI intent views equivalent', () => {
+  const registry = kit.createProviderRegistry();
+  const view = kit.createFreshProviderView();
+  const control = kit.createProviderControl({ registry, view });
+  const proposal = control.proposeSwitch({ profileId: 'deterministic-fixture', tupleDigest: TUPLE_B });
   assert.equal(proposal.ok, true);
-  assert.equal(proposal.proposal.entryId, 'deterministic-fixture');
-  assert.equal(proposal.proposal.expectedGeneration, preference.generation);
+  assert.equal(proposal.intent.candidate.profileId, 'deterministic-fixture');
+  assert.equal(proposal.intent.expectedGeneration, view.generation);
+  assert.equal(proposal.view.state, 'unconfigured');
+  assert.throws(() => control.authorizeAndRun(proposal.intent), (error) => error.code === 'owner_authorization_required');
+  assert.throws(() => control.rollback(), (error) => error.code === 'owner_authorization_required');
 
-  const preview = control.preview({ entryId: 'deterministic-fixture', result: 'passed' });
-  assert.equal(preview.ok, true);
-  assert.equal(preview.preference.entryId, 'deterministic-fixture');
-  assert.equal(preview.status.state, 'selected');
-
-  const cliStatus = spawnSync(process.execPath, [
+  const cli = spawnSync(process.execPath, [
     path.resolve(__dirname, '../../../scripts/active-assistant-provider.js'),
-    'status', '--json',
+    'propose-switch', 'deterministic-fixture', '--tuple', TUPLE_B, '--json',
   ], { encoding: 'utf8' });
-  assert.equal(cliStatus.status, 0, cliStatus.stderr);
-  assert.deepEqual(JSON.parse(cliStatus.stdout), control.status());
-
-  const cliPreview = spawnSync(process.execPath, [
-    path.resolve(__dirname, '../../../scripts/active-assistant-provider.js'),
-    'preview', 'deterministic-fixture', '--result', 'passed', '--json',
-  ], { encoding: 'utf8' });
-  assert.equal(cliPreview.status, 0, cliPreview.stderr);
-  const cliResult = JSON.parse(cliPreview.stdout);
-  assert.equal(cliResult.ok, true);
-  assert.equal(cliResult.preference.entryId, 'deterministic-fixture');
+  assert.equal(cli.status, 0, cli.stderr);
+  const cliResult = JSON.parse(cli.stdout);
+  assert.deepEqual(cliResult.intent, proposal.intent);
+  assert.deepEqual(cliResult.view, proposal.view);
 });

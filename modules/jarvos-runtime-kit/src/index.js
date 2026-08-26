@@ -16,6 +16,7 @@ const operatorNotification = require('./operator-notification.js');
 const operatorNotificationLint = require('./operator-notification-lint.js');
 const managedActivation = require('./managed-activation.js');
 const providerSelection = require('./provider-selection.js');
+const providerPreference = require('./provider-preference.js');
 
 const DEFAULT_AGENT_CONTEXT_MCP = 'modules/jarvos-agent-context/scripts/jarvos-mcp.js';
 const REQUIRED_MCP_TOOL = 'jarvos_hydrate';
@@ -1297,6 +1298,7 @@ module.exports = {
   ...operatorNotificationLint,
   ...managedActivation,
   ...providerSelection,
+  ...providerPreference,
   DEFAULT_AGENT_CONTEXT_MCP,
   HYDRATION_MODES,
   REQUIRED_MCP_TOOL,

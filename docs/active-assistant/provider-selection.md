@@ -82,10 +82,10 @@ They run against a fresh in-memory catalog and preference, so they never
 inspect or modify an installed owner's provider configuration:
 
 ```bash
-node scripts/active-assistant-provider.js catalog --json
-node scripts/active-assistant-provider.js status --json
-node scripts/active-assistant-provider.js propose <entry-id> --json
-node scripts/active-assistant-provider.js preview <entry-id> --result passed --json
+node scripts/active-assistant-provider-preference.js catalog --json
+node scripts/active-assistant-provider-preference.js status --json
+node scripts/active-assistant-provider-preference.js propose <entry-id> --json
+node scripts/active-assistant-provider-preference.js preview <entry-id> --result passed --json
 ```
 
 Selecting and delivering with a real, paid provider is a private owner-side

@@ -2,55 +2,169 @@
 
 const crypto = require('node:crypto');
 
-// This is a provider-neutral, data-driven public contract. It describes a
-// catalog of possible provider choices, an explicit preference/proposal flow,
-// and a generation-bound preview outcome. It never reads credentials,
-// resolves a host executable, calls a provider, authenticates a profile, or
-// admits a paid choice on its own authority. A private host owner supplies
-// the actual authenticated, admitted catalog entries.
-const CATALOG_ENTRY_SCHEMA_VERSION = 'jarvos-provider-catalog-entry/v1';
-const CATALOG_SCHEMA_VERSION = 'jarvos-provider-catalog/v1';
-const PREFERENCE_SCHEMA_VERSION = 'jarvos-provider-preference/v1';
-const PROPOSAL_SCHEMA_VERSION = 'jarvos-provider-proposal/v1';
-const STATUS_SCHEMA_VERSION = 'jarvos-provider-status/v1';
+// U1 is deliberately a portable contract.  It can describe an authenticated
+// host profile, but it never reads credentials, resolves an executable, calls
+// a provider, or persists the owner-private operator record.
+const PROVIDER_PROFILE_SCHEMA_VERSION = 'jarvos-provider-profile/v1';
+const MANAGED_ADAPTER_DESCRIPTOR_SCHEMA_VERSION = 'jarvos-managed-adapter/v1';
+const PROVIDER_HEALTH_SCHEMA_VERSION = 'jarvos-provider-health/v1';
+const PROVIDER_RUNTIME_VIEW_SCHEMA_VERSION = 'jarvos-provider-runtime-view/v1';
+const PROVIDER_SWITCH_INTENT_SCHEMA_VERSION = 'jarvos-provider-switch-intent/v1';
+const PROVIDER_REGISTRY_SCHEMA_VERSION = 'jarvos-provider-registry/v1';
 
-// Closed, non-secret auth category. It lets a user or agent tell a
-// subscription-backed (or usage-metered) choice apart from a free one
-// without ever exposing profile identity or credentials.
-const PROVIDER_AUTH_CATEGORIES = Object.freeze(['none', 'subscription', 'usage_metered']);
-const PROVIDER_REASONING_EFFORTS = Object.freeze(['low', 'medium', 'high', 'max']);
-const PROVIDER_PREVIEW_RESULTS = Object.freeze(['passed', 'failed']);
-const PROVIDER_STATUS_STATES = Object.freeze(['unselected', 'selected']);
+const PROVIDER_PROFILE_VERSION = PROVIDER_PROFILE_SCHEMA_VERSION;
+const MANAGED_ADAPTER_DESCRIPTOR_VERSION = MANAGED_ADAPTER_DESCRIPTOR_SCHEMA_VERSION;
+const PROVIDER_HEALTH_VERSION = PROVIDER_HEALTH_SCHEMA_VERSION;
+const PROVIDER_RUNTIME_VIEW_VERSION = PROVIDER_RUNTIME_VIEW_SCHEMA_VERSION;
+const PROVIDER_SWITCH_INTENT_VERSION = PROVIDER_SWITCH_INTENT_SCHEMA_VERSION;
 
+const PROVIDER_HEALTH_STATUSES = Object.freeze([
+  'available',
+  'auth_required',
+  'unsupported',
+  'unhealthy',
+  'active',
+]);
+const PROVIDER_PROFILE_STATES = Object.freeze([
+  'unconfigured',
+  'active',
+  'candidate',
+  'activating',
+  'rollback_required',
+]);
+const PROVIDER_QUALIFICATION_STATES = Object.freeze(['absent', 'legacy', 'current']);
+const PROVIDER_AUTH_MODES = Object.freeze(['none', 'subscription', 'api-key']);
+const PROVIDER_PROMPT_TRANSPORTS = Object.freeze([
+  'deterministic-memory',
+  'owner-private-file',
+  'stdin',
+]);
+const PROVIDER_ALLOWED_DATA_CLASSES = Object.freeze([
+  'project_context',
+  'source_excerpt',
+  'decision_context',
+]);
+const PROVIDER_TOOL_POLICY_MODES = Object.freeze(['deny-all']);
+const PROVIDER_SUPPORT_STATES = Object.freeze(['supported', 'unsupported']);
+const PROVIDER_REASON_CODES = Object.freeze([
+  'active',
+  'auth_missing',
+  'capability_proof_pending',
+  'capability_unsupported',
+  'executable_missing',
+  'provider_unhealthy',
+  'ready',
+]);
+
+const SHA256 = /^[a-f0-9]{64}$/i;
 const SAFE_IDENTIFIER = /^[a-z0-9][a-z0-9._-]*$/i;
+const SAFE_SCHEMA_IDENTIFIER = /^[a-z0-9][a-z0-9._/-]*$/i;
 const GENERATION_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
+const ISO_TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/;
 
-const CATALOG_ENTRY_FIELDS = new Set([
+const PROFILE_FIELDS = new Set([
   'schemaVersion',
-  'entryId',
+  'profileId',
   'provider',
   'model',
-  'authCategory',
-  'reasoningEfforts',
-  'defaultReasoningEffort',
+  'adapterDistribution',
+  'authMode',
+  'promptTransport',
+  'toolPolicy',
+  'egressPolicy',
+  'qualificationState',
+  'state',
+  'runtimeTuple',
 ]);
-const CATALOG_FIELDS = new Set(['schemaVersion', 'entries']);
-const PREFERENCE_FIELDS = new Set(['schemaVersion', 'entryId', 'generation', 'lastPreview']);
-const PREVIEW_RECORD_FIELDS = new Set(['entryId', 'generation', 'result']);
-const PROPOSAL_FIELDS = new Set(['schemaVersion', 'proposalId', 'entryId', 'expectedGeneration']);
-const STATUS_FIELDS = new Set(['schemaVersion', 'generation', 'state', 'selected', 'lastPreview']);
-const STATUS_SELECTED_FIELDS = new Set(['entryId', 'provider', 'model', 'authCategory', 'reasoningEffort']);
+const ADAPTER_FIELDS = new Set([
+  'schemaVersion',
+  'profileId',
+  'adapterId',
+  'provider',
+  'displayName',
+  'distribution',
+  'capabilityVersion',
+  'models',
+  'authModes',
+  'promptTransports',
+  'toolPolicy',
+  'egressPolicy',
+  'support',
+  'reasonCode',
+  'deterministic',
+  'portable',
+]);
+const DISTRIBUTION_FIELDS = new Set(['name', 'version', 'revision']);
+const PROFILE_ADAPTER_FIELDS = new Set(['id', 'version', 'capabilityVersion', 'revision']);
+const TRANSPORT_FIELDS = new Set(['mode', 'version']);
+const TOOL_POLICY_FIELDS = new Set(['mode', 'version']);
+const EGRESS_FIELDS = new Set([
+  'digest',
+  'allowedDataClasses',
+  'minimizationRevision',
+  'disclosureRevision',
+  'byteBudget',
+  'ownerAcceptance',
+]);
+const DESCRIPTOR_EGRESS_FIELDS = new Set([
+  'digest',
+  'allowedDataClasses',
+  'minimizationRevision',
+  'disclosureRevision',
+  'byteBudget',
+]);
+const BYTE_BUDGET_FIELDS = new Set(['maxBytes', 'revision']);
+const RUNTIME_TUPLE_FIELDS = new Set(['tupleDigest', 'generation']);
+const HEALTH_FIELDS = new Set([
+  'schemaVersion',
+  'profileId',
+  'status',
+  'reasonCode',
+  'observedAt',
+  'descriptorVersion',
+  'generation',
+  'executableDigest',
+  'tupleDigest',
+  'policyDigest',
+]);
+const VIEW_FIELDS = new Set([
+  'schemaVersion',
+  'source',
+  'generation',
+  'state',
+  'readOnly',
+  'activeProfile',
+  'candidateProfile',
+  'health',
+  'qualification',
+  'rollback',
+]);
+const VIEW_REFERENCE_FIELDS = new Set(['state', 'reference']);
+const VIEW_ROLLBACK_FIELDS = new Set(['tupleDigest', 'generation']);
+const INTENT_FIELDS = new Set([
+  'schemaVersion',
+  'intentId',
+  'action',
+  'candidate',
+  'expectedGeneration',
+]);
+const INTENT_CANDIDATE_FIELDS = new Set(['profileId', 'tupleDigest']);
 
-const FORBIDDEN_FIELD = /(?:authorization|credential|secret|token|password|private(?:key|path)?|signature|executable(?:path)?|hostpath|provideroutput|rawoutput|stdout|stderr|argv|environment|capabilitybody|apikey|api_key|accountid|principal)/i;
+const FORBIDDEN_FIELD = /(?:authorization|credential|secret|token|password|private(?:key|path)?|signature|executable(?:path)?|hostpath|provideroutput|rawoutput|stdout|stderr|argv|environment|capabilitybody|apikey|api_key)/i;
 
 function isObject(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
-function isSafeString(value, { identifier = false } = {}) {
+function isSha256(value) {
+  return typeof value === 'string' && SHA256.test(value);
+}
+
+function isSafeString(value, { identifier = false, schemaIdentifier = false } = {}) {
   if (typeof value !== 'string' || value.length === 0 || /[\0\r\n]/.test(value)) return false;
   if (value.includes('..') || value.startsWith('/') || value.startsWith('~') || value.startsWith('\\') || /^file:/i.test(value)) return false;
   if (identifier && !SAFE_IDENTIFIER.test(value)) return false;
+  if (schemaIdentifier && !SAFE_SCHEMA_IDENTIFIER.test(value)) return false;
   return true;
 }
 
@@ -74,8 +188,8 @@ function requireObject(value, path, errors) {
   return true;
 }
 
-function requireSafe(value, path, errors, { identifier = false } = {}) {
-  if (!isSafeString(value, { identifier })) errors.push(`${path} must be a safe non-empty string`);
+function requireSafe(value, path, errors, { identifier = false, schemaIdentifier = false } = {}) {
+  if (!isSafeString(value, { identifier, schemaIdentifier })) errors.push(`${path} must be a safe non-empty string`);
 }
 
 function requireOpaque(value, path, errors) {
@@ -86,101 +200,217 @@ function requireEnum(value, path, values, errors) {
   if (!values.includes(value)) errors.push(`${path} must be one of: ${values.join(', ')}`);
 }
 
-function validatePreviewRecord(value, path, errors) {
+function requireIso(value, path, errors) {
+  if (typeof value !== 'string' || !ISO_TIMESTAMP.test(value) || Number.isNaN(Date.parse(value))) {
+    errors.push(`${path} must be an ISO UTC timestamp`);
+  }
+}
+
+function validateDigest(value, path, errors) {
+  if (!isSha256(value)) errors.push(`${path} must be a SHA-256 digest`);
+}
+
+function validateDistribution(value, path, errors, { profile = false } = {}) {
+  const fields = profile ? PROFILE_ADAPTER_FIELDS : DISTRIBUTION_FIELDS;
   if (!requireObject(value, path, errors)) return;
-  addUnknownAndForbidden(value, PREVIEW_RECORD_FIELDS, path, errors);
-  requireSafe(value.entryId, `${path}.entryId`, errors, { identifier: true });
+  addUnknownAndForbidden(value, fields, path, errors);
+  const idField = profile ? 'id' : 'name';
+  requireSafe(value[idField], `${path}.${idField}`, errors);
+  requireSafe(value.version, `${path}.version`, errors);
+  if (profile) requireSafe(value.capabilityVersion, `${path}.capabilityVersion`, errors, { schemaIdentifier: true });
+  if (value.revision !== undefined) validateDigest(value.revision, `${path}.revision`, errors);
+}
+
+function validateTransport(value, path, errors) {
+  if (!requireObject(value, path, errors)) return;
+  addUnknownAndForbidden(value, TRANSPORT_FIELDS, path, errors);
+  requireEnum(value.mode, `${path}.mode`, PROVIDER_PROMPT_TRANSPORTS, errors);
+  requireSafe(value.version, `${path}.version`, errors, { identifier: true });
+}
+
+function validateToolPolicy(value, path, errors) {
+  if (!requireObject(value, path, errors)) return;
+  addUnknownAndForbidden(value, TOOL_POLICY_FIELDS, path, errors);
+  requireEnum(value.mode, `${path}.mode`, PROVIDER_TOOL_POLICY_MODES, errors);
+  requireSafe(value.version, `${path}.version`, errors, { identifier: true });
+}
+
+function validateDataClasses(value, path, errors) {
+  if (!Array.isArray(value) || value.length === 0) {
+    errors.push(`${path} must be a non-empty array`);
+    return;
+  }
+  if (new Set(value).size !== value.length) errors.push(`${path} must not contain duplicates`);
+  for (const dataClass of value) requireEnum(dataClass, `${path}[]`, PROVIDER_ALLOWED_DATA_CLASSES, errors);
+}
+
+function validateByteBudget(value, path, errors) {
+  if (!requireObject(value, path, errors)) return;
+  addUnknownAndForbidden(value, BYTE_BUDGET_FIELDS, path, errors);
+  if (!Number.isInteger(value.maxBytes) || value.maxBytes < 1 || value.maxBytes > 1_000_000) {
+    errors.push(`${path}.maxBytes must be an integer between 1 and 1000000`);
+  }
+  requireSafe(value.revision, `${path}.revision`, errors, { identifier: true });
+}
+
+function validateEgressPolicy(value, path, errors, { descriptor = false } = {}) {
+  const fields = descriptor ? DESCRIPTOR_EGRESS_FIELDS : EGRESS_FIELDS;
+  if (!requireObject(value, path, errors)) return;
+  addUnknownAndForbidden(value, fields, path, errors);
+  validateDigest(value.digest, `${path}.digest`, errors);
+  validateDataClasses(value.allowedDataClasses, `${path}.allowedDataClasses`, errors);
+  requireSafe(value.minimizationRevision, `${path}.minimizationRevision`, errors, { identifier: true });
+  requireSafe(value.disclosureRevision, `${path}.disclosureRevision`, errors, { identifier: true });
+  if (value.byteBudget !== undefined) validateByteBudget(value.byteBudget, `${path}.byteBudget`, errors);
+  if (!descriptor) requireEnum(value.ownerAcceptance, `${path}.ownerAcceptance`, ['required', 'accepted'], errors);
+}
+
+function validateRuntimeTuple(value, path, errors) {
+  if (!requireObject(value, path, errors)) return;
+  addUnknownAndForbidden(value, RUNTIME_TUPLE_FIELDS, path, errors);
+  validateDigest(value.tupleDigest, `${path}.tupleDigest`, errors);
   requireOpaque(value.generation, `${path}.generation`, errors);
-  requireEnum(value.result, `${path}.result`, PROVIDER_PREVIEW_RESULTS, errors);
 }
 
-function validateProviderCatalogEntry(entry) {
+function validateProviderProfile(profile) {
   const errors = [];
-  if (!requireObject(entry, 'provider catalog entry', errors)) return { ok: false, errors };
-  addUnknownAndForbidden(entry, CATALOG_ENTRY_FIELDS, 'provider catalog entry', errors);
-  if (entry.schemaVersion !== CATALOG_ENTRY_SCHEMA_VERSION) errors.push(`provider catalog entry.schemaVersion must be ${CATALOG_ENTRY_SCHEMA_VERSION}`);
-  requireSafe(entry.entryId, 'provider catalog entry.entryId', errors, { identifier: true });
-  requireSafe(entry.provider, 'provider catalog entry.provider', errors, { identifier: true });
-  requireSafe(entry.model, 'provider catalog entry.model', errors);
-  requireEnum(entry.authCategory, 'provider catalog entry.authCategory', PROVIDER_AUTH_CATEGORIES, errors);
-  if (!Array.isArray(entry.reasoningEfforts) || entry.reasoningEfforts.length === 0) {
-    errors.push('provider catalog entry.reasoningEfforts must be a non-empty array');
-  } else {
-    if (new Set(entry.reasoningEfforts).size !== entry.reasoningEfforts.length) errors.push('provider catalog entry.reasoningEfforts must not contain duplicates');
-    entry.reasoningEfforts.forEach((effort, index) => requireEnum(effort, `provider catalog entry.reasoningEfforts[${index}]`, PROVIDER_REASONING_EFFORTS, errors));
-  }
-  requireEnum(entry.defaultReasoningEffort, 'provider catalog entry.defaultReasoningEffort', PROVIDER_REASONING_EFFORTS, errors);
-  if (Array.isArray(entry.reasoningEfforts) && !entry.reasoningEfforts.includes(entry.defaultReasoningEffort)) {
-    errors.push('provider catalog entry.defaultReasoningEffort must be one of provider catalog entry.reasoningEfforts');
-  }
-  return { ok: errors.length === 0, errors };
-}
+  if (!requireObject(profile, 'provider profile', errors)) return { ok: false, errors };
+  addUnknownAndForbidden(profile, PROFILE_FIELDS, 'provider profile', errors);
+  if (profile.schemaVersion !== PROVIDER_PROFILE_SCHEMA_VERSION) errors.push(`provider profile.schemaVersion must be ${PROVIDER_PROFILE_SCHEMA_VERSION}`);
+  requireSafe(profile.profileId, 'provider profile.profileId', errors, { identifier: true });
+  requireSafe(profile.provider, 'provider profile.provider', errors, { identifier: true });
+  requireSafe(profile.model, 'provider profile.model', errors);
+  validateDistribution(profile.adapterDistribution, 'provider profile.adapterDistribution', errors, { profile: true });
+  requireEnum(profile.authMode, 'provider profile.authMode', PROVIDER_AUTH_MODES, errors);
+  validateTransport(profile.promptTransport, 'provider profile.promptTransport', errors);
+  validateToolPolicy(profile.toolPolicy, 'provider profile.toolPolicy', errors);
+  validateEgressPolicy(profile.egressPolicy, 'provider profile.egressPolicy', errors);
+  requireEnum(profile.qualificationState, 'provider profile.qualificationState', PROVIDER_QUALIFICATION_STATES, errors);
+  requireEnum(profile.state, 'provider profile.state', PROVIDER_PROFILE_STATES, errors);
+  if (profile.runtimeTuple !== undefined) validateRuntimeTuple(profile.runtimeTuple, 'provider profile.runtimeTuple', errors);
 
-function validateProviderCatalog(catalog) {
-  const errors = [];
-  if (!requireObject(catalog, 'provider catalog', errors)) return { ok: false, errors };
-  addUnknownAndForbidden(catalog, CATALOG_FIELDS, 'provider catalog', errors);
-  if (catalog.schemaVersion !== CATALOG_SCHEMA_VERSION) errors.push(`provider catalog.schemaVersion must be ${CATALOG_SCHEMA_VERSION}`);
-  if (!Array.isArray(catalog.entries)) {
-    errors.push('provider catalog.entries must be an array');
-    return { ok: false, errors };
-  }
-  catalog.entries.forEach((entry, index) => {
-    const result = validateProviderCatalogEntry(entry);
-    errors.push(...result.errors.map((error) => `provider catalog.entries[${index}]: ${error}`));
-  });
-  if (new Set(catalog.entries.map((entry) => entry?.entryId)).size !== catalog.entries.length) {
-    errors.push('provider catalog.entries must have unique entryId values');
-  }
-  return { ok: errors.length === 0, errors };
-}
-
-function validateProviderPreference(preference) {
-  const errors = [];
-  if (!requireObject(preference, 'provider preference', errors)) return { ok: false, errors };
-  addUnknownAndForbidden(preference, PREFERENCE_FIELDS, 'provider preference', errors);
-  if (preference.schemaVersion !== PREFERENCE_SCHEMA_VERSION) errors.push(`provider preference.schemaVersion must be ${PREFERENCE_SCHEMA_VERSION}`);
-  if (preference.entryId !== null) requireSafe(preference.entryId, 'provider preference.entryId', errors, { identifier: true });
-  requireOpaque(preference.generation, 'provider preference.generation', errors);
-  if (preference.lastPreview !== null && preference.lastPreview !== undefined) {
-    validatePreviewRecord(preference.lastPreview, 'provider preference.lastPreview', errors);
-  }
-  return { ok: errors.length === 0, errors };
-}
-
-function validateProviderProposal(proposal) {
-  const errors = [];
-  if (!requireObject(proposal, 'provider proposal', errors)) return { ok: false, errors };
-  addUnknownAndForbidden(proposal, PROPOSAL_FIELDS, 'provider proposal', errors);
-  if (proposal.schemaVersion !== PROPOSAL_SCHEMA_VERSION) errors.push(`provider proposal.schemaVersion must be ${PROPOSAL_SCHEMA_VERSION}`);
-  requireOpaque(proposal.proposalId, 'provider proposal.proposalId', errors);
-  requireSafe(proposal.entryId, 'provider proposal.entryId', errors, { identifier: true });
-  requireOpaque(proposal.expectedGeneration, 'provider proposal.expectedGeneration', errors);
-  return { ok: errors.length === 0, errors };
-}
-
-function validateProviderSafeStatus(status) {
-  const errors = [];
-  if (!requireObject(status, 'provider safe status', errors)) return { ok: false, errors };
-  addUnknownAndForbidden(status, STATUS_FIELDS, 'provider safe status', errors);
-  if (status.schemaVersion !== STATUS_SCHEMA_VERSION) errors.push(`provider safe status.schemaVersion must be ${STATUS_SCHEMA_VERSION}`);
-  requireOpaque(status.generation, 'provider safe status.generation', errors);
-  requireEnum(status.state, 'provider safe status.state', PROVIDER_STATUS_STATES, errors);
-  if (status.selected !== null) {
-    if (requireObject(status.selected, 'provider safe status.selected', errors)) {
-      addUnknownAndForbidden(status.selected, STATUS_SELECTED_FIELDS, 'provider safe status.selected', errors);
-      requireSafe(status.selected.entryId, 'provider safe status.selected.entryId', errors, { identifier: true });
-      requireSafe(status.selected.provider, 'provider safe status.selected.provider', errors, { identifier: true });
-      requireSafe(status.selected.model, 'provider safe status.selected.model', errors);
-      requireEnum(status.selected.authCategory, 'provider safe status.selected.authCategory', PROVIDER_AUTH_CATEGORIES, errors);
-      requireEnum(status.selected.reasoningEffort, 'provider safe status.selected.reasoningEffort', PROVIDER_REASONING_EFFORTS, errors);
+  if (profile.state === 'active') {
+    if (!['legacy', 'current'].includes(profile.qualificationState)) {
+      errors.push('active provider profile must have qualificationState legacy or current');
     }
+    if (profile.runtimeTuple === undefined) errors.push('active provider profile must bind an exact runtimeTuple');
   }
-  if (status.state === 'selected' && status.selected === null) errors.push('provider safe status.selected is required when state is selected');
-  if (status.state === 'unselected' && status.selected !== null) errors.push('provider safe status.selected must be null when state is unselected');
-  if (status.lastPreview !== null && status.lastPreview !== undefined) {
-    validatePreviewRecord(status.lastPreview, 'provider safe status.lastPreview', errors);
+  if (profile.qualificationState === 'legacy' && profile.state !== 'active') {
+    errors.push('legacy qualificationState is valid only for an active provider profile');
   }
+  if (profile.state === 'unconfigured' && profile.qualificationState !== 'absent') {
+    errors.push('unconfigured provider profile must have qualificationState absent');
+  }
+  if (profile.state === 'active' && profile.egressPolicy.ownerAcceptance !== 'accepted') {
+    errors.push('active provider profile requires accepted egressPolicy');
+  }
+  if (profile.provider === 'grok' && profile.state === 'active' && profile.egressPolicy.byteBudget === undefined) {
+    errors.push('active Grok provider profile requires a versioned egressPolicy.byteBudget');
+  }
+  return { ok: errors.length === 0, errors };
+}
+
+function validateManagedAdapterDescriptor(descriptor) {
+  const errors = [];
+  if (!requireObject(descriptor, 'managed adapter descriptor', errors)) return { ok: false, errors };
+  addUnknownAndForbidden(descriptor, ADAPTER_FIELDS, 'managed adapter descriptor', errors);
+  if (descriptor.schemaVersion !== MANAGED_ADAPTER_DESCRIPTOR_SCHEMA_VERSION) errors.push(`managed adapter descriptor.schemaVersion must be ${MANAGED_ADAPTER_DESCRIPTOR_SCHEMA_VERSION}`);
+  requireSafe(descriptor.profileId, 'managed adapter descriptor.profileId', errors, { identifier: true });
+  requireSafe(descriptor.adapterId, 'managed adapter descriptor.adapterId', errors, { identifier: true });
+  requireSafe(descriptor.provider, 'managed adapter descriptor.provider', errors, { identifier: true });
+  requireSafe(descriptor.displayName, 'managed adapter descriptor.displayName', errors);
+  validateDistribution(descriptor.distribution, 'managed adapter descriptor.distribution', errors);
+  requireSafe(descriptor.capabilityVersion, 'managed adapter descriptor.capabilityVersion', errors, { schemaIdentifier: true });
+  if (!Array.isArray(descriptor.models) || descriptor.models.length === 0) errors.push('managed adapter descriptor.models must be a non-empty array');
+  else descriptor.models.forEach((model, index) => requireSafe(model, `managed adapter descriptor.models[${index}]`, errors));
+  if (!Array.isArray(descriptor.authModes) || descriptor.authModes.length === 0) errors.push('managed adapter descriptor.authModes must be a non-empty array');
+  else descriptor.authModes.forEach((mode) => requireEnum(mode, 'managed adapter descriptor.authModes[]', PROVIDER_AUTH_MODES, errors));
+  if (!Array.isArray(descriptor.promptTransports) || descriptor.promptTransports.length === 0) errors.push('managed adapter descriptor.promptTransports must be a non-empty array');
+  else descriptor.promptTransports.forEach((mode) => requireEnum(mode, 'managed adapter descriptor.promptTransports[]', PROVIDER_PROMPT_TRANSPORTS, errors));
+  validateToolPolicy(descriptor.toolPolicy, 'managed adapter descriptor.toolPolicy', errors);
+  validateEgressPolicy(descriptor.egressPolicy, 'managed adapter descriptor.egressPolicy', errors, { descriptor: true });
+  if (descriptor.provider === 'grok' && descriptor.egressPolicy?.byteBudget === undefined) {
+    errors.push('Grok managed adapter descriptor requires a versioned egressPolicy.byteBudget');
+  }
+  requireEnum(descriptor.support, 'managed adapter descriptor.support', PROVIDER_SUPPORT_STATES, errors);
+  if (descriptor.support === 'unsupported') requireEnum(descriptor.reasonCode, 'managed adapter descriptor.reasonCode', PROVIDER_REASON_CODES, errors);
+  else if (descriptor.reasonCode !== undefined) requireEnum(descriptor.reasonCode, 'managed adapter descriptor.reasonCode', PROVIDER_REASON_CODES, errors);
+  if (typeof descriptor.deterministic !== 'boolean') errors.push('managed adapter descriptor.deterministic must be boolean');
+  if (descriptor.portable !== true) errors.push('managed adapter descriptor.portable must be true');
+  return { ok: errors.length === 0, errors };
+}
+
+function validateProviderHealth(health) {
+  const errors = [];
+  if (!requireObject(health, 'provider health', errors)) return { ok: false, errors };
+  addUnknownAndForbidden(health, HEALTH_FIELDS, 'provider health', errors);
+  if (health.schemaVersion !== PROVIDER_HEALTH_SCHEMA_VERSION) errors.push(`provider health.schemaVersion must be ${PROVIDER_HEALTH_SCHEMA_VERSION}`);
+  if (health.profileId !== undefined) requireSafe(health.profileId, 'provider health.profileId', errors, { identifier: true });
+  requireEnum(health.status, 'provider health.status', PROVIDER_HEALTH_STATUSES, errors);
+  requireEnum(health.reasonCode, 'provider health.reasonCode', PROVIDER_REASON_CODES, errors);
+  if (health.observedAt !== undefined) requireIso(health.observedAt, 'provider health.observedAt', errors);
+  if (health.descriptorVersion !== undefined) requireSafe(health.descriptorVersion, 'provider health.descriptorVersion', errors, { schemaIdentifier: true });
+  if (health.generation !== undefined) requireOpaque(health.generation, 'provider health.generation', errors);
+  if (health.executableDigest !== undefined) validateDigest(health.executableDigest, 'provider health.executableDigest', errors);
+  if (health.tupleDigest !== undefined) validateDigest(health.tupleDigest, 'provider health.tupleDigest', errors);
+  if (health.policyDigest !== undefined) validateDigest(health.policyDigest, 'provider health.policyDigest', errors);
+  return { ok: errors.length === 0, errors };
+}
+
+function validateProviderRuntimeView(view) {
+  const errors = [];
+  if (!requireObject(view, 'provider runtime view', errors)) return { ok: false, errors };
+  addUnknownAndForbidden(view, VIEW_FIELDS, 'provider runtime view', errors);
+  for (const field of ['schemaVersion', 'source', 'generation', 'state', 'readOnly', 'activeProfile', 'candidateProfile', 'health', 'qualification', 'rollback']) {
+    if (!Object.hasOwn(view, field)) errors.push(`provider runtime view.${field} is required`);
+  }
+  if (view.schemaVersion !== PROVIDER_RUNTIME_VIEW_SCHEMA_VERSION) errors.push(`provider runtime view.schemaVersion must be ${PROVIDER_RUNTIME_VIEW_SCHEMA_VERSION}`);
+  if (view.source !== 'runtime-rendered') errors.push('provider runtime view.source must be runtime-rendered');
+  requireOpaque(view.generation, 'provider runtime view.generation', errors);
+  requireEnum(view.state, 'provider runtime view.state', PROVIDER_PROFILE_STATES, errors);
+  if (view.readOnly !== true) errors.push('provider runtime view.readOnly must be true');
+  if (view.activeProfile !== null && view.activeProfile !== undefined) {
+    const profileResult = validateProviderProfile(view.activeProfile);
+    errors.push(...profileResult.errors.map((error) => `activeProfile: ${error}`));
+    if (view.state === 'active' && view.activeProfile.state !== 'active') errors.push('activeProfile.state must be active for an active view');
+  }
+  if (view.candidateProfile !== null && view.candidateProfile !== undefined) {
+    const profileResult = validateProviderProfile(view.candidateProfile);
+    errors.push(...profileResult.errors.map((error) => `candidateProfile: ${error}`));
+  }
+  if (view.health !== null && view.health !== undefined) {
+    const healthResult = validateProviderHealth(view.health);
+    errors.push(...healthResult.errors.map((error) => `health: ${error}`));
+  }
+  if (view.qualification !== null && view.qualification !== undefined) {
+    if (!requireObject(view.qualification, 'provider runtime view.qualification', errors)) return { ok: false, errors };
+    addUnknownAndForbidden(view.qualification, VIEW_REFERENCE_FIELDS, 'provider runtime view.qualification', errors);
+    requireEnum(view.qualification.state, 'provider runtime view.qualification.state', PROVIDER_QUALIFICATION_STATES, errors);
+    if (view.qualification.reference !== undefined) validateDigest(view.qualification.reference, 'provider runtime view.qualification.reference', errors);
+  }
+  if (view.rollback !== null && view.rollback !== undefined) {
+    if (!requireObject(view.rollback, 'provider runtime view.rollback', errors)) return { ok: false, errors };
+    addUnknownAndForbidden(view.rollback, VIEW_ROLLBACK_FIELDS, 'provider runtime view.rollback', errors);
+    validateDigest(view.rollback.tupleDigest, 'provider runtime view.rollback.tupleDigest', errors);
+    requireOpaque(view.rollback.generation, 'provider runtime view.rollback.generation', errors);
+  }
+  if (view.state === 'unconfigured' && view.activeProfile !== null) errors.push('unconfigured provider runtime view cannot expose an active profile');
+  if (view.state === 'active' && !view.activeProfile) errors.push('active provider runtime view must expose its public active profile');
+  return { ok: errors.length === 0, errors };
+}
+
+function validateProviderSwitchIntent(intent) {
+  const errors = [];
+  if (!requireObject(intent, 'provider switch intent', errors)) return { ok: false, errors };
+  addUnknownAndForbidden(intent, INTENT_FIELDS, 'provider switch intent', errors);
+  if (intent.schemaVersion !== PROVIDER_SWITCH_INTENT_SCHEMA_VERSION) errors.push(`provider switch intent.schemaVersion must be ${PROVIDER_SWITCH_INTENT_SCHEMA_VERSION}`);
+  requireOpaque(intent.intentId, 'provider switch intent.intentId', errors);
+  if (intent.action !== 'propose-switch') errors.push('provider switch intent.action must be propose-switch');
+  if (!requireObject(intent.candidate, 'provider switch intent.candidate', errors)) return { ok: false, errors };
+  addUnknownAndForbidden(intent.candidate, INTENT_CANDIDATE_FIELDS, 'provider switch intent.candidate', errors);
+  requireSafe(intent.candidate.profileId, 'provider switch intent.candidate.profileId', errors, { identifier: true });
+  validateDigest(intent.candidate.tupleDigest, 'provider switch intent.candidate.tupleDigest', errors);
+  requireOpaque(intent.expectedGeneration, 'provider switch intent.expectedGeneration', errors);
   return { ok: errors.length === 0, errors };
 }
 
@@ -196,10 +426,492 @@ function canonicalDigest(value) {
   return crypto.createHash('sha256').update(canonicalJson(value)).digest('hex');
 }
 
+function createProviderProfile(input = {}) {
+  return {
+    schemaVersion: PROVIDER_PROFILE_SCHEMA_VERSION,
+    state: 'unconfigured',
+    qualificationState: 'absent',
+    ...input,
+  };
+}
+
+function descriptorPolicyDigest(dataClasses = PROVIDER_ALLOWED_DATA_CLASSES, byteBudget) {
+  return canonicalDigest({
+    allowedDataClasses: [...dataClasses].sort(),
+    minimizationRevision: 'v1',
+    disclosureRevision: 'v1',
+    ...(byteBudget === undefined ? {} : { byteBudget }),
+  });
+}
+
 function deepFreeze(value) {
   if (!isObject(value) && !Array.isArray(value)) return value;
   for (const child of Object.values(value)) deepFreeze(child);
   return Object.freeze(value);
+}
+
+const PORTABLE_CLAUDE_ADAPTER_DESCRIPTOR = deepFreeze({
+  schemaVersion: MANAGED_ADAPTER_DESCRIPTOR_SCHEMA_VERSION,
+  profileId: 'claude-subscription',
+  adapterId: 'jarvos-claude-cli',
+  provider: 'claude',
+  displayName: 'Claude CLI subscription',
+  distribution: {
+    name: 'claude-cli',
+    version: 'portable-v1',
+  },
+  capabilityVersion: 'jarvos-claude-cli-capability/v1',
+  models: ['claude-sonnet-5'],
+  authModes: ['subscription'],
+  promptTransports: ['stdin'],
+  toolPolicy: { mode: 'deny-all', version: 'v1' },
+  egressPolicy: {
+    digest: descriptorPolicyDigest(['source_excerpt', 'project_context']),
+    allowedDataClasses: ['source_excerpt', 'project_context'],
+    minimizationRevision: 'v1',
+    disclosureRevision: 'v1',
+  },
+  support: 'supported',
+  deterministic: false,
+  portable: true,
+});
+
+const DETERMINISTIC_ADAPTER_DESCRIPTOR = deepFreeze({
+  schemaVersion: MANAGED_ADAPTER_DESCRIPTOR_SCHEMA_VERSION,
+  profileId: 'deterministic-fixture',
+  adapterId: 'jarvos-deterministic',
+  provider: 'deterministic',
+  displayName: 'Deterministic fixture adapter',
+  distribution: {
+    name: 'jarvos-runtime-kit',
+    version: 'portable-v1',
+  },
+  capabilityVersion: 'jarvos-deterministic-capability/v1',
+  models: ['deterministic-v1'],
+  authModes: ['none'],
+  promptTransports: ['deterministic-memory'],
+  toolPolicy: { mode: 'deny-all', version: 'v1' },
+  egressPolicy: {
+    digest: descriptorPolicyDigest(['source_excerpt', 'project_context']),
+    allowedDataClasses: ['source_excerpt', 'project_context'],
+    minimizationRevision: 'v1',
+    disclosureRevision: 'v1',
+  },
+  support: 'supported',
+  deterministic: true,
+  portable: true,
+});
+
+const GROK_SUBSCRIPTION_ADAPTER_DESCRIPTOR = deepFreeze({
+  schemaVersion: MANAGED_ADAPTER_DESCRIPTOR_SCHEMA_VERSION,
+  profileId: 'grok-subscription',
+  adapterId: 'jarvos-grok-cli',
+  provider: 'grok',
+  displayName: 'Grok CLI subscription',
+  distribution: {
+    name: 'grok-cli',
+    version: '1.0.3',
+    revision: 'b5eef73b94fdc72b8c67218f19abe2b2728db38f1f0e66903de8fb931948bd26',
+  },
+  capabilityVersion: 'jarvos-grok-cli-capability/v1',
+  models: ['grok-4.5'],
+  authModes: ['subscription'],
+  promptTransports: ['owner-private-file'],
+  toolPolicy: { mode: 'deny-all', version: 'v1' },
+  egressPolicy: {
+    digest: descriptorPolicyDigest(['source_excerpt', 'project_context'], { maxBytes: 65_536, revision: 'v1' }),
+    allowedDataClasses: ['source_excerpt', 'project_context'],
+    minimizationRevision: 'v1',
+    disclosureRevision: 'v1',
+    byteBudget: { maxBytes: 65_536, revision: 'v1' },
+  },
+  support: 'supported',
+  deterministic: false,
+  portable: true,
+});
+
+function getBuiltInAdapterDescriptors() {
+  return {
+    claude: PORTABLE_CLAUDE_ADAPTER_DESCRIPTOR,
+    deterministic: DETERMINISTIC_ADAPTER_DESCRIPTOR,
+    grok: GROK_SUBSCRIPTION_ADAPTER_DESCRIPTOR,
+  };
+}
+
+function profileFromDescriptor(descriptor, overrides = {}) {
+  const validation = validateManagedAdapterDescriptor(descriptor);
+  if (!validation.ok) throw providerError('invalid_adapter_descriptor', validation.errors.join('; '));
+  const dataClasses = [...descriptor.egressPolicy.allowedDataClasses];
+  return createProviderProfile({
+    profileId: descriptor.profileId,
+    provider: descriptor.provider,
+    model: descriptor.models[0],
+    adapterDistribution: {
+      id: descriptor.adapterId,
+      version: descriptor.distribution.version,
+      capabilityVersion: descriptor.capabilityVersion,
+      ...(descriptor.distribution.revision === undefined ? {} : { revision: descriptor.distribution.revision }),
+    },
+    authMode: descriptor.authModes[0],
+    promptTransport: { mode: descriptor.promptTransports[0], version: 'v1' },
+    toolPolicy: { ...descriptor.toolPolicy },
+    egressPolicy: {
+      digest: descriptor.egressPolicy.digest,
+      allowedDataClasses: dataClasses,
+      minimizationRevision: descriptor.egressPolicy.minimizationRevision,
+      disclosureRevision: descriptor.egressPolicy.disclosureRevision,
+      ...(descriptor.egressPolicy.byteBudget === undefined ? {} : {
+        byteBudget: { ...descriptor.egressPolicy.byteBudget },
+      }),
+      ownerAcceptance: 'required',
+    },
+    ...overrides,
+  });
+}
+
+function createProviderRegistry({ descriptors, profiles } = {}) {
+  const sourceDescriptors = descriptors || Object.values(getBuiltInAdapterDescriptors());
+  const checkedDescriptors = sourceDescriptors.map((descriptor) => {
+    const result = validateManagedAdapterDescriptor(descriptor);
+    if (!result.ok) throw providerError('invalid_adapter_descriptor', result.errors.join('; '));
+    return descriptor;
+  });
+  const byId = new Map(checkedDescriptors.map((descriptor) => [descriptor.profileId, descriptor]));
+  if (byId.size !== checkedDescriptors.length) {
+    throw providerError('duplicate_adapter_profile', 'managed adapter profileId values must be unique');
+  }
+  const sourceProfiles = profiles || checkedDescriptors.map((descriptor) => profileFromDescriptor(descriptor));
+  const checkedProfiles = sourceProfiles.map((candidate) => {
+    const result = validateProviderProfile(candidate);
+    if (!result.ok) throw providerError('invalid_provider_profile', result.errors.join('; '));
+    if (!byId.has(candidate.profileId)) throw providerError('profile_descriptor_missing', `No registered descriptor for ${candidate.profileId}`);
+    return candidate;
+  });
+  if (new Set(checkedProfiles.map((candidate) => candidate.profileId)).size !== checkedProfiles.length) {
+    throw providerError('duplicate_provider_profile', 'provider profileId values must be unique');
+  }
+  return {
+    schemaVersion: PROVIDER_REGISTRY_SCHEMA_VERSION,
+    descriptors: Object.freeze([...checkedDescriptors]),
+    profiles: Object.freeze([...checkedProfiles]),
+    activeProfileId: checkedProfiles.find((candidate) => candidate.state === 'active')?.profileId || null,
+    defaultProfileId: null,
+  };
+}
+
+function registerManagedAdapter(registryOrOptions, maybeDescriptor) {
+  const registry = registryOrOptions?.registry || registryOrOptions;
+  const descriptor = registryOrOptions?.descriptor || maybeDescriptor;
+  if (!registry || !descriptor) throw providerError('adapter_registration_invalid', 'registry and descriptor are required');
+  const validation = validateManagedAdapterDescriptor(descriptor);
+  if (!validation.ok) throw providerError('invalid_adapter_descriptor', validation.errors.join('; '));
+  const descriptors = registry.descriptors.filter((item) => item.profileId !== descriptor.profileId).concat(descriptor);
+  const profiles = registry.profiles.some((item) => item.profileId === descriptor.profileId)
+    ? registry.profiles
+    : registry.profiles.concat(profileFromDescriptor(descriptor));
+  return createProviderRegistry({ descriptors, profiles });
+}
+
+function registerProviderProfile(registry, profile) {
+  const validation = validateProviderProfile(profile);
+  if (!validation.ok) throw providerError('invalid_provider_profile', validation.errors.join('; '));
+  const descriptors = registry.descriptors;
+  if (!descriptors.some((descriptor) => descriptor.profileId === profile.profileId)) {
+    throw providerError('profile_descriptor_missing', `No registered descriptor for ${profile.profileId}`);
+  }
+  const profiles = registry.profiles.filter((item) => item.profileId !== profile.profileId).concat(profile);
+  return createProviderRegistry({ descriptors, profiles });
+}
+
+function createFreshProviderView({ generation = 'fresh-generation' } = {}) {
+  const view = {
+    schemaVersion: PROVIDER_RUNTIME_VIEW_SCHEMA_VERSION,
+    source: 'runtime-rendered',
+    generation,
+    state: 'unconfigured',
+    readOnly: true,
+    activeProfile: null,
+    candidateProfile: null,
+    health: null,
+    qualification: null,
+    rollback: null,
+  };
+  const validation = validateProviderRuntimeView(view);
+  if (!validation.ok) throw providerError('invalid_runtime_view', validation.errors.join('; '));
+  return view;
+}
+
+function publicProfile(profile, { state } = {}) {
+  if (!profile) return null;
+  const output = {
+    schemaVersion: profile.schemaVersion,
+    profileId: profile.profileId,
+    provider: profile.provider,
+    model: profile.model,
+    adapterDistribution: { ...profile.adapterDistribution },
+    authMode: profile.authMode,
+    promptTransport: { ...profile.promptTransport },
+    toolPolicy: { ...profile.toolPolicy },
+    egressPolicy: {
+      digest: profile.egressPolicy.digest,
+      allowedDataClasses: [...profile.egressPolicy.allowedDataClasses],
+      minimizationRevision: profile.egressPolicy.minimizationRevision,
+      disclosureRevision: profile.egressPolicy.disclosureRevision,
+      ...(profile.egressPolicy.byteBudget === undefined ? {} : {
+        byteBudget: { ...profile.egressPolicy.byteBudget },
+      }),
+      ownerAcceptance: profile.egressPolicy.ownerAcceptance,
+    },
+    qualificationState: profile.qualificationState,
+    state: state || profile.state,
+  };
+  if (profile.runtimeTuple) output.runtimeTuple = { ...profile.runtimeTuple };
+  return output;
+}
+
+function renderProviderReadView({ generation = 'fresh-generation', operatorState = {} } = {}) {
+  if (!isOpaque(generation)) throw providerError('invalid_generation', 'generation must be opaque');
+  const state = operatorState.state || 'unconfigured';
+  if (!PROVIDER_PROFILE_STATES.includes(state)) throw providerError('invalid_runtime_state', `state must be one of: ${PROVIDER_PROFILE_STATES.join(', ')}`);
+  const activeProfile = operatorState.activeProfile || null;
+  const candidateProfile = operatorState.candidateProfile || null;
+  for (const [label, candidate] of [['activeProfile', activeProfile], ['candidateProfile', candidateProfile]]) {
+    if (!candidate) continue;
+    const result = validateProviderProfile(candidate);
+    if (!result.ok) throw providerError('invalid_provider_profile', `${label}: ${result.errors.join('; ')}`);
+  }
+  const publicActive = publicProfile(activeProfile, { state: state === 'active' ? 'active' : activeProfile?.state });
+  const publicCandidate = publicProfile(candidateProfile, { state: state === 'candidate' ? 'candidate' : candidateProfile?.state });
+  const qualification = publicActive
+    ? { state: publicActive.qualificationState, reference: publicActive.runtimeTuple?.tupleDigest }
+    : null;
+  const health = operatorState.health || null;
+  if (health) {
+    const result = validateProviderHealth(health);
+    if (!result.ok) throw providerError('invalid_provider_health', result.errors.join('; '));
+  }
+  const rollbackPoint = operatorState.rollbackPoint || operatorState.rollback || null;
+  const rollback = rollbackPoint
+    ? { tupleDigest: rollbackPoint.tupleDigest, generation: rollbackPoint.generation }
+    : null;
+  const view = {
+    schemaVersion: PROVIDER_RUNTIME_VIEW_SCHEMA_VERSION,
+    source: 'runtime-rendered',
+    generation,
+    state,
+    readOnly: true,
+    activeProfile: publicActive,
+    candidateProfile: publicCandidate,
+    health,
+    qualification,
+    rollback,
+  };
+  const validation = validateProviderRuntimeView(view);
+  if (!validation.ok) throw providerError('invalid_runtime_view', validation.errors.join('; '));
+  return view;
+}
+
+function isProviderViewPreparationEligible(view, { operatorGeneration, selectedTupleDigest } = {}) {
+  if (!validateProviderRuntimeView(view).ok) return false;
+  if (!isOpaque(operatorGeneration) || !isSha256(selectedTupleDigest)) return false;
+  if (view.readOnly !== true || view.state !== 'active' || view.generation !== operatorGeneration) return false;
+  const profile = view.activeProfile;
+  if (!profile || !profile.runtimeTuple || !['legacy', 'current'].includes(profile.qualificationState)) return false;
+  if (profile.runtimeTuple.tupleDigest.toLowerCase() !== selectedTupleDigest.toLowerCase()
+    || profile.runtimeTuple.generation !== operatorGeneration) return false;
+
+  // Grok support is portable, but host readiness remains bound to a redacted
+  // capability observation. The private receipt that produces this health
+  // record belongs to the host adapter (U2), not this public package.
+  if (profile.provider === 'grok') {
+    const health = view.health;
+    if (profile.egressPolicy.ownerAcceptance !== 'accepted' || !profile.egressPolicy.byteBudget) return false;
+    if (!health
+      || health.profileId !== profile.profileId
+      || health.status !== 'active'
+      || health.reasonCode !== 'active'
+      || health.descriptorVersion !== profile.adapterDistribution.capabilityVersion
+      || health.generation !== operatorGeneration
+      || !isSha256(profile.adapterDistribution.revision)
+      || typeof health.executableDigest !== 'string'
+      || health.executableDigest.toLowerCase() !== profile.adapterDistribution.revision.toLowerCase()
+      || typeof health.tupleDigest !== 'string'
+      || health.tupleDigest.toLowerCase() !== selectedTupleDigest.toLowerCase()
+      || typeof health.policyDigest !== 'string'
+      || health.policyDigest.toLowerCase() !== profile.egressPolicy.digest.toLowerCase()) return false;
+  }
+  return true;
+}
+
+function canPrepareProviderView(view, options = {}) {
+  return isProviderViewPreparationEligible(view, options);
+}
+
+function canDeliverProviderView() {
+  // Delivery is a private operator concern. A public projection can never
+  // authorize a sender, even when it is generation-current and active.
+  return false;
+}
+
+function redactedProviderHealth({
+  profileId,
+  status,
+  reasonCode,
+  observedAt,
+  descriptorVersion,
+  generation,
+  executableDigest,
+  tupleDigest,
+  policyDigest,
+} = {}) {
+  const health = {
+    schemaVersion: PROVIDER_HEALTH_SCHEMA_VERSION,
+    ...(profileId === undefined ? {} : { profileId }),
+    status,
+    reasonCode,
+    ...(observedAt === undefined ? {} : { observedAt }),
+    ...(descriptorVersion === undefined ? {} : { descriptorVersion }),
+    ...(generation === undefined ? {} : { generation }),
+    ...(executableDigest === undefined ? {} : { executableDigest }),
+    ...(tupleDigest === undefined ? {} : { tupleDigest }),
+    ...(policyDigest === undefined ? {} : { policyDigest }),
+  };
+  const validation = validateProviderHealth(health);
+  if (!validation.ok) throw providerError('invalid_provider_health', validation.errors.join('; '));
+  return health;
+}
+
+function classifyProviderHealth({ descriptor, evidence = {} } = {}) {
+  const descriptorResult = validateManagedAdapterDescriptor(descriptor);
+  if (!descriptorResult.ok) throw providerError('invalid_adapter_descriptor', descriptorResult.errors.join('; '));
+  let status = 'available';
+  let reasonCode = 'ready';
+  const capability = evidence.capability;
+  const capabilitySupported = capability === 'supported'
+    || capability?.support === 'supported'
+    || capability?.status === 'supported'
+    || capability?.state === 'supported';
+  const capabilityUnsupported = capability === 'unsupported'
+    || capability?.support === 'unsupported'
+    || capability?.status === 'unsupported'
+    || capability?.state === 'unsupported';
+  if (descriptor.support === 'unsupported' || capabilityUnsupported) {
+    status = 'unsupported';
+    reasonCode = descriptor.reasonCode || 'capability_unsupported';
+  } else if (evidence.executable === 'missing') {
+    status = 'unhealthy';
+    reasonCode = 'executable_missing';
+  } else if (evidence.unhealthy === true) {
+    status = 'unhealthy';
+    reasonCode = 'provider_unhealthy';
+  } else if (descriptor.provider === 'grok' && !capabilitySupported) {
+    status = 'unsupported';
+    reasonCode = 'capability_proof_pending';
+  } else if (!descriptor.authModes.includes('none') && evidence.authenticated !== true) {
+    status = 'auth_required';
+    reasonCode = 'auth_missing';
+  } else if (evidence.active === true) {
+    status = 'active';
+    reasonCode = 'active';
+  }
+  return redactedProviderHealth({
+    profileId: descriptor.profileId,
+    status,
+    reasonCode,
+    descriptorVersion: descriptor.capabilityVersion,
+    ...(evidence.generation === undefined ? {} : { generation: evidence.generation }),
+    ...(evidence.executableDigest === undefined ? {} : { executableDigest: evidence.executableDigest }),
+    ...(evidence.tupleDigest === undefined ? {} : { tupleDigest: evidence.tupleDigest }),
+    ...(evidence.policyDigest === undefined ? {} : { policyDigest: evidence.policyDigest }),
+  });
+}
+
+function listProviderProfiles({ registry = createProviderRegistry() } = {}) {
+  const descriptors = new Map(registry.descriptors.map((descriptor) => [descriptor.profileId, descriptor]));
+  const profiles = registry.profiles.map((profile) => {
+    const descriptor = descriptors.get(profile.profileId);
+    const status = profile.state === 'active'
+      ? 'active'
+      : descriptor.support === 'supported'
+        ? 'available'
+        : 'unsupported';
+    return {
+      profileId: profile.profileId,
+      provider: profile.provider,
+      model: profile.model,
+      status,
+      state: profile.state,
+      qualificationState: profile.qualificationState,
+      support: descriptor.support,
+      adapterVersion: descriptor.capabilityVersion,
+    };
+  });
+  return {
+    schemaVersion: PROVIDER_REGISTRY_SCHEMA_VERSION,
+    ok: true,
+    profiles,
+    activeProfileId: registry.activeProfileId || null,
+    defaultProfileId: null,
+  };
+}
+
+function createProviderSwitchIntent({ profileId, tupleDigest, expectedGeneration = 'fresh-generation' } = {}) {
+  const candidate = { profileId, tupleDigest };
+  const intentId = `intent-${canonicalDigest({ action: 'propose-switch', candidate, expectedGeneration }).slice(0, 32)}`;
+  const intent = {
+    schemaVersion: PROVIDER_SWITCH_INTENT_SCHEMA_VERSION,
+    intentId,
+    action: 'propose-switch',
+    candidate,
+    expectedGeneration,
+  };
+  const validation = validateProviderSwitchIntent(intent);
+  if (!validation.ok) throw providerError('invalid_switch_intent', validation.errors.join('; '));
+  return intent;
+}
+
+function createProviderControl({ registry = createProviderRegistry(), view = createFreshProviderView() } = {}) {
+  const viewValidation = validateProviderRuntimeView(view);
+  if (!viewValidation.ok) throw providerError('invalid_runtime_view', viewValidation.errors.join('; '));
+  const descriptors = new Map(registry.descriptors.map((descriptor) => [descriptor.profileId, descriptor]));
+  const profiles = new Set(registry.profiles.map((profile) => profile.profileId));
+  return {
+    list() {
+      return listProviderProfiles({ registry });
+    },
+    status() {
+      return view;
+    },
+    proposeSwitch({ profileId, tupleDigest } = {}) {
+      const descriptor = descriptors.get(profileId);
+      if (!descriptor) return { ok: false, code: 'profile_not_registered', view };
+      if (!profiles.has(profileId)) return { ok: false, code: 'profile_not_registered', view };
+      if (descriptor.support !== 'supported') return { ok: false, code: 'candidate_unsupported', view };
+      const intent = createProviderSwitchIntent({ profileId, tupleDigest, expectedGeneration: view.generation });
+      return { ok: true, intent, view };
+    },
+    authorizeAndRun() {
+      throw providerError('owner_authorization_required', 'provider authorization and activation belong to the local owner surface');
+    },
+    rollback() {
+      throw providerError('owner_authorization_required', 'provider rollback belongs to the local owner surface');
+    },
+  };
+}
+
+function deterministicAdapter() {
+  return Object.freeze({
+    preflight() {
+      return { ok: true, status: 'available', providerCalls: 0 };
+    },
+    invoke(input) {
+      const text = typeof input === 'string' ? input : JSON.stringify(input ?? '');
+      return { ok: true, text: `deterministic:${canonicalDigest(text)}`, providerCalls: 0 };
+    },
+    normalizeReceipt() {
+      return { providerCalls: 0, status: 'passed', model: 'deterministic-v1' };
+    },
+  });
 }
 
 function providerError(code, message) {
@@ -208,232 +920,100 @@ function providerError(code, message) {
   return error;
 }
 
-// The only built-in catalog entry is a deterministic, non-paid fixture. A
-// fresh public installation never hard-codes or advertises a paid Claude,
-// OpenAI, or Grok choice as authenticated or admitted; the private host
-// supplies actual authenticated, admitted entries via createProviderCatalog.
-const DETERMINISTIC_CATALOG_ENTRY = deepFreeze({
-  schemaVersion: CATALOG_ENTRY_SCHEMA_VERSION,
-  entryId: 'deterministic-fixture',
-  provider: 'deterministic',
-  model: 'deterministic-v1',
-  authCategory: 'none',
-  reasoningEfforts: [...PROVIDER_REASONING_EFFORTS],
-  defaultReasoningEffort: 'medium',
-});
-
-function getDefaultProviderCatalogEntries() {
-  return [DETERMINISTIC_CATALOG_ENTRY];
-}
-
-function createProviderCatalog({ entries } = {}) {
-  const sourceEntries = entries || getDefaultProviderCatalogEntries();
-  const checkedEntries = sourceEntries.map((entry) => {
-    const result = validateProviderCatalogEntry(entry);
-    if (!result.ok) throw providerError('invalid_catalog_entry', result.errors.join('; '));
-    return entry;
+function preserveLegacyProviderProfile(profile, runtimeTuple) {
+  const candidate = createProviderProfile({
+    ...profile,
+    state: 'active',
+    qualificationState: 'legacy',
+    runtimeTuple: { ...runtimeTuple },
   });
-  if (new Set(checkedEntries.map((entry) => entry.entryId)).size !== checkedEntries.length) {
-    throw providerError('duplicate_catalog_entry', 'provider catalog entryId values must be unique');
-  }
-  const catalog = deepFreeze({
-    schemaVersion: CATALOG_SCHEMA_VERSION,
-    entries: [...checkedEntries],
+  const validation = validateProviderProfile(candidate);
+  if (!validation.ok) throw providerError('invalid_legacy_profile', validation.errors.join('; '));
+  return candidate;
+}
+
+function providerProfileIdentity(profile) {
+  const validation = validateProviderProfile(profile);
+  if (!validation.ok) throw providerError('invalid_provider_profile', validation.errors.join('; '));
+  return canonicalDigest({
+    profileId: profile.profileId,
+    provider: profile.provider,
+    model: profile.model,
+    adapterDistribution: profile.adapterDistribution,
+    authMode: profile.authMode,
+    promptTransport: profile.promptTransport,
+    toolPolicy: profile.toolPolicy,
+    egressPolicy: profile.egressPolicy,
+    runtimeTuple: profile.runtimeTuple || null,
   });
-  const validation = validateProviderCatalog(catalog);
-  if (!validation.ok) throw providerError('invalid_provider_catalog', validation.errors.join('; '));
-  return catalog;
 }
 
-function findProviderCatalogEntry(catalog, entryId) {
-  return catalog.entries.find((entry) => entry.entryId === entryId) || null;
-}
-
-function createInitialProviderPreference({ generation = 'initial-generation' } = {}) {
-  const preference = {
-    schemaVersion: PREFERENCE_SCHEMA_VERSION,
-    entryId: null,
-    generation,
-    lastPreview: null,
-  };
-  const validation = validateProviderPreference(preference);
-  if (!validation.ok) throw providerError('invalid_provider_preference', validation.errors.join('; '));
-  return preference;
-}
-
-function createProviderProposal({ catalog, entryId, expectedGeneration } = {}) {
-  if (!catalog || !findProviderCatalogEntry(catalog, entryId)) {
-    throw providerError('entry_not_registered', `No catalog entry for ${entryId}`);
-  }
-  const proposalId = `proposal-${canonicalDigest({ entryId, expectedGeneration }).slice(0, 32)}`;
-  const proposal = {
-    schemaVersion: PROPOSAL_SCHEMA_VERSION,
-    proposalId,
-    entryId,
-    expectedGeneration,
-  };
-  const validation = validateProviderProposal(proposal);
-  if (!validation.ok) throw providerError('invalid_provider_proposal', validation.errors.join('; '));
-  return proposal;
-}
-
-// Applies a generation-bound preview outcome to an explicit proposal. A
-// passed preview advances the preference only when the proposal's
-// expectedGeneration exactly matches the incumbent preference generation; it
-// then produces a fresh generation, which makes a stale, replayed proposal
-// conflict rather than silently re-apply. A failed preview never selects or
-// advances the candidate: it preserves the incumbent entryId and generation
-// exactly and only records a bounded lastPreview: failed status.
-function previewProviderProposal({ catalog, preference, proposal, result } = {}) {
-  if (!PROVIDER_PREVIEW_RESULTS.includes(result)) throw providerError('invalid_preview_result', `result must be one of: ${PROVIDER_PREVIEW_RESULTS.join(', ')}`);
-  const preferenceValidation = validateProviderPreference(preference);
-  if (!preferenceValidation.ok) throw providerError('invalid_provider_preference', preferenceValidation.errors.join('; '));
-  const proposalValidation = validateProviderProposal(proposal);
-  if (!proposalValidation.ok) throw providerError('invalid_provider_proposal', proposalValidation.errors.join('; '));
-
-  const entry = findProviderCatalogEntry(catalog, proposal.entryId);
-  if (!entry) return { ok: false, code: 'entry_not_registered', preference };
-  if (proposal.expectedGeneration !== preference.generation) {
-    return { ok: false, code: 'stale_generation', preference };
-  }
-
-  if (result === 'failed') {
-    const next = {
-      ...preference,
-      lastPreview: { entryId: proposal.entryId, generation: preference.generation, result: 'failed' },
-    };
-    const validation = validateProviderPreference(next);
-    if (!validation.ok) throw providerError('invalid_provider_preference', validation.errors.join('; '));
-    return { ok: true, preference: next };
-  }
-
-  const nextGeneration = canonicalDigest({ generation: preference.generation, entryId: proposal.entryId, result: 'passed' });
-  const next = {
-    schemaVersion: PREFERENCE_SCHEMA_VERSION,
-    entryId: proposal.entryId,
-    generation: nextGeneration,
-    lastPreview: { entryId: proposal.entryId, generation: preference.generation, result: 'passed' },
-  };
-  const validation = validateProviderPreference(next);
-  if (!validation.ok) throw providerError('invalid_provider_preference', validation.errors.join('; '));
-  return { ok: true, preference: next };
-}
-
-// Renders the closed, non-secret safe status: enough for a user or agent to
-// tell a subscription-backed (or usage-metered) choice apart from a free
-// one, and to see the last preview outcome, without ever exposing profile
-// identity or credentials.
-function renderProviderSafeStatus({ catalog, preference } = {}) {
-  const preferenceValidation = validateProviderPreference(preference);
-  if (!preferenceValidation.ok) throw providerError('invalid_provider_preference', preferenceValidation.errors.join('; '));
-  const entry = preference.entryId ? findProviderCatalogEntry(catalog, preference.entryId) : null;
-  const status = {
-    schemaVersion: STATUS_SCHEMA_VERSION,
-    generation: preference.generation,
-    state: entry ? 'selected' : 'unselected',
-    selected: entry
-      ? {
-        entryId: entry.entryId,
-        provider: entry.provider,
-        model: entry.model,
-        authCategory: entry.authCategory,
-        reasoningEffort: entry.defaultReasoningEffort,
-      }
-      : null,
-    lastPreview: preference.lastPreview ? { ...preference.lastPreview } : null,
-  };
-  const validation = validateProviderSafeStatus(status);
-  if (!validation.ok) throw providerError('invalid_provider_safe_status', validation.errors.join('; '));
-  return status;
-}
-
-// A provider-neutral, read-only demonstration surface: it lists a catalog,
-// projects safe status, and proposes/previews a switch against an in-memory
-// preference. It never persists, authorizes spend, or delivers a message;
-// that authority belongs to a private owner-side operator.
-function createProviderSelectionControl({
-  catalog = createProviderCatalog(),
-  preference = createInitialProviderPreference(),
-} = {}) {
-  return {
-    catalog() {
-      return catalog;
-    },
-    status() {
-      return renderProviderSafeStatus({ catalog, preference });
-    },
-    propose({ entryId } = {}) {
-      const proposal = createProviderProposal({ catalog, entryId, expectedGeneration: preference.generation });
-      return { ok: true, proposal, status: renderProviderSafeStatus({ catalog, preference }) };
-    },
-    preview({ entryId, result } = {}) {
-      const proposal = createProviderProposal({ catalog, entryId, expectedGeneration: preference.generation });
-      const outcome = previewProviderProposal({ catalog, preference, proposal, result });
-      return {
-        ...outcome,
-        status: renderProviderSafeStatus({ catalog, preference: outcome.preference }),
-      };
-    },
-  };
-}
-
-// Narrow, inert legacy classifier. It never grants rollback authority on its
-// own: it only recognizes a small, exact old public-schema shape and a small,
-// exact set of old provider identifiers, and returns a classification for a
-// private host operator to act on. Anything unrecognized, including a
-// missing or unknown provider, returns null.
-const LEGACY_PROVIDER_PROFILE_SCHEMA_VERSION = 'jarvos-provider-profile/v1';
-const LEGACY_PROVIDER_RUNTIME_VIEW_SCHEMA_VERSION = 'jarvos-provider-runtime-view/v1';
-const LEGACY_RECOGNIZED_PROVIDERS = Object.freeze(['claude', 'grok', 'deterministic']);
-
-function isRecognizedLegacyProvider(provider) {
-  return typeof provider === 'string' && LEGACY_RECOGNIZED_PROVIDERS.includes(provider);
-}
-
-function classifyLegacyProviderRecord(record) {
-  if (!isObject(record)) return null;
-
-  if (record.schemaVersion === LEGACY_PROVIDER_PROFILE_SCHEMA_VERSION) {
-    if (!isRecognizedLegacyProvider(record.provider)) return null;
-    return record.state === 'active' ? 'rollback_only' : 'migration_required';
-  }
-
-  if (record.schemaVersion === LEGACY_PROVIDER_RUNTIME_VIEW_SCHEMA_VERSION) {
-    const provider = isObject(record.activeProfile) ? record.activeProfile.provider : undefined;
-    if (!isRecognizedLegacyProvider(provider)) return null;
-    const isActiveIncumbent = record.state === 'active' && record.activeProfile.state === 'active';
-    return isActiveIncumbent ? 'rollback_only' : 'migration_required';
-  }
-
-  return null;
+function qualificationRequiresFreshMatrix(previousProfile, nextProfile) {
+  return providerProfileIdentity(previousProfile) !== providerProfileIdentity(nextProfile);
 }
 
 module.exports = {
-  CATALOG_ENTRY_SCHEMA_VERSION,
-  CATALOG_SCHEMA_VERSION,
-  PREFERENCE_SCHEMA_VERSION,
-  PROPOSAL_SCHEMA_VERSION,
-  STATUS_SCHEMA_VERSION,
-  PROVIDER_AUTH_CATEGORIES,
-  PROVIDER_REASONING_EFFORTS,
-  PROVIDER_PREVIEW_RESULTS,
-  PROVIDER_STATUS_STATES,
-  DETERMINISTIC_CATALOG_ENTRY,
-  LEGACY_PROVIDER_PROFILE_SCHEMA_VERSION,
-  LEGACY_PROVIDER_RUNTIME_VIEW_SCHEMA_VERSION,
-  LEGACY_RECOGNIZED_PROVIDERS,
-  getDefaultProviderCatalogEntries,
-  createProviderCatalog,
-  findProviderCatalogEntry,
-  validateProviderCatalogEntry,
-  validateProviderCatalog,
-  validateProviderPreference,
-  validateProviderProposal,
-  validateProviderSafeStatus,
-  createInitialProviderPreference,
-  createProviderProposal,
-  previewProviderProposal,
-  renderProviderSafeStatus,
-  createProviderSelectionControl,
-  classifyLegacyProviderRecord,
+  PROVIDER_PROFILE_SCHEMA_VERSION,
+  MANAGED_ADAPTER_DESCRIPTOR_SCHEMA_VERSION,
+  PROVIDER_HEALTH_SCHEMA_VERSION,
+  PROVIDER_RUNTIME_VIEW_SCHEMA_VERSION,
+  PROVIDER_SWITCH_INTENT_SCHEMA_VERSION,
+  PROVIDER_REGISTRY_SCHEMA_VERSION,
+  PROVIDER_PROFILE_VERSION,
+  MANAGED_ADAPTER_DESCRIPTOR_VERSION,
+  PROVIDER_HEALTH_VERSION,
+  PROVIDER_RUNTIME_VIEW_VERSION,
+  PROVIDER_SWITCH_INTENT_VERSION,
+  ACTIVE_ASSISTANT_PROVIDER_VIEW_SCHEMA_VERSION: PROVIDER_RUNTIME_VIEW_SCHEMA_VERSION,
+  PROVIDER_LIFECYCLE_VIEW_SCHEMA_VERSION: PROVIDER_RUNTIME_VIEW_SCHEMA_VERSION,
+  PROVIDER_DISCOVERY_STATUSES: PROVIDER_HEALTH_STATUSES,
+  PROVIDER_HEALTH_STATUSES,
+  PROVIDER_PROFILE_STATES,
+  PROVIDER_QUALIFICATION_STATES,
+  PROVIDER_AUTH_MODES,
+  PROVIDER_PROMPT_TRANSPORTS,
+  PROVIDER_ALLOWED_DATA_CLASSES,
+  PORTABLE_CLAUDE_ADAPTER_DESCRIPTOR,
+  CLAUDE_ADAPTER_DESCRIPTOR: PORTABLE_CLAUDE_ADAPTER_DESCRIPTOR,
+  DETERMINISTIC_ADAPTER_DESCRIPTOR,
+  DETERMINISTIC_PROVIDER_DESCRIPTOR: DETERMINISTIC_ADAPTER_DESCRIPTOR,
+  GROK_SUBSCRIPTION_ADAPTER_DESCRIPTOR,
+  GROK_ADAPTER_DESCRIPTOR: GROK_SUBSCRIPTION_ADAPTER_DESCRIPTOR,
+  deterministicAdapter,
+  createProviderProfile,
+  profileFromDescriptor,
+  validateProviderProfile,
+  validateManagedAdapterDescriptor,
+  validateAdapterDescriptor: validateManagedAdapterDescriptor,
+  validateProviderHealth,
+  validateRedactedProviderHealth: validateProviderHealth,
+  validateProviderRuntimeView,
+  validateProviderReadView: validateProviderRuntimeView,
+  validateProviderLifecycleView: validateProviderRuntimeView,
+  validateLifecycleView: validateProviderRuntimeView,
+  validateProviderSwitchIntent,
+  getBuiltInAdapterDescriptors,
+  createProviderRegistry,
+  createManagedAdapterRegistry: createProviderRegistry,
+  registerManagedAdapter,
+  registerManagedAdapterDescriptor: registerManagedAdapter,
+  registerProviderProfile,
+  createFreshProviderView,
+  createFreshProviderState: createFreshProviderView,
+  renderProviderReadView,
+  renderProviderRuntimeView: renderProviderReadView,
+  renderProviderView: renderProviderReadView,
+  canPrepareProviderView,
+  canDeliverProviderView,
+  isProviderViewPreparationEligible,
+  redactedProviderHealth,
+  classifyProviderHealth,
+  inspectProviderHealth: classifyProviderHealth,
+  listProviderProfiles,
+  createProviderSwitchIntent,
+  createProviderControl,
+  preserveLegacyProviderProfile,
+  migrateLegacyProviderProfile: preserveLegacyProviderProfile,
+  providerProfileIdentity,
+  qualificationRequiresFreshMatrix,
 };
