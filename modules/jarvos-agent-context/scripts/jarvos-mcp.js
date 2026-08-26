@@ -66,14 +66,21 @@ function resolveHostCredential(env = process.env) {
   return null;
 }
 
-function trustedFile(filePath, root = null) {
+// ownerOnly distinguishes two trust policies sharing one ancestry check:
+// service/executable modules must be owner-only (no group/world bits at
+// all), while a config file may be owner-controlled and merely
+// non-group/world-writable, matching projects-context-bootstrap.js's split.
+// Never loosen the default -- callers that load and execute code must pass
+// ownerOnly: true explicitly or accept it as the default.
+function trustedFile(filePath, { root = null, ownerOnly = true } = {}) {
   if (typeof filePath !== 'string' || !path.isAbsolute(filePath)) return null;
   try {
     if (fs.lstatSync(filePath).isSymbolicLink()) return null;
     const real = fs.realpathSync(filePath);
     const stat = fs.statSync(real);
     const uid = typeof process.getuid === 'function' ? process.getuid() : null;
-    if (!stat.isFile() || (uid !== null && stat.uid !== uid) || (stat.mode & 0o077) !== 0) return null;
+    if (!stat.isFile() || (uid !== null && stat.uid !== uid)) return null;
+    if (ownerOnly ? (stat.mode & 0o077) !== 0 : (stat.mode & 0o022) !== 0) return null;
     if (root) {
       const relative = path.relative(root, real);
       if (relative.startsWith('..') || path.isAbsolute(relative)) return null;
@@ -94,7 +101,7 @@ function trustedFile(filePath, root = null) {
 }
 
 function selectedWorkspaceRoot(env = process.env) {
-  const configPath = trustedFile(env.JARVOS_PROJECTS_CONTEXT_CONFIG);
+  const configPath = trustedFile(env.JARVOS_PROJECTS_CONTEXT_CONFIG, { ownerOnly: false });
   if (!configPath) return null;
   try {
     const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
@@ -339,7 +346,7 @@ function loadHostWorkActionService() {
     return { service: null, error: WORK_ACTION_HOST_UNAVAILABLE };
   }
   const selectedRoot = selectedWorkspaceRoot();
-  const trusted = selectedRoot ? trustedFile(modulePath, selectedRoot) : null;
+  const trusted = selectedRoot ? trustedFile(modulePath, { root: selectedRoot, ownerOnly: true }) : null;
   if (!trusted) {
     return { service: null, error: WORK_ACTION_HOST_REFUSED };
   }

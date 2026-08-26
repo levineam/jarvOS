@@ -5,6 +5,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const test = require('node:test');
+const { spawnSync } = require('child_process');
 
 const {
   callTool,
@@ -116,6 +117,88 @@ test('trusted work-action module loads and jarvos_todo_list returns a list shape
   });
 });
 
+test('a trusted 0644 Projects config is accepted for work-action host binding', async () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-todo-config-mode-'));
+  fs.chmodSync(workspace, 0o700);
+  const configPath = path.join(workspace, 'projects.json');
+  const servicePath = path.join(workspace, 'todo-service.js');
+  // The config is owner-controlled and non-group/world-writable, but readable
+  // (0644): trusted ancestry is the integrity boundary, not an owner-only leaf.
+  fs.writeFileSync(configPath, JSON.stringify({ workspaceRoot: workspace }), 'utf8');
+  fs.chmodSync(configPath, 0o644);
+  writeOwnerFile(servicePath, [
+    "'use strict';",
+    'module.exports = {',
+    "  list: async () => ({ contract: 'jarvos.work-action/v1', ok: true, items: [] }),",
+    '};',
+    '',
+  ].join('\n'));
+  await withWorkActionEnv({
+    JARVOS_PROJECTS_CONTEXT_CONFIG: configPath,
+    JARVOS_WORK_ACTION_SERVICE_MODULE: servicePath,
+  }, async () => {
+    const result = await callTool('jarvos_todo_list', {});
+    assert.equal(result.isError, false, result.content?.[0]?.text);
+    assert.ok(loadHostWorkActionService().service);
+  }).finally(() => {
+    delete require.cache[servicePath];
+    fs.rmSync(workspace, { recursive: true, force: true });
+  });
+});
+
+test('a 0644 work-action service module is refused even with a trusted config', async () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-todo-service-mode-'));
+  fs.chmodSync(workspace, 0o700);
+  const configPath = path.join(workspace, 'projects.json');
+  const servicePath = path.join(workspace, 'todo-service.js');
+  writeOwnerFile(configPath, JSON.stringify({ workspaceRoot: workspace }));
+  fs.writeFileSync(servicePath, [
+    "'use strict';",
+    'module.exports = {',
+    "  list: async () => ({ contract: 'jarvos.work-action/v1', ok: true, items: [] }),",
+    '};',
+    '',
+  ].join('\n'), 'utf8');
+  fs.chmodSync(servicePath, 0o644);
+  await withWorkActionEnv({
+    JARVOS_PROJECTS_CONTEXT_CONFIG: configPath,
+    JARVOS_WORK_ACTION_SERVICE_MODULE: servicePath,
+  }, async () => {
+    const result = await callTool('jarvos_todo_list', {});
+    assert.equal(result.isError, true);
+    assert.equal(result.content[0].text, WORK_ACTION_HOST_REFUSED);
+    assert.equal(loadHostWorkActionService().service, null);
+  }).finally(() => {
+    delete require.cache[servicePath];
+    fs.rmSync(workspace, { recursive: true, force: true });
+  });
+});
+
+test('a group/world-writable Projects config is refused even when the work-action module is owner-only', async () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-todo-config-writable-'));
+  fs.chmodSync(workspace, 0o700);
+  const configPath = path.join(workspace, 'projects.json');
+  const servicePath = path.join(workspace, 'todo-service.js');
+  fs.writeFileSync(configPath, JSON.stringify({ workspaceRoot: workspace }), 'utf8');
+  fs.chmodSync(configPath, 0o666);
+  writeOwnerFile(servicePath, [
+    "'use strict';",
+    'module.exports = {',
+    "  list: async () => ({ contract: 'jarvos.work-action/v1', ok: true, items: [] }),",
+    '};',
+    '',
+  ].join('\n'));
+  await withWorkActionEnv({
+    JARVOS_PROJECTS_CONTEXT_CONFIG: configPath,
+    JARVOS_WORK_ACTION_SERVICE_MODULE: servicePath,
+  }, async () => {
+    assert.equal(loadHostWorkActionService().service, null);
+  }).finally(() => {
+    delete require.cache[servicePath];
+    fs.rmSync(workspace, { recursive: true, force: true });
+  });
+});
+
 test('Todo mutation tools stay unavailable and refused the same way reads do, without host binding', async () => {
   await withWorkActionEnv({}, async () => {
     const createResult = await callTool('jarvos_todo_create', { title: 'x', operationId: 'op-mutation-1', canonical: { kind: 'outcome' } });
@@ -206,8 +289,253 @@ test('Claude and Codex setup scripts pass optional work-action env and never req
     assert.doesNotMatch(source, /: "\$\{JARVOS_WORK_ACTION_SERVICE_MODULE:\?/);
     assert.doesNotMatch(source, /: "\$\{JARVOS_PROJECTS_CONTEXT_CONFIG:\?/);
   }
-  assert.match(claude, /claude mcp add --scope user "\$\{MCP_ENV_ARGS\[@\]\}" jarvos -- node/);
-  assert.match(codex, /codex mcp add "\$\{MCP_ENV_ARGS\[@\]\}" jarvos -- node/);
+  assert.match(claude, /claude mcp add --scope user "\$\{MCP_ENV_ARGS\[@\]\}" jarvos -- "\$\{MCP_COMMAND\[@\]\}"/);
+  assert.match(codex, /codex mcp add "\$\{MCP_ENV_ARGS\[@\]\}" jarvos -- "\$\{MCP_COMMAND\[@\]\}"/);
+});
+
+// Records the argv of a fake `codex`/`claude` CLI so setup.sh's real MCP
+// registration call can be inspected without a real installed CLI.
+function writeFakeMcpCli(binPath, recordPath) {
+  fs.writeFileSync(binPath, [
+    '#!/usr/bin/env node',
+    "const fs = require('fs');",
+    'const args = process.argv.slice(2);',
+    `const recordPath = ${JSON.stringify(recordPath)};`,
+    "if (args[0] === 'mcp' && args[1] === 'get') process.exit(1);",
+    "if (args[0] === 'mcp' && args[1] === 'remove') process.exit(0);",
+    "if (args[0] === 'mcp' && args[1] === 'add') { fs.writeFileSync(recordPath, JSON.stringify(args)); process.exit(0); }",
+    'process.exit(0);',
+    '',
+  ].join('\n'), { encoding: 'utf8', mode: 0o755 });
+  fs.chmodSync(binPath, 0o755);
+}
+
+test('Codex and Claude setup register a validated stable entrypoint instead of the immutable install script', () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-mcp-stable-entrypoint-'));
+  try {
+    const bin = path.join(tmp, 'bin');
+    fs.mkdirSync(bin, { recursive: true });
+
+    const entrypointRoot = path.join(tmp, 'entrypoint-root');
+    fs.mkdirSync(entrypointRoot, { recursive: true });
+    fs.chmodSync(entrypointRoot, 0o700);
+    const stableEntrypoint = path.join(entrypointRoot, 'jarvos-mcp-shim');
+    fs.writeFileSync(stableEntrypoint, '#!/usr/bin/env node\n', { encoding: 'utf8', mode: 0o700 });
+    fs.chmodSync(stableEntrypoint, 0o700);
+
+    const baseEnv = { ...process.env, PATH: `${bin}:${process.env.PATH}` };
+    for (const key of [
+      'JARVOS_MANAGED_REPOSITORIES', 'JARVOS_STEWARDSHIP_STABLE_ROOT', 'JARVOS_STEWARDSHIP_ONLY',
+      'JARVOS_MANAGED_HARNESS_ROLLBACK', 'JARVOS_CODEX_PROVIDER_MODE', 'JARVOS_PROFILE',
+      'JARVOS_WORK_ACTION_SERVICE_MODULE', 'JARVOS_PROJECTS_CONTEXT_CONFIG',
+      'JARVOS_STEWARDSHIP_BRIDGE_COMMAND', 'JARVOS_STEWARDSHIP_CODEX_SESSION_MAP_ROOT',
+      'JARVOS_STEWARDSHIP_CLAUDE_SESSION_MAP_ROOT', 'JARVOS_STEWARDSHIP_BRIDGE_PATH',
+      'JARVOS_STAGED_PUBLIC_RUNTIME_ROOT', 'JARVOS_CONTROL_PLANE_SERVICE_MODULE',
+      'JARVOS_CONTROL_PLANE_CREDENTIAL_FILE',
+    ]) delete baseEnv[key];
+
+    // -- Codex --
+    const codexRecord = path.join(tmp, 'codex-mcp-add.json');
+    writeFakeMcpCli(path.join(bin, 'codex'), codexRecord);
+    const codexHome = path.join(tmp, 'codex-home');
+    fs.mkdirSync(codexHome, { recursive: true });
+    const codexResult = spawnSync('bash', [path.join(REPO_ROOT, 'runtimes', 'codex', 'setup.sh')], {
+      encoding: 'utf8',
+      env: {
+        ...baseEnv,
+        HOME: path.join(tmp, 'home-codex'),
+        CODEX_HOME: codexHome,
+        CODEX_CONFIG: path.join(codexHome, 'config.toml'),
+        JARVOS_MCP_STABLE_ENTRYPOINT: stableEntrypoint,
+      },
+    });
+    assert.equal(codexResult.status, 0, codexResult.stderr || codexResult.stdout);
+    const codexArgs = JSON.parse(fs.readFileSync(codexRecord, 'utf8'));
+    assert.ok(codexArgs.includes(stableEntrypoint), codexArgs.join(' '));
+    assert.ok(!codexArgs.some((value) => value.includes('jarvos-mcp.js')), codexArgs.join(' '));
+
+    // -- Claude --
+    const claudeRecord = path.join(tmp, 'claude-mcp-add.json');
+    writeFakeMcpCli(path.join(bin, 'claude'), claudeRecord);
+    const claudeDesktopConfig = path.join(tmp, 'claude-desktop', 'claude_desktop_config.json');
+    const claudeResult = spawnSync('bash', [path.join(REPO_ROOT, 'runtimes', 'claude', 'setup.sh')], {
+      encoding: 'utf8',
+      env: {
+        ...baseEnv,
+        HOME: path.join(tmp, 'home-claude'),
+        CLAUDE_SETTINGS: path.join(tmp, 'claude-settings', 'settings.json'),
+        CLAUDE_DESKTOP_CONFIG: claudeDesktopConfig,
+        CLAUDE_MD_PATH: path.join(tmp, 'claude-md', 'CLAUDE.md'),
+        JARVOS_MCP_STABLE_ENTRYPOINT: stableEntrypoint,
+        JARVOS_SKIP_CLAUDE_MD: '1',
+      },
+    });
+    assert.equal(claudeResult.status, 0, claudeResult.stderr || claudeResult.stdout);
+    const claudeArgs = JSON.parse(fs.readFileSync(claudeRecord, 'utf8'));
+    assert.ok(claudeArgs.includes(stableEntrypoint), claudeArgs.join(' '));
+    assert.ok(!claudeArgs.some((value) => value.includes('jarvos-mcp.js')), claudeArgs.join(' '));
+
+    const desktopConfig = JSON.parse(fs.readFileSync(claudeDesktopConfig, 'utf8'));
+    assert.equal(desktopConfig.mcpServers.jarvos.command, stableEntrypoint);
+    assert.equal(desktopConfig.mcpServers.jarvos.args, undefined);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('Codex and Claude setup register the immutable install script when no stable entrypoint is bound', () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-mcp-portable-entrypoint-'));
+  try {
+    const bin = path.join(tmp, 'bin');
+    fs.mkdirSync(bin, { recursive: true });
+    const baseEnv = { ...process.env, PATH: `${bin}:${process.env.PATH}` };
+    for (const key of [
+      'JARVOS_MANAGED_REPOSITORIES', 'JARVOS_STEWARDSHIP_STABLE_ROOT', 'JARVOS_STEWARDSHIP_ONLY',
+      'JARVOS_MANAGED_HARNESS_ROLLBACK', 'JARVOS_CODEX_PROVIDER_MODE', 'JARVOS_PROFILE',
+      'JARVOS_WORK_ACTION_SERVICE_MODULE', 'JARVOS_PROJECTS_CONTEXT_CONFIG', 'JARVOS_MCP_STABLE_ENTRYPOINT',
+      'JARVOS_STEWARDSHIP_BRIDGE_COMMAND', 'JARVOS_STEWARDSHIP_CODEX_SESSION_MAP_ROOT',
+      'JARVOS_STEWARDSHIP_CLAUDE_SESSION_MAP_ROOT', 'JARVOS_STEWARDSHIP_BRIDGE_PATH',
+      'JARVOS_STAGED_PUBLIC_RUNTIME_ROOT', 'JARVOS_CONTROL_PLANE_SERVICE_MODULE',
+      'JARVOS_CONTROL_PLANE_CREDENTIAL_FILE',
+    ]) delete baseEnv[key];
+
+    const codexRecord = path.join(tmp, 'codex-mcp-add.json');
+    writeFakeMcpCli(path.join(bin, 'codex'), codexRecord);
+    const codexHome = path.join(tmp, 'codex-home');
+    fs.mkdirSync(codexHome, { recursive: true });
+    const codexResult = spawnSync('bash', [path.join(REPO_ROOT, 'runtimes', 'codex', 'setup.sh')], {
+      encoding: 'utf8',
+      env: {
+        ...baseEnv,
+        HOME: path.join(tmp, 'home-codex'),
+        CODEX_HOME: codexHome,
+        CODEX_CONFIG: path.join(codexHome, 'config.toml'),
+      },
+    });
+    assert.equal(codexResult.status, 0, codexResult.stderr || codexResult.stdout);
+    const codexArgs = JSON.parse(fs.readFileSync(codexRecord, 'utf8'));
+    assert.ok(codexArgs.some((value) => value.endsWith(path.join('jarvos-agent-context', 'scripts', 'jarvos-mcp.js'))), codexArgs.join(' '));
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('rerunning Codex setup from a different immutable runtime preserves the same stable entrypoint', () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-mcp-rerun-entrypoint-'));
+  try {
+    const bin = path.join(tmp, 'bin');
+    fs.mkdirSync(bin, { recursive: true });
+    const codexRecord = path.join(tmp, 'codex-mcp-add.json');
+    writeFakeMcpCli(path.join(bin, 'codex'), codexRecord);
+
+    const entrypointRoot = path.join(tmp, 'entrypoint-root');
+    fs.mkdirSync(entrypointRoot, { recursive: true });
+    fs.chmodSync(entrypointRoot, 0o700);
+    const stableEntrypoint = path.join(entrypointRoot, 'jarvos-mcp-shim');
+    fs.writeFileSync(stableEntrypoint, '#!/usr/bin/env node\n', { encoding: 'utf8', mode: 0o700 });
+    fs.chmodSync(stableEntrypoint, 0o700);
+
+    const baseEnv = { ...process.env, PATH: `${bin}:${process.env.PATH}` };
+    for (const key of [
+      'JARVOS_MANAGED_REPOSITORIES', 'JARVOS_STEWARDSHIP_STABLE_ROOT', 'JARVOS_STEWARDSHIP_ONLY',
+      'JARVOS_MANAGED_HARNESS_ROLLBACK', 'JARVOS_CODEX_PROVIDER_MODE', 'JARVOS_PROFILE',
+      'JARVOS_WORK_ACTION_SERVICE_MODULE', 'JARVOS_PROJECTS_CONTEXT_CONFIG',
+    ]) delete baseEnv[key];
+
+    // A second immutable runtime generation: its own install root, with its
+    // own copy of setup.sh and its own MCP script at a different path. A
+    // rerun from here must still register the owner-supplied stable
+    // entrypoint, never this generation's own jarvos-mcp.js.
+    const runtime2Root = path.join(tmp, 'runtime-generation-2');
+    const runtime2McpDir = path.join(runtime2Root, 'modules', 'jarvos-agent-context', 'scripts');
+    const runtime2CodexDir = path.join(runtime2Root, 'runtimes', 'codex');
+    fs.mkdirSync(runtime2McpDir, { recursive: true });
+    fs.mkdirSync(runtime2CodexDir, { recursive: true });
+    fs.writeFileSync(path.join(runtime2McpDir, 'jarvos-mcp.js'), '// stub for a different runtime generation\n');
+    fs.writeFileSync(path.join(runtime2CodexDir, 'hooks.json'), '{"hooks":{}}\n');
+    fs.writeFileSync(path.join(runtime2CodexDir, 'jarvos-session-start-hook.js'), '// stub\n');
+    fs.writeFileSync(path.join(runtime2CodexDir, 'jarvos-session-turn-hook.js'), '// stub\n');
+    fs.writeFileSync(path.join(runtime2CodexDir, 'trust-session-start-hook.js'), '// stub\n');
+    fs.copyFileSync(path.join(REPO_ROOT, 'runtimes', 'codex', 'setup.sh'), path.join(runtime2CodexDir, 'setup.sh'));
+    fs.chmodSync(path.join(runtime2CodexDir, 'setup.sh'), 0o755);
+
+    const runFrom = (setupPath) => {
+      const codexHome = path.join(tmp, `codex-home-${path.basename(path.dirname(path.dirname(setupPath))) || 'a'}-${Math.random()}`);
+      fs.mkdirSync(codexHome, { recursive: true });
+      const result = spawnSync('bash', [setupPath], {
+        encoding: 'utf8',
+        env: {
+          ...baseEnv,
+          HOME: `${codexHome}-home`,
+          CODEX_HOME: codexHome,
+          CODEX_CONFIG: path.join(codexHome, 'config.toml'),
+          JARVOS_MCP_STABLE_ENTRYPOINT: stableEntrypoint,
+        },
+      });
+      assert.equal(result.status, 0, result.stderr || result.stdout);
+      return JSON.parse(fs.readFileSync(codexRecord, 'utf8'));
+    };
+
+    const firstRun = runFrom(path.join(REPO_ROOT, 'runtimes', 'codex', 'setup.sh'));
+    assert.ok(firstRun.includes(stableEntrypoint));
+
+    fs.unlinkSync(codexRecord);
+    const rerun = runFrom(path.join(runtime2CodexDir, 'setup.sh'));
+    assert.ok(rerun.includes(stableEntrypoint));
+    assert.ok(!rerun.some((value) => value.includes('runtime-generation-2')), rerun.join(' '));
+    assert.deepEqual(rerun, firstRun);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('an unsafe stable entrypoint binding is rejected without echoing the path', () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-mcp-unsafe-entrypoint-'));
+  try {
+    const bin = path.join(tmp, 'bin');
+    fs.mkdirSync(bin, { recursive: true });
+    const codexRecord = path.join(tmp, 'codex-mcp-add.json');
+    writeFakeMcpCli(path.join(bin, 'codex'), codexRecord);
+
+    const groupWritableRoot = path.join(tmp, 'group-writable-root');
+    fs.mkdirSync(groupWritableRoot, { recursive: true });
+    fs.chmodSync(groupWritableRoot, 0o700);
+    const groupWritableEntrypoint = path.join(groupWritableRoot, 'unsafe-shim');
+    fs.writeFileSync(groupWritableEntrypoint, '#!/usr/bin/env node\n', { encoding: 'utf8', mode: 0o755 });
+    fs.chmodSync(groupWritableEntrypoint, 0o755);
+
+    const baseEnv = { ...process.env, PATH: `${bin}:${process.env.PATH}` };
+    for (const key of [
+      'JARVOS_MANAGED_REPOSITORIES', 'JARVOS_STEWARDSHIP_STABLE_ROOT', 'JARVOS_STEWARDSHIP_ONLY',
+      'JARVOS_MANAGED_HARNESS_ROLLBACK', 'JARVOS_CODEX_PROVIDER_MODE', 'JARVOS_PROFILE',
+    ]) delete baseEnv[key];
+    const codexHome = path.join(tmp, 'codex-home');
+    fs.mkdirSync(codexHome, { recursive: true });
+
+    for (const [label, value] of [
+      ['relative', 'relative/shim'],
+      ['escaped', '../escaped-shim'],
+      ['missing', path.join(groupWritableRoot, 'does-not-exist')],
+      ['group-writable', groupWritableEntrypoint],
+    ]) {
+      const result = spawnSync('bash', [path.join(REPO_ROOT, 'runtimes', 'codex', 'setup.sh')], {
+        encoding: 'utf8',
+        env: {
+          ...baseEnv,
+          HOME: path.join(tmp, `home-${label}`),
+          CODEX_HOME: codexHome,
+          CODEX_CONFIG: path.join(codexHome, 'config.toml'),
+          JARVOS_MCP_STABLE_ENTRYPOINT: value,
+        },
+      });
+      assert.notEqual(result.status, 0, `${label} binding must be rejected`);
+      assert.match(result.stderr, /JARVOS_MCP_STABLE_ENTRYPOINT/);
+      assert.doesNotMatch(result.stderr, /does-not-exist|unsafe-shim|escaped-shim/);
+      assert.equal(fs.existsSync(codexRecord), false, `${label} binding must not register an MCP server`);
+    }
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
 });
 
 test('the documented host binding actually starts from a workspace copy', async () => {

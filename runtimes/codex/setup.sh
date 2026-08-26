@@ -19,6 +19,12 @@ STEWARDSHIP_CODEX_SESSION_MAP_ROOT="${JARVOS_STEWARDSHIP_CODEX_SESSION_MAP_ROOT:
 STEWARDSHIP_STABLE_ROOT="${JARVOS_STEWARDSHIP_STABLE_ROOT:-}"
 STEWARDSHIP_DISPATCHER=""
 CODEX_PROVIDER_MODE="${JARVOS_CODEX_PROVIDER_MODE:-}"
+# Optional owner-controlled stable selector-aware entrypoint. When set, this
+# is what gets persisted in Codex config instead of this immutable install's
+# own MCP script -- so a later selected-runtime transition does not require
+# rewriting persisted client config. Unset preserves the current portable
+# behavior: register this run's own $MCP_SERVER directly.
+STABLE_MCP_ENTRYPOINT="${JARVOS_MCP_STABLE_ENTRYPOINT:-}"
 
 # The private installer materializes this owner-controlled bundle once. Native
 # configuration must refer to it, never to a selected immutable runtime stage.
@@ -70,6 +76,33 @@ fi
 if [ ! -f "$TRUST_SCRIPT" ]; then
   echo "jarvOS Codex hook trust script not found: $TRUST_SCRIPT" >&2
   exit 1
+fi
+
+# The stable entrypoint is what setup registers with Codex, so it must be
+# validated to the same bar as the stable stewardship dispatcher: absolute,
+# not a symlink, an owner-only executable file. Reject without echoing the
+# path -- an unsafe binding is refused before it is ever persisted.
+MCP_COMMAND=(node "$MCP_SERVER")
+if [ -n "$STABLE_MCP_ENTRYPOINT" ]; then
+  case "$STABLE_MCP_ENTRYPOINT" in
+    /*) ;;
+    *)
+      echo "JARVOS_MCP_STABLE_ENTRYPOINT must be an absolute path" >&2
+      exit 1
+      ;;
+  esac
+  if ! node -e '
+const fs = require("fs");
+const value = process.argv[1];
+let stat;
+try { stat = fs.lstatSync(value); } catch { process.exit(1); }
+const uid = typeof process.getuid === "function" ? process.getuid() : null;
+if (stat.isSymbolicLink() || !stat.isFile() || (stat.mode & 0o077) !== 0 || (stat.mode & 0o111) === 0 || (uid !== null && stat.uid !== uid)) process.exit(1);
+' "$STABLE_MCP_ENTRYPOINT"; then
+    echo "JARVOS_MCP_STABLE_ENTRYPOINT must be an absolute, owner-only executable file" >&2
+    exit 1
+  fi
+  MCP_COMMAND=("$STABLE_MCP_ENTRYPOINT")
 fi
 
 # Control-plane host bindings are optional on public/minimal installs.
@@ -173,11 +206,11 @@ if [ "${JARVOS_STEWARDSHIP_ONLY:-0}" != "1" ]; then
   fi
 
   if [ ${#MCP_ENV_ARGS[@]} -gt 0 ]; then
-    codex mcp add "${MCP_ENV_ARGS[@]}" jarvos -- node "$MCP_SERVER"
-    echo "Registered jarvOS MCP server for Codex with host bindings: $MCP_SERVER"
+    codex mcp add "${MCP_ENV_ARGS[@]}" jarvos -- "${MCP_COMMAND[@]}"
+    echo "Registered jarvOS MCP server for Codex with host bindings: ${MCP_COMMAND[*]}"
   else
-    codex mcp add jarvos -- node "$MCP_SERVER"
-    echo "Registered jarvOS MCP server for Codex: $MCP_SERVER"
+    codex mcp add jarvos -- "${MCP_COMMAND[@]}"
+    echo "Registered jarvOS MCP server for Codex: ${MCP_COMMAND[*]}"
   fi
 fi
 
