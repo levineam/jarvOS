@@ -4,7 +4,7 @@
   "description": "Portable semantic-role and native instruction-projection contracts for jarvOS harnesses.",
   "license": "MIT",
   "type": "commonjs",
-  "main": "src/contracts.js",
+  "main": "src/index.js",
   "files": [
     "src/",
     "schemas/"
