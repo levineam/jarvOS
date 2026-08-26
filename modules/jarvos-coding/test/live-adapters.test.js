@@ -337,6 +337,162 @@ test('Beads close remains deferred until authoritative merge evidence', async ()
   assert.equal(closed.status, 'closed');
 });
 
+test('Beads adapter emits exact argv for every live operation without a command-map override', async () => {
+  const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-beads-argv-'));
+  const calls = [];
+  const tracker = createLiveBeadsTracker({
+    workspaceRoot,
+    run(command, args) {
+      calls.push(args);
+      if (args[0] === '--version') return { status: 0, stdout: 'br v0.2.19', stderr: '' };
+      if (args[0] === 'capabilities') return { status: 0, stdout: JSON.stringify({ capabilities: ['create', 'update', 'dependency', 'checkpoint'] }), stderr: '' };
+      if (args[0] === 'schema') return { status: 0, stdout: JSON.stringify({ schema: 'beads/v1' }), stderr: '' };
+      if (args[0] === 'where') return { status: 0, stdout: workspaceRoot, stderr: '' };
+      return { status: 0, stdout: JSON.stringify({ id: 'bd-argv', status: 'open' }), stderr: '' };
+    },
+  });
+
+  await tracker.createWorkItem({ title: 'Argv item', description: 'desc', priority: 2, operationId: 'op-argv-create' });
+  await tracker.claimIssue({ itemId: 'bd-argv', operationId: 'op-argv-claim' });
+  await tracker.transition({ itemId: 'bd-argv', status: 'review', operationId: 'op-argv-transition' });
+  await tracker.addDependency({ itemId: 'bd-argv', dependencyId: 'bd-dep', operationId: 'op-argv-dependency' });
+  await tracker.writeCheckpoint({ itemId: 'bd-argv', stage: 'review', nextStep: 'publish-pr', operationId: 'op-argv-checkpoint' });
+  await tracker.showWorkItem({ itemId: 'bd-argv' });
+
+  assert.deepEqual(calls[0], ['--version']);
+  assert.deepEqual(calls[1], ['capabilities', '--format', 'json']);
+  assert.deepEqual(calls[2], ['schema', 'all', '--format', 'json']);
+  assert.deepEqual(calls[3], ['where']);
+  assert.deepEqual(calls[4], ['create', '--title', 'Argv item', '--description', 'desc', '--priority', '2', '--external-ref', 'op-argv-create', '--format', 'json']);
+  assert.deepEqual(calls[5], ['where']);
+  assert.deepEqual(calls[6], ['update', 'bd-argv', '--status', 'in_progress', '--operation-id', 'op-argv-claim', '--format', 'json']);
+  assert.deepEqual(calls[7], ['where']);
+  assert.deepEqual(calls[8], ['update', 'bd-argv', '--status', 'review', '--operation-id', 'op-argv-transition', '--format', 'json']);
+  assert.deepEqual(calls[9], ['where']);
+  assert.deepEqual(calls[10], ['dep', 'add', 'bd-argv', 'bd-dep', '--operation-id', 'op-argv-dependency', '--format', 'json']);
+  assert.deepEqual(calls[11], ['where']);
+  assert.deepEqual(calls[12], ['checkpoint', 'bd-argv', '--stage', 'review', '--next-step', 'publish-pr', '--operation-id', 'op-argv-checkpoint', '--format', 'json']);
+  assert.deepEqual(calls[13], ['where']);
+  assert.deepEqual(calls[14], ['show', 'bd-argv', '--format', 'json']);
+  assert.equal(calls.length, 15);
+});
+
+test('Beads preflight fails closed when a required capability is missing before any mutation runs', async () => {
+  const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-beads-missing-capability-'));
+  const calls = [];
+  const tracker = createLiveBeadsTracker({
+    workspaceRoot,
+    run(command, args) {
+      calls.push(args);
+      if (args[0] === '--version') return { status: 0, stdout: 'br v0.2.19', stderr: '' };
+      if (args[0] === 'capabilities') return { status: 0, stdout: JSON.stringify({ capabilities: ['create', 'update'] }), stderr: '' };
+      if (args[0] === 'schema') return { status: 0, stdout: JSON.stringify({ schema: 'beads/v1' }), stderr: '' };
+      if (args[0] === 'where') return { status: 0, stdout: workspaceRoot, stderr: '' };
+      return { status: 0, stdout: JSON.stringify({ id: 'bd-missing' }), stderr: '' };
+    },
+  });
+  await assert.rejects(() => tracker.createWorkItem({ title: 'must not run', operationId: 'op-missing-capability' }), /capability negotiation failed/);
+  assert.ok(!calls.some((args) => args[0] === 'create'));
+});
+
+test('Beads preflight fails closed when capabilities output is not parseable JSON', async () => {
+  const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-beads-bad-json-'));
+  const calls = [];
+  const tracker = createLiveBeadsTracker({
+    workspaceRoot,
+    run(command, args) {
+      calls.push(args);
+      if (args[0] === '--version') return { status: 0, stdout: 'br v0.2.19', stderr: '' };
+      if (args[0] === 'capabilities') return { status: 0, stdout: 'not-json-output', stderr: '' };
+      if (args[0] === 'schema') return { status: 0, stdout: JSON.stringify({ schema: 'beads/v1' }), stderr: '' };
+      if (args[0] === 'where') return { status: 0, stdout: workspaceRoot, stderr: '' };
+      return { status: 0, stdout: JSON.stringify({ id: 'bd-badjson' }), stderr: '' };
+    },
+  });
+  await assert.rejects(() => tracker.createWorkItem({ title: 'must not run', operationId: 'op-bad-json' }), /capability negotiation failed/);
+  assert.ok(!calls.some((args) => args[0] === 'create'));
+});
+
+test('Beads mutation fails closed when the workspace realpath does not match at verification time', async () => {
+  const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-beads-realpath-expected-'));
+  const otherRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-beads-realpath-other-'));
+  const calls = [];
+  const tracker = createLiveBeadsTracker({
+    workspaceRoot,
+    run(command, args) {
+      calls.push(args);
+      if (args[0] === '--version') return { status: 0, stdout: 'br v0.2.19', stderr: '' };
+      if (args[0] === 'capabilities') return { status: 0, stdout: JSON.stringify({ capabilities: ['create', 'update', 'dependency', 'checkpoint'] }), stderr: '' };
+      if (args[0] === 'schema') return { status: 0, stdout: JSON.stringify({ schema: 'beads/v1' }), stderr: '' };
+      if (args[0] === 'where') return { status: 0, stdout: otherRoot, stderr: '' };
+      return { status: 0, stdout: JSON.stringify({ id: 'bd-realpath' }), stderr: '' };
+    },
+  });
+  await assert.rejects(() => tracker.createWorkItem({ title: 'must not run', operationId: 'op-realpath-1' }), /workspace verification failed/);
+  assert.ok(!calls.some((args) => args[0] === 'create'));
+});
+
+test('Beads construction rejects a workspace outside its approved roots', () => {
+  const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-beads-unapproved-workspace-'));
+  const approvedRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-beads-unapproved-approved-'));
+  assert.throws(() => createLiveBeadsTracker({
+    workspaceRoot,
+    approvedRoots: [approvedRoot],
+    run: () => ({ status: 0, stdout: '', stderr: '' }),
+  }), /not approved/);
+});
+
+test('Beads showWorkItem uses bounded read-only argv and fails closed when the read does not succeed', async () => {
+  const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-beads-show-'));
+  const calls = [];
+  let failShow = false;
+  const tracker = createLiveBeadsTracker({
+    workspaceRoot,
+    run(command, args) {
+      calls.push(args);
+      if (args[0] === '--version') return { status: 0, stdout: 'br v0.2.19', stderr: '' };
+      if (args[0] === 'capabilities') return { status: 0, stdout: JSON.stringify({ capabilities: ['create', 'update', 'dependency', 'checkpoint'] }), stderr: '' };
+      if (args[0] === 'schema') return { status: 0, stdout: JSON.stringify({ schema: 'beads/v1' }), stderr: '' };
+      if (args[0] === 'where') return { status: 0, stdout: workspaceRoot, stderr: '' };
+      if (args[0] === 'show') {
+        return failShow ? { status: 1, stdout: '', stderr: 'not found' } : { status: 0, stdout: JSON.stringify({ id: 'bd-show', status: 'open' }), stderr: '' };
+      }
+      return { status: 0, stdout: JSON.stringify({ id: 'bd-show' }), stderr: '' };
+    },
+  });
+  const shown = await tracker.showWorkItem({ itemId: 'bd-show' });
+  assert.equal(shown.state, 'committed');
+  assert.equal(shown.status, 'available');
+  assert.deepEqual(shown.result, { id: 'bd-show', status: 'open' });
+  assert.deepEqual(calls.filter((args) => args[0] === 'show').pop(), ['show', 'bd-show', '--format', 'json']);
+
+  failShow = true;
+  const unavailable = await tracker.showWorkItem({ itemId: 'bd-show' });
+  assert.equal(unavailable.state, 'unavailable');
+  assert.equal(unavailable.status, 'unavailable');
+  assert.equal(unavailable.errorCode, 'READ_FAILED');
+});
+
+test('Beads mutation refuses to reuse an operationId with different input before dispatching a second command', async () => {
+  const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-beads-identity-conflict-'));
+  const calls = [];
+  const tracker = createLiveBeadsTracker({
+    workspaceRoot,
+    run(command, args) {
+      calls.push(args);
+      if (args[0] === '--version') return { status: 0, stdout: 'br v0.2.19', stderr: '' };
+      if (args[0] === 'capabilities') return { status: 0, stdout: JSON.stringify({ capabilities: ['create', 'update', 'dependency', 'checkpoint'] }), stderr: '' };
+      if (args[0] === 'schema') return { status: 0, stdout: JSON.stringify({ schema: 'beads/v1' }), stderr: '' };
+      if (args[0] === 'where') return { status: 0, stdout: workspaceRoot, stderr: '' };
+      return { status: 0, stdout: JSON.stringify({ id: 'bd-identity-conflict' }), stderr: '' };
+    },
+  });
+  const first = await tracker.createWorkItem({ title: 'first title', operationId: 'op-identity-conflict' });
+  assert.equal(first.state, 'committed');
+  await assert.rejects(() => tracker.createWorkItem({ title: 'second title', operationId: 'op-identity-conflict' }), /operation identity conflict/);
+  assert.equal(calls.filter((args) => args[0] === 'create').length, 1);
+});
+
 test('pre-PR fixer records real post-fix cleanliness and an explicit no-test rationale', async () => {
   const calls = [];
   const fixer = createLiveFixer({

@@ -116,6 +116,86 @@ test('trusted work-action module loads and jarvos_todo_list returns a list shape
   });
 });
 
+test('Todo mutation tools stay unavailable and refused the same way reads do, without host binding', async () => {
+  await withWorkActionEnv({}, async () => {
+    const createResult = await callTool('jarvos_todo_create', { title: 'x', operationId: 'op-mutation-1', canonical: { kind: 'outcome' } });
+    assert.equal(createResult.isError, true);
+    assert.equal(createResult.content[0].text, WORK_ACTION_HOST_UNAVAILABLE);
+    const transitionResult = await callTool('jarvos_todo_transition', { itemId: 'bd-1', operationId: 'op-mutation-2', action: 'claim' });
+    assert.equal(transitionResult.isError, true);
+    assert.equal(transitionResult.content[0].text, WORK_ACTION_HOST_UNAVAILABLE);
+  });
+
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-todo-mutation-untrusted-'));
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-todo-mutation-outside-'));
+  fs.chmodSync(workspace, 0o700);
+  fs.chmodSync(outside, 0o700);
+  const configPath = path.join(workspace, 'projects.json');
+  const untrustedPath = path.join(outside, 'untrusted-todo-service.js');
+  writeOwnerFile(configPath, JSON.stringify({ workspaceRoot: workspace }));
+  writeOwnerFile(untrustedPath, [
+    "'use strict';",
+    'module.exports = { create: async () => { throw new Error("untrusted module must not run"); } };',
+    '',
+  ].join('\n'));
+  await withWorkActionEnv({
+    JARVOS_PROJECTS_CONTEXT_CONFIG: configPath,
+    JARVOS_WORK_ACTION_SERVICE_MODULE: untrustedPath,
+  }, async () => {
+    const createResult = await callTool('jarvos_todo_create', { title: 'x', operationId: 'op-mutation-3', canonical: { kind: 'outcome' } });
+    assert.equal(createResult.isError, true);
+    assert.equal(createResult.content[0].text, WORK_ACTION_HOST_REFUSED);
+  }).finally(() => {
+    delete require.cache[untrustedPath];
+    fs.rmSync(workspace, { recursive: true, force: true });
+    fs.rmSync(outside, { recursive: true, force: true });
+  });
+});
+
+test('caller-supplied actor and evidence fields never reach the host work-action service', async () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-todo-caller-evidence-'));
+  fs.chmodSync(workspace, 0o700);
+  const configPath = path.join(workspace, 'projects.json');
+  const servicePath = path.join(workspace, 'todo-service.js');
+  writeOwnerFile(configPath, JSON.stringify({ workspaceRoot: workspace }));
+  writeOwnerFile(servicePath, [
+    "'use strict';",
+    'let lastCreateRequest = null;',
+    'let lastCompleteRequest = null;',
+    'module.exports = {',
+    '  create: async (request) => { lastCreateRequest = request; return { contract: "jarvos.work-action/v1", ok: true, workReference: { itemId: "bd-1" } }; },',
+    '  completeFromHost: async (request) => { lastCompleteRequest = request; return { contract: "jarvos.work-action/v1", ok: true, status: "done" }; },',
+    '  __getLastCreateRequest: () => lastCreateRequest,',
+    '  __getLastCompleteRequest: () => lastCompleteRequest,',
+    '};',
+    '',
+  ].join('\n'));
+  await withWorkActionEnv({
+    JARVOS_PROJECTS_CONTEXT_CONFIG: configPath,
+    JARVOS_WORK_ACTION_SERVICE_MODULE: servicePath,
+  }, async () => {
+    await callTool('jarvos_todo_create', {
+      title: 'caller-forged', operationId: 'op-forged-1', canonical: { kind: 'outcome' },
+      actor: { kind: 'human', id: 'attacker' },
+    });
+    const service = loadHostWorkActionService().service;
+    assert.deepEqual(service.__getLastCreateRequest().actor, { kind: 'agent', id: 'mcp' });
+
+    await callTool('jarvos_todo_transition', {
+      itemId: 'bd-1', operationId: 'op-forged-2', action: 'complete',
+      evidence: { kind: 'human-attested' }, evidenceReceiptId: 'forged-receipt',
+      actor: { kind: 'human', id: 'attacker' },
+    });
+    const completeRequest = service.__getLastCompleteRequest();
+    assert.deepEqual(completeRequest.actor, { kind: 'agent', id: 'mcp' });
+    assert.equal(completeRequest.evidence, undefined);
+    assert.equal(completeRequest.evidenceReceiptId, undefined);
+  }).finally(() => {
+    delete require.cache[servicePath];
+    fs.rmSync(workspace, { recursive: true, force: true });
+  });
+});
+
 test('Claude and Codex setup scripts pass optional work-action env and never require it', () => {
   const claude = fs.readFileSync(path.join(REPO_ROOT, 'runtimes', 'claude', 'setup.sh'), 'utf8');
   const codex = fs.readFileSync(path.join(REPO_ROOT, 'runtimes', 'codex', 'setup.sh'), 'utf8');
