@@ -205,6 +205,17 @@ function main(argv = process.argv.slice(2), options = {}) {
   return implementation.main(argv);
 }
 
+// The public bridge is also the selected-runtime entrypoint for the private
+// preview runner. It exposes no CLI preview mode and no persistence or send
+// rights; the owner-private test-run surface owns those concerns.
+function runPreview(options = {}) {
+  const implementation = options.implementation || loadImplementation(options);
+  if (typeof implementation.runPreview !== 'function') {
+    throw bridgeError('active_assistant_runtime_contract_invalid');
+  }
+  return implementation.runPreview(options);
+}
+
 module.exports = {
   IMPLEMENTATION_RELATIVE_PATH,
   PUBLIC_RELATIVE_PATH,
@@ -218,6 +229,7 @@ module.exports = {
   loadImplementation,
   readRuntimeSelection,
   main,
+  runPreview,
   ownerPath,
   assertNoSymlinkComponents,
   resolveImplementationEntrypoint,
