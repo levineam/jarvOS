@@ -20,6 +20,7 @@ people, projects, concepts, meetings, and source pages.
 | **Retrieval eval** | Small fixture-driven checks for whether GBrain can answer expected questions |
 | **Graph recall** | Compact wrapper around `gbrain graph-query` for sidecar recall from known seed pages |
 | **Runtime resolver bundle** | One callable bundle for GBrain search, optional QMD lookup, and graph sidecar context |
+| **Managed provider launcher** | Revalidates an owner-controlled GBrain source and interpreter before each provider-native stdio launch |
 
 ## What this module is NOT for
 
@@ -77,6 +78,91 @@ The public repo ships template manifest/eval files only. Put private note lists
 and private eval questions in your local workspace and point env vars or CLI flags
 at those files.
 
+## Shared-brain continuity
+
+GBrain remains an optional external provider in portable jarvOS. A private
+profile may require it for continuity across Codex, Hermes, and OpenClaw. The
+three harnesses register the same provider-native stdio server through
+`scripts/jarvos-gbrain-provider.js`; jarvOS does not proxy GBrain tools or copy
+provider skills into its shared-skill bundle.
+
+The launcher reads the absolute path in
+`JARVOS_GBRAIN_RUNTIME_DESCRIPTOR`. The descriptor must be a regular,
+owner-controlled `0600` JSON file. It pins the GBrain source entry, its
+interpreter, the provider-owned skill manifest, and Skillify by realpath,
+owner, mode, and SHA-256; names the stable logical store tuple; and supplies
+absolute GBrain home/store roots. The launcher sets `GBRAIN_SKILLS_DIR` from
+that pin, so neutral-cwd launches cannot silently resolve some other skill
+tree. Database URLs and provider credentials do not belong in harness
+configuration or descriptor environment fields; keep them in GBrain's
+owner-only configuration.
+
+```json
+{
+  "schemaVersion": "jarvos-gbrain-runtime-descriptor/v1",
+  "executablePath": "/absolute/release/src/cli.ts",
+  "sha256": "<sha256>",
+  "expectedOwnerUid": 501,
+  "version": "0.46.32.0",
+  "commit": "<40-character-commit>",
+  "engineKind": "postgres",
+  "storeIdentity": { "host": "127.0.0.1", "port": 5432, "database": "gbrain" },
+  "gbrainHome": "/absolute/owner-home",
+  "gbrainStore": "/absolute/owner-store",
+  "providerEnv": { "GBRAIN_BRAIN_ID": "host" },
+  "interpreter": {
+    "executablePath": "/absolute/bin/bun",
+    "sha256": "<sha256>",
+    "expectedOwnerUid": 501
+  },
+  "skills": {
+    "directoryPath": "/absolute/release/skills",
+    "manifestSha256": "<sha256>",
+    "skillifySha256": "<sha256>"
+  }
+}
+```
+
+Every launch uses a neutral working directory, a fixed minimal `PATH`, and
+`GBRAIN_SWEEP=0`. The scheduler-owned delta-maintenance path remains the sole
+maintenance owner. Skillify stays in GBrain's skill tree and is discovered
+through GBrain's `list_skills` / `get_skill` resolver tools; copying its
+`SKILL.md` into a jarvOS or harness skill directory would break provenance.
+
+The continuity producer accepts an owner-only
+`jarvos-gbrain-continuity-producer-input/v1` declaration, not a completed
+health snapshot. It revalidates this same runtime descriptor, issues a fresh
+challenge, and runs the ordered Codex, Hermes, and OpenClaw native probe
+commands directly. Each probe must return the exact
+`jarvos-gbrain-native-probe/v1` result bound to the supplied challenge,
+generation, jarvOS runtime, and GBrain runtime. The producer computes
+cross-harness brain equality and constructs the trusted snapshot; failed,
+replayed, mismatched, or malformed probe output remains below live proof.
+
+The producer input contains only orchestration declarations and boolean safety
+gates; it cannot supply the resulting brain, store, fixture, or trust facts:
+
+```json
+{
+  "schema": "jarvos-gbrain-continuity-producer-input/v1",
+  "generation": 1,
+  "validForSeconds": 1800,
+  "jarvosRuntimeDigest": "sha256:<sha256>",
+  "targets": [
+    {
+      "target": "codex",
+      "command": "/absolute/owner-controlled/codex-probe",
+      "args": [],
+      "timeoutMs": 120000,
+      "maintenanceBlocked": false,
+      "backupFresh": true
+    },
+    { "target": "hermes", "command": "/absolute/owner-controlled/hermes-probe", "args": [], "timeoutMs": 120000, "maintenanceBlocked": false, "backupFresh": true },
+    { "target": "openclaw", "command": "/absolute/owner-controlled/openclaw-probe", "args": [], "timeoutMs": 120000, "maintenanceBlocked": false, "backupFresh": true }
+  ]
+}
+```
+
 ## Curated Import Manifest
 
 ```json
@@ -118,6 +204,8 @@ const {
   graphRecall,
   recallBundle,
   renderRecallMarkdown,
+  loadManagedRuntimeDescriptor,
+  prepareManagedGbrainProvider,
   doctor,
 } = require('@jarvos/gbrain');
 ```
@@ -129,6 +217,8 @@ const {
 - `graphRecall(config, { seeds, depth, dryRun })` runs `gbrain graph-query <seed> --depth <n>` and returns parsed graph nodes for sidecar recall.
 - `recallBundle(config, { query, includeQmd, autoGraph, seeds })` returns a compact runtime resolver bundle with direct GBrain search, optional QMD broad lookup, and graph sidecar expansion.
 - `renderRecallMarkdown(bundle)` renders a bundle into context-ready Markdown.
+- `loadManagedRuntimeDescriptor(path)` validates the owner-only runtime descriptor and both pinned executables.
+- `prepareManagedGbrainProvider(path)` returns the revalidated provider-native stdio invocation without proxying GBrain tools.
 - `doctor(config)` checks manifest, eval file, brain directory, GBrain directory, and CLI availability.
 
 ## Retrieval Eval Fixture

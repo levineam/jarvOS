@@ -439,6 +439,50 @@ test('validateManifest accepts the Codex runtime manifest', () => {
   assert.equal(manifest.controlPlane.module, 'modules/jarvos-control-plane/scripts/jarvos-manager.js');
 });
 
+test('private continuity harnesses share one provider-native GBrain contract', () => {
+  for (const harness of ['codex', 'hermes', 'openclaw']) {
+    const manifest = JSON.parse(fs.readFileSync(path.join(ROOT, `runtimes/${harness}/adapter.json`), 'utf8'));
+    const result = validateManifest(manifest);
+    assert.equal(result.ok, true, `${harness}: ${result.errors.join('\n')}`);
+    assert.equal(manifest.gbrainContinuity.transport, 'provider-native-stdio');
+    assert.equal(manifest.gbrainContinuity.availability, 'optional-public-required-private');
+    assert.equal(manifest.gbrainContinuity.skillProjection.owner, 'gbrain');
+    assert.equal(manifest.gbrainContinuity.skillProjection.mode, 'provider-resolver');
+    assert.equal(manifest.gbrainContinuity.skillProjection.copiedIntoJarvosSkills, false);
+    assert.equal(manifest.gbrainContinuity.maintenance.sweepDisabled, true);
+  }
+});
+
+test('private continuity manifest rejects copied Skillify and missing provider tools', () => {
+  const manifest = JSON.parse(fs.readFileSync(path.join(ROOT, 'runtimes/codex/adapter.json'), 'utf8'));
+  manifest.gbrainContinuity = {
+    ...manifest.gbrainContinuity,
+    requiredTools: ['recall'],
+    skillProjection: {
+      ...manifest.gbrainContinuity.skillProjection,
+      copiedIntoJarvosSkills: true,
+    },
+  };
+  const result = validateManifest(manifest);
+  assert.equal(result.ok, false);
+  assert.match(result.errors.join('\n'), /requiredTools.*list_skills/);
+  assert.match(result.errors.join('\n'), /provider-owned and resolver-backed/);
+});
+
+test('private continuity manifests reject prose or misordered native registration commands', () => {
+  const hermes = JSON.parse(fs.readFileSync(path.join(ROOT, 'runtimes/hermes/adapter.json'), 'utf8'));
+  hermes.gbrainContinuity.registration.command = 'hermes mcp add gbrain --command node --args launcher --env descriptor';
+  const hermesResult = validateManifest(hermes);
+  assert.equal(hermesResult.ok, false);
+  assert.match(hermesResult.errors.join('\n'), /verified hermes native MCP command contract/);
+
+  const openclaw = JSON.parse(fs.readFileSync(path.join(ROOT, 'runtimes/openclaw/adapter.json'), 'utf8'));
+  openclaw.gbrainContinuity.registration.command = 'Register gbrain somehow';
+  const openclawResult = validateManifest(openclaw);
+  assert.equal(openclawResult.ok, false);
+  assert.match(openclawResult.errors.join('\n'), /verified openclaw native MCP command contract/);
+});
+
 test('validateManifest accepts the OpenClaw persistence ownership and validation contract', () => {
   const manifest = JSON.parse(fs.readFileSync(path.join(ROOT, 'runtimes/openclaw/adapter.json'), 'utf8'));
   const result = validateManifest(manifest);

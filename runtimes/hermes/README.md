@@ -45,6 +45,32 @@ Hermes has built-in systems for things jarvOS custom-builds on OpenClaw:
 
 ## Shared context and skill projection
 
+Portable setup keeps GBrain optional. A private continuity profile registers a
+separate `gbrain` stdio MCP through the shared jarvOS provider launcher and the
+same owner-only runtime descriptor used by Codex and OpenClaw. The launcher
+pins the GBrain source and interpreter, strips ambient database routing, and
+forces `GBRAIN_SWEEP=0`; Hermes configuration contains only the descriptor path,
+not the database credential. `hermes mcp test gbrain` proves connectivity, but
+a native Hermes recall turn is still required for behavioral proof.
+
+Hermes treats `--args` as the final option, so registration uses this exact
+native command shape:
+
+```bash
+hermes mcp add gbrain --command node \
+  --env JARVOS_GBRAIN_RUNTIME_DESCRIPTOR=<owner-only-descriptor> \
+  --args <provider-launcher>
+hermes mcp test gbrain
+```
+
+The native add command probes the server and asks which discovered tools to
+enable. Accept that explicit private-profile choice; an add-command exit code
+without a saved entry and a passing `hermes mcp test gbrain` is not success.
+
+GBrain owns its provider skill resolver. Skillify is discovered through
+`list_skills` and `get_skill`, not copied into the Hermes skill directory or
+the jarvOS shared-skill projection.
+
 The setup script registers the shared jarvOS MCP server with Hermes using the
 native stdio transport, then verifies the connection with `hermes mcp test
 jarvos`. Registration is idempotent for ordinary public setup: an existing

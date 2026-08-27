@@ -17,6 +17,7 @@ const {
   checkControlPlaneModule,
   checkVaultPathStale,
   checkJournalConflict,
+  healthModuleBlocksDoctor,
 } = require('../lib/jarvos-cli');
 const {
   validateJarvosProfile,
@@ -39,6 +40,13 @@ function makeVault(root, { obsidian = false, journalDir = true } = {}) {
   if (obsidian) fs.mkdirSync(path.join(root, '.obsidian'), { recursive: true });
   return root;
 }
+
+test('optional GBrain continuity remains visible without blocking portable doctor', () => {
+  const staleContinuity = { id: 'gbrain-continuity', state: 'needs your attention' };
+  assert.equal(healthModuleBlocksDoctor(staleContinuity, { continuityRequired: false }), false);
+  assert.equal(healthModuleBlocksDoctor(staleContinuity, { continuityRequired: true }), true);
+  assert.equal(healthModuleBlocksDoctor({ id: 'memory', state: 'needs your attention' }), true);
+});
 
 test('vault-path-stale passes for an existing vault root', () => {
   const tmp = scratch();
@@ -391,5 +399,59 @@ test('profile doctor honors an explicit config path', async () => {
   } finally {
     fs.rmSync(workspace, { recursive: true, force: true });
     fs.rmSync(path.dirname(externalConfig), { recursive: true, force: true });
+  }
+});
+
+test('profile doctor fails closed when private GBrain continuity is required but evidence is missing', async () => {
+  const workspace = scratch();
+  try {
+    fs.copyFileSync(path.join(__dirname, '..', 'jarvos.config.schema.json'), path.join(workspace, 'jarvos.config.schema.json'));
+    writeConfig(workspace, {
+      assistantName: 'Jarvis',
+      userName: 'Andrew',
+      coachName: 'Coach',
+      vaultPath: path.join(workspace, 'vault'),
+      workspacePath: workspace,
+      runtime: 'codex',
+      gbrainContinuity: { required: true },
+    });
+
+    const result = await validateJarvosProfile({
+      profile: 'v0-5-0',
+      workspace,
+      commandsPresent: { gbrain: false },
+    });
+    const continuity = result.checks.find((check) => check.component === 'provider.gbrainContinuity');
+    assert.equal(continuity.status, 'fail');
+    assert.equal(continuity.required, true);
+    assert.deepEqual(continuity.targets.map((target) => target.target), ['codex', 'hermes', 'openclaw']);
+    assert.equal(result.ok, false);
+    assert.doesNotMatch(JSON.stringify(continuity), /Users\/|jarvos-doctor-/);
+  } finally {
+    fs.rmSync(workspace, { recursive: true, force: true });
+  }
+});
+
+test('profile doctor keeps missing GBrain continuity optional for portable configs', async () => {
+  const workspace = scratch();
+  try {
+    fs.copyFileSync(path.join(__dirname, '..', 'jarvos.config.schema.json'), path.join(workspace, 'jarvos.config.schema.json'));
+    writeConfig(workspace, {
+      assistantName: 'Jarvis',
+      userName: 'Portable User',
+      coachName: 'Coach',
+      vaultPath: path.join(workspace, 'vault'),
+      workspacePath: workspace,
+      runtime: 'codex',
+    });
+
+    const result = await validateJarvosProfile({
+      profile: 'v0-5-0',
+      workspace,
+      commandsPresent: { gbrain: false },
+    });
+    assert.equal(result.checks.some((check) => check.component === 'provider.gbrainContinuity'), false);
+  } finally {
+    fs.rmSync(workspace, { recursive: true, force: true });
   }
 });

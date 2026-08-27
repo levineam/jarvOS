@@ -1081,3 +1081,309 @@ process.stdout.write(JSON.stringify(gbrain.resolveConfig({}).gbrainBin));
   assert.equal(child.status, 0, child.stderr);
   assert.equal(JSON.parse(child.stdout), gbrainBinPath);
 });
+
+function sha256File(filePath) {
+  return require('crypto').createHash('sha256').update(fs.readFileSync(filePath)).digest('hex');
+}
+
+function managedRuntimeDescriptor(executablePath, extras = {}) {
+  return {
+    executablePath,
+    sha256: sha256File(executablePath),
+    expectedOwnerUid: typeof process.getuid === 'function' ? process.getuid() : undefined,
+    ...extras,
+  };
+}
+
+test('managed GBrain runtime resolves a symlink but pins the resolved executable', () => {
+  const root = tempDir();
+  const target = path.join(root, 'gbrain-real');
+  const link = path.join(root, 'gbrain-link');
+  fs.writeFileSync(target, '#!/bin/sh\nprintf managed\n', { mode: 0o755 });
+  fs.symlinkSync(target, link);
+
+  const runtime = gbrain.validateManagedRuntime(managedRuntimeDescriptor(link, {
+    version: '0.46.32',
+    commit: 'abc123',
+    engineKind: 'postgres',
+    storeIdentity: { host: '127.0.0.1', port: 5432, database: 'brain', pageCount: 2 },
+  }));
+  assert.equal(runtime.ok, true);
+  assert.equal(runtime.executablePath, fs.realpathSync(target));
+  assert.equal(runtime.provenance.managed, true);
+  assert.equal(runtime.provenance.verified, true);
+  assert.equal(runtime.provenance.selectedRuntimeVersion, '0.46.32');
+  assert.equal(runtime.provenance.engineKind, 'postgres');
+  assert.match(runtime.provenance.canonicalStoreIdentityDigest, /^sha256:/);
+});
+
+test('managed GBrain runtime fails closed for owner, mode, and digest drift', () => {
+  const root = tempDir();
+  const executable = path.join(root, 'gbrain');
+  fs.writeFileSync(executable, '#!/bin/sh\nprintf managed\n', { mode: 0o755 });
+  const descriptor = managedRuntimeDescriptor(executable);
+
+  assert.equal(gbrain.validateManagedRuntime({ ...descriptor, expectedOwnerUid: 999999 }).failureClass, 'runtime-owner-mismatch');
+  fs.chmodSync(executable, 0o775);
+  assert.equal(gbrain.validateManagedRuntime(descriptor).failureClass, 'runtime-mode-unsafe');
+  fs.chmodSync(executable, 0o755);
+  assert.equal(gbrain.validateManagedRuntime({ ...descriptor, sha256: '0'.repeat(64) }).failureClass, 'runtime-digest-mismatch');
+});
+
+test('managed GBrain runtime rejects a group-writable ancestor', () => {
+  const root = tempDir();
+  const unsafe = path.join(root, 'unsafe-runtime');
+  fs.mkdirSync(unsafe, { mode: 0o770 });
+  fs.chmodSync(unsafe, 0o770);
+  const executable = path.join(unsafe, 'gbrain');
+  fs.writeFileSync(executable, '#!/bin/sh\nprintf unsafe\n', { mode: 0o700 });
+  const result = gbrain.validateManagedRuntime(managedRuntimeDescriptor(executable));
+  assert.equal(result.ok, false);
+  assert.equal(result.failureClass, 'runtime-ancestor-unsafe');
+});
+
+test('managed GBrain runtime revalidates before every spawn', () => {
+  const root = tempDir();
+  const executable = path.join(root, 'gbrain');
+  fs.writeFileSync(executable, '#!/bin/sh\nprintf first\n', { mode: 0o755 });
+  const config = {
+    gbrainBin: executable,
+    gbrainDir: root,
+    gbrainHome: root,
+    gbrainStore: path.join(root, 'store'),
+    managedRuntime: managedRuntimeDescriptor(executable),
+  };
+
+  assert.equal(gbrain.runGbrainCommand(config, ['search', 'one']).ok, true);
+  fs.writeFileSync(executable, '#!/bin/sh\nprintf changed\n', { mode: 0o755 });
+  const second = gbrain.runGbrainCommand(config, ['search', 'two']);
+  assert.equal(second.ok, false);
+  assert.equal(second.failureClass, 'runtime-digest-mismatch');
+});
+
+test('managed GBrain uses neutral cwd, minimal env, and does not inherit database routing', () => {
+  const root = tempDir();
+  const executable = path.join(root, 'gbrain');
+  const home = path.join(root, 'home');
+  const store = path.join(root, 'store');
+  fs.writeFileSync(executable, '#!/bin/sh\nprintf "%s|%s|%s|%s|%s|%s" "$PWD" "$GBRAIN_HOME" "$GBRAIN_STORE" "${DATABASE_URL:+set}" "${GBRAIN_BRAIN_ID:+set}" "$GBRAIN_SWEEP"\n', { mode: 0o755 });
+  const result = withEnv({
+    PRIVATE_TOKEN: 'do-not-inherit',
+    DATABASE_URL: 'postgresql://private:secret@localhost/brain',
+    GBRAIN_ENGINE: 'postgres',
+  }, () => gbrain.runGbrainCommand({
+    gbrainBin: executable,
+    gbrainDir: root,
+    gbrainHome: home,
+    gbrainStore: store,
+    managedRuntime: managedRuntimeDescriptor(executable),
+    managedProviderEnv: { GBRAIN_BRAIN_ID: 'host' },
+  }, ['search', 'one']));
+
+  assert.equal(result.ok, true);
+  assert.equal(result.stdout, `${fs.realpathSync(os.tmpdir())}|${home}|${store}||set|0`);
+});
+
+function writeManagedProviderDescriptor(root, executable, extras = {}) {
+  const descriptorPath = path.join(root, 'gbrain-runtime.json');
+  const skillsDir = path.join(root, 'skills');
+  const skillifyDir = path.join(skillsDir, 'skillify');
+  const manifestPath = path.join(skillsDir, 'manifest.json');
+  const skillifyPath = path.join(skillifyDir, 'SKILL.md');
+  fs.mkdirSync(skillifyDir, { recursive: true, mode: 0o755 });
+  fs.writeFileSync(manifestPath, JSON.stringify({ skills: [{ name: 'skillify', path: 'skillify/SKILL.md' }] }), { mode: 0o644 });
+  fs.writeFileSync(skillifyPath, '# Skillify\n', { mode: 0o644 });
+  const interpreterPath = path.join(root, 'node-interpreter');
+  fs.writeFileSync(interpreterPath, `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} "$@"\n`, { mode: 0o700 });
+  const descriptor = {
+    schemaVersion: 'jarvos-gbrain-runtime-descriptor/v1',
+    executablePath: executable,
+    sha256: sha256File(executable),
+    expectedOwnerUid: typeof process.getuid === 'function' ? process.getuid() : undefined,
+    version: '0.46.32.0',
+    commit: 'd11b7992d7085ada60505730f53bda7ab4df3313',
+    engineKind: 'postgres',
+    storeIdentity: { host: '127.0.0.1', port: 5432, database: 'gbrain' },
+    gbrainHome: path.join(root, 'home'),
+    gbrainStore: path.join(root, 'store'),
+    providerEnv: { GBRAIN_BRAIN_ID: 'host' },
+    interpreter: {
+      executablePath: interpreterPath,
+      sha256: sha256File(interpreterPath),
+      expectedOwnerUid: fs.statSync(interpreterPath).uid,
+    },
+    skills: {
+      directoryPath: skillsDir,
+      manifestSha256: sha256File(manifestPath),
+      skillifySha256: sha256File(skillifyPath),
+    },
+    ...extras,
+  };
+  fs.writeFileSync(descriptorPath, JSON.stringify(descriptor), { mode: 0o600 });
+  fs.chmodSync(descriptorPath, 0o600);
+  return { descriptorPath, descriptor };
+}
+
+test('managed provider descriptor pins the source and interpreter and prepares provider-owned stdio', () => {
+  const root = tempDir();
+  const executable = path.join(root, 'gbrain.js');
+  fs.writeFileSync(executable, '#!/usr/bin/env node\n', { mode: 0o755 });
+  const { descriptorPath } = writeManagedProviderDescriptor(root, executable);
+
+  const loaded = gbrain.loadManagedRuntimeDescriptor(descriptorPath);
+  assert.equal(loaded.ok, true);
+  assert.equal(loaded.runtime.executablePath, fs.realpathSync(executable));
+  assert.equal(loaded.runtime.launchCommand, fs.realpathSync(path.join(root, 'node-interpreter')));
+  assert.match(loaded.runtime.provenance.interpreterDigest, /^sha256:/);
+  assert.match(loaded.skills.manifestDigest, /^sha256:/);
+  assert.match(loaded.skills.skillifyDigest, /^sha256:/);
+
+  const prepared = withEnv({ DATABASE_URL: 'postgresql://ambient/must-not-leak' }, () => (
+    gbrain.prepareManagedGbrainProvider(descriptorPath)
+  ));
+  assert.equal(prepared.ok, true);
+  assert.deepEqual(prepared.args, [fs.realpathSync(executable), 'serve']);
+  assert.equal(prepared.env.DATABASE_URL, undefined);
+  assert.equal(prepared.env.GBRAIN_SWEEP, '0');
+  assert.equal(prepared.env.GBRAIN_BRAIN_ID, 'host');
+  assert.equal(prepared.env.GBRAIN_SKILLS_DIR, fs.realpathSync(path.join(root, 'skills')));
+  assert.match(prepared.provenance.skillifyDigest, /^sha256:/);
+});
+
+test('managed provider descriptor fails closed for unsafe mode and provider env', () => {
+  const root = tempDir();
+  const executable = path.join(root, 'gbrain.js');
+  fs.writeFileSync(executable, '#!/usr/bin/env node\n', { mode: 0o755 });
+  const { descriptorPath, descriptor } = writeManagedProviderDescriptor(root, executable);
+
+  fs.chmodSync(descriptorPath, 0o644);
+  assert.equal(gbrain.loadManagedRuntimeDescriptor(descriptorPath).failureClass, 'descriptor-mode-unsafe');
+
+  fs.writeFileSync(descriptorPath, JSON.stringify({
+    ...descriptor,
+    providerEnv: { DATABASE_URL: 'postgresql://must-live-in-owner-config' },
+  }), { mode: 0o600 });
+  fs.chmodSync(descriptorPath, 0o600);
+  assert.equal(gbrain.loadManagedRuntimeDescriptor(descriptorPath).failureClass, 'descriptor-provider-env-invalid');
+
+  fs.writeFileSync(path.join(root, 'skills', 'skillify', 'SKILL.md'), '# drifted\n');
+  fs.writeFileSync(descriptorPath, JSON.stringify(descriptor), { mode: 0o600 });
+  fs.chmodSync(descriptorPath, 0o600);
+  assert.equal(gbrain.loadManagedRuntimeDescriptor(descriptorPath).failureClass, 'runtime-skills-digest-mismatch');
+});
+
+test('provider launcher streams GBrain stdio without inheriting ambient database credentials', () => {
+  const root = tempDir();
+  const executable = path.join(root, 'gbrain.js');
+  fs.writeFileSync(executable, `#!/usr/bin/env node
+process.stdout.write(JSON.stringify({
+  args: process.argv.slice(2),
+  databaseUrl: process.env.DATABASE_URL || null,
+  sweep: process.env.GBRAIN_SWEEP,
+  brain: process.env.GBRAIN_BRAIN_ID,
+  skillsDir: process.env.GBRAIN_SKILLS_DIR || null,
+}));
+`, { mode: 0o755 });
+  const { descriptorPath } = writeManagedProviderDescriptor(root, executable);
+  const launcher = path.join(__dirname, '..', 'scripts', 'jarvos-gbrain-provider.js');
+  const launched = spawnSync(process.execPath, [launcher], {
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      DATABASE_URL: 'postgresql://ambient/must-not-leak',
+      JARVOS_GBRAIN_RUNTIME_DESCRIPTOR: descriptorPath,
+    },
+  });
+  assert.equal(launched.status, 0, launched.stderr);
+  assert.deepEqual(JSON.parse(launched.stdout), {
+    args: ['serve'],
+    databaseUrl: null,
+    sweep: '0',
+    brain: 'host',
+    skillsDir: fs.realpathSync(path.join(root, 'skills')),
+  });
+});
+
+test('successful managed recall redacts command path and query from public provenance', () => {
+  const root = tempDir();
+  const executable = path.join(root, 'gbrain');
+  fs.writeFileSync(executable, '#!/bin/sh\nprintf "[0.9] projects/safe-result -- answer"\n', { mode: 0o755 });
+  const privateQuery = 'private query must not reach provenance';
+  const result = gbrain.recallBundle({
+    gbrainBin: executable,
+    gbrainDir: root,
+    gbrainHome: root,
+    gbrainStore: path.join(root, 'store'),
+    managedRuntime: managedRuntimeDescriptor(executable),
+    includeQmd: false,
+  }, { query: privateQuery });
+
+  assert.equal(result.engines.gbrain.ok, true);
+  assert.equal(result.engines.gbrain.command.command, null);
+  assert.deepEqual(result.engines.gbrain.command.args, []);
+  assert.equal(result.engines.gbrain.command.stdoutSample, '');
+  const receipt = JSON.stringify({ command: result.engines.gbrain.command, provenance: result.provenance });
+  assert.doesNotMatch(receipt, new RegExp(root.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+  assert.doesNotMatch(receipt, /private query/);
+});
+
+test('managed runtime failure provenance is sanitized', () => {
+  const result = gbrain.recallBundle({
+    gbrainDir: '/private/gbrain',
+    gbrainHome: '/private/gbrain',
+    gbrainStore: '/private/store',
+    managedRuntime: { executablePath: 'relative', sha256: '0'.repeat(64) },
+    includeQmd: false,
+  }, { query: 'safe query' });
+
+  assert.equal(result.engines.gbrain.failureClass, 'runtime-invalid-descriptor');
+  assert.equal(result.engines.gbrain.text, '');
+  assert.equal(result.engines.gbrain.command.stderrSample, '');
+  assert.equal(result.provenance.gbrain.managed, true);
+  assert.equal(result.provenance.gbrain.verified, false);
+  assert.equal(result.provenance.gbrain.selectedRuntimeVersion, null);
+  assert.equal(result.provenance.gbrain.canonicalStoreIdentityDigest, null);
+  assert.equal(result.provenance.gbrain.failureClass, 'runtime-invalid-descriptor');
+  assert.doesNotMatch(JSON.stringify(result), /\/private\/gbrain|\/private\/store/);
+});
+
+test('stable GBrain identity ignores mutable corpus counts', () => {
+  const first = gbrain.deriveStableBrainIdentity({
+    engineKind: 'postgres',
+    storeIdentity: { host: '127.0.0.1', port: 5432, database: 'brain', pageCount: 1 },
+    sentinelDigest: 'sha256:sentinel',
+  });
+  const second = gbrain.deriveStableBrainIdentity({
+    engineKind: 'postgres',
+    storeIdentity: { database: 'brain', port: 5432, host: '127.0.0.1', pageCount: 9999 },
+    sentinelDigest: 'sha256:sentinel',
+  });
+  assert.equal(first.logicalBrainDigest, second.logicalBrainDigest);
+  assert.equal(first.storeIdentityDigest, second.storeIdentityDigest);
+  const otherStore = gbrain.deriveStableBrainIdentity({
+    engineKind: 'postgres',
+    storeIdentity: { host: '127.0.0.1', port: 5432, database: 'other-brain' },
+    sentinelDigest: 'sha256:sentinel',
+  });
+  assert.notEqual(first.storeIdentityDigest, otherStore.storeIdentityDigest);
+  assert.equal(first.logicalBrainDigest, otherStore.logicalBrainDigest);
+});
+
+test('stable GBrain identity rejects unsafe store identity fields', () => {
+  const result = gbrain.deriveStableBrainIdentity({
+    engineKind: 'postgres',
+    storeIdentity: { host: '127.0.0.1', port: 5432, database: 'brain', ['pass' + 'word']: 'not-safe' },
+    sentinelDigest: 'sha256:sentinel',
+  });
+  assert.deepEqual(result, { ok: false, failureClass: 'store-identity-invalid' });
+});
+
+test('legacy GBrain remains optional and never claims continuity', () => {
+  const root = tempDir();
+  const executable = path.join(root, 'gbrain');
+  fs.writeFileSync(executable, '#!/bin/sh\nprintf legacy\n', { mode: 0o755 });
+  const result = gbrain.recallBundle({ gbrainBin: executable, gbrainDir: root, includeQmd: false }, { query: 'legacy' });
+  assert.equal(result.engines.gbrain.ok, true);
+  assert.equal(result.engines.gbrain.provenance.managed, false);
+  assert.equal(result.provenance.gbrain.continuityClaimed, false);
+});
