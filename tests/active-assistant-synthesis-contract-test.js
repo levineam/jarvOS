@@ -87,6 +87,56 @@ test('v2 rejects the whole narrative instead of salvaging an invalid sibling', (
   assert.deepEqual(result.rejected.map((row) => row.reasonCode), ['unsupported_assistant_action']);
 });
 
+test('v2 accepts a narrative claim punctuated immediately before a closing quotation mark', () => {
+  const result = contract.composeProposal({
+    proposal: {
+      contractVersion: V2,
+      kind: 'proposal',
+      claims: [
+        { id: 'one', type: 'source_backed_observation', text: 'You returned to the manuscript this week.', sourceRefs: [source] },
+        { id: 'two', type: 'source_backed_observation', text: 'You wrote that “the thread became clearer.”', sourceRefs: [source] },
+      ],
+      closingQuestion: { id: 'question', text: 'Is the manuscript the thread to continue?', sourceRefs: [source] },
+    },
+    eligibleSourceIds: [source],
+  });
+  assert.equal(result.ok, true);
+  assert.equal(result.terminalOutcome, 'rendered');
+  assert.equal(result.rejected.length, 0);
+});
+
+test('v2 still rejects a narrative claim with trailing words after punctuation or no terminal punctuation', () => {
+  const trailingWords = contract.composeProposal({
+    proposal: {
+      contractVersion: V2,
+      kind: 'proposal',
+      claims: [
+        { id: 'one', type: 'source_backed_observation', text: 'You returned to the manuscript this week.', sourceRefs: [source] },
+        { id: 'two', type: 'source_backed_observation', text: 'You wrote that “the thread became clearer.” today', sourceRefs: [source] },
+      ],
+      closingQuestion: { id: 'question', text: 'Is the manuscript the thread to continue?', sourceRefs: [source] },
+    },
+    eligibleSourceIds: [source],
+  });
+  assert.equal(trailingWords.ok, false);
+  assert.deepEqual(trailingWords.rejected.map((row) => row.reasonCode), ['narrative_claim_invalid']);
+
+  const noPunctuation = contract.composeProposal({
+    proposal: {
+      contractVersion: V2,
+      kind: 'proposal',
+      claims: [
+        { id: 'one', type: 'source_backed_observation', text: 'You returned to the manuscript this week.', sourceRefs: [source] },
+        { id: 'two', type: 'source_backed_observation', text: 'You wrote that “the thread became clearer”', sourceRefs: [source] },
+      ],
+      closingQuestion: { id: 'question', text: 'Is the manuscript the thread to continue?', sourceRefs: [source] },
+    },
+    eligibleSourceIds: [source],
+  });
+  assert.equal(noPunctuation.ok, false);
+  assert.deepEqual(noPunctuation.rejected.map((row) => row.reasonCode), ['narrative_claim_invalid']);
+});
+
 test('v2 rejects dangling subjects such as “that work”', () => {
   const result = contract.composeProposal({
     proposal: {
