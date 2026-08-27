@@ -64,6 +64,29 @@
       "jarvos_session_thread_write"
     ]
   },
+  "gbrainContinuity": {
+    "version": "jarvos-gbrain-continuity/v1",
+    "availability": "optional-public-required-private",
+    "provider": "gbrain",
+    "transport": "provider-native-stdio",
+    "launcher": "modules/jarvos-gbrain/scripts/jarvos-gbrain-provider.js",
+    "descriptorEnvironment": "JARVOS_GBRAIN_RUNTIME_DESCRIPTOR",
+    "requiredTools": ["get_brain_identity", "recall", "remember", "list_skills", "get_skill"],
+    "skillProjection": {
+      "owner": "gbrain",
+      "mode": "provider-resolver",
+      "skill": "skillify",
+      "copiedIntoJarvosSkills": false
+    },
+    "maintenance": {
+      "sweepDisabled": true,
+      "owner": "scheduler-owned-delta-maintenance"
+    },
+    "registration": {
+      "command": "hermes mcp add gbrain --command node --env JARVOS_GBRAIN_RUNTIME_DESCRIPTOR=<owner-only-descriptor> --args <provider-launcher>",
+      "verification": "hermes mcp test gbrain followed by a native recall turn"
+    }
+  },
   "targets": [
     {
       "id": "hermes-agent",

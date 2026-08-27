@@ -3,6 +3,31 @@
 This adapter connects local Codex CLI and Codex app sessions to jarvOS through
 the shared `@jarvos/agent-context` MCP server and a Codex `SessionStart` hook.
 
+## Private GBrain continuity
+
+Portable setup keeps GBrain optional. A private continuity profile registers a
+second MCP server named `gbrain` through
+`modules/jarvos-gbrain/scripts/jarvos-gbrain-provider.js`, with
+`JARVOS_GBRAIN_RUNTIME_DESCRIPTOR` pointing at the same owner-only descriptor
+used by Hermes and OpenClaw. The launcher revalidates the pinned GBrain source
+and Bun interpreter before handing stdio directly to GBrain. It does not proxy
+tools or persist database credentials in Codex configuration.
+
+Codex discovers Skillify through GBrain's `list_skills` and `get_skill` tools.
+Do not copy Skillify into `~/.codex/skills`: that would bypass GBrain's resolver
+and sever update provenance. Registration presence is only configuration
+evidence; continuity requires a native recall turn plus Skillify discovery
+against the shared runtime/brain/store tuple.
+
+Register and inspect the provider with Codex's native stdio surface:
+
+```bash
+codex mcp add gbrain \
+  --env JARVOS_GBRAIN_RUNTIME_DESCRIPTOR=<owner-only-descriptor> \
+  -- node <provider-launcher>
+codex mcp get gbrain
+```
+
 ## Compound Engineering provider
 
 `compound-engineering-capability.json` declares the approved Compound Engineering

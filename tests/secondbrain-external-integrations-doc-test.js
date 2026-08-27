@@ -32,7 +32,7 @@ test('secondbrain external integration inventory names required components and s
     ['obsidian-cli', 'optional'],
     ['Defuddle', 'optional'],
     ['QMD', 'active'],
-    ['GBrain', 'active'],
+    ['GBrain', 'optional'],
     ['OpenClaw memory-wiki', 'active'],
     ['OpenClaw runtime memory', 'active'],
     ['generated LLM-wiki / secondbrain wiki', 'generated'],

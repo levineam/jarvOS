@@ -32,6 +32,13 @@
         "timezone": { "type": "string" }
       },
       "additionalProperties": true
+    },
+    "gbrainContinuity": {
+      "type": "object",
+      "properties": {
+        "required": { "type": "boolean" }
+      },
+      "additionalProperties": true
     }
   },
   "additionalProperties": true

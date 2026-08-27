@@ -14,6 +14,7 @@ const {
   collectOpenClawPluginEvidence,
   inspectCompoundEngineeringProvider,
 } = require('../../jarvos-runtime-kit/src');
+const { loadHealthModules } = require('../../../lib/jarvos-doctor-modules');
 
 const MINIMAL_WORKSPACE_FILES = [
   'MEMORY.md',
@@ -178,6 +179,31 @@ function createStatusCheck(component, status, message, details = {}) {
     message,
     ...details,
   };
+}
+
+function gbrainContinuityCheck(workspace, config, options = {}) {
+  const required = config?.gbrainContinuity?.required === true;
+  const report = loadHealthModules({
+    workspace,
+    now: options.now || new Date(),
+    expectedContinuity: required,
+  });
+  const continuity = report.modules.find((module) => module.id === 'gbrain-continuity');
+  if (!continuity) return null;
+
+  const healthy = continuity.state === 'healthy';
+  const status = healthy ? 'ok' : (required ? 'fail' : 'warn');
+  const targets = Array.isArray(continuity.targets)
+    ? continuity.targets.map(({ target, evidenceState, reasonClass }) => ({ target, evidenceState, reasonClass }))
+    : [];
+  return createStatusCheck(
+    'provider.gbrainContinuity',
+    status,
+    healthy
+      ? 'GBrain continuity is live-turn proven for Codex, Hermes, and OpenClaw'
+      : `GBrain continuity evidence needs attention (${continuity.reasonClass})`,
+    { required, generation: continuity.generation, reasonClass: continuity.reasonClass, targets },
+  );
 }
 
 function validateCompoundEngineeringProvider(options = {}) {
@@ -596,6 +622,8 @@ function runMinimalDoctor(options = {}) {
   checks.push(validateObsidianSingleWriter(workspace, configSchemaCheck.config, options));
   checks.push(validateObsidianPaths(workspace, configSchemaCheck.config, options));
   checks.push(validateCompoundEngineeringProvider(options));
+  const continuity = gbrainContinuityCheck(workspace, configSchemaCheck.config, options);
+  if (continuity) checks.push(continuity);
 
   const ok = checks.every((check) => check.ok);
   return {

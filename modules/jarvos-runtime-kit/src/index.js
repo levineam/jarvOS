@@ -22,6 +22,25 @@ const DEFAULT_AGENT_CONTEXT_MCP = 'modules/jarvos-agent-context/scripts/jarvos-m
 const REQUIRED_MCP_TOOL = 'jarvos_hydrate';
 const CONTROL_PLANE_TOOL = 'jarvos_control_plane';
 const CONTROL_PLANE_MODULE = 'modules/jarvos-control-plane/scripts/jarvos-manager.js';
+const GBRAIN_CONTINUITY_VERSION = 'jarvos-gbrain-continuity/v1';
+const GBRAIN_PROVIDER_LAUNCHER = 'modules/jarvos-gbrain/scripts/jarvos-gbrain-provider.js';
+const GBRAIN_DESCRIPTOR_ENV = 'JARVOS_GBRAIN_RUNTIME_DESCRIPTOR';
+const GBRAIN_CONTINUITY_HARNESSES = new Set(['codex', 'hermes', 'openclaw']);
+const GBRAIN_REQUIRED_TOOLS = Object.freeze(['get_brain_identity', 'recall', 'remember', 'list_skills', 'get_skill']);
+const GBRAIN_NATIVE_REGISTRATION = Object.freeze({
+  codex: {
+    command: 'codex mcp add gbrain --env JARVOS_GBRAIN_RUNTIME_DESCRIPTOR=<owner-only-descriptor> -- node <provider-launcher>',
+    verification: 'codex mcp get gbrain followed by a native recall turn',
+  },
+  hermes: {
+    command: 'hermes mcp add gbrain --command node --env JARVOS_GBRAIN_RUNTIME_DESCRIPTOR=<owner-only-descriptor> --args <provider-launcher>',
+    verification: 'hermes mcp test gbrain followed by a native recall turn',
+  },
+  openclaw: {
+    command: 'openclaw mcp add gbrain --command node --arg <provider-launcher> --env JARVOS_GBRAIN_RUNTIME_DESCRIPTOR=<owner-only-descriptor>',
+    verification: 'openclaw mcp probe gbrain --json followed by a native recall turn',
+  },
+});
 const HYDRATION_MODES = ['hook', 'manual', 'unsupported'];
 const COMPOUND_ENGINEERING_CAPABILITY_VERSION = 'jarvos-codex-ce-capability.v1';
 const COMPOUND_ENGINEERING_OPERATIONS = ['plan', 'work', 'compound'];
@@ -959,6 +978,44 @@ function validateManifest(manifest) {
   if (!Array.isArray(shared.requiredTools) || !shared.requiredTools.includes(REQUIRED_MCP_TOOL)) {
     add(errors, `sharedAgentContext.requiredTools must include ${REQUIRED_MCP_TOOL}`);
   }
+  if (GBRAIN_CONTINUITY_HARNESSES.has(manifest.id)) {
+    const continuity = manifest.gbrainContinuity;
+    if (!isObject(continuity)) {
+      add(errors, 'gbrainContinuity is required for private continuity harnesses');
+    } else {
+      if (continuity.version !== GBRAIN_CONTINUITY_VERSION) add(errors, `gbrainContinuity.version must be ${GBRAIN_CONTINUITY_VERSION}`);
+      if (continuity.availability !== 'optional-public-required-private') add(errors, 'gbrainContinuity.availability must preserve the public/private boundary');
+      if (continuity.provider !== 'gbrain') add(errors, 'gbrainContinuity.provider must be gbrain');
+      if (continuity.transport !== 'provider-native-stdio') add(errors, 'gbrainContinuity.transport must be provider-native-stdio');
+      if (continuity.launcher !== GBRAIN_PROVIDER_LAUNCHER) add(errors, `gbrainContinuity.launcher must be ${GBRAIN_PROVIDER_LAUNCHER}`);
+      if (continuity.descriptorEnvironment !== GBRAIN_DESCRIPTOR_ENV) add(errors, `gbrainContinuity.descriptorEnvironment must be ${GBRAIN_DESCRIPTOR_ENV}`);
+      if (!Array.isArray(continuity.requiredTools)
+        || GBRAIN_REQUIRED_TOOLS.some((tool) => !continuity.requiredTools.includes(tool))) {
+        add(errors, `gbrainContinuity.requiredTools must include ${GBRAIN_REQUIRED_TOOLS.join(', ')}`);
+      }
+      const skill = continuity.skillProjection;
+      if (!isObject(skill) || skill.owner !== 'gbrain' || skill.mode !== 'provider-resolver'
+        || skill.skill !== 'skillify' || skill.copiedIntoJarvosSkills !== false) {
+        add(errors, 'gbrainContinuity.skillProjection must keep Skillify provider-owned and resolver-backed');
+      }
+      const maintenance = continuity.maintenance;
+      if (!isObject(maintenance) || maintenance.sweepDisabled !== true
+        || maintenance.owner !== 'scheduler-owned-delta-maintenance') {
+        add(errors, 'gbrainContinuity.maintenance must disable serve sweeps and preserve the scheduler owner');
+      }
+      if (!isObject(continuity.registration)
+        || typeof continuity.registration.command !== 'string' || !continuity.registration.command
+        || typeof continuity.registration.verification !== 'string' || !continuity.registration.verification) {
+        add(errors, 'gbrainContinuity.registration must declare native registration and verification');
+      } else {
+        const native = GBRAIN_NATIVE_REGISTRATION[manifest.id];
+        if (continuity.registration.command !== native.command
+          || continuity.registration.verification !== native.verification) {
+          add(errors, `gbrainContinuity.registration must use the verified ${manifest.id} native MCP command contract`);
+        }
+      }
+    }
+  }
   if (manifest.controlPlane) {
     if (manifest.controlPlane.module !== CONTROL_PLANE_MODULE) add(errors, `controlPlane.module must be ${CONTROL_PLANE_MODULE}`);
     if (!shared.requiredTools?.includes(CONTROL_PLANE_TOOL)) add(errors, `sharedAgentContext.requiredTools must include ${CONTROL_PLANE_TOOL} when controlPlane is declared`);
@@ -1132,6 +1189,15 @@ function checkRuntime(manifestPath, options = {}) {
   const readmePath = path.join(runtimeDir, 'README.md');
   if (!fs.existsSync(readmePath)) add(errors, `README missing: ${rel(root, readmePath)}`);
 
+  if (manifest.gbrainContinuity?.launcher === GBRAIN_PROVIDER_LAUNCHER) {
+    const launcher = path.join(root, GBRAIN_PROVIDER_LAUNCHER);
+    if (!fs.existsSync(launcher)) {
+      add(errors, `GBrain provider launcher missing: ${GBRAIN_PROVIDER_LAUNCHER}`);
+    } else if (!sourceContains(launcher, [/prepareManagedGbrainProvider/, /stdio:\s*['"]inherit['"]/])) {
+      add(errors, 'GBrain provider launcher must revalidate the managed runtime and preserve provider-owned stdio');
+    }
+  }
+
   const mcpServerPath = manifest.sharedAgentContext?.mcpServer;
   const mcpServer = mcpServerPath === DEFAULT_AGENT_CONTEXT_MCP ? path.join(root, mcpServerPath) : null;
   if (mcpServerPath === DEFAULT_AGENT_CONTEXT_MCP && !fs.existsSync(mcpServer)) {
@@ -1304,6 +1370,10 @@ module.exports = {
   REQUIRED_MCP_TOOL,
   CONTROL_PLANE_MODULE,
   CONTROL_PLANE_TOOL,
+  GBRAIN_CONTINUITY_VERSION,
+  GBRAIN_PROVIDER_LAUNCHER,
+  GBRAIN_DESCRIPTOR_ENV,
+  GBRAIN_REQUIRED_TOOLS,
   COMPOUND_ENGINEERING_CAPABILITY_VERSION,
   MANAGED_ACTIVATION_HARNESS_ORDER,
   MANAGED_ACTIVATION_OWNER_EVIDENCE_VERSION,

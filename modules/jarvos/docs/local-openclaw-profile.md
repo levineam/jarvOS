@@ -37,24 +37,23 @@ jarvos init --profile local-openclaw \
 
 ## GBrain Provider
 
-The profile can use GBrain 0.42.52.0+ as an optional brain-native provider for
-memory lookup, advisor/status, SkillOpt, and GBrain skillpack reference. GBrain is
-not the jarvOS foundation and does not own Paperclip state, workflow-execution,
-release placement, note creation, journal backlinks, or local governance.
+Portable jarvOS treats GBrain as optional. Andrew's private profile requires
+one shared local GBrain for Codex, Hermes, and OpenClaw. GBrain owns structured
+recall and provider-owned skills; it does not own Paperclip state,
+workflow-execution, release placement, raw Vault notes, journal backlinks, or
+jarvOS governance.
 
-Useful setup checks:
+The supported private topology is local Postgres plus one provider-native stdio
+registration per harness. Each registration runs the jarvOS provenance
+launcher with the same owner-only runtime descriptor. Database credentials
+remain in GBrain's owner-only configuration, the service stays loopback-only,
+and `GBRAIN_SWEEP=0` leaves maintenance to the scheduler-owned delta path.
+Remote `gbrain connect` is not the default for this local private topology.
 
-```bash
-gbrain --version
-gbrain status --fast --json
-gbrain advisor --json
-gbrain connect <https://brain.example.com/mcp> --agent codex --install --yes
-gbrain connect <https://brain.example.com/mcp> --agent claude-code --install --yes
-```
-
-OpenClaw and Hermes should expose equivalent connection state through their
-adapter config. `jarvos doctor` reports unknown runtime connection state as
-`skipped` until the adapter can prove it.
+Skillify is not installed into Codex or the jarvOS shared-skill bundle. Enable
+GBrain's skill publication consent in the private profile, then prove discovery
+through GBrain's `list_skills` and `get_skill` tools so resolver provenance and
+quality gates remain intact.
 
 ## Doctor
 
@@ -95,8 +94,23 @@ Doctor also reports:
   the profile's minimum provider version.
 - `provider.gbrain.status`: `gbrain status --fast --json` summary when available.
 - `provider.gbrain.advisor`: advisor availability and worst-severity summary.
-- `provider.gbrain.runtime.<tool>`: per-runtime connection state for Codex,
-  Claude Code, OpenClaw, and Hermes when detectable.
+- the `gbrain-continuity` health module: per-target registration, reachability,
+  runtime/brain/store identity, capability, freshness, maintenance, backup,
+  machine proof, and native live-turn proof for Codex, Hermes, and OpenClaw.
+
+An installed binary is never treated as continuity proof. All three targets
+must match the same runtime, logical-brain, store, and fixture digests; Codex
+must additionally prove Skillify discovery. Raw URLs, paths, credentials,
+queries, and recalled content stay out of the public doctor snapshot.
+
+The snapshot producer accepts only an owner-only, exact-schema input and writes
+the continuity module atomically with a strictly increasing generation:
+
+```bash
+node scripts/jarvos-gbrain-continuity-snapshot.js \
+  --workspace /absolute/jarvos-workspace \
+  --input /absolute/owner-only/continuity-snapshot.json
+```
 
 Missing GBrain is a warning, not a profile failure. Stale GBrain remains visible
 until upgraded because provider drift can silently weaken memory and skillpack

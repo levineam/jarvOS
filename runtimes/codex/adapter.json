@@ -52,6 +52,29 @@
       "jarvos_control_plane"
     ]
   },
+  "gbrainContinuity": {
+    "version": "jarvos-gbrain-continuity/v1",
+    "availability": "optional-public-required-private",
+    "provider": "gbrain",
+    "transport": "provider-native-stdio",
+    "launcher": "modules/jarvos-gbrain/scripts/jarvos-gbrain-provider.js",
+    "descriptorEnvironment": "JARVOS_GBRAIN_RUNTIME_DESCRIPTOR",
+    "requiredTools": ["get_brain_identity", "recall", "remember", "list_skills", "get_skill"],
+    "skillProjection": {
+      "owner": "gbrain",
+      "mode": "provider-resolver",
+      "skill": "skillify",
+      "copiedIntoJarvosSkills": false
+    },
+    "maintenance": {
+      "sweepDisabled": true,
+      "owner": "scheduler-owned-delta-maintenance"
+    },
+    "registration": {
+      "command": "codex mcp add gbrain --env JARVOS_GBRAIN_RUNTIME_DESCRIPTOR=<owner-only-descriptor> -- node <provider-launcher>",
+      "verification": "codex mcp get gbrain followed by a native recall turn"
+    }
+  },
   "targets": [
     {
       "id": "codex-cli",
