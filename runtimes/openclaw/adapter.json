@@ -158,7 +158,7 @@
     "bridge": {
       "environment": "JARVOS_STEWARDSHIP_BRIDGE_COMMAND",
       "route": "owner-only hashed session mapping",
-      "contract": "The managed launcher uses the private bridge environment for lifecycle calls and records only the staged bridge executable and context paths under a SHA-256 key derived from the explicit OpenClaw session key or ID. The separate gateway process uses its own session context to select that exact mapping and may inject only a bounded public-safe judgment receipt."
+      "contract": "The managed launcher uses the private bridge environment for lifecycle calls and records only the staged bridge executable and context paths under a SHA-256 key derived from the explicit OpenClaw session key or ID. A schemaVersion 2 mapping additionally carries `projectsEnvironment`: the exact owner-selected six-field Projects binding (runtime root, private/public commits, config, provider module, public root). The gateway validates that mapping and its mode-0600 context file, passes the binding only to projectsContextRefresh, and may inject only bounded public-safe judgment or validated jarvos.projects-context-refresh/v1 refreshed/partial context."
     },
     "capabilities": {
       "startOrResume": { "mode": "managed-launcher" },
@@ -166,6 +166,7 @@
       "checkpoint": { "mode": "managed-launcher", "state": "stable-idle" },
       "stop": { "mode": "managed-launcher" },
       "nextTurnInput": { "mode": "native-hook", "event": "agent_turn_prepare", "script": "jarvos-next-turn-plugin.js" },
+      "projectsContextRefresh": { "mode": "native-hook", "event": "agent_turn_prepare", "script": "jarvos-next-turn-plugin.js", "timeoutMs": 250, "contract": "jarvos.projects-context-refresh/v1" },
       "availability": { "mode": "managed-launcher" }
     }
   },
