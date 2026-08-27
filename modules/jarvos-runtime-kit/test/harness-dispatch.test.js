@@ -5,15 +5,19 @@ const test = require('node:test');
 
 const {
   CODING_EXECUTION_AUTHORITIES,
+  COMMON_WORK_ACTIONS,
   authorizeToolCall,
   buildEgressPacket,
+  createCommonWorkBridge,
   createLifecycleReceipt,
   createSessionHandoff,
+  createWorkHandoff,
   redactDiagnostics,
   sanitizeChildEnvironment,
   validateCapabilityProfile,
   validateDispatchRequest,
   validateSessionHandoff,
+  validateWorkHandoff,
 } = require('../src/index.js');
 
 const profile = {
@@ -82,6 +86,106 @@ test('validates a dispatch request bound to an opaque identity', () => {
   }));
   assert.equal(rejected.ok, false);
   assert.match(rejected.errors.join('\n'), /interactionWindowId/);
+});
+
+test('common work handoffs use canonical pointers only', () => {
+  const handoff = createWorkHandoff({
+    workId: 'work:SUP-2214',
+    workspaceId: 'workspace:jarvos-main',
+    headOid: 'a'.repeat(40),
+  });
+  assert.equal(handoff.ok, true, handoff.errors?.join('\n'));
+  assert.deepEqual(handoff.handoff, {
+    workId: 'work:SUP-2214', workspaceId: 'workspace:jarvos-main', headOid: 'a'.repeat(40),
+  });
+  assert.equal(validateWorkHandoff({ ...handoff.handoff, branch: 'unsafe-copy' }).ok, false);
+  assert.equal(validateWorkHandoff({ ...handoff.handoff, headOid: 'short' }).ok, false);
+});
+
+test('common work bridge exposes one vocabulary and rereads authority before resume or mutation', async () => {
+  const calls = [];
+  const handoff = { workId: 'work:SUP-2214', workspaceId: 'workspace:jarvos-main', headOid: 'a'.repeat(40) };
+  const authority = Object.fromEntries(COMMON_WORK_ACTIONS.map((action) => [action, async (input) => {
+    calls.push(action);
+    return { ok: true, action, input, ...handoff };
+  }]));
+  authority.reread = async (input) => {
+    calls.push(`reread:${input.action}`);
+    return { ok: true, ...handoff };
+  };
+  const bridge = createCommonWorkBridge(authority);
+
+  assert.deepEqual(Object.keys(bridge.availability), COMMON_WORK_ACTIONS);
+  assert.deepEqual(COMMON_WORK_ACTIONS.filter((action) => typeof bridge[action] === 'function'), COMMON_WORK_ACTIONS);
+  await bridge.get_status({ handoff });
+  await bridge.attach_or_resume({ handoff });
+  await bridge.submit_judgment({ handoff, judgment: 'hold' });
+  await bridge.claim({ handoff });
+  await bridge.request_or_answer_approval({ handoff, answer: 'wait' });
+  await bridge.get_terminal_receipt({ handoff, operationId: 'operation:one' });
+  assert.deepEqual(calls, [
+    'reread:get_status', 'get_status',
+    'reread:attach_or_resume', 'attach_or_resume',
+    'reread:submit_judgment', 'submit_judgment',
+    'reread:claim', 'claim',
+    'reread:request_or_answer_approval', 'request_or_answer_approval',
+    'reread:get_terminal_receipt', 'get_terminal_receipt',
+  ]);
+  assert.equal('authoritySnapshot' in (await bridge.claim({ handoff })).input, false);
+});
+
+test('common work bridge fails closed for stale, dirty, foreign, or unavailable authority', async () => {
+  const handoff = { workId: 'work:SUP-2214', workspaceId: 'workspace:jarvos-main', headOid: 'a'.repeat(40) };
+  for (const [label, snapshot, code] of [
+    ['stale', { ok: true, ...handoff, stale: true }, 'stale_handoff'],
+    ['dirty', { ok: true, ...handoff, dirty: true }, 'dirty_workspace'],
+    ['foreign', { ok: true, ...handoff, foreign: true }, 'foreign_workspace'],
+    ['head changed', { ok: true, ...handoff, headOid: 'b'.repeat(40) }, 'stale_handoff'],
+  ]) {
+    let mutated = false;
+    const result = await createCommonWorkBridge({
+      reread: async () => snapshot,
+      claim: async () => { mutated = true; return { ok: true }; },
+    }).claim({ handoff });
+    assert.equal(result.ok, false, label);
+    assert.equal(result.code, code, label);
+    assert.equal(mutated, false, label);
+  }
+  assert.equal((await createCommonWorkBridge({ claim: async () => ({ ok: true }) }).claim({ handoff })).code, 'authority_reread_required');
+  assert.equal(createCommonWorkBridge({ claim: async () => ({ ok: true }) }).availability.claim, false);
+  assert.equal(createCommonWorkBridge({ get_terminal_receipt: async () => ({ ok: true }) }).availability.get_terminal_receipt, false);
+});
+
+test('common work bridge rejects authority-shaped input and cross-work terminal receipts', async () => {
+  const handoff = { workId: 'work:SUP-2214', workspaceId: 'workspace:jarvos-main', headOid: 'a'.repeat(40) };
+  const reread = async () => ({ ok: true, ...handoff });
+  let calls = 0;
+  const bridge = createCommonWorkBridge({
+    reread,
+    claim: async (input) => { calls += 1; return { ok: true, ...handoff, input }; },
+    get_terminal_receipt: async () => ({ ok: true, workId: 'work:OTHER', workspaceId: handoff.workspaceId, headOid: handoff.headOid }),
+  });
+  for (const hostile of [
+    { authoritySnapshot: { ownerLease: 'lease:other' } },
+    { payload: { privateSnapshot: { path: '/private' } } },
+    { lease: 'lease:other' },
+  ]) {
+    assert.deepEqual(await bridge.claim({ handoff, ...hostile }), { ok: false, code: 'reserved_authority_input' });
+  }
+  const inherited = Object.create({ privateSnapshot: { lease: 'lease:inherited' } });
+  inherited.handoff = handoff;
+  assert.deepEqual(await bridge.claim(inherited), { ok: false, code: 'reserved_authority_input' });
+  const hidden = { handoff };
+  Object.defineProperty(hidden, 'lease', { value: 'lease:hidden', enumerable: false });
+  assert.deepEqual(await bridge.claim(hidden), { ok: false, code: 'reserved_authority_input' });
+  const callable = () => {};
+  callable.handoff = handoff;
+  callable.privateSnapshot = { lease: 'lease:callable' };
+  assert.deepEqual(await bridge.claim(callable), { ok: false, code: 'reserved_authority_input' });
+  assert.equal(calls, 0);
+  assert.deepEqual(await bridge.get_terminal_receipt({ handoff, operationId: 'operation:one' }), {
+    ok: false, code: 'authority_result_mismatch',
+  });
 });
 
 test('authorizes tools at the server boundary with an identity verifier', () => {
