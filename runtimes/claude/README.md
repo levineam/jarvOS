@@ -16,7 +16,7 @@ From the jarvOS repo root:
 The setup script:
 
 - registers a user-scoped Claude Code MCP server named `jarvos`
-- installs a Claude Code `SessionStart` hook in `~/.claude/settings.json`
+- installs Claude Code `SessionStart` and `PreCompact` hooks in `~/.claude/settings.json`
 - materializes `~/.claude/CLAUDE.md` from
   `runtimes/claude/templates/CLAUDE.md.template` (see
   [Claude Code CLAUDE.md bootstrap](#claude-code-claudemd-bootstrap) below)
@@ -30,19 +30,40 @@ Claude Code MCP registration uses:
 claude mcp add --scope user jarvos -- node "$PWD/modules/jarvos-agent-context/scripts/jarvos-mcp.js"
 ```
 
+Optional Todo work-action host bindings are passed through when set, and never
+required for setup to succeed:
+
+```bash
+JARVOS_WORK_ACTION_SERVICE_MODULE=/absolute/path/in/workspace/work-action-host-service.js \
+JARVOS_PROJECTS_CONTEXT_CONFIG=/absolute/path/to/jarvos-project-context.json \
+  ./runtimes/claude/setup.sh
+```
+
+Copy `examples/work-action-host-service.js` into the Projects `workspaceRoot`
+as an owner-only file. The MCP server refuses any module outside that root.
+Leave both variables unset on a public/minimal install.
+
 ## Claude Code Hydration
 
 Target: `claude-code`.
 
 Claude Code supports `SessionStart` hook `additionalContext`, so the adapter
 uses `runtimes/claude/jarvos-session-start-hook.js` to emit the same jarvOS
-Working Context Packet used by Codex.
+Working Context Packet used by Codex. The hook matcher is `startup|resume|compact`
+so a compaction or resume re-orients the session instead of dropping jarvOS
+context. Compact and resume use a 4,000 character packet because the session
+already carries a summary of its own history; startup keeps the 9,500 character
+default. Both budgets are capped by `JARVOS_CLAUDE_HYDRATION_MAX_CHARS` when
+set. Claude Code caps hook-injected context at 10,000 characters.
 
-Claude Code caps hook-injected context at 10,000 characters. This adapter uses a
-9,500 character default budget, configurable with
-`JARVOS_CLAUDE_HYDRATION_MAX_CHARS`. Hook failures are logged to
-`~/.claude/jarvos-hydration.log` and fail open with an empty hook result so
-Claude startup is not blocked.
+Before compaction, `runtimes/claude/jarvos-precompact-hook.js` appends a
+mechanical session-thread checkpoint (cwd, git HEAD, dirty-path count, trigger).
+It does not persist compaction summaries or other prompt-derived content.
+PreCompact cannot inject `additionalContext`; re-orientation happens on the
+following `SessionStart` with `source: compact`.
+
+Hook failures are logged to `~/.claude/jarvos-hydration.log` and fail open with
+an empty hook result so Claude startup and compaction are not blocked.
 
 When the optional stewardship bridge is enabled by the managed launcher, Claude
 hooks resolve a pending judgment from the hook's `session_id` and an owner-only,
@@ -135,6 +156,10 @@ does not imply automatic startup context injection for Claude Desktop.
 - `jarvos_hydrate` — bounded working-context packet with a host-issued Projects
   orientation packet (or explicit unavailable/partial state), today's journal,
   linked notes, jarvOS ontology spine, redaction, and a hydration report.
+- `jarvos_todo_*` — claim-based Beads Todo tools through the host work-action
+  service. Requires `JARVOS_WORK_ACTION_SERVICE_MODULE` and
+  `JARVOS_PROJECTS_CONTEXT_CONFIG` on the MCP process; without those host
+  bindings the tools are present but unavailable.
 
 ## Secondbrain Capture Rule
 
@@ -150,5 +175,6 @@ and do not create guessed daily journal files under `Notes/`.
 ```bash
 claude mcp get jarvos
 node runtimes/claude/jarvos-session-start-hook.js
+node runtimes/claude/jarvos-precompact-hook.js
 node modules/jarvos-runtime-kit/scripts/jarvos-runtime-kit.js check claude
 ```

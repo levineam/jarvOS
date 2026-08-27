@@ -97,6 +97,7 @@ test('stewardship bootstrap declarations reject a missing action, selected asset
   const baseline = manifestFor('codex').stewardshipAdapter.bootstrap;
   for (const [label, mutate] of [
     ['action', (value) => { value.actions = value.actions.slice(1); }],
+    ['stale five-action list missing session-precompact', (value) => { value.actions = ['harness-launch', 'session-start', 'session-turn', 'bridge', 'provenance-probe']; }],
     ['asset', (value) => { value.selectedRuntimeAssets = []; }],
     ['inspection', (value) => { delete value.installedConfig.inspection; }],
     ['entrypoint', (value) => { value.entrypoint = { kind: 'unknown', path: 'unknown' }; }],
@@ -353,7 +354,7 @@ test('Claude turn hooks accept only a consistent canonical or transcript-derived
     ].join('\n'), { mode: 0o755 });
     fs.chmodSync(bridge, 0o755);
     const env = {
-      ...process.env,
+      ...cleanEnv(),
       PATH: `${bin}${path.delimiter}${oldPath || ''}`,
       JARVOS_STEWARDSHIP_BRIDGE_COMMAND: 'jarvos-stewardship-bridge',
     };
@@ -574,6 +575,94 @@ test('Claude SessionStart persists only a validated bridge command and neutral m
   }
 });
 
+test('Claude SessionStart uses a smaller hydration budget after compact or resume', () => {
+  const hook = require(path.join(ROOT, 'runtimes', 'claude', 'jarvos-session-start-hook.js'));
+  const previous = {
+    claude: process.env.JARVOS_CLAUDE_HYDRATION_MAX_CHARS,
+    shared: process.env.JARVOS_HYDRATION_MAX_CHARS,
+  };
+  delete process.env.JARVOS_CLAUDE_HYDRATION_MAX_CHARS;
+  delete process.env.JARVOS_HYDRATION_MAX_CHARS;
+  try {
+    assert.equal(hook.hydrationMaxChars({ source: 'startup' }), hook.DEFAULT_MAX_CHARS);
+    assert.equal(hook.hydrationMaxChars({ source: 'compact' }), hook.REORIENT_MAX_CHARS);
+    assert.equal(hook.hydrationMaxChars({ source: 'resume' }), hook.REORIENT_MAX_CHARS);
+    assert.equal(hook.hydrationMaxChars({}), hook.DEFAULT_MAX_CHARS);
+    process.env.JARVOS_CLAUDE_HYDRATION_MAX_CHARS = '2000';
+    assert.equal(hook.hydrationMaxChars({ source: 'startup' }), 2000);
+    assert.equal(hook.hydrationMaxChars({ source: 'compact' }), 2000);
+  } finally {
+    for (const [key, value] of Object.entries({
+      JARVOS_CLAUDE_HYDRATION_MAX_CHARS: previous.claude,
+      JARVOS_HYDRATION_MAX_CHARS: previous.shared,
+    })) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+});
+
+test('Claude PreCompact hook flushes mechanical session-thread state and fails open', () => {
+  const hook = require(path.join(ROOT, 'runtimes', 'claude', 'jarvos-precompact-hook.js'));
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-precompact-'));
+  try {
+    const summary = hook.mechanicalSummary({
+      cwd,
+      trigger: 'manual',
+      session_id: CLAUDE_HOOK_SESSION_ID,
+      custom_instructions: 'SECRET COMPACTION PROMPT MUST NEVER PERSIST',
+      transcript_path: path.join(cwd, `${CLAUDE_HOOK_SESSION_ID}.jsonl`),
+    });
+    assert.match(summary, /Pre-compaction flush \(manual\)/);
+    assert.match(summary, new RegExp(`cwd: ${cwd.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
+    assert.match(summary, /dirty paths: 0/);
+    assert.match(summary, new RegExp(`session: ${CLAUDE_HOOK_SESSION_ID}`));
+    assert.doesNotMatch(summary, /SECRET COMPACTION PROMPT/);
+    assert.doesNotMatch(summary, /transcript_path/);
+    assert.doesNotMatch(summary, /\.jsonl/);
+
+    const result = spawnSync(process.execPath, [path.join(ROOT, 'runtimes', 'claude', 'jarvos-precompact-hook.js')], {
+      cwd,
+      encoding: 'utf8',
+      input: JSON.stringify({
+        session_id: CLAUDE_HOOK_SESSION_ID,
+        hook_event_name: 'PreCompact',
+        trigger: 'auto',
+        custom_instructions: 'SECRET COMPACTION PROMPT MUST NEVER PERSIST',
+        cwd,
+      }),
+      env: {
+        ...cleanEnv(),
+        HOME: path.join(cwd, 'home'),
+        JARVOS_SECONDBRAIN_DIR: path.join(cwd, 'missing-secondbrain'),
+        JARVOS_VAULT_DIR: path.join(cwd, 'missing-vault'),
+        JARVOS_WORKSPACE_DIR: cwd,
+      },
+    });
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+    assert.deepEqual(JSON.parse(result.stdout || '{}'), {});
+    assert.doesNotMatch(result.stdout, /SECRET COMPACTION PROMPT/);
+    assert.doesNotMatch(result.stderr || '', /SECRET COMPACTION PROMPT/);
+
+    const empty = spawnSync(process.execPath, [path.join(ROOT, 'runtimes', 'claude', 'jarvos-precompact-hook.js')], {
+      cwd,
+      encoding: 'utf8',
+      input: '',
+      env: {
+        ...cleanEnv(),
+        HOME: path.join(cwd, 'home'),
+        JARVOS_SECONDBRAIN_DIR: path.join(cwd, 'missing-secondbrain'),
+        JARVOS_VAULT_DIR: path.join(cwd, 'missing-vault'),
+        JARVOS_WORKSPACE_DIR: cwd,
+      },
+    });
+    assert.equal(empty.status, 0, empty.stderr || empty.stdout);
+    assert.deepEqual(JSON.parse(empty.stdout || '{}'), {});
+  } finally {
+    fs.rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
 test('Claude SessionStart exposes a pending stewardship judgment even when hydration is unavailable', () => {
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-claude-start-judgment-'));
   const bin = path.join(temp, 'bin');
@@ -604,6 +693,9 @@ test('Claude SessionStart exposes a pending stewardship judgment even when hydra
       encoding: 'utf8',
       input: JSON.stringify({ transcript_path: path.join(temp, 'private', `${CLAUDE_HOOK_SESSION_ID}.jsonl`) }),
       env: {
+        // This test sets JARVOS_STEWARDSHIP_BRIDGE_COMMAND on process.env on
+        // purpose and needs it to reach the child, so it inherits directly
+        // rather than through cleanEnv's ambient-stripping.
         ...process.env,
         JARVOS_SECONDBRAIN_DIR: path.join(temp, 'missing-secondbrain'),
       },
@@ -691,6 +783,11 @@ test('native hook declarations point at the packaged start and turn bridges', ()
     }
     assert.ok(fs.existsSync(path.join(ROOT, 'runtimes', runtime, 'jarvos-session-turn-hook.js')));
   }
+  assert.equal(
+    manifestFor('claude').capabilityDescriptor.capabilities.session.preCompactHook.evidence,
+    'jarvos-precompact-hook.js',
+  );
+  assert.ok(fs.existsSync(path.join(ROOT, 'runtimes', 'claude', 'jarvos-precompact-hook.js')));
 });
 
 test('OpenClaw and Hermes package bounded per-turn stewardship bridge artifacts without activating user configuration', async () => {
@@ -723,7 +820,7 @@ test('OpenClaw and Hermes package bounded per-turn stewardship bridge artifacts 
       '',
     ].join('\n'), { mode: 0o755 });
     fs.chmodSync(bridge, 0o755);
-    const env = { ...process.env, PATH: `${bin}${path.delimiter}${process.env.PATH || ''}`, JARVOS_STEWARDSHIP_BRIDGE_COMMAND: 'jarvos-stewardship-bridge' };
+    const env = { ...cleanEnv(), PATH: `${bin}${path.delimiter}${process.env.PATH || ''}`, JARVOS_STEWARDSHIP_BRIDGE_COMMAND: 'jarvos-stewardship-bridge' };
     const hermesResult = spawnSync('node', [path.join(ROOT, 'runtimes', 'hermes', 'jarvos-pre-llm-hook.js')], { encoding: 'utf8', env });
     assert.equal(hermesResult.status, 0, hermesResult.stderr);
     const hermesContext = JSON.parse(hermesResult.stdout).context;
@@ -772,12 +869,62 @@ function runSetupResult(script, env) {
   return spawnSync('bash', [script], { cwd: ROOT, encoding: 'utf8', env });
 }
 
-function prepareStableStewardshipBundle(temp, rootName = 'managed-harness-bin') {
+// The fake dispatcher is held to the same contract as a real one: it answers the
+// probe with an advertisement, and rejects an unknown action without a receipt.
+// An accept-anything stub would let the fixture and the contract drift apart,
+// which is how a hook once shipped registering an action the live dispatcher
+// rejects while this suite stayed green. `advertise` lets a test build a
+// dispatcher that predates capability advertising (null) or supports a narrower
+// set, so the installer's degrade path is exercised against a real binary.
+function conformantDispatcherScript(advertise = STEWARDSHIP_ACTIONS) {
+  const receipt = { schema: 'jarvos.managed-harness-dispatcher/v1', action: 'provenance-probe' };
+  if (advertise !== null) receipt.actions = advertise;
+  const known = (advertise === null ? STEWARDSHIP_ACTIONS : advertise).filter((action) => action !== 'provenance-probe');
+  return [
+    '#!/usr/bin/env sh',
+    'action=""',
+    'while [ $# -gt 0 ]; do',
+    '  case "$1" in',
+    '    --action) action="$2"; shift 2 ;;',
+    '    *) shift ;;',
+    '  esac',
+    'done',
+    'case "$action" in',
+    `  provenance-probe) printf '%s' '${JSON.stringify(receipt)}'; exit 0 ;;`,
+    // An empty list would emit `) exit 0 ;;` -- a shell syntax error that makes
+    // the fixture reject everything including the probe, so a test using it
+    // would pass for the wrong reason.
+    ...(known.length ? [`  ${known.join('|')}) exit 0 ;;`] : []),
+    '  *) exit 1 ;;',
+    'esac',
+    '',
+  ].join('\n');
+}
+
+// A managed jarvOS install exports JARVOS_STEWARDSHIP_* into every shell it
+// spawns, so a developer running this suite from inside one inherits a bridge
+// path, selector, and harness that the fixtures never set. setup.sh then
+// validates that inherited configuration against fixture directories that do
+// not match it and aborts, failing tests that have nothing to do with the
+// change under test. Fixture environments start from a copy with those removed.
+function cleanEnv(overrides = {}) {
+  const base = {};
+  for (const [key, value] of Object.entries(process.env)) {
+    if (/^JARVOS_/.test(key)) continue;
+    base[key] = value;
+  }
+  return { ...base, ...overrides };
+}
+
+function prepareStableStewardshipBundle(temp, rootName = 'managed-harness-bin', options = {}) {
   const root = path.join(temp, rootName);
   fs.mkdirSync(root, { recursive: true, mode: 0o700 }); fs.chmodSync(root, 0o700);
+  const dispatcherBody = Object.prototype.hasOwnProperty.call(options, 'advertise')
+    ? conformantDispatcherScript(options.advertise)
+    : conformantDispatcherScript();
   for (const name of ['jarvos-stewardship-dispatcher', 'jarvos-hermes-pre-llm-hook.js']) {
     const target = path.join(root, name);
-    fs.writeFileSync(target, '#!/usr/bin/env sh\nexit 0\n', { mode: 0o700 });
+    fs.writeFileSync(target, name === 'jarvos-stewardship-dispatcher' ? dispatcherBody : '#!/usr/bin/env sh\nexit 0\n', { mode: 0o700 });
     fs.chmodSync(target, 0o700);
   }
   const plugin = path.join(root, 'jarvos-openclaw-stewardship-plugin');
@@ -847,7 +994,7 @@ test('OpenClaw stewardship-only setup preserves unrelated configuration and roll
     fs.mkdirSync(path.join(staged, 'runtimes', 'openclaw'), { recursive: true });
     fs.writeFileSync(config, `${JSON.stringify({ plugins: { load: { paths: ['/user/jarvos-openclaw-stewardship-plugin', path.join(staged, 'runtimes', 'openclaw')] }, allow: ['unrelated'], entries: { unrelated: { enabled: true } } }, tools: { profile: 'coding', allow: ['read'] }, agents: { list: [{ id: 'main', tools: { alsoAllow: ['browser'] } }] }, unrelated: { keep: true } }, null, 2)}\n`);
     const fakeOpenClaw = prepareFakeOpenClaw(temp);
-    const env = { ...process.env, HOME: path.join(temp, 'home'), PATH: `${fakeOpenClaw}${path.delimiter}${process.env.PATH || ''}`, OPENCLAW_CONFIG: config, JARVOS_FAKE_OPENCLAW_PLUGIN_PATH: path.join(stable, 'jarvos-openclaw-stewardship-plugin'), JARVOS_STEWARDSHIP_ONLY: '1', JARVOS_MANAGED_REPOSITORIES: '/managed/repo', JARVOS_STAGED_PUBLIC_RUNTIME_ROOT: staged, JARVOS_STEWARDSHIP_STABLE_ROOT: stable, JARVOS_MANAGED_HARNESS_STATE_ROOT: state };
+    const env = { ...cleanEnv(), HOME: path.join(temp, 'home'), PATH: `${fakeOpenClaw}${path.delimiter}${process.env.PATH || ''}`, OPENCLAW_CONFIG: config, JARVOS_FAKE_OPENCLAW_PLUGIN_PATH: path.join(stable, 'jarvos-openclaw-stewardship-plugin'), JARVOS_STEWARDSHIP_ONLY: '1', JARVOS_MANAGED_REPOSITORIES: '/managed/repo', JARVOS_STAGED_PUBLIC_RUNTIME_ROOT: staged, JARVOS_STEWARDSHIP_STABLE_ROOT: stable, JARVOS_MANAGED_HARNESS_STATE_ROOT: state };
     const script = path.join(ROOT, 'runtimes', 'openclaw', 'setup.sh');
     runSetup(script, env); const first = fs.readFileSync(config, 'utf8'); runSetup(script, env); assert.equal(fs.readFileSync(config, 'utf8'), first);
     let parsed = JSON.parse(first); assert.deepEqual(parsed.plugins.load.paths, ['/user/jarvos-openclaw-stewardship-plugin', path.join(stable, 'jarvos-openclaw-stewardship-plugin')]); assert.equal(parsed.unrelated.keep, true); assert.equal(parsed.plugins.entries.unrelated.enabled, true); assert.equal(parsed.plugins.entries['jarvos-stewardship'].config.mappingRoot, path.join(state, 'stewardship-bridge', 'openclaw-sessions')); assert.deepEqual(parsed.tools.allow, ['read', 'jarvos_stewardship_answer']);
@@ -870,7 +1017,7 @@ test('OpenClaw rollback preserves a stewardship tool grant that predated jarvOS 
     fs.mkdirSync(path.join(staged, 'runtimes', 'openclaw'), { recursive: true });
     fs.writeFileSync(config, `${JSON.stringify({ tools: { profile: 'coding', allow: ['read', 'jarvos_stewardship_answer'] }, agents: { list: [{ id: 'main', tools: { alsoAllow: ['jarvos_stewardship_answer'] } }] } }, null, 2)}\n`);
     const fakeOpenClaw = prepareFakeOpenClaw(temp);
-    const env = { ...process.env, HOME: path.join(temp, 'home'), PATH: `${fakeOpenClaw}${path.delimiter}${process.env.PATH || ''}`, OPENCLAW_CONFIG: config, JARVOS_FAKE_OPENCLAW_PLUGIN_PATH: path.join(stable, 'jarvos-openclaw-stewardship-plugin'), JARVOS_STEWARDSHIP_ONLY: '1', JARVOS_MANAGED_REPOSITORIES: '/managed/repo', JARVOS_STAGED_PUBLIC_RUNTIME_ROOT: staged, JARVOS_STEWARDSHIP_STABLE_ROOT: stable, JARVOS_MANAGED_HARNESS_STATE_ROOT: state };
+    const env = { ...cleanEnv(), HOME: path.join(temp, 'home'), PATH: `${fakeOpenClaw}${path.delimiter}${process.env.PATH || ''}`, OPENCLAW_CONFIG: config, JARVOS_FAKE_OPENCLAW_PLUGIN_PATH: path.join(stable, 'jarvos-openclaw-stewardship-plugin'), JARVOS_STEWARDSHIP_ONLY: '1', JARVOS_MANAGED_REPOSITORIES: '/managed/repo', JARVOS_STAGED_PUBLIC_RUNTIME_ROOT: staged, JARVOS_STEWARDSHIP_STABLE_ROOT: stable, JARVOS_MANAGED_HARNESS_STATE_ROOT: state };
     const script = path.join(ROOT, 'runtimes', 'openclaw', 'setup.sh');
     runSetup(script, env); const installed = JSON.parse(fs.readFileSync(config, 'utf8')); assert.equal(installed.plugins.entries['jarvos-stewardship'].config.toolAllowAddedByJarvos, false); assert.equal(installed.plugins.entries['jarvos-stewardship'].config.agentToolGrantByJarvos.added, false);
     fs.rmSync(stable, { recursive: true, force: true });
@@ -886,7 +1033,7 @@ test('OpenClaw setup does not claim permission ownership when its configuration 
     const stable = prepareStableStewardshipBundle(temp);
     fs.mkdirSync(configRoot, { recursive: true }); fs.mkdirSync(path.join(staged, 'runtimes', 'openclaw'), { recursive: true });
     fs.writeFileSync(config, `${JSON.stringify({ tools: { allow: ['read'] } }, null, 2)}\n`); fs.chmodSync(configRoot, 0o500);
-    const env = { ...process.env, HOME: path.join(temp, 'home'), OPENCLAW_CONFIG: config, JARVOS_STEWARDSHIP_ONLY: '1', JARVOS_MANAGED_REPOSITORIES: '/managed/repo', JARVOS_STAGED_PUBLIC_RUNTIME_ROOT: staged, JARVOS_STEWARDSHIP_STABLE_ROOT: stable, JARVOS_MANAGED_HARNESS_STATE_ROOT: state };
+    const env = { ...cleanEnv(), HOME: path.join(temp, 'home'), OPENCLAW_CONFIG: config, JARVOS_STEWARDSHIP_ONLY: '1', JARVOS_MANAGED_REPOSITORIES: '/managed/repo', JARVOS_STAGED_PUBLIC_RUNTIME_ROOT: staged, JARVOS_STEWARDSHIP_STABLE_ROOT: stable, JARVOS_MANAGED_HARNESS_STATE_ROOT: state };
     const result = runSetupResult(path.join(ROOT, 'runtimes', 'openclaw', 'setup.sh'), env);
     assert.notEqual(result.status, 0); assert.deepEqual(JSON.parse(fs.readFileSync(config, 'utf8')).tools.allow, ['read']);
   } finally { fs.chmodSync(configRoot, 0o700); fs.rmSync(temp, { recursive: true, force: true }); }
@@ -901,7 +1048,7 @@ test('OpenClaw setup restores exact prior bytes and mode when staged registratio
     fs.mkdirSync(path.join(staged, 'runtimes', 'openclaw'), { recursive: true });
     const original = Buffer.from('{"unrelated":true}\n');
     fs.writeFileSync(config, original); fs.chmodSync(config, 0o640);
-    const env = { ...process.env, HOME: path.join(temp, 'home'), PATH: `${fakeOpenClaw}${path.delimiter}${process.env.PATH || ''}`, OPENCLAW_CONFIG: config, JARVOS_FAKE_OPENCLAW_MODE: 'fail', JARVOS_FAKE_OPENCLAW_PLUGIN_PATH: path.join(stable, 'jarvos-openclaw-stewardship-plugin'), JARVOS_STEWARDSHIP_ONLY: '1', JARVOS_MANAGED_REPOSITORIES: '/managed/repo', JARVOS_STAGED_PUBLIC_RUNTIME_ROOT: staged, JARVOS_STEWARDSHIP_STABLE_ROOT: stable, JARVOS_MANAGED_HARNESS_STATE_ROOT: state };
+    const env = { ...cleanEnv(), HOME: path.join(temp, 'home'), PATH: `${fakeOpenClaw}${path.delimiter}${process.env.PATH || ''}`, OPENCLAW_CONFIG: config, JARVOS_FAKE_OPENCLAW_MODE: 'fail', JARVOS_FAKE_OPENCLAW_PLUGIN_PATH: path.join(stable, 'jarvos-openclaw-stewardship-plugin'), JARVOS_STEWARDSHIP_ONLY: '1', JARVOS_MANAGED_REPOSITORIES: '/managed/repo', JARVOS_STAGED_PUBLIC_RUNTIME_ROOT: staged, JARVOS_STEWARDSHIP_STABLE_ROOT: stable, JARVOS_MANAGED_HARNESS_STATE_ROOT: state };
     const result = runSetupResult(path.join(ROOT, 'runtimes', 'openclaw', 'setup.sh'), env);
     assert.notEqual(result.status, 0);
     assert.deepEqual(fs.readFileSync(config), original);
@@ -916,7 +1063,7 @@ test('OpenClaw setup removes only a newly created config when verification fails
   try {
     const stable = prepareStableStewardshipBundle(temp); const fakeOpenClaw = prepareFakeOpenClaw(temp);
     fs.mkdirSync(path.join(staged, 'runtimes', 'openclaw'), { recursive: true });
-    const env = { ...process.env, HOME: path.join(temp, 'home'), PATH: `${fakeOpenClaw}${path.delimiter}${process.env.PATH || ''}`, OPENCLAW_CONFIG: config, JARVOS_FAKE_OPENCLAW_MODE: 'fail', JARVOS_FAKE_OPENCLAW_PLUGIN_PATH: path.join(stable, 'jarvos-openclaw-stewardship-plugin'), JARVOS_STEWARDSHIP_ONLY: '1', JARVOS_MANAGED_REPOSITORIES: '/managed/repo', JARVOS_STAGED_PUBLIC_RUNTIME_ROOT: staged, JARVOS_STEWARDSHIP_STABLE_ROOT: stable, JARVOS_MANAGED_HARNESS_STATE_ROOT: state };
+    const env = { ...cleanEnv(), HOME: path.join(temp, 'home'), PATH: `${fakeOpenClaw}${path.delimiter}${process.env.PATH || ''}`, OPENCLAW_CONFIG: config, JARVOS_FAKE_OPENCLAW_MODE: 'fail', JARVOS_FAKE_OPENCLAW_PLUGIN_PATH: path.join(stable, 'jarvos-openclaw-stewardship-plugin'), JARVOS_STEWARDSHIP_ONLY: '1', JARVOS_MANAGED_REPOSITORIES: '/managed/repo', JARVOS_STAGED_PUBLIC_RUNTIME_ROOT: staged, JARVOS_STEWARDSHIP_STABLE_ROOT: stable, JARVOS_MANAGED_HARNESS_STATE_ROOT: state };
     const result = runSetupResult(path.join(ROOT, 'runtimes', 'openclaw', 'setup.sh'), env);
     assert.notEqual(result.status, 0);
     assert.equal(fs.existsSync(config), false);
@@ -930,7 +1077,7 @@ test('OpenClaw setup preserves a concurrent config edit instead of rolling it ba
     const stable = prepareStableStewardshipBundle(temp); const fakeOpenClaw = prepareFakeOpenClaw(temp);
     fs.mkdirSync(path.join(staged, 'runtimes', 'openclaw'), { recursive: true });
     fs.writeFileSync(config, `${JSON.stringify({ unrelated: true }, null, 2)}\n`);
-    const env = { ...process.env, HOME: path.join(temp, 'home'), PATH: `${fakeOpenClaw}${path.delimiter}${process.env.PATH || ''}`, OPENCLAW_CONFIG: config, JARVOS_FAKE_OPENCLAW_MODE: 'concurrent-fail', JARVOS_FAKE_OPENCLAW_PLUGIN_PATH: path.join(stable, 'jarvos-openclaw-stewardship-plugin'), JARVOS_STEWARDSHIP_ONLY: '1', JARVOS_MANAGED_REPOSITORIES: '/managed/repo', JARVOS_STAGED_PUBLIC_RUNTIME_ROOT: staged, JARVOS_STEWARDSHIP_STABLE_ROOT: stable, JARVOS_MANAGED_HARNESS_STATE_ROOT: state };
+    const env = { ...cleanEnv(), HOME: path.join(temp, 'home'), PATH: `${fakeOpenClaw}${path.delimiter}${process.env.PATH || ''}`, OPENCLAW_CONFIG: config, JARVOS_FAKE_OPENCLAW_MODE: 'concurrent-fail', JARVOS_FAKE_OPENCLAW_PLUGIN_PATH: path.join(stable, 'jarvos-openclaw-stewardship-plugin'), JARVOS_STEWARDSHIP_ONLY: '1', JARVOS_MANAGED_REPOSITORIES: '/managed/repo', JARVOS_STAGED_PUBLIC_RUNTIME_ROOT: staged, JARVOS_STEWARDSHIP_STABLE_ROOT: stable, JARVOS_MANAGED_HARNESS_STATE_ROOT: state };
     const result = runSetupResult(path.join(ROOT, 'runtimes', 'openclaw', 'setup.sh'), env);
     assert.notEqual(result.status, 0);
     assert.equal(JSON.parse(fs.readFileSync(config, 'utf8')).concurrentUserChange, true);
@@ -945,7 +1092,7 @@ test('OpenClaw setup rejects a symlinked config before any write', () => {
     const stable = prepareStableStewardshipBundle(temp); const fakeOpenClaw = prepareFakeOpenClaw(temp);
     fs.mkdirSync(path.join(staged, 'runtimes', 'openclaw'), { recursive: true });
     const original = '{"unrelated":true}\n'; fs.writeFileSync(target, original); fs.symlinkSync(target, config);
-    const env = { ...process.env, HOME: path.join(temp, 'home'), PATH: `${fakeOpenClaw}${path.delimiter}${process.env.PATH || ''}`, OPENCLAW_CONFIG: config, JARVOS_FAKE_OPENCLAW_PLUGIN_PATH: path.join(stable, 'jarvos-openclaw-stewardship-plugin'), JARVOS_STEWARDSHIP_ONLY: '1', JARVOS_MANAGED_REPOSITORIES: '/managed/repo', JARVOS_STAGED_PUBLIC_RUNTIME_ROOT: staged, JARVOS_STEWARDSHIP_STABLE_ROOT: stable, JARVOS_MANAGED_HARNESS_STATE_ROOT: state };
+    const env = { ...cleanEnv(), HOME: path.join(temp, 'home'), PATH: `${fakeOpenClaw}${path.delimiter}${process.env.PATH || ''}`, OPENCLAW_CONFIG: config, JARVOS_FAKE_OPENCLAW_PLUGIN_PATH: path.join(stable, 'jarvos-openclaw-stewardship-plugin'), JARVOS_STEWARDSHIP_ONLY: '1', JARVOS_MANAGED_REPOSITORIES: '/managed/repo', JARVOS_STAGED_PUBLIC_RUNTIME_ROOT: staged, JARVOS_STEWARDSHIP_STABLE_ROOT: stable, JARVOS_MANAGED_HARNESS_STATE_ROOT: state };
     const result = runSetupResult(path.join(ROOT, 'runtimes', 'openclaw', 'setup.sh'), env);
     assert.notEqual(result.status, 0);
     assert.equal(fs.readFileSync(target, 'utf8'), original);
@@ -959,7 +1106,7 @@ test('OpenClaw rejects relative, missing, and unsafe stable plugin bundles witho
   const original = `${JSON.stringify({ plugins: { load: { paths: ['/user/jarvos-openclaw-stewardship-plugin'] } }, unrelated: true }, null, 2)}\n`;
   try {
     fs.writeFileSync(config, original);
-    const baseEnv = { ...process.env, HOME: path.join(temp, 'home'), OPENCLAW_CONFIG: config, JARVOS_STEWARDSHIP_ONLY: '1', JARVOS_MANAGED_REPOSITORIES: '/managed/repo', JARVOS_MANAGED_HARNESS_STATE_ROOT: state };
+    const baseEnv = { ...cleanEnv(), HOME: path.join(temp, 'home'), OPENCLAW_CONFIG: config, JARVOS_STEWARDSHIP_ONLY: '1', JARVOS_MANAGED_REPOSITORIES: '/managed/repo', JARVOS_MANAGED_HARNESS_STATE_ROOT: state };
     const script = path.join(ROOT, 'runtimes', 'openclaw', 'setup.sh');
     for (const stableRoot of ['relative-stable-root', path.join(temp, 'missing-stable-root')]) {
       const result = runSetupResult(script, { ...baseEnv, JARVOS_STEWARDSHIP_STABLE_ROOT: stableRoot });
@@ -985,7 +1132,7 @@ test('Hermes stewardship-only setup records exact consent idempotently and remov
     const legacyHook = path.join(staged, 'runtimes', 'hermes', 'jarvos-pre-llm-hook.js');
     fs.writeFileSync(config, `hooks:\n  pre_tool_call:\n    - command: user-hook\n  pre_llm_call:\n    - command: ${legacyHook}\nunrelated: keep\n`);
     fs.writeFileSync(allowlist, `${JSON.stringify({ approvals: [{ event: 'pre_tool_call', command: 'user-hook' }, { event: 'pre_llm_call', command: legacyHook }] }, null, 2)}\n`);
-    const env = { ...process.env, HOME: home, HERMES_CONFIG: config, JARVOS_STEWARDSHIP_ONLY: '1', JARVOS_MANAGED_REPOSITORIES: '/managed/repo', JARVOS_STAGED_PUBLIC_RUNTIME_ROOT: staged, JARVOS_STEWARDSHIP_STABLE_ROOT: stable };
+    const env = { ...cleanEnv(), HOME: home, HERMES_CONFIG: config, JARVOS_STEWARDSHIP_ONLY: '1', JARVOS_MANAGED_REPOSITORIES: '/managed/repo', JARVOS_STAGED_PUBLIC_RUNTIME_ROOT: staged, JARVOS_STEWARDSHIP_STABLE_ROOT: stable };
     const script = path.join(ROOT, 'runtimes', 'hermes', 'setup.sh');
     runSetup(script, env); const firstConfig = fs.readFileSync(config, 'utf8'); const firstAllowlist = fs.readFileSync(allowlist, 'utf8'); runSetup(script, env); assert.equal(fs.readFileSync(config, 'utf8'), firstConfig); assert.equal(fs.readFileSync(allowlist, 'utf8'), firstAllowlist);
     assert.match(firstConfig, new RegExp(hook.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))); const approvals = JSON.parse(firstAllowlist).approvals; const approval = approvals.find((item) => item.command === hook); assert.equal(approval.event, 'pre_llm_call'); assert.ok(approval.script_mtime_at_approval);
@@ -1004,8 +1151,8 @@ test('Claude setup merges both jarvOS lifecycle hooks without replacing user hoo
   try {
     fs.mkdirSync(path.join(staged, 'runtimes', 'claude'), { recursive: true });
     fs.mkdirSync(stable, { recursive: true, mode: 0o700 }); fs.chmodSync(stable, 0o700);
-    for (const file of ['jarvos-session-start-hook.js', 'jarvos-session-turn-hook.js']) fs.copyFileSync(path.join(ROOT, 'runtimes', 'claude', file), path.join(staged, 'runtimes', 'claude', file));
-    fs.writeFileSync(path.join(stable, 'jarvos-stewardship-dispatcher'), '#!/usr/bin/env sh\nexit 0\n', { mode: 0o700 });
+    for (const file of ['jarvos-session-start-hook.js', 'jarvos-session-turn-hook.js', 'jarvos-precompact-hook.js']) fs.copyFileSync(path.join(ROOT, 'runtimes', 'claude', file), path.join(staged, 'runtimes', 'claude', file));
+    fs.writeFileSync(path.join(stable, 'jarvos-stewardship-dispatcher'), conformantDispatcherScript(), { mode: 0o700 });
     fs.chmodSync(path.join(stable, 'jarvos-stewardship-dispatcher'), 0o700);
     fs.writeFileSync(settings, `${JSON.stringify({
       hooks: {
@@ -1018,7 +1165,7 @@ test('Claude setup merges both jarvOS lifecycle hooks without replacing user hoo
     existingSettings.hooks.UserPromptSubmit.push({ hooks: [{ type: 'command', command: `node ${JSON.stringify(path.join(staged, 'runtimes', 'claude', 'jarvos-session-turn-hook.js'))}` }] });
     fs.writeFileSync(settings, `${JSON.stringify(existingSettings, null, 2)}\n`);
     const env = {
-      ...process.env,
+      ...cleanEnv(),
       HOME: path.join(temp, 'home'),
       CLAUDE_SETTINGS: settings,
       CLAUDE_DESKTOP_CONFIG: desktop,
@@ -1038,13 +1185,31 @@ test('Claude setup merges both jarvOS lifecycle hooks without replacing user hoo
     assert.equal(first, second);
     assert.equal(parsed.hooks.SessionStart.length, 2);
     assert.equal(parsed.hooks.UserPromptSubmit.length, 2);
-    assert.equal(count(second, /jarvos-stewardship-dispatcher/g), 2);
-    assert.doesNotMatch(second, /jarvos-session-(?:start|turn)-hook\.js/);
+    // The fixture dispatcher advertises session-precompact, so the probe finds it
+    // and PreCompact is registered -- wrapped, so a later dispatcher failure
+    // yields an empty directive rather than blocking compaction.
+    assert.equal(parsed.hooks.PreCompact.length, 1);
+    const precompactCommand = parsed.hooks.PreCompact[0].hooks[0].command;
+    assert.match(precompactCommand, /--action session-precompact/);
+    // Assert the property, not the shell idiom: whatever form the wrapper takes,
+    // it must be able to emit the empty directive when the dispatcher fails.
+    assert.match(precompactCommand, /printf '%s' '\{\}'/);
+    assert.equal(parsed.hooks.SessionStart[1].matcher, 'startup|resume|compact');
+    assert.equal(count(second, /jarvos-stewardship-dispatcher/g), 3);
+    assert.doesNotMatch(second, /jarvos-(?:session-(?:start|turn)|precompact)-hook\.js/);
     assert.match(second, /user-session-start/);
     assert.match(second, /user-prompt-submit/);
     assert.match(second, new RegExp(stable.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
     assert.match(second, /--harness claude --action session-start/);
     assert.match(second, /--harness claude --action session-turn/);
+    // Compaction now routes through the dispatcher, because the action is on the
+    // ABI and this fixture's dispatcher advertises it. The invariant that still
+    // holds unconditionally is the general one below: nothing may invoke an
+    // action the contract does not carry.
+    assert.match(second, /--harness claude --action session-precompact/);
+    for (const action of second.matchAll(/--action ([a-z-]+)/g)) {
+      assert.ok(STEWARDSHIP_ACTIONS.includes(action[1]), `managed hook uses off-ABI action: ${action[1]}`);
+    }
     assert.doesNotMatch(second, new RegExp(staged.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
     assert.doesNotMatch(second, new RegExp(`${ROOT.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}/runtimes/claude/jarvos-session`));
     assert.equal(fs.readdirSync(temp).filter((name) => name.startsWith('settings.json.bak-jarvos-')).length, 1);
@@ -1054,9 +1219,128 @@ test('Claude setup merges both jarvOS lifecycle hooks without replacing user hoo
     const rolledBack = JSON.parse(fs.readFileSync(settings, 'utf8'));
     assert.equal(rolledBack.hooks.SessionStart.length, 1);
     assert.equal(rolledBack.hooks.UserPromptSubmit.length, 1);
+    assert.equal(rolledBack.hooks.PreCompact, undefined);
     assert.match(JSON.stringify(rolledBack), /user-session-start/);
     assert.match(JSON.stringify(rolledBack), /user-prompt-submit/);
     assert.doesNotMatch(JSON.stringify(rolledBack), /jarvos-stewardship-dispatcher/);
+  } finally {
+    fs.rmSync(temp, { recursive: true, force: true });
+  }
+});
+
+test('Claude managed setup registers no PreCompact hook when the dispatcher does not advertise it', () => {
+  // The public ABI declaring an action is not evidence that the installed
+  // dispatcher implements it -- the two ship from different repositories. A
+  // dispatcher predating capability advertising, and one advertising a narrower
+  // set, must both leave PreCompact unregistered rather than route a block/allow
+  // channel at a binary that would reject it.
+  for (const advertise of [null, STEWARDSHIP_ACTIONS.filter((action) => action !== 'session-precompact')]) {
+    const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-claude-precompact-unsupported-'));
+    try {
+      const settings = path.join(temp, 'settings.json'); const desktop = path.join(temp, 'desktop.json'); const staged = path.join(temp, 'staged-public');
+      const stable = prepareStableStewardshipBundle(temp, 'managed-harness-bin', { advertise });
+      const env = {
+        ...cleanEnv(), HOME: path.join(temp, 'home'), CLAUDE_SETTINGS: settings, CLAUDE_DESKTOP_CONFIG: desktop,
+        JARVOS_SKIP_CLAUDE_CODE_MCP: '1', JARVOS_SKIP_CLAUDE_MD: '1', JARVOS_STEWARDSHIP_ONLY: '1',
+        JARVOS_MANAGED_REPOSITORIES: '/managed/repository', JARVOS_STAGED_PUBLIC_RUNTIME_ROOT: staged,
+        JARVOS_STEWARDSHIP_STABLE_ROOT: stable,
+      };
+      runSetup(path.join(ROOT, 'runtimes', 'claude', 'setup.sh'), env);
+      const parsed = JSON.parse(fs.readFileSync(settings, 'utf8'));
+      assert.equal(parsed.hooks.PreCompact, undefined, `advertise=${JSON.stringify(advertise)} must not register PreCompact`);
+      assert.doesNotMatch(fs.readFileSync(settings, 'utf8'), /--action session-precompact/);
+      // The other lifecycle hooks are unaffected by the compaction decision.
+      assert.equal(parsed.hooks.SessionStart.length, 1);
+      assert.equal(parsed.hooks.UserPromptSubmit.length, 1);
+    } finally {
+      fs.rmSync(temp, { recursive: true, force: true });
+    }
+  }
+});
+
+test('Claude managed setup distrusts an advertisement from a probe that failed', () => {
+  // The whole point of probing is that an advertisement is only worth as much as
+  // the probe that carried it. A dispatcher that is stale, mid-fence, or degraded
+  // can still print a well-formed receipt naming every action while exiting
+  // non-zero -- trusting that would wire PreCompact to an action the binary does
+  // not serve, which is the advertised-but-not-implemented failure this change
+  // exists to prevent. Mutation testing found this check had no coverage.
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-precompact-badprobe-'));
+  try {
+    const settings = path.join(temp, 'settings.json'); const desktop = path.join(temp, 'desktop.json'); const staged = path.join(temp, 'staged-public');
+    const stable = prepareStableStewardshipBundle(temp);
+    const receipt = JSON.stringify({ schema: 'jarvos.managed-harness-dispatcher/v1', actions: STEWARDSHIP_ACTIONS });
+    const cases = [
+      ['valid receipt but non-zero exit', `#!/usr/bin/env sh\nprintf '%s' '${receipt}'\nexit 1\n`],
+      ['receipt is a JSON array, not an object', "#!/usr/bin/env sh\nprintf '%s' '[\"session-precompact\"]'\nexit 0\n"],
+      ['actions contains a non-string entry', '#!/usr/bin/env sh\nprintf \'%s\' \'{"actions":["session-precompact",7]}\'\nexit 0\n'],
+    ];
+    for (const [name, script] of cases) {
+      fs.rmSync(settings, { force: true });
+      fs.writeFileSync(path.join(stable, 'jarvos-stewardship-dispatcher'), script, { mode: 0o700 });
+      fs.chmodSync(path.join(stable, 'jarvos-stewardship-dispatcher'), 0o700);
+      const env = {
+        ...cleanEnv(), HOME: path.join(temp, 'home'), CLAUDE_SETTINGS: settings, CLAUDE_DESKTOP_CONFIG: desktop,
+        JARVOS_SKIP_CLAUDE_CODE_MCP: '1', JARVOS_SKIP_CLAUDE_MD: '1', JARVOS_STEWARDSHIP_ONLY: '1',
+        JARVOS_MANAGED_REPOSITORIES: '/managed/repository', JARVOS_STAGED_PUBLIC_RUNTIME_ROOT: staged,
+        JARVOS_STEWARDSHIP_STABLE_ROOT: stable,
+      };
+      runSetup(path.join(ROOT, 'runtimes', 'claude', 'setup.sh'), env);
+      const parsed = JSON.parse(fs.readFileSync(settings, 'utf8'));
+      assert.equal(parsed.hooks.PreCompact, undefined, `${name}: must not register PreCompact`);
+    }
+  } finally {
+    fs.rmSync(temp, { recursive: true, force: true });
+  }
+});
+
+test('the registered PreCompact command survives a dispatcher that fails at invocation', () => {
+  // The setup-time probe gates registration; it cannot protect invocation. A
+  // dispatcher fenced mid-promotion, pointed at a mismatched tuple, or rolled
+  // back to a build without the action exits non-zero with no stdout long after
+  // setup ran. On a block/allow channel that blocks compaction, so the command
+  // written into settings.json has to absorb it.
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-precompact-failopen-'));
+  try {
+    const settings = path.join(temp, 'settings.json'); const desktop = path.join(temp, 'desktop.json'); const staged = path.join(temp, 'staged-public');
+    const stable = prepareStableStewardshipBundle(temp);
+    const env = {
+      ...cleanEnv(), HOME: path.join(temp, 'home'), CLAUDE_SETTINGS: settings, CLAUDE_DESKTOP_CONFIG: desktop,
+      JARVOS_SKIP_CLAUDE_CODE_MCP: '1', JARVOS_SKIP_CLAUDE_MD: '1', JARVOS_STEWARDSHIP_ONLY: '1',
+      JARVOS_MANAGED_REPOSITORIES: '/managed/repository', JARVOS_STAGED_PUBLIC_RUNTIME_ROOT: staged,
+      JARVOS_STEWARDSHIP_STABLE_ROOT: stable,
+    };
+    runSetup(path.join(ROOT, 'runtimes', 'claude', 'setup.sh'), env);
+    const command = JSON.parse(fs.readFileSync(settings, 'utf8')).hooks.PreCompact[0].hooks[0].command;
+
+    // Healthy dispatcher: the hook's own output passes through UNCHANGED. The
+    // stdout assertion is the load-bearing half -- checking only the exit code
+    // leaves a wrapper that appends `{}` to real output indistinguishable from
+    // one that substitutes on failure, which is exactly the regression that
+    // would corrupt a real directive.
+    const speaking = path.join(stable, 'jarvos-stewardship-dispatcher');
+    fs.writeFileSync(speaking, '#!/usr/bin/env sh\nprintf \'%s\' \'{"hookSpecificOutput":{"kept":true}}\'\nexit 0\n', { mode: 0o700 });
+    fs.chmodSync(speaking, 0o700);
+    const healthy = spawnSync('/bin/sh', ['-c', command], { encoding: 'utf8', env: { PATH: process.env.PATH || '' } });
+    assert.equal(healthy.status, 0);
+    assert.equal(healthy.stdout, '{"hookSpecificOutput":{"kept":true}}', 'a healthy dispatcher\'s output must reach the harness unmodified');
+
+    // Partial output then failure must be REPLACED, not appended to: concatenation
+    // yields invalid JSON and silently loses the directive.
+    fs.writeFileSync(speaking, '#!/usr/bin/env sh\nprintf \'%s\' \'{"partial\'\nexit 1\n', { mode: 0o700 });
+    fs.chmodSync(speaking, 0o700);
+    const partial = spawnSync('/bin/sh', ['-c', command], { encoding: 'utf8', env: { PATH: process.env.PATH || '' } });
+    assert.equal(partial.status, 0);
+    assert.equal(partial.stdout, '{}', 'partial output from a failed dispatcher must be replaced, not appended to');
+
+    // Now break it the way a fenced or rolled-back dispatcher breaks: non-zero
+    // exit, nothing on stdout. Compaction must still be allowed to proceed.
+    const dispatcherPath = path.join(stable, 'jarvos-stewardship-dispatcher');
+    fs.writeFileSync(dispatcherPath, '#!/usr/bin/env sh\nexit 1\n', { mode: 0o700 });
+    fs.chmodSync(dispatcherPath, 0o700);
+    const failed = spawnSync('/bin/sh', ['-c', command], { encoding: 'utf8', env: { PATH: process.env.PATH || '' } });
+    assert.equal(failed.status, 0, 'a failing dispatcher must not fail the PreCompact hook');
+    assert.equal(failed.stdout.trim(), '{}', 'the wrapper must emit the empty directive the harness reads as proceed');
   } finally {
     fs.rmSync(temp, { recursive: true, force: true });
   }
@@ -1087,7 +1371,7 @@ test('Claude setup injects a private bridge command environment without retainin
     ].join('\n'), { mode: 0o700 });
     fs.chmodSync(bridge, 0o700);
     const env = {
-      ...process.env, HOME: path.join(temp, 'home'), CLAUDE_SETTINGS: settings, CLAUDE_DESKTOP_CONFIG: desktop,
+      ...cleanEnv(), HOME: path.join(temp, 'home'), CLAUDE_SETTINGS: settings, CLAUDE_DESKTOP_CONFIG: desktop,
       JARVOS_SKIP_CLAUDE_CODE_MCP: '1', JARVOS_SKIP_CLAUDE_MD: '1', JARVOS_STEWARDSHIP_ONLY: '1',
       JARVOS_STEWARDSHIP_BRIDGE_COMMAND: 'jarvos-stewardship-bridge',
       JARVOS_STEWARDSHIP_CLAUDE_SESSION_MAP_ROOT: mapRoot, JARVOS_STEWARDSHIP_BRIDGE_PATH: bin,
@@ -1126,7 +1410,7 @@ test('Claude setup rollback removes only the managed command from a mixed hook e
       { type: 'command', command: userCommand },
       { type: 'command', command: `node ${JSON.stringify(path.join(staged, 'runtimes', 'claude', 'jarvos-session-start-hook.js'))}` },
     ] }] } }, null, 2)}\n`);
-    const env = { ...process.env, HOME: path.join(temp, 'home'), CLAUDE_SETTINGS: settings, CLAUDE_DESKTOP_CONFIG: desktop, JARVOS_SKIP_CLAUDE_CODE_MCP: '1', JARVOS_SKIP_CLAUDE_MD: '1', JARVOS_STEWARDSHIP_ONLY: '1', JARVOS_STAGED_PUBLIC_RUNTIME_ROOT: staged };
+    const env = { ...cleanEnv(), HOME: path.join(temp, 'home'), CLAUDE_SETTINGS: settings, CLAUDE_DESKTOP_CONFIG: desktop, JARVOS_SKIP_CLAUDE_CODE_MCP: '1', JARVOS_SKIP_CLAUDE_MD: '1', JARVOS_STEWARDSHIP_ONLY: '1', JARVOS_STAGED_PUBLIC_RUNTIME_ROOT: staged };
     const script = path.join(ROOT, 'runtimes', 'claude', 'setup.sh');
     runSetup(script, env);
     runSetup(script, { ...env, JARVOS_MANAGED_HARNESS_ROLLBACK: '1' });
@@ -1172,7 +1456,7 @@ test('Codex setup merges both jarvOS lifecycle hooks without replacing user hook
     prior = prior.replace('UserPromptSubmit = [', `UserPromptSubmit = [{ hooks = [{ type = "command", command = ${JSON.stringify(`node ${JSON.stringify(path.join(staged, 'runtimes', 'codex', 'jarvos-session-turn-hook.js'))}`)}, async = false, timeout = 30 }] }, `);
     fs.writeFileSync(config, prior);
     const env = {
-      ...process.env,
+      ...cleanEnv(),
       HOME: path.join(temp, 'home'),
       PATH: `${bin}${path.delimiter}${process.env.PATH || ''}`,
       CODEX_CONFIG: config,
@@ -1234,7 +1518,7 @@ test('Codex setup shell-quotes a stable dispatcher path before persisting hooks'
     fs.writeFileSync(codex, '#!/usr/bin/env sh\nif [ "$1" = "mcp" ] && [ "$2" = "get" ]; then exit 1; fi\nexit 0\n', { mode: 0o755 });
     fs.chmodSync(codex, 0o755);
     const env = {
-      ...process.env,
+      ...cleanEnv(),
       HOME: path.join(temp, 'home'), PATH: `${bin}${path.delimiter}${process.env.PATH || ''}`,
       CODEX_CONFIG: config, JARVOS_STEWARDSHIP_ONLY: '1', JARVOS_MANAGED_REPOSITORIES: '/managed/repository',
       JARVOS_STEWARDSHIP_STABLE_ROOT: stable, JARVOS_CAPTURE: capture, JARVOS_STEWARDSHIP_QUOTE_TEST: 'expanded',
@@ -1282,7 +1566,7 @@ test('Codex setup repairs the nested shell environment table without losing user
       '',
     ].join('\n'), 'utf8');
     const env = {
-      ...process.env,
+      ...cleanEnv(),
       HOME: path.join(temp, 'home'),
       CODEX_HOME: codexHome,
       CODEX_CONFIG: config,
@@ -1359,7 +1643,7 @@ test('Codex stewardship setup migrates legacy hooks.json without losing unrelate
     fs.writeFileSync(hooksJson, `${originalHooks}\n`, { mode: 0o600 });
     fs.chmodSync(hooksJson, 0o600);
     const env = {
-      ...process.env,
+      ...cleanEnv(),
       HOME: home,
       CODEX_HOME: codexHome,
       PATH: `${bin}${path.delimiter}${process.env.PATH || ''}`,
@@ -1419,7 +1703,7 @@ test('Codex hooks migration fails closed for malformed legacy hooks.json', () =>
     fs.writeFileSync(config, originalConfig);
     fs.writeFileSync(hooksJson, originalHooks);
     const result = runSetupResult(path.join(ROOT, 'runtimes', 'codex', 'setup.sh'), {
-      ...process.env,
+      ...cleanEnv(),
       HOME: path.join(temp, 'home'),
       CODEX_HOME: codexHome,
       PATH: `${bin}${path.delimiter}${process.env.PATH || ''}`,
@@ -1439,7 +1723,7 @@ test('Codex hooks migration fails closed for malformed legacy hooks.json', () =>
     fs.writeFileSync(config, multilineConfig);
     fs.writeFileSync(hooksJson, validHooks);
     const multilineResult = runSetupResult(path.join(ROOT, 'runtimes', 'codex', 'setup.sh'), {
-      ...process.env,
+      ...cleanEnv(),
       HOME: path.join(temp, 'home'), CODEX_HOME: codexHome,
       PATH: `${bin}${path.delimiter}${process.env.PATH || ''}`,
       JARVOS_STEWARDSHIP_ONLY: '1', JARVOS_MANAGED_REPOSITORIES: '/managed/repository', JARVOS_STAGED_PUBLIC_RUNTIME_ROOT: staged, JARVOS_STEWARDSHIP_STABLE_ROOT: stable,

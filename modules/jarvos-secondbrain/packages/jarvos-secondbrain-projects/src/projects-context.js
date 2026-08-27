@@ -23,6 +23,7 @@ const QUERY_FIELDS = Object.freeze(['scope', 'include', 'limits']);
 const SCOPE_FIELDS = Object.freeze(['projectIds', 'outcomeIds', 'includeDescendants']);
 const LIMIT_FIELDS = Object.freeze(['maxItems', 'maxBytes', 'maxProviderAgeSeconds']);
 const INCLUDE_SECTIONS = Object.freeze(['hierarchy', 'activity', 'currentWork', 'attention']);
+const TERMINAL_WORK_STATUSES = new Set(['closed', 'completed', 'done', 'cancelled', 'canceled', 'rejected', 'abandoned']);
 const KNOWN_PROVIDERS = Object.freeze(['activity', 'beads', 'paperclip', 'release', 'stewardship', 'todo']);
 const SUMMARY_FIELDS = Object.freeze(['id', 'canonicalId', 'category', 'status', 'title', 'occurredAt', 'observedAt', 'evidenceRefs', 'source', 'canonicalAtAdmission']);
 const EVIDENCE_FIELDS = Object.freeze(['source', 'id', 'canonicalId', 'occurredAt', 'observedAt', 'evidenceRefs']);
@@ -346,7 +347,9 @@ function providerView(provider, snapshot, { now, maxAgeSeconds, selectedIds, red
 
 function classifySummaries(summaries) {
   const activity = summaries.filter((summary) => summary.category === 'activity');
-  const currentWork = summaries.filter((summary) => ['intent', 'execution', 'work'].includes(summary.category) || ['active', 'open', 'in_progress', 'tracked', 'claimed'].includes(summary.status));
+  const currentWork = summaries.filter((summary) => !TERMINAL_WORK_STATUSES.has(summary.status)
+    && (['intent', 'execution', 'work'].includes(summary.category)
+      || ['active', 'open', 'in_progress', 'tracked', 'claimed'].includes(summary.status)));
   const attention = summaries.filter((summary) => summary.category === 'attention' || ['blocked', 'approval_due', 'due', 'overdue'].includes(summary.status));
   return { activity, currentWork, attention };
 }

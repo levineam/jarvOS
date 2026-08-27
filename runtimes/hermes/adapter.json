@@ -13,6 +13,14 @@
     "alias": { "pattern": "^[a-z][a-z0-9-]{0,63}$", "maxLength": 64, "reservedNames": [] },
     "probeIsolation": { "mode": "receipt-bound-exact-path", "unattended": true }
   },
+  "instructionProjection": {
+    "version": "jarvos-instruction-projection-adapter/v1",
+    "status": "discovery-pending",
+    "loader": null,
+    "supportedVersions": null,
+    "precedence": null,
+    "reason": "Native instruction loader discovery is required before compatibility can be declared."
+  },
   "operatorNotification": {
     "version": "jarvos-operator-notification-adapter/v1",
     "contract": "jarvos-operator-notification/v1",
@@ -37,7 +45,7 @@
       "skills": { "discover": { "status": "manual", "transport": "Hermes skill directory", "reason": "The public adapter installs guidance but does not claim skill discovery integration." }, "invoke": { "status": "manual", "transport": "Hermes skill directory", "reason": "Hermes owns skill invocation." } },
       "toolAuthorization": { "declare": { "status": "unsupported", "reason": "No public Hermes authorization contract is installed." }, "enforce": { "status": "unsupported", "reason": "Hermes owns tool authorization." } },
       "egress": { "declare": { "status": "unsupported", "reason": "No public Hermes egress declaration is installed." }, "enforce": { "status": "unsupported", "reason": "Hermes owns egress enforcement." } },
-      "session": { "startupHook": { "status": "supported", "transport": "Hermes on_session_start + pre_llm_call plugin hooks", "evidence": "plugins/jarvos-context/__init__.py" }, "handoff": { "status": "unsupported", "reason": "No public Hermes handoff adapter is declared." } },
+      "session": { "startupHook": { "status": "supported", "transport": "Hermes on_session_start + pre_llm_call plugin hooks", "evidence": "plugins/jarvos-context/__init__.py" }, "handoff": { "status": "unsupported", "reason": "No public Hermes handoff adapter is declared." }, "preCompactHook": { "status": "unsupported", "reason": "No public Hermes pre-compaction session-thread flush is declared." } },
       "inboundDispatch": { "receive": { "status": "unsupported", "reason": "No public Hermes inbound dispatch bridge is declared." }, "validate": { "status": "unsupported", "reason": "No public Hermes inbound dispatch bridge is declared." } },
       "lifecycle": { "receipt": { "status": "supported", "transport": "Hermes gateway lifecycle outbox + private bridge", "evidence": "gateway/lifecycle_events.py@ed13651a30deb6ca5f8902a13eaecada412d6f22" } },
       "scheduledWork": { "participate": { "status": "unsupported", "reason": "Hermes scheduling remains host-native." } },
@@ -125,7 +133,7 @@
       "rootEnvironment": "JARVOS_STEWARDSHIP_STABLE_ROOT",
       "dispatcher": "jarvos-stewardship-dispatcher",
       "entrypoint": { "kind": "hermesShell", "path": "jarvos-hermes-pre-llm-hook.js" },
-      "actions": ["harness-launch", "session-start", "session-turn", "bridge", "provenance-probe"],
+      "actions": ["harness-launch", "session-start", "session-turn", "bridge", "provenance-probe", "session-precompact"],
       "selectedRuntimeAssets": ["runtimes/hermes/jarvos-pre-llm-hook.js"],
       "installedConfig": { "inspection": "stable-entrypoint-only", "prepare": "reversible", "rollback": "exact-owned-state" },
       "provenance": { "action": "provenance-probe", "sideEffectFree": true }

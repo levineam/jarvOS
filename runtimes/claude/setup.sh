@@ -5,6 +5,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 MCP_SERVER="$ROOT/modules/jarvos-agent-context/scripts/jarvos-mcp.js"
 HOOK_SCRIPT="$ROOT/runtimes/claude/jarvos-session-start-hook.js"
 TURN_HOOK_SCRIPT="$ROOT/runtimes/claude/jarvos-session-turn-hook.js"
+PRECOMPACT_HOOK_SCRIPT="$ROOT/runtimes/claude/jarvos-precompact-hook.js"
 CLAUDE_MD_TEMPLATE="$ROOT/runtimes/claude/templates/CLAUDE.md.template"
 CLAUDE_SETTINGS="${CLAUDE_SETTINGS:-$HOME/.claude/settings.json}"
 CLAUDE_DESKTOP_CONFIG="${CLAUDE_DESKTOP_CONFIG:-$HOME/Library/Application Support/Claude/claude_desktop_config.json}"
@@ -14,6 +15,38 @@ STEWARDSHIP_CLAUDE_SESSION_MAP_ROOT="${JARVOS_STEWARDSHIP_CLAUDE_SESSION_MAP_ROO
 STEWARDSHIP_BRIDGE_PATH="${JARVOS_STEWARDSHIP_BRIDGE_PATH:-}"
 STEWARDSHIP_STABLE_ROOT="${JARVOS_STEWARDSHIP_STABLE_ROOT:-}"
 STEWARDSHIP_DISPATCHER=""
+# Optional owner-controlled stable selector-aware entrypoint. When set, this
+# is what gets persisted in Claude Code and Claude Desktop config instead of
+# this immutable install's own MCP script -- so a later selected-runtime
+# transition does not require rewriting persisted client config. Unset
+# preserves the current portable behavior: register this run's own
+# $MCP_SERVER directly.
+STABLE_MCP_ENTRYPOINT="${JARVOS_MCP_STABLE_ENTRYPOINT:-}"
+# Optional Todo work-action host bindings. Unset keeps public/minimal behavior.
+# When set, persist the non-secret absolute paths on the MCP child. Trust
+# checks stay in the MCP server (fail closed on an untrusted path).
+WORK_ACTION_SERVICE_MODULE="${JARVOS_WORK_ACTION_SERVICE_MODULE:-}"
+PROJECTS_CONTEXT_CONFIG="${JARVOS_PROJECTS_CONTEXT_CONFIG:-}"
+MCP_ENV_ARGS=()
+
+append_optional_mcp_env() {
+  local name="$1"
+  local value="${2:-}"
+  if [ -z "$value" ]; then
+    return 0
+  fi
+  case "$value" in
+    /*) ;;
+    *)
+      echo "${name} must be an absolute path when set" >&2
+      exit 1
+      ;;
+  esac
+  MCP_ENV_ARGS+=(--env "${name}=${value}")
+}
+
+append_optional_mcp_env JARVOS_WORK_ACTION_SERVICE_MODULE "$WORK_ACTION_SERVICE_MODULE"
+append_optional_mcp_env JARVOS_PROJECTS_CONTEXT_CONFIG "$PROJECTS_CONTEXT_CONFIG"
 
 # The private installer materializes this owner-controlled bundle once. Native
 # configuration must refer to it, never to a selected immutable runtime stage.
@@ -54,6 +87,63 @@ if [ ! -f "$TURN_HOOK_SCRIPT" ]; then
   exit 1
 fi
 
+if [ ! -f "$PRECOMPACT_HOOK_SCRIPT" ]; then
+  echo "jarvOS Claude precompact hook script not found: $PRECOMPACT_HOOK_SCRIPT" >&2
+  exit 1
+fi
+
+# The stable entrypoint is what setup registers with Claude, so it must be
+# validated to the same bar as the stable stewardship dispatcher: absolute,
+# not a symlink, an owner-only executable file. An owner-only leaf is not
+# enough on its own -- an unprivileged co-tenant of a writable *ancestor*
+# directory can delete and replace that "trusted" file at will, so every
+# directory from the entrypoint's parent up to the filesystem root ("/",
+# a boundary public setup can name without inventing a private path) must
+# also be owned by us (or root) and not group/world-writable, mirroring the
+# stewardship dispatcher and control-plane credential-file checks. Reject
+# without echoing the path -- an unsafe binding is refused before it is ever
+# persisted.
+MCP_COMMAND=(node "$MCP_SERVER")
+if [ -n "$STABLE_MCP_ENTRYPOINT" ]; then
+  case "$STABLE_MCP_ENTRYPOINT" in
+    /*) ;;
+    *)
+      echo "JARVOS_MCP_STABLE_ENTRYPOINT must be an absolute path" >&2
+      exit 1
+      ;;
+  esac
+  if ! node -e '
+const fs = require("fs");
+const path = require("path");
+const value = process.argv[1];
+let stat;
+try { stat = fs.lstatSync(value); } catch { process.exit(1); }
+const uid = typeof process.getuid === "function" ? process.getuid() : null;
+if (stat.isSymbolicLink() || !stat.isFile() || (stat.mode & 0o077) !== 0 || (stat.mode & 0o111) === 0 || (uid !== null && stat.uid !== uid)) process.exit(1);
+function trustedAncestor(dirStat) {
+  if (!dirStat.isDirectory()) return false;
+  if (uid !== null && dirStat.uid !== 0 && dirStat.uid !== uid) return false;
+  const writable = (dirStat.mode & 0o022) !== 0;
+  const sticky = (dirStat.mode & 0o1000) !== 0;
+  return !writable || sticky;
+}
+let dir = path.dirname(value);
+for (;;) {
+  let dirStat;
+  try { dirStat = fs.statSync(dir); } catch { process.exit(1); }
+  if (!trustedAncestor(dirStat)) process.exit(1);
+  const parent = path.dirname(dir);
+  if (parent === dir) break;
+  dir = parent;
+}
+' "$STABLE_MCP_ENTRYPOINT"; then
+    echo "JARVOS_MCP_STABLE_ENTRYPOINT must be an absolute, owner-only executable file with trusted, non-writable ancestry up to the filesystem root" >&2
+    exit 1
+  fi
+  MCP_COMMAND=("$STABLE_MCP_ENTRYPOINT")
+fi
+EFFECTIVE_MCP_TARGET="${STABLE_MCP_ENTRYPOINT:-$MCP_SERVER}"
+
 warn_if_claude_mcp_shadowed() {
   local details
   details="$(claude mcp get jarvos 2>/dev/null || true)"
@@ -61,8 +151,8 @@ warn_if_claude_mcp_shadowed() {
     echo "Warning: Claude Code could not resolve the jarvOS MCP server after user-scope registration." >&2
     return
   fi
-  if ! printf "%s\n" "$details" | grep -F "$MCP_SERVER" >/dev/null; then
-    echo "Warning: the effective Claude Code jarvOS MCP entry does not point at $MCP_SERVER." >&2
+  if ! printf "%s\n" "$details" | grep -F "$EFFECTIVE_MCP_TARGET" >/dev/null; then
+    echo "Warning: the effective Claude Code jarvOS MCP entry does not point at $EFFECTIVE_MCP_TARGET." >&2
     echo "A local or project scoped Claude MCP server named jarvos may be shadowing the user-scoped jarvOS server." >&2
   fi
 }
@@ -71,18 +161,23 @@ if [ "${JARVOS_SKIP_CLAUDE_CODE_MCP:-0}" = "1" ]; then
   echo "Skipping Claude Code MCP registration because JARVOS_SKIP_CLAUDE_CODE_MCP=1."
 elif command -v claude >/dev/null 2>&1; then
   claude mcp remove --scope user jarvos >/dev/null 2>&1 || true
-  claude mcp add --scope user jarvos -- node "$MCP_SERVER" >/dev/null
+  if [ ${#MCP_ENV_ARGS[@]} -gt 0 ]; then
+    claude mcp add --scope user "${MCP_ENV_ARGS[@]}" jarvos -- "${MCP_COMMAND[@]}" >/dev/null
+  else
+    claude mcp add --scope user jarvos -- "${MCP_COMMAND[@]}" >/dev/null
+  fi
   warn_if_claude_mcp_shadowed
-  echo "Registered jarvOS MCP server for Claude Code: $MCP_SERVER"
+  echo "Registered jarvOS MCP server for Claude Code: $EFFECTIVE_MCP_TARGET"
 else
   echo "Claude Code CLI not found on PATH; skipping Claude Code MCP registration." >&2
 fi
 
-node - "$CLAUDE_SETTINGS" "$HOOK_SCRIPT" "$TURN_HOOK_SCRIPT" "$STEWARDSHIP_DISPATCHER" "$CLAUDE_DESKTOP_CONFIG" "$MCP_SERVER" "${JARVOS_STEWARDSHIP_ONLY:-0}" "${JARVOS_MANAGED_HARNESS_ROLLBACK:-0}" "$STEWARDSHIP_BRIDGE_COMMAND" "$STEWARDSHIP_CLAUDE_SESSION_MAP_ROOT" "$STEWARDSHIP_BRIDGE_PATH" "${JARVOS_STAGED_PUBLIC_RUNTIME_ROOT:-}" <<'NODE'
+node - "$CLAUDE_SETTINGS" "$HOOK_SCRIPT" "$TURN_HOOK_SCRIPT" "$PRECOMPACT_HOOK_SCRIPT" "$STEWARDSHIP_DISPATCHER" "$CLAUDE_DESKTOP_CONFIG" "$MCP_SERVER" "${JARVOS_STEWARDSHIP_ONLY:-0}" "${JARVOS_MANAGED_HARNESS_ROLLBACK:-0}" "$STEWARDSHIP_BRIDGE_COMMAND" "$STEWARDSHIP_CLAUDE_SESSION_MAP_ROOT" "$STEWARDSHIP_BRIDGE_PATH" "${JARVOS_STAGED_PUBLIC_RUNTIME_ROOT:-}" "$STABLE_MCP_ENTRYPOINT" <<'NODE'
 const fs = require('fs');
 const path = require('path');
+const { spawnSync } = require('child_process');
 
-const [settingsPath, hookScript, turnHookScript, dispatcher, desktopConfigPath, mcpServer, stewardshipOnly, rollback, bridgeCommand, claudeSessionMapRoot, bridgePath, stagedRoot] = process.argv.slice(2);
+const [settingsPath, hookScript, turnHookScript, precompactHookScript, dispatcher, desktopConfigPath, mcpServer, stewardshipOnly, rollback, bridgeCommand, claudeSessionMapRoot, bridgePath, stagedRoot, stableMcpEntrypoint] = process.argv.slice(2);
 
 function readJsonFile(filePath, fallback) {
   if (!fs.existsSync(filePath)) return fallback;
@@ -137,13 +232,23 @@ function upsertClaudeCodeHook(settings, bridge) {
   const next = { ...settings };
   const hooks = next.hooks && typeof next.hooks === 'object' && !Array.isArray(next.hooks) ? { ...next.hooks } : {};
 
-  const ownedPaths = [hookScript, turnHookScript, dispatcher].filter(Boolean);
+  const ownedPaths = [hookScript, turnHookScript, precompactHookScript, dispatcher].filter(Boolean);
   if (path.isAbsolute(stagedRoot || '')) {
     ownedPaths.push(path.join(stagedRoot, 'runtimes', 'claude', 'jarvos-session-start-hook.js'));
     ownedPaths.push(path.join(stagedRoot, 'runtimes', 'claude', 'jarvos-session-turn-hook.js'));
+    ownedPaths.push(path.join(stagedRoot, 'runtimes', 'claude', 'jarvos-precompact-hook.js'));
   }
   const escapeRegex = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const hasOwnedPath = (command, target) => new RegExp(`(?:^|[\\s'\"])${escapeRegex(target)}(?=$|[\\s'\"])`).test(command);
+  // A path is written into the command shell-quoted, and shellQuote renders an
+  // apostrophe as '"'"' -- so the raw path is not a substring of the command for
+  // any user whose path contains one. Matching only the raw form made re-running
+  // setup duplicate hooks and rollback silently leave them behind. Check the
+  // quoted rendering too.
+  const hasOwnedPath = (command, target) => {
+    const raw = new RegExp(`(?:^|[\\s'\"])${escapeRegex(target)}(?=$|[\\s'\"])`);
+    if (raw.test(command)) return true;
+    return command.includes(shellQuote(target));
+  };
 
   function upsert(event, script, entry) {
     const entries = Array.isArray(hooks[event]) ? [...hooks[event]] : [];
@@ -158,13 +263,74 @@ function upsertClaudeCodeHook(settings, bridge) {
     else delete hooks[event];
   }
 
-  function commandEntry(script, action, matcher) {
+  // Ask the dispatcher what it can actually do. The probe action is
+  // side-effect-free by contract, so calling it during setup is safe, and the
+  // answer is authoritative in a way the public ABI is not: the ABI says what
+  // the contract declares, the receipt says what this binary implements. A
+  // dispatcher predating capability advertising reports nothing, which reads as
+  // unsupported rather than as permission to guess.
+  // Distinguish "this dispatcher does not offer the capability" from "we could
+  // not find out". Both degrade to registering nothing, but only the second is a
+  // symptom -- a probe that raced a runtime promotion leaves an install with no
+  // compaction checkpoint, and setup is one-shot, so it never self-heals. Saying
+  // which happened is the difference between a known limitation and a silent one.
+  function unsupported(reason) {
+    process.stderr.write(`jarvOS: PreCompact not registered -- ${reason}. Re-run setup once the dispatcher is reachable to enable it.\n`);
+    return [];
+  }
+
+  function dispatcherActions() {
+    if (!dispatcher) return [];
+    let probe;
+    try {
+      // Bounded: the dispatcher fences itself while a runtime promotion is in
+      // flight, so an unbounded probe can hang setup with no output under
+      // `set -euo pipefail`. A stall is treated as "cannot answer" -> unsupported.
+      probe = spawnSync(dispatcher, ['--harness', 'claude', '--action', 'provenance-probe'], { encoding: 'utf8', timeout: 10000, maxBuffer: 1024 * 1024 });
+    } catch (error) {
+      return unsupported(`probe could not be started (${error && error.message ? error.message : 'unknown error'})`);
+    }
+    if (!probe) return unsupported('probe returned no result');
+    if (probe.error) return unsupported(`probe did not complete (${probe.error.message})`);
+    if (probe.status !== 0) return unsupported(`probe exited ${probe.status}`);
+    let receipt;
+    try {
+      receipt = JSON.parse(String(probe.stdout || ''));
+    } catch (_) {
+      return unsupported('probe output was not a JSON receipt');
+    }
+    if (!receipt || typeof receipt !== 'object' || Array.isArray(receipt)) return unsupported('probe receipt was not an object');
+    const actions = receipt.actions;
+    if (!Array.isArray(actions) || actions.some((value) => typeof value !== 'string')) {
+      return unsupported('probe receipt did not advertise an actions list');
+    }
+    return actions;
+  }
+
+  // The probe gates registration; it cannot protect invocation. Once the hook is
+  // in settings.json the dispatcher can still fail before it ever spawns the
+  // hook -- fenced mid-promotion, a selector or tuple mismatch, a missing asset,
+  // or a rollback to a build that no longer knows the action. On PreCompact,
+  // which is a block/allow channel, any of those would block compaction. So the
+  // registered command absorbs a dispatcher failure and emits the empty
+  // directive the harness reads as "proceed", exactly as the hook itself would.
+  function failOpenCommand(inner) {
+    // Capture and replace rather than append. `cmd || printf '{}'` concatenates:
+    // a dispatcher that emits partial output and then fails would produce that
+    // output followed by `{}`, which is not valid JSON, so the directive is lost
+    // rather than defaulted. Substituting the whole stdout keeps the fallback
+    // exact -- the harness sees either the hook's real output or `{}`.
+    return `if jarvos_out=$(${inner}); then printf '%s' "$jarvos_out"; else printf '%s' '{}'; fi`;
+  }
+
+  function commandEntry(script, action, matcher, failOpen) {
     const target = dispatcher
       ? `${shellQuote(dispatcher)} --harness claude --action ${action}`
       : `node ${shellQuote(script)}`;
-    const command = bridge
+    const invocation = bridge
       ? `env JARVOS_STEWARDSHIP_BRIDGE_COMMAND=${shellQuote(bridge.command)} JARVOS_STEWARDSHIP_CLAUDE_SESSION_MAP_ROOT=${shellQuote(bridge.mapRoot)} PATH=${shellQuote(bridge.bin)}:\"$PATH\" ${target}`
       : target;
+    const command = failOpen ? failOpenCommand(invocation) : invocation;
     const entry = {
       hooks: [{ type: 'command', command, timeout: 30 }],
     };
@@ -175,12 +341,36 @@ function upsertClaudeCodeHook(settings, bridge) {
   if (rollback === '1') {
     upsert('SessionStart', hookScript, null);
     upsert('UserPromptSubmit', turnHookScript, null);
+    upsert('PreCompact', precompactHookScript, null);
   } else {
-    upsert('SessionStart', hookScript, commandEntry(hookScript, 'session-start', 'startup'));
+    upsert('SessionStart', hookScript, commandEntry(hookScript, 'session-start', 'startup|resume|compact'));
     upsert('UserPromptSubmit', turnHookScript, commandEntry(turnHookScript, 'session-turn'));
+    // An unmanaged install runs the hook directly and inherits its fail-open
+    // behaviour. A managed install routes through the dispatcher, but only if
+    // this dispatcher says it implements the action -- the public ABI declaring
+    // it is not evidence that the installed binary does, and those two live in
+    // different repositories on different release schedules. Unsupported, or
+    // any probe that cannot be trusted, registers nothing rather than a hook
+    // that would reject at runtime on a block/allow channel.
+    if (!dispatcher) {
+      upsert('PreCompact', precompactHookScript, commandEntry(precompactHookScript, 'session-precompact'));
+    } else if (dispatcherActions().includes('session-precompact')) {
+      upsert('PreCompact', precompactHookScript, commandEntry(precompactHookScript, 'session-precompact', null, true));
+    } else {
+      upsert('PreCompact', precompactHookScript, null);
+    }
   }
   next.hooks = hooks;
   return next;
+}
+
+function optionalMcpHostEnv() {
+  const env = {};
+  for (const name of ['JARVOS_WORK_ACTION_SERVICE_MODULE', 'JARVOS_PROJECTS_CONTEXT_CONFIG']) {
+    const value = process.env[name];
+    if (typeof value === 'string' && value.trim()) env[name] = value.trim();
+  }
+  return env;
 }
 
 function upsertClaudeDesktopMcp(config) {
@@ -188,10 +378,11 @@ function upsertClaudeDesktopMcp(config) {
   next.mcpServers = next.mcpServers && typeof next.mcpServers === 'object' && !Array.isArray(next.mcpServers)
     ? { ...next.mcpServers }
     : {};
-  next.mcpServers.jarvos = {
-    command: 'node',
-    args: [mcpServer],
-  };
+  const hostEnv = optionalMcpHostEnv();
+  next.mcpServers.jarvos = stableMcpEntrypoint
+    ? { command: stableMcpEntrypoint }
+    : { command: 'node', args: [mcpServer] };
+  if (Object.keys(hostEnv).length > 0) next.mcpServers.jarvos.env = hostEnv;
   return next;
 }
 

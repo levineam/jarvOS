@@ -13,6 +13,14 @@
     "alias": { "pattern": "^[a-z][a-z0-9-]{0,63}$", "maxLength": 64, "reservedNames": [] },
     "probeIsolation": { "mode": "receipt-bound-exact-path", "unattended": true }
   },
+  "instructionProjection": {
+    "version": "jarvos-instruction-projection-adapter/v1",
+    "status": "discovery-pending",
+    "loader": null,
+    "supportedVersions": null,
+    "precedence": null,
+    "reason": "Native instruction loader discovery is required before compatibility can be declared."
+  },
   "operatorNotification": {
     "version": "jarvos-operator-notification-adapter/v1",
     "contract": "jarvos-operator-notification/v1",
@@ -26,7 +34,7 @@
       "skills": { "discover": { "status": "manual", "transport": "Codex skills directory", "reason": "Codex owns skill discovery." }, "invoke": { "status": "manual", "transport": "Codex skills directory", "reason": "Codex owns skill invocation." } },
       "toolAuthorization": { "declare": { "status": "manual", "transport": "capability profile", "reason": "The public profile declares but does not install Codex authorization." }, "enforce": { "status": "unsupported", "reason": "No public Codex authorization enforcer is declared." } },
       "egress": { "declare": { "status": "manual", "transport": "capability profile", "reason": "The public profile declares egress but does not configure Codex egress." }, "enforce": { "status": "unsupported", "reason": "No public Codex egress enforcer is declared." } },
-      "session": { "startupHook": { "status": "supported", "transport": "SessionStart hook", "evidence": "jarvos-session-start-hook.js" }, "handoff": { "status": "unsupported", "reason": "No public Codex handoff adapter is declared." } },
+      "session": { "startupHook": { "status": "supported", "transport": "SessionStart hook", "evidence": "jarvos-session-start-hook.js" }, "handoff": { "status": "unsupported", "reason": "No public Codex handoff adapter is declared." }, "preCompactHook": { "status": "unsupported", "reason": "No public Codex pre-compaction session-thread flush is declared." } },
       "inboundDispatch": { "receive": { "status": "unsupported", "reason": "No public Codex inbound dispatch bridge is declared." }, "validate": { "status": "unsupported", "reason": "No public Codex inbound dispatch bridge is declared." } },
       "lifecycle": { "receipt": { "status": "unsupported", "reason": "No public Codex lifecycle receipt bridge is declared." } },
       "scheduledWork": { "participate": { "status": "unsupported", "reason": "Scheduled work is not part of this public adapter." } },
@@ -137,7 +145,7 @@
       "rootEnvironment": "JARVOS_STEWARDSHIP_STABLE_ROOT",
       "dispatcher": "jarvos-stewardship-dispatcher",
       "entrypoint": { "kind": "dispatcher", "path": "jarvos-stewardship-dispatcher" },
-      "actions": ["harness-launch", "session-start", "session-turn", "bridge", "provenance-probe"],
+      "actions": ["harness-launch", "session-start", "session-turn", "bridge", "provenance-probe", "session-precompact"],
       "selectedRuntimeAssets": ["runtimes/codex/jarvos-session-start-hook.js", "runtimes/codex/jarvos-session-turn-hook.js"],
       "installedConfig": { "inspection": "stable-entrypoint-only", "prepare": "reversible", "rollback": "exact-owned-state" },
       "provenance": { "action": "provenance-probe", "sideEffectFree": true }
