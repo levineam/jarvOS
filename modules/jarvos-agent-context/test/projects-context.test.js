@@ -503,6 +503,29 @@ test('hydration cutover removes raw Paperclip and Journal project orientation', 
   setProjectsContextProvider(null);
 });
 
+test('hydrate({ projectsContext: false }) skips the Projects packet read/build but still strips the Journal Projects section', async () => {
+  const provider = {
+    defaultQuery: QUERY,
+    read: async () => { throw new Error('Projects provider must not be read when projectsContext is disabled'); },
+  };
+  setProjectsContextProvider(provider);
+  await withTempContextEnv(async () => {
+    const dateParts = Object.fromEntries(new Intl.DateTimeFormat('en-US', {
+      timeZone: 'UTC', year: 'numeric', month: '2-digit', day: '2-digit',
+    }).formatToParts(new Date()).map((part) => [part.type, part.value]));
+    const date = `${dateParts.year}-${dateParts.month}-${dateParts.day}`;
+    fs.writeFileSync(path.join(process.env.JARVOS_JOURNAL_DIR, `${date}.md`), [
+      '# Journal', '', '## 🚀 Projects', '', '- [[jarvOS v1.0.0 release]]', '', '## Notes', '', 'Worked on the release reconciler.',
+    ].join('\n'));
+    const result = await hydrate({ sessionThread: false, maxChars: 5000, projectsContext: false });
+    assert.equal(result.report.projectsContext.status, 'disabled');
+    assert.doesNotMatch(result.markdown, /## Projects Context|jarvOS v1\.0\.0 release/);
+    assert.match(result.markdown, /Worked on the release reconciler/);
+    assert.match(result.markdown, /Journal Projects section omitted/);
+  });
+  setProjectsContextProvider(null);
+});
+
 test('hydrate ignores model-visible provider and query inputs in favor of its host orientation binding', async () => {
   const hostProvider = {
     defaultQuery: QUERY,

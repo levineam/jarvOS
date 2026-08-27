@@ -7,11 +7,23 @@ const {
   STEWARDSHIP_ADAPTER_VERSION,
   validateNextTurnBridgeResponse,
 } = require('../../modules/jarvos-runtime-kit/src/stewardship-adapter.js');
+const {
+  envelopeHasContent: projectsContextRefreshHasContent,
+  validateEnvelope: validateProjectsContextRefreshEnvelope,
+} = require('../../modules/jarvos-runtime-kit/src/projects-context-refresh.js');
 
 const HARNESS = 'codex';
 const BRIDGE_COMMAND_ENV = 'JARVOS_STEWARDSHIP_BRIDGE_COMMAND';
 const BRIDGE_COMMAND = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 const MAX_HOOK_INPUT_CHARS = 4096;
+const DEFAULT_BRIDGE_TIMEOUT_MS = 5000;
+// projectsContextStart/Refresh are hard, single-shot deadlines: a hung or
+// slow bridge must never block session start or a user turn. There is no
+// retry and no background timer -- a timeout simply fails open.
+const BRIDGE_CAPABILITY_TIMEOUT_MS = Object.freeze({
+  projectsContextStart: 2000,
+  projectsContextRefresh: 250,
+});
 const CODEX_THREAD_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const SESSION_WAIT_ID = /^session-wait:[A-Za-z0-9._:-]{1,80}$/;
 const RESULT_DIGEST = /^sha256:[a-f0-9]{64}$/i;
@@ -84,15 +96,30 @@ function invokeBridge(capability, options = {}) {
     return { ...base, pendingInSessionInput: false, reason: 'bridge-unavailable' };
   }
 
-  const result = spawnSync(command, [capability], {
+  const spawnSyncImpl = options.spawnSyncImpl || spawnSync;
+  const result = spawnSyncImpl(command, [capability], {
     cwd: options.cwd || process.cwd(),
     encoding: 'utf8',
-    timeout: 5000,
+    timeout: BRIDGE_CAPABILITY_TIMEOUT_MS[capability] || DEFAULT_BRIDGE_TIMEOUT_MS,
     // A SessionStart hook may receive its thread identity on stdin rather than
     // in its inherited environment. Callers pass a short-lived environment
     // copy so that identity is visible only to this bridge child process.
     env,
   });
+  if (capability === 'projectsContextStart' || capability === 'projectsContextRefresh') {
+    // Invalid, timed out, nonzero, or unavailable all fail open the same way:
+    // no stale or unproven Projects markdown ever reaches model-visible output.
+    if (!result || result.error || result.status !== 0) return { ...base, envelope: null, reason: 'bridge-unavailable' };
+    let response;
+    try {
+      response = JSON.parse(result.stdout || '{}');
+    } catch {
+      return { ...base, envelope: null, reason: 'bridge-unavailable' };
+    }
+    const validated = validateProjectsContextRefreshEnvelope(response);
+    if (!validated.ok) return { ...base, envelope: null, reason: 'bridge-unavailable' };
+    return { ...base, envelope: response, reason: undefined };
+  }
   if (result.status !== 0) return { ...base, pendingInSessionInput: false, reason: 'bridge-unavailable' };
   try {
     const response = JSON.parse(result.stdout || '{}');
@@ -160,6 +187,8 @@ function stop(options) { return invokeBridge('stop', options); }
 function nextTurnInput(options) { return invokeBridge('nextTurnInput', options); }
 function sessionWaitBind(options) { return invokeBridge('sessionWaitBind', options); }
 function sessionWaitNextTurn(options) { return invokeBridge('sessionWaitNextTurn', options); }
+function projectsContextStart(options) { return invokeBridge('projectsContextStart', options); }
+function projectsContextRefresh(options) { return invokeBridge('projectsContextRefresh', options); }
 
 function sessionWaitContext(input) {
   if (!input?.pendingSessionWait || !input.wait) return '';
@@ -199,10 +228,14 @@ function main(sessionId = readHookInput('UserPromptSubmit')) {
       writeJson({});
       return;
     }
+    // Exactly one refresh call per turn boundary; a timeout, invalid, or
+    // unavailable result continues the turn with no injection and no retry.
+    const refresh = projectsContextRefresh({ env });
     const input = nextTurnInput({ env });
     const sessionWait = sessionWaitNextTurn({ env });
     heartbeat({ env });
     const contexts = [];
+    if (projectsContextRefreshHasContent(refresh.envelope)) contexts.push(refresh.envelope.markdown);
     if (input.pendingInSessionInput && input.nextTurnInput) contexts.push(additionalContext(input));
     const waitContext = sessionWaitContext(sessionWait);
     if (waitContext) contexts.push(waitContext);
@@ -228,6 +261,7 @@ if (require.main === module) main();
 module.exports = {
   HARNESS,
   BRIDGE_COMMAND_ENV,
+  BRIDGE_CAPABILITY_TIMEOUT_MS,
   CODEX_THREAD_ID,
   MAX_HOOK_INPUT_CHARS,
   availability,
@@ -237,6 +271,8 @@ module.exports = {
   hasVerifiedLinkedWorktree,
   heartbeat,
   invokeBridge,
+  projectsContextStart,
+  projectsContextRefresh,
   sessionWaitNextTurn,
   hookSessionId,
   main,

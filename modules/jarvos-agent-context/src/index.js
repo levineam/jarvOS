@@ -1732,25 +1732,33 @@ async function hydrate(options = {}) {
   };
   const jarvosPaths = loadJarvosPaths();
   const parts = ['# jarvOS Working Context Packet', ''];
-
-  // Hydration is an orientation consumer, not a generic Projects query
-  // surface.  Its host-issued profile is fixed so startup, MCP hydration, and
-  // direct library hydration cannot drift into caller-shaped project reads.
-  const projectsRequest = orientationProjectsRequest(options, options[HYDRATION_PROJECTS_PROVIDER]);
-  const projects = await readProjectsContext(projectsRequest, true);
   const projectsCutover = projectsContextCutoverEnabled();
-  report.projectsContext = {
-    status: projects.status,
-    fingerprint: projects.fingerprint || null,
-    code: projects.code || null,
-  };
-  parts.push(projects.markdown, '');
-  if (projects.status === 'ok') {
-    report.sources.push(`${PROJECTS_CONTEXT_CONTRACT} (${projects.packet?.canonical?.records?.length || 0} records)`);
-    report.handles.push(`Projects context fingerprint: ${projects.fingerprint}`);
+
+  if (options.projectsContext === false) {
+    // A caller (e.g. a native start hook that already injected a bridge-issued
+    // Projects block) disabled only this section: no provider read, no packet
+    // build, no Projects markdown in this packet.
+    report.projectsContext = { status: 'disabled', fingerprint: null, code: null };
+    report.handles.push('Projects context: disabled for this hydration call');
   } else {
-    report.omissions.push(`Projects context unavailable: ${projects.reason}`);
-    report.handles.push('Projects context: provider unavailable (shadow mode)');
+    // Hydration is an orientation consumer, not a generic Projects query
+    // surface.  Its host-issued profile is fixed so startup, MCP hydration, and
+    // direct library hydration cannot drift into caller-shaped project reads.
+    const projectsRequest = orientationProjectsRequest(options, options[HYDRATION_PROJECTS_PROVIDER]);
+    const projects = await readProjectsContext(projectsRequest, true);
+    report.projectsContext = {
+      status: projects.status,
+      fingerprint: projects.fingerprint || null,
+      code: projects.code || null,
+    };
+    parts.push(projects.markdown, '');
+    if (projects.status === 'ok') {
+      report.sources.push(`${PROJECTS_CONTEXT_CONTRACT} (${projects.packet?.canonical?.records?.length || 0} records)`);
+      report.handles.push(`Projects context fingerprint: ${projects.fingerprint}`);
+    } else {
+      report.omissions.push(`Projects context unavailable: ${projects.reason}`);
+      report.handles.push('Projects context: provider unavailable (shadow mode)');
+    }
   }
 
   if (projectsCutover) {

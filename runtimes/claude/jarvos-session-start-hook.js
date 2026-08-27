@@ -5,10 +5,12 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { hydrate } = require('../../modules/jarvos-agent-context/src/index.js');
+const { envelopeHasContent: projectsContextRefreshHasContent } = require('../../modules/jarvos-runtime-kit/src/projects-context-refresh.js');
 const {
   additionalContext,
   BRIDGE_COMMAND_ENV,
   hookSessionId,
+  projectsContextStart,
   readHookInput,
   stewardshipAdapter,
 } = require('./jarvos-session-turn-hook.js');
@@ -122,8 +124,8 @@ function stewardshipContext(options = {}) {
   return input.pendingInSessionInput && input.nextTurnInput ? additionalContext(input) : '';
 }
 
-async function startupHydration(hookInput = {}) {
-  const result = await hydrate({ maxChars: hydrationMaxChars(hookInput) });
+async function startupHydration(hookInput = {}, options = {}) {
+  const result = await hydrate({ maxChars: hydrationMaxChars(hookInput), ...options });
   return result.markdown;
 }
 
@@ -134,13 +136,17 @@ async function main(hookInput = readHookInput()) {
     stewardshipAdapter.startOrResume(bridgeOptions);
     emitLocalChangeInvalidation();
     const judgment = stewardshipContext(bridgeOptions);
+    // A single hard-timeout start call; invalid, timed out, nonzero, or
+    // unavailable all fail open to the ordinary hydrate() Projects fallback.
+    const refresh = projectsContextStart(bridgeOptions);
+    const projectsContextMarkdown = projectsContextRefreshHasContent(refresh.envelope) ? refresh.envelope.markdown : '';
     let hydration = '';
     try {
-      hydration = await startupHydration(hookInput);
+      hydration = await startupHydration(hookInput, projectsContextMarkdown ? { projectsContext: false } : {});
     } catch (error) {
       logFailure(error);
     }
-    const context = [judgment, hydration].filter((value) => typeof value === 'string' && value.trim()).join('\n\n');
+    const context = [judgment, projectsContextMarkdown, hydration].filter((value) => typeof value === 'string' && value.trim()).join('\n\n');
     if (!context) {
       writeJson({});
       return;
