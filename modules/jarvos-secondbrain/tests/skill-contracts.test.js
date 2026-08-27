@@ -105,3 +105,15 @@ test('contracts declare adapter-backed writes', () => {
     'note-creation must declare the notes writer dependency',
   );
 });
+
+test('journal-entry contract declares strict idea and journal routes', () => {
+  const contract = getSkillContract('journal-entry');
+  const keywordTriggers = contract.triggers
+    .filter((trigger) => trigger.source === 'keyword-router')
+    .map((trigger) => trigger.when.trigger);
+  const targets = contract.capabilities.flatMap((capability) => capability.writes.map((write) => write.target));
+
+  assert.deepEqual(keywordTriggers, ['idea', 'journal']);
+  assert.deepEqual(targets, ['## 💡 Ideas', '## 📓 Journal Entry']);
+  assert.deepEqual(contract.input.properties.trigger.enum, ['idea', 'journal']);
+});

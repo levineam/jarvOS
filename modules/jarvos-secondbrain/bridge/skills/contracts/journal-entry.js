@@ -14,6 +14,14 @@ module.exports = {
       reason: 'The keyword router treats idea-prefixed captures as journal-first material.',
     },
     {
+      source: 'keyword-router',
+      when: {
+        trigger: 'journal',
+      },
+      action: 'append captured text to the journal Journal Entry section',
+      reason: 'Explicit journal commands are terminal journal-first captures.',
+    },
+    {
       source: 'classifier',
       when: {
         salienceClass: 'idea',
@@ -43,7 +51,7 @@ module.exports = {
       text: { type: 'string', minLength: 1 },
       content: { type: 'string' },
       title: { type: 'string' },
-      trigger: { type: 'string', enum: ['idea'] },
+      trigger: { type: 'string', enum: ['idea', 'journal'] },
       salienceClass: { type: 'string', enum: ['idea'] },
       confidence: { type: 'number', minimum: 0, maximum: 1 },
       date: { type: 'string', pattern: '^\\d{4}-\\d{2}-\\d{2}$' },
@@ -75,6 +83,11 @@ module.exports = {
           adapter: 'obsidian',
           operation: 'appendLineToJournalSection',
           target: '## 💡 Ideas',
+        },
+        {
+          adapter: 'obsidian',
+          operation: 'appendLineToJournalSection',
+          target: '## 📓 Journal Entry',
         },
       ],
     },
