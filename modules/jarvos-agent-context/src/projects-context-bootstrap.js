@@ -8,6 +8,7 @@ const path = require('node:path');
 
 const CONFIG_ENV = 'JARVOS_PROJECTS_CONTEXT_CONFIG';
 const ACTIVE_ASSISTANT_PROVIDER_MODULE_ENV = 'ACTIVE_ASSISTANT_PROJECTS_PROVIDER_MODULE';
+const ACTIVE_ASSISTANT_PUBLIC_RUNTIME_ROOT_ENV = 'ACTIVE_ASSISTANT_PUBLIC_RUNTIME_ROOT';
 
 const MODULE_ROOT = path.resolve(__dirname, '..');
 const JARVOS_ROOT = path.resolve(MODULE_ROOT, '..', '..');
@@ -135,7 +136,11 @@ function createHostProjectsContextProvider(env = process.env) {
   if (!config || typeof config !== 'object' || Array.isArray(config)) return null;
 
   const workspaceRoot = resolveTrustedDirectory(config.workspaceRoot);
-  const repositoryRoot = workspaceRoot && resolveTrustedDirectory(config.repositoryRoot, workspaceRoot);
+  const hasSelectedPublicRoot = Object.prototype.hasOwnProperty.call(env || {}, ACTIVE_ASSISTANT_PUBLIC_RUNTIME_ROOT_ENV);
+  const repositoryRoot = workspaceRoot && resolveTrustedDirectory(
+    hasSelectedPublicRoot ? env[ACTIVE_ASSISTANT_PUBLIC_RUNTIME_ROOT_ENV] : config.repositoryRoot,
+    workspaceRoot,
+  );
   const stateRoot = workspaceRoot && resolveTrustedDirectory(config.stateRoot, workspaceRoot);
   if (!workspaceRoot || !repositoryRoot || !stateRoot) return null;
   // The provider is a host-owned adapter. It may live beside the repository
@@ -215,9 +220,15 @@ function createHostProjectsContextProvider(env = process.env) {
         releaseProducerId: typeof config.releaseProducerId === 'string' && config.releaseProducerId.trim()
           ? config.releaseProducerId.trim()
           : undefined,
+        beadsProviderProducerId: typeof config.beadsProviderProducerId === 'string' && config.beadsProviderProducerId.trim()
+          ? config.beadsProviderProducerId.trim()
+          : undefined,
+        todoProviderProducerId: typeof config.todoProviderProducerId === 'string' && config.todoProviderProducerId.trim()
+          ? config.todoProviderProducerId.trim()
+          : undefined,
       });
     },
   };
 }
 
-module.exports = { ACTIVE_ASSISTANT_PROVIDER_MODULE_ENV, CONFIG_ENV, createHostProjectsContextProvider };
+module.exports = { ACTIVE_ASSISTANT_PROVIDER_MODULE_ENV, ACTIVE_ASSISTANT_PUBLIC_RUNTIME_ROOT_ENV, CONFIG_ENV, createHostProjectsContextProvider };

@@ -53,6 +53,7 @@ const SOURCE_TOOLS = [
   'codex',
   'claude-code',
   'hermes',
+  'grok-bot',
   'chatgpt',
   'claude-app',
   'manual',

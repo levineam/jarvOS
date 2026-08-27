@@ -50,6 +50,27 @@ Unset keeps the tools present but unavailable. A set but untrusted module path
 is refused and never loaded. Runtime setup scripts pass these through when set
 and never require them for a public/minimal install.
 
+The copied example is a live-only composition. Its trusted config must supply
+three distinct owner-only durable roots—`trackerOperationStoreRoot`,
+`workActionOperationStoreRoot`, and `executionLinkStoreRoot`—as well as the
+pinned opaque `beadsWorkspaceId`, `workActionAuthorizationModule`,
+`workActionCompletionModule`, and non-empty
+`registeredCompletionProducers`. The tracker operation ledger, work-action
+operation ledger, and Projects execution-link store cannot be aliases. The
+host refuses absent, memory-only, or shared roots before Beads I/O; memory
+stores remain available only for explicitly test-mode services.
+The three state roots must be provisioned before the service starts; loading or
+listing the service never creates or changes their permissions.
+
+Todo authorization and completion receipts are host-resolved. MCP callers may
+send ordinary operation and canonical-reference fields only; they cannot supply
+authorization, actor identity, or evidence. Each authorization receipt must
+echo the host-issued request fingerprint, exact operation, item, workspace, and
+canonical reference. Generic transitions cannot enter a terminal state.
+Completion requires a registered host receipt; an
+`andrew-owner-attestation` records Andrew's attestation, not technical or
+external verification.
+
 `jarvos_control_plane` is available only after the host has configured
 `JARVOS_CONTROL_PLANE_SERVICE_MODULE`. `@jarvos/agent-context` declares
 `@jarvos/control-plane` as a runtime dependency so this boundary resolves from

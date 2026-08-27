@@ -66,14 +66,21 @@ function resolveHostCredential(env = process.env) {
   return null;
 }
 
-function trustedFile(filePath, root = null) {
+// ownerOnly distinguishes two trust policies sharing one ancestry check:
+// service/executable modules must be owner-only (no group/world bits at
+// all), while a config file may be owner-controlled and merely
+// non-group/world-writable, matching projects-context-bootstrap.js's split.
+// Never loosen the default -- callers that load and execute code must pass
+// ownerOnly: true explicitly or accept it as the default.
+function trustedFile(filePath, { root = null, ownerOnly = true } = {}) {
   if (typeof filePath !== 'string' || !path.isAbsolute(filePath)) return null;
   try {
     if (fs.lstatSync(filePath).isSymbolicLink()) return null;
     const real = fs.realpathSync(filePath);
     const stat = fs.statSync(real);
     const uid = typeof process.getuid === 'function' ? process.getuid() : null;
-    if (!stat.isFile() || (uid !== null && stat.uid !== uid) || (stat.mode & 0o077) !== 0) return null;
+    if (!stat.isFile() || (uid !== null && stat.uid !== uid)) return null;
+    if (ownerOnly ? (stat.mode & 0o077) !== 0 : (stat.mode & 0o022) !== 0) return null;
     if (root) {
       const relative = path.relative(root, real);
       if (relative.startsWith('..') || path.isAbsolute(relative)) return null;
@@ -94,7 +101,7 @@ function trustedFile(filePath, root = null) {
 }
 
 function selectedWorkspaceRoot(env = process.env) {
-  const configPath = trustedFile(env.JARVOS_PROJECTS_CONTEXT_CONFIG);
+  const configPath = trustedFile(env.JARVOS_PROJECTS_CONTEXT_CONFIG, { ownerOnly: false });
   if (!configPath) return null;
   try {
     const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
@@ -124,7 +131,22 @@ const TOOLS = [
   {
     name: 'jarvos_todo_transition',
     description: 'Request a claim, transition, completion, or reopen through the host-authorized work-action service. The MCP caller cannot supply authorization or verification evidence.',
-    inputSchema: { type: 'object', additionalProperties: false, required: ['itemId', 'operationId', 'action'], properties: { itemId: { type: 'string' }, operationId: { type: 'string' }, action: { type: 'string', enum: ['claim', 'transition', 'complete', 'reopen'] }, status: { type: 'string' }, expectedRevision: { type: 'string' } } },
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['itemId', 'operationId', 'action'],
+      properties: {
+        itemId: { type: 'string' },
+        operationId: { type: 'string' },
+        action: { type: 'string', enum: ['claim', 'transition', 'complete', 'reopen'] },
+        status: { type: 'string', minLength: 1 },
+        expectedRevision: { type: 'string' },
+      },
+      oneOf: [
+        { properties: { action: { const: 'transition' } }, required: ['status'] },
+        { properties: { action: { enum: ['claim', 'complete', 'reopen'] } }, not: { required: ['status'] } },
+      ],
+    },
   },
   {
     name: 'jarvos_control_plane',
@@ -339,7 +361,7 @@ function loadHostWorkActionService() {
     return { service: null, error: WORK_ACTION_HOST_UNAVAILABLE };
   }
   const selectedRoot = selectedWorkspaceRoot();
-  const trusted = selectedRoot ? trustedFile(modulePath, selectedRoot) : null;
+  const trusted = selectedRoot ? trustedFile(modulePath, { root: selectedRoot, ownerOnly: true }) : null;
   if (!trusted) {
     return { service: null, error: WORK_ACTION_HOST_REFUSED };
   }
@@ -371,12 +393,16 @@ async function todoAction(name, args) {
   if (name === 'jarvos_todo_show') return textResult(JSON.stringify(await service.show(args), null, 2));
   const request = { itemId: args.itemId, operationId: args.operationId, expectedRevision: args.expectedRevision, actor };
   if (args.action === 'claim') return textResult(JSON.stringify(await service.claim(request), null, 2));
-  if (args.action === 'transition') return textResult(JSON.stringify(await service.transition({ ...request, status: args.status }), null, 2));
+  if (args.action === 'transition') {
+    if (typeof args.status !== 'string' || !args.status.trim()) return textResult('Todo transition status is required', true);
+    return textResult(JSON.stringify(await service.transition({ ...request, status: args.status }), null, 2));
+  }
   if (args.action === 'complete') {
     if (typeof service.completeFromHost !== 'function') return textResult('Todo host completion binding is unavailable', true);
     return textResult(JSON.stringify(await service.completeFromHost(request), null, 2));
   }
-  return textResult(JSON.stringify(await service.reopen(request), null, 2));
+  if (args.action === 'reopen') return textResult(JSON.stringify(await service.reopen(request), null, 2));
+  return textResult('Unsupported Todo transition action', true);
 }
 
 function setMcpProjectsContextProvider(provider) {
