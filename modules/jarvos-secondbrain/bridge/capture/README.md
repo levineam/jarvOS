@@ -17,7 +17,7 @@ Any AI agent
 ```
 
 OpenClaw and Lobster can enforce or adapt this path, but they do not own the
-abstraction. Claude Code, Codex, OpenClaw, Hermes, ChatGPT, and future agents
+abstraction. Claude Code, Codex, OpenClaw, Hermes, Grok Bot, ChatGPT, and future agents
 should all call the same root shim:
 
 ```bash
