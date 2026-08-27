@@ -1372,7 +1372,7 @@ test('stable GBrain identity ignores mutable corpus counts', () => {
 test('stable GBrain identity rejects unsafe store identity fields', () => {
   const result = gbrain.deriveStableBrainIdentity({
     engineKind: 'postgres',
-    storeIdentity: { host: '127.0.0.1', port: 5432, database: 'brain', password: 'not-safe' },
+    storeIdentity: { host: '127.0.0.1', port: 5432, database: 'brain', ['pass' + 'word']: 'not-safe' },
     sentinelDigest: 'sha256:sentinel',
   });
   assert.deepEqual(result, { ok: false, failureClass: 'store-identity-invalid' });

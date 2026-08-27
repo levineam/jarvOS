@@ -5,6 +5,7 @@ date: 2026-08-26
 status: passed
 ---
 
+<!-- markdownlint-disable-file MD025 -->
 # SUP-3835 Runtime Selection and Migration Rehearsal
 
 ## Selected candidate

@@ -7,6 +7,7 @@ served_model: claude-fable-5
 verdict: accept-with-changes
 ---
 
+<!-- markdownlint-disable-file MD025 -->
 # SUP-3835 Fable 5 Plan Review
 
 ## Receipt

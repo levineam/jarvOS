@@ -9,6 +9,7 @@ issue: SUP-3835
 product_contract_source: ce-plan-bootstrap
 ---
 
+<!-- markdownlint-disable-file MD025 -->
 # GBrain Cross-Harness Continuity - Plan
 
 ## Goal Capsule
