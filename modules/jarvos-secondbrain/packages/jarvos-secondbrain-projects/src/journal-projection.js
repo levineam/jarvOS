@@ -155,6 +155,17 @@ function normalizeLinkTarget(target) {
   return unwrapped;
 }
 
+function linkTargetBasename(target) {
+  const path = String(target || '').split('#', 1)[0].replace(/\/+$/, '');
+  return path.split('/').pop() || null;
+}
+
+function projectLink({ target, title }) {
+  return title && linkTargetBasename(target) !== title
+    ? `[[${target}|${title}]]`
+    : `[[${target}]]`;
+}
+
 function projectLines({
   projects = [],
   activities = [],
@@ -187,11 +198,21 @@ function projectLines({
       omissions.push(`canonical-note-mapping:${id}`);
       continue;
     }
-    mapped.push({ id, target });
+    mapped.push({ id, target, title: byId[id]?.title });
   }
-  const limited = mapped.slice(0, maxItems);
-  const lines = limited.map(({ target }) => `- [[${target}]]`);
-  if (mapped.length > maxItems) lines.push(`- _...and ${mapped.length - maxItems} more_`);
+  // Targets, rather than Project IDs, are the navigation identity here. A
+  // canonical Project can retain multiple legacy mappings to one note; render
+  // that note once, keeping the first stable Project-ID occurrence and its
+  // canonical title as the display alias.
+  const seenTargets = new Set();
+  const uniqueMapped = mapped.filter(({ target }) => {
+    if (seenTargets.has(target)) return false;
+    seenTargets.add(target);
+    return true;
+  });
+  const limited = uniqueMapped.slice(0, maxItems);
+  const lines = limited.map(projectLink).map((link) => `- ${link}`);
+  if (uniqueMapped.length > maxItems) lines.push(`- _...and ${uniqueMapped.length - maxItems} more_`);
   const uniqueOmissions = [...new Set(omissions)].sort();
   const preserve = uniqueOmissions.some((omission) => omission.startsWith('canonical-note-mapping:'));
   return {

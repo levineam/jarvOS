@@ -45,6 +45,42 @@ test('projection never falls back to a Project title when its canonical note map
   assert.doesNotMatch(JSON.stringify(result), /jarvOS/);
 });
 
+test('projection keeps legacy note targets while displaying canonical root Project titles', () => {
+  const result = projection.buildJournalProjection({
+    date: '2026-08-08',
+    projects: [
+      { id: 'prj_000001', kind: 'project', title: 'jarvOS', lifecycle: 'active' },
+      { id: 'prj_000002', kind: 'project', title: 'Amazing Abundance Portfolio', lifecycle: 'active' },
+      { id: 'prj_000003', kind: 'project', title: 'Amazing Abundance Portfolio', lifecycle: 'active' },
+    ],
+    noteMappings: {
+      prj_000001: { target: 'jarvOS v1.0.0 Release' },
+      prj_000002: { target: 'AAF Observatory' },
+      prj_000003: { target: 'AAF Observatory' },
+    },
+    activities: [
+      { canonicalId: 'prj_000003', occurredAt: '2026-08-08T13:00:00.000Z', trust: 'verified' },
+      { canonicalId: 'prj_000001', occurredAt: '2026-08-08T11:00:00.000Z', trust: 'verified' },
+      { canonicalId: 'prj_000002', occurredAt: '2026-08-08T12:00:00.000Z', trust: 'verified' },
+    ],
+  });
+  assert.equal(result.content, [
+    '- [[jarvOS v1.0.0 Release|jarvOS]]',
+    '- [[AAF Observatory|Amazing Abundance Portfolio]]',
+  ].join('\n'));
+  assert.deepEqual(result.mappedProjectIds, ['prj_000001', 'prj_000002']);
+});
+
+test('projection leaves a mapping unaliased when its target basename is its canonical title', () => {
+  const result = projection.buildJournalProjection({
+    date: '2026-08-08',
+    projects: PROJECTS,
+    noteMappings: NOTE_MAPPINGS,
+    activities: [{ canonicalId: 'prj_000001', occurredAt: '2026-08-08T11:00:00.000Z', trust: 'verified' }],
+  });
+  assert.equal(result.content, '- [[Projects/jarvOS]]');
+});
+
 test('accepted activity uses its admission-time root and remains visible after archive or reparenting', () => {
   const result = projection.buildJournalProjection({
     date: '2026-08-08',
@@ -61,7 +97,7 @@ test('accepted activity uses its admission-time root and remains visible after a
       accepted: true,
     }],
   });
-  assert.equal(result.content, '- [[Projects/Archived-root]]');
+  assert.equal(result.content, '- [[Projects/Archived-root|Archived root]]');
   assert.deepEqual(result.touchedProjectIds, ['prj_000001']);
 });
 
