@@ -3,6 +3,7 @@
 const {
   IDEA,
   NOTE,
+  JOURNAL,
   detectTrigger,
   hasCaptureIntent,
   primaryText,
@@ -28,6 +29,7 @@ const WORK_INTAKE_CONFIDENCE_THRESHOLD = 0.8;
 
 const IDEAS_HEADING = '## 💡 Ideas';
 const NOTES_HEADING = '## 📝 Notes';
+const JOURNAL_ENTRY_HEADING = '## 📓 Journal Entry';
 const DECISIONS_HEADING = '## ✅ Decisions';
 const REMEMBERED_HEADING = '## 🧠 Remembered';
 
@@ -135,6 +137,22 @@ function buildKeywordRoutingPlan(capture = {}, options = {}) {
         trigger: IDEA,
         created_from: date ? `journal/${date}` : 'journal',
       } : null,
+    };
+  }
+
+  if (route === JOURNAL) {
+    return {
+      route,
+      detectedTrigger,
+      defaultedToNoteBias: false,
+      ignored: false,
+      date,
+      journalSection: JOURNAL_ENTRY_HEADING,
+      journalLine: `- ${primaryText(capture)}`,
+      createNote: false,
+      noteTitle: '',
+      noteContent: '',
+      noteFrontmatter: null,
     };
   }
 
@@ -257,6 +275,15 @@ function buildSkillInvocations(plan) {
       actionsByKind.get('journal'),
       { text: primaryText(plan.capture), trigger: IDEA, date: plan.date },
       'Idea routing writes a journal entry without creating a durable note.',
+    ));
+  }
+
+  if (plan.route === JOURNAL && actionsByKind.has('journal')) {
+    invocations.push(buildSkillInvocation(
+      'journal-entry',
+      actionsByKind.get('journal'),
+      { text: primaryText(plan.capture), trigger: JOURNAL, date: plan.date },
+      'Explicit journal routing appends captured text to the Journal Entry section.',
     ));
   }
 
@@ -428,6 +455,7 @@ function previewRouting(capture = {}, options = {}) {
 module.exports = {
   IDEA,
   NOTE,
+  JOURNAL,
   MEMORY,
   WORK_INTAKE,
   SALIENCE_TO_MEMORY_CLASS,
@@ -438,6 +466,7 @@ module.exports = {
   WORK_INTAKE_CONFIDENCE_THRESHOLD,
   IDEAS_HEADING,
   NOTES_HEADING,
+  JOURNAL_ENTRY_HEADING,
   DECISIONS_HEADING,
   REMEMBERED_HEADING,
   buildKeywordRoutingPlan,
