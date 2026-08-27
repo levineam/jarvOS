@@ -8,6 +8,7 @@ const test = require('node:test');
 
 const {
   PROJECTS_CONTEXT_CONTRACT,
+  HYDRATION_PROJECTS_PROVIDER,
   hydrate,
   proposeProjectsContext,
   readProjectsContext,
@@ -254,15 +255,73 @@ test('Codex and Claude startup use the orientation packet with the library and M
     const library = await readProjectsContext({ provider, profile: 'orientation' }, true);
     const mcp = JSON.parse((await callTool('jarvos_projects_context', { profile: 'orientation' })).content[0].text);
     const [codex, claude] = await Promise.all([codexStartupHydration(), claudeStartupHydration()]);
+    const recordCount = library.packet.canonical.records.length;
     assert.equal(library.fingerprint, mcp.fingerprint);
+    assert.equal(mcp.packet.canonical.records.length, recordCount);
     assert.match(codex, new RegExp(`Fingerprint: ${library.fingerprint}`));
     assert.match(claude, new RegExp(`Fingerprint: ${library.fingerprint}`));
+    // AE1/R1: every consumer reports the same canonical record count from the
+    // one selected binding, not just a matching fingerprint.
+    assert.match(codex, new RegExp(`\\(${recordCount} records\\)`));
+    assert.match(claude, new RegExp(`\\(${recordCount} records\\)`));
     assert.doesNotMatch(codex, /Paperclip Current Work/);
     assert.doesNotMatch(claude, /Paperclip Current Work/);
   } finally {
     setProjectsContextProvider(null);
     setMcpProjectsContextProvider(null);
   }
+});
+
+test('a long-running MCP-injected provider can signal a precise unavailable classification (e.g. tuple-mismatched) without leaking diagnostics, while the per-invocation host binding flattens custom codes to the same generic classification', async () => {
+  const mismatched = {
+    read: async () => ({
+      status: 'unavailable',
+      code: 'tuple-mismatched',
+      reason: 'bound generation no longer matches the selected runtime tuple; restart required',
+    }),
+  };
+
+  // The private managed-harness MCP entrypoint injects a live, already-vetted
+  // provider directly (setMcpProjectsContextProvider / setProjectsContextProvider).
+  // That in-process channel is trusted, so its classification code is not
+  // flattened -- this is the seam a long-running MCP client uses to report
+  // R2's tuple-mismatched state on its next probe without any host restart.
+  setMcpProjectsContextProvider(mismatched);
+  try {
+    const library = await readProjectsContext({ provider: mismatched }, true);
+    assert.equal(library.status, 'unavailable');
+    assert.equal(library.code, 'tuple-mismatched');
+    assert.equal(library.packet, null);
+    // The trusted, private-authored classification reason is a curated
+    // consumer-facing fact (not a raw diagnostic), so it is not scrubbed.
+    assert.match(library.reason, /selected runtime tuple/);
+
+    const mcpPayload = JSON.parse((await callTool('jarvos_projects_context', {})).content[0].text);
+    assert.equal(mcpPayload.status, 'unavailable');
+    assert.equal(mcpPayload.code, 'tuple-mismatched');
+
+    const hydrated = await hydrate({ sessionThread: false, maxChars: 3000, [HYDRATION_PROJECTS_PROVIDER]: mismatched });
+    assert.equal(hydrated.report.projectsContext.status, 'unavailable');
+    assert.equal(hydrated.report.projectsContext.code, 'tuple-mismatched');
+    assert.match(hydrated.markdown, /selected runtime tuple/);
+  } finally {
+    setMcpProjectsContextProvider(null);
+  }
+
+  // The per-invocation host binding (env/config resolved provider module) is
+  // untrusted arbitrary code, so R5's non-enumerating boundary intentionally
+  // flattens any code/reason it returns to the same generic classification
+  // rather than passing through provider-authored diagnostics.
+  setMcpProjectsContextProvider(null);
+  await withHostProjectsProvider(async ({ config }) => {
+    const bound = JSON.parse(fs.readFileSync(config, 'utf8'));
+    fs.writeFileSync(bound.providerModule, "module.exports.read = async () => ({ status: 'unavailable', code: 'tuple-mismatched', reason: 'host provider path leaked here' });\n");
+    delete require.cache[require.resolve(bound.providerModule)];
+    const hostResult = await readProjectsContext({ query: QUERY });
+    assert.equal(hostResult.status, 'unavailable');
+    assert.equal(hostResult.code, 'PROJECTS_PROVIDER_UNAVAILABLE');
+    assert.doesNotMatch(hostResult.reason, /leaked/);
+  });
 });
 
 test('startup brief uses Projects orientation and never imports raw Paperclip current work', async () => {
