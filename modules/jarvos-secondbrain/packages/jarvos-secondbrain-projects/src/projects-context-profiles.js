@@ -4,7 +4,10 @@ const { localDate: journalLocalDate } = require('./journal-projection');
 
 const PROFILE_CONTRACT = 'jarvos.projects-query-profile/v1';
 const PROFILE_REVISION = 'projects-profiles-1';
-const PROFILE_NAMES = Object.freeze(['orientation', 'recent-activity']);
+// 'session-focus' is a host-only bounded hierarchy profile: it is never
+// caller-selectable and MCP entrypoints must reject it before it reaches
+// resolveQueryProfile. Only host-authorized scope may request it.
+const PROFILE_NAMES = Object.freeze(['orientation', 'recent-activity', 'session-focus']);
 // A local calendar day is normally 24 hours, but DST transitions can make it
 // 23 or 25. Keep caller-selected windows bounded without rejecting either.
 const MAX_ACTIVITY_WINDOW_MS = 26 * 60 * 60 * 1000;
@@ -12,6 +15,7 @@ const MAX_ACTIVITY_WINDOW_MS = 26 * 60 * 60 * 1000;
 const PROFILE_LIMITS = Object.freeze({
   orientation: Object.freeze({ maxItems: 24, maxBytes: 16_000, maxProviderAgeSeconds: 3_600 }),
   'recent-activity': Object.freeze({ maxItems: 100, maxBytes: 24_000, maxProviderAgeSeconds: 86_400 }),
+  'session-focus': Object.freeze({ maxItems: 8, maxBytes: 4_000, maxProviderAgeSeconds: 3_600 }),
 });
 
 function isPlainObject(value) {
@@ -106,6 +110,7 @@ function resolveQueryProfile(name, {
 } = {}) {
   const profile = requiredString(name, 'profile');
   if (!PROFILE_NAMES.includes(profile)) throw new TypeError(`unknown Projects query profile: ${profile}`);
+  if (profile === 'session-focus' && !authorizedScope) throw new TypeError('session-focus profile requires host-authorized scope');
   const normalizedScope = normalizeScope(scope, { required: !authorizedScope });
   if (!authorizedScope && normalizedScope && normalizedScope.projectIds.length + normalizedScope.outcomeIds.length === 0) {
     throw new TypeError('profile scope must identify a project or outcome');
@@ -116,7 +121,7 @@ function resolveQueryProfile(name, {
     scope: effectiveScope,
     include: profile === 'orientation'
       ? ['hierarchy', 'activity', 'currentWork', 'attention']
-      : ['hierarchy', 'activity'],
+      : profile === 'session-focus' ? ['hierarchy'] : ['hierarchy', 'activity'],
     limits,
   };
   const result = {

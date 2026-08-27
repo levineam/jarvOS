@@ -33,6 +33,10 @@ const STRICT_EMPTY_ARGUMENT_TOOLS = new Set([
   'jarvos_journal_health',
   'jarvos_ensure_today_journal',
 ]);
+// Host-only profiles (e.g. 'session-focus') are resolved exclusively through
+// internal readProjectsContext(..., true) callers after protected principal
+// resolution. They are never reachable from this caller-facing MCP tool.
+const PUBLIC_PROJECTS_CONTEXT_PROFILES = new Set(['orientation', 'recent-activity']);
 
 let mcpProjectsContextProvider = null;
 
@@ -663,8 +667,21 @@ async function callTool(name, args = {}) {
     }
   }
   if (name === 'jarvos_projects_context') {
+    const requestedProfile = args.profile === undefined ? 'orientation' : args.profile;
+    // Enforced at runtime, not only in the tool's JSON schema: MCP callers
+    // may only request the public named profiles. 'session-focus' (and any
+    // other non-public profile) is host-only and must never reach the
+    // provider from this caller-facing entrypoint.
+    if (!PUBLIC_PROJECTS_CONTEXT_PROFILES.has(requestedProfile)) {
+      return textResult(JSON.stringify({
+        status: 'unavailable',
+        code: 'PROJECTS_QUERY_UNAVAILABLE',
+        reason: 'Projects query is unavailable',
+        packet: null,
+      }, null, 2), false);
+    }
     const request = {
-      profile: args.profile || 'orientation',
+      profile: requestedProfile,
       date: args.date,
       timeZone: args.timeZone,
       from: args.from,

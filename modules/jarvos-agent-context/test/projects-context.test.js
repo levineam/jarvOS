@@ -324,6 +324,32 @@ test('a long-running MCP-injected provider can signal a precise unavailable clas
   });
 });
 
+test('the host-only session-focus profile is never MCP-callable, while the internal readProjectsContext path stays bounded and healthy', async () => {
+  const provider = { defaultQuery: QUERY, read: async ({ query }) => ({ status: 'ok', packet: { ...packet(), query } }) };
+  setMcpProjectsContextProvider(provider);
+  try {
+    const mcpResult = JSON.parse((await callTool('jarvos_projects_context', { profile: 'session-focus' })).content[0].text);
+    assert.equal(mcpResult.status, 'unavailable');
+    assert.equal(mcpResult.code, 'PROJECTS_QUERY_UNAVAILABLE');
+    assert.equal(mcpResult.packet, null);
+
+    // The internal library path, host-authorized with a session-focus
+    // profile and an already-resolved scope, still succeeds -- MCP callers
+    // are rejected before the provider is ever reached, not the profile
+    // itself.
+    const libraryResult = await readProjectsContext({
+      provider,
+      profile: 'session-focus',
+      scope: { projectIds: ['prj_000001'], outcomeIds: [], includeDescendants: true },
+    }, true);
+    assert.equal(libraryResult.status, 'ok');
+    assert.equal(libraryResult.profile.name, 'session-focus');
+    assert.deepEqual(libraryResult.packet.query.include, ['hierarchy']);
+  } finally {
+    setMcpProjectsContextProvider(null);
+  }
+});
+
 test('startup brief uses Projects orientation and never imports raw Paperclip current work', async () => {
   const provider = { defaultQuery: QUERY, read: async ({ query }) => ({ status: 'ok', packet: { ...packet(), query } }) };
   const oldFetch = global.fetch;
