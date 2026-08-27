@@ -295,10 +295,16 @@ test('provider states remain distinct and verified summaries feed bounded sectio
   const query = queryFor(root, outcome);
   const providers = {
     todo: snapshot('todo', 'fresh', {
-      summaries: [{
-        id: 'todo-1', canonicalId: outcome.id, category: 'intent', status: 'open', title: 'Finish release notes',
-        occurredAt: NOW, observedAt: NOW, evidenceRefs: ['todo:todo-1'],
-      }],
+      summaries: [
+        {
+          id: 'todo-1', canonicalId: outcome.id, category: 'intent', status: 'open', title: 'Finish release notes',
+          occurredAt: NOW, observedAt: NOW, evidenceRefs: ['todo:todo-1'],
+        },
+        {
+          id: 'todo-closed', canonicalId: outcome.id, category: 'work', status: 'closed', title: 'Finished release notes',
+          occurredAt: NOW, observedAt: NOW, evidenceRefs: ['todo:todo-closed'],
+        },
+      ],
     }),
     beads: snapshot('beads', 'healthy-empty'),
     paperclip: snapshot('paperclip', 'stale', { capturedAt: '2026-08-08T10:00:00.000Z' }),
@@ -319,6 +325,7 @@ test('provider states remain distinct and verified summaries feed bounded sectio
   assert.equal(result.packet.providers.activity.state, 'unavailable');
   assert.equal(result.packet.currentWork.length, 1);
   assert.equal(result.packet.currentWork[0].id, 'todo-1');
+  assert.equal(result.packet.currentWork.some((entry) => entry.id === 'todo-closed'), false);
   assert.equal(result.packet.omissions.some((entry) => entry.includes('untrusted')), true);
 });
 
