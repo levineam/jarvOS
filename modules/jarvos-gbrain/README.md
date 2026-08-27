@@ -129,6 +129,40 @@ maintenance owner. Skillify stays in GBrain's skill tree and is discovered
 through GBrain's `list_skills` / `get_skill` resolver tools; copying its
 `SKILL.md` into a jarvOS or harness skill directory would break provenance.
 
+The continuity producer accepts an owner-only
+`jarvos-gbrain-continuity-producer-input/v1` declaration, not a completed
+health snapshot. It revalidates this same runtime descriptor, issues a fresh
+challenge, and runs the ordered Codex, Hermes, and OpenClaw native probe
+commands directly. Each probe must return the exact
+`jarvos-gbrain-native-probe/v1` result bound to the supplied challenge,
+generation, jarvOS runtime, and GBrain runtime. The producer computes
+cross-harness brain equality and constructs the trusted snapshot; failed,
+replayed, mismatched, or malformed probe output remains below live proof.
+
+The producer input contains only orchestration declarations and boolean safety
+gates; it cannot supply the resulting brain, store, fixture, or trust facts:
+
+```json
+{
+  "schema": "jarvos-gbrain-continuity-producer-input/v1",
+  "generation": 1,
+  "validForSeconds": 1800,
+  "jarvosRuntimeDigest": "sha256:<sha256>",
+  "targets": [
+    {
+      "target": "codex",
+      "command": "/absolute/owner-controlled/codex-probe",
+      "args": [],
+      "timeoutMs": 120000,
+      "maintenanceBlocked": false,
+      "backupFresh": true
+    },
+    { "target": "hermes", "command": "/absolute/owner-controlled/hermes-probe", "args": [], "timeoutMs": 120000, "maintenanceBlocked": false, "backupFresh": true },
+    { "target": "openclaw", "command": "/absolute/owner-controlled/openclaw-probe", "args": [], "timeoutMs": 120000, "maintenanceBlocked": false, "backupFresh": true }
+  ]
+}
+```
+
 ## Curated Import Manifest
 
 ```json

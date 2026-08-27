@@ -55,24 +55,28 @@ producer, target, and probe generation. Codex must also prove resolver-backed
 Skillify discovery. URLs, paths, credentials, queries, recalled facts, and skill
 contents are not accepted snapshot fields.
 
-The owner-side writer is intentionally small and generic:
+The owner-side producer is target-generic but evidence-specific:
 
 ```bash
 node scripts/jarvos-gbrain-continuity-snapshot.js \
   --workspace /absolute/jarvos-workspace \
-  --input /absolute/owner-only/continuity-snapshot.json
+  --descriptor /absolute/owner-only/gbrain-runtime.json \
+  --input /absolute/owner-only/continuity-producer-input.json
 ```
 
-It accepts only an owner-only exact-schema input, creates owner-only state
-directories, requires a strictly newer generation, and atomically replaces the
-snapshot. It delegates validation to this existing health-module contract; it
-does not add a registry, probe runner, or second validator.
+The exact producer input names three ordered native probe commands and carries
+no final facts block or trust flag. The producer revalidates the pinned GBrain
+descriptor, creates a fresh challenge, invokes every command without a shell or
+ambient database routing, validates its tuple-bound result, and constructs the
+snapshot itself. Arbitrary snapshot JSON cannot claim live proof. An owner-only
+lock serializes the generation check and atomic replacement; the existing
+health-module validator remains the sole snapshot validator.
 
 The public name and module ID are intentionally separate from legacy private
 identifiers such as `memory-stack-doctor`. Existing private schedules and
 receipts may retain those identifiers through a compatibility migration, but
 they must not appear in routine Doctor output or public JSON.
 
-Documentation impact: module-docs. This generic contract is a public jarvOS
-release candidate; producer-specific scheduling, runtime activation, delivery,
-and repair adapters remain outside the public contract.
+Documentation impact: module-docs. This producer contract is a public jarvOS
+release candidate; private command declarations, scheduling, runtime
+activation, delivery, and repair policy remain outside the public contract.

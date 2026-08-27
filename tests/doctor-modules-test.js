@@ -271,6 +271,27 @@ test('continuity reduction reports independent ordered evidence per expected har
   });
 });
 
+test('different cross-harness identity tuples cannot report shared continuity', () => {
+  const root = workspace();
+  writeSnapshot(root, continuitySnapshot({
+    facts: {
+      producer: 'jarvos-gbrain',
+      targets: [
+        continuityTarget('codex'),
+        continuityTarget('hermes', {
+          storeDigest: digest('x'),
+          liveTurn: liveTurn('hermes', { storeDigest: digest('x') }),
+        }),
+        continuityTarget('openclaw'),
+      ],
+    },
+  }));
+  const report = loadHealthModules({ workspace: root, now: NOW });
+  assert.equal(report.modules[0].state, 'needs your attention');
+  assert.ok(report.modules[0].targets.every((target) => target.evidenceState === 'wrong-brain'));
+  assert.ok(report.modules[0].targets.every((target) => target.reasonClass === 'cross-harness-tuple-mismatch'));
+});
+
 test('lower continuity evidence accepts null tuple fields but cannot become machine or live proven', () => {
   const root = workspace();
   const noEvidence = {

@@ -1130,6 +1130,18 @@ test('managed GBrain runtime fails closed for owner, mode, and digest drift', ()
   assert.equal(gbrain.validateManagedRuntime({ ...descriptor, sha256: '0'.repeat(64) }).failureClass, 'runtime-digest-mismatch');
 });
 
+test('managed GBrain runtime rejects a group-writable ancestor', () => {
+  const root = tempDir();
+  const unsafe = path.join(root, 'unsafe-runtime');
+  fs.mkdirSync(unsafe, { mode: 0o770 });
+  fs.chmodSync(unsafe, 0o770);
+  const executable = path.join(unsafe, 'gbrain');
+  fs.writeFileSync(executable, '#!/bin/sh\nprintf unsafe\n', { mode: 0o700 });
+  const result = gbrain.validateManagedRuntime(managedRuntimeDescriptor(executable));
+  assert.equal(result.ok, false);
+  assert.equal(result.failureClass, 'runtime-ancestor-unsafe');
+});
+
 test('managed GBrain runtime revalidates before every spawn', () => {
   const root = tempDir();
   const executable = path.join(root, 'gbrain');
@@ -1181,6 +1193,8 @@ function writeManagedProviderDescriptor(root, executable, extras = {}) {
   fs.mkdirSync(skillifyDir, { recursive: true, mode: 0o755 });
   fs.writeFileSync(manifestPath, JSON.stringify({ skills: [{ name: 'skillify', path: 'skillify/SKILL.md' }] }), { mode: 0o644 });
   fs.writeFileSync(skillifyPath, '# Skillify\n', { mode: 0o644 });
+  const interpreterPath = path.join(root, 'node-interpreter');
+  fs.writeFileSync(interpreterPath, `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} "$@"\n`, { mode: 0o700 });
   const descriptor = {
     schemaVersion: 'jarvos-gbrain-runtime-descriptor/v1',
     executablePath: executable,
@@ -1194,9 +1208,9 @@ function writeManagedProviderDescriptor(root, executable, extras = {}) {
     gbrainStore: path.join(root, 'store'),
     providerEnv: { GBRAIN_BRAIN_ID: 'host' },
     interpreter: {
-      executablePath: process.execPath,
-      sha256: sha256File(process.execPath),
-      expectedOwnerUid: fs.statSync(process.execPath).uid,
+      executablePath: interpreterPath,
+      sha256: sha256File(interpreterPath),
+      expectedOwnerUid: fs.statSync(interpreterPath).uid,
     },
     skills: {
       directoryPath: skillsDir,
@@ -1219,7 +1233,7 @@ test('managed provider descriptor pins the source and interpreter and prepares p
   const loaded = gbrain.loadManagedRuntimeDescriptor(descriptorPath);
   assert.equal(loaded.ok, true);
   assert.equal(loaded.runtime.executablePath, fs.realpathSync(executable));
-  assert.equal(loaded.runtime.launchCommand, fs.realpathSync(process.execPath));
+  assert.equal(loaded.runtime.launchCommand, fs.realpathSync(path.join(root, 'node-interpreter')));
   assert.match(loaded.runtime.provenance.interpreterDigest, /^sha256:/);
   assert.match(loaded.skills.manifestDigest, /^sha256:/);
   assert.match(loaded.skills.skillifyDigest, /^sha256:/);

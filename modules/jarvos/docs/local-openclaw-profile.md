@@ -109,7 +109,8 @@ the continuity module atomically with a strictly increasing generation:
 ```bash
 node scripts/jarvos-gbrain-continuity-snapshot.js \
   --workspace /absolute/jarvos-workspace \
-  --input /absolute/owner-only/continuity-snapshot.json
+  --descriptor /absolute/owner-only/gbrain-runtime.json \
+  --input /absolute/owner-only/continuity-producer-input.json
 ```
 
 Missing GBrain is a warning, not a profile failure. Stale GBrain remains visible

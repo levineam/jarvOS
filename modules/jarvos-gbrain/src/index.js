@@ -21,6 +21,18 @@ const DEFAULT_RETRIEVAL_LIMIT = 5;
 const DEFAULT_EVAL_LIMIT = 10;
 const DEFAULT_RETRIEVAL_TIMEOUT_MS = 15000;
 const MANAGED_RUNTIME_DESCRIPTOR_SCHEMA = 'jarvos-gbrain-runtime-descriptor/v1';
+const CONTINUITY_PRODUCER_INPUT_SCHEMA = 'jarvos-gbrain-continuity-producer-input/v1';
+const CONTINUITY_PROBE_SCHEMA = 'jarvos-gbrain-native-probe/v1';
+const CONTINUITY_SNAPSHOT_SCHEMA = 'jarvos-health-module-snapshot/v1';
+const CONTINUITY_FACTS_VERSION = 'jarvos-gbrain-continuity-facts/v1';
+const CONTINUITY_TARGETS = Object.freeze(['codex', 'hermes', 'openclaw']);
+const CONTINUITY_TUPLE_FIELDS = Object.freeze([
+  'jarvosRuntimeDigest',
+  'gbrainRuntimeDigest',
+  'logicalBrainDigest',
+  'storeDigest',
+  'fixtureDigest',
+]);
 const MANAGED_GBRAIN_PATH = '/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin';
 // Pinned GBrain v0.46.32.0 accepts these provider routing/storage variables.
 // Managed invocation copies only this set (and forces GBRAIN_SWEEP=0); arbitrary
@@ -530,6 +542,27 @@ function sha256File(filePath) {
   return crypto.createHash('sha256').update(fs.readFileSync(filePath)).digest('hex');
 }
 
+function safeAncestorChain(filePath, expectedUid) {
+  const allowedOwners = new Set([0]);
+  if (Number.isInteger(Number(expectedUid))) allowedOwners.add(Number(expectedUid));
+  if (typeof process.getuid === 'function') allowedOwners.add(process.getuid());
+  let current = path.dirname(filePath);
+  while (true) {
+    let stat;
+    try {
+      stat = fs.lstatSync(current);
+    } catch {
+      return false;
+    }
+    if (!stat.isDirectory() || stat.isSymbolicLink() || (stat.mode & 0o022) !== 0 || !allowedOwners.has(stat.uid)) {
+      return false;
+    }
+    const parent = path.dirname(current);
+    if (parent === current) return true;
+    current = parent;
+  }
+}
+
 function runtimeOwnerName(stat) {
   if (typeof process.getuid === 'function' && stat.uid === process.getuid()) {
     try {
@@ -566,6 +599,9 @@ function validateManagedRuntime(descriptor) {
     const actualOwnerName = runtimeOwnerName(stat);
     if (!actualOwnerName) return { ok: false, failureClass: 'runtime-owner-unverified' };
     if (actualOwnerName !== expectedOwnerName) return { ok: false, failureClass: 'runtime-owner-mismatch' };
+  }
+  if (!safeAncestorChain(executablePath, expectedUid ?? stat.uid)) {
+    return { ok: false, failureClass: 'runtime-ancestor-unsafe' };
   }
 
   try {
@@ -790,19 +826,25 @@ function loadManagedRuntimeDescriptor(descriptorPath) {
   if (typeof descriptorPath !== 'string' || !path.isAbsolute(descriptorPath)) {
     return { ok: false, failureClass: 'descriptor-path-invalid' };
   }
-  let stat;
+  let descriptorHandle;
   let raw;
   try {
-    stat = fs.lstatSync(descriptorPath);
-    if (!stat.isFile() || stat.isSymbolicLink()) return { ok: false, failureClass: 'descriptor-file-invalid' };
+    const flags = fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0);
+    descriptorHandle = fs.openSync(descriptorPath, flags);
+    const stat = fs.fstatSync(descriptorHandle);
+    if (!stat.isFile()) return { ok: false, failureClass: 'descriptor-file-invalid' };
     if (typeof process.getuid === 'function' && stat.uid !== process.getuid()) {
       return { ok: false, failureClass: 'descriptor-owner-mismatch' };
     }
     if ((stat.mode & 0o077) !== 0) return { ok: false, failureClass: 'descriptor-mode-unsafe' };
     if (stat.size < 2 || stat.size > 64 * 1024) return { ok: false, failureClass: 'descriptor-size-invalid' };
-    raw = fs.readFileSync(descriptorPath, 'utf8');
+    const realDescriptorPath = fs.realpathSync(descriptorPath);
+    if (!safeAncestorChain(realDescriptorPath, stat.uid)) return { ok: false, failureClass: 'descriptor-ancestor-unsafe' };
+    raw = fs.readFileSync(descriptorHandle, 'utf8');
   } catch {
     return { ok: false, failureClass: 'descriptor-unreadable' };
+  } finally {
+    if (descriptorHandle !== undefined) fs.closeSync(descriptorHandle);
   }
   let descriptor;
   try {
@@ -850,6 +892,188 @@ function prepareManagedGbrainProvider(descriptorPath) {
     env: managedGbrainEnv(config),
     provenance: {
       ...loaded.runtime.provenance,
+      skillsManifestDigest: loaded.skills.manifestDigest,
+      skillifyDigest: loaded.skills.skillifyDigest,
+    },
+  };
+}
+
+function exactKeys(value, keys) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const actual = Object.keys(value).sort();
+  const expected = [...keys].sort();
+  return actual.length === expected.length && actual.every((key, index) => key === expected[index]);
+}
+
+function continuityDigest(value) {
+  const normalized = normalizedSha256(value);
+  return normalized ? `sha256:${normalized}` : null;
+}
+
+function validProducerInput(input) {
+  const fields = ['schema', 'generation', 'validForSeconds', 'jarvosRuntimeDigest', 'targets'];
+  if (!exactKeys(input, fields)
+    || input.schema !== CONTINUITY_PRODUCER_INPUT_SCHEMA
+    || !Number.isSafeInteger(input.generation) || input.generation < 1
+    || !Number.isInteger(input.validForSeconds) || input.validForSeconds < 60 || input.validForSeconds > 3600
+    || !continuityDigest(input.jarvosRuntimeDigest)
+    || !Array.isArray(input.targets) || input.targets.length !== CONTINUITY_TARGETS.length) return false;
+  const targetFields = ['target', 'command', 'args', 'timeoutMs', 'maintenanceBlocked', 'backupFresh'];
+  return input.targets.every((target, index) => (
+    exactKeys(target, targetFields)
+    && target.target === CONTINUITY_TARGETS[index]
+    && path.isAbsolute(target.command || '')
+    && Array.isArray(target.args) && target.args.every((arg) => typeof arg === 'string' && arg.length <= 4096)
+    && Number.isInteger(target.timeoutMs) && target.timeoutMs >= 1000 && target.timeoutMs <= 120000
+    && typeof target.maintenanceBlocked === 'boolean'
+    && typeof target.backupFresh === 'boolean'
+  ));
+}
+
+function validProbeOutput(output, target, challengeDigest, generation, jarvosRuntimeDigest, gbrainRuntimeDigest) {
+  const fields = [
+    'schema', 'target', 'challengeDigest', 'probeGeneration', 'nativeRegistered',
+    'serviceReachable', 'capabilityProven', 'skillifyProven', 'machineProven',
+    'jarvosRuntimeDigest', 'gbrainRuntimeDigest', 'logicalBrainDigest', 'storeDigest',
+    'fixtureDigest', 'liveTurnObserved',
+  ];
+  if (!exactKeys(output, fields)
+    || output.schema !== CONTINUITY_PROBE_SCHEMA
+    || output.target !== target
+    || output.challengeDigest !== challengeDigest
+    || output.probeGeneration !== generation
+    || continuityDigest(output.jarvosRuntimeDigest) !== jarvosRuntimeDigest
+    || continuityDigest(output.gbrainRuntimeDigest) !== gbrainRuntimeDigest) return false;
+  const booleans = ['nativeRegistered', 'serviceReachable', 'capabilityProven', 'skillifyProven', 'machineProven', 'liveTurnObserved'];
+  if (!booleans.every((field) => typeof output[field] === 'boolean')) return false;
+  return ['logicalBrainDigest', 'storeDigest', 'fixtureDigest'].every((field) => continuityDigest(output[field]));
+}
+
+function unavailableContinuityTarget(spec, generation, observedAt, validUntil, challengeDigest, runtimeVerified) {
+  return {
+    target: spec.target,
+    binaryPresent: isExecutable(spec.command),
+    runtimeVerified,
+    runtimeFresh: runtimeVerified,
+    nativeRegistered: false,
+    serviceReachable: false,
+    sameBrain: false,
+    capabilityProven: false,
+    skillifyProven: false,
+    maintenanceBlocked: spec.maintenanceBlocked,
+    backupFresh: spec.backupFresh,
+    machineProven: false,
+    probeGeneration: generation,
+    observedAt,
+    validUntil,
+    challengeDigest,
+    jarvosRuntimeDigest: null,
+    gbrainRuntimeDigest: null,
+    logicalBrainDigest: null,
+    storeDigest: null,
+    fixtureDigest: null,
+    liveTurn: null,
+  };
+}
+
+function produceContinuitySnapshot({ descriptorPath, producerInput, now = new Date(), randomBytes = crypto.randomBytes, spawnSyncImpl = spawnSync } = {}) {
+  if (!path.isAbsolute(descriptorPath || '') || !validProducerInput(producerInput)) {
+    return { ok: false, failureClass: 'continuity-producer-input-invalid' };
+  }
+  const loaded = loadManagedRuntimeDescriptor(descriptorPath);
+  if (!loaded.ok) return { ok: false, failureClass: loaded.failureClass };
+  const jarvosRuntimeDigest = continuityDigest(producerInput.jarvosRuntimeDigest);
+  const gbrainRuntimeDigest = loaded.runtime.provenance.sourceDigest;
+  const observedAt = now.toISOString();
+  const validUntil = new Date(now.getTime() + producerInput.validForSeconds * 1000).toISOString();
+  const challengeDigest = `sha256:${crypto.createHash('sha256').update(randomBytes(32)).digest('hex')}`;
+  const probeEnv = {
+    PATH: process.env.PATH || MANAGED_GBRAIN_PATH,
+    HOME: process.env.HOME || os.homedir(),
+    LANG: 'C',
+    LC_ALL: 'C',
+  };
+
+  const targets = producerInput.targets.map((spec) => {
+    if (!isSafeExecutable(spec.command, typeof process.getuid === 'function' ? process.getuid() : undefined)) {
+      return unavailableContinuityTarget(spec, producerInput.generation, observedAt, validUntil, challengeDigest, true);
+    }
+    const result = spawnSyncImpl(spec.command, spec.args, {
+      cwd: neutralGbrainCwd(),
+      env: {
+        ...probeEnv,
+        JARVOS_CONTINUITY_TARGET: spec.target,
+        JARVOS_CONTINUITY_CHALLENGE_DIGEST: challengeDigest,
+        JARVOS_CONTINUITY_PROBE_GENERATION: String(producerInput.generation),
+        JARVOS_CONTINUITY_JARVOS_RUNTIME_DIGEST: jarvosRuntimeDigest,
+        JARVOS_CONTINUITY_GBRAIN_RUNTIME_DIGEST: gbrainRuntimeDigest,
+      },
+      encoding: 'utf8',
+      timeout: spec.timeoutMs,
+      maxBuffer: 64 * 1024,
+    });
+    let output;
+    try {
+      output = result.status === 0 ? JSON.parse(result.stdout) : null;
+    } catch {
+      output = null;
+    }
+    if (!validProbeOutput(output, spec.target, challengeDigest, producerInput.generation, jarvosRuntimeDigest, gbrainRuntimeDigest)) {
+      return unavailableContinuityTarget(spec, producerInput.generation, observedAt, validUntil, challengeDigest, true);
+    }
+    const tuple = Object.fromEntries(CONTINUITY_TUPLE_FIELDS.map((field) => [field, continuityDigest(output[field])]));
+    const liveTurn = output.liveTurnObserved ? {
+      producer: 'jarvos-gbrain',
+      target: spec.target,
+      challengeDigest,
+      ...tuple,
+      probeGeneration: producerInput.generation,
+      observedAt,
+      validUntil,
+      consumed: true,
+    } : null;
+    return {
+      target: spec.target,
+      binaryPresent: true,
+      runtimeVerified: true,
+      runtimeFresh: true,
+      nativeRegistered: output.nativeRegistered,
+      serviceReachable: output.serviceReachable,
+      sameBrain: false,
+      capabilityProven: output.capabilityProven,
+      skillifyProven: output.skillifyProven,
+      maintenanceBlocked: spec.maintenanceBlocked,
+      backupFresh: spec.backupFresh,
+      machineProven: output.machineProven,
+      probeGeneration: producerInput.generation,
+      observedAt,
+      validUntil,
+      challengeDigest,
+      ...tuple,
+      liveTurn,
+    };
+  });
+
+  const reference = targets[0];
+  const sameBrain = targets.every((target) => (
+    target.machineProven
+    && CONTINUITY_TUPLE_FIELDS.every((field) => target[field] === reference[field])
+  ));
+  for (const target of targets) target.sameBrain = sameBrain;
+  return {
+    ok: true,
+    snapshot: {
+      schema: CONTINUITY_SNAPSHOT_SCHEMA,
+      moduleId: 'gbrain-continuity',
+      generation: producerInput.generation,
+      observedAt,
+      validUntil,
+      trust: 'trusted',
+      factsVersion: CONTINUITY_FACTS_VERSION,
+      facts: { producer: 'jarvos-gbrain', targets },
+    },
+    provenance: {
+      gbrainRuntimeDigest,
       skillsManifestDigest: loaded.skills.manifestDigest,
       skillifyDigest: loaded.skills.skillifyDigest,
     },
@@ -1915,6 +2139,15 @@ function isExecutable(filePath) {
   }
 }
 
+function isSafeExecutable(filePath, expectedUid) {
+  if (!isExecutable(filePath)) return false;
+  try {
+    return safeAncestorChain(fs.realpathSync(filePath), expectedUid);
+  } catch {
+    return false;
+  }
+}
+
 function doctor(overrides = {}) {
   const config = resolveConfig(overrides);
   const checks = [
@@ -1952,6 +2185,7 @@ module.exports = {
   validateManagedRuntime,
   loadManagedRuntimeDescriptor,
   prepareManagedGbrainProvider,
+  produceContinuitySnapshot,
   runGbrainCommand,
   deriveStableBrainIdentity,
   runRetrievalEval,

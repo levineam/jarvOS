@@ -11,6 +11,7 @@ const {
   ownerOnly,
   validateSnapshot,
 } = require('../lib/jarvos-doctor-modules');
+const { produceContinuitySnapshot } = require('../modules/jarvos-gbrain/src');
 
 const MAX_SNAPSHOT_BYTES = 64 * 1024;
 
@@ -26,21 +27,41 @@ function parseArgs(argv) {
     const value = argv[index];
     if (value === '--workspace' && argv[index + 1]) options.workspace = argv[++index];
     else if (value === '--input' && argv[index + 1]) options.input = argv[++index];
+    else if (value === '--descriptor' && argv[index + 1]) options.descriptor = argv[++index];
     else fail('arguments-invalid');
   }
-  if (!path.isAbsolute(options.workspace || '') || !path.isAbsolute(options.input || '')) fail('arguments-invalid');
+  if (!path.isAbsolute(options.workspace || '') || !path.isAbsolute(options.input || '')
+    || !path.isAbsolute(options.descriptor || '')) fail('arguments-invalid');
   return options;
 }
 
-function assertDirectory(directory, { create = false } = {}) {
+function assertDirectory(directory, { create = false, privateMode = true } = {}) {
   try {
     const stat = fs.lstatSync(directory);
-    if (!stat.isDirectory() || stat.isSymbolicLink() || !ownerOnly(stat)) fail('directory-unsafe');
+    const wrongOwner = typeof process.getuid === 'function' && stat.uid !== process.getuid();
+    if (!stat.isDirectory() || stat.isSymbolicLink() || wrongOwner || (privateMode && !ownerOnly(stat))) fail('directory-unsafe');
   } catch (error) {
     if (error?.code !== 'ENOENT' || !create) throw error;
     fs.mkdirSync(directory, { mode: 0o700 });
     const stat = fs.lstatSync(directory);
     if (!stat.isDirectory() || stat.isSymbolicLink() || !ownerOnly(stat)) fail('directory-unsafe');
+  }
+}
+
+function acquireWriterLock(healthDirectory) {
+  const lockPath = path.join(healthDirectory, `.${CONTINUITY_MODULE_ID}.lock`);
+  let descriptor;
+  try {
+    descriptor = fs.openSync(lockPath, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL, 0o600);
+    fs.writeFileSync(descriptor, `${process.pid}\n`, 'utf8');
+    fs.fsyncSync(descriptor);
+    return () => {
+      try { fs.closeSync(descriptor); } finally { fs.unlinkSync(lockPath); }
+    };
+  } catch (error) {
+    if (descriptor !== undefined) fs.closeSync(descriptor);
+    if (error?.code === 'EEXIST') fail('writer-busy');
+    throw error;
   }
 }
 
@@ -72,48 +93,67 @@ function parseContinuitySnapshot(source, now) {
   return snapshot;
 }
 
-function writeContinuitySnapshot({ workspace, input, now = new Date() }) {
-  if (!path.isAbsolute(workspace || '') || !path.isAbsolute(input || '')) fail('arguments-invalid');
-  assertDirectory(workspace);
+function writeContinuitySnapshot({ workspace, input, descriptor, now = new Date() }) {
+  if (!path.isAbsolute(workspace || '') || !path.isAbsolute(input || '') || !path.isAbsolute(descriptor || '')) fail('arguments-invalid');
+  assertDirectory(workspace, { privateMode: false });
 
   const inputStat = fs.lstatSync(input);
   if (inputStat.isSymbolicLink()) fail('file-unsafe');
-  const snapshot = parseContinuitySnapshot(readOwnerOnlyFile(input), now);
+  const producerSource = readOwnerOnlyFile(input);
+  let producerInput;
+  try {
+    producerInput = JSON.parse(producerSource);
+  } catch {
+    fail('continuity-producer-input-invalid');
+  }
+  const produced = produceContinuitySnapshot({ descriptorPath: descriptor, producerInput, now });
+  if (!produced.ok) fail(produced.failureClass);
+  const snapshot = parseContinuitySnapshot(JSON.stringify(produced.snapshot), now);
 
   const jarvosDirectory = path.join(workspace, '.jarvos');
   const healthDirectory = path.join(workspace, HEALTH_MODULE_DIRECTORY);
   assertDirectory(jarvosDirectory, { create: true });
   assertDirectory(healthDirectory, { create: true });
 
-  const target = modulePath(workspace, CONTINUITY_MODULE_ID);
-  const existingSource = readOwnerOnlyFile(target, { required: false });
-  if (existingSource !== null) {
-    const existing = parseContinuitySnapshot(existingSource, now);
-    if (snapshot.generation <= existing.generation) fail('generation-not-newer');
-  }
-
-  const temporary = path.join(healthDirectory, `.${CONTINUITY_MODULE_ID}.${process.pid}.${crypto.randomBytes(8).toString('hex')}.tmp`);
-  let descriptor;
+  const releaseLock = acquireWriterLock(healthDirectory);
   try {
-    descriptor = fs.openSync(temporary, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL, 0o600);
-    fs.writeFileSync(descriptor, `${JSON.stringify(snapshot)}\n`, 'utf8');
-    fs.fsyncSync(descriptor);
-    fs.closeSync(descriptor);
-    descriptor = undefined;
-    fs.renameSync(temporary, target);
-    const directoryDescriptor = fs.openSync(healthDirectory, fs.constants.O_RDONLY);
-    try {
-      fs.fsyncSync(directoryDescriptor);
-    } finally {
-      fs.closeSync(directoryDescriptor);
+    const target = modulePath(workspace, CONTINUITY_MODULE_ID);
+    const existingSource = readOwnerOnlyFile(target, { required: false });
+    if (existingSource !== null) {
+      const existing = parseContinuitySnapshot(existingSource, now);
+      if (snapshot.generation <= existing.generation) fail('generation-not-newer');
     }
-  } catch (error) {
-    if (descriptor !== undefined) fs.closeSync(descriptor);
-    try { fs.unlinkSync(temporary); } catch {}
-    throw error;
+
+    const temporary = path.join(healthDirectory, `.${CONTINUITY_MODULE_ID}.${process.pid}.${crypto.randomBytes(8).toString('hex')}.tmp`);
+    let temporaryDescriptor;
+    try {
+      temporaryDescriptor = fs.openSync(temporary, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL, 0o600);
+      fs.writeFileSync(temporaryDescriptor, `${JSON.stringify(snapshot)}\n`, 'utf8');
+      fs.fsyncSync(temporaryDescriptor);
+      fs.closeSync(temporaryDescriptor);
+      temporaryDescriptor = undefined;
+      fs.renameSync(temporary, target);
+      const directoryDescriptor = fs.openSync(healthDirectory, fs.constants.O_RDONLY);
+      try {
+        fs.fsyncSync(directoryDescriptor);
+      } finally {
+        fs.closeSync(directoryDescriptor);
+      }
+    } catch (error) {
+      if (temporaryDescriptor !== undefined) fs.closeSync(temporaryDescriptor);
+      try { fs.unlinkSync(temporary); } catch {}
+      throw error;
+    }
+  } finally {
+    releaseLock();
   }
 
-  return { ok: true, moduleId: CONTINUITY_MODULE_ID, generation: snapshot.generation };
+  return {
+    ok: true,
+    moduleId: CONTINUITY_MODULE_ID,
+    generation: snapshot.generation,
+    provenance: produced.provenance,
+  };
 }
 
 function main() {

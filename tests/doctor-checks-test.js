@@ -17,6 +17,7 @@ const {
   checkControlPlaneModule,
   checkVaultPathStale,
   checkJournalConflict,
+  healthModuleBlocksDoctor,
 } = require('../lib/jarvos-cli');
 const {
   validateJarvosProfile,
@@ -39,6 +40,13 @@ function makeVault(root, { obsidian = false, journalDir = true } = {}) {
   if (obsidian) fs.mkdirSync(path.join(root, '.obsidian'), { recursive: true });
   return root;
 }
+
+test('optional GBrain continuity remains visible without blocking portable doctor', () => {
+  const staleContinuity = { id: 'gbrain-continuity', state: 'needs your attention' };
+  assert.equal(healthModuleBlocksDoctor(staleContinuity, { continuityRequired: false }), false);
+  assert.equal(healthModuleBlocksDoctor(staleContinuity, { continuityRequired: true }), true);
+  assert.equal(healthModuleBlocksDoctor({ id: 'memory', state: 'needs your attention' }), true);
+});
 
 test('vault-path-stale passes for an existing vault root', () => {
   const tmp = scratch();
