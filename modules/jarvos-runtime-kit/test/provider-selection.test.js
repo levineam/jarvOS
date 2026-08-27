@@ -61,7 +61,6 @@ test('exports strict versioned profile, adapter, health, view, and intent valida
     expectedGeneration: 'fresh-generation',
   })).ok, true);
 });
-
 test('rejects unknown and authority-shaped provider fields, paths, credentials, and raw output', () => {
   const unknown = kit.validateProviderProfile({ ...profile(), unexpected: true });
   assert.equal(unknown.ok, false);

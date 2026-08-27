@@ -85,6 +85,7 @@
     "scripts/lib/release-status.js",
     "scripts/active-assistant-nightly-synthesis.js",
     "scripts/active-assistant-provider.js",
+    "scripts/active-assistant-provider-preference.js",
     "scripts/active-assistant-cycle.js",
     "scripts/lib/active-assistant-ripeness-contract.js",
     "scripts/lib/active-assistant-synthesis-contract.js",
