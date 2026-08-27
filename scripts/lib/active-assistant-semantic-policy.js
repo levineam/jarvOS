@@ -12,7 +12,7 @@ const ASSISTANT_ACTION_CLAIM = /\b(?:I|we|the (?:assistant|system|bot)|Jarvis)\s
 const DANGLING_SUBJECT = /^(?:that|this|it|those|these)\b/i;
 const ANAPHORIC_QUESTION_SUBJECT = /^(?:is|are|was|were|does|do|did|would|could|should|can|will|has|have|had)\s+(?:that|this|it|those|these)\b/i;
 const NARRATIVE_TYPES = Object.freeze(new Set(['source_backed_observation', 'cross_project_connection']));
-const CLOSING_TYPOGRAPHY = /[”“’‘"')\]»›』】]+$/;
+const CLOSING_TYPOGRAPHY = /[”’"')\]»›』】]+$/;
 
 function reject(reasonCode) { return { ok: false, reasonCode }; }
 

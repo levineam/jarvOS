@@ -105,6 +105,40 @@ test('v2 accepts a narrative claim punctuated immediately before a closing quota
   assert.equal(result.rejected.length, 0);
 });
 
+test('v2 rejects a narrative claim ending in an opening double curly quote', () => {
+  const result = contract.composeProposal({
+    proposal: {
+      contractVersion: V2,
+      kind: 'proposal',
+      claims: [
+        { id: 'one', type: 'source_backed_observation', text: 'You returned to the manuscript this week.', sourceRefs: [source] },
+        { id: 'two', type: 'source_backed_observation', text: 'You wrote that the thread became clearer.“', sourceRefs: [source] },
+      ],
+      closingQuestion: { id: 'question', text: 'Is the manuscript the thread to continue?', sourceRefs: [source] },
+    },
+    eligibleSourceIds: [source],
+  });
+  assert.equal(result.ok, false);
+  assert.deepEqual(result.rejected.map((row) => row.reasonCode), ['narrative_claim_invalid']);
+});
+
+test('v2 rejects a narrative claim ending in an opening single curly quote', () => {
+  const result = contract.composeProposal({
+    proposal: {
+      contractVersion: V2,
+      kind: 'proposal',
+      claims: [
+        { id: 'one', type: 'source_backed_observation', text: 'You returned to the manuscript this week.', sourceRefs: [source] },
+        { id: 'two', type: 'source_backed_observation', text: 'You wrote that the thread became clearer.‘', sourceRefs: [source] },
+      ],
+      closingQuestion: { id: 'question', text: 'Is the manuscript the thread to continue?', sourceRefs: [source] },
+    },
+    eligibleSourceIds: [source],
+  });
+  assert.equal(result.ok, false);
+  assert.deepEqual(result.rejected.map((row) => row.reasonCode), ['narrative_claim_invalid']);
+});
+
 test('v2 still rejects a narrative claim with trailing words after punctuation or no terminal punctuation', () => {
   const trailingWords = contract.composeProposal({
     proposal: {
