@@ -17,6 +17,9 @@ const ROOT = path.resolve(__dirname, '..', '..', '..');
 const CODEX_SESSION_ID = '019fbf11-8aca-79c0-981e-15abcd2392f4';
 const CLAUDE_SESSION_ID = '66666666-7777-4888-8999-aaaaaaaaaaaa';
 const FINGERPRINT = 'a'.repeat(64);
+const NATIVE_PROJECTS_MARKDOWN = '## Projects Context\n\n- Native bridge marker\n';
+const ORDINARY_PROJECTS_MARKDOWN = '## Projects Context\n\n- Ordinary provider marker\n';
+const HYDRATED_NON_PROJECTS_MARKDOWN = '# Hydrated Context\n\n- Ordinary hydration marker\n';
 
 function stamp(overrides = {}) {
   return createStamp({
@@ -180,6 +183,39 @@ function runTurnHook(runtime, env, input) {
   return JSON.parse(result.stdout || '{}');
 }
 
+function runSessionStartHook(runtime, env, input, hydrationMarkdown) {
+  const { spawnSync } = require('node:child_process');
+  const agentContextPath = path.join(ROOT, 'modules', 'jarvos-agent-context', 'src', 'index.js');
+  const hookPath = path.join(ROOT, 'runtimes', runtime, 'jarvos-session-start-hook.js');
+  const callsPath = path.join(env.JARVOS_TEST_HYDRATE_CALLS_FILE);
+  const script = [
+    "'use strict';",
+    "const fs = require('node:fs');",
+    `const agentContextPath = ${JSON.stringify(agentContextPath)};`,
+    `const callsPath = ${JSON.stringify(callsPath)};`,
+    `require.cache[agentContextPath] = { id: agentContextPath, filename: agentContextPath, loaded: true, exports: { hydrate: async (options) => { fs.writeFileSync(callsPath, JSON.stringify(options)); return { markdown: ${JSON.stringify(hydrationMarkdown)} }; } } };`,
+    runtime === 'claude'
+      ? "const childProcess = require('node:child_process'); childProcess.spawn = () => ({ unref() {} });"
+      : '',
+    `const hook = require(${JSON.stringify(hookPath)});`,
+    runtime === 'codex'
+      ? 'Promise.resolve(hook.main()).catch((error) => { console.error(error.stack || error); process.exitCode = 1; });'
+      : `Promise.resolve(hook.main(${JSON.stringify(input)})).catch((error) => { console.error(error.stack || error); process.exitCode = 1; });`,
+  ].filter(Boolean).join('\n');
+  const result = spawnSync(process.execPath, ['-e', script], {
+    cwd: ROOT,
+    encoding: 'utf8',
+    env,
+    input: runtime === 'codex' ? JSON.stringify(input) : undefined,
+  });
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  assert.equal(fs.existsSync(callsPath), true, 'SessionStart must call hydrate exactly once');
+  return {
+    output: JSON.parse(result.stdout || '{}'),
+    hydrationOptions: JSON.parse(fs.readFileSync(callsPath, 'utf8')),
+  };
+}
+
 function shellQuote(value) {
   return `'${value.replace(/'/g, "'\\''")}'`;
 }
@@ -221,6 +257,144 @@ function withBridge(handlers, fn) {
     fs.rmSync(temp, { recursive: true, force: true });
   }
 }
+
+function sessionStartEnvironment(bin, temp, runtime) {
+  return {
+    ...process.env,
+    PATH: `${bin}${path.delimiter}${process.env.PATH || ''}`,
+    HOME: path.join(temp, 'home'),
+    JARVOS_STEWARDSHIP_BRIDGE_COMMAND: 'jarvos-stewardship-bridge',
+    JARVOS_TEST_HYDRATE_CALLS_FILE: path.join(temp, 'hydrate-calls.json'),
+    ...(runtime === 'codex' ? { CODEX_THREAD_ID: CODEX_SESSION_ID } : {}),
+  };
+}
+
+function sessionStartInput(runtime) {
+  return runtime === 'codex'
+    ? { hook_event_name: 'SessionStart', session_id: CODEX_SESSION_ID }
+    : { session_id: CLAUDE_SESSION_ID };
+}
+
+function codexSessionWait() {
+  return {
+    available: true,
+    pendingSessionWait: true,
+    wait: {
+      waitId: 'session-wait:codex-91',
+      workId: 'work-91',
+      state: 'consumed',
+      origin: {
+        harness: 'codex',
+        stableSessionId: CODEX_SESSION_ID,
+        adapterGeneration: 'jarvos-stewardship-adapter.v1',
+      },
+      resultDigest: `sha256:${'c'.repeat(64)}`,
+      safeProjection: {
+        status: 'completed',
+        reference: 'result-91',
+        summary: 'Completed safely',
+        resultClass: 'success',
+      },
+    },
+  };
+}
+
+test('native SessionStart injects one refreshed or partial Projects block and disables Projects hydration for Codex and Claude', () => {
+  for (const runtime of ['codex', 'claude']) {
+    for (const status of ['refreshed', 'partial']) {
+      withBridge({
+        projectsContextStart: envelope(status, { markdown: NATIVE_PROJECTS_MARKDOWN }),
+      }, ({ bin, temp }) => {
+        const { output, hydrationOptions } = runSessionStartHook(
+          runtime,
+          sessionStartEnvironment(bin, temp, runtime),
+          sessionStartInput(runtime),
+          HYDRATED_NON_PROJECTS_MARKDOWN,
+        );
+        const context = output.hookSpecificOutput.additionalContext;
+        assert.equal(context.split('## Projects Context').length - 1, 1, `${runtime} ${status} must inject exactly one Projects block`);
+        assert.match(context, /Native bridge marker/);
+        assert.match(context, /Ordinary hydration marker/);
+        assert.equal(hydrationOptions.projectsContext, false, `${runtime} ${status} must disable ordinary Projects hydration`);
+      });
+    }
+  }
+});
+
+test('native SessionStart preserves ordinary Projects hydration for unchanged, unavailable, and invalid bridge envelopes', () => {
+  const cases = [
+    ['unchanged', envelope('unchanged')],
+    ['unavailable', envelope('unavailable')],
+    ['invalid', { available: true }],
+  ];
+  for (const runtime of ['codex', 'claude']) {
+    for (const [label, projectsContextStart] of cases) {
+      withBridge({ projectsContextStart }, ({ bin, temp }) => {
+        const { output, hydrationOptions } = runSessionStartHook(
+          runtime,
+          sessionStartEnvironment(bin, temp, runtime),
+          sessionStartInput(runtime),
+          ORDINARY_PROJECTS_MARKDOWN,
+        );
+        const context = output.hookSpecificOutput.additionalContext;
+        assert.equal(context.split('## Projects Context').length - 1, 1, `${runtime} ${label} must preserve one ordinary Projects block`);
+        assert.match(context, /Ordinary provider marker/);
+        assert.doesNotMatch(context, /Native bridge marker/);
+        assert.equal(hydrationOptions.projectsContext, undefined, `${runtime} ${label} must keep ordinary Projects hydration enabled`);
+      });
+    }
+  }
+});
+
+test('codex turn hook coexists with one refreshed Projects block, SessionWait, and existing stewardship context', () => {
+  withBridge({
+    projectsContextRefresh: envelope('refreshed', { markdown: NATIVE_PROJECTS_MARKDOWN }),
+    nextTurnInput: {
+      available: true,
+      pendingInSessionInput: true,
+      prompt: 'A recovery window is ready.',
+      choices: ['Wait', 'Prepare a dry run'],
+      default: 'Wait',
+      correlation: 'judgment-with-wait',
+    },
+    sessionWaitNextTurn: codexSessionWait(),
+  }, ({ bin }) => {
+    const env = {
+      ...process.env,
+      PATH: `${bin}${path.delimiter}${process.env.PATH || ''}`,
+      JARVOS_STEWARDSHIP_BRIDGE_COMMAND: 'jarvos-stewardship-bridge',
+      CODEX_THREAD_ID: CODEX_SESSION_ID,
+    };
+    const output = runTurnHook('codex', env, { hook_event_name: 'UserPromptSubmit', session_id: CODEX_SESSION_ID });
+    const context = output.hookSpecificOutput.additionalContext;
+    assert.equal(context.split('## Projects Context').length - 1, 1);
+    assert.match(context, /Native bridge marker/);
+    assert.match(context, /judgment-with-wait/);
+    assert.match(context, /session-wait:codex-91/);
+    assert.match(context, /Reference: result-91/);
+  });
+});
+
+test('codex turn hook preserves SessionWait without Projects injection when unchanged', () => {
+  withBridge({
+    projectsContextRefresh: envelope('unchanged'),
+    nextTurnInput: { available: true, pendingInSessionInput: false },
+    sessionWaitNextTurn: codexSessionWait(),
+  }, ({ bin }) => {
+    const env = {
+      ...process.env,
+      PATH: `${bin}${path.delimiter}${process.env.PATH || ''}`,
+      JARVOS_STEWARDSHIP_BRIDGE_COMMAND: 'jarvos-stewardship-bridge',
+      CODEX_THREAD_ID: CODEX_SESSION_ID,
+    };
+    const output = runTurnHook('codex', env, { hook_event_name: 'UserPromptSubmit', session_id: CODEX_SESSION_ID });
+    const context = output.hookSpecificOutput.additionalContext;
+    assert.equal(context.split('## Projects Context').length - 1, 0);
+    assert.doesNotMatch(context, /Native bridge marker/);
+    assert.match(context, /session-wait:codex-91/);
+    assert.match(context, /Reference: result-91/);
+  });
+});
 
 test('codex turn hook injects exactly one Projects block on refreshed and coexists with a stewardship judgment block', () => {
   withBridge({
