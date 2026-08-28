@@ -13,6 +13,8 @@ const {
   LIVE_PROOF_FORWARD_SKEW_SECONDS,
   LIVE_PROOF_FRESHNESS_SECONDS,
   MANAGED_ACTIVATION_CONTRACT_VERSION,
+  COMMON_WORK_ACTIONS,
+  COMMON_WORK_BRIDGE_VERSION,
   REQUIRED_LIFECYCLE_CAPABILITIES,
   STEWARDSHIP_ADAPTER_VERSION,
   STEWARDSHIP_ACTIONS,
@@ -107,6 +109,26 @@ test('stewardship bootstrap declarations reject a missing action, selected asset
     const invalid = JSON.parse(JSON.stringify(baseline));
     mutate(invalid);
     assert.equal(validateStewardshipBootstrap(invalid, 'codex').ok, false, `${label} must fail bootstrap validation`);
+  }
+});
+
+test('runtime adapters declare the same presentation-only common work bridge', () => {
+  let expected = null;
+  for (const runtime of RUNTIMES) {
+    const declaration = manifestFor(runtime).commonWorkBridge;
+    assert.ok(declaration, `${runtime} must declare commonWorkBridge`);
+    assert.equal(declaration.version, COMMON_WORK_BRIDGE_VERSION);
+    assert.deepEqual(declaration.actions, COMMON_WORK_ACTIONS);
+    assert.equal(declaration.availability, 'injected-authority');
+    assert.deepEqual(declaration.handoff, {
+      pointerOnly: true,
+      fields: ['workId', 'workspaceId', 'headOid'],
+    });
+    assert.deepEqual(declaration.authority.rereadBefore, [
+      'attach_or_resume', 'submit_judgment', 'claim', 'request_or_answer_approval', 'get_terminal_receipt',
+    ]);
+    if (!expected) expected = declaration;
+    else assert.deepEqual(declaration, expected, `${runtime} bridge declaration drifted`);
   }
 });
 

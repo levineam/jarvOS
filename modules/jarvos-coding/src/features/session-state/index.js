@@ -5,6 +5,38 @@ const ARTICLE_THREAD_KIND = 'article-thread';
 const ARTICLE_SESSION_KIND = ARTICLE_THREAD_KIND;
 const CODE_THREAD_KIND = 'code-thread';
 const DEFAULT_SESSION_STATE_FILE = '.jarvos/session-state.json';
+const WORK_HANDOFF_POINTER_FIELDS = Object.freeze(['workId', 'workspaceId', 'headOid']);
+
+function isCanonicalPointerId(value) {
+  return typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$/.test(value);
+}
+
+function isGitObjectId(value) {
+  return typeof value === 'string' && /^[a-f0-9]{40}(?:[a-f0-9]{24})?$/i.test(value);
+}
+
+// Session state may retain this compact handoff only. Resolution, cleanliness,
+// ownership, and authority are deliberately reread by the receiving runtime.
+function buildWorkHandoff(input = {}) {
+  const source = input.handoff || input.workHandoff || input;
+  if (!source || typeof source !== 'object' || Array.isArray(source)) {
+    throw new Error('work handoff must be an object');
+  }
+  const keys = Object.keys(source).sort();
+  const expected = [...WORK_HANDOFF_POINTER_FIELDS].sort();
+  if (keys.length !== expected.length || keys.some((key, index) => key !== expected[index])) {
+    throw new Error('work handoff stores only workId, workspaceId, and headOid');
+  }
+  const handoff = {
+    workId: source.workId,
+    workspaceId: source.workspaceId,
+    headOid: source.headOid,
+  };
+  if (!isCanonicalPointerId(handoff.workId)) throw new Error('work handoff requires a canonical workId');
+  if (!isCanonicalPointerId(handoff.workspaceId)) throw new Error('work handoff requires a canonical workspaceId');
+  if (!isGitObjectId(handoff.headOid)) throw new Error('work handoff requires a Git headOid');
+  return handoff;
+}
 
 function rejectSnapshotFields(value = {}) {
   const disallowed = ['body', 'content', 'snapshot', 'markdown', 'description'];
@@ -54,7 +86,9 @@ function normalizeWorkReference(input = {}) {
 function buildSessionCheckpoint(input = {}) {
   const issueIdentifier = String(input.issueIdentifier || input.issue?.identifier || '').trim();
   const workReference = normalizeWorkReference(input);
-  const identifier = issueIdentifier || workReference?.itemId || '';
+  const handoffInput = input.handoff || input.workHandoff || null;
+  const workHandoff = handoffInput ? buildWorkHandoff(handoffInput) : null;
+  const identifier = issueIdentifier || workReference?.itemId || workHandoff?.workId || '';
   const stage = String(input.stage || input.loopStage || '').trim();
   const nextStep = String(input.nextStep || '').trim();
   if (!identifier) throw new Error('session checkpoint requires an issue or work identifier');
@@ -65,7 +99,7 @@ function buildSessionCheckpoint(input = {}) {
   if (!kind) throw new Error('session checkpoint requires a kind');
 
   const artifact = buildLiveArtifactPointer({
-    kind: input.artifact?.kind || (workReference ? 'beads-work-item' : 'paperclip-issue'),
+    kind: input.artifact?.kind || (workHandoff ? 'work-handoff' : workReference ? 'beads-work-item' : 'paperclip-issue'),
     issueIdentifier,
     itemId: workReference?.itemId,
     authority: workReference?.authority,
@@ -83,6 +117,7 @@ function buildSessionCheckpoint(input = {}) {
     nextStep,
   };
   if (workReference) codeThread.workReference = workReference;
+  if (workHandoff) codeThread.handoff = workHandoff;
 
   return {
     schemaVersion: SESSION_STATE_SCHEMA_VERSION,
@@ -182,10 +217,12 @@ module.exports = {
   CODE_THREAD_KIND,
   ARTICLE_THREAD_KIND,
   SESSION_STATE_SCHEMA_VERSION,
+  WORK_HANDOFF_POINTER_FIELDS,
   buildSessionCheckpoint,
   buildCodeThreadCheckpoint,
   buildArticleThreadCheckpoint,
   buildLiveArtifactPointer,
+  buildWorkHandoff,
   createFileSessionStateStore,
   createMemorySessionStateStore,
   readJarvosSessionState,

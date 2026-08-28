@@ -6,7 +6,7 @@ const test = require('node:test');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const { unreleasedSection, changelogVersionSection } = require('../scripts/unreleased-drift-check');
+const { unreleasedSection, changelogVersionSection, evaluateUnreleasedDrift } = require('../scripts/unreleased-drift-check');
 
 test('unreleasedSection treats a literal "Nothing yet." placeholder as empty', () => {
   const changelog = '# Changelog\n\n## [Unreleased]\n\n- Nothing yet.\n\n## v0.6.3 — 2026-07-16\n\n- Something shipped.\n';
@@ -53,6 +53,38 @@ test('changelogVersionSection reports undated when still marked Unreleased', () 
   const result = changelogVersionSection(changelog, '0.7.0');
   assert.equal(result.present, true);
   assert.equal(result.dated, false);
+});
+
+test('changelogVersionSection recognizes Release Please bracketed headings', () => {
+  const changelog = '## [0.9.0](https://github.com/levineam/jarvOS/compare/jarvos-bootstrap-v0.8.0...jarvos-bootstrap-v0.9.0) (2026-08-26)\n\nRelease notes.\n';
+  const result = changelogVersionSection(changelog, '0.9.0');
+  assert.equal(result.present, true);
+  assert.equal(result.dated, true);
+});
+
+test('evaluateUnreleasedDrift treats the canonical package-prefixed tag as the current release', () => {
+  const result = evaluateUnreleasedDrift({
+    version: '0.9.0',
+    tags: ['v0.7.0', 'jarvos-bootstrap-v0.9.0'],
+    commitsSinceTag: 0,
+    changelog: '## [0.9.0](https://example.test/compare/jarvos-bootstrap-v0.8.0...jarvos-bootstrap-v0.9.0) (2026-08-26)\n',
+  });
+
+  assert.equal(result.latestTag, 'jarvos-bootstrap-v0.9.0');
+  assert.equal(result.drift, false);
+  assert.equal(result.state, 'ok');
+});
+
+test('evaluateUnreleasedDrift still rejects a genuinely untagged finalized release', () => {
+  const result = evaluateUnreleasedDrift({
+    version: '0.9.0',
+    tags: ['v0.7.0'],
+    commitsSinceTag: 0,
+    changelog: '## [0.8.0](https://example.test/compare/jarvos-bootstrap-v0.7.0...jarvos-bootstrap-v0.8.0) (2026-08-16)\n',
+  });
+
+  assert.equal(result.drift, true);
+  assert.equal(result.state, 'untagged-release');
 });
 
 test('public journal landing remains tracked as unreleased work', () => {

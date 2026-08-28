@@ -36,22 +36,34 @@ function git(args, root = ROOT, env) {
   return { status: r.status, out: String(r.stdout || '').trim(), err: String(r.stderr || '').trim() };
 }
 
-function semverTags(root = ROOT, env) {
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function releaseTagVersion(tag, packageName) {
+  const pattern = packageName
+    ? `^(?:v|${escapeRegExp(packageName)}-v)(\\d+\\.\\d+\\.\\d+)$`
+    : '(?:^|-)v(\\d+\\.\\d+\\.\\d+)$';
+  const m = tag.match(new RegExp(pattern));
+  return m ? m[1] : null;
+}
+
+function semverTags(root = ROOT, env, packageName = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')).name) {
   const { out } = git(['tag', '--list'], root, env);
   return out
     .split(/\r?\n/)
     .map((t) => t.trim())
-    .filter((t) => /^v\d+\.\d+\.\d+$/.test(t))
+    .filter((t) => releaseTagVersion(t, packageName))
     .sort((a, b) => {
-      const pa = a.slice(1).split('.').map(Number);
-      const pb = b.slice(1).split('.').map(Number);
+      const pa = releaseTagVersion(a, packageName).split('.').map(Number);
+      const pb = releaseTagVersion(b, packageName).split('.').map(Number);
       return pa[0] - pb[0] || pa[1] - pb[1] || pa[2] - pb[2];
     });
 }
 
-// Returns { present, dated } for the `## v<version>` heading in the changelog.
+// Returns { present, dated } for a conventional or Release Please version heading.
 function changelogVersionSection(changelog, version) {
-  const re = new RegExp(`^##\\s+v${version.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\$&')}\\b([^\\n]*)`, 'm');
+  const re = new RegExp(`^##\\s+(?:\\[)?v?${escapeRegExp(version)}\\b(?:\\])?([^\\n]*)`, 'm');
   const m = changelog.match(re);
   if (!m) return { present: false, dated: false };
   return { present: true, dated: !/unreleased/i.test(m[1] || '') };
@@ -85,7 +97,7 @@ function unreleasedSection(changelog) {
 
 function evaluateUnreleasedDrift({ version, tags, commitsSinceTag, changelog }) {
   const latestTag = tags.length ? tags[tags.length - 1] : null;
-  const latestTagVersion = latestTag ? latestTag.slice(1) : null;
+  const latestTagVersion = latestTag ? releaseTagVersion(latestTag) : null;
   const verSection = changelogVersionSection(changelog, version);
   const unreleased = unreleasedSection(changelog);
 
