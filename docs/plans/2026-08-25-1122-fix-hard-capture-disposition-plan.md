@@ -14,10 +14,14 @@ execution: code
 ## Goal Capsule
 
 - **Objective:** When Andrew sends a strict capture command through Telegram, jarvOS stores it once, replies briefly, and does not run the language model on that command.
-- **Means:** Add a small public command parser, make the private OpenClaw hook translate its result into native `block` or `pass` behavior, and replace the correlated block envelope in the existing reply hook. Reuse the existing canonical writer and artifact receipt. (KTD1-KTD5)
+- **Means:** Add a small public command parser and let each host adapter claim recognized commands through its earliest native pre-model terminal-response hook. Reuse the existing canonical writer and artifact receipt. (KTD1-KTD5)
 - **Authority:** Public jarvOS owns command meaning and storage routing. Private clawd owns Telegram authorization and OpenClaw hook behavior.
 - **Stop condition:** Do not claim completion until one operator-approved Telegram command produces the expected write and no model response.
 - **Execution profile:** Two focused changes in separate clean worktrees. Public implementation starts from `4c5a4bb`; private implementation starts from `88b084d`. Land public first, then sync its exact files into the private mirror.
+
+### Implementation correction — 2026-08-28
+
+The first live rollout exposed a host-lifecycle error in the original response design: combining an out-of-band channel send with a native block caused two user-visible messages, while a follow-up reply-hook cancellation was unreachable from that block path. The corrected adapter uses OpenClaw's native `before_dispatch` terminal-ownership hook. This plan and the public host-adapter contract now capture that portable requirement so other harnesses select an equivalent reachable pre-model seam instead of copying an OpenClaw-specific workaround.
 
 ---
 
@@ -51,11 +55,11 @@ The missing stop decision is the practical defect. The absence of an always-load
 
 **OpenClaw behavior**
 
-- R6. For an owner-authorized Telegram input, the private adapter maps every recognized hard-command outcome to a valid OpenClaw `block` decision and maps public-parser `continue` to the exact decision `{ outcome: 'pass' }`. Unauthorized input retains the existing authorization behavior and performs no capture.
+- R6. For an owner-authorized Telegram input, the private adapter maps every recognized hard-command outcome to OpenClaw's native pre-model claiming result `{ handled: true, text: <receipt-derived response> }` and maps public-parser `continue` to `{ handled: false }`. Unauthorized input retains the existing authorization behavior and performs no capture.
 - R7. Ambient prose and command words embedded later in a sentence retain their current capture and conversation behavior.
 - R8. The private adapter consumes the public parser and receipt helper. It does not add another command regex or redefine command routes.
 - R9. Strict commands are parsed before the existing ordinary-capture `minLength` gate, so short commands such as `Idea: AI` remain terminal commands.
-- R10. Because OpenClaw wraps `before_agent_run` block messages as errors, the private adapter replaces the one correlated blocked-run reply in the existing `reply_payload_sending` hook with the exact short capture response. It must not send a second Telegram message.
+- R10. The private adapter uses OpenClaw's `before_dispatch` claiming hook so OpenClaw owns the one normal final delivery. It must not combine an out-of-band Telegram send with a block result or depend on a downstream hook that the selected terminal path does not reach.
 
 ### Acceptance Examples
 
@@ -72,7 +76,7 @@ The missing stop decision is the practical defect. The absence of an always-load
 **In scope**
 
 - Public command grammar, semantic routes, exact user responses, and focused fixtures.
-- Private owner authorization, OpenClaw `before_agent_run` block mapping, and correlated blocked-reply replacement through the existing reply hook.
+- Private owner authorization and OpenClaw `before_dispatch` terminal ownership through the host's normal final-delivery path.
 - Existing canonical storage and artifact receipts.
 - One staged temporary-vault check and one operator-approved Telegram acceptance.
 
@@ -93,7 +97,8 @@ The missing stop decision is the practical defect. The absence of an always-load
 ### Verified Evidence and Independent Review
 
 - The incident capture log records the strict `idea` keyword route before a real xAI model request began in the same trace. Current loaded plugin source places Telegram capture in `before_agent_run` and returns `pass` after the write. This verifies the observed write-plus-model failure path; it does not dynamically prove the unshipped `block` counterfactual.
-- Installed OpenClaw 2026.7.1 source verifies that a valid `before_agent_run` block sets `skipPromptSubmission`, emits one error-marked final payload, tags it as blocked, and runs it through `reply_payload_sending` with the correlated `runId`. KTD5 is the smallest response fix supported by that path.
+- The first private rollout used `before_agent_run` block plus an out-of-band Telegram send. The live incident trace proved one capture followed by two outbound messages: the direct response and OpenClaw's native block error. A follow-up attempted to cancel that error in `reply_payload_sending`, but the live response ledger contained no admitted-payload event because the block response was sent directly through the host dispatcher; the test had manually invoked a hook the real path never reached.
+- Installed OpenClaw 2026.7.1 source verifies that `before_dispatch` runs before model dispatch, treats the first `{ handled: true }` result as terminal, sends its text through the normal final-delivery pipeline, commits inbound dedupe, and returns without starting the model path. This is the selected OpenClaw adapter seam; other hosts must use their equivalent native pre-model terminal-ownership hook rather than copying the hook name.
 - An independent Claude Opus 5 review at requested `xhigh` effort challenged this plan before handoff. Integrated findings: block-envelope replacement, short-command length bypass, an explicit local-save/sync-pending response, closed HookDecision shapes, skill-contract coverage, and pinning success to validated `result.artifactReceipt` rather than `captured: true`.
 - One proposed review finding was rejected after source verification: the clean public implementation base already contains `jarvos.artifact-receipt.v1`, `validateArtifactReceipt`, `receiptIsAcknowledged`, and focused receipt tests. This plan reuses that contract instead of recreating it.
 
@@ -111,8 +116,8 @@ flowchart LR
     P -->|bare command| B
     P -->|populated command| W[Canonical public capture writer]
     W --> R[Artifact receipt]
-    R --> B[Private terminal response + OpenClaw block]
-    B -->|skip prompt submission| H[Existing correlated reply hook]
+    R --> B[Private native terminal response]
+    B -->|handled before model dispatch| H[Host final-delivery pipeline]
     H --> C[One clean capture response]
 ```
 
@@ -127,15 +132,15 @@ The public side owns command meaning, routing, and persistence evidence. The pri
 - KTD1. **Extend the existing public keyword router.** Add one pure hard-command parse result beside the existing ambient detection functions. The private adapter imports this result from its public-owned mirror. (session-settled: user-approved — chosen over a private-only regex fix: public jarvOS must own portable capture meaning.) Governs R1-R3, R7-R8.
 - KTD2. **Extend current routing rather than add an executor.** `Idea:` and `Note:` retain their existing paths. The journal aliases add one route to the existing journal section writer. Governs R2.
 - KTD3. **Use the current artifact receipt as the success gate.** Import `receiptIsAcknowledged` instead of adding a disposition schema or second persistence protocol. (session-settled: user-approved — chosen over a new receipt and provenance layer: the current receipt already carries the required truth.) Governs R4-R5.
-- KTD4. **Verify at the hook seam and through one live acceptance.** Unit tests prove the registered hook returns `block` or `pass`; the live check proves the installed user-visible behavior. Do not build a custom OpenClaw QA runtime for this fix. (session-settled: user-approved — chosen over a four-arm provider harness: its complexity and state risk exceeded the value for this defect.) Governs R6-R7.
-- KTD5. **Use native block for suppression and the existing reply hook for presentation.** OpenClaw 2026.7.1 turns a `before_agent_run` block into one error-marked final payload and sends it through `reply_payload_sending` with the same `runId`. Store the terminal response in the existing bounded pending-result map, then replace that correlated payload and consume the record. Do not patch OpenClaw or send an out-of-band Telegram message. Governs R6, R10.
+- KTD4. **Verify the real host transition and one live acceptance.** Unit tests must assert the adapter registers the selected terminal hook and does not register the superseded block hook. A test may invoke the registered handler, but it must not invent a downstream lifecycle transition absent from the host path. The live check proves the installed user-visible behavior and provider silence. Do not build a custom OpenClaw QA runtime for this fix. (session-settled: user-approved — chosen over a four-arm provider harness: its complexity and state risk exceeded the value for this defect.) Governs R6-R7.
+- KTD5. **Use host-native terminal ownership.** OpenClaw 2026.7.1's `before_dispatch` hook claims a command before model dispatch and routes its returned text through normal final delivery. Return one receipt-derived response there. Do not patch OpenClaw, send an out-of-band Telegram message, return a block that creates a second error, or maintain a pending reply-rewrite map. Other harness adapters follow the same semantic rule through their own earliest native pre-model terminal hook. Governs R6, R10.
 
 ### Sequencing
 
 1. Implement and test the public parser and journal route.
 2. Land the public change.
 3. Sync the exact public-owned files into the private mirror under the existing upstream-source guard.
-4. Update and test the OpenClaw gate and correlated reply replacement.
+4. Update and test the OpenClaw native terminal-ownership adapter.
 5. Install the private change through the normal managed path, then run the operator-approved live acceptance.
 
 ### Risks and Mitigations
@@ -144,7 +149,8 @@ The public side owns command meaning, routing, and persistence evidence. The pri
 - **A write failure is reported as success.** Use only `receiptIsAcknowledged` for the success response.
 - **A locally persisted write is misreported as a retryable failure.** Preserve `saved_locally_sync_pending` as its own terminal, non-success response.
 - **Public and private copies drift.** Land public first and sync the exact files under `UPSTREAM_PLAN` enforcement.
-- **OpenClaw wraps a `block` message as an error.** Rewrite only the owner-authorized pending result with the same `runId` in `reply_payload_sending`; tests cover absent, expired, and mismatched correlation. Treat live Telegram acceptance as the final gate.
+- **A hook exists but is not reachable from the selected terminal path.** Verify the installed host dispatch source and test the registered lifecycle sequence. Callback existence or manual test invocation is not reachability evidence. Treat live Telegram acceptance as the final gate.
+- **Two components both believe they own the response.** Return one host-native handled response; do not combine direct channel delivery with a host block/error path.
 - **Dirty active checkouts overwrite unrelated work.** Use the existing clean public and private worktrees; do not edit or clean the active roots.
 
 ---
@@ -195,17 +201,16 @@ The public side owns command meaning, routing, and persistence evidence. The pri
   - `scripts/capture-router-hook.js`
   - `tests/extensions/capture-router.test.js`
   - `scripts/test-capture-hook.js`
-- **Approach:** Sync the public-owned files without local semantic changes. In `processBeforeAgentRun`, authorize first and parse once through the public helper before applying ordinary `minLength`. Return exactly `{ outcome: 'pass' }` for `continue`. For a hard command, capture at most once, validate `result.artifactReceipt`, derive the terminal response from that receipt rather than `captured: true`, save the response under the current owner-authorized `runId`, and return a valid block shape with a non-empty reason. In `processReplyPayloadSending`, replace the correlated block-error payload with that response and consume the pending record. Keep Telegram `message_received` observer-only.
+- **Approach:** Sync the public-owned files without local semantic changes. In `processBeforeDispatch`, parse once through the public helper before applying ordinary `minLength`, then authorize the matched command. Return `{ handled: false }` for `continue`. For a hard command, capture at most once, validate `result.artifactReceipt`, derive the terminal response from that receipt rather than `captured: true`, and return `{ handled: true, text: <response> }`. Keep Telegram `message_received` observer-only and retain `reply_payload_sending` only for unrelated live-response observation.
 - **Execution note:** Characterize the current registered hook return first, then change only the hard-command branch.
-- **Patterns to follow:** Existing protected-identity authorization, `processBeforeAgentRun`, `_pendingCaptureResults`, `processReplyPayloadSending`, public `routeCapture`, `validateArtifactReceipt`, `receiptIsAcknowledged`, and Vitest synthetic API registration.
+- **Patterns to follow:** Existing protected-identity authorization, public `routeCapture`, `validateArtifactReceipt`, `receiptIsAcknowledged`, OpenClaw `before_dispatch`, and Vitest synthetic API registration.
 - **Test scenarios:**
-  - Covers AE1-AE3. Authorized populated commands, including a payload shorter than `minLength`, call capture once with stripped content, validate `result.artifactReceipt`, and return `{ outcome: 'block', reason: <non-empty>, message: <non-empty> }`.
-  - Covers AE1-AE4. The same `runId` rewrites the one blocked reply payload to the exact confirmation or input request, then consumes the pending record; it never sends a second message.
-  - Covers AE4. Bare commands call no capture function and still return a valid `block` decision.
+  - Covers AE1-AE3. Authorized populated commands, including a payload shorter than `minLength`, call capture once, validate `result.artifactReceipt`, and return `{ handled: true, text: <non-empty> }`.
+  - Covers AE1-AE4. The plugin registers `before_dispatch`, does not register `before_agent_run`, does not call a direct channel sender, and relies on one host-native final delivery.
+  - Covers AE4. Bare commands call no capture function and still return a terminal handled response.
   - Covers AE5. A locally-saved/sync-pending receipt yields its distinct terminal response, not the success or retry response.
   - Covers AE6. Capture throw, `captured: false`, malformed receipt, missing receipt, deferred, conflict, and failed outcomes return the failure block and correlated final text.
-  - Covers AE7. Ambient input returns exactly `{ outcome: 'pass' }` and creates no pending terminal response.
-  - Missing, expired, wrong-run, wrong-account, and wrong-conversation correlations cannot rewrite an outbound payload.
+  - Covers AE7. Ambient input returns exactly `{ handled: false }` and creates no terminal response.
   - Unauthorized input retains the current authorization behavior and performs no capture.
   - The `message_received` Telegram path still performs no second capture.
 - **Verification:** Focused private tests pass in a temporary vault. The upstream-source guard identifies the synced public-owned files and accepts the public plan reference.
@@ -238,7 +243,7 @@ node scripts/test-capture-hook.js
 git diff --check
 ```
 
-These tests prove authorization, registered-hook decision shape, temporary-vault capture, receipt-derived response selection, and correlated reply replacement. OpenClaw's installed source establishes that `block` skips prompt submission; these tests do not prove the active installed tuple or provider silence.
+These tests prove authorization, registered-hook decision shape, temporary-vault capture, and receipt-derived response selection. OpenClaw's installed source establishes that a handled `before_dispatch` result returns before model dispatch and uses normal final delivery; these tests do not prove the active installed tuple or provider silence.
 
 ### Live acceptance
 
@@ -246,7 +251,7 @@ After the public change lands and the private managed install resolves to the te
 
 1. Send one harmless `Idea:` command through Telegram.
 2. Record the command's `runId` and trace identifier, then confirm one Ideas bullet and one short capture response.
-3. Inspect the existing gateway diagnostic trace for that same `runId`: require the `before_agent_run` blocked outcome and zero model-call/provider-request start events. Visible silence alone is not evidence of inference suppression.
+3. Inspect the existing gateway diagnostic trace for that same inbound turn: require one native outbound final payload, a `before_dispatch_handled` completion, zero `before_agent_run` block errors, and zero model-call/provider-request start events. Visible silence alone is not evidence of inference suppression.
 4. Send one ambient near-miss and confirm normal model behavior.
 5. Send one bare command and confirm no additional journal content.
 
@@ -258,11 +263,11 @@ Do not automate this against the real Telegram account or vault. The operator in
 
 - Public jarvOS owns one tested parser for all four strict commands and the new Journal Entry route.
 - The private mirror matches the landed public-owned files without a second command grammar.
-- For owner-authorized Telegram input, the OpenClaw hook returns `block` for every recognized command outcome and `pass` for public-parser `continue`; unauthorized input keeps the existing no-capture behavior.
+- For owner-authorized Telegram input, the OpenClaw hook returns `handled: true` with the receipt-derived response for every recognized command outcome and `handled: false` for public-parser `continue`; unauthorized input keeps the existing no-capture behavior.
 - Short commands bypass ordinary capture length filtering.
-- The blocked-run error envelope is replaced once through the existing correlated reply hook; no second Telegram send is introduced.
+- OpenClaw owns one normal final delivery; no direct Telegram send, block error, or pending reply-rewrite map is introduced.
 - `Captured` responses require a validated `result.artifactReceipt` accepted by the existing acknowledgement helper; locally saved/sync-pending remains explicit and non-success.
 - Public and private focused suites pass from clean worktrees.
-- One operator-approved Telegram acceptance binds the hard command to one write, one short response, a blocked hook outcome, and zero provider-request starts for the same `runId`, with an ambient positive control.
+- One operator-approved Telegram acceptance binds the hard command to one write, one short response, a native handled outcome, and zero provider-request starts for the same inbound turn, with an ambient positive control.
 - Broader replay, provenance, packaging, and cross-harness work remains outside the implementation diff.
 - Experimental or abandoned code from implementation is removed before review.
