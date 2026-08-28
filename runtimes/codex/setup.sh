@@ -223,6 +223,9 @@ append_optional_mcp_env() {
 
 append_optional_mcp_env JARVOS_WORK_ACTION_SERVICE_MODULE "${JARVOS_WORK_ACTION_SERVICE_MODULE:-}"
 append_optional_mcp_env JARVOS_PROJECTS_CONTEXT_CONFIG "${JARVOS_PROJECTS_CONTEXT_CONFIG:-}"
+append_optional_mcp_env JARVOS_COMMON_WORK_SERVICE_MODULE "${JARVOS_COMMON_WORK_SERVICE_MODULE:-}"
+MCP_HAS_HOST_BINDING=${#MCP_ENV_ARGS[@]}
+MCP_ENV_ARGS+=(--env "JARVOS_COMMON_WORK_HARNESS=codex")
 
 if [ "${JARVOS_STEWARDSHIP_ONLY:-0}" != "1" ]; then
   if codex mcp get jarvos >/dev/null 2>&1; then
@@ -231,7 +234,11 @@ if [ "${JARVOS_STEWARDSHIP_ONLY:-0}" != "1" ]; then
 
   if [ ${#MCP_ENV_ARGS[@]} -gt 0 ]; then
     codex mcp add "${MCP_ENV_ARGS[@]}" jarvos -- "${MCP_COMMAND[@]}"
-    echo "Registered jarvOS MCP server for Codex with host bindings: ${MCP_COMMAND[*]}"
+    if [ "$MCP_HAS_HOST_BINDING" -gt 0 ]; then
+      echo "Registered jarvOS MCP server for Codex with host bindings: ${MCP_COMMAND[*]}"
+    else
+      echo "Registered jarvOS MCP server for Codex: ${MCP_COMMAND[*]}"
+    fi
   else
     codex mcp add jarvos -- "${MCP_COMMAND[@]}"
     echo "Registered jarvOS MCP server for Codex: ${MCP_COMMAND[*]}"

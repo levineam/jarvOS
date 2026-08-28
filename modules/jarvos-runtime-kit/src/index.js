@@ -6,6 +6,7 @@ const os = require('os');
 const path = require('path');
 const { spawnSync } = require('child_process');
 const harnessDispatch = require('./harness-dispatch.js');
+const commonWorkService = require('./common-work-service.js');
 const { isSha256 } = harnessDispatch;
 const stewardshipAdapter = require('./stewardship-adapter.js');
 const stewardshipBootstrap = require('./stewardship-bootstrap.js');
@@ -1354,6 +1355,7 @@ function scaffoldRuntime(runtimeId, outDir) {
 }
 
 module.exports = {
+  ...commonWorkService,
   ...harnessDispatch,
   ...stewardshipAdapter,
   ...stewardshipBootstrap,

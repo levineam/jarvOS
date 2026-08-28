@@ -9,6 +9,10 @@ const {
   envelopeHasContent: projectsContextRefreshHasContent,
   validateEnvelope: validateProjectsContextRefreshEnvelope,
 } = require('../../modules/jarvos-runtime-kit/src/projects-context-refresh.js');
+const {
+  COMMON_WORK_ACTIONS,
+  invokeCommonWork,
+} = require('../../modules/jarvos-runtime-kit/src/index.js');
 
 const PROJECTS_CONTEXT_REFRESH_TIMEOUT_MS = 250;
 const SELECTED_PROJECTS_ENV_KEYS = Object.freeze([
@@ -152,6 +156,27 @@ function answerTool(context, config) {
   };
 }
 
+function commonWorkTool(config) {
+  return {
+    name: 'jarvos_common_work',
+    label: 'jarvOS Common Work',
+    description: 'Call one host-bound canonical common-work action for OpenClaw.',
+    parameters: {
+      type: 'object', additionalProperties: false, required: ['action', 'input'],
+      properties: { action: { type: 'string', enum: COMMON_WORK_ACTIONS }, input: { type: 'object' } },
+    },
+    execute: async (_toolCallId, input) => {
+      const result = await invokeCommonWork({
+        serviceModule: config?.commonWorkServiceModule,
+        harness: 'openclaw',
+        action: input?.action,
+        input: input?.input,
+      });
+      return toolResult(JSON.stringify(result), result?.ok === false);
+    },
+  };
+}
+
 function agent_turn_prepare(event, context, config = context?.pluginConfig) {
   const prependContext = nextTurnContext(event, config, context);
   return prependContext ? { prependContext } : {};
@@ -163,6 +188,7 @@ function register(api) {
   const config = api.pluginConfig;
   api.on('agent_turn_prepare', (event, context) => agent_turn_prepare(event, context, config), { timeoutMs: 5000 });
   api.registerTool((context) => answerTool(context, config), { name: 'jarvos_stewardship_answer' });
+  api.registerTool(() => commonWorkTool(config), { name: 'jarvos_common_work' });
 }
 
 module.exports = register;
@@ -177,3 +203,4 @@ module.exports.PROJECTS_CONTEXT_REFRESH_TIMEOUT_MS = PROJECTS_CONTEXT_REFRESH_TI
 module.exports.SELECTED_PROJECTS_ENV_KEYS = SELECTED_PROJECTS_ENV_KEYS;
 module.exports.selectedProjectsBridgeEnvironment = selectedProjectsBridgeEnvironment;
 module.exports.answerTool = answerTool;
+module.exports.commonWorkTool = commonWorkTool;

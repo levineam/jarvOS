@@ -27,6 +27,7 @@ STABLE_MCP_ENTRYPOINT="${JARVOS_MCP_STABLE_ENTRYPOINT:-}"
 # checks stay in the MCP server (fail closed on an untrusted path).
 WORK_ACTION_SERVICE_MODULE="${JARVOS_WORK_ACTION_SERVICE_MODULE:-}"
 PROJECTS_CONTEXT_CONFIG="${JARVOS_PROJECTS_CONTEXT_CONFIG:-}"
+COMMON_WORK_SERVICE_MODULE="${JARVOS_COMMON_WORK_SERVICE_MODULE:-}"
 MCP_ENV_ARGS=()
 
 append_optional_mcp_env() {
@@ -47,6 +48,8 @@ append_optional_mcp_env() {
 
 append_optional_mcp_env JARVOS_WORK_ACTION_SERVICE_MODULE "$WORK_ACTION_SERVICE_MODULE"
 append_optional_mcp_env JARVOS_PROJECTS_CONTEXT_CONFIG "$PROJECTS_CONTEXT_CONFIG"
+append_optional_mcp_env JARVOS_COMMON_WORK_SERVICE_MODULE "$COMMON_WORK_SERVICE_MODULE"
+MCP_ENV_ARGS+=(--env "JARVOS_COMMON_WORK_HARNESS=claude")
 
 # The private installer materializes this owner-controlled bundle once. Native
 # configuration must refer to it, never to a selected immutable runtime stage.
