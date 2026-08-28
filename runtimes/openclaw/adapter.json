@@ -41,6 +41,13 @@
       "codingEntrypoint": { "invoke": { "status": "unsupported", "reason": "OpenClaw is not declared as a jarvOS coding entrypoint." } }
     }
   },
+  "commonWorkBridge": {
+    "version": "jarvos-common-work-bridge.v1",
+    "actions": ["resolve_work_record", "resolve_workspace", "get_status", "attach_or_resume", "submit_judgment", "claim", "request_or_answer_approval", "get_terminal_receipt"],
+    "availability": "injected-authority",
+    "handoff": { "pointerOnly": true, "fields": ["workId", "workspaceId", "headOid"] },
+    "authority": { "rereadBefore": ["attach_or_resume", "submit_judgment", "claim", "request_or_answer_approval", "get_terminal_receipt"] }
+  },
   "sharedAgentContext": {
     "mcpServer": "modules/jarvos-agent-context/scripts/jarvos-mcp.js",
     "requiredTools": [

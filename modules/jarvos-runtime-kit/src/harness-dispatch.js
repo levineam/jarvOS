@@ -12,6 +12,29 @@ const CODING_EXECUTION_AUTHORITIES = ['work-run', 'lease', 'fence', 'worktree', 
 const SAFE_CHILD_ENVIRONMENT = ['PATH', 'LANG', 'LC_ALL', 'TZ', 'TMPDIR', 'TEMP', 'TMP'];
 const ROUTE_CAPABILITY_VERSION = 'jarvos-route-capability.v1';
 const DEFAULT_ROUTE_CAPABILITY_TTL_MS = 30_000;
+const COMMON_WORK_BRIDGE_VERSION = 'jarvos-common-work-bridge.v1';
+const COMMON_WORK_ACTIONS = Object.freeze([
+  'resolve_work_record',
+  'resolve_workspace',
+  'get_status',
+  'attach_or_resume',
+  'submit_judgment',
+  'claim',
+  'request_or_answer_approval',
+  'get_terminal_receipt',
+]);
+const AUTHORITY_REREAD_ACTIONS = new Set([
+  'attach_or_resume',
+  'submit_judgment',
+  'claim',
+  'request_or_answer_approval',
+  'get_terminal_receipt',
+]);
+const WORK_HANDOFF_FIELDS = Object.freeze(['workId', 'workspaceId', 'headOid']);
+const RESERVED_AUTHORITY_INPUT_FIELDS = new Set([
+  'authority', 'authoritySnapshot', 'lease', 'mutationAllowed', 'ownerLease',
+  'privateSnapshot', 'safeRecoveryAction', 'workRecord', 'workspace',
+]);
 
 function isObject(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -85,6 +108,147 @@ function validateRouteCapability(token, { secret, expectedGeneration, now = Date
   if (expectedGeneration && payload.generation !== expectedGeneration) return { ok: false, code: 'route_capability_generation_mismatch' };
   if (!Number.isFinite(payload.issuedAt) || !Number.isFinite(payload.expiresAt) || Number(now) < payload.issuedAt || Number(now) >= payload.expiresAt) return { ok: false, code: 'route_capability_expired' };
   return { ok: true, routeDigest: payload.routeDigest, generation: payload.generation, issuedAt: payload.issuedAt, expiresAt: payload.expiresAt };
+}
+
+function isCanonicalWorkId(value) {
+  return typeof value === 'string'
+    && /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$/.test(value);
+}
+
+function isGitObjectId(value) {
+  return typeof value === 'string' && /^[a-f0-9]{40}(?:[a-f0-9]{24})?$/i.test(value);
+}
+
+/**
+ * A cross-harness handoff is deliberately just three canonical pointers.
+ * It carries no transcript, checkout path, authority token, or prior result.
+ */
+function validateWorkHandoff(handoff) {
+  if (!isObject(handoff)) return { ok: false, errors: ['work handoff must be an object'] };
+  const keys = Object.keys(handoff).sort();
+  const expected = [...WORK_HANDOFF_FIELDS].sort();
+  if (keys.length !== expected.length || keys.some((key, index) => key !== expected[index])) {
+    return { ok: false, errors: ['work handoff must contain only workId, workspaceId, and headOid'] };
+  }
+  const errors = [];
+  if (!isCanonicalWorkId(handoff.workId)) errors.push('work handoff.workId must be a canonical identifier');
+  if (!isCanonicalWorkId(handoff.workspaceId)) errors.push('work handoff.workspaceId must be a canonical identifier');
+  if (!isGitObjectId(handoff.headOid)) errors.push('work handoff.headOid must be a Git object identifier');
+  return errorResult(errors);
+}
+
+function createWorkHandoff(input = {}) {
+  const validation = validateWorkHandoff(input);
+  return validation.ok ? { ok: true, handoff: { ...input } } : validation;
+}
+
+function safeBridgeFailure(code) {
+  return { ok: false, code };
+}
+
+function statusFlag(value, name) {
+  return value?.[name] === true || value?.status === name || value?.state === name;
+}
+
+function canonicalHandoffFromAuthority(snapshot, handoff) {
+  const source = snapshot?.handoff || snapshot?.workspace || snapshot?.workRecord || snapshot || {};
+  if (statusFlag(source, 'stale') || statusFlag(snapshot, 'stale')) return safeBridgeFailure('stale_handoff');
+  if (statusFlag(source, 'dirty') || statusFlag(snapshot, 'dirty')) return safeBridgeFailure('dirty_workspace');
+  if (statusFlag(source, 'foreign') || statusFlag(snapshot, 'foreign')) return safeBridgeFailure('foreign_workspace');
+  if (source.workId !== handoff.workId || source.workspaceId !== handoff.workspaceId || source.headOid !== handoff.headOid) {
+    return safeBridgeFailure('stale_handoff');
+  }
+  return { ok: true, handoff };
+}
+
+function containsReservedAuthorityInput(value, seen = new Set()) {
+  if (typeof value === 'function') return true;
+  if (!value || typeof value !== 'object') return false;
+  if (seen.has(value)) return true;
+  seen.add(value);
+  if (Array.isArray(value)) {
+    if (Object.getPrototypeOf(value) !== Array.prototype) return true;
+    return Reflect.ownKeys(value).some((key) => {
+      if (key === 'length') return false;
+      if (typeof key !== 'string' || !/^(?:0|[1-9][0-9]*)$/.test(key)) return true;
+      const descriptor = Object.getOwnPropertyDescriptor(value, key);
+      return !descriptor || descriptor.enumerable !== true
+        || typeof descriptor.get === 'function' || typeof descriptor.set === 'function'
+        || containsReservedAuthorityInput(descriptor.value, seen);
+    });
+  }
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) return true;
+  return Reflect.ownKeys(value).some((key) => {
+    if (typeof key !== 'string' || RESERVED_AUTHORITY_INPUT_FIELDS.has(key)) return true;
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    return !descriptor || typeof descriptor.get === 'function' || typeof descriptor.set === 'function'
+      || containsReservedAuthorityInput(descriptor.value, seen);
+  });
+}
+
+function resultMatchesHandoff(result, handoff) {
+  if (!result || typeof result !== 'object') return false;
+  const workspace = result.workspace && typeof result.workspace === 'object' ? result.workspace : {};
+  return result.workId === handoff.workId
+    && result.workspaceId === handoff.workspaceId
+    && (result.headOid || workspace.headOid) === handoff.headOid;
+}
+
+/**
+ * Transport adapters use this one vocabulary, while the injected authority
+ * owns all resolution and mutation. A resume or mutation never trusts the
+ * caller's handoff: it rereads current authority immediately before dispatch.
+ */
+function createCommonWorkBridge(authority = {}) {
+  const availability = Object.freeze(Object.fromEntries(COMMON_WORK_ACTIONS.map((action) => [
+    action,
+    typeof authority[action] === 'function'
+      && (!AUTHORITY_REREAD_ACTIONS.has(action) || typeof authority.reread === 'function'),
+  ])));
+
+  async function callRead(action, input = {}) {
+    if (!availability[action]) return safeBridgeFailure('action_unavailable');
+    return authority[action](input);
+  }
+
+  async function callWithAuthorityReread(action, input = {}) {
+    if (!availability[action] || typeof authority.reread !== 'function') return safeBridgeFailure('authority_reread_required');
+    if (containsReservedAuthorityInput(input)) return safeBridgeFailure('reserved_authority_input');
+    const handoff = input.handoff || input;
+    const validation = validateWorkHandoff(handoff);
+    if (!validation.ok) return { ok: false, code: 'invalid_handoff', errors: validation.errors };
+    let snapshot;
+    try {
+      snapshot = await authority.reread({ action, handoff: { ...handoff } });
+    } catch {
+      return safeBridgeFailure('authority_reread_failed');
+    }
+    if (!snapshot || snapshot.ok === false) return safeBridgeFailure(snapshot?.code || 'authority_reread_failed');
+    const canonical = canonicalHandoffFromAuthority(snapshot, handoff);
+    if (!canonical.ok) return canonical;
+    // The reread is a one-use gate. Never turn its lease, owner, or local
+    // workspace evidence into a transport payload or reusable authority.
+    const result = await authority[action]({ ...input, handoff: canonical.handoff });
+    if (!resultMatchesHandoff(result, canonical.handoff)) return safeBridgeFailure('authority_result_mismatch');
+    return result;
+  }
+
+  const bridge = {
+    version: COMMON_WORK_BRIDGE_VERSION,
+    availability,
+    resolve_work_record: (input) => callRead('resolve_work_record', input),
+    resolve_workspace: (input) => callRead('resolve_workspace', input),
+    get_status: (input = {}) => input.handoff
+      ? callWithAuthorityReread('get_status', input)
+      : callRead('get_status', input),
+    attach_or_resume: (input) => callWithAuthorityReread('attach_or_resume', input),
+    submit_judgment: (input) => callWithAuthorityReread('submit_judgment', input),
+    claim: (input) => callWithAuthorityReread('claim', input),
+    request_or_answer_approval: (input) => callWithAuthorityReread('request_or_answer_approval', input),
+    get_terminal_receipt: (input) => callWithAuthorityReread('get_terminal_receipt', input),
+  };
+  return Object.freeze(bridge);
 }
 
 function hasCodingExecutionAuthority(authorities = []) {
@@ -336,6 +500,8 @@ function createSessionHandoff(input = {}) {
 module.exports = {
   isSha256,
   CAPABILITY_PROFILE_VERSION,
+  COMMON_WORK_ACTIONS,
+  COMMON_WORK_BRIDGE_VERSION,
   CODING_EXECUTION_AUTHORITIES,
   DEFAULT_ROUTE_CAPABILITY_TTL_MS,
   DISPATCH_CONTRACT_VERSION,
@@ -343,10 +509,13 @@ module.exports = {
   LIFECYCLE_STATUSES,
   SESSION_HANDOFF_CONTRACT_VERSION,
   SOURCE_CLASSES,
+  WORK_HANDOFF_FIELDS,
   authorizeToolCall,
   buildEgressPacket,
+  createCommonWorkBridge,
   createLifecycleReceipt,
   createSessionHandoff,
+  createWorkHandoff,
   issueRouteCapability,
   redactDiagnostics,
   sanitizeChildEnvironment,
@@ -354,6 +523,7 @@ module.exports = {
   validateRouteCapability,
   canonicalRouteTuple,
   ROUTE_CAPABILITY_VERSION,
+  validateWorkHandoff,
   validateCapabilityProfile,
   validateDispatchRequest,
 };
