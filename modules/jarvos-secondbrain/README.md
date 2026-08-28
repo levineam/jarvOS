@@ -179,6 +179,11 @@ the canonical Obsidian adapter, and uses the note optimizer so durable notes
 enter the secondbrain stack. Lightweight `idea:` captures stay in the Journal
 Ideas section; substantive ideas become source-backed notes linked from Ideas.
 
+Host runtimes that intercept strict capture commands must follow the
+[hard-capture host-adapter contract](docs/contracts/HARD_CAPTURE_HOST_ADAPTERS.md):
+one public grammar, one receipt-derived response, and one native pre-model
+terminal owner.
+
 The canonical journal path is `Journal/YYYY-MM-DD.md`. Agents must not create
 guessed daily journal files under `Notes/`.
 
