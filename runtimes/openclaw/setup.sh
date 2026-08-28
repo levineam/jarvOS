@@ -27,9 +27,9 @@ if [ "${JARVOS_STEWARDSHIP_ONLY:-0}" = "1" ] || [ "${JARVOS_MANAGED_HARNESS_ROLL
     : "${JARVOS_STEWARDSHIP_STABLE_ROOT:?the stable stewardship bundle root is required}"
   fi
   OPENCLAW_CONFIG="${OPENCLAW_CONFIG:-${OPENCLAW_CONFIG_PATH:-$HOME/.openclaw/openclaw.json}}"
-  node - "$OPENCLAW_CONFIG" "${JARVOS_STEWARDSHIP_STABLE_ROOT:-}" "$JARVOS_MANAGED_HARNESS_STATE_ROOT/stewardship-bridge/openclaw-sessions" "${JARVOS_MANAGED_HARNESS_ROLLBACK:-0}" "${JARVOS_STAGED_PUBLIC_RUNTIME_ROOT:-}" "$REPO_ROOT/modules/jarvos-runtime-kit/src/openclaw-plugin-persistence.js" <<'NODE'
+  node - "$OPENCLAW_CONFIG" "${JARVOS_STEWARDSHIP_STABLE_ROOT:-}" "$JARVOS_MANAGED_HARNESS_STATE_ROOT/stewardship-bridge/openclaw-sessions" "${JARVOS_MANAGED_HARNESS_ROLLBACK:-0}" "${JARVOS_STAGED_PUBLIC_RUNTIME_ROOT:-}" "$REPO_ROOT/modules/jarvos-runtime-kit/src/openclaw-plugin-persistence.js" "${JARVOS_COMMON_WORK_SERVICE_MODULE:-}" <<'NODE'
 const fs = require('fs'); const os = require('os'); const path = require('path');
-const [configPath, stableRoot, mappingRoot, rollback, stagedRoot, runtimeKitPath] = process.argv.slice(2);
+const [configPath, stableRoot, mappingRoot, rollback, stagedRoot, runtimeKitPath, commonWorkServiceModule] = process.argv.slice(2);
 const pluginPath = stableRoot ? path.join(stableRoot, 'jarvos-openclaw-stewardship-plugin') : null;
 function trustedDirectory(value) {
   const stat = fs.lstatSync(value); const uid = typeof process.getuid === 'function' ? process.getuid() : null;
@@ -100,6 +100,10 @@ const requiredPluginFiles = ['package.json', 'openclaw.plugin.json', 'jarvos-nex
 if (rollback !== '1' && (!trustedDirectory(stableRoot) || !trustedDirectory(pluginPath) || !requiredPluginFiles.every((file) => trustedFile(path.join(pluginPath, file))))) {
   throw new Error('stable OpenClaw plugin is missing or unsafe');
 }
+const { trustedOwnerOnlyFile } = require(path.join(path.dirname(runtimeKitPath), 'common-work-service.js'));
+if (rollback !== '1' && commonWorkServiceModule && !trustedOwnerOnlyFile(commonWorkServiceModule)) {
+  throw new Error('common-work service module is missing or unsafe');
+}
 const prior = snapshot(configPath);
 const original = prior.exists ? prior.bytes.toString('utf8') : '{}\n';
 const config = JSON.parse(original || '{}');
@@ -112,6 +116,10 @@ const existingToolOwnership = stewardshipEntry?.config?.toolAllowAddedByJarvos;
 const toolAllowAddedByJarvos = typeof existingToolOwnership === 'boolean'
   ? existingToolOwnership
   : Array.isArray(tools?.allow) && !tools.allow.includes('jarvos_stewardship_answer');
+const existingCommonWorkToolOwnership = stewardshipEntry?.config?.commonWorkToolAllowAddedByJarvos;
+const commonWorkToolAllowAddedByJarvos = typeof existingCommonWorkToolOwnership === 'boolean'
+  ? existingCommonWorkToolOwnership
+  : Boolean(commonWorkServiceModule) && Array.isArray(tools?.allow) && !tools.allow.includes('jarvos_common_work');
 const existingAgentGrant = stewardshipEntry?.config?.agentToolGrantByJarvos;
 let agentToolGrantByJarvos = existingAgentGrant && typeof existingAgentGrant === 'object' ? existingAgentGrant : null;
 const ownedPluginPaths = pluginPath ? [pluginPath] : [];
@@ -131,6 +139,7 @@ if (rollback === '1') {
   if (ownsStewardshipEntry && Array.isArray(plugins.allow)) plugins.allow = plugins.allow.filter((value) => value !== 'jarvos-stewardship');
   if (ownsStewardshipEntry && plugins.entries && typeof plugins.entries === 'object') delete plugins.entries['jarvos-stewardship'];
   if (toolAllowAddedByJarvos && Array.isArray(tools?.allow)) tools.allow = tools.allow.filter((value) => value !== 'jarvos_stewardship_answer');
+  if (ownsStewardshipEntry && commonWorkToolAllowAddedByJarvos && Array.isArray(tools?.allow)) tools.allow = tools.allow.filter((value) => value !== 'jarvos_common_work');
   if (agentToolGrantByJarvos?.added === true) {
     const agent = targetAgent(false);
     if (agent?.tools && Array.isArray(agent.tools.alsoAllow)) agent.tools.alsoAllow = agent.tools.alsoAllow.filter((value) => value !== 'jarvos_stewardship_answer');
@@ -148,6 +157,7 @@ if (rollback === '1') {
   if (!plugins.load.paths.includes(pluginPath)) plugins.load.paths.push(pluginPath);
   if (Array.isArray(plugins.allow) && !plugins.allow.includes('jarvos-stewardship')) plugins.allow.push('jarvos-stewardship');
   if (Array.isArray(tools?.allow) && !tools.allow.includes('jarvos_stewardship_answer')) tools.allow.push('jarvos_stewardship_answer');
+  if (commonWorkServiceModule && Array.isArray(tools?.allow) && !tools.allow.includes('jarvos_common_work')) tools.allow.push('jarvos_common_work');
   const existingAgent = targetAgent(false);
   const effectiveProfile = existingAgent?.tools?.profile || tools?.profile;
   if (effectiveProfile && effectiveProfile !== 'full') {
@@ -162,7 +172,7 @@ if (rollback === '1') {
   }
   plugins.entries = plugins.entries && typeof plugins.entries === 'object' ? plugins.entries : {};
   const entry = plugins.entries['jarvos-stewardship'] || {};
-  plugins.entries['jarvos-stewardship'] = { ...entry, enabled: true, config: { ...(entry.config || {}), mappingRoot, toolAllowAddedByJarvos, ...(agentToolGrantByJarvos ? { agentToolGrantByJarvos } : {}) }, hooks: { ...(entry.hooks || {}), allowPromptInjection: true } };
+  plugins.entries['jarvos-stewardship'] = { ...entry, enabled: true, config: { ...(entry.config || {}), mappingRoot, toolAllowAddedByJarvos, ...(agentToolGrantByJarvos ? { agentToolGrantByJarvos } : {}), ...(commonWorkServiceModule ? { commonWorkServiceModule, commonWorkToolAllowAddedByJarvos } : {}) }, hooks: { ...(entry.hooks || {}), allowPromptInjection: true } };
 }
 const next = `${JSON.stringify(config, null, 2)}\n`;
 const nextBytes = Buffer.from(next, 'utf8');

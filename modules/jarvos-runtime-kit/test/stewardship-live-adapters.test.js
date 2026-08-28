@@ -818,11 +818,12 @@ test('OpenClaw and Hermes package bounded per-turn stewardship bridge artifacts 
   const manifest = JSON.parse(fs.readFileSync(path.join(ROOT, 'runtimes', 'openclaw', 'openclaw.plugin.json'), 'utf8'));
   const packageJson = JSON.parse(fs.readFileSync(path.join(ROOT, 'runtimes', 'openclaw', 'package.json'), 'utf8'));
   assert.equal(manifest.id, 'jarvos-stewardship');
-  assert.deepEqual(manifest.contracts, { tools: ['jarvos_stewardship_answer'] });
+  assert.deepEqual(manifest.contracts, { tools: ['jarvos_stewardship_answer', 'jarvos_common_work'] });
   assert.deepEqual(manifest.configSchema, {
     type: 'object', additionalProperties: false,
     properties: {
-      mappingRoot: { type: 'string', pattern: '^/' }, toolAllowAddedByJarvos: { type: 'boolean' },
+      mappingRoot: { type: 'string', pattern: '^/' }, commonWorkServiceModule: { type: 'string', pattern: '^/' },
+      toolAllowAddedByJarvos: { type: 'boolean' }, commonWorkToolAllowAddedByJarvos: { type: 'boolean' },
       agentToolGrantByJarvos: {
         type: 'object', additionalProperties: false,
         properties: {
@@ -877,7 +878,7 @@ test('OpenClaw and Hermes package bounded per-turn stewardship bridge artifacts 
     assert.match(registeredContext, /Choose a safe next step/);
     assert.doesNotMatch(registeredContext, new RegExp(temp.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
     assert.deepEqual(registrations[0][1]({ prompt: 'Continue', messages: [] }, { sessionKey: 'agent:other:explicit:session-42' }), {});
-    assert.equal(tools.length, 1); assert.equal(tools[0][1].name, 'jarvos_stewardship_answer');
+    assert.equal(tools.length, 2); assert.equal(tools[0][1].name, 'jarvos_stewardship_answer'); assert.equal(tools[1][1].name, 'jarvos_common_work');
     const answer = await tools[0][0]({ sessionKey }).execute('call-42', { correlation: 'judgment-42', choice: 'Wait' });
     assert.deepEqual(answer, { content: [{ type: 'text', text: 'Stewardship answer recorded.' }] });
     const rejected = await tools[0][0]({ sessionKey: 'agent:other:explicit:session-42' }).execute('call-43', { correlation: 'judgment-42', choice: 'Wait' });
@@ -1018,14 +1019,18 @@ test('OpenClaw stewardship-only setup preserves unrelated configuration and roll
   const config = path.join(temp, 'openclaw.json'); const staged = path.join(temp, 'stage'); const state = path.join(temp, 'state');
   try {
     const stable = prepareStableStewardshipBundle(temp);
+    const commonWorkService = path.join(temp, 'common-work-service.js');
+    fs.writeFileSync(commonWorkService, 'module.exports = () => ({ version: "jarvos-common-work-bridge.v1" });\n', { mode: 0o600 });
+    fs.chmodSync(commonWorkService, 0o600);
     fs.mkdirSync(path.join(staged, 'runtimes', 'openclaw'), { recursive: true });
     fs.writeFileSync(config, `${JSON.stringify({ plugins: { load: { paths: ['/user/jarvos-openclaw-stewardship-plugin', path.join(staged, 'runtimes', 'openclaw')] }, allow: ['unrelated'], entries: { unrelated: { enabled: true } } }, tools: { profile: 'coding', allow: ['read'] }, agents: { list: [{ id: 'main', tools: { alsoAllow: ['browser'] } }] }, unrelated: { keep: true } }, null, 2)}\n`);
     const fakeOpenClaw = prepareFakeOpenClaw(temp);
-    const env = { ...cleanEnv(), HOME: path.join(temp, 'home'), PATH: `${fakeOpenClaw}${path.delimiter}${process.env.PATH || ''}`, OPENCLAW_CONFIG: config, JARVOS_FAKE_OPENCLAW_PLUGIN_PATH: path.join(stable, 'jarvos-openclaw-stewardship-plugin'), JARVOS_STEWARDSHIP_ONLY: '1', JARVOS_MANAGED_REPOSITORIES: '/managed/repo', JARVOS_STAGED_PUBLIC_RUNTIME_ROOT: staged, JARVOS_STEWARDSHIP_STABLE_ROOT: stable, JARVOS_MANAGED_HARNESS_STATE_ROOT: state };
+    const env = { ...cleanEnv(), HOME: path.join(temp, 'home'), PATH: `${fakeOpenClaw}${path.delimiter}${process.env.PATH || ''}`, OPENCLAW_CONFIG: config, JARVOS_FAKE_OPENCLAW_PLUGIN_PATH: path.join(stable, 'jarvos-openclaw-stewardship-plugin'), JARVOS_STEWARDSHIP_ONLY: '1', JARVOS_MANAGED_REPOSITORIES: '/managed/repo', JARVOS_STAGED_PUBLIC_RUNTIME_ROOT: staged, JARVOS_STEWARDSHIP_STABLE_ROOT: stable, JARVOS_MANAGED_HARNESS_STATE_ROOT: state, JARVOS_COMMON_WORK_SERVICE_MODULE: commonWorkService };
     const script = path.join(ROOT, 'runtimes', 'openclaw', 'setup.sh');
     runSetup(script, env); const first = fs.readFileSync(config, 'utf8'); runSetup(script, env); assert.equal(fs.readFileSync(config, 'utf8'), first);
-    let parsed = JSON.parse(first); assert.deepEqual(parsed.plugins.load.paths, ['/user/jarvos-openclaw-stewardship-plugin', path.join(stable, 'jarvos-openclaw-stewardship-plugin')]); assert.equal(parsed.unrelated.keep, true); assert.equal(parsed.plugins.entries.unrelated.enabled, true); assert.equal(parsed.plugins.entries['jarvos-stewardship'].config.mappingRoot, path.join(state, 'stewardship-bridge', 'openclaw-sessions')); assert.deepEqual(parsed.tools.allow, ['read', 'jarvos_stewardship_answer']);
+    let parsed = JSON.parse(first); assert.deepEqual(parsed.plugins.load.paths, ['/user/jarvos-openclaw-stewardship-plugin', path.join(stable, 'jarvos-openclaw-stewardship-plugin')]); assert.equal(parsed.unrelated.keep, true); assert.equal(parsed.plugins.entries.unrelated.enabled, true); assert.equal(parsed.plugins.entries['jarvos-stewardship'].config.mappingRoot, path.join(state, 'stewardship-bridge', 'openclaw-sessions')); assert.equal(parsed.plugins.entries['jarvos-stewardship'].config.commonWorkServiceModule, commonWorkService); assert.deepEqual(parsed.tools.allow, ['read', 'jarvos_stewardship_answer', 'jarvos_common_work']);
     assert.equal(parsed.plugins.entries['jarvos-stewardship'].config.toolAllowAddedByJarvos, true);
+    assert.equal(parsed.plugins.entries['jarvos-stewardship'].config.commonWorkToolAllowAddedByJarvos, true);
     assert.deepEqual(parsed.agents.list[0].tools.alsoAllow, ['browser', 'jarvos_stewardship_answer']);
     assert.deepEqual(parsed.plugins.entries['jarvos-stewardship'].config.agentToolGrantByJarvos, { agentId: 'main', added: true, createdAgent: false, createdTools: false, createdAlsoAllow: false });
     const pluginSchema = JSON.parse(fs.readFileSync(path.join(ROOT, 'runtimes', 'openclaw', 'openclaw.plugin.json'), 'utf8')).configSchema;
@@ -1050,6 +1055,22 @@ test('OpenClaw rollback preserves a stewardship tool grant that predated jarvOS 
     fs.rmSync(stable, { recursive: true, force: true });
     runSetup(script, { ...env, JARVOS_MANAGED_HARNESS_ROLLBACK: '1' });
     const rolledBack = JSON.parse(fs.readFileSync(config, 'utf8')); assert.deepEqual(rolledBack.tools.allow, ['read', 'jarvos_stewardship_answer']); assert.deepEqual(rolledBack.agents.list[0].tools.alsoAllow, ['jarvos_stewardship_answer']);
+  } finally { fs.rmSync(temp, { recursive: true, force: true }); }
+});
+
+test('OpenClaw rollback preserves common-work permission owned by a foreign stewardship entry', () => {
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-openclaw-stewardship-foreign-common-work-'));
+  const config = path.join(temp, 'openclaw.json'); const state = path.join(temp, 'state');
+  try {
+    fs.writeFileSync(config, `${JSON.stringify({
+      plugins: { entries: { 'jarvos-stewardship': { enabled: true, config: { mappingRoot: '/foreign/mapping', commonWorkToolAllowAddedByJarvos: true } } } },
+      tools: { allow: ['read', 'jarvos_common_work'] },
+    }, null, 2)}\n`);
+    const env = { ...cleanEnv(), HOME: path.join(temp, 'home'), OPENCLAW_CONFIG: config, JARVOS_STEWARDSHIP_ONLY: '1', JARVOS_MANAGED_HARNESS_ROLLBACK: '1', JARVOS_MANAGED_HARNESS_STATE_ROOT: state };
+    runSetup(path.join(ROOT, 'runtimes', 'openclaw', 'setup.sh'), env);
+    const rolledBack = JSON.parse(fs.readFileSync(config, 'utf8'));
+    assert.deepEqual(rolledBack.tools.allow, ['read', 'jarvos_common_work']);
+    assert.equal(rolledBack.plugins.entries['jarvos-stewardship'].config.mappingRoot, '/foreign/mapping');
   } finally { fs.rmSync(temp, { recursive: true, force: true }); }
 });
 

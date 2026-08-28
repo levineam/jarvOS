@@ -25,10 +25,16 @@ const {
   synthesizeRecall,
   writeSessionThread,
 } = require('../src/index.js');
+const {
+  COMMON_WORK_ACTIONS,
+} = require('../../jarvos-runtime-kit/src/harness-dispatch.js');
+const { invokeCommonWork } = require('../../jarvos-runtime-kit/src/common-work-service.js');
 
 const CREDENTIAL_ENV = 'JARVOS_CONTROL_PLANE_CREDENTIAL';
 const CREDENTIAL_FILE_ENV = 'JARVOS_CONTROL_PLANE_CREDENTIAL_FILE';
 const SHARED_SKILLS_CONFIG_ENV = 'JARVOS_SHARED_SKILLS_CONFIG_PATH';
+const COMMON_WORK_SERVICE_MODULE_ENV = 'JARVOS_COMMON_WORK_SERVICE_MODULE';
+const COMMON_WORK_HARNESS_ENV = 'JARVOS_COMMON_WORK_HARNESS';
 const STRICT_EMPTY_ARGUMENT_TOOLS = new Set([
   'jarvos_journal_health',
   'jarvos_ensure_today_journal',
@@ -117,6 +123,17 @@ function selectedWorkspaceRoot(env = process.env) {
 }
 
 const TOOLS = [
+  {
+    name: 'jarvos_common_work',
+    description: 'Call one host-bound canonical common-work action. The installed harness and host service are fixed by setup; callers may provide only ordinary action input.',
+    inputSchema: {
+      type: 'object', additionalProperties: false, required: ['action', 'input'],
+      properties: {
+        action: { type: 'string', enum: COMMON_WORK_ACTIONS },
+        input: { type: 'object' },
+      },
+    },
+  },
   {
     name: 'jarvos_todo_create',
     description: 'Create one canonically linked Beads-backed Todo through the host-authorized work-action service. Agent-discovered work must be submitted as a proposal by the host.',
@@ -352,6 +369,7 @@ const TOOLS = [
 
 const WORK_ACTION_HOST_UNAVAILABLE = 'Todo work-action host binding is unavailable. Set JARVOS_WORK_ACTION_SERVICE_MODULE to an absolute owner-only host service module and JARVOS_PROJECTS_CONTEXT_CONFIG to an absolute trusted Projects context config whose workspaceRoot contains that module.';
 const WORK_ACTION_HOST_REFUSED = 'Todo work-action host binding was refused. JARVOS_WORK_ACTION_SERVICE_MODULE must be an owner-only regular file contained under the workspaceRoot selected by JARVOS_PROJECTS_CONTEXT_CONFIG.';
+const COMMON_WORK_HOST_UNAVAILABLE = 'Common-work host binding is unavailable. Setup must bind JARVOS_COMMON_WORK_SERVICE_MODULE and a fixed JARVOS_COMMON_WORK_HARNESS.';
 
 function envBinding(name, env = process.env) {
   const value = env[name];
@@ -407,6 +425,14 @@ async function todoAction(name, args) {
   }
   if (args.action === 'reopen') return textResult(JSON.stringify(await service.reopen(request), null, 2));
   return textResult('Unsupported Todo transition action', true);
+}
+
+async function commonWorkAction(args) {
+  const harness = envBinding(COMMON_WORK_HARNESS_ENV);
+  const serviceModule = envBinding(COMMON_WORK_SERVICE_MODULE_ENV);
+  if (!harness || !serviceModule) return textResult(COMMON_WORK_HOST_UNAVAILABLE, true);
+  const result = await invokeCommonWork({ serviceModule, harness, action: args.action, input: args.input });
+  return textResult(JSON.stringify(result, null, 2), result?.ok === false);
 }
 
 function setMcpProjectsContextProvider(provider) {
@@ -576,6 +602,7 @@ function redactSharedSkillMutation(result, opaqueSkillId) {
 
 async function callTool(name, args = {}) {
   args = normalizeToolArguments(name, args);
+  if (name === 'jarvos_common_work') return commonWorkAction(args);
   if (['jarvos_todo_create', 'jarvos_todo_list', 'jarvos_todo_show', 'jarvos_todo_transition'].includes(name)) return todoAction(name, args);
   if (name === 'jarvos_journal_health') {
     requireEmptyObjectArguments(args);
@@ -852,7 +879,7 @@ if (require.main === module) {
   });
 }
 
-module.exports = { TOOLS, callTool, handle, setMcpProjectsContextProvider, textResult, loadHostWorkActionService };
+module.exports = { TOOLS, callTool, handle, setMcpProjectsContextProvider, textResult, loadHostWorkActionService, commonWorkAction };
 module.exports.WORK_ACTION_HOST_UNAVAILABLE = WORK_ACTION_HOST_UNAVAILABLE;
 module.exports.WORK_ACTION_HOST_REFUSED = WORK_ACTION_HOST_REFUSED;
 module.exports.BOOT_JARVOS_PROMPT_TEXT = BOOT_JARVOS_PROMPT_TEXT;
@@ -865,3 +892,4 @@ module.exports.readCredentialFile = readCredentialFile;
 module.exports.requireEmptyObjectArguments = requireEmptyObjectArguments;
 module.exports.CREDENTIAL_ENV = CREDENTIAL_ENV;
 module.exports.CREDENTIAL_FILE_ENV = CREDENTIAL_FILE_ENV;
+module.exports.COMMON_WORK_HOST_UNAVAILABLE = COMMON_WORK_HOST_UNAVAILABLE;

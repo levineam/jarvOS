@@ -32,8 +32,9 @@ const AUTHORITY_REREAD_ACTIONS = new Set([
 ]);
 const WORK_HANDOFF_FIELDS = Object.freeze(['workId', 'workspaceId', 'headOid']);
 const RESERVED_AUTHORITY_INPUT_FIELDS = new Set([
-  'authority', 'authoritySnapshot', 'lease', 'mutationAllowed', 'ownerLease',
-  'privateSnapshot', 'safeRecoveryAction', 'workRecord', 'workspace',
+  'authority', 'authoritySnapshot', 'harness', 'harnessId', 'lease', 'mutationAllowed',
+  'ownerLease', 'privateSnapshot', 'safeRecoveryAction', 'serviceModule',
+  'serviceModulePath', 'workRecord', 'workspace',
 ]);
 
 function isObject(value) {
@@ -513,6 +514,7 @@ module.exports = {
   authorizeToolCall,
   buildEgressPacket,
   createCommonWorkBridge,
+  containsReservedAuthorityInput,
   createLifecycleReceipt,
   createSessionHandoff,
   createWorkHandoff,
