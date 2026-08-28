@@ -729,7 +729,7 @@ test('hooks and plugins remain fail-open lifecycle bridges without activation au
     assert.equal(source.includes('evaluateManagedActivation'), false, relative);
     assert.equal(source.includes('dogfood-managed-activation'), false, relative);
     assert.equal(source.includes('activation-status'), false, relative);
-    assert.match(source, /fail open|process\.exit\(0\)|return \{\}|: \{\}|writeJson\(\{\}\)/i);
+    assert.match(source, /fail open|continues without injected context|process\.exit\(0\)|return null|return \{\}|: \{\}|writeJson\(\{\}\)/i);
   }
 
   // Hermes/OpenClaw stay bounded to turn bridge only.

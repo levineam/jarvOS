@@ -170,7 +170,7 @@
     },
     "bridge": {
       "environment": "JARVOS_STEWARDSHIP_BRIDGE_COMMAND",
-      "contract": "An executable on PATH accepts one lifecycle capability name and emits a public-safe JSON availability receipt."
+      "contract": "The selected bridge executable accepts one capability name. Native pre-LLM refresh invokes projectsContextRefresh once with a hard 250ms deadline and injects only a validated jarvos.projects-context-refresh/v1 refreshed or partial envelope."
     },
     "capabilities": {
       "startOrResume": { "mode": "managed-launcher" },
@@ -178,6 +178,7 @@
       "checkpoint": { "mode": "managed-launcher", "state": "stable-idle" },
       "stop": { "mode": "managed-launcher" },
       "nextTurnInput": { "mode": "native-hook", "event": "pre_llm_call", "script": "jarvos-hermes-pre-llm-hook.js", "reason": "The stable shell is recorded in Hermes's exact allowlist with its immutable mtime." },
+      "projectsContextRefresh": { "mode": "native-hook", "event": "pre_llm_call", "script": "jarvos-hermes-pre-llm-hook.js", "timeoutMs": 250, "contract": "jarvos.projects-context-refresh/v1" },
       "availability": { "mode": "managed-launcher" }
     }
   },

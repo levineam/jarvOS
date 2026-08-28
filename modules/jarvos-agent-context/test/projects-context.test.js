@@ -8,6 +8,7 @@ const test = require('node:test');
 
 const {
   PROJECTS_CONTEXT_CONTRACT,
+  HYDRATION_PROJECTS_PROVIDER,
   hydrate,
   proposeProjectsContext,
   readProjectsContext,
@@ -254,13 +255,97 @@ test('Codex and Claude startup use the orientation packet with the library and M
     const library = await readProjectsContext({ provider, profile: 'orientation' }, true);
     const mcp = JSON.parse((await callTool('jarvos_projects_context', { profile: 'orientation' })).content[0].text);
     const [codex, claude] = await Promise.all([codexStartupHydration(), claudeStartupHydration()]);
+    const recordCount = library.packet.canonical.records.length;
     assert.equal(library.fingerprint, mcp.fingerprint);
+    assert.equal(mcp.packet.canonical.records.length, recordCount);
     assert.match(codex, new RegExp(`Fingerprint: ${library.fingerprint}`));
     assert.match(claude, new RegExp(`Fingerprint: ${library.fingerprint}`));
+    // AE1/R1: every consumer reports the same canonical record count from the
+    // one selected binding, not just a matching fingerprint.
+    assert.match(codex, new RegExp(`\\(${recordCount} records\\)`));
+    assert.match(claude, new RegExp(`\\(${recordCount} records\\)`));
     assert.doesNotMatch(codex, /Paperclip Current Work/);
     assert.doesNotMatch(claude, /Paperclip Current Work/);
   } finally {
     setProjectsContextProvider(null);
+    setMcpProjectsContextProvider(null);
+  }
+});
+
+test('a long-running MCP-injected provider can signal a precise unavailable classification (e.g. tuple-mismatched) without leaking diagnostics, while the per-invocation host binding flattens custom codes to the same generic classification', async () => {
+  const mismatched = {
+    read: async () => ({
+      status: 'unavailable',
+      code: 'tuple-mismatched',
+      reason: 'bound generation no longer matches the selected runtime tuple; restart required',
+    }),
+  };
+
+  // The private managed-harness MCP entrypoint injects a live, already-vetted
+  // provider directly (setMcpProjectsContextProvider / setProjectsContextProvider).
+  // That in-process channel is trusted, so its classification code is not
+  // flattened -- this is the seam a long-running MCP client uses to report
+  // R2's tuple-mismatched state on its next probe without any host restart.
+  setMcpProjectsContextProvider(mismatched);
+  try {
+    const library = await readProjectsContext({ provider: mismatched }, true);
+    assert.equal(library.status, 'unavailable');
+    assert.equal(library.code, 'tuple-mismatched');
+    assert.equal(library.packet, null);
+    // The trusted, private-authored classification reason is a curated
+    // consumer-facing fact (not a raw diagnostic), so it is not scrubbed.
+    assert.match(library.reason, /selected runtime tuple/);
+
+    const mcpPayload = JSON.parse((await callTool('jarvos_projects_context', {})).content[0].text);
+    assert.equal(mcpPayload.status, 'unavailable');
+    assert.equal(mcpPayload.code, 'tuple-mismatched');
+
+    const hydrated = await hydrate({ sessionThread: false, maxChars: 3000, [HYDRATION_PROJECTS_PROVIDER]: mismatched });
+    assert.equal(hydrated.report.projectsContext.status, 'unavailable');
+    assert.equal(hydrated.report.projectsContext.code, 'tuple-mismatched');
+    assert.match(hydrated.markdown, /selected runtime tuple/);
+  } finally {
+    setMcpProjectsContextProvider(null);
+  }
+
+  // The per-invocation host binding (env/config resolved provider module) is
+  // untrusted arbitrary code, so R5's non-enumerating boundary intentionally
+  // flattens any code/reason it returns to the same generic classification
+  // rather than passing through provider-authored diagnostics.
+  setMcpProjectsContextProvider(null);
+  await withHostProjectsProvider(async ({ config }) => {
+    const bound = JSON.parse(fs.readFileSync(config, 'utf8'));
+    fs.writeFileSync(bound.providerModule, "module.exports.read = async () => ({ status: 'unavailable', code: 'tuple-mismatched', reason: 'host provider path leaked here' });\n");
+    delete require.cache[require.resolve(bound.providerModule)];
+    const hostResult = await readProjectsContext({ query: QUERY });
+    assert.equal(hostResult.status, 'unavailable');
+    assert.equal(hostResult.code, 'PROJECTS_PROVIDER_UNAVAILABLE');
+    assert.doesNotMatch(hostResult.reason, /leaked/);
+  });
+});
+
+test('the host-only session-focus profile is never MCP-callable, while the internal readProjectsContext path stays bounded and healthy', async () => {
+  const provider = { defaultQuery: QUERY, read: async ({ query }) => ({ status: 'ok', packet: { ...packet(), query } }) };
+  setMcpProjectsContextProvider(provider);
+  try {
+    const mcpResult = JSON.parse((await callTool('jarvos_projects_context', { profile: 'session-focus' })).content[0].text);
+    assert.equal(mcpResult.status, 'unavailable');
+    assert.equal(mcpResult.code, 'PROJECTS_QUERY_UNAVAILABLE');
+    assert.equal(mcpResult.packet, null);
+
+    // The internal library path, host-authorized with a session-focus
+    // profile and an already-resolved scope, still succeeds -- MCP callers
+    // are rejected before the provider is ever reached, not the profile
+    // itself.
+    const libraryResult = await readProjectsContext({
+      provider,
+      profile: 'session-focus',
+      scope: { projectIds: ['prj_000001'], outcomeIds: [], includeDescendants: true },
+    }, true);
+    assert.equal(libraryResult.status, 'ok');
+    assert.equal(libraryResult.profile.name, 'session-focus');
+    assert.deepEqual(libraryResult.packet.query.include, ['hierarchy']);
+  } finally {
     setMcpProjectsContextProvider(null);
   }
 });
@@ -413,6 +498,29 @@ test('hydration cutover removes raw Paperclip and Journal project orientation', 
     assert.doesNotMatch(result.markdown, /Paperclip Current Work|jarvOS v1\.0\.0 release/);
     assert.match(result.markdown, /Worked on the release reconciler/);
     assert.match(result.markdown, /legacy project\/task orientation disabled/);
+    assert.match(result.markdown, /Journal Projects section omitted/);
+  });
+  setProjectsContextProvider(null);
+});
+
+test('hydrate({ projectsContext: false }) skips the Projects packet read/build but still strips the Journal Projects section', async () => {
+  const provider = {
+    defaultQuery: QUERY,
+    read: async () => { throw new Error('Projects provider must not be read when projectsContext is disabled'); },
+  };
+  setProjectsContextProvider(provider);
+  await withTempContextEnv(async () => {
+    const dateParts = Object.fromEntries(new Intl.DateTimeFormat('en-US', {
+      timeZone: 'UTC', year: 'numeric', month: '2-digit', day: '2-digit',
+    }).formatToParts(new Date()).map((part) => [part.type, part.value]));
+    const date = `${dateParts.year}-${dateParts.month}-${dateParts.day}`;
+    fs.writeFileSync(path.join(process.env.JARVOS_JOURNAL_DIR, `${date}.md`), [
+      '# Journal', '', '## 🚀 Projects', '', '- [[jarvOS v1.0.0 release]]', '', '## Notes', '', 'Worked on the release reconciler.',
+    ].join('\n'));
+    const result = await hydrate({ sessionThread: false, maxChars: 5000, projectsContext: false });
+    assert.equal(result.report.projectsContext.status, 'disabled');
+    assert.doesNotMatch(result.markdown, /## Projects Context|jarvOS v1\.0\.0 release/);
+    assert.match(result.markdown, /Worked on the release reconciler/);
     assert.match(result.markdown, /Journal Projects section omitted/);
   });
   setProjectsContextProvider(null);
