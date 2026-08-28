@@ -12,8 +12,17 @@ const ASSISTANT_ACTION_CLAIM = /\b(?:I|we|the (?:assistant|system|bot)|Jarvis)\s
 const DANGLING_SUBJECT = /^(?:that|this|it|those|these)\b/i;
 const ANAPHORIC_QUESTION_SUBJECT = /^(?:is|are|was|were|does|do|did|would|could|should|can|will|has|have|had)\s+(?:that|this|it|those|these)\b/i;
 const NARRATIVE_TYPES = Object.freeze(new Set(['source_backed_observation', 'cross_project_connection']));
+const CLOSING_TYPOGRAPHY = /[”’"')\]»›』】]+$/;
 
 function reject(reasonCode) { return { ok: false, reasonCode }; }
+
+// A claim may end with sentence punctuation followed by closing quotation or
+// bracket typography (e.g. `clearer.”`); the punctuation just has to be the
+// last non-typographic character.
+function hasNarrativeClaimTerminalPunctuation(text) {
+  const core = text.replace(CLOSING_TYPOGRAPHY, '');
+  return core.length > 0 && /[.!。！]$/.test(core);
+}
 
 function validateSegment(row, { eligibleSourceIds = new Set() } = {}) {
   if (!row || typeof row !== 'object' || Array.isArray(row)) return reject('not_an_object');
@@ -93,7 +102,7 @@ function validateNarrativeRow(row, { eligibleSourceIds = new Set(), question = f
   if (question) {
     if (!/[?？]$/.test(text) || (text.match(/[?？]/g) || []).length !== 1) return reject('closing_question_invalid');
     if (ANAPHORIC_QUESTION_SUBJECT.test(text)) return reject('subject_not_named');
-  } else if (/[?？]/.test(text) || !/[.!。！]$/.test(text)) {
+  } else if (/[?？]/.test(text) || !hasNarrativeClaimTerminalPunctuation(text)) {
     return reject('narrative_claim_invalid');
   }
   return { ok: true, value: question ? { id, text, sourceRefs: refs } : { id, type, text, sourceRefs: refs } };
