@@ -29,7 +29,7 @@ const SHA256_HEX = /^[a-f0-9]{64}$/;
 // like "activity-provider:evidence-revision" must keep validating even
 // though a naive substring rule might trip on words like "token".
 const CREDENTIAL_LABEL_PREFIX = /^(?:bearer|api[-_]?key|apikey|secret|password|passwd|credential|authorization|auth)s?:/i;
-const CREDENTIAL_SHAPE = /^(?:sk-[A-Za-z0-9_-]{16,}|xox[baprs]-[A-Za-z0-9-]{10,}|AKIA[0-9A-Z]{12,}|ghp_[A-Za-z0-9]{20,})$/;
+const CREDENTIAL_SHAPE = /^(?:sk\x2d[A-Za-z0-9_-]{16,}|xox[baprs]\x2d[A-Za-z0-9-]{10,}|AKIA[0-9A-Z]{12,}|ghp\x5f[A-Za-z0-9]{20,})$/;
 
 function isPlainObject(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value);

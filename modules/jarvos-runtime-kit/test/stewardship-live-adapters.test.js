@@ -69,7 +69,9 @@ test('checked-in runtime adapters expose one opt-in stewardship lifecycle contra
       assert.match(declaration.bridge.contract, /2-3 choices/);
       assert.match(declaration.bridge.contract, /without granting authority/);
     }
-    assert.deepEqual(Object.keys(declaration.capabilities).sort(), [...CAPABILITIES].sort());
+    const expectedCapabilities = ['hermes', 'openclaw'].includes(runtime)
+      ? [...CAPABILITIES, 'projectsContextRefresh'] : CAPABILITIES;
+    assert.deepEqual(Object.keys(declaration.capabilities).sort(), [...expectedCapabilities].sort());
     assert.equal(declaration.bridge.environment, 'JARVOS_STEWARDSHIP_BRIDGE_COMMAND');
     for (const capability of CAPABILITIES) {
       assert.ok(['native-hook', 'managed-launcher'].includes(declaration.capabilities[capability].mode));
@@ -828,8 +830,11 @@ test('OpenClaw and Hermes package bounded per-turn stewardship bridge artifacts 
     assert.match(hermesContext, /authorizes only recording that preference through the bridge/);
     assert.doesNotMatch(hermesContext, /display-only/);
     const mappings = path.join(temp, 'mappings'); fs.mkdirSync(mappings);
+    const contextFile = path.join(temp, 'context.json');
+    fs.writeFileSync(contextFile, '{}\n', { mode: 0o600 });
+    fs.chmodSync(contextFile, 0o600);
     const sessionKey = 'agent:main:explicit:session-42';
-    fs.writeFileSync(path.join(mappings, `${createHash('sha256').update(sessionKey).digest('hex')}.json`), `${JSON.stringify({ schemaVersion: 1, contextFile: path.join(temp, 'context.json'), bridgeExecutable: bridge })}\n`, { mode: 0o600 });
+    fs.writeFileSync(path.join(mappings, `${createHash('sha256').update(sessionKey).digest('hex')}.json`), `${JSON.stringify({ schemaVersion: 1, contextFile, bridgeExecutable: bridge })}\n`, { mode: 0o600 });
     fs.chmodSync(path.join(mappings, `${createHash('sha256').update(sessionKey).digest('hex')}.json`), 0o600);
     const plugin = require(path.join(ROOT, 'runtimes', 'openclaw', 'jarvos-next-turn-plugin.js'));
     // OpenClaw 2026.7.1 places the session identity on the typed hook
