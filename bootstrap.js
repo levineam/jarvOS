@@ -42,8 +42,25 @@ function expandHome(p) {
 
 // ─── Dependency checks ──────────────────────────────────────────────────────
 
+function trustedCommandEnv() {
+  const systemRoot = process.env.SystemRoot || process.env.WINDIR;
+  const commandDirs = process.platform === 'win32'
+    ? [path.dirname(process.execPath), systemRoot && path.join(systemRoot, 'System32')]
+    : [path.dirname(process.execPath), '/usr/local/bin', '/usr/bin', '/bin', '/usr/sbin', '/sbin'];
+  const env = { ...process.env };
+
+  // npm exec prepends workspace-local node_modules/.bin directories to PATH.
+  // Use only installation and OS command directories when probing executables.
+  for (const key of Object.keys(env)) {
+    if (key.toLowerCase() === 'path') delete env[key];
+  }
+  env.PATH = [...new Set(commandDirs.filter(Boolean))].join(path.delimiter);
+  return env;
+}
+
 function checkDeps() {
   hdr('1/5  Checking dependencies');
+  const commandOptions = { encoding: 'utf8', env: trustedCommandEnv() };
 
   const checks = [
     {
@@ -61,18 +78,18 @@ function checkDeps() {
     {
       name: 'OpenClaw CLI (openclaw)',
       test: () => {
-        const r = spawnSync('openclaw', ['--version'], { encoding: 'utf8' });
+        const r = spawnSync('openclaw', ['--version'], commandOptions);
         return r.status === 0;
       },
       hint: 'Install with: npm install -g openclaw  (see https://openclaw.ai)'
     },
     {
       name: 'git',
-      test: () => spawnSync('git', ['--version'], { encoding: 'utf8' }).status === 0
+      test: () => spawnSync('git', ['--version'], commandOptions).status === 0
     },
     {
       name: 'npx',
-      test: () => spawnSync('npx', ['--version'], { encoding: 'utf8' }).status === 0
+      test: () => spawnSync('npx', ['--version'], commandOptions).status === 0
     }
   ];
 
