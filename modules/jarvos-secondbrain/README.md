@@ -113,8 +113,10 @@ jarvos sync \
 Rerun without `--dry-run` to create the config. The command validates that the
 vault contains `Notes/`, `Journal/`, and `Tags/`, then writes a
 `jarvos.config.json` whose shared paths all point at the existing vault. It
-never writes inside the vault and refuses to replace a different existing
-config. After that, any harness using `resolveConfig()` reads and writes through
+never writes inside the vault, rejects symlinked config targets, and refuses to
+replace a different existing config. A compatible existing config lets
+`jarvos sync --workspace "$PWD" --dry-run` reuse its configured vault, name, and
+timezone without repeating those flags. After that, any harness using `resolveConfig()` reads and writes through
 the same Journal, Notes, and Tags surfaces as the configured host. Run
 `jarvos doctor --profile minimal --workspace "$PWD"` afterward; a successful
 config handoff does not by itself claim the rest of the harness is installed.

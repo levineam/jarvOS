@@ -13,7 +13,12 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-const { DEFAULT_TIMEZONE, DEFAULT_USER_NAME, expandTilde } = require('./resolve-config');
+const {
+  DEFAULT_TIMEZONE,
+  DEFAULT_USER_NAME,
+  expandTilde,
+  isValidTimezone,
+} = require('./resolve-config');
 
 const DEFAULT_VAULT_CANDIDATES = [
   path.join('~', 'Vaults', 'Vault v3'),
@@ -63,6 +68,10 @@ function buildSharedVaultConfig({
   }
 
   const resolvedWorkspace = asAbsolutePath(workspaceRoot || path.join(homeDir, 'clawd'), homeDir);
+  const timezone = user.timezone || DEFAULT_TIMEZONE;
+  if (!isValidTimezone(timezone)) {
+    throw new Error('A valid IANA timezone is required (for example, America/New_York or UTC)');
+  }
 
   return {
     $schema: 'https://raw.githubusercontent.com/levineam/jarvOS/main/jarvos.config.schema.json',
@@ -79,7 +88,7 @@ function buildSharedVaultConfig({
     },
     user: {
       name: user.name || DEFAULT_USER_NAME,
-      timezone: user.timezone || DEFAULT_TIMEZONE,
+      timezone,
     },
   };
 }
@@ -116,13 +125,83 @@ function isCompatibleSharedVaultConfig(existing, expected, homeDir = os.homedir(
     && existingTimezone === expected.user.timezone;
 }
 
-function assessSharedVaultConfigTarget({ configPath, config, homeDir = os.homedir() } = {}) {
-  const target = asAbsolutePath(configPath || path.join(process.cwd(), 'jarvos.config.json'), homeDir);
-  if (!fs.existsSync(target)) return { action: 'create', configPath: target };
+function isSameOrDescendant(parentPath, candidatePath) {
+  const parent = path.resolve(parentPath);
+  const candidate = path.resolve(candidatePath);
+  return candidate === parent || candidate.startsWith(`${parent}${path.sep}`);
+}
 
-  const targetStat = fs.lstatSync(target);
-  if (targetStat.isSymbolicLink()) {
-    throw new Error(`Refusing to write through a symlinked config path: ${target}`);
+function assertNoSymlinkedConfigPathComponents(target) {
+  const parsed = path.parse(target);
+  const components = target.slice(parsed.root.length).split(path.sep).filter(Boolean);
+  let current = parsed.root;
+  let missingAncestor = false;
+
+  for (const component of components) {
+    current = path.join(current, component);
+    if (missingAncestor) continue;
+    try {
+      const stat = fs.lstatSync(current);
+      if (stat.isSymbolicLink()) {
+        throw new Error(`Refusing to write through a symlinked config path: ${current}`);
+      }
+    } catch (error) {
+      if (error.code === 'ENOENT') {
+        missingAncestor = true;
+        continue;
+      }
+      throw error;
+    }
+  }
+}
+
+function canonicalizePathWithMissingTail(target) {
+  let existing = target;
+  const missingTail = [];
+  for (;;) {
+    try {
+      return path.join(fs.realpathSync(existing), ...missingTail);
+    } catch (error) {
+      if (error.code !== 'ENOENT') throw error;
+      const parent = path.dirname(existing);
+      if (parent === existing) throw error;
+      missingTail.unshift(path.basename(existing));
+      existing = parent;
+    }
+  }
+}
+
+function assertConfigTargetOutsideVault(target, vaultDir, homeDir) {
+  const vault = asAbsolutePath(vaultDir, homeDir);
+  if (!vault) return;
+
+  let canonicalVault;
+  try {
+    canonicalVault = fs.realpathSync(vault);
+  } catch (error) {
+    throw new Error(`Refusing to use an unreadable existing vault: ${vault} (${error.message})`);
+  }
+  let canonicalTarget;
+  try {
+    canonicalTarget = canonicalizePathWithMissingTail(target);
+  } catch (error) {
+    throw new Error(`Refusing to inspect an unreadable config path: ${target} (${error.message})`);
+  }
+  if (isSameOrDescendant(canonicalVault, canonicalTarget)) {
+    throw new Error(`Refusing to place jarvos.config.json inside the shared vault: ${target}`);
+  }
+}
+
+function readSharedVaultConfigTarget({ configPath, homeDir = os.homedir() } = {}) {
+  const target = asAbsolutePath(configPath || path.join(process.cwd(), 'jarvos.config.json'), homeDir);
+  assertNoSymlinkedConfigPathComponents(target);
+
+  let targetStat;
+  try {
+    targetStat = fs.lstatSync(target);
+  } catch (error) {
+    if (error.code === 'ENOENT') return { configPath: target, config: null };
+    throw new Error(`Refusing to inspect an unreadable config path: ${target} (${error.message})`);
   }
   let existing;
   try {
@@ -130,8 +209,18 @@ function assessSharedVaultConfigTarget({ configPath, config, homeDir = os.homedi
   } catch (error) {
     throw new Error(`Refusing to overwrite an unreadable existing config: ${target} (${error.message})`);
   }
+  return { configPath: target, config: existing, targetStat };
+}
+
+function assessSharedVaultConfigTarget({ configPath, config, vaultDir, homeDir = os.homedir() } = {}) {
+  const targetState = readSharedVaultConfigTarget({ configPath, homeDir });
+  const target = targetState.configPath;
+  const configuredVault = vaultDir || config?.paths?.vault || config?.vaultPath;
+  assertConfigTargetOutsideVault(target, configuredVault, homeDir);
+  if (!targetState.config) return { action: 'create', configPath: target };
+
   return {
-    action: isCompatibleSharedVaultConfig(existing, config, homeDir) ? 'already-synced' : 'conflict',
+    action: isCompatibleSharedVaultConfig(targetState.config, config, homeDir) ? 'already-synced' : 'conflict',
     configPath: target,
   };
 }
@@ -145,7 +234,7 @@ function writeSharedVaultConfig({
 } = {}) {
   const target = asAbsolutePath(configPath || path.join(process.cwd(), 'jarvos.config.json'), homeDir);
   const config = buildSharedVaultConfig({ vaultDir, workspaceRoot, homeDir, user });
-  const assessment = assessSharedVaultConfigTarget({ configPath: target, config, homeDir });
+  const assessment = assessSharedVaultConfigTarget({ configPath: target, config, vaultDir, homeDir });
   if (assessment.action === 'already-synced') {
     return { configPath: target, config, changed: false };
   }
@@ -213,7 +302,13 @@ function main(argv = process.argv.slice(2)) {
   const vaultDir = options.vaultDir || discoverExistingVault({ homeDir });
   if (options.dryRun) {
     const config = buildSharedVaultConfig({ ...options, vaultDir, homeDir });
-    console.log(JSON.stringify({ ok: true, action: 'dry-run', paths: config.paths }, null, 2));
+    const assessment = assessSharedVaultConfigTarget({
+      configPath: options.configPath,
+      config,
+      vaultDir,
+      homeDir,
+    });
+    console.log(JSON.stringify({ ok: true, action: 'dry-run', targetAction: assessment.action, paths: config.paths }, null, 2));
     return { ok: true, config };
   }
 
@@ -245,5 +340,6 @@ module.exports = {
   discoverExistingVault,
   hasSharedVaultShape,
   isCompatibleSharedVaultConfig,
+  readSharedVaultConfigTarget,
   writeSharedVaultConfig,
 };

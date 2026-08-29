@@ -19,7 +19,7 @@ function run(args, options = {}) {
   });
 }
 
-const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-cli-'));
+const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-cli-')));
 try {
   const workspace = path.join(tmp, 'workspace');
   const vault = path.join(tmp, 'vault');
@@ -125,6 +125,57 @@ try {
   assert.equal(JSON.parse(syncDryRun.stdout).vaultWrites, false);
   assert.equal(fs.existsSync(syncConfigPath), false, 'sync dry-run must not create the config or workspace');
 
+  const vaultWorkspace = run([
+    'sync',
+    '--workspace', syncVault,
+    '--vault', syncVault,
+    '--name', 'TestUser',
+    '--timezone', 'UTC',
+  ]);
+  assert.notEqual(vaultWorkspace.status, 0);
+  assert.match(vaultWorkspace.stderr, /inside the shared vault/);
+  assert.equal(fs.existsSync(path.join(syncVault, 'jarvos.config.json')), false, 'sync must never create config inside the vault');
+
+  const explicitVaultConfig = run([...syncArgs, '--config', path.join(syncVault, 'outside-workspace.json'), '--dry-run']);
+  assert.notEqual(explicitVaultConfig.status, 0);
+  assert.match(explicitVaultConfig.stderr, /inside the shared vault/);
+  assert.equal(fs.existsSync(path.join(syncVault, 'outside-workspace.json')), false);
+
+  if (process.platform !== 'win32') {
+    const symlinkParent = path.join(tmp, 'symlinked-workspace');
+    const symlinkDestination = path.join(tmp, 'symlink-destination');
+    fs.mkdirSync(symlinkDestination);
+    fs.symlinkSync(symlinkDestination, symlinkParent, 'dir');
+    const symlinkParentSync = run([
+      'sync',
+      '--workspace', symlinkParent,
+      '--vault', syncVault,
+      '--name', 'TestUser',
+      '--timezone', 'UTC',
+      '--dry-run',
+    ]);
+    assert.notEqual(symlinkParentSync.status, 0);
+    assert.match(symlinkParentSync.stderr, /symlinked config path/);
+    assert.equal(fs.existsSync(path.join(symlinkDestination, 'jarvos.config.json')), false);
+
+    const danglingConfig = path.join(tmp, 'dangling-config.json');
+    fs.symlinkSync(path.join(tmp, 'does-not-exist.json'), danglingConfig);
+    const danglingConfigSync = run([...syncArgs, '--config', danglingConfig, '--dry-run']);
+    assert.notEqual(danglingConfigSync.status, 0);
+    assert.match(danglingConfigSync.stderr, /symlinked config path/);
+  }
+
+  const invalidTimezone = run([
+    'sync',
+    '--workspace', path.join(tmp, 'invalid-timezone-workspace'),
+    '--vault', syncVault,
+    '--name', 'TestUser',
+    '--timezone', 'Not/AZone',
+    '--dry-run',
+  ]);
+  assert.notEqual(invalidTimezone.status, 0);
+  assert.match(invalidTimezone.stderr, /valid IANA timezone/);
+
   const syncApply = run(syncArgs);
   assert.equal(syncApply.status, 0, syncApply.stderr || syncApply.stdout);
   assert.match(syncApply.stdout, /Mode: APPLIED/);
@@ -134,6 +185,10 @@ try {
   const syncAgain = run(syncArgs);
   assert.equal(syncAgain.status, 0, syncAgain.stderr || syncAgain.stdout);
   assert.match(syncAgain.stdout, /Mode: ALREADY SYNCED/);
+
+  const syncExistingWithoutRedundantIdentity = run(['sync', '--workspace', syncWorkspace, '--dry-run']);
+  assert.equal(syncExistingWithoutRedundantIdentity.status, 0, syncExistingWithoutRedundantIdentity.stderr || syncExistingWithoutRedundantIdentity.stdout);
+  assert.match(syncExistingWithoutRedundantIdentity.stdout, /Config action: already-synced/);
 
   const syncConfigSuperset = JSON.parse(fs.readFileSync(syncConfigPath, 'utf8'));
   syncConfigSuperset.privateExtension = { enabled: true };

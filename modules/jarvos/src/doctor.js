@@ -15,6 +15,7 @@ const {
   inspectCompoundEngineeringProvider,
 } = require('../../jarvos-runtime-kit/src');
 const { loadHealthModules } = require('../../../lib/jarvos-doctor-modules');
+const { isValidTimezone } = require('../../jarvos-secondbrain/bridge/config/src/resolve-config');
 
 const MINIMAL_WORKSPACE_FILES = [
   'MEMORY.md',
@@ -142,6 +143,9 @@ function validateAgainstSchema(value, schema, instancePath = '') {
   if (schema.type === 'string' && value.trim() === '') {
     errors.push(`${instancePath || '/'} must be a non-empty string`);
   }
+  if (schema.format === 'time-zone' && !isValidTimezone(value)) {
+    errors.push(`${instancePath || '/'} must be a valid IANA timezone`);
+  }
 
   return errors;
 }
@@ -158,8 +162,21 @@ function createCheck(component, ok, message, details = {}) {
 
 function getPathConfig(config, key) {
   if (!config || typeof config !== 'object') return undefined;
-  if (!config.paths || typeof config.paths !== 'object') return undefined;
-  return config.paths[key];
+  const paths = config.paths && typeof config.paths === 'object' ? config.paths : {};
+  if (Object.prototype.hasOwnProperty.call(paths, key)) return paths[key];
+
+  const workspace = paths.workspace || config.workspacePath;
+  const vault = paths.vault || config.vaultPath;
+  if (key === 'workspace') return workspace;
+  if (key === 'vault') return vault;
+  if (key === 'notes' && vault) return path.join(vault, 'Notes');
+  if (key === 'journal' && vault) return path.join(vault, 'Journal');
+  if (key === 'tags' && vault) return path.join(vault, 'Tags');
+  if (key === 'memory' && workspace) return path.join(workspace, 'memory');
+  if (key === 'scripts' && workspace) return path.join(workspace, 'scripts');
+  if (key === 'workflows' && workspace) return path.join(workspace, 'workflows');
+  if (key === 'customers' && workspace) return path.join(workspace, 'customers');
+  return undefined;
 }
 
 function validateConfiguredDirectory(workspace, config, key) {

@@ -16,7 +16,7 @@ const {
 } = require('../bridge/config');
 
 function tempDir() {
-  return fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-config-'));
+  return fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-config-')));
 }
 
 test('resolveConfig loads jarvos.config.json and recomputes child paths from workspace and vault', () => {
@@ -121,6 +121,17 @@ test('resolveConfig prefers configured timezone over generic TZ env fallback', (
   });
 
   assert.equal(config.user.timezone, 'America/Los_Angeles');
+});
+
+test('resolveConfig rejects an invalid configured timezone instead of silently changing it', () => {
+  const root = tempDir();
+  const configPath = path.join(root, 'jarvos.config.json');
+  fs.writeFileSync(configPath, JSON.stringify({ user: { timezone: 'Not/AZone' } }));
+
+  assert.throws(
+    () => resolveConfig({ configPath, homeDir: '/home/tester', env: {} }),
+    /invalid configured IANA timezone/,
+  );
 });
 
 test('resolveJournalConfig requires an explicit journal target and valid configured timezone', () => {
@@ -413,6 +424,74 @@ test('shared-vault onboarding is idempotent and refuses to replace a different c
       user: { name: 'Different User', timezone: 'UTC' },
     }),
     /Refusing to overwrite an existing jarvos\.config\.json/,
+  );
+});
+
+test('shared-vault onboarding refuses config targets inside the vault or behind symlinks', { skip: process.platform === 'win32' }, () => {
+  const home = tempDir();
+  const workspace = path.join(home, 'workspace');
+  const vault = path.join(home, 'Vaults', 'Vault v3');
+  fs.mkdirSync(path.join(vault, 'Notes'), { recursive: true });
+  fs.mkdirSync(path.join(vault, 'Journal'), { recursive: true });
+  fs.mkdirSync(path.join(vault, 'Tags'), { recursive: true });
+
+  assert.throws(
+    () => writeSharedVaultConfig({
+      configPath: path.join(vault, 'jarvos.config.json'),
+      vaultDir: vault,
+      workspaceRoot: workspace,
+      homeDir: home,
+      user: { name: 'Tester', timezone: 'UTC' },
+    }),
+    /inside the shared vault/,
+  );
+  assert.equal(fs.existsSync(path.join(vault, 'jarvos.config.json')), false);
+
+  const targetDirectory = path.join(home, 'target-directory');
+  const linkedDirectory = path.join(home, 'linked-directory');
+  fs.mkdirSync(targetDirectory);
+  fs.symlinkSync(targetDirectory, linkedDirectory, 'dir');
+  assert.throws(
+    () => writeSharedVaultConfig({
+      configPath: path.join(linkedDirectory, 'jarvos.config.json'),
+      vaultDir: vault,
+      workspaceRoot: workspace,
+      homeDir: home,
+      user: { name: 'Tester', timezone: 'UTC' },
+    }),
+    /symlinked config path/,
+  );
+  assert.equal(fs.existsSync(path.join(targetDirectory, 'jarvos.config.json')), false);
+
+  const danglingConfig = path.join(home, 'dangling.json');
+  fs.symlinkSync(path.join(home, 'missing.json'), danglingConfig);
+  assert.throws(
+    () => writeSharedVaultConfig({
+      configPath: danglingConfig,
+      vaultDir: vault,
+      workspaceRoot: workspace,
+      homeDir: home,
+      user: { name: 'Tester', timezone: 'UTC' },
+    }),
+    /symlinked config path/,
+  );
+});
+
+test('shared-vault onboarding rejects invalid timezones before generating a config', () => {
+  const home = tempDir();
+  const vault = path.join(home, 'Vaults', 'Vault v3');
+  fs.mkdirSync(path.join(vault, 'Notes'), { recursive: true });
+  fs.mkdirSync(path.join(vault, 'Journal'), { recursive: true });
+  fs.mkdirSync(path.join(vault, 'Tags'), { recursive: true });
+
+  assert.throws(
+    () => buildSharedVaultConfig({
+      vaultDir: vault,
+      workspaceRoot: path.join(home, 'workspace'),
+      homeDir: home,
+      user: { name: 'Tester', timezone: 'Not/AZone' },
+    }),
+    /valid IANA timezone/,
   );
 });
 

@@ -290,10 +290,16 @@ jarvos doctor --profile minimal --workspace /path/to/jarvos-workspace
 Use `jarvos init` for a new standalone system. Use `jarvos sync` to **sync with
 an existing jarvOS installation**: it creates a portable config that points the
 new harness at the existing vault. The sync command is config-only, never
-writes inside the vault, requires an explicit workspace, and refuses to replace
-a different existing config. Inspect the plan with `--dry-run`, rerun without
+writes inside the vault, requires an explicit workspace, rejects symlinked
+config targets, and refuses to replace a different existing config. Inspect the
+plan with `--dry-run`, rerun without
 that flag to apply it, and then use `jarvos doctor` to expose any remaining
 workspace or runtime setup rather than assuming the machine is ready.
+
+For a workspace that already has a compatible `jarvos.config.json`, `jarvos
+sync --workspace /path/to/jarvos-workspace --dry-run` reuses its vault, name,
+and timezone; those flags are only required for a new config. Timezones must be
+valid IANA names such as `UTC` or `America/New_York`.
 
 `jarvos doctor` uses the checked-in profile manifest and reports portable health
 checks for the starter workspace, `jarvos.config.json`, vault folders, Node.js,

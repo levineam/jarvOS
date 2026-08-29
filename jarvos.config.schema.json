@@ -58,7 +58,7 @@
       "type": "object",
       "properties": {
         "name": { "type": "string" },
-        "timezone": { "type": "string" }
+        "timezone": { "type": "string", "format": "time-zone" }
       },
       "additionalProperties": true
     },

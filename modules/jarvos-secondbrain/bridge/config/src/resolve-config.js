@@ -152,14 +152,18 @@ function isValidTimezone(value) {
 }
 
 function resolveUserTimezone(rest = {}, env = process.env) {
-  return validTimezone(
-    env.JARVOS_TIMEZONE
+  const configuredTimezone = env.JARVOS_TIMEZONE
     || rest.user?.timezone
     || rest.user?.timeZone
     || rest.timezone
-    || rest.timeZone
-    || env.TZ,
-  );
+    || rest.timeZone;
+  if (configuredTimezone) {
+    if (!isValidTimezone(configuredTimezone)) {
+      throw new Error('jarvOS config has an invalid configured IANA timezone');
+    }
+    return configuredTimezone;
+  }
+  return validTimezone(env.TZ);
 }
 
 /**

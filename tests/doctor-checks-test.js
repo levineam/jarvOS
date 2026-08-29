@@ -18,8 +18,10 @@ const {
   checkVaultPathStale,
   checkJournalConflict,
   healthModuleBlocksDoctor,
+  validateConfigShape,
 } = require('../lib/jarvos-cli');
 const {
+  runMinimalDoctor,
   validateJarvosProfile,
   validateOpenClawProfile,
 } = require('../modules/jarvos/src/doctor');
@@ -46,6 +48,14 @@ test('optional GBrain continuity remains visible without blocking portable docto
   assert.equal(healthModuleBlocksDoctor(staleContinuity, { continuityRequired: false }), false);
   assert.equal(healthModuleBlocksDoctor(staleContinuity, { continuityRequired: true }), true);
   assert.equal(healthModuleBlocksDoctor({ id: 'memory', state: 'needs your attention' }), true);
+});
+
+test('CLI schema validation rejects an invalid portable-config timezone', () => {
+  const errors = validateConfigShape({
+    paths: { workspace: '/srv/jarvos', vault: '/srv/vault' },
+    user: { name: 'Tester', timezone: 'Not/AZone' },
+  });
+  assert.deepEqual(errors, ['jarvos.config.json.user.timezone must be a valid IANA timezone']);
 });
 
 test('vault-path-stale passes for an existing vault root', () => {
@@ -451,6 +461,35 @@ test('profile doctor keeps missing GBrain continuity optional for portable confi
       commandsPresent: { gbrain: false },
     });
     assert.equal(result.checks.some((check) => check.component === 'provider.gbrainContinuity'), false);
+  } finally {
+    fs.rmSync(workspace, { recursive: true, force: true });
+  }
+});
+
+test('module doctor derives portable path checks from a valid legacy config', () => {
+  const workspace = scratch();
+  const vault = path.join(workspace, 'vault');
+  try {
+    fs.copyFileSync(path.join(__dirname, '..', 'jarvos.config.schema.json'), path.join(workspace, 'jarvos.config.schema.json'));
+    fs.mkdirSync(path.join(workspace, 'memory'), { recursive: true });
+    fs.mkdirSync(path.join(vault, 'Notes'), { recursive: true });
+    fs.mkdirSync(path.join(vault, 'Journal'), { recursive: true });
+    fs.writeFileSync(path.join(workspace, 'AGENTS.md'), '# Agent context\n');
+    fs.writeFileSync(path.join(workspace, 'MEMORY.md'), '# Memory\n');
+    writeConfig(workspace, {
+      assistantName: 'Jarvis',
+      userName: 'Legacy User',
+      coachName: 'Coach',
+      vaultPath: vault,
+      workspacePath: workspace,
+      runtime: 'codex',
+    });
+
+    const result = runMinimalDoctor({ workspace });
+    assert.equal(result.checks.find((check) => check.component === 'config.schema').ok, true);
+    for (const key of ['workspace', 'vault', 'notes', 'journal', 'memory']) {
+      assert.equal(result.checks.find((check) => check.component === `path.${key}`).ok, true, key);
+    }
   } finally {
     fs.rmSync(workspace, { recursive: true, force: true });
   }
