@@ -57,18 +57,27 @@ function resolvePathInput(value, fallback) {
   return path.resolve(expandHome(selected));
 }
 
+function requirePathOptionValue(flag, value) {
+  if (typeof value !== 'string' || !value.trim() || value.startsWith('-')) {
+    throw new Error(`${flag} requires a non-empty path value`);
+  }
+  return value;
+}
+
 function parseBootstrapPathOptions(argv = process.argv.slice(2)) {
   const options = {};
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
-    if (arg === '--workspace' && argv[index + 1]) {
-      options.workspace = argv[++index];
+    if (arg === '--workspace') {
+      options.workspace = requirePathOptionValue(arg, argv[index + 1]);
+      index += 1;
     } else if (arg.startsWith('--workspace=')) {
-      options.workspace = arg.slice('--workspace='.length);
-    } else if (arg === '--vault' && argv[index + 1]) {
-      options.vault = argv[++index];
+      options.workspace = requirePathOptionValue('--workspace', arg.slice('--workspace='.length));
+    } else if (arg === '--vault') {
+      options.vault = requirePathOptionValue(arg, argv[index + 1]);
+      index += 1;
     } else if (arg.startsWith('--vault=')) {
-      options.vault = arg.slice('--vault='.length);
+      options.vault = requirePathOptionValue('--vault', arg.slice('--vault='.length));
     }
   }
   return options;
@@ -102,6 +111,10 @@ function resolvedPathInputs(argv = process.argv.slice(2), env = process.env) {
 }
 
 function inspectTarget(target) {
+  const pathInspection = inspectPathComponents(target);
+  if (!pathInspection.ok) {
+    return { state: 'symlinked-path', path: pathInspection.path };
+  }
   try {
     const stat = fs.statSync(target);
     if (!stat.isDirectory()) return { state: 'not-directory' };
@@ -110,6 +123,46 @@ function inspectTarget(target) {
     if (error && error.code === 'ENOENT') return { state: 'absent' };
     return { state: 'unreadable', error: error && error.message };
   }
+}
+
+const MACOS_SYSTEM_PARENT_ALIASES = new Map([
+  ['/tmp', '/private/tmp'],
+  ['/var', '/private/var'],
+]);
+
+function isAllowedMacOSSystemParentAlias(component, target) {
+  if (process.platform !== 'darwin' || component === target) return false;
+  const expectedRealPath = MACOS_SYSTEM_PARENT_ALIASES.get(component);
+  if (!expectedRealPath) return false;
+  try {
+    return fs.realpathSync(component) === expectedRealPath;
+  } catch {
+    return false;
+  }
+}
+
+function inspectPathComponents(target) {
+  const absolute = path.resolve(target);
+  const parsed = path.parse(absolute);
+  let current = parsed.root;
+  let missingAncestor = false;
+  for (const component of absolute.slice(parsed.root.length).split(path.sep).filter(Boolean)) {
+    current = path.join(current, component);
+    if (missingAncestor) continue;
+    try {
+      const stat = fs.lstatSync(current);
+      if (stat.isSymbolicLink() && !isAllowedMacOSSystemParentAlias(current, absolute)) {
+        return { ok: false, path: current };
+      }
+    } catch (error) {
+      if (error && error.code === 'ENOENT') {
+        missingAncestor = true;
+        continue;
+      }
+      return { ok: false, path: current };
+    }
+  }
+  return { ok: true };
 }
 
 function resolveConfigPath(value, workspace) {
@@ -156,11 +209,11 @@ function classifyInitTargets({ workspace, vault }) {
   const badTarget = [
     ['workspace', workspaceTarget],
     ['vault', vaultTarget],
-  ].find(([, target]) => ['not-directory', 'unreadable'].includes(target.state));
+  ].find(([, target]) => ['not-directory', 'unreadable', 'symlinked-path'].includes(target.state));
   if (badTarget) {
     return {
       action: 'refuse',
-      reason: `${badTarget[0]} target is ${badTarget[1].state.replace('-', ' ')}`,
+      reason: `${badTarget[0]} target is ${badTarget[1].state.replaceAll('-', ' ')}`,
     };
   }
 

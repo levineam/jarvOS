@@ -307,7 +307,8 @@ valid IANA names such as `UTC` or `America/New_York`. `jarvos init` is for a
 new standalone installation and fails closed if either target contains unrelated
 files; a complete prior bootstrap installation is recognized for a no-overwrite
 rerun. Use `--use-existing-vault` only to attach a verified existing vault to a
-new workspace.
+new workspace. New writes through a symlinked target are refused; a symlinked
+path is accepted only for a recognized read-only compatible rerun.
 
 `jarvos sync` runs on macOS and Linux. It holds a POSIX directory descriptor on
 the config directory and rechecks that directory's identity before and after
