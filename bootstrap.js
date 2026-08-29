@@ -84,6 +84,8 @@ function parseBootstrapPathOptions(argv = process.argv.slice(2)) {
       index += 1;
     } else if (arg.startsWith('--vault=')) {
       options.vault = requirePathOptionValue('--vault', arg.slice('--vault='.length));
+    } else if (arg === '--use-existing-vault') {
+      options.useExistingVault = true;
     }
   }
   return options;
@@ -115,6 +117,7 @@ function resolvedPathInputs(argv = process.argv.slice(2), env = process.env) {
     ),
     workspaceSource,
     vaultSource,
+    useExistingVault: Boolean(options.useExistingVault),
   };
 }
 
@@ -179,6 +182,14 @@ function resolveConfigPath(value, workspace) {
   return path.resolve(path.isAbsolute(expanded) ? expanded : path.join(workspace, expanded));
 }
 
+function sameExistingPath(left, right) {
+  try {
+    return fs.realpathSync(left) === fs.realpathSync(right);
+  } catch {
+    return left === right;
+  }
+}
+
 function isCompatibleExistingInstall(workspace, vault) {
   const configPath = path.join(workspace, 'jarvos.config.json');
   let config;
@@ -192,8 +203,8 @@ function isCompatibleExistingInstall(workspace, vault) {
   if (requiredConfigFields.some((field) => typeof config[field] !== 'string' || !config[field].trim())) {
     return { compatible: false, reason: 'jarvos.config.json is not a complete bootstrap configuration' };
   }
-  if (resolveConfigPath(config.workspacePath, workspace) !== workspace
-    || resolveConfigPath(config.vaultPath, workspace) !== vault) {
+  if (!sameExistingPath(resolveConfigPath(config.workspacePath, workspace), workspace)
+    || !sameExistingPath(resolveConfigPath(config.vaultPath, workspace), vault)) {
     return { compatible: false, reason: 'jarvos.config.json targets different workspace or vault paths' };
   }
 
@@ -211,9 +222,23 @@ function isCompatibleExistingInstall(workspace, vault) {
   return { compatible: true };
 }
 
-function classifyInitTargets({ workspace, vault }) {
+function isExistingVaultAttachable(vault) {
+  const requiredVaultDirectories = ['Notes', 'Journal', 'Tags'];
+  return requiredVaultDirectories.every((dir) => fs.statSync(path.join(vault, dir), { throwIfNoEntry: false })?.isDirectory());
+}
+
+function classifyInitTargets({ workspace, vault, useExistingVault = false }) {
   const workspaceTarget = inspectTarget(workspace);
   const vaultTarget = inspectTarget(vault);
+
+  // A compatible installed tree is read-only on this code path. Recognize it
+  // before rejecting an alias in its path; otherwise a normal synced/iCloud
+  // location cannot be safely inspected or re-run at all. Any non-compatible
+  // symlinked target still refuses before a write.
+  if (['non-empty-directory', 'symlinked-path'].includes(workspaceTarget.state)
+    && isCompatibleExistingInstall(workspace, vault).compatible) {
+    return { action: 'already-initialized' };
+  }
   const badTarget = [
     ['workspace', workspaceTarget],
     ['vault', vaultTarget],
@@ -235,9 +260,14 @@ function classifyInitTargets({ workspace, vault }) {
   }
 
   if (vaultTarget.state === 'non-empty-directory') {
+    if (useExistingVault && ['absent', 'empty-directory'].includes(workspaceTarget.state) && isExistingVaultAttachable(vault)) {
+      return { action: 'attach-existing-vault' };
+    }
     return {
       action: 'refuse',
-      reason: 'vault already exists and is not attached to a compatible jarvOS install',
+      reason: useExistingVault
+        ? 'existing vault is missing required Notes/, Journal/, or Tags/ directories'
+        : 'vault already exists; pass --use-existing-vault only to attach a vault with Notes/, Journal/, and Tags/',
     };
   }
   return { action: 'new-install' };
@@ -250,12 +280,13 @@ function preflightInit(config, inputs) {
   const classification = classifyInitTargets({
     workspace: config.WORKSPACE_PATH,
     vault: config.VAULT_PATH,
+    useExistingVault: inputs.useExistingVault,
   });
   console.log(`Resolved workspace: ${config.WORKSPACE_PATH} (${inputs.workspaceSource})`);
   console.log(`Resolved vault:     ${config.VAULT_PATH} (${inputs.vaultSource})`);
   console.log(`Intended action:    ${classification.action}`);
   if (classification.action === 'refuse') {
-    throw new Error(`Refusing to initialize: ${classification.reason}. Use \`jarvos sync\` to attach to an existing jarvOS installation, or choose empty/new --workspace and --vault targets.`);
+    throw new Error(`Refusing to initialize: ${classification.reason}. Use \`jarvos sync\` to attach to an existing jarvOS installation, pass --use-existing-vault for a verified existing vault, or choose empty/new --workspace and --vault targets.`);
   }
   return classification;
 }
@@ -639,7 +670,7 @@ function smokeTest(config) {
     console.log(`${GREEN}${BOLD}All checks passed (${passed}/${passed + failed}).${RESET}`);
   } else {
     console.log(`${YELLOW}${BOLD}${passed} passed, ${failed} failed.${RESET}`);
-    console.log('Review errors above and re-run bootstrap to fix.');
+    console.log('Review errors above and inspect or use fresh targets; do not re-run over a partial install.');
   }
 
   return failed === 0;
@@ -663,7 +694,13 @@ async function main() {
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
 
   let config;
-  const pathInputs = resolvedPathInputs();
+  let pathInputs;
+  try {
+    pathInputs = resolvedPathInputs();
+  } catch (error) {
+    err(error.message);
+    process.exit(1);
+  }
   try {
     config = await gatherConfig(rl);
   } finally {
@@ -679,13 +716,14 @@ async function main() {
       vaultSource: config.VAULT_PATH === pathInputs.vault
         ? pathInputs.vaultSource
         : 'interactive prompt',
+      useExistingVault: pathInputs.useExistingVault,
     });
   } catch (error) {
     err(error.message);
     process.exit(1);
   }
 
-  if (preflight.action === 'new-install') {
+  if (preflight.action === 'new-install' || preflight.action === 'attach-existing-vault') {
     createDirectories(config);
     generateOverlays(config);
   } else {

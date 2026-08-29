@@ -185,6 +185,16 @@ try {
   assert.equal(fs.existsSync(blockedWorkspace), false, 'refusal must happen before workspace mkdir');
   assert.equal(fs.readFileSync(path.join(existingVault, 'notes.md'), 'utf8'), 'existing vault content\n');
 
+  const attachWorkspace = path.join(tmp, 'attach-workspace');
+  const attachVault = path.join(tmp, 'attach-vault');
+  for (const directory of ['Notes', 'Journal', 'Tags']) fs.mkdirSync(path.join(attachVault, directory), { recursive: true });
+  fs.writeFileSync(path.join(attachVault, 'Notes', 'existing.md'), 'do not modify\n');
+  const attach = runInit(['--workspace', attachWorkspace, '--vault', attachVault, '--use-existing-vault'], env);
+  assert.equal(attach.status, 0, attach.stderr || attach.stdout);
+  assert.match(attach.stdout, /Intended action:\s+attach-existing-vault/);
+  assert.ok(fs.existsSync(path.join(attachWorkspace, 'jarvos.config.json')));
+  assert.equal(fs.readFileSync(path.join(attachVault, 'Notes', 'existing.md'), 'utf8'), 'do not modify\n');
+
   const emptyWorkspaceDestination = path.join(tmp, 'empty-workspace-destination');
   const workspaceLink = path.join(tmp, 'workspace-link');
   const symlinkVault = path.join(tmp, 'symlink-workspace-vault');
@@ -206,6 +216,17 @@ try {
   assert.match(symlinkVaultRefusal.stdout, /vault target is symlinked path/);
   assert.deepEqual(fs.readdirSync(emptyVaultDestination), []);
   assert.equal(fs.existsSync(symlinkedVaultWorkspace), false);
+
+  // A symlink is still refused for new writes, but a complete existing install
+  // behind aliases can be recognized and read-only re-run safely.
+  const compatibleWorkspaceLink = path.join(tmp, 'compatible-workspace-link');
+  const compatibleVaultLink = path.join(tmp, 'compatible-vault-link');
+  fs.symlinkSync(workspace, compatibleWorkspaceLink, 'dir');
+  fs.symlinkSync(vault, compatibleVaultLink, 'dir');
+  const symlinkCompatible = runInit(['--workspace', compatibleWorkspaceLink, '--vault', compatibleVaultLink], env);
+  assert.equal(symlinkCompatible.status, 0, symlinkCompatible.stderr || symlinkCompatible.stdout);
+  assert.match(symlinkCompatible.stdout, /Intended action:\s+already-initialized/);
+  assert.match(symlinkCompatible.stdout, /preserving all existing files/i);
 
   const realWorkspaceParent = path.join(tmp, 'real-workspace-parent');
   const workspaceParentLink = path.join(tmp, 'workspace-parent-link');
