@@ -58,10 +58,16 @@ function resolvePathInput(value, fallback) {
 }
 
 function requirePathOptionValue(flag, value) {
-  if (typeof value !== 'string' || !value.trim() || value.startsWith('-')) {
+  const normalized = typeof value === 'string' ? value.trim() : '';
+  if (!normalized || normalized.startsWith('-')) {
     throw new Error(`${flag} requires a non-empty path value`);
   }
   return value;
+}
+
+function explicitEnvironmentPath(env, name) {
+  if (!Object.prototype.hasOwnProperty.call(env, name)) return undefined;
+  return requirePathOptionValue(name, env[name]);
 }
 
 function parseBootstrapPathOptions(argv = process.argv.slice(2)) {
@@ -86,23 +92,25 @@ function parseBootstrapPathOptions(argv = process.argv.slice(2)) {
 function resolvedPathInputs(argv = process.argv.slice(2), env = process.env) {
   const options = parseBootstrapPathOptions(argv);
   const homeDir = os.homedir();
+  const environmentWorkspace = explicitEnvironmentPath(env, 'JARVOS_WORKSPACE_PATH');
+  const environmentVault = explicitEnvironmentPath(env, 'JARVOS_VAULT_PATH');
   const workspaceSource = options.workspace
     ? '--workspace'
-    : env.JARVOS_WORKSPACE_PATH
+    : environmentWorkspace !== undefined
       ? 'JARVOS_WORKSPACE_PATH'
       : 'default';
   const vaultSource = options.vault
     ? '--vault'
-    : env.JARVOS_VAULT_PATH
+    : environmentVault !== undefined
       ? 'JARVOS_VAULT_PATH'
       : 'default';
   return {
     workspace: resolvePathInput(
-      options.workspace || env.JARVOS_WORKSPACE_PATH,
+      options.workspace || environmentWorkspace,
       path.join(homeDir, 'clawd'),
     ),
     vault: resolvePathInput(
-      options.vault || env.JARVOS_VAULT_PATH,
+      options.vault || environmentVault,
       path.join(homeDir, 'jarvos-vault'),
     ),
     workspaceSource,

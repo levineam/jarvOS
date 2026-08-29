@@ -20,9 +20,9 @@ function runInit(args, env) {
   });
 }
 
-function runBootstrap(args, env) {
+function runBootstrap(args, env, options = {}) {
   return spawnSync(process.execPath, [BOOTSTRAP, '--yes', ...args], {
-    cwd: ROOT,
+    cwd: options.cwd || ROOT,
     env,
     encoding: 'utf8',
     maxBuffer: 10 * 1024 * 1024,
@@ -30,7 +30,7 @@ function runBootstrap(args, env) {
 }
 
 function initEnv(home) {
-  return {
+  const env = {
     ...process.env,
     HOME: home,
     JARVOS_YES: '1',
@@ -39,6 +39,9 @@ function initEnv(home) {
     JARVOS_COACH_NAME: 'SafetyCoach',
     JARVOS_RUNTIME: 'minimal',
   };
+  delete env.JARVOS_WORKSPACE_PATH;
+  delete env.JARVOS_VAULT_PATH;
+  return env;
 }
 
 function escapeRegex(value) {
@@ -75,6 +78,59 @@ try {
       assert.equal(fs.existsSync(path.join(tmp, 'malformed-vault')), false, `${surface} wrote an explicit target after a malformed flag`);
     }
   }
+
+  const invalidEnvironmentCases = [
+    { name: 'JARVOS_WORKSPACE_PATH', value: '', other: 'JARVOS_VAULT_PATH' },
+    { name: 'JARVOS_WORKSPACE_PATH', value: '   ', other: 'JARVOS_VAULT_PATH' },
+    { name: 'JARVOS_WORKSPACE_PATH', value: '  -workspace', other: 'JARVOS_VAULT_PATH' },
+    { name: 'JARVOS_VAULT_PATH', value: '', other: 'JARVOS_WORKSPACE_PATH' },
+    { name: 'JARVOS_VAULT_PATH', value: '\t', other: 'JARVOS_WORKSPACE_PATH' },
+    { name: 'JARVOS_VAULT_PATH', value: '-vault', other: 'JARVOS_WORKSPACE_PATH' },
+  ];
+  for (const [index, invalid] of invalidEnvironmentCases.entries()) {
+    for (const [surface, invoke] of [['router', runInit], ['bootstrap', runBootstrap]]) {
+      const invalidHome = path.join(tmp, `invalid-env-${index}-${surface}`);
+      const selectedOtherTarget = path.join(tmp, `invalid-env-selected-${index}-${surface}`);
+      fs.mkdirSync(invalidHome);
+      const invalidEnv = {
+        ...initEnv(invalidHome),
+        [invalid.name]: invalid.value,
+        [invalid.other]: selectedOtherTarget,
+      };
+      const result = invoke([], invalidEnv);
+      assert.notEqual(result.status, 0, `${surface} accepted ${invalid.name}=${JSON.stringify(invalid.value)}`);
+      assert.match(`${result.stdout}${result.stderr}`, new RegExp(`${invalid.name} requires a non-empty path value`));
+      assert.equal(fs.existsSync(selectedOtherTarget), false, `${surface} wrote another selected environment target`);
+      assert.equal(fs.existsSync(path.join(invalidHome, 'clawd')), false, `${surface} wrote the default workspace`);
+      assert.equal(fs.existsSync(path.join(invalidHome, 'jarvos-vault')), false, `${surface} wrote the default vault`);
+    }
+  }
+
+  const relativeRouterHome = path.join(tmp, 'relative-router-home');
+  const relativeRouterWorkspace = path.join(tmp, 'relative-router-workspace');
+  const relativeRouterVault = path.join(tmp, 'relative-router-vault');
+  fs.mkdirSync(relativeRouterHome);
+  const relativeRouter = runInit([], {
+    ...initEnv(relativeRouterHome),
+    JARVOS_WORKSPACE_PATH: path.relative(ROOT, relativeRouterWorkspace),
+    JARVOS_VAULT_PATH: path.relative(ROOT, relativeRouterVault),
+  });
+  assert.equal(relativeRouter.status, 0, relativeRouter.stderr || relativeRouter.stdout);
+  assert.ok(fs.existsSync(path.join(relativeRouterWorkspace, 'jarvos.config.json')));
+  assert.ok(fs.existsSync(path.join(relativeRouterVault, 'Journal')));
+
+  const relativeBootstrapRoot = path.join(tmp, 'relative-bootstrap-root');
+  const relativeBootstrapHome = path.join(tmp, 'relative-bootstrap-home');
+  fs.mkdirSync(relativeBootstrapRoot);
+  fs.mkdirSync(relativeBootstrapHome);
+  const relativeBootstrap = runBootstrap([], {
+    ...initEnv(relativeBootstrapHome),
+    JARVOS_WORKSPACE_PATH: 'workspace',
+    JARVOS_VAULT_PATH: 'vault',
+  }, { cwd: relativeBootstrapRoot });
+  assert.equal(relativeBootstrap.status, 0, relativeBootstrap.stderr || relativeBootstrap.stdout);
+  assert.ok(fs.existsSync(path.join(relativeBootstrapRoot, 'workspace', 'jarvos.config.json')));
+  assert.ok(fs.existsSync(path.join(relativeBootstrapRoot, 'vault', 'Journal')));
 
   const workspace = path.join(tmp, 'new-workspace');
   const vault = path.join(tmp, 'new-vault');
