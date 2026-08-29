@@ -52,6 +52,153 @@ function isValidIanaTimezone(value) {
   try { Intl.DateTimeFormat(undefined, { timeZone: value }); return true; } catch { return false; }
 }
 
+function resolvePathInput(value, fallback) {
+  const selected = value || fallback;
+  return path.resolve(expandHome(selected));
+}
+
+function parseBootstrapPathOptions(argv = process.argv.slice(2)) {
+  const options = {};
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index];
+    if (arg === '--workspace' && argv[index + 1]) {
+      options.workspace = argv[++index];
+    } else if (arg.startsWith('--workspace=')) {
+      options.workspace = arg.slice('--workspace='.length);
+    } else if (arg === '--vault' && argv[index + 1]) {
+      options.vault = argv[++index];
+    } else if (arg.startsWith('--vault=')) {
+      options.vault = arg.slice('--vault='.length);
+    }
+  }
+  return options;
+}
+
+function resolvedPathInputs(argv = process.argv.slice(2), env = process.env) {
+  const options = parseBootstrapPathOptions(argv);
+  const homeDir = os.homedir();
+  const workspaceSource = options.workspace
+    ? '--workspace'
+    : env.JARVOS_WORKSPACE_PATH
+      ? 'JARVOS_WORKSPACE_PATH'
+      : 'default';
+  const vaultSource = options.vault
+    ? '--vault'
+    : env.JARVOS_VAULT_PATH
+      ? 'JARVOS_VAULT_PATH'
+      : 'default';
+  return {
+    workspace: resolvePathInput(
+      options.workspace || env.JARVOS_WORKSPACE_PATH,
+      path.join(homeDir, 'clawd'),
+    ),
+    vault: resolvePathInput(
+      options.vault || env.JARVOS_VAULT_PATH,
+      path.join(homeDir, 'jarvos-vault'),
+    ),
+    workspaceSource,
+    vaultSource,
+  };
+}
+
+function inspectTarget(target) {
+  try {
+    const stat = fs.statSync(target);
+    if (!stat.isDirectory()) return { state: 'not-directory' };
+    return { state: fs.readdirSync(target).length === 0 ? 'empty-directory' : 'non-empty-directory' };
+  } catch (error) {
+    if (error && error.code === 'ENOENT') return { state: 'absent' };
+    return { state: 'unreadable', error: error && error.message };
+  }
+}
+
+function resolveConfigPath(value, workspace) {
+  if (typeof value !== 'string' || !value.trim()) return null;
+  const expanded = expandHome(value);
+  return path.resolve(path.isAbsolute(expanded) ? expanded : path.join(workspace, expanded));
+}
+
+function isCompatibleExistingInstall(workspace, vault) {
+  const configPath = path.join(workspace, 'jarvos.config.json');
+  let config;
+  try {
+    config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+  } catch {
+    return { compatible: false, reason: 'jarvos.config.json is missing or invalid' };
+  }
+
+  const requiredConfigFields = ['assistantName', 'userName', 'coachName', 'runtime'];
+  if (requiredConfigFields.some((field) => typeof config[field] !== 'string' || !config[field].trim())) {
+    return { compatible: false, reason: 'jarvos.config.json is not a complete bootstrap configuration' };
+  }
+  if (resolveConfigPath(config.workspacePath, workspace) !== workspace
+    || resolveConfigPath(config.vaultPath, workspace) !== vault) {
+    return { compatible: false, reason: 'jarvos.config.json targets different workspace or vault paths' };
+  }
+
+  const requiredWorkspaceFiles = [
+    'AGENTS.md', 'BOOTSTRAP.md', 'HEARTBEAT.md', 'MEMORY.md',
+    'USER.md', 'ONTOLOGY.md', 'SOUL.md', 'TOOLS.md', 'jarvos.config.json',
+  ];
+  if (requiredWorkspaceFiles.some((file) => !fs.existsSync(path.join(workspace, file)))) {
+    return { compatible: false, reason: 'required bootstrap workspace files are missing' };
+  }
+  const requiredVaultDirectories = ['Notes', 'Journal', 'Tags'];
+  if (requiredVaultDirectories.some((dir) => !fs.statSync(path.join(vault, dir), { throwIfNoEntry: false })?.isDirectory())) {
+    return { compatible: false, reason: 'required bootstrap vault directories are missing' };
+  }
+  return { compatible: true };
+}
+
+function classifyInitTargets({ workspace, vault }) {
+  const workspaceTarget = inspectTarget(workspace);
+  const vaultTarget = inspectTarget(vault);
+  const badTarget = [
+    ['workspace', workspaceTarget],
+    ['vault', vaultTarget],
+  ].find(([, target]) => ['not-directory', 'unreadable'].includes(target.state));
+  if (badTarget) {
+    return {
+      action: 'refuse',
+      reason: `${badTarget[0]} target is ${badTarget[1].state.replace('-', ' ')}`,
+    };
+  }
+
+  if (workspaceTarget.state === 'non-empty-directory') {
+    const compatibility = isCompatibleExistingInstall(workspace, vault);
+    if (compatibility.compatible) return { action: 'already-initialized' };
+    return {
+      action: 'refuse',
+      reason: `workspace already exists and is not a compatible jarvOS install (${compatibility.reason})`,
+    };
+  }
+
+  if (vaultTarget.state === 'non-empty-directory') {
+    return {
+      action: 'refuse',
+      reason: 'vault already exists and is not attached to a compatible jarvOS install',
+    };
+  }
+  return { action: 'new-install' };
+}
+
+function preflightInit(config, inputs) {
+  if (!isValidIanaTimezone(config.TIMEZONE)) {
+    throw new Error(`Refusing to initialize: TIMEZONE must be a valid IANA timezone (received ${JSON.stringify(config.TIMEZONE)})`);
+  }
+  const classification = classifyInitTargets({
+    workspace: config.WORKSPACE_PATH,
+    vault: config.VAULT_PATH,
+  });
+  console.log(`Resolved workspace: ${config.WORKSPACE_PATH} (${inputs.workspaceSource})`);
+  console.log(`Resolved vault:     ${config.VAULT_PATH} (${inputs.vaultSource})`);
+  console.log(`Intended action:    ${classification.action}`);
+  if (classification.action === 'refuse') {
+    throw new Error(`Refusing to initialize: ${classification.reason}. Use \`jarvos sync\` to attach to an existing jarvOS installation, or choose empty/new --workspace and --vault targets.`);
+  }
+  return classification;
+}
+
 // ─── Dependency checks ──────────────────────────────────────────────────────
 
 function checkDeps() {
@@ -130,34 +277,35 @@ function checkDeps() {
  * Set JARVOS_YES=1 (or pass --yes) to skip prompts entirely.
  * Override individual fields with JARVOS_ASSISTANT_NAME, JARVOS_USER_NAME, etc.
  */
-function nonInteractiveConfig() {
+function nonInteractiveConfig(argv = process.argv.slice(2), env = process.env) {
   // Detect local timezone (e.g. "America/New_York")
   let tz = 'UTC';
   try { tz = Intl.DateTimeFormat().resolvedOptions().timeZone; } catch {}
 
+  const paths = resolvedPathInputs(argv, env);
   const defaults = {
-    ASSISTANT_NAME: process.env.JARVOS_ASSISTANT_NAME || 'Jarvis',
-    USER_NAME:      process.env.JARVOS_USER_NAME      || os.userInfo().username,
-    COACH_NAME:     process.env.JARVOS_COACH_NAME     || 'jarvOS',
-    TIMEZONE:       process.env.JARVOS_TIMEZONE       || tz,
-    VAULT_PATH:     absolutePath(process.env.JARVOS_VAULT_PATH      || path.join(os.homedir(), 'jarvos-vault')),
-    WORKSPACE_PATH: absolutePath(process.env.JARVOS_WORKSPACE_PATH  || path.join(os.homedir(), 'clawd')),
-    RUNTIME:        process.env.JARVOS_RUNTIME        || 'openclaw'
+    ASSISTANT_NAME: env.JARVOS_ASSISTANT_NAME || 'Jarvis',
+    USER_NAME:      env.JARVOS_USER_NAME      || os.userInfo().username,
+    COACH_NAME:     env.JARVOS_COACH_NAME     || 'jarvOS',
+    TIMEZONE:       env.JARVOS_TIMEZONE       || tz,
+    VAULT_PATH:     paths.vault,
+    WORKSPACE_PATH: paths.workspace,
+    RUNTIME:        env.JARVOS_RUNTIME        || 'openclaw'
   };
   return defaults;
 }
 
-async function gatherConfig(rl) {
+async function gatherConfig(rl, argv = process.argv.slice(2), env = process.env) {
   hdr('2/5  Configure your jarvOS instance');
 
   // Non-interactive mode: --yes / -y / --non-interactive flag or JARVOS_YES env var
   const isYes =
-    process.argv.includes('--yes') ||
-    process.argv.includes('-y') ||
-    process.argv.includes('--non-interactive') ||
-    process.env.JARVOS_YES === '1';
+    argv.includes('--yes') ||
+    argv.includes('-y') ||
+    argv.includes('--non-interactive') ||
+    env.JARVOS_YES === '1';
   if (isYes) {
-    const cfg = nonInteractiveConfig();
+    const cfg = nonInteractiveConfig(argv, env);
     info('Non-interactive mode — using defaults / env vars');
     info(`  ASSISTANT_NAME:  ${cfg.ASSISTANT_NAME}`);
     info(`  USER_NAME:       ${cfg.USER_NAME}`);
@@ -169,7 +317,7 @@ async function gatherConfig(rl) {
     return cfg;
   }
 
-  const defaults = nonInteractiveConfig();
+  const defaults = nonInteractiveConfig(argv, env);
 
   console.log('\nPress Enter to accept the default shown in brackets.\n');
 
@@ -454,19 +602,34 @@ async function main() {
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
 
   let config;
+  const pathInputs = resolvedPathInputs();
   try {
     config = await gatherConfig(rl);
   } finally {
     rl.close();
   }
 
-  if (!isValidIanaTimezone(config.TIMEZONE)) {
-    err(`Refusing to initialize: TIMEZONE must be a valid IANA timezone (received ${JSON.stringify(config.TIMEZONE)})`);
+  let preflight;
+  try {
+    preflight = preflightInit(config, {
+      workspaceSource: config.WORKSPACE_PATH === pathInputs.workspace
+        ? pathInputs.workspaceSource
+        : 'interactive prompt',
+      vaultSource: config.VAULT_PATH === pathInputs.vault
+        ? pathInputs.vaultSource
+        : 'interactive prompt',
+    });
+  } catch (error) {
+    err(error.message);
     process.exit(1);
   }
 
-  createDirectories(config);
-  generateOverlays(config);
+  if (preflight.action === 'new-install') {
+    createDirectories(config);
+    generateOverlays(config);
+  } else {
+    info('Compatible jarvOS installation detected — preserving all existing files.');
+}
   const allPassed = smokeTest(config);
 
   console.log(`\n${BOLD}Next steps:${RESET}`);

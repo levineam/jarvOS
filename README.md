@@ -278,7 +278,10 @@ The public command router is `jarvos`. It keeps the old bootstrap aliases
 working while making new profile-aware commands discoverable:
 
 ```bash
-jarvos init --profile minimal --yes
+jarvos init --profile minimal \
+  --workspace /path/to/new-workspace \
+  --vault /path/to/new-vault \
+  --yes
 jarvos sync --workspace /path/to/jarvos-workspace \
   --vault "$HOME/Vaults/Vault v3" \
   --name "Your Name" \
@@ -300,7 +303,11 @@ workspace or runtime setup rather than assuming the machine is ready.
 For a workspace that already has a compatible `jarvos.config.json`, `jarvos
 sync --workspace /path/to/jarvos-workspace --dry-run` reuses its vault, name,
 and timezone; those flags are only required for a new config. Timezones must be
-valid IANA names such as `UTC` or `America/New_York`.
+valid IANA names such as `UTC` or `America/New_York`. `jarvos init` is for a
+new standalone installation and fails closed if either target contains unrelated
+files; a complete prior bootstrap installation is recognized for a no-overwrite
+rerun. Use `--use-existing-vault` only to attach a verified existing vault to a
+new workspace.
 
 `jarvos sync` runs on macOS and Linux. It holds a POSIX directory descriptor on
 the config directory and rechecks that directory's identity before and after
