@@ -56,16 +56,17 @@ test('timeouts and ambiguous CLI failures never prove that Obsidian is stopped',
   assert.equal(stoppedAdapter.capability().state, 'app_stopped');
 });
 
-test('capability probe times out and contains only its fake CLI process group', () => {
+test('capability probe escalates after its direct child exits and contains a SIGTERM-resistant descendant', () => {
   if (process.platform === 'win32') return;
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-obsidian-probe-'));
   const fixture = path.join(root, 'fake-obsidian-cli.js');
   const descendantPid = path.join(root, 'descendant.pid');
-  fs.writeFileSync(fixture, `#!${process.execPath}\nconst fs = require('node:fs'); const { spawn } = require('node:child_process'); const child = spawn(process.execPath, ['-e', \"setInterval(() => {}, 1000)\"], { stdio: ['ignore', 'inherit', 'inherit'] }); fs.writeFileSync(${JSON.stringify(descendantPid)}, String(child.pid)); setInterval(() => {}, 1000);\n`);
+  fs.writeFileSync(fixture, `#!${process.execPath}\nconst fs = require('node:fs'); const { spawn } = require('node:child_process'); const child = spawn(process.execPath, ['-e', \"process.on('SIGTERM', () => {}); setInterval(() => {}, 1000)\"], { stdio: 'ignore' }); fs.writeFileSync(${JSON.stringify(descendantPid)}, String(child.pid)); setInterval(() => {}, 1000);\n`);
   fs.chmodSync(fixture, 0o755);
   const started = Date.now();
   try {
     assert.throws(() => runObsidianEval('JSON.stringify({ok:true})', { vaultName: 'fake-vault', command: fixture, timeoutMs: 500 }), (error) => error.code === 'ETIMEDOUT');
+    assert.ok(Date.now() - started >= 550);
     assert.ok(Date.now() - started < 3_000);
     const pid = Number(fs.readFileSync(descendantPid, 'utf8'));
     assert.throws(() => process.kill(pid, 0), { code: 'ESRCH' });
@@ -81,13 +82,33 @@ test('probe output capture caps multibyte chunks by bytes', () => {
   assert.equal(capture.bytes(), MAX_CAPTURE_BYTES);
 });
 
-test('Windows taskkill failure falls back to direct-child termination', () => {
-  const taskkill = new EventEmitter();
+test('Windows taskkill retries process-tree containment and reports success only from taskkill', () => {
+  const firstTaskkill = new EventEmitter();
+  const secondTaskkill = new EventEmitter();
   const signals = [];
+  const results = [];
   const child = { pid: 12345, kill: (signal) => signals.push(signal) };
-  terminateOwnedTree(child, { platform: 'win32', spawnProcess: () => taskkill });
-  taskkill.emit('close', 1);
-  assert.deepEqual(signals, ['SIGKILL']);
+  let calls = 0;
+  terminateOwnedTree(child, { platform: 'win32', spawnProcess: () => [firstTaskkill, secondTaskkill][calls++], onComplete: (result) => results.push(result) });
+  firstTaskkill.emit('close', 1);
+  secondTaskkill.emit('close', 0);
+  assert.equal(calls, 2);
+  assert.deepEqual(signals, []);
+  assert.deepEqual(results, [{ contained: true }]);
+});
+
+test('Windows taskkill double failure reports unconfirmed containment without direct-child fallback', () => {
+  const firstTaskkill = new EventEmitter();
+  const secondTaskkill = new EventEmitter();
+  const signals = [];
+  const results = [];
+  const child = { pid: 12345, kill: (signal) => signals.push(signal) };
+  let calls = 0;
+  terminateOwnedTree(child, { platform: 'win32', spawnProcess: () => [firstTaskkill, secondTaskkill][calls++], onComplete: (result) => results.push(result) });
+  firstTaskkill.emit('close', 1);
+  secondTaskkill.emit('close', 1);
+  assert.deepEqual(signals, []);
+  assert.deepEqual(results, [{ contained: false, reason: 'taskkill_failed' }]);
 });
 
 test('unavailable capability retains planned intent for reconciliation', () => {

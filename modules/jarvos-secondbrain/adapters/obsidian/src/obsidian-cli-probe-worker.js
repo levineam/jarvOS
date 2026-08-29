@@ -17,22 +17,35 @@ function createOutputCapture(stream, limit = MAX_CAPTURE_BYTES) {
   return Object.freeze({ bytes: () => byteLength, value: () => Buffer.concat(chunks, byteLength).toString('utf8') });
 }
 
-function terminateOwnedTree(child, { platform = process.platform, spawnProcess = spawn, schedule = setTimeout } = {}) {
-  if (!child?.pid) return;
-  const killDirect = () => { try { child.kill('SIGKILL'); } catch {} };
+function terminateOwnedTree(child, { platform = process.platform, spawnProcess = spawn, schedule = setTimeout, signalProcess = process.kill, onComplete = () => {} } = {}) {
+  if (!child?.pid) { onComplete({ contained: false, reason: 'missing_child_pid' }); return; }
+  let completed = false;
+  const complete = (result) => { if (!completed) { completed = true; onComplete(result); } };
   if (platform === 'win32') {
     // /t targets the child process tree by PID; it is not a process-name kill.
-    let killer;
-    try { killer = spawnProcess('taskkill', ['/pid', String(child.pid), '/t', '/f'], { stdio: 'ignore', windowsHide: true }); } catch { killDirect(); return; }
-    if (!killer || typeof killer.once !== 'function') { killDirect(); return; }
-    let fellBack = false;
-    const fallback = () => { if (!fellBack) { fellBack = true; killDirect(); } };
-    killer.once('error', fallback);
-    killer.once('close', (code) => { if (code !== 0) fallback(); });
+    const taskkillArgs = ['/pid', String(child.pid), '/t', '/f'];
+    const runTaskkill = (attempt) => {
+      let killer;
+      try { killer = spawnProcess('taskkill', taskkillArgs, { stdio: 'ignore', windowsHide: true }); } catch { complete({ contained: false, reason: 'taskkill_spawn_failed' }); return; }
+      if (!killer || typeof killer.once !== 'function') { complete({ contained: false, reason: 'taskkill_unavailable' }); return; }
+      killer.once('error', () => complete({ contained: false, reason: 'taskkill_failed' }));
+      killer.once('close', (code) => {
+        if (code === 0) complete({ contained: true });
+        else if (attempt === 0) runTaskkill(1);
+        else complete({ contained: false, reason: 'taskkill_failed' });
+      });
+    };
+    runTaskkill(0);
     return;
   }
-  try { process.kill(-child.pid, 'SIGTERM'); } catch { try { child.kill('SIGTERM'); } catch {} }
-  schedule(() => { try { process.kill(-child.pid, 'SIGKILL'); } catch { killDirect(); } }, 100).unref?.();
+  try { signalProcess(-child.pid, 'SIGTERM'); }
+  catch (error) { complete({ contained: error?.code === 'ESRCH', reason: error?.code === 'ESRCH' ? undefined : 'process_group_unavailable' }); return; }
+  // Keep the worker alive through escalation even if the direct child exits
+  // after SIGTERM and leaves no inherited pipes open.
+  schedule(() => {
+    try { signalProcess(-child.pid, 'SIGKILL'); complete({ contained: true }); }
+    catch (error) { complete({ contained: error?.code === 'ESRCH', reason: error?.code === 'ESRCH' ? undefined : 'process_group_kill_failed' }); }
+  }, 100);
 }
 
 function runProbe(request, { spawnProcess = spawn, platform = process.platform, output = process.stdout, schedule = setTimeout } = {}) {
@@ -49,18 +62,31 @@ function runProbe(request, { spawnProcess = spawn, platform = process.platform, 
   const stderr = createOutputCapture(child.stderr);
   let timedOut = false;
   let settled = false;
-  const timer = schedule(() => { timedOut = true; terminateOwnedTree(child, { platform, spawnProcess, schedule }); }, timeoutMs);
+  const finishTimeout = (containment) => {
+    if (settled) return;
+    settled = true;
+    clearTimeout(timer);
+    if (containment.contained) return finish({ ok: false, code: 'ETIMEDOUT', message: `Obsidian CLI probe timed out after ${timeoutMs}ms`, stdout: stdout.value(), stderr: stderr.value() });
+    finish({ ok: false, code: 'ECONTAINMENT', message: `Obsidian CLI probe timed out after ${timeoutMs}ms and owned process-tree containment could not be confirmed (${containment.reason || 'unknown'})`, stdout: stdout.value(), stderr: stderr.value() });
+  };
+  const timer = schedule(() => {
+    timedOut = true;
+    terminateOwnedTree(child, { platform, spawnProcess, schedule, onComplete: finishTimeout });
+  }, timeoutMs);
   child.on('error', (error) => {
     if (settled) return;
+    if (timedOut) return;
     settled = true;
     clearTimeout(timer);
     finish({ ok: false, code: error.code, message: error.message, stdout: stdout.value(), stderr: stderr.value() });
   });
   child.on('close', (code, signal) => {
     if (settled) return;
+    // A timeout has begun owned-tree containment.  The direct child may close
+    // before same-group descendants receive the SIGKILL escalation.
+    if (timedOut) return;
     settled = true;
     clearTimeout(timer);
-    if (timedOut) return finish({ ok: false, code: 'ETIMEDOUT', message: `Obsidian CLI probe timed out after ${timeoutMs}ms`, stdout: stdout.value(), stderr: stderr.value() });
     if (code === 0) return finish({ ok: true, stdout: stdout.value(), stderr: stderr.value() });
     finish({ ok: false, code: code == null ? signal : code, message: stderr.value() || stdout.value() || `Obsidian CLI exited with ${code == null ? signal : code}`, stdout: stdout.value(), stderr: stderr.value() });
   });
