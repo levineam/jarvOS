@@ -340,7 +340,22 @@ function generateOverlays(config) {
       coachName: config.COACH_NAME,
       vaultPath: config.VAULT_PATH,
       workspacePath: config.WORKSPACE_PATH,
-      runtime: config.RUNTIME
+      runtime: config.RUNTIME,
+      paths: {
+        workspace: config.WORKSPACE_PATH,
+        vault: config.VAULT_PATH,
+        notes: path.join(config.VAULT_PATH, 'Notes'),
+        journal: path.join(config.VAULT_PATH, 'Journal'),
+        tags: path.join(config.VAULT_PATH, 'Tags'),
+        memory: path.join(config.WORKSPACE_PATH, 'memory'),
+        scripts: path.join(config.WORKSPACE_PATH, 'scripts'),
+        workflows: path.join(config.WORKSPACE_PATH, 'workflows'),
+        customers: path.join(config.WORKSPACE_PATH, 'customers')
+      },
+      user: {
+        name: config.USER_NAME,
+        timezone: config.TIMEZONE
+      }
     };
     fs.writeFileSync(configPath, JSON.stringify(jarvosConfig, null, 2) + '\n', 'utf8');
     ok(`jarvos.config.json → ${configPath}`);

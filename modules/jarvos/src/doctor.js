@@ -97,6 +97,15 @@ function validateAgainstSchema(value, schema, instancePath = '') {
     return [`${instancePath || '/'} schema must be an object`];
   }
 
+  if (Array.isArray(schema.anyOf)) {
+    const matches = schema.anyOf.some((candidate) => (
+      validateAgainstSchema(value, candidate, instancePath).length === 0
+    ));
+    if (!matches) {
+      errors.push(`${instancePath || '/'} must match one supported config shape`);
+    }
+  }
+
   if (schema.type && !typeMatches(value, schema.type)) {
     errors.push(`${instancePath || '/'} must be ${schema.type}`);
     return errors;
@@ -128,6 +137,10 @@ function validateAgainstSchema(value, schema, instancePath = '') {
     value.forEach((item, index) => {
       errors.push(...validateAgainstSchema(item, schema.items, `${instancePath}/${index}`));
     });
+  }
+
+  if (schema.type === 'string' && value.trim() === '') {
+    errors.push(`${instancePath || '/'} must be a non-empty string`);
   }
 
   return errors;

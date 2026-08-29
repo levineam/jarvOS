@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Shared-vault onboarding for new runtimes.
+ * Sync a new runtime with an existing jarvOS installation.
  *
  * A runtime such as Hermes should not need runtime-specific path instructions.
  * Point this helper at an existing vault once; it writes a portable
@@ -30,7 +30,8 @@ function hasSharedVaultShape(vaultDir) {
   return Boolean(
     vaultDir
     && fs.existsSync(path.join(vaultDir, 'Notes'))
-    && fs.existsSync(path.join(vaultDir, 'Journal')),
+    && fs.existsSync(path.join(vaultDir, 'Journal'))
+    && fs.existsSync(path.join(vaultDir, 'Tags')),
   );
 }
 
@@ -58,18 +59,19 @@ function buildSharedVaultConfig({
     throw new Error('A shared vault path is required. Pass --vault or create ~/Vaults/Vault v3.');
   }
   if (!hasSharedVaultShape(resolvedVault)) {
-    throw new Error(`Shared vault must contain Notes/ and Journal/: ${resolvedVault}`);
+    throw new Error(`Existing jarvOS vault must contain Notes/, Journal/, and Tags/: ${resolvedVault}`);
   }
 
   const resolvedWorkspace = asAbsolutePath(workspaceRoot || path.join(homeDir, 'clawd'), homeDir);
 
   return {
-    $schema: './jarvos.config.schema.json',
+    $schema: 'https://raw.githubusercontent.com/levineam/jarvOS/main/jarvos.config.schema.json',
     paths: {
       workspace: resolvedWorkspace,
       vault: resolvedVault,
       notes: path.join(resolvedVault, 'Notes'),
       journal: path.join(resolvedVault, 'Journal'),
+      tags: path.join(resolvedVault, 'Tags'),
       memory: path.join(resolvedWorkspace, 'memory'),
       scripts: path.join(resolvedWorkspace, 'scripts'),
       workflows: path.join(resolvedWorkspace, 'workflows'),
@@ -82,6 +84,58 @@ function buildSharedVaultConfig({
   };
 }
 
+function resolvedConfigPaths(config, homeDir) {
+  const configured = config?.paths && typeof config.paths === 'object' ? config.paths : {};
+  const workspace = asAbsolutePath(configured.workspace || config?.workspacePath, homeDir);
+  const vault = asAbsolutePath(configured.vault || config?.vaultPath, homeDir);
+  return {
+    workspace,
+    vault,
+    notes: asAbsolutePath(configured.notes, homeDir) || (vault && path.join(vault, 'Notes')),
+    journal: asAbsolutePath(configured.journal, homeDir) || (vault && path.join(vault, 'Journal')),
+    tags: asAbsolutePath(configured.tags, homeDir) || (vault && path.join(vault, 'Tags')),
+    memory: asAbsolutePath(configured.memory, homeDir) || (workspace && path.join(workspace, 'memory')),
+    scripts: asAbsolutePath(configured.scripts, homeDir) || (workspace && path.join(workspace, 'scripts')),
+    workflows: asAbsolutePath(configured.workflows, homeDir) || (workspace && path.join(workspace, 'workflows')),
+    customers: asAbsolutePath(configured.customers, homeDir) || (workspace && path.join(workspace, 'customers')),
+  };
+}
+
+function isCompatibleSharedVaultConfig(existing, expected, homeDir = os.homedir()) {
+  if (!existing || typeof existing !== 'object' || Array.isArray(existing)) return false;
+  const existingPaths = resolvedConfigPaths(existing, homeDir);
+  const expectedPaths = resolvedConfigPaths(expected, homeDir);
+  const pathsMatch = Object.keys(expectedPaths).every((key) => existingPaths[key] === expectedPaths[key]);
+  const existingName = existing.user?.name || existing.userName;
+  const existingTimezone = existing.user?.timezone
+    || existing.user?.timeZone
+    || existing.timezone
+    || existing.timeZone;
+  return pathsMatch
+    && existingName === expected.user.name
+    && existingTimezone === expected.user.timezone;
+}
+
+function assessSharedVaultConfigTarget({ configPath, config, homeDir = os.homedir() } = {}) {
+  const target = asAbsolutePath(configPath || path.join(process.cwd(), 'jarvos.config.json'), homeDir);
+  if (!fs.existsSync(target)) return { action: 'create', configPath: target };
+
+  const targetStat = fs.lstatSync(target);
+  if (targetStat.isSymbolicLink()) {
+    throw new Error(`Refusing to write through a symlinked config path: ${target}`);
+  }
+  let existing;
+  try {
+    existing = JSON.parse(fs.readFileSync(target, 'utf8'));
+  } catch (error) {
+    throw new Error(`Refusing to overwrite an unreadable existing config: ${target} (${error.message})`);
+  }
+  return {
+    action: isCompatibleSharedVaultConfig(existing, config, homeDir) ? 'already-synced' : 'conflict',
+    configPath: target,
+  };
+}
+
 function writeSharedVaultConfig({
   configPath,
   vaultDir,
@@ -91,9 +145,20 @@ function writeSharedVaultConfig({
 } = {}) {
   const target = asAbsolutePath(configPath || path.join(process.cwd(), 'jarvos.config.json'), homeDir);
   const config = buildSharedVaultConfig({ vaultDir, workspaceRoot, homeDir, user });
+  const assessment = assessSharedVaultConfigTarget({ configPath: target, config, homeDir });
+  if (assessment.action === 'already-synced') {
+    return { configPath: target, config, changed: false };
+  }
+  if (assessment.action === 'conflict') {
+    throw new Error(
+      `Refusing to overwrite an existing jarvos.config.json: ${target}. `
+      + 'Choose a new --config path or reconcile the existing config manually.',
+    );
+  }
+
   fs.mkdirSync(path.dirname(target), { recursive: true });
-  fs.writeFileSync(target, `${JSON.stringify(config, null, 2)}\n`);
-  return { configPath: target, config };
+  fs.writeFileSync(target, `${JSON.stringify(config, null, 2)}\n`, { flag: 'wx', mode: 0o600 });
+  return { configPath: target, config, changed: true };
 }
 
 function parseArgs(argv) {
@@ -131,8 +196,9 @@ function usage() {
   return [
     'Usage: node bridge/config/src/shared-vault-onboarding.js [--vault PATH] [--workspace PATH] [--config PATH] [--dry-run]',
     '',
-    'Creates a jarvos.config.json that points this runtime at an existing shared vault.',
-    'If --vault is omitted, the helper uses ~/Vaults/Vault v3 when it contains Notes/ and Journal/.',
+    'Sync with an existing jarvOS installation by pointing this runtime at its shared vault.',
+    'If --vault is omitted, the helper uses ~/Vaults/Vault v3 when it contains Notes/, Journal/, and Tags/.',
+    'The helper never writes inside the vault and refuses to replace a different existing config.',
   ].join('\n');
 }
 
@@ -174,8 +240,10 @@ if (require.main === module) {
 
 module.exports = {
   DEFAULT_VAULT_CANDIDATES,
+  assessSharedVaultConfigTarget,
   buildSharedVaultConfig,
   discoverExistingVault,
   hasSharedVaultShape,
+  isCompatibleSharedVaultConfig,
   writeSharedVaultConfig,
 };

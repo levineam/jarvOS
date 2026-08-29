@@ -3,13 +3,34 @@
   "$id": "https://github.com/levineam/jarvOS/schemas/jarvos.config.schema.json",
   "title": "jarvOS config",
   "type": "object",
-  "required": [
-    "assistantName",
-    "userName",
-    "coachName",
-    "vaultPath",
-    "workspacePath",
-    "runtime"
+  "anyOf": [
+    {
+      "title": "Legacy bootstrap config",
+      "type": "object",
+      "required": [
+        "assistantName",
+        "userName",
+        "coachName",
+        "vaultPath",
+        "workspacePath",
+        "runtime"
+      ]
+    },
+    {
+      "title": "Portable shared-installation config",
+      "type": "object",
+      "required": ["paths", "user"],
+      "properties": {
+        "paths": {
+          "type": "object",
+          "required": ["workspace", "vault"]
+        },
+        "user": {
+          "type": "object",
+          "required": ["name", "timezone"]
+        }
+      }
+    }
   ],
   "properties": {
     "assistantName": { "type": "string" },
@@ -21,14 +42,22 @@
     "paths": {
       "type": "object",
       "properties": {
+        "workspace": { "type": "string" },
         "vault": { "type": "string" },
-        "journal": { "type": "string" }
+        "notes": { "type": "string" },
+        "journal": { "type": "string" },
+        "tags": { "type": "string" },
+        "memory": { "type": "string" },
+        "scripts": { "type": "string" },
+        "workflows": { "type": "string" },
+        "customers": { "type": "string" }
       },
       "additionalProperties": true
     },
     "user": {
       "type": "object",
       "properties": {
+        "name": { "type": "string" },
         "timezone": { "type": "string" }
       },
       "additionalProperties": true

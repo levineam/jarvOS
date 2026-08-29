@@ -178,7 +178,8 @@ function resolveJournalConfig(options = {}) {
     || configuredJournalPath(paths, 'journal', home)
     || (() => {
       const vault = firstConfiguredJournalPath(PATH_ENV_KEYS.vault, env, home)
-        || configuredJournalPath(paths, 'vault', home);
+        || configuredJournalPath(paths, 'vault', home)
+        || configuredJournalPath({ vault: raw?.vaultPath }, 'vault', home);
       return vault ? path.join(vault, 'Journal') : null;
     })();
   if (!explicitJournal) throw new Error('Journal mutation requires an explicit journal directory');
@@ -295,7 +296,14 @@ function resolveConfig(options = {}) {
   const raw = readJsonFile(configPath);
   const { $schema: _schema, ...rest } = raw && typeof raw === 'object' ? raw : {};
   const basePaths = defaultPaths(home);
-  const configPaths = normalizePathMap(rest.paths, home);
+  const legacyPaths = normalizePathMap({
+    workspace: rest.workspacePath,
+    vault: rest.vaultPath,
+  }, home);
+  const configPaths = {
+    ...legacyPaths,
+    ...normalizePathMap(rest.paths, home),
+  };
   const envPaths = {};
 
   for (const [key, keys] of Object.entries(PATH_ENV_KEYS)) {
@@ -337,7 +345,7 @@ function resolveConfig(options = {}) {
   assertWithinRequiredVault(paths.vault, requiredCanonicalVaultRoot(env, home), vaultSource);
 
   const user = {
-    name: rest.user?.name || DEFAULT_USER_NAME,
+    name: rest.user?.name || rest.userName || DEFAULT_USER_NAME,
     timezone: resolveUserTimezone(rest, env),
   };
 

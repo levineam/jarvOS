@@ -95,26 +95,32 @@ configuration, but scheduler delivery and operational evidence stay outside
 this package. The stdio MCP health action is read-only; MCP ensure is reserved
 for an explicit user request or host-declared journal-maintenance trigger.
 
-## Shared-Vault Runtime Onboarding
+## Sync with an Existing jarvOS Installation
 
-When a new runtime such as Hermes should reuse an existing secondbrain, make
-`jarvos-secondbrain` own the vault handoff instead of adding runtime-specific
-path instructions. Run the shared-vault onboarding helper from the runtime's
-workspace:
+When a new harness such as Hermes should reuse an existing secondbrain, make
+`jarvos-secondbrain` own the vault handoff instead of adding harness-specific
+path instructions. From the public jarvOS checkout, inspect the sync plan first:
 
 ```bash
-npm --prefix jarvos-secondbrain run onboard:shared-vault -- \
+jarvos sync \
   --vault "$HOME/Vaults/MyVault" \
   --workspace "$PWD" \
-  --config "$PWD/jarvos.config.json"
+  --name "Your Name" \
+  --timezone Area/City \
+  --dry-run
 ```
 
-The helper validates that the vault contains `Notes/` and `Journal/`, then writes
-a `jarvos.config.json` whose `paths.vault`, `paths.notes`, and `paths.journal`
-all point at the existing vault. After that, any runtime using
-`resolveConfig()` writes through the same Journal and Notes surfaces as the
-configured host. Use `--dry-run` first when you want to inspect the
-resolved paths without writing the config.
+Rerun without `--dry-run` to create the config. The command validates that the
+vault contains `Notes/`, `Journal/`, and `Tags/`, then writes a
+`jarvos.config.json` whose shared paths all point at the existing vault. It
+never writes inside the vault and refuses to replace a different existing
+config. After that, any harness using `resolveConfig()` reads and writes through
+the same Journal, Notes, and Tags surfaces as the configured host. Run
+`jarvos doctor --profile minimal --workspace "$PWD"` afterward; a successful
+config handoff does not by itself claim the rest of the harness is installed.
+
+The lower-level `onboard:shared-vault` npm script remains available for module
+consumers, with the same config-only and no-overwrite safety contract.
 
 ## Bootstrap choices
 

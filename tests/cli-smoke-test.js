@@ -23,6 +23,11 @@ const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-cli-'));
 try {
   const workspace = path.join(tmp, 'workspace');
   const vault = path.join(tmp, 'vault');
+  const syncWorkspace = path.join(tmp, 'sync-workspace');
+  const syncVault = path.join(tmp, 'sync-vault');
+  fs.mkdirSync(path.join(syncVault, 'Notes'), { recursive: true });
+  fs.mkdirSync(path.join(syncVault, 'Journal'), { recursive: true });
+  fs.mkdirSync(path.join(syncVault, 'Tags'), { recursive: true });
   const controlPlaneHost = path.join(tmp, 'control-plane-host.js');
   const controlPlaneSource = path.join(ROOT, 'modules', 'jarvos-control-plane', 'src', 'index.js');
   fs.writeFileSync(controlPlaneHost, [
@@ -89,6 +94,7 @@ try {
   const help = run(['--help']);
   assert.equal(help.status, 0, help.stderr || help.stdout);
   assert.match(help.stdout, /jarvos init/);
+  assert.match(help.stdout, /jarvos sync/);
   assert.match(help.stdout, /jarvos doctor/);
   assert.match(help.stdout, /minimal\s+Portable jarvOS starter workspace/);
 
@@ -100,6 +106,45 @@ try {
   const doctorHelp = run(['doctor', '--help']);
   assert.equal(doctorHelp.status, 0, doctorHelp.stderr || doctorHelp.stdout);
   assert.match(doctorHelp.stdout, /public profile health checks/);
+
+  const syncHelp = run(['sync', '--help']);
+  assert.equal(syncHelp.status, 0, syncHelp.stderr || syncHelp.stdout);
+  assert.match(syncHelp.stdout, /Sync with an existing jarvOS installation/);
+  assert.match(syncHelp.stdout, /never writes\ninside the vault/);
+
+  const syncConfigPath = path.join(syncWorkspace, 'jarvos.config.json');
+  const syncArgs = [
+    'sync',
+    '--workspace', syncWorkspace,
+    '--vault', syncVault,
+    '--name', 'TestUser',
+    '--timezone', 'UTC',
+  ];
+  const syncDryRun = run([...syncArgs, '--dry-run', '--json']);
+  assert.equal(syncDryRun.status, 0, syncDryRun.stderr || syncDryRun.stdout);
+  assert.equal(JSON.parse(syncDryRun.stdout).vaultWrites, false);
+  assert.equal(fs.existsSync(syncConfigPath), false, 'sync dry-run must not create the config or workspace');
+
+  const syncApply = run(syncArgs);
+  assert.equal(syncApply.status, 0, syncApply.stderr || syncApply.stdout);
+  assert.match(syncApply.stdout, /Mode: APPLIED/);
+  assert.match(syncApply.stdout, /Vault writes: none/);
+  assert.ok(fs.existsSync(syncConfigPath));
+
+  const syncAgain = run(syncArgs);
+  assert.equal(syncAgain.status, 0, syncAgain.stderr || syncAgain.stdout);
+  assert.match(syncAgain.stdout, /Mode: ALREADY SYNCED/);
+
+  const syncConfigSuperset = JSON.parse(fs.readFileSync(syncConfigPath, 'utf8'));
+  syncConfigSuperset.privateExtension = { enabled: true };
+  fs.writeFileSync(syncConfigPath, `${JSON.stringify(syncConfigSuperset, null, 2)}\n`);
+  const syncCompatibleSuperset = run([...syncArgs, '--dry-run']);
+  assert.equal(syncCompatibleSuperset.status, 0, syncCompatibleSuperset.stderr || syncCompatibleSuperset.stdout);
+  assert.match(syncCompatibleSuperset.stdout, /Config action: already-synced/);
+
+  const syncConflict = run(syncArgs.map((arg) => (arg === 'TestUser' ? 'DifferentUser' : arg)));
+  assert.notEqual(syncConflict.status, 0);
+  assert.match(syncConflict.stderr, /Refusing to overwrite an existing jarvos\.config\.json/);
 
   const badProfile = run(['init', '--profile', 'full', '--yes']);
   assert.notEqual(badProfile.status, 0);
@@ -164,6 +209,24 @@ try {
   assert.match(doctor.stdout, /authenticated host service/);
   assert.match(doctor.stdout, /READY/);
 
+  for (const file of [
+    'AGENTS.md',
+    'BOOTSTRAP.md',
+    'HEARTBEAT.md',
+    'MEMORY.md',
+    'USER.md',
+    'ONTOLOGY.md',
+    'SOUL.md',
+    'TOOLS.md',
+  ]) {
+    fs.copyFileSync(path.join(workspace, file), path.join(syncWorkspace, file));
+  }
+  const syncDoctor = run(['doctor', '--profile', 'minimal', '--workspace', syncWorkspace], { env });
+  assert.equal(syncDoctor.status, 0, syncDoctor.stderr || syncDoctor.stdout);
+  assert.match(syncDoctor.stdout, /PASS config-schema/);
+  assert.match(syncDoctor.stdout, /PASS vault-path/);
+  assert.match(syncDoctor.stdout, /READY/);
+
   const jsonDoctor = run(['doctor', '--profile=minimal', '--workspace', workspace, '--json'], { env });
   assert.equal(jsonDoctor.status, 0, jsonDoctor.stderr || jsonDoctor.stdout);
   const report = JSON.parse(jsonDoctor.stdout);
@@ -214,7 +277,7 @@ try {
     ROOT,
     '--json',
   ], { env: localDoctorEnv });
-  assert.notEqual(localDoctor.status, 0, 'local profile should report the incomplete minimal fixture as not ready');
+  assert.equal(localDoctor.status, 0, localDoctor.stderr || localDoctor.stdout);
   const localReport = JSON.parse(localDoctor.stdout);
   assert.equal(localReport.profile, 'local-openclaw');
   const persistence = localReport.checks.find((check) => check.component === 'openclaw.pluginPersistence');

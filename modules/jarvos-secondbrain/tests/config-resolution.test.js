@@ -317,11 +317,12 @@ test('JARVOS_REQUIRE_CANONICAL_VAULT passes when JARVOS_VAULT_DIR is pinned to t
   assert.equal(config.paths.vault, requiredRoot);
 });
 
-test('discoverExistingVault finds one reusable vault with Notes and Journal', () => {
+test('discoverExistingVault finds one reusable vault with Notes, Journal, and Tags', () => {
   const home = tempDir();
   const vault = path.join(home, 'Vaults', 'Vault v3');
   fs.mkdirSync(path.join(vault, 'Notes'), { recursive: true });
   fs.mkdirSync(path.join(vault, 'Journal'), { recursive: true });
+  fs.mkdirSync(path.join(vault, 'Tags'), { recursive: true });
 
   assert.equal(discoverExistingVault({ homeDir: home }), vault);
 });
@@ -334,6 +335,7 @@ test('shared-vault onboarding writes a config a new runtime home can reuse', () 
   const vault = path.join(realHome, 'Vaults', 'Vault v3');
   fs.mkdirSync(path.join(vault, 'Notes'), { recursive: true });
   fs.mkdirSync(path.join(vault, 'Journal'), { recursive: true });
+  fs.mkdirSync(path.join(vault, 'Tags'), { recursive: true });
 
   writeSharedVaultConfig({
     configPath,
@@ -348,17 +350,84 @@ test('shared-vault onboarding writes a config a new runtime home can reuse', () 
   assert.equal(config.paths.vault, vault);
   assert.equal(config.paths.notes, path.join(vault, 'Notes'));
   assert.equal(config.paths.journal, path.join(vault, 'Journal'));
+  assert.equal(config.paths.tags, path.join(vault, 'Tags'));
   assert.equal(config.user.name, 'Hermes');
   assert.equal(config.user.timezone, 'UTC');
 });
 
-test('shared-vault onboarding refuses paths without Notes and Journal', () => {
+test('shared-vault onboarding refuses paths without Notes, Journal, and Tags', () => {
   const home = tempDir();
   const vault = path.join(home, 'Vaults', 'Vault v3');
   fs.mkdirSync(path.join(vault, 'Notes'), { recursive: true });
 
   assert.throws(
     () => buildSharedVaultConfig({ vaultDir: vault, homeDir: home }),
-    /must contain Notes\/ and Journal\//,
+    /must contain Notes\/, Journal\/, and Tags\//,
   );
+});
+
+test('shared-vault onboarding is idempotent and refuses to replace a different config', () => {
+  const home = tempDir();
+  const workspace = path.join(home, 'workspace');
+  const configPath = path.join(workspace, 'jarvos.config.json');
+  const vault = path.join(home, 'Vaults', 'Vault v3');
+  fs.mkdirSync(path.join(vault, 'Notes'), { recursive: true });
+  fs.mkdirSync(path.join(vault, 'Journal'), { recursive: true });
+  fs.mkdirSync(path.join(vault, 'Tags'), { recursive: true });
+
+  const first = writeSharedVaultConfig({
+    configPath,
+    vaultDir: vault,
+    workspaceRoot: workspace,
+    homeDir: home,
+    user: { name: 'Tester', timezone: 'UTC' },
+  });
+  const second = writeSharedVaultConfig({
+    configPath,
+    vaultDir: vault,
+    workspaceRoot: workspace,
+    homeDir: home,
+    user: { name: 'Tester', timezone: 'UTC' },
+  });
+
+  assert.equal(first.changed, true);
+  assert.equal(second.changed, false);
+
+  const compatibleSuperset = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+  compatibleSuperset.gbrainContinuity = { required: true };
+  fs.writeFileSync(configPath, `${JSON.stringify(compatibleSuperset, null, 2)}\n`);
+  assert.equal(writeSharedVaultConfig({
+    configPath,
+    vaultDir: vault,
+    workspaceRoot: workspace,
+    homeDir: home,
+    user: { name: 'Tester', timezone: 'UTC' },
+  }).changed, false);
+
+  assert.throws(
+    () => writeSharedVaultConfig({
+      configPath,
+      vaultDir: vault,
+      workspaceRoot: workspace,
+      homeDir: home,
+      user: { name: 'Different User', timezone: 'UTC' },
+    }),
+    /Refusing to overwrite an existing jarvos\.config\.json/,
+  );
+});
+
+test('resolveConfig accepts legacy bootstrap paths as compatibility input', () => {
+  const home = tempDir();
+  const configPath = path.join(home, 'legacy.json');
+  fs.writeFileSync(configPath, JSON.stringify({
+    userName: 'Legacy User',
+    workspacePath: '/srv/legacy-workspace',
+    vaultPath: '/srv/legacy-vault',
+  }));
+
+  const config = resolveConfig({ configPath, homeDir: home, env: {} });
+  assert.equal(config.paths.workspace, '/srv/legacy-workspace');
+  assert.equal(config.paths.vault, '/srv/legacy-vault');
+  assert.equal(config.paths.journal, '/srv/legacy-vault/Journal');
+  assert.equal(config.user.name, 'Legacy User');
 });

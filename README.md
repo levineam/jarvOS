@@ -262,6 +262,7 @@ Clone the repo and run the smoke test:
 ```bash
 git clone https://github.com/levineam/jarvOS.git
 cd jarvOS
+npm ci
 npm test
 ```
 
@@ -278,8 +279,21 @@ working while making new profile-aware commands discoverable:
 
 ```bash
 jarvos init --profile minimal --yes
+jarvos sync --workspace /path/to/jarvos-workspace \
+  --vault "$HOME/Vaults/Vault v3" \
+  --name "Your Name" \
+  --timezone Area/City \
+  --dry-run
 jarvos doctor --profile minimal --workspace /path/to/jarvos-workspace
 ```
+
+Use `jarvos init` for a new standalone system. Use `jarvos sync` to **sync with
+an existing jarvOS installation**: it creates a portable config that points the
+new harness at the existing vault. The sync command is config-only, never
+writes inside the vault, requires an explicit workspace, and refuses to replace
+a different existing config. Inspect the plan with `--dry-run`, rerun without
+that flag to apply it, and then use `jarvos doctor` to expose any remaining
+workspace or runtime setup rather than assuming the machine is ready.
 
 `jarvos doctor` uses the checked-in profile manifest and reports portable health
 checks for the starter workspace, `jarvos.config.json`, vault folders, Node.js,
