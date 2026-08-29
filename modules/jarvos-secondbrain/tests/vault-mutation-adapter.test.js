@@ -3,11 +3,13 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { EventEmitter } = require('node:events');
 const vm = require('node:vm');
 const test = require('node:test');
 const { createVaultMutationAdapter, runObsidianEval } = require('../adapters/obsidian/src/vault-mutation-adapter');
 const { buildObsidianInvariantProgram, buildObsidianMutationProgram } = require('../adapters/obsidian/src/vault-mutation-adapter');
 const { createJarvosVaultTransforms } = require('../src/vault-transform-registry');
+const { MAX_CAPTURE_BYTES, createOutputCapture, terminateOwnedTree } = require('../adapters/obsidian/src/obsidian-cli-probe-worker');
 
 const operation = () => ({ schemaVersion: 1, operationId: 'op-20260806-adapter-test', vaultId: 'vault-a', vaultRelativePath: 'Notes/A.md', sequence: 1, operationKind: 'create', content: 'hello' });
 const ledgerPath = () => path.join(os.tmpdir(), `jarvos-adapter-${Math.random()}.json`);
@@ -59,7 +61,7 @@ test('capability probe times out and contains only its fake CLI process group', 
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-obsidian-probe-'));
   const fixture = path.join(root, 'fake-obsidian-cli.js');
   const descendantPid = path.join(root, 'descendant.pid');
-  fs.writeFileSync(fixture, `#!${process.execPath}\nconst fs = require('node:fs'); const { spawn } = require('node:child_process'); const child = spawn(process.execPath, ['-e', \"setInterval(() => {}, 1000)\"], { stdio: 'ignore' }); fs.writeFileSync(${JSON.stringify(descendantPid)}, String(child.pid)); setInterval(() => {}, 1000);\n`);
+  fs.writeFileSync(fixture, `#!${process.execPath}\nconst fs = require('node:fs'); const { spawn } = require('node:child_process'); const child = spawn(process.execPath, ['-e', \"setInterval(() => {}, 1000)\"], { stdio: ['ignore', 'inherit', 'inherit'] }); fs.writeFileSync(${JSON.stringify(descendantPid)}, String(child.pid)); setInterval(() => {}, 1000);\n`);
   fs.chmodSync(fixture, 0o755);
   const started = Date.now();
   try {
@@ -70,6 +72,22 @@ test('capability probe times out and contains only its fake CLI process group', 
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
+});
+
+test('probe output capture caps multibyte chunks by bytes', () => {
+  const stream = new EventEmitter();
+  const capture = createOutputCapture(stream);
+  stream.emit('data', Buffer.from('€'.repeat(MAX_CAPTURE_BYTES)));
+  assert.equal(capture.bytes(), MAX_CAPTURE_BYTES);
+});
+
+test('Windows taskkill failure falls back to direct-child termination', () => {
+  const taskkill = new EventEmitter();
+  const signals = [];
+  const child = { pid: 12345, kill: (signal) => signals.push(signal) };
+  terminateOwnedTree(child, { platform: 'win32', spawnProcess: () => taskkill });
+  taskkill.emit('close', 1);
+  assert.deepEqual(signals, ['SIGKILL']);
 });
 
 test('unavailable capability retains planned intent for reconciliation', () => {
