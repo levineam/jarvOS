@@ -140,9 +140,6 @@ function validateAgainstSchema(value, schema, instancePath = '') {
     });
   }
 
-  if (schema.type === 'string' && value.trim() === '') {
-    errors.push(`${instancePath || '/'} must be a non-empty string`);
-  }
   if (schema.format === 'time-zone' && !isValidTimezone(value)) {
     errors.push(`${instancePath || '/'} must be a valid IANA timezone`);
   }

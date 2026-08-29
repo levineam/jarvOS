@@ -130,7 +130,23 @@ test('resolveConfig rejects an invalid configured timezone instead of silently c
 
   assert.throws(
     () => resolveConfig({ configPath, homeDir: '/home/tester', env: {} }),
-    /invalid configured IANA timezone/,
+    /invalid IANA timezone "Not\/AZone" from .*jarvos\.config\.json/,
+  );
+});
+
+test('resolveJournalConfig does not derive a write target from legacy vaultPath', () => {
+  const home = tempDir();
+  const configPath = path.join(home, 'jarvos.config.json');
+  const staleVault = path.join(home, 'Documents', 'Vault v3');
+  fs.mkdirSync(path.join(home, 'Vaults', 'Vault v3'), { recursive: true });
+  fs.writeFileSync(configPath, JSON.stringify({
+    vaultPath: staleVault,
+    user: { timezone: 'UTC' },
+  }));
+
+  assert.throws(
+    () => resolveJournalConfig({ configPath, homeDir: home, env: {} }),
+    /explicit journal directory/i,
   );
 });
 
@@ -373,7 +389,7 @@ test('shared-vault onboarding refuses paths without Notes, Journal, and Tags', (
 
   assert.throws(
     () => buildSharedVaultConfig({ vaultDir: vault, homeDir: home }),
-    /must contain Notes\/, Journal\/, and Tags\//,
+    /missing required directories \(Journal, Tags\)/,
   );
 });
 
@@ -495,7 +511,7 @@ test('shared-vault onboarding rejects invalid timezones before generating a conf
   );
 });
 
-test('resolveConfig accepts legacy bootstrap paths as compatibility input', () => {
+test('resolveConfig preserves historical default resolution for legacy bootstrap paths', () => {
   const home = tempDir();
   const configPath = path.join(home, 'legacy.json');
   fs.writeFileSync(configPath, JSON.stringify({
@@ -505,8 +521,24 @@ test('resolveConfig accepts legacy bootstrap paths as compatibility input', () =
   }));
 
   const config = resolveConfig({ configPath, homeDir: home, env: {} });
-  assert.equal(config.paths.workspace, '/srv/legacy-workspace');
-  assert.equal(config.paths.vault, '/srv/legacy-vault');
-  assert.equal(config.paths.journal, '/srv/legacy-vault/Journal');
+  assert.equal(config.paths.workspace, path.join(home, 'clawd'));
+  assert.equal(config.paths.vault, path.join(home, 'Vaults', 'Vault v3'));
+  assert.equal(config.paths.journal, path.join(home, 'Vaults', 'Vault v3', 'Journal'));
   assert.equal(config.user.name, 'Legacy User');
+});
+
+test('shared-vault onboarding rejects a stale vault and discovery skips its DO_NOT_USE marker', () => {
+  const home = tempDir();
+  const staleVault = path.join(home, 'Documents', 'Vault v3');
+  const canonicalVault = path.join(home, 'Vaults', 'Vault v3');
+  for (const vault of [staleVault, canonicalVault]) {
+    for (const directory of ['Notes', 'Journal', 'Tags']) fs.mkdirSync(path.join(vault, directory), { recursive: true });
+  }
+  fs.writeFileSync(path.join(staleVault, 'DO_NOT_USE.txt'), `Use ${canonicalVault} instead.\n`);
+
+  assert.equal(discoverExistingVault({ homeDir: home }), canonicalVault);
+  assert.throws(
+    () => buildSharedVaultConfig({ vaultDir: staleVault, workspaceRoot: path.join(home, 'workspace'), homeDir: home }),
+    /Refusing to use stale vault path/,
+  );
 });

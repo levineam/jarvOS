@@ -201,6 +201,23 @@ try {
   assert.notEqual(syncConflict.status, 0);
   assert.match(syncConflict.stderr, /Refusing to overwrite an existing jarvos\.config\.json/);
 
+  // A pre-sync bootstrap config has only legacy path keys and no timezone.
+  // Syncing it with an explicit timezone must be a safe no-overwrite attach,
+  // rather than treating the missing metadata as a conflict.
+  const legacySyncWorkspace = path.join(tmp, 'legacy-sync-workspace');
+  fs.mkdirSync(legacySyncWorkspace);
+  fs.writeFileSync(path.join(legacySyncWorkspace, 'jarvos.config.json'), JSON.stringify({
+    workspacePath: legacySyncWorkspace,
+    vaultPath: syncVault,
+    userName: 'TestUser',
+  }));
+  const syncLegacy = run([
+    'sync', '--workspace', legacySyncWorkspace, '--vault', syncVault,
+    '--name', 'TestUser', '--timezone', 'UTC', '--dry-run',
+  ]);
+  assert.equal(syncLegacy.status, 0, syncLegacy.stderr || syncLegacy.stdout);
+  assert.match(syncLegacy.stdout, /Config action: already-synced/);
+
   const badProfile = run(['init', '--profile', 'full', '--yes']);
   assert.notEqual(badProfile.status, 0);
   assert.match(badProfile.stderr, /Unknown profile: full/);

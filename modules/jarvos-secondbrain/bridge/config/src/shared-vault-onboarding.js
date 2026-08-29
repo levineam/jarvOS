@@ -16,6 +16,7 @@ const path = require('path');
 const {
   DEFAULT_TIMEZONE,
   DEFAULT_USER_NAME,
+  assertNotStaleVaultPath,
   expandTilde,
   isValidTimezone,
 } = require('./resolve-config');
@@ -40,11 +41,19 @@ function hasSharedVaultShape(vaultDir) {
   );
 }
 
+function missingSharedVaultDirectories(vaultDir) {
+  return ['Notes', 'Journal', 'Tags'].filter((directory) => !fs.existsSync(path.join(vaultDir, directory)));
+}
+
+function hasDoNotUseMarker(vaultDir) {
+  return fs.existsSync(path.join(vaultDir, 'DO_NOT_USE.txt'));
+}
+
 function discoverExistingVault({ homeDir = os.homedir(), candidates = DEFAULT_VAULT_CANDIDATES } = {}) {
   const matches = candidates
     .map((candidate) => asAbsolutePath(candidate, homeDir))
     .filter(Boolean)
-    .filter(hasSharedVaultShape);
+    .filter((candidate) => hasSharedVaultShape(candidate) && !hasDoNotUseMarker(candidate));
 
   if (matches.length === 1) return matches[0];
   if (matches.length > 1) {
@@ -64,8 +73,10 @@ function buildSharedVaultConfig({
     throw new Error('A shared vault path is required. Pass --vault or create ~/Vaults/Vault v3.');
   }
   if (!hasSharedVaultShape(resolvedVault)) {
-    throw new Error(`Existing jarvOS vault must contain Notes/, Journal/, and Tags/: ${resolvedVault}`);
+    const missing = missingSharedVaultDirectories(resolvedVault);
+    throw new Error(`Existing jarvOS vault is missing required directories (${missing.join(', ')}): ${resolvedVault}`);
   }
+  assertNotStaleVaultPath(resolvedVault, { home: homeDir, source: 'config' });
 
   const resolvedWorkspace = asAbsolutePath(workspaceRoot || path.join(homeDir, 'clawd'), homeDir);
   const timezone = user.timezone || DEFAULT_TIMEZONE;
@@ -120,9 +131,12 @@ function isCompatibleSharedVaultConfig(existing, expected, homeDir = os.homedir(
     || existing.user?.timeZone
     || existing.timezone
     || existing.timeZone;
-  return pathsMatch
-    && existingName === expected.user.name
-    && existingTimezone === expected.user.timezone;
+  // Old bootstrap configs did not record identity metadata.  Their paths are
+  // still authoritative; a supplied sync identity is an additive migration,
+  // not a conflicting target.
+  const nameCompatible = !existingName || existingName === expected.user.name;
+  const timezoneCompatible = !existingTimezone || existingTimezone === expected.user.timezone;
+  return pathsMatch && nameCompatible && timezoneCompatible;
 }
 
 function isSameOrDescendant(parentPath, candidatePath) {

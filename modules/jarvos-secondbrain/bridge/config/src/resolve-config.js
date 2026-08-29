@@ -151,7 +151,7 @@ function isValidTimezone(value) {
   }
 }
 
-function resolveUserTimezone(rest = {}, env = process.env) {
+function resolveUserTimezone(rest = {}, env = process.env, configPath = null) {
   const configuredTimezone = env.JARVOS_TIMEZONE
     || rest.user?.timezone
     || rest.user?.timeZone
@@ -159,7 +159,8 @@ function resolveUserTimezone(rest = {}, env = process.env) {
     || rest.timeZone;
   if (configuredTimezone) {
     if (!isValidTimezone(configuredTimezone)) {
-      throw new Error('jarvOS config has an invalid configured IANA timezone');
+      const source = env.JARVOS_TIMEZONE ? 'JARVOS_TIMEZONE' : (configPath || 'jarvos.config.json');
+      throw new Error(`jarvOS configuration has an invalid IANA timezone ${JSON.stringify(configuredTimezone)} from ${source}`);
     }
     return configuredTimezone;
   }
@@ -182,8 +183,7 @@ function resolveJournalConfig(options = {}) {
     || configuredJournalPath(paths, 'journal', home)
     || (() => {
       const vault = firstConfiguredJournalPath(PATH_ENV_KEYS.vault, env, home)
-        || configuredJournalPath(paths, 'vault', home)
-        || configuredJournalPath({ vault: raw?.vaultPath }, 'vault', home);
+        || configuredJournalPath(paths, 'vault', home);
       return vault ? path.join(vault, 'Journal') : null;
     })();
   if (!explicitJournal) throw new Error('Journal mutation requires an explicit journal directory');
@@ -300,14 +300,11 @@ function resolveConfig(options = {}) {
   const raw = readJsonFile(configPath);
   const { $schema: _schema, ...rest } = raw && typeof raw === 'object' ? raw : {};
   const basePaths = defaultPaths(home);
-  const legacyPaths = normalizePathMap({
-    workspace: rest.workspacePath,
-    vault: rest.vaultPath,
-  }, home);
-  const configPaths = {
-    ...legacyPaths,
-    ...normalizePathMap(rest.paths, home),
-  };
+  // Keep legacy bootstrap fields readable by the sync/migration path, but do
+  // not promote them into runtime resolution.  Historically they were ignored
+  // by this resolver; treating a stale legacy value as an active write target
+  // would silently redirect an existing installation.
+  const configPaths = normalizePathMap(rest.paths, home);
   const envPaths = {};
 
   for (const [key, keys] of Object.entries(PATH_ENV_KEYS)) {
@@ -350,7 +347,7 @@ function resolveConfig(options = {}) {
 
   const user = {
     name: rest.user?.name || rest.userName || DEFAULT_USER_NAME,
-    timezone: resolveUserTimezone(rest, env),
+    timezone: resolveUserTimezone(rest, env, configPath),
   };
 
   const config = { paths, user };
