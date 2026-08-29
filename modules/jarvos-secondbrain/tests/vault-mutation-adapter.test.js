@@ -5,7 +5,7 @@ const os = require('node:os');
 const path = require('node:path');
 const vm = require('node:vm');
 const test = require('node:test');
-const { createVaultMutationAdapter } = require('../adapters/obsidian/src/vault-mutation-adapter');
+const { createVaultMutationAdapter, runObsidianEval } = require('../adapters/obsidian/src/vault-mutation-adapter');
 const { buildObsidianInvariantProgram, buildObsidianMutationProgram } = require('../adapters/obsidian/src/vault-mutation-adapter');
 const { createJarvosVaultTransforms } = require('../src/vault-transform-registry');
 
@@ -52,6 +52,24 @@ test('timeouts and ambiguous CLI failures never prove that Obsidian is stopped',
   assert.equal(unknownAdapter.capability().state, 'app_unreachable');
   const stoppedAdapter = createVaultMutationAdapter({ vaultRoot: '/vault', vaultId: 'vault-a', ledgerPath: ledgerPath(), evaluate: () => { throw new Error('Obsidian is not running'); } });
   assert.equal(stoppedAdapter.capability().state, 'app_stopped');
+});
+
+test('capability probe times out and contains only its fake CLI process group', () => {
+  if (process.platform === 'win32') return;
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-obsidian-probe-'));
+  const fixture = path.join(root, 'fake-obsidian-cli.js');
+  const descendantPid = path.join(root, 'descendant.pid');
+  fs.writeFileSync(fixture, `#!${process.execPath}\nconst fs = require('node:fs'); const { spawn } = require('node:child_process'); const child = spawn(process.execPath, ['-e', \"setInterval(() => {}, 1000)\"], { stdio: 'ignore' }); fs.writeFileSync(${JSON.stringify(descendantPid)}, String(child.pid)); setInterval(() => {}, 1000);\n`);
+  fs.chmodSync(fixture, 0o755);
+  const started = Date.now();
+  try {
+    assert.throws(() => runObsidianEval('JSON.stringify({ok:true})', { vaultName: 'fake-vault', command: fixture, timeoutMs: 500 }), (error) => error.code === 'ETIMEDOUT');
+    assert.ok(Date.now() - started < 3_000);
+    const pid = Number(fs.readFileSync(descendantPid, 'utf8'));
+    assert.throws(() => process.kill(pid, 0), { code: 'ESRCH' });
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test('unavailable capability retains planned intent for reconciliation', () => {
