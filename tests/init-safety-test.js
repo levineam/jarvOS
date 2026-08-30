@@ -106,6 +106,17 @@ try {
     }
   }
 
+  const invalidTimezoneWorkspace = path.join(tmp, 'invalid-timezone-workspace');
+  const invalidTimezoneVault = path.join(tmp, 'invalid-timezone-vault');
+  const invalidTimezone = runInit(['--workspace', invalidTimezoneWorkspace, '--vault', invalidTimezoneVault], {
+    ...env,
+    JARVOS_TIMEZONE: 'Not/AZone',
+  });
+  assert.notEqual(invalidTimezone.status, 0);
+  assert.match(`${invalidTimezone.stdout}${invalidTimezone.stderr}`, /TIMEZONE must be a valid IANA timezone/);
+  assert.equal(fs.existsSync(invalidTimezoneWorkspace), false, 'invalid timezone must fail before workspace writes');
+  assert.equal(fs.existsSync(invalidTimezoneVault), false, 'invalid timezone must fail before vault writes');
+
   const relativeRouterHome = path.join(tmp, 'relative-router-home');
   const relativeRouterWorkspace = path.join(tmp, 'relative-router-workspace');
   const relativeRouterVault = path.join(tmp, 'relative-router-vault');
