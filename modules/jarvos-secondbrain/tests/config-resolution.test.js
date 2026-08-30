@@ -516,6 +516,31 @@ test('shared-vault onboarding refuses config targets inside the vault or behind 
     }),
     /symlinked config path/,
   );
+
+  const racedWorkspace = path.join(home, 'raced-workspace');
+  const originalMkdirSync = fs.mkdirSync;
+  fs.mkdirSync = (directory, options) => {
+    if (directory === racedWorkspace) {
+      fs.symlinkSync(vault, racedWorkspace, 'dir');
+      return undefined;
+    }
+    return originalMkdirSync(directory, options);
+  };
+  try {
+    assert.throws(
+      () => writeSharedVaultConfig({
+        configPath: path.join(racedWorkspace, 'jarvos.config.json'),
+        vaultDir: vault,
+        workspaceRoot: racedWorkspace,
+        homeDir: home,
+        user: { name: 'Tester', timezone: 'UTC' },
+      }),
+      /symlinked config path/,
+    );
+    assert.equal(fs.existsSync(path.join(vault, 'jarvos.config.json')), false);
+  } finally {
+    fs.mkdirSync = originalMkdirSync;
+  }
 });
 
 test('shared-vault onboarding rejects invalid timezones before generating a config', () => {

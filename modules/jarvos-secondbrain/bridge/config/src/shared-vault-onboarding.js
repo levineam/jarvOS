@@ -191,6 +191,30 @@ function assertNoSymlinkedConfigPathComponents(target) {
   }
 }
 
+function ensureDirectoryPathWithoutSymlinks(directory) {
+  const parsed = path.parse(directory);
+  const components = directory.slice(parsed.root.length).split(path.sep).filter(Boolean);
+  let current = parsed.root;
+  for (const component of components) {
+    current = path.join(current, component);
+    let stat;
+    try {
+      stat = fs.lstatSync(current);
+    } catch (error) {
+      if (error.code !== 'ENOENT') throw error;
+      try {
+        fs.mkdirSync(current, { mode: 0o700 });
+      } catch (mkdirError) {
+        if (mkdirError.code !== 'EEXIST') throw mkdirError;
+      }
+      stat = fs.lstatSync(current);
+    }
+    if (stat.isSymbolicLink()) throw new Error(`Refusing to write through a symlinked config path: ${current}`);
+    if (!stat.isDirectory()) throw new Error(`Refusing to use a non-directory config path component: ${current}`);
+    assertNoSymlinkedConfigPathComponents(current);
+  }
+}
+
 function canonicalizePathWithMissingTail(target) {
   let existing = target;
   const missingTail = [];
@@ -299,11 +323,16 @@ function writeSharedVaultConfig({
   if (assessment.action === 'migrate') {
     const existing = readSharedVaultConfigTarget({ configPath: target, homeDir }).config;
     const migrated = migratedSharedVaultConfig(existing, config);
+    assertNoSymlinkedConfigPathComponents(target);
+    assertConfigTargetOutsideVault(target, vaultDir, homeDir);
     atomicReplaceConfig(target, `${JSON.stringify(migrated, null, 2)}\n`);
     return { configPath: target, config: migrated, changed: true, migrated: true };
   }
 
-  fs.mkdirSync(path.dirname(target), { recursive: true });
+  ensureDirectoryPathWithoutSymlinks(path.dirname(target));
+  const finalState = readSharedVaultConfigTarget({ configPath: target, homeDir });
+  if (finalState.config) throw new Error(`Refusing to write a config target that changed during sync: ${target}`);
+  assertConfigTargetOutsideVault(target, vaultDir, homeDir);
   fs.writeFileSync(target, `${JSON.stringify(config, null, 2)}\n`, { flag: 'wx', mode: 0o600 });
   return { configPath: target, config, changed: true };
 }

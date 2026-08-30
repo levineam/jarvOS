@@ -125,6 +125,12 @@ try {
   assert.equal(JSON.parse(syncDryRun.stdout).vaultWrites, false);
   assert.equal(fs.existsSync(syncConfigPath), false, 'sync dry-run must not create the config or workspace');
 
+  const externalConfig = path.join(tmp, 'external-config', 'custom.json');
+  const explicitConfigDryRun = run([...syncArgs, '--config', externalConfig, '--dry-run']);
+  assert.equal(explicitConfigDryRun.status, 0, explicitConfigDryRun.stderr || explicitConfigDryRun.stdout);
+  assert.match(explicitConfigDryRun.stdout, new RegExp(`Next: jarvos doctor .* --config ${JSON.stringify(externalConfig).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
+  assert.equal(fs.existsSync(path.dirname(externalConfig)), false);
+
   const vaultWorkspace = run([
     'sync',
     '--workspace', syncVault,
