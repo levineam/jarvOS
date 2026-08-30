@@ -58,6 +58,17 @@ test('CLI schema validation rejects an invalid portable-config timezone', () => 
   assert.deepEqual(errors, ['jarvos.config.json.user.timezone must be a valid IANA timezone']);
 });
 
+test('schema validation rejects incomplete portable and empty legacy configs', () => {
+  assert.notEqual(validateConfigShape({
+    paths: { vault: '/srv/vault' },
+    user: { name: 'Tester', timezone: 'UTC' },
+  }).length, 0);
+  assert.notEqual(validateConfigShape({
+    assistantName: '', userName: 'Tester', coachName: 'Coach',
+    vaultPath: '/srv/vault', workspacePath: '/srv/workspace', runtime: 'codex',
+  }).length, 0);
+});
+
 test('vault-path-stale passes for an existing vault root', () => {
   const tmp = scratch();
   try {
@@ -490,6 +501,23 @@ test('module doctor derives portable path checks from a valid legacy config', ()
     for (const key of ['workspace', 'vault', 'notes', 'journal', 'memory']) {
       assert.equal(result.checks.find((check) => check.component === `path.${key}`).ok, true, key);
     }
+  } finally {
+    fs.rmSync(workspace, { recursive: true, force: true });
+  }
+});
+
+test('module doctor rejects a portable config missing required nested paths', () => {
+  const workspace = scratch();
+  try {
+    fs.copyFileSync(path.join(__dirname, '..', 'jarvos.config.schema.json'), path.join(workspace, 'jarvos.config.schema.json'));
+    writeConfig(workspace, {
+      paths: { vault: path.join(workspace, 'vault') },
+      user: { name: 'Tester', timezone: 'UTC' },
+    });
+    const result = runMinimalDoctor({ workspace });
+    const schema = result.checks.find((check) => check.component === 'config.schema');
+    assert.equal(schema.ok, false);
+    assert.match(schema.message, /failed .* validation/i);
   } finally {
     fs.rmSync(workspace, { recursive: true, force: true });
   }

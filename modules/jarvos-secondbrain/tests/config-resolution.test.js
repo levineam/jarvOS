@@ -393,6 +393,18 @@ test('shared-vault onboarding refuses paths without Notes, Journal, and Tags', (
   );
 });
 
+test('shared-vault onboarding requires Notes, Journal, and Tags to be directories', () => {
+  const home = tempDir();
+  const vault = path.join(home, 'Vaults', 'Vault v3');
+  fs.mkdirSync(vault, { recursive: true });
+  for (const entry of ['Notes', 'Journal', 'Tags']) fs.writeFileSync(path.join(vault, entry), 'not a directory\n');
+
+  assert.throws(
+    () => buildSharedVaultConfig({ vaultDir: vault, homeDir: home }),
+    /missing required directories \(Notes, Journal, Tags\)/,
+  );
+});
+
 test('shared-vault onboarding is idempotent and refuses to replace a different config', () => {
   const home = tempDir();
   const workspace = path.join(home, 'workspace');

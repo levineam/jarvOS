@@ -33,17 +33,17 @@
     }
   ],
   "properties": {
-    "assistantName": { "type": "string" },
-    "userName": { "type": "string" },
-    "coachName": { "type": "string" },
-    "vaultPath": { "type": "string" },
-    "workspacePath": { "type": "string" },
-    "runtime": { "type": "string" },
+    "assistantName": { "type": "string", "minLength": 1 },
+    "userName": { "type": "string", "minLength": 1 },
+    "coachName": { "type": "string", "minLength": 1 },
+    "vaultPath": { "type": "string", "minLength": 1 },
+    "workspacePath": { "type": "string", "minLength": 1 },
+    "runtime": { "type": "string", "minLength": 1 },
     "paths": {
       "type": "object",
       "properties": {
-        "workspace": { "type": "string" },
-        "vault": { "type": "string" },
+        "workspace": { "type": "string", "minLength": 1 },
+        "vault": { "type": "string", "minLength": 1 },
         "notes": { "type": "string" },
         "journal": { "type": "string" },
         "tags": { "type": "string" },
@@ -57,8 +57,8 @@
     "user": {
       "type": "object",
       "properties": {
-        "name": { "type": "string" },
-        "timezone": { "type": "string", "format": "time-zone" }
+        "name": { "type": "string", "minLength": 1 },
+        "timezone": { "type": "string", "minLength": 1, "format": "time-zone" }
       },
       "additionalProperties": true
     },

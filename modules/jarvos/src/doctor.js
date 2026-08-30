@@ -112,7 +112,7 @@ function validateAgainstSchema(value, schema, instancePath = '') {
     return errors;
   }
 
-  if (schema.type === 'object' && schema.properties) {
+  if (schema.type === 'object') {
     const properties = schema.properties || {};
     const required = Array.isArray(schema.required) ? schema.required : [];
 
@@ -142,6 +142,9 @@ function validateAgainstSchema(value, schema, instancePath = '') {
 
   if (schema.format === 'time-zone' && !isValidTimezone(value)) {
     errors.push(`${instancePath || '/'} must be a valid IANA timezone`);
+  }
+  if (schema.type === 'string' && Number.isInteger(schema.minLength) && value.length < schema.minLength) {
+    errors.push(`${instancePath || '/'} must contain at least ${schema.minLength} character`);
   }
 
   return errors;

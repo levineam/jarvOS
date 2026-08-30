@@ -35,14 +35,16 @@ function asAbsolutePath(value, home) {
 function hasSharedVaultShape(vaultDir) {
   return Boolean(
     vaultDir
-    && fs.existsSync(path.join(vaultDir, 'Notes'))
-    && fs.existsSync(path.join(vaultDir, 'Journal'))
-    && fs.existsSync(path.join(vaultDir, 'Tags')),
+    && ['Notes', 'Journal', 'Tags'].every((directory) => (
+      fs.statSync(path.join(vaultDir, directory), { throwIfNoEntry: false })?.isDirectory()
+    )),
   );
 }
 
 function missingSharedVaultDirectories(vaultDir) {
-  return ['Notes', 'Journal', 'Tags'].filter((directory) => !fs.existsSync(path.join(vaultDir, directory)));
+  return ['Notes', 'Journal', 'Tags'].filter((directory) => (
+    !fs.statSync(path.join(vaultDir, directory), { throwIfNoEntry: false })?.isDirectory()
+  ));
 }
 
 function hasDoNotUseMarker(vaultDir) {
