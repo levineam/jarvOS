@@ -21,11 +21,16 @@ function runObsidianEval(code, { vaultName, command = process.env.OBSIDIAN_CLI |
   try {
     // Test seams that supply their own executor retain the old direct contract.
     if (execute !== execFileSync) return parseEvalResult(execute(command, args, { encoding: 'utf8', timeout: timeoutMs, stdio: ['ignore', 'pipe', 'pipe'] }));
-    const request = Buffer.from(JSON.stringify({ command, args, timeoutMs }), 'utf8').toString('base64url');
-    const response = JSON.parse(execFileSync(process.execPath, [OBSIDIAN_CLI_PROBE_WORKER, request], {
+    // Keep the worker envelope off argv.  The underlying CLI still receives
+    // the exact same args (including large mutation programs), while the
+    // worker request itself travels through stdin and does not add base64
+    // expansion to the platform's per-argument limit.
+    const request = JSON.stringify({ command, args, timeoutMs });
+    const response = JSON.parse(execFileSync(process.execPath, [OBSIDIAN_CLI_PROBE_WORKER], {
       encoding: 'utf8',
+      input: request,
       timeout: timeoutMs + 1_000,
-      stdio: ['ignore', 'pipe', 'pipe'],
+      stdio: ['pipe', 'pipe', 'pipe'],
     }));
     if (!response.ok) {
       const error = new Error(String(response.stderr || response.stdout || response.message || 'Obsidian CLI failed'));
