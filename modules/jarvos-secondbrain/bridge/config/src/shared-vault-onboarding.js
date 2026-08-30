@@ -186,18 +186,48 @@ function isSameOrDescendant(parentPath, candidatePath) {
   return candidate === parent || candidate.startsWith(`${parent}${path.sep}`);
 }
 
-function assertNoSymlinkedConfigPathComponents(target) {
-  const parsed = path.parse(target);
-  const components = target.slice(parsed.root.length).split(path.sep).filter(Boolean);
+const MACOS_SYSTEM_PARENT_ALIASES = new Map([
+  ['/tmp', '/private/tmp'],
+  ['/var', '/private/var'],
+]);
+
+// macOS exposes /tmp and /var as stable system-parent aliases. They are the
+// only symlinked path components this publication path may traverse. The
+// final config target is never an alias: passing a null target is reserved for
+// the directory-creation check, where the directory itself may be /tmp or
+// /var. The realpath check keeps this exception narrow if a host changes one
+// of those system entries.
+function isAllowedMacOSSystemParentAlias(component, target, platform = process.platform, realpathSync = fs.realpathSync) {
+  if (platform !== 'darwin' || (target && component === target)) return false;
+  const expectedRealPath = MACOS_SYSTEM_PARENT_ALIASES.get(component);
+  if (!expectedRealPath) return false;
+  try {
+    return realpathSync(component) === expectedRealPath;
+  } catch {
+    return false;
+  }
+}
+
+function assertNoSymlinkedConfigPathComponents(
+  target,
+  platform = process.platform,
+  allowFinalMacOSSystemParentAlias = false,
+) {
+  const absolute = path.resolve(target);
+  const parsed = path.parse(absolute);
+  const components = absolute.slice(parsed.root.length).split(path.sep).filter(Boolean);
   let current = parsed.root;
   let missingAncestor = false;
+  // A config target must not itself be a symlink. Directory publication may
+  // legitimately use /tmp or /var as its final parent spelling, however.
+  const aliasTarget = allowFinalMacOSSystemParentAlias ? null : absolute;
 
   for (const component of components) {
     current = path.join(current, component);
     if (missingAncestor) continue;
     try {
       const stat = fs.lstatSync(current);
-      if (stat.isSymbolicLink()) {
+      if (stat.isSymbolicLink() && !isAllowedMacOSSystemParentAlias(current, aliasTarget, platform)) {
         throw new Error(`Refusing to write through a symlinked config path: ${current}`);
       }
     } catch (error) {
@@ -210,9 +240,10 @@ function assertNoSymlinkedConfigPathComponents(target) {
   }
 }
 
-function ensureDirectoryPathWithoutSymlinks(directory) {
-  const parsed = path.parse(directory);
-  const components = directory.slice(parsed.root.length).split(path.sep).filter(Boolean);
+function ensureDirectoryPathWithoutSymlinks(directory, platform = process.platform) {
+  const absolute = path.resolve(directory);
+  const parsed = path.parse(absolute);
+  const components = absolute.slice(parsed.root.length).split(path.sep).filter(Boolean);
   let current = parsed.root;
   for (const component of components) {
     current = path.join(current, component);
@@ -228,9 +259,14 @@ function ensureDirectoryPathWithoutSymlinks(directory) {
       }
       stat = fs.lstatSync(current);
     }
-    if (stat.isSymbolicLink()) throw new Error(`Refusing to write through a symlinked config path: ${current}`);
+    if (stat.isSymbolicLink()) {
+      if (!isAllowedMacOSSystemParentAlias(current, null, platform)) {
+        throw new Error(`Refusing to write through a symlinked config path: ${current}`);
+      }
+      stat = fs.statSync(current);
+    }
     if (!stat.isDirectory()) throw new Error(`Refusing to use a non-directory config path component: ${current}`);
-    assertNoSymlinkedConfigPathComponents(current);
+    assertNoSymlinkedConfigPathComponents(absolute, platform, true);
   }
 }
 
@@ -293,9 +329,9 @@ function normalizeSelectedVaultDir(vaultDir, homeDir = os.homedir()) {
   return normalized;
 }
 
-function readSharedVaultConfigTarget({ configPath, homeDir = os.homedir() } = {}) {
+function readSharedVaultConfigTarget({ configPath, homeDir = os.homedir(), platform = process.platform } = {}) {
   const target = asAbsolutePath(configPath || path.join(process.cwd(), 'jarvos.config.json'), homeDir);
-  assertNoSymlinkedConfigPathComponents(target);
+  assertNoSymlinkedConfigPathComponents(target, platform);
 
   let targetStat;
   try {
@@ -320,8 +356,8 @@ function readSharedVaultConfigTarget({ configPath, homeDir = os.homedir() } = {}
   return { configPath: target, config: existing, exists: true, targetStat };
 }
 
-function assessSharedVaultConfigTarget({ configPath, config, vaultDir, homeDir = os.homedir() } = {}) {
-  const targetState = readSharedVaultConfigTarget({ configPath, homeDir });
+function assessSharedVaultConfigTarget({ configPath, config, vaultDir, homeDir = os.homedir(), platform = process.platform } = {}) {
+  const targetState = readSharedVaultConfigTarget({ configPath, homeDir, platform });
   const target = targetState.configPath;
   const configuredVault = vaultDir || config?.paths?.vault || config?.vaultPath;
   assertConfigTargetOutsideVault(target, configuredVault, homeDir);
@@ -549,7 +585,7 @@ function assertDescriptorContents(fd, expected, target) {
 function createConfigExclusively(target, contents, {
   vaultDir,
   homeDir = os.homedir(),
-  platform,
+  platform = process.platform,
   constants,
 } = {}) {
   const selectedVault = normalizeSelectedVaultDir(vaultDir, homeDir);
@@ -558,6 +594,7 @@ function createConfigExclusively(target, contents, {
   const expected = Buffer.from(contents, 'utf8');
   // Validate the requested target before pinning and repeat the containment
   // decision against the canonical pinned directory below.
+  assertNoSymlinkedConfigPathComponents(target, platform);
   assertConfigTargetOutsideVault(target, selectedVault, homeDir);
   return withPinnedDirectory(directory, (assertUnchanged, directoryFd) => {
     // Decide containment against the directory actually pinned before the
@@ -625,7 +662,7 @@ function writeSharedVaultConfig({
 } = {}) {
   const target = asAbsolutePath(configPath || path.join(process.cwd(), 'jarvos.config.json'), homeDir);
   const config = buildSharedVaultConfig({ vaultDir, workspaceRoot, homeDir, user });
-  const assessment = assessSharedVaultConfigTarget({ configPath: target, config, vaultDir, homeDir });
+  const assessment = assessSharedVaultConfigTarget({ configPath: target, config, vaultDir, homeDir, platform });
   if (assessment.action === 'already-synced') {
     return { configPath: target, config, changed: false };
   }
@@ -650,8 +687,8 @@ function writeSharedVaultConfig({
     assertConfigPublicationSupported(platform, constants);
   }
 
-  ensureDirectoryPathWithoutSymlinks(path.dirname(target));
-  const finalState = readSharedVaultConfigTarget({ configPath: target, homeDir });
+  ensureDirectoryPathWithoutSymlinks(path.dirname(target), platform);
+  const finalState = readSharedVaultConfigTarget({ configPath: target, homeDir, platform });
   if (finalState.exists) throw new Error(`Refusing to write a config target that changed during sync: ${target}`);
   createConfigExclusively(target, `${JSON.stringify(config, null, 2)}\n`, {
     vaultDir,
@@ -721,6 +758,7 @@ function main(argv = process.argv.slice(2)) {
       config,
       vaultDir,
       homeDir,
+      platform,
     });
     if (assessment.action === 'migrate') {
       console.log(JSON.stringify({
@@ -770,6 +808,7 @@ module.exports = {
   discoverExistingVault,
   hasPosixDirectoryPinCapability,
   hasSharedVaultShape,
+  isAllowedMacOSSystemParentAlias,
   isCompatibleSharedVaultConfig,
   MANUAL_RECONCILIATION_ACTION,
   manualReconciliationError,

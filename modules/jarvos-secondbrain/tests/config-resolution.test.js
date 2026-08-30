@@ -20,6 +20,7 @@ const {
   resolveConfig,
   resolveJournalConfig,
   resolvePaperclipConfig,
+  isAllowedMacOSSystemParentAlias,
   writeSharedVaultConfig,
 } = require('../bridge/config');
 
@@ -991,6 +992,60 @@ test('shared-vault onboarding is idempotent and refuses to replace a different c
     }),
     /Refusing to overwrite an existing jarvos\.config\.json/,
   );
+});
+
+test('macOS system-parent alias exception is exact, platform-bound, and realpath-bound', () => {
+  const realpath = (candidate) => ({
+    '/tmp': '/private/tmp',
+    '/var': '/private/var',
+  }[candidate] || candidate);
+
+  assert.equal(isAllowedMacOSSystemParentAlias('/tmp', '/tmp/runtime/jarvos.config.json', 'darwin', realpath), true);
+  assert.equal(isAllowedMacOSSystemParentAlias('/var', '/var/runtime/jarvos.config.json', 'darwin', realpath), true);
+
+  // The exception is for parent components only: a symlink cannot be the
+  // final config target even when it is one of the two standard aliases.
+  assert.equal(isAllowedMacOSSystemParentAlias('/tmp', '/tmp', 'darwin', realpath), false);
+  assert.equal(isAllowedMacOSSystemParentAlias('/var', '/var', 'darwin', realpath), false);
+
+  // A different platform, a different path, or a changed canonical mapping
+  // must not widen the exception.
+  assert.equal(isAllowedMacOSSystemParentAlias('/tmp', '/tmp/runtime/jarvos.config.json', 'linux', realpath), false);
+  assert.equal(isAllowedMacOSSystemParentAlias('/var/tmp', '/var/tmp/runtime/jarvos.config.json', 'darwin', realpath), false);
+  assert.equal(isAllowedMacOSSystemParentAlias('/tmp', '/tmp/runtime/jarvos.config.json', 'darwin', () => '/private/not-tmp'), false);
+});
+
+test('shared-vault onboarding accepts the standard macOS parent aliases but not an aliased final target', { skip: process.platform !== 'darwin' }, () => {
+  const home = tempDir();
+  const vault = path.join(home, 'Vaults', 'Vault v3');
+  for (const directory of ['Notes', 'Journal', 'Tags']) fs.mkdirSync(path.join(vault, directory), { recursive: true });
+
+  for (const [base, canonical, alias] of [['/tmp', '/private/tmp', '/tmp'], ['/var/tmp', '/private/var/tmp', '/var']]) {
+    const workspace = fs.mkdtempSync(path.join(base, 'jarvos-config-alias-'));
+    const configPath = path.join(workspace, 'jarvos.config.json');
+    assert.equal(fs.realpathSync(base), canonical);
+
+    writeSharedVaultConfig({
+      configPath,
+      vaultDir: vault,
+      workspaceRoot: workspace,
+      homeDir: home,
+      user: { name: 'Tester', timezone: 'UTC' },
+    });
+    assert.equal(fs.existsSync(configPath), true, `${base} parent alias should be usable for sync`);
+
+    assert.throws(
+      () => writeSharedVaultConfig({
+        configPath: alias,
+        vaultDir: vault,
+        workspaceRoot: workspace,
+        homeDir: home,
+        user: { name: 'Tester', timezone: 'UTC' },
+      }),
+      /symlinked config path/,
+      `${alias} must remain rejected when used as the final target`,
+    );
+  }
 });
 
 test('shared-vault onboarding refuses config targets inside the vault or behind symlinks', { skip: process.platform === 'win32' }, () => {
