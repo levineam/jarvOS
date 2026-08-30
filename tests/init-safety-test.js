@@ -142,6 +142,13 @@ try {
   assert.equal(relativeBootstrap.status, 0, relativeBootstrap.stderr || relativeBootstrap.stdout);
   assert.ok(fs.existsSync(path.join(relativeBootstrapRoot, 'workspace', 'jarvos.config.json')));
   assert.ok(fs.existsSync(path.join(relativeBootstrapRoot, 'vault', 'Journal')));
+  const relativeBootstrapRerun = runBootstrap([], {
+    ...initEnv(relativeBootstrapHome),
+    JARVOS_WORKSPACE_PATH: 'workspace',
+    JARVOS_VAULT_PATH: 'vault',
+  }, { cwd: relativeBootstrapRoot });
+  assert.equal(relativeBootstrapRerun.status, 0, relativeBootstrapRerun.stderr || relativeBootstrapRerun.stdout);
+  assert.match(relativeBootstrapRerun.stdout, /Compatible jarvOS installation detected/);
 
   const workspace = path.join(tmp, 'new-workspace');
   const vault = path.join(tmp, 'new-vault');
@@ -161,6 +168,23 @@ try {
   assert.match(rerun.stdout, /Intended action:\s+already-initialized/);
   assert.match(rerun.stdout, /preserving all existing files/i);
   assert.equal(fs.readFileSync(userPath, 'utf8'), authoredUser);
+
+  const memoryFile = path.join(workspace, 'MEMORY.md');
+  const memoryContents = fs.readFileSync(memoryFile, 'utf8');
+  fs.rmSync(memoryFile);
+  fs.mkdirSync(memoryFile);
+  const malformedFileRerun = runInit(['--workspace', workspace, '--vault', vault], env);
+  assert.notEqual(malformedFileRerun.status, 0);
+  assert.match(malformedFileRerun.stdout, /not a compatible jarvOS install/);
+  fs.rmSync(memoryFile, { recursive: true });
+  fs.writeFileSync(memoryFile, memoryContents);
+
+  const memoryDirectory = path.join(workspace, 'memory');
+  fs.rmSync(memoryDirectory, { recursive: true });
+  const missingMemoryRerun = runInit(['--workspace', workspace, '--vault', vault], env);
+  assert.notEqual(missingMemoryRerun.status, 0);
+  assert.match(missingMemoryRerun.stdout, /not a compatible jarvOS install/);
+  fs.mkdirSync(memoryDirectory);
 
   // Reproduce the incident shape: `jarvos init --yes` must not touch an
   // already-used default ~/clawd workspace or create a shadow ~/jarvos-vault.

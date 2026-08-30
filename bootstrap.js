@@ -176,6 +176,38 @@ function inspectPathComponents(target) {
   return { ok: true };
 }
 
+function assertPathComponentsSafe(target, label) {
+  const inspection = inspectPathComponents(target);
+  if (!inspection.ok) throw new Error(`${label} is symlinked or unreadable at ${inspection.path}`);
+}
+
+function ensureDirectoryPathSafe(directory, label) {
+  const absolute = path.resolve(directory);
+  const parsed = path.parse(absolute);
+  let current = parsed.root;
+  for (const component of absolute.slice(parsed.root.length).split(path.sep).filter(Boolean)) {
+    current = path.join(current, component);
+    let stat;
+    try {
+      stat = fs.lstatSync(current);
+    } catch (error) {
+      if (error.code !== 'ENOENT') throw error;
+      try {
+        fs.mkdirSync(current, { mode: 0o700 });
+      } catch (mkdirError) {
+        if (mkdirError.code !== 'EEXIST') throw mkdirError;
+      }
+      stat = fs.lstatSync(current);
+    }
+    if (stat.isSymbolicLink()) {
+      if (!isAllowedMacOSSystemParentAlias(current, absolute)) throw new Error(`${label} is symlinked at ${current}`);
+      stat = fs.statSync(current);
+    }
+    if (!stat.isDirectory()) throw new Error(`${label} has a non-directory component at ${current}`);
+    assertPathComponentsSafe(absolute, label);
+  }
+}
+
 function resolveConfigPath(value, workspace) {
   if (typeof value !== 'string' || !value.trim()) return null;
   const expanded = expandHome(value);
@@ -203,8 +235,8 @@ function isCompatibleExistingInstall(workspace, vault) {
   if (requiredConfigFields.some((field) => typeof config[field] !== 'string' || !config[field].trim())) {
     return { compatible: false, reason: 'jarvos.config.json is not a complete bootstrap configuration' };
   }
-  if (!sameExistingPath(resolveConfigPath(config.workspacePath, workspace), workspace)
-    || !sameExistingPath(resolveConfigPath(config.vaultPath, workspace), vault)) {
+  if (!sameExistingPath(resolveConfigPath(config.workspacePath, process.cwd()), workspace)
+    || !sameExistingPath(resolveConfigPath(config.vaultPath, process.cwd()), vault)) {
     return { compatible: false, reason: 'jarvos.config.json targets different workspace or vault paths' };
   }
 
@@ -212,8 +244,11 @@ function isCompatibleExistingInstall(workspace, vault) {
     'AGENTS.md', 'BOOTSTRAP.md', 'HEARTBEAT.md', 'MEMORY.md',
     'USER.md', 'ONTOLOGY.md', 'SOUL.md', 'TOOLS.md', 'jarvos.config.json',
   ];
-  if (requiredWorkspaceFiles.some((file) => !fs.existsSync(path.join(workspace, file)))) {
+  if (requiredWorkspaceFiles.some((file) => !fs.statSync(path.join(workspace, file), { throwIfNoEntry: false })?.isFile())) {
     return { compatible: false, reason: 'required bootstrap workspace files are missing' };
+  }
+  if (!fs.statSync(path.join(workspace, 'memory'), { throwIfNoEntry: false })?.isDirectory()) {
+    return { compatible: false, reason: 'required bootstrap memory directory is missing' };
   }
   const requiredVaultDirectories = ['Notes', 'Journal', 'Tags'];
   if (requiredVaultDirectories.some((dir) => !fs.statSync(path.join(vault, dir), { throwIfNoEntry: false })?.isDirectory())) {
@@ -454,7 +489,7 @@ function createDirectories(config) {
 
   for (const d of dirs) {
     try {
-      fs.mkdirSync(d, { recursive: true });
+      ensureDirectoryPathSafe(d, 'Bootstrap directory target');
       ok(d);
     } catch (e) {
       err(`Failed to create ${d}: ${e.message}`);
@@ -540,7 +575,8 @@ function generateOverlays(config) {
     }
     try {
       const rendered = renderTemplate(o.template, config);
-      fs.writeFileSync(dest, rendered, 'utf8');
+      assertPathComponentsSafe(path.dirname(dest), 'Bootstrap overlay parent');
+      fs.writeFileSync(dest, rendered, { encoding: 'utf8', flag: 'wx' });
       ok(`${o.label} → ${dest}`);
     } catch (e) {
       err(`Failed to write ${o.label}: ${e.message}`);
@@ -562,7 +598,8 @@ function generateOverlays(config) {
 ## Important Context
 *(Will grow over time)*
 `;
-    fs.writeFileSync(memoryPath, memContent, 'utf8');
+    assertPathComponentsSafe(path.dirname(memoryPath), 'Bootstrap memory parent');
+    fs.writeFileSync(memoryPath, memContent, { encoding: 'utf8', flag: 'wx' });
     ok(`MEMORY.md → ${memoryPath}`);
   } else {
     warn(`MEMORY.md already exists — skipping`);
@@ -579,7 +616,8 @@ function generateOverlays(config) {
 - Identity: ${config.ASSISTANT_NAME} for ${config.USER_NAME}
 - Coach: ${config.COACH_NAME}
 `;
-    fs.writeFileSync(dailyPath, dailyContent, 'utf8');
+    assertPathComponentsSafe(path.dirname(dailyPath), 'Bootstrap daily-memory parent');
+    fs.writeFileSync(dailyPath, dailyContent, { encoding: 'utf8', flag: 'wx' });
     ok(`memory/${today}.md → ${dailyPath}`);
   }
 
@@ -609,7 +647,8 @@ function generateOverlays(config) {
         timezone: config.TIMEZONE
       }
     };
-    fs.writeFileSync(configPath, JSON.stringify(jarvosConfig, null, 2) + '\n', 'utf8');
+    assertPathComponentsSafe(path.dirname(configPath), 'Bootstrap config parent');
+    fs.writeFileSync(configPath, JSON.stringify(jarvosConfig, null, 2) + '\n', { encoding: 'utf8', flag: 'wx' });
     ok(`jarvos.config.json → ${configPath}`);
   } else {
     warn(`jarvos.config.json already exists — skipping`);
@@ -724,7 +763,11 @@ async function main() {
   }
 
   if (preflight.action === 'new-install' || preflight.action === 'attach-existing-vault') {
+    assertPathComponentsSafe(config.WORKSPACE_PATH, 'Workspace write target');
+    assertPathComponentsSafe(config.VAULT_PATH, 'Vault write target');
     createDirectories(config);
+    assertPathComponentsSafe(config.WORKSPACE_PATH, 'Workspace write target');
+    assertPathComponentsSafe(config.VAULT_PATH, 'Vault write target');
     generateOverlays(config);
   } else {
     info('Compatible jarvOS installation detected — preserving all existing files.');
