@@ -139,6 +139,25 @@ function isCompatibleSharedVaultConfig(existing, expected, homeDir = os.homedir(
   return pathsMatch && nameCompatible && timezoneCompatible;
 }
 
+function hasPortableRuntimeConfig(existing, expected, homeDir = os.homedir()) {
+  if (!existing?.paths || typeof existing.paths !== 'object' || !existing?.user || typeof existing.user !== 'object') return false;
+  const existingPaths = resolvedConfigPaths(existing, homeDir);
+  const expectedPaths = resolvedConfigPaths(expected, homeDir);
+  return Object.keys(expectedPaths).every((key) => existingPaths[key] === expectedPaths[key]
+    && typeof existing.paths[key] === 'string')
+    && existing.user.name === expected.user.name
+    && existing.user.timezone === expected.user.timezone;
+}
+
+function migratedSharedVaultConfig(existing, expected) {
+  return {
+    ...existing,
+    ...expected,
+    paths: { ...(existing.paths || {}), ...expected.paths },
+    user: { ...(existing.user || {}), ...expected.user },
+  };
+}
+
 function isSameOrDescendant(parentPath, candidatePath) {
   const parent = path.resolve(parentPath);
   const candidate = path.resolve(candidatePath);
@@ -233,8 +252,11 @@ function assessSharedVaultConfigTarget({ configPath, config, vaultDir, homeDir =
   assertConfigTargetOutsideVault(target, configuredVault, homeDir);
   if (!targetState.config) return { action: 'create', configPath: target };
 
+  const compatible = isCompatibleSharedVaultConfig(targetState.config, config, homeDir);
   return {
-    action: isCompatibleSharedVaultConfig(targetState.config, config, homeDir) ? 'already-synced' : 'conflict',
+    action: compatible
+      ? (hasPortableRuntimeConfig(targetState.config, config, homeDir) ? 'already-synced' : 'migrate')
+      : 'conflict',
     configPath: target,
   };
 }
@@ -257,6 +279,13 @@ function writeSharedVaultConfig({
       `Refusing to overwrite an existing jarvos.config.json: ${target}. `
       + 'Choose a new --config path or reconcile the existing config manually.',
     );
+  }
+
+  if (assessment.action === 'migrate') {
+    const existing = readSharedVaultConfigTarget({ configPath: target, homeDir }).config;
+    const migrated = migratedSharedVaultConfig(existing, config);
+    fs.writeFileSync(target, `${JSON.stringify(migrated, null, 2)}\n`, { mode: 0o600 });
+    return { configPath: target, config: migrated, changed: true, migrated: true };
   }
 
   fs.mkdirSync(path.dirname(target), { recursive: true });

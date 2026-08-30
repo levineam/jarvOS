@@ -40,6 +40,11 @@ function expandHome(p) {
   return p;
 }
 
+function isValidIanaTimezone(value) {
+  if (typeof value !== 'string' || !value.trim()) return false;
+  try { Intl.DateTimeFormat(undefined, { timeZone: value }); return true; } catch { return false; }
+}
+
 // ─── Dependency checks ──────────────────────────────────────────────────────
 
 function checkDeps() {
@@ -446,6 +451,11 @@ async function main() {
     config = await gatherConfig(rl);
   } finally {
     rl.close();
+  }
+
+  if (!isValidIanaTimezone(config.TIMEZONE)) {
+    err(`Refusing to initialize: TIMEZONE must be a valid IANA timezone (received ${JSON.stringify(config.TIMEZONE)})`);
+    process.exit(1);
   }
 
   createDirectories(config);

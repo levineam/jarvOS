@@ -213,10 +213,13 @@ try {
   }));
   const syncLegacy = run([
     'sync', '--workspace', legacySyncWorkspace, '--vault', syncVault,
-    '--name', 'TestUser', '--timezone', 'UTC', '--dry-run',
+    '--name', 'TestUser', '--timezone', 'UTC',
   ]);
   assert.equal(syncLegacy.status, 0, syncLegacy.stderr || syncLegacy.stdout);
-  assert.match(syncLegacy.stdout, /Config action: already-synced/);
+  assert.match(syncLegacy.stdout, /Mode: APPLIED/);
+  const migratedLegacy = JSON.parse(fs.readFileSync(path.join(legacySyncWorkspace, 'jarvos.config.json'), 'utf8'));
+  assert.equal(migratedLegacy.paths.vault, syncVault);
+  assert.equal(migratedLegacy.user.timezone, 'UTC');
 
   const badProfile = run(['init', '--profile', 'full', '--yes']);
   assert.notEqual(badProfile.status, 0);
