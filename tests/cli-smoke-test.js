@@ -19,6 +19,29 @@ function run(args, options = {}) {
   });
 }
 
+function snapshotTree(root) {
+  const entries = [];
+  function visit(directory, relative = '') {
+    for (const name of fs.readdirSync(directory).sort()) {
+      const absolute = path.join(directory, name);
+      const entry = relative ? path.join(relative, name) : name;
+      const stat = fs.lstatSync(absolute);
+      const record = {
+        path: entry,
+        type: stat.isDirectory() ? 'directory' : stat.isFile() ? 'file' : 'other',
+        mode: stat.mode & 0o7777,
+        mtimeMs: stat.mtimeMs,
+      };
+      if (stat.isFile()) record.content = fs.readFileSync(absolute, 'utf8');
+      if (stat.isSymbolicLink()) record.link = fs.readlinkSync(absolute);
+      entries.push(record);
+      if (stat.isDirectory()) visit(absolute, entry);
+    }
+  }
+  visit(root);
+  return entries;
+}
+
 const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-cli-')));
 try {
   const workspace = path.join(tmp, 'workspace');
@@ -101,6 +124,10 @@ try {
   const initHelp = run(['init', '--help']);
   assert.equal(initHelp.status, 0, initHelp.stderr || initHelp.stdout);
   assert.match(initHelp.stdout, /jarvos init --profile minimal --yes/);
+  assert.match(initHelp.stdout, /fresh host or for a new harness workspace/);
+  assert.match(initHelp.stdout, /--use-existing-vault: init creates the starter workspace files/);
+  assert.match(initHelp.stdout, /Do not use jarvos sync as a replacement for init/);
+  assert.doesNotMatch(initHelp.stdout, /Use jarvos sync to attach/);
   assert.match(initHelp.stdout, /Profiles:\n\s+minimal\s+Minimal/);
 
   const doctorHelp = run(['doctor', '--help']);
@@ -109,14 +136,17 @@ try {
 
   const syncHelp = run(['sync', '--help']);
   assert.equal(syncHelp.status, 0, syncHelp.stderr || syncHelp.stdout);
-  assert.match(syncHelp.stdout, /Sync with an existing jarvOS installation/);
-  assert.match(syncHelp.stdout, /ordinary, uncontended use the command validates Notes\/,\nJournal\/, and Tags\/ and writes no config contents inside the vault/);
+  assert.match(syncHelp.stdout, /Sync with an existing jarvOS installation \(config-only handoff\)/);
+  assert.match(syncHelp.stdout, /only for a harness workspace that is already installed/);
+  assert.match(syncHelp.stdout, /does not create starter workspace files, install\n+a harness, or initialize vault folders/);
+  assert.match(syncHelp.stdout, /fresh host or new harness\nworkspace, use jarvos init with --use-existing-vault instead/);
+  assert.match(syncHelp.stdout, /In ordinary, uncontended use the command validates Notes\/, Journal\/, and Tags\/\nand writes no config contents inside the vault/);
   // The contract is target-only and must describe the exclusive final target,
   // readback proof, and intentionally non-mutating failure cleanup.
   assert.match(syncHelp.stdout, /In ordinary, uncontended use sync selects the config directory outside the vault/);
   assert.match(syncHelp.stdout, /vaultWrites\s+and\s+vaultContentsWritten/);
   assert.match(syncHelp.stdout, /legacy-shaped config is reported as manual-reconcile/);
-  assert.match(syncHelp.stdout, /never rewrites an\nexisting config in place/);
+  assert.match(syncHelp.stdout, /jarvOS never rewrites an existing config in place/);
   assert.match(syncHelp.stdout, /final target with O_EXCL through a retained file descriptor/);
   assert.match(syncHelp.stdout, /target pathname still names that descriptor/);
   assert.match(syncHelp.stdout, /reads the exact bytes back through the descriptor/);
@@ -210,6 +240,52 @@ try {
   const syncAgain = run(syncArgs);
   assert.equal(syncAgain.status, 0, syncAgain.stderr || syncAgain.stdout);
   assert.match(syncAgain.stdout, /Mode: ALREADY SYNCED/);
+
+  // A fresh host/new harness workspace must use init's explicit existing-vault
+  // path. It installs the starter workspace while preserving the existing
+  // vault, after which sync is a read-only config handoff and reports the
+  // portable config as already synced.
+  const attachWorkspace = path.join(tmp, 'attach-existing-vault-workspace');
+  const attachVault = path.join(tmp, 'attach-existing-vault');
+  for (const directory of ['Notes', 'Journal', 'Tags']) {
+    fs.mkdirSync(path.join(attachVault, directory), { recursive: true });
+  }
+  fs.writeFileSync(path.join(attachVault, 'Notes', 'existing-note.md'), 'keep this note\n', 'utf8');
+  fs.writeFileSync(path.join(attachVault, 'Journal', '2026-08-30.md'), '# Existing journal\n', 'utf8');
+  const attachVaultBefore = snapshotTree(attachVault);
+  const attachEnv = {
+    ...env,
+    JARVOS_WORKSPACE_PATH: attachWorkspace,
+    JARVOS_VAULT_PATH: attachVault,
+  };
+  const attachInit = run([
+    'init', '--profile', 'minimal', '--workspace', attachWorkspace,
+    '--vault', attachVault, '--use-existing-vault', '--yes',
+  ], { env: attachEnv });
+  assert.equal(attachInit.status, 0, attachInit.stderr || attachInit.stdout);
+  assert.match(attachInit.stdout, /Intended action:\s+attach-existing-vault/);
+  assert.ok(fs.existsSync(path.join(attachWorkspace, 'AGENTS.md')));
+  assert.ok(fs.existsSync(path.join(attachWorkspace, 'jarvos.config.json')));
+  assert.deepEqual(snapshotTree(attachVault), attachVaultBefore, 'init must preserve existing vault content');
+
+  const attachDoctor = run([
+    'doctor', '--profile', 'minimal', '--workspace', attachWorkspace,
+  ], { env: attachEnv });
+  assert.equal(attachDoctor.status, 0, attachDoctor.stderr || attachDoctor.stdout);
+  assert.match(attachDoctor.stdout, /PASS workspace-files/);
+  assert.match(attachDoctor.stdout, /PASS vault-path/);
+  assert.match(attachDoctor.stdout, /READY/);
+
+  const attachSync = run([
+    'sync', '--workspace', attachWorkspace, '--dry-run', '--json',
+  ], { env: attachEnv });
+  assert.equal(attachSync.status, 0, attachSync.stderr || attachSync.stdout);
+  const attachSyncPayload = JSON.parse(attachSync.stdout);
+  assert.equal(attachSyncPayload.targetAction, 'already-synced');
+  assert.equal(attachSyncPayload.vaultWrites, false);
+  assert.equal(attachSyncPayload.vaultContentsWritten, false);
+  assert.equal(attachSyncPayload.changed, false);
+  assert.deepEqual(snapshotTree(attachVault), attachVaultBefore, 'sync dry-run must not change the existing vault');
 
   const syncExistingWithoutRedundantIdentity = run(['sync', '--workspace', syncWorkspace, '--dry-run']);
   assert.equal(syncExistingWithoutRedundantIdentity.status, 0, syncExistingWithoutRedundantIdentity.stderr || syncExistingWithoutRedundantIdentity.stdout);

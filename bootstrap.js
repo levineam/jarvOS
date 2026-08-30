@@ -345,7 +345,7 @@ function preflightInit(config, inputs) {
   console.log(`Resolved vault:     ${config.VAULT_PATH} (${inputs.vaultSource})`);
   console.log(`Intended action:    ${classification.action}`);
   if (classification.action === 'refuse') {
-    throw new Error(`Refusing to initialize: ${classification.reason}. Use \`jarvos sync\` to attach to an existing jarvOS installation, pass --use-existing-vault for a verified existing vault, or choose empty/new --workspace and --vault targets.`);
+    throw new Error(`Refusing to initialize: ${classification.reason}. Use \`jarvos init --use-existing-vault\` for a new/empty workspace with a verified existing vault, or use \`jarvos sync\` only for a harness workspace that is already installed. Otherwise choose empty/new --workspace and --vault targets.`);
   }
   return classification;
 }
