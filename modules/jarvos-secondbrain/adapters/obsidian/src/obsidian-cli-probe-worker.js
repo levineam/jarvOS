@@ -21,30 +21,37 @@ function terminateOwnedTree(child, { platform = process.platform, spawnProcess =
   if (!child?.pid) { onComplete({ contained: false, reason: 'missing_child_pid' }); return; }
   let completed = false;
   const complete = (result) => { if (!completed) { completed = true; onComplete(result); } };
+  const stopKnownChild = () => {
+    try { child.kill?.('SIGKILL'); } catch {}
+    for (const stream of [child.stdin, child.stdout, child.stderr]) {
+      try { stream?.destroy?.(); } catch {}
+    }
+  };
+  const failContainment = (reason) => { stopKnownChild(); complete({ contained: false, reason }); };
   if (platform === 'win32') {
     // /t targets the child process tree by PID; it is not a process-name kill.
     const taskkillArgs = ['/pid', String(child.pid), '/t', '/f'];
     const runTaskkill = (attempt) => {
       let killer;
-      try { killer = spawnProcess('taskkill', taskkillArgs, { stdio: 'ignore', windowsHide: true }); } catch { complete({ contained: false, reason: 'taskkill_spawn_failed' }); return; }
-      if (!killer || typeof killer.once !== 'function') { complete({ contained: false, reason: 'taskkill_unavailable' }); return; }
-      killer.once('error', () => complete({ contained: false, reason: 'taskkill_failed' }));
+      try { killer = spawnProcess('taskkill', taskkillArgs, { stdio: 'ignore', windowsHide: true }); } catch { failContainment('taskkill_spawn_failed'); return; }
+      if (!killer || typeof killer.once !== 'function') { failContainment('taskkill_unavailable'); return; }
+      killer.once('error', () => failContainment('taskkill_failed'));
       killer.once('close', (code) => {
         if (code === 0) complete({ contained: true });
         else if (attempt === 0) runTaskkill(1);
-        else complete({ contained: false, reason: 'taskkill_failed' });
+        else failContainment('taskkill_failed');
       });
     };
     runTaskkill(0);
     return;
   }
   try { signalProcess(-child.pid, 'SIGTERM'); }
-  catch (error) { complete({ contained: false, reason: error?.code === 'ESRCH' ? 'process_group_absent' : 'process_group_unavailable' }); return; }
+  catch (error) { failContainment(error?.code === 'ESRCH' ? 'process_group_absent' : 'process_group_unavailable'); return; }
   // Keep the worker alive through escalation even if the direct child exits
   // after SIGTERM and leaves no inherited pipes open.
   schedule(() => {
     try { signalProcess(-child.pid, 'SIGKILL'); complete({ contained: true }); }
-    catch (error) { complete({ contained: false, reason: error?.code === 'ESRCH' ? 'process_group_absent' : 'process_group_kill_failed' }); }
+    catch (error) { failContainment(error?.code === 'ESRCH' ? 'process_group_absent' : 'process_group_kill_failed'); }
   }, 100);
 }
 

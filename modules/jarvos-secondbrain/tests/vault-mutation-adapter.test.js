@@ -97,7 +97,7 @@ test('Windows taskkill retries process-tree containment and reports success only
   assert.deepEqual(results, [{ contained: true }]);
 });
 
-test('Windows taskkill double failure reports unconfirmed containment without direct-child fallback', () => {
+test('Windows taskkill double failure stops the known child and reports unconfirmed containment', () => {
   const firstTaskkill = new EventEmitter();
   const secondTaskkill = new EventEmitter();
   const signals = [];
@@ -107,26 +107,29 @@ test('Windows taskkill double failure reports unconfirmed containment without di
   terminateOwnedTree(child, { platform: 'win32', spawnProcess: () => [firstTaskkill, secondTaskkill][calls++], onComplete: (result) => results.push(result) });
   firstTaskkill.emit('close', 1);
   secondTaskkill.emit('close', 1);
-  assert.deepEqual(signals, []);
+  assert.deepEqual(signals, ['SIGKILL']);
   assert.deepEqual(results, [{ contained: false, reason: 'taskkill_failed' }]);
 });
 
 test('missing Unix process group does not prove descendant containment', () => {
   const results = [];
+  const signals = [];
   const error = Object.assign(new Error('process group missing'), { code: 'ESRCH' });
-  terminateOwnedTree({ pid: 12345 }, {
+  terminateOwnedTree({ pid: 12345, kill: (signal) => signals.push(signal) }, {
     platform: 'darwin',
     signalProcess: () => { throw error; },
     onComplete: (result) => results.push(result),
   });
+  assert.deepEqual(signals, ['SIGKILL']);
   assert.deepEqual(results, [{ contained: false, reason: 'process_group_absent' }]);
 });
 
 test('missing Unix process group during escalation does not prove descendant containment', () => {
   const signals = [];
+  const childSignals = [];
   const results = [];
   const error = Object.assign(new Error('process group missing'), { code: 'ESRCH' });
-  terminateOwnedTree({ pid: 12345 }, {
+  terminateOwnedTree({ pid: 12345, kill: (signal) => childSignals.push(signal) }, {
     platform: 'darwin',
     signalProcess: (pid, signal) => {
       signals.push([pid, signal]);
@@ -136,6 +139,7 @@ test('missing Unix process group during escalation does not prove descendant con
     onComplete: (result) => results.push(result),
   });
   assert.deepEqual(signals, [[-12345, 'SIGTERM'], [-12345, 'SIGKILL']]);
+  assert.deepEqual(childSignals, ['SIGKILL']);
   assert.deepEqual(results, [{ contained: false, reason: 'process_group_absent' }]);
 });
 
