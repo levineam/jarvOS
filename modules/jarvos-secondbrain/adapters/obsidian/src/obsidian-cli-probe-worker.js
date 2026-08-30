@@ -39,12 +39,12 @@ function terminateOwnedTree(child, { platform = process.platform, spawnProcess =
     return;
   }
   try { signalProcess(-child.pid, 'SIGTERM'); }
-  catch (error) { complete({ contained: error?.code === 'ESRCH', reason: error?.code === 'ESRCH' ? undefined : 'process_group_unavailable' }); return; }
+  catch (error) { complete({ contained: false, reason: error?.code === 'ESRCH' ? 'process_group_absent' : 'process_group_unavailable' }); return; }
   // Keep the worker alive through escalation even if the direct child exits
   // after SIGTERM and leaves no inherited pipes open.
   schedule(() => {
     try { signalProcess(-child.pid, 'SIGKILL'); complete({ contained: true }); }
-    catch (error) { complete({ contained: error?.code === 'ESRCH', reason: error?.code === 'ESRCH' ? undefined : 'process_group_kill_failed' }); }
+    catch (error) { complete({ contained: false, reason: error?.code === 'ESRCH' ? 'process_group_absent' : 'process_group_kill_failed' }); }
   }, 100);
 }
 

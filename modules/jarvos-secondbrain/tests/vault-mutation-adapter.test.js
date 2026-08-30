@@ -111,6 +111,34 @@ test('Windows taskkill double failure reports unconfirmed containment without di
   assert.deepEqual(results, [{ contained: false, reason: 'taskkill_failed' }]);
 });
 
+test('missing Unix process group does not prove descendant containment', () => {
+  const results = [];
+  const error = Object.assign(new Error('process group missing'), { code: 'ESRCH' });
+  terminateOwnedTree({ pid: 12345 }, {
+    platform: 'darwin',
+    signalProcess: () => { throw error; },
+    onComplete: (result) => results.push(result),
+  });
+  assert.deepEqual(results, [{ contained: false, reason: 'process_group_absent' }]);
+});
+
+test('missing Unix process group during escalation does not prove descendant containment', () => {
+  const signals = [];
+  const results = [];
+  const error = Object.assign(new Error('process group missing'), { code: 'ESRCH' });
+  terminateOwnedTree({ pid: 12345 }, {
+    platform: 'darwin',
+    signalProcess: (pid, signal) => {
+      signals.push([pid, signal]);
+      if (signal === 'SIGKILL') throw error;
+    },
+    schedule: (callback) => callback(),
+    onComplete: (result) => results.push(result),
+  });
+  assert.deepEqual(signals, [[-12345, 'SIGTERM'], [-12345, 'SIGKILL']]);
+  assert.deepEqual(results, [{ contained: false, reason: 'process_group_absent' }]);
+});
+
 test('unavailable capability retains planned intent for reconciliation', () => {
   const adapter = createVaultMutationAdapter({ vaultRoot: '/vault', vaultId: 'vault-a', ledgerPath: ledgerPath(), probe: () => ({ state: 'app_stopped' }) });
   assert.equal(adapter.execute(operation()).status, 'unavailable');
