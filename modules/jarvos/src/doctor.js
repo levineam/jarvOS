@@ -28,6 +28,7 @@ const REQUIRED_PATH_KEYS = [
   'vault',
   'notes',
   'journal',
+  'tags',
   'memory',
 ];
 

@@ -485,6 +485,7 @@ test('module doctor derives portable path checks from a valid legacy config', ()
     fs.mkdirSync(path.join(workspace, 'memory'), { recursive: true });
     fs.mkdirSync(path.join(vault, 'Notes'), { recursive: true });
     fs.mkdirSync(path.join(vault, 'Journal'), { recursive: true });
+    fs.mkdirSync(path.join(vault, 'Tags'), { recursive: true });
     fs.writeFileSync(path.join(workspace, 'AGENTS.md'), '# Agent context\n');
     fs.writeFileSync(path.join(workspace, 'MEMORY.md'), '# Memory\n');
     writeConfig(workspace, {
@@ -498,7 +499,7 @@ test('module doctor derives portable path checks from a valid legacy config', ()
 
     const result = runMinimalDoctor({ workspace });
     assert.equal(result.checks.find((check) => check.component === 'config.schema').ok, true);
-    for (const key of ['workspace', 'vault', 'notes', 'journal', 'memory']) {
+    for (const key of ['workspace', 'vault', 'notes', 'journal', 'tags', 'memory']) {
       assert.equal(result.checks.find((check) => check.component === `path.${key}`).ok, true, key);
     }
   } finally {

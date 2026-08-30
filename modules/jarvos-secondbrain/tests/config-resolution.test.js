@@ -5,6 +5,7 @@ const os = require('os');
 const path = require('path');
 
 const {
+  atomicReplaceConfig,
   buildSharedVaultConfig,
   discoverConfigPath,
   discoverExistingVault,
@@ -18,6 +19,18 @@ const {
 function tempDir() {
   return fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-config-')));
 }
+
+test('config migration replacement does not follow a target symlink swapped in after assessment', { skip: process.platform === 'win32' }, () => {
+  const root = tempDir();
+  const target = path.join(root, 'jarvos.config.json');
+  const victim = path.join(root, 'victim.json');
+  fs.writeFileSync(victim, 'preserve me\n');
+  fs.symlinkSync(victim, target);
+  atomicReplaceConfig(target, '{"migrated":true}\n');
+  assert.equal(fs.lstatSync(target).isSymbolicLink(), false);
+  assert.equal(fs.readFileSync(target, 'utf8'), '{"migrated":true}\n');
+  assert.equal(fs.readFileSync(victim, 'utf8'), 'preserve me\n');
+});
 
 test('resolveConfig loads jarvos.config.json and recomputes child paths from workspace and vault', () => {
   const root = tempDir();

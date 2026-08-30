@@ -10,6 +10,7 @@
 'use strict';
 
 const fs = require('fs');
+const crypto = require('crypto');
 const os = require('os');
 const path = require('path');
 
@@ -263,6 +264,18 @@ function assessSharedVaultConfigTarget({ configPath, config, vaultDir, homeDir =
   };
 }
 
+function atomicReplaceConfig(target, contents) {
+  const temporary = path.join(path.dirname(target), `.${path.basename(target)}.${process.pid}.${crypto.randomUUID()}.tmp`);
+  try {
+    fs.writeFileSync(temporary, contents, { flag: 'wx', mode: 0o600 });
+    // rename replaces the directory entry itself, so a target swapped to a
+    // symlink after assessment is replaced rather than followed.
+    fs.renameSync(temporary, target);
+  } finally {
+    if (fs.existsSync(temporary)) fs.unlinkSync(temporary);
+  }
+}
+
 function writeSharedVaultConfig({
   configPath,
   vaultDir,
@@ -286,7 +299,7 @@ function writeSharedVaultConfig({
   if (assessment.action === 'migrate') {
     const existing = readSharedVaultConfigTarget({ configPath: target, homeDir }).config;
     const migrated = migratedSharedVaultConfig(existing, config);
-    fs.writeFileSync(target, `${JSON.stringify(migrated, null, 2)}\n`, { mode: 0o600 });
+    atomicReplaceConfig(target, `${JSON.stringify(migrated, null, 2)}\n`);
     return { configPath: target, config: migrated, changed: true, migrated: true };
   }
 
@@ -380,6 +393,7 @@ if (require.main === module) {
 
 module.exports = {
   DEFAULT_VAULT_CANDIDATES,
+  atomicReplaceConfig,
   assessSharedVaultConfigTarget,
   buildSharedVaultConfig,
   discoverExistingVault,
