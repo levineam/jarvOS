@@ -230,6 +230,21 @@ try {
   assert.ok(fs.existsSync(path.join(attachWorkspace, 'jarvos.config.json')));
   assert.equal(fs.readFileSync(path.join(attachVault, 'Notes', 'existing.md'), 'utf8'), 'do not modify\n');
 
+  if (process.platform !== 'win32') {
+    const linkedAttachWorkspace = path.join(tmp, 'linked-attach-workspace');
+    const linkedAttachVault = path.join(tmp, 'linked-attach-vault');
+    const linkedNotesTarget = path.join(tmp, 'linked-notes-target');
+    fs.mkdirSync(linkedAttachVault);
+    fs.mkdirSync(linkedNotesTarget);
+    fs.symlinkSync(linkedNotesTarget, path.join(linkedAttachVault, 'Notes'), 'dir');
+    fs.mkdirSync(path.join(linkedAttachVault, 'Journal'));
+    fs.mkdirSync(path.join(linkedAttachVault, 'Tags'));
+    const linkedAttach = runInit(['--workspace', linkedAttachWorkspace, '--vault', linkedAttachVault, '--use-existing-vault'], env);
+    assert.notEqual(linkedAttach.status, 0);
+    assert.match(linkedAttach.stdout, /existing vault is missing required Notes\/, Journal\/, or Tags\//);
+    assert.equal(fs.existsSync(linkedAttachWorkspace), false);
+  }
+
   const emptyWorkspaceDestination = path.join(tmp, 'empty-workspace-destination');
   const workspaceLink = path.join(tmp, 'workspace-link');
   const symlinkVault = path.join(tmp, 'symlink-workspace-vault');

@@ -9,6 +9,7 @@
 'use strict';
 
 const { execSync, spawnSync } = require('child_process');
+const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const readline = require('readline');
@@ -208,6 +209,29 @@ function ensureDirectoryPathSafe(directory, label) {
   }
 }
 
+function writeFileExclusiveSafe(destination, content) {
+  const parent = path.dirname(destination);
+  assertPathComponentsSafe(parent, 'Bootstrap file parent');
+  const temporary = path.join(parent, `.${path.basename(destination)}.${crypto.randomUUID()}.tmp`);
+  let temporaryCreated = false;
+  try {
+    fs.writeFileSync(temporary, content, { encoding: 'utf8', flag: 'wx', mode: 0o600 });
+    temporaryCreated = true;
+    assertPathComponentsSafe(parent, 'Bootstrap file parent');
+    // An exclusive hard link neither follows nor replaces the final directory
+    // entry. If a parent is swapped after the temporary file is created, the
+    // unpredictable source name is absent in the replacement tree and linking
+    // fails without writing the destination.
+    fs.linkSync(temporary, destination);
+    fs.unlinkSync(temporary);
+    temporaryCreated = false;
+  } finally {
+    if (temporaryCreated) {
+      try { fs.unlinkSync(temporary); } catch {}
+    }
+  }
+}
+
 function resolveConfigPath(value, workspace) {
   if (typeof value !== 'string' || !value.trim()) return null;
   const expanded = expandHome(value);
@@ -259,7 +283,7 @@ function isCompatibleExistingInstall(workspace, vault) {
 
 function isExistingVaultAttachable(vault) {
   const requiredVaultDirectories = ['Notes', 'Journal', 'Tags'];
-  return requiredVaultDirectories.every((dir) => fs.statSync(path.join(vault, dir), { throwIfNoEntry: false })?.isDirectory());
+  return requiredVaultDirectories.every((dir) => fs.lstatSync(path.join(vault, dir), { throwIfNoEntry: false })?.isDirectory());
 }
 
 function classifyInitTargets({ workspace, vault, useExistingVault = false }) {
@@ -488,12 +512,8 @@ function createDirectories(config) {
   ];
 
   for (const d of dirs) {
-    try {
-      ensureDirectoryPathSafe(d, 'Bootstrap directory target');
-      ok(d);
-    } catch (e) {
-      err(`Failed to create ${d}: ${e.message}`);
-    }
+    ensureDirectoryPathSafe(d, 'Bootstrap directory target');
+    ok(d);
   }
 }
 
@@ -575,8 +595,7 @@ function generateOverlays(config) {
     }
     try {
       const rendered = renderTemplate(o.template, config);
-      assertPathComponentsSafe(path.dirname(dest), 'Bootstrap overlay parent');
-      fs.writeFileSync(dest, rendered, { encoding: 'utf8', flag: 'wx' });
+      writeFileExclusiveSafe(dest, rendered);
       ok(`${o.label} → ${dest}`);
     } catch (e) {
       err(`Failed to write ${o.label}: ${e.message}`);
@@ -598,8 +617,7 @@ function generateOverlays(config) {
 ## Important Context
 *(Will grow over time)*
 `;
-    assertPathComponentsSafe(path.dirname(memoryPath), 'Bootstrap memory parent');
-    fs.writeFileSync(memoryPath, memContent, { encoding: 'utf8', flag: 'wx' });
+    writeFileExclusiveSafe(memoryPath, memContent);
     ok(`MEMORY.md → ${memoryPath}`);
   } else {
     warn(`MEMORY.md already exists — skipping`);
@@ -616,8 +634,7 @@ function generateOverlays(config) {
 - Identity: ${config.ASSISTANT_NAME} for ${config.USER_NAME}
 - Coach: ${config.COACH_NAME}
 `;
-    assertPathComponentsSafe(path.dirname(dailyPath), 'Bootstrap daily-memory parent');
-    fs.writeFileSync(dailyPath, dailyContent, { encoding: 'utf8', flag: 'wx' });
+    writeFileExclusiveSafe(dailyPath, dailyContent);
     ok(`memory/${today}.md → ${dailyPath}`);
   }
 
@@ -647,8 +664,7 @@ function generateOverlays(config) {
         timezone: config.TIMEZONE
       }
     };
-    assertPathComponentsSafe(path.dirname(configPath), 'Bootstrap config parent');
-    fs.writeFileSync(configPath, JSON.stringify(jarvosConfig, null, 2) + '\n', { encoding: 'utf8', flag: 'wx' });
+    writeFileExclusiveSafe(configPath, JSON.stringify(jarvosConfig, null, 2) + '\n');
     ok(`jarvos.config.json → ${configPath}`);
   } else {
     warn(`jarvos.config.json already exists — skipping`);
@@ -674,12 +690,12 @@ function smokeTest(config) {
 
   for (const f of requiredFiles) {
     const p = path.join(ws, f);
-    if (fs.existsSync(p)) { ok(`${f} present`); passed++; }
+    if (fs.lstatSync(p, { throwIfNoEntry: false })?.isFile()) { ok(`${f} present`); passed++; }
     else { err(`${f} missing at ${p}`); failed++; }
   }
 
   for (const d of requiredDirs) {
-    if (fs.existsSync(d) && fs.statSync(d).isDirectory()) {
+    if (fs.lstatSync(d, { throwIfNoEntry: false })?.isDirectory()) {
       ok(`dir: ${d}`);
       passed++;
     } else {
@@ -692,7 +708,7 @@ function smokeTest(config) {
   const templateFiles = ['AGENTS.md', 'BOOTSTRAP.md', 'HEARTBEAT.md', 'USER.md', 'ONTOLOGY.md', 'SOUL.md', 'TOOLS.md'];
   for (const f of templateFiles) {
     const p = path.join(ws, f);
-    if (!fs.existsSync(p)) continue;
+    if (!fs.lstatSync(p, { throwIfNoEntry: false })?.isFile()) continue;
     const content = fs.readFileSync(p, 'utf8');
     const remaining = content.match(/\{\{[A-Z_]+\}\}/g);
     if (remaining) {
