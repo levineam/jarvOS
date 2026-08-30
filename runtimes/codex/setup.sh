@@ -10,6 +10,13 @@ TRUST_SCRIPT="$ROOT/runtimes/codex/trust-session-start-hook.js"
 CODEX_HOME="${CODEX_HOME:-$HOME/.codex}"
 CODEX_CONFIG="${CODEX_CONFIG:-$CODEX_HOME/config.toml}"
 LEGACY_HOOKS_JSON="$CODEX_HOME/hooks.json"
+# The receipt is intentionally limited to the MCP registration created by
+# this setup run. It authorizes remove-only rollback; it is not a copy of the
+# Codex configuration and never contains credential values.
+MCP_RECEIPT_MODULE="$ROOT/runtimes/codex/mcp-registration-receipt.js"
+MCP_RECEIPT_PATH="$CODEX_HOME/jarvos-codex-mcp-receipt.json"
+MCP_LOCK_PATH="$CODEX_HOME/.jarvos-codex-mcp.lock"
+export CODEX_HOME CODEX_CONFIG
 CONTROL_PLANE_SERVICE_MODULE="${JARVOS_CONTROL_PLANE_SERVICE_MODULE:-}"
 # Setup registers only a non-secret file path. Never pass the credential value
 # through `codex mcp add --env` — that puts it on argv and persists it in config.
@@ -19,6 +26,7 @@ STEWARDSHIP_CODEX_SESSION_MAP_ROOT="${JARVOS_STEWARDSHIP_CODEX_SESSION_MAP_ROOT:
 STEWARDSHIP_STABLE_ROOT="${JARVOS_STEWARDSHIP_STABLE_ROOT:-}"
 STEWARDSHIP_DISPATCHER=""
 CODEX_PROVIDER_MODE="${JARVOS_CODEX_PROVIDER_MODE:-}"
+CODEX_EXECUTABLE="${JARVOS_CODEX_EXECUTABLE:-codex}"
 # Optional owner-controlled stable selector-aware entrypoint. When set, this
 # is what gets persisted in Codex config instead of this immutable install's
 # own MCP script -- so a later selected-runtime transition does not require
@@ -48,10 +56,17 @@ elif [ "${JARVOS_MANAGED_HARNESS_ROLLBACK:-0}" = "1" ] && [ -n "$STEWARDSHIP_STA
   STEWARDSHIP_DISPATCHER="$STEWARDSHIP_STABLE_ROOT/jarvos-stewardship-dispatcher"
 fi
 
-if ! command -v codex >/dev/null 2>&1; then
+if ! command -v "$CODEX_EXECUTABLE" >/dev/null 2>&1; then
   echo "codex CLI not found on PATH" >&2
   exit 1
 fi
+CODEX_EXECUTABLE="$(command -v "$CODEX_EXECUTABLE")"
+case "$CODEX_EXECUTABLE" in
+  /*) ;;
+  *) CODEX_EXECUTABLE="$(cd "$(dirname "$CODEX_EXECUTABLE")" && pwd)/$(basename "$CODEX_EXECUTABLE")" ;;
+esac
+JARVOS_CODEX_EXECUTABLE="$CODEX_EXECUTABLE"
+export JARVOS_CODEX_EXECUTABLE
 
 if [ ! -f "$MCP_SERVER" ]; then
   echo "jarvOS MCP server not found: $MCP_SERVER" >&2
@@ -75,6 +90,11 @@ fi
 
 if [ ! -f "$TRUST_SCRIPT" ]; then
   echo "jarvOS Codex hook trust script not found: $TRUST_SCRIPT" >&2
+  exit 1
+fi
+
+if [ ! -f "$MCP_RECEIPT_MODULE" ]; then
+  echo "jarvOS Codex MCP receipt helper not found: $MCP_RECEIPT_MODULE" >&2
   exit 1
 fi
 
@@ -227,21 +247,154 @@ append_optional_mcp_env JARVOS_COMMON_WORK_SERVICE_MODULE "${JARVOS_COMMON_WORK_
 MCP_HAS_HOST_BINDING=${#MCP_ENV_ARGS[@]}
 MCP_ENV_ARGS+=(--env "JARVOS_COMMON_WORK_HARNESS=codex")
 
+# Managed provider admission is checked before the first profile write. The
+# provider manager repeats this check immediately before activation below.
+if [ "${JARVOS_MANAGED_HARNESS_ROLLBACK:-0}" != "1" ]; then
+  REQUESTED_PROVIDER_MODE="$CODEX_PROVIDER_MODE"
+  if [ -z "$REQUESTED_PROVIDER_MODE" ] && [ "${JARVOS_PROFILE:-}" = "codex" ]; then
+    REQUESTED_PROVIDER_MODE="new-managed"
+  fi
+  case "$REQUESTED_PROVIDER_MODE" in
+    ""|existing|disabled) ;;
+    *)
+      JARVOS_CODEX_PROVIDER_MODE="$REQUESTED_PROVIDER_MODE" \
+        JARVOS_CODEX_PROVIDER_PREFLIGHT=1 \
+        node "$ROOT/runtimes/codex/compound-engineering-activation.js"
+      ;;
+  esac
+fi
+
+codex_mcp_fingerprint() {
+  local payload fingerprint list_payload list_state
+  if ! payload="$("$CODEX_EXECUTABLE" mcp get jarvos --json 2>/dev/null)"; then
+    if ! list_payload="$("$CODEX_EXECUTABLE" mcp list --json 2>/dev/null)"; then
+      return 2
+    fi
+    if ! list_state="$(printf '%s' "$list_payload" | node "$MCP_RECEIPT_MODULE" list-state)"; then
+      return 2
+    fi
+    if [ "$list_state" = "absent" ]; then
+      return 1
+    fi
+    return 2
+  fi
+  if ! fingerprint="$(printf '%s' "$payload" | node "$MCP_RECEIPT_MODULE" observe)"; then
+    return 2
+  fi
+  printf '%s' "$fingerprint"
+}
+
+release_mcp_lock() {
+  if [ "${MCP_LOCK_HELD:-0}" = "1" ]; then
+    rmdir "$MCP_LOCK_PATH" 2>/dev/null || true
+    MCP_LOCK_HELD=0
+  fi
+}
+
 if [ "${JARVOS_STEWARDSHIP_ONLY:-0}" != "1" ]; then
-  if codex mcp get jarvos >/dev/null 2>&1; then
-    codex mcp remove jarvos >/dev/null
+  MCP_DESIRED_FINGERPRINT=""
+  MCP_RECEIPT_STATE="missing"
+  if [ "${JARVOS_MANAGED_HARNESS_ROLLBACK:-0}" = "1" ] && { [ -e "$MCP_RECEIPT_PATH" ] || [ -L "$MCP_RECEIPT_PATH" ]; }; then
+    MCP_DESIRED_FINGERPRINT="$(node "$MCP_RECEIPT_MODULE" fingerprint "$MCP_RECEIPT_PATH" "$CODEX_HOME")"
+    MCP_RECEIPT_STATE="$(node "$MCP_RECEIPT_MODULE" state "$MCP_RECEIPT_PATH" "$CODEX_HOME" "$MCP_DESIRED_FINGERPRINT")"
+  elif [ "${JARVOS_MANAGED_HARNESS_ROLLBACK:-0}" = "1" ]; then
+    echo "No jarvOS-owned Codex MCP registration was found; preserving the profile."
+  else
+    MCP_DESIRED_FINGERPRINT="$(node "$MCP_RECEIPT_MODULE" desired-cli "${MCP_ENV_ARGS[@]}" -- "${MCP_COMMAND[@]}")"
+    if [ -e "$MCP_RECEIPT_PATH" ] || [ -L "$MCP_RECEIPT_PATH" ]; then
+      MCP_RECEIPT_STATE="$(node "$MCP_RECEIPT_MODULE" state "$MCP_RECEIPT_PATH" "$CODEX_HOME" "$MCP_DESIRED_FINGERPRINT")"
+    fi
   fi
 
-  if [ ${#MCP_ENV_ARGS[@]} -gt 0 ]; then
-    codex mcp add "${MCP_ENV_ARGS[@]}" jarvos -- "${MCP_COMMAND[@]}"
-    if [ "$MCP_HAS_HOST_BINDING" -gt 0 ]; then
-      echo "Registered jarvOS MCP server for Codex with host bindings: ${MCP_COMMAND[*]}"
-    else
-      echo "Registered jarvOS MCP server for Codex: ${MCP_COMMAND[*]}"
+  if [ "$MCP_RECEIPT_STATE" != "missing" ] || [ "${JARVOS_MANAGED_HARNESS_ROLLBACK:-0}" != "1" ]; then
+    node "$MCP_RECEIPT_MODULE" profile "$CODEX_HOME" create >/dev/null
+    if ! mkdir -m 700 "$MCP_LOCK_PATH" 2>/dev/null; then
+      echo "Another jarvOS Codex MCP setup or rollback is already in progress." >&2
+      exit 1
     fi
-  else
-    codex mcp add jarvos -- "${MCP_COMMAND[@]}"
-    echo "Registered jarvOS MCP server for Codex: ${MCP_COMMAND[*]}"
+    MCP_LOCK_HELD=1
+    trap release_mcp_lock EXIT
+
+    set +e
+    MCP_CURRENT_FINGERPRINT="$(codex_mcp_fingerprint)"
+    MCP_OBSERVE_STATUS=$?
+    set -e
+
+    if [ "${JARVOS_MANAGED_HARNESS_ROLLBACK:-0}" = "1" ]; then
+      if [ "$MCP_OBSERVE_STATUS" -eq 2 ]; then
+        echo "Could not verify the current jarvOS MCP registration; preserving it and its receipt." >&2
+        exit 1
+      fi
+      if [ "$MCP_OBSERVE_STATUS" -eq 1 ]; then
+        node "$MCP_RECEIPT_MODULE" clear "$MCP_RECEIPT_PATH" "$CODEX_HOME" "$MCP_DESIRED_FINGERPRINT"
+        echo "The recorded jarvOS MCP registration is already absent; cleared its receipt."
+      elif [ "$MCP_CURRENT_FINGERPRINT" != "$MCP_DESIRED_FINGERPRINT" ]; then
+        echo "The jarvOS MCP registration changed after setup; preserving it and its receipt." >&2
+        exit 1
+      else
+        "$CODEX_EXECUTABLE" mcp remove jarvos >/dev/null
+        set +e
+        MCP_AFTER_REMOVE="$(codex_mcp_fingerprint)"
+        MCP_AFTER_REMOVE_STATUS=$?
+        set -e
+        if [ "$MCP_AFTER_REMOVE_STATUS" -ne 1 ]; then
+          echo "Could not confirm removal of the jarvOS MCP registration; retaining its receipt." >&2
+          exit 1
+        fi
+        node "$MCP_RECEIPT_MODULE" clear "$MCP_RECEIPT_PATH" "$CODEX_HOME" "$MCP_DESIRED_FINGERPRINT"
+        echo "Removed the recorded jarvOS MCP registration from Codex."
+      fi
+    else
+      if [ "$MCP_RECEIPT_STATE" = "missing" ]; then
+        if [ "$MCP_OBSERVE_STATUS" -eq 0 ]; then
+          echo "Codex already has an MCP registration named jarvos; preserving it because this setup did not create it." >&2
+          exit 1
+        elif [ "$MCP_OBSERVE_STATUS" -eq 2 ]; then
+          echo "Could not inspect the existing jarvOS MCP registration; preserving it." >&2
+          exit 1
+        fi
+        MCP_RECEIPT_STATE="$(node "$MCP_RECEIPT_MODULE" claim "$MCP_RECEIPT_PATH" "$CODEX_HOME" "$MCP_DESIRED_FINGERPRINT")"
+      elif [ "$MCP_OBSERVE_STATUS" -eq 0 ]; then
+        if [ "$MCP_CURRENT_FINGERPRINT" != "$MCP_DESIRED_FINGERPRINT" ]; then
+          echo "The recorded jarvOS MCP registration no longer matches setup; preserving it." >&2
+          exit 1
+        fi
+        node "$MCP_RECEIPT_MODULE" activate "$MCP_RECEIPT_PATH" "$CODEX_HOME" "$MCP_DESIRED_FINGERPRINT" >/dev/null
+        echo "The recorded jarvOS MCP registration is already current."
+        MCP_RECEIPT_STATE="active"
+      elif [ "$MCP_OBSERVE_STATUS" -eq 2 ]; then
+        echo "Could not inspect the recorded jarvOS MCP registration; preserving it." >&2
+        exit 1
+      elif [ "$MCP_RECEIPT_STATE" = "active" ]; then
+        echo "The recorded jarvOS MCP registration is unexpectedly absent; preserving the receipt for reconciliation." >&2
+        exit 1
+      fi
+
+      if [ "$MCP_RECEIPT_STATE" = "pending" ]; then
+        "$CODEX_EXECUTABLE" mcp add "${MCP_ENV_ARGS[@]}" jarvos -- "${MCP_COMMAND[@]}" || true
+        set +e
+        MCP_AFTER_ADD="$(codex_mcp_fingerprint)"
+        MCP_AFTER_ADD_STATUS=$?
+        set -e
+        if [ "$MCP_AFTER_ADD_STATUS" -eq 0 ] && [ "$MCP_AFTER_ADD" = "$MCP_DESIRED_FINGERPRINT" ]; then
+          node "$MCP_RECEIPT_MODULE" activate "$MCP_RECEIPT_PATH" "$CODEX_HOME" "$MCP_DESIRED_FINGERPRINT" >/dev/null
+          if [ "$MCP_HAS_HOST_BINDING" -gt 0 ]; then
+            echo "Registered jarvOS MCP server for Codex with host bindings: ${MCP_COMMAND[*]}"
+          else
+            echo "Registered jarvOS MCP server for Codex: ${MCP_COMMAND[*]}"
+          fi
+        elif [ "$MCP_AFTER_ADD_STATUS" -eq 1 ]; then
+          echo "Codex did not establish the requested jarvOS MCP registration; the pending receipt permits a safe retry." >&2
+          exit 1
+        else
+          echo "Codex reported a different jarvOS MCP registration; preserving it for manual reconciliation." >&2
+          exit 1
+        fi
+      fi
+    fi
+
+    release_mcp_lock
+    trap - EXIT
   fi
 fi
 

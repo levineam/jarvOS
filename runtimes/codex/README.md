@@ -97,6 +97,10 @@ state, and records the provider-owned additions under the selected
 `CODEX_HOME`. It refuses to replace a stale, disabled, locally changed, or
 unverifiable installation. `existing` (the default) and `disabled` modes leave
 the profile untouched and jarvOS uses native fallback when CE is unavailable.
+Managed activation also requires the running Codex CLI version to exactly match
+the version recorded by the reviewed conformance receipt. Setup performs this
+check before writing the selected profile, and the provider manager repeats it
+immediately before activation.
 
 To remove only additions made by jarvOS, use the same profile and explicit
 rollback flag:
@@ -108,6 +112,14 @@ JARVOS_MANAGED_HARNESS_ROLLBACK=1 ./runtimes/codex/setup.sh
 Rollback preserves the marketplace when another plugin now uses it and refuses
 to remove provider state that changed after jarvOS installed it. Restart Codex
 after activation or rollback before relying on the new profile state.
+
+Codex MCP setup follows the same ownership boundary. A mode-`0600` receipt in
+the selected `CODEX_HOME` records only a normalized fingerprint of the jarvOS
+registration created by setup. Rollback never adds an MCP registration and
+removes one only while it still matches that receipt; pre-existing or later
+changed registrations are preserved. This receipt covers MCP ownership only.
+Hook trust and feature-setting restoration are separate profile concerns and
+are not claimed as transactional by this mechanism.
 
 ### Optional authenticated control-plane host
 
