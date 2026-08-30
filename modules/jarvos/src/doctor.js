@@ -164,20 +164,7 @@ function createCheck(component, ok, message, details = {}) {
 function getPathConfig(config, key) {
   if (!config || typeof config !== 'object') return undefined;
   const paths = config.paths && typeof config.paths === 'object' ? config.paths : {};
-  if (Object.prototype.hasOwnProperty.call(paths, key)) return paths[key];
-
-  const workspace = paths.workspace || config.workspacePath;
-  const vault = paths.vault || config.vaultPath;
-  if (key === 'workspace') return workspace;
-  if (key === 'vault') return vault;
-  if (key === 'notes' && vault) return path.join(vault, 'Notes');
-  if (key === 'journal' && vault) return path.join(vault, 'Journal');
-  if (key === 'tags' && vault) return path.join(vault, 'Tags');
-  if (key === 'memory' && workspace) return path.join(workspace, 'memory');
-  if (key === 'scripts' && workspace) return path.join(workspace, 'scripts');
-  if (key === 'workflows' && workspace) return path.join(workspace, 'workflows');
-  if (key === 'customers' && workspace) return path.join(workspace, 'customers');
-  return undefined;
+  return Object.prototype.hasOwnProperty.call(paths, key) ? paths[key] : undefined;
 }
 
 function validateConfiguredDirectory(workspace, config, key) {

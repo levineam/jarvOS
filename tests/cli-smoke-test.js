@@ -308,6 +308,14 @@ try {
   assert.match(syncDoctor.stdout, /PASS vault-path/);
   assert.match(syncDoctor.stdout, /READY/);
 
+  fs.rmSync(path.join(syncVault, 'Tags'), { recursive: true });
+  fs.writeFileSync(path.join(syncVault, 'Tags'), 'not a directory\n');
+  const fileTagsDoctor = run(['doctor', '--profile', 'minimal', '--workspace', syncWorkspace], { env });
+  assert.notEqual(fileTagsDoctor.status, 0);
+  assert.match(fileTagsDoctor.stdout, /FAIL vault-path/);
+  fs.rmSync(path.join(syncVault, 'Tags'));
+  fs.mkdirSync(path.join(syncVault, 'Tags'));
+
   const jsonDoctor = run(['doctor', '--profile=minimal', '--workspace', workspace, '--json'], { env });
   assert.equal(jsonDoctor.status, 0, jsonDoctor.stderr || jsonDoctor.stdout);
   const report = JSON.parse(jsonDoctor.stdout);

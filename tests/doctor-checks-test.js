@@ -73,7 +73,7 @@ test('vault-path-stale passes for an existing vault root', () => {
   const tmp = scratch();
   try {
     const vault = makeVault(path.join(tmp, 'vault'));
-    const configPath = writeConfig(tmp, { vaultPath: vault });
+    const configPath = writeConfig(tmp, { paths: { vault } });
     const res = checkVaultPathStale(configPath);
     assert.equal(res.ok, true, res.detail);
     assert.equal(res.id, 'vault-path-stale');
@@ -85,7 +85,7 @@ test('vault-path-stale passes for an existing vault root', () => {
 test('vault-path-stale fails when the configured vault root is gone', () => {
   const tmp = scratch();
   try {
-    const configPath = writeConfig(tmp, { vaultPath: path.join(tmp, 'moved-away') });
+    const configPath = writeConfig(tmp, { paths: { vault: path.join(tmp, 'moved-away') } });
     const res = checkVaultPathStale(configPath);
     assert.equal(res.ok, false);
     assert.match(res.detail, /does not exist \(stale or moved vault\)/);
@@ -110,7 +110,7 @@ test('journal-conflict passes when there is no .obsidian config', () => {
   const tmp = scratch();
   try {
     const vault = makeVault(path.join(tmp, 'vault'));
-    const configPath = writeConfig(tmp, { vaultPath: vault });
+    const configPath = writeConfig(tmp, { paths: { vault } });
     const res = checkJournalConflict(configPath);
     assert.equal(res.ok, true, res.detail);
     assert.match(res.detail, /sole journal writer/);
@@ -124,7 +124,7 @@ test('journal-conflict fails when the Obsidian "journals" community plugin is en
   try {
     const vault = makeVault(path.join(tmp, 'vault'), { obsidian: true });
     fs.writeFileSync(path.join(vault, '.obsidian', 'community-plugins.json'), JSON.stringify(['dataview', 'journals']));
-    const configPath = writeConfig(tmp, { vaultPath: vault });
+    const configPath = writeConfig(tmp, { paths: { vault } });
     const res = checkJournalConflict(configPath);
     assert.equal(res.ok, false);
     assert.match(res.detail, /"journals" is enabled/);
@@ -140,7 +140,7 @@ test('journal-conflict fails when core daily-notes writes into the jarvOS Journa
     const vault = makeVault(path.join(tmp, 'vault'), { obsidian: true });
     fs.writeFileSync(path.join(vault, '.obsidian', 'core-plugins.json'), JSON.stringify(['daily-notes']));
     fs.writeFileSync(path.join(vault, '.obsidian', 'daily-notes.json'), JSON.stringify({ folder: 'Journal' }));
-    const configPath = writeConfig(tmp, { vaultPath: vault });
+    const configPath = writeConfig(tmp, { paths: { vault } });
     const res = checkJournalConflict(configPath);
     assert.equal(res.ok, false);
     assert.match(res.detail, /daily-notes.*overlapping jarvOS Journal/);
@@ -155,7 +155,7 @@ test('journal-conflict ignores a daily-notes folder that does not overlap Journa
     const vault = makeVault(path.join(tmp, 'vault'), { obsidian: true });
     fs.writeFileSync(path.join(vault, '.obsidian', 'core-plugins.json'), JSON.stringify(['daily-notes']));
     fs.writeFileSync(path.join(vault, '.obsidian', 'daily-notes.json'), JSON.stringify({ folder: 'Daily' }));
-    const configPath = writeConfig(tmp, { vaultPath: vault });
+    const configPath = writeConfig(tmp, { paths: { vault } });
     const res = checkJournalConflict(configPath);
     assert.equal(res.ok, true, res.detail);
   } finally {
@@ -171,7 +171,7 @@ test('journal-conflict fails when Periodic Notes daily folder overlaps Journal',
     const pnDir = path.join(vault, '.obsidian', 'plugins', 'periodic-notes');
     fs.mkdirSync(pnDir, { recursive: true });
     fs.writeFileSync(path.join(pnDir, 'data.json'), JSON.stringify({ daily: { enabled: true, folder: 'Journal' } }));
-    const configPath = writeConfig(tmp, { vaultPath: vault });
+    const configPath = writeConfig(tmp, { paths: { vault } });
     const res = checkJournalConflict(configPath);
     assert.equal(res.ok, false);
     assert.match(res.detail, /periodic-notes.*overlapping jarvOS Journal/);
@@ -188,7 +188,7 @@ test('journal-conflict ignores Periodic Notes when its daily folder does not ove
     const pnDir = path.join(vault, '.obsidian', 'plugins', 'periodic-notes');
     fs.mkdirSync(pnDir, { recursive: true });
     fs.writeFileSync(path.join(pnDir, 'data.json'), JSON.stringify({ daily: { enabled: true, folder: 'Daily' } }));
-    const configPath = writeConfig(tmp, { vaultPath: vault });
+    const configPath = writeConfig(tmp, { paths: { vault } });
     const res = checkJournalConflict(configPath);
     assert.equal(res.ok, true, res.detail);
   } finally {
@@ -204,7 +204,7 @@ test('journal-conflict ignores Periodic Notes when its daily section is disabled
     const pnDir = path.join(vault, '.obsidian', 'plugins', 'periodic-notes');
     fs.mkdirSync(pnDir, { recursive: true });
     fs.writeFileSync(path.join(pnDir, 'data.json'), JSON.stringify({ daily: { enabled: false, folder: 'Journal' } }));
-    const configPath = writeConfig(tmp, { vaultPath: vault });
+    const configPath = writeConfig(tmp, { paths: { vault } });
     const res = checkJournalConflict(configPath);
     assert.equal(res.ok, true, res.detail);
   } finally {
@@ -477,7 +477,7 @@ test('profile doctor keeps missing GBrain continuity optional for portable confi
   }
 });
 
-test('module doctor derives portable path checks from a valid legacy config', () => {
+test('module doctor requires legacy configs to migrate before reporting runtime paths healthy', () => {
   const workspace = scratch();
   const vault = path.join(workspace, 'vault');
   try {
@@ -500,7 +500,7 @@ test('module doctor derives portable path checks from a valid legacy config', ()
     const result = runMinimalDoctor({ workspace });
     assert.equal(result.checks.find((check) => check.component === 'config.schema').ok, true);
     for (const key of ['workspace', 'vault', 'notes', 'journal', 'tags', 'memory']) {
-      assert.equal(result.checks.find((check) => check.component === `path.${key}`).ok, true, key);
+      assert.equal(result.checks.find((check) => check.component === `path.${key}`).ok, false, key);
     }
   } finally {
     fs.rmSync(workspace, { recursive: true, force: true });
