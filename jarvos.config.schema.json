@@ -41,16 +41,17 @@
     "runtime": { "type": "string", "minLength": 1 },
     "paths": {
       "type": "object",
+      "description": "Runtime path map. Every value must be absolute or ~-rooted. The resolver ignores a relative value: workspace and vault then fall back to the home defaults, and a derived key is recomputed from its resolved workspace or vault parent.",
       "properties": {
-        "workspace": { "type": "string", "minLength": 1 },
-        "vault": { "type": "string", "minLength": 1 },
-        "notes": { "type": "string" },
-        "journal": { "type": "string" },
-        "tags": { "type": "string" },
-        "memory": { "type": "string" },
-        "scripts": { "type": "string" },
-        "workflows": { "type": "string" },
-        "customers": { "type": "string" }
+        "workspace": { "type": "string", "minLength": 1, "format": "absolute-path" },
+        "vault": { "type": "string", "minLength": 1, "format": "absolute-path" },
+        "notes": { "type": "string", "format": "absolute-path" },
+        "journal": { "type": "string", "format": "absolute-path" },
+        "tags": { "type": "string", "format": "absolute-path" },
+        "memory": { "type": "string", "format": "absolute-path" },
+        "scripts": { "type": "string", "format": "absolute-path" },
+        "workflows": { "type": "string", "format": "absolute-path" },
+        "customers": { "type": "string", "format": "absolute-path" }
       },
       "additionalProperties": true
     },

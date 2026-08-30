@@ -110,7 +110,22 @@ try {
   const syncHelp = run(['sync', '--help']);
   assert.equal(syncHelp.status, 0, syncHelp.stderr || syncHelp.stdout);
   assert.match(syncHelp.stdout, /Sync with an existing jarvOS installation/);
-  assert.match(syncHelp.stdout, /never writes\ninside the vault/);
+  assert.match(syncHelp.stdout, /ordinary, uncontended use the command validates Notes\/,\nJournal\/, and Tags\/ and writes no config contents inside the vault/);
+  // The contract is target-only and must describe the exclusive final target,
+  // readback proof, and intentionally non-mutating failure cleanup.
+  assert.match(syncHelp.stdout, /In ordinary, uncontended use sync selects the config directory outside the vault/);
+  assert.match(syncHelp.stdout, /vaultWrites\s+and\s+vaultContentsWritten/);
+  assert.match(syncHelp.stdout, /legacy-shaped config is reported as manual-reconcile/);
+  assert.match(syncHelp.stdout, /never rewrites an\nexisting config in place/);
+  assert.match(syncHelp.stdout, /final target with O_EXCL through a retained file descriptor/);
+  assert.match(syncHelp.stdout, /target pathname still names that descriptor/);
+  assert.match(syncHelp.stdout, /reads the exact bytes back through the descriptor/);
+  assert.match(syncHelp.stdout, /failed create may\nleave an empty 0600 config target/);
+  assert.match(syncHelp.stdout, /never removes\nany pathname during cleanup/);
+  assert.match(syncHelp.stdout, /simultaneous local filesystem changes are\nobserved by the identity checks, sync fails closed/);
+  assert.doesNotMatch(syncHelp.stdout, /hard-link-capable filesystem/);
+  assert.doesNotMatch(syncHelp.stdout, /publishes it by hard link/);
+  assert.doesNotMatch(syncHelp.stdout, /republishes by rename/);
 
   const syncConfigPath = path.join(syncWorkspace, 'jarvos.config.json');
   const syncArgs = [
@@ -122,7 +137,11 @@ try {
   ];
   const syncDryRun = run([...syncArgs, '--dry-run', '--json']);
   assert.equal(syncDryRun.status, 0, syncDryRun.stderr || syncDryRun.stdout);
-  assert.equal(JSON.parse(syncDryRun.stdout).vaultWrites, false);
+  const syncDryRunPayload = JSON.parse(syncDryRun.stdout);
+  // Both fields record that no config contents were observed in the vault for
+  // this completed dry-run operation.
+  assert.equal(syncDryRunPayload.vaultWrites, false);
+  assert.equal(syncDryRunPayload.vaultContentsWritten, false);
   assert.equal(fs.existsSync(syncConfigPath), false, 'sync dry-run must not create the config or workspace');
 
   const externalConfig = path.join(tmp, 'external-config', 'custom.json');
@@ -140,7 +159,7 @@ try {
   ]);
   assert.notEqual(vaultWorkspace.status, 0);
   assert.match(vaultWorkspace.stderr, /inside the shared vault/);
-  assert.equal(fs.existsSync(path.join(syncVault, 'jarvos.config.json')), false, 'sync must never create config inside the vault');
+  assert.equal(fs.existsSync(path.join(syncVault, 'jarvos.config.json')), false, 'an ordinary sync target stays outside the vault');
 
   const explicitVaultConfig = run([...syncArgs, '--config', path.join(syncVault, 'outside-workspace.json'), '--dry-run']);
   assert.notEqual(explicitVaultConfig.status, 0);
@@ -185,7 +204,7 @@ try {
   const syncApply = run(syncArgs);
   assert.equal(syncApply.status, 0, syncApply.stderr || syncApply.stdout);
   assert.match(syncApply.stdout, /Mode: APPLIED/);
-  assert.match(syncApply.stdout, /Vault writes: none/);
+  assert.match(syncApply.stdout, /Vault writes observed: none/);
   assert.ok(fs.existsSync(syncConfigPath));
 
   const syncAgain = run(syncArgs);
@@ -208,24 +227,67 @@ try {
   assert.match(syncConflict.stderr, /Refusing to overwrite an existing jarvos\.config\.json/);
 
   // A pre-sync bootstrap config has only legacy path keys and no timezone.
-  // Syncing it with an explicit timezone must be a safe no-overwrite attach,
-  // rather than treating the missing metadata as a conflict.
+  // Sync must identify the target as manual-reconcile and leave it untouched;
+  // it must never rewrite the legacy file in place.
   const legacySyncWorkspace = path.join(tmp, 'legacy-sync-workspace');
   fs.mkdirSync(legacySyncWorkspace);
-  fs.writeFileSync(path.join(legacySyncWorkspace, 'jarvos.config.json'), JSON.stringify({
+  const legacySyncConfigPath = path.join(legacySyncWorkspace, 'jarvos.config.json');
+  const legacySyncContents = JSON.stringify({
     workspacePath: legacySyncWorkspace,
     vaultPath: syncVault,
     userName: 'TestUser',
-  }));
-  const syncLegacy = run([
+  });
+  fs.writeFileSync(legacySyncConfigPath, legacySyncContents);
+  const syncLegacyDryRun = run([
+    'sync', '--workspace', legacySyncWorkspace, '--vault', syncVault,
+    '--name', 'TestUser', '--timezone', 'UTC',
+    '--dry-run', '--json',
+  ]);
+  assert.equal(syncLegacyDryRun.status, 0, syncLegacyDryRun.stderr || syncLegacyDryRun.stdout);
+  const syncLegacyPayload = JSON.parse(syncLegacyDryRun.stdout);
+  assert.equal(syncLegacyPayload.action, 'manual-reconcile');
+  assert.equal(syncLegacyPayload.targetAction, 'manual-reconcile');
+  assert.equal(syncLegacyPayload.manualReconciliation, true);
+  assert.match(syncLegacyPayload.message, /Cannot automatically migrate.*never rewrites.*in place/);
+  assert.equal(fs.readFileSync(legacySyncConfigPath, 'utf8'), legacySyncContents);
+  const syncLegacyApply = run([
     'sync', '--workspace', legacySyncWorkspace, '--vault', syncVault,
     '--name', 'TestUser', '--timezone', 'UTC',
   ]);
-  assert.equal(syncLegacy.status, 0, syncLegacy.stderr || syncLegacy.stdout);
-  assert.match(syncLegacy.stdout, /Mode: APPLIED/);
-  const migratedLegacy = JSON.parse(fs.readFileSync(path.join(legacySyncWorkspace, 'jarvos.config.json'), 'utf8'));
-  assert.equal(migratedLegacy.paths.vault, syncVault);
-  assert.equal(migratedLegacy.user.timezone, 'UTC');
+  assert.notEqual(syncLegacyApply.status, 0);
+  assert.match(syncLegacyApply.stderr, /Cannot automatically migrate/);
+  assert.equal(fs.readFileSync(legacySyncConfigPath, 'utf8'), legacySyncContents);
+
+  const blankName = run([
+    'sync',
+    '--workspace', path.join(tmp, 'blank-name-workspace'),
+    '--vault', syncVault,
+    '--name', '  ',
+    '--timezone', 'UTC',
+    '--dry-run',
+  ]);
+  assert.notEqual(blankName.status, 0);
+  assert.match(blankName.stderr, /non-empty user name/);
+
+  const nullConfigWorkspace = path.join(tmp, 'null-config-workspace');
+  const nullConfigPath = path.join(nullConfigWorkspace, 'jarvos.config.json');
+  fs.mkdirSync(nullConfigWorkspace, { recursive: true });
+  fs.writeFileSync(nullConfigPath, 'null\n');
+  const nullConfigArgs = [
+    'sync',
+    '--workspace', nullConfigWorkspace,
+    '--vault', syncVault,
+    '--name', 'TestUser',
+    '--timezone', 'UTC',
+  ];
+  // Dry run and apply must agree: neither may report a plannable `create` for a
+  // target that already holds a file the exclusive write cannot replace.
+  for (const extra of [['--dry-run'], []]) {
+    const nullConfigSync = run([...nullConfigArgs, ...extra]);
+    assert.notEqual(nullConfigSync.status, 0);
+    assert.match(nullConfigSync.stderr, /not a JSON object/);
+  }
+  assert.equal(fs.readFileSync(nullConfigPath, 'utf8'), 'null\n');
 
   const badProfile = run(['init', '--profile', 'full', '--yes']);
   assert.notEqual(badProfile.status, 0);

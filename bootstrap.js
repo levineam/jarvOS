@@ -40,6 +40,13 @@ function expandHome(p) {
   return p;
 }
 
+// jarvos.config.json paths.* must be runtime-effective: the config resolver
+// ignores relative values and silently falls back to the home-directory
+// defaults, so anchor them here instead of writing a path nothing will use.
+function absolutePath(p) {
+  return path.resolve(expandHome(p));
+}
+
 function isValidIanaTimezone(value) {
   if (typeof value !== 'string' || !value.trim()) return false;
   try { Intl.DateTimeFormat(undefined, { timeZone: value }); return true; } catch { return false; }
@@ -133,8 +140,8 @@ function nonInteractiveConfig() {
     USER_NAME:      process.env.JARVOS_USER_NAME      || os.userInfo().username,
     COACH_NAME:     process.env.JARVOS_COACH_NAME     || 'jarvOS',
     TIMEZONE:       process.env.JARVOS_TIMEZONE       || tz,
-    VAULT_PATH:     expandHome(process.env.JARVOS_VAULT_PATH      || path.join(os.homedir(), 'jarvos-vault')),
-    WORKSPACE_PATH: expandHome(process.env.JARVOS_WORKSPACE_PATH  || path.join(os.homedir(), 'clawd')),
+    VAULT_PATH:     absolutePath(process.env.JARVOS_VAULT_PATH      || path.join(os.homedir(), 'jarvos-vault')),
+    WORKSPACE_PATH: absolutePath(process.env.JARVOS_WORKSPACE_PATH  || path.join(os.homedir(), 'clawd')),
     RUNTIME:        process.env.JARVOS_RUNTIME        || 'openclaw'
   };
   return defaults;
@@ -187,8 +194,8 @@ async function gatherConfig(rl) {
     USER_NAME:       answers.USER_NAME,
     COACH_NAME:      answers.COACH_NAME,
     TIMEZONE:        answers.TIMEZONE,
-    VAULT_PATH:      expandHome(answers.VAULT_PATH),
-    WORKSPACE_PATH:  expandHome(answers.WORKSPACE_PATH),
+    VAULT_PATH:      absolutePath(answers.VAULT_PATH),
+    WORKSPACE_PATH:  absolutePath(answers.WORKSPACE_PATH),
     RUNTIME:         answers.RUNTIME
   };
 }

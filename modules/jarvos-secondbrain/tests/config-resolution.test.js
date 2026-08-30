@@ -5,11 +5,18 @@ const os = require('os');
 const path = require('path');
 
 const {
+  MANUAL_RECONCILIATION_ACTION,
+  assertConfigPublicationSupported,
+  assessSharedVaultConfigTarget,
   atomicReplaceConfig,
+  createConfigExclusively,
+  requiresConfigPublication,
   buildSharedVaultConfig,
   discoverConfigPath,
   discoverExistingVault,
+  hasPosixDirectoryPinCapability,
   parseEnvFile,
+  readSharedVaultConfigTarget,
   resolveConfig,
   resolveJournalConfig,
   resolvePaperclipConfig,
@@ -20,16 +27,534 @@ function tempDir() {
   return fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-config-')));
 }
 
-test('config migration replacement does not follow a target symlink swapped in after assessment', { skip: process.platform === 'win32' }, () => {
+test('in-place replacement is disabled and leaves an existing target untouched', { skip: process.platform === 'win32' }, () => {
   const root = tempDir();
   const target = path.join(root, 'jarvos.config.json');
-  const victim = path.join(root, 'victim.json');
-  fs.writeFileSync(victim, 'preserve me\n');
-  fs.symlinkSync(victim, target);
-  atomicReplaceConfig(target, '{"migrated":true}\n');
-  assert.equal(fs.lstatSync(target).isSymbolicLink(), false);
-  assert.equal(fs.readFileSync(target, 'utf8'), '{"migrated":true}\n');
-  assert.equal(fs.readFileSync(victim, 'utf8'), 'preserve me\n');
+  const original = '{"original":true}\n';
+  fs.writeFileSync(target, original);
+
+  assert.throws(
+    () => atomicReplaceConfig(target, '{"migrated":true}\n'),
+    /Cannot automatically migrate.*never rewrites.*in place/,
+  );
+  assert.equal(fs.readFileSync(target, 'utf8'), original);
+});
+
+test('config publication support is decided per platform, and only for actions that write', () => {
+  // Parameterized rather than read from process.platform so non-Windows CI
+  // still covers the Windows verdict.
+  for (const platform of ['darwin', 'linux', 'freebsd']) {
+    assert.doesNotThrow(() => assertConfigPublicationSupported(platform), platform);
+  }
+  assert.throws(
+    () => assertConfigPublicationSupported('win32'),
+    /jarvos sync cannot publish a config on win32.*O_DIRECTORY\/O_NOFOLLOW.*macOS or Linux/s,
+  );
+
+  assert.equal(requiresConfigPublication('create'), true);
+  assert.equal(requiresConfigPublication('migrate'), false);
+  assert.equal(MANUAL_RECONCILIATION_ACTION, 'manual-reconcile');
+  // Read-only inspection needs no write, so it stays available everywhere.
+  assert.equal(requiresConfigPublication('already-synced'), false);
+  assert.equal(requiresConfigPublication('conflict'), false);
+});
+
+test('config publication support fails closed on a non-win32 platform missing O_DIRECTORY/O_NOFOLLOW, via injected constants rather than mutating fs.constants', () => {
+  // fs.constants' own properties are non-writable/non-configurable (a real
+  // Node process cannot be made to lack these flags: this file runs in sloppy
+  // mode, where the assignment below silently no-ops rather than throwing, and
+  // strict-mode code would throw instead), so the capability gap is exercised
+  // by injecting a substitute constants object instead of trying to patch the
+  // real one.
+  const before = fs.constants.O_DIRECTORY;
+  fs.constants.O_DIRECTORY = 'poked';
+  assert.equal(fs.constants.O_DIRECTORY, before, 'fs.constants must stay unwritable, or this test is no longer proving anything');
+
+  const real = fs.constants;
+  assert.equal(hasPosixDirectoryPinCapability(real), true, 'the real runtime must have the capability for every other test in this suite to mean anything');
+
+  for (const missing of ['O_DIRECTORY', 'O_NOFOLLOW']) {
+    const degraded = { ...real, [missing]: undefined };
+    assert.equal(hasPosixDirectoryPinCapability(degraded), false, missing);
+    assert.throws(
+      () => assertConfigPublicationSupported('linux', degraded),
+      /jarvos sync cannot publish a config on linux.*O_DIRECTORY\/O_NOFOLLOW.*macOS or Linux/s,
+      missing,
+    );
+    // A non-integer stand-in (e.g. NaN from a broken shim) must be rejected
+    // exactly like a missing one: OR-ing it into an open() mode would not
+    // raise, it would just silently degrade the flags being requested.
+    const nonInteger = { ...real, [missing]: NaN };
+    assert.equal(hasPosixDirectoryPinCapability(nonInteger), false, `${missing} as NaN`);
+    const zero = { ...real, [missing]: 0 };
+    assert.equal(hasPosixDirectoryPinCapability(zero), false, `${missing} as zero`);
+  }
+
+  // Planning and applying still share the exact same verdict and message when
+  // the capability is present: the new gate must not fire spuriously for a
+  // real, fully capable environment.
+  for (const platform of ['darwin', 'linux', 'freebsd']) {
+    assert.doesNotThrow(() => assertConfigPublicationSupported(platform, real), platform);
+  }
+});
+
+test('unsupported create capability has the same plan/apply verdict', { skip: process.platform === 'win32' }, () => {
+  const root = tempDir();
+  const target = path.join(root, 'jarvos.config.json');
+  const vault = path.join(root, 'selected-vault');
+  fs.mkdirSync(vault);
+  let shared = '';
+  try {
+    assertConfigPublicationSupported('win32');
+  } catch (error) {
+    shared = error.message;
+  }
+
+  assert.throws(
+    () => createConfigExclusively(target, '{"created":true}\n', { platform: 'win32', vaultDir: vault, homeDir: root }),
+    (error) => error.message === shared,
+  );
+  assert.deepEqual(fs.readdirSync(root), ['selected-vault'], 'an unsupported platform must publish nothing');
+});
+
+test('direct exclusive creation requires an explicit valid selected vault', () => {
+  const root = tempDir();
+  const target = path.join(root, 'jarvos.config.json');
+
+  assert.throws(
+    () => createConfigExclusively(target, '{"created":true}\n', { homeDir: root }),
+    /explicit selected vaultDir/,
+  );
+  assert.equal(fs.existsSync(target), false);
+
+  const notADirectory = path.join(root, 'not-a-vault');
+  fs.writeFileSync(notADirectory, 'not a directory\n');
+  assert.throws(
+    () => createConfigExclusively(target, '{"created":true}\n', { vaultDir: notADirectory, homeDir: root }),
+    /selected vault that is not a directory/,
+  );
+  assert.equal(fs.existsSync(target), false);
+});
+
+test('direct shared-vault apply rejects unsupported platform/capabilities before creating config ancestors', { skip: process.platform === 'win32' }, () => {
+  // Exercise both ways the publication capability can be absent without
+  // touching the process-wide fs.constants object.  The target parent is
+  // intentionally missing: a direct apply must reject before provisioning it.
+  const scenarios = [
+    { platform: 'win32', constants: fs.constants },
+    { platform: 'linux', constants: { ...fs.constants, O_DIRECTORY: undefined } },
+  ];
+
+  for (const { platform, constants } of scenarios) {
+    const home = tempDir();
+    const workspace = path.join(home, 'new-runtime', 'workspace');
+    const configPath = path.join(workspace, 'jarvos.config.json');
+    const vault = path.join(home, 'Vaults', 'Vault v3');
+    for (const directory of ['Notes', 'Journal', 'Tags']) fs.mkdirSync(path.join(vault, directory), { recursive: true });
+
+    assert.throws(
+      () => writeSharedVaultConfig({
+        configPath,
+        vaultDir: vault,
+        workspaceRoot: workspace,
+        homeDir: home,
+        platform,
+        constants,
+        user: { name: 'Tester', timezone: 'UTC' },
+      }),
+      /jarvos sync cannot publish a config/,
+      platform,
+    );
+    assert.equal(fs.existsSync(workspace), false, `${platform}: workspace ancestors must not be created`);
+    assert.equal(fs.existsSync(configPath), false, `${platform}: config must not be created`);
+    assert.deepEqual(fs.readdirSync(home), ['Vaults'], `${platform}: no unrelated home entries may be created`);
+  }
+});
+
+test('direct create writes the exact config through one exclusive final target and uses no pathname cleanup or staging publication', { skip: process.platform === 'win32' }, () => {
+  const home = tempDir();
+  const workspace = path.join(home, 'workspace');
+  const vault = path.join(home, 'Vaults', 'Vault v3');
+  for (const directory of ['Notes', 'Journal', 'Tags']) fs.mkdirSync(path.join(vault, directory), { recursive: true });
+  fs.mkdirSync(workspace, { recursive: true });
+  const target = path.join(workspace, 'jarvos.config.json');
+  const contents = '{"created":true}\n';
+  const opened = [];
+  const writes = [];
+  const forbiddenCalls = [];
+  const originalOpenSync = fs.openSync;
+  const originalWriteFileSync = fs.writeFileSync;
+  const originals = Object.fromEntries(['linkSync', 'renameSync', 'unlinkSync'].map((method) => [method, fs[method]]));
+
+  fs.openSync = (file, ...rest) => {
+    opened.push(file);
+    return originalOpenSync(file, ...rest);
+  };
+  fs.writeFileSync = (file, ...rest) => {
+    writes.push(file);
+    return originalWriteFileSync(file, ...rest);
+  };
+  for (const method of Object.keys(originals)) {
+    fs[method] = (...args) => {
+      forbiddenCalls.push({ method, args });
+      throw new Error(`${method} must not be used by config publication`);
+    };
+  }
+
+  try {
+    createConfigExclusively(target, contents, { vaultDir: vault, homeDir: home });
+  } finally {
+    fs.openSync = originalOpenSync;
+    fs.writeFileSync = originalWriteFileSync;
+    for (const [method, original] of Object.entries(originals)) fs[method] = original;
+  }
+
+  assert.deepEqual(forbiddenCalls, []);
+  assert.equal(opened.includes(target), true, 'the final target must be opened directly');
+  assert.equal(opened.some((file) => typeof file === 'string' && path.basename(file).startsWith('.jarvos.config.json.')), false, 'no staging pathname may be opened');
+  // The only write is through the retained numeric descriptor, never a path.
+  assert.equal(writes.length, 1);
+  assert.equal(typeof writes[0], 'number');
+  assert.equal(fs.readFileSync(target, 'utf8'), contents);
+  const stat = fs.statSync(target);
+  assert.equal(stat.mode & 0o777, 0o600);
+  assert.equal(stat.nlink, 1);
+});
+
+test('an additional name for the new inode fails closed before writing and preserves existing files', { skip: process.platform === 'win32' }, () => {
+  const home = tempDir();
+  const workspace = path.join(home, 'workspace');
+  const vault = path.join(home, 'Vaults', 'Vault v3');
+  for (const directory of ['Notes', 'Journal', 'Tags']) fs.mkdirSync(path.join(vault, directory), { recursive: true });
+  fs.mkdirSync(workspace, { recursive: true });
+  const target = path.join(workspace, 'jarvos.config.json');
+  const secondName = path.join(workspace, 'second-name-for-new-inode');
+  const existing = path.join(workspace, 'existing-data.json');
+  const existingContents = 'preserve this existing file\n';
+  fs.writeFileSync(existing, existingContents);
+  const originalOpenSync = fs.openSync;
+  const originalUnlinkSync = fs.unlinkSync;
+  const unlinkCalls = [];
+  let additionalNameCreated = false;
+  fs.openSync = (file, ...rest) => {
+    const fd = originalOpenSync(file, ...rest);
+    if (!additionalNameCreated && file === target) {
+      additionalNameCreated = true;
+      // Give the newly created inode an additional name before the creator's
+      // pre-write link-count check. The creator must preserve both path names
+      // but clear the held inode rather than publish config bytes.
+      fs.linkSync(target, secondName);
+    }
+    return fd;
+  };
+  fs.unlinkSync = (...args) => {
+    unlinkCalls.push(args);
+    throw new Error('pathname removal is not part of config publication');
+  };
+
+  try {
+    assert.throws(
+      () => createConfigExclusively(target, '{"created":true}\n', { vaultDir: vault, homeDir: home }),
+      /config target with additional names/,
+    );
+  } finally {
+    fs.openSync = originalOpenSync;
+    fs.unlinkSync = originalUnlinkSync;
+  }
+
+  assert.equal(additionalNameCreated, true);
+  assert.deepEqual(unlinkCalls, []);
+  assert.equal(fs.readFileSync(existing, 'utf8'), existingContents);
+  assert.equal(fs.existsSync(target), true);
+  assert.equal(fs.existsSync(secondName), true);
+  assert.equal(fs.statSync(target).size, 0, 'the held descriptor residue is empty');
+  assert.equal(fs.statSync(secondName).size, 0, 'the additional name sees the empty residue');
+});
+
+test('create failure after a simultaneous target change preserves existing data and leaves only an empty file residue', { skip: process.platform === 'win32' }, () => {
+  const home = tempDir();
+  const workspace = path.join(home, 'workspace');
+  const vault = path.join(home, 'Vaults', 'Vault v3');
+  for (const directory of ['Notes', 'Journal', 'Tags']) fs.mkdirSync(path.join(vault, directory), { recursive: true });
+  fs.mkdirSync(workspace, { recursive: true });
+  const target = path.join(workspace, 'jarvos.config.json');
+  const moved = path.join(workspace, 'moved-created-inode');
+  const replacementContents = 'replacement-owned\n';
+  const originalOpenSync = fs.openSync;
+  const originalUnlinkSync = fs.unlinkSync;
+  const unlinkCalls = [];
+  let substituted = false;
+  fs.openSync = (file, ...rest) => {
+    const fd = originalOpenSync(file, ...rest);
+    if (!substituted && file === target) {
+      substituted = true;
+      // A simultaneous edit moves our newly created inode away, then installs
+      // a separate file at the original pathname before the identity proof.
+      fs.renameSync(target, moved);
+      fs.writeFileSync(target, replacementContents);
+    }
+    return fd;
+  };
+  fs.unlinkSync = (...args) => {
+    unlinkCalls.push(args);
+    return originalUnlinkSync(...args);
+  };
+
+  try {
+    assert.throws(
+      () => createConfigExclusively(target, '{"created":true}\n', { vaultDir: vault, homeDir: home }),
+      /config target that changed during sync/,
+    );
+  } finally {
+    fs.openSync = originalOpenSync;
+    fs.unlinkSync = originalUnlinkSync;
+  }
+
+  assert.equal(substituted, true);
+  assert.deepEqual(unlinkCalls, [], 'failed create must never remove a pathname');
+  assert.equal(fs.readFileSync(target, 'utf8'), replacementContents, 'the replacement file must survive');
+  assert.equal(fs.statSync(moved).size, 0, 'the held fd is truncated before close');
+});
+
+test('an existing target appearing after assessment fails with EEXIST without modifying it', { skip: process.platform === 'win32' }, () => {
+  const home = tempDir();
+  const workspace = path.join(home, 'workspace');
+  const vault = path.join(home, 'Vaults', 'Vault v3');
+  for (const directory of ['Notes', 'Journal', 'Tags']) fs.mkdirSync(path.join(vault, directory), { recursive: true });
+  fs.mkdirSync(workspace, { recursive: true });
+  const target = path.join(workspace, 'jarvos.config.json');
+  const replacementContents = 'appeared-after-assessment\n';
+  const originalOpenSync = fs.openSync;
+  let appeared = false;
+  fs.openSync = (file, ...rest) => {
+    if (!appeared && file === target) {
+      appeared = true;
+      fs.writeFileSync(target, replacementContents);
+    }
+    return originalOpenSync(file, ...rest);
+  };
+
+  try {
+    assert.throws(
+      () => writeSharedVaultConfig({
+        configPath: target,
+        vaultDir: vault,
+        workspaceRoot: workspace,
+        homeDir: home,
+        user: { name: 'Tester', timezone: 'UTC' },
+      }),
+      /EEXIST|already exists/,
+    );
+  } finally {
+    fs.openSync = originalOpenSync;
+  }
+
+  assert.equal(appeared, true);
+  assert.equal(fs.readFileSync(target, 'utf8'), replacementContents);
+});
+
+test('legacy migration is manual-only and preserves bytes changed during assessment', { skip: process.platform === 'win32' }, () => {
+  const home = tempDir();
+  const workspace = path.join(home, 'workspace');
+  const vault = path.join(home, 'Vaults', 'Vault v3');
+  for (const directory of ['Notes', 'Journal', 'Tags']) fs.mkdirSync(path.join(vault, directory), { recursive: true });
+  fs.mkdirSync(workspace, { recursive: true });
+  const target = path.join(workspace, 'jarvos.config.json');
+  const legacy = JSON.stringify({ workspacePath: workspace, vaultPath: vault, userName: 'Tester' });
+  const replacementContents = '{"replacement":"changed during assessment"}\n';
+  fs.writeFileSync(target, `${legacy}\n`);
+  const originalReadFileSync = fs.readFileSync;
+  let changedDuringAssessment = false;
+  fs.readFileSync = (file, ...rest) => {
+    const bytes = originalReadFileSync(file, ...rest);
+    if (!changedDuringAssessment && file === target) {
+      changedDuringAssessment = true;
+      fs.writeFileSync(target, replacementContents);
+    }
+    return bytes;
+  };
+
+  try {
+    assert.throws(
+      () => writeSharedVaultConfig({
+        configPath: target,
+        vaultDir: vault,
+        workspaceRoot: workspace,
+        homeDir: home,
+        user: { name: 'Tester', timezone: 'UTC' },
+      }),
+      /Cannot automatically migrate.*manual|never rewrites.*in place/,
+    );
+  } finally {
+    fs.readFileSync = originalReadFileSync;
+  }
+
+  assert.equal(changedDuringAssessment, true);
+  assert.equal(fs.readFileSync(target, 'utf8'), replacementContents);
+});
+
+
+
+
+
+test('a fully populated relative config is never classified already-synced', () => {
+  const home = tempDir();
+  const workspace = path.join(home, 'workspace');
+  const vault = path.join(home, 'Vaults', 'Vault v3');
+  for (const directory of ['Notes', 'Journal', 'Tags']) fs.mkdirSync(path.join(vault, directory), { recursive: true });
+  fs.mkdirSync(workspace, { recursive: true });
+
+  const expected = buildSharedVaultConfig({
+    vaultDir: vault,
+    workspaceRoot: workspace,
+    homeDir: home,
+    user: { name: 'Tester', timezone: 'UTC' },
+  });
+  // Every key present and every value relative: normalizePathMap() drops all of
+  // them, so the runtime would use the home defaults, not these.
+  const relative = {
+    ...expected,
+    paths: Object.fromEntries(Object.entries(expected.paths).map(([key, value]) => [key, path.relative(home, value)])),
+  };
+  for (const value of Object.values(relative.paths)) {
+    assert.equal(path.isAbsolute(value), false, `${value} must be relative for this fixture`);
+  }
+
+  const configPath = path.join(workspace, 'jarvos.config.json');
+  fs.writeFileSync(configPath, `${JSON.stringify(relative, null, 2)}\n`);
+
+  const previousCwd = process.cwd();
+  try {
+    // Run from the directory that makes the relative values resolve onto the
+    // expected absolute paths — the cwd that would otherwise fake a match.
+    process.chdir(home);
+    const assessment = assessSharedVaultConfigTarget({ configPath, config: expected, vaultDir: vault, homeDir: home });
+    assert.notEqual(assessment.action, 'already-synced');
+    assert.equal(assessment.action, 'migrate');
+  } finally {
+    process.chdir(previousCwd);
+  }
+});
+
+test('successful exclusive creation leaves no residue beside the config', { skip: process.platform === 'win32' }, () => {
+  const home = tempDir();
+  const workspace = path.join(home, 'workspace');
+  const vault = path.join(home, 'Vaults', 'Vault v3');
+  for (const directory of ['Notes', 'Journal', 'Tags']) fs.mkdirSync(path.join(vault, directory), { recursive: true });
+  fs.mkdirSync(workspace, { recursive: true });
+  const user = { name: 'Tester', timezone: 'UTC' };
+  const configPath = path.join(workspace, 'jarvos.config.json');
+
+  writeSharedVaultConfig({ configPath, vaultDir: vault, workspaceRoot: workspace, homeDir: home, user });
+  assert.deepEqual(fs.readdirSync(workspace), ['jarvos.config.json']);
+  assert.equal(fs.lstatSync(configPath).nlink, 1, 'a successful create leaves one target inode');
+  assert.deepEqual(fs.readdirSync(vault).sort(), ['Journal', 'Notes', 'Tags'], 'ordinary create never chooses the vault for config publication');
+  for (const directory of ['Notes', 'Journal', 'Tags']) {
+    assert.deepEqual(fs.readdirSync(path.join(vault, directory)), [], `ordinary create leaves ${directory} untouched`);
+  }
+
+  assert.equal(JSON.parse(fs.readFileSync(configPath, 'utf8')).user.name, 'Tester');
+});
+
+test('an ancestor redirected before the pin cannot publish a config inside the vault', { skip: process.platform === 'win32' }, () => {
+  const home = tempDir();
+  const parent = path.join(home, 'parent');
+  const workspace = path.join(parent, 'workspace');
+  const vault = path.join(home, 'Vaults', 'Vault v3');
+  for (const directory of ['Notes', 'Journal', 'Tags']) fs.mkdirSync(path.join(vault, directory), { recursive: true });
+  // A real directory inside the vault, so the redirected path pins a genuine
+  // directory: the descriptor and the lstat agree, and only re-deriving the
+  // canonical location can tell that it sits in the vault.
+  fs.mkdirSync(path.join(vault, 'workspace'), { recursive: true });
+  fs.mkdirSync(workspace, { recursive: true });
+
+  const originalOpenSync = fs.openSync;
+  let redirected = false;
+  fs.openSync = (file, ...rest) => {
+    if (!redirected && file === workspace) {
+      redirected = true;
+      fs.renameSync(parent, path.join(home, 'parent-real'));
+      fs.symlinkSync(vault, parent, 'dir');
+    }
+    return originalOpenSync(file, ...rest);
+  };
+  try {
+    assert.throws(
+      () => writeSharedVaultConfig({
+        configPath: path.join(workspace, 'jarvos.config.json'),
+        vaultDir: vault,
+        workspaceRoot: workspace,
+        homeDir: home,
+        user: { name: 'Tester', timezone: 'UTC' },
+      }),
+      /inside the shared vault/,
+    );
+  } finally {
+    fs.openSync = originalOpenSync;
+  }
+
+  assert.equal(redirected, true, 'the test must actually redirect the ancestor before the pin');
+  assert.deepEqual(fs.readdirSync(path.join(vault, 'workspace')), [], 'nothing may be created inside the vault');
+  assert.deepEqual(fs.readdirSync(vault).sort(), ['Journal', 'Notes', 'Tags', 'workspace']);
+});
+
+
+
+
+
+
+test('shared-vault onboarding treats a JSON null config target as an existing file', () => {
+  const home = tempDir();
+  const workspace = path.join(home, 'workspace');
+  const configPath = path.join(workspace, 'jarvos.config.json');
+  const vault = path.join(home, 'Vaults', 'Vault v3');
+  for (const directory of ['Notes', 'Journal', 'Tags']) fs.mkdirSync(path.join(vault, directory), { recursive: true });
+  fs.mkdirSync(workspace, { recursive: true });
+  fs.writeFileSync(configPath, 'null\n');
+
+  const config = buildSharedVaultConfig({
+    vaultDir: vault,
+    workspaceRoot: workspace,
+    homeDir: home,
+    user: { name: 'Tester', timezone: 'UTC' },
+  });
+  // The dry run must not plan a `create` the exclusive apply write would then
+  // fail with EEXIST; both paths refuse the unusable target instead.
+  assert.throws(
+    () => assessSharedVaultConfigTarget({ configPath, config, vaultDir: vault, homeDir: home }),
+    /not a JSON object/,
+  );
+  assert.throws(
+    () => writeSharedVaultConfig({
+      configPath,
+      vaultDir: vault,
+      workspaceRoot: workspace,
+      homeDir: home,
+      user: { name: 'Tester', timezone: 'UTC' },
+    }),
+    /not a JSON object/,
+  );
+  assert.equal(fs.readFileSync(configPath, 'utf8'), 'null\n');
+
+  fs.rmSync(configPath);
+  assert.equal(readSharedVaultConfigTarget({ configPath, homeDir: home }).exists, false);
+  assert.equal(assessSharedVaultConfigTarget({ configPath, config, vaultDir: vault, homeDir: home }).action, 'create');
+});
+
+test('shared-vault onboarding refuses a whitespace-only user name', () => {
+  const home = tempDir();
+  const vault = path.join(home, 'Vaults', 'Vault v3');
+  for (const directory of ['Notes', 'Journal', 'Tags']) fs.mkdirSync(path.join(vault, directory), { recursive: true });
+
+  assert.throws(
+    () => buildSharedVaultConfig({
+      vaultDir: vault,
+      workspaceRoot: path.join(home, 'workspace'),
+      homeDir: home,
+      user: { name: '  ', timezone: 'UTC' },
+    }),
+    /non-empty user name/,
+  );
 });
 
 test('resolveConfig loads jarvos.config.json and recomputes child paths from workspace and vault', () => {
@@ -576,6 +1101,12 @@ test('resolveConfig preserves historical default resolution for legacy bootstrap
   assert.equal(config.paths.journal, path.join(home, 'Vaults', 'Vault v3', 'Journal'));
   assert.equal(config.user.name, 'Legacy User');
 });
+
+
+
+
+
+
 
 test('shared-vault onboarding rejects a stale vault and discovery skips its DO_NOT_USE marker', () => {
   const home = tempDir();

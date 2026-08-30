@@ -59,7 +59,11 @@ function defaultPaths(home) {
   };
 }
 
-function isUsablePath(value, home) {
+// A configured paths.* value only reaches the runtime when it survives this
+// check; normalizePathMap() drops everything else in favour of the
+// home-directory defaults.  Validators share this predicate so they cannot
+// report a path healthy that resolveConfig() will silently ignore.
+function isUsablePath(value, home = os.homedir()) {
   if (typeof value !== 'string' || value.trim() === '') return false;
   return path.isAbsolute(expandTilde(value.trim(), home));
 }
@@ -73,11 +77,21 @@ function normalizePathMap(rawPaths = {}, home) {
   return paths;
 }
 
-function firstEnvPath(keys = [], env = process.env, home = os.homedir()) {
+// Returns the specific env var name that would win firstEnvPath()'s
+// precedence order, or null if none of `keys` is currently set to a usable
+// path. Consumers that need to name the override in a diagnostic (rather
+// than just resolve its value) call this instead of re-deriving the same
+// precedence rule themselves.
+function winningPathEnvKey(keys = [], env = process.env, home = os.homedir()) {
   for (const key of keys) {
-    if (isUsablePath(env[key], home)) return expandTilde(env[key].trim(), home);
+    if (isUsablePath(env[key], home)) return key;
   }
   return null;
+}
+
+function firstEnvPath(keys = [], env = process.env, home = os.homedir()) {
+  const winningKey = winningPathEnvKey(keys, env, home);
+  return winningKey ? expandTilde(env[winningKey].trim(), home) : null;
 }
 
 function firstConfiguredJournalPath(keys = [], env = process.env, home = os.homedir()) {
@@ -370,9 +384,11 @@ module.exports = {
   requiredCanonicalVaultRoot,
   discoverConfigPath,
   expandTilde,
+  isUsablePath,
   resolveConfig,
   resolveJournalConfig,
   resolveUserTimezone,
   isValidTimezone,
+  winningPathEnvKey,
   xdgConfigPath,
 };

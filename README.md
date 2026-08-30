@@ -289,17 +289,43 @@ jarvos doctor --profile minimal --workspace /path/to/jarvos-workspace
 
 Use `jarvos init` for a new standalone system. Use `jarvos sync` to **sync with
 an existing jarvOS installation**: it creates a portable config that points the
-new harness at the existing vault. The sync command is config-only, never
-writes inside the vault, requires an explicit workspace, rejects symlinked
-config targets, and refuses to replace a different existing config. Inspect the
-plan with `--dry-run`, rerun without
-that flag to apply it, and then use `jarvos doctor` to expose any remaining
+new harness at the existing vault. In ordinary, uncontended use the sync
+command is config-only and writes no config contents inside the vault; it requires an explicit workspace,
+rejects symlinked config targets, and refuses to replace a different existing
+config. Inspect the plan with `--dry-run`; for a new target, rerun without that
+flag to apply it. A legacy-shaped target instead reports `manual-reconcile` and
+must be reconciled separately. Then use `jarvos doctor` to expose any remaining
 workspace or runtime setup rather than assuming the machine is ready.
 
 For a workspace that already has a compatible `jarvos.config.json`, `jarvos
 sync --workspace /path/to/jarvos-workspace --dry-run` reuses its vault, name,
 and timezone; those flags are only required for a new config. Timezones must be
 valid IANA names such as `UTC` or `America/New_York`.
+
+`jarvos sync` runs on macOS and Linux. It holds a POSIX directory descriptor on
+the config directory and rechecks that directory's identity before and after
+writing. It creates the final target directly with an exclusive `O_EXCL`
+descriptor, verifies that the target pathname still names that descriptor,
+fsyncs when available, and reads the exact bytes back through the descriptor
+before reporting success. A directory or target substituted during the run
+fails closed rather than overwriting an existing file. On platforms without
+such a descriptor it fails closed instead of falling back to a less safe write.
+
+The vault guarantee is precise for an ordinary, uncontended operation: sync
+selects the config directory outside the vault and writes no config contents
+there. The `vaultWrites` and `vaultContentsWritten` fields in `--json` output
+record that no vault config write was observed by the completed operation.
+Sync never enumerates or removes vault paths. A failed create may leave an
+empty `0600` config target that requires manual removal; the held descriptor is
+truncated best-effort before close, but sync never deletes its pathname.
+`--dry-run` never writes. If simultaneous local filesystem changes are observed
+by the identity checks, sync fails closed. The OS does not provide a transaction
+against every same-account change in the narrow intervals between checks.
+
+Sync never migrates a legacy-shaped config in place. It reports
+`manual-reconcile` during a dry run and asks you to reconcile the existing file
+manually or pass `--config` to a new path. A portable existing config remains
+`already-synced`; a different config remains a conflict.
 
 `jarvos doctor` uses the checked-in profile manifest and reports portable health
 checks for the starter workspace, `jarvos.config.json`, vault folders, Node.js,

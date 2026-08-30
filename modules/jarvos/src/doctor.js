@@ -15,7 +15,37 @@ const {
   inspectCompoundEngineeringProvider,
 } = require('../../jarvos-runtime-kit/src');
 const { loadHealthModules } = require('../../../lib/jarvos-doctor-modules');
-const { isValidTimezone } = require('../../jarvos-secondbrain/bridge/config/src/resolve-config');
+const {
+  assessDoctorConfigReconciliation,
+  invalidRuntimeTimezoneAliases,
+  schemaConfigWithRuntimeTimezoneAlias,
+} = require('../../../lib/jarvos-cli');
+const {
+  expandTilde,
+  isUsablePath,
+  isValidTimezone,
+  PATH_ENV_KEYS,
+  resolveConfig,
+  winningPathEnvKey,
+} = require('../../jarvos-secondbrain/bridge/config/src/resolve-config');
+
+// The keys resolveConfig() runs assertNotStaleVaultPath() against.  A
+// config-only check that never consults the runtime's own resolver can
+// report a stale ~/Documents/Vault v3 (or a canonical-vault-drift violation)
+// healthy simply because the directory happens to exist with the right
+// shape; the runtime itself would refuse to start from it.
+const STALE_VAULT_GUARDED_PATH_KEYS = new Set(['vault', 'notes', 'journal']);
+
+// Matches only assertNotStaleVaultPath()/assertWithinRequiredVault()'s own
+// thrown messages. resolveConfig() throws for other reasons too (e.g. an
+// invalid IANA timezone) while resolving the very same call; misattributing
+// those to a vault/notes/journal path guard would blame the wrong check for
+// a failure config.schema/timezone validation already owns.
+const VAULT_PATH_GUARD_ERROR_PATTERN = /stale vault path|outside the required canonical vault/;
+
+function isVaultPathGuardError(error) {
+  return Boolean(error) && typeof error.message === 'string' && VAULT_PATH_GUARD_ERROR_PATTERN.test(error.message);
+}
 
 const MINIMAL_WORKSPACE_FILES = [
   'MEMORY.md',
@@ -31,6 +61,21 @@ const REQUIRED_PATH_KEYS = [
   'tags',
   'memory',
 ];
+
+// What resolveConfig() actually does with a paths.* value it drops.  The two
+// roots fall back to the home defaults; a dropped derived key is recomputed
+// from whichever root it hangs off, which is not necessarily a home default.
+const RELATIVE_PATH_FALLBACKS = {
+  workspace: 'falls back to the home default workspace',
+  vault: 'falls back to the home default vault',
+  notes: 'recomputes it from the resolved vault',
+  journal: 'recomputes it from the resolved vault',
+  tags: 'recomputes it from the resolved vault',
+  memory: 'recomputes it from the resolved workspace',
+  scripts: 'recomputes it from the resolved workspace',
+  workflows: 'recomputes it from the resolved workspace',
+  customers: 'recomputes it from the resolved workspace',
+};
 
 const KNOWLEDGE_OUTPUT_FILES = [
   ['artifacts', 'directory'],
@@ -49,16 +94,24 @@ const OBSIDIAN_CONFLICTING_WRITERS = [
 
 const GBRAIN_COMMAND_TIMEOUT_MS = 10_000;
 
-function expandHome(value) {
-  if (typeof value !== 'string') return value;
-  if (value === '~') return os.homedir();
-  if (value.startsWith('~/')) return path.join(os.homedir(), value.slice(2));
-  return value;
+function expandHome(value, homeDir = os.homedir()) {
+  // Keep command-option expansion aligned with the shared runtime resolver,
+  // including both ~/ and ~\\ roots, while retaining Doctor's threaded home.
+  return expandTilde(value, homeDir);
 }
 
-function resolveConfiguredPath(value, workspace) {
-  const expanded = expandHome(value);
-  if (typeof expanded !== 'string' || expanded.trim() === '') return expanded;
+function resolveConfiguredPath(value, workspace, homeDir = os.homedir()) {
+  // normalizePathMap() trims paths.* before the runtime uses them, and
+  // isUsablePath() gates on the trimmed string too.  Resolving the raw value
+  // here would make a padded absolute path look relative and silently resolve
+  // against the workspace, reporting a failure for a path the runtime uses fine.
+  // expandTilde is the runtime's own helper, so `~\`-rooted values — which the
+  // gate accepts — expand here exactly as resolveConfig() expands them. homeDir
+  // must be the same home passed to resolveConfig()'s own cross-check below, or
+  // a ~-rooted path resolves against a different home than the one the runtime
+  // actually used, and the two computations spuriously diverge.
+  const expanded = typeof value === 'string' ? expandTilde(value.trim(), homeDir) : expandHome(value, homeDir);
+  if (typeof expanded !== 'string' || expanded === '') return expanded;
   return path.isAbsolute(expanded) ? expanded : path.resolve(workspace, expanded);
 }
 
@@ -144,8 +197,12 @@ function validateAgainstSchema(value, schema, instancePath = '') {
   if (schema.format === 'time-zone' && !isValidTimezone(value)) {
     errors.push(`${instancePath || '/'} must be a valid IANA timezone`);
   }
-  if (schema.type === 'string' && Number.isInteger(schema.minLength) && value.length < schema.minLength) {
-    errors.push(`${instancePath || '/'} must contain at least ${schema.minLength} character`);
+  if (schema.format === 'absolute-path' && !isUsablePath(value)) {
+    errors.push(`${instancePath || '/'} must be an absolute or ~-rooted path the runtime can use`);
+  }
+  // Whitespace is not content; a whitespace-only required string is a failure.
+  if (schema.type === 'string' && Number.isInteger(schema.minLength) && value.trim().length < schema.minLength) {
+    errors.push(`${instancePath || '/'} must contain at least ${schema.minLength} non-whitespace character`);
   }
 
   return errors;
@@ -167,7 +224,42 @@ function getPathConfig(config, key) {
   return Object.prototype.hasOwnProperty.call(paths, key) ? paths[key] : undefined;
 }
 
-function validateConfiguredDirectory(workspace, config, key) {
+/**
+ * Resolve a configured paths.* value under the runtime's own contract.
+ *
+ * normalizePathMap() drops a relative or blank entry, so any consumer that
+ * resolved one against the workspace would inspect a tree the runtime never
+ * uses.  Returns null for anything the runtime would drop.
+ *
+ * Deliberately scoped to paths.*: adapter values such as
+ * runtimeAdapters.openclaw.installedSkillsManifest are intentionally
+ * workspace-relative and keep using resolveConfiguredPath().
+ */
+function runtimeConfiguredPath(config, key, homeDir = os.homedir()) {
+  const value = getPathConfig(config, key);
+  return isUsablePath(value, homeDir) ? expandTilde(value.trim(), homeDir) : null;
+}
+
+function resolveRuntimeConfigSnapshot(configPath, options = {}) {
+  const homeDir = options.homeDir || os.homedir();
+  const env = options.env || process.env;
+  // This intentionally narrow seam keeps the snapshot test deterministic
+  // without teaching the public Doctor report about resolver internals.
+  const resolver = typeof options.runtimeConfigResolver === 'function'
+    ? options.runtimeConfigResolver
+    : resolveConfig;
+  try {
+    const runtimeConfig = resolver({ configPath, homeDir, env });
+    const paths = runtimeConfig?.paths && typeof runtimeConfig.paths === 'object'
+      ? Object.freeze({ ...runtimeConfig.paths })
+      : null;
+    return Object.freeze({ paths, error: null });
+  } catch (error) {
+    return Object.freeze({ paths: null, error });
+  }
+}
+
+function validateConfiguredDirectory(workspace, config, key, configPath, options = {}, runtimeConfigSnapshot = null) {
   if (!config || typeof config !== 'object') {
     return createCheck(`path.${key}`, false, `Cannot inspect paths.${key} because jarvos.config.json is invalid`);
   }
@@ -176,8 +268,107 @@ function validateConfiguredDirectory(workspace, config, key) {
   if (typeof value !== 'string' || value.trim() === '') {
     return createCheck(`path.${key}`, false, `Missing configured path: paths.${key}`);
   }
+  // homeDir is computed once and threaded through both the gate below and the
+  // resolveConfig() cross-check further down, so a ~-rooted path and the
+  // runtime's own resolution are always judged against the same home.
+  const homeDir = options.homeDir || os.homedir();
+  // resolveConfiguredPath() resolves relative values against the workspace, but
+  // normalizePathMap() drops them: workspace and vault then fall back to the
+  // home defaults, and a dropped derived key is recomputed from its resolved
+  // workspace/vault parent.  Either way the runtime never uses the configured
+  // value, so reporting such a path healthy would hide that divergence.
+  if (!isUsablePath(value, homeDir)) {
+    return createCheck(
+      `path.${key}`,
+      false,
+      `Configured path is not runtime-effective: paths.${key} must be absolute or ~-rooted (got ${value}); `
+      + `the runtime ignores it and ${RELATIVE_PATH_FALLBACKS[key] || 'falls back to its default'}`,
+    );
+  }
 
-  const resolvedPath = resolveConfiguredPath(value, workspace);
+  const resolvedPath = resolveConfiguredPath(value, workspace, homeDir);
+
+  // Cross-check against the runtime's own resolver.  A runtime environment
+  // override (JARVOS_*, or a legacy alias such as CLAWD_DIR/JOURNAL_DIR/
+  // VAULT_NOTES_DIR — see PATH_ENV_KEYS) or the vault-drift/stale-vault guard
+  // can make the runtime use a different directory than the one configured
+  // here, or refuse to start from it outright; a check that only ever
+  // inspects the configured value would report green for a directory the
+  // runtime never touches, or for a vault resolveConfig() itself fails
+  // closed on.
+  if (configPath) {
+    const env = options.env || process.env;
+    // runMinimalDoctor resolves this once before entering the REQUIRED_PATH_KEYS
+    // loop. Keep the fallback for internal callers that use this helper alone,
+    // but never re-resolve inside an ordinary Doctor run: six reads could
+    // otherwise produce a report assembled from six different configurations.
+    const snapshot = runtimeConfigSnapshot || resolveRuntimeConfigSnapshot(configPath, options);
+    const runtimePaths = snapshot.paths;
+    const resolutionError = snapshot.error;
+    if (resolutionError) {
+      if (STALE_VAULT_GUARDED_PATH_KEYS.has(key) && isVaultPathGuardError(resolutionError)) {
+        return createCheck(
+          `path.${key}`,
+          false,
+          `The runtime's own resolver refuses this configuration, so paths.${key} cannot be reported `
+          + `healthy: ${resolutionError.message}`,
+        );
+      }
+      // Not a stale-vault/canonical-vault guard failure (or not one of the
+      // guarded keys): the failure belongs to whichever check actually owns
+      // it — e.g. an invalid timezone is config.schema's failure, not this
+      // path's — so let this check proceed against the configured value.
+    }
+
+    if (runtimePaths) {
+      const runtimeEffective = runtimePaths[key];
+      if (runtimeEffective && path.resolve(runtimeEffective) !== path.resolve(resolvedPath)) {
+        // `value` already passed isUsablePath() above, and validateConfigSchema()
+        // read it from the same configPath resolveConfig() just re-read with the
+        // same homeDir — so resolveConfig() computed configPaths[key] from the
+        // identical value and it lands on the same resolvedPath this check did.
+        // paths.*'s own vault/workspace fallback cascade only ever fires for a
+        // key resolveConfig() found *unset* in both config and env, which this
+        // key is not. So the only remaining way runtimePaths[key] can diverge
+        // here is one of this key's own PATH_ENV_KEYS winning inside
+        // firstEnvPath() — i.e. winningPathEnvKey() must report a concrete key.
+        const winningKey = winningPathEnvKey(PATH_ENV_KEYS[key] || [], env, homeDir);
+        if (!winningKey) {
+          // The invariant above is broken: report it rather than mislabel the
+          // cause, and fail closed instead of crashing the whole Doctor run.
+          return createCheck(
+            `path.${key}`,
+            false,
+            `paths.${key} configures ${resolvedPath}, but the runtime resolves it to `
+            + `${runtimeEffective} for a reason Doctor cannot identify (no ${key} `
+            + "environment override is set); resolveConfig()'s override precedence may have "
+            + 'changed without this check being updated to match',
+            { path: runtimeEffective },
+          );
+        }
+        const overrideLabel = `a ${winningKey} environment override`;
+        if (!directoryExists(runtimeEffective)) {
+          return createCheck(
+            `path.${key}`,
+            false,
+            `paths.${key} configures ${resolvedPath}, but ${overrideLabel} redirects the `
+            + `runtime to ${runtimeEffective}, which does not exist`,
+            { path: runtimeEffective },
+          );
+        }
+        // The override directory exists, so the runtime is not broken — but
+        // this is still drift between what jarvos.config.json says and what
+        // actually runs, so it must stay visibly a warning, never plain ok.
+        return createCheck(
+          `path.${key}`,
+          true,
+          `Found ${key} directory via ${overrideLabel}: ${runtimeEffective} (paths.${key} configures ${resolvedPath})`,
+          { path: runtimeEffective, status: 'warn' },
+        );
+      }
+    }
+  }
+
   if (!directoryExists(resolvedPath)) {
     return createCheck(`path.${key}`, false, `Missing configured ${key} directory: ${resolvedPath}`, {
       path: resolvedPath,
@@ -248,7 +439,20 @@ function validateCompoundEngineeringProvider(options = {}) {
 }
 
 function resolveDoctorConfigPath(workspace, options = {}) {
-  return path.resolve(expandHome(options.configPath || path.join(workspace, 'jarvos.config.json')));
+  const homeDir = options.homeDir || os.homedir();
+  return path.resolve(expandHome(options.configPath || path.join(workspace, 'jarvos.config.json'), homeDir));
+}
+
+function resolveProfileDoctorContext(options = {}) {
+  const env = options.env || process.env;
+  const homeDir = options.homeDir || os.homedir();
+  const workspaceInput = options.workspace || env.JARVOS_WORKSPACE_PATH || process.cwd();
+  const workspace = path.resolve(expandHome(workspaceInput, homeDir));
+  const configInput = options.configPath || env.JARVOS_CONFIG_PATH || path.join(workspace, 'jarvos.config.json');
+  return {
+    workspace,
+    configPath: path.resolve(expandHome(configInput, homeDir)),
+  };
 }
 
 function validateWorkspaceFiles(workspace, configPath = path.join(workspace, 'jarvos.config.json')) {
@@ -326,7 +530,7 @@ function validateAgentContextHydration(workspace) {
   });
 }
 
-function validateConfigSchema(workspace, configPath = path.join(workspace, 'jarvos.config.json')) {
+function validateConfigSchema(workspace, configPath = path.join(workspace, 'jarvos.config.json'), options = {}) {
   const schemaPath = path.join(workspace, 'jarvos.config.schema.json');
 
   const configResult = readJson(configPath);
@@ -347,7 +551,15 @@ function validateConfigSchema(workspace, configPath = path.join(workspace, 'jarv
     );
   }
 
-  const errors = validateAgainstSchema(configResult.value, schemaResult.value);
+  // Keep the schema check on the same env source as resolveConfig(). Passing
+  // env: {} remains an explicit isolated environment rather than falling back
+  // to process.env.
+  const env = options.env || process.env;
+  const errors = [
+    ...validateAgainstSchema(schemaConfigWithRuntimeTimezoneAlias(configResult.value, env), schemaResult.value),
+    ...invalidRuntimeTimezoneAliases(configResult.value, env)
+      .map((field) => `/${field.replace('.', '/')} must be a valid IANA timezone`),
+  ];
 
   if (errors.length > 0) {
     return createCheck(
@@ -363,35 +575,77 @@ function validateConfigSchema(workspace, configPath = path.join(workspace, 'jarv
   });
 }
 
-function defaultKnowledgeDirectory(workspace, config) {
-  const explicitKnowledge = getPathConfig(config, 'knowledge');
-  if (typeof explicitKnowledge === 'string' && explicitKnowledge.trim()) {
-    return resolveConfiguredPath(explicitKnowledge, workspace);
+function validateConfigReconciliation(config, configPath, options = {}) {
+  const assessment = assessDoctorConfigReconciliation(config, configPath, options);
+  if (assessment) {
+    return createCheck(
+      'config.reconciliation',
+      false,
+      assessment.detail,
+      { action: assessment.action, configPath: assessment.configPath },
+    );
+  }
+  return createCheck(
+    'config.reconciliation',
+    true,
+    'No compatible legacy configuration requires a Doctor reconciliation recommendation',
+  );
+}
+
+function defaultKnowledgeDirectory(workspace, config, options = {}) {
+  // knowledge-optimizer.js and journal-spine-synthesis.js — the actual
+  // runtime writers of knowledge output — give JARVOS_KNOWLEDGE_DIR absolute
+  // priority over any vault-derived default, and never consult paths.knowledge
+  // at all. They derive the default from their effective notes directory.
+  // This must agree, or an output
+  // directory that IS present (just wherever the env var actually points)
+  // reads here as "not present yet".  A relative value is resolved the same
+  // way the fs calls that follow it would resolve it: against cwd.
+  const env = options.env || process.env;
+  if (typeof env.JARVOS_KNOWLEDGE_DIR === 'string' && env.JARVOS_KNOWLEDGE_DIR.trim() !== '') {
+    return path.resolve(env.JARVOS_KNOWLEDGE_DIR);
   }
 
-  const vaultValue = getPathConfig(config, 'vault');
-  if (typeof vaultValue === 'string' && vaultValue.trim()) {
-    return path.join(resolveConfiguredPath(vaultValue, workspace), '.jarvos', 'knowledge');
+  // runtimeObsidianPath uses the frozen resolveConfig() snapshot when one was
+  // captured for this Doctor run. It deliberately ignores paths.knowledge:
+  // that key is not an input to the writers above.
+  const notesPath = runtimeObsidianPath(config, 'notes', options);
+  if (notesPath) {
+    const vaultRoot = path.basename(notesPath).toLowerCase() === 'notes' ? path.dirname(notesPath) : notesPath;
+    return path.join(vaultRoot, '.jarvos', 'knowledge');
   }
 
-  const notesValue = getPathConfig(config, 'notes');
-  if (typeof notesValue === 'string' && notesValue.trim()) {
-    const notesPath = resolveConfiguredPath(notesValue, workspace);
-    const vaultPath = path.basename(notesPath).toLowerCase() === 'notes' ? path.dirname(notesPath) : notesPath;
-    return path.join(vaultPath, '.jarvos', 'knowledge');
-  }
+  const vaultPath = runtimeObsidianPath(config, 'vault', options);
+  if (vaultPath) return path.join(vaultPath, '.jarvos', 'knowledge');
 
   return path.join(workspace, '.jarvos', 'knowledge');
 }
 
-function validateMemoryWikiSurface(workspace, config) {
+function validateMemoryWikiSurface(workspace, config, options = {}) {
   if (!config || typeof config !== 'object') {
     return createCheck('memory-wiki.surface', false, 'Cannot inspect memory-wiki surface because jarvos.config.json is invalid');
+  }
+  const runtimeError = options.runtimeConfigSnapshot?.error;
+  if (runtimeError && isVaultPathGuardError(runtimeError)) {
+    return createCheck(
+      'memory-wiki.surface',
+      true,
+      `Skipped memory-wiki surface inspection because the runtime resolver refuses this vault configuration: ${runtimeError.message}`,
+      { status: 'skipped' },
+    );
   }
 
   const explicitMemoryWiki = getPathConfig(config, 'memoryWiki');
   if (typeof explicitMemoryWiki === 'string' && explicitMemoryWiki.trim()) {
-    const memoryWikiPath = resolveConfiguredPath(explicitMemoryWiki, workspace);
+    const memoryWikiPath = runtimeConfiguredPath(config, 'memoryWiki', options.homeDir);
+    if (!memoryWikiPath) {
+      return createCheck(
+        'memory-wiki.surface',
+        false,
+        `Configured memory-wiki surface is not runtime-effective: paths.memoryWiki must be absolute or ~-rooted `
+        + `(got ${explicitMemoryWiki}); the runtime ignores it`,
+      );
+    }
     if (directoryExists(memoryWikiPath) || fileExists(memoryWikiPath)) {
       return createCheck('memory-wiki.surface', true, `Found configured memory-wiki surface: ${memoryWikiPath}`, {
         path: memoryWikiPath,
@@ -403,7 +657,7 @@ function validateMemoryWikiSurface(workspace, config) {
     });
   }
 
-  const knowledgeDir = defaultKnowledgeDirectory(workspace, config);
+  const knowledgeDir = defaultKnowledgeDirectory(workspace, config, options);
   const queuePath = path.join(knowledgeDir, 'memory-wiki-queue.json');
   if (fileExists(queuePath)) {
     return createCheck('memory-wiki.surface', true, `Found memory-wiki import queue: ${queuePath}`, {
@@ -420,12 +674,21 @@ function validateMemoryWikiSurface(workspace, config) {
   );
 }
 
-function validateKnowledgeOutputs(workspace, config) {
+function validateKnowledgeOutputs(workspace, config, options = {}) {
   if (!config || typeof config !== 'object') {
     return createCheck('knowledge.outputs', false, 'Cannot inspect knowledge outputs because jarvos.config.json is invalid');
   }
+  const runtimeError = options.runtimeConfigSnapshot?.error;
+  if (runtimeError && isVaultPathGuardError(runtimeError)) {
+    return createCheck(
+      'knowledge.outputs',
+      true,
+      `Skipped knowledge output inspection because the runtime resolver refuses this vault configuration: ${runtimeError.message}`,
+      { status: 'skipped' },
+    );
+  }
 
-  const knowledgeDir = defaultKnowledgeDirectory(workspace, config);
+  const knowledgeDir = defaultKnowledgeDirectory(workspace, config, options);
   if (!directoryExists(knowledgeDir)) {
     return createCheck(
       'knowledge.outputs',
@@ -462,30 +725,58 @@ function validateKnowledgeOutputs(workspace, config) {
   );
 }
 
-function normalizePathForCompare(value) {
+function normalizePathForCompare(value, homeDir = os.homedir()) {
   if (typeof value !== 'string' || !value.trim()) return null;
-  return path.resolve(expandHome(value));
+  return path.resolve(expandHome(value, homeDir));
 }
 
-function samePath(a, b) {
-  const left = normalizePathForCompare(a);
-  const right = normalizePathForCompare(b);
+function samePath(a, b, homeDir = os.homedir()) {
+  const left = normalizePathForCompare(a, homeDir);
+  const right = normalizePathForCompare(b, homeDir);
   return Boolean(left && right && left === right);
 }
 
-function pathInside(parent, child) {
-  const parentPath = normalizePathForCompare(parent);
-  const childPath = normalizePathForCompare(child);
+function pathInside(parent, child, homeDir = os.homedir()) {
+  const parentPath = normalizePathForCompare(parent, homeDir);
+  const childPath = normalizePathForCompare(child, homeDir);
   if (!parentPath || !childPath) return false;
   const relative = path.relative(parentPath, childPath);
   return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
 }
 
+function runtimeObsidianPath(config, key, options = {}) {
+  const homeDir = options.homeDir || os.homedir();
+  const env = options.env || process.env;
+  const snapshotPaths = options.runtimeConfigSnapshot?.paths;
+  if (!snapshotPaths) return runtimeConfiguredPath(config, key, homeDir);
+
+  // A configured usable value or one of the runtime's own env overrides is
+  // authoritative. Do not mistake a home-directory default for an active
+  // jarvOS setting: a relative config value is deliberately ignored by the
+  // runtime and should remain a per-key "not runtime-effective" diagnostic.
+  if (winningPathEnvKey(PATH_ENV_KEYS[key] || [], env, homeDir) || runtimeConfiguredPath(config, key, homeDir)) {
+    return snapshotPaths[key] || null;
+  }
+
+  // resolveConfig derives notes/journal from an explicitly selected vault.
+  // This is the common portable shape with only paths.vault, and it must use
+  // the same derived paths as the runtime rather than treating them as absent.
+  const rawValue = getPathConfig(config, key);
+  const vaultSelected = Boolean(
+    winningPathEnvKey(PATH_ENV_KEYS.vault || [], env, homeDir)
+    || runtimeConfiguredPath(config, 'vault', homeDir),
+  );
+  if ((key === 'notes' || key === 'journal') && rawValue === undefined && vaultSelected) {
+    return snapshotPaths[key] || null;
+  }
+  return null;
+}
+
 function resolveObsidianVault(workspace, config, options = {}) {
-  const explicit = normalizePathForCompare(options.obsidianVault);
+  const explicit = normalizePathForCompare(options.obsidianVault, options.homeDir);
   if (explicit && directoryExists(path.join(explicit, '.obsidian'))) return explicit;
 
-  const configuredVault = resolveConfiguredPath(getPathConfig(config, 'vault'), workspace);
+  const configuredVault = runtimeObsidianPath(config, 'vault', options);
   if (configuredVault && directoryExists(path.join(configuredVault, '.obsidian'))) return configuredVault;
 
   if (directoryExists(path.join(workspace, '.obsidian'))) return workspace;
@@ -535,6 +826,15 @@ function validateObsidianSingleWriter(workspace, config, options = {}) {
     return createStatusCheck('obsidian.singleWriter', 'skipped', 'Cannot inspect Obsidian single-writer contract because jarvos.config.json is invalid');
   }
 
+  const runtimeError = options.runtimeConfigSnapshot?.error;
+  if (runtimeError && isVaultPathGuardError(runtimeError)) {
+    return createStatusCheck(
+      'obsidian.singleWriter',
+      'warn',
+      `Skipped Obsidian writer inspection because the runtime resolver refuses this vault configuration: ${runtimeError.message}`,
+    );
+  }
+
   const obsidianVault = resolveObsidianVault(workspace, config, options);
   if (!obsidianVault) {
     return createStatusCheck('obsidian.singleWriter', 'skipped', 'No active Obsidian vault config found; skipped automated daily-note writer check');
@@ -574,40 +874,75 @@ function validateObsidianPaths(workspace, config, options = {}) {
     return createStatusCheck('obsidian.paths', 'skipped', 'Cannot validate Obsidian paths because jarvos.config.json is invalid');
   }
 
+  const runtimeError = options.runtimeConfigSnapshot?.error;
+  if (runtimeError && isVaultPathGuardError(runtimeError)) {
+    return createStatusCheck(
+      'obsidian.paths',
+      'warn',
+      `Skipped Obsidian path alignment because the runtime resolver refuses this vault configuration: ${runtimeError.message}`,
+    );
+  }
+
   const obsidianVault = resolveObsidianVault(workspace, config, options);
   if (!obsidianVault) {
     return createStatusCheck('obsidian.paths', 'skipped', 'No active Obsidian vault config found; skipped jarvOS vault path alignment check');
   }
 
-  const configuredVault = resolveConfiguredPath(getPathConfig(config, 'vault'), workspace);
-  const configuredJournal = resolveConfiguredPath(getPathConfig(config, 'journal'), workspace);
-  const configuredNotes = resolveConfiguredPath(getPathConfig(config, 'notes'), workspace);
+  // Each key is judged on its own.  notes/journal are optional under the
+  // schema, so an absent or unusable sibling must never suppress drift
+  // reporting for a paths.vault the runtime would actually use.
   const stale = [];
+  const skipped = [];
+  const evaluate = (key, isAligned) => {
+    const resolved = runtimeObsidianPath(config, key, options);
+    if (!resolved) {
+      skipped.push(getPathConfig(config, key) === undefined
+        ? `paths.${key} is not configured`
+        : `paths.${key} is not runtime-effective (must be absolute or ~-rooted)`);
+      return;
+    }
+    const drift = isAligned(resolved);
+    if (drift) stale.push(drift);
+  };
 
-  if (!samePath(configuredVault, obsidianVault)) stale.push(`paths.vault points at ${configuredVault}`);
-  if (!pathInside(obsidianVault, configuredJournal)) stale.push(`paths.journal points outside the active vault: ${configuredJournal}`);
-  if (!pathInside(obsidianVault, configuredNotes)) stale.push(`paths.notes points outside the active vault: ${configuredNotes}`);
+  evaluate('vault', (resolved) => (samePath(resolved, obsidianVault) ? null : `paths.vault points at ${resolved}`));
+  evaluate('journal', (resolved) => (pathInside(obsidianVault, resolved)
+    ? null
+    : `paths.journal points outside the active vault: ${resolved}`));
+  evaluate('notes', (resolved) => (pathInside(obsidianVault, resolved)
+    ? null
+    : `paths.notes points outside the active vault: ${resolved}`));
 
+  const details = { path: obsidianVault, ...(skipped.length ? { skipped } : {}) };
   if (stale.length) {
     return createStatusCheck(
       'obsidian.paths',
       'warn',
       `jarvos.config.json paths are stale for active Obsidian vault ${obsidianVault}: ${stale.join('; ')}`,
-      {
-        path: obsidianVault,
-        stale,
-      },
+      { ...details, stale },
     );
   }
 
-  return createStatusCheck('obsidian.paths', 'ok', `jarvos.config.json paths align with active Obsidian vault: ${obsidianVault}`, {
-    path: obsidianVault,
-  });
+  if (skipped.length === 3) {
+    return createStatusCheck(
+      'obsidian.paths',
+      'skipped',
+      `Skipped jarvOS vault path alignment for active Obsidian vault ${obsidianVault}: ${skipped.join('; ')}`,
+      details,
+    );
+  }
+
+  const skippedNote = skipped.length ? ` (not evaluated: ${skipped.join('; ')})` : '';
+  return createStatusCheck(
+    'obsidian.paths',
+    'ok',
+    `jarvos.config.json paths align with active Obsidian vault: ${obsidianVault}${skippedNote}`,
+    details,
+  );
 }
 
 function runMinimalDoctor(options = {}) {
-  const workspace = path.resolve(options.workspace || process.cwd());
-  const configPath = resolveDoctorConfigPath(workspace, options);
+  const { workspace, configPath } = resolveProfileDoctorContext(options);
   const checks = [];
 
   if (!directoryExists(workspace)) {
@@ -628,17 +963,31 @@ function runMinimalDoctor(options = {}) {
   }));
   checks.push(validateWorkspaceFiles(workspace, configPath));
 
-  const configSchemaCheck = validateConfigSchema(workspace, configPath);
+  // Capture the runtime result exactly once. Every required-path check below
+  // must describe the same runtime configuration (or the same guarded refusal)
+  // even if the config changes while Doctor is rendering the report.
+  const runtimeConfigSnapshot = resolveRuntimeConfigSnapshot(configPath, options);
+  const runtimeOptions = { ...options, runtimeConfigSnapshot };
+
+  const configSchemaCheck = validateConfigSchema(workspace, configPath, options);
   checks.push(configSchemaCheck);
+  checks.push(validateConfigReconciliation(configSchemaCheck.config, configPath, options));
   for (const key of REQUIRED_PATH_KEYS) {
-    checks.push(validateConfiguredDirectory(workspace, configSchemaCheck.config, key));
+    checks.push(validateConfiguredDirectory(
+      workspace,
+      configSchemaCheck.config,
+      key,
+      configPath,
+      options,
+      runtimeConfigSnapshot,
+    ));
   }
   checks.push(validateAgentContext(workspace));
   checks.push(validateAgentContextHydration(workspace));
-  checks.push(validateMemoryWikiSurface(workspace, configSchemaCheck.config));
-  checks.push(validateKnowledgeOutputs(workspace, configSchemaCheck.config));
-  checks.push(validateObsidianSingleWriter(workspace, configSchemaCheck.config, options));
-  checks.push(validateObsidianPaths(workspace, configSchemaCheck.config, options));
+  checks.push(validateMemoryWikiSurface(workspace, configSchemaCheck.config, runtimeOptions));
+  checks.push(validateKnowledgeOutputs(workspace, configSchemaCheck.config, runtimeOptions));
+  checks.push(validateObsidianSingleWriter(workspace, configSchemaCheck.config, runtimeOptions));
+  checks.push(validateObsidianPaths(workspace, configSchemaCheck.config, runtimeOptions));
   checks.push(validateCompoundEngineeringProvider(options));
   const continuity = gbrainContinuityCheck(workspace, configSchemaCheck.config, options);
   if (continuity) checks.push(continuity);
@@ -675,18 +1024,18 @@ function profileNeedsOpenClawAdapter(profile) {
 }
 
 async function validateJarvosProfile(options = {}) {
-  const workspace = path.resolve(options.workspace || process.cwd());
-  const configPath = resolveDoctorConfigPath(workspace, options);
+  const { workspace, configPath } = resolveProfileDoctorContext(options);
   const profile = normalizeProfile(options.profile || 'minimal');
   const packName = options.packName || (profile === 'local-openclaw' ? 'local-openclaw' : 'v0-5-0');
   const checks = runMinimalDoctor({ ...options, workspace, configPath }).checks;
   const config = readWorkspaceConfig(workspace, configPath);
+  const openclawStateDir = resolveOpenClawStateDir(options, config);
   const pack = loadPack(packName);
   const plan = buildInstallPlan({
     pack,
     homeDir: options.homeDir,
     workspaceRoot: workspace,
-    openclawStateDir: options.openclawStateDir,
+    openclawStateDir,
     commandsPresent: options.commandsPresent,
     filesPresent: options.filesPresent,
     providerVersions: options.providerVersions,
@@ -714,8 +1063,8 @@ async function validateJarvosProfile(options = {}) {
       ? createStatusCheck('openclaw.stateDir', 'ok', `Found OpenClaw state directory: ${stateDir.resolvedPath}`, {
         path: stateDir.resolvedPath,
       })
-      : createStatusCheck('openclaw.stateDir', 'skipped', `OpenClaw state directory is not present yet: ${options.openclawStateDir || path.join(os.homedir(), '.openclaw')}`, {
-        path: stateDir?.resolvedPath || path.join(os.homedir(), '.openclaw'),
+      : createStatusCheck('openclaw.stateDir', 'skipped', `OpenClaw state directory is not present yet: ${openclawStateDir}`, {
+        path: stateDir?.resolvedPath || openclawStateDir,
       }));
 
     const runtimeConfig = fileStatus(plan, 'openclaw-runtime-config');
@@ -724,7 +1073,7 @@ async function validateJarvosProfile(options = {}) {
         path: runtimeConfig.resolvedPath,
       })
       : createStatusCheck('openclaw.runtimeConfig', 'skipped', 'OpenClaw runtime config is absent; jarvOS init will not create or overwrite it', {
-        path: runtimeConfig?.resolvedPath || path.join(options.openclawStateDir || path.join(os.homedir(), '.openclaw'), 'openclaw.json'),
+        path: runtimeConfig?.resolvedPath || path.join(openclawStateDir, 'openclaw.json'),
       }));
     checks.push(await validateOpenClawPluginPersistence(options, config, openclawCommand));
   }
@@ -740,7 +1089,7 @@ async function validateJarvosProfile(options = {}) {
 
   const configuredManifest = hasOpenClawAdapter && config?.runtimeAdapters?.openclaw?.installedSkillsManifest;
   const installedSkillsManifestPath = configuredManifest
-    ? resolveConfiguredPath(configuredManifest, workspace)
+    ? resolveConfiguredPath(configuredManifest, workspace, options.homeDir)
     : defaultInstalledSkillsManifestPath(workspace, profile);
   checks.push(fileExists(installedSkillsManifestPath)
     ? createStatusCheck('jarvos.installedSkills', 'ok', `Found installed skills manifest: ${installedSkillsManifestPath}`, {
@@ -984,21 +1333,29 @@ function defaultInstalledSkillsManifestPath(workspace, profile) {
 }
 
 function resolveOpenClawStateDir(options = {}, config) {
+  const env = options.env || process.env;
+  const homeDir = options.homeDir || os.homedir();
   const configured = config?.runtimeAdapters?.openclaw?.stateDir;
-  const envConfigPath = process.env.OPENCLAW_CONFIG_PATH;
+  const envConfigPath = env.OPENCLAW_CONFIG_PATH;
   const envStateDir = typeof envConfigPath === 'string' && envConfigPath.trim()
-    ? path.dirname(expandHome(envConfigPath))
+    ? path.dirname(expandHome(envConfigPath, homeDir))
     : null;
-  return path.resolve(expandHome(options.openclawStateDir || configured || envStateDir || path.join(os.homedir(), '.openclaw')));
+  return path.resolve(expandHome(
+    options.openclawStateDir || configured || envStateDir || path.join(homeDir, '.openclaw'),
+    homeDir,
+  ));
 }
 
 function resolveStagedOpenClawRuntimeRoot(options = {}, config) {
+  const env = options.env || process.env;
+  const homeDir = options.homeDir || os.homedir();
   const configured = config?.runtimeAdapters?.openclaw?.stagedRuntimeRoot;
   return path.resolve(expandHome(
     options.stagedRuntimeRoot
       || configured
-      || process.env.JARVOS_STAGED_PUBLIC_RUNTIME_ROOT
+      || env.JARVOS_STAGED_PUBLIC_RUNTIME_ROOT
       || path.join(__dirname, '..', '..', '..'),
+    homeDir,
   ));
 }
 
@@ -1114,8 +1471,7 @@ function readWorkspaceConfig(workspace, configPath = path.join(workspace, 'jarvo
 }
 
 async function validateOpenClawProfile(options = {}) {
-  const workspace = path.resolve(options.workspace || process.cwd());
-  const configPath = resolveDoctorConfigPath(workspace, options);
+  const { workspace, configPath } = resolveProfileDoctorContext(options);
   const profile = normalizeProfile(options.profile || 'local-openclaw');
   const checks = runMinimalDoctor({ ...options, workspace, configPath }).checks;
   const config = readWorkspaceConfig(workspace, configPath);
@@ -1181,7 +1537,7 @@ async function validateOpenClawProfile(options = {}) {
 
   const configuredManifest = adapter?.installedSkillsManifest;
   const installedSkillsManifestPath = configuredManifest
-    ? resolveConfiguredPath(configuredManifest, workspace)
+    ? resolveConfiguredPath(configuredManifest, workspace, options.homeDir)
     : defaultInstalledSkillsManifestPath(workspace, profile);
   checks.push(fileExists(installedSkillsManifestPath)
     ? createStatusCheck('jarvos.installedSkills', 'ok', `Found installed skills manifest: ${installedSkillsManifestPath}`, {
@@ -1267,6 +1623,7 @@ async function initProfile(options = {}) {
     profile,
     workspace: result.workspaceRoot,
     configPath: options.configPath,
+    env: options.env,
     openclawStateDir: result.openclawStateDir,
     commandsPresent: options.commandsPresent,
     filesPresent: options.filesPresent,
@@ -1318,9 +1675,12 @@ module.exports = {
   mapOpenClawPersistenceResult,
   runProfileDoctor,
   runMinimalDoctor,
+  resolveOpenClawStateDir,
+  resolveStagedOpenClawRuntimeRoot,
   validateJarvosProfile,
   validateOpenClawProfile,
   validateObsidianPaths,
   validateObsidianSingleWriter,
   validateCompoundEngineeringProvider,
+  validateConfigReconciliation,
 };

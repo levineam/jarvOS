@@ -67,6 +67,13 @@ Alternatively, set paths under `paths.*` in `jarvos.config.json`:
 }
 ```
 
+Every `paths.*` value must be absolute or `~`-rooted. The resolver ignores a
+relative value: `workspace` and `vault` fall back to the home defaults, while a
+derived key such as `journal` or `notes` is recomputed from its resolved vault
+or workspace parent. The configured value is never used either way, so
+`jarvos doctor` reports one as a failure instead of quietly resolving it
+against the workspace.
+
 For journal mutation, timezone may be `user.timezone`, `user.timeZone`,
 `timezone`, or `timeZone` in that config. The process `TZ` value is not an
 implicit journal fallback. See the [journal install contract](../../docs/journal-install-contract.md)
@@ -110,16 +117,40 @@ jarvos sync \
   --dry-run
 ```
 
-Rerun without `--dry-run` to create the config. The command validates that the
-vault contains `Notes/`, `Journal/`, and `Tags/`, then writes a
-`jarvos.config.json` whose shared paths all point at the existing vault. It
-never writes inside the vault, rejects symlinked config targets, and refuses to
-replace a different existing config. A compatible existing config lets
-`jarvos sync --workspace "$PWD" --dry-run` reuse its configured vault, name, and
-timezone without repeating those flags. After that, any harness using `resolveConfig()` reads and writes through
-the same Journal, Notes, and Tags surfaces as the configured host. Run
-`jarvos doctor --profile minimal --workspace "$PWD"` afterward; a successful
-config handoff does not by itself claim the rest of the harness is installed.
+For a new target, rerun without `--dry-run` to create the config. The command
+validates that the vault contains `Notes/`, `Journal/`, and `Tags/`, then writes a
+`jarvos.config.json` whose shared paths all point at the existing vault. In
+ordinary, uncontended use it writes no config contents inside the vault,
+rejects symlinked config targets,
+and refuses to replace any different existing config. A compatible portable
+config lets `jarvos sync --workspace "$PWD" --dry-run` reuse its configured
+vault, name, and timezone without repeating those flags. After that, any
+harness using `resolveConfig()` reads and writes through the same Journal,
+Notes, and Tags surfaces as the configured host. Run `jarvos doctor --profile
+minimal --workspace "$PWD"` afterward; a successful config handoff does not by
+itself claim the rest of the harness is installed.
+
+The config directory's identity is pinned by a POSIX directory descriptor and
+rechecked before and after writing. The final target is opened directly with
+exclusive `O_EXCL`/`0600` flags, its pathname is checked against the retained
+descriptor, the file is fsynced when available, and the exact bytes are read
+back through that descriptor before success is reported. A directory or target
+substituted during the run fails closed. Platforms without the descriptor fail
+closed.
+
+In ordinary, uncontended use sync selects the config directory outside the vault
+and writes no config contents there. It never enumerates or removes vault paths.
+A failed create may leave an empty `0600` config target that requires manual
+removal; the held descriptor is truncated best-effort before close, but sync
+never deletes its pathname. If simultaneous local filesystem changes are
+observed by the identity checks, sync fails closed. The OS does not provide a
+transaction against every same-account change in the narrow intervals between
+checks.
+
+Sync never migrates a legacy-shaped config in place. It reports
+`manual-reconcile` during a dry run and asks you to reconcile the existing file
+manually or pass `--config` to a new path. A portable existing config remains
+`already-synced`; a different config remains a conflict.
 
 The lower-level `onboard:shared-vault` npm script remains available for module
 consumers, with the same config-only and no-overwrite safety contract.
