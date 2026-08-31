@@ -1,0 +1,12 @@
+{
+  "schemaVersion": "jarvos.promotion-receipt.v1",
+  "receiptId": "jarvos:receipt:example:r-0103",
+  "operation": "promotion",
+  "outcome": "failed",
+  "candidateIds": ["jarvos:candidate:example:c-0103"],
+  "policyId": "jarvos:policy:example:promotion-v1",
+  "authorization": { "mode": "user-reviewed" },
+  "destination": { "surface": "ontology", "artifactId": "jarvos:artifact:example:a-0103", "revisionBefore": "rev-0001", "revisionAfter": "invented-revision", "reversalMode": "rollback" },
+  "recordedAt": "2026-08-31T13:10:00Z",
+  "evidence": [{ "type": "verification", "ref": "verification:ontology:0103", "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" }]
+}
