@@ -4,9 +4,9 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const SCHEMA_VERSION = 'jarvos-codex-hook-feature-receipt/v1';
+const SCHEMA_VERSION = 'jarvos-codex-hook-feature-receipt/v2';
 const SECTION_KEYS = ['hooks', 'features', 'shellEnvironmentPolicy', 'shellEnvironmentPolicySet'];
-const RECEIPT_KEYS = ['schemaVersion', 'profileDigest', 'before', 'after'];
+const RECEIPT_KEYS = ['schemaVersion', 'profileDigest', 'state', 'before', 'after'];
 
 function fail(message) {
   const error = new Error(message);
@@ -67,7 +67,8 @@ function validateSnapshot(snapshot) {
 function validateReceipt(value, profileDigest) {
   if (!value || typeof value !== 'object' || Array.isArray(value)
     || Object.keys(value).sort().join('\0') !== [...RECEIPT_KEYS].sort().join('\0')
-    || value.schemaVersion !== SCHEMA_VERSION || value.profileDigest !== profileDigest) {
+    || value.schemaVersion !== SCHEMA_VERSION || value.profileDigest !== profileDigest
+    || !['pending', 'active'].includes(value.state)) {
     fail('hook-feature receipt is not a recognized jarvOS ownership record');
   }
   validateSnapshot(value.before);
@@ -96,16 +97,38 @@ function claimReceipt(receiptPath, profilePath, before, after) {
   validateSnapshot(after);
   const value = context(receiptPath, profilePath, { create: true });
   if (readReceipt(value.receipt, value.profile)) fail('hook-feature receipt already exists');
-  const receipt = { schemaVersion: SCHEMA_VERSION, profileDigest: value.profileDigest, before, after };
+  const receipt = { schemaVersion: SCHEMA_VERSION, profileDigest: value.profileDigest, state: 'pending', before, after };
+  writeReceipt(value.receipt, receipt);
+  return receipt;
+}
+
+function writeReceipt(receiptPath, receipt) {
   let fd;
   try {
-    fd = fs.openSync(value.receipt, 'wx', 0o600);
+    fd = fs.openSync(receiptPath, 'wx', 0o600);
     fs.writeFileSync(fd, `${JSON.stringify(receipt, null, 2)}\n`, 'utf8');
     fs.fsyncSync(fd);
   } finally {
     if (fd !== undefined) fs.closeSync(fd);
   }
-  return receipt;
+}
+
+function activateReceipt(receiptPath, profilePath, expectedAfter) {
+  const value = context(receiptPath, profilePath);
+  const receipt = readReceipt(value.receipt, value.profile);
+  if (!receipt) fail('hook-feature receipt disappeared before activation');
+  if (receipt.state !== 'pending' || !snapshotsEqual(receipt.after, expectedAfter)) {
+    fail('hook-feature receipt does not match the completed setup state');
+  }
+  // `rename` is atomic within CODEX_HOME. The replacement remains 0600 and a
+  // torn process leaves either the pending or active record, both recoverable.
+  const temporary = path.join(value.profile, `.${path.basename(value.receipt)}.${process.pid}.${Date.now()}.tmp`);
+  try {
+    writeReceipt(temporary, { ...receipt, state: 'active' });
+    fs.renameSync(temporary, value.receipt);
+  } finally {
+    try { fs.unlinkSync(temporary); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+  }
 }
 
 function clearReceipt(receiptPath, profilePath, expectedAfter) {
@@ -117,4 +140,4 @@ function clearReceipt(receiptPath, profilePath, expectedAfter) {
   return true;
 }
 
-module.exports = { SCHEMA_VERSION, claimReceipt, clearReceipt, readReceipt, snapshotsEqual, validateSnapshot };
+module.exports = { SCHEMA_VERSION, claimReceipt, activateReceipt, clearReceipt, readReceipt, snapshotsEqual, validateSnapshot };

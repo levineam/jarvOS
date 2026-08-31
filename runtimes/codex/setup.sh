@@ -1038,9 +1038,30 @@ function stewardshipBridgeEnvironment(command, codexMapRoot) {
 }
 
 const beforeManagedTables = managedTableSnapshot(original);
-const existingHookFeatureReceipt = hookFeatureReceipt.readReceipt(receiptPath, codexHome);
-if (existingHookFeatureReceipt && !hookFeatureReceipt.snapshotsEqual(existingHookFeatureReceipt.after, beforeManagedTables)) {
-  fail('jarvOS-owned hook or feature state changed after setup; preserving it and its receipt');
+let existingHookFeatureReceipt = hookFeatureReceipt.readReceipt(receiptPath, codexHome);
+if (existingHookFeatureReceipt) {
+  const isBefore = hookFeatureReceipt.snapshotsEqual(existingHookFeatureReceipt.before, beforeManagedTables);
+  const isAfter = hookFeatureReceipt.snapshotsEqual(existingHookFeatureReceipt.after, beforeManagedTables);
+  if (existingHookFeatureReceipt.state === 'pending') {
+    // Claim happens before the managed write. A crash therefore leaves either
+    // the old state (safe to abandon) or the completed state (safe to activate).
+    if (isBefore) {
+      hookFeatureReceipt.clearReceipt(receiptPath, codexHome, existingHookFeatureReceipt.after);
+      existingHookFeatureReceipt = null;
+    } else if (isAfter) {
+      hookFeatureReceipt.activateReceipt(receiptPath, codexHome, existingHookFeatureReceipt.after);
+      existingHookFeatureReceipt = hookFeatureReceipt.readReceipt(receiptPath, codexHome);
+    } else {
+      fail('pending jarvOS hook-feature transaction no longer matches either safe state; preserving the Codex configuration');
+    }
+  } else if (isBefore) {
+    // Rollback writes before it clears its active receipt. This exact state is
+    // proof of a completed write interrupted before receipt cleanup.
+    hookFeatureReceipt.clearReceipt(receiptPath, codexHome, existingHookFeatureReceipt.after);
+    existingHookFeatureReceipt = null;
+  } else if (!isAfter) {
+    fail('jarvOS-owned hook or feature state changed after setup; preserving it and its receipt');
+  }
 }
 
 function hasUnreceiptedJarvosHookState(content) {
@@ -1105,6 +1126,7 @@ if (next !== original || migrated) {
   writeAtomically(configPath, next);
   if (migrated) fs.unlinkSync(legacyHooksPath);
   if (rollback === '1') hookFeatureReceipt.clearReceipt(receiptPath, codexHome, existingHookFeatureReceipt.after);
+  else hookFeatureReceipt.activateReceipt(receiptPath, codexHome, afterManagedTables);
   console.log(`Updated Codex config for jarvOS hooks: ${configPath}`);
   if (backupPath) console.log(`Backup: ${backupPath}`);
   if (legacyBackupPath) console.log(`Migrated legacy Codex hooks with backup: ${legacyBackupPath}`);

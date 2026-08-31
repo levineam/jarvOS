@@ -1500,6 +1500,35 @@ test('Codex hook-feature rollback fails closed for unreceipted jarvOS hook state
   }
 });
 
+test('Codex hook-feature receipt recovers a pending claim after the managed write', () => {
+  const run = runCodexSetup({ FAKE_CODEX_APP_SERVER_MODE: 'success' });
+  try {
+    assert.equal(run.result.status, 0, run.result.stderr || run.result.stdout);
+    const receipt = JSON.parse(fs.readFileSync(run.hookFeatureReceiptPath, 'utf8'));
+    fs.writeFileSync(run.hookFeatureReceiptPath, JSON.stringify({ ...receipt, state: 'pending' }), { mode: 0o600 });
+    const result = run.rerun();
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+    assert.equal(JSON.parse(fs.readFileSync(run.hookFeatureReceiptPath, 'utf8')).state, 'active');
+  } finally {
+    run.cleanup();
+  }
+});
+
+test('Codex hook-feature rollback clears an active receipt after its completed write', () => {
+  const run = runCodexSetup({ FAKE_CODEX_APP_SERVER_MODE: 'success' });
+  try {
+    assert.equal(run.result.status, 0, run.result.stderr || run.result.stdout);
+    const receipt = JSON.parse(fs.readFileSync(run.hookFeatureReceiptPath, 'utf8'));
+    fs.writeFileSync(run.configPath, '', 'utf8');
+    const result = run.rerun({ JARVOS_MANAGED_HARNESS_ROLLBACK: '1' });
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+    assert.equal(fs.existsSync(run.hookFeatureReceiptPath), false);
+    assert.equal(receipt.state, 'active');
+  } finally {
+    run.cleanup();
+  }
+});
+
 test('Codex hook-feature rollback preserves unrelated concurrent configuration', () => {
   const run = runCodexSetup({ FAKE_CODEX_APP_SERVER_MODE: 'success' });
   try {
