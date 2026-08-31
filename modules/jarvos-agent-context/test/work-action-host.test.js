@@ -371,6 +371,17 @@ function writeFakeMcpCli(binPath, recordPath) {
     `const recordPath = ${JSON.stringify(recordPath)};`,
     "const scope = process.env.CODEX_HOME || process.env.CLAUDE_SETTINGS || process.env.HOME || 'default';",
     "const statePath = `${recordPath}.${crypto.createHash('sha256').update(scope).digest('hex')}.state.json`;",
+    "const hookStatePath = `${statePath}.hooks.json`;",
+    "if (args[0] === 'app-server') {",
+    "  const configFile = fs.realpathSync(process.env.CODEX_CONFIG); const readHooks = () => fs.existsSync(hookStatePath) ? JSON.parse(fs.readFileSync(hookStatePath, 'utf8')) : {}; const version = (value) => crypto.createHash('sha256').update(JSON.stringify(value)).digest('hex');",
+    "  const setAt = (value, keyPath, replacement) => { const keys = keyPath.split('.'); let cursor = value; for (const key of keys.slice(0, -1)) cursor = cursor[key] ||= {}; if (replacement === null) delete cursor[keys.at(-1)]; else cursor[keys.at(-1)] = replacement; };",
+    "  const emit = (value) => process.stdout.write(JSON.stringify(value) + '\\n'); let input = ''; process.stdin.setEncoding('utf8');",
+    "  process.stdin.on('data', (chunk) => { input += chunk; let newline; while ((newline = input.indexOf('\\n')) >= 0) { const line = input.slice(0, newline).trim(); input = input.slice(newline + 1); if (!line) continue; const message = JSON.parse(line);",
+    "    if (message.method === 'initialize') { emit({ id: message.id, result: { ok: true } }); continue; }",
+    "    if (message.method === 'config/read') { const config = readHooks(); emit({ id: message.id, result: { config, origins: {}, layers: [{ name: { type: 'user', file: configFile, profile: null }, version: version(config), config }] } }); continue; }",
+    "    if (message.method === 'config/batchWrite') { const config = readHooks(); if (message.params.filePath !== configFile || message.params.expectedVersion !== version(config)) process.exit(9); for (const edit of message.params.edits) setAt(config, edit.keyPath, edit.value); fs.writeFileSync(hookStatePath, JSON.stringify(config)); emit({ id: message.id, result: { status: 'ok', version: version(config), filePath: configFile, overriddenMetadata: null } }); }",
+    "  } }); process.stdin.resume(); return;",
+    "}",
     "if (args[0] === 'mcp' && args[1] === 'list') { const entries = fs.existsSync(statePath) ? [JSON.parse(fs.readFileSync(statePath, 'utf8'))] : []; process.stdout.write(JSON.stringify(entries)); process.exit(0); }",
     "if (args[0] === 'mcp' && args[1] === 'get') { if (!fs.existsSync(statePath)) process.exit(1); process.stdout.write(fs.readFileSync(statePath, 'utf8')); process.exit(0); }",
     "if (args[0] === 'mcp' && args[1] === 'remove') { try { fs.unlinkSync(statePath); } catch (error) { if (error.code !== 'ENOENT') throw error; } process.exit(0); }",
@@ -536,6 +547,8 @@ test('rerunning Codex setup from a different immutable runtime preserves the sam
     fs.writeFileSync(path.join(runtime2CodexDir, 'trust-session-start-hook.js'), '// stub\n');
     fs.copyFileSync(path.join(REPO_ROOT, 'runtimes', 'codex', 'setup.sh'), path.join(runtime2CodexDir, 'setup.sh'));
     fs.copyFileSync(path.join(REPO_ROOT, 'runtimes', 'codex', 'mcp-registration-receipt.js'), path.join(runtime2CodexDir, 'mcp-registration-receipt.js'));
+    fs.copyFileSync(path.join(REPO_ROOT, 'runtimes', 'codex', 'hook-feature-receipt.js'), path.join(runtime2CodexDir, 'hook-feature-receipt.js'));
+    fs.copyFileSync(path.join(REPO_ROOT, 'runtimes', 'codex', 'hook-feature-transaction.js'), path.join(runtime2CodexDir, 'hook-feature-transaction.js'));
     fs.chmodSync(path.join(runtime2CodexDir, 'setup.sh'), 0o755);
 
     const runFrom = (setupPath) => {

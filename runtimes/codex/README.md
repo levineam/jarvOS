@@ -71,9 +71,10 @@ From the jarvOS repo root:
 
 The script registers a local stdio MCP server named `jarvos`, enables a Codex
 `SessionStart` hook in `~/.codex/config.toml` for both fresh and resumed
-sessions, backs up the config before any
-write, and persists the hook's current trusted hash through Codex's app-server
-config path so the hook is runnable in Codex app Local sessions.
+sessions, and persists the hook's current trusted hash through Codex's
+app-server config path so the hook is runnable in Codex app Local sessions.
+Hook and feature changes are semantic app-server edits; setup does not rewrite
+or back up the whole TOML file.
 
 On a public or minimal install with no private host configured, that command is
 enough: setup registers the shared MCP server without control-plane host
@@ -130,17 +131,23 @@ does not need. Missing subsystem prerequisites are reported after every
 independent hook, MCP, and Compound Engineering provider cleanup that can still
 run; one phase does not short-circuit the others.
 
-Hook and feature rollback has its own mode-`0600`, profile-scoped ownership
-receipt. Before setup changes jarvOS lifecycle configuration, it snapshots only
-the affected `[hooks]`, `[features]`, `[shell_environment_policy]`, and
-`[shell_environment_policy.set]` tables. Rollback restores those exact
-pre-setup tables only when their complete post-setup snapshot still matches;
-unrelated tables can change concurrently without blocking restoration. A
-missing, malformed, or stale receipt (or detected jarvOS hook state from an
-older unreceipted install) leaves that state untouched and reports a nonzero
-hook phase while MCP and provider rollback continue independently. If setup
-failed before changing hooks, a receipt-free rollback is a no-op. Codex hook
-trust is separately managed by Codex and is not restored by this receipt.
+Hook and feature rollback has its own mode-`0600` ownership receipt, bound to
+the selected profile and canonical `CODEX_CONFIG`. A `config/read` with
+`includeLayers` selects that exact user layer and snapshots presence plus value
+for only `hooks.SessionStart`, `hooks.UserPromptSubmit`, `features.hooks`,
+`features.codex_hooks`, and the three jarvOS stewardship keys below
+`shell_environment_policy.set`. Setup or rollback then submits one
+`config/batchWrite` containing `replace`/`null` edits, the canonical
+`filePath`, and that layer's exact `expectedVersion`. Both `ok` and
+`okOverridden` prove the user-layer write; a higher layer remains untouched.
+Unrelated keys and tables can change concurrently without becoming jarvOS
+owned. A conflict, unavailable app-server, ambiguous layer, drift in an owned
+key, or missing/malformed receipt fails closed and preserves the receipt for
+recovery while independent MCP and provider rollback continue. Pending and
+active receipt states distinguish crashes before/after the atomic write. A
+legacy `hooks.json` is never deleted implicitly; setup stops for an explicit
+semantic migration. Codex hook trust is separately managed by Codex and is not
+restored by this receipt.
 
 ### Optional authenticated control-plane host
 
@@ -207,7 +214,8 @@ validated, bounded pending judgment and lets the in-session agent run the
 listed bridge answer command without locating private runtime state. The
 private bridge resolves its context by the current `CODEX_THREAD_ID`; setup
 never persists a session-specific context path. Setup does not print either
-value, and rollback removes only these two entries.
+value, and rollback restores the exact prior presence/value of those two keys
+and the retired context-file key without changing other policy settings.
 
 ## Available Tools
 

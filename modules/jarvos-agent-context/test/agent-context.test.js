@@ -958,8 +958,25 @@ test('Codex setup registers only credential file path, never the secret value', 
   assert.doesNotMatch(source, /CONTROL_PLANE_CREDENTIAL="\$\{JARVOS_CONTROL_PLANE_CREDENTIAL(?!_FILE)/);
 });
 
-// Executable setup.sh branches with a fake codex on PATH and a temp CODEX_CONFIG.
-// Never mutates the real ~/.codex/config.toml.
+function renderFakeCodexToml(config) {
+  const scalar = (value) => {
+    if (typeof value === 'string') return JSON.stringify(value);
+    if (typeof value === 'boolean' || typeof value === 'number') return String(value);
+    if (Array.isArray(value)) return `[${value.map(scalar).join(', ')}]`;
+    return `{ ${Object.entries(value).map(([key, item]) => `${key} = ${scalar(item)}`).join(', ')} }`;
+  };
+  const sections = [];
+  const visit = (value, keys) => {
+    const direct = Object.entries(value).filter(([, item]) => item === null || typeof item !== 'object' || Array.isArray(item));
+    if (keys.length && direct.length) sections.push(`[${keys.join('.')}]\n${direct.map(([key, item]) => `${key} = ${scalar(item)}`).join('\n')}`);
+    for (const [key, item] of Object.entries(value)) if (item && typeof item === 'object' && !Array.isArray(item)) visit(item, [...keys, key]);
+  };
+  visit(config, []);
+  return sections.length ? `${sections.join('\n\n')}\n` : '';
+}
+
+// Executable setup.sh branches with a semantic fake app-server and a temp
+// CODEX_CONFIG. Never mutates the real ~/.codex/config.toml.
 function runCodexSetup(envOverrides = {}) {
   const repoRoot = path.join(__dirname, '..', '..', '..');
   const setupPath = path.join(repoRoot, 'runtimes', 'codex', 'setup.sh');
@@ -971,10 +988,20 @@ function runCodexSetup(envOverrides = {}) {
   const providerCliStatePath = path.join(tmp, 'provider-codex-state.json');
   const providerStatePath = path.join(codexHome, 'jarvos-compound-engineering.state.json');
   const configPath = path.join(tmp, 'codex-config.toml');
+  const configModelPath = path.join(tmp, 'codex-config-model.json');
+  const rpcLog = path.join(tmp, 'codex-rpc.log');
   fs.mkdirSync(binDir, { recursive: true });
   fs.mkdirSync(codexHome, { recursive: true, mode: 0o700 });
-  fs.writeFileSync(configPath, envOverrides.FAKE_CODEX_CONFIG_INITIAL || '', 'utf8');
-  // Fake Codex records invocations and persists only a disposable MCP model.
+  const initialConfigModel = envOverrides.FAKE_CODEX_CONFIG_INITIAL_MODEL
+    ? JSON.parse(envOverrides.FAKE_CODEX_CONFIG_INITIAL_MODEL) : {};
+  const writeConfigModel = (value) => {
+    fs.writeFileSync(configModelPath, JSON.stringify(value), 'utf8');
+    fs.writeFileSync(configPath, renderFakeCodexToml(value), 'utf8');
+  };
+  const readConfigModel = () => JSON.parse(fs.readFileSync(configModelPath, 'utf8'));
+  writeConfigModel(initialConfigModel);
+  // Fake Codex records invocations and persists disposable semantic user-layer
+  // and MCP models with content-derived versions.
   const fakeCodex = [
     '#!/usr/bin/env node',
     "const fs = require('node:fs');",
@@ -985,40 +1012,61 @@ function runCodexSetup(envOverrides = {}) {
     `const providerStatePath = ${JSON.stringify(providerCliStatePath)};`,
     `if (args[0] === '--version') { process.stdout.write(${JSON.stringify(`codex-cli ${envOverrides.FAKE_CODEX_VERSION || '0.146.0'}\n`)}); process.exit(0); }`,
     "if (args[0] === 'app-server') {",
-    "  if (!['success', 'success-readd', 'conflict', 'overridden'].includes(process.env.FAKE_CODEX_APP_SERVER_MODE)) process.exit(8);",
-    '  const emit = (value) => process.stdout.write(JSON.stringify(value) + \'\\n\');',
+    "  const crypto = require('node:crypto');",
+    `  const modelPath = ${JSON.stringify(configModelPath)};`,
+    `  const configFile = ${JSON.stringify(configPath)};`,
+    "  const canonicalConfigFile = fs.realpathSync(configFile);",
+    `  const rpcLogPath = ${JSON.stringify(rpcLog)};`,
+    "  const readModel = () => JSON.parse(fs.readFileSync(modelPath, 'utf8'));",
+    "  const scalar = (value) => { if (typeof value === 'string') return JSON.stringify(value); if (typeof value === 'boolean' || typeof value === 'number') return String(value); if (Array.isArray(value)) return `[${value.map(scalar).join(', ')}]`; return `{ ${Object.entries(value).map(([key, item]) => `${key} = ${scalar(item)}`).join(', ')} }`; };",
+    "  const render = (config) => { const sections = []; const visit = (value, keys) => { const direct = Object.entries(value).filter(([, item]) => item === null || typeof item !== 'object' || Array.isArray(item)); if (keys.length && direct.length) sections.push(`[${keys.join('.')}]\\n${direct.map(([key, item]) => `${key} = ${scalar(item)}`).join('\\n')}`); for (const [key, item] of Object.entries(value)) if (item && typeof item === 'object' && !Array.isArray(item)) visit(item, [...keys, key]); }; visit(config, []); return sections.length ? `${sections.join('\\n\\n')}\\n` : ''; };",
+    "  const writeModel = (value) => { fs.writeFileSync(modelPath, JSON.stringify(value)); fs.writeFileSync(configFile, render(value)); };",
+    "  const registration = () => fs.existsSync(statePath) ? JSON.parse(fs.readFileSync(statePath, 'utf8')).transport : null;",
+    "  const userConfig = () => { const value = JSON.parse(JSON.stringify(readModel())); const current = registration(); if (current) { value.mcp_servers ||= {}; value.mcp_servers.jarvos = current; } return value; };",
+    "  const version = (value) => crypto.createHash('sha256').update(JSON.stringify(value)).digest('hex');",
+    "  const setAt = (value, keyPath, replacement) => { const keys = keyPath.split('.'); let cursor = value; for (const key of keys.slice(0, -1)) cursor = cursor[key] ||= {}; const leaf = keys.at(-1); if (replacement === null) delete cursor[leaf]; else cursor[leaf] = replacement; };",
+    "  const owned = new Set(['hooks.SessionStart', 'hooks.UserPromptSubmit', 'features.hooks', 'features.codex_hooks', 'shell_environment_policy.set.JARVOS_STEWARDSHIP_BRIDGE_COMMAND', 'shell_environment_policy.set.JARVOS_STEWARDSHIP_CODEX_SESSION_MAP_ROOT', 'shell_environment_policy.set.JARVOS_STEWARDSHIP_BRIDGE_CONTEXT_FILE']);",
+    "  const emit = (value) => process.stdout.write(JSON.stringify(value) + '\\n');",
     "  let input = '';",
     "  process.stdin.setEncoding('utf8');",
     "  process.stdin.on('data', (chunk) => {",
-    '    input += chunk; let newline;',
+    "    input += chunk; let newline;",
     "    while ((newline = input.indexOf('\\n')) >= 0) {",
     "      const line = input.slice(0, newline).trim(); input = input.slice(newline + 1);",
     "      if (!line) continue;",
     "      let message; try { message = JSON.parse(line); } catch (_) { continue; }",
+    "      fs.appendFileSync(rpcLogPath, `${message.method} ${JSON.stringify(message.params || {})}\\n`);",
     "      if (message.method === 'initialize') { emit({ id: message.id, result: { ok: true } }); continue; }",
     "      if (message.method === 'config/read') {",
-    "        const registration = fs.existsSync(statePath) ? JSON.parse(fs.readFileSync(statePath, 'utf8')).transport : null;",
-    "        const config = registration ? { mcp_servers: { jarvos: registration } } : {};",
-    "        emit({ id: message.id, result: { config, origins: {}, layers: [{ name: { type: 'user', file: process.env.CODEX_CONFIG, profile: null }, version: 'fake-version', config }] } });",
-    '        continue;',
-    '      }',
+    "        const config = userConfig(); const layers = [{ name: { type: 'user', file: canonicalConfigFile, profile: null }, version: version(config), config }];",
+    "        if (process.env.FAKE_CODEX_HOOK_APP_SERVER_MODE === 'overridden') layers.push({ name: { type: 'system' }, version: 'higher', config: { features: { hooks: false } } });",
+    "        emit({ id: message.id, result: { config, origins: {}, layers } }); continue;",
+    "      }",
     "      if (message.method === 'config/batchWrite') {",
-    "        const edit = message.params?.edits?.[0];",
-    "        if (message.params?.filePath !== process.env.CODEX_CONFIG || message.params?.expectedVersion !== 'fake-version' || edit?.keyPath !== 'mcp_servers.jarvos' || edit.value !== null || edit.mergeStrategy !== 'replace') process.exit(9);",
-    "        if (process.env.FAKE_CODEX_APP_SERVER_MODE === 'conflict') {",
-    "          fs.writeFileSync(statePath, JSON.stringify({ name: 'jarvos', transport: { type: 'stdio', command: 'concurrent-replacement', args: [], env: {} } }));",
+    "        const params = message.params || {}; const edits = params.edits || []; const before = userConfig();",
+    "        const isMcp = edits.length === 1 && edits[0].keyPath === 'mcp_servers.jarvos';",
+    "        const validHook = edits.length > 0 && edits.every((edit) => owned.has(edit.keyPath));",
+    "        const expectedFile = isMcp ? configFile : canonicalConfigFile;",
+    "        if (params.filePath !== expectedFile || params.expectedVersion !== version(before) || (!isMcp && !validHook) || edits.some((edit) => edit.mergeStrategy !== 'replace')) { emit({ id: message.id, error: { code: -32009, message: 'configuration version conflict' } }); continue; }",
+    "        const mode = isMcp ? process.env.FAKE_CODEX_APP_SERVER_MODE : (process.env.FAKE_CODEX_HOOK_APP_SERVER_MODE || 'success');",
+    "        if (isMcp && !['success', 'success-readd', 'conflict', 'overridden'].includes(mode)) { emit({ id: message.id, error: { code: -32000, message: 'app-server CAS unavailable' } }); continue; }",
+    "        if (mode === 'conflict') {",
+    "          if (isMcp) fs.writeFileSync(statePath, JSON.stringify({ name: 'jarvos', transport: { type: 'stdio', command: 'concurrent-replacement', args: [], env: {} } }));",
+    "          else { const concurrent = readModel(); concurrent.unrelated ||= {}; concurrent.unrelated.concurrent = 'kept'; writeModel(concurrent); }",
     "          emit({ id: message.id, error: { code: -32009, message: 'configuration version conflict' } }); continue;",
-    '        }',
-    "        if (process.env.FAKE_CODEX_APP_SERVER_MODE === 'overridden') { fs.writeFileSync(statePath, JSON.stringify({ name: 'jarvos', transport: { type: 'stdio', command: 'higher-layer-override', args: [], env: {} } })); emit({ id: message.id, result: { status: 'okOverridden', version: 'fake-after', filePath: process.env.CODEX_CONFIG, overriddenMetadata: { keyPath: 'mcp_servers.jarvos' } } }); continue; }",
-    '        try { fs.unlinkSync(statePath); } catch (error) { if (error.code !== "ENOENT") throw error; }',
-    "        if (process.env.FAKE_CODEX_APP_SERVER_MODE === 'success-readd') fs.writeFileSync(statePath, JSON.stringify({ name: 'jarvos', transport: { type: 'stdio', command: 'foreign-readd', args: [], env: {} } }));",
-    "        emit({ id: message.id, result: { status: 'ok', version: 'fake-after', filePath: process.env.CODEX_CONFIG, overriddenMetadata: null } });",
-    '      }',
-    '    }',
-    '  });',
-    '  process.stdin.resume();',
-    '  return;',
-    '}',
+    "        }",
+    "        if (isMcp) {",
+    "          if (mode === 'overridden') fs.writeFileSync(statePath, JSON.stringify({ name: 'jarvos', transport: { type: 'stdio', command: 'higher-layer-override', args: [], env: {} } }));",
+    "          else { try { fs.unlinkSync(statePath); } catch (error) { if (error.code !== 'ENOENT') throw error; } if (mode === 'success-readd') fs.writeFileSync(statePath, JSON.stringify({ name: 'jarvos', transport: { type: 'stdio', command: 'foreign-readd', args: [], env: {} } })); }",
+    "        } else { const model = readModel(); for (const edit of edits) setAt(model, edit.keyPath, edit.value); writeModel(model); }",
+    "        const status = mode === 'overridden' ? 'okOverridden' : 'ok';",
+    "        emit({ id: message.id, result: { status, version: version(userConfig()), filePath: expectedFile, overriddenMetadata: status === 'okOverridden' ? { keyPath: edits[0].keyPath } : null } });",
+    "      }",
+    "    }",
+    "  });",
+    "  process.stdin.resume();",
+    "  return;",
+    "}",
     "if (args[0] === 'mcp' && args[1] === 'list') {",
     "  if (process.env.FAKE_CODEX_LIST_MODE === 'fail') process.exit(8);",
     "  if (process.env.FAKE_CODEX_LIST_MODE === 'malformed') { process.stdout.write('{'); process.exit(0); }",
@@ -1073,6 +1121,9 @@ function runCodexSetup(envOverrides = {}) {
   fs.writeFileSync(pathCodex, `#!/usr/bin/env bash\nprintf '%s\\n' 'path-codex-was-used' >> ${JSON.stringify(codexLog)}\nexit 99\n`, { encoding: 'utf8', mode: 0o755 });
   fs.chmodSync(pathCodex, 0o755);
   if (envOverrides.FAKE_CODEX_INITIAL_JSON) fs.writeFileSync(mcpStatePath, envOverrides.FAKE_CODEX_INITIAL_JSON, 'utf8');
+  if (envOverrides.FAKE_CODEX_LEGACY_HOOKS) {
+    fs.writeFileSync(path.join(codexHome, 'hooks.json'), envOverrides.FAKE_CODEX_LEGACY_HOOKS, 'utf8');
+  }
 
   const env = {
     ...process.env,
@@ -1110,6 +1161,8 @@ function runCodexSetup(envOverrides = {}) {
     tmp,
     codexHome,
     configPath,
+    configModelPath,
+    rpcLog,
     codexLog,
     fakeCodexPath,
     mcpStatePath,
@@ -1119,6 +1172,8 @@ function runCodexSetup(envOverrides = {}) {
     hookFeatureReceiptPath: path.join(codexHome, 'jarvos-codex-hook-feature-receipt.json'),
     result,
     rerun: invoke,
+    readConfigModel,
+    writeConfigModel,
     cleanup() {
       fs.rmSync(tmp, { recursive: true, force: true });
     },
@@ -1198,7 +1253,7 @@ test('Codex setup preserves a present MCP registration when app-server CAS is un
     const commands = fs.readFileSync(run.codexLog, 'utf8').trim().split('\n');
     assert.equal(commands.filter((entry) => entry.startsWith('mcp add ')).length, 1);
     assert.equal(commands.filter((entry) => entry === 'mcp remove jarvos').length, 0);
-    assert.equal(commands.filter((entry) => entry === 'app-server --listen stdio://').length, 1);
+    assert.equal(commands.filter((entry) => entry === 'app-server --listen stdio://').length, 4);
     assert.equal(commands.includes('path-codex-was-used'), false);
     assert.doesNotMatch(fs.readFileSync(run.configPath, 'utf8'), /jarvos-session-start-hook\.js|jarvos-session-turn-hook\.js/);
   } finally {
@@ -1284,7 +1339,7 @@ test('Codex MCP rollback clears an active receipt when its registration is alrea
     assert.equal(fs.existsSync(run.mcpStatePath), false);
     const commands = fs.readFileSync(run.codexLog, 'utf8');
     assert.doesNotMatch(commands, /mcp remove jarvos/);
-    assert.doesNotMatch(commands, /app-server --listen stdio:\/\//);
+    assert.match(commands, /app-server --listen stdio:\/\//, 'hook rollback still uses its semantic app-server transaction');
   } finally {
     run.cleanup();
   }
@@ -1412,7 +1467,9 @@ test('Codex hook rollback failure does not block MCP or provider rollback', () =
   try {
     assert.equal(run.result.status, 0, run.result.stderr || run.result.stdout);
     seedCodexProviderRollback(run);
-    fs.writeFileSync(run.configPath, '[hooks]\nSessionStart = "not-an-array"\n', 'utf8');
+    const drifted = run.readConfigModel();
+    drifted.hooks.SessionStart = 'not-an-array';
+    run.writeConfigModel(drifted);
 
     const result = run.rerun({ JARVOS_MANAGED_HARNESS_ROLLBACK: '1' });
     assert.notEqual(result.status, 0);
@@ -1430,24 +1487,31 @@ test('Codex hook rollback failure does not block MCP or provider rollback', () =
   }
 });
 
-test('Codex hook-feature rollback restores the exact pre-setup sections without empty tables', () => {
-  const initialConfig = [
-    '[features]',
-    'hooks = false',
-    'codex_hooks = true',
-    'unrelated = true',
-    '',
-    '[hooks]',
-    'SessionStart = [{ hooks = [{ type = "command", command = "user-session-start" }] }]',
-    '',
-  ].join('\n');
+test('Codex hook-feature rollback restores exact owned key presence and values', () => {
+  const initialModel = {
+    features: { hooks: false, codex_hooks: true, unrelated: true },
+    hooks: { SessionStart: [{ hooks: [{ type: 'command', command: 'user-session-start' }] }] },
+  };
   const run = runCodexSetup({
     FAKE_CODEX_APP_SERVER_MODE: 'success',
-    FAKE_CODEX_CONFIG_INITIAL: initialConfig,
+    FAKE_CODEX_CONFIG_INITIAL_MODEL: JSON.stringify(initialModel),
   });
   try {
     assert.equal(run.result.status, 0, run.result.stderr || run.result.stdout);
     assert.equal(fs.statSync(run.hookFeatureReceiptPath).mode & 0o777, 0o600);
+    const ownership = JSON.parse(fs.readFileSync(run.hookFeatureReceiptPath, 'utf8'));
+    assert.equal(ownership.schemaVersion, 'jarvos-codex-hook-feature-receipt/v3');
+    assert.deepEqual(ownership.before['features.hooks'], { present: true, value: false });
+    assert.deepEqual(ownership.before['hooks.UserPromptSubmit'], { present: false, value: null });
+    assert.deepEqual(Object.keys(ownership.before).sort(), [
+      'features.codex_hooks',
+      'features.hooks',
+      'hooks.SessionStart',
+      'hooks.UserPromptSubmit',
+      'shell_environment_policy.set.JARVOS_STEWARDSHIP_BRIDGE_COMMAND',
+      'shell_environment_policy.set.JARVOS_STEWARDSHIP_BRIDGE_CONTEXT_FILE',
+      'shell_environment_policy.set.JARVOS_STEWARDSHIP_CODEX_SESSION_MAP_ROOT',
+    ]);
     const configured = fs.readFileSync(run.configPath, 'utf8');
     assert.match(configured, /hooks = true/);
     assert.doesNotMatch(configured, /codex_hooks = true/);
@@ -1456,8 +1520,7 @@ test('Codex hook-feature rollback restores the exact pre-setup sections without 
     const result = run.rerun({ JARVOS_MANAGED_HARNESS_ROLLBACK: '1' });
     assert.equal(result.status, 0, result.stderr || result.stdout);
     assert.equal(fs.existsSync(run.hookFeatureReceiptPath), false);
-    assert.equal(fs.readFileSync(run.configPath, 'utf8'), initialConfig);
-    assert.doesNotMatch(fs.readFileSync(run.configPath, 'utf8'), /\[hooks\]\s*\n\s*\n/);
+    assert.deepEqual(run.readConfigModel(), initialModel);
   } finally {
     run.cleanup();
   }
@@ -1467,14 +1530,15 @@ test('Codex hook-feature rollback preserves changed managed sections but still c
   const run = runCodexSetup({ FAKE_CODEX_APP_SERVER_MODE: 'success' });
   try {
     assert.equal(run.result.status, 0, run.result.stderr || run.result.stdout);
-    const changed = fs.readFileSync(run.configPath, 'utf8').replace('hooks = true', 'hooks = false');
-    fs.writeFileSync(run.configPath, changed, 'utf8');
+    const changed = run.readConfigModel();
+    changed.features.hooks = false;
+    run.writeConfigModel(changed);
 
     const result = run.rerun({ JARVOS_MANAGED_HARNESS_ROLLBACK: '1' });
     assert.notEqual(result.status, 0);
     assert.match(result.stderr, /hook or feature state changed|hooks=1/i);
     assert.equal(fs.existsSync(run.hookFeatureReceiptPath), true);
-    assert.equal(fs.readFileSync(run.configPath, 'utf8'), changed);
+    assert.deepEqual(run.readConfigModel(), changed);
     assert.equal(fs.existsSync(run.receiptPath), false, 'independent MCP rollback should complete');
     assert.equal(fs.existsSync(run.mcpStatePath), false);
   } finally {
@@ -1500,6 +1564,24 @@ test('Codex hook-feature rollback fails closed for unreceipted jarvOS hook state
   }
 });
 
+test('Codex hook-feature rollback preserves corrupt receipt state while MCP cleanup completes', () => {
+  const run = runCodexSetup({ FAKE_CODEX_APP_SERVER_MODE: 'success' });
+  try {
+    assert.equal(run.result.status, 0, run.result.stderr || run.result.stdout);
+    const configured = run.readConfigModel();
+    fs.writeFileSync(run.hookFeatureReceiptPath, '{}\n', { encoding: 'utf8', mode: 0o600 });
+    const result = run.rerun({ JARVOS_MANAGED_HARNESS_ROLLBACK: '1' });
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /not a recognized jarvOS ownership record|hooks=1/i);
+    assert.deepEqual(run.readConfigModel(), configured);
+    assert.equal(fs.existsSync(run.hookFeatureReceiptPath), true);
+    assert.equal(fs.existsSync(run.receiptPath), false);
+    assert.equal(fs.existsSync(run.mcpStatePath), false);
+  } finally {
+    run.cleanup();
+  }
+});
+
 test('Codex hook-feature receipt recovers a pending claim after the managed write', () => {
   const run = runCodexSetup({ FAKE_CODEX_APP_SERVER_MODE: 'success' });
   try {
@@ -1519,7 +1601,7 @@ test('Codex hook-feature rollback clears an active receipt after its completed w
   try {
     assert.equal(run.result.status, 0, run.result.stderr || run.result.stdout);
     const receipt = JSON.parse(fs.readFileSync(run.hookFeatureReceiptPath, 'utf8'));
-    fs.writeFileSync(run.configPath, '', 'utf8');
+    run.writeConfigModel({});
     const result = run.rerun({ JARVOS_MANAGED_HARNESS_ROLLBACK: '1' });
     assert.equal(result.status, 0, result.stderr || result.stdout);
     assert.equal(fs.existsSync(run.hookFeatureReceiptPath), false);
@@ -1533,7 +1615,9 @@ test('Codex hook-feature rollback preserves unrelated concurrent configuration',
   const run = runCodexSetup({ FAKE_CODEX_APP_SERVER_MODE: 'success' });
   try {
     assert.equal(run.result.status, 0, run.result.stderr || run.result.stdout);
-    fs.appendFileSync(run.configPath, '\n[unrelated]\nvalue = "kept"\n');
+    const concurrent = run.readConfigModel();
+    concurrent.unrelated = { value: 'kept' };
+    run.writeConfigModel(concurrent);
 
     const result = run.rerun({ JARVOS_MANAGED_HARNESS_ROLLBACK: '1' });
     assert.equal(result.status, 0, result.stderr || result.stdout);
@@ -1542,6 +1626,95 @@ test('Codex hook-feature rollback preserves unrelated concurrent configuration',
     assert.doesNotMatch(restored, /\[hooks\]/);
     assert.doesNotMatch(restored, /\[features\]/);
     assert.equal(fs.existsSync(run.hookFeatureReceiptPath), false);
+  } finally {
+    run.cleanup();
+  }
+});
+
+test('Codex hook setup uses one exact-version semantic batch and recovers a conflict without losing unrelated config', () => {
+  const run = runCodexSetup({
+    FAKE_CODEX_APP_SERVER_MODE: 'success',
+    FAKE_CODEX_HOOK_APP_SERVER_MODE: 'conflict',
+  });
+  try {
+    assert.notEqual(run.result.status, 0);
+    assert.match(run.result.stderr, /version-bound configuration transaction|preserving/i);
+    assert.equal(JSON.parse(fs.readFileSync(run.hookFeatureReceiptPath, 'utf8')).state, 'pending');
+    assert.deepEqual(run.readConfigModel(), { unrelated: { concurrent: 'kept' } });
+
+    const recovered = run.rerun({ FAKE_CODEX_HOOK_APP_SERVER_MODE: 'success' });
+    assert.equal(recovered.status, 0, recovered.stderr || recovered.stdout);
+    assert.equal(JSON.parse(fs.readFileSync(run.hookFeatureReceiptPath, 'utf8')).state, 'active');
+    assert.equal(run.readConfigModel().unrelated.concurrent, 'kept');
+    const batches = fs.readFileSync(run.rpcLog, 'utf8').trim().split('\n')
+      .filter((line) => line.startsWith('config/batchWrite '))
+      .map((line) => JSON.parse(line.slice('config/batchWrite '.length)))
+      .filter((params) => params.edits.some((edit) => edit.keyPath === 'hooks.SessionStart'));
+    assert.equal(batches.length, 2, 'each attempt must submit exactly one hook batch');
+    for (const batch of batches) {
+      assert.equal(batch.filePath, fs.realpathSync(run.configPath));
+      assert.equal(typeof batch.expectedVersion, 'string');
+      assert.ok(batch.expectedVersion.length > 0);
+      assert.ok(batch.edits.every((edit) => edit.mergeStrategy === 'replace'));
+    }
+  } finally {
+    run.cleanup();
+  }
+});
+
+test('Codex hook transaction restores only owned nested keys and accepts higher-layer override status', () => {
+  const initialModel = {
+    shell_environment_policy: {
+      inherit: 'all',
+      set: {
+        USER_VALUE: 'keep',
+        JARVOS_STEWARDSHIP_BRIDGE_COMMAND: 'old-command',
+        JARVOS_STEWARDSHIP_CODEX_SESSION_MAP_ROOT: '/old/map',
+        JARVOS_STEWARDSHIP_BRIDGE_CONTEXT_FILE: '/old/context',
+      },
+    },
+    features: { hooks: false, codex_hooks: true, unrelated: true },
+  };
+  const run = runCodexSetup({
+    FAKE_CODEX_APP_SERVER_MODE: 'success',
+    FAKE_CODEX_HOOK_APP_SERVER_MODE: 'overridden',
+    FAKE_CODEX_CONFIG_INITIAL_MODEL: JSON.stringify(initialModel),
+    JARVOS_STEWARDSHIP_BRIDGE_COMMAND: 'jarvos-bridge',
+    JARVOS_STEWARDSHIP_CODEX_SESSION_MAP_ROOT: '/private/jarvos-map',
+  });
+  try {
+    assert.equal(run.result.status, 0, run.result.stderr || run.result.stdout);
+    const configured = run.readConfigModel();
+    assert.equal(configured.shell_environment_policy.inherit, 'all');
+    assert.equal(configured.shell_environment_policy.set.USER_VALUE, 'keep');
+    assert.equal(configured.shell_environment_policy.set.JARVOS_STEWARDSHIP_BRIDGE_COMMAND, 'jarvos-bridge');
+    assert.equal(Object.hasOwn(configured.shell_environment_policy.set, 'JARVOS_STEWARDSHIP_BRIDGE_CONTEXT_FILE'), false);
+
+    const rollback = run.rerun({
+      JARVOS_MANAGED_HARNESS_ROLLBACK: '1',
+      FAKE_CODEX_HOOK_APP_SERVER_MODE: 'overridden',
+    });
+    assert.equal(rollback.status, 0, rollback.stderr || rollback.stdout);
+    const restored = run.readConfigModel();
+    if (restored.hooks && Object.keys(restored.hooks).length === 0) delete restored.hooks;
+    assert.deepEqual(restored, initialModel);
+    assert.equal(fs.existsSync(run.hookFeatureReceiptPath), false);
+  } finally {
+    run.cleanup();
+  }
+});
+
+test('Codex semantic setup leaves legacy hooks.json untouched and fails closed', () => {
+  const legacy = '{"hooks":{"SessionStart":[]}}\n';
+  const run = runCodexSetup({ FAKE_CODEX_LEGACY_HOOKS: legacy });
+  try {
+    assert.notEqual(run.result.status, 0);
+    assert.match(run.result.stderr, /legacy .*hooks\.json.*explicit semantic migration/i);
+    assert.equal(fs.readFileSync(path.join(run.codexHome, 'hooks.json'), 'utf8'), legacy);
+    assert.deepEqual(run.readConfigModel(), {});
+    assert.equal(fs.existsSync(run.hookFeatureReceiptPath), false);
+    assert.equal(fs.existsSync(run.receiptPath), false);
+    assert.equal(fs.existsSync(run.mcpStatePath), false);
   } finally {
     run.cleanup();
   }
@@ -1568,7 +1741,7 @@ test('Codex rollback ignores stale forward-install bindings', () => {
   }
 });
 
-test('Codex rollback without its CLI still performs independent hook cleanup', () => {
+test('Codex rollback without its CLI preserves hook ownership while other cleanup remains independent', () => {
   const run = runCodexSetup();
   try {
     assert.equal(run.result.status, 0, run.result.stderr || run.result.stdout);
@@ -1580,7 +1753,8 @@ test('Codex rollback without its CLI still performs independent hook cleanup', (
     assert.match(result.stderr, /continuing rollback phases|mcp=1/i);
     assert.equal(fs.existsSync(run.receiptPath), true, 'MCP receipt must be preserved without the CLI');
     assert.equal(fs.existsSync(run.mcpStatePath), true, 'MCP registration must be preserved without the CLI');
-    assert.doesNotMatch(fs.readFileSync(run.configPath, 'utf8'), /jarvos-session-start-hook\.js|jarvos-session-turn-hook\.js/);
+    assert.match(fs.readFileSync(run.configPath, 'utf8'), /jarvos-session-start-hook\.js|jarvos-session-turn-hook\.js/);
+    assert.equal(fs.existsSync(run.hookFeatureReceiptPath), true, 'hook receipt must be preserved without app-server');
   } finally {
     run.cleanup();
   }
