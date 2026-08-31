@@ -10,7 +10,8 @@ This plan is the integrated result of a read-only Fable 5/high first pass and a
 Codex review against the exact base tree and current open pull-request file
 sets. It implements the first safe slice from the parent Overseer roadmap. It
 does not authorize a push, pull request, merge, release, installation,
-activation, scheduler, runtime change, Vault operation, or Mac Mini mutation.
+activation, scheduler, runtime change, Vault operation, or private host
+mutation.
 
 ## Goal
 
@@ -175,7 +176,7 @@ Every record contains:
 - optional bounded `notes`.
 
 The activation vocabulary is generic public-product language. It must not name
-Andrew's machines.
+an operator's machines.
 
 Invariants:
 
