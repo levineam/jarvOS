@@ -119,12 +119,16 @@ registration created by setup. Rollback never invokes name-only
 `codex mcp remove`. For a present matching registration it can use an atomic
 Codex app-server `config/batchWrite` guarded by the exact user-layer
 `expectedVersion`; the receipt is cleared only after app-server confirms the
-atomic edit succeeded. If app-server CAS is unavailable, the layer or registration
-changed, or the write cannot be confirmed, the registration and receipt are
-preserved for manual reconciliation and rollback exits nonzero. An already
-absent registration clears a valid receipt. MCP reconciliation does not
-short-circuit independent hook or Compound Engineering provider rollback;
-those later phases still run before an unresolved MCP outcome is reported.
+atomic edit succeeded. Both `ok` and `okOverridden` are successful writes: the
+latter means the jarvOS-owned user-layer entry was removed but a higher-priority
+layer still supplies the effective value, which rollback preserves. If
+app-server CAS is unavailable, the layer or registration changed, or the write
+cannot be confirmed, the registration and receipt are preserved for manual
+reconciliation and rollback exits nonzero. An already absent registration
+clears a valid receipt. Rollback ignores stale forward-install bindings that it
+does not need. Missing subsystem prerequisites are reported after every
+independent hook, MCP, and Compound Engineering provider cleanup that can still
+run; one phase does not short-circuit the others.
 This receipt covers MCP ownership only. Hook trust and feature-setting
 restoration are separate profile concerns and are not claimed as transactional
 by this mechanism.

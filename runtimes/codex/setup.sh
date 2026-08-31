@@ -33,6 +33,11 @@ CODEX_EXECUTABLE="${JARVOS_CODEX_EXECUTABLE:-codex}"
 # rewriting persisted client config. Unset preserves the current portable
 # behavior: register this run's own $MCP_SERVER directly.
 STABLE_MCP_ENTRYPOINT="${JARVOS_MCP_STABLE_ENTRYPOINT:-}"
+ROLLBACK_MODE="${JARVOS_MANAGED_HARNESS_ROLLBACK:-0}"
+CODEX_EXECUTABLE_AVAILABLE=0
+MCP_ROLLBACK_STATUS=0
+HOOK_ROLLBACK_STATUS=0
+PROVIDER_ROLLBACK_STATUS=0
 
 # The private installer materializes this owner-controlled bundle once. Native
 # configuration must refer to it, never to a selected immutable runtime stage.
@@ -56,47 +61,52 @@ elif [ "${JARVOS_MANAGED_HARNESS_ROLLBACK:-0}" = "1" ] && [ -n "$STEWARDSHIP_STA
   STEWARDSHIP_DISPATCHER="$STEWARDSHIP_STABLE_ROOT/jarvos-stewardship-dispatcher"
 fi
 
-if ! command -v "$CODEX_EXECUTABLE" >/dev/null 2>&1; then
+if command -v "$CODEX_EXECUTABLE" >/dev/null 2>&1; then
+  CODEX_EXECUTABLE="$(command -v "$CODEX_EXECUTABLE")"
+  case "$CODEX_EXECUTABLE" in
+    /*) ;;
+    *) CODEX_EXECUTABLE="$(cd "$(dirname "$CODEX_EXECUTABLE")" && pwd)/$(basename "$CODEX_EXECUTABLE")" ;;
+  esac
+  CODEX_EXECUTABLE_AVAILABLE=1
+  JARVOS_CODEX_EXECUTABLE="$CODEX_EXECUTABLE"
+  export JARVOS_CODEX_EXECUTABLE
+elif [ "$ROLLBACK_MODE" = "1" ]; then
+  echo "Codex CLI is unavailable; continuing rollback phases that do not require it." >&2
+else
   echo "codex CLI not found on PATH" >&2
   exit 1
 fi
-CODEX_EXECUTABLE="$(command -v "$CODEX_EXECUTABLE")"
-case "$CODEX_EXECUTABLE" in
-  /*) ;;
-  *) CODEX_EXECUTABLE="$(cd "$(dirname "$CODEX_EXECUTABLE")" && pwd)/$(basename "$CODEX_EXECUTABLE")" ;;
-esac
-JARVOS_CODEX_EXECUTABLE="$CODEX_EXECUTABLE"
-export JARVOS_CODEX_EXECUTABLE
 
-if [ ! -f "$MCP_SERVER" ]; then
-  echo "jarvOS MCP server not found: $MCP_SERVER" >&2
-  exit 1
-fi
+if [ "$ROLLBACK_MODE" != "1" ]; then
+  if [ ! -f "$MCP_SERVER" ]; then
+    echo "jarvOS MCP server not found: $MCP_SERVER" >&2
+    exit 1
+  fi
 
-if [ ! -f "$MANAGED_HOOKS_JSON" ]; then
-  echo "jarvOS Codex hooks config not found: $MANAGED_HOOKS_JSON" >&2
-  exit 1
-fi
+  if [ ! -f "$MANAGED_HOOKS_JSON" ]; then
+    echo "jarvOS Codex hooks config not found: $MANAGED_HOOKS_JSON" >&2
+    exit 1
+  fi
 
-if [ ! -f "$HOOK_SCRIPT" ]; then
-  echo "jarvOS Codex hook script not found: $HOOK_SCRIPT" >&2
-  exit 1
-fi
+  if [ ! -f "$HOOK_SCRIPT" ]; then
+    echo "jarvOS Codex hook script not found: $HOOK_SCRIPT" >&2
+    exit 1
+  fi
 
-if [ ! -f "$TURN_HOOK_SCRIPT" ]; then
-  echo "jarvOS Codex turn hook script not found: $TURN_HOOK_SCRIPT" >&2
-  exit 1
-fi
+  if [ ! -f "$TURN_HOOK_SCRIPT" ]; then
+    echo "jarvOS Codex turn hook script not found: $TURN_HOOK_SCRIPT" >&2
+    exit 1
+  fi
 
-if [ ! -f "$TRUST_SCRIPT" ]; then
-  echo "jarvOS Codex hook trust script not found: $TRUST_SCRIPT" >&2
-  exit 1
-fi
+  if [ ! -f "$TRUST_SCRIPT" ]; then
+    echo "jarvOS Codex hook trust script not found: $TRUST_SCRIPT" >&2
+    exit 1
+  fi
 
-if [ ! -f "$MCP_RECEIPT_MODULE" ]; then
-  echo "jarvOS Codex MCP receipt helper not found: $MCP_RECEIPT_MODULE" >&2
-  exit 1
-fi
+  if [ ! -f "$MCP_RECEIPT_MODULE" ]; then
+    echo "jarvOS Codex MCP receipt helper not found: $MCP_RECEIPT_MODULE" >&2
+    exit 1
+  fi
 
 # The stable entrypoint is what setup registers with Codex, so it must be
 # validated to the same bar as the stable stewardship dispatcher: absolute,
@@ -249,7 +259,6 @@ MCP_ENV_ARGS+=(--env "JARVOS_COMMON_WORK_HARNESS=codex")
 
 # Managed provider admission is checked before the first profile write. The
 # provider manager repeats this check immediately before activation below.
-if [ "${JARVOS_MANAGED_HARNESS_ROLLBACK:-0}" != "1" ]; then
   REQUESTED_PROVIDER_MODE="$CODEX_PROVIDER_MODE"
   if [ -z "$REQUESTED_PROVIDER_MODE" ] && [ "${JARVOS_PROFILE:-}" = "codex" ]; then
     REQUESTED_PROVIDER_MODE="new-managed"
@@ -375,7 +384,7 @@ function handle(message) {
   }
   if (message.id === 3) {
     const result = message.result;
-    if (!result || result.status !== 'ok' || typeof result.version !== 'string'
+    if (!result || !['ok', 'okOverridden'].includes(result.status) || typeof result.version !== 'string'
       || typeof result.filePath !== 'string' || !samePath(result.filePath, targetConfig)) {
       return fail('Codex app-server did not confirm the expected atomic MCP rollback; preserving the registration and receipt');
     }
@@ -504,13 +513,14 @@ rollback_mcp_registration() {
   return 0
 }
 
-MCP_ROLLBACK_STATUS=0
-HOOK_ROLLBACK_STATUS=0
-PROVIDER_ROLLBACK_STATUS=0
-
 if [ "${JARVOS_STEWARDSHIP_ONLY:-0}" != "1" ]; then
   if [ "${JARVOS_MANAGED_HARNESS_ROLLBACK:-0}" = "1" ]; then
-    if ! rollback_mcp_registration; then
+    if { [ ! -e "$MCP_RECEIPT_PATH" ] && [ ! -L "$MCP_RECEIPT_PATH" ]; }; then
+      rollback_mcp_registration
+    elif [ "$CODEX_EXECUTABLE_AVAILABLE" -ne 1 ] || [ ! -f "$MCP_RECEIPT_MODULE" ]; then
+      echo "Codex MCP rollback prerequisites are unavailable; preserving the registration and receipt while continuing other rollback phases." >&2
+      MCP_ROLLBACK_STATUS=1
+    elif ! rollback_mcp_registration; then
       MCP_ROLLBACK_STATUS=1
     fi
   else
@@ -1029,13 +1039,13 @@ if [ "$HOOK_PHASE_STATUS" -ne 0 ]; then
   else
     exit 1
   fi
-elif [ "$CODEX_CONFIG" = "$HOME/.codex/config.toml" ]; then
+elif [ "$ROLLBACK_MODE" != "1" ] && [ "$CODEX_CONFIG" = "$HOME/.codex/config.toml" ]; then
   if node "$TRUST_SCRIPT" "$ROOT" "$HOOK_SCRIPT" && node "$TRUST_SCRIPT" "$ROOT" "$TURN_HOOK_SCRIPT"; then
     echo "Trusted jarvOS Codex lifecycle hooks."
   else
     echo "Could not automatically trust jarvOS Codex lifecycle hooks; review them in Codex hooks settings." >&2
   fi
-else
+elif [ "$ROLLBACK_MODE" != "1" ]; then
   echo "Skipping automatic hook trust for custom CODEX_CONFIG: $CODEX_CONFIG"
 fi
 
