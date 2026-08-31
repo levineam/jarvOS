@@ -1002,6 +1002,48 @@ function count(content, pattern) {
   return (content.match(pattern) || []).length;
 }
 
+function renderCodexTestToml(config) {
+  const scalar = (value) => {
+    if (typeof value === 'string') return JSON.stringify(value);
+    if (typeof value === 'boolean' || typeof value === 'number') return String(value);
+    if (Array.isArray(value)) return `[${value.map(scalar).join(', ')}]`;
+    return `{ ${Object.entries(value).map(([key, item]) => `${key} = ${scalar(item)}`).join(', ')} }`;
+  };
+  const sections = [];
+  const visit = (value, keys) => {
+    const direct = Object.entries(value).filter(([, item]) => item === null || typeof item !== 'object' || Array.isArray(item));
+    if (keys.length && direct.length) sections.push(`[${keys.join('.')}]\n${direct.map(([key, item]) => `${key} = ${scalar(item)}`).join('\n')}`);
+    for (const [key, item] of Object.entries(value)) if (item && typeof item === 'object' && !Array.isArray(item)) visit(item, [...keys, key]);
+  };
+  visit(config, []);
+  return sections.length ? `${sections.join('\n\n')}\n` : '';
+}
+
+function writeFakeCodexAppServer(executable, configPath, initialModel = {}) {
+  const modelPath = `${configPath}.semantic.json`;
+  fs.writeFileSync(modelPath, JSON.stringify(initialModel));
+  fs.writeFileSync(configPath, renderCodexTestToml(initialModel));
+  fs.writeFileSync(executable, [
+    '#!/usr/bin/env node',
+    "const fs = require('node:fs'); const crypto = require('node:crypto');",
+    `const configPath = ${JSON.stringify(configPath)}; const modelPath = ${JSON.stringify(modelPath)};`,
+    "const args = process.argv.slice(2); if (args[0] === 'mcp' && args[1] === 'get') process.exit(1); if (args[0] !== 'app-server') process.exit(0);",
+    "const scalar = (value) => { if (typeof value === 'string') return JSON.stringify(value); if (typeof value === 'boolean' || typeof value === 'number') return String(value); if (Array.isArray(value)) return `[${value.map(scalar).join(', ')}]`; return `{ ${Object.entries(value).map(([key, item]) => `${key} = ${scalar(item)}`).join(', ')} }`; };",
+    "const render = (config) => { const sections = []; const visit = (value, keys) => { const direct = Object.entries(value).filter(([, item]) => item === null || typeof item !== 'object' || Array.isArray(item)); if (keys.length && direct.length) sections.push(`[${keys.join('.')}]\\n${direct.map(([key, item]) => `${key} = ${scalar(item)}`).join('\\n')}`); for (const [key, item] of Object.entries(value)) if (item && typeof item === 'object' && !Array.isArray(item)) visit(item, [...keys, key]); }; visit(config, []); return sections.length ? `${sections.join('\\n\\n')}\\n` : ''; };",
+    "const read = () => JSON.parse(fs.readFileSync(modelPath, 'utf8')); const version = (value) => crypto.createHash('sha256').update(JSON.stringify(value)).digest('hex');",
+    "const setAt = (value, keyPath, replacement) => { const keys = keyPath.split('.'); let cursor = value; for (const key of keys.slice(0, -1)) cursor = cursor[key] ||= {}; if (replacement === null) delete cursor[keys.at(-1)]; else cursor[keys.at(-1)] = replacement; };",
+    "const emit = (value) => process.stdout.write(JSON.stringify(value) + '\\n'); let input = ''; process.stdin.setEncoding('utf8');",
+    "process.stdin.on('data', (chunk) => { input += chunk; let newline; while ((newline = input.indexOf('\\n')) >= 0) { const line = input.slice(0, newline).trim(); input = input.slice(newline + 1); if (!line) continue; const message = JSON.parse(line);",
+    "if (message.method === 'initialize') { emit({ id: message.id, result: { ok: true } }); continue; }",
+    "if (message.method === 'config/read') { const config = read(); emit({ id: message.id, result: { config, origins: {}, layers: [{ name: { type: 'user', file: fs.realpathSync(configPath), profile: null }, version: version(config), config }] } }); continue; }",
+    "if (message.method === 'config/batchWrite') { const config = read(); if (message.params.filePath !== fs.realpathSync(configPath) || message.params.expectedVersion !== version(config)) process.exit(9); for (const edit of message.params.edits) setAt(config, edit.keyPath, edit.value); fs.writeFileSync(modelPath, JSON.stringify(config)); fs.writeFileSync(configPath, render(config)); emit({ id: message.id, result: { status: 'ok', version: version(config), filePath: fs.realpathSync(configPath), overriddenMetadata: null } }); }",
+    '} }); process.stdin.resume();',
+    '',
+  ].join('\n'), { encoding: 'utf8', mode: 0o755 });
+  fs.chmodSync(executable, 0o755);
+  return { modelPath, read: () => JSON.parse(fs.readFileSync(modelPath, 'utf8')) };
+}
+
 function assertCodexParsesConfig(config) {
   const result = spawnSync('codex', ['features', 'list'], {
     encoding: 'utf8',
@@ -1480,29 +1522,20 @@ test('Codex setup merges both jarvOS lifecycle hooks without replacing user hook
     for (const file of ['jarvos-session-start-hook.js', 'jarvos-session-turn-hook.js']) fs.copyFileSync(path.join(ROOT, 'runtimes', 'codex', file), path.join(staged, 'runtimes', 'codex', file));
     fs.mkdirSync(bin, { recursive: true });
     const codex = path.join(bin, 'codex');
-    fs.writeFileSync(codex, [
-      '#!/usr/bin/env sh',
-      'if [ "$1" = "mcp" ] && [ "$2" = "get" ]; then exit 1; fi',
-      'exit 0',
-      '',
-    ].join('\n'), { encoding: 'utf8', mode: 0o755 });
-    fs.chmodSync(codex, 0o755);
-    fs.writeFileSync(config, [
-      '[hooks]',
-      'SessionStart = [{ matcher = "startup", hooks = [{ type = "command", command = "user-session-start" }] }]',
-      'UserPromptSubmit = [{ hooks = [{ type = "command", command = "user-prompt-submit" }] }]',
-      '',
-      '[shell_environment_policy]',
-      'set = { EXISTING = "keep" }',
-      '',
-      '[unrelated]',
-      'value = true',
-      '',
-    ].join('\n'), 'utf8');
-    let prior = fs.readFileSync(config, 'utf8');
-    prior = prior.replace('SessionStart = [', `SessionStart = [{ matcher = "startup", hooks = [{ type = "command", command = ${JSON.stringify(`node ${JSON.stringify(path.join(staged, 'runtimes', 'codex', 'jarvos-session-start-hook.js'))}`)}, async = false, timeout = 30 }] }, `);
-    prior = prior.replace('UserPromptSubmit = [', `UserPromptSubmit = [{ hooks = [{ type = "command", command = ${JSON.stringify(`node ${JSON.stringify(path.join(staged, 'runtimes', 'codex', 'jarvos-session-turn-hook.js'))}`)}, async = false, timeout = 30 }] }, `);
-    fs.writeFileSync(config, prior);
+    writeFakeCodexAppServer(codex, config, {
+      hooks: {
+        SessionStart: [
+          { matcher: 'startup', hooks: [{ type: 'command', command: `node ${JSON.stringify(path.join(staged, 'runtimes', 'codex', 'jarvos-session-start-hook.js'))}`, async: false, timeout: 30 }] },
+          { matcher: 'startup', hooks: [{ type: 'command', command: 'user-session-start' }] },
+        ],
+        UserPromptSubmit: [
+          { hooks: [{ type: 'command', command: `node ${JSON.stringify(path.join(staged, 'runtimes', 'codex', 'jarvos-session-turn-hook.js'))}`, async: false, timeout: 30 }] },
+          { hooks: [{ type: 'command', command: 'user-prompt-submit' }] },
+        ],
+      },
+      shell_environment_policy: { set: { EXISTING: 'keep' } },
+      unrelated: { value: true },
+    });
     const env = {
       ...cleanEnv(),
       HOME: path.join(temp, 'home'),
@@ -1536,7 +1569,6 @@ test('Codex setup merges both jarvOS lifecycle hooks without replacing user hook
     assert.doesNotMatch(second, new RegExp(staged.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
     assert.doesNotMatch(second, new RegExp(`${ROOT.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}/runtimes/codex/jarvos-session`));
     assert.match(second, /\[unrelated\]\nvalue = true/);
-    assert.equal(fs.readdirSync(temp).filter((name) => name.startsWith('config.toml.bak-jarvos-')).length, 1);
     const withoutBridge = { ...env };
     delete withoutBridge.JARVOS_STEWARDSHIP_BRIDGE_COMMAND;
     delete withoutBridge.JARVOS_STEWARDSHIP_CODEX_SESSION_MAP_ROOT;
@@ -1563,8 +1595,7 @@ test('Codex setup shell-quotes a stable dispatcher path before persisting hooks'
     fs.chmodSync(dispatcher, 0o700);
     fs.mkdirSync(bin, { recursive: true });
     const codex = path.join(bin, 'codex');
-    fs.writeFileSync(codex, '#!/usr/bin/env sh\nif [ "$1" = "mcp" ] && [ "$2" = "get" ]; then exit 1; fi\nexit 0\n', { mode: 0o755 });
-    fs.chmodSync(codex, 0o755);
+    writeFakeCodexAppServer(codex, config);
     const env = {
       ...cleanEnv(),
       HOME: path.join(temp, 'home'), PATH: `${bin}${path.delimiter}${process.env.PATH || ''}`,
@@ -1593,26 +1624,15 @@ test('Codex setup repairs the nested shell environment table without losing user
     fs.mkdirSync(path.join(staged, 'runtimes', 'codex'), { recursive: true });
     for (const file of ['jarvos-session-start-hook.js', 'jarvos-session-turn-hook.js']) fs.copyFileSync(path.join(ROOT, 'runtimes', 'codex', file), path.join(staged, 'runtimes', 'codex', file));
     fs.mkdirSync(bin, { recursive: true });
-    fs.writeFileSync(path.join(bin, 'codex'), '#!/usr/bin/env sh\nif [ "$1" = "mcp" ] && [ "$2" = "get" ]; then exit 1; fi\nexit 0\n', { mode: 0o755 });
-    fs.chmodSync(path.join(bin, 'codex'), 0o755);
     fs.mkdirSync(codexHome, { recursive: true });
-    fs.writeFileSync(config, [
-      '[hooks]',
-      'SessionStart = [{ hooks = [{ type = "command", command = "user-session-start" }] }]',
-      '',
-      '[shell_environment_policy.set]',
-      'BROWSER_USE_AVAILABLE_BACKENDS = "chrome,iab"',
-      'NODE_REPL_TRUSTED_CODE_PATHS = "/trusted/code"',
-      '',
-      // This is the real drift shape: a nested table plus a stale inline set.
-      '[shell_environment_policy]',
-      'set = { JARVOS_STEWARDSHIP_BRIDGE_COMMAND = "old-bridge", JARVOS_STEWARDSHIP_CODEX_SESSION_MAP_ROOT = "/old/map" } # Preserve this trailing user note.',
-      '# Keep this note for the person maintaining the environment policy.',
-      '',
-      '[unrelated]',
-      'value = true',
-      '',
-    ].join('\n'), 'utf8');
+    writeFakeCodexAppServer(path.join(bin, 'codex'), config, {
+      hooks: { SessionStart: [{ hooks: [{ type: 'command', command: 'user-session-start' }] }] },
+      shell_environment_policy: { set: {
+        BROWSER_USE_AVAILABLE_BACKENDS: 'chrome,iab',
+        NODE_REPL_TRUSTED_CODE_PATHS: '/trusted/code',
+      } },
+      unrelated: { value: true },
+    });
     const env = {
       ...cleanEnv(),
       HOME: path.join(temp, 'home'),
@@ -1636,8 +1656,6 @@ test('Codex setup repairs the nested shell environment table without losing user
     assert.match(configured, /NODE_REPL_TRUSTED_CODE_PATHS = "\/trusted\/code"/);
     assert.match(configured, /JARVOS_STEWARDSHIP_BRIDGE_COMMAND = "jarvos-stewardship-bridge"/);
     assert.match(configured, /JARVOS_STEWARDSHIP_CODEX_SESSION_MAP_ROOT = ".*codex-session-map"/);
-    assert.match(configured, /# Keep this note for the person maintaining the environment policy\./);
-    assert.match(configured, /# Preserve this trailing user note\./);
     assertCodexParsesConfig(config);
 
     runSetup(script, { ...env, JARVOS_MANAGED_HARNESS_ROLLBACK: '1' });
@@ -1649,15 +1667,13 @@ test('Codex setup repairs the nested shell environment table without losing user
     assert.match(rolledBack, /BROWSER_USE_AVAILABLE_BACKENDS = "chrome,iab"/);
     assert.match(rolledBack, /NODE_REPL_TRUSTED_CODE_PATHS = "\/trusted\/code"/);
     assert.match(rolledBack, /\[unrelated\]\nvalue = true/);
-    assert.match(rolledBack, /# Keep this note for the person maintaining the environment policy\./);
-    assert.match(rolledBack, /# Preserve this trailing user note\./);
     assertCodexParsesConfig(config);
   } finally {
     fs.rmSync(temp, { recursive: true, force: true });
   }
 });
 
-test('Codex stewardship setup migrates legacy hooks.json without losing unrelated hooks', () => {
+test('Codex stewardship setup preserves legacy hooks.json and requires explicit semantic migration', () => {
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-codex-hooks-migration-'));
   const bin = path.join(temp, 'bin');
   const home = path.join(temp, 'home');
@@ -1701,36 +1717,18 @@ test('Codex stewardship setup migrates legacy hooks.json without losing unrelate
       JARVOS_STEWARDSHIP_STABLE_ROOT: stable,
     };
     const script = path.join(ROOT, 'runtimes', 'codex', 'setup.sh');
-    runSetup(script, env);
-    const first = fs.readFileSync(config, 'utf8');
-    assert.equal(fs.existsSync(hooksJson), false);
-    assert.equal(count(first, /dcg --check/g), 1);
-    assert.equal(count(first, /jarvos-stewardship-dispatcher/g), 2);
-    assert.match(first, /model-routing/);
-    assert.match(first, /unrelated-session-hook/);
-    assert.match(first, /\[unrelated\]\nvalue = true/);
-    const configBackups = fs.readdirSync(codexHome).filter((name) => name.startsWith('config.toml.bak-jarvos-'));
-    const hooksBackups = fs.readdirSync(codexHome).filter((name) => name.startsWith('hooks.json.bak-jarvos-'));
-    assert.equal(configBackups.length, 1);
-    assert.equal(hooksBackups.length, 1);
-    assert.equal(fs.readFileSync(path.join(codexHome, configBackups[0]), 'utf8'), originalConfig);
-    assert.equal(fs.readFileSync(path.join(codexHome, hooksBackups[0]), 'utf8'), `${originalHooks}\n`);
-    assert.equal(fs.statSync(path.join(codexHome, hooksBackups[0])).mode & 0o777, 0o600);
-    runSetup(script, env);
-    assert.equal(fs.readFileSync(config, 'utf8'), first);
-    assert.equal(fs.readdirSync(codexHome).filter((name) => name.startsWith('hooks.json.bak-jarvos-')).length, 1);
-    runSetup(script, { ...env, JARVOS_MANAGED_HARNESS_ROLLBACK: '1' });
-    const rolledBack = fs.readFileSync(config, 'utf8');
-    assert.doesNotMatch(rolledBack, /jarvos-session-(?:start|turn)-hook\.js/);
-    assert.match(rolledBack, /dcg --check/);
-    assert.match(rolledBack, /model-routing/);
-    assert.equal(fs.existsSync(hooksJson), false);
+    const result = runSetupResult(script, env);
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /Legacy Codex hooks\.json requires an explicit semantic migration/);
+    assert.equal(fs.readFileSync(config, 'utf8'), originalConfig);
+    assert.equal(fs.readFileSync(hooksJson, 'utf8'), `${originalHooks}\n`);
+    assert.deepEqual(fs.readdirSync(codexHome).filter((name) => name.includes('.bak-jarvos-')), []);
   } finally {
     fs.rmSync(temp, { recursive: true, force: true });
   }
 });
 
-test('Codex hooks migration fails closed for malformed legacy hooks.json', () => {
+test('Codex legacy hooks migration fails closed uniformly without parsing or rewriting', () => {
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-codex-hooks-malformed-'));
   const bin = path.join(temp, 'bin');
   const codexHome = path.join(temp, 'codex-home');
@@ -1761,7 +1759,7 @@ test('Codex hooks migration fails closed for malformed legacy hooks.json', () =>
       JARVOS_STEWARDSHIP_STABLE_ROOT: stable,
     });
     assert.notEqual(result.status, 0);
-    assert.match(result.stderr, /refusing Codex hook migration/);
+    assert.match(result.stderr, /Legacy Codex hooks\.json requires an explicit semantic migration/);
     assert.equal(fs.readFileSync(config, 'utf8'), originalConfig);
     assert.equal(fs.readFileSync(hooksJson, 'utf8'), originalHooks);
     assert.deepEqual(fs.readdirSync(codexHome).filter((name) => name.includes('.bak-jarvos-')), []);
@@ -1777,7 +1775,7 @@ test('Codex hooks migration fails closed for malformed legacy hooks.json', () =>
       JARVOS_STEWARDSHIP_ONLY: '1', JARVOS_MANAGED_REPOSITORIES: '/managed/repository', JARVOS_STAGED_PUBLIC_RUNTIME_ROOT: staged, JARVOS_STEWARDSHIP_STABLE_ROOT: stable,
     });
     assert.notEqual(multilineResult.status, 0);
-    assert.match(multilineResult.stderr, /one-line inline-array/);
+    assert.match(multilineResult.stderr, /Legacy Codex hooks\.json requires an explicit semantic migration/);
     assert.equal(fs.readFileSync(config, 'utf8'), multilineConfig);
     assert.equal(fs.readFileSync(hooksJson, 'utf8'), validHooks);
   } finally {

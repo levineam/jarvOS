@@ -29,6 +29,35 @@ function getPath(config, keyPath) {
 function snapshot(config) {
   return receiptApi.validateSnapshot(Object.fromEntries(receiptApi.OWNED_PATHS.map((key) => [key, getPath(config, key)])));
 }
+function parentPresence(config) {
+  return receiptApi.validateParentPresence(Object.fromEntries(receiptApi.PARENT_PATHS.map((key) => [key, getPath(config, key).present])));
+}
+function applyPath(config, keyPath, item) {
+  const keys = keyPath.split('.');
+  let cursor = config;
+  for (const key of keys.slice(0, -1)) cursor = cursor[key] ||= {};
+  if (item.present) cursor[keys.at(-1)] = clone(item.value);
+  else delete cursor[keys.at(-1)];
+}
+function semanticEdits(current, target) {
+  return receiptApi.OWNED_PATHS
+    .filter((key) => JSON.stringify(current[key]) !== JSON.stringify(target[key]))
+    .map((keyPath) => ({ keyPath, value: target[keyPath].present ? target[keyPath].value : null, mergeStrategy: 'replace' }));
+}
+function rollbackEdits(config, current, target, parentBefore) {
+  let edits = semanticEdits(current, target);
+  const simulated = clone(config);
+  for (const key of receiptApi.OWNED_PATHS) applyPath(simulated, key, target[key]);
+  for (const parent of ['shell_environment_policy.set', 'hooks', 'features', 'shell_environment_policy']) {
+    const item = getPath(simulated, parent);
+    if (parentBefore[parent] || !item.present || !item.value || typeof item.value !== 'object'
+      || Array.isArray(item.value) || Object.keys(item.value).length !== 0) continue;
+    edits = edits.filter((edit) => edit.keyPath !== parent && !edit.keyPath.startsWith(`${parent}.`));
+    edits.push({ keyPath: parent, value: null, mergeStrategy: 'replace' });
+    applyPath(simulated, parent, { present: false, value: null });
+  }
+  return edits;
+}
 function shellQuote(value) { return `'${value.replace(/'/g, "'\"'\"'")}'`; }
 function managedCommand(entry, ownedPaths) {
   if (!entry || typeof entry !== 'object' || !Array.isArray(entry.hooks)) return false;
@@ -127,7 +156,8 @@ async function transact(options) {
     const matches = read.layers.filter((layer) => layer?.name?.type === 'user' && typeof layer.name.file === 'string' && samePath(layer.name.file, targetConfig));
     if (matches.length !== 1 || typeof matches[0].version !== 'string' || !matches[0].version) fail('the exact Codex user layer is unavailable or ambiguous');
     const layer = matches[0];
-    const current = snapshot(layer.config || {});
+    const currentConfig = layer.config || {};
+    const current = snapshot(currentConfig);
     let receipt = receiptApi.readReceipt(options.receiptPath, options.codexHome, options.configPath);
     let recoveredNoop = false;
     if (receipt) {
@@ -166,11 +196,18 @@ async function transact(options) {
       if (receiptApi.snapshotsEqual(current, target)) {
         console.log(`Codex config already has the requested jarvOS hooks: ${options.configPath}`); return;
       }
-      if (!receipt) receipt = receiptApi.claimReceipt(options.receiptPath, options.codexHome, options.configPath, current, target);
+      if (!receipt) receipt = receiptApi.claimReceipt(
+        options.receiptPath,
+        options.codexHome,
+        options.configPath,
+        current,
+        target,
+        parentPresence(currentConfig),
+      );
     }
-    const edits = receiptApi.OWNED_PATHS
-      .filter((key) => JSON.stringify(current[key]) !== JSON.stringify(target[key]))
-      .map((keyPath) => ({ keyPath, value: target[keyPath].present ? target[keyPath].value : null, mergeStrategy: 'replace' }));
+    const edits = options.rollback
+      ? rollbackEdits(currentConfig, current, target, receipt.parentBefore)
+      : semanticEdits(current, target);
     let result;
     try {
       result = await server.request('config/batchWrite', { filePath: targetConfig, edits, expectedVersion: layer.version, reloadUserConfig: true });
@@ -189,4 +226,4 @@ async function main() {
 }
 
 if (require.main === module) main().catch((error) => { process.stderr.write(`${error.message}\n`); process.exitCode = 1; });
-module.exports = { snapshot, desiredSnapshot, transact };
+module.exports = { snapshot, parentPresence, desiredSnapshot, rollbackEdits, transact };

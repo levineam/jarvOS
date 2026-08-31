@@ -4,7 +4,7 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const SCHEMA_VERSION = 'jarvos-codex-hook-feature-receipt/v3';
+const SCHEMA_VERSION = 'jarvos-codex-hook-feature-receipt/v4';
 const OWNED_PATHS = [
   'hooks.SessionStart',
   'hooks.UserPromptSubmit',
@@ -14,7 +14,8 @@ const OWNED_PATHS = [
   'shell_environment_policy.set.JARVOS_STEWARDSHIP_CODEX_SESSION_MAP_ROOT',
   'shell_environment_policy.set.JARVOS_STEWARDSHIP_BRIDGE_CONTEXT_FILE',
 ];
-const RECEIPT_KEYS = ['schemaVersion', 'profileDigest', 'configDigest', 'state', 'before', 'after'];
+const PARENT_PATHS = ['hooks', 'features', 'shell_environment_policy', 'shell_environment_policy.set'];
+const RECEIPT_KEYS = ['schemaVersion', 'profileDigest', 'configDigest', 'state', 'before', 'after', 'parentBefore'];
 
 function fail(message) {
   const error = new Error(message);
@@ -82,6 +83,15 @@ function validateSnapshot(snapshot) {
   return snapshot;
 }
 
+function validateParentPresence(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)
+    || Object.keys(value).sort().join('\0') !== [...PARENT_PATHS].sort().join('\0')
+    || PARENT_PATHS.some((key) => typeof value[key] !== 'boolean')) {
+    fail('hook-feature receipt parent presence has an unsupported shape');
+  }
+  return value;
+}
+
 function validateReceipt(value, profileDigest, configDigest) {
   if (!value || typeof value !== 'object' || Array.isArray(value)
     || Object.keys(value).sort().join('\0') !== [...RECEIPT_KEYS].sort().join('\0')
@@ -91,6 +101,7 @@ function validateReceipt(value, profileDigest, configDigest) {
   }
   validateSnapshot(value.before);
   validateSnapshot(value.after);
+  validateParentPresence(value.parentBefore);
   return value;
 }
 
@@ -132,11 +143,11 @@ function writeReceipt(receiptPath, receipt) {
   }
 }
 
-function claimReceipt(receiptPath, profilePath, configPath, before, after) {
-  validateSnapshot(before); validateSnapshot(after);
+function claimReceipt(receiptPath, profilePath, configPath, before, after, parentBefore) {
+  validateSnapshot(before); validateSnapshot(after); validateParentPresence(parentBefore);
   const value = context(receiptPath, profilePath, configPath, { create: true });
   if (readReceipt(value.receipt, value.profile, value.config)) fail('hook-feature receipt already exists');
-  const receipt = { schemaVersion: SCHEMA_VERSION, profileDigest: value.profileDigest, configDigest: value.configDigest, state: 'pending', before, after };
+  const receipt = { schemaVersion: SCHEMA_VERSION, profileDigest: value.profileDigest, configDigest: value.configDigest, state: 'pending', before, after, parentBefore };
   writeReceipt(value.receipt, receipt);
   return receipt;
 }
@@ -164,4 +175,4 @@ function clearReceipt(receiptPath, profilePath, configPath, expectedAfter) {
   return true;
 }
 
-module.exports = { SCHEMA_VERSION, OWNED_PATHS, claimReceipt, activateReceipt, clearReceipt, readReceipt, snapshotsEqual, validateSnapshot };
+module.exports = { SCHEMA_VERSION, OWNED_PATHS, PARENT_PATHS, claimReceipt, activateReceipt, clearReceipt, readReceipt, snapshotsEqual, validateSnapshot, validateParentPresence };

@@ -136,7 +136,9 @@ the selected profile and canonical `CODEX_CONFIG`. A `config/read` with
 `includeLayers` selects that exact user layer and snapshots presence plus value
 for only `hooks.SessionStart`, `hooks.UserPromptSubmit`, `features.hooks`,
 `features.codex_hooks`, and the three jarvOS stewardship keys below
-`shell_environment_policy.set`. Setup or rollback then submits one
+`shell_environment_policy.set`. The receipt also records whether the containing
+`hooks`, `features`, `shell_environment_policy`, and nested `set` tables existed
+before setup. Setup or rollback then submits one
 `config/batchWrite` containing `replace`/`null` edits, the canonical
 `filePath`, and that layer's exact `expectedVersion`. Both `ok` and
 `okOverridden` prove the user-layer write; a higher layer remains untouched.
@@ -148,6 +150,11 @@ active receipt states distinguish crashes before/after the atomic write. A
 legacy `hooks.json` is never deleted implicitly; setup stops for an explicit
 semantic migration. Codex hook trust is separately managed by Codex and is not
 restored by this receipt.
+
+On rollback, an originally absent parent table is removed in that same atomic
+batch only if the exact current user-layer parent becomes empty after restoring
+the owned keys. A concurrently added sibling keeps its parent and is preserved;
+the `expectedVersion` guard rejects a race between that check and the write.
 
 ### Optional authenticated control-plane host
 

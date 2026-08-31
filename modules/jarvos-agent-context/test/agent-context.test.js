@@ -1025,7 +1025,7 @@ function runCodexSetup(envOverrides = {}) {
     "  const userConfig = () => { const value = JSON.parse(JSON.stringify(readModel())); const current = registration(); if (current) { value.mcp_servers ||= {}; value.mcp_servers.jarvos = current; } return value; };",
     "  const version = (value) => crypto.createHash('sha256').update(JSON.stringify(value)).digest('hex');",
     "  const setAt = (value, keyPath, replacement) => { const keys = keyPath.split('.'); let cursor = value; for (const key of keys.slice(0, -1)) cursor = cursor[key] ||= {}; const leaf = keys.at(-1); if (replacement === null) delete cursor[leaf]; else cursor[leaf] = replacement; };",
-    "  const owned = new Set(['hooks.SessionStart', 'hooks.UserPromptSubmit', 'features.hooks', 'features.codex_hooks', 'shell_environment_policy.set.JARVOS_STEWARDSHIP_BRIDGE_COMMAND', 'shell_environment_policy.set.JARVOS_STEWARDSHIP_CODEX_SESSION_MAP_ROOT', 'shell_environment_policy.set.JARVOS_STEWARDSHIP_BRIDGE_CONTEXT_FILE']);",
+    "  const owned = new Set(['hooks', 'features', 'shell_environment_policy', 'shell_environment_policy.set', 'hooks.SessionStart', 'hooks.UserPromptSubmit', 'features.hooks', 'features.codex_hooks', 'shell_environment_policy.set.JARVOS_STEWARDSHIP_BRIDGE_COMMAND', 'shell_environment_policy.set.JARVOS_STEWARDSHIP_CODEX_SESSION_MAP_ROOT', 'shell_environment_policy.set.JARVOS_STEWARDSHIP_BRIDGE_CONTEXT_FILE']);",
     "  const emit = (value) => process.stdout.write(JSON.stringify(value) + '\\n');",
     "  let input = '';",
     "  process.stdin.setEncoding('utf8');",
@@ -1500,7 +1500,7 @@ test('Codex hook-feature rollback restores exact owned key presence and values',
     assert.equal(run.result.status, 0, run.result.stderr || run.result.stdout);
     assert.equal(fs.statSync(run.hookFeatureReceiptPath).mode & 0o777, 0o600);
     const ownership = JSON.parse(fs.readFileSync(run.hookFeatureReceiptPath, 'utf8'));
-    assert.equal(ownership.schemaVersion, 'jarvos-codex-hook-feature-receipt/v3');
+    assert.equal(ownership.schemaVersion, 'jarvos-codex-hook-feature-receipt/v4');
     assert.deepEqual(ownership.before['features.hooks'], { present: true, value: false });
     assert.deepEqual(ownership.before['hooks.UserPromptSubmit'], { present: false, value: null });
     assert.deepEqual(Object.keys(ownership.before).sort(), [
@@ -1512,6 +1512,12 @@ test('Codex hook-feature rollback restores exact owned key presence and values',
       'shell_environment_policy.set.JARVOS_STEWARDSHIP_BRIDGE_CONTEXT_FILE',
       'shell_environment_policy.set.JARVOS_STEWARDSHIP_CODEX_SESSION_MAP_ROOT',
     ]);
+    assert.deepEqual(ownership.parentBefore, {
+      hooks: true,
+      features: true,
+      shell_environment_policy: false,
+      'shell_environment_policy.set': false,
+    });
     const configured = fs.readFileSync(run.configPath, 'utf8');
     assert.match(configured, /hooks = true/);
     assert.doesNotMatch(configured, /codex_hooks = true/);
@@ -1521,6 +1527,46 @@ test('Codex hook-feature rollback restores exact owned key presence and values',
     assert.equal(result.status, 0, result.stderr || result.stdout);
     assert.equal(fs.existsSync(run.hookFeatureReceiptPath), false);
     assert.deepEqual(run.readConfigModel(), initialModel);
+  } finally {
+    run.cleanup();
+  }
+});
+
+test('Codex hook-feature rollback removes only originally absent empty parent tables', () => {
+  const run = runCodexSetup({ FAKE_CODEX_APP_SERVER_MODE: 'success' });
+  try {
+    assert.equal(run.result.status, 0, run.result.stderr || run.result.stdout);
+    const result = run.rerun({ JARVOS_MANAGED_HARNESS_ROLLBACK: '1' });
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+    assert.equal(fs.readFileSync(run.configPath, 'utf8'), '');
+    assert.deepEqual(run.readConfigModel(), {});
+  } finally {
+    run.cleanup();
+  }
+});
+
+test('Codex hook-feature rollback preserves unrelated keys concurrently added inside owned parents', () => {
+  const run = runCodexSetup({
+    FAKE_CODEX_APP_SERVER_MODE: 'success',
+    JARVOS_STEWARDSHIP_BRIDGE_COMMAND: 'jarvos-bridge',
+    JARVOS_STEWARDSHIP_CODEX_SESSION_MAP_ROOT: '/private/jarvos-map',
+  });
+  try {
+    assert.equal(run.result.status, 0, run.result.stderr || run.result.stdout);
+    const concurrent = run.readConfigModel();
+    concurrent.hooks.OtherEvent = [{ hooks: [{ type: 'command', command: 'keep-hook' }] }];
+    concurrent.features.keep_feature = true;
+    concurrent.shell_environment_policy.inherit = 'all';
+    concurrent.shell_environment_policy.set.USER_VALUE = 'keep';
+    run.writeConfigModel(concurrent);
+
+    const result = run.rerun({ JARVOS_MANAGED_HARNESS_ROLLBACK: '1' });
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+    assert.deepEqual(run.readConfigModel(), {
+      hooks: { OtherEvent: [{ hooks: [{ type: 'command', command: 'keep-hook' }] }] },
+      features: { keep_feature: true },
+      shell_environment_policy: { set: { USER_VALUE: 'keep' }, inherit: 'all' },
+    });
   } finally {
     run.cleanup();
   }

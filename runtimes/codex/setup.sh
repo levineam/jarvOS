@@ -617,6 +617,9 @@ if [ "${JARVOS_STEWARDSHIP_ONLY:-0}" != "1" ]; then
 fi
 
 HOOK_PHASE_STATUS=0
+if [ ! -d "$CODEX_HOME" ]; then
+  mkdir -m 700 -p "$CODEX_HOME" || HOOK_PHASE_STATUS=1
+fi
 mkdir -p "$(dirname "$CODEX_CONFIG")" || HOOK_PHASE_STATUS=1
 if [ ! -f "$CODEX_CONFIG" ]; then
   touch "$CODEX_CONFIG" || HOOK_PHASE_STATUS=1
