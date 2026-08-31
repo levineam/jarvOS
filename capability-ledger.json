@@ -38,32 +38,38 @@
     {
       "capabilityId": "candidate-envelope",
       "title": "Non-authoritative candidate envelope contract",
-      "specification": "draft",
-      "implementation": "absent",
+      "specification": "canonical",
+      "implementation": "partial",
       "repository": "local-only",
-      "verification": "untested",
+      "verification": "fixture-proven",
       "activation": "inactive",
       "authority": "none",
       "evidence": [
-        { "type": "document", "ref": "docs/plans/2026-08-31-feat-product-realization-foundation-v1-plan.md" }
+        { "type": "repo-path", "ref": "modules/jarvos-secondbrain/packages/jarvos-ambient/src/intent/candidate-contract.js" },
+        { "type": "test", "ref": "modules/jarvos-secondbrain/packages/jarvos-ambient/test/candidate-contract.test.js" },
+        { "type": "document", "ref": "modules/jarvos-secondbrain/docs/contracts/CANDIDATE_ENVELOPE.md" },
+        { "type": "test", "ref": "tests/fixtures/foundation-contracts/manifest.json" }
       ],
       "assertedOn": "2026-08-31",
-      "notes": "Planned in a later slice of this branch; no validator or fixtures exist yet."
+      "notes": "Validator, exports, unit tests, and shared conformance fixtures exist; no source adapter or promotion consumer constructs candidates yet."
     },
     {
       "capabilityId": "promotion-receipt",
       "title": "Cross-surface promotion receipt envelope contract",
-      "specification": "draft",
-      "implementation": "absent",
+      "specification": "canonical",
+      "implementation": "partial",
       "repository": "local-only",
-      "verification": "untested",
+      "verification": "fixture-proven",
       "activation": "inactive",
       "authority": "none",
       "evidence": [
-        { "type": "document", "ref": "docs/plans/2026-08-31-feat-product-realization-foundation-v1-plan.md" }
+        { "type": "repo-path", "ref": "modules/jarvos-control-plane/src/promotion-receipt.js" },
+        { "type": "test", "ref": "modules/jarvos-control-plane/test/promotion-receipt.test.js" },
+        { "type": "document", "ref": "modules/jarvos-control-plane/README.md" },
+        { "type": "test", "ref": "tests/fixtures/foundation-contracts/manifest.json" }
       ],
       "assertedOn": "2026-08-31",
-      "notes": "Planned in a later slice of this branch; no validator or fixtures exist yet."
+      "notes": "Validator, exports, unit tests, and shared conformance fixtures exist; no destination writer emits this envelope yet."
     }
   ]
 }

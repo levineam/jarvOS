@@ -51,8 +51,8 @@ traversal, and cannot carry a `file:` or other URI scheme.
 ## Seed ledger
 
 The tracked `capability-ledger.json` seed describes only this local foundation
-slice. Contracts that already exist are asserted at `implementation: partial`
-and `verification: fixture-proven`; contracts that are only planned stay at
-`specification: draft`, `implementation: absent`, and `verification: untested`
-until their code and fixtures land. Every seed record is `repository:
-local-only`, `activation: inactive`, and `authority: none`.
+slice. Its identity, truth-ledger, candidate-envelope, and promotion-receipt
+contracts are asserted at `implementation: partial` and `verification:
+fixture-proven` because their validators and tests exist but no installed
+product consumer activates them. Every seed record is `repository: local-only`,
+`activation: inactive`, and `authority: none`.
