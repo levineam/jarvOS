@@ -41,6 +41,28 @@ Paperclip, OpenClaw, Codex, Claude Code, cron, or a private machine path.
 - It is not permission to mutate by free-form text. Requests must declare a
   resource, mutation class, authority, command spec, budget, and lifecycle.
 
+## Portable identity
+
+The package validates opaque `jarvos.identity.v1` identifiers so candidates,
+receipts, sessions, and other portable entities can reference stable identities
+without a shared database. An identifier has the fixed grammar
+
+```text
+jarvos:<kind>:<namespace>:<opaque>
+```
+
+The whole value is lowercase and at most 256 characters. `namespace` and
+`opaque` each match `[a-z0-9][a-z0-9._-]{0,63}` and contain no whitespace,
+path separator, percent-encoding, or extra colon. The allowed kinds are `mind`,
+`installation`, `host`, `harness-instance`, `session`, `source-event`,
+`candidate`, `artifact`, `project`, `policy`, and `receipt`.
+
+`validateIdentity(value, expectedKind)` returns an error array, `parseIdentity`
+returns the four bounded segments, and `assertIdentity` throws on invalid input.
+Validation never resolves, dereferences, normalizes, or infers an identifier,
+and it reads no host, process, or environment state. This contract does not mint
+identifiers; each owning subsystem defines how it issues them.
+
 ## Public human and agent adapters
 
 The package ships `jarvos-manager` for a human CLI and exposes the same

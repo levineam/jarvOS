@@ -13,7 +13,8 @@
     "./storage": "./src/storage/index.js",
     "./application-service": "./src/application-service.js",
     "./manager": "./scripts/jarvos-manager.js",
-    "./protected-resource": "./src/protected-resource/index.js"
+    "./protected-resource": "./src/protected-resource/index.js",
+    "./identity": "./src/identity.js"
   },
   "bin": {
     "jarvos-manager": "scripts/jarvos-manager.js"
