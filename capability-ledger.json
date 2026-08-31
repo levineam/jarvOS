@@ -1,0 +1,69 @@
+{
+  "schemaVersion": "jarvos.capability-ledger.v1",
+  "records": [
+    {
+      "capabilityId": "portable-identity",
+      "title": "Portable opaque identity contract",
+      "specification": "canonical",
+      "implementation": "partial",
+      "repository": "local-only",
+      "verification": "fixture-proven",
+      "activation": "inactive",
+      "authority": "none",
+      "evidence": [
+        { "type": "repo-path", "ref": "modules/jarvos-control-plane/src/identity.js" },
+        { "type": "test", "ref": "modules/jarvos-control-plane/test/identity.test.js" },
+        { "type": "document", "ref": "docs/architecture/capability-truth-ledger.md" }
+      ],
+      "assertedOn": "2026-08-31",
+      "notes": "Validator, exports, and unit tests exist; no product consumer issues identifiers yet."
+    },
+    {
+      "capabilityId": "capability-truth-ledger",
+      "title": "Capability truth ledger contract",
+      "specification": "canonical",
+      "implementation": "partial",
+      "repository": "local-only",
+      "verification": "fixture-proven",
+      "activation": "inactive",
+      "authority": "none",
+      "evidence": [
+        { "type": "repo-path", "ref": "scripts/lib/capability-ledger.js" },
+        { "type": "document", "ref": "docs/architecture/capability-truth-ledger.md" },
+        { "type": "repo-path", "ref": "capability-ledger.json" }
+      ],
+      "assertedOn": "2026-08-31",
+      "notes": "This ledger validates against its own contract; no automated reporter consumes it yet."
+    },
+    {
+      "capabilityId": "candidate-envelope",
+      "title": "Non-authoritative candidate envelope contract",
+      "specification": "draft",
+      "implementation": "absent",
+      "repository": "local-only",
+      "verification": "untested",
+      "activation": "inactive",
+      "authority": "none",
+      "evidence": [
+        { "type": "document", "ref": "docs/plans/2026-08-31-feat-product-realization-foundation-v1-plan.md" }
+      ],
+      "assertedOn": "2026-08-31",
+      "notes": "Planned in a later slice of this branch; no validator or fixtures exist yet."
+    },
+    {
+      "capabilityId": "promotion-receipt",
+      "title": "Cross-surface promotion receipt envelope contract",
+      "specification": "draft",
+      "implementation": "absent",
+      "repository": "local-only",
+      "verification": "untested",
+      "activation": "inactive",
+      "authority": "none",
+      "evidence": [
+        { "type": "document", "ref": "docs/plans/2026-08-31-feat-product-realization-foundation-v1-plan.md" }
+      ],
+      "assertedOn": "2026-08-31",
+      "notes": "Planned in a later slice of this branch; no validator or fixtures exist yet."
+    }
+  ]
+}
