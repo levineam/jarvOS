@@ -21,6 +21,7 @@ const ROOT = path.resolve(__dirname, '..', '..');
 const CAPABILITY_PATH = path.join(__dirname, 'compound-engineering-capability.json');
 const CONFORMANCE_PATH = path.join(__dirname, 'compound-engineering-conformance.json');
 const STATE_VERSION = 'jarvos-codex-provider-state/v1';
+const CODEX_SEMVER = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
 const PROVIDER_ID = 'compound-engineering';
 const MARKETPLACE_NAME = 'compound-engineering-plugin';
 const PLUGIN_SELECTOR = 'compound-engineering@compound-engineering-plugin';
@@ -46,10 +47,13 @@ function readJson(filePath, label) {
   }
 }
 
-function assertProfileDirectory(profilePath) {
+function assertProfileDirectory(profilePath, { create = true } = {}) {
   if (typeof profilePath !== 'string' || !path.isAbsolute(profilePath)) fail('CODEX_HOME must be absolute');
   const absolute = path.resolve(profilePath);
-  if (!fs.existsSync(absolute)) fs.mkdirSync(absolute, { recursive: true, mode: 0o700 });
+  if (!fs.existsSync(absolute)) {
+    if (!create) return absolute;
+    fs.mkdirSync(absolute, { recursive: true, mode: 0o700 });
+  }
   const stat = fs.lstatSync(absolute);
   if (stat.isSymbolicLink() || !stat.isDirectory()) fail('CODEX_HOME must be a real directory');
   if (typeof process.getuid === 'function' && stat.uid !== process.getuid()) fail('CODEX_HOME must be owned by the current user');
@@ -111,8 +115,12 @@ function commandEnvironment() {
   return env;
 }
 
+function codexExecutable() {
+  return process.env.JARVOS_CODEX_EXECUTABLE || 'codex';
+}
+
 function runCodex(args, { expectJson = false } = {}) {
-  const result = spawnSync(process.env.JARVOS_CODEX_EXECUTABLE || 'codex', args, {
+  const result = spawnSync(codexExecutable(), args, {
     cwd: ROOT,
     env: commandEnvironment(),
     encoding: 'utf8',
@@ -190,7 +198,32 @@ function ensureApprovedEvidence() {
   const validation = validateCodexConformanceReceipt(conformance, { capability });
   if (!validation.ok) fail('shipped Codex provider conformance receipt is not approved');
   if (capability.admission !== 'supported' || capability.activation.candidateOnly !== false) fail('Compound Engineering provider is not admitted for activation');
-  return capability;
+  return { capability, conformance };
+}
+
+function readLiveCodexVersion() {
+  const result = spawnSync(codexExecutable(), ['--version'], {
+    cwd: ROOT,
+    env: commandEnvironment(),
+    encoding: 'utf8',
+    timeout: 30_000,
+    maxBuffer: 128 * 1024,
+  });
+  if (result.error || result.status !== 0) fail('could not read the running Codex CLI version');
+  const output = `${result.stdout || ''}\n${result.stderr || ''}`;
+  const versions = output.match(/\b\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?\b/g) || [];
+  if (versions.length !== 1 || !CODEX_SEMVER.test(versions[0])) fail('running Codex CLI returned an unusable version');
+  return versions[0];
+}
+
+function assertLiveCodexVersion(conformance) {
+  const expected = conformance?.discovery?.codexVersion;
+  if (typeof expected !== 'string' || !CODEX_SEMVER.test(expected)) fail('Codex provider conformance has no valid covered CLI version');
+  const actual = readLiveCodexVersion();
+  if (actual !== expected) {
+    fail(`managed Compound Engineering activation is not covered for Codex CLI ${actual}; conformance covers ${expected}. Update Codex or repeat the disposable conformance validation before retrying`);
+  }
+  return actual;
 }
 
 function stateMatchesInstallation(state, current) {
@@ -299,7 +332,7 @@ function activate({ capability, statePath }) {
   }
 }
 
-function rollback({ capability, statePath }) {
+function rollback({ statePath }) {
   const state = readState(statePath);
   if (!state) {
     console.log('No jarvOS-owned Compound Engineering activation was found; preserving the Codex profile.');
@@ -314,16 +347,28 @@ function main() {
   const mode = process.env.JARVOS_CODEX_PROVIDER_MODE
     || (process.env.JARVOS_PROFILE === 'codex' ? 'new-managed' : 'existing');
   if (!SAFE_MODE.has(mode)) fail('JARVOS_CODEX_PROVIDER_MODE must be existing, new-managed, opt-in, or disabled');
-  const profile = assertProfileDirectory(process.env.CODEX_HOME || path.join(process.env.HOME || '', '.codex'));
+  const rollbackRequested = process.env.JARVOS_MANAGED_HARNESS_ROLLBACK === '1';
+  const preflightRequested = process.env.JARVOS_CODEX_PROVIDER_PREFLIGHT === '1';
+  const managedMode = mode === 'new-managed' || mode === 'opt-in';
+  if (preflightRequested && !managedMode) fail('Codex provider preflight requires new-managed or opt-in mode');
+  const profile = assertProfileDirectory(
+    process.env.CODEX_HOME || path.join(process.env.HOME || '', '.codex'),
+    { create: !preflightRequested && !rollbackRequested },
+  );
   process.env.CODEX_HOME = profile;
   const statePath = path.join(profile, 'jarvos-compound-engineering.state.json');
-  const capability = ensureApprovedEvidence();
-  if (process.env.JARVOS_MANAGED_HARNESS_ROLLBACK === '1') return rollback({ capability, statePath });
+  if (rollbackRequested) return rollback({ statePath });
+  const evidence = ensureApprovedEvidence();
+  const liveCodexVersion = managedMode ? assertLiveCodexVersion(evidence.conformance) : undefined;
+  if (preflightRequested) {
+    console.log(`Codex ${liveCodexVersion} is covered by the reviewed Compound Engineering conformance receipt; no provider changes were made.`);
+    return { status: 'preflight', codexVersion: liveCodexVersion };
+  }
   if (mode === 'existing' || mode === 'disabled') {
     console.log(`Compound Engineering provider setup is ${mode === 'disabled' ? 'disabled' : 'preserve-only'} for this Codex profile.`);
     return { status: mode };
   }
-  return activate({ capability, statePath });
+  return activate({ capability: evidence.capability, statePath });
 }
 
 if (require.main === module) {
@@ -337,7 +382,9 @@ if (require.main === module) {
 
 module.exports = {
   activate,
+  assertLiveCodexVersion,
   discover,
   main,
+  readLiveCodexVersion,
   rollback,
 };

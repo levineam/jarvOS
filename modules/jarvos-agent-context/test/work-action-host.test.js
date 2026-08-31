@@ -357,7 +357,7 @@ test('Claude and Codex setup scripts pass optional work-action env and never req
     assert.doesNotMatch(source, /: "\$\{JARVOS_PROJECTS_CONTEXT_CONFIG:\?/);
   }
   assert.match(claude, /claude mcp add --scope user "\$\{MCP_ENV_ARGS\[@\]\}" jarvos -- "\$\{MCP_COMMAND\[@\]\}"/);
-  assert.match(codex, /codex mcp add "\$\{MCP_ENV_ARGS\[@\]\}" jarvos -- "\$\{MCP_COMMAND\[@\]\}"/);
+  assert.match(codex, /"\$CODEX_EXECUTABLE" mcp add "\$\{MCP_ENV_ARGS\[@\]\}" jarvos -- "\$\{MCP_COMMAND\[@\]\}"/);
 });
 
 // Records the argv of a fake `codex`/`claude` CLI so setup.sh's real MCP
@@ -366,11 +366,22 @@ function writeFakeMcpCli(binPath, recordPath) {
   fs.writeFileSync(binPath, [
     '#!/usr/bin/env node',
     "const fs = require('fs');",
+    "const crypto = require('crypto');",
     'const args = process.argv.slice(2);',
     `const recordPath = ${JSON.stringify(recordPath)};`,
-    "if (args[0] === 'mcp' && args[1] === 'get') process.exit(1);",
-    "if (args[0] === 'mcp' && args[1] === 'remove') process.exit(0);",
-    "if (args[0] === 'mcp' && args[1] === 'add') { fs.writeFileSync(recordPath, JSON.stringify(args)); process.exit(0); }",
+    "const scope = process.env.CODEX_HOME || process.env.CLAUDE_SETTINGS || process.env.HOME || 'default';",
+    "const statePath = `${recordPath}.${crypto.createHash('sha256').update(scope).digest('hex')}.state.json`;",
+    "if (args[0] === 'mcp' && args[1] === 'list') { const entries = fs.existsSync(statePath) ? [JSON.parse(fs.readFileSync(statePath, 'utf8'))] : []; process.stdout.write(JSON.stringify(entries)); process.exit(0); }",
+    "if (args[0] === 'mcp' && args[1] === 'get') { if (!fs.existsSync(statePath)) process.exit(1); process.stdout.write(fs.readFileSync(statePath, 'utf8')); process.exit(0); }",
+    "if (args[0] === 'mcp' && args[1] === 'remove') { try { fs.unlinkSync(statePath); } catch (error) { if (error.code !== 'ENOENT') throw error; } process.exit(0); }",
+    "if (args[0] === 'mcp' && args[1] === 'add') {",
+    "  fs.writeFileSync(recordPath, JSON.stringify(args));",
+    "  const separator = args.indexOf('--'); const nameIndex = args.indexOf('jarvos'); const env = {};",
+    "  for (let index = 2; index < nameIndex; index += 1) if (args[index] === '--env') { const binding = args[++index]; const split = binding.indexOf('='); env[binding.slice(0, split)] = binding.slice(split + 1); }",
+    "  const command = args[separator + 1]; const commandArgs = args.slice(separator + 2);",
+    "  fs.writeFileSync(statePath, JSON.stringify({ name: 'jarvos', enabled: true, startup_timeout_sec: null, tool_timeout_sec: null, enabled_tools: null, disabled_tools: null, transport: { type: 'stdio', command, args: commandArgs, cwd: null, env, env_vars: [] } }));",
+    "  process.exit(0);",
+    "}",
     'process.exit(0);',
     '',
   ].join('\n'), { encoding: 'utf8', mode: 0o755 });
@@ -524,6 +535,7 @@ test('rerunning Codex setup from a different immutable runtime preserves the sam
     fs.writeFileSync(path.join(runtime2CodexDir, 'jarvos-session-turn-hook.js'), '// stub\n');
     fs.writeFileSync(path.join(runtime2CodexDir, 'trust-session-start-hook.js'), '// stub\n');
     fs.copyFileSync(path.join(REPO_ROOT, 'runtimes', 'codex', 'setup.sh'), path.join(runtime2CodexDir, 'setup.sh'));
+    fs.copyFileSync(path.join(REPO_ROOT, 'runtimes', 'codex', 'mcp-registration-receipt.js'), path.join(runtime2CodexDir, 'mcp-registration-receipt.js'));
     fs.chmodSync(path.join(runtime2CodexDir, 'setup.sh'), 0o755);
 
     const runFrom = (setupPath) => {

@@ -965,27 +965,121 @@ function runCodexSetup(envOverrides = {}) {
   const setupPath = path.join(repoRoot, 'runtimes', 'codex', 'setup.sh');
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-codex-setup-'));
   const binDir = path.join(tmp, 'bin');
+  const codexHome = path.join(tmp, 'codex-home');
   const codexLog = path.join(tmp, 'codex-args.log');
+  const mcpStatePath = path.join(tmp, 'mcp-state.json');
+  const providerCliStatePath = path.join(tmp, 'provider-codex-state.json');
+  const providerStatePath = path.join(codexHome, 'jarvos-compound-engineering.state.json');
   const configPath = path.join(tmp, 'codex-config.toml');
   fs.mkdirSync(binDir, { recursive: true });
+  fs.mkdirSync(codexHome, { recursive: true, mode: 0o700 });
   fs.writeFileSync(configPath, '', 'utf8');
-  // Fake codex records invocations and pretends jarvos is not registered.
+  // Fake Codex records invocations and persists only a disposable MCP model.
   const fakeCodex = [
-    '#!/usr/bin/env bash',
-    'set -euo pipefail',
-    `printf '%s\\n' "$*" >> ${JSON.stringify(codexLog)}`,
-    'if [ "${1:-}" = "mcp" ] && [ "${2:-}" = "get" ]; then exit 1; fi',
-    'exit 0',
+    '#!/usr/bin/env node',
+    "const fs = require('node:fs');",
+    "const path = require('node:path');",
+    'const args = process.argv.slice(2);',
+    `fs.appendFileSync(${JSON.stringify(codexLog)}, args.join(' ') + '\\n');`,
+    `const statePath = ${JSON.stringify(mcpStatePath)};`,
+    `const providerStatePath = ${JSON.stringify(providerCliStatePath)};`,
+    `if (args[0] === '--version') { process.stdout.write(${JSON.stringify(`codex-cli ${envOverrides.FAKE_CODEX_VERSION || '0.146.0'}\n`)}); process.exit(0); }`,
+    "if (args[0] === 'app-server') {",
+    "  if (!['success', 'success-readd', 'conflict', 'overridden'].includes(process.env.FAKE_CODEX_APP_SERVER_MODE)) process.exit(8);",
+    '  const emit = (value) => process.stdout.write(JSON.stringify(value) + \'\\n\');',
+    "  let input = '';",
+    "  process.stdin.setEncoding('utf8');",
+    "  process.stdin.on('data', (chunk) => {",
+    '    input += chunk; let newline;',
+    "    while ((newline = input.indexOf('\\n')) >= 0) {",
+    "      const line = input.slice(0, newline).trim(); input = input.slice(newline + 1);",
+    "      if (!line) continue;",
+    "      let message; try { message = JSON.parse(line); } catch (_) { continue; }",
+    "      if (message.method === 'initialize') { emit({ id: message.id, result: { ok: true } }); continue; }",
+    "      if (message.method === 'config/read') {",
+    "        const registration = fs.existsSync(statePath) ? JSON.parse(fs.readFileSync(statePath, 'utf8')).transport : null;",
+    "        const config = registration ? { mcp_servers: { jarvos: registration } } : {};",
+    "        emit({ id: message.id, result: { config, origins: {}, layers: [{ name: { type: 'user', file: process.env.CODEX_CONFIG, profile: null }, version: 'fake-version', config }] } });",
+    '        continue;',
+    '      }',
+    "      if (message.method === 'config/batchWrite') {",
+    "        const edit = message.params?.edits?.[0];",
+    "        if (message.params?.filePath !== process.env.CODEX_CONFIG || message.params?.expectedVersion !== 'fake-version' || edit?.keyPath !== 'mcp_servers.jarvos' || edit.value !== null || edit.mergeStrategy !== 'replace') process.exit(9);",
+    "        if (process.env.FAKE_CODEX_APP_SERVER_MODE === 'conflict') {",
+    "          fs.writeFileSync(statePath, JSON.stringify({ name: 'jarvos', transport: { type: 'stdio', command: 'concurrent-replacement', args: [], env: {} } }));",
+    "          emit({ id: message.id, error: { code: -32009, message: 'configuration version conflict' } }); continue;",
+    '        }',
+    "        if (process.env.FAKE_CODEX_APP_SERVER_MODE === 'overridden') { fs.writeFileSync(statePath, JSON.stringify({ name: 'jarvos', transport: { type: 'stdio', command: 'higher-layer-override', args: [], env: {} } })); emit({ id: message.id, result: { status: 'okOverridden', version: 'fake-after', filePath: process.env.CODEX_CONFIG, overriddenMetadata: { keyPath: 'mcp_servers.jarvos' } } }); continue; }",
+    '        try { fs.unlinkSync(statePath); } catch (error) { if (error.code !== "ENOENT") throw error; }',
+    "        if (process.env.FAKE_CODEX_APP_SERVER_MODE === 'success-readd') fs.writeFileSync(statePath, JSON.stringify({ name: 'jarvos', transport: { type: 'stdio', command: 'foreign-readd', args: [], env: {} } }));",
+    "        emit({ id: message.id, result: { status: 'ok', version: 'fake-after', filePath: process.env.CODEX_CONFIG, overriddenMetadata: null } });",
+    '      }',
+    '    }',
+    '  });',
+    '  process.stdin.resume();',
+    '  return;',
+    '}',
+    "if (args[0] === 'mcp' && args[1] === 'list') {",
+    "  if (process.env.FAKE_CODEX_LIST_MODE === 'fail') process.exit(8);",
+    "  if (process.env.FAKE_CODEX_LIST_MODE === 'malformed') { process.stdout.write('{'); process.exit(0); }",
+    "  const entries = fs.existsSync(statePath) ? [JSON.parse(fs.readFileSync(statePath, 'utf8'))] : [];",
+    '  process.stdout.write(JSON.stringify(entries)); process.exit(0);',
+    '}',
+    "if (args[0] === 'mcp' && args[1] === 'get') {",
+    "  if (process.env.FAKE_CODEX_GET_MODE === 'fail') process.exit(9);",
+    "  if (!fs.existsSync(statePath)) process.exit(1);",
+    "  if (process.env.FAKE_CODEX_GET_MALFORMED === '1') { process.stdout.write('{'); process.exit(0); }",
+    "  process.stdout.write(fs.readFileSync(statePath, 'utf8')); process.exit(0);",
+    '}',
+    "if (args[0] === 'mcp' && args[1] === 'remove') {",
+    "  if (process.env.FAKE_CODEX_REMOVE_MODE === 'fail') process.exit(7);",
+    "  if (process.env.FAKE_CODEX_REMOVE_MODE === 'retain') process.exit(0);",
+    '  try { fs.unlinkSync(statePath); } catch (error) { if (error.code !== "ENOENT") throw error; }',
+    '  process.exit(0);',
+    '}',
+    "if (args[0] === 'mcp' && args[1] === 'add') {",
+    "  if (process.env.FAKE_CODEX_ADD_MODE === 'fail-before') process.exit(6);",
+    '  const env = {}; let index = 2;',
+    "  while (args[index] === '--env') { const value = args[index + 1]; const split = value.indexOf('='); env[value.slice(0, split)] = value.slice(split + 1); index += 2; }",
+    "  if (args[index] !== 'jarvos' || args[index + 1] !== '--') process.exit(2);",
+    '  const command = args[index + 2]; const commandArgs = args.slice(index + 3);',
+    "  fs.writeFileSync(statePath, JSON.stringify({ name: 'jarvos', transport: { type: 'stdio', command, args: commandArgs, env } }));",
+    "  if (process.env.FAKE_CODEX_ADD_MODE === 'write-then-fail') process.exit(6);",
+    '  process.exit(0);',
+    '}',
+    "if (args.join(' ') === 'plugin list --json') {",
+    "  const value = fs.existsSync(providerStatePath) ? JSON.parse(fs.readFileSync(providerStatePath, 'utf8')) : { installed: [], marketplaces: [] };",
+    "  process.stdout.write(JSON.stringify({ installed: value.installed || [] })); process.exit(0);",
+    '}',
+    "if (args.join(' ') === 'plugin marketplace list --json') {",
+    "  const value = fs.existsSync(providerStatePath) ? JSON.parse(fs.readFileSync(providerStatePath, 'utf8')) : { installed: [], marketplaces: [] };",
+    "  process.stdout.write(JSON.stringify({ marketplaces: value.marketplaces || [] })); process.exit(0);",
+    '}',
+    "if (args[0] === 'plugin' && args[1] === 'remove') {",
+    "  const value = fs.existsSync(providerStatePath) ? JSON.parse(fs.readFileSync(providerStatePath, 'utf8')) : { installed: [], marketplaces: [] };",
+    "  value.installed = (value.installed || []).filter((entry) => entry.pluginId !== args[2]); fs.writeFileSync(providerStatePath, JSON.stringify(value)); process.exit(0);",
+    '}',
+    "if (args[0] === 'plugin' && args[1] === 'marketplace' && args[2] === 'remove') {",
+    "  const value = fs.existsSync(providerStatePath) ? JSON.parse(fs.readFileSync(providerStatePath, 'utf8')) : { installed: [], marketplaces: [] };",
+    "  value.marketplaces = (value.marketplaces || []).filter((entry) => entry.name !== args[3]); fs.writeFileSync(providerStatePath, JSON.stringify(value)); process.exit(0);",
+    '}',
+    'process.exit(0);',
     '',
   ].join('\n');
-  const fakeCodexPath = path.join(binDir, 'codex');
+  const fakeCodexPath = path.join(binDir, 'selected-codex');
   fs.writeFileSync(fakeCodexPath, fakeCodex, { encoding: 'utf8', mode: 0o755 });
   fs.chmodSync(fakeCodexPath, 0o755);
+  const pathCodex = path.join(binDir, 'codex');
+  fs.writeFileSync(pathCodex, `#!/usr/bin/env bash\nprintf '%s\\n' 'path-codex-was-used' >> ${JSON.stringify(codexLog)}\nexit 99\n`, { encoding: 'utf8', mode: 0o755 });
+  fs.chmodSync(pathCodex, 0o755);
+  if (envOverrides.FAKE_CODEX_INITIAL_JSON) fs.writeFileSync(mcpStatePath, envOverrides.FAKE_CODEX_INITIAL_JSON, 'utf8');
 
   const env = {
     ...process.env,
     PATH: `${binDir}${path.delimiter}${process.env.PATH || ''}`,
+    CODEX_HOME: codexHome,
     CODEX_CONFIG: configPath,
+    JARVOS_CODEX_EXECUTABLE: fakeCodexPath,
     // Public-only setup: clear private host bindings unless the caller sets them.
     JARVOS_CONTROL_PLANE_SERVICE_MODULE: '',
     JARVOS_CONTROL_PLANE_CREDENTIAL_FILE: '',
@@ -1005,21 +1099,60 @@ function runCodexSetup(envOverrides = {}) {
   if (!env.JARVOS_STEWARDSHIP_CODEX_SESSION_MAP_ROOT) delete env.JARVOS_STEWARDSHIP_CODEX_SESSION_MAP_ROOT;
   if (!env.JARVOS_STEWARDSHIP_STABLE_ROOT) delete env.JARVOS_STEWARDSHIP_STABLE_ROOT;
 
-  const result = spawnSync('bash', [setupPath], {
+  const invoke = (overrides = {}) => spawnSync('bash', [setupPath], {
     encoding: 'utf8',
     cwd: repoRoot,
-    env,
+    env: { ...env, ...overrides },
     maxBuffer: 4 * 1024 * 1024,
   });
+  const result = invoke();
   return {
     tmp,
+    codexHome,
     configPath,
     codexLog,
+    fakeCodexPath,
+    mcpStatePath,
+    providerCliStatePath,
+    providerStatePath,
+    receiptPath: path.join(codexHome, 'jarvos-codex-mcp-receipt.json'),
     result,
+    rerun: invoke,
     cleanup() {
       fs.rmSync(tmp, { recursive: true, force: true });
     },
   };
+}
+
+function seedCodexProviderRollback(run) {
+  const revision = 'e36ddb8cbd4dd902d3b6ddd96165a783b0ac4711';
+  const marketplaceRoot = path.join(run.codexHome, 'compound-marketplace');
+  fs.mkdirSync(marketplaceRoot, { recursive: true });
+  fs.writeFileSync(path.join(marketplaceRoot, '.codex-marketplace-install.json'), JSON.stringify({
+    source_type: 'git',
+    source: 'https://github.com/EveryInc/compound-engineering-plugin.git',
+    revision,
+  }), { encoding: 'utf8', mode: 0o600 });
+  fs.writeFileSync(run.providerCliStatePath, JSON.stringify({
+    installed: [{
+      pluginId: 'compound-engineering@compound-engineering-plugin',
+      name: 'compound-engineering',
+      marketplaceName: 'compound-engineering-plugin',
+      version: '3.21.4',
+      enabled: true,
+    }],
+    marketplaces: [{ name: 'compound-engineering-plugin', root: marketplaceRoot }],
+  }), { encoding: 'utf8', mode: 0o600 });
+  fs.writeFileSync(run.providerStatePath, JSON.stringify({
+    schemaVersion: 'jarvos-codex-provider-state/v1',
+    provider: 'compound-engineering',
+    version: '3.21.4',
+    revision,
+    marketplace: 'compound-engineering-plugin',
+    plugin: 'compound-engineering@compound-engineering-plugin',
+    marketplaceAdded: true,
+    pluginAdded: true,
+  }), { encoding: 'utf8', mode: 0o600 });
 }
 
 test('Codex setup succeeds publicly with no control-plane host pair', () => {
@@ -1037,6 +1170,433 @@ test('Codex setup succeeds publicly with no control-plane host pair', () => {
     assert.doesNotMatch(log, /JARVOS_PROJECTS_CONTEXT_CONFIG=/);
     // Real user config must not be touched; only the temp CODEX_CONFIG may change.
     assert.ok(fs.existsSync(run.configPath));
+  } finally {
+    run.cleanup();
+  }
+});
+
+test('Codex setup preserves a present MCP registration when app-server CAS is unavailable', () => {
+  const run = runCodexSetup();
+  try {
+    assert.equal(run.result.status, 0, run.result.stderr || run.result.stdout);
+    const receipt = JSON.parse(fs.readFileSync(run.receiptPath, 'utf8'));
+    assert.equal(receipt.state, 'active');
+    assert.equal(fs.statSync(run.receiptPath).mode & 0o777, 0o600);
+
+    const repeated = run.rerun();
+    assert.equal(repeated.status, 0, repeated.stderr || repeated.stdout);
+    const rolledBack = run.rerun({
+      JARVOS_MANAGED_HARNESS_ROLLBACK: '1',
+      JARVOS_PROJECTS_CONTEXT_CONFIG: '/different-after-setup/projects.json',
+    });
+    assert.notEqual(rolledBack.status, 0);
+    assert.match(rolledBack.stderr, /app-server|preserving|reconciliation/i);
+    assert.equal(fs.existsSync(run.receiptPath), true);
+    assert.equal(fs.existsSync(run.mcpStatePath), true);
+
+    const commands = fs.readFileSync(run.codexLog, 'utf8').trim().split('\n');
+    assert.equal(commands.filter((entry) => entry.startsWith('mcp add ')).length, 1);
+    assert.equal(commands.filter((entry) => entry === 'mcp remove jarvos').length, 0);
+    assert.equal(commands.filter((entry) => entry === 'app-server --listen stdio://').length, 1);
+    assert.equal(commands.includes('path-codex-was-used'), false);
+    assert.doesNotMatch(fs.readFileSync(run.configPath, 'utf8'), /jarvos-session-start-hook\.js|jarvos-session-turn-hook\.js/);
+  } finally {
+    run.cleanup();
+  }
+});
+
+test('Codex MCP rollback uses an exact app-server CAS and clears only its receipt', () => {
+  const run = runCodexSetup({ FAKE_CODEX_APP_SERVER_MODE: 'success' });
+  try {
+    assert.equal(run.result.status, 0, run.result.stderr || run.result.stdout);
+    const result = run.rerun({ JARVOS_MANAGED_HARNESS_ROLLBACK: '1' });
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+    assert.equal(fs.existsSync(run.receiptPath), false);
+    assert.equal(fs.existsSync(run.mcpStatePath), false);
+    const commands = fs.readFileSync(run.codexLog, 'utf8');
+    assert.match(commands, /app-server --listen stdio:\/\//);
+    assert.doesNotMatch(commands, /mcp remove jarvos/);
+    assert.doesNotMatch(fs.readFileSync(run.configPath, 'utf8'), /jarvos-session-start-hook\.js|jarvos-session-turn-hook\.js/);
+  } finally {
+    run.cleanup();
+  }
+});
+
+test('Codex MCP CAS conflict preserves a concurrent replacement and still rolls back other phases', () => {
+  const run = runCodexSetup({ FAKE_CODEX_APP_SERVER_MODE: 'conflict' });
+  try {
+    assert.equal(run.result.status, 0, run.result.stderr || run.result.stdout);
+    seedCodexProviderRollback(run);
+    const result = run.rerun({ JARVOS_MANAGED_HARNESS_ROLLBACK: '1' });
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /CAS conflict|preserving|reconciliation/i);
+    assert.equal(JSON.parse(fs.readFileSync(run.mcpStatePath, 'utf8')).transport.command, 'concurrent-replacement');
+    assert.equal(fs.existsSync(run.receiptPath), true);
+    assert.equal(fs.existsSync(run.providerStatePath), false);
+    assert.deepEqual(JSON.parse(fs.readFileSync(run.providerCliStatePath, 'utf8')), { installed: [], marketplaces: [] });
+    assert.doesNotMatch(fs.readFileSync(run.codexLog, 'utf8'), /mcp remove jarvos/);
+    assert.doesNotMatch(fs.readFileSync(run.configPath, 'utf8'), /jarvos-session-start-hook\.js|jarvos-session-turn-hook\.js/);
+    const commands = fs.readFileSync(run.codexLog, 'utf8');
+    assert.match(commands, /plugin remove compound-engineering@compound-engineering-plugin --json/);
+    assert.match(commands, /plugin marketplace remove compound-engineering-plugin --json/);
+  } finally {
+    run.cleanup();
+  }
+});
+
+test('Codex MCP CAS re-add leaves the new registration without the old receipt', () => {
+  const run = runCodexSetup({ FAKE_CODEX_APP_SERVER_MODE: 'success-readd' });
+  try {
+    assert.equal(run.result.status, 0, run.result.stderr || run.result.stdout);
+    const result = run.rerun({ JARVOS_MANAGED_HARNESS_ROLLBACK: '1' });
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+    assert.equal(fs.existsSync(run.receiptPath), false);
+    assert.equal(JSON.parse(fs.readFileSync(run.mcpStatePath, 'utf8')).transport.command, 'foreign-readd');
+    assert.doesNotMatch(fs.readFileSync(run.codexLog, 'utf8'), /mcp remove jarvos/);
+  } finally {
+    run.cleanup();
+  }
+});
+
+test('Codex MCP CAS clears its receipt when a higher layer overrides the committed user-layer deletion', () => {
+  const run = runCodexSetup({ FAKE_CODEX_APP_SERVER_MODE: 'overridden' });
+  try {
+    assert.equal(run.result.status, 0, run.result.stderr || run.result.stdout);
+    const result = run.rerun({ JARVOS_MANAGED_HARNESS_ROLLBACK: '1' });
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+    assert.equal(fs.existsSync(run.receiptPath), false);
+    assert.equal(JSON.parse(fs.readFileSync(run.mcpStatePath, 'utf8')).transport.command, 'higher-layer-override');
+    assert.doesNotMatch(fs.readFileSync(run.codexLog, 'utf8'), /mcp remove jarvos/);
+  } finally {
+    run.cleanup();
+  }
+});
+
+test('Codex MCP rollback clears an active receipt when its registration is already absent', () => {
+  const run = runCodexSetup();
+  try {
+    assert.equal(run.result.status, 0, run.result.stderr || run.result.stdout);
+    fs.unlinkSync(run.mcpStatePath);
+    const result = run.rerun({ JARVOS_MANAGED_HARNESS_ROLLBACK: '1' });
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+    assert.equal(fs.existsSync(run.receiptPath), false);
+    assert.equal(fs.existsSync(run.mcpStatePath), false);
+    const commands = fs.readFileSync(run.codexLog, 'utf8');
+    assert.doesNotMatch(commands, /mcp remove jarvos/);
+    assert.doesNotMatch(commands, /app-server --listen stdio:\/\//);
+  } finally {
+    run.cleanup();
+  }
+});
+
+test('Codex setup preserves state when MCP inspection is inconclusive', () => {
+  const run = runCodexSetup({
+    FAKE_CODEX_GET_MODE: 'fail',
+    FAKE_CODEX_LIST_MODE: 'fail',
+  });
+  try {
+    assert.notEqual(run.result.status, 0);
+    assert.match(run.result.stderr, /inspect|preserving/i);
+    assert.equal(fs.existsSync(run.receiptPath), false);
+    const commands = fs.readFileSync(run.codexLog, 'utf8');
+    assert.doesNotMatch(commands, /mcp add |mcp remove /);
+  } finally {
+    run.cleanup();
+  }
+});
+
+test('Codex setup preserves a pre-existing or later-changed jarvOS MCP registration', () => {
+  const foreign = runCodexSetup({
+    FAKE_CODEX_INITIAL_JSON: JSON.stringify({
+      name: 'jarvos',
+      transport: { type: 'stdio', command: 'other-command', args: [], env: {} },
+    }),
+  });
+  try {
+    assert.notEqual(foreign.result.status, 0);
+    assert.match(foreign.result.stderr, /did not create it|preserving/i);
+    assert.equal(fs.existsSync(foreign.receiptPath), false);
+    const log = fs.readFileSync(foreign.codexLog, 'utf8');
+    assert.doesNotMatch(log, /mcp (?:add|remove) /);
+  } finally {
+    foreign.cleanup();
+  }
+
+  const changed = runCodexSetup();
+  try {
+    assert.equal(changed.result.status, 0, changed.result.stderr || changed.result.stdout);
+    const value = JSON.parse(fs.readFileSync(changed.mcpStatePath, 'utf8'));
+    value.transport.command = 'locally-changed-command';
+    fs.writeFileSync(changed.mcpStatePath, JSON.stringify(value));
+    const rolledBack = changed.rerun({ JARVOS_MANAGED_HARNESS_ROLLBACK: '1' });
+    assert.notEqual(rolledBack.status, 0);
+    assert.match(rolledBack.stderr, /changed after setup|preserving/i);
+    assert.equal(fs.existsSync(changed.receiptPath), true);
+    assert.equal(fs.existsSync(changed.mcpStatePath), true);
+    assert.doesNotMatch(fs.readFileSync(changed.codexLog, 'utf8'), /mcp remove jarvos/);
+  } finally {
+    changed.cleanup();
+  }
+
+  const behaviorChanged = runCodexSetup();
+  try {
+    assert.equal(behaviorChanged.result.status, 0, behaviorChanged.result.stderr || behaviorChanged.result.stdout);
+    const value = JSON.parse(fs.readFileSync(behaviorChanged.mcpStatePath, 'utf8'));
+    value.enabled = false;
+    fs.writeFileSync(behaviorChanged.mcpStatePath, JSON.stringify(value));
+    const rolledBack = behaviorChanged.rerun({ JARVOS_MANAGED_HARNESS_ROLLBACK: '1' });
+    assert.notEqual(rolledBack.status, 0);
+    assert.equal(fs.existsSync(behaviorChanged.receiptPath), true);
+    assert.doesNotMatch(fs.readFileSync(behaviorChanged.codexLog, 'utf8'), /mcp remove jarvos/);
+  } finally {
+    behaviorChanged.cleanup();
+  }
+});
+
+test('Codex MCP rollback failures do not block hook or provider rollback', () => {
+  const cases = [
+    {
+      label: 'corrupt receipt',
+      prepare(run) {
+        fs.writeFileSync(run.receiptPath, '{}\n', { encoding: 'utf8', mode: 0o600 });
+      },
+      overrides: {},
+    },
+    {
+      label: 'inconclusive inspection',
+      prepare() {},
+      overrides: { FAKE_CODEX_GET_MODE: 'fail', FAKE_CODEX_LIST_MODE: 'fail' },
+    },
+    {
+      label: 'changed registration',
+      prepare(run) {
+        const value = JSON.parse(fs.readFileSync(run.mcpStatePath, 'utf8'));
+        value.transport.command = 'locally-changed-command';
+        fs.writeFileSync(run.mcpStatePath, JSON.stringify(value));
+      },
+      overrides: {},
+    },
+    {
+      label: 'present matching registration',
+      prepare() {},
+      overrides: {},
+    },
+  ];
+
+  for (const scenario of cases) {
+    const run = runCodexSetup();
+    try {
+      assert.equal(run.result.status, 0, `${scenario.label}: ${run.result.stderr || run.result.stdout}`);
+      seedCodexProviderRollback(run);
+      scenario.prepare(run);
+      const result = run.rerun({ JARVOS_MANAGED_HARNESS_ROLLBACK: '1', ...scenario.overrides });
+      assert.notEqual(result.status, 0, `${scenario.label} should report unresolved MCP rollback`);
+      assert.equal(fs.existsSync(run.receiptPath), true, `${scenario.label} should preserve its receipt`);
+      assert.equal(fs.existsSync(run.mcpStatePath), true, `${scenario.label} should preserve its registration`);
+      assert.equal(fs.existsSync(run.providerStatePath), false, `${scenario.label} should still roll back provider state`);
+      assert.deepEqual(JSON.parse(fs.readFileSync(run.providerCliStatePath, 'utf8')), { installed: [], marketplaces: [] });
+      assert.doesNotMatch(fs.readFileSync(run.codexLog, 'utf8'), /mcp remove jarvos/);
+      assert.doesNotMatch(fs.readFileSync(run.configPath, 'utf8'), /jarvos-session-start-hook\.js|jarvos-session-turn-hook\.js/);
+      const commands = fs.readFileSync(run.codexLog, 'utf8');
+      assert.match(commands, /plugin remove compound-engineering@compound-engineering-plugin --json/);
+      assert.match(commands, /plugin marketplace remove compound-engineering-plugin --json/);
+    } finally {
+      run.cleanup();
+    }
+  }
+});
+
+test('Codex hook rollback failure does not block MCP or provider rollback', () => {
+  const run = runCodexSetup({ FAKE_CODEX_APP_SERVER_MODE: 'success' });
+  try {
+    assert.equal(run.result.status, 0, run.result.stderr || run.result.stdout);
+    seedCodexProviderRollback(run);
+    fs.writeFileSync(run.configPath, '[hooks]\nSessionStart = "not-an-array"\n', 'utf8');
+
+    const result = run.rerun({ JARVOS_MANAGED_HARNESS_ROLLBACK: '1' });
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /hook rollback did not complete|hooks=1/i);
+    assert.equal(fs.existsSync(run.receiptPath), false, 'MCP receipt should still be cleared');
+    assert.equal(fs.existsSync(run.mcpStatePath), false, 'MCP registration should still be removed');
+    assert.equal(fs.existsSync(run.providerStatePath), false, 'provider state should still be rolled back');
+    assert.deepEqual(JSON.parse(fs.readFileSync(run.providerCliStatePath, 'utf8')), { installed: [], marketplaces: [] });
+    const commands = fs.readFileSync(run.codexLog, 'utf8');
+    assert.doesNotMatch(commands, /mcp remove jarvos/);
+    assert.match(commands, /plugin remove compound-engineering@compound-engineering-plugin --json/);
+    assert.match(commands, /plugin marketplace remove compound-engineering-plugin --json/);
+  } finally {
+    run.cleanup();
+  }
+});
+
+test('Codex rollback ignores stale forward-install bindings', () => {
+  const run = runCodexSetup({ FAKE_CODEX_APP_SERVER_MODE: 'success' });
+  try {
+    assert.equal(run.result.status, 0, run.result.stderr || run.result.stdout);
+    seedCodexProviderRollback(run);
+    const result = run.rerun({
+      JARVOS_MANAGED_HARNESS_ROLLBACK: '1',
+      JARVOS_MCP_STABLE_ENTRYPOINT: 'stale-relative-entrypoint',
+      JARVOS_CONTROL_PLANE_SERVICE_MODULE: 'stale-relative-service',
+      JARVOS_WORK_ACTION_SERVICE_MODULE: 'stale-relative-work-service',
+    });
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+    assert.equal(fs.existsSync(run.receiptPath), false);
+    assert.equal(fs.existsSync(run.mcpStatePath), false);
+    assert.equal(fs.existsSync(run.providerStatePath), false);
+    assert.doesNotMatch(fs.readFileSync(run.configPath, 'utf8'), /jarvos-session-start-hook\.js|jarvos-session-turn-hook\.js/);
+  } finally {
+    run.cleanup();
+  }
+});
+
+test('Codex rollback without its CLI still performs independent hook cleanup', () => {
+  const run = runCodexSetup();
+  try {
+    assert.equal(run.result.status, 0, run.result.stderr || run.result.stdout);
+    const result = run.rerun({
+      JARVOS_MANAGED_HARNESS_ROLLBACK: '1',
+      JARVOS_CODEX_EXECUTABLE: path.join(run.tmp, 'missing-codex'),
+    });
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /continuing rollback phases|mcp=1/i);
+    assert.equal(fs.existsSync(run.receiptPath), true, 'MCP receipt must be preserved without the CLI');
+    assert.equal(fs.existsSync(run.mcpStatePath), true, 'MCP registration must be preserved without the CLI');
+    assert.doesNotMatch(fs.readFileSync(run.configPath, 'utf8'), /jarvos-session-start-hook\.js|jarvos-session-turn-hook\.js/);
+  } finally {
+    run.cleanup();
+  }
+});
+
+test('Codex setup reconciles bounded add outcomes without broad ownership claims', () => {
+  const beforeWrite = runCodexSetup({ FAKE_CODEX_ADD_MODE: 'fail-before' });
+  try {
+    assert.notEqual(beforeWrite.result.status, 0);
+    assert.equal(JSON.parse(fs.readFileSync(beforeWrite.receiptPath, 'utf8')).state, 'pending');
+    assert.equal(fs.existsSync(beforeWrite.mcpStatePath), false);
+    const rolledBack = beforeWrite.rerun({ JARVOS_MANAGED_HARNESS_ROLLBACK: '1' });
+    assert.equal(rolledBack.status, 0, rolledBack.stderr || rolledBack.stdout);
+    assert.equal(fs.existsSync(beforeWrite.receiptPath), false);
+    assert.doesNotMatch(fs.readFileSync(beforeWrite.codexLog, 'utf8'), /mcp remove jarvos/);
+  } finally {
+    beforeWrite.cleanup();
+  }
+
+  const afterWrite = runCodexSetup({ FAKE_CODEX_ADD_MODE: 'write-then-fail' });
+  try {
+    assert.equal(afterWrite.result.status, 0, afterWrite.result.stderr || afterWrite.result.stdout);
+    assert.equal(JSON.parse(fs.readFileSync(afterWrite.receiptPath, 'utf8')).state, 'active');
+  } finally {
+    afterWrite.cleanup();
+  }
+});
+
+test('Codex MCP rollback retains its receipt when CAS cannot be confirmed', () => {
+  const failed = runCodexSetup();
+  try {
+    assert.equal(failed.result.status, 0, failed.result.stderr || failed.result.stdout);
+    const result = failed.rerun({ JARVOS_MANAGED_HARNESS_ROLLBACK: '1' });
+    assert.notEqual(result.status, 0);
+    assert.equal(fs.existsSync(failed.receiptPath), true);
+    assert.equal(fs.existsSync(failed.mcpStatePath), true);
+    assert.doesNotMatch(fs.readFileSync(failed.codexLog, 'utf8'), /mcp remove jarvos/);
+  } finally {
+    failed.cleanup();
+  }
+
+  const uncertain = runCodexSetup();
+  try {
+    assert.equal(uncertain.result.status, 0, uncertain.result.stderr || uncertain.result.stdout);
+    const result = uncertain.rerun({ JARVOS_MANAGED_HARNESS_ROLLBACK: '1', FAKE_CODEX_APP_SERVER_MODE: 'conflict' });
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /CAS conflict|preserving|reconciliation/i);
+    assert.equal(fs.existsSync(uncertain.receiptPath), true);
+    assert.doesNotMatch(fs.readFileSync(uncertain.codexLog, 'utf8'), /mcp remove jarvos/);
+  } finally {
+    uncertain.cleanup();
+  }
+});
+
+test('Codex MCP receipt rejects loose modes, invalid content, and symlinks', () => {
+  const receiptApi = require(path.join(__dirname, '..', '..', '..', 'runtimes', 'codex', 'mcp-registration-receipt.js'));
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-codex-receipt-'));
+  const codexHome = path.join(tmp, 'codex-home');
+  const receiptPath = path.join(codexHome, 'jarvos-codex-mcp-receipt.json');
+  fs.mkdirSync(codexHome, { recursive: true, mode: 0o700 });
+  const fingerprint = receiptApi.fingerprintRegistration({ command: 'node', args: ['server.js'], env: {} });
+  try {
+    const behaviorChanges = [
+      { command: 'node', args: ['server.js'], env: {}, enabled: false },
+      { command: 'node', args: ['server.js'], env: {}, env_vars: ['PASSTHROUGH'] },
+      { command: 'node', args: ['server.js'], env: {}, startup_timeout_sec: 5 },
+      { command: 'node', args: ['server.js'], env: {}, tool_timeout_sec: 7 },
+      { command: 'node', args: ['server.js'], env: {}, enabled_tools: ['one'] },
+      { command: 'node', args: ['server.js'], env: {}, disabled_tools: ['two'] },
+    ];
+    for (const changed of behaviorChanges) {
+      assert.notEqual(receiptApi.fingerprintRegistration(changed), fingerprint);
+    }
+
+    receiptApi.claimReceipt(receiptPath, codexHome, fingerprint);
+    fs.chmodSync(receiptPath, 0o644);
+    assert.throws(() => receiptApi.readReceipt(receiptPath, codexHome), /mode 0600/);
+
+    fs.chmodSync(receiptPath, 0o600);
+    fs.writeFileSync(receiptPath, '{}\n', { mode: 0o600 });
+    assert.throws(() => receiptApi.readReceipt(receiptPath, codexHome), /unsupported shape|recognized/);
+
+    const target = path.join(codexHome, 'receipt-target.json');
+    fs.renameSync(receiptPath, target);
+    fs.symlinkSync(target, receiptPath);
+    assert.throws(() => receiptApi.readReceipt(receiptPath, codexHome), /regular file/);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('managed Codex provider version mismatch stops before profile mutation', () => {
+  const run = runCodexSetup({
+    JARVOS_CODEX_PROVIDER_MODE: 'new-managed',
+    FAKE_CODEX_VERSION: '0.145.0',
+  });
+  try {
+    assert.notEqual(run.result.status, 0);
+    assert.match(run.result.stderr, /not covered|conformance/i);
+    assert.equal(fs.readFileSync(run.configPath, 'utf8'), '');
+    assert.equal(fs.existsSync(run.receiptPath), false);
+    assert.equal(fs.existsSync(run.mcpStatePath), false);
+    const log = fs.readFileSync(run.codexLog, 'utf8');
+    assert.match(log, /^--version\n$/);
+    assert.doesNotMatch(log, /mcp |plugin /);
+
+    const rollback = run.rerun({ JARVOS_MANAGED_HARNESS_ROLLBACK: '1' });
+    assert.equal(rollback.status, 0, rollback.stderr || rollback.stdout);
+  } finally {
+    run.cleanup();
+  }
+});
+
+test('managed Codex provider preflight accepts the exact reviewed CLI version without writes', () => {
+  const run = runCodexSetup();
+  try {
+    assert.equal(run.result.status, 0, run.result.stderr || run.result.stdout);
+    const manager = path.join(__dirname, '..', '..', '..', 'runtimes', 'codex', 'compound-engineering-activation.js');
+    const before = fs.readdirSync(run.codexHome).sort();
+    const result = spawnSync(process.execPath, [manager], {
+      cwd: path.join(__dirname, '..', '..', '..'),
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        HOME: run.tmp,
+        CODEX_HOME: run.codexHome,
+        JARVOS_CODEX_EXECUTABLE: run.fakeCodexPath,
+        JARVOS_CODEX_PROVIDER_MODE: 'new-managed',
+        JARVOS_CODEX_PROVIDER_PREFLIGHT: '1',
+      },
+    });
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+    assert.match(result.stdout, /0\.146\.0|no provider changes/i);
+    assert.deepEqual(fs.readdirSync(run.codexHome).sort(), before);
   } finally {
     run.cleanup();
   }

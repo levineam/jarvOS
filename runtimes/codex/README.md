@@ -97,6 +97,10 @@ state, and records the provider-owned additions under the selected
 `CODEX_HOME`. It refuses to replace a stale, disabled, locally changed, or
 unverifiable installation. `existing` (the default) and `disabled` modes leave
 the profile untouched and jarvOS uses native fallback when CE is unavailable.
+Managed activation also requires the running Codex CLI version to exactly match
+the version recorded by the reviewed conformance receipt. Setup performs this
+check before writing the selected profile, and the provider manager repeats it
+immediately before activation.
 
 To remove only additions made by jarvOS, use the same profile and explicit
 rollback flag:
@@ -108,6 +112,26 @@ JARVOS_MANAGED_HARNESS_ROLLBACK=1 ./runtimes/codex/setup.sh
 Rollback preserves the marketplace when another plugin now uses it and refuses
 to remove provider state that changed after jarvOS installed it. Restart Codex
 after activation or rollback before relying on the new profile state.
+
+Codex MCP setup follows the same ownership boundary. A mode-`0600` receipt in
+the selected `CODEX_HOME` records only a normalized fingerprint of the jarvOS
+registration created by setup. Rollback never invokes name-only
+`codex mcp remove`. For a present matching registration it can use an atomic
+Codex app-server `config/batchWrite` guarded by the exact user-layer
+`expectedVersion`; the receipt is cleared only after app-server confirms the
+atomic edit succeeded. Both `ok` and `okOverridden` are successful writes: the
+latter means the jarvOS-owned user-layer entry was removed but a higher-priority
+layer still supplies the effective value, which rollback preserves. If
+app-server CAS is unavailable, the layer or registration changed, or the write
+cannot be confirmed, the registration and receipt are preserved for manual
+reconciliation and rollback exits nonzero. An already absent registration
+clears a valid receipt. Rollback ignores stale forward-install bindings that it
+does not need. Missing subsystem prerequisites are reported after every
+independent hook, MCP, and Compound Engineering provider cleanup that can still
+run; one phase does not short-circuit the others.
+This receipt covers MCP ownership only. Hook trust and feature-setting
+restoration are separate profile concerns and are not claimed as transactional
+by this mechanism.
 
 ### Optional authenticated control-plane host
 
