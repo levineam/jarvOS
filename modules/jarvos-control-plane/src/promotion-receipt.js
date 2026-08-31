@@ -64,6 +64,14 @@ function isLogicalRef(value) {
     && !value.startsWith('file:');
 }
 
+function daysInMonth(year, month) {
+  if (month === 2) {
+    const leap = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+    return leap ? 29 : 28;
+  }
+  return [4, 6, 9, 11].includes(month) ? 30 : 31;
+}
+
 function isRealUtcInstant(value) {
   if (typeof value !== 'string') return false;
   const match = UTC_INSTANT_PATTERN.exec(value);
@@ -76,7 +84,7 @@ function isRealUtcInstant(value) {
   const minute = Number(minuteText);
   const second = Number(secondText);
   if (month < 1 || month > 12 || day < 1 || hour > 23 || minute > 59 || second > 59) return false;
-  if (day > new Date(Date.UTC(year, month, 0)).getUTCDate()) return false;
+  if (day > daysInMonth(year, month)) return false;
   return !Number.isNaN(Date.parse(value));
 }
 

@@ -149,6 +149,9 @@ test('timestamps must be real ISO UTC instants', () => {
     '2026-02-30T00:00:00Z',
     '2026-08-31T24:00:00Z',
   ]) assert.ok(contract.validatePromotionReceipt(makeReceipt({ recordedAt })).length > 0, recordedAt);
+  assert.deepEqual(contract.validatePromotionReceipt(makeReceipt({
+    recordedAt: '0000-02-29T00:00:00Z',
+  })), []);
 });
 
 test('non-object input fails closed and assertion throws', () => {

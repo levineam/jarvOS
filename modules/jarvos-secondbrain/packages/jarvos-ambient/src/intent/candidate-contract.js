@@ -74,6 +74,14 @@ function isIdentityOfKind(value, kind) {
   return IDENTITY_SEGMENT_PATTERN.test(namespace) && IDENTITY_SEGMENT_PATTERN.test(opaque);
 }
 
+function daysInMonth(year, month) {
+  if (month === 2) {
+    const leap = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+    return leap ? 29 : 28;
+  }
+  return [4, 6, 9, 11].includes(month) ? 30 : 31;
+}
+
 function isoInstantMs(value) {
   if (typeof value !== 'string') return null;
   const match = ISO_INSTANT_PATTERN.exec(value);
@@ -87,9 +95,12 @@ function isoInstantMs(value) {
   const minute = Number(minuteText);
   const second = Number(secondText);
   if (month < 1 || month > 12 || day < 1 || hour > 23 || minute > 59 || second > 59) return null;
-  const daysInMonth = new Date(Date.UTC(year, month, 0)).getUTCDate();
-  if (day > daysInMonth) return null;
-  if (offsetSign && (Number(offsetHourText) > 23 || Number(offsetMinuteText) > 59)) return null;
+  if (day > daysInMonth(year, month)) return null;
+  if (offsetSign) {
+    const offsetHour = Number(offsetHourText);
+    const offsetMinute = Number(offsetMinuteText);
+    if (offsetHour > 14 || offsetMinute > 59 || (offsetHour === 14 && offsetMinute !== 0)) return null;
+  }
   const ms = Date.parse(value);
   return Number.isNaN(ms) ? null : ms;
 }

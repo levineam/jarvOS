@@ -145,6 +145,12 @@ test('timestamps must be real ISO instants with expiry after creation', () => {
   assert.ok(contract.validateCandidate(makeCandidate({
     createdAt: '2026-09-30T12:00:00Z', expiresAt: '2026-08-31T12:00:00Z',
   })).length > 0);
+  assert.deepEqual(contract.validateCandidate(makeCandidate({
+    createdAt: '0000-02-29T00:00:00Z', expiresAt: '0000-03-01T00:00:00Z',
+  })), []);
+  for (const createdAt of ['2026-08-31T12:00:00+14:01', '2026-08-31T12:00:00-14:01', '2026-08-31T12:00:00+23:59']) {
+    assert.ok(contract.validateCandidate(makeCandidate({ createdAt })).length > 0, createdAt);
+  }
 });
 
 test('non-object input fails closed and assertion throws on invalid input', () => {
