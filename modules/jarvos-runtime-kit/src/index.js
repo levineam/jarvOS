@@ -1057,8 +1057,17 @@ function validateManifest(manifest) {
     }
   }
 
-  if (manifest.configWrites && !manifest.configWrites.backupBeforeWrite) {
-    add(errors, 'configWrites.backupBeforeWrite must be true when configWrites is declared');
+  if (manifest.configWrites
+    && manifest.configWrites.backupBeforeWrite !== true
+    && manifest.configWrites.atomicExpectedVersionWrite !== true) {
+    add(errors, 'configWrites must declare backupBeforeWrite or atomicExpectedVersionWrite');
+  }
+  if (manifest.configWrites?.atomicExpectedVersionWrite === true
+    && (typeof manifest.configWrites.transactionScript !== 'string'
+      || !manifest.configWrites.transactionScript
+      || path.isAbsolute(manifest.configWrites.transactionScript)
+      || manifest.configWrites.transactionScript.split(/[\\/]+/).includes('..'))) {
+    add(errors, 'configWrites.transactionScript must be a safe relative path for atomicExpectedVersionWrite');
   }
   const managedCompound = manifest.managedProviders?.['compound-engineering'];
   if (managedCompound !== undefined) {
@@ -1224,6 +1233,19 @@ function checkRuntime(manifestPath, options = {}) {
   if (manifest.configWrites?.backupBeforeWrite) {
     if (!sourceContains(setupScript, [/backup/i, /copyFileSync/, /\bcp\s+/])) {
       add(errors, 'setup script declares config writes but no backup behavior was detected');
+    }
+  }
+  if (manifest.configWrites?.atomicExpectedVersionWrite) {
+    const transactionScript = path.resolve(path.dirname(manifestPath), manifest.configWrites.transactionScript);
+    const transactionRelative = path.relative(path.dirname(manifestPath), transactionScript);
+    if (transactionRelative.startsWith(`..${path.sep}`) || path.isAbsolute(transactionRelative) || !fs.existsSync(transactionScript)) {
+      add(errors, 'atomic config transaction script is missing or outside the runtime');
+    } else {
+      const transactionSource = fs.readFileSync(transactionScript, 'utf8');
+      if (![/config\/read/, /includeLayers/, /config\/batchWrite/, /expectedVersion/]
+        .every((pattern) => pattern.test(transactionSource))) {
+        add(errors, 'atomic config transaction must use a layered expectedVersion batch write');
+      }
     }
   }
 

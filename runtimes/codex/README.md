@@ -71,9 +71,10 @@ From the jarvOS repo root:
 
 The script registers a local stdio MCP server named `jarvos`, enables a Codex
 `SessionStart` hook in `~/.codex/config.toml` for both fresh and resumed
-sessions, backs up the config before any
-write, and persists the hook's current trusted hash through Codex's app-server
-config path so the hook is runnable in Codex app Local sessions.
+sessions, and persists the hook's current trusted hash through Codex's
+app-server config path so the hook is runnable in Codex app Local sessions.
+Hook and feature changes are semantic app-server edits; setup does not rewrite
+or back up the whole TOML file.
 
 On a public or minimal install with no private host configured, that command is
 enough: setup registers the shared MCP server without control-plane host
@@ -129,9 +130,31 @@ clears a valid receipt. Rollback ignores stale forward-install bindings that it
 does not need. Missing subsystem prerequisites are reported after every
 independent hook, MCP, and Compound Engineering provider cleanup that can still
 run; one phase does not short-circuit the others.
-This receipt covers MCP ownership only. Hook trust and feature-setting
-restoration are separate profile concerns and are not claimed as transactional
-by this mechanism.
+
+Hook and feature rollback has its own mode-`0600` ownership receipt, bound to
+the selected profile and canonical `CODEX_CONFIG`. A `config/read` with
+`includeLayers` selects that exact user layer and snapshots presence plus value
+for only `hooks.SessionStart`, `hooks.UserPromptSubmit`, `features.hooks`,
+`features.codex_hooks`, and the three jarvOS stewardship keys below
+`shell_environment_policy.set`. The receipt also records whether the containing
+`hooks`, `features`, `shell_environment_policy`, and nested `set` tables existed
+before setup. Setup or rollback then submits one
+`config/batchWrite` containing `replace`/`null` edits, the canonical
+`filePath`, and that layer's exact `expectedVersion`. Both `ok` and
+`okOverridden` prove the user-layer write; a higher layer remains untouched.
+Unrelated keys and tables can change concurrently without becoming jarvOS
+owned. A conflict, unavailable app-server, ambiguous layer, drift in an owned
+key, or missing/malformed receipt fails closed and preserves the receipt for
+recovery while independent MCP and provider rollback continue. Pending and
+active receipt states distinguish crashes before/after the atomic write. A
+legacy `hooks.json` is never deleted implicitly; setup stops for an explicit
+semantic migration. Codex hook trust is separately managed by Codex and is not
+restored by this receipt.
+
+On rollback, an originally absent parent table is removed in that same atomic
+batch only if the exact current user-layer parent becomes empty after restoring
+the owned keys. A concurrently added sibling keeps its parent and is preserved;
+the `expectedVersion` guard rejects a race between that check and the write.
 
 ### Optional authenticated control-plane host
 
@@ -198,7 +221,8 @@ validated, bounded pending judgment and lets the in-session agent run the
 listed bridge answer command without locating private runtime state. The
 private bridge resolves its context by the current `CODEX_THREAD_ID`; setup
 never persists a session-specific context path. Setup does not print either
-value, and rollback removes only these two entries.
+value, and rollback restores the exact prior presence/value of those two keys
+and the retired context-file key without changing other policy settings.
 
 ## Available Tools
 

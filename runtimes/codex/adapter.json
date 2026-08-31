@@ -216,7 +216,8 @@
     }
   },
   "configWrites": {
-    "backupBeforeWrite": true,
+    "atomicExpectedVersionWrite": true,
+    "transactionScript": "hook-feature-transaction.js",
     "paths": [
       "~/.codex/config.toml"
     ]
