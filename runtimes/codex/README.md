@@ -129,9 +129,18 @@ clears a valid receipt. Rollback ignores stale forward-install bindings that it
 does not need. Missing subsystem prerequisites are reported after every
 independent hook, MCP, and Compound Engineering provider cleanup that can still
 run; one phase does not short-circuit the others.
-This receipt covers MCP ownership only. Hook trust and feature-setting
-restoration are separate profile concerns and are not claimed as transactional
-by this mechanism.
+
+Hook and feature rollback has its own mode-`0600`, profile-scoped ownership
+receipt. Before setup changes jarvOS lifecycle configuration, it snapshots only
+the affected `[hooks]`, `[features]`, `[shell_environment_policy]`, and
+`[shell_environment_policy.set]` tables. Rollback restores those exact
+pre-setup tables only when their complete post-setup snapshot still matches;
+unrelated tables can change concurrently without blocking restoration. A
+missing, malformed, or stale receipt (or detected jarvOS hook state from an
+older unreceipted install) leaves that state untouched and reports a nonzero
+hook phase while MCP and provider rollback continue independently. If setup
+failed before changing hooks, a receipt-free rollback is a no-op. Codex hook
+trust is separately managed by Codex and is not restored by this receipt.
 
 ### Optional authenticated control-plane host
 

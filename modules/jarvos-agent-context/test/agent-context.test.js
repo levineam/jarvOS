@@ -973,7 +973,7 @@ function runCodexSetup(envOverrides = {}) {
   const configPath = path.join(tmp, 'codex-config.toml');
   fs.mkdirSync(binDir, { recursive: true });
   fs.mkdirSync(codexHome, { recursive: true, mode: 0o700 });
-  fs.writeFileSync(configPath, '', 'utf8');
+  fs.writeFileSync(configPath, envOverrides.FAKE_CODEX_CONFIG_INITIAL || '', 'utf8');
   // Fake Codex records invocations and persists only a disposable MCP model.
   const fakeCodex = [
     '#!/usr/bin/env node',
@@ -1116,6 +1116,7 @@ function runCodexSetup(envOverrides = {}) {
     providerCliStatePath,
     providerStatePath,
     receiptPath: path.join(codexHome, 'jarvos-codex-mcp-receipt.json'),
+    hookFeatureReceiptPath: path.join(codexHome, 'jarvos-codex-hook-feature-receipt.json'),
     result,
     rerun: invoke,
     cleanup() {
@@ -1424,6 +1425,94 @@ test('Codex hook rollback failure does not block MCP or provider rollback', () =
     assert.doesNotMatch(commands, /mcp remove jarvos/);
     assert.match(commands, /plugin remove compound-engineering@compound-engineering-plugin --json/);
     assert.match(commands, /plugin marketplace remove compound-engineering-plugin --json/);
+  } finally {
+    run.cleanup();
+  }
+});
+
+test('Codex hook-feature rollback restores the exact pre-setup sections without empty tables', () => {
+  const initialConfig = [
+    '[features]',
+    'hooks = false',
+    'codex_hooks = true',
+    'unrelated = true',
+    '',
+    '[hooks]',
+    'SessionStart = [{ hooks = [{ type = "command", command = "user-session-start" }] }]',
+    '',
+  ].join('\n');
+  const run = runCodexSetup({
+    FAKE_CODEX_APP_SERVER_MODE: 'success',
+    FAKE_CODEX_CONFIG_INITIAL: initialConfig,
+  });
+  try {
+    assert.equal(run.result.status, 0, run.result.stderr || run.result.stdout);
+    assert.equal(fs.statSync(run.hookFeatureReceiptPath).mode & 0o777, 0o600);
+    const configured = fs.readFileSync(run.configPath, 'utf8');
+    assert.match(configured, /hooks = true/);
+    assert.doesNotMatch(configured, /codex_hooks = true/);
+    assert.match(configured, /jarvos-session-start-hook\.js/);
+
+    const result = run.rerun({ JARVOS_MANAGED_HARNESS_ROLLBACK: '1' });
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+    assert.equal(fs.existsSync(run.hookFeatureReceiptPath), false);
+    assert.equal(fs.readFileSync(run.configPath, 'utf8'), initialConfig);
+    assert.doesNotMatch(fs.readFileSync(run.configPath, 'utf8'), /\[hooks\]\s*\n\s*\n/);
+  } finally {
+    run.cleanup();
+  }
+});
+
+test('Codex hook-feature rollback preserves changed managed sections but still completes MCP cleanup', () => {
+  const run = runCodexSetup({ FAKE_CODEX_APP_SERVER_MODE: 'success' });
+  try {
+    assert.equal(run.result.status, 0, run.result.stderr || run.result.stdout);
+    const changed = fs.readFileSync(run.configPath, 'utf8').replace('hooks = true', 'hooks = false');
+    fs.writeFileSync(run.configPath, changed, 'utf8');
+
+    const result = run.rerun({ JARVOS_MANAGED_HARNESS_ROLLBACK: '1' });
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /hook or feature state changed|hooks=1/i);
+    assert.equal(fs.existsSync(run.hookFeatureReceiptPath), true);
+    assert.equal(fs.readFileSync(run.configPath, 'utf8'), changed);
+    assert.equal(fs.existsSync(run.receiptPath), false, 'independent MCP rollback should complete');
+    assert.equal(fs.existsSync(run.mcpStatePath), false);
+  } finally {
+    run.cleanup();
+  }
+});
+
+test('Codex hook-feature rollback fails closed for unreceipted jarvOS hook state', () => {
+  const run = runCodexSetup({ FAKE_CODEX_APP_SERVER_MODE: 'success' });
+  try {
+    assert.equal(run.result.status, 0, run.result.stderr || run.result.stdout);
+    const configured = fs.readFileSync(run.configPath, 'utf8');
+    fs.unlinkSync(run.hookFeatureReceiptPath);
+
+    const result = run.rerun({ JARVOS_MANAGED_HARNESS_ROLLBACK: '1' });
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /no jarvOS-owned hook-feature receipt.*preserving|hooks=1/i);
+    assert.equal(fs.readFileSync(run.configPath, 'utf8'), configured);
+    assert.equal(fs.existsSync(run.receiptPath), false, 'independent MCP rollback should complete');
+    assert.equal(fs.existsSync(run.mcpStatePath), false);
+  } finally {
+    run.cleanup();
+  }
+});
+
+test('Codex hook-feature rollback preserves unrelated concurrent configuration', () => {
+  const run = runCodexSetup({ FAKE_CODEX_APP_SERVER_MODE: 'success' });
+  try {
+    assert.equal(run.result.status, 0, run.result.stderr || run.result.stdout);
+    fs.appendFileSync(run.configPath, '\n[unrelated]\nvalue = "kept"\n');
+
+    const result = run.rerun({ JARVOS_MANAGED_HARNESS_ROLLBACK: '1' });
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+    const restored = fs.readFileSync(run.configPath, 'utf8');
+    assert.match(restored, /\[unrelated\]\nvalue = "kept"/);
+    assert.doesNotMatch(restored, /\[hooks\]/);
+    assert.doesNotMatch(restored, /\[features\]/);
+    assert.equal(fs.existsSync(run.hookFeatureReceiptPath), false);
   } finally {
     run.cleanup();
   }

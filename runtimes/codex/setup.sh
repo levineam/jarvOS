@@ -16,6 +16,8 @@ LEGACY_HOOKS_JSON="$CODEX_HOME/hooks.json"
 MCP_RECEIPT_MODULE="$ROOT/runtimes/codex/mcp-registration-receipt.js"
 MCP_RECEIPT_PATH="$CODEX_HOME/jarvos-codex-mcp-receipt.json"
 MCP_LOCK_PATH="$CODEX_HOME/.jarvos-codex-mcp.lock"
+HOOK_FEATURE_RECEIPT_MODULE="$ROOT/runtimes/codex/hook-feature-receipt.js"
+HOOK_FEATURE_RECEIPT_PATH="$CODEX_HOME/jarvos-codex-hook-feature-receipt.json"
 export CODEX_HOME CODEX_CONFIG
 CONTROL_PLANE_SERVICE_MODULE="${JARVOS_CONTROL_PLANE_SERVICE_MODULE:-}"
 # Setup registers only a non-secret file path. Never pass the credential value
@@ -105,6 +107,11 @@ if [ "$ROLLBACK_MODE" != "1" ]; then
 
   if [ ! -f "$MCP_RECEIPT_MODULE" ]; then
     echo "jarvOS Codex MCP receipt helper not found: $MCP_RECEIPT_MODULE" >&2
+    exit 1
+  fi
+
+  if [ ! -f "$HOOK_FEATURE_RECEIPT_MODULE" ]; then
+    echo "jarvOS Codex hook-feature receipt helper not found: $HOOK_FEATURE_RECEIPT_MODULE" >&2
     exit 1
   fi
 
@@ -604,12 +611,16 @@ if [ ! -f "$CODEX_CONFIG" ]; then
   touch "$CODEX_CONFIG" || HOOK_PHASE_STATUS=1
 fi
 
-if [ "$HOOK_PHASE_STATUS" -eq 0 ]; then
-  if ! node - "$CODEX_CONFIG" "$LEGACY_HOOKS_JSON" "$HOOK_SCRIPT" "$TURN_HOOK_SCRIPT" "$STEWARDSHIP_DISPATCHER" "${JARVOS_MANAGED_HARNESS_ROLLBACK:-0}" "$STEWARDSHIP_BRIDGE_COMMAND" "$STEWARDSHIP_CODEX_SESSION_MAP_ROOT" "${JARVOS_STAGED_PUBLIC_RUNTIME_ROOT:-}" <<'NODE'
+if [ "$ROLLBACK_MODE" = "1" ] && [ ! -f "$HOOK_FEATURE_RECEIPT_MODULE" ]; then
+  HOOK_PHASE_STATUS=1
+  echo "Codex hook-feature rollback receipt helper is unavailable; preserving hook and feature state." >&2
+elif [ "$HOOK_PHASE_STATUS" -eq 0 ]; then
+  if ! node - "$CODEX_CONFIG" "$LEGACY_HOOKS_JSON" "$HOOK_SCRIPT" "$TURN_HOOK_SCRIPT" "$STEWARDSHIP_DISPATCHER" "${JARVOS_MANAGED_HARNESS_ROLLBACK:-0}" "$STEWARDSHIP_BRIDGE_COMMAND" "$STEWARDSHIP_CODEX_SESSION_MAP_ROOT" "${JARVOS_STAGED_PUBLIC_RUNTIME_ROOT:-}" "$HOOK_FEATURE_RECEIPT_MODULE" "$HOOK_FEATURE_RECEIPT_PATH" "$CODEX_HOME" <<'NODE'
 const fs = require('fs');
 const path = require('path');
 
-const [configPath, legacyHooksPath, hookScript, turnHookScript, dispatcher, rollback, bridgeCommand, codexSessionMapRoot, stagedRoot] = process.argv.slice(2);
+const [configPath, legacyHooksPath, hookScript, turnHookScript, dispatcher, rollback, bridgeCommand, codexSessionMapRoot, stagedRoot, receiptModule, receiptPath, codexHome] = process.argv.slice(2);
+const hookFeatureReceipt = require(receiptModule);
 const original = fs.readFileSync(configPath, 'utf8');
 let next = original;
 
@@ -857,6 +868,47 @@ function tomlTableRange(lines, header) {
   return { start, end };
 }
 
+const MANAGED_CONFIG_TABLES = [
+  ['hooks', 'hooks'],
+  ['features', 'features'],
+  ['shellEnvironmentPolicySet', 'shell_environment_policy.set'],
+  ['shellEnvironmentPolicy', 'shell_environment_policy'],
+];
+
+function managedTableSnapshot(content) {
+  const lines = content.split(/\n/);
+  const snapshot = {};
+  for (const [key, header] of MANAGED_CONFIG_TABLES) {
+    const { start, end } = tomlTableRange(lines, header);
+    snapshot[key] = start < 0 ? null : lines.slice(start, end).join('\n');
+  }
+  return hookFeatureReceipt.validateSnapshot(snapshot);
+}
+
+function replaceManagedTable(content, header, replacement) {
+  const lines = content.split(/\n/);
+  const { start, end } = tomlTableRange(lines, header);
+  if (start >= 0) {
+    lines.splice(start, end - start, ...(replacement === null ? [] : replacement.split('\n')));
+    return lines.join('\n');
+  }
+  if (replacement === null) return content;
+  const suffix = content.endsWith('\n') || content.length === 0 ? '' : '\n';
+  return `${content}${suffix}${replacement}\n`;
+}
+
+function restoreManagedTables(content, snapshot) {
+  hookFeatureReceipt.validateSnapshot(snapshot);
+  let restored = content;
+  // Restore the nested table first so removing an absent parent never leaves
+  // a dangling child table. All replacements are guarded by the full post-setup
+  // snapshot before this function is reached.
+  for (const [key, header] of MANAGED_CONFIG_TABLES) {
+    restored = replaceManagedTable(restored, header, snapshot[key]);
+  }
+  return restored;
+}
+
 function parseEnvironmentSet(value) {
   if (!value.startsWith('{') || !value.endsWith('}')) fail('shell_environment_policy.set must use a one-line inline table');
   const entries = topLevelHookEntries(`[${value.slice(1, -1)}]`);
@@ -985,21 +1037,42 @@ function stewardshipBridgeEnvironment(command, codexMapRoot) {
   };
 }
 
+const beforeManagedTables = managedTableSnapshot(original);
+const existingHookFeatureReceipt = hookFeatureReceipt.readReceipt(receiptPath, codexHome);
+if (existingHookFeatureReceipt && !hookFeatureReceipt.snapshotsEqual(existingHookFeatureReceipt.after, beforeManagedTables)) {
+  fail('jarvOS-owned hook or feature state changed after setup; preserving it and its receipt');
+}
+
+function hasUnreceiptedJarvosHookState(content) {
+  // A missing receipt must never authorize cleanup of a pre-receipt install.
+  // The feature flag alone is intentionally not evidence: it is a normal
+  // Codex preference that a user may have set independently.
+  return ownedHookPaths.some((target) => content.includes(target))
+    || STEWARDSHIP_ENVIRONMENT_KEYS.some((key) => content.includes(key));
+}
+
 let migrated = null;
-if (fs.existsSync(legacyHooksPath)) {
+let rollbackWithoutReceipt = false;
+if (rollback !== '1' && fs.existsSync(legacyHooksPath)) {
   migrated = parseLegacyHooks(legacyHooksPath);
   validateHookTable(next);
   for (const [event, entries] of Object.entries(migrated)) for (const entry of entries) next = setHook(next, event, renderHookEntry(entry), false);
 }
 
-const bridgeEnvironment = stewardshipBridgeEnvironment(bridgeCommand, codexSessionMapRoot);
-
 if (rollback === '1') {
-  validateHookTable(next);
-  next = setHook(next, 'SessionStart', null, true);
-  next = setHook(next, 'UserPromptSubmit', null, true);
-  next = setStewardshipBridgeEnvironment(next, null);
+  if (!existingHookFeatureReceipt) {
+    if (hasUnreceiptedJarvosHookState(original)) {
+      fail('no jarvOS-owned hook-feature receipt was found for existing jarvOS hook state; preserving the Codex configuration');
+    }
+    // Setup can fail before touching hooks (for example an MCP or provider
+    // preflight failure). That has no hook state to reconcile, so treat this
+    // narrow, receipt-free case as a no-op rather than failing rollback.
+    rollbackWithoutReceipt = true;
+  } else {
+    next = restoreManagedTables(original, existingHookFeatureReceipt.before);
+  }
 } else {
+  const bridgeEnvironment = stewardshipBridgeEnvironment(bridgeCommand, codexSessionMapRoot);
   validateHookTable(next);
   const startCommand = dispatcher
     ? `${shellQuote(dispatcher)} --harness codex --action session-start`
@@ -1010,21 +1083,42 @@ if (rollback === '1') {
   next = setHook(next, 'SessionStart', renderHookEntry({ matcher: 'startup|resume', hooks: [{ type: 'command', command: startCommand, async: false, timeout: 30 }] }), true);
   next = setHook(next, 'UserPromptSubmit', renderHookEntry({ hooks: [{ type: 'command', command: turnCommand, async: false, timeout: 30 }] }), true);
   next = setStewardshipBridgeEnvironment(next, bridgeEnvironment);
+  next = setFeature(next, 'hooks', 'true');
+  next = removeFeature(next, 'codex_hooks');
 }
-next = setFeature(next, 'hooks', 'true');
-next = removeFeature(next, 'codex_hooks');
+
+const afterManagedTables = managedTableSnapshot(next);
+if (rollback !== '1' && existingHookFeatureReceipt && !hookFeatureReceipt.snapshotsEqual(existingHookFeatureReceipt.after, afterManagedTables)) {
+  fail('existing jarvOS hook-feature receipt does not describe the requested setup state');
+}
 
 if (next !== original || migrated) {
+  if (rollback === '1') {
+    // The current snapshot was checked against the receipt before any write.
+    // A write failure retains the receipt and fails closed on the next attempt.
+  } else if (!existingHookFeatureReceipt) {
+    hookFeatureReceipt.claimReceipt(receiptPath, codexHome, beforeManagedTables, afterManagedTables);
+  }
   const backupStamp = stamp();
   const backupPath = next !== original ? backup(configPath, backupStamp) : null;
   const legacyBackupPath = migrated ? backup(legacyHooksPath, backupStamp) : null;
   writeAtomically(configPath, next);
   if (migrated) fs.unlinkSync(legacyHooksPath);
+  if (rollback === '1') hookFeatureReceipt.clearReceipt(receiptPath, codexHome, existingHookFeatureReceipt.after);
   console.log(`Updated Codex config for jarvOS hooks: ${configPath}`);
   if (backupPath) console.log(`Backup: ${backupPath}`);
   if (legacyBackupPath) console.log(`Migrated legacy Codex hooks with backup: ${legacyBackupPath}`);
 } else {
-  console.log(`Codex config already has jarvOS hooks enabled: ${configPath}`);
+  if (rollback === '1') {
+    if (rollbackWithoutReceipt) {
+      console.log(`Codex hook-feature rollback found no jarvOS-owned receipt or hook state: ${configPath}`);
+    } else {
+      hookFeatureReceipt.clearReceipt(receiptPath, codexHome, existingHookFeatureReceipt.after);
+      console.log(`Codex hook-feature state was already restored: ${configPath}`);
+    }
+  } else {
+    console.log(`Codex config already has jarvOS hooks enabled: ${configPath}`);
+  }
 }
 NODE
   then
