@@ -115,11 +115,19 @@ after activation or rollback before relying on the new profile state.
 
 Codex MCP setup follows the same ownership boundary. A mode-`0600` receipt in
 the selected `CODEX_HOME` records only a normalized fingerprint of the jarvOS
-registration created by setup. Rollback never adds an MCP registration and
-removes one only while it still matches that receipt; pre-existing or later
-changed registrations are preserved. This receipt covers MCP ownership only.
-Hook trust and feature-setting restoration are separate profile concerns and
-are not claimed as transactional by this mechanism.
+registration created by setup. Rollback never invokes name-only
+`codex mcp remove`. For a present matching registration it can use an atomic
+Codex app-server `config/batchWrite` guarded by the exact user-layer
+`expectedVersion`; the receipt is cleared only after app-server confirms the
+atomic edit succeeded. If app-server CAS is unavailable, the layer or registration
+changed, or the write cannot be confirmed, the registration and receipt are
+preserved for manual reconciliation and rollback exits nonzero. An already
+absent registration clears a valid receipt. MCP reconciliation does not
+short-circuit independent hook or Compound Engineering provider rollback;
+those later phases still run before an unresolved MCP outcome is reported.
+This receipt covers MCP ownership only. Hook trust and feature-setting
+restoration are separate profile concerns and are not claimed as transactional
+by this mechanism.
 
 ### Optional authenticated control-plane host
 
