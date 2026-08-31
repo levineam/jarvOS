@@ -63,6 +63,24 @@ Validation never resolves, dereferences, normalizes, or infers an identifier,
 and it reads no host, process, or environment state. This contract does not mint
 identifiers; each owning subsystem defines how it issues them.
 
+## Promotion receipts
+
+The package also validates `jarvos.promotion-receipt.v1` envelopes. A receipt
+records the outcome of a governed promotion, supersession, retraction,
+rollback, or correction across the notes, journal, memory, ontology, Projects,
+skills, and work surfaces. It binds portable candidate, policy, artifact, and
+receipt identities to bounded evidence digests without embedding raw content,
+destination receipts, secrets, or host paths.
+
+A `committed` outcome names the resulting destination revision. Every other
+outcome reports no new revision and no reversal claim; in particular, a failed
+or deferred receipt proves only that an attempt was recorded. `reversalMode`
+describes how committed destination state may later be changed. It does not
+prove that a reversal is available or will succeed. Destination-specific
+writers and receipts retain that responsibility. Likewise,
+`policy-automatic` is representable as provenance but does not itself grant
+automation authority.
+
 ## Public human and agent adapters
 
 The package ships `jarvos-manager` for a human CLI and exposes the same

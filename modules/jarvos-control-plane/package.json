@@ -14,7 +14,8 @@
     "./application-service": "./src/application-service.js",
     "./manager": "./scripts/jarvos-manager.js",
     "./protected-resource": "./src/protected-resource/index.js",
-    "./identity": "./src/identity.js"
+    "./identity": "./src/identity.js",
+    "./promotion-receipt": "./src/promotion-receipt.js"
   },
   "bin": {
     "jarvos-manager": "scripts/jarvos-manager.js"
