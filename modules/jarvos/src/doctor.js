@@ -13,6 +13,7 @@ const {
 const {
   collectOpenClawPluginEvidence,
   inspectCompoundEngineeringProvider,
+  loadRuntimeModeConfig,
 } = require('../../jarvos-runtime-kit/src');
 const { loadHealthModules } = require('../../../lib/jarvos-doctor-modules');
 
@@ -330,6 +331,10 @@ function validateConfigSchema(workspace, configPath = path.join(workspace, 'jarv
   }
 
   const errors = validateAgainstSchema(configResult.value, schemaResult.value);
+  const runtimeMode = loadRuntimeModeConfig(configResult.value);
+  if (!runtimeMode.ok) {
+    errors.push(...runtimeMode.errors.map((error) => `runtimeMode: ${error}`));
+  }
 
   if (errors.length > 0) {
     return createCheck(
@@ -1304,5 +1309,6 @@ module.exports = {
   validateOpenClawProfile,
   validateObsidianPaths,
   validateObsidianSingleWriter,
+  validateConfigSchema,
   validateCompoundEngineeringProvider,
 };

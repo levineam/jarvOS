@@ -18,6 +18,18 @@
     "vaultPath": { "type": "string" },
     "workspacePath": { "type": "string" },
     "runtime": { "type": "string" },
+    "runtimeMode": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "mode", "installedAdapters", "workloadRoutes", "capabilityTruth"],
+      "properties": {
+        "version": { "const": "jarvos-runtime-mode/v1" },
+        "mode": { "enum": ["none", "hermes", "openclaw", "multi"] },
+        "installedAdapters": { "type": "array", "items": { "type": "object", "additionalProperties": false, "required": ["id"], "properties": { "id": { "enum": ["hermes", "openclaw"] } } } },
+        "workloadRoutes": { "type": "array", "items": { "type": "object", "additionalProperties": false, "required": ["workload", "adapter"], "properties": { "workload": { "type": "string" }, "adapter": { "enum": ["hermes", "openclaw"] } } } },
+        "capabilityTruth": { "type": "array", "items": { "type": "object", "additionalProperties": false, "required": ["adapter", "capability", "state", "evidence"], "properties": { "adapter": { "enum": ["hermes", "openclaw"] }, "capability": { "type": "string" }, "state": { "enum": ["available", "unavailable", "unknown"] }, "evidence": { "type": "array", "minItems": 1, "items": { "type": "object", "additionalProperties": false, "required": ["kind", "detail"], "properties": { "kind": { "type": "string" }, "detail": { "type": "string" } } } } } } }
+      }
+    },
     "paths": {
       "type": "object",
       "properties": {

@@ -65,6 +65,19 @@ drift: missing shared MCP wiring, undocumented unsupported MCP targets, missing
 `jarvos_hydrate`, setup scripts that edit config without backup behavior, and
 hook-based adapters that do not fail open.
 
+## Resident runtime modes and workload routing
+
+`runtimeMode` is an optional, declaration-only block in `jarvos.config.json`.
+Its version is `jarvos-runtime-mode/v1`; the modes are `none`, `hermes`,
+`openclaw`, and `multi`. `installedAdapters` records what is installed, while
+`workloadRoutes` selects a consumer only in `multi`. A `telegram.updates`
+workload may have exactly one consumer. `capabilityTruth` records an explicit
+`available`, `unavailable`, or `unknown` state with non-empty evidence.
+
+Configurations that do not contain `runtimeMode` are loaded as the compatible
+`none` declaration. This contract has no activation behavior: it starts no
+process, changes no credentials, and installs nothing.
+
 ## Managed harness activation
 
 Managed activation answers whether a harness is **live under a selected public
