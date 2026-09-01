@@ -60,6 +60,31 @@ function isSameOrSubPath(parentPath, candidatePath) {
   return candidate === parent || candidate.startsWith(`${parent}${path.sep}`);
 }
 
+// Compare physical locations without requiring the final targets to exist.
+// On macOS, /tmp is a stable alias of /private/tmp; lexical comparison alone
+// would let those two spellings place a workspace inside the selected vault.
+function canonicalizePathWithMissingTail(target) {
+  let existing = path.resolve(target);
+  const missingTail = [];
+  for (;;) {
+    try {
+      return path.join(fs.realpathSync(existing), ...missingTail);
+    } catch (error) {
+      if (error.code !== 'ENOENT') throw error;
+      const parent = path.dirname(existing);
+      if (parent === existing) throw error;
+      missingTail.unshift(path.basename(existing));
+      existing = parent;
+    }
+  }
+}
+
+function workspaceIsInsideVault(workspace, vault) {
+  const canonicalVault = canonicalizePathWithMissingTail(vault);
+  const canonicalWorkspace = canonicalizePathWithMissingTail(workspace);
+  return isSameOrSubPath(canonicalVault, canonicalWorkspace);
+}
+
 function resolvePathInput(value, fallback) {
   const selected = value || fallback;
   return path.resolve(expandHome(selected));
@@ -354,7 +379,7 @@ function preflightInit(config, inputs) {
     home: os.homedir(),
     source: inputs.vaultSource,
   });
-  if (isSameOrSubPath(config.VAULT_PATH, config.WORKSPACE_PATH)) {
+  if (workspaceIsInsideVault(config.WORKSPACE_PATH, config.VAULT_PATH)) {
     throw new Error('Refusing to initialize: workspace must not equal or be inside the selected vault');
   }
   const classification = classifyInitTargets({

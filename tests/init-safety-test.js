@@ -127,6 +127,18 @@ try {
     assert.match(`${nested.stdout}${nested.stderr}`, /workspace must not equal or be inside the selected vault/);
     assert.equal(fs.existsSync(containmentVault), false, `${surface} wrote the selected vault before rejecting containment`);
 
+    if (process.platform === 'darwin') {
+      const aliasRoot = path.join('/private/tmp', `jarvos-init-alias-${process.pid}-${surface}`);
+      for (const [vaultBase, workspaceBase] of [['/private/tmp', '/tmp'], ['/tmp', '/private/tmp']]) {
+        const vault = path.join(vaultBase, path.relative('/private/tmp', aliasRoot), 'vault');
+        const workspace = path.join(workspaceBase, path.relative('/private/tmp', aliasRoot), 'vault', 'workspace');
+        const aliased = invoke(['--workspace', workspace, '--vault', vault], initEnv(path.join(tmp, `alias-${surface}-${vaultBase === '/tmp' ? 'tmp' : 'private'}`)));
+        assert.notEqual(aliased.status, 0, `${surface} accepted /tmp and /private/tmp alias containment`);
+        assert.match(`${aliased.stdout}${aliased.stderr}`, /workspace must not equal or be inside the selected vault/);
+        assert.equal(fs.existsSync(aliasRoot), false, `${surface} wrote through a /tmp alias before rejecting containment`);
+      }
+    }
+
     const staleHome = path.join(tmp, `stale-vault-${surface}-home`);
     const staleVault = path.join(staleHome, 'Documents', 'Vault v3');
     const canonicalVault = path.join(staleHome, 'Vaults', 'Vault v3');
