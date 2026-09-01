@@ -28,20 +28,23 @@ contract does not name, load, configure, or start a particular harness.
 
 ## Governed flow
 
-1. `createCandidate` accepts validated evidence records and makes a candidate
-   that refers to evidence by ID and digest only.
+1. `createCandidate` accepts validated evidence records for one subject and
+   makes a candidate that refers to evidence by ID and digest only. Conflicting
+   records with the same evidence ID fail closed.
 2. `promoteCandidate` requires complete evidence, a matching candidate
    generation, a candidate-and-policy-bound unambiguous approval scoped to
    `promotion`, and a policy revision. Otherwise it returns a fail-closed
    reason and creates nothing.
 3. `prepareDelivery` requires a promoted candidate, an unexpired schedule,
-   portable conversation identity, a catalog-registered selected provider
-   generation, and an unambiguous approval bound to that exact delivery. It
-   creates a deterministic prepared record; it does not deliver.
+   portable conversation identity for the same subject, a catalog-registered
+   provider selection with a successful CAS-qualified outcome bound to that
+   exact catalog generation, and an unambiguous approval bound to every input
+   record. It creates a deterministic prepared record; it does not deliver.
 4. `evaluateDelivery` accepts a lifecycle receipt only once its schedule is
    due, and binds it to a declared receipt-producing bridge and that bridge's
    portable conversation mapping. A previously seen idempotency key is
-   replay-safe; an early, expired, malformed, or incorrectly bound receipt is
+   replay-safe only when all duplicate receipts are byte-identical; conflicting,
+   future-dated, early, expired, malformed, or incorrectly bound receipts are
    rejected.
 
 Provider selection is similarly data-only: `settleProviderSelection` accepts a

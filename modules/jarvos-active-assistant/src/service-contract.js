@@ -46,18 +46,18 @@ const FIELDS = Object.freeze({
   candidate: new Set(['schemaVersion', 'candidateId', 'subjectId', 'candidateType', 'evidenceRefs', 'summaryDigest', 'generation']),
   evidenceRef: new Set(['evidenceId', 'digest']),
   approval: new Set(['scope', 'approvalId', 'bindingDigest', 'approved', 'ambiguous']),
-  promotion: new Set(['schemaVersion', 'promotionId', 'candidateId', 'candidateGeneration', 'policyRevision', 'approvalId', 'status']),
-  schedule: new Set(['schemaVersion', 'scheduleId', 'candidateId', 'dueAt', 'expiresAt', 'idempotencyKey']),
-  prepared: new Set(['schemaVersion', 'preparedId', 'promotionId', 'scheduleId', 'conversationId', 'providerEntryId', 'providerGeneration', 'idempotencyKey', 'dueAt', 'expiresAt', 'state']),
+  promotion: new Set(['schemaVersion', 'promotionId', 'candidateId', 'candidateGeneration', 'subjectId', 'policyRevision', 'approvalId', 'status']),
+  schedule: new Set(['schemaVersion', 'scheduleId', 'candidateId', 'subjectId', 'dueAt', 'expiresAt', 'idempotencyKey']),
+  prepared: new Set(['schemaVersion', 'preparedId', 'promotionId', 'scheduleId', 'conversationId', 'subjectId', 'providerEntryId', 'providerGeneration', 'idempotencyKey', 'dueAt', 'expiresAt', 'state']),
   providerEntry: new Set(['schemaVersion', 'entryId', 'provider', 'model', 'reasoningEfforts']),
   providerCatalog: new Set(['schemaVersion', 'entries']),
   providerSelection: new Set(['schemaVersion', 'entryId', 'generation', 'lastOutcome']),
   providerProposal: new Set(['schemaVersion', 'proposalId', 'entryId', 'expectedGeneration']),
-  providerOutcome: new Set(['entryId', 'generation', 'outcome']),
+  providerOutcome: new Set(['entryId', 'generation', 'resultingGeneration', 'catalogDigest', 'outcome']),
   conversation: new Set(['schemaVersion', 'conversationId', 'subjectId', 'createdAt']),
   mapping: new Set(['schemaVersion', 'mappingId', 'conversationId', 'bridgeId', 'nativeSessionRef', 'mappedAt']),
   interaction: new Set(['schemaVersion', 'receiptId', 'conversationId', 'mappingId', 'kind', 'occurredAt', 'payloadDigest', 'idempotencyKey']),
-  lifecycle: new Set(['schemaVersion', 'receiptId', 'preparedId', 'conversationId', 'mappingId', 'bridgeId', 'idempotencyKey', 'outcome', 'occurredAt', 'producer']),
+  lifecycle: new Set(['schemaVersion', 'receiptId', 'preparedId', 'conversationId', 'subjectId', 'mappingId', 'bridgeId', 'idempotencyKey', 'outcome', 'occurredAt', 'producer']),
   bridge: new Set(['schemaVersion', 'bridgeId', 'operations']),
 });
 
@@ -197,6 +197,7 @@ function validatePromotion(promotion) {
   requireSafe(promotion.promotionId, 'promotion.promotionId', errors, { identifier: true });
   requireSafe(promotion.candidateId, 'promotion.candidateId', errors, { identifier: true });
   requireOpaque(promotion.candidateGeneration, 'promotion.candidateGeneration', errors);
+  requireSafe(promotion.subjectId, 'promotion.subjectId', errors, { identifier: true });
   requireSafe(promotion.policyRevision, 'promotion.policyRevision', errors, { identifier: true });
   requireOpaque(promotion.approvalId, 'promotion.approvalId', errors);
   if (promotion.status !== 'promoted') errors.push('promotion.status must be promoted');
@@ -210,6 +211,7 @@ function validateSchedule(schedule) {
   if (schedule.schemaVersion !== SCHEDULE_SCHEMA_VERSION) errors.push(`schedule.schemaVersion must be ${SCHEDULE_SCHEMA_VERSION}`);
   requireSafe(schedule.scheduleId, 'schedule.scheduleId', errors, { identifier: true });
   requireSafe(schedule.candidateId, 'schedule.candidateId', errors, { identifier: true });
+  requireSafe(schedule.subjectId, 'schedule.subjectId', errors, { identifier: true });
   requireIso(schedule.dueAt, 'schedule.dueAt', errors);
   requireIso(schedule.expiresAt, 'schedule.expiresAt', errors);
   requireOpaque(schedule.idempotencyKey, 'schedule.idempotencyKey', errors);
@@ -260,6 +262,8 @@ function validateProviderSelection(selection) {
     addUnknownFields(selection.lastOutcome, FIELDS.providerOutcome, 'provider selection.lastOutcome', errors);
     requireSafe(selection.lastOutcome.entryId, 'provider selection.lastOutcome.entryId', errors, { identifier: true });
     requireOpaque(selection.lastOutcome.generation, 'provider selection.lastOutcome.generation', errors);
+    requireOpaque(selection.lastOutcome.resultingGeneration, 'provider selection.lastOutcome.resultingGeneration', errors);
+    requireDigest(selection.lastOutcome.catalogDigest, 'provider selection.lastOutcome.catalogDigest', errors);
     requireEnum(selection.lastOutcome.outcome, 'provider selection.lastOutcome.outcome', PROVIDER_OUTCOMES, errors);
   }
   return { ok: errors.length === 0, errors };
@@ -323,6 +327,7 @@ function validateLifecycleReceipt(receipt) {
   requireSafe(receipt.receiptId, 'lifecycle receipt.receiptId', errors, { identifier: true });
   requireSafe(receipt.preparedId, 'lifecycle receipt.preparedId', errors, { identifier: true });
   requireSafe(receipt.conversationId, 'lifecycle receipt.conversationId', errors, { identifier: true });
+  requireSafe(receipt.subjectId, 'lifecycle receipt.subjectId', errors, { identifier: true });
   requireSafe(receipt.mappingId, 'lifecycle receipt.mappingId', errors, { identifier: true });
   requireSafe(receipt.bridgeId, 'lifecycle receipt.bridgeId', errors, { identifier: true });
   requireOpaque(receipt.idempotencyKey, 'lifecycle receipt.idempotencyKey', errors);
@@ -351,7 +356,7 @@ function validatePreparedDelivery(prepared) {
   if (!requireObject(prepared, 'prepared delivery', errors)) return { ok: false, errors };
   addUnknownFields(prepared, FIELDS.prepared, 'prepared delivery', errors);
   if (prepared.schemaVersion !== PREPARED_DELIVERY_SCHEMA_VERSION) errors.push(`prepared delivery.schemaVersion must be ${PREPARED_DELIVERY_SCHEMA_VERSION}`);
-  for (const field of ['preparedId', 'promotionId', 'scheduleId', 'conversationId', 'providerEntryId']) requireSafe(prepared[field], `prepared delivery.${field}`, errors, { identifier: true });
+  for (const field of ['preparedId', 'promotionId', 'scheduleId', 'conversationId', 'subjectId', 'providerEntryId']) requireSafe(prepared[field], `prepared delivery.${field}`, errors, { identifier: true });
   requireOpaque(prepared.providerGeneration, 'prepared delivery.providerGeneration', errors);
   requireOpaque(prepared.idempotencyKey, 'prepared delivery.idempotencyKey', errors);
   requireIso(prepared.dueAt, 'prepared delivery.dueAt', errors);
@@ -374,9 +379,7 @@ function createApprovalBinding(value) {
 function promotionApprovalBinding({ candidate, policyRevision } = {}) {
   return createApprovalBinding({
     scope: 'promotion',
-    candidateId: candidate?.candidateId,
-    candidateGeneration: candidate?.generation,
-    evidenceRefs: candidate?.evidenceRefs,
+    candidateDigest: canonicalDigest(candidate),
     policyRevision,
   });
 }
@@ -394,14 +397,10 @@ function providerSelectionApprovalBinding({ catalog, proposal } = {}) {
 function deliveryApprovalBinding({ promotion, schedule, conversation, selection } = {}) {
   return createApprovalBinding({
     scope: 'delivery',
-    promotionId: promotion?.promotionId,
-    candidateId: promotion?.candidateId,
-    candidateGeneration: promotion?.candidateGeneration,
-    scheduleId: schedule?.scheduleId,
-    conversationId: conversation?.conversationId,
-    providerEntryId: selection?.entryId,
-    providerGeneration: selection?.generation,
-    idempotencyKey: schedule?.idempotencyKey,
+    promotionDigest: canonicalDigest(promotion),
+    scheduleDigest: canonicalDigest(schedule),
+    conversationDigest: canonicalDigest(conversation),
+    selectionDigest: canonicalDigest(selection),
   });
 }
 
@@ -417,9 +416,14 @@ function actionAllowed(approval, scope, bindingDigest) {
 
 function createCandidate({ candidateId, subjectId, candidateType, evidence = [], summaryDigest, generation } = {}) {
   if (!Array.isArray(evidence) || evidence.length === 0) throw new Error('candidate requires at least one evidence record');
+  const knownEvidence = new Map();
   evidence.forEach((record) => {
     const validation = validateEvidence(record);
     if (!validation.ok) throw new Error(`invalid evidence: ${validation.errors.join('; ')}`);
+    if (record.subjectId !== subjectId) throw new Error('evidence subject does not match candidate subject');
+    const existing = knownEvidence.get(record.evidenceId);
+    if (existing !== undefined && existing !== record.digest) throw new Error('conflicting evidence records share an evidenceId');
+    knownEvidence.set(record.evidenceId, record.digest);
   });
   const candidate = {
     schemaVersion: CANDIDATE_SCHEMA_VERSION,
@@ -448,6 +452,8 @@ function promoteCandidate({ candidate, evidence = [], expectedGeneration, approv
     const validation = validateEvidence(record);
     if (!validation.ok) return contractError('evidence_invalid', validation.errors);
     if (record.subjectId !== candidate.subjectId) return contractError('evidence_subject_mismatch');
+    const existing = knownEvidence.get(record.evidenceId);
+    if (existing !== undefined && existing !== record.digest) return contractError('evidence_conflict');
     knownEvidence.set(record.evidenceId, record.digest);
   }
   if (candidate.evidenceRefs.some((reference) => knownEvidence.get(reference.evidenceId) !== reference.digest)) return contractError('evidence_incomplete');
@@ -456,6 +462,7 @@ function promoteCandidate({ candidate, evidence = [], expectedGeneration, approv
     promotionId: `promotion-${canonicalDigest({ candidateId: candidate.candidateId, generation: candidate.generation, approvalId: approval.approvalId, policyRevision }).slice(0, 32)}`,
     candidateId: candidate.candidateId,
     candidateGeneration: candidate.generation,
+    subjectId: candidate.subjectId,
     policyRevision,
     approvalId: approval.approvalId,
     status: 'promoted',
@@ -505,7 +512,16 @@ function settleProviderSelection({ catalog, selection, proposal, outcome, approv
   if (outcome === 'failed') {
     return {
       ok: true,
-      selection: { ...selection, lastOutcome: { entryId: proposal.entryId, generation: selection.generation, outcome: 'failed' } },
+      selection: {
+        ...selection,
+        lastOutcome: {
+          entryId: proposal.entryId,
+          generation: selection.generation,
+          resultingGeneration: selection.generation,
+          catalogDigest: canonicalDigest(catalog),
+          outcome: 'failed',
+        },
+      },
     };
   }
   const gate = actionAllowed(approval, 'provider_selection', providerSelectionApprovalBinding({ catalog, proposal }));
@@ -517,7 +533,13 @@ function settleProviderSelection({ catalog, selection, proposal, outcome, approv
       schemaVersion: PROVIDER_SELECTION_SCHEMA_VERSION,
       entryId: proposal.entryId,
       generation: nextGeneration,
-      lastOutcome: { entryId: proposal.entryId, generation: selection.generation, outcome: 'qualified' },
+      lastOutcome: {
+        entryId: proposal.entryId,
+        generation: selection.generation,
+        resultingGeneration: nextGeneration,
+        catalogDigest: canonicalDigest(catalog),
+        outcome: 'qualified',
+      },
     },
   };
 }
@@ -535,17 +557,23 @@ function prepareDelivery({ promotion, schedule, conversation, catalog, selection
   if (!selectionValidation.ok) return contractError('provider_selection_invalid', selectionValidation.errors);
   if (!isIso(now)) return contractError('time_invalid');
   if (promotion.candidateId !== schedule.candidateId) return contractError('candidate_mismatch');
+  if (promotion.subjectId !== schedule.subjectId || promotion.subjectId !== conversation.subjectId) return contractError('subject_mismatch');
   if (Date.parse(now) > Date.parse(schedule.expiresAt)) return contractError('schedule_expired');
   if (selection.entryId === null) return contractError('provider_unselected');
   if (!catalog.entries.some((entry) => entry.entryId === selection.entryId)) return contractError('provider_entry_unregistered');
+  if (selection.lastOutcome?.outcome !== 'qualified'
+    || selection.lastOutcome.entryId !== selection.entryId
+    || selection.lastOutcome.resultingGeneration !== selection.generation
+    || selection.lastOutcome.catalogDigest !== canonicalDigest(catalog)) return contractError('provider_not_qualified');
   const gate = actionAllowed(approval, 'delivery', deliveryApprovalBinding({ promotion, schedule, conversation, selection }));
   if (!gate.ok) return gate;
   const prepared = {
     schemaVersion: PREPARED_DELIVERY_SCHEMA_VERSION,
-    preparedId: `prepared-${canonicalDigest({ promotionId: promotion.promotionId, scheduleId: schedule.scheduleId, conversationId: conversation.conversationId, entryId: selection.entryId, generation: selection.generation, idempotencyKey: schedule.idempotencyKey }).slice(0, 32)}`,
+    preparedId: `prepared-${canonicalDigest({ promotionId: promotion.promotionId, scheduleId: schedule.scheduleId, conversationId: conversation.conversationId, subjectId: promotion.subjectId, entryId: selection.entryId, generation: selection.generation, idempotencyKey: schedule.idempotencyKey }).slice(0, 32)}`,
     promotionId: promotion.promotionId,
     scheduleId: schedule.scheduleId,
     conversationId: conversation.conversationId,
+    subjectId: promotion.subjectId,
     providerEntryId: selection.entryId,
     providerGeneration: selection.generation,
     idempotencyKey: schedule.idempotencyKey,
@@ -567,26 +595,33 @@ function evaluateDelivery({ prepared, receipt, priorReceipts = [], bridge, mappi
   const mappingValidation = validateConversationMapping(mapping);
   if (!mappingValidation.ok) return contractError('conversation_mapping_invalid', mappingValidation.errors);
   if (mapping.conversationId !== prepared.conversationId || mapping.bridgeId !== bridge.bridgeId) return contractError('conversation_mapping_mismatch');
-  const duplicate = priorReceipts.find((item) => item && item.idempotencyKey === prepared.idempotencyKey);
-  if (duplicate) {
-    const duplicateValidation = validateLifecycleReceipt(duplicate);
-    if (!duplicateValidation.ok
-      || duplicate.preparedId !== prepared.preparedId
-      || duplicate.conversationId !== prepared.conversationId
-      || duplicate.mappingId !== mapping.mappingId
-      || duplicate.bridgeId !== bridge.bridgeId
-      || Date.parse(duplicate.occurredAt) < Date.parse(prepared.dueAt)
-      || Date.parse(duplicate.occurredAt) > Date.parse(prepared.expiresAt)) {
-      return contractError('idempotency_record_invalid');
+  const duplicates = priorReceipts.filter((item) => item && item.idempotencyKey === prepared.idempotencyKey);
+  if (duplicates.length > 0) {
+    for (const duplicate of duplicates) {
+      const duplicateValidation = validateLifecycleReceipt(duplicate);
+      if (!duplicateValidation.ok
+        || duplicate.preparedId !== prepared.preparedId
+        || duplicate.conversationId !== prepared.conversationId
+        || duplicate.subjectId !== prepared.subjectId
+        || duplicate.mappingId !== mapping.mappingId
+        || duplicate.bridgeId !== bridge.bridgeId
+        || Date.parse(duplicate.occurredAt) < Date.parse(prepared.dueAt)
+        || Date.parse(duplicate.occurredAt) > Date.parse(prepared.expiresAt)
+        || Date.parse(duplicate.occurredAt) > Date.parse(now)) {
+        return contractError('idempotency_record_invalid');
+      }
     }
-    return { ok: true, code: 'idempotent_replay', receipt: duplicate };
+    if (new Set(duplicates.map(canonicalDigest)).size !== 1) return contractError('idempotency_conflict');
+    return { ok: true, code: 'idempotent_replay', receipt: duplicates[0] };
   }
-  if (Date.parse(now) < Date.parse(prepared.dueAt)) return contractError('not_due');
-  if (Date.parse(now) > Date.parse(prepared.expiresAt)) return contractError('schedule_expired');
   const receiptValidation = validateLifecycleReceipt(receipt);
   if (!receiptValidation.ok) return contractError('lifecycle_receipt_invalid', receiptValidation.errors);
+  if (Date.parse(receipt.occurredAt) > Date.parse(now)) return contractError('receipt_future');
+  if (Date.parse(now) < Date.parse(prepared.dueAt)) return contractError('not_due');
+  if (Date.parse(now) > Date.parse(prepared.expiresAt)) return contractError('schedule_expired');
   if (receipt.preparedId !== prepared.preparedId
     || receipt.conversationId !== prepared.conversationId
+    || receipt.subjectId !== prepared.subjectId
     || receipt.mappingId !== mapping.mappingId
     || receipt.bridgeId !== bridge.bridgeId
     || receipt.idempotencyKey !== prepared.idempotencyKey) {

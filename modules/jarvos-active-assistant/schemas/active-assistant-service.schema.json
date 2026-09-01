@@ -65,11 +65,12 @@
     "schedule": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["schemaVersion", "scheduleId", "candidateId", "dueAt", "expiresAt", "idempotencyKey"],
+      "required": ["schemaVersion", "scheduleId", "candidateId", "subjectId", "dueAt", "expiresAt", "idempotencyKey"],
       "properties": {
         "schemaVersion": { "const": "jarvos-active-assistant-schedule/v1" },
         "scheduleId": { "$ref": "#/$defs/id" },
         "candidateId": { "$ref": "#/$defs/id" },
+        "subjectId": { "$ref": "#/$defs/id" },
         "dueAt": { "$ref": "#/$defs/time" },
         "expiresAt": { "$ref": "#/$defs/time" },
         "idempotencyKey": { "$ref": "#/$defs/opaque" }
@@ -102,22 +103,22 @@
     "promotion": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["schemaVersion", "promotionId", "candidateId", "candidateGeneration", "policyRevision", "approvalId", "status"],
+      "required": ["schemaVersion", "promotionId", "candidateId", "candidateGeneration", "subjectId", "policyRevision", "approvalId", "status"],
       "properties": {
         "schemaVersion": { "const": "jarvos-active-assistant-promotion/v1" },
         "promotionId": { "$ref": "#/$defs/id" }, "candidateId": { "$ref": "#/$defs/id" },
-        "candidateGeneration": { "$ref": "#/$defs/opaque" }, "policyRevision": { "$ref": "#/$defs/id" },
+        "candidateGeneration": { "$ref": "#/$defs/opaque" }, "subjectId": { "$ref": "#/$defs/id" }, "policyRevision": { "$ref": "#/$defs/id" },
         "approvalId": { "$ref": "#/$defs/opaque" }, "status": { "const": "promoted" }
       }
     },
     "prepared": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["schemaVersion", "preparedId", "promotionId", "scheduleId", "conversationId", "providerEntryId", "providerGeneration", "idempotencyKey", "dueAt", "expiresAt", "state"],
+      "required": ["schemaVersion", "preparedId", "promotionId", "scheduleId", "conversationId", "subjectId", "providerEntryId", "providerGeneration", "idempotencyKey", "dueAt", "expiresAt", "state"],
       "properties": {
         "schemaVersion": { "const": "jarvos-active-assistant-prepared-delivery/v1" },
         "preparedId": { "$ref": "#/$defs/id" }, "promotionId": { "$ref": "#/$defs/id" },
-        "scheduleId": { "$ref": "#/$defs/id" }, "conversationId": { "$ref": "#/$defs/id" },
+        "scheduleId": { "$ref": "#/$defs/id" }, "conversationId": { "$ref": "#/$defs/id" }, "subjectId": { "$ref": "#/$defs/id" },
         "providerEntryId": { "$ref": "#/$defs/id" }, "providerGeneration": { "$ref": "#/$defs/opaque" },
         "idempotencyKey": { "$ref": "#/$defs/opaque" }, "dueAt": { "$ref": "#/$defs/time" },
         "expiresAt": { "$ref": "#/$defs/time" }, "state": { "const": "prepared" }
@@ -154,8 +155,8 @@
         "lastOutcome": {
           "anyOf": [
             { "type": "null" },
-            { "type": "object", "additionalProperties": false, "required": ["entryId", "generation", "outcome"], "properties": {
-              "entryId": { "$ref": "#/$defs/id" }, "generation": { "$ref": "#/$defs/opaque" }, "outcome": { "enum": ["qualified", "failed"] }
+            { "type": "object", "additionalProperties": false, "required": ["entryId", "generation", "resultingGeneration", "catalogDigest", "outcome"], "properties": {
+              "entryId": { "$ref": "#/$defs/id" }, "generation": { "$ref": "#/$defs/opaque" }, "resultingGeneration": { "$ref": "#/$defs/opaque" }, "catalogDigest": { "$ref": "#/$defs/digest" }, "outcome": { "enum": ["qualified", "failed"] }
             } }
           ]
         }
@@ -186,11 +187,11 @@
     "lifecycle": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["schemaVersion", "receiptId", "preparedId", "conversationId", "mappingId", "bridgeId", "idempotencyKey", "outcome", "occurredAt", "producer"],
+      "required": ["schemaVersion", "receiptId", "preparedId", "conversationId", "subjectId", "mappingId", "bridgeId", "idempotencyKey", "outcome", "occurredAt", "producer"],
       "properties": {
         "schemaVersion": { "const": "jarvos-active-assistant-lifecycle-receipt/v1" },
         "receiptId": { "$ref": "#/$defs/id" }, "preparedId": { "$ref": "#/$defs/id" },
-        "conversationId": { "$ref": "#/$defs/id" }, "mappingId": { "$ref": "#/$defs/id" },
+        "conversationId": { "$ref": "#/$defs/id" }, "subjectId": { "$ref": "#/$defs/id" }, "mappingId": { "$ref": "#/$defs/id" },
         "bridgeId": { "$ref": "#/$defs/id" }, "idempotencyKey": { "$ref": "#/$defs/opaque" },
         "outcome": { "enum": ["delivered", "failed", "denied"] }, "occurredAt": { "$ref": "#/$defs/time" },
         "producer": { "const": "harness_bridge" }
@@ -208,6 +209,7 @@
     }
   },
   "oneOf": [
+    { "$ref": "#/$defs/approval" },
     { "$ref": "#/$defs/evidence" },
     { "$ref": "#/$defs/candidate" },
     { "$ref": "#/$defs/promotion" },

@@ -93,6 +93,27 @@ test('evidence becomes a candidate and is promoted only through complete unambig
   }).code, 'evidence_incomplete');
   assert.equal(contract.promoteCandidate({
     candidate,
+    evidence: [record, { ...record, digest: digest({ conflict: true }) }],
+    expectedGeneration: candidate.generation,
+    approval: approval('promotion', promotionBinding),
+    policyRevision: 'policy-1',
+  }).code, 'evidence_conflict');
+  assert.throws(() => contract.createCandidate({
+    candidateId: 'candidate-2',
+    subjectId: 'subject-1',
+    candidateType: 'follow_up',
+    evidence: [record, { ...record, digest: digest({ conflict: true }) }],
+    summaryDigest: digest({ summary: 'conflict' }),
+  }), /conflicting evidence records/);
+  assert.throws(() => contract.createCandidate({
+    candidateId: 'candidate-3',
+    subjectId: 'subject-1',
+    candidateType: 'follow_up',
+    evidence: [{ ...record, subjectId: 'subject-2' }],
+    summaryDigest: digest({ summary: 'wrong-subject' }),
+  }), /evidence subject does not match candidate subject/);
+  assert.equal(contract.promoteCandidate({
+    candidate,
     evidence: [{ ...record, digest: digest({ replacement: true }) }],
     expectedGeneration: candidate.generation,
     approval: approval('promotion', promotionBinding),
@@ -112,6 +133,13 @@ test('evidence becomes a candidate and is promoted only through complete unambig
     approval: approval('promotion', promotionBinding, { ambiguous: true }),
     policyRevision: 'policy-1',
   }).code, 'ambiguous_request');
+  assert.equal(contract.promoteCandidate({
+    candidate: { ...candidate, summaryDigest: digest({ changed: true }) },
+    evidence: [record],
+    expectedGeneration: candidate.generation,
+    approval: approval('promotion', promotionBinding),
+    policyRevision: 'policy-1',
+  }).code, 'approval_binding_mismatch');
 });
 
 test('provider catalog selection is registered, approval-gated, compare-and-swap bound, and failure-preserving', () => {
@@ -176,6 +204,7 @@ test('prepare is inert and delivery is due-bound, receipt-bound, expiry-bound, a
     schemaVersion: contract.SCHEDULE_SCHEMA_VERSION,
     scheduleId: 'schedule-1',
     candidateId: candidate.candidateId,
+    subjectId: candidate.subjectId,
     dueAt: later,
     expiresAt: expiry,
     idempotencyKey: 'delivery-key-1',
@@ -224,6 +253,7 @@ test('prepare is inert and delivery is due-bound, receipt-bound, expiry-bound, a
     receiptId: 'delivery-receipt-1',
     preparedId: prepared.prepared.preparedId,
     conversationId: conversation.conversationId,
+    subjectId: conversation.subjectId,
     mappingId: mapping.mappingId,
     bridgeId: bridge.bridgeId,
     idempotencyKey: schedule.idempotencyKey,
@@ -231,12 +261,29 @@ test('prepare is inert and delivery is due-bound, receipt-bound, expiry-bound, a
     occurredAt: later,
     producer: 'harness_bridge',
   };
-  assert.equal(contract.evaluateDelivery({ prepared: prepared.prepared, receipt, bridge, mapping, now: time }).code, 'not_due');
+  assert.equal(contract.evaluateDelivery({ prepared: prepared.prepared, receipt, bridge, mapping, now: time }).code, 'receipt_future');
   assert.equal(contract.evaluateDelivery({ prepared: prepared.prepared, receipt, bridge, mapping, now: later }).code, 'delivered');
+  assert.equal(contract.evaluateDelivery({ prepared: prepared.prepared, receipt: { ...receipt, subjectId: 'subject-2' }, bridge, mapping, now: later }).code, 'receipt_binding_mismatch');
   assert.equal(contract.evaluateDelivery({ prepared: prepared.prepared, receipt, bridge: { ...bridge, bridgeId: 'bridge-2' }, mapping, now: later }).code, 'conversation_mapping_mismatch');
   assert.equal(contract.evaluateDelivery({ prepared: prepared.prepared, receipt, bridge, mapping: { ...mapping, mappingId: 'mapping-2' }, now: later }).code, 'receipt_binding_mismatch');
   const replay = contract.evaluateDelivery({ prepared: prepared.prepared, receipt, priorReceipts: [receipt], bridge, mapping, now: later });
   assert.equal(replay.code, 'idempotent_replay');
+  assert.equal(contract.evaluateDelivery({
+    prepared: prepared.prepared,
+    receipt,
+    priorReceipts: [{ ...receipt, occurredAt: '2026-09-01T13:30:00.000Z' }],
+    bridge,
+    mapping,
+    now: later,
+  }).code, 'idempotency_record_invalid');
+  assert.equal(contract.evaluateDelivery({
+    prepared: prepared.prepared,
+    receipt,
+    priorReceipts: [receipt, { ...receipt, receiptId: 'delivery-receipt-2' }],
+    bridge,
+    mapping,
+    now: later,
+  }).code, 'idempotency_conflict');
   assert.equal(contract.evaluateDelivery({
     prepared: prepared.prepared,
     receipt,
@@ -259,6 +306,45 @@ test('prepare is inert and delivery is due-bound, receipt-bound, expiry-bound, a
     now: later,
   }).code, 'receipt_outside_schedule');
   assert.equal(contract.evaluateDelivery({ prepared: prepared.prepared, receipt, bridge, mapping, now: '2026-09-01T15:00:00.000Z' }).code, 'schedule_expired');
+  assert.equal(contract.prepareDelivery({
+    promotion,
+    schedule: { ...schedule, subjectId: 'subject-2' },
+    conversation,
+    catalog,
+    selection,
+    approval: approval('delivery', contract.deliveryApprovalBinding({ promotion, schedule, conversation, selection })),
+    now: time,
+  }).code, 'subject_mismatch');
+  assert.equal(contract.prepareDelivery({
+    promotion,
+    schedule: { ...schedule, dueAt: time },
+    conversation,
+    catalog,
+    selection,
+    approval: approval('delivery', contract.deliveryApprovalBinding({ promotion, schedule, conversation, selection })),
+    now: time,
+  }).code, 'approval_binding_mismatch');
+  assert.equal(contract.prepareDelivery({
+    promotion,
+    schedule,
+    conversation,
+    catalog,
+    selection: { ...selection, lastOutcome: { ...selection.lastOutcome, outcome: 'failed' } },
+    approval: approval('delivery', contract.deliveryApprovalBinding({ promotion, schedule, conversation, selection })),
+    now: time,
+  }).code, 'provider_not_qualified');
+  assert.equal(contract.prepareDelivery({
+    promotion,
+    schedule,
+    conversation,
+    catalog,
+    selection: {
+      ...selection,
+      lastOutcome: { ...selection.lastOutcome, resultingGeneration: 'forged-generation' },
+    },
+    approval: approval('delivery', contract.deliveryApprovalBinding({ promotion, schedule, conversation, selection })),
+    now: time,
+  }).code, 'provider_not_qualified');
 });
 
 test('portable conversation and bridge receipts have a closed, redacted boundary', () => {
@@ -307,6 +393,7 @@ test('timestamps are strict UTC calendar values rather than normalized dates', (
     schemaVersion: contract.SCHEDULE_SCHEMA_VERSION,
     scheduleId: 'schedule-1',
     candidateId: 'candidate-1',
+    subjectId: 'subject-1',
     dueAt: later,
     expiresAt: expiry,
     idempotencyKey: 'delivery-key-1',
@@ -321,6 +408,7 @@ test('the schema artifact parses and production code stays pure and host-namespa
   const schema = JSON.parse(fs.readFileSync(schemaPath, 'utf8'));
   assert.equal(schema.$id, 'https://jarvos.dev/schemas/active-assistant-service.schema.json');
   assert.match(schema.$comment, /structural envelope/i);
+  assert.ok(schema.oneOf.some((entry) => entry.$ref === '#/$defs/approval'));
   const schemaText = JSON.stringify(schema);
   [
     contract.EVIDENCE_SCHEMA_VERSION,
