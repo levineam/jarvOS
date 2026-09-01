@@ -103,8 +103,9 @@ paths or symlinks, duplicate Telegram routes, and conflicting new/legacy
 records. It has no default home-directory lookup, so it cannot inspect a live
 installation until a separately reviewed adapter deliberately opts in.
 
-Telegram is a route dimension, not a harness name: identities such as
-`openclaw:telegram:default` and `hermes:telegram:default` are recognized but
+The supported route identities are `telegram:<route-name>`,
+`openclaw:telegram:<route-name>`, and `hermes:telegram:<route-name>`.
+`<route-name>` is one opaque, colon-free segment; accepted identities are
 returned exactly as written. Compatibility fallback always returns structured
 read-only evidence, whether or not an optional observer is supplied. Files are
 opened with no-follow descriptors and revalidated against their inspected

@@ -72,13 +72,31 @@ test('legacy OpenClaw state is a logged read-only fallback and is never modified
   ]);
 });
 
-test('recognizes existing OpenClaw and Hermes Telegram route identities without rewriting them', () => {
-  for (const routeIdentity of ['openclaw:telegram:owner-primary', 'hermes:telegram:owner-primary']) {
+test('recognizes only generic, OpenClaw, and Hermes Telegram route identities without rewriting them', () => {
+  for (const routeIdentity of ['telegram:default', 'openclaw:telegram:owner-primary', 'hermes:telegram:owner-primary']) {
     const root = fixtureRoot();
     writeState(root, JARVOS_RUNNER_STATE_RELATIVE_PATH, [{ ...telegramRoute, routeIdentity }]);
     const result = resolveTelegramCredentialReference({ fixtureRoot: root });
     assert.equal(result.ok, true, routeIdentity);
     assert.equal(result.credential.routeIdentity, routeIdentity);
+  }
+});
+
+test('rejects unsupported, extra-segment, and token-shaped route identities without echoing them', () => {
+  const rejectedIdentities = [
+    'codex:telegram:default',
+    'telegram:default:extra',
+    'openclaw:telegram:default:extra',
+    'openclaw:telegram:123456789:fixture_value_that_is_intentionally_long',
+  ];
+  for (const routeIdentity of rejectedIdentities) {
+    const root = fixtureRoot();
+    writeState(root, JARVOS_RUNNER_STATE_RELATIVE_PATH, [{ ...telegramRoute, routeIdentity }]);
+    const state = readRunnerState({ fixtureRoot: root });
+    const credential = resolveTelegramCredentialReference({ fixtureRoot: root });
+    assert.deepEqual(state, { ok: false, code: 'runner_state_invalid' }, routeIdentity);
+    assert.deepEqual(credential, { ok: false, code: 'runner_state_invalid' }, routeIdentity);
+    assert.equal(JSON.stringify({ state, credential }).includes(routeIdentity), false);
   }
 });
 

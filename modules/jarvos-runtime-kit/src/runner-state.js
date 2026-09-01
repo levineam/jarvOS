@@ -10,7 +10,10 @@ const path = require('node:path');
 const RUNNER_STATE_VERSION = 'jarvos-runner-state/v1';
 const JARVOS_RUNNER_STATE_RELATIVE_PATH = '.jarvos/runner-state.json';
 const LEGACY_OPENCLAW_RUNNER_STATE_RELATIVE_PATH = '.openclaw/cron/external-runner-state.json';
-const ROUTE_ID_RE = /^[a-z][a-z0-9._-]*(?::[A-Za-z0-9][A-Za-z0-9._/-]{0,127})+$/;
+// Only the generic Telegram identity and the two installed compatibility
+// harnesses are admissible. The final route-name is one opaque, colon-free
+// segment, so an identity cannot smuggle a Telegram token payload.
+const TELEGRAM_ROUTE_ID_RE = /^(?:telegram|(?:openclaw|hermes):telegram):[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 const SECRET_STORE_REF_RE = /^[a-z][a-z0-9._-]*:[A-Za-z0-9][A-Za-z0-9._/@-]{0,255}$/;
 // A revision is an opaque identifier, never a credential. Colons are
 // intentionally excluded: they are required by Telegram bot-token shapes.
@@ -124,7 +127,7 @@ function parseRunnerState(content) {
   for (const candidate of parsed.routes) {
     if (!isObject(candidate)
       || Object.keys(candidate).some((key) => !['routeIdentity', 'secretStoreRef', 'revision'].includes(key))
-      || typeof candidate.routeIdentity !== 'string' || !ROUTE_ID_RE.test(candidate.routeIdentity)
+      || typeof candidate.routeIdentity !== 'string' || !TELEGRAM_ROUTE_ID_RE.test(candidate.routeIdentity)
       || typeof candidate.secretStoreRef !== 'string' || !SECRET_STORE_REF_RE.test(candidate.secretStoreRef)
       || typeof candidate.revision !== 'string' || !OPAQUE_REVISION_RE.test(candidate.revision)
       || routeIdentities.has(candidate.routeIdentity)) {
@@ -165,10 +168,9 @@ function equivalentRoutes(first, second) {
 }
 
 function telegramRoutes(state) {
-  // Identity remains opaque and unmodified. Telegram is simply a route
-  // dimension: legacy `openclaw:telegram:*`, `hermes:telegram:*`, and future
-  // `<adapter>:telegram:*` identities all retain their original form.
-  return state.routes.filter((route) => route.routeIdentity.split(':').includes('telegram'));
+  // parseRunnerState admits only these three Telegram identity shapes. Keep
+  // the selected identity opaque and return it exactly as configured.
+  return state.routes;
 }
 
 function telegramRoute(state) {
