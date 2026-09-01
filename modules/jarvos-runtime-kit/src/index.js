@@ -19,6 +19,7 @@ const managedActivation = require('./managed-activation.js');
 const providerSelection = require('./provider-selection.js');
 const providerPreference = require('./provider-preference.js');
 const runtimeModeContract = require('./runtime-mode-contract.js');
+const harnessConformance = require('./harness-conformance.js');
 const constrainedGeneration = require('./constrained-generation.js');
 
 const DEFAULT_AGENT_CONTEXT_MCP = 'modules/jarvos-agent-context/scripts/jarvos-mcp.js';
@@ -1019,6 +1020,15 @@ function validateManifest(manifest) {
       }
     }
   }
+  if (['hermes', 'openclaw'].includes(manifest.id)) {
+    const conformanceValidation = harnessConformance.validateHarnessConformanceRegistry(manifest.harnessConformance, {
+      harness: manifest.id,
+      requireCanonicalTiers: true,
+    });
+    if (!conformanceValidation.ok) {
+      for (const error of conformanceValidation.errors) add(errors, `harnessConformance: ${error}`);
+    }
+  }
   if (manifest.controlPlane) {
     if (manifest.controlPlane.module !== CONTROL_PLANE_MODULE) add(errors, `controlPlane.module must be ${CONTROL_PLANE_MODULE}`);
     if (!shared.requiredTools?.includes(CONTROL_PLANE_TOOL)) add(errors, `sharedAgentContext.requiredTools must include ${CONTROL_PLANE_TOOL} when controlPlane is declared`);
@@ -1370,6 +1380,7 @@ module.exports = {
   ...providerSelection,
   ...providerPreference,
   ...runtimeModeContract,
+  ...harnessConformance,
   ...constrainedGeneration,
   DEFAULT_AGENT_CONTEXT_MCP,
   HYDRATION_MODES,

@@ -89,6 +89,20 @@ Configurations that do not contain `runtimeMode` are loaded as the compatible
 `none` declaration. This contract has no activation behavior: it starts no
 process, changes no credentials, and installs nothing.
 
+`runtimeMode.conformanceFacts` is an optional `jarvos-harness-conformance/v1`
+registry. Its tiers are `baseline-context`, `conversational`,
+`mutation-capable`, and `proactive-authority`. A
+`telegram.proactive-delivery` route is rejected unless its selected harness has
+a verified `proactive-authority` fact bound to the exact installed tuple
+(harness, runtime version, and asset digest). Hooks are descriptive evidence,
+not proactive proof. The checked-in Hermes and OpenClaw declarations are both
+`claimed-unverified` pending owner-local Mac Mini proof; this repository does
+not run that proof or activate either harness.
+
+Conformance facts currently name only `hermes` or `openclaw`. Their registered
+adapter manifests must bind every fact to their own id and declare all four
+tiers once, in the canonical order above.
+
 ## Managed harness activation
 
 Managed activation answers whether a harness is **live under a selected public
