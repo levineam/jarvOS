@@ -167,6 +167,16 @@ function migratedSharedVaultConfig(existing, expected) {
   };
 }
 
+// Match Doctor's comparison semantics: the runtime keeps an absolute env
+// override's spelling, while path.resolve() normalizes harmless trailing
+// separators and dot segments without resolving symlinks or weakening the
+// publication target's separate containment/symlink checks.
+function hasSameRuntimePath(left, right) {
+  return typeof left === 'string'
+    && typeof right === 'string'
+    && path.resolve(left) === path.resolve(right);
+}
+
 function hasPortableRuntimeConfig(existing, expected, homeDir = os.homedir(), runtimePaths = null) {
   if (!existing?.paths || typeof existing.paths !== 'object' || !existing?.user || typeof existing.user !== 'object') return false;
   const existingPaths = resolvedConfigPaths(existing, homeDir);
@@ -182,7 +192,7 @@ function hasPortableRuntimeConfig(existing, expected, homeDir = os.homedir(), ru
   // workspace or vault, so those optional omissions are portable when their
   // resolved value still matches the expected installation.
   return Object.keys(expectedPaths).every((key) => existingPaths[key] === expectedPaths[key]
-    && (!runtimePaths || runtimePaths[key] === expectedPaths[key])
+    && (!runtimePaths || hasSameRuntimePath(runtimePaths[key], expectedPaths[key]))
     && (Object.hasOwn(existing.paths, key)
       ? isUsablePath(existing.paths[key], homeDir)
       : derivedPathKeys.has(key)))
@@ -192,16 +202,10 @@ function hasPortableRuntimeConfig(existing, expected, homeDir = os.homedir(), ru
 
 function divergentRuntimePathKeys(config, runtimePaths, homeDir = os.homedir()) {
   const expectedPaths = resolvedConfigPaths(config, homeDir);
-  // Match Doctor's comparison semantics: the runtime keeps an absolute env
-  // override's spelling, while path.resolve() normalizes harmless trailing
-  // separators and dot segments without resolving symlinks or weakening the
-  // publication target's separate containment/symlink checks.
   return Object.keys(expectedPaths).filter((key) => {
     const runtimePath = runtimePaths[key];
     const expectedPath = expectedPaths[key];
-    return typeof runtimePath !== 'string'
-      || typeof expectedPath !== 'string'
-      || path.resolve(runtimePath) !== path.resolve(expectedPath);
+    return !hasSameRuntimePath(runtimePath, expectedPath);
   });
 }
 
