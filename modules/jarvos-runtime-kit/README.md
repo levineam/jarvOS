@@ -2,6 +2,17 @@
 
 Contract, scaffold, and conformance checks for jarvOS runtime adapters.
 
+## Constrained generation (declaration-only)
+
+`evaluateConstrainedGeneration(record)` evaluates a redacted, backend-neutral
+generation receipt. It requires runtime-proof evidence, exact returned model
+and reasoning effort, zero tools, no fallback attempts, usage evidence, and
+explicit delivery denial. It never invokes a backend or changes provider
+selection. The OpenClaw-shaped fixture proves only this contract's fixture
+conformance; it is not preserved-runtime behavior or golden-parity evidence.
+It remains `claimed-unverified`; Hermes and direct-provider backends have no
+verified claim in this contract.
+
 Runtime adapters should stay thin. Shared jarvOS capabilities live in
 `@jarvos/agent-context`; adapter directories translate those capabilities into a
 host runtime's native surfaces such as MCP, hooks, skills, or desktop config.
