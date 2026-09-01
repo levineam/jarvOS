@@ -117,6 +117,28 @@ try {
   assert.equal(fs.existsSync(invalidTimezoneWorkspace), false, 'invalid timezone must fail before workspace writes');
   assert.equal(fs.existsSync(invalidTimezoneVault), false, 'invalid timezone must fail before vault writes');
 
+  for (const [surface, invoke] of [['router', runInit], ['bootstrap', runBootstrap]]) {
+    const containmentHome = path.join(tmp, `containment-${surface}-home`);
+    const containmentVault = path.join(tmp, `containment-${surface}-vault`);
+    const nestedWorkspace = path.join(containmentVault, 'workspace');
+    fs.mkdirSync(containmentHome);
+    const nested = invoke(['--workspace', nestedWorkspace, '--vault', containmentVault], initEnv(containmentHome));
+    assert.notEqual(nested.status, 0, `${surface} accepted a workspace inside its vault`);
+    assert.match(`${nested.stdout}${nested.stderr}`, /workspace must not equal or be inside the selected vault/);
+    assert.equal(fs.existsSync(containmentVault), false, `${surface} wrote the selected vault before rejecting containment`);
+
+    const staleHome = path.join(tmp, `stale-vault-${surface}-home`);
+    const staleVault = path.join(staleHome, 'Documents', 'Vault v3');
+    const canonicalVault = path.join(staleHome, 'Vaults', 'Vault v3');
+    const staleWorkspace = path.join(tmp, `stale-vault-${surface}-workspace`);
+    fs.mkdirSync(canonicalVault, { recursive: true });
+    const stale = invoke(['--workspace', staleWorkspace, '--vault', staleVault], initEnv(staleHome));
+    assert.notEqual(stale.status, 0, `${surface} accepted a stale vault path`);
+    assert.match(`${stale.stdout}${stale.stderr}`, /Refusing to use stale vault path/);
+    assert.equal(fs.existsSync(staleWorkspace), false, `${surface} wrote a workspace for a stale vault path`);
+    assert.equal(fs.existsSync(staleVault), false, `${surface} wrote the stale vault path`);
+  }
+
   const relativeRouterHome = path.join(tmp, 'relative-router-home');
   const relativeRouterWorkspace = path.join(tmp, 'relative-router-workspace');
   const relativeRouterVault = path.join(tmp, 'relative-router-vault');

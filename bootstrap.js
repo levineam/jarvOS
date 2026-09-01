@@ -14,6 +14,7 @@ const fs = require('fs');
 const path = require('path');
 const readline = require('readline');
 const os = require('os');
+const { assertNotStaleVaultPath } = require('./modules/jarvos-secondbrain/bridge/config/src/resolve-config');
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -51,6 +52,12 @@ function absolutePath(p) {
 function isValidIanaTimezone(value) {
   if (typeof value !== 'string' || !value.trim()) return false;
   try { Intl.DateTimeFormat(undefined, { timeZone: value }); return true; } catch { return false; }
+}
+
+function isSameOrSubPath(parentPath, candidatePath) {
+  const parent = path.resolve(parentPath);
+  const candidate = path.resolve(candidatePath);
+  return candidate === parent || candidate.startsWith(`${parent}${path.sep}`);
 }
 
 function resolvePathInput(value, fallback) {
@@ -339,6 +346,16 @@ function classifyInitTargets({ workspace, vault, useExistingVault = false }) {
 function preflightInit(config, inputs) {
   if (!isValidIanaTimezone(config.TIMEZONE)) {
     throw new Error(`Refusing to initialize: TIMEZONE must be a valid IANA timezone (received ${JSON.stringify(config.TIMEZONE)})`);
+  }
+  // Keep bootstrap aligned with the runtime resolver: an explicit old
+  // Documents/Vault v3 selection must not create a config the runtime rejects.
+  // This is intentionally before target classification or directory creation.
+  assertNotStaleVaultPath(config.VAULT_PATH, {
+    home: os.homedir(),
+    source: inputs.vaultSource,
+  });
+  if (isSameOrSubPath(config.VAULT_PATH, config.WORKSPACE_PATH)) {
+    throw new Error('Refusing to initialize: workspace must not equal or be inside the selected vault');
   }
   const classification = classifyInitTargets({
     workspace: config.WORKSPACE_PATH,
