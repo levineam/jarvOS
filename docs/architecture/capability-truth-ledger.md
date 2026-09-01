@@ -5,7 +5,9 @@ project asserts about each capability and points to the evidence behind the
 assertion. It is not discovery, not an activation probe, and not proof that a
 capability runs anywhere. Reading the ledger tells you what has been claimed and
 where to check it; validating it inspects no repository, host, process, or
-network.
+network. In particular, a record on an open draft pull request is a draft
+specification and `draft-pr` repository state, never canonical or
+repository-shipped merely because its branch contains code and tests.
 
 ## Schema
 
@@ -36,8 +38,9 @@ Every record also has a bounded lowercase `capabilityId`, a bounded `title`, an
 ISO `assertedOn` date, optional bounded `notes`, and a non-empty `evidence`
 array. Each evidence pointer is `{ type, ref }`, where type is `repo-path`,
 `pull-request`, `test`, `document`, or `commit`. A reference is a bounded,
-repository-relative pointer: it cannot be absolute, cannot contain `..`
-traversal, and cannot carry a `file:` or other URI scheme.
+repository-relative pointer, except that a pull-request pointer is a bounded
+tracker-relative reference such as `pull/257`; it cannot be absolute, cannot
+contain `..` traversal, and cannot carry a `file:` or other URI scheme.
 
 ## Invariants
 
@@ -50,9 +53,11 @@ traversal, and cannot carry a `file:` or other URI scheme.
 
 ## Seed ledger
 
-The tracked `capability-ledger.json` seed describes only this local foundation
-slice. Its identity, truth-ledger, candidate-envelope, and promotion-receipt
-contracts are asserted at `implementation: partial` and `verification:
-fixture-proven` because their validators and tests exist but no installed
-product consumer activates them. Every seed record is `repository: local-only`,
-`activation: inactive`, and `authority: none`.
+The tracked `capability-ledger.json` seed describes only the foundation work in
+draft pull request 257. Its identity, truth-ledger, candidate-envelope, and
+promotion-receipt contracts are asserted at `specification: draft`,
+`implementation: partial`, and `verification: fixture-proven` because their
+validators and tests exist but no installed product consumer activates them.
+Every seed record is `repository: draft-pr`, `activation: inactive`, and
+`authority: none`. Merge and release are separate future observations; neither
+is inferred from this branch.

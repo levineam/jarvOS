@@ -4,43 +4,45 @@
     {
       "capabilityId": "portable-identity",
       "title": "Portable opaque identity contract",
-      "specification": "canonical",
+      "specification": "draft",
       "implementation": "partial",
-      "repository": "local-only",
+      "repository": "draft-pr",
       "verification": "fixture-proven",
       "activation": "inactive",
       "authority": "none",
       "evidence": [
         { "type": "repo-path", "ref": "modules/jarvos-control-plane/src/identity.js" },
         { "type": "test", "ref": "modules/jarvos-control-plane/test/identity.test.js" },
-        { "type": "document", "ref": "docs/architecture/capability-truth-ledger.md" }
+        { "type": "document", "ref": "docs/architecture/capability-truth-ledger.md" },
+        { "type": "pull-request", "ref": "pull/257" }
       ],
       "assertedOn": "2026-08-31",
-      "notes": "Validator, exports, and unit tests exist; no product consumer issues identifiers yet."
+      "notes": "Draft-PR validator, exports, and unit tests exist; no product consumer issues identifiers yet."
     },
     {
       "capabilityId": "capability-truth-ledger",
       "title": "Capability truth ledger contract",
-      "specification": "canonical",
+      "specification": "draft",
       "implementation": "partial",
-      "repository": "local-only",
+      "repository": "draft-pr",
       "verification": "fixture-proven",
       "activation": "inactive",
       "authority": "none",
       "evidence": [
         { "type": "repo-path", "ref": "scripts/lib/capability-ledger.js" },
         { "type": "document", "ref": "docs/architecture/capability-truth-ledger.md" },
-        { "type": "repo-path", "ref": "capability-ledger.json" }
+        { "type": "repo-path", "ref": "capability-ledger.json" },
+        { "type": "pull-request", "ref": "pull/257" }
       ],
       "assertedOn": "2026-08-31",
-      "notes": "This ledger validates against its own contract; no automated reporter consumes it yet."
+      "notes": "This draft-PR ledger validates against its own contract; no automated reporter consumes it yet."
     },
     {
       "capabilityId": "candidate-envelope",
       "title": "Non-authoritative candidate envelope contract",
-      "specification": "canonical",
+      "specification": "draft",
       "implementation": "partial",
-      "repository": "local-only",
+      "repository": "draft-pr",
       "verification": "fixture-proven",
       "activation": "inactive",
       "authority": "none",
@@ -48,17 +50,18 @@
         { "type": "repo-path", "ref": "modules/jarvos-secondbrain/packages/jarvos-ambient/src/intent/candidate-contract.js" },
         { "type": "test", "ref": "modules/jarvos-secondbrain/packages/jarvos-ambient/test/candidate-contract.test.js" },
         { "type": "document", "ref": "modules/jarvos-secondbrain/docs/contracts/CANDIDATE_ENVELOPE.md" },
-        { "type": "test", "ref": "tests/fixtures/foundation-contracts/manifest.json" }
+        { "type": "test", "ref": "tests/fixtures/foundation-contracts/manifest.json" },
+        { "type": "pull-request", "ref": "pull/257" }
       ],
       "assertedOn": "2026-08-31",
-      "notes": "Validator, exports, unit tests, and shared conformance fixtures exist; no source adapter or promotion consumer constructs candidates yet."
+      "notes": "Draft-PR validator, exports, unit tests, and shared conformance fixtures exist; no source adapter or promotion consumer constructs candidates yet."
     },
     {
       "capabilityId": "promotion-receipt",
       "title": "Cross-surface promotion receipt envelope contract",
-      "specification": "canonical",
+      "specification": "draft",
       "implementation": "partial",
-      "repository": "local-only",
+      "repository": "draft-pr",
       "verification": "fixture-proven",
       "activation": "inactive",
       "authority": "none",
@@ -66,10 +69,11 @@
         { "type": "repo-path", "ref": "modules/jarvos-control-plane/src/promotion-receipt.js" },
         { "type": "test", "ref": "modules/jarvos-control-plane/test/promotion-receipt.test.js" },
         { "type": "document", "ref": "modules/jarvos-control-plane/README.md" },
-        { "type": "test", "ref": "tests/fixtures/foundation-contracts/manifest.json" }
+        { "type": "test", "ref": "tests/fixtures/foundation-contracts/manifest.json" },
+        { "type": "pull-request", "ref": "pull/257" }
       ],
       "assertedOn": "2026-08-31",
-      "notes": "Validator, exports, unit tests, and shared conformance fixtures exist; no destination writer emits this envelope yet."
+      "notes": "Draft-PR validator, exports, unit tests, and shared conformance fixtures exist; no destination writer emits this envelope yet."
     }
   ]
 }

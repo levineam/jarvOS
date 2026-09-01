@@ -83,6 +83,46 @@ test('the tracked capability ledger conforms to the ledger contract', () => {
   assert.deepEqual(validateCapabilityLedger(ledger), []);
 });
 
+test('the tracked foundation ledger does not overstate an open draft pull request', () => {
+  const ledger = readJson(path.join(ROOT, 'capability-ledger.json'));
+  for (const record of ledger.records) {
+    assert.equal(record.specification, 'draft', `${record.capabilityId} must remain draft`);
+    assert.equal(record.repository, 'draft-pr', `${record.capabilityId} must remain draft-pr`);
+    assert.ok(
+      record.evidence.some((entry) => entry.type === 'pull-request' && entry.ref === 'pull/257'),
+      `${record.capabilityId} must identify its draft pull request evidence`,
+    );
+  }
+});
+
+test('foundation architecture documents keep runtime ownership and proof tiers explicit', () => {
+  const productBoundary = fs.readFileSync(
+    path.join(ROOT, 'docs/architecture/product-category-and-boundaries.md'),
+    'utf8',
+  );
+  const ledgerBoundary = fs.readFileSync(
+    path.join(ROOT, 'docs/architecture/capability-truth-ledger.md'),
+    'utf8',
+  );
+
+  const normalizedProductBoundary = productBoundary.replace(/\s+/g, ' ');
+  const normalizedLedgerBoundary = ledgerBoundary.replace(/\s+/g, ' ');
+  for (const claim of [
+    'jarvOS has no load-bearing harness',
+    'Active Assistant is a jarvOS-owned service boundary',
+    'Native session identifiers and their storage remain harness-owned',
+    'Compatibility-read mode',
+    'contract/fixture conformance',
+    'does not claim adapter, installed, or live behavior',
+  ]) {
+    assert.ok(normalizedProductBoundary.includes(claim), `missing product boundary: ${claim}`);
+  }
+  assert.ok(
+    normalizedLedgerBoundary.includes('never canonical or repository-shipped'),
+    'ledger documentation must distinguish draft PR work from shipped repository state',
+  );
+});
+
 test('control-plane and ambient agree on candidate identity grammar', () => {
   const valid = 'jarvos:candidate:example:c-identity-0001';
   const malformed = [
