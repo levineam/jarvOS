@@ -520,6 +520,40 @@ test('an equivalent trailing-separator runtime override keeps an existing portab
   assert.equal(fs.readFileSync(configPath, 'utf8'), existingBytes, 'assessment remains read-only');
 });
 
+test('a symlink-bearing parent traversal never collapses into an equivalent existing runtime path', () => {
+  const home = tempDir();
+  const workspace = path.join(home, 'workspace');
+  const vault = path.join(home, 'Vaults', 'Vault v3');
+  const outside = path.join(home, 'outside');
+  for (const directory of ['Notes', 'Journal', 'Tags']) fs.mkdirSync(path.join(vault, directory), { recursive: true });
+  fs.mkdirSync(workspace, { recursive: true });
+  const linkedDirectory = path.join(vault, 'linked-directory');
+  fs.symlinkSync(outside, linkedDirectory, 'dir');
+
+  const expected = buildSharedVaultConfig({
+    vaultDir: vault,
+    workspaceRoot: workspace,
+    homeDir: home,
+    user: { name: 'Tester', timezone: 'UTC' },
+  });
+  const configPath = path.join(workspace, 'jarvos.config.json');
+  const existingBytes = `${JSON.stringify(expected, null, 2)}\n`;
+  fs.writeFileSync(configPath, existingBytes);
+  // Lexically this normalizes to <vault>/Tags. At runtime `linked-directory`
+  // is expanded first, so its `..` can escape to a different physical parent.
+  const ambiguousOverride = `${linkedDirectory}${path.sep}..${path.sep}Tags`;
+
+  const assessment = assessSharedVaultConfigTarget({
+    configPath,
+    config: expected,
+    vaultDir: vault,
+    homeDir: home,
+    env: { JARVOS_TAGS_DIR: ambiguousOverride },
+  });
+  assert.equal(assessment.action, 'migrate');
+  assert.equal(fs.readFileSync(configPath, 'utf8'), existingBytes, 'ambiguous assessment remains read-only');
+});
+
 test('successful exclusive creation leaves no residue beside the config', { skip: process.platform === 'win32' }, () => {
   const home = tempDir();
   const workspace = path.join(home, 'workspace');

@@ -167,13 +167,23 @@ function migratedSharedVaultConfig(existing, expected) {
   };
 }
 
-// Match Doctor's comparison semantics: the runtime keeps an absolute env
-// override's spelling, while path.resolve() normalizes harmless trailing
-// separators and dot segments without resolving symlinks or weakening the
-// publication target's separate containment/symlink checks.
+function hasParentTraversal(value) {
+  const parsed = path.parse(value);
+  return value.slice(parsed.root.length).split(path.sep).includes('..');
+}
+
+// Match Doctor's comparison semantics for harmless spelling differences, but
+// never let lexical path.resolve() collapse `..` before we know whether an
+// earlier component is a symlink. That traversal can name a physically
+// different target. Treat it as unequal so fresh publication fails closed and
+// existing configs stay in the manual-reconciliation path; trailing separators
+// and `.` segments remain equivalent without resolving symlinks or weakening
+// the publication target's separate containment/symlink checks.
 function hasSameRuntimePath(left, right) {
   return typeof left === 'string'
     && typeof right === 'string'
+    && !hasParentTraversal(left)
+    && !hasParentTraversal(right)
     && path.resolve(left) === path.resolve(right);
 }
 
