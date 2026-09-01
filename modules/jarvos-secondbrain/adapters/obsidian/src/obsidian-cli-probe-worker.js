@@ -1,20 +1,81 @@
 'use strict';
 
-const { spawn } = require('node:child_process');
+const { execFileSync, spawn } = require('node:child_process');
 const fs = require('node:fs');
 
 const MAX_CAPTURE_BYTES = 64 * 1024;
+const DEFAULT_PROBE_TIMEOUT_MS = 10_000;
+const PROBE_CLEANUP_GRACE_MS = 1_000;
+const MAX_PROBE_TIMEOUT_MS = 2_147_483_647 - PROBE_CLEANUP_GRACE_MS;
+const PROCESS_SCAN_INTERVAL_MS = 25;
+const PROCESS_SNAPSHOT_TIMEOUT_MS = 50;
+const MAX_PROCESS_SNAPSHOT_CALLS = 512;
 const TASKKILL_TIMEOUT_MS = 250;
+const TRUNCATION_SEPARATOR = Buffer.from('\n[... output truncated ...]\n', 'utf8');
+
+function normalizeProbeTimeoutMs(value, fallback = DEFAULT_PROBE_TIMEOUT_MS) {
+  if (value === undefined || value === null) return fallback;
+  const numeric = typeof value === 'number'
+    ? value
+    : typeof value === 'string' && value.trim()
+      ? Number(value)
+      : NaN;
+  if (!Number.isFinite(numeric) || numeric <= 0 || numeric > MAX_PROBE_TIMEOUT_MS) throw new RangeError(`timeoutMs must be a finite number between 1 and ${MAX_PROBE_TIMEOUT_MS}`);
+  return Math.max(1, Math.floor(numeric));
+}
+
+function readProcessSnapshot() {
+  return execFileSync('ps', ['-axo', 'pid=,ppid='], {
+    encoding: 'utf8',
+    timeout: PROCESS_SNAPSHOT_TIMEOUT_MS,
+    maxBuffer: 2 * 1024 * 1024,
+  });
+}
+
+function descendantPids(rootPid, snapshot) {
+  const children = new Map();
+  for (const line of String(snapshot || '').split(/\r?\n/)) {
+    const match = line.trim().match(/^(\d+)\s+(\d+)$/);
+    if (!match) continue;
+    const pid = Number(match[1]);
+    const ppid = Number(match[2]);
+    if (!children.has(ppid)) children.set(ppid, []);
+    children.get(ppid).push(pid);
+  }
+  const result = new Set();
+  const pending = [Number(rootPid)];
+  while (pending.length) {
+    const parent = pending.shift();
+    for (const pid of children.get(parent) || []) {
+      if (result.has(pid)) continue;
+      result.add(pid);
+      pending.push(pid);
+    }
+  }
+  return result;
+}
+
+function collectDescendantPids(rootPid, {
+  platform = process.platform,
+  snapshotProcesses = readProcessSnapshot,
+} = {}) {
+  if (platform === 'win32') return { pids: new Set(), available: true };
+  try { return { pids: descendantPids(rootPid, snapshotProcesses()), available: true }; } catch { return { pids: new Set(), available: false }; }
+}
 
 function createOutputCapture(stream, limit = MAX_CAPTURE_BYTES) {
   const boundedLimit = Math.max(0, Number(limit) || 0);
-  const headLimit = Math.ceil(boundedLimit / 2);
-  const tailLimit = boundedLimit - headLimit;
+  const separatorLength = TRUNCATION_SEPARATOR.length <= boundedLimit ? TRUNCATION_SEPARATOR.length : 0;
+  const payloadLimit = boundedLimit - separatorLength;
+  const headLimit = Math.ceil(payloadLimit / 2);
+  const tailLimit = payloadLimit - headLimit;
   const headChunks = [];
   let headByteLength = 0;
   let tail = Buffer.alloc(0);
+  let truncated = false;
   const appendTail = (buffer) => {
     if (!tailLimit || !buffer.length) return;
+    if (buffer.length > tailLimit || tail.length + buffer.length > tailLimit) truncated = true;
     const retained = buffer.length > tailLimit ? buffer.subarray(buffer.length - tailLimit) : buffer;
     const combined = Buffer.concat([tail, retained]);
     tail = combined.length > tailLimit
@@ -26,6 +87,7 @@ function createOutputCapture(stream, limit = MAX_CAPTURE_BYTES) {
     let offset = 0;
     if (headByteLength < headLimit) {
       const retainedLength = Math.min(buffer.length, headLimit - headByteLength);
+      if (retainedLength < buffer.length) truncated = true;
       headChunks.push(Buffer.from(buffer.subarray(0, retainedLength)));
       headByteLength += retainedLength;
       offset = retainedLength;
@@ -36,8 +98,11 @@ function createOutputCapture(stream, limit = MAX_CAPTURE_BYTES) {
     if (offset < buffer.length) appendTail(buffer.subarray(offset));
   });
   return Object.freeze({
-    bytes: () => headByteLength + tail.length,
-    value: () => Buffer.concat([...headChunks, tail], headByteLength + tail.length).toString('utf8'),
+    bytes: () => headByteLength + tail.length + (truncated ? separatorLength : 0),
+    value: () => {
+      const separator = truncated ? TRUNCATION_SEPARATOR.subarray(0, separatorLength) : Buffer.alloc(0);
+      return Buffer.concat([...headChunks, separator, tail], headByteLength + tail.length + separator.length).toString('utf8');
+    },
   });
 }
 
@@ -48,15 +113,20 @@ function terminateOwnedTree(child, {
   signalProcess = process.kill,
   onComplete = () => {},
   taskkillTimeoutMs = TASKKILL_TIMEOUT_MS,
+  ownedPids = new Set(),
+  ownershipScanFailed = false,
 } = {}) {
   if (!child?.pid) { onComplete({ contained: false, reason: 'missing_child_pid' }); return; }
   let completed = false;
   const complete = (result) => { if (!completed) { completed = true; onComplete(result); } };
-  const stopKnownChild = () => {
-    try { child.kill?.('SIGKILL'); } catch {}
+  const closeKnownStreams = () => {
     for (const stream of [child.stdin, child.stdout, child.stderr]) {
       try { stream?.destroy?.(); } catch {}
     }
+  };
+  const stopKnownChild = () => {
+    try { child.kill?.('SIGKILL'); } catch {}
+    closeKnownStreams();
   };
   const failContainment = (reason) => { stopKnownChild(); complete({ contained: false, reason }); };
   if (platform === 'win32') {
@@ -76,7 +146,7 @@ function terminateOwnedTree(child, {
       killer.once('error', () => { if (!settleAttempt()) return; failContainment('taskkill_failed'); });
       killer.once('close', (code) => {
         if (!settleAttempt()) return;
-        if (code === 0) complete({ contained: true });
+        if (code === 0) { closeKnownStreams(); complete({ contained: true }); }
         else if (attempt === 0) runTaskkill(1);
         else failContainment('taskkill_failed');
       });
@@ -84,17 +154,36 @@ function terminateOwnedTree(child, {
     runTaskkill(0);
     return;
   }
-  // The dedicated group is the containment boundary.  A direct SIGKILL avoids
-  // graceful handlers and the fork window they can open; success means only
-  // that the owned process group accepted the signal, not that arbitrary
-  // processes which detached before the timeout were in that group.
+  // The dedicated group is the primary containment boundary. A process can
+  // deliberately call setsid/detach and escape that group, so the worker also
+  // kills the exact descendant PIDs observed while the probe was alive. This
+  // is still an owned-process boundary, unlike a process-name kill.
+  let groupError;
   try {
     signalProcess(-child.pid, 'SIGKILL');
-    complete({ contained: true });
   }
   catch (error) {
-    failContainment(error?.code === 'ESRCH' ? 'process_group_absent' : 'process_group_kill_failed');
+    groupError = error;
   }
+  for (const pid of ownedPids) {
+    if (!pid || pid === child.pid || pid === process.pid) continue;
+    try { signalProcess(pid, 'SIGKILL'); }
+    catch (error) {
+      if (error?.code !== 'ESRCH') {
+        failContainment('owned_process_kill_failed');
+        return;
+      }
+    }
+  }
+  if (ownershipScanFailed) {
+    failContainment('descendant_scan_failed');
+    return;
+  }
+  if (!groupError || (groupError.code === 'ESRCH' && ownedPids.size)) {
+    stopKnownChild();
+    complete({ contained: true });
+  }
+  else failContainment(groupError.code === 'ESRCH' ? 'process_group_absent' : 'process_group_kill_failed');
 }
 
 function runProbe(request, {
@@ -103,8 +192,9 @@ function runProbe(request, {
   output = process.stdout,
   schedule = setTimeout,
   taskkillTimeoutMs = TASKKILL_TIMEOUT_MS,
+  snapshotProcesses = readProcessSnapshot,
 } = {}) {
-  const timeoutMs = Math.max(1, Number(request.timeoutMs) || 10_000);
+  const timeoutMs = normalizeProbeTimeoutMs(request.timeoutMs);
   const finish = (value) => output.write(JSON.stringify(value));
   let child;
   try {
@@ -115,24 +205,59 @@ function runProbe(request, {
   }
   const stdout = createOutputCapture(child.stdout);
   const stderr = createOutputCapture(child.stderr);
+  const ownedPids = new Set();
   let timedOut = false;
   let settled = false;
+  let ownershipTimer;
+  let ownershipScanFailed = false;
+  let ownershipScanCalls = 0;
+  const clearOwnershipTimer = () => { if (ownershipTimer) { try { clearTimeout(ownershipTimer); } catch {} ownershipTimer = undefined; } };
+  const scanOwnedPids = () => {
+    if (platform === 'win32') return;
+    if (ownershipScanCalls >= MAX_PROCESS_SNAPSHOT_CALLS) {
+      ownershipScanFailed = true;
+      return;
+    }
+    ownershipScanCalls += 1;
+    const scan = collectDescendantPids(child.pid, { platform, snapshotProcesses });
+    if (!scan.available) {
+      ownershipScanFailed = true;
+      return;
+    }
+    for (const pid of scan.pids) ownedPids.add(pid);
+  };
+  const refreshOwnedPids = () => {
+    if (settled || timedOut || platform === 'win32') return;
+    scanOwnedPids();
+    if (!settled && !timedOut && !ownershipScanFailed) {
+      ownershipTimer = schedule(refreshOwnedPids, PROCESS_SCAN_INTERVAL_MS);
+      ownershipTimer?.unref?.();
+    }
+  };
   const finishTimeout = (containment) => {
     if (settled) return;
     settled = true;
     clearTimeout(timer);
+    clearOwnershipTimer();
     if (containment.contained) return finish({ ok: false, code: 'ETIMEDOUT', message: `Obsidian CLI probe timed out after ${timeoutMs}ms`, stdout: stdout.value(), stderr: stderr.value() });
     finish({ ok: false, code: 'ECONTAINMENT', message: `Obsidian CLI probe timed out after ${timeoutMs}ms and dedicated process-group containment could not be confirmed (${containment.reason || 'unknown'})`, stdout: stdout.value(), stderr: stderr.value() });
   };
   const timer = schedule(() => {
     timedOut = true;
-    terminateOwnedTree(child, { platform, spawnProcess, schedule, taskkillTimeoutMs, onComplete: finishTimeout });
+    // Take one final bounded snapshot while the direct child is still the
+    // ownership root. PIDs observed here or in earlier snapshots are the only
+    // exact descendants eligible for POSIX cleanup.
+    scanOwnedPids();
+    terminateOwnedTree(child, { platform, spawnProcess, schedule, taskkillTimeoutMs, ownedPids, ownershipScanFailed, onComplete: finishTimeout });
   }, timeoutMs);
+  ownershipTimer = schedule(refreshOwnedPids, 0);
+  ownershipTimer?.unref?.();
   child.on('error', (error) => {
     if (settled) return;
     if (timedOut) return;
     settled = true;
     clearTimeout(timer);
+    clearOwnershipTimer();
     finish({ ok: false, code: error.code, message: error.message, stdout: stdout.value(), stderr: stderr.value() });
   });
   child.on('close', (code, signal) => {
@@ -142,6 +267,7 @@ function runProbe(request, {
     if (timedOut) return;
     settled = true;
     clearTimeout(timer);
+    clearOwnershipTimer();
     if (code === 0) return finish({ ok: true, stdout: stdout.value(), stderr: stderr.value() });
     finish({ ok: false, code: code == null ? signal : code, message: stderr.value() || stdout.value() || `Obsidian CLI exited with ${code == null ? signal : code}`, stdout: stdout.value(), stderr: stderr.value() });
   });
@@ -158,4 +284,4 @@ if (require.main === module) {
   runProbe(request);
 }
 
-module.exports = { MAX_CAPTURE_BYTES, createOutputCapture, runProbe, terminateOwnedTree };
+module.exports = { MAX_CAPTURE_BYTES, PROBE_CLEANUP_GRACE_MS, createOutputCapture, normalizeProbeTimeoutMs, runProbe, terminateOwnedTree };

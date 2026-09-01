@@ -9,7 +9,7 @@ const test = require('node:test');
 const { createVaultMutationAdapter, runObsidianEval } = require('../adapters/obsidian/src/vault-mutation-adapter');
 const { buildObsidianInvariantProgram, buildObsidianMutationProgram } = require('../adapters/obsidian/src/vault-mutation-adapter');
 const { createJarvosVaultTransforms } = require('../src/vault-transform-registry');
-const { MAX_CAPTURE_BYTES, createOutputCapture, terminateOwnedTree } = require('../adapters/obsidian/src/obsidian-cli-probe-worker');
+const { MAX_CAPTURE_BYTES, createOutputCapture, normalizeProbeTimeoutMs, runProbe, terminateOwnedTree } = require('../adapters/obsidian/src/obsidian-cli-probe-worker');
 
 const operation = () => ({ schemaVersion: 1, operationId: 'op-20260806-adapter-test', vaultId: 'vault-a', vaultRelativePath: 'Notes/A.md', sequence: 1, operationKind: 'create', content: 'hello' });
 const ledgerPath = () => path.join(os.tmpdir(), `jarvos-adapter-${Math.random()}.json`);
@@ -56,6 +56,14 @@ test('timeouts and ambiguous CLI failures never prove that Obsidian is stopped',
   assert.equal(stoppedAdapter.capability().state, 'app_stopped');
 });
 
+test('probe timeout values are normalized and rejected consistently before spawning', () => {
+  assert.equal(normalizeProbeTimeoutMs('12.9'), 12);
+  for (const timeoutMs of [0, -1, NaN, Infinity, '', 'not-a-number', true]) {
+    assert.throws(() => runObsidianEval('JSON.stringify({ok:true})', { vaultName: 'fake-vault', timeoutMs }), /timeoutMs/);
+    assert.throws(() => runProbe({ command: 'unused', args: [], timeoutMs }, { spawnProcess: () => { throw new Error('must not spawn'); } }), /timeoutMs/);
+  }
+});
+
 test('capability probe kills a same-process-group descendant', () => {
   if (process.platform === 'win32') return;
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-obsidian-probe-'));
@@ -71,6 +79,25 @@ test('capability probe kills a same-process-group descendant', () => {
     const pid = Number(fs.readFileSync(descendantPid, 'utf8'));
     assert.throws(() => process.kill(pid, 0), { code: 'ESRCH' });
   } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('timeout contains a detached descendant that inherits probe pipes and returns promptly', () => {
+  if (process.platform === 'win32') return;
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-obsidian-probe-inherited-pipes-'));
+  const fixture = path.join(root, 'fake-obsidian-cli.js');
+  const descendantPid = path.join(root, 'descendant.pid');
+  fs.writeFileSync(fixture, `#!${process.execPath}\nconst fs = require('node:fs'); const { spawn } = require('node:child_process'); const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { detached: true, stdio: 'inherit' }); child.unref(); fs.writeFileSync(${JSON.stringify(descendantPid)}, String(child.pid)); setInterval(() => {}, 1000);\n`);
+  fs.chmodSync(fixture, 0o755);
+  const started = Date.now();
+  try {
+    assert.throws(() => runObsidianEval('JSON.stringify({ok:true})', { vaultName: 'fake-vault', command: fixture, timeoutMs: 300 }), (error) => error.code === 'ETIMEDOUT');
+    assert.ok(Date.now() - started < 1_000);
+    const pid = Number(fs.readFileSync(descendantPid, 'utf8'));
+    assert.throws(() => process.kill(pid, 0), { code: 'ESRCH' });
+  } finally {
+    try { const pid = Number(fs.readFileSync(descendantPid, 'utf8')); process.kill(pid, 'SIGKILL'); } catch {}
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
@@ -139,6 +166,7 @@ test('probe output capture caps multibyte chunks by bytes', () => {
   const capture = createOutputCapture(stream);
   stream.emit('data', Buffer.from('€'.repeat(MAX_CAPTURE_BYTES)));
   assert.equal(capture.bytes(), MAX_CAPTURE_BYTES);
+  assert.match(capture.value(), /\[\.\.\. output truncated \.\.\.\]/);
 });
 
 test('Windows taskkill retries process-tree containment and reports success only from taskkill', () => {
@@ -235,6 +263,22 @@ test('a failed POSIX group SIGKILL does not prove descendant containment', () =>
   assert.deepEqual(signals, [[-12345, 'SIGKILL']]);
   assert.deepEqual(childSignals, ['SIGKILL']);
   assert.deepEqual(results, [{ contained: false, reason: 'process_group_absent' }]);
+});
+
+test('an uncertain descendant snapshot fails closed after killing only observed descendants', () => {
+  const signals = [];
+  const childSignals = [];
+  const results = [];
+  terminateOwnedTree({ pid: 12345, kill: (signal) => childSignals.push(signal) }, {
+    platform: 'darwin',
+    signalProcess: (pid, signal) => signals.push([pid, signal]),
+    ownedPids: new Set([23456]),
+    ownershipScanFailed: true,
+    onComplete: (result) => results.push(result),
+  });
+  assert.deepEqual(signals, [[-12345, 'SIGKILL'], [23456, 'SIGKILL']]);
+  assert.deepEqual(childSignals, ['SIGKILL']);
+  assert.deepEqual(results, [{ contained: false, reason: 'descendant_scan_failed' }]);
 });
 
 test('unavailable capability retains planned intent for reconciliation', () => {
