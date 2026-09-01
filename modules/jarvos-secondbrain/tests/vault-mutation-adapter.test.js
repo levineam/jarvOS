@@ -3,11 +3,13 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { EventEmitter } = require('node:events');
 const vm = require('node:vm');
 const test = require('node:test');
-const { createVaultMutationAdapter } = require('../adapters/obsidian/src/vault-mutation-adapter');
+const { createVaultMutationAdapter, runObsidianEval } = require('../adapters/obsidian/src/vault-mutation-adapter');
 const { buildObsidianInvariantProgram, buildObsidianMutationProgram } = require('../adapters/obsidian/src/vault-mutation-adapter');
 const { createJarvosVaultTransforms } = require('../src/vault-transform-registry');
+const { MAX_CAPTURE_BYTES, createOutputCapture, normalizeProbeTimeoutMs, runProbe, terminateOwnedTree } = require('../adapters/obsidian/src/obsidian-cli-probe-worker');
 
 const operation = () => ({ schemaVersion: 1, operationId: 'op-20260806-adapter-test', vaultId: 'vault-a', vaultRelativePath: 'Notes/A.md', sequence: 1, operationKind: 'create', content: 'hello' });
 const ledgerPath = () => path.join(os.tmpdir(), `jarvos-adapter-${Math.random()}.json`);
@@ -52,6 +54,231 @@ test('timeouts and ambiguous CLI failures never prove that Obsidian is stopped',
   assert.equal(unknownAdapter.capability().state, 'app_unreachable');
   const stoppedAdapter = createVaultMutationAdapter({ vaultRoot: '/vault', vaultId: 'vault-a', ledgerPath: ledgerPath(), evaluate: () => { throw new Error('Obsidian is not running'); } });
   assert.equal(stoppedAdapter.capability().state, 'app_stopped');
+});
+
+test('probe timeout values are normalized and rejected consistently before spawning', () => {
+  assert.equal(normalizeProbeTimeoutMs('12.9'), 12);
+  for (const timeoutMs of [0, -1, NaN, Infinity, '', 'not-a-number', true]) {
+    assert.throws(() => runObsidianEval('JSON.stringify({ok:true})', { vaultName: 'fake-vault', timeoutMs }), /timeoutMs/);
+    assert.throws(() => runProbe({ command: 'unused', args: [], timeoutMs }, { spawnProcess: () => { throw new Error('must not spawn'); } }), /timeoutMs/);
+  }
+});
+
+test('capability probe kills a same-process-group descendant', () => {
+  if (process.platform === 'win32') return;
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-obsidian-probe-'));
+  const fixture = path.join(root, 'fake-obsidian-cli.js');
+  const descendantPid = path.join(root, 'descendant.pid');
+  fs.writeFileSync(fixture, `#!${process.execPath}\nconst fs = require('node:fs'); const { spawn } = require('node:child_process'); const child = spawn(process.execPath, ['-e', \"process.on('SIGTERM', () => {}); setInterval(() => {}, 1000)\"], { stdio: 'ignore' }); fs.writeFileSync(${JSON.stringify(descendantPid)}, String(child.pid)); setInterval(() => {}, 1000);\n`);
+  fs.chmodSync(fixture, 0o755);
+  const started = Date.now();
+  try {
+    assert.throws(() => runObsidianEval('JSON.stringify({ok:true})', { vaultName: 'fake-vault', command: fixture, timeoutMs: 500 }), (error) => error.code === 'ETIMEDOUT');
+    assert.ok(Date.now() - started >= 500);
+    assert.ok(Date.now() - started < 3_000);
+    const pid = Number(fs.readFileSync(descendantPid, 'utf8'));
+    assert.throws(() => process.kill(pid, 0), { code: 'ESRCH' });
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('timeout contains a detached descendant that inherits probe pipes and returns promptly', () => {
+  if (process.platform === 'win32') return;
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-obsidian-probe-inherited-pipes-'));
+  const fixture = path.join(root, 'fake-obsidian-cli.js');
+  const descendantPid = path.join(root, 'descendant.pid');
+  fs.writeFileSync(fixture, `#!${process.execPath}\nconst fs = require('node:fs'); const { spawn } = require('node:child_process'); const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { detached: true, stdio: 'inherit' }); child.unref(); fs.writeFileSync(${JSON.stringify(descendantPid)}, String(child.pid)); setInterval(() => {}, 1000);\n`);
+  fs.chmodSync(fixture, 0o755);
+  const started = Date.now();
+  try {
+    assert.throws(() => runObsidianEval('JSON.stringify({ok:true})', { vaultName: 'fake-vault', command: fixture, timeoutMs: 300 }), (error) => error.code === 'ETIMEDOUT');
+    assert.ok(Date.now() - started < 1_000);
+    const pid = Number(fs.readFileSync(descendantPid, 'utf8'));
+    assert.throws(() => process.kill(pid, 0), { code: 'ESRCH' });
+  } finally {
+    try { const pid = Number(fs.readFileSync(descendantPid, 'utf8')); process.kill(pid, 'SIGKILL'); } catch {}
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('an ordinary timeout preserves ETIMEDOUT and leaves no child', () => {
+  if (process.platform === 'win32') return;
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-obsidian-probe-normal-'));
+  const fixture = path.join(root, 'fake-obsidian-cli.js');
+  const childPid = path.join(root, 'child.pid');
+  const termMarker = path.join(root, 'sigterm.marker');
+  fs.writeFileSync(fixture, `#!${process.execPath}\nconst fs = require('node:fs'); fs.writeFileSync(${JSON.stringify(childPid)}, String(process.pid)); process.on('SIGTERM', () => fs.writeFileSync(${JSON.stringify(termMarker)}, 'unexpected')); setInterval(() => {}, 1000);\n`);
+  fs.chmodSync(fixture, 0o755);
+  try {
+    assert.throws(() => runObsidianEval('JSON.stringify({ok:true})', { vaultName: 'fake-vault', command: fixture, timeoutMs: 300 }), (error) => error.code === 'ETIMEDOUT');
+    const pid = Number(fs.readFileSync(childPid, 'utf8'));
+    assert.throws(() => process.kill(pid, 0), { code: 'ESRCH' });
+    assert.equal(fs.existsSync(termMarker), false);
+  } finally {
+    try { const pid = Number(fs.readFileSync(childPid, 'utf8')); process.kill(pid, 'SIGKILL'); } catch {}
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('direct group SIGKILL prevents a SIGTERM handler from creating work', () => {
+  if (process.platform === 'win32') return;
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-obsidian-probe-term-handler-'));
+  const fixture = path.join(root, 'fake-obsidian-cli.js');
+  const descendantPid = path.join(root, 'descendant.pid');
+  const termMarker = path.join(root, 'sigterm.marker');
+  fs.writeFileSync(fixture, `#!${process.execPath}\nconst fs = require('node:fs'); const { spawn } = require('node:child_process'); process.on('SIGTERM', () => { fs.writeFileSync(${JSON.stringify(termMarker)}, 'unexpected'); const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { detached: true, stdio: 'ignore' }); fs.writeFileSync(${JSON.stringify(descendantPid)}, String(child.pid)); child.unref(); }); setInterval(() => {}, 1000);\n`);
+  fs.chmodSync(fixture, 0o755);
+  try {
+    assert.throws(() => runObsidianEval('JSON.stringify({ok:true})', { vaultName: 'fake-vault', command: fixture, timeoutMs: 300 }), (error) => error.code === 'ETIMEDOUT');
+    assert.equal(fs.existsSync(termMarker), false);
+    assert.equal(fs.existsSync(descendantPid), false);
+  } finally {
+    try { const pid = Number(fs.readFileSync(descendantPid, 'utf8')); process.kill(pid, 'SIGKILL'); } catch {}
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('large CLI programs are passed through the worker without envelope argv expansion', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-obsidian-probe-large-'));
+  const fixture = path.join(root, 'fake-obsidian-cli.js');
+  fs.writeFileSync(fixture, `#!${process.execPath}\nprocess.stdout.write('=> ' + JSON.stringify({ length: process.argv[4]?.length || 0 }) + '\\n');\n`);
+  fs.chmodSync(fixture, 0o755);
+  const code = 'x'.repeat(70 * 1024);
+  try {
+    assert.deepEqual(runObsidianEval(code, { vaultName: 'fake-vault', command: fixture, timeoutMs: 1_000 }), { length: code.length + 'code='.length });
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test('bounded probe output preserves a terminal eval result after more than 64 KiB of noise', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-obsidian-probe-output-'));
+  const fixture = path.join(root, 'fake-obsidian-cli.js');
+  const result = { vaultName: 'fake-vault', hasVault: true };
+  fs.writeFileSync(fixture, `#!${process.execPath}\nprocess.stdout.write('x'.repeat(${MAX_CAPTURE_BYTES + 1024}) + '\\n=> ' + ${JSON.stringify(JSON.stringify(result))} + '\\n');\n`);
+  fs.chmodSync(fixture, 0o755);
+  try {
+    assert.deepEqual(runObsidianEval('JSON.stringify({ok:true})', { vaultName: 'fake-vault', command: fixture, timeoutMs: 1_000 }), result);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test('probe output capture caps multibyte chunks by bytes', () => {
+  const stream = new EventEmitter();
+  const capture = createOutputCapture(stream);
+  stream.emit('data', Buffer.from('€'.repeat(MAX_CAPTURE_BYTES)));
+  assert.equal(capture.bytes(), MAX_CAPTURE_BYTES);
+  assert.match(capture.value(), /\[\.\.\. output truncated \.\.\.\]/);
+});
+
+test('Windows taskkill retries process-tree containment and reports success only from taskkill', () => {
+  const firstTaskkill = new EventEmitter();
+  const secondTaskkill = new EventEmitter();
+  const signals = [];
+  const results = [];
+  const child = { pid: 12345, kill: (signal) => signals.push(signal) };
+  let calls = 0;
+  terminateOwnedTree(child, { platform: 'win32', spawnProcess: () => [firstTaskkill, secondTaskkill][calls++], onComplete: (result) => results.push(result) });
+  firstTaskkill.emit('close', 1);
+  secondTaskkill.emit('close', 0);
+  assert.equal(calls, 2);
+  assert.deepEqual(signals, []);
+  assert.deepEqual(results, [{ contained: true }]);
+});
+
+test('Windows taskkill double failure stops the known child and reports unconfirmed containment', () => {
+  const firstTaskkill = new EventEmitter();
+  const secondTaskkill = new EventEmitter();
+  const signals = [];
+  const results = [];
+  const child = { pid: 12345, kill: (signal) => signals.push(signal) };
+  let calls = 0;
+  terminateOwnedTree(child, { platform: 'win32', spawnProcess: () => [firstTaskkill, secondTaskkill][calls++], onComplete: (result) => results.push(result) });
+  firstTaskkill.emit('close', 1);
+  secondTaskkill.emit('close', 1);
+  assert.deepEqual(signals, ['SIGKILL']);
+  assert.deepEqual(results, [{ contained: false, reason: 'taskkill_failed' }]);
+});
+
+test('Windows taskkill watchdog fails closed when the helper does not finish', () => {
+  const killer = new EventEmitter();
+  const killerSignals = [];
+  killer.kill = (signal) => killerSignals.push(signal);
+  const childSignals = [];
+  const results = [];
+  const timers = [];
+  terminateOwnedTree({ pid: 12345, kill: (signal) => childSignals.push(signal) }, {
+    platform: 'win32',
+    spawnProcess: () => killer,
+    schedule: (callback, delay) => { const timer = { callback, delay, unref() {} }; timers.push(timer); return timer; },
+    onComplete: (result) => results.push(result),
+  });
+  assert.equal(timers.length, 1);
+  assert.equal(timers[0].delay, 250);
+  timers[0].callback();
+  assert.deepEqual(killerSignals, ['SIGKILL']);
+  assert.deepEqual(childSignals, ['SIGKILL']);
+  assert.deepEqual(results, [{ contained: false, reason: 'taskkill_timeout' }]);
+  killer.emit('close', 0);
+  assert.deepEqual(results, [{ contained: false, reason: 'taskkill_timeout' }]);
+});
+
+test('an accepted POSIX group SIGKILL reports the existing timeout contract', () => {
+  const signals = [];
+  const results = [];
+  terminateOwnedTree({ pid: 12345, kill: () => {} }, {
+    platform: 'darwin',
+    signalProcess: (pid, signal) => signals.push([pid, signal]),
+    onComplete: (result) => results.push(result),
+  });
+  assert.deepEqual(signals, [[-12345, 'SIGKILL']]);
+  assert.deepEqual(results, [{ contained: true }]);
+});
+
+test('missing Unix process group does not prove descendant containment', () => {
+  const results = [];
+  const signals = [];
+  const error = Object.assign(new Error('process group missing'), { code: 'ESRCH' });
+  terminateOwnedTree({ pid: 12345, kill: (signal) => signals.push(signal) }, {
+    platform: 'darwin',
+    signalProcess: () => { throw error; },
+    onComplete: (result) => results.push(result),
+  });
+  assert.deepEqual(signals, ['SIGKILL']);
+  assert.deepEqual(results, [{ contained: false, reason: 'process_group_absent' }]);
+});
+
+test('a failed POSIX group SIGKILL does not prove descendant containment', () => {
+  const signals = [];
+  const childSignals = [];
+  const results = [];
+  const error = Object.assign(new Error('process group missing'), { code: 'ESRCH' });
+  terminateOwnedTree({ pid: 12345, kill: (signal) => childSignals.push(signal) }, {
+    platform: 'darwin',
+    signalProcess: (pid, signal) => {
+      signals.push([pid, signal]);
+      if (signal === 'SIGKILL') throw error;
+    },
+    schedule: (callback) => callback(),
+    onComplete: (result) => results.push(result),
+  });
+  assert.deepEqual(signals, [[-12345, 'SIGKILL']]);
+  assert.deepEqual(childSignals, ['SIGKILL']);
+  assert.deepEqual(results, [{ contained: false, reason: 'process_group_absent' }]);
+});
+
+test('an uncertain descendant snapshot fails closed after killing only observed descendants', () => {
+  const signals = [];
+  const childSignals = [];
+  const results = [];
+  terminateOwnedTree({ pid: 12345, kill: (signal) => childSignals.push(signal) }, {
+    platform: 'darwin',
+    signalProcess: (pid, signal) => signals.push([pid, signal]),
+    ownedPids: new Set([23456]),
+    ownershipScanFailed: true,
+    onComplete: (result) => results.push(result),
+  });
+  assert.deepEqual(signals, [[-12345, 'SIGKILL'], [23456, 'SIGKILL']]);
+  assert.deepEqual(childSignals, ['SIGKILL']);
+  assert.deepEqual(results, [{ contained: false, reason: 'descendant_scan_failed' }]);
 });
 
 test('unavailable capability retains planned intent for reconciliation', () => {

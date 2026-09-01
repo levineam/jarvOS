@@ -6,9 +6,11 @@ const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const { createInternalReceipt, hashUtf8, validateOperation, validateVaultRelativeMarkdownPath } = require('./vault-mutation-contract');
 const { createVaultMutationLedger } = require('./vault-mutation-ledger');
+const { normalizeProbeTimeoutMs, PROBE_CLEANUP_GRACE_MS } = require('./obsidian-cli-probe-worker');
 
 const RESULT_STORE = '__jarvosVaultMutationResults';
 const CAPABILITY_STATES = Object.freeze(['available', 'cli_missing', 'app_stopped', 'app_busy', 'app_unreachable', 'cli_disabled', 'cli_unsupported', 'wrong_vault', 'api_incompatible']);
+const OBSIDIAN_CLI_PROBE_WORKER = path.join(__dirname, 'obsidian-cli-probe-worker.js');
 
 function sleepSync(milliseconds) {
   if (milliseconds > 0) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, milliseconds);
@@ -16,7 +18,29 @@ function sleepSync(milliseconds) {
 
 function parseEvalResult(output) { const match = [...String(output || '').matchAll(/^=>\s*(.+)$/gm)].at(-1); return match ? JSON.parse(match[1]) : null; }
 function runObsidianEval(code, { vaultName, command = process.env.OBSIDIAN_CLI || 'obsidian', timeoutMs = 10_000, execute = execFileSync } = {}) {
-  try { return parseEvalResult(execute(command, [`vault=${vaultName}`, 'eval', `code=${code}`], { encoding: 'utf8', timeout: timeoutMs, stdio: ['ignore', 'pipe', 'pipe'] })); }
+  const normalizedTimeoutMs = normalizeProbeTimeoutMs(timeoutMs);
+  const args = [`vault=${vaultName}`, 'eval', `code=${code}`];
+  try {
+    // Test seams that supply their own executor retain the old direct contract.
+    if (execute !== execFileSync) return parseEvalResult(execute(command, args, { encoding: 'utf8', timeout: normalizedTimeoutMs, stdio: ['ignore', 'pipe', 'pipe'] }));
+    // Keep the worker envelope off argv.  The underlying CLI still receives
+    // the exact same args (including large mutation programs), while the
+    // worker request itself travels through stdin and does not add base64
+    // expansion to the platform's per-argument limit.
+    const request = JSON.stringify({ command, args, timeoutMs: normalizedTimeoutMs });
+    const response = JSON.parse(execFileSync(process.execPath, [OBSIDIAN_CLI_PROBE_WORKER], {
+      encoding: 'utf8',
+      input: request,
+      timeout: normalizedTimeoutMs + PROBE_CLEANUP_GRACE_MS,
+      stdio: ['pipe', 'pipe', 'pipe'],
+    }));
+    if (!response.ok) {
+      const error = new Error(String(response.stderr || response.stdout || response.message || 'Obsidian CLI failed'));
+      error.code = response.code;
+      throw error;
+    }
+    return parseEvalResult(response.stdout);
+  }
   catch (error) { const wrapped = new Error(String(error.stderr || error.stdout || error.message || 'Obsidian CLI failed')); wrapped.code = error.code; throw wrapped; }
 }
 function payload(operation) { return Buffer.from(JSON.stringify(operation), 'utf8').toString('base64'); }
