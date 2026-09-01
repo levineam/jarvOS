@@ -12,7 +12,9 @@ const JARVOS_RUNNER_STATE_RELATIVE_PATH = '.jarvos/runner-state.json';
 const LEGACY_OPENCLAW_RUNNER_STATE_RELATIVE_PATH = '.openclaw/cron/external-runner-state.json';
 const ROUTE_ID_RE = /^[a-z][a-z0-9._-]*(?::[A-Za-z0-9][A-Za-z0-9._/-]{0,127})+$/;
 const SECRET_STORE_REF_RE = /^[a-z][a-z0-9._-]*:[A-Za-z0-9][A-Za-z0-9._/@-]{0,255}$/;
-const REVISION_RE = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
+// A revision is an opaque identifier, never a credential. Colons are
+// intentionally excluded: they are required by Telegram bot-token shapes.
+const OPAQUE_REVISION_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 
 function isObject(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -124,7 +126,7 @@ function parseRunnerState(content) {
       || Object.keys(candidate).some((key) => !['routeIdentity', 'secretStoreRef', 'revision'].includes(key))
       || typeof candidate.routeIdentity !== 'string' || !ROUTE_ID_RE.test(candidate.routeIdentity)
       || typeof candidate.secretStoreRef !== 'string' || !SECRET_STORE_REF_RE.test(candidate.secretStoreRef)
-      || typeof candidate.revision !== 'string' || !REVISION_RE.test(candidate.revision)
+      || typeof candidate.revision !== 'string' || !OPAQUE_REVISION_RE.test(candidate.revision)
       || routeIdentities.has(candidate.routeIdentity)) {
       // Do not include an invalid value in this result: a malformed document
       // could itself contain a raw credential.
@@ -235,9 +237,6 @@ module.exports = {
   JARVOS_RUNNER_STATE_RELATIVE_PATH,
   LEGACY_OPENCLAW_RUNNER_STATE_RELATIVE_PATH,
   RUNNER_STATE_VERSION,
-  inspectFixtureFile,
-  readPinnedFixtureFile,
   readRunnerState,
-  revalidateFixtureFile,
   resolveTelegramCredentialReference,
 };

@@ -109,6 +109,8 @@ returned exactly as written. Compatibility fallback always returns structured
 read-only evidence, whether or not an optional observer is supplied. Files are
 opened with no-follow descriptors and revalidated against their inspected
 identity and fixture-root containment before they are parsed.
+The descriptor and filesystem helpers are internal implementation details; the
+public API returns only validated, sanitized state records.
 
 `runtimeMode.conformanceFacts` is an optional `jarvos-harness-conformance/v1`
 registry. Its tiers are `baseline-context`, `conversational`,

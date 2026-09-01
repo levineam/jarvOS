@@ -91,6 +91,18 @@ test('strictly rejects non-string route identity, secret-store reference, and re
   }
 });
 
+test('rejects Telegram-token-shaped revisions before they can enter public state', () => {
+  const root = fixtureRoot();
+  // Fixture-only synthetic shape; this is not a credential.
+  const tokenShapedRevision = '123456789:fixture_value_that_is_intentionally_long';
+  writeState(root, JARVOS_RUNNER_STATE_RELATIVE_PATH, [{ ...telegramRoute, revision: tokenShapedRevision }]);
+  const state = readRunnerState({ fixtureRoot: root });
+  const credential = resolveTelegramCredentialReference({ fixtureRoot: root });
+  assert.deepEqual(state, { ok: false, code: 'runner_state_invalid' });
+  assert.deepEqual(credential, { ok: false, code: 'runner_state_invalid' });
+  assert.equal(JSON.stringify({ state, credential }).includes(tokenShapedRevision), false);
+});
+
 test('conflicting new and legacy Telegram routes fail closed', () => {
   const root = fixtureRoot();
   writeState(root, JARVOS_RUNNER_STATE_RELATIVE_PATH, [telegramRoute]);
@@ -122,6 +134,8 @@ test('ambiguous Telegram routes, raw token fields, and symlinks fail closed with
   const rejected = readRunnerState({ fixtureRoot: rawToken });
   assert.deepEqual(rejected, { ok: false, code: 'runner_state_invalid' });
   assert.equal(JSON.stringify(rejected).includes(marker), false);
+  const rejectedCredential = resolveTelegramCredentialReference({ fixtureRoot: rawToken });
+  assert.equal(JSON.stringify(rejectedCredential).includes(marker), false);
 
   const linked = fixtureRoot();
   const target = writeState(linked, 'target.json', [telegramRoute]);
@@ -173,4 +187,15 @@ test('an ambiguous legacy Telegram state blocks a primary route and descriptor r
 
 test('fixture root is mandatory; the resolver has no live-install default', () => {
   assert.deepEqual(readRunnerState(), { ok: false, code: 'fixture_root_required' });
+});
+
+test('public runtime-kit exports cannot expose raw fixture reader helpers', () => {
+  const kit = require('../src');
+  const runnerState = require('../src/runner-state.js');
+  for (const name of ['inspectFixtureFile', 'readPinnedFixtureFile', 'revalidateFixtureFile']) {
+    assert.equal(name in kit, false, `${name} must not be exported by runtime-kit`);
+    assert.equal(name in runnerState, false, `${name} must not be exported by runner-state`);
+  }
+  assert.equal(typeof kit.readRunnerState, 'function');
+  assert.equal(typeof kit.resolveTelegramCredentialReference, 'function');
 });
