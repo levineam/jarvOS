@@ -14,19 +14,20 @@ const {
 const FIXTURES = path.join(__dirname, 'fixtures', 'constrained-generation');
 const fixture = (name) => JSON.parse(fs.readFileSync(path.join(FIXTURES, name), 'utf8'));
 
-test('recorded OpenClaw fixture preserves constrained-generation golden parity without backend admission', () => {
-  const recorded = fixture('openclaw-recorded-success.json');
-  const golden = fixture('openclaw-recorded-success.golden.json');
-  assert.deepEqual(evaluateConstrainedGeneration(recorded), golden);
-  assert.equal(golden.backend.verification, 'claimed-unverified');
-  assert.equal(golden.effectiveModelReceipt.verified, false);
-  assert.equal(golden.admitted, false);
+test('OpenClaw-shaped contract fixture conforms without backend admission', () => {
+  const recorded = fixture('openclaw-contract-success.json');
+  const expected = fixture('openclaw-contract-success.expected.json');
+  assert.deepEqual(evaluateConstrainedGeneration(recorded), expected);
+  assert.equal(expected.backend.verification, 'claimed-unverified');
+  assert.equal(expected.effectiveModelReceipt.verified, false);
+  assert.equal(expected.admitted, false);
 });
 
-test('constrained generation rejects every extracted safety failure from recorded evidence', () => {
-  const valid = fixture('openclaw-recorded-success.json');
+test('constrained generation rejects every extracted safety failure from fixture evidence', () => {
+  const valid = fixture('openclaw-contract-success.json');
   const cases = [
     ['runtime proof', { runtimeProof: { ...valid.runtimeProof, receiptDigest: 'not-a-digest' } }, 'runtime_proof_invalid'],
+    ['unproven runtime proof', { runtimeProof: { ...valid.runtimeProof, status: 'unproven' } }, 'runtime_proof_unproven'],
     ['model mismatch', { observed: { ...valid.observed, model: 'gpt-5.6-sol' } }, 'effective_model_mismatch'],
     ['tool activity', { observed: { ...valid.observed, toolCallCount: 1 } }, 'tool_activity_detected'],
     ['fallback flag', { observed: { ...valid.observed, fallbackUsed: true } }, 'fallback_detected'],
@@ -40,7 +41,7 @@ test('constrained generation rejects every extracted safety failure from recorde
 });
 
 test('an externally supplied verified claim cannot admit a backend through this extraction contract', () => {
-  const recorded = fixture('openclaw-recorded-success.json');
+  const recorded = fixture('openclaw-contract-success.json');
   const backendOnly = evaluateConstrainedGeneration({ ...recorded, backend: { ...recorded.backend, verification: 'verified' } });
   assert.equal(backendOnly.ok, true);
   assert.equal(backendOnly.effectiveModelReceipt.verified, false);

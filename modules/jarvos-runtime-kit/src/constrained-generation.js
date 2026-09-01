@@ -69,6 +69,7 @@ function evaluateConstrainedGeneration(record) {
     || !isIdentifier(request.provider) || !isIdentifier(request.model) || !isIdentifier(request.reasoningEffort)) return invalid('request_invalid');
   if (!exactKeys(runtimeProof, ['status', 'receiptDigest'])
     || !RUNTIME_PROOF_STATES.includes(runtimeProof.status) || !isDigest(runtimeProof.receiptDigest)) return invalid('runtime_proof_invalid');
+  if (runtimeProof.status === 'unproven') return invalid('runtime_proof_unproven');
   if (!exactKeys(observed, [
     'provider', 'model', 'reasoningEffort', 'toolCallCount', 'delivered', 'fallbackUsed', 'attempts', 'usage', 'outputDigest',
   ])) return invalid('observed_invalid');
@@ -94,8 +95,8 @@ function evaluateConstrainedGeneration(record) {
     effectiveModelReceipt: Object.freeze({ provider: observed.provider, model: observed.model, verified: false }),
     usage: Object.freeze({ ...observed.usage }),
     constraints: Object.freeze({ runtimeProofPresent: true, zeroToolAssurance: true, exactModel: true, noFallback: true, usageEvidencePresent: true, deliveryDenied: true }),
-    // An extracted fixture can characterize parity without making a live
-    // harness admission claim. A future explicit verifier owns promotion.
+    // Contract-fixture conformance cannot make a live harness admission
+    // claim. A future explicit verifier owns promotion.
     admitted: false,
   });
 }
