@@ -9,10 +9,12 @@
 'use strict';
 
 const { execSync, spawnSync } = require('child_process');
+const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const readline = require('readline');
 const os = require('os');
+const { assertNotStaleVaultPath } = require('./modules/jarvos-secondbrain/bridge/config/src/resolve-config');
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -50,6 +52,348 @@ function absolutePath(p) {
 function isValidIanaTimezone(value) {
   if (typeof value !== 'string' || !value.trim()) return false;
   try { Intl.DateTimeFormat(undefined, { timeZone: value }); return true; } catch { return false; }
+}
+
+function isSameOrSubPath(parentPath, candidatePath) {
+  const parent = path.resolve(parentPath);
+  const candidate = path.resolve(candidatePath);
+  return candidate === parent || candidate.startsWith(`${parent}${path.sep}`);
+}
+
+// Compare physical locations without requiring the final targets to exist.
+// On macOS, /tmp is a stable alias of /private/tmp; lexical comparison alone
+// would let those two spellings place a workspace inside the selected vault.
+function canonicalizePathWithMissingTail(target) {
+  let existing = path.resolve(target);
+  const missingTail = [];
+  for (;;) {
+    try {
+      return path.join(fs.realpathSync(existing), ...missingTail);
+    } catch (error) {
+      if (error.code !== 'ENOENT') throw error;
+      const parent = path.dirname(existing);
+      if (parent === existing) throw error;
+      missingTail.unshift(path.basename(existing));
+      existing = parent;
+    }
+  }
+}
+
+function workspaceIsInsideVault(workspace, vault) {
+  const canonicalVault = canonicalizePathWithMissingTail(vault);
+  const canonicalWorkspace = canonicalizePathWithMissingTail(workspace);
+  return isSameOrSubPath(canonicalVault, canonicalWorkspace);
+}
+
+function resolvePathInput(value, fallback) {
+  const selected = value || fallback;
+  return path.resolve(expandHome(selected));
+}
+
+function requirePathOptionValue(flag, value) {
+  const normalized = typeof value === 'string' ? value.trim() : '';
+  if (!normalized || normalized.startsWith('-')) {
+    throw new Error(`${flag} requires a non-empty path value`);
+  }
+  return value;
+}
+
+function explicitEnvironmentPath(env, name) {
+  if (!Object.prototype.hasOwnProperty.call(env, name)) return undefined;
+  return requirePathOptionValue(name, env[name]);
+}
+
+function parseBootstrapPathOptions(argv = process.argv.slice(2)) {
+  const options = {};
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index];
+    if (arg === '--workspace') {
+      options.workspace = requirePathOptionValue(arg, argv[index + 1]);
+      index += 1;
+    } else if (arg.startsWith('--workspace=')) {
+      options.workspace = requirePathOptionValue('--workspace', arg.slice('--workspace='.length));
+    } else if (arg === '--vault') {
+      options.vault = requirePathOptionValue(arg, argv[index + 1]);
+      index += 1;
+    } else if (arg.startsWith('--vault=')) {
+      options.vault = requirePathOptionValue('--vault', arg.slice('--vault='.length));
+    } else if (arg === '--use-existing-vault') {
+      options.useExistingVault = true;
+    }
+  }
+  return options;
+}
+
+function resolvedPathInputs(argv = process.argv.slice(2), env = process.env) {
+  const options = parseBootstrapPathOptions(argv);
+  const homeDir = os.homedir();
+  const environmentWorkspace = explicitEnvironmentPath(env, 'JARVOS_WORKSPACE_PATH');
+  const environmentVault = explicitEnvironmentPath(env, 'JARVOS_VAULT_PATH');
+  const workspaceSource = options.workspace
+    ? '--workspace'
+    : environmentWorkspace !== undefined
+      ? 'JARVOS_WORKSPACE_PATH'
+      : 'default';
+  const vaultSource = options.vault
+    ? '--vault'
+    : environmentVault !== undefined
+      ? 'JARVOS_VAULT_PATH'
+      : 'default';
+  return {
+    workspace: resolvePathInput(
+      options.workspace || environmentWorkspace,
+      path.join(homeDir, 'clawd'),
+    ),
+    vault: resolvePathInput(
+      options.vault || environmentVault,
+      path.join(homeDir, 'jarvos-vault'),
+    ),
+    workspaceSource,
+    vaultSource,
+    useExistingVault: Boolean(options.useExistingVault),
+  };
+}
+
+function inspectTarget(target) {
+  const pathInspection = inspectPathComponents(target);
+  if (!pathInspection.ok) {
+    return { state: 'symlinked-path', path: pathInspection.path };
+  }
+  try {
+    const stat = fs.statSync(target);
+    if (!stat.isDirectory()) return { state: 'not-directory' };
+    return { state: fs.readdirSync(target).length === 0 ? 'empty-directory' : 'non-empty-directory' };
+  } catch (error) {
+    if (error && error.code === 'ENOENT') return { state: 'absent' };
+    return { state: 'unreadable', error: error && error.message };
+  }
+}
+
+const MACOS_SYSTEM_PARENT_ALIASES = new Map([
+  ['/tmp', '/private/tmp'],
+  ['/var', '/private/var'],
+]);
+
+function isAllowedMacOSSystemParentAlias(component, target) {
+  if (process.platform !== 'darwin' || component === target) return false;
+  const expectedRealPath = MACOS_SYSTEM_PARENT_ALIASES.get(component);
+  if (!expectedRealPath) return false;
+  try {
+    return fs.realpathSync(component) === expectedRealPath;
+  } catch {
+    return false;
+  }
+}
+
+function inspectPathComponents(target) {
+  const absolute = path.resolve(target);
+  const parsed = path.parse(absolute);
+  let current = parsed.root;
+  let missingAncestor = false;
+  for (const component of absolute.slice(parsed.root.length).split(path.sep).filter(Boolean)) {
+    current = path.join(current, component);
+    if (missingAncestor) continue;
+    try {
+      const stat = fs.lstatSync(current);
+      if (stat.isSymbolicLink() && !isAllowedMacOSSystemParentAlias(current, absolute)) {
+        return { ok: false, path: current };
+      }
+    } catch (error) {
+      if (error && error.code === 'ENOENT') {
+        missingAncestor = true;
+        continue;
+      }
+      return { ok: false, path: current };
+    }
+  }
+  return { ok: true };
+}
+
+function assertPathComponentsSafe(target, label) {
+  const inspection = inspectPathComponents(target);
+  if (!inspection.ok) throw new Error(`${label} is symlinked or unreadable at ${inspection.path}`);
+}
+
+function ensureDirectoryPathSafe(directory, label) {
+  const absolute = path.resolve(directory);
+  const parsed = path.parse(absolute);
+  let current = parsed.root;
+  for (const component of absolute.slice(parsed.root.length).split(path.sep).filter(Boolean)) {
+    current = path.join(current, component);
+    let stat;
+    try {
+      stat = fs.lstatSync(current);
+    } catch (error) {
+      if (error.code !== 'ENOENT') throw error;
+      try {
+        fs.mkdirSync(current, { mode: 0o700 });
+      } catch (mkdirError) {
+        if (mkdirError.code !== 'EEXIST') throw mkdirError;
+      }
+      stat = fs.lstatSync(current);
+    }
+    if (stat.isSymbolicLink()) {
+      if (!isAllowedMacOSSystemParentAlias(current, absolute)) throw new Error(`${label} is symlinked at ${current}`);
+      stat = fs.statSync(current);
+    }
+    if (!stat.isDirectory()) throw new Error(`${label} has a non-directory component at ${current}`);
+    assertPathComponentsSafe(absolute, label);
+  }
+}
+
+function writeFileExclusiveSafe(destination, content) {
+  const parent = path.dirname(destination);
+  assertPathComponentsSafe(parent, 'Bootstrap file parent');
+  const temporary = path.join(parent, `.${path.basename(destination)}.${crypto.randomUUID()}.tmp`);
+  let temporaryCreated = false;
+  try {
+    fs.writeFileSync(temporary, content, { encoding: 'utf8', flag: 'wx', mode: 0o600 });
+    temporaryCreated = true;
+    assertPathComponentsSafe(parent, 'Bootstrap file parent');
+    // An exclusive hard link neither follows nor replaces the final directory
+    // entry. If a parent is swapped after the temporary file is created, the
+    // unpredictable source name is absent in the replacement tree and linking
+    // fails without writing the destination.
+    fs.linkSync(temporary, destination);
+    fs.unlinkSync(temporary);
+    temporaryCreated = false;
+  } finally {
+    if (temporaryCreated) {
+      try { fs.unlinkSync(temporary); } catch {}
+    }
+  }
+}
+
+function resolveConfigPath(value, workspace) {
+  if (typeof value !== 'string' || !value.trim()) return null;
+  const expanded = expandHome(value);
+  return path.resolve(path.isAbsolute(expanded) ? expanded : path.join(workspace, expanded));
+}
+
+function sameExistingPath(left, right) {
+  try {
+    return fs.realpathSync(left) === fs.realpathSync(right);
+  } catch {
+    return left === right;
+  }
+}
+
+function isCompatibleExistingInstall(workspace, vault) {
+  const configPath = path.join(workspace, 'jarvos.config.json');
+  let config;
+  try {
+    config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+  } catch {
+    return { compatible: false, reason: 'jarvos.config.json is missing or invalid' };
+  }
+
+  const requiredConfigFields = ['assistantName', 'userName', 'coachName', 'runtime'];
+  if (requiredConfigFields.some((field) => typeof config[field] !== 'string' || !config[field].trim())) {
+    return { compatible: false, reason: 'jarvos.config.json is not a complete bootstrap configuration' };
+  }
+  if (!sameExistingPath(resolveConfigPath(config.workspacePath, process.cwd()), workspace)
+    || !sameExistingPath(resolveConfigPath(config.vaultPath, process.cwd()), vault)) {
+    return { compatible: false, reason: 'jarvos.config.json targets different workspace or vault paths' };
+  }
+
+  const requiredWorkspaceFiles = [
+    'AGENTS.md', 'BOOTSTRAP.md', 'HEARTBEAT.md', 'MEMORY.md',
+    'USER.md', 'ONTOLOGY.md', 'SOUL.md', 'TOOLS.md', 'jarvos.config.json',
+  ];
+  // Compatibility grants a read-only rerun, so it must apply the same
+  // no-symlink boundary as the smoke test. `statSync` follows a final link and
+  // would otherwise classify a tree as compatible only for smokeTest to reject
+  // it moments later.
+  if (requiredWorkspaceFiles.some((file) => !fs.lstatSync(path.join(workspace, file), { throwIfNoEntry: false })?.isFile())) {
+    return { compatible: false, reason: 'required bootstrap workspace files are missing' };
+  }
+  if (!fs.lstatSync(path.join(workspace, 'memory'), { throwIfNoEntry: false })?.isDirectory()) {
+    return { compatible: false, reason: 'required bootstrap memory directory is missing' };
+  }
+  const requiredVaultDirectories = ['Notes', 'Journal', 'Tags'];
+  if (requiredVaultDirectories.some((dir) => !fs.lstatSync(path.join(vault, dir), { throwIfNoEntry: false })?.isDirectory())) {
+    return { compatible: false, reason: 'required bootstrap vault directories are missing' };
+  }
+  return { compatible: true };
+}
+
+function isExistingVaultAttachable(vault) {
+  const requiredVaultDirectories = ['Notes', 'Journal', 'Tags'];
+  return requiredVaultDirectories.every((dir) => fs.lstatSync(path.join(vault, dir), { throwIfNoEntry: false })?.isDirectory());
+}
+
+function classifyInitTargets({ workspace, vault, useExistingVault = false }) {
+  const workspaceTarget = inspectTarget(workspace);
+  const vaultTarget = inspectTarget(vault);
+
+  // A compatible installed tree is read-only on this code path. Recognize it
+  // before rejecting an alias in its path; otherwise a normal synced/iCloud
+  // location cannot be safely inspected or re-run at all. Any non-compatible
+  // symlinked target still refuses before a write.
+  if (['non-empty-directory', 'symlinked-path'].includes(workspaceTarget.state)
+    && isCompatibleExistingInstall(workspace, vault).compatible) {
+    return { action: 'already-initialized' };
+  }
+  const badTarget = [
+    ['workspace', workspaceTarget],
+    ['vault', vaultTarget],
+  ].find(([, target]) => ['not-directory', 'unreadable', 'symlinked-path'].includes(target.state));
+  if (badTarget) {
+    return {
+      action: 'refuse',
+      reason: `${badTarget[0]} target is ${badTarget[1].state.replaceAll('-', ' ')}`,
+    };
+  }
+
+  if (workspaceTarget.state === 'non-empty-directory') {
+    const compatibility = isCompatibleExistingInstall(workspace, vault);
+    if (compatibility.compatible) return { action: 'already-initialized' };
+    return {
+      action: 'refuse',
+      reason: `workspace already exists and is not a compatible jarvOS install (${compatibility.reason})`,
+    };
+  }
+
+  if (vaultTarget.state === 'non-empty-directory') {
+    if (useExistingVault && ['absent', 'empty-directory'].includes(workspaceTarget.state) && isExistingVaultAttachable(vault)) {
+      return { action: 'attach-existing-vault' };
+    }
+    return {
+      action: 'refuse',
+      reason: useExistingVault
+        ? 'existing vault is missing required Notes/, Journal/, or Tags/ directories'
+        : 'vault already exists; pass --use-existing-vault only to attach a vault with Notes/, Journal/, and Tags/',
+    };
+  }
+  return { action: 'new-install' };
+}
+
+function preflightInit(config, inputs) {
+  if (!isValidIanaTimezone(config.TIMEZONE)) {
+    throw new Error(`Refusing to initialize: TIMEZONE must be a valid IANA timezone (received ${JSON.stringify(config.TIMEZONE)})`);
+  }
+  // Keep bootstrap aligned with the runtime resolver: an explicit old
+  // Documents/Vault v3 selection must not create a config the runtime rejects.
+  // This is intentionally before target classification or directory creation.
+  assertNotStaleVaultPath(config.VAULT_PATH, {
+    home: os.homedir(),
+    source: inputs.vaultSource,
+  });
+  if (workspaceIsInsideVault(config.WORKSPACE_PATH, config.VAULT_PATH)) {
+    throw new Error('Refusing to initialize: workspace must not equal or be inside the selected vault');
+  }
+  const classification = classifyInitTargets({
+    workspace: config.WORKSPACE_PATH,
+    vault: config.VAULT_PATH,
+    useExistingVault: inputs.useExistingVault,
+  });
+  console.log(`Resolved workspace: ${config.WORKSPACE_PATH} (${inputs.workspaceSource})`);
+  console.log(`Resolved vault:     ${config.VAULT_PATH} (${inputs.vaultSource})`);
+  console.log(`Intended action:    ${classification.action}`);
+  if (classification.action === 'refuse') {
+    throw new Error(`Refusing to initialize: ${classification.reason}. Use \`jarvos init --use-existing-vault\` for a new/empty workspace with a verified existing vault, or use \`jarvos sync\` only for a harness workspace that is already installed. Otherwise choose empty/new --workspace and --vault targets.`);
+  }
+  return classification;
 }
 
 // ─── Dependency checks ──────────────────────────────────────────────────────
@@ -130,34 +474,35 @@ function checkDeps() {
  * Set JARVOS_YES=1 (or pass --yes) to skip prompts entirely.
  * Override individual fields with JARVOS_ASSISTANT_NAME, JARVOS_USER_NAME, etc.
  */
-function nonInteractiveConfig() {
+function nonInteractiveConfig(argv = process.argv.slice(2), env = process.env) {
   // Detect local timezone (e.g. "America/New_York")
   let tz = 'UTC';
   try { tz = Intl.DateTimeFormat().resolvedOptions().timeZone; } catch {}
 
+  const paths = resolvedPathInputs(argv, env);
   const defaults = {
-    ASSISTANT_NAME: process.env.JARVOS_ASSISTANT_NAME || 'Jarvis',
-    USER_NAME:      process.env.JARVOS_USER_NAME      || os.userInfo().username,
-    COACH_NAME:     process.env.JARVOS_COACH_NAME     || 'jarvOS',
-    TIMEZONE:       process.env.JARVOS_TIMEZONE       || tz,
-    VAULT_PATH:     absolutePath(process.env.JARVOS_VAULT_PATH      || path.join(os.homedir(), 'jarvos-vault')),
-    WORKSPACE_PATH: absolutePath(process.env.JARVOS_WORKSPACE_PATH  || path.join(os.homedir(), 'clawd')),
-    RUNTIME:        process.env.JARVOS_RUNTIME        || 'openclaw'
+    ASSISTANT_NAME: env.JARVOS_ASSISTANT_NAME || 'Jarvis',
+    USER_NAME:      env.JARVOS_USER_NAME      || os.userInfo().username,
+    COACH_NAME:     env.JARVOS_COACH_NAME     || 'jarvOS',
+    TIMEZONE:       env.JARVOS_TIMEZONE       || tz,
+    VAULT_PATH:     paths.vault,
+    WORKSPACE_PATH: paths.workspace,
+    RUNTIME:        env.JARVOS_RUNTIME        || 'openclaw'
   };
   return defaults;
 }
 
-async function gatherConfig(rl) {
+async function gatherConfig(rl, argv = process.argv.slice(2), env = process.env) {
   hdr('2/5  Configure your jarvOS instance');
 
   // Non-interactive mode: --yes / -y / --non-interactive flag or JARVOS_YES env var
   const isYes =
-    process.argv.includes('--yes') ||
-    process.argv.includes('-y') ||
-    process.argv.includes('--non-interactive') ||
-    process.env.JARVOS_YES === '1';
+    argv.includes('--yes') ||
+    argv.includes('-y') ||
+    argv.includes('--non-interactive') ||
+    env.JARVOS_YES === '1';
   if (isYes) {
-    const cfg = nonInteractiveConfig();
+    const cfg = nonInteractiveConfig(argv, env);
     info('Non-interactive mode — using defaults / env vars');
     info(`  ASSISTANT_NAME:  ${cfg.ASSISTANT_NAME}`);
     info(`  USER_NAME:       ${cfg.USER_NAME}`);
@@ -169,7 +514,7 @@ async function gatherConfig(rl) {
     return cfg;
   }
 
-  const defaults = nonInteractiveConfig();
+  const defaults = nonInteractiveConfig(argv, env);
 
   console.log('\nPress Enter to accept the default shown in brackets.\n');
 
@@ -213,12 +558,8 @@ function createDirectories(config) {
   ];
 
   for (const d of dirs) {
-    try {
-      fs.mkdirSync(d, { recursive: true });
-      ok(d);
-    } catch (e) {
-      err(`Failed to create ${d}: ${e.message}`);
-    }
+    ensureDirectoryPathSafe(d, 'Bootstrap directory target');
+    ok(d);
   }
 }
 
@@ -300,7 +641,7 @@ function generateOverlays(config) {
     }
     try {
       const rendered = renderTemplate(o.template, config);
-      fs.writeFileSync(dest, rendered, 'utf8');
+      writeFileExclusiveSafe(dest, rendered);
       ok(`${o.label} → ${dest}`);
     } catch (e) {
       err(`Failed to write ${o.label}: ${e.message}`);
@@ -322,7 +663,7 @@ function generateOverlays(config) {
 ## Important Context
 *(Will grow over time)*
 `;
-    fs.writeFileSync(memoryPath, memContent, 'utf8');
+    writeFileExclusiveSafe(memoryPath, memContent);
     ok(`MEMORY.md → ${memoryPath}`);
   } else {
     warn(`MEMORY.md already exists — skipping`);
@@ -339,7 +680,7 @@ function generateOverlays(config) {
 - Identity: ${config.ASSISTANT_NAME} for ${config.USER_NAME}
 - Coach: ${config.COACH_NAME}
 `;
-    fs.writeFileSync(dailyPath, dailyContent, 'utf8');
+    writeFileExclusiveSafe(dailyPath, dailyContent);
     ok(`memory/${today}.md → ${dailyPath}`);
   }
 
@@ -369,7 +710,7 @@ function generateOverlays(config) {
         timezone: config.TIMEZONE
       }
     };
-    fs.writeFileSync(configPath, JSON.stringify(jarvosConfig, null, 2) + '\n', 'utf8');
+    writeFileExclusiveSafe(configPath, JSON.stringify(jarvosConfig, null, 2) + '\n');
     ok(`jarvos.config.json → ${configPath}`);
   } else {
     warn(`jarvos.config.json already exists — skipping`);
@@ -395,12 +736,12 @@ function smokeTest(config) {
 
   for (const f of requiredFiles) {
     const p = path.join(ws, f);
-    if (fs.existsSync(p)) { ok(`${f} present`); passed++; }
+    if (fs.lstatSync(p, { throwIfNoEntry: false })?.isFile()) { ok(`${f} present`); passed++; }
     else { err(`${f} missing at ${p}`); failed++; }
   }
 
   for (const d of requiredDirs) {
-    if (fs.existsSync(d) && fs.statSync(d).isDirectory()) {
+    if (fs.lstatSync(d, { throwIfNoEntry: false })?.isDirectory()) {
       ok(`dir: ${d}`);
       passed++;
     } else {
@@ -413,7 +754,7 @@ function smokeTest(config) {
   const templateFiles = ['AGENTS.md', 'BOOTSTRAP.md', 'HEARTBEAT.md', 'USER.md', 'ONTOLOGY.md', 'SOUL.md', 'TOOLS.md'];
   for (const f of templateFiles) {
     const p = path.join(ws, f);
-    if (!fs.existsSync(p)) continue;
+    if (!fs.lstatSync(p, { throwIfNoEntry: false })?.isFile()) continue;
     const content = fs.readFileSync(p, 'utf8');
     const remaining = content.match(/\{\{[A-Z_]+\}\}/g);
     if (remaining) {
@@ -430,7 +771,7 @@ function smokeTest(config) {
     console.log(`${GREEN}${BOLD}All checks passed (${passed}/${passed + failed}).${RESET}`);
   } else {
     console.log(`${YELLOW}${BOLD}${passed} passed, ${failed} failed.${RESET}`);
-    console.log('Review errors above and re-run bootstrap to fix.');
+    console.log('Review errors above and inspect or use fresh targets; do not re-run over a partial install.');
   }
 
   return failed === 0;
@@ -454,19 +795,45 @@ async function main() {
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
 
   let config;
+  let pathInputs;
+  try {
+    pathInputs = resolvedPathInputs();
+  } catch (error) {
+    err(error.message);
+    process.exit(1);
+  }
   try {
     config = await gatherConfig(rl);
   } finally {
     rl.close();
   }
 
-  if (!isValidIanaTimezone(config.TIMEZONE)) {
-    err(`Refusing to initialize: TIMEZONE must be a valid IANA timezone (received ${JSON.stringify(config.TIMEZONE)})`);
+  let preflight;
+  try {
+    preflight = preflightInit(config, {
+      workspaceSource: config.WORKSPACE_PATH === pathInputs.workspace
+        ? pathInputs.workspaceSource
+        : 'interactive prompt',
+      vaultSource: config.VAULT_PATH === pathInputs.vault
+        ? pathInputs.vaultSource
+        : 'interactive prompt',
+      useExistingVault: pathInputs.useExistingVault,
+    });
+  } catch (error) {
+    err(error.message);
     process.exit(1);
   }
 
-  createDirectories(config);
-  generateOverlays(config);
+  if (preflight.action === 'new-install' || preflight.action === 'attach-existing-vault') {
+    assertPathComponentsSafe(config.WORKSPACE_PATH, 'Workspace write target');
+    assertPathComponentsSafe(config.VAULT_PATH, 'Vault write target');
+    createDirectories(config);
+    assertPathComponentsSafe(config.WORKSPACE_PATH, 'Workspace write target');
+    assertPathComponentsSafe(config.VAULT_PATH, 'Vault write target');
+    generateOverlays(config);
+  } else {
+    info('Compatible jarvOS installation detected — preserving all existing files.');
+}
   const allPassed = smokeTest(config);
 
   console.log(`\n${BOLD}Next steps:${RESET}`);

@@ -278,29 +278,51 @@ The public command router is `jarvos`. It keeps the old bootstrap aliases
 working while making new profile-aware commands discoverable:
 
 ```bash
-jarvos init --profile minimal --yes
-jarvos sync --workspace /path/to/jarvos-workspace \
+jarvos init --profile minimal \
+  --workspace /path/to/new-workspace \
+  --vault /path/to/new-vault \
+  --yes
+jarvos init --profile minimal \
+  --workspace /path/to/new-harness-workspace \
+  --vault "$HOME/Vaults/Vault v3" \
+  --use-existing-vault --yes
+jarvos sync --workspace /path/to/already-installed-workspace \
   --vault "$HOME/Vaults/Vault v3" \
   --name "Your Name" \
   --timezone Area/City \
   --dry-run
-jarvos doctor --profile minimal --workspace /path/to/jarvos-workspace
+jarvos doctor --profile minimal --workspace /path/to/already-installed-workspace
 ```
 
-Use `jarvos init` for a new standalone system. Use `jarvos sync` to **sync with
-an existing jarvOS installation**: it creates a portable config that points the
-new harness at the existing vault. In ordinary, uncontended use the sync
-command is config-only and writes no config contents inside the vault; it requires an explicit workspace,
-rejects symlinked config targets, and refuses to replace a different existing
-config. Inspect the plan with `--dry-run`; for a new target, rerun without that
-flag to apply it. A legacy-shaped target instead reports `manual-reconcile` and
-must be reconciled separately. Then use `jarvos doctor` to expose any remaining
-workspace or runtime setup rather than assuming the machine is ready.
+Use `jarvos init` on a fresh host or for a new harness workspace. To reuse an
+existing vault, add `--use-existing-vault`; init creates the starter workspace
+files and portable config, validates `Notes/`, `Journal/`, and `Tags/`, and
+leaves the vault's existing content untouched.
+
+Use `jarvos sync` only for an already-installed harness workspace. It is a
+portable, config-only handoff: it creates or verifies `jarvos.config.json` and
+does not install a harness, create starter workspace files, or initialize vault
+folders. A sync into an absent or otherwise new workspace can therefore finish
+with a config while `jarvos doctor` still reports missing starter files; use
+`jarvos init --use-existing-vault` for that fresh-host/new-harness case.
+
+In ordinary, uncontended use the sync command writes no config contents inside
+the vault; it requires an explicit workspace, rejects symlinked config targets,
+and refuses to replace a different existing config. Inspect the plan with
+`--dry-run`; for a new config target, rerun without that flag to apply it. A
+legacy-shaped target instead reports `manual-reconcile` and must be reconciled
+separately. Then use `jarvos doctor` to verify the workspace and runtime setup;
+neither command should be treated as proof that an uninstalled harness is ready.
 
 For a workspace that already has a compatible `jarvos.config.json`, `jarvos
 sync --workspace /path/to/jarvos-workspace --dry-run` reuses its vault, name,
 and timezone; those flags are only required for a new config. Timezones must be
-valid IANA names such as `UTC` or `America/New_York`.
+valid IANA names such as `UTC` or `America/New_York`. `jarvos init` is for a
+new standalone installation and fails closed if either target contains unrelated
+files; a complete prior bootstrap installation is recognized for a no-overwrite
+rerun. Use `--use-existing-vault` only to attach a verified existing vault to a
+new workspace. New writes through a symlinked target are refused; a symlinked
+path is accepted only for a recognized read-only compatible rerun.
 
 `jarvos sync` runs on macOS and Linux. It holds a POSIX directory descriptor on
 the config directory and rechecks that directory's identity before and after
