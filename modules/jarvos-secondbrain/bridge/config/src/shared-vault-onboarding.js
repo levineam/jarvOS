@@ -190,6 +190,11 @@ function hasPortableRuntimeConfig(existing, expected, homeDir = os.homedir(), ru
     && existing.user.timezone === expected.user.timezone;
 }
 
+function divergentRuntimePathKeys(config, runtimePaths, homeDir = os.homedir()) {
+  const expectedPaths = resolvedConfigPaths(config, homeDir);
+  return Object.keys(expectedPaths).filter((key) => runtimePaths[key] !== expectedPaths[key]);
+}
+
 function isSameOrDescendant(parentPath, candidatePath) {
   const parent = path.resolve(parentPath);
   const candidate = path.resolve(candidatePath);
@@ -378,7 +383,21 @@ function assessSharedVaultConfigTarget({
   const target = targetState.configPath;
   const configuredVault = vaultDir || config?.paths?.vault || config?.vaultPath;
   assertConfigTargetOutsideVault(target, configuredVault, homeDir);
-  if (!targetState.exists) return { action: 'create', configPath: target };
+  if (!targetState.exists) {
+    // Publication is not allowed to write a canonical-looking file which the
+    // same process would immediately resolve to different JARVOS_* paths.
+    // Resolve the in-memory candidate so this preflight creates no target or
+    // parent directory merely to learn the effective runtime configuration.
+    const runtimePaths = resolveConfig({ config, configPath: target, homeDir, env }).paths;
+    const divergentKeys = divergentRuntimePathKeys(config, runtimePaths, homeDir);
+    if (divergentKeys.length) {
+      throw new Error(
+        `Refusing to create ${target}: effective JARVOS path overrides diverge from the proposed config `
+        + `(${divergentKeys.join(', ')}). Unset or reconcile those overrides before running jarvos sync.`,
+      );
+    }
+    return { action: 'create', configPath: target };
+  }
 
   const compatible = isCompatibleSharedVaultConfig(targetState.config, config, homeDir);
   let runtimePaths = false;

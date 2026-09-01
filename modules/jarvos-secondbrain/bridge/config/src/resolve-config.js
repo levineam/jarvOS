@@ -311,7 +311,11 @@ function resolveConfig(options = {}) {
   const env = options.env || process.env;
   const home = homeDir(options);
   const configPath = discoverConfigPath({ ...options, env, homeDir: home });
-  const raw = readJsonFile(configPath);
+  // Callers that need to assess a candidate before publication can supply the
+  // exact prospective config. Runtime callers continue to read configPath.
+  const raw = options.config && typeof options.config === 'object'
+    ? options.config
+    : readJsonFile(configPath);
   const { $schema: _schema, ...rest } = raw && typeof raw === 'object' ? raw : {};
   const basePaths = defaultPaths(home);
   // Keep legacy bootstrap fields readable by the sync/migration path, but do

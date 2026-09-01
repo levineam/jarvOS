@@ -144,6 +144,22 @@ try {
   assert.equal(syncDryRunPayload.vaultContentsWritten, false);
   assert.equal(fs.existsSync(syncConfigPath), false, 'sync dry-run must not create the config or workspace');
 
+  // A missing config must not be published when the current process would
+  // immediately resolve a JARVOS_* path override instead of the written path.
+  const overrideCreateWorkspace = path.join(tmp, 'override-create-workspace');
+  const overrideCreateTags = path.join(tmp, 'override-create-tags');
+  fs.mkdirSync(overrideCreateTags);
+  const overrideCreate = run(
+    [
+      'sync', '--workspace', overrideCreateWorkspace, '--vault', syncVault,
+      '--name', 'TestUser', '--timezone', 'UTC',
+    ],
+    { env: { ...env, JARVOS_TAGS_DIR: overrideCreateTags } },
+  );
+  assert.notEqual(overrideCreate.status, 0);
+  assert.match(overrideCreate.stderr, /effective JARVOS path overrides diverge/);
+  assert.equal(fs.existsSync(overrideCreateWorkspace), false, 'rejected fresh sync must not create its workspace or config target');
+
   const externalConfig = path.join(tmp, 'external-config', 'custom.json');
   const explicitConfigDryRun = run([...syncArgs, '--config', externalConfig, '--dry-run']);
   assert.equal(explicitConfigDryRun.status, 0, explicitConfigDryRun.stderr || explicitConfigDryRun.stdout);
