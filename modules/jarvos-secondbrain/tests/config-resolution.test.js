@@ -437,6 +437,33 @@ test('a fully populated relative config is never classified already-synced', () 
   }
 });
 
+test('a portable config may omit derived child paths and remain already-synced', () => {
+  const home = tempDir();
+  const workspace = path.join(home, 'workspace');
+  const vault = path.join(home, 'Vaults', 'Vault v3');
+  for (const directory of ['Notes', 'Journal', 'Tags']) fs.mkdirSync(path.join(vault, directory), { recursive: true });
+  fs.mkdirSync(workspace, { recursive: true });
+
+  const expected = buildSharedVaultConfig({
+    vaultDir: vault,
+    workspaceRoot: workspace,
+    homeDir: home,
+    user: { name: 'Tester', timezone: 'UTC' },
+  });
+  const existing = structuredClone(expected);
+  delete existing.paths.tags;
+  const configPath = path.join(workspace, 'jarvos.config.json');
+  fs.writeFileSync(configPath, `${JSON.stringify(existing, null, 2)}\n`);
+
+  const assessment = assessSharedVaultConfigTarget({
+    configPath,
+    config: expected,
+    vaultDir: vault,
+    homeDir: home,
+  });
+  assert.equal(assessment.action, 'already-synced');
+});
+
 test('successful exclusive creation leaves no residue beside the config', { skip: process.platform === 'win32' }, () => {
   const home = tempDir();
   const workspace = path.join(home, 'workspace');

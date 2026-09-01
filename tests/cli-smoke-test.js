@@ -215,6 +215,18 @@ try {
   assert.equal(syncExistingWithoutRedundantIdentity.status, 0, syncExistingWithoutRedundantIdentity.stderr || syncExistingWithoutRedundantIdentity.stdout);
   assert.match(syncExistingWithoutRedundantIdentity.stdout, /Config action: already-synced/);
 
+  // Existing portable installs may omit a derived child path. The resolver
+  // derives Tags from the configured vault, so sync must recognize this shape
+  // as already-synced rather than demanding manual reconciliation.
+  const syncExistingWithoutTags = JSON.parse(fs.readFileSync(syncConfigPath, 'utf8'));
+  delete syncExistingWithoutTags.paths.tags;
+  fs.writeFileSync(syncConfigPath, `${JSON.stringify(syncExistingWithoutTags, null, 2)}\n`);
+  const syncWithoutTags = run(['sync', '--workspace', syncWorkspace, '--dry-run']);
+  assert.equal(syncWithoutTags.status, 0, syncWithoutTags.stderr || syncWithoutTags.stdout);
+  assert.match(syncWithoutTags.stdout, /Config action: already-synced/);
+  const runtimeConfig = JSON.parse(fs.readFileSync(syncConfigPath, 'utf8'));
+  assert.equal(Object.hasOwn(runtimeConfig.paths, 'tags'), false);
+
   const syncConfigSuperset = JSON.parse(fs.readFileSync(syncConfigPath, 'utf8'));
   syncConfigSuperset.privateExtension = { enabled: true };
   fs.writeFileSync(syncConfigPath, `${JSON.stringify(syncConfigSuperset, null, 2)}\n`);

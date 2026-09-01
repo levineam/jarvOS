@@ -170,12 +170,20 @@ function hasPortableRuntimeConfig(existing, expected, homeDir = os.homedir()) {
   if (!existing?.paths || typeof existing.paths !== 'object' || !existing?.user || typeof existing.user !== 'object') return false;
   const existingPaths = resolvedConfigPaths(existing, homeDir);
   const expectedPaths = resolvedConfigPaths(expected, homeDir);
+  const derivedPathKeys = new Set([
+    'notes', 'journal', 'tags', 'memory', 'scripts', 'workflows', 'customers',
+  ]);
   // Every raw value must be one the runtime would actually use.  A relative
   // paths.* entry is dropped by normalizePathMap() in favour of the
-  // home-directory default, so a fully populated relative config is never
-  // already-synced however its cwd-anchored comparison happens to land.
+  // home-directory default, so a supplied relative config is never
+  // already-synced however its cwd-anchored comparison happens to land. The
+  // resolver intentionally derives omitted child paths from a configured
+  // workspace or vault, so those optional omissions are portable when their
+  // resolved value still matches the expected installation.
   return Object.keys(expectedPaths).every((key) => existingPaths[key] === expectedPaths[key]
-    && isUsablePath(existing.paths[key], homeDir))
+    && (Object.hasOwn(existing.paths, key)
+      ? isUsablePath(existing.paths[key], homeDir)
+      : derivedPathKeys.has(key)))
     && existing.user.name === expected.user.name
     && existing.user.timezone === expected.user.timezone;
 }
