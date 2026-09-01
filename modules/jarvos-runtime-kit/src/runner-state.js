@@ -27,6 +27,14 @@ function fixtureRootPath(fixtureRoot) {
   return path.resolve(fixtureRoot);
 }
 
+function identityOf(stat) {
+  return { dev: stat.dev, ino: stat.ino };
+}
+
+function sameIdentity(first, second) {
+  return first && second && first.dev === second.dev && first.ino === second.ino;
+}
+
 // Read each existing component with lstat.  realpath alone is not sufficient:
 // it would silently follow the very symlink this boundary must reject.
 function inspectFixtureFile(relativePath, { fixtureRoot, fsImpl = fs } = {}) {
@@ -42,6 +50,7 @@ function inspectFixtureFile(relativePath, { fixtureRoot, fsImpl = fs } = {}) {
   }
   if (rootStat.isSymbolicLink() || !rootStat.isDirectory()) return { status: 'unsafe-path' };
 
+  const chain = [{ path: root, identity: identityOf(rootStat), directory: true }];
   let current = root;
   for (let index = 0; index < parts.length; index += 1) {
     current = path.join(current, parts[index]);
@@ -52,13 +61,57 @@ function inspectFixtureFile(relativePath, { fixtureRoot, fsImpl = fs } = {}) {
     if (stat.isSymbolicLink()) return { status: 'unsafe-path' };
     if (index < parts.length - 1 && !stat.isDirectory()) return { status: 'unsafe-path' };
     if (index === parts.length - 1 && !stat.isFile()) return { status: 'unsafe-path' };
+    chain.push({ path: current, identity: identityOf(stat), directory: index < parts.length - 1 });
   }
-  return { status: 'present', path: current };
+  return { status: 'present', path: current, root, chain };
 }
 
-function parseRunnerState(filePath, { fsImpl = fs } = {}) {
+function revalidateFixtureFile(inspected, { fsImpl = fs } = {}) {
+  if (!inspected || inspected.status !== 'present' || !Array.isArray(inspected.chain)) return { status: 'unsafe-path' };
+  if (path.relative(inspected.root, inspected.path).startsWith(`..${path.sep}`) || path.relative(inspected.root, inspected.path) === '..') {
+    return { status: 'unsafe-path' };
+  }
+  for (const entry of inspected.chain) {
+    let stat;
+    try { stat = fsImpl.lstatSync(entry.path); } catch (_) { return { status: 'unsafe-path' }; }
+    if (stat.isSymbolicLink() || !sameIdentity(entry.identity, identityOf(stat))
+      || (entry.directory ? !stat.isDirectory() : !stat.isFile())) return { status: 'unsafe-path' };
+  }
+  return { status: 'present' };
+}
+
+// Open the already-inspected leaf with O_NOFOLLOW and read from the descriptor,
+// not the path. Rechecking every ancestor after the read closes the remaining
+// rename/symlink window before an accepted document can influence resolution.
+function readPinnedFixtureFile(inspected, { fsImpl = fs } = {}) {
+  const constants = fsImpl.constants || fs.constants;
+  if (!Number.isInteger(constants?.O_RDONLY) || !Number.isInteger(constants?.O_NOFOLLOW)) return { ok: false, code: 'descriptor_nofollow_unavailable' };
+  let descriptor;
+  try {
+    descriptor = fsImpl.openSync(inspected.path, constants.O_RDONLY | constants.O_NOFOLLOW);
+  } catch (error) {
+    return { ok: false, code: error?.code === 'ELOOP' ? 'unsafe-path' : 'runner_state_unreadable' };
+  }
+  try {
+    const opened = fsImpl.fstatSync(descriptor);
+    const expected = inspected.chain[inspected.chain.length - 1];
+    if (!opened.isFile() || !sameIdentity(expected.identity, identityOf(opened))) return { ok: false, code: 'unsafe-path' };
+    if (revalidateFixtureFile(inspected, { fsImpl }).status !== 'present') return { ok: false, code: 'unsafe-path' };
+    const content = fsImpl.readFileSync(descriptor, 'utf8');
+    const after = fsImpl.fstatSync(descriptor);
+    if (!after.isFile() || !sameIdentity(expected.identity, identityOf(after))
+      || revalidateFixtureFile(inspected, { fsImpl }).status !== 'present') return { ok: false, code: 'unsafe-path' };
+    return { ok: true, content };
+  } catch (_) {
+    return { ok: false, code: 'runner_state_unreadable' };
+  } finally {
+    try { fsImpl.closeSync(descriptor); } catch (_) {}
+  }
+}
+
+function parseRunnerState(content) {
   let parsed;
-  try { parsed = JSON.parse(fsImpl.readFileSync(filePath, 'utf8')); } catch (_) { return { ok: false, code: 'runner_state_unreadable' }; }
+  try { parsed = JSON.parse(content); } catch (_) { return { ok: false, code: 'runner_state_unreadable' }; }
   if (!isObject(parsed) || parsed.version !== RUNNER_STATE_VERSION || !Array.isArray(parsed.routes)
     || Object.keys(parsed).some((key) => key !== 'version' && key !== 'routes')) {
     return { ok: false, code: 'runner_state_invalid' };
@@ -69,9 +122,9 @@ function parseRunnerState(filePath, { fsImpl = fs } = {}) {
   for (const candidate of parsed.routes) {
     if (!isObject(candidate)
       || Object.keys(candidate).some((key) => !['routeIdentity', 'secretStoreRef', 'revision'].includes(key))
-      || !ROUTE_ID_RE.test(candidate.routeIdentity || '')
-      || !SECRET_STORE_REF_RE.test(candidate.secretStoreRef || '')
-      || !REVISION_RE.test(candidate.revision || '')
+      || typeof candidate.routeIdentity !== 'string' || !ROUTE_ID_RE.test(candidate.routeIdentity)
+      || typeof candidate.secretStoreRef !== 'string' || !SECRET_STORE_REF_RE.test(candidate.secretStoreRef)
+      || typeof candidate.revision !== 'string' || !REVISION_RE.test(candidate.revision)
       || routeIdentities.has(candidate.routeIdentity)) {
       // Do not include an invalid value in this result: a malformed document
       // could itself contain a raw credential.
@@ -88,16 +141,18 @@ function parseRunnerState(filePath, { fsImpl = fs } = {}) {
 }
 
 function logCompatibility(logger, event) {
-  if (typeof logger !== 'function') return;
   // Events contain a source label only; never surface fixture paths or parsed
-  // values through diagnostics.
-  logger(Object.freeze({ event, source: 'legacy-openclaw', readOnly: true }));
+  // values through diagnostics. The event is also returned as required
+  // evidence, so an omitted observer cannot make a fallback invisible.
+  if (typeof logger === 'function') logger(event);
 }
 
 function readCandidate(relativePath, options) {
   const inspected = inspectFixtureFile(relativePath, options);
   if (inspected.status !== 'present') return inspected;
-  const parsed = parseRunnerState(inspected.path, options);
+  const pinned = readPinnedFixtureFile(inspected, options);
+  if (!pinned.ok) return { status: pinned.code };
+  const parsed = parseRunnerState(pinned.content);
   return parsed.ok ? { status: 'present', state: parsed.state } : { status: parsed.code };
 }
 
@@ -107,10 +162,16 @@ function equivalentRoutes(first, second) {
     && first.revision === second.revision;
 }
 
+function telegramRoutes(state) {
+  // Identity remains opaque and unmodified. Telegram is simply a route
+  // dimension: legacy `openclaw:telegram:*`, `hermes:telegram:*`, and future
+  // `<adapter>:telegram:*` identities all retain their original form.
+  return state.routes.filter((route) => route.routeIdentity.split(':').includes('telegram'));
+}
+
 function telegramRoute(state) {
-  const matches = state.routes.filter((route) => route.routeIdentity.startsWith('telegram:'));
-  if (matches.length !== 1) return null;
-  return matches[0];
+  const matches = telegramRoutes(state);
+  return matches.length === 1 ? matches[0] : null;
 }
 
 /**
@@ -133,7 +194,9 @@ function readRunnerState({ fixtureRoot, fsImpl = fs, logger } = {}) {
     // identities, pointers, or revisions are ambiguous and fail closed.
     if (legacy.status === 'present') {
       const primaryTelegram = telegramRoute(primary.state);
-      const legacyTelegram = telegramRoute(legacy.state);
+      const legacyTelegramRoutes = telegramRoutes(legacy.state);
+      if (legacyTelegramRoutes.length > 1) return stateFailure('legacy_telegram_credential_reference_ambiguous');
+      const legacyTelegram = legacyTelegramRoutes[0] || null;
       if (primaryTelegram && legacyTelegram && !equivalentRoutes(primaryTelegram, legacyTelegram)) {
         return stateFailure('runner_state_conflict');
       }
@@ -141,11 +204,13 @@ function readRunnerState({ fixtureRoot, fsImpl = fs, logger } = {}) {
     return { ok: true, source: 'jarvos', compatibility: null, state: primary.state };
   }
   if (legacy.status === 'present') {
-    logCompatibility(logger, 'jarvos.runner_state.legacy_fallback');
+    if (telegramRoutes(legacy.state).length > 1) return stateFailure('legacy_telegram_credential_reference_ambiguous');
+    const event = Object.freeze({ event: 'jarvos.runner_state.legacy_fallback', source: 'legacy-openclaw', readOnly: true });
+    logCompatibility(logger, event);
     return {
       ok: true,
       source: 'legacy-openclaw',
-      compatibility: Object.freeze({ readOnly: true, migration: false }),
+      compatibility: Object.freeze({ readOnly: true, migration: false, evidence: Object.freeze([event]) }),
       state: legacy.state,
     };
   }
@@ -171,6 +236,8 @@ module.exports = {
   LEGACY_OPENCLAW_RUNNER_STATE_RELATIVE_PATH,
   RUNNER_STATE_VERSION,
   inspectFixtureFile,
+  readPinnedFixtureFile,
   readRunnerState,
+  revalidateFixtureFile,
   resolveTelegramCredentialReference,
 };

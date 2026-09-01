@@ -55,10 +55,40 @@ test('legacy OpenClaw state is a logged read-only fallback and is never modified
   const result = resolveTelegramCredentialReference({ fixtureRoot: root, logger: (event) => events.push(event) });
   assert.equal(result.ok, true);
   assert.equal(result.source, 'legacy-openclaw');
-  assert.deepEqual(result.compatibility, { readOnly: true, migration: false });
+  assert.deepEqual(result.compatibility, {
+    readOnly: true,
+    migration: false,
+    evidence: [{ event: 'jarvos.runner_state.legacy_fallback', source: 'legacy-openclaw', readOnly: true }],
+  });
   assert.deepEqual(result.credential, telegramRoute);
   assert.deepEqual(events, [{ event: 'jarvos.runner_state.legacy_fallback', source: 'legacy-openclaw', readOnly: true }]);
   assert.equal(fs.readFileSync(legacyPath, 'utf8'), before);
+
+  // Compatibility evidence is mandatory even when an adapter has no observer
+  // to receive the optional structured event.
+  const withoutObserver = resolveTelegramCredentialReference({ fixtureRoot: root });
+  assert.deepEqual(withoutObserver.compatibility.evidence, [
+    { event: 'jarvos.runner_state.legacy_fallback', source: 'legacy-openclaw', readOnly: true },
+  ]);
+});
+
+test('recognizes existing OpenClaw and Hermes Telegram route identities without rewriting them', () => {
+  for (const routeIdentity of ['openclaw:telegram:owner-primary', 'hermes:telegram:owner-primary']) {
+    const root = fixtureRoot();
+    writeState(root, JARVOS_RUNNER_STATE_RELATIVE_PATH, [{ ...telegramRoute, routeIdentity }]);
+    const result = resolveTelegramCredentialReference({ fixtureRoot: root });
+    assert.equal(result.ok, true, routeIdentity);
+    assert.equal(result.credential.routeIdentity, routeIdentity);
+  }
+});
+
+test('strictly rejects non-string route identity, secret-store reference, and revision values', () => {
+  for (const [field, value] of Object.entries({ routeIdentity: 7, secretStoreRef: { ref: 'keychain:fixture' }, revision: null })) {
+    const root = fixtureRoot();
+    writeState(root, JARVOS_RUNNER_STATE_RELATIVE_PATH, [{ ...telegramRoute, [field]: value }]);
+    assert.doesNotThrow(() => readRunnerState({ fixtureRoot: root }));
+    assert.deepEqual(readRunnerState({ fixtureRoot: root }), { ok: false, code: 'runner_state_invalid' });
+  }
 });
 
 test('conflicting new and legacy Telegram routes fail closed', () => {
@@ -100,6 +130,45 @@ test('ambiguous Telegram routes, raw token fields, and symlinks fail closed with
   fs.symlinkSync(target, linkPath);
   assert.deepEqual(readRunnerState({ fixtureRoot: linked }), { ok: false, code: 'unsafe-path' });
   t.diagnostic('fixtures only: no live home directory, runtime, or credential store was consulted');
+});
+
+test('an ambiguous legacy Telegram state blocks a primary route and descriptor replacement fails closed', () => {
+  const ambiguousLegacy = fixtureRoot();
+  writeState(ambiguousLegacy, JARVOS_RUNNER_STATE_RELATIVE_PATH, [{ ...telegramRoute, routeIdentity: 'hermes:telegram:primary' }]);
+  writeState(ambiguousLegacy, LEGACY_OPENCLAW_RUNNER_STATE_RELATIVE_PATH, [
+    { ...telegramRoute, routeIdentity: 'openclaw:telegram:first' },
+    { ...telegramRoute, routeIdentity: 'openclaw:telegram:second', secretStoreRef: 'keychain:jarvos/telegram-secondary' },
+  ]);
+  assert.deepEqual(readRunnerState({ fixtureRoot: ambiguousLegacy }), {
+    ok: false,
+    code: 'legacy_telegram_credential_reference_ambiguous',
+  });
+  const legacyOnly = fixtureRoot();
+  writeState(legacyOnly, LEGACY_OPENCLAW_RUNNER_STATE_RELATIVE_PATH, [
+    { ...telegramRoute, routeIdentity: 'openclaw:telegram:first' },
+    { ...telegramRoute, routeIdentity: 'openclaw:telegram:second', secretStoreRef: 'keychain:jarvos/telegram-secondary' },
+  ]);
+  assert.deepEqual(readRunnerState({ fixtureRoot: legacyOnly }), {
+    ok: false,
+    code: 'legacy_telegram_credential_reference_ambiguous',
+  });
+
+  const root = fixtureRoot();
+  const statePath = writeState(root, JARVOS_RUNNER_STATE_RELATIVE_PATH, [telegramRoute]);
+  const replacement = writeState(root, 'replacement.json', [telegramRoute]);
+  let replaced = false;
+  const fsImpl = {
+    ...fs,
+    readFileSync(target, encoding) {
+      if (!replaced && typeof target === 'number') {
+        replaced = true;
+        fs.unlinkSync(statePath);
+        fs.symlinkSync(replacement, statePath);
+      }
+      return fs.readFileSync(target, encoding);
+    },
+  };
+  assert.deepEqual(readRunnerState({ fixtureRoot: root, fsImpl }), { ok: false, code: 'unsafe-path' });
 });
 
 test('fixture root is mandatory; the resolver has no live-install default', () => {

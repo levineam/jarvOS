@@ -103,6 +103,13 @@ paths or symlinks, duplicate Telegram routes, and conflicting new/legacy
 records. It has no default home-directory lookup, so it cannot inspect a live
 installation until a separately reviewed adapter deliberately opts in.
 
+Telegram is a route dimension, not a harness name: identities such as
+`openclaw:telegram:default` and `hermes:telegram:default` are recognized but
+returned exactly as written. Compatibility fallback always returns structured
+read-only evidence, whether or not an optional observer is supplied. Files are
+opened with no-follow descriptors and revalidated against their inspected
+identity and fixture-root containment before they are parsed.
+
 `runtimeMode.conformanceFacts` is an optional `jarvos-harness-conformance/v1`
 registry. Its tiers are `baseline-context`, `conversational`,
 `mutation-capable`, and `proactive-authority`. A
