@@ -41,6 +41,46 @@ Paperclip, OpenClaw, Codex, Claude Code, cron, or a private machine path.
 - It is not permission to mutate by free-form text. Requests must declare a
   resource, mutation class, authority, command spec, budget, and lifecycle.
 
+## Portable identity
+
+The package validates opaque `jarvos.identity.v1` identifiers so candidates,
+receipts, sessions, and other portable entities can reference stable identities
+without a shared database. An identifier has the fixed grammar
+
+```text
+jarvos:<kind>:<namespace>:<opaque>
+```
+
+The whole value is lowercase and at most 256 characters. `namespace` and
+`opaque` each match `[a-z0-9][a-z0-9._-]{0,63}` and contain no whitespace,
+path separator, percent-encoding, or extra colon. The allowed kinds are `mind`,
+`installation`, `host`, `harness-instance`, `session`, `source-event`,
+`candidate`, `artifact`, `project`, `policy`, and `receipt`.
+
+`validateIdentity(value, expectedKind)` returns an error array, `parseIdentity`
+returns the four bounded segments, and `assertIdentity` throws on invalid input.
+Validation never resolves, dereferences, normalizes, or infers an identifier,
+and it reads no host, process, or environment state. This contract does not mint
+identifiers; each owning subsystem defines how it issues them.
+
+## Promotion receipts
+
+The package also validates `jarvos.promotion-receipt.v1` envelopes. A receipt
+records the outcome of a governed promotion, supersession, retraction,
+rollback, or correction across the notes, journal, memory, ontology, Projects,
+skills, and work surfaces. It binds portable candidate, policy, artifact, and
+receipt identities to bounded evidence digests without embedding raw content,
+destination receipts, secrets, or host paths.
+
+A `committed` outcome names the resulting destination revision. Every other
+outcome reports no new revision and no reversal claim; in particular, a failed
+or deferred receipt proves only that an attempt was recorded. `reversalMode`
+describes how committed destination state may later be changed. It does not
+prove that a reversal is available or will succeed. Destination-specific
+writers and receipts retain that responsibility. Likewise,
+`policy-automatic` is representable as provenance but does not itself grant
+automation authority.
+
 ## Public human and agent adapters
 
 The package ships `jarvos-manager` for a human CLI and exposes the same

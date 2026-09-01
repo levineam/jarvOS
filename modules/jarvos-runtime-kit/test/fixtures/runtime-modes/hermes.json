@@ -1,0 +1,7 @@
+{
+  "version": "jarvos-runtime-mode/v1",
+  "mode": "hermes",
+  "installedAdapters": [{ "id": "hermes" }],
+  "workloadRoutes": [],
+  "capabilityTruth": [{ "adapter": "hermes", "capability": "resident", "state": "available", "evidence": [{ "kind": "fixture", "detail": "Hermes adapter declaration is present." }] }]
+}

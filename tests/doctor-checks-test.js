@@ -35,6 +35,7 @@ const {
   resolveStagedOpenClawRuntimeRoot,
   validateJarvosProfile,
   validateOpenClawProfile,
+  validateConfigSchema,
 } = require('../modules/jarvos/src/doctor');
 
 function scratch() {
@@ -232,6 +233,25 @@ test('vault-path-stale passes for an existing vault root', () => {
     assert.equal(res.id, 'vault-path-stale');
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('config schema check applies the runtime-mode contract in addition to structural schema validation', () => {
+  const workspace = scratch();
+  try {
+    fs.copyFileSync(path.join(__dirname, '..', 'jarvos.config.schema.json'), path.join(workspace, 'jarvos.config.schema.json'));
+    writeConfig(workspace, {
+      assistantName: 'Jarvis', userName: 'User', coachName: 'Coach',
+      vaultPath: path.join(workspace, 'vault'), workspacePath: workspace, runtime: 'openclaw',
+      runtimeMode: {
+        version: 'jarvos-runtime-mode/v1', mode: 'not-a-mode', installedAdapters: [], workloadRoutes: [], capabilityTruth: [],
+      },
+    });
+    const result = validateConfigSchema(workspace);
+    assert.equal(result.ok, false);
+    assert.match(result.message, /runtimeMode\.mode must be one of/);
+  } finally {
+    fs.rmSync(workspace, { recursive: true, force: true });
   }
 });
 

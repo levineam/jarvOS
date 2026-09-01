@@ -1,0 +1,7 @@
+{
+  "version": "jarvos-runtime-mode/v1",
+  "mode": "multi",
+  "installedAdapters": [{ "id": "hermes" }, { "id": "openclaw" }],
+  "workloadRoutes": [{ "workload": "telegram.updates", "adapter": "openclaw" }, { "workload": "interactive.chat", "adapter": "hermes" }],
+  "capabilityTruth": [{ "adapter": "hermes", "capability": "resident", "state": "available", "evidence": [{ "kind": "fixture", "detail": "Hermes adapter declaration is present." }] }, { "adapter": "openclaw", "capability": "resident", "state": "available", "evidence": [{ "kind": "fixture", "detail": "OpenClaw adapter declaration is present." }] }]
+}

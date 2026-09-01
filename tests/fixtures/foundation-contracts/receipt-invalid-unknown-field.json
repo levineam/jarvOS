@@ -1,0 +1,13 @@
+{
+  "schemaVersion": "jarvos.promotion-receipt.v1",
+  "receiptId": "jarvos:receipt:example:r-0105",
+  "operation": "promotion",
+  "outcome": "committed",
+  "candidateIds": ["jarvos:candidate:example:c-0105"],
+  "policyId": "jarvos:policy:example:promotion-v1",
+  "authorization": { "mode": "user-reviewed" },
+  "destination": { "surface": "work", "artifactId": "jarvos:artifact:example:a-0105", "revisionBefore": null, "revisionAfter": "rev-0105", "reversalMode": "none" },
+  "recordedAt": "2026-08-31T13:20:00Z",
+  "evidence": [{ "type": "verification", "ref": "verification:work:0105", "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" }],
+  "rawContent": "must never be carried by a receipt"
+}

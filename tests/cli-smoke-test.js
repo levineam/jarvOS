@@ -436,6 +436,25 @@ try {
   fs.rmSync(path.join(syncVault, 'Tags'));
   fs.mkdirSync(path.join(syncVault, 'Tags'));
 
+  const configured = JSON.parse(fs.readFileSync(path.join(workspace, 'jarvos.config.json'), 'utf8'));
+  configured.runtimeMode = {
+    version: 'jarvos-runtime-mode/v1',
+    mode: 'multi',
+    installedAdapters: [{ id: 'hermes' }, { id: 'openclaw' }],
+    workloadRoutes: [
+      { workload: 'telegram.updates', adapter: 'hermes' },
+      { workload: 'telegram.updates', adapter: 'openclaw' },
+    ],
+    capabilityTruth: [],
+  };
+  fs.writeFileSync(path.join(workspace, 'jarvos.config.json'), JSON.stringify(configured, null, 2));
+  const duplicateTelegramDoctor = run(['doctor', '--profile', 'minimal', '--workspace', workspace], { env });
+  assert.equal(duplicateTelegramDoctor.status, 1, duplicateTelegramDoctor.stderr || duplicateTelegramDoctor.stdout);
+  assert.match(duplicateTelegramDoctor.stdout, /FAIL config-schema/);
+  assert.match(duplicateTelegramDoctor.stdout, /only one Telegram update consumer/);
+  delete configured.runtimeMode;
+  fs.writeFileSync(path.join(workspace, 'jarvos.config.json'), JSON.stringify(configured, null, 2));
+
   const jsonDoctor = run(['doctor', '--profile=minimal', '--workspace', workspace, '--json'], { env });
   assert.equal(jsonDoctor.status, 0, jsonDoctor.stderr || jsonDoctor.stdout);
   const report = JSON.parse(jsonDoctor.stdout);

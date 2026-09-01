@@ -13,6 +13,7 @@ const {
 const {
   collectOpenClawPluginEvidence,
   inspectCompoundEngineeringProvider,
+  loadRuntimeModeConfig,
 } = require('../../jarvos-runtime-kit/src');
 const { loadHealthModules } = require('../../../lib/jarvos-doctor-modules');
 const {
@@ -607,6 +608,10 @@ function validateConfigSchema(workspace, configPath = path.join(workspace, 'jarv
     ...invalidRuntimeTimezoneAliases(configResult.value, env)
       .map((field) => `/${field.replace('.', '/')} must be a valid IANA timezone`),
   ];
+  const runtimeMode = loadRuntimeModeConfig(configResult.value);
+  if (!runtimeMode.ok) {
+    errors.push(...runtimeMode.errors.map((error) => `runtimeMode: ${error}`));
+  }
 
   if (errors.length > 0) {
     return createCheck(
@@ -1729,5 +1734,6 @@ module.exports = {
   validateObsidianPaths,
   validateObsidianSingleWriter,
   validateCompoundEngineeringProvider,
+  validateConfigSchema,
   validateConfigReconciliation,
 };
