@@ -1,0 +1,236 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://jarvos.dev/schemas/active-assistant-service.schema.json",
+  "title": "jarvOS Active Assistant service contract",
+  "description": "Portable, redacted data records for the pure Active Assistant service boundary.",
+  "$comment": "This is a portable structural envelope. The exported JavaScript validators are authoritative for calendar-valid UTC timestamps, duplicate identity checks, relational time ordering, path-safe strings, approval bindings, and cross-record receipt bindings.",
+  "$defs": {
+    "id": { "type": "string", "pattern": "^(?!.*\\.\\.)[A-Za-z0-9][A-Za-z0-9._-]*$" },
+    "safeString": { "type": "string", "minLength": 1, "pattern": "^(?!.*\\.\\.)(?![\\\\/~])(?![Ff][Ii][Ll][Ee]:).+$" },
+    "opaque": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,191}$" },
+    "digest": { "type": "string", "pattern": "^[a-fA-F0-9]{64}$" },
+    "time": { "type": "string", "format": "date-time", "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{3})?Z$" },
+    "approval": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["scope", "approvalId", "bindingDigest", "approved", "ambiguous"],
+      "properties": {
+        "scope": { "enum": ["promotion", "provider_selection", "delivery"] },
+        "approvalId": { "$ref": "#/$defs/opaque" },
+        "bindingDigest": { "$ref": "#/$defs/digest" },
+        "approved": { "type": "boolean" },
+        "ambiguous": { "type": "boolean" }
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schemaVersion", "evidenceId", "subjectId", "observedAt", "sourceRef", "digest", "classification"],
+      "properties": {
+        "schemaVersion": { "const": "jarvos-active-assistant-evidence/v1" },
+        "evidenceId": { "$ref": "#/$defs/id" },
+        "subjectId": { "$ref": "#/$defs/id" },
+        "observedAt": { "$ref": "#/$defs/time" },
+        "sourceRef": { "$ref": "#/$defs/opaque" },
+        "digest": { "$ref": "#/$defs/digest" },
+        "classification": { "enum": ["observed", "inferred"] }
+      }
+    },
+    "candidate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schemaVersion", "candidateId", "subjectId", "candidateType", "evidenceRefs", "summaryDigest", "generation"],
+      "properties": {
+        "schemaVersion": { "const": "jarvos-active-assistant-candidate/v1" },
+        "candidateId": { "$ref": "#/$defs/id" },
+        "subjectId": { "$ref": "#/$defs/id" },
+        "candidateType": { "$ref": "#/$defs/id" },
+        "evidenceRefs": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["evidenceId", "digest"],
+            "properties": {
+              "evidenceId": { "$ref": "#/$defs/id" },
+              "digest": { "$ref": "#/$defs/digest" }
+            }
+          }
+        },
+        "summaryDigest": { "$ref": "#/$defs/digest" },
+        "generation": { "$ref": "#/$defs/opaque" }
+      }
+    },
+    "schedule": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schemaVersion", "scheduleId", "candidateId", "subjectId", "dueAt", "expiresAt", "idempotencyKey"],
+      "properties": {
+        "schemaVersion": { "const": "jarvos-active-assistant-schedule/v1" },
+        "scheduleId": { "$ref": "#/$defs/id" },
+        "candidateId": { "$ref": "#/$defs/id" },
+        "subjectId": { "$ref": "#/$defs/id" },
+        "dueAt": { "$ref": "#/$defs/time" },
+        "expiresAt": { "$ref": "#/$defs/time" },
+        "idempotencyKey": { "$ref": "#/$defs/opaque" }
+      }
+    },
+    "conversation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schemaVersion", "conversationId", "subjectId", "createdAt"],
+      "properties": {
+        "schemaVersion": { "const": "jarvos-active-assistant-conversation/v1" },
+        "conversationId": { "$ref": "#/$defs/id" },
+        "subjectId": { "$ref": "#/$defs/id" },
+        "createdAt": { "$ref": "#/$defs/time" }
+      }
+    },
+    "mapping": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schemaVersion", "mappingId", "conversationId", "bridgeId", "nativeSessionRef", "mappedAt"],
+      "properties": {
+        "schemaVersion": { "const": "jarvos-active-assistant-conversation-mapping/v1" },
+        "mappingId": { "$ref": "#/$defs/id" },
+        "conversationId": { "$ref": "#/$defs/id" },
+        "bridgeId": { "$ref": "#/$defs/id" },
+        "nativeSessionRef": { "$ref": "#/$defs/opaque" },
+        "mappedAt": { "$ref": "#/$defs/time" }
+      }
+    },
+    "promotion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schemaVersion", "promotionId", "candidateId", "candidateGeneration", "subjectId", "policyRevision", "approvalId", "status"],
+      "properties": {
+        "schemaVersion": { "const": "jarvos-active-assistant-promotion/v1" },
+        "promotionId": { "$ref": "#/$defs/id" }, "candidateId": { "$ref": "#/$defs/id" },
+        "candidateGeneration": { "$ref": "#/$defs/opaque" }, "subjectId": { "$ref": "#/$defs/id" }, "policyRevision": { "$ref": "#/$defs/id" },
+        "approvalId": { "$ref": "#/$defs/opaque" }, "status": { "const": "promoted" }
+      }
+    },
+    "prepared": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schemaVersion", "preparedId", "promotionId", "scheduleId", "conversationId", "subjectId", "providerEntryId", "providerGeneration", "idempotencyKey", "dueAt", "expiresAt", "state"],
+      "properties": {
+        "schemaVersion": { "const": "jarvos-active-assistant-prepared-delivery/v1" },
+        "preparedId": { "$ref": "#/$defs/id" }, "promotionId": { "$ref": "#/$defs/id" },
+        "scheduleId": { "$ref": "#/$defs/id" }, "conversationId": { "$ref": "#/$defs/id" }, "subjectId": { "$ref": "#/$defs/id" },
+        "providerEntryId": { "$ref": "#/$defs/id" }, "providerGeneration": { "$ref": "#/$defs/opaque" },
+        "idempotencyKey": { "$ref": "#/$defs/opaque" }, "dueAt": { "$ref": "#/$defs/time" },
+        "expiresAt": { "$ref": "#/$defs/time" }, "state": { "const": "prepared" }
+      }
+    },
+    "providerEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schemaVersion", "entryId", "provider", "model", "reasoningEfforts"],
+      "properties": {
+        "schemaVersion": { "const": "jarvos-active-assistant-provider-entry/v1" },
+        "entryId": { "$ref": "#/$defs/id" }, "provider": { "$ref": "#/$defs/id" },
+        "model": { "$ref": "#/$defs/safeString" },
+        "reasoningEfforts": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "enum": ["low", "medium", "high", "max"] } }
+      }
+    },
+    "providerCatalog": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schemaVersion", "entries"],
+      "properties": {
+        "schemaVersion": { "const": "jarvos-active-assistant-provider-catalog/v1" },
+        "entries": { "type": "array", "items": { "$ref": "#/$defs/providerEntry" } }
+      }
+    },
+    "providerSelection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schemaVersion", "entryId", "generation", "qualifiedOutcome", "lastFailure"],
+      "properties": {
+        "schemaVersion": { "const": "jarvos-active-assistant-provider-selection/v1" },
+        "entryId": { "anyOf": [{ "type": "null" }, { "$ref": "#/$defs/id" }] },
+        "generation": { "$ref": "#/$defs/opaque" },
+        "qualifiedOutcome": {
+          "anyOf": [
+            { "type": "null" },
+            { "type": "object", "additionalProperties": false, "required": ["entryId", "generation", "resultingGeneration", "catalogDigest", "outcome"], "properties": {
+              "entryId": { "$ref": "#/$defs/id" }, "generation": { "$ref": "#/$defs/opaque" }, "resultingGeneration": { "$ref": "#/$defs/opaque" }, "catalogDigest": { "$ref": "#/$defs/digest" }, "outcome": { "const": "qualified" }
+            } }
+          ]
+        },
+        "lastFailure": {
+          "anyOf": [
+            { "type": "null" },
+            { "type": "object", "additionalProperties": false, "required": ["entryId", "generation", "resultingGeneration", "catalogDigest", "outcome"], "properties": {
+              "entryId": { "$ref": "#/$defs/id" }, "generation": { "$ref": "#/$defs/opaque" }, "resultingGeneration": { "$ref": "#/$defs/opaque" }, "catalogDigest": { "$ref": "#/$defs/digest" }, "outcome": { "const": "failed" }
+            } }
+          ]
+        }
+      }
+    },
+    "providerProposal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schemaVersion", "proposalId", "entryId", "expectedGeneration"],
+      "properties": {
+        "schemaVersion": { "const": "jarvos-active-assistant-provider-proposal/v1" },
+        "proposalId": { "$ref": "#/$defs/opaque" }, "entryId": { "$ref": "#/$defs/id" },
+        "expectedGeneration": { "$ref": "#/$defs/opaque" }
+      }
+    },
+    "interaction": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schemaVersion", "receiptId", "conversationId", "mappingId", "kind", "occurredAt", "payloadDigest", "idempotencyKey"],
+      "properties": {
+        "schemaVersion": { "const": "jarvos-active-assistant-interaction-receipt/v1" },
+        "receiptId": { "$ref": "#/$defs/id" }, "conversationId": { "$ref": "#/$defs/id" },
+        "mappingId": { "$ref": "#/$defs/id" }, "kind": { "enum": ["user_message", "assistant_reply", "media", "event"] },
+        "occurredAt": { "$ref": "#/$defs/time" }, "payloadDigest": { "$ref": "#/$defs/digest" },
+        "idempotencyKey": { "$ref": "#/$defs/opaque" }
+      }
+    },
+    "lifecycle": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schemaVersion", "receiptId", "preparedId", "conversationId", "subjectId", "mappingId", "bridgeId", "idempotencyKey", "outcome", "occurredAt", "producer"],
+      "properties": {
+        "schemaVersion": { "const": "jarvos-active-assistant-lifecycle-receipt/v1" },
+        "receiptId": { "$ref": "#/$defs/id" }, "preparedId": { "$ref": "#/$defs/id" },
+        "conversationId": { "$ref": "#/$defs/id" }, "subjectId": { "$ref": "#/$defs/id" }, "mappingId": { "$ref": "#/$defs/id" },
+        "bridgeId": { "$ref": "#/$defs/id" }, "idempotencyKey": { "$ref": "#/$defs/opaque" },
+        "outcome": { "enum": ["delivered", "failed", "denied"] }, "occurredAt": { "$ref": "#/$defs/time" },
+        "producer": { "const": "harness_bridge" }
+      }
+    },
+    "bridge": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schemaVersion", "bridgeId", "operations"],
+      "properties": {
+        "schemaVersion": { "const": "jarvos-active-assistant-harness-bridge/v1" },
+        "bridgeId": { "$ref": "#/$defs/id" },
+        "operations": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "enum": ["transport", "native_session_mapping", "media_reply", "event_bridge", "receipt_production"] } }
+      }
+    }
+  },
+  "oneOf": [
+    { "$ref": "#/$defs/approval" },
+    { "$ref": "#/$defs/evidence" },
+    { "$ref": "#/$defs/candidate" },
+    { "$ref": "#/$defs/promotion" },
+    { "$ref": "#/$defs/schedule" },
+    { "$ref": "#/$defs/prepared" },
+    { "$ref": "#/$defs/providerEntry" },
+    { "$ref": "#/$defs/providerCatalog" },
+    { "$ref": "#/$defs/providerSelection" },
+    { "$ref": "#/$defs/providerProposal" },
+    { "$ref": "#/$defs/conversation" },
+    { "$ref": "#/$defs/mapping" },
+    { "$ref": "#/$defs/interaction" },
+    { "$ref": "#/$defs/lifecycle" },
+    { "$ref": "#/$defs/bridge" }
+  ]
+}
