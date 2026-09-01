@@ -1,0 +1,13 @@
+{
+  "ok": true,
+  "contractVersion": "jarvos-constrained-generation/v1",
+  "backend": { "id": "openclaw", "verification": "claimed-unverified" },
+  "runtimeProof": { "status": "recorded-fixture", "receiptDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" },
+  "effectiveModelReceipt": { "provider": "openai", "model": "gpt-5.6-luna", "verification": "not-verified-by-jarvos" },
+  "usage": { "inputTokens": 12, "outputTokens": 8, "totalTokens": 20 },
+  "constraints": {
+    "runtimeProofPresent": true, "zeroToolAssurance": true, "exactModel": true,
+    "noFallback": true, "usageEvidencePresent": true, "deliveryDenied": true
+  },
+  "admitted": false
+}
