@@ -8,6 +8,8 @@ const storage = require('./storage');
 const applicationService = require('./application-service');
 const protectedResource = require('./protected-resource');
 const schedulerAdapter = require('./scheduler-adapter');
+const identity = require('./identity');
+const promotionReceipt = require('./promotion-receipt');
 
 module.exports = {
   ...contracts,
@@ -18,4 +20,6 @@ module.exports = {
   ...applicationService,
   ...protectedResource,
   ...schedulerAdapter,
+  ...identity,
+  ...promotionReceipt,
 };

@@ -97,16 +97,35 @@ match. Missing or incompatible private fields produce `unknown`; the global
 
 ## Operating Model
 
-The active secondbrain path is:
+The intended secondbrain model is below. Only intentional capture is active in
+this repository today; the eligible-interaction candidate stages are future
+adapter behavior.
 
 ```text
 intentional capture
   -> Obsidian-compatible Markdown Notes/Journal
+
+future eligible AI interactions
+  -> eligibility and trust boundary
+  -> immutable, source-backed, non-authoritative candidates
+  -> governed review or policy admission
+  -> destination-owned promotion plus outcome receipt
+
+authoritative durable surfaces
   -> source-backed sidecars and generated LLM-wiki
   -> QMD freshness / broad lookup
   -> GBrain curated structured recall
   -> OpenClaw memory-wiki and runtime recall diagnostics
 ```
+
+Intentional capture remains the direct authored path. Eligible ambient
+observation is a future proposal path: a future adapter may prepare candidates,
+but this foundation contains no source adapter that does so. It does not
+automatically believe, promote, or retain every conversation. Source
+trust, privacy, expiry, deduplication, and evidence binding are checked before
+candidate construction. Destination owners still decide admission and emit a
+receipt whose outcome distinguishes a committed revision from a failed,
+deferred, conflicted, or already-satisfied attempt.
 
 Paperclip runs alongside that path for execution state. It records issues,
 owners, blockers, reviews, release evidence, and follow-up work, but it is not
@@ -147,7 +166,10 @@ Active integrations should be proven through these public-safe signals:
 
 ## Non-Goals
 
-- No automatic ingestion of every AI conversation.
+- No indiscriminate ingestion of every AI conversation, raw transcript
+  hoarding, or automatic belief. A future eligible-interaction adapter may
+  produce bounded non-authoritative candidates; durable promotion remains
+  governed.
 - No ChatGPT or Claude app first-class capture target in the current
   determinism contract.
 - No direct agentmemory host access or automatic memory promotion.
