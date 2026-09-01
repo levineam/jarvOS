@@ -1,0 +1,14 @@
+{
+  "schemaVersion": "jarvos.candidate.v1",
+  "candidateId": "jarvos:candidate:example:c-0101",
+  "candidateType": "memory-unit",
+  "authority": "authoritative",
+  "sources": [{ "sourceEventId": "jarvos:source-event:example:se-0101", "evidenceDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" }],
+  "privacyTier": "private",
+  "sourceTrust": "user-authored",
+  "construction": { "extractorId": "example-extractor", "extractorVersion": "1.0.0", "eligibilityPolicyId": "jarvos:policy:example:eligibility-v1" },
+  "dedupeKey": "invalid:authoritative",
+  "createdAt": "2026-08-31T12:00:00Z",
+  "expiresAt": "2026-09-30T12:00:00Z",
+  "proposal": { "title": "Invalid authority claim", "summary": "A candidate may never claim authority." }
+}

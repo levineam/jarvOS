@@ -20,6 +20,7 @@ const {
   expandTilde,
   isUsablePath,
   isValidTimezone,
+  resolveConfig,
 } = require('./resolve-config');
 
 const DEFAULT_VAULT_CANDIDATES = [
@@ -166,18 +167,56 @@ function migratedSharedVaultConfig(existing, expected) {
   };
 }
 
-function hasPortableRuntimeConfig(existing, expected, homeDir = os.homedir()) {
+function hasParentTraversal(value) {
+  const parsed = path.parse(value);
+  return value.slice(parsed.root.length).split(path.sep).includes('..');
+}
+
+// Match Doctor's comparison semantics for harmless spelling differences, but
+// never let lexical path.resolve() collapse `..` before we know whether an
+// earlier component is a symlink. That traversal can name a physically
+// different target. Treat it as unequal so fresh publication fails closed and
+// existing configs stay in the manual-reconciliation path; trailing separators
+// and `.` segments remain equivalent without resolving symlinks or weakening
+// the publication target's separate containment/symlink checks.
+function hasSameRuntimePath(left, right) {
+  return typeof left === 'string'
+    && typeof right === 'string'
+    && !hasParentTraversal(left)
+    && !hasParentTraversal(right)
+    && path.resolve(left) === path.resolve(right);
+}
+
+function hasPortableRuntimeConfig(existing, expected, homeDir = os.homedir(), runtimePaths = null) {
   if (!existing?.paths || typeof existing.paths !== 'object' || !existing?.user || typeof existing.user !== 'object') return false;
   const existingPaths = resolvedConfigPaths(existing, homeDir);
   const expectedPaths = resolvedConfigPaths(expected, homeDir);
+  const derivedPathKeys = new Set([
+    'notes', 'journal', 'tags', 'memory', 'scripts', 'workflows', 'customers',
+  ]);
   // Every raw value must be one the runtime would actually use.  A relative
   // paths.* entry is dropped by normalizePathMap() in favour of the
-  // home-directory default, so a fully populated relative config is never
-  // already-synced however its cwd-anchored comparison happens to land.
+  // home-directory default, so a supplied relative config is never
+  // already-synced however its cwd-anchored comparison happens to land. The
+  // resolver intentionally derives omitted child paths from a configured
+  // workspace or vault, so those optional omissions are portable when their
+  // resolved value still matches the expected installation.
   return Object.keys(expectedPaths).every((key) => existingPaths[key] === expectedPaths[key]
-    && isUsablePath(existing.paths[key], homeDir))
+    && (!runtimePaths || hasSameRuntimePath(runtimePaths[key], expectedPaths[key]))
+    && (Object.hasOwn(existing.paths, key)
+      ? isUsablePath(existing.paths[key], homeDir)
+      : derivedPathKeys.has(key)))
     && existing.user.name === expected.user.name
     && existing.user.timezone === expected.user.timezone;
+}
+
+function divergentRuntimePathKeys(config, runtimePaths, homeDir = os.homedir()) {
+  const expectedPaths = resolvedConfigPaths(config, homeDir);
+  return Object.keys(expectedPaths).filter((key) => {
+    const runtimePath = runtimePaths[key];
+    const expectedPath = expectedPaths[key];
+    return !hasSameRuntimePath(runtimePath, expectedPath);
+  });
 }
 
 function isSameOrDescendant(parentPath, candidatePath) {
@@ -356,17 +395,47 @@ function readSharedVaultConfigTarget({ configPath, homeDir = os.homedir(), platf
   return { configPath: target, config: existing, exists: true, targetStat };
 }
 
-function assessSharedVaultConfigTarget({ configPath, config, vaultDir, homeDir = os.homedir(), platform = process.platform } = {}) {
+function assessSharedVaultConfigTarget({
+  configPath,
+  config,
+  vaultDir,
+  homeDir = os.homedir(),
+  platform = process.platform,
+  env = process.env,
+} = {}) {
   const targetState = readSharedVaultConfigTarget({ configPath, homeDir, platform });
   const target = targetState.configPath;
   const configuredVault = vaultDir || config?.paths?.vault || config?.vaultPath;
   assertConfigTargetOutsideVault(target, configuredVault, homeDir);
-  if (!targetState.exists) return { action: 'create', configPath: target };
+  if (!targetState.exists) {
+    // Publication is not allowed to write a canonical-looking file which the
+    // same process would immediately resolve to different JARVOS_* paths.
+    // Resolve the in-memory candidate so this preflight creates no target or
+    // parent directory merely to learn the effective runtime configuration.
+    const runtimePaths = resolveConfig({ config, configPath: target, homeDir, env }).paths;
+    const divergentKeys = divergentRuntimePathKeys(config, runtimePaths, homeDir);
+    if (divergentKeys.length) {
+      throw new Error(
+        `Refusing to create ${target}: effective JARVOS path overrides diverge from the proposed config `
+        + `(${divergentKeys.join(', ')}). Unset or reconcile those overrides before running jarvos sync.`,
+      );
+    }
+    return { action: 'create', configPath: target };
+  }
 
   const compatible = isCompatibleSharedVaultConfig(targetState.config, config, homeDir);
+  let runtimePaths = false;
+  try {
+    runtimePaths = resolveConfig({ configPath: target, homeDir, env }).paths;
+  } catch {
+    // A legacy file that the runtime cannot resolve is not portable enough to
+    // call already-synced. Keep it in the existing manual-reconciliation path.
+  }
   return {
     action: compatible
-      ? (hasPortableRuntimeConfig(targetState.config, config, homeDir) ? 'already-synced' : 'migrate')
+      ? (runtimePaths && hasPortableRuntimeConfig(targetState.config, config, homeDir, runtimePaths)
+        ? 'already-synced'
+        : 'migrate')
       : 'conflict',
     configPath: target,
   };
@@ -659,10 +728,11 @@ function writeSharedVaultConfig({
   platform = process.platform,
   constants = fs.constants,
   user,
+  env = process.env,
 } = {}) {
   const target = asAbsolutePath(configPath || path.join(process.cwd(), 'jarvos.config.json'), homeDir);
   const config = buildSharedVaultConfig({ vaultDir, workspaceRoot, homeDir, user });
-  const assessment = assessSharedVaultConfigTarget({ configPath: target, config, vaultDir, homeDir, platform });
+  const assessment = assessSharedVaultConfigTarget({ configPath: target, config, vaultDir, homeDir, platform, env });
   if (assessment.action === 'already-synced') {
     return { configPath: target, config, changed: false };
   }

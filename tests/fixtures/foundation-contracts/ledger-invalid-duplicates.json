@@ -1,0 +1,7 @@
+{
+  "schemaVersion": "jarvos.capability-ledger.v1",
+  "records": [
+    { "capabilityId": "duplicate", "title": "First", "specification": "draft", "implementation": "absent", "repository": "local-only", "verification": "untested", "activation": "inactive", "authority": "none", "evidence": [{ "type": "document", "ref": "docs/first.md" }], "assertedOn": "2026-08-31" },
+    { "capabilityId": "duplicate", "title": "Second", "specification": "draft", "implementation": "absent", "repository": "local-only", "verification": "untested", "activation": "inactive", "authority": "none", "evidence": [{ "type": "document", "ref": "docs/second.md" }], "assertedOn": "2026-08-31" }
+  ]
+}

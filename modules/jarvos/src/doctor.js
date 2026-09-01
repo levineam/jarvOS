@@ -13,6 +13,7 @@ const {
 const {
   collectOpenClawPluginEvidence,
   inspectCompoundEngineeringProvider,
+  loadRuntimeModeConfig,
 } = require('../../jarvos-runtime-kit/src');
 const { loadHealthModules } = require('../../../lib/jarvos-doctor-modules');
 const {
@@ -61,6 +62,12 @@ const REQUIRED_PATH_KEYS = [
   'tags',
   'memory',
 ];
+
+// These child directories are optional in portable configs: resolveConfig()
+// derives them from a configured vault or workspace when absent.
+const RESOLVER_DERIVED_PATH_KEYS = new Set([
+  'notes', 'journal', 'tags', 'memory', 'scripts', 'workflows', 'customers',
+]);
 
 // What resolveConfig() actually does with a paths.* value it drops.  The two
 // roots fall back to the home defaults; a dropped derived key is recomputed
@@ -264,14 +271,55 @@ function validateConfiguredDirectory(workspace, config, key, configPath, options
     return createCheck(`path.${key}`, false, `Cannot inspect paths.${key} because jarvos.config.json is invalid`);
   }
 
-  const value = getPathConfig(config, key);
-  if (typeof value !== 'string' || value.trim() === '') {
-    return createCheck(`path.${key}`, false, `Missing configured path: paths.${key}`);
-  }
   // homeDir is computed once and threaded through both the gate below and the
   // resolveConfig() cross-check further down, so a ~-rooted path and the
   // runtime's own resolution are always judged against the same home.
   const homeDir = options.homeDir || os.homedir();
+  const value = getPathConfig(config, key);
+  if (typeof value !== 'string' || value.trim() === '') {
+    // Only a canonical portable config can use this omission. A legacy
+    // config's fallback runtime paths are not evidence that its missing
+    // paths.* contract is healthy.
+    const portableRoots = config.paths && typeof config.paths === 'object'
+      && config.user && typeof config.user === 'object'
+      && isUsablePath(config.paths.workspace, homeDir)
+      && isUsablePath(config.paths.vault, homeDir);
+    if (!RESOLVER_DERIVED_PATH_KEYS.has(key) || !portableRoots) {
+      return createCheck(`path.${key}`, false, `Missing configured path: paths.${key}`);
+    }
+
+    const snapshot = runtimeConfigSnapshot || (configPath
+      ? resolveRuntimeConfigSnapshot(configPath, options)
+      : null);
+    const runtimeEffective = snapshot?.paths?.[key];
+    if (!runtimeEffective) {
+      return createCheck(`path.${key}`, false, `Missing configured path: paths.${key}`);
+    }
+    if (!directoryExists(runtimeEffective)) {
+      return createCheck(
+        `path.${key}`,
+        false,
+        `The runtime derives ${key} from its configured parent, but the effective directory is missing: ${runtimeEffective}`,
+        { path: runtimeEffective },
+      );
+    }
+    const env = options.env || process.env;
+    const winningKey = winningPathEnvKey(PATH_ENV_KEYS[key] || [], env, homeDir);
+    if (winningKey) {
+      return createCheck(
+        `path.${key}`,
+        true,
+        `Found ${key} directory via ${winningKey} environment override: ${runtimeEffective}`,
+        { path: runtimeEffective, status: 'warn' },
+      );
+    }
+    return createCheck(
+      `path.${key}`,
+      true,
+      `Found runtime-derived ${key} directory: ${runtimeEffective}`,
+      { path: runtimeEffective },
+    );
+  }
   // resolveConfiguredPath() resolves relative values against the workspace, but
   // normalizePathMap() drops them: workspace and vault then fall back to the
   // home defaults, and a dropped derived key is recomputed from its resolved
@@ -560,6 +608,10 @@ function validateConfigSchema(workspace, configPath = path.join(workspace, 'jarv
     ...invalidRuntimeTimezoneAliases(configResult.value, env)
       .map((field) => `/${field.replace('.', '/')} must be a valid IANA timezone`),
   ];
+  const runtimeMode = loadRuntimeModeConfig(configResult.value);
+  if (!runtimeMode.ok) {
+    errors.push(...runtimeMode.errors.map((error) => `runtimeMode: ${error}`));
+  }
 
   if (errors.length > 0) {
     return createCheck(
@@ -1682,5 +1734,6 @@ module.exports = {
   validateObsidianPaths,
   validateObsidianSingleWriter,
   validateCompoundEngineeringProvider,
+  validateConfigSchema,
   validateConfigReconciliation,
 };

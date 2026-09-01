@@ -35,6 +35,7 @@ const {
   resolveStagedOpenClawRuntimeRoot,
   validateJarvosProfile,
   validateOpenClawProfile,
+  validateConfigSchema,
 } = require('../modules/jarvos/src/doctor');
 
 function scratch() {
@@ -232,6 +233,25 @@ test('vault-path-stale passes for an existing vault root', () => {
     assert.equal(res.id, 'vault-path-stale');
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('config schema check applies the runtime-mode contract in addition to structural schema validation', () => {
+  const workspace = scratch();
+  try {
+    fs.copyFileSync(path.join(__dirname, '..', 'jarvos.config.schema.json'), path.join(workspace, 'jarvos.config.schema.json'));
+    writeConfig(workspace, {
+      assistantName: 'Jarvis', userName: 'User', coachName: 'Coach',
+      vaultPath: path.join(workspace, 'vault'), workspacePath: workspace, runtime: 'openclaw',
+      runtimeMode: {
+        version: 'jarvos-runtime-mode/v1', mode: 'not-a-mode', installedAdapters: [], workloadRoutes: [], capabilityTruth: [],
+      },
+    });
+    const result = validateConfigSchema(workspace);
+    assert.equal(result.ok, false);
+    assert.match(result.message, /runtimeMode\.mode must be one of/);
+  } finally {
+    fs.rmSync(workspace, { recursive: true, force: true });
   }
 });
 
@@ -751,11 +771,18 @@ test('public and minimal Doctor visibly require read-only reconciliation for a c
       homeDir,
       user: { name: 'Legacy User', timezone: 'UTC' },
     });
+    delete portable.paths.tags;
     fs.writeFileSync(configPath, JSON.stringify(portable, null, 2));
     const portablePublic = runDoctor({ profile: 'minimal', env, homeDir });
     const portableMinimal = runMinimalDoctor({ env, homeDir });
+    const portableProfile = await runProfileDoctor({ profile: 'minimal', env, homeDir });
     assert.equal(portablePublic.results.find((entry) => entry.id === 'config-reconciliation').ok, true);
     assert.equal(portableMinimal.checks.find((entry) => entry.component === 'config.reconciliation').ok, true);
+    const portableTags = portableMinimal.checks.find((entry) => entry.component === 'path.tags');
+    assert.equal(portableTags.ok, true, portableTags.message);
+    assert.match(portableTags.message, /runtime-derived tags directory/);
+    const portableProfileTags = portableProfile.checks.find((entry) => entry.component === 'path.tags');
+    assert.equal(portableProfileTags.ok, true, portableProfileTags.message);
 
     // A divergent path is a sync conflict, not manual reconciliation. Doctor
     // leaves that shape to its existing config/path diagnostics rather than

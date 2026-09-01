@@ -437,6 +437,123 @@ test('a fully populated relative config is never classified already-synced', () 
   }
 });
 
+test('a portable config may omit derived child paths and remain already-synced', () => {
+  const home = tempDir();
+  const workspace = path.join(home, 'workspace');
+  const vault = path.join(home, 'Vaults', 'Vault v3');
+  for (const directory of ['Notes', 'Journal', 'Tags']) fs.mkdirSync(path.join(vault, directory), { recursive: true });
+  fs.mkdirSync(workspace, { recursive: true });
+
+  const expected = buildSharedVaultConfig({
+    vaultDir: vault,
+    workspaceRoot: workspace,
+    homeDir: home,
+    user: { name: 'Tester', timezone: 'UTC' },
+  });
+  const existing = structuredClone(expected);
+  delete existing.paths.tags;
+  const configPath = path.join(workspace, 'jarvos.config.json');
+  fs.writeFileSync(configPath, `${JSON.stringify(existing, null, 2)}\n`);
+
+  const assessment = assessSharedVaultConfigTarget({
+    configPath,
+    config: expected,
+    vaultDir: vault,
+    homeDir: home,
+  });
+  assert.equal(assessment.action, 'already-synced');
+});
+
+test('a runtime path override prevents an existing portable config from being already-synced', () => {
+  const home = tempDir();
+  const workspace = path.join(home, 'workspace');
+  const vault = path.join(home, 'Vaults', 'Vault v3');
+  const overriddenTags = path.join(home, 'runtime-tags');
+  for (const directory of ['Notes', 'Journal', 'Tags']) fs.mkdirSync(path.join(vault, directory), { recursive: true });
+  fs.mkdirSync(workspace, { recursive: true });
+  fs.mkdirSync(overriddenTags, { recursive: true });
+
+  const expected = buildSharedVaultConfig({
+    vaultDir: vault,
+    workspaceRoot: workspace,
+    homeDir: home,
+    user: { name: 'Tester', timezone: 'UTC' },
+  });
+  const configPath = path.join(workspace, 'jarvos.config.json');
+  fs.writeFileSync(configPath, `${JSON.stringify(expected, null, 2)}\n`);
+
+  const assessment = assessSharedVaultConfigTarget({
+    configPath,
+    config: expected,
+    vaultDir: vault,
+    homeDir: home,
+    env: { JARVOS_TAGS_DIR: overriddenTags },
+  });
+  assert.equal(assessment.action, 'migrate');
+});
+
+test('an equivalent trailing-separator runtime override keeps an existing portable config already-synced', () => {
+  const home = tempDir();
+  const workspace = path.join(home, 'workspace');
+  const vault = path.join(home, 'Vaults', 'Vault v3');
+  for (const directory of ['Notes', 'Journal', 'Tags']) fs.mkdirSync(path.join(vault, directory), { recursive: true });
+  fs.mkdirSync(workspace, { recursive: true });
+
+  const expected = buildSharedVaultConfig({
+    vaultDir: vault,
+    workspaceRoot: workspace,
+    homeDir: home,
+    user: { name: 'Tester', timezone: 'UTC' },
+  });
+  const configPath = path.join(workspace, 'jarvos.config.json');
+  const existingBytes = `${JSON.stringify(expected, null, 2)}\n`;
+  fs.writeFileSync(configPath, existingBytes);
+
+  const assessment = assessSharedVaultConfigTarget({
+    configPath,
+    config: expected,
+    vaultDir: vault,
+    homeDir: home,
+    env: { JARVOS_TAGS_DIR: `${path.join(vault, 'Tags')}${path.sep}` },
+  });
+  assert.equal(assessment.action, 'already-synced');
+  assert.equal(fs.readFileSync(configPath, 'utf8'), existingBytes, 'assessment remains read-only');
+});
+
+test('a symlink-bearing parent traversal never collapses into an equivalent existing runtime path', () => {
+  const home = tempDir();
+  const workspace = path.join(home, 'workspace');
+  const vault = path.join(home, 'Vaults', 'Vault v3');
+  const outside = path.join(home, 'outside');
+  for (const directory of ['Notes', 'Journal', 'Tags']) fs.mkdirSync(path.join(vault, directory), { recursive: true });
+  fs.mkdirSync(workspace, { recursive: true });
+  const linkedDirectory = path.join(vault, 'linked-directory');
+  fs.symlinkSync(outside, linkedDirectory, 'dir');
+
+  const expected = buildSharedVaultConfig({
+    vaultDir: vault,
+    workspaceRoot: workspace,
+    homeDir: home,
+    user: { name: 'Tester', timezone: 'UTC' },
+  });
+  const configPath = path.join(workspace, 'jarvos.config.json');
+  const existingBytes = `${JSON.stringify(expected, null, 2)}\n`;
+  fs.writeFileSync(configPath, existingBytes);
+  // Lexically this normalizes to <vault>/Tags. At runtime `linked-directory`
+  // is expanded first, so its `..` can escape to a different physical parent.
+  const ambiguousOverride = `${linkedDirectory}${path.sep}..${path.sep}Tags`;
+
+  const assessment = assessSharedVaultConfigTarget({
+    configPath,
+    config: expected,
+    vaultDir: vault,
+    homeDir: home,
+    env: { JARVOS_TAGS_DIR: ambiguousOverride },
+  });
+  assert.equal(assessment.action, 'migrate');
+  assert.equal(fs.readFileSync(configPath, 'utf8'), existingBytes, 'ambiguous assessment remains read-only');
+});
+
 test('successful exclusive creation leaves no residue beside the config', { skip: process.platform === 'win32' }, () => {
   const home = tempDir();
   const workspace = path.join(home, 'workspace');

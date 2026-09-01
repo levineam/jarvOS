@@ -174,6 +174,35 @@ try {
   assert.equal(syncDryRunPayload.vaultContentsWritten, false);
   assert.equal(fs.existsSync(syncConfigPath), false, 'sync dry-run must not create the config or workspace');
 
+  // Doctor and the runtime normalize a trailing separator. A fresh sync must
+  // use that same comparison and publish normally for an equivalent override.
+  const equivalentOverrideWorkspace = path.join(tmp, 'equivalent-override-workspace');
+  const equivalentOverride = run(
+    [
+      'sync', '--workspace', equivalentOverrideWorkspace, '--vault', syncVault,
+      '--name', 'TestUser', '--timezone', 'UTC',
+    ],
+    { env: { ...env, JARVOS_TAGS_DIR: `${path.join(syncVault, 'Tags')}${path.sep}` } },
+  );
+  assert.equal(equivalentOverride.status, 0, equivalentOverride.stderr || equivalentOverride.stdout);
+  assert.equal(fs.existsSync(path.join(equivalentOverrideWorkspace, 'jarvos.config.json')), true);
+
+  // A missing config must not be published when the current process would
+  // immediately resolve a JARVOS_* path override instead of the written path.
+  const overrideCreateWorkspace = path.join(tmp, 'override-create-workspace');
+  const overrideCreateTags = path.join(tmp, 'override-create-tags');
+  fs.mkdirSync(overrideCreateTags);
+  const overrideCreate = run(
+    [
+      'sync', '--workspace', overrideCreateWorkspace, '--vault', syncVault,
+      '--name', 'TestUser', '--timezone', 'UTC',
+    ],
+    { env: { ...env, JARVOS_TAGS_DIR: overrideCreateTags } },
+  );
+  assert.notEqual(overrideCreate.status, 0);
+  assert.match(overrideCreate.stderr, /effective JARVOS path overrides diverge/);
+  assert.equal(fs.existsSync(overrideCreateWorkspace), false, 'rejected fresh sync must not create its workspace or config target');
+
   const externalConfig = path.join(tmp, 'external-config', 'custom.json');
   const explicitConfigDryRun = run([...syncArgs, '--config', externalConfig, '--dry-run']);
   assert.equal(explicitConfigDryRun.status, 0, explicitConfigDryRun.stderr || explicitConfigDryRun.stdout);
@@ -290,6 +319,35 @@ try {
   const syncExistingWithoutRedundantIdentity = run(['sync', '--workspace', syncWorkspace, '--dry-run']);
   assert.equal(syncExistingWithoutRedundantIdentity.status, 0, syncExistingWithoutRedundantIdentity.stderr || syncExistingWithoutRedundantIdentity.stdout);
   assert.match(syncExistingWithoutRedundantIdentity.stdout, /Config action: already-synced/);
+
+  // Existing portable installs may omit a derived child path. The resolver
+  // derives Tags from the configured vault, so sync must recognize this shape
+  // as already-synced rather than demanding manual reconciliation.
+  const syncExistingWithoutTags = JSON.parse(fs.readFileSync(syncConfigPath, 'utf8'));
+  delete syncExistingWithoutTags.paths.tags;
+  fs.writeFileSync(syncConfigPath, `${JSON.stringify(syncExistingWithoutTags, null, 2)}\n`);
+  const syncWithoutTags = run(['sync', '--workspace', syncWorkspace, '--dry-run']);
+  assert.equal(syncWithoutTags.status, 0, syncWithoutTags.stderr || syncWithoutTags.stdout);
+  assert.match(syncWithoutTags.stdout, /Config action: already-synced/);
+  const runtimeConfig = JSON.parse(fs.readFileSync(syncConfigPath, 'utf8'));
+  assert.equal(Object.hasOwn(runtimeConfig.paths, 'tags'), false);
+
+  const overriddenTags = path.join(tmp, 'sync-runtime-tags');
+  fs.mkdirSync(overriddenTags);
+  const beforeOverrideAssessment = fs.readFileSync(syncConfigPath, 'utf8');
+  const syncWithDivergentRuntimeOverride = run(
+    ['sync', '--workspace', syncWorkspace, '--dry-run', '--json'],
+    { env: { ...env, JARVOS_TAGS_DIR: overriddenTags } },
+  );
+  assert.equal(
+    syncWithDivergentRuntimeOverride.status,
+    0,
+    syncWithDivergentRuntimeOverride.stderr || syncWithDivergentRuntimeOverride.stdout,
+  );
+  const overrideAssessment = JSON.parse(syncWithDivergentRuntimeOverride.stdout);
+  assert.equal(overrideAssessment.action, 'manual-reconcile');
+  assert.equal(overrideAssessment.targetAction, 'manual-reconcile');
+  assert.equal(fs.readFileSync(syncConfigPath, 'utf8'), beforeOverrideAssessment, 'sync assessment is read-only');
 
   const syncConfigSuperset = JSON.parse(fs.readFileSync(syncConfigPath, 'utf8'));
   syncConfigSuperset.privateExtension = { enabled: true };
@@ -453,6 +511,25 @@ try {
   assert.match(fileTagsDoctor.stdout, /FAIL vault-path/);
   fs.rmSync(path.join(syncVault, 'Tags'));
   fs.mkdirSync(path.join(syncVault, 'Tags'));
+
+  const configured = JSON.parse(fs.readFileSync(path.join(workspace, 'jarvos.config.json'), 'utf8'));
+  configured.runtimeMode = {
+    version: 'jarvos-runtime-mode/v1',
+    mode: 'multi',
+    installedAdapters: [{ id: 'hermes' }, { id: 'openclaw' }],
+    workloadRoutes: [
+      { workload: 'telegram.updates', adapter: 'hermes' },
+      { workload: 'telegram.updates', adapter: 'openclaw' },
+    ],
+    capabilityTruth: [],
+  };
+  fs.writeFileSync(path.join(workspace, 'jarvos.config.json'), JSON.stringify(configured, null, 2));
+  const duplicateTelegramDoctor = run(['doctor', '--profile', 'minimal', '--workspace', workspace], { env });
+  assert.equal(duplicateTelegramDoctor.status, 1, duplicateTelegramDoctor.stderr || duplicateTelegramDoctor.stdout);
+  assert.match(duplicateTelegramDoctor.stdout, /FAIL config-schema/);
+  assert.match(duplicateTelegramDoctor.stdout, /only one Telegram update consumer/);
+  delete configured.runtimeMode;
+  fs.writeFileSync(path.join(workspace, 'jarvos.config.json'), JSON.stringify(configured, null, 2));
 
   const jsonDoctor = run(['doctor', '--profile=minimal', '--workspace', workspace, '--json'], { env });
   assert.equal(jsonDoctor.status, 0, jsonDoctor.stderr || jsonDoctor.stdout);
