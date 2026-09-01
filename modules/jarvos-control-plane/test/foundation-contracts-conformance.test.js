@@ -83,6 +83,15 @@ test('the tracked capability ledger conforms to the ledger contract', () => {
   assert.deepEqual(validateCapabilityLedger(ledger), []);
 });
 
+test('capability ledger rejects sparse record and evidence arrays', () => {
+  const ledger = readJson(path.join(ROOT, 'capability-ledger.json'));
+  assert.ok(validateCapabilityLedger({ ...ledger, records: new Array(1) }).length > 0);
+
+  const sparseEvidence = structuredClone(ledger);
+  sparseEvidence.records[0].evidence = new Array(1);
+  assert.ok(validateCapabilityLedger(sparseEvidence).length > 0);
+});
+
 test('the tracked foundation ledger does not overstate an open draft pull request', () => {
   const ledger = readJson(path.join(ROOT, 'capability-ledger.json'));
   for (const record of ledger.records) {

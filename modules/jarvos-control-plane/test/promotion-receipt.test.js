@@ -78,6 +78,7 @@ test('non-committed outcomes report no mutation or reversal claim', () => {
 
 test('promotion requires candidates and forbids a predecessor', () => {
   assert.ok(contract.validatePromotionReceipt(makeReceipt({ candidateIds: [] })).length > 0);
+  assert.ok(contract.validatePromotionReceipt(makeReceipt({ candidateIds: new Array(1) })).length > 0);
   assert.ok(contract.validatePromotionReceipt(makeReceipt({
     predecessorReceiptId: 'jarvos:receipt:foundation:r-0000',
   })).length > 0);
@@ -128,6 +129,7 @@ test('unknown fields and enums fail closed at every nesting level', () => {
 
 test('evidence is non-empty, bounded, path-free with sha256 digests', () => {
   assert.ok(contract.validatePromotionReceipt(makeReceipt({ evidence: [] })).length > 0);
+  assert.ok(contract.validatePromotionReceipt(makeReceipt({ evidence: new Array(1) })).length > 0);
   for (const ref of ['/tmp/evidence', '../evidence', 'file://evidence', 'file:evidence', 'evidence one', 'Evidence:one']) {
     assert.ok(contract.validatePromotionReceipt(makeReceipt({
       evidence: [{ type: 'verification', ref, digest: DIGEST }],

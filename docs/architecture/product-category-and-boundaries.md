@@ -77,19 +77,21 @@ claim adapter, installed, or live behavior.
 
 ## Product Realization Boundary
 
-jarvOS may autonomously observe eligible AI interactions and prepare bounded,
-source-backed candidates for notes, journals, memory, ontology, Projects,
-skills, or work. That is how the product can construct a useful digital twin
-across harnesses without treating every transcript or model statement as true.
+The product architecture permits a future adapter to observe eligible AI
+interactions and prepare bounded, source-backed candidates for notes, journals,
+memory, ontology, Projects, skills, or work. That future path could help
+construct a useful digital twin across harnesses without treating every
+transcript or model statement as true. This draft foundation implements no
+source adapter, candidate storage, or promotion consumer.
 
 The boundary is explicit:
 
 - portable identities connect a mind, its installations, harness sessions,
   source events, candidates, artifacts, policies, Projects, and receipts
   without making one machine the permanent home of jarvOS;
-- a candidate is immutable and non-authoritative, contains evidence pointers
-  rather than raw source content, and cannot claim completion, verification,
-  destination state, or Project identity;
+- an asserted candidate is immutable and non-authoritative, contains evidence
+  pointers rather than raw source content, and cannot claim completion,
+  verification, destination state, or Project identity;
 - promotion into authoritative memory, ontology, Projects, authored notes, or
   other durable surfaces is governed by the owning writer and policy;
 - a promotion receipt distinguishes a committed destination revision from an

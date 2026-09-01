@@ -101,7 +101,9 @@ function validateRecord(record, index, seenIds, errors) {
   if (!Array.isArray(record.evidence) || record.evidence.length === 0 || record.evidence.length > MAX_EVIDENCE) {
     errors.push(`${label} evidence must be a bounded non-empty array`);
   } else {
-    record.evidence.forEach((entry, evidenceIndex) => validateEvidenceEntry(entry, evidenceIndex, label, errors));
+    for (let evidenceIndex = 0; evidenceIndex < record.evidence.length; evidenceIndex += 1) {
+      validateEvidenceEntry(record.evidence[evidenceIndex], evidenceIndex, label, errors);
+    }
   }
   if (!isDate(record.assertedOn)) {
     errors.push(`${label} assertedOn must be an ISO calendar date`);
@@ -128,7 +130,9 @@ function validateCapabilityLedger(ledger) {
     return errors;
   }
   const seenIds = new Set();
-  ledger.records.forEach((record, index) => validateRecord(record, index, seenIds, errors));
+  for (let index = 0; index < ledger.records.length; index += 1) {
+    validateRecord(ledger.records[index], index, seenIds, errors);
+  }
   return errors;
 }
 

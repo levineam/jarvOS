@@ -180,7 +180,8 @@ function validatePromotionReceipt(receipt) {
     errors.push('candidateIds must be a bounded array');
   } else {
     const seen = new Set();
-    receipt.candidateIds.forEach((candidateId, index) => {
+    for (let index = 0; index < receipt.candidateIds.length; index += 1) {
+      const candidateId = receipt.candidateIds[index];
       if (validateIdentity(candidateId, 'candidate').length > 0) {
         errors.push(`candidateIds[${index}] must be a candidate identity`);
       } else if (seen.has(candidateId)) {
@@ -188,7 +189,7 @@ function validatePromotionReceipt(receipt) {
       } else {
         seen.add(candidateId);
       }
-    });
+    }
   }
   if (receipt.operation === 'promotion') {
     if (!Array.isArray(receipt.candidateIds) || receipt.candidateIds.length === 0) {
@@ -215,7 +216,9 @@ function validatePromotionReceipt(receipt) {
   if (!Array.isArray(receipt.evidence) || receipt.evidence.length === 0 || receipt.evidence.length > MAX_EVIDENCE) {
     errors.push('evidence must be a bounded non-empty array');
   } else {
-    receipt.evidence.forEach((entry, index) => validateEvidence(entry, index, errors));
+    for (let index = 0; index < receipt.evidence.length; index += 1) {
+      validateEvidence(receipt.evidence[index], index, errors);
+    }
   }
   return errors;
 }

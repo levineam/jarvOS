@@ -1,10 +1,11 @@
 'use strict';
 
-// Immutable, non-authoritative candidate envelope for the ambient intent layer.
-// A candidate is a bounded proposal bound to eligible source evidence. It is a
-// value, not a record: it carries no mutable status and cannot itself represent
-// promotion, rejection, completion, or recall. It never carries raw transcript,
-// note content, recall text, completion output, or a destination.
+// Non-authoritative candidate envelope for the ambient intent layer. A
+// validated value is a bounded proposal bound to eligible source evidence. An
+// asserted value is returned as an immutable clone. Neither is a record: it
+// carries no mutable status and cannot itself represent promotion, rejection,
+// completion, or recall. It never carries raw transcript, note content, recall
+// text, completion output, or a destination.
 
 const CANDIDATE_SCHEMA_VERSION = 'jarvos.candidate.v1';
 
@@ -152,6 +153,13 @@ function validateProposal(proposal, errors) {
   }
 }
 
+function deepFreeze(value) {
+  if (value === null || typeof value !== 'object' || Object.isFrozen(value)) return value;
+  Object.freeze(value);
+  for (const child of Object.values(value)) deepFreeze(child);
+  return value;
+}
+
 function validateCandidate(candidate) {
   const errors = [];
   if (!isPlainObject(candidate)) {
@@ -191,7 +199,9 @@ function validateCandidate(candidate) {
     errors.push('candidate sources must be a bounded non-empty array');
   } else {
     const seen = new Set();
-    candidate.sources.forEach((entry, index) => validateSourceEntry(entry, index, seen, errors));
+    for (let index = 0; index < candidate.sources.length; index += 1) {
+      validateSourceEntry(candidate.sources[index], index, seen, errors);
+    }
   }
 
   if (!isPlainObject(candidate.construction)) {
@@ -222,7 +232,7 @@ function assertCandidate(candidate) {
   if (errors.length > 0) {
     throw new Error(`invalid jarvos candidate: ${errors.join('; ')}`);
   }
-  return candidate;
+  return deepFreeze(structuredClone(candidate));
 }
 
 module.exports = {

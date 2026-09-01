@@ -63,11 +63,20 @@ test('the module exposes no recall, completion, write, store, or promotion funct
   ]);
 });
 
-test('valid candidate types assert without mutation powers', () => {
+test('valid candidate types assert as immutable copies without mutation powers', () => {
   for (const candidateType of contract.CANDIDATE_TYPES) {
     const candidate = makeCandidate({ candidateType });
     assert.deepEqual(contract.validateCandidate(candidate), [], candidateType);
-    assert.equal(contract.assertCandidate(candidate), candidate);
+    const asserted = contract.assertCandidate(candidate);
+    assert.notEqual(asserted, candidate);
+    assert.deepEqual(asserted, candidate);
+    assert.ok(Object.isFrozen(asserted));
+    assert.ok(Object.isFrozen(asserted.sources));
+    assert.ok(Object.isFrozen(asserted.sources[0]));
+    assert.ok(Object.isFrozen(asserted.proposal));
+    candidate.proposal.title = 'mutable input';
+    assert.notEqual(asserted.proposal.title, candidate.proposal.title);
+    assert.throws(() => { asserted.proposal.title = 'cannot mutate'; }, TypeError);
   }
 });
 
@@ -112,6 +121,7 @@ test('sources must be unique evidence pointers with source-event identities and 
   assert.ok(contract.validateCandidate(makeCandidate({
     sources: [{ sourceEventId: 'jarvos:source-event:ambient:e-0001', evidenceDigest: DIGEST_A, recallText: 'x' }],
   })).length > 0);
+  assert.ok(contract.validateCandidate(makeCandidate({ sources: new Array(1) })).length > 0);
 });
 
 test('construction rejects the wrong identity kind and unknown nested fields', () => {

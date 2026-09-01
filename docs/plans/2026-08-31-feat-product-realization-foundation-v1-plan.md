@@ -1,6 +1,6 @@
 # Product realization foundation v1 plan
 
-Status: approved for local repository-only execution
+Status: implemented as a draft-PR contract slice; no runtime behavior is authorized
 
 Base: `af427a68bbe88c0f08dc516356e3fee55cf41b89` (`origin/main`)
 
@@ -16,7 +16,7 @@ mutation.
 ## Goal
 
 Add four fail-closed, machine-readable foundation contracts and the minimum
-canonical documentation needed to describe them:
+product-boundary documentation needed to describe them:
 
 1. a capability truth ledger that separates specification, implementation,
    repository, verification, activation, and authority state;
@@ -40,7 +40,7 @@ attempt.
 
 Documentation reconciliation is limited to:
 
-- the canonical product-boundary document; and
+- the product-boundary document; and
 - the external-integration document's intentional-capture and non-goal
   language.
 
@@ -58,7 +58,7 @@ rewrite remains separate.
    mutation and never implies universal rollback.
 5. Project identities can be referenced but no generic function can mint them.
 6. The seed capability ledger validates and describes this local branch
-   honestly: repository `local-only`, activation `inactive`, authority `none`,
+   honestly: specification `draft`, repository `draft-pr`, activation `inactive`, authority `none`,
    implementation `partial`, verification `fixture-proven`.
 7. The cross-contract fixture suite runs through the existing control-plane
    test glob, so root `package.json` is unchanged.
@@ -114,7 +114,7 @@ replacement.
 
 Schema version: `jarvos.identity.v1`.
 
-Canonical identifier grammar:
+Identifier grammar:
 
 ```text
 jarvos:<kind>:<namespace>:<opaque>
@@ -189,16 +189,17 @@ Invariants:
 - the seed contains only the four contracts in this slice.
 
 The seed records use `implementation: partial` because validators and fixtures
-exist but no product consumer does. Specification is `canonical` after the
-contract docs land. Verification is `fixture-proven`; repository is
-`local-only`; activation is `inactive`; authority is `none`.
+exist but no product consumer does. While this work remains in a draft pull
+request, specification is `draft`, verification is `fixture-proven`, repository
+is `draft-pr`, activation is `inactive`, and authority is `none`.
 
 ## Candidate envelope contract
 
 Schema version: `jarvos.candidate.v1`.
 
-The envelope is immutable. It has no mutable `status` and cannot itself record
-promotion, rejection, completion, or recall.
+`assertCandidate()` returns an immutable deep clone. The envelope has no
+mutable `status` and cannot itself record promotion, rejection, completion, or
+recall.
 
 Required fields:
 
@@ -388,8 +389,8 @@ Also prove one malformed in-memory ledger is rejected.
 
 ### Step 4 — Candidate envelope
 
-Implement the immutable candidate validator, ambient exports, tests, and
-contract documentation.
+Implement the candidate validator, immutable assertion result, ambient exports,
+tests, and contract documentation.
 
 Verification:
 
@@ -422,7 +423,7 @@ node --test modules/jarvos-control-plane/test/foundation-contracts-conformance.t
 node --test modules/jarvos-control-plane/test/*.test.js
 ```
 
-### Step 7 — Canonical documentation reconciliation
+### Step 7 — Product-boundary documentation reconciliation
 
 Add a bounded product-boundary section for candidates, receipts, identities,
 and truth states. Amend the external-integration operating model and non-goal so
@@ -527,7 +528,7 @@ the other branches.
   identity, Vault, Obsidian, GBrain, or Paperclip behavior.
 - [ ] No fixture or document contains personal data, real absolute paths,
   secrets, transcript text, Vault content, or deployment evidence.
-- [ ] Seed ledger says `local-only`, `inactive`, `none`, `partial`, and
+- [ ] Seed ledger says `draft`, `draft-pr`, `inactive`, `none`, `partial`, and
   `fixture-proven`.
 - [ ] Candidates are structurally non-authoritative and immutable.
 - [ ] Receipts distinguish attempts from successful mutation and do not promise

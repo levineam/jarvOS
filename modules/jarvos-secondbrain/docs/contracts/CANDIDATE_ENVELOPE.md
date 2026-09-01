@@ -16,8 +16,9 @@ constructed and is therefore not representable in this envelope.
 
 ## Shape
 
-A candidate is an immutable object with exactly these fields. Any unknown
-top-level or nested field fails closed.
+`assertCandidate()` returns an immutable deep-cloned candidate object with
+exactly these fields. `validateCandidate()` only validates an input and never
+mutates or freezes it. Any unknown top-level or nested field fails closed.
 
 | Field | Requirement |
 | --- | --- |
@@ -46,7 +47,7 @@ content, recall text, completion output, or destination.
 
 ## Invariants
 
-- The envelope is immutable and has no mutable `status`.
+- An asserted envelope is immutable and has no mutable `status`.
 - `authority` is the literal `non-authoritative`; there is no authoritative
   member.
 - `secret` privacy and any trust other than `user-authored` or
