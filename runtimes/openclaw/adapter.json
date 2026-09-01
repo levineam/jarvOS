@@ -26,6 +26,15 @@
     "contract": "jarvos-operator-notification/v1",
     "delivery": { "status": "not-configured", "reason": "Local owner configuration chooses a delivery surface; this public adapter does not configure one." }
   },
+  "harnessConformance": {
+    "version": "jarvos-harness-conformance/v1",
+    "facts": [
+      { "harness": "openclaw", "tier": "baseline-context", "state": "claimed-unverified", "evidence": [{ "kind": "adapter-declaration", "detail": "Checked-in OpenClaw adapter declaration; no owner-local harness proof was run." }] },
+      { "harness": "openclaw", "tier": "conversational", "state": "claimed-unverified", "evidence": [{ "kind": "adapter-declaration", "detail": "Checked-in OpenClaw adapter declaration; no owner-local harness proof was run." }] },
+      { "harness": "openclaw", "tier": "mutation-capable", "state": "claimed-unverified", "evidence": [{ "kind": "adapter-declaration", "detail": "Checked-in OpenClaw adapter declaration; no owner-local harness proof was run." }] },
+      { "harness": "openclaw", "tier": "proactive-authority", "state": "claimed-unverified", "evidence": [{ "kind": "offline-declaration", "detail": "Mac Mini exact installed-tuple evidence and owner-local proof are required before proactive routing." }] }
+    ]
+  },
   "capabilityDescriptor": {
     "version": "jarvos-runtime-capability-descriptor.v1", "harness": "openclaw",
     "capabilities": {
