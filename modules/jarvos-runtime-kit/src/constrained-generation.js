@@ -5,8 +5,9 @@
 // responsible for collecting their own receipts; jarvOS can evaluate the
 // redacted evidence using the same constraints everywhere.
 const CONSTRAINED_GENERATION_CONTRACT_VERSION = 'jarvos-constrained-generation/v1';
-const BACKEND_VERIFICATION_STATES = Object.freeze(['claimed-unverified', 'verified']);
-const RUNTIME_PROOF_STATES = Object.freeze(['unproven', 'recorded-fixture', 'verified']);
+const BACKEND_VERIFICATION_STATES = Object.freeze(['claimed-unverified']);
+const RUNTIME_PROOF_STATES = Object.freeze(['recorded-fixture']);
+const EFFECTIVE_MODEL_VERIFICATION = 'not-verified-by-jarvos';
 const USAGE_FIELDS = Object.freeze(['inputTokens', 'outputTokens', 'cacheReadTokens', 'cacheWriteTokens', 'totalTokens']);
 // This is intentionally not a router or an install inventory. It prevents a
 // declaration-only extraction from implying that any candidate backend has
@@ -55,21 +56,21 @@ function validAttempt(attempt, request) {
 
 /**
  * Evaluate a redacted constrained-generation receipt. A successful return
- * proves only that this record satisfies the portable constraints. It never
- * promotes a backend from claimed-unverified to verified.
+ * proves only that this record satisfies the portable constraints. It accepts
+ * no caller-supplied verification claim and cannot promote a backend.
  */
 function evaluateConstrainedGeneration(record) {
   if (!exactKeys(record, ['version', 'backend', 'request', 'runtimeProof', 'observed'])) return invalid('record_invalid');
   if (record.version !== CONSTRAINED_GENERATION_CONTRACT_VERSION) return invalid('version_unsupported');
 
   const { backend, request, runtimeProof, observed } = record;
-  if (!exactKeys(backend, ['id', 'verification']) || !isIdentifier(backend.id)
-    || !BACKEND_VERIFICATION_STATES.includes(backend.verification)) return invalid('backend_invalid');
+  if (!exactKeys(backend, ['id', 'verification']) || !isIdentifier(backend.id)) return invalid('backend_invalid');
+  if (backend.verification !== 'claimed-unverified') return invalid('backend_verification_untrusted');
   if (!exactKeys(request, ['provider', 'model', 'reasoningEffort'])
     || !isIdentifier(request.provider) || !isIdentifier(request.model) || !isIdentifier(request.reasoningEffort)) return invalid('request_invalid');
-  if (!exactKeys(runtimeProof, ['status', 'receiptDigest'])
-    || !RUNTIME_PROOF_STATES.includes(runtimeProof.status) || !isDigest(runtimeProof.receiptDigest)) return invalid('runtime_proof_invalid');
+  if (!exactKeys(runtimeProof, ['status', 'receiptDigest']) || !isDigest(runtimeProof.receiptDigest)) return invalid('runtime_proof_invalid');
   if (runtimeProof.status === 'unproven') return invalid('runtime_proof_unproven');
+  if (!RUNTIME_PROOF_STATES.includes(runtimeProof.status)) return invalid('runtime_proof_untrusted');
   if (!exactKeys(observed, [
     'provider', 'model', 'reasoningEffort', 'toolCallCount', 'delivered', 'fallbackUsed', 'attempts', 'usage', 'outputDigest',
   ])) return invalid('observed_invalid');
@@ -89,10 +90,9 @@ function evaluateConstrainedGeneration(record) {
     contractVersion: CONSTRAINED_GENERATION_CONTRACT_VERSION,
     backend: Object.freeze({ id: backend.id, verification: backend.verification }),
     runtimeProof: Object.freeze({ status: runtimeProof.status, receiptDigest: runtimeProof.receiptDigest }),
-    // This evaluator authenticates nothing. Even an externally supplied
-    // `verified` claim stays non-admitting until a future backend-specific
-    // verifier binds it to an actual runtime.
-    effectiveModelReceipt: Object.freeze({ provider: observed.provider, model: observed.model, verified: false }),
+    // This evaluator authenticates nothing. Its output says so explicitly;
+    // a future backend-specific verifier owns any stronger assertion.
+    effectiveModelReceipt: Object.freeze({ provider: observed.provider, model: observed.model, verification: EFFECTIVE_MODEL_VERIFICATION }),
     usage: Object.freeze({ ...observed.usage }),
     constraints: Object.freeze({ runtimeProofPresent: true, zeroToolAssurance: true, exactModel: true, noFallback: true, usageEvidencePresent: true, deliveryDenied: true }),
     // Contract-fixture conformance cannot make a live harness admission
@@ -105,6 +105,7 @@ module.exports = {
   BACKEND_VERIFICATION_STATES,
   CONSTRAINED_GENERATION_CONTRACT_VERSION,
   DEFAULT_CONSTRAINED_GENERATION_BACKENDS,
+  EFFECTIVE_MODEL_VERIFICATION,
   RUNTIME_PROOF_STATES,
   evaluateConstrainedGeneration,
 };

@@ -8,6 +8,7 @@ const test = require('node:test');
 const {
   CONSTRAINED_GENERATION_CONTRACT_VERSION,
   DEFAULT_CONSTRAINED_GENERATION_BACKENDS,
+  EFFECTIVE_MODEL_VERIFICATION,
   evaluateConstrainedGeneration,
 } = require('../src/index.js');
 
@@ -19,7 +20,7 @@ test('OpenClaw-shaped contract fixture conforms without backend admission', () =
   const expected = fixture('openclaw-contract-success.expected.json');
   assert.deepEqual(evaluateConstrainedGeneration(recorded), expected);
   assert.equal(expected.backend.verification, 'claimed-unverified');
-  assert.equal(expected.effectiveModelReceipt.verified, false);
+  assert.equal(expected.effectiveModelReceipt.verification, EFFECTIVE_MODEL_VERIFICATION);
   assert.equal(expected.admitted, false);
 });
 
@@ -28,6 +29,8 @@ test('constrained generation rejects every extracted safety failure from fixture
   const cases = [
     ['runtime proof', { runtimeProof: { ...valid.runtimeProof, receiptDigest: 'not-a-digest' } }, 'runtime_proof_invalid'],
     ['unproven runtime proof', { runtimeProof: { ...valid.runtimeProof, status: 'unproven' } }, 'runtime_proof_unproven'],
+    ['caller-supplied runtime verification', { runtimeProof: { ...valid.runtimeProof, status: 'verified' } }, 'runtime_proof_untrusted'],
+    ['caller-supplied backend verification', { backend: { ...valid.backend, verification: 'verified' } }, 'backend_verification_untrusted'],
     ['model mismatch', { observed: { ...valid.observed, model: 'gpt-5.6-sol' } }, 'effective_model_mismatch'],
     ['tool activity', { observed: { ...valid.observed, toolCallCount: 1 } }, 'tool_activity_detected'],
     ['fallback flag', { observed: { ...valid.observed, fallbackUsed: true } }, 'fallback_detected'],
@@ -40,21 +43,13 @@ test('constrained generation rejects every extracted safety failure from fixture
   }
 });
 
-test('an externally supplied verified claim cannot admit a backend through this extraction contract', () => {
-  const recorded = fixture('openclaw-contract-success.json');
-  const backendOnly = evaluateConstrainedGeneration({ ...recorded, backend: { ...recorded.backend, verification: 'verified' } });
-  assert.equal(backendOnly.ok, true);
-  assert.equal(backendOnly.effectiveModelReceipt.verified, false);
-  assert.equal(backendOnly.admitted, false);
-
-  const claimedVerified = evaluateConstrainedGeneration({
-    ...recorded,
-    backend: { ...recorded.backend, verification: 'verified' },
-    runtimeProof: { ...recorded.runtimeProof, status: 'verified' },
+test('the evaluator exposes only its explicit non-verification disposition', () => {
+  const result = evaluateConstrainedGeneration(fixture('openclaw-contract-success.json'));
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.effectiveModelReceipt, {
+    provider: 'openai', model: 'gpt-5.6-luna', verification: 'not-verified-by-jarvos',
   });
-  assert.equal(claimedVerified.ok, true);
-  assert.equal(claimedVerified.effectiveModelReceipt.verified, false);
-  assert.equal(claimedVerified.admitted, false);
+  assert.equal(result.admitted, false);
   assert.equal(CONSTRAINED_GENERATION_CONTRACT_VERSION, 'jarvos-constrained-generation/v1');
 });
 
