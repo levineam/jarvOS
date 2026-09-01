@@ -147,16 +147,24 @@
     "providerSelection": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["schemaVersion", "entryId", "generation", "lastOutcome"],
+      "required": ["schemaVersion", "entryId", "generation", "qualifiedOutcome", "lastFailure"],
       "properties": {
         "schemaVersion": { "const": "jarvos-active-assistant-provider-selection/v1" },
         "entryId": { "anyOf": [{ "type": "null" }, { "$ref": "#/$defs/id" }] },
         "generation": { "$ref": "#/$defs/opaque" },
-        "lastOutcome": {
+        "qualifiedOutcome": {
           "anyOf": [
             { "type": "null" },
             { "type": "object", "additionalProperties": false, "required": ["entryId", "generation", "resultingGeneration", "catalogDigest", "outcome"], "properties": {
-              "entryId": { "$ref": "#/$defs/id" }, "generation": { "$ref": "#/$defs/opaque" }, "resultingGeneration": { "$ref": "#/$defs/opaque" }, "catalogDigest": { "$ref": "#/$defs/digest" }, "outcome": { "enum": ["qualified", "failed"] }
+              "entryId": { "$ref": "#/$defs/id" }, "generation": { "$ref": "#/$defs/opaque" }, "resultingGeneration": { "$ref": "#/$defs/opaque" }, "catalogDigest": { "$ref": "#/$defs/digest" }, "outcome": { "const": "qualified" }
+            } }
+          ]
+        },
+        "lastFailure": {
+          "anyOf": [
+            { "type": "null" },
+            { "type": "object", "additionalProperties": false, "required": ["entryId", "generation", "resultingGeneration", "catalogDigest", "outcome"], "properties": {
+              "entryId": { "$ref": "#/$defs/id" }, "generation": { "$ref": "#/$defs/opaque" }, "resultingGeneration": { "$ref": "#/$defs/opaque" }, "catalogDigest": { "$ref": "#/$defs/digest" }, "outcome": { "const": "failed" }
             } }
           ]
         }

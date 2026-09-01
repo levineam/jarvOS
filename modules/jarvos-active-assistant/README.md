@@ -49,11 +49,13 @@ contract does not name, load, configure, or start a particular harness.
 
 Provider selection is similarly data-only: `settleProviderSelection` accepts a
 registered proposal only if its expected generation matches the incumbent. A
-failed outcome keeps the incumbent selection and generation exactly; a
-qualified outcome needs `provider_selection` approval bound to the catalog and
-proposal and produces a new generation, making replay stale. The exported
-binding helpers calculate the digest an approval must carry; an approval cannot
-be replayed across a different candidate, provider proposal, or delivery.
+failed outcome keeps the incumbent qualified selection and generation exactly,
+while recording the failed proposal separately; it never treats that proposal
+as selected. A qualified outcome needs `provider_selection` approval bound to
+the catalog and proposal and produces a new generation, making replay stale.
+The exported binding helpers calculate the digest an approval must carry; an
+approval cannot be replayed across a different candidate, provider proposal,
+or delivery.
 
 ## Privacy and safety
 

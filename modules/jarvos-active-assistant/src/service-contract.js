@@ -51,7 +51,7 @@ const FIELDS = Object.freeze({
   prepared: new Set(['schemaVersion', 'preparedId', 'promotionId', 'scheduleId', 'conversationId', 'subjectId', 'providerEntryId', 'providerGeneration', 'idempotencyKey', 'dueAt', 'expiresAt', 'state']),
   providerEntry: new Set(['schemaVersion', 'entryId', 'provider', 'model', 'reasoningEfforts']),
   providerCatalog: new Set(['schemaVersion', 'entries']),
-  providerSelection: new Set(['schemaVersion', 'entryId', 'generation', 'lastOutcome']),
+  providerSelection: new Set(['schemaVersion', 'entryId', 'generation', 'qualifiedOutcome', 'lastFailure']),
   providerProposal: new Set(['schemaVersion', 'proposalId', 'entryId', 'expectedGeneration']),
   providerOutcome: new Set(['entryId', 'generation', 'resultingGeneration', 'catalogDigest', 'outcome']),
   conversation: new Set(['schemaVersion', 'conversationId', 'subjectId', 'createdAt']),
@@ -257,14 +257,22 @@ function validateProviderSelection(selection) {
   if (selection.schemaVersion !== PROVIDER_SELECTION_SCHEMA_VERSION) errors.push(`provider selection.schemaVersion must be ${PROVIDER_SELECTION_SCHEMA_VERSION}`);
   if (selection.entryId !== null) requireSafe(selection.entryId, 'provider selection.entryId', errors, { identifier: true });
   requireOpaque(selection.generation, 'provider selection.generation', errors);
-  if (selection.lastOutcome !== null) {
-    if (!requireObject(selection.lastOutcome, 'provider selection.lastOutcome', errors)) return { ok: false, errors };
-    addUnknownFields(selection.lastOutcome, FIELDS.providerOutcome, 'provider selection.lastOutcome', errors);
-    requireSafe(selection.lastOutcome.entryId, 'provider selection.lastOutcome.entryId', errors, { identifier: true });
-    requireOpaque(selection.lastOutcome.generation, 'provider selection.lastOutcome.generation', errors);
-    requireOpaque(selection.lastOutcome.resultingGeneration, 'provider selection.lastOutcome.resultingGeneration', errors);
-    requireDigest(selection.lastOutcome.catalogDigest, 'provider selection.lastOutcome.catalogDigest', errors);
-    requireEnum(selection.lastOutcome.outcome, 'provider selection.lastOutcome.outcome', PROVIDER_OUTCOMES, errors);
+  const validateOutcome = (value, field, expectedOutcome) => {
+    if (!requireObject(value, `provider selection.${field}`, errors)) return;
+    addUnknownFields(value, FIELDS.providerOutcome, `provider selection.${field}`, errors);
+    requireSafe(value.entryId, `provider selection.${field}.entryId`, errors, { identifier: true });
+    requireOpaque(value.generation, `provider selection.${field}.generation`, errors);
+    requireOpaque(value.resultingGeneration, `provider selection.${field}.resultingGeneration`, errors);
+    requireDigest(value.catalogDigest, `provider selection.${field}.catalogDigest`, errors);
+    if (value.outcome !== expectedOutcome) errors.push(`provider selection.${field}.outcome must be ${expectedOutcome}`);
+  };
+  if (selection.qualifiedOutcome !== null) validateOutcome(selection.qualifiedOutcome, 'qualifiedOutcome', 'qualified');
+  if (selection.lastFailure !== null) validateOutcome(selection.lastFailure, 'lastFailure', 'failed');
+  if (selection.entryId === null && selection.qualifiedOutcome !== null) errors.push('provider selection.qualifiedOutcome requires an entryId');
+  if (selection.entryId !== null && selection.qualifiedOutcome === null) errors.push('provider selection.entryId requires a qualifiedOutcome');
+  if (selection.qualifiedOutcome !== null
+    && (selection.qualifiedOutcome.entryId !== selection.entryId || selection.qualifiedOutcome.resultingGeneration !== selection.generation)) {
+    errors.push('provider selection.qualifiedOutcome must bind the current entryId and generation');
   }
   return { ok: errors.length === 0, errors };
 }
@@ -478,7 +486,7 @@ function createProviderCatalog({ entries = [] } = {}) {
 }
 
 function createInitialProviderSelection({ generation = 'initial-generation' } = {}) {
-  const selection = { schemaVersion: PROVIDER_SELECTION_SCHEMA_VERSION, entryId: null, generation, lastOutcome: null };
+  const selection = { schemaVersion: PROVIDER_SELECTION_SCHEMA_VERSION, entryId: null, generation, qualifiedOutcome: null, lastFailure: null };
   const validation = validateProviderSelection(selection);
   if (!validation.ok) throw new Error(`invalid provider selection: ${validation.errors.join('; ')}`);
   return selection;
@@ -514,7 +522,7 @@ function settleProviderSelection({ catalog, selection, proposal, outcome, approv
       ok: true,
       selection: {
         ...selection,
-        lastOutcome: {
+        lastFailure: {
           entryId: proposal.entryId,
           generation: selection.generation,
           resultingGeneration: selection.generation,
@@ -533,13 +541,14 @@ function settleProviderSelection({ catalog, selection, proposal, outcome, approv
       schemaVersion: PROVIDER_SELECTION_SCHEMA_VERSION,
       entryId: proposal.entryId,
       generation: nextGeneration,
-      lastOutcome: {
+      qualifiedOutcome: {
         entryId: proposal.entryId,
         generation: selection.generation,
         resultingGeneration: nextGeneration,
         catalogDigest: canonicalDigest(catalog),
         outcome: 'qualified',
       },
+      lastFailure: null,
     },
   };
 }
@@ -561,10 +570,9 @@ function prepareDelivery({ promotion, schedule, conversation, catalog, selection
   if (Date.parse(now) > Date.parse(schedule.expiresAt)) return contractError('schedule_expired');
   if (selection.entryId === null) return contractError('provider_unselected');
   if (!catalog.entries.some((entry) => entry.entryId === selection.entryId)) return contractError('provider_entry_unregistered');
-  if (selection.lastOutcome?.outcome !== 'qualified'
-    || selection.lastOutcome.entryId !== selection.entryId
-    || selection.lastOutcome.resultingGeneration !== selection.generation
-    || selection.lastOutcome.catalogDigest !== canonicalDigest(catalog)) return contractError('provider_not_qualified');
+  if (selection.qualifiedOutcome?.entryId !== selection.entryId
+    || selection.qualifiedOutcome.resultingGeneration !== selection.generation
+    || selection.qualifiedOutcome.catalogDigest !== canonicalDigest(catalog)) return contractError('provider_not_qualified');
   const gate = actionAllowed(approval, 'delivery', deliveryApprovalBinding({ promotion, schedule, conversation, selection }));
   if (!gate.ok) return gate;
   const prepared = {
@@ -597,6 +605,8 @@ function evaluateDelivery({ prepared, receipt, priorReceipts = [], bridge, mappi
   if (mapping.conversationId !== prepared.conversationId || mapping.bridgeId !== bridge.bridgeId) return contractError('conversation_mapping_mismatch');
   const duplicates = priorReceipts.filter((item) => item && item.idempotencyKey === prepared.idempotencyKey);
   if (duplicates.length > 0) {
+    const submittedValidation = validateLifecycleReceipt(receipt);
+    if (!submittedValidation.ok) return contractError('idempotency_record_invalid', submittedValidation.errors);
     for (const duplicate of duplicates) {
       const duplicateValidation = validateLifecycleReceipt(duplicate);
       if (!duplicateValidation.ok
@@ -612,6 +622,7 @@ function evaluateDelivery({ prepared, receipt, priorReceipts = [], bridge, mappi
       }
     }
     if (new Set(duplicates.map(canonicalDigest)).size !== 1) return contractError('idempotency_conflict');
+    if (canonicalDigest(receipt) !== canonicalDigest(duplicates[0])) return contractError('idempotency_conflict');
     return { ok: true, code: 'idempotent_replay', receipt: duplicates[0] };
   }
   const receiptValidation = validateLifecycleReceipt(receipt);

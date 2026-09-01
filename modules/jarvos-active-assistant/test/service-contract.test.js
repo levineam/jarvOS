@@ -56,6 +56,12 @@ function catalogFixture() {
       provider: 'vendor-a',
       model: 'model-a',
       reasoningEfforts: ['low', 'high'],
+    }, {
+      schemaVersion: contract.PROVIDER_ENTRY_SCHEMA_VERSION,
+      entryId: 'provider-b',
+      provider: 'vendor-b',
+      model: 'model-b',
+      reasoningEfforts: ['medium'],
     }],
   });
 }
@@ -152,7 +158,8 @@ test('provider catalog selection is registered, approval-gated, compare-and-swap
   assert.equal(failed.ok, true);
   assert.equal(failed.selection.entryId, null);
   assert.equal(failed.selection.generation, initial.generation);
-  assert.equal(failed.selection.lastOutcome.outcome, 'failed');
+  assert.equal(failed.selection.qualifiedOutcome, null);
+  assert.equal(failed.selection.lastFailure.outcome, 'failed');
 
   assert.equal(contract.settleProviderSelection({
     catalog,
@@ -172,6 +179,22 @@ test('provider catalog selection is registered, approval-gated, compare-and-swap
   assert.equal(selected.ok, true);
   assert.equal(selected.selection.entryId, 'provider-a');
   assert.notEqual(selected.selection.generation, initial.generation);
+  const replacement = contract.createProviderProposal({
+    catalog,
+    entryId: 'provider-b',
+    expectedGeneration: selected.selection.generation,
+  });
+  const failedReplacement = contract.settleProviderSelection({
+    catalog,
+    selection: selected.selection,
+    proposal: replacement,
+    outcome: 'failed',
+  });
+  assert.equal(failedReplacement.ok, true);
+  assert.equal(failedReplacement.selection.entryId, selected.selection.entryId);
+  assert.equal(failedReplacement.selection.generation, selected.selection.generation);
+  assert.deepEqual(failedReplacement.selection.qualifiedOutcome, selected.selection.qualifiedOutcome);
+  assert.equal(failedReplacement.selection.lastFailure.entryId, 'provider-b');
   assert.equal(contract.settleProviderSelection({
     catalog,
     selection: selected.selection,
@@ -270,6 +293,22 @@ test('prepare is inert and delivery is due-bound, receipt-bound, expiry-bound, a
   assert.equal(replay.code, 'idempotent_replay');
   assert.equal(contract.evaluateDelivery({
     prepared: prepared.prepared,
+    receipt: { ...receipt, outcome: 'failed' },
+    priorReceipts: [receipt],
+    bridge,
+    mapping,
+    now: later,
+  }).code, 'idempotency_conflict');
+  assert.equal(contract.evaluateDelivery({
+    prepared: prepared.prepared,
+    receipt: { ...receipt, schemaVersion: 'invalid-receipt/v1' },
+    priorReceipts: [receipt],
+    bridge,
+    mapping,
+    now: later,
+  }).code, 'idempotency_record_invalid');
+  assert.equal(contract.evaluateDelivery({
+    prepared: prepared.prepared,
     receipt,
     priorReceipts: [{ ...receipt, occurredAt: '2026-09-01T13:30:00.000Z' }],
     bridge,
@@ -329,7 +368,10 @@ test('prepare is inert and delivery is due-bound, receipt-bound, expiry-bound, a
     schedule,
     conversation,
     catalog,
-    selection: { ...selection, lastOutcome: { ...selection.lastOutcome, outcome: 'failed' } },
+    selection: {
+      ...selection,
+      qualifiedOutcome: { ...selection.qualifiedOutcome, catalogDigest: digest({ changed: true }) },
+    },
     approval: approval('delivery', contract.deliveryApprovalBinding({ promotion, schedule, conversation, selection })),
     now: time,
   }).code, 'provider_not_qualified');
@@ -340,11 +382,36 @@ test('prepare is inert and delivery is due-bound, receipt-bound, expiry-bound, a
     catalog,
     selection: {
       ...selection,
-      lastOutcome: { ...selection.lastOutcome, resultingGeneration: 'forged-generation' },
+      qualifiedOutcome: { ...selection.qualifiedOutcome, resultingGeneration: 'forged-generation' },
     },
     approval: approval('delivery', contract.deliveryApprovalBinding({ promotion, schedule, conversation, selection })),
     now: time,
-  }).code, 'provider_not_qualified');
+  }).code, 'provider_selection_invalid');
+  const replacement = contract.createProviderProposal({
+    catalog,
+    entryId: 'provider-b',
+    expectedGeneration: selection.generation,
+  });
+  const failedReplacement = contract.settleProviderSelection({
+    catalog,
+    selection,
+    proposal: replacement,
+    outcome: 'failed',
+  });
+  assert.equal(contract.prepareDelivery({
+    promotion,
+    schedule,
+    conversation,
+    catalog,
+    selection: failedReplacement.selection,
+    approval: approval('delivery', contract.deliveryApprovalBinding({
+      promotion,
+      schedule,
+      conversation,
+      selection: failedReplacement.selection,
+    })),
+    now: time,
+  }).ok, true);
 });
 
 test('portable conversation and bridge receipts have a closed, redacted boundary', () => {
