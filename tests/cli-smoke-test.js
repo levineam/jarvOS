@@ -19,10 +19,15 @@ function run(args, options = {}) {
   });
 }
 
-const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-cli-'));
+const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-cli-')));
 try {
   const workspace = path.join(tmp, 'workspace');
   const vault = path.join(tmp, 'vault');
+  const syncWorkspace = path.join(tmp, 'sync-workspace');
+  const syncVault = path.join(tmp, 'sync-vault');
+  fs.mkdirSync(path.join(syncVault, 'Notes'), { recursive: true });
+  fs.mkdirSync(path.join(syncVault, 'Journal'), { recursive: true });
+  fs.mkdirSync(path.join(syncVault, 'Tags'), { recursive: true });
   const controlPlaneHost = path.join(tmp, 'control-plane-host.js');
   const controlPlaneSource = path.join(ROOT, 'modules', 'jarvos-control-plane', 'src', 'index.js');
   fs.writeFileSync(controlPlaneHost, [
@@ -89,6 +94,7 @@ try {
   const help = run(['--help']);
   assert.equal(help.status, 0, help.stderr || help.stdout);
   assert.match(help.stdout, /jarvos init/);
+  assert.match(help.stdout, /jarvos sync/);
   assert.match(help.stdout, /jarvos doctor/);
   assert.match(help.stdout, /minimal\s+Portable jarvOS starter workspace/);
 
@@ -100,6 +106,246 @@ try {
   const doctorHelp = run(['doctor', '--help']);
   assert.equal(doctorHelp.status, 0, doctorHelp.stderr || doctorHelp.stdout);
   assert.match(doctorHelp.stdout, /public profile health checks/);
+
+  const syncHelp = run(['sync', '--help']);
+  assert.equal(syncHelp.status, 0, syncHelp.stderr || syncHelp.stdout);
+  assert.match(syncHelp.stdout, /Sync with an existing jarvOS installation/);
+  assert.match(syncHelp.stdout, /ordinary, uncontended use the command validates Notes\/,\nJournal\/, and Tags\/ and writes no config contents inside the vault/);
+  // The contract is target-only and must describe the exclusive final target,
+  // readback proof, and intentionally non-mutating failure cleanup.
+  assert.match(syncHelp.stdout, /In ordinary, uncontended use sync selects the config directory outside the vault/);
+  assert.match(syncHelp.stdout, /vaultWrites\s+and\s+vaultContentsWritten/);
+  assert.match(syncHelp.stdout, /legacy-shaped config is reported as manual-reconcile/);
+  assert.match(syncHelp.stdout, /never rewrites an\nexisting config in place/);
+  assert.match(syncHelp.stdout, /final target with O_EXCL through a retained file descriptor/);
+  assert.match(syncHelp.stdout, /target pathname still names that descriptor/);
+  assert.match(syncHelp.stdout, /reads the exact bytes back through the descriptor/);
+  assert.match(syncHelp.stdout, /failed create may\nleave an empty 0600 config target/);
+  assert.match(syncHelp.stdout, /never removes\nany pathname during cleanup/);
+  assert.match(syncHelp.stdout, /simultaneous local filesystem changes are\nobserved by the identity checks, sync fails closed/);
+  assert.doesNotMatch(syncHelp.stdout, /hard-link-capable filesystem/);
+  assert.doesNotMatch(syncHelp.stdout, /publishes it by hard link/);
+  assert.doesNotMatch(syncHelp.stdout, /republishes by rename/);
+
+  const syncConfigPath = path.join(syncWorkspace, 'jarvos.config.json');
+  const syncArgs = [
+    'sync',
+    '--workspace', syncWorkspace,
+    '--vault', syncVault,
+    '--name', 'TestUser',
+    '--timezone', 'UTC',
+  ];
+  const syncDryRun = run([...syncArgs, '--dry-run', '--json']);
+  assert.equal(syncDryRun.status, 0, syncDryRun.stderr || syncDryRun.stdout);
+  const syncDryRunPayload = JSON.parse(syncDryRun.stdout);
+  // Both fields record that no config contents were observed in the vault for
+  // this completed dry-run operation.
+  assert.equal(syncDryRunPayload.vaultWrites, false);
+  assert.equal(syncDryRunPayload.vaultContentsWritten, false);
+  assert.equal(fs.existsSync(syncConfigPath), false, 'sync dry-run must not create the config or workspace');
+
+  // Doctor and the runtime normalize a trailing separator. A fresh sync must
+  // use that same comparison and publish normally for an equivalent override.
+  const equivalentOverrideWorkspace = path.join(tmp, 'equivalent-override-workspace');
+  const equivalentOverride = run(
+    [
+      'sync', '--workspace', equivalentOverrideWorkspace, '--vault', syncVault,
+      '--name', 'TestUser', '--timezone', 'UTC',
+    ],
+    { env: { ...env, JARVOS_TAGS_DIR: `${path.join(syncVault, 'Tags')}${path.sep}` } },
+  );
+  assert.equal(equivalentOverride.status, 0, equivalentOverride.stderr || equivalentOverride.stdout);
+  assert.equal(fs.existsSync(path.join(equivalentOverrideWorkspace, 'jarvos.config.json')), true);
+
+  // A missing config must not be published when the current process would
+  // immediately resolve a JARVOS_* path override instead of the written path.
+  const overrideCreateWorkspace = path.join(tmp, 'override-create-workspace');
+  const overrideCreateTags = path.join(tmp, 'override-create-tags');
+  fs.mkdirSync(overrideCreateTags);
+  const overrideCreate = run(
+    [
+      'sync', '--workspace', overrideCreateWorkspace, '--vault', syncVault,
+      '--name', 'TestUser', '--timezone', 'UTC',
+    ],
+    { env: { ...env, JARVOS_TAGS_DIR: overrideCreateTags } },
+  );
+  assert.notEqual(overrideCreate.status, 0);
+  assert.match(overrideCreate.stderr, /effective JARVOS path overrides diverge/);
+  assert.equal(fs.existsSync(overrideCreateWorkspace), false, 'rejected fresh sync must not create its workspace or config target');
+
+  const externalConfig = path.join(tmp, 'external-config', 'custom.json');
+  const explicitConfigDryRun = run([...syncArgs, '--config', externalConfig, '--dry-run']);
+  assert.equal(explicitConfigDryRun.status, 0, explicitConfigDryRun.stderr || explicitConfigDryRun.stdout);
+  assert.match(explicitConfigDryRun.stdout, new RegExp(`Next: jarvos doctor .* --config ${JSON.stringify(externalConfig).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
+  assert.equal(fs.existsSync(path.dirname(externalConfig)), false);
+
+  const vaultWorkspace = run([
+    'sync',
+    '--workspace', syncVault,
+    '--vault', syncVault,
+    '--name', 'TestUser',
+    '--timezone', 'UTC',
+  ]);
+  assert.notEqual(vaultWorkspace.status, 0);
+  assert.match(vaultWorkspace.stderr, /inside the shared vault/);
+  assert.equal(fs.existsSync(path.join(syncVault, 'jarvos.config.json')), false, 'an ordinary sync target stays outside the vault');
+
+  const explicitVaultConfig = run([...syncArgs, '--config', path.join(syncVault, 'outside-workspace.json'), '--dry-run']);
+  assert.notEqual(explicitVaultConfig.status, 0);
+  assert.match(explicitVaultConfig.stderr, /inside the shared vault/);
+  assert.equal(fs.existsSync(path.join(syncVault, 'outside-workspace.json')), false);
+
+  if (process.platform !== 'win32') {
+    const symlinkParent = path.join(tmp, 'symlinked-workspace');
+    const symlinkDestination = path.join(tmp, 'symlink-destination');
+    fs.mkdirSync(symlinkDestination);
+    fs.symlinkSync(symlinkDestination, symlinkParent, 'dir');
+    const symlinkParentSync = run([
+      'sync',
+      '--workspace', symlinkParent,
+      '--vault', syncVault,
+      '--name', 'TestUser',
+      '--timezone', 'UTC',
+      '--dry-run',
+    ]);
+    assert.notEqual(symlinkParentSync.status, 0);
+    assert.match(symlinkParentSync.stderr, /symlinked config path/);
+    assert.equal(fs.existsSync(path.join(symlinkDestination, 'jarvos.config.json')), false);
+
+    const danglingConfig = path.join(tmp, 'dangling-config.json');
+    fs.symlinkSync(path.join(tmp, 'does-not-exist.json'), danglingConfig);
+    const danglingConfigSync = run([...syncArgs, '--config', danglingConfig, '--dry-run']);
+    assert.notEqual(danglingConfigSync.status, 0);
+    assert.match(danglingConfigSync.stderr, /symlinked config path/);
+  }
+
+  const invalidTimezone = run([
+    'sync',
+    '--workspace', path.join(tmp, 'invalid-timezone-workspace'),
+    '--vault', syncVault,
+    '--name', 'TestUser',
+    '--timezone', 'Not/AZone',
+    '--dry-run',
+  ]);
+  assert.notEqual(invalidTimezone.status, 0);
+  assert.match(invalidTimezone.stderr, /valid IANA timezone/);
+
+  const syncApply = run(syncArgs);
+  assert.equal(syncApply.status, 0, syncApply.stderr || syncApply.stdout);
+  assert.match(syncApply.stdout, /Mode: APPLIED/);
+  assert.match(syncApply.stdout, /Vault writes observed: none/);
+  assert.ok(fs.existsSync(syncConfigPath));
+
+  const syncAgain = run(syncArgs);
+  assert.equal(syncAgain.status, 0, syncAgain.stderr || syncAgain.stdout);
+  assert.match(syncAgain.stdout, /Mode: ALREADY SYNCED/);
+
+  const syncExistingWithoutRedundantIdentity = run(['sync', '--workspace', syncWorkspace, '--dry-run']);
+  assert.equal(syncExistingWithoutRedundantIdentity.status, 0, syncExistingWithoutRedundantIdentity.stderr || syncExistingWithoutRedundantIdentity.stdout);
+  assert.match(syncExistingWithoutRedundantIdentity.stdout, /Config action: already-synced/);
+
+  // Existing portable installs may omit a derived child path. The resolver
+  // derives Tags from the configured vault, so sync must recognize this shape
+  // as already-synced rather than demanding manual reconciliation.
+  const syncExistingWithoutTags = JSON.parse(fs.readFileSync(syncConfigPath, 'utf8'));
+  delete syncExistingWithoutTags.paths.tags;
+  fs.writeFileSync(syncConfigPath, `${JSON.stringify(syncExistingWithoutTags, null, 2)}\n`);
+  const syncWithoutTags = run(['sync', '--workspace', syncWorkspace, '--dry-run']);
+  assert.equal(syncWithoutTags.status, 0, syncWithoutTags.stderr || syncWithoutTags.stdout);
+  assert.match(syncWithoutTags.stdout, /Config action: already-synced/);
+  const runtimeConfig = JSON.parse(fs.readFileSync(syncConfigPath, 'utf8'));
+  assert.equal(Object.hasOwn(runtimeConfig.paths, 'tags'), false);
+
+  const overriddenTags = path.join(tmp, 'sync-runtime-tags');
+  fs.mkdirSync(overriddenTags);
+  const beforeOverrideAssessment = fs.readFileSync(syncConfigPath, 'utf8');
+  const syncWithDivergentRuntimeOverride = run(
+    ['sync', '--workspace', syncWorkspace, '--dry-run', '--json'],
+    { env: { ...env, JARVOS_TAGS_DIR: overriddenTags } },
+  );
+  assert.equal(
+    syncWithDivergentRuntimeOverride.status,
+    0,
+    syncWithDivergentRuntimeOverride.stderr || syncWithDivergentRuntimeOverride.stdout,
+  );
+  const overrideAssessment = JSON.parse(syncWithDivergentRuntimeOverride.stdout);
+  assert.equal(overrideAssessment.action, 'manual-reconcile');
+  assert.equal(overrideAssessment.targetAction, 'manual-reconcile');
+  assert.equal(fs.readFileSync(syncConfigPath, 'utf8'), beforeOverrideAssessment, 'sync assessment is read-only');
+
+  const syncConfigSuperset = JSON.parse(fs.readFileSync(syncConfigPath, 'utf8'));
+  syncConfigSuperset.privateExtension = { enabled: true };
+  fs.writeFileSync(syncConfigPath, `${JSON.stringify(syncConfigSuperset, null, 2)}\n`);
+  const syncCompatibleSuperset = run([...syncArgs, '--dry-run']);
+  assert.equal(syncCompatibleSuperset.status, 0, syncCompatibleSuperset.stderr || syncCompatibleSuperset.stdout);
+  assert.match(syncCompatibleSuperset.stdout, /Config action: already-synced/);
+
+  const syncConflict = run(syncArgs.map((arg) => (arg === 'TestUser' ? 'DifferentUser' : arg)));
+  assert.notEqual(syncConflict.status, 0);
+  assert.match(syncConflict.stderr, /Refusing to overwrite an existing jarvos\.config\.json/);
+
+  // A pre-sync bootstrap config has only legacy path keys and no timezone.
+  // Sync must identify the target as manual-reconcile and leave it untouched;
+  // it must never rewrite the legacy file in place.
+  const legacySyncWorkspace = path.join(tmp, 'legacy-sync-workspace');
+  fs.mkdirSync(legacySyncWorkspace);
+  const legacySyncConfigPath = path.join(legacySyncWorkspace, 'jarvos.config.json');
+  const legacySyncContents = JSON.stringify({
+    workspacePath: legacySyncWorkspace,
+    vaultPath: syncVault,
+    userName: 'TestUser',
+  });
+  fs.writeFileSync(legacySyncConfigPath, legacySyncContents);
+  const syncLegacyDryRun = run([
+    'sync', '--workspace', legacySyncWorkspace, '--vault', syncVault,
+    '--name', 'TestUser', '--timezone', 'UTC',
+    '--dry-run', '--json',
+  ]);
+  assert.equal(syncLegacyDryRun.status, 0, syncLegacyDryRun.stderr || syncLegacyDryRun.stdout);
+  const syncLegacyPayload = JSON.parse(syncLegacyDryRun.stdout);
+  assert.equal(syncLegacyPayload.action, 'manual-reconcile');
+  assert.equal(syncLegacyPayload.targetAction, 'manual-reconcile');
+  assert.equal(syncLegacyPayload.manualReconciliation, true);
+  assert.match(syncLegacyPayload.message, /Cannot automatically migrate.*never rewrites.*in place/);
+  assert.equal(fs.readFileSync(legacySyncConfigPath, 'utf8'), legacySyncContents);
+  const syncLegacyApply = run([
+    'sync', '--workspace', legacySyncWorkspace, '--vault', syncVault,
+    '--name', 'TestUser', '--timezone', 'UTC',
+  ]);
+  assert.notEqual(syncLegacyApply.status, 0);
+  assert.match(syncLegacyApply.stderr, /Cannot automatically migrate/);
+  assert.equal(fs.readFileSync(legacySyncConfigPath, 'utf8'), legacySyncContents);
+
+  const blankName = run([
+    'sync',
+    '--workspace', path.join(tmp, 'blank-name-workspace'),
+    '--vault', syncVault,
+    '--name', '  ',
+    '--timezone', 'UTC',
+    '--dry-run',
+  ]);
+  assert.notEqual(blankName.status, 0);
+  assert.match(blankName.stderr, /non-empty user name/);
+
+  const nullConfigWorkspace = path.join(tmp, 'null-config-workspace');
+  const nullConfigPath = path.join(nullConfigWorkspace, 'jarvos.config.json');
+  fs.mkdirSync(nullConfigWorkspace, { recursive: true });
+  fs.writeFileSync(nullConfigPath, 'null\n');
+  const nullConfigArgs = [
+    'sync',
+    '--workspace', nullConfigWorkspace,
+    '--vault', syncVault,
+    '--name', 'TestUser',
+    '--timezone', 'UTC',
+  ];
+  // Dry run and apply must agree: neither may report a plannable `create` for a
+  // target that already holds a file the exclusive write cannot replace.
+  for (const extra of [['--dry-run'], []]) {
+    const nullConfigSync = run([...nullConfigArgs, ...extra]);
+    assert.notEqual(nullConfigSync.status, 0);
+    assert.match(nullConfigSync.stderr, /not a JSON object/);
+  }
+  assert.equal(fs.readFileSync(nullConfigPath, 'utf8'), 'null\n');
 
   const badProfile = run(['init', '--profile', 'full', '--yes']);
   assert.notEqual(badProfile.status, 0);
@@ -163,6 +409,32 @@ try {
   assert.match(doctor.stdout, /PASS control-plane-module/);
   assert.match(doctor.stdout, /authenticated host service/);
   assert.match(doctor.stdout, /READY/);
+
+  for (const file of [
+    'AGENTS.md',
+    'BOOTSTRAP.md',
+    'HEARTBEAT.md',
+    'MEMORY.md',
+    'USER.md',
+    'ONTOLOGY.md',
+    'SOUL.md',
+    'TOOLS.md',
+  ]) {
+    fs.copyFileSync(path.join(workspace, file), path.join(syncWorkspace, file));
+  }
+  const syncDoctor = run(['doctor', '--profile', 'minimal', '--workspace', syncWorkspace], { env });
+  assert.equal(syncDoctor.status, 0, syncDoctor.stderr || syncDoctor.stdout);
+  assert.match(syncDoctor.stdout, /PASS config-schema/);
+  assert.match(syncDoctor.stdout, /PASS vault-path/);
+  assert.match(syncDoctor.stdout, /READY/);
+
+  fs.rmSync(path.join(syncVault, 'Tags'), { recursive: true });
+  fs.writeFileSync(path.join(syncVault, 'Tags'), 'not a directory\n');
+  const fileTagsDoctor = run(['doctor', '--profile', 'minimal', '--workspace', syncWorkspace], { env });
+  assert.notEqual(fileTagsDoctor.status, 0);
+  assert.match(fileTagsDoctor.stdout, /FAIL vault-path/);
+  fs.rmSync(path.join(syncVault, 'Tags'));
+  fs.mkdirSync(path.join(syncVault, 'Tags'));
 
   const configured = JSON.parse(fs.readFileSync(path.join(workspace, 'jarvos.config.json'), 'utf8'));
   configured.runtimeMode = {
@@ -233,7 +505,7 @@ try {
     ROOT,
     '--json',
   ], { env: localDoctorEnv });
-  assert.notEqual(localDoctor.status, 0, 'local profile should report the incomplete minimal fixture as not ready');
+  assert.equal(localDoctor.status, 0, localDoctor.stderr || localDoctor.stdout);
   const localReport = JSON.parse(localDoctor.stdout);
   assert.equal(localReport.profile, 'local-openclaw');
   const persistence = localReport.checks.find((check) => check.component === 'openclaw.pluginPersistence');
