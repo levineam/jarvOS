@@ -7,16 +7,38 @@ const MAX_CAPTURE_BYTES = 64 * 1024;
 const TASKKILL_TIMEOUT_MS = 250;
 
 function createOutputCapture(stream, limit = MAX_CAPTURE_BYTES) {
-  const chunks = [];
-  let byteLength = 0;
+  const boundedLimit = Math.max(0, Number(limit) || 0);
+  const headLimit = Math.ceil(boundedLimit / 2);
+  const tailLimit = boundedLimit - headLimit;
+  const headChunks = [];
+  let headByteLength = 0;
+  let tail = Buffer.alloc(0);
+  const appendTail = (buffer) => {
+    if (!tailLimit || !buffer.length) return;
+    const retained = buffer.length > tailLimit ? buffer.subarray(buffer.length - tailLimit) : buffer;
+    const combined = Buffer.concat([tail, retained]);
+    tail = combined.length > tailLimit
+      ? Buffer.from(combined.subarray(combined.length - tailLimit))
+      : combined;
+  };
   stream?.on('data', (chunk) => {
-    if (byteLength >= limit) return;
     const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk));
-    const retained = buffer.subarray(0, Math.min(buffer.length, limit - byteLength));
-    chunks.push(retained);
-    byteLength += retained.length;
+    let offset = 0;
+    if (headByteLength < headLimit) {
+      const retainedLength = Math.min(buffer.length, headLimit - headByteLength);
+      headChunks.push(Buffer.from(buffer.subarray(0, retainedLength)));
+      headByteLength += retainedLength;
+      offset = retainedLength;
+    }
+    // Obsidian writes the eval result as a terminal `=> ...` line. Keep a
+    // bounded tail as well as the leading diagnostics so verbose output does
+    // not hide a valid result and make a healthy CLI look incompatible.
+    if (offset < buffer.length) appendTail(buffer.subarray(offset));
   });
-  return Object.freeze({ bytes: () => byteLength, value: () => Buffer.concat(chunks, byteLength).toString('utf8') });
+  return Object.freeze({
+    bytes: () => headByteLength + tail.length,
+    value: () => Buffer.concat([...headChunks, tail], headByteLength + tail.length).toString('utf8'),
+  });
 }
 
 function terminateOwnedTree(child, {

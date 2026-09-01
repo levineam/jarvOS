@@ -123,6 +123,17 @@ test('large CLI programs are passed through the worker without envelope argv exp
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
+test('bounded probe output preserves a terminal eval result after more than 64 KiB of noise', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-obsidian-probe-output-'));
+  const fixture = path.join(root, 'fake-obsidian-cli.js');
+  const result = { vaultName: 'fake-vault', hasVault: true };
+  fs.writeFileSync(fixture, `#!${process.execPath}\nprocess.stdout.write('x'.repeat(${MAX_CAPTURE_BYTES + 1024}) + '\\n=> ' + ${JSON.stringify(JSON.stringify(result))} + '\\n');\n`);
+  fs.chmodSync(fixture, 0o755);
+  try {
+    assert.deepEqual(runObsidianEval('JSON.stringify({ok:true})', { vaultName: 'fake-vault', command: fixture, timeoutMs: 1_000 }), result);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
 test('probe output capture caps multibyte chunks by bytes', () => {
   const stream = new EventEmitter();
   const capture = createOutputCapture(stream);
