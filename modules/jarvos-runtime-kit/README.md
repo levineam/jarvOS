@@ -89,6 +89,30 @@ Configurations that do not contain `runtimeMode` are loaded as the compatible
 `none` declaration. This contract has no activation behavior: it starts no
 process, changes no credentials, and installs nothing.
 
+## Runner-state compatibility reads
+
+`readRunnerState` and `resolveTelegramCredentialReference` are fixture-only,
+read-only compatibility helpers. They prefer `.jarvos/runner-state.json` and
+can fall back to `.openclaw/cron/external-runner-state.json` only when the new
+location is absent. The fallback emits a structured read-only compatibility
+event; it never writes or migrates the legacy file.
+
+A route record contains exactly `routeIdentity`, `secretStoreRef`, and
+`revision`. The resolver rejects raw-token-shaped configuration fields, unsafe
+paths or symlinks, duplicate Telegram routes, and conflicting new/legacy
+records. It has no default home-directory lookup, so it cannot inspect a live
+installation until a separately reviewed adapter deliberately opts in.
+
+The supported route identities are `telegram:<route-name>`,
+`openclaw:telegram:<route-name>`, and `hermes:telegram:<route-name>`.
+`<route-name>` is one opaque, colon-free segment; accepted identities are
+returned exactly as written. Compatibility fallback always returns structured
+read-only evidence, whether or not an optional observer is supplied. Files are
+opened with no-follow descriptors and revalidated against their inspected
+identity and fixture-root containment before they are parsed.
+The descriptor and filesystem helpers are internal implementation details; the
+public API returns only validated, sanitized state records.
+
 `runtimeMode.conformanceFacts` is an optional `jarvos-harness-conformance/v1`
 registry. Its tiers are `baseline-context`, `conversational`,
 `mutation-capable`, and `proactive-authority`. A
