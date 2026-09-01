@@ -144,6 +144,19 @@ try {
   assert.equal(syncDryRunPayload.vaultContentsWritten, false);
   assert.equal(fs.existsSync(syncConfigPath), false, 'sync dry-run must not create the config or workspace');
 
+  // Doctor and the runtime normalize a trailing separator. A fresh sync must
+  // use that same comparison and publish normally for an equivalent override.
+  const equivalentOverrideWorkspace = path.join(tmp, 'equivalent-override-workspace');
+  const equivalentOverride = run(
+    [
+      'sync', '--workspace', equivalentOverrideWorkspace, '--vault', syncVault,
+      '--name', 'TestUser', '--timezone', 'UTC',
+    ],
+    { env: { ...env, JARVOS_TAGS_DIR: `${path.join(syncVault, 'Tags')}${path.sep}` } },
+  );
+  assert.equal(equivalentOverride.status, 0, equivalentOverride.stderr || equivalentOverride.stdout);
+  assert.equal(fs.existsSync(path.join(equivalentOverrideWorkspace, 'jarvos.config.json')), true);
+
   // A missing config must not be published when the current process would
   // immediately resolve a JARVOS_* path override instead of the written path.
   const overrideCreateWorkspace = path.join(tmp, 'override-create-workspace');

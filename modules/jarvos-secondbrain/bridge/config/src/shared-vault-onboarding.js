@@ -192,7 +192,17 @@ function hasPortableRuntimeConfig(existing, expected, homeDir = os.homedir(), ru
 
 function divergentRuntimePathKeys(config, runtimePaths, homeDir = os.homedir()) {
   const expectedPaths = resolvedConfigPaths(config, homeDir);
-  return Object.keys(expectedPaths).filter((key) => runtimePaths[key] !== expectedPaths[key]);
+  // Match Doctor's comparison semantics: the runtime keeps an absolute env
+  // override's spelling, while path.resolve() normalizes harmless trailing
+  // separators and dot segments without resolving symlinks or weakening the
+  // publication target's separate containment/symlink checks.
+  return Object.keys(expectedPaths).filter((key) => {
+    const runtimePath = runtimePaths[key];
+    const expectedPath = expectedPaths[key];
+    return typeof runtimePath !== 'string'
+      || typeof expectedPath !== 'string'
+      || path.resolve(runtimePath) !== path.resolve(expectedPath);
+  });
 }
 
 function isSameOrDescendant(parentPath, candidatePath) {
