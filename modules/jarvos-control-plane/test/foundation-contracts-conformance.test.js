@@ -92,14 +92,22 @@ test('capability ledger rejects sparse record and evidence arrays', () => {
   assert.ok(validateCapabilityLedger(sparseEvidence).length > 0);
 });
 
-test('the tracked foundation ledger does not overstate an open draft pull request', () => {
+test('the tracked foundation ledger records merged foundation contracts conservatively', () => {
   const ledger = readJson(path.join(ROOT, 'capability-ledger.json'));
   for (const record of ledger.records) {
-    assert.equal(record.specification, 'draft', `${record.capabilityId} must remain draft`);
-    assert.equal(record.repository, 'draft-pr', `${record.capabilityId} must remain draft-pr`);
+    assert.equal(record.specification, 'canonical', `${record.capabilityId} must be canonical after merge`);
+    assert.equal(record.repository, 'merged', `${record.capabilityId} must record merged repository state`);
+    assert.equal(record.verification, 'fixture-proven', `${record.capabilityId} must not overstate verification`);
+    assert.equal(record.activation, 'inactive', `${record.capabilityId} must not infer activation from merge`);
+    assert.equal(record.authority, 'none', `${record.capabilityId} must not infer authority from merge`);
     assert.ok(
+      record.evidence.some((entry) => entry.type === 'commit' && entry.ref === '03b5263e3b273ea7a3e76581fd73c6059fd90ada'),
+      `${record.capabilityId} must identify its merged commit evidence`,
+    );
+    assert.equal(
       record.evidence.some((entry) => entry.type === 'pull-request' && entry.ref === 'pull/257'),
-      `${record.capabilityId} must identify its draft pull request evidence`,
+      false,
+      `${record.capabilityId} must not retain draft pull request evidence`,
     );
   }
 });
