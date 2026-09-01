@@ -162,7 +162,7 @@ try {
   });
   assert.equal(relativeRouter.status, 0, relativeRouter.stderr || relativeRouter.stdout);
   assert.ok(fs.existsSync(path.join(relativeRouterWorkspace, 'jarvos.config.json')));
-  assert.ok(fs.existsSync(path.join(relativeRouterVault, 'Journal')));
+  assert.equal(fs.existsSync(relativeRouterVault), false, 'fresh router init must not activate a vault');
 
   const relativeBootstrapRoot = path.join(tmp, 'relative-bootstrap-root');
   const relativeBootstrapHome = path.join(tmp, 'relative-bootstrap-home');
@@ -175,7 +175,7 @@ try {
   }, { cwd: relativeBootstrapRoot });
   assert.equal(relativeBootstrap.status, 0, relativeBootstrap.stderr || relativeBootstrap.stdout);
   assert.ok(fs.existsSync(path.join(relativeBootstrapRoot, 'workspace', 'jarvos.config.json')));
-  assert.ok(fs.existsSync(path.join(relativeBootstrapRoot, 'vault', 'Journal')));
+  assert.equal(fs.existsSync(path.join(relativeBootstrapRoot, 'vault')), false, 'fresh bootstrap must not activate a vault');
   const relativeBootstrapRerun = runBootstrap([], {
     ...initEnv(relativeBootstrapHome),
     JARVOS_WORKSPACE_PATH: 'workspace',
@@ -192,7 +192,7 @@ try {
   assert.match(cleanInstall.stdout, /Resolved vault:.*\(--vault\)/);
   assert.match(cleanInstall.stdout, /Intended action:\s+new-install/);
   assert.ok(fs.existsSync(path.join(workspace, 'jarvos.config.json')));
-  assert.ok(fs.existsSync(path.join(vault, 'Journal')));
+  assert.equal(fs.existsSync(vault), false, 'fresh init must not activate a vault');
 
   const userPath = path.join(workspace, 'USER.md');
   const authoredUser = '# Authored user context\n\nDo not overwrite.\n';
@@ -315,6 +315,7 @@ try {
 
   // A symlink is still refused for new writes, but a complete existing install
   // behind aliases can be recognized and read-only re-run safely.
+  for (const directory of ['Notes', 'Journal', 'Tags']) fs.mkdirSync(path.join(vault, directory), { recursive: true });
   const compatibleWorkspaceLink = path.join(tmp, 'compatible-workspace-link');
   const compatibleVaultLink = path.join(tmp, 'compatible-vault-link');
   fs.symlinkSync(workspace, compatibleWorkspaceLink, 'dir');

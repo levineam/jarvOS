@@ -2,12 +2,11 @@
   "schemaVersion": "jarvos.profile.v1",
   "id": "minimal",
   "title": "Minimal",
-  "description": "Portable jarvOS starter workspace with core files, config, vault folders, agent-context, and the public control-plane module.",
+  "description": "Portable jarvOS starter workspace with core files, a dormant runtime declaration, agent-context, and the public control-plane module. A Vault remains optional until explicitly activated.",
   "public": true,
   "required": [
     "node",
     "workspace",
-    "vault",
     "config-schema",
     "agent-context",
     "control-plane"
@@ -15,8 +14,7 @@
   "optional": [],
   "writes": [
     "core-files",
-    "jarvos.config.json",
-    "vault-folders"
+    "jarvos.config.json"
   ],
   "doctorChecks": [
     "node-version",

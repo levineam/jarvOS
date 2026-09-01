@@ -267,6 +267,34 @@ test('vault-path-stale fails when the configured vault root is gone', () => {
   }
 });
 
+test('explicit dormant mode accepts an absent vault, while an active mode remains strict', () => {
+  const tmp = scratch();
+  try {
+    const vault = path.join(tmp, 'unactivated-vault');
+    const dormantConfig = writeConfig(tmp, {
+      paths: { vault },
+      runtimeMode: {
+        version: 'jarvos-runtime-mode/v1', mode: 'none', installedAdapters: [], workloadRoutes: [], capabilityTruth: [],
+      },
+    });
+    assert.equal(checkVaultPath(dormantConfig, { env: {} }).ok, true);
+    assert.equal(checkVaultPathStale(dormantConfig, { env: {} }).ok, true);
+
+    const activeDir = path.join(tmp, 'active');
+    fs.mkdirSync(activeDir);
+    const activeConfig = writeConfig(activeDir, {
+      paths: { vault },
+      runtimeMode: {
+        version: 'jarvos-runtime-mode/v1', mode: 'hermes', installedAdapters: [{ id: 'hermes' }], workloadRoutes: [], capabilityTruth: [],
+      },
+    });
+    assert.equal(checkVaultPath(activeConfig, { env: {} }).ok, false);
+    assert.equal(checkVaultPathStale(activeConfig, { env: {} }).ok, false);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
 test('vault-path-stale fails when vaultPath is unset', () => {
   const tmp = scratch();
   try {

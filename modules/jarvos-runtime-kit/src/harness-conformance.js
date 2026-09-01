@@ -10,14 +10,11 @@ const HARNESS_CONFORMANCE_TIERS = Object.freeze([
   'proactive-authority',
 ]);
 const HARNESS_CONFORMANCE_STATES = Object.freeze(['claimed-unverified', 'verified']);
+const HARNESS_CONFORMANCE_HARNESSES = Object.freeze(['hermes', 'openclaw']);
 const PROACTIVE_TELEGRAM_WORKLOAD = 'telegram.proactive-delivery';
 
 function isObject(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
-}
-
-function isIdentifier(value) {
-  return typeof value === 'string' && /^[a-z][a-z0-9-]*$/.test(value);
 }
 
 function isDigest(value) {
@@ -43,7 +40,7 @@ function validateHarnessConformanceFact(fact, path = 'conformanceFacts.facts[0]'
   for (const key of Object.keys(fact)) {
     if (!['harness', 'tier', 'state', 'evidence', 'installedTuple'].includes(key)) errors.push(`${path} has unknown field: ${key}`);
   }
-  if (!isIdentifier(fact.harness)) errors.push(`${path}.harness must be a stable harness id`);
+  if (!HARNESS_CONFORMANCE_HARNESSES.includes(fact.harness)) errors.push(`${path}.harness must be one of: ${HARNESS_CONFORMANCE_HARNESSES.join(', ')}`);
   if (!HARNESS_CONFORMANCE_TIERS.includes(fact.tier)) errors.push(`${path}.tier must be one of: ${HARNESS_CONFORMANCE_TIERS.join(', ')}`);
   if (!HARNESS_CONFORMANCE_STATES.includes(fact.state)) errors.push(`${path}.state must be one of: ${HARNESS_CONFORMANCE_STATES.join(', ')}`);
   if (!Array.isArray(fact.evidence) || fact.evidence.length === 0) {
@@ -66,7 +63,7 @@ function validateHarnessConformanceFact(fact, path = 'conformanceFacts.facts[0]'
   return { ok: errors.length === 0, errors };
 }
 
-function validateHarnessConformanceRegistry(registry) {
+function validateHarnessConformanceRegistry(registry, { harness, requireCanonicalTiers = false } = {}) {
   const errors = [];
   if (!isObject(registry)) return { ok: false, errors: ['conformanceFacts must be an object'] };
   for (const key of Object.keys(registry)) if (!['version', 'facts'].includes(key)) errors.push(`conformanceFacts has unknown field: ${key}`);
@@ -78,10 +75,19 @@ function validateHarnessConformanceRegistry(registry) {
     registry.facts.forEach((fact, index) => {
       const result = validateHarnessConformanceFact(fact, `conformanceFacts.facts[${index}]`);
       errors.push(...result.errors);
+      if (harness && fact?.harness !== harness) errors.push(`conformanceFacts.facts[${index}].harness must match manifest id ${harness}`);
       const key = `${fact?.harness}:${fact?.tier}`;
       if (factKeys.has(key)) errors.push(`conformanceFacts.facts has duplicate harness/tier: ${key}`);
       factKeys.add(key);
     });
+    if (requireCanonicalTiers) {
+      if (registry.facts.length !== HARNESS_CONFORMANCE_TIERS.length) {
+        errors.push(`conformanceFacts.facts must declare exactly ${HARNESS_CONFORMANCE_TIERS.length} canonical tiers`);
+      }
+      HARNESS_CONFORMANCE_TIERS.forEach((tier, index) => {
+        if (registry.facts[index]?.tier !== tier) errors.push(`conformanceFacts.facts[${index}] must be canonical tier ${tier}`);
+      });
+    }
   }
   return { ok: errors.length === 0, errors };
 }
@@ -113,6 +119,7 @@ function admitRuntimeProfileRoute({ route, registry }) {
 
 module.exports = {
   HARNESS_CONFORMANCE_STATES,
+  HARNESS_CONFORMANCE_HARNESSES,
   HARNESS_CONFORMANCE_TIERS,
   HARNESS_CONFORMANCE_VERSION,
   PROACTIVE_TELEGRAM_WORKLOAD,

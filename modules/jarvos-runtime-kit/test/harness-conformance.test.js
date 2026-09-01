@@ -7,6 +7,7 @@ const test = require('node:test');
 const {
   HARNESS_CONFORMANCE_TIERS,
   HARNESS_CONFORMANCE_VERSION,
+  validateManifest,
   validateHarnessConformanceRegistry,
   validateRuntimeModeContract,
 } = require('../src/index.js');
@@ -77,4 +78,33 @@ test('rejects duplicate harness-tier registry facts', () => {
   });
   assert.equal(result.ok, false);
   assert.match(result.errors.join('\n'), /duplicate harness\/tier/);
+});
+
+test('rejects unknown harness ids in conformance facts', () => {
+  const result = validateHarnessConformanceRegistry({
+    version: HARNESS_CONFORMANCE_VERSION,
+    facts: [{ harness: 'other-harness', tier: 'baseline-context', state: 'claimed-unverified', evidence: [{ kind: 'declaration', detail: 'not registered' }] }],
+  });
+  assert.equal(result.ok, false);
+  assert.match(result.errors.join('\n'), /must be one of: hermes, openclaw/);
+});
+
+test('registered Hermes and OpenClaw manifests bind facts to their id in canonical complete tier order', () => {
+  const adapter = JSON.parse(fs.readFileSync(path.join(ROOT, 'runtimes', 'openclaw', 'adapter.json'), 'utf8'));
+  adapter.harnessConformance.facts[0].harness = 'hermes';
+  let result = validateManifest(adapter);
+  assert.equal(result.ok, false);
+  assert.match(result.errors.join('\n'), /must match manifest id openclaw/);
+
+  const incomplete = JSON.parse(fs.readFileSync(path.join(ROOT, 'runtimes', 'openclaw', 'adapter.json'), 'utf8'));
+  incomplete.harnessConformance.facts.pop();
+  result = validateManifest(incomplete);
+  assert.equal(result.ok, false);
+  assert.match(result.errors.join('\n'), /exactly 4 canonical tiers/);
+
+  const reordered = JSON.parse(fs.readFileSync(path.join(ROOT, 'runtimes', 'openclaw', 'adapter.json'), 'utf8'));
+  [reordered.harnessConformance.facts[0], reordered.harnessConformance.facts[1]] = [reordered.harnessConformance.facts[1], reordered.harnessConformance.facts[0]];
+  result = validateManifest(reordered);
+  assert.equal(result.ok, false);
+  assert.match(result.errors.join('\n'), /canonical tier baseline-context/);
 });
