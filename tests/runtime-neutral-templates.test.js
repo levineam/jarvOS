@@ -72,12 +72,25 @@ try {
     assert.doesNotMatch(content, /\bopenclaw\b/i, `${name} must stay runtime-neutral in a fresh workspace`);
   }
 
+  const doctor = run(['doctor', '--profile', 'minimal', '--workspace', workspace], env);
+  assert.equal(doctor.status, 0, doctor.stderr || doctor.stdout);
+  assert.match(doctor.stdout, /PASS vault-path/);
+  assert.match(doctor.stdout, /PASS vault-path-stale/);
+  assert.match(doctor.stdout, /dormant runtime mode leaves vault unactivated/);
+
   const authoredAgents = '# Customized workspace instructions\n';
   fs.writeFileSync(path.join(workspace, 'AGENTS.md'), authoredAgents, 'utf8');
   const rerun = run(['init', '--profile', 'minimal', '--yes', '--workspace', workspace, '--vault', vault], env);
   assert.equal(rerun.status, 0, rerun.stderr || rerun.stdout);
   assert.equal(fs.readFileSync(path.join(workspace, 'AGENTS.md'), 'utf8'), authoredAgents,
     'a compatible workspace must preserve customized instructions');
+
+  fs.mkdirSync(vault);
+  const emptyVaultBefore = fs.readdirSync(vault);
+  const emptyVaultRerun = run(['init', '--profile', 'minimal', '--yes', '--workspace', workspace, '--vault', vault], env);
+  assert.equal(emptyVaultRerun.status, 0, emptyVaultRerun.stderr || emptyVaultRerun.stdout);
+  assert.match(emptyVaultRerun.stdout, /Intended action:\s+already-initialized/);
+  assert.deepEqual(fs.readdirSync(vault), emptyVaultBefore, 'a dormant rerun must not mutate a pre-existing empty vault');
 
   const syncWorkspace = path.join(tmp, 'sync-workspace');
   const syncVault = path.join(tmp, 'sync-vault');

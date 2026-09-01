@@ -319,7 +319,7 @@ function isCompatibleExistingInstall(workspace, vault) {
     && Array.isArray(config.runtimeMode.capabilityTruth) && config.runtimeMode.capabilityTruth.length === 0
     // statSync follows a compatible symlink so a previously accepted alias to
     // an absent dormant vault remains read-only on rerun.
-    && !fs.statSync(vault, { throwIfNoEntry: false })) {
+    && ['absent', 'empty-directory'].includes(inspectTarget(vault).state)) {
     return { compatible: true };
   }
   const requiredVaultDirectories = ['Notes', 'Journal', 'Tags'];
