@@ -40,6 +40,18 @@ function expandHome(p) {
   return p;
 }
 
+// jarvos.config.json paths.* must be runtime-effective: the config resolver
+// ignores relative values and silently falls back to the home-directory
+// defaults, so anchor them here instead of writing a path nothing will use.
+function absolutePath(p) {
+  return path.resolve(expandHome(p));
+}
+
+function isValidIanaTimezone(value) {
+  if (typeof value !== 'string' || !value.trim()) return false;
+  try { Intl.DateTimeFormat(undefined, { timeZone: value }); return true; } catch { return false; }
+}
+
 // ─── Dependency checks ──────────────────────────────────────────────────────
 
 function checkDeps() {
@@ -128,8 +140,8 @@ function nonInteractiveConfig() {
     USER_NAME:      process.env.JARVOS_USER_NAME      || os.userInfo().username,
     COACH_NAME:     process.env.JARVOS_COACH_NAME     || 'jarvOS',
     TIMEZONE:       process.env.JARVOS_TIMEZONE       || tz,
-    VAULT_PATH:     expandHome(process.env.JARVOS_VAULT_PATH      || path.join(os.homedir(), 'jarvos-vault')),
-    WORKSPACE_PATH: expandHome(process.env.JARVOS_WORKSPACE_PATH  || path.join(os.homedir(), 'clawd')),
+    VAULT_PATH:     absolutePath(process.env.JARVOS_VAULT_PATH      || path.join(os.homedir(), 'jarvos-vault')),
+    WORKSPACE_PATH: absolutePath(process.env.JARVOS_WORKSPACE_PATH  || path.join(os.homedir(), 'clawd')),
     RUNTIME:        process.env.JARVOS_RUNTIME        || 'openclaw'
   };
   return defaults;
@@ -182,8 +194,8 @@ async function gatherConfig(rl) {
     USER_NAME:       answers.USER_NAME,
     COACH_NAME:      answers.COACH_NAME,
     TIMEZONE:        answers.TIMEZONE,
-    VAULT_PATH:      expandHome(answers.VAULT_PATH),
-    WORKSPACE_PATH:  expandHome(answers.WORKSPACE_PATH),
+    VAULT_PATH:      absolutePath(answers.VAULT_PATH),
+    WORKSPACE_PATH:  absolutePath(answers.WORKSPACE_PATH),
     RUNTIME:         answers.RUNTIME
   };
 }
@@ -340,7 +352,22 @@ function generateOverlays(config) {
       coachName: config.COACH_NAME,
       vaultPath: config.VAULT_PATH,
       workspacePath: config.WORKSPACE_PATH,
-      runtime: config.RUNTIME
+      runtime: config.RUNTIME,
+      paths: {
+        workspace: config.WORKSPACE_PATH,
+        vault: config.VAULT_PATH,
+        notes: path.join(config.VAULT_PATH, 'Notes'),
+        journal: path.join(config.VAULT_PATH, 'Journal'),
+        tags: path.join(config.VAULT_PATH, 'Tags'),
+        memory: path.join(config.WORKSPACE_PATH, 'memory'),
+        scripts: path.join(config.WORKSPACE_PATH, 'scripts'),
+        workflows: path.join(config.WORKSPACE_PATH, 'workflows'),
+        customers: path.join(config.WORKSPACE_PATH, 'customers')
+      },
+      user: {
+        name: config.USER_NAME,
+        timezone: config.TIMEZONE
+      }
     };
     fs.writeFileSync(configPath, JSON.stringify(jarvosConfig, null, 2) + '\n', 'utf8');
     ok(`jarvos.config.json → ${configPath}`);
@@ -431,6 +458,11 @@ async function main() {
     config = await gatherConfig(rl);
   } finally {
     rl.close();
+  }
+
+  if (!isValidIanaTimezone(config.TIMEZONE)) {
+    err(`Refusing to initialize: TIMEZONE must be a valid IANA timezone (received ${JSON.stringify(config.TIMEZONE)})`);
+    process.exit(1);
   }
 
   createDirectories(config);
