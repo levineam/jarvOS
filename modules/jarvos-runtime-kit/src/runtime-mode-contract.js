@@ -7,6 +7,7 @@ const RUNTIME_MODE_CONTRACT_VERSION = 'jarvos-runtime-mode/v1';
 const RUNTIME_MODES = Object.freeze(['none', 'hermes', 'openclaw', 'multi']);
 const RESIDENT_ADAPTERS = Object.freeze(['hermes', 'openclaw']);
 const CAPABILITY_TRUTH_STATES = Object.freeze(['available', 'unavailable', 'unknown']);
+const conformance = require('./harness-conformance.js');
 
 function isObject(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -25,7 +26,7 @@ function defaultRuntimeMode() {
 function validateRuntimeModeContract(contract) {
   const errors = [];
   if (!isObject(contract)) return { ok: false, errors: ['runtimeMode must be an object'] };
-  const allowed = new Set(['version', 'mode', 'installedAdapters', 'workloadRoutes', 'capabilityTruth']);
+  const allowed = new Set(['version', 'mode', 'installedAdapters', 'workloadRoutes', 'capabilityTruth', 'conformanceFacts']);
   for (const key of Object.keys(contract)) if (!allowed.has(key)) errors.push(`runtimeMode has unknown field: ${key}`);
   if (contract.version !== RUNTIME_MODE_CONTRACT_VERSION) errors.push(`runtimeMode.version must be ${RUNTIME_MODE_CONTRACT_VERSION}`);
   if (!RUNTIME_MODES.includes(contract.mode)) errors.push(`runtimeMode.mode must be one of: ${RUNTIME_MODES.join(', ')}`);
@@ -98,6 +99,21 @@ function validateRuntimeModeContract(contract) {
   if (contract.mode === 'multi') {
     if (adapters.length < 2) errors.push('runtimeMode multi must install at least two resident adapters');
     if (routes.length === 0) errors.push('runtimeMode multi requires explicit workload routes');
+  }
+  const conformanceValidation = contract.conformanceFacts === undefined
+    ? null
+    : conformance.validateHarnessConformanceRegistry(contract.conformanceFacts);
+  if (conformanceValidation && !conformanceValidation.ok) {
+    errors.push(...conformanceValidation.errors);
+  }
+  // Preserve the exact schema error for malformed evidence; do not obscure it
+  // with a second admission error. An absent registry still fails a proactive
+  // route through the admission rule below.
+  if (!conformanceValidation || conformanceValidation.ok) {
+    for (const route of routes) {
+      const admission = conformance.admitRuntimeProfileRoute({ route, registry: contract.conformanceFacts });
+      errors.push(...admission.errors);
+    }
   }
   return { ok: errors.length === 0, errors };
 }

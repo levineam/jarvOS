@@ -26,6 +26,15 @@
     "contract": "jarvos-operator-notification/v1",
     "delivery": { "status": "not-configured", "reason": "Local owner configuration chooses a delivery surface; this public adapter does not configure one." }
   },
+  "harnessConformance": {
+    "version": "jarvos-harness-conformance/v1",
+    "facts": [
+      { "harness": "hermes", "tier": "baseline-context", "state": "claimed-unverified", "evidence": [{ "kind": "adapter-declaration", "detail": "Checked-in Hermes adapter declaration; no owner-local harness proof was run." }] },
+      { "harness": "hermes", "tier": "conversational", "state": "claimed-unverified", "evidence": [{ "kind": "adapter-declaration", "detail": "Checked-in Hermes adapter declaration; no owner-local harness proof was run." }] },
+      { "harness": "hermes", "tier": "mutation-capable", "state": "claimed-unverified", "evidence": [{ "kind": "adapter-declaration", "detail": "Checked-in Hermes adapter declaration; no owner-local harness proof was run." }] },
+      { "harness": "hermes", "tier": "proactive-authority", "state": "claimed-unverified", "evidence": [{ "kind": "offline-declaration", "detail": "Mac Mini exact installed-tuple evidence and owner-local proof are required before proactive routing." }] }
+    ]
+  },
   "artifactGeneration": {
     "version": "jarvos-hermes-artifact-generation.v1",
     "releaseRevision": "291c334-route-capability",
