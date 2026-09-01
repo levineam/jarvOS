@@ -53,11 +53,12 @@ contain `..` traversal, and cannot carry a `file:` or other URI scheme.
 
 ## Seed ledger
 
-The tracked `capability-ledger.json` seed describes only the foundation work in
-draft pull request 257. Its identity, truth-ledger, candidate-envelope, and
-promotion-receipt contracts are asserted at `specification: draft`,
-`implementation: partial`, and `verification: fixture-proven` because their
-validators and tests exist but no installed product consumer activates them.
-Every seed record is `repository: draft-pr`, `activation: inactive`, and
-`authority: none`. Merge and release are separate future observations; neither
-is inferred from this branch.
+The tracked `capability-ledger.json` seed describes foundation work merged in
+commit `03b5263e3b273ea7a3e76581fd73c6059fd90ada`. Its identity, truth-ledger,
+candidate-envelope, and promotion-receipt contracts are asserted at
+`specification: canonical`, `implementation: partial`, and
+`verification: fixture-proven` because their validators and tests exist but no
+installed product consumer activates them. Every seed record is
+`repository: merged`, `activation: inactive`, and `authority: none`. A merge
+establishes repository state only; activation, authority, and release remain
+separate observations and are never inferred from that commit.
