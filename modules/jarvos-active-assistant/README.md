@@ -43,7 +43,8 @@ contract does not name, load, configure, or start a particular harness.
 4. `evaluateDelivery` accepts a lifecycle receipt only once its schedule is
    due, and binds it to a declared receipt-producing bridge and that bridge's
    portable conversation mapping. A previously seen idempotency key is
-   replay-safe only when all duplicate receipts are byte-identical; conflicting,
+   replay-safe only when all duplicate receipts are canonical-equivalent;
+   conflicting,
    future-dated, early, expired, malformed, or incorrectly bound receipts are
    rejected.
 
