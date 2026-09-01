@@ -268,14 +268,18 @@ function isCompatibleExistingInstall(workspace, vault) {
     'AGENTS.md', 'BOOTSTRAP.md', 'HEARTBEAT.md', 'MEMORY.md',
     'USER.md', 'ONTOLOGY.md', 'SOUL.md', 'TOOLS.md', 'jarvos.config.json',
   ];
-  if (requiredWorkspaceFiles.some((file) => !fs.statSync(path.join(workspace, file), { throwIfNoEntry: false })?.isFile())) {
+  // Compatibility grants a read-only rerun, so it must apply the same
+  // no-symlink boundary as the smoke test. `statSync` follows a final link and
+  // would otherwise classify a tree as compatible only for smokeTest to reject
+  // it moments later.
+  if (requiredWorkspaceFiles.some((file) => !fs.lstatSync(path.join(workspace, file), { throwIfNoEntry: false })?.isFile())) {
     return { compatible: false, reason: 'required bootstrap workspace files are missing' };
   }
-  if (!fs.statSync(path.join(workspace, 'memory'), { throwIfNoEntry: false })?.isDirectory()) {
+  if (!fs.lstatSync(path.join(workspace, 'memory'), { throwIfNoEntry: false })?.isDirectory()) {
     return { compatible: false, reason: 'required bootstrap memory directory is missing' };
   }
   const requiredVaultDirectories = ['Notes', 'Journal', 'Tags'];
-  if (requiredVaultDirectories.some((dir) => !fs.statSync(path.join(vault, dir), { throwIfNoEntry: false })?.isDirectory())) {
+  if (requiredVaultDirectories.some((dir) => !fs.lstatSync(path.join(vault, dir), { throwIfNoEntry: false })?.isDirectory())) {
     return { compatible: false, reason: 'required bootstrap vault directories are missing' };
   }
   return { compatible: true };

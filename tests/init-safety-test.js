@@ -186,6 +186,18 @@ try {
   assert.match(missingMemoryRerun.stdout, /not a compatible jarvOS install/);
   fs.mkdirSync(memoryDirectory);
 
+  const linkedRequiredFileTarget = path.join(tmp, 'linked-required-file-target.md');
+  fs.writeFileSync(linkedRequiredFileTarget, memoryContents);
+  fs.rmSync(memoryFile);
+  fs.symlinkSync(linkedRequiredFileTarget, memoryFile, 'file');
+  const symlinkedRequiredFileRerun = runInit(['--workspace', workspace, '--vault', vault], env);
+  assert.notEqual(symlinkedRequiredFileRerun.status, 0);
+  assert.match(symlinkedRequiredFileRerun.stdout, /not a compatible jarvOS install/);
+  assert.match(symlinkedRequiredFileRerun.stdout, /required bootstrap workspace files are missing/);
+  assert.equal(fs.readFileSync(linkedRequiredFileTarget, 'utf8'), memoryContents);
+  fs.unlinkSync(memoryFile);
+  fs.writeFileSync(memoryFile, memoryContents);
+
   // Reproduce the incident shape: `jarvos init --yes` must not touch an
   // already-used default ~/clawd workspace or create a shadow ~/jarvos-vault.
   const incidentHome = path.join(tmp, 'incident-home');
