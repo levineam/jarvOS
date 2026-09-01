@@ -465,6 +465,11 @@ try {
   assert.equal(legacyInit.status, 0, legacyInit.stderr || legacyInit.stdout);
   assert.ok(fs.existsSync(path.join(legacyWorkspace, 'jarvos.config.json')));
 
+  // A dormant init intentionally leaves the selected vault untouched. The
+  // doctor fixture opts into a shaped vault explicitly so its vault-health
+  // checks have a target to inspect.
+  for (const directory of ['Notes', 'Journal', 'Tags']) fs.mkdirSync(path.join(vault, directory), { recursive: true });
+
   // Fresh generic minimal install: no private host service configured.
   const envWithoutHost = { ...env };
   delete envWithoutHost.JARVOS_CONTROL_PLANE_SERVICE_MODULE;

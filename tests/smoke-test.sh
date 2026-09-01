@@ -50,6 +50,18 @@ check_exists() {
   fi
 }
 
+check_absent() {
+  local label="$1"
+  local path="$2"
+  if [ ! -e "$path" ]; then
+    echo "  ✓ $label"
+    PASS=$((PASS + 1))
+  else
+    echo "  ✗ $label  (unexpectedly created: $path)"
+    FAIL=$((FAIL + 1))
+  fi
+}
+
 echo ""
 echo "→ Verifying outputs"
 check_exists "AGENTS.md"      "$WORKSPACE/AGENTS.md"
@@ -62,9 +74,7 @@ check_exists "SOUL.md"        "$WORKSPACE/SOUL.md"
 check_exists "TOOLS.md"       "$WORKSPACE/TOOLS.md"
 check_exists "jarvos.config.json" "$WORKSPACE/jarvos.config.json"
 check_exists "memory dir"     "$WORKSPACE/memory"
-check_exists "vault/Notes"    "$VAULT/Notes"
-check_exists "vault/Journal"  "$VAULT/Journal"
-check_exists "vault/Tags"     "$VAULT/Tags"
+check_absent "vault remains dormant" "$VAULT"
 
 # Template substitution check
 for f in AGENTS.md BOOTSTRAP.md HEARTBEAT.md USER.md ONTOLOGY.md SOUL.md TOOLS.md; do

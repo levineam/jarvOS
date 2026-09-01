@@ -310,6 +310,18 @@ function isCompatibleExistingInstall(workspace, vault) {
   if (!fs.lstatSync(path.join(workspace, 'memory'), { throwIfNoEntry: false })?.isDirectory()) {
     return { compatible: false, reason: 'required bootstrap memory directory is missing' };
   }
+  // A new core-only installation deliberately leaves its configured vault
+  // untouched. Keep legacy installs strict, but recognize the explicit dormant
+  // declaration so a harmless rerun cannot turn into a refusal.
+  if (config.runtimeMode?.mode === 'none'
+    && Array.isArray(config.runtimeMode.installedAdapters) && config.runtimeMode.installedAdapters.length === 0
+    && Array.isArray(config.runtimeMode.workloadRoutes) && config.runtimeMode.workloadRoutes.length === 0
+    && Array.isArray(config.runtimeMode.capabilityTruth) && config.runtimeMode.capabilityTruth.length === 0
+    // statSync follows a compatible symlink so a previously accepted alias to
+    // an absent dormant vault remains read-only on rerun.
+    && ['absent', 'empty-directory'].includes(inspectTarget(vault).state)) {
+    return { compatible: true };
+  }
   const requiredVaultDirectories = ['Notes', 'Journal', 'Tags'];
   if (requiredVaultDirectories.some((dir) => !fs.lstatSync(path.join(vault, dir), { throwIfNoEntry: false })?.isDirectory())) {
     return { compatible: false, reason: 'required bootstrap vault directories are missing' };
@@ -412,16 +424,9 @@ function checkDeps() {
     }
   ];
 
-  // Optional but noted
+  // Optional developer conveniences. Runtime-specific tools are checked only
+  // after a user has selected that runtime.
   const optionals = [
-    {
-      name: 'OpenClaw CLI (openclaw)',
-      test: () => {
-        const r = spawnSync('openclaw', ['--version'], { encoding: 'utf8' });
-        return r.status === 0;
-      },
-      hint: 'Install with: npm install -g openclaw  (see https://openclaw.ai)'
-    },
     {
       name: 'git',
       test: () => spawnSync('git', ['--version'], { encoding: 'utf8' }).status === 0
@@ -487,7 +492,7 @@ function nonInteractiveConfig(argv = process.argv.slice(2), env = process.env) {
     TIMEZONE:       env.JARVOS_TIMEZONE       || tz,
     VAULT_PATH:     paths.vault,
     WORKSPACE_PATH: paths.workspace,
-    RUNTIME:        env.JARVOS_RUNTIME        || 'openclaw'
+    RUNTIME:        env.JARVOS_RUNTIME        || 'none'
   };
   return defaults;
 }
@@ -525,8 +530,8 @@ async function gatherConfig(rl, argv = process.argv.slice(2), env = process.env)
     ['COACH_NAME',     `Coach/operator name [${defaults.COACH_NAME}]: `],
     ['TIMEZONE',       `Your timezone [${defaults.TIMEZONE}]: `],
     ['VAULT_PATH',     `Vault path (Obsidian or notes folder) [${defaults.VAULT_PATH}]: `],
-    ['WORKSPACE_PATH', `OpenClaw workspace path [${defaults.WORKSPACE_PATH}]: `],
-    ['RUNTIME',        `Runtime (e.g. openclaw) [${defaults.RUNTIME}]: `]
+    ['WORKSPACE_PATH', `Workspace path [${defaults.WORKSPACE_PATH}]: `],
+    ['RUNTIME',        `Runtime (none until explicitly selected) [${defaults.RUNTIME}]: `]
   ];
 
   for (const [key, prompt] of fields) {
@@ -551,9 +556,6 @@ function createDirectories(config) {
   hdr('3/5  Creating directory structure');
 
   const dirs = [
-    path.join(config.VAULT_PATH, 'Notes'),
-    path.join(config.VAULT_PATH, 'Journal'),
-    path.join(config.VAULT_PATH, 'Tags'),
     path.join(config.WORKSPACE_PATH, 'memory')
   ];
 
@@ -694,6 +696,13 @@ function generateOverlays(config) {
       vaultPath: config.VAULT_PATH,
       workspacePath: config.WORKSPACE_PATH,
       runtime: config.RUNTIME,
+      runtimeMode: {
+        version: 'jarvos-runtime-mode/v1',
+        mode: 'none',
+        installedAdapters: [],
+        workloadRoutes: [],
+        capabilityTruth: [],
+      },
       paths: {
         workspace: config.WORKSPACE_PATH,
         vault: config.VAULT_PATH,
@@ -724,12 +733,7 @@ function smokeTest(config) {
 
   const ws = config.WORKSPACE_PATH;
   const requiredFiles = ['AGENTS.md', 'BOOTSTRAP.md', 'HEARTBEAT.md', 'MEMORY.md', 'USER.md', 'ONTOLOGY.md', 'SOUL.md', 'TOOLS.md', 'jarvos.config.json'];
-  const requiredDirs  = [
-    path.join(config.VAULT_PATH, 'Notes'),
-    path.join(config.VAULT_PATH, 'Journal'),
-    path.join(config.VAULT_PATH, 'Tags'),
-    path.join(ws, 'memory')
-  ];
+  const requiredDirs  = [path.join(ws, 'memory')];
 
   let passed = 0;
   let failed = 0;
@@ -837,14 +841,10 @@ async function main() {
   const allPassed = smokeTest(config);
 
   console.log(`\n${BOLD}Next steps:${RESET}`);
-  if (config.RUNTIME === 'openclaw') {
-    console.log(`  1. Start OpenClaw:          openclaw gateway start`);
-  } else {
-    console.log(`  1. Start your runtime (${config.RUNTIME}) and point it at: ${config.WORKSPACE_PATH}`);
-  }
-  console.log(`  2. Tell your assistant:     "Read BOOTSTRAP.md and follow its instructions"`);
+  console.log(`  1. Tell your assistant:     "Read BOOTSTRAP.md and follow its instructions"`);
+  console.log(`  2. Choose an optional runtime or integration only when you want to activate it.`);
   console.log(`  3. Set up your ontology:    Edit ONTOLOGY.md with your mission and goals`);
-  console.log(`  4. Create your first project: Board.md + Brief.md under a Portfolio folder`);
+  console.log(`  4. Propose a first durable project artifact before creating it.`);
   console.log(`\nDocs: https://github.com/levineam/jarvOS\n`);
 
   process.exit(allPassed ? 0 : 1);

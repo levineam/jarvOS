@@ -102,6 +102,13 @@ function buildSharedVaultConfig({
 
   return {
     $schema: 'https://raw.githubusercontent.com/levineam/jarvOS/main/jarvos.config.schema.json',
+    runtimeMode: {
+      version: 'jarvos-runtime-mode/v1',
+      mode: 'none',
+      installedAdapters: [],
+      workloadRoutes: [],
+      capabilityTruth: [],
+    },
     paths: {
       workspace: resolvedWorkspace,
       vault: resolvedVault,
