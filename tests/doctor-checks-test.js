@@ -751,11 +751,18 @@ test('public and minimal Doctor visibly require read-only reconciliation for a c
       homeDir,
       user: { name: 'Legacy User', timezone: 'UTC' },
     });
+    delete portable.paths.tags;
     fs.writeFileSync(configPath, JSON.stringify(portable, null, 2));
     const portablePublic = runDoctor({ profile: 'minimal', env, homeDir });
     const portableMinimal = runMinimalDoctor({ env, homeDir });
+    const portableProfile = await runProfileDoctor({ profile: 'minimal', env, homeDir });
     assert.equal(portablePublic.results.find((entry) => entry.id === 'config-reconciliation').ok, true);
     assert.equal(portableMinimal.checks.find((entry) => entry.component === 'config.reconciliation').ok, true);
+    const portableTags = portableMinimal.checks.find((entry) => entry.component === 'path.tags');
+    assert.equal(portableTags.ok, true, portableTags.message);
+    assert.match(portableTags.message, /runtime-derived tags directory/);
+    const portableProfileTags = portableProfile.checks.find((entry) => entry.component === 'path.tags');
+    assert.equal(portableProfileTags.ok, true, portableProfileTags.message);
 
     // A divergent path is a sync conflict, not manual reconciliation. Doctor
     // leaves that shape to its existing config/path diagnostics rather than

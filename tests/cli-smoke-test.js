@@ -227,6 +227,23 @@ try {
   const runtimeConfig = JSON.parse(fs.readFileSync(syncConfigPath, 'utf8'));
   assert.equal(Object.hasOwn(runtimeConfig.paths, 'tags'), false);
 
+  const overriddenTags = path.join(tmp, 'sync-runtime-tags');
+  fs.mkdirSync(overriddenTags);
+  const beforeOverrideAssessment = fs.readFileSync(syncConfigPath, 'utf8');
+  const syncWithDivergentRuntimeOverride = run(
+    ['sync', '--workspace', syncWorkspace, '--dry-run', '--json'],
+    { env: { ...env, JARVOS_TAGS_DIR: overriddenTags } },
+  );
+  assert.equal(
+    syncWithDivergentRuntimeOverride.status,
+    0,
+    syncWithDivergentRuntimeOverride.stderr || syncWithDivergentRuntimeOverride.stdout,
+  );
+  const overrideAssessment = JSON.parse(syncWithDivergentRuntimeOverride.stdout);
+  assert.equal(overrideAssessment.action, 'manual-reconcile');
+  assert.equal(overrideAssessment.targetAction, 'manual-reconcile');
+  assert.equal(fs.readFileSync(syncConfigPath, 'utf8'), beforeOverrideAssessment, 'sync assessment is read-only');
+
   const syncConfigSuperset = JSON.parse(fs.readFileSync(syncConfigPath, 'utf8'));
   syncConfigSuperset.privateExtension = { enabled: true };
   fs.writeFileSync(syncConfigPath, `${JSON.stringify(syncConfigSuperset, null, 2)}\n`);

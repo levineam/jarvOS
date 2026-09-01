@@ -20,6 +20,7 @@ const {
   expandTilde,
   isUsablePath,
   isValidTimezone,
+  resolveConfig,
 } = require('./resolve-config');
 
 const DEFAULT_VAULT_CANDIDATES = [
@@ -166,7 +167,7 @@ function migratedSharedVaultConfig(existing, expected) {
   };
 }
 
-function hasPortableRuntimeConfig(existing, expected, homeDir = os.homedir()) {
+function hasPortableRuntimeConfig(existing, expected, homeDir = os.homedir(), runtimePaths = null) {
   if (!existing?.paths || typeof existing.paths !== 'object' || !existing?.user || typeof existing.user !== 'object') return false;
   const existingPaths = resolvedConfigPaths(existing, homeDir);
   const expectedPaths = resolvedConfigPaths(expected, homeDir);
@@ -181,6 +182,7 @@ function hasPortableRuntimeConfig(existing, expected, homeDir = os.homedir()) {
   // workspace or vault, so those optional omissions are portable when their
   // resolved value still matches the expected installation.
   return Object.keys(expectedPaths).every((key) => existingPaths[key] === expectedPaths[key]
+    && (!runtimePaths || runtimePaths[key] === expectedPaths[key])
     && (Object.hasOwn(existing.paths, key)
       ? isUsablePath(existing.paths[key], homeDir)
       : derivedPathKeys.has(key)))
@@ -364,7 +366,14 @@ function readSharedVaultConfigTarget({ configPath, homeDir = os.homedir(), platf
   return { configPath: target, config: existing, exists: true, targetStat };
 }
 
-function assessSharedVaultConfigTarget({ configPath, config, vaultDir, homeDir = os.homedir(), platform = process.platform } = {}) {
+function assessSharedVaultConfigTarget({
+  configPath,
+  config,
+  vaultDir,
+  homeDir = os.homedir(),
+  platform = process.platform,
+  env = process.env,
+} = {}) {
   const targetState = readSharedVaultConfigTarget({ configPath, homeDir, platform });
   const target = targetState.configPath;
   const configuredVault = vaultDir || config?.paths?.vault || config?.vaultPath;
@@ -372,9 +381,18 @@ function assessSharedVaultConfigTarget({ configPath, config, vaultDir, homeDir =
   if (!targetState.exists) return { action: 'create', configPath: target };
 
   const compatible = isCompatibleSharedVaultConfig(targetState.config, config, homeDir);
+  let runtimePaths = false;
+  try {
+    runtimePaths = resolveConfig({ configPath: target, homeDir, env }).paths;
+  } catch {
+    // A legacy file that the runtime cannot resolve is not portable enough to
+    // call already-synced. Keep it in the existing manual-reconciliation path.
+  }
   return {
     action: compatible
-      ? (hasPortableRuntimeConfig(targetState.config, config, homeDir) ? 'already-synced' : 'migrate')
+      ? (runtimePaths && hasPortableRuntimeConfig(targetState.config, config, homeDir, runtimePaths)
+        ? 'already-synced'
+        : 'migrate')
       : 'conflict',
     configPath: target,
   };
@@ -667,10 +685,11 @@ function writeSharedVaultConfig({
   platform = process.platform,
   constants = fs.constants,
   user,
+  env = process.env,
 } = {}) {
   const target = asAbsolutePath(configPath || path.join(process.cwd(), 'jarvos.config.json'), homeDir);
   const config = buildSharedVaultConfig({ vaultDir, workspaceRoot, homeDir, user });
-  const assessment = assessSharedVaultConfigTarget({ configPath: target, config, vaultDir, homeDir, platform });
+  const assessment = assessSharedVaultConfigTarget({ configPath: target, config, vaultDir, homeDir, platform, env });
   if (assessment.action === 'already-synced') {
     return { configPath: target, config, changed: false };
   }
