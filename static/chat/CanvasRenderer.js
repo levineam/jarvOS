@@ -1,0 +1,1 @@
+import{r as e}from"./VoiceAvatarPanel.js";export{e as CanvasRenderer};

@@ -21,6 +21,7 @@
     "@assistant-ui/react": "^0.14.24",
     "@vitejs/plugin-react": "^6.0.3",
     "ai": "^7.0.7",
+    "pixi.js": "^8.20.1",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
     "vite": "^8.1.0",

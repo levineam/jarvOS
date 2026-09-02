@@ -26,6 +26,35 @@
   margin: 0;
 }
 
+.chat-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.avatar-launch {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 34px;
+  padding: 0 12px;
+  border: 1px solid rgba(85, 139, 255, .34);
+  border-radius: 999px;
+  background: rgba(41, 85, 180, .12);
+  color: #a9c7ff;
+  font: 11px var(--mono);
+  cursor: pointer;
+}
+
+.avatar-launch i,
+.avatar-state-readout i {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #75a7ff;
+  box-shadow: 0 0 10px #447eff;
+}
+
 .settings-bar {
   position: relative;
   display: flex;
@@ -426,6 +455,161 @@
   font-size: 13px;
 }
 
+.avatar-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(4, 7, 14, .78);
+}
+
+.avatar-lab {
+  width: min(980px, 100%);
+  max-height: calc(100vh - 48px);
+  overflow: auto;
+  padding: 18px;
+  border: 1px solid rgba(90, 132, 220, .28);
+  border-radius: 14px;
+  background: #090d18;
+  box-shadow: 0 28px 90px rgba(0, 0, 0, .58);
+}
+
+.avatar-lab-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 14px;
+}
+
+.avatar-lab-head h2 {
+  margin: 4px 0 0;
+  color: #edf4ff;
+  font: 400 28px var(--serif);
+}
+
+.avatar-demo-grid {
+  display: grid;
+  grid-template-columns: minmax(360px, 1fr) 300px;
+  gap: 16px;
+}
+
+.avatar-viewport {
+  position: relative;
+  min-height: 590px;
+  overflow: hidden;
+  border: 1px solid rgba(78, 120, 208, .18);
+  border-radius: 12px;
+  background:
+    radial-gradient(circle at 50% 42%, rgba(28, 69, 158, .22), transparent 44%),
+    linear-gradient(180deg, #030713, #070b16);
+}
+
+.avatar-stage {
+  position: absolute;
+  inset: 22px 5% 16px;
+}
+
+.avatar-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.avatar-state-readout,
+.avatar-metrics {
+  position: absolute;
+  z-index: 1;
+  font: 10px var(--mono);
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  color: #8094bb;
+}
+
+.avatar-state-readout {
+  top: 14px;
+  left: 15px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #b9cdf2;
+}
+
+.avatar-metrics {
+  right: 15px;
+  bottom: 13px;
+  letter-spacing: .04em;
+  text-transform: none;
+}
+
+.avatar-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.avatar-control-group {
+  margin: 0;
+  padding: 12px;
+  border: 1px solid rgba(86, 120, 180, .2);
+  border-radius: 10px;
+  background: rgba(17, 24, 39, .62);
+}
+
+.avatar-control-group legend {
+  padding: 0 6px;
+  color: #7085aa;
+  font: 10px var(--mono);
+  letter-spacing: .12em;
+  text-transform: uppercase;
+}
+
+.avatar-button-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px;
+}
+
+.avatar-button-grid button {
+  min-height: 34px;
+  border: 1px solid rgba(99, 128, 182, .23);
+  border-radius: 7px;
+  background: #101727;
+  color: #9eacc5;
+  font: 11px var(--mono);
+  text-transform: capitalize;
+  cursor: pointer;
+}
+
+.avatar-button-grid button:hover,
+.avatar-button-grid button.active {
+  border-color: rgba(91, 145, 255, .72);
+  background: rgba(50, 96, 190, .22);
+  color: #d5e4ff;
+}
+
+.avatar-range {
+  display: grid;
+  grid-template-columns: 1fr 42px;
+  align-items: center;
+  gap: 9px;
+}
+
+.avatar-range input { width: 100%; accent-color: #5d8fff; }
+.avatar-range output { color: #b8c9e8; font: 11px var(--mono); text-align: right; }
+
+.avatar-toggle {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  min-height: 31px;
+  color: #a6b3ca;
+  font-size: 12px;
+}
+
+.avatar-toggle input { accent-color: #5d8fff; }
+
 @media (max-width: 1120px) {
   .chat-shell {
     grid-template-columns: 1fr;
@@ -436,6 +620,11 @@
 }
 
 @media (max-width: 760px) {
+  .chat-head-actions { align-items: flex-end; flex-direction: column-reverse; gap: 8px; }
+  .avatar-backdrop { padding: 0; }
+  .avatar-lab { max-height: 100vh; min-height: 100vh; border-radius: 0; }
+  .avatar-demo-grid { grid-template-columns: 1fr; }
+  .avatar-viewport { min-height: 520px; }
   .composer-controls select {
     padding: 5px 8px;
     font-size: 11px;
