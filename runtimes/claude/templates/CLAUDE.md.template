@@ -168,16 +168,11 @@ For intentional capture requests such as `note:`, `make a note`, `idea:`, or
 `save this`, Claude Code should call the jarvOS universal capture contract
 instead of raw-writing Markdown. Use source `claude-code`.
 
-Preferred path:
+Use the trusted absolute path materialized by jarvOS setup (never resolve the
+capture script relative to the current workspace):
 
 ```bash
-node modules/jarvos-secondbrain/scripts/jarvos-capture.js
-```
-
-Compatibility path:
-
-```bash
-node scripts/obsidian-note-journal-contract.js
+node {{JARVOS_CAPTURE_SCRIPT}}
 ```
 
 Successful note captures must write under the configured `Notes/` directory,

@@ -229,10 +229,11 @@ create source-backed ontology candidates or inquiry items for review.
 
 For intentional capture requests such as `note:`, `make a note`, `idea:`, or
 `save this`, Codex should call the jarvOS universal capture entrypoint instead
-of raw-writing Markdown:
+of raw-writing Markdown. Resolve the trusted jarvOS installation outside the
+current workspace and use its absolute path:
 
 ```bash
-node modules/jarvos-secondbrain/scripts/jarvos-capture.js
+node "/absolute/path/to/trusted/jarvOS/modules/jarvos-secondbrain/scripts/jarvos-capture.js"
 ```
 
 The capture event source is `codex`. Successful note captures must end up under

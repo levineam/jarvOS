@@ -7,6 +7,7 @@ HOOK_SCRIPT="$ROOT/runtimes/claude/jarvos-session-start-hook.js"
 TURN_HOOK_SCRIPT="$ROOT/runtimes/claude/jarvos-session-turn-hook.js"
 PRECOMPACT_HOOK_SCRIPT="$ROOT/runtimes/claude/jarvos-precompact-hook.js"
 CLAUDE_MD_TEMPLATE="$ROOT/runtimes/claude/templates/CLAUDE.md.template"
+CAPTURE_SCRIPT="$ROOT/modules/jarvos-secondbrain/scripts/jarvos-capture.js"
 CLAUDE_SETTINGS="${CLAUDE_SETTINGS:-$HOME/.claude/settings.json}"
 CLAUDE_DESKTOP_CONFIG="${CLAUDE_DESKTOP_CONFIG:-$HOME/Library/Application Support/Claude/claude_desktop_config.json}"
 CLAUDE_MD_PATH="${CLAUDE_MD_PATH:-$HOME/.claude/CLAUDE.md}"
@@ -400,11 +401,11 @@ else
     echo "jarvOS Claude CLAUDE.md template not found: $CLAUDE_MD_TEMPLATE" >&2
     exit 1
   fi
-  node - "$CLAUDE_MD_TEMPLATE" "$CLAUDE_MD_PATH" <<'NODE'
+  node - "$CLAUDE_MD_TEMPLATE" "$CLAUDE_MD_PATH" "$CAPTURE_SCRIPT" <<'NODE'
 const fs = require('fs');
 const path = require('path');
 
-const [templatePath, claudeMdPath] = process.argv.slice(2);
+const [templatePath, claudeMdPath, captureScript] = process.argv.slice(2);
 const LOCAL_EXTENSIONS_MARKER = '<!-- LOCAL-EXTENSIONS-BELOW -->';
 const ADOPTED_NOTICE =
   '\n<!-- The block below was preserved from your prior ~/.claude/CLAUDE.md ' +
@@ -430,7 +431,12 @@ function timestampSuffix() {
   return new Date().toISOString().replace(/[:.]/g, '').replace('T', '-').replace('Z', 'Z');
 }
 
-const template = fs.readFileSync(templatePath, 'utf8');
+if (!path.isAbsolute(captureScript)) throw new Error('capture script path must be absolute');
+const shellQuote = (value) => `'${value.replace(/'/g, `'"'"'`)}'`;
+const template = fs.readFileSync(templatePath, 'utf8').replace(
+  '{{JARVOS_CAPTURE_SCRIPT}}',
+  shellQuote(captureScript),
+);
 const existing = readFileOrNull(claudeMdPath);
 const { mode, body } = extractLocalExtensions(existing);
 
