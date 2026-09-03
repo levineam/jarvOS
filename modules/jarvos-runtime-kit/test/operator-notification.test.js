@@ -144,3 +144,115 @@ test('stale release evidence cannot request approval', () => {
   assert.equal(result.ok, false);
   assert.match(result.errors.join('\n'), /cannot request release review/);
 });
+
+test('skill owner decision names the held skill and gives exact plain-English choices', () => {
+  const output = renderOperatorNotification({
+    schemaVersion: OPERATOR_NOTIFICATION_SCHEMA_VERSION,
+    code: 'skill-owner-decision',
+    audience: 'operator',
+    severity: 'warning',
+    automationOutcome: 'failed',
+    actionRequired: true,
+    action: 'choose-skill-option',
+    nextState: 'await-owner-decision',
+    eventReference: EVENT_REFERENCE,
+    decisionReference: EVENT_REFERENCE,
+    revision: 1,
+    optionSetVersion: 'v1',
+    skillName: 'newsletter-generator',
+    reasonCode: 'needs_owner_input',
+    options: ['share', 'keep-local', 'exclude', 'details'],
+    dedupeKey: 'skill-owner-decision-newsletter-generator',
+    observedAt: '2026-08-16T12:30:00Z',
+    freshness: 'current',
+    privateDetailReference: 'jJ3xbPq7YvmT0n6eC1fKrS9D',
+  });
+  assert.match(output, /found the newsletter-generator skill/);
+  assert.match(output, /did not share it because it needs your approval/);
+  assert.match(output, /Nothing changed/);
+  assert.match(output, /Reply “share”/);
+  assert.match(output, /reply “keep local”/);
+  assert.match(output, /reply “exclude”/);
+  assert.match(output, /reply “details”/);
+  assert.match(output, /leave the skill unchanged until you choose an option/);
+  assert.doesNotMatch(output, /needs_owner_input|SKILL\.md|\//);
+});
+
+test('skill decision summaries are actionable without exposing internal identifiers', () => {
+  const event = {
+    schemaVersion: OPERATOR_NOTIFICATION_SCHEMA_VERSION,
+    code: 'skill-decision-summary',
+    audience: 'operator',
+    severity: 'warning',
+    automationOutcome: 'failed',
+    actionRequired: true,
+    action: 'review-decisions',
+    nextState: 'await-owner-decision',
+    eventReference: EVENT_REFERENCE,
+    dedupeKey: 'skill-decision-migration-abc123',
+    observedAt: '2026-08-16T12:30:00Z',
+    freshness: 'current',
+    itemCount: 28,
+    resolvedCount: 1,
+  };
+  const output = renderOperatorNotification(event);
+  assert.match(output, /28 skills that still need your decision/);
+  assert.match(output, /left them unchanged/);
+  assert.match(output, /confirmed that 1 earlier item is resolved/);
+  assert.match(output, /Review the pending decisions/);
+  assert.doesNotMatch(output, /resolvedCount|needs_owner_input|decision-/);
+});
+
+test('skill notification fields stay scoped to their event kind and options remain strings', () => {
+  const summaryWithSkillFields = validateOperatorNotificationEvent({
+    schemaVersion: OPERATOR_NOTIFICATION_SCHEMA_VERSION,
+    code: 'skill-decision-summary',
+    audience: 'operator',
+    severity: 'warning',
+    automationOutcome: 'failed',
+    actionRequired: true,
+    action: 'review-decisions',
+    nextState: 'await-owner-decision',
+    eventReference: EVENT_REFERENCE,
+    dedupeKey: 'skill-decision-summary-1',
+    observedAt: '2026-08-16T12:30:00Z',
+    freshness: 'current',
+    itemCount: 1,
+    skillName: '/Users/andrew/private/skill',
+  });
+  assert.equal(summaryWithSkillFields.ok, false);
+  assert.match(summaryWithSkillFields.errors.join('\n'), /skillName is only valid for individual skill decisions/);
+
+  const individualDecision = {
+    schemaVersion: OPERATOR_NOTIFICATION_SCHEMA_VERSION,
+    code: 'skill-owner-decision',
+    audience: 'operator',
+    severity: 'warning',
+    automationOutcome: 'failed',
+    actionRequired: true,
+    action: 'choose-skill-option',
+    nextState: 'await-owner-decision',
+    eventReference: EVENT_REFERENCE,
+    decisionReference: EVENT_REFERENCE,
+    revision: 1,
+    optionSetVersion: 'v1',
+    skillName: 'newsletter-generator',
+    reasonCode: 'needs_owner_input',
+    options: ['share'],
+    dedupeKey: 'skill-owner-decision-1',
+    observedAt: '2026-08-16T12:30:00Z',
+    freshness: 'current',
+    itemCount: 1,
+  };
+  const decisionWithSummaryFields = validateOperatorNotificationEvent(individualDecision);
+  assert.equal(decisionWithSummaryFields.ok, false);
+  assert.match(decisionWithSummaryFields.errors.join('\n'), /itemCount is only valid for skill decision summaries/);
+
+  const objectOption = validateOperatorNotificationEvent({
+    ...individualDecision,
+    itemCount: undefined,
+    options: [{ toString: () => 'share' }],
+  });
+  assert.equal(objectOption.ok, false);
+  assert.match(objectOption.errors.join('\n'), /unsupported or duplicate choice/);
+});
