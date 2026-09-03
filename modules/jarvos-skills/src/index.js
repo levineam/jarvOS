@@ -225,6 +225,19 @@ function resolveProjectionTrigger(value) {
   if (!realStat.isFile() || (typeof process.getuid === 'function' && realStat.uid !== process.getuid()) || (realStat.mode & 0o022) !== 0) {
     throw new Error('skill projection trigger changed during validation');
   }
+  let ancestor = path.dirname(real);
+  for (;;) {
+    const ancestorStat = fs.statSync(ancestor);
+    const trustedOwner = ancestorStat.uid === 0
+      || (typeof process.getuid === 'function' && ancestorStat.uid === process.getuid());
+    const unsafeWritable = (ancestorStat.mode & 0o022) !== 0 && (ancestorStat.mode & 0o1000) === 0;
+    if (!ancestorStat.isDirectory() || !trustedOwner || unsafeWritable) {
+      throw new Error('skill projection trigger has untrusted ancestry');
+    }
+    const parent = path.dirname(ancestor);
+    if (parent === ancestor) break;
+    ancestor = parent;
+  }
   return real;
 }
 
