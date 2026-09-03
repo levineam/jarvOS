@@ -79,6 +79,7 @@ test('resolveConfig uses shared jarvOS vault paths when available', () => {
 
 test('resolveConfig can load shared paths from an installed secondbrain package', () => {
   const root = tempDir();
+  const gbrainRoot = path.join(root, 'node_modules', '@jarvos', 'gbrain');
   const packageRoot = path.join(root, 'node_modules', '@jarvos', 'secondbrain');
   const packageDir = path.join(packageRoot, 'bridge', 'config');
   const installedModule = path.join(packageDir, 'jarvos-paths.js');
@@ -94,13 +95,18 @@ exports.getNotesDir = () => ${JSON.stringify(notes)};
 `,
     'utf8',
   );
+  fs.mkdirSync(path.join(gbrainRoot, 'src'), { recursive: true });
+  fs.copyFileSync(
+    path.join(__dirname, '..', 'src', 'index.js'),
+    path.join(gbrainRoot, 'src', 'index.js'),
+  );
   const env = { ...process.env };
   for (const key of ['JARVOS_CLAWD_DIR', 'CLAWD_DIR', 'JARVOS_VAULT_DIR', 'JARVOS_NOTES_DIR', 'VAULT_NOTES_DIR']) {
     delete env[key];
   }
   const child = spawnSync(process.execPath, [
     '-e',
-    `const gbrain = require(${JSON.stringify(path.join(__dirname, '..', 'src', 'index.js'))});
+    `const gbrain = require(${JSON.stringify(path.join(gbrainRoot, 'src', 'index.js'))});
 const result = gbrain.resolveConfig({ brainDir: ${JSON.stringify(path.join(root, 'brain'))} });
 process.stdout.write(JSON.stringify({ vaultDir: result.vaultDir, notesDir: result.notesDir }));
 `,
@@ -113,6 +119,35 @@ process.stdout.write(JSON.stringify({ vaultDir: result.vaultDir, notesDir: resul
   const result = JSON.parse(child.stdout);
   assert.equal(result.vaultDir, vault);
   assert.equal(result.notesDir, notes);
+});
+
+test('resolveConfig does not load shared paths from the working directory', () => {
+  const root = tempDir();
+  const packageDir = path.join(root, 'node_modules', '@jarvos', 'secondbrain', 'bridge', 'config');
+  const marker = path.join(root, 'loaded');
+  const vault = path.join(root, 'safe-vault');
+  const notes = path.join(root, 'safe-notes');
+
+  fs.mkdirSync(packageDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(packageDir, 'jarvos-paths.js'),
+    `require('fs').writeFileSync(${JSON.stringify(marker)}, 'loaded');\n`,
+    'utf8',
+  );
+  const child = spawnSync(process.execPath, [
+    '-e',
+    `const gbrain = require(${JSON.stringify(path.join(__dirname, '..', 'src', 'index.js'))});
+const result = gbrain.resolveConfig({ vaultDir: ${JSON.stringify(vault)}, notesDir: ${JSON.stringify(notes)} });
+process.stdout.write(JSON.stringify({ vaultDir: result.vaultDir, notesDir: result.notesDir }));
+`,
+  ], {
+    cwd: root,
+    encoding: 'utf8',
+  });
+
+  assert.equal(child.status, 0, child.stderr);
+  assert.deepEqual(JSON.parse(child.stdout), { vaultDir: vault, notesDir: notes });
+  assert.equal(fs.existsSync(marker), false);
 });
 
 test('resolveConfig derives notes from an explicit vault override', () => {
