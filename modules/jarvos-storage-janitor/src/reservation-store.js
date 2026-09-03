@@ -1,7 +1,6 @@
 'use strict';
 
-const crypto = require('node:crypto');
-const { isObject, clone, isOpaqueId, isSafeNonNegativeInt, isSafePositiveInt, isValidClockValue, normalizeTime } = require('./primitives');
+const { isObject, clone, isOpaqueId, isSafeNonNegativeInt, isSafePositiveInt, isValidClockValue, normalizeTime, digestOf } = require('./primitives');
 
 const RESERVATION_STORE_SCHEMA_VERSION = 'jarvos-storage-janitor.reservation-store.v1';
 const RESERVATION_STATES = Object.freeze(['active', 'consumed', 'expired']);
@@ -42,7 +41,7 @@ function createReservationContentionError() {
 }
 
 function reservationId(idempotencyKey) {
-  return `reservation_${crypto.createHash('sha256').update(idempotencyKey).digest('hex').slice(0, 32)}`;
+  return `reservation_${digestOf(idempotencyKey).slice(0, 32)}`;
 }
 
 function publicReservation(record) {

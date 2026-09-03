@@ -1,6 +1,6 @@
 'use strict';
 
-const { isObject, isOpaqueId, isDigest, isSafeNonNegativeInt, isValidClockValue, normalizeTime, digestOf, collectUnknownFieldErrors } = require('./primitives');
+const { isObject, isOpaqueId, isDigest, isSafeNonNegativeInt, isValidClockValue, normalizeTime, digestOf, collectUnknownFieldErrors, safeSum } = require('./primitives');
 const { validateCapacityPolicy } = require('./policy');
 const { DISPOSITIONS, computeCapacityPreflight } = require('./preflight');
 const { validateExternalReclaimEvidence, RECLAIM_IDENTITY_FIELDS } = require('./reclaim');
@@ -133,8 +133,8 @@ async function authorizeReclaimReservation({ evidence, expected, remeasurement, 
     // Reserve the full required total, including the safety margin, so an
     // authorized reservation actually covers the policy's declared
     // requirement rather than only its base requiredBytes.
-    const requiredTotal = policy.requiredBytes + policy.safetyMarginBytes;
-    if (!Number.isSafeInteger(requiredTotal)) {
+    const requiredTotal = safeSum(policy.requiredBytes, policy.safetyMarginBytes);
+    if (requiredTotal === null) {
       return { ok: false, outcome: 'blocked', errors: ['policy.requiredBytes + policy.safetyMarginBytes overflows a safe integer'], reservation: null };
     }
 

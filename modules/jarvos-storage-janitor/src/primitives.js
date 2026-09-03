@@ -42,6 +42,12 @@ function isSafePositiveInt(value) {
   return typeof value === 'number' && Number.isSafeInteger(value) && value > 0;
 }
 
+function safeSum(a, b) {
+  if (!Number.isSafeInteger(a) || !Number.isSafeInteger(b)) return null;
+  const sum = a + b;
+  return Number.isSafeInteger(sum) ? sum : null;
+}
+
 function isValidClockValue(value) {
   return typeof value === 'string' && UTC_ISO_TIMESTAMP.test(value) && !Number.isNaN(new Date(value).getTime());
 }
@@ -152,6 +158,7 @@ module.exports = {
   isDigest,
   isSafeNonNegativeInt,
   isSafePositiveInt,
+  safeSum,
   isValidClockValue,
   normalizeTime,
   digestOf,

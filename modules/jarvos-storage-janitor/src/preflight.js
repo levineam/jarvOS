@@ -1,17 +1,11 @@
 'use strict';
 
-const { isValidClockValue } = require('./primitives');
+const { isValidClockValue, safeSum } = require('./primitives');
 const { validateCapacityObservation } = require('./observation');
 const { validateCapacityPolicy } = require('./policy');
 const { validateCandidateSet, computeCandidateSetDigest } = require('./catalog');
 
 const DISPOSITIONS = Object.freeze(['proceed', 'blocked', 'recommend_external_reclaim']);
-
-function safeSum(a, b) {
-  if (!Number.isSafeInteger(a) || !Number.isSafeInteger(b)) return null;
-  const sum = a + b;
-  return Number.isSafeInteger(sum) ? sum : null;
-}
 
 // Any failure here is an unsafe write: a caller with no verdict must not
 // proceed, so every rejection path returns `blocked` rather than throwing or

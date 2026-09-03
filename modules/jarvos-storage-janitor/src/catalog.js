@@ -40,7 +40,7 @@ function validateCandidateSet(candidates) {
     for (const [index, candidate] of candidates.entries()) {
       const validation = validateCandidate(candidate);
       if (!validation.ok) { errors.push(...validation.errors.map((e) => `candidates[${index}].${e}`)); continue; }
-      if (!isEligibleCandidate(candidate)) errors.push(`candidates[${index}] (${candidate.candidateId}) is not eligible for credit`);
+      if (!CANDIDATE_FLAGS.every((flag) => candidate[flag] === false)) errors.push(`candidates[${index}] (${candidate.candidateId}) is not eligible for credit`);
       if (seen.has(candidate.candidateId)) errors.push(`candidates[${index}] duplicates candidateId ${candidate.candidateId}`);
       seen.add(candidate.candidateId);
     }
