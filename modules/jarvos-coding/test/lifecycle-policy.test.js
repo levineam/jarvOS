@@ -94,3 +94,28 @@ test('supported contracts name Git and Agent Mail as authority and tracker recor
   assert.equal(submission.coordinationAuthority, 'agent-mail');
   assert.equal(submission.trackerProjection, 'optional-one-way-after-authoritative-outcome');
 });
+
+test('submission fails closed when branch claims are not backed by a durable work identity', () => {
+  const input = authoritativeLifecycleInput();
+  delete input.workIdentity;
+  input.git.branch = 'feature/no-work-id';
+  input.git.issueNamed = true;
+
+  const submission = evaluateSubmissionGate(input);
+
+  assert.equal(submission.ready, false);
+  assert.equal(submission.missing.includes('issue_linkage'), true);
+  assert.equal(submission.missing.includes('branch_hygiene'), true);
+});
+
+test('branch hygiene derives issue naming instead of trusting a caller claim', () => {
+  const input = authoritativeLifecycleInput();
+  input.git.branch = 'feature/unrelated-change';
+  input.git.issueNamed = true;
+
+  const submission = evaluateSubmissionGate(input);
+
+  assert.equal(submission.ready, false);
+  assert.equal(submission.missing.includes('issue_linkage'), false);
+  assert.equal(submission.missing.includes('branch_hygiene'), true);
+});
