@@ -1027,6 +1027,84 @@ try {
   bad('@jarvos/agentify channel-context load', e);
 }
 
+// ── @jarvos/storage-janitor ─────────────────────────────────────────────────
+
+console.log('\n→ @jarvos/storage-janitor');
+
+try {
+  const janitor = require(path.join(ROOT, 'modules/jarvos-storage-janitor/src/index.js'));
+
+  const policy = {
+    version: 'jarvos-storage-janitor.policy.v1',
+    policyId: 'policy:smoke',
+    requiredBytes: 1073741824,
+    safetyMarginBytes: 104857600,
+  };
+  const now = '2026-09-03T12:01:00.000Z';
+
+  const sufficient = janitor.computeCapacityPreflight({
+    observation: {
+      version: 'jarvos-storage-janitor.observation.v1',
+      candidateSetId: null,
+      observedAt: '2026-09-03T12:00:00.000Z',
+      freshUntil: '2026-09-03T12:05:00.000Z',
+      bytesAvailable: 2147483648,
+      bytesTotal: 1000000000000,
+    },
+    policy,
+    now,
+  });
+  if (sufficient.ok && sufficient.disposition === 'proceed') {
+    ok('computeCapacityPreflight proceeds on fresh sufficient capacity');
+  } else {
+    bad('computeCapacityPreflight proceed', new Error(JSON.stringify(sufficient)));
+  }
+
+  const insufficient = janitor.computeCapacityPreflight({
+    observation: {
+      version: 'jarvos-storage-janitor.observation.v1',
+      candidateSetId: null,
+      observedAt: '2026-09-03T12:00:00.000Z',
+      freshUntil: '2026-09-03T12:05:00.000Z',
+      bytesAvailable: 627048448,
+      bytesTotal: 1000000000000,
+    },
+    policy,
+    now,
+  });
+  if (insufficient.ok && insufficient.disposition === 'blocked') {
+    ok('computeCapacityPreflight blocks on insufficient capacity with no candidates');
+  } else {
+    bad('computeCapacityPreflight blocked', new Error(JSON.stringify(insufficient)));
+  }
+
+  const missingNow = janitor.computeCapacityPreflight({
+    observation: {
+      version: 'jarvos-storage-janitor.observation.v1',
+      candidateSetId: null,
+      observedAt: '2026-09-03T12:00:00.000Z',
+      freshUntil: '2026-09-03T12:05:00.000Z',
+      bytesAvailable: 2147483648,
+      bytesTotal: 1000000000000,
+    },
+    policy,
+  });
+  if (!missingNow.ok && missingNow.disposition === 'blocked') {
+    ok('computeCapacityPreflight fails closed on a missing now');
+  } else {
+    bad('computeCapacityPreflight missing now', new Error(JSON.stringify(missingNow)));
+  }
+
+  const invalid = janitor.validateCapacityObservation({});
+  if (invalid.ok === false) {
+    ok('validateCapacityObservation fails closed on a missing observation');
+  } else {
+    bad('validateCapacityObservation', new Error(JSON.stringify(invalid)));
+  }
+} catch (e) {
+  bad('@jarvos/storage-janitor module load', e);
+}
+
 // ── Summary ─────────────────────────────────────────────────────────────────
 
 console.log(`\n${pass + fail} checks: ${pass} passed, ${fail} failed.\n`);
