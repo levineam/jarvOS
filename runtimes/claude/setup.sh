@@ -67,7 +67,18 @@ function trustedExecutable(value) {
   const stat = fs.lstatSync(value); const uid = typeof process.getuid === 'function' ? process.getuid() : null;
   return !stat.isSymbolicLink() && stat.isFile() && (stat.mode & 0o077) === 0 && (stat.mode & 0o111) !== 0 && (uid === null || stat.uid === uid);
 }
-if (!trustedDirectory(root) || !trustedExecutable(dispatcher)) throw new Error('stable jarvOS stewardship dispatcher is missing or unsafe');
+function trustedAncestry(value) {
+  const uid = typeof process.getuid === 'function' ? process.getuid() : null;
+  if (!path.isAbsolute(value) || path.resolve(value) !== value || fs.realpathSync(value) !== value) return false;
+  for (let current = value; ; current = path.dirname(current)) {
+    const stat = fs.lstatSync(current);
+    const trustedOwner = uid === null || stat.uid === uid || stat.uid === 0;
+    const safelyWritable = (stat.mode & 0o022) === 0 || (stat.mode & 0o1000) !== 0;
+    if (stat.isSymbolicLink() || !stat.isDirectory() || !trustedOwner || !safelyWritable) return false;
+    if (path.dirname(current) === current) return true;
+  }
+}
+if (!trustedDirectory(root) || !trustedAncestry(root) || !trustedExecutable(dispatcher)) throw new Error('stable jarvOS stewardship dispatcher is missing or unsafe');
 NODE
 elif [ "${JARVOS_MANAGED_HARNESS_ROLLBACK:-0}" = "1" ] && [ -n "$STEWARDSHIP_STABLE_ROOT" ] && [ "${STEWARDSHIP_STABLE_ROOT#/}" != "$STEWARDSHIP_STABLE_ROOT" ]; then
   # The bundle may already be gone. Its absolute former path is still the only
