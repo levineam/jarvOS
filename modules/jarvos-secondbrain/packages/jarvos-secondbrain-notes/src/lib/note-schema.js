@@ -263,7 +263,7 @@ function parseScalarValue(raw) {
     const items = [];
     for (const line of String(raw).split('\n')) {
       const m = line.match(/^\s*-\s+(.*)$/);
-      if (m) items.push(m[1].trim());
+      if (m) items.push(stripQuotes(m[1]));
     }
     if (items.length) return items;
   }
@@ -306,7 +306,12 @@ function parseScalarValue(raw) {
     try {
       return JSON.parse(trimmed);
     } catch (_) {
-      // Fall through.
+      // YAML flow sequences do not require JSON-style quoted strings.
+      if (trimmed.startsWith('[') && trimmed.endsWith(']')) {
+        const contents = trimmed.slice(1, -1).trim();
+        if (!contents) return [];
+        return contents.split(',').map((item) => stripQuotes(item));
+      }
     }
   }
   return stripQuotes(trimmed);
