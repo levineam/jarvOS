@@ -298,11 +298,30 @@ function codingControlPlaneManifest(options = {}) {
 }
 
 function issueIdentifierFor(command = {}) {
-  const identifier = command.commandSpec?.arguments?.issueIdentifier
-    || command.commandSpec?.arguments?.issue?.identifier
-    || command.resource?.id;
+  const identifier = command.resource?.id;
   if (!identifier) throw new Error('coding command requires an issueIdentifier-scoped resource');
   return String(identifier);
+}
+
+function assertIssueIdentity(value, issueIdentifier, location, seen = new Set()) {
+  if (!value || typeof value !== 'object' || seen.has(value)) return;
+  seen.add(value);
+
+  if (Object.hasOwn(value, 'issueIdentifier')
+    && String(value.issueIdentifier) !== issueIdentifier) {
+    throw new Error(`${location}.issueIdentifier must match command.resource.id`);
+  }
+  if (value.issue && typeof value.issue === 'object'
+    && Object.hasOwn(value.issue, 'identifier')
+    && String(value.issue.identifier) !== issueIdentifier) {
+    throw new Error(`${location}.issue.identifier must match command.resource.id`);
+  }
+
+  for (const [key, child] of Object.entries(value)) {
+    if (key !== 'issue' && child && typeof child === 'object') {
+      assertIssueIdentity(child, issueIdentifier, `${location}.${key}`, seen);
+    }
+  }
 }
 
 function eventsByStage(result = {}) {
@@ -616,6 +635,11 @@ function createCodingControlPlanePort(options = {}) {
       throw new Error('coding control-plane execution requires assertCurrentFence');
     }
 
+    const issueIdentifier = issueIdentifierFor(command);
+    const args = command.commandSpec.arguments || {};
+    assertIssueIdentity(args, issueIdentifier, 'command.commandSpec.arguments');
+    assertIssueIdentity(command.checkpoint, issueIdentifier, 'command.checkpoint');
+
     // Idempotent redelivery must not depend on a still-current lease fence.
     const completedResult = completed.get(command.id);
     if (completedResult) return completedResult;
@@ -626,11 +650,9 @@ function createCodingControlPlanePort(options = {}) {
       throw new Error('coding host adapter is unavailable for take-issue-to-done');
     }
 
-    const issueIdentifier = issueIdentifierFor(command);
-    const args = command.commandSpec.arguments || {};
     const result = await hostAdapter.runTakeIssueToDone({
       issueIdentifier,
-      issue: args.issue || { identifier: issueIdentifier },
+      issue: { ...(args.issue || {}), identifier: issueIdentifier },
       branch: args.branch,
       baseRef: args.baseRef,
       resumeFrom: command.checkpoint || args.resumeFrom || null,
@@ -647,8 +669,15 @@ function createCodingControlPlanePort(options = {}) {
 
     const orchestrator = result.result || result;
     const assessment = assessTerminalSubmission(orchestrator);
+    if (assessment.submissionEvidence.issueIdentifier != null
+      && String(assessment.submissionEvidence.issueIdentifier) !== issueIdentifier) {
+      throw new Error('submissionEvidence.issueIdentifier must match command.resource.id');
+    }
     if (!assessment.ok) {
       throw new Error(`coding host did not complete command: ${assessment.reasons.join('; ')}`);
+    }
+    if (assessment.submissionEvidence.issueIdentifier == null) {
+      throw new Error('submissionEvidence.issueIdentifier must match command.resource.id');
     }
 
     const execution = {
