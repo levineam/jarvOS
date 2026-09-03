@@ -349,16 +349,19 @@ Sync never migrates a legacy-shaped config in place. It reports
 manually or pass `--config` to a new path. A portable existing config remains
 `already-synced`; a different config remains a conflict.
 
-`jarvos doctor` uses the checked-in profile manifest and reports portable health
+`jarvos doctor` is the profile-aware System Doctor. It reports portable health
 checks for the starter workspace, `jarvos.config.json`, vault folders, Node.js,
-and the public agent-context package. It also verifies your journal stays safe:
+and the public agent-context package, then lists only optional components
+selected by a profile-bound health receipt. A clean install does not fail
+because an unselected local provider is absent. It also verifies your journal stays safe:
 `vault-path-stale` catches a configured vault root that has moved or gone away,
 and `journal-conflict` catches a second journaling tool (Obsidian's `journals`
 plugin or core Daily notes) writing into the same `Journal/` folder jarvOS owns.
 Run it after install and whenever you change vault or Obsidian settings. See the
 [Journal Install Contract](./docs/journal-install-contract.md) for the
-single-writer rule these checks enforce. Local-only Paperclip, GBrain, and full
-profile checks are intentionally out of the minimal public profile.
+single-writer rule these checks enforce. Local-only Paperclip, GBrain, SearXNG,
+OpenClaw, and Telegram checks are intentionally out of the minimal public
+profile unless an owner-side producer explicitly selects them.
 
 ### OpenClaw
 
