@@ -182,8 +182,30 @@ function routeThreadKey(input = {}) {
 // Defaults to the bundled modules copy; set JARVOS_SECONDBRAIN_DIR to an absolute
 // path (e.g. the canonical clawd mirror) to point all note-creation through it.
 function secondbrainDir() {
-  return expandTilde(process.env.JARVOS_SECONDBRAIN_DIR)
-    || path.join(JARVOS_ROOT, 'modules', 'jarvos-secondbrain');
+  const configured = expandTilde(process.env.JARVOS_SECONDBRAIN_DIR);
+  const candidate = configured || path.join(JARVOS_ROOT, 'modules', 'jarvos-secondbrain');
+  if (!path.isAbsolute(candidate)) {
+    throw new Error('JARVOS_SECONDBRAIN_DIR must be an absolute path');
+  }
+
+  let trustedRoot;
+  try {
+    trustedRoot = fs.realpathSync(candidate);
+  } catch {
+    throw new Error('JARVOS_SECONDBRAIN_DIR must identify an existing directory');
+  }
+
+  const uid = typeof process.getuid === 'function' ? process.getuid() : null;
+  for (let current = trustedRoot; ; current = path.dirname(current)) {
+    const stat = fs.statSync(current);
+    const trustedOwner = uid === null || stat.uid === uid || stat.uid === 0;
+    if (!stat.isDirectory() || !trustedOwner || (stat.mode & 0o022) !== 0) {
+      throw new Error('JARVOS_SECONDBRAIN_DIR must be in an owner-controlled directory tree');
+    }
+    const parent = path.dirname(current);
+    if (parent === current) break;
+  }
+  return trustedRoot;
 }
 
 function loadJarvosPaths() {
