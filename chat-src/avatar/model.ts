@@ -92,8 +92,14 @@ export function setAvatarState(model: AvatarModel, state: AvatarState): void {
   model.transition = 0;
   model.stateElapsed = 0;
   if (state === 'interrupted') {
+    // Keep speechEnergyTarget latched so a later speaking turn still honors the
+    // last setSpeechEnergy value. Mouth motion is already gated by speaking weight.
     model.gesture = null;
-    model.speechEnergyTarget = 0;
+    model.speechEnergy = 0;
+  }
+  if (state === 'speaking') {
+    // stateElapsed resets above; refresh the auto-gesture schedule for this turn.
+    model.nextGestureAt = 2.8;
   }
 }
 

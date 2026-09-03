@@ -84,7 +84,7 @@ export class ParticleAvatar implements AvatarController {
   }
 
   async init(): Promise<this> {
-    if (this.initialized) return this;
+    if (this.initialized || this.destroyed) return this;
     await this.app.init({
       antialias: false,
       autoDensity: true,
@@ -97,6 +97,11 @@ export class ParticleAvatar implements AvatarController {
       width: this.host.clientWidth || 460,
       height: this.host.clientHeight || 560,
     });
+    // destroy() may have won the race while Application.init() was pending.
+    if (this.destroyed) {
+      this.teardownRenderer();
+      return this;
+    }
     this.texture = createGlowTexture();
     this.app.canvas.className = 'avatar-canvas';
     this.app.canvas.setAttribute('aria-label', 'Abstract jarvOS point-light avatar');
@@ -170,11 +175,17 @@ export class ParticleAvatar implements AvatarController {
   destroy(): void {
     if (this.destroyed) return;
     this.destroyed = true;
+    this.teardownRenderer();
+  }
+
+  private teardownRenderer(): void {
     document.removeEventListener('visibilitychange', this.visibilityHandler);
     this.resizeObserver.disconnect();
     this.app.ticker?.remove(this.tick);
     if (this.app.renderer) this.app.destroy({ removeView: true }, { children: true, texture: false });
     this.texture?.destroy(true);
+    this.texture = undefined;
+    this.host.replaceChildren();
     this.initialized = false;
   }
 

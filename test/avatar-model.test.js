@@ -39,6 +39,25 @@ test('speech energy is clamped and smoothed', async () => {
   assert.equal(model.speechEnergyTarget, 0);
 });
 
+test('interrupt keeps speech energy latch and speaking resets gesture schedule', async () => {
+  const { createAvatarModel, setAvatarState, setSpeechEnergy, stepAvatarModel } = await modelModule;
+  const model = createAvatarModel('speaking');
+
+  setSpeechEnergy(model, 0.42);
+  model.nextGestureAt = 8.4;
+  setAvatarState(model, 'interrupted');
+  assert.equal(model.speechEnergyTarget, 0.42);
+  assert.equal(model.speechEnergy, 0);
+
+  for (let frame = 0; frame < 30; frame += 1) stepAvatarModel(model, 1 / 60);
+  assert.equal(model.targetState, 'listening');
+
+  setAvatarState(model, 'speaking');
+  assert.equal(model.speechEnergyTarget, 0.42);
+  assert.equal(model.nextGestureAt, 2.8);
+  assert.ok(model.stateElapsed < model.nextGestureAt);
+});
+
 test('hidden avatars do not advance and every gesture stays restrained', async () => {
   const { createAvatarModel, gesturePose, stepAvatarModel } = await modelModule;
   const model = createAvatarModel('hidden');

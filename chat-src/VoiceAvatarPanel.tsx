@@ -99,6 +99,9 @@ export function VoiceAvatarPanel({ onClose, voiceState }: {
     stateRef.current = next;
     setState(next);
     avatarRef.current?.setState(next);
+    if (next === 'speaking') {
+      avatarRef.current?.setSpeechEnergy(controlsRef.current.speechEnergy);
+    }
   }
 
   function syncRendererState(next: AvatarState) {

@@ -1,0 +1,43 @@
+# Submission receipt — SUP-3894
+
+**Issue:** Replay voice-mode particle avatar through jarvOS coding gate  
+**Repo:** `levineam/jarvos-desktop`  
+**Branch:** `SUP-3894/voice-mode-particle-avatar`  
+**Submitted head:** `625f02a572eb96852ff147ce9a7ae3d1ffd2aa52`  
+**Base:** `origin/master` @ `b4113ed7d3559faebe461b09670be3faa3a79314`  
+**Provenance (unmanaged, do not merge):** PR #4 @ `0443147df93996fd9cfd13334156ce067f05ce67`
+
+## Gate bundle
+
+| Gate | Status | Evidence |
+| --- | --- | --- |
+| Paperclip issue + plan | present | [SUP-3894](/SUP/issues/SUP-3894) |
+| Issue-named branch / worktree | present | `SUP-3894/voice-mode-particle-avatar` @ `/Users/andrew/clawd-worktrees/SUP-3894-paperclip` |
+| Tests | pass | `npm test` → 25/25 |
+| Production build | pass | `NODE_ENV=production npm run build` (committed `VoiceAvatarPanel.js` rebuilt; `chat.js` unchanged) |
+| Smoke | pass | `npm run smoke` |
+| Clawpatch / slice review | advisory complete | `.jarvos-gate/SUP-3894/clawpatch-advisory.md` + run `20260903T015910-2f077d` |
+| CE review-of-record | Ready for merge | `.jarvos-gate/SUP-3894/ce-review-of-record.md` |
+| Goal-alignment | aligned | `.jarvos-gate/SUP-3894/goal-alignment.md` |
+| Replacement PR | pending this submission | open issue-named PR; close unmanaged PR #4 |
+
+## Fixes landed after review
+
+- Speech-energy latch survives interrupt; re-applied on speaking entry
+- Speaking re-entry resets auto-gesture schedule
+- Destroy-during-`Application.init` race hardened
+- Regression test for latch + gesture schedule
+
+## Launch demo
+
+```bash
+cd /Users/andrew/clawd-worktrees/SUP-3894-paperclip
+npm run serve
+# open http://127.0.0.1:8787 (or configured port) → Chat → Voice avatar
+```
+
+## Next
+
+1. Push branch and open replacement PR from this issue-named branch.
+2. Close unmanaged PR #4 with pointer to the replacement.
+3. Move Paperclip issue to `in_review` pending PR review/CI; autonomous merge when gates stay clean.
