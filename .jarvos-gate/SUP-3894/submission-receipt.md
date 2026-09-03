@@ -3,7 +3,7 @@
 **Issue:** Replay voice-mode particle avatar through jarvOS coding gate  
 **Repo:** `levineam/jarvos-desktop`  
 **Branch:** `SUP-3894/voice-mode-particle-avatar`  
-**Submitted head:** `ca38b262d110cb6fd056b63776a6b446e77221e8` (fix + gate receipts; tip may include this receipt pin)  
+**Submitted head:** `ca38b262d110cb6fd056b63776a6b446e77221e8` (fix + gate receipts; tip may include receipt pin)  
 **Base:** `origin/master` @ `b4113ed7d3559faebe461b09670be3faa3a79314`  
 **Provenance (unmanaged, do not merge):** PR #4 @ `0443147df93996fd9cfd13334156ce067f05ce67`
 
@@ -19,7 +19,7 @@
 | Clawpatch / slice review | advisory complete | `.jarvos-gate/SUP-3894/clawpatch-advisory.md` + run `20260903T015910-2f077d` |
 | CE review-of-record | Ready for merge | `.jarvos-gate/SUP-3894/ce-review-of-record.md` |
 | Goal-alignment | aligned | `.jarvos-gate/SUP-3894/goal-alignment.md` |
-| Replacement PR | pending this submission | open issue-named PR; close unmanaged PR #4 |
+| Replacement PR | pending this handoff | branch pushed; body at `.jarvos-gate/SUP-3894/pr-body.md` |
 
 ## Fixes landed after review
 
@@ -36,8 +36,12 @@ npm run serve
 # open http://127.0.0.1:8787 (or configured port) → Chat → Voice avatar
 ```
 
-## Next
+## Publication
 
-1. Push branch and open replacement PR from this issue-named branch.
-2. Close unmanaged PR #4 with pointer to the replacement.
-3. Move Paperclip issue to `in_review` pending PR review/CI; autonomous merge when gates stay clean.
+```bash
+cd /Users/andrew/clawd-worktrees/SUP-3894-paperclip
+gh pr create --base master --head SUP-3894/voice-mode-particle-avatar \
+  --title "feat(SUP-3894): voice-mode particle avatar (coding-gate replay)" \
+  --body-file .jarvos-gate/SUP-3894/pr-body.md
+gh pr close 4 --comment "Superseded by compliant coding-gate replay on SUP-3894/voice-mode-particle-avatar. Do not merge this unmanaged provenance PR."
+```
