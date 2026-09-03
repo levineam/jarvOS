@@ -457,8 +457,10 @@ test('the known-good snapshot refreshes across a contract migration', () => {
 
   const previousJournalDir = process.env.JARVOS_JOURNAL_DIR;
   const previousProjectsDir = process.env.JARVOS_PROJECTS_DIR;
+  const previousStateDir = process.env.JARVOS_JOURNAL_STATE_DIR;
   process.env.JARVOS_JOURNAL_DIR = journalDir;
   process.env.JARVOS_PROJECTS_DIR = path.join(tmp, 'Vault', 'Projects');
+  process.env.JARVOS_JOURNAL_STATE_DIR = path.join(tmp, 'local-state');
 
   try {
     const config = loadConfig();
@@ -476,7 +478,7 @@ test('the known-good snapshot refreshes across a contract migration', () => {
     fs.writeFileSync(path.join(journalDir, `${date}.md`), preMigration, 'utf8');
 
     // A snapshot exactly as the previous contract would have recorded it.
-    const stateDir = path.join(tmp, 'Vault', '.jarvos', 'journal-maintenance');
+    const stateDir = process.env.JARVOS_JOURNAL_STATE_DIR;
     fs.mkdirSync(path.join(stateDir, 'known-good'), { recursive: true });
     fs.writeFileSync(path.join(stateDir, 'known-good', `${date}.md`), preMigration, 'utf8');
     fs.writeFileSync(path.join(stateDir, 'state.json'), JSON.stringify({
@@ -509,6 +511,8 @@ test('the known-good snapshot refreshes across a contract migration', () => {
     else process.env.JARVOS_JOURNAL_DIR = previousJournalDir;
     if (previousProjectsDir === undefined) delete process.env.JARVOS_PROJECTS_DIR;
     else process.env.JARVOS_PROJECTS_DIR = previousProjectsDir;
+    if (previousStateDir === undefined) delete process.env.JARVOS_JOURNAL_STATE_DIR;
+    else process.env.JARVOS_JOURNAL_STATE_DIR = previousStateDir;
   }
 });
 
@@ -528,8 +532,10 @@ test('a damaged entry must not overwrite a good pre-migration snapshot', () => {
 
   const prevJournal = process.env.JARVOS_JOURNAL_DIR;
   const prevProjects = process.env.JARVOS_PROJECTS_DIR;
+  const prevState = process.env.JARVOS_JOURNAL_STATE_DIR;
   process.env.JARVOS_JOURNAL_DIR = journalDir;
   process.env.JARVOS_PROJECTS_DIR = path.join(tmp, 'Vault', 'Projects');
+  process.env.JARVOS_JOURNAL_STATE_DIR = path.join(tmp, 'local-state');
 
   try {
     const config = loadConfig();
@@ -559,7 +565,7 @@ test('a damaged entry must not overwrite a good pre-migration snapshot', () => {
     ].join('\n');
     fs.writeFileSync(path.join(journalDir, `${date}.md`), gutted, 'utf8');
 
-    const stateDir = path.join(tmp, 'Vault', '.jarvos', 'journal-maintenance');
+    const stateDir = process.env.JARVOS_JOURNAL_STATE_DIR;
     const kgPath = path.join(stateDir, 'known-good', `${date}.md`);
     fs.mkdirSync(path.dirname(kgPath), { recursive: true });
     fs.writeFileSync(kgPath, intact, 'utf8');
@@ -588,5 +594,6 @@ test('a damaged entry must not overwrite a good pre-migration snapshot', () => {
   } finally {
     if (prevJournal === undefined) delete process.env.JARVOS_JOURNAL_DIR; else process.env.JARVOS_JOURNAL_DIR = prevJournal;
     if (prevProjects === undefined) delete process.env.JARVOS_PROJECTS_DIR; else process.env.JARVOS_PROJECTS_DIR = prevProjects;
+    if (prevState === undefined) delete process.env.JARVOS_JOURNAL_STATE_DIR; else process.env.JARVOS_JOURNAL_STATE_DIR = prevState;
   }
 });
