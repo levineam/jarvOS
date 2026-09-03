@@ -43,7 +43,11 @@ function createManagedSoftwareCatalog(input = {}) {
   function revise({ entryId, patch, actor, pendingApprovals = [] } = {}) {
     if (typeof entryId !== 'string' || !byId.has(entryId)) throw new Error('known entryId is required');
     if (!patch || typeof patch !== 'object' || Array.isArray(patch)) throw new Error('revision patch is required');
-    const sensitiveFields = new Set(['credentialRef', 'notificationPreferenceRef', 'approvalPrincipalRefs', 'publicationAdapter', 'runtime']);
+    const sensitiveFields = new Set([
+      'canonicalUpstream', 'integrationBranch', 'executionAdapter', 'updatePolicy', 'releaseAuthority',
+      'releaseAdapter', 'publicationAdapter', 'strategyEvidence', 'credentialRef', 'notificationPreferenceRef',
+      'approvalPrincipalRefs', 'runtime',
+    ]);
     const sensitive = Object.keys(patch).some((field) => sensitiveFields.has(field));
     if (sensitive && (!actor || actor.authenticated !== true || !['andrew', 'delegate'].includes(actor.role))) {
       throw new Error('sensitive catalog revisions require an authenticated Andrew or delegate');
