@@ -1,8 +1,10 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { lazy, Suspense, useEffect, useMemo, useState } from 'react';
 import { createRoot, Root } from 'react-dom/client';
 import { useChat } from '@ai-sdk/react';
 import { DefaultChatTransport } from 'ai';
 import './styles.css';
+
+const VoiceAvatarPanel = lazy(() => import('./VoiceAvatarPanel').then(({ VoiceAvatarPanel }) => ({ default: VoiceAvatarPanel })));
 
 type ModelInfo = {
   id: string;
@@ -175,6 +177,7 @@ function ChatApp() {
   const [voiceState, setVoiceState] = useState<'idle' | 'recording' | 'working'>('idle');
   const [voiceError, setVoiceError] = useState('');
   const [recorder, setRecorder] = useState<MediaRecorder | null>(null);
+  const [avatarOpen, setAvatarOpen] = useState(false);
 
   const transport = useMemo(() => new DefaultChatTransport({
     api: '/api/chat',
@@ -224,6 +227,7 @@ function ChatApp() {
       return;
     }
     if (!settings?.voice?.available) return;
+    setAvatarOpen(true);
     let stream: MediaStream;
     try {
       stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -263,7 +267,10 @@ function ChatApp() {
             <div className="page-kicker">agentic desktop</div>
             <h1>Chat</h1>
           </div>
-          <SettingsBar settings={settings} onSaved={refreshSettings} />
+          <div className="chat-head-actions">
+            <button type="button" className="avatar-launch" onClick={() => setAvatarOpen(true)}><i />Voice avatar</button>
+            <SettingsBar settings={settings} onSaved={refreshSettings} />
+          </div>
         </header>
 
         {!settings?.hasKey && (
@@ -324,6 +331,11 @@ function ChatApp() {
         </footer>
       </section>
       <RightPanel pending={pendingApprovals} onApprove={(id) => approve(id, true)} onDeny={(id) => approve(id, false)} />
+      {avatarOpen && (
+        <Suspense fallback={null}>
+          <VoiceAvatarPanel voiceState={voiceState} onClose={() => setAvatarOpen(false)} />
+        </Suspense>
+      )}
     </div>
   );
 }

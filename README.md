@@ -92,8 +92,21 @@ config.json        all paths/endpoints — edit to point at your own setup
 
 - Voice dictation requires a configured local whisper.cpp binary and model in
   `config.json`; when absent, text chat still works.
+- The **Voice avatar** button opens the particle-avatar lab in the existing Chat
+  view. It exposes every lifecycle state, speech energy, four gestures, reduced
+  motion, low-performance mode, and live frame timing. Run `npm run build`, then
+  `npm run serve` and open `http://127.0.0.1:4807/#/chat` to use it.
 - The Chat bundle is intentionally isolated from the vanilla pages, but it is a
   larger React/AI island and can be code-split later.
 - The Today brief is deterministic composition, not an LLM synthesis — the
   Jarvis "what changed and why it matters" narrative is future work.
 - Paperclip issue list is capped at 250 most recent issues.
+
+### Voice avatar integration
+
+`chat-src/avatar/ParticleAvatar.ts` exports the renderer/controller boundary:
+`setState`, `setSpeechEnergy`, `setReducedMotion`, and `destroy`. The current
+dictation lifecycle maps recording to `listening` and transcription to
+`thinking`. When voice playback is added, connect its `AnalyserNode` to
+`WebAudioSpeechEnergy` and feed the sampled value to `setSpeechEnergy` while the
+avatar is `speaking`; the renderer deliberately owns no audio or agent logic.
