@@ -103,9 +103,10 @@ mismatched); and the dry run is observed strictly before the terminal
 receipt. `outcome` is one of `verified`, `no-effect`, or `failed`.
 
 A `failed` dry run is never creditable -- nothing was actually previewed --
-and neither is a `failed` terminal receipt. A `no-effect` outcome always
-credits zero bytes even if `bytesReclaimed` is nonzero. A `verified` outcome
-with effect credits `min(terminalReceipt.bytesReclaimed,
+and neither is a `failed` terminal receipt. A `no-effect` outcome on either
+the dry-run or the terminal receipt always credits zero bytes even if
+`bytesReclaimed` is nonzero. A `verified` outcome on both receipts with
+effect credits `min(terminalReceipt.bytesReclaimed,
 dryRunReceipt.bytesReclaimed, expected.maxCreditableBytes)`: the dry run's
 own preview and the caller-supplied maximum both bound the credit, so no
 receipt can ever over-credit beyond what was previewed or beyond the exact
@@ -154,11 +155,13 @@ The reservation-persistence port requires:
   compare-and-set is absent, not because its initial state is malformed.
 - **Explicit, typed capacity pool and limit.** `reserve({ poolId,
   capacityLimitBytes, ... })` requires both as explicit inputs; this package
-  never assumes a default pool or limit. Reserving sums the already-active
-  reservations for the same `poolId` and `fenceGeneration` (with overflow
-  protection) and rejects a reservation that would push the total past
-  `capacityLimitBytes` as `capacity_exceeded`, so two distinct reservations
-  cannot double-commit the same headroom.
+  never assumes a default pool or limit. Reserving sums every already-active
+  reservation for the same `poolId`, across all fence generations (with
+  overflow protection), and rejects a reservation that would push the total
+  past `capacityLimitBytes` as `capacity_exceeded`, so two distinct
+  reservations cannot double-commit the same headroom. A newer fence
+  generation does not make an older, still-active reservation's held bytes
+  disappear from capacity accounting.
 - **Durable idempotency keys with matching-replay semantics.** `reserve({
   idempotencyKey, ... })` is idempotent: a repeated key replays the existing
   reservation only if it is still `active`, its parameters (`amountBytes`,
@@ -190,7 +193,10 @@ The reservation-persistence port requires:
 - **Strict UTC clock inputs.** `now` (when supplied to `reserve`, `consume`,
   or `reap`) and `expiresAt` must be UTC ISO-8601 timestamps with an
   explicit `Z` offset; a zoneless or malformed timestamp is rejected as
-  `invalid_request` and is never written into a persisted record.
+  `invalid_request` and is never written into a persisted record. An
+  injected `clock` used in `now`'s absence is validated through this same
+  strict check before it resolves, so a malformed clock output cannot
+  mutate reservation state either.
 - **Fail-closed recovery, never a throw.** No public method -- `reserve`,
   `consume`, `reap`, or `get` -- ever throws past its caller. If the backend
   cannot load or save state, it returns `{ ok: false, reason:

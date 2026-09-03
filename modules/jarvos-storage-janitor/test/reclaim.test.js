@@ -56,6 +56,16 @@ test('a no-effect receipt reporting bytes is still credited zero', () => {
   assert.equal(result.creditedBytes, 0);
 });
 
+test('a no-effect dry-run receipt credits zero even when the terminal receipt is verified and reports positive bytes', () => {
+  const e = evidence({
+    dryRunReceipt: receipt({ dryRun: true, outcome: 'no-effect', bytesReclaimed: 500000000, observedAt: '2026-09-03T12:02:00.000Z' }),
+    terminalReceipt: receipt({ dryRun: false, outcome: 'verified', bytesReclaimed: 900000000, observedAt: '2026-09-03T12:03:00.000Z' }),
+  });
+  const result = validateExternalReclaimEvidence(e, EXPECTED);
+  assert.equal(result.ok, true, JSON.stringify(result.errors));
+  assert.equal(result.creditedBytes, 0);
+});
+
 test('rejects a terminal receipt with no matching dry run (dry-run-first)', () => {
   const e = evidence();
   delete e.dryRunReceipt;

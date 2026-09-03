@@ -86,6 +86,17 @@ function buildIncident() {
   return { candidates, preflight, candidateSetDigest, expected, evidence, remeasurement };
 }
 
+function recordingReservationStore() {
+  const calls = { reserve: 0, consume: 0, reap: 0, get: 0 };
+  return {
+    calls,
+    reserve() { calls.reserve += 1; return { ok: true, created: true, reservation: {} }; },
+    consume() { calls.consume += 1; return { ok: true }; },
+    reap() { calls.reap += 1; return { ok: true, expired: [] }; },
+    get() { calls.get += 1; return { ok: false, reason: 'not_found' }; },
+  };
+}
+
 function authorizeArgs(overrides = {}) {
   const { expected, evidence, remeasurement } = buildIncident();
   return {
@@ -222,16 +233,48 @@ test('an insufficient remeasurement remains blocked even with valid evidence', a
 });
 
 test('a missing now fails closed to blocked without touching the reservation store', async () => {
-  const args = authorizeArgs({ now: undefined });
+  const reservationStore = recordingReservationStore();
+  const args = authorizeArgs({ now: undefined, reservationStore });
   const result = await authorizeReclaimReservation(args);
   assert.equal(result.ok, false);
   assert.equal(result.outcome, 'blocked');
+  assert.equal(reservationStore.calls.reserve, 0);
 });
 
-test('a missing poolId or capacityLimitBytes fails closed to blocked', async () => {
-  const result = await authorizeReclaimReservation(authorizeArgs({ poolId: undefined }));
+test('a missing poolId or capacityLimitBytes fails closed to blocked without touching the reservation store', async () => {
+  const reservationStore = recordingReservationStore();
+  const result = await authorizeReclaimReservation(authorizeArgs({ poolId: undefined, reservationStore }));
   assert.equal(result.ok, false);
   assert.equal(result.outcome, 'blocked');
+  assert.equal(reservationStore.calls.reserve, 0);
+});
+
+test('a stale remeasurement (freshUntil already passed) remains blocked without touching the reservation store', async () => {
+  const { expected, evidence } = buildIncident();
+  const reservationStore = recordingReservationStore();
+  const staleRemeasurement = observation({
+    bytesAvailable: INCIDENT_BYTES_AVAILABLE + CANDIDATE_BYTES,
+    observedAt: '2026-09-03T12:01:00.000Z',
+    freshUntil: '2026-09-03T12:02:00.000Z',
+  });
+  const result = await authorizeReclaimReservation(authorizeArgs({ expected, evidence, remeasurement: staleRemeasurement, reservationStore }));
+  assert.equal(result.ok, false);
+  assert.equal(result.outcome, 'blocked');
+  assert.equal(reservationStore.calls.reserve, 0);
+});
+
+test('a future remeasurement (observedAt after now) remains blocked without touching the reservation store', async () => {
+  const { expected, evidence } = buildIncident();
+  const reservationStore = recordingReservationStore();
+  const futureRemeasurement = observation({
+    bytesAvailable: INCIDENT_BYTES_AVAILABLE + CANDIDATE_BYTES,
+    observedAt: '2026-09-03T12:20:00.000Z',
+    freshUntil: '2026-09-03T12:25:00.000Z',
+  });
+  const result = await authorizeReclaimReservation(authorizeArgs({ expected, evidence, remeasurement: futureRemeasurement, reservationStore }));
+  assert.equal(result.ok, false);
+  assert.equal(result.outcome, 'blocked');
+  assert.equal(reservationStore.calls.reserve, 0);
 });
 
 test('an off-contract reservation port that throws is caught and fails closed to blocked', async () => {
@@ -267,7 +310,7 @@ test('an expected identity with an unrecognized extra field is rejected', async 
   assert.equal(result.outcome, 'blocked');
 });
 
-test('a distinct concurrent reservation for a different run cannot overcommit the same pool and fence', async () => {
+test('a distinct concurrent reservation for a different run cannot overcommit the same pool', async () => {
   const reservationStore = createMemoryReservationStore();
   const first = await authorizeReclaimReservation(authorizeArgs({ reservationStore, capacityLimitBytes: POLICY_REQUIRED_TOTAL }));
   assert.equal(first.ok, true, JSON.stringify(first));

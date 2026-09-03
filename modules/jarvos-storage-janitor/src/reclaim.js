@@ -40,11 +40,12 @@ function validateReclaimReceipt(record, label = 'receipt') {
 // previewed, or credit a fence the preflight decision no longer recognizes.
 //
 // Credited bytes are bounded three ways: a failed dry run or failed
-// terminal receipt credits nothing; a no-effect terminal receipt always
-// credits zero even if it reports nonzero bytes; and a verified terminal
-// receipt is bounded by both the dry run's own preview (`bytesReclaimed`)
-// and the caller-supplied `expected.maxCreditableBytes` tied to the exact
-// candidate set, so no receipt can ever over-credit.
+// terminal receipt credits nothing; a no-effect dry-run or terminal receipt
+// always credits zero even if either reports nonzero bytes; and a verified
+// terminal receipt (with a verified dry run) is bounded by both the dry
+// run's own preview (`bytesReclaimed`) and the caller-supplied
+// `expected.maxCreditableBytes` tied to the exact candidate set, so no
+// receipt can ever over-credit.
 function validateExternalReclaimEvidence(evidence, expected = {}) {
   try {
     if (!isObject(evidence)) return { ok: false, errors: ['reclaim evidence must be an object'], creditedBytes: 0 };
@@ -94,7 +95,7 @@ function validateExternalReclaimEvidence(evidence, expected = {}) {
     if (terminalReceipt.outcome === 'failed') {
       return { ok: false, errors: ['terminalReceipt outcome is failed; no bytes can be credited'], creditedBytes: 0 };
     }
-    if (terminalReceipt.outcome === 'no-effect') {
+    if (dryRunReceipt.outcome === 'no-effect' || terminalReceipt.outcome === 'no-effect') {
       return { ok: true, errors: [], creditedBytes: 0 };
     }
 

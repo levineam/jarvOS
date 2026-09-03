@@ -63,10 +63,14 @@ function isExpired(record, now) {
   return new Date(record.expiresAt).getTime() <= new Date(now).getTime();
 }
 
+// An injected clock is untrusted output, not a validated timestamp: it must
+// pass through the same strict UTC ISO-8601 check as an explicit `now`
+// before it can resolve, so a malformed clock cannot write an invalid
+// timestamp into a persisted record.
 function resolveNow(now, clock) {
-  if (now === undefined) return { ok: true, value: clock() };
-  if (!isValidClockValue(now)) return { ok: false };
-  return { ok: true, value: new Date(now).toISOString() };
+  const candidate = now === undefined ? clock() : now;
+  if (!isValidClockValue(candidate)) return { ok: false };
+  return { ok: true, value: new Date(candidate).toISOString() };
 }
 
 function createReservationStore(options = {}) {

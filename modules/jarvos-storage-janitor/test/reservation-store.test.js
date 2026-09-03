@@ -6,10 +6,20 @@ const assert = require('node:assert');
 const {
   createMemoryReservationStore,
   createReservationStore,
+  createMemoryReservationBackend,
   checkReservationStoreConformance,
   emptyState,
   RESERVATION_STATES,
 } = require('../src/reservation-store');
+
+function countingBackend(backend) {
+  const calls = { save: 0 };
+  return {
+    calls,
+    load: (...args) => backend.load(...args),
+    save: (...args) => { calls.save += 1; return backend.save(...args); },
+  };
+}
 
 function req(overrides = {}) {
   return {
@@ -67,7 +77,7 @@ test('idempotent replay against a still-active reservation with mismatched param
   assert.equal(mismatched.reason, 'idempotency_key_conflict');
 });
 
-test('reserve rejects a reservation that would overcommit the same pool and fence', async () => {
+test('reserve rejects a reservation that would overcommit the pool capacity limit', async () => {
   const store = createMemoryReservationStore();
   const first = await store.reserve(req({ idempotencyKey: 'reserve:a', amountBytes: 1200000000 }));
   assert.equal(first.ok, true, JSON.stringify(first));
@@ -116,6 +126,47 @@ test('reserve rejects a zoneless now rather than writing an invalid clock string
   const result = await store.reserve(req({ now: '2026-09-03T12:03:00' }));
   assert.equal(result.ok, false);
   assert.equal(result.reason, 'invalid_request');
+});
+
+test('reserve rejects an injected clock producing a zoneless timestamp, before any state mutation', async () => {
+  const backend = countingBackend(createMemoryReservationBackend());
+  const store = createReservationStore({ backend, clock: () => 'not-a-timestamp' });
+  const result = await store.reserve(req({ now: undefined }));
+  assert.equal(result.ok, false);
+  assert.equal(result.reason, 'invalid_request');
+  assert.equal(backend.calls.save, 0);
+});
+
+test('consume rejects an injected clock producing a zoneless timestamp, before any state mutation', async () => {
+  const backend = countingBackend(createMemoryReservationBackend());
+  const store = createReservationStore({ backend, clock: () => 'not-a-timestamp' });
+  const validNowStore = createReservationStore({ backend, clock: () => '2026-09-03T12:03:00.000Z' });
+  const { reservation } = await validNowStore.reserve(req({ now: undefined }));
+  backend.calls.save = 0;
+
+  const result = await store.consume({ reservationId: reservation.reservationId, idempotencyKey: 'consume:once', amountBytes: reservation.amountBytes, now: undefined });
+  assert.equal(result.ok, false);
+  assert.equal(result.reason, 'invalid_request');
+  assert.equal(backend.calls.save, 0);
+
+  const fetched = await validNowStore.get(reservation.reservationId);
+  assert.equal(fetched.reservation.status, 'active');
+});
+
+test('reap rejects an injected clock producing a zoneless timestamp, before any state mutation', async () => {
+  const backend = countingBackend(createMemoryReservationBackend());
+  const store = createReservationStore({ backend, clock: () => 'not-a-timestamp' });
+  const validNowStore = createReservationStore({ backend, clock: () => '2026-09-03T12:03:00.000Z' });
+  const { reservation } = await validNowStore.reserve(req({ now: undefined, expiresAt: '2026-09-03T12:04:00.000Z' }));
+  backend.calls.save = 0;
+
+  const result = await store.reap({ now: undefined });
+  assert.equal(result.ok, false);
+  assert.equal(result.reason, 'invalid_request');
+  assert.equal(backend.calls.save, 0);
+
+  const fetched = await validNowStore.get(reservation.reservationId);
+  assert.equal(fetched.reservation.status, 'active');
 });
 
 test('consume draws down a reservation and cannot exceed it', async () => {

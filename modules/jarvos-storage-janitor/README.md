@@ -36,10 +36,11 @@ contract. In short:
 - **External reclaim evidence** (`reclaim.js`) validates a paired dry-run and
   terminal receipt with dry-run-first, exact run/policy/candidate-set
   matching, and monotonic-fence enforcement. A failed dry run or a failed
-  terminal receipt credits nothing; a no-effect receipt always credits zero;
-  a verified receipt's credited bytes are bounded by both the dry run's own
-  preview and a caller-supplied `maxCreditableBytes` tied to the exact
-  candidate set, so no receipt can over-credit.
+  terminal receipt credits nothing; a no-effect dry-run or terminal receipt
+  always credits zero even if either reports nonzero bytes; a verified
+  receipt's credited bytes are bounded by both the dry run's own preview and
+  a caller-supplied `maxCreditableBytes` tied to the exact candidate set, so
+  no receipt can over-credit.
 - **Reservation persistence** (`reservation-store.js`) is a public port
   contract plus a reference in-memory implementation and a conformance
   checker. It requires atomic compare-and-set (or equivalent serialization),
@@ -52,9 +53,9 @@ contract. In short:
   reservation with matching parameters and a non-stale fence; a consumed,
   expired, or mismatched replay is a typed blocked result. The capacity pool
   (`poolId`) and its limit (`capacityLimitBytes`) are explicit, caller-typed
-  inputs; reserving against the same pool and fence subtracts already-active
-  reservations so two distinct reservations cannot double-commit the same
-  headroom.
+  inputs; reserving against a pool subtracts every already-active
+  reservation held for that `poolId` across all fence generations, so two
+  distinct reservations cannot double-commit the same headroom.
 - **Ports** (`ports.js`) define the three explicit boundaries this package
   depends on -- capacity observation, external reclaim provider, and
   reservation persistence -- as typed method-shape contracts. None receives a
