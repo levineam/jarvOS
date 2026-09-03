@@ -297,11 +297,17 @@ const pages = {
   },
 
   async services() {
-    const svcs = await api('/api/health');
+    const [svcs, doctor] = await Promise.all([
+      api('/api/health'),
+      api('/api/system-doctor').catch((err) => ({ ok: false, error: err.message, receipt: null })),
+    ]);
     const okCount = svcs.filter((s) => s.ok).length;
     let html = head('the bundle', 'Services',
       `The systems jarvOS stitches into one operating layer. ${okCount}/${svcs.length} healthy.`);
-    html += `<div class="svc-grid reveal" style="animation-delay:80ms">${svcs.map((s) => `
+
+    html += renderSystemDoctorReceipt(doctor);
+
+    html += `<div class="svc-grid reveal" style="animation-delay:120ms">${svcs.map((s) => `
       <div class="svc">
         <span class="light ${s.ok ? 'ok' : 'bad'}"></span>
         <div>
@@ -313,6 +319,80 @@ const pages = {
     return html;
   },
 };
+
+/* ── System Doctor receipt (public jarvos-system-doctor-report/v1) ── */
+
+function doctorStateClass(state) {
+  if (state === 'healthy') return 'ok';
+  if (state === 'warning' || state === 'not configured') return 'warn';
+  if (state === 'repair needed' || state === 'needs your attention') return 'bad';
+  return 'warn';
+}
+
+function doctorStateLabel(state) {
+  return fmt.status(state || 'unknown');
+}
+
+function doctorRows(components) {
+  if (!components?.length) return '<div class="empty">none selected</div>';
+  return `<div class="doctor-rows">${components.map((c) => `
+    <div class="doctor-row" data-component-id="${fmt.esc(c.id)}" data-section="${fmt.esc(c.section)}">
+      <span class="light ${doctorStateClass(c.state)}" title="${fmt.esc(c.state)}"></span>
+      <div class="doctor-row-body">
+        <div class="doctor-row-top">
+          <span class="nm">${fmt.esc(c.label || c.id)}</span>
+          <span class="doctor-state ${doctorStateClass(c.state)}">${fmt.esc(doctorStateLabel(c.state))}</span>
+        </div>
+        ${c.message ? `<div class="det">${fmt.esc(c.message)}</div>` : ''}
+        ${c.reasonClass && c.reasonClass !== 'none' ? `<div class="ep">${fmt.esc(c.reasonClass)}</div>` : ''}
+      </div>
+    </div>`).join('')}</div>`;
+}
+
+function renderSystemDoctorReceipt(payload) {
+  const receipt = payload?.receipt;
+  if (!receipt) {
+    return card('System Doctor', `<div class="empty">${fmt.esc(payload?.error || 'receipt unavailable')}</div>`, { delay: 60 });
+  }
+
+  const sections = receipt.sections || {
+    core: (receipt.components || []).filter((c) => c.section === 'core'),
+    optional: (receipt.components || []).filter((c) => c.section === 'optional'),
+    memory: (receipt.components || []).filter((c) => c.section === 'memory'),
+  };
+  const statusClass = doctorStateClass(receipt.status);
+  const ready = receipt.status === 'healthy' ? 'READY' : `NOT READY — ${doctorStateLabel(receipt.status)}`;
+  const profile = receipt.profile?.title || receipt.profile?.id || 'profile';
+
+  let body = `
+    <div class="doctor-receipt" data-schema="${fmt.esc(receipt.schema || '')}" data-status="${fmt.esc(receipt.status || '')}">
+      <div class="doctor-banner ${statusClass}">
+        <span class="light ${statusClass}"></span>
+        <div>
+          <div class="doctor-final">${fmt.esc(ready)}</div>
+          <div class="det">${fmt.esc(profile)}${receipt.workspace ? ` · ${fmt.esc(receipt.workspace)}` : ''}</div>
+        </div>
+      </div>
+      <section class="doctor-section" data-section="core">
+        <h4>Core</h4>
+        ${doctorRows(sections.core)}
+      </section>
+      <section class="doctor-section" data-section="optional">
+        <h4>Selected optional</h4>
+        ${doctorRows(sections.optional)}
+      </section>
+      <section class="doctor-section" data-section="memory">
+        <h4>Memory <span class="kind">fixed ten-row order</span></h4>
+        ${doctorRows(sections.memory)}
+      </section>
+    </div>`;
+
+  if (payload && payload.ok === false && payload.error) {
+    body = `<div class="err-banner">${fmt.esc(payload.error)}</div>` + body;
+  }
+
+  return card('System Doctor receipt', body, { delay: 60 });
+}
 
 /* ── Journal helpers ────────────────────────────────────── */
 
@@ -437,12 +517,24 @@ window.addEventListener('hashchange', render);
 /* sidebar health pulse */
 async function pulse() {
   try {
-    const svcs = await api('/api/health');
+    const [svcs, doctor] = await Promise.all([
+      api('/api/health'),
+      api('/api/system-doctor').catch(() => null),
+    ]);
     const bad = svcs.filter((s) => !s.ok);
+    const receiptStatus = doctor?.receipt?.status;
+    const doctorBad = receiptStatus && receiptStatus !== 'healthy';
     const dot = document.getElementById('pulse-dot');
     const label = document.getElementById('pulse-label');
-    dot.className = `pulse-dot ${bad.length ? 'warn' : 'ok'}`;
-    label.textContent = bad.length ? `${bad.length} service${bad.length > 1 ? 's' : ''} down` : 'all systems calm';
+    const warn = bad.length > 0 || doctorBad;
+    dot.className = `pulse-dot ${warn ? 'warn' : 'ok'}`;
+    if (doctorBad && !bad.length) {
+      label.textContent = `doctor ${fmt.status(receiptStatus)}`;
+    } else if (bad.length) {
+      label.textContent = `${bad.length} service${bad.length > 1 ? 's' : ''} down`;
+    } else {
+      label.textContent = 'all systems calm';
+    }
   } catch {
     document.getElementById('pulse-dot').className = 'pulse-dot warn';
     document.getElementById('pulse-label').textContent = 'server offline';

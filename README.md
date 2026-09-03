@@ -20,7 +20,7 @@ does not invent its own database.
 | **Work** | Execution | Paperclip issues / agents / activity / projects via the local API |
 | **Memory** | Agent state | `clawd/MEMORY.md` index + daily memory files |
 | **Ontology** | Meaning | jarvos-ontology spine (higher order → projects) |
-| **Services** | The bundle | Health of every system jarvOS connects |
+| **Services** | The bundle | Health of every system jarvOS connects, plus the public System Doctor receipt |
 
 ## Run
 
@@ -66,6 +66,7 @@ server/            zero-dependency Node HTTP server
     ontology.js    jarvos-ontology spine files
     memory.js      MEMORY.md + daily memory files
     health.js      service checks
+    system-doctor.js  public jarvos-system-doctor-report/v1 receipt (no probes)
 static/            single-page UI, vanilla JS, vendored assets
   chat/            Vite-built React chat island
 chat-src/          Chat source (React + AI SDK useChat)

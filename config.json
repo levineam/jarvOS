@@ -23,5 +23,11 @@
     "args": [],
     "timeoutMs": 60000
   },
-  "jarvosRepo": "~/jarvOS"
+  "jarvosRepo": "~/jarvOS",
+  "systemDoctor": {
+    "workspace": "~/clawd",
+    "profile": "local-openclaw",
+    "jarvosBin": "jarvos",
+    "receiptFile": null
+  }
 }
