@@ -19,7 +19,7 @@
 | Clawpatch / slice review | advisory complete | `.jarvos-gate/SUP-3894/clawpatch-advisory.md` + run `20260903T015910-2f077d` |
 | CE review-of-record | Ready for merge | `.jarvos-gate/SUP-3894/ce-review-of-record.md` |
 | Goal-alignment | aligned | `.jarvos-gate/SUP-3894/goal-alignment.md` |
-| Replacement PR | pending this handoff | branch pushed; body at `.jarvos-gate/SUP-3894/pr-body.md` |
+| Replacement PR | open | https://github.com/levineam/jarvos-desktop/pull/5 @ `d10c94c` |
 
 ## Fixes landed after review
 
@@ -36,12 +36,8 @@ npm run serve
 # open http://127.0.0.1:8787 (or configured port) → Chat → Voice avatar
 ```
 
-## Publication
+## Publication result
 
-```bash
-cd /Users/andrew/clawd-worktrees/SUP-3894-paperclip
-gh pr create --base master --head SUP-3894/voice-mode-particle-avatar \
-  --title "feat(SUP-3894): voice-mode particle avatar (coding-gate replay)" \
-  --body-file .jarvos-gate/SUP-3894/pr-body.md
-gh pr close 4 --comment "Superseded by compliant coding-gate replay on SUP-3894/voice-mode-particle-avatar. Do not merge this unmanaged provenance PR."
-```
+- Replacement PR: https://github.com/levineam/jarvos-desktop/pull/5
+- Unmanaged PR #4: closed with supersession comment
+- Head: `d10c94c02...` on `SUP-3894/voice-mode-particle-avatar`
