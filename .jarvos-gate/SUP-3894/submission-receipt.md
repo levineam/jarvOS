@@ -3,7 +3,7 @@
 **Issue:** Replay voice-mode particle avatar through jarvOS coding gate  
 **Repo:** `levineam/jarvos-desktop`  
 **Branch:** `SUP-3894/voice-mode-particle-avatar`  
-**Submitted head:** `625f02a572eb96852ff147ce9a7ae3d1ffd2aa52`  
+**Submitted head:** `ca38b262d110cb6fd056b63776a6b446e77221e8` (fix + gate receipts; tip may include this receipt pin)  
 **Base:** `origin/master` @ `b4113ed7d3559faebe461b09670be3faa3a79314`  
 **Provenance (unmanaged, do not merge):** PR #4 @ `0443147df93996fd9cfd13334156ce067f05ce67`
 
