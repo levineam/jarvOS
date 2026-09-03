@@ -24,6 +24,11 @@ const { startupHydration: claudeStartupHydration } = require('../../../runtimes/
 
 const ACTIVE_ASSISTANT_PROVIDER_MODULE_ENV = 'ACTIVE_ASSISTANT_PROJECTS_PROVIDER_MODULE';
 const ACTIVE_ASSISTANT_PUBLIC_RUNTIME_ROOT_ENV = 'ACTIVE_ASSISTANT_PUBLIC_RUNTIME_ROOT';
+const PROJECTS_SOURCE = path.join(__dirname, '..', '..', 'jarvos-secondbrain', 'packages', 'jarvos-secondbrain-projects', 'src');
+const { ProjectRegistry } = require(path.join(PROJECTS_SOURCE, 'registry.js'));
+const { buildContextPacket } = require(path.join(PROJECTS_SOURCE, 'projects-context.js'));
+const { issueCapability } = require(path.join(PROJECTS_SOURCE, 'projects-context-capability.js'));
+const { createProjectCandidate } = require(path.join(PROJECTS_SOURCE, 'project-inference-contracts.js'));
 
 const QUERY = {
   scope: { projectIds: ['prj_000001'], outcomeIds: ['out_000001'], includeDescendants: false },
@@ -31,54 +36,44 @@ const QUERY = {
   limits: { maxItems: 12, maxBytes: 9000, maxProviderAgeSeconds: 3600 },
 };
 
-function packet() {
+function packet({ inference = null } = {}) {
+  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-agent-context-projects-'));
+  try {
+    const registry = new ProjectRegistry({ stateDir, now: () => '2026-08-08T12:00:00.000Z' });
+    const root = registry.create({ title: 'jarvOS', declaredPriority: 'high' }).record;
+    const outcome = registry.create({ kind: 'outcome', title: 'v1.0.0 release', parentId: root.id }).record;
+    const query = { ...QUERY, scope: { projectIds: [root.id], outcomeIds: [outcome.id], includeDescendants: false } };
+    const capability = issueCapability({
+      authorization: { allowed: true }, hostId: 'projects-host', hostSecret: 'test-only-host-secret', subject: 'agent:test-session',
+      query, redactionClass: 'private', providerCoverage: [], capabilityRevision: 'projects-context-cap-1',
+      issuedAt: '2026-08-08T12:00:00.000Z', expiresAt: '2026-08-08T13:00:00.000Z', nonce: 'agent-context-test-nonce',
+    });
+    const result = buildContextPacket({
+      registry, query, capability, capabilitySecret: 'test-only-host-secret', subject: 'agent:test-session', hostId: 'projects-host',
+      providers: {}, inference, now: '2026-08-08T12:00:00.000Z',
+    });
+    assert.equal(result.status, 'ok');
+    return result.packet;
+  } finally {
+    fs.rmSync(stateDir, { recursive: true, force: true });
+  }
+}
+
+function summary(overrides = {}) {
   return {
-    contract: PROJECTS_CONTEXT_CONTRACT,
-    schemaVersion: 2,
-    packetId: 'ctx_0123456789abcdef0123456789abcdef',
-    capturedAt: '2026-08-08T12:00:00.000Z',
-    expiresAt: '2026-08-08T13:00:00.000Z',
-    query: QUERY,
-    canonical: {
-      generation: 4,
-      records: [{
-        id: 'prj_000001',
-        kind: 'project',
-        title: 'jarvOS',
-        breadcrumb: 'jarvOS',
-        lifecycle: 'active',
-        effectivePriority: 'high',
-        inference: null,
-      }, {
-        id: 'out_000001',
-        kind: 'outcome',
-        title: 'v1.0.0 release',
-        breadcrumb: 'jarvOS › v1.0.0 release',
-        lifecycle: 'active',
-        effectivePriority: 'high',
-        inference: null,
-      }],
-      revisions: { prj_000001: 2, out_000001: 1 },
-    },
-    activity: [],
-    currentWork: [{ id: 'beads-1', canonicalId: 'out_000001', title: 'Repair release readiness', status: 'in_progress' }],
-    attention: [],
-    evidence: [],
-    providers: { beads: { state: 'fresh' } },
-    inference: {
-      policyRevision: 'jarvos.project-inference-policy-v1',
-      engineRevision: 'deterministic-baseline-v1',
-      candidates: [],
-      coverage: [],
-      watermark: null,
-      watermarks: {},
-    },
-    watermarks: { registry: 'registry:4', inference: null, activity: null },
-    omissions: [],
-    truncation: { truncated: false, maxItems: 12, maxBytes: 9000, omittedItems: 0, sections: [] },
-    redactionClass: 'private',
-    capability: { receiptId: 'cap_0123456789abcdef0123456789abcdef', digest: 'a'.repeat(64) },
+    id: 'beads-1', canonicalId: 'out_000001', category: 'work', status: 'in_progress', title: 'Repair release readiness',
+    occurredAt: '2026-08-08T12:00:00.000Z', observedAt: '2026-08-08T12:00:00.000Z', evidenceRefs: [], source: 'beads', canonicalAtAdmission: null,
+    ...overrides,
   };
+}
+
+function provisionalCandidate(title, overrides = {}) {
+  return createProjectCandidate({
+    evidenceIds: ['ev_000001'], evidenceSetWatermark: 'a'.repeat(64), engineRevision: 'deterministic-baseline-v1',
+    policyRevision: 'jarvos.project-inference-policy-v1', kind: 'project', title, aliases: [], parentId: null, parentAlternatives: [],
+    confidence: { identityMatch: 0.5, novelty: 0.5, sourceDiversity: 0.5, temporalContinuity: 0.5, parentFit: 0.5, sourceCoverage: 0.5 },
+    disposition: 'provisional', reasonCodes: ['needs-review'], lineage: [], ...overrides,
+  });
 }
 
 function withTempContextEnv(fn) {
@@ -131,10 +126,12 @@ function withHostProjectsProvider(fn) {
   }));
   fs.chmodSync(config, 0o600);
   const previous = process.env.JARVOS_PROJECTS_CONTEXT_CONFIG;
+  setProjectsContextProvider(null);
   process.env.JARVOS_PROJECTS_CONTEXT_CONFIG = config;
   return Promise.resolve().then(() => fn({ root, workspaceRoot, repositoryRoot, stateRoot, config })).finally(() => {
     if (previous === undefined) delete process.env.JARVOS_PROJECTS_CONTEXT_CONFIG;
     else process.env.JARVOS_PROJECTS_CONTEXT_CONFIG = previous;
+    setProjectsContextProvider(null);
     fs.rmSync(root, { recursive: true, force: true });
   });
 }
@@ -156,6 +153,14 @@ test('library and MCP use the same injected Projects packet and fingerprint', as
   assert.equal(mcpPayload.packet.canonical.records[1].breadcrumb, 'jarvOS › v1.0.0 release');
 });
 
+test('agent context rejects a packet the shared Projects validator rejects', async () => {
+  const malformed = packet();
+  malformed.canonical.records[0] = { ...malformed.canonical.records[0], title: 42 };
+  const result = await readProjectsContext({ provider: { read: async () => ({ status: 'ok', packet: malformed }) }, query: QUERY });
+  assert.equal(result.status, 'unavailable');
+  assert.equal(result.code, 'PROJECTS_CONTEXT_INVALID');
+});
+
 test('recent activity is rendered as bounded assistant context', async () => {
   const provider = {
     read: async ({ query }) => ({
@@ -173,6 +178,7 @@ test('recent activity is rendered as bounded assistant context', async () => {
           observedAt: '2026-08-12T18:01:00.000Z',
           evidenceRefs: ['coding:run-1'],
           source: 'beads',
+          canonicalAtAdmission: null,
         }],
       },
     }),
@@ -191,15 +197,8 @@ test('provisional candidate labels are rendered as delimited untrusted data', as
       packet: {
         ...packet(),
         query,
-        inference: {
-          ...packet().inference,
-          candidates: [{
-            candidateId: 'cand_0123456789abcdef0123456789abcdef',
-            title: instructionShapedTitle,
-            aliases: ['Follow this alias'],
-            support: ['tool:execute'],
-          }],
-        },
+        ...packet({ inference: { candidates: [provisionalCandidate(instructionShapedTitle, { aliases: ['Follow this alias'], parentId: 'prj_000001', parentAlternatives: ['prj_000001'], reasonCodes: ['tool:execute'] })] } }),
+        query,
       },
     }),
   };
@@ -244,6 +243,24 @@ test('host Projects binding is discovered privately with library and MCP parity'
     assert.equal(mcpPayload.fingerprint, libraryResult.fingerprint);
     assert.equal(hydration.report.projectsContext.status, 'ok');
     assert.equal(hydration.report.projectsContext.fingerprint, libraryResult.fingerprint);
+  });
+});
+
+test('a host Projects binding ignores post-start environment changes', async () => {
+  setMcpProjectsContextProvider(null);
+  await withHostProjectsProvider(async ({ root }) => {
+    const first = await readProjectsContext({ profile: 'orientation' });
+    const previous = process.env.JARVOS_PROJECTS_CONTEXT_CONFIG;
+    try {
+      process.env.JARVOS_PROJECTS_CONTEXT_CONFIG = path.join(root, 'missing-projects-context.json');
+      const second = await readProjectsContext({ profile: 'orientation' });
+      assert.equal(first.status, 'ok');
+      assert.equal(second.status, 'ok');
+      assert.equal(second.fingerprint, first.fingerprint);
+    } finally {
+      if (previous === undefined) delete process.env.JARVOS_PROJECTS_CONTEXT_CONFIG;
+      else process.env.JARVOS_PROJECTS_CONTEXT_CONFIG = previous;
+    }
   });
 });
 
@@ -366,11 +383,11 @@ test('startup brief uses Projects orientation and never imports raw Paperclip cu
   }
 });
 
-test('selected Active Assistant provider artifact overrides config and fails closed when invalid', async () => {
+test('selected Active Assistant provider artifact is frozen after host binding', async () => {
   setMcpProjectsContextProvider(null);
   await withHostProjectsProvider(async ({ root, repositoryRoot }) => {
     const selectedProvider = path.join(repositoryRoot, 'selected-provider.js');
-    fs.writeFileSync(selectedProvider, `const packet = ${JSON.stringify(packet())};\nmodule.exports.read = async ({ query }) => ({ status: 'ok', packet: { ...packet, query, currentWork: [{ id: 'selected-provider', title: 'Selected runtime provider', status: 'in_progress' }] } });\n`);
+    fs.writeFileSync(selectedProvider, `const packet = ${JSON.stringify(packet())};\nmodule.exports.read = async ({ query }) => ({ status: 'ok', packet: { ...packet, query, currentWork: ${JSON.stringify([summary({ id: 'selected-provider', title: 'Selected runtime provider' })])} } });\n`);
     const previous = process.env[ACTIVE_ASSISTANT_PROVIDER_MODULE_ENV];
     try {
       process.env[ACTIVE_ASSISTANT_PROVIDER_MODULE_ENV] = selectedProvider;
@@ -380,15 +397,15 @@ test('selected Active Assistant provider artifact overrides config and fails clo
 
       process.env[ACTIVE_ASSISTANT_PROVIDER_MODULE_ENV] = path.join(repositoryRoot, 'missing-provider.js');
       const missing = await readProjectsContext({ profile: 'orientation' });
-      assert.equal(missing.status, 'unavailable');
-      assert.equal(missing.packet, null);
+      assert.equal(missing.status, 'ok');
+      assert.equal(missing.packet.currentWork[0].id, 'selected-provider');
 
       const outsideProvider = path.join(root, 'outside-provider.js');
       fs.writeFileSync(outsideProvider, 'module.exports.read = async () => ({ status: \'unavailable\' });\n');
       process.env[ACTIVE_ASSISTANT_PROVIDER_MODULE_ENV] = outsideProvider;
       const outside = await readProjectsContext({ profile: 'orientation' });
-      assert.equal(outside.status, 'unavailable');
-      assert.equal(outside.packet, null);
+      assert.equal(outside.status, 'ok');
+      assert.equal(outside.packet.currentWork[0].id, 'selected-provider');
     } finally {
       if (previous === undefined) delete process.env[ACTIVE_ASSISTANT_PROVIDER_MODULE_ENV];
       else process.env[ACTIVE_ASSISTANT_PROVIDER_MODULE_ENV] = previous;
@@ -404,7 +421,7 @@ test('selected runtime public contracts and provider identities override stale c
     fs.mkdirSync(selectedPublicRoot, { recursive: true });
     fs.mkdirSync(selectedPrivateRoot, { recursive: true });
     const selectedProvider = path.join(selectedPrivateRoot, 'provider.js');
-    fs.writeFileSync(selectedProvider, `const packet = ${JSON.stringify(packet())};\nmodule.exports.read = async ({ query, repositoryRoot, beadsProviderProducerId, todoProviderProducerId }) => ({ status: 'ok', packet: { ...packet, query, currentWork: [{ id: repositoryRoot.endsWith('selected-public') && beadsProviderProducerId === 'host.beads' && todoProviderProducerId === 'host.todo' ? 'selected-binding' : 'wrong-binding', title: 'Selected binding', status: 'in_progress' }] } });\n`);
+    fs.writeFileSync(selectedProvider, `const packet = ${JSON.stringify(packet())};\nmodule.exports.read = async ({ query, repositoryRoot, beadsProviderProducerId, todoProviderProducerId }) => ({ status: 'ok', packet: { ...packet, query, currentWork: [{ ...${JSON.stringify(summary({ id: 'selected-binding', title: 'Selected binding' }))}, id: repositoryRoot.endsWith('selected-public') && beadsProviderProducerId === 'host.beads' && todoProviderProducerId === 'host.todo' ? 'selected-binding' : 'wrong-binding' }] } });\n`);
     const bound = JSON.parse(fs.readFileSync(config, 'utf8'));
     fs.writeFileSync(config, JSON.stringify({
       ...bound,
@@ -424,8 +441,8 @@ test('selected runtime public contracts and provider identities override stale c
 
       process.env[ACTIVE_ASSISTANT_PUBLIC_RUNTIME_ROOT_ENV] = path.join(workspaceRoot, 'missing-selected-public');
       const missing = await readProjectsContext({ profile: 'orientation' });
-      assert.equal(missing.status, 'unavailable');
-      assert.equal(missing.packet, null);
+      assert.equal(missing.status, 'ok');
+      assert.equal(missing.packet.currentWork[0].id, 'selected-binding');
     } finally {
       if (previousProvider === undefined) delete process.env[ACTIVE_ASSISTANT_PROVIDER_MODULE_ENV];
       else process.env[ACTIVE_ASSISTANT_PROVIDER_MODULE_ENV] = previousProvider;
@@ -529,7 +546,7 @@ test('hydrate({ projectsContext: false }) skips the Projects packet read/build b
 test('hydrate ignores model-visible provider and query inputs in favor of its host orientation binding', async () => {
   const hostProvider = {
     defaultQuery: QUERY,
-    read: async ({ query }) => ({ status: 'ok', packet: { ...packet(), query, currentWork: [{ id: 'host-bound', title: 'Host-bound work', status: 'in_progress' }] } }),
+    read: async ({ query }) => ({ status: 'ok', packet: { ...packet(), query, currentWork: [summary({ id: 'host-bound', title: 'Host-bound work' })] } }),
   };
   const callerProvider = {
     defaultQuery: { ...QUERY, scope: { projectIds: ['prj_999999'], outcomeIds: [], includeDescendants: false } },
@@ -625,12 +642,14 @@ test('provider failures and omitted host secret stay private', async () => {
 
     fs.writeFileSync(bound.providerModule, "module.exports.read = async () => ({ status: 'unavailable', reason: 'host-secret /private/provider-payload' });\n");
     delete require.cache[require.resolve(bound.providerModule)];
+    setProjectsContextProvider(null);
     const failure = await readProjectsContext({ query: QUERY });
     assert.equal(failure.status, 'unavailable');
     assert.equal(failure.reason, 'Projects provider is unavailable');
     assert.doesNotMatch(failure.reason, /host-secret|private|payload/);
     fs.writeFileSync(bound.providerModule, "module.exports.read = async () => { throw new Error('host-secret /private/provider-payload'); };\n");
     delete require.cache[require.resolve(bound.providerModule)];
+    setProjectsContextProvider(null);
     const thrown = await readProjectsContext({ query: QUERY });
     assert.equal(thrown.reason, 'Projects provider is unavailable');
     assert.ok(repositoryRoot);

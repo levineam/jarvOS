@@ -3,6 +3,7 @@
 // This boundary is intentionally host-owned: an agent can ask for Projects
 // context, but it cannot choose a module, paths, capability, or secret.
 const fs = require('node:fs');
+const crypto = require('node:crypto');
 const os = require('node:os');
 const path = require('node:path');
 
@@ -119,6 +120,10 @@ function readPrivateJson(filePath) {
   }
 }
 
+function fileDigest(filePath) {
+  return crypto.createHash('sha256').update(fs.readFileSync(filePath)).digest('hex');
+}
+
 function createHostProjectsContextProvider(env = process.env) {
   const configuredPath = env && env[CONFIG_ENV];
   const configPath = typeof configuredPath === 'string' && configuredPath.length > 0
@@ -188,6 +193,7 @@ function createHostProjectsContextProvider(env = process.env) {
   if (!provider || typeof provider.read !== 'function') return null;
 
   return {
+    descriptor: Object.freeze({ configPath: trustedConfig, configDigest: fileDigest(trustedConfig), providerModule, providerDigest: fileDigest(providerModule) }),
     defaultQuery: config.query && typeof config.query === 'object' && !Array.isArray(config.query)
       ? JSON.parse(JSON.stringify(config.query))
       : null,

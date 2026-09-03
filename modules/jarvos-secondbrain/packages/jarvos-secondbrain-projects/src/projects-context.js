@@ -15,6 +15,7 @@ const {
 } = require('./projects-context-capability');
 
 const CONTEXT_SCHEMA_VERSION = 2;
+const SUPPORTED_CONTEXT_SCHEMA_VERSIONS = Object.freeze([CONTEXT_SCHEMA_VERSION]);
 const CONTEXT_PACKET_FIELDS = Object.freeze([
   'contract', 'schemaVersion', 'packetId', 'capturedAt', 'expiresAt', 'query', 'canonical', 'activity', 'currentWork', 'attention',
   'evidence', 'providers', 'inference', 'watermarks', 'omissions', 'truncation', 'redactionClass', 'capability',
@@ -435,14 +436,16 @@ function enforceBounds(packet, limits) {
 function validatePacketRecord(record) {
   if (!exactKeys(record, RECORD_PACKET_FIELDS) || !/^\w+_[0-9]{6,}$/.test(record.id) || !['project', 'outcome'].includes(record.kind)) return false;
   const allowedLifecycle = record.kind === 'project' ? ['active', 'paused', 'archived'] : ['planned', 'active', 'complete', 'archived'];
-  if (!Array.isArray(record.aliases) || !allowedLifecycle.includes(record.lifecycle)) return false;
+  if (requiredString(record.title, 'record.title') !== record.title || !Array.isArray(record.aliases) || record.aliases.some((alias) => requiredString(alias, 'record.alias') !== alias) || new Set(record.aliases).size !== record.aliases.length || !allowedLifecycle.includes(record.lifecycle)) return false;
+  if ((record.parentId !== null && (!/^prj_[0-9]{6,}$/.test(record.parentId) || record.parentId === record.id)) || (record.kind === 'project' && record.parentId !== null) || (record.kind === 'outcome' && record.parentId === null)) return false;
   if (!['high', 'medium', 'low', 'unset'].includes(record.declaredPriority) || !['high', 'medium', 'low', 'unset'].includes(record.effectivePriority)) return false;
-  if (!exactKeys(record.priority, PRIORITY_FIELDS) || !['explicit', 'inherited', 'unset'].includes(record.priority.source)) return false;
+  if (!exactKeys(record.priority, PRIORITY_FIELDS) || !['explicit', 'inherited', 'unset'].includes(record.priority.source) || !['high', 'medium', 'low', 'unset'].includes(record.priority.declared) || !['high', 'medium', 'low', 'unset'].includes(record.priority.effective) || (record.priority.sourceRecordId !== null && !/^\w+_[0-9]{6,}$/.test(record.priority.sourceRecordId)) || (record.priority.sourceKind !== null && !['project', 'outcome'].includes(record.priority.sourceKind))) return false;
+  if (Number.isNaN(Date.parse(record.createdAt)) || Number.isNaN(Date.parse(record.updatedAt)) || (record.goal !== null && typeof record.goal !== 'string') || (record.definitionOfDone !== null && typeof record.definitionOfDone !== 'string') || !isPlainObject(record.links)) return false;
   if (record.inference !== null) {
     const result = validateInferenceMetadata(record.inference);
     if (!result || stableStringify(result) !== stableStringify(record.inference)) return false;
   }
-  return Number.isInteger(record.revision) && record.revision > 0 && typeof record.breadcrumb === 'string';
+  return Number.isInteger(record.revision) && record.revision > 0 && typeof record.breadcrumb === 'string' && record.breadcrumb.trim().length > 0;
 }
 
 function validatePacketSummary(summary) {
@@ -536,13 +539,15 @@ function validateProviderView(view) {
 
 function validateContextPacket(packet) {
   if (!exactKeys(packet, CONTEXT_PACKET_FIELDS) || packet.contract !== CONTEXT_CONTRACT) return { ok: false, reason: 'invalid-contract' };
-  if (packet.schemaVersion !== CONTEXT_SCHEMA_VERSION) return { ok: false, reason: 'invalid-contract' };
+  if (!SUPPORTED_CONTEXT_SCHEMA_VERSIONS.includes(packet.schemaVersion)) return { ok: false, reason: 'unsupported-schema' };
   if (!/^ctx_[a-f0-9]{32}$/.test(packet.packetId) || Number.isNaN(Date.parse(packet.capturedAt)) || Number.isNaN(Date.parse(packet.expiresAt))) return { ok: false, reason: 'invalid-contract' };
   if (!REDACTION_CLASSES.includes(packet.redactionClass) || !exactKeys(packet.capability, ['receiptId', 'digest']) || !/^cap_[a-f0-9]{32}$/.test(packet.capability.receiptId) || !/^[a-f0-9]{64}$/.test(packet.capability.digest)) return { ok: false, reason: 'invalid-contract' };
   try {
     validateContextQuery(packet.query);
     if (!exactKeys(packet.canonical, ['generation', 'records', 'revisions']) || !Number.isInteger(packet.canonical.generation) || !Array.isArray(packet.canonical.records) || !isPlainObject(packet.canonical.revisions)) return { ok: false, reason: 'invalid-contract' };
     if (packet.canonical.records.some((record) => !validatePacketRecord(record))) return { ok: false, reason: 'invalid-contract' };
+    const recordsById = new Map(packet.canonical.records.map((record) => [record.id, record]));
+    if (recordsById.size !== packet.canonical.records.length || packet.canonical.records.some((record) => record.parentId !== null && recordsById.get(record.parentId)?.kind !== 'project')) return { ok: false, reason: 'invalid-contract' };
     if (!Object.entries(packet.canonical.revisions).every(([id, revision]) => /^\w+_[0-9]{6,}$/.test(id) && Number.isInteger(revision) && revision > 0)) return { ok: false, reason: 'invalid-contract' };
     if ([...packet.activity, ...packet.currentWork, ...packet.attention].some((value) => !validatePacketSummary(value)) || packet.evidence.some((value) => !validatePacketEvidence(value))) return { ok: false, reason: 'invalid-contract' };
     if (!validateInferencePacket(packet.inference) || !validatePacketWatermarks(packet.watermarks)) return { ok: false, reason: 'invalid-contract' };
@@ -553,6 +558,13 @@ function validateContextPacket(packet) {
     return { ok: false, reason: 'invalid-contract' };
   }
   return { ok: true, packet };
+}
+
+function normalizeContextPacket(packet) {
+  const validation = validateContextPacket(packet);
+  return validation.ok
+    ? { ok: true, packet: clone(validation.packet), supportedSchemaVersions: [...SUPPORTED_CONTEXT_SCHEMA_VERSIONS] }
+    : validation;
 }
 
 function buildContextPacket({ registry, query, providers = {}, providerAuthorities = {}, capability, capabilitySecret, subject, hostId, activityWindow = null, inference = null, now = new Date().toISOString() } = {}) {
@@ -668,6 +680,7 @@ function buildContextPacket({ registry, query, providers = {}, providerAuthoriti
 module.exports = {
   CONTEXT_CONTRACT,
   CONTEXT_SCHEMA_VERSION,
+  SUPPORTED_CONTEXT_SCHEMA_VERSIONS,
   CONTEXT_PACKET_FIELDS,
   EVIDENCE_FIELDS,
   INCLUDE_SECTIONS,
@@ -678,6 +691,7 @@ module.exports = {
   buildContextPacket,
   filterSummariesByWindow,
   normalizeInferenceSnapshot,
+  normalizeContextPacket,
   validateActivityWindow,
   validateContextPacket,
   validateContextQuery,
