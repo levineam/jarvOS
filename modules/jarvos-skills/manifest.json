@@ -35,15 +35,16 @@
       "purpose": "Plan, track, package, execute, and verify non-trivial work.",
       "source": {
         "revision": "jarvos-skills-v0.3.0",
-        "digest": "32ad169ce1f2296433fd552be6b0c6251d69b9e28ea620b97123e9d9310e7c04",
+        "digest": "5812ee2a9943cb3dac712041c01ceb5ff88348e99338821e14e45917eeb72af8",
         "license": "MIT",
         "provenance": "jarvOS reviewed source"
       },
-      "supportedHarnesses": ["generic", "hermes"],
+      "supportedHarnesses": ["generic", "codex", "hermes"],
       "projection": {
         "mode": "copy",
         "targets": {
           "generic": { "path": "{skillsRoot}/workflow-execution/SKILL.md", "renderer": "raw-skill-md" },
+          "codex": { "path": "{skillsRoot}/workflow-execution/SKILL.md", "renderer": "raw-skill-md" },
           "hermes": { "path": "{skillsRoot}/workflow-execution/SKILL.md", "renderer": "raw-skill-md" }
         }
       }

@@ -16,6 +16,7 @@ const {
 } = require('../src');
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-skills-projection-'));
+const codexRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-skills-projection-codex-'));
 const manifest = getManifest();
 const digest = (value) => crypto.createHash('sha256').update(value).digest('hex');
 
@@ -29,7 +30,15 @@ try {
   const first = planSkillProjection({ harness: 'hermes', skillsRoot: root, skills: ['workflow-execution'] });
   assert.equal(first.entries[0].status, 'missing');
   assert.equal(first.entries[0].action, 'create');
-  assert.equal(planSkillProjection({ harness: 'codex', skillsRoot: root, skills: ['workflow-execution'] }).entries[0].status, 'unsupported');
+  const codexWorkflow = planSkillProjection({ harness: 'codex', skillsRoot: codexRoot, skills: ['workflow-execution'] });
+  assert.equal(codexWorkflow.entries[0].status, 'missing');
+  assert.equal(codexWorkflow.entries[0].action, 'create');
+  const codexInitial = applySkillProjection(codexWorkflow);
+  assert.equal(codexInitial.applied[0].applied, true);
+  const codexText = fs.readFileSync(path.join(codexRoot, 'workflow-execution', 'SKILL.md'), 'utf8');
+  assert.match(codexText, /jarvos_coding_finish/);
+  assert.match(codexText, /merge it\s+autonomously/);
+  assert.match(codexText, /separate authority for publication, live activation,\s+spending, destructive action, or an external send/);
   assert.equal(planSkillProjection({ harness: 'hermes', skillsRoot: root, skills: ['workflow-execution'], incompatibleSkills: ['workflow-execution'] }).entries[0].status, 'incompatible');
   const initial = applySkillProjection(first);
   assert.equal(initial.applied[0].applied, true);
@@ -193,6 +202,7 @@ try {
   fs.rmSync(stagingRoot, { recursive: true, force: true });
 } finally {
   fs.rmSync(root, { recursive: true, force: true });
+  fs.rmSync(codexRoot, { recursive: true, force: true });
 }
 
 console.log('PASS @jarvos/skills projection');
