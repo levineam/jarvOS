@@ -560,6 +560,8 @@ try {
   const moduleDoctor = run(['doctor', '--profile', 'minimal', '--workspace', workspace, '--json'], { env });
   assert.equal(moduleDoctor.status, 0, moduleDoctor.stderr || moduleDoctor.stdout);
   const moduleReport = JSON.parse(moduleDoctor.stdout);
+  assert.equal(moduleReport.systemDoctor.status, 'healthy');
+  assert.equal(moduleReport.systemDoctor.components.some((component) => component.id === 'module.memory'), false);
   assert.deepEqual(moduleReport.modules, [{
     id: 'memory',
     state: 'update available',
@@ -568,6 +570,44 @@ try {
     validUntil: '2099-08-13T23:00:00.000Z',
     reasonClass: 'update-available',
   }]);
+  const moduleTextDoctor = run(['doctor', '--profile', 'minimal', '--workspace', workspace], { env });
+  assert.equal(moduleTextDoctor.status, 0, moduleTextDoctor.stderr || moduleTextDoctor.stdout);
+  assert.match(moduleTextDoctor.stdout, /jarvOS doctor — Minimal/);
+  assert.match(moduleTextDoctor.stdout, /Optional modules:\nMemory — update available/);
+  assert.match(moduleTextDoctor.stdout, /\nREADY\n\nSystem Doctor: READY\n$/);
+
+  const systemSnapshotPath = path.join(healthModules, 'system.json');
+  fs.writeFileSync(systemSnapshotPath, `${JSON.stringify({
+    schema: 'jarvos-health-module-snapshot/v1',
+    moduleId: 'system',
+    generation: 2,
+    observedAt: '2026-08-12T23:00:00.000Z',
+    validUntil: '2099-08-13T23:00:00.000Z',
+    trust: 'trusted',
+    factsVersion: 'jarvos-system-doctor-facts/v1',
+    facts: {
+      profile: 'minimal',
+      components: [{
+        id: 'provider.searxng',
+        state: 'healthy',
+        reasonClass: 'none',
+        evidence: { httpReachable: true, searchResultCount: 0, runtimeToolAvailable: false },
+      }],
+    },
+  })}\n`, 'utf8');
+  fs.chmodSync(systemSnapshotPath, 0o600);
+  const systemJsonDoctor = run(['doctor', '--profile', 'minimal', '--workspace', workspace, '--json'], { env });
+  assert.equal(systemJsonDoctor.status, 1, systemJsonDoctor.stderr || systemJsonDoctor.stdout);
+  const systemReport = JSON.parse(systemJsonDoctor.stdout);
+  assert.equal(systemReport.systemDoctor.schema, 'jarvos-system-doctor-report/v1');
+  const searxng = systemReport.systemDoctor.components.find((component) => component.id === 'provider.searxng');
+  assert.equal(searxng.state, 'warning');
+  assert.equal(searxng.reasonClass, 'search-empty');
+  const systemTextDoctor = run(['doctor', '--profile', 'minimal', '--workspace', workspace], { env });
+  assert.equal(systemTextDoctor.status, 1, systemTextDoctor.stderr || systemTextDoctor.stdout);
+  assert.match(systemTextDoctor.stdout, /⚠️ WARN SearXNG — warning/);
+  assert.match(systemTextDoctor.stdout, /NOT READY — needs your attention/);
+  fs.unlinkSync(systemSnapshotPath);
 
   const localDoctorEnv = {
     ...env,
@@ -589,9 +629,34 @@ try {
   assert.equal(localDoctor.status, 0, localDoctor.stderr || localDoctor.stdout);
   const localReport = JSON.parse(localDoctor.stdout);
   assert.equal(localReport.profile, 'local-openclaw');
+  assert.equal(localReport.systemDoctor.status, 'healthy');
   const persistence = localReport.checks.find((check) => check.component === 'openclaw.pluginPersistence');
   assert.equal(persistence.status, 'ok');
   assert.equal(persistence.driftCount, 0);
+
+  fs.writeFileSync(systemSnapshotPath, `${JSON.stringify({
+    schema: 'jarvos-health-module-snapshot/v1',
+    moduleId: 'system',
+    generation: 3,
+    observedAt: '2026-08-12T23:00:00.000Z',
+    validUntil: '2099-08-13T23:00:00.000Z',
+    trust: 'trusted',
+    factsVersion: 'jarvos-system-doctor-facts/v1',
+    facts: {
+      profile: 'local-openclaw',
+      components: [{ id: 'provider.paperclip', state: 'warning', reasonClass: 'unavailable', evidence: null }],
+    },
+  })}\n`, 'utf8');
+  fs.chmodSync(systemSnapshotPath, 0o600);
+  const blockedLocalDoctor = run([
+    'doctor', '--profile', 'local-openclaw', '--workspace', workspace,
+    '--openclaw-dir', openclawStateDir, '--staged-runtime-root', ROOT, '--json',
+  ], { env: localDoctorEnv });
+  assert.equal(blockedLocalDoctor.status, 1, blockedLocalDoctor.stderr || blockedLocalDoctor.stdout);
+  const blockedLocalReport = JSON.parse(blockedLocalDoctor.stdout);
+  assert.equal(blockedLocalReport.ok, false);
+  assert.equal(blockedLocalReport.systemDoctor.status, 'needs your attention');
+  fs.unlinkSync(systemSnapshotPath);
 
   const localConfigPath = path.join(tmp, 'local-openclaw-config.json');
   const localConfig = JSON.parse(fs.readFileSync(path.join(workspace, 'jarvos.config.json'), 'utf8'));

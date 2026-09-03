@@ -9,10 +9,13 @@ const test = require('node:test');
 const {
   HEALTH_MODULE_DIRECTORY,
   CONTINUITY_MODULE_ID,
+  MEMORY_COMPONENTS,
   PUBLIC_MODULE_ID,
+  SYSTEM_MODULE_ID,
   loadHealthModules,
   modulePath,
 } = require('../lib/jarvos-doctor-modules');
+const { buildSystemDoctorReceipt, renderSystemDoctor } = require('../lib/jarvos-system-doctor');
 
 const NOW = new Date('2026-08-13T12:00:00.000Z');
 
@@ -114,11 +117,147 @@ function snapshot(overrides = {}) {
   };
 }
 
+function systemComponent(id, state = 'healthy', overrides = {}) {
+  return {
+    id,
+    state,
+    reasonClass: state === 'healthy' ? 'none' : 'reported-condition',
+    evidence: id === 'provider.searxng'
+      ? { httpReachable: true, searchResultCount: 3, runtimeToolAvailable: true }
+      : null,
+    ...overrides,
+  };
+}
+
+function systemSnapshot(overrides = {}) {
+  return {
+    schema: 'jarvos-health-module-snapshot/v1',
+    moduleId: SYSTEM_MODULE_ID,
+    generation: 11,
+    observedAt: NOW.toISOString(),
+    validUntil: new Date(NOW.getTime() + 60 * 60 * 1000).toISOString(),
+    trust: 'trusted',
+    factsVersion: 'jarvos-system-doctor-facts/v1',
+    facts: { profile: 'minimal', components: [] },
+    ...overrides,
+  };
+}
+
 test('a missing optional Memory module is absent rather than a failure', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-doctor-module-'));
   const report = loadHealthModules({ workspace: root, now: NOW });
   assert.deepEqual(report.modules, []);
   assert.deepEqual(report.issues, []);
+});
+
+test('a profile-bound system snapshot exposes only its selected optional components', () => {
+  const root = workspace();
+  writeSnapshot(root, systemSnapshot({
+    facts: {
+      profile: 'minimal',
+      components: [systemComponent('provider.paperclip', 'not configured')],
+    },
+  }));
+  const report = loadHealthModules({ workspace: root, now: NOW, profile: 'minimal' });
+  assert.deepEqual(report.modules.map((module) => module.id), [SYSTEM_MODULE_ID]);
+  assert.equal(report.modules[0].components.length, 1);
+  assert.equal(report.modules[0].components[0].label, 'Paperclip');
+  assert.equal(report.modules[0].components[0].state, 'not configured');
+  assert.equal(report.modules[0].state, 'needs your attention');
+  assert.doesNotMatch(JSON.stringify(report), /telegram|openclaw|gbrain/i);
+});
+
+test('a system snapshot for another profile fails closed', () => {
+  const root = workspace();
+  writeSnapshot(root, systemSnapshot());
+  const report = loadHealthModules({ workspace: root, now: NOW, profile: 'local-openclaw' });
+  assert.equal(report.modules[0].id, SYSTEM_MODULE_ID);
+  assert.equal(report.modules[0].state, 'needs your attention');
+  assert.equal(report.modules[0].reasonClass, 'profile-mismatch');
+  assert.equal(report.modules[0].components, undefined);
+});
+
+test('Memory keeps its fixed ten-component roster and rejects partial or reordered projections', () => {
+  const components = MEMORY_COMPONENTS.map(([id]) => systemComponent(id));
+  const root = workspace();
+  writeSnapshot(root, systemSnapshot({ facts: { profile: 'minimal', components } }));
+  const accepted = loadHealthModules({ workspace: root, now: NOW, profile: 'minimal' }).modules[0];
+  assert.deepEqual(accepted.components.map(({ id, label }) => [id, label]), MEMORY_COMPONENTS);
+
+  for (const invalid of [components.slice(0, -1), [components[1], components[0], ...components.slice(2)]]) {
+    const invalidRoot = workspace();
+    writeSnapshot(invalidRoot, systemSnapshot({ facts: { profile: 'minimal', components: invalid } }));
+    const rejected = loadHealthModules({ workspace: invalidRoot, now: NOW, profile: 'minimal' }).modules[0];
+    assert.equal(rejected.state, 'needs your attention');
+    assert.equal(rejected.reasonClass, 'module-invalid');
+  }
+});
+
+test('SearXNG cannot be healthy when HTTP responds but search and runtime-tool proof fail', () => {
+  const root = workspace();
+  writeSnapshot(root, systemSnapshot({
+    facts: {
+      profile: 'minimal',
+      components: [systemComponent('provider.searxng', 'healthy', {
+        evidence: { httpReachable: true, searchResultCount: 0, runtimeToolAvailable: false },
+      })],
+    },
+  }));
+  const component = loadHealthModules({ workspace: root, now: NOW, profile: 'minimal' }).modules[0].components[0];
+  assert.equal(component.state, 'warning');
+  assert.equal(component.reasonClass, 'search-empty');
+});
+
+test('SearXNG reports the first failed acceptance layer', () => {
+  const cases = [
+    [{ httpReachable: false, searchResultCount: 3, runtimeToolAvailable: true }, 'http-unreachable'],
+    [{ httpReachable: true, searchResultCount: 3, runtimeToolAvailable: false }, 'runtime-tool-missing'],
+  ];
+  for (const [evidence, reasonClass] of cases) {
+    const root = workspace();
+    writeSnapshot(root, systemSnapshot({
+      facts: {
+        profile: 'minimal',
+        components: [systemComponent('provider.searxng', 'healthy', { evidence })],
+      },
+    }));
+    const component = loadHealthModules({ workspace: root, now: NOW, profile: 'minimal' }).modules[0].components[0];
+    assert.equal(component.state, 'warning');
+    assert.equal(component.reasonClass, reasonClass);
+  }
+});
+
+test('legacy module snapshots cannot select System Doctor components', () => {
+  const root = workspace();
+  writeSnapshot(root, snapshot());
+  const modules = loadHealthModules({ workspace: root, now: NOW, profile: 'minimal' }).modules;
+  const receipt = buildSystemDoctorReceipt({
+    ok: true,
+    profile: { id: 'minimal', title: 'Minimal' },
+    workspace: root,
+    results: [],
+    modules,
+  });
+  assert.deepEqual(receipt.components, []);
+});
+
+test('the shared System Doctor receipt and text list core plus every selected component', () => {
+  const memory = MEMORY_COMPONENTS.map(([id, label]) => ({
+    id, label, state: 'healthy', reasonClass: 'none', evidence: null,
+  }));
+  const report = {
+    ok: true,
+    profile: { id: 'minimal', title: 'Minimal' },
+    workspace: '/portable/workspace',
+    results: [{ id: 'node-version', ok: true, message: 'Node.js is supported' }],
+    modules: [{ id: 'system', state: 'healthy', reasonClass: 'none', components: memory }],
+  };
+  const receipt = buildSystemDoctorReceipt(report);
+  assert.equal(receipt.schema, 'jarvos-system-doctor-report/v1');
+  assert.equal(receipt.components.filter((component) => component.section === 'memory').length, 10);
+  const text = renderSystemDoctor({ ...report, systemDoctor: receipt });
+  assert.match(text, /✅ PASS node-version — healthy/);
+  for (const [, label] of MEMORY_COMPONENTS) assert.match(text, new RegExp(label.replace(/[&]/g, '\\&')));
 });
 
 test('missing continuity evidence is visible only when the private profile requires it', () => {
