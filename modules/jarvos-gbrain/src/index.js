@@ -271,8 +271,23 @@ function resolveSourcePath(item, config) {
   const sourcePath = firstString(item.sourcePath, item.path);
   if (!sourcePath) return null;
   const expanded = expandTilde(sourcePath);
-  if (path.isAbsolute(expanded)) return expanded;
-  return path.join(config.vaultDir, expanded);
+  const vaultDir = path.resolve(config.vaultDir);
+  const resolved = path.resolve(vaultDir, expanded);
+  const relative = path.relative(vaultDir, resolved);
+  if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) return null;
+  return resolved;
+}
+
+function resolveRealSourcePath(sourcePath, config) {
+  try {
+    const vaultDir = fs.realpathSync(config.vaultDir);
+    const resolved = fs.realpathSync(sourcePath);
+    const relative = path.relative(vaultDir, resolved);
+    if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) return null;
+    return resolved;
+  } catch {
+    return null;
+  }
 }
 
 function targetPathForItem(item, config) {
@@ -416,11 +431,16 @@ function createImportPlan(overrides = {}) {
 
     const sourcePath = resolveSourcePath(item, config);
     if (!sourcePath) {
-      warnings.push(`Item ${index} is missing sourcePath`);
+      warnings.push(`Item ${index} has a missing or out-of-vault sourcePath`);
       continue;
     }
     if (!fs.existsSync(sourcePath)) {
       warnings.push(`Item ${index} source does not exist: ${sourcePath}`);
+      continue;
+    }
+    const realSourcePath = resolveRealSourcePath(sourcePath, config);
+    if (!realSourcePath) {
+      warnings.push(`Item ${index} source is outside the vault: ${sourcePath}`);
       continue;
     }
 
@@ -429,7 +449,7 @@ function createImportPlan(overrides = {}) {
       index,
       type: pageType,
       title: firstString(item.title, path.basename(sourcePath, '.md')),
-      sourcePath,
+      sourcePath: realSourcePath,
       targetPath,
       slug: path.basename(targetPath, '.md'),
       tags: Array.isArray(item.tags) ? item.tags : [],
