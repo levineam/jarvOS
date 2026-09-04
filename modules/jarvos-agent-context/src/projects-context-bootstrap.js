@@ -3,6 +3,7 @@
 // This boundary is intentionally host-owned: an agent can ask for Projects
 // context, but it cannot choose a module, paths, capability, or secret.
 const fs = require('node:fs');
+const crypto = require('node:crypto');
 const os = require('node:os');
 const path = require('node:path');
 
@@ -119,6 +120,10 @@ function readPrivateJson(filePath) {
   }
 }
 
+function digest(contents) {
+  return crypto.createHash('sha256').update(contents).digest('hex');
+}
+
 function createHostProjectsContextProvider(env = process.env) {
   const configuredPath = env && env[CONFIG_ENV];
   const configPath = typeof configuredPath === 'string' && configuredPath.length > 0
@@ -131,8 +136,8 @@ function createHostProjectsContextProvider(env = process.env) {
   const trustedConfig = resolveAbsoluteFile(configPath, null);
   if (!trustedConfig) return null;
 
-  let config;
-  try { config = JSON.parse(fs.readFileSync(trustedConfig, 'utf8')); } catch { return null; }
+  let config; let configDigest;
+  try { const contents = fs.readFileSync(trustedConfig); config = JSON.parse(contents); configDigest = digest(contents); } catch { return null; }
   if (!config || typeof config !== 'object' || Array.isArray(config)) return null;
 
   const workspaceRoot = resolveTrustedDirectory(config.workspaceRoot);
@@ -183,11 +188,20 @@ function createHostProjectsContextProvider(env = process.env) {
     || (capabilitySecretValue !== undefined && !capabilitySecretPath)
     || (hostSecretValue !== undefined && !hostSecretPath)) return null;
 
-  let provider;
-  try { provider = require(providerModule); } catch { return null; }
+  let provider; let providerDigest;
+  try {
+    const before = fs.readFileSync(providerModule);
+    provider = require(providerModule);
+    const after = fs.readFileSync(providerModule);
+    if (!before.equals(after)) return null;
+    providerDigest = digest(before);
+  } catch { return null; }
   if (!provider || typeof provider.read !== 'function') return null;
 
+  const descriptor = Object.freeze({ configPath: trustedConfig, configDigest, providerModule, providerDigest });
+
   return {
+    descriptor,
     defaultQuery: config.query && typeof config.query === 'object' && !Array.isArray(config.query)
       ? JSON.parse(JSON.stringify(config.query))
       : null,

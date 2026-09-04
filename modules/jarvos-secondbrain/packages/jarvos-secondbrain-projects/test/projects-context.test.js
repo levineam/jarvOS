@@ -8,7 +8,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 
 const { ProjectRegistry } = require('../src/registry');
-const { CONTEXT_CONTRACT, buildContextPacket, validateContextPacket, validateContextQuery } = require('../src/projects-context');
+const { CONTEXT_CONTRACT, buildContextPacket, normalizeContextPacket, SUPPORTED_CONTEXT_SCHEMA_VERSIONS, validateContextPacket, validateContextQuery } = require('../src/projects-context');
 const { CAPABILITY_CONTRACT, issueCapability, verifyCapability } = require('../src/projects-context-capability');
 const inferenceContracts = require('../src/project-inference-contracts');
 const {
@@ -554,4 +554,31 @@ test('packet identity is stable for the same bounded input', () => {
   assert.equal(crypto.createHash('sha256').update(JSON.stringify(first.packet.canonical.revisions)).digest('hex').length, 64);
   assert.deepEqual(first.packet.inference, second.packet.inference);
   assert.deepEqual(first.packet.watermarks, second.packet.watermarks);
+});
+
+test('packet normalization advertises the supported schema set and rejects unknown schemas', () => {
+  const { registry, root, outcome } = makeRegistry();
+  const query = queryFor(root, outcome);
+  const result = buildContextPacket({
+    registry, query, capability: issue(query), capabilitySecret: SECRET, subject: 'agent:test-session', hostId: 'projects-host', providers: {}, now: NOW,
+  });
+  assert.equal(result.status, 'ok');
+  assert.deepEqual(normalizeContextPacket(result.packet), {
+    ok: true, packet: result.packet, supportedSchemaVersions: [2],
+  });
+  assert.deepEqual(SUPPORTED_CONTEXT_SCHEMA_VERSIONS, [2]);
+  assert.deepEqual(normalizeContextPacket({ ...result.packet, schemaVersion: 99 }), { ok: false, reason: 'unsupported-schema' });
+  assert.deepEqual(normalizeContextPacket({
+    ...result.packet,
+    canonical: { ...result.packet.canonical, records: [{ ...result.packet.canonical.records[0], title: 42 }, ...result.packet.canonical.records.slice(1)] },
+  }), { ok: false, reason: 'invalid-contract' });
+  assert.deepEqual(normalizeContextPacket({
+    ...result.packet,
+    canonical: { ...result.packet.canonical, records: [result.packet.canonical.records[0], { ...result.packet.canonical.records[1], parentId: null }] },
+  }), { ok: false, reason: 'invalid-contract' });
+  for (const revisions of [
+    {},
+    { ...result.packet.canonical.revisions, prj_999999: 1 },
+    { ...result.packet.canonical.revisions, [result.packet.canonical.records[0].id]: result.packet.canonical.records[0].revision + 1 },
+  ]) assert.deepEqual(normalizeContextPacket({ ...result.packet, canonical: { ...result.packet.canonical, revisions } }), { ok: false, reason: 'invalid-contract' });
 });
