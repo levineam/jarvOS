@@ -292,7 +292,9 @@ function collectCompoundEngineeringFixtureEntries(root, relative = '') {
 
 function computeCompoundEngineeringFixtureDigest(root, entries = null) {
   const fixtureEntries = entries || collectCompoundEngineeringFixtureEntries(root);
-  const canonical = fixtureEntries.map((entry) => `${entry.path}\0${entry.type}\0${entry.mode.toString(8)}\0${entry.digest || ''}\n`).join('');
+  // Digest content and path identity only. Permission bits vary across checkout
+  // umasks (macOS vs Linux CI) and must not invalidate the shipped pin.
+  const canonical = fixtureEntries.map((entry) => `${entry.path}\0${entry.type}\0${entry.digest || ''}\n`).join('');
   return crypto.createHash('sha256').update(canonical).digest('hex');
 }
 
