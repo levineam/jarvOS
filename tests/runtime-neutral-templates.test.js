@@ -74,9 +74,10 @@ try {
 
   const doctor = run(['doctor', '--profile', 'minimal', '--workspace', workspace], env);
   assert.equal(doctor.status, 0, doctor.stderr || doctor.stdout);
-  assert.match(doctor.stdout, /PASS vault-path/);
-  assert.match(doctor.stdout, /PASS vault-path-stale/);
+  assert.match(doctor.stdout, /✅ vault-path/);
+  assert.match(doctor.stdout, /✅ vault-path-stale/);
   assert.match(doctor.stdout, /dormant runtime mode leaves vault unactivated/);
+  assert.doesNotMatch(doctor.stdout, /\bPASS\b|\bFAIL\b|READY/);
 
   const authoredAgents = '# Customized workspace instructions\n';
   fs.writeFileSync(path.join(workspace, 'AGENTS.md'), authoredAgents, 'utf8');
