@@ -127,7 +127,7 @@ search returns zero results or the runtime tool is absent, jarvOS downgrades
 the component to `warning`.
 
 When the system snapshot selects Memory, it must contain the existing ten
-components in their fixed order: GBrain, Lossless Claw, QMD search,
+components in their fixed order: GBrain core, GBrain semantic coverage, Lossless Claw, QMD search,
 memory-wiki, Notes & provenance, Recall evaluation, Scheduled maintenance,
 Reviewed runtime, Automatic repair, and Telegram follow-up & proof. Partial or
 reordered Memory rosters fail closed. The legacy aggregate `memory.json`

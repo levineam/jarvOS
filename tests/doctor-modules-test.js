@@ -177,7 +177,7 @@ test('a system snapshot for another profile fails closed', () => {
   assert.equal(report.modules[0].components, undefined);
 });
 
-test('Memory keeps its fixed ten-component roster and rejects partial or reordered projections', () => {
+test('Memory keeps its fixed eleven-component roster and rejects partial or reordered projections', () => {
   const components = MEMORY_COMPONENTS.map(([id]) => systemComponent(id));
   const root = workspace();
   writeSnapshot(root, systemSnapshot({ facts: { profile: 'minimal', components } }));
@@ -254,10 +254,24 @@ test('the shared System Doctor receipt and text list core plus every selected co
   };
   const receipt = buildSystemDoctorReceipt(report);
   assert.equal(receipt.schema, 'jarvos-system-doctor-report/v1');
-  assert.equal(receipt.components.filter((component) => component.section === 'memory').length, 10);
+  assert.equal(receipt.components.filter((component) => component.section === 'memory').length, 11);
   const text = renderSystemDoctor({ ...report, systemDoctor: receipt });
-  assert.match(text, /✅ PASS node-version — healthy/);
-  for (const [, label] of MEMORY_COMPONENTS) assert.match(text, new RegExp(label.replace(/[&]/g, '\\&')));
+  assert.match(text, /^✅ node-version — Node\.js is supported$/m);
+  assert.doesNotMatch(text, /\bPASS\b|\bFAIL\b|\bWARN\b|\bSKIP\b/);
+  assert.doesNotMatch(text, /Selected optional components/);
+  assert.doesNotMatch(text, /READY|NOT READY/);
+  assert.doesNotMatch(text, /— healthy\b|— warning\b|— repair needed\b|— not configured\b/);
+  const memoryLines = text.split('\n').filter((line) => line.startsWith('✅ ') && !line.includes('node-version'));
+  assert.equal(memoryLines.length, 11);
+  for (const [, label] of MEMORY_COMPONENTS) {
+    assert.ok(text.split('\n').includes(`✅ ${label}`), label);
+  }
+  // Exactly one status icon per rendered component line.
+  for (const line of text.split('\n')) {
+    if (!line || line.startsWith('jarvOS') || line.startsWith('Workspace:')) continue;
+    const icons = (line.match(/[✅⚠️❌◻️]/gu) || []);
+    assert.equal(icons.length, 1, line);
+  }
 });
 
 test('missing continuity evidence is visible only when the private profile requires it', () => {
@@ -556,4 +570,55 @@ test('a present untrusted or stale continuity snapshot fails closed as that modu
     validUntil: new Date(NOW.getTime() - 60 * 60 * 1000).toISOString(),
   }));
   assert.equal(loadHealthModules({ workspace: staleRoot, now: NOW }).modules[0].reasonClass, 'module-stale');
+});
+
+
+test('System Doctor text distinguishes broken from unverified without status vocabulary', () => {
+  const report = {
+    ok: false,
+    profile: { id: 'minimal', title: 'Minimal' },
+    workspace: '/portable/workspace',
+    results: [
+      { id: 'node-version', ok: true, message: 'Node.js is supported' },
+      { id: 'workspace-files', ok: false, message: 'Missing MEMORY.md' },
+    ],
+    modules: [{
+      id: 'system',
+      state: 'needs your attention',
+      reasonClass: 'component-degraded',
+      components: [
+        ...MEMORY_COMPONENTS.map(([id, label]) => ({ id, label, state: 'healthy', reasonClass: 'none', evidence: null })),
+        {
+          id: 'provider.searxng',
+          label: 'SearXNG',
+          state: 'warning',
+          reasonClass: 'search-empty',
+          evidence: { httpReachable: true, searchResultCount: 0, runtimeToolAvailable: true },
+        },
+        {
+          id: 'provider.paperclip',
+          label: 'Paperclip',
+          state: 'not configured',
+          reasonClass: 'not-configured',
+          evidence: null,
+        },
+      ],
+    }],
+  };
+  const receipt = buildSystemDoctorReceipt(report);
+  assert.equal(receipt.ok, false);
+  assert.equal(receipt.status, 'repair needed');
+  assert.equal(receipt.components.filter((component) => component.section === 'memory').length, 11);
+  assert.ok(receipt.components.some((component) => component.id === 'provider.searxng'));
+
+  const text = renderSystemDoctor({ ...report, systemDoctor: receipt });
+  const before = [
+    '❌ workspace-files — Missing MEMORY.md',
+    '⚠️ SearXNG — reachable, but search returned no results',
+    '◻️ Paperclip — not configured yet',
+  ];
+  for (const line of before) assert.ok(text.split('\n').includes(line), line);
+  assert.ok(text.split('\n').includes('✅ GBrain core'));
+  assert.ok(text.split('\n').includes('✅ GBrain semantic coverage'));
+  assert.doesNotMatch(text, /\bPASS\b|\bFAIL\b|Selected optional components|READY/);
 });

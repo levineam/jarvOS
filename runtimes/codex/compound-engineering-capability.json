@@ -11,7 +11,11 @@
   },
   "harness": "codex",
   "admission": "supported",
-  "operations": ["plan", "work", "compound"],
+  "operations": [
+    "plan",
+    "work",
+    "compound"
+  ],
   "activation": {
     "mechanism": "codex-plugin-marketplace",
     "marketplaceArgv": [
@@ -38,19 +42,34 @@
     "commands": [
       {
         "id": "version",
-        "argv": ["codex", "--version"],
+        "argv": [
+          "codex",
+          "--version"
+        ],
         "readOnly": true,
         "activatesPluginCode": false
       },
       {
         "id": "marketplace-list",
-        "argv": ["codex", "plugin", "marketplace", "list", "--json"],
+        "argv": [
+          "codex",
+          "plugin",
+          "marketplace",
+          "list",
+          "--json"
+        ],
         "readOnly": true,
         "activatesPluginCode": false
       },
       {
         "id": "plugin-list",
-        "argv": ["codex", "plugin", "list", "--available", "--json"],
+        "argv": [
+          "codex",
+          "plugin",
+          "list",
+          "--available",
+          "--json"
+        ],
         "readOnly": true,
         "activatesPluginCode": false
       }
@@ -89,5 +108,5 @@
     "invocation.json",
     "plugin-manifest.json"
   ],
-  "fixtureTreeDigest": "5ade826c32f4ca14b00bb71be6fce330ae9cd06b28aff8d6816311a6343617a2"
+  "fixtureTreeDigest": "58f4ab90b8c5d30a983bdc80bc89699069dc2e84214ac5281df7f6b632dadbc9"
 }
