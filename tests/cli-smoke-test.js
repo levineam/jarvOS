@@ -301,9 +301,9 @@ try {
     'doctor', '--profile', 'minimal', '--workspace', attachWorkspace,
   ], { env: attachEnv });
   assert.equal(attachDoctor.status, 0, attachDoctor.stderr || attachDoctor.stdout);
-  assert.match(attachDoctor.stdout, /PASS workspace-files/);
-  assert.match(attachDoctor.stdout, /PASS vault-path/);
-  assert.match(attachDoctor.stdout, /READY/);
+  assert.match(attachDoctor.stdout, /✅ workspace-files/);
+  assert.match(attachDoctor.stdout, /✅ vault-path/);
+  assert.doesNotMatch(attachDoctor.stdout, /PASS|FAIL|WARN|SKIP|READY/);
 
   const attachSync = run([
     'sync', '--workspace', attachWorkspace, '--dry-run', '--json',
@@ -475,21 +475,19 @@ try {
   delete envWithoutHost.JARVOS_CONTROL_PLANE_SERVICE_MODULE;
   const doctorNoHost = run(['doctor', '--profile', 'minimal', '--workspace', workspace], { env: envWithoutHost });
   assert.equal(doctorNoHost.status, 0, doctorNoHost.stderr || doctorNoHost.stdout);
-  assert.match(doctorNoHost.stdout, /PASS control-plane-module/);
-  assert.match(doctorNoHost.stdout, /host service not configured/);
-  assert.match(doctorNoHost.stdout, /READY/);
+  assert.match(doctorNoHost.stdout, /✅ control-plane-module/);
+  assert.doesNotMatch(doctorNoHost.stdout, /PASS|FAIL|WARN|SKIP|READY/);
 
   const doctor = run(['doctor', '--profile', 'minimal', '--workspace', workspace], { env });
   assert.equal(doctor.status, 0, doctor.stderr || doctor.stdout);
-  assert.match(doctor.stdout, /PASS node-version/);
-  assert.match(doctor.stdout, /PASS workspace-files/);
-  assert.match(doctor.stdout, /PASS config-schema/);
-  assert.match(doctor.stdout, /PASS vault-path/);
-  assert.match(doctor.stdout, /PASS vault-path-stale/);
-  assert.match(doctor.stdout, /PASS journal-conflict/);
-  assert.match(doctor.stdout, /PASS control-plane-module/);
-  assert.match(doctor.stdout, /authenticated host service/);
-  assert.match(doctor.stdout, /READY/);
+  assert.match(doctor.stdout, /✅ node-version/);
+  assert.match(doctor.stdout, /✅ workspace-files/);
+  assert.match(doctor.stdout, /✅ config-schema/);
+  assert.match(doctor.stdout, /✅ vault-path/);
+  assert.match(doctor.stdout, /✅ vault-path-stale/);
+  assert.match(doctor.stdout, /✅ journal-conflict/);
+  assert.match(doctor.stdout, /✅ control-plane-module/);
+  assert.doesNotMatch(doctor.stdout, /PASS|FAIL|WARN|SKIP|READY/);
 
   for (const file of [
     'AGENTS.md',
@@ -505,15 +503,15 @@ try {
   }
   const syncDoctor = run(['doctor', '--profile', 'minimal', '--workspace', syncWorkspace], { env });
   assert.equal(syncDoctor.status, 0, syncDoctor.stderr || syncDoctor.stdout);
-  assert.match(syncDoctor.stdout, /PASS config-schema/);
-  assert.match(syncDoctor.stdout, /PASS vault-path/);
-  assert.match(syncDoctor.stdout, /READY/);
+  assert.match(syncDoctor.stdout, /✅ config-schema/);
+  assert.match(syncDoctor.stdout, /✅ vault-path/);
+  assert.doesNotMatch(syncDoctor.stdout, /PASS|FAIL|WARN|SKIP|READY/);
 
   fs.rmSync(path.join(syncVault, 'Tags'), { recursive: true });
   fs.writeFileSync(path.join(syncVault, 'Tags'), 'not a directory\n');
   const fileTagsDoctor = run(['doctor', '--profile', 'minimal', '--workspace', syncWorkspace], { env });
   assert.notEqual(fileTagsDoctor.status, 0);
-  assert.match(fileTagsDoctor.stdout, /FAIL vault-path/);
+  assert.match(fileTagsDoctor.stdout, /❌ vault-path/);
   fs.rmSync(path.join(syncVault, 'Tags'));
   fs.mkdirSync(path.join(syncVault, 'Tags'));
 
@@ -531,7 +529,7 @@ try {
   fs.writeFileSync(path.join(workspace, 'jarvos.config.json'), JSON.stringify(configured, null, 2));
   const duplicateTelegramDoctor = run(['doctor', '--profile', 'minimal', '--workspace', workspace], { env });
   assert.equal(duplicateTelegramDoctor.status, 1, duplicateTelegramDoctor.stderr || duplicateTelegramDoctor.stdout);
-  assert.match(duplicateTelegramDoctor.stdout, /FAIL config-schema/);
+  assert.match(duplicateTelegramDoctor.stdout, /❌ config-schema/);
   assert.match(duplicateTelegramDoctor.stdout, /only one Telegram update consumer/);
   delete configured.runtimeMode;
   fs.writeFileSync(path.join(workspace, 'jarvos.config.json'), JSON.stringify(configured, null, 2));
@@ -572,11 +570,38 @@ try {
   }]);
   const moduleTextDoctor = run(['doctor', '--profile', 'minimal', '--workspace', workspace], { env });
   assert.equal(moduleTextDoctor.status, 0, moduleTextDoctor.stderr || moduleTextDoctor.stdout);
-  assert.match(moduleTextDoctor.stdout, /jarvOS doctor — Minimal/);
-  assert.match(moduleTextDoctor.stdout, /Optional modules:\nMemory — update available/);
-  assert.match(moduleTextDoctor.stdout, /\nREADY\n\nSystem Doctor: READY\n$/);
+  assert.match(moduleTextDoctor.stdout, /jarvOS System Doctor — Minimal/);
+  assert.doesNotMatch(moduleTextDoctor.stdout, /Memory — update available/);
+  assert.doesNotMatch(moduleTextDoctor.stdout, /PASS|FAIL|WARN|SKIP|System Doctor:|READY/);
+
+  fs.writeFileSync(memorySnapshotPath, `${JSON.stringify({
+    schema: 'jarvos-health-module-snapshot/v1',
+    moduleId: 'memory',
+    generation: 2,
+    observedAt: '2026-08-12T23:00:00.000Z',
+    validUntil: '2099-08-13T23:00:00.000Z',
+    trust: 'trusted',
+    repairable: true,
+    updateAvailable: false,
+  })}\n`, 'utf8');
+  const blockedMemoryDoctor = run(['doctor', '--profile', 'minimal', '--workspace', workspace], { env });
+  assert.equal(blockedMemoryDoctor.status, 1, blockedMemoryDoctor.stderr || blockedMemoryDoctor.stdout);
+  assert.match(blockedMemoryDoctor.stdout, /❌ Memory receipt/);
 
   const systemSnapshotPath = path.join(healthModules, 'system.json');
+  const memoryIds = [
+    'memory.gbrain',
+    'memory.gbrain-semantic-coverage',
+    'memory.lossless-claw',
+    'memory.qmd-search',
+    'memory.memory-wiki',
+    'memory.notes-provenance',
+    'memory.recall-evaluation',
+    'memory.scheduled-maintenance',
+    'memory.runtime-checkout',
+    'memory.automatic-repair',
+    'memory.notification-follow-up',
+  ];
   fs.writeFileSync(systemSnapshotPath, `${JSON.stringify({
     schema: 'jarvos-health-module-snapshot/v1',
     moduleId: 'system',
@@ -584,7 +609,36 @@ try {
     observedAt: '2026-08-12T23:00:00.000Z',
     validUntil: '2099-08-13T23:00:00.000Z',
     trust: 'trusted',
-    factsVersion: 'jarvos-system-doctor-facts/v1',
+    factsVersion: 'jarvos-system-doctor-facts/v2',
+    facts: {
+      profile: 'minimal',
+      components: memoryIds.map((id) => ({ id, state: 'healthy', reasonClass: 'none', evidence: null })),
+    },
+  })}\n`, 'utf8');
+  fs.chmodSync(systemSnapshotPath, 0o600);
+  const projectedMemoryDoctor = run(['doctor', '--profile', 'minimal', '--workspace', workspace], { env });
+  assert.equal(projectedMemoryDoctor.status, 0, projectedMemoryDoctor.stderr || projectedMemoryDoctor.stdout);
+  assert.match(projectedMemoryDoctor.stdout, /Memory\n✅ GBrain core\n✅ GBrain semantic coverage/);
+  assert.doesNotMatch(projectedMemoryDoctor.stdout, /Memory receipt/);
+  fs.writeFileSync(memorySnapshotPath, `${JSON.stringify({
+    schema: 'jarvos-health-module-snapshot/v1',
+    moduleId: 'memory',
+    generation: 3,
+    observedAt: '2026-08-12T23:00:00.000Z',
+    validUntil: '2099-08-13T23:00:00.000Z',
+    trust: 'trusted',
+    repairable: false,
+    updateAvailable: true,
+  })}\n`, 'utf8');
+
+  fs.writeFileSync(systemSnapshotPath, `${JSON.stringify({
+    schema: 'jarvos-health-module-snapshot/v1',
+    moduleId: 'system',
+    generation: 2,
+    observedAt: '2026-08-12T23:00:00.000Z',
+    validUntil: '2099-08-13T23:00:00.000Z',
+    trust: 'trusted',
+    factsVersion: 'jarvos-system-doctor-facts/v2',
     facts: {
       profile: 'minimal',
       components: [{
@@ -605,8 +659,8 @@ try {
   assert.equal(searxng.reasonClass, 'search-empty');
   const systemTextDoctor = run(['doctor', '--profile', 'minimal', '--workspace', workspace], { env });
   assert.equal(systemTextDoctor.status, 1, systemTextDoctor.stderr || systemTextDoctor.stdout);
-  assert.match(systemTextDoctor.stdout, /⚠️ WARN SearXNG — warning/);
-  assert.match(systemTextDoctor.stdout, /NOT READY — needs your attention/);
+  assert.match(systemTextDoctor.stdout, /⚠️ SearXNG — No search results\. Run a real search, then rerun Doctor\./);
+  assert.doesNotMatch(systemTextDoctor.stdout, /PASS|FAIL|WARN|SKIP|Selected optional components|System Doctor:|READY/);
   fs.unlinkSync(systemSnapshotPath);
 
   const localDoctorEnv = {
@@ -641,7 +695,7 @@ try {
     observedAt: '2026-08-12T23:00:00.000Z',
     validUntil: '2099-08-13T23:00:00.000Z',
     trust: 'trusted',
-    factsVersion: 'jarvos-system-doctor-facts/v1',
+    factsVersion: 'jarvos-system-doctor-facts/v2',
     facts: {
       profile: 'local-openclaw',
       components: [{ id: 'provider.paperclip', state: 'warning', reasonClass: 'unavailable', evidence: null }],
@@ -713,7 +767,7 @@ try {
   };
   const doctorBadHost = run(['doctor', '--profile', 'minimal', '--workspace', workspace], { env: badHostEnv });
   assert.notEqual(doctorBadHost.status, 0);
-  assert.match(doctorBadHost.stdout, /FAIL control-plane-module/);
+  assert.match(doctorBadHost.stdout, /❌ control-plane-module/);
   assert.match(doctorBadHost.stdout, /configure a usable JARVOS_CONTROL_PLANE_SERVICE_MODULE/);
   assert.doesNotMatch(doctorBadHost.stdout, /missing-host\.js/);
 

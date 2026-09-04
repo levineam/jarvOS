@@ -124,8 +124,9 @@ The minimal profile checks the reusable JarvOS contract:
 
 Failure output names the exact component, such as `agent.context` or
 `path.vault`, so an installer or assistant can repair the missing piece directly.
-JSON includes the `jarvos-system-doctor-report/v1` projection, while text keeps
-its existing transcript and appends the same selected-component result.
+JSON includes the `jarvos-system-doctor-report/v1` projection, while text shows
+one icon and one line per component, adding a concise reason and next action only
+when a component is degraded.
 Optional providers are absent unless selected by a profile-bound, data-only
 health snapshot; selected components remain individually visible as healthy,
 warning, repair needed, or not configured.

@@ -137,7 +137,7 @@ function systemSnapshot(overrides = {}) {
     observedAt: NOW.toISOString(),
     validUntil: new Date(NOW.getTime() + 60 * 60 * 1000).toISOString(),
     trust: 'trusted',
-    factsVersion: 'jarvos-system-doctor-facts/v1',
+    factsVersion: 'jarvos-system-doctor-facts/v2',
     facts: { profile: 'minimal', components: [] },
     ...overrides,
   };
@@ -177,7 +177,7 @@ test('a system snapshot for another profile fails closed', () => {
   assert.equal(report.modules[0].components, undefined);
 });
 
-test('Memory keeps its fixed ten-component roster and rejects partial or reordered projections', () => {
+test('Memory keeps its fixed eleven-component roster and rejects partial or reordered projections', () => {
   const components = MEMORY_COMPONENTS.map(([id]) => systemComponent(id));
   const root = workspace();
   writeSnapshot(root, systemSnapshot({ facts: { profile: 'minimal', components } }));
@@ -191,6 +191,31 @@ test('Memory keeps its fixed ten-component roster and rejects partial or reorder
     assert.equal(rejected.state, 'needs your attention');
     assert.equal(rejected.reasonClass, 'module-invalid');
   }
+});
+
+test('the obsolete ten-row v1 System Doctor facts fail closed', () => {
+  const root = workspace();
+  writeSnapshot(root, systemSnapshot({
+    factsVersion: 'jarvos-system-doctor-facts/v1',
+    facts: {
+      profile: 'minimal',
+      components: MEMORY_COMPONENTS
+        .filter(([id]) => id !== 'memory.gbrain-semantic-coverage')
+        .map(([id]) => systemComponent(id)),
+    },
+  }));
+  const report = loadHealthModules({ workspace: root, now: NOW, profile: 'minimal' });
+  assert.equal(report.modules[0].state, 'needs your attention');
+  assert.equal(report.modules[0].reasonClass, 'module-invalid');
+  assert.equal(report.modules[0].components, undefined);
+  const text = renderSystemDoctor({
+    ok: false,
+    profile: { id: 'minimal', title: 'Minimal' },
+    workspace: root,
+    results: [{ id: 'node-version', ok: true, message: 'Node.js is supported' }],
+    modules: report.modules,
+  });
+  assert.match(text, /❌ System health receipt — Receipt is invalid\. Republish it\./);
 });
 
 test('SearXNG cannot be healthy when HTTP responds but search and runtime-tool proof fail', () => {
@@ -254,10 +279,77 @@ test('the shared System Doctor receipt and text list core plus every selected co
   };
   const receipt = buildSystemDoctorReceipt(report);
   assert.equal(receipt.schema, 'jarvos-system-doctor-report/v1');
-  assert.equal(receipt.components.filter((component) => component.section === 'memory').length, 10);
+  assert.equal(receipt.components.filter((component) => component.section === 'memory').length, 11);
   const text = renderSystemDoctor({ ...report, systemDoctor: receipt });
-  assert.match(text, /✅ PASS node-version — healthy/);
+  assert.match(text, /Core\n✅ node-version/);
+  assert.match(text, /Memory\n✅ GBrain core\n✅ GBrain semantic coverage/);
   for (const [, label] of MEMORY_COMPONENTS) assert.match(text, new RegExp(label.replace(/[&]/g, '\\&')));
+  assert.doesNotMatch(text, /PASS|FAIL|WARN|SKIP|Selected optional components|System Doctor:|READY/);
+  assert.equal((text.match(/✅|❌|⚠️/g) || []).length, receipt.components.length);
+});
+
+test('operator text distinguishes a failure from an unverified component and gives each a next action', () => {
+  const report = {
+    ok: false,
+    profile: { id: 'minimal', title: 'Minimal' },
+    workspace: '/portable/workspace',
+    results: [
+      { id: 'workspace-files', ok: false, message: 'Required workspace file is missing' },
+      {
+        id: 'optional-runtime', status: 'skipped', message: 'Runtime adapter is not installed', detail: 'Install it only when needed',
+      },
+    ],
+    modules: [{
+      id: 'system',
+      state: 'needs your attention',
+      reasonClass: 'component-degraded',
+      components: [
+        {
+          id: 'provider.searxng', label: 'SearXNG', state: 'warning', reasonClass: 'search-empty', evidence: null,
+        },
+        {
+          id: 'provider.paperclip', label: 'Paperclip', state: 'not configured', reasonClass: 'not-configured', evidence: null,
+        },
+        {
+          id: 'memory.qmd', label: 'QMD search', state: 'warning', reasonClass: 'unavailable', evidence: null,
+        },
+      ],
+    }],
+  };
+  const text = renderSystemDoctor(report);
+  assert.match(text, /❌ workspace-files — Required workspace file is missing\. Fix it, then rerun Doctor\./);
+  assert.match(text, /⚠️ optional-runtime — Runtime adapter is not installed — Install it only when needed\. Configure it when needed\./);
+  assert.match(text, /⚠️ SearXNG — No search results\. Run a real search, then rerun Doctor\./);
+  assert.match(text, /⚠️ Paperclip — Not configured\. Configure it when needed\./);
+  assert.match(text, /⚠️ QMD search — unavailable\. Verify it, then rerun Doctor\./);
+  assert.equal((text.match(/✅|❌|⚠️/g) || []).length, 5);
+});
+
+test('blocking modules remain visible without duplicating a projected Memory roster', () => {
+  const base = {
+    ok: false,
+    profile: { id: 'minimal', title: 'Minimal' },
+    workspace: '/portable/workspace',
+    results: [{ id: 'node-version', ok: true, message: 'Node.js is supported' }],
+  };
+  const legacyOnly = renderSystemDoctor({
+    ...base,
+    modules: [{ id: 'memory', state: 'repair needed', reasonClass: 'reported-condition' }],
+  });
+  assert.match(legacyOnly, /❌ Memory receipt — reported condition\. Fix it, then rerun Doctor\./);
+
+  const memory = MEMORY_COMPONENTS.map(([id, label]) => ({
+    id, label, state: 'healthy', reasonClass: 'none', evidence: null,
+  }));
+  const projected = renderSystemDoctor({
+    ...base,
+    modules: [
+      { id: 'memory', state: 'repair needed', reasonClass: 'reported-condition' },
+      { id: 'system', state: 'healthy', reasonClass: 'none', components: memory },
+    ],
+  });
+  assert.doesNotMatch(projected, /Memory receipt/);
+  assert.equal((projected.match(/✅ GBrain core/g) || []).length, 1);
 });
 
 test('missing continuity evidence is visible only when the private profile requires it', () => {

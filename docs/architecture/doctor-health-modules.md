@@ -81,8 +81,10 @@ they must not appear in routine Doctor output or public JSON.
 
 Every `jarvos doctor` profile also projects its core checks and selected
 optional components into `systemDoctor`, a backward-compatible
-`jarvos-system-doctor-report/v1` receipt. The text view preserves its existing
-transcript and appends the receipt's selected components and final result.
+`jarvos-system-doctor-report/v1` receipt. The text view is a compact scoreboard:
+one icon and one line per component, with short section labels only when the
+receipt contains more than one section. Degraded rows include a concise reason
+and next action; the structured reason code remains available in JSON.
 Existing top-level JSON fields remain available to older consumers.
 
 A clean profile has no selected optional components unless an owner-side
@@ -101,7 +103,7 @@ of `healthy`, `warning`, `repair needed`, or `not configured`.
   "observedAt": "2026-09-03T18:00:00.000Z",
   "validUntil": "2026-09-04T18:00:00.000Z",
   "trust": "trusted",
-  "factsVersion": "jarvos-system-doctor-facts/v1",
+  "factsVersion": "jarvos-system-doctor-facts/v2",
   "facts": {
     "profile": "minimal",
     "components": [
@@ -126,12 +128,17 @@ the selected runtime's local-search tool. If the service responds while a real
 search returns zero results or the runtime tool is absent, jarvOS downgrades
 the component to `warning`.
 
-When the system snapshot selects Memory, it must contain the existing ten
-components in their fixed order: GBrain, Lossless Claw, QMD search,
+When the system snapshot selects Memory, it must contain the existing eleven
+components in their fixed order: GBrain core, GBrain semantic coverage,
+Lossless Claw, QMD search,
 memory-wiki, Notes & provenance, Recall evaluation, Scheduled maintenance,
 Reviewed runtime, Automatic repair, and Telegram follow-up & proof. Partial or
-reordered Memory rosters fail closed. The legacy aggregate `memory.json`
-contract remains supported.
+reordered Memory rosters fail closed. The eleven-row roster is versioned as
+`jarvos-system-doctor-facts/v2`; v1 snapshots fail closed rather than being
+mistaken for complete coverage. The legacy aggregate `memory.json` contract
+remains supported when no v2 Memory roster is present. Once that roster is
+present, it is authoritative; the aggregate is neither rendered nor part of
+the eleven-component result.
 
 ## Consumer and ownership boundary
 
@@ -147,7 +154,7 @@ The private owner remains responsible for machine-specific probes, credentials,
 Telegram identities, launchd bindings, repair procedures, scheduling, and
 publishing the normalized snapshot. The existing Memory Doctor Telegram
 message remains unchanged until the new projection is behaviorally proven to
-retain all ten rows and at least the same operator information.
+retain all eleven rows and at least the same operator information.
 
 Documentation impact: module-docs. This producer contract is a public jarvOS
 release candidate; private command declarations, scheduling, runtime

@@ -74,9 +74,15 @@ try {
 
   const doctor = run(['doctor', '--profile', 'minimal', '--workspace', workspace], env);
   assert.equal(doctor.status, 0, doctor.stderr || doctor.stdout);
-  assert.match(doctor.stdout, /PASS vault-path/);
-  assert.match(doctor.stdout, /PASS vault-path-stale/);
-  assert.match(doctor.stdout, /dormant runtime mode leaves vault unactivated/);
+  assert.match(doctor.stdout, /✅ vault-path/);
+  assert.match(doctor.stdout, /✅ vault-path-stale/);
+  const jsonDoctor = run(['doctor', '--profile', 'minimal', '--workspace', workspace, '--json'], env);
+  assert.equal(jsonDoctor.status, 0, jsonDoctor.stderr || jsonDoctor.stdout);
+  const doctorReceipt = JSON.parse(jsonDoctor.stdout);
+  assert.match(
+    doctorReceipt.results.find((result) => result.id === 'vault-path-stale').detail,
+    /dormant runtime mode leaves vault unactivated/,
+  );
 
   const authoredAgents = '# Customized workspace instructions\n';
   fs.writeFileSync(path.join(workspace, 'AGENTS.md'), authoredAgents, 'utf8');
