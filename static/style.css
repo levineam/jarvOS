@@ -354,43 +354,28 @@ body {
 .svc .ep { font-family: var(--mono); font-size: 10.5px; color: var(--ink-faint); margin-top: 6px; word-break: break-all; }
 
 
-/* ── System Doctor receipt ──────────────────────────────── */
-.doctor-receipt { display: flex; flex-direction: column; gap: 18px; }
-.doctor-banner {
-  display: flex; gap: 14px; align-items: flex-start;
-  padding: 12px 14px; border-radius: 10px; border: 1px solid var(--line-soft);
-  background: rgba(143,181,115,.08);
-}
-.doctor-banner.warn { background: rgba(210,168,74,.1); border-color: rgba(210,168,74,.35); }
-.doctor-banner.bad { background: rgba(210,112,74,.1); border-color: rgba(210,112,74,.35); }
-.doctor-banner .light { margin-top: 5px; width: 10px; height: 10px; border-radius: 50%; flex: none; }
-.doctor-banner .light.ok { background: var(--sage); box-shadow: 0 0 9px rgba(143,181,115,.55); }
-.doctor-banner .light.warn { background: #d2a84a; box-shadow: 0 0 9px rgba(210,168,74,.45); }
-.doctor-banner .light.bad { background: var(--rust); box-shadow: 0 0 9px rgba(210,112,74,.55); }
-.doctor-final { font-weight: 600; font-size: 15px; letter-spacing: .01em; }
+/* ── System Doctor receipt (compact scoreboard) ───────── */
+.doctor-receipt { display: flex; flex-direction: column; gap: 14px; }
+.doctor-meta { margin-bottom: 2px; }
 .doctor-section h4 {
-  margin: 0 0 10px; font: 600 13px var(--sans); color: var(--ink-dim);
+  margin: 0 0 8px; font: 600 12.5px var(--sans); color: var(--ink-dim);
   text-transform: uppercase; letter-spacing: .04em;
 }
 .doctor-section h4 .kind { text-transform: none; letter-spacing: 0; font-weight: 400; margin-left: 6px; }
-.doctor-rows { display: flex; flex-direction: column; gap: 8px; }
+.doctor-rows { display: flex; flex-direction: column; gap: 4px; }
 .doctor-row {
-  display: flex; gap: 12px; align-items: flex-start;
-  background: var(--bg-card); border: 1px solid var(--line-soft); border-radius: var(--r);
-  padding: 12px 14px;
+  display: flex; gap: 10px; align-items: flex-start;
+  padding: 6px 2px;
 }
-.doctor-row .light { margin-top: 5px; width: 9px; height: 9px; border-radius: 50%; flex: none; }
-.doctor-row .light.ok { background: var(--sage); }
-.doctor-row .light.warn { background: #d2a84a; }
-.doctor-row .light.bad { background: var(--rust); }
-.doctor-row-body { min-width: 0; flex: 1; }
-.doctor-row-top { display: flex; gap: 10px; align-items: baseline; justify-content: space-between; }
-.doctor-state {
-  font-family: var(--mono); font-size: 11px; color: var(--ink-dim); white-space: nowrap;
+.doctor-icon {
+  margin-top: 4px; width: 9px; height: 9px; border-radius: 50%; flex: none;
 }
-.doctor-state.ok { color: var(--sage); }
-.doctor-state.warn { color: #d2a84a; }
-.doctor-state.bad { color: var(--rust); }
+.doctor-icon.ok { background: var(--sage); box-shadow: 0 0 7px rgba(143,181,115,.45); }
+.doctor-icon.warn { background: #d2a84a; box-shadow: 0 0 7px rgba(210,168,74,.4); }
+.doctor-icon.bad { background: var(--rust); box-shadow: 0 0 7px rgba(210,112,74,.45); }
+.doctor-row-body { min-width: 0; flex: 1; font-size: 13.5px; line-height: 1.35; }
+.doctor-row-body .nm { font-weight: 500; }
+.doctor-guide { color: var(--ink-dim); font-weight: 400; }
 
 /* misc */
 .err-banner {

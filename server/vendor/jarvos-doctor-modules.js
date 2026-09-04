@@ -16,10 +16,11 @@ const PUBLIC_STATES = Object.freeze(['healthy', 'update available', 'repair need
 const SNAPSHOT_FIELDS = Object.freeze(['schema', 'moduleId', 'generation', 'observedAt', 'validUntil', 'trust', 'repairable', 'updateAvailable']);
 const CONTINUITY_SNAPSHOT_FIELDS = Object.freeze(['schema', 'moduleId', 'generation', 'observedAt', 'validUntil', 'trust', 'factsVersion', 'facts']);
 const CONTINUITY_FACTS_VERSION = 'jarvos-gbrain-continuity-facts/v1';
-const SYSTEM_FACTS_VERSION = 'jarvos-system-doctor-facts/v1';
+const SYSTEM_FACTS_VERSION = 'jarvos-system-doctor-facts/v2';
 const SYSTEM_COMPONENT_STATES = Object.freeze(['healthy', 'warning', 'repair needed', 'not configured']);
 const MEMORY_COMPONENTS = Object.freeze([
-  ['memory.gbrain', 'GBrain'],
+  ['memory.gbrain', 'GBrain core'],
+  ['memory.gbrain-semantic-coverage', 'GBrain semantic coverage'],
   ['memory.lossless-claw', 'Lossless Claw'],
   ['memory.qmd-search', 'QMD search'],
   ['memory.memory-wiki', 'memory-wiki'],

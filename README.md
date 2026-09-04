@@ -66,7 +66,7 @@ server/            zero-dependency Node HTTP server
     ontology.js    jarvos-ontology spine files
     memory.js      MEMORY.md + daily memory files
     health.js      service checks
-    system-doctor.js  public jarvos-system-doctor-report/v1 receipt (no probes)
+    system-doctor.js  public jarvos-system-doctor-report/v1 compact scoreboard (no probes; facts/v2 eleven-row Memory)
 static/            single-page UI, vanilla JS, vendored assets
   chat/            Vite-built React chat island
 chat-src/          Chat source (React + AI SDK useChat)

@@ -320,7 +320,7 @@ const pages = {
   },
 };
 
-/* ── System Doctor receipt (public jarvos-system-doctor-report/v1) ── */
+/* ── System Doctor receipt (public jarvos-system-doctor-report/v1, compact) ── */
 
 function doctorStateClass(state) {
   if (state === 'healthy') return 'ok';
@@ -329,24 +329,19 @@ function doctorStateClass(state) {
   return 'warn';
 }
 
-function doctorStateLabel(state) {
-  return fmt.status(state || 'unknown');
-}
-
 function doctorRows(components) {
   if (!components?.length) return '<div class="empty">none selected</div>';
-  return `<div class="doctor-rows">${components.map((c) => `
-    <div class="doctor-row" data-component-id="${fmt.esc(c.id)}" data-section="${fmt.esc(c.section)}">
-      <span class="light ${doctorStateClass(c.state)}" title="${fmt.esc(c.state)}"></span>
+  return `<div class="doctor-rows">${components.map((c) => {
+    const guidance = c.state === 'healthy' ? '' : (c.guidance || c.message || '');
+    return `
+    <div class="doctor-row" data-component-id="${fmt.esc(c.id)}" data-section="${fmt.esc(c.section)}" data-state="${fmt.esc(c.state)}">
+      <span class="doctor-icon ${doctorStateClass(c.state)}" aria-label="${fmt.esc(c.state)}" title="${fmt.esc(c.state)}"></span>
       <div class="doctor-row-body">
-        <div class="doctor-row-top">
-          <span class="nm">${fmt.esc(c.label || c.id)}</span>
-          <span class="doctor-state ${doctorStateClass(c.state)}">${fmt.esc(doctorStateLabel(c.state))}</span>
-        </div>
-        ${c.message ? `<div class="det">${fmt.esc(c.message)}</div>` : ''}
-        ${c.reasonClass && c.reasonClass !== 'none' ? `<div class="ep">${fmt.esc(c.reasonClass)}</div>` : ''}
+        <span class="nm">${fmt.esc(c.label || c.id)}</span>
+        ${guidance ? `<span class="doctor-guide"> — ${fmt.esc(guidance)}</span>` : ''}
       </div>
-    </div>`).join('')}</div>`;
+    </div>`;
+  }).join('')}</div>`;
 }
 
 function renderSystemDoctorReceipt(payload) {
@@ -360,38 +355,26 @@ function renderSystemDoctorReceipt(payload) {
     optional: (receipt.components || []).filter((c) => c.section === 'optional'),
     memory: (receipt.components || []).filter((c) => c.section === 'memory'),
   };
-  const statusClass = doctorStateClass(receipt.status);
-  const ready = receipt.status === 'healthy' ? 'READY' : `NOT READY — ${doctorStateLabel(receipt.status)}`;
   const profile = receipt.profile?.title || receipt.profile?.id || 'profile';
+  const present = ['core', 'optional', 'memory'].filter((key) => (sections[key] || []).length > 0);
+  const showSectionLabels = present.length > 1;
+  const sectionTitles = { core: 'Core', optional: 'Services', memory: 'Memory' };
 
   let body = `
-    <div class="doctor-receipt" data-schema="${fmt.esc(receipt.schema || '')}" data-status="${fmt.esc(receipt.status || '')}">
-      <div class="doctor-banner ${statusClass}">
-        <span class="light ${statusClass}"></span>
-        <div>
-          <div class="doctor-final">${fmt.esc(ready)}</div>
-          <div class="det">${fmt.esc(profile)}${receipt.workspace ? ` · ${fmt.esc(receipt.workspace)}` : ''}</div>
-        </div>
-      </div>
-      <section class="doctor-section" data-section="core">
-        <h4>Core</h4>
-        ${doctorRows(sections.core)}
-      </section>
-      <section class="doctor-section" data-section="optional">
-        <h4>Selected optional</h4>
-        ${doctorRows(sections.optional)}
-      </section>
-      <section class="doctor-section" data-section="memory">
-        <h4>Memory <span class="kind">fixed ten-row order</span></h4>
-        ${doctorRows(sections.memory)}
-      </section>
+    <div class="doctor-receipt" data-schema="${fmt.esc(receipt.schema || '')}" data-status="${fmt.esc(receipt.status || '')}" data-presentation="compact-scoreboard" data-facts-version="${fmt.esc(receipt.factsVersion || '')}">
+      <div class="doctor-meta det">${fmt.esc(profile)}${receipt.workspace ? ` · ${fmt.esc(receipt.workspace)}` : ''}</div>
+      ${present.map((key) => `
+      <section class="doctor-section" data-section="${key === 'optional' ? 'services' : key}">
+        ${showSectionLabels ? `<h4>${sectionTitles[key]}${key === 'memory' ? ' <span class="kind">fixed eleven-row order</span>' : ''}</h4>` : ''}
+        ${doctorRows(sections[key])}
+      </section>`).join('')}
     </div>`;
 
   if (payload && payload.ok === false && payload.error) {
     body = `<div class="err-banner">${fmt.esc(payload.error)}</div>` + body;
   }
 
-  return card('System Doctor receipt', body, { delay: 60 });
+  return card('System Doctor', body, { delay: 60 });
 }
 
 /* ── Journal helpers ────────────────────────────────────── */

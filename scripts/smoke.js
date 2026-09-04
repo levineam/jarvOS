@@ -67,7 +67,9 @@ async function waitForServer() {
     assert.match(servicesPage.body, /app\.js/);
     const appJs = await request('/app.js');
     assert.match(appJs.body, /renderSystemDoctorReceipt/);
-    assert.match(appJs.body, /fixed ten-row order/);
+    assert.match(appJs.body, /fixed eleven-row order/);
+    assert.match(appJs.body, /compact-scoreboard/);
+    assert.doesNotMatch(appJs.body, /PASS|FAIL|NOT READY|ten-row/);
   } finally {
     child.kill('SIGTERM');
   }

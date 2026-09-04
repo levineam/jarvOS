@@ -1,0 +1,235 @@
+{
+  "schema": "jarvos-system-doctor-report/v1",
+  "factsVersion": "jarvos-system-doctor-facts/v2",
+  "presentation": "compact-scoreboard",
+  "status": "healthy",
+  "memoryIds": [
+    "memory.gbrain",
+    "memory.gbrain-semantic-coverage",
+    "memory.lossless-claw",
+    "memory.qmd-search",
+    "memory.memory-wiki",
+    "memory.notes-provenance",
+    "memory.recall-evaluation",
+    "memory.scheduled-maintenance",
+    "memory.runtime-checkout",
+    "memory.automatic-repair",
+    "memory.notification-follow-up"
+  ],
+  "memoryLabels": [
+    "GBrain core",
+    "GBrain semantic coverage",
+    "Lossless Claw",
+    "QMD search",
+    "memory-wiki",
+    "Notes & provenance",
+    "Recall evaluation",
+    "Scheduled maintenance",
+    "Reviewed runtime",
+    "Automatic repair",
+    "Telegram follow-up & proof"
+  ],
+  "services": [
+    {
+      "id": "provider.gbrain",
+      "label": "GBrain",
+      "state": "warning",
+      "guidance": "doctor unhealthy. Verify it, then rerun Doctor."
+    },
+    {
+      "id": "provider.searxng",
+      "label": "SearXNG",
+      "state": "healthy",
+      "guidance": null
+    },
+    {
+      "id": "provider.paperclip",
+      "label": "Paperclip",
+      "state": "healthy",
+      "guidance": null
+    },
+    {
+      "id": "provider.openclaw",
+      "label": "OpenClaw",
+      "state": "healthy",
+      "guidance": null
+    },
+    {
+      "id": "provider.telegram",
+      "label": "Telegram",
+      "state": "healthy",
+      "guidance": null
+    },
+    {
+      "id": "module.gbrain-continuity",
+      "label": "GBrain continuity",
+      "state": "warning",
+      "guidance": "Receipt is stale. Refresh it."
+    }
+  ],
+  "compactRows": [
+    {
+      "section": "core",
+      "sectionLabel": "Core",
+      "id": "workspace.root",
+      "label": "workspace.root",
+      "state": "healthy",
+      "icon": "ok",
+      "guidance": null
+    },
+    {
+      "section": "optional",
+      "sectionLabel": "Services",
+      "id": "provider.gbrain",
+      "label": "GBrain",
+      "state": "warning",
+      "icon": "warn",
+      "guidance": "doctor unhealthy. Verify it, then rerun Doctor."
+    },
+    {
+      "section": "optional",
+      "sectionLabel": "Services",
+      "id": "provider.searxng",
+      "label": "SearXNG",
+      "state": "healthy",
+      "icon": "ok",
+      "guidance": null
+    },
+    {
+      "section": "optional",
+      "sectionLabel": "Services",
+      "id": "provider.paperclip",
+      "label": "Paperclip",
+      "state": "healthy",
+      "icon": "ok",
+      "guidance": null
+    },
+    {
+      "section": "optional",
+      "sectionLabel": "Services",
+      "id": "provider.openclaw",
+      "label": "OpenClaw",
+      "state": "healthy",
+      "icon": "ok",
+      "guidance": null
+    },
+    {
+      "section": "optional",
+      "sectionLabel": "Services",
+      "id": "provider.telegram",
+      "label": "Telegram",
+      "state": "healthy",
+      "icon": "ok",
+      "guidance": null
+    },
+    {
+      "section": "optional",
+      "sectionLabel": "Services",
+      "id": "module.gbrain-continuity",
+      "label": "GBrain continuity",
+      "state": "warning",
+      "icon": "warn",
+      "guidance": "Receipt is stale. Refresh it."
+    },
+    {
+      "section": "memory",
+      "sectionLabel": "Memory",
+      "id": "memory.gbrain",
+      "label": "GBrain core",
+      "state": "warning",
+      "icon": "warn",
+      "guidance": "reported condition. Verify it, then rerun Doctor."
+    },
+    {
+      "section": "memory",
+      "sectionLabel": "Memory",
+      "id": "memory.gbrain-semantic-coverage",
+      "label": "GBrain semantic coverage",
+      "state": "warning",
+      "icon": "warn",
+      "guidance": "reported condition. Verify it, then rerun Doctor."
+    },
+    {
+      "section": "memory",
+      "sectionLabel": "Memory",
+      "id": "memory.lossless-claw",
+      "label": "Lossless Claw",
+      "state": "warning",
+      "icon": "warn",
+      "guidance": "reported condition. Verify it, then rerun Doctor."
+    },
+    {
+      "section": "memory",
+      "sectionLabel": "Memory",
+      "id": "memory.qmd-search",
+      "label": "QMD search",
+      "state": "warning",
+      "icon": "warn",
+      "guidance": "reported condition. Verify it, then rerun Doctor."
+    },
+    {
+      "section": "memory",
+      "sectionLabel": "Memory",
+      "id": "memory.memory-wiki",
+      "label": "memory-wiki",
+      "state": "warning",
+      "icon": "warn",
+      "guidance": "reported condition. Verify it, then rerun Doctor."
+    },
+    {
+      "section": "memory",
+      "sectionLabel": "Memory",
+      "id": "memory.notes-provenance",
+      "label": "Notes & provenance",
+      "state": "healthy",
+      "icon": "ok",
+      "guidance": null
+    },
+    {
+      "section": "memory",
+      "sectionLabel": "Memory",
+      "id": "memory.recall-evaluation",
+      "label": "Recall evaluation",
+      "state": "healthy",
+      "icon": "ok",
+      "guidance": null
+    },
+    {
+      "section": "memory",
+      "sectionLabel": "Memory",
+      "id": "memory.scheduled-maintenance",
+      "label": "Scheduled maintenance",
+      "state": "warning",
+      "icon": "warn",
+      "guidance": "reported condition. Verify it, then rerun Doctor."
+    },
+    {
+      "section": "memory",
+      "sectionLabel": "Memory",
+      "id": "memory.runtime-checkout",
+      "label": "Reviewed runtime",
+      "state": "healthy",
+      "icon": "ok",
+      "guidance": null
+    },
+    {
+      "section": "memory",
+      "sectionLabel": "Memory",
+      "id": "memory.automatic-repair",
+      "label": "Automatic repair",
+      "state": "warning",
+      "icon": "warn",
+      "guidance": "reported condition. Verify it, then rerun Doctor."
+    },
+    {
+      "section": "memory",
+      "sectionLabel": "Memory",
+      "id": "memory.notification-follow-up",
+      "label": "Telegram follow-up & proof",
+      "state": "warning",
+      "icon": "warn",
+      "guidance": "reported condition. Verify it, then rerun Doctor."
+    }
+  ],
+  "generatedAt": "2026-09-04T02:48:39.754Z"
+}
