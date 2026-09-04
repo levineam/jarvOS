@@ -7,10 +7,14 @@ const {
   createMemoryReservationStore,
   createReservationStore,
   createMemoryReservationBackend,
+  createReservationConflictError,
   checkReservationStoreConformance,
   emptyState,
   RESERVATION_STATES,
+  RESERVATION_STORE_SCHEMA_VERSION,
+  RESERVATION_STORE_SCHEMA_VERSION_V1,
 } = require('../src/reservation-store');
+const { clone, isObject } = require('../src/primitives');
 
 function countingBackend(backend) {
   const calls = { save: 0 };
@@ -32,6 +36,103 @@ function req(overrides = {}) {
     now: '2026-09-03T12:03:00.000Z',
     ...overrides,
   };
+}
+
+function createDeferred() {
+  let resolve;
+  const promise = new Promise((res) => { resolve = res; });
+  return { promise, resolve };
+}
+
+// A single unsynchronized core shared by two independently-gated backend
+// handles, so a test -- not incidental microtask/array ordering -- controls
+// which of two racing operations' save() the CAS accepts first, while both
+// are guaranteed to have loaded the same pre-mutation revision (neither's
+// save can complete, and so neither can change the loadable state, until the
+// test explicitly releases its gate).
+function createSharedReservationCore() {
+  let state = emptyState();
+  return {
+    async rawLoad() { return clone(state); },
+    async rawSave(next, expectedRevision) {
+      if (state.revision !== expectedRevision) throw createReservationConflictError();
+      state = clone(next);
+    },
+  };
+}
+
+function createPlainReservationBackend(core) {
+  return { load: () => core.rawLoad(), save: (next, rev) => core.rawSave(next, rev) };
+}
+
+function createGatedReservationBackend(core) {
+  let saveGate = null;
+  let loadCalls = 0;
+  return {
+    get loadCalls() { return loadCalls; },
+    holdSave() { saveGate = createDeferred(); },
+    releaseSave() {
+      if (!saveGate) return;
+      const gate = saveGate;
+      saveGate = null;
+      gate.resolve();
+    },
+    async load() {
+      loadCalls += 1;
+      return core.rawLoad();
+    },
+    async save(next, expectedRevision) {
+      if (saveGate) await saveGate.promise;
+      return core.rawSave(next, expectedRevision);
+    },
+  };
+}
+
+function legacyV1Record(overrides = {}) {
+  return {
+    reservationId: 'reservation_legacy001',
+    idempotencyKey: 'reserve:legacy-001',
+    poolId: 'pool:legacy-001',
+    capacityLimitBytes: 2000000000,
+    fenceGeneration: 1,
+    amountBytes: 900000000,
+    consumedBytes: 0,
+    status: 'active',
+    consumeIdempotencyKey: null,
+    createdAt: '2026-09-03T12:00:00.000Z',
+    expiresAt: '2026-09-03T13:00:00.000Z',
+    consumedAt: null,
+    ...overrides,
+  };
+}
+
+// Deliberately has no releaseIdempotencyKey/releasedAt fields at all: a
+// genuine v1 record was written before those fields existed.
+function legacyV1State(recordOverrides = {}) {
+  const record = legacyV1Record(recordOverrides);
+  return {
+    schemaVersion: RESERVATION_STORE_SCHEMA_VERSION_V1,
+    revision: 3,
+    currentFence: 1,
+    reservations: { [record.reservationId]: record },
+    idempotencyIndex: { [record.idempotencyKey]: record.reservationId },
+  };
+}
+
+// Replicates the pre-release validateState exactly as it shipped before
+// `release`/`released` existed (schemaVersion pinned to v1, no released-field
+// awareness at all), to prove old v1-only code fails closed -- via a schema
+// mismatch, not a crash or a silent misread -- on a store a v2-aware node has
+// since upgraded and released against.
+function legacyV1OnlyValidateState(state) {
+  const errors = [];
+  if (!isObject(state)) return { ok: false, errors: ['reservation-store state must be an object'] };
+  if (state.schemaVersion !== RESERVATION_STORE_SCHEMA_VERSION_V1) errors.push(`state.schemaVersion must be ${RESERVATION_STORE_SCHEMA_VERSION_V1}`);
+  if (!Number.isInteger(state.revision) || state.revision < 0) errors.push('state.revision must be a non-negative integer');
+  if (!Number.isInteger(state.currentFence) || state.currentFence < 0) errors.push('state.currentFence must be a non-negative integer');
+  if (!isObject(state.reservations)) errors.push('state.reservations must be an object');
+  if (!isObject(state.idempotencyIndex)) errors.push('state.idempotencyIndex must be an object');
+  return { ok: errors.length === 0, errors };
 }
 
 test('reserve creates a reservation with a typed active state', async () => {
@@ -428,16 +529,79 @@ test('consume rejects a released reservation without mutation', async () => {
   assert.equal(fetched.reservation.consumedBytes, 0);
 });
 
-test('a release racing a consume for the same reservation lets only one transition win, and the loser is rejected as already_released', async () => {
-  const store = createMemoryReservationStore();
-  const { reservation } = await store.reserve(req());
-  const [released, consumed] = await Promise.all([
-    store.release({ reservationId: reservation.reservationId, idempotencyKey: 'release:once', now: req().now }),
-    store.consume({ reservationId: reservation.reservationId, idempotencyKey: 'consume:once', amountBytes: reservation.amountBytes, now: req().now }),
-  ]);
+// A barrier/CAS backend forces release and consume to both load the exact
+// same pre-mutation revision (neither's save can complete until the test
+// explicitly releases its gate), then the test -- not incidental
+// Promise.all/array ordering -- picks which save the CAS accepts first. The
+// loser's save() is rejected by the real CAS check and mutate() retries: it
+// re-loads the now-updated state and re-reads it as terminal, proving actual
+// loser retry/re-read rather than a result baked in by call order. Either
+// operation may win, so both orderings are exercised.
+async function raceReleaseAndConsume({ releaseWinsFirst }) {
+  const core = createSharedReservationCore();
+  const setupStore = createReservationStore({ backend: createPlainReservationBackend(core) });
+  const { reservation } = await setupStore.reserve(req());
+
+  const releaseBackend = createGatedReservationBackend(core);
+  const consumeBackend = createGatedReservationBackend(core);
+  releaseBackend.holdSave();
+  consumeBackend.holdSave();
+  const releaseStore = createReservationStore({ backend: releaseBackend });
+  const consumeStore = createReservationStore({ backend: consumeBackend });
+
+  const releasePromise = releaseStore.release({ reservationId: reservation.reservationId, idempotencyKey: 'release:once', now: req().now });
+  const consumePromise = consumeStore.consume({ reservationId: reservation.reservationId, idempotencyKey: 'consume:once', amountBytes: reservation.amountBytes, now: req().now });
+
+  if (releaseWinsFirst) {
+    releaseBackend.releaseSave();
+    const released = await releasePromise;
+    consumeBackend.releaseSave();
+    const consumed = await consumePromise;
+    return { released, consumed, releaseBackend, consumeBackend, reservationId: reservation.reservationId, setupStore };
+  }
+  consumeBackend.releaseSave();
+  const consumed = await consumePromise;
+  releaseBackend.releaseSave();
+  const released = await releasePromise;
+  return { released, consumed, releaseBackend, consumeBackend, reservationId: reservation.reservationId, setupStore };
+}
+
+test('release winning a barrier-forced race against consume commits released, and the loser retries, re-reads, and reports already_released', async () => {
+  const { released, consumed, consumeBackend, reservationId, setupStore } = await raceReleaseAndConsume({ releaseWinsFirst: true });
   assert.equal(released.ok, true, JSON.stringify(released));
+  assert.equal(released.reservation.status, 'released');
   assert.equal(consumed.ok, false, JSON.stringify(consumed));
   assert.equal(consumed.reason, 'already_released');
+  assert.ok(consumeBackend.loadCalls >= 2, 'the loser must retry: re-load after its first save is rejected by CAS');
+
+  const fetched = await setupStore.get(reservationId);
+  assert.equal(fetched.ok, true);
+  assert.equal(fetched.reservation.status, 'released');
+  assert.equal(fetched.reservation.consumedBytes, 0);
+});
+
+test('consume winning a barrier-forced race against release commits consumed, and the loser retries, re-reads, and reports already_consumed', async () => {
+  const { released, consumed, releaseBackend, reservationId, setupStore } = await raceReleaseAndConsume({ releaseWinsFirst: false });
+  assert.equal(consumed.ok, true, JSON.stringify(consumed));
+  assert.equal(consumed.reservation.status, 'consumed');
+  assert.equal(released.ok, false, JSON.stringify(released));
+  assert.equal(released.reason, 'already_consumed');
+  assert.ok(releaseBackend.loadCalls >= 2, 'the loser must retry: re-load after its first save is rejected by CAS');
+
+  const fetched = await setupStore.get(reservationId);
+  assert.equal(fetched.ok, true);
+  assert.equal(fetched.reservation.status, 'consumed');
+});
+
+test('reap never reverts an already-released reservation back to expired: released remains terminal', async () => {
+  const store = createMemoryReservationStore();
+  const { reservation } = await store.reserve(req({ expiresAt: '2026-09-03T12:04:00.000Z' }));
+  const released = await store.release({ reservationId: reservation.reservationId, idempotencyKey: 'release:once', now: req().now });
+  assert.equal(released.ok, true, JSON.stringify(released));
+
+  const reap = await store.reap({ now: '2026-09-03T13:00:00.000Z' });
+  assert.equal(reap.ok, true);
+  assert.deepEqual(reap.expired, []);
 
   const fetched = await store.get(reservation.reservationId);
   assert.equal(fetched.ok, true);
@@ -534,4 +698,62 @@ test('conformance check fails a backend lacking atomic compare-and-set, not a ma
   assert.equal(result.ok, false);
   assert.ok(result.errors.length > 0);
   assert.ok(result.errors.some((e) => /compare-and-set/i.test(e)));
+});
+
+test('a legitimate v1 store normalizes a missing releasedAt to null and upgrades to v2 on the next mutation', async () => {
+  let persisted = null;
+  const v1State = legacyV1State();
+  const backend = {
+    async load() { return clone(persisted || v1State); },
+    async save(next, expectedRevision) {
+      const current = persisted || v1State;
+      if (current.revision !== expectedRevision) throw createReservationConflictError();
+      persisted = clone(next);
+    },
+  };
+  const store = createReservationStore({ backend });
+
+  const result = await store.release({ reservationId: 'reservation_legacy001', idempotencyKey: 'release:once', now: '2026-09-03T12:05:00.000Z' });
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.equal(result.reservation.status, 'released');
+  assert.equal(result.reservation.releasedAt, '2026-09-03T12:05:00.000Z');
+
+  assert.equal(persisted.schemaVersion, RESERVATION_STORE_SCHEMA_VERSION);
+  assert.equal(persisted.reservations.reservation_legacy001.releasedAt, '2026-09-03T12:05:00.000Z');
+  assert.equal(persisted.reservations.reservation_legacy001.releaseIdempotencyKey, 'release:once');
+});
+
+test('get() of a legacy v1 record returns a stable public shape with releasedAt: null, without persisting the upgrade', async () => {
+  const v1State = legacyV1State();
+  const backend = {
+    async load() { return clone(v1State); },
+    async save() { throw new Error('a read-only get() must never save'); },
+  };
+  const store = createReservationStore({ backend });
+
+  const result = await store.get('reservation_legacy001');
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.equal(result.reservation.status, 'active');
+  assert.equal(result.reservation.releasedAt, null);
+  assert.equal(result.reservation.version, RESERVATION_STORE_SCHEMA_VERSION);
+});
+
+test('a v1 store impossibly containing status: released is rejected as invalid rather than silently normalized', async () => {
+  const v1State = legacyV1State({ status: 'released' });
+  const backend = {
+    async load() { return clone(v1State); },
+    async save() { throw new Error('an invalid state must never be saved'); },
+  };
+  const store = createReservationStore({ backend });
+
+  const result = await store.get('reservation_legacy001');
+  assert.equal(result.ok, false);
+  assert.equal(result.reason, 'store_unavailable');
+});
+
+test('old v1-only code fails closed on a v2 store via schema-version mismatch, the documented rollback boundary', () => {
+  const v2State = emptyState();
+  const legacyValidation = legacyV1OnlyValidateState(v2State);
+  assert.equal(legacyValidation.ok, false);
+  assert.ok(legacyValidation.errors.some((e) => e.includes(RESERVATION_STORE_SCHEMA_VERSION_V1)));
 });

@@ -2,7 +2,15 @@
 
 const { isObject, clone, isOpaqueId, isSafeNonNegativeInt, isSafePositiveInt, isValidClockValue, normalizeTime, digestOf } = require('./primitives');
 
-const RESERVATION_STORE_SCHEMA_VERSION = 'jarvos-storage-janitor.reservation-store.v1';
+// v1 shipped before `release`/`released` existed: it is the pre-release
+// contract, and a genuine v1 store can therefore never contain a `released`
+// record. v2 is a breaking addition (a new terminal status and its
+// `releasedAt`/`releaseIdempotencyKey` fields); old v1-only code must fail
+// closed on a v2 store via this schema-version mismatch rather than silently
+// misreading a status it does not know about. See README.md for the
+// documented rollback boundary this implies.
+const RESERVATION_STORE_SCHEMA_VERSION_V1 = 'jarvos-storage-janitor.reservation-store.v1';
+const RESERVATION_STORE_SCHEMA_VERSION = 'jarvos-storage-janitor.reservation-store.v2';
 const RESERVATION_STATES = Object.freeze(['active', 'consumed', 'expired', 'released']);
 const MAX_MUTATE_ATTEMPTS = 8;
 
@@ -19,6 +27,55 @@ function validateState(state) {
   if (!isObject(state.reservations)) errors.push('state.reservations must be an object');
   if (!isObject(state.idempotencyIndex)) errors.push('state.idempotencyIndex must be an object');
   return { ok: errors.length === 0, errors };
+}
+
+// A legitimate v1 store only ever wrote `active`, `consumed`, or `expired`;
+// a `released` record under a v1 schemaVersion is impossible for genuine v1
+// data, so it is rejected as invalid rather than silently normalized.
+function validateV1State(state) {
+  const errors = [];
+  if (!isObject(state)) return { ok: false, errors: ['reservation-store state must be an object'] };
+  if (state.schemaVersion !== RESERVATION_STORE_SCHEMA_VERSION_V1) errors.push(`state.schemaVersion must be ${RESERVATION_STORE_SCHEMA_VERSION_V1}`);
+  if (!Number.isInteger(state.revision) || state.revision < 0) errors.push('state.revision must be a non-negative integer');
+  if (!Number.isInteger(state.currentFence) || state.currentFence < 0) errors.push('state.currentFence must be a non-negative integer');
+  if (!isObject(state.reservations)) errors.push('state.reservations must be an object');
+  if (!isObject(state.idempotencyIndex)) errors.push('state.idempotencyIndex must be an object');
+  if (isObject(state.reservations)) {
+    for (const record of Object.values(state.reservations)) {
+      if (isObject(record) && record.status === 'released') {
+        errors.push(`reservation ${record.reservationId} has status "released" under schemaVersion ${RESERVATION_STORE_SCHEMA_VERSION_V1}, which is impossible for a genuine v1 store`);
+      }
+    }
+  }
+  return { ok: errors.length === 0, errors };
+}
+
+// Upgrades an already-validated v1 state to the v2 shape in memory, adding
+// the `released`-status fields a v1 record never had. This does not persist
+// anything by itself: a mutation persists the upgrade via its normal save,
+// while a read-only `get` returns the upgraded shape without writing it back.
+function upgradeV1State(state) {
+  const upgraded = clone(state);
+  upgraded.schemaVersion = RESERVATION_STORE_SCHEMA_VERSION;
+  for (const record of Object.values(upgraded.reservations)) {
+    if (record.releaseIdempotencyKey === undefined) record.releaseIdempotencyKey = null;
+    if (record.releasedAt === undefined) record.releasedAt = null;
+  }
+  return upgraded;
+}
+
+// Every read path funnels through here so a legitimate v1 store loads and
+// upgrades exactly once, a v2 store loads as-is, and anything else --
+// including a v1 store impossibly marked `released` -- fails closed.
+function loadAndUpgradeState(loaded) {
+  if (isObject(loaded) && loaded.schemaVersion === RESERVATION_STORE_SCHEMA_VERSION_V1) {
+    const v1Validation = validateV1State(loaded);
+    if (!v1Validation.ok) return { ok: false, errors: v1Validation.errors };
+    return { ok: true, state: upgradeV1State(loaded) };
+  }
+  const validation = validateState(loaded);
+  if (!validation.ok) return { ok: false, errors: validation.errors };
+  return { ok: true, state: loaded };
 }
 
 // A conflict here is the store's declared atomic primitive speaking: a
@@ -84,9 +141,9 @@ function createReservationStore(options = {}) {
   async function mutate(mutator) {
     for (let attempt = 0; attempt < MAX_MUTATE_ATTEMPTS; attempt += 1) {
       const loaded = await backend.load();
-      const validation = validateState(loaded);
-      if (!validation.ok) throw new Error(`invalid reservation-store state: ${validation.errors.join('; ')}`);
-      const state = clone(loaded);
+      const normalized = loadAndUpgradeState(loaded);
+      if (!normalized.ok) throw new Error(`invalid reservation-store state: ${normalized.errors.join('; ')}`);
+      const state = clone(normalized.state);
       const expectedRevision = state.revision;
       const outcome = mutator(state);
       if (outcome && outcome.__noCommit) return outcome.value;
@@ -352,10 +409,10 @@ function createReservationStore(options = {}) {
   function get(id) {
     return guarded(async () => {
       if (!isOpaqueId(id)) return { ok: false, reason: 'invalid_request', errors: ['reservationId must be an opaque identifier'] };
-      const state = await backend.load();
-      const validation = validateState(state);
-      if (!validation.ok) throw new Error(`invalid reservation-store state: ${validation.errors.join('; ')}`);
-      const record = state.reservations[id];
+      const loaded = await backend.load();
+      const normalized = loadAndUpgradeState(loaded);
+      if (!normalized.ok) throw new Error(`invalid reservation-store state: ${normalized.errors.join('; ')}`);
+      const record = normalized.state.reservations[id];
       if (!record) return { ok: false, reason: 'not_found' };
       return { ok: true, reservation: publicReservation(record) };
     });
@@ -390,7 +447,11 @@ function createMemoryReservationStore(options = {}) {
 // equivalent serialization) this store depends on for no-double-spend: a
 // second save() against a precondition its own first save() already
 // invalidated must be rejected with a reservationConflict error, not
-// silently accepted as a last-writer-wins overwrite.
+// silently accepted as a last-writer-wins overwrite. This is a mechanical
+// property of a *fresh* backend, not a business-semantics check, so it
+// validates against the current schema directly rather than through
+// loadAndUpgradeState's legacy-store business rules (a fresh backend has no
+// legacy store to upgrade from).
 async function checkReservationStoreConformance(createBackend) {
   if (typeof createBackend !== 'function') return { ok: false, errors: ['createBackend must be a factory function returning a fresh backend'] };
   const backend = createBackend();
@@ -424,6 +485,7 @@ async function checkReservationStoreConformance(createBackend) {
 
 module.exports = {
   RESERVATION_STORE_SCHEMA_VERSION,
+  RESERVATION_STORE_SCHEMA_VERSION_V1,
   RESERVATION_STATES,
   emptyState,
   validateState,
