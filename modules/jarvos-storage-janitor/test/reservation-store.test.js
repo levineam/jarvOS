@@ -292,6 +292,159 @@ test('idempotent reserve replay against an expired reservation is rejected', asy
   assert.equal(replay.reason, 'expired');
 });
 
+test('release frees an active reservation with zero consumed bytes', async () => {
+  const store = createMemoryReservationStore();
+  const { reservation } = await store.reserve(req());
+  const result = await store.release({ reservationId: reservation.reservationId, idempotencyKey: 'release:once', now: req().now });
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.equal(result.replayed, false);
+  assert.equal(result.reservation.status, 'released');
+  assert.equal(result.reservation.consumedBytes, 0);
+
+  const fetched = await store.get(reservation.reservationId);
+  assert.equal(fetched.ok, true);
+  assert.equal(fetched.reservation.status, 'released');
+  assert.equal(fetched.reservation.consumedBytes, 0);
+});
+
+test('release is idempotent for a repeated idempotencyKey', async () => {
+  const store = createMemoryReservationStore();
+  const { reservation } = await store.reserve(req());
+  const first = await store.release({ reservationId: reservation.reservationId, idempotencyKey: 'release:once', now: req().now });
+  const second = await store.release({ reservationId: reservation.reservationId, idempotencyKey: 'release:once', now: req().now });
+  assert.equal(first.ok, true);
+  assert.equal(second.ok, true);
+  assert.equal(second.replayed, true);
+  assert.equal(second.reservation.status, 'released');
+});
+
+test('a release replay with a different idempotencyKey against an already-released reservation is rejected without mutation', async () => {
+  const store = createMemoryReservationStore();
+  const { reservation } = await store.reserve(req());
+  await store.release({ reservationId: reservation.reservationId, idempotencyKey: 'release:once', now: req().now });
+  const different = await store.release({ reservationId: reservation.reservationId, idempotencyKey: 'release:different', now: req().now });
+  assert.equal(different.ok, false);
+  assert.equal(different.reason, 'already_released');
+
+  const fetched = await store.get(reservation.reservationId);
+  assert.equal(fetched.reservation.status, 'released');
+});
+
+test('idempotent reserve replay against a released reservation is rejected as terminal, never reopened', async () => {
+  const store = createMemoryReservationStore();
+  const { reservation } = await store.reserve(req());
+  await store.release({ reservationId: reservation.reservationId, idempotencyKey: 'release:once', now: req().now });
+  const replay = await store.reserve(req());
+  assert.equal(replay.ok, false);
+  assert.equal(replay.reason, 'already_released');
+
+  const fetched = await store.get(reservation.reservationId);
+  assert.equal(fetched.reservation.status, 'released');
+});
+
+test('release rejects a consumed reservation without mutation', async () => {
+  const store = createMemoryReservationStore();
+  const { reservation } = await store.reserve(req());
+  await store.consume({ reservationId: reservation.reservationId, idempotencyKey: 'consume:once', amountBytes: reservation.amountBytes, now: req().now });
+  const result = await store.release({ reservationId: reservation.reservationId, idempotencyKey: 'release:once', now: req().now });
+  assert.equal(result.ok, false);
+  assert.equal(result.reason, 'already_consumed');
+
+  const fetched = await store.get(reservation.reservationId);
+  assert.equal(fetched.reservation.status, 'consumed');
+});
+
+test('release rejects an expired reservation and persists the expiry transition', async () => {
+  const store = createMemoryReservationStore();
+  const { reservation } = await store.reserve(req({ expiresAt: '2026-09-03T12:04:00.000Z' }));
+  const result = await store.release({ reservationId: reservation.reservationId, idempotencyKey: 'release:once', now: '2026-09-03T12:05:00.000Z' });
+  assert.equal(result.ok, false);
+  assert.equal(result.reason, 'expired');
+
+  const fetched = await store.get(reservation.reservationId);
+  assert.equal(fetched.reservation.status, 'expired');
+});
+
+test('release rejects a missing, invalid, or malformed request without mutation', async () => {
+  const store = createMemoryReservationStore();
+  const missing = await store.release({ reservationId: 'reservation_does_not_exist', idempotencyKey: 'release:once', now: req().now });
+  assert.equal(missing.ok, false);
+  assert.equal(missing.reason, 'not_found');
+
+  const invalid = await store.release({ reservationId: 'not an opaque id!', idempotencyKey: 'release:once', now: req().now });
+  assert.equal(invalid.ok, false);
+  assert.equal(invalid.reason, 'invalid_request');
+
+  const { reservation } = await store.reserve(req());
+  const malformedClock = await store.release({ reservationId: reservation.reservationId, idempotencyKey: 'release:once', now: '2026-09-03T12:03:00' });
+  assert.equal(malformedClock.ok, false);
+  assert.equal(malformedClock.reason, 'invalid_request');
+
+  const fetched = await store.get(reservation.reservationId);
+  assert.equal(fetched.reservation.status, 'active');
+});
+
+test('release frees a reservation from aggregate active headroom so a new reservation can reuse it', async () => {
+  const store = createMemoryReservationStore();
+  const first = await store.reserve(req({ idempotencyKey: 'reserve:a', amountBytes: 1200000000 }));
+  assert.equal(first.ok, true, JSON.stringify(first));
+  const blocked = await store.reserve(req({ idempotencyKey: 'reserve:b', amountBytes: 900000000 }));
+  assert.equal(blocked.ok, false);
+  assert.equal(blocked.reason, 'capacity_exceeded');
+
+  const released = await store.release({ reservationId: first.reservation.reservationId, idempotencyKey: 'release:once', now: req().now });
+  assert.equal(released.ok, true, JSON.stringify(released));
+
+  const second = await store.reserve(req({ idempotencyKey: 'reserve:b', amountBytes: 900000000 }));
+  assert.equal(second.ok, true, JSON.stringify(second));
+});
+
+test('concurrent release calls for the same reservation and idempotencyKey cannot double-mutate', async () => {
+  const store = createMemoryReservationStore();
+  const { reservation } = await store.reserve(req());
+  const [a, b] = await Promise.all([
+    store.release({ reservationId: reservation.reservationId, idempotencyKey: 'release:once', now: req().now }),
+    store.release({ reservationId: reservation.reservationId, idempotencyKey: 'release:once', now: req().now }),
+  ]);
+  assert.equal(a.ok, true);
+  assert.equal(b.ok, true);
+  assert.equal([a.replayed, b.replayed].filter(Boolean).length, 1);
+
+  const fetched = await store.get(reservation.reservationId);
+  assert.equal(fetched.reservation.status, 'released');
+});
+
+test('consume rejects a released reservation without mutation', async () => {
+  const store = createMemoryReservationStore();
+  const { reservation } = await store.reserve(req());
+  await store.release({ reservationId: reservation.reservationId, idempotencyKey: 'release:once', now: req().now });
+  const result = await store.consume({ reservationId: reservation.reservationId, idempotencyKey: 'consume:once', amountBytes: reservation.amountBytes, now: req().now });
+  assert.equal(result.ok, false);
+  assert.equal(result.reason, 'already_released');
+
+  const fetched = await store.get(reservation.reservationId);
+  assert.equal(fetched.ok, true);
+  assert.equal(fetched.reservation.status, 'released');
+  assert.equal(fetched.reservation.consumedBytes, 0);
+});
+
+test('a release racing a consume for the same reservation lets only one transition win, and the loser is rejected as already_released', async () => {
+  const store = createMemoryReservationStore();
+  const { reservation } = await store.reserve(req());
+  const [released, consumed] = await Promise.all([
+    store.release({ reservationId: reservation.reservationId, idempotencyKey: 'release:once', now: req().now }),
+    store.consume({ reservationId: reservation.reservationId, idempotencyKey: 'consume:once', amountBytes: reservation.amountBytes, now: req().now }),
+  ]);
+  assert.equal(released.ok, true, JSON.stringify(released));
+  assert.equal(consumed.ok, false, JSON.stringify(consumed));
+  assert.equal(consumed.reason, 'already_released');
+
+  const fetched = await store.get(reservation.reservationId);
+  assert.equal(fetched.ok, true);
+  assert.equal(fetched.reservation.status, 'released');
+  assert.equal(fetched.reservation.consumedBytes, 0);
+});
+
 test('get validates its identifier', async () => {
   const store = createMemoryReservationStore();
   const result = await store.get('not an opaque id!');
@@ -317,7 +470,7 @@ test('fail-closed recovery: a backend that cannot load denies rather than procee
   assert.equal(result.reason, 'store_unavailable');
 });
 
-test('fail-closed recovery covers get, consume, and reap as well as reserve', async () => {
+test('fail-closed recovery covers get, consume, release, and reap as well as reserve', async () => {
   const backend = {
     load() { throw new Error('backend unavailable'); },
     save() { throw new Error('backend unavailable'); },
@@ -325,11 +478,14 @@ test('fail-closed recovery covers get, consume, and reap as well as reserve', as
   const store = createReservationStore({ backend });
   const getResult = await store.get('reservation_abc');
   const consumeResult = await store.consume({ reservationId: 'reservation_abc', idempotencyKey: 'consume:x', amountBytes: 1 });
+  const releaseResult = await store.release({ reservationId: 'reservation_abc', idempotencyKey: 'release:x' });
   const reapResult = await store.reap({});
   assert.equal(getResult.ok, false);
   assert.equal(getResult.reason, 'store_unavailable');
   assert.equal(consumeResult.ok, false);
   assert.equal(consumeResult.reason, 'store_unavailable');
+  assert.equal(releaseResult.ok, false);
+  assert.equal(releaseResult.reason, 'store_unavailable');
   assert.equal(reapResult.ok, false);
   assert.equal(reapResult.reason, 'store_unavailable');
 });

@@ -56,6 +56,17 @@ contract. In short:
   inputs; reserving against a pool subtracts every already-active
   reservation held for that `poolId` across all fence generations, so two
   distinct reservations cannot double-commit the same headroom.
+  `release({ reservationId, idempotencyKey, now })` ends an active,
+  unexpired hold without any drawdown: `consumedBytes` stays zero and the
+  reservation immediately stops counting toward its pool's active headroom.
+  A same-key replay is a stable success; a different-key replay against an
+  already-released reservation, or a release attempt against a consumed,
+  expired, or missing reservation, is a typed blocked result rather than a
+  mutation. `released` is terminal -- a `reserve` idempotency replay against
+  a released reservation is rejected, never reopened, and a `consume`
+  attempt against a released reservation is rejected as `already_released`
+  with no drawdown, so no transition can ever reopen or rewrite a released
+  reservation.
 - **Ports** (`ports.js`) define the three explicit boundaries this package
   depends on -- capacity observation, external reclaim provider, and
   reservation persistence -- as typed method-shape contracts. None receives a

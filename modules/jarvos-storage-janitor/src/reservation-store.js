@@ -3,7 +3,7 @@
 const { isObject, clone, isOpaqueId, isSafeNonNegativeInt, isSafePositiveInt, isValidClockValue, normalizeTime, digestOf } = require('./primitives');
 
 const RESERVATION_STORE_SCHEMA_VERSION = 'jarvos-storage-janitor.reservation-store.v1';
-const RESERVATION_STATES = Object.freeze(['active', 'consumed', 'expired']);
+const RESERVATION_STATES = Object.freeze(['active', 'consumed', 'expired', 'released']);
 const MAX_MUTATE_ATTEMPTS = 8;
 
 function emptyState() {
@@ -56,6 +56,7 @@ function publicReservation(record) {
     createdAt: record.createdAt,
     expiresAt: record.expiresAt,
     consumedAt: record.consumedAt,
+    releasedAt: record.releasedAt,
   };
 }
 
@@ -160,6 +161,9 @@ function createReservationStore(options = {}) {
           }
           if (existing.status === 'expired') return noCommit({ ok: false, reason: 'expired' });
           if (existing.status === 'consumed') return noCommit({ ok: false, reason: 'already_consumed' });
+          // A released reservation is terminal: a reserve replay must never
+          // reopen it, regardless of matching parameters or fence.
+          if (existing.status === 'released') return noCommit({ ok: false, reason: 'already_released' });
 
           const matches = existing.amountBytes === amountBytes
             && existing.fenceGeneration === fenceGeneration
@@ -222,9 +226,11 @@ function createReservationStore(options = {}) {
           consumedBytes: 0,
           status: 'active',
           consumeIdempotencyKey: null,
+          releaseIdempotencyKey: null,
           createdAt: effectiveNow,
           expiresAt: expiresIso,
           consumedAt: null,
+          releasedAt: null,
         };
         state.reservations[id] = record;
         state.idempotencyIndex[idempotencyKey] = id;
@@ -258,6 +264,10 @@ function createReservationStore(options = {}) {
           return noCommit({ ok: true, replayed: true, reservation: publicReservation(record) });
         }
         if (record.status === 'consumed') return noCommit({ ok: false, reason: 'already_consumed' });
+        // A released reservation is terminal: a consume attempt must never
+        // reopen it and rewrite it to `consumed`, regardless of idempotency
+        // key or requested amount.
+        if (record.status === 'released') return noCommit({ ok: false, reason: 'already_released' });
         if (record.status === 'expired') return noCommit({ ok: false, reason: 'expired' });
         if (record.status === 'active' && isExpired(record, effectiveNow)) {
           // Commit the expiry transition rather than reporting `expired`
@@ -271,6 +281,49 @@ function createReservationStore(options = {}) {
         record.status = 'consumed';
         record.consumeIdempotencyKey = idempotencyKey;
         record.consumedAt = effectiveNow;
+        return { ok: true, replayed: false, reservation: publicReservation(record) };
+      });
+    });
+  }
+
+  function release({ reservationId: id, idempotencyKey, now } = {}) {
+    return guarded(async () => {
+      if (!isOpaqueId(id) || !isOpaqueId(idempotencyKey)) {
+        return { ok: false, reason: 'invalid_request', errors: ['reservationId and idempotencyKey are required and must be well-formed'] };
+      }
+      const resolvedNow = resolveNow(now, clock);
+      if (!resolvedNow.ok) return { ok: false, reason: 'invalid_request', errors: ['now must be a valid UTC ISO-8601 timestamp'] };
+      const effectiveNow = resolvedNow.value;
+
+      return mutate((state) => {
+        const record = state.reservations[id];
+        if (!record) return noCommit({ ok: false, reason: 'not_found' });
+
+        // A repeat release with the same idempotency key replays the
+        // original result; a released reservation is terminal, so a
+        // same-key replay is the only way a second release call can
+        // succeed. A different key against an already-released
+        // reservation is a typed conflict, never a silent reuse.
+        if (record.status === 'released' && record.releaseIdempotencyKey === idempotencyKey) {
+          return noCommit({ ok: true, replayed: true, reservation: publicReservation(record) });
+        }
+        if (record.status === 'released') return noCommit({ ok: false, reason: 'already_released' });
+        if (record.status === 'consumed') return noCommit({ ok: false, reason: 'already_consumed' });
+        if (record.status === 'expired') return noCommit({ ok: false, reason: 'expired' });
+        if (record.status === 'active' && isExpired(record, effectiveNow)) {
+          // Commit the expiry transition rather than reporting `expired`
+          // for a mutation that was never actually persisted.
+          record.status = 'expired';
+          return { ok: false, reason: 'expired' };
+        }
+
+        // Freeing an active, unexpired reservation drops its status out of
+        // `active`, so it stops counting toward reserve()'s aggregate
+        // active-headroom sum for its pool immediately, with no
+        // consumedBytes drawdown.
+        record.status = 'released';
+        record.releaseIdempotencyKey = idempotencyKey;
+        record.releasedAt = effectiveNow;
         return { ok: true, replayed: false, reservation: publicReservation(record) };
       });
     });
@@ -308,7 +361,7 @@ function createReservationStore(options = {}) {
     });
   }
 
-  return { reserve, consume, reap, get };
+  return { reserve, consume, release, reap, get };
 }
 
 function createMemoryReservationBackend() {
