@@ -549,6 +549,7 @@ function validateContextPacket(packet) {
     const recordsById = new Map(packet.canonical.records.map((record) => [record.id, record]));
     if (recordsById.size !== packet.canonical.records.length || packet.canonical.records.some((record) => record.parentId !== null && recordsById.get(record.parentId)?.kind !== 'project')) return { ok: false, reason: 'invalid-contract' };
     if (!Object.entries(packet.canonical.revisions).every(([id, revision]) => /^\w+_[0-9]{6,}$/.test(id) && Number.isInteger(revision) && revision > 0)) return { ok: false, reason: 'invalid-contract' };
+    if (Object.keys(packet.canonical.revisions).length !== recordsById.size || [...recordsById].some(([id, record]) => packet.canonical.revisions[id] !== record.revision)) return { ok: false, reason: 'invalid-contract' };
     if ([...packet.activity, ...packet.currentWork, ...packet.attention].some((value) => !validatePacketSummary(value)) || packet.evidence.some((value) => !validatePacketEvidence(value))) return { ok: false, reason: 'invalid-contract' };
     if (!validateInferencePacket(packet.inference) || !validatePacketWatermarks(packet.watermarks)) return { ok: false, reason: 'invalid-contract' };
     if (!isPlainObject(packet.providers) || Object.values(packet.providers).some((view) => !validateProviderView(view))) return { ok: false, reason: 'invalid-contract' };

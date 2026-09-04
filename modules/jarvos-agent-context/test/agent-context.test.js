@@ -1844,3 +1844,18 @@ test('createHostProjectsContextProvider fails closed when the workspace-derived 
     jarvosPaths.resetConfigCache();
   }
 });
+
+test('createHostProjectsContextProvider fails closed when its selected provider changes during binding', async () => {
+  await withTempVault(async ({ tmp }) => {
+    const workspace = path.join(tmp, 'workspace'); fs.mkdirSync(workspace, { recursive: true });
+    const configPath = path.join(workspace, 'projects-context.json');
+    fs.writeFileSync(configPath, buildProjectsConfigFixture(workspace, 'race'));
+    const original = fs.readFileSync; let providerReads = 0;
+    fs.readFileSync = function patched(filePath, ...args) {
+      if (String(filePath).endsWith('/provider.js') && ++providerReads === 2) throw new Error('selected provider changed');
+      return original.call(this, filePath, ...args);
+    };
+    try { assert.equal(createHostProjectsContextProvider({ [PROJECTS_CONTEXT_CONFIG_ENV]: configPath }), null); }
+    finally { fs.readFileSync = original; }
+  });
+});

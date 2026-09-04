@@ -576,4 +576,9 @@ test('packet normalization advertises the supported schema set and rejects unkno
     ...result.packet,
     canonical: { ...result.packet.canonical, records: [result.packet.canonical.records[0], { ...result.packet.canonical.records[1], parentId: null }] },
   }), { ok: false, reason: 'invalid-contract' });
+  for (const revisions of [
+    {},
+    { ...result.packet.canonical.revisions, prj_999999: 1 },
+    { ...result.packet.canonical.revisions, [result.packet.canonical.records[0].id]: result.packet.canonical.records[0].revision + 1 },
+  ]) assert.deepEqual(normalizeContextPacket({ ...result.packet, canonical: { ...result.packet.canonical, revisions } }), { ok: false, reason: 'invalid-contract' });
 });
