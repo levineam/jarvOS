@@ -147,6 +147,28 @@ test('canonical-only packet is useful and optional providers are visibly omitted
   assert.equal(validateContextPacket(result.packet).ok, true);
 });
 
+test('canonical packet accepts nested projects beneath a project parent', () => {
+  const { registry, root, outcome } = makeRegistry();
+  const child = registry.create({ title: 'Active Assistant', parentId: root.id }).record;
+  const query = queryFor(root, outcome, {
+    scope: { projectIds: [root.id], outcomeIds: [], includeDescendants: true },
+  });
+  const result = buildContextPacket({
+    registry,
+    query,
+    capability: issue(query),
+    capabilitySecret: SECRET,
+    subject: 'agent:test-session',
+    hostId: 'projects-host',
+    now: NOW,
+    providers: {},
+  });
+
+  assert.equal(result.status, 'ok');
+  assert.equal(result.packet.canonical.records.find((record) => record.id === child.id).parentId, root.id);
+  assert.equal(validateContextPacket(result.packet).ok, true);
+});
+
 test('inference is versioned, provisional candidates are explicitly non-actionable, and coverage remains typed', () => {
   const { registry, root, outcome } = makeRegistry();
   const query = queryFor(root, outcome);
