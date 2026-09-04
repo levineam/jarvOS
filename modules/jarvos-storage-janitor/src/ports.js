@@ -31,11 +31,11 @@ function assertExternalReclaimPort(port) {
   assertPortShape(port, ['proposeDryRun', 'execute'], 'external reclaim port');
 }
 
-// ReservationPersistencePort: reserve/consume/reap/get, matching the
+// ReservationPersistencePort: reserve/consume/release/reap/get, matching the
 // reservation-store.js contract. A conforming implementation must satisfy
 // checkReservationStoreConformance from reservation-store.js.
 function assertReservationPort(port) {
-  assertPortShape(port, ['reserve', 'consume', 'reap', 'get'], 'reservation-persistence port');
+  assertPortShape(port, ['reserve', 'consume', 'release', 'reap', 'get'], 'reservation-persistence port');
 }
 
 module.exports = {

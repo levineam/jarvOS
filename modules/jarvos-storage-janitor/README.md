@@ -56,6 +56,42 @@ contract. In short:
   inputs; reserving against a pool subtracts every already-active
   reservation held for that `poolId` across all fence generations, so two
   distinct reservations cannot double-commit the same headroom.
+  `release({ reservationId, idempotencyKey, now })` ends an active,
+  unexpired hold without any drawdown: `consumedBytes` stays zero and the
+  reservation immediately stops counting toward its pool's active headroom.
+  A same-key replay is a stable success; a different-key replay against an
+  already-released reservation, or a release attempt against a consumed,
+  expired, or missing reservation, is a typed blocked result rather than a
+  mutation. `released` is terminal -- a `reserve` idempotency replay against
+  a released reservation is rejected, never reopened, and a `consume`
+  attempt against a released reservation is rejected as `already_released`
+  with no drawdown, so no transition can ever reopen or rewrite a released
+  reservation. `reap` never reverts a released reservation back to `expired`
+  either: terminal means terminal against every transition, not just
+  `reserve` and `consume`.
+
+  `release()` and the `released` status are a **breaking addition** to the
+  reservation-persistence port and its persisted schema: the store's
+  persisted `schemaVersion` is `jarvos-storage-janitor.reservation-store.v2`.
+  Any host adapter implementing this port directly (not through
+  `createMemoryReservationStore`) must add `release()` -- see
+  `assertReservationPort` in `ports.js`. A **genuine** v1 store (one written
+  before `release` existed) contains only `active`, `consumed`, or `expired`
+  records; this package still reads it, normalizes its missing
+  `releasedAt`/`releaseIdempotencyKey` fields to `null` in memory, and
+  upgrades it to v2 in storage the next time it is mutated -- `get()` alone
+  never writes anything. A v1 store that impossibly contains a `released`
+  record (which genuine v1 code could never have written) is rejected as
+  invalid rather than silently accepted. This upgrade path is one-way: a
+  v1-only rollback boundary. Once any node has upgraded a store to v2 (by
+  mutating it, or simply by starting from an already-v2 empty state), old
+  v1-only code reading that store sees a `schemaVersion` it does not
+  recognize and fails closed with a schema-mismatch error -- it does not
+  crash, and it does not silently misinterpret a `released` record as some
+  other status. Rolling back to v1-only code against a store any v2 code has
+  touched is therefore unsafe and unsupported; a rollback requires either a
+  v1-only store that has never been touched by v2 code, or restoring a v1
+  snapshot taken before the first v2 write.
 - **Ports** (`ports.js`) define the three explicit boundaries this package
   depends on -- capacity observation, external reclaim provider, and
   reservation persistence -- as typed method-shape contracts. None receives a

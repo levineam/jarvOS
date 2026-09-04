@@ -20,9 +20,12 @@ test('an external reclaim port must expose proposeDryRun() and execute()', () =>
   assert.doesNotThrow(() => assertExternalReclaimPort({ proposeDryRun: () => {}, execute: () => {} }));
 });
 
-test('a reservation port must expose reserve(), consume(), reap(), and get()', () => {
+test('a reservation port must expose reserve(), consume(), release(), reap(), and get()', () => {
   assert.throws(() => assertReservationPort({ reserve: () => {} }));
-  assert.doesNotThrow(() => assertReservationPort({
+  assert.throws(() => assertReservationPort({
     reserve: () => {}, consume: () => {}, reap: () => {}, get: () => {},
+  }));
+  assert.doesNotThrow(() => assertReservationPort({
+    reserve: () => {}, consume: () => {}, release: () => {}, reap: () => {}, get: () => {},
   }));
 });
