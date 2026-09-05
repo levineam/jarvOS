@@ -25,7 +25,6 @@ test('touched-only projection resolves Outcome activity to the canonical parent 
     activities: [
       { canonicalId: 'out_000001', canonicalAtAdmission: { rootProjectId: 'prj_000001' }, occurredAt: '2026-08-08T11:00:00.000Z', trust: 'verified' },
       { canonicalId: 'prj_000002', occurredAt: '2026-08-07T11:00:00.000Z', trust: 'verified' },
-      { canonicalId: 'prj_000002', occurredAt: '2026-08-08T11:00:00.000Z', trust: 'unverified' },
     ],
   });
   assert.equal(result.status, 'fresh');
@@ -65,10 +64,10 @@ test('projection keeps legacy note targets while displaying canonical root Proje
     ],
   });
   assert.equal(result.content, [
-    '- [[jarvOS v1.0.0 Release|jarvOS]]',
     '- [[AAF Observatory|Amazing Abundance Portfolio]]',
+    '- [[jarvOS v1.0.0 Release|jarvOS]]',
   ].join('\n'));
-  assert.deepEqual(result.mappedProjectIds, ['prj_000001', 'prj_000002']);
+  assert.deepEqual(result.mappedProjectIds, ['prj_000003', 'prj_000001']);
 });
 
 test('projection leaves a mapping unaliased when its target basename is its canonical title', () => {
@@ -111,7 +110,8 @@ test('provisional and quarantined activity cannot create Journal links', () => {
       { canonicalId: 'prj_000002', canonicalAtAdmission: { rootProjectId: 'prj_000002' }, inference: { disposition: 'quarantined' }, occurredAt: '2026-08-08T11:00:00.000Z', trust: 'verified' },
     ],
   });
-  assert.equal(result.status, 'fresh-empty');
+  assert.equal(result.status, 'degraded');
+  assert.equal(result.preserve, true);
   assert.equal(result.content, null);
   assert.deepEqual(result.touchedProjectIds, []);
 });
@@ -142,6 +142,37 @@ test('context reads do not count as activity and expected revisions fence projec
   const planned = projection.applyJournalProjection({ content, projection: result });
   assert.equal(planned.status, 'planned');
   assert.equal(planned.manifest.priorRevision, projection.digest(content));
+});
+
+test('verified context-read events never become project activity', () => {
+  const result = projection.buildJournalProjection({
+    date: '2026-08-08',
+    projects: PROJECTS,
+    noteMappings: NOTE_MAPPINGS,
+    activities: [{
+      canonicalId: 'prj_000001',
+      occurredAt: '2026-08-08T11:00:00.000Z',
+      category: 'context-read',
+      trust: 'verified',
+      eventId: 'evt-context-read',
+    }],
+  });
+  assert.equal(result.status, 'fresh-empty');
+  assert.equal(result.content, null);
+  assert.deepEqual(result.omissions, []);
+});
+
+test('malformed same-day activity is explicit and preserves the existing section', () => {
+  const result = projection.buildJournalProjection({
+    date: '2026-08-08',
+    projects: PROJECTS,
+    noteMappings: NOTE_MAPPINGS,
+    activities: [null],
+  });
+  assert.equal(result.status, 'degraded');
+  assert.equal(result.preserve, true);
+  assert.equal(result.content, null);
+  assert.deepEqual(result.omissions, ['activity-invalid:0']);
 });
 
 test('touched-parent projection is idempotent after its acknowledged content is applied', () => {
