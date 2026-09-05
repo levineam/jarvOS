@@ -166,6 +166,7 @@ const compoundEngineeringProvider = require('./providers/compound-engineering');
 const workflowProvider = require('./providers/workflow-provider');
 const learningEligibility = require('./providers/learning-eligibility');
 const workRunStore = require('./features/work-run-store');
+const workFollowThrough = require('./features/work-follow-through');
 const managedWorkflow = require('./features/workflow');
 module.exports = {
   ...projectsActivity,
@@ -177,6 +178,7 @@ module.exports = {
   ...workflowProvider,
   ...learningEligibility,
   ...workRunStore,
+  ...workFollowThrough,
   ...managedWorkflow,
   ACTIVE_STATUSES,
   DEFAULT_IGNORED_PATH_SEGMENTS,
