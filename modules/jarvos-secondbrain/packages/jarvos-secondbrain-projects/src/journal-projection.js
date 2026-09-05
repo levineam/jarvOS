@@ -51,9 +51,19 @@ function activityDisposition(activity) {
   return selected ? selected.trim().toLowerCase() : null;
 }
 
+function activityIdentity(activity, fallback = 'unknown') {
+  const value = activityPayload(activity) || {};
+  return String(value.eventId || value.id || value.canonicalId || fallback);
+}
+
+function isContextRead(activity) {
+  const value = activityPayload(activity);
+  return Boolean(value && (value.kind === 'context-read' || value.category === 'context-read'));
+}
+
 function acceptedActivity(activity) {
   const value = activityPayload(activity);
-  if (!value || !(value.accepted === true || value.trust === 'verified')) return false;
+  if (!value || isContextRead(value) || !(value.accepted === true || value.trust === 'verified')) return false;
   return !BLOCKED_DISPOSITIONS.has(activityDisposition(value));
 }
 
@@ -99,14 +109,18 @@ function touchedProjectIds({ activities = [], projects = [], date, timeZone = 'U
   const targetDate = requiredString(date, 'projection date');
   const records = Array.isArray(projects) ? projects : [];
   const recordsById = Object.fromEntries(records.filter((record) => record && record.id).map((record) => [record.id, record]));
-  const touched = new Set();
+  const touched = [];
+  const seen = new Set();
   for (const activity of Array.isArray(activities) ? activities : []) {
     const value = activityPayload(activity);
     if (!acceptedActivity(value) || !value.canonicalId || localDate(value.occurredAt, timeZone) !== targetDate) continue;
     const projectId = projectIdForActivity(value, recordsById);
-    if (projectId) touched.add(projectId);
+    if (projectId && !seen.has(projectId)) {
+      seen.add(projectId);
+      touched.push(projectId);
+    }
   }
-  return [...touched].sort();
+  return touched;
 }
 
 function mappingTarget(mapping) {
@@ -166,6 +180,40 @@ function projectLink({ target, title }) {
     : `[[${target}]]`;
 }
 
+function activityOmissions({ activities = [], projects = [], date, timeZone = 'UTC' } = {}) {
+  const targetDate = requiredString(date, 'projection date');
+  const recordsById = Object.fromEntries((Array.isArray(projects) ? projects : [])
+    .filter((record) => record && record.id)
+    .map((record) => [record.id, record]));
+  const omissions = [];
+  for (const [index, activity] of (Array.isArray(activities) ? activities : []).entries()) {
+    const value = activityPayload(activity);
+    const identity = activityIdentity(value, index);
+    if (!value) {
+      omissions.push(`activity-invalid:${identity}`);
+      continue;
+    }
+    const occurredDate = localDate(value.occurredAt, timeZone);
+    if (!occurredDate || occurredDate !== targetDate) continue;
+    // A context read is intentionally not an activity event. It is an
+    // ordinary read-path observation, not evidence that Andrew worked on a
+    // Project, so it should not degrade an otherwise healthy activity feed.
+    if (isContextRead(value)) continue;
+    if (!(value.accepted === true || value.trust === 'verified')) {
+      omissions.push(`activity-untrusted:${identity}`);
+      continue;
+    }
+    const disposition = activityDisposition(value);
+    if (BLOCKED_DISPOSITIONS.has(disposition)) {
+      omissions.push(`activity-${disposition}:${identity}`);
+      continue;
+    }
+    if (!value.canonicalId) continue;
+    if (!projectIdForActivity(value, recordsById)) omissions.push(`activity-unresolved:${identity}`);
+  }
+  return [...new Set(omissions)];
+}
+
 function projectLines({
   projects = [],
   activities = [],
@@ -187,10 +235,11 @@ function projectLines({
       omissions: [`activity-provider:${state}`],
     };
   }
-  const byId = Object.fromEntries((Array.isArray(projects) ? projects : []).filter((record) => record && record.id).map((record) => [record.id, record]));
-  const touchedIds = touchedProjectIds({ activities, projects, date, timeZone });
+  const records = Array.isArray(projects) ? projects : [];
+  const byId = Object.fromEntries(records.filter((record) => record && record.id).map((record) => [record.id, record]));
+  const touchedIds = touchedProjectIds({ activities, projects: records, date, timeZone });
   const mappings = normalizeNoteMappings(noteMappings === undefined ? canonicalNoteMappings : noteMappings);
-  const omissions = [];
+  const omissions = activityOmissions({ activities, projects: records, date, timeZone });
   const mapped = [];
   for (const id of touchedIds) {
     const target = normalizeLinkTarget(mappings.get(id));
@@ -214,7 +263,7 @@ function projectLines({
   const lines = limited.map(projectLink).map((link) => `- ${link}`);
   if (uniqueMapped.length > maxItems) lines.push(`- _...and ${uniqueMapped.length - maxItems} more_`);
   const uniqueOmissions = [...new Set(omissions)].sort();
-  const preserve = uniqueOmissions.some((omission) => omission.startsWith('canonical-note-mapping:'));
+  const preserve = uniqueOmissions.length > 0;
   return {
     contract: JOURNAL_PROJECTION_CONTRACT,
     status: preserve ? 'degraded' : (lines.length ? 'fresh' : 'fresh-empty'),
@@ -313,10 +362,13 @@ module.exports = {
   JOURNAL_PROJECTION_CONTRACT,
   PROJECTS_SECTION_HEADING,
   acceptedActivity,
+  activityOmissions,
   admissionRootProjectId,
   applyJournalProjection,
   buildJournalProjection,
+  canonicalProjectId,
   digest,
+  isContextRead,
   localDate,
   normalizeNoteMappings,
   noteMappingsSnapshot,
