@@ -11,6 +11,9 @@ const {
   createMemoryWorkRunStore,
   createWorkFollowThrough,
 } = require('../src');
+const {
+  createHostAdmission,
+} = require('../../jarvos-secondbrain/packages/jarvos-secondbrain-projects/src/provider-contracts');
 
 function claimed(store, { workRunId = 'run_sup3905', ownerId = 'agent:codex' } = {}) {
   const result = store.claimWorkRun({
@@ -99,15 +102,35 @@ test('one outcome is durably bound to exactly one fenced coding run', () => {
   assert.throws(() => store.bindFollowThrough(binding(renewed, { outcomeId: 'SUP-3905' })), /outcomeId must be an opaque identifier/);
 });
 
-test('assignee-only binding stays not-dispatched and never trusts caller evidence', async () => {
+test('missing receipt resolver stays unavailable and never trusts caller evidence', async () => {
   const store = createMemoryWorkRunStore();
   const claim = claimed(store);
   assert.equal(store.bindFollowThrough(binding(claim)).ok, true);
   const followThrough = createWorkFollowThrough({ workRunStore: store });
 
   const summary = await followThrough.summarize({ outcomeId: 'out_390500', evidence: nativeReceipt(claim) });
+  assert.equal(summary.status, 'unavailable');
+  assert.equal(summary.disposition, 'unavailable');
+  assert.equal(summary.reason, 'native_receipt_resolver_unavailable');
+
+  const throwing = createWorkFollowThrough({
+    workRunStore: store,
+    hostReceiptResolver: async () => { throw new Error('temporary receipt store outage'); },
+  });
+  const outage = await throwing.summarize({ outcomeId: 'out_390500' });
+  assert.equal(outage.status, 'unavailable');
+  assert.equal(outage.reason, 'native_receipt_resolver_unavailable');
+});
+
+test('a working resolver that finds no invocation reports not-dispatched', async () => {
+  const store = createMemoryWorkRunStore();
+  const claim = claimed(store);
+  assert.equal(store.bindFollowThrough(binding(claim)).ok, true);
+  const followThrough = createWorkFollowThrough({ workRunStore: store, hostReceiptResolver: async () => null });
+
+  const summary = await followThrough.summarize({ outcomeId: 'out_390500' });
   assert.equal(summary.status, 'not-dispatched');
-  assert.equal(summary.disposition, 'not-dispatched');
+  assert.equal(summary.reason, 'exact_native_invocation_not_found');
 });
 
 test('only a resolver-captured exact native receipt can advance a bound run', async () => {
@@ -195,13 +218,33 @@ test('file-store restart preserves bindings and provider projection is path and 
   const summary = await followThrough.summarize({ outcomeId: 'out_390500' });
   const projected = await followThrough.toProjectsSummary({ outcomeId: 'out_390500', canonicalId: 'out_390500', observedAt: '2026-09-05T00:00:00.000Z' });
   assert.equal(summary.execution.workRunId, claim.workRunId);
-  assert.equal(projected.category, 'execution');
-  assert.equal(projected.status, 'not-dispatched');
-  assert.match(projected.title, /not-dispatched.*bd_sup3905_next/);
+  assert.equal(projected.category, 'attention');
+  assert.equal(projected.status, 'unavailable');
+  assert.match(projected.title, /unavailable.*bd_sup3905_next/);
   assert.deepEqual(projected.evidenceRefs, ['agent:codex', 'workspace_sup3905', 'run_sup3905', 'bd_sup3905_next', 'session_sup3905_resume']);
   await assert.rejects(() => followThrough.toProjectsSummary({ outcomeId: 'out_390500', canonicalId: 'out_999999', observedAt: '2026-09-05T00:00:00.000Z' }), /must match outcomeId/);
   const serialized = JSON.stringify(projected);
   assert.doesNotMatch(serialized, /private\/jarvos|canonicalWorktree|ownerId|secret|token/i);
+  assert.equal(Object.hasOwn(projected, 'canonicalAtAdmission'), false);
+
+  const admitted = createHostAdmission({
+    producerId: 'provider:stewardship',
+    secret: 'test-only-provider-secret',
+    allowedProviders: ['stewardship'],
+  }).admitProviderSnapshot({
+    contract: 'jarvos.provider-snapshot/v1',
+    provider: 'stewardship',
+    state: 'fresh',
+    trust: 'verified',
+    capturedAt: '2026-09-05T00:00:00.000Z',
+    watermark: 'follow-through-1',
+    scope: { projectIds: [], outcomeIds: ['out_390500'] },
+    summaries: [projected],
+    omissions: [],
+    errorCode: null,
+    admission: null,
+  });
+  assert.equal(admitted.summaries[0].status, 'unavailable');
 });
 
 test('failed or blocked work runs cannot become running or accepted from a native receipt', async () => {
@@ -241,7 +284,7 @@ test('provider projection resolves trusted store state instead of a fabricated c
   const store = createMemoryWorkRunStore();
   const claim = claimed(store);
   store.bindFollowThrough(binding(claim));
-  const followThrough = createWorkFollowThrough({ workRunStore: store });
+  const followThrough = createWorkFollowThrough({ workRunStore: store, hostReceiptResolver: async () => null });
   const projected = await followThrough.toProjectsSummary({
     outcomeId: 'out_390500', canonicalId: 'out_390500', observedAt: '2026-09-05T00:00:00.000Z',
   }, { status: 'accepted', execution: binding(claim) });

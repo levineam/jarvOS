@@ -140,7 +140,10 @@ function createWorkFollowThrough({ workRunStore, hostReceiptResolver = null, adm
     if (native.available && native.receipt?.type === 'jarvos.native-invocation-receipt/v1') {
       return summary({ status: 'unavailable', binding, reason: 'native_receipt_correlation_unavailable' });
     }
-    return summary({ status: 'not-dispatched', binding, reason: native.available ? 'exact_native_invocation_not_found' : 'native_receipt_resolver_unavailable' });
+    if (!native.available) {
+      return summary({ status: 'unavailable', binding, reason: 'native_receipt_resolver_unavailable' });
+    }
+    return summary({ status: 'not-dispatched', binding, reason: 'exact_native_invocation_not_found' });
   }
 
   async function toProjectsSummary({ outcomeId, canonicalId, observedAt, canonicalAtAdmission = null } = {}) {
@@ -150,7 +153,7 @@ function createWorkFollowThrough({ workRunStore, hostReceiptResolver = null, adm
     if (canonicalId !== outcomeId) throw new Error('canonicalId must match outcomeId');
     if (typeof observedAt !== 'string' || Number.isNaN(Date.parse(observedAt))) throw new Error('observedAt must be an ISO timestamp');
     const blocked = ['failed', 'resumption-pending', 'unsupported', 'unavailable'].includes(derived.status);
-    return {
+    const projected = {
       id: `follow-through:${outcomeId}`,
       canonicalId,
       category: blocked ? 'attention' : 'execution',
@@ -165,8 +168,9 @@ function createWorkFollowThrough({ workRunStore, hostReceiptResolver = null, adm
         derived.execution.todoId,
         derived.execution.triggerId,
       ],
-      canonicalAtAdmission,
     };
+    if (canonicalAtAdmission !== null) projected.canonicalAtAdmission = canonicalAtAdmission;
+    return projected;
   }
 
   return { summarize, toProjectsSummary };
