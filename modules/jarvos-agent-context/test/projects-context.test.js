@@ -29,6 +29,8 @@ const { ProjectRegistry } = require(path.join(PROJECTS_SOURCE, 'registry.js'));
 const { buildContextPacket } = require(path.join(PROJECTS_SOURCE, 'projects-context.js'));
 const { issueCapability } = require(path.join(PROJECTS_SOURCE, 'projects-context-capability.js'));
 const { createProjectCandidate } = require(path.join(PROJECTS_SOURCE, 'project-inference-contracts.js'));
+const { createHostAdmission } = require(path.join(PROJECTS_SOURCE, 'provider-contracts.js'));
+const { intentSourceDescriptorDigest } = require(path.join(PROJECTS_SOURCE, 'intent-gap-attention.js'));
 
 const QUERY = {
   scope: { projectIds: ['prj_000001'], outcomeIds: ['out_000001'], includeDescendants: false },
@@ -36,13 +38,14 @@ const QUERY = {
   limits: { maxItems: 12, maxBytes: 9000, maxProviderAgeSeconds: 3600 },
 };
 
-function packet({ inference = null } = {}) {
+function packet({ inference = null, intentGaps = null } = {}) {
   const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-agent-context-projects-'));
   try {
     const registry = new ProjectRegistry({ stateDir, now: () => '2026-08-08T12:00:00.000Z' });
     const root = registry.create({ title: 'jarvOS', declaredPriority: 'high' }).record;
     const outcome = registry.create({ kind: 'outcome', title: 'v1.0.0 release', parentId: root.id }).record;
     const query = { ...QUERY, scope: { projectIds: [root.id], outcomeIds: [outcome.id], includeDescendants: false } };
+    const resolvedIntentGaps = typeof intentGaps === 'function' ? intentGaps({ registry, root, outcome }) : intentGaps;
     const capability = issueCapability({
       authorization: { allowed: true }, hostId: 'projects-host', hostSecret: 'test-only-host-secret', subject: 'agent:test-session',
       query, redactionClass: 'private', providerCoverage: [], capabilityRevision: 'projects-context-cap-1',
@@ -50,7 +53,7 @@ function packet({ inference = null } = {}) {
     });
     const result = buildContextPacket({
       registry, query, capability, capabilitySecret: 'test-only-host-secret', subject: 'agent:test-session', hostId: 'projects-host',
-      providers: {}, inference, now: '2026-08-08T12:00:00.000Z',
+      providers: {}, inference, intentGaps: resolvedIntentGaps, now: '2026-08-08T12:00:00.000Z',
     });
     assert.equal(result.status, 'ok');
     return result.packet;
@@ -187,6 +190,39 @@ test('recent activity is rendered as bounded assistant context', async () => {
   assert.equal(result.status, 'ok');
   assert.match(result.markdown, /### Recent activity/);
   assert.match(result.markdown, /Reconciled release readiness \[completed\]/);
+});
+
+test('derived Project intent gaps use the existing attention rendering consumer', async () => {
+  const authority = createHostAdmission({ producerId: 'agent-context-intent-source', secret: 'agent-context-intent-secret', allowedSourceClasses: ['note'] });
+  const provider = {
+    read: async ({ query }) => ({
+      status: 'ok',
+      packet: {
+        ...packet({
+          intentGaps: ({ registry, root }) => ({
+            sourceAuthority: authority,
+            sources: (() => {
+              const descriptor = {
+                canonicalId: root.id, recordRevision: root.revision, registryGeneration: registry.generation,
+                role: 'migration-source', status: 'current', scope: 'record', sourceRef: 'agent-context-intent-source', sourceDigest: 'c'.repeat(64),
+                fields: { goal: 'Keep intent current', definitionOfDone: 'Intent is proven' },
+              };
+              return [{ ...descriptor, evidence: authority.admitEvidenceUnit({
+                observationId: 'obs_agent_intent', evidenceId: 'ev_agent_intent', sourceClass: 'note',
+                occurredAt: '2026-08-08T12:00:00.000Z', observedAt: '2026-08-08T12:00:00.000Z', sourceRevision: 'brief-v1',
+                sensitivity: 'owner-private', coverageState: 'fresh', contentDigest: intentSourceDescriptorDigest(descriptor),
+              }) }];
+            })(),
+          }),
+        }),
+        query,
+      },
+    }),
+  };
+  const result = await readProjectsContext({ provider, query: QUERY });
+  assert.equal(result.status, 'ok');
+  assert.match(result.markdown, /### Attention/);
+  assert.match(result.markdown, /Intent gap: jarvOS \(recoverable-migration\); next owner: protected-project-owner/);
 });
 
 test('provisional candidate labels are rendered as delimited untrusted data', async () => {

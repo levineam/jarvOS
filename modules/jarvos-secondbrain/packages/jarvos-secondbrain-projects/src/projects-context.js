@@ -7,6 +7,7 @@ const { validateProviderSnapshot } = require('./provider-contracts');
 const { validateInferenceMetadata } = require('./records');
 const inferenceContracts = require('./project-inference-contracts');
 const { ENGINE_REVISION, POLICY_REVISION } = require('./project-inference-reconciler');
+const { attentionSummaries, deriveIntentGapAttention } = require('./intent-gap-attention');
 const {
   CONTEXT_CONTRACT,
   REDACTION_CLASSES,
@@ -568,7 +569,7 @@ function normalizeContextPacket(packet) {
     : validation;
 }
 
-function buildContextPacket({ registry, query, providers = {}, providerAuthorities = {}, capability, capabilitySecret, subject, hostId, activityWindow = null, inference = null, now = new Date().toISOString() } = {}) {
+function buildContextPacket({ registry, query, providers = {}, providerAuthorities = {}, capability, capabilitySecret, subject, hostId, activityWindow = null, inference = null, intentGaps = null, now = new Date().toISOString() } = {}) {
   let normalizedQuery;
   try { normalizedQuery = validateContextQuery(query); } catch (_) { return { status: 'unavailable', code: 'CONTEXT_UNAVAILABLE' }; }
   let normalizedActivityWindow;
@@ -595,12 +596,13 @@ function buildContextPacket({ registry, query, providers = {}, providerAuthoriti
   if (!selectedIds) return { status: 'unavailable', code: 'CONTEXT_UNAVAILABLE' };
   const wholePortfolio = normalizedQuery.scope.projectIds.length === 0 && normalizedQuery.scope.outcomeIds.length === 0;
   const redactionClass = authorized.redactionClass;
+  let selectedRecords;
   let records;
   try {
-    records = registry.list()
+    selectedRecords = registry.list()
       .filter((record) => selectedIds.has(record.id))
-      .sort((left, right) => registry.breadcrumb(left.id).localeCompare(registry.breadcrumb(right.id)) || left.id.localeCompare(right.id))
-      .map((record) => serializeRecord(record, registry, redactionClass));
+      .sort((left, right) => registry.breadcrumb(left.id).localeCompare(registry.breadcrumb(right.id)) || left.id.localeCompare(right.id));
+    records = selectedRecords.map((record) => serializeRecord(record, registry, redactionClass));
   } catch (_) {
     return { status: 'unavailable', code: 'CONTEXT_UNAVAILABLE' };
   }
@@ -613,6 +615,29 @@ function buildContextPacket({ registry, query, providers = {}, providerAuthoriti
   const packetOmissions = [];
   const providerResults = {};
   const allSummaries = [];
+  if (intentGaps === null || intentGaps === undefined) {
+    packetOmissions.push('intent-gap:omitted');
+  } else if (redactionClass === 'public') {
+    packetOmissions.push('intent-gap:redacted');
+  } else {
+    try {
+      const derived = deriveIntentGapAttention({
+        records: selectedRecords,
+        registryGeneration: registry.generation,
+        // Do not normalize or verify a foreign descriptor: scope filtering is
+        // an authority boundary, not just packet presentation.
+        sources: Array.isArray(intentGaps.sources)
+          ? intentGaps.sources.filter((source) => source && selectedIds.has(source.canonicalId))
+          : intentGaps.sources,
+        sourceAuthority: intentGaps.sourceAuthority,
+        maxEvidenceAgeSeconds: normalizedQuery.limits.maxProviderAgeSeconds,
+        now,
+      });
+      allSummaries.push(...attentionSummaries(derived.entries, { observedAt: now }));
+    } catch (_) {
+      return { status: 'unavailable', code: 'CONTEXT_UNAVAILABLE' };
+    }
+  }
   for (const provider of allProviderNames) {
     if (!authorized.providerCoverage.includes(provider)) {
       const result = { view: emptyProvider(provider, 'omitted', [`provider:${provider}:not-covered`]), summaries: [], omissions: [`provider:${provider}:not-covered`] };

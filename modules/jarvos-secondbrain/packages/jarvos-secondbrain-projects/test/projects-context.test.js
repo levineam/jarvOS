@@ -12,6 +12,12 @@ const { CONTEXT_CONTRACT, buildContextPacket, normalizeContextPacket, SUPPORTED_
 const { CAPABILITY_CONTRACT, issueCapability, verifyCapability } = require('../src/projects-context-capability');
 const inferenceContracts = require('../src/project-inference-contracts');
 const {
+  acknowledgeIntentGapAlerts,
+  createMemoryIntentGapAlertState,
+  deriveIntentGapAttention,
+  intentSourceDescriptorDigest,
+} = require('../src/intent-gap-attention');
+const {
   PROVIDER_STATES,
   createHostAdmission,
   submitAgentObservation,
@@ -83,6 +89,21 @@ function providerAuthorities(providers) {
   ]));
 }
 
+function intentGapSource(authority, record, registryGeneration, overrides = {}) {
+  const descriptor = {
+    canonicalId: record.id, recordRevision: record.revision, registryGeneration,
+    role: 'migration-source', status: 'current', scope: 'record',
+    fields: { goal: 'Keep the bounded context current', definitionOfDone: 'Context is proven' },
+    sourceRef: 'packet-intent-source', sourceDigest: 'b'.repeat(64),
+    ...overrides,
+  };
+  const evidence = authority.admitEvidenceUnit({
+    observationId: 'obs_packet_intent', evidenceId: 'ev_packet_intent', sourceClass: 'note', occurredAt: NOW, observedAt: NOW,
+    sourceRevision: 'brief-v1', sensitivity: 'owner-private', coverageState: 'fresh', contentDigest: intentSourceDescriptorDigest(descriptor),
+  });
+  return { ...descriptor, evidence };
+}
+
 function candidate(overrides = {}) {
   return inferenceContracts.createProjectCandidate({
     evidenceIds: ['ev_000001'],
@@ -144,7 +165,73 @@ test('canonical-only packet is useful and optional providers are visibly omitted
   assert.deepEqual(result.packet.activity, []);
   assert.deepEqual(result.packet.currentWork, []);
   assert.deepEqual(result.packet.attention, []);
+  assert.ok(result.packet.omissions.includes('intent-gap:omitted'));
   assert.equal(validateContextPacket(result.packet).ok, true);
+});
+
+test('intent gaps enter the existing bounded attention seam only after scope and redaction checks', () => {
+  const { registry, root, outcome } = makeRegistry();
+  const authority = createHostAdmission({ producerId: 'projects-intent-source', secret: 'intent-source-secret', allowedSourceClasses: ['note'] });
+  const scopedQuery = queryFor(root, outcome, {
+    scope: { projectIds: [root.id], outcomeIds: [], includeDescendants: false },
+    limits: { maxItems: 2, maxBytes: 20000, maxProviderAgeSeconds: 3600 },
+  });
+  const alertState = createMemoryIntentGapAlertState();
+  const intentGaps = {
+    sources: [intentGapSource(authority, root, registry.generation), { canonicalId: outcome.id, malformed: true }],
+    sourceAuthority: authority,
+    alertState,
+  };
+  const scoped = buildContextPacket({
+    registry, query: scopedQuery, capability: issue(scopedQuery, { nonce: 'intent-scope' }), capabilitySecret: SECRET,
+    subject: 'agent:test-session', hostId: 'projects-host', now: NOW, providers: {}, intentGaps,
+  });
+  assert.equal(scoped.status, 'ok');
+  assert.deepEqual(scoped.packet.attention.map((summary) => summary.canonicalId), [root.id]);
+  assert.equal(scoped.packet.attention[0].source, 'projects-intent-gap');
+  assert.equal(scoped.packet.attention[0].status, 'recoverable-migration');
+  assert.equal(scoped.packet.canonical.records.some((record) => record.id === outcome.id), false);
+  assert.equal(scoped.packet.truncation.truncated, true);
+  assert.equal(scoped.packet.attention.length, 1);
+  const unacknowledged = deriveIntentGapAttention({
+    records: [root], registryGeneration: registry.generation, sources: intentGaps.sources.filter((source) => source.canonicalId === root.id),
+    sourceAuthority: authority, now: NOW,
+  });
+  assert.equal(acknowledgeIntentGapAlerts(unacknowledged.entries, { alertState, consumerKey: 'overseer' }).length, 1);
+  const publicResult = buildContextPacket({
+    registry, query: scopedQuery, capability: issue(scopedQuery, { nonce: 'intent-public', redactionClass: 'public' }), capabilitySecret: SECRET,
+    subject: 'agent:test-session', hostId: 'projects-host', now: NOW, providers: {}, intentGaps,
+  });
+  assert.equal(publicResult.status, 'ok');
+  assert.deepEqual(publicResult.packet.attention, []);
+  assert.ok(publicResult.packet.omissions.includes('intent-gap:redacted'));
+});
+
+test('an unresolved intent gap leaves an already-authorized Todo in current work', () => {
+  const { registry, root, outcome } = makeRegistry();
+  const authority = createHostAdmission({ producerId: 'projects-intent-source', secret: 'intent-source-secret', allowedSourceClasses: ['note'] });
+  const query = queryFor(root, outcome, {
+    scope: { projectIds: [root.id], outcomeIds: [], includeDescendants: false },
+  });
+  const providers = {
+    todo: snapshot('todo', 'fresh', {
+      summaries: [{
+        id: 'todo-authorized', canonicalId: root.id, category: 'work', status: 'in_progress', title: 'Authorized repair',
+        occurredAt: NOW, observedAt: NOW, evidenceRefs: ['todo:authorized'],
+      }],
+    }),
+  };
+  const result = buildContextPacket({
+    registry, query, capability: issue(query, { nonce: 'intent-current-work' }), capabilitySecret: SECRET,
+    subject: 'agent:test-session', hostId: 'projects-host', now: NOW, providers, providerAuthorities: providerAuthorities(providers),
+    intentGaps: {
+      sourceAuthority: authority,
+      sources: [intentGapSource(authority, root, registry.generation, { fields: { goal: '-', definitionOfDone: '-' } })],
+    },
+  });
+  assert.equal(result.status, 'ok');
+  assert.deepEqual(result.packet.currentWork.map((summary) => summary.id), ['todo-authorized']);
+  assert.deepEqual(result.packet.attention.map((summary) => summary.status), ['unresolved-intent']);
 });
 
 test('canonical packet accepts nested projects beneath a project parent', () => {
