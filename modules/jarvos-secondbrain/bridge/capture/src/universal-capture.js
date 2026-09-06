@@ -108,9 +108,13 @@ function normalizeCaptureEvent(rawInput = {}) {
     durable: raw.durable,
     durableNote: raw.durableNote,
     standaloneNote: raw.standaloneNote,
+    captureIdentity: raw.captureIdentity,
   };
 
   const normalized = compact(event);
+  // Keep an explicitly supplied null visible to the normal validation/error
+  // contract instead of silently dropping it with legacy empty fields.
+  if (raw.captureIdentity !== undefined) normalized.captureIdentity = raw.captureIdentity;
   const errors = validateCaptureEvent(normalized);
   if (errors.length) {
     const error = new Error(`invalid CaptureEvent v2: ${errors.join('; ')}`);

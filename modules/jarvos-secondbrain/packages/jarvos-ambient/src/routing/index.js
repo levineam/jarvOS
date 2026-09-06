@@ -473,6 +473,7 @@ module.exports = {
   buildNoteContent,
   buildRoutingPlan: buildKeywordRoutingPlan,
   buildThreePackagePlan,
+  buildSkillInvocations,
   buildWorkIntakePlan,
   ideaJournalLine,
   inferTitle,

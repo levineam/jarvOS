@@ -1,5 +1,7 @@
 'use strict';
 
+const { validateCaptureIdentity } = require('./capture-identity');
+
 /**
  * Canonical CaptureEvent schema for the ambient intent layer.
  *
@@ -26,6 +28,7 @@
  * @property {string} [privacyTier] - Public/private handling tier.
  * @property {object[]} [evidence] - Source-backed evidence spans.
  * @property {string|object} [origin] - Origin pointer for the capture.
+ * @property {object} [captureIdentity] - Exact namespace/id/revision with optional corrects/withdraws target; separate from writer-owned note ID.
  */
 
 const CAPTURE_EVENT_SCHEMA_VERSION = '2.0';
@@ -258,6 +261,10 @@ function validateEvidence(event, errors) {
 
 function validateCaptureEvent(event = {}) {
   const errors = [];
+
+  if (event.captureIdentity !== undefined) {
+    try { validateCaptureIdentity(event.captureIdentity); } catch (error) { errors.push(error.message); }
+  }
 
   if (event.schemaVersion != null && !SUPPORTED_CAPTURE_EVENT_SCHEMA_VERSIONS.includes(String(event.schemaVersion))) {
     pushEnumError(
