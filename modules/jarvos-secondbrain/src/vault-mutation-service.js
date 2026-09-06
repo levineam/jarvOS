@@ -130,12 +130,37 @@ function createConfiguredVaultMutationService({
     return source;
   }
 
-  function submitAuthorized(input, operationSource) {
-    const operation = { ...input, source: operationSource };
-    const receipt = adapter.submit(operation);
+  function submitAuthorized(input, operationSource, requestHash) {
+    let operation = { ...input, source: operationSource, ...(requestHash ? { captureRequestHash: requestHash } : {}) };
+    function replayExisting() {
+      const existing = adapter.ledger.get(operation.operationId)?.operation;
+      if (!existing) return false;
+      if (existing.captureRequestHash !== requestHash || existing.vaultId !== operation.vaultId
+        || existing.vaultRelativePath !== operation.vaultRelativePath || existing.source !== operationSource) {
+        return { status: 'conflict', obsidian: 'unacknowledged', reason: 'capture_identity_request_conflict' };
+      }
+      // The first planned payload owns generated IDs and the mutation kind.
+      // Resubmission still goes through the ledger's lifecycle/dispatch guards.
+      operation = existing;
+      return true;
+    }
+    if (requestHash) {
+      const replay = replayExisting();
+      if (replay && replay !== true) return replay;
+    }
+    let receipt;
+    try { receipt = adapter.submit(operation); } catch (error) {
+      if (!requestHash || error.message !== 'operationId already belongs to a different mutation') throw error;
+      // A concurrent first submission may have won atomic planning.
+      const replay = replayExisting();
+      if (!replay) throw error;
+      if (replay !== true) return replay;
+      receipt = adapter.submit(operation);
+    }
     if (receipt.status !== 'unavailable') return receipt;
     const planned = receipt.operation || adapter.ledger.get(operation.operationId)?.operation || operation;
-    return reconciler.safeOfflineSave(planned, offlineWriteCapability);
+    const offlineReceipt = reconciler.safeOfflineSave(planned, offlineWriteCapability);
+    return requestHash ? { ...offlineReceipt, operation: planned } : offlineReceipt;
   }
 
   function execute(input) {
@@ -143,12 +168,16 @@ function createConfiguredVaultMutationService({
     return submitAuthorized(input, source);
   }
 
-  function createWriteContext({ vaultRelativePath, operationId, intentId, operationSource = source } = {}) {
+  function createWriteContext({ vaultRelativePath, operationId, intentId, requestHash, operationSource = source } = {}) {
     if (typeof vaultRelativePath !== 'string' || !vaultRelativePath) throw new Error('vaultRelativePath is required');
+    if (requestHash !== undefined && (typeof requestHash !== 'string' || !/^[a-f0-9]{64}$/.test(requestHash) || !(operationId || intentId))) throw new Error('requestHash requires a SHA-256 digest and stable intentId');
     const contextSource = boundSource(operationSource);
     const id = operationId || intentId || `note-${crypto.randomUUID()}`;
     return Object.freeze({
-      mutationExecutor: (operation) => submitAuthorized(operation, contextSource),
+      mutationExecutor: (operation) => {
+        if (requestHash && (operation.operationId !== id || operation.vaultRelativePath !== vaultRelativePath || operation.vaultId !== vaultId)) throw new Error('Identified capture operation does not match its write context');
+        return submitAuthorized(operation, contextSource, requestHash);
+      },
       operationId: id,
       // Package operation factories require a positive sequence field. The
       // adapter replaces this placeholder while atomically persisting the full
