@@ -1,0 +1,13 @@
+{
+  "mind": "jarvos:mind:example:m-0001",
+  "installation": "jarvos:installation:example:i-0001",
+  "host": "jarvos:host:example:h-0001",
+  "harness-instance": "jarvos:harness-instance:example:hi-0001",
+  "session": "jarvos:session:example:s-0001",
+  "source-event": "jarvos:source-event:example:se-0001",
+  "candidate": "jarvos:candidate:example:c-0001",
+  "artifact": "jarvos:artifact:example:a-0001",
+  "project": "jarvos:project:example:p-0001",
+  "policy": "jarvos:policy:example:po-0001",
+  "receipt": "jarvos:receipt:example:r-0001"
+}

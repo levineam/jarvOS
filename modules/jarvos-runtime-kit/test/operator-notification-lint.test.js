@@ -18,7 +18,7 @@ test('all public runtime adapters explicitly declare local delivery as unconfigu
   assert.equal(result.status, 0, result.stderr || result.stdout);
   const report = JSON.parse(result.stdout);
   assert.equal(report.ok, true);
-  assert.deepEqual(report.results.map((item) => item.id).sort(), ['claude', 'codex', 'hermes', 'openclaw']);
+  assert.deepEqual(report.results.map((item) => item.id).sort(), ['claude', 'codex', 'grok-bot', 'hermes', 'openclaw']);
 });
 
 test('the declaration rejects missing fields, delivery claims, and unknown fields', () => {

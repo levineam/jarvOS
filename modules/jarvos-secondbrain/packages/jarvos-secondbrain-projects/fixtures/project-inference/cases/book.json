@@ -1,0 +1,42 @@
+{
+  "contract": "jarvos.project-inference-case/v1",
+  "caseId": "book",
+  "engineRevision": null,
+  "coverage": [
+    { "sourceClass": "note", "state": "fresh" },
+    { "sourceClass": "chat", "state": "fresh" }
+  ],
+  "observations": [
+    {
+      "observationId": "obs_public_book_note_001",
+      "evidenceId": "ev_public_book_note_001",
+      "sourceClass": "note",
+      "occurredAt": "2026-08-04T10:00:00.000Z",
+      "observedAt": "2026-08-05T10:00:00.000Z",
+      "sourceRevision": "fixture-note-r1",
+      "sensitivity": "public-fixture",
+      "coverageState": "fresh",
+      "contentDigest": "828e5368114d5571b7d2552b615529cda0c18fc41d4645c989262ffaca503916"
+    },
+    {
+      "observationId": "obs_public_book_chat_001",
+      "evidenceId": "ev_public_book_chat_001",
+      "sourceClass": "chat",
+      "occurredAt": "2026-08-06T11:00:00.000Z",
+      "observedAt": "2026-08-06T12:00:00.000Z",
+      "sourceRevision": "fixture-chat-r1",
+      "sensitivity": "public-fixture",
+      "coverageState": "fresh",
+      "contentDigest": "11431180278b83c09e22c74ee780a8a345bff52d39bed046ba7e0196892375f3"
+    }
+  ],
+  "correction": null,
+  "expected": {
+    "decision": "associate",
+    "kind": "project",
+    "canonicalName": "Swarm Theory Book",
+    "aliases": [],
+    "parentCanonicalName": null
+  },
+  "contentDigest": "936429700262e9f94e51f3bcf1dd06ff09cdaeea934b9270e2395999c59d94aa"
+}

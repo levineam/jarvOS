@@ -9,6 +9,7 @@ const { spawnSync } = require('child_process');
 
 const REPO_ROOT = path.resolve(__dirname, '..');
 const CONTRACT_CLI = path.join(REPO_ROOT, 'scripts', 'obsidian-note-journal-contract.js');
+const { inspectProjectNote } = require('../bridge/provenance/src/note-journal-contract');
 const { verifyContract, writeNoteThroughContract } = require('../bridge/provenance/src/note-journal-contract.js');
 const { createConfiguredVaultMutationService } = require('../src/vault-mutation-service.js');
 
@@ -280,6 +281,44 @@ test('unsupported personalities fail closed instead of raw-writing orphaned mark
   assert.match(result.stderr, /unsupported personality/);
   assert.equal(fs.existsSync(path.join(root, 'Notes')), false);
   assert.equal(fs.existsSync(path.join(root, 'Journal')), false);
+});
+
+test('Project-note inspection distinguishes absent, existing, applied, and conflicting notes without writing', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'project-note-inspection-'));
+  const notesDir = path.join(root, 'Notes');
+  const journalDir = path.join(root, 'Journal');
+  const knowledgeDir = path.join(root, '.jarvos', 'knowledge');
+  fs.mkdirSync(notesDir, { recursive: true });
+  const priorNotesDir = process.env.VAULT_NOTES_DIR;
+  const priorJournalDir = process.env.JOURNAL_DIR;
+  const priorKnowledgeDir = process.env.JARVOS_KNOWLEDGE_DIR;
+  process.env.VAULT_NOTES_DIR = notesDir;
+  process.env.JOURNAL_DIR = journalDir;
+  process.env.JARVOS_KNOWLEDGE_DIR = knowledgeDir;
+  try {
+    const operationId = `project-note-map:${'a'.repeat(64)}`;
+    assert.equal(inspectProjectNote({ title: 'Portfolio', canonicalId: 'prj_000001', operationId }).status, 'absent');
+    const notePath = path.join(notesDir, 'Portfolio.md');
+    fs.writeFileSync(notePath, '---\nproject_id: prj_000001\n---\n\n# Portfolio\n\nKeep me.\n');
+    assert.equal(inspectProjectNote({ title: 'Portfolio', canonicalId: 'prj_000001', operationId }).status, 'existing');
+    const today = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+    fs.writeFileSync(notePath, `---\nstatus: active\ntype: project-note\nproject: Portfolio\ncreated: ${today}\nupdated: ${today}\nauthor: jarvis\nsource_personality: codex\ncontract: obsidian-note-journal-v1\njarvos_note_id: note_project_000001\nproject_id: prj_000001\nmapping_operation_id: ${operationId}\n---\n\n# Portfolio\n\nKeep me.\n`);
+    assert.equal(inspectProjectNote({ title: 'Portfolio', canonicalId: 'prj_000001', operationId }).status, 'partial');
+    fs.mkdirSync(journalDir, { recursive: true });
+    fs.writeFileSync(path.join(journalDir, `${today}.md`), '## 📝 Notes\n- [[Portfolio]]\n');
+    fs.mkdirSync(knowledgeDir, { recursive: true });
+    fs.writeFileSync(path.join(knowledgeDir, 'qmd-refresh-pending.json'), JSON.stringify({ entries: { 'Notes/Portfolio.md': { status: 'pending-refresh' } } }));
+    assert.equal(inspectProjectNote({ title: 'Portfolio', canonicalId: 'prj_000001', operationId }).status, 'applied');
+    assert.equal(inspectProjectNote({ title: 'Portfolio', canonicalId: 'prj_000002', operationId }).status, 'conflict');
+    assert.match(fs.readFileSync(notePath, 'utf8'), /Keep me\./);
+  } finally {
+    if (priorNotesDir === undefined) delete process.env.VAULT_NOTES_DIR;
+    else process.env.VAULT_NOTES_DIR = priorNotesDir;
+    if (priorJournalDir === undefined) delete process.env.JOURNAL_DIR;
+    else process.env.JOURNAL_DIR = priorJournalDir;
+    if (priorKnowledgeDir === undefined) delete process.env.JARVOS_KNOWLEDGE_DIR;
+    else process.env.JARVOS_KNOWLEDGE_DIR = priorKnowledgeDir;
+  }
 });
 
 test('durable note contract refuses lightweight Idea captures without explicit durable intent', () => {

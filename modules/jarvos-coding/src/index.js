@@ -108,10 +108,12 @@ const {
   CODE_THREAD_KIND,
   ARTICLE_THREAD_KIND,
   SESSION_STATE_SCHEMA_VERSION,
+  WORK_HANDOFF_POINTER_FIELDS,
   buildSessionCheckpoint,
   buildArticleThreadCheckpoint,
   buildCodeThreadCheckpoint,
   buildLiveArtifactPointer,
+  buildWorkHandoff,
   createFileSessionStateStore,
   createMemorySessionStateStore,
   readJarvosSessionState,
@@ -164,6 +166,7 @@ const compoundEngineeringProvider = require('./providers/compound-engineering');
 const workflowProvider = require('./providers/workflow-provider');
 const learningEligibility = require('./providers/learning-eligibility');
 const workRunStore = require('./features/work-run-store');
+const workFollowThrough = require('./features/work-follow-through');
 const managedWorkflow = require('./features/workflow');
 module.exports = {
   ...projectsActivity,
@@ -175,6 +178,7 @@ module.exports = {
   ...workflowProvider,
   ...learningEligibility,
   ...workRunStore,
+  ...workFollowThrough,
   ...managedWorkflow,
   ACTIVE_STATUSES,
   DEFAULT_IGNORED_PATH_SEGMENTS,
@@ -224,6 +228,7 @@ module.exports = {
   REQUIRED_EVIDENCE,
   REVIEW_ENGINE_SCHEMA_VERSION,
   SESSION_STATE_SCHEMA_VERSION,
+  WORK_HANDOFF_POINTER_FIELDS,
   SUBMISSION_GATE_PHASES,
   SUBMISSION_GATE_SCHEMA_VERSION,
   SUBMISSION_GATE_STAGES,
@@ -243,6 +248,7 @@ module.exports = {
   buildSessionCheckpoint,
   buildArticleThreadCheckpoint,
   buildLiveArtifactPointer,
+  buildWorkHandoff,
   buildSkillDescriptor,
   createFileSessionStateStore,
   branchSatisfiesIdentifier,

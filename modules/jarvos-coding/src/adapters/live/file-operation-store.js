@@ -46,6 +46,16 @@ function metadataResult(value) {
         }
       }
     }
+    if (value.completionEvidence && typeof value.completionEvidence === 'object') {
+      const kind = value.completionEvidence.kind;
+      const producer = value.completionEvidence.producer;
+      if (['human-attested', 'execution-verified', 'domain-verified'].includes(kind) && typeof producer === 'string') {
+        safe.completionEvidence = { kind, producer };
+        if (kind === 'human-attested' && value.completionEvidence.attestation === 'andrew-owner-attested') {
+          safe.completionEvidence.attestation = 'andrew-owner-attested';
+        }
+      }
+    }
     return safe;
   }
   const item = value.item && typeof value.item === 'object' ? value.item : value;
@@ -119,6 +129,11 @@ function createFileOperationStore(options = {}) {
   };
   return {
     schemaVersion: OPERATION_STORE_SCHEMA_VERSION,
+    storage: 'file',
+    // This is host-only composition metadata. It never appears in operation
+    // records or MCP responses, but lets a live host prove that its ledgers are
+    // physically distinct before the first mutation.
+    root,
     async read(operationId) { return readFile(safeId(operationId)); },
     async write(record) {
       const operationId = safeId(record?.operationId);

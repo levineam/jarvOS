@@ -381,6 +381,16 @@ if command -v hermes >/dev/null 2>&1; then
     append_mcp_env JARVOS_HERMES_CONTEXT_BRIDGE_GENERATION
     append_mcp_env JARVOS_ROUTE_BINDING_SECRET_FILE
     append_mcp_env JARVOS_ROUTE_BINDING_GENERATION
+    if [ -n "${JARVOS_COMMON_WORK_SERVICE_MODULE:-}" ]; then
+      case "$JARVOS_COMMON_WORK_SERVICE_MODULE" in
+        /*) ;;
+        *) echo "JARVOS_COMMON_WORK_SERVICE_MODULE must be an absolute path when set" >&2; HERMES_MCP_STATUS=1 ;;
+      esac
+    fi
+    if [ "$HERMES_MCP_STATUS" -eq 0 ]; then
+      append_mcp_env JARVOS_COMMON_WORK_SERVICE_MODULE
+      MCP_ENV_ARGS+=(--env "JARVOS_COMMON_WORK_HARNESS=hermes")
+    fi
     if [ -n "${JARVOS_ROUTE_BINDING_SECRET_FILE:-}" ]; then
       # Once the private key is injected, route-bound tools must not fall back
       # to caller-selected thread dimensions.

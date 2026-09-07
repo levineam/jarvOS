@@ -15,7 +15,8 @@
     "./intent/salience-detector": "./src/intent/salience-detector.js",
     "./intent/keyword-capture-router": "./src/intent/keyword-capture-router.js",
     "./intent/retroactive-capture": "./src/intent/retroactive-capture.js",
-    "./intent/capture-contract": "./src/intent/capture-contract.js"
+    "./intent/capture-contract": "./src/intent/capture-contract.js",
+    "./intent/candidate-contract": "./src/intent/candidate-contract.js"
   },
   "files": [
     "src",

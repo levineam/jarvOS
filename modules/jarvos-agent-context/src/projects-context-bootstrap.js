@@ -3,10 +3,58 @@
 // This boundary is intentionally host-owned: an agent can ask for Projects
 // context, but it cannot choose a module, paths, capability, or secret.
 const fs = require('node:fs');
+const crypto = require('node:crypto');
+const os = require('node:os');
 const path = require('node:path');
 
 const CONFIG_ENV = 'JARVOS_PROJECTS_CONTEXT_CONFIG';
 const ACTIVE_ASSISTANT_PROVIDER_MODULE_ENV = 'ACTIVE_ASSISTANT_PROJECTS_PROVIDER_MODULE';
+const ACTIVE_ASSISTANT_PUBLIC_RUNTIME_ROOT_ENV = 'ACTIVE_ASSISTANT_PUBLIC_RUNTIME_ROOT';
+
+const MODULE_ROOT = path.resolve(__dirname, '..');
+const JARVOS_ROOT = path.resolve(MODULE_ROOT, '..', '..');
+
+function expandTilde(value) {
+  if (typeof value !== 'string') return value;
+  if (value === '~') return os.homedir();
+  if (value.startsWith('~/')) return path.join(os.homedir(), value.slice(2));
+  return value;
+}
+
+// Mirrors index.js's secondbrainDir()/loadJarvosPaths(): resolve the
+// canonical jarvos-secondbrain paths helper, defaulting to the bundled
+// modules copy but honoring JARVOS_SECONDBRAIN_DIR like the rest of the
+// host runtime. Kept as a self-contained copy here (rather than importing
+// index.js, which already requires this file) so the two modules do not
+// form a require cycle.
+function secondbrainDir() {
+  return expandTilde(process.env.JARVOS_SECONDBRAIN_DIR)
+    || path.join(JARVOS_ROOT, 'modules', 'jarvos-secondbrain');
+}
+
+function loadJarvosPaths() {
+  const fallbackPath = path.join(secondbrainDir(), 'bridge', 'config', 'jarvos-paths.js');
+  try {
+    return require(require.resolve('@jarvos/secondbrain/bridge/config/jarvos-paths.js', { paths: [process.cwd(), MODULE_ROOT] }));
+  } catch {
+    return require(fallbackPath);
+  }
+}
+
+// The env var remains an explicit override. When it is unset, fall back to
+// the config file a jarvOS workspace ships at a fixed, well-known path so a
+// user who never sets environment variables still gets Projects orientation.
+function workspaceProjectsContextConfigPath() {
+  try {
+    const workspace = loadJarvosPaths().getClawdDir();
+    if (typeof workspace !== 'string' || !workspace) return null;
+    return path.join(expandTilde(workspace), 'config', 'jarvos-project-context.json');
+  } catch {
+    // Hydration is orientation, never a hard dependency: fail open (no
+    // provider) rather than aborting the packet.
+    return null;
+  }
+}
 
 function inside(root, target) {
   const relative = path.relative(root, target);
@@ -72,8 +120,15 @@ function readPrivateJson(filePath) {
   }
 }
 
+function digest(contents) {
+  return crypto.createHash('sha256').update(contents).digest('hex');
+}
+
 function createHostProjectsContextProvider(env = process.env) {
-  const configPath = env && env[CONFIG_ENV];
+  const configuredPath = env && env[CONFIG_ENV];
+  const configPath = typeof configuredPath === 'string' && configuredPath.length > 0
+    ? configuredPath
+    : workspaceProjectsContextConfigPath();
   if (typeof configPath !== 'string' || configPath.length === 0) return null;
   // The configuration is not itself a secret. Ownership, trusted ancestry,
   // and the absence of group/world write bits are the integrity boundary;
@@ -81,12 +136,16 @@ function createHostProjectsContextProvider(env = process.env) {
   const trustedConfig = resolveAbsoluteFile(configPath, null);
   if (!trustedConfig) return null;
 
-  let config;
-  try { config = JSON.parse(fs.readFileSync(trustedConfig, 'utf8')); } catch { return null; }
+  let config; let configDigest;
+  try { const contents = fs.readFileSync(trustedConfig); config = JSON.parse(contents); configDigest = digest(contents); } catch { return null; }
   if (!config || typeof config !== 'object' || Array.isArray(config)) return null;
 
   const workspaceRoot = resolveTrustedDirectory(config.workspaceRoot);
-  const repositoryRoot = workspaceRoot && resolveTrustedDirectory(config.repositoryRoot, workspaceRoot);
+  const hasSelectedPublicRoot = Object.prototype.hasOwnProperty.call(env || {}, ACTIVE_ASSISTANT_PUBLIC_RUNTIME_ROOT_ENV);
+  const repositoryRoot = workspaceRoot && resolveTrustedDirectory(
+    hasSelectedPublicRoot ? env[ACTIVE_ASSISTANT_PUBLIC_RUNTIME_ROOT_ENV] : config.repositoryRoot,
+    workspaceRoot,
+  );
   const stateRoot = workspaceRoot && resolveTrustedDirectory(config.stateRoot, workspaceRoot);
   if (!workspaceRoot || !repositoryRoot || !stateRoot) return null;
   // The provider is a host-owned adapter. It may live beside the repository
@@ -129,11 +188,20 @@ function createHostProjectsContextProvider(env = process.env) {
     || (capabilitySecretValue !== undefined && !capabilitySecretPath)
     || (hostSecretValue !== undefined && !hostSecretPath)) return null;
 
-  let provider;
-  try { provider = require(providerModule); } catch { return null; }
+  let provider; let providerDigest;
+  try {
+    const before = fs.readFileSync(providerModule);
+    provider = require(providerModule);
+    const after = fs.readFileSync(providerModule);
+    if (!before.equals(after)) return null;
+    providerDigest = digest(before);
+  } catch { return null; }
   if (!provider || typeof provider.read !== 'function') return null;
 
+  const descriptor = Object.freeze({ configPath: trustedConfig, configDigest, providerModule, providerDigest });
+
   return {
+    descriptor,
     defaultQuery: config.query && typeof config.query === 'object' && !Array.isArray(config.query)
       ? JSON.parse(JSON.stringify(config.query))
       : null,
@@ -166,9 +234,15 @@ function createHostProjectsContextProvider(env = process.env) {
         releaseProducerId: typeof config.releaseProducerId === 'string' && config.releaseProducerId.trim()
           ? config.releaseProducerId.trim()
           : undefined,
+        beadsProviderProducerId: typeof config.beadsProviderProducerId === 'string' && config.beadsProviderProducerId.trim()
+          ? config.beadsProviderProducerId.trim()
+          : undefined,
+        todoProviderProducerId: typeof config.todoProviderProducerId === 'string' && config.todoProviderProducerId.trim()
+          ? config.todoProviderProducerId.trim()
+          : undefined,
       });
     },
   };
 }
 
-module.exports = { ACTIVE_ASSISTANT_PROVIDER_MODULE_ENV, CONFIG_ENV, createHostProjectsContextProvider };
+module.exports = { ACTIVE_ASSISTANT_PROVIDER_MODULE_ENV, ACTIVE_ASSISTANT_PUBLIC_RUNTIME_ROOT_ENV, CONFIG_ENV, createHostProjectsContextProvider };

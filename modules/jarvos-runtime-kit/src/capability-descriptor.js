@@ -8,7 +8,7 @@ const CAPABILITY_VOCABULARY = Object.freeze({
   skills: ['discover', 'invoke'],
   toolAuthorization: ['declare', 'enforce'],
   egress: ['declare', 'enforce'],
-  session: ['startupHook', 'handoff'],
+  session: ['startupHook', 'handoff', 'preCompactHook'],
   inboundDispatch: ['receive', 'validate'],
   lifecycle: ['receipt'],
   scheduledWork: ['participate'],

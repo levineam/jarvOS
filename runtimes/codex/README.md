@@ -3,6 +3,31 @@
 This adapter connects local Codex CLI and Codex app sessions to jarvOS through
 the shared `@jarvos/agent-context` MCP server and a Codex `SessionStart` hook.
 
+## Private GBrain continuity
+
+Portable setup keeps GBrain optional. A private continuity profile registers a
+second MCP server named `gbrain` through
+`modules/jarvos-gbrain/scripts/jarvos-gbrain-provider.js`, with
+`JARVOS_GBRAIN_RUNTIME_DESCRIPTOR` pointing at the same owner-only descriptor
+used by Hermes and OpenClaw. The launcher revalidates the pinned GBrain source
+and Bun interpreter before handing stdio directly to GBrain. It does not proxy
+tools or persist database credentials in Codex configuration.
+
+Codex discovers Skillify through GBrain's `list_skills` and `get_skill` tools.
+Do not copy Skillify into `~/.codex/skills`: that would bypass GBrain's resolver
+and sever update provenance. Registration presence is only configuration
+evidence; continuity requires a native recall turn plus Skillify discovery
+against the shared runtime/brain/store tuple.
+
+Register and inspect the provider with Codex's native stdio surface:
+
+```bash
+codex mcp add gbrain \
+  --env JARVOS_GBRAIN_RUNTIME_DESCRIPTOR=<owner-only-descriptor> \
+  -- node <provider-launcher>
+codex mcp get gbrain
+```
+
 ## Compound Engineering provider
 
 `compound-engineering-capability.json` declares the approved Compound Engineering
@@ -117,6 +142,18 @@ parent. Errors never echo the path or secret. Ambient
 (for example tests), but setup must not register that variable. The host service
 enforces authorization.
 
+Optional Todo work-action host bindings follow the same optional `--env`
+pattern and are never required for setup to succeed:
+
+```bash
+JARVOS_WORK_ACTION_SERVICE_MODULE=/absolute/path/in/workspace/work-action-host-service.js \
+JARVOS_PROJECTS_CONTEXT_CONFIG=/absolute/path/to/jarvos-project-context.json \
+  ./runtimes/codex/setup.sh
+```
+
+Copy `examples/work-action-host-service.js` into the Projects `workspaceRoot`
+as an owner-only file. The MCP server refuses any module outside that root.
+
 The repo also includes an equivalent hook manifest template for review/reference:
 
 ```text
@@ -148,6 +185,10 @@ value, and rollback removes only these two entries.
 - `jarvos_hydrate` — bounded Codex startup packet with a host-issued Projects
   orientation packet (or explicit unavailable/partial state), today's journal,
   linked notes, the jarvOS ontology context packet, redaction, and a hydration report.
+- `jarvos_todo_*` — claim-based Beads Todo tools through the host work-action
+  service. Requires `JARVOS_WORK_ACTION_SERVICE_MODULE` and
+  `JARVOS_PROJECTS_CONTEXT_CONFIG` on the MCP process; without those host
+  bindings the tools are present but unavailable.
 - `jarvos_control_plane` — authenticated request, inspection, evidence, and
   approval access through the installed host application service. Requires
   `JARVOS_CONTROL_PLANE_SERVICE_MODULE` (and a credential binding) on the MCP

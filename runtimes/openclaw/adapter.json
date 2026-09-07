@@ -13,10 +13,27 @@
     "alias": { "pattern": "^[a-z][a-z0-9-]{0,63}$", "maxLength": 64, "reservedNames": [] },
     "probeIsolation": { "mode": "receipt-bound-exact-path", "unattended": true }
   },
+  "instructionProjection": {
+    "version": "jarvos-instruction-projection-adapter/v1",
+    "status": "discovery-pending",
+    "loader": null,
+    "supportedVersions": null,
+    "precedence": null,
+    "reason": "Native instruction loader discovery is required before compatibility can be declared."
+  },
   "operatorNotification": {
     "version": "jarvos-operator-notification-adapter/v1",
     "contract": "jarvos-operator-notification/v1",
     "delivery": { "status": "not-configured", "reason": "Local owner configuration chooses a delivery surface; this public adapter does not configure one." }
+  },
+  "harnessConformance": {
+    "version": "jarvos-harness-conformance/v1",
+    "facts": [
+      { "harness": "openclaw", "tier": "baseline-context", "state": "claimed-unverified", "evidence": [{ "kind": "adapter-declaration", "detail": "Checked-in OpenClaw adapter declaration; no owner-local harness proof was run." }] },
+      { "harness": "openclaw", "tier": "conversational", "state": "claimed-unverified", "evidence": [{ "kind": "adapter-declaration", "detail": "Checked-in OpenClaw adapter declaration; no owner-local harness proof was run." }] },
+      { "harness": "openclaw", "tier": "mutation-capable", "state": "claimed-unverified", "evidence": [{ "kind": "adapter-declaration", "detail": "Checked-in OpenClaw adapter declaration; no owner-local harness proof was run." }] },
+      { "harness": "openclaw", "tier": "proactive-authority", "state": "claimed-unverified", "evidence": [{ "kind": "offline-declaration", "detail": "Mac Mini exact installed-tuple evidence and owner-local proof are required before proactive routing." }] }
+    ]
   },
   "capabilityDescriptor": {
     "version": "jarvos-runtime-capability-descriptor.v1", "harness": "openclaw",
@@ -26,12 +43,19 @@
       "skills": { "discover": { "status": "manual", "transport": "OpenClaw workspace", "reason": "OpenClaw owns skill discovery." }, "invoke": { "status": "manual", "transport": "OpenClaw workspace", "reason": "OpenClaw owns skill invocation." } },
       "toolAuthorization": { "declare": { "status": "unsupported", "reason": "No public OpenClaw authorization contract is shipped." }, "enforce": { "status": "unsupported", "reason": "OpenClaw owns tool authorization." } },
       "egress": { "declare": { "status": "unsupported", "reason": "No public OpenClaw egress declaration is shipped." }, "enforce": { "status": "unsupported", "reason": "OpenClaw owns egress enforcement." } },
-      "session": { "startupHook": { "status": "manual", "transport": "workspace adapter", "reason": "No checked-in OpenClaw hook is shipped." }, "handoff": { "status": "manual", "transport": "workspace adapter", "reason": "OpenClaw handoff remains adapter-owned." } },
+      "session": { "startupHook": { "status": "manual", "transport": "workspace adapter", "reason": "No checked-in OpenClaw hook is shipped." }, "handoff": { "status": "manual", "transport": "workspace adapter", "reason": "OpenClaw handoff remains adapter-owned." }, "preCompactHook": { "status": "unsupported", "reason": "No public OpenClaw pre-compaction session-thread flush is declared." } },
       "inboundDispatch": { "receive": { "status": "unsupported", "reason": "No public OpenClaw inbound dispatch bridge is shipped." }, "validate": { "status": "unsupported", "reason": "No public OpenClaw inbound dispatch bridge is shipped." } },
       "lifecycle": { "receipt": { "status": "manual", "transport": "workspace adapter", "reason": "OpenClaw lifecycle receipts remain adapter-owned." } },
       "scheduledWork": { "participate": { "status": "manual", "transport": "OpenClaw workspace", "reason": "OpenClaw scheduling remains workspace-owned." } },
       "codingEntrypoint": { "invoke": { "status": "unsupported", "reason": "OpenClaw is not declared as a jarvOS coding entrypoint." } }
     }
+  },
+  "commonWorkBridge": {
+    "version": "jarvos-common-work-bridge.v1",
+    "actions": ["resolve_work_record", "resolve_workspace", "get_status", "attach_or_resume", "submit_judgment", "claim", "request_or_answer_approval", "get_terminal_receipt"],
+    "availability": "injected-authority",
+    "handoff": { "pointerOnly": true, "fields": ["workId", "workspaceId", "headOid"] },
+    "authority": { "rereadBefore": ["attach_or_resume", "submit_judgment", "claim", "request_or_answer_approval", "get_terminal_receipt"] }
   },
   "sharedAgentContext": {
     "mcpServer": "modules/jarvos-agent-context/scripts/jarvos-mcp.js",
@@ -42,6 +66,29 @@
       "jarvos_startup_brief",
       "jarvos_hydrate"
     ]
+  },
+  "gbrainContinuity": {
+    "version": "jarvos-gbrain-continuity/v1",
+    "availability": "optional-public-required-private",
+    "provider": "gbrain",
+    "transport": "provider-native-stdio",
+    "launcher": "modules/jarvos-gbrain/scripts/jarvos-gbrain-provider.js",
+    "descriptorEnvironment": "JARVOS_GBRAIN_RUNTIME_DESCRIPTOR",
+    "requiredTools": ["get_brain_identity", "recall", "remember", "list_skills", "get_skill"],
+    "skillProjection": {
+      "owner": "gbrain",
+      "mode": "provider-resolver",
+      "skill": "skillify",
+      "copiedIntoJarvosSkills": false
+    },
+    "maintenance": {
+      "sweepDisabled": true,
+      "owner": "scheduler-owned-delta-maintenance"
+    },
+    "registration": {
+      "command": "openclaw mcp add gbrain --command node --arg <provider-launcher> --env JARVOS_GBRAIN_RUNTIME_DESCRIPTOR=<owner-only-descriptor>",
+      "verification": "openclaw mcp probe gbrain --json followed by a native recall turn"
+    }
   },
   "targets": [
     {
@@ -109,7 +156,7 @@
       "rootEnvironment": "JARVOS_STEWARDSHIP_STABLE_ROOT",
       "dispatcher": "jarvos-stewardship-dispatcher",
       "entrypoint": { "kind": "openclawPlugin", "path": "jarvos-openclaw-stewardship-plugin" },
-      "actions": ["harness-launch", "session-start", "session-turn", "bridge", "provenance-probe"],
+      "actions": ["harness-launch", "session-start", "session-turn", "bridge", "provenance-probe", "session-precompact"],
       "selectedRuntimeAssets": ["runtimes/openclaw/jarvos-next-turn-plugin.js", "runtimes/openclaw/openclaw.plugin.json", "runtimes/openclaw/package.json"],
       "installedConfig": { "inspection": "stable-entrypoint-only", "prepare": "reversible", "rollback": "exact-owned-state" },
       "provenance": { "action": "provenance-probe", "sideEffectFree": true }
@@ -127,7 +174,7 @@
     "bridge": {
       "environment": "JARVOS_STEWARDSHIP_BRIDGE_COMMAND",
       "route": "owner-only hashed session mapping",
-      "contract": "The managed launcher uses the private bridge environment for lifecycle calls and records only the staged bridge executable and context paths under a SHA-256 key derived from the explicit OpenClaw session key or ID. The separate gateway process uses its own session context to select that exact mapping and may inject only a bounded public-safe judgment receipt."
+      "contract": "The managed launcher uses the private bridge environment for lifecycle calls and records only the staged bridge executable and context paths under a SHA-256 key derived from the explicit OpenClaw session key or ID. A schemaVersion 2 mapping additionally carries `projectsEnvironment`: the exact owner-selected six-field Projects binding (runtime root, private/public commits, config, provider module, public root). The gateway validates that mapping and its mode-0600 context file, passes the binding only to projectsContextRefresh, and may inject only bounded public-safe judgment or validated jarvos.projects-context-refresh/v1 refreshed/partial context."
     },
     "capabilities": {
       "startOrResume": { "mode": "managed-launcher" },
@@ -135,6 +182,7 @@
       "checkpoint": { "mode": "managed-launcher", "state": "stable-idle" },
       "stop": { "mode": "managed-launcher" },
       "nextTurnInput": { "mode": "native-hook", "event": "agent_turn_prepare", "script": "jarvos-next-turn-plugin.js" },
+      "projectsContextRefresh": { "mode": "native-hook", "event": "agent_turn_prepare", "script": "jarvos-next-turn-plugin.js", "timeoutMs": 250, "contract": "jarvos.projects-context-refresh/v1" },
       "availability": { "mode": "managed-launcher" }
     }
   },

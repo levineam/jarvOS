@@ -3,6 +3,7 @@
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
+const crypto = require('crypto');
 const { spawnSync } = require('child_process');
 
 const MODULE_ROOT = path.resolve(__dirname, '..');
@@ -17,7 +18,58 @@ const DEFAULT_GBRAIN_BIN_CANDIDATES = [
   path.join(os.homedir(), '.bun', 'bin', 'gbrain'),
 ];
 const DEFAULT_RETRIEVAL_LIMIT = 5;
+const DEFAULT_EVAL_LIMIT = 10;
 const DEFAULT_RETRIEVAL_TIMEOUT_MS = 15000;
+const MANAGED_RUNTIME_DESCRIPTOR_SCHEMA = 'jarvos-gbrain-runtime-descriptor/v1';
+const CONTINUITY_PRODUCER_INPUT_SCHEMA = 'jarvos-gbrain-continuity-producer-input/v1';
+const CONTINUITY_PROBE_SCHEMA = 'jarvos-gbrain-native-probe/v1';
+const CONTINUITY_SNAPSHOT_SCHEMA = 'jarvos-health-module-snapshot/v1';
+const CONTINUITY_FACTS_VERSION = 'jarvos-gbrain-continuity-facts/v1';
+const CONTINUITY_TARGETS = Object.freeze(['codex', 'hermes', 'openclaw']);
+const CONTINUITY_TUPLE_FIELDS = Object.freeze([
+  'jarvosRuntimeDigest',
+  'gbrainRuntimeDigest',
+  'logicalBrainDigest',
+  'storeDigest',
+  'fixtureDigest',
+]);
+const MANAGED_GBRAIN_PATH = '/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin';
+// Pinned GBrain v0.46.32.0 accepts these provider routing/storage variables.
+// Managed invocation copies only this set (and forces GBRAIN_SWEEP=0); arbitrary
+// ambient GBRAIN_* values and all values from provenance/receipts are excluded.
+const MANAGED_GBRAIN_PROVIDER_ENV_KEYS = Object.freeze([
+  'GBRAIN_BRAIN_ID',
+  'GBRAIN_SOURCE',
+  'GBRAIN_SURFACE',
+]);
+const MANAGED_RUNTIME_DESCRIPTOR_KEYS = new Set([
+  'schemaVersion',
+  'executablePath',
+  'sha256',
+  'expectedOwnerUid',
+  'expectedOwnerName',
+  'version',
+  'commit',
+  'engineKind',
+  'storeIdentity',
+  'gbrainHome',
+  'gbrainStore',
+  'providerEnv',
+  'interpreter',
+  'skills',
+]);
+const MANAGED_INTERPRETER_KEYS = new Set([
+  'executablePath',
+  'sha256',
+  'expectedOwnerUid',
+  'expectedOwnerName',
+]);
+const MANAGED_SKILLS_KEYS = new Set([
+  'directoryPath',
+  'manifestSha256',
+  'skillifySha256',
+]);
+const RETRIEVAL_EVAL_ARTIFACT_SCHEMA = 'jarvos-gbrain-retrieval-eval-artifact/v1';
 const JARVOS_PATHS_PACKAGE = '@jarvos/secondbrain/bridge/config/jarvos-paths.js';
 const JARVOS_PATHS_SOURCE_MODULE = path.resolve(
   MODULE_ROOT,
@@ -133,6 +185,11 @@ function resolveConfig(overrides = {}) {
     process.env.JARVOS_GBRAIN_DIR,
     DEFAULT_GBRAIN_DIR,
   ));
+  const gbrainHome = expandTilde(firstString(overrides.gbrainHome, gbrainDir));
+  const gbrainStore = expandTilde(firstString(overrides.gbrainStore, overrides.gbrainDatabase, gbrainDir));
+  const gbrainSkillsDir = expandTilde(firstString(overrides.gbrainSkillsDir));
+  const managedRuntime = overrides.managedRuntime || overrides.managedGbrainRuntime || null;
+  const managedProviderEnv = overrides.managedProviderEnv || overrides.providerEnv || managedRuntime?.providerEnv || null;
   const manifestPath = expandTilde(firstString(
     overrides.manifestPath,
     process.env.JARVOS_GBRAIN_IMPORT_MANIFEST,
@@ -160,6 +217,11 @@ function resolveConfig(overrides = {}) {
     notesDir,
     brainDir,
     gbrainDir,
+    gbrainHome,
+    gbrainStore,
+    gbrainSkillsDir,
+    managedRuntime,
+    managedProviderEnv,
     manifestPath,
     evalPath,
     gbrainBin,
@@ -439,7 +501,7 @@ function runCommand(command, args, options = {}) {
   const timeout = positiveInteger(options.timeoutMs, 0);
   const spawnOptions = {
     cwd: options.cwd || process.cwd(),
-    env: { ...process.env, ...(options.env || {}) },
+    env: options.replaceEnv ? (options.env || {}) : { ...process.env, ...(options.env || {}) },
     encoding: 'utf8',
     maxBuffer: 10 * 1024 * 1024,
   };
@@ -461,22 +523,638 @@ function runCommand(command, args, options = {}) {
     stdout: result.stdout || '',
     stderr: result.stderr || '',
     error: result.error ? result.error.message : null,
+    errorCode: result.error?.code || null,
+  };
+}
+
+function normalizedSha256(value) {
+  const normalized = String(value || '').trim().replace(/^sha256:/i, '');
+  return /^[a-f0-9]{64}$/i.test(normalized) ? normalized.toLowerCase() : null;
+}
+
+function managedRuntimeEntry(descriptor) {
+  if (!descriptor || typeof descriptor !== 'object') return null;
+  const entry = firstString(descriptor.executablePath, descriptor.sourceEntryPath, descriptor.entryPath);
+  return entry && path.isAbsolute(entry) ? entry : null;
+}
+
+function sha256File(filePath) {
+  return crypto.createHash('sha256').update(fs.readFileSync(filePath)).digest('hex');
+}
+
+function safeAncestorChain(filePath, expectedUid) {
+  const allowedOwners = new Set([0]);
+  if (Number.isInteger(Number(expectedUid))) allowedOwners.add(Number(expectedUid));
+  if (typeof process.getuid === 'function') allowedOwners.add(process.getuid());
+  let current = path.dirname(filePath);
+  while (true) {
+    let stat;
+    try {
+      stat = fs.lstatSync(current);
+    } catch {
+      return false;
+    }
+    if (!stat.isDirectory() || stat.isSymbolicLink() || (stat.mode & 0o022) !== 0 || !allowedOwners.has(stat.uid)) {
+      return false;
+    }
+    const parent = path.dirname(current);
+    if (parent === current) return true;
+    current = parent;
+  }
+}
+
+function runtimeOwnerName(stat) {
+  if (typeof process.getuid === 'function' && stat.uid === process.getuid()) {
+    try {
+      return os.userInfo().username || null;
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+function validateManagedRuntime(descriptor) {
+  const entry = managedRuntimeEntry(descriptor);
+  const expectedDigest = normalizedSha256(descriptor?.sha256 || descriptor?.expectedSha256);
+  if (!entry || !expectedDigest) return { ok: false, failureClass: 'runtime-invalid-descriptor' };
+
+  let executablePath;
+  let stat;
+  try {
+    executablePath = fs.realpathSync(entry);
+    stat = fs.statSync(executablePath);
+  } catch {
+    return { ok: false, failureClass: 'runtime-realpath-failed' };
+  }
+  if (!stat.isFile() || !isExecutable(executablePath)) return { ok: false, failureClass: 'runtime-not-executable' };
+  if ((stat.mode & 0o022) !== 0) return { ok: false, failureClass: 'runtime-mode-unsafe' };
+
+  const expectedUid = descriptor.expectedOwnerUid ?? descriptor.ownerUid;
+  if (expectedUid !== undefined && Number(expectedUid) !== stat.uid) {
+    return { ok: false, failureClass: 'runtime-owner-mismatch' };
+  }
+  const expectedOwnerName = firstString(descriptor.expectedOwnerName, descriptor.ownerName);
+  if (expectedOwnerName) {
+    const actualOwnerName = runtimeOwnerName(stat);
+    if (!actualOwnerName) return { ok: false, failureClass: 'runtime-owner-unverified' };
+    if (actualOwnerName !== expectedOwnerName) return { ok: false, failureClass: 'runtime-owner-mismatch' };
+  }
+  if (!safeAncestorChain(executablePath, expectedUid ?? stat.uid)) {
+    return { ok: false, failureClass: 'runtime-ancestor-unsafe' };
+  }
+
+  try {
+    if (sha256File(executablePath) !== expectedDigest) {
+      return { ok: false, failureClass: 'runtime-digest-mismatch' };
+    }
+  } catch {
+    return { ok: false, failureClass: 'runtime-digest-unavailable' };
+  }
+  let interpreter = null;
+  if (descriptor.interpreter !== undefined) {
+    if (!descriptor.interpreter || typeof descriptor.interpreter !== 'object' || Array.isArray(descriptor.interpreter)
+      || Object.keys(descriptor.interpreter).some((key) => !MANAGED_INTERPRETER_KEYS.has(key))) {
+      return { ok: false, failureClass: 'runtime-interpreter-invalid-descriptor' };
+    }
+    interpreter = validateManagedRuntime({
+      ...descriptor.interpreter,
+      interpreter: undefined,
+      storeIdentity: undefined,
+      engineKind: undefined,
+    });
+    if (!interpreter.ok) {
+      return { ok: false, failureClass: `runtime-interpreter-${interpreter.failureClass.replace(/^runtime-/, '')}` };
+    }
+  }
+  const storeIdentity = descriptor.storeIdentity === undefined
+    ? { ok: true, digest: null }
+    : storeIdentityDigestFor(descriptor.engineKind, descriptor.storeIdentity);
+  if (!storeIdentity.ok) return { ok: false, failureClass: 'runtime-store-identity-invalid' };
+  return {
+    ok: true,
+    executablePath,
+    launchCommand: interpreter?.executablePath || executablePath,
+    launchArgsPrefix: interpreter ? [executablePath] : [],
+    provenance: {
+      ...managedRuntimeProvenance(descriptor, true, `sha256:${expectedDigest}`, storeIdentity.digest),
+      interpreterDigest: interpreter?.provenance?.sourceDigest || null,
+    },
+  };
+}
+
+function neutralGbrainCwd() {
+  try {
+    return fs.realpathSync(os.tmpdir());
+  } catch {
+    return path.resolve(os.tmpdir());
+  }
+}
+
+function managedGbrainEnv(config) {
+  const supplied = config.managedProviderEnv || config.providerEnv || config.managedRuntime?.providerEnv || {};
+  const env = {
+    PATH: MANAGED_GBRAIN_PATH,
+    HOME: process.env.HOME || os.homedir(),
+    LANG: 'C',
+    LC_ALL: 'C',
+    GBRAIN_HOME: config.gbrainHome,
+    GBRAIN_STORE: config.gbrainStore,
+    // The pinned provider starts a maintenance sweep unless this kill switch is set.
+    GBRAIN_SWEEP: '0',
+  };
+  if (path.isAbsolute(config.gbrainSkillsDir || '')) env.GBRAIN_SKILLS_DIR = config.gbrainSkillsDir;
+  for (const key of MANAGED_GBRAIN_PROVIDER_ENV_KEYS) {
+    const value = supplied[key];
+    if (typeof value === 'string' && value) env[key] = value;
+  }
+  return env;
+}
+
+function validateManagedSkills(skills, expectedOwnerUid) {
+  if (!skills || typeof skills !== 'object' || Array.isArray(skills)
+    || Object.keys(skills).some((key) => !MANAGED_SKILLS_KEYS.has(key))
+    || !path.isAbsolute(skills.directoryPath || '')) {
+    return { ok: false, failureClass: 'runtime-skills-invalid-descriptor' };
+  }
+  const expectedManifestDigest = normalizedSha256(skills.manifestSha256);
+  const expectedSkillifyDigest = normalizedSha256(skills.skillifySha256);
+  if (!expectedManifestDigest || !expectedSkillifyDigest) {
+    return { ok: false, failureClass: 'runtime-skills-invalid-descriptor' };
+  }
+
+  let directoryPath;
+  try {
+    const directoryStat = fs.lstatSync(skills.directoryPath);
+    if (!directoryStat.isDirectory() || directoryStat.isSymbolicLink() || (directoryStat.mode & 0o022) !== 0) {
+      return { ok: false, failureClass: 'runtime-skills-mode-unsafe' };
+    }
+    if (expectedOwnerUid !== undefined && Number(expectedOwnerUid) !== directoryStat.uid) {
+      return { ok: false, failureClass: 'runtime-skills-owner-mismatch' };
+    }
+    directoryPath = fs.realpathSync(skills.directoryPath);
+  } catch {
+    return { ok: false, failureClass: 'runtime-skills-unreadable' };
+  }
+
+  const manifestPath = path.join(directoryPath, 'manifest.json');
+  const skillifyPath = path.join(directoryPath, 'skillify', 'SKILL.md');
+  const validatedContents = new Map();
+  for (const [filePath, expectedDigest] of [[manifestPath, expectedManifestDigest], [skillifyPath, expectedSkillifyDigest]]) {
+    try {
+      const stat = fs.lstatSync(filePath);
+      if (!stat.isFile() || stat.isSymbolicLink() || (stat.mode & 0o022) !== 0) {
+        return { ok: false, failureClass: 'runtime-skills-mode-unsafe' };
+      }
+      if (expectedOwnerUid !== undefined && Number(expectedOwnerUid) !== stat.uid) {
+        return { ok: false, failureClass: 'runtime-skills-owner-mismatch' };
+      }
+      const contents = fs.readFileSync(filePath);
+      if (crypto.createHash('sha256').update(contents).digest('hex') !== expectedDigest) {
+        return { ok: false, failureClass: 'runtime-skills-digest-mismatch' };
+      }
+      validatedContents.set(filePath, contents);
+    } catch {
+      return { ok: false, failureClass: 'runtime-skills-unreadable' };
+    }
+  }
+  try {
+    const manifest = JSON.parse(validatedContents.get(manifestPath).toString('utf8'));
+    const skillify = Array.isArray(manifest?.skills)
+      ? manifest.skills.find((entry) => entry?.name === 'skillify')
+      : null;
+    if (skillify?.path !== 'skillify/SKILL.md') {
+      return { ok: false, failureClass: 'runtime-skillify-unresolved' };
+    }
+  } catch {
+    return { ok: false, failureClass: 'runtime-skills-manifest-invalid' };
+  }
+  return {
+    ok: true,
+    directoryPath,
+    manifestDigest: `sha256:${expectedManifestDigest}`,
+    skillifyDigest: `sha256:${expectedSkillifyDigest}`,
+  };
+}
+
+function legacyGbrainProvenance() {
+  return {
+    managed: false,
+    verified: false,
+    continuityClaimed: false,
+    selectedRuntimeVersion: null,
+    selectedRuntimeCommit: null,
+    sourceDigest: null,
+    engineKind: null,
+    canonicalStoreIdentityDigest: null,
+  };
+}
+
+function managedRuntimeProvenance(descriptor, verified = false, sourceDigest = null, storeIdentityDigest = null) {
+  return {
+    managed: true,
+    verified,
+    continuityClaimed: false,
+    selectedRuntimeVersion: firstString(descriptor?.version, descriptor?.runtimeVersion) || null,
+    selectedRuntimeCommit: firstString(descriptor?.commit, descriptor?.runtimeCommit) || null,
+    sourceDigest: sourceDigest || (normalizedSha256(descriptor?.sha256 || descriptor?.expectedSha256)
+      ? `sha256:${normalizedSha256(descriptor.sha256 || descriptor.expectedSha256)}` : null),
+    engineKind: firstString(descriptor?.engineKind) || null,
+    canonicalStoreIdentityDigest: storeIdentityDigest || runtimeStoreIdentityDigest(descriptor),
+    failureClass: null,
+  };
+}
+
+function gbrainStatusConfig(config) {
+  return {
+    managedRuntime: Boolean(config.managedRuntime || config.managedGbrainRuntime),
+    gbrainHomeConfigured: Boolean(config.gbrainHome),
+    gbrainStoreConfigured: Boolean(config.gbrainStore),
+    retrievalTimeoutMs: config.retrievalTimeoutMs,
+  };
+}
+
+function runtimeStoreIdentityDigest(descriptor) {
+  const supplied = normalizedSha256(descriptor?.canonicalStoreIdentityDigest || descriptor?.storeIdentityDigest);
+  if (supplied) return `sha256:${supplied}`;
+  if (descriptor?.storeIdentity === undefined) return null;
+  return storeIdentityDigestFor(descriptor?.engineKind, descriptor.storeIdentity).digest || null;
+}
+
+function runGbrainCommand(config, args, options = {}) {
+  const descriptor = config.managedRuntime || config.managedGbrainRuntime;
+  if (!descriptor) {
+    return {
+      ...runCommand(config.gbrainBin, args, options),
+      provenance: legacyGbrainProvenance(),
+    };
+  }
+  if (!path.isAbsolute(config.gbrainHome || '') || !path.isAbsolute(config.gbrainStore || '')) {
+    return redactManagedCommand({
+      ok: false, dryRun: Boolean(options.dryRun), command: null, args, status: null, signal: null,
+      timedOut: false, stdout: '', stderr: '', error: null, errorCode: null,
+      failureClass: 'runtime-config-invalid', provenance: { ...managedRuntimeProvenance(descriptor), failureClass: 'runtime-config-invalid' },
+    });
+  }
+  // This validation deliberately occurs on every invocation immediately before spawn.
+  const runtime = validateManagedRuntime(descriptor);
+  if (!runtime.ok) {
+    return redactManagedCommand({
+      ok: false, dryRun: Boolean(options.dryRun), command: null, args, status: null, signal: null,
+      timedOut: false, stdout: '', stderr: '', error: null, errorCode: null,
+      failureClass: runtime.failureClass, provenance: { ...managedRuntimeProvenance(descriptor), failureClass: runtime.failureClass },
+    });
+  }
+  const result = runCommand(runtime.launchCommand, [...runtime.launchArgsPrefix, ...args], {
+    ...options,
+    cwd: neutralGbrainCwd(),
+    env: managedGbrainEnv(config),
+    replaceEnv: true,
+  });
+  const failureClass = result.ok ? null : (result.timedOut ? 'runtime-timeout' : 'runtime-command-failed');
+  return redactManagedCommand({
+    ...result,
+    // Provider stderr and spawn errors can contain credentials, source paths, or config.
+    stderr: '',
+    error: null,
+    provenance: { ...runtime.provenance, failureClass },
+    ...(failureClass ? { failureClass } : {}),
+  });
+}
+
+function loadManagedRuntimeDescriptor(descriptorPath) {
+  if (typeof descriptorPath !== 'string' || !path.isAbsolute(descriptorPath)) {
+    return { ok: false, failureClass: 'descriptor-path-invalid' };
+  }
+  let descriptorHandle;
+  let raw;
+  try {
+    const flags = fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0);
+    descriptorHandle = fs.openSync(descriptorPath, flags);
+    const stat = fs.fstatSync(descriptorHandle);
+    if (!stat.isFile()) return { ok: false, failureClass: 'descriptor-file-invalid' };
+    if (typeof process.getuid === 'function' && stat.uid !== process.getuid()) {
+      return { ok: false, failureClass: 'descriptor-owner-mismatch' };
+    }
+    if ((stat.mode & 0o077) !== 0) return { ok: false, failureClass: 'descriptor-mode-unsafe' };
+    if (stat.size < 2 || stat.size > 64 * 1024) return { ok: false, failureClass: 'descriptor-size-invalid' };
+    const realDescriptorPath = fs.realpathSync(descriptorPath);
+    if (!safeAncestorChain(realDescriptorPath, stat.uid)) return { ok: false, failureClass: 'descriptor-ancestor-unsafe' };
+    raw = fs.readFileSync(descriptorHandle, 'utf8');
+  } catch {
+    return { ok: false, failureClass: 'descriptor-unreadable' };
+  } finally {
+    if (descriptorHandle !== undefined) fs.closeSync(descriptorHandle);
+  }
+  let descriptor;
+  try {
+    descriptor = JSON.parse(raw);
+  } catch {
+    return { ok: false, failureClass: 'descriptor-json-invalid' };
+  }
+  if (!descriptor || typeof descriptor !== 'object' || Array.isArray(descriptor)
+    || Object.keys(descriptor).some((key) => !MANAGED_RUNTIME_DESCRIPTOR_KEYS.has(key))
+    || descriptor.schemaVersion !== MANAGED_RUNTIME_DESCRIPTOR_SCHEMA) {
+    return { ok: false, failureClass: 'descriptor-schema-invalid' };
+  }
+  if (!path.isAbsolute(descriptor.gbrainHome || '') || !path.isAbsolute(descriptor.gbrainStore || '')) {
+    return { ok: false, failureClass: 'descriptor-config-invalid' };
+  }
+  if (!descriptor.interpreter) return { ok: false, failureClass: 'descriptor-interpreter-required' };
+  const providerEnv = descriptor.providerEnv === undefined ? {} : descriptor.providerEnv;
+  if (!providerEnv || typeof providerEnv !== 'object' || Array.isArray(providerEnv)
+    || Object.keys(providerEnv).some((key) => !MANAGED_GBRAIN_PROVIDER_ENV_KEYS.includes(key))
+    || Object.values(providerEnv).some((value) => typeof value !== 'string' || !value)) {
+    return { ok: false, failureClass: 'descriptor-provider-env-invalid' };
+  }
+  const runtime = validateManagedRuntime(descriptor);
+  if (!runtime.ok) return { ok: false, failureClass: runtime.failureClass };
+  const skills = validateManagedSkills(descriptor.skills, descriptor.expectedOwnerUid);
+  if (!skills.ok) return skills;
+  return { ok: true, descriptor, runtime, skills };
+}
+
+function prepareManagedGbrainProvider(descriptorPath) {
+  const loaded = loadManagedRuntimeDescriptor(descriptorPath);
+  if (!loaded.ok) return loaded;
+  const config = resolveConfig({
+    managedRuntime: loaded.descriptor,
+    managedProviderEnv: loaded.descriptor.providerEnv || {},
+    gbrainHome: loaded.descriptor.gbrainHome,
+    gbrainStore: loaded.descriptor.gbrainStore,
+    gbrainSkillsDir: loaded.skills.directoryPath,
+  });
+  return {
+    ok: true,
+    command: loaded.runtime.launchCommand,
+    args: [...loaded.runtime.launchArgsPrefix, 'serve'],
+    cwd: neutralGbrainCwd(),
+    env: managedGbrainEnv(config),
+    provenance: {
+      ...loaded.runtime.provenance,
+      skillsManifestDigest: loaded.skills.manifestDigest,
+      skillifyDigest: loaded.skills.skillifyDigest,
+    },
+  };
+}
+
+function exactKeys(value, keys) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const actual = Object.keys(value).sort();
+  const expected = [...keys].sort();
+  return actual.length === expected.length && actual.every((key, index) => key === expected[index]);
+}
+
+function continuityDigest(value) {
+  const normalized = normalizedSha256(value);
+  return normalized ? `sha256:${normalized}` : null;
+}
+
+function validProducerInput(input) {
+  const fields = ['schema', 'generation', 'validForSeconds', 'jarvosRuntimeDigest', 'targets'];
+  if (!exactKeys(input, fields)
+    || input.schema !== CONTINUITY_PRODUCER_INPUT_SCHEMA
+    || !Number.isSafeInteger(input.generation) || input.generation < 1
+    || !Number.isInteger(input.validForSeconds) || input.validForSeconds < 60 || input.validForSeconds > 3600
+    || !continuityDigest(input.jarvosRuntimeDigest)
+    || !Array.isArray(input.targets) || input.targets.length !== CONTINUITY_TARGETS.length) return false;
+  const targetFields = ['target', 'command', 'args', 'timeoutMs', 'maintenanceBlocked', 'backupFresh'];
+  return input.targets.every((target, index) => (
+    exactKeys(target, targetFields)
+    && target.target === CONTINUITY_TARGETS[index]
+    && path.isAbsolute(target.command || '')
+    && Array.isArray(target.args) && target.args.every((arg) => typeof arg === 'string' && arg.length <= 4096)
+    && Number.isInteger(target.timeoutMs) && target.timeoutMs >= 1000 && target.timeoutMs <= 120000
+    && typeof target.maintenanceBlocked === 'boolean'
+    && typeof target.backupFresh === 'boolean'
+  ));
+}
+
+function validProbeOutput(output, target, challengeDigest, generation, jarvosRuntimeDigest, gbrainRuntimeDigest) {
+  const fields = [
+    'schema', 'target', 'challengeDigest', 'probeGeneration', 'nativeRegistered',
+    'serviceReachable', 'capabilityProven', 'skillifyProven', 'machineProven',
+    'jarvosRuntimeDigest', 'gbrainRuntimeDigest', 'logicalBrainDigest', 'storeDigest',
+    'fixtureDigest', 'liveTurnObserved',
+  ];
+  if (!exactKeys(output, fields)
+    || output.schema !== CONTINUITY_PROBE_SCHEMA
+    || output.target !== target
+    || output.challengeDigest !== challengeDigest
+    || output.probeGeneration !== generation
+    || continuityDigest(output.jarvosRuntimeDigest) !== jarvosRuntimeDigest
+    || continuityDigest(output.gbrainRuntimeDigest) !== gbrainRuntimeDigest) return false;
+  const booleans = ['nativeRegistered', 'serviceReachable', 'capabilityProven', 'skillifyProven', 'machineProven', 'liveTurnObserved'];
+  if (!booleans.every((field) => typeof output[field] === 'boolean')) return false;
+  return ['logicalBrainDigest', 'storeDigest', 'fixtureDigest'].every((field) => continuityDigest(output[field]));
+}
+
+function unavailableContinuityTarget(spec, generation, observedAt, validUntil, challengeDigest, runtimeVerified) {
+  return {
+    target: spec.target,
+    binaryPresent: isExecutable(spec.command),
+    runtimeVerified,
+    runtimeFresh: runtimeVerified,
+    nativeRegistered: false,
+    serviceReachable: false,
+    sameBrain: false,
+    capabilityProven: false,
+    skillifyProven: false,
+    maintenanceBlocked: spec.maintenanceBlocked,
+    backupFresh: spec.backupFresh,
+    machineProven: false,
+    probeGeneration: generation,
+    observedAt,
+    validUntil,
+    challengeDigest,
+    jarvosRuntimeDigest: null,
+    gbrainRuntimeDigest: null,
+    logicalBrainDigest: null,
+    storeDigest: null,
+    fixtureDigest: null,
+    liveTurn: null,
+  };
+}
+
+function produceContinuitySnapshot({ descriptorPath, producerInput, now = new Date(), randomBytes = crypto.randomBytes, spawnSyncImpl = spawnSync } = {}) {
+  if (!path.isAbsolute(descriptorPath || '') || !validProducerInput(producerInput)) {
+    return { ok: false, failureClass: 'continuity-producer-input-invalid' };
+  }
+  const loaded = loadManagedRuntimeDescriptor(descriptorPath);
+  if (!loaded.ok) return { ok: false, failureClass: loaded.failureClass };
+  const jarvosRuntimeDigest = continuityDigest(producerInput.jarvosRuntimeDigest);
+  const gbrainRuntimeDigest = loaded.runtime.provenance.sourceDigest;
+  const observedAt = now.toISOString();
+  const validUntil = new Date(now.getTime() + producerInput.validForSeconds * 1000).toISOString();
+  const challengeDigest = `sha256:${crypto.createHash('sha256').update(randomBytes(32)).digest('hex')}`;
+  const probeEnv = {
+    PATH: process.env.PATH || MANAGED_GBRAIN_PATH,
+    HOME: process.env.HOME || os.homedir(),
+    LANG: 'C',
+    LC_ALL: 'C',
+  };
+
+  const targets = producerInput.targets.map((spec) => {
+    if (!isSafeExecutable(spec.command, typeof process.getuid === 'function' ? process.getuid() : undefined)) {
+      return unavailableContinuityTarget(spec, producerInput.generation, observedAt, validUntil, challengeDigest, true);
+    }
+    const result = spawnSyncImpl(spec.command, spec.args, {
+      cwd: neutralGbrainCwd(),
+      env: {
+        ...probeEnv,
+        JARVOS_CONTINUITY_TARGET: spec.target,
+        JARVOS_CONTINUITY_CHALLENGE_DIGEST: challengeDigest,
+        JARVOS_CONTINUITY_PROBE_GENERATION: String(producerInput.generation),
+        JARVOS_CONTINUITY_JARVOS_RUNTIME_DIGEST: jarvosRuntimeDigest,
+        JARVOS_CONTINUITY_GBRAIN_RUNTIME_DIGEST: gbrainRuntimeDigest,
+      },
+      encoding: 'utf8',
+      timeout: spec.timeoutMs,
+      maxBuffer: 64 * 1024,
+    });
+    let output;
+    try {
+      output = result.status === 0 ? JSON.parse(result.stdout) : null;
+    } catch {
+      output = null;
+    }
+    if (!validProbeOutput(output, spec.target, challengeDigest, producerInput.generation, jarvosRuntimeDigest, gbrainRuntimeDigest)) {
+      return unavailableContinuityTarget(spec, producerInput.generation, observedAt, validUntil, challengeDigest, true);
+    }
+    const tuple = Object.fromEntries(CONTINUITY_TUPLE_FIELDS.map((field) => [field, continuityDigest(output[field])]));
+    const liveTurn = output.liveTurnObserved ? {
+      producer: 'jarvos-gbrain',
+      target: spec.target,
+      challengeDigest,
+      ...tuple,
+      probeGeneration: producerInput.generation,
+      observedAt,
+      validUntil,
+      consumed: true,
+    } : null;
+    return {
+      target: spec.target,
+      binaryPresent: true,
+      runtimeVerified: true,
+      runtimeFresh: true,
+      nativeRegistered: output.nativeRegistered,
+      serviceReachable: output.serviceReachable,
+      sameBrain: false,
+      capabilityProven: output.capabilityProven,
+      skillifyProven: output.skillifyProven,
+      maintenanceBlocked: spec.maintenanceBlocked,
+      backupFresh: spec.backupFresh,
+      machineProven: output.machineProven,
+      probeGeneration: producerInput.generation,
+      observedAt,
+      validUntil,
+      challengeDigest,
+      ...tuple,
+      liveTurn,
+    };
+  });
+
+  const reference = targets[0];
+  const sameBrain = targets.every((target) => (
+    target.machineProven
+    && CONTINUITY_TUPLE_FIELDS.every((field) => target[field] === reference[field])
+  ));
+  for (const target of targets) target.sameBrain = sameBrain;
+  return {
+    ok: true,
+    snapshot: {
+      schema: CONTINUITY_SNAPSHOT_SCHEMA,
+      moduleId: 'gbrain-continuity',
+      generation: producerInput.generation,
+      observedAt,
+      validUntil,
+      trust: 'trusted',
+      factsVersion: CONTINUITY_FACTS_VERSION,
+      facts: { producer: 'jarvos-gbrain', targets },
+    },
+    provenance: {
+      gbrainRuntimeDigest,
+      skillsManifestDigest: loaded.skills.manifestDigest,
+      skillifyDigest: loaded.skills.skillifyDigest,
+    },
+  };
+}
+
+function redactManagedCommand(command) {
+  return { ...command, command: null, args: [] };
+}
+
+function stableJson(value) {
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`;
+  if (!value || typeof value !== 'object') return JSON.stringify(value);
+  return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${stableJson(value[key])}`).join(',')}}`;
+}
+
+function canonicalStoreIdentity(engineKind, value) {
+  const engine = firstString(engineKind)?.toLowerCase();
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return { ok: false };
+  if (engine === 'postgres') {
+    const allowed = new Set(['host', 'port', 'database', 'pageCount', 'chunkCount', 'documentCount']);
+    if (Object.keys(value).some((key) => !allowed.has(key))) return { ok: false };
+    if (typeof value.host !== 'string' || !/^[a-z0-9.-]+$/i.test(value.host)
+      || !Number.isInteger(value.port) || value.port < 1 || value.port > 65535
+      || typeof value.database !== 'string' || !/^[a-z0-9_-]+$/i.test(value.database)) return { ok: false };
+    return { ok: true, value: { host: value.host.toLowerCase(), port: value.port, database: value.database } };
+  }
+  if (engine === 'pglite') {
+    const allowed = new Set(['storePathDigest', 'pageCount', 'chunkCount', 'documentCount']);
+    if (Object.keys(value).some((key) => !allowed.has(key))) return { ok: false };
+    const storePathDigest = normalizedSha256(value.storePathDigest);
+    return storePathDigest ? { ok: true, value: { storePathDigest: `sha256:${storePathDigest}` } } : { ok: false };
+  }
+  return { ok: false };
+}
+
+function storeIdentityDigestFor(engineKind, storeIdentity) {
+  const engine = firstString(engineKind)?.toLowerCase();
+  const canonical = canonicalStoreIdentity(engine, storeIdentity);
+  if (!engine || !canonical.ok) return { ok: false, digest: null };
+  return {
+    ok: true,
+    digest: `sha256:${crypto.createHash('sha256')
+      .update(stableJson({ engineKind: engine, storeIdentity: canonical.value }))
+      .digest('hex')}`,
+  };
+}
+
+function deriveStableBrainIdentity({ engineKind, storeIdentity, sentinelDigest } = {}) {
+  const engine = firstString(engineKind);
+  const sentinel = firstString(sentinelDigest);
+  if (!engine || !sentinel || !storeIdentity || typeof storeIdentity !== 'object') {
+    return { ok: false, failureClass: 'identity-input-invalid' };
+  }
+  const store = storeIdentityDigestFor(engine, storeIdentity);
+  if (!store.ok) return { ok: false, failureClass: 'store-identity-invalid' };
+  const logicalBrainDigest = `sha256:${crypto.createHash('sha256')
+    .update(stableJson({ namespace: 'jarvos/gbrain/logical-brain/v1', sentinelDigest: sentinel }))
+    .digest('hex')}`;
+  return {
+    ok: true,
+    engineKind: engine,
+    storeIdentityDigest: store.digest,
+    sentinelDigest: sentinel,
+    logicalBrainDigest,
   };
 }
 
 function syncBrain(overrides = {}, options = {}) {
   const config = resolveConfig(overrides);
-  const sync = runCommand(config.gbrainBin, ['sync', '--repo', config.brainDir], {
+  const sync = runGbrainCommand(config, ['sync', '--repo', config.brainDir], {
     cwd: config.gbrainDir,
     dryRun: options.dryRun === true,
   });
   const embed = sync.ok
-    ? runCommand(config.gbrainBin, ['embed', '--stale'], {
+    ? runGbrainCommand(config, ['embed', '--stale'], {
         cwd: config.gbrainDir,
         dryRun: options.dryRun === true,
       })
     : null;
-  return { config, sync, embed, ok: sync.ok && (!embed || embed.ok) };
+  return { config: gbrainStatusConfig(config), sync, embed, ok: sync.ok && (!embed || embed.ok) };
 }
 
 function readEvalQuestions(config) {
@@ -484,6 +1162,188 @@ function readEvalQuestions(config) {
   return Array.isArray(data.questions)
     ? data.questions.filter((question) => !(question && typeof question === 'object' && question.include === false))
     : [];
+}
+
+function digest(value) {
+  const serialized = typeof value === 'string' || Buffer.isBuffer(value)
+    ? value
+    : JSON.stringify(value);
+  return `sha256:${crypto.createHash('sha256').update(serialized).digest('hex')}`;
+}
+
+function stableQuestionId(entry, index) {
+  const ordinal = String(index + 1).padStart(2, '0');
+  return `question-${ordinal}-${digest(entry).slice(7, 19)}`;
+}
+
+function commandCandidateDigests(command, engine) {
+  const output = String(command?.stdout || command?.stdoutSample || '').trim();
+  if (!output) return [];
+  const parsed = parseJsonOutput(output);
+  const parsedRows = parsed.ok
+    ? Array.isArray(parsed.value)
+      ? parsed.value
+      : Array.isArray(parsed.value?.results)
+        ? parsed.value.results
+        : Array.isArray(parsed.value?.items)
+          ? parsed.value.items
+          : Array.isArray(parsed.value?.matches)
+            ? parsed.value.matches
+            : parsed.value && typeof parsed.value === 'object' ? [parsed.value] : []
+    : [];
+  const rows = parsedRows.length ? parsedRows : output.split(/\r?\n/).filter(Boolean);
+  return rows.slice(0, 50).map((row, index) => {
+    const identity = row && typeof row === 'object'
+      ? {
+        file: row.file || row.path || row.uri || null,
+        title: row.title || null,
+        docid: row.docid || row.id || null,
+        slug: row.slug || null,
+      }
+      : String(row);
+    return { rank: index + 1, candidateDigest: digest({ engine, identity }) };
+  });
+}
+
+function graphCandidateDigests(graph) {
+  return (graph?.results || []).flatMap((result) => (result.nodes || []).map((node, index) => ({
+    rank: index + 1,
+    candidateDigest: digest({
+      engine: 'gbrain_graph',
+      seed: result.seed || null,
+      slug: node.slug || null,
+      title: node.title || null,
+      type: node.type || null,
+      depth: node.depth ?? null,
+    }),
+  })));
+}
+
+function actualCandidateDigests(engineName, engineResult) {
+  if (!engineResult || typeof engineResult !== 'object') return [];
+  if (engineName === 'gbrain_graph') return graphCandidateDigests(engineResult.recall);
+  if (engineName === 'gbrain_recall') {
+    const bundle = engineResult.bundle || {};
+    return [
+      ...commandCandidateDigests(bundle.engines?.gbrain?.command, 'gbrain'),
+      ...commandCandidateDigests(bundle.engines?.qmd?.command, 'qmd'),
+      ...graphCandidateDigests(bundle.graph),
+    ];
+  }
+  return commandCandidateDigests(engineResult.command, engineName);
+}
+
+function expectedCandidateDigests(engineName, engineResult) {
+  if (!engineResult || typeof engineResult !== 'object') return [];
+  const values = engineName === 'gbrain_recall'
+    ? engineResult.expectedCandidates
+    : engineResult.expected === undefined ? [] : [engineResult.expected];
+  return (values || []).map((value) => digest(value));
+}
+
+function engineFailureReason(engineName, engineResult) {
+  if (!engineResult || typeof engineResult !== 'object') return 'missing-engine';
+  if (engineResult.failureReason) return engineResult.failureReason;
+  if (engineName === 'gbrain_recall') {
+    const nestedReason = engineResult.bundle?.engines?.gbrain?.failureReason
+      || engineResult.bundle?.engines?.qmd?.failureReason;
+    if (nestedReason) return nestedReason;
+  }
+  const commands = engineName === 'gbrain_recall'
+    ? [engineResult.bundle?.engines?.gbrain?.command, engineResult.bundle?.engines?.qmd?.command]
+    : engineName === 'gbrain_graph'
+      ? (engineResult.recall?.results || []).map((result) => result.command)
+      : [engineResult.command];
+  if (commands.some((command) => command?.errorCode === 'ENOENT')) return 'missing-engine';
+  if (commands.some((command) => command?.timedOut)) return 'timeout';
+  if (commands.some((command) => command && command.ok === false)) return 'engine-command-failed';
+  if (engineResult.parseError || engineResult.recall?.results?.some((result) => result.parseError)) return 'malformed-result';
+  if (actualCandidateDigests(engineName, engineResult).length === 0) return 'empty-candidate-set';
+  if (engineResult.expectedMatched === false) return 'expected-candidate-missing';
+  return 'engine-failed';
+}
+
+function healthBearingEngines(result, { compareQmd, compareGraph, compareRecall }) {
+  if (compareRecall) {
+    return [
+      'gbrain_recall',
+      ...(compareQmd ? ['qmd'] : []),
+      ...(compareGraph && result.engines?.gbrain_graph ? ['gbrain_graph'] : []),
+    ];
+  }
+  return ['gbrain', ...(compareQmd ? ['qmd'] : []), ...(compareGraph && result.engines?.gbrain_graph ? ['gbrain_graph'] : [])];
+}
+
+function sourceRevision() {
+  const result = spawnSync('git', ['rev-parse', '--verify', 'HEAD'], {
+    cwd: path.resolve(MODULE_ROOT, '../..'),
+    encoding: 'utf8',
+    timeout: 10_000,
+  });
+  const revision = String(result.stdout || '').trim().toLowerCase();
+  return result.status === 0 && /^[0-9a-f]{40}$/.test(revision) ? revision : null;
+}
+
+function buildRetrievalEvalArtifact({ questions, results, summary, compareQmd, compareGraph, compareRecall, now = new Date(), publicRevision = null, runtimeRevision = null }) {
+  const failures = [];
+  for (const [index, result] of results.entries()) {
+    if (result.skipped || !result.query) {
+      failures.push({
+        questionId: stableQuestionId(questions[index], index),
+        engine: 'evaluation',
+        failureReason: result.reason || 'missing-query',
+        expectedCandidateDigests: [],
+        actualCandidateDigests: [],
+      });
+      continue;
+    }
+    for (const engine of healthBearingEngines(result, { compareQmd, compareGraph, compareRecall })) {
+      const engineResult = result.engines?.[engine];
+      if (engineResult?.ok === true) continue;
+      failures.push({
+        questionId: stableQuestionId(questions[index], index),
+        engine,
+        failureReason: engineFailureReason(engine, engineResult),
+        expectedCandidateDigests: expectedCandidateDigests(engine, engineResult),
+        actualCandidateDigests: actualCandidateDigests(engine, engineResult),
+      });
+    }
+  }
+  const artifact = {
+    schema: RETRIEVAL_EVAL_ARTIFACT_SCHEMA,
+    generatedAt: (now instanceof Date ? now : new Date(now)).toISOString(),
+    corpusDigest: digest({ questions }),
+    questionCount: questions.length,
+    publicRevision,
+    runtimeRevision,
+    compareQmd,
+    compareGraph,
+    compareRecall,
+    summary,
+    failures,
+  };
+  return { ...artifact, artifactDigest: digest(artifact) };
+}
+
+function writePrivateArtifact(filePath, artifact, fsImpl = fs) {
+  const resolved = path.resolve(filePath);
+  fsImpl.mkdirSync(path.dirname(resolved), { recursive: true, mode: 0o700 });
+  try {
+    if (fsImpl.lstatSync(resolved).isSymbolicLink()) throw new Error('artifact-target-symlinked');
+  } catch (error) {
+    if (error?.code !== 'ENOENT') throw error;
+  }
+  const temporary = path.join(path.dirname(resolved), `.${path.basename(resolved)}.${process.pid}.${crypto.randomBytes(6).toString('hex')}.tmp`);
+  try {
+    fsImpl.writeFileSync(temporary, `${JSON.stringify(artifact, null, 2)}\n`, { mode: 0o600 });
+    fsImpl.chmodSync?.(temporary, 0o600);
+    fsImpl.renameSync(temporary, resolved);
+    fsImpl.chmodSync?.(resolved, 0o600);
+  } catch (error) {
+    try { fsImpl.unlinkSync(temporary); } catch (_) {}
+    throw error;
+  }
+  return resolved;
 }
 
 function asStringList(value) {
@@ -565,9 +1425,16 @@ function matchExpected(output, expected) {
   if (!clauses) return { checked: false, matched: true, missing: [] };
 
   const haystack = String(output || '').toLowerCase();
-  const missingAll = clauses.all.filter((needle) => !haystack.includes(needle.toLowerCase()));
+  const canonicalHaystack = canonicalMatchText(output);
+  const includesNeedle = (needle) => {
+    const rawNeedle = String(needle || '').toLowerCase();
+    if (rawNeedle && haystack.includes(rawNeedle)) return true;
+    const canonicalNeedle = canonicalMatchText(needle);
+    return Boolean(canonicalNeedle) && canonicalHaystack.includes(canonicalNeedle);
+  };
+  const missingAll = clauses.all.filter((needle) => !includesNeedle(needle));
   const anyMatched = clauses.any.length === 0
-    || clauses.any.some((needle) => haystack.includes(needle.toLowerCase()));
+    || clauses.any.some((needle) => includesNeedle(needle));
   const missingAny = anyMatched || clauses.any.length === 0 ? [] : clauses.any;
 
   return {
@@ -575,6 +1442,16 @@ function matchExpected(output, expected) {
     matched: missingAll.length === 0 && anyMatched,
     missing: [...missingAll, ...missingAny],
   };
+}
+
+function canonicalMatchText(value) {
+  return String(value || '')
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim()
+    .replace(/\s+/g, ' ');
 }
 
 function positiveInteger(value, fallback) {
@@ -605,12 +1482,22 @@ function evalCommandResult(command, expected, dryRun) {
 }
 
 function runGbrainEval(config, query, expected, dryRun, limit) {
-  const command = runCommand(config.gbrainBin, ['search', query, '--limit', String(limit)], {
+  const command = runGbrainCommand(config, ['search', query, '--limit', String(limit)], {
     cwd: config.gbrainDir,
     dryRun,
     timeoutMs: config.retrievalTimeoutMs,
   });
-  return evalCommandResult(command, expected, dryRun);
+  const result = {
+    ...evalCommandResult(command, expected, dryRun),
+    command: summarizeCommand(command, { sanitized: true }),
+    provenance: command.provenance || legacyGbrainProvenance(),
+    answeredByGbrain: command.ok && (dryRun || Boolean(String(command.stdout || '').trim())),
+  };
+  if (!dryRun && command.ok && !String(command.stdout || '').trim()) {
+    return { ...result, ok: false, failureReason: 'empty-candidate-set' };
+  }
+  if (!command.ok) return { ...result, failureReason: gbrainFailureClass(command) };
+  return result;
 }
 
 function runQmdEval(config, query, expected, dryRun, limit) {
@@ -618,7 +1505,9 @@ function runQmdEval(config, query, expected, dryRun, limit) {
     dryRun,
     timeoutMs: config.retrievalTimeoutMs,
   });
-  return evalCommandResult(command, expected, dryRun);
+  const result = evalCommandResult(command, expected, dryRun);
+  const admission = qmdCommandAdmission(command, dryRun);
+  return { ...result, ...admission, ok: result.ok && admission.ok };
 }
 
 function parseJsonOutput(output) {
@@ -627,6 +1516,27 @@ function parseJsonOutput(output) {
   } catch (error) {
     return { ok: false, value: null, error: error.message };
   }
+}
+
+function qmdCommandAdmission(command, dryRun = false) {
+  if (dryRun) return { ok: true, resultCount: null };
+  if (!command.ok) return { ok: false, failureReason: command.errorCode === 'ENOENT' ? 'missing-engine' : command.timedOut ? 'timeout' : 'engine-command-failed', resultCount: 0 };
+  if (!String(command.stdout || '').trim()) return { ok: false, failureReason: 'empty-candidate-set', resultCount: 0 };
+  if (/^No results found\.?$/i.test(String(command.stdout).trim())) return { ok: false, failureReason: 'empty-candidate-set', resultCount: 0 };
+  const parsed = parseJsonOutput(command.stdout);
+  if (!parsed.ok) return { ok: false, failureReason: 'malformed-result', resultCount: 0 };
+  const rows = Array.isArray(parsed.value)
+    ? parsed.value
+    : Array.isArray(parsed.value?.results)
+      ? parsed.value.results
+      : Array.isArray(parsed.value?.items)
+        ? parsed.value.items
+        : Array.isArray(parsed.value?.matches)
+          ? parsed.value.matches
+          : parsed.value && typeof parsed.value === 'object' ? [parsed.value] : [];
+  return rows.length > 0
+    ? { ok: true, resultCount: rows.length }
+    : { ok: false, failureReason: 'empty-candidate-set', resultCount: 0 };
 }
 
 function parseGraphQueryOutput(output, seed) {
@@ -668,21 +1578,32 @@ function parseGraphQueryOutput(output, seed) {
   return { ok: false, value: null, error: json.error || 'Expected gbrain graph-query output' };
 }
 
-function summarizeCommand(command) {
+function summarizeCommand(command, options = {}) {
+  const sanitized = options.sanitized === true;
   return {
     ok: command.ok,
     dryRun: command.dryRun,
-    command: command.command,
-    args: command.args,
+    command: sanitized ? null : command.command,
+    args: sanitized ? [] : command.args,
     status: command.status,
     signal: command.signal,
     timedOut: command.timedOut,
     stdoutBytes: Buffer.byteLength(command.stdout || '', 'utf8'),
-    stderrBytes: Buffer.byteLength(command.stderr || '', 'utf8'),
-    stdoutSample: command.stdout ? command.stdout.slice(0, 500) : '',
-    stderrSample: command.stderr ? command.stderr.slice(0, 1000) : '',
-    error: command.error,
+    stderrBytes: sanitized ? 0 : Buffer.byteLength(command.stderr || '', 'utf8'),
+    stdoutSample: sanitized ? '' : (command.stdout ? command.stdout.slice(0, 500) : ''),
+    stderrSample: sanitized ? '' : (command.stderr ? command.stderr.slice(0, 1000) : ''),
+    error: sanitized ? null : command.error,
+    errorCode: sanitized ? null : (command.errorCode || null),
+    ...(command.provenance ? { provenance: command.provenance } : {}),
+    ...(command.failureClass ? { failureClass: command.failureClass } : {}),
   };
+}
+
+function gbrainFailureClass(command) {
+  if (command.failureClass) return command.failureClass;
+  if (command.errorCode === 'ENOENT') return 'missing-engine';
+  if (command.timedOut) return 'timeout';
+  return 'engine-command-failed';
 }
 
 function graphRecall(overrides = {}, options = {}) {
@@ -692,7 +1613,7 @@ function graphRecall(overrides = {}, options = {}) {
   const seedValues = options.seeds || overrides.seeds || options.seed || overrides.seed;
   const seeds = asStringList(seedValues);
   const results = seeds.map((seed) => {
-    const command = runCommand(config.gbrainBin, ['graph-query', seed, '--depth', String(depth)], {
+    const command = runGbrainCommand(config, ['graph-query', seed, '--depth', String(depth)], {
       cwd: config.gbrainDir,
       dryRun,
       timeoutMs: config.retrievalTimeoutMs,
@@ -707,12 +1628,14 @@ function graphRecall(overrides = {}, options = {}) {
       nodeCount: nodes.length,
       nodes,
       parseError: parseOk ? null : parsed.error || 'Expected gbrain graph-query output',
-      command: summarizeCommand(command),
+      command: summarizeCommand(command, { sanitized: true }),
+      provenance: command.provenance || legacyGbrainProvenance(),
+      ...(command.ok ? {} : { failureClass: gbrainFailureClass(command) }),
     };
   });
 
   return {
-    config,
+    config: gbrainStatusConfig(config),
     dryRun,
     depth,
     seedCount: seeds.length,
@@ -938,16 +1861,20 @@ function recallBundle(overrides = {}, options = {}) {
     };
   }
 
-  const gbrainCommand = runCommand(config.gbrainBin, ['search', query, '--limit', String(limit)], {
+  const gbrainCommand = runGbrainCommand(config, ['search', query, '--limit', String(limit)], {
     cwd: config.gbrainDir,
     dryRun,
     timeoutMs: config.retrievalTimeoutMs,
   });
   const engines = {
     gbrain: {
-      ok: gbrainCommand.ok,
-      text: truncateText(`${gbrainCommand.stdout || ''}\n${gbrainCommand.stderr || ''}`, maxChars),
-      command: summarizeCommand(gbrainCommand),
+      ok: gbrainCommand.ok && (dryRun || Boolean(String(gbrainCommand.stdout || '').trim())),
+      text: gbrainCommand.ok ? truncateText(gbrainCommand.stdout || '', maxChars) : '',
+      command: summarizeCommand(gbrainCommand, { sanitized: true }),
+      provenance: gbrainCommand.provenance || legacyGbrainProvenance(),
+      answeredByGbrain: gbrainCommand.ok && (dryRun || Boolean(String(gbrainCommand.stdout || '').trim())),
+      ...(!dryRun && gbrainCommand.ok && !String(gbrainCommand.stdout || '').trim() ? { failureReason: 'empty-candidate-set' } : {}),
+      ...(!gbrainCommand.ok ? { failureReason: gbrainFailureClass(gbrainCommand), failureClass: gbrainFailureClass(gbrainCommand) } : {}),
     },
   };
 
@@ -956,10 +1883,13 @@ function recallBundle(overrides = {}, options = {}) {
       dryRun,
       timeoutMs: config.retrievalTimeoutMs,
     });
+    const qmdAdmission = qmdCommandAdmission(qmdCommand, dryRun);
     engines.qmd = {
-      ok: qmdCommand.ok,
+      ok: qmdAdmission.ok,
       text: truncateText(`${qmdCommand.stdout || ''}\n${qmdCommand.stderr || ''}`, maxChars),
       command: summarizeCommand(qmdCommand),
+      resultCount: qmdAdmission.resultCount,
+      ...(qmdAdmission.failureReason ? { failureReason: qmdAdmission.failureReason } : {}),
     };
   }
 
@@ -973,8 +1903,10 @@ function recallBundle(overrides = {}, options = {}) {
     : null;
 
   const bundle = {
-    config,
-    ok: gbrainCommand.ok && (!includeQmd || engines.qmd.ok) && (!graph || graph.ok),
+    config: gbrainStatusConfig(config),
+    ok: engines.gbrain.ok
+      && (!includeQmd || engines.qmd.ok || engines.qmd.failureReason === 'empty-candidate-set')
+      && (!graph || graph.ok),
     dryRun,
     query,
     limit,
@@ -985,6 +1917,13 @@ function recallBundle(overrides = {}, options = {}) {
     graphSeeds: seeds,
     engines,
     graph,
+    provenance: {
+      gbrain: {
+        ...(gbrainCommand.provenance || legacyGbrainProvenance()),
+        answeredByGbrain: engines.gbrain.answeredByGbrain,
+        failureClass: engines.gbrain.failureClass || null,
+      },
+    },
   };
   return {
     ...bundle,
@@ -1044,7 +1983,7 @@ function runRetrievalEval(overrides = {}, options = {}) {
   const compareQmd = options.compareQmd === true;
   const compareGraph = options.compareGraph === true;
   const compareRecall = options.compareRecall === true;
-  const limit = positiveInteger(options.limit || overrides.limit || process.env.JARVOS_GBRAIN_EVAL_LIMIT, DEFAULT_RETRIEVAL_LIMIT);
+  const limit = positiveInteger(options.limit || overrides.limit || process.env.JARVOS_GBRAIN_EVAL_LIMIT, DEFAULT_EVAL_LIMIT);
   const graphDepth = positiveInteger(
     options.graphDepth || overrides.graphDepth || process.env.JARVOS_GBRAIN_GRAPH_DEPTH,
     2,
@@ -1120,8 +2059,37 @@ function runRetrievalEval(overrides = {}, options = {}) {
       engines,
     };
   });
+  const summary = summarizeEvalResults(results);
+  const evaluationOk = results.every((result) => result.ok || result.skipped);
+  const artifactPath = firstString(options.artifactPath, overrides.artifactPath);
+  const publicRevision = firstString(options.publicRevision, overrides.publicRevision) || sourceRevision();
+  const runtimeRevision = firstString(options.runtimeRevision, overrides.runtimeRevision, process.env.OPENCLAW_RUNTIME_REVISION);
+  let artifact = null;
+  if (artifactPath) {
+    if (!/^[0-9a-f]{40}$/i.test(String(publicRevision || '')) || !/^[0-9a-f]{40}$/i.test(String(runtimeRevision || ''))) {
+      artifact = { ok: false, path: path.resolve(artifactPath), reason: 'artifact-revision-unavailable' };
+    } else {
+      const record = buildRetrievalEvalArtifact({
+        questions,
+        results,
+        summary,
+        compareQmd,
+        compareGraph,
+        compareRecall,
+        now: options.now || new Date(),
+        publicRevision: publicRevision.toLowerCase(),
+        runtimeRevision: runtimeRevision.toLowerCase(),
+      });
+      try {
+        const writtenPath = writePrivateArtifact(artifactPath, record, options.fsImpl || fs);
+        artifact = { ok: true, path: writtenPath, digest: record.artifactDigest, failureCount: record.failures.length };
+      } catch (_) {
+        artifact = { ok: false, path: path.resolve(artifactPath), reason: 'artifact-write-failed' };
+      }
+    }
+  }
   return {
-    config,
+    config: gbrainStatusConfig(config),
     dryRun,
     compareQmd,
     compareGraph,
@@ -1130,9 +2098,13 @@ function runRetrievalEval(overrides = {}, options = {}) {
     graphDepth,
     graphSeedLimit,
     questionCount: questions.length,
-    summary: summarizeEvalResults(results),
+    corpusDigest: digest({ questions }),
+    publicRevision,
+    runtimeRevision,
+    summary,
     results,
-    ok: results.every((result) => result.ok || result.skipped),
+    artifact,
+    ok: evaluationOk && (!artifact || artifact.ok),
   };
 }
 
@@ -1167,6 +2139,15 @@ function isExecutable(filePath) {
   }
 }
 
+function isSafeExecutable(filePath, expectedUid) {
+  if (!isExecutable(filePath)) return false;
+  try {
+    return safeAncestorChain(fs.realpathSync(filePath), expectedUid);
+  } catch {
+    return false;
+  }
+}
+
 function doctor(overrides = {}) {
   const config = resolveConfig(overrides);
   const checks = [
@@ -1191,7 +2172,9 @@ module.exports = {
   DEFAULT_MANIFEST_PATH,
   DEFAULT_EVAL_PATH,
   DEFAULT_QMD_BIN,
+  DEFAULT_EVAL_LIMIT,
   DEFAULT_RETRIEVAL_TIMEOUT_MS,
+  RETRIEVAL_EVAL_ARTIFACT_SCHEMA,
   expandTilde,
   resolveConfig,
   slugify,
@@ -1199,6 +2182,12 @@ module.exports = {
   createImportPlan,
   importToBrain,
   syncBrain,
+  validateManagedRuntime,
+  loadManagedRuntimeDescriptor,
+  prepareManagedGbrainProvider,
+  produceContinuitySnapshot,
+  runGbrainCommand,
+  deriveStableBrainIdentity,
   runRetrievalEval,
   graphRecall,
   recallBundle,

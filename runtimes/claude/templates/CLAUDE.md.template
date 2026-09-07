@@ -56,33 +56,35 @@ auto-trigger, and enforcement assessment for HARD rules.
 
 ## jarvOS Release Targeting
 
-When the user signals a target with `Target: jarvOS v0.X.Y`, route the work
-accordingly. If no target is given but the work touches the jarvOS repo, ask
-before proceeding.
+jarvOS versions itself with release-please (`release-please-config.json`
+at the repo root): the version number is derived automatically from
+conventional-commit types on merged commits, not chosen by hand. `fix:`
+yields a patch bump, `feat:` a minor bump. Picking the right commit type
+is the entire versioning decision — there is no "target version" to
+choose, and no version number belongs in a branch name, PR title, or
+this file. Release *placement* — which release lane a piece of work
+belongs to — is a separate question owned by the steward system in
+`modules/jarvos-coding` (`triageCodingWork`,
+`releaseFitFromPaperclipReleaseIntake`), which classifies work into a
+product lane, release lane, ready-execution lane, or manual triage.
 
-### Version policy
+### What this triggers
 
-- **v0.1.x** — bug fixes, doc corrections, install-flow fixes, smoke-test
-  gaps. Patch-level only; no new capabilities.
-- **v0.2.0** — meaningful new capabilities, new MCP tools, new runtime
-  adapters, new skills, workflow improvements. Pre-v1.0 breaking changes
-  are allowed but must be flagged in the release notes.
-
-### What targeting triggers
-
-- **Branch naming** — `fix/SUP-XXXX/...` (v0.1.x) or `feat/SUP-XXXX/...` (v0.2.0)
-- **Paperclip labels** — `jarvos-release-candidate` + `release-v0.X.Y`,
-  linked to the parent release lane issue
-- **CHANGELOG.md** — add a bullet under `## v0.X.Y — Unreleased` (create the
-  section if it does not exist yet)
-- **PR title** — `fix(SUP-XXXX): …` or `feat(SUP-XXXX): …`
-- **Scope discipline** — reject scope creep that crosses release boundaries
+- **Commit type** — `fix:` for bug fixes, doc corrections, install-flow
+  fixes, smoke-test gaps; `feat:` for new capabilities, new MCP tools,
+  new runtime adapters, new skills, workflow improvements.
+- **Branch naming and PR titles** — mirror the commit type, e.g.
+  `fix/SUP-XXXX/...` / `fix(SUP-XXXX): …` or `feat/SUP-XXXX/...` /
+  `feat(SUP-XXXX): …`.
+- **CHANGELOG.md** — release-please maintains this file; do not hand-edit
+  version headers.
+- **Scope discipline** — reject scope creep that crosses release lane
+  boundaries, even though lanes are no longer numbered by hand.
 
 ### Ambiguity rule
 
-If the work could plausibly be either: ask the user, do not guess.
-Default lean: fixes broken shipped behavior → v0.1.x; adds anything
-user-facing-new → v0.2.0.
+If the right commit type or release lane is unclear: ask the user or
+consult the `jarvos-coding` release intake, do not guess.
 
 ## jarvOS Upstream Evaluation (Proactive)
 
@@ -109,7 +111,8 @@ configuration, one-off scripts, anything obviously user-specific.
 2. **Code, not content?** Per `PUBLIC_BASELINE.md`, code is public and content
    is private. Hardcoded paths, personal IDs, vault content, and secrets
    disqualify a candidate until refactored.
-3. **Version?** Apply the targeting rules above — fix vs new capability.
+3. **Commit type?** Apply the targeting rules above — `fix:` vs `feat:`,
+   and check placement with `jarvos-coding` release intake if unclear.
 4. **Risk?** Identity, privacy, external-send, and marketing surfaces require
    extra scrutiny under the tiered auto-merge rule.
 
@@ -118,10 +121,10 @@ configuration, one-off scripts, anything obviously user-specific.
 When a candidate is found, raise it inline using this format:
 
 > **Upstream candidate:** [one-line description]
-> **Target:** v0.X.Y — [reason]
+> **Commit type:** fix / feat — [reason]
 > **What it would take:** [refactor needs, e.g., extract hardcoded path, add
 > config var, write template]
-> **Recommend:** [ship now / queue for v0.X / pass]
+> **Recommend:** [ship now / queue for later / pass]
 
 Do not open PRs, branches, or Paperclip issues unilaterally — surface the
 candidate and let the user decide.
@@ -139,7 +142,8 @@ Every Claude Code session in this workspace starts with a hydrated Working
 Context Packet, injected by the jarvOS `SessionStart` hook (configured in
 `~/.claude/settings.json`). It includes current Paperclip work, today's
 journal, linked notes, the jarvOS ontology context packet, and a Hydration
-Report.
+Report. The same hook re-fires after compact and resume with a smaller packet
+so the session can re-orient without a full re-brief.
 
 ### MCP tools (registered as `jarvos`)
 
@@ -180,6 +184,27 @@ Successful note captures must write under the configured `Notes/` directory,
 link exactly once from `Journal/YYYY-MM-DD.md`, preserve source-backed
 provenance, and leave QMD/search freshness as `pending-refresh`. Do not create
 guessed daily journal files under `Notes/`.
+
+## jarvOS Tool Doctrine
+
+- `jarvos_recall` — for people, decisions, prior reasoning, and history.
+  Trigger: "why did we choose X", "what did we decide about Y", "who is Z".
+  Not for code or file contents; use grep/read for those. It searches a
+  curated knowledge base, not the repo.
+- `jarvos_session_thread_write` — write a checkpoint when a task switches,
+  when a decision is made, or before a long session compact. A hook can
+  record what changed mechanically; only the agent can record why. This
+  is the surface that carries judgment.
+- `jarvos_create_note` — when a session produces a durable conclusion
+  someone would want months later. Not for routine progress.
+- `jarvos_current_work` / `jarvos_projects_context` — consult at the start
+  of substantive work to orient on what is already in flight, before
+  proposing new work.
+- `jarvos_todo_*` — claim an item before starting work another agent might
+  also pick up. Claiming is what stops two harnesses doing the same job.
+
+If a tool returns unavailable or stale, say so plainly rather than silently
+working around it.
 
 ## Local Extensions
 

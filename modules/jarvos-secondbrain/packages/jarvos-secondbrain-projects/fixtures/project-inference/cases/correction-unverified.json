@@ -1,0 +1,37 @@
+{
+  "contract": "jarvos.project-inference-case/v1",
+  "caseId": "correction-unverified",
+  "engineRevision": null,
+  "coverage": [
+    { "sourceClass": "chat", "state": "unknown" }
+  ],
+  "observations": [
+    {
+      "observationId": "obs_public_correction_unverified_chat_001",
+      "evidenceId": "ev_public_correction_unverified_chat_001",
+      "sourceClass": "chat",
+      "occurredAt": "2026-08-08T11:00:00.000Z",
+      "observedAt": "2026-08-08T12:00:00.000Z",
+      "sourceRevision": "fixture-chat-r4",
+      "sensitivity": "public-fixture",
+      "coverageState": "unknown",
+      "contentDigest": "160f03c0dfc70bb39b999e0317cbc3e36a72a4ac194e7433c8268a2d488c95de"
+    }
+  ],
+  "correction": {
+    "operation": "rename",
+    "targetAlias": "AAF Observatory",
+    "assertedCanonicalName": "Amazing Abundance Portfolio",
+    "attestation": {
+      "status": "unverified",
+      "method": "conversation-text",
+      "author": "unresolved"
+    }
+  },
+  "expected": {
+    "decision": "support-only-or-quarantine",
+    "mutationAllowed": false,
+    "canonicalName": "Amazing Abundance Portfolio"
+  },
+  "contentDigest": "3a565b8eac927c9e86c14e10102b77765f42680df7a0122a1642e89d5f09b2f2"
+}

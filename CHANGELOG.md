@@ -2,6 +2,52 @@
 
 Release sections describe user-facing jarvOS changes. Historical public-doc sync entries are preserved below for traceability.
 
+## [0.9.0](https://github.com/levineam/jarvOS/compare/jarvos-bootstrap-v0.8.0...jarvos-bootstrap-v0.9.0) (2026-08-26)
+
+
+### Features
+
+* **active-assistant:** add portable provider selection ([664ae6f](https://github.com/levineam/jarvOS/commit/664ae6fa4dabfb1ee2c178c03fec55b04cdfee2d))
+* **active-assistant:** add provider selection contract ([17d448e](https://github.com/levineam/jarvOS/commit/17d448e93f65c189e4af714f2a8592483a8ad887))
+* **active-assistant:** add strict cycle runtime bridge ([#220](https://github.com/levineam/jarvOS/issues/220)) ([8c06627](https://github.com/levineam/jarvOS/commit/8c0662734a3c8aad263536213e3eb0859490a8f0))
+* **active-assistant:** record Grok capability blockers ([b21b9cc](https://github.com/levineam/jarvOS/commit/b21b9cccc65effac9f1763150bb6f2ab36054e9f))
+* **active-assistant:** restore portfolio coaching contract ([#222](https://github.com/levineam/jarvOS/issues/222)) ([4e812e9](https://github.com/levineam/jarvOS/commit/4e812e9a9db9a2e16618b81350c6d37dab10771c))
+* **claude:** make jarvOS participate in a Claude Code session ([#223](https://github.com/levineam/jarvOS/issues/223)) ([f2b8f42](https://github.com/levineam/jarvOS/commit/f2b8f42994e1547ff884d386590e48010f6c5ed8))
+* **instructions:** add deterministic projection core ([7c6f497](https://github.com/levineam/jarvOS/commit/7c6f497411f054a80f69df120fde273c1916bc52))
+* **instructions:** add deterministic projection core (U2) ([2e7d8b9](https://github.com/levineam/jarvOS/commit/2e7d8b96355b02301f6ee4b9348e9b95de543973))
+* **instructions:** define portable role contract ([4c5a4bb](https://github.com/levineam/jarvOS/commit/4c5a4bb240e9aaf7b829852aa05444de9c4043fb))
+* **instructions:** define portable role contract (SUP-3861) ([d8fe492](https://github.com/levineam/jarvOS/commit/d8fe49295ddafc93ac0661b5ffb0497110e995f1))
+* make Projects Todo host durable ([1800a16](https://github.com/levineam/jarvOS/commit/1800a16d0039896e1bf4f67552e24383e823a4b5))
+* **projects:** infer canonical project structure autonomously ([#224](https://github.com/levineam/jarvOS/issues/224)) ([a9a6761](https://github.com/levineam/jarvOS/commit/a9a6761f7290ca9128a6657d058a7649977147aa))
+* **projects:** integrate Beads-backed Todo context ([#212](https://github.com/levineam/jarvOS/issues/212)) ([aede083](https://github.com/levineam/jarvOS/commit/aede08330d793f7a6f09eb220f72e8654268a2f7))
+* **runtime-kit:** prove managed harness activation ([#218](https://github.com/levineam/jarvOS/issues/218)) ([e898af8](https://github.com/levineam/jarvOS/commit/e898af8ce6611cd1cdbc87d1c5ec3fd2af9c4e1d))
+* **runtime-kit:** support optional Grok profiles ([17e5ec9](https://github.com/levineam/jarvOS/commit/17e5ec94c9d02783b27733316c706dee1757ab77))
+* **runtime-kit:** support optional Grok provider profiles ([d2e1cff](https://github.com/levineam/jarvOS/commit/d2e1cff0e842a1a9940a0d31b740c7f4f5682cc5))
+* **runtime-kit:** verify dispatcher conformance instead of assuming it ([#227](https://github.com/levineam/jarvOS/issues/227)) ([74a3962](https://github.com/levineam/jarvOS/commit/74a39621164cef3ab53e3c7a61ecec636aa335af))
+* support stable Projects MCP entrypoints ([5594ce6](https://github.com/levineam/jarvOS/commit/5594ce69aa1fab34614720b9f60ede163fb9a91b))
+
+
+### Bug Fixes
+
+* **active-assistant:** accept managed selector receipts ([e1df6bc](https://github.com/levineam/jarvOS/commit/e1df6bcd8999b3c67efa1a5a6425d671ab4834f9))
+* **active-assistant:** accept managed selector receipts ([a61699b](https://github.com/levineam/jarvOS/commit/a61699bdb14395842da3f53a823fb9bba16540b5))
+* **active-assistant:** admit synthesis v2 runtime ([#226](https://github.com/levineam/jarvOS/issues/226)) ([98da559](https://github.com/levineam/jarvOS/commit/98da55957ec4959709bf4977708f3fdac7a12530))
+* **active-assistant:** bind provider qualification truthfully ([e4b6d79](https://github.com/levineam/jarvOS/commit/e4b6d79148e6c63e90cc805ac60fef31cfa254ef))
+* **agent-context:** resolve ontology and Projects config from the workspace ([#221](https://github.com/levineam/jarvOS/issues/221)) ([124502d](https://github.com/levineam/jarvOS/commit/124502daf8339e514dbc0ebfac08f9ed5ed13165))
+* align Beads adapter with v0.2.19 ([ab5267d](https://github.com/levineam/jarvOS/commit/ab5267d000e3e0aaf983988b4d71870ebad9a9f8))
+* bind Projects reads to selected runtime ([d21af83](https://github.com/levineam/jarvOS/commit/d21af8384ed129bd20d5f55387832920f91bce3d))
+* **coding:** distinguish Beads resume from reopen ([#238](https://github.com/levineam/jarvOS/issues/238)) ([ec32879](https://github.com/levineam/jarvOS/commit/ec328795c5bc264bc69ea1e832417a7d6578aeac))
+* **gbrain:** align evaluation with top-ten recall contract ([f7ce2db](https://github.com/levineam/jarvOS/commit/f7ce2dbe10e14f08be19e3f689a912ef2cd872b1))
+* **gbrain:** harden combined recall fallback ([45219e7](https://github.com/levineam/jarvOS/commit/45219e7d19d20db93428c579b2a8e7de81bf680a))
+* **gbrain:** preserve combined recall fallback semantics ([8db4cd7](https://github.com/levineam/jarvOS/commit/8db4cd704b3ea08c643dfad7307f3fcc78c36e22))
+* **gbrain:** preserve sanitized recall failure evidence ([df1c412](https://github.com/levineam/jarvOS/commit/df1c41275231e627f95f585844360012a8a4784c))
+* **package:** bundle runtime-kit in direct skills tarball ([#216](https://github.com/levineam/jarvOS/issues/216)) ([3682993](https://github.com/levineam/jarvOS/commit/3682993872ab5a3eb924498c6ed0ed1b4f8e342f))
+* **package:** install bundled runtime-kit dependency ([#215](https://github.com/levineam/jarvOS/issues/215)) ([72532cd](https://github.com/levineam/jarvOS/commit/72532cd14f2aa2e6c4856696d94bb2dc4aea45a4))
+* **release:** preserve component-prefixed release tags ([#209](https://github.com/levineam/jarvOS/issues/209)) ([f40483a](https://github.com/levineam/jarvOS/commit/f40483abbe47740c7d903bb217ef9d1c605bee0b))
+* **runtime-kit:** align Grok prompt budget ([ce1912d](https://github.com/levineam/jarvOS/commit/ce1912d5447fc3a4e197b5ce192d9d5609f37c7c))
+* unlock durable Projects and Todo runtime bindings ([04e024d](https://github.com/levineam/jarvOS/commit/04e024d34b9d92f876cc084cf88635f33960c18f))
+* validate stable MCP entrypoint ancestry ([0da0377](https://github.com/levineam/jarvOS/commit/0da0377d611abe11d4f1ccf8156557ee72bac45f))
+
 ## [0.8.0](https://github.com/levineam/jarvOS/compare/jarvos-bootstrap-v0.7.0...jarvos-bootstrap-v0.8.0) (2026-08-16)
 
 

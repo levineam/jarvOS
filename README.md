@@ -163,7 +163,7 @@ jarvOS/
 │   ├── jarvos-agent-context/ # Runtime-facing recall/action MCP adapter
 │   └── jarvos-skills/        # Default operating-system skill bundle
 ├── templates/         # Blank USER, MEMORY, ONTOLOGY, TOOLS, BOOTSTRAP, HEARTBEAT
-├── runtimes/          # Runtime-specific adapters for OpenClaw, Hermes, Codex
+├── runtimes/          # Runtime-specific adapters for OpenClaw, Hermes, Codex, Claude, Grok Bot
 ├── starter-kit/       # Governance and project-management scaffolding
 ├── docs/              # Architecture, release process, operations
 └── scripts/           # Smoke tests and release checks
@@ -186,7 +186,7 @@ jarvOS is a set of layers, not a monolith:
 | Runtime context | `@jarvos/agent-context` | Current work, recall bundles, startup briefs, note creation |
 | Behavior | `core/` | Identity, tone, rules, governance |
 | Execution | Beads; optional Paperclip projection | Claims, dependencies, status, retries, verification |
-| Runtime | OpenClaw, Hermes, Codex, Claude, etc. | Tools, messaging, sessions, model calls |
+| Runtime | OpenClaw, Hermes, Codex, Claude, Grok Bot, etc. | Tools, messaging, sessions, model calls |
 
 Each layer has one job. Notes do not become project boards. Project tasks do not
 become memory. Private beliefs do not leak into public templates. That
@@ -235,6 +235,12 @@ jarvOS deliberately separates portable behavior from runtime-specific glue.
   avoids duplicating Hermes-native systems.
 - **Codex and Claude** can use jarvOS context through local adapters and
   hydration flows.
+- **Grok Bot** is an optional remote runtime. The vault stays on the vault
+  host; Grok Bot connects with a URL and token to an authenticated Streamable
+  HTTP MCP gateway. Stdio MCP on the Grok Bot disk hydrates the wrong machine.
+  Native Grok memory, routines, and CloudAgent stay host-owned. The connector
+  is operator-supervised and sits outside conformance; loopback is the vault
+  host, so Grok Bot needs a tunnel (see `runtimes/grok-bot/README.md`).
 
 jarvOS is not the runtime. It is the user-owned context and governance layer that
 runtimes hydrate from and write back to. The same core files and knowledge base
@@ -243,6 +249,9 @@ tooling, not a single vendor's memory system.
 
 For the product-category boundary, see
 [`docs/architecture/product-category-and-boundaries.md`](./docs/architecture/product-category-and-boundaries.md).
+For how adapters install in a direct clone versus a managed, promotion-backed
+runtime — and the dispatcher contract the managed shape depends on — see
+[`docs/architecture/managed-runtime-topologies.md`](./docs/architecture/managed-runtime-topologies.md).
 For the secondbrain external integration inventory, see
 [`docs/architecture/secondbrain-external-integrations.md`](./docs/architecture/secondbrain-external-integrations.md).
 
@@ -253,6 +262,7 @@ Clone the repo and run the smoke test:
 ```bash
 git clone https://github.com/levineam/jarvOS.git
 cd jarvOS
+npm ci
 npm test
 ```
 
@@ -268,20 +278,90 @@ The public command router is `jarvos`. It keeps the old bootstrap aliases
 working while making new profile-aware commands discoverable:
 
 ```bash
-jarvos init --profile minimal --yes
-jarvos doctor --profile minimal --workspace /path/to/jarvos-workspace
+jarvos init --profile minimal \
+  --workspace /path/to/new-workspace \
+  --vault /path/to/new-vault \
+  --yes
+jarvos init --profile minimal \
+  --workspace /path/to/new-harness-workspace \
+  --vault "$HOME/Vaults/Vault v3" \
+  --use-existing-vault --yes
+jarvos sync --workspace /path/to/already-installed-workspace \
+  --vault "$HOME/Vaults/Vault v3" \
+  --name "Your Name" \
+  --timezone Area/City \
+  --dry-run
+jarvos doctor --profile minimal --workspace /path/to/already-installed-workspace
 ```
 
-`jarvos doctor` uses the checked-in profile manifest and reports portable health
+Use `jarvos init` on a fresh host or for a new harness workspace. To reuse an
+existing vault, add `--use-existing-vault`; init creates the starter workspace
+files and portable config, validates `Notes/`, `Journal/`, and `Tags/`, and
+leaves the vault's existing content untouched.
+
+Use `jarvos sync` only for an already-installed harness workspace. It is a
+portable, config-only handoff: it creates or verifies `jarvos.config.json` and
+does not install a harness, create starter workspace files, or initialize vault
+folders. A sync into an absent or otherwise new workspace can therefore finish
+with a config while `jarvos doctor` still reports missing starter files; use
+`jarvos init --use-existing-vault` for that fresh-host/new-harness case.
+
+In ordinary, uncontended use the sync command writes no config contents inside
+the vault; it requires an explicit workspace, rejects symlinked config targets,
+and refuses to replace a different existing config. Inspect the plan with
+`--dry-run`; for a new config target, rerun without that flag to apply it. A
+legacy-shaped target instead reports `manual-reconcile` and must be reconciled
+separately. Then use `jarvos doctor` to verify the workspace and runtime setup;
+neither command should be treated as proof that an uninstalled harness is ready.
+
+For a workspace that already has a compatible `jarvos.config.json`, `jarvos
+sync --workspace /path/to/jarvos-workspace --dry-run` reuses its vault, name,
+and timezone; those flags are only required for a new config. Timezones must be
+valid IANA names such as `UTC` or `America/New_York`. `jarvos init` is for a
+new standalone installation and fails closed if either target contains unrelated
+files; a complete prior bootstrap installation is recognized for a no-overwrite
+rerun. Use `--use-existing-vault` only to attach a verified existing vault to a
+new workspace. New writes through a symlinked target are refused; a symlinked
+path is accepted only for a recognized read-only compatible rerun.
+
+`jarvos sync` runs on macOS and Linux. It holds a POSIX directory descriptor on
+the config directory and rechecks that directory's identity before and after
+writing. It creates the final target directly with an exclusive `O_EXCL`
+descriptor, verifies that the target pathname still names that descriptor,
+fsyncs when available, and reads the exact bytes back through the descriptor
+before reporting success. A directory or target substituted during the run
+fails closed rather than overwriting an existing file. On platforms without
+such a descriptor it fails closed instead of falling back to a less safe write.
+
+The vault guarantee is precise for an ordinary, uncontended operation: sync
+selects the config directory outside the vault and writes no config contents
+there. The `vaultWrites` and `vaultContentsWritten` fields in `--json` output
+record that no vault config write was observed by the completed operation.
+Sync never enumerates or removes vault paths. A failed create may leave an
+empty `0600` config target that requires manual removal; the held descriptor is
+truncated best-effort before close, but sync never deletes its pathname.
+`--dry-run` never writes. If simultaneous local filesystem changes are observed
+by the identity checks, sync fails closed. The OS does not provide a transaction
+against every same-account change in the narrow intervals between checks.
+
+Sync never migrates a legacy-shaped config in place. It reports
+`manual-reconcile` during a dry run and asks you to reconcile the existing file
+manually or pass `--config` to a new path. A portable existing config remains
+`already-synced`; a different config remains a conflict.
+
+`jarvos doctor` is the profile-aware System Doctor. It reports portable health
 checks for the starter workspace, `jarvos.config.json`, vault folders, Node.js,
-and the public agent-context package. It also verifies your journal stays safe:
+and the public agent-context package, then lists only optional components
+selected by a profile-bound health receipt. A clean install does not fail
+because an unselected local provider is absent. It also verifies your journal stays safe:
 `vault-path-stale` catches a configured vault root that has moved or gone away,
 and `journal-conflict` catches a second journaling tool (Obsidian's `journals`
 plugin or core Daily notes) writing into the same `Journal/` folder jarvOS owns.
 Run it after install and whenever you change vault or Obsidian settings. See the
 [Journal Install Contract](./docs/journal-install-contract.md) for the
-single-writer rule these checks enforce. Local-only Paperclip, GBrain, and full
-profile checks are intentionally out of the minimal public profile.
+single-writer rule these checks enforce. Local-only Paperclip, GBrain, SearXNG,
+OpenClaw, and Telegram checks are intentionally out of the minimal public
+profile unless an owner-side producer explicitly selects them.
 
 ### OpenClaw
 
@@ -320,6 +400,22 @@ setup path and the systems jarvOS intentionally does not duplicate.
 
 This registers the local jarvOS MCP server so Codex can call jarvOS recall,
 current-work, and note-capture tools.
+
+### Grok Bot
+
+Grok Bot has a separate computer from the vault. Run setup on the **vault
+host**, start the Streamable HTTP gateway there, and give Grok Bot only a
+reachable URL (SSH tunnel or `JARVOS_MCP_HTTP_ALLOW_NON_LOOPBACK=1`) and
+token. Do not register `jarvos-mcp.js` as stdio on Grok Bot.
+
+```bash
+./runtimes/grok-bot/setup.sh
+```
+
+Hydration is manual (`boot_jarvos` or `jarvos_hydrate`). If the vault-host
+URL is unreachable, continue without jarvOS context.
+
+See [`runtimes/grok-bot/README.md`](./runtimes/grok-bot/README.md).
 
 ### Install Modules
 

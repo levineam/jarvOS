@@ -1,0 +1,6 @@
+{
+  "schemaVersion": "jarvos.capability-ledger.v1",
+  "records": [
+    { "capabilityId": "machine-state", "title": "Machine-specific activation", "specification": "canonical", "implementation": "complete", "repository": "merged", "verification": "clean-install-proven", "activation": "host-alpha", "authority": "active", "evidence": [{ "type": "test", "ref": "tests/activation.test.js" }], "assertedOn": "2026-08-31" }
+  ]
+}

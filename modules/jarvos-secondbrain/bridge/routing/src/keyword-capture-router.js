@@ -29,7 +29,10 @@ const {
 const {
   IDEA,
   NOTE,
+  JOURNAL,
   KEYWORD_RE,
+  HARD_COMMAND_RE,
+  HARD_COMMAND_RESPONSES,
   IDEA_ANTI_TRIGGER_PATTERNS,
   IDEA_CAPTURE_PATTERNS,
   NOTE_CAPTURE_PATTERNS,
@@ -38,6 +41,7 @@ const {
   hasCaptureIntent,
   stripLeadingKeyword,
   primaryText,
+  parseHardCaptureCommand,
 } = require('../../../packages/jarvos-ambient/src/intent/keyword-capture-router');
 
 const {
@@ -48,9 +52,12 @@ const {
   isSubstantiveIdea,
 } = require('../../../packages/jarvos-ambient/src/routing');
 const { createArtifactReceipt } = require('../../../src/artifact-receipt');
+const { prepareIdentifiedCapture, projectNoteTitle } = require('../../../packages/jarvos-ambient/src/intent/capture-identity');
 
-function applyRoutingPlan(capture = {}, options = {}) {
-  const plan = buildRoutingPlan(capture);
+function applyPlan(capture, plan, options = {}) {
+  const prepared = prepareIdentifiedCapture(capture, plan);
+  ({ capture, plan } = prepared);
+  const { intentId, requestHash } = prepared;
   const date = plan.date;
   const result = {
     plan,
@@ -73,18 +80,30 @@ function applyRoutingPlan(capture = {}, options = {}) {
         ...(capture.frontmatter || {}),
         ...(plan.noteFrontmatter || {}),
       },
+      ...(intentId ? { intentId: `${intentId}:note`, requestHash } : {}),
     });
+  }
+
+  if (intentId && !result.note?.written) {
+    result.artifactReceipt = createArtifactReceipt({ artifacts: result.note?.artifactReceipt?.artifacts || [] });
+    return result;
+  }
+
+  if (intentId && result.note?.title) {
+    plan = projectNoteTitle(plan, result.note.title);
+    result.plan = plan;
   }
 
   if (plan.journalSection && plan.journalLine) {
     const actualNoteTitle = result.note?.title;
     const journalLine = actualNoteTitle && plan.noteTitle
-      ? plan.journalLine.replace(`[[${plan.noteTitle}]]`, `[[${actualNoteTitle}]]`)
+      ? plan.journalLine.replace(`[[${plan.noteTitle}]]`, () => `[[${actualNoteTitle}]]`)
       : plan.journalLine;
     result.journalEntry = adapter.appendLineToJournalSection({
       heading: plan.journalSection,
       line: journalLine,
       date,
+      ...(intentId ? { intentId: `${intentId}:journal`, requestHash } : {}),
     });
     result.noteLink = result.journalEntry;
   } else {
@@ -97,6 +116,40 @@ function applyRoutingPlan(capture = {}, options = {}) {
   ] });
 
   return result;
+}
+
+function applyRoutingPlan(capture = {}, options = {}) {
+  return applyPlan(capture, buildRoutingPlan(capture), options);
+}
+
+function applyStrictCommandPlan(capture = {}, options = {}) {
+  const command = parseHardCaptureCommand(capture);
+  return applyParsedStrictCommandPlan(capture, command, options);
+}
+
+function applyParsedStrictCommandPlan(capture = {}, command = {}, options = {}) {
+  const emptyResult = {
+    ...command,
+    plan: null,
+    journalEntry: null,
+    note: null,
+    noteLink: null,
+    artifactReceipt: createArtifactReceipt(),
+  };
+
+  if (command.disposition !== 'capture') return emptyResult;
+
+  const routedCapture = {
+    ...capture,
+    text: command.content,
+    content: command.content,
+    body: undefined,
+    trigger: command.route,
+  };
+  return {
+    ...command,
+    ...applyPlan(routedCapture, buildRoutingPlan(routedCapture), options),
+  };
 }
 
 function main() {
@@ -124,12 +177,17 @@ function main() {
 module.exports = {
   IDEA,
   NOTE,
+  JOURNAL,
   KEYWORD_RE,
+  HARD_COMMAND_RE,
+  HARD_COMMAND_RESPONSES,
   IDEA_ANTI_TRIGGER_PATTERNS,
   IDEA_CAPTURE_PATTERNS,
   NOTE_CAPTURE_PATTERNS,
   GENERAL_CAPTURE_PATTERNS,
   applyRoutingPlan,
+  applyParsedStrictCommandPlan,
+  applyStrictCommandPlan,
   buildNoteContent,
   buildRoutingPlan,
   detectTrigger,
@@ -138,6 +196,7 @@ module.exports = {
   inferTitle,
   isSubstantiveIdea,
   primaryText,
+  parseHardCaptureCommand,
   stripLeadingKeyword,
 };
 

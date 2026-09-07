@@ -1,0 +1,13 @@
+{
+  "schemaVersion": "jarvos.candidate.v1",
+  "candidateId": "jarvos:candidate:example:c-0103",
+  "candidateType": "journal-suggestion",
+  "authority": "non-authoritative",
+  "sources": [{ "sourceEventId": "jarvos:source-event:example:se-0103", "evidenceDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" }],
+  "privacyTier": "private",
+  "sourceTrust": "user-authored",
+  "construction": { "extractorId": "example-extractor", "extractorVersion": "1.0.0", "eligibilityPolicyId": "jarvos:policy:example:eligibility-v1" },
+  "dedupeKey": "invalid:missing-expiry",
+  "createdAt": "2026-08-31T12:00:00Z",
+  "proposal": { "title": "Missing expiry", "summary": "Candidate lifetimes are bounded." }
+}

@@ -12,10 +12,12 @@ const {
 const WORK_RUN_STORE_SCHEMA_VERSION = 'jarvos-coding-work-run/v1';
 const WORK_RUN_EVENT_VERSION = 'jarvos-coding-work-run-event/v1';
 const WORK_RUN_PUBLIC_VERSION = 'jarvos-coding-work-run-public/v1';
+const FOLLOW_THROUGH_BINDING_VERSION = 'jarvos-coding-follow-through-binding/v1';
 const WORK_RUN_STATES = new Set(['active', 'blocked', 'completed', 'failed']);
 const WORK_RUN_EVENT_TYPES = new Set(['route', 'provider', 'artifact', 'recovery', 'terminal']);
 const SHA256 = /^[a-f0-9]{64}$/i;
 const OPAQUE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
+const PROJECT_OUTCOME_ID = /^out_[0-9]{6,}$/;
 const ARTIFACT_REFERENCE = /^artifact:[A-Za-z0-9._-]{6,160}$/;
 const SUBJECT_KEY = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$/;
 const ABSOLUTE_PATH = /^(?:\/(?!\/)|[A-Za-z]:[\\/]|\\\\)/;
@@ -61,6 +63,7 @@ function emptyState() {
     schemaVersion: WORK_RUN_STORE_SCHEMA_VERSION,
     revision: 0,
     workRuns: {},
+    followThrough: {},
   };
 }
 
@@ -70,6 +73,7 @@ function validateState(state) {
   if (state.schemaVersion !== WORK_RUN_STORE_SCHEMA_VERSION) errors.push(`state.schemaVersion must be ${WORK_RUN_STORE_SCHEMA_VERSION}`);
   if (!Number.isInteger(state.revision) || state.revision < 0) errors.push('state.revision must be a non-negative integer');
   if (!isObject(state.workRuns)) errors.push('state.workRuns must be an object');
+  if (state.followThrough !== undefined && !isObject(state.followThrough)) errors.push('state.followThrough must be an object');
   for (const [id, run] of Object.entries(state.workRuns || {})) {
     if (id !== run.workRunId) errors.push(`workRuns.${id}.workRunId must match its key`);
     if (!isObject(run)) { errors.push(`workRuns.${id} must be an object`); continue; }
@@ -81,6 +85,23 @@ function validateState(state) {
     if (!Array.isArray(run.events)) errors.push(`workRuns.${id}.events must be an array`);
     if (!Array.isArray(run.artifacts)) errors.push(`workRuns.${id}.artifacts must be an array`);
     if (!isObject(run.recovery)) errors.push(`workRuns.${id}.recovery must be an object`);
+  }
+  for (const [outcomeId, binding] of Object.entries(state.followThrough || {})) {
+    if (!isObject(binding)) { errors.push(`followThrough.${outcomeId} must be an object`); continue; }
+    if (binding.outcomeId !== outcomeId || !PROJECT_OUTCOME_ID.test(outcomeId) || binding.version !== FOLLOW_THROUGH_BINDING_VERSION) errors.push(`followThrough.${outcomeId} is invalid`);
+    for (const field of ['outcomeId', 'executorOwnerId', 'harnessWorkspaceId', 'workRunId', 'todoId', 'triggerId']) {
+      if ((field === 'outcomeId' ? !PROJECT_OUTCOME_ID.test(binding[field] || '') : !OPAQUE_ID.test(binding[field] || ''))) errors.push(`followThrough.${outcomeId}.${field} must be opaque`);
+    }
+    if (!Number.isInteger(binding.fence) || binding.fence < 1) errors.push(`followThrough.${outcomeId}.fence is invalid`);
+    if (binding.leaseHistory !== undefined) {
+      if (!Array.isArray(binding.leaseHistory) || !binding.leaseHistory.length) errors.push(`followThrough.${outcomeId}.leaseHistory is invalid`);
+      for (const lease of binding.leaseHistory || []) {
+        if (!isObject(lease) || !Number.isInteger(lease.fence) || lease.fence < 1 || typeof lease.boundAt !== 'string' || Number.isNaN(Date.parse(lease.boundAt))) {
+          errors.push(`followThrough.${outcomeId}.leaseHistory contains an invalid entry`);
+        }
+      }
+    }
+    if (typeof binding.boundAt !== 'string' || Number.isNaN(Date.parse(binding.boundAt))) errors.push(`followThrough.${outcomeId}.boundAt is invalid`);
   }
   return { ok: errors.length === 0, errors };
 }
@@ -178,6 +199,21 @@ function publicRun(run) {
   };
 }
 
+function publicFollowThrough(binding) {
+  return {
+    version: FOLLOW_THROUGH_BINDING_VERSION,
+    outcomeId: binding.outcomeId,
+    executorOwnerId: binding.executorOwnerId,
+    harnessWorkspaceId: binding.harnessWorkspaceId,
+    workRunId: binding.workRunId,
+    fence: binding.fence,
+    todoId: binding.todoId,
+    triggerId: binding.triggerId,
+    boundAt: binding.boundAt,
+    leaseHistory: clone(binding.leaseHistory || [{ fence: binding.fence, boundAt: binding.boundAt }]),
+  };
+}
+
 function assertRunOwner(run, ownerId, fence) {
   if (typeof ownerId !== 'string' || !OPAQUE_ID.test(ownerId)) return { ok: false, reason: 'owner_required' };
   if (run.ownerId !== ownerId || run.fence !== fence) return { ok: false, reason: 'stale_fence', expectedFence: run.fence, providedFence: fence };
@@ -195,6 +231,8 @@ function createWorkRunStore(options = {}) {
 
   function loadState() {
     const state = options.backend.load();
+    // v1 stores created before the additive follow-through index remain readable.
+    if (state && state.followThrough === undefined) state.followThrough = {};
     const validation = validateState(state);
     if (!validation.ok) throw new Error(`invalid work-run state: ${validation.errors.join('; ')}`);
     return state;
@@ -269,6 +307,64 @@ function createWorkRunStore(options = {}) {
     const run = state.workRuns[workRunId];
     if (!run) return null;
     return options.public === false ? clone(run) : publicRun(run);
+  }
+
+  function normalizeFollowThroughBinding(input = {}) {
+    if (!isObject(input)) throw new Error('follow-through binding must be an object');
+    const binding = {
+      version: FOLLOW_THROUGH_BINDING_VERSION,
+      outcomeId: input.outcomeId,
+      executorOwnerId: input.executorOwnerId,
+      harnessWorkspaceId: input.harnessWorkspaceId,
+      workRunId: input.workRunId,
+      fence: input.fence,
+      todoId: input.todoId,
+      triggerId: input.triggerId,
+    };
+    for (const field of Object.keys(binding).filter((field) => field !== 'version' && field !== 'fence')) {
+      if ((field === 'outcomeId' ? !PROJECT_OUTCOME_ID.test(binding[field] || '') : !OPAQUE_ID.test(binding[field] || ''))) throw new Error(`follow-through ${field} must be an opaque identifier`);
+    }
+    if (!Number.isInteger(binding.fence) || binding.fence < 1) throw new Error('follow-through fence must be a positive integer');
+    return binding;
+  }
+
+  function getFollowThrough(outcomeId) {
+    if (!PROJECT_OUTCOME_ID.test(outcomeId || '')) throw new Error('outcomeId must be a Projects outcome identifier');
+    const binding = loadState().followThrough[outcomeId];
+    return binding ? publicFollowThrough(binding) : null;
+  }
+
+  function bindFollowThrough(input = {}) {
+    const binding = normalizeFollowThroughBinding(input);
+    return mutate((state) => {
+      const run = state.workRuns[binding.workRunId];
+      if (!run) return noCommit({ ok: false, reason: 'not_found' });
+      const owner = assertRunOwner(run, input.ownerId, input.fence);
+      if (!owner.ok) return noCommit(owner);
+      if (run.ownerId !== binding.executorOwnerId) return noCommit({ ok: false, reason: 'executor_owner_conflict' });
+      const existing = state.followThrough[binding.outcomeId];
+      if (existing) {
+        const sameReferences = ['executorOwnerId', 'harnessWorkspaceId', 'workRunId', 'todoId', 'triggerId']
+          .every((field) => existing[field] === binding[field]);
+        if (sameReferences && existing.fence === binding.fence) return noCommit({ ok: true, deduped: true, binding: publicFollowThrough(existing) });
+        if (sameReferences
+          && existing.executorOwnerId === run.ownerId
+          && binding.fence > existing.fence) {
+          const boundAt = nowIso(clock);
+          const leaseHistory = [...(existing.leaseHistory || [{ fence: existing.fence, boundAt: existing.boundAt }]), { fence: binding.fence, boundAt }];
+          const renewed = { ...existing, fence: binding.fence, boundAt, leaseHistory };
+          state.followThrough[binding.outcomeId] = renewed;
+          return { ok: true, renewed: true, binding: publicFollowThrough(renewed) };
+        }
+        return noCommit({ ok: false, reason: 'outcome_binding_conflict', binding: publicFollowThrough(existing) });
+      }
+      const boundElsewhere = Object.values(state.followThrough).find((entry) => entry.workRunId === binding.workRunId);
+      if (boundElsewhere) return noCommit({ ok: false, reason: 'work_run_binding_conflict', binding: publicFollowThrough(boundElsewhere) });
+      const boundAt = nowIso(clock);
+      const stored = { ...binding, boundAt, leaseHistory: [{ fence: binding.fence, boundAt }] };
+      state.followThrough[binding.outcomeId] = stored;
+      return { ok: true, deduped: false, binding: publicFollowThrough(stored) };
+    });
   }
 
   function claimWorkRun(input = {}) {
@@ -405,7 +501,7 @@ function createWorkRunStore(options = {}) {
       const owner = assertRunOwner(run, input.ownerId, input.fence);
       if (!owner.ok) return noCommit(owner);
       if (!isObject(input.evidence) || typeof input.evidence.reference !== 'string' || !OPAQUE_ID.test(input.evidence.reference)) return noCommit({ ok: false, reason: 'invalid_terminal_evidence' });
-      const evidence = { reference: input.evidence.reference, digest: input.evidence.digest || null, status: input.evidence.status || null, recordedAt: nowIso(clock) };
+      const evidence = { reference: input.evidence.reference, digest: input.evidence.digest || null, status: input.evidence.status || null, fence: input.fence, recordedAt: nowIso(clock) };
       if (evidence.digest !== null && !isDigest(evidence.digest)) return noCommit({ ok: false, reason: 'invalid_terminal_evidence_digest' });
       run.terminalEvidence = evidence;
       run.state = input.state === 'failed' ? 'failed' : input.state === 'blocked' ? 'blocked' : 'completed';
@@ -435,6 +531,8 @@ function createWorkRunStore(options = {}) {
   return {
     resolveWorkRun,
     getWorkRun,
+    getFollowThrough,
+    bindFollowThrough,
     claimWorkRun,
     releaseWorkRun,
     appendEvent,
@@ -523,6 +621,7 @@ function createControlPlaneWorkRunEvidencePort(options = {}) {
 }
 
 module.exports = {
+  FOLLOW_THROUGH_BINDING_VERSION,
   WORK_RUN_EVENT_VERSION,
   WORK_RUN_PUBLIC_VERSION,
   WORK_RUN_STORE_SCHEMA_VERSION,
@@ -531,6 +630,7 @@ module.exports = {
   createFileWorkRunStore,
   createMemoryWorkRunStore,
   createWorkRunStore,
+  publicFollowThrough,
   publicRun,
   validateState,
 };

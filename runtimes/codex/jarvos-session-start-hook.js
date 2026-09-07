@@ -5,11 +5,13 @@ const fs = require('node:fs');
 const os = require('os');
 const path = require('path');
 const { hydrate } = require('../../modules/jarvos-agent-context/src/index.js');
+const { envelopeHasContent: projectsContextRefreshHasContent } = require('../../modules/jarvos-runtime-kit/src/projects-context-refresh.js');
 const {
   additionalContext,
   bridgeEnvironment,
   hookSessionId,
   MAX_HOOK_INPUT_CHARS,
+  projectsContextStart,
   readHookInput,
   sessionWaitContext,
   stewardshipAdapter,
@@ -63,24 +65,34 @@ function readSessionStartInput() {
   return readHookInput('SessionStart');
 }
 
-async function startupHydration() {
-  const result = await hydrate({ maxChars: hydrationMaxChars() });
+async function startupHydration(options = {}) {
+  const result = await hydrate({ maxChars: hydrationMaxChars(), ...options });
   return result.markdown;
 }
 
 async function main() {
   try {
     const env = bridgeEnvironment(readSessionStartInput());
-    const judgment = env
-      ? (stewardshipAdapter.startOrResume({ env }), stewardshipAdapter.sessionWaitBind({ env }), stewardshipContext({ env }))
-      : '';
+    let projectsContextMarkdown = '';
+    let judgment = '';
+    if (env) {
+      stewardshipAdapter.startOrResume({ env });
+      stewardshipAdapter.sessionWaitBind({ env });
+      judgment = stewardshipContext({ env });
+      // A single hard-timeout start call; invalid, timed out, nonzero, or
+      // unavailable all fail open to the ordinary hydrate() Projects fallback.
+      const refresh = projectsContextStart({ env });
+      if (projectsContextRefreshHasContent(refresh.envelope)) {
+        projectsContextMarkdown = refresh.envelope.markdown;
+      }
+    }
     let hydration = '';
     try {
-      hydration = await startupHydration();
+      hydration = await startupHydration(projectsContextMarkdown ? { projectsContext: false } : {});
     } catch (error) {
       logFailure(error);
     }
-    const context = [judgment, hydration].filter((value) => typeof value === 'string' && value.trim()).join('\n\n');
+    const context = [judgment, projectsContextMarkdown, hydration].filter((value) => typeof value === 'string' && value.trim()).join('\n\n');
     if (!context) {
       writeJson({});
       return;

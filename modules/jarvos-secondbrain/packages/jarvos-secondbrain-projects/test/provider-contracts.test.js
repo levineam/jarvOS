@@ -142,3 +142,86 @@ test('provider contract validators remain isolated from live Todo, Beads, Paperc
   const source = fs.readFileSync(path.join(__dirname, '..', 'src', 'provider-contracts.js'), 'utf8');
   assert.doesNotMatch(source, /require\(['"](?:\.\.?\/)*.*(?:todos|beads|paperclip|release)/i);
 });
+
+function inferenceEvidence(overrides = {}) {
+  return {
+    contract: 'jarvos.project-inference-evidence/v1',
+    observationId: 'obs_note_001',
+    evidenceId: 'ev_note_001',
+    sourceClass: 'note',
+    occurredAt: NOW,
+    observedAt: NOW,
+    sourceRevision: 'note-rev-1',
+    sensitivity: 'public-fixture',
+    coverageState: 'fresh',
+    contentDigest: 'a'.repeat(64),
+    ...overrides,
+  };
+}
+
+test('admitted inference evidence is exact, capability-bound, replay-safe, and secret-free', () => {
+  const authority = contracts.createInferenceHostAuthority({
+    producerId: 'notes-adapter',
+    secret: 'inference-admission-secret',
+    allowedSourceClasses: ['note'],
+  });
+  const envelope = authority.admitEvidenceUnit(inferenceEvidence());
+  assert.deepEqual(Object.keys(envelope).sort(), ['admission', 'contract', 'evidence']);
+  assert.equal(envelope.contract, contracts.ADMITTED_INFERENCE_EVIDENCE_CONTRACT);
+  assert.equal(contracts.validateAdmittedInferenceEvidence(envelope).ok, true);
+  assert.equal(authority.verifyAdmittedInferenceEvidence(envelope).ok, true);
+  assert.deepEqual(authority.verifyAdmittedInferenceEvidence(envelope).evidence, envelope.evidence);
+  assert.equal(Object.prototype.hasOwnProperty.call(authority, 'secret'), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(envelope, 'secret'), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(envelope.evidence, 'sourceContent'), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(envelope.evidence, 'path'), false);
+
+  const replay = authority.admitEvidenceUnit(inferenceEvidence());
+  assert.deepEqual(replay, envelope);
+  assert.throws(() => authority.admitEvidenceUnit(inferenceEvidence({ contentDigest: 'b'.repeat(64) })), /conflict|replay/i);
+});
+
+test('inference admission rejects wrong producer/source/secret and any content or shape tamper', () => {
+  const authority = contracts.createInferenceHostAuthority({
+    producerId: 'notes-adapter',
+    secret: 'inference-admission-secret',
+    allowedSourceClasses: ['note'],
+  });
+  const envelope = authority.admitEvidenceUnit(inferenceEvidence());
+  const wrongSecret = contracts.createInferenceHostAuthority({
+    producerId: 'notes-adapter',
+    secret: 'wrong-secret',
+    allowedSourceClasses: ['note'],
+  });
+  assert.equal(wrongSecret.verifyAdmittedInferenceEvidence(envelope).ok, false);
+  assert.equal(authority.verifyAdmittedInferenceEvidence({
+    ...envelope,
+    admission: { ...envelope.admission, producerId: 'other-adapter' },
+  }).ok, false);
+  assert.throws(() => authority.admitEvidenceUnit(inferenceEvidence({ sourceClass: 'chat' })), /source class|not admitted/i);
+  assert.equal(authority.verifyAdmittedInferenceEvidence({
+    ...envelope,
+    evidence: { ...envelope.evidence, contentDigest: 'b'.repeat(64) },
+  }).ok, false);
+  assert.throws(() => authority.admitEvidenceUnit({ ...inferenceEvidence(), raw: 'private note body' }), /unsupported|raw/i);
+  assert.throws(() => authority.admitEvidenceUnit(inferenceEvidence({ sourceRevision: '/Users/andrew/private-note.md' })), /opaque|path|sourceRevision/i);
+  assert.throws(() => contracts.validateAdmittedInferenceEvidence({ ...envelope, extra: true }), /unsupported|exact/i);
+});
+
+test('admitted inference evidence preserves every typed coverage mode without lifecycle meaning', () => {
+  const authority = contracts.createInferenceHostAuthority({
+    producerId: 'notes-adapter',
+    secret: 'inference-admission-secret',
+    allowedSourceClasses: ['note'],
+  });
+  for (const [index, coverageState] of ['fresh', 'stale', 'partial', 'unknown', 'unavailable', 'healthy-empty'].entries()) {
+    const envelope = authority.admitEvidenceUnit(inferenceEvidence({
+      observationId: `obs_note_${index}`,
+      evidenceId: `ev_note_${index}`,
+      coverageState,
+      contentDigest: ['unavailable', 'healthy-empty', 'unknown'].includes(coverageState) ? null : 'a'.repeat(64),
+    }));
+    assert.equal(envelope.evidence.coverageState, coverageState);
+    assert.equal(authority.verifyAdmittedInferenceEvidence(envelope).ok, true);
+  }
+});

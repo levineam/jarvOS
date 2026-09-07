@@ -23,6 +23,10 @@ const {
   verifyNoteCaptureContract,
   writeSessionThread,
 } = require('../src/index.js');
+const {
+  CONFIG_ENV: PROJECTS_CONTEXT_CONFIG_ENV,
+  createHostProjectsContextProvider,
+} = require('../src/projects-context-bootstrap.js');
 const { issueRouteCapability } = require('../../jarvos-runtime-kit/src/index.js');
 const {
   callTool,
@@ -33,6 +37,7 @@ const {
   readCredentialFile,
   CREDENTIAL_ENV,
   CREDENTIAL_FILE_ENV,
+  WORK_ACTION_HOST_UNAVAILABLE,
 } = require('../scripts/jarvos-mcp.js');
 
 function withIsolatedAgentContextPackage(fn) {
@@ -69,6 +74,11 @@ function withTempVault(fn) {
     JARVOS_SESSION_THREAD_ID: process.env.JARVOS_SESSION_THREAD_ID,
     JARVOS_ALLOW_UNSAFE_TEST_JOURNAL_WRITE: process.env.JARVOS_ALLOW_UNSAFE_TEST_JOURNAL_WRITE,
     XDG_STATE_HOME: process.env.XDG_STATE_HOME,
+    // Isolate the workspace default too: without this, config-derived
+    // fallbacks that key off getClawdDir() (e.g. the Projects context config
+    // path) would resolve against whatever real workspace happens to exist
+    // on the machine running the suite, instead of the temp fixture.
+    JARVOS_WORKSPACE_DIR: process.env.JARVOS_WORKSPACE_DIR,
   };
 
   process.env.JARVOS_VAULT_DIR = vault;
@@ -77,6 +87,7 @@ function withTempVault(fn) {
   process.env.JARVOS_TIMEZONE = 'UTC';
   process.env.JARVOS_ALLOW_UNSAFE_TEST_JOURNAL_WRITE = '1';
   process.env.XDG_STATE_HOME = path.join(tmp, 'state');
+  process.env.JARVOS_WORKSPACE_DIR = tmp;
   jarvosPaths.resetConfigCache();
 
   let result;
@@ -552,6 +563,7 @@ test('MCP session thread tools round-trip through the shared note and journal pa
 test('MCP tool list includes jarvOS tools', () => {
   const names = TOOLS.map((tool) => tool.name);
   assert.deepEqual(names, [
+    'jarvos_common_work',
     'jarvos_todo_create',
     'jarvos_todo_list',
     'jarvos_todo_show',
@@ -590,15 +602,21 @@ test('MCP tool list includes jarvOS tools', () => {
 });
 
 test('named Todo MCP actions fail closed when the host work-action binding is absent', async () => {
-  const previous = process.env.JARVOS_WORK_ACTION_SERVICE_MODULE;
+  const previousModule = process.env.JARVOS_WORK_ACTION_SERVICE_MODULE;
+  const previousConfig = process.env.JARVOS_PROJECTS_CONTEXT_CONFIG;
   delete process.env.JARVOS_WORK_ACTION_SERVICE_MODULE;
+  delete process.env.JARVOS_PROJECTS_CONTEXT_CONFIG;
   try {
     const result = await callTool('jarvos_todo_list', {});
     assert.equal(result.isError, true);
-    assert.match(result.content[0].text, /host binding is unavailable/);
+    assert.equal(result.content[0].text, WORK_ACTION_HOST_UNAVAILABLE);
+    assert.match(result.content[0].text, /JARVOS_WORK_ACTION_SERVICE_MODULE/);
+    assert.match(result.content[0].text, /JARVOS_PROJECTS_CONTEXT_CONFIG/);
   } finally {
-    if (previous === undefined) delete process.env.JARVOS_WORK_ACTION_SERVICE_MODULE;
-    else process.env.JARVOS_WORK_ACTION_SERVICE_MODULE = previous;
+    if (previousModule === undefined) delete process.env.JARVOS_WORK_ACTION_SERVICE_MODULE;
+    else process.env.JARVOS_WORK_ACTION_SERVICE_MODULE = previousModule;
+    if (previousConfig === undefined) delete process.env.JARVOS_PROJECTS_CONTEXT_CONFIG;
+    else process.env.JARVOS_PROJECTS_CONTEXT_CONFIG = previousConfig;
   }
 });
 
@@ -1054,6 +1072,8 @@ function runCodexSetup(envOverrides = {}) {
     // Public-only setup: clear private host bindings unless the caller sets them.
     JARVOS_CONTROL_PLANE_SERVICE_MODULE: '',
     JARVOS_CONTROL_PLANE_CREDENTIAL_FILE: '',
+    JARVOS_WORK_ACTION_SERVICE_MODULE: '',
+    JARVOS_PROJECTS_CONTEXT_CONFIG: '',
     JARVOS_STEWARDSHIP_BRIDGE_COMMAND: '',
     JARVOS_STEWARDSHIP_CODEX_SESSION_MAP_ROOT: '',
     JARVOS_STEWARDSHIP_STABLE_ROOT: '',
@@ -1062,6 +1082,8 @@ function runCodexSetup(envOverrides = {}) {
   // Empty string override should delete so setup sees "unset".
   if (!env.JARVOS_CONTROL_PLANE_SERVICE_MODULE) delete env.JARVOS_CONTROL_PLANE_SERVICE_MODULE;
   if (!env.JARVOS_CONTROL_PLANE_CREDENTIAL_FILE) delete env.JARVOS_CONTROL_PLANE_CREDENTIAL_FILE;
+  if (!env.JARVOS_WORK_ACTION_SERVICE_MODULE) delete env.JARVOS_WORK_ACTION_SERVICE_MODULE;
+  if (!env.JARVOS_PROJECTS_CONTEXT_CONFIG) delete env.JARVOS_PROJECTS_CONTEXT_CONFIG;
   if (!env.JARVOS_STEWARDSHIP_BRIDGE_COMMAND) delete env.JARVOS_STEWARDSHIP_BRIDGE_COMMAND;
   if (!env.JARVOS_STEWARDSHIP_CODEX_SESSION_MAP_ROOT) delete env.JARVOS_STEWARDSHIP_CODEX_SESSION_MAP_ROOT;
   if (!env.JARVOS_STEWARDSHIP_STABLE_ROOT) delete env.JARVOS_STEWARDSHIP_STABLE_ROOT;
@@ -1094,10 +1116,49 @@ test('Codex setup succeeds publicly with no control-plane host pair', () => {
     assert.doesNotMatch(log, /JARVOS_CONTROL_PLANE_SERVICE_MODULE=/);
     assert.doesNotMatch(log, /JARVOS_CONTROL_PLANE_CREDENTIAL_FILE=/);
     assert.doesNotMatch(log, /JARVOS_CONTROL_PLANE_CREDENTIAL=/);
+    assert.doesNotMatch(log, /JARVOS_WORK_ACTION_SERVICE_MODULE=/);
+    assert.doesNotMatch(log, /JARVOS_PROJECTS_CONTEXT_CONFIG=/);
     // Real user config must not be touched; only the temp CODEX_CONFIG may change.
     assert.ok(fs.existsSync(run.configPath));
   } finally {
     run.cleanup();
+  }
+});
+
+test('Codex setup optionally binds work-action host env without requiring it', () => {
+  const hostTmp = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-setup-todo-host-'));
+  try {
+    const configPath = path.join(hostTmp, 'projects.json');
+    const servicePath = path.join(hostTmp, 'todo-service.js');
+    fs.writeFileSync(configPath, '{}\n', { encoding: 'utf8', mode: 0o600 });
+    fs.writeFileSync(servicePath, "'use strict';\nmodule.exports = {};\n", { encoding: 'utf8', mode: 0o600 });
+
+    const bound = runCodexSetup({
+      JARVOS_WORK_ACTION_SERVICE_MODULE: servicePath,
+      JARVOS_PROJECTS_CONTEXT_CONFIG: configPath,
+    });
+    try {
+      assert.equal(bound.result.status, 0, bound.result.stderr || bound.result.stdout);
+      const log = fs.existsSync(bound.codexLog) ? fs.readFileSync(bound.codexLog, 'utf8') : '';
+      assert.match(log, /JARVOS_WORK_ACTION_SERVICE_MODULE=/);
+      assert.match(log, /JARVOS_PROJECTS_CONTEXT_CONFIG=/);
+    } finally {
+      bound.cleanup();
+    }
+
+    const relative = runCodexSetup({
+      JARVOS_WORK_ACTION_SERVICE_MODULE: 'relative/todo-service.js',
+    });
+    try {
+      assert.notEqual(relative.result.status, 0);
+      assert.match(relative.result.stderr, /JARVOS_WORK_ACTION_SERVICE_MODULE must be an absolute path when set/);
+      assert.doesNotMatch(relative.result.stderr, /relative\/todo-service/);
+      assert.ok(!fs.existsSync(relative.codexLog) || !fs.readFileSync(relative.codexLog, 'utf8').includes('mcp add'));
+    } finally {
+      relative.cleanup();
+    }
+  } finally {
+    fs.rmSync(hostTmp, { recursive: true, force: true });
   }
 });
 
@@ -1708,5 +1769,176 @@ test('MCP jarvos_hydrate returns text content', async () => {
         else process.env[key] = value;
       }
     }
+  });
+});
+
+test('hydrate resolves ontology from the configured workspace when the bundle ships no ontology directory', async () => {
+  const oldEnv = {
+    JARVOS_WORKSPACE_DIR: process.env.JARVOS_WORKSPACE_DIR,
+    JARVOS_ONTOLOGY_DIR: process.env.JARVOS_ONTOLOGY_DIR,
+  };
+  // A managed-software runtime ships modules without their content directories,
+  // so neither the in-tree candidate nor an explicit override is available.
+  delete process.env.JARVOS_ONTOLOGY_DIR;
+
+  try {
+    await withTempVault(async ({ journal, tmp }) => {
+      fs.writeFileSync(path.join(journal, '2026-05-12.md'), '# 2026-05-12\n\nPlain entry.\n', 'utf8');
+
+      const workspace = path.join(tmp, 'workspace');
+      const ontologyDir = path.join(workspace, 'jarvos-ontology', 'ontology');
+      fs.mkdirSync(ontologyDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(ontologyDir, '1-higher-order.md'),
+        '# Higher\n\n## My Higher Order\n\nWorkspace ontology content.\n',
+        'utf8',
+      );
+      process.env.JARVOS_WORKSPACE_DIR = workspace;
+      jarvosPaths.resetConfigCache();
+
+      const result = await hydrate({
+        maxChars: 9000,
+        journal: { date: '2026-05-12', timeZone: 'UTC' },
+      });
+
+      assert.equal(result.ok, true);
+      assert.match(result.markdown, /Workspace ontology content/);
+      assert.doesNotMatch(result.markdown, /jarvos-ontology provider unavailable/);
+      assert.match(result.markdown, /Ontology provider: .*jarvos-ontology\/ontology/);
+    });
+  } finally {
+    for (const [key, value] of Object.entries(oldEnv)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    jarvosPaths.resetConfigCache();
+  }
+});
+
+// Minimal, self-contained Projects context config: enough for
+// createHostProjectsContextProvider() to pass every integrity check
+// (trusted workspace/repository/state roots, a requireable provider module)
+// without needing the provider's read() to actually succeed. `marker` is
+// carried through as the config's default query so a test can tell which
+// config file was actually selected.
+function buildProjectsConfigFixture(workspaceRoot, marker) {
+  const repositoryRoot = path.join(workspaceRoot, 'repository');
+  const stateRoot = path.join(workspaceRoot, 'state');
+  fs.mkdirSync(repositoryRoot, { recursive: true });
+  fs.mkdirSync(path.join(stateRoot, 'registry'), { recursive: true });
+  fs.mkdirSync(path.join(stateRoot, 'release-provider'), { recursive: true });
+  fs.writeFileSync(
+    path.join(repositoryRoot, 'provider.js'),
+    "module.exports = { read: async () => ({ status: 'unavailable' }) };\n",
+  );
+  return JSON.stringify({
+    workspaceRoot,
+    repositoryRoot,
+    providerModule: path.join(repositoryRoot, 'provider.js'),
+    stateRoot,
+    registryStateDir: path.join(stateRoot, 'registry'),
+    releaseProviderStateDir: path.join(stateRoot, 'release-provider'),
+    query: { marker },
+  });
+}
+
+test('createHostProjectsContextProvider falls back to the workspace-derived config path when the env var is unset', async () => {
+  const oldEnv = { JARVOS_WORKSPACE_DIR: process.env.JARVOS_WORKSPACE_DIR };
+  try {
+    await withTempVault(async ({ tmp }) => {
+      const workspace = path.join(tmp, 'workspace');
+      fs.mkdirSync(path.join(workspace, 'config'), { recursive: true });
+      fs.writeFileSync(
+        path.join(workspace, 'config', 'jarvos-project-context.json'),
+        buildProjectsConfigFixture(workspace, 'default'),
+      );
+
+      process.env.JARVOS_WORKSPACE_DIR = workspace;
+      jarvosPaths.resetConfigCache();
+
+      const provider = createHostProjectsContextProvider({});
+      assert.notEqual(provider, null);
+      assert.equal(typeof provider.read, 'function');
+      assert.equal(provider.defaultQuery.marker, 'default');
+    });
+  } finally {
+    for (const [key, value] of Object.entries(oldEnv)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    jarvosPaths.resetConfigCache();
+  }
+});
+
+test('JARVOS_PROJECTS_CONTEXT_CONFIG still wins over the workspace-derived default when both are present', async () => {
+  const oldEnv = { JARVOS_WORKSPACE_DIR: process.env.JARVOS_WORKSPACE_DIR };
+  try {
+    await withTempVault(async ({ tmp }) => {
+      const workspace = path.join(tmp, 'workspace');
+      fs.mkdirSync(path.join(workspace, 'config'), { recursive: true });
+      fs.writeFileSync(
+        path.join(workspace, 'config', 'jarvos-project-context.json'),
+        buildProjectsConfigFixture(workspace, 'default'),
+      );
+
+      const overrideRoot = path.join(tmp, 'override');
+      fs.mkdirSync(overrideRoot, { recursive: true });
+      const overrideConfigPath = path.join(overrideRoot, 'projects-context.json');
+      fs.writeFileSync(overrideConfigPath, buildProjectsConfigFixture(overrideRoot, 'override'));
+
+      process.env.JARVOS_WORKSPACE_DIR = workspace;
+      jarvosPaths.resetConfigCache();
+
+      const provider = createHostProjectsContextProvider({ [PROJECTS_CONTEXT_CONFIG_ENV]: overrideConfigPath });
+      assert.notEqual(provider, null);
+      assert.equal(provider.defaultQuery.marker, 'override');
+    });
+  } finally {
+    for (const [key, value] of Object.entries(oldEnv)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    jarvosPaths.resetConfigCache();
+  }
+});
+
+test('createHostProjectsContextProvider fails closed when the workspace-derived config path does not exist', async () => {
+  const oldEnv = { JARVOS_WORKSPACE_DIR: process.env.JARVOS_WORKSPACE_DIR };
+  try {
+    await withTempVault(async ({ tmp }) => {
+      // No config/jarvos-project-context.json under this workspace.
+      const workspace = path.join(tmp, 'workspace-without-config');
+      fs.mkdirSync(workspace, { recursive: true });
+
+      process.env.JARVOS_WORKSPACE_DIR = workspace;
+      jarvosPaths.resetConfigCache();
+
+      let provider;
+      assert.doesNotThrow(() => {
+        provider = createHostProjectsContextProvider({});
+      });
+      assert.equal(provider, null);
+    });
+  } finally {
+    for (const [key, value] of Object.entries(oldEnv)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    jarvosPaths.resetConfigCache();
+  }
+});
+
+test('createHostProjectsContextProvider fails closed when its selected provider changes during binding', async () => {
+  await withTempVault(async ({ tmp }) => {
+    const workspace = path.join(tmp, 'workspace'); fs.mkdirSync(workspace, { recursive: true });
+    const configPath = path.join(workspace, 'projects-context.json');
+    fs.writeFileSync(configPath, buildProjectsConfigFixture(workspace, 'race'));
+    const original = fs.readFileSync; let providerReads = 0;
+    fs.readFileSync = function patched(filePath, ...args) {
+      if (String(filePath).endsWith('/provider.js') && ++providerReads === 2) throw new Error('selected provider changed');
+      return original.call(this, filePath, ...args);
+    };
+    try { assert.equal(createHostProjectsContextProvider({ [PROJECTS_CONTEXT_CONFIG_ENV]: configPath }), null); }
+    finally { fs.readFileSync = original; }
   });
 });

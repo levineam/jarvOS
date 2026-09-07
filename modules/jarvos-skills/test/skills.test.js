@@ -50,6 +50,17 @@ const tempDir = path.join(os.tmpdir(), `jarvos-skills-test-${process.pid}`);
 const installed = installSkills(tempDir, { skills: ['workflow-execution'], force: true });
 assert.equal(installed.length, 1);
 assert.ok(installed[0].path.endsWith(path.join('workflow-execution', 'SKILL.md')));
+const workflowText = fs.readFileSync(installed[0].path, 'utf8');
+assert.match(workflowText, /finishes through this managed workflow/);
+assert.match(workflowText, /merge it\s+autonomously/);
+assert.match(workflowText, /routine non-author approval is not a\s+gate/);
+assert.match(workflowText, /unclear goal alignment/);
+assert.match(workflowText, /required failed or missing gate/);
+assert.match(workflowText, /branch or path policy/);
+for (const boundary of ['publication', 'live activation', 'spending', 'destructive action', 'external send']) {
+  assert.match(workflowText, new RegExp(boundary));
+}
+assert.match(workflowText, /separate authority for publication, live activation,\s+spending, destructive action, or an external send/);
 assert.equal(installed.event, null);
 
 // A machine-wide install emits one owner-only, digest-bound event only after

@@ -5,8 +5,8 @@
 
 const fs = require('fs');
 const path = require('path');
-const { writeNoteFile, todayDate } = require('../../../packages/jarvos-secondbrain-notes/src/write-to-vault');
-const { sourcePathFor } = require('../../../packages/jarvos-secondbrain-notes/src/knowledge-optimizer');
+const { writeNoteFile, todayDate, noteFilePath, sanitizeTitle } = require('../../../packages/jarvos-secondbrain-notes/src/write-to-vault');
+const { defaultKnowledgeDir, sourcePathFor } = require('../../../packages/jarvos-secondbrain-notes/src/knowledge-optimizer');
 const { getVaultNotesDir, getVaultJournalDir } = require('./lib/provenance-config');
 const { frontmatterToObject, parseFrontmatter } = require('../../../packages/jarvos-secondbrain-notes/src/lib/note-schema');
 const { createObsidianOwnedMutationService } = require('./obsidian-mutation');
@@ -48,6 +48,11 @@ function parseInput(input) {
   if (input.frontmatter !== undefined && (!input.frontmatter || typeof input.frontmatter !== 'object' || Array.isArray(input.frontmatter))) {
     throw new Error('frontmatter must be an object when provided');
   }
+  const operationId = input.operationId == null ? null : String(input.operationId).trim();
+  if (operationId && (!/^[A-Za-z0-9][A-Za-z0-9_.:-]{0,239}$/.test(operationId)
+    || input.frontmatter?.mapping_operation_id !== operationId)) {
+    throw new Error('operationId must be an opaque identifier bound to frontmatter.mapping_operation_id');
+  }
   if (
     LIGHTWEIGHT_IDEA_RE.test(String(input.content || ''))
     && input.substantive !== true
@@ -58,6 +63,7 @@ function parseInput(input) {
   }
   return {
     personality,
+    operationId,
     title: input.title,
     content: String(input.content),
     frontmatter: {
@@ -66,6 +72,34 @@ function parseInput(input) {
       contract: 'obsidian-note-journal-v1',
     },
   };
+}
+
+function inspectProjectNote({ title, canonicalId, operationId, personality = 'codex' } = {}) {
+  if (typeof title !== 'string' || !title.trim()) throw new Error('title is required');
+  if (typeof canonicalId !== 'string' || !/^prj_[0-9]{6,}$/.test(canonicalId)) throw new Error('canonicalId must identify a Project');
+  if (typeof operationId !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9_.:-]{0,239}$/.test(operationId)) throw new Error('operationId must be opaque');
+  const normalizedTitle = sanitizeTitle(title);
+  const filePath = noteFilePath(normalizedTitle);
+  if (!fs.existsSync(filePath)) return { status: 'absent', title: normalizedTitle, verification: { ok: true } };
+  const frontmatter = frontmatterToObject(parseFrontmatter(fs.readFileSync(filePath, 'utf8')));
+  if ((frontmatter.project_id && frontmatter.project_id !== canonicalId)
+    || (frontmatter.mapping_operation_id && frontmatter.mapping_operation_id !== operationId)) {
+    return { status: 'conflict', title: normalizedTitle, verification: { ok: true } };
+  }
+  if (frontmatter.mapping_operation_id !== operationId) {
+    return { status: 'existing', title: normalizedTitle, verification: { ok: true } };
+  }
+  const notesDir = getVaultNotesDir();
+  const qmdPendingPath = path.join(defaultKnowledgeDir(notesDir), 'qmd-refresh-pending.json');
+  const verification = verifyContract({
+    path: filePath,
+    title: normalizedTitle,
+    created: true,
+    receipt: { status: 'committed' },
+    journal: { status: 'linked' },
+    knowledge: { qmdPendingPath, qmdStatus: 'pending-refresh' },
+  }, personality);
+  return { status: verification.ok ? 'applied' : 'partial', title: normalizedTitle, verification };
 }
 
 function verifyContract(result, personality) {
@@ -244,6 +278,7 @@ function writeNoteThroughContract(rawInput, { mutationService, link } = {}) {
   }
   return {
     personality: input.personality,
+    operationId: input.operationId,
     written: result.written,
     savedLocally: result.savedLocally,
     title: result.title,
@@ -283,6 +318,7 @@ function main() {
 module.exports = {
   SUPPORTED_PERSONALITIES,
   countJournalBacklinks,
+  inspectProjectNote,
   dispatchBacklink,
   main,
   parseInput,

@@ -10,3 +10,7 @@ node_modules/
 .clawpatch/patches/
 .clawpatch/reports/
 .clawpatch/runs/
+
+# Python bytecode caches: never ship, and they embed absolute build paths.
+__pycache__/
+*.pyc

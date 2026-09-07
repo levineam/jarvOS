@@ -675,12 +675,24 @@ function loadProjectsProjection() {
 }
 
 function activityReceiptForProjection(activity) {
-  if (!activity || typeof activity !== 'object' || Array.isArray(activity)) return null;
+  if (!activity || typeof activity !== 'object' || Array.isArray(activity)) return activity;
   if (activity.receipt && typeof activity.receipt === 'object') {
-    return { ...activity.receipt, trust: activity.receipt.trust || 'verified', accepted: true };
+    // Keep admission metadata carried by an ActivityStore envelope. In
+    // particular, the root Project pinned at admission must survive the
+    // unwrap; resolving an Outcome through today's hierarchy would rewrite a
+    // historical Journal touch after a later reparent.
+    const carried = {};
+    for (const field of ['canonicalAtAdmission', 'disposition', 'inferenceDecision', 'kind', 'category']) {
+      if (Object.prototype.hasOwnProperty.call(activity, field)) carried[field] = activity[field];
+    }
+    return {
+      ...activity.receipt,
+      ...carried,
+      trust: activity.receipt.trust || activity.trust || 'verified',
+      accepted: true,
+    };
   }
-  if (activity.trust === 'verified' || activity.accepted === true) return { ...activity, trust: 'verified', accepted: true };
-  return null;
+  return { ...activity };
 }
 
 function normalizeProjectsActivityResult(result, { date, timeZone, maxItems = 25 } = {}) {
@@ -689,7 +701,12 @@ function normalizeProjectsActivityResult(result, { date, timeZone, maxItems = 25
 
   const value = result && typeof result === 'object' ? result : {};
   const state = value.activityProviderState || value.providerState || value.state
-    || (value.status === 'ok' ? 'fresh' : 'unavailable');
+    || ({
+      ok: 'fresh',
+      fresh: 'fresh',
+      'healthy-empty': 'healthy-empty',
+      'fresh-empty': 'healthy-empty',
+    }[value.status] || 'unavailable');
   const packet = value.packet && typeof value.packet === 'object' ? value.packet : value;
   const projects = Array.isArray(value.projects)
     ? value.projects
@@ -697,7 +714,12 @@ function normalizeProjectsActivityResult(result, { date, timeZone, maxItems = 25
   const rawActivities = Array.isArray(value.activities)
     ? value.activities
     : (Array.isArray(value.activityReceipts) ? value.activityReceipts : (Array.isArray(packet.activities) ? packet.activities : []));
-  let activities = rawActivities.map(activityReceiptForProjection).filter(Boolean);
+  const noteMappings = value.noteMappings !== undefined
+    ? value.noteMappings
+    : (value.canonicalNoteMappings !== undefined
+      ? value.canonicalNoteMappings
+      : (packet.noteMappings !== undefined ? packet.noteMappings : packet.canonicalNoteMappings));
+  let activities = rawActivities.map(activityReceiptForProjection);
 
   // A verified Projects context packet exposes bounded activity summaries
   // rather than receipt envelopes. They are safe for navigation only when the
@@ -709,6 +731,7 @@ function normalizeProjectsActivityResult(result, { date, timeZone, maxItems = 25
       .map((summary) => ({
         canonicalId: summary.canonicalId,
         occurredAt: summary.occurredAt,
+        ...(summary.canonicalAtAdmission ? { canonicalAtAdmission: summary.canonicalAtAdmission } : {}),
         trust: 'verified',
         accepted: true,
       }));
@@ -719,6 +742,7 @@ function normalizeProjectsActivityResult(result, { date, timeZone, maxItems = 25
     timeZone,
     projects,
     activities,
+    noteMappings,
     activityProviderState: state,
     coverageWatermark: value.coverageWatermark || value.watermark || packet.watermark || null,
     generator: value.generator || 'projects-activity-v1',

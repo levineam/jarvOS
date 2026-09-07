@@ -87,7 +87,8 @@ test('activity-backed Journal maintenance carries a separate projection receipt 
         status: 'ok',
         coverageWatermark: 'activity:9',
         projects: [{ id: 'prj_000001', kind: 'project', title: 'jarvOS', lifecycle: 'active' }],
-        activities: [{ canonicalId: 'prj_000001', occurredAt: '2026-01-02T15:00:00.000Z', trust: 'verified' }],
+        noteMappings: { prj_000001: { target: 'Projects/jarvOS' } },
+        activities: [{ canonicalId: 'prj_000001', canonicalAtAdmission: { rootProjectId: 'prj_000001' }, occurredAt: '2026-01-02T15:00:00.000Z', trust: 'verified' }],
       }),
       applyMarkdownMutation(input) {
         projectionReceipt = input.projectionReceipt;
@@ -97,7 +98,57 @@ test('activity-backed Journal maintenance carries a separate projection receipt 
     assert.equal(result.projectProjection.coverageWatermark, 'activity:9');
     assert.equal(projectionReceipt.inputDigest, result.projectProjection.inputDigest);
     assert.equal(projectionReceipt.status, 'fresh');
-    assert.equal(sectionBody(fs.readFileSync(journalPath, 'utf8'), '## 🚀 Projects'), '- [[jarvOS]]');
+    assert.equal(sectionBody(fs.readFileSync(journalPath, 'utf8'), '## 🚀 Projects'), '- [[Projects/jarvOS]]');
+  } finally {
+    if (previous === undefined) delete process.env.JARVOS_JOURNAL_DIR;
+    else process.env.JARVOS_JOURNAL_DIR = previous;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('Journal keeps receipt category and malformed activity omissions visible', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-journal-activity-shape-'));
+  const journalDir = path.join(root, 'Journal');
+  const journalPath = path.join(journalDir, `${TEST_DATE}.md`);
+  const previous = process.env.JARVOS_JOURNAL_DIR;
+  fs.mkdirSync(journalDir, { recursive: true });
+  fs.writeFileSync(journalPath, [
+    '---',
+    'journal: Journal',
+    `journal-date: ${TEST_DATE}`,
+    '---',
+    '',
+    '## 🚀 Projects',
+    '- [[Existing]]',
+    '',
+    '## 📝 Notes',
+    '- [[Note]]',
+    '',
+  ].join('\n'), 'utf8');
+  process.env.JARVOS_JOURNAL_DIR = journalDir;
+  let projectionReceipt = null;
+  try {
+    const config = loadConfig();
+    const result = rawSyncOneDate(TEST_DATE, config, {
+      projectsActivityReader: () => ({
+        status: 'ok',
+        projects: [{ id: 'prj_000001', kind: 'project', title: 'jarvOS' }],
+        noteMappings: { prj_000001: { target: 'Projects/jarvOS' } },
+        activities: [
+          { receipt: { canonicalId: 'prj_000001', occurredAt: `${TEST_DATE}T11:00:00.000Z`, trust: 'verified' }, category: 'context-read' },
+          null,
+        ],
+      }),
+      applyMarkdownMutation(input) {
+        projectionReceipt = input.projectionReceipt;
+        return fakeOwnedMutation(input);
+      },
+    });
+    assert.equal(result.projectProjection.status, 'degraded');
+    assert.equal(result.projectProjection.preserve, true);
+    assert.ok(result.projectProjection.omissions.includes('activity-invalid:1'));
+    assert.equal(projectionReceipt.status, 'degraded');
+    assert.match(fs.readFileSync(journalPath, 'utf8'), /\[\[Existing\]\]/);
   } finally {
     if (previous === undefined) delete process.env.JARVOS_JOURNAL_DIR;
     else process.env.JARVOS_JOURNAL_DIR = previous;

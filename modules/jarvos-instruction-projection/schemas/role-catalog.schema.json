@@ -1,0 +1,89 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://jarvos.dev/schemas/instruction-projection/role-catalog.v1.json",
+  "title": "jarvOS instruction role catalog",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "contractVersion", "catalogId", "roles"],
+  "properties": {
+    "schemaVersion": { "const": "jarvos.instruction-role-catalog/v1" },
+    "contractVersion": { "const": "1.0.0" },
+    "catalogId": { "type": "string", "pattern": "^[a-z][a-z0-9-]{0,79}$" },
+    "roles": {
+      "type": "array",
+      "minItems": 9,
+      "maxItems": 9,
+      "items": { "$ref": "#/$defs/role" },
+      "allOf": [
+        { "contains": { "properties": { "role": { "const": "governance" } }, "required": ["role"] } },
+        { "contains": { "properties": { "role": { "const": "soul" } }, "required": ["role"] } },
+        { "contains": { "properties": { "role": { "const": "identity" } }, "required": ["role"] } },
+        { "contains": { "properties": { "role": { "const": "stable-user-constraints" } }, "required": ["role"] } },
+        { "contains": { "properties": { "role": { "const": "tool-mechanics" } }, "required": ["role"] } },
+        { "contains": { "properties": { "role": { "const": "durable-orientation" } }, "required": ["role"] } },
+        { "contains": { "properties": { "role": { "const": "heartbeat-intent" } }, "required": ["role"] } },
+        { "contains": { "properties": { "role": { "const": "dynamic-memory" } }, "required": ["role"] } },
+        { "contains": { "properties": { "role": { "const": "repository-instructions" } }, "required": ["role"] } }
+      ]
+    }
+  },
+  "$defs": {
+    "disposition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status"],
+      "properties": {
+        "status": {
+          "enum": ["equivalent-native", "harness-native-translation", "unsupported", "deferred", "private-only", "not-evaluable"]
+        },
+        "reason": { "type": "string", "minLength": 1, "maxLength": 500 }
+      },
+      "allOf": [{
+        "if": {
+          "properties": {
+            "status": { "enum": ["unsupported", "deferred", "private-only", "not-evaluable"] }
+          },
+          "required": ["status"]
+        },
+        "then": { "required": ["reason"] }
+      }]
+    },
+    "directive": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "dispositions"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z][a-z0-9-]{0,79}$" },
+        "dispositions": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["claude", "codex", "openclaw", "hermes"],
+          "properties": {
+            "claude": { "$ref": "#/$defs/disposition" },
+            "codex": { "$ref": "#/$defs/disposition" },
+            "openclaw": { "$ref": "#/$defs/disposition" },
+            "hermes": { "$ref": "#/$defs/disposition" }
+          }
+        }
+      }
+    },
+    "role": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["role", "sourceClass", "scope", "visibility", "directives"],
+      "properties": {
+        "role": {
+          "enum": ["governance", "soul", "identity", "stable-user-constraints", "tool-mechanics", "durable-orientation", "heartbeat-intent", "dynamic-memory", "repository-instructions"]
+        },
+        "sourceClass": { "enum": ["shared-static", "private-static", "harness-native", "dynamic-service", "repository-native"] },
+        "scope": { "enum": ["global", "workspace", "repository", "dynamic"] },
+        "visibility": { "enum": ["public", "private"] },
+        "directives": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/directive" }
+        }
+      }
+    }
+  }
+}

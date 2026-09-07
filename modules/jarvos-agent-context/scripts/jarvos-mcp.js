@@ -8,6 +8,7 @@ const {
   createNote,
   controlPlane,
   currentWork,
+  renderCurrentWorkUnavailable,
   ensureTodayJournal,
   healthTodayJournal,
   hydrate,
@@ -24,14 +25,24 @@ const {
   synthesizeRecall,
   writeSessionThread,
 } = require('../src/index.js');
+const {
+  COMMON_WORK_ACTIONS,
+} = require('../../jarvos-runtime-kit/src/harness-dispatch.js');
+const { invokeCommonWork } = require('../../jarvos-runtime-kit/src/common-work-service.js');
 
 const CREDENTIAL_ENV = 'JARVOS_CONTROL_PLANE_CREDENTIAL';
 const CREDENTIAL_FILE_ENV = 'JARVOS_CONTROL_PLANE_CREDENTIAL_FILE';
 const SHARED_SKILLS_CONFIG_ENV = 'JARVOS_SHARED_SKILLS_CONFIG_PATH';
+const COMMON_WORK_SERVICE_MODULE_ENV = 'JARVOS_COMMON_WORK_SERVICE_MODULE';
+const COMMON_WORK_HARNESS_ENV = 'JARVOS_COMMON_WORK_HARNESS';
 const STRICT_EMPTY_ARGUMENT_TOOLS = new Set([
   'jarvos_journal_health',
   'jarvos_ensure_today_journal',
 ]);
+// Host-only profiles (e.g. 'session-focus') are resolved exclusively through
+// internal readProjectsContext(..., true) callers after protected principal
+// resolution. They are never reachable from this caller-facing MCP tool.
+const PUBLIC_PROJECTS_CONTEXT_PROFILES = new Set(['orientation', 'recent-activity']);
 
 let mcpProjectsContextProvider = null;
 
@@ -65,14 +76,21 @@ function resolveHostCredential(env = process.env) {
   return null;
 }
 
-function trustedFile(filePath, root = null) {
+// ownerOnly distinguishes two trust policies sharing one ancestry check:
+// service/executable modules must be owner-only (no group/world bits at
+// all), while a config file may be owner-controlled and merely
+// non-group/world-writable, matching projects-context-bootstrap.js's split.
+// Never loosen the default -- callers that load and execute code must pass
+// ownerOnly: true explicitly or accept it as the default.
+function trustedFile(filePath, { root = null, ownerOnly = true } = {}) {
   if (typeof filePath !== 'string' || !path.isAbsolute(filePath)) return null;
   try {
     if (fs.lstatSync(filePath).isSymbolicLink()) return null;
     const real = fs.realpathSync(filePath);
     const stat = fs.statSync(real);
     const uid = typeof process.getuid === 'function' ? process.getuid() : null;
-    if (!stat.isFile() || (uid !== null && stat.uid !== uid) || (stat.mode & 0o077) !== 0) return null;
+    if (!stat.isFile() || (uid !== null && stat.uid !== uid)) return null;
+    if (ownerOnly ? (stat.mode & 0o077) !== 0 : (stat.mode & 0o022) !== 0) return null;
     if (root) {
       const relative = path.relative(root, real);
       if (relative.startsWith('..') || path.isAbsolute(relative)) return null;
@@ -93,7 +111,7 @@ function trustedFile(filePath, root = null) {
 }
 
 function selectedWorkspaceRoot(env = process.env) {
-  const configPath = trustedFile(env.JARVOS_PROJECTS_CONTEXT_CONFIG);
+  const configPath = trustedFile(env.JARVOS_PROJECTS_CONTEXT_CONFIG, { ownerOnly: false });
   if (!configPath) return null;
   try {
     const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
@@ -105,6 +123,17 @@ function selectedWorkspaceRoot(env = process.env) {
 }
 
 const TOOLS = [
+  {
+    name: 'jarvos_common_work',
+    description: 'Call one host-bound canonical common-work action. The installed harness and host service are fixed by setup; callers may provide only ordinary action input.',
+    inputSchema: {
+      type: 'object', additionalProperties: false, required: ['action', 'input'],
+      properties: {
+        action: { type: 'string', enum: COMMON_WORK_ACTIONS },
+        input: { type: 'object' },
+      },
+    },
+  },
   {
     name: 'jarvos_todo_create',
     description: 'Create one canonically linked Beads-backed Todo through the host-authorized work-action service. Agent-discovered work must be submitted as a proposal by the host.',
@@ -123,7 +152,22 @@ const TOOLS = [
   {
     name: 'jarvos_todo_transition',
     description: 'Request a claim, transition, completion, or reopen through the host-authorized work-action service. The MCP caller cannot supply authorization or verification evidence.',
-    inputSchema: { type: 'object', additionalProperties: false, required: ['itemId', 'operationId', 'action'], properties: { itemId: { type: 'string' }, operationId: { type: 'string' }, action: { type: 'string', enum: ['claim', 'transition', 'complete', 'reopen'] }, status: { type: 'string' }, expectedRevision: { type: 'string' } } },
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['itemId', 'operationId', 'action'],
+      properties: {
+        itemId: { type: 'string' },
+        operationId: { type: 'string' },
+        action: { type: 'string', enum: ['claim', 'transition', 'complete', 'reopen'] },
+        status: { type: 'string', minLength: 1 },
+        expectedRevision: { type: 'string' },
+      },
+      oneOf: [
+        { properties: { action: { const: 'transition' } }, required: ['status'] },
+        { properties: { action: { enum: ['claim', 'complete', 'reopen'] } }, not: { required: ['status'] } },
+      ],
+    },
   },
   {
     name: 'jarvos_control_plane',
@@ -327,24 +371,45 @@ const TOOLS = [
   },
 ];
 
+const WORK_ACTION_HOST_UNAVAILABLE = 'Todo work-action host binding is unavailable. Set JARVOS_WORK_ACTION_SERVICE_MODULE to an absolute owner-only host service module and JARVOS_PROJECTS_CONTEXT_CONFIG to an absolute trusted Projects context config whose workspaceRoot contains that module.';
+const WORK_ACTION_HOST_REFUSED = 'Todo work-action host binding was refused. JARVOS_WORK_ACTION_SERVICE_MODULE must be an owner-only regular file contained under the workspaceRoot selected by JARVOS_PROJECTS_CONTEXT_CONFIG.';
+const COMMON_WORK_HOST_UNAVAILABLE = 'Common-work host binding is unavailable. Setup must bind JARVOS_COMMON_WORK_SERVICE_MODULE and a fixed JARVOS_COMMON_WORK_HARNESS.';
+
+function envBinding(name, env = process.env) {
+  const value = env[name];
+  return typeof value === 'string' && value.length > 0 ? value : null;
+}
+
 function loadHostWorkActionService() {
-  const modulePath = process.env.JARVOS_WORK_ACTION_SERVICE_MODULE;
+  const modulePath = envBinding('JARVOS_WORK_ACTION_SERVICE_MODULE');
+  const configPath = envBinding('JARVOS_PROJECTS_CONTEXT_CONFIG');
+  if (!modulePath || !configPath) {
+    return { service: null, error: WORK_ACTION_HOST_UNAVAILABLE };
+  }
   const selectedRoot = selectedWorkspaceRoot();
-  if (!selectedRoot) return null;
-  const trusted = trustedFile(modulePath, selectedRoot);
-  if (!trusted) return null;
+  const trusted = selectedRoot ? trustedFile(modulePath, { root: selectedRoot, ownerOnly: true }) : null;
+  if (!trusted) {
+    return { service: null, error: WORK_ACTION_HOST_REFUSED };
+  }
+  // Past this point the module passed the containment check, so reporting the
+  // containment message would name the wrong cause -- the failure is inside the
+  // host module, and the operator needs to see which.
   try {
     const loaded = require(trusted);
     const service = typeof loaded === 'function' ? loaded() : (loaded?.service || loaded);
-    return service && typeof service === 'object' ? service : null;
-  } catch {
-    return null;
+    if (!service || typeof service !== 'object') {
+      return { service: null, error: 'Todo work-action host module loaded but exported no service object.' };
+    }
+    return { service, error: null };
+  } catch (error) {
+    const detail = error && error.message ? error.message : 'unknown error';
+    return { service: null, error: `Todo work-action host module failed to load: ${detail}` };
   }
 }
 
 async function todoAction(name, args) {
-  const service = loadHostWorkActionService();
-  if (!service) return textResult('Todo work-action host binding is unavailable', true);
+  const { service, error } = loadHostWorkActionService();
+  if (!service) return textResult(error, true);
   // Deliberately project only ordinary request fields. Authorization, human
   // identity, and verification receipts are host-bound service state, never
   // caller-controlled MCP arguments.
@@ -354,12 +419,24 @@ async function todoAction(name, args) {
   if (name === 'jarvos_todo_show') return textResult(JSON.stringify(await service.show(args), null, 2));
   const request = { itemId: args.itemId, operationId: args.operationId, expectedRevision: args.expectedRevision, actor };
   if (args.action === 'claim') return textResult(JSON.stringify(await service.claim(request), null, 2));
-  if (args.action === 'transition') return textResult(JSON.stringify(await service.transition({ ...request, status: args.status }), null, 2));
+  if (args.action === 'transition') {
+    if (typeof args.status !== 'string' || !args.status.trim()) return textResult('Todo transition status is required', true);
+    return textResult(JSON.stringify(await service.transition({ ...request, status: args.status }), null, 2));
+  }
   if (args.action === 'complete') {
     if (typeof service.completeFromHost !== 'function') return textResult('Todo host completion binding is unavailable', true);
     return textResult(JSON.stringify(await service.completeFromHost(request), null, 2));
   }
-  return textResult(JSON.stringify(await service.reopen(request), null, 2));
+  if (args.action === 'reopen') return textResult(JSON.stringify(await service.reopen(request), null, 2));
+  return textResult('Unsupported Todo transition action', true);
+}
+
+async function commonWorkAction(args) {
+  const harness = envBinding(COMMON_WORK_HARNESS_ENV);
+  const serviceModule = envBinding(COMMON_WORK_SERVICE_MODULE_ENV);
+  if (!harness || !serviceModule) return textResult(COMMON_WORK_HOST_UNAVAILABLE, true);
+  const result = await invokeCommonWork({ serviceModule, harness, action: args.action, input: args.input });
+  return textResult(JSON.stringify(result, null, 2), result?.ok === false);
 }
 
 function setMcpProjectsContextProvider(provider) {
@@ -529,6 +606,7 @@ function redactSharedSkillMutation(result, opaqueSkillId) {
 
 async function callTool(name, args = {}) {
   args = normalizeToolArguments(name, args);
+  if (name === 'jarvos_common_work') return commonWorkAction(args);
   if (['jarvos_todo_create', 'jarvos_todo_list', 'jarvos_todo_show', 'jarvos_todo_transition'].includes(name)) return todoAction(name, args);
   if (name === 'jarvos_journal_health') {
     requireEmptyObjectArguments(args);
@@ -648,12 +726,32 @@ async function callTool(name, args = {}) {
     return textResult('unsupported shared-skill operation', true);
   }
   if (name === 'jarvos_current_work') {
-    const result = await currentWork(args);
-    return textResult(result.markdown, !result.ok);
+    try {
+      const result = await currentWork(args);
+      if (!result || typeof result.markdown !== 'string' || !result.markdown.trim()) {
+        return textResult(renderCurrentWorkUnavailable(), true);
+      }
+      return textResult(result.markdown, !result.ok);
+    } catch {
+      return textResult(renderCurrentWorkUnavailable(), true);
+    }
   }
   if (name === 'jarvos_projects_context') {
+    const requestedProfile = args.profile === undefined ? 'orientation' : args.profile;
+    // Enforced at runtime, not only in the tool's JSON schema: MCP callers
+    // may only request the public named profiles. 'session-focus' (and any
+    // other non-public profile) is host-only and must never reach the
+    // provider from this caller-facing entrypoint.
+    if (!PUBLIC_PROJECTS_CONTEXT_PROFILES.has(requestedProfile)) {
+      return textResult(JSON.stringify({
+        status: 'unavailable',
+        code: 'PROJECTS_QUERY_UNAVAILABLE',
+        reason: 'Projects query is unavailable',
+        packet: null,
+      }, null, 2), false);
+    }
     const request = {
-      profile: args.profile || 'orientation',
+      profile: requestedProfile,
       date: args.date,
       timeZone: args.timeZone,
       from: args.from,
@@ -824,7 +922,9 @@ if (require.main === module) {
   });
 }
 
-module.exports = { TOOLS, callTool, handle, setMcpProjectsContextProvider, textResult };
+module.exports = { TOOLS, callTool, handle, setMcpProjectsContextProvider, textResult, loadHostWorkActionService, commonWorkAction };
+module.exports.WORK_ACTION_HOST_UNAVAILABLE = WORK_ACTION_HOST_UNAVAILABLE;
+module.exports.WORK_ACTION_HOST_REFUSED = WORK_ACTION_HOST_REFUSED;
 module.exports.BOOT_JARVOS_PROMPT_TEXT = BOOT_JARVOS_PROMPT_TEXT;
 module.exports.PROMPTS = PROMPTS;
 module.exports.promptResult = promptResult;
@@ -835,3 +935,4 @@ module.exports.readCredentialFile = readCredentialFile;
 module.exports.requireEmptyObjectArguments = requireEmptyObjectArguments;
 module.exports.CREDENTIAL_ENV = CREDENTIAL_ENV;
 module.exports.CREDENTIAL_FILE_ENV = CREDENTIAL_FILE_ENV;
+module.exports.COMMON_WORK_HOST_UNAVAILABLE = COMMON_WORK_HOST_UNAVAILABLE;

@@ -4,6 +4,10 @@ const crypto = require('node:crypto');
 
 const { resolvePriority } = require('./priority');
 const { validateProviderSnapshot } = require('./provider-contracts');
+const { validateInferenceMetadata } = require('./records');
+const inferenceContracts = require('./project-inference-contracts');
+const { ENGINE_REVISION, POLICY_REVISION } = require('./project-inference-reconciler');
+const { attentionSummaries, deriveIntentGapAttention } = require('./intent-gap-attention');
 const {
   CONTEXT_CONTRACT,
   REDACTION_CLASSES,
@@ -11,22 +15,30 @@ const {
   verifyCapability,
 } = require('./projects-context-capability');
 
+const CONTEXT_SCHEMA_VERSION = 2;
+const SUPPORTED_CONTEXT_SCHEMA_VERSIONS = Object.freeze([CONTEXT_SCHEMA_VERSION]);
 const CONTEXT_PACKET_FIELDS = Object.freeze([
-  'contract', 'packetId', 'capturedAt', 'expiresAt', 'query', 'canonical', 'activity', 'currentWork', 'attention',
-  'evidence', 'providers', 'omissions', 'truncation', 'redactionClass', 'capability',
+  'contract', 'schemaVersion', 'packetId', 'capturedAt', 'expiresAt', 'query', 'canonical', 'activity', 'currentWork', 'attention',
+  'evidence', 'providers', 'inference', 'watermarks', 'omissions', 'truncation', 'redactionClass', 'capability',
 ]);
 const QUERY_FIELDS = Object.freeze(['scope', 'include', 'limits']);
 const SCOPE_FIELDS = Object.freeze(['projectIds', 'outcomeIds', 'includeDescendants']);
 const LIMIT_FIELDS = Object.freeze(['maxItems', 'maxBytes', 'maxProviderAgeSeconds']);
 const INCLUDE_SECTIONS = Object.freeze(['hierarchy', 'activity', 'currentWork', 'attention']);
+const TERMINAL_WORK_STATUSES = new Set(['closed', 'completed', 'done', 'cancelled', 'canceled', 'rejected', 'abandoned']);
 const KNOWN_PROVIDERS = Object.freeze(['activity', 'beads', 'paperclip', 'release', 'stewardship', 'todo']);
-const SUMMARY_FIELDS = Object.freeze(['id', 'canonicalId', 'category', 'status', 'title', 'occurredAt', 'observedAt', 'evidenceRefs', 'source']);
+const SUMMARY_FIELDS = Object.freeze(['id', 'canonicalId', 'category', 'status', 'title', 'occurredAt', 'observedAt', 'evidenceRefs', 'source', 'canonicalAtAdmission']);
 const EVIDENCE_FIELDS = Object.freeze(['source', 'id', 'canonicalId', 'occurredAt', 'observedAt', 'evidenceRefs']);
 const RECORD_PACKET_FIELDS = Object.freeze([
   'id', 'kind', 'title', 'aliases', 'parentId', 'lifecycle', 'declaredPriority', 'effectivePriority', 'priority',
-  'revision', 'createdAt', 'updatedAt', 'goal', 'definitionOfDone', 'links', 'breadcrumb',
+  'revision', 'createdAt', 'updatedAt', 'goal', 'definitionOfDone', 'links', 'breadcrumb', 'inference',
 ]);
 const PRIORITY_FIELDS = Object.freeze(['declared', 'effective', 'source', 'sourceRecordId', 'sourceKind']);
+const INFERENCE_FIELDS = Object.freeze(['policyRevision', 'engineRevision', 'candidates', 'coverage', 'watermark', 'watermarks']);
+const INFERENCE_WATERMARK_FIELDS = Object.freeze(['sourceClass', 'state', 'observedAt', 'sourceRevision', 'evidenceId']);
+const ADMISSION_FIELDS = Object.freeze([
+  'canonicalId', 'canonicalKind', 'canonicalRevision', 'rootProjectId', 'rootProjectRevision', 'rootProjectLifecycle', 'registryGeneration',
+]);
 
 function isPlainObject(value) { return Boolean(value) && typeof value === 'object' && !Array.isArray(value); }
 function exactKeys(value, keys) { return isPlainObject(value) && Object.keys(value).length === keys.length && keys.every((key) => Object.prototype.hasOwnProperty.call(value, key)); }
@@ -42,6 +54,120 @@ function stableValue(value) {
 function stableStringify(value) { return JSON.stringify(stableValue(value)); }
 function hash(value) { return crypto.createHash('sha256').update(stableStringify(value)).digest('hex'); }
 function byteLength(value) { return Buffer.byteLength(JSON.stringify(value), 'utf8'); }
+
+function opaque(value, field, { nullable = false } = {}) {
+  if (value === null || value === undefined) {
+    if (nullable) return null;
+    throw new TypeError(`${field} must be an opaque identifier`);
+  }
+  if (typeof value !== 'string' || !value.trim() || value.length > 256 || /\s|[\\/]|:\/\//.test(value)) {
+    throw new TypeError(`${field} must be an opaque identifier`);
+  }
+  return value.trim();
+}
+
+function normalizeAdmission(value, field = 'canonicalAtAdmission') {
+  if (value === null || value === undefined) return null;
+  if (!exactKeys(value, ADMISSION_FIELDS)) throw new TypeError(`${field} has unsupported fields`);
+  const canonicalId = opaque(value.canonicalId, `${field}.canonicalId`);
+  const canonicalKind = value.canonicalKind;
+  const rootProjectId = opaque(value.rootProjectId, `${field}.rootProjectId`);
+  if (!/^(?:prj|out)_[0-9]{6,}$/.test(canonicalId) || !/^prj_[0-9]{6,}$/.test(rootProjectId)) throw new TypeError(`${field} contains an invalid canonical ID`);
+  if (!['project', 'outcome'].includes(canonicalKind)) throw new TypeError(`${field}.canonicalKind is invalid`);
+  if (!Number.isInteger(value.canonicalRevision) || value.canonicalRevision < 1) throw new TypeError(`${field}.canonicalRevision is invalid`);
+  if (!Number.isInteger(value.rootProjectRevision) || value.rootProjectRevision < 1) throw new TypeError(`${field}.rootProjectRevision is invalid`);
+  if (value.rootProjectLifecycle !== 'active' && value.rootProjectLifecycle !== 'paused' && value.rootProjectLifecycle !== 'archived') throw new TypeError(`${field}.rootProjectLifecycle is invalid`);
+  if (!Number.isInteger(value.registryGeneration) || value.registryGeneration < 0) throw new TypeError(`${field}.registryGeneration is invalid`);
+  return {
+    canonicalId,
+    canonicalKind,
+    canonicalRevision: value.canonicalRevision,
+    rootProjectId,
+    rootProjectRevision: value.rootProjectRevision,
+    rootProjectLifecycle: value.rootProjectLifecycle,
+    registryGeneration: value.registryGeneration,
+  };
+}
+
+function normalizeInferenceWatermark(value, field) {
+  if (value === null || value === undefined) return null;
+  if (!exactKeys(value, INFERENCE_WATERMARK_FIELDS)) throw new TypeError(`${field} has unsupported fields`);
+  const sourceClass = value.sourceClass;
+  if (!inferenceContracts.SOURCE_CLASSES.includes(sourceClass)) throw new TypeError(`${field}.sourceClass is invalid`);
+  if (!inferenceContracts.COVERAGE_STATES.includes(value.state)) throw new TypeError(`${field}.state is invalid`);
+  const observedAt = timestamp(value.observedAt, `${field}.observedAt`);
+  const sourceRevision = opaque(value.sourceRevision, `${field}.sourceRevision`);
+  const evidenceId = value.evidenceId === null ? null : opaque(value.evidenceId, `${field}.evidenceId`);
+  return { sourceClass, state: value.state, observedAt, sourceRevision, evidenceId };
+}
+
+function normalizeInferenceSnapshot(input) {
+  const source = input === null || input === undefined ? {} : input;
+  if (!isPlainObject(source)) throw new TypeError('inference snapshot must be an object');
+  if (Object.keys(source).some((key) => !INFERENCE_FIELDS.includes(key))) throw new TypeError('inference snapshot has unsupported fields');
+  const policyRevision = opaque(source.policyRevision === undefined ? POLICY_REVISION : source.policyRevision, 'inference.policyRevision');
+  const engineRevision = opaque(source.engineRevision === undefined ? ENGINE_REVISION : source.engineRevision, 'inference.engineRevision');
+  const candidates = Array.isArray(source.candidates) ? source.candidates.map((candidate, index) => {
+    const result = inferenceContracts.validateProjectCandidate(candidate);
+    if (!result.ok) throw new TypeError(`inference.candidates[${index}] is invalid`);
+    if (result.candidate.disposition !== 'provisional') return null;
+    return result.candidate;
+  }).filter(Boolean) : [];
+  const coverage = Array.isArray(source.coverage) ? source.coverage.map((entry, index) => {
+    const result = inferenceContracts.validateCoverageStatus(entry);
+    if (!result.ok) throw new TypeError(`inference.coverage[${index}] is invalid`);
+    return result.coverage;
+  }) : [];
+  const coverageBySource = new Map();
+  for (const entry of coverage) {
+    if (coverageBySource.has(entry.sourceClass)) throw new TypeError('inference.coverage must contain one entry per source');
+    coverageBySource.set(entry.sourceClass, entry);
+  }
+  const watermarks = {};
+  if (source.watermarks !== undefined) {
+    if (!isPlainObject(source.watermarks)) throw new TypeError('inference.watermarks must be an object');
+    for (const key of Object.keys(source.watermarks).sort()) {
+      if (!inferenceContracts.SOURCE_CLASSES.includes(key)) throw new TypeError('inference.watermarks contains an unsupported source');
+      watermarks[key] = normalizeInferenceWatermark(source.watermarks[key], `inference.watermarks.${key}`);
+    }
+  }
+  const watermark = source.watermark === undefined || source.watermark === null ? null : opaque(source.watermark, 'inference.watermark');
+  candidates.sort((left, right) => left.candidateId.localeCompare(right.candidateId));
+  return {
+    policyRevision,
+    engineRevision,
+    candidates,
+    coverage: [...coverageBySource.values()].sort((left, right) => left.sourceClass.localeCompare(right.sourceClass)),
+    watermark,
+    watermarks,
+  };
+}
+
+function projectCandidate(candidate, selectedIds, wholePortfolio) {
+  const bound = candidate.parentId || candidate.parentAlternatives.find((id) => selectedIds.has(id)) || null;
+  if (!wholePortfolio && !bound) return null;
+  if (!wholePortfolio && candidate.parentId && !selectedIds.has(candidate.parentId)) return null;
+  const parentAlternatives = wholePortfolio
+    ? [...candidate.parentAlternatives]
+    : candidate.parentAlternatives.filter((id) => selectedIds.has(id));
+  return {
+    candidateId: candidate.candidateId,
+    kind: candidate.kind,
+    title: candidate.title,
+    aliases: [...candidate.aliases],
+    parentId: candidate.parentId,
+    parentAlternatives,
+    confidence: { ...candidate.confidence },
+    disposition: 'provisional',
+    reasonCodes: [...candidate.reasonCodes],
+    policyRevision: candidate.policyRevision,
+    engineRevision: candidate.engineRevision,
+    evidenceSetWatermark: candidate.evidenceSetWatermark,
+    lineage: [...candidate.lineage],
+    actionable: false,
+    support: [...candidate.reasonCodes],
+  };
+}
 
 function validateIds(value, field, prefix) {
   if (!Array.isArray(value) || value.some((id) => typeof id !== 'string' || !id.startsWith(prefix) || !/^\w+_[0-9]{6,}$/.test(id))) throw new TypeError(`${field} must contain canonical IDs`);
@@ -102,6 +228,11 @@ function validateProviderScope(scope) {
 
 function serializeRecord(record, registry, redactionClass) {
   const priority = resolvePriority(record.id, Object.fromEntries(registry.list().map((item) => [item.id, item])));
+  let inference = null;
+  if (record.inference !== undefined) {
+    const result = validateInferenceMetadata(record.inference);
+    inference = result;
+  }
   return {
     id: record.id,
     kind: record.kind,
@@ -125,6 +256,7 @@ function serializeRecord(record, registry, redactionClass) {
     definitionOfDone: redactionClass === 'public' ? null : (record.definitionOfDone || null),
     links: redactionClass === 'public' ? {} : clone(record.links || {}),
     breadcrumb: registry.breadcrumb(record.id),
+    inference,
   };
 }
 
@@ -139,6 +271,7 @@ function normalizeSummary(summary, provider, redactionClass) {
     observedAt: requiredString(summary.observedAt, 'summary.observedAt'),
     evidenceRefs: redactionClass === 'public' ? [] : [...summary.evidenceRefs],
     source: provider,
+    canonicalAtAdmission: normalizeAdmission(summary.canonicalAtAdmission),
   };
   return normalized;
 }
@@ -216,7 +349,9 @@ function providerView(provider, snapshot, { now, maxAgeSeconds, selectedIds, red
 
 function classifySummaries(summaries) {
   const activity = summaries.filter((summary) => summary.category === 'activity');
-  const currentWork = summaries.filter((summary) => ['intent', 'execution', 'work'].includes(summary.category) || ['active', 'open', 'in_progress', 'tracked', 'claimed'].includes(summary.status));
+  const currentWork = summaries.filter((summary) => !TERMINAL_WORK_STATUSES.has(summary.status)
+    && (['intent', 'execution', 'work'].includes(summary.category)
+      || ['active', 'open', 'in_progress', 'tracked', 'claimed'].includes(summary.status)));
   const attention = summaries.filter((summary) => summary.category === 'attention' || ['blocked', 'approval_due', 'due', 'overdue'].includes(summary.status));
   return { activity, currentWork, attention };
 }
@@ -260,7 +395,8 @@ function redactEvidence(summary) {
 }
 
 function countItems(packet) {
-  return packet.canonical.records.length + packet.activity.length + packet.currentWork.length + packet.attention.length + packet.evidence.length;
+  return packet.canonical.records.length + packet.activity.length + packet.currentWork.length + packet.attention.length + packet.evidence.length
+    + (packet.inference?.candidates?.length || 0);
 }
 
 function removeLast(array) { return array.length ? array.pop() : null; }
@@ -268,21 +404,24 @@ function removeLast(array) { return array.length ? array.pop() : null; }
 function enforceBounds(packet, limits) {
   let omittedItems = 0;
   const sections = [];
-  const targetFor = (section) => section === 'canonical.records' ? packet.canonical.records : packet[section];
+  const targetFor = (section) => section === 'canonical.records'
+    ? packet.canonical.records
+    : section === 'inference.candidates' ? packet.inference.candidates : packet[section];
   const trim = (section, predicate = () => true) => {
     while (predicate() && removeLast(targetFor(section))) { omittedItems += 1; if (!sections.includes(section)) sections.push(section); }
   };
   trim('activity', () => countItems(packet) > limits.maxItems);
   trim('currentWork', () => countItems(packet) > limits.maxItems);
   trim('evidence', () => countItems(packet) > limits.maxItems);
+  trim('inference.candidates', () => countItems(packet) > limits.maxItems);
   trim('canonical.records', () => countItems(packet) > limits.maxItems);
   trim('attention', () => countItems(packet) > limits.maxItems);
   if (packet.canonical && packet.canonical.records) {
     packet.canonical.revisions = Object.fromEntries(packet.canonical.records.map((record) => [record.id, record.revision]));
   }
   const bytesExceeded = () => byteLength(packet) > limits.maxBytes;
-  for (const section of ['activity', 'currentWork', 'evidence', 'attention', 'canonical.records']) {
-    const target = section === 'canonical.records' ? packet.canonical.records : packet[section];
+  for (const section of ['activity', 'currentWork', 'evidence', 'inference.candidates', 'attention', 'canonical.records']) {
+    const target = section === 'canonical.records' ? packet.canonical.records : section === 'inference.candidates' ? packet.inference.candidates : packet[section];
     while (bytesExceeded() && target.length) { target.pop(); omittedItems += 1; if (!sections.includes(section)) sections.push(section); }
   }
   packet.truncation = {
@@ -298,10 +437,16 @@ function enforceBounds(packet, limits) {
 function validatePacketRecord(record) {
   if (!exactKeys(record, RECORD_PACKET_FIELDS) || !/^\w+_[0-9]{6,}$/.test(record.id) || !['project', 'outcome'].includes(record.kind)) return false;
   const allowedLifecycle = record.kind === 'project' ? ['active', 'paused', 'archived'] : ['planned', 'active', 'complete', 'archived'];
-  if (!Array.isArray(record.aliases) || !allowedLifecycle.includes(record.lifecycle)) return false;
+  if (requiredString(record.title, 'record.title') !== record.title || !Array.isArray(record.aliases) || record.aliases.some((alias) => requiredString(alias, 'record.alias') !== alias) || new Set(record.aliases).size !== record.aliases.length || !allowedLifecycle.includes(record.lifecycle)) return false;
+  if ((record.parentId !== null && (!/^prj_[0-9]{6,}$/.test(record.parentId) || record.parentId === record.id)) || (record.kind === 'outcome' && record.parentId === null)) return false;
   if (!['high', 'medium', 'low', 'unset'].includes(record.declaredPriority) || !['high', 'medium', 'low', 'unset'].includes(record.effectivePriority)) return false;
-  if (!exactKeys(record.priority, PRIORITY_FIELDS) || !['explicit', 'inherited', 'unset'].includes(record.priority.source)) return false;
-  return Number.isInteger(record.revision) && record.revision > 0 && typeof record.breadcrumb === 'string';
+  if (!exactKeys(record.priority, PRIORITY_FIELDS) || !['explicit', 'inherited', 'unset'].includes(record.priority.source) || !['high', 'medium', 'low', 'unset'].includes(record.priority.declared) || !['high', 'medium', 'low', 'unset'].includes(record.priority.effective) || (record.priority.sourceRecordId !== null && !/^\w+_[0-9]{6,}$/.test(record.priority.sourceRecordId)) || (record.priority.sourceKind !== null && !['project', 'outcome'].includes(record.priority.sourceKind))) return false;
+  if (Number.isNaN(Date.parse(record.createdAt)) || Number.isNaN(Date.parse(record.updatedAt)) || (record.goal !== null && typeof record.goal !== 'string') || (record.definitionOfDone !== null && typeof record.definitionOfDone !== 'string') || !isPlainObject(record.links)) return false;
+  if (record.inference !== null) {
+    const result = validateInferenceMetadata(record.inference);
+    if (!result || stableStringify(result) !== stableStringify(record.inference)) return false;
+  }
+  return Number.isInteger(record.revision) && record.revision > 0 && typeof record.breadcrumb === 'string' && record.breadcrumb.trim().length > 0;
 }
 
 function validatePacketSummary(summary) {
@@ -314,7 +459,65 @@ function validatePacketSummary(summary) {
     && (summary.occurredAt === null || typeof summary.occurredAt === 'string')
     && typeof summary.observedAt === 'string'
     && Array.isArray(summary.evidenceRefs)
-    && typeof summary.source === 'string';
+    && typeof summary.source === 'string'
+    && (summary.canonicalAtAdmission === null || (() => { try { normalizeAdmission(summary.canonicalAtAdmission); return true; } catch (_) { return false; } })());
+}
+
+function validateProvisionalCandidate(candidate) {
+  if (!exactKeys(candidate, [
+    'candidateId', 'kind', 'title', 'aliases', 'parentId', 'parentAlternatives', 'confidence', 'disposition',
+    'reasonCodes', 'policyRevision', 'engineRevision', 'evidenceSetWatermark', 'lineage', 'actionable', 'support',
+  ])) return false;
+  const result = inferenceContracts.validateProjectCandidate({
+    contract: inferenceContracts.PROJECT_CANDIDATE_CONTRACT,
+    candidateId: candidate.candidateId,
+    origin: 'inference',
+    evidenceIds: ['ev_context_placeholder'],
+    evidenceSetWatermark: candidate.evidenceSetWatermark,
+    engineRevision: candidate.engineRevision,
+    policyRevision: candidate.policyRevision,
+    kind: candidate.kind,
+    title: candidate.title,
+    aliases: candidate.aliases,
+    parentId: candidate.parentId,
+    parentAlternatives: candidate.parentAlternatives,
+    confidence: candidate.confidence,
+    disposition: candidate.disposition,
+    reasonCodes: candidate.reasonCodes,
+    lineage: candidate.lineage,
+  });
+  return result.ok && candidate.disposition === 'provisional' && candidate.actionable === false
+    && Array.isArray(candidate.support) && stableStringify(candidate.support) === stableStringify(candidate.reasonCodes);
+}
+
+function validateInferencePacket(inference) {
+  if (!exactKeys(inference, INFERENCE_FIELDS)) return false;
+  try {
+    if (inference.policyRevision !== opaque(inference.policyRevision, 'inference.policyRevision')) return false;
+    if (inference.engineRevision !== opaque(inference.engineRevision, 'inference.engineRevision')) return false;
+    if (!Array.isArray(inference.candidates) || inference.candidates.some((candidate) => !validateProvisionalCandidate(candidate))) return false;
+    if (!Array.isArray(inference.coverage)) return false;
+    const coverage = new Set();
+    for (const entry of inference.coverage) {
+      if (coverage.has(entry.sourceClass) || !inferenceContracts.validateCoverageStatus(entry).ok) return false;
+      coverage.add(entry.sourceClass);
+    }
+    if (inference.watermark !== null && typeof inference.watermark !== 'string') return false;
+    if (!isPlainObject(inference.watermarks)) return false;
+    for (const [source, watermark] of Object.entries(inference.watermarks)) {
+      if (!inferenceContracts.SOURCE_CLASSES.includes(source) || !normalizeInferenceWatermark(watermark, `inference.watermarks.${source}`)) return false;
+    }
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
+function validatePacketWatermarks(watermarks) {
+  return exactKeys(watermarks, ['registry', 'inference', 'activity'])
+    && typeof watermarks.registry === 'string'
+    && (watermarks.inference === null || typeof watermarks.inference === 'string')
+    && (watermarks.activity === null || typeof watermarks.activity === 'string');
 }
 
 function validatePacketEvidence(evidence) {
@@ -337,14 +540,19 @@ function validateProviderView(view) {
 
 function validateContextPacket(packet) {
   if (!exactKeys(packet, CONTEXT_PACKET_FIELDS) || packet.contract !== CONTEXT_CONTRACT) return { ok: false, reason: 'invalid-contract' };
+  if (!SUPPORTED_CONTEXT_SCHEMA_VERSIONS.includes(packet.schemaVersion)) return { ok: false, reason: 'unsupported-schema' };
   if (!/^ctx_[a-f0-9]{32}$/.test(packet.packetId) || Number.isNaN(Date.parse(packet.capturedAt)) || Number.isNaN(Date.parse(packet.expiresAt))) return { ok: false, reason: 'invalid-contract' };
   if (!REDACTION_CLASSES.includes(packet.redactionClass) || !exactKeys(packet.capability, ['receiptId', 'digest']) || !/^cap_[a-f0-9]{32}$/.test(packet.capability.receiptId) || !/^[a-f0-9]{64}$/.test(packet.capability.digest)) return { ok: false, reason: 'invalid-contract' };
   try {
     validateContextQuery(packet.query);
     if (!exactKeys(packet.canonical, ['generation', 'records', 'revisions']) || !Number.isInteger(packet.canonical.generation) || !Array.isArray(packet.canonical.records) || !isPlainObject(packet.canonical.revisions)) return { ok: false, reason: 'invalid-contract' };
     if (packet.canonical.records.some((record) => !validatePacketRecord(record))) return { ok: false, reason: 'invalid-contract' };
+    const recordsById = new Map(packet.canonical.records.map((record) => [record.id, record]));
+    if (recordsById.size !== packet.canonical.records.length || packet.canonical.records.some((record) => record.parentId !== null && recordsById.get(record.parentId)?.kind !== 'project')) return { ok: false, reason: 'invalid-contract' };
     if (!Object.entries(packet.canonical.revisions).every(([id, revision]) => /^\w+_[0-9]{6,}$/.test(id) && Number.isInteger(revision) && revision > 0)) return { ok: false, reason: 'invalid-contract' };
+    if (Object.keys(packet.canonical.revisions).length !== recordsById.size || [...recordsById].some(([id, record]) => packet.canonical.revisions[id] !== record.revision)) return { ok: false, reason: 'invalid-contract' };
     if ([...packet.activity, ...packet.currentWork, ...packet.attention].some((value) => !validatePacketSummary(value)) || packet.evidence.some((value) => !validatePacketEvidence(value))) return { ok: false, reason: 'invalid-contract' };
+    if (!validateInferencePacket(packet.inference) || !validatePacketWatermarks(packet.watermarks)) return { ok: false, reason: 'invalid-contract' };
     if (!isPlainObject(packet.providers) || Object.values(packet.providers).some((view) => !validateProviderView(view))) return { ok: false, reason: 'invalid-contract' };
     if (!Array.isArray(packet.omissions) || packet.omissions.some((entry) => typeof entry !== 'string')) return { ok: false, reason: 'invalid-contract' };
     if (!exactKeys(packet.truncation, ['truncated', 'maxItems', 'maxBytes', 'omittedItems', 'sections']) || typeof packet.truncation.truncated !== 'boolean' || !Number.isInteger(packet.truncation.maxItems) || !Number.isInteger(packet.truncation.maxBytes) || !Number.isInteger(packet.truncation.omittedItems) || !Array.isArray(packet.truncation.sections)) return { ok: false, reason: 'invalid-contract' };
@@ -354,11 +562,20 @@ function validateContextPacket(packet) {
   return { ok: true, packet };
 }
 
-function buildContextPacket({ registry, query, providers = {}, providerAuthorities = {}, capability, capabilitySecret, subject, hostId, activityWindow = null, now = new Date().toISOString() } = {}) {
+function normalizeContextPacket(packet) {
+  const validation = validateContextPacket(packet);
+  return validation.ok
+    ? { ok: true, packet: clone(validation.packet), supportedSchemaVersions: [...SUPPORTED_CONTEXT_SCHEMA_VERSIONS] }
+    : validation;
+}
+
+function buildContextPacket({ registry, query, providers = {}, providerAuthorities = {}, capability, capabilitySecret, subject, hostId, activityWindow = null, inference = null, intentGaps = null, now = new Date().toISOString() } = {}) {
   let normalizedQuery;
   try { normalizedQuery = validateContextQuery(query); } catch (_) { return { status: 'unavailable', code: 'CONTEXT_UNAVAILABLE' }; }
   let normalizedActivityWindow;
   try { normalizedActivityWindow = validateActivityWindow(activityWindow); } catch (_) { return { status: 'unavailable', code: 'CONTEXT_UNAVAILABLE' }; }
+  let normalizedInference;
+  try { normalizedInference = normalizeInferenceSnapshot(inference); } catch (_) { return { status: 'unavailable', code: 'CONTEXT_UNAVAILABLE' }; }
   if (typeof hostId !== 'string' || !hostId.trim()) return { status: 'unavailable', code: 'CONTEXT_UNAVAILABLE' };
   const verification = verifyCapability(capability, {
     hostSecret: capabilitySecret,
@@ -377,13 +594,15 @@ function buildContextPacket({ registry, query, providers = {}, providerAuthoriti
     || authorized.freshness.maxAgeSeconds < normalizedQuery.limits.maxProviderAgeSeconds) return { status: 'unavailable', code: 'CONTEXT_UNAVAILABLE' };
   const selectedIds = recordIdsForScope(registry, normalizedQuery.scope);
   if (!selectedIds) return { status: 'unavailable', code: 'CONTEXT_UNAVAILABLE' };
+  const wholePortfolio = normalizedQuery.scope.projectIds.length === 0 && normalizedQuery.scope.outcomeIds.length === 0;
   const redactionClass = authorized.redactionClass;
+  let selectedRecords;
   let records;
   try {
-    records = registry.list()
+    selectedRecords = registry.list()
       .filter((record) => selectedIds.has(record.id))
-      .sort((left, right) => registry.breadcrumb(left.id).localeCompare(registry.breadcrumb(right.id)) || left.id.localeCompare(right.id))
-      .map((record) => serializeRecord(record, registry, redactionClass));
+      .sort((left, right) => registry.breadcrumb(left.id).localeCompare(registry.breadcrumb(right.id)) || left.id.localeCompare(right.id));
+    records = selectedRecords.map((record) => serializeRecord(record, registry, redactionClass));
   } catch (_) {
     return { status: 'unavailable', code: 'CONTEXT_UNAVAILABLE' };
   }
@@ -396,6 +615,29 @@ function buildContextPacket({ registry, query, providers = {}, providerAuthoriti
   const packetOmissions = [];
   const providerResults = {};
   const allSummaries = [];
+  if (intentGaps === null || intentGaps === undefined) {
+    packetOmissions.push('intent-gap:omitted');
+  } else if (redactionClass === 'public') {
+    packetOmissions.push('intent-gap:redacted');
+  } else {
+    try {
+      const derived = deriveIntentGapAttention({
+        records: selectedRecords,
+        registryGeneration: registry.generation,
+        // Do not normalize or verify a foreign descriptor: scope filtering is
+        // an authority boundary, not just packet presentation.
+        sources: Array.isArray(intentGaps.sources)
+          ? intentGaps.sources.filter((source) => source && selectedIds.has(source.canonicalId))
+          : intentGaps.sources,
+        sourceAuthority: intentGaps.sourceAuthority,
+        maxEvidenceAgeSeconds: normalizedQuery.limits.maxProviderAgeSeconds,
+        now,
+      });
+      allSummaries.push(...attentionSummaries(derived.entries, { observedAt: now }));
+    } catch (_) {
+      return { status: 'unavailable', code: 'CONTEXT_UNAVAILABLE' };
+    }
+  }
   for (const provider of allProviderNames) {
     if (!authorized.providerCoverage.includes(provider)) {
       const result = { view: emptyProvider(provider, 'omitted', [`provider:${provider}:not-covered`]), summaries: [], omissions: [`provider:${provider}:not-covered`] };
@@ -415,9 +657,21 @@ function buildContextPacket({ registry, query, providers = {}, providerAuthoriti
   allSummaries.sort(summarySort);
   const classified = classifySummaries(allSummaries);
   const evidence = allSummaries.map(redactEvidence).sort(summarySort);
+  const provisionalCandidates = redactionClass === 'public' ? [] : normalizedInference.candidates
+    .map((candidate) => projectCandidate(candidate, selectedIds, wholePortfolio))
+    .filter(Boolean);
+  if (redactionClass === 'public' && normalizedInference.candidates.length) {
+    packetOmissions.push('inference:candidates:redacted');
+  }
+  const packetWatermarks = {
+    registry: `registry:${registry.generation}`,
+    inference: normalizedInference.watermark,
+    activity: providerResults.activity?.watermark || null,
+  };
   const expiresAt = authorized.expiresAt;
   const packet = {
     contract: CONTEXT_CONTRACT,
+    schemaVersion: CONTEXT_SCHEMA_VERSION,
     packetId: '',
     capturedAt: now,
     expiresAt,
@@ -428,6 +682,15 @@ function buildContextPacket({ registry, query, providers = {}, providerAuthoriti
     attention: normalizedQuery.include.includes('attention') ? classified.attention : [],
     evidence,
     providers: providerResults,
+    inference: {
+      policyRevision: normalizedInference.policyRevision,
+      engineRevision: normalizedInference.engineRevision,
+      candidates: provisionalCandidates,
+      coverage: normalizedInference.coverage,
+      watermark: normalizedInference.watermark,
+      watermarks: normalizedInference.watermarks,
+    },
+    watermarks: packetWatermarks,
     omissions: [...new Set(packetOmissions)].sort(),
     truncation: { truncated: false, maxItems: normalizedQuery.limits.maxItems, maxBytes: normalizedQuery.limits.maxBytes, omittedItems: 0, sections: [] },
     redactionClass,
@@ -442,6 +705,8 @@ function buildContextPacket({ registry, query, providers = {}, providerAuthoriti
 
 module.exports = {
   CONTEXT_CONTRACT,
+  CONTEXT_SCHEMA_VERSION,
+  SUPPORTED_CONTEXT_SCHEMA_VERSIONS,
   CONTEXT_PACKET_FIELDS,
   EVIDENCE_FIELDS,
   INCLUDE_SECTIONS,
@@ -451,6 +716,8 @@ module.exports = {
   SUMMARY_FIELDS,
   buildContextPacket,
   filterSummariesByWindow,
+  normalizeInferenceSnapshot,
+  normalizeContextPacket,
   validateActivityWindow,
   validateContextPacket,
   validateContextQuery,

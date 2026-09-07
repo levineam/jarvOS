@@ -144,6 +144,40 @@ test('idea capture keeps lightweight ideas in journal and promotes substantive i
   });
 });
 
+test('strict journal commands use the public hard-command route', () => {
+  const vault = makeTempVault();
+  withVaultEnv(vault, (options) => {
+    const result = captureWithJarvos(baseCapture('openclaw', {
+      text: 'Add to Journal: reviewed the capture bug: no model needed',
+    }), options);
+
+    assert.equal(result.ok, true);
+    assert.equal(result.hardCommand.disposition, 'capture');
+    assert.equal(result.hardCommand.command, 'add-to-journal');
+    assert.equal(result.routing.plan.route, 'journal');
+    assert.equal(result.routing.note, null);
+    assert.equal(result.routing.noteLink.heading, '## 📓 Journal Entry');
+    assert.equal(result.routing.noteLink.line, '- reviewed the capture bug: no model needed');
+  });
+});
+
+test('bare strict commands return needs_input without writing', () => {
+  const vault = makeTempVault();
+  withVaultEnv(vault, (options) => {
+    const result = captureWithJarvos(baseCapture('openclaw', {
+      text: 'Idea:   ',
+    }), options);
+
+    assert.equal(result.ok, false);
+    assert.equal(result.error, null);
+    assert.equal(result.hardCommand.disposition, 'needs_input');
+    assert.equal(result.routing.response, 'What idea should I capture?');
+    assert.deepEqual(result.artifactReceipt.artifacts, []);
+    assert.equal(fs.readdirSync(vault.notesDir).length, 0);
+    assert.equal(fs.readdirSync(vault.journalDir).length, 0);
+  });
+});
+
 test('triggerless title+content capture defaults to note intent for library callers', () => {
   const vault = makeTempVault();
   withVaultEnv(vault, (options) => {

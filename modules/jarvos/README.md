@@ -106,8 +106,13 @@ The minimal profile checks the reusable JarvOS contract:
 - required workspace files: `MEMORY.md`, `jarvos.config.json`, and
   `jarvos.config.schema.json`
 - `jarvos.config.json` validates against `jarvos.config.schema.json`
-- `paths.workspace`, `paths.vault`, `paths.notes`, `paths.journal`, and
-  `paths.memory` point to existing directories
+- `paths.workspace`, `paths.vault`, `paths.notes`, `paths.journal`,
+  `paths.tags`, and `paths.memory` are absolute or `~`-rooted and point to
+  existing directories. The config resolver ignores a relative `paths.*` value:
+  `workspace` and `vault` fall back to the home defaults, while a derived key
+  such as `notes` or `memory` is recomputed from its resolved vault or
+  workspace parent. Either way the configured value is never used, so doctor
+  reports it as a failure rather than resolving it against the workspace.
 - `AGENTS.md` exists as the agent context entry point and `MEMORY.md` is
   present for agent-context hydration
 - the native knowledge surfaces under `.jarvos/knowledge` are available after
@@ -119,6 +124,12 @@ The minimal profile checks the reusable JarvOS contract:
 
 Failure output names the exact component, such as `agent.context` or
 `path.vault`, so an installer or assistant can repair the missing piece directly.
+JSON includes the `jarvos-system-doctor-report/v1` projection, while text shows
+one icon and one line per component, adding a concise reason and next action only
+when a component is degraded.
+Optional providers are absent unless selected by a profile-bound, data-only
+health snapshot; selected components remain individually visible as healthy,
+warning, repair needed, or not configured.
 
 ## Local OpenClaw Profile
 

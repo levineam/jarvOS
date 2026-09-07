@@ -24,8 +24,9 @@ Status values:
 | obsidian-cli | optional | Bounded transport into the running app's reviewed `app.vault` operations. | It carries fixed, data-only create/transform/replace/delete programs and cannot accept arbitrary evaluated source from an agent. |
 | Defuddle | optional | Web-page-to-Markdown extraction for source material workflows. | Extraction aid only. Source provenance must be preserved before material enters QMD, GBrain, or other retrieval layers. |
 | QMD | active | Broad Markdown lookup, exact note retrieval, and retrieval-eval comparison. | Search/index layer, not durable truth and not the graph layer. Freshness is explicit through `qmd-refresh-pending.json`. |
-| GBrain | active | Curated structured recall for people, companies, projects, concepts, meetings, and sources. | Reviewed structured graph memory. jarvOS queues/imports curated, provenance-rich notes; GBrain does not replace the vault or QMD. |
+| GBrain | optional | Curated structured recall and provider-owned skills for people, companies, projects, concepts, meetings, and sources. Andrew's private profile requires one shared GBrain for Codex, Hermes, and OpenClaw; portable jarvOS does not. | Reviewed structured graph memory. GBrain owns structured recall and its resolver/quality gates, not Paperclip task state, raw Vault notes, journal mutation, or jarvOS governance. jarvOS pins and observes the provider but does not proxy it or supervise its database. |
 | OpenClaw memory-wiki | active | Runtime-native compiled wiki, diagnostics, and synthesis support. | Diagnostic/generated runtime layer. It is not the canonical GBrain import source and does not own authored notes. |
+| Grok Bot runtime | optional | Separate-computer agent runtime that hydrates from a vault-host authenticated HTTP/SSE MCP connector. | Optional runtime, not a knowledge authority. Native Grok memory, routines, and CloudAgent stay host-owned. jarvOS does not clone the vault, auto-ingest chats, or expose SendMessage/CloudAgent. |
 | OpenClaw runtime memory | active | Session continuity, diary/dreaming, compaction recall, and runtime health. | Runtime continuity layer. It must not mirror itself into durable memory or overwrite canonical notes. |
 | generated LLM-wiki / secondbrain wiki | generated | Visible derived Markdown wiki pages compiled from source-backed sidecars. | Rebuildable retrieval and inspection artifact. Source notes, journals, and sidecars remain authoritative. The generated output is managed and marked as generated so it can be safely rebuilt without becoming editable truth. |
 | Paperclip | active | Live execution state for work that becomes tasks, blockers, reviews, and release evidence. | Project/task truth only. It is not long-form memory or the knowledge base. |
@@ -96,20 +97,48 @@ match. Missing or incompatible private fields produce `unknown`; the global
 
 ## Operating Model
 
-The active secondbrain path is:
+The intended secondbrain model is below. Only intentional capture is active in
+this repository today; the eligible-interaction candidate stages are future
+adapter behavior.
 
 ```text
 intentional capture
   -> Obsidian-compatible Markdown Notes/Journal
+
+future eligible AI interactions
+  -> eligibility and trust boundary
+  -> immutable, source-backed, non-authoritative candidates
+  -> governed review or policy admission
+  -> destination-owned promotion plus outcome receipt
+
+authoritative durable surfaces
   -> source-backed sidecars and generated LLM-wiki
   -> QMD freshness / broad lookup
   -> GBrain curated structured recall
   -> OpenClaw memory-wiki and runtime recall diagnostics
 ```
 
+Intentional capture remains the direct authored path. Eligible ambient
+observation is a future proposal path: a future adapter may prepare candidates,
+but this foundation contains no source adapter that does so. It does not
+automatically believe, promote, or retain every conversation. Source
+trust, privacy, expiry, deduplication, and evidence binding are checked before
+candidate construction. Destination owners still decide admission and emit a
+receipt whose outcome distinguishes a committed revision from a failed,
+deferred, conflicted, or already-satisfied attempt.
+
 Paperclip runs alongside that path for execution state. It records issues,
 owners, blockers, reviews, release evidence, and follow-up work, but it is not
 the knowledge base.
+
+Private shared-brain continuity uses one provider-native GBrain stdio
+registration per harness, all launched through the same pinned-runtime
+descriptor and all pointing at the same local Postgres brain. The public
+runtime adapters declare this optional integration contract without shipping
+private configuration. GBrain's resolver remains the only Skillify projection;
+the jarvOS shared-skill distributor must not copy or fork it. Serve-time sweep
+is disabled, leaving the scheduler-owned delta-maintenance path as the sole
+maintenance owner.
 
 agentmemory, when used, belongs beside the runtime continuity layer as an
 advisory dogfood sidecar. It should answer questions like "what did another
@@ -137,7 +166,10 @@ Active integrations should be proven through these public-safe signals:
 
 ## Non-Goals
 
-- No automatic ingestion of every AI conversation.
+- No indiscriminate ingestion of every AI conversation, raw transcript
+  hoarding, or automatic belief. A future eligible-interaction adapter may
+  produce bounded non-authoritative candidates; durable promotion remains
+  governed.
 - No ChatGPT or Claude app first-class capture target in the current
   determinism contract.
 - No direct agentmemory host access or automatic memory promotion.

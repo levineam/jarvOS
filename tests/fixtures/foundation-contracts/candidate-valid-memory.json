@@ -1,0 +1,14 @@
+{
+  "schemaVersion": "jarvos.candidate.v1",
+  "candidateId": "jarvos:candidate:example:c-0001",
+  "candidateType": "memory-unit",
+  "authority": "non-authoritative",
+  "sources": [{ "sourceEventId": "jarvos:source-event:example:se-0001", "evidenceDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" }],
+  "privacyTier": "local-private",
+  "sourceTrust": "user-authored",
+  "construction": { "extractorId": "example-extractor", "extractorVersion": "1.0.0", "eligibilityPolicyId": "jarvos:policy:example:eligibility-v1" },
+  "dedupeKey": "memory-unit:example:0001",
+  "createdAt": "2026-08-31T12:00:00Z",
+  "expiresAt": "2026-09-30T12:00:00Z",
+  "proposal": { "title": "Example preference", "summary": "A synthetic source-backed memory candidate awaiting governed review." }
+}

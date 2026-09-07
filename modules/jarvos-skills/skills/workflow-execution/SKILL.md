@@ -13,6 +13,8 @@ metadata:
     bundle: operating-system-skills
     portability: generic
     managedCodingProvider: compound-engineering
+    codex:
+      implicitInvocation: managed coding intent only
 ---
 
 # Workflow Execution
@@ -51,7 +53,7 @@ The workflow is complete only when:
 8. **Close or hand off.** Move the issue to done only when no follow-up remains.
    Use in-review only when a real reviewer path exists.
 
-## Managed coding verbs
+## Managed coding workflow
 
 When this skill is running inside a jarvOS coding profile, the natural verbs
 `plan`, `work`, and `complete` use the jarvOS-managed provider route. A healthy,
@@ -61,11 +63,26 @@ accepted plan revision, review evidence, submission gate, and completion
 decision. `compound` is an explicit, post-verification learning-capture step,
 not a substitute for completion evidence.
 
+In a jarvOS-managed Codex profile, start with `jarvos_coding_repositories` when
+an opaque repository identifier is needed, then use one durable run through
+`jarvos_coding_plan`, `jarvos_coding_accept_plan`, `jarvos_coding_work`, and
+`jarvos_coding_finish`. Use `jarvos_coding_status` or `jarvos_coding_resume` to
+continue that run. Never infer a repository root, provider, executable,
+credential, or registry path from the request.
+
 If the provider is unavailable, modified, unsupported, or fails during a run,
 fall back through the generic workflow in the same work run and worktree. Do
 not start a second plan, branch, or pull request. Treat provider checkpoints as
 reattachment hints only and revalidate current Git, review, test, and PR
 evidence before claiming completion.
+
+Code work finishes through this managed workflow rather than stopping at a
+local commit or open pull request. When the exact pull-request head is aligned
+with the tracked goal and every required submission gate is clean, merge it
+autonomously and close the tracked work; routine non-author approval is not a
+gate. Stop only for unclear goal alignment, a required failed or missing gate,
+branch or path policy, or separate authority for publication, live activation,
+spending, destructive action, or an external send.
 
 ## Definition of done template
 

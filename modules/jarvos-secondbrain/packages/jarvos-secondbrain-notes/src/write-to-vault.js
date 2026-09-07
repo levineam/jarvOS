@@ -145,6 +145,7 @@ function writeNoteFile({ title, content, frontmatter = {}, appendEntry, mutation
     source,
   });
   const receipt = mutationExecutor(operation);
+  const persistedOperation = receipt.operation || operation;
   const hasBytes = hasPersistedNoteBytes(filePath, receipt);
   const artifactReceipt = createArtifactReceipt({
     artifacts: [{
@@ -158,7 +159,7 @@ function writeNoteFile({ title, content, frontmatter = {}, appendEntry, mutation
   });
   const journal = { status: 'pending', linked: false, deferred: false, disabled: false, failed: false, reason: 'backlink dispatch is composed separately' };
   const knowledge = hasBytes
-    ? optimizeNoteKnowledge({ filePath, notesDir, title: safeName, body, frontmatter: { ...normalizedFrontmatter, jarvos_note_id: operation.noteId }, created, journal })
+    ? optimizeNoteKnowledge({ filePath, notesDir, title: safeName, body, frontmatter: { ...normalizedFrontmatter, jarvos_note_id: persistedOperation.noteId }, created, journal })
     : null;
 
   return {
@@ -167,7 +168,7 @@ function writeNoteFile({ title, content, frontmatter = {}, appendEntry, mutation
     path: filePath,
     title: safeName,
     created,
-    noteId: operation.noteId,
+    noteId: persistedOperation.noteId,
     receipt,
     artifactReceipt,
     journal,

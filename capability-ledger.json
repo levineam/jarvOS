@@ -1,0 +1,79 @@
+{
+  "schemaVersion": "jarvos.capability-ledger.v1",
+  "records": [
+    {
+      "capabilityId": "portable-identity",
+      "title": "Portable opaque identity contract",
+      "specification": "canonical",
+      "implementation": "partial",
+      "repository": "merged",
+      "verification": "fixture-proven",
+      "activation": "inactive",
+      "authority": "none",
+      "evidence": [
+        { "type": "repo-path", "ref": "modules/jarvos-control-plane/src/identity.js" },
+        { "type": "test", "ref": "modules/jarvos-control-plane/test/identity.test.js" },
+        { "type": "document", "ref": "docs/architecture/capability-truth-ledger.md" },
+        { "type": "commit", "ref": "03b5263e3b273ea7a3e76581fd73c6059fd90ada" }
+      ],
+      "assertedOn": "2026-09-01",
+      "notes": "Merged validator, exports, and unit tests exist; no product consumer issues identifiers yet."
+    },
+    {
+      "capabilityId": "capability-truth-ledger",
+      "title": "Capability truth ledger contract",
+      "specification": "canonical",
+      "implementation": "partial",
+      "repository": "merged",
+      "verification": "fixture-proven",
+      "activation": "inactive",
+      "authority": "none",
+      "evidence": [
+        { "type": "repo-path", "ref": "scripts/lib/capability-ledger.js" },
+        { "type": "document", "ref": "docs/architecture/capability-truth-ledger.md" },
+        { "type": "repo-path", "ref": "capability-ledger.json" },
+        { "type": "commit", "ref": "03b5263e3b273ea7a3e76581fd73c6059fd90ada" }
+      ],
+      "assertedOn": "2026-09-01",
+      "notes": "This merged ledger validates against its own contract; no automated reporter consumes it yet."
+    },
+    {
+      "capabilityId": "candidate-envelope",
+      "title": "Non-authoritative candidate envelope contract",
+      "specification": "canonical",
+      "implementation": "partial",
+      "repository": "merged",
+      "verification": "fixture-proven",
+      "activation": "inactive",
+      "authority": "none",
+      "evidence": [
+        { "type": "repo-path", "ref": "modules/jarvos-secondbrain/packages/jarvos-ambient/src/intent/candidate-contract.js" },
+        { "type": "test", "ref": "modules/jarvos-secondbrain/packages/jarvos-ambient/test/candidate-contract.test.js" },
+        { "type": "document", "ref": "modules/jarvos-secondbrain/docs/contracts/CANDIDATE_ENVELOPE.md" },
+        { "type": "test", "ref": "tests/fixtures/foundation-contracts/manifest.json" },
+        { "type": "commit", "ref": "03b5263e3b273ea7a3e76581fd73c6059fd90ada" }
+      ],
+      "assertedOn": "2026-09-01",
+      "notes": "Merged validator, exports, unit tests, and shared conformance fixtures exist; no source adapter or promotion consumer constructs candidates yet."
+    },
+    {
+      "capabilityId": "promotion-receipt",
+      "title": "Cross-surface promotion receipt envelope contract",
+      "specification": "canonical",
+      "implementation": "partial",
+      "repository": "merged",
+      "verification": "fixture-proven",
+      "activation": "inactive",
+      "authority": "none",
+      "evidence": [
+        { "type": "repo-path", "ref": "modules/jarvos-control-plane/src/promotion-receipt.js" },
+        { "type": "test", "ref": "modules/jarvos-control-plane/test/promotion-receipt.test.js" },
+        { "type": "document", "ref": "modules/jarvos-control-plane/README.md" },
+        { "type": "test", "ref": "tests/fixtures/foundation-contracts/manifest.json" },
+        { "type": "commit", "ref": "03b5263e3b273ea7a3e76581fd73c6059fd90ada" }
+      ],
+      "assertedOn": "2026-09-01",
+      "notes": "Merged validator, exports, unit tests, and shared conformance fixtures exist; no destination writer emits this envelope yet."
+    }
+  ]
+}

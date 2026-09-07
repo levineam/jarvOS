@@ -2,6 +2,17 @@
 
 Contract, scaffold, and conformance checks for jarvOS runtime adapters.
 
+## Constrained generation (declaration-only)
+
+`evaluateConstrainedGeneration(record)` evaluates a redacted, backend-neutral
+generation receipt. It requires runtime-proof evidence, exact returned model
+and reasoning effort, zero tools, no fallback attempts, usage evidence, and
+explicit delivery denial. It never invokes a backend or changes provider
+selection. The OpenClaw-shaped fixture proves only this contract's fixture
+conformance; it is not preserved-runtime behavior or golden-parity evidence.
+It remains `claimed-unverified`; Hermes and direct-provider backends have no
+verified claim in this contract.
+
 Runtime adapters should stay thin. Shared jarvOS capabilities live in
 `@jarvos/agent-context`; adapter directories translate those capabilities into a
 host runtime's native surfaces such as MCP, hooks, skills, or desktop config.
@@ -64,6 +75,57 @@ The kit validates the manifest shape and checks the adapter directory for common
 drift: missing shared MCP wiring, undocumented unsupported MCP targets, missing
 `jarvos_hydrate`, setup scripts that edit config without backup behavior, and
 hook-based adapters that do not fail open.
+
+## Resident runtime modes and workload routing
+
+`runtimeMode` is an optional, declaration-only block in `jarvos.config.json`.
+Its version is `jarvos-runtime-mode/v1`; the modes are `none`, `hermes`,
+`openclaw`, and `multi`. `installedAdapters` records what is installed, while
+`workloadRoutes` selects a consumer only in `multi`. A `telegram.updates`
+workload may have exactly one consumer. `capabilityTruth` records an explicit
+`available`, `unavailable`, or `unknown` state with non-empty evidence.
+
+Configurations that do not contain `runtimeMode` are loaded as the compatible
+`none` declaration. This contract has no activation behavior: it starts no
+process, changes no credentials, and installs nothing.
+
+## Runner-state compatibility reads
+
+`readRunnerState` and `resolveTelegramCredentialReference` are fixture-only,
+read-only compatibility helpers. They prefer `.jarvos/runner-state.json` and
+can fall back to `.openclaw/cron/external-runner-state.json` only when the new
+location is absent. The fallback emits a structured read-only compatibility
+event; it never writes or migrates the legacy file.
+
+A route record contains exactly `routeIdentity`, `secretStoreRef`, and
+`revision`. The resolver rejects raw-token-shaped configuration fields, unsafe
+paths or symlinks, duplicate Telegram routes, and conflicting new/legacy
+records. It has no default home-directory lookup, so it cannot inspect a live
+installation until a separately reviewed adapter deliberately opts in.
+
+The supported route identities are `telegram:<route-name>`,
+`openclaw:telegram:<route-name>`, and `hermes:telegram:<route-name>`.
+`<route-name>` is one opaque, colon-free segment; accepted identities are
+returned exactly as written. Compatibility fallback always returns structured
+read-only evidence, whether or not an optional observer is supplied. Files are
+opened with no-follow descriptors and revalidated against their inspected
+identity and fixture-root containment before they are parsed.
+The descriptor and filesystem helpers are internal implementation details; the
+public API returns only validated, sanitized state records.
+
+`runtimeMode.conformanceFacts` is an optional `jarvos-harness-conformance/v1`
+registry. Its tiers are `baseline-context`, `conversational`,
+`mutation-capable`, and `proactive-authority`. A
+`telegram.proactive-delivery` route is rejected unless its selected harness has
+a verified `proactive-authority` fact bound to the exact installed tuple
+(harness, runtime version, and asset digest). Hooks are descriptive evidence,
+not proactive proof. The checked-in Hermes and OpenClaw declarations are both
+`claimed-unverified` pending owner-local Mac Mini proof; this repository does
+not run that proof or activate either harness.
+
+Conformance facts currently name only `hermes` or `openclaw`. Their registered
+adapter manifests must bind every fact to their own id and declare all four
+tiers once, in the canonical order above.
 
 ## Managed harness activation
 

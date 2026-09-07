@@ -15,8 +15,11 @@ const {
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const {
+  createFileExecutionLinkStore,
+} = require('../../jarvos-secondbrain/packages/jarvos-secondbrain-projects/src/execution-link-store');
 
-function hostAuthorization({ action, workspaceId, operationId, itemId, canonical }) {
+function hostAuthorization({ action, workspaceId, operationId, itemId, canonical, requestFingerprint }) {
   return {
     contract: 'jarvos.work-action-authorization/v1',
     authorized: true,
@@ -27,6 +30,7 @@ function hostAuthorization({ action, workspaceId, operationId, itemId, canonical
     operationId,
     itemId,
     canonical,
+    requestFingerprint,
   };
 }
 
@@ -56,6 +60,38 @@ test('live Beads tracker selects the durable operation ledger when the host supp
   assert.ok(fs.readdirSync(ledgerRoot).some((name) => name.endsWith('.json')));
 });
 
+test('live Todo composition refuses memory, missing, and aliased durable roots while test mode can be explicit memory', () => {
+  const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-todo-live-roots-'));
+  assert.throws(() => createLiveBeadsTracker({ workspaceRoot, mode: 'live' }), /durable tracker operation ledger/);
+
+  const { createBeadsWorkActionService, createMemoryExecutionLinkStore, createFileOperationStore } = require('../src/index.js');
+  const memoryTracker = { authority: 'beads', workspaceRoot, async createWorkItem() { return null; } };
+  assert.doesNotThrow(() => createBeadsWorkActionService({ mode: 'test', tracker: memoryTracker, executionLinks: createMemoryExecutionLinkStore() }));
+
+  const sharedRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-todo-live-aliased-'));
+  const tracker = {
+    authority: 'beads', workspaceRoot,
+    operationStoreRoot: sharedRoot,
+    operationStoreContract: 'jarvos-coding-operation-store/v1',
+    operationStoreStorage: 'file',
+    async createWorkItem() { return null; },
+  };
+  assert.throws(() => createBeadsWorkActionService({
+    mode: 'live', tracker,
+    operationStore: createFileOperationStore({ root: sharedRoot }),
+    executionLinks: createFileExecutionLinkStore({ root: sharedRoot }),
+  }), /roots must be distinct/);
+
+  const nestedRoot = path.join(sharedRoot, 'nested-actions');
+  const nestedLinks = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-todo-live-nested-links-'));
+  fs.mkdirSync(nestedRoot, { mode: 0o700 });
+  assert.throws(() => createBeadsWorkActionService({
+    mode: 'live', tracker,
+    operationStore: createFileOperationStore({ root: nestedRoot }),
+    executionLinks: createFileExecutionLinkStore({ root: nestedLinks }),
+  }), /non-overlapping/);
+});
+
 test('Beads Todo action facade requires host authority, exact linkage, and Andrew for human attestation', async () => {
   const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-todo-action-'));
   const { createBeadsWorkActionService, createMemoryExecutionLinkStore } = require('../src/index.js');
@@ -83,6 +119,54 @@ test('Beads Todo action facade requires host authority, exact linkage, and Andre
   await assert.rejects(() => unbound.transition({ itemId: 'bd-action', operationId: 'action-7', status: 'review' }), /host mutation authorization/);
   await assert.rejects(() => unbound.completeWithEvidence({ itemId: 'bd-action', operationId: 'action-8', evidence: { kind: 'human-attested' }, actor: { kind: 'human', id: 'andrew' } }), /host mutation authorization/);
   await assert.rejects(() => unbound.reopen({ itemId: 'bd-action', operationId: 'action-9' }), /host mutation authorization/);
+});
+
+test('Beads Todo authorization is bound to the complete mutation request', async () => {
+  const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-todo-auth-fingerprint-'));
+  const { createBeadsWorkActionService, createMemoryExecutionLinkStore } = require('../src/index.js');
+  let dispatches = 0;
+  const tracker = {
+    authority: 'beads', workspaceRoot,
+    async createWorkItem() { dispatches += 1; return { state: 'committed', result: { id: 'bd-auth', revision: '1', status: 'open' } }; },
+  };
+  const canonical = { kind: 'outcome', id: 'out_000001', revision: 1, breadcrumb: 'Project › Outcome' };
+  const service = createBeadsWorkActionService({
+    tracker,
+    executionLinks: createMemoryExecutionLinkStore(),
+    approvedWorkspaceIds: [workspaceRoot],
+    authorizeMutation: async (request) => ({ ...hostAuthorization(request), requestFingerprint: 'substituted-request' }),
+  });
+  await assert.rejects(
+    () => service.create({ title: 'must stay bound', operationId: 'auth-fingerprint-1', canonical }),
+    /not bound to this request/,
+  );
+  assert.equal(dispatches, 0);
+});
+
+test('Beads Todo distinguishes resuming blocked work from reopening closed work', async () => {
+  const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-todo-resume-reopen-'));
+  const { createBeadsWorkActionService, createMemoryExecutionLinkStore } = require('../src/index.js');
+  const transitions = [];
+  let revision = 1;
+  const tracker = {
+    authority: 'beads', workspaceRoot,
+    async createWorkItem() { return { state: 'committed', result: { id: 'bd-resume', revision: String(revision), status: 'open' } }; },
+    async transition(input) {
+      transitions.push(input);
+      revision += 1;
+      return { state: 'committed', result: { id: input.itemId, revision: String(revision), status: input.status } };
+    },
+  };
+  const canonical = { contract: 'jarvos.canonical-reference/v1', kind: 'outcome', id: 'out_000001', revision: 1, breadcrumb: 'Project › Outcome' };
+  const service = createBeadsWorkActionService({ tracker, executionLinks: createMemoryExecutionLinkStore(), approvedWorkspaceIds: [workspaceRoot], authorizeMutation: hostAuthorization });
+  await service.create({ title: 'Resume semantics', operationId: 'resume-create', canonical, actor: { kind: 'human', id: 'andrew' } });
+  await service.transition({ itemId: 'bd-resume', operationId: 'resume-blocked', status: 'open', actor: { kind: 'human', id: 'andrew' } });
+  await service.reopen({ itemId: 'bd-resume', operationId: 'reopen-closed', actor: { kind: 'human', id: 'andrew' } });
+
+  assert.equal(transitions[0].status, 'open');
+  assert.equal(transitions[0].reopen, undefined);
+  assert.equal(transitions[1].status, 'open');
+  assert.equal(transitions[1].reopen, true);
 });
 
 test('Beads Todo completion accepts only host-resolved immutable verification receipts', async () => {
@@ -133,10 +217,199 @@ test('Beads Todo host completion resolves its receipt without caller evidence', 
   assert.deepEqual(completionRequest, { operationId: 'host-complete-1', itemId: 'bd-host-complete', workspaceId: completionRequest.workspaceId });
 });
 
+test('Beads Todo host completion hides private resolver failures', async () => {
+  const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-todo-host-error-'));
+  const { createBeadsWorkActionService, createMemoryExecutionLinkStore } = require('../src/index.js');
+  const canonical = { kind: 'outcome', id: 'out_000001', revision: 1, breadcrumb: 'Project › Outcome' };
+  const tracker = {
+    authority: 'beads', workspaceRoot,
+    async createWorkItem() { return { state: 'committed', result: { id: 'bd-host-error', revision: '1', status: 'open' } }; },
+    async transition() { throw new Error('must not dispatch without completion evidence'); },
+  };
+  const service = createBeadsWorkActionService({
+    tracker,
+    executionLinks: createMemoryExecutionLinkStore(),
+    approvedWorkspaceIds: [workspaceRoot],
+    authorizeMutation: hostAuthorization,
+    registeredEvidenceProducers: ['ci'],
+    resolveCompletionReceipt: async () => { throw new Error('token=private /Users/private/receipt.json'); },
+  });
+  await service.create({ title: 'host completion error', operationId: 'host-error-create', canonical });
+  await assert.rejects(
+    () => service.completeFromHost({ itemId: 'bd-host-error', operationId: 'host-error-complete' }),
+    (error) => error.message === 'host completion receipt is unavailable' && !error.message.includes('private'),
+  );
+});
+
+test('live Todo mode accepts only host-resolved terminal evidence', async () => {
+  const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-todo-live-terminal-workspace-'));
+  const trackerRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-todo-live-terminal-tracker-'));
+  const actionRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-todo-live-terminal-action-'));
+  const linkRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-todo-live-terminal-links-'));
+  const { createBeadsWorkActionService, createFileOperationStore } = require('../src/index.js');
+  const canonical = { kind: 'outcome', id: 'out_000001', revision: 1, breadcrumb: 'Project › Outcome' };
+  let transitions = 0;
+  const tracker = {
+    authority: 'beads', workspaceRoot,
+    operationStoreRoot: trackerRoot,
+    operationStoreContract: 'jarvos-coding-operation-store/v1',
+    operationStoreStorage: 'file',
+    async createWorkItem() { return { state: 'committed', result: { id: 'bd-live-terminal', revision: '1', status: 'open' } }; },
+    async transition(input) { transitions += 1; return { state: 'committed', result: { id: input.itemId, revision: '2', status: input.status } }; },
+  };
+  const service = createBeadsWorkActionService({
+    tracker,
+    mode: 'live',
+    operationStore: createFileOperationStore({ root: actionRoot }),
+    executionLinks: createFileExecutionLinkStore({ root: linkRoot }),
+    workspaceId: 'workspace-live-terminal',
+    approvedWorkspaceIds: ['workspace-live-terminal'],
+    authorizeMutation: hostAuthorization,
+    registeredEvidenceProducers: ['ci'],
+    resolveCompletionReceipt: async (request) => ({
+      contract: 'jarvos.work-action-evidence-receipt/v1', immutable: true,
+      kind: 'execution-verified', producer: 'ci', canonical,
+      operationId: request.operationId, itemId: request.itemId,
+    }),
+  });
+  await service.create({ title: 'live terminal', operationId: 'live-terminal-create', canonical });
+  await assert.rejects(
+    () => service.completeWithEvidence({ itemId: 'bd-live-terminal', operationId: 'live-terminal-forged', evidenceReceiptId: 'forged' }),
+    /host-resolved receipt/,
+  );
+  assert.equal(transitions, 0);
+  const completed = await service.completeFromHost({ itemId: 'bd-live-terminal', operationId: 'live-terminal-complete' });
+  assert.equal(completed.status, 'done');
+  assert.equal(completed.completionEvidence.kind, 'execution-verified');
+  assert.equal(transitions, 1);
+});
+
+test('Todo completion preserves its evidence class while an indeterminate mutation reconciles', async () => {
+  const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-todo-completion-reconcile-workspace-'));
+  const actionRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-todo-completion-reconcile-action-'));
+  const linkRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-todo-completion-reconcile-links-'));
+  const { createBeadsWorkActionService, createFileOperationStore } = require('../src/index.js');
+  const canonical = { kind: 'outcome', id: 'out_000001', revision: 1, breadcrumb: 'Project › Outcome' };
+  let transitionAttempts = 0;
+  let receiptResolutions = 0;
+  const tracker = {
+    authority: 'beads', workspaceRoot,
+    async createWorkItem() { return { state: 'committed', result: { id: 'bd-completion-reconcile', revision: '1', status: 'open' } }; },
+    async transition(input) {
+      transitionAttempts += 1;
+      if (transitionAttempts === 1) return { state: 'indeterminate' };
+      return { state: 'committed', result: { id: input.itemId, revision: '2', status: input.status } };
+    },
+  };
+  const options = {
+    tracker,
+    operationStore: createFileOperationStore({ root: actionRoot }),
+    executionLinks: createFileExecutionLinkStore({ root: linkRoot }),
+    workspaceId: 'workspace-completion-reconcile',
+    approvedWorkspaceIds: ['workspace-completion-reconcile'],
+    authorizeMutation: hostAuthorization,
+    registeredEvidenceProducers: ['ci'],
+    resolveCompletionReceipt: async (request) => {
+      receiptResolutions += 1;
+      return {
+        contract: 'jarvos.work-action-evidence-receipt/v1', immutable: true,
+        kind: 'domain-verified', producer: 'ci', canonical,
+        operationId: request.operationId, itemId: request.itemId,
+      };
+    },
+  };
+  const firstService = createBeadsWorkActionService(options);
+  await firstService.create({ title: 'completion reconcile', operationId: 'completion-reconcile-create', canonical });
+  const uncertain = await firstService.completeFromHost({ itemId: 'bd-completion-reconcile', operationId: 'completion-reconcile-complete' });
+  assert.equal(uncertain.status, 'indeterminate');
+  const completed = await createBeadsWorkActionService({
+    ...options,
+    operationStore: createFileOperationStore({ root: actionRoot }),
+    executionLinks: createFileExecutionLinkStore({ root: linkRoot }),
+  }).completeFromHost({ itemId: 'bd-completion-reconcile', operationId: 'completion-reconcile-complete' });
+  assert.equal(completed.status, 'done');
+  assert.equal(completed.completionEvidence.kind, 'domain-verified');
+  assert.equal(receiptResolutions, 1);
+});
+
+test('host completion preserves Andrew owner attestation without calling it technical verification', async () => {
+  const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-todo-owner-attestation-'));
+  const operationRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-todo-owner-operation-'));
+  const linkRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-todo-owner-links-'));
+  const { createBeadsWorkActionService, createFileOperationStore } = require('../src/index.js');
+  const canonical = { kind: 'outcome', id: 'out_000001', revision: 1, breadcrumb: 'Project › Outcome' };
+  const tracker = {
+    authority: 'beads', workspaceRoot,
+    async createWorkItem() { return { state: 'committed', result: { id: 'bd-owner-attestation', revision: '1', status: 'open' } }; },
+    async transition(input) { return { state: 'committed', result: { id: input.itemId, revision: '2', status: input.status } }; },
+  };
+  let completionResolutionCount = 0;
+  const serviceOptions = {
+    tracker,
+    workspaceId: 'owner-attestation-workspace',
+    approvedWorkspaceIds: ['owner-attestation-workspace'],
+    authorizeMutation: hostAuthorization,
+    registeredEvidenceProducers: ['andrew-owner-attestation'],
+    resolveCompletionReceipt: async (request) => {
+      completionResolutionCount += 1;
+      return {
+        contract: 'jarvos.work-action-evidence-receipt/v1', immutable: true, kind: 'human-attested',
+        producer: 'andrew-owner-attestation', attestation: 'andrew-owner-attested',
+        operationId: request.operationId, itemId: request.itemId, canonical,
+      };
+    },
+  };
+  const service = createBeadsWorkActionService({
+    ...serviceOptions,
+    operationStore: createFileOperationStore({ root: operationRoot }),
+    executionLinks: createFileExecutionLinkStore({ root: linkRoot }),
+  });
+  await service.create({ title: 'owner-attested work', operationId: 'owner-create-1', canonical });
+  const completed = await service.completeFromHost({ itemId: 'bd-owner-attestation', operationId: 'owner-complete-1' });
+  assert.equal(completed.status, 'done');
+  assert.deepEqual(completed.completionEvidence, {
+    kind: 'human-attested', producer: 'andrew-owner-attestation', attestation: 'andrew-owner-attested',
+  });
+  const restarted = createBeadsWorkActionService({
+    ...serviceOptions,
+    operationStore: createFileOperationStore({ root: operationRoot }),
+    executionLinks: createFileExecutionLinkStore({ root: linkRoot }),
+  });
+  const replayed = await restarted.completeFromHost({ itemId: 'bd-owner-attestation', operationId: 'owner-complete-1' });
+  assert.deepEqual(replayed.completionEvidence, completed.completionEvidence);
+  assert.equal(completionResolutionCount, 1);
+  await assert.rejects(() => service.transition({ itemId: 'bd-owner-attestation', operationId: 'owner-generic-terminal', status: 'done' }), /unsupported Todo transition status/);
+  await assert.rejects(() => service.transition({ itemId: 'bd-owner-attestation', operationId: 'owner-generic-cancelled', status: 'cancelled' }), /unsupported Todo transition status/);
+});
+
+test('Beads Todo derives a workspace and canonical-bound external reference for create reconciliation', async () => {
+  const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-todo-external-reference-'));
+  const { createBeadsWorkActionService, createMemoryExecutionLinkStore } = require('../src/index.js');
+  const canonical = { kind: 'outcome', id: 'out_000001', revision: 1, breadcrumb: 'Project › Outcome' };
+  let trackerInput;
+  const tracker = {
+    authority: 'beads', workspaceRoot,
+    async createWorkItem(input) {
+      trackerInput = input;
+      return { state: 'committed', result: { id: 'bd-derived-reference', revision: '1', status: 'open' } };
+    },
+  };
+  const service = createBeadsWorkActionService({
+    tracker,
+    workspaceId: 'workspace-one',
+    approvedWorkspaceIds: ['workspace-one'],
+    executionLinks: createMemoryExecutionLinkStore(),
+    authorizeMutation: hostAuthorization,
+  });
+  await service.create({ title: 'bound create', operationId: 'caller-operation', canonical });
+  assert.match(trackerInput.externalReference, /^jarvos-[a-f0-9]{32}$/);
+  assert.notEqual(trackerInput.externalReference, 'caller-operation');
+});
+
 test('Beads Todo action facade replays a committed operation without a second Beads create', async () => {
   const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-todo-replay-workspace-'));
   const ledgerRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-todo-replay-ledger-'));
-  const links = require('../../jarvos-secondbrain/packages/jarvos-secondbrain-projects/src/execution-link-store').createFileExecutionLinkStore({
+  const links = createFileExecutionLinkStore({
     root: fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-todo-replay-links-')),
   });
   const operationStore = require('../src/index.js').createFileOperationStore({ root: ledgerRoot });
@@ -154,6 +427,74 @@ test('Beads Todo action facade replays a committed operation without a second Be
   assert.equal(replay.executionLink.workspaceId, 'workspace-main');
   assert.deepEqual((await secondService.list()).items.map((item) => item.itemId), ['bd-replay']);
   assert.equal(fs.readFileSync(path.join(ledgerRoot, 'replay-1.json'), 'utf8').includes(workspaceRoot), false);
+});
+
+test('live Todo create reconciles both durable ledgers after timeout and restart', async () => {
+  const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-todo-live-reconcile-workspace-'));
+  const trackerRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-todo-live-reconcile-tracker-'));
+  const actionRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-todo-live-reconcile-action-'));
+  const linkRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-todo-live-reconcile-links-'));
+  const { createBeadsWorkActionService, createFileOperationStore } = require('../src/index.js');
+  const canonical = { kind: 'outcome', id: 'out_000001', revision: 1, breadcrumb: 'Project › Outcome' };
+  let externalReference = null;
+  let createDispatches = 0;
+  const run = (_command, args) => {
+    if (args[0] === '--version') return { status: 0, stdout: 'br v0.2.19' };
+    if (args[0] === 'capabilities') return { status: 0, stdout: JSON.stringify({ capabilities: ['create', 'update', 'dependency', 'checkpoint'] }) };
+    if (args[0] === 'schema') return { status: 0, stdout: '{}' };
+    if (args[0] === 'where') return { status: 0, stdout: workspaceRoot };
+    if (args[0] === 'list') {
+      return { status: 0, stdout: JSON.stringify({ issues: [{ id: 'bd-reconciled', revision: '1', status: 'open', external_ref: externalReference }] }) };
+    }
+    if (args[0] === 'create') {
+      createDispatches += 1;
+      externalReference = args[args.indexOf('--external-ref') + 1];
+      return { status: null, error: { code: 'ETIMEDOUT' }, stdout: '', stderr: 'timed out' };
+    }
+    throw new Error(`unexpected Beads command: ${args.join(' ')}`);
+  };
+  const build = () => {
+    const tracker = createLiveBeadsTracker({ workspaceRoot, approvedRoots: [workspaceRoot], operationStoreRoot: trackerRoot, mode: 'live', run });
+    return createBeadsWorkActionService({
+      tracker,
+      mode: 'live',
+      operationStore: createFileOperationStore({ root: actionRoot }),
+      executionLinks: createFileExecutionLinkStore({ root: linkRoot }),
+      workspaceId: 'workspace-reconcile',
+      approvedWorkspaceIds: ['workspace-reconcile'],
+      authorizeMutation: hostAuthorization,
+    });
+  };
+  const first = await build().create({ title: 'reconcile me', operationId: 'reconcile-create-1', canonical });
+  assert.equal(first.status, 'indeterminate');
+  const reconciled = await build().create({ title: 'reconcile me', operationId: 'reconcile-create-1', canonical });
+  assert.equal(reconciled.ok, true);
+  assert.equal(reconciled.workReference.itemId, 'bd-reconciled');
+  assert.equal(createDispatches, 1);
+});
+
+test('failed and mismatched Beads mutations never change the durable execution link', async () => {
+  const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-todo-failed-link-'));
+  const { createBeadsWorkActionService, createMemoryExecutionLinkStore } = require('../src/index.js');
+  const links = createMemoryExecutionLinkStore();
+  const canonical = { kind: 'outcome', id: 'out_000001', revision: 1, breadcrumb: 'Project › Outcome' };
+  let responseMode = 'failed';
+  const tracker = {
+    authority: 'beads', workspaceRoot,
+    async createWorkItem() { return { state: 'committed', result: { id: 'bd-stable-link', revision: '1', status: 'open' } }; },
+    async transition(input) {
+      if (responseMode === 'failed') return { state: 'failed', status: 'failed' };
+      return { state: 'committed', result: { id: 'bd-other-item', revision: '2', status: input.status } };
+    },
+  };
+  const service = createBeadsWorkActionService({ tracker, executionLinks: links, approvedWorkspaceIds: [workspaceRoot], authorizeMutation: hostAuthorization });
+  await service.create({ title: 'stable link', operationId: 'stable-link-create', canonical });
+  assert.equal((await service.transition({ itemId: 'bd-stable-link', operationId: 'stable-link-failed', status: 'review' })).status, 'failed');
+  responseMode = 'mismatched';
+  assert.equal((await service.transition({ itemId: 'bd-stable-link', operationId: 'stable-link-mismatch', status: 'review' })).status, 'failed');
+  const [linkRecord] = (await service.list()).items;
+  assert.equal(linkRecord.itemRevision, '1');
+  assert.equal(linkRecord.status, 'open');
 });
 
 test('public package declares a registry-safe control-plane dependency', () => {
@@ -184,7 +525,8 @@ test('explicit Beads transport works without Paperclip and uses bounded argv', a
       if (args[0] === 'capabilities') return { status: 0, stdout: JSON.stringify({ capabilities: ['create', 'update', 'dependency', 'checkpoint'] }), stderr: '' };
       if (args[0] === 'schema') return { status: 0, stdout: JSON.stringify({ schema: 'beads/v1' }), stderr: '' };
       if (args[0] === 'where') return { status: 0, stdout: `${workspaceRoot}\n`, stderr: '' };
-      return { status: 0, stdout: JSON.stringify({ id: 'bd-1', status: 'open' }), stderr: '' };
+      if (args[0] === 'update' && args.includes('--claim')) return { status: 0, stdout: JSON.stringify([{ id: 'bd-1', status: 'in_progress', updated_at: '2026-08-26T00:00:00Z' }]), stderr: '' };
+      return { status: 0, stdout: JSON.stringify({ id: 'bd-1', status: 'open', external_ref: args.includes('--external-ref') ? args[args.indexOf('--external-ref') + 1] : undefined }), stderr: '' };
     },
   });
 
@@ -205,6 +547,48 @@ test('explicit Beads transport works without Paperclip and uses bounded argv', a
     beads: { workspaceRoot, approvedRoots: [workspaceRoot], run: () => ({ status: 0, stdout: '', stderr: '' }) },
   });
   assert.equal(adapters.tracker.authority, 'beads');
+});
+
+test('Beads preflight derives logical capabilities from the real v0.2.19 command inventory', async () => {
+  const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-beads-real-capabilities-'));
+  const externalReference = 'real-capability-create';
+  const tracker = createLiveBeadsTracker({
+    workspaceRoot,
+    run(command, args) {
+      if (args[0] === '--version') return { status: 0, stdout: 'br 0.2.19', stderr: '' };
+      if (args[0] === 'capabilities') return { status: 0, stdout: JSON.stringify({
+        tool: 'br',
+        version: '0.2.19',
+        contract_version: 'br.capabilities.v1',
+        commands: ['create', 'update', 'show', 'close', 'reopen', 'dep', 'comments'].map((name) => ({ name })),
+      }), stderr: '' };
+      if (args[0] === 'schema') return { status: 0, stdout: JSON.stringify({ tool: 'br', schemas: {}, commands: {} }), stderr: '' };
+      if (args[0] === 'where') return { status: 0, stdout: `${workspaceRoot}\n  prefix: bd\n`, stderr: '' };
+      if (args[0] === 'create') return { status: 0, stdout: JSON.stringify({ id: 'bd-real', status: 'open', external_ref: externalReference }), stderr: '' };
+      throw new Error(`unexpected command: ${args.join(' ')}`);
+    },
+  });
+  const result = await tracker.createWorkItem({ title: 'real capability shape', operationId: externalReference });
+  assert.equal(result.state, 'committed');
+  assert.equal(result.result.id, 'bd-real');
+});
+
+test('Beads workspace proof accepts only the exact discovered .beads directory when initialized', async () => {
+  const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-beads-where-shape-'));
+  const beadsRoot = path.join(workspaceRoot, '.beads');
+  fs.mkdirSync(beadsRoot);
+  const tracker = createLiveBeadsTracker({
+    workspaceRoot,
+    run(command, args) {
+      if (args[0] === '--version') return { status: 0, stdout: 'br 0.2.19', stderr: '' };
+      if (args[0] === 'capabilities') return { status: 0, stdout: JSON.stringify({ capabilities: ['create', 'update', 'dependency', 'checkpoint'] }), stderr: '' };
+      if (args[0] === 'schema') return { status: 0, stdout: '{}', stderr: '' };
+      if (args[0] === 'where') return { status: 0, stdout: `${beadsRoot}\n  database: ${beadsRoot}/beads.db\n`, stderr: '' };
+      if (args[0] === 'create') return { status: 0, stdout: JSON.stringify({ id: 'bd-where', status: 'open', external_ref: 'where-create' }), stderr: '' };
+      throw new Error(`unexpected command: ${args.join(' ')}`);
+    },
+  });
+  assert.equal((await tracker.createWorkItem({ title: 'where proof', operationId: 'where-create' })).state, 'committed');
 });
 
 test('Beads preflight rejects an unpinned version before mutation', async () => {
@@ -229,7 +613,7 @@ test('Beads caller validation happens before an operation is prepared', async ()
       if (args[0] === 'capabilities') return { status: 0, stdout: JSON.stringify({ capabilities: ['create', 'update', 'dependency', 'checkpoint'] }), stderr: '' };
       if (args[0] === 'schema') return { status: 0, stdout: JSON.stringify({ schema: 'beads/v1' }), stderr: '' };
       if (args[0] === 'where') return { status: 0, stdout: workspaceRoot, stderr: '' };
-      return { status: 0, stdout: JSON.stringify({ id: 'bd-input' }), stderr: '' };
+      return { status: 0, stdout: JSON.stringify({ id: 'bd-input', external_ref: args.includes('--external-ref') ? args[args.indexOf('--external-ref') + 1] : undefined }), stderr: '' };
     },
   });
   await assert.rejects(() => tracker.createWorkItem({ title: '', operationId: 'op-input-1' }), /create title is required/);
@@ -255,9 +639,9 @@ test('prepared Beads operations reconcile before replay after an uncertain launc
       if (args[0] === 'capabilities') return { status: 0, stdout: JSON.stringify({ capabilities: ['create', 'update', 'dependency', 'checkpoint'] }), stderr: '' };
       if (args[0] === 'schema') return { status: 0, stdout: JSON.stringify({ schema: 'beads/v1' }), stderr: '' };
       if (args[0] === 'where') return { status: 0, stdout: workspaceRoot, stderr: '' };
-      if (args[0] === 'show' && args.includes('--external-ref')) return { status: 0, stdout: JSON.stringify({ id: 'bd-9', status: 'open' }), stderr: '' };
+      if (args[0] === 'list') return { status: 0, stdout: JSON.stringify({ issues: [{ id: 'bd-9', status: 'open', external_ref: 'op-reconcile-1' }] }), stderr: '' };
       if (firstMutation) { firstMutation = false; return { status: 1, stdout: '', stderr: 'timed out', error: new Error('timed out') }; }
-      return { status: 0, stdout: JSON.stringify({ id: 'bd-9' }), stderr: '' };
+      return { status: 0, stdout: JSON.stringify({ id: 'bd-9', external_ref: args.includes('--external-ref') ? args[args.indexOf('--external-ref') + 1] : undefined }), stderr: '' };
     },
   });
   const uncertain = await tracker.createWorkItem({ title: 'reconcile me', operationId: 'op-reconcile-1' });
@@ -265,7 +649,52 @@ test('prepared Beads operations reconcile before replay after an uncertain launc
   const replay = await tracker.createWorkItem({ title: 'reconcile me', operationId: 'op-reconcile-1' });
   assert.equal(replay.state, 'committed');
   assert.equal(calls.filter((args) => args[0] === 'create').length, 1);
-  assert.ok(calls.some((args) => args[0] === 'show' && args.includes('--external-ref')));
+  assert.ok(calls.some((args) => args[0] === 'list' && args.includes('--all') && args.includes('1001')));
+});
+
+test('derived create references survive timeout and restart reconciliation without duplicate dispatch', async () => {
+  const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-beads-derived-reconcile-workspace-'));
+  const operationStoreRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-beads-derived-reconcile-ledger-'));
+  const externalReference = 'jarvos-1234567890abcdef1234567890abcdef';
+  let createCount = 0;
+  const calls = [];
+  const run = (command, args) => {
+    calls.push(args);
+    if (args[0] === '--version') return { status: 0, stdout: 'br v0.2.19' };
+    if (args[0] === 'capabilities') return { status: 0, stdout: JSON.stringify({ capabilities: ['create', 'update', 'dependency', 'checkpoint'] }) };
+    if (args[0] === 'schema') return { status: 0, stdout: '{}' };
+    if (args[0] === 'where') return { status: 0, stdout: workspaceRoot };
+    if (args[0] === 'list') {
+      return { status: 0, stdout: JSON.stringify({ issues: [{ id: 'bd-derived', status: 'open', external_ref: externalReference }] }) };
+    }
+    createCount += 1;
+    return { status: 1, stdout: '', stderr: 'timed out', error: new Error('timed out') };
+  };
+  const input = { title: 'derived reconciliation', operationId: 'caller-operation', externalReference };
+  const first = createLiveBeadsTracker({ workspaceRoot, operationStoreRoot, run });
+  assert.equal((await first.createWorkItem(input)).state, 'indeterminate');
+  const restarted = createLiveBeadsTracker({ workspaceRoot, operationStoreRoot, run });
+  const reconciled = await restarted.createWorkItem(input);
+  assert.equal(reconciled.state, 'committed');
+  assert.equal(createCount, 1);
+  assert.ok(calls.some((args) => args[0] === 'list' && args.includes('--all') && args.includes('1001')));
+});
+
+test('Beads create treats empty or unrelated external references as indeterminate', async () => {
+  const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-beads-unrelated-create-'));
+  const tracker = createLiveBeadsTracker({
+    workspaceRoot,
+    run(command, args) {
+      if (args[0] === '--version') return { status: 0, stdout: 'br v0.2.19' };
+      if (args[0] === 'capabilities') return { status: 0, stdout: JSON.stringify({ capabilities: ['create', 'update', 'dependency', 'checkpoint'] }) };
+      if (args[0] === 'schema') return { status: 0, stdout: '{}' };
+      if (args[0] === 'where') return { status: 0, stdout: workspaceRoot };
+      return { status: 0, stdout: JSON.stringify({ id: 'bd-unrelated', external_ref: 'another-operation' }) };
+    },
+  });
+  const result = await tracker.createWorkItem({ title: 'must not link', operationId: 'expected-operation' });
+  assert.equal(result.state, 'indeterminate');
+  assert.equal(result.errorCode, 'CREATE_REFERENCE_UNCONFIRMED');
 });
 
 test('Beads replay reconciles non-create operations by their exact postcondition', async () => {
@@ -304,13 +733,15 @@ test('Beads default operation identities distinguish operation inputs', async ()
   const operationIds = [];
   const tracker = createLiveBeadsTracker({
     workspaceRoot,
+    operationStore: {
+      async read() { return null; },
+      async write(record) { operationIds.push(record.operationId); return record; },
+    },
     run(command, args) {
       if (args[0] === '--version') return { status: 0, stdout: 'br v0.2.19', stderr: '' };
       if (args[0] === 'capabilities') return { status: 0, stdout: JSON.stringify({ capabilities: ['create', 'update', 'dependency', 'checkpoint'] }), stderr: '' };
       if (args[0] === 'schema') return { status: 0, stdout: JSON.stringify({ schema: 'beads/v1' }), stderr: '' };
       if (args[0] === 'where') return { status: 0, stdout: workspaceRoot, stderr: '' };
-      const index = args.indexOf('--operation-id');
-      if (index >= 0) operationIds.push(args[index + 1]);
       return { status: 0, stdout: JSON.stringify({ id: 'bd-identity', status: 'open' }), stderr: '' };
     },
   });
@@ -328,6 +759,8 @@ test('Beads close remains deferred until authoritative merge evidence', async ()
       if (args[0] === 'capabilities') return { status: 0, stdout: JSON.stringify({ capabilities: ['create', 'update', 'dependency', 'checkpoint'] }), stderr: '' };
       if (args[0] === 'schema') return { status: 0, stdout: JSON.stringify({ schema: 'beads/v1' }), stderr: '' };
       if (args[0] === 'where') return { status: 0, stdout: workspaceRoot, stderr: '' };
+      if (args[0] === 'close') return { status: 0, stdout: JSON.stringify([{ id: 'bd-1', status: 'closed' }]), stderr: '' };
+      if (args[0] === 'show') return { status: 0, stdout: JSON.stringify([{ id: 'bd-1', status: 'closed', updated_at: '2026-08-26T00:00:00Z' }]), stderr: '' };
       return { status: 0, stdout: JSON.stringify({ id: 'bd-1' }), stderr: '' };
     },
   });
@@ -335,6 +768,173 @@ test('Beads close remains deferred until authoritative merge evidence', async ()
   assert.equal(deferred.status, 'deferred');
   const closed = await tracker.verifyAndClose({ itemId: 'bd-1', pullRequest: { state: 'MERGED' }, operationId: 'op-close-1' });
   assert.equal(closed.status, 'closed');
+});
+
+test('Beads adapter emits exact argv for every live operation without a command-map override', async () => {
+  const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-beads-argv-'));
+  const calls = [];
+  const tracker = createLiveBeadsTracker({
+    workspaceRoot,
+    run(command, args) {
+      calls.push(args);
+      if (args[0] === '--version') return { status: 0, stdout: 'br v0.2.19', stderr: '' };
+      if (args[0] === 'capabilities') return { status: 0, stdout: JSON.stringify({ capabilities: ['create', 'update', 'dependency', 'checkpoint'] }), stderr: '' };
+      if (args[0] === 'schema') return { status: 0, stdout: JSON.stringify({ schema: 'beads/v1' }), stderr: '' };
+      if (args[0] === 'where') return { status: 0, stdout: workspaceRoot, stderr: '' };
+      if (args[0] === 'update') {
+        const status = args.includes('--claim') ? 'in_progress' : args[args.indexOf('--status') + 1];
+        return { status: 0, stdout: JSON.stringify([{ id: 'bd-argv', status, updated_at: '2026-08-26T00:00:00Z' }]), stderr: '' };
+      }
+      if (args[0] === 'reopen') return { status: 0, stdout: JSON.stringify([{ id: 'bd-argv', status: 'open', updated_at: '2026-08-26T00:00:01Z' }]), stderr: '' };
+      return { status: 0, stdout: JSON.stringify({ id: 'bd-argv', status: 'open' }), stderr: '' };
+    },
+  });
+
+  await tracker.createWorkItem({ title: 'Argv item', description: 'desc', priority: 2, operationId: 'op-argv-create' });
+  await tracker.claimIssue({ itemId: 'bd-argv', operationId: 'op-argv-claim' });
+  await tracker.transition({ itemId: 'bd-argv', status: 'review', operationId: 'op-argv-transition' });
+  await tracker.transition({ itemId: 'bd-argv', status: 'open', operationId: 'op-argv-resume' });
+  await tracker.transition({ itemId: 'bd-argv', status: 'open', reopen: true, operationId: 'op-argv-reopen' });
+  await tracker.addDependency({ itemId: 'bd-argv', dependencyId: 'bd-dep', operationId: 'op-argv-dependency' });
+  await tracker.writeCheckpoint({ itemId: 'bd-argv', stage: 'review', nextStep: 'publish-pr', operationId: 'op-argv-checkpoint' });
+  await tracker.showWorkItem({ itemId: 'bd-argv' });
+
+  assert.deepEqual(calls[0], ['--version']);
+  assert.deepEqual(calls[1], ['capabilities', '--format', 'json']);
+  assert.deepEqual(calls[2], ['schema', 'all', '--format', 'json']);
+  assert.deepEqual(calls[3], ['where']);
+  assert.deepEqual(calls[4], ['create', '--title', 'Argv item', '--description', 'desc', '--priority', '2', '--external-ref', 'op-argv-create', '--json']);
+  assert.deepEqual(calls[5], ['where']);
+  assert.deepEqual(calls[6], ['update', 'bd-argv', '--claim', '--json']);
+  assert.deepEqual(calls[7], ['where']);
+  assert.deepEqual(calls[8], ['update', 'bd-argv', '--status', 'review', '--json']);
+  assert.deepEqual(calls[9], ['where']);
+  assert.deepEqual(calls[10], ['update', 'bd-argv', '--status', 'open', '--json']);
+  assert.deepEqual(calls[11], ['where']);
+  assert.deepEqual(calls[12], ['reopen', 'bd-argv', '--reason', 'Reopened by jarvOS work action', '--json']);
+  assert.deepEqual(calls[13], ['where']);
+  assert.deepEqual(calls[14], ['dep', 'add', 'bd-argv', 'bd-dep', '--json']);
+  assert.deepEqual(calls[15], ['where']);
+  assert.deepEqual(calls[16], ['comments', 'add', 'bd-argv', '--message', '[jarvos-checkpoint/v1] {"operationId":"op-argv-checkpoint","stage":"review","nextStep":"publish-pr"}', '--json']);
+  assert.deepEqual(calls[17], ['where']);
+  assert.deepEqual(calls[18], ['show', 'bd-argv', '--format', 'json']);
+  assert.equal(calls.length, 19);
+});
+
+test('Beads preflight fails closed when a required capability is missing before any mutation runs', async () => {
+  const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-beads-missing-capability-'));
+  const calls = [];
+  const tracker = createLiveBeadsTracker({
+    workspaceRoot,
+    run(command, args) {
+      calls.push(args);
+      if (args[0] === '--version') return { status: 0, stdout: 'br v0.2.19', stderr: '' };
+      if (args[0] === 'capabilities') return { status: 0, stdout: JSON.stringify({ capabilities: ['create', 'update'] }), stderr: '' };
+      if (args[0] === 'schema') return { status: 0, stdout: JSON.stringify({ schema: 'beads/v1' }), stderr: '' };
+      if (args[0] === 'where') return { status: 0, stdout: workspaceRoot, stderr: '' };
+      return { status: 0, stdout: JSON.stringify({ id: 'bd-missing' }), stderr: '' };
+    },
+  });
+  await assert.rejects(() => tracker.createWorkItem({ title: 'must not run', operationId: 'op-missing-capability' }), /capability negotiation failed/);
+  assert.ok(!calls.some((args) => args[0] === 'create'));
+});
+
+test('Beads preflight fails closed when capabilities output is not parseable JSON', async () => {
+  const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-beads-bad-json-'));
+  const calls = [];
+  const tracker = createLiveBeadsTracker({
+    workspaceRoot,
+    run(command, args) {
+      calls.push(args);
+      if (args[0] === '--version') return { status: 0, stdout: 'br v0.2.19', stderr: '' };
+      if (args[0] === 'capabilities') return { status: 0, stdout: 'not-json-output', stderr: '' };
+      if (args[0] === 'schema') return { status: 0, stdout: JSON.stringify({ schema: 'beads/v1' }), stderr: '' };
+      if (args[0] === 'where') return { status: 0, stdout: workspaceRoot, stderr: '' };
+      return { status: 0, stdout: JSON.stringify({ id: 'bd-badjson' }), stderr: '' };
+    },
+  });
+  await assert.rejects(() => tracker.createWorkItem({ title: 'must not run', operationId: 'op-bad-json' }), /capability negotiation failed/);
+  assert.ok(!calls.some((args) => args[0] === 'create'));
+});
+
+test('Beads mutation fails closed when the workspace realpath does not match at verification time', async () => {
+  const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-beads-realpath-expected-'));
+  const otherRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-beads-realpath-other-'));
+  const calls = [];
+  const tracker = createLiveBeadsTracker({
+    workspaceRoot,
+    run(command, args) {
+      calls.push(args);
+      if (args[0] === '--version') return { status: 0, stdout: 'br v0.2.19', stderr: '' };
+      if (args[0] === 'capabilities') return { status: 0, stdout: JSON.stringify({ capabilities: ['create', 'update', 'dependency', 'checkpoint'] }), stderr: '' };
+      if (args[0] === 'schema') return { status: 0, stdout: JSON.stringify({ schema: 'beads/v1' }), stderr: '' };
+      if (args[0] === 'where') return { status: 0, stdout: otherRoot, stderr: '' };
+      return { status: 0, stdout: JSON.stringify({ id: 'bd-realpath' }), stderr: '' };
+    },
+  });
+  await assert.rejects(() => tracker.createWorkItem({ title: 'must not run', operationId: 'op-realpath-1' }), /workspace verification failed/);
+  assert.ok(!calls.some((args) => args[0] === 'create'));
+});
+
+test('Beads construction rejects a workspace outside its approved roots', () => {
+  const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-beads-unapproved-workspace-'));
+  const approvedRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-beads-unapproved-approved-'));
+  assert.throws(() => createLiveBeadsTracker({
+    workspaceRoot,
+    approvedRoots: [approvedRoot],
+    run: () => ({ status: 0, stdout: '', stderr: '' }),
+  }), /not approved/);
+});
+
+test('Beads showWorkItem uses bounded read-only argv and fails closed when the read does not succeed', async () => {
+  const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-beads-show-'));
+  const calls = [];
+  let failShow = false;
+  const tracker = createLiveBeadsTracker({
+    workspaceRoot,
+    run(command, args) {
+      calls.push(args);
+      if (args[0] === '--version') return { status: 0, stdout: 'br v0.2.19', stderr: '' };
+      if (args[0] === 'capabilities') return { status: 0, stdout: JSON.stringify({ capabilities: ['create', 'update', 'dependency', 'checkpoint'] }), stderr: '' };
+      if (args[0] === 'schema') return { status: 0, stdout: JSON.stringify({ schema: 'beads/v1' }), stderr: '' };
+      if (args[0] === 'where') return { status: 0, stdout: workspaceRoot, stderr: '' };
+      if (args[0] === 'show') {
+        return failShow ? { status: 1, stdout: '', stderr: 'not found' } : { status: 0, stdout: JSON.stringify({ id: 'bd-show', status: 'open' }), stderr: '' };
+      }
+      return { status: 0, stdout: JSON.stringify({ id: 'bd-show' }), stderr: '' };
+    },
+  });
+  const shown = await tracker.showWorkItem({ itemId: 'bd-show' });
+  assert.equal(shown.state, 'committed');
+  assert.equal(shown.status, 'available');
+  assert.deepEqual(shown.result, { id: 'bd-show', status: 'open' });
+  assert.deepEqual(calls.filter((args) => args[0] === 'show').pop(), ['show', 'bd-show', '--format', 'json']);
+
+  failShow = true;
+  const unavailable = await tracker.showWorkItem({ itemId: 'bd-show' });
+  assert.equal(unavailable.state, 'unavailable');
+  assert.equal(unavailable.status, 'unavailable');
+  assert.equal(unavailable.errorCode, 'READ_FAILED');
+});
+
+test('Beads mutation refuses to reuse an operationId with different input before dispatching a second command', async () => {
+  const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-beads-identity-conflict-'));
+  const calls = [];
+  const tracker = createLiveBeadsTracker({
+    workspaceRoot,
+    run(command, args) {
+      calls.push(args);
+      if (args[0] === '--version') return { status: 0, stdout: 'br v0.2.19', stderr: '' };
+      if (args[0] === 'capabilities') return { status: 0, stdout: JSON.stringify({ capabilities: ['create', 'update', 'dependency', 'checkpoint'] }), stderr: '' };
+      if (args[0] === 'schema') return { status: 0, stdout: JSON.stringify({ schema: 'beads/v1' }), stderr: '' };
+      if (args[0] === 'where') return { status: 0, stdout: workspaceRoot, stderr: '' };
+      return { status: 0, stdout: JSON.stringify({ id: 'bd-identity-conflict', external_ref: args.includes('--external-ref') ? args[args.indexOf('--external-ref') + 1] : undefined }), stderr: '' };
+    },
+  });
+  const first = await tracker.createWorkItem({ title: 'first title', operationId: 'op-identity-conflict' });
+  assert.equal(first.state, 'committed');
+  await assert.rejects(() => tracker.createWorkItem({ title: 'second title', operationId: 'op-identity-conflict' }), /operation identity conflict/);
+  assert.equal(calls.filter((args) => args[0] === 'create').length, 1);
 });
 
 test('pre-PR fixer records real post-fix cleanliness and an explicit no-test rationale', async () => {

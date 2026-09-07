@@ -21,6 +21,7 @@ const os = require('os');
 const path = require('path');
 
 const CONFIG_PATH = path.join(__dirname, '..', 'config', 'projects-module.json');
+const journalProjection = require('./journal-projection');
 
 /**
  * Resolve the shared vault config if the bridge is present.
@@ -356,27 +357,30 @@ function createProject({ title, dir, config = loadConfig(), now = new Date(), cr
 }
 
 /**
- * Wiki-links for the journal's Projects section.
+ * Compatibility entry point for callers that used to render an all-ongoing
+ * inventory. The Journal projection owns that section now; this function only
+ * delegates to it and therefore cannot manufacture a title-only wiki-link.
  *
- * `projects` of null means the directory could not be read. That renders the
- * unavailable marker, which the journal treats as a degraded source and will
- * not write over existing content — unlike the empty-state line, which is a
- * positive claim that there are no projects.
+ * `options.noteMappings` (or `canonicalNoteMappings`) must contain the
+ * injected canonical note targets. `projects === null` remains an unavailable
+ * read and is surfaced as a degraded marker for legacy callers.
  */
-function journalProjectLines(projects, config = loadConfig()) {
+function journalProjectLines(projects, config = loadConfig(), options = {}) {
   const journal = config.journal || {};
-  if (projects === null) return journal.unavailableText || '- (projects unavailable)';
-  const allowed = Array.isArray(journal.listStatuses) && journal.listStatuses.length
-    ? new Set(journal.listStatuses)
-    : ongoingStatuses(config);
-  const max = Number.isFinite(journal.maxItems) ? journal.maxItems : 25;
-
-  const listed = projects.filter((project) => allowed.has(String(project.status || '').toLowerCase()));
-  if (!listed.length) return journal.emptyText || '- No ongoing projects';
-
-  const lines = listed.slice(0, max).map((project) => `- [[${project.title}]]`);
-  if (listed.length > max) lines.push(`- _...and ${listed.length - max} more_`);
-  return lines.join('\n');
+  const timeZone = options.timeZone || config.timeZone || 'UTC';
+  const date = options.date || journalProjection.localDate(new Date().toISOString(), timeZone);
+  const state = options.activityProviderState || options.providerState || (projects === null ? 'unavailable' : 'healthy-empty');
+  const result = journalProjection.projectLines({
+    projects: projects === null ? [] : projects,
+    activities: Array.isArray(options.activities) ? options.activities : [],
+    date,
+    timeZone,
+    providerState: state,
+    maxItems: Number.isFinite(options.maxItems) ? options.maxItems : (Number.isFinite(journal.maxItems) ? journal.maxItems : 25),
+    noteMappings: options.noteMappings === undefined ? options.canonicalNoteMappings : options.noteMappings,
+  });
+  if (result.preserve) return journal.unavailableText || '- (projects unavailable)';
+  return result.content || '- No projects touched today';
 }
 
 function renderIndex(projects, config = loadConfig()) {

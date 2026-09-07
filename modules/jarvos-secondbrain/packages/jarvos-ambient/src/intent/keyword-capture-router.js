@@ -2,7 +2,26 @@
 
 const IDEA = 'idea';
 const NOTE = 'note';
+const JOURNAL = 'journal';
 const KEYWORD_RE = /^\s*(idea|note)\s*[:\-]\s*/i;
+const HARD_COMMAND_RE = /^\s*(add\s+to\s+journal|idea|note|journal)\s*:\s*([\s\S]*)$/i;
+
+const HARD_COMMAND_RESPONSES = Object.freeze({
+  idea: Object.freeze({
+    captured: 'Captured to Ideas.',
+    needsInput: 'What idea should I capture?',
+  }),
+  note: Object.freeze({
+    captured: 'Captured as a note.',
+    needsInput: 'What note should I capture?',
+  }),
+  journal: Object.freeze({
+    captured: 'Captured to Journal.',
+    needsInput: 'What should I add to your journal?',
+  }),
+  savedLocallySyncPending: 'Saved locally; sync pending.',
+  failure: "I couldn't confirm that capture. Please try again.",
+});
 
 const IDEA_ANTI_TRIGGER_PATTERNS = [
   /\bno idea\b/i,
@@ -39,7 +58,40 @@ const GENERAL_CAPTURE_PATTERNS = [
 
 function normalizeTrigger(value) {
   const trimmed = String(value || '').trim().toLowerCase();
-  return trimmed === IDEA || trimmed === NOTE ? trimmed : null;
+  return trimmed === IDEA || trimmed === NOTE || trimmed === JOURNAL ? trimmed : null;
+}
+
+function parseHardCaptureCommand(input = {}) {
+  const source = typeof input === 'string'
+    ? input
+    : (input.text ?? input.content ?? input.body ?? '');
+  const match = String(source).match(HARD_COMMAND_RE);
+
+  if (!match) {
+    return {
+      disposition: 'continue',
+      matched: false,
+      command: null,
+      route: null,
+      content: '',
+      response: null,
+    };
+  }
+
+  const token = match[1].toLowerCase().replace(/\s+/g, ' ');
+  const command = token === 'add to journal' ? 'add-to-journal' : token;
+  const route = command === 'add-to-journal' ? JOURNAL : command;
+  const content = match[2].trim();
+  const responses = HARD_COMMAND_RESPONSES[route];
+
+  return {
+    disposition: content ? 'capture' : 'needs_input',
+    matched: true,
+    command,
+    route,
+    content,
+    response: content ? responses.captured : responses.needsInput,
+  };
 }
 
 function stripLeadingKeyword(text) {
@@ -123,7 +175,10 @@ function hasCaptureIntent(capture = {}) {
 module.exports = {
   IDEA,
   NOTE,
+  JOURNAL,
   KEYWORD_RE,
+  HARD_COMMAND_RE,
+  HARD_COMMAND_RESPONSES,
   IDEA_ANTI_TRIGGER_PATTERNS,
   IDEA_CAPTURE_PATTERNS,
   NOTE_CAPTURE_PATTERNS,
@@ -133,6 +188,7 @@ module.exports = {
   hasCaptureIntent,
   matchesAny,
   normalizeTrigger,
+  parseHardCaptureCommand,
   primaryText,
   stripLeadingKeyword,
 };

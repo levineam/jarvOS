@@ -9,6 +9,23 @@ and stable jarvOS stewardship plugin tuple for jarvOS.
 adapter checklist below, but does not ship an OpenClaw MCP registration or a
 startup hook; local workspace adapters remain responsible for that integration.
 
+Portable setup keeps GBrain optional. Andrew's private continuity profile adds
+a separate provider-native `gbrain` stdio registration through
+`modules/jarvos-gbrain/scripts/jarvos-gbrain-provider.js`. It uses the same
+owner-only runtime descriptor as Codex and Hermes, persists no database
+credential in OpenClaw configuration, and forces `GBRAIN_SWEEP=0`. Effective
+configuration inspection is not live proof; a native OpenClaw recall turn must
+match the shared runtime/brain/store/fixture tuple. Skillify remains
+GBrain-resolver-owned and is never copied into the OpenClaw workspace skills.
+
+Use OpenClaw's native MCP registration and probe commands:
+
+```bash
+openclaw mcp add gbrain --command node --arg <provider-launcher> \
+  --env JARVOS_GBRAIN_RUNTIME_DESCRIPTOR=<owner-only-descriptor>
+openclaw mcp probe gbrain --json
+```
+
 ## What's Here
 
 OpenClaw provides powerful scheduling, tool execution, and multi-channel messaging — but ships with blank templates. jarvOS fills the behavioral layer.
