@@ -63,6 +63,7 @@ const ALLOWED_REASON_CODES = Object.freeze([
   'ambiguous_identity',
   'semantic_collision',
   'owner_excluded',
+  'owner_keep_local',
   'trust_class_insufficient',
   'needs_owner_input',
   'incomplete_observation',

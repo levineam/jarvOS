@@ -1,6 +1,9 @@
 'use strict';
 
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
 const test = require('node:test');
 
 const {
@@ -11,6 +14,7 @@ const {
   scheduledRepairNotification,
   runScheduledRepair,
 } = require('../src/scheduled-repair');
+const { defaultConfig, saveConfig } = require('../src');
 
 function healthy(overrides = {}) {
   return {
@@ -54,6 +58,124 @@ test('unsafe-source holds are durable, semantic, and quiet on repeats', () => {
   assert.equal(first.dedupeIdentity, repeat.dedupeIdentity);
   assert.equal(repeat.output, 'NO_REPLY');
   assert.doesNotMatch(`${first.statusMessage} ${JSON.stringify(first.event)}`, /unsafe_source|private-skill/);
+});
+
+test('one new owner decision becomes a plain-English question with a safe answer path', () => {
+  const notification = scheduledRepairNotification(healthy({
+    status: { observedAt: '2026-08-16T12:30:00.000Z', counts: { skills: 1, actionable: 1 } },
+    decisions: {
+      created: 1,
+      pending: 1,
+      items: [{
+        id: 'decision-0123456789abcdef01234567',
+        decisionReference: 'AbCdEfGhIjKlMnOpQrStUvWx',
+        skill: 'newsletter-generator',
+        revision: 1,
+        reason: 'needs_owner_input',
+        options: ['share', 'keep-local', 'exclude', 'details'],
+      }],
+      migration: null,
+    },
+  }));
+  assert.equal(notification.disposition, 'direct-notification');
+  assert.match(notification.output, /found the newsletter-generator skill/);
+  assert.match(notification.output, /did not share it because it needs your approval/);
+  assert.match(notification.output, /Reply “share”/);
+  assert.match(notification.output, /reply “keep local”/);
+  assert.match(notification.output, /Nothing changed/);
+  assert.doesNotMatch(notification.output, /needs_owner_input|SKILL\.md|\//);
+  assert.equal(notification.event.eventReference, notification.event.decisionReference);
+});
+
+test('scheduled repair claims the write-ahead attempt before emitting an owner question', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-scheduled-claim-'));
+  const configPath = path.join(root, 'config.json');
+  try {
+    const decision = {
+      id: 'decision-0123456789abcdef01234567',
+      decisionReference: 'AbCdEfGhIjKlMnOpQrStUvWx',
+      skill: 'newsletter-generator',
+      revision: 1,
+      reason: 'needs_owner_input',
+      options: ['share', 'keep-local', 'exclude', 'details'],
+    };
+    const config = defaultConfig();
+    config.controlRoot = root;
+    config.publicCatalogPath = path.join(root, 'public-catalog.json');
+    config.localOverlayPath = path.join(root, 'local-overlay.json');
+    saveConfig(config, configPath);
+    let claimInput;
+    const run = runScheduledRepair({
+      configPath,
+      now: '2026-08-16T16:00:00.000Z',
+      repair: () => healthy({ decisions: { created: 1, pending: 1, pendingItems: [decision], items: [decision], migration: null } }),
+      claimDelivery: (input) => {
+        claimInput = input;
+        return { decisionId: decision.id, decisionReference: decision.decisionReference, revision: 1, attemptId: 'attempt-AbCdEfGhIjKlMnOpQrStUvWx', kind: 'initial' };
+      },
+    });
+    assert.equal(claimInput.decisionId, decision.id);
+    assert.equal(run.notification.event.deliveryAttemptKind, 'initial');
+    assert.equal(run.notification.event.deliveryAttemptId, 'attempt-AbCdEfGhIjKlMnOpQrStUvWx');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('a single older pending decision retry is rendered with its new delivery attempt', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-scheduled-retry-'));
+  const configPath = path.join(root, 'config.json');
+  try {
+    const decision = {
+      id: 'decision-abcdef0123456789abcdef01',
+      decisionReference: 'QrStUvWxYz0123456789abcd',
+      skill: 'newsletter-generator',
+      revision: 1,
+      reason: 'needs_owner_input',
+      options: ['share', 'keep-local', 'exclude', 'details'],
+    };
+    const config = defaultConfig();
+    config.controlRoot = root;
+    config.publicCatalogPath = path.join(root, 'public-catalog.json');
+    config.localOverlayPath = path.join(root, 'local-overlay.json');
+    saveConfig(config, configPath);
+    const run = runScheduledRepair({
+      configPath,
+      now: '2026-08-17T16:00:00.000Z',
+      repair: () => healthy({ decisions: { created: 0, pending: 1, pendingItems: [decision], items: [], migration: null } }),
+      claimDelivery: () => ({
+        decisionId: decision.id,
+        decisionReference: decision.decisionReference,
+        revision: 1,
+        attemptId: 'attempt-retry-QrStUvWxYz',
+        kind: 'fallback',
+      }),
+    });
+    assert.equal(run.notification.event.code, 'skill-owner-decision');
+    assert.equal(run.notification.event.deliveryAttemptKind, 'fallback');
+    assert.equal(run.notification.event.deliveryAttemptId, 'attempt-retry-QrStUvWxYz');
+    assert.match(run.notification.output, /found the newsletter-generator skill/);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('legacy migration produces one understandable batch summary and stays quiet on replay', () => {
+  const result = healthy({
+    decisions: {
+      created: 0,
+      pending: 2,
+      items: [],
+      migration: { migrated: true, replay: false, reference: 'batch-0123456789abcdef01234567', pendingCount: 2, migratedCount: 2 },
+    },
+  });
+  const notification = scheduledRepairNotification(result);
+  assert.equal(notification.disposition, 'direct-notification');
+  assert.match(notification.output, /2 skills that still need your decision/);
+  assert.match(notification.output, /left them unchanged/);
+  assert.doesNotMatch(notification.output, /batch-|needs_owner_input|receipt|\//);
+  const replay = scheduledRepairNotification(healthy({ decisions: { created: 0, pending: 2, items: [], migration: { migrated: false, replay: true, reference: 'batch-0123456789abcdef01234567', pendingCount: 2, migratedCount: 2 } } }));
+  assert.equal(replay.output, 'NO_REPLY');
 });
 
 test('missing runner receipt produces an opaque owner-action recovery message', () => {

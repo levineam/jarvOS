@@ -1,7 +1,8 @@
 'use strict';
 
 const crypto = require('node:crypto');
-const { autonomousRepairOperator, statusOperator } = require('./operator');
+const { autonomousRepairOperator, statusOperator, decisionStatePath } = require('./operator');
+const decisionStore = require('./decision-store');
 // The package import is the installed public contract. The relative fallback
 // keeps the source distribution runnable before its sibling packages are packed.
 let operatorNotification;
@@ -27,9 +28,17 @@ function observedAt(result, now) {
   return typeof value === 'string' && !Number.isNaN(Date.parse(value)) ? value : now;
 }
 
-function eventFor(result, { now = new Date().toISOString() } = {}) {
+function eventFor(result, { now = new Date().toISOString(), deliveryClaims = [] } = {}) {
   const raised = Array.isArray(result?.attention?.raised) ? result.attention.raised : [];
   const resolved = Array.isArray(result?.attention?.resolved) ? result.attention.resolved : [];
+  const createdDecisions = Array.isArray(result?.decisions?.items) ? result.decisions.items : [];
+  const pendingDecisions = Array.isArray(result?.decisions?.pendingItems) ? result.decisions.pendingItems : [];
+  // A fresh decision takes precedence over older pending decisions. If this
+  // run created nothing, an existing single decision may be a retry; more than
+  // one older item is summarized without pretending one delivery attempt
+  // acknowledges the whole batch.
+  const decisionsForNotification = createdDecisions.length > 0 ? createdDecisions : pendingDecisions;
+  const migration = result?.decisions?.migration;
   const repaired = result?.reconciliation?.repaired === true
     && Array.isArray(result.reconciliation.applied)
     && result.reconciliation.applied.some((item) => item?.applied !== false);
@@ -66,6 +75,67 @@ function eventFor(result, { now = new Date().toISOString() } = {}) {
       nextState: 'continue-monitoring',
       eventReference: opaqueReference(),
       dedupeKey: 'scheduled-repair-safety-hold',
+    };
+  }
+
+  if (migration?.migrated === true && migration.pendingCount > 0) {
+    const reference = opaqueReference();
+    const migrationKey = migration.reference || reference;
+    return {
+      ...common,
+      code: 'skill-decision-summary',
+      severity: 'warning',
+      automationOutcome: 'failed',
+      actionRequired: true,
+      action: 'review-decisions',
+      nextState: 'await-owner-decision',
+      eventReference: reference,
+      itemCount: migration.migratedCount || migration.pendingCount,
+      resolvedCount: resolved.length,
+      dedupeKey: `skill-decision-migration-${migrationKey.replace(/[^A-Za-z0-9-]/g, '').slice(-80)}`,
+    };
+  }
+
+  if (decisionsForNotification.length === 1) {
+    const decision = decisionsForNotification[0];
+    const deliveryAttempt = deliveryClaims.find((claim) => claim.decisionId === decision.id) || null;
+    return {
+      ...common,
+      code: 'skill-owner-decision',
+      severity: 'warning',
+      automationOutcome: 'failed',
+      actionRequired: true,
+      action: 'choose-skill-option',
+      nextState: 'await-owner-decision',
+      eventReference: decision.decisionReference,
+      decisionReference: decision.decisionReference,
+      revision: decision.revision,
+      optionSetVersion: 'v1',
+      skillName: decision.skill,
+      reasonCode: decision.reason,
+      options: decision.options,
+      ...(deliveryAttempt ? {
+        deliveryAttemptId: deliveryAttempt.attemptId,
+        deliveryAttemptKind: deliveryAttempt.kind,
+      } : {}),
+      dedupeKey: `skill-owner-decision-${decision.id.replace(/[^A-Za-z0-9-]/g, '-')}`,
+    };
+  }
+
+  if (decisionsForNotification.length > 1) {
+    const reference = opaqueReference();
+    return {
+      ...common,
+      code: 'skill-decision-summary',
+      severity: 'warning',
+      automationOutcome: 'failed',
+      actionRequired: true,
+      action: 'review-decisions',
+      nextState: 'await-owner-decision',
+      eventReference: reference,
+      itemCount: decisionsForNotification.length,
+      resolvedCount: resolved.length,
+      dedupeKey: `skill-decision-batch-${decisionsForNotification.map((decision) => decision.id).sort().join('-').slice(0, 140)}`,
     };
   }
 
@@ -112,6 +182,30 @@ function eventFor(result, { now = new Date().toISOString() } = {}) {
   }
 
   return null;
+}
+
+function claimPendingDecisionAttempts(result, { configPath, now, claimDelivery = decisionStore.claimDelivery } = {}) {
+  const createdItems = Array.isArray(result?.decisions?.items) ? result.decisions.items : [];
+  const pendingItems = Array.isArray(result?.decisions?.pendingItems) ? result.decisions.pendingItems : [];
+  const candidates = createdItems.length === 1
+    ? createdItems
+    : createdItems.length === 0 && pendingItems.length === 1
+      ? pendingItems
+      : [];
+  if (candidates.length === 0 || typeof claimDelivery !== 'function') return [];
+  let statePath;
+  try {
+    statePath = decisionStatePath({ configPath });
+  } catch {
+    return [];
+  }
+  return candidates.map((decision) => {
+    try {
+      return claimDelivery({ statePath, decisionId: decision.id, now });
+    } catch {
+      return null;
+    }
+  }).filter(Boolean);
 }
 
 const OPERATOR_NOTIFICATION_TRANSPORT_VERSION = 'jarvos-operator-notification-transport/v1';
@@ -171,12 +265,15 @@ function runScheduledRepair({
   announceConvergence = false,
   repair = autonomousRepairOperator,
   readStatus = statusOperator,
+  claimDelivery = decisionStore.claimDelivery,
+  now = new Date().toISOString(),
 } = {}) {
   const result = repair({ configPath });
+  const deliveryClaims = claimPendingDecisionAttempts(result, { configPath, now, claimDelivery });
   const catalogStatus = announceConvergence && result?.ok && result?.ran !== false
     ? readStatus({ configPath })
     : null;
-  const notification = scheduledRepairNotification(result);
+  const notification = scheduledRepairNotification(result, { now, deliveryClaims });
   return {
     result,
     notification,
@@ -187,6 +284,7 @@ function runScheduledRepair({
 module.exports = {
   OPERATOR_NOTIFICATION_TRANSPORT_VERSION,
   eventFor,
+  claimPendingDecisionAttempts,
   scheduledRepairCliOutput,
   scheduledRepairMessage,
   scheduledRepairNotification,
