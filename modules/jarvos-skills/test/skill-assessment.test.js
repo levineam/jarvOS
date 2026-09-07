@@ -1175,6 +1175,43 @@ test('an owner-approved share admits the same network skill digest on replay', (
   assert.equal(approved.assessment.admissions.some((item) => item.logicalId === 'net-skill'), true);
 });
 
+test('Ponytail-style prose holds conservatively and an exact owner approval does not approve later bytes', () => {
+  const root = temp('jarvos-prose-share-');
+  const body = 'Keep user requests small. A helper named fetch is only an example.\n';
+  writeSkill(path.join(root, 'prose-skill'), { name: 'prose-skill', body });
+  const { configPath } = seedConfig({ roots: { codex: root }, trustClass: 'markdown-only' });
+  const held = assessObserved(configPath);
+  const heldSkill = held.assessment.document.skills.find((item) => item.logicalId === 'prose-skill');
+  assert.equal(heldSkill.disposition.reasonCode, 'needs_owner_input');
+  assert.equal(held.assessment.admissions.length, 0);
+  const ownerApprovedSkills = new Map([['prose-skill', { treeDigest: heldSkill.treeDigest }]]);
+  const approved = assessObserved(configPath, { ownerApprovedSkills });
+  assert.equal(approved.assessment.admissions.some((item) => item.logicalId === 'prose-skill'), true);
+
+  writeSkill(path.join(root, 'prose-skill'), { name: 'prose-skill', body: `${body}Changed requests.\n` });
+  const changed = assessObserved(configPath, { ownerApprovedSkills });
+  assert.equal(changed.assessment.document.skills.find((item) => item.logicalId === 'prose-skill').disposition.reasonCode, 'needs_owner_input');
+  assert.equal(changed.assessment.admissions.length, 0);
+});
+
+test('even an exact owner approval cannot bypass privacy or injection restrictions', () => {
+  for (const [flag, reason] of [['secret', 'privacy_restricted'], ['injection', 'unsafe_source']]) {
+    const root = temp('jarvos-share-safety-');
+    const bundle = writeSkill(path.join(root, 'unsafe-skill'), {
+      name: 'unsafe-skill', body: 'Handle requests carefully.\n', [flag]: true,
+    });
+    const tree = computeBundleTree(bundle, { allowlist: DEFAULT_ALLOWED_BUNDLE_GLOBS });
+    const { configPath } = seedConfig({ roots: { codex: root }, trustClass: 'markdown-only' });
+    const result = assessObserved(configPath, {
+      ownerApprovedSkills: new Map([['unsafe-skill', { treeDigest: tree.treeDigest }]]),
+    });
+    const skill = result.assessment.document.skills.find((item) => item.logicalId === 'unsafe-skill');
+    assert.equal(skill.disposition.kind, 'blocked', flag);
+    assert.equal(skill.disposition.reasonCode, reason, flag);
+    assert.equal(result.assessment.admissions.length, 0, flag);
+  }
+});
+
 test('changed source updates even when destinations already have receipts', () => {
   const root = temp('jarvos-update-');
   const bundle = writeSkill(path.join(root, 'update-skill'), { name: 'update-skill', body: 'v1\n' });
