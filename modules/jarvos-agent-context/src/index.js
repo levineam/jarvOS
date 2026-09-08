@@ -1,5 +1,11 @@
 'use strict';
 
+const { invokeMeaning } = require('./ripeness-context');
+let meaningProvider = null;
+function setMeaningProvider(provider) { meaningProvider = provider || null; }
+function readRipenessContext(args = {}) { return invokeMeaning('context', args, meaningProvider); }
+function assessActiveAssistant(args = {}, lifecycle = {}) { return invokeMeaning('assessment', args, meaningProvider, lifecycle); }
+
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
@@ -2142,6 +2148,9 @@ async function startupBrief(options = {}) {
 }
 
 module.exports = {
+  setMeaningProvider,
+  readRipenessContext,
+  assessActiveAssistant,
   PROJECTS_CONTEXT_CONTRACT,
   PROJECTS_CONTEXT_SCHEMA_VERSION,
   PROJECTS_CONTEXT_CUTOVER_ENV,
