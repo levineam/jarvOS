@@ -8,6 +8,7 @@ const { createWriteTools } = require('./tools/write');
 const { createDispatchTools } = require('./tools/dispatch');
 const { createSelfTools } = require('./tools/self');
 const { readJson, pipeWebResponse, httpError } = require('../http-utils');
+const { getCodexAppServer } = require('../adapters/codex-app-server');
 
 const GATED_TOOLS = {
   create_note: 'user-approval',
@@ -25,7 +26,8 @@ const TOOL_APPROVAL_SECRET =
 function instructions() {
   return [
     'You are the jarvOS Desktop Chat agent.',
-    'Answer using the user\'s local jarvOS substrate through tools: journal, notes, memory, ontology, and Paperclip.',
+    'Answer using the user\'s local jarvOS substrate through tools: journal, notes, memory, ontology, canonical Projects context, and Paperclip.',
+    'Projects context is provider-scoped and may be partial, stale, or unavailable; preserve those qualifications and never substitute raw registry data.',
     'Read tools may run automatically. Write, delete, Paperclip mutation, and runtime dispatch tools require explicit user approval.',
     'You run inside the jarvOS Desktop app itself (an Electron + Node-server + React app). Use read_app_source, list_app_source, read_app_logs, and read_app_health to inspect your own source, configuration, logs, and live health so you can explain and debug your own behavior. Any fix you propose still goes through the approval-gated write and dispatch tools.',
     'Vault writes are additive only: create new notes or append journal bullets; never rewrite or delete existing vault content.',
@@ -55,6 +57,7 @@ async function buildAgent(cfg, { modelId, apiKey }) {
 
 async function handleChat(req, res, cfg) {
   const body = await readJson(req, { limit: 2_000_000 });
+  if (body.connection !== 'api-key') return handleSubscriptionChat(req, res, body);
   const resolved = credentials.resolveOpenAIKey();
   if (!resolved.key) {
     throw httpError(412, 'Add an OpenAI API key before chatting');
@@ -74,9 +77,60 @@ async function handleChat(req, res, cfg) {
   await pipeWebResponse(webResponse, res);
 }
 
+function lastUserText(messages) {
+  const message = [...(Array.isArray(messages) ? messages : [])].reverse().find((item) => item?.role === 'user');
+  return (message?.parts || []).filter((part) => part?.type === 'text').map((part) => part.text || '').join('\n').trim();
+}
+
+async function handleSubscriptionChat(req, res, body, client = getCodexAppServer()) {
+  const text = lastUserText(body.messages);
+  if (!text) throw httpError(400, 'message text required');
+  if (!/^[a-zA-Z0-9_-]{12,100}$/.test(body.conversationId || '')) throw httpError(400, 'valid conversationId required');
+  const { createUIMessageStream, createUIMessageStreamResponse } = await import('ai');
+  const abortController = new AbortController();
+  res.on('close', () => abortController.abort());
+  const stream = createUIMessageStream({
+    execute: async ({ writer }) => {
+      const id = `subscription-${Date.now()}`;
+      writer.write({ type: 'text-start', id });
+      await client.turn({
+        conversationId: body.conversationId,
+        model: body.modelId,
+        effort: body.reasoningEffort,
+        text,
+        signal: abortController.signal,
+        onDelta: (delta) => writer.write({ type: 'text-delta', id, delta }),
+      });
+      writer.write({ type: 'text-end', id });
+    },
+    onError: (error) => error?.message || 'Subscription chat failed',
+  });
+  await pipeWebResponse(createUIMessageStreamResponse({ stream }), res);
+}
+
+async function subscriptionStatus(client = getCodexAppServer()) {
+  try { return await client.status(); }
+  catch (error) {
+    return { available: false, authenticated: false, connection: 'none', requiresSignIn: false, reason: error.message };
+  }
+}
+
+async function subscriptionModels(client = getCodexAppServer()) {
+  const models = await client.models();
+  const selected = models.find((model) => model.isDefault) || models[0];
+  return {
+    models,
+    defaultModelId: selected?.id || '',
+    defaultReasoningEffort: selected?.defaultReasoningEffort || 'medium',
+  };
+}
+
 module.exports = {
   GATED_TOOLS,
   buildAgent,
   handleChat,
+  handleSubscriptionChat,
+  subscriptionStatus,
+  subscriptionModels,
   listModels: providers.listModels,
 };

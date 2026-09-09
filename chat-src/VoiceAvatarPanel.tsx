@@ -16,13 +16,25 @@ export function VoiceAvatarPanel({ onClose, voiceState }: {
   const [reducedMotion, setReducedMotion] = useState(() => window.matchMedia('(prefers-reduced-motion: reduce)').matches);
   const [lowPerformance, setLowPerformance] = useState(false);
   const [autoGestures, setAutoGestures] = useState(true);
+  const [equalBrightness, setEqualBrightness] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [metrics, setMetrics] = useState<AvatarMetrics | null>(null);
   const [unavailable, setUnavailable] = useState(false);
-  const controlsRef = useRef({ speechEnergy, reducedMotion, lowPerformance, autoGestures });
+  const controlsRef = useRef({ speechEnergy, reducedMotion, lowPerformance, autoGestures, equalBrightness });
   const stateRef = useRef(state);
   const stateVersionRef = useRef(0);
   const introTimerRef = useRef(0);
-  controlsRef.current = { speechEnergy, reducedMotion, lowPerformance, autoGestures };
+  controlsRef.current = { speechEnergy, reducedMotion, lowPerformance, autoGestures, equalBrightness };
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      if (settingsOpen) setSettingsOpen(false);
+      else onClose();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [settingsOpen, onClose]);
 
   useEffect(() => {
     if (!stageRef.current) return;
@@ -82,6 +94,7 @@ export function VoiceAvatarPanel({ onClose, voiceState }: {
   useEffect(() => avatarRef.current?.setReducedMotion(reducedMotion), [reducedMotion]);
   useEffect(() => avatarRef.current?.setLowPerformance(lowPerformance), [lowPerformance]);
   useEffect(() => avatarRef.current?.setAutoGestures(autoGestures), [autoGestures]);
+  useEffect(() => avatarRef.current?.setEqualBrightness(equalBrightness), [equalBrightness]);
 
   function syncControls(avatar: ParticleAvatar) {
     const controls = controlsRef.current;
@@ -89,6 +102,7 @@ export function VoiceAvatarPanel({ onClose, voiceState }: {
     avatar.setReducedMotion(controls.reducedMotion);
     avatar.setLowPerformance(controls.lowPerformance);
     avatar.setAutoGestures(controls.autoGestures);
+    avatar.setEqualBrightness(controls.equalBrightness);
   }
 
   function chooseState(next: AvatarState, userOrVoiceChange = true) {
@@ -117,23 +131,24 @@ export function VoiceAvatarPanel({ onClose, voiceState }: {
             <div className="page-kicker">voice mode prototype</div>
             <h2 id="avatar-title">Particle presence</h2>
           </div>
-          <button type="button" className="icon-btn" onClick={onClose} aria-label="Close voice avatar">×</button>
+          <div className="avatar-head-actions">
+            <button type="button" className={`icon-btn ${settingsOpen ? 'active' : ''}`} onClick={() => setSettingsOpen((open) => !open)} aria-label="Avatar settings" aria-expanded={settingsOpen}>⚙</button>
+            <button type="button" className="icon-btn" onClick={onClose} aria-label="Close voice avatar">×</button>
+          </div>
         </header>
 
-        <div className="avatar-demo-grid">
+        <div className={`avatar-demo-grid ${settingsOpen ? 'controls-open' : ''}`}>
           <div className="avatar-viewport" data-avatar-state={state} data-rendering={metrics?.rendering ?? false}>
             <div ref={stageRef} className="avatar-stage" />
             <div className="avatar-state-readout"><i />{state}</div>
+          </div>
+
+          {settingsOpen && <aside className="avatar-controls" aria-label="Avatar settings">
             <div className="avatar-metrics">
-              {unavailable
-                ? 'Avatar unavailable'
-                : metrics?.rendering
+              {unavailable ? 'Avatar unavailable' : metrics?.rendering
                 ? `${metrics.fps.toFixed(0)} fps · ${metrics.frameTimeMs.toFixed(1)} ms · ${metrics.particles} lights`
                 : `Paused · 0 render work · ${metrics?.particles ?? 0} lights`}
             </div>
-          </div>
-
-          <aside className="avatar-controls">
             <ControlGroup label="State">
               <div className="avatar-button-grid">
                 {STATES.map((item) => (
@@ -161,8 +176,9 @@ export function VoiceAvatarPanel({ onClose, voiceState }: {
               <Toggle label="Reduced motion" checked={reducedMotion} onChange={setReducedMotion} />
               <Toggle label="Low performance" checked={lowPerformance} onChange={setLowPerformance} />
               <Toggle label="Automatic gestures" checked={autoGestures} onChange={setAutoGestures} />
+              <Toggle label="Equal brightness proof" checked={equalBrightness} onChange={setEqualBrightness} />
             </ControlGroup>
-          </aside>
+          </aside>}
         </div>
       </section>
     </div>,

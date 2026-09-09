@@ -132,8 +132,9 @@ function agentChip(a) {
 
 /* ── Pages ──────────────────────────────────────────────── */
 
-const state = { journalDays: [], notes: [], activeNote: null, pendingNote: null, after: null };
+const state = { journalDays: [], notes: [], activeNote: null, activeProject: null, pendingNote: null, after: null };
 let renderedPage = null;
+let renderGeneration = 0;
 
 const pages = {
   async chat() {
@@ -220,63 +221,23 @@ const pages = {
     return html;
   },
 
-  async work() {
-    const d = await api('/api/work');
-    const agentName = new Map(d.agents.map((a) => [a.id, a.name]));
-    const projName = new Map(d.projects.map((p) => [p.id, p.name]));
-    const dec = (i) => ({ ...i, assignee: agentName.get(i.assigneeAgentId) || null, project: projName.get(i.projectId) || null });
-    const issues = d.issues.map(dec);
-    const lane = (key, label, list) => `<div class="lane">
-      <h3>${label}<span class="n">${list.length}</span></h3>
-      <div class="lane-cards">${list.map((i) => `
-        <div class="icard s-${i.status}">
-          <div class="top"><span>${fmt.esc(i.identifier || '')}</span><span class="who">${i.assignee ? '@' + fmt.esc(i.assignee) : ''}</span></div>
-          <div class="t">${fmt.esc(i.title)}</div>
-          ${i.project ? `<div class="who" style="margin-top:5px">${fmt.esc(i.project)}</div>` : ''}
-          ${i.blockedReason ? `<div class="why">${fmt.esc(i.blockedReason)}</div>` : ''}
-        </div>`).join('') || '<div class="empty">empty lane</div>'}
-      </div></div>`;
-
-    const by = (s) => issues.filter((i) => i.status === s);
-    const doneCount = by('done').length;
-
-    let html = head('paperclip', 'Work',
-      `Tracked work beats chat promises. ${issues.length} issues loaded · ${doneCount} done.`);
-    html += card('Agents', `<div class="agents-strip">${d.agents.map(agentChip).join('')}</div>`, { delay: 40 });
-    html += `<div style="height:18px"></div>`;
-    html += `<div class="board reveal" style="animation-delay:100ms">
-      ${lane('in_progress', 'In progress', by('in_progress'))}
-      ${lane('in_review', 'In review', by('in_review'))}
-      ${lane('blocked', 'Blocked', by('blocked'))}
-      ${lane('todo', 'Up next', [...by('todo'), ...by('backlog')])}
-    </div>
-    <div style="height:18px"></div>`;
-    html += card('Recent activity', `<ul class="feed">${d.activity.slice(0, 25).map((a) => `
-      <li><span class="at">${fmt.ago(a.createdAt)}</span>
-        <span class="act"><b>${fmt.esc(agentName.get(a.actorId) || a.actorType)}</b> ${fmt.esc(a.action.replace(/[._]/g, ' '))}
-          ${a.summary ? `<span class="sum">${fmt.esc(a.summary)}</span>` : ''}</span>
-      </li>`).join('')}</ul>`, { delay: 160 });
+  async projects() {
+    const data = await api('/api/projects');
+    let html = head('portfolio', 'Projects', 'Outcomes, definitions of done, verified completion evidence, and the next useful step.');
+    html += `<div id="projects-view" class="reveal" style="animation-delay:60ms">${window.JarvosProjectsView.render(data, state.activeProject)}</div>`;
+    state.after = () => {
+      document.querySelectorAll('[data-project-id]').forEach((button) => button.addEventListener('click', () => {
+        state.activeProject = button.dataset.projectId;
+        document.getElementById('projects-view').innerHTML = window.JarvosProjectsView.render(data, state.activeProject);
+        state.after();
+      }));
+    };
     return html;
   },
 
   async memory() {
-    const d = await api('/api/memory');
-    let html = head('durable agent state', 'Memory',
-      'What the agents promote out of conversation: facts, lessons, decisions, preferences. The index is loaded into every session.');
-    html += card('Daily memory files', d.dailies.length
-      ? `<div class="chips">${d.dailies.map((f) => `<button class="chip" data-mem="${fmt.esc(f.file)}">${fmt.esc(f.date)}</button>`).join('')}</div>
-         <div id="mem-reader" style="margin-top:16px"></div>`
-      : '<div class="empty">no daily memory files</div>', { delay: 60 });
-    html += `<div style="height:18px"></div>`;
-    html += card('MEMORY.md — the index', d.index ? renderMarkdown(d.index) : '<div class="empty">no MEMORY.md found</div>', { delay: 120 });
-    state.after = () => {
-      document.querySelectorAll('[data-mem]').forEach((b) => b.addEventListener('click', async () => {
-        document.querySelectorAll('[data-mem]').forEach((x) => x.classList.toggle('active', x === b));
-        const day = await api(`/api/memory/day?file=${encodeURIComponent(b.dataset.mem)}`);
-        document.getElementById('mem-reader').innerHTML = renderMarkdown(day.content);
-      }));
-    };
-    return html;
+    return head('deferred', 'Memory', 'Memory development is intentionally deferred from this Desktop slice.')
+      + card('Not in this release', '<p>The underlying data remains untouched. Memory will return when its product contract is ready.</p>', { delay: 60 });
   },
 
   async ontology() {
@@ -378,6 +339,10 @@ async function openNote(title) {
 
 function currentPage() {
   const m = location.hash.match(/^#\/(\w+)/);
+  if (m?.[1] === 'work') {
+    history.replaceState(null, '', '#/projects');
+    return 'projects';
+  }
   return m && pages[m[1]] ? m[1] : 'chat';
 }
 
@@ -411,6 +376,7 @@ function unmountChatIsland() {
 }
 
 async function render() {
+  const generation = ++renderGeneration;
   const page = currentPage();
   if (renderedPage === 'chat' && page !== 'chat') {
     unmountChatIsland();
@@ -421,10 +387,13 @@ async function render() {
   $main.innerHTML = '<div class="spin">gathering…</div>';
   state.after = null;
   try {
-    $main.innerHTML = await pages[page]();
+    const html = await pages[page]();
+    if (generation !== renderGeneration) return;
+    $main.innerHTML = html;
     renderedPage = page;
     state.after?.(); // post-render bindings, now that the HTML is in the DOM
   } catch (err) {
+    if (generation !== renderGeneration) return;
     $main.innerHTML = head('hm', 'Something broke', '') +
       `<div class="err-banner">${fmt.esc(err.message)}</div>`;
     renderedPage = 'error';

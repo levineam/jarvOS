@@ -4,7 +4,7 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const { loadConfig } = require('./config');
-const { json, httpError, httpThrow, readJson } = require('./http-utils');
+const { json, httpError, httpThrow, readJson, requireLoopbackRequest } = require('./http-utils');
 const journal = require('./adapters/journal');
 const notes = require('./adapters/notes');
 const paperclip = require('./adapters/paperclip');
@@ -15,6 +15,7 @@ const today = require('./today');
 const agent = require('./agent');
 const credentials = require('./agent/credentials');
 const transcribe = require('./agent/transcribe');
+const projectsContext = require('./adapters/projects-context');
 
 const cfg = loadConfig();
 const STATIC_DIR = path.join(__dirname, '..', 'static');
@@ -65,6 +66,8 @@ const routes = {
     return { issues: allIssues, agents, activity, projects };
   },
 
+  '/api/projects': async () => projectsContext.read(cfg),
+
   '/api/ontology': async () => ontology.spine(cfg.ontologyDir),
 
   '/api/memory': async () => memory.index(cfg.memory),
@@ -79,7 +82,7 @@ const routes = {
 
 async function settingsRoute(req) {
   if (req.method === 'GET') {
-    return { ...credentials.status(), voice: transcribe.voiceStatus(cfg) };
+    return { ...credentials.status(), subscription: await agent.subscriptionStatus(), voice: transcribe.voiceStatus(cfg) };
   }
   if (req.method === 'POST') {
     const body = await readJson(req, { limit: 20_000 });
@@ -109,6 +112,7 @@ const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
   if (url.pathname === '/api/chat' && req.method === 'POST') {
     try {
+      requireLoopbackRequest(req);
       return await agent.handleChat(req, res, cfg);
     } catch (err) {
       return json(res, err.status || 500, { error: err.message });
@@ -116,6 +120,7 @@ const server = http.createServer(async (req, res) => {
   }
   if (url.pathname === '/api/settings') {
     try {
+      if (req.method !== 'GET') requireLoopbackRequest(req);
       return json(res, 200, await settingsRoute(req));
     } catch (err) {
       return json(res, err.status || 500, { error: err.message });
@@ -123,7 +128,15 @@ const server = http.createServer(async (req, res) => {
   }
   if (url.pathname === '/api/transcribe' && req.method === 'POST') {
     try {
+      requireLoopbackRequest(req);
       return json(res, 200, await transcribe.transcribe(req, cfg));
+    } catch (err) {
+      return json(res, err.status || 500, { error: err.message });
+    }
+  }
+  if (url.pathname === '/api/chat/models' && req.method === 'GET' && url.searchParams.get('connection') !== 'api-key') {
+    try {
+      return json(res, 200, await agent.subscriptionModels());
     } catch (err) {
       return json(res, err.status || 500, { error: err.message });
     }

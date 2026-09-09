@@ -14,6 +14,7 @@ import {
 } from './model';
 import {
   createParticleField,
+  particleLuminance,
   poseBodyParticle,
   type AmbientParticle,
   type BodyParticle,
@@ -23,6 +24,7 @@ export interface AvatarController {
   setState(state: AvatarState): void;
   setSpeechEnergy(value: number): void;
   setReducedMotion(enabled: boolean): void;
+  setEqualBrightness(enabled: boolean): void;
   destroy(): void;
 }
 
@@ -58,13 +60,12 @@ export class ParticleAvatar implements AvatarController {
   private readonly visibilityHandler = () => this.syncTicker();
   private texture?: Texture;
   private bodyContainer?: ParticleContainer;
-  private mouthContainer?: ParticleContainer;
   private ambientContainer?: ParticleContainer;
   private bodyParticles: RuntimeBodyParticle[] = [];
-  private mouthParticles: RuntimeBodyParticle[] = [];
   private ambientParticles: RuntimeAmbientParticle[] = [];
   private lowPerformance: boolean;
   private autoGestures: boolean;
+  private equalBrightness = false;
   private gestureIndex = 0;
   private width = 460;
   private height = 560;
@@ -146,6 +147,11 @@ export class ParticleAvatar implements AvatarController {
     this.updateParticles();
   }
 
+  setEqualBrightness(enabled: boolean): void {
+    this.equalBrightness = enabled;
+    this.updateParticles();
+  }
+
   setLowPerformance(enabled: boolean): void {
     if (enabled === this.lowPerformance) return;
     this.lowPerformance = enabled;
@@ -214,30 +220,21 @@ export class ParticleAvatar implements AvatarController {
     this.root.removeChildren().forEach((child) => child.destroy({ children: true }));
     const field = createParticleField({ bodyCount: this.mode.body, ambientCount: this.mode.ambient });
     this.bodyParticles = [];
-    this.mouthParticles = [];
     this.ambientParticles = [];
 
-    const body: Particle[] = [];
-    const mouth: Particle[] = [];
-    for (const spec of field.body) {
+    const body = field.body.map((spec) => {
       const display = new Particle({
         texture: this.texture,
         anchorX: 0.5,
         anchorY: 0.5,
         scaleX: spec.size,
         scaleY: spec.size,
-        tint: spec.brightness > 0.87 ? 0xd7e7ff : spec.brightness > 0.62 ? 0x78a8ff : 0x2d68ed,
+        tint: 0x78a8ff,
         alpha: spec.brightness,
       });
-      const runtime = { display, spec };
-      if (spec.bone === 'mouth') {
-        mouth.push(display);
-        this.mouthParticles.push(runtime);
-      } else {
-        body.push(display);
-        this.bodyParticles.push(runtime);
-      }
-    }
+      this.bodyParticles.push({ display, spec });
+      return display;
+    });
     const ambient = field.ambient.map((spec) => {
       const display = new Particle({
         texture: this.texture!, anchorX: 0.5, anchorY: 0.5,
@@ -248,12 +245,10 @@ export class ParticleAvatar implements AvatarController {
     });
 
     this.ambientContainer = particleContainer(ambient, this.texture, true);
-    this.bodyContainer = particleContainer(body, this.texture, false);
-    this.mouthContainer = particleContainer(mouth, this.texture, true);
+    this.bodyContainer = particleContainer(body, this.texture, true);
     this.ambientContainer.blendMode = 'add';
     this.bodyContainer.blendMode = 'add';
-    this.mouthContainer.blendMode = 'add';
-    this.root.addChild(this.ambientContainer, this.bodyContainer, this.mouthContainer);
+    this.root.addChild(this.ambientContainer, this.bodyContainer);
     this.updateParticles();
   }
 
@@ -262,7 +257,6 @@ export class ParticleAvatar implements AvatarController {
     const transition = smoothstep(this.model.transition);
     const appearing = stateWeight(this.model, 'appearing');
     const disappearing = stateWeight(this.model, 'disappearing');
-    const thinking = stateWeight(this.model, 'thinking');
     const speaking = stateWeight(this.model, 'speaking');
     const interrupted = stateWeight(this.model, 'interrupted');
     const reveal = appearing ? transition : 1;
@@ -273,6 +267,10 @@ export class ParticleAvatar implements AvatarController {
     const gesture = this.model.gesture && !this.model.reducedMotion
       ? gesturePose(this.model.gesture, this.model.gestureElapsed / this.model.gestureDuration)
       : gesturePose(null, 0);
+    const gestureSpread = Math.min(1, (
+      Math.abs(gesture.leftArm) + Math.abs(gesture.rightArm)
+      + Math.abs(gesture.leftForearm) + Math.abs(gesture.rightForearm)
+    ) / 1.2);
     const scale = Math.min(this.width / 460, this.height / 560);
     const offsetX = (this.width - 460 * scale) / 2;
     const offsetY = (this.height - 560 * scale) / 2;
@@ -280,27 +278,29 @@ export class ParticleAvatar implements AvatarController {
     const position = ({ display, spec }: RuntimeBodyParticle) => {
       const posed = poseBodyParticle(spec, {
         elapsed: this.model.elapsed,
-        speechEnergy: this.model.speechEnergy * speaking,
-        gesture,
         motionAmount: motion,
-        thinkingAmount: thinking,
       });
+      const lowerWeight = smoothstep(Math.max(0, Math.min(1, (spec.y - 0.42) / 0.38)));
+      const headWeight = 1 - smoothstep(Math.max(0, Math.min(1, (spec.y - 0.38) / 0.18)));
+      posed.x += (spec.x - 0.5) * gestureSpread * lowerWeight * 0.035;
+      posed.x += gesture.torsoLean * lowerWeight * 0.035 + gesture.headTilt * headWeight * 0.012;
+      posed.y += (spec.x - 0.5) * gesture.shoulderTilt * lowerWeight * 0.018;
       const dispersedX = Math.cos(spec.scatterAngle + this.model.elapsed * 0.08) * spec.scatterDistance * scatter;
       const dispersedY = Math.sin(spec.scatterAngle + this.model.elapsed * 0.08) * spec.scatterDistance * scatter;
       display.x = offsetX + (posed.x + dispersedX) * 460 * scale;
       display.y = offsetY + (posed.y + dispersedY) * 560 * scale;
+      const luminance = particleLuminance(spec, {
+        elapsed: this.model.elapsed,
+        speechEnergy: this.model.speechEnergy * speaking,
+        equalBrightness: this.equalBrightness,
+      });
+      display.alpha = luminance;
+      display.tint = luminance > 0.82 ? 0xd7e7ff : luminance > 0.48 ? 0x78a8ff : 0x2d68ed;
     };
     this.bodyParticles.forEach(position);
-    this.mouthParticles.forEach((particle) => {
-      position(particle);
-      particle.display.alpha = Math.min(1, particle.spec.brightness * (0.8 + this.model.speechEnergy * speaking));
-      particle.display.scaleX = particle.spec.size * (1 + this.model.speechEnergy * speaking * 0.18);
-      particle.display.scaleY = particle.spec.size * (1 + this.model.speechEnergy * speaking * 0.18);
-    });
 
     const pulse = this.model.reducedMotion ? 1 : 0.96 + Math.sin(this.model.elapsed * 1.5) * 0.04;
-    if (this.bodyContainer) this.bodyContainer.alpha = visibility * pulse * (0.96 + thinking * 0.04);
-    if (this.mouthContainer) this.mouthContainer.alpha = visibility;
+    if (this.bodyContainer) this.bodyContainer.alpha = visibility * pulse;
     if (this.ambientContainer) this.ambientContainer.alpha = visibility * 0.58;
     this.ambientParticles.forEach(({ display, spec }) => {
       const drift = this.model.reducedMotion ? 0 : motion;

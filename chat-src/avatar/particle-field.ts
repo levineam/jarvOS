@@ -1,195 +1,116 @@
-import type { GesturePose } from './model';
-
-export type BoneName =
-  | 'core' | 'torso' | 'head' | 'mouth'
-  | 'upperArmL' | 'upperArmR' | 'lowerArmL' | 'lowerArmR'
-  | 'handL' | 'handR' | 'thighL' | 'thighR' | 'shinL' | 'shinR';
-
 export type BodyParticle = {
-  bone: BoneName;
   x: number;
   y: number;
   size: number;
   brightness: number;
+  edgeAlpha: number;
   phase: number;
   drift: number;
   scatterAngle: number;
   scatterDistance: number;
 };
 
-export type AmbientParticle = {
-  x: number;
-  y: number;
-  size: number;
-  brightness: number;
-  phase: number;
-  speed: number;
-};
-
+export type AmbientParticle = { x: number; y: number; size: number; brightness: number; phase: number; speed: number };
 export type ParticleField = { body: BodyParticle[]; ambient: AmbientParticle[] };
+export type PoseInput = { elapsed: number; motionAmount?: number };
+export type LuminanceInput = { elapsed?: number; speechEnergy?: number; equalBrightness?: boolean };
 
-export type PoseInput = {
-  elapsed: number;
-  speechEnergy: number;
-  gesture?: GesturePose;
-  motionAmount?: number;
-  thinkingAmount?: number;
-};
+export function avatarEnvelope(x: number, y: number): number {
+  const headRadius = Math.hypot((x - 0.5) / 0.19, (y - 0.3) / 0.235);
+  const head = softInside(headRadius, 0.78, 1.18);
+  const neckRadius = Math.hypot((x - 0.5) / 0.115, (y - 0.515) / 0.14);
+  const neck = softInside(neckRadius, 0.65, 1.24) * smoothstep(0.41, 0.55, y);
+  const shoulderRadius = Math.pow(Math.abs((x - 0.5) / 0.43), 3.2) + Math.pow(Math.abs((y - 0.685) / 0.17), 3.2);
+  const shoulders = softInside(shoulderRadius, 0.38, 1.28) * smoothstep(0.48, 0.61, y);
+  return Math.max(head, neck * 0.92, shoulders * 0.9);
+}
 
-const REGIONS: Array<[BoneName, number]> = [
-  ['core', 0.025], ['torso', 0.29], ['head', 0.145], ['mouth', 0.025],
-  ['upperArmL', 0.055], ['upperArmR', 0.055], ['lowerArmL', 0.045], ['lowerArmR', 0.045],
-  ['handL', 0.02], ['handR', 0.02], ['thighL', 0.075], ['thighR', 0.075],
-  ['shinL', 0.065], ['shinR', 0.065],
-];
-
-const ZERO_GESTURE: GesturePose = {
-  leftArm: 0, rightArm: 0, leftForearm: 0, rightForearm: 0,
-  headTilt: 0, shoulderTilt: 0, torsoLean: 0,
-};
-
-export function createParticleField({ bodyCount, ambientCount, seed = 0x4a415256 }: {
-  bodyCount: number;
-  ambientCount: number;
-  seed?: number;
-}): ParticleField {
+export function createParticleField({ bodyCount, ambientCount, seed = 0x4a415256 }: { bodyCount: number; ambientCount: number; seed?: number }): ParticleField {
   const random = seededRandom(seed);
-  const body = Array.from({ length: Math.max(0, Math.floor(bodyCount)) }, () => {
-    const bone = chooseRegion(random());
-    const point = sampleRegion(bone, random);
-    return {
-      bone,
-      x: point.x,
-      y: point.y,
-      size: 0.18 + random() * random() * 0.42,
-      brightness: 0.5 + random() * 0.5,
+  const body: BodyParticle[] = [];
+  const target = Math.max(0, Math.floor(bodyCount));
+  const minimumDistance = target > 900 ? 0.008 : 0.012;
+  const cells = new Map<string, BodyParticle[]>();
+  const nearbyDistance = (x: number, y: number) => {
+    const cellX = Math.floor(x / minimumDistance);
+    const cellY = Math.floor(y / minimumDistance);
+    let nearest = Infinity;
+    for (let offsetX = -1; offsetX <= 1; offsetX += 1) {
+      for (let offsetY = -1; offsetY <= 1; offsetY += 1) {
+        for (const particle of cells.get(`${cellX + offsetX}:${cellY + offsetY}`) || []) {
+          nearest = Math.min(nearest, Math.hypot(x - particle.x, y - particle.y));
+        }
+      }
+    }
+    return nearest;
+  };
+  for (let index = 0; index < target; index += 1) {
+    let chosen = { x: 0.5, y: 0.4, edgeAlpha: 1 };
+    let bestDistance = -1;
+    for (let attempt = 0; attempt < 72; attempt += 1) {
+      const x = 0.035 + random() * 0.93;
+      const y = 0.025 + random() * 0.85;
+      const edgeAlpha = avatarEnvelope(x, y);
+      if (random() > 0.12 + edgeAlpha * 0.88) continue;
+      const nearest = nearbyDistance(x, y);
+      if (nearest > bestDistance) { bestDistance = nearest; chosen = { x, y, edgeAlpha }; }
+      if (nearest >= minimumDistance) break;
+    }
+    const particle = {
+      ...chosen,
+      size: 0.24 + random() * 0.1,
+      brightness: 0.68 + random() * 0.25,
       phase: random() * Math.PI * 2,
-      drift: 0.3 + random() * 0.7,
+      drift: 0.35 + random() * 0.65,
       scatterAngle: random() * Math.PI * 2,
       scatterDistance: 0.12 + random() * 0.48,
-    } satisfies BodyParticle;
-  });
+    };
+    body.push(particle);
+    const key = `${Math.floor(particle.x / minimumDistance)}:${Math.floor(particle.y / minimumDistance)}`;
+    const bucket = cells.get(key) || [];
+    bucket.push(particle);
+    cells.set(key, bucket);
+  }
   const ambient = Array.from({ length: Math.max(0, Math.floor(ambientCount)) }, () => ({
-    x: 0.07 + random() * 0.86,
-    y: 0.04 + random() * 0.92,
-    size: 0.1 + random() * 0.22,
-    brightness: 0.22 + random() * 0.48,
-    phase: random() * Math.PI * 2,
-    speed: 0.16 + random() * 0.38,
+    x: 0.04 + random() * 0.92, y: 0.03 + random() * 0.91,
+    size: 0.13 + random() * 0.1, brightness: 0.16 + random() * 0.25,
+    phase: random() * Math.PI * 2, speed: 0.16 + random() * 0.38,
   }));
   return { body, ambient };
 }
 
 export function poseBodyParticle(particle: BodyParticle, input: PoseInput): { x: number; y: number } {
   const motion = input.motionAmount ?? 1;
-  const thinking = input.thinkingAmount ?? 0;
-  const gesture = input.gesture ?? ZERO_GESTURE;
-  const breath = Math.sin(input.elapsed * 1.65) * 0.0045 * motion;
-  const shimmer = Math.sin(input.elapsed * (0.7 + particle.drift) + particle.phase) * 0.0018 * motion;
-  let point = { x: particle.x + shimmer, y: particle.y };
-
-  if (particle.bone === 'torso' || particle.bone === 'core') {
-    point = rotateAbout(point, { x: 0.5, y: 0.58 }, gesture.torsoLean * 0.22);
-    point.x += gesture.shoulderTilt * (0.55 - point.y) * 0.08;
-    point.y += breath * Math.max(0, (0.61 - point.y) / 0.3);
-  }
-  if (particle.bone === 'head' || particle.bone === 'mouth') {
-    point = rotateAbout(point, { x: 0.5, y: 0.255 }, gesture.headTilt * 0.24 + Math.sin(input.elapsed * 0.42) * 0.052 * thinking);
-    point.y += breath * 0.35;
-  }
-  if (particle.bone === 'mouth') {
-    const energy = Math.min(1, Math.max(0, input.speechEnergy));
-    point.y += energy * (0.009 + Math.abs(point.y - 0.298) * 0.22);
-    point.x = 0.5 + (point.x - 0.5) * (1 + energy * 0.12);
-  }
-  if (particle.bone.endsWith('ArmL') || particle.bone === 'handL') {
-    point = poseArm(point, 'left', particle.bone, gesture.leftArm, gesture.leftForearm, input.elapsed, motion);
-  } else if (particle.bone.endsWith('ArmR') || particle.bone === 'handR') {
-    point = poseArm(point, 'right', particle.bone, gesture.rightArm, gesture.rightForearm, input.elapsed, motion);
-  }
-  if (particle.bone.startsWith('thigh') || particle.bone.startsWith('shin')) {
-    point.x += Math.sin(input.elapsed * 0.72 + particle.phase * 0.1) * 0.0017 * motion;
-    point.y += breath * 0.18;
-  }
-  if (thinking) {
-    const dx = point.x - 0.5;
-    const dy = point.y - 0.47;
-    const circulation = Math.sin(input.elapsed * 0.9 + particle.phase) * 0.0034 * thinking;
-    point.x -= dy * circulation;
-    point.y += dx * circulation;
-  }
-  return point;
+  const breath = Math.sin(input.elapsed * 1.15) * 0.0032 * motion;
+  const shimmerX = Math.sin(input.elapsed * (0.45 + particle.drift * 0.22) + particle.phase) * 0.0017 * motion;
+  const shimmerY = Math.cos(input.elapsed * (0.38 + particle.drift * 0.18) + particle.phase) * 0.0013 * motion;
+  const lowerWeight = smoothstep(0.42, 0.82, particle.y);
+  return { x: particle.x + shimmerX + (particle.x - 0.5) * breath * lowerWeight, y: particle.y + shimmerY + breath * (0.25 + lowerWeight * 0.75) };
 }
 
-function poseArm(point: { x: number; y: number }, side: 'left' | 'right', bone: BoneName, arm: number, forearm: number, elapsed: number, motion: number) {
-  const sign = side === 'left' ? -1 : 1;
-  const shoulder = { x: side === 'left' ? 0.395 : 0.605, y: 0.36 };
-  const elbow = { x: side === 'left' ? 0.305 : 0.695, y: 0.505 };
-  const upperRotation = sign * arm * 0.62 + sign * Math.sin(elapsed * 0.55) * 0.012 * motion;
-  let posed = rotateAbout(point, shoulder, upperRotation);
-  if (bone.startsWith('lowerArm') || bone.startsWith('hand')) {
-    posed = rotateAbout(posed, rotateAbout(elbow, shoulder, upperRotation), sign * forearm * 0.72);
-  }
-  return posed;
+export function particleLuminance(particle: BodyParticle, input: LuminanceInput = {}): number {
+  const envelope = 0.16 + particle.edgeAlpha * 0.84;
+  if (input.equalBrightness) return clamp(0.78 * envelope, 0.06, 1);
+  const x = particle.x;
+  const y = particle.y;
+  const eyeShadow = gaussian(x, y, 0.438, 0.285, 0.055, 0.035) + gaussian(x, y, 0.562, 0.285, 0.055, 0.035);
+  const noseLight = gaussian(x, y, 0.5, 0.34, 0.04, 0.095);
+  const cheekLight = gaussian(x, y, 0.5, 0.395, 0.15, 0.085);
+  const mouthShade = gaussian(x, y, 0.5, 0.43, 0.085, 0.035);
+  const speech = clamp(input.speechEnergy ?? 0, 0, 1);
+  const speechGlow = gaussian(x, y, 0.5, 0.43, 0.12, 0.065) * speech * (0.2 + Math.sin((input.elapsed ?? 0) * 8) * 0.06);
+  const featureLight = 1 - eyeShadow * 0.38 - mouthShade * 0.22 + noseLight * 0.2 + cheekLight * 0.08 + speechGlow;
+  return clamp(particle.brightness * envelope * featureLight, 0.035, 1);
 }
 
-function chooseRegion(value: number): BoneName {
-  let total = 0;
-  for (const [bone, weight] of REGIONS) {
-    total += weight;
-    if (value <= total) return bone;
-  }
-  return 'shinR';
+function gaussian(x: number, y: number, cx: number, cy: number, rx: number, ry: number) {
+  const dx = (x - cx) / rx;
+  const dy = (y - cy) / ry;
+  return Math.exp(-(dx * dx + dy * dy) * 0.5);
 }
-
-function sampleRegion(bone: BoneName, random: () => number): { x: number; y: number } {
-  switch (bone) {
-    case 'core': return sampleEllipse(0.5, 0.585, 0.105, 0.065, random);
-    case 'torso': return sampleTorso(random);
-    case 'head': return sampleEllipse(0.5, 0.215, 0.09, 0.115, random);
-    case 'mouth': return sampleEllipse(0.5, 0.292, 0.038, 0.018, random);
-    case 'upperArmL': return sampleSegment(0.405, 0.355, 0.28, 0.5, 0.043, random);
-    case 'upperArmR': return sampleSegment(0.595, 0.355, 0.72, 0.5, 0.043, random);
-    case 'lowerArmL': return sampleSegment(0.28, 0.5, 0.15, 0.65, 0.035, random);
-    case 'lowerArmR': return sampleSegment(0.72, 0.5, 0.85, 0.65, 0.035, random);
-    case 'handL': return sampleEllipse(0.13, 0.672, 0.046, 0.05, random);
-    case 'handR': return sampleEllipse(0.87, 0.672, 0.046, 0.05, random);
-    case 'thighL': return sampleSegment(0.46, 0.59, 0.425, 0.765, 0.055, random);
-    case 'thighR': return sampleSegment(0.54, 0.59, 0.575, 0.765, 0.055, random);
-    case 'shinL': return sampleSegment(0.425, 0.765, 0.405, 0.915, 0.043, random);
-    case 'shinR': return sampleSegment(0.575, 0.765, 0.595, 0.915, 0.043, random);
-  }
-}
-
-function sampleTorso(random: () => number) {
-  const y = 0.315 + random() * 0.3;
-  const t = (y - 0.315) / 0.3;
-  const halfWidth = 0.12 - t * 0.03 + Math.sin(t * Math.PI) * 0.018;
-  return { x: 0.5 + (random() * 2 - 1) * halfWidth * Math.sqrt(random()), y };
-}
-
-function sampleEllipse(cx: number, cy: number, rx: number, ry: number, random: () => number) {
-  const angle = random() * Math.PI * 2;
-  const radius = Math.sqrt(random());
-  return { x: cx + Math.cos(angle) * rx * radius, y: cy + Math.sin(angle) * ry * radius };
-}
-
-function sampleSegment(sx: number, sy: number, ex: number, ey: number, width: number, random: () => number) {
-  const along = random();
-  const dx = ex - sx;
-  const dy = ey - sy;
-  const length = Math.hypot(dx, dy);
-  const radial = (random() * 2 - 1) * width * (0.68 + Math.sin(along * Math.PI) * 0.32);
-  return { x: sx + dx * along - (dy / length) * radial, y: sy + dy * along + (dx / length) * radial };
-}
-
-function rotateAbout(point: { x: number; y: number }, pivot: { x: number; y: number }, angle: number) {
-  const cosine = Math.cos(angle);
-  const sine = Math.sin(angle);
-  const dx = point.x - pivot.x;
-  const dy = point.y - pivot.y;
-  return { x: pivot.x + dx * cosine - dy * sine, y: pivot.y + dx * sine + dy * cosine };
-}
+function softInside(value: number, inner: number, outer: number) { return 1 - smoothstep(inner, outer, value); }
+function smoothstep(edge0: number, edge1: number, value: number) { const amount = clamp((value - edge0) / (edge1 - edge0), 0, 1); return amount * amount * (3 - 2 * amount); }
+function clamp(value: number, minimum: number, maximum: number) { return Math.min(maximum, Math.max(minimum, value)); }
 
 function seededRandom(seed: number): () => number {
   let state = seed >>> 0;

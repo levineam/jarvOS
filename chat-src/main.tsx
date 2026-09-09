@@ -1,4 +1,4 @@
-import React, { lazy, Suspense, useEffect, useMemo, useState } from 'react';
+import React, { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot, Root } from 'react-dom/client';
 import { useChat } from '@ai-sdk/react';
 import { DefaultChatTransport } from 'ai';
@@ -16,6 +16,14 @@ type Settings = {
   hasKey: boolean;
   source: string;
   canStoreKey: boolean;
+  subscription?: {
+    available: boolean;
+    authenticated: boolean;
+    connection: string;
+    planType?: string | null;
+    requiresSignIn?: boolean;
+    reason?: string;
+  };
   voice?: { available: boolean };
 };
 
@@ -119,7 +127,12 @@ function RightPanel({ pending, onApprove, onDeny }: { pending: any[]; onApprove:
   );
 }
 
-function SettingsBar({ settings, onSaved }: { settings: Settings | null; onSaved: () => void }) {
+function SettingsBar({ settings, connection, onConnection, onSaved }: {
+  settings: Settings | null;
+  connection: 'subscription' | 'api-key';
+  onConnection: (connection: 'subscription' | 'api-key') => void;
+  onSaved: () => void;
+}) {
   const [open, setOpen] = useState(false);
   const [key, setKey] = useState('');
   const [error, setError] = useState('');
@@ -147,20 +160,25 @@ function SettingsBar({ settings, onSaved }: { settings: Settings | null; onSaved
 
   return (
     <div className="settings-bar">
-      <span className={settings?.hasKey ? 'dot ok' : 'dot warn'} />
-      <span>{settings?.hasKey ? `OpenAI key: ${settings.source}` : 'OpenAI key required'}</span>
+      <span className={(connection === 'subscription' ? settings?.subscription?.authenticated : settings?.hasKey) ? 'dot ok' : 'dot warn'} />
+      <span>{connection === 'subscription'
+        ? settings?.subscription?.authenticated ? `ChatGPT ${settings.subscription.planType || 'subscription'}` : 'ChatGPT sign-in required'
+        : settings?.hasKey ? `API key: ${settings.source}` : 'API key required'}</span>
       <button type="button" className="icon-btn" onClick={() => setOpen(!open)} aria-label="Open settings">⚙</button>
       {open && (
         <div className="settings-popover">
-          {settings?.canStoreKey ? (
-            <>
-              <input value={key} onChange={(e) => setKey(e.target.value)} placeholder="OpenAI API key" type="password" />
-              <button type="button" onClick={save}>Save</button>
-            </>
-          ) : (
-            <p>Set OPENAI_API_KEY before starting the server, or run the Electron app to store a key in the OS keychain.</p>
-          )}
-          {settings?.hasKey && settings.source !== 'env' && <button type="button" className="quiet" onClick={clear}>Clear key</button>}
+          <div className="connection-choice" role="group" aria-label="Chat connection">
+            <button type="button" className={connection === 'subscription' ? 'active' : ''} onClick={() => onConnection('subscription')}>ChatGPT subscription</button>
+            <button type="button" className={connection === 'api-key' ? 'active' : ''} onClick={() => onConnection('api-key')}>API key</button>
+          </div>
+          {connection === 'subscription' ? (
+            <p>{settings?.subscription?.authenticated
+              ? 'Uses the ChatGPT account already signed in to Codex. Ordinary chat is text-only and has no workspace tools.'
+              : settings?.subscription?.reason || 'Sign in with ChatGPT through Codex on this Mac, then reopen Chat.'}</p>
+          ) : settings?.canStoreKey ? (
+            <><input value={key} onChange={(e) => setKey(e.target.value)} placeholder="OpenAI API key" type="password" /><button type="button" onClick={save}>Save</button></>
+          ) : <p>Set OPENAI_API_KEY before starting the server, or run the Electron app to store a key in the OS keychain.</p>}
+          {connection === 'api-key' && settings?.hasKey && settings.source !== 'env' && <button type="button" className="quiet" onClick={clear}>Clear key</button>}
           {error && <div className="chat-error">{error}</div>}
         </div>
       )}
@@ -170,19 +188,23 @@ function SettingsBar({ settings, onSaved }: { settings: Settings | null; onSaved
 
 function ChatApp() {
   const [models, setModels] = useState<ModelInfo[]>([]);
-  const [modelId, setModelId] = useState('openai:gpt-5.5');
+  const [modelId, setModelId] = useState('');
   const [reasoningEffort, setReasoningEffort] = useState('medium');
   const [settings, setSettings] = useState<Settings | null>(null);
+  const [connection, setConnection] = useState<'subscription' | 'api-key'>('subscription');
+  const [conversationId] = useState(() => crypto.randomUUID());
   const [input, setInput] = useState('');
   const [voiceState, setVoiceState] = useState<'idle' | 'recording' | 'working'>('idle');
   const [voiceError, setVoiceError] = useState('');
   const [recorder, setRecorder] = useState<MediaRecorder | null>(null);
   const [avatarOpen, setAvatarOpen] = useState(false);
+  const requestOptions = useRef({ modelId, reasoningEffort, connection, conversationId });
+  requestOptions.current = { modelId, reasoningEffort, connection, conversationId };
 
   const transport = useMemo(() => new DefaultChatTransport({
     api: '/api/chat',
-    body: () => ({ modelId, reasoningEffort }),
-  }), [modelId, reasoningEffort]);
+    body: () => requestOptions.current,
+  }), []);
 
   const {
     messages,
@@ -198,13 +220,23 @@ function ChatApp() {
   }
 
   useEffect(() => {
-    api<{ models: ModelInfo[]; defaultModelId: string; defaultReasoningEffort: string }>('/api/chat/models').then((data) => {
+    let current = true;
+    setModels([]);
+    setModelId('');
+    api<{ models: ModelInfo[]; defaultModelId: string; defaultReasoningEffort: string }>(`/api/chat/models?connection=${connection}`).then((data) => {
+      if (!current) return;
       setModels(data.models);
       setModelId(data.defaultModelId);
       setReasoningEffort(data.defaultReasoningEffort);
-    });
+    }).catch(() => { if (current) setModelId(''); });
+    return () => { current = false; };
+  }, [connection]);
+
+  useEffect(() => {
     refreshSettings();
   }, []);
+
+  const chatReady = connection === 'subscription' ? settings?.subscription?.authenticated : settings?.hasKey;
 
   const pendingApprovals = messages.flatMap((message: any) =>
     (message.parts || []).filter((part: any) => String(part.type).startsWith('tool-') && part.state === 'approval-requested' && part.approval?.id));
@@ -269,19 +301,23 @@ function ChatApp() {
           </div>
           <div className="chat-head-actions">
             <button type="button" className="avatar-launch" onClick={() => setAvatarOpen(true)}><i />Voice avatar</button>
-            <SettingsBar settings={settings} onSaved={refreshSettings} />
+            <SettingsBar settings={settings} connection={connection} onConnection={setConnection} onSaved={refreshSettings} />
           </div>
         </header>
 
-        {!settings?.hasKey && (
+        {!chatReady && (
           <div className="no-key">
-            <h2>Add an OpenAI key to start chatting</h2>
-            <p>The key stays server-side. In Electron it is encrypted with the OS keychain; in browser serve mode use OPENAI_API_KEY.</p>
+            <h2>{connection === 'subscription' ? 'Sign in with ChatGPT to start chatting' : 'Add an OpenAI key to start chatting'}</h2>
+            <p>{connection === 'subscription'
+              ? 'Desktop reuses the ChatGPT account managed by Codex. It never reads or copies your credential.'
+              : 'API-key billing is used only while this connection is explicitly selected.'}</p>
           </div>
         )}
 
         <div className="thread">
-          {messages.length === 0 && <div className="empty-chat">Ask about your journal, notes, memory, ontology, or Paperclip work.</div>}
+          {messages.length === 0 && <div className="empty-chat">{connection === 'subscription'
+            ? 'Start a private text conversation through your ChatGPT subscription. Workspace tools are off.'
+            : 'Ask about your journal, notes, memory, ontology, or Paperclip work.'}</div>}
           {messages.map((message: any) => (
             <article className={`msg ${message.role}`} key={message.id}>
               <div className="msg-body">
@@ -315,7 +351,7 @@ function ChatApp() {
                 {models.map((model) => <option key={model.id} value={model.id}>{model.label}</option>)}
               </select>
               <select value={reasoningEffort} onChange={(e) => setReasoningEffort(e.target.value)} aria-label="Thinking level">
-                {['minimal', 'low', 'medium', 'high'].map((effort) => <option key={effort} value={effort}>thinking: {effort}</option>)}
+                {(models.find((model) => model.id === modelId)?.reasoningEfforts || ['minimal', 'low', 'medium', 'high']).map((effort) => <option key={effort} value={effort}>thinking: {effort}</option>)}
               </select>
             </div>
             <div className="composer-actions">
@@ -324,7 +360,7 @@ function ChatApp() {
               </button>
               {status === 'streaming' || status === 'submitted'
                 ? <button type="button" className="send-btn" onClick={stop} aria-label="Stop">■</button>
-                : <button type="button" className="send-btn" disabled={!settings?.hasKey || !input.trim()} onClick={submit} aria-label="Send">↑</button>}
+                : <button type="button" className="send-btn" disabled={!chatReady || !modelId || !input.trim()} onClick={submit} aria-label="Send">↑</button>}
             </div>
           </div>
           {voiceError && <div className="chat-error">{voiceError}</div>}

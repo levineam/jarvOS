@@ -16,6 +16,9 @@ const providers = require('../server/agent/providers');
 const transcribe = require('../server/agent/transcribe');
 const config = require('../server/config');
 const selfTools = require('../server/agent/tools/self');
+const { createReadTools } = require('../server/agent/tools/read');
+const projectsContext = require('../server/adapters/projects-context');
+const { requireLoopbackRequest } = require('../server/http-utils');
 
 function tempDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-chat-test-'));
@@ -209,6 +212,34 @@ test('Chat is first nav item and default route', () => {
   const app = fs.readFileSync(path.join(__dirname, '..', 'static', 'app.js'), 'utf8');
   assert(index.indexOf('data-page="chat"') < index.indexOf('data-page="today"'));
   assert.match(app, /return m && pages\[m\[1\]\] \? m\[1\] : 'chat'/);
+});
+
+test('async navigation and connection changes discard stale responses', () => {
+  const app = fs.readFileSync(path.join(__dirname, '..', 'static', 'app.js'), 'utf8');
+  const chat = fs.readFileSync(path.join(__dirname, '..', 'chat-src', 'main.tsx'), 'utf8');
+  assert.match(app, /generation !== renderGeneration/);
+  assert.match(chat, /let current = true/);
+  assert.match(chat, /if \(!current\) return/);
+  assert.match(chat, /setModelId\(''\)/);
+});
+
+test('API-key agent exposes canonical Projects context without a registry fallback', async () => {
+  const originalRead = projectsContext.read;
+  const expected = { status: 'unavailable', code: 'PROJECTS_CONTEXT_STALE', reason: 'Provider data is stale' };
+  projectsContext.read = async () => expected;
+  try {
+    const tools = await createReadTools({ vault: {}, memory: {}, ontologyDir: '', paperclip: {} });
+    assert.deepEqual(await tools.read_projects_context.execute({}), expected);
+  } finally {
+    projectsContext.read = originalRead;
+  }
+});
+
+test('local control routes require a loopback Host and matching Origin', () => {
+  assert.doesNotThrow(() => requireLoopbackRequest({ headers: { host: '127.0.0.1:4807', origin: 'http://127.0.0.1:4807' } }));
+  assert.doesNotThrow(() => requireLoopbackRequest({ headers: { host: 'localhost:4807' } }));
+  assert.throws(() => requireLoopbackRequest({ headers: { host: 'desktop.example' } }), /loopback host required/);
+  assert.throws(() => requireLoopbackRequest({ headers: { host: '127.0.0.1:4807', origin: 'https://evil.example' } }), /same-origin request required/);
 });
 
 const REPO_ROOT = path.join(__dirname, '..');

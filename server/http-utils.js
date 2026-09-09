@@ -16,6 +16,16 @@ function httpThrow(status, message) {
   throw httpError(status, message);
 }
 
+function requireLoopbackRequest(req) {
+  const host = String(req.headers.host || '').toLowerCase();
+  if (!/^(?:127\.0\.0\.1|localhost|\[::1\])(?::\d+)?$/.test(host)) throw httpError(403, 'loopback host required');
+  const origin = req.headers.origin;
+  if (!origin) return;
+  let parsed;
+  try { parsed = new URL(origin); } catch { throw httpError(403, 'same-origin request required'); }
+  if (parsed.protocol !== 'http:' || parsed.host.toLowerCase() !== host) throw httpError(403, 'same-origin request required');
+}
+
 function readJson(req, { limit = 1_000_000 } = {}) {
   return new Promise((resolve, reject) => {
     let body = '';
@@ -56,4 +66,4 @@ async function pipeWebResponse(webResponse, res) {
   }
 }
 
-module.exports = { json, httpError, httpThrow, readJson, pipeWebResponse };
+module.exports = { json, httpError, httpThrow, readJson, pipeWebResponse, requireLoopbackRequest };

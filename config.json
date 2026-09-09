@@ -16,6 +16,10 @@
     "projectId": "f805b421-ecc9-40e6-a890-501d8acfbe62",
     "authFile": "~/.paperclip/auth.json"
   },
+  "projectsContext": {
+    "adapterModule": "~/clawd/scripts/lib/jarvos-project-context-adapter.js",
+    "configFile": "~/clawd/config/jarvos-project-context.json"
+  },
   "whisper": {
     "binary": "whisper-cli",
     "ffmpeg": "ffmpeg",

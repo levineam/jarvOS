@@ -8,6 +8,7 @@ async function createReadTools(cfg) {
   const paperclip = require('../../adapters/paperclip');
   const ontology = require('../../adapters/ontology');
   const memory = require('../../adapters/memory');
+  const projectsContext = require('../../adapters/projects-context');
 
   return {
     search_notes: tool({
@@ -41,6 +42,11 @@ async function createReadTools(cfg) {
       description: 'Read the ontology meaning spine.',
       inputSchema: z.object({}),
       execute: async () => ontology.spine(cfg.ontologyDir),
+    }),
+    read_projects_context: tool({
+      description: 'Read canonical Projects context, preserving provider scope, timestamps, omissions, and unavailable states.',
+      inputSchema: z.object({}),
+      execute: async () => projectsContext.read(cfg),
     }),
     list_paperclip_issues: tool({
       description: 'List current Paperclip issues visible to jarvOS.',

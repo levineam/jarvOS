@@ -71,19 +71,40 @@ test('hidden avatars do not advance and every gesture stays restrained', async (
   }
 });
 
-test('particle field is deterministic and speech moves the mouth cluster', async () => {
-  const { createParticleField, poseBodyParticle } = await fieldModule;
+test('each gesture produces a nonzero broad-pose signal at mid-gesture', async () => {
+  const { gesturePose } = await modelModule;
+  for (const gesture of ['outward', 'explain', 'emphasis', 'thoughtful']) {
+    const pose = gesturePose(gesture, 0.5);
+    assert.ok(Object.values(pose).some((value) => Math.abs(value) > 0.01), `${gesture} must affect the cloud pose`);
+  }
+});
+
+test('particle placement is deterministic and independent of speech or facial luminance', async () => {
+  const { createParticleField, particleLuminance, poseBodyParticle } = await fieldModule;
   const first = createParticleField({ bodyCount: 900, ambientCount: 64, seed: 42 });
   const second = createParticleField({ bodyCount: 900, ambientCount: 64, seed: 42 });
 
   assert.equal(first.body.length, 900);
   assert.equal(first.ambient.length, 64);
   assert.deepEqual(first, second);
-  assert.ok(new Set(first.body.map((particle) => particle.bone)).size >= 12);
+  assert.equal(first.body.some((particle) => Object.hasOwn(particle, 'bone')), false);
 
-  const mouth = first.body.find((particle) => particle.bone === 'mouth');
-  assert.ok(mouth);
-  const quiet = poseBodyParticle(mouth, { elapsed: 1, speechEnergy: 0 });
-  const speaking = poseBodyParticle(mouth, { elapsed: 1, speechEnergy: 1 });
-  assert.ok(Math.abs(speaking.y - quiet.y) > 0.001);
+  const particle = first.body.find((point) => Math.abs(point.x - 0.5) < 0.08 && Math.abs(point.y - 0.43) < 0.05);
+  assert.ok(particle);
+  const quiet = poseBodyParticle(particle, { elapsed: 1, motionAmount: 1 });
+  const speaking = poseBodyParticle(particle, { elapsed: 1, motionAmount: 1, speechEnergy: 1 });
+  assert.deepEqual(speaking, quiet);
+  assert.notEqual(particleLuminance(particle, { elapsed: 1, speechEnergy: 0 }), particleLuminance(particle, { elapsed: 1, speechEnergy: 1 }));
+  assert.equal(particle.size, second.body[first.body.indexOf(particle)].size);
+});
+
+test('matched interior facial windows have comparable spatial density', async () => {
+  const { createParticleField } = await fieldModule;
+  const field = createParticleField({ bodyCount: 4200, ambientCount: 0, seed: 77 });
+  const count = (cx, cy) => field.body.filter((point) => Math.abs(point.x - cx) <= 0.035 && Math.abs(point.y - cy) <= 0.025).length;
+  const windows = [count(0.44, 0.285), count(0.56, 0.285), count(0.5, 0.35), count(0.5, 0.43), count(0.42, 0.37), count(0.58, 0.37)];
+  const minimum = Math.min(...windows);
+  const maximum = Math.max(...windows);
+  assert.ok(minimum > 8, `facial density sample too small: ${windows.join(',')}`);
+  assert.ok(maximum / minimum < 1.9, `facial clustering detected: ${windows.join(',')}`);
 });
