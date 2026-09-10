@@ -26,6 +26,9 @@ function loadConfig() {
   const configPath = path.join(__dirname, '..', 'config.json');
   const raw = JSON.parse(fs.readFileSync(configPath, 'utf8'));
   const cfg = expandDeep(raw);
+  if (process.env.JARVOS_DESKTOP_PROJECTS_CONTEXT_MODULE) {
+    cfg.projectsContext = { contextModule: expandTilde(process.env.JARVOS_DESKTOP_PROJECTS_CONTEXT_MODULE) };
+  }
   // The app's own root (the repo containing this server). Derived, not read
   // from config.json — `jarvosRepo` points at a *different* repo (~/jarvOS).
   // Self-introspection tools confine all reads to this directory.

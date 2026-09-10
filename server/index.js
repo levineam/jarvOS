@@ -11,6 +11,7 @@ const paperclip = require('./adapters/paperclip');
 const ontology = require('./adapters/ontology');
 const memory = require('./adapters/memory');
 const health = require('./adapters/health');
+const systemDoctor = require('./adapters/system-doctor');
 const today = require('./today');
 const agent = require('./agent');
 const credentials = require('./agent/credentials');
@@ -76,6 +77,15 @@ const routes = {
     memory.readDaily(cfg.memory, q.get('file') || '') || httpThrow(404, 'memory file not found'),
 
   '/api/health': async () => health.services(cfg, today.localDate()),
+
+  '/api/system-doctor': async () => {
+    const loaded = systemDoctor.loadReceipt(cfg);
+    if (!loaded.ok && !loaded.receipt) {
+      const unavailable = systemDoctor.emptyUnavailable(loaded.error || 'system doctor unavailable');
+      return unavailable;
+    }
+    return loaded;
+  },
 
   '/api/chat/models': async () => agent.listModels(),
 };

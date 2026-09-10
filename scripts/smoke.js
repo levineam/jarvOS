@@ -85,6 +85,24 @@ async function waitForServer() {
     const chatAsset = await request('/chat/chat.js');
     assert.equal(chatAsset.status, 200);
     assert.match(chatAsset.headers['content-type'] || '', /javascript|octet-stream/);
+
+    const doctor = await request('/api/system-doctor');
+    assert.equal(doctor.status, 200);
+    const doctorBody = JSON.parse(doctor.body);
+    assert.equal(typeof doctorBody.ok, 'boolean');
+    assert.ok(doctorBody.receipt);
+    assert.equal(doctorBody.receipt.schema, 'jarvos-system-doctor-report/v1');
+    assert.ok(Array.isArray(doctorBody.receipt.components));
+    assert.ok(doctorBody.receipt.sections);
+    assert.ok(Array.isArray(doctorBody.receipt.sections.memory));
+
+    const servicesPage = await request('/');
+    assert.match(servicesPage.body, /app\.js/);
+    const appJs = await request('/app.js');
+    assert.match(appJs.body, /renderSystemDoctorReceipt/);
+    assert.match(appJs.body, /fixed eleven-row order/);
+    assert.match(appJs.body, /compact-scoreboard/);
+    assert.doesNotMatch(appJs.body, /PASS|FAIL|NOT READY|ten-row/);
   } finally {
     child.kill('SIGTERM');
   }

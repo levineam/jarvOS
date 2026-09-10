@@ -17,10 +17,10 @@ does not invent its own database.
 | **Today** | Control room | Composed brief: journal + Paperclip + recent notes. What's moving, what needs you, what shipped. |
 | **Journal** | Daily trail | `Vault/Journal/YYYY-MM-DD.md`, newest first, parsed into sections |
 | **Notes** | Durable knowledge | `Vault/Notes/*.md` — search, reader, wikilinks, CriticMarkup rendering |
-| **Work** | Execution | Paperclip issues / agents / activity / projects via the local API |
-| **Memory** | Agent state | `clawd/MEMORY.md` index + daily memory files |
+| **Projects** | Outcomes | Host-authorized canonical projects, definitions of done and explicitly partial provider evidence |
+| **Memory** | Deferred | Not part of this Desktop slice; underlying data is preserved |
 | **Ontology** | Meaning | jarvos-ontology spine (higher order → projects) |
-| **Services** | The bundle | Health of every system jarvOS connects |
+| **System** | Operating health | Published Doctor observations with freshness and lightweight connection checks |
 
 ## Run
 
@@ -40,6 +40,25 @@ npm run smoke
 
 The Electron shell boots the server in-process; if a server is already running
 on the port it just attaches to it.
+
+### Host bindings and observation freshness
+
+Set `projectsContext.contextModule` in `config.json`, or the host-local
+`JARVOS_DESKTOP_PROJECTS_CONTEXT_MODULE` environment variable, to the installed
+jarvOS agent-context entry point exporting `readProjectsContext`. Desktop requests
+the `orientation` profile; the host enforces its admitted scope and capabilities.
+It does not read the raw registry or use automation's stricter freshness adapter.
+Stale supporting providers remain visible as stale alongside canonical definitions.
+Unverified completion evidence and next steps stay unavailable.
+
+System reads owner-published `.jarvos/health-modules` snapshots using the public
+jarvOS validator. Page/API reads never run Doctor, model probes or repairs. A
+configured public `systemDoctor.receiptFile` additionally requires matching host
+and profile plus `observedAt`/`validUntil`; invalid files fail closed. Missing or
+expired observations never imply health. The view refreshes every 30 seconds
+while visible, with single-flight reads and failure backoff. This rereads
+observations; publishing new evidence remains the existing producer owner's job,
+not a Desktop scheduler. Old `#/services` links redirect to `#/system`.
 
 ## Design intent
 
@@ -66,6 +85,7 @@ server/            zero-dependency Node HTTP server
     ontology.js    jarvos-ontology spine files
     memory.js      MEMORY.md + daily memory files
     health.js      service checks
+    system-doctor.js  public jarvos-system-doctor-report/v1 compact scoreboard (no probes; facts/v2 eleven-row Memory)
 static/            single-page UI, vanilla JS, vendored assets
   chat/            Vite-built React chat island
 chat-src/          Chat source (React + AI SDK useChat)
