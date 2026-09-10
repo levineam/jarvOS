@@ -399,16 +399,25 @@ function countItems(packet) {
     + (packet.inference?.candidates?.length || 0);
 }
 
-function removeLast(array) { return array.length ? array.pop() : null; }
-
 function enforceBounds(packet, limits) {
-  let omittedItems = 0;
-  const sections = [];
+  const truncation = packet.truncation;
   const targetFor = (section) => section === 'canonical.records'
     ? packet.canonical.records
     : section === 'inference.candidates' ? packet.inference.candidates : packet[section];
   const trim = (section, predicate = () => true) => {
-    while (predicate() && removeLast(targetFor(section))) { omittedItems += 1; if (!sections.includes(section)) sections.push(section); }
+    const target = targetFor(section);
+    while (predicate() && target.length) {
+      // Breadcrumb ordering puts ancestors before descendants, so tail
+      // removal preserves the canonical hierarchy without a second sort.
+      const removed = target.pop();
+      if (section === 'canonical.records') {
+        delete packet.canonical.revisions[removed.id];
+      }
+      truncation.truncated = true;
+      truncation.omittedItems += 1;
+      if (!truncation.sections.includes(section)) truncation.sections.push(section);
+      truncation.sections.sort();
+    }
   };
   trim('activity', () => countItems(packet) > limits.maxItems);
   trim('currentWork', () => countItems(packet) > limits.maxItems);
@@ -416,21 +425,10 @@ function enforceBounds(packet, limits) {
   trim('inference.candidates', () => countItems(packet) > limits.maxItems);
   trim('canonical.records', () => countItems(packet) > limits.maxItems);
   trim('attention', () => countItems(packet) > limits.maxItems);
-  if (packet.canonical && packet.canonical.records) {
-    packet.canonical.revisions = Object.fromEntries(packet.canonical.records.map((record) => [record.id, record.revision]));
-  }
   const bytesExceeded = () => byteLength(packet) > limits.maxBytes;
   for (const section of ['activity', 'currentWork', 'evidence', 'inference.candidates', 'attention', 'canonical.records']) {
-    const target = section === 'canonical.records' ? packet.canonical.records : section === 'inference.candidates' ? packet.inference.candidates : packet[section];
-    while (bytesExceeded() && target.length) { target.pop(); omittedItems += 1; if (!sections.includes(section)) sections.push(section); }
+    trim(section, bytesExceeded);
   }
-  packet.truncation = {
-    truncated: omittedItems > 0,
-    maxItems: limits.maxItems,
-    maxBytes: limits.maxBytes,
-    omittedItems,
-    sections: sections.sort(),
-  };
   return packet;
 }
 
