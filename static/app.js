@@ -266,8 +266,7 @@ const pages = {
       api('/api/health'),
       api('/api/system-doctor').catch((err) => ({ ok: false, error: err.message, receipt: null })),
     ]);
-    let html = head('operating health', 'System',
-      'Published Doctor observations. Refreshes every 30 seconds while visible; observations update when their owner publishes.');
+    let html = head('operating health', 'System');
 
     html += `<div id="system-observations">${renderSystemDoctorReceipt(doctor)}</div><p id="refresh-status" class="det" role="status"></p>`;
 

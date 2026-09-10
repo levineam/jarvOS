@@ -96,6 +96,7 @@ test('System navigation and visible refresh are wired without subprocess executi
   assert.match(app, /document.hidden/);
   assert.match(app, /generation === renderGeneration/);
   assert.doesNotMatch(app, /all systems calm/);
+  assert.doesNotMatch(app, /Published Doctor observations\. Refreshes every 30 seconds/);
   const reader = fs.readFileSync(path.join(__dirname, '../server/adapters/system-doctor.js'), 'utf8');
   assert.doesNotMatch(reader, /spawnSync|child_process|runPublicDoctor/);
 });
