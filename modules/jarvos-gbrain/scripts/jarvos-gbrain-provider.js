@@ -12,7 +12,7 @@ function fail(failureClass) {
 }
 
 function main() {
-  const prepared = prepareManagedGbrainProvider(process.env[DESCRIPTOR_ENV]);
+  const prepared = prepareManagedGbrainProvider(process.env[DESCRIPTOR_ENV], process.argv.slice(2));
   if (!prepared.ok) {
     fail(prepared.failureClass || 'provider-preflight-failed');
     return;

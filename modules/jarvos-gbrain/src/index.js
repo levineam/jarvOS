@@ -874,9 +874,17 @@ function loadManagedRuntimeDescriptor(descriptorPath) {
   return { ok: true, descriptor, runtime, skills };
 }
 
-function prepareManagedGbrainProvider(descriptorPath) {
+function prepareManagedGbrainProvider(descriptorPath, argv = []) {
+  const pluginArgs = ['serve', '--surface', 'starter', '--source-guard'];
+  if (!Array.isArray(argv) || (argv.length > 0
+    && (argv.length !== pluginArgs.length || argv.some((arg, index) => arg !== pluginArgs[index])))) {
+    return { ok: false, failureClass: 'provider-arguments-refused' };
+  }
   const loaded = loadManagedRuntimeDescriptor(descriptorPath);
   if (!loaded.ok) return loaded;
+  if (argv.length && (!loaded.descriptor.providerEnv?.GBRAIN_BRAIN_ID || !loaded.descriptor.providerEnv?.GBRAIN_SOURCE)) {
+    return { ok: false, failureClass: 'plugin-brain-source-binding-required' };
+  }
   const config = resolveConfig({
     managedRuntime: loaded.descriptor,
     managedProviderEnv: loaded.descriptor.providerEnv || {},
@@ -887,7 +895,7 @@ function prepareManagedGbrainProvider(descriptorPath) {
   return {
     ok: true,
     command: loaded.runtime.launchCommand,
-    args: [...loaded.runtime.launchArgsPrefix, 'serve'],
+    args: [...loaded.runtime.launchArgsPrefix, ...(argv.length ? pluginArgs : ['serve'])],
     cwd: neutralGbrainCwd(),
     env: managedGbrainEnv(config),
     provenance: {
