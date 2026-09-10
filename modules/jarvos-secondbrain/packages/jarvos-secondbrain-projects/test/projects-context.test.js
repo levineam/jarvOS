@@ -589,6 +589,89 @@ test('bounds preserve attention evidence over ordinary activity and reject impos
   }), { status: 'unavailable', code: 'CONTEXT_BUDGET_TOO_SMALL' });
 });
 
+test('byte trimming keeps the final packet valid, bounded and deterministic across portfolio shapes', () => {
+  for (let seed = 1; seed <= 5; seed += 1) {
+    const { registry, root, outcome } = makeRegistry();
+    const parents = [root];
+    for (let index = 0; index < 9; index += 1) {
+      const parent = parents[(index * seed) % parents.length];
+      const record = registry.create({
+        title: `Project ${seed}-${index}`, parentId: index % 3 ? parent.id : null,
+        goal: 'Synthetic goal '.repeat(10 + index),
+        definitionOfDone: 'Synthetic acceptance evidence '.repeat(10 + seed),
+      }).record;
+      parents.push(record);
+    }
+    const providers = { release: snapshot('release', 'fresh', {
+      capturedAt: '2026-08-08T10:00:00.000Z',
+      summaries: [{
+        id: 'release-work', canonicalId: root.id, category: 'work', status: 'open',
+        title: 'Synthetic release work '.repeat(10), occurredAt: NOW, observedAt: NOW, evidenceRefs: ['release:work'],
+      }, {
+        id: 'release-attention', canonicalId: outcome.id, category: 'attention', status: 'blocked',
+        title: 'Synthetic release blocker '.repeat(10), occurredAt: NOW, observedAt: NOW, evidenceRefs: ['release:attention'],
+      }],
+    }) };
+    const build = (maxItems, maxBytes) => {
+      const query = queryFor(root, outcome, {
+        scope: { projectIds: [], outcomeIds: [], includeDescendants: true },
+        limits: { maxItems, maxBytes, maxProviderAgeSeconds: 60 },
+      });
+      return buildContextPacket({
+        registry, query, capability: issue(query), capabilitySecret: SECRET,
+        subject: 'agent:test-session', hostId: 'projects-host', now: NOW,
+        providers, providerAuthorities: providerAuthorities(providers),
+      });
+    };
+    for (const maxItems of [1, 5, 50]) {
+      for (const maxBytes of [512, 4096, 8000, 16000, 30000]) {
+        const result = build(maxItems, maxBytes);
+        assert.deepEqual(result, build(maxItems, maxBytes));
+        if (maxBytes >= 8000) assert.equal(result.status, 'ok');
+        if (result.status !== 'ok') {
+          assert.deepEqual(result, { status: 'unavailable', code: 'CONTEXT_BUDGET_TOO_SMALL' });
+          continue;
+        }
+        const { packet } = result;
+        assert.equal(validateContextPacket(packet).ok, true, `seed=${seed}, items=${maxItems}, bytes=${maxBytes}`);
+        assert.ok(Buffer.byteLength(JSON.stringify(packet)) <= maxBytes);
+        const count = packet.canonical.records.length + packet.currentWork.length + packet.attention.length + packet.evidence.length;
+        assert.ok(count <= maxItems);
+        assert.equal(packet.truncation.omittedItems, 15 - count);
+        assert.equal(packet.truncation.truncated, count < 15);
+        const trimmed = [
+          ['canonical.records', packet.canonical.records.length, 11],
+          ['currentWork', packet.currentWork.length, 1],
+          ['attention', packet.attention.length, 1],
+          ['evidence', packet.evidence.length, 2],
+        ].filter(([, actual, initial]) => actual < initial).map(([section]) => section).sort();
+        assert.deepEqual(packet.truncation.sections, trimmed);
+        assert.equal(packet.providers.release.state, 'stale');
+      }
+    }
+    assert.equal(build(50, 16000).status, 'ok');
+    assert.ok(build(50, 16000).packet.canonical.records.length > 0);
+  }
+});
+
+test('truncation metadata is budgeted before accepting the final packet', () => {
+  const { registry, root, outcome } = makeRegistry();
+  const build = (maxBytes) => {
+    const query = queryFor(root, outcome, { limits: { maxItems: 1, maxBytes, maxProviderAgeSeconds: 3600 } });
+    return buildContextPacket({
+      registry, query, capability: issue(query), capabilitySecret: SECRET,
+      subject: 'agent:test-session', hostId: 'projects-host', now: NOW,
+    });
+  };
+  const full = build(20000);
+  const maxBytes = Buffer.byteLength(JSON.stringify(full.packet)) - 5;
+  const result = build(maxBytes);
+  assert.equal(result.status, 'ok');
+  assert.equal(validateContextPacket(result.packet).ok, true);
+  assert.ok(Buffer.byteLength(JSON.stringify(result.packet)) <= maxBytes);
+  assert.equal(result.packet.truncation.truncated, true);
+});
+
 test('expired, invalid-scope, and missing-record requests are non-enumerating', () => {
   const { registry, root, outcome } = makeRegistry();
   const query = queryFor(root, outcome);
