@@ -143,6 +143,16 @@ function systemSnapshot(overrides = {}) {
   };
 }
 
+function systemSnapshotV3(overrides = {}) {
+  return systemSnapshot({ factsVersion: 'jarvos-system-doctor-facts/v3', ...overrides });
+}
+
+function systemComponentV3(id, state = 'healthy', dateOverrides = {}, overrides = {}) {
+  const observedAt = Object.prototype.hasOwnProperty.call(dateOverrides, 'observedAt') ? dateOverrides.observedAt : NOW.toISOString();
+  const validUntil = Object.prototype.hasOwnProperty.call(dateOverrides, 'validUntil') ? dateOverrides.validUntil : new Date(NOW.getTime() + 15 * 60 * 1000).toISOString();
+  return { ...systemComponent(id, state, overrides), observedAt, validUntil };
+}
+
 test('a missing optional Memory module is absent rather than a failure', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-doctor-module-'));
   const report = loadHealthModules({ workspace: root, now: NOW });
@@ -215,7 +225,7 @@ test('the obsolete ten-row v1 System Doctor facts fail closed', () => {
     results: [{ id: 'node-version', ok: true, message: 'Node.js is supported' }],
     modules: report.modules,
   });
-  assert.match(text, /❌ System health receipt — Receipt is invalid\. Republish it\./);
+  assert.match(text, /⚠️ System health receipt — Receipt is invalid\. Republish it\./);
 });
 
 test('SearXNG cannot be healthy when HTTP responds but search and runtime-tool proof fail', () => {
@@ -252,6 +262,163 @@ test('SearXNG reports the first failed acceptance layer', () => {
   }
 });
 
+test('a valid v2 system component is readable with explicitly unknown check age', () => {
+  const root = workspace();
+  writeSnapshot(root, systemSnapshot({
+    facts: { profile: 'minimal', components: [systemComponent('provider.paperclip', 'healthy')] },
+  }));
+  const component = loadHealthModules({ workspace: root, now: NOW, profile: 'minimal' }).modules[0].components[0];
+  assert.equal(component.state, 'healthy');
+  assert.equal(component.observedAt, null);
+  assert.equal(component.validUntil, null);
+});
+
+test('a fresh v3 system component preserves its own observed and valid-until times', () => {
+  const root = workspace();
+  const observedAt = NOW.toISOString();
+  const validUntil = new Date(NOW.getTime() + 15 * 60 * 1000).toISOString();
+  writeSnapshot(root, systemSnapshotV3({
+    facts: { profile: 'minimal', components: [systemComponentV3('provider.paperclip', 'healthy', { observedAt, validUntil })] },
+  }));
+  const component = loadHealthModules({ workspace: root, now: NOW, profile: 'minimal' }).modules[0].components[0];
+  assert.equal(component.state, 'healthy');
+  assert.equal(component.observedAt, observedAt);
+  assert.equal(component.validUntil, validUntil);
+});
+
+test('a v3 component with null/null dates is accepted as unknown check age', () => {
+  const root = workspace();
+  writeSnapshot(root, systemSnapshotV3({
+    facts: { profile: 'minimal', components: [systemComponentV3('provider.paperclip', 'healthy', { observedAt: null, validUntil: null })] },
+  }));
+  const component = loadHealthModules({ workspace: root, now: NOW, profile: 'minimal' }).modules[0].components[0];
+  assert.equal(component.state, 'healthy');
+  assert.equal(component.observedAt, null);
+  assert.equal(component.validUntil, null);
+});
+
+test('an expired v3 component is stale even inside a fresh outer System snapshot', () => {
+  const root = workspace();
+  const observedAt = new Date(NOW.getTime() - 60 * 60 * 1000).toISOString();
+  const validUntil = new Date(NOW.getTime() - 1).toISOString();
+  writeSnapshot(root, systemSnapshotV3({
+    facts: { profile: 'minimal', components: [systemComponentV3('provider.paperclip', 'healthy', { observedAt, validUntil })] },
+  }));
+  const report = loadHealthModules({ workspace: root, now: NOW, profile: 'minimal' });
+  const component = report.modules[0].components[0];
+  assert.equal(component.state, 'warning');
+  assert.equal(component.reasonClass, 'component-stale');
+  assert.equal(component.observedAt, observedAt);
+  assert.equal(component.validUntil, validUntil);
+  assert.equal(report.modules[0].state, 'needs your attention');
+});
+
+test('a stale v3 component never asserts fresh healthy or service repair', () => {
+  const observedAt = new Date(NOW.getTime() - 60 * 60 * 1000).toISOString();
+  const validUntil = new Date(NOW.getTime() - 1).toISOString();
+  for (const state of ['healthy', 'repair needed']) {
+    const root = workspace();
+    writeSnapshot(root, systemSnapshotV3({
+      facts: { profile: 'minimal', components: [systemComponentV3('provider.paperclip', state, { observedAt, validUntil })] },
+    }));
+    const component = loadHealthModules({ workspace: root, now: NOW, profile: 'minimal' }).modules[0].components[0];
+    assert.equal(component.state, 'warning');
+    assert.equal(component.reasonClass, 'component-stale');
+  }
+});
+
+test('a stale v3 SearXNG component cannot assert a fresh healthy search result', () => {
+  const root = workspace();
+  const observedAt = new Date(NOW.getTime() - 60 * 60 * 1000).toISOString();
+  const validUntil = new Date(NOW.getTime() - 1).toISOString();
+  writeSnapshot(root, systemSnapshotV3({
+    facts: { profile: 'minimal', components: [systemComponentV3('provider.searxng', 'healthy', { observedAt, validUntil })] },
+  }));
+  const component = loadHealthModules({ workspace: root, now: NOW, profile: 'minimal' }).modules[0].components[0];
+  assert.equal(component.state, 'warning');
+  assert.equal(component.reasonClass, 'component-stale');
+});
+
+test('a v3 system snapshot with a legacy four-field component fails closed', () => {
+  const root = workspace();
+  writeSnapshot(root, systemSnapshotV3({
+    facts: { profile: 'minimal', components: [systemComponent('provider.paperclip', 'healthy')] },
+  }));
+  const report = loadHealthModules({ workspace: root, now: NOW, profile: 'minimal' });
+  assert.equal(report.modules[0].state, 'needs your attention');
+  assert.equal(report.modules[0].reasonClass, 'module-invalid');
+  assert.equal(report.modules[0].components, undefined);
+});
+
+test('missing, half-present, malformed, future, and reversed v3 component dates fail closed', () => {
+  const future = new Date(NOW.getTime() + 60 * 60 * 1000).toISOString();
+  const past = new Date(NOW.getTime() - 60 * 60 * 1000).toISOString();
+  const cases = [
+    { observedAt: NOW.toISOString(), validUntil: null },
+    { observedAt: null, validUntil: past },
+    { observedAt: 'not-a-date', validUntil: future },
+    { observedAt: NOW.toISOString(), validUntil: 'not-a-date' },
+    { observedAt: '2026-02-30T00:00:00.000Z', validUntil: future },
+    { observedAt: future, validUntil: new Date(NOW.getTime() + 2 * 60 * 60 * 1000).toISOString() },
+    { observedAt: NOW.toISOString(), validUntil: NOW.toISOString() },
+    { observedAt: NOW.toISOString(), validUntil: past },
+  ];
+  for (const dates of cases) {
+    const root = workspace();
+    writeSnapshot(root, systemSnapshotV3({
+      facts: { profile: 'minimal', components: [{ ...systemComponent('provider.paperclip', 'healthy'), ...dates }] },
+    }));
+    const report = loadHealthModules({ workspace: root, now: NOW, profile: 'minimal' });
+    assert.equal(report.modules[0].state, 'needs your attention');
+    assert.equal(report.modules[0].reasonClass, 'module-invalid');
+    assert.equal(report.modules[0].components, undefined);
+  }
+
+  const missingObservedAt = systemComponentV3('provider.paperclip');
+  delete missingObservedAt.observedAt;
+  const missingRoot = workspace();
+  writeSnapshot(missingRoot, systemSnapshotV3({
+    facts: { profile: 'minimal', components: [missingObservedAt] },
+  }));
+  assert.equal(loadHealthModules({ workspace: missingRoot, now: NOW, profile: 'minimal' }).modules[0].reasonClass, 'module-invalid');
+});
+
+test('a v3 component is stale exactly at its validity deadline', () => {
+  const root = workspace();
+  writeSnapshot(root, systemSnapshotV3({
+    facts: {
+      profile: 'minimal',
+      components: [systemComponentV3('provider.paperclip', 'healthy', {
+        observedAt: new Date(NOW.getTime() - 60 * 60 * 1000).toISOString(),
+        validUntil: NOW.toISOString(),
+      })],
+    },
+  }));
+  const component = loadHealthModules({ workspace: root, now: NOW, profile: 'minimal' }).modules[0].components[0];
+  assert.equal(component.reasonClass, 'component-stale');
+});
+
+test('a v3 Memory roster remains accepted in its fixed order', () => {
+  const root = workspace();
+  writeSnapshot(root, systemSnapshotV3({
+    facts: { profile: 'minimal', components: MEMORY_COMPONENTS.map(([id]) => systemComponentV3(id)) },
+  }));
+  const module = loadHealthModules({ workspace: root, now: NOW, profile: 'minimal' }).modules[0];
+  assert.equal(module.state, 'healthy');
+  assert.deepEqual(module.components.map((component) => component.id), MEMORY_COMPONENTS.map(([id]) => id));
+});
+
+test('an unrecognized field on a v3 component fails closed without leaking it', () => {
+  const root = workspace();
+  writeSnapshot(root, systemSnapshotV3({
+    facts: { profile: 'minimal', components: [{ ...systemComponentV3('provider.paperclip'), privateNote: 'do-not-leak' }] },
+  }));
+  const report = loadHealthModules({ workspace: root, now: NOW, profile: 'minimal' });
+  assert.equal(report.modules[0].state, 'needs your attention');
+  assert.equal(report.modules[0].reasonClass, 'module-invalid');
+  assert.doesNotMatch(JSON.stringify(report), /do-not-leak/);
+});
+
 test('legacy module snapshots cannot select System Doctor components', () => {
   const root = workspace();
   writeSnapshot(root, snapshot());
@@ -286,6 +453,163 @@ test('the shared System Doctor receipt and text list core plus every selected co
   for (const [, label] of MEMORY_COMPONENTS) assert.match(text, new RegExp(label.replace(/[&]/g, '\\&')));
   assert.doesNotMatch(text, /PASS|FAIL|WARN|SKIP|Selected optional components|System Doctor:|READY/);
   assert.equal((text.match(/✅|❌|⚠️/g) || []).length, receipt.components.length);
+});
+
+test('the validated System module preserves its declared version and component age into the receipt', () => {
+  const root = workspace();
+  const observedAt = '2026-08-13T11:45:00.000Z';
+  const validUntil = '2026-08-13T12:15:00.000Z';
+  writeSnapshot(root, systemSnapshotV3({
+    facts: {
+      profile: 'minimal',
+      components: [
+        systemComponentV3('provider.paperclip', 'healthy', { observedAt, validUntil }),
+        systemComponentV3('provider.searxng', 'healthy', { observedAt: null, validUntil: null }),
+      ],
+    },
+  }));
+  const modules = loadHealthModules({ workspace: root, now: NOW, profile: 'minimal' }).modules;
+  const receipt = buildSystemDoctorReceipt({
+    ok: true,
+    profile: { id: 'minimal', title: 'Minimal' },
+    workspace: root,
+    results: [],
+    modules,
+  });
+  const paperclip = receipt.components.find((component) => component.id === 'provider.paperclip');
+  const searxng = receipt.components.find((component) => component.id === 'provider.searxng');
+  assert.equal(receipt.factsVersion, 'jarvos-system-doctor-facts/v3');
+  assert.deepEqual({ observedAt: paperclip.observedAt, validUntil: paperclip.validUntil }, { observedAt, validUntil });
+  assert.deepEqual({ observedAt: searxng.observedAt, validUntil: searxng.validUntil }, { observedAt: null, validUntil: null });
+});
+
+test('the validated v2 System module retains unknown component age without inferring outer receipt dates', () => {
+  const root = workspace();
+  writeSnapshot(root, systemSnapshot({
+    facts: { profile: 'minimal', components: [systemComponent('provider.paperclip')] },
+  }));
+  const modules = loadHealthModules({ workspace: root, now: NOW, profile: 'minimal' }).modules;
+  const receipt = buildSystemDoctorReceipt({
+    ok: true,
+    profile: { id: 'minimal', title: 'Minimal' },
+    workspace: root,
+    results: [],
+    modules,
+  });
+  const paperclip = receipt.components.find((component) => component.id === 'provider.paperclip');
+  assert.equal(receipt.factsVersion, 'jarvos-system-doctor-facts/v2');
+  assert.deepEqual({ observedAt: paperclip.observedAt, validUntil: paperclip.validUntil }, { observedAt: null, validUntil: null });
+});
+
+test('the System Doctor receipt preserves each selected system component observed and valid-until age', () => {
+  const observedAt = '2026-09-03T18:00:00.000Z';
+  const validUntil = '2026-09-03T18:15:00.000Z';
+  const report = {
+    ok: true,
+    profile: { id: 'minimal', title: 'Minimal' },
+    workspace: '/portable/workspace',
+    results: [],
+    modules: [{
+      id: 'system',
+      state: 'healthy',
+      reasonClass: 'none',
+      factsVersion: 'jarvos-system-doctor-facts/v3',
+      components: [
+        {
+          id: 'provider.paperclip', label: 'Paperclip', state: 'healthy', reasonClass: 'none', evidence: null, observedAt, validUntil,
+        },
+        {
+          id: 'provider.searxng', label: 'SearXNG', state: 'healthy', reasonClass: 'none', evidence: null, observedAt: null, validUntil: null,
+        },
+      ],
+    }],
+  };
+  const receipt = buildSystemDoctorReceipt(report);
+  const v3Component = receipt.components.find((component) => component.id === 'provider.paperclip');
+  assert.equal(v3Component.observedAt, observedAt);
+  assert.equal(v3Component.validUntil, validUntil);
+  const v2Component = receipt.components.find((component) => component.id === 'provider.searxng');
+  assert.equal(v2Component.observedAt, null);
+  assert.equal(v2Component.validUntil, null);
+});
+
+test('the System Doctor receipt preserves the validated module\'s declared facts version without stamping one', () => {
+  const withVersion = buildSystemDoctorReceipt({
+    ok: true,
+    profile: { id: 'minimal', title: 'Minimal' },
+    workspace: '/portable/workspace',
+    results: [],
+    modules: [{
+      id: 'system', state: 'healthy', reasonClass: 'none', factsVersion: 'jarvos-system-doctor-facts/v3', components: [],
+    }],
+  });
+  assert.equal(withVersion.factsVersion, 'jarvos-system-doctor-facts/v3');
+
+  const withoutVersion = buildSystemDoctorReceipt({
+    ok: true,
+    profile: { id: 'minimal', title: 'Minimal' },
+    workspace: '/portable/workspace',
+    results: [],
+    modules: [{ id: 'system', state: 'healthy', reasonClass: 'none', components: [] }],
+  });
+  assert.equal(withoutVersion.factsVersion, null);
+
+  const noSystemModule = buildSystemDoctorReceipt({
+    ok: true,
+    profile: { id: 'minimal', title: 'Minimal' },
+    workspace: '/portable/workspace',
+    results: [],
+    modules: [],
+  });
+  assert.equal(noSystemModule.factsVersion, null);
+
+  const invalidSystemModule = buildSystemDoctorReceipt({
+    ok: false,
+    profile: { id: 'minimal', title: 'Minimal' },
+    workspace: '/portable/workspace',
+    results: [],
+    modules: [{
+      id: 'system', state: 'needs your attention', reasonClass: 'module-invalid', factsVersion: 'jarvos-system-doctor-facts/v3',
+    }],
+  });
+  assert.equal(invalidSystemModule.factsVersion, null);
+});
+
+test('the System Doctor receipt treats module-invalid, module-stale, and module-untrusted system evidence as a warning, never repair needed', () => {
+  for (const reasonClass of ['module-invalid', 'module-stale', 'module-untrusted']) {
+    const report = {
+      ok: false,
+      profile: { id: 'minimal', title: 'Minimal' },
+      workspace: '/portable/workspace',
+      results: [],
+      modules: [{ id: 'system', state: 'needs your attention', reasonClass }],
+    };
+    const receipt = buildSystemDoctorReceipt(report);
+    const component = receipt.components.find((item) => item.id === 'module.system');
+    assert.equal(component.state, 'warning');
+    assert.equal(component.reasonClass, reasonClass);
+  }
+});
+
+test('the System Doctor receipt still reports repair needed for a genuinely failed selected service', () => {
+  const report = {
+    ok: false,
+    profile: { id: 'minimal', title: 'Minimal' },
+    workspace: '/portable/workspace',
+    results: [],
+    modules: [{
+      id: 'system',
+      state: 'repair needed',
+      reasonClass: 'component-failed',
+      components: [{
+        id: 'provider.paperclip', label: 'Paperclip', state: 'repair needed', reasonClass: 'reported-condition', evidence: null, observedAt: null, validUntil: null,
+      }],
+    }],
+  };
+  const receipt = buildSystemDoctorReceipt(report);
+  const component = receipt.components.find((item) => item.id === 'provider.paperclip');
+  assert.equal(component.state, 'repair needed');
+  assert.equal(receipt.status, 'repair needed');
 });
 
 test('operator text distinguishes a failure from an unverified component and gives each a next action', () => {

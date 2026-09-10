@@ -136,9 +136,43 @@ Reviewed runtime, Automatic repair, and Telegram follow-up & proof. Partial or
 reordered Memory rosters fail closed. The eleven-row roster is versioned as
 `jarvos-system-doctor-facts/v2`; v1 snapshots fail closed rather than being
 mistaken for complete coverage. The legacy aggregate `memory.json` contract
-remains supported when no v2 Memory roster is present. Once that roster is
+remains supported when no v2 or v3 Memory roster is present. Once that roster is
 present, it is authoritative; the aggregate is neither rendered nor part of
 the eleven-component result.
+
+### Per-component check freshness (v3)
+
+`jarvos-system-doctor-facts/v3` carries the same profile and component roster
+as v2, plus a per-component `observedAt`/`validUntil` pair naming when that
+one component was actually checked and when that check itself expires. The
+pair is either both `null`, meaning the check age is unknown, or both valid
+ISO timestamps with `validUntil` strictly after `observedAt` and `observedAt`
+not after the reader's clock; missing, half-present, malformed, future, or
+reversed values fail the whole snapshot closed. A v2 component never carries
+these fields — reading it always reports an explicit `observedAt: null,
+validUntil: null` rather than inheriting the aggregate publication time.
+
+jarvOS evaluates a known v3 component's own deadline at read time against the
+same injected clock used for the outer module, independently of the outer
+snapshot's freshness. A component whose `validUntil` has passed is stale: its
+reduced state is forced to `warning` with `reasonClass: "component-stale"`
+even if the underlying report claimed `healthy` or `repair needed`, and even
+when the System module that carries it was itself published moments ago. Its
+own `observedAt`/`validUntil` are preserved through the module reduction and
+into the public `systemDoctor` receipt (`components[].observedAt` /
+`components[].validUntil`), with the v2 unknown age still reported as an
+explicit `null`/`null` rather than the outer receipt's own dates. The receipt
+also carries the selected system module's declared `factsVersion` (e.g.
+`jarvos-system-doctor-facts/v3`) when one was supplied by a validated module,
+and `null` otherwise; jarvOS never stamps or infers a version. This is a
+component-level check only; the outer module's own trust and freshness gate is
+unchanged and still governs the module as a whole before any component is
+reduced.
+
+A rejected module snapshot — `module-invalid`, `module-stale`, or
+`module-untrusted` — is evidence the reader could not trust, not a service
+claiming a fault. The `systemDoctor` receipt lists it as `warning` with its
+specific reason class, never as `repair needed`.
 
 ## Consumer and ownership boundary
 
