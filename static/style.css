@@ -292,8 +292,10 @@ body {
 
 /* ── Work board ──────────────────────────────────────────── */
 .projects-shell { display: grid; grid-template-columns: minmax(260px, .72fr) minmax(0, 1.55fr); gap: 18px; align-items: start; }
-.project-list { padding: 10px; position: sticky; top: 0; }
-.project-scope { margin: 5px 8px 12px; color: var(--ink-faint); font: 10.5px/1.5 var(--mono); }
+.project-list { padding: 10px; position: sticky; top: 0; min-width: 0; }
+.project-scope { margin: 5px 8px 12px; color: var(--ink-dim); font: 10.5px/1.5 var(--mono); overflow-wrap: anywhere; }
+.project-provider-details { margin: 8px; color: var(--ink-dim); font-size: 12px; }
+.project-provider-details summary { cursor: pointer; }
 .project-row {
   width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 14px;
   padding: 13px 12px; border: 0; border-top: 1px solid var(--line-soft); border-radius: 8px;
@@ -301,12 +303,12 @@ body {
 }
 .project-row:hover { background: var(--bg-hover); }
 .project-row.active { background: var(--amber-soft); }
-.project-row span { min-width: 0; }
+.project-row span { min-width: 0; flex: 1; }
 .project-row b, .project-row small { display: block; }
 .project-row b { font-size: 14px; }
 .project-row small { margin-top: 3px; color: var(--ink-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .project-row i { color: var(--sage); font: normal 10px var(--mono); }
-.project-detail { padding: 28px 32px; }
+.project-detail { padding: 28px 32px; min-width: 0; overflow-wrap: anywhere; }
 .project-detail > h2 { margin: 0 0 24px; font: 400 30px/1.15 var(--serif); }
 .project-detail section { padding: 18px 0; border-top: 1px solid var(--line-soft); }
 .project-detail section h3 { margin: 0 0 7px; color: var(--ink-faint); font: 500 10.5px var(--mono); letter-spacing: .13em; text-transform: uppercase; }
@@ -317,7 +319,7 @@ body {
 .projects-unavailable { max-width: 760px; padding: 28px 32px; }
 .projects-unavailable h2 { margin: 0 0 8px; font: 400 26px var(--serif); }
 @media (max-width: 900px) {
-  .projects-shell { grid-template-columns: 1fr; }
+  .projects-shell { grid-template-columns: minmax(0, 1fr); }
   .project-list { position: static; }
   .project-detail { padding: 22px; }
 }
@@ -383,6 +385,33 @@ body {
 .svc .kind { font-family: var(--serif); font-style: italic; font-size: 12.5px; color: var(--ink-dim); margin-left: 7px; }
 .svc .det { font-size: 12.5px; color: var(--ink-dim); margin-top: 3px; }
 .svc .ep { font-family: var(--mono); font-size: 10.5px; color: var(--ink-faint); margin-top: 6px; word-break: break-all; }
+
+
+/* ── System Doctor receipt (compact scoreboard) ───────── */
+.doctor-receipt { display: flex; flex-direction: column; gap: 14px; }
+.doctor-meta { margin-bottom: 2px; }
+.doctor-freshness, .doctor-sources { font-size: 12px; color: var(--ink-dim); line-height: 1.5; }
+.doctor-sources summary { cursor: pointer; }
+.doctor-sources p { margin: 10px 0 0; }
+.doctor-section h4 {
+  margin: 0 0 8px; font: 600 12.5px var(--sans); color: var(--ink-dim);
+  text-transform: uppercase; letter-spacing: .04em;
+}
+.doctor-section h4 .kind { text-transform: none; letter-spacing: 0; font-weight: 400; margin-left: 6px; }
+.doctor-rows { display: flex; flex-direction: column; gap: 4px; }
+.doctor-row {
+  display: flex; gap: 10px; align-items: flex-start;
+  padding: 6px 2px;
+}
+.doctor-icon {
+  margin-top: 4px; width: 9px; height: 9px; border-radius: 50%; flex: none;
+}
+.doctor-icon.ok { background: var(--sage); box-shadow: 0 0 7px rgba(143,181,115,.45); }
+.doctor-icon.warn { background: #d2a84a; box-shadow: 0 0 7px rgba(210,168,74,.4); }
+.doctor-icon.bad { background: var(--rust); box-shadow: 0 0 7px rgba(210,112,74,.45); }
+.doctor-row-body { min-width: 0; flex: 1; font-size: 13.5px; line-height: 1.35; }
+.doctor-row-body .nm { font-weight: 500; }
+.doctor-guide { color: var(--ink-dim); font-weight: 400; }
 
 /* misc */
 .err-banner {

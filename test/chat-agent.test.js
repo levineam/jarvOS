@@ -265,7 +265,8 @@ test('read_app_source reads app files and confines reads to the app root', () =>
 
   // Denylisted directories are rejected even though they sit under the root.
   assert.throws(() => h.readAppSource({ path: '.git/config' }), /not permitted/);
-  assert.throws(() => h.readAppSource({ path: 'node_modules/ai/package.json' }), /not permitted/);
+  // Shared worktree dependencies may hit the stricter symlink boundary first.
+  assert.throws(() => h.readAppSource({ path: 'node_modules/ai/package.json' }), /not permitted|escapes the app root via a symlink/);
 
   // Extension allowlist: binary assets and extensionless files are rejected.
   assert.throws(() => h.readAppSource({ path: 'static/fonts/plex-sans-400.woff2' }), /file type is not permitted/);

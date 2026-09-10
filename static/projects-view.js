@@ -10,7 +10,7 @@
   function coverageText(data) {
     const projectIds = data.scope?.projectIds || [];
     const suffix = data.capturedAt ? ` · as of ${esc(data.capturedAt)}` : '';
-    return `Partial provider scope${projectIds.length ? ` · ${projectIds.length} admitted root${projectIds.length === 1 ? '' : 's'}` : ''}${suffix}`;
+    return `Partial provider scope${projectIds.length ? ` · ${projectIds.length} admitted root${projectIds.length === 1 ? '' : 's'}` : ''}${suffix}${data.truncated ? ' · some records omitted to fit this view' : ''}`;
   }
 
   function render(data, activeId) {
@@ -27,6 +27,9 @@
     return `<div class="projects-shell">
       <aside class="project-list card" aria-label="Projects">
         <p class="project-scope">${coverageText(data)}</p>
+        <details class="project-provider-details"><summary>Supporting sources (${(data.providers || []).filter((p) => p.state !== 'fresh' || p.trust !== 'verified').length} incomplete)</summary>
+        ${(data.providers || []).map((p) => `<p class="project-scope">${esc(p.name)}: ${esc(p.state)} · ${esc(p.trust)}${p.capturedAt ? ` · observed ${esc(p.capturedAt)}` : ''}</p>`).join('')}
+        </details>
         ${data.projects.map((project) => `<button type="button" class="project-row ${project.id === active.id ? 'active' : ''}" data-project-id="${esc(project.id)}">
           <span><b>${esc(project.title)}</b><small>${esc(project.outcome)}</small></span><i>${esc(project.lifecycle)}</i>
         </button>`).join('')}

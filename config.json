@@ -17,8 +17,7 @@
     "authFile": "~/.paperclip/auth.json"
   },
   "projectsContext": {
-    "adapterModule": "~/clawd/scripts/lib/jarvos-project-context-adapter.js",
-    "configFile": "~/clawd/config/jarvos-project-context.json"
+    "contextModule": null
   },
   "whisper": {
     "binary": "whisper-cli",
@@ -27,5 +26,10 @@
     "args": [],
     "timeoutMs": 60000
   },
-  "jarvosRepo": "~/jarvOS"
+  "jarvosRepo": "~/jarvOS",
+  "systemDoctor": {
+    "workspace": "~/clawd",
+    "profile": "local-openclaw",
+    "receiptFile": null
+  }
 }
