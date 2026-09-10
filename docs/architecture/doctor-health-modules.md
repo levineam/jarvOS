@@ -158,11 +158,21 @@ snapshot's freshness. A component whose `validUntil` has passed is stale: its
 reduced state is forced to `warning` with `reasonClass: "component-stale"`
 even if the underlying report claimed `healthy` or `repair needed`, and even
 when the System module that carries it was itself published moments ago. Its
-own `observedAt`/`validUntil` are preserved in the module reduction
-(`modules[].components`); the System Doctor receipt and text do not yet expose
-component age. This is a component-level
-check only; the outer module's own trust and freshness gate is unchanged and
-still governs the module as a whole before any component is reduced.
+own `observedAt`/`validUntil` are preserved through the module reduction and
+into the public `systemDoctor` receipt (`components[].observedAt` /
+`components[].validUntil`), with the v2 unknown age still reported as an
+explicit `null`/`null` rather than the outer receipt's own dates. The receipt
+also carries the selected system module's declared `factsVersion` (e.g.
+`jarvos-system-doctor-facts/v3`) when one was supplied by a validated module,
+and `null` otherwise; jarvOS never stamps or infers a version. This is a
+component-level check only; the outer module's own trust and freshness gate is
+unchanged and still governs the module as a whole before any component is
+reduced.
+
+A rejected module snapshot — `module-invalid`, `module-stale`, or
+`module-untrusted` — is evidence the reader could not trust, not a service
+claiming a fault. The `systemDoctor` receipt lists it as `warning` with its
+specific reason class, never as `repair needed`.
 
 ## Consumer and ownership boundary
 
