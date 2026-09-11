@@ -86,6 +86,8 @@ The coding module makes repo-aware agents work from the same execution model.
 
 It supports coding workflows across tools like Codex and Claude Code while preserving issue context, branch state, review expectations, and continuity.
 
+If its coding workflow provider is unavailable, jarvOS falls back to its native workflow in the same run and worktree.
+
 The goal is that implementation work feels consistent no matter which coding agent is doing it.
 
 ### `@jarvos/skills`
