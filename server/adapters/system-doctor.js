@@ -20,6 +20,8 @@ const {
   loadHealthModules,
   MEMORY_COMPONENTS,
   SYSTEM_FACTS_VERSION,
+  SYSTEM_FACTS_VERSION_V3,
+  SYSTEM_FACTS_VERSIONS,
 } = require('../vendor/jarvos-doctor-modules');
 const {
   REPORT_SCHEMA,
@@ -36,13 +38,24 @@ const KNOWN_GUIDANCE = Object.freeze({
   'search-empty': 'No search results. Run a real search, then rerun Doctor.',
   'runtime-tool-missing': 'Runtime search tool unavailable. Enable it, then rerun Doctor.',
   'profile-mismatch': 'Receipt is for another profile. Publish a matching receipt.',
-  'module-invalid': 'Receipt is invalid. Republish it.',
-  'module-stale': 'Receipt is stale. Refresh it.',
-  'module-untrusted': 'Receipt is untrusted. Publish a trusted receipt.',
+  'component-stale': 'This component\'s published evidence is stale. A trusted publisher must refresh it.',
+  'module-invalid': 'Published evidence is invalid. A trusted publisher must replace it.',
+  'module-stale': 'Published evidence is stale. A trusted publisher must refresh it.',
+  'module-untrusted': 'Published evidence is untrusted. A trusted publisher must replace it.',
 });
 
 function isPlainObject(value) {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function validDatePair(observedAt, validUntil, now = new Date()) {
+  if (observedAt === null && validUntil === null) return true;
+  if (typeof observedAt !== 'string' || typeof validUntil !== 'string') return false;
+  const observed = new Date(observedAt);
+  const valid = new Date(validUntil);
+  return !Number.isNaN(observed.getTime()) && !Number.isNaN(valid.getTime())
+    && observed.toISOString() === observedAt && valid.toISOString() === validUntil
+    && valid > observed && observed <= now;
 }
 
 function sentence(value) {
@@ -63,8 +76,8 @@ function componentGuidance(component) {
   }
   const detail = sentence(component.message || humanizeReason(component.reasonClass));
   const action = component.state === 'repair needed'
-    ? 'Fix it, then rerun Doctor.'
-    : 'Verify it, then rerun Doctor.';
+    ? 'See the owner-published evidence before attempting a repair.'
+    : 'See the published evidence and owner guidance.';
   return `${detail} ${action}`;
 }
 
@@ -98,7 +111,7 @@ function decorateComponent(component) {
   };
 }
 
-function validateReceipt(receipt) {
+function validateReceipt(receipt, now = new Date()) {
   if (!isPlainObject(receipt) || receipt.schema !== REPORT_SCHEMA) {
     return { ok: false, error: 'invalid system doctor receipt schema' };
   }
@@ -114,6 +127,9 @@ function validateReceipt(receipt) {
   if (!RECEIPT_STATUSES.has(receipt.status)) {
     return { ok: false, error: 'receipt.status invalid' };
   }
+  if (!SYSTEM_FACTS_VERSIONS.includes(receipt.factsVersion)) {
+    return { ok: false, error: 'receipt.factsVersion unsupported' };
+  }
   if (!Array.isArray(receipt.components)) {
     return { ok: false, error: 'receipt.components must be an array' };
   }
@@ -126,6 +142,19 @@ function validateReceipt(receipt) {
     }
     if (!COMPONENT_STATES.has(component.state)) {
       return { ok: false, error: `component.state invalid for ${component.id}` };
+    }
+    if (receipt.factsVersion === SYSTEM_FACTS_VERSION_V3) {
+      if (!Object.hasOwn(component, 'observedAt') || !Object.hasOwn(component, 'validUntil')) {
+        return { ok: false, error: `component dates required for ${component.id}` };
+      }
+      if ((component.observedAt === null) !== (component.validUntil === null)) {
+        return { ok: false, error: `component dates incomplete for ${component.id}` };
+      }
+      if (!validDatePair(component.observedAt, component.validUntil, now)) {
+        return { ok: false, error: `component dates invalid for ${component.id}` };
+      }
+    } else if (component.observedAt != null || component.validUntil != null) {
+      return { ok: false, error: `component dates unsupported for ${component.id}` };
     }
   }
   return { ok: true, receipt: normalizeReceipt(receipt) };
@@ -156,7 +185,7 @@ function normalizeReceipt(receipt) {
 
   return {
     schema: REPORT_SCHEMA,
-    factsVersion: SYSTEM_FACTS_VERSION,
+    factsVersion: receipt.factsVersion,
     profile: {
       id: receipt.profile.id,
       title: receipt.profile.title || receipt.profile.id,
@@ -199,14 +228,15 @@ function loadPublishedReceipt(filePath, fsImpl = fs, opts = {}, now = new Date()
   if (raw.profile?.id !== opts.profile || path.resolve(raw.workspace || '.') !== path.resolve(opts.workspace || '.')) return null;
   const freshness = observation(raw, now);
   if (freshness.freshness !== 'current') return null;
+  const factsVersion = raw.factsVersion == null ? SYSTEM_FACTS_VERSION : raw.factsVersion;
   const components = raw.components.map((c) => {
     if (!isPlainObject(c)) return c;
-    const ownDates = Object.hasOwn(c, 'observedAt') || Object.hasOwn(c, 'validUntil');
-    const dates = observation(ownDates ? c : raw, now);
-    return dates.freshness === 'current' ? { ...c, ...dates }
-      : { ...c, ...dates, state: 'warning', reasonClass: dates.freshness === 'stale' ? 'module-stale' : 'module-invalid', message: null };
+    const dates = observation(c, now);
+    return dates.freshness === 'stale'
+      ? { ...c, ...dates, state: 'warning', reasonClass: 'component-stale', message: null }
+      : { ...c, ...dates };
   });
-  const checked = validateReceipt({ ...raw, source: 'receipt-file', observations: [{ id: 'system', ...freshness }], components });
+  const checked = validateReceipt({ ...raw, factsVersion, source: 'receipt-file', observations: [{ id: 'system', ...freshness }], components }, now);
   return checked.ok ? checked.receipt : null;
 }
 
@@ -251,15 +281,17 @@ function buildFromPublicSources(opts, { fsImpl = fs, now = new Date() } = {}) {
   receipt.observations = report.modules.map((m) => ({ id: m.id, generation: m.generation || null,
     ...observation(m, now), state: m.state, reasonClass: m.reasonClass }));
   for (const component of receipt.components) {
-    const owner = report.modules.find((m) => m.components?.some((c) => c.id === component.id)
-      || `module.${m.id}` === component.id);
-    Object.assign(component, observation(owner || {}, now));
-    if (component.freshness !== 'current' && component.state === 'healthy') {
+    Object.assign(component, observation(component, now));
+    if (component.freshness === 'stale' && component.state === 'healthy') {
       component.state = 'warning';
-      component.reasonClass = component.freshness === 'stale' ? 'module-stale' : 'module-invalid';
+      component.reasonClass = 'component-stale';
     }
   }
-  const checked = validateReceipt({ ...receipt, source: 'published-modules' });
+  const checked = validateReceipt({
+    ...receipt,
+    factsVersion: receipt.factsVersion || SYSTEM_FACTS_VERSION,
+    source: 'published-modules',
+  }, now);
   if (!checked.ok) return { ok: false, error: checked.error, receipt: null };
   return { ok: true, receipt: checked.receipt };
 }

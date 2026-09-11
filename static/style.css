@@ -412,6 +412,10 @@ body {
 .doctor-row-body { min-width: 0; flex: 1; font-size: 13.5px; line-height: 1.35; }
 .doctor-row-body .nm { font-weight: 500; }
 .doctor-guide { color: var(--ink-dim); font-weight: 400; }
+.doctor-row-freshness, .doctor-source-profile {
+  display: block; font-size: 11.5px; color: var(--ink-dim); margin-top: 2px;
+  overflow-wrap: anywhere;
+}
 
 /* misc */
 .err-banner {
