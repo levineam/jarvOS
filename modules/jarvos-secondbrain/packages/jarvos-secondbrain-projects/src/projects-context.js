@@ -16,6 +16,7 @@ const {
 } = require('./projects-context-capability');
 
 const CONTEXT_SCHEMA_VERSION = 2;
+const ROSTER_CONTRACT = 'jarvos.projects-roster/v1';
 const SUPPORTED_CONTEXT_SCHEMA_VERSIONS = Object.freeze([CONTEXT_SCHEMA_VERSION]);
 const CONTEXT_PACKET_FIELDS = Object.freeze([
   'contract', 'schemaVersion', 'packetId', 'capturedAt', 'expiresAt', 'query', 'canonical', 'activity', 'currentWork', 'attention',
@@ -567,6 +568,109 @@ function normalizeContextPacket(packet) {
     : validation;
 }
 
+function rosterUnavailable(code = 'ROSTER_UNAVAILABLE') {
+  return { status: 'unavailable', code };
+}
+
+function validRosterRequest(input) {
+  if (!isPlainObject(input)) return false;
+  const allowed = new Set(['registry', 'query', 'capability', 'capabilitySecret', 'subject', 'hostId', 'now', 'expectedGeneration']);
+  return Object.keys(input).every((key) => allowed.has(key));
+}
+
+function rosterRecord(record) {
+  if (!isPlainObject(record)
+    || !((record.kind === 'project' && /^prj_[0-9]{6,}$/.test(record.id))
+      || (record.kind === 'outcome' && /^out_[0-9]{6,}$/.test(record.id)))
+    || !['project', 'outcome'].includes(record.kind)
+    || (record.kind === 'project' && record.parentId !== null && !/^prj_[0-9]{6,}$/.test(record.parentId))
+    || (record.kind === 'outcome' && !/^prj_[0-9]{6,}$/.test(record.parentId))
+    || !Number.isInteger(record.revision) || record.revision < 1) throw new TypeError('invalid roster record');
+  return { id: record.id, kind: record.kind, parentId: record.parentId, revision: record.revision };
+}
+
+function rosterIdsForScope(records, scope) {
+  const requested = new Set([...scope.projectIds, ...scope.outcomeIds]);
+  const byId = new Map(records.map((record) => [record.id, record]));
+  if (byId.size !== records.length || [...requested].some((id) => !byId.has(id))) return null;
+  if (!requested.size) return new Set(byId.keys());
+  if (scope.includeDescendants) {
+    let changed = true;
+    while (changed) {
+      changed = false;
+      for (const record of records) {
+        if (record.parentId && requested.has(record.parentId) && !requested.has(record.id)) {
+          requested.add(record.id);
+          changed = true;
+        }
+      }
+    }
+  }
+  return requested;
+}
+
+function buildCanonicalRosterPacket(input = {}) {
+  if (!validRosterRequest(input)) return rosterUnavailable();
+  const { registry, query, capability, capabilitySecret, subject, hostId, now = new Date().toISOString(), expectedGeneration } = input;
+  let normalizedQuery;
+  try { normalizedQuery = validateContextQuery(query); } catch (_) { return rosterUnavailable(); }
+  if (typeof hostId !== 'string' || !hostId.trim() || typeof subject !== 'string' || !subject.trim()
+    || typeof now !== 'string' || Number.isNaN(Date.parse(now))
+    || (expectedGeneration !== undefined && (!Number.isSafeInteger(expectedGeneration) || expectedGeneration < 0))) return rosterUnavailable();
+  const verification = verifyCapability(capability, {
+    hostSecret: capabilitySecret,
+    now,
+    expectedSubject: subject,
+    expectedHostId: hostId,
+    expectedQuery: normalizedQuery,
+    expectedRedactionClass: capability && capability.redactionClass,
+  });
+  if (!verification.ok || !registry || typeof registry.list !== 'function') return rosterUnavailable();
+  const authorized = verification.capability;
+  if (stableStringify(authorized.scope) !== stableStringify(normalizedQuery.scope)
+    || authorized.limits.maxItems < normalizedQuery.limits.maxItems
+    || authorized.limits.maxBytes < normalizedQuery.limits.maxBytes
+    || authorized.limits.maxProviderAgeSeconds < normalizedQuery.limits.maxProviderAgeSeconds
+    || authorized.freshness.maxAgeSeconds < normalizedQuery.limits.maxProviderAgeSeconds) return rosterUnavailable();
+
+  let generationBefore; let rows;
+  try {
+    generationBefore = registry.generation;
+    if (!Number.isSafeInteger(generationBefore) || generationBefore < 0
+      || (expectedGeneration !== undefined && expectedGeneration !== generationBefore)) return rosterUnavailable('ROSTER_GENERATION_MISMATCH');
+    rows = registry.list();
+    if (!Array.isArray(rows) || rows.length > 1000) return rosterUnavailable();
+  } catch (_) {
+    return rosterUnavailable();
+  }
+
+  let records;
+  try {
+    const selectedIds = rosterIdsForScope(rows, normalizedQuery.scope);
+    if (!selectedIds) return rosterUnavailable();
+    records = rows.filter((record) => selectedIds.has(record.id)).map(rosterRecord).sort((left, right) => left.id.localeCompare(right.id));
+    if (new Set(records.map((record) => record.id)).size !== records.length) return rosterUnavailable();
+  } catch (_) {
+    return rosterUnavailable();
+  }
+  let generationAfter;
+  try { generationAfter = registry.generation; } catch (_) { return rosterUnavailable(); }
+  if (!Number.isSafeInteger(generationAfter) || generationAfter < 0 || generationAfter !== generationBefore) return rosterUnavailable('ROSTER_GENERATION_MISMATCH');
+
+  const roster = {
+    contract: ROSTER_CONTRACT,
+    generation: generationBefore,
+    capturedAt: now,
+    scope: normalizedQuery.scope,
+    records,
+    complete: true,
+  };
+  const complete = { status: 'ok', roster };
+  if (records.length <= normalizedQuery.limits.maxItems && byteLength(complete) <= normalizedQuery.limits.maxBytes) return complete;
+  const incomplete = { status: 'incomplete', roster: { ...roster, records: [], complete: false } };
+  return byteLength(incomplete) <= normalizedQuery.limits.maxBytes ? incomplete : rosterUnavailable('ROSTER_BUDGET_TOO_SMALL');
+}
+
 function buildContextPacket({ registry, query, providers = {}, providerAuthorities = {}, capability, capabilitySecret, subject, hostId, activityWindow = null, inference = null, intentGaps = null, now = new Date().toISOString() } = {}) {
   let normalizedQuery;
   try { normalizedQuery = validateContextQuery(query); } catch (_) { return { status: 'unavailable', code: 'CONTEXT_UNAVAILABLE' }; }
@@ -712,6 +816,8 @@ module.exports = {
   LIMIT_FIELDS,
   QUERY_FIELDS,
   SUMMARY_FIELDS,
+  ROSTER_CONTRACT,
+  buildCanonicalRosterPacket,
   buildContextPacket,
   filterSummariesByWindow,
   normalizeInferenceSnapshot,
