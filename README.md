@@ -1,489 +1,165 @@
 # jarvOS
 
-**Your own personal Jarvis that just works.**
-
-AI power users are already building personal
-Artificial Superintelligences by stringing together a complicated set of open 
-source solutions plus custom code to make eveything work together to unlock 
-incredible capabilities. But these setups are completely inaccessible to 
-non-developers or even developers who just dont have the time to spend endlessly
-tinkering and debugging these inherently
-fragile setups. 
-
-jarvOS bundles those tools and patterns into a compounding, self-improving knowledge 
-base which any AI agent can tap into to understand who you are, what you're working on,
-and what you're trying to accomplish. 
-
-## What jarvOS Does
-
-jarvOS combines an autonomous journaling and note-taking system (powered by Obsidian) with a Project 
-Management System (powered by Paperclip) as well as a number of other pieces
-of open source software (e.g. GBrain by Garry Tan) to construct a "digital twin" that serves as a unifying "mind" 
-for your AI agents. Not only does it enable your AI agent to understand you and what you're 
-trying to accomplish, but you can seamlessly switch between agents without losing any 
-
-You talk to your assistant like normal. jarvOS routes useful information into
-the right place, then brings the right context back when your assistant needs
-it.
-
-## The Power-User Stack, Bundled
-
-jarvOS is built around excellent tools that already exist.
-
-**OpenClaw** is the local agent runtime. It handles tools, sessions, messaging,
-scheduled work, model routing, and native knowledge features like memory-wiki.
-jarvOS uses OpenClaw as the engine and adds the operating layer around it.
+jarvOS — your own personal superintelligence, accessible to all.
 
-**lossless-claw** gives OpenClaw stronger continuity across long conversations
-and context compaction. It helps your assistant keep track of what happened
-instead of losing the thread when a session gets large.
+jarvOS builds on Markdown files you own to create a cross-AI digital twin: a shared second brain that OpenClaw, Codex, Claude Code, Hermes, and future agents can all use.
 
-**Obsidian-compatible Markdown** gives your knowledge a home you own. Notes,
-journals, drafts, references, and decisions stay in plain files you can open,
-edit, search, sync, and back up.
-
-**GBrain** turns your knowledge into structured recall. People, projects,
-companies, concepts, meetings, and source material can become a queryable
-knowledge base your assistant can use before it acts.
-
-**Beads** gives managed software work a durable local execution ledger with
-claims, dependencies, retries, and verification evidence. **Paperclip** can
-optionally mirror that work as a convenient human-facing record; it is not
-required to run the stewardship pipeline.
-
-**jarvOS skills and adapters** are the webbing. They connect the tools, install
-sane defaults, route context, define workflows, and make the system feel like
-one assistant instead of a pile of software.
-
-For coding work, jarvOS-coding bundles a managed Compound Engineering provider
-behind the ordinary jarvOS verbs. Say `plan`, `work`, or `complete`; a healthy,
-approved provider supplies the stronger planning and execution loop while
-jarvOS keeps ownership of the work run, branch, review evidence, submission
-gate, and completion decision. Provider learning is a separate, post-verification
-tail: `compound` may capture one reusable lesson, but a skipped or failed lesson
-never changes a verified coding result. If the provider is missing, modified,
-unsupported, or unavailable, jarvOS continues through its native workflow in
-the same run and worktree.
-
-Provider installation is managed software, not a JavaScript dependency or a
-moving upstream branch. jarvOS ships one reviewed pin, preserves unrelated
-runtime configuration, and lets doctor distinguish a discovered installation
-from a conformance-proven activation. See
-[`modules/jarvos-coding/README.md`](modules/jarvos-coding/README.md) and
-[`runtimes/codex/README.md`](runtimes/codex/README.md) for the support matrix
-and recovery path.
-
-For the exact external secondbrain integration status -- active, optional,
-dogfood-only, deferred, or guarded -- see
-[`docs/architecture/secondbrain-external-integrations.md`](./docs/architecture/secondbrain-external-integrations.md).
-
-## A Compounding Knowledge Base for Every Agent You Use
-
-Most assistant memory is trapped inside one product. jarvOS takes a different
-path: your knowledge base lives in local, readable files and structured indexes
-that multiple agents can use.
-
-OpenClaw can use it for daily operation. Codex can use it for coding context.
-Claude can use it for writing, planning, and analysis. Hermes Agent can use it
-as part of a broader local assistant setup. Future runtimes can plug into the
-same context spine through adapters.
-
-Every useful capture makes the system better. Notes become searchable
-knowledge. Repeated preferences become memory. Important entities become
-structured recall. Completed work becomes durable context.
-
-The longer you use jarvOS, the more leverage your assistants have.
-
-## Your Local Improvements Can Become Public Software
-
-`@jarvos/coding` includes the portable foundation for a managed-software
-pipeline: it can inventory local repository work, identify bounded release
-opportunities, route them toward the appropriate public project, and carry the
-evidence needed by the issue-to-PR workflow. This is designed to work across
-Claude Code, Codex, OpenClaw, and other host adapters, so you can improve your
-own system without continually tracking which changes also belong upstream.
-
-Routine stewardship uses Git as the work authority and a local coordination
-adapter to keep concurrent coding sessions from losing or duplicating work.
-Beads is the required durable execution ledger for the supported stewardship
-profile. Projects can add context, and Paperclip can add a one-way record, but
-both are optional. If Beads is unavailable, work stays preserved and visibly
-pending for retry instead of being treated as completed. Public merge, tagging,
-release, and upstream submission remain separate approval boundaries.
-
-## Your Knowledge Base Builds Itself
-
-This is the part that matters most: every useful interaction can make your
-system better.
-
-When you share an idea, jarvOS can put it in today's journal.
-
-When something should last, jarvOS can turn it into a Markdown note.
-
-When a fact, preference, decision, or lesson will matter later, jarvOS can
-promote it into durable memory.
-
-When a note describes a person, project, company, meeting, source, or concept,
-jarvOS can prepare it for structured recall through GBrain.
-
-When something becomes real work, jarvOS can move it into Paperclip.
-
-Over time, your assistant is not just accumulating chat logs. It is helping
-construct your personal knowledge base from the work you are already doing.
-
-## How It Works
-
-jarvOS is organized around a simple loop:
-
-1. **Capture.** You talk to an agent like you would a personal assistant; tell 
-it to save an idea, make a note, start a project.
-2. **Route.** jarvOS automatically knows where and how to store that information
-so that it cam both be put to use, and efficiently
-retrieved in the future. 
-3. **Promote.** Important information becomes durable context instead of being
-   stranded in chat history.
-4. **Inject.** The next agent gets the critical context it needs before acting.
-5. **Audit.** The daily journal and health checks show what changed and what
-   still needs attention.
-
-This is the core idea: your assistant should not just answer you. It should help
-maintain the operating system around your work and life.
-
-## What's in This Repo
-
-```text
-jarvOS/
-├── core/              # Portable behavior layer: AGENTS, SOUL, IDENTITY, governance
-├── modules/           # jarvOS-owned npm modules
-│   ├── jarvos-secondbrain/   # Journal, notes, capture routing, Obsidian adapter
-│   ├── jarvos-memory/        # Durable memory contract and audit tooling
-│   ├── jarvos-ontology/      # Beliefs, goals, projects, predictions, worldview
-│   ├── jarvos-gbrain/        # Structured-knowledge adapter
-│   ├── jarvos-coding/        # Issue-to-PR coding orchestrator, review gates, host adapters
-│   ├── jarvos-agent-context/ # Runtime-facing recall/action MCP adapter
-│   └── jarvos-skills/        # Default operating-system skill bundle
-├── templates/         # Blank USER, MEMORY, ONTOLOGY, TOOLS, BOOTSTRAP, HEARTBEAT
-├── runtimes/          # Runtime-specific adapters for OpenClaw, Hermes, Codex, Claude, Grok Bot
-├── starter-kit/       # Governance and project-management scaffolding
-├── docs/              # Architecture, release process, operations
-└── scripts/           # Smoke tests and release checks
-```
-
-Everything jarvOS-owned is plain Markdown plus a small amount of generic Node.js
-code. There is no hosted service, no required database, and no proprietary
-knowledge format.
-
-## Architecture
-
-jarvOS is a set of layers, not a monolith:
-
-| Layer | Owner | Purpose |
-| --- | --- | --- |
-| Content | `@jarvos/secondbrain` | Journal entries, notes, raw capture |
-| Recall | `@jarvos/memory` | Facts, preferences, lessons, decisions |
-| Worldview | `@jarvos/ontology` | Beliefs, predictions, goals, projects |
-| Structured knowledge | `@jarvos/gbrain` and local knowledge tools | People, companies, projects, concepts, meetings, sources |
-| Runtime context | `@jarvos/agent-context` | Current work, recall bundles, startup briefs, note creation |
-| Behavior | `core/` | Identity, tone, rules, governance |
-| Execution | Beads; optional Paperclip projection | Claims, dependencies, status, retries, verification |
-| Runtime | OpenClaw, Hermes, Codex, Claude, Grok Bot, etc. | Tools, messaging, sessions, model calls |
-
-Each layer has one job. Notes do not become project boards. Project tasks do not
-become memory. Private beliefs do not leak into public templates. That
-discipline is what lets jarvOS stay portable.
-
-## Modules
-
-The runnable pieces live in `modules/`:
-
-- **[`@jarvos/secondbrain`](./modules/jarvos-secondbrain/)** keeps the content
-  layer organized: journal maintenance, notes management, capture routing, and
-  Obsidian-compatible storage adapters.
-- **[`@jarvos/memory`](./modules/jarvos-memory/)** defines how durable agent
-  memory is represented, promoted, and audited.
-- **[`@jarvos/ontology`](./modules/jarvos-ontology/)** renders a reviewed
-  hierarchy-of-meaning packet for goals, beliefs, predictions, values, and
-  project relationships. Source-backed secondbrain evidence can create
-  candidates or inquiry items, but review is required before promotion.
-- **[`@jarvos/gbrain`](./modules/jarvos-gbrain/)** prepares curated vault content
-  for a local knowledge base and exposes sync, recall, health-check, and
-  retrieval-eval workflows.
-- **[`@jarvos/coding`](./modules/jarvos-coding/)** orchestrates coding work from
-  tracked issue to pull request: the portable `runTakeIssueToDone` loop, review
-  gates with documented host equivalents, live tracker/git/PR adapters, and thin
-  Claude Code/Codex host adapters.
-- **[`@jarvos/agent-context`](./modules/jarvos-agent-context/)** exposes current
-  work, recall bundles, startup briefs, ontology context packets, and verified
-  note creation to agent runtimes through a local MCP adapter.
-- **[`@jarvos/skills`](./modules/jarvos-skills/)** packages default operating
-  skills plus the `obsidian-default` experience pack: workflow execution, rule
-  creation, context management, cron hygiene, Obsidian Markdown, Obsidian CLI,
-  Defuddle, JSON Canvas, and Obsidian Bases.
-
-Each module has its own README and can be used independently.
-
-## Runtime Adapters
-
-jarvOS deliberately separates portable behavior from runtime-specific glue.
-
-- **OpenClaw** provides scheduling, tools, messaging, workspace context loading,
-  cron jobs, workflow gates, and native knowledge surfaces like memory-wiki.
-  jarvOS supplies the behavior, memory, project, note, and recall patterns that
-  OpenClaw runs.
-- **Hermes Agent** provides its own model configuration, tool calling, learning,
-  session search, and user modeling. jarvOS adds the portable behavior layer and
-  avoids duplicating Hermes-native systems.
-- **Codex and Claude** can use jarvOS context through local adapters and
-  hydration flows.
-- **Grok Bot** is an optional remote runtime. The vault stays on the vault
-  host; Grok Bot connects with a URL and token to an authenticated Streamable
-  HTTP MCP gateway. Stdio MCP on the Grok Bot disk hydrates the wrong machine.
-  Native Grok memory, routines, and CloudAgent stay host-owned. The connector
-  is operator-supervised and sits outside conformance; loopback is the vault
-  host, so Grok Bot needs a tunnel (see `runtimes/grok-bot/README.md`).
-
-jarvOS is not the runtime. It is the user-owned context and governance layer that
-runtimes hydrate from and write back to. The same core files and knowledge base
-can move across runtimes because the source of truth is Markdown and local
-tooling, not a single vendor's memory system.
-
-For the product-category boundary, see
-[`docs/architecture/product-category-and-boundaries.md`](./docs/architecture/product-category-and-boundaries.md).
-For how adapters install in a direct clone versus a managed, promotion-backed
-runtime — and the dispatcher contract the managed shape depends on — see
-[`docs/architecture/managed-runtime-topologies.md`](./docs/architecture/managed-runtime-topologies.md).
-For the secondbrain external integration inventory, see
-[`docs/architecture/secondbrain-external-integrations.md`](./docs/architecture/secondbrain-external-integrations.md).
-
-## Quick Start
-
-Clone the repo and run the smoke test:
-
-```bash
-git clone https://github.com/levineam/jarvOS.git
-cd jarvOS
-npm ci
-npm test
-```
-
-Expected result:
-
-```text
-PASS - All checks passed. The repo is ready to use.
-```
-
-### Public CLI
-
-The public command router is `jarvos`. It keeps the old bootstrap aliases
-working while making new profile-aware commands discoverable:
-
-```bash
-jarvos init --profile minimal \
-  --workspace /path/to/new-workspace \
-  --vault /path/to/new-vault \
-  --yes
-jarvos init --profile minimal \
-  --workspace /path/to/new-harness-workspace \
-  --vault "$HOME/Vaults/Vault v3" \
-  --use-existing-vault --yes
-jarvos sync --workspace /path/to/already-installed-workspace \
-  --vault "$HOME/Vaults/Vault v3" \
-  --name "Your Name" \
-  --timezone Area/City \
-  --dry-run
-jarvos doctor --profile minimal --workspace /path/to/already-installed-workspace
-```
-
-Use `jarvos init` on a fresh host or for a new harness workspace. To reuse an
-existing vault, add `--use-existing-vault`; init creates the starter workspace
-files and portable config, validates `Notes/`, `Journal/`, and `Tags/`, and
-leaves the vault's existing content untouched.
-
-Use `jarvos sync` only for an already-installed harness workspace. It is a
-portable, config-only handoff: it creates or verifies `jarvos.config.json` and
-does not install a harness, create starter workspace files, or initialize vault
-folders. A sync into an absent or otherwise new workspace can therefore finish
-with a config while `jarvos doctor` still reports missing starter files; use
-`jarvos init --use-existing-vault` for that fresh-host/new-harness case.
-
-In ordinary, uncontended use the sync command writes no config contents inside
-the vault; it requires an explicit workspace, rejects symlinked config targets,
-and refuses to replace a different existing config. Inspect the plan with
-`--dry-run`; for a new config target, rerun without that flag to apply it. A
-legacy-shaped target instead reports `manual-reconcile` and must be reconciled
-separately. Then use `jarvos doctor` to verify the workspace and runtime setup;
-neither command should be treated as proof that an uninstalled harness is ready.
-
-For a workspace that already has a compatible `jarvos.config.json`, `jarvos
-sync --workspace /path/to/jarvos-workspace --dry-run` reuses its vault, name,
-and timezone; those flags are only required for a new config. Timezones must be
-valid IANA names such as `UTC` or `America/New_York`. `jarvos init` is for a
-new standalone installation and fails closed if either target contains unrelated
-files; a complete prior bootstrap installation is recognized for a no-overwrite
-rerun. Use `--use-existing-vault` only to attach a verified existing vault to a
-new workspace. New writes through a symlinked target are refused; a symlinked
-path is accepted only for a recognized read-only compatible rerun.
-
-`jarvos sync` runs on macOS and Linux. It holds a POSIX directory descriptor on
-the config directory and rechecks that directory's identity before and after
-writing. It creates the final target directly with an exclusive `O_EXCL`
-descriptor, verifies that the target pathname still names that descriptor,
-fsyncs when available, and reads the exact bytes back through the descriptor
-before reporting success. A directory or target substituted during the run
-fails closed rather than overwriting an existing file. On platforms without
-such a descriptor it fails closed instead of falling back to a less safe write.
-
-The vault guarantee is precise for an ordinary, uncontended operation: sync
-selects the config directory outside the vault and writes no config contents
-there. The `vaultWrites` and `vaultContentsWritten` fields in `--json` output
-record that no vault config write was observed by the completed operation.
-Sync never enumerates or removes vault paths. A failed create may leave an
-empty `0600` config target that requires manual removal; the held descriptor is
-truncated best-effort before close, but sync never deletes its pathname.
-`--dry-run` never writes. If simultaneous local filesystem changes are observed
-by the identity checks, sync fails closed. The OS does not provide a transaction
-against every same-account change in the narrow intervals between checks.
-
-Sync never migrates a legacy-shaped config in place. It reports
-`manual-reconcile` during a dry run and asks you to reconcile the existing file
-manually or pass `--config` to a new path. A portable existing config remains
-`already-synced`; a different config remains a conflict.
-
-`jarvos doctor` is the profile-aware System Doctor. It reports portable health
-checks for the starter workspace, `jarvos.config.json`, vault folders, Node.js,
-and the public agent-context package, then lists only optional components
-selected by a profile-bound health receipt. A clean install does not fail
-because an unselected local provider is absent. It also verifies your journal stays safe:
-`vault-path-stale` catches a configured vault root that has moved or gone away,
-and `journal-conflict` catches a second journaling tool (Obsidian's `journals`
-plugin or core Daily notes) writing into the same `Journal/` folder jarvOS owns.
-Run it after install and whenever you change vault or Obsidian settings. See the
-[Journal Install Contract](./docs/journal-install-contract.md) for the
-single-writer rule these checks enforce. Local-only Paperclip, GBrain, SearXNG,
-OpenClaw, and Telegram checks are intentionally out of the minimal public
-profile unless an owner-side producer explicitly selects them.
-
-### OpenClaw
-
-OpenClaw is the recommended first runtime for the full jarvOS experience.
-
-```bash
-cp core/AGENTS.md    /path/to/openclaw-workspace/AGENTS.md
-cp core/SOUL.md      /path/to/openclaw-workspace/SOUL.md
-cp core/IDENTITY.md  /path/to/openclaw-workspace/IDENTITY.md
-cp templates/BOOTSTRAP-template.md /path/to/openclaw-workspace/BOOTSTRAP.md
-cp templates/HEARTBEAT-template.md /path/to/openclaw-workspace/HEARTBEAT.md
-node modules/jarvos-skills/scripts/install-skills.js --dest /path/to/openclaw-workspace/skills
-```
-
-Then create `USER.md`, `MEMORY.md`, and `ONTOLOGY.md` from the templates and
-fill them in for your own workspace.
-
-See [`runtimes/openclaw/README.md`](./runtimes/openclaw/README.md) for the full
-adapter checklist.
-
-### Hermes
-
-```bash
-hermes setup
-./runtimes/hermes/setup.sh
-```
-
-See [`runtimes/hermes/README.md`](./runtimes/hermes/README.md) for the Hermes
-setup path and the systems jarvOS intentionally does not duplicate.
-
-### Codex
-
-```bash
-./runtimes/codex/setup.sh
-```
-
-This registers the local jarvOS MCP server so Codex can call jarvOS recall,
-current-work, and note-capture tools.
-
-### Grok Bot
-
-Grok Bot has a separate computer from the vault. Run setup on the **vault
-host**, start the Streamable HTTP gateway there, and give Grok Bot only a
-reachable URL (SSH tunnel or `JARVOS_MCP_HTTP_ALLOW_NON_LOOPBACK=1`) and
-token. Do not register `jarvos-mcp.js` as stdio on Grok Bot.
-
-```bash
-./runtimes/grok-bot/setup.sh
-```
-
-Hydration is manual (`boot_jarvos` or `jarvos_hydrate`). If the vault-host
-URL is unreachable, continue without jarvOS context.
-
-See [`runtimes/grok-bot/README.md`](./runtimes/grok-bot/README.md).
-
-### Install Modules
-
-Install modules from a local clone:
-
-```bash
-npm install ./modules/jarvos-memory ./modules/jarvos-ontology ./modules/jarvos-secondbrain ./modules/jarvos-gbrain ./modules/jarvos-agent-context ./modules/jarvos-skills
-```
-
-## Public vs. Private
-
-This repo is the public, reusable baseline. It includes templates, adapters,
-schemas, smoke tests, and generic operating patterns.
-
-It does **not** include anyone's private workspace:
-
-- personal notes
-- journal entries
-- reminders
-- memories
-- goals
-- beliefs
-- private structured-knowledge pages
-- private Paperclip projects
-- local API keys or runtime configuration
-
-The design principle is simple: **code and patterns are public; personal context
-is private.**
-
-## Release Status
-
-`v0.7.0` is the current public preview release. It is the post-v0.6.3
-control-plane release: an authenticated control-plane application service, a
-protected-resource mutation policy layer, public human/agent parity for that
-service (`jarvos-manager` CLI and `jarvos_control_plane` MCP), and a portable
-`@jarvos/coding` control-plane compatibility layer for supported agent hosts.
-
-Useful release files:
-
-- [`CHANGELOG.md`](./CHANGELOG.md)
-- [`docs/release-process.md`](./docs/release-process.md)
-- [`PUBLIC_BASELINE.md`](./PUBLIC_BASELINE.md)
-
-Run the release readiness check locally:
-
-```bash
-npm run release:check
-```
-
-## Philosophy
-
-- **Bundle the best tools, do not hide them.** jarvOS is strongest when it makes
-  excellent local tools work together.
-- **Local-first over hosted lock-in.** Your operating layer should outlive any
-  one model, runtime, or chat product.
-- **Human-readable first.** Important context should be inspectable in normal
-  files, especially notes and journals.
-- **Context compounds.** Every useful capture should make future assistant work
-  better.
-- **Tracked work beats chat promises.** If an agent is doing real work, the work
-  should be visible in a project system with status and evidence.
-- **Power-user workflows should be usable by most people.** The goal is to give
-  more people the personal artificial Superintelligence stack that power users
-  are already building for themselves.
-
-## Follow Along
-
-The creator shares how he uses and develops jarvOS on X:
-[@andrarchy](https://x.com/andrarchy).
-
-If you build something on top of jarvOS, open an issue or find him there.
+The goal is simple:
+
+**One mind, many harnesses.**
+
+Different AI tools should not have separate memories, workflows, and understandings of you. They should connect to the same personal superintelligence through whichever harness you choose. A harness is the environment an AI works in, such as Codex, Claude Code, or Hermes.
+
+## What Is It?
+
+jarvOS is a modular, local-first secondbrain system for AI agents.
+
+It starts with Markdown as the human-readable foundation. Your notes, journals, ideas, decisions, source material, and written project context live in files you own.
+
+Then jarvOS adds modules that let AI agents capture, retrieve, organize, and act on that context consistently across tools.
+
+## The Core Stack
+
+See the [secondbrain integration inventory](docs/architecture/secondbrain-external-integrations.md).
+
+### Markdown, with Obsidian as an optional interface
+
+Markdown is the durable foundation of the second brain. You should be able to read and edit your notes without depending on a particular app.
+
+We currently use Obsidian because it is free to use, works with local Markdown files, and makes connected notes easy to explore. It provides a useful interface for reading, linking, and organizing your knowledge while keeping the underlying files yours.
+
+Obsidian is optional in jarvOS's portable architecture. Integrations that use the running Obsidian app depend on it; the Markdown foundation does not.
+
+### qmd
+
+qmd provides fast local search over Markdown.
+
+jarvOS uses qmd so agents can retrieve context from notes, journals, generated wiki pages, and other Markdown collections without depending on a hosted memory database.
+
+### LLM Wiki
+
+jarvOS uses the LLM-wiki pattern to generate AI-readable wiki pages from source notes, journals, and captured session material.
+
+The generated wiki is not the source of truth. It is a rebuildable retrieval layer that helps agents find concepts, decisions, source pages, summaries, and links.
+
+### lossless-claw
+
+lossless-claw helps long OpenClaw sessions preserve continuity across context limits.
+
+It is not the secondbrain itself. It helps agents keep the thread while jarvOS keeps durable knowledge grounded in Markdown.
+
+## jarvOS Modules
+
+### `@jarvos/secondbrain`
+
+The secondbrain module owns the Markdown knowledge layer.
+
+It handles intentional capture, note creation, journal routing, source provenance, generated wiki inputs, qmd freshness state, and secondbrain status checks.
+
+When an agent captures a note, idea, decision, quote, preference, fact, or lesson, this module makes sure it lands in the right place with the right metadata and a link back to the daily journal.
+
+### `@jarvos/memory`
+
+The memory module owns compact durable recall.
+
+Not everything belongs in long-term memory. jarvOS keeps source notes and journals as the authority, then promotes only useful, source-backed knowledge into memory.
+
+This prevents raw transcripts and noisy captures from polluting the user’s durable context.
+
+### `@jarvos/gbrain`
+
+The GBrain module adds structured recall.
+
+Where qmd helps agents search Markdown, GBrain helps organize and retrieve higher-level relationships: projects, goals, concepts, decisions, and other structured knowledge.
+
+It helps the secondbrain become more than a pile of files.
+
+### `@jarvos/agent-context`
+
+The agent-context module gives AI tools a shared way to orient.
+
+It exposes current work, note capture, recall, and session continuity tools so different agents can enter the same jarvOS context instead of starting cold.
+
+This is one of the key pieces behind seamless transitions between AIs.
+
+### `@jarvos/coding`
+
+The coding module makes repo-aware agents work from the same execution model.
+
+It supports coding workflows across tools like Codex and Claude Code while preserving issue context, branch state, review expectations, and continuity.
+
+If its coding workflow provider is unavailable, jarvOS falls back to its native workflow in the same run and worktree.
+
+The goal is that implementation work feels consistent no matter which coding agent is doing it.
+
+### `@jarvos/skills`
+
+The skills module packages reusable agent behavior.
+
+It includes operating patterns for workflow execution, context management, rule creation, cron hygiene, Obsidian workflows, and local runtime profiles.
+
+Skills are how jarvOS teaches different agents to behave like parts of the same system.
+
+### `@jarvos/runtime-kit`
+
+The runtime kit helps new agent runtimes plug into jarvOS.
+
+It provides adapter manifests, scaffolding, and checks so future AI tools can connect to the shared secondbrain without hardcoding one runtime as the center of the product.
+
+## How It Works Together
+
+The modules form one pipeline:
+
+1. Markdown files store the human-readable secondbrain, with Obsidian as an optional interface.
+2. `@jarvos/secondbrain` captures notes, ideas, decisions, and source-backed knowledge.
+3. LLM Wiki generates AI-readable retrieval pages from the source material.
+4. qmd indexes the Markdown so agents can search it locally.
+5. `@jarvos/memory` promotes only the durable, source-backed pieces worth remembering.
+6. `@jarvos/gbrain` adds structured recall over relationships and higher-level context.
+7. `@jarvos/agent-context` exposes that shared context to different AI agents.
+8. `@jarvos/coding` lets coding agents act on work with consistent continuity.
+9. `@jarvos/skills` and `@jarvos/runtime-kit` make the whole system portable across tools.
+
+That is the cross-AI digital twin: a shared second brain that many AI agents can use across different harnesses.
+
+## Supported AI Agents
+
+jarvOS currently targets:
+
+- **OpenClaw**
+- **Codex**
+- **Claude Code**
+- **Hermes**
+- **future agents through adapter contracts**
+
+The important point is not any single agent.
+
+The important point is that each agent can enter the same secondbrain, follow the same capture rules, retrieve the same context, and preserve knowledge in the same durable place.
+
+## Core Principles
+
+### Markdown First
+
+The user should be able to open, read, edit, and move their notes without depending on a particular app.
+
+### Markdown Is The Source Of Truth
+
+Generated wiki pages, sidecars, queues, indexes, and memory records support the system. They do not replace the source notes.
+
+### Cross-AI By Design
+
+OpenClaw, Codex, Claude Code, Hermes, and future agents should share one secondbrain instead of creating fragmented memories.
+
+### Capture Must Be Source-Backed
+
+Captured knowledge should carry provenance, evidence, privacy state, and a clear reason to exist.
+
+### Best OSS, Wired Together
+
+jarvOS should use strong existing software wherever possible, then build the missing integration layer: modules, contracts, adapters, workflows, evals, safety gates, and defaults.
+
+## The Destination
+
+jarvOS is your own personal superintelligence, accessible to all.
+
+It is a cross-AI digital twin built on a real second brain: Markdown at the foundation, useful tools connected around it, and jarvOS modules making the whole thing work as one mind across many harnesses.
