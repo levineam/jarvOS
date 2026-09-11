@@ -109,7 +109,7 @@
     "@jarvos/runtime-kit": "file:modules/jarvos-runtime-kit"
   },
   "scripts": {
-    "pretest": "node --test modules/jarvos-agent-context/test/ripeness-context.test.js",
+    "pretest": "node --test modules/jarvos-agent-context/test/ripeness-context.test.js modules/jarvos-agent-context/test/source-age.test.js modules/jarvos-agent-context/test/projects-roster-bootstrap.test.js modules/jarvos-secondbrain/packages/jarvos-secondbrain-projects/test/projects-roster.test.js",
     "bootstrap": "node bootstrap.js",
     "clawpatch": "node scripts/clawpatch-runner.js",
     "clawpatch:doctor": "node scripts/clawpatch-runner.js doctor",

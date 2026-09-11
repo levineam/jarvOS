@@ -93,6 +93,14 @@ process.exit(1);
     { mode: 0o755 },
   );
   fs.chmodSync(bin, 0o755);
+  // First execution of a newly written script can incur host security-scan
+  // latency. Admit and verify the fixture before testing the unchanged
+  // two-second production read deadline.
+  const ready = spawnSync(bin, ['sources', 'list', '--json', '--timeout=3'], {
+    encoding: 'utf8', timeout: 30000,
+  });
+  assert.equal(ready.status, 0, ready.error?.code || ready.stderr);
+  assert.deepEqual(JSON.parse(ready.stdout), payload);
   return bin;
 }
 
@@ -136,6 +144,29 @@ test('recall labels source last-commit age from the GBrain repo', () => {
     assert.match(truncated, /brain age: last commit 2026-05-01 \(112d ago\)/);
   });
 });
+
+for (const mode of ['direct', 'synthesis']) {
+  test(`${mode} recall observes source age without exposing internal configuration`, () => {
+    withTempDir((tmp) => {
+      const brainDir = path.join(tmp, 'brain');
+      initBrainRepo(brainDir, STALE_AT);
+      const result = recall(recallOptions(recallConfig(brainDir, brainDir, {
+        gbrainBin: path.join(tmp, 'missing-gbrain'),
+        includeQmd: false,
+        autoGraph: false,
+        limit: 2,
+      }), { mode, includeQmd: true, autoGraph: true, listBrainSources: () => null }));
+      assert.match(result.markdown, /brain age: last commit 2026-05-01 \(112d ago\); last sync unknown/);
+      assert.equal(Object.hasOwn(result.bundle.config, 'brainDir'), false);
+      assert.equal(Object.hasOwn(result.bundle.config, 'gbrainDir'), false);
+      assert.equal(JSON.stringify(result.bundle.config).includes(tmp), false);
+      assert.equal(result.markdown.includes(tmp), false);
+      assert.equal(result.bundle.includeQmd, false);
+      assert.equal(result.bundle.autoGraph, false);
+      assert.equal(result.bundle.limit, 2);
+    });
+  });
+}
 
 test('recall labels last-modified age when git metadata is absent', () => {
   withTempDir((tmp) => {
