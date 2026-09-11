@@ -20,6 +20,8 @@ Then jarvOS adds modules that let AI agents capture, retrieve, organize, and act
 
 ## The Core Stack
 
+See the [secondbrain integration inventory](docs/architecture/secondbrain-external-integrations.md).
+
 ### Markdown, with Obsidian as an optional interface
 
 Markdown is the durable foundation of the second brain. You should be able to read and edit your notes without depending on a particular app.
