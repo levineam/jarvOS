@@ -17,6 +17,10 @@ const SNAPSHOT_FIELDS = Object.freeze(['schema', 'moduleId', 'generation', 'obse
 const CONTINUITY_SNAPSHOT_FIELDS = Object.freeze(['schema', 'moduleId', 'generation', 'observedAt', 'validUntil', 'trust', 'factsVersion', 'facts']);
 const CONTINUITY_FACTS_VERSION = 'jarvos-gbrain-continuity-facts/v1';
 const SYSTEM_FACTS_VERSION = 'jarvos-system-doctor-facts/v2';
+const SYSTEM_FACTS_VERSION_V3 = 'jarvos-system-doctor-facts/v3';
+const SYSTEM_FACTS_VERSIONS = Object.freeze([SYSTEM_FACTS_VERSION, SYSTEM_FACTS_VERSION_V3]);
+const SYSTEM_COMPONENT_FIELDS_V2 = Object.freeze(['id', 'state', 'reasonClass', 'evidence']);
+const SYSTEM_COMPONENT_FIELDS_V3 = Object.freeze(['id', 'state', 'reasonClass', 'evidence', 'observedAt', 'validUntil']);
 const SYSTEM_COMPONENT_STATES = Object.freeze(['healthy', 'warning', 'repair needed', 'not configured']);
 const MEMORY_COMPONENTS = Object.freeze([
   ['memory.gbrain', 'GBrain core'],
@@ -81,7 +85,7 @@ function ownedHealthDirectory(workspace, fsImpl = fs) {
 function isoDate(value) {
   if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(value)) return null;
   const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? null : date;
+  return Number.isNaN(date.getTime()) || date.toISOString() !== value ? null : date;
 }
 
 function exactObject(value, fields) {
@@ -136,11 +140,23 @@ function validateBaseSnapshot(snapshot, now) {
   return { ok: true, snapshot, observedAt, validUntil };
 }
 
-function validateSystemComponent(component) {
-  if (!exactObject(component, ['id', 'state', 'reasonClass', 'evidence'])
+function validComponentCheckDates(component, now) {
+  const { observedAt, validUntil } = component;
+  if (observedAt === null && validUntil === null) return true;
+  if (observedAt === null || validUntil === null) return false;
+  const observed = isoDate(observedAt);
+  const valid = isoDate(validUntil);
+  return Boolean(observed) && Boolean(valid) && valid > observed && observed <= now;
+}
+
+function validateSystemComponent(component, factsVersion, now) {
+  const isV3 = factsVersion === SYSTEM_FACTS_VERSION_V3;
+  const fields = isV3 ? SYSTEM_COMPONENT_FIELDS_V3 : SYSTEM_COMPONENT_FIELDS_V2;
+  if (!exactObject(component, fields)
     || !SAFE_PUBLIC_ID.test(component.id)
     || !SYSTEM_COMPONENT_STATES.includes(component.state)
     || !SAFE_PUBLIC_ID.test(component.reasonClass)) return false;
+  if (isV3 && !validComponentCheckDates(component, now)) return false;
   if (component.id !== 'provider.searxng') return component.evidence === null;
   return exactObject(component.evidence, ['httpReachable', 'searchResultCount', 'runtimeToolAvailable'])
     && typeof component.evidence.httpReachable === 'boolean'
@@ -149,12 +165,12 @@ function validateSystemComponent(component) {
     && typeof component.evidence.runtimeToolAvailable === 'boolean';
 }
 
-function validateSystemFacts(facts) {
+function validateSystemFacts(facts, factsVersion, now) {
   if (!exactObject(facts, ['profile', 'components'])
     || !SAFE_PUBLIC_ID.test(facts.profile)
     || !Array.isArray(facts.components)
     || facts.components.length > 64
-    || !facts.components.every(validateSystemComponent)) return false;
+    || !facts.components.every((component) => validateSystemComponent(component, factsVersion, now))) return false;
   const ids = facts.components.map((component) => component.id);
   if (new Set(ids).size !== ids.length) return false;
   const memoryIds = ids.filter((id) => id.startsWith('memory.'));
@@ -205,7 +221,7 @@ function validateSnapshot(snapshot, now = new Date()) {
     if (snapshot.factsVersion !== CONTINUITY_FACTS_VERSION || !validateContinuityFacts(snapshot.facts)) {
       return { ok: false, reasonClass: 'module-invalid' };
     }
-  } else if (snapshot.factsVersion !== SYSTEM_FACTS_VERSION || !validateSystemFacts(snapshot.facts)) {
+  } else if (!SYSTEM_FACTS_VERSIONS.includes(snapshot.factsVersion) || !validateSystemFacts(snapshot.facts, snapshot.factsVersion, now)) {
     return { ok: false, reasonClass: 'module-invalid' };
   }
   return base;
@@ -223,21 +239,38 @@ function systemComponentLabel(id) {
     .join(' ');
 }
 
-function reduceSystemComponent(component) {
+function componentCheckDates(component, factsVersion, now) {
+  if (factsVersion !== SYSTEM_FACTS_VERSION_V3) return { observedAt: null, validUntil: null, stale: false };
+  const { observedAt, validUntil } = component;
+  if (observedAt === null || validUntil === null) return { observedAt: null, validUntil: null, stale: false };
+  return { observedAt, validUntil, stale: isoDate(validUntil) <= now };
+}
+
+function reduceSystemComponent(component, factsVersion, now) {
+  const { observedAt, validUntil, stale } = componentCheckDates(component, factsVersion, now);
+  let reduced;
   if (component.id !== 'provider.searxng' || component.state !== 'healthy') {
-    return { ...component, label: systemComponentLabel(component.id) };
+    reduced = { ...component, label: systemComponentLabel(component.id) };
+  } else {
+    const evidence = component.evidence;
+    let reasonClass = 'none';
+    if (!evidence.httpReachable) reasonClass = 'http-unreachable';
+    else if (evidence.searchResultCount < 1) reasonClass = 'search-empty';
+    else if (!evidence.runtimeToolAvailable) reasonClass = 'runtime-tool-missing';
+    reduced = {
+      ...component,
+      label: systemComponentLabel(component.id),
+      state: reasonClass === 'none' ? 'healthy' : 'warning',
+      reasonClass,
+    };
   }
-  const evidence = component.evidence;
-  let reasonClass = 'none';
-  if (!evidence.httpReachable) reasonClass = 'http-unreachable';
-  else if (evidence.searchResultCount < 1) reasonClass = 'search-empty';
-  else if (!evidence.runtimeToolAvailable) reasonClass = 'runtime-tool-missing';
-  return {
-    ...component,
-    label: systemComponentLabel(component.id),
-    state: reasonClass === 'none' ? 'healthy' : 'warning',
-    reasonClass,
-  };
+  if (stale) {
+    reduced.state = 'warning';
+    reduced.reasonClass = 'component-stale';
+  }
+  reduced.observedAt = observedAt;
+  reduced.validUntil = validUntil;
+  return reduced;
 }
 
 function reduceSystemModule(snapshot, { now = new Date(), validation = null, profile = null } = {}) {
@@ -246,7 +279,7 @@ function reduceSystemModule(snapshot, { now = new Date(), validation = null, pro
   if (snapshot.trust !== 'trusted') return publicAttention('module-untrusted', snapshot, SYSTEM_MODULE_ID);
   if (checked.validUntil <= now) return publicAttention('module-stale', snapshot, SYSTEM_MODULE_ID);
   if (profile && snapshot.facts.profile !== profile) return publicAttention('profile-mismatch', snapshot, SYSTEM_MODULE_ID);
-  const components = snapshot.facts.components.map(reduceSystemComponent);
+  const components = snapshot.facts.components.map((component) => reduceSystemComponent(component, snapshot.factsVersion, now));
   let state = 'healthy';
   let reasonClass = 'none';
   if (components.some((component) => component.state === 'repair needed')) {
@@ -261,6 +294,7 @@ function reduceSystemModule(snapshot, { now = new Date(), validation = null, pro
     observedAt: snapshot.observedAt,
     validUntil: snapshot.validUntil,
     reasonClass,
+    factsVersion: snapshot.factsVersion,
     profile: snapshot.facts.profile,
     components,
   };
@@ -404,7 +438,7 @@ function loadHealthModules({ workspace, now = new Date(), fsImpl = fs, expectedC
 module.exports = {
   HEALTH_MODULE_DIRECTORY, MODULE_SNAPSHOT_SCHEMA, PUBLIC_MODULE_ID, PUBLIC_STATES, PUBLIC_MODULE_FILE,
   CONTINUITY_MODULE_ID, CONTINUITY_MODULE_FILE, CONTINUITY_FACTS_VERSION, CONTINUITY_TARGETS, CONTINUITY_EVIDENCE_STATES,
-  SYSTEM_MODULE_ID, SYSTEM_MODULE_FILE, SYSTEM_FACTS_VERSION, SYSTEM_COMPONENT_STATES, MEMORY_COMPONENTS,
+  SYSTEM_MODULE_ID, SYSTEM_MODULE_FILE, SYSTEM_FACTS_VERSION, SYSTEM_FACTS_VERSION_V3, SYSTEM_FACTS_VERSIONS, SYSTEM_COMPONENT_STATES, MEMORY_COMPONENTS,
   loadHealthModules, missingContinuityModule, modulePath, ownerOnly, reduceHealthModule, reduceContinuityModule,
   reduceSystemModule, systemComponentLabel, validateSnapshot,
 };

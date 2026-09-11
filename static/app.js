@@ -352,12 +352,16 @@ function doctorRows(components) {
   if (!components?.length) return '<div class="empty">none selected</div>';
   return `<div class="doctor-rows">${components.map((c) => {
     const guidance = c.state === 'healthy' ? '' : (c.guidance || c.message || '');
+    const checked = c.observedAt
+      ? `Last checked ${fmt.esc(new Date(c.observedAt).toLocaleString())}${c.validUntil ? ` · valid until ${fmt.esc(new Date(c.validUntil).toLocaleString())}` : ''}`
+      : 'Last checked unavailable';
     return `
     <div class="doctor-row" data-component-id="${fmt.esc(c.id)}" data-section="${fmt.esc(c.section)}" data-state="${fmt.esc(c.state)}">
       <span class="doctor-icon ${doctorStateClass(c.state)}" aria-label="${fmt.esc(c.state)}" title="${fmt.esc(c.state)}"></span>
       <div class="doctor-row-body">
         <span class="nm">${fmt.esc(c.label || c.id)}</span>
         ${guidance ? `<span class="doctor-guide"> — ${fmt.esc(guidance)}</span>` : ''}
+        <span class="doctor-row-freshness det">${checked}</span>
       </div>
     </div>`;
   }).join('')}</div>`;
@@ -375,6 +379,10 @@ function renderSystemDoctorReceipt(payload) {
     memory: (receipt.components || []).filter((c) => c.section === 'memory'),
   };
   const profile = receipt.profile?.title || receipt.profile?.id || 'profile';
+  const attention = (receipt.components || []).filter((component) => component.state !== 'healthy');
+  const attentionReason = attention.length
+    ? ` · attention: ${attention.map((component) => component.label || component.id).join(', ')}`
+    : '';
   const present = ['core', 'optional', 'memory'].filter((key) => (sections[key] || []).length > 0);
   const showSectionLabels = present.length > 1;
   const sectionTitles = { core: 'Core', optional: 'Services', memory: 'Memory' };
@@ -382,7 +390,8 @@ function renderSystemDoctorReceipt(payload) {
 
   let body = `
     <div class="doctor-receipt" data-schema="${fmt.esc(receipt.schema || '')}" data-status="${fmt.esc(receipt.status || '')}" data-presentation="compact-scoreboard" data-facts-version="${fmt.esc(receipt.factsVersion || '')}">
-      <div class="doctor-meta det">${fmt.esc(profile)} · ${fmt.esc(receipt.status)}</div>
+      <div class="doctor-meta det">Overall · ${fmt.esc(receipt.status)}${fmt.esc(attentionReason)}</div>
+      <div class="doctor-source-profile det">Source profile: ${fmt.esc(profile)}</div>
       <div class="doctor-freshness">${primary?.observedAt ? `Observed ${fmt.esc(new Date(primary.observedAt).toLocaleString())} · ${fmt.esc(primary.freshness)}` : 'Observation time unavailable'}<br>${fmt.esc(receipt.coverage || 'Published observations only.')}</div>
       ${!present.length ? '<p class="empty">No verified observations available.</p>' : ''}
       ${present.map((key) => `

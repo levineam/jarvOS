@@ -60,6 +60,12 @@ while visible, with single-flight reads and failure backoff. This rereads
 observations; publishing new evidence remains the existing producer owner's job,
 not a Desktop scheduler. Old `#/services` links redirect to `#/system`.
 
+System facts v2 has no component-age claim. Facts v3 retains only each
+component's own `observedAt`/`validUntil` pair; Desktop never substitutes the
+receipt or module timestamp for a component. Unsupported receipt facts versions
+are unavailable, and stale, invalid, or untrusted evidence is shown as a warning
+with publisher-owned guidance rather than an executable Desktop action.
+
 ## Design intent
 
 Follows the Jarvis-page product correction from the Agent Control for Mac PRD:
