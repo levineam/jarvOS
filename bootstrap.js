@@ -15,6 +15,7 @@ const path = require('path');
 const readline = require('readline');
 const os = require('os');
 const { assertNotStaleVaultPath } = require('./modules/jarvos-secondbrain/bridge/config/src/resolve-config');
+const { preflightDesktop, installDesktop } = require('./lib/jarvos-desktop');
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -813,6 +814,8 @@ async function main() {
   }
 
   let preflight;
+  const skipDesktop = process.argv.includes('--no-desktop') || process.env.JARVOS_NO_DESKTOP === '1';
+  const desktopOptions = { workspace: config.WORKSPACE_PATH, vault: config.VAULT_PATH };
   try {
     preflight = preflightInit(config, {
       workspaceSource: config.WORKSPACE_PATH === pathInputs.workspace
@@ -823,6 +826,7 @@ async function main() {
         : 'interactive prompt',
       useExistingVault: pathInputs.useExistingVault,
     });
+    if (!skipDesktop) preflightDesktop(desktopOptions);
   } catch (error) {
     err(error.message);
     process.exit(1);
@@ -839,6 +843,21 @@ async function main() {
     info('Compatible jarvOS installation detected — preserving all existing files.');
 }
   const allPassed = smokeTest(config);
+  if (!allPassed) process.exit(1);
+  if (skipDesktop) {
+    info('Desktop skipped — headless core installation complete.');
+  } else {
+    info('Installing Desktop dependencies and Electron; this may take a few minutes.');
+    try {
+      const desktop = installDesktop(desktopOptions);
+      ok(`Desktop installed at ${desktop.appPath}`);
+      info(`Launch when ready: npx jarvos-bootstrap desktop --workspace ${JSON.stringify(config.WORKSPACE_PATH)}`);
+    } catch (error) {
+      err(`Partial installation: core is ready, but Desktop failed: ${error.message}`);
+      info(`Existing core, vault and prior Desktop selection are preserved. Retry: npx jarvos-bootstrap desktop install --workspace ${JSON.stringify(config.WORKSPACE_PATH)}`);
+      process.exit(1);
+    }
+  }
 
   console.log(`\n${BOLD}Next steps:${RESET}`);
   console.log(`  1. Tell your assistant:     "Read BOOTSTRAP.md and follow its instructions"`);

@@ -9,6 +9,7 @@ product_contract_source: ce-plan-bootstrap
 issue: https://github.com/levineam/jarvOS/issues/293
 ---
 
+<!-- markdownlint-disable-next-line MD025 -->
 # Desktop Bundled Installation - Plan
 
 ## Goal Capsule
@@ -16,8 +17,10 @@ issue: https://github.com/levineam/jarvOS/issues/293
 Users completing the standard jarvOS installation can launch its Desktop companion without separately cloning or assembling it.
 Harnesses remain the primary interfaces.
 The existing Desktop child project owns this outcome.
-Fable 5.1 drafted the approach; the lead integrates and verifies bounded Grok 4.5/4.6 implementation.
+Fable 5.1 drafted the approach; the lead integrates and verifies bounded Grok 4.5/4.6 implementation through the user-selected codex-router transport.
 Source submission follows normal review and merge gates; public release, live installation, runtime changes, and archival of the old repository are excluded.
+
+Routing recovery: the earlier router trial was cloned but never executed. The first U1 attempt incorrectly used the legacy direct adapter and hit its eight-turn limit without an accepted result; disclosed native fallback completed U1, and native U2 continued independently. Before any further Grok call, qualify the exact subscription route in an isolated trial. Do not silently change transport, substitute paid API access, reconfigure live Codex, or duplicate accepted units. The lead continues authorized local integration while that route is unproven.
 
 ## Product Contract
 
@@ -47,7 +50,7 @@ The separate app requires manual assembly and can drift from the jarvOS capabili
 
 - KTD1. Import the existing history without squash and reconcile source heads `011e75e` and `e6fe82d`; verify ancestor reachability and tree equivalence, not a misleading path-log count. Keep unrelated voice/feedback worktrees intact. Implements R1.
 - KTD2. Keep Desktop as a nested package with its own lockfile, not a new workspace framework. Include its required source and existing prebuilt chat assets in the root tarball; package validation detects missing/stale assets. Root installation never runs a hidden npm postinstall. Implements R2/R6.
-- KTD3. The shared installer stores versioned, content-identified app copies under the installation workspace's `.jarvos/desktop`, not inside a global/npx package or vault. Build/install into a private staging directory, verify required assets and Electron executable, then atomically select it. Preserve the prior selection on failure; take an exclusive install lock and refuse unsafe/symlinked targets. No automatic cleanup or background updater. Implements R4.
+- KTD3. The shared installer stores versioned, content-identified app copies under the installation workspace's `.jarvos/desktop`, not inside a global/npx package or vault. Build/install into a private staging directory, verify required assets and Electron executable, then atomically select it. Preserve the prior selection on failure; take an exclusive install lock and refuse unsafe/symlinked targets. Remove only a verified, failed staging directory owned by the current attempt; never clean prior versions, foreign stages or interrupted-attempt evidence automatically. No background updater. Implements R4.
 - KTD4. `jarvos desktop install|status` accepts the installation workspace; bare `jarvos desktop` launches its selected app. Standard init aliases and direct bootstrap use the same installation helper. Explicit install provides retry/update; `sync` and Doctor remain read-only. Never launch Desktop automatically. Implements R2/R4/R5.
 - KTD5. `config.default.json` is portable; installed workspace-derived settings live outside versioned app bytes and are written only when absent. `JARVOS_DESKTOP_CONFIG` selects an explicit override, shared by server and Electron. Respect `PORT` and existing Projects override semantics. Unconfigured integrations remain unavailable rather than binding to the developer's services. Implements R6.
 

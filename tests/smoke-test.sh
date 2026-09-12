@@ -3,6 +3,9 @@
 # and verify it exits 0 and produces the expected structure.
 set -euo pipefail
 
+# This suite verifies the Node 18-compatible headless core without downloads.
+export JARVOS_NO_DESKTOP=1
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BOOTSTRAP="$SCRIPT_DIR/bootstrap.js"
 TMPDIR_BASE="$(mktemp -d)"

@@ -308,14 +308,15 @@ test('list_app_source lists files without contents and prunes node_modules', () 
 
 test('read_app_source redacts secrets and caps size', () => {
   const root = tempDir();
+  const fakeKey = ['sk', 'ABCDEFGHIJKLMNOPQRSTUVWX'].join('-');
   fs.writeFileSync(
     path.join(root, 'leak.md'),
-    `key sk-ABCDEFGHIJKLMNOPQRSTUVWX and hash ${'a'.repeat(50)}\n`,
+    `key ${fakeKey} and hash ${'a'.repeat(50)}\n`,
   );
   const h = selfTools.__test.makeHandlers({ appRoot: root });
 
   const res = h.readAppSource({ path: 'leak.md' });
-  assert.doesNotMatch(res.content, /sk-ABCDEFGHIJKLMNOPQRSTUVWX/);
+  assert.equal(res.content.includes(fakeKey), false);
   assert.match(res.content, /sk-\[redacted\]/);
   assert.doesNotMatch(res.content, /a{50}/);
 

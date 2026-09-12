@@ -22,14 +22,34 @@ does not invent its own database.
 | **Ontology** | Meaning | jarvos-ontology spine (higher order → projects) |
 | **System** | Operating health | Published Doctor observations with freshness and lightweight connection checks |
 
-## Run
+## Install and launch
+
+Standard `jarvos init` installs this companion into the selected workspace.
+Desktop requires Node 22.12+, npm and network access for Electron. Use
+`--no-desktop` or `JARVOS_NO_DESKTOP=1` for headless core installation on Node 18.
+Harnesses remain the primary interfaces; the installer never launches the app.
+
+```bash
+jarvos desktop --workspace /path/to/workspace
+jarvos desktop status --workspace /path/to/workspace
+jarvos desktop install --workspace /path/to/workspace
+```
+
+The last command retries installation or installs an update from the current
+jarvOS package. Versioned app bytes live under `.jarvos/desktop/versions` in the
+workspace. Configuration and Electron user data stay outside those versions;
+updates preserve them and keep the prior version if installation fails. There
+is no background updater or automatic deletion of older versions.
+
+## Develop
 
 ```bash
 # in a browser
 npm run serve            # http://127.0.0.1:4807
 
 # as a desktop app
-npm install              # first time only (pulls Electron)
+npm ci --include=dev      # first time only
+node node_modules/electron/install.js
 npm run desktop
 
 # verify
@@ -38,12 +58,18 @@ npm test
 npm run smoke
 ```
 
-The Electron shell boots the server in-process; if a server is already running
-on the port it just attaches to it.
+The Electron shell boots its own server before opening a window. An occupied
+port fails clearly; use `PORT=4809` (or another unused port) for a separate instance.
 
 ### Host bindings and observation freshness
 
-Set `projectsContext.contextModule` in `config.json`, or the host-local
+Portable defaults live in `config.default.json`. Select a local override with
+`JARVOS_DESKTOP_CONFIG=/path/to/config.json` (a development `config.json` is ignored
+by Git but is not loaded implicitly). Installed copies use
+the workspace's `.jarvos/desktop/config.json`. Unconfigured integrations remain
+unavailable; copying the app does not connect another user's services.
+
+Set `projectsContext.contextModule` in that override, or the host-local
 `JARVOS_DESKTOP_PROJECTS_CONTEXT_MODULE` environment variable, to the installed
 jarvOS agent-context entry point exporting `readProjectsContext`. Desktop requests
 the `orientation` profile; the host enforces its admitted scope and capabilities.
@@ -82,7 +108,7 @@ no telemetry, all assets vendored (fonts, markdown renderer, sanitizer).
 ```
 server/            zero-dependency Node HTTP server
   agent/           AI SDK ToolLoopAgent, tools, credentials, transcription
-  config.js        loads config.json, expands ~
+  config.js        merges portable defaults and local overrides, expands ~
   today.js         composes the Today brief (deterministic, no LLM)
   adapters/
     journal.js     vault daily files -> parsed sections
@@ -96,12 +122,13 @@ static/            single-page UI, vanilla JS, vendored assets
   chat/            Vite-built React chat island
 chat-src/          Chat source (React + AI SDK useChat)
 electron/main.js   thin desktop shell
-config.json        all paths/endpoints — edit to point at your own setup
+config.default.json portable defaults; config.json is an ignored local override
 ```
 
 ## Trust & safety notes
 
-- Binds to `127.0.0.1` only. Nothing leaves the machine.
+- Binds to `127.0.0.1` only. Configured chat providers and integrations can send
+  approved requests to their external services; local binding is not offline mode.
 - Paperclip agent records are field-whitelisted server-side so gateway tokens
   in `adapterConfig` never reach the browser.
 - All rendered markdown is sanitized with DOMPurify (journal content is partly

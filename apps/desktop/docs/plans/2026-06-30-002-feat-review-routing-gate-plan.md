@@ -9,6 +9,7 @@ product_contract_source: ce-plan-bootstrap
 execution: code
 ---
 
+<!-- markdownlint-disable-next-line MD025 -->
 # Risk-Based Review Gate (global Claude Code default) - Plan
 
 **Target:** the user's global Claude Code config under `~/.claude/` (not a single repo). Paths below are `~/.claude/...` deliberately — this is machine-global tooling, so `~`-rooted paths are correct here rather than repo-relative ones.

@@ -6,6 +6,8 @@ async function createWriteTools(cfg) {
   const notes = require('../../adapters/notes');
   const journal = require('../../adapters/journal');
   const paperclip = require('../../adapters/paperclip');
+  const unavailable = (name) => ({ available: false, reason: `${name} is not configured` });
+  const has = (value) => typeof value === 'string' && value.trim() !== '';
 
   return {
     create_note: tool({
@@ -14,7 +16,7 @@ async function createWriteTools(cfg) {
         title: z.string().min(1),
         content: z.string().min(1),
       }),
-      execute: async ({ title, content }) => notes.create(cfg.vault.notesDir, title, content),
+      execute: async ({ title, content }) => has(cfg.vault?.notesDir) ? notes.create(cfg.vault.notesDir, title, content) : unavailable('Notes vault'),
     }),
     append_journal: tool({
       description: 'Append a bullet to a journal day. Additive only. Requires user approval.',
@@ -23,7 +25,7 @@ async function createWriteTools(cfg) {
         section: z.string().default('Agent Notes'),
         bullet: z.string().min(1),
       }),
-      execute: async ({ date, section, bullet }) => journal.appendBullet(cfg.vault.journalDir, date, section, bullet),
+      execute: async ({ date, section, bullet }) => has(cfg.vault?.journalDir) ? journal.appendBullet(cfg.vault.journalDir, date, section, bullet) : unavailable('Journal'),
     }),
     create_paperclip_issue: tool({
       description: 'Create a Paperclip issue. Requires user approval.',
@@ -34,7 +36,7 @@ async function createWriteTools(cfg) {
         projectId: z.string().optional(),
       }),
       execute: async ({ title, description, priority, projectId }) =>
-        paperclip.createIssue(cfg.paperclip, {
+        !paperclip.configured(cfg.paperclip) ? unavailable('Paperclip') : paperclip.createIssue(cfg.paperclip, {
           title,
           description,
           priority,
@@ -52,7 +54,7 @@ async function createWriteTools(cfg) {
         priority: z.enum(['critical', 'high', 'medium', 'low']).optional(),
         comment: z.string().optional(),
       }),
-      execute: async ({ id, ...patch }) => paperclip.updateIssue(cfg.paperclip, id, patch),
+      execute: async ({ id, ...patch }) => paperclip.configured(cfg.paperclip) ? paperclip.updateIssue(cfg.paperclip, id, patch) : unavailable('Paperclip'),
     }),
   };
 }

@@ -12,6 +12,7 @@
     "smoke": "node scripts/smoke.js"
   },
   "license": "MIT",
+  "engines": { "node": ">=22.12" },
   "devDependencies": {
     "electron": "^42.5.1"
   },

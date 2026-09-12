@@ -22,12 +22,16 @@ function sectionItems(day, title) {
 // Deterministic plain-English brief: what's moving, what needs you, what changed.
 async function brief(cfg) {
   const date = localDate();
-  const day = journal.today(cfg.vault.journalDir, date);
+  const journalConfigured = Boolean(cfg.vault?.journalDir);
+  const notesConfigured = Boolean(cfg.vault?.notesDir);
+  const paperclipConfigured = paperclip.configured(cfg.paperclip);
+  const day = journalConfigured ? journal.today(cfg.vault.journalDir, date) : null;
 
   let allIssues = [];
   let agents = [];
   let paperclipError = null;
   try {
+    if (!paperclipConfigured) throw new Error('Paperclip is not configured');
     [allIssues, agents] = await Promise.all([
       paperclip.issues(cfg.paperclip),
       paperclip.agents(cfg.paperclip),
@@ -59,7 +63,7 @@ async function brief(cfg) {
     moving,
     needsYou,
     recentlyDone: recentlyDone.slice(0, 10),
-    recentNotes: notes.recent(cfg.vault.notesDir, { limit: 8, sinceHours: 72 }),
+    recentNotes: notesConfigured ? notes.recent(cfg.vault.notesDir, { limit: 8, sinceHours: 72 }) : [],
     agents,
   };
 }

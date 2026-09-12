@@ -10,7 +10,7 @@ const { httpError } = require('../http-utils');
 // directly; a bare name (e.g. "whisper-cli") is looked up on PATH so the
 // availability check works for PATH-installed binaries, not just absolute paths.
 function resolveOnPath(cmd) {
-  if (!cmd) return null;
+  if (!cmd || typeof cmd !== 'string') return null;
   if (cmd.includes('/')) {
     try {
       fs.accessSync(cmd, fs.constants.X_OK);

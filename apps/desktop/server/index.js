@@ -30,34 +30,45 @@ const MIME = {
   '.woff2': 'font/woff2',
 };
 
+function configured(value) {
+  return typeof value === 'string' && value.trim() !== '';
+}
+
+function unavailable(name) {
+  throw httpError(503, `${name} is not configured`);
+}
+
 const routes = {
   '/api/today': async () => today.brief(cfg),
 
-  '/api/journal': async (q) =>
+  '/api/journal': async (q) => !configured(cfg.vault.journalDir) ? unavailable('Journal') :
     journal.stream(cfg.vault.journalDir, {
       limit: Math.min(parseInt(q.get('limit') || '10', 10), 60),
       before: q.get('before'),
     }),
 
   '/api/journal/day': async (q) => {
+    if (!configured(cfg.vault.journalDir)) return unavailable('Journal');
     const date = q.get('date');
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date || '')) throw httpError(400, 'date=YYYY-MM-DD required');
     return journal.readDay(cfg.vault.journalDir, date) || httpThrow(404, 'no journal for that day');
   },
 
-  '/api/notes': async (q) =>
+  '/api/notes': async (q) => !configured(cfg.vault.notesDir) ? unavailable('Notes vault') :
     notes.list(cfg.vault.notesDir, {
       limit: Math.min(parseInt(q.get('limit') || '60', 10), 200),
       q: q.get('q') || '',
     }),
 
   '/api/note': async (q) => {
+    if (!configured(cfg.vault.notesDir)) return unavailable('Notes vault');
     const title = (q.get('title') || '').replace(/[/\\]/g, ''); // vault notes are flat; block traversal
     if (!title) throw httpError(400, 'title required');
     return notes.read(cfg.vault.notesDir, title) || httpThrow(404, `note "${title}" not found`);
   },
 
   '/api/work': async () => {
+    if (!paperclip.configured(cfg.paperclip)) return unavailable('Paperclip');
     const [allIssues, agents, activity, projects] = await Promise.all([
       paperclip.issues(cfg.paperclip),
       paperclip.agents(cfg.paperclip),
@@ -69,11 +80,11 @@ const routes = {
 
   '/api/projects': async () => projectsContext.read(cfg),
 
-  '/api/ontology': async () => ontology.spine(cfg.ontologyDir),
+  '/api/ontology': async () => configured(cfg.ontologyDir) ? ontology.spine(cfg.ontologyDir) : unavailable('Ontology'),
 
-  '/api/memory': async () => memory.index(cfg.memory),
+  '/api/memory': async () => configured(cfg.memory.indexFile) && configured(cfg.memory.dailyDir) ? memory.index(cfg.memory) : unavailable('Memory'),
 
-  '/api/memory/day': async (q) =>
+  '/api/memory/day': async (q) => !configured(cfg.memory.dailyDir) ? unavailable('Memory') :
     memory.readDaily(cfg.memory, q.get('file') || '') || httpThrow(404, 'memory file not found'),
 
   '/api/health': async () => health.services(cfg, today.localDate()),
@@ -161,12 +172,12 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
-const port = process.env.PORT || cfg.port;
+const port = cfg.port;
 server.on('error', (err) => {
   if (err.code === 'EADDRINUSE') {
-    // Another copy (e.g. `npm run serve`) already owns the port; the
-    // desktop window will attach to that instance instead.
-    console.log(`jarvOS Desktop already serving on port ${port} — reusing it.`);
+    // Another listener may belong to a different workspace or application.
+    console.error(`jarvOS Desktop cannot start: port ${port} is already in use. Choose another PORT.`);
+    process.exitCode = 1;
   } else {
     throw err;
   }

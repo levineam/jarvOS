@@ -9,6 +9,7 @@ product_contract_source: ce-brainstorm
 execution: code
 ---
 
+<!-- markdownlint-disable-next-line MD025 -->
 # Chat Agent Page - Plan
 
 ## Goal Capsule

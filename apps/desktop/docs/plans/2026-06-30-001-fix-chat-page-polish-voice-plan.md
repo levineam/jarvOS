@@ -9,6 +9,7 @@ product_contract_source: ce-plan-bootstrap
 execution: code
 ---
 
+<!-- markdownlint-disable-next-line MD025 -->
 # Chat Page Polish + Voice Wiring - Plan
 
 ## Goal Capsule

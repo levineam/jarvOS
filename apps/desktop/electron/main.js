@@ -3,8 +3,16 @@
 // Thin desktop shell: boots the local server in-process, then opens a window on it.
 const { app, BrowserWindow, shell, safeStorage, session } = require('electron');
 const path = require('path');
+const fs = require('fs');
 
-const PORT = process.env.PORT || require('../config.json').port;
+if (process.env.JARVOS_ELECTRON_USER_DATA_DIR) {
+  const userData = path.resolve(process.env.JARVOS_ELECTRON_USER_DATA_DIR);
+  fs.mkdirSync(userData, { recursive: true, mode: 0o700 });
+  app.setPath('userData', userData);
+}
+
+const { loadConfig } = require('../server/config');
+const PORT = loadConfig().port;
 
 function createWindow() {
   const win = new BrowserWindow({
@@ -45,11 +53,11 @@ app.whenReady().then(() => {
     }
     callback(permission === 'media' && local);
   });
-  require(path.join(__dirname, '..', 'server', 'index.js'));
-  // Give the listener a beat before pointing the window at it.
-  setTimeout(createWindow, 300);
+  const { server } = require(path.join(__dirname, '..', 'server', 'index.js'));
+  server.once('error', () => app.exit(1));
+  server.once('listening', createWindow);
   app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow();
+    if (server.listening && BrowserWindow.getAllWindows().length === 0) createWindow();
   });
 });
 

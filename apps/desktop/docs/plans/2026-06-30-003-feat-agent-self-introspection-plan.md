@@ -9,6 +9,7 @@ product_contract_source: ce-plan-bootstrap
 execution: code
 ---
 
+<!-- markdownlint-disable-next-line MD025 -->
 # Agent Self-Introspection (chat agent can read its own app) - Plan
 
 **Target repo:** jarvos-desktop. All paths below are repo-relative.

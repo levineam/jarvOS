@@ -5,6 +5,7 @@ const path = require('path');
 const paperclip = require('./paperclip');
 
 function dirStatus(dir, glob = '.md') {
+  if (!dir) return { ok: false, error: 'not configured' };
   try {
     const count = fs.readdirSync(dir).filter((f) => f.endsWith(glob)).length;
     return { ok: true, count };
@@ -15,12 +16,12 @@ function dirStatus(dir, glob = '.md') {
 
 async function services(cfg, todayDate) {
   const journal = dirStatus(cfg.vault.journalDir);
-  const todayFile = path.join(cfg.vault.journalDir, `${todayDate}.md`);
+  const todayFile = cfg.vault.journalDir ? path.join(cfg.vault.journalDir, `${todayDate}.md`) : null;
   const notes = dirStatus(cfg.vault.notesDir);
   const ontology = dirStatus(cfg.ontologyDir);
-  const memoryIndex = fs.existsSync(cfg.memory.indexFile);
+  const memoryIndex = Boolean(cfg.memory.indexFile && fs.existsSync(cfg.memory.indexFile));
   const memoryDaily = dirStatus(cfg.memory.dailyDir);
-  const mcpScript = path.join(cfg.jarvosRepo, 'modules', 'jarvos-agent-context', 'scripts', 'jarvos-mcp.js');
+  const mcpScript = cfg.jarvosRepo && path.join(cfg.jarvosRepo, 'modules', 'jarvos-agent-context', 'scripts', 'jarvos-mcp.js');
   const pc = await paperclip.ping(cfg.paperclip);
 
   return [
@@ -36,9 +37,9 @@ async function services(cfg, todayDate) {
       key: 'journal',
       name: 'Journal',
       kind: 'Daily control room',
-      ok: journal.ok && fs.existsSync(todayFile),
+      ok: journal.ok && Boolean(todayFile && fs.existsSync(todayFile)),
       detail: journal.ok
-        ? `${journal.count} days · today ${fs.existsSync(todayFile) ? 'present' : 'MISSING'}`
+        ? `${journal.count} days · today ${todayFile && fs.existsSync(todayFile) ? 'present' : 'MISSING'}`
         : journal.error,
       endpoint: cfg.vault.journalDir,
     },
@@ -72,8 +73,8 @@ async function services(cfg, todayDate) {
       key: 'agent-context',
       name: 'Agent Context MCP',
       kind: 'Runtime adapter',
-      ok: fs.existsSync(mcpScript),
-      detail: fs.existsSync(mcpScript) ? 'jarvos-mcp.js installed' : 'adapter script not found',
+      ok: Boolean(mcpScript && fs.existsSync(mcpScript)),
+      detail: mcpScript && fs.existsSync(mcpScript) ? 'jarvos-mcp.js installed' : 'adapter script not configured',
       endpoint: mcpScript,
     },
   ];

@@ -34,6 +34,7 @@ function initEnv(home) {
     ...process.env,
     HOME: home,
     JARVOS_YES: '1',
+    JARVOS_NO_DESKTOP: '1',
     JARVOS_ASSISTANT_NAME: 'SafetyJarvis',
     JARVOS_USER_NAME: 'SafetyUser',
     JARVOS_COACH_NAME: 'SafetyCoach',

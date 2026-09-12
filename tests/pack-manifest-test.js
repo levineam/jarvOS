@@ -116,6 +116,26 @@ test('published tarball includes every advertised runtime and runtime-kit asset'
   assert.deepEqual(missing, [], `published tarball is missing required files: ${missing.join(', ')}`);
 });
 
+test('Desktop package includes locked source and every browser asset but no user state', () => {
+  const files = packedFiles();
+  const base = 'apps/desktop/';
+  for (const file of ['package.json', 'package-lock.json', 'config.default.json', 'electron/main.js', 'server/index.js', 'static/index.html', 'static/app.js', 'static/chat/chat.js', 'static/chat/style.css']) {
+    assert.ok(files.has(base + file), `missing Desktop asset: ${file}`);
+  }
+  assert.ok(!files.has(base + 'config.json'));
+  assert.ok(![...files].some((file) => file.startsWith(base + 'node_modules/') || file.startsWith(base + 'docs/') || file.startsWith(base + 'test/')));
+  for (const file of [...files].filter((name) => name.startsWith(base))) {
+    if (!/\.(?:js|json|html|css|md|tsx?|svg)$/.test(file)) continue;
+    const text = fs.readFileSync(path.join(ROOT, file), 'utf8');
+    assert.ok(!text.includes('/Users/andrew'), `private path in ${file}`);
+    if (!file.endsWith('.js')) continue;
+    for (const match of text.matchAll(/(?:from\s*|import\s*\()\s*["'](\.\.?\/[^"']+)["']/g)) {
+      const target = path.posix.normalize(path.posix.join(path.posix.dirname(file), match[1]));
+      assert.ok(files.has(target), `missing imported asset: ${target}`);
+    }
+  }
+});
+
 test('bootstrap package installs the bundled runtime-kit for shared skill repair', () => {
   const packageJson = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
   assert.equal(packageJson.dependencies?.['@jarvos/runtime-kit'], 'file:modules/jarvos-runtime-kit');

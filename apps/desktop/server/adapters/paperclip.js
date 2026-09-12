@@ -13,6 +13,7 @@ const AGENT_SAFE_FIELDS = [
 
 function readToken(cfg) {
   if (process.env.PAPERCLIP_BOARD_TOKEN) return process.env.PAPERCLIP_BOARD_TOKEN;
+  if (!cfg || !cfg.authFile || !cfg.url) return null;
   try {
     const auth = JSON.parse(fs.readFileSync(cfg.authFile, 'utf8'));
     return auth.credentials?.[cfg.url]?.token || null;
@@ -21,7 +22,12 @@ function readToken(cfg) {
   }
 }
 
+function configured(cfg) {
+  return Boolean(cfg && cfg.url && cfg.companyId);
+}
+
 async function request(cfg, route, { method = 'GET', body, companyScoped = true, cacheable = method === 'GET' } = {}) {
+  if (!configured(cfg)) throw new Error('Paperclip is not configured');
   const key = route;
   const hit = cacheable ? cache.get(key) : null;
   if (hit && Date.now() - hit.at < CACHE_TTL_MS) return hit.value;
@@ -150,4 +156,4 @@ async function updateIssue(cfg, id, payload) {
   return updated.issue || updated.data || updated;
 }
 
-module.exports = { issues, issueDetail, agents, activity, projects, ping, createIssue, updateIssue, readToken };
+module.exports = { issues, issueDetail, agents, activity, projects, ping, createIssue, updateIssue, readToken, configured };
