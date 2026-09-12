@@ -18,6 +18,15 @@
   "main": "bootstrap.js",
   "files": [
     "lib/",
+    "apps/desktop/package.json",
+    "apps/desktop/package-lock.json",
+    "apps/desktop/config.default.json",
+    "apps/desktop/README.md",
+    "apps/desktop/server/",
+    "apps/desktop/electron/",
+    "apps/desktop/static/",
+    "apps/desktop/chat-src/",
+    "apps/desktop/vite.config.js",
     "bootstrap.js",
     "bootstrap.sh",
     "runtime-contract.json",
@@ -109,7 +118,7 @@
     "@jarvos/runtime-kit": "file:modules/jarvos-runtime-kit"
   },
   "scripts": {
-    "pretest": "node --test modules/jarvos-agent-context/test/ripeness-context.test.js modules/jarvos-agent-context/test/source-age.test.js modules/jarvos-agent-context/test/projects-roster-bootstrap.test.js modules/jarvos-secondbrain/packages/jarvos-secondbrain-projects/test/projects-roster.test.js",
+    "pretest": "node --test modules/jarvos-agent-context/test/ripeness-context.test.js modules/jarvos-agent-context/test/source-age.test.js modules/jarvos-agent-context/test/projects-roster-bootstrap.test.js modules/jarvos-secondbrain/packages/jarvos-secondbrain-projects/test/projects-roster.test.js tests/desktop-install-test.js tests/desktop-entrypoints-test.js",
     "bootstrap": "node bootstrap.js",
     "clawpatch": "node scripts/clawpatch-runner.js",
     "clawpatch:doctor": "node scripts/clawpatch-runner.js doctor",
