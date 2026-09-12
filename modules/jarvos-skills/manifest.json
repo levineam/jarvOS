@@ -74,7 +74,7 @@
       "purpose": "Maintain compact, coherent always-loaded context and durable memory routing.",
       "source": {
         "revision": "jarvos-skills-v0.3.0",
-        "digest": "a29f774811f08581069c2fbaab10bc8055183d4b5e609c974b92f0837c51f0f9",
+        "digest": "737f63f7688eb4ea6595b4be7b685b6cb754598ec5484c6fde7e4def37696e8b",
         "license": "MIT",
         "provenance": "jarvOS reviewed source"
       },

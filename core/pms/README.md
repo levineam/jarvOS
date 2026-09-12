@@ -2,6 +2,10 @@
 
 A structured project hierarchy your AI assistant can read, write, and reason about — without you managing it manually.
 
+These Board, Brief, Plan, task-board, and OKR conventions are optional. Work
+placement can use an available Projects packet for Project and Outcome identity
+without creating or requiring any PMS document.
+
 ## The Hierarchy
 
 ```

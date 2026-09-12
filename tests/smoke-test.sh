@@ -68,6 +68,7 @@ check_absent() {
 echo ""
 echo "→ Verifying outputs"
 check_exists "AGENTS.md"      "$WORKSPACE/AGENTS.md"
+check_exists "WORK-CONTEXT.md" "$WORKSPACE/WORK-CONTEXT.md"
 check_exists "BOOTSTRAP.md"   "$WORKSPACE/BOOTSTRAP.md"
 check_exists "HEARTBEAT.md"   "$WORKSPACE/HEARTBEAT.md"
 check_exists "MEMORY.md"      "$WORKSPACE/MEMORY.md"

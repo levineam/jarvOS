@@ -15,6 +15,12 @@ not installation defaults.
 - Preserve existing user-authored workspace files. Do not replace or
   synchronize them merely because a new jarvOS template exists.
 
+## Work context
+
+For new substantive work or materially changed scope, read `WORK-CONTEXT.md`
+when present. It is the portable work-placement and goal-fit contract; absence
+is a visibility limit, not permission to invent project state.
+
 ## Capability and authority boundary
 
 Before an action that can persist, notify, schedule, or use an integration:

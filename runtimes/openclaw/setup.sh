@@ -13,6 +13,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 CORE_DIR="$REPO_ROOT/core"
+WORK_CONTEXT_SOURCE="$REPO_ROOT/modules/jarvos-instruction-projection/content/durable-orientation.md"
 TEMPLATES_DIR="$REPO_ROOT/templates"
 
 WORKSPACE_INPUT="${1:-$(pwd)}"
@@ -317,6 +318,7 @@ echo "→ Installing core behavioral layer..."
 for f in AGENTS.md SOUL.md IDENTITY.md; do
   copy_if_missing "$CORE_DIR/$f" "$WORKSPACE/$f"
 done
+copy_if_missing "$WORK_CONTEXT_SOURCE" "$WORKSPACE/WORK-CONTEXT.md"
 echo ""
 
 # ── Personal overlay templates ────────────────────────────────────────────────
@@ -361,7 +363,7 @@ echo ""
 echo "→ Running smoke test..."
 
 SMOKE_PASS=true
-for f in AGENTS.md SOUL.md IDENTITY.md USER.md MEMORY.md ONTOLOGY.md TOOLS.md BOOTSTRAP.md HEARTBEAT.md; do
+for f in AGENTS.md WORK-CONTEXT.md SOUL.md IDENTITY.md USER.md MEMORY.md ONTOLOGY.md TOOLS.md BOOTSTRAP.md HEARTBEAT.md; do
   if [ -f "$WORKSPACE/$f" ]; then
     echo "  ✓ $f"
   else

@@ -580,6 +580,13 @@ function renderTemplate(src, config) {
 }
 
 const TEMPLATE_DIR = path.join(__dirname, 'templates');
+const DURABLE_ORIENTATION = path.join(
+  __dirname,
+  'modules',
+  'jarvos-instruction-projection',
+  'content',
+  'durable-orientation.md'
+);
 
 function generateOverlays(config) {
   hdr('4/5  Generating starter overlay files');
@@ -595,6 +602,11 @@ function generateOverlays(config) {
   const ws = config.WORKSPACE_PATH;
 
   const overlays = [
+    {
+      template: DURABLE_ORIENTATION,
+      dest: path.join(ws, 'WORK-CONTEXT.md'),
+      label: 'WORK-CONTEXT.md'
+    },
     {
       template: path.join(TEMPLATE_DIR, 'AGENTS-template.md'),
       dest: path.join(ws, 'AGENTS.md'),
@@ -733,7 +745,7 @@ function smokeTest(config) {
   hdr('5/5  Smoke test');
 
   const ws = config.WORKSPACE_PATH;
-  const requiredFiles = ['AGENTS.md', 'BOOTSTRAP.md', 'HEARTBEAT.md', 'MEMORY.md', 'USER.md', 'ONTOLOGY.md', 'SOUL.md', 'TOOLS.md', 'jarvos.config.json'];
+  const requiredFiles = ['AGENTS.md', 'WORK-CONTEXT.md', 'BOOTSTRAP.md', 'HEARTBEAT.md', 'MEMORY.md', 'USER.md', 'ONTOLOGY.md', 'SOUL.md', 'TOOLS.md', 'jarvos.config.json'];
   const requiredDirs  = [path.join(ws, 'memory')];
 
   let passed = 0;
@@ -756,7 +768,7 @@ function smokeTest(config) {
   }
 
   // Template substitution check — no raw {{placeholders}} left
-  const templateFiles = ['AGENTS.md', 'BOOTSTRAP.md', 'HEARTBEAT.md', 'USER.md', 'ONTOLOGY.md', 'SOUL.md', 'TOOLS.md'];
+  const templateFiles = ['AGENTS.md', 'WORK-CONTEXT.md', 'BOOTSTRAP.md', 'HEARTBEAT.md', 'USER.md', 'ONTOLOGY.md', 'SOUL.md', 'TOOLS.md'];
   for (const f of templateFiles) {
     const p = path.join(ws, f);
     if (!fs.lstatSync(p, { throwIfNoEntry: false })?.isFile()) continue;
