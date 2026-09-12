@@ -199,11 +199,19 @@ function createHostProjectsContextProvider(env = process.env) {
   if (!provider || typeof provider.read !== 'function') return null;
 
   const descriptor = Object.freeze({ configPath: trustedConfig, configDigest, providerModule, providerDigest });
+  const trustedRosterQuery = config.query && typeof config.query === 'object' && !Array.isArray(config.query)
+    ? JSON.parse(JSON.stringify(config.query))
+    : null;
+  const validRosterRequest = (request) => request !== undefined && request !== null
+    ? typeof request === 'object' && !Array.isArray(request)
+      && Object.keys(request).every((key) => key === 'expectedGeneration')
+      && (request.expectedGeneration === undefined || (Number.isSafeInteger(request.expectedGeneration) && request.expectedGeneration >= 0))
+    : true;
 
   return {
     descriptor,
-    defaultQuery: config.query && typeof config.query === 'object' && !Array.isArray(config.query)
-      ? JSON.parse(JSON.stringify(config.query))
+    defaultQuery: trustedRosterQuery
+      ? JSON.parse(JSON.stringify(trustedRosterQuery))
       : null,
     async read(request) {
       // Values from the host binding win over all model-visible request keys.
@@ -241,6 +249,44 @@ function createHostProjectsContextProvider(env = process.env) {
           ? config.todoProviderProducerId.trim()
           : undefined,
       });
+    },
+    async readRoster(request = undefined) {
+      if (!validRosterRequest(request) || !trustedRosterQuery || typeof provider.readRoster !== 'function') return { status: 'unavailable', code: 'ROSTER_UNAVAILABLE' };
+      const capabilityReceipt = capabilityReceiptPath ? readPrivateJson(capabilityReceiptPath) : null;
+      const capabilitySecret = capabilitySecretPath ? readPrivate(capabilitySecretPath) : null;
+      const hostSecret = hostSecretPath ? readPrivate(hostSecretPath) : null;
+      try {
+        return await provider.readRoster({
+          workspaceRoot,
+          repositoryRoot,
+          stateRoot,
+          registryStateDir,
+          projectionStateDir,
+          releaseProviderStateDir,
+          registry,
+          projection,
+          capability: capabilityReceipt,
+          capabilitySecret,
+          hostSecret,
+          releaseProviderSecret: hostSecret,
+          hostId: typeof config.hostId === 'string' && config.hostId.trim() ? config.hostId.trim() : undefined,
+          subject: typeof config.subject === 'string' && config.subject.trim() ? config.subject.trim() : undefined,
+          query: JSON.parse(JSON.stringify(trustedRosterQuery)),
+          expectedGeneration: request && request.expectedGeneration,
+          releaseRefreshPolicy: { enabled: false },
+          releaseProducerId: typeof config.releaseProducerId === 'string' && config.releaseProducerId.trim()
+            ? config.releaseProducerId.trim()
+            : undefined,
+          beadsProviderProducerId: typeof config.beadsProviderProducerId === 'string' && config.beadsProviderProducerId.trim()
+            ? config.beadsProviderProducerId.trim()
+            : undefined,
+          todoProviderProducerId: typeof config.todoProviderProducerId === 'string' && config.todoProviderProducerId.trim()
+            ? config.todoProviderProducerId.trim()
+            : undefined,
+        });
+      } catch (_) {
+        return { status: 'unavailable', code: 'ROSTER_UNAVAILABLE' };
+      }
     },
   };
 }
