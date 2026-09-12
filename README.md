@@ -126,14 +126,15 @@ That is the cross-AI digital twin: a shared second brain that many AI agents can
 
 ## Install
 
-Run `npx jarvos-bootstrap init --yes` for a portable workspace and its Desktop
-companion. Desktop requires Node 22.12+, npm and network access; use
+From this checkout, run `node scripts/jarvos.js init --yes` for a portable
+workspace and its Desktop companion. Desktop requires Node 22.12+, npm and network access; use
 `--no-desktop` or `JARVOS_NO_DESKTOP=1` for headless core on Node 18.
 
 Harnesses remain the primary interfaces. Launch the companion explicitly with
-`npx jarvos-bootstrap desktop --workspace /path/to/workspace`, or use
-`npx jarvos-bootstrap desktop install` with the same workspace to retry or update.
-A global installation also provides the `jarvos` command. See [Desktop installation](apps/desktop/README.md)
+`node scripts/jarvos.js desktop --workspace /path/to/workspace`, or add `install`
+after `desktop` with the same workspace to retry or update. Installed packages
+provide the equivalent `jarvos` and `npx jarvos-bootstrap` commands; Desktop is
+available there only in a package release containing this change. See [Desktop installation](apps/desktop/README.md)
 for configuration, update preservation and development instructions.
 
 ## Supported AI Agents
