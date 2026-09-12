@@ -55,8 +55,74 @@ test('grok-bot docs refuse stdio-on-the-box and require remote HTTP', () => {
   assert.match(readme, /fail open|unreachable/i);
   assert.match(readme, /JARVOS_MCP_HTTP_ALLOW_NON_LOOPBACK/);
   assert.match(readme, /ssh -L|tunnel/i);
+  assert.match(readme, /Tailscale Funnel|funnel/i);
+  assert.match(readme, /LaunchAgent|KeepAlive|supervised/i);
+  assert.match(readme, /2025-11-25/);
+  assert.match(readme, /Obsidian|acknowledg/i);
   assert.match(readme, /full MCP surface|all registered tools/i);
   assert.doesNotMatch(setup, /Bearer \$\{|Bearer \$\(cat/);
+});
+
+test('HTTP gateway accepts Cursor/Grok Bot MCP protocol versions and rejects unknown', async () => {
+  const gateway = require(GATEWAY);
+  assert.equal(gateway.DEFAULT_PROTOCOL_VERSION, '2025-06-18');
+  for (const version of ['2025-11-25', '2025-06-18', '2025-03-26', '2024-11-05']) {
+    assert.ok(gateway.SUPPORTED_PROTOCOL_VERSIONS.has(version), version);
+  }
+
+  const token = 'grok-bot-test-token-32chars-min';
+  const bridge = {
+    sseClients: new Set(),
+    send: async (message) => ({
+      jsonrpc: '2.0',
+      id: message.id,
+      result: {
+        protocolVersion: message.params?.protocolVersion || gateway.DEFAULT_PROTOCOL_VERSION,
+        capabilities: { tools: {} },
+        serverInfo: { name: 'jarvos', version: '0.1.0' },
+      },
+    }),
+    health: () => ({ alive: true, restarts: 0 }),
+  };
+  const server = gateway.createServer({ token, host: '127.0.0.1', port: 0, bridge });
+  await new Promise((resolve, reject) => server.listen(0, '127.0.0.1', (error) => error ? reject(error) : resolve()));
+  const { port } = server.address();
+  try {
+    for (const version of ['2025-11-25', '2025-06-18', '2025-03-26', '2024-11-05']) {
+      const ok = await httpRequest({
+        port,
+        path: '/mcp',
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          id: 1,
+          method: 'initialize',
+          params: { protocolVersion: version, capabilities: {}, clientInfo: { name: 'test', version: '0.1' } },
+        }),
+      });
+      assert.equal(ok.status, 200, version);
+      assert.equal(JSON.parse(ok.body).result.protocolVersion, version);
+      assert.ok(ok.headers['mcp-session-id']);
+    }
+
+    const rejected = await httpRequest({
+      port,
+      path: '/mcp',
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'initialize',
+        params: { protocolVersion: '1999-01-01', capabilities: {}, clientInfo: { name: 'test', version: '0.1' } },
+      }),
+    });
+    assert.equal(rejected.status, 400);
+    assert.match(rejected.body, /unsupported initialize protocol version/);
+  } finally {
+    await disposeServer(server);
+  }
 });
 
 test('HTTP gateway fails closed without a token and rejects bad auth', async () => {

@@ -31,7 +31,13 @@ const DEFAULT_REQUEST_TIMEOUT_MS = 15_000;
 const DEFAULT_MAX_SESSIONS = 32;
 const DEFAULT_SESSION_IDLE_MS = 15 * 60_000;
 const DEFAULT_PROTOCOL_VERSION = '2025-06-18';
-const SUPPORTED_PROTOCOL_VERSIONS = new Set([DEFAULT_PROTOCOL_VERSION]);
+const SUPPORTED_PROTOCOL_VERSIONS = new Set([
+  DEFAULT_PROTOCOL_VERSION,
+  // Grok Bot / Cursor Streamable HTTP clients commonly negotiate these.
+  '2025-11-25',
+  '2025-03-26',
+  '2024-11-05',
+]);
 
 function failClosed(message) {
   process.stderr.write(`${message}\n`);
@@ -763,6 +769,8 @@ module.exports = {
   TOKEN_ENV,
   TOKEN_FILE_ENV,
   ALLOW_NON_LOOPBACK_ENV,
+  DEFAULT_PROTOCOL_VERSION,
+  SUPPORTED_PROTOCOL_VERSIONS,
   resolveToken,
   safeEqual,
   extractBearer,
