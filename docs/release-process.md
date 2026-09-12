@@ -13,17 +13,15 @@ release-level decision.
 - `v0.6.x` was the secondbrain hardening lane: the v0.6.0 focused release,
   v0.6.1 capitalization patch, v0.6.2 AI coding-tool capture determinism
   patch, and v0.6.3 GBrain-first provider/reconciled-public-surface patch.
-- `v0.7.0` is the latest shipped public release (SUP-3497): an authenticated
-  control-plane application service, a protected-resource mutation policy
-  layer, public human/agent parity for that service, and a portable
-  `@jarvos/coding` control-plane compatibility layer for supported agent
-  hosts.
-- Post-v0.7.0 work belongs to one versionless forming batch. The batch has no
+- `v0.10.0` is the current public preview release for `jarvos-bootstrap`.
+  It packages the accumulated portable runtime, Projects-context, GBrain-first,
+  storage, and safe-installation work recorded in its release notes and
+  changelog.
+- Post-v0.10.0 work belongs to one versionless forming batch. The batch has no
   target version or Paperclip parent; Beads carries the durable membership and
   Paperclip, when enabled, is only a one-way projection.
 - Release Please is the sole version authority. It derives the next SemVer
-  from the immutable last release and conventional commits on `main` (the
-  current unreleased range is expected to produce `v0.8.0`). No routine
+  from the immutable last release and conventional commits on `main`. No routine
   `Release-As` footer or manually selected target is valid.
 
 ## Unreleased Work and Drift

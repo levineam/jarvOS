@@ -2,6 +2,8 @@
 
 jarvOS — your own personal superintelligence, accessible to all.
 
+> **Release status:** `v0.10.0` is the current public preview release.
+
 jarvOS builds on Markdown files you own to create a cross-AI digital twin: a shared second brain that OpenClaw, Codex, Claude Code, Hermes, and future agents can all use.
 
 The goal is simple:
