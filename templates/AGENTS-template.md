@@ -17,9 +17,13 @@ not installation defaults.
 
 ## Work context
 
-For new substantive work or materially changed scope, read `WORK-CONTEXT.md`
-when present. It is the portable work-placement and goal-fit contract; absence
-is a visibility limit, not permission to invent project state.
+The canonical portable work-placement contract is rendered below so native
+static instruction loaders receive it without a separate file read.
+`WORK-CONTEXT.md` contains the same contract for other supported surfaces.
+
+<!-- BEGIN jarvOS durable orientation -->
+{{DURABLE_ORIENTATION}}
+<!-- END jarvOS durable orientation -->
 
 ## Capability and authority boundary
 

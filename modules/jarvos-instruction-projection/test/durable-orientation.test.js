@@ -94,7 +94,12 @@ test('fresh core bootstrap installs the canonical contract and preserves customi
       encoding: 'utf8',
     });
     assert.equal(first.status, 0, first.stderr || first.stdout);
-    assert.equal(fs.readFileSync(path.join(workspace, 'WORK-CONTEXT.md'), 'utf8'), fs.readFileSync(CONTRACT_PATH, 'utf8'));
+    const contract = fs.readFileSync(CONTRACT_PATH, 'utf8');
+    const agents = fs.readFileSync(path.join(workspace, 'AGENTS.md'), 'utf8');
+    const begin = '<!-- BEGIN jarvOS durable orientation -->';
+    const end = '<!-- END jarvOS durable orientation -->';
+    assert.equal(fs.readFileSync(path.join(workspace, 'WORK-CONTEXT.md'), 'utf8'), contract);
+    assert.equal(agents.slice(agents.indexOf(begin) + begin.length, agents.indexOf(end)).trim(), contract.trim());
     assert.equal(fs.readFileSync(claudeMd, 'utf8'), '# Customized CLAUDE\n');
 
     const customAgents = '# Customized AGENTS\n';
