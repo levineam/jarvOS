@@ -574,12 +574,13 @@ function renderTemplate(src, config) {
   content = content.replace(/^<!--.*?-->\n/s, '');
   for (const [key, val] of Object.entries(config)) {
     const re = new RegExp(`\\{\\{${key}\\}\\}`, 'g');
-    content = content.replace(re, val);
+    content = content.replace(re, () => String(val));
   }
   return content;
 }
 
 const TEMPLATE_DIR = path.join(__dirname, 'templates');
+const AGENTS_TEMPLATE = path.join(TEMPLATE_DIR, 'AGENTS-template.md');
 const DURABLE_ORIENTATION = path.join(
   __dirname,
   'modules',
@@ -608,7 +609,7 @@ function generateOverlays(config) {
       label: 'WORK-CONTEXT.md'
     },
     {
-      template: path.join(TEMPLATE_DIR, 'AGENTS-template.md'),
+      template: AGENTS_TEMPLATE,
       dest: path.join(ws, 'AGENTS.md'),
       label: 'AGENTS.md'
     },
@@ -655,7 +656,10 @@ function generateOverlays(config) {
       continue;
     }
     try {
-      const rendered = renderTemplate(o.template, config);
+      const values = o.template === AGENTS_TEMPLATE
+        ? { ...config, DURABLE_ORIENTATION: fs.readFileSync(DURABLE_ORIENTATION, 'utf8') }
+        : config;
+      const rendered = renderTemplate(o.template, values);
       writeFileExclusiveSafe(dest, rendered);
       ok(`${o.label} → ${dest}`);
     } catch (e) {
