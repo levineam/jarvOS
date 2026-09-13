@@ -2,6 +2,22 @@
 
 Release sections describe user-facing jarvOS changes. Historical public-doc sync entries are preserved below for traceability.
 
+## [0.11.0](https://github.com/levineam/jarvOS/compare/jarvos-bootstrap-v0.10.0...jarvos-bootstrap-v0.11.0) (2026-09-13)
+
+
+### Features
+
+* **context:** add portable work orientation ([26a7db6](https://github.com/levineam/jarvOS/commit/26a7db612c02d3d875bddb2b26bb4fc693d99c2b))
+* **context:** package portable work orientation ([7822691](https://github.com/levineam/jarvOS/commit/7822691d0001baf6b51bb1007ac66ef46f2fb2d6))
+* **desktop:** bundle companion in standard installation ([aadcaa4](https://github.com/levineam/jarvOS/commit/aadcaa4e10a130111aed03dae3c9010673d19e87))
+* **desktop:** bundle the companion in standard installation ([78d2414](https://github.com/levineam/jarvOS/commit/78d2414412ea7dbd3246e995200e2e015249f45c))
+
+
+### Bug Fixes
+
+* **context:** load work orientation through Codex static instructions ([c1dce45](https://github.com/levineam/jarvOS/commit/c1dce45c1a02f9f6890abda8a2033496bebeea48))
+* **context:** load work orientation through Codex static instructions ([9ae8ff7](https://github.com/levineam/jarvOS/commit/9ae8ff76bd673e03ac5f411aa5b56f338e960e89))
+
 ## [0.10.0](https://github.com/levineam/jarvOS/compare/jarvos-bootstrap-v0.9.0...jarvos-bootstrap-v0.10.0) (2026-09-11)
 
 
