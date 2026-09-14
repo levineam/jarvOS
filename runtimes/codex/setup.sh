@@ -626,7 +626,6 @@ function stewardshipBridgeEnvironment(command, codexMapRoot) {
   if (!path.isAbsolute(codexMapRoot || '')) fail('JARVOS_STEWARDSHIP_CODEX_SESSION_MAP_ROOT must be an absolute path');
   return {
     JARVOS_STEWARDSHIP_BRIDGE_COMMAND: command,
-    JARVOS_STEWARDSHIP_CODEX_SESSION_MAP_ROOT: codexMapRoot,
   };
 }
 
