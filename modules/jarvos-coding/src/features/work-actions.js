@@ -238,8 +238,7 @@ function createBeadsWorkActionService(options = {}) {
     references.set(item.itemId, result);
     return result;
   };
-  const durableBacklog = async (itemId, current, force = false) => {
-    if (!force && !backlogEnabled && String(current.status).toLowerCase() !== 'deferred') return null;
+  const durableBacklog = async (itemId, current) => {
     if (typeof tracker.showWorkItem !== 'function') {
       if (String(current.status).toLowerCase() === 'deferred') throw new Error('held work item cannot be verified');
       return null;
@@ -393,7 +392,7 @@ function createBeadsWorkActionService(options = {}) {
       if (observed.state !== 'committed') return { contract: WORK_ACTION_CONTRACT, ok: false, status: 'unavailable', workReference: { authority: 'beads', itemId, revision: linkRecord.itemRevision }, executionLink: linkRecord };
       const item = itemFrom(observed, itemId);
       const raw = observed.result?.item || observed.result || observed.item || observed;
-      const enrolled = backlogFromItem(raw) ? await durableBacklog(itemId, linkRecord, true) : null;
+      const enrolled = backlogFromItem(raw) ? await durableBacklog(itemId, linkRecord) : null;
       return { contract: WORK_ACTION_CONTRACT, ok: true, status: item.status, workReference: { authority: 'beads', itemId, revision: item.revision }, executionLink: linkRecord, ...(enrolled ? { backlog: { notBefore: enrolled.backlog.notBefore, sourceIntent: enrolled.backlog.sourceIntent, sourceRef: enrolled.backlog.sourceRef } } : {}) };
     },
     async list() { const values = links.list ? await links.list() : []; return { contract: WORK_ACTION_CONTRACT, ok: true, items: values.filter((entry) => entry.workspaceId === workspaceId) }; },

@@ -128,6 +128,11 @@ test('host-enabled backlog holds, admits, and completes one fixture without a se
   assert.deepEqual(readback.backlog, {
     notBefore: '2030-01-02T00:00:00.000Z', sourceIntent: 'Research the existing fixture only.', sourceRef: 'message-1',
   });
+  const afterRollback = createBeadsWorkActionService({ ...options, backlogEnabled: false });
+  await assert.rejects(() => afterRollback.reopen({ itemId: 'bd-held', operationId: 'rollback-reopen', expectedRevision: '4' }), /cannot be reopened/);
+  await assert.rejects(() => afterRollback.claim({ itemId: 'bd-held', operationId: 'rollback-claim', expectedRevision: '4' }), /not claimable/);
+  assert.equal(item.status, 'done');
+  assert.equal(claims, 1);
 });
 
 test('Beads accepts only deferred or open create status', async (t) => {
