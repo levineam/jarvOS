@@ -109,6 +109,7 @@ test('host-enabled backlog holds, admits, and completes one fixture without a se
   item.description = originalDescription;
   const admitted = await dueService.admitBacklog({ itemId: 'bd-held', operationId: 'held-admit-due', expectedRevision: '1' });
   assert.equal(admitted.status, 'open');
+  await assert.rejects(() => dueService.transition({ itemId: 'bd-held', operationId: 'claim-via-transition', expectedRevision: '2', status: 'in_progress' }), /backlog transition/);
   await assert.rejects(() => dueService.admitBacklog({ itemId: 'bd-held', operationId: 'held-admit-again', expectedRevision: '1' }), /stale expected/);
   await assert.rejects(() => dueService.reopen({ itemId: 'bd-held', operationId: 'held-reopen-admitted', expectedRevision: '2' }), /cannot be reopened/);
 
@@ -131,6 +132,9 @@ test('host-enabled backlog holds, admits, and completes one fixture without a se
   const afterRollback = createBeadsWorkActionService({ ...options, backlogEnabled: false });
   await assert.rejects(() => afterRollback.reopen({ itemId: 'bd-held', operationId: 'rollback-reopen', expectedRevision: '4' }), /cannot be reopened/);
   await assert.rejects(() => afterRollback.claim({ itemId: 'bd-held', operationId: 'rollback-claim', expectedRevision: '4' }), /not claimable/);
+  for (const status of ['open', 'in_progress', 'blocked', 'review']) {
+    await assert.rejects(() => afterRollback.transition({ itemId: 'bd-held', operationId: `rollback-transition-${status}`, expectedRevision: '4', status }), /backlog transition/);
+  }
   assert.equal(item.status, 'done');
   assert.equal(claims, 1);
 });

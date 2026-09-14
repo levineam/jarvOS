@@ -292,6 +292,7 @@ function createBeadsWorkActionService(options = {}) {
     const enrolled = await durableBacklog(itemId, current);
     if (enrolled?.item.status.toLowerCase() === 'deferred') throw new Error('held backlog work requires explicit admission');
     if (action === 'reopen' && enrolled) throw new Error('enrolled backlog work cannot be reopened');
+    if (action === 'transition' && enrolled && (['open', 'in_progress'].includes(status.toLowerCase()) || ['done', 'closed'].includes(enrolled.item.status.toLowerCase()))) throw new Error('backlog transition cannot bypass admission, claim, or terminal evidence');
     if (method === 'claim' && enrolled && enrolled.item.status.toLowerCase() !== 'open') throw new Error('backlog work is not claimable');
     const completionEvidence = preflight ? (prior?.result?.completionEvidence || await preflight(current)) : null;
     const result = method === 'claim'
