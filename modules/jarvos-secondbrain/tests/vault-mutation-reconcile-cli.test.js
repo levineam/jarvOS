@@ -19,6 +19,7 @@ test('operator command composes registered transforms and derives the vault iden
     let capabilityState = 'app_stopped';
     const file = { path: 'Notes/Pending.md', content: 'mobile edit\n' };
     const vault = {
+      adapter: { getBasePath: () => root },
       getFileByPath: (target) => target === file.path ? file : null,
       process(target, transform) { target.content = transform(target.content); return settled(target); },
       read: (target) => settled(target.content),

@@ -318,3 +318,37 @@ test('adapter exposes only a read-only ledger view', () => {
     assert.equal(adapter.ledger[mutator], undefined, mutator);
   }
 });
+
+test('capability rejects a same-named vault at a different absolute root', () => {
+  const adapter = createVaultMutationAdapter({
+    vaultRoot: '/private/DuplicateVault',
+    vaultId: 'private-vault',
+    vaultName: 'DuplicateVault',
+    ledgerPath: ledgerPath(),
+    evaluate: () => ({ vaultName: 'DuplicateVault', vaultRoot: '/shared/DuplicateVault', hasVault: true }),
+  });
+  assert.deepEqual(adapter.capability(), { state: 'wrong_vault' });
+});
+
+test('mutation program rechecks the absolute vault root before exposing content', () => {
+  const mutation = operation();
+  let created = false;
+  const context = {
+    app: { vault: {
+      adapter: { getBasePath: () => '/shared/DuplicateVault' },
+      getFileByPath: () => null,
+      create: () => { created = true; },
+      process: () => {},
+      read: () => settled('hello'),
+    } },
+    TextDecoder,
+    Uint8Array,
+    atob: (value) => Buffer.from(value, 'base64').toString('binary'),
+    JSON,
+  };
+  context.globalThis = context;
+  vm.runInNewContext(buildObsidianMutationProgram(mutation, '/private/DuplicateVault'), context);
+  assert.equal(created, false);
+  assert.equal(context.__jarvosVaultMutationResults[mutation.operationId].status, 'error');
+  assert.equal(context.__jarvosVaultMutationResults[mutation.operationId].errorClass, 'wrong_vault');
+});
