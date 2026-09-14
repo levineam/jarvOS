@@ -245,6 +245,47 @@ test('Todo transition schema tells agents exactly when status is required', () =
   assert.deepEqual(tool.inputSchema.oneOf[1].not.required, ['status']);
 });
 
+test('backlog capture routes only intent fields and never falls back to immediate creation', async () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-backlog-mcp-'));
+  fs.chmodSync(workspace, 0o700);
+  const configPath = path.join(workspace, 'projects.json');
+  const servicePath = path.join(workspace, 'todo-service.js');
+  writeOwnerFile(configPath, JSON.stringify({ workspaceRoot: workspace }));
+  writeOwnerFile(servicePath, `module.exports = {
+    create: async () => { throw new Error('must not create immediate work'); },
+    captureBacklog: async (request) => ({ status: 'deferred', request })
+  };`);
+  try {
+    await withWorkActionEnv({ JARVOS_PROJECTS_CONTEXT_CONFIG: configPath, JARVOS_WORK_ACTION_SERVICE_MODULE: servicePath }, async () => {
+      const request = {
+        title: 'Investigate later', operationId: 'capture-1', canonical: { kind: 'project', id: 'prj_000001', revision: 1, breadcrumb: 'Example' },
+        backlog: { sourceIntent: 'Save this for later', sourceRef: 'message:1', notBefore: '2030-01-01T00:00:00Z', backlogEnabled: true, authority: 'forged' },
+        actor: { kind: 'human', id: 'forged' },
+      };
+      const result = JSON.parse((await callTool('jarvos_todo_create', request)).content[0].text);
+      assert.equal(result.status, 'deferred');
+      assert.deepEqual(result.request, {
+        title: request.title, operationId: request.operationId, canonical: request.canonical,
+        actor: { kind: 'agent', id: 'mcp' }, sourceIntent: 'Save this for later', sourceRef: 'message:1', notBefore: '2030-01-01T00:00:00Z',
+      });
+      delete loadHostWorkActionService().service.captureBacklog;
+      const unavailable = await callTool('jarvos_todo_create', request);
+      assert.equal(unavailable.isError, true);
+      assert.match(unavailable.content[0].text, /backlog host binding is unavailable/);
+      const malformed = await callTool('jarvos_todo_create', { ...request, backlog: null });
+      assert.equal(malformed.isError, true);
+      assert.match(malformed.content[0].text, /must be an object/);
+    });
+  } finally {
+    delete require.cache[servicePath];
+    fs.rmSync(workspace, { recursive: true, force: true });
+  }
+  const schema = TOOLS.find((tool) => tool.name === 'jarvos_todo_create').inputSchema.properties.backlog;
+  assert.deepEqual(schema.required, ['sourceIntent', 'sourceRef', 'notBefore']);
+  assert.equal(schema.additionalProperties, false);
+  assert.ok(!TOOLS.some((tool) => /backlog.*admit/.test(tool.name)));
+});
+
 test('Todo transition rejects a missing status before calling the host service', async () => {
   const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-todo-transition-status-'));
   fs.chmodSync(workspace, 0o700);

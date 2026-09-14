@@ -53,8 +53,18 @@ function operationFingerprint(method, input) {
   return JSON.stringify({ method, input: operationInputOf(input) });
 }
 
+function createStatus(input = {}) {
+  if (input.status === undefined) return null;
+  const status = requiredString(input.status, 'create status').toLowerCase();
+  if (!['open', 'deferred'].includes(status)) throw new Error('Beads create status is unsupported');
+  return status;
+}
+
 function operationExpectation(method, input = {}) {
-  if (method === 'create') return { externalReference: String(input.externalReference || operationIdOf(input, method)) };
+  if (method === 'create') return {
+    externalReference: String(input.externalReference || operationIdOf(input, method)),
+    ...(createStatus(input) ? { status: createStatus(input) } : {}),
+  };
   const itemId = workIdOf(input, method);
   if (method === 'claim') return { itemId, status: 'in_progress' };
   if (method === 'transition') {
@@ -124,6 +134,8 @@ function commandArgs(method, input, operationId) {
     const args = ['create', '--title', requiredString(input.title, 'create title')];
     if (input.description) args.push('--description', String(input.description));
     if (input.priority !== undefined) args.push('--priority', String(input.priority));
+    const status = createStatus(input);
+    if (status) args.push('--status', status);
     args.push('--external-ref', String(input.externalReference || operationId), '--json');
     return args;
   }
@@ -286,7 +298,8 @@ function createLiveBeadsTracker(options = {}) {
       const found = normalizedItem(value);
       if (!plain(found)) return false;
       const externalReference = found.external_ref || found.externalRef || found.externalReference || found.external_reference;
-      return typeof externalReference === 'string' && externalReference === expectation.externalReference;
+      return typeof externalReference === 'string' && externalReference === expectation.externalReference
+        && (!expectation.status || String(found.status || found.state || '').toLowerCase() === expectation.status);
     }
     const found = normalizedItem(value);
     if (!plain(found)) return false;
