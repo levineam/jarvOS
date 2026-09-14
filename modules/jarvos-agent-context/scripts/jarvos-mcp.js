@@ -149,8 +149,21 @@ const TOOLS = [
   },
   {
     name: 'jarvos_todo_create',
-    description: 'Create one canonically linked Beads-backed Todo through the host-authorized work-action service. Agent-discovered work must be submitted as a proposal by the host.',
-    inputSchema: { type: 'object', additionalProperties: false, required: ['title', 'operationId', 'canonical'], properties: { title: { type: 'string' }, description: { type: 'string' }, operationId: { type: 'string' }, canonical: { type: 'object' } } },
+    description: 'Create one canonically linked Beads-backed Todo through the host-authorized work-action service. Supply backlog to preserve intent and hold work until explicit host admission; unavailable backlog support never falls back to immediate work. Agent-discovered work must be submitted as a proposal by the host.',
+    inputSchema: {
+      type: 'object', additionalProperties: false, required: ['title', 'operationId', 'canonical'],
+      properties: {
+        title: { type: 'string' }, description: { type: 'string' }, operationId: { type: 'string' }, canonical: { type: 'object' },
+        backlog: {
+          type: 'object', additionalProperties: false, required: ['sourceIntent', 'sourceRef', 'notBefore'],
+          properties: {
+            sourceIntent: { type: 'string', minLength: 1 },
+            sourceRef: { type: 'string', minLength: 1 },
+            notBefore: { type: 'string', format: 'date-time' },
+          },
+        },
+      },
+    },
   },
   {
     name: 'jarvos_todo_list',
@@ -423,7 +436,16 @@ async function todoAction(name, args) {
   // identity, and verification receipts are host-bound service state, never
   // caller-controlled MCP arguments.
   const actor = { kind: 'agent', id: 'mcp' };
-  if (name === 'jarvos_todo_create') return textResult(JSON.stringify(await service.create({ title: args.title, description: args.description, operationId: args.operationId, canonical: args.canonical, actor }), null, 2));
+  if (name === 'jarvos_todo_create') {
+    const request = { title: args.title, description: args.description, operationId: args.operationId, canonical: args.canonical, actor };
+    if (Object.hasOwn(args, 'backlog')) {
+      if (!args.backlog || typeof args.backlog !== 'object' || Array.isArray(args.backlog)) return textResult('Todo backlog input must be an object', true);
+      if (typeof service.captureBacklog !== 'function') return textResult('Todo backlog host binding is unavailable; no work was created', true);
+      const { sourceIntent, sourceRef, notBefore } = args.backlog;
+      return textResult(JSON.stringify(await service.captureBacklog({ ...request, sourceIntent, sourceRef, notBefore }), null, 2));
+    }
+    return textResult(JSON.stringify(await service.create(request), null, 2));
+  }
   if (name === 'jarvos_todo_list') return textResult(JSON.stringify(await service.list(), null, 2));
   if (name === 'jarvos_todo_show') return textResult(JSON.stringify(await service.show(args), null, 2));
   const request = { itemId: args.itemId, operationId: args.operationId, expectedRevision: args.expectedRevision, actor };

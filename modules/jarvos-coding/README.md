@@ -56,6 +56,30 @@ const triage = triageCodingWork({
 Adapters should persist this object as evidence, then translate the portable
 decision into their own labels, documents, comments, or workflow state.
 
+### Held backlog source slice
+
+`createBeadsWorkActionService` supports Project/Outcome-linked held capture
+only when the composing host sets `backlogEnabled: true`. It is disabled by
+default. `captureBacklog({ title, description, operationId, canonical,
+sourceIntent, sourceRef, notBefore })` preserves intent and source in the
+Beads description and atomically creates native `deferred` work. No executor
+or schedule is registered. Reuse the same operation ID for a retried capture;
+changing its payload is an identity conflict.
+
+The host calls `admitBacklog({ itemId, operationId, expectedRevision })`
+explicitly. It reads durable work, validates the due time, canonical binding
+and current revision, and requires a separate host mutation authorization.
+The ordinary claim and completion path then applies, including host-resolved
+completion evidence. Neither MCP arguments nor a due timestamp grant execution
+authority. The source slice supplies no fairness policy, automatic dispatch,
+one-off placement or production rollout; hosts must qualify those separately.
+
+Keep backlog disabled to roll back an unactivated installation. Preserve any
+held items and operation/evidence stores; do not release or delete them as a
+rollback action. A deployed host must reconcile already-admitted work with its
+executor before reverting source. No private database, host path, provider or
+Paperclip service is required by the fixture tests.
+
 ### Beads execution transport
 
 Local execution can use the pinned Beads Rust CLI without Paperclip:

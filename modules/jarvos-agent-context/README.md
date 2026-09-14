@@ -71,6 +71,15 @@ Completion requires a registered host receipt; an
 `andrew-owner-attestation` records Andrew's attestation, not technical or
 external verification.
 
+For “backlog this”, `jarvos_todo_create` accepts an optional `backlog` object
+with `sourceIntent`, `sourceRef`, and an ISO timestamp `notBefore`. The host
+must explicitly enable the coding service's backlog support. Capture preserves
+the original intent in Beads and creates a deferred item; it never starts work.
+An unavailable backlog method never falls back to ordinary immediate creation.
+Admission is an explicit host operation, not an MCP transition or a timer.
+See [held backlog](../jarvos-coding/README.md#held-backlog-source-slice) for the
+disabled source/fixture contract and its limits.
+
 `jarvos_control_plane` is available only after the host has configured
 `JARVOS_CONTROL_PLANE_SERVICE_MODULE`. `@jarvos/agent-context` declares
 `@jarvos/control-plane` as a runtime dependency so this boundary resolves from
