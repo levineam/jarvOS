@@ -60,6 +60,7 @@ try {
   const env = {
     ...process.env,
     JARVOS_YES: '1',
+    JARVOS_NO_DESKTOP: '1',
     JARVOS_ASSISTANT_NAME: 'TestJarvis',
     JARVOS_USER_NAME: 'TestUser',
     JARVOS_COACH_NAME: 'TestCoach',

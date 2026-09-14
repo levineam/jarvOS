@@ -3,6 +3,9 @@
 # and verify it exits 0 and produces the expected structure.
 set -euo pipefail
 
+# This suite verifies the Node 18-compatible headless core without downloads.
+export JARVOS_NO_DESKTOP=1
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BOOTSTRAP="$SCRIPT_DIR/bootstrap.js"
 TMPDIR_BASE="$(mktemp -d)"
@@ -65,6 +68,7 @@ check_absent() {
 echo ""
 echo "→ Verifying outputs"
 check_exists "AGENTS.md"      "$WORKSPACE/AGENTS.md"
+check_exists "WORK-CONTEXT.md" "$WORKSPACE/WORK-CONTEXT.md"
 check_exists "BOOTSTRAP.md"   "$WORKSPACE/BOOTSTRAP.md"
 check_exists "HEARTBEAT.md"   "$WORKSPACE/HEARTBEAT.md"
 check_exists "MEMORY.md"      "$WORKSPACE/MEMORY.md"

@@ -1,5 +1,9 @@
 # CLAUDE.md
 
+For new substantive work or materially changed scope, read `WORK-CONTEXT.md`
+beside this file when present. It owns portable work placement and goal-fit
+behavior; missing context is not authority to invent project state.
+
 This is the jarvOS Claude Code baseline. It is materialized into
 `~/.claude/CLAUDE.md` by the jarvOS runtime adapter and therefore loads at the
 start of **every** Claude Code session on this user account, not just sessions

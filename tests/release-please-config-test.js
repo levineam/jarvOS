@@ -100,11 +100,11 @@ test('runs only from trusted main pushes with immutable action and App-token rel
 test('pins CI checkout and Node setup actions to Node 24 releases', () => {
   const workflow = readFileSync(join(ROOT, '.github/workflows/ci.yml'), 'utf8');
   const checkoutUses = [...workflow.matchAll(/^\s+- uses: actions\/checkout@([^ ]+) # v7\.0\.1$/gm)];
-  const setupNodeUses = [...workflow.matchAll(/^\s+uses: actions\/setup-node@([^ ]+) # v7\.0\.0$/gm)];
+  const setupNodeUses = [...workflow.matchAll(/^\s+(?:- )?uses: actions\/setup-node@([^ ]+) # v7\.0\.0$/gm)];
 
-  assert.equal(checkoutUses.length, 6);
+  assert.equal(checkoutUses.length, 7);
   assert.ok(checkoutUses.every((match) => match[1] === CHECKOUT_ACTION_SHA));
-  assert.equal(setupNodeUses.length, 2);
+  assert.equal(setupNodeUses.length, 3);
   assert.ok(setupNodeUses.every((match) => match[1] === SETUP_NODE_ACTION_SHA));
   assert.doesNotMatch(workflow, /uses: actions\/(?:checkout|setup-node)@v\d/);
 });
@@ -122,6 +122,32 @@ test('secret scan ignores exact GitHub secret references but retains literal can
 
   assert.equal(result.status, 0);
   assert.equal(result.stdout, `+  ${key}: literal-value\n`);
+});
+
+test('secret scan strips non-literal Desktop references without hiding a credential on the same line', () => {
+  const apiField = ['api', 'Key'].join('');
+  const passwordField = ['pass', 'word'].join('');
+  const envField = ['OPENAI', 'API', 'KEY'].join('_');
+  const safe = [
+    `+  const agent = await buildAgent(cfg, { modelId: body.modelId, ${apiField}: resolved.key });`,
+    `+var types={number:!0,${passwordField}:!0,range:!0};`,
+    `+  if (previous) process.env.${envField} = previous;`,
+  ];
+  const run = (input) => spawnSync('bash', [join(ROOT, 'scripts/filter-secret-scan-candidates.sh')], { encoding: 'utf8', input });
+  const clean = run(`${safe.join('\n')}\n`);
+  assert.equal(clean.status, 1);
+  assert.equal(clean.stdout, '');
+  for (const line of safe) {
+    const mixed = run(`${line} const credential = { ${passwordField}: 'literal-value' };\n`);
+    assert.equal(mixed.status, 0);
+    assert.match(mixed.stdout, /literal-value/);
+  }
+  const literal = run(`+const cfg = { ${apiField}: 'literal-value' };\n`);
+  assert.equal(literal.status, 0);
+  assert.match(literal.stdout, /literal-value/);
+  const appended = run(`+const cfg = { ${apiField}: resolved.key + 'literal-value' };\n`);
+  assert.equal(appended.status, 0);
+  assert.match(appended.stdout, /literal-value/);
 });
 
 test('does not force a target version before Release Please observes the public range', () => {

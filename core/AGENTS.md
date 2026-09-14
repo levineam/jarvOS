@@ -4,6 +4,10 @@ This folder is home. Treat it that way.
 
 This file is the **always-loaded hub**. It stays lean. If your runtime includes an `agents/` folder, keep deeper behavioral rules in focused modules there and load them when the work calls for it.
 
+For new substantive work or materially changed scope, read `WORK-CONTEXT.md`
+when present. It owns portable work placement and goal-fit behavior; missing
+context is not authority to invent project state.
+
 ---
 
 ## 🏗️ Operating System Vision

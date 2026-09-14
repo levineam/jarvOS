@@ -1868,14 +1868,17 @@ function recall(options = {}) {
   }
 
   const gbrain = loadGbrain();
-  const bundle = gbrain.recallBundle(options.config || {}, {
+  // Bundle config is a sanitized public summary, not the source-path config.
+  // Keep the resolved config local for provenance; never return it in the bundle.
+  const config = gbrain.resolveConfig(options.config || {});
+  const bundle = gbrain.recallBundle({ ...options.config, ...config }, {
     query,
     includeQmd: options.includeQmd !== false,
     autoGraph: options.autoGraph !== false,
     seeds: Array.isArray(options.seeds) ? options.seeds : undefined,
     dryRun: options.dryRun === true,
   });
-  const markdown = withBrainProvenanceMarkdown(gbrain.renderRecallMarkdown(bundle), bundle.config, options);
+  const markdown = withBrainProvenanceMarkdown(gbrain.renderRecallMarkdown(bundle), config, options);
   return {
     ok: true,
     markdown,
@@ -1902,7 +1905,8 @@ function synthesizeRecall(options = {}) {
   if (!query) throw new Error('query is required');
 
   const gbrain = loadGbrain();
-  const bundle = gbrain.recallBundle(options.config || {}, {
+  const config = gbrain.resolveConfig(options.config || {});
+  const bundle = gbrain.recallBundle({ ...options.config, ...config }, {
     query,
     includeQmd: options.includeQmd !== false,
     autoGraph: options.autoGraph !== false,
@@ -1923,7 +1927,7 @@ function synthesizeRecall(options = {}) {
     .slice(0, 8);
 
   const provenanceLine = formatBrainProvenanceLine(
-    observeBrainProvenance(bundle.config, options),
+    observeBrainProvenance(config, options),
     parseTimestamp(options.now) || new Date(),
   );
   const sourceMarkdown = prependAfterHeading(bundle.markdown, provenanceLine);

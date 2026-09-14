@@ -15,6 +15,16 @@ not installation defaults.
 - Preserve existing user-authored workspace files. Do not replace or
   synchronize them merely because a new jarvOS template exists.
 
+## Work context
+
+The canonical portable work-placement contract is rendered below so native
+static instruction loaders receive it without a separate file read.
+`WORK-CONTEXT.md` contains the same contract for other supported surfaces.
+
+<!-- BEGIN jarvOS durable orientation -->
+{{DURABLE_ORIENTATION}}
+<!-- END jarvOS durable orientation -->
+
 ## Capability and authority boundary
 
 Before an action that can persist, notify, schedule, or use an integration:
