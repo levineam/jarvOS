@@ -21,8 +21,16 @@ function getMemoryPaths() {
   };
 }
 
+function getHindsightConfig() {
+  return {
+    apiUrl: process.env.HINDSIGHT_API_URL || 'http://127.0.0.1:8888',
+    timeoutMs: Number(process.env.HINDSIGHT_TIMEOUT_MS || 1500),
+  };
+}
+
 module.exports = {
   DEFAULT_CLAWD_ROOT,
   getClawdRoot,
   getMemoryPaths,
+  getHindsightConfig,
 };

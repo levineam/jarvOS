@@ -71,6 +71,199 @@ test('injected writer reports the identity carried by the submitted operation', 
   });
 });
 
+test('canonical note writes persist origin metadata, default missing declarations to unknown, and strip adoption state', () => {
+  withVault(({ root }) => {
+    const result = writeNoteFile({
+      title: 'Provenance note',
+      content: 'Generated context stays searchable but is not user evidence.',
+      frontmatter: {
+        status: 'draft',
+        type: 'reference',
+        project: 'PROVENANCE',
+        author: 'jarvis',
+        content_origin: 'assistant',
+        content_origin_basis: 'assistant_generated',
+        content_adoption: { state: 'accepted' },
+      },
+      operationId: 'note-provenance-0001',
+      vaultId: 'vault-provenance',
+      vaultRoot: root,
+      mutationExecutor(operation) {
+        const target = path.join(root, operation.vaultRelativePath);
+        fs.mkdirSync(path.dirname(target), { recursive: true });
+        fs.writeFileSync(target, operation.content, 'utf8');
+        return { status: 'committed', obsidian: 'acknowledged' };
+      },
+    });
+
+    const content = fs.readFileSync(result.path, 'utf8');
+    assert.match(content, /content_origin_schema: jarvos-content-origin\/v1/);
+    assert.match(content, /content_origin: assistant/);
+    assert.match(content, /content_origin_basis: assistant_generated/);
+    assert.doesNotMatch(content, /content_adoption/);
+  });
+});
+
+test('canonical note writes make an omitted origin explicit unknown', () => {
+  withVault(({ root }) => {
+    const result = writeNoteFile({
+      title: 'Undeclared note',
+      content: 'A note without a provenance declaration remains context-only.',
+      operationId: 'note-provenance-unknown-0001',
+      vaultId: 'vault-provenance',
+      vaultRoot: root,
+      mutationExecutor(operation) {
+        const target = path.join(root, operation.vaultRelativePath);
+        fs.mkdirSync(path.dirname(target), { recursive: true });
+        fs.writeFileSync(target, operation.content, 'utf8');
+        return { status: 'committed', obsidian: 'acknowledged' };
+      },
+    });
+
+    const content = fs.readFileSync(result.path, 'utf8');
+    assert.match(content, /content_origin_schema: jarvos-content-origin\/v1/);
+    assert.match(content, /content_origin: unknown/);
+    assert.match(content, /content_origin_basis: unknown/);
+    assert.match(content, /human_evidence_eligible: false/);
+  });
+});
+
+const { cleanNoteContent, digestText } = require('../bridge/provenance/src/content-origin-contract');
+
+function commitToDisk(root) {
+  return (operation) => {
+    const target = path.join(root, operation.vaultRelativePath);
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.writeFileSync(target, operation.content, 'utf8');
+    return { status: 'committed', obsidian: 'acknowledged' };
+  };
+}
+
+function userReceipt({ title, content, captureEventId = 'capture-user-0001', contentDigest }) {
+  return {
+    capture_event_id: captureEventId,
+    actor: 'user',
+    source_digest: digestText(content),
+    content_digest: contentDigest || digestText(cleanNoteContent(content, title)),
+  };
+}
+
+test('a human origin claim without a verifiable receipt is written as unknown', () => {
+  withVault(({ root }) => {
+    const title = 'Forged human note';
+    const content = 'Assistant prose that claims to be the user.';
+    for (const [index, extra] of [
+      {},
+      // A well-formed receipt is still unverifiable without an injected resolver.
+      { content_origin_source: userReceipt({ title, content }) },
+    ].entries()) {
+      const result = writeNoteFile({
+        title: `${title} ${index}`,
+        content,
+        frontmatter: {
+          content_origin: 'human',
+          content_origin_basis: 'verbatim_user',
+          human_evidence_eligible: true,
+          ...extra,
+        },
+        operationId: `note-provenance-forged-000${index}`,
+        vaultId: 'vault-provenance',
+        vaultRoot: root,
+        mutationExecutor: commitToDisk(root),
+      });
+
+      const written = fs.readFileSync(result.path, 'utf8');
+      assert.match(written, /content_origin_schema: jarvos-content-origin\/v1/);
+      assert.match(written, /content_origin: unknown/);
+      assert.match(written, /content_origin_basis: unknown/);
+      assert.match(written, /human_evidence_eligible: false/);
+      assert.doesNotMatch(written, /content_origin_source/);
+    }
+  });
+});
+
+test('a human origin claim with a resolvable receipt is written as human evidence', () => {
+  withVault(({ root }) => {
+    const title = 'User thought';
+    const content = 'The market itself grows when launch costs fall.';
+    const receipt = userReceipt({ title, content });
+    const result = writeNoteFile({
+      title,
+      content,
+      frontmatter: { content_origin: 'human', content_origin_basis: 'verbatim_user', content_origin_source: receipt },
+      resolveUserSource: (id) => (id === receipt.capture_event_id ? { capture_event_id: id, actor: 'user', text: content } : null),
+      operationId: 'note-provenance-human-0001',
+      vaultId: 'vault-provenance',
+      vaultRoot: root,
+      mutationExecutor: commitToDisk(root),
+    });
+
+    const written = fs.readFileSync(result.path, 'utf8');
+    assert.match(written, /content_origin_schema: jarvos-content-origin\/v1/);
+    assert.match(written, /content_origin: human/);
+    assert.match(written, /content_origin_basis: verbatim_user/);
+    assert.match(written, /human_evidence_eligible: true/);
+    assert.match(written, /content_origin_source:/);
+  });
+});
+
+test('a human receipt whose content digest does not match the note fails closed', () => {
+  withVault(({ root }) => {
+    const title = 'Edited user thought';
+    const content = 'Assistant rewrite of what the user said.';
+    const receipt = userReceipt({ title, content, contentDigest: digestText('What the user actually said.') });
+    const result = writeNoteFile({
+      title,
+      content,
+      frontmatter: { content_origin: 'human', content_origin_basis: 'user_derived', content_origin_source: receipt },
+      resolveUserSource: (id) => ({ capture_event_id: id, actor: 'user', text: content }),
+      operationId: 'note-provenance-mismatch-0001',
+      vaultId: 'vault-provenance',
+      vaultRoot: root,
+      mutationExecutor: commitToDisk(root),
+    });
+
+    const written = fs.readFileSync(result.path, 'utf8');
+    assert.match(written, /content_origin: unknown/);
+    assert.match(written, /human_evidence_eligible: false/);
+    assert.doesNotMatch(written, /content_origin_source/);
+  });
+});
+
+test('material note updates without a declaration downgrade inherited provenance to unknown', () => {
+  withVault(({ root }) => {
+    const execute = (operation) => {
+      const target = path.join(root, operation.vaultRelativePath);
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      if (operation.operationKind === 'create') fs.writeFileSync(target, operation.content, 'utf8');
+      else if (operation.operationKind === 'replace') fs.writeFileSync(target, operation.content, 'utf8');
+      else fs.writeFileSync(target, `${fs.readFileSync(target, 'utf8').trimEnd()}\n\n${operation.replayPayload.body}\n`, 'utf8');
+      return { status: 'committed', obsidian: 'acknowledged' };
+    };
+    const context = (operationId) => ({
+      operationId,
+      vaultId: 'vault-provenance-update',
+      vaultRoot: root,
+      mutationExecutor: execute,
+    });
+    const first = writeNoteFile({
+      title: 'Stable provenance',
+      content: 'Assistant draft.',
+      frontmatter: { status: 'draft', type: 'reference', project: 'PROVENANCE', author: 'jarvis', content_origin: 'assistant', content_origin_basis: 'assistant_generated' },
+      ...context('note-provenance-0002'),
+    });
+    writeNoteFile({
+      title: 'Stable provenance',
+      content: 'A later maintenance update.',
+      ...context('note-provenance-0003'),
+    });
+    const content = fs.readFileSync(first.path, 'utf8');
+    assert.match(content, /content_origin: unknown/);
+    assert.match(content, /content_origin_basis: unknown/);
+    assert.doesNotMatch(content, /content_origin: assistant/);
+  });
+});
+
 function settled(value) {
   return {
     then(fn) { try { fn(value); return this; } catch (error) { this.error = error; return this; } },

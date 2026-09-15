@@ -47,12 +47,20 @@ test('OpenClaw session adapter emits source-backed CaptureEvent v2 events', () =
   assertSourceBackedEvent(result.events[0], 'openclaw');
   assert.equal(result.events[0].actor.type, 'assistant');
   assert.equal(result.events[0].actor.model, 'test-model');
+  assert.equal(result.events[0].content_origin, 'assistant');
+  assert.equal(result.events[0].content_origin_basis, 'assistant_generated');
+  assert.equal(result.events[0].human_evidence_eligible, false);
   assert.equal(result.events[0].source.label, 'Architecture decision');
   assert.equal(result.events[0].date, '2026-06-21');
 });
 
 test('Codex session adapter handles content arrays and stable source IDs', () => {
-  const adapter = createCodexSessionAdapter();
+  const userText = 'Save this quote about source-backed notes.\n\nThe source notes remain authoritative.';
+  const adapter = createCodexSessionAdapter({
+    resolveUserSource: (captureEventId) => captureEventId === 'capture:codex:codex-session-1:turn-1'
+      ? { capture_event_id: captureEventId, actor: 'user', text: userText }
+      : null,
+  });
   const result = adapter.normalizeSession({
     sessionId: 'codex-session-1',
     turns: [{
@@ -70,7 +78,22 @@ test('Codex session adapter handles content arrays and stable source IDs', () =>
   assertSourceBackedEvent(result.events[0], 'codex');
   assert.equal(result.events[0].id, 'capture:codex:codex-session-1:turn-1');
   assert.equal(result.events[0].actor.type, 'human');
+  assert.equal(result.events[0].content_origin, 'human');
+  assert.equal(result.events[0].content_origin_basis, 'verbatim_user');
+  assert.equal(result.events[0].human_evidence_eligible, true);
+  assert.equal(result.events[0].user_source.capture_event_id, result.events[0].captureEventId);
   assert.match(result.events[0].text, /source notes remain authoritative/);
+});
+
+test('a session role alone cannot mint a human-source receipt', () => {
+  const result = createCodexSessionAdapter().normalizeSession({
+    sessionId: 'codex-unverified-user',
+    turns: [{ messageId: 'turn-1', role: 'user', content: 'A role label is not a source receipt.' }],
+  });
+
+  assert.equal(result.events.length, 1);
+  assert.equal(result.events[0].content_origin, 'unknown');
+  assert.equal(result.events[0].human_evidence_eligible, false);
 });
 
 test('Claude Code session adapter accepts entries and caller privacy overrides', () => {
@@ -89,6 +112,22 @@ test('Claude Code session adapter accepts entries and caller privacy overrides',
   assertSourceBackedEvent(result.events[0], 'claude-code', 'private');
   assert.equal(result.events[0].actor.type, 'tool');
   assert.equal(result.events[0].privacyTier, 'private');
+  assert.equal(result.events[0].content_origin, 'unknown');
+});
+
+test('session adapter preserves an explicit mixed declaration only when it is a valid origin pair', () => {
+  const result = createOpenClawSessionAdapter({
+    content_origin: 'mixed',
+    content_origin_basis: 'mixed_composition',
+  }).normalizeSession({
+    sessionId: 'mixed-session',
+    messages: [{ role: 'assistant', content: 'A jointly edited conclusion.' }],
+  });
+
+  assert.equal(result.events.length, 1);
+  assert.equal(result.events[0].content_origin, 'mixed');
+  assert.equal(result.events[0].content_origin_basis, 'mixed_composition');
+  assert.equal(result.events[0].human_evidence_eligible, false);
 });
 
 test('session adapters skip secret sessions and unsupported tools explicitly', () => {

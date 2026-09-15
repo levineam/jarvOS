@@ -5,6 +5,9 @@ const {
   validateCaptureEvent,
 } = require('../../../packages/jarvos-ambient/src/intent/capture-contract');
 const {
+  normalizeContentOrigin,
+} = require('../../provenance/src/content-origin-contract');
+const {
   applyRoutingPlan,
   applyParsedStrictCommandPlan,
   detectTrigger,
@@ -77,7 +80,7 @@ function normalizeEvidence(raw = {}, text) {
   }].map(compact);
 }
 
-function normalizeCaptureEvent(rawInput = {}) {
+function normalizeCaptureEvent(rawInput = {}, options = {}) {
   const raw = rawInput.captureEvent && typeof rawInput.captureEvent === 'object'
     ? { ...rawInput.captureEvent, ...rawInput }
     : { ...rawInput };
@@ -85,8 +88,41 @@ function normalizeCaptureEvent(rawInput = {}) {
 
   const text = String(raw.text ?? raw.content ?? raw.body ?? '').trim();
   const source = normalizeSource(raw);
+  const hasOriginDeclaration = raw.content_origin != null
+    || raw.contentOrigin != null
+    || raw.content_origin_basis != null
+    || raw.contentOriginBasis != null
+    || raw.user_source != null
+    || raw.userSource != null;
+  // A serialized source record is not a trusted receipt resolver. The caller
+  // must inject the harness-owned event lookup explicitly.
+  const resolveUserSource = options.resolveUserSource || raw.resolveUserSource || null;
+  const captureEventId = raw.captureEventId || raw.capture_event_id || raw.eventId;
+  const contentOrigin = normalizeContentOrigin({
+    content_origin: raw.content_origin ?? raw.contentOrigin,
+    content_origin_basis: raw.content_origin_basis ?? raw.contentOriginBasis,
+    user_source: raw.user_source ?? raw.userSource,
+  }, {
+    content: text,
+    resolveUserSource,
+    captureEventId,
+  });
+  const declaredOrigin = raw.content_origin ?? raw.contentOrigin;
+  const declaredBasis = raw.content_origin_basis ?? raw.contentOriginBasis;
+  if (options.requireDeclaration === true
+    && (!hasOriginDeclaration || typeof declaredOrigin !== 'string' || typeof declaredBasis !== 'string')) {
+    const error = new Error('invalid CaptureEvent v2: content_origin declaration is required at the canonical writer boundary');
+    error.errors = ['content_origin declaration is required at the canonical writer boundary'];
+    throw error;
+  }
+  if (options.requireDeclaration === true && declaredOrigin === 'human' && contentOrigin.content_origin !== 'human') {
+    const error = new Error('invalid CaptureEvent v2: human content requires a valid user-source receipt');
+    error.errors = ['human content requires a valid user-source receipt'];
+    throw error;
+  }
   const event = {
     schemaVersion: String(raw.schemaVersion || CAPTURE_EVENT_SCHEMA_VERSION),
+    captureEventId,
     trigger: raw.trigger || raw.keyword || raw.mode || raw.type || raw.route,
     salienceClass: raw.salienceClass,
     confidence: raw.confidence,
@@ -102,6 +138,11 @@ function normalizeCaptureEvent(rawInput = {}) {
     privacyTier: raw.privacyTier || 'local-private',
     origin: normalizeOrigin(raw, source),
     evidence: normalizeEvidence(raw, text),
+    content_origin_schema: contentOrigin.schema_version,
+    content_origin: contentOrigin.content_origin,
+    content_origin_basis: contentOrigin.content_origin_basis,
+    user_source: contentOrigin.user_source,
+    human_evidence_eligible: contentOrigin.human_evidence_eligible,
     substantive: raw.substantive,
     createNote: raw.createNote,
     createDurableNote: raw.createDurableNote,
@@ -115,7 +156,7 @@ function normalizeCaptureEvent(rawInput = {}) {
   // Keep an explicitly supplied null visible to the normal validation/error
   // contract instead of silently dropping it with legacy empty fields.
   if (raw.captureIdentity !== undefined) normalized.captureIdentity = raw.captureIdentity;
-  const errors = validateCaptureEvent(normalized);
+  const errors = validateCaptureEvent(normalized, { requireDeclaration: options.requireDeclaration === true });
   if (errors.length) {
     const error = new Error(`invalid CaptureEvent v2: ${errors.join('; ')}`);
     error.errors = errors;
@@ -134,10 +175,16 @@ function frontmatterForCaptureEvent(event) {
     source_actor: typeof event.actor === 'string' ? event.actor : event.actor.type,
     source_agent: typeof event.actor === 'string' ? event.actor : event.actor.name,
     capture_event_schema: event.schemaVersion,
+    capture_event_id: event.captureEventId,
+    content_origin_schema: event.content_origin_schema,
     capture_mode: event.captureMode,
     privacy_tier: event.privacyTier,
     origin_ref: origin,
     evidence_count: Array.isArray(event.evidence) ? event.evidence.length : 0,
+    content_origin: event.content_origin,
+    content_origin_basis: event.content_origin_basis,
+    content_origin_source: event.user_source,
+    human_evidence_eligible: event.human_evidence_eligible,
   });
 }
 
@@ -158,12 +205,12 @@ function ignoredCaptureMessage() {
 }
 
 function captureWithJarvos(rawInput = {}, options = {}) {
-  const captureEvent = normalizeCaptureEvent(rawInput);
+  const captureEvent = normalizeCaptureEvent(rawInput, options);
   const hardCommand = parseHardCaptureCommand(captureEvent);
   const adapter = options.adapter || createStorageAdapter(options);
   const frontmatter = {
-    ...frontmatterForCaptureEvent(captureEvent),
     ...(captureEvent.frontmatter || {}),
+    ...frontmatterForCaptureEvent(captureEvent),
   };
   const routingInput = {
     ...captureEvent,
