@@ -2,6 +2,12 @@
 
 Release sections describe user-facing jarvOS changes. Historical public-doc sync entries are preserved below for traceability.
 
+## [Unreleased]
+
+### Features
+
+* **secondbrain:** emit `jarvos-content-origin/v1` on canonical durable-note writes (`content_origin`, `content_origin_basis`, `content_origin_schema`). Human origin without a verifiable user receipt fails closed to `unknown`. Ripeness, Active Assistant, and memory evidence gates must not treat unverified human claims as receipt-bound evidence (SUP-3959).
+
 ## [0.10.0](https://github.com/levineam/jarvOS/compare/jarvos-bootstrap-v0.9.0...jarvos-bootstrap-v0.10.0) (2026-09-11)
 
 
