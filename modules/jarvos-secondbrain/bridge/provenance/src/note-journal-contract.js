@@ -287,6 +287,7 @@ function writeNoteThroughContract(rawInput, { mutationService, link, resolveUser
     title: input.title,
     content: input.content,
     frontmatter: input.frontmatter,
+    resolveUserSource,
     ...writeContext,
   });
   const result = {

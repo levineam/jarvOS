@@ -114,9 +114,9 @@ function createVaultStorageAdapter({ mutationService, vaultRoot = getVaultDir(),
         ]),
       };
     },
-    writeNote({ title, content, frontmatter = {}, intentId, requestHash } = {}) {
+    writeNote({ title, content, frontmatter = {}, intentId, requestHash, resolveUserSource } = {}) {
       const filePath = noteFilePath(title);
-      return writeNoteFile({ title, content, frontmatter, ...contextFor(relativeToVault(vaultRoot, filePath), intentId, requestHash) });
+      return writeNoteFile({ title, content, frontmatter, resolveUserSource, ...contextFor(relativeToVault(vaultRoot, filePath), intentId, requestHash) });
     },
     linkNoteToJournal({ noteTitle, noteId, date = todayDate(), heading = NOTES_HEADING, intentId } = {}) {
       if (!noteTitle) throw new Error('noteTitle is required');

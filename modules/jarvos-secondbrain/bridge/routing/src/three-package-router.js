@@ -78,6 +78,7 @@ function applyStoragePlan(plan, capture = {}, options = {}) {
         ...(capture.frontmatter || {}),
         ...(plan.noteFrontmatter || {}),
       },
+      ...(typeof options.resolveUserSource === 'function' ? { resolveUserSource: options.resolveUserSource } : {}),
       ...(intentId ? { intentId: `${intentId}:note`, requestHash } : {}),
     });
   }

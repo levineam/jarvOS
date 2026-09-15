@@ -5,6 +5,7 @@ const {
   CONTENT_ORIGIN_BASES,
   CONTENT_ORIGIN_SCHEMA_VERSION,
   CONTENT_ORIGINS,
+  frontmatterForContentOrigin,
 } = require('../../../../bridge/provenance/src/content-origin-contract');
 
 const REQUIRED_FIELDS = ['status', 'type', 'project', 'created', 'updated', 'author'];
@@ -436,19 +437,16 @@ function splitIncomingFrontmatter(frontmatter) {
   return { required, optional };
 }
 
-function normalizeContentOriginFrontmatter(frontmatter = {}) {
+// Every canonical note write lands here, so this is the single place a
+// declaration becomes jarvos-content-origin/v1 frontmatter. A declaration the
+// caller supplies (options.verifyDeclaration) goes through the contract helper:
+// human origin without a resolvable receipt fails closed to unknown. A stored
+// declaration that the write merely carries forward is enum-checked only.
+function normalizeContentOriginFrontmatter(frontmatter = {}, options = {}) {
   const normalized = { ...frontmatter };
   const hasDeclaration = CONTENT_ORIGIN_FIELDS.some((field) => normalized[field] !== undefined);
   if (!hasDeclaration) {
-    return {
-      fields: {
-        content_origin_schema: CONTENT_ORIGIN_SCHEMA_VERSION,
-        content_origin: 'unknown',
-        content_origin_basis: 'unknown',
-        human_evidence_eligible: false,
-      },
-      errors: [],
-    };
+    return { fields: frontmatterForContentOrigin({}), errors: [] };
   }
 
   const origin = String(normalized.content_origin || '').trim().toLowerCase();
@@ -469,6 +467,19 @@ function normalizeContentOriginFrontmatter(frontmatter = {}) {
     errors.push('human_evidence_eligible must be a boolean when provided');
   }
 
+  if (options.verifyDeclaration === true) {
+    // Caller-supplied human_evidence_eligible is never trusted; the helper
+    // derives it from a verified receipt.
+    return {
+      fields: frontmatterForContentOrigin(errors.length ? {} : {
+        content_origin: origin,
+        content_origin_basis: basis,
+        content_origin_source: normalized.content_origin_source,
+      }, options),
+      errors,
+    };
+  }
+
   return {
     fields: {
       content_origin_schema: normalized.content_origin_schema || CONTENT_ORIGIN_SCHEMA_VERSION,
@@ -483,9 +494,10 @@ function normalizeContentOriginFrontmatter(frontmatter = {}) {
   };
 }
 
-function canonicalizeFrontmatter({ incomingFrontmatter = {}, existingFrontmatter = {}, today }) {
+function canonicalizeFrontmatter({ incomingFrontmatter = {}, existingFrontmatter = {}, today, origin = {} }) {
   const split = splitIncomingFrontmatter(incomingFrontmatter);
   if (split.error) return { errors: [split.error] };
+  const incomingDeclaresOrigin = CONTENT_ORIGIN_FIELDS.some((field) => split.optional[field] !== undefined);
 
   const existingRequired = {};
   const existingOptional = {};
@@ -506,7 +518,14 @@ function canonicalizeFrontmatter({ incomingFrontmatter = {}, existingFrontmatter
   const optional = { ...existingOptional, ...split.optional, ...existingWriterOwned };
   for (const key of REQUIRED_FIELDS) delete optional[key];
 
-  const provenance = normalizeContentOriginFrontmatter({ ...normalized, ...optional });
+  // An incoming declaration replaces the stored one wholesale, so stale
+  // stored fields (for example an old receipt) cannot be mixed into it.
+  const declaration = incomingDeclaresOrigin ? split.optional : optional;
+  const provenance = normalizeContentOriginFrontmatter(
+    { ...normalized, ...declaration },
+    { ...origin, verifyDeclaration: incomingDeclaresOrigin },
+  );
+  for (const field of CONTENT_ORIGIN_FIELDS) delete optional[field];
 
   return {
     errors: [...errors, ...provenance.errors],
