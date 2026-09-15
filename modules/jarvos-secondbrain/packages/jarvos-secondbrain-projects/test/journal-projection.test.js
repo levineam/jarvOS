@@ -128,6 +128,9 @@ test('fresh empty and degraded evidence both remove a stale Projects section', (
   const applied = projection.applyJournalProjection({ content: original, projection: degraded });
   assert.equal(applied.status, 'planned');
   assert.doesNotMatch(applied.content, /## 🚀 Projects/);
+  assert.equal(applied.manifest.projectionStatus, 'degraded');
+  assert.equal(applied.manifest.projectionOmitted, true);
+  assert.deepEqual(applied.manifest.projectionOmissions, ['activity-provider:partial']);
 });
 
 test('context reads do not count as activity and expected revisions fence projection writes', () => {
@@ -176,6 +179,22 @@ test('malformed same-day activity is explicit and omits the Projects section', (
   assert.equal(result.omit, true);
   assert.equal(result.content, null);
   assert.deepEqual(result.omissions, ['activity-invalid:0']);
+});
+
+test('one malformed timestamp makes an otherwise renderable activity feed fail closed', () => {
+  const result = projection.buildJournalProjection({
+    date: '2026-08-08',
+    projects: PROJECTS,
+    noteMappings: NOTE_MAPPINGS,
+    activities: [
+      { canonicalId: 'prj_000001', occurredAt: '2026-08-08T11:00:00.000Z', trust: 'verified' },
+      { canonicalId: 'prj_000002', occurredAt: 'not-a-timestamp', trust: 'verified', eventId: 'evt-invalid-time' },
+    ],
+  });
+  assert.equal(result.status, 'degraded');
+  assert.equal(result.omit, true);
+  assert.equal(result.content, null);
+  assert.deepEqual(result.omissions, ['activity-invalid:evt-invalid-time']);
 });
 
 test('touched-parent projection is idempotent after its acknowledged content is applied', () => {

@@ -193,12 +193,15 @@ function activityOmissions({ activities = [], projects = [], date, timeZone = 'U
       omissions.push(`activity-invalid:${identity}`);
       continue;
     }
-    const occurredDate = localDate(value.occurredAt, timeZone);
-    if (!occurredDate || occurredDate !== targetDate) continue;
-    // A context read is intentionally not an activity event. It is an
-    // ordinary read-path observation, not evidence that Andrew worked on a
-    // Project, so it should not degrade an otherwise healthy activity feed.
+    // Context reads are observations, not activity evidence. Their timestamp
+    // shape cannot degrade a feed they do not participate in.
     if (isContextRead(value)) continue;
+    const occurredDate = localDate(value.occurredAt, timeZone);
+    if (!occurredDate) {
+      omissions.push(`activity-invalid:${identity}`);
+      continue;
+    }
+    if (occurredDate !== targetDate) continue;
     if (!(value.accepted === true || value.trust === 'verified')) {
       omissions.push(`activity-untrusted:${identity}`);
       continue;
@@ -348,6 +351,9 @@ function applyJournalProjection({ content, expectedRevision, projection, write, 
     timeZone: projection.timeZone,
     coverageWatermark: projection.coverageWatermark || coverageWatermark,
     inputDigest: projection.inputDigest,
+    projectionStatus: projection.status,
+    projectionOmitted: projection.omit === true,
+    projectionOmissions: [...(projection.omissions || [])],
     priorRevision,
     resultRevision,
     observedAt: now,

@@ -157,6 +157,41 @@ test('Journal keeps receipt category and malformed activity omissions visible', 
   }
 });
 
+for (const [label, projectsActivityReader, expectedOmission] of [
+  ['missing', undefined, 'activity-reader:missing'],
+  ['throwing', () => { throw new Error('reader unavailable'); }, 'activity-reader:failed'],
+]) {
+  test(`Journal emits a degraded projection receipt for a ${label} activity reader`, () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), `jarvos-journal-reader-${label}-`));
+    const journalDir = path.join(root, 'Journal');
+    const journalPath = path.join(journalDir, `${TEST_DATE}.md`);
+    const previous = process.env.JARVOS_JOURNAL_DIR;
+    fs.mkdirSync(journalDir, { recursive: true });
+    fs.writeFileSync(journalPath, '## 🚀 Projects\n- [[Existing]]\n\n## 📝 Notes\n- [[Note]]\n', 'utf8');
+    process.env.JARVOS_JOURNAL_DIR = journalDir;
+    let projectionReceipt = null;
+    try {
+      const config = loadConfig();
+      const result = rawSyncOneDate(TEST_DATE, config, {
+        projectsActivityReader,
+        applyMarkdownMutation(input) {
+          projectionReceipt = input.projectionReceipt;
+          return fakeOwnedMutation(input);
+        },
+      });
+      assert.equal(result.projectProjection.status, 'degraded');
+      assert.equal(result.projectProjection.omit, true);
+      assert.ok(result.projectProjection.omissions.includes(expectedOmission));
+      assert.deepEqual(projectionReceipt, result.projectProjection);
+      assert.doesNotMatch(fs.readFileSync(journalPath, 'utf8'), /## 🚀 Projects/);
+    } finally {
+      if (previous === undefined) delete process.env.JARVOS_JOURNAL_DIR;
+      else process.env.JARVOS_JOURNAL_DIR = previous;
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+}
+
 test('Sync-pending local journal bytes never advance the known-good recovery snapshot', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-journal-pending-known-good-'));
   const journalDir = path.join(root, 'Vault', 'Journal');

@@ -764,32 +764,47 @@ function normalizeProjectsActivityResult(result, { date, timeZone, maxItems = 25
 
 function buildProjectsActivityFetcher({ reader, timeZone = DEFAULT_TIMEZONE, onProjection = null } = {}) {
   return ({ date, config, section }) => {
+    const projectionOptions = {
+      date,
+      timeZone: timeZone || config?.timeZone || DEFAULT_TIMEZONE,
+      maxItems: Number(config?.journal?.maxItems || 25),
+    };
+    let projectsProjection;
+    const unavailableProjection = (reason) => {
+      const unavailable = normalizeProjectsActivityResult({
+        activityProviderState: 'unavailable',
+        generator: 'projects-activity-v1',
+      }, projectionOptions);
+      return {
+        ...unavailable,
+        omissions: [...new Set([...(unavailable.omissions || []), reason])].sort(),
+      };
+    };
+
     if (typeof reader !== 'function' && !(reader && typeof reader.read === 'function')) {
-      return null;
-    }
-    try {
-      const read = typeof reader === 'function' ? reader : reader.read.bind(reader);
-      const result = read({
-        profile: 'recent-activity',
-        date,
-        timeZone: timeZone || config?.timeZone || DEFAULT_TIMEZONE,
-        maxItems: Number(config?.journal?.maxItems || 25),
-        section,
-      });
-      if (result && typeof result.then === 'function') {
-        throw new Error('asynchronous Projects activity readers are not supported by synchronous journal maintenance');
+      projectsProjection = unavailableProjection('activity-reader:missing');
+    } else {
+      try {
+        const read = typeof reader === 'function' ? reader : reader.read.bind(reader);
+        const result = read({
+          profile: 'recent-activity',
+          date,
+          timeZone: projectionOptions.timeZone,
+          maxItems: projectionOptions.maxItems,
+          section,
+        });
+        if (result && typeof result.then === 'function') {
+          throw new Error('asynchronous Projects activity readers are not supported by synchronous journal maintenance');
+        }
+        projectsProjection = normalizeProjectsActivityResult(result, projectionOptions);
+      } catch {
+        projectsProjection = unavailableProjection('activity-reader:failed');
       }
-      const projection = normalizeProjectsActivityResult(result, {
-        date,
-        timeZone: timeZone || config?.timeZone || DEFAULT_TIMEZONE,
-        maxItems: Number(config?.journal?.maxItems || 25),
-      });
-      if (typeof onProjection === 'function') onProjection(projection);
-      if (projection.omit || projection.preserve || !projection.content) return null;
-      return projection.content;
-    } catch {
-      return null;
     }
+
+    if (typeof onProjection === 'function') onProjection(projectsProjection);
+    if (projectsProjection.omit || projectsProjection.preserve || !projectsProjection.content) return null;
+    return projectsProjection.content;
   };
 }
 
