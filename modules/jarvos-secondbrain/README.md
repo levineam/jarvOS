@@ -13,6 +13,23 @@ Public package state:
   watch status are generic jarvOS surfaces; private vault content and raw
   transcripts are not part of this package
 
+## Content origin (`jarvos-content-origin/v1`)
+
+Canonical durable-note writes go through `packages/jarvos-secondbrain-notes` → `write-to-vault.js` → `lib/note-schema.js`, which calls `bridge/provenance/src/content-origin-contract.js` (`frontmatterForContentOrigin()`).
+
+Written frontmatter includes:
+
+| Field | Meaning |
+|---|---|
+| `content_origin_schema` | Always `jarvos-content-origin/v1` |
+| `content_origin` | `human` \| `assistant` \| `mixed` \| `unknown` |
+| `content_origin_basis` | `verbatim_user` \| `user_derived` \| `assistant_generated` \| `mixed_composition` \| `unknown` (`legacy_author` is read-time only) |
+| `content_origin_source` | Present only when a user receipt verifies human evidence |
+
+A `human` declaration without `{capture_event_id, actor: "user", source_digest, content_digest}` that resolves and matches stored content is written as `unknown`. Downstream Ripeness / Active Assistant / memory gates must use that receipt check; they must not treat `author:` heuristics as human evidence.
+
+Private host writers (for example a local article-generator) should pass the same keys through the note-journal contract shim. Vault body text is not rewritten by origin repair.
+
 ## Layout
 
 ```text

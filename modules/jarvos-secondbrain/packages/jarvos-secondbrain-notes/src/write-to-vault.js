@@ -8,16 +8,18 @@
 'use strict';
 
 const { existsSync, readFileSync } = require('fs');
-const { randomUUID } = require('crypto');
+const { createHash, randomUUID } = require('crypto');
 const { join, relative, sep } = require('path');
 const {
   artifactFromMutationResult,
   createArtifactReceipt,
 } = require('../../../src/artifact-receipt');
+const { cleanNoteContent } = require('../../../bridge/provenance/src/content-origin-contract');
 const { getVaultNotesDir, loadConfig } = require('./lib/notes-config');
 const { optimizeNoteKnowledge } = require('./knowledge-optimizer');
 const {
   canonicalizeFrontmatter,
+  CONTENT_ORIGIN_FIELDS,
   frontmatterToObject,
   parseFrontmatter,
   renderFrontmatter,
@@ -44,17 +46,52 @@ function buildNoteBody(title, content) {
   return String(content || '').startsWith('# ') ? String(content || '') : `# ${title}\n\n${content}`;
 }
 
+function hasContentOriginDeclaration(frontmatter = {}) {
+  return CONTENT_ORIGIN_FIELDS.some((field) => frontmatter[field] !== undefined);
+}
+
+function hasExactBlock(content, block) {
+  const expected = String(block || '').trim();
+  return Boolean(expected && (`\n\n${String(content || '').trim()}\n\n`).includes(`\n\n${expected}\n\n`));
+}
+
+function appendBlock(content, block) {
+  const source = String(content || '');
+  const expected = String(block || '').trim();
+  return hasExactBlock(source, expected)
+    ? source
+    : `${source.trimEnd()}\n\n${expected}\n`;
+}
+
+function provenanceDeclarationsDiffer(existing = {}, next = {}) {
+  return CONTENT_ORIGIN_FIELDS.some((field) => JSON.stringify(existing[field]) !== JSON.stringify(next[field]));
+}
+
 function readExistingFrontmatter(filePath) {
   if (!existsSync(filePath)) return {};
   const existing = readFileSync(filePath, 'utf8');
   return frontmatterToObject(parseFrontmatter(existing));
 }
 
-function normalizeFrontmatter({ incoming = {}, existing = {} } = {}) {
+// Receipt checks for a human declaration need the note content and the
+// caller-injected source resolver; without a resolver the claim fails closed.
+function originOptions({ title, content, resolveUserSource } = {}) {
+  return {
+    content: cleanNoteContent(String(content ?? ''), title),
+    ...(typeof resolveUserSource === 'function' ? { resolveUserSource } : {}),
+  };
+}
+
+function normalizeFrontmatter({ incoming = {}, existing = {}, preserveExistingProvenance = true, origin = {} } = {}) {
+  const existingForNormalization = { ...existing };
+  if (!preserveExistingProvenance) {
+    for (const field of CONTENT_ORIGIN_FIELDS) delete existingForNormalization[field];
+  }
   const canonical = canonicalizeFrontmatter({
     incomingFrontmatter: incoming,
-    existingFrontmatter: existing,
+    existingFrontmatter: existingForNormalization,
     today: todayDate(),
+    origin,
   });
 
   if (canonical.errors?.length) {
@@ -63,28 +100,65 @@ function normalizeFrontmatter({ incoming = {}, existing = {} } = {}) {
 
   // jarvos_note_id is deliberately writer-owned: callers cannot choose it,
   // while an existing canonical note retains its stable identity.
-  return {
+  const normalizedFrontmatter = {
     ...canonical.frontmatter,
     jarvos_note_id: canonical.frontmatter.jarvos_note_id || randomUUID(),
   };
+  // Reserved v1 fields are intentionally not persisted, even if a caller
+  // supplied them through a lower-level adapter.
+  delete normalizedFrontmatter.content_adoption;
+  return normalizedFrontmatter;
 }
 
-function buildFrontmatter({ incomingFrontmatter = {}, existingFrontmatter = {} } = {}) {
+function buildFrontmatter({ incomingFrontmatter = {}, existingFrontmatter = {}, preserveExistingProvenance = true } = {}) {
   return renderFrontmatter(normalizeFrontmatter({
     incoming: incomingFrontmatter,
     existing: existingFrontmatter,
+    preserveExistingProvenance,
   }));
 }
 
 // Pure operation factory.  The package deliberately does not know which
 // transport executes it; bridge and agent composition inject that executor.
-function createNoteMutationOperation({ operationId, vaultId, vaultRelativePath, title, content, frontmatter = {}, existingContent = '', existingFrontmatter = {}, appendEntry, sequence = 1, source } = {}) {
+function createNoteMutationOperation({ operationId, vaultId, vaultRelativePath, title, content, frontmatter = {}, existingContent = '', existingFrontmatter = {}, appendEntry, sequence = 1, source, resolveUserSource } = {}) {
   if (typeof operationId !== 'string' || !operationId.trim()) throw new Error('operationId is required for a note mutation');
   if (!vaultId || !vaultRelativePath) throw new Error('vaultId and vaultRelativePath are required for a note mutation');
-  const normalizedFrontmatter = normalizeFrontmatter({ incoming: frontmatter, existing: existingFrontmatter });
   const body = buildNoteBody(title, content);
+  const existingBody = parseFrontmatter(existingContent)?.remainder || existingContent;
+  const appendBody = appendEntry ? String(appendEntry).trim() : body;
+  const materialBodyChange = Boolean(existingContent) && !hasExactBlock(existingBody, appendBody);
+  const preserveExistingProvenance = !(materialBodyChange && !hasContentOriginDeclaration(frontmatter));
+  const normalizedFrontmatter = normalizeFrontmatter({
+    incoming: frontmatter,
+    existing: existingFrontmatter,
+    preserveExistingProvenance,
+    origin: originOptions({ title, content, resolveUserSource }),
+  });
   const rendered = renderFrontmatter(normalizedFrontmatter) + body;
   const created = !existingContent;
+  // Replace the whole note only when its stored provenance actually changes.
+  // A material body change already drops undeclared provenance above, so an
+  // unchanged declaration can keep the append-only transforms.
+  const provenanceRewrite = Boolean(existingContent)
+    && (hasContentOriginDeclaration(frontmatter) || hasContentOriginDeclaration(existingFrontmatter))
+    && provenanceDeclarationsDiffer(existingFrontmatter, normalizedFrontmatter);
+  if (provenanceRewrite) {
+    const nextBody = appendBlock(existingBody, appendBody).trimEnd();
+    const nextContent = `${renderFrontmatter(normalizedFrontmatter)}${nextBody}\n`;
+    return {
+      schemaVersion: 1,
+      operationId: operationId.trim(),
+      vaultId,
+      vaultRelativePath,
+      sequence,
+      operationKind: 'replace',
+      content: nextContent,
+      expectedContent: String(existingContent),
+      expectedHash: createHash('sha256').update(String(existingContent), 'utf8').digest('hex'),
+      noteId: normalizedFrontmatter.jarvos_note_id,
+      ...(source ? { source } : {}),
+    };
+  }
   const replayPayload = created
     ? null
     : appendEntry
@@ -110,7 +184,7 @@ function hasPersistedNoteBytes(filePath, receipt) {
   );
 }
 
-function writeNoteFile({ title, content, frontmatter = {}, appendEntry, mutationExecutor, operationId, vaultId, vaultRoot, sequence = 1, source }) {
+function writeNoteFile({ title, content, frontmatter = {}, appendEntry, mutationExecutor, operationId, vaultId, vaultRoot, sequence = 1, source, resolveUserSource }) {
   if (!title) throw new Error('title is required');
   if (content === undefined || content === null) throw new Error('content is required');
   if (!frontmatter || typeof frontmatter !== 'object' || Array.isArray(frontmatter)) {
@@ -123,9 +197,16 @@ function writeNoteFile({ title, content, frontmatter = {}, appendEntry, mutation
   const created = !existsSync(filePath);
   const existingFrontmatter = readExistingFrontmatter(filePath);
   const body = buildNoteBody(title, content);
+  const existingContent = created ? '' : readFileSync(filePath, 'utf8');
+  const existingBody = parseFrontmatter(existingContent)?.remainder || existingContent;
+  const appendBody = appendEntry ? String(appendEntry).trim() : buildNoteBody(title, content);
+  const materialBodyChange = Boolean(existingContent) && !hasExactBlock(existingBody, appendBody);
+  const preserveExistingProvenance = !(materialBodyChange && !hasContentOriginDeclaration(frontmatter));
   const normalizedFrontmatter = normalizeFrontmatter({
     incoming: frontmatter,
     existing: existingFrontmatter,
+    preserveExistingProvenance,
+    origin: originOptions({ title, content, resolveUserSource }),
   });
   if (typeof mutationExecutor !== 'function' || !vaultId || !vaultRoot || !operationId) {
     throw new Error('Canonical vault mutation composition is required; package note writes cannot modify Markdown directly');
@@ -138,11 +219,12 @@ function writeNoteFile({ title, content, frontmatter = {}, appendEntry, mutation
     title,
     content,
     frontmatter,
-    existingContent: created ? '' : readFileSync(filePath, 'utf8'),
+    existingContent,
     existingFrontmatter,
     appendEntry,
     sequence,
     source,
+    resolveUserSource,
   });
   const receipt = mutationExecutor(operation);
   const persistedOperation = receipt.operation || operation;

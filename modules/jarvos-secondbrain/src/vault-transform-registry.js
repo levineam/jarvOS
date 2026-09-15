@@ -1,5 +1,13 @@
 'use strict';
 
+const {
+  cleanJournalEntryText,
+  parseJournalEntry,
+  parseJournalOriginMarker,
+  renderJournalOriginMarker,
+  stripJournalOriginMarkers,
+} = require('../bridge/provenance/src/content-origin-contract');
+
 function payloadBytes(value) { return Buffer.byteLength(JSON.stringify(value), 'utf8'); }
 
 function lineTransform(content, { line }) {
@@ -62,6 +70,111 @@ function journalSectionLineTransform(content, { heading, line }) {
   const materialized = section.filter((entry) => entry.trim() !== '-' && entry.trim() !== '');
   materialized.push(canonicalLine);
   return [...lines.slice(0, range.start + 1), ...materialized, '', ...lines.slice(range.end)].join('\n');
+}
+
+function normalizedJournalOrigin(contentOrigin = {}) {
+  const origin = String(contentOrigin.content_origin || '').trim().toLowerCase();
+  const basis = String(contentOrigin.content_origin_basis || '').trim().toLowerCase();
+  if (!origin || !basis) throw new Error('journal content-origin payload is required');
+  if (contentOrigin.clean_text_digest && !/^[a-f0-9]{64}$/.test(String(contentOrigin.clean_text_digest))) {
+    throw new Error('journal content-origin digest is invalid');
+  }
+  return {
+    content_origin: origin,
+    content_origin_basis: basis,
+    human_evidence_eligible: contentOrigin.human_evidence_eligible === true && origin === 'human',
+    ...(contentOrigin.clean_text_digest ? { clean_text_digest: String(contentOrigin.clean_text_digest) } : {}),
+    ...(contentOrigin.source_ref ? { source_ref: String(contentOrigin.source_ref).trim() } : {}),
+    ...(contentOrigin.user_source && typeof contentOrigin.user_source === 'object'
+      ? { user_source: { ...contentOrigin.user_source } }
+      : {}),
+  };
+}
+
+function cleanJournalLine(line) {
+  const cleaned = stripJournalOriginMarkers(String(line || '')).trim();
+  return cleaned.startsWith('- ') ? cleaned : `- ${cleaned.replace(/^[-\s]+/, '')}`;
+}
+
+function journalOriginMarkerForLine(line, contentOrigin) {
+  const cleanLine = cleanJournalLine(line);
+  return renderJournalOriginMarker({
+    cleanText: cleanLine.slice(2).trim(),
+    ...contentOrigin,
+  });
+}
+
+function matchingJournalBullet(lines, range, canonicalLine) {
+  for (let index = range.start + 1; index < range.end; index += 1) {
+    if (String(lines[index] || '').trim().startsWith('- ') && cleanJournalEntryText(lines[index]).trim() === canonicalLine) return index;
+  }
+  return -1;
+}
+
+function journalSectionLineOriginTransform(content, { heading, line, contentOrigin }) {
+  const canonicalHeading = normalizeJournalHeading(heading);
+  const canonicalLine = cleanJournalLine(line);
+  const origin = normalizedJournalOrigin(contentOrigin);
+  const marker = journalOriginMarkerForLine(canonicalLine, origin);
+  const source = String(content);
+  const lines = source.split('\n');
+  const range = journalSectionRange(lines, canonicalHeading);
+
+  if (range.start === -1) {
+    const trimmed = source.trimEnd();
+    return `${trimmed}${trimmed ? '\n\n' : ''}${canonicalHeading}\n${canonicalLine}\n${marker}\n`;
+  }
+
+  const matchingIndex = matchingJournalBullet(lines, range, canonicalLine);
+  if (matchingIndex !== -1) {
+    const entry = parseJournalEntry(lines, matchingIndex);
+    // An existing unmarked bullet is the legacy/manual-human convention. It
+    // already represents stronger evidence than a new non-human echo, so keep
+    // it untouched and let the invariant treat the safe no-op as satisfied.
+    if (!entry?.marker && !entry?.marker_line) return source;
+
+    const existing = entry.origin;
+    const newIsVerifiedHuman = origin.content_origin === 'human' && origin.human_evidence_eligible === true;
+    const existingMarkerIsValid = Boolean(entry.marker && !entry.marker.normalization_reason);
+    const existingIsVerifiedHuman = existingMarkerIsValid
+      && existing.content_origin === 'human'
+      && existing.human_evidence_eligible === true;
+    if (existingIsVerifiedHuman && !newIsVerifiedHuman) return source;
+    if (existingMarkerIsValid
+      && existing.content_origin === origin.content_origin
+      && existing.content_origin_basis === origin.content_origin_basis
+      && existing.human_evidence_eligible === origin.human_evidence_eligible) return source;
+
+    const next = [...lines];
+    const markerCount = entry.marker_lines?.length || (entry.marker_line ? 1 : 0);
+    if (markerCount > 0) next.splice(matchingIndex + 1, markerCount, marker);
+    else next.splice(matchingIndex + 1, 0, marker);
+    return next.join('\n');
+  }
+
+  const section = lines.slice(range.start + 1, range.end)
+    .filter((entry) => entry.trim() !== '-' && entry.trim() !== '');
+  section.push(canonicalLine, marker);
+  return [...lines.slice(0, range.start + 1), ...section, '', ...lines.slice(range.end)].join('\n');
+}
+
+function journalSectionLineOriginSatisfied(content, { heading, line, contentOrigin }) {
+  const canonicalHeading = normalizeJournalHeading(heading);
+  const canonicalLine = cleanJournalLine(line);
+  const expected = normalizedJournalOrigin(contentOrigin);
+  const lines = String(content).split('\n');
+  const range = journalSectionRange(lines, canonicalHeading);
+  if (range.start === -1) return false;
+  const index = matchingJournalBullet(lines, range, canonicalLine);
+  if (index === -1) return false;
+  const entry = parseJournalEntry(lines, index);
+  if (entry && !entry.marker && !entry.marker_line) return true;
+  const actual = entry?.marker ? parseJournalOriginMarker(entry.marker_line, entry.clean_text) : null;
+  return Boolean(actual
+    && !actual.normalization_reason
+    && actual.content_origin === expected.content_origin
+    && actual.content_origin_basis === expected.content_origin_basis
+    && actual.human_evidence_eligible === expected.human_evidence_eligible);
 }
 
 function escapeRegex(value) { return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
@@ -136,6 +249,22 @@ function createJarvosVaultTransforms() {
       },
     },
     {
+      name: 'journal-section-line', version: 2, maxPayloadBytes: 16 * 1024,
+      validatePayload: (p) => typeof p?.heading === 'string'
+        && typeof p?.line === 'string'
+        && p.line.trim().startsWith('- ')
+        && !/[\r\n]/.test(p.line)
+        && p.contentOrigin
+        && typeof p.contentOrigin === 'object',
+      normalizePayload: (p) => ({
+        heading: normalizeJournalHeading(p.heading),
+        line: cleanJournalLine(p.line),
+        contentOrigin: normalizedJournalOrigin(p.contentOrigin),
+      }),
+      applyNode: (content, payload) => journalSectionLineOriginTransform(content, payload),
+      invariant: (content, payload) => journalSectionLineOriginSatisfied(content, payload),
+    },
+    {
       name: 'journal-backlink', version: 1, maxPayloadBytes: 8192,
       validatePayload: (p) => typeof p?.linkTarget === 'string' && p.linkTarget.trim() && !/[\r\n\[\]]/.test(p.linkTarget) && (p.section === undefined || typeof p.section === 'string') && (p.noteId === undefined || typeof p.noteId === 'string'),
       normalizePayload: (p) => ({ linkTarget: p.linkTarget.trim(), section: normalizeJournalHeading(p.section || '📝 Notes'), ...(p.noteId ? { noteId: p.noteId.trim() } : {}) }),
@@ -174,4 +303,14 @@ function createVaultTransformRegistry(descriptors = []) {
   return Object.freeze({ applyNode, isSatisfied, prepare, quarantine });
 }
 
-module.exports = { createJarvosVaultTransforms, createVaultTransformRegistry, journalBacklinkSatisfied, journalBacklinkTransform, journalSectionLineTransform, normalizeJournalHeading, sessionThreadAppendTransform };
+module.exports = {
+  createJarvosVaultTransforms,
+  createVaultTransformRegistry,
+  journalBacklinkSatisfied,
+  journalBacklinkTransform,
+  journalSectionLineOriginSatisfied,
+  journalSectionLineOriginTransform,
+  journalSectionLineTransform,
+  normalizeJournalHeading,
+  sessionThreadAppendTransform,
+};

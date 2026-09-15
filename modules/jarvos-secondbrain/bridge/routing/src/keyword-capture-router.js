@@ -80,6 +80,7 @@ function applyPlan(capture, plan, options = {}) {
         ...(capture.frontmatter || {}),
         ...(plan.noteFrontmatter || {}),
       },
+      ...(typeof options.resolveUserSource === 'function' ? { resolveUserSource: options.resolveUserSource } : {}),
       ...(intentId ? { intentId: `${intentId}:note`, requestHash } : {}),
     });
   }
@@ -104,6 +105,7 @@ function applyPlan(capture, plan, options = {}) {
       line: journalLine,
       date,
       ...(intentId ? { intentId: `${intentId}:journal`, requestHash } : {}),
+      ...(plan.route === 'idea' && plan.journalOrigin ? { contentOrigin: plan.journalOrigin } : {}),
     });
     result.noteLink = result.journalEntry;
   } else {
@@ -119,7 +121,7 @@ function applyPlan(capture, plan, options = {}) {
 }
 
 function applyRoutingPlan(capture = {}, options = {}) {
-  return applyPlan(capture, buildRoutingPlan(capture), options);
+  return applyPlan(capture, buildRoutingPlan(capture, options), options);
 }
 
 function applyStrictCommandPlan(capture = {}, options = {}) {
@@ -148,7 +150,7 @@ function applyParsedStrictCommandPlan(capture = {}, command = {}, options = {}) 
   };
   return {
     ...command,
-    ...applyPlan(routedCapture, buildRoutingPlan(routedCapture), options),
+    ...applyPlan(routedCapture, buildRoutingPlan(routedCapture, options), options),
   };
 }
 

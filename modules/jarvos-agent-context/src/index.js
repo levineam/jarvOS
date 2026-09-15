@@ -1405,7 +1405,9 @@ function sessionThreadFrontmatter(input = {}, thread) {
     host: firstString(input.host, ''),
     updated_by: firstString(input.actor, input.persona, ''),
     tags: ['jarvos', 'session-thread'].concat(input.project ? [String(input.project)] : []),
-    ...(input.frontmatter && typeof input.frontmatter === 'object' && !Array.isArray(input.frontmatter) ? input.frontmatter : {}),
+    ...(input.frontmatter && typeof input.frontmatter === 'object' && !Array.isArray(input.frontmatter)
+      ? { ...assistantOriginDefaults(input.frontmatter), ...input.frontmatter }
+      : assistantOriginDefaults()),
   };
 }
 
@@ -1967,11 +1969,21 @@ function synthesizeRecall(options = {}) {
   };
 }
 
+// Agent-context note writers are assistant-run, so they declare assistant
+// origin unless the caller supplies a declaration. The canonical writer still
+// verifies any human claim against a receipt and fails closed to unknown.
+function assistantOriginDefaults(frontmatter = {}) {
+  const declared = ['content_origin', 'content_origin_basis', 'content_origin_source']
+    .some((field) => frontmatter[field] !== undefined);
+  return declared ? {} : { content_origin: 'assistant', content_origin_basis: 'assistant_generated' };
+}
+
 function defaultFrontmatter(frontmatter = {}) {
   return {
     status: 'draft',
     type: 'note',
     project: 'jarvOS',
+    ...assistantOriginDefaults(frontmatter),
     ...frontmatter,
   };
 }

@@ -78,6 +78,7 @@ function applyStoragePlan(plan, capture = {}, options = {}) {
         ...(capture.frontmatter || {}),
         ...(plan.noteFrontmatter || {}),
       },
+      ...(typeof options.resolveUserSource === 'function' ? { resolveUserSource: options.resolveUserSource } : {}),
       ...(intentId ? { intentId: `${intentId}:note`, requestHash } : {}),
     });
   }
@@ -127,6 +128,7 @@ function applyStoragePlan(plan, capture = {}, options = {}) {
         line: journalLine,
         date,
         ...(intentId ? { intentId: `${intentId}:journal`, requestHash } : {}),
+        ...(plan.route === 'idea' && plan.journalOrigin ? { contentOrigin: plan.journalOrigin } : {}),
       });
       result.noteLink = result.journalEntry;
     }
