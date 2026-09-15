@@ -34,6 +34,7 @@ function verifiedHumanEvidenceProjection(record, clean_text, options = {}) {
   const validation = validateUserSourceReceipt(receipt, {
     content: clean_text,
     resolveUserSource: options.resolveUserSource,
+    basis: record.content_origin_basis,
   });
   if (!validation.ok) return null;
   return {
@@ -124,7 +125,7 @@ function projectEvidenceBatch(records = [], options = {}) {
   return records.map((record) => projectEvidenceRecord(record, options));
 }
 
-function readEvidenceProjection(input = {}) {
+function readEvidenceProjection(input = {}, options = {}) {
   if (!input || input.projection_version !== EVIDENCE_PROJECTION_VERSION) {
     return { ok: false, reason: 'unknown_projection_version', record: projectionUnknown('unknown_projection_version') };
   }
@@ -140,14 +141,27 @@ function readEvidenceProjection(input = {}) {
   if (input.content_origin !== 'human' && input.human_evidence_eligible) {
     return { ok: false, reason: 'ineligible_origin_marked_eligible', record: projectionUnknown('ineligible_origin') };
   }
-  if (input.content_origin === 'human') {
+  if (input.content_origin === 'human' || input.human_evidence_eligible || input.human_evidence_projection) {
     const evidence = input.human_evidence_projection;
-    if (!input.human_evidence_eligible || !evidence
-      || evidence.projection_version !== EVIDENCE_PROJECTION_VERSION
-      || evidence.actor !== 'user'
-      || typeof evidence.capture_event_id !== 'string' || !evidence.capture_event_id.trim()
-      || typeof evidence.source_digest !== 'string' || !/^[a-f0-9]{64}$/.test(evidence.source_digest)
-      || evidence.content_digest !== require('./content-origin-contract').digestText(input.clean_text)) {
+    if (input.content_origin !== 'human'
+      || !['verbatim_user', 'user_derived'].includes(input.content_origin_basis)
+      || !input.human_evidence_eligible
+      || !evidence
+      || evidence.projection_version !== EVIDENCE_PROJECTION_VERSION) {
+      return { ok: false, reason: 'unverified_human_evidence', record: projectionUnknown('unverified_human_evidence') };
+    }
+    const { digestText } = require('./content-origin-contract');
+    const validation = validateUserSourceReceipt({
+      capture_event_id: evidence.capture_event_id,
+      actor: evidence.actor,
+      source_digest: evidence.source_digest,
+      content_digest: evidence.content_digest,
+    }, {
+      content: input.clean_text,
+      resolveUserSource: options.resolveUserSource,
+      basis: input.content_origin_basis,
+    });
+    if (!validation.ok || evidence.content_digest !== digestText(input.clean_text)) {
       return { ok: false, reason: 'unverified_human_evidence', record: projectionUnknown('unverified_human_evidence') };
     }
   }

@@ -12,14 +12,22 @@ const {
 } = require('../modules/jarvos-secondbrain/bridge/provenance/src/ripeness-artifact-contract');
 
 function humanEvidenceProjection(text) {
+  const digest = crypto.createHash('sha256').update(text.trim()).digest('hex');
   return {
     projection_version: 'jarvos-content-origin-evidence/v1',
     capture_event_id: 'capture-human-1',
     actor: 'user',
-    source_digest: crypto.createHash('sha256').update('user source').digest('hex'),
-    content_digest: crypto.createHash('sha256').update(text.trim()).digest('hex'),
+    source_digest: digest,
+    content_digest: digest,
   };
 }
+
+function resolveUserSource(id) {
+  if (id !== 'capture-human-1') return null;
+  return { capture_event_id: id, actor: 'user', text: 'Synthetic recurring thought.' };
+}
+
+const reviewOptions = { now: new Date('2026-08-10T12:00:00.000Z'), resolveUserSource };
 
 function artifact(overrides = {}) {
   const value = {
@@ -77,19 +85,19 @@ const now = new Date('2026-08-10T12:00:00.000Z');
 
 test('validates a fresh, published artifact and accepts fresh empty output', () => {
   assert.equal(localDateFor(now, 'America/New_York'), '2026-08-10');
-  assert.deepEqual(validateRipenessArtifact(artifact(), { now }), { ok: true, status: 'fresh', artifact: artifact() });
-  assert.equal(validateRipenessArtifact(artifact({ themes: [] }), { now }).status, 'fresh_empty');
+  assert.deepEqual(validateRipenessArtifact(artifact(), reviewOptions), { ok: true, status: 'fresh', artifact: artifact() });
+  assert.equal(validateRipenessArtifact(artifact({ themes: [] }), reviewOptions).status, 'fresh_empty');
 });
 
 test('fails closed on future, stale, unknown schema, digest, provenance, and bounded-row defects', () => {
-  assert.equal(validateRipenessArtifact(artifact({ asOf: '2026-08-11' }), { now }).ok, false);
-  assert.equal(validateRipenessArtifact(artifact({ asOf: '2026-08-09' }), { now }).ok, false);
-  assert.equal(validateRipenessArtifact(artifact({ schemaVersion: 'unknown/v9' }), { now }).ok, false);
+  assert.equal(validateRipenessArtifact(artifact({ asOf: '2026-08-11' }), reviewOptions).ok, false);
+  assert.equal(validateRipenessArtifact(artifact({ asOf: '2026-08-09' }), reviewOptions).ok, false);
+  assert.equal(validateRipenessArtifact(artifact({ schemaVersion: 'unknown/v9' }), reviewOptions).ok, false);
   const digestMismatch = artifact(); digestMismatch.outputDigest = '0'.repeat(64);
-  assert.equal(validateRipenessArtifact(digestMismatch, { now }).ok, false);
+  assert.equal(validateRipenessArtifact(digestMismatch, reviewOptions).ok, false);
   const noRun = artifact(); delete noRun.producer.runId; noRun.outputDigest = computeRipenessArtifactDigest(noRun);
-  assert.equal(validateRipenessArtifact(noRun, { now }).ok, false);
-  assert.equal(validateRipenessArtifact(artifact({ themes: Array.from({ length: 4 }, () => artifact().themes[0]) }), { now }).ok, false);
+  assert.equal(validateRipenessArtifact(noRun, reviewOptions).ok, false);
+  assert.equal(validateRipenessArtifact(artifact({ themes: Array.from({ length: 4 }, () => artifact().themes[0]) }), reviewOptions).ok, false);
 });
 
 test('assistant-only themes cannot validate and legacy artifacts are explicitly non-qualifying', () => {
@@ -109,10 +117,10 @@ test('assistant-only themes cannot validate and legacy artifacts are explicitly 
       }],
     }],
   });
-  assert.equal(validateRipenessArtifact(assistantOnly, { now }).ok, false);
+  assert.equal(validateRipenessArtifact(assistantOnly, reviewOptions).ok, false);
 
   const legacy = artifact({ schemaVersion: 'jarvos-ripeness-artifact/v1' });
-  assert.deepEqual(validateRipenessArtifact(legacy, { now }), {
+  assert.deepEqual(validateRipenessArtifact(legacy, reviewOptions), {
     ok: false,
     status: 'legacy_non_qualifying',
     artifact: null,
@@ -124,7 +132,7 @@ test('ripeness rejects a human-evidence boolean without a receipt-bound projecti
   const forged = artifact();
   delete forged.themes[0].fragments[0].human_evidence_projection;
   forged.outputDigest = computeRipenessArtifactDigest(forged);
-  assert.equal(validateRipenessArtifact(forged, { now }).ok, false);
+  assert.equal(validateRipenessArtifact(forged, reviewOptions).ok, false);
 });
 
 test('artifact digest covers origin composition and eligibility fields', () => {
@@ -132,8 +140,25 @@ test('artifact digest covers origin composition and eligibility fields', () => {
   changed.themes[0].contextSupport[0].content_origin = 'mixed';
   changed.themes[0].contextSupport[0].content_origin_basis = 'mixed_composition';
   changed.outputDigest = computeRipenessArtifactDigest(changed);
-  assert.equal(validateRipenessArtifact(changed, { now }).ok, true);
+  assert.equal(validateRipenessArtifact(changed, reviewOptions).ok, true);
 
   changed.themes[0].qualifyingHumanSupport[0].human_evidence_eligible = false;
-  assert.equal(validateRipenessArtifact(changed, { now }).ok, false);
+  assert.equal(validateRipenessArtifact(changed, reviewOptions).ok, false);
+});
+
+test('ripeness rejects fabricated capture ids and unbound verbatim source digests', () => {
+  assert.equal(validateRipenessArtifact(artifact(), { now }).ok, false);
+
+  const fabricated = artifact();
+  fabricated.themes[0].fragments[0].human_evidence_projection.capture_event_id = 'nonexistent-capture';
+  fabricated.themes[0].qualifyingHumanSupport[0].human_evidence_projection.capture_event_id = 'nonexistent-capture';
+  fabricated.outputDigest = computeRipenessArtifactDigest(fabricated);
+  assert.equal(validateRipenessArtifact(fabricated, reviewOptions).ok, false);
+
+  const unbound = artifact();
+  const other = crypto.createHash('sha256').update('hello').digest('hex');
+  unbound.themes[0].fragments[0].human_evidence_projection.source_digest = other;
+  unbound.themes[0].qualifyingHumanSupport[0].human_evidence_projection.source_digest = other;
+  unbound.outputDigest = computeRipenessArtifactDigest(unbound);
+  assert.equal(validateRipenessArtifact(unbound, reviewOptions).ok, false);
 });

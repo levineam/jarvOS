@@ -388,6 +388,27 @@ describe('knowledgeUnit promotion gates', () => {
     assert.match(review.reason, /context-only/);
   });
 
+  it('rejects verbatim_user when the output digest does not match the verified source', () => {
+    const sourceText = 'Unrelated synthetic user source.';
+    const outputText = 'Entirely assistant-written synthetic assertion.';
+    const mismatched = {
+      capture_event_id: 'capture-1',
+      actor: 'user',
+      source_digest: crypto.createHash('sha256').update(sourceText).digest('hex'),
+      content_digest: crypto.createHash('sha256').update(outputText).digest('hex'),
+    };
+    const review = reviewCandidate({
+      text: outputText,
+      knowledgeUnit: knowledgeUnit({
+        text: outputText,
+        evidence: [{ sourcePath: 'Notes/Unit.md', quote: outputText }],
+        content_origin_source: mismatched,
+      }),
+    }, { resolveUserSource: () => ({ capture_event_id: 'capture-1', actor: 'user', text: sourceText }) });
+    assert.equal(review.shouldPromote, false);
+    assert.match(review.reason, /verified user-source receipt/);
+  });
+
   it('rejects fabricated, unresolved, and legacy-author human evidence', () => {
     for (const [provenance, options] of [
       [{ content_origin: 'human', content_origin_basis: 'verbatim_user', content_origin_source: { ...receipt, source_digest: '0'.repeat(64) } }, { resolveUserSource: resolver }],

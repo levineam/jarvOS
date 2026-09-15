@@ -5,7 +5,7 @@
 // policy; consumers pass only a parsed artifact and the effective instant.
 
 const crypto = require('crypto');
-const { CONTENT_ORIGINS } = require('./content-origin-contract');
+const { CONTENT_ORIGINS, validateUserSourceReceipt } = require('./content-origin-contract');
 
 const RIPENESS_ARTIFACT_SCHEMA_VERSION = 'jarvos-ripeness-artifact/v2';
 const LEGACY_RIPENESS_ARTIFACT_SCHEMA_VERSION = 'jarvos-ripeness-artifact/v1';
@@ -68,18 +68,28 @@ function validOriginCounts(counts) {
   return CONTENT_ORIGINS.every((origin) => Number.isInteger(counts[origin]) && counts[origin] >= 0);
 }
 
-function validHumanEvidenceProjection(projection, text) {
-  return isPlainObject(projection)
-    && projection.projection_version === 'jarvos-content-origin-evidence/v1'
-    && projection.actor === 'user'
-    && typeof projection.capture_event_id === 'string' && projection.capture_event_id.length > 0
-    && SHA256_RE.test(String(projection.source_digest || ''))
-    && SHA256_RE.test(String(projection.content_digest || ''))
-    && typeof text === 'string'
-    && crypto.createHash('sha256').update(text.trim()).digest('hex') === projection.content_digest;
+function validHumanEvidenceProjection(projection, text, options = {}) {
+  if (!isPlainObject(projection)
+    || projection.projection_version !== 'jarvos-content-origin-evidence/v1'
+    || projection.actor !== 'user'
+    || typeof projection.capture_event_id !== 'string' || !projection.capture_event_id.length
+    || !SHA256_RE.test(String(projection.source_digest || ''))
+    || !SHA256_RE.test(String(projection.content_digest || ''))
+    || typeof text !== 'string') return false;
+  const validation = validateUserSourceReceipt({
+    capture_event_id: projection.capture_event_id,
+    actor: projection.actor,
+    source_digest: projection.source_digest,
+    content_digest: projection.content_digest,
+  }, {
+    content: text,
+    resolveUserSource: options.resolveUserSource,
+    basis: options.basis,
+  });
+  return validation.ok;
 }
 
-function validHumanSupport(support) {
+function validHumanSupport(support, options = {}) {
   return isPlainObject(support)
     && typeof support.id === 'string' && support.id.length > 0 && support.id.length <= 200
     && isIsoDate(support.date)
@@ -90,7 +100,10 @@ function validHumanSupport(support) {
     && support.text.length > 0
     && support.text.length <= MAX_FRAGMENT_CHARS
     && !/jarvos-content-origin\/v\d+/i.test(support.text)
-    && validHumanEvidenceProjection(support.human_evidence_projection, support.text);
+    && validHumanEvidenceProjection(support.human_evidence_projection, support.text, {
+      ...options,
+      basis: support.content_origin_basis,
+    });
 }
 
 function validContextSupport(support) {
@@ -108,7 +121,7 @@ function validContextSupport(support) {
       && !/jarvos-content-origin\/v\d+/i.test(support.text)));
 }
 
-function validateFragment(fragment) {
+function validateFragment(fragment, options = {}) {
   return isPlainObject(fragment)
     && isIsoDate(fragment.date)
     && typeof fragment.text === 'string'
@@ -118,10 +131,13 @@ function validateFragment(fragment) {
     && fragment.content_origin === 'human'
     && HUMAN_ORIGIN_BASES.includes(fragment.content_origin_basis)
     && fragment.human_evidence_eligible === true
-    && validHumanEvidenceProjection(fragment.human_evidence_projection, fragment.text);
+    && validHumanEvidenceProjection(fragment.human_evidence_projection, fragment.text, {
+      ...options,
+      basis: fragment.content_origin_basis,
+    });
 }
 
-function validateTheme(theme) {
+function validateTheme(theme, options = {}) {
   if (!isPlainObject(theme)
     || !Number.isInteger(theme.days) || theme.days < 1
     || !Number.isInteger(theme.spanDays) || theme.spanDays < 1
@@ -136,8 +152,8 @@ function validateTheme(theme) {
     || !validOriginCounts(theme.originCounts)
     || theme.originCounts.human < 1) return false;
 
-  return theme.fragments.every(validateFragment)
-    && theme.qualifyingHumanSupport.every(validHumanSupport)
+  return theme.fragments.every((fragment) => validateFragment(fragment, options))
+    && theme.qualifyingHumanSupport.every((support) => validHumanSupport(support, options))
     && theme.contextSupport.every(validContextSupport)
     && theme.support.every((support) => typeof support === 'string' && support.length > 0 && support.length <= 200);
 }
@@ -155,6 +171,7 @@ function validateRipenessArtifact(artifact, {
   now = new Date(),
   timeZone = RIPENESS_TIME_ZONE,
   requireCurrentDate = true,
+  resolveUserSource,
 } = {}) {
   if (!isPlainObject(artifact)) return invalid('malformed');
   if (artifact.schemaVersion === LEGACY_RIPENESS_ARTIFACT_SCHEMA_VERSION) return invalid('legacy_non_qualifying');
@@ -169,7 +186,7 @@ function validateRipenessArtifact(artifact, {
   if (!isPlainObject(artifact.publication) || artifact.publication.state !== 'published') return invalid('provenance_incomplete');
   if (artifact.omissions !== undefined && (!Array.isArray(artifact.omissions) || !artifact.omissions.every(validateOmission))) return invalid('malformed');
   if (!SHA256_RE.test(String(artifact.outputDigest || '')) || artifact.outputDigest !== computeRipenessArtifactDigest(artifact)) return invalid('digest_mismatch');
-  if (!Array.isArray(artifact.themes) || artifact.themes.length > MAX_THEMES || !artifact.themes.every(validateTheme)) return invalid('non_qualifying_theme');
+  if (!Array.isArray(artifact.themes) || artifact.themes.length > MAX_THEMES || !artifact.themes.every((theme) => validateTheme(theme, { resolveUserSource }))) return invalid('non_qualifying_theme');
 
   const expectedDate = localDateFor(now, timeZone);
   if (requireCurrentDate && artifact.asOf !== expectedDate) return invalid(artifact.asOf > expectedDate ? 'future' : 'stale');

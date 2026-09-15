@@ -88,6 +88,7 @@ function contentOriginRecord(unit = {}, event = {}, { resolveUserSource } = {}) 
       ? validateUserSourceReceipt(receipt, {
         content: promotionContent(event),
         resolveUserSource,
+        basis: normalizedBasis,
       })
       : null,
   };

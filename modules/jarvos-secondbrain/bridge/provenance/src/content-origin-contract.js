@@ -122,6 +122,9 @@ function validateUserSourceReceipt(receipt, options = {}) {
     return invalidReceipt('source_mismatch');
   }
   if (digestText(sourceText) !== receipt.source_digest) return invalidReceipt('source_digest_mismatch');
+  if (options.basis === 'verbatim_user' && receipt.source_digest !== receipt.content_digest) {
+    return invalidReceipt('verbatim_mismatch');
+  }
 
   return { ok: true, reason: null, source };
 }
@@ -148,7 +151,7 @@ function normalizeContentOrigin(input = {}, options = {}) {
   if (basis === 'legacy_author') return unknownRecord('legacy_basis_requires_read_time_resolution');
   if (BASIS_ORIGIN[basis] !== origin) return unknownRecord('origin_basis_mismatch');
   if (origin === 'human') {
-    const validation = validateUserSourceReceipt(sourceReceipt(source), options);
+    const validation = validateUserSourceReceipt(sourceReceipt(source), { ...options, basis });
     if (!validation.ok) return unknownRecord(`invalid_user_source:${validation.reason}`);
   }
 

@@ -331,8 +331,54 @@ test('human evidence projections require a resolver-validated receipt, not an el
   assert.equal(projectEvidenceRecord(input).human_evidence_eligible, false);
   const projected = projectEvidenceRecord(input, { resolveUserSource: resolveSource(text, 'capture-projection') });
   assert.equal(projected.human_evidence_eligible, true);
-  assert.equal(readEvidenceProjection(projected).ok, true);
-  assert.equal(readEvidenceProjection({ ...projected, human_evidence_projection: undefined }).ok, false);
+  assert.equal(readEvidenceProjection(projected, { resolveUserSource: resolveSource(text, 'capture-projection') }).ok, true);
+  assert.equal(readEvidenceProjection(projected).ok, false);
+  assert.equal(readEvidenceProjection({ ...projected, human_evidence_projection: undefined }, { resolveUserSource: resolveSource(text, 'capture-projection') }).ok, false);
+});
+
+test('rejects fabricated projections, unresolved captures, legacy_author evidence, and unbound verbatim_user', () => {
+  const text = 'Entirely assistant-written synthetic assertion.';
+  const source = 'Unrelated synthetic user source.';
+  const resolver = resolveSource(source, 'synthetic-real-id');
+  const forged = {
+    projection_version: EVIDENCE_PROJECTION_VERSION,
+    clean_text: text,
+    content_origin: 'human',
+    content_origin_basis: 'legacy_author',
+    human_evidence_eligible: true,
+    human_evidence_projection: {
+      projection_version: EVIDENCE_PROJECTION_VERSION,
+      capture_event_id: 'nonexistent',
+      actor: 'user',
+      source_digest: '0'.repeat(64),
+      content_digest: digest(text),
+    },
+  };
+  assert.equal(readEvidenceProjection(forged).ok, false);
+  assert.equal(readEvidenceProjection(forged, { resolveUserSource: resolver }).ok, false);
+
+  const verbatimMismatch = normalizeContentOrigin({
+    content_origin: 'human',
+    content_origin_basis: 'verbatim_user',
+    user_source: receipt(source, text, 'synthetic-real-id'),
+  }, { content: text, resolveUserSource: resolver });
+  assert.equal(verbatimMismatch.content_origin, 'unknown');
+
+  const validHuman = {
+    projection_version: EVIDENCE_PROJECTION_VERSION,
+    clean_text: source,
+    content_origin: 'human',
+    content_origin_basis: 'verbatim_user',
+    human_evidence_eligible: true,
+    human_evidence_projection: {
+      projection_version: EVIDENCE_PROJECTION_VERSION,
+      capture_event_id: 'synthetic-real-id',
+      actor: 'user',
+      source_digest: digest(source),
+      content_digest: digest(source),
+    },
+  };
+  assert.equal(readEvidenceProjection(validHuman, { resolveUserSource: resolver }).ok, true);
 });
 
 test('evidence projection rejects malformed records before private consumers see them', () => {
