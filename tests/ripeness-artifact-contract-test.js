@@ -11,6 +11,16 @@ const {
   validateRipenessArtifact,
 } = require('../modules/jarvos-secondbrain/bridge/provenance/src/ripeness-artifact-contract');
 
+function humanEvidenceProjection(text) {
+  return {
+    projection_version: 'jarvos-content-origin-evidence/v1',
+    capture_event_id: 'capture-human-1',
+    actor: 'user',
+    source_digest: crypto.createHash('sha256').update('user source').digest('hex'),
+    content_digest: crypto.createHash('sha256').update(text.trim()).digest('hex'),
+  };
+}
+
 function artifact(overrides = {}) {
   const value = {
     schemaVersion: RIPENESS_ARTIFACT_SCHEMA_VERSION,
@@ -37,13 +47,16 @@ function artifact(overrides = {}) {
         content_origin: 'human',
         content_origin_basis: 'verbatim_user',
         human_evidence_eligible: true,
+        human_evidence_projection: humanEvidenceProjection('Synthetic recurring thought.'),
       }],
       qualifyingHumanSupport: [{
         id: 'human-support-1',
         date: '2026-08-09',
+        text: 'Synthetic recurring thought.',
         content_origin: 'human',
         content_origin_basis: 'verbatim_user',
         human_evidence_eligible: true,
+        human_evidence_projection: humanEvidenceProjection('Synthetic recurring thought.'),
       }],
       contextSupport: [{
         id: 'assistant-support-1',
@@ -105,6 +118,13 @@ test('assistant-only themes cannot validate and legacy artifacts are explicitly 
     artifact: null,
     legacy: true,
   });
+});
+
+test('ripeness rejects a human-evidence boolean without a receipt-bound projection', () => {
+  const forged = artifact();
+  delete forged.themes[0].fragments[0].human_evidence_projection;
+  forged.outputDigest = computeRipenessArtifactDigest(forged);
+  assert.equal(validateRipenessArtifact(forged, { now }).ok, false);
 });
 
 test('artifact digest covers origin composition and eligibility fields', () => {

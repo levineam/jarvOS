@@ -34,7 +34,10 @@ const {
 const { createMemoryRecord } = require('../../lib/memory-record');
 const { HindsightAdapter } = require('./hindsight-adapter');
 const { getHindsightConfig } = require('../../lib/memory-config');
-const { contentOriginPairIsValid } = require('../../../jarvos-secondbrain/bridge/provenance/src/content-origin-contract');
+const {
+  contentOriginPairIsValid,
+  validateUserSourceReceipt,
+} = require('../../../jarvos-secondbrain/bridge/provenance/src/content-origin-contract');
 
 function promotionContent(event = {}) {
   if (event.knowledgeUnit) return String(event.knowledgeUnit.text || '').trim();
@@ -46,17 +49,7 @@ function hasKnowledgeUnitEvidence(unit = {}) {
     && unit.evidence.some((entry) => entry?.sourcePath || entry?.quote || entry?.bodySha256 || entry?.ref);
 }
 
-function hasUserSourceReceipt(receipt = {}) {
-  return Boolean(receipt
-    && typeof receipt === 'object'
-    && receipt.actor === 'user'
-    && typeof receipt.capture_event_id === 'string'
-    && receipt.capture_event_id.trim()
-    && /^[a-f0-9]{64}$/.test(String(receipt.source_digest || ''))
-    && /^[a-f0-9]{64}$/.test(String(receipt.content_digest || '')));
-}
-
-function contentOriginRecord(unit = {}, event = {}) {
+function contentOriginRecord(unit = {}, event = {}, { resolveUserSource } = {}) {
   const candidate = unit.provenance || unit;
   const eventOrigin = event.content_origin ?? event.contentOrigin;
   const eventBasis = event.content_origin_basis ?? event.contentOriginBasis;
@@ -83,9 +76,7 @@ function contentOriginRecord(unit = {}, event = {}) {
     || candidate.contentOriginSource
     || event.user_source
     || event.userSource;
-  const validPair = normalizedBasis === 'legacy_author'
-    ? ['human', 'assistant', 'mixed'].includes(normalizedOrigin)
-    : contentOriginPairIsValid(normalizedOrigin, normalizedBasis);
+  const validPair = contentOriginPairIsValid(normalizedOrigin, normalizedBasis);
   return {
     content_origin: normalizedOrigin,
     content_origin_basis: normalizedBasis,
@@ -93,14 +84,17 @@ function contentOriginRecord(unit = {}, event = {}) {
       ? candidate.human_evidence_eligible === true || candidate.humanEvidenceEligible === true
       : event.human_evidence_eligible === true || event.humanEvidenceEligible === true,
     valid_pair: validPair,
-    receipt_bound: normalizedOrigin !== 'human'
-      || normalizedBasis === 'legacy_author'
-      || hasUserSourceReceipt(receipt),
+    receipt_validation: normalizedOrigin === 'human'
+      ? validateUserSourceReceipt(receipt, {
+        content: promotionContent(event),
+        resolveUserSource,
+      })
+      : null,
   };
 }
 
-function humanEvidenceGate(unit, event) {
-  const provenance = contentOriginRecord(unit, event);
+function humanEvidenceGate(unit, event, options) {
+  const provenance = contentOriginRecord(unit, event, options);
   if (!provenance) return null;
   if (!provenance.valid_pair) {
     return {
@@ -109,11 +103,10 @@ function humanEvidenceGate(unit, event) {
     };
   }
   if (provenance.content_origin === 'human'
-    && provenance.content_origin_basis !== 'legacy_author'
-    && !provenance.receipt_bound) {
+    && (!provenance.receipt_validation || !provenance.receipt_validation.ok)) {
     return {
       provenance,
-      reason: 'human evidence requires a user-source receipt',
+      reason: `human evidence requires a verified user-source receipt (${provenance.receipt_validation?.reason || 'unresolved'})`,
     };
   }
   if (provenance.content_origin !== 'human' || provenance.human_evidence_eligible !== true) {
@@ -136,7 +129,7 @@ function isRawCaptureEvent(event = {}) {
     && !event.knowledgeUnit;
 }
 
-function reviewKnowledgeUnitCandidate(event = {}) {
+function reviewKnowledgeUnitCandidate(event = {}, options = {}) {
   const unit = event.knowledgeUnit || {};
   const text = promotionContent(event);
   if (!text) {
@@ -152,7 +145,7 @@ function reviewKnowledgeUnitCandidate(event = {}) {
   if (!hasKnowledgeUnitEvidence(unit)) {
     return { shouldPromote: false, memoryClass: null, reason: 'knowledgeUnit promotion requires source evidence' };
   }
-  const evidenceGate = humanEvidenceGate(unit, event);
+  const evidenceGate = humanEvidenceGate(unit, event, options);
   if (evidenceGate?.reason) {
     return { shouldPromote: false, memoryClass: null, reason: evidenceGate.reason };
   }
@@ -195,9 +188,9 @@ function reviewKnowledgeUnitCandidate(event = {}) {
  * @param {string} [event.content]        - Body override (takes priority over text)
  * @returns {{ shouldPromote: boolean, memoryClass: string|null, reason: string }}
  */
-function reviewCandidate(event = {}) {
+function reviewCandidate(event = {}, options = {}) {
   if (event.knowledgeUnit) {
-    return reviewKnowledgeUnitCandidate(event);
+    return reviewKnowledgeUnitCandidate(event, options);
   }
 
   if (isRawTranscriptSource(event.source)) {
@@ -208,7 +201,7 @@ function reviewCandidate(event = {}) {
     return { shouldPromote: false, memoryClass: null, reason: 'raw source-backed captures must promote through cited knowledgeUnit references' };
   }
 
-  const evidenceGate = humanEvidenceGate({}, event);
+  const evidenceGate = humanEvidenceGate({}, event, options);
   if (evidenceGate?.reason) {
     return { shouldPromote: false, memoryClass: null, reason: evidenceGate.reason };
   }
@@ -280,8 +273,8 @@ function reviewCandidate(event = {}) {
  * @property {string}      reason
  * @property {string|null} error
  */
-function promoteCandidate(event = {}) {
-  const review = reviewCandidate(event);
+function promoteCandidate(event = {}, options = {}) {
+  const review = reviewCandidate(event, options);
 
   if (!review.shouldPromote) {
     return {
@@ -297,7 +290,7 @@ function promoteCandidate(event = {}) {
 
   const content = promotionContent(event);
   const unit = event.knowledgeUnit || null;
-  const provenance = contentOriginRecord(unit || {}, event);
+  const provenance = contentOriginRecord(unit || {}, event, options);
   const result = createMemoryRecord({
     class: review.memoryClass,
     content,

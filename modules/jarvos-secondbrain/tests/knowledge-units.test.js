@@ -66,8 +66,8 @@ test('buildArtifact emits generalized source-backed knowledge units for safe not
   assert.equal(unit.author, 'andrew');
   assert.equal(unit.content_origin, 'human');
   assert.equal(unit.content_origin_basis, 'legacy_author');
-  assert.equal(unit.human_evidence_eligible, true);
-  assert.equal(unit.provenance.human_evidence_eligible, true);
+  assert.equal(unit.human_evidence_eligible, false);
+  assert.equal(unit.provenance.human_evidence_eligible, false);
   assert.equal(unit.source.type, 'note');
   assert.equal(unit.source.path, 'Notes/Secondbrain Architecture.md');
   assert.equal(unit.privacyDecision.tier, 'local-private');
@@ -172,11 +172,12 @@ test('explicit human note provenance requires a syntactically valid source recei
       content_origin_source: {
         capture_event_id: 'capture-1',
         actor: 'user',
-        source_digest: 'a'.repeat(64),
+        source_digest: digestText(body),
         content_digest: digestText(body),
       },
     },
     created: true,
+    resolveUserSource: () => ({ capture_event_id: 'capture-1', actor: 'user', text: body }),
   });
   assert.equal(valid.knowledgeUnits[0].content_origin, 'human');
   assert.equal(valid.knowledgeUnits[0].human_evidence_eligible, true);

@@ -19,7 +19,6 @@ const crypto = require('crypto');
 const {
   CONTENT_ORIGIN_SCHEMA_VERSION,
   cleanNoteContent,
-  humanEvidenceEligible,
   normalizeContentOriginWithLegacy,
 } = require('../../../bridge/provenance/src/content-origin-contract');
 
@@ -122,20 +121,16 @@ function knowledgeUnitId({ sourcePath, bodyHash, kind, text }) {
   return `ku_${sha256(`${sourcePath}:${bodyHash}:${kind}:${text}`).slice(0, 16)}`;
 }
 
-function noteProvenance(frontmatter = {}, body = '', title = '') {
+function noteProvenance(frontmatter = {}, body = '', title = '', { resolveUserSource } = {}) {
   const normalized = normalizeContentOriginWithLegacy(frontmatter, {
-    allowLegacyFallback: true,
-    allowUnresolvedReceipt: true,
     content: cleanNoteContent(body, title),
+    resolveUserSource,
   });
-  const eligible = normalized.content_origin === 'human'
-    && (normalized.human_evidence_eligible === true
-      || humanEvidenceEligible(normalized, { allowLegacyFallback: true }));
   return {
     content_origin_schema: normalized.schema_version || CONTENT_ORIGIN_SCHEMA_VERSION,
     content_origin: normalized.content_origin || 'unknown',
     content_origin_basis: normalized.content_origin_basis || 'unknown',
-    human_evidence_eligible: eligible,
+    human_evidence_eligible: normalized.content_origin === 'human' && normalized.human_evidence_eligible === true,
     ...(normalized.user_source ? { content_origin_source: { ...normalized.user_source } } : {}),
     ...(normalized.normalization_reason ? { normalization_reason: normalized.normalization_reason } : {}),
   };
@@ -270,7 +265,7 @@ function sourcePathFor(filePath, notesDir) {
   return rel && !rel.startsWith('..') ? rel : path.basename(filePath);
 }
 
-function buildArtifact({ filePath, notesDir, title, body, frontmatter, created, journal = null }) {
+function buildArtifact({ filePath, notesDir, title, body, frontmatter, created, journal = null, resolveUserSource }) {
   const aliases = [...new Set([title, ...parseList(frontmatter.aliases || '')].filter(Boolean))];
   const wikilinks = extractWikilinks(body);
   const entities = extractEntities(title, body, wikilinks);
@@ -281,7 +276,7 @@ function buildArtifact({ filePath, notesDir, title, body, frontmatter, created, 
   const now = new Date().toISOString();
   const claims = extractClaims(body);
   const noteSummary = summarize(body);
-  const provenance = noteProvenance(frontmatter, body, title);
+  const provenance = noteProvenance(frontmatter, body, title, { resolveUserSource });
 
   const gbrainStatus = sensitivity.excluded ? 'skipped' : 'queued';
   const memoryWikiStatus = sensitivity.excluded ? 'skipped' : 'queued';
@@ -408,7 +403,7 @@ function recordAudit(knowledgeDir, artifact) {
   return { auditPath, counts: audit.counts };
 }
 
-function optimizeNoteKnowledge({ filePath, notesDir, knowledgeDir: providedKnowledgeDir = null, title, body, frontmatter = {}, created = true, journal = null }) {
+function optimizeNoteKnowledge({ filePath, notesDir, knowledgeDir: providedKnowledgeDir = null, title, body, frontmatter = {}, created = true, journal = null, resolveUserSource }) {
   if (process.env.JARVOS_NOTE_OPTIMIZATION === '0') {
     return { optimized: false, skipped: true, reason: 'disabled by JARVOS_NOTE_OPTIMIZATION=0' };
   }
@@ -419,7 +414,7 @@ function optimizeNoteKnowledge({ filePath, notesDir, knowledgeDir: providedKnowl
   const artifactKey = sha256(`${sourcePath}:${bodyHash}`).slice(0, 16);
   const artifactName = `${slugify(title)}-${artifactKey}.json`;
   const artifactPath = path.join(knowledgeDir, 'artifacts', artifactName);
-  const artifact = buildArtifact({ filePath, notesDir, title, body, frontmatter, created, journal });
+  const artifact = buildArtifact({ filePath, notesDir, title, body, frontmatter, created, journal, resolveUserSource });
 
   writeJson(artifactPath, artifact);
 

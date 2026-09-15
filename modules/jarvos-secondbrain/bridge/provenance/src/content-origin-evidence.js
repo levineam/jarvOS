@@ -6,8 +6,9 @@ const {
   CONTENT_ORIGIN_BASES,
   cleanText,
   cleanNoteContent,
-  humanEvidenceEligible,
   normalizeContentOriginWithLegacy,
+  sourceReceipt,
+  validateUserSourceReceipt,
   parseJournalEntry,
 } = require('./content-origin-contract');
 const { frontmatterToObject, parseFrontmatter } = require('../../../packages/jarvos-secondbrain-notes/src/lib/note-schema');
@@ -25,6 +26,25 @@ function projectionUnknown(reason = 'unknown') {
   };
 }
 
+function verifiedHumanEvidenceProjection(record, clean_text, options = {}) {
+  if (record.content_origin !== 'human'
+    || !['verbatim_user', 'user_derived'].includes(record.content_origin_basis)
+    || record.human_evidence_eligible !== true) return null;
+  const receipt = sourceReceipt(record);
+  const validation = validateUserSourceReceipt(receipt, {
+    content: clean_text,
+    resolveUserSource: options.resolveUserSource,
+  });
+  if (!validation.ok) return null;
+  return {
+    projection_version: EVIDENCE_PROJECTION_VERSION,
+    capture_event_id: receipt.capture_event_id,
+    actor: 'user',
+    source_digest: receipt.source_digest,
+    content_digest: receipt.content_digest,
+  };
+}
+
 function projectEvidenceRecord(record = {}, options = {}) {
   const clean_text = cleanText(record.clean_text ?? record.cleanText ?? options.cleanText ?? record.text);
   const origin = record.content_origin;
@@ -34,19 +54,19 @@ function projectEvidenceRecord(record = {}, options = {}) {
   }
   if (basis === 'legacy_author' && origin === 'unknown') return projectionUnknown('invalid_legacy_record');
 
+  const human_evidence_projection = verifiedHumanEvidenceProjection(record, clean_text, options);
   return {
     projection_version: EVIDENCE_PROJECTION_VERSION,
     content_origin_schema: CONTENT_ORIGIN_SCHEMA_VERSION,
     clean_text,
     content_origin: origin,
     content_origin_basis: basis,
-    human_evidence_eligible: origin === 'human' && (options.prevalidated === true
-      ? record.human_evidence_eligible === true
-      : humanEvidenceEligible(record, options)),
+    human_evidence_eligible: Boolean(human_evidence_projection),
+    ...(human_evidence_projection ? { human_evidence_projection } : {}),
   };
 }
 
-function projectJournalEntriesFromMarkdown(markdown, { date = null, section = 'ideas' } = {}) {
+function projectJournalEntriesFromMarkdown(markdown, { date = null, section = 'ideas', resolveUserSource } = {}) {
   const lines = String(markdown || '').split(/\r?\n/);
   const entries = [];
   let inSection = false;
@@ -65,13 +85,7 @@ function projectJournalEntriesFromMarkdown(markdown, { date = null, section = 'i
       content_origin_basis: entry.origin.content_origin_basis,
       user_source: entry.origin.user_source,
       human_evidence_eligible: entry.origin.human_evidence_eligible === true,
-    }, {
-      prevalidated: Boolean(entry.marker
-        && !entry.marker.normalization_reason
-        && (entry.origin.content_origin !== 'human' || entry.origin.user_source)),
-      manualEntry: !entry.marker_line,
-      allowLegacyFallback: true,
-    });
+    }, { resolveUserSource });
     entries.push({
       ...projected,
       date: date || null,
@@ -82,24 +96,21 @@ function projectJournalEntriesFromMarkdown(markdown, { date = null, section = 'i
   return entries;
 }
 
-function projectNoteMarkdown(markdown, { sourcePath = null, title = null } = {}) {
+function projectNoteMarkdown(markdown, { sourcePath = null, title = null, resolveUserSource } = {}) {
   const parsed = parseFrontmatter(String(markdown || ''));
   const frontmatter = parsed ? frontmatterToObject(parsed) : {};
   const clean_text = cleanText(parsed?.remainder || markdown);
   const normalized = normalizeContentOriginWithLegacy(frontmatter, {
-    allowLegacyFallback: true,
-    allowUnresolvedReceipt: true,
     content: cleanNoteContent(clean_text, title),
+    resolveUserSource,
   });
-  const eligible = normalized.content_origin === 'human'
-    && (normalized.human_evidence_eligible === true
-      || humanEvidenceEligible(normalized, { allowLegacyFallback: true }));
   const projected = projectEvidenceRecord({
     clean_text,
     content_origin: normalized.content_origin,
     content_origin_basis: normalized.content_origin_basis,
-    human_evidence_eligible: eligible,
-  }, { prevalidated: true, allowLegacyFallback: true });
+    user_source: normalized.user_source,
+    human_evidence_eligible: normalized.human_evidence_eligible === true,
+  }, { resolveUserSource });
   return {
     ...projected,
     source_id: `note:${sourcePath || title || 'unknown'}`,
@@ -129,6 +140,17 @@ function readEvidenceProjection(input = {}) {
   if (input.content_origin !== 'human' && input.human_evidence_eligible) {
     return { ok: false, reason: 'ineligible_origin_marked_eligible', record: projectionUnknown('ineligible_origin') };
   }
+  if (input.content_origin === 'human') {
+    const evidence = input.human_evidence_projection;
+    if (!input.human_evidence_eligible || !evidence
+      || evidence.projection_version !== EVIDENCE_PROJECTION_VERSION
+      || evidence.actor !== 'user'
+      || typeof evidence.capture_event_id !== 'string' || !evidence.capture_event_id.trim()
+      || typeof evidence.source_digest !== 'string' || !/^[a-f0-9]{64}$/.test(evidence.source_digest)
+      || evidence.content_digest !== require('./content-origin-contract').digestText(input.clean_text)) {
+      return { ok: false, reason: 'unverified_human_evidence', record: projectionUnknown('unverified_human_evidence') };
+    }
+  }
   return {
     ok: true,
     reason: null,
@@ -139,6 +161,7 @@ function readEvidenceProjection(input = {}) {
       content_origin: input.content_origin,
       content_origin_basis: input.content_origin_basis,
       human_evidence_eligible: input.human_evidence_eligible,
+      ...(input.human_evidence_projection ? { human_evidence_projection: { ...input.human_evidence_projection } } : {}),
     },
   };
 }

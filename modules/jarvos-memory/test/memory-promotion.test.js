@@ -6,6 +6,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const http = require('http');
+const crypto = require('crypto');
 
 const {
   reviewCandidate,
@@ -251,11 +252,20 @@ describe('knowledgeUnit promotion gates', () => {
     removeTempWorkspace(workspace);
   });
 
+  const unitText = 'Generated wiki pages are rebuildable from source notes.';
+  const receipt = {
+    capture_event_id: 'capture-1',
+    actor: 'user',
+    source_digest: crypto.createHash('sha256').update(unitText).digest('hex'),
+    content_digest: crypto.createHash('sha256').update(unitText).digest('hex'),
+  };
+  const resolver = () => ({ capture_event_id: 'capture-1', actor: 'user', text: unitText });
+
   function knowledgeUnit(overrides = {}) {
     return {
       id: 'ku_test',
       kind: 'claim',
-      text: 'Generated wiki pages are rebuildable from source notes.',
+      text: unitText,
       source: {
         type: 'note',
         path: 'Notes/Generated Wiki.md',
@@ -275,7 +285,8 @@ describe('knowledgeUnit promotion gates', () => {
         memoryPromotion: true,
       },
       content_origin: 'human',
-      content_origin_basis: 'legacy_author',
+      content_origin_basis: 'verbatim_user',
+      content_origin_source: receipt,
       human_evidence_eligible: true,
       ...overrides,
     };
@@ -284,7 +295,7 @@ describe('knowledgeUnit promotion gates', () => {
   it('accepts cited eligible knowledge units', () => {
     const review = reviewKnowledgeUnitCandidate({
       knowledgeUnit: knowledgeUnit(),
-    });
+    }, { resolveUserSource: resolver });
 
     assert.equal(review.shouldPromote, true);
     assert.equal(review.memoryClass, 'fact');
@@ -307,7 +318,7 @@ describe('knowledgeUnit promotion gates', () => {
           excludedFromPromotion: true,
         },
       }),
-    });
+    }, { resolveUserSource: resolver });
 
     assert.equal(review.shouldPromote, false);
     assert.match(review.reason, /privacy tier 'sensitive'/);
@@ -359,7 +370,7 @@ describe('knowledgeUnit promotion gates', () => {
           memoryPromotion: false,
         },
       }),
-    });
+    }, { resolveUserSource: resolver });
 
     assert.equal(review.shouldPromote, false);
     assert.match(review.reason, /memoryPromotion is false/);
@@ -375,6 +386,18 @@ describe('knowledgeUnit promotion gates', () => {
     });
     assert.equal(review.shouldPromote, false);
     assert.match(review.reason, /context-only/);
+  });
+
+  it('rejects fabricated, unresolved, and legacy-author human evidence', () => {
+    for (const [provenance, options] of [
+      [{ content_origin: 'human', content_origin_basis: 'verbatim_user', content_origin_source: { ...receipt, source_digest: '0'.repeat(64) } }, { resolveUserSource: resolver }],
+      [{ content_origin_source: undefined }, {}],
+      [{ content_origin: 'human', content_origin_basis: 'legacy_author', content_origin_source: receipt }, { resolveUserSource: resolver }],
+    ]) {
+      const review = reviewCandidate({ knowledgeUnit: knowledgeUnit(provenance) }, options);
+      assert.equal(review.shouldPromote, false);
+      assert.match(review.reason, /verified user-source receipt|invalid basis/);
+    }
   });
 
   it('rejects explicit human knowledge units that omit their source receipt', () => {
@@ -405,7 +428,7 @@ describe('knowledgeUnit promotion gates', () => {
     const review = reviewCandidate({
       human_evidence_eligible: true,
       knowledgeUnit: knowledgeUnit({ human_evidence_eligible: false }),
-    });
+    }, { resolveUserSource: resolver });
     assert.equal(review.shouldPromote, false);
     assert.match(review.reason, /context-only/);
   });
@@ -429,15 +452,12 @@ describe('knowledgeUnit promotion gates', () => {
 
   it('promotes cited knowledge units through the local file path', () => {
     const result = promoteCandidate({
-      knowledgeUnit: knowledgeUnit({
-        kind: 'preference',
-        text: 'Andrew prefers concise engineering updates.',
-      }),
-    });
+      knowledgeUnit: knowledgeUnit({ kind: 'preference' }),
+    }, { resolveUserSource: resolver });
 
     assert.equal(result.stage, 'promoted');
     assert.equal(result.memoryClass, 'preference');
-    assert.equal(result.record.content, 'Andrew prefers concise engineering updates.');
+    assert.equal(result.record.content, unitText);
   });
 });
 

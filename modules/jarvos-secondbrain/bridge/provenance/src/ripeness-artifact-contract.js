@@ -16,7 +16,7 @@ const MAX_THEMES = 3;
 const MAX_FRAGMENTS_PER_THEME = 4;
 const MAX_SUPPORT_PER_THEME = 4;
 const MAX_FRAGMENT_CHARS = 320;
-const HUMAN_ORIGIN_BASES = Object.freeze(['verbatim_user', 'user_derived', 'legacy_author', 'unknown']);
+const HUMAN_ORIGIN_BASES = Object.freeze(['verbatim_user', 'user_derived']);
 const CONTEXT_ORIGIN_BASES = Object.freeze(['assistant_generated', 'mixed_composition', 'unknown', 'legacy_author']);
 const CONTEXT_BASIS_BY_ORIGIN = Object.freeze({
   assistant: 'assistant_generated',
@@ -68,6 +68,17 @@ function validOriginCounts(counts) {
   return CONTENT_ORIGINS.every((origin) => Number.isInteger(counts[origin]) && counts[origin] >= 0);
 }
 
+function validHumanEvidenceProjection(projection, text) {
+  return isPlainObject(projection)
+    && projection.projection_version === 'jarvos-content-origin-evidence/v1'
+    && projection.actor === 'user'
+    && typeof projection.capture_event_id === 'string' && projection.capture_event_id.length > 0
+    && SHA256_RE.test(String(projection.source_digest || ''))
+    && SHA256_RE.test(String(projection.content_digest || ''))
+    && typeof text === 'string'
+    && crypto.createHash('sha256').update(text.trim()).digest('hex') === projection.content_digest;
+}
+
 function validHumanSupport(support) {
   return isPlainObject(support)
     && typeof support.id === 'string' && support.id.length > 0 && support.id.length <= 200
@@ -75,10 +86,11 @@ function validHumanSupport(support) {
     && support.content_origin === 'human'
     && HUMAN_ORIGIN_BASES.includes(support.content_origin_basis)
     && support.human_evidence_eligible === true
-    && (support.text === undefined || (typeof support.text === 'string'
-      && support.text.length > 0
-      && support.text.length <= MAX_FRAGMENT_CHARS
-      && !/jarvos-content-origin\/v\d+/i.test(support.text)));
+    && typeof support.text === 'string'
+    && support.text.length > 0
+    && support.text.length <= MAX_FRAGMENT_CHARS
+    && !/jarvos-content-origin\/v\d+/i.test(support.text)
+    && validHumanEvidenceProjection(support.human_evidence_projection, support.text);
 }
 
 function validContextSupport(support) {
@@ -105,7 +117,8 @@ function validateFragment(fragment) {
     && !/jarvos-content-origin\/v\d+/i.test(fragment.text)
     && fragment.content_origin === 'human'
     && HUMAN_ORIGIN_BASES.includes(fragment.content_origin_basis)
-    && fragment.human_evidence_eligible === true;
+    && fragment.human_evidence_eligible === true
+    && validHumanEvidenceProjection(fragment.human_evidence_projection, fragment.text);
 }
 
 function validateTheme(theme) {

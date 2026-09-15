@@ -385,6 +385,7 @@ module.exports = {
   cleanText,
   cleanNoteContent,
   digestText,
+  sourceReceipt,
   validateUserSourceReceipt,
   normalizeContentOrigin,
   contentOriginPairIsValid,

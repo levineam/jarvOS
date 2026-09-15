@@ -281,7 +281,7 @@ test('public projections expose clean journal and note evidence without marker p
   const journal = projectJournalEntriesFromMarkdown(`## 💡 Ideas\n- User thought\n- Assistant-generated context\n${marker}\n`, { date: '2026-08-14' });
   assert.equal(journal.length, 2);
   assert.equal(journal[0].content_origin, 'human');
-  assert.equal(journal[0].human_evidence_eligible, true);
+  assert.equal(journal[0].human_evidence_eligible, false);
   assert.equal(journal[1].content_origin, 'assistant');
   assert.equal(journal[1].human_evidence_eligible, false);
   assert.equal(journal[1].clean_text, 'Assistant-generated context');
@@ -317,6 +317,22 @@ test('note projections downgrade a receipt when the clean body digest is stale',
   const projected = projectNoteMarkdown(markdown, { title: 'Digest note', sourcePath: 'Notes/Digest note.md' });
   assert.equal(projected.content_origin, 'unknown');
   assert.equal(projected.human_evidence_eligible, false);
+});
+
+test('human evidence projections require a resolver-validated receipt, not an eligibility boolean', () => {
+  const text = 'Resolver-backed human evidence.';
+  const input = {
+    clean_text: text,
+    content_origin: 'human',
+    content_origin_basis: 'verbatim_user',
+    human_evidence_eligible: true,
+    user_source: receipt(text, text, 'capture-projection'),
+  };
+  assert.equal(projectEvidenceRecord(input).human_evidence_eligible, false);
+  const projected = projectEvidenceRecord(input, { resolveUserSource: resolveSource(text, 'capture-projection') });
+  assert.equal(projected.human_evidence_eligible, true);
+  assert.equal(readEvidenceProjection(projected).ok, true);
+  assert.equal(readEvidenceProjection({ ...projected, human_evidence_projection: undefined }).ok, false);
 });
 
 test('evidence projection rejects malformed records before private consumers see them', () => {
