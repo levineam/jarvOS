@@ -343,8 +343,11 @@ function hasMeaningfulBodyText(body) {
  * exact loss this machinery exists to prevent.
  */
 function contractSignature(config) {
-  const headings = buildDesiredSections(config || {}).map((section) => section.heading);
-  return contentHash(headings.join('\u0000'));
+  const sections = buildDesiredSections(config || {}).map((section) => ({
+    heading: section.heading,
+    presence: section.presence || 'always',
+  }));
+  return contentHash(JSON.stringify(sections));
 }
 
 /**
@@ -361,11 +364,20 @@ function contractSignature(config) {
  * is genuinely damaged, and the shrink guard and restore path must still fire.
  */
 function structureMatchesContract(sections, config) {
-  const desired = buildDesiredSections(config || {}).map((section) => String(section.heading).trim());
+  const desired = buildDesiredSections(config || {});
   if (!desired.length) return false;
   const have = (sections || []).map((heading) => String(heading).trim());
-  if (have.length !== desired.length) return false;
-  return desired.every((heading, index) => have[index] === heading);
+  let haveIndex = 0;
+  for (const section of desired) {
+    const heading = String(section.heading).trim();
+    if (have[haveIndex] === heading) {
+      haveIndex += 1;
+      continue;
+    }
+    if (section.presence === 'when-supported-activity') continue;
+    return false;
+  }
+  return haveIndex === have.length;
 }
 
 /**
@@ -752,32 +764,47 @@ function normalizeProjectsActivityResult(result, { date, timeZone, maxItems = 25
 
 function buildProjectsActivityFetcher({ reader, timeZone = DEFAULT_TIMEZONE, onProjection = null } = {}) {
   return ({ date, config, section }) => {
+    const projectionOptions = {
+      date,
+      timeZone: timeZone || config?.timeZone || DEFAULT_TIMEZONE,
+      maxItems: Number(config?.journal?.maxItems || 25),
+    };
+    let projectsProjection;
+    const unavailableProjection = (reason) => {
+      const unavailable = normalizeProjectsActivityResult({
+        activityProviderState: 'unavailable',
+        generator: 'projects-activity-v1',
+      }, projectionOptions);
+      return {
+        ...unavailable,
+        omissions: [...new Set([...(unavailable.omissions || []), reason])].sort(),
+      };
+    };
+
     if (typeof reader !== 'function' && !(reader && typeof reader.read === 'function')) {
-      return '- (projects unavailable — activity reader not configured)';
-    }
-    try {
-      const read = typeof reader === 'function' ? reader : reader.read.bind(reader);
-      const result = read({
-        profile: 'recent-activity',
-        date,
-        timeZone: timeZone || config?.timeZone || DEFAULT_TIMEZONE,
-        maxItems: Number(config?.journal?.maxItems || 25),
-        section,
-      });
-      if (result && typeof result.then === 'function') {
-        throw new Error('asynchronous Projects activity readers are not supported by synchronous journal maintenance');
+      projectsProjection = unavailableProjection('activity-reader:missing');
+    } else {
+      try {
+        const read = typeof reader === 'function' ? reader : reader.read.bind(reader);
+        const result = read({
+          profile: 'recent-activity',
+          date,
+          timeZone: projectionOptions.timeZone,
+          maxItems: projectionOptions.maxItems,
+          section,
+        });
+        if (result && typeof result.then === 'function') {
+          throw new Error('asynchronous Projects activity readers are not supported by synchronous journal maintenance');
+        }
+        projectsProjection = normalizeProjectsActivityResult(result, projectionOptions);
+      } catch {
+        projectsProjection = unavailableProjection('activity-reader:failed');
       }
-      const projection = normalizeProjectsActivityResult(result, {
-        date,
-        timeZone: timeZone || config?.timeZone || DEFAULT_TIMEZONE,
-        maxItems: Number(config?.journal?.maxItems || 25),
-      });
-      if (typeof onProjection === 'function') onProjection(projection);
-      if (projection.preserve) return '- (projects unavailable — activity evidence degraded)';
-      return projection.content || '- No projects touched today';
-    } catch {
-      return '- (projects unavailable — activity reader failed)';
     }
+
+    if (typeof onProjection === 'function') onProjection(projectsProjection);
+    if (projectsProjection.omit || projectsProjection.preserve || !projectsProjection.content) return null;
+    return projectsProjection.content;
   };
 }
 
@@ -1034,6 +1061,10 @@ function normalizeSections(original, date, config, opts = {}) {
       // back-written onto an older entry. The activity projection is explicitly
       // date-scoped, so it renders a backfilled date from that date's evidence.
       if (isToday || section.source === 'projects') {
+        if (section.source === 'projects'
+          && (!fetched || isDegradedSourceMarker(fetched) || /^-\s+No (?:ongoing projects|projects touched today)$/i.test(trimOuterBlankLines(fetched)))) {
+          continue;
+        }
         // ...but a DEGRADED read is not a fact about the world, only about our
         // ability to read it, so it must never overwrite content already in
         // the entry. Without this, one unavailable activity source could

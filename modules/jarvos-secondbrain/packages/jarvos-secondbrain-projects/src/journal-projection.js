@@ -193,12 +193,15 @@ function activityOmissions({ activities = [], projects = [], date, timeZone = 'U
       omissions.push(`activity-invalid:${identity}`);
       continue;
     }
-    const occurredDate = localDate(value.occurredAt, timeZone);
-    if (!occurredDate || occurredDate !== targetDate) continue;
-    // A context read is intentionally not an activity event. It is an
-    // ordinary read-path observation, not evidence that Andrew worked on a
-    // Project, so it should not degrade an otherwise healthy activity feed.
+    // Context reads are observations, not activity evidence. Their timestamp
+    // shape cannot degrade a feed they do not participate in.
     if (isContextRead(value)) continue;
+    const occurredDate = localDate(value.occurredAt, timeZone);
+    if (!occurredDate) {
+      omissions.push(`activity-invalid:${identity}`);
+      continue;
+    }
+    if (occurredDate !== targetDate) continue;
     if (!(value.accepted === true || value.trust === 'verified')) {
       omissions.push(`activity-untrusted:${identity}`);
       continue;
@@ -229,7 +232,8 @@ function projectLines({
     return {
       contract: JOURNAL_PROJECTION_CONTRACT,
       status: 'degraded',
-      preserve: true,
+      preserve: false,
+      omit: true,
       content: null,
       touchedProjectIds: [],
       omissions: [`activity-provider:${state}`],
@@ -263,12 +267,13 @@ function projectLines({
   const lines = limited.map(projectLink).map((link) => `- ${link}`);
   if (uniqueMapped.length > maxItems) lines.push(`- _...and ${uniqueMapped.length - maxItems} more_`);
   const uniqueOmissions = [...new Set(omissions)].sort();
-  const preserve = uniqueOmissions.length > 0;
+  const omit = uniqueOmissions.length > 0 || lines.length === 0;
   return {
     contract: JOURNAL_PROJECTION_CONTRACT,
-    status: preserve ? 'degraded' : (lines.length ? 'fresh' : 'fresh-empty'),
-    preserve,
-    content: lines.length ? lines.join('\n') : null,
+    status: uniqueOmissions.length ? 'degraded' : (lines.length ? 'fresh' : 'fresh-empty'),
+    preserve: false,
+    omit,
+    content: omit ? null : lines.join('\n'),
     touchedProjectIds: touchedIds,
     mappedProjectIds: limited.map(({ id }) => id),
     omissions: uniqueOmissions,
@@ -346,6 +351,9 @@ function applyJournalProjection({ content, expectedRevision, projection, write, 
     timeZone: projection.timeZone,
     coverageWatermark: projection.coverageWatermark || coverageWatermark,
     inputDigest: projection.inputDigest,
+    projectionStatus: projection.status,
+    projectionOmitted: projection.omit === true,
+    projectionOmissions: [...(projection.omissions || [])],
     priorRevision,
     resultRevision,
     observedAt: now,
