@@ -563,6 +563,8 @@ test('MCP session thread tools round-trip through the shared note and journal pa
 test('MCP tool list includes jarvOS tools', () => {
   const names = TOOLS.map((tool) => tool.name);
   assert.deepEqual(names, [
+    'jarvos_ripeness_context',
+    'jarvos_active_assistant',
     'jarvos_common_work',
     'jarvos_todo_create',
     'jarvos_todo_list',

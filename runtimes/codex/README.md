@@ -3,6 +3,14 @@
 This adapter connects local Codex CLI and Codex app sessions to jarvOS through
 the shared `@jarvos/agent-context` MCP server and a Codex `SessionStart` hook.
 
+## Optional native GBrain plugin
+
+The [native plugin integration](gbrain-plugin.md) provides explicit install,
+doctor, update and removal using a compatible Codex executable. It preserves
+managed launch authority and documents binding an existing descriptor-managed
+brain through the upstream launcher. Choose one connection owner: the native
+plugin or the manual provider below. Registration does not prove live tools.
+
 ## Private GBrain continuity
 
 Portable setup keeps GBrain optional. A private continuity profile registers a

@@ -1250,6 +1250,39 @@ test('managed provider descriptor pins the source and interpreter and prepares p
   assert.match(prepared.provenance.skillifyDigest, /^sha256:/);
 });
 
+test('native plugin provider requires descriptor brain/source and only accepts guarded starter arguments', () => {
+  const root = tempDir();
+  const executable = path.join(root, 'gbrain.js');
+  fs.writeFileSync(executable, '#!/usr/bin/env node\nprocess.stdout.write(JSON.stringify(process.argv.slice(2)));\n', { mode: 0o755 });
+  const argv = ['serve', '--surface', 'starter', '--source-guard'];
+  const { descriptorPath, descriptor } = writeManagedProviderDescriptor(root, executable);
+  assert.equal(gbrain.prepareManagedGbrainProvider(descriptorPath, argv).failureClass, 'plugin-brain-source-binding-required');
+  fs.writeFileSync(descriptorPath, JSON.stringify({ ...descriptor, providerEnv: { GBRAIN_BRAIN_ID: 'shared', GBRAIN_SOURCE: 'vault' } }));
+  const prepared = withEnv({ GBRAIN_SOURCE: 'ambient', DATABASE_URL: 'must-not-leak' }, () => (
+    gbrain.prepareManagedGbrainProvider(descriptorPath, argv)
+  ));
+  assert.equal(prepared.ok, true);
+  assert.deepEqual(prepared.args, [fs.realpathSync(executable), ...argv]);
+  assert.equal(prepared.env.GBRAIN_SOURCE, 'vault');
+  assert.equal(prepared.env.GBRAIN_BRAIN_ID, 'shared');
+  assert.equal(prepared.env.DATABASE_URL, undefined);
+  for (const denied of [['serve'], ['init'], ['serve', '--surface', 'full', '--source-guard'], [...argv, '--extra'], 'serve']) {
+    assert.equal(gbrain.prepareManagedGbrainProvider(descriptorPath, denied).failureClass, 'provider-arguments-refused');
+  }
+  const launcher = path.join(__dirname, '..', 'scripts', 'jarvos-gbrain-provider.js');
+  const launched = spawnSync(process.execPath, [launcher, ...argv], {
+    encoding: 'utf8', env: { ...process.env, JARVOS_GBRAIN_RUNTIME_DESCRIPTOR: descriptorPath },
+  });
+  assert.equal(launched.status, 0, launched.stderr);
+  assert.deepEqual(JSON.parse(launched.stdout), argv);
+  const denied = spawnSync(process.execPath, [launcher, 'init'], {
+    encoding: 'utf8', env: { ...process.env, JARVOS_GBRAIN_RUNTIME_DESCRIPTOR: descriptorPath },
+  });
+  assert.notEqual(denied.status, 0);
+  assert.equal(denied.stdout, '');
+  assert.match(denied.stderr, /provider-arguments-refused/);
+});
+
 test('managed provider descriptor fails closed for unsafe mode and provider env', () => {
   const root = tempDir();
   const executable = path.join(root, 'gbrain.js');

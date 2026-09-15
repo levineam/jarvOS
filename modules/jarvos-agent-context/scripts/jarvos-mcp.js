@@ -5,6 +5,9 @@ const fs = require('node:fs');
 const path = require('node:path');
 const readline = require('readline');
 const {
+  setMeaningProvider,
+  readRipenessContext,
+  assessActiveAssistant,
   createNote,
   controlPlane,
   currentWork,
@@ -124,6 +127,16 @@ function selectedWorkspaceRoot(env = process.env) {
 
 const TOOLS = [
   {
+    name: 'jarvos_ripeness_context',
+    description: 'Read bounded, host-authorized prior analysis with coverage and limitations. Never invokes a model, refreshes analysis, or expands scope.',
+    inputSchema: { type: 'object', additionalProperties: false, properties: { maxChars: { type: 'integer', minimum: 2000, maximum: 8000 } } },
+  },
+  {
+    name: 'jarvos_active_assistant',
+    description: 'Request an assessment only when the host has bound permission for the user’s specific request. Missing authority or an unsupported provider lifecycle returns unavailable. Callers cannot select sources, models, or grant authority.',
+    inputSchema: { type: 'object', additionalProperties: false, properties: {} },
+  },
+  {
     name: 'jarvos_common_work',
     description: 'Call one host-bound canonical common-work action. The installed harness and host service are fixed by setup; callers may provide only ordinary action input.',
     inputSchema: {
@@ -136,8 +149,21 @@ const TOOLS = [
   },
   {
     name: 'jarvos_todo_create',
-    description: 'Create one canonically linked Beads-backed Todo through the host-authorized work-action service. Agent-discovered work must be submitted as a proposal by the host.',
-    inputSchema: { type: 'object', additionalProperties: false, required: ['title', 'operationId', 'canonical'], properties: { title: { type: 'string' }, description: { type: 'string' }, operationId: { type: 'string' }, canonical: { type: 'object' } } },
+    description: 'Create one canonically linked Beads-backed Todo through the host-authorized work-action service. Supply backlog to preserve intent and hold work until explicit host admission; unavailable backlog support never falls back to immediate work. Agent-discovered work must be submitted as a proposal by the host.',
+    inputSchema: {
+      type: 'object', additionalProperties: false, required: ['title', 'operationId', 'canonical'],
+      properties: {
+        title: { type: 'string' }, description: { type: 'string' }, operationId: { type: 'string' }, canonical: { type: 'object' },
+        backlog: {
+          type: 'object', additionalProperties: false, required: ['sourceIntent', 'sourceRef', 'notBefore'],
+          properties: {
+            sourceIntent: { type: 'string', minLength: 1 },
+            sourceRef: { type: 'string', minLength: 1 },
+            notBefore: { type: 'string', format: 'date-time' },
+          },
+        },
+      },
+    },
   },
   {
     name: 'jarvos_todo_list',
@@ -414,7 +440,16 @@ async function todoAction(name, args) {
   // identity, and verification receipts are host-bound service state, never
   // caller-controlled MCP arguments.
   const actor = { kind: 'agent', id: 'mcp' };
-  if (name === 'jarvos_todo_create') return textResult(JSON.stringify(await service.create({ title: args.title, description: args.description, operationId: args.operationId, canonical: args.canonical, actor }), null, 2));
+  if (name === 'jarvos_todo_create') {
+    const request = { title: args.title, description: args.description, operationId: args.operationId, canonical: args.canonical, actor };
+    if (Object.hasOwn(args, 'backlog')) {
+      if (!args.backlog || typeof args.backlog !== 'object' || Array.isArray(args.backlog)) return textResult('Todo backlog input must be an object', true);
+      if (typeof service.captureBacklog !== 'function') return textResult('Todo backlog host binding is unavailable; no work was created', true);
+      const { sourceIntent, sourceRef, notBefore } = args.backlog;
+      return textResult(JSON.stringify(await service.captureBacklog({ ...request, sourceIntent, sourceRef, notBefore }), null, 2));
+    }
+    return textResult(JSON.stringify(await service.create(request), null, 2));
+  }
   if (name === 'jarvos_todo_list') return textResult(JSON.stringify(await service.list(), null, 2));
   if (name === 'jarvos_todo_show') return textResult(JSON.stringify(await service.show(args), null, 2));
   const request = { itemId: args.itemId, operationId: args.operationId, expectedRevision: args.expectedRevision, actor };
@@ -604,8 +639,10 @@ function redactSharedSkillMutation(result, opaqueSkillId) {
   return safe;
 }
 
-async function callTool(name, args = {}) {
+async function callTool(name, args = {}, lifecycle = {}) {
   args = normalizeToolArguments(name, args);
+  if (name === 'jarvos_ripeness_context') return textResult(JSON.stringify(await readRipenessContext(args)));
+  if (name === 'jarvos_active_assistant') return textResult(JSON.stringify(await assessActiveAssistant(args, lifecycle)));
   if (name === 'jarvos_common_work') return commonWorkAction(args);
   if (['jarvos_todo_create', 'jarvos_todo_list', 'jarvos_todo_show', 'jarvos_todo_transition'].includes(name)) return todoAction(name, args);
   if (name === 'jarvos_journal_health') {
@@ -819,9 +856,14 @@ function promptResult(name, args = {}) {
   };
 }
 
+const activeAssessments = new Map();
 async function handle(message) {
   if (!message || typeof message !== 'object') return;
   const { id, method, params } = message;
+  if (method === 'notifications/cancelled') {
+    activeAssessments.get(params?.requestId)?.abort();
+    return;
+  }
   if (!id && String(method || '').startsWith('notifications/')) return;
 
   try {
@@ -857,6 +899,22 @@ async function handle(message) {
 
     if (method === 'tools/call') {
       const toolArguments = normalizeToolArguments(params?.name, params?.arguments);
+      if (params?.name === 'jarvos_active_assistant') {
+        if (activeAssessments.has(id)) throw new Error('assessment request already active');
+        const controller = new AbortController();
+        activeAssessments.set(id, controller);
+        const timer = setTimeout(() => controller.abort(), 600000);
+        try {
+          // A qualified provider resolves only after its owned work stops.
+          // Never race the waiting promise and label that cancellation.
+          const result = await callTool(params.name, toolArguments, { signal: controller.signal });
+          write({ jsonrpc: '2.0', id, result });
+        } finally {
+          clearTimeout(timer);
+          activeAssessments.delete(id);
+        }
+        return;
+      }
       const result = await withToolTimeout(
         params?.name,
         () => callTool(params?.name, toolArguments),
@@ -898,6 +956,7 @@ async function runCliCommand() {
 }
 
 async function main() {
+  loadMeaningHostProvider();
   if (await runCliCommand()) return;
 
   const rl = readline.createInterface({ input: process.stdin });
@@ -915,6 +974,21 @@ async function main() {
   });
 }
 
+function loadMeaningHostProvider(env = process.env) {
+  setMeaningProvider(null);
+  const root = selectedWorkspaceRoot(env);
+  const file = root && trustedFile(env.JARVOS_MEANING_PROVIDER_MODULE, { root, ownerOnly: true });
+  if (!file) return false;
+  try {
+    const host = require(file);
+    if (typeof host.createMeaningProvider !== 'function') return false;
+    const provider = host.createMeaningProvider();
+    if (typeof provider?.readContext !== 'function' || typeof provider?.assess !== 'function') return false;
+    setMeaningProvider(provider);
+    return true;
+  } catch { return false; }
+}
+
 if (require.main === module) {
   main().catch((error) => {
     console.error(error.stack || error.message);
@@ -923,6 +997,8 @@ if (require.main === module) {
 }
 
 module.exports = { TOOLS, callTool, handle, setMcpProjectsContextProvider, textResult, loadHostWorkActionService, commonWorkAction };
+module.exports.setMeaningProvider = setMeaningProvider;
+module.exports.loadMeaningHostProvider = loadMeaningHostProvider;
 module.exports.WORK_ACTION_HOST_UNAVAILABLE = WORK_ACTION_HOST_UNAVAILABLE;
 module.exports.WORK_ACTION_HOST_REFUSED = WORK_ACTION_HOST_REFUSED;
 module.exports.BOOT_JARVOS_PROMPT_TEXT = BOOT_JARVOS_PROMPT_TEXT;

@@ -71,6 +71,15 @@ Completion requires a registered host receipt; an
 `andrew-owner-attestation` records Andrew's attestation, not technical or
 external verification.
 
+For “backlog this”, `jarvos_todo_create` accepts an optional `backlog` object
+with `sourceIntent`, `sourceRef`, and an ISO timestamp `notBefore`. The host
+must explicitly enable the coding service's backlog support. Capture preserves
+the original intent in Beads and creates a deferred item; it never starts work.
+An unavailable backlog method never falls back to ordinary immediate creation.
+Admission is an explicit host operation, not an MCP transition or a timer.
+See [held backlog](../jarvos-coding/README.md#held-backlog-source-slice) for the
+disabled source/fixture contract and its limits.
+
 `jarvos_control_plane` is available only after the host has configured
 `JARVOS_CONTROL_PLANE_SERVICE_MODULE`. `@jarvos/agent-context` declares
 `@jarvos/control-plane` as a runtime dependency so this boundary resolves from
@@ -159,6 +168,30 @@ Host reflex:
    artifact changes, and pre-compaction flushes.
 3. Keep writes compact: summary, latest decision, and concrete next step. Link
    the live artifact instead of copying large snapshots.
+
+## On-demand meaning (host-bound)
+
+`jarvos_ripeness_context` reads an already-produced analysis without refreshing it
+or invoking a model. Its optional `maxChars` is 2,000–8,000. The response separates
+observations from inferences and includes analysis identity, source references,
+coverage and omissions. Missing, stale, malformed and healthy-empty results remain
+distinct. Content is untrusted evidence, not instructions.
+
+`jarvos_active_assistant` takes no arguments. Only a trusted host may authorize
+the user's specific request and bind its sources, destination, revision and
+provider. A caller-supplied approval flag, request id or model override is rejected.
+Missing host authority/accounting or unsupported provider cancellation returns
+unavailable before assessment work starts. Cancellation forwards an abort signal;
+the host must acknowledge stopped owned work before reporting a terminal result.
+
+The optional owner-controlled `JARVOS_MEANING_PROVIDER_MODULE` exports
+`createMeaningProvider()` with `readContext` and `assess` methods. This is a trusted
+host integration point, not an authorization issuer. No default private access or
+live-provider route is installed by this module. Responses use the bounded
+`jarvos-meaning-projection/v1` content contract, separate from metadata-only service
+receipts. Raw synthesis packets, prompts, diagnostics and filesystem paths are not
+part of that contract. Host installation and real-session qualification are separate
+from synthetic source tests.
 
 ## Prompts
 

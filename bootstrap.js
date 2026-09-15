@@ -15,6 +15,7 @@ const path = require('path');
 const readline = require('readline');
 const os = require('os');
 const { assertNotStaleVaultPath } = require('./modules/jarvos-secondbrain/bridge/config/src/resolve-config');
+const { preflightDesktop, installDesktop } = require('./lib/jarvos-desktop');
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -573,12 +574,20 @@ function renderTemplate(src, config) {
   content = content.replace(/^<!--.*?-->\n/s, '');
   for (const [key, val] of Object.entries(config)) {
     const re = new RegExp(`\\{\\{${key}\\}\\}`, 'g');
-    content = content.replace(re, val);
+    content = content.replace(re, () => String(val));
   }
   return content;
 }
 
 const TEMPLATE_DIR = path.join(__dirname, 'templates');
+const AGENTS_TEMPLATE = path.join(TEMPLATE_DIR, 'AGENTS-template.md');
+const DURABLE_ORIENTATION = path.join(
+  __dirname,
+  'modules',
+  'jarvos-instruction-projection',
+  'content',
+  'durable-orientation.md'
+);
 
 function generateOverlays(config) {
   hdr('4/5  Generating starter overlay files');
@@ -595,7 +604,12 @@ function generateOverlays(config) {
 
   const overlays = [
     {
-      template: path.join(TEMPLATE_DIR, 'AGENTS-template.md'),
+      template: DURABLE_ORIENTATION,
+      dest: path.join(ws, 'WORK-CONTEXT.md'),
+      label: 'WORK-CONTEXT.md'
+    },
+    {
+      template: AGENTS_TEMPLATE,
       dest: path.join(ws, 'AGENTS.md'),
       label: 'AGENTS.md'
     },
@@ -642,7 +656,10 @@ function generateOverlays(config) {
       continue;
     }
     try {
-      const rendered = renderTemplate(o.template, config);
+      const values = o.template === AGENTS_TEMPLATE
+        ? { ...config, DURABLE_ORIENTATION: fs.readFileSync(DURABLE_ORIENTATION, 'utf8') }
+        : config;
+      const rendered = renderTemplate(o.template, values);
       writeFileExclusiveSafe(dest, rendered);
       ok(`${o.label} → ${dest}`);
     } catch (e) {
@@ -732,7 +749,7 @@ function smokeTest(config) {
   hdr('5/5  Smoke test');
 
   const ws = config.WORKSPACE_PATH;
-  const requiredFiles = ['AGENTS.md', 'BOOTSTRAP.md', 'HEARTBEAT.md', 'MEMORY.md', 'USER.md', 'ONTOLOGY.md', 'SOUL.md', 'TOOLS.md', 'jarvos.config.json'];
+  const requiredFiles = ['AGENTS.md', 'WORK-CONTEXT.md', 'BOOTSTRAP.md', 'HEARTBEAT.md', 'MEMORY.md', 'USER.md', 'ONTOLOGY.md', 'SOUL.md', 'TOOLS.md', 'jarvos.config.json'];
   const requiredDirs  = [path.join(ws, 'memory')];
 
   let passed = 0;
@@ -755,7 +772,7 @@ function smokeTest(config) {
   }
 
   // Template substitution check — no raw {{placeholders}} left
-  const templateFiles = ['AGENTS.md', 'BOOTSTRAP.md', 'HEARTBEAT.md', 'USER.md', 'ONTOLOGY.md', 'SOUL.md', 'TOOLS.md'];
+  const templateFiles = ['AGENTS.md', 'WORK-CONTEXT.md', 'BOOTSTRAP.md', 'HEARTBEAT.md', 'USER.md', 'ONTOLOGY.md', 'SOUL.md', 'TOOLS.md'];
   for (const f of templateFiles) {
     const p = path.join(ws, f);
     if (!fs.lstatSync(p, { throwIfNoEntry: false })?.isFile()) continue;
@@ -813,6 +830,8 @@ async function main() {
   }
 
   let preflight;
+  const skipDesktop = process.argv.includes('--no-desktop') || process.env.JARVOS_NO_DESKTOP === '1';
+  const desktopOptions = { workspace: config.WORKSPACE_PATH, vault: config.VAULT_PATH };
   try {
     preflight = preflightInit(config, {
       workspaceSource: config.WORKSPACE_PATH === pathInputs.workspace
@@ -823,6 +842,7 @@ async function main() {
         : 'interactive prompt',
       useExistingVault: pathInputs.useExistingVault,
     });
+    if (!skipDesktop) preflightDesktop(desktopOptions);
   } catch (error) {
     err(error.message);
     process.exit(1);
@@ -839,6 +859,21 @@ async function main() {
     info('Compatible jarvOS installation detected — preserving all existing files.');
 }
   const allPassed = smokeTest(config);
+  if (!allPassed) process.exit(1);
+  if (skipDesktop) {
+    info('Desktop skipped — headless core installation complete.');
+  } else {
+    info('Installing Desktop dependencies and Electron; this may take a few minutes.');
+    try {
+      const desktop = installDesktop(desktopOptions);
+      ok(`Desktop installed at ${desktop.appPath}`);
+      info(`Launch when ready: npx jarvos-bootstrap desktop --workspace ${JSON.stringify(config.WORKSPACE_PATH)}`);
+    } catch (error) {
+      err(`Partial installation: core is ready, but Desktop failed: ${error.message}`);
+      info(`Existing core, vault and prior Desktop selection are preserved. Retry: npx jarvos-bootstrap desktop install --workspace ${JSON.stringify(config.WORKSPACE_PATH)}`);
+      process.exit(1);
+    }
+  }
 
   console.log(`\n${BOLD}Next steps:${RESET}`);
   console.log(`  1. Tell your assistant:     "Read BOOTSTRAP.md and follow its instructions"`);

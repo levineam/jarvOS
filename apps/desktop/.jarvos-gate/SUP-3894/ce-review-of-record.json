@@ -1,0 +1,47 @@
+{
+  "verdict": "Ready for merge",
+  "headShaPreFix": "29d83b0b011f652838991a157cefaa89d8dd3971",
+  "baseRef": "origin/master",
+  "baseSha": "b4113ed7d3559faebe461b09670be3faa3a79314",
+  "findings": [
+    {
+      "severity": "P1",
+      "confidence": 92,
+      "file": "chat-src/avatar/model.ts",
+      "line": 94,
+      "title": "Speech energy latch cleared on interrupt without controller re-apply",
+      "status": "fixed",
+      "resolution": "Keep speechEnergyTarget on interrupted; snap speechEnergy only; re-assert setSpeechEnergy on speaking entry; regression test added."
+    },
+    {
+      "severity": "P2",
+      "confidence": 90,
+      "file": "chat-src/avatar/model.ts",
+      "line": 100,
+      "title": "Auto-gesture nextGestureAt not reset when re-entering speaking",
+      "status": "fixed",
+      "resolution": "Reset nextGestureAt to 2.8 on speaking entry; covered by regression test."
+    },
+    {
+      "severity": "P2",
+      "confidence": 88,
+      "file": "chat-src/avatar/ParticleAvatar.ts",
+      "title": "destroy() during async init can resurrect avatar",
+      "status": "fixed",
+      "resolution": "destroyed guard in init; post-init teardown; destroy delegates to teardownRenderer."
+    }
+  ],
+  "deferred": [
+    "Pre-existing config tenant ID defaults (clawpatch medium)",
+    "Pre-existing Vite stale-bundle verification gap (clawpatch medium)",
+    "Pre-existing smoke HTTP hang (clawpatch medium)",
+    "Pre-existing model assertion separator nit (clawpatch low)"
+  ],
+  "residualRisks": [
+    "No DOM/Pixi tests for ticker pause or destroy races",
+    "WebAudioSpeechEnergy is untested and not wired into the panel yet",
+    "voiceState idle does not drive avatar state (lab stays on last listening/thinking)",
+    "prefers-reduced-motion sampled once on mount"
+  ],
+  "summary": "SUP-3894 particle avatar replay is merge-ready after speech-energy latch, gesture schedule, and destroy-during-init fixes with regression coverage. Deferred clawpatch findings are pre-existing and out of replay scope."
+}

@@ -7,6 +7,7 @@ HOOK_SCRIPT="$ROOT/runtimes/claude/jarvos-session-start-hook.js"
 TURN_HOOK_SCRIPT="$ROOT/runtimes/claude/jarvos-session-turn-hook.js"
 PRECOMPACT_HOOK_SCRIPT="$ROOT/runtimes/claude/jarvos-precompact-hook.js"
 CLAUDE_MD_TEMPLATE="$ROOT/runtimes/claude/templates/CLAUDE.md.template"
+WORK_CONTEXT_SOURCE="$ROOT/modules/jarvos-instruction-projection/content/durable-orientation.md"
 CLAUDE_SETTINGS="${CLAUDE_SETTINGS:-$HOME/.claude/settings.json}"
 CLAUDE_DESKTOP_CONFIG="${CLAUDE_DESKTOP_CONFIG:-$HOME/Library/Application Support/Claude/claude_desktop_config.json}"
 CLAUDE_MD_PATH="${CLAUDE_MD_PATH:-$HOME/.claude/CLAUDE.md}"
@@ -463,6 +464,15 @@ if (existing === nextContent) {
   }
 }
 NODE
+fi
+
+CLAUDE_WORK_CONTEXT_PATH="${CLAUDE_WORK_CONTEXT_PATH:-$(dirname "$CLAUDE_MD_PATH")/WORK-CONTEXT.md}"
+if [ -f "$CLAUDE_WORK_CONTEXT_PATH" ]; then
+  echo "Claude work-context contract already exists — keeping yours: $CLAUDE_WORK_CONTEXT_PATH"
+else
+  mkdir -p "$(dirname "$CLAUDE_WORK_CONTEXT_PATH")"
+  cp "$WORK_CONTEXT_SOURCE" "$CLAUDE_WORK_CONTEXT_PATH"
+  echo "Installed Claude work-context contract: $CLAUDE_WORK_CONTEXT_PATH"
 fi
 
 echo "Claude adapter setup complete."
