@@ -85,6 +85,7 @@ test('the shipped contract is the simplified journal: Projects, Notes, Ideas, Jo
     ['projects', 'notes', 'ideas', 'journal-entry'],
   );
   assert.deepEqual(config.sections.optional, []);
+  assert.equal(config.sections.required[0].presence, 'when-supported-activity');
 });
 
 test('the removed sections are declared as dropped, not migrated', () => {
@@ -158,7 +159,7 @@ test('activity-backed projection renders a touched Outcome as its canonical pare
   assert.doesNotMatch(output, /Untouched/);
 });
 
-test('healthy-empty activity evidence clears stale navigation while degraded evidence preserves it', () => {
+test('healthy-empty and degraded activity evidence both omit stale Projects navigation', () => {
   const entry = [
     '---',
     'journal: Journal',
@@ -177,13 +178,13 @@ test('healthy-empty activity evidence clears stale navigation while degraded evi
     fetchers: {},
     projectsActivityReader: () => ({ status: 'ok', activityProviderState: 'healthy-empty', projects: [], activities: [] }),
   });
-  assert.equal(sectionBody(empty, '## 🚀 Projects'), '- No projects touched today');
+  assert.doesNotMatch(empty, /## 🚀 Projects/);
 
   const degraded = render(entry, {
     fetchers: {},
     projectsActivityReader: () => ({ status: 'partial', activityProviderState: 'partial', projects: [], activities: [] }),
   });
-  assert.equal(sectionBody(degraded, '## 🚀 Projects'), '- [[jarvOS]]');
+  assert.doesNotMatch(degraded, /## 🚀 Projects/);
 });
 
 test('activity projection can repair a backfilled date from that date\'s evidence', () => {
@@ -214,15 +215,11 @@ test('activity projection can repair a backfilled date from that date\'s evidenc
   assert.equal(sectionBody(output, '## 🚀 Projects'), '- [[Projects/Historical]]');
 });
 
-/**
- * `projects.js` documented this contract -- "the journal treats [the unavailable
- * marker] as a degraded source and will not write over existing content" -- and
- * the journal never implemented it. `'- (projects unavailable)'` is a truthy
- * string, so it won the `fetched || existingContent` chain and replaced the
- * real list. One unmounted volume or permissions blip would rewrite a populated
- * Projects section down to a single placeholder line on every date in the run.
+/** Machine-owned navigation is useful only when its dated activity evidence is
+ * complete. A read failure must remove the whole section, including stale
+ * output from an earlier implementation, without affecting authored sections.
  */
-test('a degraded projects read does not overwrite an existing project list', () => {
+test('a degraded projects read removes an existing machine-owned project list', () => {
   const entry = [
     '---',
     'journal: Journal',
@@ -239,25 +236,15 @@ test('a degraded projects read does not overwrite an existing project list', () 
   ].join('\n');
 
   const output = render(entry, { fetchers: { projects: () => '- (projects unavailable)' } });
-  assert.equal(
-    sectionBody(output, '## 🚀 Projects'),
-    '- [[AAF Observatory]]\n- [[Proof of Value]]',
-    'a marker meaning "could not read" must not replace real evidence',
-  );
+  assert.doesNotMatch(output, /## 🚀 Projects/);
 });
 
-test('a degraded projects read still renders the marker when there is nothing to protect', () => {
-  // The other half: the marker is diagnostic and must stay visible on an entry
-  // whose Projects section is genuinely empty, rather than silently rendering
-  // a bare '-'.
+test('a degraded projects read never renders a diagnostic placeholder section', () => {
   const output = render(legacyEntry(), { fetchers: { projects: () => '- (projects unavailable)' } });
-  assert.equal(sectionBody(output, '## 🚀 Projects'), '- (projects unavailable)');
+  assert.doesNotMatch(output, /## 🚀 Projects/);
 });
 
-test('a positive empty-state claim still replaces a stale list', () => {
-  // `- No ongoing projects` is an observation, not a read failure, so it is
-  // allowed to overwrite -- otherwise closing your last project could never
-  // clear the section.
+test('a positive empty-state claim removes the stale Projects section', () => {
   const entry = [
     '---',
     'journal: Journal',
@@ -270,10 +257,10 @@ test('a positive empty-state claim still replaces a stale list', () => {
   ].join('\n');
 
   const output = render(entry, { fetchers: { projects: () => '- No ongoing projects' } });
-  assert.equal(sectionBody(output, '## 🚀 Projects'), '- No ongoing projects');
+  assert.doesNotMatch(output, /## 🚀 Projects/);
 });
 
-test('a failing projects source degrades visibly instead of emptying the section', () => {
+test('a failing projects source omits the section without taking down the entry', () => {
   const output = render(legacyEntry(), {
     fetchers: {
       projects: () => {
@@ -281,9 +268,8 @@ test('a failing projects source degrades visibly instead of emptying the section
       },
     },
   });
-  // The fetcher itself swallows errors; a thrown fetcher must not take the
-  // whole entry down, and the section must still exist.
-  assert.match(output, /## 🚀 Projects/);
+  assert.doesNotMatch(output, /## 🚀 Projects/);
+  assert.match(output, /## 📝 Notes/);
 });
 
 test('the empty-projects line does not read as real content to the blank-journal guard', () => {

@@ -145,10 +145,11 @@ test('Journal keeps receipt category and malformed activity omissions visible', 
       },
     });
     assert.equal(result.projectProjection.status, 'degraded');
-    assert.equal(result.projectProjection.preserve, true);
+    assert.equal(result.projectProjection.preserve, false);
+    assert.equal(result.projectProjection.omit, true);
     assert.ok(result.projectProjection.omissions.includes('activity-invalid:1'));
     assert.equal(projectionReceipt.status, 'degraded');
-    assert.match(fs.readFileSync(journalPath, 'utf8'), /\[\[Existing\]\]/);
+    assert.doesNotMatch(fs.readFileSync(journalPath, 'utf8'), /## 🚀 Projects/);
   } finally {
     if (previous === undefined) delete process.env.JARVOS_JOURNAL_DIR;
     else process.env.JARVOS_JOURNAL_DIR = previous;

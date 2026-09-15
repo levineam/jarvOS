@@ -111,21 +111,23 @@ test('provisional and quarantined activity cannot create Journal links', () => {
     ],
   });
   assert.equal(result.status, 'degraded');
-  assert.equal(result.preserve, true);
+  assert.equal(result.preserve, false);
+  assert.equal(result.omit, true);
   assert.equal(result.content, null);
   assert.deepEqual(result.touchedProjectIds, []);
 });
-test('fresh empty evidence removes a stale Projects section while degraded evidence preserves it', () => {
+test('fresh empty and degraded evidence both remove a stale Projects section', () => {
   const empty = projection.buildJournalProjection({ date: '2026-08-08', projects: PROJECTS, noteMappings: NOTE_MAPPINGS, activities: [], activityProviderState: 'healthy-empty' });
   assert.equal(empty.status, 'fresh-empty');
   const original = '---\n\n## 🚀 Projects\n- [[jarvOS]]\n\n## 📝 Notes\n- [[Note]]\n';
   assert.doesNotMatch(projection.replaceProjectsSection(original, empty.content), /## 🚀 Projects/);
 
   const degraded = projection.buildJournalProjection({ date: '2026-08-08', projects: PROJECTS, noteMappings: NOTE_MAPPINGS, activities: [], activityProviderState: 'partial' });
-  assert.equal(degraded.preserve, true);
-  const applied = projection.applyJournalProjection({ content: original, projection: degraded, write: () => { throw new Error('must not write'); } });
-  assert.equal(applied.status, 'degraded');
-  assert.equal(applied.preserve, true);
+  assert.equal(degraded.preserve, false);
+  assert.equal(degraded.omit, true);
+  const applied = projection.applyJournalProjection({ content: original, projection: degraded });
+  assert.equal(applied.status, 'planned');
+  assert.doesNotMatch(applied.content, /## 🚀 Projects/);
 });
 
 test('context reads do not count as activity and expected revisions fence projection writes', () => {
@@ -162,7 +164,7 @@ test('verified context-read events never become project activity', () => {
   assert.deepEqual(result.omissions, []);
 });
 
-test('malformed same-day activity is explicit and preserves the existing section', () => {
+test('malformed same-day activity is explicit and omits the Projects section', () => {
   const result = projection.buildJournalProjection({
     date: '2026-08-08',
     projects: PROJECTS,
@@ -170,7 +172,8 @@ test('malformed same-day activity is explicit and preserves the existing section
     activities: [null],
   });
   assert.equal(result.status, 'degraded');
-  assert.equal(result.preserve, true);
+  assert.equal(result.preserve, false);
+  assert.equal(result.omit, true);
   assert.equal(result.content, null);
   assert.deepEqual(result.omissions, ['activity-invalid:0']);
 });
