@@ -22,7 +22,7 @@ const EVENT_FIELDS = new Set([
   'observedAt', 'freshness', 'privateDetailReference', 'release',
   'skillName', 'reasonCode', 'options', 'decisionReference', 'revision',
   'optionSetVersion', 'deliveryAttemptId', 'deliveryAttemptKind', 'itemCount', 'resolvedCount',
-  'affectedHarnesses', 'preservedState', 'decisions', 'chunkIndex', 'chunkCount', 'failureCause',
+  'affectedHarnesses', 'preservedState', 'decisions', 'chunkIndex', 'chunkCount', 'pendingCount', 'failureCause',
 ]);
 
 const SKILL_REASON_CODES = new Set([
@@ -45,7 +45,13 @@ const SKILL_DECISION_BATCH_LIMIT = 4;
 // count and an index inside it. Whether the positions of one occurrence form a
 // complete 1..count sequence is a property of the set, not of one message, so
 // the transport layer that assembles the occurrence checks it.
-const SKILL_BATCH_FIELDS = ['decisions', 'chunkIndex', 'chunkCount'];
+//
+// Chunked batches are the legacy form. A digest batch instead carries
+// pendingCount, the total number of decisions its occurrence reminded: it names
+// only a bounded preview and points the owner at the full list, so one
+// occurrence is one message however large the backlog. pendingCount has no
+// ceiling for the same reason chunkCount has none.
+const SKILL_BATCH_FIELDS = ['decisions', 'chunkIndex', 'chunkCount', 'pendingCount'];
 const SKILL_BATCH_ITEM_FIELDS = new Set(['skillName', 'reasonCode', 'options', 'decisionReference', 'revision', 'affectedHarnesses', 'preservedState']);
 // The skill fields each skill event may carry; any other skill field is
 // reported against the event kind it belongs to.
@@ -145,6 +151,7 @@ const SKILL_REPLY_MEANING = {
 };
 const SKILL_BATCH_REMINDER_TEXT = 'jarvOS will remind you every hour until each skill is decided; ignoring this message does not pause reminders. To pause reminders for one skill, reply “acknowledge” with its name, or “defer” with its name and “until” a date and time; reply “resume” with its name to restart them.';
 const SKILL_BATCH_NEXT_TEXT = 'jarvOS will leave each skill unchanged until you choose one of its options.';
+const SKILL_DIGEST_LIST_TEXT = 'Ask jarvOS to list your pending skill decisions.';
 
 // Every unresolved decision belongs to the same scheduler occurrence, but no
 // single message may grow without bound. Split one occurrence's decisions into
@@ -256,6 +263,8 @@ function validateSkillDecision(event, errors) {
 // reply correlated only to the message cannot resolve any decision. When one
 // occurrence needs more than one bounded message, each message declares its
 // own position, so a sender can ledger and correlate every chunk separately.
+// A digest instead declares pendingCount, at least the number it names, and
+// is never also a chunk.
 function validateSkillDecisionBatch(event, errors) {
   const label = 'skill-owner-decision-batch';
   if (typeof event.optionSetVersion !== 'string' || !/^v[0-9]+$/.test(event.optionSetVersion)) errors.push(`${label}.optionSetVersion is invalid`);
@@ -266,6 +275,11 @@ function validateSkillDecisionBatch(event, errors) {
     if (!Number.isSafeInteger(event.chunkIndex) || event.chunkIndex < 1 || event.chunkIndex > event.chunkCount) errors.push(`${label}.chunkIndex is invalid`);
   }
   const items = event.decisions;
+  if (event.pendingCount !== undefined) {
+    if (event.chunkIndex !== undefined || event.chunkCount !== undefined) errors.push(`${label} pendingCount cannot be combined with chunk fields`);
+    const shown = Array.isArray(items) ? items.length : 2;
+    if (!Number.isSafeInteger(event.pendingCount) || event.pendingCount < Math.max(shown, 2)) errors.push(`${label}.pendingCount is invalid`);
+  }
   if (!Array.isArray(items) || items.length < 2 || items.length > SKILL_DECISION_BATCH_LIMIT) {
     errors.push(`${label}.decisions must contain two to ${SKILL_DECISION_BATCH_LIMIT} decisions`);
   } else {
@@ -381,7 +395,28 @@ function skillDecisionSummaryMessage(event) {
   return `jarvOS found ${count} that still need your decision. It left them unchanged.${resolved} Review the pending decisions in jarvOS shared skills; nothing will be shared automatically until you choose. To see each skill by name, the AI tools it affects, and its exact choices, ask jarvOS to list your pending skill decisions. jarvOS will remind you every hour until each one is decided; acknowledging or deferring a decision pauses its reminders.`;
 }
 
+// A digest names a bounded preview once each, with its cause and exact
+// options, then says how many are pending in total and where the full list is.
+// Nothing outside the preview is resolved or paused by being left out.
+function skillDecisionDigestMessage(event) {
+  const shown = event.decisions.length;
+  const remaining = event.pendingCount - shown;
+  const items = event.decisions.map((item, index) => (
+    `${index + 1}. ${item.skillName}: not shared because ${SKILL_REASON_TEXT[item.reasonCode]}. Options: ${listText(item.options.map((option) => SKILL_REPLY_TEXT[option]), 'or')}.`
+  ));
+  const [example] = event.decisions;
+  const exampleOption = example.options.includes('details') ? 'details' : example.options[0];
+  return [
+    `jarvOS has ${event.pendingCount} skills waiting for your decision and left each one unchanged.`,
+    ...(remaining > 0 ? [`Here are ${shown}; ${remaining} more ${remaining === 1 ? 'is' : 'are'} still pending and not shown.`] : []),
+    ...items,
+    `Reply with one option and the skill name, such as “${SKILL_REPLY_TEXT[exampleOption]} ${example.skillName}”; a reply that does not name a skill changes nothing.`,
+    `To see all ${event.pendingCount} with their details: ${SKILL_DIGEST_LIST_TEXT}`,
+  ].join(' ');
+}
+
 function skillDecisionBatchMessage(event) {
+  if (event.pendingCount !== undefined) return skillDecisionDigestMessage(event);
   const items = event.decisions.map((item, index) => {
     const tools = item.affectedHarnesses?.length > 0
       ? ` with ${listText(item.affectedHarnesses.map((harness) => HARNESS_TEXT[harness]))}`

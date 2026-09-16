@@ -59,8 +59,10 @@ Every other unresolved skill decision (a skill that needs approval, a name
 conflict, an ambiguous source, an unsupported capability, an accepted source
 that disappeared, an unsafe source, a source that appears to hold private
 information, or scripts in a folder trusted only for instructions) becomes a
-named owner message: the skill, the affected harnesses, the cause in plain
-English, what jarvOS preserved, how to fix it, and the exact choices. Unsafe,
+named owner decision. Alone, it is sent as its own message: the skill, the
+affected harnesses, the cause in plain English, what jarvOS preserved, how to
+fix it, and the exact choices. Several at once share one digest, described
+below. Unsafe,
 private, and under-trusted skills can only be kept local or excluded; no
 decision can share them. A source that disappears before it was ever accepted
 stays quiet. Decisions are reconciled from the private assessed inventory, so they
@@ -93,32 +95,40 @@ themselves), and `resume-decision` restores them. Reminders are independent of
 the bounded initial and fallback delivery attempts, which remain the
 acknowledgeable outbox for uncertain transports.
 
-When several decisions are due at once, one occurrence names every one of them.
-Each message stays bounded, so an occurrence with more pending decisions than
-fit in one message emits as many bounded messages as that takes, each saying
-which message of how many it is; there is no ceiling on that count, so a large
-pending population is never left partly unnamed. The action-required envelope
-therefore carries a `messages` array, one entry per bounded message. Each entry
-is a complete transport entry in its own right — the same `schema`,
-`disposition`, `message`, `event`, and `dedupeIdentity` fields as a
-single-message envelope — so a sender may deliver and acknowledge entries
-independently; the envelope's top-level fields always mirror the first entry.
-Every reply still names its skill, so a reply correlated only to a message
-resolves nothing.
+When several decisions are due at once, the occurrence still reminds every one
+of them in the decision ledger, but sends one digest message instead of one
+message per group. The digest (a `skill-owner-decision-batch` event with
+`pendingCount`) names a stable preview of at most four decisions, the first in
+pending order, each with its plain-English cause and exact options, and states
+the total and how many are not shown. It tells the owner to “Ask jarvOS to list
+your pending skill decisions.”; the owner session's shared-skills decision list
+returns every pending decision by name with its choices. A decision left out of
+the preview is not resolved, acknowledged, paused, or dropped: it stays pending,
+is counted, and is reminded again next hour. `pendingCount` has no ceiling, so
+a large backlog is always one bounded message. Every reply still names its
+skill, one decision at a time, so a reply correlated only to the message
+resolves nothing and no reply decides several skills at once.
+
+The action-required envelope keeps its `messages` array; a digest occurrence has
+exactly one entry, and the top-level fields mirror it. Chunked batches from
+older producers (`chunkIndex`/`chunkCount`, one message per group of two to
+four) still validate, render, and deliver unchanged.
 
 A retry of the same occurrence never claims a second reminder: reminder counts
-do not move and the ledger is not written again. It does, however, re-render
-what that occurrence already claimed, under the same per-message dedupe
-identities, so a sender that accepted some of the occurrence's messages and
-failed the rest can recover the missing ones instead of waiting an hour. The
-sender's own per-message accepted-delivery dedupe suppresses what it already
-delivered. The replay names only decisions that are still pending and still
-remindable, so one resolved, acknowledged, or deferred in the meantime drops
-out and is never revived, and a decision that first became actionable after the
-occurrence began leads the next occurrence rather than joining this one. Only
-the current occurrence of an hourly series replays; once a later hour has been
-claimed, every earlier hour is closed for good. The next occurrence names every
-still-unresolved decision again. The separate v1 migration notice remains a
+do not move and the ledger is not written again. It re-renders the digest under
+the same dedupe identity, so a sender that failed to deliver it can recover it
+instead of waiting an hour. The replay counts only decisions that are still
+pending and still remindable, so one resolved, acknowledged, or deferred in the
+meantime drops out and is never revived, and a decision that first became
+actionable after the occurrence began leads the next occurrence rather than
+joining this one. Once a sender has accepted a digest for an occurrence, it
+sends no further owner-decision message for that occurrence, even if the
+preview, membership, or shape (a digest shrinking to a single decision)
+changes; a digest is likewise not sent for an occurrence whose older chunked
+decision messages were already accepted. Only confirmed provider acceptance
+counts. Only the current occurrence of an hourly series replays; once a later
+hour has been claimed, every earlier hour is closed for good. The next
+occurrence sends one digest again. The separate v1 migration notice remains a
 count-only summary that explains how to list the named decisions through the
 owner session.
 
