@@ -91,6 +91,9 @@ function projectJournalEntriesFromMarkdown(markdown, { date = null, section = 'i
       ...projected,
       date: date || null,
       source_id: `journal:${date || 'unknown'}:${index}`,
+      // Boolean only: a read-only audit needs to count declared versus
+      // undeclared bullets without any consumer touching raw marker text.
+      marker_present: Boolean(entry.marker_line),
     });
     index += entry.marker_lines?.length || (entry.marker_line ? 1 : 0);
   }

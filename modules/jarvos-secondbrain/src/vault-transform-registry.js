@@ -300,7 +300,11 @@ function createVaultTransformRegistry(descriptors = []) {
   }
   function applyNode(content, operation) { const prepared = prepare(operation); return descriptorFor(prepared).applyNode(String(content), prepared.replayPayload); }
   function isSatisfied(content, operation) { const prepared = prepare(operation); return descriptorFor(prepared).invariant(String(content), prepared.replayPayload) === true; }
-  return Object.freeze({ applyNode, isSatisfied, prepare, quarantine });
+  // Registered transforms are enumerable so the content-origin writer
+  // conformance check can fail on a newly registered durable writer that never
+  // declared how it emits jarvos-content-origin/v1.
+  function list() { return [...entries.values()].map(({ name, version }) => ({ name, version })); }
+  return Object.freeze({ applyNode, isSatisfied, list, prepare, quarantine });
 }
 
 module.exports = {

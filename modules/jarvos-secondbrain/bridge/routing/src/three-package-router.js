@@ -44,6 +44,7 @@ const {
   REVIEW_CONFIDENCE_MIN,
   REVIEW_CONFIDENCE_MAX,
   buildThreePackagePlan,
+  journalContentOriginForPlan,
 } = require('../../../packages/jarvos-ambient/src/routing');
 
 const {
@@ -123,12 +124,13 @@ function applyStoragePlan(plan, capture = {}, options = {}) {
       // Resolve the plan's (default) heading to the currently-configured one, so a
       // renamed/reordered section in journal-module.json is honored by the capture
       // path — not just the renderer (WS0 config-driven sections).
+      const contentOrigin = journalContentOriginForPlan({ ...plan, journalLine });
       result.journalEntry = adapter.appendLineToJournalSection({
         heading: resolveConfiguredHeading(plan.journalSection),
         line: journalLine,
         date,
         ...(intentId ? { intentId: `${intentId}:journal`, requestHash } : {}),
-        ...(plan.route === 'idea' && plan.journalOrigin ? { contentOrigin: plan.journalOrigin } : {}),
+        ...(contentOrigin ? { contentOrigin } : {}),
       });
       result.noteLink = result.journalEntry;
     }

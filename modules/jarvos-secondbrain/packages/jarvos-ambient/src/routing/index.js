@@ -89,6 +89,19 @@ function journalOriginForCapture(capture = {}, options = {}) {
   };
 }
 
+// A journal bullet that is nothing but a note wikilink carries no content of
+// its own; the linked note's frontmatter holds its jarvos-content-origin/v1
+// declaration. Every other bullet is material text and must be written with the
+// adjacent hidden marker, otherwise a downstream reader would treat it as an
+// unmarked manual entry — that is, as Andrew's own words.
+const NOTE_BACKLINK_LINE_RE = /^-\s*\[\[[^\]]+\]\]\s*$/;
+
+function journalContentOriginForPlan(plan = {}) {
+  if (!plan || !plan.journalOrigin || !plan.journalLine) return null;
+  if (plan.route === IDEA || plan.route === JOURNAL) return plan.journalOrigin;
+  return NOTE_BACKLINK_LINE_RE.test(String(plan.journalLine).trim()) ? null : plan.journalOrigin;
+}
+
 function inferTitle(capture = {}, fallbackPrefix = 'Captured Note', options = {}) {
   const explicit = String(capture.title || '').trim();
   if (explicit) return stripLeadingKeyword(explicit);
@@ -212,6 +225,7 @@ function buildKeywordRoutingPlan(capture = {}, options = {}) {
       noteTitle: '',
       noteContent: '',
       noteFrontmatter: null,
+      journalOrigin: journalOriginForCapture(capture, options),
     };
   }
 
@@ -245,6 +259,7 @@ function shouldFlagForReview() {
 
 function buildJournalAction(plan) {
   if (plan.ignored || !plan.journalSection || !plan.journalLine) return null;
+  const contentOrigin = journalContentOriginForPlan(plan);
   return {
     kind: 'journal',
     adapter: 'journal',
@@ -253,7 +268,7 @@ function buildJournalAction(plan) {
       heading: plan.journalSection,
       line: plan.journalLine,
       date: plan.date,
-      ...(plan.route === IDEA && plan.journalOrigin ? { contentOrigin: plan.journalOrigin } : {}),
+      ...(contentOrigin ? { contentOrigin } : {}),
     },
   };
 }
@@ -543,6 +558,7 @@ module.exports = {
   buildSkillInvocations,
   buildWorkIntakePlan,
   journalOriginForCapture,
+  journalContentOriginForPlan,
   ideaJournalLine,
   inferTitle,
   isSubstantiveIdea,
