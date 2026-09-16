@@ -17,19 +17,19 @@ const {
   NO_REPLY,
   OPERATOR_NOTIFICATION_SCHEMA_VERSION,
   SKILL_DECISION_BATCH_LIMIT,
-  chunkSkillDecisions,
   evaluateOperatorNotification,
 } = operatorNotification;
 
 // Whichever copy of the runtime kit Node actually resolved must carry the
 // notification contract this module renders against. A stale or partial copy
-// would otherwise silently fall back to older reminder semantics, naming only
-// part of an occurrence, so rendering fails closed instead. The check is at
-// the point of use, so an inconsistent install cannot break unrelated skills
-// commands that never render a notification.
+// would otherwise silently fall back to older reminder semantics, so rendering
+// fails closed instead; a copy that predates the digest rejects its
+// pendingCount when the event is evaluated. The check is at the point of use,
+// so an inconsistent install cannot break unrelated skills commands that never
+// render a notification.
 function requireNotificationContract() {
   for (const [name, value] of Object.entries({
-    NO_REPLY, OPERATOR_NOTIFICATION_SCHEMA_VERSION, SKILL_DECISION_BATCH_LIMIT, chunkSkillDecisions, evaluateOperatorNotification,
+    NO_REPLY, OPERATOR_NOTIFICATION_SCHEMA_VERSION, SKILL_DECISION_BATCH_LIMIT, evaluateOperatorNotification,
   })) {
     if (value === undefined) throw new Error(`the resolved @jarvos/runtime-kit does not provide ${name}`);
   }
@@ -101,8 +101,8 @@ function eventsFor(result, {
   // A scheduled run names exactly the decisions whose reminder it claimed for
   // this occurrence; paused, resolved, or already-reminded decisions are left
   // out. Rendering without claims keeps the original rule: a fresh decision
-  // takes precedence over older pending ones. More than one item is named
-  // across bounded batches that carry no delivery attempt.
+  // takes precedence over older pending ones. More than one item becomes one
+  // bounded digest that carries no delivery attempt.
   const reminded = Array.isArray(reminderClaims) ? new Set(reminderClaims.map((claim) => claim?.decisionId)) : null;
   const decisionsForNotification = reminded
     ? pendingDecisions.filter((decision) => reminded.has(decision.id))
@@ -170,27 +170,25 @@ function eventsFor(result, {
   }
 
   if (decisionsForNotification.length > 1) {
-    // Each decision is named with its own redacted facts and skill-qualified
-    // replies. The message reference is fresh and never a decision reference,
-    // so a reply that names no skill resolves nothing. A batch carries no
-    // delivery attempt, so none is orphaned or acknowledged for another.
-    //
-    // Every decision this occurrence claimed is named in this occurrence: the
-    // bound applies to one message, so a set too large for one message becomes
-    // several bounded messages rather than a truncated list that would leave
-    // some decisions unnamed for an hour.
-    const chunks = chunkSkillDecisions(decisionsForNotification, SKILL_DECISION_BATCH_LIMIT);
-    // A reminder batch is identified by its occurrence alone, so a changed
-    // membership within one occurrence keeps one delivery identity per chunk.
-    // The chunk position is part of that identity, and a single-message
-    // occurrence keeps the original unsuffixed identity, so an occurrence that
-    // a sender already accepted is never re-sent under a new name.
+    // One occurrence is one digest message. It names a stable preview, the
+    // first decisions in pending order up to the batch limit, each with its own
+    // redacted facts and options, and declares how many this occurrence
+    // reminded in total. Every claimed decision stays durable, pending, and
+    // reminded; the ones outside the preview are listed in full through the
+    // owner session. The message reference is fresh and never a decision
+    // reference, so a reply that names no skill resolves nothing. A digest
+    // carries no delivery attempt, so none is orphaned or acknowledged for
+    // another.
+    const named = decisionsForNotification.slice(0, SKILL_DECISION_BATCH_LIMIT);
+    // A reminder digest is identified by its occurrence alone, so a changed
+    // membership within one occurrence keeps its one delivery identity, the
+    // same unsuffixed identity a single-message batch always had.
     const batchKey = crypto.createHash('sha256')
       .update(reminderOccurrence
         ? `occurrence\0${reminderOccurrence}`
         : decisionsForNotification.map((decision) => decision.id).sort().join('\0'))
       .digest('hex').slice(0, 32);
-    return chunks.map((named, index) => ({
+    return [{
       ...common,
       code: 'skill-owner-decision-batch',
       severity: 'warning',
@@ -208,12 +206,9 @@ function eventsFor(result, {
         revision: decision.revision,
         ...decisionFacts(decision),
       })),
-      ...(chunks.length > 1 ? { chunkIndex: index + 1, chunkCount: chunks.length } : {}),
-      dedupeKey: occurrenceDedupeKey(
-        chunks.length > 1 ? `skill-owner-decision-batch-${batchKey}-part-${index + 1}` : `skill-owner-decision-batch-${batchKey}`,
-        reminderOccurrence,
-      ),
-    }));
+      pendingCount: decisionsForNotification.length,
+      dedupeKey: occurrenceDedupeKey(`skill-owner-decision-batch-${batchKey}`, reminderOccurrence),
+    }];
   }
 
   if (migration?.migrated === true && migration.pendingCount > 0) {
@@ -335,10 +330,10 @@ function claimPendingDecisionAttempts(result, {
   // claims them in one transition, least recently reminded first. A retry
   // within the current occurrence claims nothing new and changes nothing, but
   // replays that occurrence's own membership so the still-pending decisions
-  // can be rendered again under the same per-message identities; the sender
-  // suppresses whatever it already accepted. Rendering then splits the claimed
-  // set into bounded messages; the batch limit bounds a message, not an
-  // occurrence.
+  // can be rendered again under the same identity; the sender suppresses what
+  // it already accepted. Rendering then names a bounded preview of the claimed
+  // set with its total; the batch limit bounds the preview, never how many
+  // decisions are claimed or kept pending.
   if (typeof claimReminder === 'function') {
     for (const decision of pendingItems) {
       if (failed) break;
@@ -387,7 +382,9 @@ function transportEntry(notification) {
   };
 }
 
-// One occurrence's bounded messages must form a complete, consistent sequence.
+// A digest occurrence is one message and declares no chunk positions. Legacy
+// chunked batches handed to the envelope must still form a complete sequence:
+// one occurrence's bounded messages must form a complete, consistent sequence.
 // An individual message can only declare its own position, so the count being
 // the same in every message and every position from 1 to that count appearing
 // exactly once is a property the transport layer checks as it assembles the

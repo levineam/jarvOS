@@ -29,9 +29,11 @@ const {
   acknowledgeDecision,
   resumeDecision,
   claimDelivery,
+  listDecisions,
 } = require('../src');
 const {
   SKILL_DECISION_BATCH_LIMIT,
+  chunkSkillDecisions,
   evaluateOperatorNotification,
   notificationDedupeIdentity,
   validateOperatorNotificationEvent,
@@ -339,7 +341,7 @@ test('a reminded named decision is rendered before a generic safety hold', () =>
   assert.equal(eventFor(result, { reminderClaims: [], occurrenceKey }).code, 'safety-hold');
 });
 
-test('a batch of reminded decisions names every skill with its own facts and skill-qualified choices', () => {
+test('a digest of reminded decisions names each skill with its cause and exact options and declares the total', () => {
   const decisions = ['0123456789abcdef01234567', 'abcdef0123456789abcdef01'].map((suffix, index) => ({
     id: `decision-${suffix}`,
     decisionReference: `AbCdEfGhIjKlMnOpQrStUvW${index}`,
@@ -357,16 +359,23 @@ test('a batch of reminded decisions names every skill with its own facts and ski
   const notification = render('hour-2026-08-16T16');
   const { event, output } = notification;
   assert.equal(event.code, 'skill-owner-decision-batch');
+  assert.equal(event.pendingCount, 2);
+  assert.equal(event.chunkIndex, undefined);
+  assert.equal(event.chunkCount, undefined);
   assert.deepEqual(event.decisions.map((item) => [item.skillName, item.decisionReference]), decisions.map((decision) => [decision.skill, decision.decisionReference]));
+  assert.deepEqual(event.decisions[1].affectedHarnesses, ['claude', 'hermes', 'openclaw']);
+  assert.equal(event.decisions[1].preservedState, 'shared-copies-kept');
   assert.equal(decisions.some((decision) => decision.decisionReference === event.eventReference), false);
   assert.equal(event.deliveryAttemptId, undefined);
   for (const expected of [
-    '1. newsletter-generator: jarvOS did not share it with Claude because it needs your approval before jarvOS can share it. Nothing changed:',
-    'Reply “share newsletter-generator”, “keep local newsletter-generator”, “exclude newsletter-generator”, or “details newsletter-generator”.',
-    '2. use-anthropic: jarvOS did not share it with Claude, Hermes, and OpenClaw because its source is no longer available. Nothing was removed: the copies it already shared stay in place. To fix it, restore the skill folder, or tell jarvOS to stop offering it. Reply “keep local use-anthropic”, “exclude use-anthropic”, or “details use-anthropic”.',
-    'a reply that does not name one of these skills changes nothing',
+    'jarvOS has 2 skills waiting for your decision and left each one unchanged.',
+    '1. newsletter-generator: not shared because it needs your approval before jarvOS can share it. Options: share, keep local, exclude, or details.',
+    '2. use-anthropic: not shared because its source is no longer available. Options: keep local, exclude, or details.',
+    'Reply with one option and the skill name, such as “details newsletter-generator”; a reply that does not name a skill changes nothing.',
+    'Ask jarvOS to list your pending skill decisions.',
     'remind you every hour until each skill is decided',
   ]) assert.ok(output.includes(expected), `${expected}\n---\n${output}`);
+  assert.doesNotMatch(output, /still pending and not shown/);
   assert.doesNotMatch(output, /decision-[a-f0-9]|needs_owner_input|source_absent|shared-copies-kept|\//);
   assert.doesNotMatch(JSON.stringify(event), /decision-[a-f0-9]{24}/);
   assert.match(event.dedupeKey, /^skill-owner-decision-batch-[a-f0-9]{32}-hour-2026-08-16t16$/);
@@ -374,7 +383,7 @@ test('a batch of reminded decisions names every skill with its own facts and ski
   assert.notEqual(render('hour-2026-08-16T17').dedupeIdentity, notification.dedupeIdentity);
 });
 
-test('one occurrence names every pending decision in bounded messages, claims no delivery attempt, and repeats them all next hour', () => {
+test('one occurrence reminds every pending decision in one bounded digest, claims no delivery attempt, and repeats them all next hour', () => {
   const { root, configPath } = seededConfig('jarvos-scheduled-batch-');
   try {
     const statePath = decisionStatePath({ configPath });
@@ -389,91 +398,152 @@ test('one occurrence names every pending decision in bounded messages, claims no
     const run = (now) => runScheduledRepair({ configPath, now, repair, claimDelivery: (input) => { deliveryClaims += 1; return claimDelivery(input); } });
     const sentEvents = (sent) => sent.notifications.filter((item) => item.output !== 'NO_REPLY').map((item) => item.event);
     const namedIn = (sent) => sentEvents(sent).flatMap((event) => event.decisions.map((item) => item.skillName));
+    const ledger = () => JSON.parse(fs.readFileSync(statePath, 'utf8'));
+    const pendingSkills = () => ledger().decisions.filter((decision) => decision.status === 'pending').map((decision) => decision.skill);
 
-    // Nine unresolved decisions cannot fit one bounded message, so the same
-    // occurrence sends several bounded messages rather than naming four.
+    // Nine unresolved decisions become one message: a stable preview of the
+    // first four in pending order, and the total that this occurrence reminded.
     const first = run('2026-08-16T16:00:00.000Z');
     const events = sentEvents(first);
-    assert.equal(events.length, 3);
-    assert.deepEqual([...new Set(events.map((event) => event.code))], ['skill-owner-decision-batch']);
-    assert.deepEqual(events.map((event) => [event.chunkIndex, event.chunkCount]), [[1, 3], [2, 3], [3, 3]]);
-    for (const event of events) assert.ok(event.decisions.length <= SKILL_DECISION_BATCH_LIMIT, `${event.decisions.length} decisions in one message`);
-    assert.deepEqual(namedIn(first).slice().sort(), [...names].sort(), 'every pending decision is named this hour');
-    assert.equal(first.messages.length, 3);
-    assert.equal(new Set(first.notifications.map((item) => item.dedupeIdentity)).size, 3, 'each bounded message has its own delivery identity');
-    for (const message of first.messages) {
-      assert.ok(message.length <= 4000, `bounded message is ${message.length} characters`);
-      assert.match(message, /This is message \d of 3/);
-      assert.match(message, /Name the skill in every reply/);
-      assert.doesNotMatch(message, /[a-f0-9]{64}|\/|decision-[a-f0-9]/);
-    }
+    assert.equal(events.length, 1);
+    const [digest] = events;
+    assert.equal(digest.code, 'skill-owner-decision-batch');
+    assert.equal(digest.pendingCount, 9);
+    assert.equal(digest.chunkCount, undefined);
+    const preview = repair().decisions.pendingItems.slice(0, SKILL_DECISION_BATCH_LIMIT).map((decision) => decision.skill);
+    assert.deepEqual(namedIn(first), preview);
+    assert.equal(first.messages.length, 1);
+    const [message] = first.messages;
+    assert.ok(message.length < 2000, `digest is ${message.length} characters`);
+    assert.match(message, /jarvOS has 9 skills waiting for your decision/);
+    assert.match(message, /Here are 4; 5 more are still pending and not shown\./);
+    assert.match(message, /Ask jarvOS to list your pending skill decisions\./);
+    assert.doesNotMatch(message, /[a-f0-9]{64}|\/|decision-[a-f0-9]|message \d of/);
+    // Every one of the nine was reminded and stays pending, shown or not.
+    assert.deepEqual(ledger().decisions.map((decision) => [decision.status, decision.reminder.count]), names.map(() => ['pending', 1]));
 
-    // A retry inside the same occurrence claims nothing new, but re-renders
-    // the same bounded messages under the same per-message identities, so a
-    // sender that accepted only some of them can deliver the rest. The
-    // reminder counts do not move and the ledger is not written again.
+    // A retry inside the same occurrence claims nothing new and re-renders the
+    // same digest under the same identity, so a sender that already accepted
+    // it sends nothing. The ledger is not written again.
     const ledgerAfterFirst = fs.readFileSync(statePath, 'utf8');
     const replay = run('2026-08-16T16:40:00.000Z');
-    const replayEvents = sentEvents(replay);
-    assert.equal(replayEvents.length, 3);
-    assert.deepEqual(replayEvents.map((event) => [event.chunkIndex, event.chunkCount]), [[1, 3], [2, 3], [3, 3]]);
-    assert.deepEqual(namedIn(replay), namedIn(first), 'the same decisions in the same chunks');
+    assert.equal(sentEvents(replay).length, 1);
+    assert.deepEqual(namedIn(replay), namedIn(first));
+    assert.equal(sentEvents(replay)[0].pendingCount, 9);
     assert.deepEqual(replay.notifications.map((item) => item.dedupeIdentity), first.notifications.map((item) => item.dedupeIdentity));
-    // Only the per-message correlation reference is minted fresh; the owner
-    // text is identical, so the replay is the same reminder, not a new one.
-    const withoutReference = (messages) => messages.map((message) => message.replace(/Reference: [A-Za-z0-9_-]+\./, 'Reference.'));
+    // Only the correlation reference is minted fresh; the owner text is
+    // identical, so the replay is the same reminder, not a new one.
+    const withoutReference = (messages) => messages.map((text) => text.replace(/Reference: [A-Za-z0-9_-]+\./, 'Reference.'));
     assert.deepEqual(withoutReference(replay.messages), withoutReference(first.messages));
     assert.equal(fs.readFileSync(statePath, 'utf8'), ledgerAfterFirst, 'a replay never writes the ledger');
-    assert.deepEqual([...new Set(JSON.parse(ledgerAfterFirst).decisions.map((decision) => decision.reminder.count))], [1]);
 
-    // The next occurrence repeats every still-unresolved decision, under new
-    // per-message identities.
+    // The next occurrence reminds every still-unresolved decision again under
+    // a new identity.
     const second = run('2026-08-16T17:00:00.000Z');
-    assert.deepEqual(namedIn(second).slice().sort(), [...names].sort());
-    assert.equal(new Set([...first.notifications, ...second.notifications].map((item) => item.dedupeIdentity)).size, 6);
+    assert.equal(sentEvents(second)[0].pendingCount, 9);
+    assert.equal(new Set([...first.notifications, ...second.notifications].map((item) => item.dedupeIdentity)).size, 2);
     assert.equal(deliveryClaims, 0);
-    assert.ok(JSON.parse(fs.readFileSync(statePath, 'utf8')).decisions.every((decision) => decision.attempts.length === 0));
+    assert.ok(ledger().decisions.every((decision) => decision.attempts.length === 0));
+    assert.deepEqual([...new Set(ledger().decisions.map((decision) => decision.reminder.count))], [2]);
 
-    // A reply correlated only to a message resolves nothing; a reply that
-    // names a skill resolves only that skill's decision, whichever bounded
-    // message named it.
-    const chunk = sentEvents(second)[2];
-    const target = chunk.decisions[0];
+    // A decision left out of the preview is still retrievable by name from
+    // the owner's full list and resolvable on its own. A reply correlated only
+    // to the message resolves nothing.
+    const listed = listDecisions({ statePath, principal: owner() }).decisions;
+    assert.deepEqual(listed.map((decision) => decision.skill).sort(), [...names].sort());
+    const target = listed.find((decision) => !preview.includes(decision.skill));
     const current = (name) => skills.find((item) => item.logicalId === name);
     assert.equal(resolveDecision({
-      statePath, principal: owner(), decisionReference: chunk.eventReference, revision: 1, option: 'keep-local', currentSkill: current(target.skillName),
+      statePath, principal: owner(), decisionReference: sentEvents(second)[0].eventReference, revision: 1, option: 'keep-local', currentSkill: current(target.skill),
       mutate: () => assert.fail('a reply without a skill must not mutate a decision'),
     }).status, 'not_found');
     const mutated = [];
     assert.equal(resolveDecision({
-      statePath, principal: owner(), decisionReference: target.decisionReference, revision: target.revision, option: 'keep-local', currentSkill: current(target.skillName),
+      statePath, principal: owner(), decisionReference: target.decisionReference, revision: target.revision, option: 'keep-local', currentSkill: current(target.skill),
       mutate: ({ skill }) => mutated.push(skill),
     }).status, 'resolved');
-    assert.deepEqual(mutated, [target.skillName]);
-    assert.deepEqual(JSON.parse(fs.readFileSync(statePath, 'utf8')).decisions.filter((decision) => decision.status === 'resolved').map((decision) => decision.skill), [target.skillName]);
+    assert.deepEqual(mutated, [target.skill]);
+    const remaining = names.filter((name) => name !== target.skill);
+    assert.deepEqual(pendingSkills().sort(), [...remaining].sort());
 
-    // A replay of that same occurrence renders the safe current subset: the
-    // decision resolved in the meantime is omitted rather than revived, and
-    // the remaining eight are re-chunked within the same bound.
-    const remaining = names.filter((name) => name !== target.skillName);
+    // A replay of that same occurrence renders the safe current subset under
+    // the same identity: the resolved decision is gone from the total and is
+    // never revived, and no reminder count moves.
     const afterResolve = run('2026-08-16T17:45:00.000Z');
-    assert.deepEqual(namedIn(afterResolve).slice().sort(), [...remaining].sort());
-    const afterResolveEvents = sentEvents(afterResolve);
-    assert.deepEqual(afterResolveEvents.map((event) => [event.chunkIndex, event.chunkCount]), [[1, 2], [2, 2]]);
-    for (const event of afterResolveEvents) assert.ok(event.decisions.length <= SKILL_DECISION_BATCH_LIMIT);
-    assert.deepEqual([...new Set(JSON.parse(fs.readFileSync(statePath, 'utf8')).decisions
+    assert.equal(sentEvents(afterResolve)[0].pendingCount, 8);
+    assert.equal(afterResolve.notifications[0].dedupeIdentity, second.notifications[0].dedupeIdentity);
+    assert.deepEqual([...new Set(ledger().decisions
       .filter((decision) => decision.status === 'pending').map((decision) => decision.reminder.count))], [2],
     'the replay after a resolution still moved no reminder count');
 
-    // A resolved decision drops out; every other one is named again.
+    // A resolved decision drops out; every other one is reminded again.
     const third = run('2026-08-16T18:00:00.000Z');
-    assert.deepEqual(namedIn(third).slice().sort(), [...remaining].sort());
+    assert.equal(sentEvents(third)[0].pendingCount, 8);
+    assert.ok(namedIn(third).every((name) => remaining.includes(name)));
+    assert.deepEqual([...new Set(ledger().decisions
+      .filter((decision) => decision.status === 'pending').map((decision) => decision.reminder.count))], [3]);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
 
-test('the CLI envelope recovers a partly delivered occurrence and never reopens an older one', () => {
+test('a production-sized backlog is one compact digest whose hidden decisions all stay durable, pending, and listed', () => {
+  const { root, configPath } = seededConfig('jarvos-scheduled-backlog-');
+  try {
+    const statePath = decisionStatePath({ configPath });
+    const skills = Array.from({ length: 110 }, (unused, index) => heldSkill({ logicalId: `backlog-skill-${String(index).padStart(3, '0')}` }));
+    const repair = () => {
+      const { pending } = reconcileDecisions({ statePath, skills });
+      return healthy({ decisions: { created: 0, pending: pending.length, items: [], pendingItems: pending, migration: null } });
+    };
+    const cli = (now) => JSON.parse(scheduledRepairCliEnvelope(runScheduledRepair({ configPath, now, repair }).notifications));
+    const ledger = () => JSON.parse(fs.readFileSync(statePath, 'utf8')).decisions;
+
+    const envelope = cli('2026-08-16T16:00:00.000Z');
+    assert.equal(envelope.messages.length, 1, 'one message for the whole backlog');
+    assertTransportEntry(envelope.messages[0], 'digest');
+    const { event, message } = envelope.messages[0];
+    assert.equal(event.pendingCount, 110);
+    assert.equal(event.decisions.length, SKILL_DECISION_BATCH_LIMIT);
+    assert.equal(event.chunkIndex, undefined);
+    assert.ok(message.length < 2000, `digest is ${message.length} characters`);
+    assert.match(message, /jarvOS has 110 skills waiting for your decision/);
+    assert.match(message, /Here are 4; 106 more are still pending and not shown\./);
+    assert.match(message, /Ask jarvOS to list your pending skill decisions\./);
+    for (const item of event.decisions) assert.ok(message.includes(`${item.skillName}: not shared because`), item.skillName);
+
+    // All 110 were reminded once for the occurrence and stay pending.
+    assert.equal(ledger().length, 110);
+    assert.ok(ledger().every((decision) => decision.status === 'pending' && decision.reminder.count === 1));
+
+    // The exact retry is the same digest identity, so a sender that accepted
+    // it sends nothing; nothing is resolved, acknowledged, or dropped.
+    const retry = cli('2026-08-16T16:30:00.000Z');
+    assert.equal(retry.messages.length, 1);
+    assert.equal(retry.dedupeIdentity, envelope.dedupeIdentity);
+    assert.deepEqual(retry.event.decisions.map((item) => item.decisionReference), event.decisions.map((item) => item.decisionReference));
+    assert.ok(ledger().every((decision) => decision.status === 'pending' && decision.reminder.count === 1));
+
+    // Every hidden decision is retrievable with its reference and options.
+    const listed = listDecisions({ statePath, principal: owner() }).decisions;
+    assert.equal(listed.length, 110);
+    const shown = new Set(event.decisions.map((item) => item.decisionReference));
+    const hidden = listed.filter((decision) => !shown.has(decision.decisionReference));
+    assert.equal(hidden.length, 106);
+    assert.ok(hidden.every((decision) => decision.status === 'pending' && decision.options.length > 0));
+
+    // The next occurrence sends one new digest for all of them.
+    const nextHour = cli('2026-08-16T17:00:00.000Z');
+    assert.equal(nextHour.messages.length, 1);
+    assert.equal(nextHour.event.pendingCount, 110);
+    assert.notEqual(nextHour.dedupeIdentity, envelope.dedupeIdentity);
+    assert.ok(ledger().every((decision) => decision.status === 'pending' && decision.reminder.count === 2));
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('the CLI digest keeps one identity for its occurrence and never reopens an older one', () => {
   const { root, configPath } = seededConfig('jarvos-scheduled-cli-recovery-');
   try {
     const statePath = decisionStatePath({ configPath });
@@ -493,21 +563,22 @@ test('the CLI envelope recovers a partly delivered occurrence and never reopens 
       .filter((decision) => decision.status === 'pending').map((decision) => decision.reminder.count))];
 
     const first = parse(cli('2026-08-16T16:00:00.000Z'));
-    assert.equal(first.messages.length, 3, 'nine decisions become three bounded messages');
-    assert.deepEqual(skillsIn(first).slice().sort(), [...names].sort());
+    assert.equal(first.messages.length, 1, 'nine decisions become one digest');
+    assert.equal(first.event.pendingCount, 9);
+    assert.equal(skillsIn(first).length, SKILL_DECISION_BATCH_LIMIT);
     assert.deepEqual(counts(), [1]);
 
-    // Suppose the sender accepted messages 1 and 2 and failed message 3.
-    // Rerunning the same occurrence re-emits all three under the same
-    // identities, so the sender's own accepted-delivery dedupe suppresses the
-    // two it already delivered and sends the one it missed.
+    // Rerunning the same occurrence re-emits the digest under the same
+    // identity, so a sender that failed can recover it and one that accepted
+    // it suppresses it.
     const retry = parse(cli('2026-08-16T16:20:00.000Z'));
     assert.deepEqual(identities(retry), identities(first));
     assert.deepEqual(skillsIn(retry), skillsIn(first));
     assert.deepEqual(counts(), [1], 'a recovery rerun is not a second reminder');
 
-    // A decision resolved inside the occurrence leaves the recoverable set.
-    const target = 'india-skill';
+    // A decision resolved inside the occurrence leaves the total; the identity
+    // of the occurrence does not change.
+    const target = skillsIn(first)[0];
     const decision = reconcileDecisions({ statePath, skills }).pending.find((item) => item.skill === target);
     assert.equal(resolveDecision({
       statePath, principal: owner(), decisionId: decision.id, revision: decision.revision, option: 'keep-local',
@@ -515,13 +586,17 @@ test('the CLI envelope recovers a partly delivered occurrence and never reopens 
     }).status, 'resolved');
     const remaining = names.filter((name) => name !== target);
     const shrunk = parse(cli('2026-08-16T16:40:00.000Z'));
-    assert.deepEqual(skillsIn(shrunk).slice().sort(), [...remaining].sort(), 'a resolved decision is never revived');
+    assert.equal(shrunk.event.pendingCount, 8);
+    assert.equal(skillsIn(shrunk).includes(target), false, 'a resolved decision is never revived');
+    assert.deepEqual(identities(shrunk), identities(first));
     assert.deepEqual(counts(), [1]);
 
-    // The next hour emits every remaining decision under fresh identities.
+    // The next hour emits one digest for every remaining decision under a
+    // fresh identity.
     const nextHour = parse(cli('2026-08-16T17:00:00.000Z'));
-    assert.deepEqual(skillsIn(nextHour).slice().sort(), [...remaining].sort());
-    assert.equal(new Set([...identities(first), ...identities(nextHour)]).size, first.messages.length + nextHour.messages.length);
+    assert.equal(nextHour.event.pendingCount, remaining.length);
+    assert.ok(skillsIn(nextHour).every((name) => remaining.includes(name)));
+    assert.notEqual(nextHour.dedupeIdentity, first.dedupeIdentity);
     assert.deepEqual(counts(), [2]);
 
     // Once that later hour is claimed, the hour before it is closed for good.
@@ -532,7 +607,7 @@ test('the CLI envelope recovers a partly delivered occurrence and never reopens 
   }
 });
 
-test('the action-required envelope carries every bounded message of the occurrence', () => {
+test('the action-required envelope carries the one digest message of the occurrence', () => {
   const { root, configPath } = seededConfig('jarvos-scheduled-envelope-');
   try {
     const statePath = decisionStatePath({ configPath });
@@ -547,14 +622,15 @@ test('the action-required envelope carries every bounded message of the occurren
     assert.deepEqual(Object.keys(envelope).sort(), ['dedupeIdentity', 'disposition', 'event', 'message', 'messages', 'schema']);
     assert.equal(envelope.schema, OPERATOR_NOTIFICATION_TRANSPORT_VERSION);
     assert.equal(envelope.disposition, 'action-required');
-    assert.equal(envelope.messages.length, 2);
+    assert.equal(envelope.messages.length, 1);
     // The legacy single-message fields always mirror the first entry, so an
     // older sender still delivers one safe, correlatable message.
     assert.equal(envelope.message, envelope.messages[0].message);
     assert.equal(envelope.dedupeIdentity, envelope.messages[0].dedupeIdentity);
     assert.deepEqual(envelope.event, envelope.messages[0].event);
-    assert.equal(new Set(envelope.messages.map((item) => item.dedupeIdentity)).size, 2);
-    assert.deepEqual(envelope.messages.flatMap((item) => item.event.decisions.map((decision) => decision.skillName)).sort(), [...names].sort());
+    assert.equal(envelope.event.pendingCount, names.length);
+    assert.equal(envelope.event.decisions.length, SKILL_DECISION_BATCH_LIMIT);
+    assert.ok(envelope.event.decisions.every((decision) => names.includes(decision.skillName)));
     // Both schema identifiers carry a slash as contract syntax; every other
     // slash anywhere in the envelope would be a leaked absolute path.
     const withoutSchemaIds = JSON.stringify(envelope)
@@ -590,7 +666,7 @@ function assertTransportEntry(entry, label) {
   assert.equal(entry.dedupeIdentity, notificationDedupeIdentity(entry.event), label);
 }
 
-test('every entry of the serialized multi-message envelope is independently a complete transport entry', () => {
+test('the serialized digest envelope entry is independently a complete transport entry', () => {
   const { root, configPath } = seededConfig('jarvos-scheduled-envelope-members-');
   try {
     const statePath = decisionStatePath({ configPath });
@@ -603,15 +679,15 @@ test('every entry of the serialized multi-message envelope is independently a co
     };
     const serialized = scheduledRepairCliEnvelope(runScheduledRepair({ configPath, now: '2026-08-16T16:00:00.000Z', repair }).notifications);
     const envelope = JSON.parse(serialized);
-    assert.equal(envelope.messages.length, 3);
+    assert.equal(envelope.messages.length, 1);
     envelope.messages.forEach((entry, index) => assertTransportEntry(entry, `messages[${index}]`));
     // The outer object is itself a legacy transport entry mirroring the first
     // message, with `messages` added, so an older sender is unaffected.
     const { messages, ...outer } = envelope;
     assertTransportEntry(outer, 'envelope');
     assert.deepEqual(outer, messages[0]);
-    // Every entry declares a position in one complete, consistent sequence.
-    assert.deepEqual(messages.map((entry) => [entry.event.chunkIndex, entry.event.chunkCount]), [[1, 3], [2, 3], [3, 3]]);
+    // A digest declares its total and no chunk position.
+    assert.deepEqual([messages[0].event.pendingCount, messages[0].event.chunkIndex, messages[0].event.chunkCount], [9, undefined, undefined]);
 
     // A single-message occurrence is the same entry shape without `messages`.
     const single = JSON.parse(scheduledRepairCliOutput(scheduledRepairNotification(healthy({
@@ -623,10 +699,9 @@ test('every entry of the serialized multi-message envelope is independently a co
   }
 });
 
-test('an occurrence with more pending decisions than any chunk ceiling would allow still names every one of them exactly once', () => {
+test('an occurrence with more pending decisions than any ceiling would allow is one digest that counts every one of them', () => {
   // The inventory can represent this population, so the occurrence must be
-  // able to name it. Only the individual message is bounded; there is no
-  // aggregate ceiling on how many bounded messages one occurrence may take.
+  // able to count it. Only the preview is bounded; pendingCount has no ceiling.
   const total = 1001;
   const decisions = Array.from({ length: total }, (unused, index) => ({
     id: `decision-${String(index).padStart(24, '0')}`,
@@ -642,34 +717,25 @@ test('an occurrence with more pending decisions than any chunk ceiling would all
     healthy({ decisions: { created: 0, pending: total, items: [], pendingItems: decisions, migration: null } }),
     { reminderClaims: decisions.map((decision) => ({ decisionId: decision.id })), occurrenceKey: 'hour-2026-08-16T16' },
   );
-  const expectedChunks = Math.ceil(total / SKILL_DECISION_BATCH_LIMIT);
-  assert.equal(expectedChunks, 251, 'this population exceeds the removed 250-chunk ceiling');
-  assert.equal(notifications.length, expectedChunks);
-  assert.equal(new Set(notifications.map((item) => item.dedupeIdentity)).size, expectedChunks, 'each message has its own delivery identity');
+  assert.equal(notifications.length, 1);
+  const [{ event, output }] = notifications;
+  const validation = validateOperatorNotificationEvent(event);
+  assert.equal(validation.ok, true, validation.errors.join('; '));
+  assert.equal(event.pendingCount, total);
+  assert.deepEqual(event.decisions.map((item) => item.skillName), decisions.slice(0, SKILL_DECISION_BATCH_LIMIT).map((decision) => decision.skill), 'a stable preview in pending order');
+  assert.ok(output.length < 2000, `digest is ${output.length} characters`);
+  assert.match(output, /Here are 4; 997 more are still pending and not shown\./);
 
-  const named = [];
-  notifications.forEach((notification, index) => {
-    const { event, output } = notification;
-    const validation = validateOperatorNotificationEvent(event);
-    assert.equal(validation.ok, true, `chunk ${index + 1}: ${validation.errors.join('; ')}`);
-    assert.deepEqual([event.chunkIndex, event.chunkCount], [index + 1, expectedChunks]);
-    assert.ok(event.decisions.length >= 2 && event.decisions.length <= SKILL_DECISION_BATCH_LIMIT, `chunk ${index + 1} holds ${event.decisions.length}`);
-    assert.ok(output.length <= 4000, `chunk ${index + 1} is ${output.length} characters`);
-    for (const item of event.decisions) named.push(item.skillName);
-  });
-  assert.deepEqual(named, decisions.map((decision) => decision.skill), 'every decision appears exactly once, in order');
-
-  // The whole occurrence still serializes as one envelope whose entries form a
-  // complete, consistent sequence.
   const envelope = JSON.parse(scheduledRepairCliEnvelope(notifications));
-  assert.equal(envelope.messages.length, expectedChunks);
+  assert.equal(envelope.messages.length, 1);
   envelope.messages.forEach((entry, index) => assertTransportEntry(entry, `messages[${index}]`));
 });
 
-test('the transport envelope fails closed on an incomplete or repeated chunk sequence', () => {
-  // A message can only declare its own position, so the transport layer checks
-  // that the occurrence's positions form one complete 1..count sequence rather
-  // than handing a sender a set that silently omits or repeats a message.
+test('the transport envelope still fails closed on an incomplete or repeated legacy chunk sequence', () => {
+  // A legacy chunked message can only declare its own position, so the
+  // transport layer checks that the occurrence's positions form one complete
+  // 1..count sequence rather than handing a sender a set that silently omits
+  // or repeats a message.
   const decisions = Array.from({ length: 9 }, (unused, index) => ({
     id: `decision-${String(index).padStart(24, '0')}`,
     decisionReference: `Ref${String(index).padStart(4, '0')}0123456789abcdefgh`,
@@ -678,10 +744,25 @@ test('the transport envelope fails closed on an incomplete or repeated chunk seq
     reason: 'needs_owner_input',
     options: ['share', 'keep-local', 'exclude', 'details'],
   }));
-  const notifications = scheduledRepairNotifications(
+  const { pendingCount, ...legacyBase } = eventFor(
     healthy({ decisions: { created: 0, pending: 9, items: [], pendingItems: decisions, migration: null } }),
     { reminderClaims: decisions.map((decision) => ({ decisionId: decision.id })), occurrenceKey: 'hour-2026-08-16T16' },
   );
+  assert.equal(pendingCount, 9);
+  const chunks = chunkSkillDecisions(decisions.map((decision) => ({
+    skillName: decision.skill, reasonCode: decision.reason, options: decision.options, decisionReference: decision.decisionReference, revision: decision.revision,
+  })));
+  const notifications = chunks.map((named, index) => {
+    const event = {
+      ...legacyBase,
+      eventReference: `LegacyChunkReference${index}AbCdEf`,
+      decisions: named,
+      chunkIndex: index + 1,
+      chunkCount: chunks.length,
+      dedupeKey: `${legacyBase.dedupeKey.slice(0, 120)}-part-${index + 1}`,
+    };
+    return { event, ...evaluateOperatorNotification(event) };
+  });
   assert.equal(notifications.length, 3);
   assert.equal(JSON.parse(scheduledRepairCliEnvelope(notifications)).messages.length, 3);
   for (const broken of [

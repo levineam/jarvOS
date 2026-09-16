@@ -491,6 +491,73 @@ test('chunk identity is validated as a positive safe-integer position and belong
   assert.match(validateOperatorNotificationEvent(event({ chunkIndex: 1, chunkCount: 2 })).errors.join('\n'), /chunkIndex is only valid for skill decision events/);
 });
 
+test('a digest names a bounded preview with the total, remaining count, per-skill options, and the full-list action', () => {
+  const decisions = [0, 1, 2, 3].map((index) => batchItem(index, index === 1
+    ? { reasonCode: 'unsafe_source', options: ['keep-local', 'exclude', 'details'] }
+    : {}));
+  const input = batchEvent({ decisions, pendingCount: 110 });
+  assert.equal(validateOperatorNotificationEvent(input).ok, true);
+  const result = evaluateOperatorNotification(input);
+  assert.equal(result.disposition, 'direct-notification');
+  const output = result.output;
+  for (const expected of [
+    'jarvOS has 110 skills waiting for your decision and left each one unchanged.',
+    'Here are 4; 106 more are still pending and not shown.',
+    '1. newsletter-generator: not shared because it needs your approval before jarvOS can share it. Options: share, keep local, exclude, or details.',
+    '2. use-anthropic: not shared because jarvOS could not confirm that its files are safe to share. Options: keep local, exclude, or details.',
+    'Reply with one option and the skill name, such as “details newsletter-generator”; a reply that does not name a skill changes nothing.',
+    'To see all 110 with their details: Ask jarvOS to list your pending skill decisions.',
+    'remind you every hour until each skill is decided',
+    'Action required: Choose one listed option for each skill, naming the skill in your reply.',
+    `Reference: ${EVENT_REFERENCE}.`,
+  ]) assert.ok(output.includes(expected), `${expected}\n---\n${output}`);
+  assert.ok(output.length < 2000, `digest is ${output.length} characters`);
+  // Each skill appears once in its line and once at most in the reply example;
+  // no per-item paragraphs of preserved state or recovery are repeated.
+  assert.doesNotMatch(output, /Nothing changed:|To fix it|message \d of|needs_owner_input|unsafe_source|ItemReference|\//);
+  assert.equal(output.split('use-anthropic').length - 1, 1);
+
+  // A digest whose preview is the whole occurrence has nothing hidden.
+  const whole = renderOperatorNotification(batchEvent({ pendingCount: 2 }));
+  assert.match(whole, /jarvOS has 2 skills waiting for your decision/);
+  assert.doesNotMatch(whole, /more are still pending|more is still pending/);
+  assert.match(whole, /Ask jarvOS to list your pending skill decisions\./);
+  assert.match(renderOperatorNotification(batchEvent({ decisions: decisions.slice(0, 3), pendingCount: 4 })), /Here are 3; 1 more is still pending and not shown\./);
+
+  // The largest names and reference still stay inside one chat message.
+  const widest = [0, 1, 2, 3].map((index) => batchItem(index, { skillName: `${'x'.repeat(63)}${index}`, reasonCode: 'trust_class_insufficient' }));
+  const wide = renderOperatorNotification(batchEvent({ eventReference: 'R'.repeat(128), decisions: widest, pendingCount: Number.MAX_SAFE_INTEGER }));
+  assert.ok(wide.length <= 4000, `widest digest is ${wide.length} characters`);
+});
+
+test('digest pendingCount is a safe integer no smaller than the preview, never a chunk, and has no ceiling', () => {
+  for (const [unsafe, pattern] of [
+    [{ pendingCount: 0 }, /pendingCount is invalid/],
+    [{ pendingCount: 1 }, /pendingCount is invalid/],
+    [{ decisions: [0, 1, 2].map((index) => batchItem(index)), pendingCount: 2 }, /pendingCount is invalid/],
+    [{ pendingCount: -5 }, /pendingCount is invalid/],
+    [{ pendingCount: 2.5 }, /pendingCount is invalid/],
+    [{ pendingCount: '110' }, /pendingCount is invalid/],
+    [{ pendingCount: Number.NaN }, /pendingCount is invalid/],
+    [{ pendingCount: Infinity }, /pendingCount is invalid/],
+    [{ pendingCount: Number.MAX_SAFE_INTEGER + 2 }, /pendingCount is invalid/],
+    [{ pendingCount: null }, /pendingCount is invalid/],
+    [{ pendingCount: 9, chunkIndex: 1, chunkCount: 3 }, /pendingCount cannot be combined with chunk fields/],
+  ]) {
+    const result = validateOperatorNotificationEvent(batchEvent(unsafe));
+    assert.equal(result.ok, false, JSON.stringify(unsafe));
+    assert.match(result.errors.join('\n'), pattern);
+  }
+  for (const pendingCount of [2, 110, 1001, 100000]) {
+    assert.equal(validateOperatorNotificationEvent(batchEvent({ pendingCount })).ok, true, `pendingCount ${pendingCount}`);
+  }
+  assert.match(validateOperatorNotificationEvent(decisionEvent({ pendingCount: 2 })).errors.join('\n'), /pendingCount is only valid for skill decision batches/);
+  assert.match(validateOperatorNotificationEvent(event({ pendingCount: 2 })).errors.join('\n'), /pendingCount is only valid for skill decision events/);
+  // The legacy forms keep their exact rendering.
+  assert.equal(renderOperatorNotification(batchEvent()).includes('jarvOS found 2 skills it did not share, and each needs its own decision.'), true);
+  assert.equal(renderOperatorNotification(batchEvent({ chunkIndex: 1, chunkCount: 2 })).includes('This is message 1 of 2'), true);
+});
+
 test('unsafe, private, and under-trusted skills name their cause and offer only non-share choices', () => {
   for (const [reasonCode, cause, recovery] of [
     ['privacy_restricted', 'because it appears to contain private information, such as a credential.', 'To fix it, remove the private information from the skill, or keep it local.'],
