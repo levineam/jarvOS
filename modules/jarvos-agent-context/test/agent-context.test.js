@@ -297,6 +297,36 @@ test('createNote writes note, links journal, and verifies contract', () => {
   });
 });
 
+test('agent-context note writers emit jarvos-content-origin/v1 and fail closed on human claims', () => {
+  withTempVault(({ mutationService }) => {
+    const assistantNote = createNote({ title: 'Origin Default Test', content: 'Assistant-written summary.', mutationService });
+    assert.equal(assistantNote.ok, true);
+    const assistantText = fs.readFileSync(assistantNote.note.path, 'utf8');
+    assert.match(assistantText, /content_origin_schema: jarvos-content-origin\/v1/);
+    assert.match(assistantText, /content_origin: assistant/);
+    assert.match(assistantText, /content_origin_basis: assistant_generated/);
+    assert.match(assistantText, /human_evidence_eligible: false/);
+
+    // MCP callers have no receipt resolver, so a human claim cannot be verified.
+    const forged = createNote({
+      title: 'Forged Human Origin Test',
+      content: 'Assistant prose claiming to be the user.',
+      frontmatter: { content_origin: 'human', content_origin_basis: 'verbatim_user', human_evidence_eligible: true },
+      mutationService,
+    });
+    assert.equal(forged.ok, true);
+    const forgedText = fs.readFileSync(forged.note.path, 'utf8');
+    assert.match(forgedText, /content_origin: unknown/);
+    assert.match(forgedText, /content_origin_basis: unknown/);
+    assert.match(forgedText, /human_evidence_eligible: false/);
+
+    const thread = writeSessionThread({ threadId: 'origin-thread', actor: 'worker', event: 'checkpoint', summary: 'origin check', mutationService });
+    assert.equal(thread.ok, true);
+    const threadText = readSessionThread({ threadId: 'origin-thread', maxChars: 12000 });
+    assert.match(fs.readFileSync(threadText.notePath || threadText.path, 'utf8'), /content_origin: assistant/);
+  });
+});
+
 test('createNote creates today journal when missing', () => {
   withTempVault(({ journal, mutationService }) => {
     const result = createNote({

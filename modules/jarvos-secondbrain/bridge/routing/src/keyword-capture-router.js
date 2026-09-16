@@ -50,6 +50,7 @@ const {
   ideaJournalLine,
   inferTitle,
   isSubstantiveIdea,
+  journalContentOriginForPlan,
 } = require('../../../packages/jarvos-ambient/src/routing');
 const { createArtifactReceipt } = require('../../../src/artifact-receipt');
 const { prepareIdentifiedCapture, projectNoteTitle } = require('../../../packages/jarvos-ambient/src/intent/capture-identity');
@@ -80,6 +81,7 @@ function applyPlan(capture, plan, options = {}) {
         ...(capture.frontmatter || {}),
         ...(plan.noteFrontmatter || {}),
       },
+      ...(typeof options.resolveUserSource === 'function' ? { resolveUserSource: options.resolveUserSource } : {}),
       ...(intentId ? { intentId: `${intentId}:note`, requestHash } : {}),
     });
   }
@@ -99,11 +101,13 @@ function applyPlan(capture, plan, options = {}) {
     const journalLine = actualNoteTitle && plan.noteTitle
       ? plan.journalLine.replace(`[[${plan.noteTitle}]]`, () => `[[${actualNoteTitle}]]`)
       : plan.journalLine;
+    const contentOrigin = journalContentOriginForPlan({ ...plan, journalLine });
     result.journalEntry = adapter.appendLineToJournalSection({
       heading: plan.journalSection,
       line: journalLine,
       date,
       ...(intentId ? { intentId: `${intentId}:journal`, requestHash } : {}),
+      ...(contentOrigin ? { contentOrigin } : {}),
     });
     result.noteLink = result.journalEntry;
   } else {
@@ -119,7 +123,7 @@ function applyPlan(capture, plan, options = {}) {
 }
 
 function applyRoutingPlan(capture = {}, options = {}) {
-  return applyPlan(capture, buildRoutingPlan(capture), options);
+  return applyPlan(capture, buildRoutingPlan(capture, options), options);
 }
 
 function applyStrictCommandPlan(capture = {}, options = {}) {
@@ -148,7 +152,7 @@ function applyParsedStrictCommandPlan(capture = {}, command = {}, options = {}) 
   };
   return {
     ...command,
-    ...applyPlan(routedCapture, buildRoutingPlan(routedCapture), options),
+    ...applyPlan(routedCapture, buildRoutingPlan(routedCapture, options), options),
   };
 }
 

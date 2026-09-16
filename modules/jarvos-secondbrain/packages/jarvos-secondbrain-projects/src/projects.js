@@ -379,7 +379,7 @@ function journalProjectLines(projects, config = loadConfig(), options = {}) {
     maxItems: Number.isFinite(options.maxItems) ? options.maxItems : (Number.isFinite(journal.maxItems) ? journal.maxItems : 25),
     noteMappings: options.noteMappings === undefined ? options.canonicalNoteMappings : options.noteMappings,
   });
-  if (result.preserve) return journal.unavailableText || '- (projects unavailable)';
+  if (result.status === 'degraded') return journal.unavailableText || '- (projects unavailable)';
   return result.content || '- No projects touched today';
 }
 

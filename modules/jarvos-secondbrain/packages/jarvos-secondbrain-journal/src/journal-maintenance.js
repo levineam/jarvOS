@@ -38,7 +38,7 @@ const PROJECTS_PROJECTION_MODULE = path.join(
   'src',
   'journal-projection.js',
 );
-const SIGNATURE = '— Edited by Jarvis';
+const LEGACY_SIGNATURES = new Set(['— Edited by Jarvis', '— Written by Jarvis']);
 const DEFAULT_TIMEZONE = 'America/New_York';
 const LEGACY_SALIENCE_LINE_RE = /^-\s*📌\s*\*\(([^,]+),\s*(\d+)%\)\*\s*(.+)$/i;
 const JOURNAL_STATE_DIR = '.jarvos/journal-maintenance';
@@ -145,8 +145,9 @@ function trimOuterBlankLines(text) {
 }
 
 function stripSignature(md) {
+  const signaturePattern = [...LEGACY_SIGNATURES].map(escapeRegex).join('|');
   return String(md || '')
-    .replace(new RegExp(`^${escapeRegex(SIGNATURE)}\\s*$`, 'gm'), '')
+    .replace(new RegExp(`^(?:${signaturePattern})\\s*$`, 'gm'), '')
     .replace(/\n{3,}/g, '\n\n');
 }
 
@@ -258,7 +259,7 @@ function authoredBodyLines(body, config) {
       continue;
     }
     if (generated) continue;
-    if (!line || line === SIGNATURE || line === '-') continue;
+    if (!line || LEGACY_SIGNATURES.has(line) || line === '-') continue;
     if (isGeneratedPlaceholderLine(line)) continue;
     lines.push(line);
   }
@@ -323,7 +324,7 @@ function hasMeaningfulBodyText(body) {
     .split(/\r?\n/)
     .map((line) => line.trim())
     .filter(Boolean)
-    .some((line) => line !== SIGNATURE && line !== '-');
+    .some((line) => !LEGACY_SIGNATURES.has(line) && line !== '-');
 }
 
 /**
@@ -343,8 +344,11 @@ function hasMeaningfulBodyText(body) {
  * exact loss this machinery exists to prevent.
  */
 function contractSignature(config) {
-  const headings = buildDesiredSections(config || {}).map((section) => section.heading);
-  return contentHash(headings.join('\u0000'));
+  const sections = buildDesiredSections(config || {}).map((section) => ({
+    heading: section.heading,
+    presence: section.presence || 'always',
+  }));
+  return contentHash(JSON.stringify(sections));
 }
 
 /**
@@ -361,11 +365,20 @@ function contractSignature(config) {
  * is genuinely damaged, and the shrink guard and restore path must still fire.
  */
 function structureMatchesContract(sections, config) {
-  const desired = buildDesiredSections(config || {}).map((section) => String(section.heading).trim());
+  const desired = buildDesiredSections(config || {});
   if (!desired.length) return false;
   const have = (sections || []).map((heading) => String(heading).trim());
-  if (have.length !== desired.length) return false;
-  return desired.every((heading, index) => have[index] === heading);
+  let haveIndex = 0;
+  for (const section of desired) {
+    const heading = String(section.heading).trim();
+    if (have[haveIndex] === heading) {
+      haveIndex += 1;
+      continue;
+    }
+    if (section.presence === 'when-supported-activity') continue;
+    return false;
+  }
+  return haveIndex === have.length;
 }
 
 /**
@@ -752,32 +765,47 @@ function normalizeProjectsActivityResult(result, { date, timeZone, maxItems = 25
 
 function buildProjectsActivityFetcher({ reader, timeZone = DEFAULT_TIMEZONE, onProjection = null } = {}) {
   return ({ date, config, section }) => {
+    const projectionOptions = {
+      date,
+      timeZone: timeZone || config?.timeZone || DEFAULT_TIMEZONE,
+      maxItems: Number(config?.journal?.maxItems || 25),
+    };
+    let projectsProjection;
+    const unavailableProjection = (reason) => {
+      const unavailable = normalizeProjectsActivityResult({
+        activityProviderState: 'unavailable',
+        generator: 'projects-activity-v1',
+      }, projectionOptions);
+      return {
+        ...unavailable,
+        omissions: [...new Set([...(unavailable.omissions || []), reason])].sort(),
+      };
+    };
+
     if (typeof reader !== 'function' && !(reader && typeof reader.read === 'function')) {
-      return '- (projects unavailable — activity reader not configured)';
-    }
-    try {
-      const read = typeof reader === 'function' ? reader : reader.read.bind(reader);
-      const result = read({
-        profile: 'recent-activity',
-        date,
-        timeZone: timeZone || config?.timeZone || DEFAULT_TIMEZONE,
-        maxItems: Number(config?.journal?.maxItems || 25),
-        section,
-      });
-      if (result && typeof result.then === 'function') {
-        throw new Error('asynchronous Projects activity readers are not supported by synchronous journal maintenance');
+      projectsProjection = unavailableProjection('activity-reader:missing');
+    } else {
+      try {
+        const read = typeof reader === 'function' ? reader : reader.read.bind(reader);
+        const result = read({
+          profile: 'recent-activity',
+          date,
+          timeZone: projectionOptions.timeZone,
+          maxItems: projectionOptions.maxItems,
+          section,
+        });
+        if (result && typeof result.then === 'function') {
+          throw new Error('asynchronous Projects activity readers are not supported by synchronous journal maintenance');
+        }
+        projectsProjection = normalizeProjectsActivityResult(result, projectionOptions);
+      } catch {
+        projectsProjection = unavailableProjection('activity-reader:failed');
       }
-      const projection = normalizeProjectsActivityResult(result, {
-        date,
-        timeZone: timeZone || config?.timeZone || DEFAULT_TIMEZONE,
-        maxItems: Number(config?.journal?.maxItems || 25),
-      });
-      if (typeof onProjection === 'function') onProjection(projection);
-      if (projection.preserve) return '- (projects unavailable — activity evidence degraded)';
-      return projection.content || '- No projects touched today';
-    } catch {
-      return '- (projects unavailable — activity reader failed)';
     }
+
+    if (typeof onProjection === 'function') onProjection(projectsProjection);
+    if (projectsProjection.omit || projectsProjection.preserve || !projectsProjection.content) return null;
+    return projectsProjection.content;
   };
 }
 
@@ -1034,6 +1062,10 @@ function normalizeSections(original, date, config, opts = {}) {
       // back-written onto an older entry. The activity projection is explicitly
       // date-scoped, so it renders a backfilled date from that date's evidence.
       if (isToday || section.source === 'projects') {
+        if (section.source === 'projects'
+          && (!fetched || isDegradedSourceMarker(fetched) || /^-\s+No (?:ongoing projects|projects touched today)$/i.test(trimOuterBlankLines(fetched)))) {
+          continue;
+        }
         // ...but a DEGRADED read is not a fact about the world, only about our
         // ability to read it, so it must never overwrite content already in
         // the entry. Without this, one unavailable activity source could
@@ -1079,8 +1111,6 @@ function renderJournal(date, config, normalized) {
     parts.push(section.content || '-');
     parts.push('');
   }
-  parts.push(SIGNATURE);
-  parts.push('');
   return trimOuterBlankLines(parts.join('\n')) + '\n';
 }
 

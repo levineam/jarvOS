@@ -4,12 +4,14 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { createJarvosVaultTransforms } = require('../src/vault-transform-registry.js');
+const { parseArgs } = require('../scripts/journal-backlink-recovery.js');
 
 const {
   classifyDeferredBacklink,
   deferredQueuePathForJournalDir,
   flushDeferredBacklinks,
   reconcileDeferredBacklink,
+  supersedeDeferredBacklink,
   recordDeferredBacklink,
   linkNoteToJournal,
 } = require('../bridge/provenance/src/link-to-journal.js');
@@ -109,6 +111,25 @@ test('v2 identity mismatch is unresolved and never changes the journal', () => {
   }
 });
 
+test('v2 exact link does not bypass note identity validation', () => {
+  const state = fixture();
+  try {
+    note(state.root, 'Notes/Exact.md', 'wrong-id');
+    fs.writeFileSync(state.journalPath, '## 📝 Notes\n- [[Exact]]\n', 'utf8');
+    const classification = classifyDeferredBacklink({
+      journalPath: state.journalPath,
+      noteTitle: 'Exact',
+      noteId: 'right-id',
+      notePath: 'Notes/Exact.md',
+      section: '📝 Notes',
+    }, { vaultRoot: state.root, notesDir: state.notesDir, journalDir: state.journalDir });
+    assert.equal(classification.status, 'unresolved');
+    assert.equal(classification.reason, 'v2-note-identity-mismatch');
+  } finally {
+    fs.rmSync(state.root, { recursive: true, force: true });
+  }
+});
+
 test('missing v2 path is superseded only for one moved identity and conflicts stay unresolved', () => {
   const state = fixture();
   try {
@@ -135,10 +156,203 @@ test('legacy entries use only exact title evidence and do not fuzzy-match notes'
     assert.equal(exactNote.status, 'retry');
     fs.writeFileSync(state.journalPath, '## 📝 Notes\n- [[Legacy Title]]\n', 'utf8');
     const exactLink = classifyDeferredBacklink({ journalPath: state.journalPath, noteTitle: 'Legacy Title', section: '📝 Notes' }, { vaultRoot: state.root, notesDir: state.notesDir });
-    assert.equal(exactLink.status, 'retry');
+    assert.deepEqual(exactLink, { status: 'linked', reason: 'exact-link-present', journalPath: state.journalPath });
   } finally {
     fs.rmSync(state.root, { recursive: true, force: true });
   }
+});
+
+test('recovery derives a canonical journal path from journalDate and resolves an exact existing link', () => {
+  const state = fixture();
+  try {
+    note(state.root, 'Notes/Dated.md', 'dated-id');
+    fs.writeFileSync(state.journalPath, '## 📝 Notes\n- [[Dated]]\n', 'utf8');
+    const classification = classifyDeferredBacklink({
+      journalDate: '2030-02-03',
+      noteTitle: 'Dated',
+      section: '📝 Notes',
+    }, { vaultRoot: state.root, notesDir: state.notesDir, journalDir: state.journalDir });
+    assert.deepEqual(classification, { status: 'linked', reason: 'exact-link-present', journalPath: state.journalPath });
+  } finally {
+    fs.rmSync(state.root, { recursive: true, force: true });
+  }
+});
+
+test('journalDate never overrides an explicitly unsafe journal path', () => {
+  const state = fixture();
+  try {
+    const classification = classifyDeferredBacklink({
+      journalPath: path.join(state.root, 'Outside', '2030-02-03.md'),
+      journalDate: '2030-02-03',
+      noteTitle: 'Dated',
+      section: '📝 Notes',
+    }, { vaultRoot: state.root, notesDir: state.notesDir, journalDir: state.journalDir });
+    assert.deepEqual(classification, { status: 'unresolved', reason: 'journal-path-unsafe' });
+  } finally {
+    fs.rmSync(state.root, { recursive: true, force: true });
+  }
+});
+
+test('journalDate never overrides an explicitly empty journal path', () => {
+  const state = fixture();
+  try {
+    const classification = classifyDeferredBacklink({
+      journalPath: '',
+      journalDate: '2030-02-03',
+      noteTitle: 'Dated',
+      section: '📝 Notes',
+    }, { vaultRoot: state.root, notesDir: state.notesDir, journalDir: state.journalDir });
+    assert.deepEqual(classification, { status: 'unresolved', reason: 'journal-path-unsafe' });
+  } finally {
+    fs.rmSync(state.root, { recursive: true, force: true });
+  }
+});
+
+test('journalDate requires a real calendar date', () => {
+  const state = fixture();
+  try {
+    for (const journalDate of ['2030-02-30', '2030-99-99']) {
+      const classification = classifyDeferredBacklink({ journalDate, noteTitle: 'Dated' }, {
+        vaultRoot: state.root,
+        notesDir: state.notesDir,
+        journalDir: state.journalDir,
+      });
+      assert.deepEqual(classification, { status: 'unresolved', reason: 'journal-path-unsafe' });
+    }
+  } finally {
+    fs.rmSync(state.root, { recursive: true, force: true });
+  }
+});
+
+test('v2 recovery may derive a missing journal path from a canonical journalDate', () => {
+  const state = fixture();
+  try {
+    note(state.root, 'Notes/Dated V2.md', 'dated-v2-id');
+    fs.writeFileSync(state.journalPath, '## 📝 Notes\n- [[Notes/Dated V2]]\n', 'utf8');
+    const classification = classifyDeferredBacklink({
+      journalDate: '2030-02-03',
+      noteTitle: 'Dated V2',
+      noteId: 'dated-v2-id',
+      notePath: 'Notes/Dated V2.md',
+      section: '📝 Notes',
+    }, { vaultRoot: state.root, notesDir: state.notesDir, journalDir: state.journalDir });
+    assert.deepEqual(classification, { status: 'linked', reason: 'exact-link-present', journalPath: state.journalPath });
+  } finally {
+    fs.rmSync(state.root, { recursive: true, force: true });
+  }
+});
+
+test('recovery of an existing journal skips scaffold creation', () => {
+  const state = fixture();
+  try {
+    note(state.root, 'Notes/Retry.md', 'retry-id');
+    recordDeferredBacklink({
+      journalPath: state.journalPath,
+      noteTitle: 'Retry',
+      noteId: 'retry-id',
+      notePath: 'Notes/Retry.md',
+      section: '📝 Notes',
+      reason: 'failed',
+    });
+    const operationKinds = [];
+    const result = flushDeferredBacklinks({
+      journalDir: state.journalDir,
+      vaultRoot: state.root,
+      notesDir: state.notesDir,
+      mutationService: fakeMutationService(state, { onExecute: (operation) => operationKinds.push(operation.operationKind) }),
+    });
+    assert.equal(result.linked, 1);
+    assert.deepEqual(operationKinds, ['transform']);
+  } finally {
+    fs.rmSync(state.root, { recursive: true, force: true });
+  }
+});
+
+test('an unreadable stale journal target does not block a later valid recovery', () => {
+  const state = fixture();
+  try {
+    const badJournalPath = path.join(state.journalDir, '2030-02-01.md');
+    fs.mkdirSync(badJournalPath);
+    note(state.root, 'Notes/Bad.md', 'bad-id');
+    note(state.root, 'Notes/Good.md', 'good-id');
+    recordDeferredBacklink({
+      journalPath: badJournalPath,
+      noteTitle: 'Bad',
+      noteId: 'bad-id',
+      notePath: 'Notes/Bad.md',
+      section: '📝 Notes',
+      reason: 'failed',
+    });
+    recordDeferredBacklink({
+      journalPath: state.journalPath,
+      noteTitle: 'Good',
+      noteId: 'good-id',
+      notePath: 'Notes/Good.md',
+      section: '📝 Notes',
+      reason: 'failed',
+    });
+    const result = flushDeferredBacklinks({
+      journalDir: state.journalDir,
+      vaultRoot: state.root,
+      notesDir: state.notesDir,
+      mutationService: fakeMutationService(state),
+    });
+    assert.equal(result.pending, 1);
+    assert.equal(result.linked, 1);
+    assert.match(fs.readFileSync(state.journalPath, 'utf8'), /\[\[Notes\/Good\]\]/);
+  } finally {
+    fs.rmSync(state.root, { recursive: true, force: true });
+  }
+});
+
+test('operator supersede is evidence-backed, auditable, and leaves journal content unchanged', () => {
+  const state = fixture();
+  try {
+    const deferred = recordDeferredBacklink({
+      journalPath: state.journalPath,
+      noteTitle: 'Fixture Probe',
+      section: '📝 Notes',
+      reason: 'failed',
+    });
+    const journalBefore = fs.readFileSync(state.journalPath, 'utf8');
+    const dry = supersedeDeferredBacklink({
+      journalDir: state.journalDir,
+      key: deferred.key,
+      reason: 'test-artifact',
+      evidence: 'named fixture probe with no durable note',
+      dryRun: true,
+    });
+    assert.equal(dry.status, 'superseded');
+    assert.equal(JSON.parse(fs.readFileSync(deferred.deferredPath, 'utf8')).entries[deferred.key].status, 'pending');
+    const applied = supersedeDeferredBacklink({
+      journalDir: state.journalDir,
+      key: deferred.key,
+      reason: 'test-artifact',
+      evidence: 'named fixture probe with no durable note',
+    });
+    assert.equal(applied.previousStatus, 'pending');
+    const entry = JSON.parse(fs.readFileSync(deferred.deferredPath, 'utf8')).entries[deferred.key];
+    assert.equal(entry.status, 'superseded');
+    assert.equal(entry.terminalReason, 'test-artifact');
+    assert.equal(entry.terminalEvidence, 'named fixture probe with no durable note');
+    assert.equal(entry.events.at(-1).type, 'operator-superseded');
+    assert.equal(fs.readFileSync(state.journalPath, 'utf8'), journalBefore);
+  } finally {
+    fs.rmSync(state.root, { recursive: true, force: true });
+  }
+});
+
+test('supersede CLI requires an explicit key, reason, and evidence', () => {
+  assert.throws(() => parseArgs(['--supersede', '--key', 'abc']), /requires --key, --reason, and --evidence/);
+  assert.throws(() => parseArgs(['--reason', 'stale']), /require --supersede/);
+  assert.throws(() => parseArgs(['--supersede', '--key', 'abc', '--reason', 'stale', '--evidence', 'receipt', '--note-path', 'Notes/X.md']), /cannot be combined/);
+  assert.deepEqual(parseArgs(['--apply', '--supersede', '--key', 'abc', '--reason', 'stale', '--evidence', 'receipt']), {
+    dryRun: false,
+    supersede: true,
+    key: 'abc',
+    reason: 'stale',
+    evidence: 'receipt',
+  });
 });
 
 test('dry runs classify without mutating while an empty apply records freshness metadata', () => {

@@ -13,6 +13,27 @@ Public package state:
   watch status are generic jarvOS surfaces; private vault content and raw
   transcripts are not part of this package
 
+## Content origin (`jarvos-content-origin/v1`)
+
+Canonical durable-note writes go through `packages/jarvos-secondbrain-notes` → `write-to-vault.js` → `lib/note-schema.js`, which calls `bridge/provenance/src/content-origin-contract.js` (`frontmatterForContentOrigin()`).
+
+Written frontmatter includes:
+
+| Field | Meaning |
+|---|---|
+| `content_origin_schema` | Always `jarvos-content-origin/v1` |
+| `content_origin` | `human` \| `assistant` \| `mixed` \| `unknown` |
+| `content_origin_basis` | `verbatim_user` \| `user_derived` \| `assistant_generated` \| `mixed_composition` \| `unknown` (`legacy_author` is read-time only) |
+| `content_origin_source` | Present only when a user receipt verifies human evidence |
+
+A `human` declaration without `{capture_event_id, actor: "user", source_digest, content_digest}` that resolves and matches stored content is written as `unknown`. Downstream Ripeness / Active Assistant / memory gates must use that receipt check; they must not treat `author:` heuristics as human evidence.
+
+Private host writers (for example a local article-generator) should pass the same keys through the note-journal contract shim. Vault body text is not rewritten by origin repair.
+
+Journal bullets declare through an adjacent hidden marker bound to the digest of the clean bullet text; a bullet that is only a note wikilink is declared by the linked note instead. An **unmarked** material bullet is read as an unmarked manual entry — that is, as Andrew's own typing — so programmatic journal writers must declare rather than omit.
+
+The declared set of canonical writers and vault transforms lives in `bridge/provenance/src/content-origin-writers.js` and is enforced by `tests/content-origin-writer-conformance.test.js`: a newly added writer that never declares how it emits the contract fails the suite. For vault coverage reporting and the apply-gated repair path, see `docs/operations/content-origin-audit.md`.
+
 ## Layout
 
 ```text
