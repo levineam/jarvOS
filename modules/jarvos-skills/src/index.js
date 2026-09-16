@@ -1276,6 +1276,7 @@ module.exports = {
   scheduledRepairCliEnvelope: require('./scheduled-repair').scheduledRepairCliEnvelope,
   hourlyOccurrenceKey: require('./scheduled-repair').hourlyOccurrenceKey,
   runScheduledRepair: require('./scheduled-repair').runScheduledRepair,
+  projectSkillSyncDesktop: require('./desktop-recommendation').projectSkillSyncDesktop,
   doctorSharedSkills: doctor.doctorSharedSkills,
   INVENTORY_SCHEMA_VERSION: inventoryContract.INVENTORY_SCHEMA_VERSION,
   STATUS_SCHEMA_VERSION: inventoryContract.STATUS_SCHEMA_VERSION,
