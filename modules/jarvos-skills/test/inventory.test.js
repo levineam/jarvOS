@@ -169,6 +169,47 @@ test('bounded inventory observes bundles across four registered roots and redact
   assert.equal(validated.document.schemaVersion, INVENTORY_SCHEMA_VERSION);
 });
 
+test('a missing observation never makes its harness a live source or a divergent copy', () => {
+  const home = temp('jarvos-inv-missing-');
+  const roots = {
+    codex: path.join(home, 'codex-skills'),
+    claude: path.join(home, 'claude-skills'),
+    openclaw: path.join(home, 'openclaw-skills'),
+    hermes: path.join(home, 'hermes-skills'),
+  };
+  for (const root of Object.values(roots)) ensureDir(root, 'root');
+  writeSkill(path.join(roots.codex, 'use-anthropic'), 'use-anthropic', 'same-body');
+  writeSkill(path.join(roots.claude, 'use-anthropic'), 'use-anthropic', 'same-body');
+  writeSkill(path.join(roots.hermes, 'other-skill'), 'other-skill', 'other');
+  const env = seedConfig({ roots });
+  const projection = (skill, harness) => skill.matrix.find((row) => row.harness === harness).projection;
+
+  const first = observeInventory({ configPath: env.configPath, observedAt: '2026-08-15T15:00:00.000Z' });
+  const before = first.document.skills.find((skill) => skill.logicalId === 'use-anthropic');
+  assert.equal(projection(before, 'claude'), 'source_present');
+
+  // The Claude copy is gone and the Codex copy changed; the older digest kept
+  // for the missing Claude observation is not a second, divergent source.
+  fs.rmSync(path.join(roots.claude, 'use-anthropic'), { recursive: true, force: true });
+  writeSkill(path.join(roots.codex, 'use-anthropic'), 'use-anthropic', 'updated-body');
+  const second = observeInventory({ configPath: env.configPath, observedAt: '2026-08-15T16:00:00.000Z' });
+  assert.equal(second.complete, true);
+  assert.equal(second.document.roots.length, 4);
+  assert.ok(second.document.roots.every((root) => root.complete === true));
+
+  const skill = second.document.skills.find((item) => item.logicalId === 'use-anthropic');
+  assert.deepEqual(skill.observations.map((observation) => observation.state).sort(), ['changed', 'missing']);
+  assert.deepEqual(skill.matrix.map((row) => [row.harness, row.projection]).sort(), [
+    ['claude', 'missing'], ['codex', 'source_present'], ['hermes', 'missing'], ['openclaw', 'missing'],
+  ]);
+  assert.ok(skill.matrix.every((row) => row.verification !== 'model_visible'));
+  assert.notEqual(skill.treeDigest, before.treeDigest);
+  assert.notEqual(skill.disposition.reasonCode, 'ambiguous_identity');
+  assert.equal(skill.attention, 'quiet');
+  const other = second.document.skills.find((item) => item.logicalId === 'other-skill');
+  assert.equal(projection(other, 'hermes'), 'source_present');
+});
+
 test('registration lifecycle, relative/stale roots, and unregistration stay non-authorizing', () => {
   const home = temp('jarvos-inv-life-');
   const available = path.join(home, 'available');

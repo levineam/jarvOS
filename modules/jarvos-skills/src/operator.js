@@ -551,7 +551,10 @@ function autonomousRepairOperator(options = {}) {
     ownerApprovedSkills,
     saveConfig: true,
     observedAt: options.observedAt,
-    includeDocument: false,
+    // Owner decisions need real logical ids, which only the private assessed
+    // document carries. It stays in-process; this result returns only the
+    // redacted outward status.
+    includeDocument: true,
   });
   if (assessed.complete !== true || assessed.overflowed === true || assessed.partial === true) {
     return {
@@ -584,7 +587,7 @@ function autonomousRepairOperator(options = {}) {
   const decisions = decisionStore.reconcileDecisionsWithMigration({
     statePath: decisionPath,
     attentionPath: current.resolved.inventory.attentionPath,
-    skills: assessed.status?.skills || [],
+    skills: assessed.document?.skills || [],
     observedAt: assessed.status?.observedAt,
     generationId: assessed.generationId,
   });
@@ -638,6 +641,17 @@ function resolveDecisionOperator(options = {}) {
     revision: options.revision, option: options.option, currentSkill: options.currentSkill, mutate: options.mutate,
   });
 }
+
+function decisionReminderOperator(update) {
+  return (options = {}) => update({
+    statePath: decisionStatePath(options), principal: decisionPrincipal(options), decisionId: options.decisionId,
+    decisionReference: options.decisionReference, until: options.until, now: options.now,
+  });
+}
+
+const acknowledgeDecisionOperator = decisionReminderOperator(decisionStore.acknowledgeDecision);
+const deferDecisionOperator = decisionReminderOperator(decisionStore.deferDecision);
+const resumeDecisionOperator = decisionReminderOperator(decisionStore.resumeDecision);
 
 function schedulerOperator(options = {}) {
   const loaded = loadConfig(options.configPath);
@@ -703,44 +717,10 @@ function withMutationLease(configPath, operation, fn, rootOverride = null) {
       ? path.resolve(expandHome(initRoot))
       : loadConfig(configPath).resolved.controlRoot;
   ensureDir(root, 'control root');
-  const lease = path.join(root, '.shared-skill-cli.lock');
-  const staleAfterMs = 6 * 60 * 60 * 1000;
-  const malformedGraceMs = 60 * 1000;
-  const tryAcquire = () => {
-    try {
-      const fd = fs.openSync(lease, 'wx', 0o600);
-      fs.writeFileSync(fd, JSON.stringify({ pid: process.pid, operation, startedAt: new Date().toISOString() }));
-      return fd;
-    } catch (error) {
-      if (error.code !== 'EEXIST') throw error;
-      return null;
-    }
-  };
-  let fd = tryAcquire();
-  if (fd === null) {
-    let stale = false;
-    try {
-      const prior = JSON.parse(fs.readFileSync(lease, 'utf8'));
-      const startedAt = Date.parse(prior.startedAt);
-      const tooOld = Number.isFinite(startedAt) && Date.now() - startedAt > staleAfterMs;
-      let alive = typeof prior.pid === 'number' && prior.pid > 0;
-      if (alive) {
-        try { process.kill(prior.pid, 0); } catch { alive = false; }
-      }
-      stale = tooOld || !alive;
-    } catch {
-      try {
-        stale = Date.now() - fs.statSync(lease).mtimeMs > malformedGraceMs;
-      } catch {
-        stale = true;
-      }
-    }
-    if (!stale) throw new Error(`shared skill ${operation} is already running`);
-    fs.unlinkSync(lease);
-    fd = tryAcquire();
-    if (fd === null) throw new Error(`shared skill ${operation} is already running`);
-  }
-  try { return fn(); } finally { fs.closeSync(fd); try { fs.unlinkSync(lease); } catch (_) {} }
+  // Same lease primitive as the decision ledger; the CLI lease fails fast.
+  return decisionStore.withFileLease(path.join(root, '.shared-skill-cli.lock'), {
+    operation, busyMessage: `shared skill ${operation} is already running`,
+  }, fn);
 }
 
 const _applyOperator = applyOperator;
@@ -1142,4 +1122,7 @@ module.exports = {
   decisionStatePath,
   explainDecisionOperator,
   resolveDecisionOperator,
+  acknowledgeDecisionOperator,
+  deferDecisionOperator,
+  resumeDecisionOperator,
 };

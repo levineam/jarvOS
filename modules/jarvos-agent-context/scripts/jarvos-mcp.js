@@ -212,18 +212,19 @@ const TOOLS = [
   },
   {
     name: 'jarvos_shared_skills',
-    description: 'Inspect and manage cross-harness shared-skill parity. Status and explain are redacted reads; all other operations require the host-bound owner session and never reveal private names, paths, or bodies.',
+    description: 'Inspect and manage cross-harness shared-skill parity. Status and explain are redacted reads; all other operations require the host-bound owner session and never reveal private names, paths, or bodies. Pending decisions are reminded hourly; acknowledge-decision and defer-decision pause reminders without resolving, and resume-decision restores them.',
     inputSchema: {
       type: 'object',
       required: ['operation'],
       additionalProperties: false,
       properties: {
-        operation: { type: 'string', enum: ['status', 'explain', 'inventory', 'plan', 'repair', 'exclude', 'include', 'decisions', 'explain-decision', 'resolve-decision'] },
+        operation: { type: 'string', enum: ['status', 'explain', 'inventory', 'plan', 'repair', 'exclude', 'include', 'decisions', 'explain-decision', 'resolve-decision', 'acknowledge-decision', 'defer-decision', 'resume-decision'] },
         id: { type: 'string', description: 'Owner-known canonical skill id for explain, exclude, or include.' },
         decisionId: { type: 'string', description: 'Owner-visible decision reference for decision operations.' },
         decisionReference: { type: 'string', description: 'Opaque transport correlation reference for an owner decision.' },
         revision: { type: 'number', description: 'Current decision revision for a resolution.' },
         option: { type: 'string', description: 'One option listed by explain-decision.' },
+        until: { type: 'string', description: 'Future ISO-8601 UTC time for defer-decision; reminders resume by themselves after it.' },
         reasonCode: { type: 'string', description: 'Optional exclusion reason code.' },
       },
     },
@@ -727,6 +728,17 @@ async function callTool(name, args = {}, lifecycle = {}) {
     }
     if (operation === 'explain-decision') {
       return textResult(JSON.stringify(skills.explainDecisionOperator({ configPath, principal, decisionId: args.decisionId, decisionReference: args.decisionReference }), null, 2));
+    }
+    const reminderOperators = {
+      'acknowledge-decision': skills.acknowledgeDecisionOperator,
+      'defer-decision': skills.deferDecisionOperator,
+      'resume-decision': skills.resumeDecisionOperator,
+    };
+    if (Object.hasOwn(reminderOperators, operation)) {
+      // Pausing or restoring reminders never resolves a decision; a deferral
+      // needs a validated future time and fails closed otherwise.
+      const result = reminderOperators[operation]({ configPath, principal, decisionId: args.decisionId, decisionReference: args.decisionReference, until: args.until });
+      return textResult(JSON.stringify(result, null, 2), !['updated', 'unchanged'].includes(result.status));
     }
     if (operation === 'resolve-decision') {
       // The decision store verifies the source digest immediately before this

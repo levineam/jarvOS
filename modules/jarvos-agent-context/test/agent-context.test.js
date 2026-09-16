@@ -599,6 +599,7 @@ test('MCP tool list includes jarvOS tools', () => {
   assert.deepEqual(shared.inputSchema.properties.operation.enum, [
     'status', 'explain', 'inventory', 'plan', 'repair', 'exclude', 'include',
     'decisions', 'explain-decision', 'resolve-decision',
+    'acknowledge-decision', 'defer-decision', 'resume-decision',
   ]);
   assert.equal('credential' in shared.inputSchema.properties, false);
 });
@@ -677,7 +678,7 @@ test('shared-skill MCP mutation operations fail closed without a host-bound owne
   delete process.env.JARVOS_CONTROL_PLANE_CREDENTIAL;
   delete process.env.JARVOS_CONTROL_PLANE_CREDENTIAL_FILE;
   try {
-    for (const operation of ['inventory', 'plan', 'repair', 'exclude', 'include', 'decisions', 'explain-decision', 'resolve-decision']) {
+    for (const operation of ['inventory', 'plan', 'repair', 'exclude', 'include', 'decisions', 'explain-decision', 'resolve-decision', 'acknowledge-decision', 'defer-decision', 'resume-decision']) {
       const result = await callTool('jarvos_shared_skills', { operation, id: 'private-skill' });
       assert.equal(result.isError, true);
       assert.match(result.content[0].text, /owner session is not configured/i);
@@ -781,6 +782,29 @@ test('shared-skill MCP decision operations use opaque references and reject stal
     });
     assert.equal(explained.isError, false);
     assert.equal(JSON.parse(explained.content[0].text).found, true);
+
+    const acknowledged = await callTool('jarvos_shared_skills', {
+      operation: 'acknowledge-decision', decisionReference: seeded.decisionReference,
+    });
+    assert.equal(acknowledged.isError, false);
+    const acknowledgedPayload = JSON.parse(acknowledged.content[0].text);
+    assert.equal(acknowledgedPayload.decision.status, 'pending');
+    assert.deepEqual(acknowledgedPayload.decision.reminder, { status: 'acknowledged' });
+    const invalidDefer = await callTool('jarvos_shared_skills', {
+      operation: 'defer-decision', decisionReference: seeded.decisionReference, until: '2000-01-01T00:00:00.000Z',
+    });
+    assert.equal(invalidDefer.isError, true);
+    assert.match(invalidDefer.content[0].text, /invalid_until/);
+    const deferred = await callTool('jarvos_shared_skills', {
+      operation: 'defer-decision', decisionReference: seeded.decisionReference, until: '2999-01-01T00:00:00.000Z',
+    });
+    assert.equal(deferred.isError, false);
+    assert.equal(JSON.parse(deferred.content[0].text).decision.reminder.status, 'deferred');
+    const resumed = await callTool('jarvos_shared_skills', {
+      operation: 'resume-decision', decisionReference: seeded.decisionReference,
+    });
+    assert.equal(resumed.isError, false);
+    assert.deepEqual(JSON.parse(resumed.content[0].text).decision.reminder, { status: 'active' });
 
     const stale = await callTool('jarvos_shared_skills', {
       operation: 'resolve-decision', decisionReference: seeded.decisionReference,

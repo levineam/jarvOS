@@ -884,6 +884,10 @@ function mergeSkills(skillRecords, { previousSkills, observedAt }) {
   const previousByLogicalId = new Map((previousSkills || []).map((skill) => [skill.logicalId, skill]));
 
   for (const record of skillRecords) {
+    // A missing observation is history from an earlier generation. It keeps
+    // the absence visible, but it is never a live source for its harness and
+    // its older digest is not evidence of divergent content.
+    const missing = record.observation?.state === 'missing';
     const existing = byLogicalId.get(record.logicalId);
     if (!existing) {
       byLogicalId.set(record.logicalId, {
@@ -891,10 +895,25 @@ function mergeSkills(skillRecords, { previousSkills, observedAt }) {
         observedName: record.observedName,
         treeDigest: record.treeDigest,
         observations: [record.observation],
-        harnesses: new Set([record.harness]),
-        realPaths: new Set([record.realPath]),
+        harnesses: new Set(missing ? [] : [record.harness]),
+        realPaths: new Set(missing ? [] : [record.realPath]),
+        live: !missing,
         unsafe: false,
       });
+      continue;
+    }
+
+    if (missing) {
+      existing.observations.push(record.observation);
+      continue;
+    }
+    if (!existing.live) {
+      existing.observedName = record.observedName;
+      existing.treeDigest = record.treeDigest;
+      existing.observations.push(record.observation);
+      existing.harnesses.add(record.harness);
+      existing.realPaths.add(record.realPath);
+      existing.live = true;
       continue;
     }
 

@@ -40,6 +40,7 @@ const {
   OVERLAY_SCHEMA_VERSION,
 } = require('../src/catalog');
 const { atomicWriteReceipt } = require('../src/receipts');
+const { reconcileDecisions } = require('../src/decision-store');
 const {
   inventoryAssessOperator,
   excludeSkillOperator,
@@ -314,6 +315,41 @@ test('auto-admits markdown skill under markdown-only trust', () => {
   }
 });
 
+test('a skill present only in Codex is admitted to a harness whose earlier copy is now missing', () => {
+  const roots = {
+    codex: temp('jarvos-only-codex-'),
+    claude: temp('jarvos-only-claude-'),
+    openclaw: temp('jarvos-only-openclaw-'),
+    hermes: temp('jarvos-only-hermes-'),
+  };
+  writeSkill(path.join(roots.codex, 'use-anthropic'), { name: 'use-anthropic', body: 'Portable prose helper.\n' });
+  writeSkill(path.join(roots.claude, 'use-anthropic'), { name: 'use-anthropic', body: 'Portable prose helper.\n' });
+  writeSkill(path.join(roots.hermes, 'unrelated-skill'), { name: 'unrelated-skill', body: 'Unrelated prose.\n' });
+  const { configPath } = seedConfig({ roots, trustClass: 'markdown-only' });
+  observeInventory({ configPath });
+  fs.rmSync(path.join(roots.claude, 'use-anthropic'), { recursive: true, force: true });
+
+  const { observed, assessment } = assessObserved(configPath);
+  assert.equal(observed.complete, true);
+  assert.equal(observed.document.roots.length, 4);
+  assert.ok(observed.document.roots.every((root) => root.complete === true));
+  const projection = (skill, harness) => skill.matrix.find((row) => row.harness === harness).projection;
+  const observedSkill = observed.document.skills.find((item) => item.logicalId === 'use-anthropic');
+  assert.equal(projection(observedSkill, 'codex'), 'source_present');
+  assert.equal(projection(observedSkill, 'claude'), 'missing');
+  assert.ok(observedSkill.observations.some((item) => item.state === 'missing'));
+  // Observation alone never claims native visibility.
+  assert.ok(observedSkill.matrix.every((row) => row.verification !== 'model_visible'));
+
+  const assessedSkill = assessment.document.skills.find((item) => item.logicalId === 'use-anthropic');
+  assert.equal(assessedSkill.disposition.kind, 'shared');
+  assert.equal(assessedSkill.disposition.reasonCode, 'rule_proven_portable');
+  assert.ok(assessment.admissions.some((item) => item.logicalId === 'use-anthropic'));
+  const entry = assessment.acceptedGeneration.generatedOverlay.entries.find((item) => item.id === 'use-anthropic');
+  assert.deepEqual([...entry.allowedHarnesses].sort(), ['claude', 'hermes', 'openclaw']);
+  assert.ok(assessment.document.skills.some((item) => item.logicalId === 'unrelated-skill'));
+});
+
 test('scripts require portable-bundles trust class', () => {
   const codexRoot = temp('jarvos-codex-scripts-');
   copyFixture(path.join(codexRoot, 'public-fixture'));
@@ -327,6 +363,22 @@ test('scripts require portable-bundles trust class', () => {
   assert.equal(skill.disposition.kind, 'blocked');
   assert.equal(skill.disposition.reasonCode, 'trust_class_insufficient');
   assert.equal((assessment.admissions || []).length, 0);
+});
+
+test('an actionable under-trusted script skill becomes a share-free owner decision', () => {
+  const codexRoot = temp('jarvos-codex-blocked-decision-');
+  copyFixture(path.join(codexRoot, 'public-fixture'));
+  const { configPath, control } = seedConfig({ roots: { codex: codexRoot }, trustClass: 'markdown-only' });
+  const { assessment } = assessObserved(configPath, { autoAdmit: true });
+  const skill = assessment.document.skills.find((item) => item.logicalId === 'public-fixture');
+  assert.equal(skill.disposition.kind, 'blocked');
+  assert.equal(skill.attention, 'actionable');
+  const statePath = path.join(control, 'owner-decisions-test.json');
+  const decisions = reconcileDecisions({ statePath, skills: assessment.document.skills }).pending
+    .filter((item) => item.skill === 'public-fixture');
+  assert.equal(decisions.length, 1);
+  assert.equal(decisions[0].reason, 'trust_class_insufficient');
+  assert.deepEqual(decisions[0].options, ['keep-local', 'exclude', 'details']);
 });
 
 test('portable-bundles trust admits script-bearing fixture', () => {
