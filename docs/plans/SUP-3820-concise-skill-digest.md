@@ -33,7 +33,7 @@ Next: satisfy exact-head submission gates or report the precise blocked gate to 
 
 - Opus implementation completed successfully with exact first-party `claude-opus-5`, session `1b09aba4-4c9b-4321-a9dd-b14e10b42c80`, no permission denials. No fallback was used.
 - Focused public notification and scheduled-repair tests: 58 passed. Decision lifecycle: 33 passed. Operator/source assessment: 49 passed.
-- Broader public skills/runtime-kit run: 508 of 509 passed; the unchanged HTTP gateway timing test failed under parallel load and its complete file passed 18 of 18 independently. Sequential full-module rerun is pending.
+- Broader public skills/runtime-kit run: 508 of 509 initially passed; the unchanged HTTP gateway timing test failed under parallel load and its complete file passed 18 of 18 independently. The full sequential rerun passed all 509 tests with zero skips.
 - Paired private sender/transport suites: 301 passed. Capture-router regression suite: 61 passed.
 - Real public renderer to private parser and fake transport: 110 pending, four shown, 106 hidden, 1,406 characters; one accepted send for the occurrence, zero additional sends on exact retry, changed preview or batch-to-single, one send next hour. No live network calls.
 - Independent Astra-medium review accepted the frozen paired diffs with no P1/P2 findings. Public diff SHA-256: `243a71eb861aa0f1bc88daae591a6b9dc9ff88f9d6bc439daa5dcdc316e5bc26`; private: `c502daf55c23bd07e7c715d5dc4c8d71ff331798ed08bbdeef3ac6b34ad48f51`. These hashes exclude this execution-evidence document.
