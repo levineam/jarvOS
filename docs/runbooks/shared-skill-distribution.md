@@ -114,6 +114,46 @@ exactly one entry, and the top-level fields mirror it. Chunked batches from
 older producers (`chunkIndex`/`chunkCount`, one message per group of two to
 four) still validate, render, and deliver unchanged.
 
+## Desktop recommendation projection
+
+`projectSkillSyncDesktop` is the public, read-only producer contract for a
+Desktop consumer. It emits
+`jarvos.skill-sync-desktop-recommendations/v1` with a numeric `version`, one
+projection `generatedAt`, and current or invalidated freshness state. It does
+not move policy, repair, recommendation, or apply authority into Desktop.
+
+Every pending decision is bound to its opaque `decisionReference` and exact
+`revision`. Without a durable recommendation its state is `analysis_required`
+and its primary action is **Generate recommendation**. With a matching durable
+recommendation its state is `recommendation_available` and its primary action
+is **See recommendation**. A recommendation from an older revision is exposed
+only as invalidated metadata; its rationale and apply operation are withheld.
+
+A current recommendation contains the decision, plain-English rationale,
+affected harnesses and expected result, material risk, uncertainty, every
+remaining option with its tradeoff, and one `resolve_skill_decision` operation
+bound to the decision reference, revision, and selected option. The host
+adapter must pass that mapping through the existing owner-only resolution path,
+which revalidates the current skill, option set, semantic identity, and
+revision before mutation. The producer never treats the projection itself as
+authority to apply.
+
+Every item also exposes **Not now** as an `acknowledge_skill_decision`
+operation with `resolves: false`; it pauses reminders and never resolves the
+decision. Operation descriptors carry explicit availability derived from the
+verified host adapter. The default is unavailable, so a consumer cannot turn a
+schema label or opaque handle into authority. There is currently no durable
+recommendation reader or `generate_skill_recommendation` host adapter; the
+supported checkpoint is a read-only projection with Generate disabled. The
+existing owner-only adapter may explicitly enable acknowledgement and
+revision-revalidated resolution when a future trusted recommendation producer
+supplies current durable state.
+
+The default projection allowlists only public decision identity,
+skill name, harness ids, bounded display-safe recommendation text, option
+mappings, and freshness metadata. It contains no private paths, skill bodies,
+raw diffs, raw receipts, or diagnostic payloads.
+
 A retry of the same occurrence never claims a second reminder: reminder counts
 do not move and the ledger is not written again. It re-renders the digest under
 the same dedupe identity, so a sender that failed to deliver it can recover it
