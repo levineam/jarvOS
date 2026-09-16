@@ -8,11 +8,17 @@ const os = require('os');
 const path = require('path');
 
 const {
+  KNOWN_SOURCE_KINDS,
+  KNOWN_WRITER_PERSONALITIES,
+  WRITER_BUCKETS,
   auditContentOrigin,
   applyContentOriginBackfill,
   classifyNoteRecord,
   planContentOriginBackfill,
+  writerBucket,
 } = require('../bridge/provenance/src/content-origin-audit');
+const { CANONICAL_WRITERS } = require('../bridge/provenance/src/content-origin-writers');
+const { SUPPORTED_PERSONALITIES } = require('../bridge/provenance/src/note-journal-contract');
 const { renderJournalOriginMarker } = require('../bridge/provenance/src/content-origin-contract');
 const { parseFrontmatter } = require('../packages/jarvos-secondbrain-notes/src/lib/note-schema');
 const { writeNoteFile } = require('../packages/jarvos-secondbrain-notes/src/write-to-vault');
@@ -249,6 +255,105 @@ test('the audit reports counts, mutates nothing, and emits no note or journal te
 
   assert.equal(snapshot(vault.notesDir), notesBefore);
   assert.equal(snapshot(vault.journalDir), journalBefore);
+});
+
+// SUP-3959: `source_personality` and `source` are free-text frontmatter. A real
+// vault carries URLs, paths, and whole sentences in them, so a bucket that
+// echoed the stored value put private content into a report that is supposed to
+// be counts-only — and put it there in the DEFAULT report, which emits no
+// filenames at all.
+const SENSITIVE_PERSONALITY = 'https://private.example.com/andrew/thread?token=hunter2';
+const SENSITIVE_SOURCE = 'Andrew told me over dinner that the acquisition closes Friday';
+
+function noteWithAttribution({ created = '2026-05-04', personality, source }) {
+  return [
+    '---',
+    'status: active',
+    'type: reference',
+    'project: ""',
+    `created: ${created}`,
+    `updated: ${created}`,
+    ...(personality === undefined ? [] : [`source_personality: ${personality}`]),
+    ...(source === undefined ? [] : [`source: ${source}`]),
+    '---',
+    '',
+    '# Attributed Note',
+    '',
+    'Body prose that is none of the report\'s business.',
+    '',
+  ].join('\n');
+}
+
+test('the writer bucket is a closed vocabulary and never echoes a stored value', () => {
+  assert.equal(writerBucket({ source_personality: 'codex' }), 'personality:codex');
+  assert.equal(writerBucket({ source: CANONICAL_WRITERS[0].id }), `source_kind:${CANONICAL_WRITERS[0].id}`);
+  // Anything outside the closed vocabulary aggregates; the value is dropped.
+  assert.equal(writerBucket({ source_personality: SENSITIVE_PERSONALITY }), 'other_attributed');
+  assert.equal(writerBucket({ source: SENSITIVE_SOURCE }), 'other_attributed');
+  assert.equal(writerBucket({ source_personality: SENSITIVE_PERSONALITY, source: SENSITIVE_SOURCE }), 'other_attributed');
+  // A non-string value cannot stringify its way into a key either.
+  assert.equal(writerBucket({ source: { url: SENSITIVE_SOURCE } }), 'other_attributed');
+  assert.equal(writerBucket({}), 'unattributed');
+  assert.equal(writerBucket({ source_personality: '   ', source: '' }), 'unattributed');
+
+  // A known personality still wins over an unknown source, and neither leaks.
+  assert.equal(writerBucket({ source_personality: 'hermes', source: SENSITIVE_SOURCE }), 'personality:hermes');
+});
+
+test('the closed writer vocabulary tracks the supported personalities and the writer inventory', () => {
+  // A personality added to the contract without being added here would quietly
+  // become `other_attributed`, which is safe but silently less useful.
+  assert.deepEqual([...KNOWN_WRITER_PERSONALITIES].sort(), [...SUPPORTED_PERSONALITIES].sort());
+  assert.deepEqual([...KNOWN_SOURCE_KINDS].sort(), CANONICAL_WRITERS.map((writer) => writer.id).sort());
+});
+
+test('the audit never emits a stored personality or source value, with or without paths', () => {
+  const vault = makeVault({
+    notes: {
+      'Hostile Attribution.md': noteWithAttribution({ personality: SENSITIVE_PERSONALITY, source: SENSITIVE_SOURCE }),
+      'Known Writer.md': noteWithAttribution({ created: '2026-05-05', personality: 'codex' }),
+      'Known Source.md': noteWithAttribution({ created: '2026-05-06', source: CANONICAL_WRITERS[0].id }),
+      'Quiet Note.md': UNDECLARED_NOTE,
+    },
+  });
+
+  const forbidden = [
+    SENSITIVE_PERSONALITY,
+    SENSITIVE_SOURCE,
+    'private.example.com',
+    'hunter2',
+    'acquisition',
+    'none of the report',
+  ];
+
+  const quiet = auditContentOrigin({ notesDir: vault.notesDir, journalDir: vault.journalDir });
+  const quietSerialized = JSON.stringify(quiet);
+  for (const secret of forbidden) assert.equal(quietSerialized.includes(secret), false, `default report leaked: ${secret}`);
+
+  // The counts still say what they need to say.
+  assert.equal(quiet.notes.scanned, 4);
+  assert.equal(quiet.notes.byWriter.other_attributed, 1);
+  assert.equal(quiet.notes.byWriter['personality:codex'], 1);
+  assert.equal(quiet.notes.byWriter[`source_kind:${CANONICAL_WRITERS[0].id}`], 1);
+  assert.equal(quiet.notes.byWriter.unattributed, 1);
+  // Every emitted key comes from the closed vocabulary.
+  for (const key of Object.keys(quiet.notes.byWriter)) assert.equal(WRITER_BUCKETS.includes(key), true, `unexpected bucket: ${key}`);
+
+  const verbose = auditContentOrigin({ notesDir: vault.notesDir, journalDir: vault.journalDir, includePaths: true });
+  const verboseSerialized = JSON.stringify(verbose);
+  for (const secret of forbidden) assert.equal(verboseSerialized.includes(secret), false, `includePaths report leaked: ${secret}`);
+  // Opting in adds normalized relative file paths, and nothing else.
+  assert.deepEqual(verbose.notes.undeclaredPaths, [
+    'Hostile Attribution.md',
+    'Known Source.md',
+    'Known Writer.md',
+    'Quiet Note.md',
+  ]);
+  for (const relativePath of verbose.notes.undeclaredPaths) assert.match(relativePath, /^[^/].*\.md$/);
+
+  const plan = planContentOriginBackfill({ notesDir: vault.notesDir, includePaths: true });
+  const planSerialized = JSON.stringify(plan);
+  for (const secret of forbidden) assert.equal(planSerialized.includes(secret), false, `plan leaked: ${secret}`);
 });
 
 test('the audit only reports paths when the operator opts in', () => {

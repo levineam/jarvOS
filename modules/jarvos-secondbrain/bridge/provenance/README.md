@@ -44,7 +44,12 @@ evidence.
 
 Notes persist five frontmatter fields (`content_origin_schema`,
 `content_origin`, `content_origin_basis`, optional `content_origin_source`,
-`human_evidence_eligible`). Journal bullets carry an adjacent hidden marker
+`human_evidence_eligible`). Every supported write to an existing note persists
+that record in the same operation that writes the prose: when the normalized
+declaration differs from the stored one — including when the note stores none —
+the canonical writer replaces the whole note rather than selecting an
+append-only transform, so a pre-contract note cannot keep taking new prose and
+stay undeclared. Journal bullets carry an adjacent hidden marker
 bound to the digest of the clean bullet text; the marker never contains source
 prose and is stripped from any clean text used for embeddings or prompts.
 
@@ -75,7 +80,12 @@ linked note's frontmatter holds the declaration.
 
 `src/content-origin-audit.js` is a read-only reporter and a separate,
 explicitly gated repair path. The walk is recursive and never follows a
-symlink; paths appear only when the operator opts in. Apply runs a fail-closed
+symlink; paths appear only when the operator opts in, and opting in adds
+normalized relative paths only. Writer attribution is reported through a closed
+vocabulary — a supported personality, a declared writer id, `other_attributed`,
+or `unattributed` — because `source_personality` and `source` are free text and
+a report that echoed them would leak vault content through its own keys. Apply
+runs a fail-closed
 preflight that proves the post-write body bytes are identical before anything is
 committed, so no note is mutated in the hope that its body survives. The repair
 goes through the canonical writer's `preserveExistingBodyBytes` option — the

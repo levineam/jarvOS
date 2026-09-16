@@ -12,12 +12,34 @@ It reads. That is the whole contract:
 - It never writes a vault byte, never calls a model or an embedding service,
   and never invokes Active Assistant.
 - It returns counts, not content: contract state, origin, basis, eligibility,
-  and a writer bucket derived from `source_personality`/`source` frontmatter.
-  Note bodies, journal bullets, marker text, and source receipts never appear in
-  the report.
+  and a **closed** writer bucket. Note bodies, journal bullets, marker text,
+  source receipts, and stored frontmatter values never appear in the report.
 - Filenames are omitted unless you pass `--include-paths`. A vault filename is
   itself private content, so opt in deliberately. When included they are
-  normalized POSIX paths relative to the notes or journal root.
+  normalized POSIX paths relative to the notes or journal root — opting in adds
+  paths and nothing else.
+
+## Writer buckets are a closed vocabulary
+
+`source_personality` and `source` are free-text frontmatter. A real vault
+carries URLs, file paths, capture receipts, and whole sentences in them, so a
+bucket that echoed the stored value would put vault content into a report whose
+entire contract is counts-only — and it would do it in the default report, which
+does not even emit filenames.
+
+A stored value is therefore reported only when it matches a known identifier
+exactly. Everything else aggregates:
+
+| Bucket | Meaning |
+| --- | --- |
+| `personality:<name>` | A supported personality (`claude-code`, `codex`, `hermes`, `michael`) |
+| `source_kind:<id>` | A declared canonical writer id from the writer inventory |
+| `other_attributed` | Some other attribution; the stored text is discarded, not reported |
+| `unattributed` | Neither field carries anything |
+
+An operator who needs to know *which* unrecognised writer is behind an
+`other_attributed` count reads the notes themselves, deliberately — the audit
+will not do it for them.
 
 ## Traversal
 

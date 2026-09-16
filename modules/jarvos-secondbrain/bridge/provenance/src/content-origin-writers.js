@@ -64,6 +64,10 @@ const CANONICAL_WRITERS = Object.freeze([
     note: 'Single canonical note write. Every durable note frontmatter passes through '
       + 'canonicalizeFrontmatter, which always emits the v1 fields; a material body '
       + 'change without a caller declaration drops the stored one instead of carrying it. '
+      + 'Any write to an existing note whose normalized provenance differs from the '
+      + 'stored provenance — including a note that stores none at all — is a whole-note '
+      + 'replace, so an undeclared legacy note cannot keep taking prose through the '
+      + 'append-only transforms and stay undeclared. '
       + 'preserveExistingBodyBytes is the one opt-in metadata-only repair: canonical '
       + 'frontmatter in front of an unchanged stored body, refused for anything else.',
   },
@@ -131,14 +135,19 @@ const JOURNAL_BULLET_TRANSFORMS = Object.freeze([
     version: 1,
     declaration: 'preserves',
     writesMaterialBullet: false,
-    note: 'Appends to a note body; the note frontmatter keeps its declaration.',
+    note: 'Appends to a note body; the note frontmatter keeps its declaration. '
+      + 'The canonical writer selects it only when the stored declaration already '
+      + 'equals the normalized one, so it can never be the operation that leaves a '
+      + 'note undeclared.',
   },
   {
     name: 'session-thread-append',
     version: 1,
     declaration: 'preserves',
     writesMaterialBullet: false,
-    note: 'Appends a session thread entry to an existing declared note.',
+    note: 'Appends a session thread entry to an existing declared note. Selected '
+      + 'under the same condition as note-append-body: the declaration is already '
+      + 'canonical and unchanged by this write.',
   },
   {
     name: 'journal-section-line',

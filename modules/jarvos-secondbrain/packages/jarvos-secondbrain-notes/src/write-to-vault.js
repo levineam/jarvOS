@@ -201,11 +201,23 @@ function createNoteMutationOperation({ operationId, vaultId, vaultRelativePath, 
   });
   const rendered = renderFrontmatter(normalizedFrontmatter) + body;
   const created = !existingContent;
-  // Replace the whole note only when its stored provenance actually changes.
-  // A material body change already drops undeclared provenance above, so an
-  // unchanged declaration can keep the append-only transforms.
+  // Replace the whole note whenever the normalized provenance differs from what
+  // is stored — including when NOTHING is stored.
+  //
+  // The gate used to require a declaration on one side or the other, which let a
+  // pre-contract note escape the contract indefinitely: appending prose to a
+  // legacy note with a valid `jarvos_note_id` and no declaration selected the
+  // append-only `note-append-body` transform, so the new prose landed and the
+  // frontmatter stayed undeclared. Undeclared is not neutral downstream — a
+  // stored `author:` reads as legacy_author — so every supported write to an
+  // existing note now persists the canonical declaration in the same operation
+  // that writes the prose. With no caller declaration that record is
+  // `unknown`/`unknown`/ineligible, which is the honest one.
+  //
+  // Already-canonical notes are unaffected: their normalized declaration equals
+  // the stored one, so the comparison is false and the append-only transforms
+  // are still selected.
   const provenanceRewrite = Boolean(existingContent)
-    && (hasContentOriginDeclaration(frontmatter) || hasContentOriginDeclaration(existingFrontmatter))
     && provenanceDeclarationsDiffer(existingFrontmatter, normalizedFrontmatter);
   if (provenanceRewrite) {
     // Compare-and-swap semantics are identical either way: the whole note is

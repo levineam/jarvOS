@@ -5,9 +5,11 @@
 //
 //   1. `auditContentOrigin` never writes. It opens files for reading and
 //      returns counts only. It does not invoke a model, a network call, or
-//      Active Assistant, and it does not emit note bodies, journal bullets, or
-//      source receipts — only vocabulary terms and integers. Paths are omitted
-//      unless the operator explicitly asks for them.
+//      Active Assistant, and it does not emit note bodies, journal bullets,
+//      source receipts, or any other stored frontmatter value — only closed
+//      vocabulary terms and integers. Paths are omitted unless the operator
+//      explicitly asks for them, and asking for paths adds normalized relative
+//      paths and nothing else.
 //   2. Backfill is a two-step boundary. `planContentOriginBackfill` produces
 //      proposals; `applyContentOriginBackfill` refuses to touch anything unless
 //      `apply === true` and a supported note writer is supplied. Every proposal
@@ -56,6 +58,49 @@ const MAX_SCAN_DEPTH = 16;
 
 // How a stored record declares itself, before any origin is resolved.
 const CONTRACT_STATES = Object.freeze(['declared_v1', 'declared_other_version', 'legacy_author_only', 'undeclared']);
+
+// Writer attribution is reported through a CLOSED vocabulary.
+//
+// `source_personality` and `source` are free-text frontmatter. A stored value
+// can be a URL, a file path, a capture receipt, or a line of prose, so copying
+// one into a report key would put vault content into a report whose entire
+// contract is "counts, not content" — and it would put it there in the DEFAULT
+// report, which does not even emit file names. The bucket therefore emits a
+// stored value only when that value is a known stable writer identifier, and
+// collapses everything else into fixed aggregates.
+//
+// The four buckets are: a known personality, a known source kind, some other
+// attribution this build does not recognise, and no attribution at all. That is
+// enough to answer "which supported writer produced the undeclared notes?"
+// without the report ever echoing a stored string back at the operator.
+const KNOWN_WRITER_PERSONALITIES = Object.freeze([
+  // Mirrors SUPPORTED_PERSONALITIES in bridge/provenance/src/note-journal-contract.js,
+  // which is the closed set the personality-facing contract will write. Kept as
+  // a literal so the audit does not pull the whole contract module in, and
+  // asserted against it by tests/content-origin-audit.test.js.
+  'claude-code',
+  'codex',
+  'hermes',
+  'michael',
+]);
+
+// `source` is not writer-owned, so there is no separate inventory of stored
+// values to mirror. The declared canonical writer ids are this tree's one
+// closed vocabulary of stable writer identifiers, so they are the only `source`
+// values worth recognising; nothing else is echoed.
+const KNOWN_SOURCE_KINDS = Object.freeze(CANONICAL_WRITERS.map((writer) => writer.id).sort());
+
+const WRITER_BUCKET_OTHER_ATTRIBUTED = 'other_attributed';
+const WRITER_BUCKET_UNATTRIBUTED = 'unattributed';
+
+// Every bucket key the report can contain, so the vocabulary is enumerable and
+// a test can assert nothing outside it is ever emitted.
+const WRITER_BUCKETS = Object.freeze([
+  ...KNOWN_WRITER_PERSONALITIES.map((personality) => `personality:${personality}`),
+  ...KNOWN_SOURCE_KINDS.map((kind) => `source_kind:${kind}`),
+  WRITER_BUCKET_OTHER_ATTRIBUTED,
+  WRITER_BUCKET_UNATTRIBUTED,
+]);
 
 function emptyBasisCounts() {
   return Object.fromEntries(CONTENT_ORIGIN_BASES.map((basis) => [basis, 0]));
@@ -123,12 +168,21 @@ function contractStateFor(frontmatter = {}) {
   return 'undeclared';
 }
 
+/**
+ * Map a stored record onto one closed writer bucket.
+ *
+ * A value is echoed only when it matches a known identifier exactly. Any other
+ * non-empty attribution — a URL, a path, a sentence, a personality this build
+ * has never heard of — is counted as `other_attributed` and its text is
+ * discarded here, before it can reach a report key.
+ */
 function writerBucket(frontmatter = {}) {
-  const personality = String(frontmatter.source_personality || '').trim();
-  if (personality) return `personality:${personality}`;
-  const source = String(frontmatter.source || '').trim();
-  if (source) return `source:${source}`;
-  return 'unattributed';
+  const personality = String(frontmatter.source_personality ?? '').trim();
+  if (KNOWN_WRITER_PERSONALITIES.includes(personality)) return `personality:${personality}`;
+  const source = String(frontmatter.source ?? '').trim();
+  if (KNOWN_SOURCE_KINDS.includes(source)) return `source_kind:${source}`;
+  if (personality || source) return WRITER_BUCKET_OTHER_ATTRIBUTED;
+  return WRITER_BUCKET_UNATTRIBUTED;
 }
 
 /**
@@ -189,8 +243,9 @@ function countInto(bucket, key) {
 
 /**
  * Read-only audit. Returns counts by contract state, origin, basis,
- * eligibility, and writer bucket. `includePaths` is opt-in because a vault
- * filename is itself private content.
+ * eligibility, and closed writer bucket. `includePaths` is opt-in because a
+ * vault filename is itself private content, and it adds normalized relative
+ * paths only — never a stored frontmatter value and never note text.
  */
 function auditContentOrigin({
   notesDir = getVaultNotesDir(),
@@ -771,8 +826,12 @@ function main(argv = process.argv.slice(2)) {
 module.exports = {
   CONTENT_ORIGIN_AUDIT_VERSION,
   CONTRACT_STATES,
+  KNOWN_SOURCE_KINDS,
+  KNOWN_WRITER_PERSONALITIES,
   MAX_SCAN_DEPTH,
+  WRITER_BUCKETS,
   classifyNoteRecord,
+  writerBucket,
   auditContentOrigin,
   listMarkdownRelative,
   resolveProposalPath,

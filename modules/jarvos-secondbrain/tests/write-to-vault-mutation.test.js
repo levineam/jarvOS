@@ -49,8 +49,47 @@ test('note mutation factory keeps the supplied operation id for an existing-note
   const operation = createNoteMutationOperation({ ...options, operationId: 'note-intent-0002', sequence: 8, existingContent: existing, existingFrontmatter: { jarvos_note_id: 'stable-note-id' } });
   assert.equal(operation.operationId, 'note-intent-0002');
   assert.equal(operation.sequence, 8);
+  assert.equal(operation.noteId, 'stable-note-id');
+  // The stored note carries no declaration, so this write is also the one that
+  // gives it one; a whole-note replace is the only operation that can do both.
+  assert.equal(operation.operationKind, 'replace');
+  assert.match(operation.content, /content_origin_schema: jarvos-content-origin\/v1/);
+  assert.match(operation.content, /mobile prose/);
+  assert.match(operation.content, /# Stable\n\nbody/);
+});
+
+test('an existing note that already carries the canonical declaration keeps the append-only transform', () => {
+  const existing = [
+    '---',
+    'jarvos_note_id: "declared-note-id"',
+    'content_origin_schema: jarvos-content-origin/v1',
+    'content_origin: unknown',
+    'content_origin_basis: unknown',
+    'human_evidence_eligible: false',
+    '---',
+    '',
+    '# Stable',
+    '',
+    'mobile prose',
+    '',
+  ].join('\n');
+  const operation = createNoteMutationOperation({
+    ...options,
+    operationId: 'note-intent-0003',
+    existingContent: existing,
+    existingFrontmatter: {
+      jarvos_note_id: 'declared-note-id',
+      content_origin_schema: 'jarvos-content-origin/v1',
+      content_origin: 'unknown',
+      content_origin_basis: 'unknown',
+      human_evidence_eligible: false,
+    },
+  });
+
+  // Nothing about the stored declaration changes, so the write stays an append.
   assert.equal(operation.operationKind, 'transform');
-  assert.deepEqual(operation.replayPayload, { noteId: 'stable-note-id', body: '# Stable\n\nbody' });
+  assert.equal(operation.transformName, 'note-append-body');
+  assert.deepEqual(operation.replayPayload, { noteId: 'declared-note-id', body: '# Stable\n\nbody' });
 });
 
 test('injected writer reports the identity carried by the submitted operation', () => {
@@ -631,6 +670,114 @@ test('the writeNoteFile path forwards the metadata-only option to the supported 
     // The executor is the only thing that touches bytes; the stored note is
     // untouched by the factory itself.
     assert.equal(fs.readFileSync(notePath, 'utf8'), STORED_LEGACY_NOTE);
+  });
+});
+
+// SUP-3959: a legacy note must not be able to keep taking new prose while
+// staying undeclared. `note-append-body` and `session-thread-append` cannot
+// carry frontmatter, so selecting one for an undeclared note was an escape from
+// the contract that no later write would close on its own.
+test('appending prose to an undeclared legacy note declares it in the same operation', () => {
+  const operation = createNoteMutationOperation({
+    operationId: 'note-legacy-append-0001',
+    vaultId: 'vault-legacy-append',
+    vaultRelativePath: 'Notes/Stored Legacy.md',
+    title: 'Stored Legacy',
+    content: 'A later paragraph the stored note has never contained.',
+    existingContent: STORED_LEGACY_NOTE,
+    existingFrontmatter: frontmatterToObject(parseFrontmatter(STORED_LEGACY_NOTE)),
+  });
+
+  assert.equal(operation.operationKind, 'replace');
+  assert.equal(operation.transformName, undefined);
+  // Compare-and-swap against the exact pre-state, as for any other rewrite.
+  assert.equal(operation.expectedHash, sha256Utf8(STORED_LEGACY_NOTE));
+  assert.match(operation.content, /content_origin_schema: jarvos-content-origin\/v1/);
+  assert.match(operation.content, /content_origin: unknown/);
+  assert.match(operation.content, /content_origin_basis: unknown/);
+  assert.match(operation.content, /human_evidence_eligible: false/);
+  // The stored `author: andrew` line is carried, and inferred from for nothing.
+  assert.match(operation.content, /author: andrew/);
+  assert.doesNotMatch(operation.content, /content_origin: human/);
+  // Both the stored prose and the new prose are in the committed content.
+  assert.match(operation.content, /Prose that predates the contract\./);
+  assert.match(operation.content, /A later paragraph the stored note has never contained\./);
+});
+
+test('a session-thread append to an undeclared legacy note declares it too', () => {
+  const operation = createNoteMutationOperation({
+    operationId: 'note-legacy-append-0002',
+    vaultId: 'vault-legacy-append',
+    vaultRelativePath: 'Notes/Stored Legacy.md',
+    title: 'Stored Legacy',
+    content: remainderOf(STORED_LEGACY_NOTE).trim(),
+    appendEntry: '## Agent checkpoint\n\nAgent-written thread entry.',
+    existingContent: STORED_LEGACY_NOTE,
+    existingFrontmatter: frontmatterToObject(parseFrontmatter(STORED_LEGACY_NOTE)),
+  });
+
+  assert.equal(operation.operationKind, 'replace');
+  assert.equal(operation.transformName, undefined);
+  assert.match(operation.content, /content_origin_schema: jarvos-content-origin\/v1/);
+  assert.match(operation.content, /content_origin: unknown/);
+  assert.match(operation.content, /Prose that predates the contract\./);
+  assert.match(operation.content, /Agent-written thread entry\./);
+});
+
+test('the writeNoteFile path leaves no undeclared note behind after appending to one', () => {
+  withVault(({ root }) => {
+    const notePath = path.join(root, 'Notes', 'Stored Legacy.md');
+    fs.mkdirSync(path.dirname(notePath), { recursive: true });
+    fs.writeFileSync(notePath, STORED_LEGACY_NOTE, 'utf8');
+    const submitted = [];
+
+    // Executes whichever operation the factory chose, so the assertion below is
+    // about the bytes on disk, not only about the operation shape.
+    const execute = (operation) => {
+      submitted.push(operation);
+      const target = path.join(root, operation.vaultRelativePath);
+      if (operation.operationKind === 'transform') {
+        const current = fs.readFileSync(target, 'utf8');
+        fs.writeFileSync(target, `${current.trimEnd()}\n\n${operation.replayPayload.body}\n`, 'utf8');
+      } else {
+        fs.writeFileSync(target, operation.content, 'utf8');
+      }
+      return { status: 'committed', obsidian: 'acknowledged' };
+    };
+
+    writeNoteFile({
+      title: 'Stored Legacy',
+      content: 'A later paragraph with no declaration attached.',
+      operationId: 'note-legacy-append-writefile-0001',
+      vaultId: 'vault-legacy-append',
+      vaultRoot: root,
+      mutationExecutor: execute,
+    });
+
+    assert.equal(submitted[0].operationKind, 'replace');
+    const after = fs.readFileSync(notePath, 'utf8');
+    assert.match(after, /content_origin_schema: jarvos-content-origin\/v1/);
+    assert.match(after, /content_origin: unknown/);
+    assert.match(after, /human_evidence_eligible: false/);
+    assert.match(after, /Prose that predates the contract\./);
+    assert.match(after, /A later paragraph with no declaration attached\./);
+
+    // The note is canonical now, so the next append is an ordinary transform
+    // again and the declaration it just gained survives it.
+    writeNoteFile({
+      title: 'Stored Legacy',
+      content: 'A second later paragraph.',
+      operationId: 'note-legacy-append-writefile-0002',
+      vaultId: 'vault-legacy-append',
+      vaultRoot: root,
+      mutationExecutor: execute,
+    });
+
+    assert.equal(submitted[1].operationKind, 'transform');
+    assert.equal(submitted[1].transformName, 'note-append-body');
+    const afterSecond = fs.readFileSync(notePath, 'utf8');
+    assert.match(afterSecond, /content_origin_schema: jarvos-content-origin\/v1/);
+    assert.match(afterSecond, /A second later paragraph\./);
   });
 });
 
