@@ -22,6 +22,10 @@
 // the exact post-write bytes are computed from the supported writer's own pure
 // operation factory and compared to the stored body BEFORE anything is
 // committed. Nothing is mutated on the hope that the body survives.
+//
+// The write is bound to the exact bytes the preflight read, not to whatever the
+// writer reads later, and recovery may only undo bytes this repair provably
+// produced. Anything else on disk belongs to someone else and is left alone.
 
 'use strict';
 
@@ -45,6 +49,7 @@ const { frontmatterToObject, parseFrontmatter } = require('../../../packages/jar
 // implementation of it.
 const {
   NOTE_BODY_PRESERVATION_REFUSED,
+  NOTE_EXPECTED_STATE_REFUSED,
   createNoteMutationOperation,
   noteFilePath,
 } = require('../../../packages/jarvos-secondbrain-notes/src/write-to-vault');
@@ -475,9 +480,10 @@ function resolveProposalPath(notesDir, relativePath) {
  * and reading the bytes it would commit. `createNoteMutationOperation` is pure:
  * for a frontmatter-only provenance change on an existing note it returns a
  * `replace` carrying both the exact next content and the `expectedHash` of the
- * pre-state. So the body comparison happens BEFORE the commit, and the commit
- * itself is compare-and-swap against that hash — a concurrent edit between
- * preflight and write turns into a conflict receipt, not a lost body.
+ * pre-state. So the body comparison happens BEFORE the commit. Apply then hands
+ * the writer these same preflight bytes as `expectedExistingContent`, so the
+ * commit is compare-and-swap against the preflight state itself — a concurrent
+ * edit between preflight and commit turns into a conflict, not a lost edit.
  *
  * The operation is built with the writer's `preserveExistingBodyBytes` option,
  * the supported metadata-only capability, and apply asks the injected writer for
@@ -588,6 +594,9 @@ function preflightProposal({ notesDir, proposal }) {
 }
 
 const COMMITTED_RECEIPT_STATUSES = Object.freeze(['committed', 'already_satisfied']);
+// Statuses under which the writer says bytes landed on disk. Only these can have
+// produced output this module could be responsible for undoing.
+const PERSISTED_RECEIPT_STATUSES = Object.freeze([...COMMITTED_RECEIPT_STATUSES, 'saved_locally_sync_pending']);
 
 /**
  * Apply a backfill plan through a supported note writer.
@@ -601,10 +610,21 @@ const COMMITTED_RECEIPT_STATUSES = Object.freeze(['committed', 'already_satisfie
  * itself. Each proposal is fully preflighted first; only a proposal whose
  * post-write body bytes are already known to be identical is written at all.
  *
- * The post-write re-read is defence in depth, not the guarantee. If it ever
- * disagrees with the preflight, the run stops immediately — every remaining
- * proposal is left untouched — and the pre-image is handed to the optional
- * `restoreNote` recovery seam. One anomalous write must not become a cascade.
+ * The write is bound to the preflight bytes: `writeNote` receives them as
+ * `expectedExistingContent` and must return the writer's `stateBinding` — the
+ * hash it was guarded by and the hash of the content it submitted. A binding
+ * that is missing or names a different pre-state is an integrity violation,
+ * because the write cannot be shown to have been guarded by what was proven.
+ *
+ * The post-write re-read is defence in depth, not the guarantee. It is judged
+ * against the binding:
+ *
+ *   - no persisted receipt: nothing of ours landed, so nothing is restored;
+ *   - bytes other than the submitted content: someone else wrote after the
+ *     commit, so the file is preserved and reported as a conflict;
+ *   - exactly the submitted content with a changed body: the writer itself
+ *     misbehaved, so the run stops and the pre-image goes to the optional
+ *     `restoreNote` seam, guarded by the hash of that exact output.
  */
 function applyContentOriginBackfill({
   plan,
@@ -660,10 +680,10 @@ function applyContentOriginBackfill({
       continue;
     }
 
-    let receipt;
+    let written;
     writeAttempted = true;
     try {
-      receipt = writeNote({
+      written = writeNote({
         title: preflight.title,
         content: preflight.content,
         frontmatter: { ...preflight.next },
@@ -671,32 +691,98 @@ function applyContentOriginBackfill({
         // A writer that ignores it does not get the benefit of the doubt: the
         // post-write body comparison below still has to hold.
         ...METADATA_ONLY_WRITE_OPTIONS,
+        // The exact bytes the preflight proved against. The writer builds the
+        // operation from these and the executor commits only if the note still
+        // hashes to them, so a fresh read inside the writer proves nothing.
+        expectedExistingContent: preflight.before,
       });
-    } catch {
-      results.push({ relativePath: preflight.relativePath, status: 'failed', reason: 'write_rejected' });
+    } catch (error) {
+      const changed = error?.code === NOTE_EXPECTED_STATE_REFUSED && error.reason === 'changed_since_expected_state';
+      results.push({
+        relativePath: preflight.relativePath,
+        status: changed ? 'conflict' : 'failed',
+        reason: changed ? 'changed_since_preflight' : 'write_rejected',
+        rollbackAttempted: false,
+      });
       continue;
     }
 
-    const mutationStatus = receipt?.receipt?.status || receipt?.mutationStatus || 'unknown';
-    let after;
-    try {
-      after = fs.readFileSync(preflight.absolute, 'utf8');
-    } catch {
+    const mutationStatus = written?.receipt?.status || written?.mutationStatus || 'unknown';
+    const current = readQuietly(preflight.absolute);
+    // Raw remainder equality, byte for byte. Not trimmed: a body that gained or
+    // lost trailing bytes is a changed body.
+    const bodyPreserved = current !== null && bodyOf(current) === preflight.bodyBefore;
+
+    if (!PERSISTED_RECEIPT_STATUSES.includes(mutationStatus)) {
+      // No repair landed, so whatever is on disk now is not this module's to
+      // undo — it is the preflight image or somebody's later edit. Never restore.
+      const conflict = mutationStatus === 'conflict';
+      results.push({
+        relativePath: preflight.relativePath,
+        status: conflict ? 'conflict' : 'failed',
+        reason: conflict ? 'changed_since_preflight' : `mutation_not_committed:${mutationStatus}`,
+        bodyPreserved,
+        mutationStatus,
+        rollbackAttempted: false,
+      });
+      // A guarded conflict is the model working. An unexplained receipt next to
+      // a moved body is not, and no further note is safe.
+      if (!conflict && current !== preflight.before) aborted = true;
+      continue;
+    }
+
+    const binding = written?.stateBinding;
+    if (!binding
+      || binding.expectedHash !== sha256(preflight.before)
+      || typeof binding.contentHash !== 'string'
+      || !binding.contentHash) {
       results.push({
         relativePath: preflight.relativePath,
         status: 'failed',
-        reason: 'unreadable_after_write',
+        reason: 'writer_did_not_bind_expected_state',
+        bodyPreserved,
         mutationStatus,
+        rollbackAttempted: false,
       });
       aborted = true;
       continue;
     }
 
-    const bodyAfter = bodyOf(after);
-    // Raw remainder equality, byte for byte. Not trimmed: a body that gained or
-    // lost trailing bytes is a changed body.
-    if (bodyAfter !== preflight.bodyBefore) {
-      const recovery = attemptRestore({ restoreNote, preflight, after });
+    if (current === null) {
+      results.push({
+        relativePath: preflight.relativePath,
+        status: 'failed',
+        reason: 'unreadable_after_write',
+        mutationStatus,
+        rollbackAttempted: false,
+      });
+      aborted = true;
+      continue;
+    }
+
+    if (sha256(current) !== binding.contentHash) {
+      // Not the bytes this repair submitted. Either a legitimate edit landed
+      // after the commit or the writer's report is wrong; in both cases the only
+      // safe move is to keep the file as it is and say so.
+      results.push({
+        relativePath: preflight.relativePath,
+        status: 'conflict',
+        reason: 'changed_after_write',
+        bodyPreserved,
+        mutationStatus,
+        rollbackAttempted: false,
+      });
+      // With the body moved, this run can no longer tell a concurrent editor
+      // from a misbehaving writer, so it does not go on to the next note.
+      if (!bodyPreserved) aborted = true;
+      continue;
+    }
+
+    if (!bodyPreserved) {
+      // Exactly the bytes this repair submitted, and they changed the body: the
+      // writer is not behaving as modelled. Recovery may undo this output and
+      // only this output.
+      const recovery = attemptRestore({ restoreNote, preflight, output: current, outputHash: binding.contentHash });
       results.push({
         relativePath: preflight.relativePath,
         status: 'failed',
@@ -711,17 +797,9 @@ function applyContentOriginBackfill({
       continue;
     }
 
-    // A receipt that neither committed nor durably saved locally is not an
-    // applied declaration, even though the body survived.
-    const status = COMMITTED_RECEIPT_STATUSES.includes(mutationStatus)
-      ? 'applied'
-      : mutationStatus === 'saved_locally_sync_pending'
-        ? 'applied_pending_sync'
-        : 'failed';
     results.push({
       relativePath: preflight.relativePath,
-      status,
-      ...(status === 'failed' ? { reason: `mutation_not_committed:${mutationStatus}` } : {}),
+      status: COMMITTED_RECEIPT_STATUSES.includes(mutationStatus) ? 'applied' : 'applied_pending_sync',
       bodyPreserved: true,
       bodyBytesIdentical: true,
       mutationStatus,
@@ -741,32 +819,47 @@ function applyContentOriginBackfill({
   };
 }
 
+function readQuietly(absolute) {
+  try {
+    return fs.readFileSync(absolute, 'utf8');
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Hand the pre-image back to a caller-supplied recovery seam.
  *
  * This module still refuses to write Markdown itself, so recovery goes through
- * the same supported mutation boundary as the write did, guarded by the hash of
- * the state the write actually produced. Without a seam there is nothing to do
- * but say so loudly.
+ * the same supported mutation boundary as the write did. It is only ever called
+ * for bytes already shown to be exactly the output this repair submitted, and
+ * the seam is guarded by the hash of that output — never by a hash of whatever
+ * was observed last — so a restore can only replace this repair's own bytes and
+ * a concurrent edit that lands first turns the restore into a conflict. Without
+ * a seam there is nothing to do but say so loudly.
  */
-function attemptRestore({ restoreNote, preflight, after }) {
-  if (typeof restoreNote !== 'function') return { rollbackAvailable: false, rolledBack: false };
+function attemptRestore({ restoreNote, preflight, output, outputHash }) {
+  if (typeof restoreNote !== 'function') return { rollbackAvailable: false, rollbackAttempted: false, rolledBack: false };
+  if (sha256(output) !== outputHash) {
+    return { rollbackAvailable: true, rollbackAttempted: false, rolledBack: false, restoreStatus: 'output_unverified' };
+  }
   try {
     const outcome = restoreNote({
       relativePath: preflight.relativePath,
       absolutePath: preflight.absolute,
       content: preflight.before,
-      expectedContent: after,
-      expectedHash: sha256(after),
+      expectedContent: output,
+      expectedHash: outputHash,
     });
     const restored = fs.readFileSync(preflight.absolute, 'utf8');
     return {
       rollbackAvailable: true,
+      rollbackAttempted: true,
       rolledBack: restored === preflight.before,
       restoreStatus: outcome?.receipt?.status || outcome?.status || 'unknown',
     };
   } catch {
-    return { rollbackAvailable: true, rolledBack: false, restoreStatus: 'threw' };
+    return { rollbackAvailable: true, rollbackAttempted: true, rolledBack: false, restoreStatus: 'threw' };
   }
 }
 

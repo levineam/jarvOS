@@ -84,6 +84,28 @@ class NoteBodyPreservationError extends Error {
   }
 }
 
+// A caller that already read a note and proved something about those exact
+// bytes can bind the write to them with `expectedExistingContent`. The writer
+// then builds the operation from those bytes, not from a fresh read, so the
+// submitted compare-and-swap guard is the caller's state rather than whatever
+// happens to be on disk by the time the writer runs. A fresh read that already
+// disagrees is refused before submission; one that changes later is rejected by
+// the executor's guard on the same hash.
+const NOTE_EXPECTED_STATE_REFUSED = 'note_expected_state_refused';
+
+class NoteExpectedStateError extends Error {
+  constructor(reason) {
+    super(`expectedExistingContent refused: ${reason}`);
+    this.name = 'NoteExpectedStateError';
+    this.code = NOTE_EXPECTED_STATE_REFUSED;
+    this.reason = reason;
+  }
+}
+
+function hashUtf8(value) {
+  return createHash('sha256').update(String(value), 'utf8').digest('hex');
+}
+
 // The raw parsed remainder, untrimmed: a note without frontmatter is all body,
 // and an empty remainder is an empty body, not a missing one.
 function rawBodyRemainder(content) {
@@ -234,7 +256,7 @@ function createNoteMutationOperation({ operationId, vaultId, vaultRelativePath, 
       operationKind: 'replace',
       content: nextContent,
       expectedContent: String(existingContent),
-      expectedHash: createHash('sha256').update(String(existingContent), 'utf8').digest('hex'),
+      expectedHash: hashUtf8(existingContent),
       noteId: normalizedFrontmatter.jarvos_note_id,
       ...(source ? { source } : {}),
     };
@@ -267,20 +289,34 @@ function hasPersistedNoteBytes(filePath, receipt) {
   );
 }
 
-function writeNoteFile({ title, content, frontmatter = {}, appendEntry, mutationExecutor, operationId, vaultId, vaultRoot, sequence = 1, source, resolveUserSource, preserveExistingBodyBytes = false }) {
+function writeNoteFile({ title, content, frontmatter = {}, appendEntry, mutationExecutor, operationId, vaultId, vaultRoot, sequence = 1, source, resolveUserSource, preserveExistingBodyBytes = false, expectedExistingContent }) {
   if (!title) throw new Error('title is required');
   if (content === undefined || content === null) throw new Error('content is required');
   if (!frontmatter || typeof frontmatter !== 'object' || Array.isArray(frontmatter)) {
     throw new Error('frontmatter must be an object when provided');
+  }
+  const bindExpectedState = expectedExistingContent !== undefined;
+  if (bindExpectedState && (typeof expectedExistingContent !== 'string' || !expectedExistingContent)) {
+    throw new NoteExpectedStateError('expected_state_invalid');
   }
 
   const safeName = sanitizeTitle(title);
   const notesDir = getVaultNotesDir();
   const filePath = noteFilePath(safeName);
   const created = !existsSync(filePath);
-  const existingFrontmatter = readExistingFrontmatter(filePath);
+  // The fresh read below is only ever grounds for refusal, never proof that the
+  // caller's state still holds: the operation is built from the caller's bytes
+  // and the executor enforces the hash of those bytes at commit.
+  if (bindExpectedState && (created || readFileSync(filePath, 'utf8') !== expectedExistingContent)) {
+    throw new NoteExpectedStateError('changed_since_expected_state');
+  }
+  const existingFrontmatter = bindExpectedState
+    ? frontmatterToObject(parseFrontmatter(expectedExistingContent))
+    : readExistingFrontmatter(filePath);
   const body = buildNoteBody(title, content);
-  const existingContent = created ? '' : readFileSync(filePath, 'utf8');
+  const existingContent = bindExpectedState
+    ? expectedExistingContent
+    : created ? '' : readFileSync(filePath, 'utf8');
   const existingBody = parseFrontmatter(existingContent)?.remainder || existingContent;
   const appendBody = appendEntry ? String(appendEntry).trim() : buildNoteBody(title, content);
   const materialBodyChange = Boolean(existingContent) && !hasExactBlock(existingBody, appendBody);
@@ -311,6 +347,12 @@ function writeNoteFile({ title, content, frontmatter = {}, appendEntry, mutation
     // Opt-in metadata-only repair; the factory refuses it for anything else.
     preserveExistingBodyBytes,
   });
+  // Only a guarded whole-content replace can enforce the caller's state. An
+  // append transform or a create carries no expected hash, so it is refused
+  // rather than submitted unguarded.
+  if (bindExpectedState && (operation.operationKind !== 'replace' || operation.expectedHash !== hashUtf8(expectedExistingContent))) {
+    throw new NoteExpectedStateError('expected_state_not_enforceable');
+  }
   const receipt = mutationExecutor(operation);
   const persistedOperation = receipt.operation || operation;
   const hasBytes = hasPersistedNoteBytes(filePath, receipt);
@@ -341,6 +383,15 @@ function writeNoteFile({ title, content, frontmatter = {}, appendEntry, mutation
     journal,
     knowledge,
     vaultRootDuplicate: null,
+    // What a bound write was guarded by and what it asked to commit, as hashes
+    // of the operation actually submitted. A caller verifying the result can
+    // then tell "the bytes this write produced" from "bytes someone wrote since".
+    ...(bindExpectedState ? {
+      stateBinding: {
+        expectedHash: persistedOperation.expectedHash,
+        contentHash: typeof persistedOperation.content === 'string' ? hashUtf8(persistedOperation.content) : null,
+      },
+    } : {}),
   };
 }
 
@@ -370,6 +421,8 @@ module.exports = {
   main,
   NOTE_BODY_PRESERVATION_REFUSED,
   NoteBodyPreservationError,
+  NOTE_EXPECTED_STATE_REFUSED,
+  NoteExpectedStateError,
   buildFrontmatter,
   buildNoteBody,
   normalizeFrontmatter,

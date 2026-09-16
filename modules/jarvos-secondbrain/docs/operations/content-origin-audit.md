@@ -125,11 +125,17 @@ const dryRun = applyContentOriginBackfill({ plan, notesDir });
 const result = applyContentOriginBackfill({ plan, apply: true, notesDir, writeNote, restoreNote });
 ```
 
-`writeNote` is called with `{ title, content, frontmatter, preserveExistingBodyBytes: true }`
-and must forward every one of those to the canonical note writer. The last is the
-supported metadata-only capability described below; a seam that drops it makes
-the write a legitimate but non-byte-identical re-render, which the post-write
-check then reports as an integrity violation rather than an applied repair.
+`writeNote` is called with
+`{ title, content, frontmatter, preserveExistingBodyBytes: true, expectedExistingContent }`
+and must forward every one of those to the canonical note writer (`writeNoteFile`)
+and return its result unchanged. `preserveExistingBodyBytes` is the supported
+metadata-only capability described below; a seam that drops it makes the write a
+legitimate but non-byte-identical re-render, which the post-write check then
+reports as an integrity violation rather than an applied repair.
+`expectedExistingContent` is the exact bytes the preflight proved against; see
+[Concurrency](#concurrency-the-write-is-bound-to-the-preflight-bytes). A seam
+that drops it gets no `stateBinding` back from the writer, and apply reports
+`writer_did_not_bind_expected_state` and aborts.
 
 ### Apply runs a fail-closed preflight
 
@@ -158,15 +164,33 @@ The decisive check is the last one. `createNoteMutationOperation` is pure: for a
 frontmatter-only provenance change on an existing note it returns a `replace`
 carrying both the exact next content and the `expectedHash` of the pre-state. So
 the raw body remainder is compared byte-for-byte against the stored body before
-anything is committed, and the commit itself is compare-and-swap against that
-hash — a concurrent edit between preflight and write becomes a conflict receipt,
-not a lost body. The declaration written is always this module's
+anything is committed, and the commit is compare-and-swap against the preflight
+bytes themselves (next section). The declaration written is always this module's
 `unknown`/`unknown`/ineligible record, never the `next` block carried in the
 plan, so a hand-edited plan cannot smuggle a `human` claim through backfill.
 
 Note the comparison is **untrimmed**. Two bodies that differ only in trailing
 bytes are not the same body, and reporting that as preserved is how a silent
 rewrite gets recorded as a success.
+
+### Concurrency: the write is bound to the preflight bytes
+
+The writer re-reads the note when it runs. A fresh read is not proof that the
+note still matches what the preflight proved, so apply does not rely on it:
+
+- Apply passes the exact preflight bytes as `expectedExistingContent`.
+- The writer builds the operation from those bytes, not from its own read, so the
+  submitted `replace` carries `expectedHash` of the preflight state. If its own
+  read already disagrees it refuses before submitting anything; an `append`
+  transform or `create` cannot carry the guard and is refused too.
+- The mutation executor commits only if the note still hashes to that guard.
+- The writer returns `stateBinding: { expectedHash, contentHash }` — the guard it
+  submitted and the hash of the content it asked to commit.
+
+A change to frontmatter, declaration, or body at any point between preflight and
+commit therefore ends as `status: conflict`, `reason: changed_since_preflight`.
+Nothing is committed, nothing is restored, and the run continues: a guarded
+conflict is the model working, not an integrity violation.
 
 ### The metadata-only writer capability
 
@@ -188,18 +212,27 @@ heading, and that is a body edit, not a frontmatter repair.
 
 ### If the post-write check ever disagrees
 
-Each written note is re-read and its raw body compared again. The preflight
-means this should be unreachable, so a mismatch is treated as an integrity
-violation, not a per-note failure:
+Each written note is re-read and judged against the writer's `stateBinding`.
+Recovery may only ever undo bytes this repair provably produced; anything else on
+disk belongs to someone else and is preserved:
 
-- The result is `failed` with `reason: body_changed_after_write`.
-- The pre-image is handed to the optional `restoreNote` seam — the same
-  supported mutation boundary the write used, guarded by the hash of the state
-  the write actually produced. `rollbackAvailable` / `rolledBack` report what
-  happened. With no seam supplied, `rollbackAvailable: false` says so plainly
-  rather than the run pretending it recovered.
-- The run **aborts**. Every remaining proposal is `skipped` with
-  `aborted_after_integrity_violation`. One anomalous write must not cascade.
+| Situation | Result | Restore? |
+| --- | --- | --- |
+| Receipt is not `committed` / `already_satisfied` / `saved_locally_sync_pending` | `conflict` (`changed_since_preflight`) or `failed` (`mutation_not_committed:<status>`) | Never |
+| Persisted receipt, but no binding or a binding for a different pre-state | `failed`, `writer_did_not_bind_expected_state`; run aborts | Never |
+| File hash is not the binding's `contentHash` (someone wrote after the commit) | `conflict`, `changed_after_write`; run aborts if the body moved | Never |
+| File hash is exactly `contentHash` and the body changed (the writer misbehaved) | `failed`, `body_changed_after_write`; run aborts | Yes, guarded by `contentHash` |
+
+In the last case the pre-image is handed to the optional `restoreNote` seam with
+`expectedHash` set to the hash of that exact output — never the hash of whatever
+was observed last — and the seam must go through the same guarded mutation
+boundary, so an edit that lands before the restore turns it into a conflict
+instead of being erased. `rollbackAttempted` / `rolledBack` report what happened.
+With no seam supplied, `rollbackAvailable: false` says so plainly rather than the
+run pretending it recovered.
+
+An abort means every remaining proposal is `skipped` with
+`aborted_after_integrity_violation`. One anomalous write must not cascade.
 
 `mutated` is true as soon as the supported writer was invoked at all, so an
 operator never reads `mutated: false` off a run that reached the mutation

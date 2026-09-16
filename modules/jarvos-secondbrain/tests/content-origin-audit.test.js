@@ -127,15 +127,39 @@ function snapshot(dir, prefix = '') {
   }).join('\n');
 }
 
-function supportedNoteWriter(vault) {
+function sha256Hex(value) {
+  return crypto.createHash('sha256').update(String(value), 'utf8').digest('hex');
+}
+
+// `beforeCommit` runs inside the executor, after the writer has read the note
+// and built its operation but before the guarded commit: the narrowest race.
+function supportedNoteWriter(vault, { beforeCommit } = {}) {
   const service = createAcknowledgedVaultMutationService(vault.root);
   // Forwards every option apply asks for, including the metadata-only
-  // `preserveExistingBodyBytes` capability the preflight proved against.
-  return ({ title, content, frontmatter, preserveExistingBodyBytes }) => {
+  // `preserveExistingBodyBytes` capability the preflight proved against and the
+  // `expectedExistingContent` binding to the preflight bytes.
+  return ({ title, content, frontmatter, preserveExistingBodyBytes, expectedExistingContent }) => {
     const filePath = path.join(vault.notesDir, `${title}.md`);
     const vaultRelativePath = path.relative(vault.root, filePath).split(path.sep).join('/');
     const context = service.createWriteContext({ vaultRelativePath, operationSource: 'test.content-origin-backfill' });
-    return writeNoteFile({ title, content, frontmatter, preserveExistingBodyBytes, ...context });
+    const mutationExecutor = beforeCommit
+      ? (operation) => {
+        beforeCommit(operation);
+        return context.mutationExecutor(operation);
+      }
+      : context.mutationExecutor;
+    return writeNoteFile({ title, content, frontmatter, preserveExistingBodyBytes, expectedExistingContent, ...context, mutationExecutor });
+  };
+}
+
+// A recovery seam that behaves like the supported boundary: it replaces the
+// note only while the note still hashes to the guard it was given.
+function guardedRestore(restores) {
+  return ({ absolutePath, content, expectedHash }) => {
+    restores.push({ absolutePath, expectedHash });
+    if (sha256Hex(fs.readFileSync(absolutePath, 'utf8')) !== expectedHash) return { status: 'conflict' };
+    fs.writeFileSync(absolutePath, content, 'utf8');
+    return { status: 'committed' };
   };
 }
 
@@ -690,6 +714,21 @@ test('apply never smuggles a caller-supplied origin through the proposal', () =>
   assert.doesNotMatch(after, /content_origin: human/);
 });
 
+// An unsupported writer that rewrites prose behind the contract's back, but
+// honestly reports the binding: the guard it was given and the bytes it wrote.
+function bodyChangingWriter(vault, badContentFor, { afterWrite } = {}) {
+  return ({ title, expectedExistingContent }) => {
+    const target = path.join(vault.notesDir, `${title}.md`);
+    const bad = badContentFor(expectedExistingContent);
+    fs.writeFileSync(target, bad, 'utf8');
+    if (afterWrite) afterWrite(target);
+    return {
+      receipt: { status: 'committed' },
+      stateBinding: { expectedHash: sha256Hex(expectedExistingContent), contentHash: sha256Hex(bad) },
+    };
+  };
+}
+
 test('a writer that changes the body stops the run and hands the pre-image to recovery', () => {
   const vault = makeVault({
     notes: { 'Legacy Note.md': LEGACY_NOTE, 'Undeclared Note.md': UNDECLARED_NOTE },
@@ -700,22 +739,15 @@ test('a writer that changes the body stops the run and hands the pre-image to re
   const legacyPath = path.join(vault.notesDir, 'Legacy Note.md');
   const before = fs.readFileSync(legacyPath, 'utf8');
   const undeclaredBefore = fs.readFileSync(path.join(vault.notesDir, 'Undeclared Note.md'), 'utf8');
+  const bad = `${before}\nAn extra paragraph.\n`;
 
   const restores = [];
   const applied = withNotesEnv(vault, () => applyContentOriginBackfill({
     plan,
     apply: true,
     notesDir: vault.notesDir,
-    // An unsupported writer that rewrites prose behind the contract's back.
-    writeNote: ({ title }) => {
-      fs.writeFileSync(path.join(vault.notesDir, `${title}.md`), `${before}\nAn extra paragraph.\n`, 'utf8');
-      return { receipt: { status: 'committed' } };
-    },
-    restoreNote: ({ absolutePath, content, expectedHash }) => {
-      restores.push({ absolutePath, expectedHash });
-      fs.writeFileSync(absolutePath, content, 'utf8');
-      return { status: 'committed' };
-    },
+    writeNote: bodyChangingWriter(vault, () => bad),
+    restoreNote: guardedRestore(restores),
   }));
 
   assert.equal(applied.aborted, true);
@@ -723,8 +755,11 @@ test('a writer that changes the body stops the run and hands the pre-image to re
   assert.equal(applied.results[0].status, 'failed');
   assert.equal(applied.results[0].reason, 'body_changed_after_write');
   assert.equal(applied.results[0].rollbackAvailable, true);
+  assert.equal(applied.results[0].rollbackAttempted, true);
   assert.equal(applied.results[0].rolledBack, true);
   assert.equal(restores.length, 1);
+  // Guarded by the hash of the exact output this repair produced.
+  assert.equal(restores[0].expectedHash, sha256Hex(bad));
   // The damaged note is back to its exact pre-edit bytes...
   assert.equal(fs.readFileSync(legacyPath, 'utf8'), before);
   // ...and the run did not go on to the next note.
@@ -743,10 +778,7 @@ test('a body-changing writer with no recovery seam is reported, not quietly acce
     plan,
     apply: true,
     notesDir: vault.notesDir,
-    writeNote: ({ title }) => {
-      fs.writeFileSync(path.join(vault.notesDir, `${title}.md`), `${before}\nAn extra paragraph.\n`, 'utf8');
-      return { receipt: { status: 'committed' } };
-    },
+    writeNote: bodyChangingWriter(vault, () => `${before}\nAn extra paragraph.\n`),
   }));
 
   assert.equal(applied.applied, false);
@@ -756,4 +788,185 @@ test('a body-changing writer with no recovery seam is reported, not quietly acce
   assert.equal(applied.results[0].reason, 'body_changed_after_write');
   assert.equal(applied.results[0].rollbackAvailable, false);
   assert.equal(applied.results[0].rolledBack, false);
+});
+
+// SUP-3959 (Astra P1): the preflight proved a replace against exact bytes, but
+// the writer used to re-read the note and build a fresh guard. A change that
+// landed in between was then overwritten and reported applied.
+const CONCURRENT_DECLARATION = LEGACY_NOTE.replace('author: andrew\n', [
+  'author: andrew',
+  'content_origin_schema: jarvos-content-origin/v1',
+  'content_origin: assistant',
+  'content_origin_basis: assistant_generated',
+  'human_evidence_eligible: false',
+  '',
+].join('\n'));
+const CONCURRENT_BODY_EDIT = `${LEGACY_NOTE}Mobile prose added while the backfill ran.\n`;
+
+for (const [label, concurrent] of [['declaration', CONCURRENT_DECLARATION], ['body', CONCURRENT_BODY_EDIT]]) {
+  test(`a concurrent ${label} change after preflight is a conflict, never an overwrite`, () => {
+    assert.notEqual(concurrent, LEGACY_NOTE);
+    const vault = makeVault({ notes: { 'Legacy Note.md': LEGACY_NOTE } });
+    const plan = planContentOriginBackfill({ notesDir: vault.notesDir, includePaths: true });
+    const legacyPath = path.join(vault.notesDir, 'Legacy Note.md');
+
+    const run = (writeNote) => {
+      fs.writeFileSync(legacyPath, LEGACY_NOTE, 'utf8');
+      const restores = [];
+      const result = withNotesEnv(vault, () => applyContentOriginBackfill({
+        plan,
+        apply: true,
+        notesDir: vault.notesDir,
+        writeNote,
+        restoreNote: guardedRestore(restores),
+      }));
+      return { result, restores };
+    };
+
+    // Between the preflight and the writer's own read.
+    const early = run((args) => {
+      fs.writeFileSync(legacyPath, concurrent, 'utf8');
+      return supportedNoteWriter(vault)(args);
+    });
+    // Between the writer's read and the executor's commit.
+    const guards = [];
+    const late = run(supportedNoteWriter(vault, {
+      beforeCommit: (operation) => {
+        guards.push(operation.expectedHash);
+        fs.writeFileSync(legacyPath, concurrent, 'utf8');
+      },
+    }));
+
+    for (const { result, restores } of [early, late]) {
+      assert.equal(result.applied, false);
+      assert.equal(result.mutated, true);
+      assert.equal(result.aborted, false);
+      assert.equal(result.results[0].status, 'conflict');
+      assert.equal(result.results[0].reason, 'changed_since_preflight');
+      assert.equal(result.results[0].rollbackAttempted, false);
+      assert.equal(restores.length, 0);
+    }
+    assert.equal(early.result.results[0].mutationStatus, undefined);
+    assert.equal(late.result.results[0].mutationStatus, 'conflict');
+    // The submitted guard was the preflight state, not a fresh read.
+    assert.deepEqual(guards, [sha256Hex(LEGACY_NOTE)]);
+    assert.equal(fs.readFileSync(legacyPath, 'utf8'), concurrent);
+  });
+}
+
+// SUP-3959 (Astra P1): recovery used to hash whatever it observed last and
+// restore the pre-image over it, which could erase a legitimate later edit.
+test('an edit that lands after the repair commits is preserved, not restored away', () => {
+  const vault = makeVault({ notes: { 'Legacy Note.md': LEGACY_NOTE, 'Undeclared Note.md': UNDECLARED_NOTE } });
+  const plan = planContentOriginBackfill({ notesDir: vault.notesDir, includePaths: true });
+  plan.proposals.sort((a, b) => a.relativePath.localeCompare(b.relativePath));
+  const legacyPath = path.join(vault.notesDir, 'Legacy Note.md');
+  const undeclaredBefore = fs.readFileSync(path.join(vault.notesDir, 'Undeclared Note.md'), 'utf8');
+  const writer = supportedNoteWriter(vault);
+  let edited;
+
+  const restores = [];
+  const applied = withNotesEnv(vault, () => applyContentOriginBackfill({
+    plan,
+    apply: true,
+    notesDir: vault.notesDir,
+    writeNote: (args) => {
+      const written = writer(args);
+      assert.equal(written.receipt.status, 'committed');
+      edited = `${fs.readFileSync(legacyPath, 'utf8')}Mobile prose written right after the repair.\n`;
+      fs.writeFileSync(legacyPath, edited, 'utf8');
+      return written;
+    },
+    restoreNote: guardedRestore(restores),
+  }));
+
+  assert.equal(applied.results[0].status, 'conflict');
+  assert.equal(applied.results[0].reason, 'changed_after_write');
+  assert.equal(applied.results[0].mutationStatus, 'committed');
+  assert.equal(applied.results[0].bodyPreserved, false);
+  assert.equal(applied.results[0].rollbackAttempted, false);
+  assert.equal(restores.length, 0);
+  assert.equal(fs.readFileSync(legacyPath, 'utf8'), edited);
+  // The moved body means this run cannot tell an editor from a bad writer.
+  assert.equal(applied.aborted, true);
+  assert.equal(applied.results[1].reason, 'aborted_after_integrity_violation');
+  assert.equal(fs.readFileSync(path.join(vault.notesDir, 'Undeclared Note.md'), 'utf8'), undeclaredBefore);
+});
+
+test('a bad writer output that is edited again before the reread is not restored', () => {
+  const vault = makeVault({ notes: { 'Legacy Note.md': LEGACY_NOTE } });
+  const plan = planContentOriginBackfill({ notesDir: vault.notesDir, includePaths: true });
+  const legacyPath = path.join(vault.notesDir, 'Legacy Note.md');
+  const edited = `${LEGACY_NOTE}\nAn extra paragraph.\nAnd a human reply to it.\n`;
+
+  const restores = [];
+  const applied = withNotesEnv(vault, () => applyContentOriginBackfill({
+    plan,
+    apply: true,
+    notesDir: vault.notesDir,
+    writeNote: bodyChangingWriter(vault, (before) => `${before}\nAn extra paragraph.\n`, {
+      afterWrite: (target) => fs.writeFileSync(target, edited, 'utf8'),
+    }),
+    restoreNote: guardedRestore(restores),
+  }));
+
+  assert.equal(applied.results[0].status, 'conflict');
+  assert.equal(applied.results[0].reason, 'changed_after_write');
+  assert.equal(applied.results[0].rollbackAttempted, false);
+  assert.equal(restores.length, 0);
+  assert.equal(fs.readFileSync(legacyPath, 'utf8'), edited);
+  assert.equal(applied.aborted, true);
+});
+
+test('a writer that reports no expected-state binding is an integrity failure with no restore', () => {
+  const vault = makeVault({ notes: { 'Legacy Note.md': LEGACY_NOTE, 'Undeclared Note.md': UNDECLARED_NOTE } });
+  const plan = planContentOriginBackfill({ notesDir: vault.notesDir, includePaths: true });
+  plan.proposals.sort((a, b) => a.relativePath.localeCompare(b.relativePath));
+  const legacyPath = path.join(vault.notesDir, 'Legacy Note.md');
+  const bad = `${LEGACY_NOTE}\nAn extra paragraph.\n`;
+
+  const restores = [];
+  const applied = withNotesEnv(vault, () => applyContentOriginBackfill({
+    plan,
+    apply: true,
+    notesDir: vault.notesDir,
+    writeNote: ({ title }) => {
+      fs.writeFileSync(path.join(vault.notesDir, `${title}.md`), bad, 'utf8');
+      return { receipt: { status: 'committed' } };
+    },
+    restoreNote: guardedRestore(restores),
+  }));
+
+  assert.equal(applied.results[0].status, 'failed');
+  assert.equal(applied.results[0].reason, 'writer_did_not_bind_expected_state');
+  assert.equal(applied.results[0].rollbackAttempted, false);
+  assert.equal(restores.length, 0);
+  assert.equal(fs.readFileSync(legacyPath, 'utf8'), bad);
+  assert.equal(applied.aborted, true);
+  assert.equal(applied.results[1].reason, 'aborted_after_integrity_violation');
+});
+
+test('a non-concurrent repair through the bound writer still commits with identical body bytes', () => {
+  const vault = makeVault({ notes: { 'Legacy Note.md': LEGACY_NOTE } });
+  const plan = planContentOriginBackfill({ notesDir: vault.notesDir, includePaths: true });
+  const guards = [];
+  const restores = [];
+
+  const applied = withNotesEnv(vault, () => applyContentOriginBackfill({
+    plan,
+    apply: true,
+    notesDir: vault.notesDir,
+    writeNote: supportedNoteWriter(vault, { beforeCommit: (operation) => guards.push(operation) }),
+    restoreNote: guardedRestore(restores),
+  }));
+
+  assert.equal(applied.results[0].status, 'applied');
+  assert.equal(applied.results[0].bodyBytesIdentical, true);
+  assert.equal(applied.aborted, false);
+  assert.equal(restores.length, 0);
+  assert.equal(guards.length, 1);
+  assert.equal(guards[0].expectedHash, sha256Hex(LEGACY_NOTE));
+  const after = fs.readFileSync(path.join(vault.notesDir, 'Legacy Note.md'), 'utf8');
+  assert.equal(sha256Hex(after), sha256Hex(guards[0].content));
+  assert.equal(bodyOf(after), bodyOf(LEGACY_NOTE));
 });

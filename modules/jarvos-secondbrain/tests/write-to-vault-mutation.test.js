@@ -508,6 +508,7 @@ test('write contexts do not reserve empty FIFO slots before full submission', ()
 const crypto = require('node:crypto');
 const {
   NOTE_BODY_PRESERVATION_REFUSED,
+  NOTE_EXPECTED_STATE_REFUSED,
 } = require('../packages/jarvos-secondbrain-notes/src/write-to-vault');
 const { frontmatterToObject, parseFrontmatter } = require('../packages/jarvos-secondbrain-notes/src/lib/note-schema');
 
@@ -670,6 +671,129 @@ test('the writeNoteFile path forwards the metadata-only option to the supported 
     // The executor is the only thing that touches bytes; the stored note is
     // untouched by the factory itself.
     assert.equal(fs.readFileSync(notePath, 'utf8'), STORED_LEGACY_NOTE);
+  });
+});
+
+// SUP-3959 (Astra P1): a caller that proved something about exact bytes must be
+// able to bind the commit to those bytes rather than to the writer's own re-read.
+function boundRepair(root, extra = {}) {
+  return writeNoteFile({
+    title: 'Stored Legacy',
+    content: remainderOf(STORED_LEGACY_NOTE).trim(),
+    frontmatter: {
+      content_origin_schema: 'jarvos-content-origin/v1',
+      content_origin: 'unknown',
+      content_origin_basis: 'unknown',
+      human_evidence_eligible: false,
+    },
+    operationId: 'note-provenance-bound-repair',
+    vaultId: 'vault-provenance-repair',
+    vaultRoot: root,
+    preserveExistingBodyBytes: true,
+    expectedExistingContent: STORED_LEGACY_NOTE,
+    ...extra,
+  });
+}
+
+// Executes a replace only while the note still hashes to the operation's guard,
+// as the supported boundary does.
+function guardedExecutor(root, submitted, beforeCommit = () => {}) {
+  return (operation) => {
+    submitted.push(operation);
+    const target = path.join(root, operation.vaultRelativePath);
+    beforeCommit(target);
+    if (sha256Utf8(fs.readFileSync(target, 'utf8')) !== operation.expectedHash) return { status: 'conflict', obsidian: 'unacknowledged' };
+    fs.writeFileSync(target, operation.content, 'utf8');
+    return { status: 'committed', obsidian: 'acknowledged' };
+  };
+}
+
+test('an expected-state write commits against the caller bytes and reports its binding', () => {
+  withVault(({ root }) => {
+    const notePath = path.join(root, 'Notes', 'Stored Legacy.md');
+    fs.mkdirSync(path.dirname(notePath), { recursive: true });
+    fs.writeFileSync(notePath, STORED_LEGACY_NOTE, 'utf8');
+    const submitted = [];
+
+    const result = boundRepair(root, { mutationExecutor: guardedExecutor(root, submitted) });
+
+    assert.equal(result.receipt.status, 'committed');
+    assert.equal(submitted.length, 1);
+    assert.equal(submitted[0].operationKind, 'replace');
+    assert.equal(submitted[0].expectedHash, sha256Utf8(STORED_LEGACY_NOTE));
+    assert.deepEqual(result.stateBinding, {
+      expectedHash: sha256Utf8(STORED_LEGACY_NOTE),
+      contentHash: sha256Utf8(submitted[0].content),
+    });
+    const after = fs.readFileSync(notePath, 'utf8');
+    assert.equal(sha256Utf8(after), result.stateBinding.contentHash);
+    assert.equal(remainderOf(after), remainderOf(STORED_LEGACY_NOTE));
+  });
+});
+
+test('an expected-state write never overwrites a change that landed after the caller read', () => {
+  withVault(({ root }) => {
+    const notePath = path.join(root, 'Notes', 'Stored Legacy.md');
+    fs.mkdirSync(path.dirname(notePath), { recursive: true });
+    const declared = STORED_DECLARED_NOTE.replace('content_origin: unknown', 'content_origin: assistant')
+      .replace('content_origin_basis: unknown', 'content_origin_basis: assistant_generated');
+    const edited = `${STORED_LEGACY_NOTE}Mobile prose.\n`;
+
+    for (const concurrent of [declared, edited]) {
+      // Already changed when the writer reads: refused before submission.
+      fs.writeFileSync(notePath, concurrent, 'utf8');
+      const early = [];
+      assert.throws(
+        () => boundRepair(root, { mutationExecutor: guardedExecutor(root, early) }),
+        (error) => error.code === NOTE_EXPECTED_STATE_REFUSED && error.reason === 'changed_since_expected_state',
+      );
+      assert.equal(early.length, 0);
+      assert.equal(fs.readFileSync(notePath, 'utf8'), concurrent);
+
+      // Changed after the writer read but before commit: the submitted guard is
+      // still the caller's bytes, so the executor rejects it.
+      fs.writeFileSync(notePath, STORED_LEGACY_NOTE, 'utf8');
+      const late = [];
+      const result = boundRepair(root, {
+        mutationExecutor: guardedExecutor(root, late, (target) => fs.writeFileSync(target, concurrent, 'utf8')),
+      });
+      assert.equal(result.receipt.status, 'conflict');
+      assert.equal(result.written, false);
+      assert.equal(late[0].expectedHash, sha256Utf8(STORED_LEGACY_NOTE));
+      assert.equal(fs.readFileSync(notePath, 'utf8'), concurrent);
+    }
+  });
+});
+
+test('an expected state that cannot be enforced by a guarded replace is refused', () => {
+  withVault(({ root }) => {
+    const notePath = path.join(root, 'Notes', 'Stored Legacy.md');
+    fs.mkdirSync(path.dirname(notePath), { recursive: true });
+    const submitted = [];
+    const refusal = (extra) => {
+      try {
+        boundRepair(root, { mutationExecutor: guardedExecutor(root, submitted), ...extra });
+      } catch (error) {
+        assert.equal(error.code, NOTE_EXPECTED_STATE_REFUSED);
+        return error.reason;
+      }
+      return 'not_refused';
+    };
+
+    // No note on disk at all.
+    assert.equal(refusal({}), 'changed_since_expected_state');
+    assert.equal(refusal({ expectedExistingContent: '' }), 'expected_state_invalid');
+    assert.equal(refusal({ expectedExistingContent: Buffer.from(STORED_LEGACY_NOTE) }), 'expected_state_invalid');
+    // A canonical note takes the unguarded append transform, which cannot carry
+    // the caller's expected state.
+    fs.writeFileSync(notePath, STORED_DECLARED_NOTE, 'utf8');
+    assert.equal(refusal({
+      content: 'A later paragraph.',
+      preserveExistingBodyBytes: false,
+      expectedExistingContent: STORED_DECLARED_NOTE,
+    }), 'expected_state_not_enforceable');
+    assert.equal(submitted.length, 0);
+    assert.equal(fs.readFileSync(notePath, 'utf8'), STORED_DECLARED_NOTE);
   });
 });
 
