@@ -272,6 +272,37 @@ function normalizeVerificationPolicy(value, field, allowedHarnesses) {
   return normalized;
 }
 
+// These are jarvOS distribution facts.  In particular, do not infer either
+// from a skill's prose or from the older `requires` field: that field belongs
+// to the skill itself and may describe something quite different.
+function normalizeSkillDependencies(value, field) {
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) throw new Error(`${field} must be an array`);
+  const seen = new Set();
+  return value.map((dependency, index) => {
+    const id = assertSkillId(dependency, `${field}[${index}]`);
+    if (seen.has(id)) throw new Error(`${field} duplicates ${id}`);
+    seen.add(id);
+    return id;
+  }).sort();
+}
+
+function normalizeRuntimePrerequisites(value, field) {
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) throw new Error(`${field} must be an array`);
+  const seen = new Set();
+  return value.map((prerequisite, index) => {
+    // Keep the portable contract deliberately small: a prerequisite is an
+    // opaque, stable identifier. Harness adapters provide the evidence.
+    if (typeof prerequisite !== 'string' || !/^[a-z][a-z0-9._:-]{0,127}$/i.test(prerequisite)) {
+      throw new Error(`${field}[${index}] must be a stable prerequisite id`);
+    }
+    if (seen.has(prerequisite)) throw new Error(`${field} duplicates ${prerequisite}`);
+    seen.add(prerequisite);
+    return prerequisite;
+  }).sort();
+}
+
 function normalizePublicEntry(entry) {
   const source = nonEmptyObject(entry, 'public catalog entry');
   const id = assertSkillId(source.id || source.name, 'public catalog entry id');
@@ -299,6 +330,8 @@ function normalizePublicEntry(entry) {
     id,
     sourceKind: PUBLIC_SOURCE_KIND,
     allowedHarnesses,
+    skillDependencies: normalizeSkillDependencies(source.skillDependencies, `skillDependencies for ${id}`),
+    runtimePrerequisites: normalizeRuntimePrerequisites(source.runtimePrerequisites, `runtimePrerequisites for ${id}`),
     requiredTools,
     renderer,
     verification: normalizeVerificationPolicy(source.verification, `verification for ${id}`, allowedHarnesses),
@@ -331,6 +364,8 @@ function normalizeOverlayEntry(entry) {
     id,
     sourceKind: LOCAL_OVERLAY_SOURCE_KIND,
     allowedHarnesses,
+    skillDependencies: normalizeSkillDependencies(source.skillDependencies, `skillDependencies for ${id}`),
+    runtimePrerequisites: normalizeRuntimePrerequisites(source.runtimePrerequisites, `runtimePrerequisites for ${id}`),
     requiredTools: Array.isArray(source.requiredTools)
       ? source.requiredTools.map((tool, index) => {
         if (typeof tool !== 'string' || !tool.trim()) throw new Error(`requiredTools[${index}] for ${id} is invalid`);
@@ -505,6 +540,8 @@ function redactEffectiveCatalog(result) {
       id: entry.id,
       sourceKind: entry.sourceKind,
       allowedHarnesses: entry.allowedHarnesses,
+      skillDependencies: entry.skillDependencies || [],
+      runtimePrerequisites: entry.runtimePrerequisites || [],
       requiredTools: entry.requiredTools || [],
       renderer: entry.renderer,
       verification: entry.verification,

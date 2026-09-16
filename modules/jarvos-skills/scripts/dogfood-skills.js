@@ -83,7 +83,16 @@ if (args.has('--matrix') && args.has('--live')) {
       controlRoot: path.join(temp, 'control'),
       harnesses,
     });
-    const applied = skills.applyCatalogReconciliation(plan);
+    const freshDiscovery = ({ harness }) => ({
+      fresh: true,
+      source: 'isolated-native-discovery-fixture',
+      tuples: plan.pairs.filter((pair) => pair.harness === harness.id).map((pair) => ({
+        id: pair.id,
+        catalogRelease: pair.catalogRelease,
+        treeDigest: pair.treeDigest,
+      })),
+    });
+    const applied = skills.applyCatalogReconciliation(plan, { freshDiscovery });
     const shadowChecks = harnesses.filter((harness) => harness.adapter.skillProjection.verificationTier === 'exact-path').map((harness) => {
       const shadowPaths = skills.resolveShadowPaths({ harness, adapter: harness.adapter, effectiveName: 'public-fixture' });
       const shadowRoot = shadowPaths.paths[0];
@@ -106,7 +115,10 @@ if (args.has('--matrix') && args.has('--live')) {
       // Claude's declared interactive proof cannot be fabricated in CI. Its
       // receipt-owned containment is the strongest truthful isolated result.
       const satisfied = proof.status === 'model_visible' || (harness.id === 'claude' && proof.status === 'verification_pending');
-      return { harness: harness.id, installed: fs.existsSync(path.join(targetPath, 'SKILL.md')), verification: proof.status, satisfied };
+      const receipts = plan.pairs.filter((pair) => pair.harness === harness.id).map((pair) => skills.readReceipt(harness.root, pair.effectiveName));
+      const observedEqualDesired = receipts.every((receipt) => receipt?.status !== 'model_visible'
+        || receipt.desiredSetDigest === receipt.observedSetDigest);
+      return { harness: harness.id, installed: fs.existsSync(path.join(targetPath, 'SKILL.md')), verification: proof.status, observedEqualDesired, satisfied: satisfied && observedEqualDesired };
     });
     const second = skills.planCatalogReconciliation({ catalog: effective.catalog, publicSourceRoot: fixtureRoot, controlRoot: path.join(temp, 'control'), harnesses });
     const result = { mode: 'isolated', catalogDigest: effective.digest, applied: applied.applied.filter((item) => item.applied).length, pairs, shadowChecks, secondRunNoop: second.pairs.every((pair) => pair.status === 'clean') };

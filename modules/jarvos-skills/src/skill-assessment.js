@@ -343,6 +343,7 @@ function assessInventory({
   harnessRoots = [],
   publicCatalog,
   localOverlay,
+  ownerApprovedSkills,
   reviewer,
   complete = true,
   autoAdmit = true,
@@ -400,9 +401,9 @@ function assessInventory({
     const sources = sourceRootsFor(skill, validated.document.roots);
     let result = { ...skill, ...stableDisposition('needs_input', 'incomplete_observation') };
     // Preserve owner exclusions applied by inventory observation.
-    if (skill.disposition?.kind === 'blocked' && skill.disposition?.reasonCode === 'owner_excluded') {
+    if (skill.disposition?.kind === 'blocked' && ['owner_excluded', 'owner_keep_local'].includes(skill.disposition?.reasonCode)) {
       if (priorEntryFor(prior, skill.logicalId)) retireIds.add(skill.logicalId);
-      assessed.push({ ...result, ...stableDisposition('blocked', 'owner_excluded', 'quiet') });
+      assessed.push({ ...result, ...stableDisposition('blocked', skill.disposition.reasonCode, 'quiet') });
       continue;
     }
     if (manual.error) {
@@ -470,7 +471,11 @@ function assessInventory({
       assessed.push({ ...result, ...stableDisposition('blocked', 'unsafe_source', 'actionable') });
       continue;
     }
-    if (feature.hasNetwork || feature.hasPluginOrInteractive) {
+    const ownerApproval = ownerApprovedSkills instanceof Map
+      ? ownerApprovedSkills.get(skill.logicalId)
+      : ownerApprovedSkills?.[skill.logicalId];
+    const explicitlyApproved = ownerApproval?.treeDigest === feature.tree.treeDigest;
+    if ((feature.hasNetwork || feature.hasPluginOrInteractive) && !explicitlyApproved) {
       assessed.push({ ...result, ...stableDisposition('needs_input', 'needs_owner_input', 'actionable') });
       continue;
     }

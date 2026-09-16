@@ -884,6 +884,10 @@ function mergeSkills(skillRecords, { previousSkills, observedAt }) {
   const previousByLogicalId = new Map((previousSkills || []).map((skill) => [skill.logicalId, skill]));
 
   for (const record of skillRecords) {
+    // A missing observation is history from an earlier generation. It keeps
+    // the absence visible, but it is never a live source for its harness and
+    // its older digest is not evidence of divergent content.
+    const missing = record.observation?.state === 'missing';
     const existing = byLogicalId.get(record.logicalId);
     if (!existing) {
       byLogicalId.set(record.logicalId, {
@@ -891,10 +895,25 @@ function mergeSkills(skillRecords, { previousSkills, observedAt }) {
         observedName: record.observedName,
         treeDigest: record.treeDigest,
         observations: [record.observation],
-        harnesses: new Set([record.harness]),
-        realPaths: new Set([record.realPath]),
+        harnesses: new Set(missing ? [] : [record.harness]),
+        realPaths: new Set(missing ? [] : [record.realPath]),
+        live: !missing,
         unsafe: false,
       });
+      continue;
+    }
+
+    if (missing) {
+      existing.observations.push(record.observation);
+      continue;
+    }
+    if (!existing.live) {
+      existing.observedName = record.observedName;
+      existing.treeDigest = record.treeDigest;
+      existing.observations.push(record.observation);
+      existing.harnesses.add(record.harness);
+      existing.realPaths.add(record.realPath);
+      existing.live = true;
       continue;
     }
 
@@ -1212,12 +1231,13 @@ function observeInventory(options = {}) {
     const loadedExclusions = loadExclusionOverlay(layout.exclusionOverlayPath);
     if (loadedExclusions.status === 'valid' || loadedExclusions.status === 'absent') {
       exclusions = loadedExclusions.overlay.entries || [];
-      const excludedIds = new Set(exclusions.map((entry) => entry.logicalId));
+      const excludedById = new Map(exclusions.map((entry) => [entry.logicalId, entry]));
       skills = skills.map((skill) => {
-        if (!excludedIds.has(skill.logicalId)) return skill;
+        const exclusion = excludedById.get(skill.logicalId);
+        if (!exclusion) return skill;
         return {
           ...skill,
-          disposition: { kind: 'blocked', reasonCode: 'owner_excluded' },
+          disposition: { kind: 'blocked', reasonCode: exclusion.reasonCode || 'owner_excluded' },
           attention: 'quiet',
         };
       });
@@ -1333,6 +1353,7 @@ function observeInventory(options = {}) {
       harnessRoots,
       publicCatalog: readJsonSafe(resolved.publicCatalogPath, null),
       localOverlay: readJsonSafe(resolved.localOverlayPath, null),
+      ownerApprovedSkills: options.ownerApprovedSkills,
       reviewer: options.reviewer || null,
       complete,
       autoAdmit: options.autoAdmit !== false && complete,
@@ -1440,6 +1461,7 @@ function inventoryOperator(options = {}) {
     // observation-first so discovery never silently mutates accepted state.
     assess: options.assess === true,
     autoAdmit: options.autoAdmit !== false,
+    ownerApprovedSkills: options.ownerApprovedSkills,
     reviewer: options.reviewer || null,
     saveConfig: options.saveConfig === true,
   });

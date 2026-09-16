@@ -45,18 +45,85 @@ local modification, authorize egress, or roll back a generation.
 
 Events are merely debounced wake-ups, not proof that a skill is safe to share.
 The full scan and mutation lease are authoritative. Healthy recurring runs are
-quiet and write no durable state. A new actionable transition gets one redacted
-notice; a recovery gets one redacted recovery notice.
+quiet and write no durable state. A recovery gets one redacted recovery notice.
 
 Use `jarvos-skills-scheduled-repair` when a scheduler delivers stdout. Healthy
 replays, safe holds, and completed automatic repairs emit exactly `NO_REPLY`;
-safe holds remain available through durable local status. When Andrew must make
-a decision, jarvOS sends a reviewed recovery message that says what happened,
-what jarvOS preserved, what action is needed, what happens next, and an opaque
-reference. It never exposes source names, paths, receipt details, or internal
-reason codes. Pass `--announce-convergence` once through the configured delivery
-route after activation, then remove that flag so subsequent healthy runs remain
-quiet.
+safe holds remain available through durable local status. A recovery failure
+gets a reviewed message that says what happened, what jarvOS preserved, what
+action is needed, what happens next, and an opaque reference, without source
+names, paths, receipt details, or internal reason codes.
+
+Rule-proven compatible skills are still admitted and projected automatically.
+Every other unresolved skill decision (a skill that needs approval, a name
+conflict, an ambiguous source, an unsupported capability, an accepted source
+that disappeared, an unsafe source, a source that appears to hold private
+information, or scripts in a folder trusted only for instructions) becomes a
+named owner message: the skill, the affected harnesses, the cause in plain
+English, what jarvOS preserved, how to fix it, and the exact choices. Unsafe,
+private, and under-trusted skills can only be kept local or excluded; no
+decision can share them. A source that disappears before it was ever accepted
+stays quiet. Decisions are reconciled from the private assessed inventory, so they
+carry real skill names; stored decisions keep only harness ids and one
+preserved-state word, never paths, bodies, or diagnostics. Pending named
+decisions take precedence over generic safety-hold status.
+
+Each scheduler occurrence (by default the UTC hour of the run) claims exactly
+one reminder for every unresolved decision, so nothing waits an extra hour. A
+scheduler that can catch up or retry a missed run should pass its own
+deterministic `--occurrence KEY` (up to 64 characters of letters, digits, `:`,
+`.`, `_`, or `-`, starting with a letter or digit), so a late retry keeps the
+same reminder identity. Prefer a name followed by the UTC hour, such as
+`hour-2026-08-16T16` or `my-runner:2026-08-16T16`: jarvOS keeps only the latest
+hour it reminded for each such name, so that hour and every earlier one can
+never remind again, however much later it is replayed. A key that stamps the
+same shape to the minute (`my-runner:2026-08-16T16:30`) names that same hour, so
+a runner's within-hour retries still dedupe exactly. An hourly key more than an
+hour in the future is refused. Other keys are remembered exactly, up to a fixed
+bound, so a run key that carries no UTC hour eventually exhausts that bound;
+name a series and a UTC hour instead.
+If a reminder cannot be recorded (a stuck lock gate, a busy or unreadable
+decision ledger, or a rejected occurrence), the run changes nothing, exits
+non-zero, and sends a named recovery once per occurrence until it is fixed.
+Reminders repeat hourly until the decision is
+resolved or disappears. Silence never pauses them. Through the owner session,
+`acknowledge-decision` pauses reminders without resolving, `defer-decision`
+with a future `until` pauses them until that time (they then resume by
+themselves), and `resume-decision` restores them. Reminders are independent of
+the bounded initial and fallback delivery attempts, which remain the
+acknowledgeable outbox for uncertain transports.
+
+When several decisions are due at once, one occurrence names every one of them.
+Each message stays bounded, so an occurrence with more pending decisions than
+fit in one message emits as many bounded messages as that takes, each saying
+which message of how many it is; there is no ceiling on that count, so a large
+pending population is never left partly unnamed. The action-required envelope
+therefore carries a `messages` array, one entry per bounded message. Each entry
+is a complete transport entry in its own right — the same `schema`,
+`disposition`, `message`, `event`, and `dedupeIdentity` fields as a
+single-message envelope — so a sender may deliver and acknowledge entries
+independently; the envelope's top-level fields always mirror the first entry.
+Every reply still names its skill, so a reply correlated only to a message
+resolves nothing.
+
+A retry of the same occurrence never claims a second reminder: reminder counts
+do not move and the ledger is not written again. It does, however, re-render
+what that occurrence already claimed, under the same per-message dedupe
+identities, so a sender that accepted some of the occurrence's messages and
+failed the rest can recover the missing ones instead of waiting an hour. The
+sender's own per-message accepted-delivery dedupe suppresses what it already
+delivered. The replay names only decisions that are still pending and still
+remindable, so one resolved, acknowledged, or deferred in the meantime drops
+out and is never revived, and a decision that first became actionable after the
+occurrence began leads the next occurrence rather than joining this one. Only
+the current occurrence of an hourly series replays; once a later hour has been
+claimed, every earlier hour is closed for good. The next occurrence names every
+still-unresolved decision again. The separate v1 migration notice remains a
+count-only summary that explains how to list the named decisions through the
+owner session.
+
+Pass `--announce-convergence` once through the configured delivery route after
+activation, then remove that flag so subsequent healthy runs remain quiet.
 
 For an exact-path proof, bind each higher-precedence project or workspace root
 as an absolute `scopeRoots` path and set `scopeRootsComplete: true` in the local

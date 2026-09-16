@@ -40,6 +40,7 @@ const {
   OVERLAY_SCHEMA_VERSION,
 } = require('../src/catalog');
 const { atomicWriteReceipt } = require('../src/receipts');
+const { reconcileDecisions } = require('../src/decision-store');
 const {
   inventoryAssessOperator,
   excludeSkillOperator,
@@ -147,6 +148,7 @@ function assessObserved(configPath, {
   complete,
   autoAdmit = true,
   reviewer = null,
+  ownerApprovedSkills = null,
   persist = true,
 } = {}) {
   const observed = observeInventory({ configPath, persist });
@@ -170,6 +172,7 @@ function assessObserved(configPath, {
     harnessRoots,
     publicCatalog: null,
     localOverlay: null,
+    ownerApprovedSkills,
     reviewer,
     complete: complete === undefined ? observed.complete === true : complete,
     autoAdmit,
@@ -312,6 +315,41 @@ test('auto-admits markdown skill under markdown-only trust', () => {
   }
 });
 
+test('a skill present only in Codex is admitted to a harness whose earlier copy is now missing', () => {
+  const roots = {
+    codex: temp('jarvos-only-codex-'),
+    claude: temp('jarvos-only-claude-'),
+    openclaw: temp('jarvos-only-openclaw-'),
+    hermes: temp('jarvos-only-hermes-'),
+  };
+  writeSkill(path.join(roots.codex, 'use-anthropic'), { name: 'use-anthropic', body: 'Portable prose helper.\n' });
+  writeSkill(path.join(roots.claude, 'use-anthropic'), { name: 'use-anthropic', body: 'Portable prose helper.\n' });
+  writeSkill(path.join(roots.hermes, 'unrelated-skill'), { name: 'unrelated-skill', body: 'Unrelated prose.\n' });
+  const { configPath } = seedConfig({ roots, trustClass: 'markdown-only' });
+  observeInventory({ configPath });
+  fs.rmSync(path.join(roots.claude, 'use-anthropic'), { recursive: true, force: true });
+
+  const { observed, assessment } = assessObserved(configPath);
+  assert.equal(observed.complete, true);
+  assert.equal(observed.document.roots.length, 4);
+  assert.ok(observed.document.roots.every((root) => root.complete === true));
+  const projection = (skill, harness) => skill.matrix.find((row) => row.harness === harness).projection;
+  const observedSkill = observed.document.skills.find((item) => item.logicalId === 'use-anthropic');
+  assert.equal(projection(observedSkill, 'codex'), 'source_present');
+  assert.equal(projection(observedSkill, 'claude'), 'missing');
+  assert.ok(observedSkill.observations.some((item) => item.state === 'missing'));
+  // Observation alone never claims native visibility.
+  assert.ok(observedSkill.matrix.every((row) => row.verification !== 'model_visible'));
+
+  const assessedSkill = assessment.document.skills.find((item) => item.logicalId === 'use-anthropic');
+  assert.equal(assessedSkill.disposition.kind, 'shared');
+  assert.equal(assessedSkill.disposition.reasonCode, 'rule_proven_portable');
+  assert.ok(assessment.admissions.some((item) => item.logicalId === 'use-anthropic'));
+  const entry = assessment.acceptedGeneration.generatedOverlay.entries.find((item) => item.id === 'use-anthropic');
+  assert.deepEqual([...entry.allowedHarnesses].sort(), ['claude', 'hermes', 'openclaw']);
+  assert.ok(assessment.document.skills.some((item) => item.logicalId === 'unrelated-skill'));
+});
+
 test('scripts require portable-bundles trust class', () => {
   const codexRoot = temp('jarvos-codex-scripts-');
   copyFixture(path.join(codexRoot, 'public-fixture'));
@@ -325,6 +363,22 @@ test('scripts require portable-bundles trust class', () => {
   assert.equal(skill.disposition.kind, 'blocked');
   assert.equal(skill.disposition.reasonCode, 'trust_class_insufficient');
   assert.equal((assessment.admissions || []).length, 0);
+});
+
+test('an actionable under-trusted script skill becomes a share-free owner decision', () => {
+  const codexRoot = temp('jarvos-codex-blocked-decision-');
+  copyFixture(path.join(codexRoot, 'public-fixture'));
+  const { configPath, control } = seedConfig({ roots: { codex: codexRoot }, trustClass: 'markdown-only' });
+  const { assessment } = assessObserved(configPath, { autoAdmit: true });
+  const skill = assessment.document.skills.find((item) => item.logicalId === 'public-fixture');
+  assert.equal(skill.disposition.kind, 'blocked');
+  assert.equal(skill.attention, 'actionable');
+  const statePath = path.join(control, 'owner-decisions-test.json');
+  const decisions = reconcileDecisions({ statePath, skills: assessment.document.skills }).pending
+    .filter((item) => item.skill === 'public-fixture');
+  assert.equal(decisions.length, 1);
+  assert.equal(decisions[0].reason, 'trust_class_insufficient');
+  assert.deepEqual(decisions[0].options, ['keep-local', 'exclude', 'details']);
 });
 
 test('portable-bundles trust admits script-bearing fixture', () => {
@@ -415,6 +469,30 @@ test('owner exclusion blocks without deleting observation', () => {
   const skill = assessment.document.skills.find((item) => item.logicalId === 'keep-local');
   assert.equal(skill.disposition.kind, 'blocked');
   assert.equal(skill.disposition.reasonCode, 'owner_excluded');
+  assert.equal((assessment.admissions || []).length, 0);
+});
+
+test('keep-local decisions preserve their distinct owner reason in the inventory overlay', () => {
+  const root = temp('jarvos-keep-local-overlay-');
+  writeSkill(path.join(root, 'keep-local'), { name: 'keep-local' });
+  const { configPath, control } = seedConfig({ roots: { codex: root }, trustClass: 'markdown-only' });
+  const layout = ensureInventoryStateLayout({
+    controlRoot: control,
+    inventory: loadConfig(configPath).config.inventory,
+  });
+  fs.writeFileSync(layout.exclusionOverlayPath, `${JSON.stringify({
+    schemaVersion: 'jarvos.skill-exclusions/v1',
+    entries: [{
+      logicalId: 'keep-local',
+      reasonCode: 'owner_keep_local',
+      excludedAt: '2026-08-15T12:00:00.000Z',
+    }],
+  }, null, 2)}\n`, { mode: 0o600 });
+
+  const { assessment } = assessObserved(configPath);
+  const skill = assessment.document.skills.find((item) => item.logicalId === 'keep-local');
+  assert.equal(skill.disposition.kind, 'blocked');
+  assert.equal(skill.disposition.reasonCode, 'owner_keep_local');
   assert.equal((assessment.admissions || []).length, 0);
 });
 
@@ -1127,6 +1205,63 @@ test('egress + scripts fails closed to needs_input', () => {
   const skill = assessment.document.skills.find((item) => item.logicalId === 'net-skill');
   assert.equal(skill.disposition.kind, 'needs_input');
   assert.equal(skill.disposition.reasonCode, 'needs_owner_input');
+});
+
+test('an owner-approved share admits the same network skill digest on replay', () => {
+  const root = temp('jarvos-approved-share-');
+  writeSkill(path.join(root, 'net-skill'), {
+    name: 'net-skill',
+    scripts: true,
+    egress: true,
+  });
+  const { configPath } = seedConfig({ roots: { codex: root }, trustClass: 'portable-bundles' });
+  const held = assessObserved(configPath);
+  const heldSkill = held.assessment.document.skills.find((item) => item.logicalId === 'net-skill');
+  assert.equal(heldSkill.disposition.reasonCode, 'needs_owner_input');
+
+  const approved = assessObserved(configPath, {
+    ownerApprovedSkills: new Map([['net-skill', { treeDigest: heldSkill.treeDigest }]]),
+  });
+  const admitted = approved.assessment.document.skills.find((item) => item.logicalId === 'net-skill');
+  assert.equal(admitted.disposition.kind, 'shared');
+  assert.equal(approved.assessment.admissions.some((item) => item.logicalId === 'net-skill'), true);
+});
+
+test('Ponytail-style prose holds conservatively and an exact owner approval does not approve later bytes', () => {
+  const root = temp('jarvos-prose-share-');
+  const body = 'Keep user requests small. A helper named fetch is only an example.\n';
+  writeSkill(path.join(root, 'prose-skill'), { name: 'prose-skill', body });
+  const { configPath } = seedConfig({ roots: { codex: root }, trustClass: 'markdown-only' });
+  const held = assessObserved(configPath);
+  const heldSkill = held.assessment.document.skills.find((item) => item.logicalId === 'prose-skill');
+  assert.equal(heldSkill.disposition.reasonCode, 'needs_owner_input');
+  assert.equal(held.assessment.admissions.length, 0);
+  const ownerApprovedSkills = new Map([['prose-skill', { treeDigest: heldSkill.treeDigest }]]);
+  const approved = assessObserved(configPath, { ownerApprovedSkills });
+  assert.equal(approved.assessment.admissions.some((item) => item.logicalId === 'prose-skill'), true);
+
+  writeSkill(path.join(root, 'prose-skill'), { name: 'prose-skill', body: `${body}Changed requests.\n` });
+  const changed = assessObserved(configPath, { ownerApprovedSkills });
+  assert.equal(changed.assessment.document.skills.find((item) => item.logicalId === 'prose-skill').disposition.reasonCode, 'needs_owner_input');
+  assert.equal(changed.assessment.admissions.length, 0);
+});
+
+test('even an exact owner approval cannot bypass privacy or injection restrictions', () => {
+  for (const [flag, reason] of [['secret', 'privacy_restricted'], ['injection', 'unsafe_source']]) {
+    const root = temp('jarvos-share-safety-');
+    const bundle = writeSkill(path.join(root, 'unsafe-skill'), {
+      name: 'unsafe-skill', body: 'Handle requests carefully.\n', [flag]: true,
+    });
+    const tree = computeBundleTree(bundle, { allowlist: DEFAULT_ALLOWED_BUNDLE_GLOBS });
+    const { configPath } = seedConfig({ roots: { codex: root }, trustClass: 'markdown-only' });
+    const result = assessObserved(configPath, {
+      ownerApprovedSkills: new Map([['unsafe-skill', { treeDigest: tree.treeDigest }]]),
+    });
+    const skill = result.assessment.document.skills.find((item) => item.logicalId === 'unsafe-skill');
+    assert.equal(skill.disposition.kind, 'blocked', flag);
+    assert.equal(skill.disposition.reasonCode, reason, flag);
+    assert.equal(result.assessment.admissions.length, 0, flag);
+  }
 });
 
 test('changed source updates even when destinations already have receipts', () => {

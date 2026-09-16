@@ -628,6 +628,8 @@ test('MCP tool list includes jarvOS tools', () => {
   const shared = TOOLS.find((tool) => tool.name === 'jarvos_shared_skills');
   assert.deepEqual(shared.inputSchema.properties.operation.enum, [
     'status', 'explain', 'inventory', 'plan', 'repair', 'exclude', 'include',
+    'decisions', 'explain-decision', 'resolve-decision',
+    'acknowledge-decision', 'defer-decision', 'resume-decision',
   ]);
   assert.equal('credential' in shared.inputSchema.properties, false);
 });
@@ -706,7 +708,7 @@ test('shared-skill MCP mutation operations fail closed without a host-bound owne
   delete process.env.JARVOS_CONTROL_PLANE_CREDENTIAL;
   delete process.env.JARVOS_CONTROL_PLANE_CREDENTIAL_FILE;
   try {
-    for (const operation of ['inventory', 'plan', 'repair', 'exclude', 'include']) {
+    for (const operation of ['inventory', 'plan', 'repair', 'exclude', 'include', 'decisions', 'explain-decision', 'resolve-decision', 'acknowledge-decision', 'defer-decision', 'resume-decision']) {
       const result = await callTool('jarvos_shared_skills', { operation, id: 'private-skill' });
       assert.equal(result.isError, true);
       assert.match(result.content[0].text, /owner session is not configured/i);
@@ -751,6 +753,111 @@ test('shared-skill MCP status and explain match redacted operator behavior', asy
   } finally {
     if (previous === undefined) delete process.env.JARVOS_SHARED_SKILLS_CONFIG_PATH;
     else process.env.JARVOS_SHARED_SKILLS_CONFIG_PATH = previous;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('shared-skill MCP decision operations use opaque references and reject stale resolutions', async () => {
+  const skills = require('../../jarvos-skills/src');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-mcp-decision-'));
+  fs.chmodSync(root, 0o700);
+  const harnessRoot = path.join(root, 'codex-skills');
+  const bundle = path.join(harnessRoot, 'newsletter-generator');
+  fs.mkdirSync(bundle, { recursive: true, mode: 0o700 });
+  fs.writeFileSync(path.join(bundle, 'SKILL.md'), [
+    '---',
+    'name: newsletter-generator',
+    'description: owner decision fixture',
+    '---',
+    '',
+    'Use the approved network endpoint: https://example.test/submit',
+    '',
+  ].join('\n'), { mode: 0o600 });
+  const tree = skills.computeBundleTree(bundle, {
+    allowlist: ['SKILL.md', 'scripts/**', 'assets/**', 'references/**', 'templates/**'],
+  });
+  const configPath = path.join(root, 'config.json');
+  const config = skills.defaultConfig();
+  config.controlRoot = root;
+  config.publicCatalogPath = path.join(root, 'public-catalog.json');
+  config.localOverlayPath = path.join(root, 'local-overlay.json');
+  config.inventory.enabled = true;
+  config.inventory.registeredRoots = [{
+    rootId: 'codex-decision-fixture', harness: 'codex', root: harnessRoot, trustClass: 'markdown-only', lifecycle: 'available',
+  }];
+  skills.saveConfig(config, configPath);
+  const statePath = skills.decisionStatePath({ configPath });
+  const seeded = skills.reconcileDecisions({
+    statePath,
+    skills: [{
+      logicalId: 'newsletter-generator',
+      treeDigest: tree.treeDigest,
+      attention: 'actionable',
+      disposition: { kind: 'needs_input', reasonCode: 'needs_owner_input' },
+    }],
+  }).pending[0];
+  const previousConfig = process.env.JARVOS_SHARED_SKILLS_CONFIG_PATH;
+  const previousCredential = process.env.JARVOS_CONTROL_PLANE_CREDENTIAL;
+  process.env.JARVOS_SHARED_SKILLS_CONFIG_PATH = configPath;
+  process.env.JARVOS_CONTROL_PLANE_CREDENTIAL = 'test-owner-session';
+  try {
+    const listed = await callTool('jarvos_shared_skills', { operation: 'decisions' });
+    assert.equal(listed.isError, false);
+    const listedPayload = JSON.parse(listed.content[0].text);
+    assert.equal(listedPayload.decisions[0].decisionReference, seeded.decisionReference);
+    assert.doesNotMatch(listed.content[0].text, /absolutePath|SKILL\.md/);
+
+    const explained = await callTool('jarvos_shared_skills', {
+      operation: 'explain-decision', decisionReference: seeded.decisionReference,
+    });
+    assert.equal(explained.isError, false);
+    assert.equal(JSON.parse(explained.content[0].text).found, true);
+
+    const acknowledged = await callTool('jarvos_shared_skills', {
+      operation: 'acknowledge-decision', decisionReference: seeded.decisionReference,
+    });
+    assert.equal(acknowledged.isError, false);
+    const acknowledgedPayload = JSON.parse(acknowledged.content[0].text);
+    assert.equal(acknowledgedPayload.decision.status, 'pending');
+    assert.deepEqual(acknowledgedPayload.decision.reminder, { status: 'acknowledged' });
+    const invalidDefer = await callTool('jarvos_shared_skills', {
+      operation: 'defer-decision', decisionReference: seeded.decisionReference, until: '2000-01-01T00:00:00.000Z',
+    });
+    assert.equal(invalidDefer.isError, true);
+    assert.match(invalidDefer.content[0].text, /invalid_until/);
+    const deferred = await callTool('jarvos_shared_skills', {
+      operation: 'defer-decision', decisionReference: seeded.decisionReference, until: '2999-01-01T00:00:00.000Z',
+    });
+    assert.equal(deferred.isError, false);
+    assert.equal(JSON.parse(deferred.content[0].text).decision.reminder.status, 'deferred');
+    const resumed = await callTool('jarvos_shared_skills', {
+      operation: 'resume-decision', decisionReference: seeded.decisionReference,
+    });
+    assert.equal(resumed.isError, false);
+    assert.deepEqual(JSON.parse(resumed.content[0].text).decision.reminder, { status: 'active' });
+
+    const stale = await callTool('jarvos_shared_skills', {
+      operation: 'resolve-decision', decisionReference: seeded.decisionReference,
+      revision: 99, option: 'share',
+    });
+    assert.equal(stale.isError, true);
+    assert.match(stale.content[0].text, /stale/i);
+
+    const valid = await callTool('jarvos_shared_skills', {
+      operation: 'resolve-decision', decisionReference: seeded.decisionReference,
+      revision: 1, option: 'keep-local',
+    });
+    assert.equal(valid.isError, false);
+    const validPayload = JSON.parse(valid.content[0].text);
+    assert.equal(validPayload.status, 'resolved');
+    assert.equal(validPayload.receipt.option, 'keep-local');
+    assert.match(valid.content[0].text, /postResolution/);
+    assert.equal(skills.loadExclusionOverlay(path.join(root, 'inventory', 'exclusions.json')).status, 'valid');
+  } finally {
+    if (previousConfig === undefined) delete process.env.JARVOS_SHARED_SKILLS_CONFIG_PATH;
+    else process.env.JARVOS_SHARED_SKILLS_CONFIG_PATH = previousConfig;
+    if (previousCredential === undefined) delete process.env.JARVOS_CONTROL_PLANE_CREDENTIAL;
+    else process.env.JARVOS_CONTROL_PLANE_CREDENTIAL = previousCredential;
     fs.rmSync(root, { recursive: true, force: true });
   }
 });

@@ -4,7 +4,7 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const RECEIPT_VERSION = 1;
+const RECEIPT_VERSION = 2;
 const STATE_DIR = '.jarvos-projections';
 const SHA256_RE = /^[a-f0-9]{64}$/i;
 
@@ -56,7 +56,9 @@ function readReceipt(skillsRoot, effectiveName) {
 
 function validateReceipt(receipt) {
   if (!receipt || typeof receipt !== 'object' || Array.isArray(receipt)) return null;
-  if (receipt.version !== RECEIPT_VERSION) return null;
+  // v1 ownership receipts remain readable so they can be safely refreshed,
+  // but are never evidence of dependency-complete native discovery.
+  if (receipt.version !== 1 && receipt.version !== RECEIPT_VERSION) return null;
   if (typeof receipt.id !== 'string' || typeof receipt.effectiveName !== 'string') return null;
   if (typeof receipt.harness !== 'string') return null;
   if (!SHA256_RE.test(receipt.treeDigest || '')) return null;
@@ -78,7 +80,7 @@ function validateReceipt(receipt) {
     }
     : null;
   return {
-    version: RECEIPT_VERSION,
+    version: receipt.version,
     id: receipt.id,
     effectiveName: receipt.effectiveName,
     harness: receipt.harness,
@@ -90,6 +92,21 @@ function validateReceipt(receipt) {
     // Optional inventory provenance (U4). Absent on pre-inventory receipts.
     inventoryGenerationId,
     sourceIdentity,
+    catalogRelease: typeof receipt.catalogRelease === 'string' ? receipt.catalogRelease : null,
+    manifestDigest: typeof receipt.manifestDigest === 'string' && SHA256_RE.test(receipt.manifestDigest)
+      ? receipt.manifestDigest.toLowerCase() : null,
+    dependencyComplete: receipt.dependencyComplete === true,
+    runtimePrerequisites: receipt.runtimePrerequisites && typeof receipt.runtimePrerequisites === 'object'
+      && !Array.isArray(receipt.runtimePrerequisites) ? receipt.runtimePrerequisites : null,
+    enrolledRoot: receipt.enrolledRoot && typeof receipt.enrolledRoot === 'object'
+      && !Array.isArray(receipt.enrolledRoot) ? receipt.enrolledRoot : null,
+    desiredSetDigest: typeof receipt.desiredSetDigest === 'string' && SHA256_RE.test(receipt.desiredSetDigest)
+      ? receipt.desiredSetDigest.toLowerCase() : null,
+    observedSetDigest: typeof receipt.observedSetDigest === 'string' && SHA256_RE.test(receipt.observedSetDigest)
+      ? receipt.observedSetDigest.toLowerCase() : null,
+    discovery: receipt.discovery && typeof receipt.discovery === 'object' && !Array.isArray(receipt.discovery)
+      ? receipt.discovery : null,
+    status: typeof receipt.status === 'string' ? receipt.status : 'verification_pending',
   };
 }
 

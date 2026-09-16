@@ -16,8 +16,10 @@ const path = require('node:path');
 const { attestCatalogBundle, computeBundleTree, LOCAL_OVERLAY_SOURCE_KIND } = require('./catalog');
 const { expandHome } = require('./config');
 const { resolveCollisionAlias } = require('./collision-alias');
+const { verifyHarnessBundle, resolveShadowPaths } = require('./harness-verification');
 const {
   STATE_DIR,
+  RECEIPT_VERSION,
   readReceipt,
   validateReceipt,
   atomicWriteReceipt,
@@ -27,6 +29,7 @@ const {
 const ALIAS_FILE = 'shared-skill-aliases.json';
 const ALIAS_STATE_VERSION = 1;
 const JOURNAL_FILE = 'shared-skill-reconcile.journal.json';
+const SHA256_RE = /^[a-f0-9]{64}$/i;
 
 function sha256(value) {
   return crypto.createHash('sha256').update(value).digest('hex');
@@ -51,6 +54,103 @@ function safeRoot(value, { create = true } = {}) {
   const stat = fs.lstatSync(root);
   assertSafeOwnedDirectory(stat, 'managed skill root');
   return fs.realpathSync(root);
+}
+
+function rootIdentity(root) {
+  if (!fs.existsSync(root)) return null;
+  const resolved = safeRoot(root, { create: false });
+  const stat = fs.lstatSync(resolved);
+  return { path: resolved, dev: String(stat.dev), ino: String(stat.ino), uid: stat.uid };
+}
+
+function sameRootIdentity(left, right) {
+  return left && right && left.path === right.path && left.dev === right.dev && left.ino === right.ino && left.uid === right.uid;
+}
+
+function assertTargetBelowRoot(root, target) {
+  const relative = path.relative(root, target);
+  if (!relative || relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+    throw new Error('target is outside enrolled managed skill root');
+  }
+  // Check every existing ancestor without following a link.  This protects
+  // both the planned target and a parent substituted before apply.
+  let current = root;
+  for (const part of relative.split(path.sep)) {
+    current = path.join(current, part);
+    if (!fs.existsSync(current)) break;
+    const stat = fs.lstatSync(current);
+    if (stat.isSymbolicLink()) throw new Error('target contains a symbolic link');
+    if (current !== target) assertSafeOwnedDirectory(stat, 'managed skill target ancestor');
+  }
+  return relative.split(path.sep).join('/');
+}
+
+function desiredTupleDigest(entries, catalogRelease) {
+  return sha256(JSON.stringify(entries
+    .map((entry) => ({ id: entry.id, catalogRelease, treeDigest: entry.bundle.treeDigest }))
+    .sort((left, right) => left.id.localeCompare(right.id))));
+}
+
+function observedTupleDigest(tuples) {
+  if (!Array.isArray(tuples)) return null;
+  const normalized = tuples.map((tuple) => ({
+    id: tuple?.id,
+    catalogRelease: tuple?.catalogRelease,
+    treeDigest: tuple?.treeDigest,
+  }));
+  if (normalized.some((tuple) => typeof tuple.id !== 'string'
+    || typeof tuple.catalogRelease !== 'string' || !SHA256_RE.test(tuple.treeDigest || ''))) return null;
+  return sha256(JSON.stringify(normalized.sort((left, right) => left.id.localeCompare(right.id))));
+}
+
+function receiptNeedsRefresh(receipt, pair) {
+  return !receipt || receipt.version !== RECEIPT_VERSION
+    || receipt.catalogRelease !== pair.catalogRelease
+    || receipt.manifestDigest !== pair.manifestDigest
+    || receipt.dependencyComplete !== true
+    || !sameRootIdentity(receipt.enrolledRoot, pair.enrolledRoot)
+    || receipt.desiredSetDigest !== pair.desiredSetDigest
+    || !receipt.discovery
+    || !receipt.observedSetDigest;
+}
+
+function desiredIdsForHarness(options, harnessId, catalog) {
+  const configured = options.desiredSkillIds || options.desiredSkills || null;
+  if (!configured) return catalog.entries.filter((entry) => entry.allowedHarnesses.includes(harnessId)).map((entry) => entry.id);
+  const values = Array.isArray(configured) ? configured : configured[harnessId];
+  if (!Array.isArray(values)) return [];
+  return values.slice();
+}
+
+function resolveDependencyClosure({ catalog, harnessId, desiredIds, excludedSkillIds }) {
+  const byId = new Map(catalog.entries.map((entry) => [entry.id, entry]));
+  const excluded = new Set(Array.isArray(excludedSkillIds) ? excludedSkillIds : (excludedSkillIds?.[harnessId] || []));
+  const resolved = new Map();
+  const visiting = new Set();
+  const visit = (id, chain = []) => {
+    if (visiting.has(id)) throw new Error(`dependency_cycle:${[...chain, id].join('->')}`);
+    const entry = byId.get(id);
+    if (!entry) throw new Error(`dependency_missing:${id}`);
+    if (excluded.has(id)) throw new Error(`dependency_excluded:${id}`);
+    if (!entry.allowedHarnesses.includes(harnessId)) throw new Error(`dependency_incompatible:${id}`);
+    if (resolved.has(id)) return;
+    visiting.add(id);
+    for (const dependency of entry.skillDependencies || []) visit(dependency, [...chain, id]);
+    visiting.delete(id);
+    resolved.set(id, entry);
+  };
+  for (const id of desiredIds) visit(id);
+  return [...resolved.values()].sort((left, right) => left.id.localeCompare(right.id));
+}
+
+function runtimePrerequisiteStatus(entry, harness, verifier) {
+  const statuses = {};
+  for (const prerequisite of entry.runtimePrerequisites || []) {
+    const result = typeof verifier === 'function' ? verifier({ entry, harness, prerequisite }) : null;
+    const available = result === true || result?.available === true || result?.status === 'available';
+    statuses[prerequisite] = { available, reason: available ? null : (result?.reason || 'runtime_prerequisite_unavailable') };
+  }
+  return { complete: Object.values(statuses).every((status) => status.available), statuses };
 }
 
 function atomicWriteJson(filePath, value) {
@@ -403,9 +503,11 @@ function planCatalogReconciliation(options = {}) {
   const readOnly = options.readOnly === true;
   const harnesses = options.harnesses.map((harness) => {
     if (!harness || typeof harness.id !== 'string') throw new Error('harness id is required');
+    const root = safeRoot(harness.root, { create: !readOnly });
     return {
       id: harness.id,
-      root: safeRoot(harness.root, { create: !readOnly }),
+      root,
+      enrolledRoot: rootIdentity(root),
       adapter: harness.adapter || null,
       scopeRoots: harness.scopeRoots || {},
       scopeRootsComplete: harness.scopeRootsComplete !== false,
@@ -425,6 +527,22 @@ function planCatalogReconciliation(options = {}) {
 
   const catalogDigest = options.catalogDigest || catalog.digest || sha256(JSON.stringify(catalog));
   const pairs = [];
+
+  const closureByHarness = new Map();
+  const closureFailures = new Map();
+  for (const harness of harnesses) {
+    try {
+      closureByHarness.set(harness.id, resolveDependencyClosure({
+        catalog,
+        harnessId: harness.id,
+        desiredIds: desiredIdsForHarness(options, harness.id, catalog),
+        excludedSkillIds: options.excludedSkillIds,
+      }));
+    } catch (error) {
+      closureFailures.set(harness.id, error.message);
+      closureByHarness.set(harness.id, []);
+    }
+  }
 
   for (const entry of catalog.entries) {
     const effectiveName = aliases[entry.id];
@@ -448,12 +566,13 @@ function planCatalogReconciliation(options = {}) {
       localSourceRoot: options.localSourceRoot,
     });
 
-    const enrolled = harnesses.filter((item) => entry.allowedHarnesses.includes(item.id));
+    const enrolled = harnesses.filter((item) => closureByHarness.get(item.id)?.some((candidate) => candidate.id === entry.id));
     if (enrolled.length === 0) continue;
     // The source bundle is immutable for the duration of planning. Attest it
     // once per catalog entry, then retain a fresh attestation in apply.
     const sourceAttestation = (options.attestCatalogBundle || attestCatalogBundle)(entry, { sourceRoot });
     for (const harness of enrolled) {
+      const prerequisiteStatus = runtimePrerequisiteStatus(entry, harness, options.verifyRuntimePrerequisite);
       const classified = classifyPair({
         entry,
         harness,
@@ -475,6 +594,12 @@ function planCatalogReconciliation(options = {}) {
         catalogDigest,
         aliasRevision: aliasState.data.revision,
         inventoryGenerationId: options.inventoryGenerationId || null,
+        catalogRelease: options.catalogRelease || catalog.release || catalog.publicCatalogDigest || catalogDigest,
+        manifestDigest: options.manifestDigest || catalogDigest,
+        enrolledRoot: harness.enrolledRoot,
+        desiredSetDigest: desiredTupleDigest(closureByHarness.get(harness.id), options.catalogRelease || catalog.release || catalog.publicCatalogDigest || catalogDigest),
+        dependencyComplete: prerequisiteStatus.complete,
+        runtimePrerequisites: prerequisiteStatus.statuses,
         sourceIdentity: options.sourceIdentities?.[entry.id] || {
           logicalId: entry.id,
           sourceKind: entry.sourceKind,
@@ -482,15 +607,49 @@ function planCatalogReconciliation(options = {}) {
         },
         ...classified,
       };
+      pair.targetRelativePath = assertTargetBelowRoot(harness.root, pair.target);
+      if (!prerequisiteStatus.complete) {
+        pair.status = 'verification_failed';
+        pair.action = 'preserve';
+        pair.reason = 'runtime_prerequisite_unavailable';
+      } else if (options.refreshVerification === true && pair.status === 'clean' && receiptNeedsRefresh(pair.receipt, pair)) {
+        // A v1 receipt, or a v2 receipt without the complete discovery tuple,
+        // remains ownership evidence only. Refresh it without replacing bytes.
+        pair.status = 'verification_stale';
+        pair.action = 'refresh';
+        pair.reason = 'receipt_verification_stale';
+      }
       pair.generation = pairGeneration(pair);
       pairs.push(pair);
     }
   }
 
+  for (const [harnessId, reason] of closureFailures) {
+    const harness = harnesses.find((item) => item.id === harnessId);
+    for (const id of desiredIdsForHarness(options, harnessId, catalog)) {
+      pairs.push({
+        id,
+        harness: harnessId,
+        effectiveName: null,
+        status: 'verification_failed',
+        action: 'preserve',
+        reason,
+        enrolledRoot: harness.enrolledRoot,
+        dependencyComplete: false,
+        generation: sha256(`${id}:${harnessId}:${reason}`),
+      });
+    }
+  }
+
   // De-selection also retires a receipt-owned previous alias after an explicit
   // rename. Locally modified and unsafe copies remain preserved.
-  const selectedIds = new Set(catalog.entries.map((entry) => entry.id));
   for (const harness of harnesses) {
+    // A failed dependency closure is not a de-selection. Preserve existing
+    // receipt-owned targets until the closure can be evaluated safely.
+    if (closureFailures.has(harness.id)) continue;
+    // The root's desired closure, not catalog membership elsewhere, owns
+    // cleanup. This preserves a dependency needed by any retained wrapper.
+    const selectedIds = new Set((closureByHarness.get(harness.id) || []).map((entry) => entry.id));
     const stateDir = path.join(harness.root, STATE_DIR);
     if (!fs.existsSync(stateDir)) continue;
     for (const file of fs.readdirSync(stateDir)) {
@@ -530,6 +689,7 @@ function planCatalogReconciliation(options = {}) {
         status,
         action,
         target,
+        targetRelativePath: assertTargetBelowRoot(harness.root, target),
         receipt,
         observed,
         catalogDigest,
@@ -556,8 +716,8 @@ function planCatalogReconciliation(options = {}) {
     pairs,
     inventoryGenerationId: options.inventoryGenerationId || null,
     incompleteGeneration: false,
-    mutate: pairs.some((pair) => pair.action === 'install' || pair.action === 'retire' || pair.action === 'adopt'),
-    ok: pairs.every((pair) => ['clean', 'missing', 'outdated', 'retire', 'unmanaged_exact'].includes(pair.status)
+    mutate: pairs.some((pair) => ['install', 'retire', 'adopt', 'refresh'].includes(pair.action)),
+    ok: pairs.every((pair) => ['clean', 'missing', 'outdated', 'retire', 'unmanaged_exact', 'verification_stale'].includes(pair.status)
       || (pair.action === 'preserve' && ['unmanaged', 'local_modified', 'unsafe', 'conflict'].includes(pair.status))),
   };
 }
@@ -764,6 +924,66 @@ function commitAliasesIfNeeded(plan) {
   return { revision: nextRevision, changed: true };
 }
 
+function assertLivePairRoot(plan, pair) {
+  const harness = (plan.harnesses || []).find((item) => item.id === pair.harness);
+  if (!harness || !pair.target) throw new Error(`enrolled root is unavailable: ${pair.id}/${pair.harness}`);
+  const live = rootIdentity(harness.root);
+  if (!sameRootIdentity(live, pair.enrolledRoot || harness.enrolledRoot)) {
+    throw new Error(`enrolled root changed since planning: ${pair.id}/${pair.harness}`);
+  }
+  const relativePath = assertTargetBelowRoot(live.path, pair.target);
+  if (pair.targetRelativePath && pair.targetRelativePath !== relativePath) {
+    throw new Error(`target path changed since planning: ${pair.id}/${pair.harness}`);
+  }
+  return { live, relativePath };
+}
+
+function writeVerificationReceipt(pair, targetAttestation, io, outcome) {
+  io.writeReceipt(path.dirname(pair.target), {
+    version: RECEIPT_VERSION,
+    id: pair.id,
+    effectiveName: pair.effectiveName,
+    harness: pair.harness,
+    treeDigest: pair.source.treeDigest,
+    catalogDigest: pair.catalogDigest,
+    aliasRevision: pair.aliasRevision,
+    targetPath: pair.target,
+    verificationTier: outcome.verificationTier || 'receipt-owned',
+    inventoryGenerationId: pair.inventoryGenerationId || null,
+    sourceIdentity: pair.sourceIdentity || null,
+    catalogRelease: pair.catalogRelease,
+    manifestDigest: pair.manifestDigest,
+    dependencyComplete: pair.dependencyComplete === true,
+    runtimePrerequisites: pair.runtimePrerequisites || {},
+    enrolledRoot: targetAttestation.live,
+    desiredSetDigest: pair.desiredSetDigest || null,
+    observedSetDigest: outcome.observedSetDigest || null,
+    discovery: outcome.discovery || null,
+    status: outcome.status || 'verification_pending',
+  });
+}
+
+function verificationOutcome(plan, pair, targetAttestation, options) {
+  const harness = plan.harnesses.find((item) => item.id === pair.harness);
+  const activation = typeof options.activationReceipt === 'function'
+    ? options.activationReceipt({ harness, pair }) : null;
+  if (activation?.active === false || activation?.status === 'activation_pending') {
+    return { status: 'activation_pending', verificationTier: 'activation-receipt', discovery: { activationDependency: activation.dependency || 'harness_activation' } };
+  }
+  const observed = typeof options.freshDiscovery === 'function'
+    ? options.freshDiscovery({ harness, pair, desiredSetDigest: pair.desiredSetDigest }) : null;
+  if (!observed || observed.fresh !== true) return { status: 'verification_pending', verificationTier: 'receipt-owned' };
+  const observedSetDigest = observedTupleDigest(observed.tuples);
+  if (!observedSetDigest || observedSetDigest !== pair.desiredSetDigest) {
+    return { status: 'verification_failed', verificationTier: 'native-discovery', discovery: { fresh: true, source: observed.source || 'native' } };
+  }
+  const shadows = resolveShadowPaths({ harness, adapter: harness.adapter, effectiveName: pair.effectiveName });
+  const proof = verifyHarnessBundle({ adapter: harness.adapter, targetPath: pair.target, expectedName: pair.effectiveName,
+    expectedTreeDigest: pair.source.treeDigest, allowlist: pair.allowlist, shadowPaths: shadows.paths, shadowPathsComplete: shadows.complete });
+  if (proof.status !== 'model_visible') return { status: 'verification_failed', verificationTier: proof.tier, discovery: { fresh: true, source: observed.source || 'native', reason: proof.reason } };
+  return { status: 'model_visible', verificationTier: proof.tier, observedSetDigest, discovery: { fresh: true, source: observed.source || 'native', observedAt: observed.observedAt || null } };
+}
+
 function applyCatalogReconciliation(plan, options = {}) {
   if (!plan || !Array.isArray(plan.pairs)) {
     throw new Error('catalog reconciliation plan is required');
@@ -795,7 +1015,7 @@ function applyCatalogReconciliation(plan, options = {}) {
   };
 
   const hasActionablePairs = plan.pairs.some((pair) => (
-    pair.action === 'install' || pair.action === 'retire' || pair.action === 'adopt'
+    pair.action === 'install' || pair.action === 'retire' || pair.action === 'adopt' || pair.action === 'refresh'
   ));
   if (!aliasCommit.changed && !hasActionablePairs) {
     return {
@@ -832,6 +1052,16 @@ function applyCatalogReconciliation(plan, options = {}) {
         continue;
       }
 
+      // The root is a security boundary, not a convenient parent directory.
+      // Re-attest just before every mutation/adoption/retirement.
+      const targetAttestation = assertLivePairRoot(plan, pair);
+
+      if (pair.action === 'refresh' && pair.status === 'verification_stale') {
+        writeVerificationReceipt(pair, targetAttestation, io, verificationOutcome(plan, pair, targetAttestation, options));
+        applied.push({ id: pair.id, harness: pair.harness, effectiveName: pair.effectiveName, status: 'verification_stale', applied: true, reason: 'receipt_refreshed' });
+        continue;
+      }
+
       if (pair.action === 'adopt' && pair.status === 'unmanaged_exact') {
         // Ownership evidence only — never rewrite matching bytes.
         let observed;
@@ -859,18 +1089,7 @@ function applyCatalogReconciliation(plan, options = {}) {
           });
           continue;
         }
-        io.writeReceipt(path.dirname(pair.target), {
-          version: 1,
-          id: pair.id,
-          effectiveName: pair.effectiveName,
-          harness: pair.harness,
-          treeDigest: pair.treeDigest,
-          catalogDigest: plan.catalogDigest,
-          aliasRevision,
-          targetPath: pair.target,
-          inventoryGenerationId: pair.inventoryGenerationId || plan.inventoryGenerationId || null,
-          sourceIdentity: pair.sourceIdentity || null,
-        });
+        writeVerificationReceipt(pair, targetAttestation, io, verificationOutcome(plan, pair, targetAttestation, options));
         applied.push({
           id: pair.id,
           harness: pair.harness,
@@ -931,7 +1150,7 @@ function applyCatalogReconciliation(plan, options = {}) {
         const retirement = { target: pair.target, backup, receipt: liveReceipt };
         // Record the rollback pointer before moving the only managed copy.
         writeJournal(plan.journalFile, {
-          version: 1,
+          version: RECEIPT_VERSION,
           phase: 'applying',
           catalogDigest: plan.catalogDigest,
           aliasRevision,
@@ -1001,19 +1220,8 @@ function applyCatalogReconciliation(plan, options = {}) {
 
       const staged = stageBundleCopy(freshSource, pair.target);
       try {
-        io.writeReceipt(path.dirname(pair.target), {
-          version: 1,
-          id: pair.id,
-          effectiveName: pair.effectiveName,
-          harness: pair.harness,
-          treeDigest: freshSource.treeDigest,
-          catalogDigest: plan.catalogDigest,
-          aliasRevision,
-          targetPath: pair.target,
-          verificationTier: options.verificationTier || 'receipt-owned',
-          inventoryGenerationId: pair.inventoryGenerationId || plan.inventoryGenerationId || null,
-          sourceIdentity: pair.sourceIdentity || null,
-        });
+        pair.source.treeDigest = freshSource.treeDigest;
+        writeVerificationReceipt(pair, targetAttestation, io, verificationOutcome(plan, pair, targetAttestation, options));
       } catch (error) {
         // A receipt is the ownership boundary. Roll back the replacement when
         // it cannot be committed, preserving the prior target for retry.

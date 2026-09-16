@@ -31,6 +31,7 @@ const { readReceipt } = require('./receipts');
 const { verifyHarnessBundle, resolveShadowPaths } = require('./harness-verification');
 const { planSchedulerUnits } = require('./scheduler');
 const { reconcileAttention, redactedAttention } = require('./attention');
+const decisionStore = require('./decision-store');
 const {
   inventoryOperator,
   registerAdapterRootsOperator,
@@ -540,14 +541,20 @@ function autonomousRepairOperator(options = {}) {
   if (loaded.config.inventory.enabled !== true) {
     return { ok: true, ran: false, reason: 'inventory_disabled', mutationDenied: true };
   }
+  const decisionPath = path.join(path.dirname(loaded.resolved.inventory.attentionPath), 'owner-decisions.json');
+  const ownerApprovedSkills = decisionStore.approvedShareMap({ statePath: decisionPath });
   const assessed = inventoryOperator({
     configPath: options.configPath,
     persist: true,
     assess: true,
     autoAdmit: true,
+    ownerApprovedSkills,
     saveConfig: true,
     observedAt: options.observedAt,
-    includeDocument: false,
+    // Owner decisions need real logical ids, which only the private assessed
+    // document carries. It stays in-process; this result returns only the
+    // redacted outward status.
+    includeDocument: true,
   });
   if (assessed.complete !== true || assessed.overflowed === true || assessed.partial === true) {
     return {
@@ -565,12 +572,26 @@ function autonomousRepairOperator(options = {}) {
     && current.config.acceptedAliasRevision === planned.aliasRevision
     ? _repairOperator({ configPath: options.configPath })
     : _applyOperator({ configPath: options.configPath });
+  // Persist owner-actionable observations independently of notification
+  // delivery. A transport failure must never erase the decision or let a
+  // later repair mutate the held skill implicitly.
+  // Read the legacy file before maintaining it with the v1 compatibility
+  // writer; otherwise a first v2 run would erase the historic active set
+  // before it could be migrated.
   const attention = reconcileAttention({
     attentionPath: current.resolved.inventory.attentionPath,
     status: assessed.status,
     observedAt: assessed.status?.observedAt,
     deliver: options.deliver || null,
   });
+  const decisions = decisionStore.reconcileDecisionsWithMigration({
+    statePath: decisionPath,
+    attentionPath: current.resolved.inventory.attentionPath,
+    skills: assessed.document?.skills || [],
+    observedAt: assessed.status?.observedAt,
+    generationId: assessed.generationId,
+  });
+  const migration = decisions.migration;
   return {
     ok: reconciliation.ok,
     ran: true,
@@ -579,8 +600,58 @@ function autonomousRepairOperator(options = {}) {
     status: assessed.status,
     reconciliation: reconciliation.repaired === false ? { repaired: false } : { repaired: true, applied: reconciliation.applied || [] },
     attention,
+    decisions: {
+      created: decisions.created.length,
+      pending: decisions.pending.length,
+      items: decisions.created,
+      // Kept inside the local result so the scheduled sender can claim an
+      // outbox attempt for an older pending decision after its cooldown. The
+      // CLI envelope never forwards this list unless a single item is being
+      // rendered through the redacted notification contract.
+      pendingItems: decisions.pending,
+      migration: migration.summary
+        ? { migrated: migration.migrated, replay: migration.replay, reference: migration.summary.reference, pendingCount: migration.summary.pendingCount, migratedCount: migration.summary.migratedCount }
+        : null,
+    },
   };
 }
+
+function decisionStatePath(options = {}) {
+  const loaded = loadConfig(options.configPath);
+  return path.join(path.dirname(loaded.resolved.inventory.attentionPath), 'owner-decisions.json');
+}
+
+function decisionPrincipal(options = {}) {
+  // Callers must inject the host-bound principal.  A library default here
+  // would turn every direct import into an owner session.
+  return options.principal || null;
+}
+
+function decisionsOperator(options = {}) {
+  return decisionStore.listDecisions({ statePath: decisionStatePath(options), principal: decisionPrincipal(options) });
+}
+
+function explainDecisionOperator(options = {}) {
+  return decisionStore.explainDecision({ statePath: decisionStatePath(options), principal: decisionPrincipal(options), decisionId: options.decisionId, decisionReference: options.decisionReference });
+}
+
+function resolveDecisionOperator(options = {}) {
+  return decisionStore.resolveDecision({
+    statePath: decisionStatePath(options), principal: decisionPrincipal(options), decisionId: options.decisionId, decisionReference: options.decisionReference,
+    revision: options.revision, option: options.option, currentSkill: options.currentSkill, mutate: options.mutate,
+  });
+}
+
+function decisionReminderOperator(update) {
+  return (options = {}) => update({
+    statePath: decisionStatePath(options), principal: decisionPrincipal(options), decisionId: options.decisionId,
+    decisionReference: options.decisionReference, until: options.until, now: options.now,
+  });
+}
+
+const acknowledgeDecisionOperator = decisionReminderOperator(decisionStore.acknowledgeDecision);
+const deferDecisionOperator = decisionReminderOperator(decisionStore.deferDecision);
+const resumeDecisionOperator = decisionReminderOperator(decisionStore.resumeDecision);
 
 function schedulerOperator(options = {}) {
   const loaded = loadConfig(options.configPath);
@@ -646,44 +717,10 @@ function withMutationLease(configPath, operation, fn, rootOverride = null) {
       ? path.resolve(expandHome(initRoot))
       : loadConfig(configPath).resolved.controlRoot;
   ensureDir(root, 'control root');
-  const lease = path.join(root, '.shared-skill-cli.lock');
-  const staleAfterMs = 6 * 60 * 60 * 1000;
-  const malformedGraceMs = 60 * 1000;
-  const tryAcquire = () => {
-    try {
-      const fd = fs.openSync(lease, 'wx', 0o600);
-      fs.writeFileSync(fd, JSON.stringify({ pid: process.pid, operation, startedAt: new Date().toISOString() }));
-      return fd;
-    } catch (error) {
-      if (error.code !== 'EEXIST') throw error;
-      return null;
-    }
-  };
-  let fd = tryAcquire();
-  if (fd === null) {
-    let stale = false;
-    try {
-      const prior = JSON.parse(fs.readFileSync(lease, 'utf8'));
-      const startedAt = Date.parse(prior.startedAt);
-      const tooOld = Number.isFinite(startedAt) && Date.now() - startedAt > staleAfterMs;
-      let alive = typeof prior.pid === 'number' && prior.pid > 0;
-      if (alive) {
-        try { process.kill(prior.pid, 0); } catch { alive = false; }
-      }
-      stale = tooOld || !alive;
-    } catch {
-      try {
-        stale = Date.now() - fs.statSync(lease).mtimeMs > malformedGraceMs;
-      } catch {
-        stale = true;
-      }
-    }
-    if (!stale) throw new Error(`shared skill ${operation} is already running`);
-    fs.unlinkSync(lease);
-    fd = tryAcquire();
-    if (fd === null) throw new Error(`shared skill ${operation} is already running`);
-  }
-  try { return fn(); } finally { fs.closeSync(fd); try { fs.unlinkSync(lease); } catch (_) {} }
+  // Same lease primitive as the decision ledger; the CLI lease fails fast.
+  return decisionStore.withFileLease(path.join(root, '.shared-skill-cli.lock'), {
+    operation, busyMessage: `shared skill ${operation} is already running`,
+  }, fn);
 }
 
 const _applyOperator = applyOperator;
@@ -897,7 +934,7 @@ function excludeSkillOperator(options = {}) {
       schemaVersion: EXCLUSION_SCHEMA_VERSION,
       entries,
     }, exclusionPath);
-    const retired = retireGeneratedSkill(loaded, logicalId, record.excludedAt);
+    const retired = retireGeneratedSkill(loaded, logicalId, record.excludedAt, reasonCode);
     return {
       ok: true,
       mode: 'exclude',
@@ -909,7 +946,7 @@ function excludeSkillOperator(options = {}) {
   });
 }
 
-function retireGeneratedSkill(loaded, logicalId, retiredAt) {
+function retireGeneratedSkill(loaded, logicalId, retiredAt, reasonCode = 'owner_excluded') {
   const { readAcceptedGeneration } = require('./source-store');
   const acceptedPath = loaded.resolved.inventory.acceptedGenerationPath;
   const accepted = readAcceptedGeneration(acceptedPath);
@@ -931,7 +968,7 @@ function retireGeneratedSkill(loaded, logicalId, retiredAt) {
     absences: Object.fromEntries(Object.entries(accepted.absences || {}).filter(([id]) => id !== logicalId)),
     tombstones: [
       ...(accepted.tombstones || []).filter((item) => item.logicalId !== logicalId),
-      { logicalId, retiredAt, reasonCode: 'owner_excluded' },
+      { logicalId, retiredAt, reasonCode },
     ],
   };
   const overlay = readJson(loaded.resolved.localOverlayPath, { schemaVersion: OVERLAY_SCHEMA_VERSION, entries: [] });
@@ -1081,4 +1118,11 @@ module.exports = {
   excludeSkillOperator,
   includeSkillOperator,
   claudeProofOperator,
+  decisionsOperator,
+  decisionStatePath,
+  explainDecisionOperator,
+  resolveDecisionOperator,
+  acknowledgeDecisionOperator,
+  deferDecisionOperator,
+  resumeDecisionOperator,
 };
