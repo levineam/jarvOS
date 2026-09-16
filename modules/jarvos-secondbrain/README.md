@@ -30,6 +30,10 @@ A `human` declaration without `{capture_event_id, actor: "user", source_digest, 
 
 Private host writers (for example a local article-generator) should pass the same keys through the note-journal contract shim. Vault body text is not rewritten by origin repair.
 
+Journal bullets declare through an adjacent hidden marker bound to the digest of the clean bullet text; a bullet that is only a note wikilink is declared by the linked note instead. An **unmarked** material bullet is read as an unmarked manual entry — that is, as Andrew's own typing — so programmatic journal writers must declare rather than omit.
+
+The declared set of canonical writers and vault transforms lives in `bridge/provenance/src/content-origin-writers.js` and is enforced by `tests/content-origin-writer-conformance.test.js`: a newly added writer that never declares how it emits the contract fails the suite. For vault coverage reporting and the apply-gated repair path, see `docs/operations/content-origin-audit.md`.
+
 ## Layout
 
 ```text

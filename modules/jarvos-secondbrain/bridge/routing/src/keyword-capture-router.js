@@ -50,6 +50,7 @@ const {
   ideaJournalLine,
   inferTitle,
   isSubstantiveIdea,
+  journalContentOriginForPlan,
 } = require('../../../packages/jarvos-ambient/src/routing');
 const { createArtifactReceipt } = require('../../../src/artifact-receipt');
 const { prepareIdentifiedCapture, projectNoteTitle } = require('../../../packages/jarvos-ambient/src/intent/capture-identity');
@@ -100,12 +101,13 @@ function applyPlan(capture, plan, options = {}) {
     const journalLine = actualNoteTitle && plan.noteTitle
       ? plan.journalLine.replace(`[[${plan.noteTitle}]]`, () => `[[${actualNoteTitle}]]`)
       : plan.journalLine;
+    const contentOrigin = journalContentOriginForPlan({ ...plan, journalLine });
     result.journalEntry = adapter.appendLineToJournalSection({
       heading: plan.journalSection,
       line: journalLine,
       date,
       ...(intentId ? { intentId: `${intentId}:journal`, requestHash } : {}),
-      ...(plan.route === 'idea' && plan.journalOrigin ? { contentOrigin: plan.journalOrigin } : {}),
+      ...(contentOrigin ? { contentOrigin } : {}),
     });
     result.noteLink = result.journalEntry;
   } else {

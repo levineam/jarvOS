@@ -1,0 +1,654 @@
+'use strict';
+
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const crypto = require('node:crypto');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+
+const {
+  auditContentOrigin,
+  applyContentOriginBackfill,
+  classifyNoteRecord,
+  planContentOriginBackfill,
+} = require('../bridge/provenance/src/content-origin-audit');
+const { renderJournalOriginMarker } = require('../bridge/provenance/src/content-origin-contract');
+const { parseFrontmatter } = require('../packages/jarvos-secondbrain-notes/src/lib/note-schema');
+const { writeNoteFile } = require('../packages/jarvos-secondbrain-notes/src/write-to-vault');
+const { createAcknowledgedVaultMutationService } = require('./helpers/acknowledged-vault-mutation-service');
+
+const DECLARED_NOTE = [
+  '---',
+  'status: draft',
+  'type: draft',
+  'project: ""',
+  'created: 2026-09-01',
+  'updated: 2026-09-01',
+  'author: jarvis',
+  'content_origin_schema: jarvos-content-origin/v1',
+  'content_origin: assistant',
+  'content_origin_basis: assistant_generated',
+  'human_evidence_eligible: false',
+  'source_personality: claude-code',
+  '---',
+  '',
+  '# Declared Draft',
+  '',
+  'Assistant-generated body.',
+  '',
+].join('\n');
+
+const LEGACY_NOTE = [
+  '---',
+  'status: active',
+  'type: reference',
+  'project: ""',
+  'created: 2026-05-01',
+  'updated: 2026-05-01',
+  'author: andrew',
+  '---',
+  '',
+  '# Legacy Note',
+  '',
+  'A note that predates the contract.',
+  '',
+].join('\n');
+
+const UNDECLARED_NOTE = [
+  '---',
+  'status: active',
+  'type: reference',
+  'project: ""',
+  'created: 2026-05-02',
+  'updated: 2026-05-02',
+  '---',
+  '',
+  '# Undeclared Note',
+  '',
+  'No declaration and no author.',
+  '',
+].join('\n');
+
+// A note whose body does not open with its `# <title>` heading. The canonical
+// writer would insert one, which is a prose edit, not a frontmatter repair.
+const NO_HEADING_NOTE = [
+  '---',
+  'status: active',
+  'type: reference',
+  'project: ""',
+  'created: 2026-05-03',
+  'updated: 2026-05-03',
+  '---',
+  '',
+  'Straight into the body with no heading.',
+  '',
+].join('\n');
+
+// Raw remainder, exactly as the audit module computes it. Untrimmed on purpose.
+function bodyOf(markdown) {
+  const parsed = parseFrontmatter(String(markdown || ''));
+  return String(parsed?.remainder ?? markdown ?? '');
+}
+
+function makeVault({ notes = {}, journal = {} } = {}) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-content-origin-audit-'));
+  const notesDir = path.join(root, 'Notes');
+  const journalDir = path.join(root, 'Journal');
+  fs.mkdirSync(notesDir, { recursive: true });
+  fs.mkdirSync(journalDir, { recursive: true });
+  // Keys may be nested relative paths, e.g. 'Projects/Nested Note.md'.
+  const write = (dir, name, content) => {
+    const target = path.join(dir, ...name.split('/'));
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.writeFileSync(target, content, 'utf8');
+  };
+  for (const [name, content] of Object.entries(notes)) write(notesDir, name, content);
+  for (const [name, content] of Object.entries(journal)) write(journalDir, name, content);
+  return { root, notesDir, journalDir };
+}
+
+// Recursive so a nested vault is snapshotted as thoroughly as a flat one. A
+// symlink is recorded by its link text rather than followed, so the snapshot
+// itself never leaves the tree it is supposed to be proving unchanged.
+function snapshot(dir, prefix = '') {
+  return fs.readdirSync(dir, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name)).map((entry) => {
+    const absolute = path.join(dir, entry.name);
+    const label = prefix ? `${prefix}/${entry.name}` : entry.name;
+    if (entry.isSymbolicLink()) return `${label}->${fs.readlinkSync(absolute)}`;
+    if (entry.isDirectory()) return snapshot(absolute, label);
+    return `${label}:${crypto.createHash('sha256').update(fs.readFileSync(absolute)).digest('hex')}`;
+  }).join('\n');
+}
+
+function supportedNoteWriter(vault) {
+  const service = createAcknowledgedVaultMutationService(vault.root);
+  // Forwards every option apply asks for, including the metadata-only
+  // `preserveExistingBodyBytes` capability the preflight proved against.
+  return ({ title, content, frontmatter, preserveExistingBodyBytes }) => {
+    const filePath = path.join(vault.notesDir, `${title}.md`);
+    const vaultRelativePath = path.relative(vault.root, filePath).split(path.sep).join('/');
+    const context = service.createWriteContext({ vaultRelativePath, operationSource: 'test.content-origin-backfill' });
+    return writeNoteFile({ title, content, frontmatter, preserveExistingBodyBytes, ...context });
+  };
+}
+
+function withNotesEnv(vault, fn) {
+  const previous = process.env.VAULT_NOTES_DIR;
+  process.env.VAULT_NOTES_DIR = vault.notesDir;
+  try {
+    return fn();
+  } finally {
+    if (previous === undefined) delete process.env.VAULT_NOTES_DIR;
+    else process.env.VAULT_NOTES_DIR = previous;
+  }
+}
+
+test('classifies declared, legacy-author, and undeclared notes without inferring human origin', () => {
+  const declared = classifyNoteRecord({ markdown: DECLARED_NOTE, title: 'Declared Draft' });
+  assert.equal(declared.contract, 'declared_v1');
+  assert.equal(declared.content_origin, 'assistant');
+  assert.equal(declared.human_evidence_eligible, false);
+  assert.equal(declared.writer, 'personality:claude-code');
+
+  const legacy = classifyNoteRecord({ markdown: LEGACY_NOTE, title: 'Legacy Note' });
+  assert.equal(legacy.contract, 'legacy_author_only');
+  assert.equal(legacy.content_origin, 'human');
+  assert.equal(legacy.content_origin_basis, 'legacy_author');
+  // author: andrew is read-time context, never programmatic human evidence.
+  assert.equal(legacy.human_evidence_eligible, false);
+
+  const undeclared = classifyNoteRecord({ markdown: UNDECLARED_NOTE, title: 'Undeclared Note' });
+  assert.equal(undeclared.contract, 'undeclared');
+  assert.equal(undeclared.content_origin, 'unknown');
+  assert.equal(undeclared.human_evidence_eligible, false);
+});
+
+test('a stored human declaration whose receipt no longer binds the body resolves to unknown', () => {
+  const markdown = [
+    '---',
+    'status: active',
+    'type: reference',
+    'project: ""',
+    'created: 2026-05-02',
+    'updated: 2026-05-02',
+    'author: andrew',
+    'content_origin_schema: jarvos-content-origin/v1',
+    'content_origin: human',
+    'content_origin_basis: verbatim_user',
+    'human_evidence_eligible: true',
+    `content_origin_source: ${JSON.stringify({
+      capture_event_id: 'capture-stale',
+      actor: 'user',
+      source_digest: 'a'.repeat(64),
+      content_digest: 'b'.repeat(64),
+    })}`,
+    '---',
+    '',
+    '# Stale Receipt',
+    '',
+    'A later rewrite that the receipt no longer covers.',
+    '',
+  ].join('\n');
+
+  const record = classifyNoteRecord({ markdown, title: 'Stale Receipt' });
+  assert.equal(record.content_origin, 'unknown');
+  assert.equal(record.human_evidence_eligible, false);
+  assert.equal(record.degraded, true);
+});
+
+test('the audit reports counts, mutates nothing, and emits no note or journal text', () => {
+  const marker = renderJournalOriginMarker({
+    cleanText: 'an assistant-generated idea',
+    content_origin: 'assistant',
+    content_origin_basis: 'assistant_generated',
+  });
+  const vault = makeVault({
+    notes: {
+      'Declared Draft.md': DECLARED_NOTE,
+      'Legacy Note.md': LEGACY_NOTE,
+      'Undeclared Note.md': UNDECLARED_NOTE,
+    },
+    journal: {
+      '2026-09-01.md': [
+        '## 💡 Ideas',
+        '- an unmarked manual thought',
+        '- an assistant-generated idea',
+        marker,
+        '',
+      ].join('\n'),
+    },
+  });
+
+  const notesBefore = snapshot(vault.notesDir);
+  const journalBefore = snapshot(vault.journalDir);
+  const report = auditContentOrigin({ notesDir: vault.notesDir, journalDir: vault.journalDir });
+
+  assert.equal(report.read_only, true);
+  assert.equal(report.mutated, false);
+  assert.equal(report.notes.scanned, 3);
+  assert.equal(report.notes.contract.declared_v1, 1);
+  assert.equal(report.notes.contract.legacy_author_only, 1);
+  assert.equal(report.notes.contract.undeclared, 1);
+  assert.equal(report.notes.human_evidence_eligible, 0);
+  assert.equal(report.notes.byWriter['personality:claude-code'], 1);
+
+  assert.equal(report.journal.scannedDays, 1);
+  assert.equal(report.journal.entries, 2);
+  assert.equal(report.journal.marked, 1);
+  assert.equal(report.journal.unmarked, 1);
+  assert.equal(report.journal.origin.assistant, 1);
+  // No resolver is available to an audit, so nothing can be human evidence.
+  assert.equal(report.journal.human_evidence_eligible, 0);
+
+  const serialized = JSON.stringify(report);
+  assert.equal(serialized.includes('unmarked manual thought'), false);
+  assert.equal(serialized.includes('Assistant-generated body'), false);
+  assert.equal(serialized.includes('Declared Draft'), false);
+  assert.doesNotMatch(serialized, /<!--\s*jarvos-content-origin/);
+
+  assert.equal(snapshot(vault.notesDir), notesBefore);
+  assert.equal(snapshot(vault.journalDir), journalBefore);
+});
+
+test('the audit only reports paths when the operator opts in', () => {
+  const vault = makeVault({ notes: { 'Undeclared Note.md': UNDECLARED_NOTE } });
+  const quiet = auditContentOrigin({ notesDir: vault.notesDir, journalDir: vault.journalDir });
+  assert.equal('undeclaredPaths' in quiet.notes, false);
+
+  const verbose = auditContentOrigin({ notesDir: vault.notesDir, journalDir: vault.journalDir, includePaths: true });
+  assert.deepEqual(verbose.notes.undeclaredPaths, ['Undeclared Note.md']);
+});
+
+test('the audit descends into nested note and journal directories', () => {
+  // A flat scan under-reports coverage, and an under-report on a provenance
+  // audit reads as "everything is declared" when it is not.
+  const vault = makeVault({
+    notes: {
+      'Declared Draft.md': DECLARED_NOTE,
+      'Projects/Legacy Note.md': LEGACY_NOTE,
+      'Projects/Deep/Deeper/Undeclared Note.md': UNDECLARED_NOTE,
+    },
+    journal: {
+      '2026-09-01.md': ['## 💡 Ideas', '- a top-level manual thought', ''].join('\n'),
+      '2026/2026-09-02.md': ['## 💡 Ideas', '- a nested manual thought', ''].join('\n'),
+      'archive/not-a-journal-day.md': ['## 💡 Ideas', '- ignored', ''].join('\n'),
+    },
+  });
+
+  const report = auditContentOrigin({ notesDir: vault.notesDir, journalDir: vault.journalDir, includePaths: true });
+
+  assert.equal(report.notes.scanned, 3);
+  assert.equal(report.notes.nested, 2);
+  assert.equal(report.notes.contract.legacy_author_only, 1);
+  assert.equal(report.notes.contract.undeclared, 1);
+  // Normalized POSIX relative paths, and only because includePaths was set.
+  assert.deepEqual(report.notes.undeclaredPaths, [
+    'Projects/Deep/Deeper/Undeclared Note.md',
+    'Projects/Legacy Note.md',
+  ]);
+
+  // Nested journal days count; a file that is not a YYYY-MM-DD day does not.
+  assert.equal(report.journal.scannedDays, 2);
+  assert.equal(report.journal.entries, 2);
+
+  const plan = planContentOriginBackfill({ notesDir: vault.notesDir, includePaths: true });
+  assert.equal(plan.proposalCount, 2);
+  assert.equal(plan.nestedProposals, 2);
+  assert.deepEqual(plan.proposals.map((proposal) => proposal.relativePath).sort(), [
+    'Projects/Deep/Deeper/Undeclared Note.md',
+    'Projects/Legacy Note.md',
+  ]);
+});
+
+test('the audit reports nested notes but never backfills them through the flat writer', () => {
+  const vault = makeVault({ notes: { 'Projects/Legacy Note.md': LEGACY_NOTE } });
+  const plan = planContentOriginBackfill({ notesDir: vault.notesDir, includePaths: true });
+  const before = fs.readFileSync(path.join(vault.notesDir, 'Projects', 'Legacy Note.md'), 'utf8');
+
+  const applied = withNotesEnv(vault, () => applyContentOriginBackfill({
+    plan,
+    apply: true,
+    notesDir: vault.notesDir,
+    writeNote: () => { throw new Error('the flat writer must not be reached for a nested note'); },
+  }));
+
+  // The supported writer resolves <notesDir>/<title>.md, so applying here would
+  // create a second note at the root and leave the nested one undeclared.
+  assert.equal(applied.results[0].status, 'skipped');
+  assert.equal(applied.results[0].reason, 'writer_path_mismatch');
+  assert.equal(applied.mutated, false);
+  assert.equal(fs.readFileSync(path.join(vault.notesDir, 'Projects', 'Legacy Note.md'), 'utf8'), before);
+  assert.equal(fs.existsSync(path.join(vault.notesDir, 'Legacy Note.md')), false);
+});
+
+test('the audit does not follow symlinked directories or notes', () => {
+  const vault = makeVault({ notes: { 'Declared Draft.md': DECLARED_NOTE } });
+  const outsideDir = path.join(vault.root, 'Outside');
+  fs.mkdirSync(outsideDir, { recursive: true });
+  fs.writeFileSync(path.join(outsideDir, 'Escaped Note.md'), UNDECLARED_NOTE, 'utf8');
+  fs.symlinkSync(outsideDir, path.join(vault.notesDir, 'Linked Dir'));
+  fs.symlinkSync(path.join(outsideDir, 'Escaped Note.md'), path.join(vault.notesDir, 'Linked Note.md'));
+
+  const report = auditContentOrigin({ notesDir: vault.notesDir, journalDir: vault.journalDir, includePaths: true });
+
+  // Only the one real note in the vault.
+  assert.equal(report.notes.scanned, 1);
+  assert.deepEqual(report.notes.undeclaredPaths, []);
+
+  const plan = planContentOriginBackfill({ notesDir: vault.notesDir, includePaths: true });
+  assert.equal(plan.proposalCount, 0);
+});
+
+test('backfill proposals are always unknown and never derived from author or personality', () => {
+  const vault = makeVault({
+    notes: {
+      'Declared Draft.md': DECLARED_NOTE,
+      'Legacy Note.md': LEGACY_NOTE,
+      'Undeclared Note.md': UNDECLARED_NOTE,
+    },
+  });
+
+  const plan = planContentOriginBackfill({ notesDir: vault.notesDir, includePaths: true });
+  assert.equal(plan.proposalCount, 2);
+  assert.deepEqual(plan.proposals.map((proposal) => proposal.relativePath).sort(), ['Legacy Note.md', 'Undeclared Note.md']);
+  for (const proposal of plan.proposals) {
+    assert.deepEqual(proposal.next, {
+      content_origin_schema: 'jarvos-content-origin/v1',
+      content_origin: 'unknown',
+      content_origin_basis: 'unknown',
+      human_evidence_eligible: false,
+    });
+    assert.match(proposal.sourceDigest, /^[a-f0-9]{64}$/);
+  }
+});
+
+test('backfill planning withholds paths unless the operator asks for them', () => {
+  const vault = makeVault({ notes: { 'Legacy Note.md': LEGACY_NOTE } });
+
+  const quiet = planContentOriginBackfill({ notesDir: vault.notesDir });
+  assert.equal(quiet.pathsIncluded, false);
+  assert.equal(quiet.proposalCount, 1);
+  assert.equal('relativePath' in quiet.proposals[0], false);
+  assert.equal('title' in quiet.proposals[0], false);
+  assert.equal('notesDir' in quiet, false);
+  // Counts and digests are content-free and stay.
+  assert.match(quiet.proposals[0].sourceDigest, /^[a-f0-9]{64}$/);
+
+  const verbose = planContentOriginBackfill({ notesDir: vault.notesDir, includePaths: true });
+  assert.equal(verbose.pathsIncluded, true);
+  assert.equal(verbose.proposals[0].relativePath, 'Legacy Note.md');
+});
+
+test('backfill without an explicit apply writes nothing at all', () => {
+  const vault = makeVault({ notes: { 'Legacy Note.md': LEGACY_NOTE } });
+  const before = snapshot(vault.notesDir);
+  const plan = planContentOriginBackfill({ notesDir: vault.notesDir });
+
+  const dryRun = applyContentOriginBackfill({ plan });
+  assert.equal(dryRun.mode, 'dry-run');
+  assert.equal(dryRun.applied, false);
+  assert.equal(dryRun.mutated, false);
+  assert.equal(dryRun.proposalCount, 1);
+  assert.equal(snapshot(vault.notesDir), before);
+
+  assert.throws(
+    () => applyContentOriginBackfill({ plan, apply: true }),
+    /supported note writer/,
+  );
+  assert.equal(snapshot(vault.notesDir), before);
+});
+
+test('an applied backfill declares unknown through the supported writer and preserves the body bytes', () => {
+  const vault = makeVault({ notes: { 'Legacy Note.md': LEGACY_NOTE } });
+  const plan = planContentOriginBackfill({ notesDir: vault.notesDir, includePaths: true });
+  const bodyBefore = bodyOf(fs.readFileSync(path.join(vault.notesDir, 'Legacy Note.md'), 'utf8'));
+
+  const applied = withNotesEnv(vault, () => applyContentOriginBackfill({
+    plan,
+    apply: true,
+    notesDir: vault.notesDir,
+    writeNote: supportedNoteWriter(vault),
+  }));
+
+  assert.equal(applied.mode, 'apply');
+  assert.equal(applied.aborted, false);
+  assert.equal(applied.results.length, 1);
+  assert.equal(applied.results[0].status, 'applied');
+  assert.equal(applied.results[0].bodyPreserved, true);
+  assert.equal(applied.results[0].bodyBytesIdentical, true);
+
+  const after = fs.readFileSync(path.join(vault.notesDir, 'Legacy Note.md'), 'utf8');
+  assert.match(after, /content_origin_schema: jarvos-content-origin\/v1/);
+  assert.match(after, /content_origin: unknown/);
+  assert.match(after, /human_evidence_eligible: false/);
+  assert.match(after, /author: andrew/);
+  assert.match(after, /A note that predates the contract\./);
+  // Not "equivalent after trimming": the same bytes.
+  assert.equal(bodyOf(after), bodyBefore);
+
+  const audited = auditContentOrigin({ notesDir: vault.notesDir, journalDir: vault.journalDir });
+  assert.equal(audited.notes.contract.declared_v1, 1);
+  assert.equal(audited.notes.contract.legacy_author_only, 0);
+  assert.equal(audited.notes.human_evidence_eligible, 0);
+});
+
+test('a dry run reports per-proposal eligibility without opening anything for writing', () => {
+  const vault = makeVault({ notes: { 'Legacy Note.md': LEGACY_NOTE, 'No Heading.md': NO_HEADING_NOTE } });
+  const before = snapshot(vault.notesDir);
+  const plan = planContentOriginBackfill({ notesDir: vault.notesDir, includePaths: true });
+
+  const dryRun = withNotesEnv(vault, () => applyContentOriginBackfill({ plan, notesDir: vault.notesDir }));
+
+  assert.equal(dryRun.mode, 'dry-run');
+  assert.equal(dryRun.mutated, false);
+  assert.equal(dryRun.eligibleCount, 1);
+  const byPath = Object.fromEntries(dryRun.results.map((result) => [result.relativePath, result]));
+  assert.equal(byPath['Legacy Note.md'].status, 'eligible');
+  // The canonical writer would insert a `# <title>` heading, so the body bytes
+  // cannot be preserved and the note is refused rather than rewritten.
+  assert.equal(byPath['No Heading.md'].status, 'skipped');
+  assert.equal(byPath['No Heading.md'].reason, 'body_bytes_would_change');
+  assert.equal(snapshot(vault.notesDir), before);
+});
+
+test('apply refuses a plan whose paths were withheld rather than guessing them', () => {
+  const vault = makeVault({ notes: { 'Legacy Note.md': LEGACY_NOTE } });
+  const before = snapshot(vault.notesDir);
+  const plan = planContentOriginBackfill({ notesDir: vault.notesDir });
+
+  const applied = withNotesEnv(vault, () => applyContentOriginBackfill({
+    plan,
+    apply: true,
+    notesDir: vault.notesDir,
+    writeNote: supportedNoteWriter(vault),
+  }));
+
+  assert.equal(applied.mutated, false);
+  assert.equal(applied.results[0].status, 'skipped');
+  assert.equal(applied.results[0].reason, 'plan_paths_withheld');
+  assert.equal(snapshot(vault.notesDir), before);
+});
+
+test('apply rejects escaped, absolute, and symlinked proposal paths before touching anything', () => {
+  const vault = makeVault({ notes: { 'Legacy Note.md': LEGACY_NOTE } });
+  const outside = path.join(vault.root, 'Outside.md');
+  fs.writeFileSync(outside, LEGACY_NOTE, 'utf8');
+  fs.symlinkSync(outside, path.join(vault.notesDir, 'Linked Note.md'));
+  const notesBefore = snapshot(vault.notesDir);
+  const outsideBefore = fs.readFileSync(outside, 'utf8');
+
+  const digest = crypto.createHash('sha256').update(LEGACY_NOTE, 'utf8').digest('hex');
+  const proposal = (relativePath) => ({
+    relativePath,
+    title: 'Legacy Note',
+    sourceDigest: digest,
+    next: {
+      content_origin_schema: 'jarvos-content-origin/v1',
+      content_origin: 'unknown',
+      content_origin_basis: 'unknown',
+      human_evidence_eligible: false,
+    },
+  });
+
+  const hostile = {
+    proposals: [
+      proposal('../Outside.md'),
+      proposal('Projects/../../Outside.md'),
+      proposal(outside),
+      proposal('/etc/passwd.md'),
+      proposal('..\\Outside.md'),
+      proposal('Linked Note.md'),
+    ],
+  };
+
+  const applied = withNotesEnv(vault, () => applyContentOriginBackfill({
+    plan: hostile,
+    apply: true,
+    notesDir: vault.notesDir,
+    writeNote: () => { throw new Error('the writer must never be reached for an unsafe path'); },
+  }));
+
+  assert.equal(applied.mutated, false);
+  assert.deepEqual(applied.results.map((result) => result.status), Array(6).fill('skipped'));
+  assert.deepEqual(applied.results.map((result) => result.reason), [
+    'path_escape',
+    'path_escape',
+    'path_absolute',
+    'path_absolute',
+    'path_escape',
+    'symlink',
+  ]);
+  assert.equal(snapshot(vault.notesDir), notesBefore);
+  assert.equal(fs.readFileSync(outside, 'utf8'), outsideBefore);
+});
+
+test('apply refuses a stale or tampered proposal instead of writing a declaration from bytes that moved', () => {
+  const vault = makeVault({ notes: { 'Legacy Note.md': LEGACY_NOTE } });
+  const plan = planContentOriginBackfill({ notesDir: vault.notesDir, includePaths: true });
+
+  // The note changes after the plan was produced.
+  fs.writeFileSync(path.join(vault.notesDir, 'Legacy Note.md'), LEGACY_NOTE.replace('predates', 'still predates'), 'utf8');
+  const before = snapshot(vault.notesDir);
+
+  const stale = withNotesEnv(vault, () => applyContentOriginBackfill({
+    plan,
+    apply: true,
+    notesDir: vault.notesDir,
+    writeNote: () => { throw new Error('a stale proposal must never reach the writer'); },
+  }));
+  assert.equal(stale.results[0].status, 'skipped');
+  assert.equal(stale.results[0].reason, 'stale_proposal');
+  assert.equal(snapshot(vault.notesDir), before);
+
+  // A proposal with no digest at all is unverifiable, not implicitly fresh.
+  const unverifiable = { proposals: [{ relativePath: 'Legacy Note.md', title: 'Legacy Note' }] };
+  const result = withNotesEnv(vault, () => applyContentOriginBackfill({
+    plan: unverifiable,
+    apply: true,
+    notesDir: vault.notesDir,
+    writeNote: () => { throw new Error('an unverifiable proposal must never reach the writer'); },
+  }));
+  assert.equal(result.results[0].reason, 'proposal_unverifiable');
+  assert.equal(snapshot(vault.notesDir), before);
+});
+
+test('apply never smuggles a caller-supplied origin through the proposal', () => {
+  const vault = makeVault({ notes: { 'Legacy Note.md': LEGACY_NOTE } });
+  const plan = planContentOriginBackfill({ notesDir: vault.notesDir, includePaths: true });
+  plan.proposals[0].next = {
+    content_origin_schema: 'jarvos-content-origin/v1',
+    content_origin: 'human',
+    content_origin_basis: 'verbatim_user',
+    human_evidence_eligible: true,
+  };
+
+  const seen = [];
+  withNotesEnv(vault, () => applyContentOriginBackfill({
+    plan,
+    apply: true,
+    notesDir: vault.notesDir,
+    writeNote: (args) => {
+      seen.push(args.frontmatter);
+      return supportedNoteWriter(vault)(args);
+    },
+  }));
+
+  assert.deepEqual(seen, [{
+    content_origin_schema: 'jarvos-content-origin/v1',
+    content_origin: 'unknown',
+    content_origin_basis: 'unknown',
+    human_evidence_eligible: false,
+  }]);
+  const after = fs.readFileSync(path.join(vault.notesDir, 'Legacy Note.md'), 'utf8');
+  assert.match(after, /content_origin: unknown/);
+  assert.doesNotMatch(after, /content_origin: human/);
+});
+
+test('a writer that changes the body stops the run and hands the pre-image to recovery', () => {
+  const vault = makeVault({
+    notes: { 'Legacy Note.md': LEGACY_NOTE, 'Undeclared Note.md': UNDECLARED_NOTE },
+  });
+  const plan = planContentOriginBackfill({ notesDir: vault.notesDir, includePaths: true });
+  // Deterministic order so the misbehaving write happens first.
+  plan.proposals.sort((a, b) => a.relativePath.localeCompare(b.relativePath));
+  const legacyPath = path.join(vault.notesDir, 'Legacy Note.md');
+  const before = fs.readFileSync(legacyPath, 'utf8');
+  const undeclaredBefore = fs.readFileSync(path.join(vault.notesDir, 'Undeclared Note.md'), 'utf8');
+
+  const restores = [];
+  const applied = withNotesEnv(vault, () => applyContentOriginBackfill({
+    plan,
+    apply: true,
+    notesDir: vault.notesDir,
+    // An unsupported writer that rewrites prose behind the contract's back.
+    writeNote: ({ title }) => {
+      fs.writeFileSync(path.join(vault.notesDir, `${title}.md`), `${before}\nAn extra paragraph.\n`, 'utf8');
+      return { receipt: { status: 'committed' } };
+    },
+    restoreNote: ({ absolutePath, content, expectedHash }) => {
+      restores.push({ absolutePath, expectedHash });
+      fs.writeFileSync(absolutePath, content, 'utf8');
+      return { status: 'committed' };
+    },
+  }));
+
+  assert.equal(applied.aborted, true);
+  assert.equal(applied.applied, false);
+  assert.equal(applied.results[0].status, 'failed');
+  assert.equal(applied.results[0].reason, 'body_changed_after_write');
+  assert.equal(applied.results[0].rollbackAvailable, true);
+  assert.equal(applied.results[0].rolledBack, true);
+  assert.equal(restores.length, 1);
+  // The damaged note is back to its exact pre-edit bytes...
+  assert.equal(fs.readFileSync(legacyPath, 'utf8'), before);
+  // ...and the run did not go on to the next note.
+  assert.equal(applied.results[1].status, 'skipped');
+  assert.equal(applied.results[1].reason, 'aborted_after_integrity_violation');
+  assert.equal(fs.readFileSync(path.join(vault.notesDir, 'Undeclared Note.md'), 'utf8'), undeclaredBefore);
+});
+
+test('a body-changing writer with no recovery seam is reported, not quietly accepted', () => {
+  const vault = makeVault({ notes: { 'Legacy Note.md': LEGACY_NOTE } });
+  const plan = planContentOriginBackfill({ notesDir: vault.notesDir, includePaths: true });
+  const legacyPath = path.join(vault.notesDir, 'Legacy Note.md');
+  const before = fs.readFileSync(legacyPath, 'utf8');
+
+  const applied = withNotesEnv(vault, () => applyContentOriginBackfill({
+    plan,
+    apply: true,
+    notesDir: vault.notesDir,
+    writeNote: ({ title }) => {
+      fs.writeFileSync(path.join(vault.notesDir, `${title}.md`), `${before}\nAn extra paragraph.\n`, 'utf8');
+      return { receipt: { status: 'committed' } };
+    },
+  }));
+
+  assert.equal(applied.applied, false);
+  assert.equal(applied.mutated, true);
+  assert.equal(applied.aborted, true);
+  assert.equal(applied.results[0].status, 'failed');
+  assert.equal(applied.results[0].reason, 'body_changed_after_write');
+  assert.equal(applied.results[0].rollbackAvailable, false);
+  assert.equal(applied.results[0].rolledBack, false);
+});

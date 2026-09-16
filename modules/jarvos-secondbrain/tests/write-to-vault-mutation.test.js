@@ -466,6 +466,174 @@ test('write contexts do not reserve empty FIFO slots before full submission', ()
   });
 });
 
+const crypto = require('node:crypto');
+const {
+  NOTE_BODY_PRESERVATION_REFUSED,
+} = require('../packages/jarvos-secondbrain-notes/src/write-to-vault');
+const { frontmatterToObject, parseFrontmatter } = require('../packages/jarvos-secondbrain-notes/src/lib/note-schema');
+
+// A stored note that predates the contract. The trailing blank line is the
+// point: the raw remainder is what has to survive, not a trimmed likeness.
+const STORED_LEGACY_NOTE = [
+  '---',
+  'status: active',
+  'type: reference',
+  'project: ""',
+  'created: 2026-05-01',
+  'updated: 2026-05-01',
+  'author: andrew',
+  '---',
+  '',
+  '# Stored Legacy',
+  '',
+  'Prose that predates the contract.',
+  '',
+  '',
+].join('\n');
+
+// The same note once it already carries the unknown declaration.
+const STORED_DECLARED_NOTE = [
+  '---',
+  'status: active',
+  'type: reference',
+  'project: ""',
+  'created: 2026-05-01',
+  'updated: 2026-05-01',
+  'author: andrew',
+  'content_origin_schema: jarvos-content-origin/v1',
+  'content_origin: unknown',
+  'content_origin_basis: unknown',
+  'human_evidence_eligible: false',
+  '---',
+  '',
+  '# Stored Legacy',
+  '',
+  'Prose that predates the contract.',
+  '',
+  '',
+].join('\n');
+
+// Raw, untrimmed remainder, exactly as the audit and the writer compute it.
+function remainderOf(markdown) {
+  const parsed = parseFrontmatter(String(markdown || ''));
+  return String(parsed?.remainder ?? markdown ?? '');
+}
+
+function sha256Utf8(value) {
+  return crypto.createHash('sha256').update(String(value), 'utf8').digest('hex');
+}
+
+// A metadata-only provenance repair: the caller's content is the stored body.
+function repairOptions(existingContent = STORED_LEGACY_NOTE) {
+  return {
+    operationId: 'note-provenance-repair-0001',
+    vaultId: 'vault-provenance-repair',
+    vaultRelativePath: 'Notes/Stored Legacy.md',
+    title: 'Stored Legacy',
+    content: remainderOf(existingContent).trim(),
+    frontmatter: {
+      content_origin_schema: 'jarvos-content-origin/v1',
+      content_origin: 'unknown',
+      content_origin_basis: 'unknown',
+      human_evidence_eligible: false,
+    },
+    existingContent,
+    existingFrontmatter: frontmatterToObject(parseFrontmatter(existingContent)),
+  };
+}
+
+test('a provenance rewrite re-renders the body by default, unchanged', () => {
+  const operation = createNoteMutationOperation(repairOptions());
+
+  assert.equal(operation.operationKind, 'replace');
+  assert.equal(operation.expectedContent, STORED_LEGACY_NOTE);
+  assert.equal(operation.expectedHash, sha256Utf8(STORED_LEGACY_NOTE));
+  assert.match(operation.content, /content_origin: unknown/);
+  // The default render puts the renderer's separator line ahead of the body and
+  // ends it with a single newline, so the raw remainder is not the stored one.
+  assert.equal(remainderOf(operation.content), `\n${remainderOf(STORED_LEGACY_NOTE).trimEnd()}\n`);
+  assert.notEqual(remainderOf(operation.content), remainderOf(STORED_LEGACY_NOTE));
+});
+
+test('the metadata-only option preserves the stored body remainder byte for byte', () => {
+  const operation = createNoteMutationOperation({ ...repairOptions(), preserveExistingBodyBytes: true });
+
+  assert.equal(operation.operationKind, 'replace');
+  // Compare-and-swap and mutation boundary semantics are untouched.
+  assert.equal(operation.expectedContent, STORED_LEGACY_NOTE);
+  assert.equal(operation.expectedHash, sha256Utf8(STORED_LEGACY_NOTE));
+  // Not "equivalent after trimming": the same bytes, trailing blank line included.
+  assert.equal(remainderOf(operation.content), remainderOf(STORED_LEGACY_NOTE));
+  assert.equal(operation.content.endsWith(remainderOf(STORED_LEGACY_NOTE)), true);
+  // Only the frontmatter block changed, and it is still canonical.
+  assert.match(operation.content, /content_origin_schema: jarvos-content-origin\/v1/);
+  assert.match(operation.content, /content_origin: unknown/);
+  assert.match(operation.content, /human_evidence_eligible: false/);
+  assert.match(operation.content, /author: andrew/);
+});
+
+test('the metadata-only option is refused rather than dropping caller prose', () => {
+  const refusalFor = (overrides) => {
+    try {
+      createNoteMutationOperation({ ...repairOptions(), preserveExistingBodyBytes: true, ...overrides });
+    } catch (error) {
+      assert.equal(error.code, NOTE_BODY_PRESERVATION_REFUSED);
+      return error.reason;
+    }
+    return 'not_refused';
+  };
+
+  assert.equal(refusalFor({ existingContent: '', existingFrontmatter: {} }), 'not_an_existing_note');
+  assert.equal(refusalFor({ appendEntry: 'a session thread line' }), 'append_entry_unsupported');
+  // Prose the stored body does not already contain would be silently discarded.
+  assert.equal(refusalFor({ content: 'Prose the stored note has never contained.' }), 'body_would_change');
+  assert.equal(refusalFor({ preserveExistingBodyBytes: 'yes' }), 'option_not_boolean');
+  // Nothing about the stored declaration changes, so there is no whole-note
+  // replacement to make byte-preserving in the first place.
+  assert.equal(refusalFor(repairOptions(STORED_DECLARED_NOTE)), 'not_a_provenance_rewrite');
+});
+
+test('the writeNoteFile path forwards the metadata-only option to the supported mutation', () => {
+  withVault(({ root }) => {
+    const notePath = path.join(root, 'Notes', 'Stored Legacy.md');
+    fs.mkdirSync(path.dirname(notePath), { recursive: true });
+    fs.writeFileSync(notePath, STORED_LEGACY_NOTE, 'utf8');
+    const submitted = [];
+
+    const write = (extra) => writeNoteFile({
+      title: 'Stored Legacy',
+      content: remainderOf(STORED_LEGACY_NOTE).trim(),
+      frontmatter: {
+        content_origin_schema: 'jarvos-content-origin/v1',
+        content_origin: 'unknown',
+        content_origin_basis: 'unknown',
+        human_evidence_eligible: false,
+      },
+      operationId: `note-provenance-repair-${submitted.length}`,
+      vaultId: 'vault-provenance-repair',
+      vaultRoot: root,
+      mutationExecutor(operation) {
+        submitted.push(operation);
+        return { status: 'committed', obsidian: 'acknowledged' };
+      },
+      ...extra,
+    });
+
+    // Default: the option is off, and the body is re-rendered as before.
+    write({});
+    assert.equal(submitted[0].operationKind, 'replace');
+    assert.notEqual(remainderOf(submitted[0].content), remainderOf(STORED_LEGACY_NOTE));
+
+    write({ preserveExistingBodyBytes: true });
+    assert.equal(submitted[1].operationKind, 'replace');
+    assert.equal(submitted[1].expectedHash, sha256Utf8(STORED_LEGACY_NOTE));
+    assert.equal(remainderOf(submitted[1].content), remainderOf(STORED_LEGACY_NOTE));
+    // The executor is the only thing that touches bytes; the stored note is
+    // untouched by the factory itself.
+    assert.equal(fs.readFileSync(notePath, 'utf8'), STORED_LEGACY_NOTE);
+  });
+});
+
 test('package note writer contains no direct Markdown write primitive', () => {
   const source = fs.readFileSync(path.join(__dirname, '..', 'packages', 'jarvos-secondbrain-notes', 'src', 'write-to-vault.js'), 'utf8');
   assert.doesNotMatch(source, /\b(?:writeFileSync|writeFile|appendFileSync|appendFile)\s*\(/);
