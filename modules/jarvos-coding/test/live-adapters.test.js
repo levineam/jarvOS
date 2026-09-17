@@ -1023,6 +1023,21 @@ test('live PR adapter revalidates a merged reattachment by number after branch d
   assert.equal(calls.length, 1);
 });
 
+test('live PR adapter rejects option injection in merge inputs', async () => {
+  const calls = [];
+  const adapter = createLivePullRequest({
+    repo: 'levineam/jarVOS',
+    run(command, args) {
+      calls.push([command, args]);
+      return { status: 0, stdout: '', stderr: '' };
+    },
+  });
+
+  await assert.rejects(() => adapter.merge({ number: '--admin' }), /positive integer pull request number/);
+  await assert.rejects(() => adapter.merge({ number: 112, mergeMethod: 'admin' }), /must be one of/);
+  assert.equal(calls.length, 0);
+});
+
 test('live tracker defers close until there is merge evidence', async () => {
   const tracker = createLivePaperclipTracker({
     prLink: {
