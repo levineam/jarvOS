@@ -16,6 +16,7 @@ const input = {
 
 function capability(overrides = {}) {
   return context.issueProjectContext({
+    input,
     authorization: { allowed: true },
     destinationSelectors: ['jarvOS-private'],
     allowedVisibilities: ['private', 'internal'],
