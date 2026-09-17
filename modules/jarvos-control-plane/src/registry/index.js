@@ -21,24 +21,34 @@ function createManagedSoftwareCatalog(input = {}) {
     if (byId.has(entry.id)) throw new Error(`duplicate managed-software entry: ${entry.id}`);
     byId.set(entry.id, entry);
   }
-  const publicEntries = entries.map((entry) => {
-    const publicEntry = clone(entry);
-    delete publicEntry.checkoutSelectors;
-    delete publicEntry.credentialRef;
-    delete publicEntry.notificationPreferenceRef;
-    delete publicEntry.approvalPrincipalRefs;
-    if (publicEntry.runtime) {
-      delete publicEntry.runtime.stagingRootSelector;
-      delete publicEntry.runtime.recoveryAuthorityRef;
-      delete publicEntry.runtime.activationPointerSelector;
-      delete publicEntry.runtime.verifierPolicyRef;
-      delete publicEntry.runtime.developmentIdentityRef;
-      delete publicEntry.runtime.developmentStateSelector;
-      delete publicEntry.runtime.developmentCredentialScopeRef;
-      delete publicEntry.runtime.developmentDestinationScopeRef;
-    }
-    return publicEntry;
-  });
+  const publicEntries = entries
+    .filter((entry) => entry.defaultVisibility === 'public')
+    .map((entry) => {
+      const publicEntry = {};
+      for (const field of [
+        'id', 'label', 'ownership', 'distribution', 'integrationBranch',
+        'executionAdapter', 'defaultVisibility', 'localChangePolicy', 'updatePolicy',
+        'releaseAuthority', 'integrationImpactPolicy', 'ignoredPathPolicy', 'versioningPolicy',
+        'releaseAdapter',
+      ]) {
+        publicEntry[field] = clone(entry[field]);
+      }
+      publicEntry.canonicalUpstream = { repository: entry.canonicalUpstream.repository };
+      publicEntry.tracker = { kind: entry.tracker.kind, repository: entry.tracker.repository };
+      publicEntry.strategyEvidence = {
+        adapter: entry.strategyEvidence.adapter,
+        authority: entry.strategyEvidence.authority,
+      };
+      publicEntry.capabilities = {
+        installedVersion: entry.capabilities.installedVersion,
+        developmentCheckout: entry.capabilities.developmentCheckout,
+        productionRuntime: entry.capabilities.productionRuntime,
+      };
+      if (entry.runtime) {
+        publicEntry.runtime = { serviceId: entry.runtime.serviceId, mode: entry.runtime.mode };
+      }
+      return publicEntry;
+    });
 
   function revise({ entryId, patch, actor, pendingApprovals = [] } = {}) {
     if (typeof entryId !== 'string' || !byId.has(entryId)) throw new Error('known entryId is required');
