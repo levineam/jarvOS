@@ -39,7 +39,12 @@ const {
   DEFAULT_ALLOWED_BUNDLE_GLOBS,
   OVERLAY_SCHEMA_VERSION,
 } = require('../src/catalog');
-const { atomicWriteReceipt } = require('../src/receipts');
+const {
+  atomicWriteReceipt,
+  readReceipt,
+  validateReceipt,
+  STATE_DIR,
+} = require('../src/receipts');
 const { reconcileDecisions } = require('../src/decision-store');
 const {
   inventoryAssessOperator,
@@ -178,6 +183,66 @@ function assessObserved(configPath, {
     autoAdmit,
   });
   return { observed, assessment, layout, configPath, control: resolved.controlRoot };
+}
+
+function singleRootDocument({ logicalId, root, bundle, treeDigest, harness = 'codex' }) {
+  return {
+    schemaVersion: INVENTORY_SCHEMA_VERSION,
+    generationId: `gen-${logicalId.replace(/[^a-z0-9]/gi, '')}0001`,
+    acceptedGenerationId: null,
+    acceptedAt: null,
+    observedAt: '2026-08-15T12:00:00.000Z',
+    roots: [{
+      rootId: `root-${harness}-0`,
+      harness,
+      root,
+      lifecycle: 'available',
+      trustClass: 'markdown-only',
+      complete: true,
+    }],
+    skills: [{
+      logicalId,
+      observedName: logicalId,
+      treeDigest,
+      observations: [{
+        rootId: `root-${harness}-0`,
+        relativePath: logicalId,
+        absolutePath: bundle,
+        state: 'unchanged',
+        observedAt: '2026-08-15T12:00:00.000Z',
+      }],
+      disposition: { kind: 'needs_input', reasonCode: 'incomplete_observation' },
+      matrix: SUPPORTED_HARNESSES.map((item) => ({
+        harness: item,
+        projection: item === harness ? 'source_present' : 'missing',
+        verification: item === harness ? 'model_visible' : 'unverifiable',
+      })),
+      attention: 'quiet',
+    }],
+    exclusions: [],
+  };
+}
+
+function assessSingleRootDocument({ configPath, document, readdirSync }) {
+  const loaded = loadConfig(configPath);
+  const resolved = resolveConfigPaths(loaded.config);
+  const layout = ensureInventoryStateLayout({
+    controlRoot: resolved.controlRoot,
+    inventory: loaded.config.inventory,
+  });
+  const harnessRoots = Object.entries(loaded.config.harnesses).map(([harness, value]) => ({
+    harness,
+    root: path.resolve(String(value.root).replace(/^~/, os.homedir())),
+  }));
+  return assessInventory({
+    document,
+    sourceStorePath: layout.sourceStorePath,
+    acceptedGenerationPath: layout.acceptedGenerationPath,
+    complete: true,
+    autoAdmit: true,
+    harnessRoots,
+    ...(readdirSync ? { readdirSync } : {}),
+  });
 }
 
 test('featuresFor detects markdown-only portable skills', () => {
@@ -640,6 +705,136 @@ test('already_managed receipt is recognized', () => {
   });
   const skill = assessed.document.skills.find((item) => item.logicalId === 'managed-skill');
   assert.equal(skill.disposition.kind, 'already_managed');
+});
+
+test('receiptOwns matches an aliased receipt by its recorded id, not its filename', () => {
+  const root = temp('jarvos-alias-managed-');
+  const bundle = writeSkill(path.join(root, 'managed-skill'), { name: 'managed-skill' });
+  const tree = computeBundleTree(bundle, { allowlist: DEFAULT_ALLOWED_BUNDLE_GLOBS });
+  const { configPath } = seedConfig({ roots: { codex: root }, trustClass: 'markdown-only' });
+  // The receipt is filed under an alias (collision-avoidance) name that
+  // differs from the skill's own logical id.
+  atomicWriteReceipt(root, {
+    version: 1,
+    id: 'managed-skill',
+    effectiveName: 'jarvos-managed-skill',
+    harness: 'codex',
+    treeDigest: tree.treeDigest,
+    catalogDigest: 'c'.repeat(64),
+    aliasRevision: 1,
+    targetPath: path.join(root, 'jarvos-managed-skill'),
+  });
+  assert.equal(readReceipt(root, 'managed-skill'), null);
+  assert.ok(readReceipt(root, 'jarvos-managed-skill'));
+
+  const document = singleRootDocument({ logicalId: 'managed-skill', root, bundle, treeDigest: tree.treeDigest });
+  const assessed = assessSingleRootDocument({ configPath, document });
+  const skill = assessed.document.skills.find((item) => item.logicalId === 'managed-skill');
+  assert.equal(skill.disposition.kind, 'already_managed');
+  assert.equal(skill.disposition.reasonCode, 'already_managed_receipt');
+  assert.equal((assessed.admissions || []).length, 0);
+});
+
+test('a symlinked receipt-shaped entry fails closed rather than being skipped', () => {
+  const root = temp('jarvos-receipt-symlink-');
+  const bundle = writeSkill(path.join(root, 'managed-skill'), { name: 'managed-skill' });
+  const tree = computeBundleTree(bundle, { allowlist: DEFAULT_ALLOWED_BUNDLE_GLOBS });
+  const { configPath } = seedConfig({ roots: { codex: root }, trustClass: 'markdown-only' });
+  const stateDir = path.join(root, STATE_DIR);
+  fs.mkdirSync(stateDir, { mode: 0o700 });
+  const target = path.join(root, 'outside-receipt.json');
+  fs.writeFileSync(target, `${JSON.stringify({
+    version: 1,
+    id: 'managed-skill',
+    effectiveName: 'managed-skill',
+    harness: 'codex',
+    treeDigest: tree.treeDigest,
+    catalogDigest: 'c'.repeat(64),
+    aliasRevision: 0,
+  })}\n`, { mode: 0o600 });
+  fs.symlinkSync(target, path.join(stateDir, 'managed-skill.json'));
+
+  const document = singleRootDocument({ logicalId: 'managed-skill', root, bundle, treeDigest: tree.treeDigest });
+  const assessed = assessSingleRootDocument({ configPath, document });
+  const skill = assessed.document.skills.find((item) => item.logicalId === 'managed-skill');
+  assert.equal(skill.disposition.kind, 'already_managed');
+  assert.equal(skill.disposition.reasonCode, 'already_managed_receipt');
+  assert.equal((assessed.admissions || []).length, 0);
+});
+
+test('a directory masquerading as a receipt fails closed rather than being skipped', () => {
+  const root = temp('jarvos-receipt-dir-');
+  const bundle = writeSkill(path.join(root, 'managed-skill'), { name: 'managed-skill' });
+  const tree = computeBundleTree(bundle, { allowlist: DEFAULT_ALLOWED_BUNDLE_GLOBS });
+  const { configPath } = seedConfig({ roots: { codex: root }, trustClass: 'markdown-only' });
+  const stateDir = path.join(root, STATE_DIR);
+  fs.mkdirSync(stateDir, { mode: 0o700 });
+  fs.mkdirSync(path.join(stateDir, 'managed-skill.json'), { mode: 0o700 });
+
+  const document = singleRootDocument({ logicalId: 'managed-skill', root, bundle, treeDigest: tree.treeDigest });
+  const assessed = assessSingleRootDocument({ configPath, document });
+  const skill = assessed.document.skills.find((item) => item.logicalId === 'managed-skill');
+  assert.equal(skill.disposition.kind, 'already_managed');
+  assert.equal(skill.disposition.reasonCode, 'already_managed_receipt');
+  assert.equal((assessed.admissions || []).length, 0);
+});
+
+test('a symlinked projection state directory fails closed rather than being enumerated', () => {
+  const root = temp('jarvos-state-symlink-');
+  const bundle = writeSkill(path.join(root, 'managed-skill'), { name: 'managed-skill' });
+  const tree = computeBundleTree(bundle, { allowlist: DEFAULT_ALLOWED_BUNDLE_GLOBS });
+  const { configPath } = seedConfig({ roots: { codex: root }, trustClass: 'markdown-only' });
+  const outside = temp('jarvos-state-outside-');
+  fs.symlinkSync(outside, path.join(root, STATE_DIR));
+
+  const document = singleRootDocument({ logicalId: 'managed-skill', root, bundle, treeDigest: tree.treeDigest });
+  const assessed = assessSingleRootDocument({ configPath, document });
+  const skill = assessed.document.skills.find((item) => item.logicalId === 'managed-skill');
+  assert.equal(skill.disposition.kind, 'already_managed');
+  assert.equal(skill.disposition.reasonCode, 'already_managed_receipt');
+  assert.equal((assessed.admissions || []).length, 0);
+});
+
+test('a projection state directory swapped to a symlinked empty directory during enumeration fails closed', () => {
+  const root = temp('jarvos-state-swap-');
+  const bundle = writeSkill(path.join(root, 'managed-skill'), { name: 'managed-skill' });
+  const tree = computeBundleTree(bundle, { allowlist: DEFAULT_ALLOWED_BUNDLE_GLOBS });
+  const { configPath } = seedConfig({ roots: { codex: root }, trustClass: 'markdown-only' });
+  atomicWriteReceipt(root, {
+    version: 1,
+    id: 'managed-skill',
+    effectiveName: 'managed-skill',
+    harness: 'codex',
+    treeDigest: tree.treeDigest,
+    catalogDigest: 'c'.repeat(64),
+    aliasRevision: 0,
+    targetPath: bundle,
+  });
+  const stateDir = path.join(root, STATE_DIR);
+  const emptyReplacement = temp('jarvos-state-swap-empty-');
+
+  // Injected at the exact seam the implementation uses to enumerate receipt
+  // state (readdirSync), this deterministically reproduces the reported
+  // TOCTOU: the directory is replaced with a symlink to an empty directory
+  // in the window between the safety check and the actual listing, which
+  // would otherwise make an owned receipt invisible.
+  let swapped = false;
+  const swappingReaddirSync = (dir, opts) => {
+    if (dir === stateDir && !swapped) {
+      swapped = true;
+      fs.rmSync(dir, { recursive: true, force: true });
+      fs.symlinkSync(emptyReplacement, dir);
+    }
+    return fs.readdirSync(dir, opts);
+  };
+
+  const document = singleRootDocument({ logicalId: 'managed-skill', root, bundle, treeDigest: tree.treeDigest });
+  const assessed = assessSingleRootDocument({ configPath, document, readdirSync: swappingReaddirSync });
+  assert.equal(swapped, true);
+  const skill = assessed.document.skills.find((item) => item.logicalId === 'managed-skill');
+  assert.equal(skill.disposition.kind, 'already_managed');
+  assert.equal(skill.disposition.reasonCode, 'already_managed_receipt');
+  assert.equal((assessed.admissions || []).length, 0);
 });
 
 test('reviewer timeout fails closed to needs_input', () => {
@@ -1581,4 +1776,202 @@ test('reviewer-selected divergent digest is admitted', () => {
   assert.equal(skill.disposition.kind, 'shared');
   assert.equal(skill.treeDigest, rightTree.treeDigest);
   assert.ok(assessed.admissions.some((item) => item.treeDigest === rightTree.treeDigest));
+});
+
+test('editing one unmanaged canonical source advances the accepted generation across compatible harnesses while preserving the alias and a local edit', () => {
+  const openclawRoot = temp('jarvos-newsletter-openclaw-');
+  const codexRoot = temp('jarvos-newsletter-codex-');
+  const claudeRoot = temp('jarvos-newsletter-claude-');
+  const hermesRoot = temp('jarvos-newsletter-hermes-');
+
+  // The canonical source is an unmanaged bundle that lives directly in
+  // OpenClaw's own skills directory — never a reconciliation target.
+  const bundle = writeSkill(path.join(openclawRoot, 'newsletter-generator'), {
+    name: 'newsletter-generator',
+    body: 'Draft a weekly newsletter, v1.\n',
+  });
+  const referencesDir = path.join(bundle, 'references');
+  fs.mkdirSync(referencesDir, { mode: 0o700 });
+  fs.writeFileSync(path.join(referencesDir, 'style-guide.md'), 'Keep tone friendly. v1\n', { mode: 0o600 });
+  const treeV1 = computeBundleTree(bundle, { allowlist: DEFAULT_ALLOWED_BUNDLE_GLOBS });
+
+  // A pre-existing, unrelated, divergent skill already occupies the
+  // canonical name in Claude's own skills directory. The collision-alias
+  // machinery must route around it deterministically (no reviewer).
+  writeSkill(path.join(claudeRoot, 'newsletter-generator'), {
+    name: 'newsletter-generator',
+    body: 'Pre-existing unrelated claude skill.\n',
+  });
+
+  // Only OpenClaw and Codex are registered inventory (source-scanning) roots;
+  // Claude and Hermes are reconciliation targets only, matching a real setup
+  // where not every harness root is scanned for new sources.
+  const { configPath } = seedConfig({
+    roots: { openclaw: openclawRoot, codex: codexRoot },
+    trustClass: 'markdown-only',
+  });
+  let loaded = loadConfig(configPath);
+  saveConfig({
+    ...loaded.config,
+    harnesses: {
+      ...loaded.config.harnesses,
+      claude: { ...loaded.config.harnesses.claude, root: claudeRoot },
+      hermes: { ...loaded.config.harnesses.hermes, root: hermesRoot },
+    },
+  }, configPath);
+  loaded = loadConfig(configPath);
+  const resolved = loaded.resolved;
+
+  // 1-2) Establish v1 and converge projections through the real operator
+  // workflow: observe/assess/capture, then plan/apply.
+  const admitted = inventoryAssessOperator({ configPath, observedAt: '2026-09-01T10:00:00.000Z' });
+  assert.equal(admitted.complete, true);
+  assert.ok(admitted.admissions.some((item) => item.logicalId === 'newsletter-generator' && item.mode === 'admit'));
+
+  const plannedV1 = planOperator({ configPath, readOnly: true });
+  assert.equal(plannedV1.ok, true);
+  const v1Harnesses = [...new Set(plannedV1.pairs
+    .filter((pair) => pair.id === 'newsletter-generator')
+    .map((pair) => pair.harness))].sort();
+  assert.deepEqual(v1Harnesses, ['claude', 'codex', 'hermes']);
+  assert.equal(plannedV1.aliases['newsletter-generator'], 'jarvos-newsletter-generator');
+  applyOperator({ configPath });
+
+  const postV1Plan = planOperator({ configPath, readOnly: true });
+  const aliasRevisionAfterV1 = postV1Plan.aliasRevision;
+
+  for (const harnessRoot of [codexRoot, claudeRoot, hermesRoot]) {
+    const receipt = validateReceipt(readReceipt(harnessRoot, 'jarvos-newsletter-generator'));
+    assert.ok(receipt, harnessRoot);
+    assert.equal(receipt.id, 'newsletter-generator');
+    assert.equal(receipt.treeDigest, treeV1.treeDigest);
+    assert.equal(fs.existsSync(path.join(harnessRoot, 'jarvos-newsletter-generator', 'SKILL.md')), true);
+  }
+  // The pre-existing unrelated Claude occupant is untouched and unmanaged.
+  assert.equal(fs.existsSync(path.join(claudeRoot, 'newsletter-generator', 'SKILL.md')), true);
+  assert.equal(readReceipt(claudeRoot, 'newsletter-generator'), null);
+  // The canonical unmanaged source is never itself a reconciliation target.
+  assert.equal(readReceipt(openclawRoot, 'newsletter-generator'), null);
+  assert.equal(readReceipt(openclawRoot, 'jarvos-newsletter-generator'), null);
+
+  // 3) Two more observations of the unchanged source are stable: exactly one
+  // canonical source is seen, and the receipt-owned Codex projection is never
+  // rediscovered as a second source.
+  const secondObserved = observeInventory({ configPath, observedAt: '2026-09-01T11:00:00.000Z' });
+  assert.equal(secondObserved.complete, true);
+  const skillAfterFirstObserve = secondObserved.document.skills.find((item) => item.logicalId === 'newsletter-generator');
+  assert.equal(skillAfterFirstObserve.observations.filter((item) => item.state !== 'missing').length, 1);
+  assert.equal(skillAfterFirstObserve.treeDigest, treeV1.treeDigest);
+  assert.equal(skillAfterFirstObserve.matrix.find((row) => row.harness === 'openclaw').projection, 'source_present');
+  assert.equal(skillAfterFirstObserve.matrix.find((row) => row.harness === 'codex').projection, 'missing');
+
+  const thirdObserved = observeInventory({ configPath, observedAt: '2026-09-01T12:00:00.000Z' });
+  assert.equal(thirdObserved.complete, true);
+  assert.equal(thirdObserved.unchanged, true);
+  assert.equal(thirdObserved.generationId, secondObserved.generationId);
+  const skillAfterSecondObserve = thirdObserved.document.skills.find((item) => item.logicalId === 'newsletter-generator');
+  assert.equal(skillAfterSecondObserve.treeDigest, treeV1.treeDigest);
+
+  // 4) The owner edits only the canonical source, including a nested
+  // references file, so the recursive tree digest changes.
+  fs.writeFileSync(path.join(bundle, 'SKILL.md'), '---\nname: newsletter-generator\n---\n\nDraft a weekly newsletter, v2.\n', { mode: 0o600 });
+  fs.writeFileSync(path.join(referencesDir, 'style-guide.md'), 'Keep tone friendly. v2 - add a call to action.\n', { mode: 0o600 });
+  const treeV2 = computeBundleTree(bundle, { allowlist: DEFAULT_ALLOWED_BUNDLE_GLOBS });
+  assert.notEqual(treeV2.treeDigest, treeV1.treeDigest);
+
+  // 5) Before update convergence, the owner locally modifies the Hermes
+  // receipt-owned projection.
+  const hermesProjection = path.join(hermesRoot, 'jarvos-newsletter-generator');
+  fs.writeFileSync(path.join(hermesProjection, 'SKILL.md'), '---\nname: newsletter-generator\n---\n\nHermes-local tweak, keep me.\n', { mode: 0o600 });
+  const hermesLocalTree = computeBundleTree(hermesProjection, { allowlist: DEFAULT_ALLOWED_BUNDLE_GLOBS });
+  const hermesReceiptBeforeUpdate = validateReceipt(readReceipt(hermesRoot, 'jarvos-newsletter-generator'));
+  assert.notEqual(hermesLocalTree.treeDigest, treeV1.treeDigest);
+  assert.notEqual(hermesLocalTree.treeDigest, treeV2.treeDigest);
+
+  // 6) The real inventory assess/capture path admits exactly one update.
+  const updated = inventoryAssessOperator({ configPath, observedAt: '2026-09-02T09:00:00.000Z' });
+  assert.equal(updated.complete, true);
+  assert.notEqual(updated.generationId, admitted.generationId);
+  assert.equal(updated.admissions.length, 1);
+  const updateAdmissions = updated.admissions.filter((item) => item.logicalId === 'newsletter-generator');
+  assert.equal(updateAdmissions.length, 1);
+  assert.equal(updateAdmissions[0].mode, 'update');
+  assert.equal(updateAdmissions[0].treeDigest, treeV2.treeDigest);
+  const updatedSkill = updated.classifications.find((item) => item.logicalId === 'newsletter-generator');
+  assert.equal(updatedSkill.disposition.kind, 'shared');
+  assert.equal(updatedSkill.reasonCode, 'rule_proven_update');
+
+  const acceptedV2 = readAcceptedGeneration(resolved.inventory.acceptedGenerationPath);
+  assert.equal(acceptedV2.generationId, updated.generationId);
+  assert.equal(acceptedV2.entries.find((entry) => entry.id === 'newsletter-generator').treeDigest, treeV2.treeDigest);
+  assert.equal((acceptedV2.tombstones || []).some((item) => item.logicalId === 'newsletter-generator'), false);
+  assert.ok(acceptedV2.identities.some((item) => item.logicalId === 'newsletter-generator'));
+
+  // 7) Plan/apply the accepted generation.
+  const plannedV2 = planOperator({ configPath, readOnly: true });
+  assert.equal(plannedV2.ok, true);
+  assert.equal(plannedV2.aliases['newsletter-generator'], 'jarvos-newsletter-generator');
+  const pairsV2 = plannedV2.pairs.filter((pair) => pair.id === 'newsletter-generator');
+  assert.equal(pairsV2.length, 3);
+  const byHarness = Object.fromEntries(pairsV2.map((pair) => [pair.harness, pair]));
+  assert.equal(byHarness.codex.status, 'outdated');
+  assert.equal(byHarness.codex.action, 'install');
+  assert.equal(byHarness.claude.status, 'outdated');
+  assert.equal(byHarness.claude.action, 'install');
+  assert.equal(byHarness.hermes.status, 'local_modified');
+  assert.equal(byHarness.hermes.action, 'preserve');
+  for (const pair of pairsV2) assert.equal(pair.effectiveName, 'jarvos-newsletter-generator');
+
+  const appliedV2 = applyOperator({ configPath });
+  assert.equal(appliedV2.ok, true);
+  const appliedHermes = appliedV2.applied.find((item) => item.id === 'newsletter-generator' && item.harness === 'hermes');
+  assert.equal(appliedHermes.applied, false);
+  assert.equal(appliedHermes.status, 'local_modified');
+
+  for (const harnessRoot of [codexRoot, claudeRoot]) {
+    const receipt = validateReceipt(readReceipt(harnessRoot, 'jarvos-newsletter-generator'));
+    assert.equal(receipt.treeDigest, treeV2.treeDigest);
+    assert.equal(
+      fs.readFileSync(path.join(harnessRoot, 'jarvos-newsletter-generator', 'references', 'style-guide.md'), 'utf8'),
+      'Keep tone friendly. v2 - add a call to action.\n',
+    );
+  }
+  // Hermes stays byte-for-byte the owner's local edit, with its old receipt/digest.
+  const hermesReceiptAfterApply = validateReceipt(readReceipt(hermesRoot, 'jarvos-newsletter-generator'));
+  assert.deepEqual(hermesReceiptAfterApply, hermesReceiptBeforeUpdate);
+  assert.equal(computeBundleTree(hermesProjection, { allowlist: DEFAULT_ALLOWED_BUNDLE_GLOBS }).treeDigest, hermesLocalTree.treeDigest);
+  // The canonical source remains untouched and is never receipt-owned.
+  assert.equal(fs.readFileSync(path.join(bundle, 'SKILL.md'), 'utf8').includes('v2'), true);
+  assert.equal(readReceipt(openclawRoot, 'newsletter-generator'), null);
+  assert.equal(readReceipt(openclawRoot, 'jarvos-newsletter-generator'), null);
+
+  // 8) No source or prior alias was accidentally retired: the durable alias
+  // binding and revision from v1 survive the v2 update unchanged, and the
+  // unrelated pre-existing Claude occupant is still exactly as it was.
+  const postV2Plan = planOperator({ configPath, readOnly: true });
+  assert.equal(postV2Plan.aliases['newsletter-generator'], 'jarvos-newsletter-generator');
+  assert.equal(postV2Plan.aliasRevision, aliasRevisionAfterV1);
+  assert.equal(fs.existsSync(path.join(claudeRoot, 'newsletter-generator', 'SKILL.md')), true);
+  assert.equal(readReceipt(claudeRoot, 'newsletter-generator'), null);
+
+  // A replay observes/assesses/plans/applies with zero writes at the durable
+  // state boundary this contract supports (per-target, not one global
+  // filesystem transaction).
+  const durablePaths = [
+    configPath,
+    resolved.localOverlayPath,
+    resolved.inventory.acceptedGenerationPath,
+  ];
+  const before = durablePaths.map((file) => ({ body: fs.readFileSync(file, 'utf8'), mtimeMs: fs.statSync(file).mtimeMs }));
+  const replay = inventoryAssessOperator({ configPath, observedAt: '2026-09-02T10:00:00.000Z' });
+  assert.equal(replay.mutate, false);
+  durablePaths.forEach((file, index) => {
+    assert.equal(fs.readFileSync(file, 'utf8'), before[index].body);
+    assert.equal(fs.statSync(file).mtimeMs, before[index].mtimeMs);
+  });
+  const replayPlan = planOperator({ configPath, readOnly: true });
+  assert.equal(replayPlan.ok, true);
+  const replayApply = applyOperator({ configPath });
+  assert.equal(replayApply.ok, true);
+  assert.equal(replayApply.applied.length, 0);
 });

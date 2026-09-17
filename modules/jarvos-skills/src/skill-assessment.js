@@ -11,7 +11,7 @@ const path = require('node:path');
 const { DEFAULT_ALLOWED_BUNDLE_GLOBS, OVERLAY_SCHEMA_VERSION, SUPPORTED_HARNESSES, computeBundleTree, validateLocalOverlay, validatePublicCatalog, composeEffectiveCatalog, CATALOG_SCHEMA_VERSION } = require('./catalog');
 const { validateInventoryDocument, serializeOutwardStatus, normalizeRetirementPolicy } = require('./inventory-contract');
 const { captureAcceptedGeneration, readAcceptedGeneration } = require('./source-store');
-const { readReceipt, validateReceipt } = require('./receipts');
+const { readReceipt, validateReceipt, STATE_DIR } = require('./receipts');
 const { loadConfig, resolveConfigPaths, atomicWriteJson, saveConfig } = require('./config');
 
 const SECRET_RE = /(?:api[_-]?key|access[_-]?token|secret|password|private[_-]?key)\s*[:=]|-----BEGIN [A-Z ]*PRIVATE KEY-----/i;
@@ -110,26 +110,122 @@ function sourceRootsFor(skill, roots) {
       || left.observation.relativePath.localeCompare(right.observation.relativePath));
 }
 
-function receiptOwns(harnessRoots, id) {
+function stateDirIdentity(stat) {
+  return { dev: stat.dev, ino: stat.ino, mode: stat.mode, uid: stat.uid };
+}
+
+function sameStateDirIdentity(left, right) {
+  return !!left && !!right
+    && left.dev === right.dev
+    && left.ino === right.ino
+    && left.mode === right.mode
+    && left.uid === right.uid;
+}
+
+function assertSafeStateDirStat(stat) {
+  // No-follow: a symlinked, non-owned, or group/world-writable state
+  // directory must never be enumerated as if it were trustworthy.
+  if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error('projection state directory is unsafe');
+  if (typeof process.getuid === 'function' && stat.uid !== process.getuid()) {
+    throw new Error('projection state directory has unsafe ownership');
+  }
+  if ((stat.mode & 0o022) !== 0) throw new Error('projection state directory has unsafe permissions');
+}
+
+// Node's fs has no fd-bound readdir, so listing itself must still resolve the
+// path a second time. A no-follow-opened descriptor is used only to pin an
+// authoritative device/inode/mode/uid identity that the OS refuses to hand
+// out for a symlink substituted at this instant; the path-based read that
+// follows is required to observe that identity both immediately before and
+// immediately after it runs. This closes the check-to-listing and
+// listing-to-return windows around a single enumeration call. It does not by
+// itself guarantee the directory cannot change again while each named
+// receipt file is subsequently read one at a time; see the post-loop check
+// in receiptOwns for that boundary.
+function safeStateDirEntries(skillsRoot, readdirSync = fs.readdirSync) {
+  const stateDir = path.join(skillsRoot, STATE_DIR);
+  let preStat;
+  try {
+    preStat = fs.lstatSync(stateDir);
+  } catch (error) {
+    if (error && error.code === 'ENOENT') return { entries: [], identity: null };
+    throw error; // unreadable state is never an admission opportunity
+  }
+  assertSafeStateDirStat(preStat);
+  const fd = fs.openSync(stateDir, fs.constants.O_RDONLY | (fs.constants.O_DIRECTORY || 0) | (fs.constants.O_NOFOLLOW || 0));
+  let openedIdentity;
+  try {
+    const opened = fs.fstatSync(fd);
+    assertSafeStateDirStat(opened);
+    openedIdentity = stateDirIdentity(opened);
+  } finally {
+    fs.closeSync(fd);
+  }
+  if (!sameStateDirIdentity(stateDirIdentity(preStat), openedIdentity)) {
+    throw new Error('projection state directory changed before enumeration');
+  }
+  const entries = readdirSync(stateDir, { withFileTypes: true });
+  const postStat = fs.lstatSync(stateDir);
+  assertSafeStateDirStat(postStat);
+  const postIdentity = stateDirIdentity(postStat);
+  if (!sameStateDirIdentity(openedIdentity, postIdentity)) {
+    throw new Error('projection state directory changed during enumeration');
+  }
+  return { entries, identity: postIdentity };
+}
+
+function stateDirChangedSince(skillsRoot, identity) {
+  const stateDir = path.join(skillsRoot, STATE_DIR);
+  let stat;
+  try {
+    stat = fs.lstatSync(stateDir);
+  } catch {
+    return true; // a state directory that vanished mid-read is itself a change
+  }
+  return !sameStateDirIdentity(identity, stateDirIdentity(stat));
+}
+
+function receiptOwns(harnessRoots, id, readdirSync = fs.readdirSync) {
   for (const root of harnessRoots || []) {
+    let snapshot;
     try {
-      const receipt = validateReceipt(readReceipt(root.root, id));
-      if (receipt && receipt.id === id) return true;
+      snapshot = safeStateDirEntries(root.root, readdirSync);
     } catch {
       return true; // unsafe receipt state is never an admission opportunity
     }
+    for (const entry of snapshot.entries) {
+      if (!entry.name.endsWith('.json')) continue;
+      // A receipt-shaped entry that is not a regular file (symlink,
+      // directory, socket, etc.) must fail closed, not be skipped.
+      if (!entry.isFile()) return true;
+      let receipt;
+      try {
+        receipt = validateReceipt(readReceipt(root.root, entry.name.slice(0, -'.json'.length)));
+      } catch {
+        return true; // unsafe receipt state is never an admission opportunity
+      }
+      // Ownership is recorded by the skill id inside the receipt, not by its
+      // projected directory name: collision aliasing can install a skill
+      // under a name different from its canonical id.
+      if (receipt && receipt.id === id) return true;
+    }
+    // The identity certified by safeStateDirEntries only covers the listing
+    // itself. If the directory was swapped while its named receipts were
+    // being read one at a time, "no match found" is not trustworthy: fail
+    // closed rather than report the root as unowned.
+    if (snapshot.identity && stateDirChangedSince(root.root, snapshot.identity)) return true;
   }
   return false;
 }
 
-function compatibleTargets(skill, harnessRoots, { forUpdate = false } = {}) {
+function compatibleTargets(skill, harnessRoots, { forUpdate = false, readdirSync = fs.readdirSync } = {}) {
   const sourcePresent = new Set(skill.matrix.filter((row) => row.projection === 'source_present').map((row) => row.harness));
   return SUPPORTED_HARNESSES.filter((harness) => {
     if (sourcePresent.has(harness)) return false;
     // Updates must keep receipt-owned destinations eligible so reconcile can
     // refresh outdated projections from a new accepted generation.
     if (forUpdate) return true;
-    return !receiptOwns((harnessRoots || []).filter((root) => root.harness === harness), skill.logicalId);
+    return !receiptOwns((harnessRoots || []).filter((root) => root.harness === harness), skill.logicalId, readdirSync);
   });
 }
 
@@ -351,6 +447,7 @@ function assessInventory({
   captureGeneration = captureAcceptedGeneration,
   writeJson = atomicWriteJson,
   writeConfig = saveConfig,
+  readdirSync = fs.readdirSync,
   config: suppliedConfig = null,
   resolved: suppliedResolved = null,
 } = {}) {
@@ -503,11 +600,11 @@ function assessInventory({
     const isSameManaged = Boolean(priorMeta?.treeDigest && priorMeta.treeDigest === feature.tree.treeDigest);
     // A receipt at a source root means the unchanged source is already managed,
     // but it must never suppress a safe update from a newer source digest.
-    if (!isUpdate && receiptOwns(sources.map((item) => ({ root: item.root.root })), skill.logicalId)) {
+    if (!isUpdate && receiptOwns(sources.map((item) => ({ root: item.root.root })), skill.logicalId, readdirSync)) {
       assessed.push({ ...result, ...stableDisposition('already_managed', 'already_managed_receipt') });
       continue;
     }
-    const targets = compatibleTargets(skill, harnessRoots, { forUpdate: isUpdate });
+    const targets = compatibleTargets(skill, harnessRoots, { forUpdate: isUpdate, readdirSync });
     // Prefer prior allowed harnesses on update so the matrix does not shrink.
     const priorAllowed = priorMeta?.entry?.allowedHarnesses || [];
     const allowedHarnesses = [...new Set([
