@@ -246,8 +246,9 @@ try {
   const defaultNotePlan = sb.buildRoutingPlan({ text: 'remember this module smoke capture' });
   if (
     notePlan.route === 'note' &&
-    defaultNotePlan.route === 'note' &&
-    defaultNotePlan.defaultedToNoteBias === true &&
+    defaultNotePlan.route === null &&
+    defaultNotePlan.ignored === true &&
+    defaultNotePlan.defaultedToNoteBias === false &&
     sb.SKILL_CONTRACTS &&
     sb.SKILL_CONTRACTS['note-creation']
   ) {
