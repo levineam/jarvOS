@@ -229,7 +229,7 @@ test('capture contract rejects invalid v2 source actor privacy and evidence valu
       kind: 'database',
     },
   }), [
-    'Unknown source.tool: "unsupported-tool". Expected one of: openclaw, codex, claude-code, chatgpt, claude-app, manual, journal, note, paperclip, discord, telegram, unknown, other, or custom:<slug>',
+    'Unknown source.tool: "unsupported-tool". Expected one of: openclaw, codex, claude-code, hermes, grok-bot, chatgpt, claude-app, manual, journal, note, paperclip, discord, telegram, unknown, other, or custom:<slug>',
     'source.sessionId must be a string',
     'Unknown actor: "bot". Expected one of: human, assistant, tool, system, mixed, unknown',
     'Unknown origin.kind: "database". Expected one of: session, journal, note, transcript, prompt, file, url, manual',
@@ -243,13 +243,14 @@ test('capture contract rejects invalid v2 source actor privacy and evidence valu
 
 test('ambient routing builds CRAM actions without side effects', () => {
   const plan = routing.buildThreePackagePlan({
-    text: "I've decided to use Postgres for durable memory",
+    text: "Note: I've decided to use Postgres for durable memory",
     salienceClass: 'decision',
     confidence: 0.92,
     date: '2026-05-19',
   });
 
   assert.equal(plan.version, 'ambient-routing-plan/v1');
+  assert.equal(plan.ignored, false);
   assert.equal(plan.route, 'note');
   assert.equal(plan.createNote, true);
   assert.equal(plan.routeToMemory, true);
@@ -263,7 +264,26 @@ test('ambient routing builds CRAM actions without side effects', () => {
   );
 });
 
-test('ambient routing produces work-intake skill plans for commitments', () => {
+test('ambient routing produces work-intake skill plans for commitments with explicit note intent', () => {
+  const plan = routing.buildThreePackagePlan({
+    text: 'Note: I will write the routing refactor by Friday',
+    salienceClass: 'commitment',
+    confidence: 0.9,
+    date: '2026-05-19',
+  });
+
+  assert.equal(plan.ignored, false);
+  assert.equal(plan.workIntake.operation, 'ensureTrackedWork');
+  assert.equal(plan.workIntake.input.status, 'todo');
+  assert.equal(plan.skillInvocations.some((invocation) => invocation.skillId === 'work-intake'), true);
+  assert.equal(routing.previewRouting({
+    text: 'Note: I will write the routing refactor by Friday',
+    salienceClass: 'commitment',
+    confidence: 0.9,
+  }).workIntake, true);
+});
+
+test('ambient routing does not synthesize a work-intake plan from commitment salience alone (SUP-3981)', () => {
   const plan = routing.buildThreePackagePlan({
     text: 'I will write the routing refactor by Friday',
     salienceClass: 'commitment',
@@ -271,14 +291,9 @@ test('ambient routing produces work-intake skill plans for commitments', () => {
     date: '2026-05-19',
   });
 
-  assert.equal(plan.workIntake.operation, 'ensureTrackedWork');
-  assert.equal(plan.workIntake.input.status, 'todo');
-  assert.equal(plan.skillInvocations.some((invocation) => invocation.skillId === 'work-intake'), true);
-  assert.equal(routing.previewRouting({
-    text: 'I will write the routing refactor by Friday',
-    salienceClass: 'commitment',
-    confidence: 0.9,
-  }).workIntake, true);
+  assert.equal(plan.ignored, true);
+  assert.equal(plan.workIntake, null);
+  assert.deepEqual(plan.skillInvocations, []);
 });
 
 test('ambient routing can produce explicit work-intake plans without journal or note writes', () => {

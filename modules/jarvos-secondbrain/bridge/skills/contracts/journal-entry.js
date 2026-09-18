@@ -22,17 +22,6 @@ module.exports = {
       reason: 'Explicit journal commands are terminal journal-first captures.',
     },
     {
-      source: 'classifier',
-      when: {
-        salienceClass: 'idea',
-        confidence: {
-          min: 0.8,
-        },
-      },
-      action: 'append high-confidence thought capture to the journal Ideas section',
-      reason: 'High-confidence idea classifications are intentional thought captures.',
-    },
-    {
       source: 'capture-router',
       when: {
         path: 'capture_that',

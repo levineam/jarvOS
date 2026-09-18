@@ -14,7 +14,7 @@ const {
 
 test('ambient integration classifies, routes, dispatches skills, and writes through adapters', async () => {
   const calls = [];
-  const text = "The decision is final: we've decided to keep adapter writes behind skill dispatch";
+  const text = "Note: the decision is final, we've decided to keep adapter writes behind skill dispatch";
   const classification = classifyMessage(text);
   const plan = buildThreePackagePlan({
     text,
@@ -23,6 +23,7 @@ test('ambient integration classifies, routes, dispatches skills, and writes thro
   });
 
   assert.equal(classification.salienceClass, 'decision');
+  assert.equal(plan.ignored, false);
   assert.equal(plan.route, 'note');
   assert.equal(plan.routeToMemory, true);
   assert.deepEqual(
@@ -55,7 +56,7 @@ test('ambient integration classifies, routes, dispatches skills, and writes thro
   assert.equal(dispatch.ok, true);
   assert.deepEqual(calls, [
     ['note', plan.noteTitle],
-    ['journal', '## ✅ Decisions'],
+    ['journal', '## 📝 Notes'],
     ['memory', 'decision'],
   ]);
   assert.equal(dispatch.results[0].skillId, 'note-creation');
@@ -65,7 +66,7 @@ test('ambient integration classifies, routes, dispatches skills, and writes thro
 
 test('ambient integration dispatches work-intake skill plans through compatibility aliases', async () => {
   const calls = [];
-  const text = 'I will send and finish the release checklist by Friday';
+  const text = 'Note: I will send and finish the release checklist by Friday';
   const classification = classifyMessage(text);
   const plan = buildThreePackagePlan({
     text,
@@ -74,6 +75,7 @@ test('ambient integration dispatches work-intake skill plans through compatibili
   });
 
   assert.equal(classification.salienceClass, 'commitment');
+  assert.equal(plan.ignored, false);
   assert.equal(plan.workIntake.operation, 'ensureTrackedWork');
   assert.equal(plan.skillInvocations.some((invocation) => invocation.skillId === 'work-intake'), true);
 

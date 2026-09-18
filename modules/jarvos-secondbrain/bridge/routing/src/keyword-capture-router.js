@@ -45,6 +45,10 @@ const {
 } = require('../../../packages/jarvos-ambient/src/intent/keyword-capture-router');
 
 const {
+  authorizeCapture,
+} = require('../../../packages/jarvos-ambient/src/intent/capture-authorization');
+
+const {
   buildNoteContent,
   buildRoutingPlan,
   ideaJournalLine,
@@ -189,6 +193,7 @@ module.exports = {
   IDEA_CAPTURE_PATTERNS,
   NOTE_CAPTURE_PATTERNS,
   GENERAL_CAPTURE_PATTERNS,
+  authorizeCapture,
   applyRoutingPlan,
   applyParsedStrictCommandPlan,
   applyStrictCommandPlan,

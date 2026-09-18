@@ -5,10 +5,12 @@ const {
   NOTE,
   JOURNAL,
   detectTrigger,
-  hasCaptureIntent,
   primaryText,
   stripLeadingKeyword,
 } = require('../intent/keyword-capture-router');
+const {
+  authorizeCapture,
+} = require('../intent/capture-authorization');
 const {
   normalizeContentOrigin,
 } = require('../../../../bridge/provenance/src/content-origin-contract');
@@ -166,7 +168,11 @@ function isSubstantiveIdea(capture = {}) {
 function buildKeywordRoutingPlan(capture = {}, options = {}) {
   capture = normalizeCaptureProvenance(capture, options);
   const detectedTrigger = detectTrigger(capture);
-  const captureIntent = hasCaptureIntent(capture);
+  // Explicit durable-capture intent only (SUP-3981) — never the legacy broad
+  // hasCaptureIntent, which authorizes on a bare "capture" mention or other
+  // incidental wording. authorizeCapture is the single strict predicate shared
+  // with the dispatcher, so a direct planner call can't bypass it.
+  const captureIntent = authorizeCapture(capture).authorized;
   const date = String(capture.date || '').trim() || undefined;
 
   if (!captureIntent) {
@@ -407,52 +413,18 @@ function buildSkillInvocations(plan) {
 function buildThreePackagePlan(capture = {}, options = {}) {
   const normalizedCapture = normalizeCaptureProvenance(capture, options);
   const keywordPlan = buildKeywordRoutingPlan(normalizedCapture, options);
+  // Captured before the work-intake override below can flip keywordPlan.ignored to
+  // false — memory promotion must depend only on this, never on work-intake
+  // eligibility (SUP-3981). Work intake and durable capture are independent grants.
+  const hasExplicitCaptureIntent = !keywordPlan.ignored;
 
   const salienceClass = normalizedCapture.salienceClass || null;
   const confidence = typeof normalizedCapture.confidence === 'number' ? normalizedCapture.confidence : null;
   const memoryClass = salienceClass ? SALIENCE_TO_MEMORY_CLASS[salienceClass] : null;
 
-  const salienceOverridesIgnored = Boolean(
-    salienceClass
-    && salienceClass !== 'nothing'
-    && confidence !== null
-    && confidence >= HIGH_CONFIDENCE_THRESHOLD,
-  );
-
-  if (keywordPlan.ignored && salienceOverridesIgnored) {
-    const text = primaryText(normalizedCapture);
-    const title = String(normalizedCapture.title || text.split(/\r?\n/)[0] || '').slice(0, 80).trim();
-    keywordPlan.ignored = false;
-    keywordPlan.defaultedToNoteBias = true;
-
-    if (salienceClass === IDEA) {
-      keywordPlan.route = IDEA;
-      keywordPlan.journalSection = IDEAS_HEADING;
-      keywordPlan.journalLine = title && text && title !== text ? `- ${title} — ${text}` : `- ${text || title}`;
-      keywordPlan.createNote = false;
-      keywordPlan.noteTitle = '';
-      keywordPlan.noteContent = '';
-      keywordPlan.noteFrontmatter = null;
-      keywordPlan.journalOrigin = journalOriginForCapture(normalizedCapture, options);
-    } else {
-      keywordPlan.route = NOTE;
-      keywordPlan.journalSection = salienceClass === 'decision' ? DECISIONS_HEADING : NOTES_HEADING;
-      keywordPlan.journalLine = title ? `- [[${title}]]` : `- ${text.slice(0, 120)}`;
-      keywordPlan.createNote = true;
-      keywordPlan.noteTitle = title || inferTitle(normalizedCapture, `Captured ${salienceClass}`, options);
-      keywordPlan.noteContent = text;
-      keywordPlan.noteFrontmatter = {
-        type: 'draft',
-        source: 'salience-capture',
-        salience_class: salienceClass,
-        confidence,
-        created_from: normalizedCapture.date ? `journal/${normalizedCapture.date}` : 'journal',
-        ...contentOriginFrontmatter(normalizedCapture, options),
-      };
-      keywordPlan.journalOrigin = journalOriginForCapture(normalizedCapture, options);
-    }
-  }
-
+  // Salience/confidence are descriptive metadata, never an authorization input. Only
+  // buildKeywordRoutingPlan's explicit-intent gate (hard command, caller trigger,
+  // keyword/natural-language directive) may set keywordPlan.ignored = false.
   if (keywordPlan.ignored && (normalizedCapture.workIntake || normalizedCapture.routeToWork || normalizedCapture.createIssue)) {
     keywordPlan.ignored = false;
     keywordPlan.route = WORK_INTAKE;
@@ -469,7 +441,7 @@ function buildThreePackagePlan(capture = {}, options = {}) {
     memoryClass
     && confidence !== null
     && confidence >= MEMORY_CONFIDENCE_THRESHOLD
-    && !keywordPlan.ignored,
+    && hasExplicitCaptureIntent,
   );
 
   const memoryParams = shouldRouteToMemory ? {

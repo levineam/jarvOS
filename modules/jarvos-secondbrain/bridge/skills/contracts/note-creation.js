@@ -16,16 +16,6 @@ module.exports = {
     {
       source: 'capture-router',
       when: {
-        path: 'salience_high',
-        captured: true,
-        destinations: ['journal', 'notes'],
-      },
-      action: 'create a standalone note for high-confidence non-idea salience',
-      reason: 'The capture hook emits notes in destinations when a durable artifact was created.',
-    },
-    {
-      source: 'capture-router',
-      when: {
         path: 'capture_that',
         captured: true,
         destinations: ['journal', 'notes'],

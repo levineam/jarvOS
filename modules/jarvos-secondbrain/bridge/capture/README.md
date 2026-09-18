@@ -51,8 +51,11 @@ source enum. Do not raw-write daily journal files. The canonical journal is
 - Substantive `idea:` captures create a note and link that note from Journal
   Ideas only when the capture explicitly sets `substantive:true`, supplies a
   title, or sets a durable-note flag such as `createDurableNote:true`.
-- Non-capture text is ignored unless a classifier/salience path explicitly
-  routes it.
+- Non-capture text is always ignored. Salience and confidence are descriptive
+  metadata attached only after explicit durable-capture intent (a strict
+  command, a caller-set trigger, or a keyword/bounded natural-language
+  directive) has already authorized the capture; they never grant permission
+  on their own (SUP-3981).
 
 The Obsidian adapter disables the note writer's automatic today-link while
 running routed captures so the routing plan owns the single intended backlink
