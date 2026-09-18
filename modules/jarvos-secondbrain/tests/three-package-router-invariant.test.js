@@ -69,7 +69,7 @@ test('applyStoragePlan still writes non-note journal lines (idea/flagged) uncond
 
 test('applyThreePackagePlan does not attach memory noteRef when note write failed', () => {
   const result = applyThreePackagePlan({
-    trigger: 'decision',
+    trigger: 'note',
     salienceClass: 'decision',
     confidence: 0.95,
     title: 'Package naming decision',

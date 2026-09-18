@@ -412,47 +412,9 @@ function buildThreePackagePlan(capture = {}, options = {}) {
   const confidence = typeof normalizedCapture.confidence === 'number' ? normalizedCapture.confidence : null;
   const memoryClass = salienceClass ? SALIENCE_TO_MEMORY_CLASS[salienceClass] : null;
 
-  const salienceOverridesIgnored = Boolean(
-    salienceClass
-    && salienceClass !== 'nothing'
-    && confidence !== null
-    && confidence >= HIGH_CONFIDENCE_THRESHOLD,
-  );
-
-  if (keywordPlan.ignored && salienceOverridesIgnored) {
-    const text = primaryText(normalizedCapture);
-    const title = String(normalizedCapture.title || text.split(/\r?\n/)[0] || '').slice(0, 80).trim();
-    keywordPlan.ignored = false;
-    keywordPlan.defaultedToNoteBias = true;
-
-    if (salienceClass === IDEA) {
-      keywordPlan.route = IDEA;
-      keywordPlan.journalSection = IDEAS_HEADING;
-      keywordPlan.journalLine = title && text && title !== text ? `- ${title} — ${text}` : `- ${text || title}`;
-      keywordPlan.createNote = false;
-      keywordPlan.noteTitle = '';
-      keywordPlan.noteContent = '';
-      keywordPlan.noteFrontmatter = null;
-      keywordPlan.journalOrigin = journalOriginForCapture(normalizedCapture, options);
-    } else {
-      keywordPlan.route = NOTE;
-      keywordPlan.journalSection = salienceClass === 'decision' ? DECISIONS_HEADING : NOTES_HEADING;
-      keywordPlan.journalLine = title ? `- [[${title}]]` : `- ${text.slice(0, 120)}`;
-      keywordPlan.createNote = true;
-      keywordPlan.noteTitle = title || inferTitle(normalizedCapture, `Captured ${salienceClass}`, options);
-      keywordPlan.noteContent = text;
-      keywordPlan.noteFrontmatter = {
-        type: 'draft',
-        source: 'salience-capture',
-        salience_class: salienceClass,
-        confidence,
-        created_from: normalizedCapture.date ? `journal/${normalizedCapture.date}` : 'journal',
-        ...contentOriginFrontmatter(normalizedCapture, options),
-      };
-      keywordPlan.journalOrigin = journalOriginForCapture(normalizedCapture, options);
-    }
-  }
-
+  // Salience/confidence are descriptive metadata, never an authorization input. Only
+  // buildKeywordRoutingPlan's explicit-intent gate (hard command, caller trigger,
+  // keyword/natural-language directive) may set keywordPlan.ignored = false.
   if (keywordPlan.ignored && (normalizedCapture.workIntake || normalizedCapture.routeToWork || normalizedCapture.createIssue)) {
     keywordPlan.ignored = false;
     keywordPlan.route = WORK_INTAKE;

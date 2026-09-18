@@ -7,7 +7,8 @@ const {
   HARD_COMMAND_RESPONSES,
   IDEA,
   JOURNAL,
-  detectTrigger,
+  NOTE,
+  authorizeCapture,
   parseHardCaptureCommand,
 } = require('../../routing/src/keyword-capture-router');
 const {
@@ -35,13 +36,15 @@ function normalizeInput(input = {}) {
     input.classification || input.classifierOutput || input.salience || {},
   );
   const text = String(input.text || input.content || input.body || '').trim();
-  const trigger = input.trigger || detectTrigger({ ...input, text });
+  const authorization = authorizeCapture({ ...input, text });
+  const trigger = input.trigger || authorization.trigger;
 
   return {
     ...input,
     text,
     date: input.date,
     trigger,
+    authorization,
     classification,
   };
 }
@@ -84,9 +87,8 @@ const CAPTURE_SKILLS = [
     id: 'journal-entry',
     description: 'Write idea and journal-entry captures into the journal package.',
     matches(capture) {
-      if (capture.trigger === IDEA || capture.trigger === JOURNAL) return true;
-      return capture.classification.salienceClass === 'idea'
-        && capture.classification.confidence >= HIGH_CONFIDENCE;
+      return capture.authorization.authorized
+        && (capture.trigger === IDEA || capture.trigger === JOURNAL);
     },
     invoke(capture, options = {}) {
       const trigger = capture.trigger === JOURNAL ? JOURNAL : IDEA;
@@ -95,7 +97,7 @@ const CAPTURE_SKILLS = [
       return {
         captured: true,
         skillId: createsNote ? 'note-creation' : 'journal-entry',
-        path: capture.trigger ? 'keyword_trigger' : 'salience_high',
+        path: 'keyword_trigger',
         trigger: capture.trigger || null,
         salienceClass: capture.classification.salienceClass,
         confidence: capture.classification.confidence,
@@ -111,17 +113,14 @@ const CAPTURE_SKILLS = [
     id: 'note-creation',
     description: 'Create durable notes through the configured storage adapter.',
     matches(capture) {
-      if (capture.trigger === 'note') return true;
-      return capture.classification.salienceClass !== 'nothing'
-        && capture.classification.salienceClass !== 'idea'
-        && capture.classification.confidence >= HIGH_CONFIDENCE;
+      return capture.authorization.authorized && capture.trigger === NOTE;
     },
     invoke(capture, options = {}) {
       const routing = applyThreePackagePlan(buildCaptureEvent(capture, 'note'), options);
       return {
         captured: true,
         skillId: 'note-creation',
-        path: capture.trigger ? 'keyword_trigger' : 'salience_high',
+        path: 'keyword_trigger',
         trigger: capture.trigger || null,
         salienceClass: capture.classification.salienceClass,
         confidence: capture.classification.confidence,
@@ -138,6 +137,7 @@ const CAPTURE_SKILLS = [
 function noCaptureResult(capture, path = 'no_capture') {
   return {
     captured: false,
+    observed: path === 'salience_observed',
     skillId: null,
     path,
     trigger: capture.trigger || null,
@@ -149,13 +149,19 @@ function noCaptureResult(capture, path = 'no_capture') {
   };
 }
 
+// Unauthorized salience is never a capture, but a high-confidence classification
+// is worth surfacing as descriptive observation metadata (observed:true) rather
+// than silently discarding it. Salience never grants write permission either way.
 function ignoredPathForCapture(capture) {
   const confidence = capture.classification?.confidence;
-  if (
-    typeof confidence === 'number'
-    && confidence >= MEDIUM_CONFIDENCE
-    && confidence < HIGH_CONFIDENCE
-  ) {
+  const salienceClass = capture.classification?.salienceClass;
+  if (typeof confidence !== 'number' || !salienceClass || salienceClass === 'nothing') {
+    return 'no_capture';
+  }
+  if (confidence >= HIGH_CONFIDENCE) {
+    return 'salience_observed';
+  }
+  if (confidence >= MEDIUM_CONFIDENCE) {
     return 'salience_medium_ignored';
   }
   return 'no_capture';

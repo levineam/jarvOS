@@ -124,28 +124,43 @@ test('three-pkg: keyword note routes to journal + notes', () => {
   assert(r.memory === false, 'Keyword note without salience should not route to memory');
 });
 
-test('three-pkg: high-confidence decision routes to all three', () => {
+test('three-pkg: high-confidence decision without explicit intent is not captured (SUP-3981)', () => {
   const r = previewRouting({
     salienceClass: 'decision',
     confidence: 0.9,
     text: 'Using Postgres for the main database',
     date: '2026-03-26',
   });
-  assert(r.journal === true, 'Decision should route to journal');
-  assert(r.notes === true, 'Decision should create note');
-  assert(r.memory === true, 'High-confidence decision should route to memory');
-  assert(r.memoryClass === 'decision', `Memory class should be 'decision', got '${r.memoryClass}'`);
+  assert(r.wouldCapture === false, 'Salience alone must never authorize a durable capture');
+  assert(r.notes === false, 'Salience alone must not create a note');
+  assert(r.memory === false, 'Salience alone must not route to memory');
 });
 
-test('three-pkg: high-confidence preference routes to all three', () => {
+test('three-pkg: high-confidence preference without explicit intent is not captured (SUP-3981)', () => {
   const r = previewRouting({
     salienceClass: 'preference',
     confidence: 0.85,
     text: 'Prefer short replies in main chat',
     date: '2026-03-26',
   });
-  assert(r.memory === true, 'High-confidence preference should route to memory');
-  assert(r.memoryClass === 'preference', `Memory class should be 'preference', got '${r.memoryClass}'`);
+  assert(r.wouldCapture === false, 'Salience alone must never authorize a durable capture');
+  assert(r.notes === false, 'Salience alone must not create a note');
+  assert(r.memory === false, 'Salience alone must not route to memory');
+});
+
+test('three-pkg: explicit note trigger with high-confidence decision still routes to memory', () => {
+  const r = previewRouting({
+    trigger: 'note',
+    salienceClass: 'decision',
+    confidence: 0.9,
+    title: 'Database choice',
+    text: 'Using Postgres for the main database',
+    date: '2026-03-26',
+  });
+  assert(r.journal === true, 'Explicit note intent should route to journal');
+  assert(r.notes === true, 'Explicit note intent should create a note');
+  assert(r.memory === true, 'Explicit intent plus high salience should still route to memory');
+  assert(r.memoryClass === 'decision', `Memory class should be 'decision', got '${r.memoryClass}'`);
 });
 
 test('three-pkg: low-confidence skips memory', () => {
