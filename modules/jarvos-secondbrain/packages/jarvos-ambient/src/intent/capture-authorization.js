@@ -48,7 +48,7 @@ const GUARDED_NOTE_PATTERNS = [
 // declining capture, not requesting it. A few adverbs (ever, actually,
 // please) may sit between the negator and the directive without weakening
 // the negation ("do not ever save this", "don't actually make a note").
-const NEGATION_LEADIN_RE = /\b(?:do\s*not|don'?t|never|won'?t|stop|please\s+don'?t)\b(?:\s+(?:ever|actually|please|really|just|even))*\s*$/i;
+const NEGATION_LEADIN_RE = /\b(?:do(?:es)?\s*not|did\s*not|don['’]?t|didn['’]?t|never|won['’]?t|stop|please\s+don['’]?t)\b(?:\s+(?:ever|actually|please|really|just|even))*\s*$/i;
 
 // Quoted or reported speech ("The phrase \"make a note\" appears in the
 // docs", "He told me to \"save this\" as an example", "The doc says \"I
@@ -80,11 +80,11 @@ function isContractionApostrophe(text, index) {
 // whose open and close marks both appear within the sentence.
 function findQuotedSpans(sentence) {
   const spans = [];
-  const openIndex = { '"': -1, "'": -1 };
+  const openIndex = { '"': -1, "'": -1, '`': -1 };
   const openStack = { '“': [], '‘': [] };
   for (let i = 0; i < sentence.length; i += 1) {
     const ch = sentence[i];
-    if (ch === '"' || ch === "'") {
+    if (ch === '"' || ch === "'" || ch === '`') {
       if (ch === "'" && isContractionApostrophe(sentence, i)) continue;
       if (openIndex[ch] === -1) {
         openIndex[ch] = i;
@@ -121,12 +121,14 @@ function isQuotedMention(source, match) {
 // A directive match is suppressed — treated as declined or merely mentioned,
 // not requested — when it is immediately preceded by a negation lead-in, or
 // wrapped in quote marks as a quoted/reported mention.
-const REPORTED_SPEECH_LEADIN_RE = /\b(?:(?:he|she|they|someone|somebody)\s+)?(?:said|told me|told us|asked me|asked us)\s+to\s*$/i;
+const REPORTED_SPEECH_LEADIN_RE = /\b(?:(?:he|she|they|someone|somebody)\s+)?(?:said|says|told me|told us|asked me|asked us)(?:\s+to)?\s*$/i;
+const INCIDENTAL_LEADIN_RE = /\b(?:how to|rejected|rejecting|discussed|discussing)\s+$/i;
 
 function isSuppressedMention(source, match) {
   const before = source.slice(0, match.index);
   return NEGATION_LEADIN_RE.test(before)
     || REPORTED_SPEECH_LEADIN_RE.test(before)
+    || INCIDENTAL_LEADIN_RE.test(before)
     || isQuotedMention(source, match);
 }
 

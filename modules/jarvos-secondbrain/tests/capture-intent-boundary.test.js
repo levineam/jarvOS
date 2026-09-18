@@ -449,6 +449,51 @@ test('Astra r3: negation with intervening "really" does not authorize', () => {
   assert.equal(result.path, 'no_capture');
 });
 
+test('Astra follow-up: unicode and past-tense negation do not authorize', () => {
+  for (const text of [
+    'Please don’t make a note of this',
+    'I did not make a note of the meeting',
+  ]) {
+    const authorization = authorizeCapture({ text });
+    assert.equal(authorization.authorized, false, text);
+    assert.equal(authorization.source, null, text);
+    assert.equal(authorization.trigger, null, text);
+
+    const result = dispatchCapture({ text }, { adapter: explodingAdapter() });
+    assert.equal(result.captured, false, text);
+    assert.equal(result.path, 'no_capture', text);
+  }
+});
+
+test('Astra follow-up: incidental or reported make-a-note language does not authorize', () => {
+  for (const text of [
+    'The docs explain how to make a note in the app',
+    'He said make a note of the meeting',
+    'Use `make a note` in the docs',
+  ]) {
+    const authorization = authorizeCapture({ text });
+    assert.equal(authorization.authorized, false, text);
+    assert.equal(authorization.source, null, text);
+    assert.equal(authorization.trigger, null, text);
+
+    const result = dispatchCapture({ text }, { adapter: explodingAdapter() });
+    assert.equal(result.captured, false, text);
+    assert.equal(result.path, 'no_capture', text);
+  }
+});
+
+test('Astra follow-up: rejected-idea discussion is not an idea capture', () => {
+  const text = 'They rejected an idea for a new dashboard';
+  const authorization = authorizeCapture({ text });
+  assert.equal(authorization.authorized, false);
+  assert.equal(authorization.source, null);
+  assert.equal(authorization.trigger, null);
+
+  const result = dispatchCapture({ text }, { adapter: explodingAdapter() });
+  assert.equal(result.captured, false);
+  assert.equal(result.path, 'no_capture');
+});
+
 test('Astra r3: a polite quoted note directive does not authorize', () => {
   const text = 'She said "please make a note about the build" during standup.';
   const authorization = authorizeCapture({ text });
