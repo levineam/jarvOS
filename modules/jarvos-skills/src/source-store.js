@@ -95,13 +95,13 @@ function snapshotPath(storeRoot, logicalId, treeDigest) {
   return path.join(storeRoot, 'snapshots', logicalId, treeDigest.toLowerCase());
 }
 
-function findSnapshot(storeRoot, logicalId, treeDigest) {
+function findSnapshot(storeRoot, logicalId, treeDigest, { allowlist } = {}) {
   const candidate = snapshotPath(storeRoot, logicalId, treeDigest);
   if (!fs.existsSync(candidate)) return null;
   const stat = fs.lstatSync(candidate);
   if (!stat.isDirectory() || stat.isSymbolicLink() || (stat.mode & 0o077) !== 0) return null;
   try {
-    const tree = computeBundleTree(candidate, { expectedDigest: treeDigest });
+    const tree = computeBundleTree(candidate, { allowlist, expectedDigest: treeDigest });
     return { path: candidate, treeDigest: tree.treeDigest };
   } catch {
     return null;
@@ -113,7 +113,7 @@ function commitSnapshot({ storeRoot, logicalId, sourceBundlePath, expectedTreeDi
   if (!ID_RE.test(logicalId || '')) throw new Error('logicalId is invalid');
   const sourceTree = computeBundleTree(sourceBundlePath, { allowlist, expectedDigest: expectedTreeDigest || null });
   const target = snapshotPath(store.root, logicalId, sourceTree.treeDigest);
-  const existing = findSnapshot(store.root, logicalId, sourceTree.treeDigest);
+  const existing = findSnapshot(store.root, logicalId, sourceTree.treeDigest, { allowlist: sourceTree.allowlist });
   if (existing) return { created: false, ...existing, relativeRoot: path.posix.join('snapshots', logicalId, sourceTree.treeDigest) };
   const parent = assertPrivateDirectory(path.dirname(target), 'snapshot identity directory');
   const staging = path.join(parent, `.${sourceTree.treeDigest}.${process.pid}.${crypto.randomBytes(8).toString('hex')}.tmp`);

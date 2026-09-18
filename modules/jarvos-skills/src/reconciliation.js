@@ -242,8 +242,12 @@ function listHigherPrecedenceNames(harness) {
   return [...names];
 }
 
-function sourceRootFor(entry, { publicSourceRoot, localSourceRoot }) {
+function sourceRootFor(entry, { publicSourceRoot, localSourceRoot, inventorySourceRoot }) {
   if (entry.sourceKind === LOCAL_OVERLAY_SOURCE_KIND) {
+    if (entry.sourceRootKind === 'inventory-snapshot') {
+      if (!inventorySourceRoot) throw new Error(`inventory source root is required for ${entry.id}`);
+      return inventorySourceRoot;
+    }
     if (!localSourceRoot) throw new Error(`localSourceRoot is required for ${entry.id}`);
     return localSourceRoot;
   }
@@ -564,6 +568,7 @@ function planCatalogReconciliation(options = {}) {
     const sourceRoot = sourceRootFor(entry, {
       publicSourceRoot: options.publicSourceRoot,
       localSourceRoot: options.localSourceRoot,
+      inventorySourceRoot: options.inventorySourceRoot,
     });
 
     const enrolled = harnesses.filter((item) => closureByHarness.get(item.id)?.some((candidate) => candidate.id === entry.id));
