@@ -81,7 +81,30 @@ a different computer; its loopback is not this process. Pick one:
    Then point Grok Bot at `http://127.0.0.1:8765/mcp` **on the machine where
    that tunnel is listening**.
 
-2. **Non-loopback bind** (explicit, and the bearer token is cleartext HTTP
+2. **Tailscale Funnel** (or another TLS reverse proxy) to the vault-host
+   loopback gateway. This is the practical path when Grok Bot runs on a
+   separate cloud/Linux computer that shares a Tailscale network with the vault
+   host, but peer `tailscale serve` / MagicDNS reverse paths are flaky
+   (timeouts, asymmetric routing, or macOS Application Firewall). Example:
+
+   ```bash
+   # vault host — gateway must already be listening on 127.0.0.1:8765
+   tailscale funnel --bg http://127.0.0.1:8765
+   tailscale funnel status
+   ```
+
+   Point Grok Bot at the Funnel HTTPS URL plus `/mcp`, for example
+   `https://<vault-host>.<tailnet>.ts.net/mcp`, with
+   `Authorization: Bearer <token>`. Funnel must be enabled on the tailnet once
+   (Tailscale admin “enable Funnel” link). Keep the gateway **supervised**
+   (see below): if the Node process dies, Funnel returns 502.
+
+   Note: on a Tailscale-joined Grok Bot box, MagicDNS may resolve the Funnel
+   hostname to the vault host’s peer Tailscale IP, while public DNS resolves
+   Funnel edge addresses. Both can work when the gateway is up; document the
+   HTTPS `/mcp` URL either way.
+
+3. **Non-loopback bind** (explicit, and the bearer token is cleartext HTTP
    unless you terminate TLS in front):
 
    ```bash
@@ -90,6 +113,60 @@ a different computer; its loopback is not this process. Pick one:
    ```
 
    Put a TLS reverse proxy in front before exposing this beyond a trusted LAN.
+
+### Keep the gateway alive (supervised)
+
+Ad-hoc `node .../jarvos-mcp-http.js` under an SSH or remote-agent shell often
+exits when that session ends, which makes Funnel/Serve return 502. Prefer a
+user LaunchAgent (macOS) or equivalent supervisor. Minimal macOS example
+(`~/Library/LaunchAgents/com.jarvos.mcp-http.plist`):
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.jarvos.mcp-http</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/opt/homebrew/bin/node</string>
+    <string>/ABS/PATH/TO/jarvOS/modules/jarvos-agent-context/scripts/jarvos-mcp-http.js</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>JARVOS_MCP_HTTP_TOKEN_FILE</key>
+    <string>/Users/YOU/.jarvos/grok-bot-mcp.token</string>
+    <key>JARVOS_MCP_HTTP_HOST</key><string>127.0.0.1</string>
+    <key>JARVOS_MCP_HTTP_PORT</key><string>8765</string>
+    <key>JARVOS_CONFIG_PATH</key>
+    <string>/Users/YOU/clawd/jarvos.config.json</string>
+  </dict>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>WorkingDirectory</key><string>/ABS/PATH/TO/jarvOS-or-config-cwd</string>
+  <key>StandardOutPath</key><string>/tmp/jarvos-mcp-http.out.log</string>
+  <key>StandardErrorPath</key><string>/tmp/jarvos-mcp-http.err.log</string>
+</dict>
+</plist>
+```
+
+Load with `launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.jarvos.mcp-http.plist`.
+Adjust the `node` path (`which node`) and absolute paths for your machine.
+
+### Protocol versions
+
+Grok Bot / Cursor Streamable HTTP clients may send MCP `initialize`
+`protocolVersion` values newer or older than the gateway default
+(`2025-06-18`), including at least `2025-11-25`, `2025-03-26`, and
+`2024-11-05`. The HTTP gateway accepts that set so remote MCP registration
+does not fail with `unsupported initialize protocol version` /
+`failed_to_load`.
+
+### Obsidian acknowledgement
+
+`jarvos_create_note` still follows the vault mutation contract: Obsidian should
+be open on the vault host so pending mutations can be acknowledged/reconciled.
+A note may appear as pending until reconcile succeeds.
 
 `JARVOS_MCP_HTTP_TOKEN_FILE` may override the default token path; treat that
 file as secret and do not paste it into agent transcripts.
