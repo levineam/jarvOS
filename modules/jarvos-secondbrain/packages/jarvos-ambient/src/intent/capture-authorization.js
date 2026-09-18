@@ -29,6 +29,11 @@ const BOUNDED_NATURAL_LANGUAGE_PATTERNS = [
   /\bwrite (?:this|that) down\b/i,
 ];
 
+// An explicit negation right before the directive verb ("do not save this",
+// "never write that down") means the speaker is declining capture, not
+// requesting it — the bounded pattern above must not fire in that case.
+const NEGATED_NATURAL_LANGUAGE_RE = /\b(?:do\s*not|don'?t|never|won'?t|stop|please\s+don'?t)\s+(?:save|write)\b/i;
+
 function explicitCallerTrigger(capture = {}) {
   return [capture.trigger, capture.keyword, capture.mode, capture.type, capture.route]
     .map(normalizeTrigger)
@@ -36,7 +41,9 @@ function explicitCallerTrigger(capture = {}) {
 }
 
 function hasBoundedNaturalLanguageIntent(capture = {}) {
-  return captureSources(capture).some((source) => matchesAny(source, BOUNDED_NATURAL_LANGUAGE_PATTERNS));
+  return captureSources(capture).some((source) => (
+    matchesAny(source, BOUNDED_NATURAL_LANGUAGE_PATTERNS) && !NEGATED_NATURAL_LANGUAGE_RE.test(source)
+  ));
 }
 
 /**

@@ -5,10 +5,12 @@ const {
   NOTE,
   JOURNAL,
   detectTrigger,
-  hasCaptureIntent,
   primaryText,
   stripLeadingKeyword,
 } = require('../intent/keyword-capture-router');
+const {
+  authorizeCapture,
+} = require('../intent/capture-authorization');
 const {
   normalizeContentOrigin,
 } = require('../../../../bridge/provenance/src/content-origin-contract');
@@ -166,7 +168,11 @@ function isSubstantiveIdea(capture = {}) {
 function buildKeywordRoutingPlan(capture = {}, options = {}) {
   capture = normalizeCaptureProvenance(capture, options);
   const detectedTrigger = detectTrigger(capture);
-  const captureIntent = hasCaptureIntent(capture);
+  // Explicit durable-capture intent only (SUP-3981) — never the legacy broad
+  // hasCaptureIntent, which authorizes on a bare "capture" mention or other
+  // incidental wording. authorizeCapture is the single strict predicate shared
+  // with the dispatcher, so a direct planner call can't bypass it.
+  const captureIntent = authorizeCapture(capture).authorized;
   const date = String(capture.date || '').trim() || undefined;
 
   if (!captureIntent) {
@@ -407,6 +413,10 @@ function buildSkillInvocations(plan) {
 function buildThreePackagePlan(capture = {}, options = {}) {
   const normalizedCapture = normalizeCaptureProvenance(capture, options);
   const keywordPlan = buildKeywordRoutingPlan(normalizedCapture, options);
+  // Captured before the work-intake override below can flip keywordPlan.ignored to
+  // false — memory promotion must depend only on this, never on work-intake
+  // eligibility (SUP-3981). Work intake and durable capture are independent grants.
+  const hasExplicitCaptureIntent = !keywordPlan.ignored;
 
   const salienceClass = normalizedCapture.salienceClass || null;
   const confidence = typeof normalizedCapture.confidence === 'number' ? normalizedCapture.confidence : null;
@@ -431,7 +441,7 @@ function buildThreePackagePlan(capture = {}, options = {}) {
     memoryClass
     && confidence !== null
     && confidence >= MEMORY_CONFIDENCE_THRESHOLD
-    && !keywordPlan.ignored,
+    && hasExplicitCaptureIntent,
   );
 
   const memoryParams = shouldRouteToMemory ? {

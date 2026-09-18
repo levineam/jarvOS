@@ -12,6 +12,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 
 const { authorizeCapture } = require('../packages/jarvos-ambient/src/intent/capture-authorization');
+const { buildKeywordRoutingPlan, buildThreePackagePlan } = require('../packages/jarvos-ambient/src/routing');
 const { dispatchCapture } = require('../bridge/dispatch/src/capture-dispatcher');
 const { applyRoutingPlan } = require('../bridge/routing/src/keyword-capture-router');
 const { captureThat } = require('../bridge/routing/src/capture-that');
@@ -244,4 +245,133 @@ test('"capture that" remains an authorized programmatic declaration', () => {
   assert.equal(result.captured, true);
   assert.equal(adapter.calls[0][0], 'writeNote');
   assert.equal(adapter.calls[1][0], 'appendLineToJournalSection');
+});
+
+test('positive control: "write this/that down" preserves bounded natural-language capture', () => {
+  for (const text of ['write this down before we forget the release steps', 'write that down for the retro notes']) {
+    const authorization = authorizeCapture({ text });
+    assert.equal(authorization.authorized, true);
+    assert.equal(authorization.source, 'natural_language');
+    assert.equal(authorization.trigger, 'note');
+
+    const adapter = recordingAdapter();
+    const result = dispatchCapture({ text, date: TEST_DATE }, { adapter });
+    assert.equal(result.captured, true);
+    assert.equal(result.skillId, 'note-creation');
+    assert.equal(adapter.calls[0][0], 'writeNote');
+    assert.equal(adapter.calls[1][0], 'appendLineToJournalSection');
+  }
+});
+
+// Astra/medium review (fresh pass) reproduced three P1 authorization gaps.
+// These regressions pin the fixed boundary at the planner, dispatcher, and
+// adapter layers so none of the three can regress independently.
+
+test('Astra repro 1: a bare "capture" mention inside high-confidence decision text does not bypass authorization at the direct planner layer', () => {
+  const text = 'Fix the capture router tomorrow';
+  // buildKeywordRoutingPlan/buildThreePackagePlan read flat salienceClass/confidence;
+  // dispatchCapture reads a nested classification — both are exercised here.
+  const plannerCapture = { text, salienceClass: 'decision', confidence: 0.99 };
+  const dispatcherCapture = { text, classification: { salienceClass: 'decision', confidence: 0.99 } };
+
+  const authorization = authorizeCapture(plannerCapture);
+  assert.equal(authorization.authorized, false);
+
+  const keywordPlan = buildKeywordRoutingPlan(plannerCapture);
+  assert.equal(keywordPlan.ignored, true);
+  assert.equal(keywordPlan.createNote, false);
+  assert.equal(keywordPlan.journalSection, null);
+
+  const plan = buildThreePackagePlan(plannerCapture);
+  assert.equal(plan.ignored, true);
+  assert.equal(plan.routeToMemory, false);
+  assert.deepEqual(plan.actions, []);
+  assert.deepEqual(plan.skillInvocations, []);
+
+  const result = dispatchCapture(dispatcherCapture, { adapter: explodingAdapter() });
+  assert.equal(result.captured, false);
+  assert.equal(result.observed, true);
+  assert.equal(result.path, 'salience_observed');
+});
+
+test('Astra repro 2a: incidental "Side note: ..." does not authorize a durable write', () => {
+  const text = 'Side note: the build is still broken';
+
+  const authorization = authorizeCapture({ text });
+  assert.equal(authorization.authorized, false);
+  assert.equal(authorization.source, null);
+  assert.equal(authorization.trigger, null);
+
+  const result = dispatchCapture({ text }, { adapter: explodingAdapter() });
+  assert.equal(result.captured, false);
+  assert.equal(result.path, 'no_capture');
+});
+
+test('Astra repro 2b: explicit negation "Do not save this conversation" does not authorize a durable write', () => {
+  const text = 'Do not save this conversation';
+
+  const authorization = authorizeCapture({ text });
+  assert.equal(authorization.authorized, false);
+  assert.equal(authorization.source, null);
+  assert.equal(authorization.trigger, null);
+
+  const result = dispatchCapture({ text }, { adapter: explodingAdapter() });
+  assert.equal(result.captured, false);
+  assert.equal(result.path, 'no_capture');
+});
+
+test('negated forms of other bounded natural-language directives are also excluded', () => {
+  for (const text of ['never write that down', "don't save this", 'please don\'t save that for later']) {
+    const authorization = authorizeCapture({ text });
+    assert.equal(authorization.authorized, false, text);
+  }
+});
+
+test('a quoted capture command embedded mid-sentence does not authorize', () => {
+  const authorization = authorizeCapture({ text: 'She said "Note: fix the router" during standup.' });
+  assert.equal(authorization.authorized, false);
+  assert.equal(authorization.source, null);
+});
+
+test('a bare "remember this" aside without a bounded save/write directive does not authorize', () => {
+  const authorization = authorizeCapture({ text: 'remember this for the retro, nothing else to do' });
+  assert.equal(authorization.authorized, false);
+});
+
+test('Astra repro 3: explicit work intake does not leak memory promotion from salience alone', () => {
+  const capture = {
+    text: 'Fix the build tomorrow',
+    workIntake: true,
+    salienceClass: 'decision',
+    confidence: 0.99,
+  };
+
+  const authorization = authorizeCapture(capture);
+  assert.equal(authorization.authorized, false);
+
+  const plan = buildThreePackagePlan(capture);
+  assert.equal(plan.route, 'work-intake');
+  assert.equal(plan.ignored, false);
+  assert.equal(plan.routeToMemory, false);
+  assert.equal(plan.memoryParams, null);
+  assert.deepEqual(plan.actions.map((action) => action.kind), ['work-intake']);
+  assert.deepEqual(plan.skillInvocations.map((invocation) => invocation.skillId), ['work-intake']);
+});
+
+test('explicit note intent alongside explicit work intake still routes to memory (memory gate keys off capture intent, not work-intake eligibility)', () => {
+  const plan = buildThreePackagePlan({
+    text: 'Note: we decided to ship the router fix tomorrow',
+    workIntake: true,
+    salienceClass: 'decision',
+    confidence: 0.92,
+    date: TEST_DATE,
+  });
+
+  assert.equal(plan.ignored, false);
+  assert.equal(plan.routeToMemory, true);
+  assert.equal(plan.workIntake.operation, 'ensureTrackedWork');
+  assert.deepEqual(
+    plan.skillInvocations.map((invocation) => invocation.skillId).sort(),
+    ['memory-promotion', 'note-creation', 'work-intake'],
+  );
 });

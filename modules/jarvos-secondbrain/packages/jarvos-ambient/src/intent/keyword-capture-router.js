@@ -41,7 +41,6 @@ const IDEA_CAPTURE_PATTERNS = [
 const NOTE_CAPTURE_PATTERNS = [
   /^\s*note\s*[:\-]/i,
   /\bnote to self\b/i,
-  /\bside note\b/i,
   /\bi(?:'ll| will) note that\b/i,
   /\bmake a note\b/i,
   /\btake a note\b/i,

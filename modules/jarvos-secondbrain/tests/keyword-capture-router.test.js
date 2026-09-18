@@ -91,7 +91,7 @@ test('substantive idea creates a note linked from the Ideas section', () => {
   });
 });
 
-test('note trigger and ambiguous capture both bias to standalone notes plus journal Notes links', () => {
+test('note trigger creates a standalone note plus a journal Notes link', () => {
   const vault = makeTempVault();
 
   withVaultEnv(vault, (options) => {
@@ -101,24 +101,33 @@ test('note trigger and ambiguous capture both bias to standalone notes plus jour
       date: TEST_DATE,
     }, options);
 
+    assert.ok(explicit.note);
+
+    const journal = readDirFile(vault.journalDir, `${TEST_DATE}.md`);
+    assert.match(journal, /## 📝 Notes\n- \[\[Secondbrain package map\]\]/);
+  });
+});
+
+test('a bare "capture ... for later reference" mention is discussion, not a durable-capture directive (SUP-3981)', () => {
+  const vault = makeTempVault();
+
+  withVaultEnv(vault, (options) => {
     const defaultPlan = buildRoutingPlan({
       text: 'capture the package naming decision for later reference',
       date: TEST_DATE,
     });
-    assert.equal(defaultPlan.route, 'note');
-    assert.equal(defaultPlan.defaultedToNoteBias, true);
+    assert.equal(defaultPlan.ignored, true);
+    assert.equal(defaultPlan.route, null);
 
     const implicit = applyRoutingPlan({
       text: 'capture the package naming decision for later reference',
       date: TEST_DATE,
     }, options);
 
-    assert.ok(explicit.note);
-    assert.ok(implicit.note);
-
-    const journal = readDirFile(vault.journalDir, `${TEST_DATE}.md`);
-    assert.match(journal, /## 📝 Notes\n- \[\[Secondbrain package map\]\]/);
-    assert.match(journal, /\[\[capture the package naming decision for later reference\]\]/);
+    assert.equal(implicit.note, null);
+    assert.equal(implicit.journalEntry, null);
+    assert.equal(fs.readdirSync(vault.notesDir).length, 0);
+    assert.equal(fs.readdirSync(vault.journalDir).length, 0);
   });
 });
 
