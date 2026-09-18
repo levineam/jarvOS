@@ -149,6 +149,34 @@ test('positive control: natural-language "make a note" creates a note and journa
   assert.equal(adapter.calls[1][0], 'appendLineToJournalSection');
 });
 
+test('positive control: direct "take a note" without quoting or negation still authorizes', () => {
+  const adapter = recordingAdapter();
+  const text = 'take a note: pick up the release notes before the demo';
+  const authorization = authorizeCapture({ text });
+  assert.equal(authorization.authorized, true);
+  assert.equal(authorization.source, 'keyword_trigger');
+  assert.equal(authorization.trigger, 'note');
+
+  const result = dispatchCapture({ text, date: TEST_DATE }, { adapter });
+  assert.equal(result.captured, true);
+  assert.equal(result.skillId, 'note-creation');
+  assert.equal(adapter.calls[0][0], 'writeNote');
+  assert.equal(adapter.calls[1][0], 'appendLineToJournalSection');
+});
+
+test('positive control: "please make a note" (no negation present) still authorizes', () => {
+  const adapter = recordingAdapter();
+  const text = 'Could you please make a note about the retro action items';
+  const authorization = authorizeCapture({ text });
+  assert.equal(authorization.authorized, true);
+  assert.equal(authorization.source, 'keyword_trigger');
+  assert.equal(authorization.trigger, 'note');
+
+  const result = dispatchCapture({ text, date: TEST_DATE }, { adapter });
+  assert.equal(result.captured, true);
+  assert.equal(result.skillId, 'note-creation');
+});
+
 test('positive control: bounded "save this"/"save that" preserve natural-language capture', () => {
   for (const text of ['save this important detail about the release', 'save that for the retro notes']) {
     const authorization = authorizeCapture({ text });
@@ -327,6 +355,68 @@ test('negated forms of other bounded natural-language directives are also exclud
   }
 });
 
+test('negated "make a note"/"take a note" directives do not authorize', () => {
+  for (const text of ['Do not make a note about this', "Please don't take a note about this"]) {
+    const authorization = authorizeCapture({ text });
+    assert.equal(authorization.authorized, false, text);
+    assert.equal(authorization.source, null, text);
+    assert.equal(authorization.trigger, null, text);
+
+    const result = dispatchCapture({ text }, { adapter: explodingAdapter() });
+    assert.equal(result.captured, false, text);
+    assert.equal(result.path, 'no_capture', text);
+  }
+});
+
+test('quoted or reported mentions of capture phrasing do not authorize', () => {
+  for (const text of [
+    'The phrase "make a note" appears in the docs',
+    'He told me to "save this" as an example',
+    'We should test the words "write that down" in the parser',
+  ]) {
+    const authorization = authorizeCapture({ text });
+    assert.equal(authorization.authorized, false, text);
+    assert.equal(authorization.source, null, text);
+    assert.equal(authorization.trigger, null, text);
+
+    const result = dispatchCapture({ text }, { adapter: explodingAdapter() });
+    assert.equal(result.captured, false, text);
+    assert.equal(result.path, 'no_capture', text);
+  }
+});
+
+// Astra r2 REQUEST_CHANGES: negated/incidental/quoted note-save language must
+// not authorize durable writes, even with an adverb between the negator and
+// the directive, or when the quoted span extends past the matched phrase.
+test('Astra r2: negation with an intervening adverb does not authorize', () => {
+  for (const text of [
+    'Do not make a note of this conversation',
+    "Don't take a note of this conversation",
+    'Do not ever save this conversation',
+  ]) {
+    const authorization = authorizeCapture({ text });
+    assert.equal(authorization.authorized, false, text);
+    assert.equal(authorization.source, null, text);
+    assert.equal(authorization.trigger, null, text);
+
+    const result = dispatchCapture({ text }, { adapter: explodingAdapter() });
+    assert.equal(result.captured, false, text);
+    assert.equal(result.path, 'no_capture', text);
+  }
+});
+
+test('Astra r2: a quote that closes after the matched phrase does not authorize', () => {
+  const text = 'She said "make a note about the build" during standup.';
+  const authorization = authorizeCapture({ text });
+  assert.equal(authorization.authorized, false);
+  assert.equal(authorization.source, null);
+  assert.equal(authorization.trigger, null);
+
+  const result = dispatchCapture({ text }, { adapter: explodingAdapter() });
+  assert.equal(result.captured, false);
+  assert.equal(result.path, 'no_capture');
+});
+
 test('a quoted capture command embedded mid-sentence does not authorize', () => {
   const authorization = authorizeCapture({ text: 'She said "Note: fix the router" during standup.' });
   assert.equal(authorization.authorized, false);
@@ -336,6 +426,87 @@ test('a quoted capture command embedded mid-sentence does not authorize', () => 
 test('a bare "remember this" aside without a bounded save/write directive does not authorize', () => {
   const authorization = authorizeCapture({ text: 'remember this for the retro, nothing else to do' });
   assert.equal(authorization.authorized, false);
+});
+
+test('negated forms of the remaining unanchored note directives do not authorize', () => {
+  for (const text of [
+    'Do not note to self about the outage',
+    "Don't remember this note for later",
+  ]) {
+    const authorization = authorizeCapture({ text });
+    assert.equal(authorization.authorized, false, text);
+    assert.equal(authorization.source, null, text);
+    assert.equal(authorization.trigger, null, text);
+
+    const result = dispatchCapture({ text }, { adapter: explodingAdapter() });
+    assert.equal(result.captured, false, text);
+    assert.equal(result.path, 'no_capture', text);
+  }
+});
+
+test('quoted mentions of the remaining unanchored note directives do not authorize', () => {
+  for (const text of [
+    'The transcript says "note to self" right before the break.',
+    'She said "I will note that" during the call.',
+    'He wrote "remember this note" as a placeholder example.',
+  ]) {
+    const authorization = authorizeCapture({ text });
+    assert.equal(authorization.authorized, false, text);
+    assert.equal(authorization.source, null, text);
+    assert.equal(authorization.trigger, null, text);
+
+    const result = dispatchCapture({ text }, { adapter: explodingAdapter() });
+    assert.equal(result.captured, false, text);
+    assert.equal(result.path, 'no_capture', text);
+  }
+});
+
+test('positive control: "note to self"/"I will note that"/"remember this note" still authorize directly', () => {
+  for (const text of [
+    'note to self: wire the release checklist before the demo',
+    'I will note that the release checklist needs wiring',
+    'remember this note about the release checklist',
+  ]) {
+    const adapter = recordingAdapter();
+    const authorization = authorizeCapture({ text });
+    assert.equal(authorization.authorized, true, text);
+    assert.equal(authorization.source, 'keyword_trigger', text);
+    assert.equal(authorization.trigger, 'note', text);
+
+    const result = dispatchCapture({ text, date: TEST_DATE }, { adapter });
+    assert.equal(result.captured, true, text);
+    assert.equal(result.skillId, 'note-creation', text);
+    assert.equal(adapter.calls[0][0], 'writeNote', text);
+    assert.equal(adapter.calls[1][0], 'appendLineToJournalSection', text);
+  }
+});
+
+test('quoted mentions of natural-language idea directives do not authorize', () => {
+  for (const text of [
+    'The doc says "I have an idea for redesigning this" as an example quote.',
+    'He said "here\'s an idea about routing" during the retro.',
+  ]) {
+    const authorization = authorizeCapture({ text });
+    assert.equal(authorization.authorized, false, text);
+    assert.equal(authorization.source, null, text);
+    assert.equal(authorization.trigger, null, text);
+
+    const result = dispatchCapture({ text }, { adapter: explodingAdapter() });
+    assert.equal(result.captured, false, text);
+    assert.equal(result.path, 'no_capture', text);
+  }
+});
+
+test('positive control: direct "I have an idea"/"here\'s an idea" still authorize', () => {
+  for (const text of [
+    'I have an idea for improving the routing layer',
+    "Here's an idea about the release checklist",
+  ]) {
+    const authorization = authorizeCapture({ text });
+    assert.equal(authorization.authorized, true, text);
+    assert.equal(authorization.source, 'keyword_trigger', text);
+    assert.equal(authorization.trigger, 'idea', text);
+  }
 });
 
 test('Astra repro 3: explicit work intake does not leak memory promotion from salience alone', () => {
