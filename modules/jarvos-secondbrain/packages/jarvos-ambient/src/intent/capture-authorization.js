@@ -57,7 +57,7 @@ const NEGATION_LEADIN_RE = /\b(?:do\s*not|don'?t|never|won'?t|stop|please\s+don'
 // quote mark, and the matching closing quote mark must appear somewhere
 // later in the same sentence — the quoted span can extend past the matched
 // phrase itself (e.g. the quote closes after "about the build").
-const QUOTE_OPEN_RE = /(["'“‘])\s*$/;
+const QUOTE_OPEN_RE = /(["“‘])[^"“‘]*$|(?:^|[\s(])(')[^']*$/;
 const QUOTE_PAIRS = { '"': '"', "'": "'", '“': '”', '‘': '’' };
 
 function explicitCallerTrigger(capture = {}) {
@@ -72,7 +72,7 @@ function explicitCallerTrigger(capture = {}) {
 function isQuotedMention(before, after) {
   const openMatch = before.match(QUOTE_OPEN_RE);
   if (!openMatch) return false;
-  const closeChar = QUOTE_PAIRS[openMatch[1]];
+  const closeChar = QUOTE_PAIRS[openMatch[1] || openMatch[2]];
   const sentenceEnd = after.search(/[.!?\n]/);
   const window = sentenceEnd === -1 ? after : after.slice(0, sentenceEnd + 1);
   return window.includes(closeChar);
