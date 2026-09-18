@@ -48,16 +48,20 @@ const GUARDED_NOTE_PATTERNS = [
 // declining capture, not requesting it. A few adverbs (ever, actually,
 // please) may sit between the negator and the directive without weakening
 // the negation ("do not ever save this", "don't actually make a note").
-const NEGATION_LEADIN_RE = /\b(?:do\s*not|don'?t|never|won'?t|stop|please\s+don'?t)\b(?:\s+(?:ever|actually|please))*\s*$/i;
+const NEGATION_LEADIN_RE = /\b(?:do\s*not|don'?t|never|won'?t|stop|please\s+don'?t)\b(?:\s+(?:ever|actually|please|really|just|even))*\s*$/i;
 
 // Quoted or reported speech ("The phrase \"make a note\" appears in the
-// docs", "He told me to \"save this\" as an example", "She said \"make a
-// note about the build\" during standup.") mentions the words without
-// issuing the directive. The matched phrase must sit right after an opening
-// quote mark, and the matching closing quote mark must appear somewhere
-// later in the same sentence — the quoted span can extend past the matched
-// phrase itself (e.g. the quote closes after "about the build").
-const QUOTE_OPEN_RE = /(["“‘])[^"“‘]*$|(?:^|[\s(])(')[^']*$/;
+// docs", "He told me to \"save this\" as an example", "The doc says \"I
+// have an idea for redesigning this\" as an example quote.") mentions the
+// words without issuing the directive. Detection is span-aware: every quote
+// mark in the sentence is tracked to build actual open/close spans, and a
+// candidate match is a quoted mention whenever it falls inside a span —
+// even when the match does not begin immediately after the opening quote
+// mark, e.g. a second, later pattern matching further into an
+// already-quoted phrase ("an idea for" inside "...says \"I have an idea for
+// redesigning this\"..."). Apostrophes flanked by letters on both sides
+// ("don't", "here's") are contractions, not quote marks, and are never
+// treated as span delimiters.
 const QUOTE_PAIRS = { '"': '"', "'": "'", '“': '”', '‘': '’' };
 
 function explicitCallerTrigger(capture = {}) {
@@ -66,25 +70,64 @@ function explicitCallerTrigger(capture = {}) {
     .find(Boolean) || null;
 }
 
-// True when the matched phrase opens right after a quote mark and the
-// matching close mark appears later in the same sentence — a quoted or
-// reported mention, not a live directive.
-function isQuotedMention(before, after) {
-  const openMatch = before.match(QUOTE_OPEN_RE);
-  if (!openMatch) return false;
-  const closeChar = QUOTE_PAIRS[openMatch[1] || openMatch[2]];
-  const sentenceEnd = after.search(/[.!?\n]/);
-  const window = sentenceEnd === -1 ? after : after.slice(0, sentenceEnd + 1);
-  return window.includes(closeChar);
+function isContractionApostrophe(text, index) {
+  const prev = text[index - 1];
+  const next = text[index + 1];
+  return Boolean(prev) && Boolean(next) && /[A-Za-z]/.test(prev) && /[A-Za-z]/.test(next);
+}
+
+// Every quoted span [openIndex, closeIndex] (indices relative to `sentence`)
+// whose open and close marks both appear within the sentence.
+function findQuotedSpans(sentence) {
+  const spans = [];
+  const openIndex = { '"': -1, "'": -1 };
+  const openStack = { '“': [], '‘': [] };
+  for (let i = 0; i < sentence.length; i += 1) {
+    const ch = sentence[i];
+    if (ch === '"' || ch === "'") {
+      if (ch === "'" && isContractionApostrophe(sentence, i)) continue;
+      if (openIndex[ch] === -1) {
+        openIndex[ch] = i;
+      } else {
+        spans.push({ start: openIndex[ch], end: i });
+        openIndex[ch] = -1;
+      }
+      continue;
+    }
+    if (ch === '“') { openStack['“'].push(i); continue; }
+    if (ch === '‘' && !isContractionApostrophe(sentence, i)) { openStack['‘'].push(i); continue; }
+    if (ch === '”' && openStack['“'].length) {
+      spans.push({ start: openStack['“'].pop(), end: i });
+      continue;
+    }
+    if (ch === '’' && openStack['‘'].length && !isContractionApostrophe(sentence, i)) {
+      spans.push({ start: openStack['‘'].pop(), end: i });
+    }
+  }
+  return spans;
+}
+
+// True when the matched phrase falls inside a quoted span opened earlier and
+// closed later in the same sentence — a quoted or reported mention, not a
+// live directive.
+function isQuotedMention(source, match) {
+  const relStart = match.index;
+  const relEnd = match.index + match[0].length;
+  // Scan the whole source, not a punctuation-bounded sentence. A closing
+  // quote after an interior period ("...conversation.") must still count.
+  return findQuotedSpans(source).some((span) => span.start < relStart && span.end >= relEnd);
 }
 
 // A directive match is suppressed — treated as declined or merely mentioned,
 // not requested — when it is immediately preceded by a negation lead-in, or
 // wrapped in quote marks as a quoted/reported mention.
+const REPORTED_SPEECH_LEADIN_RE = /\b(?:(?:he|she|they|someone|somebody)\s+)?(?:said|told me|told us|asked me|asked us)\s+to\s*$/i;
+
 function isSuppressedMention(source, match) {
   const before = source.slice(0, match.index);
-  const after = source.slice(match.index + match[0].length);
-  return NEGATION_LEADIN_RE.test(before) || isQuotedMention(before, after);
+  return NEGATION_LEADIN_RE.test(before)
+    || REPORTED_SPEECH_LEADIN_RE.test(before)
+    || isQuotedMention(source, match);
 }
 
 // True when any pattern in the list matches the source outside a negation

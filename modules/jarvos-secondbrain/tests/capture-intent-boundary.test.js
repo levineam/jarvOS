@@ -215,17 +215,25 @@ test('positive control: Idea: stays journal Ideas only unless an explicit durabl
 });
 
 test('explicit note intent plus high salience uses salience for downstream memory routing only after intent is established', () => {
-  const adapter = recordingAdapter();
-  const result = dispatchCapture({
+  // Pure planner assertion only (buildThreePackagePlan performs no I/O):
+  // dispatchCapture/applyThreePackagePlan call the real createMemoryRecord
+  // from jarvos-memory/src unconditionally, which must never be exercised
+  // in this suite.
+  const plan = buildThreePackagePlan({
     text: 'Note: we decided to keep adapter writes behind skill dispatch',
     date: TEST_DATE,
-    classification: { salienceClass: 'decision', confidence: 0.92 },
-  }, { adapter });
+    salienceClass: 'decision',
+    confidence: 0.92,
+  });
 
-  assert.equal(result.captured, true);
-  assert.equal(result.skillId, 'note-creation');
-  assert.deepEqual(result.destinations, ['journal', 'notes', 'memory']);
-  assert.equal(result.routing.memory.record.class, 'decision');
+  assert.equal(plan.ignored, false);
+  assert.equal(plan.route, 'note');
+  assert.equal(plan.routeToMemory, true);
+  assert.equal(plan.memoryParams.class, 'decision');
+  assert.deepEqual(
+    plan.skillInvocations.map((invocation) => invocation.skillId).sort(),
+    ['memory-promotion', 'note-creation'],
+  );
 });
 
 test('intentional writes retain all five jarvos-content-origin/v1 frontmatter fields', () => {
@@ -403,6 +411,42 @@ test('Astra r2: negation with an intervening adverb does not authorize', () => {
     assert.equal(result.captured, false, text);
     assert.equal(result.path, 'no_capture', text);
   }
+});
+
+test('Astra r3: a quoted note directive whose close quote follows interior punctuation does not authorize', () => {
+  const text = 'She said "make a note of this conversation."';
+  const authorization = authorizeCapture({ text });
+  assert.equal(authorization.authorized, false);
+  assert.equal(authorization.source, null);
+  assert.equal(authorization.trigger, null);
+
+  const result = dispatchCapture({ text }, { adapter: explodingAdapter() });
+  assert.equal(result.captured, false);
+  assert.equal(result.path, 'no_capture');
+});
+
+test('Astra r3: unquoted reported speech is not a capture directive', () => {
+  const text = 'He told me to save this conversation';
+  const authorization = authorizeCapture({ text });
+  assert.equal(authorization.authorized, false);
+  assert.equal(authorization.source, null);
+  assert.equal(authorization.trigger, null);
+
+  const result = dispatchCapture({ text }, { adapter: explodingAdapter() });
+  assert.equal(result.captured, false);
+  assert.equal(result.path, 'no_capture');
+});
+
+test('Astra r3: negation with intervening "really" does not authorize', () => {
+  const text = 'Do not really save this conversation';
+  const authorization = authorizeCapture({ text });
+  assert.equal(authorization.authorized, false);
+  assert.equal(authorization.source, null);
+  assert.equal(authorization.trigger, null);
+
+  const result = dispatchCapture({ text }, { adapter: explodingAdapter() });
+  assert.equal(result.captured, false);
+  assert.equal(result.path, 'no_capture');
 });
 
 test('Astra r3: a polite quoted note directive does not authorize', () => {
