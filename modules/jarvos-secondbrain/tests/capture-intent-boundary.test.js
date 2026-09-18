@@ -405,6 +405,18 @@ test('Astra r2: negation with an intervening adverb does not authorize', () => {
   }
 });
 
+test('Astra r3: a polite quoted note directive does not authorize', () => {
+  const text = 'She said "please make a note about the build" during standup.';
+  const authorization = authorizeCapture({ text });
+  assert.equal(authorization.authorized, false);
+  assert.equal(authorization.source, null);
+  assert.equal(authorization.trigger, null);
+
+  const result = dispatchCapture({ text }, { adapter: explodingAdapter() });
+  assert.equal(result.captured, false);
+  assert.equal(result.path, 'no_capture');
+});
+
 test('Astra r2: a quote that closes after the matched phrase does not authorize', () => {
   const text = 'She said "make a note about the build" during standup.';
   const authorization = authorizeCapture({ text });
