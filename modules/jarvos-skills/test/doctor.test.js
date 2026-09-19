@@ -11,6 +11,7 @@ const { doctorSharedSkills, initOperator } = require('../src');
 
 const CLI = path.join(__dirname, '..', 'scripts', 'install-skills.js');
 const PREFLIGHT = path.join(__dirname, '..', 'scripts', 'live-preflight-checklist.js');
+const DISTRIBUTION_RUNBOOK = path.join(__dirname, '..', '..', '..', 'docs', 'runbooks', 'shared-skill-distribution.md');
 
 function temp(prefix) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
@@ -122,6 +123,37 @@ test('live-preflight checklist stays non-activating and reports owner-pending st
   assert.equal(byId['isolated-matrix-dogfood'].status, 'pass');
   assert.equal(byId['doctor-shared'].status, 'pass');
   assert.equal(byId['claude-interactive-probe'].status, 'pending_owner');
+  assert.deepEqual(byId['claude-interactive-probe'].evidence, {
+    preflightRanModelProbe: false,
+    ownerModelProbeRequired: true,
+    liveGates: 'off',
+  });
+  assert.equal(byId['active-assistant-fresh-discovery'].status, 'pending_owner');
+  assert.deepEqual(byId['active-assistant-fresh-discovery'].evidence, {
+    preflightRanModelProbe: false,
+    ownerModelProbeRequired: true,
+    delivery: false,
+    consumer: 'openclaw-active-assistant',
+    sourceKind: 'file-backed',
+    proofBoundary: 'fresh-session-discovery',
+    modelSelection: 'configured-primary',
+  });
+  assert.equal(byId['active-assistant-existing-session-refresh'].status, 'pending_owner');
+  assert.deepEqual(byId['active-assistant-existing-session-refresh'].evidence, {
+    preflightRanModelProbe: false,
+    ownerModelProbeRequired: true,
+    delivery: false,
+    consumer: 'openclaw-active-assistant',
+    sourceKind: 'file-backed',
+    proofBoundary: 'existing-session-next-turn-refresh',
+    watchRequired: true,
+    sameSessionRequired: true,
+    managedLibraryRequiresExplicitRefresh: true,
+  });
+  assert.match(byId['active-assistant-fresh-discovery'].summary, /fresh-session discovery/u);
+  assert.match(byId['active-assistant-existing-session-refresh'].summary, /same existing Active Assistant session/u);
+  assert.match(report.next, /fresh-discovery and existing-session refresh proofs/u);
+  assert.match(report.next, /do not change managed runtime selection or enable a live harness gate/u);
   assert.equal(byId['live-harness-gates'].status, 'off');
   assert.ok(byId['runtime-activation'], 'runtime-activation item required');
   assert.ok(['info', 'pass', 'pending', 'pending_owner'].includes(byId['runtime-activation'].status));
@@ -135,6 +167,29 @@ test('live-preflight checklist stays non-activating and reports owner-pending st
   }
   // Informational activation status must not fail the package gate when unconfigured.
   assert.notEqual(byId['runtime-activation'].status, 'fail');
+});
+
+test('shared-skill runbook keeps Active Assistant discovery and refresh proof boundaries distinct', () => {
+  const runbook = fs.readFileSync(DISTRIBUTION_RUNBOOK, 'utf8');
+  const shellBlocks = [...runbook.matchAll(/```sh\n([\s\S]*?)\n```/gu)].map((match) => match[1]);
+  const existingSessionBlocks = shellBlocks.filter((block) => block.includes('openclaw agent --session-id <existing-session-id>'));
+  assert.match(runbook, /fresh-session discovery, existing-session refresh/u);
+  assert.match(runbook, /effective `skills\.load\.watch` value must be `true`/u);
+  assert.match(runbook, /omitted `watch` key counts\s+only when the installed OpenClaw documentation declares its default to be\s+`true`/u);
+  assert.match(runbook, /`openclaw-workspace`, `openclaw-extra`,\s+and `openclaw-managed`/u);
+  assert.match(runbook, /`openclaw-managed` is OpenClaw's watched,\s+file-backed user skill root/u);
+  assert.match(runbook, /headless `agent exec` surface proves fresh-session discovery only/u);
+  assert.match(runbook, /`openclaw agent exec --help`/u);
+  assert.match(runbook, /`openclaw\s+agent --help` and confirm that `--session-id`, `--message`, `--json`/u);
+  assert.match(runbook, /confirm the watcher event was\s+processed, or wait longer than the installed watcher's documented debounce/u);
+  assert.equal(existingSessionBlocks.length, 2);
+  for (const block of existingSessionBlocks) {
+    assert.match(block, /openclaw agent --session-id <existing-session-id> --json\s+\\\s+--message/u);
+    assert.doesNotMatch(block, /--deliver/u);
+  }
+  assert.match(existingSessionBlocks[0], /expected-version-1-behavior/u);
+  assert.match(existingSessionBlocks[1], /expected-version-2-behavior/u);
+  assert.match(runbook, /`openclaw skills library refresh` for the selected\s+session/u);
 });
 
 test('live-preflight rejects write opt-in and remains a read-only release gate', () => {
