@@ -357,6 +357,15 @@ function normalizeOverlayEntry(entry) {
   );
   const allowlist = normalizeAllowlist(bundle.allowlist || source.allowlist, `allowlist for ${id}`);
   const treeDigest = exactDigest(bundle.treeDigest || source.treeDigest || source.digest, `tree digest for ${id}`);
+  const sourceRootKind = source.sourceRootKind || 'local';
+  const articleGeneratorAllowlist = [...DEFAULT_ALLOWED_BUNDLE_GLOBS, 'evals/routing.jsonl'].sort();
+  if (sourceRootKind !== 'local' && sourceRootKind !== 'inventory-snapshot') {
+    throw new Error(`sourceRootKind for ${id} is invalid`);
+  }
+  if (sourceRootKind === 'inventory-snapshot'
+    && (id !== 'article-generator' || JSON.stringify(allowlist) !== JSON.stringify(articleGeneratorAllowlist))) {
+    throw new Error('inventory snapshots are only supported for article-generator routing evals');
+  }
   const verification = normalizeVerificationPolicy(source.verification, `verification for ${id}`, allowedHarnesses);
   // Overlay admission authorizes installation/use. Remote model probes need an
   // explicit per-harness flag and default to false.
@@ -374,6 +383,7 @@ function normalizeOverlayEntry(entry) {
       : [],
     renderer: typeof source.renderer === 'string' && source.renderer ? source.renderer : 'raw-skill-bundle',
     verification,
+    sourceRootKind,
     bundle: {
       root: relativeRoot,
       allowlist,

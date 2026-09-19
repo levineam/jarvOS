@@ -10,6 +10,7 @@ const path = require('node:path');
 const {
   CATALOG_SCHEMA_VERSION,
   OVERLAY_SCHEMA_VERSION,
+  DEFAULT_ALLOWED_BUNDLE_GLOBS,
   computeBundleTree,
   composeEffectiveCatalog,
   validatePublicCatalog,
@@ -44,8 +45,18 @@ const {
   EXCLUSION_SCHEMA_VERSION,
   opaqueSkillId,
 } = require('./inventory-contract');
+const { commitSnapshot } = require('./source-store');
 
 const MODULE_ROOT = path.resolve(__dirname, '..');
+const ARTICLE_GENERATOR_EVAL_PATH = 'evals/routing.jsonl';
+
+function shareAllowlist({ id, scope, allowExtra = null }) {
+  if (allowExtra === null || allowExtra === undefined) return [...DEFAULT_ALLOWED_BUNDLE_GLOBS];
+  if (scope !== 'local' || id !== 'article-generator' || allowExtra !== ARTICLE_GENERATOR_EVAL_PATH) {
+    throw new Error(`--allow-extra is only supported for local article-generator ${ARTICLE_GENERATOR_EVAL_PATH}`);
+  }
+  return [...DEFAULT_ALLOWED_BUNDLE_GLOBS, ARTICLE_GENERATOR_EVAL_PATH];
+}
 
 function readJson(filePath, fallback = null) {
   if (!fs.existsSync(filePath)) return fallback;
@@ -93,7 +104,9 @@ function loadEffectiveFromConfig(resolved, { includeDisabled = false, readOnly =
 
 function requireSourceRoots(resolved, effective) {
   const needsPublic = effective.catalog.entries.some((entry) => entry.sourceKind === 'public-catalog');
-  const needsLocal = effective.catalog.entries.some((entry) => entry.sourceKind === 'local-overlay');
+  const needsLocal = effective.catalog.entries.some((entry) => (
+    entry.sourceKind === 'local-overlay' && entry.sourceRootKind !== 'inventory-snapshot'
+  ));
   if (needsPublic && !resolved.publicSourceRoot) {
     throw new Error('publicSourceRoot is required when the public catalog has entries');
   }
@@ -130,6 +143,7 @@ function statusOperator(options = {}) {
     catalogDigest: state.effective.digest,
     publicSourceRoot: state.resolved.publicSourceRoot,
     localSourceRoot: state.resolved.localSourceRoot,
+    inventorySourceRoot: state.resolved.inventory.sourceStorePath,
     harnesses: state.harnesses,
     controlRoot: state.resolved.controlRoot,
     readOnly: true,
@@ -213,6 +227,7 @@ function planOperator(options = {}) {
     catalogDigest: state.effective.digest,
     publicSourceRoot: state.resolved.publicSourceRoot,
     localSourceRoot: state.resolved.localSourceRoot,
+    inventorySourceRoot: state.resolved.inventory.sourceStorePath,
     harnesses: state.harnesses,
     controlRoot: state.resolved.controlRoot,
     reviewer: options.reviewer || null,
@@ -340,10 +355,12 @@ function shareOperator(options = {}) {
     scope = 'public',
     harnesses = SUPPORTED_HARNESSES.slice(),
     configPath = null,
+    allowExtra = null,
   } = options;
   if (!id || !/^[a-z][a-z0-9-]{0,63}$/.test(id)) throw new Error('share requires a canonical skill id');
   if (!bundlePath) throw new Error('share requires --path to a skill bundle');
   if (!['public', 'local'].includes(scope)) throw new Error('share scope must be public or local');
+  const allowlist = shareAllowlist({ id, scope, allowExtra });
 
   const loaded = loadConfig(configPath);
   const config = { ...loaded.config };
@@ -354,7 +371,7 @@ function shareOperator(options = {}) {
   const sourceRoot = path.dirname(absoluteBundle);
   const relativeRoot = path.basename(absoluteBundle);
   const tree = computeBundleTree(absoluteBundle, {
-    allowlist: ['SKILL.md', 'scripts/**', 'assets/**', 'references/**', 'templates/**'],
+    allowlist,
   });
 
   const entry = {
@@ -362,10 +379,11 @@ function shareOperator(options = {}) {
     allowedHarnesses: harnesses.slice().sort(),
     bundle: {
       root: relativeRoot,
-      allowlist: ['SKILL.md', 'scripts/**', 'assets/**', 'references/**', 'templates/**'],
+      allowlist: tree.allowlist,
       treeDigest: tree.treeDigest,
     },
   };
+  let supersededTreeDigest = null;
 
   ensureControlPlane(config);
   const resolved = ensureControlPlane(config);
@@ -392,20 +410,52 @@ function shareOperator(options = {}) {
     if (validated.status !== 'valid') throw new Error(validated.reason || 'public catalog invalid');
     atomicWriteJson(resolved.publicCatalogPath, validated.catalog);
   } else {
-    config.localSourceRoot = config.localSourceRoot || path.resolve(sourceRoot);
-    if (path.resolve(expandHome(config.localSourceRoot)) !== path.resolve(sourceRoot)) {
-      const expected = path.resolve(expandHome(config.localSourceRoot), relativeRoot);
-      if (expected !== absoluteBundle) {
-        throw new Error(`local bundle must live under localSourceRoot (${config.localSourceRoot})`);
-      }
-    }
+    const sourceStoreRoot = resolved.inventory.sourceStorePath;
+    const usesImmutableSnapshot = allowExtra === ARTICLE_GENERATOR_EVAL_PATH;
     const overlay = readJson(resolved.localOverlayPath, {
       schemaVersion: OVERLAY_SCHEMA_VERSION,
       entries: [],
     });
-    if (overlay.entries.some((item) => item.id === id)) {
+    const existing = overlay.entries.find((item) => item.id === id) || null;
+    if (usesImmutableSnapshot) {
+      const snapshot = commitSnapshot({
+        storeRoot: sourceStoreRoot,
+        logicalId: id,
+        sourceBundlePath: absoluteBundle,
+        expectedTreeDigest: tree.treeDigest,
+        allowlist: tree.allowlist,
+      });
+      entry.bundle.root = snapshot.relativeRoot;
+      entry.sourceRootKind = 'inventory-snapshot';
+      if (existing && existing.bundle.treeDigest === tree.treeDigest) {
+        return {
+          ok: true,
+          scope,
+          id,
+          treeDigest: tree.treeDigest,
+          configPath: loaded.path,
+          reused: true,
+          entry: {
+            id: existing.id,
+            allowedHarnesses: existing.allowedHarnesses,
+            bundle: { root: existing.bundle.root, treeDigest: existing.bundle.treeDigest },
+          },
+        };
+      }
+    } else {
+      config.localSourceRoot = config.localSourceRoot || path.resolve(sourceRoot);
+      if (path.resolve(expandHome(config.localSourceRoot)) !== path.resolve(sourceRoot)) {
+        const expected = path.resolve(expandHome(config.localSourceRoot), relativeRoot);
+        if (expected !== absoluteBundle) {
+          throw new Error(`local bundle must live under localSourceRoot (${config.localSourceRoot})`);
+        }
+      }
+    }
+    if (existing && !usesImmutableSnapshot) {
       throw new Error(`local overlay already contains ${id}`);
     }
+    supersededTreeDigest = existing?.bundle.treeDigest || null;
+    if (existing) overlay.entries = overlay.entries.filter((item) => item.id !== id);
     overlay.entries.push(entry);
     overlay.entries.sort((a, b) => a.id.localeCompare(b.id));
     const validated = validateLocalOverlay(overlay);
@@ -421,6 +471,7 @@ function shareOperator(options = {}) {
     scope,
     id,
     treeDigest: tree.treeDigest,
+    supersededTreeDigest,
     configPath: saved.path,
     // Never echo private bodies; only redacted structural facts.
     entry: {

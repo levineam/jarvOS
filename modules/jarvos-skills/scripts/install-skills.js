@@ -87,6 +87,7 @@ function parseArgs(argv) {
     inspect: false,
     reasonCode: '',
     expectedGenerationId: '',
+    allowExtra: null,
   };
 
   if (args[0] && !args[0].startsWith('-')) {
@@ -130,6 +131,10 @@ function parseArgs(argv) {
     } else if (arg === '--path') {
       if (!args[i + 1]) throw new Error('--path requires a bundle path');
       opts.bundlePath = args[++i];
+    } else if (arg === '--allow-extra') {
+      if (!args[i + 1]) throw new Error('--allow-extra requires a relative path');
+      if (opts.allowExtra !== null) throw new Error('--allow-extra may only be supplied once');
+      opts.allowExtra = args[++i];
     } else if (arg === '--scope') {
       if (!args[i + 1]) throw new Error('--scope requires public|local');
       opts.scope = args[++i];
@@ -172,7 +177,7 @@ function printHelp() {
 
 Shared skill distribution (catalog/overlay):
   jarvos-skills init-config [--config PATH] [--control-root PATH] [--json]
-  jarvos-skills share --id NAME --path /bundle --scope public|local [--harnesses a,b] [--config PATH] [--json]
+  jarvos-skills share --id NAME --path /bundle --scope public|local [--allow-extra evals/routing.jsonl] [--harnesses a,b] [--config PATH] [--json]
   jarvos-skills refresh [--config PATH] [--json]
   jarvos-skills plan [--config PATH] [--json]
   jarvos-skills apply [--config PATH] [--json]
@@ -254,6 +259,7 @@ function runOperator(opts) {
         scope: opts.scope,
         harnesses: opts.harnesses || SUPPORTED_HARNESSES.slice(),
         configPath,
+        allowExtra: opts.allowExtra,
       });
     case 'refresh':
       return refreshOperator({ configPath });
