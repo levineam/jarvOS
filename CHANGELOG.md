@@ -2,6 +2,14 @@
 
 Release sections describe user-facing jarvOS changes. Historical public-doc sync entries are preserved below for traceability.
 
+## [0.11.1](https://github.com/levineam/jarvOS/compare/jarvos-bootstrap-v0.11.0...jarvos-bootstrap-v0.11.1) (2026-09-19)
+
+
+### Bug Fixes
+
+* **release:** separate published and candidate lanes ([1ce60ea](https://github.com/levineam/jarvOS/commit/1ce60ea2a463f73badabd4159bada911fed73fe1))
+* **release:** separate published and candidate lanes ([43c0a6d](https://github.com/levineam/jarvOS/commit/43c0a6d662e659b7058334c2fae913682c09d12e))
+
 ## [0.11.0](https://github.com/levineam/jarvOS/compare/jarvos-bootstrap-v0.10.0...jarvos-bootstrap-v0.11.0) (2026-09-19)
 
 
