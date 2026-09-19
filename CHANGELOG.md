@@ -2,6 +2,39 @@
 
 Release sections describe user-facing jarvOS changes. Historical public-doc sync entries are preserved below for traceability.
 
+## [0.11.0](https://github.com/levineam/jarvOS/compare/jarvos-bootstrap-v0.10.0...jarvos-bootstrap-v0.11.0) (2026-09-19)
+
+
+### Features
+
+* **context:** add portable work orientation ([26a7db6](https://github.com/levineam/jarvOS/commit/26a7db612c02d3d875bddb2b26bb4fc693d99c2b))
+* **context:** package portable work orientation ([7822691](https://github.com/levineam/jarvOS/commit/7822691d0001baf6b51bb1007ac66ef46f2fb2d6))
+* **desktop:** bundle companion in standard installation ([aadcaa4](https://github.com/levineam/jarvOS/commit/aadcaa4e10a130111aed03dae3c9010673d19e87))
+* **desktop:** bundle the companion in standard installation ([78d2414](https://github.com/levineam/jarvOS/commit/78d2414412ea7dbd3246e995200e2e015249f45c))
+* **skill-sync:** expose Desktop recommendation contract ([#306](https://github.com/levineam/jarvOS/issues/306)) ([b2e05f3](https://github.com/levineam/jarvOS/commit/b2e05f3e2c8ab31e62a0d45b4a61b7571b8d6c44))
+
+
+### Bug Fixes
+
+* **context:** load work orientation through Codex static instructions ([c1dce45](https://github.com/levineam/jarvOS/commit/c1dce45c1a02f9f6890abda8a2033496bebeea48))
+* **context:** load work orientation through Codex static instructions ([9ae8ff7](https://github.com/levineam/jarvOS/commit/9ae8ff76bd673e03ac5f411aa5b56f338e960e89))
+* **journal:** omit unsupported Projects sections ([#301](https://github.com/levineam/jarvOS/issues/301)) ([eda3964](https://github.com/levineam/jarvOS/commit/eda3964ed8e97b4b73af625155f678aec0cdb335))
+* **journal:** reconcile deferred backlinks safely ([#303](https://github.com/levineam/jarvOS/issues/303)) ([5115c9f](https://github.com/levineam/jarvOS/commit/5115c9f8fe9619b0dce7067a8d80b7edc4fa9693))
+* **projects:** expose an authorized complete roster (U0a) ([6ec7d7a](https://github.com/levineam/jarvOS/commit/6ec7d7a342d422d6caae227d714fbfcd48704734))
+* **projects:** expose an authorized complete roster (U0a) ([6d4990d](https://github.com/levineam/jarvOS/commit/6d4990dbc01f28bbe1231a80cba9b620d5a6d938))
+* **secondbrain:** harden content-origin provenance ([1596995](https://github.com/levineam/jarvOS/commit/15969957ec44d3adeb803fb5a332d6bca347739e))
+* **secondbrain:** reject incidental and unicode-negated capture language ([#309](https://github.com/levineam/jarvOS/issues/309)) ([2f75c68](https://github.com/levineam/jarvOS/commit/2f75c686190b53cc69d7722ca5aada3cb182d036))
+* **skills:** close owner decision reliability loop ([a7aa4f0](https://github.com/levineam/jarvOS/commit/a7aa4f0f0e1e43874c73209226c825c231f6802e))
+* **skills:** make owner decisions understandable and dependency-closed ([d9cbce2](https://github.com/levineam/jarvOS/commit/d9cbce239f8293c13e66272886d98059b7f89e15))
+* **skills:** prove active assistant update visibility ([#311](https://github.com/levineam/jarvOS/issues/311)) ([ee2ac88](https://github.com/levineam/jarvOS/commit/ee2ac883019cacf9405345e9064df286ccfd5dff))
+* **skills:** prove aliased update convergence ([441bdff](https://github.com/levineam/jarvOS/commit/441bdff406587bbc28cc6072e26eff6978d595ec))
+* **skills:** prove aliased update convergence ([0b80ad3](https://github.com/levineam/jarvOS/commit/0b80ad3a6ca729a125623b5652ca5bb7198f0ace))
+* **SUP-3820:** one concise skill decision digest per occurrence ([#305](https://github.com/levineam/jarvOS/issues/305)) ([78a6985](https://github.com/levineam/jarvOS/commit/78a6985dc51d051d0bbc8c074da01e27580d2abf))
+* **SUP-3959:** bind provenance repair state ([9ff1d7d](https://github.com/levineam/jarvOS/commit/9ff1d7d6ff500ca5406ce58e71e5a730a96350f1))
+* **SUP-3959:** close provenance trust gaps ([6a350e2](https://github.com/levineam/jarvOS/commit/6a350e2c2624408716c747b910a86ded58a3fe1e))
+* **SUP-3959:** emit and bind jarvos-content-origin/v1 receipts ([c715a90](https://github.com/levineam/jarvOS/commit/c715a90c0e67ab43a8d9f910d6502e00a3bc45f1))
+* **SUP-3959:** harden content-origin writer coverage ([40c4469](https://github.com/levineam/jarvOS/commit/40c44691895262722c87bf0974b1c42e651d2889))
+
 ## [0.10.0](https://github.com/levineam/jarvOS/compare/jarvos-bootstrap-v0.9.0...jarvos-bootstrap-v0.10.0) (2026-09-11)
 
 
