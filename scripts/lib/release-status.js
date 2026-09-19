@@ -12,6 +12,8 @@ const { checkUnreleasedDrift, semverTags } = require('../unreleased-drift-check'
 const CONTRACT = 'jarvos.release-observation/v1';
 const REPOSITORY = 'levineam/jarvOS';
 const PROTECTED_BRANCH = 'origin/main';
+const PACKAGE_NAME = require('../../package.json').name;
+const SEMVER = /^\d+\.\d+\.\d+$/;
 const SHA = /^[0-9a-f]{40}$/i;
 const GITHUB_TIMEOUT_MS = 15_000;
 const GITHUB_MAX_RESPONSE_BYTES = 1_000_000;
@@ -74,6 +76,9 @@ function normalizeDrift(drift) {
   return {
     packageVersion: optionalString(drift && drift.packageVersion),
     latestTag: optionalString(drift && drift.latestTag),
+    baselineTag: optionalString(drift && drift.baselineTag),
+    baselineVersion: optionalString(drift && drift.baselineVersion),
+    candidateVersion: optionalString(drift && drift.candidateVersion),
     commitsSinceTag: Number.isInteger(drift && drift.commitsSinceTag) ? drift.commitsSinceTag : null,
     changelogHasVersionSection: Boolean(drift && drift.changelogHasVersionSection),
     changelogVersionDated: Boolean(drift && drift.changelogVersionDated),
@@ -93,6 +98,7 @@ function unavailable({ version, sourceRef, repository, observedAt, code, error }
     source: { repository, requestedRef: sourceRef, resolvedSha: null, policy: null },
     target: { version, tag: `v${version}` },
     publication: null,
+    lanes: null,
     drift: null,
     readiness: null,
     verification: { coverage: 'none' },
@@ -103,11 +109,74 @@ function unavailable({ version, sourceRef, repository, observedAt, code, error }
   };
 }
 
+// Tag names a release may be published under. Used to recognize a tag GitHub
+// published, never to invent one.
+function approvedReleaseTags(version) {
+  return [`v${version}`, `${PACKAGE_NAME}-v${version}`];
+}
+
 function assertSourcePolicy({ sourceRef, version, protectedBranch = PROTECTED_BRANCH }) {
-  const approvedTag = `v${version}`;
-  if (sourceRef !== protectedBranch && sourceRef !== approvedTag) {
-    throw Object.assign(new Error(`source ref must be ${protectedBranch} or approved tag ${approvedTag}`), { code: 'SOURCE_POLICY_REJECTED' });
+  const approvedTags = approvedReleaseTags(version);
+  if (sourceRef !== protectedBranch && !approvedTags.includes(sourceRef)) {
+    throw Object.assign(new Error(`source ref must be ${protectedBranch} or approved tag ${approvedTags.join(' or ')}`), { code: 'SOURCE_POLICY_REJECTED' });
   }
+}
+
+// Three lanes that must never be conflated: the published baseline (GitHub's
+// latest release), the current Release Please candidate, and a future lane such
+// as a clean-machine run.  Only the first two can gate a release observation.
+function buildLanes({ latestRelease, drift, candidate, futureLane }) {
+  const baseline = latestRelease
+    ? { status: 'published', version: latestRelease.version, tag: latestRelease.tag, publishedAt: latestRelease.publishedAt }
+    : { status: 'none', version: null, tag: null, publishedAt: null };
+  // A future lane whose version is already the published baseline has landed;
+  // retire it rather than reporting the same version in two lanes.
+  const future = futureLane && SEMVER.test(String(futureLane.version || '')) && !futureLaneRetired({ latestRelease, futureLane })
+    ? { status: 'future', kind: futureLane.kind || 'clean-machine', version: futureLane.version, ref: futureLane.ref || null, gating: false, authoritative: false }
+    : null;
+  const futureVersion = future && future.version;
+  let candidateLane = { status: 'none', version: null, source: null };
+  if (candidate && (candidate.status === 'none' || candidate.status === 'unavailable')) {
+    candidateLane = { status: candidate.status, version: null, source: candidate.source || null };
+  } else if (candidateFutureConflict({ latestRelease, candidate, futureLane })) {
+    // An explicit candidate that names the future lane's version cannot be
+    // reported twice; the lane is unavailable and a finding explains why.
+    candidateLane = { status: 'unavailable', version: null, source: candidate.source || null };
+  } else {
+    const version = candidate && SEMVER.test(String(candidate.version || '')) ? candidate.version : drift && drift.candidateVersion;
+    if (version && version !== baseline.version && version !== futureVersion) {
+      candidateLane = { status: 'present', version, source: candidate && candidate.source || 'changelog' };
+    }
+  }
+  return { baseline, candidate: candidateLane, future };
+}
+
+// True when the configured future lane names the published baseline version.
+function futureLaneRetired({ latestRelease, futureLane }) {
+  return Boolean(latestRelease && futureLane && latestRelease.version === futureLane.version);
+}
+
+// The explicit candidate version that collides with the configured future lane,
+// or null.  Only a validated semver is ever returned, so it is safe to report.
+// A retired future lane no longer exists, so it cannot conflict.
+function candidateFutureConflict({ latestRelease, candidate, futureLane }) {
+  if (!candidate || candidate.status === 'none' || candidate.status === 'unavailable') return null;
+  const candidateVersion = String(candidate.version || '');
+  if (!SEMVER.test(candidateVersion) || !futureLane || !SEMVER.test(String(futureLane.version || ''))) return null;
+  if (futureLaneRetired({ latestRelease, futureLane })) return null;
+  return candidateVersion === futureLane.version ? candidateVersion : null;
+}
+
+function laneFindings({ latestRelease, candidate, futureLane }) {
+  const conflict = candidateFutureConflict({ latestRelease, candidate, futureLane });
+  return conflict ? [`candidate ${conflict} conflicts with the configured future lane; candidate lane is unavailable`] : [];
+}
+
+function targetRole(version, lanes) {
+  if (lanes.future && lanes.future.version === version) return { role: 'future-lane', gating: false };
+  if (lanes.baseline.version === version) return { role: 'published-baseline', gating: true };
+  if (lanes.candidate.version === version) return { role: 'candidate', gating: true };
+  return { role: 'target', gating: true };
 }
 
 function normalizeRelease(release) {
@@ -140,6 +209,8 @@ function observeReleaseStatus(options) {
   const observedAt = (options.now || (() => new Date().toISOString()))();
   const protectedBranch = options.protectedBranch || PROTECTED_BRANCH;
   const targetTag = `v${version}`;
+  const approvedTags = approvedReleaseTags(version);
+  const sourceIsTag = approvedTags.includes(sourceRef);
   let verificationContext = null;
   const cleanupVerification = () => {
     if (!verificationContext) return;
@@ -153,10 +224,10 @@ function observeReleaseStatus(options) {
     const resolved = options.git.resolveRef(sourceRef);
     const resolvedSha = typeof resolved === 'string' ? resolved : resolved && resolved.sha;
     if (!SHA.test(resolvedSha || '')) throw Object.assign(new Error('source ref did not resolve to an immutable commit SHA'), { code: 'AMBIGUOUS_SOURCE' });
-    if (!options.git.isReachableFrom(resolvedSha, protectedBranch) && sourceRef !== targetTag) {
+    if (!options.git.isReachableFrom(resolvedSha, protectedBranch) && !sourceIsTag) {
       throw Object.assign(new Error('resolved SHA is not reachable from the configured protected branch'), { code: 'UNTRUSTED_SOURCE' });
     }
-    if (sourceRef === targetTag && options.git.tagForSha(resolvedSha, targetTag) !== targetTag) {
+    if (sourceIsTag && options.git.tagForSha(resolvedSha, sourceRef) !== sourceRef) {
       throw Object.assign(new Error('approved release tag does not point at the resolved SHA'), { code: 'UNTRUSTED_SOURCE' });
     }
     if (typeof options.github.sourceRefSha !== 'function') {
@@ -173,10 +244,18 @@ function observeReleaseStatus(options) {
     let githubTargetRelease;
     let canonicalSha;
     try {
-      const canonicalRef = sourceRef === protectedBranch ? protectedBranch.replace(/^origin\//, '') : targetTag;
+      const canonicalRef = sourceRef === protectedBranch ? protectedBranch.replace(/^origin\//, '') : sourceRef;
       canonicalSha = options.github.sourceRefSha(repository, canonicalRef);
       latestRelease = normalizeRelease(options.github.latestRelease(repository));
-      githubTargetRelease = normalizeRelease(options.github.releaseByTag(repository, targetTag));
+      githubTargetRelease = null;
+      // Only a release GitHub published under an approved name counts.
+      for (const tag of approvedTags) {
+        const candidateRelease = normalizeRelease(options.github.releaseByTag(repository, tag));
+        if (candidateRelease && candidateRelease.version === version && approvedTags.includes(candidateRelease.tag)) {
+          githubTargetRelease = candidateRelease;
+          break;
+        }
+      }
       // The latest-release endpoint is authoritative for the current
       // component tag.  It also lets a version-targeted observation recognize
       // a Release Please component tag without guessing its name.
@@ -198,28 +277,32 @@ function observeReleaseStatus(options) {
       }
     }
 
-    const publicationTag = githubTargetRelease?.tag || targetTag;
-    const localTag = options.git.tagForSha(resolvedSha, publicationTag);
+    const localTag = githubTargetRelease
+      ? options.git.tagForSha(resolvedSha, githubTargetRelease.tag)
+      : approvedTags.map((tag) => options.git.tagForSha(resolvedSha, tag)).find(Boolean) || null;
+    const publicationTag = githubTargetRelease?.tag || localTag || targetTag;
     const commitDistance = options.git.commitDistance ? options.git.commitDistance(resolvedSha) : null;
     const policy = { protectedBranch, approvedReleaseTag: targetTag };
     if (!options.verify) {
       let drift;
       try {
-        const rawDrift = options.checks.drift();
+        const rawDrift = options.checks.drift({ candidate: options.candidate });
         if (!rawDrift || typeof rawDrift.state !== 'string') throw new Error('malformed drift check output');
         drift = normalizeDrift(rawDrift);
       } catch (error) {
         return unavailable({ version, sourceRef, repository, observedAt, code: 'CHECKS_UNAVAILABLE', error });
       }
+      const lanes = buildLanes({ latestRelease, drift, candidate: options.candidate, futureLane: options.futureLane });
       return {
         contract: CONTRACT, availability: 'available', observedAt,
         source: { repository, requestedRef: sourceRef, resolvedSha, commitDistance, policy },
-        target: { version, tag: targetTag },
+        target: { version, tag: githubTargetRelease ? githubTargetRelease.tag : targetTag, ...targetRole(version, lanes) },
         publication: { published: Boolean(githubTargetRelease), latestPublicVersion: latestRelease ? latestRelease.version : null, latestRelease, targetRelease: githubTargetRelease, localTag: localTag || null },
+        lanes,
         drift,
         readiness: { status: 'not-evaluated', checks: [] },
         verification: { coverage: 'partial' },
-        findings: findingsFrom(null, drift, localTag, githubTargetRelease, publicationTag),
+        findings: [...findingsFrom(null, drift, localTag, githubTargetRelease, publicationTag), ...laneFindings({ ...options, latestRelease })],
         omissions: ['full candidate verification (npm test) was skipped by reduced-cost mode'],
         evidenceRefs: [`git:${resolvedSha}`, `github:releases/${latestRelease ? latestRelease.tag : 'none'}`],
       };
@@ -233,12 +316,14 @@ function observeReleaseStatus(options) {
         verify: true,
         allowDirty: false,
         allowUnreleased: false,
+        // A release GitHub already published legitimately owns its tag.
+        allowExistingTag: Boolean(githubTargetRelease),
         root: verificationContext && verificationContext.root,
         env: verificationContext && verificationContext.env,
         npmPath: verificationContext && verificationContext.npmPath,
       };
       const rawReadiness = options.checks.readiness(checkOptions);
-      const rawDrift = options.checks.drift(checkOptions);
+      const rawDrift = options.checks.drift({ ...checkOptions, candidate: options.candidate });
       if (!rawReadiness || !Array.isArray(rawReadiness.results) || !rawDrift || typeof rawDrift.state !== 'string') {
         throw new Error('malformed release check output');
       }
@@ -249,12 +334,14 @@ function observeReleaseStatus(options) {
       return unavailable({ version, sourceRef, repository, observedAt, code: 'CHECKS_UNAVAILABLE', error });
     }
     cleanupVerification();
-    const findings = findingsFrom(readiness, drift, localTag, githubTargetRelease, publicationTag);
+    const findings = [...findingsFrom(readiness, drift, localTag, githubTargetRelease, publicationTag), ...laneFindings({ ...options, latestRelease })];
+    const lanes = buildLanes({ latestRelease, drift, candidate: options.candidate, futureLane: options.futureLane });
     return {
       contract: CONTRACT, availability: 'available', observedAt,
       source: { repository, requestedRef: sourceRef, resolvedSha, commitDistance, policy },
-      target: { version, tag: targetTag },
+      target: { version, tag: githubTargetRelease ? githubTargetRelease.tag : targetTag, ...targetRole(version, lanes) },
       publication: { published: Boolean(githubTargetRelease), latestPublicVersion: latestRelease ? latestRelease.version : null, latestRelease, targetRelease: githubTargetRelease, localTag: localTag || null },
+      lanes,
       drift,
       readiness: { status: readiness.ok && findings.length === 0 ? 'ready' : 'not-ready', checks: readiness.results },
       verification: { coverage: 'verified' },
@@ -281,6 +368,11 @@ function renderHuman(result) {
   else {
     lines.push(`Source: ${result.source.requestedRef} @ ${result.source.resolvedSha}`);
     lines.push(`Published: ${result.publication.published}; latest public: ${result.publication.latestPublicVersion || 'none'}`);
+    if (result.lanes) {
+      const { baseline, candidate, future } = result.lanes;
+      lines.push(`Baseline: ${baseline.tag || 'none'}; candidate: ${candidate.status === 'present' ? candidate.version : candidate.status}`);
+      if (future) lines.push(`Future lane: ${future.kind} ${future.version} (non-gating)`);
+    }
     for (const finding of result.findings) lines.push(`Finding: ${finding}`);
     for (const omission of result.omissions) lines.push(`Omission: ${omission}`);
   }
@@ -411,4 +503,4 @@ function parseArgs(argv = process.argv.slice(2)) {
   return result;
 }
 
-module.exports = { CONTRACT, REPOSITORY, PROTECTED_BRANCH, observeReleaseStatus, parseArgs, renderHuman, gitAdapter, productionGithub, githubRequest };
+module.exports = { CONTRACT, REPOSITORY, PROTECTED_BRANCH, approvedReleaseTags, buildLanes, observeReleaseStatus, parseArgs, renderHuman, gitAdapter, productionGithub, githubRequest };

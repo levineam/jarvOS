@@ -95,15 +95,24 @@ function unreleasedSection(changelog) {
   return { present: true, nonEmpty };
 }
 
-function evaluateUnreleasedDrift({ version, tags, commitsSinceTag, changelog }) {
+function evaluateUnreleasedDrift({ version, tags, commitsSinceTag, changelog, candidate }) {
   const latestTag = tags.length ? tags[tags.length - 1] : null;
   const latestTagVersion = latestTag ? releaseTagVersion(latestTag) : null;
   const verSection = changelogVersionSection(changelog, version);
   const unreleased = unreleasedSection(changelog);
 
+  // A package-prefixed tag (jarvos-bootstrap-vX.Y.Z) only names the published
+  // baseline; it never implies a Release Please candidate exists. Work after it
+  // is tracked by a candidate only when the caller supplies an explicit
+  // candidate observation, otherwise it needs ordinary [Unreleased] tracking.
+  const explicitCandidate = Boolean(candidate) && candidate.status === 'present';
+
   const result = {
     packageVersion: version,
     latestTag,
+    baselineTag: latestTag,
+    baselineVersion: latestTagVersion,
+    candidateVersion: null,
     commitsSinceTag,
     changelogHasVersionSection: verSection.present,
     changelogVersionDated: verSection.dated,
@@ -124,15 +133,22 @@ function evaluateUnreleasedDrift({ version, tags, commitsSinceTag, changelog }) 
       result.messages.push(`package.json is ${version} (ahead of latest tag ${latestTag || 'none'}) but CHANGELOG has no "## v${version}" section. Add the release section before tagging, or revert the version bump.`);
     } else if (!verSection.dated) {
       result.state = 'prep';
+      result.candidateVersion = version;
       result.messages.push(`v${version} section exists but is still marked Unreleased — finalize its date when ready to tag.`);
     } else {
       result.state = 'ready-to-tag';
-      result.messages.push(`v${version} is finalized in CHANGELOG and ahead of latest tag ${latestTag || 'none'} — ready to "git tag v${version}".`);
+      result.candidateVersion = version;
+      // Do not name a tag here: the release tool decides its published name.
+      result.messages.push(`v${version} is finalized in CHANGELOG and ahead of latest tag ${latestTag || 'none'} — ready for its release tag to be published.`);
     }
   } else {
     // package.json matches the latest tag — we are post-release; pending work
-    // must be tracked under [Unreleased].
-    if (commitsSinceTag && commitsSinceTag > 0 && !(unreleased.present && unreleased.nonEmpty)) {
+    // must be tracked under [Unreleased] unless an explicitly observed
+    // Release Please candidate tracks it.
+    if (explicitCandidate && commitsSinceTag > 0) {
+      result.state = 'ok';
+      result.messages.push(`${commitsSinceTag} commit(s) since ${latestTag}; tracked by the explicitly observed Release Please candidate.`);
+    } else if (commitsSinceTag && commitsSinceTag > 0 && !(unreleased.present && unreleased.nonEmpty)) {
       result.drift = true;
       result.state = 'unlogged-work';
       result.messages.push(`${commitsSinceTag} commit(s) since ${latestTag} but the CHANGELOG "## [Unreleased]" section is ${unreleased.present ? 'empty' : 'missing'}. Record pending user-facing work there.`);
@@ -145,7 +161,7 @@ function evaluateUnreleasedDrift({ version, tags, commitsSinceTag, changelog }) 
   return result;
 }
 
-function checkUnreleasedDrift({ root = ROOT, env } = {}) {
+function checkUnreleasedDrift({ root = ROOT, env, candidate } = {}) {
   const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
   const changelog = fs.readFileSync(path.join(root, 'CHANGELOG.md'), 'utf8');
   const tags = semverTags(root, env);
@@ -158,7 +174,7 @@ function checkUnreleasedDrift({ root = ROOT, env } = {}) {
     }
     commitsSinceTag = Number(count.out);
   }
-  return evaluateUnreleasedDrift({ version: String(pkg.version || '').trim(), tags, commitsSinceTag, changelog });
+  return evaluateUnreleasedDrift({ version: String(pkg.version || '').trim(), tags, commitsSinceTag, changelog, candidate });
 }
 
 function main() {

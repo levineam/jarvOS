@@ -3,7 +3,7 @@
 
 const { checkReleaseReadiness } = require('./release-readiness-check');
 const { checkUnreleasedDrift } = require('./unreleased-drift-check');
-const { observeReleaseStatus, parseArgs, renderHuman, gitAdapter, productionGithub, REPOSITORY } = require('./lib/release-status');
+const { approvedReleaseTags, observeReleaseStatus, parseArgs, renderHuman, gitAdapter, productionGithub, REPOSITORY } = require('./lib/release-status');
 
 function createProductionChecks() {
   return {
@@ -25,15 +25,17 @@ async function main() {
   const githubAbort = new AbortController();
   try {
     const githubResponses = productionGithub(REPOSITORY, { signal: githubAbort.signal });
-    const canonicalRef = args.sourceRef === 'origin/main' ? 'main' : `v${args.version}`;
-    const [latestRelease, targetRelease, sourceRefSha] = await Promise.all([
+    const approvedTags = approvedReleaseTags(args.version);
+    const canonicalRef = args.sourceRef === 'origin/main' ? 'main' : approvedTags.includes(args.sourceRef) ? args.sourceRef : approvedTags[0];
+    const [latestRelease, sourceRefSha, ...taggedReleases] = await Promise.all([
       githubResponses.latestRelease(),
-      githubResponses.releaseByTag(`v${args.version}`),
       githubResponses.sourceRefSha(canonicalRef),
+      ...approvedTags.map((tag) => githubResponses.releaseByTag(tag)),
     ]);
+    const releasesByTag = new Map(approvedTags.map((tag, index) => [tag, taggedReleases[index]]));
     github = {
       latestRelease: () => latestRelease,
-      releaseByTag: () => targetRelease,
+      releaseByTag: (_repository, tag) => releasesByTag.get(tag) || null,
       sourceRefSha: () => sourceRefSha,
     };
   } catch (error) {
