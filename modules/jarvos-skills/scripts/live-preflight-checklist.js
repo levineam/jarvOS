@@ -7,7 +7,7 @@
  * This script is intentionally non-activating:
  * - never writes into real harness skill roots
  * - never enables launchd/systemd
- * - never sets remoteModelProbe=true
+ * - never calls a remote model
  * - never prints private skill bodies
  * - never passes write/activation flags to managed-activation status
  *
@@ -189,7 +189,37 @@ model probes; use the installed-runtime activation procedure after merge.
     'claude-interactive-probe',
     'pending_owner',
     'Claude verification tier is interactive-smoke; authorize a remote model probe only on the owner machine',
-    { remoteModelProbe: false, liveGates: 'off' },
+    { preflightRanModelProbe: false, ownerModelProbeRequired: true, liveGates: 'off' },
+  ));
+  items.push(item(
+    'active-assistant-fresh-discovery',
+    'pending_owner',
+    'Use an owner-authorized model call to prove fresh-session discovery of the updated file-backed skill through the currently selected Active Assistant runtime',
+    {
+      preflightRanModelProbe: false,
+      ownerModelProbeRequired: true,
+      delivery: false,
+      consumer: 'openclaw-active-assistant',
+      sourceKind: 'file-backed',
+      proofBoundary: 'fresh-session-discovery',
+      modelSelection: 'configured-primary',
+    },
+  ));
+  items.push(item(
+    'active-assistant-existing-session-refresh',
+    'pending_owner',
+    'On the next real owner update or a disposable fixture, prove that the same existing Active Assistant session sees the changed file-backed skill on its next turn',
+    {
+      preflightRanModelProbe: false,
+      ownerModelProbeRequired: true,
+      delivery: false,
+      consumer: 'openclaw-active-assistant',
+      sourceKind: 'file-backed',
+      proofBoundary: 'existing-session-next-turn-refresh',
+      watchRequired: true,
+      sameSessionRequired: true,
+      managedLibraryRequiresExplicitRefresh: true,
+    },
   ));
   items.push(item(
     'hermes-private-overlay',
@@ -220,7 +250,7 @@ model probes; use the installed-runtime activation procedure after merge.
     items,
     next: blockingFail
       ? 'Fix failing package gates before owner live dogfood.'
-      : 'Package gates green. Owner may run Claude interactive probe and private Hermes overlay dogfood locally; keep live gates off until those receipts exist.',
+      : 'Package gates green. Owner may run Claude interactive proof, delivery-disabled Active Assistant fresh-discovery and existing-session refresh proofs, and private Hermes overlay dogfood locally; these checks do not change managed runtime selection or enable a live harness gate.',
   };
 
   if (json) {

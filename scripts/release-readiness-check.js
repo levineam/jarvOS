@@ -42,6 +42,17 @@ function normalizeVersion(value) {
   return String(value || '').trim().replace(/^v/i, '');
 }
 
+// Names under which a release may already be published. These are only probed
+// against tags that exist; a tag is never assumed or created from them.
+function releaseTagNames(target, packageName) {
+  return [`v${target}`, ...(packageName ? [`${packageName}-v${target}`] : [])];
+}
+
+function findExistingReleaseTag(tagList, target, packageName) {
+  const existing = new Set(String(tagList || '').split(/\r?\n/).map((name) => name.trim()).filter(Boolean));
+  return releaseTagNames(target, packageName).find((name) => existing.has(name)) || null;
+}
+
 function findReleaseProcessCurrentClaims(releaseProcess) {
   const text = String(releaseProcess || '');
   const claims = [];
@@ -132,7 +143,7 @@ Checks:
   - CHANGELOG.md has target version section
   - release docs/template exist and contain required sections
   - release notes draft exists for the target version
-  - git tag does not already exist
+  - neither vX.Y.Z nor <package>-vX.Y.Z tag already exists
   - git working tree is clean
   - tracked files do not include common local artifacts
   - npm test passes
@@ -261,15 +272,16 @@ function checkReleaseReadiness(opts = {}) {
     fail('GBrain-first release narrative', error.message);
   }
 
-  const tagCheck = runLocal('git', ['rev-parse', '--verify', '--quiet', `refs/tags/${tag}`]);
+  const tagCheck = runLocal('git', ['tag', '--list']);
   if (tagCheck.error) {
     fail('git tag preflight', `git failed: ${tagCheck.error.message}`);
-  } else if (tagCheck.status === 0 && !opts.allowExistingTag) {
-    fail('git tag preflight', `${tag} already exists`);
-  } else if (tagCheck.status === 0) {
-    pass('git tag preflight', `${tag} exists and was allowed`);
+  } else if (tagCheck.status !== 0) {
+    fail('git tag preflight', `git tag --list failed: ${String(tagCheck.stderr || '').trim() || 'tag list unavailable'}`);
   } else {
-    pass('git tag preflight', `${tag} does not exist yet`);
+    const existingTag = findExistingReleaseTag(tagCheck.stdout, target, pkg.name);
+    if (existingTag && !opts.allowExistingTag) fail('git tag preflight', `${existingTag} already exists`);
+    else if (existingTag) pass('git tag preflight', `${existingTag} exists and was allowed`);
+    else pass('git tag preflight', `${releaseTagNames(target, pkg.name).join(' or ')} does not exist yet`);
   }
 
   const status = runLocal('git', ['status', '--porcelain']);
@@ -328,10 +340,12 @@ function main() {
 module.exports = {
   checkFrontDoorReleaseProse,
   checkReleaseReadiness,
+  findExistingReleaseTag,
   findReadmeCurrentReleaseClaims,
   findReleaseProcessCurrentClaims,
   normalizeVersion,
   parseArgs,
+  releaseTagNames,
 };
 
 if (require.main === module) {

@@ -5,7 +5,12 @@ const assert = require('assert/strict');
 const test = require('node:test');
 
 const packageJson = require('../package.json');
-const { checkFrontDoorReleaseProse, checkReleaseReadiness } = require('../scripts/release-readiness-check');
+const {
+  checkFrontDoorReleaseProse,
+  checkReleaseReadiness,
+  findExistingReleaseTag,
+  releaseTagNames,
+} = require('../scripts/release-readiness-check');
 
 function runFrontDoorCheck(files, options = {}) {
   return checkFrontDoorReleaseProse({
@@ -163,6 +168,21 @@ test('front-door release prose allows candidate wording in candidate mode', () =
   assert.deepEqual(failedLabels(results), []);
   const releaseProcessResult = results.find((result) => result.label === 'release-process final-version prose');
   assert.equal(releaseProcessResult.ok, true);
+});
+
+test('tag preflight recognizes the published package-prefixed v0.11 tag', () => {
+  const tags = 'v0.7.0\njarvos-bootstrap-v0.10.0\njarvos-bootstrap-v0.11.0\n';
+
+  assert.equal(findExistingReleaseTag(tags, '0.11.0', 'jarvos-bootstrap'), 'jarvos-bootstrap-v0.11.0');
+  assert.equal(findExistingReleaseTag(tags, '0.7.0', 'jarvos-bootstrap'), 'v0.7.0');
+});
+
+test('tag preflight never treats an unpublished candidate or foreign package tag as existing', () => {
+  const tags = 'jarvos-bootstrap-v0.11.0\nother-package-v0.11.1\n';
+
+  assert.equal(findExistingReleaseTag(tags, '0.11.1', 'jarvos-bootstrap'), null);
+  assert.equal(findExistingReleaseTag('', '0.11.1', 'jarvos-bootstrap'), null);
+  assert.deepEqual(releaseTagNames('0.11.1', 'jarvos-bootstrap'), ['v0.11.1', 'jarvos-bootstrap-v0.11.1']);
 });
 
 test('candidate release gate passes as unreleased work without authorizing a versioned release', () => {

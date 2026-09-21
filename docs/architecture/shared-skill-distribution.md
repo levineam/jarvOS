@@ -30,6 +30,18 @@ replay is a zero-write, notification-silent no-op.
 
 Runtime adapters declare ordered scopes, renderer, alias limits, and their strongest safe verification tier. Exact-path adapters may record a receipt-bound model-visible proof. Interactive-only adapters remain `verification_pending` until an authorized interactive proof occurs; copied bytes alone are not availability proof.
 
+An updated projection and an assistant using that update are separate facts.
+Skill Sync proves the accepted generation, target bytes, and receipts. Each
+consumer then proves discovery and refresh through its ordinary entrypoint.
+When an OpenClaw-backed Active Assistant skill is file-backed and OpenClaw's
+skill watcher is enabled, an existing session picks up a changed `SKILL.md` on
+the next turn after the watcher event. OpenClaw managed-library selections are
+different: they remain pinned to an immutable revision until explicitly
+refreshed. The `openclaw-managed` source label names OpenClaw's watched,
+file-backed user skill root; it does not mean a managed-library selection.
+Fresh-session discovery, existing-session refresh, and external delivery
+therefore require distinct evidence.
+
 ## Operator CLI and scheduling
 
 The `jarvos-skills` CLI exposes share/refresh/plan/apply/status/repair/enable/disable/rename,
