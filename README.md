@@ -2,7 +2,7 @@
 
 jarvOS — your own personal superintelligence, accessible to all.
 
-> **Release status:** `v0.10.0` is the current public preview release.
+> **Release status:** [`jarvos-bootstrap-v0.11.0`](https://github.com/levineam/jarvOS/releases/tag/jarvos-bootstrap-v0.11.0) is the current public preview release.
 
 jarvOS builds on Markdown files you own to create a cross-AI digital twin: a shared second brain that OpenClaw, Codex, Claude Code, Hermes, and future agents can all use.
 
@@ -49,6 +49,26 @@ The generated wiki is not the source of truth. It is a rebuildable retrieval lay
 lossless-claw helps long OpenClaw sessions preserve continuity across context limits.
 
 It is not the secondbrain itself. It helps agents keep the thread while jarvOS keeps durable knowledge grounded in Markdown.
+
+## Project Management System (PMS)
+
+jarvOS includes a general-purpose Project Management System for coding and
+non-coding work. It connects durable Projects and child Projects, finite
+Outcomes, actionable Todos, and intentionally held Backlog items so different
+agents can understand what matters and what should happen next.
+
+The portable source defines the records, relationships, bounded context, and
+evidence contracts. A configured work authority owns Todo state; runtime
+adapters and specialized executors, such as `@jarvos/coding`, may advance only
+explicitly authorized work. Paperclip can provide an optional handoff surface,
+but it is not the definition of the PMS.
+
+The long-term loop is capture, organize, advance, and accept—or surface an
+explicit blocker. That loop is still being hardened. Source availability,
+assignment, or a passing interface test does not by itself prove installed
+automation or autonomous execution. See the
+[PMS vision and iteration contract](docs/architecture/project-management-system.md)
+for the current goal, definitions, and incremental acceptance milestones.
 
 ## jarvOS Modules
 
