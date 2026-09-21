@@ -225,6 +225,161 @@ test('read-only plan does not create absent inventory state', () => {
   }
 });
 
+test('article-generator local admission captures the literal routing eval and projects it across enabled harnesses', () => {
+  const home = temp('jarvos-article-home-');
+  const sourceRoot = temp('jarvos-article-source-');
+  const control = path.join(home, '.jarvos', 'shared-skills');
+  const configPath = path.join(control, 'config.json');
+  const bundle = path.join(sourceRoot, 'article-generator');
+  const harnessRoots = Object.fromEntries(['codex', 'claude', 'openclaw', 'hermes'].map((harness) => [
+    harness,
+    path.join(home, `.${harness}`, 'skills'),
+  ]));
+  try {
+    fs.mkdirSync(path.join(bundle, 'evals'), { recursive: true, mode: 0o700 });
+    fs.writeFileSync(path.join(bundle, 'SKILL.md'), '---\nname: article-generator\n---\n\nprivate fixture\n', { mode: 0o600 });
+    fs.writeFileSync(path.join(bundle, 'evals', 'routing.jsonl'), '{"case":"routing"}\n', { mode: 0o600 });
+    initOperator({ configPath, controlRoot: control });
+    for (const [harness, root] of Object.entries(harnessRoots)) {
+      enableHarness({ configPath, harness, root });
+    }
+
+    const admitted = shareOperator({
+      configPath,
+      id: 'article-generator',
+      bundlePath: bundle,
+      scope: 'local',
+      allowExtra: 'evals/routing.jsonl',
+      harnesses: Object.keys(harnessRoots),
+    });
+    assert.match(admitted.entry.bundle.root, /^snapshots\/article-generator\/[a-f0-9]{64}$/);
+    const overlayV1 = JSON.parse(fs.readFileSync(path.join(control, 'local-overlay.json'), 'utf8'));
+    const entryV1 = overlayV1.entries.find((entry) => entry.id === 'article-generator');
+    assert.equal(entryV1.sourceRootKind, 'inventory-snapshot');
+    assert.deepEqual(entryV1.bundle.allowlist, [
+      'SKILL.md',
+      'assets/**',
+      'evals/routing.jsonl',
+      'references/**',
+      'scripts/**',
+      'templates/**',
+    ]);
+    assert.equal(fs.existsSync(path.join(control, 'inventory', 'source-store', entryV1.bundle.root)), true);
+    assert.equal(loadConfig(configPath).config.localSourceRoot, null);
+    const applied = applyOperator({ configPath });
+    assert.equal(applied.ok, true);
+    for (const root of Object.values(harnessRoots)) {
+      assert.equal(fs.readFileSync(path.join(root, 'article-generator', 'evals', 'routing.jsonl'), 'utf8'), '{"case":"routing"}\n');
+    }
+    assert.equal(shareOperator({
+      configPath,
+      id: 'article-generator',
+      bundlePath: bundle,
+      scope: 'local',
+      allowExtra: 'evals/routing.jsonl',
+      harnesses: Object.keys(harnessRoots),
+    }).reused, true);
+
+    const original = fs.readFileSync(path.join(bundle, 'SKILL.md'), 'utf8');
+    fs.writeFileSync(path.join(bundle, 'SKILL.md'), `${original}v2\n`, { mode: 0o600 });
+    const updated = shareOperator({
+      configPath,
+      id: 'article-generator',
+      bundlePath: bundle,
+      scope: 'local',
+      allowExtra: 'evals/routing.jsonl',
+      harnesses: Object.keys(harnessRoots),
+    });
+    assert.equal(updated.supersededTreeDigest, entryV1.bundle.treeDigest);
+    const overlayV2 = JSON.parse(fs.readFileSync(path.join(control, 'local-overlay.json'), 'utf8'));
+    const entryV2 = overlayV2.entries.find((entry) => entry.id === 'article-generator');
+    assert.notEqual(entryV2.bundle.treeDigest, entryV1.bundle.treeDigest);
+    assert.equal(fs.existsSync(path.join(control, 'inventory', 'source-store', entryV1.bundle.root)), true);
+    assert.equal(
+      fs.readFileSync(path.join(control, 'inventory', 'source-store', entryV1.bundle.root, 'SKILL.md'), 'utf8'),
+      original,
+    );
+    applyOperator({ configPath });
+    for (const root of Object.values(harnessRoots)) {
+      assert.match(fs.readFileSync(path.join(root, 'article-generator', 'SKILL.md'), 'utf8'), /v2/);
+    }
+    const ordinarySource = temp('jarvos-ordinary-local-');
+    try {
+      const ordinaryBundle = path.join(ordinarySource, 'ordinary-local');
+      fs.mkdirSync(ordinaryBundle, { recursive: true, mode: 0o700 });
+      fs.writeFileSync(path.join(ordinaryBundle, 'SKILL.md'), '---\nname: ordinary-local\n---\n\nordinary fixture\n', { mode: 0o600 });
+      shareOperator({
+        configPath,
+        id: 'ordinary-local',
+        bundlePath: ordinaryBundle,
+        scope: 'local',
+        harnesses: Object.keys(harnessRoots),
+      });
+      assert.equal(loadConfig(configPath).resolved.localSourceRoot, ordinarySource);
+      assert.equal(applyOperator({ configPath }).ok, true);
+      for (const root of Object.values(harnessRoots)) {
+        assert.equal(fs.existsSync(path.join(root, 'ordinary-local', 'SKILL.md')), true);
+        assert.match(fs.readFileSync(path.join(root, 'article-generator', 'SKILL.md'), 'utf8'), /v2/);
+      }
+    } finally {
+      fs.rmSync(ordinarySource, { recursive: true, force: true });
+    }
+    assert.throws(() => shareOperator({
+      configPath,
+      id: 'article-generator',
+      bundlePath: bundle,
+      scope: 'public',
+      allowExtra: 'evals/routing.jsonl',
+    }), /only supported/);
+    assert.throws(() => shareOperator({
+      configPath,
+      id: 'article-generator',
+      bundlePath: bundle,
+      scope: 'local',
+      allowExtra: 'evals/other.jsonl',
+    }), /only supported/);
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+    fs.rmSync(sourceRoot, { recursive: true, force: true });
+  }
+});
+
+test('article-generator inventory snapshot coexists with an existing ordinary local source root', () => {
+  const home = temp('jarvos-article-existing-local-home-');
+  const sourceRoot = temp('jarvos-article-existing-local-source-');
+  const control = path.join(home, '.jarvos', 'shared-skills');
+  const configPath = path.join(control, 'config.json');
+  const articleBundle = path.join(sourceRoot, 'article-generator');
+  const ordinaryBundle = path.join(sourceRoot, 'ordinary-local');
+  const harnessRoot = path.join(home, '.codex', 'skills');
+  try {
+    fs.mkdirSync(path.join(articleBundle, 'evals'), { recursive: true, mode: 0o700 });
+    fs.mkdirSync(ordinaryBundle, { recursive: true, mode: 0o700 });
+    fs.writeFileSync(path.join(articleBundle, 'SKILL.md'), '---\nname: article-generator\n---\n\narticle fixture\n', { mode: 0o600 });
+    fs.writeFileSync(path.join(articleBundle, 'evals', 'routing.jsonl'), '{"case":"routing"}\n', { mode: 0o600 });
+    fs.writeFileSync(path.join(ordinaryBundle, 'SKILL.md'), '---\nname: ordinary-local\n---\n\nordinary fixture\n', { mode: 0o600 });
+    initOperator({ configPath, controlRoot: control });
+    enableHarness({ configPath, harness: 'codex', root: harnessRoot });
+    shareOperator({ configPath, id: 'ordinary-local', bundlePath: ordinaryBundle, scope: 'local', harnesses: ['codex'] });
+    assert.equal(loadConfig(configPath).resolved.localSourceRoot, sourceRoot);
+    shareOperator({
+      configPath,
+      id: 'article-generator',
+      bundlePath: articleBundle,
+      scope: 'local',
+      allowExtra: 'evals/routing.jsonl',
+      harnesses: ['codex'],
+    });
+    assert.equal(loadConfig(configPath).resolved.localSourceRoot, sourceRoot);
+    assert.equal(applyOperator({ configPath }).ok, true);
+    assert.equal(fs.existsSync(path.join(harnessRoot, 'ordinary-local', 'SKILL.md')), true);
+    assert.equal(fs.existsSync(path.join(harnessRoot, 'article-generator', 'evals', 'routing.jsonl')), true);
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+    fs.rmSync(sourceRoot, { recursive: true, force: true });
+  }
+});
+
 test('scheduler plans launchd and systemd units without enabling them', () => {
   const env = seedEnv();
   try {
