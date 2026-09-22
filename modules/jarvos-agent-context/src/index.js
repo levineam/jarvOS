@@ -33,6 +33,7 @@ const DEFAULT_SESSION_THREAD_LOCK_RETRY_DELAY_MS = 25;
 const DEFAULT_SESSION_THREAD_LOCK_STALE_MS = 30000;
 const DEFAULT_SESSION_THREAD_LOCK_TIMEOUT_MS = 30000;
 const PROJECTS_CONTEXT_CONTRACT = 'jarvos.projects-context/v1';
+const PROJECTS_PROPOSAL_CONTRACT = 'jarvos.projects-proposal/v1';
 const PROJECTS_CONTEXT_SCHEMA_VERSION = 2;
 /** @deprecated The environment no longer controls the canonical orientation path. */
 const PROJECTS_CONTEXT_CUTOVER_ENV = 'JARVOS_PROJECTS_CONTEXT_CUTOVER';
@@ -716,20 +717,37 @@ async function readProjectsContext(options = {}, internalAuthorizedScope = false
 }
 
 async function proposeProjectsContext(options = {}) {
+  const provider = Object.prototype.hasOwnProperty.call(options, 'provider')
+    ? options.provider
+    : (options.projectsProvider || configuredProjectsContextProvider);
+  if (!provider || typeof provider.propose !== 'function') {
+    return { ok: false, status: 'unavailable', contract: PROJECTS_CONTEXT_CONTRACT, code: 'PROJECTS_PROPOSAL_UNAVAILABLE', reason: 'Projects proposal provider is not configured' };
+  }
+  const proposal = options.proposal || options.input || {};
+  try {
+    const result = await provider.propose({ contract: PROJECTS_CONTEXT_CONTRACT, proposal, subject: firstString(options.subject, 'active-assistant') || 'active-assistant' });
+    if (!result || result.status !== 'proposed') return { ok: false, status: 'unavailable', contract: PROJECTS_CONTEXT_CONTRACT, code: 'PROJECTS_PROPOSAL_INVALID', reason: 'provider did not return a proposal' };
+    return { ok: true, status: 'proposed', contract: PROJECTS_CONTEXT_CONTRACT, proposal: result.proposal || result };
+  } catch (error) {
+    return { ok: false, status: 'unavailable', contract: PROJECTS_CONTEXT_CONTRACT, code: 'PROJECTS_PROPOSAL_ERROR', reason: safeProjectsReason(error?.message) };
+  }
+}
+
+async function proposePendingProjectsContext(options = {}) {
   const hasExplicitProvider = Object.prototype.hasOwnProperty.call(options, 'provider') || Object.prototype.hasOwnProperty.call(options, 'projectsProvider');
   const hostProvider = !hasExplicitProvider && !configuredProjectsContextProvider ? loadHostProjectsContextProvider() : null;
   const provider = Object.prototype.hasOwnProperty.call(options, 'provider')
     ? options.provider
     : (options.projectsProvider || configuredProjectsContextProvider || hostProvider);
   if (!provider || typeof provider.propose !== 'function') {
-    return { ok: false, status: 'unavailable', contract: PROJECTS_CONTEXT_CONTRACT, code: 'PROJECTS_PROPOSAL_UNAVAILABLE', reason: 'Projects proposal provider is not configured' };
+    return { ok: false, status: 'unavailable', contract: PROJECTS_PROPOSAL_CONTRACT, code: 'PROJECTS_PROPOSAL_UNAVAILABLE', reason: 'Projects proposal provider is not configured' };
   }
   const proposal = options.proposal || options.input || {};
   let normalized;
   try {
     normalized = normalizeProposal(proposal);
   } catch (error) {
-    return { ok: false, status: 'unavailable', contract: PROJECTS_CONTEXT_CONTRACT, code: error instanceof ProposalValidationError ? error.code : 'PROJECTS_PROPOSAL_INVALID', reason: 'Projects proposal is invalid' };
+    return { ok: false, status: 'unavailable', contract: PROJECTS_PROPOSAL_CONTRACT, code: error instanceof ProposalValidationError ? error.code : 'PROJECTS_PROPOSAL_INVALID', reason: 'Projects proposal is invalid' };
   }
   try {
     const result = await provider.propose({ proposal: normalized.proposal });
@@ -742,7 +760,7 @@ async function proposeProjectsContext(options = {}) {
       || Date.parse(receipt.createdAt) >= Date.parse(receipt.expiresAt) || receipt.digest !== normalized.digest) {
       return proposalUnavailable('PROJECTS_PROPOSAL_INVALID');
     }
-    return { ok: true, status: 'proposed', contract: PROJECTS_CONTEXT_CONTRACT, proposal: {
+    return { ok: true, status: 'proposed', contract: PROJECTS_PROPOSAL_CONTRACT, proposal: {
       id: receipt.id.trim(), status: 'pending', digest: receipt.digest, registryGeneration: receipt.registryGeneration,
       createdAt: receipt.createdAt, expiresAt: receipt.expiresAt,
     } };
@@ -767,7 +785,7 @@ function proposalUnavailable(code) {
     PROJECTS_PROPOSAL_BUSY: 'Projects proposal storage is busy',
     PROJECTS_PROPOSAL_UNAVAILABLE: 'Projects proposal provider is unavailable',
   }[safeCode];
-  return { ok: false, status: 'unavailable', contract: PROJECTS_CONTEXT_CONTRACT, code: safeCode, reason };
+  return { ok: false, status: 'unavailable', contract: PROJECTS_PROPOSAL_CONTRACT, code: safeCode, reason };
 }
 
 function issueHasConcreteReviewSignal(issue = {}) {
@@ -2207,6 +2225,7 @@ module.exports = {
   readRipenessContext,
   assessActiveAssistant,
   PROJECTS_CONTEXT_CONTRACT,
+  PROJECTS_PROPOSAL_CONTRACT,
   PROJECTS_CONTEXT_SCHEMA_VERSION,
   PROJECTS_CONTEXT_CUTOVER_ENV,
   HYDRATION_PROJECTS_PROVIDER,
@@ -2226,6 +2245,7 @@ module.exports = {
   normalizeProjectsQuery,
   normalizeProposal,
   proposeProjectsContext,
+  proposePendingProjectsContext,
   recall,
   redactObviousSecrets,
   readProjectsContext,

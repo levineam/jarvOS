@@ -605,6 +605,7 @@ test('MCP tool list includes jarvOS tools', () => {
     'jarvos_current_work',
     'jarvos_projects_context',
     'jarvos_projects_propose',
+    'jarvos_projects_propose_v1',
     'jarvos_recall',
     'jarvos_synthesize',
     'jarvos_create_note',
@@ -619,6 +620,14 @@ test('MCP tool list includes jarvOS tools', () => {
     TOOLS.find((tool) => tool.name === 'jarvos_hydrate').description,
     /boot jarvOS/,
   );
+  const proposalV1 = TOOLS.find((tool) => tool.name === 'jarvos_projects_propose_v1');
+  assert.deepEqual(proposalV1.inputSchema.properties.proposal.required, [
+    'kind', 'expectedGeneration', 'record', 'rationale', 'evidenceRefs', 'expiresAt',
+  ]);
+  assert.deepEqual(proposalV1.inputSchema.properties.proposal.properties.record.required, [
+    'kind', 'title', 'parentId', 'goal', 'definitionOfDone',
+  ]);
+  assert.match(proposalV1.description, /jarvos\.projects-proposal\/v1/);
   const healthDescription = TOOLS.find((tool) => tool.name === 'jarvos_journal_health').description;
   const ensureDescription = TOOLS.find((tool) => tool.name === 'jarvos_ensure_today_journal').description;
   assert.match(healthDescription, /read-only health/);

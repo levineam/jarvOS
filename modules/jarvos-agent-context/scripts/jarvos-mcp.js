@@ -20,6 +20,7 @@ const {
   loadSharedSkills,
   recall,
   proposeProjectsContext,
+  proposePendingProjectsContext,
   readProjectsContext,
   readSessionThread,
   runtimeActivationStatus,
@@ -257,13 +258,49 @@ const TOOLS = [
   },
   {
     name: 'jarvos_projects_propose',
-    description: 'Submit a reviewable pending Projects proposal through an opt-in host provider. This never creates, updates, or applies a project, task, release, or external handoff.',
+    description: 'Deprecated compatibility surface for the original provider-neutral injected proposal contract. Ordinary host proposals use jarvos_projects_propose_v1.',
     inputSchema: {
       type: 'object',
       required: ['proposal'],
       additionalProperties: false,
       properties: {
         proposal: { type: 'object', description: 'Provider-neutral proposal payload.' },
+      },
+    },
+  },
+  {
+    name: 'jarvos_projects_propose_v1',
+    description: 'Submit a jarvos.projects-proposal/v1 pending create proposal through an opt-in host provider. This never creates, updates, or applies a project, task, release, or external handoff.',
+    inputSchema: {
+      type: 'object',
+      required: ['proposal'],
+      additionalProperties: false,
+      properties: {
+        proposal: {
+          type: 'object',
+          required: ['kind', 'expectedGeneration', 'record', 'rationale', 'evidenceRefs', 'expiresAt'],
+          additionalProperties: false,
+          properties: {
+            kind: { const: 'create' },
+            expectedGeneration: { type: 'integer', minimum: 0 },
+            record: {
+              type: 'object',
+              required: ['kind', 'title', 'parentId', 'goal', 'definitionOfDone'],
+              additionalProperties: false,
+              properties: {
+                kind: { type: 'string', enum: ['project', 'outcome'] },
+                title: { type: 'string', minLength: 1, maxLength: 200 },
+                parentId: { type: ['string', 'null'], pattern: '^(?:prj|out)_[0-9]{6,}$' },
+                goal: { type: 'string', minLength: 1, maxLength: 4000 },
+                definitionOfDone: { type: 'string', minLength: 1, maxLength: 8000 },
+                links: { type: 'object', maxProperties: 16, additionalProperties: { type: 'string', minLength: 1, maxLength: 2000 } },
+              },
+            },
+            rationale: { type: 'string', minLength: 1, maxLength: 2000 },
+            evidenceRefs: { type: 'array', minItems: 1, maxItems: 16, items: { type: 'string', minLength: 1, maxLength: 2000 } },
+            expiresAt: { type: 'string', format: 'date-time', description: 'UTC ISO-8601 timestamp ending in Z.' },
+          },
+        },
       },
     },
   },
@@ -811,12 +848,16 @@ async function callTool(name, args = {}, lifecycle = {}) {
     return textResult(JSON.stringify(result, null, 2), false);
   }
   if (name === 'jarvos_projects_propose') {
+    const result = await proposeProjectsContext({ ...args, provider: mcpProjectsContextProvider });
+    return textResult(JSON.stringify(result, null, 2), false);
+  }
+  if (name === 'jarvos_projects_propose_v1') {
     const request = { proposal: args.proposal };
     // An explicit library null deliberately disables host resolution. The MCP
     // wrapper must omit this field when no test provider is injected so an
     // ordinary configured host can expose its opt-in proposal transport.
     if (mcpProjectsContextProvider !== null) request.provider = mcpProjectsContextProvider;
-    const result = await proposeProjectsContext(request);
+    const result = await proposePendingProjectsContext(request);
     return textResult(JSON.stringify(result, null, 2), false);
   }
   if (name === 'jarvos_recall') {

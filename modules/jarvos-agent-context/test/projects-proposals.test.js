@@ -72,20 +72,20 @@ test('rejects unknown fields, non-JSON prototypes, invalid parents, and oversize
 
 test('invalid proposals are never forwarded and provider errors stay typed and private', async () => {
   let forwarded = 0;
-  const invalid = await agentContext.proposeProjectsContext({
+  const invalid = await agentContext.proposePendingProjectsContext({
     provider: { propose: async () => { forwarded += 1; } },
     proposal: proposal({ rationale: '' }),
   });
   assert.equal(invalid.code, 'PROJECTS_PROPOSAL_INVALID');
   assert.equal(forwarded, 0);
 
-  const failed = await agentContext.proposeProjectsContext({
+  const failed = await agentContext.proposePendingProjectsContext({
     provider: { propose: async () => { throw new Error('capability-secret=/private/ledger'); } },
     proposal: proposal(),
   });
   assert.equal(failed.code, 'PROJECTS_PROPOSAL_UNAVAILABLE');
   assert.doesNotMatch(JSON.stringify(failed), /capability-secret|private\/ledger/);
-  const rateLimited = await agentContext.proposeProjectsContext({
+  const rateLimited = await agentContext.proposePendingProjectsContext({
     provider: { propose: async () => ({ status: 'unavailable', code: 'PROJECTS_PROPOSAL_RATE_LIMITED', diagnostic: 'secret=leak' }) }, proposal: proposal(),
   });
   assert.equal(rateLimited.code, 'PROJECTS_PROPOSAL_RATE_LIMITED');
@@ -141,12 +141,12 @@ function withHostProposalProvider(callback, { proposals = true } = {}) {
 
 test('ordinary configured hosts expose only an opt-in pending proposal transport', async () => {
   await withHostProposalProvider(async ({ providerModule, query, proposalStateDir }) => {
-    const result = JSON.parse((await callTool('jarvos_projects_propose', {
+    const result = JSON.parse((await callTool('jarvos_projects_propose_v1', {
       proposal: proposal(), subject: 'agent:spoofed', hostId: 'spoofed-host', query: { scope: { projectIds: ['prj_999999'] } },
     })).content[0].text);
     assert.deepEqual(Object.keys(result).sort(), ['contract', 'ok', 'proposal', 'status']);
     assert.equal(result.ok, true);
-    assert.equal(result.contract, 'jarvos.projects-context/v1');
+    assert.equal(result.contract, 'jarvos.projects-proposal/v1');
     assert.equal(result.status, 'proposed');
     assert.equal(result.proposal.status, 'pending');
     const provider = require(providerModule);
@@ -160,7 +160,7 @@ test('ordinary configured hosts expose only an opt-in pending proposal transport
     assert.ok(Object.isFrozen(forwarded.proposalPolicy));
     assert.equal(forwarded.profileDigest, crypto.createHash('sha256').update(canonicalJson(query)).digest('hex'));
 
-    const explicitNull = await agentContext.proposeProjectsContext({ provider: null, proposal: proposal() });
+    const explicitNull = await agentContext.proposePendingProjectsContext({ provider: null, proposal: proposal() });
     assert.equal(explicitNull.code, 'PROJECTS_PROPOSAL_UNAVAILABLE');
   });
 });
@@ -173,7 +173,7 @@ test('disabled or malformed host proposal opt-in keeps reads available and propo
     fs.writeFileSync(config, JSON.stringify(value));
     fs.chmodSync(config, 0o600);
     setMcpProjectsContextProvider(null);
-    const result = JSON.parse((await callTool('jarvos_projects_propose', { proposal: proposal() })).content[0].text);
+    const result = JSON.parse((await callTool('jarvos_projects_propose_v1', { proposal: proposal() })).content[0].text);
     assert.equal(result.code, 'PROJECTS_PROPOSAL_UNAVAILABLE');
     assert.equal(require(providerModule).calls.length, 0);
     const read = JSON.parse((await callTool('jarvos_projects_context', { profile: 'orientation' })).content[0].text);
