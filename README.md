@@ -58,10 +58,18 @@ Outcomes, actionable Todos, and intentionally held Backlog items so different
 agents can understand what matters and what should happen next.
 
 The portable source defines the records, relationships, bounded context, and
-evidence contracts. A configured work authority owns Todo state; runtime
-adapters and specialized executors, such as `@jarvos/coding`, may advance only
-explicitly authorized work. Paperclip can provide an optional handoff surface,
-but it is not the definition of the PMS.
+evidence contracts. Projects owns durable meaning: identity, hierarchy,
+priority, goals, and definitions of done. A Beads-compatible ledger owns the
+lifecycle of executable Todos. Rust_Beads can provide that ledger, but it is an
+implementation provider rather than part of the portable PMS contract; this
+repository does not by itself claim that Rust_Beads is selected, installed, or
+live.
+
+Runtime adapters and specialized executors, such as `@jarvos/coding`, may
+advance only explicitly authorized work. Overseer coordinates that work but is
+neither its task store nor its executor. Paperclip is an optional, deliberate
+handoff or projection surface, not the definition of the PMS or its default
+task authority.
 
 The long-term loop is capture, organize, advance, and accept—or surface an
 explicit blocker. That loop is still being hardened. Source availability,
