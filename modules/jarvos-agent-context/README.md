@@ -103,8 +103,14 @@ implement `propose(request)`. The read path returns a normalized
 `jarvos.projects-context/v1` packet and deterministic fingerprint. A missing
 provider is an explicit, non-enumerating `unavailable` or `partial` result;
 hydration and startup do not substitute Paperclip, Todo, Beads, release, or
-Journal project state. Proposals are reviewable outputs only and never create tasks, releases,
-or external handoffs directly.
+Journal project state. Proposals are reviewable pending outputs only and never
+create or update the registry, tasks, releases, or external handoffs. They are
+exposed only when trusted host config has an enabled `proposals` block with a
+separate owner-only proposal state directory, authorized subject, and bounded
+retention/rate/TTL policy. The provider receives host-owned identity,
+capability, scope, and state paths; MCP callers supply only the bounded proposal
+envelope. Applying a proposal is deliberately absent from both this library and
+MCP.
 
 ## Journal actions
 

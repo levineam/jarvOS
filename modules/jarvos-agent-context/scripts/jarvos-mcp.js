@@ -257,7 +257,7 @@ const TOOLS = [
   },
   {
     name: 'jarvos_projects_propose',
-    description: 'Submit a reviewable Projects proposal through the injected provider. This never creates a project, task, release, or external handoff directly.',
+    description: 'Submit a reviewable pending Projects proposal through an opt-in host provider. This never creates, updates, or applies a project, task, release, or external handoff.',
     inputSchema: {
       type: 'object',
       required: ['proposal'],
@@ -811,7 +811,12 @@ async function callTool(name, args = {}, lifecycle = {}) {
     return textResult(JSON.stringify(result, null, 2), false);
   }
   if (name === 'jarvos_projects_propose') {
-    const result = await proposeProjectsContext({ ...args, provider: mcpProjectsContextProvider });
+    const request = { proposal: args.proposal };
+    // An explicit library null deliberately disables host resolution. The MCP
+    // wrapper must omit this field when no test provider is injected so an
+    // ordinary configured host can expose its opt-in proposal transport.
+    if (mcpProjectsContextProvider !== null) request.provider = mcpProjectsContextProvider;
+    const result = await proposeProjectsContext(request);
     return textResult(JSON.stringify(result, null, 2), false);
   }
   if (name === 'jarvos_recall') {
