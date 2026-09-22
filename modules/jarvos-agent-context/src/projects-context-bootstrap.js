@@ -6,6 +6,7 @@ const fs = require('node:fs');
 const crypto = require('node:crypto');
 const os = require('node:os');
 const path = require('node:path');
+const { canonicalJson } = require('./projects-proposals');
 
 const CONFIG_ENV = 'JARVOS_PROJECTS_CONTEXT_CONFIG';
 const ACTIVE_ASSISTANT_PROVIDER_MODULE_ENV = 'ACTIVE_ASSISTANT_PROJECTS_PROVIDER_MODULE';
@@ -124,6 +125,43 @@ function digest(contents) {
   return crypto.createHash('sha256').update(contents).digest('hex');
 }
 
+function freezeJsonCopy(value) {
+  if (Array.isArray(value)) return Object.freeze(value.map(freezeJsonCopy));
+  if (value && typeof value === 'object') {
+    const copy = {};
+    for (const key of Object.keys(value)) copy[key] = freezeJsonCopy(value[key]);
+    return Object.freeze(copy);
+  }
+  return value;
+}
+
+function resolveOwnerOnlyDirectory(value, parent) {
+  const resolved = resolveTrustedDirectory(value, parent);
+  if (!resolved) return null;
+  try { return (fs.statSync(resolved).mode & 0o077) === 0 ? resolved : null; } catch { return null; }
+}
+
+function validProposalPolicy(value, { stateRoot, registryStateDir }) {
+  if (!value || typeof value !== 'object' || Array.isArray(value) || Object.getPrototypeOf(value) !== Object.prototype || value.enabled !== true) return null;
+  const allowed = new Set(['enabled', 'stateDir', 'authorizedSubjects', 'maxEntries', 'maxPerHour', 'ttlSeconds']);
+  if (Object.keys(value).some((key) => !allowed.has(key))) return null;
+  if (!Array.isArray(value.authorizedSubjects) || value.authorizedSubjects.length < 1 || value.authorizedSubjects.length > 32
+    || value.authorizedSubjects.some((subject) => typeof subject !== 'string' || !subject.trim() || subject.length > 200)) return null;
+  if (!Number.isSafeInteger(value.maxEntries) || value.maxEntries < 1 || value.maxEntries > 1000
+    || !Number.isSafeInteger(value.maxPerHour) || value.maxPerHour < 1 || value.maxPerHour > 100
+    || !Number.isSafeInteger(value.ttlSeconds) || value.ttlSeconds < 1 || value.ttlSeconds > 604800) return null;
+  const stateDir = resolveOwnerOnlyDirectory(value.stateDir, stateRoot);
+  if (!stateDir || !registryStateDir || inside(stateDir, registryStateDir) || inside(registryStateDir, stateDir)) return null;
+  return Object.freeze({
+    enabled: true,
+    authorizedSubjects: Object.freeze(value.authorizedSubjects.map((subject) => subject.trim())),
+    maxEntries: value.maxEntries,
+    maxPerHour: value.maxPerHour,
+    ttlSeconds: value.ttlSeconds,
+    stateDir,
+  });
+}
+
 function createHostProjectsContextProvider(env = process.env) {
   const configuredPath = env && env[CONFIG_ENV];
   const configPath = typeof configuredPath === 'string' && configuredPath.length > 0
@@ -208,7 +246,11 @@ function createHostProjectsContextProvider(env = process.env) {
       && (request.expectedGeneration === undefined || (Number.isSafeInteger(request.expectedGeneration) && request.expectedGeneration >= 0))
     : true;
 
-  return {
+  const proposalPolicy = validProposalPolicy(config.proposals, { stateRoot, registryStateDir });
+  const trustedSubject = typeof config.subject === 'string' && config.subject.trim() ? config.subject.trim() : null;
+  const proposalEnabled = Boolean(proposalPolicy && typeof provider.propose === 'function'
+    && trustedSubject && proposalPolicy.authorizedSubjects.includes(trustedSubject) && trustedRosterQuery);
+  const hostProvider = {
     descriptor,
     defaultQuery: trustedRosterQuery
       ? JSON.parse(JSON.stringify(trustedRosterQuery))
@@ -289,6 +331,34 @@ function createHostProjectsContextProvider(env = process.env) {
       }
     },
   };
+  if (proposalEnabled) {
+    const publicPolicy = freezeJsonCopy({
+      enabled: proposalPolicy.enabled,
+      authorizedSubjects: proposalPolicy.authorizedSubjects,
+      maxEntries: proposalPolicy.maxEntries,
+      maxPerHour: proposalPolicy.maxPerHour,
+      ttlSeconds: proposalPolicy.ttlSeconds,
+    });
+    hostProvider.propose = async ({ proposal }) => {
+      const capabilityReceipt = capabilityReceiptPath ? readPrivateJson(capabilityReceiptPath) : null;
+      const capabilitySecret = capabilitySecretPath ? readPrivate(capabilitySecretPath) : null;
+      return provider.propose({
+        proposal,
+        repositoryRoot,
+        stateRoot,
+        registryStateDir,
+        proposalStateDir: proposalPolicy.stateDir,
+        proposalPolicy: publicPolicy,
+        capability: capabilityReceipt,
+        capabilitySecret,
+        hostId: typeof config.hostId === 'string' && config.hostId.trim() ? config.hostId.trim() : undefined,
+        subject: trustedSubject,
+        query: freezeJsonCopy(JSON.parse(JSON.stringify(trustedRosterQuery))),
+        profileDigest: crypto.createHash('sha256').update(canonicalJson(trustedRosterQuery)).digest('hex'),
+      });
+    };
+  }
+  return hostProvider;
 }
 
 module.exports = { ACTIVE_ASSISTANT_PROVIDER_MODULE_ENV, ACTIVE_ASSISTANT_PUBLIC_RUNTIME_ROOT_ENV, CONFIG_ENV, createHostProjectsContextProvider };

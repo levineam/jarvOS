@@ -20,7 +20,8 @@ The bundled stdio MCP server exposes:
 |---|---|
 | `jarvos_current_work` | Diagnostic compatibility: compact Paperclip current-work summary, not project orientation |
 | `jarvos_projects_context` | Canonical `jarvos.projects-context/v1` read packet from the injected Projects provider |
-| `jarvos_projects_propose` | Provider-neutral, uncommitted Projects proposal through the injected provider |
+| `jarvos_projects_propose` | Deprecated compatibility surface for the original injected-provider proposal contract |
+| `jarvos_projects_propose_v1` | Versioned, bounded pending-create proposal through an opt-in host provider |
 | `jarvos_recall` | GBrain/QMD/graph recall bundle rendered as Markdown; pass `synthesize: true` or `mode: "synthesis"` for WS5 synthesis |
 | `jarvos_synthesize` | Concise WS5 synthesis over WS4 retrieval evidence with the source bundle preserved |
 | `jarvos_create_note` | Obsidian note creation + today journal wikilink + KB sidecars + verification |
@@ -103,8 +104,14 @@ implement `propose(request)`. The read path returns a normalized
 `jarvos.projects-context/v1` packet and deterministic fingerprint. A missing
 provider is an explicit, non-enumerating `unavailable` or `partial` result;
 hydration and startup do not substitute Paperclip, Todo, Beads, release, or
-Journal project state. Proposals are reviewable outputs only and never create tasks, releases,
-or external handoffs directly.
+Journal project state. Proposals are reviewable pending outputs only and never
+create or update the registry, tasks, releases, or external handoffs. They are
+exposed only when trusted host config has an enabled `proposals` block with a
+separate owner-only proposal state directory, authorized subject, and bounded
+retention/rate/TTL policy. The provider receives host-owned identity,
+capability, scope, and state paths; MCP callers supply only the bounded proposal
+envelope. Applying a proposal is deliberately absent from both this library and
+MCP.
 
 ## Journal actions
 

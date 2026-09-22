@@ -706,16 +706,25 @@ test('Projects provider reads are bounded and time out without leaking diagnosti
 test('Projects proposals remain uncommitted and parity is shared through MCP', async () => {
   const provider = {
     read: async () => ({ status: 'ok', packet: packet() }),
-    propose: async ({ proposal }) => ({ status: 'proposed', proposal: { ...proposal, status: 'proposed' } }),
+    propose: async ({ proposal }) => ({ status: 'proposed', proposal: {
+      id: 'prop_000001', status: 'pending', digest: require('node:crypto').createHash('sha256').update(require('../src/projects-proposals.js').canonicalJson(proposal)).digest('hex'),
+      registryGeneration: proposal.expectedGeneration, createdAt: '2026-08-08T12:00:00.000Z', expiresAt: proposal.expiresAt,
+    } }),
   };
-  const proposal = { kind: 'unknown-link', externalReference: 'release:v2.0.0' };
+  const proposal = {
+    kind: 'create', expectedGeneration: 12,
+    record: { kind: 'outcome', title: 'v2.0.0 release', parentId: 'prj_000001', goal: 'Ship v2.0.0', definitionOfDone: 'Release proof is recorded.' },
+    rationale: 'The release needs a canonical outcome.', evidenceRefs: ['release:v2.0.0'], expiresAt: '2026-09-01T00:00:00.000Z',
+  };
   const libraryResult = await proposeProjectsContext({ provider, proposal });
   setMcpProjectsContextProvider(provider);
   const mcpResult = await callTool('jarvos_projects_propose', { proposal });
   const mcpPayload = JSON.parse(mcpResult.content[0].text);
 
   assert.equal(libraryResult.status, 'proposed');
+  assert.equal(libraryResult.ok, true);
+  assert.equal(libraryResult.contract, 'jarvos.projects-context/v1');
   assert.equal(mcpPayload.status, 'proposed');
   assert.deepEqual(mcpPayload.proposal, libraryResult.proposal);
-  assert.equal(mcpPayload.proposal.status, 'proposed');
+  assert.equal(mcpPayload.proposal.status, 'pending');
 });
