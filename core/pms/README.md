@@ -19,6 +19,27 @@ Portfolio          (strategic theme — e.g., "Mission Control")
 
 Every active project has three companion documents: a **Board** (status + milestones), a **Brief** (why it exists and what done looks like), and a **Plan** (how to get there).
 
+## Sources of Authority
+
+The PMS is the product; its providers are replaceable. Keep each kind of state
+with the component that owns it:
+
+- **Projects** owns durable meaning: identity, hierarchy, priority, goals, and
+  definitions of done.
+- **A Beads-compatible ledger** owns the lifecycle of executable Todos,
+  including readiness, active work, blockers, and completion evidence.
+- **Rust_Beads** is one implementation that can provide that ledger. It is not
+  the portable contract, and source documentation alone does not prove that a
+  particular version is selected, installed, or live.
+- **Paperclip** is an optional, deliberate handoff or projection surface. It is
+  not required for the PMS and does not silently become the task authority.
+- **Overseer** coordinates work across these sources. It is neither a task
+  store nor an executor; assignment or coordination is not execution.
+
+Boards and Markdown task lanes remain useful human-readable views. When a
+Beads-compatible ledger is configured, those views project Todo state rather
+than creating a second lifecycle authority.
+
 ## How It Works
 
 ### The Board tracks state
@@ -37,7 +58,8 @@ The Plan has four locked sections:
 This division is the point. Your assistant works from **Autonomous Now** without being asked, routes blockers through **Needs You**, and doesn't confuse the two.
 
 ### Tasks flow through lanes
-Every task has a board linkage and a status:
+In the optional Markdown task-board convention, every task has a board linkage
+and a projected status:
 - **Backlog** — captured but not started
 - **In Progress** — actively being worked
 - **Blocked / Needs You** — waiting on user input
