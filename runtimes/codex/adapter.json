@@ -184,6 +184,18 @@
       "environment": "JARVOS_STEWARDSHIP_BRIDGE_COMMAND",
       "contract": "An executable on PATH accepts one lifecycle capability name and emits a public-safe JSON availability receipt. For nextTurnInput, a pending receipt may contain only a bounded plain-English prompt, 2-3 choices, a listed default, and an opaque correlation identifier; hooks display it without granting authority. Codex resolves private bridge state only through the current CODEX_THREAD_ID and a session-neutral private mapping root. Native hooks do not capture arbitrary reply text: the in-session agent verifies an exact listed reply, then invokes `jarvos-stewardship-bridge answer --correlation <correlation> --choice <listed-choice>`, which passes only those two bounded fields."
     },
+    "durableWorkCollection": {
+      "contract": "jarvos.durable-work-collect/v1",
+      "capability": "durableWorkCollect",
+      "mode": "turn-boundary",
+      "events": ["UserPromptSubmit"],
+      "script": "jarvos-session-turn-hook.js",
+      "enabledBy": "JARVOS_DURABLE_WORK_COLLECT",
+      "timeoutMs": 2000,
+      "failOpen": true,
+      "injectsContext": false,
+      "reason": "The characterized Codex CLI hooks contract exposes SessionStart and UserPromptSubmit only, so Codex has no PostToolUse or Stop collector. Durable work is collected at the next native UserPromptSubmit boundary, with its own bounded budget, only when the managed dispatcher enables collection for the selected runtime."
+    },
     "capabilities": {
       "startOrResume": {
         "mode": "native-hook",

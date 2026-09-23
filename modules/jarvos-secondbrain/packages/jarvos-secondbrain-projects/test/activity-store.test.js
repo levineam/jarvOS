@@ -97,7 +97,41 @@ test('admits a verified receipt once and replays it by exact causal identity', (
   assert.equal(first.status, 'admitted');
   const second = store.admit(receipt({ eventId: 'event-1-retry' }));
   assert.equal(second.status, 'deduped');
+  assert.equal(second.replay, 'identical');
   assert.equal(store.query({ from: NOW, to: NOW }).activities.length, 1);
+  // SUP-3816: an identical replay carries no new evidence and is a true no-op.
+  assert.equal(store.generation, 1);
+});
+
+test('identical replay leaves generation, CURRENT, and state digest unchanged across reload', () => {
+  const stateDir = tmpDir();
+  const store = new ActivityStore({ stateDir, now: () => NOW, admission: AUTHORITY });
+  store.admit(receipt({ evidenceRefs: ['note:rev-2', 'note:rev-1'] }));
+  const currentBefore = fs.readFileSync(path.join(stateDir, 'CURRENT'), 'utf8');
+  const generationFile = path.join(stateDir, currentBefore.trim());
+  const digestBefore = crypto.createHash('sha256').update(fs.readFileSync(generationFile)).digest('hex');
+  const filesBefore = fs.readdirSync(stateDir).sort();
+
+  const reloaded = new ActivityStore({ stateDir, now: () => '2026-08-10T13:00:00.000Z', admission: AUTHORITY });
+  const replay = reloaded.admit(receipt({ eventId: 'event-1-replay', evidenceRefs: ['note:rev-1', 'note:rev-2'] }));
+  assert.equal(replay.status, 'deduped');
+  assert.equal(replay.replay, 'identical');
+  assert.equal(reloaded.generation, 1);
+  assert.equal(fs.readFileSync(path.join(stateDir, 'CURRENT'), 'utf8'), currentBefore);
+  assert.equal(crypto.createHash('sha256').update(fs.readFileSync(generationFile)).digest('hex'), digestBefore);
+  assert.deepEqual(fs.readdirSync(stateDir).sort(), filesBefore);
+});
+
+test('a replay that adds evidence still merges and advances the generation', () => {
+  const store = new ActivityStore({ stateDir: tmpDir(), now: () => NOW, admission: AUTHORITY });
+  store.admit(receipt({ evidenceRefs: ['note:rev-1'] }));
+  const merged = store.admit(receipt({ eventId: 'event-1-more', evidenceRefs: ['note:rev-1', 'note:rev-3'] }));
+  assert.equal(merged.status, 'deduped');
+  assert.equal(merged.replay, 'evidence_merged');
+  assert.deepEqual(merged.activity.receipt.evidenceRefs, ['note:rev-1', 'note:rev-3']);
+  assert.equal(store.generation, 2);
+  const again = store.admit(receipt({ eventId: 'event-1-more', evidenceRefs: ['note:rev-3', 'note:rev-1'] }));
+  assert.equal(again.replay, 'identical');
   assert.equal(store.generation, 2);
 });
 
@@ -134,7 +168,9 @@ test('replay preserves the original admission-time canonical snapshot', () => {
   assert.equal(replay.status, 'deduped');
   assert.equal(replay.activity.canonicalAtAdmission.rootProjectRevision, 4);
   assert.equal(replay.activity.canonicalAtAdmission.registryGeneration, 7);
-  assert.equal(store.generation, 2);
+  // The replay is identical apart from the ignored admission-time snapshot, so
+  // it is a no-op rather than a new generation.
+  assert.equal(store.generation, 1);
 });
 
 test('rejects shape-valid activity without a trusted host admission', () => {

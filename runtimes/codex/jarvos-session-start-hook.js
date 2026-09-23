@@ -11,7 +11,9 @@ const {
   bridgeEnvironment,
   hookSessionId,
   MAX_HOOK_INPUT_CHARS,
+  projectsCandidateEnvironment,
   projectsContextStart,
+  readHookEnvelope,
   readHookInput,
   sessionWaitContext,
   stewardshipAdapter,
@@ -72,7 +74,8 @@ async function startupHydration(options = {}) {
 
 async function main() {
   try {
-    const env = bridgeEnvironment(readSessionStartInput());
+    const envelope = readHookEnvelope('SessionStart');
+    const env = bridgeEnvironment(envelope.sessionId);
     let projectsContextMarkdown = '';
     let judgment = '';
     if (env) {
@@ -81,7 +84,7 @@ async function main() {
       judgment = stewardshipContext({ env });
       // A single hard-timeout start call; invalid, timed out, nonzero, or
       // unavailable all fail open to the ordinary hydrate() Projects fallback.
-      const refresh = projectsContextStart({ env });
+      const refresh = projectsContextStart({ env: { ...env, ...projectsCandidateEnvironment(envelope.cwd) } });
       if (projectsContextRefreshHasContent(refresh.envelope)) {
         projectsContextMarkdown = refresh.envelope.markdown;
       }

@@ -10,6 +10,7 @@ const {
   additionalContext,
   BRIDGE_COMMAND_ENV,
   hookSessionId,
+  projectsCandidateEnvironment,
   projectsContextStart,
   readHookInput,
   stewardshipAdapter,
@@ -138,7 +139,7 @@ async function main(hookInput = readHookInput()) {
     const judgment = stewardshipContext(bridgeOptions);
     // A single hard-timeout start call; invalid, timed out, nonzero, or
     // unavailable all fail open to the ordinary hydrate() Projects fallback.
-    const refresh = projectsContextStart(bridgeOptions);
+    const refresh = projectsContextStart({ ...bridgeOptions, env: projectsCandidateEnvironment(hookInput) });
     const projectsContextMarkdown = projectsContextRefreshHasContent(refresh.envelope) ? refresh.envelope.markdown : '';
     let hydration = '';
     try {

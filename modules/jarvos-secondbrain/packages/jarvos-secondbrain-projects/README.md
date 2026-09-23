@@ -93,6 +93,14 @@ Version 2 requires Obsidian-owned mutation callbacks for `createProject()` and
 compose callbacks from the canonical jarvOS vault mutation service; the bundled
 CLI no longer falls back to direct Markdown filesystem writes.
 
+Cross-harness durable work continuity is exported as `./durable-work-event`,
+`./repo-binding`, `./target-hydration`, and `./durable-work-conformance`: a
+metadata-only event envelope that projects into the unchanged verified-activity
+receipt, host-keyed repository/worktree/branch/PR binding with explicit
+ambiguity, typed target-hydration omissions, and an adapter conformance runner.
+An identical ActivityStore replay is a no-op; an evidence-adding replay still
+merges. See `docs/contracts/durable-work-continuity.md` at the repository root.
+
 ## Not in scope
 
 This package does not talk to any issue tracker. Comparing projects against

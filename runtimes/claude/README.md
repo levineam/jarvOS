@@ -70,6 +70,23 @@ hooks resolve a pending judgment from the hook's `session_id` and an owner-only,
 hashed session map. The durable Claude hook environment retains only the bridge
 command and a neutral map root—never the private context-file path.
 
+### Durable work collection (optional)
+
+On a managed install, setup probes the selected stewardship dispatcher. Only when
+its provenance receipt advertises the optional `session-event` action does setup
+register `PostToolUse` (matcher `Bash`) and `Stop` hooks that route through the
+dispatcher to `runtimes/claude/jarvos-session-event-hook.js`. Both commands are
+wrapped fail-open, and rollback removes only the entries setup owns.
+
+The hook asks the host bridge (`durableWorkCollect`, 2-second hard budget) to
+collect metadata-only durable work events — `commit`, `merged_pr`,
+`migration_applied`, `deployment_ready`, `production_verified` — for its own
+session. It inspects the hook input in memory only to find explicit absolute
+repository roots (the hook `cwd`, `cd <abs>`, `git -C <abs>`); command text,
+tool output, and prompts are never logged, persisted, or forwarded. It never
+injects model context. See
+[`docs/contracts/durable-work-continuity.md`](../../docs/contracts/durable-work-continuity.md).
+
 ## Claude Code CLAUDE.md bootstrap
 
 Claude Code loads `~/.claude/CLAUDE.md` into every session as the user-scope
