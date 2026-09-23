@@ -192,6 +192,29 @@ test('recent activity is rendered as bounded assistant context', async () => {
   assert.match(result.markdown, /Reconciled release readiness \[completed\]/);
 });
 
+test('titled durable-work activity renders its causal key for native target acknowledgement', async () => {
+  const { assessTargetHydration } = require(path.join(PROJECTS_SOURCE, 'target-hydration.js'));
+  const causalKey = `dwe_${'c'.repeat(32)}`;
+  const base = packet();
+  const outcomeId = base.canonical.records.find((record) => record.kind === 'outcome').id;
+  const provider = {
+    read: async ({ query }) => ({
+      status: 'ok',
+      packet: { ...base, query, activity: [summary({ id: causalKey, canonicalId: outcomeId, category: 'activity', status: 'completed', title: 'Shipped the fix' })] },
+    }),
+  };
+  const result = await readProjectsContext({ provider, query: QUERY, maxChars: 2000 });
+  assert.equal(result.status, 'ok');
+  assert.ok(result.markdown.includes(`- Shipped the fix [completed] (${causalKey})`));
+  const assessment = assessTargetHydration({
+    targetId: outcomeId, result: { status: 'ok', packet: result.packet }, expected: [{ causalKey }],
+    rendered: { text: result.markdown, markers: ['v1.0.0 release'] },
+  });
+  assert.deepEqual(assessment.presentCausalKeys, [causalKey]);
+  assert.deepEqual(assessment.renderedCausalKeys, [causalKey]);
+  assert.equal(assessment.omissions.some((entry) => entry.code === 'render_truncation'), false);
+});
+
 test('derived Project intent gaps use the existing attention rendering consumer', async () => {
   const authority = createHostAdmission({ producerId: 'agent-context-intent-source', secret: 'agent-context-intent-secret', allowedSourceClasses: ['note'] });
   const provider = {

@@ -61,6 +61,30 @@ test('every omission code is typed and reachable', () => {
   assert.deepEqual([...found].sort(), [...OMISSION_CODES].sort());
 });
 
+test('a rendered title without the structurally present causal key reports keyed render truncation', () => {
+  const result = assessTargetHydration({
+    targetId: 'prj_000001', result: packet({ activity: [activity(KEY)] }), expected: [{ causalKey: KEY }],
+    rendered: { text: '## Projects Context\n\n- Record prj_000001 — active\n\n### Recent activity\n- Shipped the fix [completed]\n\n[Projects context trimmed to 120 characters]', markers: ['Record prj_000001'] },
+  });
+  assert.equal(result.status, 'partial');
+  assert.deepEqual(result.omissions, [{ code: 'render_truncation', subject: KEY }]);
+  assert.deepEqual(result.presentCausalKeys, [KEY]);
+  assert.deepEqual(result.renderedCausalKeys, []);
+});
+
+test('a rendered causal key counts as model-visible presence', () => {
+  const result = assessTargetHydration({
+    targetId: 'prj_000001', result: packet({ activity: [activity(KEY)] }), expected: [{ causalKey: KEY }],
+    rendered: { text: `## Projects Context\n\n- Record prj_000001 — active\n\n### Recent activity\n- Shipped the fix [completed] (${KEY})`, markers: ['Record prj_000001'] },
+  });
+  assert.equal(result.status, 'present');
+  assert.deepEqual(result.omissions, []);
+  assert.deepEqual(result.presentCausalKeys, [KEY]);
+  assert.deepEqual(result.renderedCausalKeys, [KEY]);
+  const unrendered = assessTargetHydration({ targetId: 'prj_000001', result: packet({ activity: [activity(KEY)] }), expected: [{ causalKey: KEY }] });
+  assert.equal(unrendered.renderedCausalKeys, null);
+});
+
 test('item and byte truncation are distinguished from the packet truncation counts', () => {
   const itemOnly = assessTargetHydration({
     targetId: 'prj_000001', result: packet({ scope: { projectIds: [], outcomeIds: [], includeDescendants: true }, records: [record('prj_000003')], truncation: { truncated: true, maxItems: 1, maxBytes: 20000, omittedItems: 3, sections: ['canonical.records'] } }),

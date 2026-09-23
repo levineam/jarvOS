@@ -85,6 +85,12 @@ omissions:
 
 A missing target is never reported as a healthy quiet packet.
 
+`presentCausalKeys` is structured packet presence. When rendered text is
+supplied, `renderedCausalKeys` is the subset that appears in that text, and
+each structurally present key missing from it is a `render_truncation`
+omission keyed by that causal key. The agent-context renderer appends the
+causal key to a titled durable-work summary line so it can be acknowledged.
+
 ## 5. Conformance
 
 `src/durable-work-conformance.js` with

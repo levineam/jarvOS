@@ -111,7 +111,10 @@ function withinWindow(occurredAt, activityWindow) {
   return occurred >= Date.parse(activityWindow.from) && occurred < Date.parse(activityWindow.to);
 }
 
-function assessmentReceipt({ targetId, status, omissions, packet, presentCausalKeys, expected }) {
+// `presentCausalKeys` is structured presence in the packet; `renderedCausalKeys`
+// is the subset also visible in the supplied rendered text (null when no
+// rendered text was assessed).
+function assessmentReceipt({ targetId, status, omissions, packet, presentCausalKeys, renderedCausalKeys = null, expected }) {
   const receipt = {
     contract: TARGET_HYDRATION_CONTRACT,
     targetId,
@@ -120,6 +123,7 @@ function assessmentReceipt({ targetId, status, omissions, packet, presentCausalK
     packetId: packet?.packetId || null,
     registryGeneration: Number.isInteger(packet?.canonical?.generation) ? packet.canonical.generation : null,
     presentCausalKeys: [...presentCausalKeys].sort(),
+    renderedCausalKeys: renderedCausalKeys === null ? null : [...renderedCausalKeys].sort(),
     expectedCausalKeys: expected.map((entry) => entry.causalKey).sort(),
   };
   receipt.assessmentDigest = sha256(receipt);
@@ -191,15 +195,24 @@ function assessTargetHydration({
     }
   }
 
-  if (rendered && recordPresent) {
+  // Structured presence is not model-visible presence: when rendered text is
+  // supplied, every structurally present causal key must appear in it too.
+  let renderedKeys = null;
+  if (rendered) {
     const text = typeof rendered.text === 'string' ? rendered.text : '';
-    const markers = Array.isArray(rendered.markers) ? rendered.markers.filter((marker) => typeof marker === 'string' && marker) : [];
-    if (!text || markers.some((marker) => !text.includes(marker))) omissions.push(omission('render_truncation', 'record'));
+    if (recordPresent) {
+      const markers = Array.isArray(rendered.markers) ? rendered.markers.filter((marker) => typeof marker === 'string' && marker) : [];
+      if (!text || markers.some((marker) => !text.includes(marker))) omissions.push(omission('render_truncation', 'record'));
+    }
+    renderedKeys = present.filter((causalKey) => text.includes(causalKey));
+    for (const causalKey of present) {
+      if (!renderedKeys.includes(causalKey)) omissions.push(omission('render_truncation', causalKey));
+    }
   }
 
   const targetMissing = !recordPresent || omissions.some((entry) => entry.code === 'generation_mismatch');
   const status = !omissions.length ? 'present' : (targetMissing && present.length === 0 ? 'omitted' : 'partial');
-  return assessmentReceipt({ targetId, status, omissions, packet, presentCausalKeys: present, expected: normalizedExpected });
+  return assessmentReceipt({ targetId, status, omissions, packet, presentCausalKeys: present, renderedCausalKeys: renderedKeys, expected: normalizedExpected });
 }
 
 module.exports = {
