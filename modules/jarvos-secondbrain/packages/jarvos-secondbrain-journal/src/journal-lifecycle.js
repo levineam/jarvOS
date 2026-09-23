@@ -12,15 +12,27 @@ const JOURNAL_MUTATION_LOCK_MAX_AGE_MS = 30 * 1000;
 const JOURNALING_INDEX_FILE = 'Journaling.md';
 const ACTIVE_INDEX_QUIET_WINDOW_MS = 5 * 60 * 1000;
 const INDEX_BACKUP_RETENTION_DAYS = 90;
+const RECEIPT_ATTESTATION_FIELDS = [
+  'canonicalPath',
+  'sourceRevision',
+  'sourceChecksum',
+  'runtimeRevision',
+  'runtimeArtifactChecksum',
+  'externalRunId',
+];
 
 function isSuccessfulJournalOutcome(value) {
   return SUCCESS_OUTCOMES.has(value);
 }
 
-function isScheduledJournalReceipt(receipt) {
+function isScheduledJournalReceipt(receipt, expectedProvenance = {}) {
   if (!isSuccessfulJournalOutcome(receipt?.outcome)) return false;
   const trigger = receipt?.trigger ?? receipt?.provenance?.trigger;
-  return SCHEDULED_TRIGGERS.has(String(trigger || '').trim());
+  if (!SCHEDULED_TRIGGERS.has(String(trigger || '').trim())) return false;
+  return RECEIPT_ATTESTATION_FIELDS.every((field) => (
+    expectedProvenance[field] == null
+    || String(receipt?.[field] ?? '') === String(expectedProvenance[field])
+  ));
 }
 
 function localDate(now, timeZone) {
@@ -34,7 +46,7 @@ function localDate(now, timeZone) {
 
 function safeProvenance(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
-  return Object.fromEntries(['source', 'runtime', 'runId', 'trigger']
+  return Object.fromEntries(['source', 'runtime', 'runId', 'trigger', ...RECEIPT_ATTESTATION_FIELDS]
     .filter((key) => typeof value[key] === 'string' && value[key].trim())
     .map((key) => [key, value[key].trim()]));
 }
@@ -54,6 +66,11 @@ function resolveProvenance(options = {}) {
     runtime: firstNonBlank(explicit.runtime, env.JARVOS_RUNTIME_REVISION, env.OPENCLAW_RUNTIME_REVISION),
     runId: firstNonBlank(explicit.runId, env.OPENCLAW_EXTERNAL_CRON_RUN_ID, env.OPENCLAW_EXTERNAL_CRON_SCHEDULED_WINDOW_KEY),
     trigger: firstNonBlank(explicit.trigger, options.trigger, env.OPENCLAW_EXTERNAL_CRON_EXECUTION_PROVENANCE),
+    sourceRevision: firstNonBlank(explicit.sourceRevision, env.JARVOS_SOURCE_REVISION, env.OPENCLAW_SOURCE_REVISION),
+    sourceChecksum: firstNonBlank(explicit.sourceChecksum, env.JARVOS_SOURCE_CHECKSUM, env.OPENCLAW_SOURCE_CHECKSUM),
+    runtimeRevision: firstNonBlank(explicit.runtimeRevision, env.JARVOS_RUNTIME_REVISION, env.OPENCLAW_RUNTIME_REVISION),
+    runtimeArtifactChecksum: firstNonBlank(explicit.runtimeArtifactChecksum, env.JARVOS_RUNTIME_ARTIFACT_CHECKSUM, env.OPENCLAW_RUNTIME_ARTIFACT_CHECKSUM),
+    externalRunId: firstNonBlank(explicit.externalRunId, env.OPENCLAW_EXTERNAL_CRON_RUN_ID, env.OPENCLAW_EXTERNAL_CRON_SCHEDULED_WINDOW_KEY),
   });
 }
 
@@ -102,6 +119,9 @@ function writeReceipt({ journalDir, date, timeZone, outcome, before, after, prov
     healthAfter: after.status,
     trigger,
     provenance: normalizedProvenance,
+    ...Object.fromEntries(RECEIPT_ATTESTATION_FIELDS
+      .filter((field) => normalizedProvenance[field])
+      .map((field) => [field, normalizedProvenance[field]])),
   };
   const serialized = `${JSON.stringify(receipt)}\n`;
   let temporary = null;
@@ -251,7 +271,7 @@ function resolveInputs(options) {
 
 function ensureTodayJournal(options = {}) {
   const fsImpl = options.fs || fs;
-  const provenance = resolveProvenance(options);
+  let provenance = resolveProvenance(options);
   let priorReceipt = null;
   let inputs;
   try { inputs = resolveInputs(options); } catch (error) {
@@ -260,6 +280,12 @@ function ensureTodayJournal(options = {}) {
   const now = options.now instanceof Date ? options.now : new Date(options.now || Date.now());
   const date = localDate(now, inputs.timeZone);
   const journalPath = path.join(inputs.journalDir, `${date}.md`);
+  const vaultRoot = inferVaultRoot(inputs.journalDir, fsImpl);
+  const canonicalPath = path.relative(vaultRoot, journalPath).split(path.sep).join('/');
+  if (!canonicalPath || canonicalPath.startsWith('../') || path.isAbsolute(canonicalPath)) {
+    return { ok: false, outcome: 'invalid-configuration', date, journalPath, reason: 'Journal mutation target is outside the configured vault', provenance };
+  }
+  provenance = safeProvenance({ ...provenance, canonicalPath });
   if (options.journalPath !== undefined
     && (typeof options.journalPath !== 'string' || path.resolve(options.journalPath) !== path.resolve(journalPath))) {
     return {

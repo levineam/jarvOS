@@ -65,7 +65,9 @@ test('journal lifecycle uses generic caller provenance without host defaults', (
       provenance: { source: 'test-source', runtime: 'test-runtime', runId: 'run-1' },
     });
     assert.equal(result.ok, true);
-    assert.deepEqual(result.provenance, { source: 'test-source', runtime: 'test-runtime', runId: 'run-1' });
+    assert.deepEqual(result.provenance, {
+      source: 'test-source', runtime: 'test-runtime', runId: 'run-1', canonicalPath: 'Journal/2026-08-03.md',
+    });
   } finally {
     fs.rmSync(vault, { recursive: true, force: true });
   }
@@ -80,8 +82,43 @@ test('blank explicit provenance falls back to scheduler environment values', () 
         OPENCLAW_SOURCE_REVISION: 'source-1',
       },
     }),
-    { source: 'source-1', trigger: 'scheduled' },
+    { source: 'source-1', trigger: 'scheduled', sourceRevision: 'source-1' },
   );
+});
+
+test('scheduled receipts preserve and qualify the complete external-runner attestation', () => {
+  const { vault, journalDir } = tempVault();
+  const now = new Date('2026-08-03T12:00:00.000Z');
+  const config = { paths: { journal: journalDir }, user: { timezone: 'UTC' } };
+  const env = {
+    OPENCLAW_EXTERNAL_CRON_EXECUTION_PROVENANCE: 'scheduled',
+    OPENCLAW_EXTERNAL_CRON_RUN_ID: 'journal-maintenance:2026-08-03:primary',
+    OPENCLAW_SOURCE_REVISION: 'jarVOS:main@source-1',
+    OPENCLAW_SOURCE_CHECKSUM: 'source-checksum-1',
+    OPENCLAW_RUNTIME_REVISION: 'runtime-1',
+    OPENCLAW_RUNTIME_ARTIFACT_CHECKSUM: 'runtime-artifact-checksum-1',
+  };
+  try {
+    fs.mkdirSync(path.join(vault, '.obsidian'), { recursive: true });
+    const result = lifecycle.ensureTodayJournal({ config, env, now });
+    const expected = {
+      canonicalPath: 'Journal/2026-08-03.md',
+      sourceRevision: 'jarVOS:main@source-1',
+      sourceChecksum: 'source-checksum-1',
+      runtimeRevision: 'runtime-1',
+      runtimeArtifactChecksum: 'runtime-artifact-checksum-1',
+      externalRunId: 'journal-maintenance:2026-08-03:primary',
+    };
+    const receiptPath = path.join(vault, '.jarvos', 'journal-maintenance', 'receipts', '2026-08-03.receipt');
+    const receipt = JSON.parse(fs.readFileSync(receiptPath, 'utf8'));
+    assert.deepEqual(Object.fromEntries(Object.keys(expected).map((key) => [key, result.provenance[key]])), expected);
+    assert.deepEqual(Object.fromEntries(Object.keys(expected).map((key) => [key, receipt[key]])), expected);
+    assert.equal(lifecycle.isScheduledJournalReceipt(receipt, expected), true);
+    assert.equal(lifecycle.isScheduledJournalReceipt(receipt, { ...expected, sourceChecksum: 'other-source' }), false);
+    assert.equal(lifecycle.isScheduledJournalReceipt(receipt, { sourceChecksum: null, externalRunId: expected.externalRunId }), true);
+  } finally {
+    fs.rmSync(vault, { recursive: true, force: true });
+  }
 });
 
 test('scheduled provenance is recorded and forced checks cannot replace scheduled proof', () => {
@@ -102,6 +139,10 @@ test('scheduled provenance is recorded and forced checks cannot replace schedule
       runtime: 'runtime-1',
       runId: 'journal-maintenance:2026-08-03:primary',
       trigger: 'scheduled',
+      canonicalPath: 'Journal/2026-08-03.md',
+      sourceRevision: 'source-1',
+      runtimeRevision: 'runtime-1',
+      externalRunId: 'journal-maintenance:2026-08-03:primary',
     });
 
     const sentinelPath = path.join(vault, '.jarvos', 'journal-maintenance', 'receipts', '2026-08-03.receipt');
