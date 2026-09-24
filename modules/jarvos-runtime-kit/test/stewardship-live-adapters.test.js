@@ -1903,3 +1903,28 @@ test('managed Codex setup persists the stable jarvos-mcp shim by default and fai
     }
   }
 });
+
+test('managed Claude setup still requires the stable shim when either client would persist an MCP command', () => {
+  // Skipping Claude Code alone still writes Claude Desktop, and stewardship-only
+  // alone still registers Claude Code; each must fail closed without the shim.
+  for (const flags of [{ JARVOS_SKIP_CLAUDE_CODE_MCP: '1' }, { JARVOS_STEWARDSHIP_ONLY: '1' }]) {
+    const { temp, bin, stable } = managedMcpSetupFixture('jarvos-claude-managed-mcp-flags-', { withShim: false });
+    try {
+      const record = path.join(temp, 'claude-mcp-add.json');
+      writeRecordingMcpCli(bin, 'claude', record);
+      const desktop = path.join(temp, 'desktop', 'claude_desktop_config.json');
+      const result = runSetupResult(path.join(ROOT, 'runtimes', 'claude', 'setup.sh'), cleanEnv({
+        HOME: path.join(temp, 'home'), PATH: `${bin}${path.delimiter}${process.env.PATH || ''}`,
+        CLAUDE_SETTINGS: path.join(temp, 'settings.json'), CLAUDE_DESKTOP_CONFIG: desktop,
+        JARVOS_SKIP_CLAUDE_MD: '1', JARVOS_MANAGED_REPOSITORIES: '/managed/repository', JARVOS_STEWARDSHIP_STABLE_ROOT: stable,
+        ...flags,
+      }));
+      assert.notEqual(result.status, 0, `managed setup with ${Object.keys(flags)[0]} alone must fail without the shim`);
+      assert.match(result.stderr, /stable jarvos-mcp shim/);
+      assert.equal(fs.existsSync(record), false);
+      assert.equal(fs.existsSync(desktop), false);
+    } finally {
+      fs.rmSync(temp, { recursive: true, force: true });
+    }
+  }
+});

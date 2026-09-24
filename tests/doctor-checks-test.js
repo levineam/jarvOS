@@ -2722,3 +2722,23 @@ test('mcp-registration: every harness registration must reach the same live entr
     fs.rmSync(tmp, { recursive: true, force: true });
   }
 });
+
+test('mcp-registration: an unparseable or unreadable registration fails instead of passing silently', () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-doctor-mcp-unreadable-'));
+  try {
+    const codex = path.join(tmp, 'config.toml');
+    const env = { CLAUDE_CODE_CONFIG: path.join(tmp, 'missing.json'), CLAUDE_DESKTOP_CONFIG: path.join(tmp, 'missing-desktop.json'), CODEX_CONFIG: codex };
+    fs.writeFileSync(codex, '[mcp_servers.jarvos]\ncommand = "node"\nargs = [\n  "/somewhere/jarvos-mcp.js",\n]\n');
+    const multiline = checkMcpRegistration({ homeDir: tmp, env });
+    assert.equal(multiline.ok, false);
+    assert.match(multiline.detail, /codex: registration is unreadable/);
+    assert.doesNotMatch(multiline.detail, /node does not exist/);
+
+    // A config path that cannot be read as a file is not the same as absent.
+    const unreadable = checkMcpRegistration({ homeDir: tmp, env: { ...env, CODEX_CONFIG: tmp } });
+    assert.equal(unreadable.ok, false);
+    assert.match(unreadable.detail, /codex: registration is unreadable/);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
