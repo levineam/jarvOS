@@ -9,7 +9,7 @@ const MAX_PROMPT_CHARS = 600;
 const MAX_CHOICE_CHARS = 160;
 const MAX_CORRELATION_CHARS = 128;
 const CORRELATION_IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
-const FORBIDDEN_PUBLIC_TEXT = /(?:[\r\n\u0000-\u001f\u007f]|(?:^|[\s("'`])(?:\/|~\/|[A-Za-z]:[\\/])|https?:\/\/|\b(?:api[ _-]?key|secret|password|token|credential|bearer)\b|\b(?:paperclip|beads|agent mail|transcript)\b|\b(?:issue|ticket)\s*(?:#|:)?\s*\d+\b|\b(?:private[- ]?router|local[- ]?route|route target)\b)/i;
+const FORBIDDEN_PUBLIC_TEXT = /(?:[\r\n\u0000-\u001f\u007f\u2028\u2029]|(?:^|[\s("'`])(?:\/|~\/|[A-Za-z]:[\\/])|https?:\/\/|file:\/\/|\\\\|\bsk-[A-Za-z0-9_-]{16,}\b|\b(?:api[ _-]?key|secret|password|token|credential|bearer)\b|\b(?:paperclip|beads|agent mail|transcript)\b|\b(?:issue|ticket)\s*(?:#|:)?\s*\d+\b|\b(?:private[- ]?router|local[- ]?route|route target)\b)/i;
 
 function isPlainObject(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
