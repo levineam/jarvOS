@@ -77,16 +77,24 @@ test('lifecycle outcomes accept only public contract states', () => {
 });
 
 test('landing and reconcile policies preserve private, public, and third-party boundaries', () => {
+  const trustedApprovalAuthority = ({ action, approval, request }) => approval.authorityProof === `approved:${request.requestId}:${action}`;
   assert.equal(evaluateLandingPolicy(createLandingPolicy({ repositoryKind: 'private' }), { action: 'merge' }).decision, 'candidate');
   assert.equal(evaluateLandingPolicy(createLandingPolicy({ repositoryKind: 'private', privateAutoLandAuthorized: true }), { action: 'merge' }).decision, 'auto-land');
   assert.equal(evaluateLandingPolicy(createLandingPolicy({ repositoryKind: 'private', privateAutoLandAuthorized: true }), { action: 'tag' }).decision, 'candidate');
   const publicPolicy = createLandingPolicy({ repositoryKind: 'public' });
   assert.equal(evaluateLandingPolicy(publicPolicy, { action: 'merge' }).decision, 'candidate');
-  assert.equal(evaluateLandingPolicy(publicPolicy, { action: 'merge', humanApproval: { action: 'merge', approved: true } }).decision, 'approved');
+  assert.equal(evaluateLandingPolicy(publicPolicy, { action: 'merge', humanApproval: { action: 'merge', approved: true } }).decision, 'candidate');
+  const publicMerge = { action: 'merge', requestId: 'request-public', humanApproval: { action: 'merge', approved: true, authorityProof: 'approved:request-public:merge' } };
+  assert.equal(evaluateLandingPolicy(publicPolicy, publicMerge, trustedApprovalAuthority).decision, 'approved');
+  assert.equal(evaluateLandingPolicy(publicPolicy, { ...publicMerge, requestId: 'replayed-request' }, trustedApprovalAuthority).decision, 'candidate');
+  assert.equal(evaluateLandingPolicy(publicPolicy, { ...publicMerge, verifyHumanApproval: () => true }).decision, 'candidate');
   assert.equal(evaluateLandingPolicy(publicPolicy, { action: 'patch', humanApproval: { action: 'patch', approved: true } }).decision, 'candidate');
   assert.equal(evaluateLandingPolicy(createLandingPolicy({ repositoryKind: 'third-party' }), { action: 'patch' }).decision, 'internal-only');
   const thirdParty = createLandingPolicy({ repositoryKind: 'third-party', thirdPartyPatchAllowed: true });
-  assert.equal(evaluateLandingPolicy(thirdParty, { action: 'patch', humanApproval: { action: 'patch', approved: true } }).decision, 'approved');
+  const thirdPartyPatch = { action: 'patch', requestId: 'request-third-party', humanApproval: { action: 'patch', approved: true, authorityProof: 'approved:request-third-party:patch' } };
+  assert.equal(evaluateLandingPolicy(thirdParty, thirdPartyPatch, trustedApprovalAuthority).decision, 'approved');
   assert.equal(evaluateLandingPolicy(thirdParty, { action: 'unknown', humanApproval: { action: 'unknown', approved: true } }).decision, 'internal-only');
+  assert.equal(evaluateReconcilePolicy(createReconcilePolicy({ repositoryKind: 'public' }), publicMerge).decision, 'candidate');
+  assert.equal(evaluateReconcilePolicy(createReconcilePolicy({ repositoryKind: 'public' }), publicMerge, trustedApprovalAuthority).decision, 'approved');
   assert.equal(evaluateReconcilePolicy(createReconcilePolicy({ repositoryKind: 'private', privateAutoLandAuthorized: true }), { action: 'merge', ownershipOnly: true }).decision, 'candidate');
 });

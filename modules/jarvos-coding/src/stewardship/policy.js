@@ -15,11 +15,12 @@ function createLandingPolicy(input = {}) {
   };
 }
 
-function hasExactHumanApproval(approval, action) {
-  return approval?.approved === true && approval.action === action;
+function hasExactHumanApproval(approval, action, verifyHumanApproval, request = {}) {
+  if (approval?.approved !== true || approval.action !== action || typeof verifyHumanApproval !== 'function') return false;
+  return verifyHumanApproval({ action, approval, request }) === true;
 }
 
-function evaluateLandingPolicy(policyInput = {}, request = {}) {
+function evaluateLandingPolicy(policyInput = {}, request = {}, verifyHumanApproval) {
   const policy = createLandingPolicy(policyInput);
   const action = request.action;
   if (policy.repositoryKind === 'private') {
@@ -29,7 +30,7 @@ function evaluateLandingPolicy(policyInput = {}, request = {}) {
   }
   if (policy.repositoryKind === 'public') {
     if (!PUBLIC_ACTIONS.includes(action)) return { decision: 'candidate', reason: 'public-action-not-authorized' };
-    return hasExactHumanApproval(request.humanApproval, action)
+    return hasExactHumanApproval(request.humanApproval, action, verifyHumanApproval, request)
       ? { decision: 'approved', reason: 'exact-human-approval' }
       : { decision: 'candidate', reason: 'exact-human-approval-required' };
   }
@@ -37,7 +38,7 @@ function evaluateLandingPolicy(policyInput = {}, request = {}) {
   const allowed = (action === 'patch' && policy.thirdPartyPatchAllowed)
     || (action === 'upstream-contribution' && policy.thirdPartyUpstreamAllowed);
   if (!allowed) return { decision: 'internal-only', reason: 'third-party-contribution-not-authorized' };
-  return hasExactHumanApproval(request.humanApproval, action)
+  return hasExactHumanApproval(request.humanApproval, action, verifyHumanApproval, request)
     ? { decision: 'approved', reason: 'exact-human-approval' }
     : { decision: 'candidate', reason: 'exact-human-approval-required' };
 }
