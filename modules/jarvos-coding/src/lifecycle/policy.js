@@ -126,7 +126,7 @@ const SUBMISSION_GATE_STAGES = Object.freeze([
     key: 'issue_linkage',
     phase: 'submit',
     role: 'Tie every code change to a durable work identity without making a tracker authoritative.',
-    evidence: 'workIdentity.identifier, issue.identifier (historical compatibility), or Git branch identity',
+    evidence: 'workIdentity.identifier or issue.identifier (historical compatibility)',
   },
   {
     key: 'branch_hygiene',
@@ -243,8 +243,7 @@ function hasIssueLinkage(input = {}) {
       || issue.identifier
       || issue.id
       || input.issueIdentifier
-      || input.issueId
-      || input.git?.branch,
+      || input.issueId,
   );
 }
 
@@ -273,7 +272,7 @@ function hasBranchHygiene(input = {}) {
   const clean = git.clean === true || evidencePassed(git.status, SUBMISSION_GATE_STATUS_POLICIES.branch_hygiene);
   const hasBranch = Boolean(git.branch);
   const hasBase = Boolean(git.baseBranch || git.upstream || git.baseRef);
-  const issueNamed = git.issueNamed === true || branchMentionsIssue(git.branch, input);
+  const issueNamed = branchMentionsIssue(git.branch, input);
   const hasIntendedScope = Array.isArray(git.intendedFiles) && git.intendedFiles.length > 0;
   return clean && hasBranch && hasBase && issueNamed && hasIntendedScope;
 }
