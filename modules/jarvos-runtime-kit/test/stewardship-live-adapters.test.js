@@ -1528,7 +1528,7 @@ test('Codex setup merges both jarvOS lifecycle hooks without replacing user hook
     assert.match(second, /user-prompt-submit/);
     assert.match(second, /EXISTING = "keep"/);
     assert.match(second, /JARVOS_STEWARDSHIP_BRIDGE_COMMAND = "jarvos-stewardship-bridge"/);
-    assert.match(second, /JARVOS_STEWARDSHIP_CODEX_SESSION_MAP_ROOT = ".*codex-session-map"/);
+    assert.doesNotMatch(second, /JARVOS_STEWARDSHIP_CODEX_SESSION_MAP_ROOT/);
     assert.doesNotMatch(second, /JARVOS_STEWARDSHIP_BRIDGE_CONTEXT_FILE/);
     assert.match(second, new RegExp(stable.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
     assert.match(second, /--harness codex --action session-start/);
@@ -1635,7 +1635,7 @@ test('Codex setup repairs the nested shell environment table without losing user
     assert.match(configured, /BROWSER_USE_AVAILABLE_BACKENDS = "chrome,iab"/);
     assert.match(configured, /NODE_REPL_TRUSTED_CODE_PATHS = "\/trusted\/code"/);
     assert.match(configured, /JARVOS_STEWARDSHIP_BRIDGE_COMMAND = "jarvos-stewardship-bridge"/);
-    assert.match(configured, /JARVOS_STEWARDSHIP_CODEX_SESSION_MAP_ROOT = ".*codex-session-map"/);
+    assert.doesNotMatch(configured, /JARVOS_STEWARDSHIP_CODEX_SESSION_MAP_ROOT/);
     assert.match(configured, /# Keep this note for the person maintaining the environment policy\./);
     assert.match(configured, /# Preserve this trailing user note\./);
     assertCodexParsesConfig(config);
