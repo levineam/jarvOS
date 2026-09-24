@@ -25,6 +25,7 @@
     "journal-conflict",
     "agent-context-package",
     "control-plane-module",
-    "compound-engineering-provider"
+    "compound-engineering-provider",
+    "mcp-registration"
   ]
 }

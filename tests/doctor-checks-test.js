@@ -15,6 +15,7 @@ const {
   assessControlPlaneDoctor,
   checkCompoundEngineeringProvider,
   checkControlPlaneModule,
+  checkMcpRegistration,
   checkVaultPath,
   checkVaultPathStale,
   checkJournalConflict,
@@ -2659,6 +2660,64 @@ test("runCli threads its env into the local-openclaw/v0-5-0 profile doctor branc
     assert.equal(vaultCheck.status, 'warn', vaultCheck.message);
     assert.match(vaultCheck.message, /JARVOS_VAULT_DIR/);
     assert.equal(vaultCheck.path, overrideVault);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('mcp-registration: every harness registration must reach the same live entrypoint', () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-doctor-mcp-registration-'));
+  try {
+    const stable = path.join(tmp, 'managed-harness-bin');
+    fs.mkdirSync(stable, { recursive: true });
+    const shim = path.join(stable, 'jarvos-mcp');
+    fs.writeFileSync(shim, '#!/bin/sh\n', { mode: 0o700 });
+    const stage = path.join(tmp, 'staged', 'managed-software-old', 'repos', 'jarvOS', 'modules', 'jarvos-agent-context', 'scripts');
+    fs.mkdirSync(stage, { recursive: true });
+    const stagedServer = path.join(stage, 'jarvos-mcp.js');
+    fs.writeFileSync(stagedServer, '// stage\n');
+    const claudeCode = path.join(tmp, 'claude.json');
+    const claudeDesktop = path.join(tmp, 'claude_desktop_config.json');
+    const codex = path.join(tmp, 'config.toml');
+    const env = { CLAUDE_CODE_CONFIG: claudeCode, CLAUDE_DESKTOP_CONFIG: claudeDesktop, CODEX_CONFIG: codex };
+    const writeClaude = (file, entry) => fs.writeFileSync(file, JSON.stringify({ mcpServers: { other: { command: 'x' }, jarvos: entry } }));
+    fs.writeFileSync(codex, `[mcp_servers.other]\ncommand = "x"\n\n[mcp_servers.jarvos]\ncommand = ${JSON.stringify(shim)}\n\n[mcp_servers.jarvos.tools.jarvos_projects_context]\napproval_mode = "approve"\n`);
+
+    assert.equal(checkMcpRegistration({ homeDir: tmp, env: {} }).ok, true, 'no registrations is not a failure');
+
+    // The 2026-09-24 drift: Codex on the stable shim, Claude pinned to one stage.
+    writeClaude(claudeCode, { type: 'stdio', command: 'node', args: [stagedServer], env: {} });
+    writeClaude(claudeDesktop, { command: 'node', args: [stagedServer] });
+    const drift = checkMcpRegistration({ homeDir: tmp, env });
+    assert.equal(drift.ok, false);
+    assert.match(drift.detail, /harnesses disagree/);
+    assert.match(drift.detail, /claude-code -> .*managed-software-old/);
+
+    // With the managed stable root known, a stage-pinned registration fails
+    // even when every harness agrees on it.
+    fs.writeFileSync(codex, `[mcp_servers.jarvos]\ncommand = "node"\nargs = [${JSON.stringify(stagedServer)}]\n`);
+    const pinned = checkMcpRegistration({ homeDir: tmp, env: { ...env, JARVOS_STEWARDSHIP_STABLE_ROOT: stable } });
+    assert.equal(pinned.ok, false);
+    assert.match(pinned.detail, /is not the stable entrypoint/);
+    assert.equal(checkMcpRegistration({ homeDir: tmp, env }).ok, true, 'agreeing unmanaged registrations pass');
+
+    // A registration whose target is gone fails.
+    fs.rmSync(stagedServer);
+    assert.match(checkMcpRegistration({ homeDir: tmp, env }).detail, /does not exist/);
+
+    // All three on the stable shim passes, managed or not.
+    writeClaude(claudeCode, { type: 'stdio', command: shim, args: [], env: {} });
+    writeClaude(claudeDesktop, { command: shim, args: [] });
+    fs.writeFileSync(codex, `[mcp_servers.jarvos]\ncommand = '${shim}'\n`);
+    for (const extra of [{}, { JARVOS_STEWARDSHIP_STABLE_ROOT: stable }]) {
+      const healthy = checkMcpRegistration({ homeDir: tmp, env: { ...env, ...extra } });
+      assert.equal(healthy.ok, true, healthy.detail);
+      assert.match(healthy.detail, /claude-code, claude-desktop, codex -> /);
+    }
+
+    // runDoctor wires the check into the minimal profile.
+    const report = runDoctor({ profile: 'minimal', workspace: tmp, env: {}, homeDir: tmp });
+    assert.ok(report.results.some((entry) => entry.id === 'mcp-registration'));
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
   }
