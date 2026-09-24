@@ -1168,6 +1168,19 @@ test('OpenClaw rejects relative, missing, and unsafe stable plugin bundles witho
       assert.notEqual(result.status, 0, file);
       assert.equal(fs.readFileSync(config, 'utf8'), original, file);
     }
+    const shared = path.join(temp, 'shared');
+    fs.mkdirSync(shared, { mode: 0o777 }); fs.chmodSync(shared, 0o777);
+    const replaceable = prepareStableStewardshipBundle(shared);
+    const replaceableResult = runSetupResult(script, { ...baseEnv, JARVOS_STEWARDSHIP_STABLE_ROOT: replaceable });
+    assert.notEqual(replaceableResult.status, 0, 'stable roots beneath non-sticky writable ancestors must be rejected');
+    assert.equal(fs.readFileSync(config, 'utf8'), original);
+
+    const realParent = path.join(temp, 'real-parent'); const linkedParent = path.join(temp, 'linked-parent');
+    fs.mkdirSync(realParent, { mode: 0o700 }); fs.chmodSync(realParent, 0o700); fs.symlinkSync(realParent, linkedParent);
+    prepareStableStewardshipBundle(realParent);
+    const symlinkedResult = runSetupResult(script, { ...baseEnv, JARVOS_STEWARDSHIP_STABLE_ROOT: path.join(linkedParent, 'managed-harness-bin') });
+    assert.notEqual(symlinkedResult.status, 0, 'stable roots beneath symlink ancestors must be rejected');
+    assert.equal(fs.readFileSync(config, 'utf8'), original);
   } finally { fs.rmSync(temp, { recursive: true, force: true }); }
 });
 
