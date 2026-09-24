@@ -67,9 +67,10 @@ function settled(value) {
   return { then(fn) { try { fn(value); return this; } catch (error) { this.error = error; return this; } }, catch(fn) { if (this.error) fn(this.error); return this; } };
 }
 
-function fakeObsidianEvaluator(initialContent) {
+function fakeObsidianEvaluator(initialContent, vaultRoot) {
   const files = new Map([['Notes/Concurrent.md', { path: 'Notes/Concurrent.md', content: initialContent }]]);
   const vault = {
+    adapter: { getBasePath: () => vaultRoot },
     getFileByPath: (target) => files.get(target) || null,
     create: (target, content) => { const file = { path: target, content }; files.set(target, file); return settled(file); },
     process: (file, transform) => { file.content = transform(file.content); return settled(file); },
@@ -109,7 +110,7 @@ test('frontmatter lint fixes only through its injected app-owned executor', () =
 test('exact-hash replacement conflicts without overwriting a concurrent app edit', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-maintenance-conflict-'));
   try {
-    const fake = fakeObsidianEvaluator('mobile edit');
+    const fake = fakeObsidianEvaluator('mobile edit', root);
     const service = createConfiguredVaultMutationService({
       vaultRoot: root,
       vaultId: 'vault-maintenance-conflict',
@@ -139,7 +140,7 @@ test('exact-hash replacement conflicts without overwriting a concurrent app edit
 test('a fresh identical replacement is not hidden by an older acknowledged intent', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-maintenance-repeat-'));
   try {
-    const fake = fakeObsidianEvaluator('old');
+    const fake = fakeObsidianEvaluator('old', root);
     const service = createConfiguredVaultMutationService({
       vaultRoot: root,
       vaultId: 'vault-maintenance-repeat',

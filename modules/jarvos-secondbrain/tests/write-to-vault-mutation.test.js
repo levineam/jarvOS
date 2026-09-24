@@ -314,6 +314,7 @@ function fakeObsidianEvaluator(root) {
   const files = new Map();
   const calls = { create: 0, process: 0, read: 0 };
   const vault = {
+    adapter: { getBasePath: () => root },
     getFileByPath(target) { return files.get(target) || null; },
     create(target, content) {
       calls.create += 1;
