@@ -363,7 +363,6 @@ function createHostProjectsContextProvider(env = process.env) {
       try {
         return await provider.readPortfolioProof({
           registryStateDir,
-          registry,
           stateRoot,
           repositoryRoot,
           capability: proofCapability,

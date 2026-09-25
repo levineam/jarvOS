@@ -117,6 +117,11 @@ test('readPortfolioProof passes trusted host binding and disables renewal', asyn
   const out = await provider.readPortfolioProof({ expectedGeneration: 3 });
   assert.equal(out.status, 'ok');
   const { request } = out;
+  assert.deepEqual(Object.keys(request).sort(), [
+    'capability', 'capabilitySecret', 'expectedGeneration', 'hostBindingDigests',
+    'hostId', 'registryStateDir', 'releaseRefreshPolicy', 'repositoryRoot',
+    'stateRoot', 'subject',
+  ].sort());
   assert.equal(request.hostId, 'proof-host');
   assert.equal(request.subject, 'proof-observer');
   assert.equal(request.expectedGeneration, 3);
