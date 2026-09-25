@@ -81,6 +81,78 @@ function inspectPacket(packet) {
   return { generation: packet.canonical.generation, projects };
 }
 
+function validProofProvenance(proof) {
+  return isObject(proof)
+    && proof.contract === 'jarvos.projects-portfolio-proof/v1'
+    && isObject(proof.capability)
+    && typeof proof.capability.receiptId === 'string'
+    && /^cap_[a-f0-9]{32}$/.test(proof.capability.receiptId)
+    && typeof proof.capability.digest === 'string'
+    && DIGEST.test(proof.capability.digest)
+    && typeof proof.recordsDigest === 'string'
+    && DIGEST.test(proof.recordsDigest)
+    && typeof proof.proofDigest === 'string'
+    && DIGEST.test(proof.proofDigest)
+    && typeof proof.signature === 'string'
+    && proof.signature.trim().length > 0;
+}
+
+// This inspects only the proof's public structural shape; it never re-derives
+// recordsDigest/proofDigest/signature, so it is not a substitute for
+// verifyPortfolioProof and must not be relied on as an authority check alone.
+function inspectProof(proof) {
+  if (!isObject(proof)) return { reasonCode: 'malformed_portfolio_proof' };
+  if (!Object.hasOwn(proof, 'contract') || !Object.hasOwn(proof, 'capability')) return { reasonCode: 'missing_portfolio_proof_provenance' };
+  if (!validProofProvenance(proof)) return { reasonCode: 'malformed_portfolio_proof_provenance' };
+  if (!Number.isInteger(proof.generation) || proof.generation < 1) return { reasonCode: 'malformed_portfolio_proof' };
+  if (typeof proof.complete !== 'boolean') return { reasonCode: 'malformed_portfolio_proof' };
+  if (!proof.complete) return { reasonCode: 'portfolio_proof_incomplete' };
+  if (!Array.isArray(proof.records)) return { reasonCode: 'malformed_portfolio_proof' };
+  if (!isObject(proof.counts) || proof.counts.records !== proof.records.length) return { reasonCode: 'malformed_portfolio_proof' };
+  const seen = new Set();
+  const projects = new Set();
+  for (const record of proof.records) {
+    if (!isObject(record) || typeof record.id !== 'string' || typeof record.kind !== 'string') return { reasonCode: 'malformed_portfolio_proof' };
+    if (!PROJECT_ID.test(record.id) && !OUTCOME_ID.test(record.id)) return { reasonCode: 'invalid_proof_record_ids' };
+    if (seen.has(record.id)) return { reasonCode: 'duplicate_proof_record_ids' };
+    seen.add(record.id);
+    if (record.kind === 'project') {
+      if (!PROJECT_ID.test(record.id)) return { reasonCode: 'invalid_proof_record_ids' };
+      projects.add(record.id);
+    } else if (record.kind === 'outcome' && !OUTCOME_ID.test(record.id)) return { reasonCode: 'invalid_proof_record_ids' };
+  }
+  return { generation: proof.generation, projects };
+}
+
+function evaluatePortfolioProofCoverage({ registryGeneration, activeProjectIds, proof } = {}) {
+  const active = Array.isArray(activeProjectIds) ? activeProjectIds : null;
+  const validActive = active && active.every((id) => typeof id === 'string' && PROJECT_ID.test(id));
+  const duplicateActive = validActive && new Set(active).size !== active.length;
+  const normalizedActive = validActive ? uniqueSorted(active) : [];
+  const considered = normalizedActive.map((projectId) => ({ projectId, state: 'unverified', reasonCodes: [] }));
+  if (!Number.isInteger(registryGeneration) || registryGeneration < 0) return publicResult({ registryGeneration, ready: false, reasonCodes: ['invalid_registry_generation'], missingProjectIds: [], considered });
+  if (!active || !validActive) return publicResult({ registryGeneration, ready: false, reasonCodes: ['invalid_active_project_ids'], missingProjectIds: [], considered });
+  if (duplicateActive) return publicResult({ registryGeneration, ready: false, reasonCodes: ['duplicate_active_project_ids'], missingProjectIds: [], considered });
+
+  const inspected = inspectProof(proof);
+  if (inspected.reasonCode) return publicResult({ registryGeneration, ready: false, reasonCodes: [inspected.reasonCode], missingProjectIds: [], considered });
+  if (inspected.generation !== registryGeneration) return publicResult({ registryGeneration, ready: false, reasonCodes: ['registry_generation_mismatch'], missingProjectIds: [], considered });
+
+  const missingProjectIds = normalizedActive.filter((id) => !inspected.projects.has(id));
+  const extraProjectIds = [...inspected.projects].filter((id) => !normalizedActive.includes(id));
+  if (missingProjectIds.length || extraProjectIds.length) {
+    const missing = new Set(missingProjectIds);
+    const finalConsidered = normalizedActive.map((projectId) => missing.has(projectId)
+      ? { projectId, state: 'missing', reasonCodes: ['portfolio_active_set_mismatch'] }
+      : { projectId, state: 'enumerated', reasonCodes: extraProjectIds.length ? ['portfolio_active_set_mismatch'] : [] });
+    return publicResult({
+      registryGeneration, ready: false, reasonCodes: ['portfolio_active_set_mismatch'], missingProjectIds, considered: finalConsidered,
+    });
+  }
+  const finalConsidered = normalizedActive.map((projectId) => ({ projectId, state: 'enumerated', reasonCodes: [] }));
+  return publicResult({ registryGeneration, ready: true, reasonCodes: [], missingProjectIds: [], considered: finalConsidered });
+}
+
 function evaluatePortfolioCoverage({ registryGeneration, activeProjectIds, packet } = {}) {
   const active = Array.isArray(activeProjectIds) ? activeProjectIds : null;
   const validActive = active && active.every((id) => typeof id === 'string' && PROJECT_ID.test(id));
@@ -112,5 +184,6 @@ function evaluatePortfolioCoverage({ registryGeneration, activeProjectIds, packe
 module.exports = {
   ACTIVE_ASSISTANT_PORTFOLIO_COVERAGE_VERSION,
   evaluatePortfolioCoverage,
+  evaluatePortfolioProofCoverage,
   verifyPortfolioCoverageReceipt,
 };

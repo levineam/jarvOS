@@ -4,15 +4,17 @@ const crypto = require('node:crypto');
 
 const { resolvePriority } = require('./priority');
 const { validateProviderSnapshot } = require('./provider-contracts');
-const { validateInferenceMetadata } = require('./records');
+const { STATUS_BY_KIND, validateInferenceMetadata } = require('./records');
 const inferenceContracts = require('./project-inference-contracts');
 const { ENGINE_REVISION, POLICY_REVISION } = require('./project-inference-reconciler');
 const { attentionSummaries, deriveIntentGapAttention } = require('./intent-gap-attention');
 const {
   CONTEXT_CONTRACT,
+  PROOF_CONTRACT: PORTFOLIO_PROOF_CONTRACT,
   REDACTION_CLASSES,
   capabilityDigest,
   verifyCapability,
+  verifyProofCapability,
 } = require('./projects-context-capability');
 
 const CONTEXT_SCHEMA_VERSION = 2;
@@ -55,6 +57,11 @@ function stableValue(value) {
 function stableStringify(value) { return JSON.stringify(stableValue(value)); }
 function hash(value) { return crypto.createHash('sha256').update(stableStringify(value)).digest('hex'); }
 function byteLength(value) { return Buffer.byteLength(JSON.stringify(value), 'utf8'); }
+function constantTimeEqual(left, right) {
+  if (typeof left !== 'string' || typeof right !== 'string') return false;
+  const a = Buffer.from(left); const b = Buffer.from(right);
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
 
 function opaque(value, field, { nullable = false } = {}) {
   if (value === null || value === undefined) {
@@ -671,6 +678,225 @@ function buildCanonicalRosterPacket(input = {}) {
   return byteLength(incomplete) <= normalizedQuery.limits.maxBytes ? incomplete : rosterUnavailable('ROSTER_BUDGET_TOO_SMALL');
 }
 
+// Proof-only whole-portfolio contract: a fixed, non-caller-selectable query so
+// the returned hierarchy is deterministic and admits no partial/ambiguous scope.
+const PORTFOLIO_PROOF_SCOPE = Object.freeze({ projectIds: [], outcomeIds: [], includeDescendants: true });
+const PORTFOLIO_PROOF_QUERY = Object.freeze({
+  scope: PORTFOLIO_PROOF_SCOPE,
+  include: Object.freeze(['hierarchy']),
+  limits: Object.freeze({ maxItems: 1000, maxBytes: 262_144, maxProviderAgeSeconds: 86_400 }),
+});
+const PORTFOLIO_PROOF_RECORD_FIELDS = Object.freeze(['id', 'kind', 'parentId', 'lifecycle', 'revision']);
+const PORTFOLIO_PROOF_COUNTS_FIELDS = Object.freeze(['records', 'projects', 'outcomes']);
+const PORTFOLIO_PROOF_FIELDS = Object.freeze([
+  'contract', 'query', 'generation', 'capturedAt', 'expiresAt', 'capability', 'hostBindingDigests',
+  'records', 'complete', 'counts', 'recordsDigest', 'proofDigest', 'signature',
+]);
+const PORTFOLIO_PROOF_DIGEST_DOMAIN = `${PORTFOLIO_PROOF_CONTRACT}:proof-digest/v1`;
+const PORTFOLIO_PROOF_SIGNATURE_DOMAIN = `${PORTFOLIO_PROOF_CONTRACT}:signature/v1`;
+
+function portfolioProofUnavailable(code = 'PORTFOLIO_PROOF_UNAVAILABLE') {
+  return { status: 'unavailable', code };
+}
+
+function validPortfolioProofRequest(input) {
+  if (!isPlainObject(input)) return false;
+  const allowed = new Set(['registry', 'capability', 'capabilitySecret', 'subject', 'hostId', 'hostBindingDigests', 'now', 'expectedGeneration']);
+  return Object.keys(input).every((key) => allowed.has(key));
+}
+
+function validateHostBindingDigests(value) {
+  if (!isPlainObject(value)) throw new TypeError('hostBindingDigests must be an object');
+  const keys = Object.keys(value).sort();
+  for (const key of keys) {
+    if (!key.trim()) throw new TypeError('hostBindingDigests keys must be non-empty');
+    if (typeof value[key] !== 'string' || !/^[a-f0-9]{64}$/.test(value[key])) throw new TypeError('hostBindingDigests values must be sha256 digests');
+  }
+  return Object.fromEntries(keys.map((key) => [key, value[key]]));
+}
+
+function proofRecord(record) {
+  // Permissive of extra source fields (mirrors rosterRecord) so real registry rows,
+  // which carry far more than these five fields, can be trimmed down here. Callers
+  // that must reject tampered *proof* records with unexpected fields check
+  // PORTFOLIO_PROOF_RECORD_FIELDS with exactKeys before delegating to this function.
+  if (!isPlainObject(record) || !['project', 'outcome'].includes(record.kind)
+    || !((record.kind === 'project' && /^prj_[0-9]{6,}$/.test(record.id)) || (record.kind === 'outcome' && /^out_[0-9]{6,}$/.test(record.id)))
+    || (record.parentId !== null && (!/^prj_[0-9]{6,}$/.test(record.parentId) || record.parentId === record.id))
+    || (record.kind === 'outcome' && record.parentId === null)
+    || !STATUS_BY_KIND[record.kind].includes(record.lifecycle)
+    || !Number.isInteger(record.revision) || record.revision < 1) {
+    throw new TypeError('invalid proof record');
+  }
+  return { id: record.id, kind: record.kind, parentId: record.parentId, lifecycle: record.lifecycle, revision: record.revision };
+}
+
+function validateProofHierarchy(records) {
+  const byId = new Map(records.map((record) => [record.id, record]));
+  if (byId.size !== records.length) return false;
+  for (const record of records) {
+    if (record.parentId !== null) {
+      const parent = byId.get(record.parentId);
+      if (!parent || parent.kind !== 'project') return false;
+    }
+  }
+  for (const record of records) {
+    const seen = new Set();
+    let current = record;
+    while (current.parentId !== null) {
+      if (seen.has(current.id)) return false;
+      seen.add(current.id);
+      current = byId.get(current.parentId);
+      if (!current) return false;
+    }
+  }
+  return true;
+}
+
+function proofCounts(records) {
+  return {
+    records: records.length,
+    projects: records.filter((record) => record.kind === 'project').length,
+    outcomes: records.filter((record) => record.kind === 'outcome').length,
+  };
+}
+
+function proofBodyDigest(unsigned) { return hash({ domain: PORTFOLIO_PROOF_DIGEST_DOMAIN, body: unsigned }); }
+function proofSignatureValue(signable, secret) {
+  return crypto.createHmac('sha256', secret).update(stableStringify({ domain: PORTFOLIO_PROOF_SIGNATURE_DOMAIN, body: signable })).digest('base64url');
+}
+
+function buildPortfolioProof(input = {}) {
+  if (!validPortfolioProofRequest(input)) return portfolioProofUnavailable();
+  const {
+    registry, capability, capabilitySecret, subject, hostId, hostBindingDigests,
+    now = new Date().toISOString(), expectedGeneration,
+  } = input;
+  if (typeof hostId !== 'string' || !hostId.trim() || typeof subject !== 'string' || !subject.trim()
+    || typeof now !== 'string' || Number.isNaN(Date.parse(now))
+    || !Number.isSafeInteger(expectedGeneration) || expectedGeneration < 1) return portfolioProofUnavailable();
+  let normalizedHostBindingDigests;
+  try { normalizedHostBindingDigests = validateHostBindingDigests(hostBindingDigests); } catch (_) { return portfolioProofUnavailable(); }
+  const verification = verifyProofCapability(capability, {
+    hostSecret: capabilitySecret,
+    now,
+    expectedSubject: subject,
+    expectedHostId: hostId,
+    expectedQuery: PORTFOLIO_PROOF_QUERY,
+    expectedScope: PORTFOLIO_PROOF_SCOPE,
+  });
+  if (!verification.ok || !registry || typeof registry.list !== 'function') return portfolioProofUnavailable();
+  const authorized = verification.capability;
+  if (authorized.limits.maxItems < PORTFOLIO_PROOF_QUERY.limits.maxItems
+    || authorized.limits.maxBytes < PORTFOLIO_PROOF_QUERY.limits.maxBytes) return portfolioProofUnavailable();
+
+  let generationBefore; let rows;
+  try {
+    generationBefore = registry.generation;
+    if (!Number.isSafeInteger(generationBefore) || generationBefore < 1
+      || expectedGeneration !== generationBefore) return portfolioProofUnavailable('PORTFOLIO_PROOF_GENERATION_MISMATCH');
+    rows = registry.list();
+    if (!Array.isArray(rows) || rows.length > PORTFOLIO_PROOF_QUERY.limits.maxItems) return portfolioProofUnavailable();
+  } catch (_) {
+    return portfolioProofUnavailable();
+  }
+
+  let records;
+  try {
+    records = rows.map(proofRecord).sort((left, right) => left.id.localeCompare(right.id));
+    if (new Set(records.map((record) => record.id)).size !== records.length) return portfolioProofUnavailable('PORTFOLIO_PROOF_HIERARCHY_INVALID');
+    if (!validateProofHierarchy(records)) return portfolioProofUnavailable('PORTFOLIO_PROOF_HIERARCHY_INVALID');
+  } catch (_) {
+    return portfolioProofUnavailable();
+  }
+
+  let generationAfter;
+  try { generationAfter = registry.generation; } catch (_) { return portfolioProofUnavailable(); }
+  if (!Number.isSafeInteger(generationAfter) || generationAfter !== generationBefore) return portfolioProofUnavailable('PORTFOLIO_PROOF_GENERATION_MISMATCH');
+
+  const sign = (recordsForProof, complete) => {
+    const body = {
+      contract: PORTFOLIO_PROOF_CONTRACT,
+      query: PORTFOLIO_PROOF_QUERY,
+      generation: generationBefore,
+      capturedAt: now,
+      expiresAt: authorized.expiresAt,
+      capability: { receiptId: authorized.receiptId, digest: capabilityDigest(authorized) },
+      hostBindingDigests: normalizedHostBindingDigests,
+      records: recordsForProof,
+      complete,
+      counts: proofCounts(recordsForProof),
+    };
+    const recordsDigest = hash(recordsForProof);
+    const unsigned = { ...body, recordsDigest };
+    const proofDigest = proofBodyDigest(unsigned);
+    const signable = { ...unsigned, proofDigest };
+    return { ...signable, signature: proofSignatureValue(signable, capabilitySecret) };
+  };
+
+  const complete = sign(records, true);
+  if (records.length <= PORTFOLIO_PROOF_QUERY.limits.maxItems && byteLength(complete) <= PORTFOLIO_PROOF_QUERY.limits.maxBytes) {
+    return { status: 'ok', proof: complete };
+  }
+  const incomplete = sign([], false);
+  return byteLength(incomplete) <= PORTFOLIO_PROOF_QUERY.limits.maxBytes
+    ? { status: 'incomplete', proof: incomplete }
+    : portfolioProofUnavailable('PORTFOLIO_PROOF_BUDGET_TOO_SMALL');
+}
+
+function verifyPortfolioProof(proof, { capability, capabilitySecret, subject, hostId, now = new Date().toISOString() } = {}) {
+  try {
+    if (!isPlainObject(proof) || !exactKeys(proof, PORTFOLIO_PROOF_FIELDS)) return { ok: false, reason: 'invalid-contract' };
+    if (proof.contract !== PORTFOLIO_PROOF_CONTRACT) return { ok: false, reason: 'invalid-contract' };
+    if (stableStringify(proof.query) !== stableStringify(PORTFOLIO_PROOF_QUERY)) return { ok: false, reason: 'invalid-query' };
+    if (!Number.isSafeInteger(proof.generation) || proof.generation < 1) return { ok: false, reason: 'invalid-contract' };
+    if (typeof proof.capturedAt !== 'string' || Number.isNaN(Date.parse(proof.capturedAt))) return { ok: false, reason: 'invalid-contract' };
+    if (typeof proof.expiresAt !== 'string' || Number.isNaN(Date.parse(proof.expiresAt))) return { ok: false, reason: 'invalid-contract' };
+    if (!exactKeys(proof.capability, ['receiptId', 'digest']) || !/^cap_[a-f0-9]{32}$/.test(proof.capability.receiptId) || !/^[a-f0-9]{64}$/.test(proof.capability.digest)) return { ok: false, reason: 'invalid-contract' };
+    let normalizedHostBindingDigests;
+    try { normalizedHostBindingDigests = validateHostBindingDigests(proof.hostBindingDigests); } catch (_) { return { ok: false, reason: 'invalid-contract' }; }
+    if (stableStringify(normalizedHostBindingDigests) !== stableStringify(proof.hostBindingDigests)) return { ok: false, reason: 'invalid-contract' };
+    if (typeof proof.complete !== 'boolean') return { ok: false, reason: 'invalid-contract' };
+    if (!Array.isArray(proof.records) || proof.records.length > PORTFOLIO_PROOF_QUERY.limits.maxItems
+      || proof.records.some((record) => !isPlainObject(record) || !exactKeys(record, PORTFOLIO_PROOF_RECORD_FIELDS))) return { ok: false, reason: 'invalid-contract' };
+    let normalizedRecords;
+    try { normalizedRecords = proof.records.map(proofRecord); } catch (_) { return { ok: false, reason: 'invalid-contract' }; }
+    if (stableStringify(normalizedRecords) !== stableStringify(proof.records)) return { ok: false, reason: 'invalid-contract' };
+    const ids = proof.records.map((record) => record.id);
+    if (JSON.stringify(ids) !== JSON.stringify([...ids].sort())) return { ok: false, reason: 'invalid-contract' };
+    if (!validateProofHierarchy(proof.records)) return { ok: false, reason: 'invalid-hierarchy' };
+    if (!isPlainObject(proof.counts) || !exactKeys(proof.counts, PORTFOLIO_PROOF_COUNTS_FIELDS) || stableStringify(proof.counts) !== stableStringify(proofCounts(proof.records))) return { ok: false, reason: 'invalid-contract' };
+    if (typeof proof.recordsDigest !== 'string' || !/^[a-f0-9]{64}$/.test(proof.recordsDigest) || proof.recordsDigest !== hash(proof.records)) return { ok: false, reason: 'invalid-contract' };
+    const { proofDigest: suppliedProofDigest, signature: suppliedSignature, ...unsigned } = proof;
+    if (typeof suppliedProofDigest !== 'string' || !/^[a-f0-9]{64}$/.test(suppliedProofDigest) || suppliedProofDigest !== proofBodyDigest(unsigned)) return { ok: false, reason: 'invalid-contract' };
+    if (typeof suppliedSignature !== 'string' || !suppliedSignature.trim()) return { ok: false, reason: 'invalid-signature' };
+
+    const capabilityVerification = verifyProofCapability(capability, {
+      hostSecret: capabilitySecret,
+      now,
+      expectedSubject: subject,
+      expectedHostId: hostId,
+      expectedQuery: PORTFOLIO_PROOF_QUERY,
+      expectedScope: PORTFOLIO_PROOF_SCOPE,
+    });
+    if (!capabilityVerification.ok) return { ok: false, reason: capabilityVerification.reason };
+    const authorized = capabilityVerification.capability;
+    if (authorized.receiptId !== proof.capability.receiptId || capabilityDigest(authorized) !== proof.capability.digest) return { ok: false, reason: 'capability-mismatch' };
+    if (proof.expiresAt !== authorized.expiresAt) return { ok: false, reason: 'capability-mismatch' };
+
+    const expectedSignature = proofSignatureValue({ ...unsigned, proofDigest: suppliedProofDigest }, capabilitySecret);
+    if (!constantTimeEqual(expectedSignature, suppliedSignature)) return { ok: false, reason: 'invalid-signature' };
+
+    const current = Date.parse(now);
+    if (Number.isNaN(current)) return { ok: false, reason: 'invalid-contract' };
+    if (current < Date.parse(proof.capturedAt)) return { ok: false, reason: 'not-yet-valid' };
+    if (current >= Date.parse(proof.expiresAt)) return { ok: false, reason: 'expired' };
+    return { ok: true, proof: clone(proof) };
+  } catch (_) {
+    return { ok: false, reason: 'invalid-contract' };
+  }
+}
+
 function buildContextPacket({ registry, query, providers = {}, providerAuthorities = {}, capability, capabilitySecret, subject, hostId, activityWindow = null, inference = null, intentGaps = null, now = new Date().toISOString() } = {}) {
   let normalizedQuery;
   try { normalizedQuery = validateContextQuery(query); } catch (_) { return { status: 'unavailable', code: 'CONTEXT_UNAVAILABLE' }; }
@@ -817,12 +1043,17 @@ module.exports = {
   QUERY_FIELDS,
   SUMMARY_FIELDS,
   ROSTER_CONTRACT,
+  PORTFOLIO_PROOF_CONTRACT,
+  PORTFOLIO_PROOF_SCOPE,
+  PORTFOLIO_PROOF_QUERY,
   buildCanonicalRosterPacket,
   buildContextPacket,
+  buildPortfolioProof,
   filterSummariesByWindow,
   normalizeInferenceSnapshot,
   normalizeContextPacket,
   validateActivityWindow,
   validateContextPacket,
   validateContextQuery,
+  verifyPortfolioProof,
 };
