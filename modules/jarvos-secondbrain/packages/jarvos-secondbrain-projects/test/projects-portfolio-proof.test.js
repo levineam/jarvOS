@@ -21,7 +21,7 @@ const NOW = '2026-09-11T12:00:00.000Z';
 const EXPIRES = '2026-09-11T13:00:00.000Z';
 const ORIENT_SECRET = 'orientation-test-only-secret';
 const PROOF_SECRET = 'proof-test-only-secret';
-const HOST_BINDING_DIGESTS = { deploymentConfig: 'a'.repeat(64), rollbackSource: 'b'.repeat(64) };
+const HOST_BINDING_DIGESTS = { configDigest: 'a'.repeat(64), providerDigest: 'b'.repeat(64) };
 
 function fixture(t, count = 12, { verbose = false } = {}) {
   const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'projects-portfolio-proof-'));
@@ -168,6 +168,67 @@ test('tampering any proof field, digest, or signature invalidates verification',
     const result = verifyPortfolioProof(tamper(built.proof), verifyArgs);
     assert.equal(result.ok, false, JSON.stringify(tamper(built.proof)));
   }
+});
+
+test('hostBindingDigests must be exactly configDigest and providerDigest, both 64-hex', (t) => {
+  const { registry } = fixture(t, 2);
+  const missingKey = { configDigest: 'a'.repeat(64) };
+  const extraKey = { configDigest: 'a'.repeat(64), providerDigest: 'b'.repeat(64), extra: 'c'.repeat(64) };
+  const empty = {};
+  const wrongKeys = { deploymentConfig: 'a'.repeat(64), rollbackSource: 'b'.repeat(64) };
+
+  for (const hostBindingDigests of [missingKey, extraKey, empty, wrongKeys]) {
+    assert.equal(buildPortfolioProof(proofInput(registry, { hostBindingDigests })).status, 'unavailable');
+  }
+
+  const built = buildPortfolioProof(proofInput(registry));
+  assert.equal(built.status, 'ok');
+  const verifyArgs = { capability: issueDefaultProofCapability(), capabilitySecret: PROOF_SECRET, subject: 'proof-observer', hostId: 'proof-host', now: NOW };
+  for (const hostBindingDigests of [missingKey, extraKey, empty, wrongKeys]) {
+    const tampered = { ...built.proof, hostBindingDigests };
+    assert.equal(verifyPortfolioProof(tampered, verifyArgs).ok, false);
+  }
+});
+
+test('proof expiresAt is capped at capturedAt+900s when the capability outlives that window', (t) => {
+  const { registry } = fixture(t, 2);
+  const longCapability = issueDefaultProofCapability({ issuedAt: NOW, expiresAt: '2026-09-12T12:00:00.000Z' });
+  const request = proofInput(registry, { capability: longCapability });
+  const built = buildPortfolioProof(request);
+  assert.equal(built.status, 'ok');
+  assert.equal(built.proof.expiresAt, '2026-09-11T12:15:00.000Z');
+
+  const verifyArgs = { capability: request.capability, capabilitySecret: request.capabilitySecret, subject: request.subject, hostId: request.hostId, now: NOW };
+  assert.equal(verifyPortfolioProof(built.proof, verifyArgs).ok, true);
+  assert.equal(verifyPortfolioProof(built.proof, { ...verifyArgs, now: '2026-09-11T12:15:00.000Z' }).ok, false);
+});
+
+test('proof expiresAt falls back to the shorter capability expiry when under the 900s cap', (t) => {
+  const { registry } = fixture(t, 2);
+  const shortCapability = issueDefaultProofCapability({ issuedAt: NOW, expiresAt: '2026-09-11T12:05:00.000Z' });
+  const request = proofInput(registry, { capability: shortCapability });
+  const built = buildPortfolioProof(request);
+  assert.equal(built.status, 'ok');
+  assert.equal(built.proof.expiresAt, '2026-09-11T12:05:00.000Z');
+});
+
+test('a proof capability with TTL over 24h is rejected outright', (t) => {
+  const { registry } = fixture(t, 2);
+  const longTtlCapability = issueDefaultProofCapability({ issuedAt: NOW, expiresAt: '2026-09-12T12:00:01.000Z' });
+  assert.equal(buildPortfolioProof(proofInput(registry, { capability: longTtlCapability })).status, 'unavailable');
+});
+
+test('tampering proof expiresAt to a value beyond the recomputed cap invalidates verification', (t) => {
+  const { registry } = fixture(t, 2);
+  const longCapability = issueDefaultProofCapability({ issuedAt: NOW, expiresAt: '2026-09-12T12:00:00.000Z' });
+  const request = proofInput(registry, { capability: longCapability });
+  const built = buildPortfolioProof(request);
+  assert.equal(built.status, 'ok');
+  const verifyArgs = { capability: request.capability, capabilitySecret: request.capabilitySecret, subject: request.subject, hostId: request.hostId, now: NOW };
+  const tampered = { ...built.proof, expiresAt: longCapability.expiresAt };
+  const result = verifyPortfolioProof(tampered, verifyArgs);
+  assert.equal(result.ok, false);
+  assert.equal(result.reason, 'invalid-contract');
 });
 
 test('evaluatePortfolioProofCoverage requires strict equality between active IDs and the proof roster', (t) => {

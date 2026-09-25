@@ -694,6 +694,13 @@ const PORTFOLIO_PROOF_FIELDS = Object.freeze([
 ]);
 const PORTFOLIO_PROOF_DIGEST_DOMAIN = `${PORTFOLIO_PROOF_CONTRACT}:proof-digest/v1`;
 const PORTFOLIO_PROOF_SIGNATURE_DOMAIN = `${PORTFOLIO_PROOF_CONTRACT}:signature/v1`;
+const PORTFOLIO_PROOF_MAX_VALIDITY_SECONDS = 900;
+const PORTFOLIO_PROOF_MAX_CAPABILITY_TTL_SECONDS = 86_400;
+
+function capabilityTtlMs(authorized) { return Date.parse(authorized.expiresAt) - Date.parse(authorized.issuedAt); }
+function portfolioProofExpiresAt(authorized, capturedAt) {
+  return new Date(Math.min(Date.parse(authorized.expiresAt), Date.parse(capturedAt) + PORTFOLIO_PROOF_MAX_VALIDITY_SECONDS * 1000)).toISOString();
+}
 
 function portfolioProofUnavailable(code = 'PORTFOLIO_PROOF_UNAVAILABLE') {
   return { status: 'unavailable', code };
@@ -705,14 +712,14 @@ function validPortfolioProofRequest(input) {
   return Object.keys(input).every((key) => allowed.has(key));
 }
 
+const HOST_BINDING_DIGEST_FIELDS = Object.freeze(['configDigest', 'providerDigest']);
+
 function validateHostBindingDigests(value) {
-  if (!isPlainObject(value)) throw new TypeError('hostBindingDigests must be an object');
-  const keys = Object.keys(value).sort();
-  for (const key of keys) {
-    if (!key.trim()) throw new TypeError('hostBindingDigests keys must be non-empty');
+  if (!isPlainObject(value) || !exactKeys(value, HOST_BINDING_DIGEST_FIELDS)) throw new TypeError('hostBindingDigests must contain exactly configDigest and providerDigest');
+  for (const key of HOST_BINDING_DIGEST_FIELDS) {
     if (typeof value[key] !== 'string' || !/^[a-f0-9]{64}$/.test(value[key])) throw new TypeError('hostBindingDigests values must be sha256 digests');
   }
-  return Object.fromEntries(keys.map((key) => [key, value[key]]));
+  return { configDigest: value.configDigest, providerDigest: value.providerDigest };
 }
 
 function proofRecord(record) {
@@ -789,6 +796,10 @@ function buildPortfolioProof(input = {}) {
   const authorized = verification.capability;
   if (authorized.limits.maxItems < PORTFOLIO_PROOF_QUERY.limits.maxItems
     || authorized.limits.maxBytes < PORTFOLIO_PROOF_QUERY.limits.maxBytes) return portfolioProofUnavailable();
+  if (!Number.isFinite(capabilityTtlMs(authorized)) || capabilityTtlMs(authorized) > PORTFOLIO_PROOF_MAX_CAPABILITY_TTL_SECONDS * 1000) {
+    return portfolioProofUnavailable('PORTFOLIO_PROOF_CAPABILITY_TTL_EXCEEDED');
+  }
+  const proofExpiresAt = portfolioProofExpiresAt(authorized, now);
 
   let generationBefore; let rows;
   try {
@@ -820,7 +831,7 @@ function buildPortfolioProof(input = {}) {
       query: PORTFOLIO_PROOF_QUERY,
       generation: generationBefore,
       capturedAt: now,
-      expiresAt: authorized.expiresAt,
+      expiresAt: proofExpiresAt,
       capability: { receiptId: authorized.receiptId, digest: capabilityDigest(authorized) },
       hostBindingDigests: normalizedHostBindingDigests,
       records: recordsForProof,
@@ -882,7 +893,10 @@ function verifyPortfolioProof(proof, { capability, capabilitySecret, subject, ho
     if (!capabilityVerification.ok) return { ok: false, reason: capabilityVerification.reason };
     const authorized = capabilityVerification.capability;
     if (authorized.receiptId !== proof.capability.receiptId || capabilityDigest(authorized) !== proof.capability.digest) return { ok: false, reason: 'capability-mismatch' };
-    if (proof.expiresAt !== authorized.expiresAt) return { ok: false, reason: 'capability-mismatch' };
+    if (!Number.isFinite(capabilityTtlMs(authorized)) || capabilityTtlMs(authorized) > PORTFOLIO_PROOF_MAX_CAPABILITY_TTL_SECONDS * 1000) {
+      return { ok: false, reason: 'capability-ttl-exceeded' };
+    }
+    if (proof.expiresAt !== portfolioProofExpiresAt(authorized, proof.capturedAt)) return { ok: false, reason: 'capability-mismatch' };
 
     const expectedSignature = proofSignatureValue({ ...unsigned, proofDigest: suppliedProofDigest }, capabilitySecret);
     if (!constantTimeEqual(expectedSignature, suppliedSignature)) return { ok: false, reason: 'invalid-signature' };

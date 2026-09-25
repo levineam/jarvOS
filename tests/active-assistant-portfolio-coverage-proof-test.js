@@ -6,7 +6,7 @@ const coverage = require('../scripts/lib/active-assistant-portfolio-coverage');
 
 const DIGEST = 'a'.repeat(64);
 
-function project(id) { return { id, kind: 'project' }; }
+function project(id, lifecycle = 'active') { return { id, kind: 'project', lifecycle }; }
 function outcome(id) { return { id, kind: 'outcome' }; }
 
 function proof({ generation = 42, records = [project('prj_000001'), project('prj_000002')], complete = true, provenance = {} } = {}) {
@@ -77,6 +77,47 @@ test('outcomes in the proof do not count toward the active project set', () => {
     proof: proof({ records: [project('prj_000001'), project('prj_000002'), outcome('out_000003')] }),
   });
   assert.equal(result.ready, true);
+});
+
+test('a complete proof correctly including paused and archived projects alongside the active set is ready', () => {
+  const result = evaluate({
+    activeProjectIds: ['prj_000001', 'prj_000002'],
+    proof: proof({ records: [project('prj_000001'), project('prj_000002'), project('prj_000003', 'paused'), project('prj_000004', 'archived')] }),
+  });
+  assert.equal(result.ready, true);
+  assert.deepEqual(result.reasonCodes, []);
+});
+
+test('a supplied active ID whose proof record is paused/archived is a distinct fail-closed mismatch from a missing ID', () => {
+  const result = evaluate({
+    activeProjectIds: ['prj_000001', 'prj_000002', 'prj_000003'],
+    proof: proof({ records: [project('prj_000001'), project('prj_000002'), project('prj_000003', 'paused')] }),
+  });
+  assert.equal(result.ready, false);
+  assert.deepEqual(result.reasonCodes, ['portfolio_active_set_mismatch']);
+  assert.deepEqual(result.missingProjectIds, []);
+  assert.deepEqual(result.considered, [
+    { projectId: 'prj_000001', state: 'enumerated', reasonCodes: [] },
+    { projectId: 'prj_000002', state: 'enumerated', reasonCodes: [] },
+    { projectId: 'prj_000003', state: 'inactive', reasonCodes: ['portfolio_active_set_mismatch'] },
+  ]);
+});
+
+test('a paused/archived project not declared active does not count as an extra active project', () => {
+  const result = evaluate({
+    activeProjectIds: ['prj_000001', 'prj_000002'],
+    proof: proof({ records: [project('prj_000001'), project('prj_000002'), project('prj_000003', 'archived')] }),
+  });
+  assert.equal(result.ready, true);
+});
+
+test('an active project present in the proof but not declared active is still a fail-closed extra mismatch even with paused records present', () => {
+  const result = evaluate({
+    activeProjectIds: ['prj_000001'],
+    proof: proof({ records: [project('prj_000001'), project('prj_000002'), project('prj_000003', 'paused')] }),
+  });
+  assert.equal(result.ready, false);
+  assert.deepEqual(result.reasonCodes, ['portfolio_active_set_mismatch']);
 });
 
 test('generation mismatch, malformed provenance, and invalid active IDs fail closed', () => {

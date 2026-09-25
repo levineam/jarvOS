@@ -6,6 +6,7 @@ const ACTIVE_ASSISTANT_PORTFOLIO_COVERAGE_VERSION = 'active-assistant-portfolio-
 const PROJECT_ID = /^prj_[0-9]{6,}$/;
 const OUTCOME_ID = /^out_[0-9]{6,}$/;
 const DIGEST = /^[a-f0-9]{64}$/;
+const PROJECT_LIFECYCLES = ['active', 'paused', 'archived'];
 
 function isObject(value) { return Boolean(value) && typeof value === 'object' && !Array.isArray(value); }
 function stable(value) {
@@ -41,7 +42,7 @@ function verifyPortfolioCoverageReceipt(receipt) {
     || !Array.isArray(receipt.missingProjectIds) || receipt.missingProjectIds.some((id) => !PROJECT_ID.test(id))
     || !Array.isArray(receipt.considered)
     || receipt.considered.some((row) => !isObject(row) || !PROJECT_ID.test(row.projectId || '')
-      || !['enumerated', 'missing', 'unverified'].includes(row.state) || !Array.isArray(row.reasonCodes))
+      || !['enumerated', 'inactive', 'missing', 'unverified'].includes(row.state) || !Array.isArray(row.reasonCodes))
     || !DIGEST.test(suppliedDigest || '')
     || digest(unsigned) !== suppliedDigest) {
     return { ok: false, reasonCode: 'portfolio_coverage_receipt_invalid' };
@@ -110,7 +111,7 @@ function inspectProof(proof) {
   if (!Array.isArray(proof.records)) return { reasonCode: 'malformed_portfolio_proof' };
   if (!isObject(proof.counts) || proof.counts.records !== proof.records.length) return { reasonCode: 'malformed_portfolio_proof' };
   const seen = new Set();
-  const projects = new Set();
+  const projectLifecycleById = new Map();
   for (const record of proof.records) {
     if (!isObject(record) || typeof record.id !== 'string' || typeof record.kind !== 'string') return { reasonCode: 'malformed_portfolio_proof' };
     if (!PROJECT_ID.test(record.id) && !OUTCOME_ID.test(record.id)) return { reasonCode: 'invalid_proof_record_ids' };
@@ -118,10 +119,11 @@ function inspectProof(proof) {
     seen.add(record.id);
     if (record.kind === 'project') {
       if (!PROJECT_ID.test(record.id)) return { reasonCode: 'invalid_proof_record_ids' };
-      projects.add(record.id);
+      if (!PROJECT_LIFECYCLES.includes(record.lifecycle)) return { reasonCode: 'malformed_portfolio_proof' };
+      projectLifecycleById.set(record.id, record.lifecycle);
     } else if (record.kind === 'outcome' && !OUTCOME_ID.test(record.id)) return { reasonCode: 'invalid_proof_record_ids' };
   }
-  return { generation: proof.generation, projects };
+  return { generation: proof.generation, projectLifecycleById };
 }
 
 function evaluatePortfolioProofCoverage({ registryGeneration, activeProjectIds, proof } = {}) {
@@ -138,13 +140,18 @@ function evaluatePortfolioProofCoverage({ registryGeneration, activeProjectIds, 
   if (inspected.reasonCode) return publicResult({ registryGeneration, ready: false, reasonCodes: [inspected.reasonCode], missingProjectIds: [], considered });
   if (inspected.generation !== registryGeneration) return publicResult({ registryGeneration, ready: false, reasonCodes: ['registry_generation_mismatch'], missingProjectIds: [], considered });
 
-  const missingProjectIds = normalizedActive.filter((id) => !inspected.projects.has(id));
-  const extraProjectIds = [...inspected.projects].filter((id) => !normalizedActive.includes(id));
-  if (missingProjectIds.length || extraProjectIds.length) {
+  const activeProjectIdsInProof = new Set([...inspected.projectLifecycleById].filter(([, lifecycle]) => lifecycle === 'active').map(([id]) => id));
+  const missingProjectIds = normalizedActive.filter((id) => !inspected.projectLifecycleById.has(id));
+  const inactiveProjectIds = normalizedActive.filter((id) => inspected.projectLifecycleById.has(id) && !activeProjectIdsInProof.has(id));
+  const extraProjectIds = [...activeProjectIdsInProof].filter((id) => !normalizedActive.includes(id));
+  if (missingProjectIds.length || inactiveProjectIds.length || extraProjectIds.length) {
     const missing = new Set(missingProjectIds);
-    const finalConsidered = normalizedActive.map((projectId) => missing.has(projectId)
-      ? { projectId, state: 'missing', reasonCodes: ['portfolio_active_set_mismatch'] }
-      : { projectId, state: 'enumerated', reasonCodes: extraProjectIds.length ? ['portfolio_active_set_mismatch'] : [] });
+    const inactive = new Set(inactiveProjectIds);
+    const finalConsidered = normalizedActive.map((projectId) => {
+      if (missing.has(projectId)) return { projectId, state: 'missing', reasonCodes: ['portfolio_active_set_mismatch'] };
+      if (inactive.has(projectId)) return { projectId, state: 'inactive', reasonCodes: ['portfolio_active_set_mismatch'] };
+      return { projectId, state: 'enumerated', reasonCodes: extraProjectIds.length ? ['portfolio_active_set_mismatch'] : [] };
+    });
     return publicResult({
       registryGeneration, ready: false, reasonCodes: ['portfolio_active_set_mismatch'], missingProjectIds, considered: finalConsidered,
     });
