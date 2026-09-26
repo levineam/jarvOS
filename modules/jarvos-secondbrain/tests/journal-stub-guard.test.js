@@ -88,10 +88,15 @@ function makeVault() {
   return { vault, journalDir };
 }
 
+function stateDirFor(journalDir) {
+  return `${path.dirname(journalDir)}-local-state`;
+}
+
 function inVault(journalDir, fn) {
   return withEnv(
     {
       JARVOS_JOURNAL_DIR: journalDir,
+      JARVOS_JOURNAL_STATE_DIR: stateDirFor(journalDir),
       JOURNAL_DIR: undefined,
       JARVOS_VAULT_DIR: undefined,
       JARVOS_CONFIG_PATH: undefined,
@@ -152,7 +157,7 @@ test('frontmatter-only stub overwrite after a populated journal is restored from
       fs.writeFileSync(journalPath, populatedJournal(), 'utf8');
       const first = syncOneDate(DATE, TEST_CONFIG, {});
       assert.equal(first.healthAfter.status, 'healthy');
-      const knownGoodFile = path.join(vault, '.jarvos/journal-maintenance/known-good', `${DATE}.md`);
+      const knownGoodFile = path.join(stateDirFor(journalDir), 'known-good', `${DATE}.md`);
       assert.ok(fs.existsSync(knownGoodFile), 'known-good snapshot is recorded');
 
       // External writer clobbers the populated journal with a stub.
@@ -310,9 +315,9 @@ test('partial clobber (stale) is detected and does not poison the known-good sna
       fs.writeFileSync(journalPath, populatedJournal(), 'utf8');
       const first = syncOneDate(DATE, TEST_CONFIG, {});
       assert.equal(first.healthAfter.status, 'healthy');
-      const knownGoodFile = path.join(vault, '.jarvos/journal-maintenance/known-good', `${DATE}.md`);
+      const knownGoodFile = path.join(stateDirFor(journalDir), 'known-good', `${DATE}.md`);
       const goodSnapshot = fs.readFileSync(knownGoodFile, 'utf8');
-      const statePath = path.join(vault, '.jarvos/journal-maintenance/state.json');
+      const statePath = path.join(stateDirFor(journalDir), 'state.json');
       const goodState = fs.readFileSync(statePath, 'utf8');
 
       // External writer clobbers it with a partial file: still has a section
@@ -352,7 +357,7 @@ test('healthy journal refresh keeps known-good state in sync', () => {
       fs.writeFileSync(journalPath, populatedJournal(), 'utf8');
 
       syncOneDate(DATE, TEST_CONFIG, {});
-      const statePath = path.join(vault, '.jarvos/journal-maintenance/state.json');
+      const statePath = path.join(stateDirFor(journalDir), 'state.json');
       const state = JSON.parse(fs.readFileSync(statePath, 'utf8'));
       const entry = state.dates[DATE];
       const onDisk = fs.readFileSync(journalPath, 'utf8');
@@ -361,5 +366,39 @@ test('healthy journal refresh keeps known-good state in sync', () => {
     });
   } finally {
     fs.rmSync(vault, { recursive: true, force: true });
+  }
+});
+
+test('full-content recovery files stay outside the vault and legacy synced copies are removed', () => {
+  const { journalDir, vault } = makeVault();
+  const localState = stateDirFor(journalDir);
+  try {
+    const legacyRoot = path.join(vault, '.jarvos', 'journal-maintenance');
+    const legacyKnownGood = path.join(legacyRoot, 'known-good', `${DATE}.md`);
+    fs.mkdirSync(path.dirname(legacyKnownGood), { recursive: true });
+    fs.writeFileSync(legacyKnownGood, populatedJournal(), 'utf8');
+    fs.writeFileSync(path.join(legacyRoot, 'state.json'), JSON.stringify({
+      version: 1,
+      dates: {
+        [DATE]: {
+          ...journalModule().journalMetrics(populatedJournal()),
+          date: DATE,
+        },
+      },
+    }), 'utf8');
+    fs.writeFileSync(path.join(journalDir, `${DATE}.md`), STUB, 'utf8');
+
+    inVault(journalDir, () => {
+      const result = journalModule().syncOneDate(DATE, TEST_CONFIG, {});
+      assert.equal(result.restoredKnownGood, true);
+      assert.ok(result.backupPath.startsWith(localState));
+      assert.ok(fs.existsSync(path.join(localState, 'known-good', `${DATE}.md`)));
+      assert.equal(fs.existsSync(path.join(legacyRoot, 'known-good')), false);
+      assert.equal(fs.existsSync(path.join(legacyRoot, 'audit-backups')), false);
+      assert.equal(fs.statSync(result.backupPath).mode & 0o777, 0o600);
+    });
+  } finally {
+    fs.rmSync(vault, { recursive: true, force: true });
+    fs.rmSync(localState, { recursive: true, force: true });
   }
 });
