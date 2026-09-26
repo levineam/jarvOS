@@ -53,6 +53,14 @@ The workflow is complete only when:
 8. **Close or hand off.** Move the issue to done only when no follow-up remains.
    Use in-review only when a real reviewer path exists.
 
+Choose the cheapest useful behavior check that exercises the real path, while
+retaining useful unit tests; a success check must fail if the intended
+behavior breaks, and `unavailable` is not success. Routine verification must
+not start shared live or subscription runtimes; use disposable local fixtures
+when an integration path is needed. For example, Desktop PR #13's smoke wires a
+temporary local provider through config and HTTP and asserts project status
+and content, instead of accepting `ok|unavailable` or merely grepping wording.
+
 ## Managed coding workflow
 
 When this skill is running inside a jarvOS coding profile, the natural verbs
