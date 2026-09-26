@@ -24,6 +24,8 @@ CODEX_PROVIDER_MODE="${JARVOS_CODEX_PROVIDER_MODE:-}"
 # own MCP script -- so a later selected-runtime transition does not require
 # rewriting persisted client config. Unset preserves the current portable
 # behavior: register this run's own $MCP_SERVER directly.
+# Managed mode (JARVOS_MANAGED_REPOSITORIES) defaults it to the stable
+# bundle's jarvos-mcp shim and fails closed without one.
 STABLE_MCP_ENTRYPOINT="${JARVOS_MCP_STABLE_ENTRYPOINT:-}"
 
 # The private installer materializes this owner-controlled bundle once. Native
@@ -76,6 +78,24 @@ fi
 if [ ! -f "$TRUST_SCRIPT" ]; then
   echo "jarvOS Codex hook trust script not found: $TRUST_SCRIPT" >&2
   exit 1
+fi
+
+# Managed mode rotates immutable runtime stages under a stable selector, so a
+# persisted MCP command must be the stable bundle's selector-aware jarvos-mcp
+# shim, never this stage's own script: a stage-pinned registration keeps
+# serving the old stage (without the selected runtime's Projects bindings)
+# after the next promotion. Default to the shim the private installer
+# materializes beside the stable dispatcher, and refuse to persist a
+# stage-pinned path when it is missing. An explicit
+# JARVOS_MCP_STABLE_ENTRYPOINT still wins; either way it is validated below.
+if [ -n "${JARVOS_MANAGED_REPOSITORIES:-}" ] && [ "${JARVOS_MANAGED_HARNESS_ROLLBACK:-0}" != "1" ] \
+  && [ -z "$STABLE_MCP_ENTRYPOINT" ] && [ "${JARVOS_STEWARDSHIP_ONLY:-0}" != "1" ]; then
+  if [ -e "$STEWARDSHIP_STABLE_ROOT/jarvos-mcp" ] || [ -L "$STEWARDSHIP_STABLE_ROOT/jarvos-mcp" ]; then
+    STABLE_MCP_ENTRYPOINT="$STEWARDSHIP_STABLE_ROOT/jarvos-mcp"
+  else
+    echo "Managed jarvOS setup requires the stable jarvos-mcp shim in the stewardship bundle (JARVOS_STEWARDSHIP_STABLE_ROOT) or an explicit JARVOS_MCP_STABLE_ENTRYPOINT; refusing to register Codex against an immutable runtime stage" >&2
+    exit 1
+  fi
 fi
 
 # The stable entrypoint is what setup registers with Codex, so it must be

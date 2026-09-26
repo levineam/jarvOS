@@ -22,6 +22,8 @@ STEWARDSHIP_DISPATCHER=""
 # transition does not require rewriting persisted client config. Unset
 # preserves the current portable behavior: register this run's own
 # $MCP_SERVER directly.
+# Managed mode (JARVOS_MANAGED_REPOSITORIES) defaults it to the stable
+# bundle's jarvos-mcp shim and fails closed without one.
 STABLE_MCP_ENTRYPOINT="${JARVOS_MCP_STABLE_ENTRYPOINT:-}"
 # Optional Todo work-action host bindings. Unset keeps public/minimal behavior.
 # When set, persist the non-secret absolute paths on the MCP child. Trust
@@ -94,6 +96,24 @@ fi
 if [ ! -f "$PRECOMPACT_HOOK_SCRIPT" ]; then
   echo "jarvOS Claude precompact hook script not found: $PRECOMPACT_HOOK_SCRIPT" >&2
   exit 1
+fi
+
+# Managed mode rotates immutable runtime stages under a stable selector, so a
+# persisted MCP command must be the stable bundle's selector-aware jarvos-mcp
+# shim, never this stage's own script: a stage-pinned registration keeps
+# serving the old stage (without the selected runtime's Projects bindings)
+# after the next promotion. Default to the shim the private installer
+# materializes beside the stable dispatcher, and refuse to persist a
+# stage-pinned path when it is missing. An explicit
+# JARVOS_MCP_STABLE_ENTRYPOINT still wins; either way it is validated below.
+if [ -n "${JARVOS_MANAGED_REPOSITORIES:-}" ] && [ "${JARVOS_MANAGED_HARNESS_ROLLBACK:-0}" != "1" ] \
+  && [ -z "$STABLE_MCP_ENTRYPOINT" ] && { [ "${JARVOS_SKIP_CLAUDE_CODE_MCP:-0}" != "1" ] || [ "${JARVOS_STEWARDSHIP_ONLY:-0}" != "1" ]; }; then
+  if [ -e "$STEWARDSHIP_STABLE_ROOT/jarvos-mcp" ] || [ -L "$STEWARDSHIP_STABLE_ROOT/jarvos-mcp" ]; then
+    STABLE_MCP_ENTRYPOINT="$STEWARDSHIP_STABLE_ROOT/jarvos-mcp"
+  else
+    echo "Managed jarvOS setup requires the stable jarvos-mcp shim in the stewardship bundle (JARVOS_STEWARDSHIP_STABLE_ROOT) or an explicit JARVOS_MCP_STABLE_ENTRYPOINT; refusing to register Claude Code or Claude Desktop against an immutable runtime stage" >&2
+    exit 1
+  fi
 fi
 
 # The stable entrypoint is what setup registers with Claude, so it must be

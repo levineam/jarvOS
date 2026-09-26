@@ -1784,3 +1784,147 @@ test('Codex hooks migration fails closed for malformed legacy hooks.json', () =>
     fs.rmSync(temp, { recursive: true, force: true });
   }
 });
+
+// Records the argv of a fake `claude`/`codex` CLI so the persisted MCP command
+// can be inspected. `mcp get` reports nothing, so setup takes the add path.
+function writeRecordingMcpCli(binDir, name, recordPath) {
+  const target = path.join(binDir, name);
+  fs.writeFileSync(target, [
+    '#!/usr/bin/env node',
+    "const fs = require('fs');",
+    'const args = process.argv.slice(2);',
+    "if (args[0] === 'mcp' && args[1] === 'get') process.exit(1);",
+    `if (args[0] === 'mcp' && args[1] === 'add') fs.writeFileSync(${JSON.stringify(recordPath)}, JSON.stringify(args));`,
+    'process.exit(0);',
+    '',
+  ].join('\n'), { mode: 0o755 });
+  fs.chmodSync(target, 0o755);
+}
+
+function writeStableMcpShim(stable) {
+  const shim = path.join(stable, 'jarvos-mcp');
+  fs.writeFileSync(shim, '#!/bin/sh\n# stable selector-aware jarvos mcp shim fixture\nexit 0\n', { mode: 0o700 });
+  fs.chmodSync(shim, 0o700);
+  return shim;
+}
+
+function managedMcpSetupFixture(prefix, { withShim }) {
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  const bin = path.join(temp, 'bin');
+  fs.mkdirSync(bin, { recursive: true });
+  const stable = prepareStableStewardshipBundle(temp);
+  const shim = withShim ? writeStableMcpShim(stable) : path.join(stable, 'jarvos-mcp');
+  return { temp, bin, stable, shim };
+}
+
+test('managed Claude setup persists the stable jarvos-mcp shim for Claude Code and Claude Desktop by default', () => {
+  // Regression: a managed install once registered Claude against one immutable
+  // stage's jarvos-mcp.js; after the next promotion Claude kept serving that
+  // stage without the selected runtime's Projects bindings (Codex, bound to the
+  // stable shim, kept working). Managed mode must never persist a stage path.
+  const { temp, bin, stable, shim } = managedMcpSetupFixture('jarvos-claude-managed-mcp-', { withShim: true });
+  try {
+    const record = path.join(temp, 'claude-mcp-add.json');
+    writeRecordingMcpCli(bin, 'claude', record);
+    const desktop = path.join(temp, 'desktop', 'claude_desktop_config.json');
+    const env = cleanEnv({
+      HOME: path.join(temp, 'home'), PATH: `${bin}${path.delimiter}${process.env.PATH || ''}`,
+      CLAUDE_SETTINGS: path.join(temp, 'settings.json'), CLAUDE_DESKTOP_CONFIG: desktop,
+      JARVOS_SKIP_CLAUDE_MD: '1', JARVOS_MANAGED_REPOSITORIES: '/managed/repository', JARVOS_STEWARDSHIP_STABLE_ROOT: stable,
+    });
+    runSetup(path.join(ROOT, 'runtimes', 'claude', 'setup.sh'), env);
+    const args = JSON.parse(fs.readFileSync(record, 'utf8'));
+    assert.equal(args[args.indexOf('--') + 1], shim, args.join(' '));
+    assert.equal(args.indexOf('--') + 2, args.length, 'the shim takes no stage-specific arguments');
+    assert.ok(!args.some((value) => value.includes('jarvos-mcp.js')), args.join(' '));
+    const desktopConfig = JSON.parse(fs.readFileSync(desktop, 'utf8'));
+    assert.equal(desktopConfig.mcpServers.jarvos.command, shim);
+    assert.equal(desktopConfig.mcpServers.jarvos.args, undefined);
+  } finally {
+    fs.rmSync(temp, { recursive: true, force: true });
+  }
+});
+
+test('managed Claude setup refuses to persist a stage-pinned MCP path when the stable shim is missing', () => {
+  const { temp, bin, stable } = managedMcpSetupFixture('jarvos-claude-managed-mcp-missing-', { withShim: false });
+  try {
+    const record = path.join(temp, 'claude-mcp-add.json');
+    writeRecordingMcpCli(bin, 'claude', record);
+    const desktop = path.join(temp, 'desktop', 'claude_desktop_config.json');
+    const settings = path.join(temp, 'settings.json');
+    const env = cleanEnv({
+      HOME: path.join(temp, 'home'), PATH: `${bin}${path.delimiter}${process.env.PATH || ''}`,
+      CLAUDE_SETTINGS: settings, CLAUDE_DESKTOP_CONFIG: desktop,
+      JARVOS_SKIP_CLAUDE_MD: '1', JARVOS_MANAGED_REPOSITORIES: '/managed/repository', JARVOS_STEWARDSHIP_STABLE_ROOT: stable,
+    });
+    const result = runSetupResult(path.join(ROOT, 'runtimes', 'claude', 'setup.sh'), env);
+    assert.notEqual(result.status, 0, 'managed setup without the stable shim must fail');
+    assert.match(result.stderr, /stable jarvos-mcp shim/);
+    assert.equal(fs.existsSync(record), false, 'Claude Code must not be registered against a stage');
+    assert.equal(fs.existsSync(desktop), false, 'Claude Desktop must not be registered against a stage');
+    assert.equal(fs.existsSync(settings), false, 'setup must fail before writing any client configuration');
+
+    // Stewardship-only with Claude Code MCP skipped persists no MCP command,
+    // so it keeps working before the shim exists.
+    runSetup(path.join(ROOT, 'runtimes', 'claude', 'setup.sh'), { ...env, JARVOS_STEWARDSHIP_ONLY: '1', JARVOS_SKIP_CLAUDE_CODE_MCP: '1' });
+    assert.equal(fs.existsSync(record), false);
+    assert.equal(fs.existsSync(desktop), false);
+  } finally {
+    fs.rmSync(temp, { recursive: true, force: true });
+  }
+});
+
+test('managed Codex setup persists the stable jarvos-mcp shim by default and fails closed without it', () => {
+  for (const withShim of [true, false]) {
+    const { temp, bin, stable, shim } = managedMcpSetupFixture('jarvos-codex-managed-mcp-', { withShim });
+    try {
+      const record = path.join(temp, 'codex-mcp-add.json');
+      writeRecordingMcpCli(bin, 'codex', record);
+      const codexHome = path.join(temp, 'codex-home');
+      fs.mkdirSync(codexHome, { recursive: true });
+      const env = cleanEnv({
+        HOME: path.join(temp, 'home'), PATH: `${bin}${path.delimiter}${process.env.PATH || ''}`,
+        CODEX_HOME: codexHome, CODEX_CONFIG: path.join(codexHome, 'config.toml'),
+        JARVOS_MANAGED_REPOSITORIES: '/managed/repository', JARVOS_STEWARDSHIP_STABLE_ROOT: stable,
+      });
+      const result = runSetupResult(path.join(ROOT, 'runtimes', 'codex', 'setup.sh'), env);
+      if (withShim) {
+        assert.equal(result.status, 0, result.stderr || result.stdout);
+        const args = JSON.parse(fs.readFileSync(record, 'utf8'));
+        assert.equal(args[args.indexOf('--') + 1], shim, args.join(' '));
+        assert.ok(!args.some((value) => value.includes('jarvos-mcp.js')), args.join(' '));
+      } else {
+        assert.notEqual(result.status, 0, 'managed Codex setup without the stable shim must fail');
+        assert.match(result.stderr, /stable jarvos-mcp shim/);
+        assert.equal(fs.existsSync(record), false, 'Codex must not be registered against a stage');
+      }
+    } finally {
+      fs.rmSync(temp, { recursive: true, force: true });
+    }
+  }
+});
+
+test('managed Claude setup still requires the stable shim when either client would persist an MCP command', () => {
+  // Skipping Claude Code alone still writes Claude Desktop, and stewardship-only
+  // alone still registers Claude Code; each must fail closed without the shim.
+  for (const flags of [{ JARVOS_SKIP_CLAUDE_CODE_MCP: '1' }, { JARVOS_STEWARDSHIP_ONLY: '1' }]) {
+    const { temp, bin, stable } = managedMcpSetupFixture('jarvos-claude-managed-mcp-flags-', { withShim: false });
+    try {
+      const record = path.join(temp, 'claude-mcp-add.json');
+      writeRecordingMcpCli(bin, 'claude', record);
+      const desktop = path.join(temp, 'desktop', 'claude_desktop_config.json');
+      const result = runSetupResult(path.join(ROOT, 'runtimes', 'claude', 'setup.sh'), cleanEnv({
+        HOME: path.join(temp, 'home'), PATH: `${bin}${path.delimiter}${process.env.PATH || ''}`,
+        CLAUDE_SETTINGS: path.join(temp, 'settings.json'), CLAUDE_DESKTOP_CONFIG: desktop,
+        JARVOS_SKIP_CLAUDE_MD: '1', JARVOS_MANAGED_REPOSITORIES: '/managed/repository', JARVOS_STEWARDSHIP_STABLE_ROOT: stable,
+        ...flags,
+      }));
+      assert.notEqual(result.status, 0, `managed setup with ${Object.keys(flags)[0]} alone must fail without the shim`);
+      assert.match(result.stderr, /stable jarvos-mcp shim/);
+      assert.equal(fs.existsSync(record), false);
+      assert.equal(fs.existsSync(desktop), false);
+    } finally {
+      fs.rmSync(temp, { recursive: true, force: true });
+    }
+  }
+});
