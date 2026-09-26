@@ -337,6 +337,20 @@ function validSessionId(value) {
   return typeof value === 'string' && SAFE_IDENTIFIER.test(value) && !value.includes('..');
 }
 
+function parseNonNegativeInteger(value) {
+  let number;
+  if (typeof value === 'number') {
+    number = value;
+  } else if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (!/^[0-9]+$/.test(trimmed)) return null;
+    number = Number(trimmed);
+  } else {
+    return null;
+  }
+  return Number.isSafeInteger(number) && number >= 0 ? number : null;
+}
+
 function jsonObject(value) {
   if (value && typeof value === 'object') return value;
   if (typeof value !== 'string') return null;
@@ -654,8 +668,9 @@ class CassTranscriptAdapter {
     if (rawConnector != null && !reportedConnector) return { valid: false, reason: 'unsupported_connector' };
     if (reportedConnector && reportedConnector !== logicalConnector) return { valid: false, reason: 'connector_mismatch' };
     const sessionId = String(
-      nestedValue(row, ['session_id', 'sessionId', 'conversation_id', 'conversationId', 'session', 'id'])
+      nestedValue(row, ['session_id', 'sessionId', 'conversation_id', 'conversationId', 'session'])
       ?? objectValue(cassCitation, ['conversation_id'])
+      ?? nestedValue(row, ['id'])
       ?? '',
     ).trim();
     if (!validSessionId(sessionId)) return { valid: false, reason: 'invalid_session_id' };
@@ -696,12 +711,13 @@ class CassTranscriptAdapter {
       ?? objectValue(cassCitation, ['line_start']);
     const citationRaw = nestedValue(row, ['locator', 'ref', 'message_id', 'messageId'])
       ?? (typeof row.citation === 'string' ? row.citation : null);
-    const messageIndex = objectValue(cassCitation, ['message_index']);
-    const lineEnd = objectValue(cassCitation, ['line_end']);
-    const fallbackCitation = Number.isInteger(Number(messageIndex))
-      ? `message:${Number(messageIndex)}`
-      : (Number.isInteger(Number(line))
-        ? `line:${Number(line)}${Number.isInteger(Number(lineEnd)) ? `-${Number(lineEnd)}` : ''}`
+    const messageIndex = parseNonNegativeInteger(objectValue(cassCitation, ['message_index']));
+    const lineNumber = parseNonNegativeInteger(line);
+    const lineEnd = parseNonNegativeInteger(objectValue(cassCitation, ['line_end']));
+    const fallbackCitation = messageIndex !== null
+      ? `message:${messageIndex}`
+      : (lineNumber !== null
+        ? `line:${lineNumber}${lineEnd !== null ? `-${lineEnd}` : ''}`
         : 'excerpt');
     const citation = String(citationRaw || fallbackCitation).trim();
     if (!SAFE_CITATION.test(citation)) return { valid: false, reason: 'invalid_citation' };

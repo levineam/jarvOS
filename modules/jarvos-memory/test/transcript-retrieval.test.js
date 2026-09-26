@@ -261,6 +261,97 @@ test('normalizes the documented CASS pack evidence citation shape without exposi
   assert.equal(Object.prototype.hasOwnProperty.call(packet.evidence[0], 'path'), false);
 });
 
+test('prefers a nested conversation id over a generic top-level id and never fabricates a message index', () => {
+  const adapter = new CassTranscriptAdapter({
+    runner: preflightRunner([], () => ok({
+      evidence: [{
+        id: 'ev_synthetic',
+        excerpt: 'A synthetic bounded transcript excerpt.',
+        citation: {
+          conversation_id: 42,
+          created_at_ms: Date.parse('2026-07-20T12:00:00.000Z'),
+          message_index: null,
+          line_start: 57,
+          line_end: 57,
+        },
+      }],
+    })),
+  });
+
+  const packet = adapter.retrieve(request({ connectors: ['codex'] }));
+  assert.equal(packet.evidence.length, 1);
+  assert.equal(packet.evidence[0].sessionId, '42');
+  assert.equal(packet.evidence[0].citation, 'line:57-57');
+});
+
+test('rejects non-integral message index locators instead of coercing them to zero', () => {
+  for (const invalidMessageIndex of ['', ' ', false, true, null, undefined, '1.5', -1, Number.MAX_SAFE_INTEGER + 2, '99999999999999999999', '9'.repeat(400)]) {
+    const adapter = new CassTranscriptAdapter({
+      runner: preflightRunner([], () => ok({
+        evidence: [{
+          id: 'ev_synthetic',
+          excerpt: 'A synthetic bounded transcript excerpt.',
+          citation: {
+            conversation_id: 'conversation42',
+            created_at_ms: Date.parse('2026-07-20T12:00:00.000Z'),
+            message_index: invalidMessageIndex,
+          },
+        }],
+      })),
+    });
+    const packet = adapter.retrieve(request({ connectors: ['codex'] }));
+    assert.equal(packet.evidence.length, 1, JSON.stringify(invalidMessageIndex));
+    assert.equal(packet.evidence[0].citation, 'excerpt', JSON.stringify(invalidMessageIndex));
+  }
+});
+
+test('preserves a numeric or string zero message index', () => {
+  for (const zeroMessageIndex of [0, '0']) {
+    const adapter = new CassTranscriptAdapter({
+      runner: preflightRunner([], () => ok({
+        evidence: [{
+          id: 'ev_synthetic',
+          excerpt: 'A synthetic bounded transcript excerpt.',
+          citation: {
+            conversation_id: 'conversation42',
+            created_at_ms: Date.parse('2026-07-20T12:00:00.000Z'),
+            message_index: zeroMessageIndex,
+          },
+        }],
+      })),
+    });
+    const packet = adapter.retrieve(request({ connectors: ['codex'] }));
+    assert.equal(packet.evidence.length, 1, JSON.stringify(zeroMessageIndex));
+    assert.equal(packet.evidence[0].citation, 'message:0', JSON.stringify(zeroMessageIndex));
+  }
+});
+
+test('lets an explicit top-level session id win over a generic id field', async () => {
+  const row = {
+    id: 'ev_synthetic',
+    session_id: 'conversation42',
+    excerpt: 'A synthetic bounded transcript excerpt.',
+    citation: {
+      conversation_id: 'conversation-should-lose',
+      created_at_ms: Date.parse('2026-07-20T12:00:00.000Z'),
+      line_start: 57,
+    },
+  };
+  const adapter = new CassTranscriptAdapter({
+    runner: preflightRunner([], () => ok({ evidence: [row] })),
+  });
+  const packet = adapter.retrieve(request({ connectors: ['codex'] }));
+  assert.equal(packet.evidence[0].sessionId, 'conversation42');
+  assert.equal(packet.evidence[0].citation, 'line:57');
+
+  const asyncAdapter = new CassTranscriptAdapter({
+    asyncRunner: async (...args) => preflightRunner([], () => ok({ evidence: [row] }))(...args),
+  });
+  const asyncPacket = await asyncAdapter.retrieveAsync(request({ connectors: ['codex'] }));
+  assert.equal(asyncPacket.evidence[0].sessionId, 'conversation42');
+  assert.equal(asyncPacket.evidence[0].citation, 'line:57');
+});
+
 test('accepts only verified CASS-redacted source labels, never arbitrary relative paths', () => {
   const row = {
     excerpt: 'A bounded, untrusted transcript excerpt.',
