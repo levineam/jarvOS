@@ -266,6 +266,41 @@ test('manual notes apply keeps sensitive artifacts local and clears automatic qu
   assert.equal(summary.gates.sensitiveNotesExcludedFromAutomaticQueues, true);
 });
 
+test('manual notes apply recognizes private tags in standard YAML lists', () => {
+  const { notesDir, knowledgeDir, statePath } = fixture();
+  const variants = {
+    'Block Tags.md': 'tags:\n  - private',
+    'Quoted Block Tags.md': 'tags:\n  - "sensitive"',
+    'Flow Tags.md': 'tags: [private, reference]',
+  };
+
+  for (const [name, tags] of Object.entries(variants)) {
+    writeNote(notesDir, name, [
+      '---',
+      'status: active',
+      'type: reference',
+      'project: ""',
+      'created: 2026-06-22',
+      'updated: 2026-06-22',
+      'author: andrew',
+      tags,
+      '---',
+      '',
+      `# ${name.replace(/\.md$/, '')}`,
+      '',
+      'This note must remain out of automatic queues.',
+    ].join('\n'));
+  }
+
+  const report = processOnce(flagsFor({ notesDir, knowledgeDir, statePath, apply: true }), applyOptions());
+
+  assert.equal(report.optimization.sensitiveSkipped, 3);
+  assert.equal(report.optimization.gbrainQueued, 0);
+  assert.equal(report.optimization.memoryWikiQueued, 0);
+  assert.deepEqual(readJson(path.join(knowledgeDir, 'gbrain-import-queue.json')).entries, {});
+  assert.deepEqual(readJson(path.join(knowledgeDir, 'memory-wiki-queue.json')).entries, {});
+});
+
 test('manual notes apply parks unfixable frontmatter without optimizer side effects', () => {
   const { notesDir, knowledgeDir, statePath } = fixture();
   const original = [
