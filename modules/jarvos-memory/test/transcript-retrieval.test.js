@@ -69,6 +69,16 @@ function preflightRunner(calls, pack = () => ok({ results: [] })) {
   };
 }
 
+function preflightRunnerWithSources(sources, pack = () => ok({ results: [] })) {
+  return (command, args) => {
+    const subcommand = args.find((arg) => ['api-version', 'capabilities', 'pack'].includes(arg));
+    if (subcommand === 'api-version') return ok({ version: '0.6.23', contract_version: 1 });
+    if (subcommand === 'capabilities') return ok({ contract_version: 1, commands: ['pack'], modes: ['lexical'], sources });
+    if (subcommand === 'pack') return pack(args);
+    return failed('unexpected command');
+  };
+}
+
 function request(overrides = {}) {
   const result = createTranscriptRequest({
     query: 'deployment decision',
@@ -476,6 +486,29 @@ test('keeps low requested budgets renderable and marks evidence dropped by the e
   assert.equal(packet.omissions.includes('aggregate_budget'), true);
 });
 
+test('requests the CASS pack floor upstream while still bounding the rendered packet to a lower caller budget', () => {
+  const calls = [];
+  const adapter = new CassTranscriptAdapter({
+    runner: preflightRunner(calls, (_command, args) => {
+      const source = args[args.indexOf('--agent') + 1];
+      return ok({
+        results: Array.from({ length: 10 }, (_, index) => ({
+          source,
+          session_id: `${source}-${index}`,
+          timestamp: '2026-07-20T12:00:00.000Z',
+          citation: `turn:${index}`,
+          snippet: 'evidence '.repeat(200),
+        })),
+      });
+    }),
+  });
+  const packet = adapter.retrieve(request({ maxTokens: 600 }));
+  const packCall = calls.find((call) => call.args[0] === 'pack');
+  const upstreamMaxTokens = Number(packCall.args[packCall.args.indexOf('--max-tokens') + 1]);
+  assert.ok(upstreamMaxTokens >= 1024, `upstream --max-tokens=${upstreamMaxTokens}`);
+  assert.ok(packet.renderedTokenCount <= 600, `renderedTokenCount=${packet.renderedTokenCount}`);
+});
+
 test('counts the final renderedTokenCount field inside the aggregate budget', () => {
   const adapter = new CassTranscriptAdapter({
     runner: preflightRunner([], (_command, args) => {
@@ -609,6 +642,188 @@ test('async preflight is shared and keeps synchronous retrieval paths separate',
   assert.equal(preflightCalls, 4);
   assert.equal(first.status, TRANSCRIPT_STATUS.NO_EVIDENCE);
   assert.equal(second.status, TRANSCRIPT_STATUS.NO_EVIDENCE);
+});
+
+test('keeps default request connectors exactly codex and claude_code even when host indexedConnectors lists more', () => {
+  const adapter = new CassTranscriptAdapter({
+    runner: preflightRunner([]),
+    indexedConnectors: ['codex', 'claude_code', 'openclaw', 'hermes'],
+  });
+  const packet = adapter.retrieve({ query: 'defaults check' });
+  assert.deepEqual(packet.requestedConnectors, ['codex', 'claude_code']);
+});
+
+test('reports not_indexed for a requested connector outside host indexedConnectors without pack-querying it', () => {
+  const calls = [];
+  const adapter = new CassTranscriptAdapter({
+    runner: preflightRunner(calls, () => ok({ results: [] })),
+    indexedConnectors: ['codex'],
+  });
+  const packet = adapter.retrieve(request());
+  const claudeOutcome = packet.connectorOutcomes.find((item) => item.connector === 'claude_code');
+  assert.equal(claudeOutcome.status, 'not_indexed');
+  assert.match(packet.omissions.join(' '), /not_indexed:claude_code/);
+  assert.equal(
+    calls.some((call) => call.args[0] === 'pack' && call.args[call.args.indexOf('--agent') + 1] === 'claude'),
+    false,
+  );
+  assert.equal(packet.status, TRANSCRIPT_STATUS.PARTIAL);
+});
+
+test('async retrieval also reports not_indexed and skips pack-querying connectors outside host coverage', async () => {
+  const packCalls = [];
+  const adapter = new CassTranscriptAdapter({
+    runner: () => { throw new Error('sync runner must not be used by retrieveAsync'); },
+    asyncRunner: (_command, args) => {
+      if (args[0] === 'api-version') return Promise.resolve(ok({ version: '0.6.23', contract_version: 1 }));
+      if (args[0] === 'capabilities') return Promise.resolve(ok({ contract_version: 1, commands: ['pack'], modes: ['lexical'], sources: ['codex', 'claude'] }));
+      packCalls.push(args[args.indexOf('--agent') + 1]);
+      return Promise.resolve(ok({ results: [] }));
+    },
+    indexedConnectors: ['codex'],
+  });
+  const packet = await adapter.retrieveAsync(request());
+  const claudeOutcome = packet.connectorOutcomes.find((item) => item.connector === 'claude_code');
+  assert.equal(claudeOutcome.status, 'not_indexed');
+  assert.equal(packCalls.includes('claude_code'), false);
+  assert.equal(packet.status, TRANSCRIPT_STATUS.PARTIAL);
+});
+
+test('treats an explicit empty indexedConnectors list as no host coverage and fails closed', () => {
+  const calls = [];
+  const adapter = new CassTranscriptAdapter({
+    runner: preflightRunner(calls, () => { throw new Error('pack must not be invoked'); }),
+    indexedConnectors: [],
+  });
+  const packet = adapter.retrieve(request());
+  assert.equal(packet.status, TRANSCRIPT_STATUS.UNAVAILABLE);
+  assert.equal(calls.some((call) => call.args[0] === 'pack'), false);
+  assert.match(packet.omissions.join(' '), /not_indexed:codex/);
+  assert.match(packet.omissions.join(' '), /not_indexed:claude_code/);
+});
+
+test('supports openclaw and hermes when the host asserts they are indexed, tagging known evidence roles and unknown otherwise', () => {
+  const adapter = new CassTranscriptAdapter({
+    indexedConnectors: ['openclaw', 'hermes'],
+    runner: preflightRunnerWithSources(['openclaw', 'hermes'], (args) => {
+      const source = args[args.indexOf('--agent') + 1];
+      return ok({
+        results: [{
+          source,
+          session_id: `${source}-session`,
+          timestamp: '2026-07-20T12:00:00.000Z',
+          citation: 'turn:1',
+          snippet: `${source} evidence`,
+          role: source === 'openclaw' ? 'assistant' : 'unspecified-role',
+        }],
+      });
+    }),
+  });
+  const packet = adapter.retrieve(request({ connectors: ['openclaw', 'hermes'] }));
+  assert.equal(packet.status, TRANSCRIPT_STATUS.EVIDENCE_FOUND);
+  const openclawEvidence = packet.evidence.find((item) => item.connector === 'openclaw');
+  const hermesEvidence = packet.evidence.find((item) => item.connector === 'hermes');
+  assert.equal(openclawEvidence.role, 'assistant');
+  assert.equal(hermesEvidence.role, 'unknown');
+});
+
+const MALFORMED_CONNECTOR_NAMES = ['not-a-real-connector', 'constructor', '__proto__', 'toString'];
+
+test('fails closed on each malformed indexedConnectors value without ever invoking the runner (no preflight)', () => {
+  for (const malformed of MALFORMED_CONNECTOR_NAMES) {
+    const adapter = new CassTranscriptAdapter({
+      runner: () => { throw new Error(`runner must not be invoked when indexedConnectors includes ${malformed}`); },
+      indexedConnectors: ['codex', malformed],
+    });
+    const packet = adapter.retrieve(request());
+    assert.equal(packet.status, TRANSCRIPT_STATUS.UNAVAILABLE, malformed);
+    assert.match(packet.omissions.join(' '), /invalid_host_config:indexed_connectors/, malformed);
+  }
+});
+
+test('async retrieval fails closed on each malformed indexedConnectors value without ever invoking the runner (no preflight)', async () => {
+  for (const malformed of MALFORMED_CONNECTOR_NAMES) {
+    const adapter = new CassTranscriptAdapter({
+      runner: () => { throw new Error('sync runner must not be used by retrieveAsync'); },
+      asyncRunner: () => { throw new Error(`async runner must not be invoked when indexedConnectors includes ${malformed}`); },
+      indexedConnectors: ['codex', malformed],
+    });
+    const packet = await adapter.retrieveAsync(request());
+    assert.equal(packet.status, TRANSCRIPT_STATUS.UNAVAILABLE, malformed);
+    assert.match(packet.omissions.join(' '), /invalid_host_config:indexed_connectors/, malformed);
+  }
+});
+
+test('rejects prototype-inherited property names as request connectors', () => {
+  const adapter = new CassTranscriptAdapter({
+    runner: () => { throw new Error('runner must not be invoked when connectors are unsupported'); },
+  });
+  const packet = adapter.retrieve({ query: 'deployment decision', connectors: ['constructor', '__proto__', 'toString'] });
+  assert.equal(packet.status, TRANSCRIPT_STATUS.UNAVAILABLE);
+  assert.match(packet.omissions.join(' '), /unsupported connector/);
+});
+
+test('CLI --indexed-connector limits pack queries to explicit host inventory', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-cass-cli-indexed-'));
+  const fakeCass = path.join(root, 'cass');
+  fs.writeFileSync(fakeCass, `#!/usr/bin/env node
+const args = process.argv.slice(2);
+const command = args[0];
+if (command === 'api-version') process.stdout.write(JSON.stringify({ version: '0.6.23', contract_version: 1 }));
+else if (command === 'capabilities') process.stdout.write(JSON.stringify({ contract_version: 1, commands: ['pack'], modes: ['lexical'], sources: ['codex', 'claude'] }));
+else if (command === 'pack') {
+  const agent = args[args.indexOf('--agent') + 1];
+  if (agent !== 'codex') { process.stderr.write('pack must not be invoked for ' + agent); process.exit(1); }
+  process.stdout.write(JSON.stringify({ results: [{ agent: 'codex', session_id: 'cli-session', timestamp: '2026-07-20T12:00:00.000Z', citation: 'turn:1', snippet: 'CLI evidence' }] }));
+} else process.exit(1);
+`, { mode: 0o700 });
+
+  const cliPath = path.resolve(__dirname, '..', 'scripts', 'search-transcripts.js');
+  const child = spawnSync(process.execPath, [
+    cliPath, 'deployment decision',
+    '--connector', 'codex', '--connector', 'claude_code',
+    '--indexed-connector', 'codex',
+    '--cass-bin', fakeCass, '--json',
+  ], {
+    cwd: root,
+    encoding: 'utf8',
+    env: { PATH: process.env.PATH || '', HOME: root },
+  });
+  assert.equal(child.status, 0, child.stderr);
+  const packet = JSON.parse(child.stdout);
+  assert.equal(packet.status, TRANSCRIPT_STATUS.PARTIAL);
+  const claudeOutcome = packet.connectorOutcomes.find((item) => item.connector === 'claude_code');
+  assert.equal(claudeOutcome.status, 'not_indexed');
+  assert.equal(packet.evidence[0].excerpt, 'CLI evidence');
+});
+
+test('CLI --indexed-connector rejects an unsupported connector slug without broadening coverage', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-cass-cli-indexed-invalid-'));
+  const fakeCass = path.join(root, 'cass');
+  fs.writeFileSync(fakeCass, `#!/usr/bin/env node
+const args = process.argv.slice(2);
+const command = args[0];
+if (command === 'api-version') process.stdout.write(JSON.stringify({ version: '0.6.23', contract_version: 1 }));
+else if (command === 'capabilities') process.stdout.write(JSON.stringify({ contract_version: 1, commands: ['pack'], modes: ['lexical'], sources: ['codex'] }));
+else if (command === 'pack') { process.stderr.write('pack must not be invoked'); process.exit(1); }
+else process.exit(1);
+`, { mode: 0o700 });
+
+  const cliPath = path.resolve(__dirname, '..', 'scripts', 'search-transcripts.js');
+  const child = spawnSync(process.execPath, [
+    cliPath, 'deployment decision',
+    '--connector', 'codex',
+    '--indexed-connector', 'clawdbot',
+    '--cass-bin', fakeCass, '--json',
+  ], {
+    cwd: root,
+    encoding: 'utf8',
+    env: { PATH: process.env.PATH || '', HOME: root },
+  });
+  assert.equal(child.status, 2);
+  const packet = JSON.parse(child.stdout);
+  assert.equal(packet.status, TRANSCRIPT_STATUS.UNAVAILABLE);
+  assert.match(packet.omissions.join(' '), /invalid_host_config:indexed_connectors/);
 });
 
 test('CLI returns the same normalized packet shape and stable usage errors', () => {

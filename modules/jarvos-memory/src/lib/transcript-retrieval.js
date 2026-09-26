@@ -35,7 +35,13 @@ const DEFAULT_TRANSCRIPT_BUDGET = Object.freeze({
   maxExcerptChars: 900,
 });
 
-const SUPPORTED_CONNECTORS = Object.freeze(['codex', 'claude_code']);
+// DEFAULT_CONNECTORS is the implicit request default AND the assumed host
+// index coverage when no host adapter option overrides it. The live index is
+// codex+claude_code only today; openclaw and hermes are supported connector
+// identities but must never be assumed indexed without explicit host
+// assertion (see indexedConnectors on CassTranscriptAdapter).
+const DEFAULT_CONNECTORS = Object.freeze(['codex', 'claude_code']);
+const SUPPORTED_CONNECTORS = Object.freeze(['codex', 'claude_code', 'openclaw', 'hermes']);
 const CONNECTOR_ALIASES = Object.freeze({
   codex: 'codex',
   'codex-cli': 'codex',
@@ -43,6 +49,8 @@ const CONNECTOR_ALIASES = Object.freeze({
   'claude-code': 'claude_code',
   claude_code: 'claude_code',
   'claude code': 'claude_code',
+  openclaw: 'openclaw',
+  hermes: 'hermes',
 });
 
 const DESTINATION_CLASSES = new Set(['on_demand_agent', 'nightly_synthesis']);
@@ -54,6 +62,11 @@ const MAX_QUERY_CHARS = 2000;
 // deliberately above the largest normal no-evidence envelope, so every
 // accepted request can render a bounded packet after evidence is dropped.
 const MIN_TOKEN_BUDGET = 512;
+// The installed CASS binary rejects --max-tokens below this floor
+// (pack-invalid-limit: allowed 1024..200000). Caller-facing aggregate
+// budgets remain honored down to MIN_TOKEN_BUDGET via fitEvidence, which
+// trims the upstream response to the caller's smaller packet budget.
+const CASS_MIN_PACK_TOKENS = 1024;
 const MAX_OUTPUT_BYTES = 2 * 1024 * 1024;
 const DEFAULT_TIMEOUT_MS = 8000;
 
@@ -96,11 +109,11 @@ function parseDate(value, now = new Date()) {
 
 function normalizeConnector(value) {
   const key = asTrimmedString(value).toLowerCase().replace(/\s+/g, ' ');
-  return CONNECTOR_ALIASES[key] || null;
+  return Object.hasOwn(CONNECTOR_ALIASES, key) ? CONNECTOR_ALIASES[key] : null;
 }
 
 function normalizeConnectorList(value) {
-  const values = value === undefined ? SUPPORTED_CONNECTORS : (Array.isArray(value) ? value : [value]);
+  const values = value === undefined ? DEFAULT_CONNECTORS : (Array.isArray(value) ? value : [value]);
   const connectors = [];
   const seen = new Set();
   const errors = [];
@@ -117,6 +130,42 @@ function normalizeConnectorList(value) {
   }
   if (connectors.length === 0 && errors.length === 0) errors.push('at least one connector is required');
   return { connectors, errors };
+}
+
+const KNOWN_EVIDENCE_ROLES = new Set(['user', 'assistant', 'system', 'tool']);
+
+// Evidence role is opaque CASS-reported provenance metadata, never an
+// identity inference. A role of 'user' identifies a transcript turn's
+// conversational role, not the human operator; unrecognized or missing
+// roles are reported as 'unknown' rather than guessed.
+function normalizeEvidenceRole(value) {
+  const key = asTrimmedString(value).toLowerCase();
+  return KNOWN_EVIDENCE_ROLES.has(key) ? key : 'unknown';
+}
+
+// Host-asserted index coverage. This is distinct from the end-user request's
+// `connectors` list: it tells the adapter which connectors the local CASS
+// index actually contains, so retrieval never pack-queries a connector the
+// host has not asserted is indexed. Absent means "assume the current
+// codex+claude_code index" (DEFAULT_CONNECTORS) rather than the full
+// SUPPORTED_CONNECTORS roster, because advertised connector support is not
+// the same as an indexed, queryable connector. An explicit empty array means
+// no connectors are indexed. Any unrecognized value fails closed to an empty
+// list rather than silently broadening coverage.
+function normalizeIndexedConnectorsOption(value) {
+  if (value === undefined) return { ok: true, connectors: [...DEFAULT_CONNECTORS] };
+  const list = Array.isArray(value) ? value : [value];
+  const connectors = [];
+  const seen = new Set();
+  for (const item of list) {
+    const normalized = normalizeConnector(item);
+    if (!normalized) return { ok: false, connectors: [], error: `unsupported indexed connector: ${safeDiagnostic(item)}` };
+    if (!seen.has(normalized)) {
+      seen.add(normalized);
+      connectors.push(normalized);
+    }
+  }
+  return { ok: true, connectors };
 }
 
 function normalizeFreshness(value) {
@@ -416,10 +465,10 @@ function makeInvalidRequestPacket(request, errors) {
   return packet;
 }
 
-function makeUnavailablePacket(request, reason) {
+function makeUnavailablePacket(request, reason, extraOmissions = []) {
   const packet = makePacket(request, {
     warnings: ['CASS transcript retrieval is unavailable'],
-    omissions: [`preflight:${safeDiagnostic(reason, 80)}`],
+    omissions: [`preflight:${safeDiagnostic(reason, 80)}`, ...extraOmissions],
   });
   packet.renderedTokenCount = estimateTranscriptTokens(packet);
   return packet;
@@ -496,6 +545,9 @@ class CassTranscriptAdapter {
     this.asyncRunner = options.asyncRunner || defaultAsyncRunner;
     this.redactExcerpt = options.redactExcerpt || ((text) => redactTranscriptText(text, { classifier: options.classifier }));
     this.clock = typeof options.clock === 'function' ? options.clock : () => new Date();
+    const indexedResult = normalizeIndexedConnectorsOption(options.indexedConnectors);
+    this.indexedConnectors = indexedResult.connectors;
+    this.indexedConnectorsError = indexedResult.ok ? null : indexedResult.error;
     this._preflightResult = null;
     this._preflightPromise = null;
   }
@@ -578,7 +630,7 @@ class CassTranscriptAdapter {
       '--json',
       '--mode', 'lexical',
       '--agent', cassSlug,
-      '--max-tokens', String(request.maxTokens),
+      '--max-tokens', String(Math.max(request.maxTokens, CASS_MIN_PACK_TOKENS)),
       '--max-evidence', String(request.maxEvidence),
       '--max-sessions', String(request.maxSessions),
       '--max-excerpt-chars', String(request.maxExcerptChars),
@@ -654,6 +706,8 @@ class CassTranscriptAdapter {
     const citation = String(citationRaw || fallbackCitation).trim();
     if (!SAFE_CITATION.test(citation)) return { valid: false, reason: 'invalid_citation' };
 
+    const rawRole = nestedValue(row, ['role']) ?? objectValue(cassCitation, ['role']);
+
     return {
       valid: true,
       candidate: {
@@ -661,6 +715,7 @@ class CassTranscriptAdapter {
         connector: logicalConnector,
         cassConnector: cassSlug,
         sessionId,
+        role: normalizeEvidenceRole(rawRole),
         observedAt: timestamp.toISOString(),
         rank: Number(nestedValue(row, ['rank', 'position'])) || null,
         score: Number(nestedValue(row, ['score', 'relevance'])) || 0,
@@ -853,6 +908,21 @@ class CassTranscriptAdapter {
     };
   }
 
+  // Host-asserted coverage gap: distinct from `incompatible` (CASS itself does
+  // not advertise the connector). This connector is never pack-queried.
+  notIndexedConnectorResult(logicalConnector) {
+    return {
+      connector: logicalConnector,
+      searched: false,
+      successful: 0,
+      failed: 1,
+      evidence: [],
+      omissions: ['not_indexed:' + logicalConnector],
+      warnings: [],
+      outcome: { connector: logicalConnector, status: 'not_indexed', evidenceCount: 0 },
+    };
+  }
+
   packInvocation(request, connector) {
     const args = this.buildPackArgs(request, connector.cassSlug);
     const runOptions = {};
@@ -872,6 +942,7 @@ class CassTranscriptAdapter {
         'fresh_partial',
         'freshness_unknown',
         'incompatible',
+        'not_indexed',
         'stale',
         'stale_best_effort',
       ].includes(item.status))
@@ -880,7 +951,7 @@ class CassTranscriptAdapter {
     else packet.status = TRANSCRIPT_STATUS.NO_EVIDENCE;
   }
 
-  finalizePacket(request, results) {
+  finalizePacket(request, results, configOmissions = []) {
     const packet = makePacket(request);
     const evidence = [];
     let successful = 0;
@@ -894,6 +965,7 @@ class CassTranscriptAdapter {
       successful += result.successful;
       failed += result.failed;
     }
+    packet.omissions.push(...configOmissions);
 
     this.setPacketStatus(packet, successful, failed, evidence.length);
     const hadEvidence = evidence.length > 0;
@@ -908,16 +980,30 @@ class CassTranscriptAdapter {
     return packet;
   }
 
+  configOmissions() {
+    return this.indexedConnectorsError
+      ? [`invalid_host_config:indexed_connectors:${safeDiagnostic(this.indexedConnectorsError, 120)}`]
+      : [];
+  }
+
   retrieve(input = {}) {
     const requestResult = createTranscriptRequest(input);
     const request = requestResult.request;
     if (!requestResult.valid) return makeInvalidRequestPacket(request, requestResult.errors);
+
+    if (this.indexedConnectorsError) {
+      return makeUnavailablePacket(request, 'invalid_host_config', this.configOmissions());
+    }
 
     const preflight = this.preflight();
     if (!preflight.ok) return makeUnavailablePacket(request, preflight.reason);
 
     const results = [];
     for (const logicalConnector of request.connectors) {
+      if (!this.indexedConnectors.includes(logicalConnector)) {
+        results.push(this.notIndexedConnectorResult(logicalConnector));
+        continue;
+      }
       const connector = preflight.connectors.find((item) => item.id === logicalConnector);
       if (!connector) {
         results.push(this.incompatibleConnectorResult(logicalConnector));
@@ -927,7 +1013,7 @@ class CassTranscriptAdapter {
       const parsed = this.parseResponse(this.run('pack', invocation.args, invocation.runOptions));
       results.push(this.normalizePackResult(parsed, request, logicalConnector, connector));
     }
-    return this.finalizePacket(request, results);
+    return this.finalizePacket(request, results, this.configOmissions());
   }
 
   async retrieveAsync(input = {}) {
@@ -935,17 +1021,22 @@ class CassTranscriptAdapter {
     const request = requestResult.request;
     if (!requestResult.valid) return makeInvalidRequestPacket(request, requestResult.errors);
 
+    if (this.indexedConnectorsError) {
+      return makeUnavailablePacket(request, 'invalid_host_config', this.configOmissions());
+    }
+
     const preflight = this._preflightResult || await this.preflightAsync();
     if (!preflight.ok) return makeUnavailablePacket(request, preflight.reason);
 
     const results = await Promise.all(request.connectors.map(async (logicalConnector) => {
+      if (!this.indexedConnectors.includes(logicalConnector)) return this.notIndexedConnectorResult(logicalConnector);
       const connector = preflight.connectors.find((item) => item.id === logicalConnector);
       if (!connector) return this.incompatibleConnectorResult(logicalConnector);
       const invocation = this.packInvocation(request, connector);
       const parsed = this.parseResponse(await this.runAsync('pack', invocation.args, invocation.runOptions));
       return this.normalizePackResult(parsed, request, logicalConnector, connector);
     }));
-    return this.finalizePacket(request, results);
+    return this.finalizePacket(request, results, this.configOmissions());
   }
 
 }
@@ -960,6 +1051,7 @@ function retrieveTranscripts(request, options = {}) {
 
 module.exports = {
   CASS_CONTRACT_VERSION,
+  DEFAULT_CONNECTORS,
   DEFAULT_TRANSCRIPT_BUDGET,
   SUPPORTED_CONNECTORS,
   TRANSCRIPT_PACKET_SCHEMA,
