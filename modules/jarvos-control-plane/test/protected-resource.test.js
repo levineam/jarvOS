@@ -143,6 +143,19 @@ test('registry matches identity and evaluates without absolute paths', () => {
   });
   assert.equal(denied.outcome, 'deny');
 
+  const deniedWithUnknownResourceId = registry.evaluate({
+    resourceId: 'unknown-resource',
+    identity: {
+      basename: '2026-07-17.md',
+      parentName: 'Journal',
+      segments: ['x', 'Journal', '2026-07-17.md'],
+    },
+    mutationKind: 'raw-filesystem-write',
+  });
+  assert.equal(deniedWithUnknownResourceId.outcome, 'deny');
+  assert.equal(deniedWithUnknownResourceId.reasonCode, 'raw-write-denied');
+  assert.equal(deniedWithUnknownResourceId.resourceId, 'daily-journal');
+
   const allowed = registry.evaluate({
     identity: {
       basename: 'other.md',
