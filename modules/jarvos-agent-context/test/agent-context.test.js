@@ -604,6 +604,7 @@ test('MCP tool list includes jarvOS tools', () => {
     'jarvos_shared_skills',
     'jarvos_current_work',
     'jarvos_projects_context',
+    'jarvos_projects_roster',
     'jarvos_projects_propose',
     'jarvos_projects_propose_v1',
     'jarvos_recall',
@@ -620,6 +621,14 @@ test('MCP tool list includes jarvOS tools', () => {
     TOOLS.find((tool) => tool.name === 'jarvos_hydrate').description,
     /boot jarvOS/,
   );
+  const roster = TOOLS.find((tool) => tool.name === 'jarvos_projects_roster');
+  assert.deepEqual(roster.inputSchema, { type: 'object', additionalProperties: false, properties: {} });
+  assert.match(roster.description, /jarvos\.projects-roster\/v1/);
+  assert.match(roster.description, /id, kind, parentId, and revision/);
+  assert.match(roster.description, /generation, scope, capturedAt, and complete/);
+  assert.match(roster.description, /identity-only/i);
+  assert.match(roster.description, /no lifecycle, owner, next action, or wait\/revisit signal/);
+  assert.match(roster.description, /does not authorize continuing work/);
   const proposalV1 = TOOLS.find((tool) => tool.name === 'jarvos_projects_propose_v1');
   assert.deepEqual(proposalV1.inputSchema.properties.proposal.required, [
     'kind', 'expectedGeneration', 'record', 'rationale', 'evidenceRefs', 'expiresAt',
@@ -641,6 +650,14 @@ test('MCP tool list includes jarvOS tools', () => {
     'acknowledge-decision', 'defer-decision', 'resume-decision',
   ]);
   assert.equal('credential' in shared.inputSchema.properties, false);
+});
+
+test('MCP jarvos_projects_roster is visible and accepts only an empty argument object', async () => {
+  assert.ok(TOOLS.some((tool) => tool.name === 'jarvos_projects_roster'));
+  await assert.rejects(
+    () => callTool('jarvos_projects_roster', { profile: 'orientation' }),
+    /empty object/,
+  );
 });
 
 test('named Todo MCP actions fail closed when the host work-action binding is absent', async () => {

@@ -240,6 +240,33 @@ function createHostProjectsContextProvider(env = process.env) {
     portfolioProofReceiptPath = null;
   }
 
+  // The portfolio roster binding is a distinct, host-owned whole-portfolio
+  // query and owner-only capability receipt, resolved the same way as the
+  // portfolio proof binding above: an invalid or absent value only disables
+  // readPortfolioRoster, never the ordinary read()/readRoster() surface, and
+  // it never falls back to the orientation query or capability receipt.
+  function isWholePortfolioScope(scope) {
+    return Boolean(scope) && typeof scope === 'object' && !Array.isArray(scope)
+      && Array.isArray(scope.projectIds) && scope.projectIds.length === 0
+      && Array.isArray(scope.outcomeIds) && scope.outcomeIds.length === 0
+      && scope.includeDescendants === true;
+  }
+  const portfolioRosterQueryValue = config.portfolioRosterQuery && typeof config.portfolioRosterQuery === 'object' && !Array.isArray(config.portfolioRosterQuery)
+    ? JSON.parse(JSON.stringify(config.portfolioRosterQuery))
+    : null;
+  const trustedPortfolioRosterQuery = portfolioRosterQueryValue && isWholePortfolioScope(portfolioRosterQueryValue.scope)
+    ? portfolioRosterQueryValue
+    : null;
+  const portfolioRosterCapabilityReceiptValue = config.portfolioRosterCapabilityReceiptPath === undefined
+    ? null
+    : config.portfolioRosterCapabilityReceiptPath;
+  let portfolioRosterCapabilityReceiptPath = portfolioRosterCapabilityReceiptValue === null
+    ? null
+    : resolveAbsoluteFile(portfolioRosterCapabilityReceiptValue, stateRoot, { ownerOnly: true });
+  if (portfolioRosterCapabilityReceiptPath && capabilityReceiptPath && portfolioRosterCapabilityReceiptPath === capabilityReceiptPath) {
+    portfolioRosterCapabilityReceiptPath = null;
+  }
+
   let provider; let providerDigest;
   try {
     const before = fs.readFileSync(providerModule);
@@ -349,6 +376,50 @@ function createHostProjectsContextProvider(env = process.env) {
         });
       } catch (_) {
         return { status: 'unavailable', code: 'ROSTER_UNAVAILABLE' };
+      }
+    },
+    async readPortfolioRoster() {
+      // No request parameter: a caller cannot select query, scope,
+      // capability, path, or limits. An invalid or missing distinct binding
+      // fails closed and never falls back to the orientation query or
+      // capability receipt used by readRoster() above.
+      if (!trustedPortfolioRosterQuery || !portfolioRosterCapabilityReceiptPath || typeof provider.readRoster !== 'function') {
+        return { status: 'unavailable', code: 'PORTFOLIO_ROSTER_UNAVAILABLE' };
+      }
+      const capabilityReceipt = readPrivateJson(portfolioRosterCapabilityReceiptPath);
+      const capabilitySecret = capabilitySecretPath ? readPrivate(capabilitySecretPath) : null;
+      const hostSecret = hostSecretPath ? readPrivate(hostSecretPath) : null;
+      if (!capabilityReceipt) return { status: 'unavailable', code: 'PORTFOLIO_ROSTER_UNAVAILABLE' };
+      try {
+        return await provider.readRoster({
+          workspaceRoot,
+          repositoryRoot,
+          stateRoot,
+          registryStateDir,
+          projectionStateDir,
+          releaseProviderStateDir,
+          registry,
+          projection,
+          capability: capabilityReceipt,
+          capabilitySecret,
+          hostSecret,
+          releaseProviderSecret: hostSecret,
+          hostId: typeof config.hostId === 'string' && config.hostId.trim() ? config.hostId.trim() : undefined,
+          subject: typeof config.subject === 'string' && config.subject.trim() ? config.subject.trim() : undefined,
+          query: JSON.parse(JSON.stringify(trustedPortfolioRosterQuery)),
+          releaseRefreshPolicy: { enabled: false },
+          releaseProducerId: typeof config.releaseProducerId === 'string' && config.releaseProducerId.trim()
+            ? config.releaseProducerId.trim()
+            : undefined,
+          beadsProviderProducerId: typeof config.beadsProviderProducerId === 'string' && config.beadsProviderProducerId.trim()
+            ? config.beadsProviderProducerId.trim()
+            : undefined,
+          todoProviderProducerId: typeof config.todoProviderProducerId === 'string' && config.todoProviderProducerId.trim()
+            ? config.todoProviderProducerId.trim()
+            : undefined,
+        });
+      } catch (_) {
+        return { status: 'unavailable', code: 'PORTFOLIO_ROSTER_UNAVAILABLE' };
       }
     },
     async readPortfolioProof(request) {

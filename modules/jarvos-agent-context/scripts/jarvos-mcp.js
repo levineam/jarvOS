@@ -29,6 +29,7 @@ const {
   synthesizeRecall,
   writeSessionThread,
 } = require('../src/index.js');
+const { createHostProjectsContextProvider } = require('../src/projects-context-bootstrap.js');
 const {
   COMMON_WORK_ACTIONS,
 } = require('../../jarvos-runtime-kit/src/harness-dispatch.js');
@@ -42,6 +43,7 @@ const COMMON_WORK_HARNESS_ENV = 'JARVOS_COMMON_WORK_HARNESS';
 const STRICT_EMPTY_ARGUMENT_TOOLS = new Set([
   'jarvos_journal_health',
   'jarvos_ensure_today_journal',
+  'jarvos_projects_roster',
 ]);
 // Host-only profiles (e.g. 'session-focus') are resolved exclusively through
 // internal readProjectsContext(..., true) callers after protected principal
@@ -255,6 +257,11 @@ const TOOLS = [
         to: { type: 'string', description: 'Optional bounded UTC activity-window end.' },
       },
     },
+  },
+  {
+    name: 'jarvos_projects_roster',
+    description: 'Return the complete host-bound Projects identity roster for the whole portfolio as the existing jarvos.projects-roster/v1 all-or-nothing packet: id, kind, parentId, and revision for every project and outcome, plus generation, scope, capturedAt, and complete. Identity-only: it carries no lifecycle, owner, next action, or wait/revisit signal, and returning it does not authorize continuing work. Missing host binding returns unavailable, never an empty-success roster.',
+    inputSchema: { type: 'object', additionalProperties: false, properties: {} },
   },
   {
     name: 'jarvos_projects_propose',
@@ -846,6 +853,28 @@ async function callTool(name, args = {}, lifecycle = {}) {
     if (mcpProjectsContextProvider) request.provider = mcpProjectsContextProvider;
     const result = await readProjectsContext(request, true);
     return textResult(JSON.stringify(result, null, 2), false);
+  }
+  if (name === 'jarvos_projects_roster') {
+    requireEmptyObjectArguments(args);
+    // No caller-selected query, scope, capability, path, or limits: this is a
+    // strictly no-argument tool. The injected MCP provider (test/host wiring)
+    // wins when present; otherwise fall back to the trusted host bootstrap.
+    // Neither path ever falls back to the orientation query or receipt.
+    let provider;
+    try {
+      provider = mcpProjectsContextProvider || createHostProjectsContextProvider();
+    } catch {
+      provider = null;
+    }
+    if (!provider || typeof provider.readPortfolioRoster !== 'function') {
+      return textResult(JSON.stringify({ status: 'unavailable', code: 'PORTFOLIO_ROSTER_UNAVAILABLE' }, null, 2), false);
+    }
+    try {
+      const result = await provider.readPortfolioRoster();
+      return textResult(JSON.stringify(result, null, 2), false);
+    } catch {
+      return textResult(JSON.stringify({ status: 'unavailable', code: 'PORTFOLIO_ROSTER_UNAVAILABLE' }, null, 2), false);
+    }
   }
   if (name === 'jarvos_projects_propose') {
     const result = await proposeProjectsContext({ ...args, provider: mcpProjectsContextProvider });
