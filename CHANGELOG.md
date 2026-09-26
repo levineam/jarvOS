@@ -2,6 +2,28 @@
 
 Release sections describe user-facing jarvOS changes. Historical public-doc sync entries are preserved below for traceability.
 
+## [0.12.0](https://github.com/levineam/jarvOS/compare/jarvos-bootstrap-v0.11.0...jarvos-bootstrap-v0.12.0) (2026-09-26)
+
+
+### Features
+
+* **memory:** declare transcript index coverage and speaker roles ([#323](https://github.com/levineam/jarvOS/issues/323)) ([b92a0e8](https://github.com/levineam/jarvOS/commit/b92a0e85524ee8937c255f0d8a994d21c848162d))
+* **projects:** add bounded pending proposal transport ([6ac656f](https://github.com/levineam/jarvOS/commit/6ac656f93e916f58d41c2e16f55a105b12065237))
+* **projects:** add bounded pending proposal transport ([6ab1bf4](https://github.com/levineam/jarvOS/commit/6ab1bf442006429de9bc34d9a85062d4102b4fe9))
+* **projects:** expose complete identity roster to MCP callers ([#322](https://github.com/levineam/jarvOS/issues/322)) ([60c2409](https://github.com/levineam/jarvOS/commit/60c24092c9698dceab2979fadbd12f2feaf9c06b))
+
+
+### Bug Fixes
+
+* **journal:** attest scheduled receipts with runner provenance ([#319](https://github.com/levineam/jarvOS/issues/319)) ([b5b949f](https://github.com/levineam/jarvOS/commit/b5b949f378d0333484321ca063ee34beec1bf4ca))
+* **memory:** preserve canonical transcript citations ([#327](https://github.com/levineam/jarvOS/issues/327)) ([cec8484](https://github.com/levineam/jarvOS/commit/cec8484aca147109bd85ab6f3d1f0e4fb0bcb291))
+* **projects:** version pending proposal contract ([39aa6ae](https://github.com/levineam/jarvOS/commit/39aa6ae57060f52aac9eaafa907cb8ea336f85bf))
+* **release:** separate published and candidate lanes ([1ce60ea](https://github.com/levineam/jarvOS/commit/1ce60ea2a463f73badabd4159bada911fed73fe1))
+* **release:** separate published and candidate lanes ([43c0a6d](https://github.com/levineam/jarvOS/commit/43c0a6d662e659b7058334c2fae913682c09d12e))
+* **skills:** admit article generator routing evals safely ([#310](https://github.com/levineam/jarvOS/issues/310)) ([e08b08d](https://github.com/levineam/jarvOS/commit/e08b08d6f380d95cb46025c9bd39777be0b7b987))
+* **skills:** harden active assistant update proof ([#325](https://github.com/levineam/jarvOS/issues/325)) ([a1d331c](https://github.com/levineam/jarvOS/commit/a1d331caef0732ced0a557e663106c2e047a0169))
+* **skills:** keep routine checks meaningful and isolated ([#324](https://github.com/levineam/jarvOS/issues/324)) ([f9da728](https://github.com/levineam/jarvOS/commit/f9da7288e8825fdcc6ba00c47b4ee67679c852e1))
+
 ## [0.11.0](https://github.com/levineam/jarvOS/compare/jarvos-bootstrap-v0.10.0...jarvos-bootstrap-v0.11.0) (2026-09-19)
 
 
