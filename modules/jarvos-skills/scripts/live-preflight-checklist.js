@@ -101,6 +101,7 @@ model probes; use the installed-runtime activation procedure after merge.
       pairs: (dogfoodBody.pairs || []).map((pair) => ({
         harness: pair.harness,
         verification: pair.verification,
+        proofBoundary: 'projection',
         satisfied: pair.satisfied,
       })),
       secondRunNoop: dogfoodBody.secondRunNoop === true,
@@ -203,6 +204,8 @@ model probes; use the installed-runtime activation procedure after merge.
       sourceKind: 'file-backed',
       proofBoundary: 'fresh-session-discovery',
       modelSelection: 'configured-primary',
+      namedAgentRequired: true,
+      expectedAnswerInPrompt: false,
     },
   ));
   items.push(item(
@@ -217,7 +220,11 @@ model probes; use the installed-runtime activation procedure after merge.
       sourceKind: 'file-backed',
       proofBoundary: 'existing-session-next-turn-refresh',
       watchRequired: true,
+      watcherEventRequired: true,
       sameSessionRequired: true,
+      sameGatewayRequired: true,
+      identicalPromptRequired: true,
+      expectedAnswerInPrompt: false,
       managedLibraryRequiresExplicitRefresh: true,
     },
   ));
