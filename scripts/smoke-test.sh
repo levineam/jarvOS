@@ -116,6 +116,7 @@ check_file "runtimes/claude/setup.sh"
 check_executable "runtimes/claude/setup.sh"
 check_file "runtimes/claude/jarvos-session-start-hook.js"
 check_file "runtimes/claude/jarvos-precompact-hook.js"
+check_file "runtimes/claude/jarvos-session-event-hook.js"
 check_file "runtimes/claude/adapter.json"
 
 # ── OpenClaw runtime ──────────────────────────────────────────────────────────

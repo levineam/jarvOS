@@ -6,6 +6,7 @@ MCP_SERVER="$ROOT/modules/jarvos-agent-context/scripts/jarvos-mcp.js"
 HOOK_SCRIPT="$ROOT/runtimes/claude/jarvos-session-start-hook.js"
 TURN_HOOK_SCRIPT="$ROOT/runtimes/claude/jarvos-session-turn-hook.js"
 PRECOMPACT_HOOK_SCRIPT="$ROOT/runtimes/claude/jarvos-precompact-hook.js"
+EVENT_HOOK_SCRIPT="$ROOT/runtimes/claude/jarvos-session-event-hook.js"
 CLAUDE_MD_TEMPLATE="$ROOT/runtimes/claude/templates/CLAUDE.md.template"
 WORK_CONTEXT_SOURCE="$ROOT/modules/jarvos-instruction-projection/content/durable-orientation.md"
 CLAUDE_SETTINGS="${CLAUDE_SETTINGS:-$HOME/.claude/settings.json}"
@@ -96,6 +97,11 @@ if [ ! -f "$PRECOMPACT_HOOK_SCRIPT" ]; then
   exit 1
 fi
 
+if [ ! -f "$EVENT_HOOK_SCRIPT" ]; then
+  echo "jarvOS Claude session-event hook script not found: $EVENT_HOOK_SCRIPT" >&2
+  exit 1
+fi
+
 # The stable entrypoint is what setup registers with Claude, so it must be
 # validated to the same bar as the stable stewardship dispatcher: absolute,
 # not a symlink, an owner-only executable file. An owner-only leaf is not
@@ -176,12 +182,12 @@ else
   echo "Claude Code CLI not found on PATH; skipping Claude Code MCP registration." >&2
 fi
 
-node - "$CLAUDE_SETTINGS" "$HOOK_SCRIPT" "$TURN_HOOK_SCRIPT" "$PRECOMPACT_HOOK_SCRIPT" "$STEWARDSHIP_DISPATCHER" "$CLAUDE_DESKTOP_CONFIG" "$MCP_SERVER" "${JARVOS_STEWARDSHIP_ONLY:-0}" "${JARVOS_MANAGED_HARNESS_ROLLBACK:-0}" "$STEWARDSHIP_BRIDGE_COMMAND" "$STEWARDSHIP_CLAUDE_SESSION_MAP_ROOT" "$STEWARDSHIP_BRIDGE_PATH" "${JARVOS_STAGED_PUBLIC_RUNTIME_ROOT:-}" "$STABLE_MCP_ENTRYPOINT" <<'NODE'
+node - "$CLAUDE_SETTINGS" "$HOOK_SCRIPT" "$TURN_HOOK_SCRIPT" "$PRECOMPACT_HOOK_SCRIPT" "$STEWARDSHIP_DISPATCHER" "$CLAUDE_DESKTOP_CONFIG" "$MCP_SERVER" "${JARVOS_STEWARDSHIP_ONLY:-0}" "${JARVOS_MANAGED_HARNESS_ROLLBACK:-0}" "$STEWARDSHIP_BRIDGE_COMMAND" "$STEWARDSHIP_CLAUDE_SESSION_MAP_ROOT" "$STEWARDSHIP_BRIDGE_PATH" "${JARVOS_STAGED_PUBLIC_RUNTIME_ROOT:-}" "$STABLE_MCP_ENTRYPOINT" "$EVENT_HOOK_SCRIPT" <<'NODE'
 const fs = require('fs');
 const path = require('path');
 const { spawnSync } = require('child_process');
 
-const [settingsPath, hookScript, turnHookScript, precompactHookScript, dispatcher, desktopConfigPath, mcpServer, stewardshipOnly, rollback, bridgeCommand, claudeSessionMapRoot, bridgePath, stagedRoot, stableMcpEntrypoint] = process.argv.slice(2);
+const [settingsPath, hookScript, turnHookScript, precompactHookScript, dispatcher, desktopConfigPath, mcpServer, stewardshipOnly, rollback, bridgeCommand, claudeSessionMapRoot, bridgePath, stagedRoot, stableMcpEntrypoint, eventHookScript] = process.argv.slice(2);
 
 function readJsonFile(filePath, fallback) {
   if (!fs.existsSync(filePath)) return fallback;
@@ -236,11 +242,12 @@ function upsertClaudeCodeHook(settings, bridge) {
   const next = { ...settings };
   const hooks = next.hooks && typeof next.hooks === 'object' && !Array.isArray(next.hooks) ? { ...next.hooks } : {};
 
-  const ownedPaths = [hookScript, turnHookScript, precompactHookScript, dispatcher].filter(Boolean);
+  const ownedPaths = [hookScript, turnHookScript, precompactHookScript, eventHookScript, dispatcher].filter(Boolean);
   if (path.isAbsolute(stagedRoot || '')) {
     ownedPaths.push(path.join(stagedRoot, 'runtimes', 'claude', 'jarvos-session-start-hook.js'));
     ownedPaths.push(path.join(stagedRoot, 'runtimes', 'claude', 'jarvos-session-turn-hook.js'));
     ownedPaths.push(path.join(stagedRoot, 'runtimes', 'claude', 'jarvos-precompact-hook.js'));
+    ownedPaths.push(path.join(stagedRoot, 'runtimes', 'claude', 'jarvos-session-event-hook.js'));
   }
   const escapeRegex = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   // A path is written into the command shell-quoted, and shellQuote renders an
@@ -283,7 +290,15 @@ function upsertClaudeCodeHook(settings, bridge) {
     return [];
   }
 
+  // Probe once per setup run: PreCompact and the optional session-event hooks
+  // are gated on the same advertisement.
+  let probedActions = null;
   function dispatcherActions() {
+    if (probedActions === null) probedActions = probeDispatcherActions();
+    return probedActions;
+  }
+
+  function probeDispatcherActions() {
     if (!dispatcher) return [];
     let probe;
     try {
@@ -346,6 +361,8 @@ function upsertClaudeCodeHook(settings, bridge) {
     upsert('SessionStart', hookScript, null);
     upsert('UserPromptSubmit', turnHookScript, null);
     upsert('PreCompact', precompactHookScript, null);
+    upsert('PostToolUse', eventHookScript, null);
+    upsert('Stop', eventHookScript, null);
   } else {
     upsert('SessionStart', hookScript, commandEntry(hookScript, 'session-start', 'startup|resume|compact'));
     upsert('UserPromptSubmit', turnHookScript, commandEntry(turnHookScript, 'session-turn'));
@@ -362,6 +379,19 @@ function upsertClaudeCodeHook(settings, bridge) {
       upsert('PreCompact', precompactHookScript, commandEntry(precompactHookScript, 'session-precompact', null, true));
     } else {
       upsert('PreCompact', precompactHookScript, null);
+    }
+    // Durable-work collection is an optional dispatcher action. It is
+    // registered only on a managed install whose selected dispatcher
+    // advertises session-event, and is always wrapped fail-open so a later
+    // dispatcher failure never disturbs a tool call or a stop. Anything else
+    // removes only jarvOS-owned entries.
+    if (dispatcher && dispatcherActions().includes('session-event')) {
+      upsert('PostToolUse', eventHookScript, commandEntry(eventHookScript, 'session-event', 'Bash', true));
+      upsert('Stop', eventHookScript, commandEntry(eventHookScript, 'session-event', null, true));
+    } else {
+      if (dispatcher) process.stderr.write('jarvOS: durable-work PostToolUse/Stop hooks not registered -- the selected dispatcher does not advertise session-event.\n');
+      upsert('PostToolUse', eventHookScript, null);
+      upsert('Stop', eventHookScript, null);
     }
   }
   next.hooks = hooks;

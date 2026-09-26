@@ -219,6 +219,24 @@ The standalone `jarvos_current_work` tool keeps its broader default status
 filter of `in_progress`, `todo`, and `blocked`, but is diagnostic compatibility
 only and never supplies startup project orientation.
 
+## Durable work collection (optional)
+
+The characterized Codex hooks contract exposes `SessionStart` and
+`UserPromptSubmit` only; there is no Codex `PostToolUse` or `Stop` hook, and this
+adapter does not invent one. Durable work (`commit`, `merged_pr`,
+`migration_applied`, `deployment_ready`, `production_verified`) is therefore
+collected at the next native `UserPromptSubmit` boundary by the existing
+`jarvos-session-turn-hook.js`, with its own 2-second budget, before the ordinary
+Projects refresh.
+
+Collection runs only when the managed dispatcher sets
+`JARVOS_DURABLE_WORK_COLLECT=1` for a selected runtime whose bridge implements
+`durableWorkCollect`; an unmanaged install never spawns the call. The only
+input the hook passes is the harness-reported session `cwd` as a transient
+candidate root — never the prompt. The result is a metadata-only receipt that
+is validated and never injected into model context. Any failure fails open.
+See [`docs/contracts/durable-work-continuity.md`](../../docs/contracts/durable-work-continuity.md).
+
 ## Operating Rule
 
 Codex should treat jarvOS as the source of truth for memory and capture

@@ -1,0 +1,45 @@
+{
+  "contract": "jarvos.durable-work-conformance-fixtures/v1",
+  "now": "2026-09-23T12:00:00.000Z",
+  "bindingSecret": "public-fixture-binding-secret",
+  "repositories": {
+    "fx-alpha": { "repositoryKey": "example.invalid/fixtures/fx-alpha" },
+    "fx-shared": { "repositoryKey": "example.invalid/fixtures/fx-shared" },
+    "fx-worktree": { "repositoryKey": "example.invalid/fixtures/fx-worktree" },
+    "fx-unmapped": { "repositoryKey": "example.invalid/fixtures/fx-unmapped" }
+  },
+  "projects": [
+    { "key": "alpha", "title": "Fixture Alpha" },
+    { "key": "shared", "title": "Fixture Shared" },
+    { "key": "sharedA", "title": "Fixture Shared Child A", "parent": "shared" },
+    { "key": "sharedB", "title": "Fixture Shared Child B", "parent": "shared" },
+    { "key": "worktree", "title": "Fixture Worktree" },
+    { "key": "pinned", "title": "Fixture Pinned Worktree" }
+  ],
+  "bindings": [
+    { "project": "alpha", "repository": "fx-alpha" },
+    { "project": "sharedA", "repository": "fx-shared", "branch": "feature/a" },
+    { "project": "sharedB", "repository": "fx-shared", "branch": "feature/b" },
+    { "project": "sharedB", "repository": "fx-shared", "pullRequest": 7 },
+    { "project": "worktree", "repository": "fx-worktree" },
+    { "project": "pinned", "repository": "fx-worktree", "worktree": "fx-worktree-linked-pinned" }
+  ],
+  "bindingCases": [
+    { "id": "binding_single_repository", "observation": { "repository": "fx-alpha", "branch": "main" }, "expect": { "status": "bound", "project": "alpha", "tier": "repository" } },
+    { "id": "binding_unmapped", "observation": { "repository": "fx-unmapped", "branch": "main" }, "expect": { "status": "unattributed", "reason": "unmapped" } },
+    { "id": "binding_shared_unqualified", "observation": { "repository": "fx-shared", "branch": "main" }, "expect": { "status": "unattributed", "reason": "unqualified" } },
+    { "id": "binding_shared_branch_qualified", "observation": { "repository": "fx-shared", "branch": "feature/a" }, "expect": { "status": "bound", "project": "sharedA", "tier": "branch" } },
+    { "id": "binding_pull_request_precedes_branch", "observation": { "repository": "fx-shared", "branch": "feature/a", "pullRequest": 7 }, "expect": { "status": "bound", "project": "sharedB", "tier": "pull_request" } },
+    { "id": "binding_linked_worktree_equivalence", "observation": { "repository": "fx-worktree", "worktree": "fx-worktree-linked-other", "branch": "topic" }, "expect": { "status": "bound", "project": "worktree", "tier": "repository" } },
+    { "id": "binding_explicit_worktree_precedence", "observation": { "repository": "fx-worktree", "worktree": "fx-worktree-linked-pinned", "branch": "topic" }, "expect": { "status": "bound", "project": "pinned", "tier": "worktree" } }
+  ],
+  "redactionCases": [
+    { "id": "reject_path_subject", "patch": { "eventKind": "migration_applied", "commitOid": null, "subjectRef": "/Users/example/db/migrations/0001.sql" } },
+    { "id": "reject_url_evidence", "patch": { "evidenceRefs": ["https://example.invalid/pr/1"] } },
+    { "id": "reject_command_subject", "patch": { "eventKind": "deployment_ready", "commitOid": null, "subjectRef": "vercel deploy --prod" } },
+    { "id": "reject_credential_evidence", "patch": { "evidenceRefs": ["credential:fixture-value"] } },
+    { "id": "reject_oversize_subject", "patch": { "eventKind": "production_verified", "commitOid": null, "subjectRef": "verify-000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000" } },
+    { "id": "reject_unknown_key", "patch": { "prompt": "summarize the diff" } },
+    { "id": "reject_commit_without_oid", "patch": { "commitOid": null } }
+  ]
+}
