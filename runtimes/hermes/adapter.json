@@ -38,9 +38,9 @@
   "artifactGeneration": {
     "version": "jarvos-hermes-artifact-generation.v1",
     "releaseRevision": "291c334-route-capability",
-    "generationDigest": "56111cbdd73fe83167704d40abae443147fa4a10c2ea9dbb1421622e19c56bd7",
+    "generationDigest": "22f826c41f8c5f9f7bfab96b2534d0f620589152ee573514cad97f5bfbcf1165",
     "components": [
-      { "name": "skills-manifest", "path": "modules/jarvos-skills/manifest.json", "digest": "975888493063f3e8c3db8a4a65c47f895514b60438d19db7b5b77f8cd913d0df" },
+      { "name": "skills-manifest", "path": "modules/jarvos-skills/manifest.json", "digest": "62a002c88d89ef0f6a3c5fa00493283e1845ede8336463a8756dccbaf904750d" },
       { "name": "context-plugin-metadata", "path": "runtimes/hermes/plugins/jarvos-context/plugin.yaml", "digest": "74f3bc53308a43b119773cf0a0fa5f47019761038d1bada4cc2fd5a1b13370bb" },
       { "name": "context-plugin-code", "path": "runtimes/hermes/plugins/jarvos-context/__init__.py", "digest": "7f05fd28a036af20f26ac46a5d44b60514c51b4da4ad4b01511bc5d6371d3dbf" },
       { "name": "coding-host-adapter", "path": "modules/jarvos-coding/src/adapters/hosts.js", "digest": "a8e24f668cb39ecf50400b5eaca122fdec93aad6df956446ea5f9def22b0f9af" }
