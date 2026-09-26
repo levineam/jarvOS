@@ -137,6 +137,8 @@ test('live-preflight checklist stays non-activating and reports owner-pending st
     sourceKind: 'file-backed',
     proofBoundary: 'fresh-session-discovery',
     modelSelection: 'configured-primary',
+    namedAgentRequired: true,
+    expectedAnswerInPrompt: false,
   });
   assert.equal(byId['active-assistant-existing-session-refresh'].status, 'pending_owner');
   assert.deepEqual(byId['active-assistant-existing-session-refresh'].evidence, {
@@ -147,7 +149,11 @@ test('live-preflight checklist stays non-activating and reports owner-pending st
     sourceKind: 'file-backed',
     proofBoundary: 'existing-session-next-turn-refresh',
     watchRequired: true,
+    watcherEventRequired: true,
     sameSessionRequired: true,
+    sameGatewayRequired: true,
+    identicalPromptRequired: true,
+    expectedAnswerInPrompt: false,
     managedLibraryRequiresExplicitRefresh: true,
   });
   assert.match(byId['active-assistant-fresh-discovery'].summary, /fresh-session discovery/u);
@@ -172,23 +178,31 @@ test('live-preflight checklist stays non-activating and reports owner-pending st
 test('shared-skill runbook keeps Active Assistant discovery and refresh proof boundaries distinct', () => {
   const runbook = fs.readFileSync(DISTRIBUTION_RUNBOOK, 'utf8');
   const shellBlocks = [...runbook.matchAll(/```sh\n([\s\S]*?)\n```/gu)].map((match) => match[1]);
-  const existingSessionBlocks = shellBlocks.filter((block) => block.includes('openclaw agent --session-id <existing-session-id>'));
+  const freshSessionBlock = shellBlocks.find((block) => block.includes('--session-id <fresh-session-id>'));
+  const existingSessionBlocks = shellBlocks.filter((block) => block.includes('--session-id <existing-session-id>'));
   assert.match(runbook, /fresh-session discovery, existing-session refresh/u);
   assert.match(runbook, /effective `skills\.load\.watch` value must be `true`/u);
   assert.match(runbook, /omitted `watch` key counts\s+only when the installed OpenClaw documentation declares its default to be\s+`true`/u);
   assert.match(runbook, /`openclaw-workspace`, `openclaw-extra`,\s+and `openclaw-managed`/u);
   assert.match(runbook, /`openclaw-managed` is OpenClaw's watched,\s+file-backed user skill root/u);
-  assert.match(runbook, /headless `agent exec` surface proves fresh-session discovery only/u);
-  assert.match(runbook, /`openclaw agent exec --help`/u);
+  assert.match(runbook, /openclaw skills list --agent <active-assistant-agent-id> --json/u);
+  assert.match(runbook, /--session-id <fresh-session-id> --json/u);
+  assert.match(freshSessionBlock, /openclaw agent --agent <active-assistant-agent-id>/u);
+  assert.match(freshSessionBlock, /return the marker defined by that skill/u);
+  assert.doesNotMatch(freshSessionBlock, /--(?:deliver|local)/u);
   assert.match(runbook, /`openclaw\s+agent --help` and confirm that `--session-id`, `--message`, `--json`/u);
-  assert.match(runbook, /confirm the watcher event was\s+processed, or wait longer than the installed watcher's documented debounce/u);
+  assert.match(runbook, /Confirm that the watcher event\s+was processed/u);
+  assert.match(runbook, /A\s+debounce wait alone is not watcher evidence/u);
+  assert.match(runbook, /unchanged Gateway process identity/u);
   assert.equal(existingSessionBlocks.length, 2);
   for (const block of existingSessionBlocks) {
-    assert.match(block, /openclaw agent --session-id <existing-session-id> --json\s+\\\s+--message/u);
+    assert.match(block, /openclaw agent --agent <active-assistant-agent-id>\s+\\\s+--session-id <existing-session-id> --json\s+\\\s+--message/u);
     assert.doesNotMatch(block, /--deliver/u);
+    assert.doesNotMatch(block, /--local/u);
+    assert.match(block, /return the marker defined by that skill/u);
   }
-  assert.match(existingSessionBlocks[0], /expected-version-1-behavior/u);
-  assert.match(existingSessionBlocks[1], /expected-version-2-behavior/u);
+  assert.equal(existingSessionBlocks[0], existingSessionBlocks[1]);
+  assert.doesNotMatch(runbook, /expected-(?:new|version-[12])-behavior/u);
   assert.match(runbook, /`openclaw skills library refresh` for the selected\s+session/u);
 });
 
