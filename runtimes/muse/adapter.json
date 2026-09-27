@@ -1,0 +1,205 @@
+{
+  "capabilityDescriptor": {
+    "capabilities": {
+      "codingEntrypoint": {
+        "invoke": {
+          "reason": "CloudAgent coding host is out of scope; Muse is not a jarvOS coding entrypoint.",
+          "status": "unsupported"
+        }
+      },
+      "context": {
+        "currentWork": {
+          "evidence": "sharedAgentContext required tools over HTTP",
+          "status": "supported",
+          "transport": "vault-host remote MCP"
+        },
+        "recall": {
+          "evidence": "sharedAgentContext required tools over HTTP",
+          "status": "supported",
+          "transport": "vault-host remote MCP"
+        },
+        "startupHydration": {
+          "reason": "Muse runs on a separate computer with no session-start hook into the Muse host; automatic startup hydration would target the wrong lifecycle. Hydrate manually with the boot_jarvos prompt or the jarvos_hydrate tool.",
+          "status": "unsupported"
+        }
+      },
+      "egress": {
+        "declare": {
+          "reason": "No public Muse egress declaration is shipped.",
+          "status": "unsupported"
+        },
+        "enforce": {
+          "reason": "Muse owns native egress.",
+          "status": "unsupported"
+        }
+      },
+      "inboundDispatch": {
+        "receive": {
+          "reason": "jarvOS does not expose SendMessage or CloudAgent from this adapter.",
+          "status": "unsupported"
+        },
+        "validate": {
+          "reason": "jarvOS does not expose SendMessage or CloudAgent from this adapter.",
+          "status": "unsupported"
+        }
+      },
+      "lifecycle": {
+        "receipt": {
+          "reason": "No public Muse lifecycle receipt bridge is declared.",
+          "status": "unsupported"
+        }
+      },
+      "notes": {
+        "create": {
+          "evidence": "sharedAgentContext required tools over HTTP",
+          "status": "supported",
+          "transport": "jarvos_create_note MCP tool"
+        },
+        "journalLink": {
+          "evidence": "note-capture contract",
+          "status": "supported",
+          "transport": "jarvos_create_note links from today's journal"
+        },
+        "read": {
+          "evidence": "read-only tools over HTTP; no raw vault file access from the Muse host",
+          "status": "supported",
+          "transport": "jarvos_recall and jarvos_session_thread_read MCP tools"
+        },
+        "update": {
+          "evidence": "writes are operator-supervised",
+          "status": "supported",
+          "transport": "jarvos_session_thread_write MCP tool for checkpoints; note edits go through the shared capture path"
+        }
+      },
+      "scheduledWork": {
+        "participate": {
+          "reason": "Muse scheduled work stays host-owned.",
+          "status": "unsupported"
+        }
+      },
+      "session": {
+        "handoff": {
+          "evidence": "rolling journal-backed session threads",
+          "status": "supported",
+          "transport": "jarvos_session_thread_write / jarvos_session_thread_read for cross-AI continuity"
+        },
+        "startupHook": {
+          "reason": "startupHydration is unsupported; there is no Muse startup hook on the vault host.",
+          "status": "unsupported"
+        }
+      },
+      "skills": {
+        "discover": {
+          "evidence": "skillProjection declaration; manifest-driven projection",
+          "status": "supported",
+          "transport": "jarvos_shared_skills parity over vault-host remote MCP"
+        },
+        "invoke": {
+          "evidence": "raw-skill-bundle renderer; parity tracked per harness",
+          "status": "supported",
+          "transport": "projected skill bundles installed into the Muse workspace skills directory"
+        }
+      },
+      "toolAuthorization": {
+        "declare": {
+          "reason": "No public Muse authorization contract is shipped.",
+          "status": "unsupported"
+        },
+        "enforce": {
+          "reason": "Muse owns native tool authorization.",
+          "status": "unsupported"
+        }
+      }
+    },
+    "harness": "muse",
+    "version": "jarvos-runtime-capability-descriptor.v1"
+  },
+  "configWrites": {
+    "backupBeforeWrite": true,
+    "paths": [
+      "~/.jarvos/muse-mcp.token"
+    ]
+  },
+  "displayName": "Muse",
+  "id": "muse",
+  "operatorNotification": {
+    "contract": "jarvos-operator-notification/v1",
+    "delivery": {
+      "reason": "Local owner configuration chooses a delivery surface; this public adapter does not configure one.",
+      "status": "not-configured"
+    },
+    "version": "jarvos-operator-notification-adapter/v1"
+  },
+  "schemaVersion": 1,
+  "setup": {
+    "script": "setup.sh"
+  },
+  "sharedAgentContext": {
+    "mcpServer": "modules/jarvos-agent-context/scripts/jarvos-mcp.js",
+    "requiredTools": [
+      "jarvos_current_work",
+      "jarvos_recall",
+      "jarvos_create_note",
+      "jarvos_startup_brief",
+      "jarvos_hydrate"
+    ]
+  },
+  "skillProjection": {
+    "version": "jarvos-skill-projection-adapter/v1",
+    "status": "supported",
+    "managedRoot": "~/workspace/skills",
+    "orderedScopes": [
+      "workspace",
+      "user",
+      "managed"
+    ],
+    "scopeRoots": {
+      "workspace": "~/workspace/skills"
+    },
+    "renderer": "raw-skill-bundle",
+    "verificationTier": "exact-path",
+    "bundleAllowlist": [
+      "SKILL.md",
+      "scripts/**",
+      "assets/**",
+      "references/**",
+      "templates/**"
+    ],
+    "alias": {
+      "pattern": "^[a-z][a-z0-9-]{0,63}$",
+      "maxLength": 64,
+      "reservedNames": []
+    },
+    "probeIsolation": {
+      "mode": "receipt-bound-exact-path",
+      "unattended": true
+    },
+    "transport": "jarvos_shared_skills parity over vault-host remote MCP",
+    "reason": "Muse is a remote runtime on a separate computer. Skill bundles are projected over the owner channel and installed into the Muse workspace skills directory; parity is tracked with the jarvos_shared_skills MCP tool. Include/exclude decisions stay owner-approved."
+  },
+  "targets": [
+    {
+      "hydration": {
+        "command": "After the remote connector is reachable, use the boot_jarvos prompt or call the jarvos_hydrate MCP tool at session start.",
+        "mode": "manual",
+        "reason": "startupHydration is unsupported because Muse is a separate computer from the canonical vault."
+      },
+      "id": "muse-http",
+      "kind": "agent-runtime",
+      "mcp": {
+        "registration": "On the VAULT HOST run modules/jarvos-agent-context/scripts/jarvos-mcp-http.js (authenticated Streamable HTTP in front of jarvos-mcp.js; Mcp-Session-Id per initialize). On the Muse host register only the reachable vault-host URL plus bearer token. Do not register stdio MCP on the Muse host disk; that hydrates the wrong machine. The token grants the full MCP surface, not only requiredTools.",
+        "supported": true,
+        "transport": "http"
+      }
+    }
+  ],
+  "unsupportedCapabilities": [
+    {
+      "capability": "startup-hydration",
+      "reason": "Automatic session-start hydration is unsupported; Muse hydrates manually per session."
+    }
+  ],
+  "verification": [
+    "node modules/jarvos-runtime-kit/scripts/jarvos-runtime-kit.js check muse"
+  ]
+}
