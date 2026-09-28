@@ -45,10 +45,19 @@ function runObsidianEval(code, { vaultName, command = process.env.OBSIDIAN_CLI |
   const encoded = Buffer.from(code, 'utf8').toString('base64');
   const parts = encoded.match(new RegExp(`.{1,${chunkBytes}}`, 'g'));
   const stageId = JSON.stringify(crypto.randomUUID());
-  parts.forEach((part, index) => {
-    const staged = evalOnce(`((globalThis.${EVAL_STAGE} ||= {})[${stageId}] ||= [])[${index}] = '${part}'; JSON.stringify(${index})`, options);
-    if (staged !== index) throw new Error(`Obsidian CLI did not stage eval chunk ${index + 1} of ${parts.length}`);
-  });
+  try {
+    parts.forEach((part, index) => {
+      const staged = evalOnce(`((globalThis.${EVAL_STAGE} ||= {})[${stageId}] ||= [])[${index}] = '${part}'; JSON.stringify(${index})`, options);
+      if (staged !== index) throw new Error(`Obsidian CLI did not stage eval chunk ${index + 1} of ${parts.length}`);
+    });
+  } catch (error) {
+    // The program never ran, so callers may treat this as retryable rather
+    // than ambiguous. Drop any chunks that did arrive.
+    try { evalOnce(`delete globalThis.${EVAL_STAGE}?.[${stageId}]; JSON.stringify(true)`, { ...options, deadline: Date.now() + 5_000, emptyRetries: 1 }); } catch { /* best effort */ }
+    const notStaged = new Error(error.message);
+    notStaged.code = 'EVAL_NOT_STAGED';
+    throw notStaged;
+  }
   return evalOnce(`(() => { const stage = globalThis.${EVAL_STAGE} || {}; const parts = stage[${stageId}]; delete stage[${stageId}]; if (!Array.isArray(parts) || parts.length !== ${parts.length} || parts.join('').length !== ${encoded.length}) throw new Error('staged eval is incomplete'); return (0, eval)(new TextDecoder().decode(Uint8Array.from(atob(parts.join('')), c => c.charCodeAt(0)))); })()`, options);
 }
 function payload(operation) { return Buffer.from(JSON.stringify(operation), 'utf8').toString('base64'); }
@@ -201,6 +210,11 @@ function createVaultMutationAdapter({ vaultRoot, vaultId, vaultName = path.basen
       mutationLedger.transition(operation.operationId, 'unknown_after_dispatch', { ownerId, fence: claim.fence });
       return createInternalReceipt({ operation, status: 'unknown_after_dispatch', persistence: 'durable', obsidian: 'unacknowledged' });
     } catch (error) {
+      if (error.code === 'EVAL_NOT_STAGED') {
+        // The mutation program never reached the app; keep it retryable.
+        mutationLedger.transition(operation.operationId, 'planned', { ownerId, fence: claim.fence, evidence: { errorClass: 'eval_not_staged' } });
+        return createInternalReceipt({ operation, status: 'unavailable', lifecycleState: 'planned', persistence: 'durable', obsidian: 'unacknowledged' });
+      }
       mutationLedger.transition(operation.operationId, 'unknown_after_dispatch', { ownerId, fence: claim.fence, evidence: { errorClass: error.code === 'ENOENT' ? 'cli_missing' : 'dispatch_failed' } });
       return createInternalReceipt({ operation, status: 'unknown_after_dispatch', persistence: 'durable', obsidian: 'unacknowledged' });
     }

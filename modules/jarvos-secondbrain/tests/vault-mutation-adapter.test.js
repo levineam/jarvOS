@@ -532,9 +532,17 @@ test('large programs are staged in bounded chunks and run once in the app', () =
 test('a dropped chunk fails before anything runs, and small programs use one call', () => {
   const { runObsidianEval } = require('../adapters/obsidian/src/vault-mutation-adapter');
   let calls = 0;
-  assert.throws(() => runObsidianEval('/*' + 'x'.repeat(9_000) + '*/1', { vaultName: 'V', emptyRetries: 1, execute: () => { calls += 1; return ''; } }), /did not stage eval chunk 1/);
-  assert.equal(calls, 2);
+  const codes = [];
+  assert.throws(() => runObsidianEval('/*' + 'x'.repeat(9_000) + '*/1', { vaultName: 'V', emptyRetries: 1, execute: (_command, args) => { calls += 1; codes.push(args[2]); return ''; } }), (error) => error.code === 'EVAL_NOT_STAGED' && /did not stage eval chunk 1/.test(error.message));
+  assert.ok(codes.at(-1).includes('delete globalThis.__jarvosEvalStage'), 'partial stage is cleaned up');
   calls = 0;
   runObsidianEval('JSON.stringify(1)', { vaultName: 'V', execute: () => { calls += 1; return '=> 1\n'; } });
   assert.equal(calls, 1);
+});
+
+test('a mutation that was never staged stays retryable instead of ambiguous', () => {
+  const adapter = createVaultMutationAdapter({ vaultRoot: '/vault', vaultId: 'vault-a', ledgerPath: ledgerPath(), probe: () => ({ state: 'available', vaultId: 'vault-a' }), evaluate: () => { const error = new Error('did not stage'); error.code = 'EVAL_NOT_STAGED'; throw error; } });
+  const result = adapter.execute(operation());
+  assert.equal(result.status, 'unavailable');
+  assert.equal(adapter.ledger.get(operation().operationId).status, 'planned');
 });
