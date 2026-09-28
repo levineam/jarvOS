@@ -546,3 +546,19 @@ test('a mutation that was never staged stays retryable instead of ambiguous', ()
   assert.equal(result.status, 'unavailable');
   assert.equal(adapter.ledger.get(operation().operationId).status, 'planned');
 });
+
+test('an empty final run is retryable only when the stage proves it never ran', () => {
+  const { runObsidianEval } = require('../adapters/obsidian/src/vault-mutation-adapter');
+  const program = `/* ${'x'.repeat(9_000)} */ JSON.stringify(1)`;
+  const fakeApp = (dropRunner, runnerExecutes) => {
+    const app = vm.createContext({ atob, TextDecoder });
+    return (_command, args) => {
+      const code = args[2].slice('code='.length);
+      const isRunner = code.includes('(0, eval)');
+      if (isRunner && dropRunner) { if (runnerExecutes) vm.runInContext(code, app); return ''; }
+      return `=> ${vm.runInContext(code, app)}\n`;
+    };
+  };
+  assert.throws(() => runObsidianEval(program, { vaultName: 'V', emptyRetries: 0, execute: fakeApp(true, false) }), (error) => error.code === 'EVAL_NOT_STAGED');
+  assert.equal(runObsidianEval(program, { vaultName: 'V', emptyRetries: 0, execute: fakeApp(true, true) }), null);
+});
