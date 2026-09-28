@@ -484,3 +484,57 @@ test('dispatch plus poll across slow CLI round-trips commits under default timeo
     assert.ok(cli.calls.length >= 3, 'probe, dispatch and at least one poll all ran');
   } finally { cli.restore(); }
 });
+
+test('an empty Obsidian CLI response is replayed rather than read as no acknowledgement', () => {
+  const { runObsidianEval } = require('../adapters/obsidian/src/vault-mutation-adapter');
+  const outputs = ['', '', '=> {"queued":true,"token":"t"}\n'];
+  let calls = 0;
+  const result = runObsidianEval('code', { vaultName: 'V', execute: () => { calls += 1; return outputs.shift(); } });
+  assert.deepEqual(result, { queued: true, token: 't' });
+  assert.equal(calls, 3);
+});
+
+test('empty-response replays are bounded and a real no-output result is not replayed', () => {
+  const { runObsidianEval } = require('../adapters/obsidian/src/vault-mutation-adapter');
+  let calls = 0;
+  assert.equal(runObsidianEval('code', { vaultName: 'V', emptyRetries: 2, execute: () => { calls += 1; return ''; } }), null);
+  assert.equal(calls, 3);
+  calls = 0;
+  assert.equal(runObsidianEval('code', { vaultName: 'V', execute: () => { calls += 1; return '(no output)\n'; } }), null);
+  assert.equal(calls, 1);
+});
+
+test('CLI errors still surface immediately without replay', () => {
+  const { runObsidianEval } = require('../adapters/obsidian/src/vault-mutation-adapter');
+  let calls = 0;
+  const failing = () => { calls += 1; const error = new Error('spawn obsidian ENOENT'); error.code = 'ENOENT'; throw error; };
+  assert.throws(() => runObsidianEval('code', { vaultName: 'V', execute: failing }), (error) => error.code === 'ENOENT');
+  assert.equal(calls, 1);
+});
+
+test('large programs are staged in bounded chunks and run once in the app', () => {
+  const { runObsidianEval } = require('../adapters/obsidian/src/vault-mutation-adapter');
+  const app = vm.createContext({ atob, TextDecoder });
+  const sizes = [];
+  const execute = (_command, args) => {
+    const code = args[2].slice('code='.length);
+    sizes.push(Buffer.byteLength(code, 'utf8'));
+    return `=> ${vm.runInContext(code, app)}\n`;
+  };
+  const program = `/* ${'x'.repeat(20_000)} */ (() => { globalThis.runs = (globalThis.runs || 0) + 1; return JSON.stringify({ heading: '📝 Notes' }); })()`;
+  assert.deepEqual(runObsidianEval(program, { vaultName: 'V', execute, chunkBytes: 6_000 }), { heading: '📝 Notes' });
+  assert.ok(sizes.length > 2);
+  assert.ok(sizes.every((size) => size <= 6_200), `every CLI call stays small: ${sizes}`);
+  assert.equal(vm.runInContext('runs', app), 1);
+  assert.equal(vm.runInContext('Object.keys(globalThis.__jarvosEvalStage).length', app), 0);
+});
+
+test('a dropped chunk fails before anything runs, and small programs use one call', () => {
+  const { runObsidianEval } = require('../adapters/obsidian/src/vault-mutation-adapter');
+  let calls = 0;
+  assert.throws(() => runObsidianEval('/*' + 'x'.repeat(9_000) + '*/1', { vaultName: 'V', emptyRetries: 1, execute: () => { calls += 1; return ''; } }), /did not stage eval chunk 1/);
+  assert.equal(calls, 2);
+  calls = 0;
+  runObsidianEval('JSON.stringify(1)', { vaultName: 'V', execute: () => { calls += 1; return '=> 1\n'; } });
+  assert.equal(calls, 1);
+});
