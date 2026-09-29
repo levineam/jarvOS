@@ -150,6 +150,23 @@ parent. Errors never echo the path or secret. Ambient
 (for example tests), but setup must not register that variable. The host service
 enforces authorization.
 
+### Optional shared-skills owner binding
+
+To resolve shared-skill decisions without enabling the broader control plane,
+provide only a dedicated owner credential file:
+
+```bash
+JARVOS_SHARED_SKILLS_OWNER_CREDENTIAL_FILE=/absolute/path/to/shared-skills.credential \
+  ./runtimes/codex/setup.sh
+```
+
+The file uses the same owner-only and trusted-ancestry checks above. Setup
+registers its path, not its value, and configures `jarvos_shared_skills` for
+explicit Codex approval on every call. Without this binding, owner operations
+use an existing control-plane credential binding if present, and otherwise fail
+closed. Owner-bound setup requires `CODEX_CONFIG` to be the same
+`$CODEX_HOME/config.toml` that `codex mcp add` updates.
+
 Optional Todo work-action host bindings follow the same optional `--env`
 pattern and are never required for setup to succeed:
 

@@ -37,6 +37,7 @@ const { invokeCommonWork } = require('../../jarvos-runtime-kit/src/common-work-s
 
 const CREDENTIAL_ENV = 'JARVOS_CONTROL_PLANE_CREDENTIAL';
 const CREDENTIAL_FILE_ENV = 'JARVOS_CONTROL_PLANE_CREDENTIAL_FILE';
+const SHARED_SKILLS_OWNER_CREDENTIAL_FILE_ENV = 'JARVOS_SHARED_SKILLS_OWNER_CREDENTIAL_FILE';
 const SHARED_SKILLS_CONFIG_ENV = 'JARVOS_SHARED_SKILLS_CONFIG_PATH';
 const COMMON_WORK_SERVICE_MODULE_ENV = 'JARVOS_COMMON_WORK_SERVICE_MODULE';
 const COMMON_WORK_HARNESS_ENV = 'JARVOS_COMMON_WORK_HARNESS';
@@ -80,6 +81,21 @@ function resolveHostCredential(env = process.env) {
   const ambient = env[CREDENTIAL_ENV];
   if (typeof ambient === 'string' && ambient.length > 0) return ambient;
   return null;
+}
+
+// Bind shared-skill ownership independently from the broader control plane.
+// Existing authenticated control-plane hosts remain compatible, but callers
+// can never supply either credential through MCP arguments.
+function resolveSharedSkillsOwnerCredential(env = process.env) {
+  const file = env[SHARED_SKILLS_OWNER_CREDENTIAL_FILE_ENV];
+  if (typeof file === 'string' && file.length > 0) {
+    try {
+      return readCredentialFile(file);
+    } catch {
+      throw new Error('shared-skill owner credential file is unusable');
+    }
+  }
+  return resolveHostCredential(env);
 }
 
 // ownerOnly distinguishes two trust policies sharing one ancestry check:
@@ -643,7 +659,7 @@ function sharedSkillsConfigPath(env = process.env, defaultPath = null) {
 }
 
 function requireSharedSkillsOwnerSession() {
-  const credential = resolveHostCredential();
+  const credential = resolveSharedSkillsOwnerCredential();
   if (!credential) throw new Error('shared-skill owner session is not configured for this MCP session');
 }
 
@@ -1095,6 +1111,7 @@ module.exports.promptResult = promptResult;
 module.exports.noteCaptureArgs = noteCaptureArgs;
 module.exports.withToolTimeout = withToolTimeout;
 module.exports.resolveHostCredential = resolveHostCredential;
+module.exports.resolveSharedSkillsOwnerCredential = resolveSharedSkillsOwnerCredential;
 module.exports.readCredentialFile = readCredentialFile;
 module.exports.requireEmptyObjectArguments = requireEmptyObjectArguments;
 module.exports.CREDENTIAL_ENV = CREDENTIAL_ENV;
