@@ -8,6 +8,11 @@ const { createInternalReceipt, hashUtf8, validateOperation, validateVaultRelativ
 const { createVaultMutationLedger } = require('./vault-mutation-ledger');
 
 const RESULT_STORE = '__jarvosVaultMutationResults';
+// Obsidian CLI eval round-trips take ~1.5-2.5 s. The capability probe is one
+// round-trip and gets the runObsidianEval default; the dispatch/poll deadline
+// must cover the dispatch plus at least one poll, each at ~2.5 s, with headroom.
+const DEFAULT_PROBE_TIMEOUT_MS = 10_000;
+const DEFAULT_POLL_TIMEOUT_MS = 10_000;
 const CAPABILITY_STATES = Object.freeze(['available', 'cli_missing', 'app_stopped', 'app_busy', 'app_unreachable', 'cli_disabled', 'cli_unsupported', 'wrong_vault', 'api_incompatible']);
 
 function sleepSync(milliseconds) {
@@ -79,7 +84,7 @@ function buildObsidianInvariantProgram(operation, inspectionToken, inspectionNon
 function tokenProgram(operationId) { return `JSON.stringify(globalThis.${RESULT_STORE}?.[${JSON.stringify(operationId)}] || null)`; }
 function cleanupProgram(operationId) { return `delete globalThis.${RESULT_STORE}?.[${JSON.stringify(operationId)}]; JSON.stringify(true)`; }
 
-function createVaultMutationAdapter({ vaultRoot, vaultId, vaultName = path.basename(vaultRoot || ''), ledger, ledgerPath, transforms, evaluate, maxPollAttempts = 40, pollIntervalMs = 50, pollTimeoutMs = 2_500, probe, ownerId = crypto.randomUUID(), opportunisticDrain, allowDeleteOperation } = {}) {
+function createVaultMutationAdapter({ vaultRoot, vaultId, vaultName = path.basename(vaultRoot || ''), ledger, ledgerPath, transforms, evaluate, maxPollAttempts = 40, pollIntervalMs = 50, pollTimeoutMs = DEFAULT_POLL_TIMEOUT_MS, probeTimeoutMs = DEFAULT_PROBE_TIMEOUT_MS, probe, ownerId = crypto.randomUUID(), opportunisticDrain, allowDeleteOperation } = {}) {
   if (typeof vaultRoot !== 'string' || !path.isAbsolute(vaultRoot)) throw new Error('vaultRoot must be absolute');
   if (typeof vaultId !== 'string' || !vaultId) throw new Error('vaultId is required');
   // Keep operational intent outside authored vault content. Hosts normally supply
@@ -96,7 +101,7 @@ function createVaultMutationAdapter({ vaultRoot, vaultId, vaultName = path.basen
   const run = evaluate || ((code, timeoutMs = pollTimeoutMs) => runObsidianEval(code, { vaultName, timeoutMs }));
   const deleteAllowed = (operation) => operation.operationKind !== 'delete' || (typeof allowDeleteOperation === 'function' && allowDeleteOperation(operation) === true);
   let draining = false;
-  function capability() { if (probe) return probe(); try { const inspected = run(`JSON.stringify({ vaultName: app?.vault?.getName?.(), hasVault: Boolean(app?.vault?.create && app?.vault?.process && app?.vault?.read) })`); if (!inspected?.hasVault) return { state: 'api_incompatible' }; return inspected.vaultName && inspected.vaultName !== vaultName ? { state: 'wrong_vault' } : { state: 'available', vaultId }; } catch (error) { const message = String(error.message || ''); if (error.code === 'ENOENT') return { state: 'cli_missing' }; if (error.code === 'ETIMEDOUT' || /timed?\s*out|busy|temporar/i.test(message)) return { state: 'app_busy' }; if (/disabled/i.test(message)) return { state: 'cli_disabled' }; if (/unsupported|unknown command|eval/i.test(message)) return { state: 'cli_unsupported' }; if (/not running|no running|connection refused|failed to connect/i.test(message)) return { state: 'app_stopped' }; return { state: 'app_unreachable' }; } }
+  function capability() { if (probe) return probe(); try { const inspected = run(`JSON.stringify({ vaultName: app?.vault?.getName?.(), hasVault: Boolean(app?.vault?.create && app?.vault?.process && app?.vault?.read) })`, probeTimeoutMs); if (!inspected?.hasVault) return { state: 'api_incompatible' }; return inspected.vaultName && inspected.vaultName !== vaultName ? { state: 'wrong_vault' } : { state: 'available', vaultId }; } catch (error) { const message = String(error.message || ''); if (error.code === 'ENOENT') return { state: 'cli_missing' }; if (error.code === 'ETIMEDOUT' || /timed?\s*out|busy|temporar/i.test(message)) return { state: 'app_busy' }; if (/disabled/i.test(message)) return { state: 'cli_disabled' }; if (/unsupported|unknown command|eval/i.test(message)) return { state: 'cli_unsupported' }; if (/not running|no running|connection refused|failed to connect/i.test(message)) return { state: 'app_stopped' }; return { state: 'app_unreachable' }; } }
   function inspectInvariant(input) {
     const operation = validateOperation(input);
     if (operation.vaultId !== vaultId) return { status: 'unavailable' };
