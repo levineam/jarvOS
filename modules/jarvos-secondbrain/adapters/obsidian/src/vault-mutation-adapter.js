@@ -114,7 +114,9 @@ function createVaultMutationAdapter({ vaultRoot, vaultId, vaultName = path.basen
       const inspectionNonce = crypto.randomUUID();
       const deadline = Date.now() + pollTimeoutMs;
       const queued = run(buildObsidianInvariantProgram(operation, inspectionToken, inspectionNonce), Math.max(1, deadline - Date.now()));
-      if (!queued?.queued || queued.token !== inspectionToken) return { status: 'unavailable' };
+      // A successful CLI eval may omit stdout even though it started the read.
+      // Only a missing receipt may fall through; an explicit bad receipt cannot.
+      if (queued !== null && (queued?.queued !== true || queued.token !== inspectionToken)) return { status: 'unavailable' };
       let result = null;
       for (let attempt = 0; attempt < maxPollAttempts; attempt += 1) {
         const remaining = deadline - Date.now();

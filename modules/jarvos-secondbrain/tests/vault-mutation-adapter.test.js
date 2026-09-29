@@ -81,6 +81,41 @@ test('read-only invariant inspection returns only Obsidian-owned status evidence
   assert.doesNotMatch(buildObsidianInvariantProgram(operation()), /app\.vault\.create|app\.vault\.process/);
 });
 
+test('response-less inspection bootstrap polls its fresh token and requires a proven invariant', () => {
+  for (const terminal of [{ status: 'satisfied', invariant: true }, { status: 'satisfied' }, { status: 'satisfied', invariant: false }, null]) {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-empty-inspection-'));
+    try {
+      let token;
+      let calls = 0;
+      const adapter = createVaultMutationAdapter({
+        vaultRoot: root, vaultId: 'vault-a', ledgerPath: path.join(root, 'ledger.json'),
+        probe: () => ({ state: 'available', vaultId: 'vault-a' }), maxPollAttempts: 1,
+        evaluate(code) {
+          calls += 1;
+          if (calls === 1) { token = inspectionToken(code); return null; }
+          assert.ok(code.includes(JSON.stringify(token)), 'poll and cleanup must use the fresh inspection token');
+          return terminal;
+        },
+      });
+      assert.equal(adapter.acknowledgeIfSatisfied(operation()), terminal?.invariant === true);
+      assert.equal(calls, 3, 'one bootstrap, one bounded poll, one cleanup');
+      assert.equal(adapter.ledger.get(operation().operationId)?.status, terminal?.invariant === true ? 'acknowledged' : undefined);
+    } finally { fs.rmSync(root, { recursive: true, force: true }); }
+  }
+});
+
+test('inspection rejects malformed and wrong-token bootstrap receipts before polling', () => {
+  for (const receipt of [{}, false, '', { queued: true, token: 'wrong-token' }, (code) => ({ queued: 'true', token: inspectionToken(code) })]) {
+    let calls = 0;
+    const adapter = createVaultMutationAdapter({
+      vaultRoot: '/vault', vaultId: 'vault-a', probe: () => ({ state: 'available' }),
+      evaluate: (code) => { calls += 1; return typeof receipt === 'function' ? receipt(code) : receipt; }, maxPollAttempts: 1,
+    });
+    assert.deepEqual(adapter.inspectInvariant(operation()), { status: 'unavailable' });
+    assert.equal(calls, 1);
+  }
+});
+
 test('inspection uses an opaque result token and leaves an in-flight mutation token intact', () => {
   const mutation = operation(); const inspection = 'inspection-token';
   const file = { path: mutation.vaultRelativePath, content: 'hello' };

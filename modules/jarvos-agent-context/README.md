@@ -155,15 +155,18 @@ configured Notes directory, and every write links that note from today's journal
 through the same `@jarvos/secondbrain` note and journal helpers used by
 `jarvos_create_note`.
 
-Write results keep three facts separate:
+Write results keep mutation, backlink and sync states separate:
 
-- **Note persistence** says whether Obsidian acknowledged the note, or whether it is only saved locally with reconciliation pending.
-- **Journal backlink** says `linked`, `deferred`, or `failed` independently of the note.
+- **Mutation status** preserves `unknown_after_dispatch` when a dispatched write lacks acknowledgement. The note may already exist; this is not permission to repeat the checkpoint. `blocked` can mean an earlier operation is unresolved.
+- **Operation** identifies the existing session-thread mutation for host-owned recovery. Read the thread, then have the owning host reconcile that operation; a fresh write creates a new checkpoint, not a status query.
+- **Obsidian acknowledgement** remains independent of local file presence. Durable operation intent alone does not prove saved note bytes.
+- **Journal backlink** says `linked`, `deferred`, `pending` (dispatch not attempted yet), or `failed` independently of the note.
 - **Sync** says `converged`, `pending`, `diverged`, or `unknown`; an Obsidian acknowledgement alone never proves remote Sync convergence.
 
-MCP write responses expose only these bounded states and the note title. They
-do not include local paths, content hashes, operation identifiers, timestamps,
-or private adapter evidence. Session-thread checkpoints use a latest-content
+MCP session-thread write responses expose these bounded states, the operation
+identifier and the note title. They do not include local paths, content hashes,
+timestamps or private adapter evidence. General public capture projections
+continue to omit operation identifiers. Session-thread checkpoints use a latest-content
 append transform so a concurrent Obsidian or mobile edit is preserved.
 
 Host reflex:
