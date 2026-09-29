@@ -636,9 +636,10 @@ function requireEmptyObjectArguments(args) {
   }
 }
 
-function sharedSkillsConfigPath(env = process.env) {
+function sharedSkillsConfigPath(env = process.env, defaultPath = null) {
   const value = env[SHARED_SKILLS_CONFIG_ENV];
-  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+  if (typeof value === 'string' && value.trim()) return value.trim();
+  return typeof defaultPath === 'function' ? defaultPath() : defaultPath || undefined;
 }
 
 function requireSharedSkillsOwnerSession() {
@@ -738,7 +739,7 @@ async function callTool(name, args = {}, lifecycle = {}) {
   }
   if (name === 'jarvos_shared_skills') {
     const skills = loadSharedSkills();
-    const configPath = sharedSkillsConfigPath();
+    const configPath = sharedSkillsConfigPath(process.env, () => skills.loadConfig().path);
     const operation = args.operation;
     if (operation === 'status') {
       return textResult(JSON.stringify(skills.sharedStatusOperator({ configPath }), null, 2));
@@ -1099,3 +1100,4 @@ module.exports.requireEmptyObjectArguments = requireEmptyObjectArguments;
 module.exports.CREDENTIAL_ENV = CREDENTIAL_ENV;
 module.exports.CREDENTIAL_FILE_ENV = CREDENTIAL_FILE_ENV;
 module.exports.COMMON_WORK_HOST_UNAVAILABLE = COMMON_WORK_HOST_UNAVAILABLE;
+module.exports.sharedSkillsConfigPath = sharedSkillsConfigPath;
