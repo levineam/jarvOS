@@ -34,6 +34,7 @@ const {
   TOOLS,
   withToolTimeout,
   resolveHostCredential,
+  resolveSharedSkillsOwnerCredential,
   readCredentialFile,
   CREDENTIAL_ENV,
   CREDENTIAL_FILE_ENV,
@@ -732,8 +733,10 @@ test('Todo MCP strips caller-supplied authorization and evidence before invoking
 test('shared-skill MCP mutation operations fail closed without a host-bound owner session', async () => {
   const previous = process.env.JARVOS_CONTROL_PLANE_CREDENTIAL;
   const previousFile = process.env.JARVOS_CONTROL_PLANE_CREDENTIAL_FILE;
+  const previousSharedSkillsFile = process.env.JARVOS_SHARED_SKILLS_OWNER_CREDENTIAL_FILE;
   delete process.env.JARVOS_CONTROL_PLANE_CREDENTIAL;
   delete process.env.JARVOS_CONTROL_PLANE_CREDENTIAL_FILE;
+  delete process.env.JARVOS_SHARED_SKILLS_OWNER_CREDENTIAL_FILE;
   try {
     for (const operation of ['inventory', 'plan', 'repair', 'exclude', 'include', 'decisions', 'explain-decision', 'resolve-decision', 'acknowledge-decision', 'defer-decision', 'resume-decision']) {
       const result = await callTool('jarvos_shared_skills', { operation, id: 'private-skill' });
@@ -746,6 +749,8 @@ test('shared-skill MCP mutation operations fail closed without a host-bound owne
     else process.env.JARVOS_CONTROL_PLANE_CREDENTIAL = previous;
     if (previousFile === undefined) delete process.env.JARVOS_CONTROL_PLANE_CREDENTIAL_FILE;
     else process.env.JARVOS_CONTROL_PLANE_CREDENTIAL_FILE = previousFile;
+    if (previousSharedSkillsFile === undefined) delete process.env.JARVOS_SHARED_SKILLS_OWNER_CREDENTIAL_FILE;
+    else process.env.JARVOS_SHARED_SKILLS_OWNER_CREDENTIAL_FILE = previousSharedSkillsFile;
   }
 });
 
@@ -879,14 +884,25 @@ test('shared-skill MCP decision operations use opaque references and reject stal
   }).pending[0];
   const previousConfig = process.env.JARVOS_SHARED_SKILLS_CONFIG_PATH;
   const previousCredential = process.env.JARVOS_CONTROL_PLANE_CREDENTIAL;
+  const previousCredentialFile = process.env.JARVOS_CONTROL_PLANE_CREDENTIAL_FILE;
+  const previousOwnerCredentialFile = process.env.JARVOS_SHARED_SKILLS_OWNER_CREDENTIAL_FILE;
+  const ownerCredentialFile = path.join(root, 'shared-skills-owner.credential');
+  fs.writeFileSync(ownerCredentialFile, 'test-owner-session\n', { encoding: 'utf8', mode: 0o600 });
+  fs.chmodSync(ownerCredentialFile, 0o600);
   process.env.JARVOS_SHARED_SKILLS_CONFIG_PATH = configPath;
-  process.env.JARVOS_CONTROL_PLANE_CREDENTIAL = 'test-owner-session';
+  delete process.env.JARVOS_CONTROL_PLANE_CREDENTIAL;
+  delete process.env.JARVOS_CONTROL_PLANE_CREDENTIAL_FILE;
+  process.env.JARVOS_SHARED_SKILLS_OWNER_CREDENTIAL_FILE = ownerCredentialFile;
   try {
     const listed = await callTool('jarvos_shared_skills', { operation: 'decisions' });
     assert.equal(listed.isError, false);
     const listedPayload = JSON.parse(listed.content[0].text);
     assert.equal(listedPayload.decisions[0].decisionReference, seeded.decisionReference);
     assert.doesNotMatch(listed.content[0].text, /absolutePath|SKILL\.md/);
+
+    const controlPlaneResult = await callTool('jarvos_control_plane', { operation: 'activation-status' });
+    assert.equal(controlPlaneResult.isError, true);
+    assert.match(controlPlaneResult.content[0].text, /credential is not configured/);
 
     const explained = await callTool('jarvos_shared_skills', {
       operation: 'explain-decision', decisionReference: seeded.decisionReference,
@@ -939,6 +955,10 @@ test('shared-skill MCP decision operations use opaque references and reject stal
     else process.env.JARVOS_SHARED_SKILLS_CONFIG_PATH = previousConfig;
     if (previousCredential === undefined) delete process.env.JARVOS_CONTROL_PLANE_CREDENTIAL;
     else process.env.JARVOS_CONTROL_PLANE_CREDENTIAL = previousCredential;
+    if (previousCredentialFile === undefined) delete process.env.JARVOS_CONTROL_PLANE_CREDENTIAL_FILE;
+    else process.env.JARVOS_CONTROL_PLANE_CREDENTIAL_FILE = previousCredentialFile;
+    if (previousOwnerCredentialFile === undefined) delete process.env.JARVOS_SHARED_SKILLS_OWNER_CREDENTIAL_FILE;
+    else process.env.JARVOS_SHARED_SKILLS_OWNER_CREDENTIAL_FILE = previousOwnerCredentialFile;
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
@@ -1170,6 +1190,9 @@ test('Codex setup registers only credential file path, never the secret value', 
   // Persisted MCP registration must use the file-path binding.
   assert.match(source, /JARVOS_CONTROL_PLANE_CREDENTIAL_FILE/);
   assert.match(source, /--env "JARVOS_CONTROL_PLANE_CREDENTIAL_FILE=\$CONTROL_PLANE_CREDENTIAL_FILE"/);
+  assert.match(source, /--env "JARVOS_SHARED_SKILLS_OWNER_CREDENTIAL_FILE=\$SHARED_SKILLS_OWNER_CREDENTIAL_FILE"/);
+  assert.match(source, /\[mcp_servers\.jarvos\.tools\.jarvos_shared_skills\]/);
+  assert.match(source, /approval_mode = "prompt"/);
   // Never put the secret on codex mcp add argv / config.
   // Negative lookahead: CREDENTIAL_FILE must not count as the forbidden binding.
   assert.doesNotMatch(source, /--env\s+["']?JARVOS_CONTROL_PLANE_CREDENTIAL(?!_FILE)=/);
@@ -1180,21 +1203,24 @@ test('Codex setup registers only credential file path, never the secret value', 
 
 // Executable setup.sh branches with a fake codex on PATH and a temp CODEX_CONFIG.
 // Never mutates the real ~/.codex/config.toml.
-function runCodexSetup(envOverrides = {}) {
+function runCodexSetup(envOverrides = {}, configSeed = '') {
   const repoRoot = path.join(__dirname, '..', '..', '..');
   const setupPath = path.join(repoRoot, 'runtimes', 'codex', 'setup.sh');
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-codex-setup-'));
   const binDir = path.join(tmp, 'bin');
   const codexLog = path.join(tmp, 'codex-args.log');
-  const configPath = path.join(tmp, 'codex-config.toml');
+  const configPath = path.join(tmp, 'config.toml');
   fs.mkdirSync(binDir, { recursive: true });
-  fs.writeFileSync(configPath, '', 'utf8');
+  fs.writeFileSync(configPath, configSeed, 'utf8');
   // Fake codex records invocations and pretends jarvos is not registered.
   const fakeCodex = [
     '#!/usr/bin/env bash',
     'set -euo pipefail',
     `printf '%s\\n' "$*" >> ${JSON.stringify(codexLog)}`,
     'if [ "${1:-}" = "mcp" ] && [ "${2:-}" = "get" ]; then exit 1; fi',
+    'if [ "${1:-}" = "mcp" ] && [ "${2:-}" = "add" ] && [ "${JARVOS_TEST_CODEX_CORRUPT_AFTER_ADD:-0}" = "1" ]; then',
+    '  printf \'\\n[mcp_servers.jarvos.tools."jarvos_shared_skills"]\\napproval_mode = "approve"\\n\' >> "$CODEX_CONFIG"',
+    'fi',
     'exit 0',
     '',
   ].join('\n');
@@ -1205,37 +1231,41 @@ function runCodexSetup(envOverrides = {}) {
   const env = {
     ...process.env,
     PATH: `${binDir}${path.delimiter}${process.env.PATH || ''}`,
+    CODEX_HOME: tmp,
     CODEX_CONFIG: configPath,
     // Public-only setup: clear private host bindings unless the caller sets them.
     JARVOS_CONTROL_PLANE_SERVICE_MODULE: '',
     JARVOS_CONTROL_PLANE_CREDENTIAL_FILE: '',
+    JARVOS_SHARED_SKILLS_OWNER_CREDENTIAL_FILE: '',
     JARVOS_WORK_ACTION_SERVICE_MODULE: '',
     JARVOS_PROJECTS_CONTEXT_CONFIG: '',
     JARVOS_STEWARDSHIP_BRIDGE_COMMAND: '',
     JARVOS_STEWARDSHIP_CODEX_SESSION_MAP_ROOT: '',
     JARVOS_STEWARDSHIP_STABLE_ROOT: '',
+    JARVOS_TEST_CODEX_CORRUPT_AFTER_ADD: '',
     ...envOverrides,
   };
   // Empty string override should delete so setup sees "unset".
   if (!env.JARVOS_CONTROL_PLANE_SERVICE_MODULE) delete env.JARVOS_CONTROL_PLANE_SERVICE_MODULE;
   if (!env.JARVOS_CONTROL_PLANE_CREDENTIAL_FILE) delete env.JARVOS_CONTROL_PLANE_CREDENTIAL_FILE;
+  if (!env.JARVOS_SHARED_SKILLS_OWNER_CREDENTIAL_FILE) delete env.JARVOS_SHARED_SKILLS_OWNER_CREDENTIAL_FILE;
   if (!env.JARVOS_WORK_ACTION_SERVICE_MODULE) delete env.JARVOS_WORK_ACTION_SERVICE_MODULE;
   if (!env.JARVOS_PROJECTS_CONTEXT_CONFIG) delete env.JARVOS_PROJECTS_CONTEXT_CONFIG;
   if (!env.JARVOS_STEWARDSHIP_BRIDGE_COMMAND) delete env.JARVOS_STEWARDSHIP_BRIDGE_COMMAND;
   if (!env.JARVOS_STEWARDSHIP_CODEX_SESSION_MAP_ROOT) delete env.JARVOS_STEWARDSHIP_CODEX_SESSION_MAP_ROOT;
   if (!env.JARVOS_STEWARDSHIP_STABLE_ROOT) delete env.JARVOS_STEWARDSHIP_STABLE_ROOT;
+  if (!env.JARVOS_TEST_CODEX_CORRUPT_AFTER_ADD) delete env.JARVOS_TEST_CODEX_CORRUPT_AFTER_ADD;
 
-  const result = spawnSync('bash', [setupPath], {
-    encoding: 'utf8',
-    cwd: repoRoot,
-    env,
-    maxBuffer: 4 * 1024 * 1024,
+  const rerun = () => spawnSync('bash', [setupPath], {
+    encoding: 'utf8', cwd: repoRoot, env, maxBuffer: 4 * 1024 * 1024,
   });
+  const result = rerun();
   return {
     tmp,
     configPath,
     codexLog,
     result,
+    rerun,
     cleanup() {
       fs.rmSync(tmp, { recursive: true, force: true });
     },
@@ -1252,13 +1282,126 @@ test('Codex setup succeeds publicly with no control-plane host pair', () => {
     assert.match(log, /mcp add /);
     assert.doesNotMatch(log, /JARVOS_CONTROL_PLANE_SERVICE_MODULE=/);
     assert.doesNotMatch(log, /JARVOS_CONTROL_PLANE_CREDENTIAL_FILE=/);
+    assert.doesNotMatch(log, /JARVOS_SHARED_SKILLS_OWNER_CREDENTIAL_FILE=/);
     assert.doesNotMatch(log, /JARVOS_CONTROL_PLANE_CREDENTIAL=/);
     assert.doesNotMatch(log, /JARVOS_WORK_ACTION_SERVICE_MODULE=/);
     assert.doesNotMatch(log, /JARVOS_PROJECTS_CONTEXT_CONFIG=/);
     // Real user config must not be touched; only the temp CODEX_CONFIG may change.
     assert.ok(fs.existsSync(run.configPath));
+    assert.match(fs.readFileSync(run.configPath, 'utf8'), /\[mcp_servers\.jarvos\.tools\.jarvos_shared_skills\]\napproval_mode = "prompt"/);
+    assert.equal(run.rerun().status, 0);
+    assert.equal((fs.readFileSync(run.configPath, 'utf8').match(/\[mcp_servers\.jarvos\.tools\.jarvos_shared_skills\]/g) || []).length, 1);
   } finally {
     run.cleanup();
+  }
+});
+
+test('Codex setup refuses an unrecognized existing shared-skills approval form', () => {
+  const run = runCodexSetup({}, '[mcp_servers.jarvos.tools."jarvos_shared_skills"]\napproval_mode = "approve"\n');
+  try {
+    assert.notEqual(run.result.status, 0);
+    assert.match(run.result.stderr, /unrecognized jarvos_shared_skills tool config/);
+    assert.ok(!fs.existsSync(run.codexLog) || !fs.readFileSync(run.codexLog, 'utf8').includes('mcp add'));
+  } finally {
+    run.cleanup();
+  }
+});
+
+test('Codex setup upgrades an existing shared-skills gate and preserves quoted keys', () => {
+  const run = runCodexSetup({}, [
+    '[mcp_servers.jarvos.tools.jarvos_shared_skills]',
+    '"approval_mode" = "approve"',
+    'custom = true',
+    '',
+  ].join('\n'));
+  try {
+    assert.equal(run.result.status, 0, run.result.stderr || run.result.stdout);
+    const config = fs.readFileSync(run.configPath, 'utf8');
+    assert.match(config, /approval_mode = "prompt"/);
+    assert.doesNotMatch(config, /"approval_mode" = "approve"/);
+    assert.match(config, /custom = true/);
+    assert.equal(run.rerun().status, 0);
+    assert.equal(fs.readFileSync(run.configPath, 'utf8'), config);
+  } finally {
+    run.cleanup();
+  }
+});
+
+test('Codex setup binds shared-skill ownership without enabling the control plane', () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-shared-skills-owner-'));
+  const credentialFile = path.join(tmp, 'owner.credential');
+  const secret = 'shared-skills-secret-never-logged';
+  try {
+    fs.writeFileSync(credentialFile, `${secret}\n`, { encoding: 'utf8', mode: 0o600 });
+    fs.chmodSync(credentialFile, 0o600);
+    const run = runCodexSetup({ JARVOS_SHARED_SKILLS_OWNER_CREDENTIAL_FILE: credentialFile });
+    try {
+      assert.equal(run.result.status, 0, run.result.stderr || run.result.stdout);
+      const log = fs.readFileSync(run.codexLog, 'utf8');
+      assert.ok(log.includes(`JARVOS_SHARED_SKILLS_OWNER_CREDENTIAL_FILE=${credentialFile}`));
+      assert.doesNotMatch(log, /JARVOS_CONTROL_PLANE_SERVICE_MODULE=/);
+      assert.doesNotMatch(log, /JARVOS_CONTROL_PLANE_CREDENTIAL_FILE=/);
+      assert.ok(!log.includes(secret), 'codex argv must not include secret');
+    } finally {
+      run.cleanup();
+    }
+
+    fs.chmodSync(credentialFile, 0o644);
+    const unsafe = runCodexSetup({ JARVOS_SHARED_SKILLS_OWNER_CREDENTIAL_FILE: credentialFile });
+    try {
+      assert.notEqual(unsafe.result.status, 0);
+      assert.match(unsafe.result.stderr, /owner-only|credential file/i);
+      assert.ok(!unsafe.result.stderr.includes(secret), 'stderr must not include secret');
+      assert.ok(!unsafe.result.stderr.includes(credentialFile), 'stderr must not include credential path');
+    } finally {
+      unsafe.cleanup();
+    }
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('Codex setup refuses owner binding when the approval config targets another file', () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-shared-skills-config-mismatch-'));
+  try {
+    const credentialFile = path.join(tmp, 'owner.credential');
+    fs.writeFileSync(credentialFile, 'owner\n', { encoding: 'utf8', mode: 0o600 });
+    fs.chmodSync(credentialFile, 0o600);
+    const run = runCodexSetup({
+      JARVOS_SHARED_SKILLS_OWNER_CREDENTIAL_FILE: credentialFile,
+      CODEX_CONFIG: path.join(tmp, 'other-config.toml'),
+    });
+    try {
+      assert.notEqual(run.result.status, 0);
+      assert.match(run.result.stderr, /requires CODEX_CONFIG to equal/);
+      assert.ok(!fs.existsSync(run.codexLog) || !fs.readFileSync(run.codexLog, 'utf8').includes('mcp add'));
+    } finally {
+      run.cleanup();
+    }
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('Codex setup removes owner-bound MCP registration when final config apply fails', () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-shared-skills-cleanup-'));
+  try {
+    const credentialFile = path.join(tmp, 'owner.credential');
+    fs.writeFileSync(credentialFile, 'owner\n', { encoding: 'utf8', mode: 0o600 });
+    fs.chmodSync(credentialFile, 0o600);
+    const run = runCodexSetup({
+      JARVOS_SHARED_SKILLS_OWNER_CREDENTIAL_FILE: credentialFile,
+      JARVOS_TEST_CODEX_CORRUPT_AFTER_ADD: '1',
+    });
+    try {
+      assert.notEqual(run.result.status, 0);
+      const calls = fs.readFileSync(run.codexLog, 'utf8').trim().split('\n');
+      assert.match(calls.at(-1), /^mcp remove jarvos$/);
+    } finally {
+      run.cleanup();
+    }
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
   }
 });
 
@@ -1461,6 +1604,28 @@ test('resolveHostCredential reads owner-only credential file and fails closed', 
     else process.env[CREDENTIAL_FILE_ENV] = previousFile;
     if (previousAmbient === undefined) delete process.env[CREDENTIAL_ENV];
     else process.env[CREDENTIAL_ENV] = previousAmbient;
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('resolveSharedSkillsOwnerCredential is narrow and keeps control plane unbound', () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-shared-skills-cred-'));
+  try {
+    const credentialFile = path.join(tmp, 'owner.credential');
+    fs.writeFileSync(credentialFile, 'shared-skills-owner\n', { encoding: 'utf8', mode: 0o600 });
+    fs.chmodSync(credentialFile, 0o600);
+    const env = { JARVOS_SHARED_SKILLS_OWNER_CREDENTIAL_FILE: credentialFile };
+    assert.equal(resolveSharedSkillsOwnerCredential(env), 'shared-skills-owner');
+    assert.equal(resolveHostCredential(env), null);
+    fs.chmodSync(credentialFile, 0o644);
+    assert.throws(
+      () => resolveSharedSkillsOwnerCredential({
+        ...env,
+        [CREDENTIAL_ENV]: 'valid-control-plane-fallback',
+      }),
+      /shared-skill owner credential file is unusable/,
+    );
+  } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
   }
 });
