@@ -592,6 +592,36 @@ test('MCP session thread tools round-trip through the shared note and journal pa
   });
 });
 
+test('MCP session thread preserves ambiguous operation identity and an unattempted backlink', async () => {
+  await withTempVault(async ({ journal, mutationService }) => {
+    const execute = mutationService.execute.bind(mutationService);
+    let submissions = 0;
+    mutationService.execute = (operation) => {
+      submissions += 1;
+      if (submissions === 1) {
+        execute(operation); // Obsidian saved the bytes but its acknowledgement was lost.
+        return { ...fakeReceipt(operation, 'unknown_after_dispatch'), obsidian: 'unacknowledged' };
+      }
+      return fakeReceipt(operation, 'blocked');
+    };
+    const first = await callTool('jarvos_session_thread_write', { threadId: 'lost-ack', summary: 'first checkpoint', mutationService });
+    assert.equal(first.isError, true);
+    assert.match(first.content[0].text, /Mutation status: unknown_after_dispatch/);
+    assert.match(first.content[0].text, /Operation: test-operation-00000001/);
+    assert.match(first.content[0].text, /Journal backlink: pending/);
+    assert.match(first.content[0].text, /Do not repeat the checkpoint/);
+    const second = await callTool('jarvos_session_thread_write', { threadId: 'lost-ack', summary: 'second checkpoint', mutationService });
+    assert.match(second.content[0].text, /Mutation status: blocked/);
+    assert.match(second.content[0].text, /Operation: test-operation-00000002/);
+    const read = await callTool('jarvos_session_thread_read', { threadId: 'lost-ack' });
+    assert.equal((read.content[0].text.match(/first checkpoint/g) || []).length, 1);
+    assert.doesNotMatch(read.content[0].text, /second checkpoint/);
+    assert.equal(submissions, 2, 'readback must not submit another mutation or backlink');
+    assert.deepEqual(fs.readdirSync(journal), []);
+    assert.doesNotMatch(first.content[0].text, /vaultRelativePath|replayPayload|\/private\/|\/Users\//);
+  });
+});
+
 test('MCP tool list includes jarvOS tools', () => {
   const names = TOOLS.map((tool) => tool.name);
   assert.deepEqual(names, [

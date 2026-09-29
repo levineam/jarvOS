@@ -279,7 +279,7 @@ function publicMutationResult(receipt) {
 }
 
 function publicBacklinkResult(journal) {
-  const status = journal?.linked ? 'linked' : journal?.deferred ? 'deferred' : 'failed';
+  const status = journal?.linked ? 'linked' : journal?.deferred ? 'deferred' : journal?.status === 'pending' ? 'pending' : 'failed';
   return { status, linked: status === 'linked', deferred: status === 'deferred' };
 }
 
@@ -1543,6 +1543,9 @@ function writeSessionThread(input = {}) {
 
   const outcome = publicCaptureOutcome(noteResult, noteResult.journal);
   const complete = noteResult.written && noteResult.journal?.linked === true;
+  // Expose the bounded identifier for recovery, never the private operation payload.
+  const operationId = noteResult.receipt?.operation?.operationId;
+  const publicOperationId = typeof operationId === 'string' && /^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/.test(operationId) ? operationId : 'unavailable';
   return {
     ok: complete,
     status: complete ? 'written' : 'pending',
@@ -1555,11 +1558,13 @@ function writeSessionThread(input = {}) {
       complete ? '# jarvOS Session Thread Written' : '# jarvOS Session Thread Pending',
       '',
       `- Thread: [[${thread.title}]]`,
-      `- Note persistence: ${outcome.note.status}`,
+      `- Mutation status: ${outcome.note.status}`,
+      `- Operation: ${publicOperationId}`,
       `- Obsidian acknowledgement: ${outcome.note.obsidian}`,
       `- Journal backlink: ${outcome.backlink.status}`,
       `- Sync: ${outcome.sync.status}`,
       `- Event: ${firstString(input.event, input.kind, 'checkpoint')}`,
+      ...(!complete ? ['- Next: Do not repeat the checkpoint. Read the thread and reconcile the existing operation through the owning host.'] : []),
     ].join('\n'),
   };
 }
