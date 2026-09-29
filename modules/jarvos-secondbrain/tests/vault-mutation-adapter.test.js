@@ -484,3 +484,107 @@ test('dispatch plus poll across slow CLI round-trips commits under default timeo
     assert.ok(cli.calls.length >= 3, 'probe, dispatch and at least one poll all ran');
   } finally { cli.restore(); }
 });
+
+test('an empty Obsidian CLI response is replayed rather than read as no acknowledgement', () => {
+  const { runObsidianEval } = require('../adapters/obsidian/src/vault-mutation-adapter');
+  const outputs = ['', '', '=> {"queued":true,"token":"t"}\n'];
+  let calls = 0;
+  const result = runObsidianEval('code', { vaultName: 'V', execute: () => { calls += 1; return outputs.shift(); } });
+  assert.deepEqual(result, { queued: true, token: 't' });
+  assert.equal(calls, 3);
+});
+
+test('empty-response replays are bounded and a real no-output result is not replayed', () => {
+  const { runObsidianEval } = require('../adapters/obsidian/src/vault-mutation-adapter');
+  let calls = 0;
+  assert.equal(runObsidianEval('code', { vaultName: 'V', emptyRetries: 2, execute: () => { calls += 1; return ''; } }), null);
+  assert.equal(calls, 3);
+  calls = 0;
+  assert.equal(runObsidianEval('code', { vaultName: 'V', execute: () => { calls += 1; return '(no output)\n'; } }), null);
+  assert.equal(calls, 1);
+});
+
+test('CLI errors still surface immediately without replay', () => {
+  const { runObsidianEval } = require('../adapters/obsidian/src/vault-mutation-adapter');
+  let calls = 0;
+  const failing = () => { calls += 1; const error = new Error('spawn obsidian ENOENT'); error.code = 'ENOENT'; throw error; };
+  assert.throws(() => runObsidianEval('code', { vaultName: 'V', execute: failing }), (error) => error.code === 'ENOENT');
+  assert.equal(calls, 1);
+});
+
+test('large programs are staged in bounded chunks and run once in the app', () => {
+  const { runObsidianEval } = require('../adapters/obsidian/src/vault-mutation-adapter');
+  const app = vm.createContext({ atob, TextDecoder });
+  const sizes = [];
+  const execute = (_command, args) => {
+    const code = args[2].slice('code='.length);
+    sizes.push(Buffer.byteLength(code, 'utf8'));
+    return `=> ${vm.runInContext(code, app)}\n`;
+  };
+  const program = `/* ${'x'.repeat(20_000)} */ (() => { globalThis.runs = (globalThis.runs || 0) + 1; return JSON.stringify({ heading: '📝 Notes' }); })()`;
+  assert.deepEqual(runObsidianEval(program, { vaultName: 'V', execute, chunkBytes: 6_000 }), { heading: '📝 Notes' });
+  assert.ok(sizes.length > 2);
+  assert.ok(sizes.every((size) => size <= 6_200), `every CLI call stays small: ${sizes}`);
+  assert.equal(vm.runInContext('runs', app), 1);
+  assert.equal(vm.runInContext('Object.keys(globalThis.__jarvosEvalStage).length', app), 0);
+});
+
+test('a dropped chunk fails before anything runs, and small programs use one call', () => {
+  const { runObsidianEval } = require('../adapters/obsidian/src/vault-mutation-adapter');
+  let calls = 0;
+  const codes = [];
+  assert.throws(() => runObsidianEval('/*' + 'x'.repeat(9_000) + '*/1', { vaultName: 'V', emptyRetries: 1, execute: (_command, args) => { calls += 1; codes.push(args[2]); return ''; } }), (error) => error.code === 'EVAL_NOT_STAGED' && /did not stage eval chunk 1/.test(error.message));
+  assert.ok(codes.at(-1).includes('delete globalThis.__jarvosEvalStage'), 'partial stage is cleaned up');
+  calls = 0;
+  runObsidianEval('JSON.stringify(1)', { vaultName: 'V', execute: () => { calls += 1; return '=> 1\n'; } });
+  assert.equal(calls, 1);
+});
+
+test('a mutation that was never staged stays retryable instead of ambiguous', () => {
+  const adapter = createVaultMutationAdapter({ vaultRoot: '/vault', vaultId: 'vault-a', ledgerPath: ledgerPath(), probe: () => ({ state: 'available', vaultId: 'vault-a' }), evaluate: () => { const error = new Error('did not stage'); error.code = 'EVAL_NOT_STAGED'; throw error; } });
+  const result = adapter.execute(operation());
+  assert.equal(result.status, 'unavailable');
+  assert.equal(adapter.ledger.get(operation().operationId).status, 'planned');
+});
+
+test('an empty final run is retryable only when the stage proves it never ran', () => {
+  const { runObsidianEval } = require('../adapters/obsidian/src/vault-mutation-adapter');
+  const program = `/* ${'x'.repeat(9_000)} */ JSON.stringify(1)`;
+  const fakeApp = (dropRunner, runnerExecutes) => {
+    const app = vm.createContext({ atob, TextDecoder });
+    return (_command, args) => {
+      const code = args[2].slice('code='.length);
+      const isRunner = code.includes('(0, eval)');
+      if (isRunner && dropRunner) { if (runnerExecutes) vm.runInContext(code, app); return ''; }
+      return `=> ${vm.runInContext(code, app)}\n`;
+    };
+  };
+  assert.throws(() => runObsidianEval(program, { vaultName: 'V', emptyRetries: 0, execute: fakeApp(true, false) }), (error) => error.code === 'EVAL_NOT_STAGED');
+  assert.equal(runObsidianEval(program, { vaultName: 'V', emptyRetries: 0, execute: fakeApp(true, true) }), null);
+});
+
+test('a staged runner that ran but lost its response returns null once, without being replayed', () => {
+  const { runObsidianEval } = require('../adapters/obsidian/src/vault-mutation-adapter');
+  const app = vm.createContext({ atob, TextDecoder });
+  let runnerCalls = 0;
+  const execute = (_command, args) => {
+    const code = args[2].slice('code='.length);
+    if (code.includes('(0, eval)')) { runnerCalls += 1; vm.runInContext(code, app); return ''; }
+    return `=> ${vm.runInContext(code, app)}\n`;
+  };
+  assert.equal(runObsidianEval(`/* ${'x'.repeat(9_000)} */ JSON.stringify(1)`, { vaultName: 'V', execute }), null);
+  assert.equal(runnerCalls, 1);
+});
+
+test('a staged runner dropped before running is resent until it runs', () => {
+  const { runObsidianEval } = require('../adapters/obsidian/src/vault-mutation-adapter');
+  const app = vm.createContext({ atob, TextDecoder });
+  let drops = 2;
+  const execute = (_command, args) => {
+    const code = args[2].slice('code='.length);
+    if (code.includes('(0, eval)') && drops > 0) { drops -= 1; return ''; }
+    return `=> ${vm.runInContext(code, app)}\n`;
+  };
+  assert.equal(runObsidianEval(`/* ${'x'.repeat(9_000)} */ JSON.stringify(7)`, { vaultName: 'V', execute }), 7);
+  assert.equal(vm.runInContext('Object.keys(globalThis.__jarvosEvalStage).length', app), 0);
+});

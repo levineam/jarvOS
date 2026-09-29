@@ -280,7 +280,12 @@ function publicMutationResult(receipt) {
 
 function publicBacklinkResult(journal) {
   const status = journal?.linked ? 'linked' : journal?.deferred ? 'deferred' : journal?.status === 'pending' ? 'pending' : 'failed';
-  return { status, linked: status === 'linked', deferred: status === 'deferred' };
+  return {
+    status,
+    linked: status === 'linked',
+    deferred: status === 'deferred',
+    ...(status === 'failed' ? { reason: journal?.reason || 'unknown' } : {}),
+  };
 }
 
 function publicCaptureOutcome(note, journal) {
@@ -319,7 +324,7 @@ function linkWrittenNote({ noteResult, section, createJournalIfMissing, mutation
         deferredPath: deferred.deferredPath,
         recoveryKey: deferred.key,
       }
-      : { status: 'failed', linked: false, deferred: false, failed: true };
+      : { status: 'failed', linked: false, deferred: false, failed: true, reason: String(error?.message || error) };
   }
 }
 
@@ -1561,7 +1566,7 @@ function writeSessionThread(input = {}) {
       `- Mutation status: ${outcome.note.status}`,
       `- Operation: ${publicOperationId}`,
       `- Obsidian acknowledgement: ${outcome.note.obsidian}`,
-      `- Journal backlink: ${outcome.backlink.status}`,
+      `- Journal backlink: ${outcome.backlink.status}${outcome.backlink.reason ? ` (${outcome.backlink.reason})` : ''}`,
       `- Sync: ${outcome.sync.status}`,
       `- Event: ${firstString(input.event, input.kind, 'checkpoint')}`,
       ...(!complete ? ['- Next: Do not repeat the checkpoint. Read the thread and reconcile the existing operation through the owning host.'] : []),
@@ -2189,7 +2194,7 @@ function createNote(input = {}) {
       `- Note: [[${noteResult.title || safeTitle}]]`,
       `- Note persistence: ${outcome.note.status}`,
       `- Obsidian acknowledgement: ${outcome.note.obsidian}`,
-      `- Journal backlink: ${outcome.backlink.status}`,
+      `- Journal backlink: ${outcome.backlink.status}${outcome.backlink.reason ? ` (${outcome.backlink.reason})` : ''}`,
       `- Sync: ${outcome.sync.status}`,
       `- Knowledge: ${noteResult.knowledge?.optimized ? noteResult.knowledge.qmdStatus : 'not optimized'}`,
     ].join('\n'),
