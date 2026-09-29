@@ -5,8 +5,10 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const {
+  PRESENCE_CAPABILITIES,
   STEWARDSHIP_ADAPTER_VERSION,
   validateNextTurnBridgeResponse,
+  withLifecyclePresence,
 } = require('../../modules/jarvos-runtime-kit/src/stewardship-adapter.js');
 const {
   envelopeHasContent: projectsContextRefreshHasContent,
@@ -146,6 +148,7 @@ function invokeBridge(capability, options = {}) {
       available: response.available === true,
       pendingInSessionInput: response.pendingInSessionInput === true,
       reason: response.available === true ? undefined : 'bridge-unavailable',
+      ...(PRESENCE_CAPABILITIES.includes(capability) ? { presence: response.presence } : {}),
     };
   } catch {
     return { ...base, pendingInSessionInput: false, reason: 'bridge-unavailable' };
@@ -165,8 +168,8 @@ function additionalContext(input) {
 }
 
 function availability(options) { return invokeBridge('availability', options); }
-function startOrResume(options) { return invokeBridge('startOrResume', options); }
-function heartbeat(options) { return invokeBridge('heartbeat', options); }
+function startOrResume(options) { return withLifecyclePresence('startOrResume', invokeBridge('startOrResume', options)); }
+function heartbeat(options) { return withLifecyclePresence('heartbeat', invokeBridge('heartbeat', options)); }
 function checkpoint(options) { return invokeBridge('checkpoint', options); }
 function stop(options) { return invokeBridge('stop', options); }
 function nextTurnInput(options) { return invokeBridge('nextTurnInput', options); }

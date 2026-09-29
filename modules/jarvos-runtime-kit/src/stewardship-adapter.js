@@ -3,6 +3,13 @@
 const STEWARDSHIP_ADAPTER_VERSION = 'jarvos-stewardship-adapter.v1';
 const ISOLATION_MODES = ['native', 'managed-launcher'];
 const REQUIRED_LIFECYCLE_CAPABILITIES = ['startOrResume', 'heartbeat', 'checkpoint', 'stop', 'nextTurnInput'];
+// Admission (`available: true`) is not coordination presence. Native-hook
+// start/resume and heartbeat results carry an explicit presence status so an
+// outage is a visible degraded state, never a silent success.
+const PRESENCE_CAPABILITIES = ['startOrResume', 'heartbeat'];
+const PRESENCE_STATUSES = ['recorded', 'degraded'];
+const PRESENCE_REPORTED_REASONS = ['coordination_unavailable', 'authentication_unavailable'];
+const PRESENCE_UNREPORTED_REASON = 'presence_unreported';
 const HARNESS_IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 const NEXT_TURN_INPUT_KEYS = ['choices', 'correlation', 'default', 'prompt'];
 const MAX_PROMPT_CHARS = 600;
@@ -75,6 +82,41 @@ function validateNextTurnBridgeResponse(response) {
   return { ok: true, value: { available: true, pendingInSessionInput: true, nextTurnInput: input.value } };
 }
 
+// A bridge reports only `{ status: 'recorded' }` or
+// `{ status: 'degraded', reason }` with a reason from PRESENCE_REPORTED_REASONS.
+function validatePresenceReport(report) {
+  if (isPlainObject(report) && report.status === 'recorded' && hasExactKeys(report, ['status'])) {
+    return { ok: true, value: { status: 'recorded' } };
+  }
+  if (isPlainObject(report) && report.status === 'degraded' && hasExactKeys(report, ['reason', 'status'])
+    && PRESENCE_REPORTED_REASONS.includes(report.reason)) {
+    return { ok: true, value: { status: 'degraded', reason: report.reason } };
+  }
+  return { ok: false, errors: ['presence report must be recorded or degraded with a known reason'] };
+}
+
+// Pure and total: it never throws or blocks, so it cannot delay admission. An
+// unavailable bridge, or an available one that omits or garbles its presence
+// report, is degraded; only a valid `recorded` report counts as recorded.
+function classifyLifecyclePresence(result) {
+  if (!isPlainObject(result) || result.available !== true) {
+    return { status: 'degraded', reason: 'coordination_unavailable' };
+  }
+  const report = validatePresenceReport(result.presence);
+  return report.ok ? report.value : { status: 'degraded', reason: PRESENCE_UNREPORTED_REASON };
+}
+
+function withLifecyclePresence(capability, result) {
+  return PRESENCE_CAPABILITIES.includes(capability)
+    ? { ...result, presence: classifyLifecyclePresence(result) }
+    : result;
+}
+
+// Read-only signal for health checks: admitted sessions can still be invisible.
+function isPresenceRecorded(result) {
+  return classifyLifecyclePresence(result).status === 'recorded';
+}
+
 function validateStewardshipAdapter(adapter = {}) {
   const errors = [];
   if (!adapter || typeof adapter !== 'object' || Array.isArray(adapter)) return { ok: false, errors: ['stewardship adapter must be an object'] };
@@ -104,10 +146,18 @@ module.exports = {
   MAX_CHOICE_CHARS,
   MAX_CORRELATION_CHARS,
   MAX_PROMPT_CHARS,
+  PRESENCE_CAPABILITIES,
+  PRESENCE_REPORTED_REASONS,
+  PRESENCE_STATUSES,
+  PRESENCE_UNREPORTED_REASON,
   REQUIRED_LIFECYCLE_CAPABILITIES,
   STEWARDSHIP_ADAPTER_VERSION,
   assertStewardshipAdapter,
+  classifyLifecyclePresence,
+  isPresenceRecorded,
   validateNextTurnBridgeResponse,
   validateNextTurnInput,
+  validatePresenceReport,
   validateStewardshipAdapter,
+  withLifecyclePresence,
 };
