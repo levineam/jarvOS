@@ -39,6 +39,14 @@ try {
   assert.match(codexText, /jarvos_coding_finish/);
   assert.match(codexText, /merge it\s+autonomously/);
   assert.match(codexText, /separate authority for publication, live activation,\s+spending, destructive action, or an external send/);
+  for (const harness of ['claude', 'claude-code', 'openclaw']) {
+    const harnessRoot = fs.mkdtempSync(path.join(os.tmpdir(), `jarvos-workflow-${harness}-`));
+    const plan = planSkillProjection({ harness, skillsRoot: harnessRoot, skills: ['workflow-execution'] });
+    assert.equal(plan.entries[0].status, 'missing');
+    assert.equal(plan.entries[0].outputDigest, plan.entries[0].sourceDigest);
+    assert.equal(applySkillProjection(plan).applied[0].applied, true);
+    fs.rmSync(harnessRoot, { recursive: true, force: true });
+  }
   assert.equal(planSkillProjection({ harness: 'hermes', skillsRoot: root, skills: ['workflow-execution'], incompatibleSkills: ['workflow-execution'] }).entries[0].status, 'incompatible');
   const initial = applySkillProjection(first);
   assert.equal(initial.applied[0].applied, true);

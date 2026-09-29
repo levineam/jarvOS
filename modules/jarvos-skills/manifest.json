@@ -35,16 +35,19 @@
       "purpose": "Plan, track, package, execute, and verify non-trivial work.",
       "source": {
         "revision": "jarvos-skills-v0.3.0",
-        "digest": "47574b6f3d913e3c7ebaf5354955c441aa7ae369b927d13c8c3d78c1e77c50f2",
+        "digest": "13c363bdf0d7534086fe301fbf55182e191e2ac58fc21bdd9e7457bbb9ab9b2f",
         "license": "MIT",
         "provenance": "jarvOS reviewed source"
       },
-      "supportedHarnesses": ["generic", "codex", "hermes"],
+      "supportedHarnesses": ["generic", "codex", "claude", "claude-code", "openclaw", "hermes"],
       "projection": {
         "mode": "copy",
         "targets": {
           "generic": { "path": "{skillsRoot}/workflow-execution/SKILL.md", "renderer": "raw-skill-md" },
           "codex": { "path": "{skillsRoot}/workflow-execution/SKILL.md", "renderer": "raw-skill-md" },
+          "claude": { "path": "{skillsRoot}/workflow-execution/SKILL.md", "renderer": "raw-skill-md" },
+          "claude-code": { "path": "{skillsRoot}/workflow-execution/SKILL.md", "renderer": "raw-skill-md" },
+          "openclaw": { "path": "{skillsRoot}/workflow-execution/SKILL.md", "renderer": "raw-skill-md" },
           "hermes": { "path": "{skillsRoot}/workflow-execution/SKILL.md", "renderer": "raw-skill-md" }
         }
       }
