@@ -401,3 +401,51 @@ test('adapter exposes only a read-only ledger view', () => {
     assert.equal(adapter.ledger[mutator], undefined, mutator);
   }
 });
+
+// Simulates the Obsidian CLI: each eval round-trip costs `latencyMs` on a fake clock
+// and times out (like execFileSync) when it exceeds the caller's `timeoutMs`.
+function slowCli({ latencyMs, respond }) {
+  const realNow = Date.now;
+  let clock = realNow();
+  Date.now = () => clock;
+  const calls = [];
+  const evaluate = (code, timeoutMs) => {
+    calls.push({ code, timeoutMs });
+    if (latencyMs > timeoutMs) { clock += timeoutMs; const error = new Error('spawnSync obsidian ETIMEDOUT'); error.code = 'ETIMEDOUT'; throw error; }
+    clock += latencyMs;
+    return respond(code);
+  };
+  return { evaluate, calls, restore: () => { Date.now = realNow; } };
+}
+
+test('capability probe slower than the old 2.5 s budget is still available', () => {
+  const cli = slowCli({ latencyMs: 2_300, respond: () => ({ vaultName: 'vault', hasVault: true }) });
+  try {
+    const adapter = createVaultMutationAdapter({ vaultRoot: '/vault', vaultId: 'vault-a', ledgerPath: ledgerPath(), evaluate: cli.evaluate });
+    assert.deepEqual(adapter.capability(), { state: 'available', vaultId: 'vault-a' });
+    assert.ok(cli.calls[0].timeoutMs > 2_500, `probe timeout ${cli.calls[0].timeoutMs} must exceed the old 2500 ms budget`);
+  } finally { cli.restore(); }
+});
+
+test('capability probe timeout is independent of pollTimeoutMs and overridable', () => {
+  const cli = slowCli({ latencyMs: 2_300, respond: () => ({ vaultName: 'vault', hasVault: true }) });
+  try {
+    const tightPoll = createVaultMutationAdapter({ vaultRoot: '/vault', vaultId: 'vault-a', ledgerPath: ledgerPath(), evaluate: cli.evaluate, pollTimeoutMs: 1_000 });
+    assert.equal(tightPoll.capability().state, 'available');
+    const tightProbe = createVaultMutationAdapter({ vaultRoot: '/vault', vaultId: 'vault-a', ledgerPath: ledgerPath(), evaluate: cli.evaluate, probeTimeoutMs: 2_000 });
+    assert.equal(tightProbe.capability().state, 'app_busy');
+  } finally { cli.restore(); }
+});
+
+test('dispatch plus poll across slow CLI round-trips commits under default timeouts', () => {
+  const cli = slowCli({ latencyMs: 2_500, respond: (code) => code.includes('JSON.stringify({ vaultName')
+    ? { vaultName: 'vault', hasVault: true }
+    : code.startsWith('(() =>') ? { queued: true, token: 'op-20260806-adapter-test' } : { status: 'done', invariant: true } });
+  try {
+    const adapter = createVaultMutationAdapter({ vaultRoot: '/vault', vaultId: 'vault-a', ledgerPath: ledgerPath(), evaluate: cli.evaluate });
+    const result = adapter.execute(operation());
+    assert.equal(result.status, 'committed');
+    assert.equal(result.obsidian, 'acknowledged');
+    assert.ok(cli.calls.length >= 3, 'probe, dispatch and at least one poll all ran');
+  } finally { cli.restore(); }
+});
