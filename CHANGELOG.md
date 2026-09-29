@@ -334,6 +334,14 @@ the Steward's release-level approval and verification.
   never rewritten in bulk.
 
 ### Fixed
+- Managed Claude Code, Claude Desktop, and Codex setup now registers the
+  stable selector-aware `jarvos-mcp` shim from the stewardship bundle by
+  default and refuses to persist an immutable runtime stage's own MCP script.
+  A stage-pinned registration kept serving the old stage after a runtime
+  promotion, so Projects context failed in Claude while Codex worked.
+  `jarvos doctor` gains an `mcp-registration` check that fails when harness
+  registrations disagree, point at a missing target, or miss the managed
+  stable entrypoint (SUP-4006).
 - Route authored vault Markdown through one acknowledged Obsidian mutation
   lifecycle. Notes, journals, backlinks, project pages, session threads, and
   maintenance repairs no longer claim success from disk bytes alone; safe
