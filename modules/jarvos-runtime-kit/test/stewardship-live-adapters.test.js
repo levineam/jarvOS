@@ -355,6 +355,54 @@ test('native hooks display a validated public judgment on the next turn', () => 
   }
 });
 
+test('native hooks report coordination presence separately from admission and fail open', () => {
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-stewardship-presence-'));
+  const bin = path.join(temp, 'bin');
+  const bridge = path.join(bin, 'jarvos-stewardship-bridge');
+  const modeFile = path.join(temp, 'mode');
+  try {
+    fs.mkdirSync(bin, { recursive: true });
+    fs.writeFileSync(bridge, [
+      '#!/usr/bin/env sh',
+      `case "$(cat ${JSON.stringify(modeFile)})" in`,
+      `  recorded) printf '%s\\n' '{"available":true,"presence":{"status":"recorded"}}' ;;`,
+      `  degraded) printf '%s\\n' '{"available":true,"presence":{"status":"degraded","reason":"authentication_unavailable"}}' ;;`,
+      `  silent) printf '%s\\n' '{"available":true}' ;;`,
+      '  down) exit 7 ;;',
+      'esac',
+      '',
+    ].join('\n'), { mode: 0o755 });
+    fs.chmodSync(bridge, 0o755);
+    const hooks = {
+      claude: { hook: require(path.join(ROOT, 'runtimes', 'claude', 'jarvos-session-turn-hook.js')), env: { JARVOS_STEWARDSHIP_CLAUDE_SESSION_ID: CLAUDE_HOOK_SESSION_ID } },
+      codex: { hook: require(path.join(ROOT, 'runtimes', 'codex', 'jarvos-session-turn-hook.js')), env: { CODEX_THREAD_ID: CODEX_HOOK_SESSION_ID } },
+    };
+    const expected = {
+      recorded: [true, { status: 'recorded' }],
+      degraded: [true, { status: 'degraded', reason: 'authentication_unavailable' }],
+      silent: [true, { status: 'degraded', reason: 'presence_unreported' }],
+      down: [false, { status: 'degraded', reason: 'coordination_unavailable' }],
+    };
+    for (const [runtime, { hook, env: identity }] of Object.entries(hooks)) {
+      const env = { ...cleanEnv(), PATH: `${bin}${path.delimiter}${process.env.PATH || ''}`, JARVOS_STEWARDSHIP_BRIDGE_COMMAND: 'jarvos-stewardship-bridge', ...identity };
+      for (const [mode, [available, presence]] of Object.entries(expected)) {
+        fs.writeFileSync(modeFile, mode);
+        for (const capability of ['startOrResume', 'heartbeat']) {
+          const result = hook.stewardshipAdapter[capability]({ cwd: temp, env, bridgeCommand: 'jarvos-stewardship-bridge', sessionId: runtime === 'claude' ? CLAUDE_HOOK_SESSION_ID : undefined });
+          assert.equal(result.available, available, `${runtime} ${capability} ${mode}`);
+          assert.deepEqual(result.presence, presence, `${runtime} ${capability} ${mode}`);
+        }
+      }
+    }
+    // Outage still lets the real turn hook exit cleanly with no output.
+    fs.writeFileSync(modeFile, 'down');
+    const env = { ...cleanEnv(), PATH: `${bin}${path.delimiter}${process.env.PATH || ''}`, JARVOS_STEWARDSHIP_BRIDGE_COMMAND: 'jarvos-stewardship-bridge' };
+    assert.deepEqual(runTurnHook('claude', env, { session_id: CLAUDE_HOOK_SESSION_ID }), {});
+  } finally {
+    fs.rmSync(temp, { recursive: true, force: true });
+  }
+});
+
 test('Claude turn hooks accept only a consistent canonical or transcript-derived UUID identity', () => {
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-claude-turn-identity-'));
   const bin = path.join(temp, 'bin');

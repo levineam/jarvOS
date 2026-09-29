@@ -19,6 +19,11 @@ appropriate public repository.
   - Hermes and OpenClaw are **harness-process** owned; their host/gateway owns
     process lifetime. jarvOS does not add a supervisor or restart loop for
     symmetry.
+- Admission is not presence. A native-hook start/resume or heartbeat result
+  must carry an explicit presence status, `recorded` or `degraded`
+  (`coordination_unavailable` or `authentication_unavailable`); a missing
+  report counts as not recorded. A coordination outage fails open: it never
+  blocks or delays session admission, it only marks presence degraded.
 - Managed harness **activation** is separate from install, skill discovery,
   health, and registration. Public activation truth is each runtime’s
   `managedActivation` block in `runtimes/*/adapter.json` (validated by

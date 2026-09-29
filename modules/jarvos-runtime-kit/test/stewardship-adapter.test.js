@@ -5,8 +5,12 @@ const test = require('node:test');
 const {
   assertStewardshipAdapter,
   STEWARDSHIP_ADAPTER_VERSION,
+  classifyLifecyclePresence,
+  isPresenceRecorded,
   validateNextTurnInput,
+  validatePresenceReport,
   validateStewardshipAdapter,
+  withLifecyclePresence,
 } = require('../src');
 
 function adapter(overrides = {}) {
@@ -82,4 +86,53 @@ test('the portable next-turn contract rejects private or route-bearing data', ()
   ]) {
     assert.equal(validateNextTurnInput(input).ok, false);
   }
+});
+
+test('an admitted session with a recorded presence report is recorded', () => {
+  const result = { available: true, pendingInSessionInput: false, presence: { status: 'recorded' } };
+  assert.deepEqual(classifyLifecyclePresence(result), { status: 'recorded' });
+  assert.equal(isPresenceRecorded(result), true);
+  assert.deepEqual(withLifecyclePresence('startOrResume', result).presence, { status: 'recorded' });
+});
+
+test('degraded presence keeps the session admitted and names the reason', () => {
+  for (const reason of ['coordination_unavailable', 'authentication_unavailable']) {
+    const result = { available: true, pendingInSessionInput: false, presence: { status: 'degraded', reason } };
+    const classified = withLifecyclePresence('heartbeat', result);
+    assert.equal(classified.available, true, 'coordination outage must not withdraw admission');
+    assert.deepEqual(classified.presence, { status: 'degraded', reason });
+    assert.equal(isPresenceRecorded(classified), false);
+  }
+});
+
+test('a missing or malformed presence report is never treated as recorded', () => {
+  const unreported = { status: 'degraded', reason: 'presence_unreported' };
+  for (const presence of [
+    undefined,
+    null,
+    'recorded',
+    {},
+    { status: 'recorded', extra: true },
+    { status: 'degraded' },
+    { status: 'degraded', reason: 'presence_unreported' },
+    { status: 'degraded', reason: 'anything-else' },
+    { status: 'active' },
+  ]) {
+    const result = { available: true, pendingInSessionInput: false, presence };
+    assert.deepEqual(classifyLifecyclePresence(result), unreported, JSON.stringify(presence));
+    assert.equal(isPresenceRecorded(result), false);
+  }
+  assert.deepEqual(classifyLifecyclePresence({ available: true }), unreported);
+  assert.equal(validatePresenceReport({ status: 'recorded' }).ok, true);
+  assert.equal(validatePresenceReport(undefined).ok, false);
+});
+
+test('an unavailable bridge is degraded, and classification never throws', () => {
+  const outage = { status: 'degraded', reason: 'coordination_unavailable' };
+  assert.deepEqual(classifyLifecyclePresence({ available: false, presence: { status: 'recorded' } }), outage);
+  for (const value of [undefined, null, 'x', 7, []]) {
+    assert.deepEqual(classifyLifecyclePresence(value), outage);
+  }
+  const unrelated = { available: true };
+  assert.equal(withLifecyclePresence('checkpoint', unrelated), unrelated, 'only start/resume and heartbeat carry presence');
 });
