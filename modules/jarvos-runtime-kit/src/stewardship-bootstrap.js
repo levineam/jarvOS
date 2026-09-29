@@ -6,6 +6,11 @@ const STEWARDSHIP_BOOTSTRAP_CONTRACT_VERSION = 'jarvos-stewardship-bootstrap.v1'
 const STEWARDSHIP_STABLE_ROOT_ENV = 'JARVOS_STEWARDSHIP_STABLE_ROOT';
 const STEWARDSHIP_DISPATCHER = 'jarvos-stewardship-dispatcher';
 const STEWARDSHIP_ACTIONS = ['harness-launch', 'session-start', 'session-turn', 'bridge', 'provenance-probe', 'session-precompact'];
+// Optional actions extend the dispatcher without changing the ordered,
+// required ABI above. A declaration may list them separately; setup registers
+// the matching native hook only when the selected dispatcher's provenance
+// probe advertises the action.
+const OPTIONAL_STEWARDSHIP_ACTIONS = ['session-event'];
 const STABLE_ENTRYPOINTS = {
   dispatcher: STEWARDSHIP_DISPATCHER,
   hermesShell: 'jarvos-hermes-pre-llm-hook.js',
@@ -54,6 +59,12 @@ function validateStewardshipBootstrap(declaration, runtimeId) {
   if (runtimeId && declaration.harness !== runtimeId) errors.push(`stewardship bootstrap harness must be ${runtimeId}`);
   if (!Object.prototype.hasOwnProperty.call(HARNESS_ENTRYPOINT_KINDS, declaration.harness)) errors.push('stewardship bootstrap harness must name a supported runtime');
   if (!sameStrings(declaration.actions, STEWARDSHIP_ACTIONS)) errors.push('stewardship bootstrap actions must declare the versioned action ABI in order');
+  if (declaration.optionalActions !== undefined
+    && (!Array.isArray(declaration.optionalActions)
+      || declaration.optionalActions.some((action) => !OPTIONAL_STEWARDSHIP_ACTIONS.includes(action))
+      || new Set(declaration.optionalActions).size !== declaration.optionalActions.length)) {
+    errors.push('stewardship bootstrap optionalActions must be unique known optional actions');
+  }
   if (!Array.isArray(declaration.selectedRuntimeAssets) || declaration.selectedRuntimeAssets.length === 0
     || declaration.selectedRuntimeAssets.some((asset) => !isRelativeAsset(asset))
     || declaration.selectedRuntimeAssets.some((asset) => !asset.startsWith(`runtimes/${declaration.harness}/`))
@@ -87,6 +98,7 @@ function assertStewardshipBootstrap(declaration, runtimeId) {
 }
 
 module.exports = {
+  OPTIONAL_STEWARDSHIP_ACTIONS,
   STABLE_ENTRYPOINTS,
   STEWARDSHIP_ACTIONS,
   STEWARDSHIP_BOOTSTRAP_CONTRACT_VERSION,

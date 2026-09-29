@@ -12,6 +12,11 @@ const {
   envelopeHasContent: projectsContextRefreshHasContent,
   validateEnvelope: validateProjectsContextRefreshEnvelope,
 } = require('../../modules/jarvos-runtime-kit/src/projects-context-refresh.js');
+const {
+  CANDIDATE_ROOTS_ENV,
+  encodeCandidateRoots,
+  extractCandidateRoots,
+} = require('../../modules/jarvos-runtime-kit/src/durable-work-collect.js');
 
 const HARNESS = 'claude-code';
 const BRIDGE_COMMAND_ENV = 'JARVOS_STEWARDSHIP_BRIDGE_COMMAND';
@@ -92,6 +97,14 @@ function hookSessionId(input) {
   }
   if (identities.length === 0 || identities.some((identity) => identity !== identities[0])) return null;
   return identities[0];
+}
+
+// The harness-reported session cwd, as a transient candidate root, lets a
+// host bridge bind the session to its repository's Project. It is passed only
+// in the bridge child's environment; the hook never logs or persists it.
+function projectsCandidateEnvironment(hookInput) {
+  const roots = extractCandidateRoots({ cwd: hookInput && typeof hookInput === 'object' ? hookInput.cwd : null });
+  return roots.length ? { [CANDIDATE_ROOTS_ENV]: encodeCandidateRoots(roots) } : {};
 }
 
 function bridgeEnvironment(options = {}) {
@@ -213,7 +226,7 @@ function main(input = readHookInput()) {
     const bridgeOptions = { sessionId };
     // Exactly one refresh call per turn boundary; a timeout, invalid, or
     // unavailable result continues the turn with no injection and no retry.
-    const refresh = projectsContextRefresh(bridgeOptions);
+    const refresh = projectsContextRefresh({ ...bridgeOptions, env: projectsCandidateEnvironment(input) });
     const nextInput = nextTurnInput(bridgeOptions);
     heartbeat(bridgeOptions);
     const contexts = [];
@@ -250,6 +263,7 @@ module.exports = {
   heartbeat,
   hookSessionId,
   invokeBridge,
+  projectsCandidateEnvironment,
   projectsContextStart,
   projectsContextRefresh,
   main,

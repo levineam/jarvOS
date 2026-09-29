@@ -44,6 +44,10 @@
     "./project-inference-ledger": "./src/project-inference-ledger.js",
     "./project-inference-evaluation": "./src/project-inference-evaluation.js",
     "./project-inference-reconciler": "./src/project-inference-reconciler.js",
-    "./intent-gap-attention": "./src/intent-gap-attention.js"
+    "./intent-gap-attention": "./src/intent-gap-attention.js",
+    "./durable-work-event": "./src/durable-work-event.js",
+    "./repo-binding": "./src/repo-binding.js",
+    "./target-hydration": "./src/target-hydration.js",
+    "./durable-work-conformance": "./src/durable-work-conformance.js"
   }
 }

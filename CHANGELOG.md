@@ -300,6 +300,7 @@ this public range and prepares the exact proposal; publication still requires
 the Steward's release-level approval and verification.
 
 ### Added
+- **projects / runtime-kit:** add metadata-only durable-work continuity contracts (`jarvos.durable-work-event/v1`, `jarvos.repo-binding/v1`, target-hydration omissions), identical ActivityStore replay no-op, optional `session-event` collection seam, Claude PostToolUse/Stop session-event hook, and Codex UserPromptSubmit-bound collection — with conformance fixtures and focused tests (SUP-3816).
 - **secondbrain:** emit `jarvos-content-origin/v1` on canonical durable-note writes (`content_origin`, `content_origin_basis`, `content_origin_schema`). Human origin without a verifiable user receipt fails closed to `unknown`. Ripeness, Active Assistant, and memory evidence gates must not treat unverified human claims as receipt-bound evidence (SUP-3959).
 - Add a data-only optional Memory health module to `jarvos doctor`. The public
   Doctor owns the four-state health vocabulary and keeps private Supervisor

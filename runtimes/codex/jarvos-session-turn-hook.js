@@ -11,6 +11,16 @@ const {
   envelopeHasContent: projectsContextRefreshHasContent,
   validateEnvelope: validateProjectsContextRefreshEnvelope,
 } = require('../../modules/jarvos-runtime-kit/src/projects-context-refresh.js');
+const {
+  CANDIDATE_ROOTS_ENV,
+  COLLECT_ENABLED_ENV,
+  COLLECT_TIMEOUT_MS,
+  COLLECT_TRIGGER_ENV,
+  DURABLE_WORK_COLLECT_CAPABILITY,
+  encodeCandidateRoots,
+  extractCandidateRoots,
+  validateCollectResponse,
+} = require('../../modules/jarvos-runtime-kit/src/durable-work-collect.js');
 
 const HARNESS = 'codex';
 const BRIDGE_COMMAND_ENV = 'JARVOS_STEWARDSHIP_BRIDGE_COMMAND';
@@ -23,6 +33,9 @@ const DEFAULT_BRIDGE_TIMEOUT_MS = 5000;
 const BRIDGE_CAPABILITY_TIMEOUT_MS = Object.freeze({
   projectsContextStart: 2000,
   projectsContextRefresh: 250,
+  // Codex exposes no PostToolUse/Stop hook; durable work is collected at the
+  // next native turn boundary with its own hard, single-shot budget.
+  [DURABLE_WORK_COLLECT_CAPABILITY]: COLLECT_TIMEOUT_MS,
 });
 const CODEX_THREAD_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const SESSION_WAIT_ID = /^session-wait:[A-Za-z0-9._:-]{1,80}$/;
@@ -69,14 +82,23 @@ function hookSessionId(input, hookEventName) {
   return typeof input.session_id === 'string' && CODEX_THREAD_ID.test(input.session_id) ? input.session_id : null;
 }
 
-function readHookInput(hookEventName) {
+// Reads the bounded hook input once. Only the thread id and the
+// harness-reported cwd survive parsing; the prompt and every other field are
+// discarded here and never reach a bridge, log, or file.
+function readHookEnvelope(hookEventName) {
   try {
     const raw = fs.readFileSync(0, 'utf8');
-    if (raw.length === 0 || raw.length > MAX_HOOK_INPUT_CHARS) return null;
-    return hookSessionId(JSON.parse(raw), hookEventName);
+    if (raw.length === 0 || raw.length > MAX_HOOK_INPUT_CHARS) return { sessionId: null, cwd: null };
+    const input = JSON.parse(raw);
+    const sessionId = hookSessionId(input, hookEventName);
+    return { sessionId, cwd: sessionId && typeof input.cwd === 'string' ? input.cwd : null };
   } catch {
-    return null;
+    return { sessionId: null, cwd: null };
   }
+}
+
+function readHookInput(hookEventName) {
+  return readHookEnvelope(hookEventName).sessionId;
 }
 
 function bridgeEnvironment(sessionId, env = process.env) {
@@ -119,6 +141,18 @@ function invokeBridge(capability, options = {}) {
     const validated = validateProjectsContextRefreshEnvelope(response);
     if (!validated.ok) return { ...base, envelope: null, reason: 'bridge-unavailable' };
     return { ...base, envelope: response, reason: undefined };
+  }
+  if (capability === DURABLE_WORK_COLLECT_CAPABILITY) {
+    // Metadata-only receipt; never model-visible. Any failure fails open.
+    if (!result || result.error || result.status !== 0) return { ...base, collect: null, reason: 'bridge-unavailable' };
+    let response;
+    try {
+      response = JSON.parse(result.stdout || '{}');
+    } catch {
+      return { ...base, collect: null, reason: 'bridge-unavailable' };
+    }
+    if (!validateCollectResponse(response).ok) return { ...base, collect: null, reason: 'bridge-unavailable' };
+    return { ...base, collect: response, reason: undefined };
   }
   if (result.status !== 0) return { ...base, pendingInSessionInput: false, reason: 'bridge-unavailable' };
   try {
@@ -190,6 +224,28 @@ function sessionWaitNextTurn(options) { return invokeBridge('sessionWaitNextTurn
 function projectsContextStart(options) { return invokeBridge('projectsContextStart', options); }
 function projectsContextRefresh(options) { return invokeBridge('projectsContextRefresh', options); }
 
+// The harness-reported session cwd, as a transient candidate root, lets a
+// host bridge bind the session to its repository's Project. It travels only
+// in the bridge child's environment and is never logged or persisted.
+function projectsCandidateEnvironment(hookCwd) {
+  const roots = extractCandidateRoots({ cwd: hookCwd });
+  return roots.length ? { [CANDIDATE_ROOTS_ENV]: encodeCandidateRoots(roots) } : {};
+}
+
+// Collects durable work observed since the previous turn boundary. Only the
+// harness-reported session cwd is a candidate root; the process cwd is never
+// a fallback because a managed dispatcher runs this hook from its selected
+// runtime rather than the session's repository.
+function durableWorkCollect(options = {}) {
+  const roots = extractCandidateRoots({ cwd: options.hookCwd });
+  if (!roots.length) return { capability: DURABLE_WORK_COLLECT_CAPABILITY, available: false, collect: null, reason: 'no-candidate-root' };
+  const env = options.env || process.env;
+  return invokeBridge(DURABLE_WORK_COLLECT_CAPABILITY, {
+    ...options,
+    env: { ...env, [COLLECT_TRIGGER_ENV]: 'turn_boundary', [CANDIDATE_ROOTS_ENV]: encodeCandidateRoots(roots) },
+  });
+}
+
 function sessionWaitContext(input) {
   if (!input?.pendingSessionWait || !input.wait) return '';
   const wait = input.wait;
@@ -221,16 +277,27 @@ function writeJson(value) {
   process.stdout.write(`${JSON.stringify(value)}\n`);
 }
 
-function main(sessionId = readHookInput('UserPromptSubmit')) {
+function main(sessionId, hookEnvelope = null) {
+  let envelope = hookEnvelope;
+  if (sessionId === undefined) {
+    envelope = readHookEnvelope('UserPromptSubmit');
+    sessionId = envelope.sessionId;
+  }
   try {
     const env = bridgeEnvironment(sessionId);
     if (!env) {
       writeJson({});
       return;
     }
+    // Opt-in host collection at the native turn boundary. The managed
+    // dispatcher enables it only for a selected runtime that implements the
+    // bridge capability; an unmanaged install never spawns this call.
+    if (env[COLLECT_ENABLED_ENV] === '1') {
+      try { durableWorkCollect({ env, hookCwd: envelope?.cwd }); } catch { /* fail open */ }
+    }
     // Exactly one refresh call per turn boundary; a timeout, invalid, or
     // unavailable result continues the turn with no injection and no retry.
-    const refresh = projectsContextRefresh({ env });
+    const refresh = projectsContextRefresh({ env: { ...env, ...projectsCandidateEnvironment(envelope?.cwd) } });
     const input = nextTurnInput({ env });
     const sessionWait = sessionWaitNextTurn({ env });
     heartbeat({ env });
@@ -268,6 +335,7 @@ module.exports = {
   additionalContext,
   sessionWaitContext,
   bridgeEnvironment,
+  durableWorkCollect,
   hasVerifiedLinkedWorktree,
   heartbeat,
   invokeBridge,
@@ -276,6 +344,8 @@ module.exports = {
   sessionWaitNextTurn,
   hookSessionId,
   main,
+  projectsCandidateEnvironment,
+  readHookEnvelope,
   readHookInput,
   stewardshipAdapter,
   validateSessionWaitBridgeResponse,

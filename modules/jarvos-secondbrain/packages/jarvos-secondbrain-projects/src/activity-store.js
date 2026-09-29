@@ -264,10 +264,18 @@ class ActivityStore {
         return { status: 'quarantined', reason: 'causal_identity_conflict', activity: clone(existing) };
       }
       const merged = mergeEnvelope(existing, incoming);
+      // An identical replay carries no new evidence. It must be a true no-op:
+      // no generation, no CURRENT rewrite, and an unchanged state digest. Only
+      // a replay that adds evidence references advances the store.
+      // Compare against the existing envelope's own merge-normalized form so an
+      // older unsorted evidence list is not mistaken for new evidence.
+      if (digest(merged) === digest(mergeEnvelope(existing, existing))) {
+        return { status: 'deduped', replay: 'identical', generation: this.state.generation, activity: clone(existing) };
+      }
       const next = clone(this.state);
       next.activities[existingId] = merged;
       this.commit(next);
-      return { status: 'deduped', generation: this.state.generation, activity: clone(merged) };
+      return { status: 'deduped', replay: 'evidence_merged', generation: this.state.generation, activity: clone(merged) };
     }
     const next = clone(this.state);
     next.activities[incoming.id] = incoming;

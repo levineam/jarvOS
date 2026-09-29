@@ -297,10 +297,14 @@
         "provenance-probe",
         "session-precompact"
       ],
+      "optionalActions": [
+        "session-event"
+      ],
       "selectedRuntimeAssets": [
         "runtimes/claude/jarvos-session-start-hook.js",
         "runtimes/claude/jarvos-session-turn-hook.js",
-        "runtimes/claude/jarvos-precompact-hook.js"
+        "runtimes/claude/jarvos-precompact-hook.js",
+        "runtimes/claude/jarvos-session-event-hook.js"
       ],
       "installedConfig": {
         "inspection": "stable-entrypoint-only",
@@ -315,6 +319,20 @@
     "bridge": {
       "environment": "JARVOS_STEWARDSHIP_BRIDGE_COMMAND",
       "contract": "An executable on PATH accepts one lifecycle capability name and emits a public-safe JSON availability receipt. For nextTurnInput, a pending receipt may contain only a bounded plain-English prompt, 2-3 choices, a listed default, and an opaque correlation identifier; hooks display it without granting authority. Claude resolves private bridge state only through its hook stdin session_id and a session-neutral private mapping root; hooks never preserve or display a private context-file path. Native hooks do not capture arbitrary reply text: the in-session agent verifies an exact listed reply, then invokes `jarvos-stewardship-bridge answer --correlation <correlation> --choice <listed-choice>`, which passes only those two bounded fields."
+    },
+    "durableWorkCollection": {
+      "contract": "jarvos.durable-work-collect/v1",
+      "capability": "durableWorkCollect",
+      "mode": "native-hook",
+      "events": ["PostToolUse", "Stop"],
+      "postToolUseMatcher": "Bash",
+      "script": "jarvos-session-event-hook.js",
+      "optionalAction": "session-event",
+      "registration": "probe-gated",
+      "timeoutMs": 2000,
+      "failOpen": true,
+      "injectsContext": false,
+      "reason": "Registered only on a managed install whose selected dispatcher advertises session-event. The hook passes the host bridge bounded absolute candidate roots and never logs or persists command text, tool output, or prompts."
     },
     "capabilities": {
       "startOrResume": {
