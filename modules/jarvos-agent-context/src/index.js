@@ -300,9 +300,7 @@ function publicCaptureOutcome(note, journal) {
 }
 
 function linkWrittenNote({ noteResult, section, createJournalIfMissing, mutationService }) {
-  if (!noteResult.written && !noteResult.savedLocally) {
-    return { ...noteResult.journal, reason: 'note write was not acknowledged; backlink not attempted' };
-  }
+  if (!noteResult.written && !noteResult.savedLocally) return noteResult.journal;
   try {
     const linked = loadJournalLinker().linkNoteToJournal({
       noteTitle: noteResult.title,
