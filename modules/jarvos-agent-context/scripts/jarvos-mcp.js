@@ -29,6 +29,7 @@ const {
   synthesizeRecall,
   writeSessionThread,
 } = require('../src/index.js');
+const { createHostProjectsContextProvider } = require('../src/projects-context-bootstrap.js');
 const {
   COMMON_WORK_ACTIONS,
 } = require('../../jarvos-runtime-kit/src/harness-dispatch.js');
@@ -36,12 +37,14 @@ const { invokeCommonWork } = require('../../jarvos-runtime-kit/src/common-work-s
 
 const CREDENTIAL_ENV = 'JARVOS_CONTROL_PLANE_CREDENTIAL';
 const CREDENTIAL_FILE_ENV = 'JARVOS_CONTROL_PLANE_CREDENTIAL_FILE';
+const SHARED_SKILLS_OWNER_CREDENTIAL_FILE_ENV = 'JARVOS_SHARED_SKILLS_OWNER_CREDENTIAL_FILE';
 const SHARED_SKILLS_CONFIG_ENV = 'JARVOS_SHARED_SKILLS_CONFIG_PATH';
 const COMMON_WORK_SERVICE_MODULE_ENV = 'JARVOS_COMMON_WORK_SERVICE_MODULE';
 const COMMON_WORK_HARNESS_ENV = 'JARVOS_COMMON_WORK_HARNESS';
 const STRICT_EMPTY_ARGUMENT_TOOLS = new Set([
   'jarvos_journal_health',
   'jarvos_ensure_today_journal',
+  'jarvos_projects_roster',
 ]);
 // Host-only profiles (e.g. 'session-focus') are resolved exclusively through
 // internal readProjectsContext(..., true) callers after protected principal
@@ -78,6 +81,21 @@ function resolveHostCredential(env = process.env) {
   const ambient = env[CREDENTIAL_ENV];
   if (typeof ambient === 'string' && ambient.length > 0) return ambient;
   return null;
+}
+
+// Bind shared-skill ownership independently from the broader control plane.
+// Existing authenticated control-plane hosts remain compatible, but callers
+// can never supply either credential through MCP arguments.
+function resolveSharedSkillsOwnerCredential(env = process.env) {
+  const file = env[SHARED_SKILLS_OWNER_CREDENTIAL_FILE_ENV];
+  if (typeof file === 'string' && file.length > 0) {
+    try {
+      return readCredentialFile(file);
+    } catch {
+      throw new Error('shared-skill owner credential file is unusable');
+    }
+  }
+  return resolveHostCredential(env);
 }
 
 // ownerOnly distinguishes two trust policies sharing one ancestry check:
@@ -255,6 +273,11 @@ const TOOLS = [
         to: { type: 'string', description: 'Optional bounded UTC activity-window end.' },
       },
     },
+  },
+  {
+    name: 'jarvos_projects_roster',
+    description: 'Return the complete host-bound Projects identity roster for the whole portfolio as the existing jarvos.projects-roster/v1 all-or-nothing packet: id, kind, parentId, and revision for every project and outcome, plus generation, scope, capturedAt, and complete. Identity-only: it carries no lifecycle, owner, next action, or wait/revisit signal, and returning it does not authorize continuing work. Missing host binding returns unavailable, never an empty-success roster.',
+    inputSchema: { type: 'object', additionalProperties: false, properties: {} },
   },
   {
     name: 'jarvos_projects_propose',
@@ -629,13 +652,14 @@ function requireEmptyObjectArguments(args) {
   }
 }
 
-function sharedSkillsConfigPath(env = process.env) {
+function sharedSkillsConfigPath(env = process.env, defaultPath = null) {
   const value = env[SHARED_SKILLS_CONFIG_ENV];
-  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+  if (typeof value === 'string' && value.trim()) return value.trim();
+  return typeof defaultPath === 'function' ? defaultPath() : defaultPath || undefined;
 }
 
 function requireSharedSkillsOwnerSession() {
-  const credential = resolveHostCredential();
+  const credential = resolveSharedSkillsOwnerCredential();
   if (!credential) throw new Error('shared-skill owner session is not configured for this MCP session');
 }
 
@@ -731,7 +755,7 @@ async function callTool(name, args = {}, lifecycle = {}) {
   }
   if (name === 'jarvos_shared_skills') {
     const skills = loadSharedSkills();
-    const configPath = sharedSkillsConfigPath();
+    const configPath = sharedSkillsConfigPath(process.env, () => skills.loadConfig().path);
     const operation = args.operation;
     if (operation === 'status') {
       return textResult(JSON.stringify(skills.sharedStatusOperator({ configPath }), null, 2));
@@ -846,6 +870,28 @@ async function callTool(name, args = {}, lifecycle = {}) {
     if (mcpProjectsContextProvider) request.provider = mcpProjectsContextProvider;
     const result = await readProjectsContext(request, true);
     return textResult(JSON.stringify(result, null, 2), false);
+  }
+  if (name === 'jarvos_projects_roster') {
+    requireEmptyObjectArguments(args);
+    // No caller-selected query, scope, capability, path, or limits: this is a
+    // strictly no-argument tool. The injected MCP provider (test/host wiring)
+    // wins when present; otherwise fall back to the trusted host bootstrap.
+    // Neither path ever falls back to the orientation query or receipt.
+    let provider;
+    try {
+      provider = mcpProjectsContextProvider || createHostProjectsContextProvider();
+    } catch {
+      provider = null;
+    }
+    if (!provider || typeof provider.readPortfolioRoster !== 'function') {
+      return textResult(JSON.stringify({ status: 'unavailable', code: 'PORTFOLIO_ROSTER_UNAVAILABLE' }, null, 2), false);
+    }
+    try {
+      const result = await provider.readPortfolioRoster();
+      return textResult(JSON.stringify(result, null, 2), false);
+    } catch {
+      return textResult(JSON.stringify({ status: 'unavailable', code: 'PORTFOLIO_ROSTER_UNAVAILABLE' }, null, 2), false);
+    }
   }
   if (name === 'jarvos_projects_propose') {
     const result = await proposeProjectsContext({ ...args, provider: mcpProjectsContextProvider });
@@ -1065,8 +1111,10 @@ module.exports.promptResult = promptResult;
 module.exports.noteCaptureArgs = noteCaptureArgs;
 module.exports.withToolTimeout = withToolTimeout;
 module.exports.resolveHostCredential = resolveHostCredential;
+module.exports.resolveSharedSkillsOwnerCredential = resolveSharedSkillsOwnerCredential;
 module.exports.readCredentialFile = readCredentialFile;
 module.exports.requireEmptyObjectArguments = requireEmptyObjectArguments;
 module.exports.CREDENTIAL_ENV = CREDENTIAL_ENV;
 module.exports.CREDENTIAL_FILE_ENV = CREDENTIAL_FILE_ENV;
 module.exports.COMMON_WORK_HOST_UNAVAILABLE = COMMON_WORK_HOST_UNAVAILABLE;
+module.exports.sharedSkillsConfigPath = sharedSkillsConfigPath;

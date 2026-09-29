@@ -65,6 +65,8 @@ Three rules. No exceptions.
 2. **Verify completion.** Before marking done, check the done criteria from the plan. No "I think it worked" — show proof.
 3. **Choose the simplest reliable execution lane.** Execute directly when the work is small or bounded. Use delegation (subagents, background processes) only when it is clearly warranted by complexity, runtime, or explicit user preference.
 
+For substantive code changes, use the shared `workflow-execution` test authoring check as a reasoning aid; protect behavior with the cheapest credible regression rather than test volume.
+
 The discipline is: plan → execute → verify.
 
 ---

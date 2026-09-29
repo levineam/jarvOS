@@ -7,7 +7,7 @@ const { MAX_MESSAGE_CHARS, lintOperatorMessage, lintOperatorMessages } = require
 
 const DECLARATION_VERSION = 'jarvos-operator-notification-adapter/v1';
 const DELIVERY_STATUS = 'not-configured';
-const RUNTIME_IDS = ['claude', 'codex', 'grok-bot', 'hermes', 'openclaw'];
+const RUNTIME_IDS = ['claude', 'codex', 'grok-bot', 'hermes', 'muse', 'openclaw'];
 function isObject(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }

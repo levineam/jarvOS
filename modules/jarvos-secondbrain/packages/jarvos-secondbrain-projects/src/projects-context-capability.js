@@ -5,6 +5,9 @@ const crypto = require('node:crypto');
 const CONTEXT_CONTRACT = 'jarvos.projects-context/v1';
 const CAPABILITY_CONTRACT = 'jarvos.projects-context-capability/v1';
 const AUDIENCE = 'jarvos-projects-context';
+const PROOF_CONTRACT = 'jarvos.projects-portfolio-proof/v1';
+const PROOF_CAPABILITY_CONTRACT = 'jarvos.projects-portfolio-proof-capability/v1';
+const PROOF_AUDIENCE = 'jarvos-projects-portfolio-proof';
 const REDACTION_CLASSES = Object.freeze(['public', 'internal', 'private', 'mixed']);
 const CAPABILITY_FIELDS = Object.freeze([
   'type', 'contract', 'capabilityRevision', 'audience', 'subject', 'queryDigest', 'scope', 'redactionClass',
@@ -61,123 +64,138 @@ function validateFreshness(freshness) {
   return { maxAgeSeconds: integer(freshness.maxAgeSeconds, 'freshness.maxAgeSeconds', { min: 1, max: 86_400 }) };
 }
 
-function unsignedFields(capability) {
-  return Object.fromEntries(CAPABILITY_FIELDS.filter((field) => field !== 'signature').map((field) => [field, capability[field]]));
-}
-
-function validateCapability(capability) {
-  if (!exactKeys(capability, CAPABILITY_FIELDS)) throw new TypeError('capability receipt has unsupported fields');
-  if (capability.type !== CAPABILITY_CONTRACT || capability.contract !== CONTEXT_CONTRACT || capability.audience !== AUDIENCE) throw new TypeError('capability receipt has an unsupported contract');
-  if (!REDACTION_CLASSES.includes(capability.redactionClass)) throw new TypeError(`unsupported redaction class: ${capability.redactionClass}`);
-  if (!Array.isArray(capability.providerCoverage) || capability.providerCoverage.some((provider) => typeof provider !== 'string' || !provider.trim())) throw new TypeError('providerCoverage must contain provider names');
-  const normalized = {
-    type: CAPABILITY_CONTRACT,
-    contract: CONTEXT_CONTRACT,
-    capabilityRevision: requiredString(capability.capabilityRevision, 'capabilityRevision'),
-    audience: AUDIENCE,
-    subject: requiredString(capability.subject, 'subject'),
-    queryDigest: /^[a-f0-9]{64}$/.test(capability.queryDigest) ? capability.queryDigest : (() => { throw new TypeError('queryDigest must be a sha256 digest'); })(),
-    scope: validateScope(capability.scope),
-    redactionClass: capability.redactionClass,
-    freshness: validateFreshness(capability.freshness),
-    providerCoverage: [...new Set(capability.providerCoverage.map((provider) => requiredString(provider, 'providerCoverage[]')))].sort(),
-    limits: validateLimits(capability.limits),
-    issuedAt: timestamp(capability.issuedAt, 'issuedAt'),
-    expiresAt: timestamp(capability.expiresAt, 'expiresAt'),
-    nonce: requiredString(capability.nonce, 'nonce'),
-    hostId: requiredString(capability.hostId, 'hostId'),
-    receiptId: /^cap_[a-f0-9]{32}$/.test(capability.receiptId) ? capability.receiptId : (() => { throw new TypeError('receiptId must be a capability ID'); })(),
-    signature: requiredString(capability.signature, 'signature'),
-  };
-  if (Date.parse(normalized.expiresAt) <= Date.parse(normalized.issuedAt)) throw new RangeError('expiresAt must be after issuedAt');
-  return normalized;
-}
-
-function issueCapability({
-  authorization,
-  hostId,
-  hostSecret,
-  subject,
-  query,
-  queryDigest,
-  scope,
-  redactionClass = 'private',
-  freshness = { maxAgeSeconds: 3600 },
-  providerCoverage = [],
-  limits = { maxItems: 100, maxBytes: 50_000, maxProviderAgeSeconds: 3600 },
-  capabilityRevision,
-  issuedAt,
-  expiresAt,
-  nonce = crypto.randomBytes(16).toString('base64url'),
-} = {}) {
-  if (!authorization || authorization.allowed !== true) return { status: 'denied' };
-  if (typeof hostSecret !== 'string' && !Buffer.isBuffer(hostSecret)) throw new TypeError('hostSecret is required');
-  const normalizedScope = validateScope(scope || (query && query.scope));
-  const normalizedLimits = validateLimits(limits);
-  const normalizedFreshness = validateFreshness(freshness);
-  const digest = queryDigest || (query ? sha256(query) : null);
-  const unsigned = {
-    type: CAPABILITY_CONTRACT,
-    contract: CONTEXT_CONTRACT,
-    capabilityRevision: requiredString(capabilityRevision, 'capabilityRevision'),
-    audience: AUDIENCE,
-    subject: requiredString(subject, 'subject'),
-    queryDigest: /^[a-f0-9]{64}$/.test(digest || '') ? digest : (() => { throw new TypeError('query or queryDigest is required'); })(),
-    scope: normalizedScope,
-    redactionClass,
-    freshness: normalizedFreshness,
-    providerCoverage: [...new Set(providerCoverage.map((provider) => requiredString(provider, 'providerCoverage[]')))].sort(),
-    limits: normalizedLimits,
-    issuedAt: timestamp(issuedAt, 'issuedAt'),
-    expiresAt: timestamp(expiresAt, 'expiresAt'),
-    nonce: requiredString(nonce, 'nonce'),
-    hostId: requiredString(hostId, 'hostId'),
-  };
-  const receiptId = `cap_${sha256(unsigned).slice(0, 32)}`;
-  const capability = { ...unsigned, receiptId };
-  capability.signature = hmac(unsignedFields(capability), hostSecret);
-  return validateCapability(capability);
-}
-
-function verifyCapability(capability, {
-  hostSecret,
-  now = new Date().toISOString(),
-  expectedSubject,
-  expectedQuery,
-  expectedScope,
-  expectedRedactionClass,
-  expectedHostId,
-} = {}) {
-  try {
-    const normalized = validateCapability(capability);
-    if (typeof hostSecret !== 'string' && !Buffer.isBuffer(hostSecret)) return { ok: false, reason: 'invalid-signature' };
-    if (expectedSubject !== undefined && normalized.subject !== expectedSubject) return { ok: false, reason: 'audience-mismatch' };
-    if (expectedHostId !== undefined && normalized.hostId !== expectedHostId) return { ok: false, reason: 'audience-mismatch' };
-    if (expectedQuery !== undefined && normalized.queryDigest !== sha256(expectedQuery)) return { ok: false, reason: 'scope-mismatch' };
-    if (expectedScope !== undefined && stableStringify(normalized.scope) !== stableStringify(validateScope(expectedScope))) return { ok: false, reason: 'scope-mismatch' };
-    if (expectedRedactionClass !== undefined && normalized.redactionClass !== expectedRedactionClass) return { ok: false, reason: 'scope-mismatch' };
-    const expectedSignature = hmac(unsignedFields(normalized), hostSecret);
-    if (!constantTimeEqual(expectedSignature, normalized.signature)) return { ok: false, reason: 'invalid-signature' };
-    const current = Date.parse(now);
-    if (Number.isNaN(current)) return { ok: false, reason: 'invalid-contract' };
-    if (current < Date.parse(normalized.issuedAt)) return { ok: false, reason: 'not-yet-valid' };
-    if (current >= Date.parse(normalized.expiresAt)) return { ok: false, reason: 'expired' };
-    return { ok: true, capability: normalized };
-  } catch (_) {
-    return { ok: false, reason: 'invalid-contract' };
+function makeCapabilityKit({ capabilityContract, contextContract, audience }) {
+  function unsignedFields(capability) {
+    return Object.fromEntries(CAPABILITY_FIELDS.filter((field) => field !== 'signature').map((field) => [field, capability[field]]));
   }
+
+  function validateCapability(capability) {
+    if (!exactKeys(capability, CAPABILITY_FIELDS)) throw new TypeError('capability receipt has unsupported fields');
+    if (capability.type !== capabilityContract || capability.contract !== contextContract || capability.audience !== audience) throw new TypeError('capability receipt has an unsupported contract');
+    if (!REDACTION_CLASSES.includes(capability.redactionClass)) throw new TypeError(`unsupported redaction class: ${capability.redactionClass}`);
+    if (!Array.isArray(capability.providerCoverage) || capability.providerCoverage.some((provider) => typeof provider !== 'string' || !provider.trim())) throw new TypeError('providerCoverage must contain provider names');
+    const normalized = {
+      type: capabilityContract,
+      contract: contextContract,
+      capabilityRevision: requiredString(capability.capabilityRevision, 'capabilityRevision'),
+      audience,
+      subject: requiredString(capability.subject, 'subject'),
+      queryDigest: /^[a-f0-9]{64}$/.test(capability.queryDigest) ? capability.queryDigest : (() => { throw new TypeError('queryDigest must be a sha256 digest'); })(),
+      scope: validateScope(capability.scope),
+      redactionClass: capability.redactionClass,
+      freshness: validateFreshness(capability.freshness),
+      providerCoverage: [...new Set(capability.providerCoverage.map((provider) => requiredString(provider, 'providerCoverage[]')))].sort(),
+      limits: validateLimits(capability.limits),
+      issuedAt: timestamp(capability.issuedAt, 'issuedAt'),
+      expiresAt: timestamp(capability.expiresAt, 'expiresAt'),
+      nonce: requiredString(capability.nonce, 'nonce'),
+      hostId: requiredString(capability.hostId, 'hostId'),
+      receiptId: /^cap_[a-f0-9]{32}$/.test(capability.receiptId) ? capability.receiptId : (() => { throw new TypeError('receiptId must be a capability ID'); })(),
+      signature: requiredString(capability.signature, 'signature'),
+    };
+    if (Date.parse(normalized.expiresAt) <= Date.parse(normalized.issuedAt)) throw new RangeError('expiresAt must be after issuedAt');
+    return normalized;
+  }
+
+  function issueCapability({
+    authorization,
+    hostId,
+    hostSecret,
+    subject,
+    query,
+    queryDigest,
+    scope,
+    redactionClass = 'private',
+    freshness = { maxAgeSeconds: 3600 },
+    providerCoverage = [],
+    limits = { maxItems: 100, maxBytes: 50_000, maxProviderAgeSeconds: 3600 },
+    capabilityRevision,
+    issuedAt,
+    expiresAt,
+    nonce = crypto.randomBytes(16).toString('base64url'),
+  } = {}) {
+    if (!authorization || authorization.allowed !== true) return { status: 'denied' };
+    if (typeof hostSecret !== 'string' && !Buffer.isBuffer(hostSecret)) throw new TypeError('hostSecret is required');
+    const normalizedScope = validateScope(scope || (query && query.scope));
+    const normalizedLimits = validateLimits(limits);
+    const normalizedFreshness = validateFreshness(freshness);
+    const digest = queryDigest || (query ? sha256(query) : null);
+    const unsigned = {
+      type: capabilityContract,
+      contract: contextContract,
+      capabilityRevision: requiredString(capabilityRevision, 'capabilityRevision'),
+      audience,
+      subject: requiredString(subject, 'subject'),
+      queryDigest: /^[a-f0-9]{64}$/.test(digest || '') ? digest : (() => { throw new TypeError('query or queryDigest is required'); })(),
+      scope: normalizedScope,
+      redactionClass,
+      freshness: normalizedFreshness,
+      providerCoverage: [...new Set(providerCoverage.map((provider) => requiredString(provider, 'providerCoverage[]')))].sort(),
+      limits: normalizedLimits,
+      issuedAt: timestamp(issuedAt, 'issuedAt'),
+      expiresAt: timestamp(expiresAt, 'expiresAt'),
+      nonce: requiredString(nonce, 'nonce'),
+      hostId: requiredString(hostId, 'hostId'),
+    };
+    const receiptId = `cap_${sha256(unsigned).slice(0, 32)}`;
+    const capability = { ...unsigned, receiptId };
+    capability.signature = hmac(unsignedFields(capability), hostSecret);
+    return validateCapability(capability);
+  }
+
+  function verifyCapability(capability, {
+    hostSecret,
+    now = new Date().toISOString(),
+    expectedSubject,
+    expectedQuery,
+    expectedScope,
+    expectedRedactionClass,
+    expectedHostId,
+  } = {}) {
+    try {
+      const normalized = validateCapability(capability);
+      if (typeof hostSecret !== 'string' && !Buffer.isBuffer(hostSecret)) return { ok: false, reason: 'invalid-signature' };
+      if (expectedSubject !== undefined && normalized.subject !== expectedSubject) return { ok: false, reason: 'audience-mismatch' };
+      if (expectedHostId !== undefined && normalized.hostId !== expectedHostId) return { ok: false, reason: 'audience-mismatch' };
+      if (expectedQuery !== undefined && normalized.queryDigest !== sha256(expectedQuery)) return { ok: false, reason: 'scope-mismatch' };
+      if (expectedScope !== undefined && stableStringify(normalized.scope) !== stableStringify(validateScope(expectedScope))) return { ok: false, reason: 'scope-mismatch' };
+      if (expectedRedactionClass !== undefined && normalized.redactionClass !== expectedRedactionClass) return { ok: false, reason: 'scope-mismatch' };
+      const expectedSignature = hmac(unsignedFields(normalized), hostSecret);
+      if (!constantTimeEqual(expectedSignature, normalized.signature)) return { ok: false, reason: 'invalid-signature' };
+      const current = Date.parse(now);
+      if (Number.isNaN(current)) return { ok: false, reason: 'invalid-contract' };
+      if (current < Date.parse(normalized.issuedAt)) return { ok: false, reason: 'not-yet-valid' };
+      if (current >= Date.parse(normalized.expiresAt)) return { ok: false, reason: 'expired' };
+      return { ok: true, capability: normalized };
+    } catch (_) {
+      return { ok: false, reason: 'invalid-contract' };
+    }
+  }
+
+  return { validateCapability, issueCapability, verifyCapability };
 }
 
 function capabilityDigest(capability) { return sha256(capability); }
+
+const orientationKit = makeCapabilityKit({ capabilityContract: CAPABILITY_CONTRACT, contextContract: CONTEXT_CONTRACT, audience: AUDIENCE });
+// Distinct contract/audience means an orientation capability can never satisfy
+// validateProofCapability (and vice versa), even when signed by the same host secret.
+const proofKit = makeCapabilityKit({ capabilityContract: PROOF_CAPABILITY_CONTRACT, contextContract: PROOF_CONTRACT, audience: PROOF_AUDIENCE });
 
 module.exports = {
   AUDIENCE,
   CAPABILITY_FIELDS,
   CAPABILITY_CONTRACT,
   CONTEXT_CONTRACT,
+  PROOF_AUDIENCE,
+  PROOF_CAPABILITY_CONTRACT,
+  PROOF_CONTRACT,
   REDACTION_CLASSES,
   capabilityDigest,
-  issueCapability,
-  validateCapability,
-  verifyCapability,
+  issueCapability: orientationKit.issueCapability,
+  validateCapability: orientationKit.validateCapability,
+  verifyCapability: orientationKit.verifyCapability,
+  issueProofCapability: proofKit.issueCapability,
+  validateProofCapability: proofKit.validateCapability,
+  verifyProofCapability: proofKit.verifyCapability,
 };

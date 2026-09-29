@@ -182,22 +182,21 @@ delivery as four different boundaries. Matching bundle digests and receipts
 prove projection; they do not prove that a model saw or followed the changed
 instructions.
 
-For OpenClaw-backed Active Assistant, first read the configured workspace for
-the Active Assistant agent. For the default agent, start with:
+For OpenClaw-backed Active Assistant, first resolve the configured agent id and
+workspace:
 
 ```sh
-openclaw config get agents.defaults.workspace
+openclaw agents list --json
 ```
 
-Use the exact returned path below; do not guess it from the current shell. A
-named agent may override the default, so resolve that agent's configured
-workspace instead. Then confirm that workspace uses a file-backed skill root
-and that global skill watching is enabled:
+Use the exact returned id and workspace below; do not guess either from the
+current shell. Then confirm that agent uses a file-backed skill root and that
+global skill watching is enabled:
 
 ```sh
 cd /path/to/active-assistant-workspace
 openclaw config get skills.load
-openclaw skills list --json
+openclaw skills list --agent <active-assistant-agent-id> --json
 ```
 
 The effective `skills.load.watch` value must be `true`, and the target skill's
@@ -210,50 +209,58 @@ installed CLI's reported source rather than inferring it from a directory name.
 `openclaw-managed` is OpenClaw's watched, file-backed user skill root (normally
 `~/.openclaw/skills`), not a pinned managed-library selection. Any other source
 requires its own source contract and must not be treated as watched file-backed
-state. Run one owner-authorized fresh-session behavior check through the configured primary
-model, without forcing a different provider. Replace the placeholders with a
-disposable fixture marker or a bounded behavior that uniquely exercises the
-real update:
+state. Run one owner-authorized fresh-session behavior check through the named
+agent's configured primary model, without forcing a different provider. Put a
+disposable expected marker only in the fixture skill and the operator's private
+record; never include the expected answer in the prompt:
 
 ```sh
-openclaw agent exec --cwd /path/to/active-assistant-workspace --json \
-  'Invoke the <skill-name> skill. Return only <expected-new-behavior>.'
+openclaw agent --agent <active-assistant-agent-id> \
+  --session-id <fresh-session-id> --json \
+  --message 'Invoke the <skill-name> skill and return the marker defined by that skill.'
 ```
 
 This model call can consume provider allowance even though it sends no user
-message. The headless `agent exec` surface proves fresh-session discovery only
-and is non-delivering; confirm with `openclaw agent exec --help` that the
-installed command has no delivery option, and never substitute `openclaw agent
---deliver`. Record the served provider/model, the skill read or invocation
-evidence, and the bounded response. A forced model whose auth profile is
-unavailable is a bad proof command, not evidence that Skill Sync or Active
-Assistant discovery failed.
+message. Confirm with `openclaw agent --help` that the installed command runs
+through the Gateway unless `--local` is supplied and that `--deliver` defaults
+to false. Omit both flags. Record the named agent, fresh session id, served
+provider/model, skill read or invocation evidence, private expected marker,
+and bounded response. A forced model whose auth profile is unavailable is a
+bad proof command, not evidence that Skill Sync or Active Assistant discovery
+failed.
 
 For the separate existing-session boundary, the file watcher makes a changed
 `SKILL.md` available on the next turn after its event. Prove that boundary on
 the next real owner update or with a disposable skill root. First run `openclaw
-agent --help` and confirm that `--session-id`, `--message`, `--json`, and the
-named-agent selector (when needed) are supported and that `--deliver` defaults
-to false. Choose a new disposable `<existing-session-id>`. If the Active
-Assistant is a named agent, add the same `--agent <id>` argument to both
-commands below. Create the session and observe version 1 without `--deliver`:
+agent --help` and confirm that `--session-id`, `--message`, `--json`, and
+`--agent` are supported, that the command uses the Gateway unless `--local` is
+supplied, and that `--deliver` defaults to false. Choose a new disposable
+`<existing-session-id>`. Record the Gateway process identity, create the
+session, and observe version 1 while omitting both `--local` and `--deliver`:
 
 ```sh
-openclaw agent --session-id <existing-session-id> --json \
-  --message 'Invoke the <skill-name> skill. Return only <expected-version-1-behavior>.'
+openclaw agent --agent <active-assistant-agent-id> \
+  --session-id <existing-session-id> --json \
+  --message 'Invoke the <skill-name> skill and return the marker defined by that skill.'
 ```
 
-Change and reconcile the canonical source. Then confirm the watcher event was
-processed, or wait longer than the installed watcher's documented debounce,
-before reusing the exact same session id for version 2. Omit `--deliver` again:
+Change only the marker in the canonical fixture source and reconcile it. Keep
+the expected version 2 marker out of the prompt. Confirm that the watcher event
+was processed before reusing the exact same session id and identical prompt for
+version 2:
 
 ```sh
-openclaw agent --session-id <existing-session-id> --json \
-  --message 'Invoke the <skill-name> skill. Return only <expected-version-2-behavior>.'
+openclaw agent --agent <active-assistant-agent-id> \
+  --session-id <existing-session-id> --json \
+  --message 'Invoke the <skill-name> skill and return the marker defined by that skill.'
 ```
 
-Record the unchanged session id, both bounded responses, and the watch event or
-debounce evidence. Do not edit a production skill merely to manufacture this
+Record the unchanged agent and session id, unchanged Gateway process identity,
+identical prompts, private expected markers, both bounded responses, served
+provider/model, skill read or invocation evidence, and the watcher event. A
+debounce wait alone is not watcher evidence. If the Gateway restarted between
+turns, the result proves cold discovery rather than existing-session refresh;
+start a new proof. Do not edit a production skill merely to manufacture this
 receipt. If watching is disabled, or OpenClaw logs that native file-watch
 capacity was exhausted and stopped its watchers, repair that condition and
 start a new session. Managed-library selections do not follow this file-backed

@@ -47,6 +47,10 @@ function parseArgs(argv) {
     } else if (arg === '--connector') {
       input.connectors.push(valueFor(argv, index, arg));
       index += 1;
+    } else if (arg === '--indexed-connector') {
+      if (!adapterOptions.indexedConnectors) adapterOptions.indexedConnectors = [];
+      adapterOptions.indexedConnectors.push(valueFor(argv, index, arg));
+      index += 1;
     } else if (arg === '--session-ref') {
       input.sessionRefs.push(valueFor(argv, index, arg));
       index += 1;
@@ -91,7 +95,7 @@ function main() {
     const parsed = parseArgs(process.argv.slice(2));
     const adapter = new CassTranscriptAdapter(parsed.adapterOptions);
     const packet = adapter.retrieve(parsed.input);
-    if (packet.omissions?.some((item) => String(item).startsWith('invalid_request:'))) process.exitCode = 2;
+    if (packet.omissions?.some((item) => String(item).startsWith('invalid_request:') || String(item).startsWith('invalid_host_config:'))) process.exitCode = 2;
     // `--json` is intentionally accepted for symmetry with cass. This CLI is
     // always JSON so callers never need a second output parser.
     process.stdout.write(`${JSON.stringify(packet)}\n`);

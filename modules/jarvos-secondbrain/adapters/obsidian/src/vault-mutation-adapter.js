@@ -8,6 +8,11 @@ const { createInternalReceipt, hashUtf8, validateOperation, validateVaultRelativ
 const { createVaultMutationLedger } = require('./vault-mutation-ledger');
 
 const RESULT_STORE = '__jarvosVaultMutationResults';
+// Obsidian CLI eval round-trips take ~1.5-2.5 s. The capability probe is one
+// small round-trip. The dispatch/poll deadline must cover a staged program
+// (several chunk calls plus the runner) and at least one poll, with headroom.
+const DEFAULT_PROBE_TIMEOUT_MS = 10_000;
+const DEFAULT_POLL_TIMEOUT_MS = 30_000;
 const CAPABILITY_STATES = Object.freeze(['available', 'cli_missing', 'app_stopped', 'app_busy', 'app_unreachable', 'cli_disabled', 'cli_unsupported', 'wrong_vault', 'api_incompatible']);
 
 function sleepSync(milliseconds) {
@@ -15,9 +20,66 @@ function sleepSync(milliseconds) {
 }
 
 function parseEvalResult(output) { const match = [...String(output || '').matchAll(/^=>\s*(.+)$/gm)].at(-1); return match ? JSON.parse(match[1]) : null; }
-function runObsidianEval(code, { vaultName, command = process.env.OBSIDIAN_CLI || 'obsidian', timeoutMs = 10_000, execute = execFileSync } = {}) {
-  try { return parseEvalResult(execute(command, [`vault=${vaultName}`, 'eval', `code=${code}`], { encoding: 'utf8', timeout: timeoutMs, stdio: ['ignore', 'pipe', 'pipe'] })); }
-  catch (error) { const wrapped = new Error(String(error.stderr || error.stdout || error.message || 'Obsidian CLI failed')); wrapped.code = error.code; throw wrapped; }
+// Obsidian CLI 1.14 exits 0 with no output at all, and without running the
+// code, for eval payloads above roughly 8 KB: about half of 10 KB calls and
+// every 14 KB call are dropped. The fixed programs below are 9-20 KB, so larger
+// programs are staged in the app in bounded chunks and run by one small call.
+// A genuine undefined result prints "(no output)", so an empty response is a
+// transport drop and is replayed within the caller's deadline. Replays are
+// safe: chunk writes are indexed, and each program is idempotent against the
+// app's current content.
+const EVAL_STAGE = '__jarvosEvalStage';
+const EVAL_CHUNK_BYTES = 6_000;
+const EMPTY_EVAL_RETRIES = 4;
+function evalOnce(code, { vaultName, command, deadline, execute, emptyRetries }) {
+  for (let attempt = 0; ; attempt += 1) {
+    let output;
+    try { output = execute(command, [`vault=${vaultName}`, 'eval', `code=${code}`], { encoding: 'utf8', timeout: Math.max(1, deadline - Date.now()), stdio: ['ignore', 'pipe', 'pipe'] }); }
+    catch (error) { const wrapped = new Error(String(error.stderr || error.stdout || error.message || 'Obsidian CLI failed')); wrapped.code = error.code; throw wrapped; }
+    if (String(output || '').trim() || attempt >= emptyRetries || Date.now() >= deadline) return parseEvalResult(output);
+  }
+}
+function runObsidianEval(code, { vaultName, command = process.env.OBSIDIAN_CLI || 'obsidian', timeoutMs = 10_000, execute = execFileSync, emptyRetries = EMPTY_EVAL_RETRIES, chunkBytes = EVAL_CHUNK_BYTES } = {}) {
+  const options = { vaultName, command, deadline: Date.now() + timeoutMs, execute, emptyRetries };
+  if (Buffer.byteLength(code, 'utf8') <= chunkBytes) return evalOnce(code, options);
+  const encoded = Buffer.from(code, 'utf8').toString('base64');
+  const parts = encoded.match(new RegExp(`.{1,${chunkBytes}}`, 'g'));
+  const stageId = JSON.stringify(crypto.randomUUID());
+  try {
+    parts.forEach((part, index) => {
+      const staged = evalOnce(`((globalThis.${EVAL_STAGE} ||= {})[${stageId}] ||= [])[${index}] = '${part}'; JSON.stringify(${index})`, options);
+      if (staged !== index) throw new Error(`Obsidian CLI did not stage eval chunk ${index + 1} of ${parts.length}`);
+    });
+  } catch (error) {
+    // The program never ran, so callers may treat this as retryable rather
+    // than ambiguous. Drop any chunks that did arrive.
+    try { evalOnce(`delete globalThis.${EVAL_STAGE}?.[${stageId}]; JSON.stringify(true)`, { ...options, deadline: Math.max(options.deadline, Date.now() + 2_500), emptyRetries: 1 }); } catch { /* best effort */ }
+    const notStaged = new Error(error.message);
+    notStaged.code = 'EVAL_NOT_STAGED';
+    throw notStaged;
+  }
+  const runner = `(() => { const stage = globalThis.${EVAL_STAGE} || {}; const parts = stage[${stageId}]; delete stage[${stageId}]; if (!Array.isArray(parts) || parts.length !== ${parts.length} || parts.join('').length !== ${encoded.length}) throw new Error('staged eval is incomplete'); return (0, eval)(new TextDecoder().decode(Uint8Array.from(atob(parts.join('')), c => c.charCodeAt(0)))); })()`;
+  // The runner deletes the stage before evaluating, so it is sent once per
+  // attempt and never blindly replayed: a surviving stage proves the runner did
+  // not run and may be resent, while a missing stage means it ran and only the
+  // response was lost, which callers recover by polling the result token.
+  // Probes get a small floor past the caller's deadline so they can finish.
+  const probeOptions = () => ({ ...options, deadline: Math.max(options.deadline, Date.now() + 2_500), emptyRetries: 1 });
+  const stageSurvived = (drop) => {
+    try { return evalOnce(`(() => { const stage = globalThis.${EVAL_STAGE}; const kept = Boolean(stage?.[${stageId}]); if (kept && ${drop}) delete stage[${stageId}]; return JSON.stringify(kept); })()`, probeOptions()) === true; }
+    catch { return false; }
+  };
+  for (let attempt = 0; ; attempt += 1) {
+    const result = evalOnce(runner, { ...options, emptyRetries: 0 });
+    if (result !== null) return result;
+    const last = attempt >= emptyRetries || Date.now() >= options.deadline;
+    if (!stageSurvived(last)) return null;
+    if (last) {
+      const notRun = new Error('Obsidian CLI did not run the staged eval');
+      notRun.code = 'EVAL_NOT_STAGED';
+      throw notRun;
+    }
+  }
 }
 function payload(operation) { return Buffer.from(JSON.stringify(operation), 'utf8').toString('base64'); }
 // This program is fixed. Data enters solely through base64 JSON. The only
@@ -79,7 +141,7 @@ function buildObsidianInvariantProgram(operation, inspectionToken, inspectionNon
 function tokenProgram(operationId) { return `JSON.stringify(globalThis.${RESULT_STORE}?.[${JSON.stringify(operationId)}] || null)`; }
 function cleanupProgram(operationId) { return `delete globalThis.${RESULT_STORE}?.[${JSON.stringify(operationId)}]; JSON.stringify(true)`; }
 
-function createVaultMutationAdapter({ vaultRoot, vaultId, vaultName = path.basename(vaultRoot || ''), ledger, ledgerPath, transforms, evaluate, maxPollAttempts = 40, pollIntervalMs = 50, pollTimeoutMs = 2_500, probe, ownerId = crypto.randomUUID(), opportunisticDrain, allowDeleteOperation } = {}) {
+function createVaultMutationAdapter({ vaultRoot, vaultId, vaultName = path.basename(vaultRoot || ''), ledger, ledgerPath, transforms, evaluate, maxPollAttempts = 40, pollIntervalMs = 50, pollTimeoutMs = DEFAULT_POLL_TIMEOUT_MS, probeTimeoutMs = DEFAULT_PROBE_TIMEOUT_MS, probe, ownerId = crypto.randomUUID(), opportunisticDrain, allowDeleteOperation } = {}) {
   if (typeof vaultRoot !== 'string' || !path.isAbsolute(vaultRoot)) throw new Error('vaultRoot must be absolute');
   if (typeof vaultId !== 'string' || !vaultId) throw new Error('vaultId is required');
   // Keep operational intent outside authored vault content. Hosts normally supply
@@ -96,7 +158,7 @@ function createVaultMutationAdapter({ vaultRoot, vaultId, vaultName = path.basen
   const run = evaluate || ((code, timeoutMs = pollTimeoutMs) => runObsidianEval(code, { vaultName, timeoutMs }));
   const deleteAllowed = (operation) => operation.operationKind !== 'delete' || (typeof allowDeleteOperation === 'function' && allowDeleteOperation(operation) === true);
   let draining = false;
-  function capability() { if (probe) return probe(); try { const inspected = run(`JSON.stringify({ vaultName: app?.vault?.getName?.(), hasVault: Boolean(app?.vault?.create && app?.vault?.process && app?.vault?.read) })`); if (!inspected?.hasVault) return { state: 'api_incompatible' }; return inspected.vaultName && inspected.vaultName !== vaultName ? { state: 'wrong_vault' } : { state: 'available', vaultId }; } catch (error) { const message = String(error.message || ''); if (error.code === 'ENOENT') return { state: 'cli_missing' }; if (error.code === 'ETIMEDOUT' || /timed?\s*out|busy|temporar/i.test(message)) return { state: 'app_busy' }; if (/disabled/i.test(message)) return { state: 'cli_disabled' }; if (/unsupported|unknown command|eval/i.test(message)) return { state: 'cli_unsupported' }; if (/not running|no running|connection refused|failed to connect/i.test(message)) return { state: 'app_stopped' }; return { state: 'app_unreachable' }; } }
+  function capability() { if (probe) return probe(); try { const inspected = run(`JSON.stringify({ vaultName: app?.vault?.getName?.(), hasVault: Boolean(app?.vault?.create && app?.vault?.process && app?.vault?.read) })`, probeTimeoutMs); if (!inspected?.hasVault) return { state: 'api_incompatible' }; return inspected.vaultName && inspected.vaultName !== vaultName ? { state: 'wrong_vault' } : { state: 'available', vaultId }; } catch (error) { const message = String(error.message || ''); if (error.code === 'ENOENT') return { state: 'cli_missing' }; if (error.code === 'ETIMEDOUT' || /timed?\s*out|busy|temporar/i.test(message)) return { state: 'app_busy' }; if (/disabled/i.test(message)) return { state: 'cli_disabled' }; if (/unsupported|unknown command|eval/i.test(message)) return { state: 'cli_unsupported' }; if (/not running|no running|connection refused|failed to connect/i.test(message)) return { state: 'app_stopped' }; return { state: 'app_unreachable' }; } }
   function inspectInvariant(input) {
     const operation = validateOperation(input);
     if (operation.vaultId !== vaultId) return { status: 'unavailable' };
@@ -109,7 +171,9 @@ function createVaultMutationAdapter({ vaultRoot, vaultId, vaultName = path.basen
       const inspectionNonce = crypto.randomUUID();
       const deadline = Date.now() + pollTimeoutMs;
       const queued = run(buildObsidianInvariantProgram(operation, inspectionToken, inspectionNonce), Math.max(1, deadline - Date.now()));
-      if (!queued?.queued || queued.token !== inspectionToken) return { status: 'unavailable' };
+      // A successful CLI eval may omit stdout even though it started the read.
+      // Only a missing receipt may fall through; an explicit bad receipt cannot.
+      if (queued !== null && (queued?.queued !== true || queued.token !== inspectionToken)) return { status: 'unavailable' };
       let result = null;
       for (let attempt = 0; attempt < maxPollAttempts; attempt += 1) {
         const remaining = deadline - Date.now();
@@ -167,6 +231,11 @@ function createVaultMutationAdapter({ vaultRoot, vaultId, vaultName = path.basen
       mutationLedger.transition(operation.operationId, 'unknown_after_dispatch', { ownerId, fence: claim.fence });
       return createInternalReceipt({ operation, status: 'unknown_after_dispatch', persistence: 'durable', obsidian: 'unacknowledged' });
     } catch (error) {
+      if (error.code === 'EVAL_NOT_STAGED') {
+        // The mutation program never reached the app; keep it retryable.
+        mutationLedger.transition(operation.operationId, 'planned', { ownerId, fence: claim.fence, evidence: { errorClass: 'eval_not_staged' } });
+        return createInternalReceipt({ operation, status: 'unavailable', lifecycleState: 'planned', persistence: 'durable', obsidian: 'unacknowledged' });
+      }
       mutationLedger.transition(operation.operationId, 'unknown_after_dispatch', { ownerId, fence: claim.fence, evidence: { errorClass: error.code === 'ENOENT' ? 'cli_missing' : 'dispatch_failed' } });
       return createInternalReceipt({ operation, status: 'unknown_after_dispatch', persistence: 'durable', obsidian: 'unacknowledged' });
     }

@@ -226,6 +226,47 @@ function createHostProjectsContextProvider(env = process.env) {
     || (capabilitySecretValue !== undefined && !capabilitySecretPath)
     || (hostSecretValue !== undefined && !hostSecretPath)) return null;
 
+  // The portfolio proof receipt is an administrative, out-of-band path: an
+  // invalid or absent value only disables readPortfolioProof, never the
+  // ordinary read()/readRoster() surface, so it is resolved outside the
+  // provider-creation gate above.
+  const portfolioProofReceiptValue = config.portfolioProofCapabilityReceiptPath === undefined
+    ? null
+    : config.portfolioProofCapabilityReceiptPath;
+  let portfolioProofReceiptPath = portfolioProofReceiptValue === null
+    ? null
+    : resolveAbsoluteFile(portfolioProofReceiptValue, stateRoot, { ownerOnly: true });
+  if (portfolioProofReceiptPath && capabilityReceiptPath && portfolioProofReceiptPath === capabilityReceiptPath) {
+    portfolioProofReceiptPath = null;
+  }
+
+  // The portfolio roster binding is a distinct, host-owned whole-portfolio
+  // query and owner-only capability receipt, resolved the same way as the
+  // portfolio proof binding above: an invalid or absent value only disables
+  // readPortfolioRoster, never the ordinary read()/readRoster() surface, and
+  // it never falls back to the orientation query or capability receipt.
+  function isWholePortfolioScope(scope) {
+    return Boolean(scope) && typeof scope === 'object' && !Array.isArray(scope)
+      && Array.isArray(scope.projectIds) && scope.projectIds.length === 0
+      && Array.isArray(scope.outcomeIds) && scope.outcomeIds.length === 0
+      && scope.includeDescendants === true;
+  }
+  const portfolioRosterQueryValue = config.portfolioRosterQuery && typeof config.portfolioRosterQuery === 'object' && !Array.isArray(config.portfolioRosterQuery)
+    ? JSON.parse(JSON.stringify(config.portfolioRosterQuery))
+    : null;
+  const trustedPortfolioRosterQuery = portfolioRosterQueryValue && isWholePortfolioScope(portfolioRosterQueryValue.scope)
+    ? portfolioRosterQueryValue
+    : null;
+  const portfolioRosterCapabilityReceiptValue = config.portfolioRosterCapabilityReceiptPath === undefined
+    ? null
+    : config.portfolioRosterCapabilityReceiptPath;
+  let portfolioRosterCapabilityReceiptPath = portfolioRosterCapabilityReceiptValue === null
+    ? null
+    : resolveAbsoluteFile(portfolioRosterCapabilityReceiptValue, stateRoot, { ownerOnly: true });
+  if (portfolioRosterCapabilityReceiptPath && capabilityReceiptPath && portfolioRosterCapabilityReceiptPath === capabilityReceiptPath) {
+    portfolioRosterCapabilityReceiptPath = null;
+  }
+
   let provider; let providerDigest;
   try {
     const before = fs.readFileSync(providerModule);
@@ -245,6 +286,13 @@ function createHostProjectsContextProvider(env = process.env) {
       && Object.keys(request).every((key) => key === 'expectedGeneration')
       && (request.expectedGeneration === undefined || (Number.isSafeInteger(request.expectedGeneration) && request.expectedGeneration >= 0))
     : true;
+  // Unlike the roster request, the proof request has no default: exactly one
+  // key, no caller-supplied query/capability/path/secret/profile.
+  const validProofRequest = (request) => request !== undefined && request !== null
+    && typeof request === 'object' && !Array.isArray(request)
+    && Object.keys(request).length === 1
+    && Object.prototype.hasOwnProperty.call(request, 'expectedGeneration')
+    && Number.isSafeInteger(request.expectedGeneration) && request.expectedGeneration >= 1;
 
   const proposalPolicy = validProposalPolicy(config.proposals, { stateRoot, registryStateDir });
   const trustedSubject = typeof config.subject === 'string' && config.subject.trim() ? config.subject.trim() : null;
@@ -328,6 +376,76 @@ function createHostProjectsContextProvider(env = process.env) {
         });
       } catch (_) {
         return { status: 'unavailable', code: 'ROSTER_UNAVAILABLE' };
+      }
+    },
+    async readPortfolioRoster() {
+      // No request parameter: a caller cannot select query, scope,
+      // capability, path, or limits. An invalid or missing distinct binding
+      // fails closed and never falls back to the orientation query or
+      // capability receipt used by readRoster() above.
+      if (!trustedPortfolioRosterQuery || !portfolioRosterCapabilityReceiptPath || typeof provider.readRoster !== 'function') {
+        return { status: 'unavailable', code: 'PORTFOLIO_ROSTER_UNAVAILABLE' };
+      }
+      const capabilityReceipt = readPrivateJson(portfolioRosterCapabilityReceiptPath);
+      const capabilitySecret = capabilitySecretPath ? readPrivate(capabilitySecretPath) : null;
+      const hostSecret = hostSecretPath ? readPrivate(hostSecretPath) : null;
+      if (!capabilityReceipt) return { status: 'unavailable', code: 'PORTFOLIO_ROSTER_UNAVAILABLE' };
+      try {
+        return await provider.readRoster({
+          workspaceRoot,
+          repositoryRoot,
+          stateRoot,
+          registryStateDir,
+          projectionStateDir,
+          releaseProviderStateDir,
+          registry,
+          projection,
+          capability: capabilityReceipt,
+          capabilitySecret,
+          hostSecret,
+          releaseProviderSecret: hostSecret,
+          hostId: typeof config.hostId === 'string' && config.hostId.trim() ? config.hostId.trim() : undefined,
+          subject: typeof config.subject === 'string' && config.subject.trim() ? config.subject.trim() : undefined,
+          query: JSON.parse(JSON.stringify(trustedPortfolioRosterQuery)),
+          releaseRefreshPolicy: { enabled: false },
+          releaseProducerId: typeof config.releaseProducerId === 'string' && config.releaseProducerId.trim()
+            ? config.releaseProducerId.trim()
+            : undefined,
+          beadsProviderProducerId: typeof config.beadsProviderProducerId === 'string' && config.beadsProviderProducerId.trim()
+            ? config.beadsProviderProducerId.trim()
+            : undefined,
+          todoProviderProducerId: typeof config.todoProviderProducerId === 'string' && config.todoProviderProducerId.trim()
+            ? config.todoProviderProducerId.trim()
+            : undefined,
+        });
+      } catch (_) {
+        return { status: 'unavailable', code: 'PORTFOLIO_ROSTER_UNAVAILABLE' };
+      }
+    },
+    async readPortfolioProof(request) {
+      // No fallback: an invalid proof binding or request never falls through
+      // to readRoster or the ordinary read() surface.
+      if (!portfolioProofReceiptPath || !validProofRequest(request) || typeof provider.readPortfolioProof !== 'function') {
+        return { status: 'unavailable', code: 'PORTFOLIO_PROOF_UNAVAILABLE' };
+      }
+      const proofCapability = readPrivateJson(portfolioProofReceiptPath);
+      const capabilitySecret = capabilitySecretPath ? readPrivate(capabilitySecretPath) : null;
+      if (!proofCapability || !capabilitySecret) return { status: 'unavailable', code: 'PORTFOLIO_PROOF_UNAVAILABLE' };
+      try {
+        return await provider.readPortfolioProof({
+          registryStateDir,
+          stateRoot,
+          repositoryRoot,
+          capability: proofCapability,
+          capabilitySecret,
+          hostId: typeof config.hostId === 'string' && config.hostId.trim() ? config.hostId.trim() : undefined,
+          subject: typeof config.subject === 'string' && config.subject.trim() ? config.subject.trim() : undefined,
+          expectedGeneration: request.expectedGeneration,
+          hostBindingDigests: { configDigest, providerDigest },
+          releaseRefreshPolicy: { enabled: false },
+        });
+      } catch (_) {
+        return { status: 'unavailable', code: 'PORTFOLIO_PROOF_UNAVAILABLE' };
       }
     },
   };

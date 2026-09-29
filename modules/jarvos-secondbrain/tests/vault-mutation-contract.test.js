@@ -79,6 +79,7 @@ test('public projection is an allowlist even when an untrusted receipt contains 
   assert.equal(JSON.stringify(projected).includes('secret'), false);
   assert.equal(contract.projectPublicResult({ status: 'blocked', persistence: 'pending', obsidian: 'pending', sync: 'unknown' }).status, 'blocked');
   assert.equal(contract.LIFECYCLE_STATES.has('unknown_after_dispatch'), true);
+  assert.equal(contract.projectPublicResult({ status: 'unknown_after_dispatch' }).status, 'unknown_after_dispatch');
 });
 
 test('capture projection rebuilds nested results without receipts, paths, or resolver details', () => {

@@ -51,7 +51,7 @@ Session transcripts hold the raw record of every agent-user exchange. They conta
 | "What did I decide about X?" | `memory/decisions/` first, then transcripts if not found |
 | "Did we ever discuss Y?" | Transcripts — this is a recall/discovery query |
 | "What was the exact wording of the correction about Z?" | Transcripts — memory files store distilled outcomes |
-| "What preferences has Andrew stated?" | `MEMORY.md` first, then transcripts for recent sessions |
+| "What preferences has the user stated?" | `MEMORY.md` first, then transcripts for recent sessions |
 | "What was the last tool output for this file?" | Transcripts only (tool outputs are not promoted to memory) |
 
 ### Search interface
@@ -71,23 +71,57 @@ node jarvos-memory/scripts/search-transcripts.js "<query>"
 node jarvos-memory/scripts/search-transcripts.js "<query>" --since 7d
 node jarvos-memory/scripts/search-transcripts.js "<query>" --connector codex --json
 node jarvos-memory/scripts/search-transcripts.js "<query>" --strict --max-evidence 8
+node jarvos-memory/scripts/search-transcripts.js "<query>" --connector openclaw --indexed-connector codex --indexed-connector openclaw
 ```
 
 The script always emits the same JSON shape as the library boundary; `--json` is
 accepted for parity with CASS. It never prints raw CASS stderr or transcript paths.
 
-The contract is provider-neutral, but the current adapter supports the local CASS
-connectors `codex` and `claude_code` (CASS's `claude` alias is normalized). Retrieval
+The contract is provider-neutral. The currently *supported* connector identities are
+`codex`, `claude_code` (CASS's `claude` alias is normalized), `openclaw`, and `hermes`.
+Supported is not the same as indexed: a request that does not specify `connectors`
+defaults to `codex` and `claude_code` for backward compatibility, regardless of what a
+host's CASS instance actually has indexed or advertises. Any other index coverage must
+be asserted explicitly via `indexedConnectors`. Retrieval
 uses `cass api-version --json`, `cass capabilities --json`, and a lexical-only
 `cass pack ... --json --mode lexical` call. It does not run `index`, `--watch`, refresh, semantic
 model installation, export, support-bundle, or remote-source commands.
 
+### Host-asserted index coverage (`indexedConnectors`)
+
+A host embedding `CassTranscriptAdapter` can pass an `indexedConnectors` option (or
+the CLI's repeatable `--indexed-connector` flag) to assert which connectors its CASS
+index actually contains. This is host-asserted coverage, not an end-user source
+override — a request's own `connectors` list is unaffected. Behavior:
+
+- **Absent** (the default): the adapter assumes the current `codex` + `claude_code`
+  index. Requesting `openclaw` or `hermes` without asserting coverage reports those
+  connectors as `not_indexed`; it never queries them.
+- **Provided, including `[]`**: the adapter never pack-queries a connector outside the
+  asserted list. An empty list means no connectors are indexed, and every requested
+  connector reports `not_indexed`.
+- **Invalid values fail closed**: an unrecognized connector in `indexedConnectors`
+  invalidates the whole option (treated as no coverage) rather than silently
+  broadening or narrowing to only the valid entries. The packet carries an
+  `invalid_host_config:indexed_connectors:...` omission so the failure is visible.
+
+A connector that is host-asserted as indexed but that CASS's own `capabilities`
+response does not advertise is still reported `incompatible`, distinct from
+`not_indexed`. Asserting a connector as indexed is a claim about coverage, not a
+guarantee of freshness or completeness — a populated index does not mean every
+session for that connector has been captured or is up to date; strict freshness
+consumers should still request `--strict` and treat stale/partial connectors
+accordingly.
+
 Each packet includes:
 
 - `status`: `evidence_found`, `no_evidence`, `partial`, or `unavailable`
-- searched/requested connectors and per-connector freshness/error outcomes
-- bounded evidence with session identifier, timestamp, citation, excerpt, and an
-  `untrustedContent: true` marker
+- searched/requested connectors and per-connector freshness/error outcomes,
+  including `not_indexed` and `incompatible` as distinct non-searched outcomes
+- bounded evidence with session identifier, timestamp, citation, excerpt, a `role`
+  (`user`, `assistant`, `system`, `tool`, or `unknown` when CASS does not report a
+  recognized role — this is transcript-turn provenance, never an inference about
+  who the human operator is), and an `untrustedContent: true` marker
 - `truncated`, `omissions`, and a deterministic `renderedTokenCount`
 
 The default aggregate packet budget is 3,000 estimated tokens; requested budgets are

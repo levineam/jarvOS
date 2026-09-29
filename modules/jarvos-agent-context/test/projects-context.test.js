@@ -300,6 +300,103 @@ test('a host Projects binding ignores post-start environment changes', async () 
   });
 });
 
+function withHostPortfolioRosterProvider(fn) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-projects-roster-host-'));
+  const workspaceRoot = path.join(root, 'workspace');
+  const repositoryRoot = path.join(workspaceRoot, 'repository');
+  const stateRoot = path.join(workspaceRoot, 'state');
+  fs.mkdirSync(repositoryRoot, { recursive: true });
+  fs.mkdirSync(path.join(stateRoot, 'registry'), { recursive: true });
+  fs.mkdirSync(path.join(stateRoot, 'release-provider'), { recursive: true });
+  const providerModule = path.join(repositoryRoot, 'provider.js');
+  const records = [
+    { id: 'prj_000001', kind: 'project', parentId: null, revision: 1 },
+    { id: 'prj_000002', kind: 'project', parentId: 'prj_000001', revision: 1 },
+    { id: 'prj_000003', kind: 'project', parentId: 'prj_000001', revision: 1 },
+  ];
+  fs.writeFileSync(providerModule, [
+    "module.exports.read = async () => ({ status: 'ordinary' });",
+    'module.exports.readRoster = async (request) => {',
+    "  if (!request.capability || request.capability.receiptId !== 'cap_portfolio_roster') return { status: 'unavailable', code: 'PORTFOLIO_ROSTER_CAPABILITY_INVALID' };",
+    `  return { status: 'ok', roster: { contract: 'jarvos.projects-roster/v1', generation: 3, capturedAt: '2026-01-01T00:00:00.000Z', scope: request.query.scope, records: ${JSON.stringify(records)}, complete: true } };`,
+    '};',
+  ].join('\n'));
+  const portfolioRosterCapabilityReceipt = path.join(stateRoot, 'portfolio-roster-capability.json');
+  fs.writeFileSync(portfolioRosterCapabilityReceipt, JSON.stringify({ receiptId: 'cap_portfolio_roster' }));
+  fs.chmodSync(portfolioRosterCapabilityReceipt, 0o600);
+  const config = path.join(root, 'projects-context.json');
+  fs.writeFileSync(config, JSON.stringify({
+    workspaceRoot, repositoryRoot, providerModule, stateRoot,
+    registryStateDir: path.join(stateRoot, 'registry'), releaseProviderStateDir: path.join(stateRoot, 'release-provider'),
+    query: QUERY,
+    portfolioRosterQuery: { scope: { projectIds: [], outcomeIds: [], includeDescendants: true }, include: ['hierarchy'], limits: { maxItems: 1000, maxBytes: 262_144, maxProviderAgeSeconds: 86_400 } },
+    portfolioRosterCapabilityReceiptPath: portfolioRosterCapabilityReceipt,
+  }));
+  fs.chmodSync(config, 0o600);
+  const previous = process.env.JARVOS_PROJECTS_CONTEXT_CONFIG;
+  process.env.JARVOS_PROJECTS_CONTEXT_CONFIG = config;
+  return Promise.resolve().then(() => fn({ records })).finally(() => {
+    if (previous === undefined) delete process.env.JARVOS_PROJECTS_CONTEXT_CONFIG;
+    else process.env.JARVOS_PROJECTS_CONTEXT_CONFIG = previous;
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+}
+
+test('MCP jarvos_projects_roster uses the injected provider when present', async () => {
+  const provider = {
+    // setProjectsContextProvider() requires read() or propose(); this fixture
+    // is only exercised through readPortfolioRoster() and never invoked.
+    read: async () => { throw new Error('unexpected orientation read'); },
+    readPortfolioRoster: async () => ({
+      status: 'ok',
+      roster: {
+        contract: 'jarvos.projects-roster/v1', generation: 9, capturedAt: '2026-01-01T00:00:00.000Z',
+        scope: { projectIds: [], outcomeIds: [], includeDescendants: true },
+        records: [{ id: 'prj_000001', kind: 'project', parentId: null, revision: 1 }], complete: true,
+      },
+    }),
+  };
+  setMcpProjectsContextProvider(provider);
+  try {
+    const result = await callTool('jarvos_projects_roster', {});
+    const payload = JSON.parse(result.content[0].text);
+    assert.equal(result.isError, false);
+    assert.equal(payload.status, 'ok');
+    assert.equal(payload.roster.generation, 9);
+  } finally {
+    setMcpProjectsContextProvider(null);
+  }
+});
+
+test('MCP jarvos_projects_roster rejects unknown arguments before touching any provider', async () => {
+  await assert.rejects(
+    () => callTool('jarvos_projects_roster', { scope: 'all' }),
+    /empty object/,
+  );
+});
+
+test('MCP jarvos_projects_roster is unavailable, never an empty-success roster, without an injected provider or host binding', async () => {
+  setMcpProjectsContextProvider(null);
+  await withTempContextEnv(async () => {
+    const result = await callTool('jarvos_projects_roster', {});
+    const payload = JSON.parse(result.content[0].text);
+    assert.equal(payload.status, 'unavailable');
+    assert.equal(payload.roster, undefined);
+  });
+});
+
+test('MCP jarvos_projects_roster falls back to the trusted host bootstrap when no provider is injected', async () => {
+  setMcpProjectsContextProvider(null);
+  await withHostPortfolioRosterProvider(async ({ records }) => {
+    const result = await callTool('jarvos_projects_roster', {});
+    const payload = JSON.parse(result.content[0].text);
+    assert.equal(result.isError, false);
+    assert.equal(payload.status, 'ok');
+    assert.deepEqual(payload.roster.records, records);
+    assert.equal(payload.roster.complete, true);
+  });
+});
+
 test('Codex and Claude startup use the orientation packet with the library and MCP fingerprint', async () => {
   const provider = { defaultQuery: QUERY, read: async ({ query }) => ({ status: 'ok', packet: { ...packet(), query } }) };
   setProjectsContextProvider(provider);

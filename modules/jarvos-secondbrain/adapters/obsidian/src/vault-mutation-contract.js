@@ -4,7 +4,7 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const PUBLIC_STATUSES = new Set(['committed', 'saved_locally_sync_pending', 'already_satisfied', 'conflict', 'blocked', 'unavailable', 'failed']);
+const PUBLIC_STATUSES = new Set(['committed', 'saved_locally_sync_pending', 'already_satisfied', 'conflict', 'blocked', 'unavailable', 'failed', 'unknown_after_dispatch']);
 const SYNC_STATES = new Set(['disabled', 'converged', 'pending', 'diverged', 'unknown']);
 const LIFECYCLE_STATES = new Set(['planned', 'local_mutating', 'local_applied', 'dispatched', 'unknown_after_dispatch', 'acknowledged', 'conflict', 'blocked']);
 const PUBLIC_PERSISTENCE = new Set(['durable', 'pending', 'unavailable', 'failed', 'unknown']);
@@ -78,7 +78,7 @@ function createInternalReceipt({ operation, status, lifecycleState, persistence,
 
 function projectPublicResult(receipt) {
   if (!receipt || typeof receipt !== 'object') fail('receipt is required');
-  const status = receipt.status === 'unknown_after_dispatch' ? 'unavailable' : receipt.status;
+  const status = receipt.status;
   return {
     schemaVersion: 1,
     status: PUBLIC_STATUSES.has(status) ? status : 'failed',
