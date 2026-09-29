@@ -37,6 +37,7 @@ const {
   readCredentialFile,
   CREDENTIAL_ENV,
   CREDENTIAL_FILE_ENV,
+  sharedSkillsConfigPath,
   WORK_ACTION_HOST_UNAVAILABLE,
 } = require('../scripts/jarvos-mcp.js');
 
@@ -745,6 +746,60 @@ test('shared-skill MCP mutation operations fail closed without a host-bound owne
     else process.env.JARVOS_CONTROL_PLANE_CREDENTIAL = previous;
     if (previousFile === undefined) delete process.env.JARVOS_CONTROL_PLANE_CREDENTIAL_FILE;
     else process.env.JARVOS_CONTROL_PLANE_CREDENTIAL_FILE = previousFile;
+  }
+});
+
+test('shared-skill MCP config binding preserves explicit paths and falls back lazily', () => {
+  let fallbackCalls = 0;
+  const fallback = () => {
+    fallbackCalls += 1;
+    return '/portable/default/config.json';
+  };
+
+  assert.equal(sharedSkillsConfigPath({}, fallback), '/portable/default/config.json');
+  assert.equal(fallbackCalls, 1);
+  assert.equal(
+    sharedSkillsConfigPath({ JARVOS_SHARED_SKILLS_CONFIG_PATH: ' /host/config.json ' }, fallback),
+    '/host/config.json',
+  );
+  assert.equal(fallbackCalls, 1);
+});
+
+test('shared-skill MCP status uses the portable default config when host binding is absent', () => {
+  const skills = require('../../jarvos-skills/src');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-mcp-default-skills-'));
+  try {
+    const controlRoot = path.join(root, '.jarvos', 'shared-skills');
+    const configPath = path.join(controlRoot, 'config.json');
+    const config = skills.defaultConfig();
+    config.controlRoot = controlRoot;
+    config.publicCatalogPath = path.join(controlRoot, 'public-catalog.json');
+    config.localOverlayPath = path.join(controlRoot, 'local-overlay.json');
+    config.inventory.enabled = true;
+    config.inventory.registeredRoots = [];
+    for (const harness of skills.SUPPORTED_HARNESSES) {
+      config.harnesses[harness].root = path.join(root, harness, 'skills');
+    }
+    skills.saveConfig(config, configPath);
+
+    const mcpPath = path.join(__dirname, '..', 'scripts', 'jarvos-mcp.js');
+    const script = [
+      `const { callTool } = require(${JSON.stringify(mcpPath)});`,
+      `callTool('jarvos_shared_skills', { operation: 'status' })`,
+      ".then((result) => process.stdout.write(result.content[0].text))",
+      '.catch((error) => { console.error(error); process.exit(1); });',
+    ].join(' ');
+    const env = { ...process.env, HOME: root };
+    delete env.JARVOS_SHARED_SKILLS_CONFIG_PATH;
+    const child = spawnSync(process.execPath, ['-e', script], { encoding: 'utf8', env });
+
+    assert.equal(child.status, 0, child.stderr);
+    const payload = JSON.parse(child.stdout);
+    assert.equal(payload.ok, true);
+    assert.equal(payload.mode, 'shared-status');
+    assert.equal(payload.inventory.complete, true);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
   }
 });
 
