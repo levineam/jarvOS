@@ -562,3 +562,29 @@ test('an empty final run is retryable only when the stage proves it never ran', 
   assert.throws(() => runObsidianEval(program, { vaultName: 'V', emptyRetries: 0, execute: fakeApp(true, false) }), (error) => error.code === 'EVAL_NOT_STAGED');
   assert.equal(runObsidianEval(program, { vaultName: 'V', emptyRetries: 0, execute: fakeApp(true, true) }), null);
 });
+
+test('a staged runner that ran but lost its response returns null once, without being replayed', () => {
+  const { runObsidianEval } = require('../adapters/obsidian/src/vault-mutation-adapter');
+  const app = vm.createContext({ atob, TextDecoder });
+  let runnerCalls = 0;
+  const execute = (_command, args) => {
+    const code = args[2].slice('code='.length);
+    if (code.includes('(0, eval)')) { runnerCalls += 1; vm.runInContext(code, app); return ''; }
+    return `=> ${vm.runInContext(code, app)}\n`;
+  };
+  assert.equal(runObsidianEval(`/* ${'x'.repeat(9_000)} */ JSON.stringify(1)`, { vaultName: 'V', execute }), null);
+  assert.equal(runnerCalls, 1);
+});
+
+test('a staged runner dropped before running is resent until it runs', () => {
+  const { runObsidianEval } = require('../adapters/obsidian/src/vault-mutation-adapter');
+  const app = vm.createContext({ atob, TextDecoder });
+  let drops = 2;
+  const execute = (_command, args) => {
+    const code = args[2].slice('code='.length);
+    if (code.includes('(0, eval)') && drops > 0) { drops -= 1; return ''; }
+    return `=> ${vm.runInContext(code, app)}\n`;
+  };
+  assert.equal(runObsidianEval(`/* ${'x'.repeat(9_000)} */ JSON.stringify(7)`, { vaultName: 'V', execute }), 7);
+  assert.equal(vm.runInContext('Object.keys(globalThis.__jarvosEvalStage).length', app), 0);
+});

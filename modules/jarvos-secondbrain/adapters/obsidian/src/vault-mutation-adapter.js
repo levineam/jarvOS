@@ -53,23 +53,33 @@ function runObsidianEval(code, { vaultName, command = process.env.OBSIDIAN_CLI |
   } catch (error) {
     // The program never ran, so callers may treat this as retryable rather
     // than ambiguous. Drop any chunks that did arrive.
-    try { evalOnce(`delete globalThis.${EVAL_STAGE}?.[${stageId}]; JSON.stringify(true)`, { ...options, deadline: Date.now() + 5_000, emptyRetries: 1 }); } catch { /* best effort */ }
+    try { evalOnce(`delete globalThis.${EVAL_STAGE}?.[${stageId}]; JSON.stringify(true)`, { ...options, deadline: Math.max(options.deadline, Date.now() + 2_500), emptyRetries: 1 }); } catch { /* best effort */ }
     const notStaged = new Error(error.message);
     notStaged.code = 'EVAL_NOT_STAGED';
     throw notStaged;
   }
-  const result = evalOnce(`(() => { const stage = globalThis.${EVAL_STAGE} || {}; const parts = stage[${stageId}]; delete stage[${stageId}]; if (!Array.isArray(parts) || parts.length !== ${parts.length} || parts.join('').length !== ${encoded.length}) throw new Error('staged eval is incomplete'); return (0, eval)(new TextDecoder().decode(Uint8Array.from(atob(parts.join('')), c => c.charCodeAt(0)))); })()`, options);
-  if (result !== null) return result;
-  // The runner deletes the stage before evaluating, so a surviving stage
-  // proves the program never ran; a missing stage leaves the result ambiguous.
-  let survived = false;
-  try { survived = evalOnce(`(() => { const stage = globalThis.${EVAL_STAGE}; const kept = Boolean(stage?.[${stageId}]); if (kept) delete stage[${stageId}]; return JSON.stringify(kept); })()`, { ...options, deadline: Date.now() + 5_000 }) === true; } catch { /* stays ambiguous */ }
-  if (survived) {
-    const notRun = new Error('Obsidian CLI did not run the staged eval');
-    notRun.code = 'EVAL_NOT_STAGED';
-    throw notRun;
+  const runner = `(() => { const stage = globalThis.${EVAL_STAGE} || {}; const parts = stage[${stageId}]; delete stage[${stageId}]; if (!Array.isArray(parts) || parts.length !== ${parts.length} || parts.join('').length !== ${encoded.length}) throw new Error('staged eval is incomplete'); return (0, eval)(new TextDecoder().decode(Uint8Array.from(atob(parts.join('')), c => c.charCodeAt(0)))); })()`;
+  // The runner deletes the stage before evaluating, so it is sent once per
+  // attempt and never blindly replayed: a surviving stage proves the runner did
+  // not run and may be resent, while a missing stage means it ran and only the
+  // response was lost, which callers recover by polling the result token.
+  // Probes get a small floor past the caller's deadline so they can finish.
+  const probeOptions = () => ({ ...options, deadline: Math.max(options.deadline, Date.now() + 2_500), emptyRetries: 1 });
+  const stageSurvived = (drop) => {
+    try { return evalOnce(`(() => { const stage = globalThis.${EVAL_STAGE}; const kept = Boolean(stage?.[${stageId}]); if (kept && ${drop}) delete stage[${stageId}]; return JSON.stringify(kept); })()`, probeOptions()) === true; }
+    catch { return false; }
+  };
+  for (let attempt = 0; ; attempt += 1) {
+    const result = evalOnce(runner, { ...options, emptyRetries: 0 });
+    if (result !== null) return result;
+    const last = attempt >= emptyRetries || Date.now() >= options.deadline;
+    if (!stageSurvived(last)) return null;
+    if (last) {
+      const notRun = new Error('Obsidian CLI did not run the staged eval');
+      notRun.code = 'EVAL_NOT_STAGED';
+      throw notRun;
+    }
   }
-  return result;
 }
 function payload(operation) { return Buffer.from(JSON.stringify(operation), 'utf8').toString('base64'); }
 // This program is fixed. Data enters solely through base64 JSON. The only
