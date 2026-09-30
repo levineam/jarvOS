@@ -233,13 +233,39 @@ function createApplicationService(options = {}) {
         .map((item) => project(item, principal));
       if (operation === 'inspect') return { ok: true, request: project(request, principal), evidence };
       if (operation === 'evidence') return { ok: true, evidence };
+      const projected = project(request, principal);
+      // The execution binding is built only from the disclosure-projected
+      // record. If record- or field-level sensitivity removed any part of the
+      // executable command, no binding is returned rather than an incomplete one.
+      const bindingIntact = projected.redacted !== true
+        && ['id', 'principal', 'status', 'actionKey', 'fence', 'approval', 'resource', 'mutationClass', 'desiredGeneration', 'commandSpec']
+          .every((field) => JSON.stringify(projected[field]) === JSON.stringify(request[field]));
       return {
         ok: true,
-        request: project(request, principal),
+        request: projected,
         approval: request.approval ? {
           actionKey: request.approval.actionKey,
           expiresAt: request.approval.expiresAt,
           usedAt: request.approval.usedAt || null,
+        } : null,
+        // The authoritative execution binding is disclosed only to the
+        // principal that created the request, so an executing host can recheck
+        // the current action fence, approval consumption and pause state from
+        // this authenticated read rather than from a caller's copy.
+        binding: request.principal.id === principal.id && bindingIntact ? {
+          requestId: projected.id,
+          principalId: projected.principal.id,
+          status: projected.status,
+          paused: state.paused === true,
+          actionKey: projected.actionKey,
+          fence: Number.isInteger(projected.fence) ? projected.fence : (projected.approval ? projected.approval.fence : null),
+          currentFence: currentFence(state, projected.actionKey),
+          approvalRequired: Boolean(projected.approval),
+          approvedAt: projected.approval ? projected.approval.usedAt || null : null,
+          resource: projected.resource,
+          mutationClass: projected.mutationClass,
+          desiredGeneration: projected.desiredGeneration,
+          commandSpec: projected.commandSpec,
         } : null,
       };
     }
@@ -291,6 +317,7 @@ function createApplicationService(options = {}) {
       }
       const fence = currentFence(state, request.actionKey) + 1;
       state.keyedFences[request.actionKey] = fence;
+      request.fence = fence;
       request.status = outcome === 'allow' ? 'approved' : outcome === 'deny' ? 'rejected' : outcome === 'defer' ? 'deferred' : 'approval_required';
       request.approval = outcome === 'require_approval' ? {
         actionKey: request.actionKey,

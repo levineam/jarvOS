@@ -36,6 +36,7 @@ The bundled stdio MCP server exposes:
 | `jarvos_todo_show` | Show one canonically linked Beads-backed Todo work item |
 | `jarvos_todo_transition` | Request a claim, transition, completion, or reopen through the host-authorized work-action service |
 | `jarvos_control_plane` | Authenticated request, inspection, evidence, and approval access through the installed host application service |
+| `jarvos_coding_take_issue_to_done` | Run `accept-plan` or `complete` for one approved control-plane request through the host-bound coding producer |
 
 `jarvos_todo_*` tools are available only after the host binds two optional
 non-secret paths on the MCP child:
@@ -91,6 +92,22 @@ the same closed, redacted managed-harness status as `@jarvos/runtime-kit`.
 Owner-local evidence is supplied only through the host-bound
 `JARVOS_MANAGED_ACTIVATION_EVIDENCE_FILE`; agents cannot choose a path, submit
 receipts, start a harness, or promote activation through this read surface.
+
+`jarvos_coding_take_issue_to_done` is available only when the MCP session has a
+bound control-plane credential (`JARVOS_CONTROL_PLANE_CREDENTIAL_FILE` or the
+ambient host credential) and the host binds `JARVOS_CODING_PRODUCER_MODULE`: an
+absolute owner-only module under the `workspaceRoot` selected by
+`JARVOS_PROJECTS_CONTEXT_CONFIG`. The module exports a producer (or a
+zero-argument factory) with `invoke(request, { readApproval })`. The credential
+is checked before the module is loaded and never reaches it; the producer only
+receives `readApproval(requestId)`, which performs the authenticated
+`approval-state` read. Callers pass `operation` (`accept-plan` or `complete`),
+`requestId`, `issueIdentifier` and, for `complete`, the declared
+`deliveryTrace`. Owner, work-run, plan digest, observation, fence and
+credential arguments are dropped. `approval-state` returns an execution
+`binding` (status, fence, current fence, pause state, approval consumption,
+resource and command spec) only to the principal that created the request.
+`JARVOS_CODING_PRODUCER_TIMEOUT_MS` (default one hour) bounds a single call.
 
 ## Projects context
 

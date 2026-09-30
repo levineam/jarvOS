@@ -12,6 +12,13 @@ const {
 
 const baseManifest = require('../providers/compound-engineering.json');
 
+test('the managed workflow loads its published provider manifest when none is injected', () => {
+  const workflow = createManagedCodingWorkflow({ workRunStore: createMemoryWorkRunStore() });
+  assert.equal(workflow.manifest.id, baseManifest.id);
+  assert.equal(workflow.manifest.version, baseManifest.version);
+  assert.equal(workflow.manifest.source.contentDigest, baseManifest.source.contentDigest);
+});
+
 function manifest() {
   return {
     ...baseManifest,

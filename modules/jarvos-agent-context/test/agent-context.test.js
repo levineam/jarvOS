@@ -633,6 +633,7 @@ test('MCP tool list includes jarvOS tools', () => {
     'jarvos_todo_show',
     'jarvos_todo_transition',
     'jarvos_control_plane',
+    'jarvos_coding_take_issue_to_done',
     'jarvos_shared_skills',
     'jarvos_current_work',
     'jarvos_projects_context',

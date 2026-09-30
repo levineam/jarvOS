@@ -90,6 +90,14 @@ function createLiveGitBranch(options = {}) {
    * trusted remote-tracking ref points at. A failed fetch or an unresolvable
    * ref yields no base commit and therefore no observation.
    */
+  function git(args) {
+    return run('git', args, { cwd: repoRootDir, timeoutMs: 30000, allowFail: true });
+  }
+
+  function canonicalPath(value) {
+    try { return fs.realpathSync(value); } catch { return path.resolve(value); }
+  }
+
   function resolveTrustedBase(fetched) {
     if (!fetched || fetched.status !== 0) return null;
     const resolved = run('git', ['rev-parse', '--verify', '--quiet', `refs/remotes/${trustedBaseRef}^{commit}`], {
@@ -127,6 +135,58 @@ function createLiveGitBranch(options = {}) {
         };
       }
       const baseRef = trustedBaseRef;
+      const failed = (reasonCode, error) => ({
+        schemaVersion: BRANCH_SCHEMA_VERSION,
+        status: 'failed',
+        ok: false,
+        reasonCode,
+        branch,
+        baseRef,
+        baseCommit: null,
+        baseBranch: null,
+        worktreeDir: null,
+        error,
+      });
+
+      // A supplied control-plane fence is rechecked before any Git or
+      // filesystem effect of this stage, and again after each potentially long
+      // Git command before the next effect or a reported success.
+      const assertFence = () => {
+        if (typeof input.controlPlane?.assertCurrentFence === 'function') input.controlPlane.assertCurrentFence();
+      };
+      assertFence();
+
+      // Work is usually already checked out on the host's own repository root.
+      // Reuse exactly that canonical worktree when it is on the requested
+      // branch — never another worktree, and never a checkout, detach, or
+      // delete — with the same trusted-base evidence as a new worktree.
+      const current = git(['symbolic-ref', '--quiet', '--short', 'HEAD']);
+      if (current.status === 0 && String(current.stdout || '').trim() === branch) {
+        const topLevel = git(['rev-parse', '--show-toplevel']);
+        const head = git(['rev-parse', '--verify', '--quiet', 'HEAD^{commit}']);
+        const headCommit = head.status === 0 ? String(head.stdout || '').trim().toLowerCase() : '';
+        if (topLevel.status !== 0 || canonicalPath(String(topLevel.stdout || '').trim()) !== canonicalPath(repoRootDir)
+          || !GIT_OBJECT_ID.test(headCommit)) {
+          return failed('existing_worktree_unverified', 'host repository root is not a verifiable checkout of the branch');
+        }
+        const { remote, branch: baseBranch } = splitBaseRef(baseRef);
+        const baseCommit = resolveTrustedBase(run('git', ['fetch', remote, baseBranch], { cwd: repoRootDir, timeoutMs: 120000, allowFail: true }));
+        assertFence();
+        if (!baseCommit) return failed('trusted_base_unverified', `host-configured base ${baseRef} could not be verified`);
+        return {
+          schemaVersion: BRANCH_SCHEMA_VERSION,
+          status: 'reused',
+          mode: 'existing-worktree',
+          ok: true,
+          preexisting: true,
+          branch,
+          baseRef,
+          baseCommit,
+          baseBranch,
+          headCommit,
+          worktreeDir: repoRootDir,
+        };
+      }
 
       mkdir(worktreeRoot);
       const worktreeDir = path.join(worktreeRoot, `${sanitizeForPath(branch)}-${now()}`);
@@ -141,6 +201,7 @@ function createLiveGitBranch(options = {}) {
       const baseEvidence = { baseCommit, baseBranch: baseCommit ? baseBranch : null };
 
       // Create a new branch in its own worktree off the base ref.
+      assertFence();
       const add = run('git', ['worktree', 'add', '-b', branch, worktreeDir, baseRef], {
         cwd: repoRootDir,
         timeoutMs: 120000,
@@ -163,6 +224,7 @@ function createLiveGitBranch(options = {}) {
       // The branch may already exist (e.g. a resumed run). Attach a worktree to
       // the existing branch — keeping its name meaningful for the later PR —
       // rather than failing the stage.
+      assertFence();
       const attach = run('git', ['worktree', 'add', worktreeDir, branch], {
         cwd: repoRootDir,
         timeoutMs: 120000,

@@ -93,6 +93,17 @@ function operationIdOf(input = {}, method = 'operation') {
   throw new Error(`Beads ${method} operationId is required`);
 }
 
+function withoutReferenceOperationIds(input = {}) {
+  const copy = { ...input };
+  for (const key of ['workReference', 'workRef']) {
+    if (plain(copy[key]) && copy[key].operationId !== undefined) {
+      const { operationId: _claimOperationId, ...reference } = copy[key];
+      copy[key] = reference;
+    }
+  }
+  return copy;
+}
+
 function workIdOf(input = {}, method = 'operation') {
   return requiredString(
     input.itemId || input.workItemId || input.workReference?.itemId || input.workRef?.itemId
@@ -343,12 +354,19 @@ function createLiveBeadsTracker(options = {}) {
       } else return { ...existing, status: 'indeterminate', retryable: false };
     }
     await ensureReady();
+    // A supplied control-plane fence is rechecked after asynchronous
+    // preparation and immediately before the tracker mutation.
+    if (typeof input.controlPlane?.assertCurrentFence === 'function') input.controlPlane.assertCurrentFence();
     // Build and validate argv before persisting the prepared record. Caller
     // input errors are not uncertain I/O and must not poison an idempotency
     // key with an execution-uncertain state.
     const args = mappedArgs(method, input, operationId);
     const prepared = { schemaVersion: BEADS_TRACKER_SCHEMA_VERSION, operationId, method, fingerprint, expectation, state: 'prepared', actor, workspaceRoot };
     await operationStore.write(prepared);
+    // Recheck after the awaited write and immediately before the mutation. A
+    // refusal here keeps its reason and leaves the prepared record, which
+    // reconciles to not-committed because nothing was invoked.
+    if (typeof input.controlPlane?.assertCurrentFence === 'function') input.controlPlane.assertCurrentFence();
     let result;
     try {
       result = invoke(args);
@@ -436,8 +454,14 @@ function createLiveBeadsTracker(options = {}) {
       const pullRequest = input.pullRequest || {};
       const merged = input.merged === true || pullRequest.merged === true || String(pullRequest.state || pullRequest.status || '').toLowerCase() === 'merged';
       if (!merged) return { schemaVersion: BEADS_TRACKER_SCHEMA_VERSION, status: 'deferred', reason: 'pull request not merged', ok: true };
-      const operationId = operationIdOf(input, 'close');
-      const result = await mutate('transition', { ...input, status: 'done', operationId });
+      // A work reference returned by the claim stage carries the claim's
+      // operation id. Closing is a distinct operation, so only an explicit
+      // close id is honored; otherwise the close derives its own identity.
+      const closeInput = input.operationId || input.idempotencyKey
+        ? input
+        : withoutReferenceOperationIds(input);
+      const operationId = operationIdOf(closeInput, 'close');
+      const result = await mutate('transition', { ...closeInput, status: 'done', operationId });
       return { ...result, status: result.state === 'committed' ? 'closed' : result.status || result.state, ok: result.state === 'committed' };
     },
     async reconcile(operation) { return reconcile(operation); },

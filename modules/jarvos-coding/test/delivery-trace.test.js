@@ -600,10 +600,81 @@ test('the live branch adapter refuses an untrusted or unsafe base before any Git
   }
 });
 
+test('the live branch adapter rechecks a supplied control-plane fence before any Git or filesystem effect', async () => {
+  const effects = [];
+  const adapter = createLiveGitBranch({
+    repoRootDir: '/tmp/repo', worktreeRoot: '/tmp/worktrees', now: () => 1,
+    run: (command, args) => { effects.push(args.join(' ')); return { status: 0, stdout: '', stderr: '' }; },
+    mkdir: (dir) => { effects.push(`mkdir ${dir}`); },
+  });
+  const controlPlane = { assertCurrentFence: () => { throw new Error('stale_fence'); } };
+  await assert.rejects(() => adapter.createBranch({ branch: BRANCH, baseRef: 'origin/main', controlPlane }), /stale_fence/);
+  assert.deepEqual(effects, []);
+});
+
+test('a fence revoked during the base fetch stops the branch stage before worktree add or a reused success', async () => {
+  for (const onBranch of [false, true]) {
+    const effects = [];
+    let revoked = false;
+    const adapter = createLiveGitBranch({
+      repoRootDir: '/tmp/repo', worktreeRoot: '/tmp/worktrees', now: () => 1, mkdir: () => {},
+      run: (command, args) => {
+        effects.push(args.join(' '));
+        if (args[0] === 'symbolic-ref') return { status: 0, stdout: onBranch ? `${BRANCH}\n` : '', stderr: '' };
+        if (args[0] === 'rev-parse' && args[1] === '--show-toplevel') return { status: 0, stdout: '/tmp/repo\n', stderr: '' };
+        // Revocation lands while the (network) fetch runs.
+        if (args[0] === 'fetch') { revoked = true; return { status: 0, stdout: '', stderr: '' }; }
+        if (args[0] === 'rev-parse') return { status: 0, stdout: `${args.at(-1) === 'refs/remotes/origin/main^{commit}' ? BASE : HEAD}\n`, stderr: '' };
+        return { status: 0, stdout: '', stderr: '' };
+      },
+    });
+    const controlPlane = { assertCurrentFence: () => { if (revoked) throw new Error('stale_fence'); } };
+    await assert.rejects(() => adapter.createBranch({ branch: BRANCH, baseRef: 'origin/main', controlPlane }), /stale_fence/, `onBranch=${onBranch}`);
+    assert.equal(effects.some((effect) => effect.startsWith('worktree')), false, `onBranch=${onBranch}`);
+  }
+});
+
+test('the live branch adapter reuses the host root only when it is itself on the branch, with verified base evidence', async () => {
+  const onBranch = ({ fetchStatus = 0, topLevel = '/tmp/repo' } = {}) => {
+    const effects = [];
+    const run = (command, args) => {
+      effects.push(args.join(' '));
+      if (args[0] === 'symbolic-ref') return { status: 0, stdout: `${BRANCH}\n`, stderr: '' };
+      if (args[0] === 'rev-parse' && args[1] === '--show-toplevel') return { status: 0, stdout: `${topLevel}\n`, stderr: '' };
+      if (args[0] === 'fetch') return { status: fetchStatus, stdout: '', stderr: '' };
+      if (args[0] === 'rev-parse') return { status: 0, stdout: `${args.at(-1) === 'refs/remotes/origin/main^{commit}' ? BASE : HEAD}\n`, stderr: '' };
+      return { status: 0, stdout: '', stderr: '' };
+    };
+    const adapter = createLiveGitBranch({
+      run, repoRootDir: '/tmp/repo', worktreeRoot: '/tmp/worktrees', now: () => 1,
+      mkdir: (dir) => { effects.push(`mkdir ${dir}`); },
+    });
+    return { adapter, effects };
+  };
+
+  const reused = onBranch();
+  const result = await reused.adapter.createBranch({ branch: BRANCH, baseRef: 'origin/main' });
+  assert.deepEqual(
+    [result.ok, result.status, result.preexisting, result.worktreeDir, result.baseCommit, result.headCommit, result.baseBranch],
+    [true, 'reused', true, '/tmp/repo', BASE, HEAD, 'main'],
+  );
+  // No worktree, checkout, detach, or directory effect on the user's checkout.
+  assert.equal(reused.effects.some((effect) => /^(worktree|checkout|switch|reset)\b|^mkdir /.test(effect)), false);
+
+  const unverified = onBranch({ fetchStatus: 1 });
+  const refused = await unverified.adapter.createBranch({ branch: BRANCH, baseRef: 'origin/main' });
+  assert.deepEqual([refused.ok, refused.reasonCode, refused.worktreeDir], [false, 'trusted_base_unverified', null]);
+
+  const elsewhere = onBranch({ topLevel: '/tmp/other-checkout' });
+  const mismatch = await elsewhere.adapter.createBranch({ branch: BRANCH, baseRef: 'origin/main' });
+  assert.deepEqual([mismatch.ok, mismatch.reasonCode], [false, 'existing_worktree_unverified']);
+  assert.equal(elsewhere.effects.some((effect) => effect.startsWith('fetch') || effect.startsWith('worktree')), false);
+});
+
 // Runs the orchestrator with the live pull-request adapter against a fake `gh`
 // that reports one existing pull request (#7) with the given live base. The
 // branch stage yields base evidence only for the host-trusted `origin/main`.
-async function runWithExistingPullRequest(liveBaseRefName, input = {}) {
+async function runWithExistingPullRequest(liveBaseRefName, input = {}, liveHead = HEAD) {
   const composed = adapters();
   composed.git = {
     async createBranch({ branch, baseRef }) {
@@ -629,6 +700,7 @@ async function runWithExistingPullRequest(liveBaseRefName, input = {}) {
         title: 'SUP-4029 delivery trace',
         state: 'MERGED',
         headRefName: BRANCH,
+        ...(liveHead ? { headRefOid: liveHead } : {}),
         ...(liveBaseRefName ? { baseRefName: liveBaseRefName } : {}),
       }),
       stderr: '',
@@ -673,4 +745,17 @@ test('a reattached pull request on the trusted base completes', async () => {
   assert.equal(result.status, 'completed');
   assert.deepEqual([pullRequest?.status, pullRequest?.baseRefName, pullRequest?.liveConfirmed], ['merged', 'main', true]);
   assert.deepEqual(result.events.map((event) => event.stage).slice(-2), ['postMergeSweep', 'verifyClose']);
+});
+
+test('a reattached merged pull request whose live head is not the observed head never reaches sweep or close', async () => {
+  for (const [name, liveHead, reasonCode] of [
+    ['remote head changed after the observation', OTHER_HEAD, 'pull_request_head_mismatch'],
+    ['live head unreadable', null, 'pull_request_head_unverified'],
+  ]) {
+    const result = await runWithExistingPullRequest('main', {}, liveHead);
+    const pullRequest = result.events.find((event) => event.stage === 'pullRequest')?.result;
+    assert.equal(result.status, 'failed', name);
+    assert.deepEqual([pullRequest?.ok, pullRequest?.reasonCode], [false, reasonCode], name);
+    assert.equal(result.events.some((event) => event.stage === 'verifyClose'), false, name);
+  }
 });
