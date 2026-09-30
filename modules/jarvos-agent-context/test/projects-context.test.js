@@ -192,6 +192,47 @@ test('recent activity is rendered as bounded assistant context', async () => {
   assert.match(result.markdown, /Reconciled release readiness \[completed\]/);
 });
 
+function portfolioPacket({ projects, outcomesPerProject, goal }) {
+  const base = packet();
+  const template = base.canonical.records[0];
+  const records = [];
+  for (let p = 1; p <= projects; p += 1) {
+    const id = `prj_${String(100 + p).padStart(6, '0')}`;
+    const title = `Roster Project ${String(p).padStart(2, '0')}`;
+    records.push({ ...template, id, kind: 'project', title, parentId: null, breadcrumb: title, goal, definitionOfDone: null, aliases: [] });
+    for (let o = 1; o <= outcomesPerProject; o += 1) {
+      records.push({
+        ...template, id: `out_${String(p * 10 + o).padStart(6, '0')}`, kind: 'outcome', title: `${title} outcome ${o}`,
+        parentId: id, lifecycle: 'planned', breadcrumb: `${title} \u203a ${title} outcome ${o}`, goal: null, definitionOfDone: null, aliases: [],
+      });
+    }
+  }
+  return { ...base, canonical: { ...base.canonical, records, revisions: Object.fromEntries(records.map((record) => [record.id, record.revision])) } };
+}
+
+test('markdown lists every top-level project before nested records so a trim cannot hide one', async () => {
+  const provider = { read: async ({ query }) => ({ status: 'ok', packet: { ...portfolioPacket({ projects: 14, outcomesPerProject: 3, goal: 'A long goal. '.repeat(40) }), query } }) };
+  const result = await readProjectsContext({ provider, query: QUERY });
+  assert.equal(result.status, 'ok');
+  assert.match(result.markdown, /\[Projects context trimmed to 3600 characters\]/, 'the tail is trimmed, not the roster');
+  const roster = result.markdown.slice(result.markdown.indexOf('### Projects roster'), result.markdown.indexOf('### Canonical projects and outcomes'));
+  for (let p = 1; p <= 14; p += 1) assert.match(roster, new RegExp(`Roster Project ${String(p).padStart(2, '0')} .* — active`));
+  // Too many projects for one-line goals in the budget: titles and lifecycle only.
+  assert.doesNotMatch(roster, /A long goal/);
+  assert.doesNotMatch(roster, /outcome/);
+});
+
+test('markdown roster carries a one-line goal capped near 100 characters when the budget allows', async () => {
+  const provider = { read: async ({ query }) => ({ status: 'ok', packet: { ...portfolioPacket({ projects: 3, outcomesPerProject: 1, goal: `First line of the goal.\n${'More words. '.repeat(40)}` }), query } }) };
+  const result = await readProjectsContext({ provider, query: QUERY });
+  assert.equal(result.status, 'ok');
+  const line = result.markdown.split('\n').find((entry) => entry.startsWith('- Roster Project 01'));
+  assert.ok(line, 'roster line present');
+  assert.match(line, /: First line of the goal\. More words\./);
+  assert.ok(line.length < 190, `line stays short: ${line.length}`);
+  assert.match(line, /\u2026$/);
+});
+
 test('derived Project intent gaps use the existing attention rendering consumer', async () => {
   const authority = createHostAdmission({ producerId: 'agent-context-intent-source', secret: 'agent-context-intent-secret', allowedSourceClasses: ['note'] });
   const provider = {
