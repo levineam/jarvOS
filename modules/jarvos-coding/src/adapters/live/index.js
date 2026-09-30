@@ -98,11 +98,14 @@ function buildLiveCodingAdapters(options = {}) {
     dryRun: options.dryRun,
   });
 
+  // The same host-owned base governs the branch observation and the pull
+  // request target: `release` and `origin/release` both mean origin/release.
   const git = options.git || createLiveGitBranch({
     run: options.run,
     env: options.env,
     repoRootDir: options.repoRootDir,
     worktreeRoot: options.worktreeRoot,
+    baseRef: options.baseRef,
   });
 
   const fixer = options.fixer || createLiveFixer({

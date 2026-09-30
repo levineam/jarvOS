@@ -1,9 +1,11 @@
 'use strict';
 
 const path = require('path');
+const { isSafeRepoPath, observePlan } = require('../../features/delivery-trace');
 const { run: defaultRun } = require('./run');
 
 const FIXER_SCHEMA_VERSION = 'jarvos-coding-live-fixer/v1';
+const GIT_OBJECT_ID = /^[a-f0-9]{40}(?:[a-f0-9]{24})?$/i;
 
 // Primary-fix-pass statuses that mean "this approach bowed out — try the
 // pr-autopilot coding-agent fix pass instead" (lock busy, doctor/preflight fail,
@@ -108,6 +110,52 @@ function createLiveFixer(options = {}) {
     };
   }
 
+  /**
+   * Read-only Git observation for the delivery trace: the committed head, the
+   * files changed from the base, and the declared plan file as it exists at
+   * that head. Every call is an argument array with no shell; the plan path is
+   * used only when it is a safe repo-relative path.
+   *
+   * The base is the commit the branch stage resolved from the trusted base ref
+   * for this same worktree — never `input.baseRef`, which a caller could point
+   * at the branch head to make the diff empty. An existing pull request that
+   * targets a different base contradicts that evidence. Returns null when the
+   * base is unverified or the head or file list cannot be read, so the gate
+   * fails closed instead of observing "no changes".
+   */
+  function observeDelivery(input = {}) {
+    const branchEvidence = input.branchResult;
+    const cwd = input.worktreeDir || branchEvidence?.worktreeDir || null;
+    if (!cwd) return null;
+    if (!branchEvidence || typeof branchEvidence !== 'object' || branchEvidence.ok === false) return null;
+    if (branchEvidence.worktreeDir !== cwd) return null;
+    const baseCommit = typeof branchEvidence.baseCommit === 'string' ? branchEvidence.baseCommit : '';
+    if (!GIT_OBJECT_ID.test(baseCommit)) return null;
+    const pullRequestBase = (input.pr || input.pullRequest || {}).baseRefName;
+    if (pullRequestBase && String(pullRequestBase).replace(/^refs\/heads\//u, '') !== branchEvidence.baseBranch) return null;
+
+    const git = (args) => run('git', args, { cwd, timeoutMs: 30000, allowFail: true });
+
+    const head = git(['rev-parse', 'HEAD']);
+    const headCommit = head.status === 0 ? String(head.stdout || '').trim() : '';
+    if (!GIT_OBJECT_ID.test(headCommit)) return null;
+
+    const diff = git(['diff', '--name-only', `${baseCommit}...HEAD`, '--']);
+    if (diff.status !== 0) return null;
+    const changedFiles = String(diff.stdout || '').split('\n').map((line) => line.trim()).filter(Boolean);
+
+    const planPath = input.deliveryTrace?.plan?.path;
+    let plan = null;
+    if (isSafeRepoPath(planPath)) {
+      const shown = git(['show', `HEAD:${planPath}`]);
+      if (shown.status === 0) {
+        plan = observePlan(shown.stdout, input.issueIdentifier || input.issue?.identifier);
+      }
+    }
+
+    return { baseCommit, headCommit, changedFiles, plan };
+  }
+
   return {
     schemaVersion: FIXER_SCHEMA_VERSION,
 
@@ -124,6 +172,7 @@ function createLiveFixer(options = {}) {
           reasonCode: 'pre_pr_no_fix_context',
           reason: 'no pull request in context (number + head ref required for a fix pass)',
           git,
+          deliveryObservation: observeDelivery(input),
         };
       }
 
@@ -131,6 +180,7 @@ function createLiveFixer(options = {}) {
       const primaryResult = {
         ...normalizeFixResult('clawpatch-primary', primary),
         git: inspectGit(input),
+        deliveryObservation: observeDelivery(input),
       };
 
       if (!FALLBACK_STATUSES.has(primaryResult.status) || !enableAutopilotFallback) {
@@ -144,6 +194,7 @@ function createLiveFixer(options = {}) {
       return {
         ...normalizeFixResult('pr-autopilot', fallback),
         git: inspectGit(input),
+        deliveryObservation: observeDelivery(input),
         primary: primaryResult,
       };
     },

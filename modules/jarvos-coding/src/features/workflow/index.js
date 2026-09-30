@@ -679,7 +679,15 @@ function createManagedCodingWorkflow(options = {}) {
 
   async function complete(input = {}, adapters = {}) {
     const claimed = claim(input);
-    const result = await runTakeIssueToDone({ ...input, workRunId: claimed.workRunId, branch: input.branch || input.branchName }, adapters);
+    const result = await runTakeIssueToDone({
+      ...input,
+      workRunId: claimed.workRunId,
+      branch: input.branch || input.branchName,
+      // The plan of record on the managed path is the revision this run's store
+      // accepted. It overrides any digest the caller restates, and a run that
+      // never accepted a plan ('' matches no digest) cannot complete.
+      acceptedPlanDigest: claimed.workRun.acceptedPlan?.digest || '',
+    }, adapters);
     if (result.learning?.status === 'eligible') {
       const learning = await compound({
         ...input,

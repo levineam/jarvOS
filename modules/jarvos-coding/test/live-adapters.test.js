@@ -1006,6 +1006,7 @@ test('live PR adapter revalidates a merged reattachment by number after branch d
           title: 'Coding compatibility',
           state: 'MERGED',
           headRefName: 'SUP-3470/public-jarvos-coding',
+          baseRefName: 'main',
         }),
         stderr: '',
       };

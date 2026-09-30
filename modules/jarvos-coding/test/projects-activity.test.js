@@ -434,6 +434,28 @@ test('the coding orchestrator emits activity only after each durable stage', asy
   const link = executionReference({ itemId: 'bd-4' });
   await executionLinks.write(link);
   const activity = createProjectsActivityEmitter({ authority, activityStore: store, executionLinks });
+  // Completion needs a declared delivery trace and the fix stage's Git observation.
+  const headCommit = 'a'.repeat(40);
+  const planDigest = 'd'.repeat(64);
+  const changedFiles = ['docs/plans/bd-4.md', 'modules/jarvos-coding/README.md', 'modules/jarvos-coding/src/projects-activity.js'];
+  const deliveryTrace = {
+    schemaVersion: 'jarvos-coding-delivery-trace/v1',
+    workIdentifier: 'bd-4',
+    plan: { path: changedFiles[0], digest: planDigest },
+    docImpact: { decision: 'affected', docs: [changedFiles[1]] },
+    implementation: { headCommit, changedFiles },
+    proof: [{
+      kind: 'behavioral',
+      level: 'source',
+      criterion: 'Activity is emitted only after each durable stage.',
+      claim: 'A completed run admits one activity per stage.',
+      command: 'node --test modules/jarvos-coding/test/projects-activity.test.js',
+      observation: 'Eight admitted activities were recorded at this head.',
+      status: 'passed',
+      headCommit,
+    }],
+  };
+  const deliveryObservation = { headCommit, changedFiles, plan: { digest: planDigest, mentionsWorkIdentifier: true } };
   const adapters = {
     activity,
     reviewEngine: createClawpatchAutoreviewAdapter({ runner: async () => ({ status: 'passed' }) }),
@@ -442,11 +464,11 @@ test('the coding orchestrator emits activity only after each durable stage', asy
       verifyAndClose: async () => ({ status: 'closed', ok: true }),
     },
     git: { createBranch: async ({ branch }) => ({ status: 'created', branch, ok: true }) },
-    fixer: { fixAndRerun: async () => ({ status: 'passed', ok: true }) },
+    fixer: { fixAndRerun: async () => ({ status: 'passed', ok: true, deliveryObservation }) },
     pullRequest: { openPullRequest: async () => ({ status: 'created', url: 'https://example.test/pr/4', ok: true }) },
     postMerge: { sweep: async () => ({ status: 'completed', ok: true }) },
   };
-  const result = await runTakeIssueToDone({ runId: 'run-4', workReference: { authority: 'beads', itemId: 'bd-4' }, executionReference: link }, adapters);
+  const result = await runTakeIssueToDone({ runId: 'run-4', workReference: { authority: 'beads', itemId: 'bd-4' }, executionReference: link, deliveryTrace }, adapters);
   assert.equal(result.status, 'completed');
   assert.equal(result.activityEvents.length, 8);
   assert.equal(store.query({}).activities.length, 8);

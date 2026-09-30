@@ -499,14 +499,40 @@ try {
         async verifyAndClose() { calls.push('verifyClose'); return { status: 'closed' }; },
       },
       git: { async createBranch(input) { calls.push('branch'); return { status: 'created', branch: input.branch }; } },
-      fixer: { async fixAndRerun() { calls.push('fixRerun'); return { status: 'passed' }; } },
+      fixer: { async fixAndRerun() { calls.push('fixRerun'); return { status: 'passed', deliveryObservation }; } },
       pullRequest: { async openPullRequest() { calls.push('pullRequest'); return { status: 'created' }; } },
       postMerge: { async sweep() { calls.push('postMergeSweep'); return { status: 'completed' }; } },
     }});
-    adapter.runTakeIssueToDone({ issueIdentifier: 'SUP-2214', branch: 'SUP-2214/modules-smoke' })
+    // Completion needs a declared delivery trace that matches the fix stage's Git observation.
+    const headCommit = 'a'.repeat(40);
+    const planText = '# SUP-2214 modules smoke plan';
+    const changedFiles = ['docs/plans/SUP-2214.md', 'modules/jarvos-coding/README.md', 'modules/jarvos-coding/src/index.js'];
+    const deliveryObservation = { headCommit, changedFiles, plan: coding.observePlan(planText, 'SUP-2214') };
+    const deliveryTrace = {
+      schemaVersion: coding.DELIVERY_TRACE_SCHEMA_VERSION,
+      workIdentifier: 'SUP-2214',
+      plan: { path: changedFiles[0], digest: deliveryObservation.plan.digest },
+      docImpact: { decision: 'affected', docs: [changedFiles[1]] },
+      implementation: { headCommit, changedFiles },
+      proof: [{
+        kind: 'behavioral', level: 'source', status: 'passed', headCommit,
+        criterion: 'The Codex host adapter drives every orchestrator stage.',
+        claim: 'runTakeIssueToDone completes through the host adapter.',
+        command: 'node tests/modules-smoke-test.js',
+        observation: 'Every stage ran and the run reported completed.',
+      }],
+    };
+    const run = (input) => adapter.runTakeIssueToDone({ issueIdentifier: 'SUP-2214', branch: 'SUP-2214/modules-smoke', ...input });
+    run({ deliveryTrace })
       .then((result) => {
         if (result.status !== 'completed') throw new Error('host adapter did not complete');
         if (result.result.events.length !== coding.TAKE_ISSUE_TO_DONE_STAGES.length) throw new Error('stage count mismatch');
+        if (result.result.deliveryGate.claims.source !== 'proven' || result.result.deliveryGate.claims.live !== 'not-claimed') throw new Error('unexpected proof claims');
+        return run({});
+      })
+      .then((result) => {
+        if (result.status !== 'blocked') throw new Error('trace-less run was not blocked');
+        if (result.result.events.some((event) => event.stage === 'verifyClose')) throw new Error('blocked run reached verifyClose');
       })
       .catch((error) => { console.error(error.message); process.exit(1); });
   `], { cwd: ROOT, encoding: 'utf8' });

@@ -4,6 +4,7 @@ const { run: defaultRun } = require('./run');
 
 const PULL_REQUEST_SCHEMA_VERSION = 'jarvos-coding-live-pull-request/v1';
 const DEFAULT_MERGE_METHOD = 'squash';
+const GIT_OBJECT_ID = /^[a-f0-9]{40}(?:[a-f0-9]{24})?$/i;
 
 function parseJson(text) {
   try {
@@ -40,9 +41,50 @@ function createLivePullRequest(options = {}) {
     return String(ref || baseDefault).replace(/^origin\//, '') || baseDefault;
   }
 
+  /**
+   * The integration target an existing pull request must have. It is the base
+   * branch the branch stage resolved from the host-configured trusted base, or
+   * otherwise this adapter's own configured base. The run's `baseRef` and any
+   * reattachment pointer are never consulted: neither is proof of the target.
+   */
+  function trustedBaseFor(input = {}) {
+    const evidence = input.branchResult;
+    const verified = evidence
+      && typeof evidence === 'object'
+      && evidence.ok !== false
+      && typeof evidence.baseCommit === 'string'
+      && GIT_OBJECT_ID.test(evidence.baseCommit)
+      && typeof evidence.baseBranch === 'string'
+      && evidence.baseBranch;
+    return verified ? evidence.baseBranch : normalizeBase();
+  }
+
+  // An existing pull request is only evidence when its live-read base is the
+  // trusted target. A different or unreadable base fails the stage closed.
+  function existingBaseFailure(repo, branch, pr, trustedBase) {
+    const actualBase = typeof pr.baseRefName === 'string' ? pr.baseRefName : '';
+    if (actualBase && actualBase === trustedBase) return null;
+    return {
+      schemaVersion: PULL_REQUEST_SCHEMA_VERSION,
+      status: 'failed',
+      ok: false,
+      reasonCode: actualBase ? 'pull_request_base_mismatch' : 'pull_request_base_unverified',
+      reason: actualBase
+        ? `existing pull request targets ${actualBase}, not the trusted base ${trustedBase}`
+        : 'existing pull request base could not be read',
+      repo,
+      branch,
+      number: pr.number,
+      url: pr.url,
+      state: pr.state,
+      baseRefName: actualBase || null,
+      expectedBaseRefName: trustedBase,
+    };
+  }
+
   function findPr(repo, ref, options = {}) {
     if (!ref) return null;
-    const args = ['pr', 'view', String(ref), '--json', 'number,url,title,state,headRefName'];
+    const args = ['pr', 'view', String(ref), '--json', 'number,url,title,state,headRefName,baseRefName'];
     if (repo) args.push('--repo', repo);
     const result = run('gh', args, { allowFail: true, timeoutMs: 60000 });
     if (result.status !== 0) return null;
@@ -62,7 +104,10 @@ function createLivePullRequest(options = {}) {
       const pointer = input.existingPullRequest || null;
       const pointerRef = pointer?.number || pointer?.url || null;
       const revalidated = pointerRef ? findPr(repo, pointerRef) : null;
+      const trustedBase = trustedBaseFor(input);
       if (revalidated) {
+        const baseFailure = existingBaseFailure(repo, branch, revalidated, trustedBase);
+        if (baseFailure) return { ...baseFailure, reattached: true, liveConfirmed: true };
         const state = String(revalidated.state || '').toUpperCase();
         const status = state === 'MERGED' ? 'merged' : (state === 'OPEN' ? 'exists' : 'closed');
         return {
@@ -75,6 +120,7 @@ function createLivePullRequest(options = {}) {
           number: revalidated.number,
           url: revalidated.url,
           title: revalidated.title,
+          baseRefName: revalidated.baseRefName,
           reattached: true,
           liveConfirmed: true,
         };
@@ -82,6 +128,8 @@ function createLivePullRequest(options = {}) {
 
       const existing = findPr(repo, branch, { openOnly: true });
       if (existing) {
+        const baseFailure = existingBaseFailure(repo, branch, existing, trustedBase);
+        if (baseFailure) return baseFailure;
         return {
           schemaVersion: PULL_REQUEST_SCHEMA_VERSION,
           status: 'exists',
@@ -92,6 +140,7 @@ function createLivePullRequest(options = {}) {
           url: existing.url,
           title: existing.title,
           state: existing.state,
+          baseRefName: existing.baseRefName,
         };
       }
 
