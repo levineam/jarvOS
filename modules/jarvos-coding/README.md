@@ -473,15 +473,17 @@ The host supplies the observation from Git, never from the caller:
 
 ```js
 const deliveryObservation = {
+  baseCommit,                   // branch-stage resolution of the host-trusted base
   headCommit,                    // git rev-parse HEAD
-  changedFiles,                  // git diff --name-only <base>...HEAD
+  changedFiles,                  // git diff --name-only <baseCommit>...HEAD
   plan: observePlan(planText, 'SUP-4029'),  // git show HEAD:<plan.path> -> { digest, mentionsWorkIdentifier }
 };
 ```
 
 `createLiveFixer` returns this as `deliveryObservation` on the `fixRerun` result,
 using read-only Git argument arrays (no shell). The plan path is read only when
-it is a safe repo-relative path.
+it is a safe repo-relative path. Missing base evidence blocks the trace rather
+than treating an empty diff from a caller-provided ref as proof.
 
 The result is `{ ok, reasons, claims }`. Reason codes:
 

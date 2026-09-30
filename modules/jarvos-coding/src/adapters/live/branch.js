@@ -6,6 +6,9 @@ const { run: defaultRun } = require('./run');
 
 const BRANCH_SCHEMA_VERSION = 'jarvos-coding-live-branch/v1';
 const DEFAULT_WORKTREE_SUBDIR = 'worktrees';
+const DEFAULT_TRUSTED_BASE_REF = 'origin/main';
+const GIT_OBJECT_ID = /^[a-f0-9]{40}(?:[a-f0-9]{24})?$/i;
+const REMOTE_TRACKING_REF = /^[A-Za-z0-9][A-Za-z0-9._-]*\/[A-Za-z0-9][A-Za-z0-9._/-]*$/;
 
 /**
  * Resolve the root directory that holds per-branch worktrees. Mirrors the env
@@ -55,6 +58,29 @@ function createLiveGitBranch(options = {}) {
   const worktreeRoot = resolveWorktreeRoot(options, env);
   const now = options.now || (() => Date.now());
   const mkdir = options.mkdir || ((dir) => fs.mkdirSync(dir, { recursive: true }));
+  // The integration base is host configuration, never a per-run argument.
+  const trustedBaseRef = options.baseRef || DEFAULT_TRUSTED_BASE_REF;
+
+  /**
+   * Base evidence for the delivery comparison: the commit the freshly fetched
+   * trusted remote-tracking ref points at. A per-run base ref is not evidence
+   * merely because it is a valid ref — `HEAD`, the branch itself, or any other
+   * name that resolves to the branch head would diff as "no changes" — so a
+   * requested base other than the configured one, a failed fetch, or an
+   * unresolvable ref yields no base commit and therefore no observation.
+   */
+  function resolveTrustedBase(requestedBaseRef, fetched) {
+    if (requestedBaseRef !== trustedBaseRef) return null;
+    if (!REMOTE_TRACKING_REF.test(trustedBaseRef) || trustedBaseRef.includes('..')) return null;
+    if (!fetched || fetched.status !== 0) return null;
+    const resolved = run('git', ['rev-parse', '--verify', '--quiet', `refs/remotes/${trustedBaseRef}^{commit}`], {
+      cwd: repoRootDir,
+      timeoutMs: 30000,
+      allowFail: true,
+    });
+    const commit = resolved.status === 0 ? String(resolved.stdout || '').trim().toLowerCase() : '';
+    return GIT_OBJECT_ID.test(commit) ? commit : null;
+  }
 
   return {
     schemaVersion: BRANCH_SCHEMA_VERSION,
@@ -62,14 +88,19 @@ function createLiveGitBranch(options = {}) {
     async createBranch(input = {}) {
       const branch = input.branch || input.branchName;
       if (!branch) throw new Error('live createBranch requires a branch name');
-      const baseRef = input.baseRef || 'origin/main';
+      const baseRef = input.baseRef || trustedBaseRef;
 
       mkdir(worktreeRoot);
       const worktreeDir = path.join(worktreeRoot, `${sanitizeForPath(branch)}-${now()}`);
 
       // Fetch the base so the new worktree branches off the latest base ref.
       const { remote, branch: baseBranch } = splitBaseRef(baseRef);
-      run('git', ['fetch', remote, baseBranch], { cwd: repoRootDir, timeoutMs: 120000, allowFail: true });
+      const fetched = run('git', ['fetch', remote, baseBranch], { cwd: repoRootDir, timeoutMs: 120000, allowFail: true });
+
+      // Resolved once, from the fetched ref, for both a new branch and a
+      // reattached existing branch. Null means the base is unverified.
+      const baseCommit = resolveTrustedBase(baseRef, fetched);
+      const baseEvidence = { baseCommit, baseBranch: baseCommit ? baseBranch : null };
 
       // Create a new branch in its own worktree off the base ref.
       const add = run('git', ['worktree', 'add', '-b', branch, worktreeDir, baseRef], {
@@ -86,6 +117,7 @@ function createLiveGitBranch(options = {}) {
           ok: true,
           branch,
           baseRef,
+          ...baseEvidence,
           worktreeDir,
         };
       }
@@ -107,6 +139,7 @@ function createLiveGitBranch(options = {}) {
           ok: true,
           branch,
           baseRef,
+          ...baseEvidence,
           worktreeDir,
         };
       }

@@ -6,7 +6,6 @@ const { run: defaultRun } = require('./run');
 
 const FIXER_SCHEMA_VERSION = 'jarvos-coding-live-fixer/v1';
 const GIT_OBJECT_ID = /^[a-f0-9]{40}(?:[a-f0-9]{24})?$/i;
-const SAFE_GIT_REF = /^[A-Za-z0-9][A-Za-z0-9._/-]*$/;
 
 // Primary-fix-pass statuses that mean "this approach bowed out — try the
 // pr-autopilot coding-agent fix pass instead" (lock busy, doctor/preflight fail,
@@ -115,21 +114,33 @@ function createLiveFixer(options = {}) {
    * Read-only Git observation for the delivery trace: the committed head, the
    * files changed from the base, and the declared plan file as it exists at
    * that head. Every call is an argument array with no shell; the plan path is
-   * used only when it is a safe repo-relative path. Returns null when the head
-   * or file list cannot be read, so the gate fails closed.
+   * used only when it is a safe repo-relative path.
+   *
+   * The base is the commit the branch stage resolved from the trusted base ref
+   * for this same worktree — never `input.baseRef`, which a caller could point
+   * at the branch head to make the diff empty. An existing pull request that
+   * targets a different base contradicts that evidence. Returns null when the
+   * base is unverified or the head or file list cannot be read, so the gate
+   * fails closed instead of observing "no changes".
    */
   function observeDelivery(input = {}) {
-    const cwd = input.worktreeDir || input.branchResult?.worktreeDir || null;
+    const branchEvidence = input.branchResult;
+    const cwd = input.worktreeDir || branchEvidence?.worktreeDir || null;
     if (!cwd) return null;
+    if (!branchEvidence || typeof branchEvidence !== 'object' || branchEvidence.ok === false) return null;
+    if (branchEvidence.worktreeDir !== cwd) return null;
+    const baseCommit = typeof branchEvidence.baseCommit === 'string' ? branchEvidence.baseCommit : '';
+    if (!GIT_OBJECT_ID.test(baseCommit)) return null;
+    const pullRequestBase = (input.pr || input.pullRequest || {}).baseRefName;
+    if (pullRequestBase && String(pullRequestBase).replace(/^refs\/heads\//u, '') !== branchEvidence.baseBranch) return null;
+
     const git = (args) => run('git', args, { cwd, timeoutMs: 30000, allowFail: true });
 
     const head = git(['rev-parse', 'HEAD']);
     const headCommit = head.status === 0 ? String(head.stdout || '').trim() : '';
     if (!GIT_OBJECT_ID.test(headCommit)) return null;
 
-    const baseRef = input.baseRef || 'origin/main';
-    if (!SAFE_GIT_REF.test(baseRef) || baseRef.includes('..')) return null;
-    const diff = git(['diff', '--name-only', `${baseRef}...HEAD`, '--']);
+    const diff = git(['diff', '--name-only', `${baseCommit}...HEAD`, '--']);
     if (diff.status !== 0) return null;
     const changedFiles = String(diff.stdout || '').split('\n').map((line) => line.trim()).filter(Boolean);
 
@@ -142,7 +153,7 @@ function createLiveFixer(options = {}) {
       }
     }
 
-    return { headCommit, changedFiles, plan };
+    return { baseCommit, headCommit, changedFiles, plan };
   }
 
   return {

@@ -11,6 +11,8 @@ const {
   createCodexHostAdapter,
   createCodingControlPlanePort,
   createLiveFixer,
+  createLiveGitBranch,
+  createLivePullRequest,
   createManagedCodingWorkflow,
   createMemoryWorkRunStore,
   evaluateDeliveryTrace,
@@ -25,6 +27,7 @@ const IDENTIFIER = 'SUP-4029';
 const BRANCH = 'SUP-4029/delivery-trace';
 const HEAD = 'a'.repeat(40);
 const OTHER_HEAD = 'b'.repeat(40);
+const BASE = 'c'.repeat(40);
 const PLAN_PATH = 'docs/plans/2026-09-30-SUP-4029-approval-doc-trace.md';
 const PLAN_TEXT = '# SUP-4029 — approved plan to documentation, implementation, and proof\n';
 const README = 'modules/jarvos-coding/README.md';
@@ -401,9 +404,13 @@ test('live fixer observes head, changed files, and the plan through read-only Gi
     if (args[0] === 'show') return { status: 0, stdout: PLAN_TEXT, stderr: '' };
     return { status: 0, stdout: '', stderr: '' };
   };
-  const input = { issueIdentifier: IDENTIFIER, branch: BRANCH, baseRef: 'origin/main', worktreeDir: '/tmp/SUP-4029' };
+  // The base is the branch stage's resolved commit, not the per-run base ref.
+  const branchResult = { status: 'created', ok: true, branch: BRANCH, baseRef: 'origin/main', baseBranch: 'main', baseCommit: BASE, worktreeDir: '/tmp/SUP-4029' };
+  const input = { issueIdentifier: IDENTIFIER, branch: BRANCH, baseRef: 'origin/main', branchResult, worktreeDir: '/tmp/SUP-4029' };
 
   const observed = (await createLiveFixer({ run }).fixAndRerun({ ...input, deliveryTrace: trace() })).deliveryObservation;
+  assert.deepEqual(calls.find((call) => call.args[0] === 'diff').args, ['diff', '--name-only', `${BASE}...HEAD`, '--']);
+  assert.equal(observed?.baseCommit, BASE);
   assert.equal(observed?.headCommit, HEAD);
   assert.deepEqual(observed?.changedFiles, [PLAN_PATH, README, SOURCE]);
   assert.deepEqual(observed?.plan, { digest: sha256(PLAN_TEXT), mentionsWorkIdentifier: true });
@@ -415,4 +422,153 @@ test('live fixer observes head, changed files, and the plan through read-only Gi
   assert.equal(unsafe?.headCommit, HEAD);
   assert.equal(unsafe?.plan ?? null, null);
   assert.equal(calls.some((call) => call.args.join(' ').includes('private/plan.md')), false);
+});
+
+// A repository whose branch head is HEAD and whose trusted base is BASE. Every
+// other name resolves to the head, and a diff from anything but BASE is empty:
+// exactly what `HEAD`, the branch itself, or the head commit look like as a base.
+function repository({ existingBranch = false, fetchStatus = 0 } = {}) {
+  const ok = (stdout) => ({ status: 0, stdout, stderr: '' });
+  return (command, args) => {
+    if (args[0] === 'fetch') return { status: fetchStatus, stdout: '', stderr: '' };
+    if (args[0] === 'worktree' && args.includes('-b') && existingBranch) return { status: 1, stdout: '', stderr: 'branch already exists' };
+    if (args[0] === 'rev-parse') return ok(`${args.at(-1) === 'refs/remotes/origin/main^{commit}' ? BASE : HEAD}\n`);
+    if (args[0] === 'diff') return ok(args.includes(`${BASE}...HEAD`) ? `${[PLAN_PATH, README, SOURCE].join('\n')}\n` : '');
+    if (args[0] === 'show') return ok(PLAN_TEXT);
+    return ok('');
+  };
+}
+
+async function observeLive(baseRef, { repo = {}, fix = {} } = {}) {
+  const run = repository(repo);
+  const branchResult = await createLiveGitBranch({
+    run,
+    repoRootDir: '/tmp/repo',
+    worktreeRoot: '/tmp/worktrees',
+    mkdir: () => {},
+    now: () => 1,
+  }).createBranch({ branch: BRANCH, baseRef });
+  const fixed = await createLiveFixer({ run, primaryFixPass: () => ({ status: 'passed' }) }).fixAndRerun({
+    issueIdentifier: IDENTIFIER,
+    branch: BRANCH,
+    baseRef,
+    branchResult,
+    worktreeDir: branchResult.worktreeDir,
+    deliveryTrace: trace(),
+    ...fix,
+  });
+  return { branchResult, observed: fixed.deliveryObservation };
+}
+
+test('live delivery observation is bound to the resolved trusted base, never a caller ref that aliases the head', async () => {
+  for (const existingBranch of [false, true]) {
+    const repo = { existingBranch };
+    const mode = existingBranch ? 'attached' : 'created';
+
+    const legitimate = await observeLive('origin/main', { repo });
+    assert.equal(legitimate.branchResult.status, mode);
+    assert.equal(legitimate.branchResult.baseCommit, BASE, mode);
+    assert.equal(legitimate.observed?.baseCommit, BASE, mode);
+    assert.deepEqual(legitimate.observed?.changedFiles, [PLAN_PATH, README, SOURCE], mode);
+    assert.equal(evaluateDeliveryTrace(trace(), { identifier: IDENTIFIER, observed: legitimate.observed }).ok, true, mode);
+
+    // The no-op trace that an empty diff would have admitted.
+    const noChange = trace({
+      docImpact: { decision: 'none', reason: 'No files changed from the base, so no documentation is affected.' },
+      implementation: { headCommit: HEAD, changedFiles: [] },
+    });
+    for (const alias of ['HEAD', BRANCH, `refs/heads/${BRANCH}`, `origin/${BRANCH}`, HEAD, 'main']) {
+      const aliased = await observeLive(alias, { repo });
+      assert.equal(aliased.branchResult.baseCommit, null, `${mode}: ${alias}`);
+      assert.equal(aliased.observed, null, `${mode}: ${alias}`);
+      const gate = evaluateDeliveryTrace(noChange, { identifier: IDENTIFIER, observed: aliased.observed });
+      assert.ok(gate.reasons.includes('observation_unavailable'), `${mode}: ${alias}`);
+    }
+
+    // An unverifiable base is no observation, not an empty passing diff.
+    assert.equal((await observeLive('origin/main', { repo: { existingBranch, fetchStatus: 1 } })).observed, null, mode);
+
+    // An existing pull request that targets another base contradicts the branch evidence.
+    const pullRequest = { number: 7, headRefName: BRANCH, baseRefName: 'release' };
+    assert.equal((await observeLive('origin/main', { repo, fix: { pullRequest } })).observed, null, mode);
+    assert.equal((await observeLive('origin/main', { repo, fix: { pullRequest: { ...pullRequest, baseRefName: 'main' } } })).observed?.baseCommit, BASE, mode);
+
+    // Branch evidence for a different worktree is not evidence for this one.
+    assert.equal((await observeLive('origin/main', { repo, fix: { worktreeDir: '/tmp/elsewhere' } })).observed, null, mode);
+  }
+});
+
+// Runs the orchestrator with the live pull-request adapter against a fake `gh`
+// that reports one existing pull request (#7) with the given live base. The
+// branch stage yields base evidence only for the host-trusted `origin/main`.
+async function runWithExistingPullRequest(liveBaseRefName, input = {}) {
+  const composed = adapters();
+  composed.git = {
+    async createBranch({ branch, baseRef }) {
+      const trusted = baseRef === 'origin/main';
+      return {
+        status: 'attached',
+        ok: true,
+        branch,
+        baseRef,
+        baseBranch: trusted ? 'main' : null,
+        baseCommit: trusted ? BASE : null,
+        worktreeDir: '/tmp/SUP-4029',
+      };
+    },
+  };
+  composed.pullRequest = createLivePullRequest({
+    repo: 'levineam/jarvOS',
+    run: () => ({
+      status: 0,
+      stdout: JSON.stringify({
+        number: 7,
+        url: 'https://github.com/levineam/jarvOS/pull/7',
+        title: 'SUP-4029 delivery trace',
+        state: 'MERGED',
+        headRefName: BRANCH,
+        ...(liveBaseRefName ? { baseRefName: liveBaseRefName } : {}),
+      }),
+      stderr: '',
+    }),
+  });
+  const wrapped = await createCodexHostAdapter({ adapters: composed }).runTakeIssueToDone({
+    issueIdentifier: IDENTIFIER,
+    branch: BRANCH,
+    deliveryTrace: trace(),
+    // The reattachment pointer claims the trusted base; it is not proof.
+    resumeFrom: { branch: BRANCH, pullRequest: { number: 7, url: 'https://github.com/levineam/jarvOS/pull/7', baseRefName: 'main' } },
+    ...input,
+  });
+  return wrapped.result;
+}
+
+test('a reattached pull request on the wrong or unreadable base never reaches sweep or close', async () => {
+  const rows = [
+    ['targets another base', 'release', {}, 'pull_request_base_mismatch'],
+    ['run restates that base as its own', 'release', { baseRef: 'origin/release' }, 'pull_request_base_mismatch'],
+    ['live base is unreadable', null, {}, 'pull_request_base_unverified'],
+  ];
+  for (const [name, liveBaseRefName, input, reasonCode] of rows) {
+    const result = await runWithExistingPullRequest(liveBaseRefName, input);
+    const pullRequest = result.events.find((event) => event.stage === 'pullRequest')?.result;
+
+    assert.equal(result.status, 'failed', name);
+    assert.equal(pullRequest?.ok, false, name);
+    assert.equal(pullRequest?.reasonCode, reasonCode, name);
+    assert.deepEqual(
+      result.events.map((event) => event.stage),
+      ['claim', 'branch', 'sliceReview', 'holisticReview', 'fixRerun', 'pullRequest'],
+      name,
+    );
+  }
+});
+
+test('a reattached pull request on the trusted base completes', async () => {
+  const result = await runWithExistingPullRequest('main');
+  const pullRequest = result.events.find((event) => event.stage === 'pullRequest')?.result;
+
+  assert.equal(result.status, 'completed');
+  assert.deepEqual([pullRequest?.status, pullRequest?.baseRefName, pullRequest?.liveConfirmed], ['merged', 'main', true]);
+  assert.deepEqual(result.events.map((event) => event.stage).slice(-2), ['postMergeSweep', 'verifyClose']);
 });

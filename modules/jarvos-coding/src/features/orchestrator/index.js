@@ -461,6 +461,9 @@ async function runTakeIssueToDone(input = {}, adapters = {}) {
       workReference: context.workReference,
       branch: context.branch,
       baseRef: context.baseRef,
+      // Branch-stage base evidence: the trusted target an existing pull
+      // request is checked against. `baseRef` above is not that evidence.
+      branchResult: branch,
       fixRerun,
       controlPlane,
       fence: controlPlane?.fence,
@@ -474,30 +477,35 @@ async function runTakeIssueToDone(input = {}, adapters = {}) {
     });
     context.pullRequest = pullRequest || context.pullRequest;
 
-    const postMergeSweep = await runStage('postMergeSweep', () => requireFn(adapters.postMerge, 'sweep', 'postMergeSweep')({
-      issue: input.issue,
-      issueIdentifier,
-      workReference: context.workReference,
-      branch: context.branch,
-      pullRequest: context.pullRequest,
-      controlPlane,
-      fence: controlPlane?.fence,
-      assertCurrentFence: controlPlane?.assertCurrentFence,
-      reattach,
-    }));
+    // A failed pull-request stage — including an existing pull request whose
+    // live-read base is not the trusted target — is not a review surface.
+    // Nothing is swept or closed on it; the run reports failed.
+    if (pullRequest?.ok !== false) {
+      const postMergeSweep = await runStage('postMergeSweep', () => requireFn(adapters.postMerge, 'sweep', 'postMergeSweep')({
+        issue: input.issue,
+        issueIdentifier,
+        workReference: context.workReference,
+        branch: context.branch,
+        pullRequest: context.pullRequest,
+        controlPlane,
+        fence: controlPlane?.fence,
+        assertCurrentFence: controlPlane?.assertCurrentFence,
+        reattach,
+      }));
 
-    await runStage('verifyClose', () => requireFn(adapters.tracker, 'verifyAndClose', 'verifyClose')({
-      issue: input.issue,
-      issueIdentifier,
-      workReference: context.workReference,
-      branch: context.branch,
-      pullRequest: context.pullRequest,
-      postMergeSweep,
-      controlPlane,
-      fence: controlPlane?.fence,
-      assertCurrentFence: controlPlane?.assertCurrentFence,
-      reattach,
-    }));
+      await runStage('verifyClose', () => requireFn(adapters.tracker, 'verifyAndClose', 'verifyClose')({
+        issue: input.issue,
+        issueIdentifier,
+        workReference: context.workReference,
+        branch: context.branch,
+        pullRequest: context.pullRequest,
+        postMergeSweep,
+        controlPlane,
+        fence: controlPlane?.fence,
+        assertCurrentFence: controlPlane?.assertCurrentFence,
+        reattach,
+      }));
+    }
   }
 
   // A blocked delivery gate is its own non-terminal status; an earlier stage
