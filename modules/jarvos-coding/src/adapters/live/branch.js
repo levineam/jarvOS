@@ -8,7 +8,21 @@ const BRANCH_SCHEMA_VERSION = 'jarvos-coding-live-branch/v1';
 const DEFAULT_WORKTREE_SUBDIR = 'worktrees';
 const DEFAULT_TRUSTED_BASE_REF = 'origin/main';
 const GIT_OBJECT_ID = /^[a-f0-9]{40}(?:[a-f0-9]{24})?$/i;
-const REMOTE_TRACKING_REF = /^[A-Za-z0-9][A-Za-z0-9._-]*\/[A-Za-z0-9][A-Za-z0-9._/-]*$/;
+// `<remote>/<branch>` with plain path segments only: no `+`, `:`, leading dash,
+// empty segment, or `..`, so it can never read to Git as a refspec or an option.
+const REMOTE_TRACKING_REF = /^[A-Za-z0-9][A-Za-z0-9._-]*(?:\/[A-Za-z0-9][A-Za-z0-9._-]*)+$/;
+
+/**
+ * Normalize the host-configured integration base to a remote-tracking ref. A
+ * bare branch (`release`, the form the pull-request adapter also accepts) means
+ * `origin/release`. Returns null when the configuration is not a safe ref.
+ */
+function normalizeTrustedBaseRef(configured) {
+  if (configured !== undefined && configured !== null && typeof configured !== 'string') return null;
+  const value = configured || DEFAULT_TRUSTED_BASE_REF;
+  const ref = value.includes('/') ? value : `origin/${value}`;
+  return REMOTE_TRACKING_REF.test(ref) && !ref.includes('..') ? ref : null;
+}
 
 /**
  * Resolve the root directory that holds per-branch worktrees. Mirrors the env
@@ -59,19 +73,24 @@ function createLiveGitBranch(options = {}) {
   const now = options.now || (() => Date.now());
   const mkdir = options.mkdir || ((dir) => fs.mkdirSync(dir, { recursive: true }));
   // The integration base is host configuration, never a per-run argument.
-  const trustedBaseRef = options.baseRef || DEFAULT_TRUSTED_BASE_REF;
+  // Null when the configuration itself is not a safe remote-tracking ref.
+  const trustedBaseRef = normalizeTrustedBaseRef(options.baseRef);
+
+  // A run may only name the host's base: the normalized ref, or the exact
+  // string the host configured. Anything else — `HEAD`, the branch itself, a
+  // refspec, an option-like string — is refused rather than handed to Git.
+  function requestsTrustedBase(requested) {
+    if (!trustedBaseRef) return false;
+    if (requested === undefined || requested === null || requested === '') return true;
+    return requested === trustedBaseRef || requested === options.baseRef;
+  }
 
   /**
    * Base evidence for the delivery comparison: the commit the freshly fetched
-   * trusted remote-tracking ref points at. A per-run base ref is not evidence
-   * merely because it is a valid ref — `HEAD`, the branch itself, or any other
-   * name that resolves to the branch head would diff as "no changes" — so a
-   * requested base other than the configured one, a failed fetch, or an
-   * unresolvable ref yields no base commit and therefore no observation.
+   * trusted remote-tracking ref points at. A failed fetch or an unresolvable
+   * ref yields no base commit and therefore no observation.
    */
-  function resolveTrustedBase(requestedBaseRef, fetched) {
-    if (requestedBaseRef !== trustedBaseRef) return null;
-    if (!REMOTE_TRACKING_REF.test(trustedBaseRef) || trustedBaseRef.includes('..')) return null;
+  function resolveTrustedBase(fetched) {
     if (!fetched || fetched.status !== 0) return null;
     const resolved = run('git', ['rev-parse', '--verify', '--quiet', `refs/remotes/${trustedBaseRef}^{commit}`], {
       cwd: repoRootDir,
@@ -88,7 +107,26 @@ function createLiveGitBranch(options = {}) {
     async createBranch(input = {}) {
       const branch = input.branch || input.branchName;
       if (!branch) throw new Error('live createBranch requires a branch name');
-      const baseRef = input.baseRef || trustedBaseRef;
+
+      // Decided before any effect: no directory, fetch, or worktree is touched
+      // for a base the host did not configure or for unsafe host configuration.
+      if (!requestsTrustedBase(input.baseRef)) {
+        return {
+          schemaVersion: BRANCH_SCHEMA_VERSION,
+          status: 'failed',
+          ok: false,
+          reasonCode: trustedBaseRef ? 'base_ref_untrusted' : 'trusted_base_ref_invalid',
+          branch,
+          baseRef: trustedBaseRef,
+          baseCommit: null,
+          baseBranch: null,
+          worktreeDir: null,
+          error: trustedBaseRef
+            ? `requested base is not the host-configured base ${trustedBaseRef}`
+            : 'host-configured base is not a safe remote-tracking ref',
+        };
+      }
+      const baseRef = trustedBaseRef;
 
       mkdir(worktreeRoot);
       const worktreeDir = path.join(worktreeRoot, `${sanitizeForPath(branch)}-${now()}`);
@@ -99,7 +137,7 @@ function createLiveGitBranch(options = {}) {
 
       // Resolved once, from the fetched ref, for both a new branch and a
       // reattached existing branch. Null means the base is unverified.
-      const baseCommit = resolveTrustedBase(baseRef, fetched);
+      const baseCommit = resolveTrustedBase(fetched);
       const baseEvidence = { baseCommit, baseBranch: baseCommit ? baseBranch : null };
 
       // Create a new branch in its own worktree off the base ref.

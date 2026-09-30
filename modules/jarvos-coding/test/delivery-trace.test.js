@@ -2,10 +2,14 @@
 
 const assert = require('node:assert/strict');
 const crypto = require('node:crypto');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
 const test = require('node:test');
 
 const {
   DELIVERY_TRACE_SCHEMA_VERSION,
+  buildLiveCodingAdapters,
   buildMcpToolDescriptor,
   createClawpatchAutoreviewAdapter,
   createCodexHostAdapter,
@@ -427,12 +431,12 @@ test('live fixer observes head, changed files, and the plan through read-only Gi
 // A repository whose branch head is HEAD and whose trusted base is BASE. Every
 // other name resolves to the head, and a diff from anything but BASE is empty:
 // exactly what `HEAD`, the branch itself, or the head commit look like as a base.
-function repository({ existingBranch = false, fetchStatus = 0 } = {}) {
+function repository({ existingBranch = false, fetchStatus = 0, trustedRef = 'origin/main' } = {}) {
   const ok = (stdout) => ({ status: 0, stdout, stderr: '' });
   return (command, args) => {
     if (args[0] === 'fetch') return { status: fetchStatus, stdout: '', stderr: '' };
     if (args[0] === 'worktree' && args.includes('-b') && existingBranch) return { status: 1, stdout: '', stderr: 'branch already exists' };
-    if (args[0] === 'rev-parse') return ok(`${args.at(-1) === 'refs/remotes/origin/main^{commit}' ? BASE : HEAD}\n`);
+    if (args[0] === 'rev-parse') return ok(`${args.at(-1) === `refs/remotes/${trustedRef}^{commit}` ? BASE : HEAD}\n`);
     if (args[0] === 'diff') return ok(args.includes(`${BASE}...HEAD`) ? `${[PLAN_PATH, README, SOURCE].join('\n')}\n` : '');
     if (args[0] === 'show') return ok(PLAN_TEXT);
     return ok('');
@@ -495,6 +499,104 @@ test('live delivery observation is bound to the resolved trusted base, never a c
 
     // Branch evidence for a different worktree is not evidence for this one.
     assert.equal((await observeLive('origin/main', { repo, fix: { worktreeDir: '/tmp/elsewhere' } })).observed, null, mode);
+  }
+});
+
+test('the composed live adapters apply one host-owned base to branch observation and pull-request target', async () => {
+  const rows = [
+    // [host baseRef option, run baseRef, trusted remote-tracking ref, base branch, another base]
+    [undefined, 'origin/main', 'origin/main', 'main', 'release'],
+    ['origin/release', 'origin/release', 'origin/release', 'release', 'main'],
+    ['release', 'release', 'origin/release', 'release', 'main'],
+    ['release', 'origin/release', 'origin/release', 'release', 'main'],
+  ];
+  for (const [hostBaseRef, runBaseRef, trustedRef, baseBranch, otherBase] of rows) {
+    const name = `host ${hostBaseRef || 'default'}, run ${runBaseRef}`;
+    const gitCalls = [];
+    const git = repository({ trustedRef });
+    let livePullRequestBase = baseBranch;
+    const run = (command, args, options) => {
+      if (command === 'gh') {
+        return {
+          status: 0,
+          stdout: JSON.stringify({ number: 7, url: 'https://github.com/levineam/jarvOS/pull/7', title: 'SUP-4029', state: 'OPEN', headRefName: BRANCH, baseRefName: livePullRequestBase }),
+          stderr: '',
+        };
+      }
+      gitCalls.push(args);
+      return git(command, args, options);
+    };
+    const live = buildLiveCodingAdapters({
+      run,
+      repo: 'levineam/jarvOS',
+      repoRootDir: '/tmp/repo',
+      worktreeRoot: fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-live-base-')),
+      ...(hostBaseRef ? { baseRef: hostBaseRef } : {}),
+    });
+
+    const branchResult = await live.git.createBranch({ branch: BRANCH, baseRef: runBaseRef });
+    assert.deepEqual(
+      [branchResult.ok, branchResult.baseRef, branchResult.baseBranch, branchResult.baseCommit],
+      [true, trustedRef, baseBranch, BASE],
+      name,
+    );
+    assert.deepEqual(gitCalls.find((args) => args[0] === 'fetch'), ['fetch', 'origin', baseBranch], name);
+    assert.equal(gitCalls.find((args) => args[0] === 'worktree').at(-1), trustedRef, name);
+
+    const fixed = await live.fixer.fixAndRerun({
+      issueIdentifier: IDENTIFIER,
+      branch: BRANCH,
+      baseRef: runBaseRef,
+      branchResult,
+      worktreeDir: branchResult.worktreeDir,
+      deliveryTrace: trace(),
+    });
+    assert.equal(fixed.deliveryObservation?.baseCommit, BASE, name);
+    assert.equal(evaluateDeliveryTrace(trace(), { identifier: IDENTIFIER, observed: fixed.deliveryObservation }).ok, true, name);
+
+    // The pull-request target is the same base, with or without branch evidence.
+    const existingPullRequest = { number: 7 };
+    for (const evidence of [{ branchResult }, {}]) {
+      livePullRequestBase = baseBranch;
+      const onBase = await live.pullRequest.openPullRequest({ branch: BRANCH, baseRef: runBaseRef, existingPullRequest, ...evidence });
+      assert.deepEqual([onBase.ok, onBase.baseRefName], [true, baseBranch], name);
+
+      livePullRequestBase = otherBase;
+      const offBase = await live.pullRequest.openPullRequest({ branch: BRANCH, baseRef: runBaseRef, existingPullRequest, ...evidence });
+      assert.deepEqual([offBase.ok, offBase.reasonCode], [false, 'pull_request_base_mismatch'], name);
+    }
+  }
+});
+
+test('the live branch adapter refuses an untrusted or unsafe base before any Git or filesystem effect', async () => {
+  const unsafeHostBase = 'origin/+main:refs/heads/unrelated';
+  const rows = [
+    ['force-update refspec', {}, 'origin/+topic:refs/heads/unrelated', 'base_ref_untrusted'],
+    ['option-like string', {}, '--upload-pack=touch', 'base_ref_untrusted'],
+    ['alias of the head', {}, 'HEAD', 'base_ref_untrusted'],
+    ['well-formed ref the host did not configure', {}, 'origin/release', 'base_ref_untrusted'],
+    ['non-string base', {}, { ref: 'origin/main' }, 'base_ref_untrusted'],
+    ['unsafe host configuration', { baseRef: unsafeHostBase }, undefined, 'trusted_base_ref_invalid'],
+    ['unsafe host configuration requested verbatim', { baseRef: unsafeHostBase }, unsafeHostBase, 'trusted_base_ref_invalid'],
+  ];
+  for (const [name, options, baseRef, reasonCode] of rows) {
+    const effects = [];
+    const adapter = createLiveGitBranch({
+      ...options,
+      repoRootDir: '/tmp/repo',
+      worktreeRoot: '/tmp/worktrees',
+      now: () => 1,
+      run: (command, args) => { effects.push([command, args]); return { status: 0, stdout: '', stderr: '' }; },
+      mkdir: (dir) => { effects.push(['mkdir', dir]); },
+    });
+    const result = await adapter.createBranch({ branch: BRANCH, baseRef });
+
+    assert.deepEqual(effects, [], name);
+    assert.deepEqual(
+      [result.ok, result.status, result.reasonCode, result.baseCommit, result.worktreeDir],
+      [false, 'failed', reasonCode, null, null],
+      name,
+    );
   }
 });
 

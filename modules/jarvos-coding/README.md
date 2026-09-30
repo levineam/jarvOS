@@ -484,6 +484,9 @@ const deliveryObservation = {
 using read-only Git argument arrays (no shell). The plan path is read only when
 it is a safe repo-relative path. Missing base evidence blocks the trace rather
 than treating an empty diff from a caller-provided ref as proof.
+The live adapters use the host-configured integration base (default
+`origin/main`); a bare host setting such as `release` means `origin/release`.
+A run naming another base is rejected before fetch or worktree creation.
 
 The result is `{ ok, reasons, claims }`. Reason codes:
 
