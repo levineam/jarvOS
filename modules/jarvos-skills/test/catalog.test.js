@@ -115,6 +115,48 @@ test('ambient workspace skills are excluded unless explicitly configured', () =>
   }
 });
 
+test('default skill bundles include only the standard OpenAI agent metadata', () => {
+  const root = tempRoot('jarvos-catalog-agent-metadata-');
+  try {
+    fs.writeFileSync(path.join(root, 'SKILL.md'), '---\nname: metadata-skill\n---\n', { mode: 0o600 });
+    fs.mkdirSync(path.join(root, 'agents'), { mode: 0o700 });
+    fs.writeFileSync(path.join(root, 'agents', 'openai.yaml'), 'interface:\n  display_name: Metadata Skill\n', { mode: 0o600 });
+
+    const tree = computeBundleTree(root);
+    assert.deepEqual(tree.entries.map((entry) => entry.path), ['agents/openai.yaml', 'SKILL.md']);
+
+    fs.writeFileSync(path.join(root, 'agents', 'other.yaml'), 'unexpected: true\n', { mode: 0o600 });
+    assert.throws(() => computeBundleTree(root), /unexpected path outside allowlist/);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('legacy article-generator snapshot allowlists remain valid', () => {
+  const result = validateLocalOverlay({
+    schemaVersion: OVERLAY_SCHEMA_VERSION,
+    entries: [{
+      id: 'article-generator',
+      sourceRootKind: 'inventory-snapshot',
+      allowedHarnesses: ['codex'],
+      bundle: {
+        root: 'snapshots/article-generator/legacy',
+        allowlist: [
+          'SKILL.md',
+          'assets/**',
+          'evals/routing.jsonl',
+          'references/**',
+          'scripts/**',
+          'templates/**',
+        ],
+        treeDigest: 'a'.repeat(64),
+      },
+    }],
+  });
+
+  assert.equal(result.status, 'valid');
+});
+
 test('duplicate ids, public-id overrides, path traversal, symlinks, unsafe ownership, and digest drift fail closed', () => {
   const publicTree = computeBundleTree(PUBLIC_FIXTURE, {
     allowlist: ['SKILL.md', 'scripts/**', 'assets/**'],

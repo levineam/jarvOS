@@ -13,7 +13,12 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const { attestCatalogBundle, computeBundleTree, LOCAL_OVERLAY_SOURCE_KIND } = require('./catalog');
+const {
+  attestCatalogBundle,
+  computeBundleTree,
+  DEFAULT_ALLOWED_BUNDLE_GLOBS,
+  LOCAL_OVERLAY_SOURCE_KIND,
+} = require('./catalog');
 const { expandHome } = require('./config');
 const { resolveCollisionAlias } = require('./collision-alias');
 const { verifyHarnessBundle, resolveShadowPaths } = require('./harness-verification');
@@ -676,7 +681,7 @@ function planCatalogReconciliation(options = {}) {
       if (fs.existsSync(target)) {
         try {
           observed = computeBundleTree(target, {
-            allowlist: options.defaultAllowlist || ['SKILL.md', 'scripts/**', 'assets/**', 'references/**', 'templates/**'],
+            allowlist: options.defaultAllowlist || DEFAULT_ALLOWED_BUNDLE_GLOBS,
           }).treeDigest;
           if (observed !== receipt.treeDigest) {
             status = 'local_modified';
@@ -1124,7 +1129,7 @@ function applyCatalogReconciliation(plan, options = {}) {
           let observed;
           try {
             observed = computeBundleTree(pair.target, {
-              allowlist: options.defaultAllowlist || ['SKILL.md', 'scripts/**', 'assets/**', 'references/**', 'templates/**'],
+              allowlist: options.defaultAllowlist || DEFAULT_ALLOWED_BUNDLE_GLOBS,
             }).treeDigest;
           } catch {
             applied.push({

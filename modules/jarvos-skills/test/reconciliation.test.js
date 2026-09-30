@@ -12,6 +12,7 @@ const {
   attestCatalogBundle,
   computeBundleTree,
   composeEffectiveCatalog,
+  DEFAULT_ALLOWED_BUNDLE_GLOBS,
 } = require('../src/catalog');
 const { resolveCollisionAlias, safeAliasCandidates, strictChoice } = require('../src/collision-alias');
 const { planCatalogReconciliation, applyCatalogReconciliation, recoverJournal } = require('../src/reconciliation');
@@ -165,11 +166,13 @@ test('root-scoped desired state retires only clean receipt-owned orphan wrappers
   const control = temp('jarvos-orphan-control-'); const sourceRoot = temp('jarvos-orphan-source-'); const codex = temp('jarvos-orphan-codex-');
   try {
     copyFixture(PUBLIC_FIXTURE, path.join(sourceRoot, 'public-fixture'));
-    const tree = computeBundleTree(path.join(sourceRoot, 'public-fixture'), { allowlist: ['SKILL.md', 'scripts/**', 'assets/**'] });
+    fs.mkdirSync(path.join(sourceRoot, 'public-fixture', 'agents'), { mode: 0o700 });
+    fs.writeFileSync(path.join(sourceRoot, 'public-fixture', 'agents', 'openai.yaml'), 'interface:\n  display_name: Public Fixture\n', { mode: 0o600 });
+    const tree = computeBundleTree(path.join(sourceRoot, 'public-fixture'));
     const catalog = composeEffectiveCatalog({ publicCatalog: { schemaVersion: CATALOG_SCHEMA_VERSION, entries: [
-      { id: 'grilling', allowedHarnesses: ['codex'], bundle: { root: 'public-fixture', allowlist: ['SKILL.md', 'scripts/**', 'assets/**'], treeDigest: tree.treeDigest } },
-      { id: 'grill-me', allowedHarnesses: ['codex'], skillDependencies: ['grilling'], bundle: { root: 'public-fixture', allowlist: ['SKILL.md', 'scripts/**', 'assets/**'], treeDigest: tree.treeDigest } },
-      { id: 'orphan-wrapper', allowedHarnesses: ['codex'], bundle: { root: 'public-fixture', allowlist: ['SKILL.md', 'scripts/**', 'assets/**'], treeDigest: tree.treeDigest } },
+      { id: 'grilling', allowedHarnesses: ['codex'], bundle: { root: 'public-fixture', allowlist: DEFAULT_ALLOWED_BUNDLE_GLOBS, treeDigest: tree.treeDigest } },
+      { id: 'grill-me', allowedHarnesses: ['codex'], skillDependencies: ['grilling'], bundle: { root: 'public-fixture', allowlist: DEFAULT_ALLOWED_BUNDLE_GLOBS, treeDigest: tree.treeDigest } },
+      { id: 'orphan-wrapper', allowedHarnesses: ['codex'], bundle: { root: 'public-fixture', allowlist: DEFAULT_ALLOWED_BUNDLE_GLOBS, treeDigest: tree.treeDigest } },
     ] }, localOverlay: { schemaVersion: OVERLAY_SCHEMA_VERSION, entries: [] } }).catalog;
     applyCatalogReconciliation(planCatalogReconciliation({ catalog, publicSourceRoot: sourceRoot, harnesses: harnesses({ codex }), controlRoot: control }));
     const plan = planCatalogReconciliation({ catalog, publicSourceRoot: sourceRoot, harnesses: harnesses({ codex }), controlRoot: control, desiredSkills: { codex: ['grill-me'] } });

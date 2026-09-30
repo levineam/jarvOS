@@ -258,6 +258,7 @@ test('article-generator local admission captures the literal routing eval and pr
     assert.equal(entryV1.sourceRootKind, 'inventory-snapshot');
     assert.deepEqual(entryV1.bundle.allowlist, [
       'SKILL.md',
+      'agents/openai.yaml',
       'assets/**',
       'evals/routing.jsonl',
       'references/**',
