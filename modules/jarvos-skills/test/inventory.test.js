@@ -377,6 +377,23 @@ test('symlinks, unsafe modes, missing SKILL.md, oversized bundles, and unreadabl
   assert.equal(result.complete === false || result.overflowed === true || unsafeOrBlocked.length >= 1, true);
 });
 
+test('inventory accepts standard OpenAI agent metadata under the shared bundle contract', () => {
+  const root = temp('jarvos-inv-agent-metadata-');
+  const bundle = writeSkill(path.join(root, 'metadata-skill'), 'metadata-skill');
+  fs.mkdirSync(path.join(bundle, 'agents'), { mode: 0o700 });
+  fs.writeFileSync(path.join(bundle, 'agents', 'openai.yaml'), 'interface:\n  display_name: Metadata Skill\n', { mode: 0o600 });
+  const env = seedConfig({ roots: { codex: root } });
+
+  const result = observeInventory({
+    configPath: env.configPath,
+    observedAt: '2026-08-15T15:03:15.000Z',
+  });
+  const skill = result.document.skills.find((item) => item.logicalId === 'metadata-skill');
+
+  assert.equal(skill.observations.some((observation) => observation.state === 'unsafe'), false);
+  assert.equal(skill.treeDigest, computeBundleTree(bundle).treeDigest);
+});
+
 test('one unsafe bundle does not freeze unrelated complete-root repair', () => {
   const home = temp('jarvos-inv-pair-safety-');
   const root = path.join(home, 'skills');

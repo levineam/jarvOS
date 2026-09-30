@@ -26,9 +26,18 @@ const RELATIVE_PATH_RE = /^(?!\.)(?!.*(?:^|\/)\.\.(?:\/|$))[A-Za-z0-9._-]+(?:\/[
 
 const DEFAULT_ALLOWED_BUNDLE_GLOBS = Object.freeze([
   'SKILL.md',
+  'agents/openai.yaml',
   'scripts/**',
   'assets/**',
   'references/**',
+  'templates/**',
+]);
+const LEGACY_ARTICLE_GENERATOR_ALLOWLIST = Object.freeze([
+  'SKILL.md',
+  'assets/**',
+  'evals/routing.jsonl',
+  'references/**',
+  'scripts/**',
   'templates/**',
 ]);
 
@@ -359,11 +368,13 @@ function normalizeOverlayEntry(entry) {
   const treeDigest = exactDigest(bundle.treeDigest || source.treeDigest || source.digest, `tree digest for ${id}`);
   const sourceRootKind = source.sourceRootKind || 'local';
   const articleGeneratorAllowlist = [...DEFAULT_ALLOWED_BUNDLE_GLOBS, 'evals/routing.jsonl'].sort();
+  const supportedArticleGeneratorAllowlist = [articleGeneratorAllowlist, LEGACY_ARTICLE_GENERATOR_ALLOWLIST]
+    .some((candidate) => JSON.stringify(allowlist) === JSON.stringify(candidate));
   if (sourceRootKind !== 'local' && sourceRootKind !== 'inventory-snapshot') {
     throw new Error(`sourceRootKind for ${id} is invalid`);
   }
   if (sourceRootKind === 'inventory-snapshot'
-    && (id !== 'article-generator' || JSON.stringify(allowlist) !== JSON.stringify(articleGeneratorAllowlist))) {
+    && (id !== 'article-generator' || !supportedArticleGeneratorAllowlist)) {
     throw new Error('inventory snapshots are only supported for article-generator routing evals');
   }
   const verification = normalizeVerificationPolicy(source.verification, `verification for ${id}`, allowedHarnesses);

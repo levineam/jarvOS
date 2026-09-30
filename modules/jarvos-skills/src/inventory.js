@@ -32,20 +32,14 @@ const {
   normalizeInventoryPolicy,
   defaultInventoryPolicy,
 } = require('./inventory-contract');
-const { computeBundleTree } = require('./catalog');
+const { computeBundleTree, DEFAULT_ALLOWED_BUNDLE_GLOBS } = require('./catalog');
 const { STATE_DIR, readReceipt, validateReceipt } = require('./receipts');
 // Lazy: skill-assessment requires inventory helpers; load only when assessing.
 
 const MODULE_ROOT = path.resolve(__dirname, '..');
 const REPO_ROOT = path.resolve(MODULE_ROOT, '..', '..');
 const LOGICAL_ID_RE = /^[a-z][a-z0-9-]{0,63}$/;
-const DEFAULT_ALLOWLIST = Object.freeze([
-  'SKILL.md',
-  'scripts/**',
-  'assets/**',
-  'references/**',
-  'templates/**',
-]);
+const DEFAULT_ALLOWLIST = DEFAULT_ALLOWED_BUNDLE_GLOBS;
 
 function digest(value) {
   return crypto.createHash('sha256').update(value).digest('hex');
