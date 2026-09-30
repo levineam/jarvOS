@@ -520,8 +520,8 @@ function enforceBounds(packet, limits) {
   trim('evidence', () => countItems(packet) > limits.maxItems);
   trim('inference.candidates', () => countItems(packet) > limits.maxItems);
   dropNonRoster(() => countItems(packet) > limits.maxItems);
-  trim('canonical.records', () => countItems(packet) > limits.maxItems);
   trim('attention', () => countItems(packet) > limits.maxItems);
+  trim('canonical.records', () => countItems(packet) > limits.maxItems);
   const bytesExceeded = () => byteLength(packet) > limits.maxBytes;
   compactDetail(1, bytesExceeded);
   for (const section of ['activity', 'currentWork', 'evidence', 'inference.candidates', 'attention']) {

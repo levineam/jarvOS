@@ -57,14 +57,17 @@ function orientationInput(registry, providers = {}) {
   };
 }
 
-function todoSnapshot(canonicalId) {
+function todoSnapshot(canonicalId, attentionCount = 0) {
   const base = {
     contract: 'jarvos.provider-snapshot/v1', provider: 'todo', state: 'fresh', trust: 'verified', capturedAt: NOW,
     watermark: 'todo-1', scope: { projectIds: [], outcomeIds: [] }, omissions: [], errorCode: null, admission: null,
     summaries: [{
       id: 'todo-active', canonicalId, category: 'intent', status: 'open', title: 'Active work',
       occurredAt: NOW, observedAt: NOW, evidenceRefs: ['todo:active'],
-    }],
+    }, ...Array.from({ length: attentionCount }, (_, index) => ({
+      id: `todo-blocked-${index}`, canonicalId, category: 'attention', status: 'blocked', title: `Blocked work ${index}`,
+      occurredAt: NOW, observedAt: NOW, evidenceRefs: [`todo:blocked-${index}`],
+    }))],
   };
   return createHostAdmission({ producerId: 'provider:todo', secret: PROVIDER_SECRET, allowedProviders: ['todo'] }).admitProviderSnapshot(base);
 }
@@ -121,5 +124,17 @@ test('records with current activity keep detail and are dropped last', (t) => {
   const kept = result.packet.canonical.records.map((record) => record.id);
   assert.ok(kept.includes(active.id), 'the outcome with current work survives the trim');
   assert.ok(kept.includes(active.parentId), 'its parent project stays so the hierarchy is valid');
+  assert.equal(validateContextPacket(result.packet).ok, true);
+});
+
+test('attention rows are trimmed before active projects at the item cap', (t) => {
+  const { registry, verbose, projects } = portfolioFixture(t);
+  const moreProjects = Array.from({ length: 11 }, (_, index) => registry.create({ title: `Extra project ${index}` }).record);
+  const roster = [verbose, ...projects, ...moreProjects];
+  const result = buildContextPacket(orientationInput(registry, { todo: todoSnapshot(verbose.id, 4) }));
+  assert.equal(result.status, 'ok');
+  const kept = new Set(result.packet.canonical.records.map((record) => record.id));
+  for (const project of roster) assert.ok(kept.has(project.id), `${project.title} survives the item cap`);
+  assert.ok(result.packet.attention.length < 4, 'attention yields capacity to the roster');
   assert.equal(validateContextPacket(result.packet).ok, true);
 });
