@@ -407,11 +407,67 @@ function countItems(packet) {
     + (packet.inference?.candidates?.length || 0);
 }
 
+const ROSTER_GOAL_CHARS = 100;
+const LIFECYCLE_RANK = Object.freeze({ active: 0, planned: 1, paused: 2, complete: 3, archived: 4 });
+const PRIORITY_RANK = Object.freeze({ high: 0, medium: 1, low: 2, unset: 3 });
+
+// The roster is the startup orientation guarantee: every active top-level
+// project stays visible, as a short line, for as long as the budget can hold it.
+function isRosterRecord(record) {
+  return record.kind === 'project' && record.parentId === null && record.lifecycle === 'active';
+}
+
+function compactGoal(goal) {
+  if (typeof goal !== 'string') return null;
+  const line = goal.replace(/\s+/g, ' ').trim();
+  if (!line) return null;
+  return line.length > ROSTER_GOAL_CHARS ? `${line.slice(0, ROSTER_GOAL_CHARS - 1).trimEnd()}\u2026` : line;
+}
+
+// Records with current activity, work or attention (and their ancestors) are
+// the last to lose detail or be dropped; then lifecycle and declared priority.
+// Roster records are never dropped before every other record (see dropNonRoster).
+function rankRecordsByImportance(packet) {
+  const byId = new Map(packet.canonical.records.map((record) => [record.id, record]));
+  const signalled = new Set();
+  for (const summary of [...packet.activity, ...packet.currentWork, ...packet.attention]) {
+    for (let record = byId.get(summary.canonicalId); record && !signalled.has(record.id); record = byId.get(record.parentId)) signalled.add(record.id);
+  }
+  const order = new Map(packet.canonical.records.map((record, index) => [record.id, index]));
+  // Spread the survivors across projects: every project's first outcome
+  // outranks any project's second, so one busy project cannot crowd out the rest.
+  const siblingCount = new Map();
+  const siblingIndex = new Map(packet.canonical.records.map((record) => {
+    const index = siblingCount.get(record.parentId) || 0;
+    siblingCount.set(record.parentId, index + 1);
+    return [record.id, index];
+  }));
+  const key = (record) => [
+    signalled.has(record.id) ? 0 : 1,
+    LIFECYCLE_RANK[record.lifecycle] ?? 5,
+    PRIORITY_RANK[record.effectivePriority] ?? 4,
+    siblingIndex.get(record.id),
+    order.get(record.id),
+  ];
+  return [...packet.canonical.records].sort((left, right) => {
+    const a = key(left);
+    const b = key(right);
+    for (let index = 0; index < a.length; index += 1) if (a[index] !== b[index]) return a[index] - b[index];
+    return 0;
+  });
+}
+
 function enforceBounds(packet, limits) {
   const truncation = packet.truncation;
   const targetFor = (section) => section === 'canonical.records'
     ? packet.canonical.records
     : section === 'inference.candidates' ? packet.inference.candidates : packet[section];
+  const noteOmitted = (section) => {
+    truncation.truncated = true;
+    truncation.omittedItems += 1;
+    if (!truncation.sections.includes(section)) truncation.sections.push(section);
+    truncation.sections.sort();
+  };
   const trim = (section, predicate = () => true) => {
     const target = targetFor(section);
     while (predicate() && target.length) {
@@ -421,22 +477,59 @@ function enforceBounds(packet, limits) {
       if (section === 'canonical.records') {
         delete packet.canonical.revisions[removed.id];
       }
-      truncation.truncated = true;
-      truncation.omittedItems += 1;
-      if (!truncation.sections.includes(section)) truncation.sections.push(section);
-      truncation.sections.sort();
+      noteOmitted(section);
+    }
+  };
+  const ranked = rankRecordsByImportance(packet);
+  // Drop the least important non-roster record that no retained record hangs
+  // off, so the hierarchy stays valid and every roster project survives.
+  const dropNonRoster = (predicate) => {
+    while (predicate()) {
+      const retained = new Set(packet.canonical.records.map((record) => record.id));
+      const hasChild = new Set(packet.canonical.records.map((record) => record.parentId).filter(Boolean));
+      let victim = null;
+      for (let index = ranked.length - 1; index >= 0; index -= 1) {
+        const record = ranked[index];
+        if (retained.has(record.id) && !isRosterRecord(record) && !hasChild.has(record.id)) { victim = record; break; }
+      }
+      if (!victim) return;
+      packet.canonical.records.splice(packet.canonical.records.findIndex((record) => record.id === victim.id), 1);
+      delete packet.canonical.revisions[victim.id];
+      noteOmitted('canonical.records');
+    }
+  };
+  // Detail is spent last: shrink the least important records first. Level 1
+  // keeps a one-line goal; level 2 (roster only, last resort) keeps title and
+  // lifecycle.
+  const compactDetail = (level, predicate) => {
+    for (let index = ranked.length - 1; index >= 0 && predicate(); index -= 1) {
+      const record = ranked[index];
+      if (!packet.canonical.records.some((candidate) => candidate.id === record.id)) continue;
+      const goal = level === 1 ? compactGoal(record.goal) : null;
+      const next = { goal, definitionOfDone: null, links: {}, aliases: [] };
+      if (record.goal === next.goal && record.definitionOfDone === null && record.aliases.length === 0 && Object.keys(record.links).length === 0) continue;
+      Object.assign(record, next);
+      if (!packet.omissions.includes('canonical:record-detail-compacted')) {
+        packet.omissions.push('canonical:record-detail-compacted');
+        packet.omissions.sort();
+      }
     }
   };
   trim('activity', () => countItems(packet) > limits.maxItems);
   trim('currentWork', () => countItems(packet) > limits.maxItems);
   trim('evidence', () => countItems(packet) > limits.maxItems);
   trim('inference.candidates', () => countItems(packet) > limits.maxItems);
+  dropNonRoster(() => countItems(packet) > limits.maxItems);
   trim('canonical.records', () => countItems(packet) > limits.maxItems);
   trim('attention', () => countItems(packet) > limits.maxItems);
   const bytesExceeded = () => byteLength(packet) > limits.maxBytes;
-  for (const section of ['activity', 'currentWork', 'evidence', 'inference.candidates', 'attention', 'canonical.records']) {
+  compactDetail(1, bytesExceeded);
+  for (const section of ['activity', 'currentWork', 'evidence', 'inference.candidates', 'attention']) {
     trim(section, bytesExceeded);
   }
+  dropNonRoster(bytesExceeded);
+  compactDetail(2, bytesExceeded);
+  trim('canonical.records', bytesExceeded);
   return packet;
 }
 

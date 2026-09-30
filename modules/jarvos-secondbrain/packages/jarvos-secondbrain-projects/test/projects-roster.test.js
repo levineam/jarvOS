@@ -38,13 +38,14 @@ function input(registry, changes = {}) {
   return { registry, query, capability, capabilitySecret: SECRET, subject: 'roster-observer', hostId: 'roster-host', now: NOW };
 }
 
-test('characterization: ordinary orientation legitimately truncates verbose canonical records', (t) => {
+test('ordinary orientation keeps every active top-level project by compacting verbose detail', (t) => {
   const { registry } = fixture(t);
   const out = buildContextPacket(input(registry));
   assert.equal(out.status, 'ok');
-  assert.equal(out.packet.truncation.truncated, true);
-  assert.ok(out.packet.truncation.sections.includes('canonical.records'));
-  assert.ok(out.packet.canonical.records.length < registry.list().length);
+  assert.deepEqual(out.packet.canonical.records.map((r) => r.id), registry.list().map((r) => r.id).sort());
+  assert.ok(out.packet.canonical.records.some((r) => r.definitionOfDone === null));
+  assert.ok(out.packet.omissions.includes('canonical:record-detail-compacted'));
+  assert.equal(out.packet.truncation.truncated, false);
   assert.ok(Buffer.byteLength(JSON.stringify(out.packet)) <= 16000);
 });
 

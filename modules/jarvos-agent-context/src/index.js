@@ -542,6 +542,13 @@ function serializeUntrustedProjectCandidate(candidate) {
   return value.replace(/[<>&]/g, (character) => ({ '<': '\\u003c', '>': '\\u003e', '&': '\\u0026' })[character]);
 }
 
+function oneLineGoal(goal, limit = 100) {
+  if (typeof goal !== 'string') return '';
+  const line = goal.replace(/\s+/g, ' ').trim();
+  const bounded = line.length > limit ? `${line.slice(0, limit - 1).trimEnd()}\u2026` : line;
+  return bounded.replace(/[<>&]/g, (character) => ({ '<': '\\u003c', '>': '\\u003e', '&': '\\u0026' })[character]);
+}
+
 function renderProjectsContextMarkdown(result, maxChars = 3600) {
   if (!result || result.status !== 'ok' || !result.packet) {
     return `## Projects Context\nUnavailable: ${safeProjectsReason(result?.reason, 'Projects provider is not configured')}.`;
@@ -550,10 +557,26 @@ function renderProjectsContextMarkdown(result, maxChars = 3600) {
   const lines = ['## Projects Context', '', `- Contract: ${PROJECTS_CONTEXT_CONTRACT}`, `- Schema: ${packet.schemaVersion || PROJECTS_CONTEXT_SCHEMA_VERSION}`, `- Fingerprint: ${result.fingerprint}`, ''];
   const records = Array.isArray(packet.canonical?.records) ? packet.canonical.records : [];
   if (records.length) {
-    lines.push('### Canonical projects and outcomes');
-    for (const record of records) {
+    const recordLine = (record, { goal = false } = {}) => {
       const priority = record.effectivePriority && record.effectivePriority !== 'unset' ? ` [${record.effectivePriority}]` : '';
-      lines.push(`- ${record.breadcrumb || record.title || record.id}${priority} — ${record.lifecycle || 'unknown'}`);
+      const summary = goal ? oneLineGoal(record.goal) : '';
+      return `- ${record.breadcrumb || record.title || record.id}${priority} — ${record.lifecycle || 'unknown'}${summary ? `: ${summary}` : ''}`;
+    };
+    // Every top-level project is listed first so a character-budget trim of
+    // the tail can never make one project look like the whole portfolio.
+    const roster = records.filter((record) => record.kind === 'project' && !record.parentId);
+    const nested = records.filter((record) => !roster.includes(record));
+    // One-line goals are a nicety: only spend on them while the roster stays
+    // within a fraction of the markdown budget.
+    const budget = Number(maxChars);
+    const withGoals = !Number.isFinite(budget) || roster.reduce((total, record) => total + recordLine(record, { goal: true }).length + 1, 0) <= budget * 0.4;
+    if (roster.length) {
+      lines.push('### Projects roster');
+      for (const record of roster) lines.push(recordLine(record, { goal: withGoals }));
+    }
+    if (nested.length) {
+      lines.push(...(roster.length ? [''] : []), '### Canonical projects and outcomes');
+      for (const record of nested) lines.push(recordLine(record));
     }
   } else {
     lines.push('No canonical projects or outcomes were returned.');
