@@ -1,5 +1,6 @@
 'use strict';
 
+const { evaluateDeliveryTrace } = require('../delivery-trace');
 const { assertReviewEngineAdapter } = require('../review-engine');
 const {
   buildCodeThreadCheckpoint,
@@ -227,6 +228,25 @@ function isFailedStageEvent(event) {
   return FAILED_STAGE_STATUSES.has(stageStatusToken(event));
 }
 
+/**
+ * Compare the declared delivery trace with the fix stage's own Git read.
+ *
+ * The observation is taken only from the live fixRerun result. An observation
+ * on the input, or on an unconfirmed reattached stage, is ignored. The accepted
+ * plan digest is set by the managed workflow from its store.
+ */
+function evaluateDeliveryGate(input, issueIdentifier, fixRerun) {
+  const authentic = isPlainObject(fixRerun)
+    && fixRerun.ok !== false
+    && !(fixRerun.reattached === true && fixRerun.liveConfirmed !== true)
+    && isPlainObject(fixRerun.deliveryObservation);
+  const observed = authentic ? { ...fixRerun.deliveryObservation } : null;
+  if (observed && input.acceptedPlanDigest !== undefined && input.acceptedPlanDigest !== null) {
+    observed.acceptedPlanDigest = input.acceptedPlanDigest;
+  }
+  return evaluateDeliveryTrace(input.deliveryTrace, { identifier: issueIdentifier, observed });
+}
+
 function deriveOrchestratorStatus(events) {
   for (const event of events) {
     if (isFailedStageEvent(event)) return 'failed';
@@ -423,55 +443,68 @@ async function runTakeIssueToDone(input = {}, adapters = {}) {
       sliceReview,
       holisticReview,
     },
+    // Declared trace, so the fixer knows which plan path to read from Git.
+    deliveryTrace: input.deliveryTrace,
     controlPlane,
     reattach,
   }));
 
-  const pullRequest = await runStage('pullRequest', () => requireFn(adapters.pullRequest, 'openPullRequest', 'pullRequest')({
-    issue: input.issue,
-    issueIdentifier,
-    workReference: context.workReference,
-    branch: context.branch,
-    baseRef: context.baseRef,
-    fixRerun,
-    controlPlane,
-    fence: controlPlane?.fence,
-    assertCurrentFence: controlPlane?.assertCurrentFence,
-    reattach,
-    existingPullRequest: context.pullRequest,
-  }), {
-    beforeCheckpoint: (result) => {
-      context.pullRequest = result || context.pullRequest;
-    },
-  });
-  context.pullRequest = pullRequest || context.pullRequest;
+  // Submission boundary. Without a verified plan -> docs -> implementation ->
+  // behavioral-proof link, no pull request is opened and the work is never
+  // closed: green tests and review alone cannot reach verifyClose.
+  const deliveryGate = evaluateDeliveryGate(input, issueIdentifier, fixRerun);
 
-  const postMergeSweep = await runStage('postMergeSweep', () => requireFn(adapters.postMerge, 'sweep', 'postMergeSweep')({
-    issue: input.issue,
-    issueIdentifier,
-    workReference: context.workReference,
-    branch: context.branch,
-    pullRequest: context.pullRequest,
-    controlPlane,
-    fence: controlPlane?.fence,
-    assertCurrentFence: controlPlane?.assertCurrentFence,
-    reattach,
-  }));
+  if (deliveryGate.ok) {
+    const pullRequest = await runStage('pullRequest', () => requireFn(adapters.pullRequest, 'openPullRequest', 'pullRequest')({
+      issue: input.issue,
+      issueIdentifier,
+      workReference: context.workReference,
+      branch: context.branch,
+      baseRef: context.baseRef,
+      fixRerun,
+      controlPlane,
+      fence: controlPlane?.fence,
+      assertCurrentFence: controlPlane?.assertCurrentFence,
+      reattach,
+      existingPullRequest: context.pullRequest,
+    }), {
+      beforeCheckpoint: (result) => {
+        context.pullRequest = result || context.pullRequest;
+      },
+    });
+    context.pullRequest = pullRequest || context.pullRequest;
 
-  await runStage('verifyClose', () => requireFn(adapters.tracker, 'verifyAndClose', 'verifyClose')({
-    issue: input.issue,
-    issueIdentifier,
-    workReference: context.workReference,
-    branch: context.branch,
-    pullRequest: context.pullRequest,
-    postMergeSweep,
-    controlPlane,
-    fence: controlPlane?.fence,
-    assertCurrentFence: controlPlane?.assertCurrentFence,
-    reattach,
-  }));
+    const postMergeSweep = await runStage('postMergeSweep', () => requireFn(adapters.postMerge, 'sweep', 'postMergeSweep')({
+      issue: input.issue,
+      issueIdentifier,
+      workReference: context.workReference,
+      branch: context.branch,
+      pullRequest: context.pullRequest,
+      controlPlane,
+      fence: controlPlane?.fence,
+      assertCurrentFence: controlPlane?.assertCurrentFence,
+      reattach,
+    }));
 
-  const status = deriveOrchestratorStatus(events);
+    await runStage('verifyClose', () => requireFn(adapters.tracker, 'verifyAndClose', 'verifyClose')({
+      issue: input.issue,
+      issueIdentifier,
+      workReference: context.workReference,
+      branch: context.branch,
+      pullRequest: context.pullRequest,
+      postMergeSweep,
+      controlPlane,
+      fence: controlPlane?.fence,
+      assertCurrentFence: controlPlane?.assertCurrentFence,
+      reattach,
+    }));
+  }
+
+  // A blocked delivery gate is its own non-terminal status; an earlier stage
+  // failure still reports as failed.
+  const status = deliveryGate.ok || events.some(isFailedStageEvent)
+    ? deriveOrchestratorStatus(events)
+    : 'blocked';
 
   // Learning is an optional, non-terminal tail. It is evaluated from the
   // live stage results above; callers may use the returned decision to invoke
@@ -506,6 +539,10 @@ async function runTakeIssueToDone(input = {}, adapters = {}) {
     events,
     checkpoints,
     activityEvents,
+    // The declared trace is echoed so later verification is self-contained; the
+    // gate result carries reason codes and source/installed/live claims.
+    deliveryTrace: input.deliveryTrace ?? null,
+    deliveryGate,
     ...(learning ? { learning } : {}),
   };
 }

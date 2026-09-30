@@ -79,6 +79,11 @@ const {
   validateSubmissionEvidence,
 } = require('./features/submission-gate');
 const {
+  DELIVERY_TRACE_SCHEMA_VERSION,
+  evaluateDeliveryTrace,
+  observePlan,
+} = require('./features/delivery-trace');
+const {
   ORCHESTRATOR_SCHEMA_VERSION,
   TAKE_ISSUE_TO_DONE_STAGES,
   runTakeIssueToDone,
@@ -215,6 +220,7 @@ module.exports = {
   ARTICLE_THREAD_KIND,
   DEFAULT_MCP_TOOL_NAME,
   DEFAULT_SKILL_NAME,
+  DELIVERY_TRACE_SCHEMA_VERSION,
   GATE_EQUIVALENT_PROFILES,
   GATE_EQUIVALENT_SURFACES,
   GOAL_ALIGNMENT_SCHEMA_VERSION,
@@ -274,6 +280,7 @@ module.exports = {
   createGateEquivalentReviewEngine,
   createMemorySessionStateStore,
   decideCodingTriage,
+  evaluateDeliveryTrace,
   evaluateIssueBranchLifecycle,
   evaluateGoalAlignment,
   evaluateSubmissionGate,
@@ -294,6 +301,7 @@ module.exports = {
   normalizeHost,
   normalizeLabels,
   normalizeLocalRefInventory,
+  observePlan,
   parseGitStatus,
   privacyOutcome,
   readJarvosSessionState,

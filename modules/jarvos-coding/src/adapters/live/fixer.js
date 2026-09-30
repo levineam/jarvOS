@@ -1,9 +1,12 @@
 'use strict';
 
 const path = require('path');
+const { isSafeRepoPath, observePlan } = require('../../features/delivery-trace');
 const { run: defaultRun } = require('./run');
 
 const FIXER_SCHEMA_VERSION = 'jarvos-coding-live-fixer/v1';
+const GIT_OBJECT_ID = /^[a-f0-9]{40}(?:[a-f0-9]{24})?$/i;
+const SAFE_GIT_REF = /^[A-Za-z0-9][A-Za-z0-9._/-]*$/;
 
 // Primary-fix-pass statuses that mean "this approach bowed out — try the
 // pr-autopilot coding-agent fix pass instead" (lock busy, doctor/preflight fail,
@@ -108,6 +111,40 @@ function createLiveFixer(options = {}) {
     };
   }
 
+  /**
+   * Read-only Git observation for the delivery trace: the committed head, the
+   * files changed from the base, and the declared plan file as it exists at
+   * that head. Every call is an argument array with no shell; the plan path is
+   * used only when it is a safe repo-relative path. Returns null when the head
+   * or file list cannot be read, so the gate fails closed.
+   */
+  function observeDelivery(input = {}) {
+    const cwd = input.worktreeDir || input.branchResult?.worktreeDir || null;
+    if (!cwd) return null;
+    const git = (args) => run('git', args, { cwd, timeoutMs: 30000, allowFail: true });
+
+    const head = git(['rev-parse', 'HEAD']);
+    const headCommit = head.status === 0 ? String(head.stdout || '').trim() : '';
+    if (!GIT_OBJECT_ID.test(headCommit)) return null;
+
+    const baseRef = input.baseRef || 'origin/main';
+    if (!SAFE_GIT_REF.test(baseRef) || baseRef.includes('..')) return null;
+    const diff = git(['diff', '--name-only', `${baseRef}...HEAD`, '--']);
+    if (diff.status !== 0) return null;
+    const changedFiles = String(diff.stdout || '').split('\n').map((line) => line.trim()).filter(Boolean);
+
+    const planPath = input.deliveryTrace?.plan?.path;
+    let plan = null;
+    if (isSafeRepoPath(planPath)) {
+      const shown = git(['show', `HEAD:${planPath}`]);
+      if (shown.status === 0) {
+        plan = observePlan(shown.stdout, input.issueIdentifier || input.issue?.identifier);
+      }
+    }
+
+    return { headCommit, changedFiles, plan };
+  }
+
   return {
     schemaVersion: FIXER_SCHEMA_VERSION,
 
@@ -124,6 +161,7 @@ function createLiveFixer(options = {}) {
           reasonCode: 'pre_pr_no_fix_context',
           reason: 'no pull request in context (number + head ref required for a fix pass)',
           git,
+          deliveryObservation: observeDelivery(input),
         };
       }
 
@@ -131,6 +169,7 @@ function createLiveFixer(options = {}) {
       const primaryResult = {
         ...normalizeFixResult('clawpatch-primary', primary),
         git: inspectGit(input),
+        deliveryObservation: observeDelivery(input),
       };
 
       if (!FALLBACK_STATUSES.has(primaryResult.status) || !enableAutopilotFallback) {
@@ -144,6 +183,7 @@ function createLiveFixer(options = {}) {
       return {
         ...normalizeFixResult('pr-autopilot', fallback),
         git: inspectGit(input),
+        deliveryObservation: observeDelivery(input),
         primary: primaryResult,
       };
     },
