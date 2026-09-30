@@ -82,9 +82,46 @@ function createLivePullRequest(options = {}) {
     };
   }
 
+  // When the fix stage supplied a delivery observation, a pull request is only
+  // evidence for exactly that host-observed head on the approved branch. A
+  // missing or malformed observation, or an unreadable live head, fails closed.
+  // Callers without a fix-stage observation keep the previous behavior.
+  function expectedHeadFor(input = {}) {
+    const fixRerun = input.fixRerun;
+    if (!fixRerun || typeof fixRerun !== 'object' || fixRerun.deliveryObservation === undefined) return { bound: false };
+    const observation = fixRerun.deliveryObservation;
+    const head = observation && typeof observation === 'object' ? String(observation.headCommit || '').toLowerCase() : '';
+    return { bound: true, head: GIT_OBJECT_ID.test(head) ? head : null };
+  }
+
+  function headFailure(repo, branch, pr, expected) {
+    if (!expected.bound) return null;
+    const liveHead = typeof pr?.headRefOid === 'string' ? pr.headRefOid.toLowerCase() : '';
+    if (expected.head && pr?.headRefName === branch && liveHead === expected.head) return null;
+    const unverified = !expected.head || !pr || !GIT_OBJECT_ID.test(liveHead) || !pr.headRefName;
+    return {
+      schemaVersion: PULL_REQUEST_SCHEMA_VERSION,
+      status: 'failed',
+      ok: false,
+      reasonCode: unverified ? 'pull_request_head_unverified' : 'pull_request_head_mismatch',
+      reason: unverified
+        ? 'pull request head could not be verified against the host-observed head'
+        : `pull request head ${pr.headRefName}@${liveHead} is not the host-observed ${branch}@${expected.head}`,
+      repo,
+      branch,
+      number: pr?.number ?? null,
+      url: pr?.url ?? null,
+      state: pr?.state ?? null,
+      headRefName: pr?.headRefName ?? null,
+      headRefOid: liveHead || null,
+      expectedHeadRefName: branch,
+      expectedHeadRefOid: expected.head,
+    };
+  }
+
   function findPr(repo, ref, options = {}) {
     if (!ref) return null;
-    const args = ['pr', 'view', String(ref), '--json', 'number,url,title,state,headRefName,baseRefName'];
+    const args = ['pr', 'view', String(ref), '--json', 'number,url,title,state,headRefName,headRefOid,baseRefName'];
     if (repo) args.push('--repo', repo);
     const result = run('gh', args, { allowFail: true, timeoutMs: 60000 });
     if (result.status !== 0) return null;
@@ -101,6 +138,8 @@ function createLivePullRequest(options = {}) {
       const branch = input.branch || input.headRefName;
       if (!branch) throw new Error('live openPullRequest requires a branch');
 
+      const expectedHead = expectedHeadFor(input);
+      if (expectedHead.bound && !expectedHead.head) return headFailure(repo, branch, null, expectedHead);
       const pointer = input.existingPullRequest || null;
       const pointerRef = pointer?.number || pointer?.url || null;
       const revalidated = pointerRef ? findPr(repo, pointerRef) : null;
@@ -108,6 +147,8 @@ function createLivePullRequest(options = {}) {
       if (revalidated) {
         const baseFailure = existingBaseFailure(repo, branch, revalidated, trustedBase);
         if (baseFailure) return { ...baseFailure, reattached: true, liveConfirmed: true };
+        const reattachedHeadFailure = headFailure(repo, branch, revalidated, expectedHead);
+        if (reattachedHeadFailure) return { ...reattachedHeadFailure, reattached: true, liveConfirmed: true };
         const state = String(revalidated.state || '').toUpperCase();
         const status = state === 'MERGED' ? 'merged' : (state === 'OPEN' ? 'exists' : 'closed');
         return {
@@ -130,6 +171,8 @@ function createLivePullRequest(options = {}) {
       if (existing) {
         const baseFailure = existingBaseFailure(repo, branch, existing, trustedBase);
         if (baseFailure) return baseFailure;
+        const existingHeadFailure = headFailure(repo, branch, existing, expectedHead);
+        if (existingHeadFailure) return existingHeadFailure;
         return {
           schemaVersion: PULL_REQUEST_SCHEMA_VERSION,
           status: 'exists',
@@ -160,6 +203,9 @@ function createLivePullRequest(options = {}) {
         };
       }
 
+      // Discovery can be slow; a supplied control-plane fence is rechecked
+      // immediately before the pull request is created.
+      if (typeof input.controlPlane?.assertCurrentFence === 'function') input.controlPlane.assertCurrentFence();
       const created = run('gh', args, { allowFail: true, timeoutMs: 120000 });
       if (created.status !== 0) {
         return {
@@ -175,6 +221,8 @@ function createLivePullRequest(options = {}) {
       // gh pr create prints the PR URL; re-read to resolve the number reliably.
       const url = (created.stdout || '').trim().split(/\s+/u).find((t) => /\/pull\/\d+/u.test(t)) || null;
       const opened = findPr(repo, branch, { openOnly: true });
+      const createdHeadFailure = headFailure(repo, branch, opened, expectedHead);
+      if (createdHeadFailure) return createdHeadFailure;
       return {
         schemaVersion: PULL_REQUEST_SCHEMA_VERSION,
         status: 'created',

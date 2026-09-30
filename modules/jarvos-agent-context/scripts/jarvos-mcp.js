@@ -41,6 +41,9 @@ const SHARED_SKILLS_OWNER_CREDENTIAL_FILE_ENV = 'JARVOS_SHARED_SKILLS_OWNER_CRED
 const SHARED_SKILLS_CONFIG_ENV = 'JARVOS_SHARED_SKILLS_CONFIG_PATH';
 const COMMON_WORK_SERVICE_MODULE_ENV = 'JARVOS_COMMON_WORK_SERVICE_MODULE';
 const COMMON_WORK_HARNESS_ENV = 'JARVOS_COMMON_WORK_HARNESS';
+const CODING_PRODUCER_TOOL = 'jarvos_coding_take_issue_to_done';
+const CODING_PRODUCER_MODULE_ENV = 'JARVOS_CODING_PRODUCER_MODULE';
+const CODING_PRODUCER_TIMEOUT_ENV = 'JARVOS_CODING_PRODUCER_TIMEOUT_MS';
 const STRICT_EMPTY_ARGUMENT_TOOLS = new Set([
   'jarvos_journal_health',
   'jarvos_ensure_today_journal',
@@ -226,6 +229,21 @@ const TOOLS = [
         requestId: { type: 'string' },
         actor: { type: 'object' }, resource: { type: 'object' }, mutationClass: { type: 'string' },
         desiredGeneration: { type: 'string' }, commandSpec: { type: 'object' }, idempotencyKey: { type: 'string' }, fence: { type: 'number' },
+      },
+    },
+  },
+  {
+    name: CODING_PRODUCER_TOOL,
+    description: 'Run one host-bound jarvOS coding operation for an approved control-plane request. accept-plan records the approved plan revision; complete takes the approved issue to done only when the host observes the accepted plan, documentation decision, implementation and behavior. The host binds the credential, owner, repository, base and work run; callers supply only the request id, issue and declared delivery trace.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['operation', 'requestId', 'issueIdentifier'],
+      properties: {
+        operation: { type: 'string', enum: ['accept-plan', 'complete'] },
+        requestId: { type: 'string', description: 'Approved control-plane request created by this session.' },
+        issueIdentifier: { type: 'string', description: 'Issue identifier the approved request is bound to, for example SUP-4029.' },
+        deliveryTrace: { type: 'object', description: 'Declared jarvos-coding-delivery-trace/v1 for complete. Observations are made by the host and are never arguments.' },
       },
     },
   },
@@ -527,6 +545,59 @@ async function todoAction(name, args) {
   return textResult('Unsupported Todo transition action', true);
 }
 
+const CODING_PRODUCER_HOST_UNAVAILABLE = 'Coding producer host binding is unavailable. Set JARVOS_CODING_PRODUCER_MODULE to an absolute owner-only host module contained under the workspaceRoot selected by JARVOS_PROJECTS_CONTEXT_CONFIG.';
+
+function loadHostCodingProducer() {
+  const modulePath = envBinding(CODING_PRODUCER_MODULE_ENV);
+  const selectedRoot = modulePath && envBinding('JARVOS_PROJECTS_CONTEXT_CONFIG') ? selectedWorkspaceRoot() : null;
+  const trusted = selectedRoot ? trustedFile(modulePath, { root: selectedRoot, ownerOnly: true }) : null;
+  if (!trusted) return { producer: null, error: CODING_PRODUCER_HOST_UNAVAILABLE };
+  try {
+    const loaded = require(trusted);
+    const producer = typeof loaded === 'function' ? loaded() : (loaded?.producer || loaded);
+    if (!producer || typeof producer.invoke !== 'function') {
+      return { producer: null, error: 'Coding producer host module loaded but exported no producer.' };
+    }
+    return { producer, error: null };
+  } catch (error) {
+    return { producer: null, error: `Coding producer host module failed to load: ${error?.message || 'unknown error'}` };
+  }
+}
+
+async function codingProducerAction(args) {
+  // Authentication comes first and only from the session binding: a missing
+  // credential never loads the producer or touches Git, trackers or PRs.
+  let credential;
+  try {
+    credential = resolveHostCredential();
+  } catch (error) {
+    return textResult(error.message || 'control-plane host credential binding failed', true);
+  }
+  if (!credential) return textResult('control-plane host credential is not configured for this MCP session', true);
+  const { producer, error } = loadHostCodingProducer();
+  if (!producer) return textResult(error, true);
+  // Only ordinary request fields cross the boundary. Owners, work runs, plan
+  // digests, observations, fences and callbacks are host-bound state.
+  const request = {
+    operation: args.operation,
+    requestId: args.requestId,
+    issueIdentifier: args.issueIdentifier,
+    deliveryTrace: args.deliveryTrace,
+  };
+  const readApproval = (requestId) => controlPlane('approval-state', { requestId, credential });
+  try {
+    const result = await producer.invoke(request, { readApproval });
+    return textResult(JSON.stringify(result, null, 2), result?.ok !== true);
+  } catch (failure) {
+    return textResult(failure?.message || 'coding producer failed', true);
+  }
+}
+
+function codingProducerTimeoutMs() {
+  const value = Number(process.env[CODING_PRODUCER_TIMEOUT_ENV] || 3600000);
+  return Number.isFinite(value) && value > 0 ? value : 3600000;
+}
+
 async function commonWorkAction(args) {
   const harness = envBinding(COMMON_WORK_HARNESS_ENV);
   const serviceModule = envBinding(COMMON_WORK_SERVICE_MODULE_ENV);
@@ -706,6 +777,7 @@ async function callTool(name, args = {}, lifecycle = {}) {
   if (name === 'jarvos_ripeness_context') return textResult(JSON.stringify(await readRipenessContext(args)));
   if (name === 'jarvos_active_assistant') return textResult(JSON.stringify(await assessActiveAssistant(args, lifecycle)));
   if (name === 'jarvos_common_work') return commonWorkAction(args);
+  if (name === CODING_PRODUCER_TOOL) return codingProducerAction(args);
   if (['jarvos_todo_create', 'jarvos_todo_list', 'jarvos_todo_show', 'jarvos_todo_transition'].includes(name)) return todoAction(name, args);
   if (name === 'jarvos_journal_health') {
     requireEmptyObjectArguments(args);
@@ -1022,6 +1094,7 @@ async function handle(message) {
       const result = await withToolTimeout(
         params?.name,
         () => callTool(params?.name, toolArguments),
+        ...(params?.name === CODING_PRODUCER_TOOL ? [codingProducerTimeoutMs()] : []),
       );
       write({ jsonrpc: '2.0', id, result });
       return;
@@ -1117,4 +1190,7 @@ module.exports.requireEmptyObjectArguments = requireEmptyObjectArguments;
 module.exports.CREDENTIAL_ENV = CREDENTIAL_ENV;
 module.exports.CREDENTIAL_FILE_ENV = CREDENTIAL_FILE_ENV;
 module.exports.COMMON_WORK_HOST_UNAVAILABLE = COMMON_WORK_HOST_UNAVAILABLE;
+module.exports.CODING_PRODUCER_TOOL = CODING_PRODUCER_TOOL;
+module.exports.CODING_PRODUCER_HOST_UNAVAILABLE = CODING_PRODUCER_HOST_UNAVAILABLE;
+module.exports.loadHostCodingProducer = loadHostCodingProducer;
 module.exports.sharedSkillsConfigPath = sharedSkillsConfigPath;

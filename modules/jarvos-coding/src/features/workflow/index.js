@@ -40,7 +40,8 @@ function digest(value) {
 }
 
 function defaultManifestPath() {
-  return path.resolve(__dirname, '../../providers/compound-engineering.json');
+  // src/features/workflow -> module root, where providers/ is published.
+  return path.resolve(__dirname, '../../../providers/compound-engineering.json');
 }
 
 function resolveManifest(options = {}) {

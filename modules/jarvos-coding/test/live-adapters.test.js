@@ -770,6 +770,91 @@ test('Beads close remains deferred until authoritative merge evidence', async ()
   assert.equal(closed.status, 'closed');
 });
 
+test('Beads rechecks a supplied control-plane fence after preparation and before mutating', async () => {
+  const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-beads-fence-'));
+  const calls = [];
+  const writes = [];
+  const tracker = createLiveBeadsTracker({
+    workspaceRoot,
+    operationStore: { async read() { return null; }, async write(record) { writes.push(record); return record; } },
+    run: (command, args) => {
+      calls.push(args[0]);
+      if (args[0] === '--version') return { status: 0, stdout: '0.2.19', stderr: '' };
+      if (args[0] === 'capabilities') return { status: 0, stdout: JSON.stringify({ capabilities: ['create', 'update', 'dependency', 'checkpoint'] }), stderr: '' };
+      if (args[0] === 'schema') return { status: 0, stdout: JSON.stringify({ schema: 'beads/v1' }), stderr: '' };
+      if (args[0] === 'where') return { status: 0, stdout: workspaceRoot, stderr: '' };
+      return { status: 0, stdout: JSON.stringify({ id: 'bd-9', status: 'in_progress', updated_at: '2026-09-30T00:00:00Z' }), stderr: '' };
+    },
+  });
+  const controlPlane = { assertCurrentFence: () => { throw new Error('stale_fence'); } };
+  await assert.rejects(() => tracker.claimIssue({ workReference: { authority: 'beads', itemId: 'bd-9' }, controlPlane }), /stale_fence/);
+  assert.equal(calls.includes('update'), false);
+  assert.deepEqual(writes, []);
+});
+
+test('Beads refuses a fence revoked during the prepared write and never invokes the mutation', async () => {
+  const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-beads-fence-write-'));
+  for (const operation of ['claim', 'close']) {
+    const calls = [];
+    const writes = [];
+    let revoked = false;
+    const tracker = createLiveBeadsTracker({
+      workspaceRoot,
+      operationStore: {
+        async read() { return null; },
+        // Revocation lands while the prepared record is being persisted.
+        async write(record) { writes.push(record.state); if (record.state === 'prepared') revoked = true; return record; },
+      },
+      run: (command, args) => {
+        calls.push(args[0]);
+        if (args[0] === '--version') return { status: 0, stdout: '0.2.19', stderr: '' };
+        if (args[0] === 'capabilities') return { status: 0, stdout: JSON.stringify({ capabilities: ['create', 'update', 'dependency', 'checkpoint'] }), stderr: '' };
+        if (args[0] === 'schema') return { status: 0, stdout: JSON.stringify({ schema: 'beads/v1' }), stderr: '' };
+        if (args[0] === 'where') return { status: 0, stdout: workspaceRoot, stderr: '' };
+        return { status: 0, stdout: JSON.stringify({ id: 'bd-11', status: 'closed', updated_at: '2026-09-30T00:00:00Z' }), stderr: '' };
+      },
+    });
+    const controlPlane = { assertCurrentFence: () => { if (revoked) throw new Error('stale_fence'); } };
+    const input = { workReference: { authority: 'beads', itemId: 'bd-11' }, controlPlane };
+    const attempt = operation === 'claim'
+      ? () => tracker.claimIssue(input)
+      : () => tracker.verifyAndClose({ ...input, pullRequest: { state: 'MERGED' } });
+    await assert.rejects(attempt, /stale_fence/, operation);
+    assert.equal(calls.some((name) => name === 'update' || name === 'close'), false, operation);
+    // Only the prepared record exists; no uncertain or committed state was invented.
+    assert.deepEqual(writes, ['prepared'], operation);
+  }
+});
+
+test('Beads close after a claim derives its own operation identity from the claimed work reference', async () => {
+  const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-beads-claim-close-'));
+  const calls = [];
+  const tracker = createLiveBeadsTracker({
+    workspaceRoot,
+    run: (command, args) => {
+      calls.push(args);
+      if (args[0] === '--version') return { status: 0, stdout: '0.2.19', stderr: '' };
+      if (args[0] === 'capabilities') return { status: 0, stdout: JSON.stringify({ capabilities: ['create', 'update', 'dependency', 'checkpoint'] }), stderr: '' };
+      if (args[0] === 'schema') return { status: 0, stdout: JSON.stringify({ schema: 'beads/v1' }), stderr: '' };
+      if (args[0] === 'where') return { status: 0, stdout: workspaceRoot, stderr: '' };
+      if (args[0] === 'update') return { status: 0, stdout: JSON.stringify({ id: 'bd-7', status: 'in_progress', updated_at: '2026-09-30T00:00:00Z' }), stderr: '' };
+      if (args[0] === 'close') return { status: 0, stdout: JSON.stringify({ id: 'bd-7', status: 'closed', updated_at: '2026-09-30T00:01:00Z' }), stderr: '' };
+      return { status: 0, stdout: JSON.stringify({ id: 'bd-7' }), stderr: '' };
+    },
+  });
+  // The orchestrator hands the claim stage's work reference to the close stage.
+  const claimed = await tracker.claimIssue({ workReference: { authority: 'beads', itemId: 'bd-7' } });
+  assert.equal(claimed.status, 'claimed');
+  assert.equal(typeof claimed.workReference.operationId, 'string');
+  const closed = await tracker.verifyAndClose({ workReference: claimed.workReference, pullRequest: { state: 'MERGED' } });
+  assert.equal(closed.status, 'closed');
+  assert.notEqual(closed.operationId, claimed.workReference.operationId);
+  assert.ok(calls.some((args) => args[0] === 'close' && args[1] === 'bd-7'));
+  // An explicit close id stays meaningful.
+  const explicit = await tracker.verifyAndClose({ workReference: claimed.workReference, pullRequest: { state: 'MERGED' }, operationId: 'op-close-explicit' });
+  assert.equal(explicit.operationId, 'op-close-explicit');
+});
+
 test('Beads adapter emits exact argv for every live operation without a command-map override', async () => {
   const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-beads-argv-'));
   const calls = [];
@@ -989,6 +1074,60 @@ test('PR-scoped fixer attaches post-fix git cleanliness to a successful primary 
   assert.equal(result.status, 'passed');
   assert.equal(result.git.clean, true);
   assert.equal(result.git.worktreePath, '/tmp/SUP-3470');
+});
+
+test('live PR adapter rechecks the fence before creating and binds every accepted PR to the observed head', async () => {
+  const HEAD_A = 'a'.repeat(40);
+  const HEAD_B = 'b'.repeat(40);
+  const BRANCH_NAME = 'SUP-1/head-binding';
+  const pr = (overrides = {}) => ({ number: 9, url: 'https://github.com/levineam/jarvOS/pull/9', title: 't', state: 'OPEN', headRefName: BRANCH_NAME, headRefOid: HEAD_A, baseRefName: 'main', ...overrides });
+  const make = (views, onView = () => {}) => {
+    const calls = [];
+    const adapter = createLivePullRequest({
+      repo: 'levineam/jarvOS',
+      run(command, args) {
+        calls.push(args.slice(0, 2).join(' '));
+        if (args[1] === 'create') return { status: 0, stdout: 'https://github.com/levineam/jarvOS/pull/9\n', stderr: '' };
+        onView();
+        const next = views.shift();
+        return next ? { status: 0, stdout: JSON.stringify(next), stderr: '' } : { status: 1, stdout: '', stderr: 'no pull request' };
+      },
+    });
+    return { adapter, calls };
+  };
+  const observed = { branch: BRANCH_NAME, fixRerun: { deliveryObservation: { headCommit: HEAD_A } } };
+
+  // Revoked while the (slow) discovery read runs: nothing is created.
+  let revoked = false;
+  const discovery = make([null], () => { revoked = true; });
+  const controlPlane = { assertCurrentFence: () => { if (revoked) throw new Error('stale_fence'); } };
+  await assert.rejects(() => discovery.adapter.openPullRequest({ ...observed, controlPlane }), /stale_fence/);
+  assert.equal(discovery.calls.includes('pr create'), false);
+
+  const created = await make([null, pr()]).adapter.openPullRequest(observed);
+  assert.deepEqual([created.ok, created.status, created.number], [true, 'created', 9]);
+
+  const createdElsewhere = await make([null, pr({ headRefOid: HEAD_B })]).adapter.openPullRequest(observed);
+  assert.deepEqual([createdElsewhere.ok, createdElsewhere.reasonCode], [false, 'pull_request_head_mismatch']);
+
+  const open = make([pr({ headRefOid: HEAD_B })]);
+  const openMismatch = await open.adapter.openPullRequest(observed);
+  assert.deepEqual([openMismatch.ok, openMismatch.reasonCode], [false, 'pull_request_head_mismatch']);
+  assert.equal(open.calls.includes('pr create'), false);
+
+  const merged = await make([pr({ state: 'MERGED', headRefOid: HEAD_B })]).adapter.openPullRequest({ ...observed, existingPullRequest: { number: 9 } });
+  assert.deepEqual([merged.ok, merged.reasonCode, merged.reattached], [false, 'pull_request_head_mismatch', true]);
+
+  const otherBranch = await make([pr({ state: 'MERGED', headRefName: 'SUP-1/other' })]).adapter.openPullRequest({ ...observed, existingPullRequest: { number: 9 } });
+  assert.deepEqual([otherBranch.ok, otherBranch.reasonCode], [false, 'pull_request_head_mismatch']);
+
+  const malformed = make([pr()]);
+  const unverified = await malformed.adapter.openPullRequest({ branch: BRANCH_NAME, fixRerun: { deliveryObservation: { headCommit: 'not-a-commit' } } });
+  assert.deepEqual([unverified.ok, unverified.reasonCode], [false, 'pull_request_head_unverified']);
+  assert.deepEqual(malformed.calls, []);
+
+  const reattached = await make([pr({ state: 'MERGED' })]).adapter.openPullRequest({ ...observed, existingPullRequest: { number: 9 } });
+  assert.deepEqual([reattached.ok, reattached.status], [true, 'merged']);
 });
 
 test('live PR adapter revalidates a merged reattachment by number after branch deletion', async () => {
