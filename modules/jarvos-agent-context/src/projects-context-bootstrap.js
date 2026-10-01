@@ -267,6 +267,14 @@ function createHostProjectsContextProvider(env = process.env) {
     portfolioRosterCapabilityReceiptPath = null;
   }
 
+  // Optional named-profile receipt: no fallback to orientation or administrative
+  // capabilities. An invalid binding disables only recent-activity reads.
+  let recentActivityCapabilityReceiptPath = resolveAbsoluteFile(
+    config.recentActivityCapabilityReceiptPath, stateRoot, { ownerOnly: true },
+  );
+  if ([capabilityReceiptPath, portfolioProofReceiptPath, portfolioRosterCapabilityReceiptPath]
+    .includes(recentActivityCapabilityReceiptPath)) recentActivityCapabilityReceiptPath = null;
+
   let provider; let providerDigest;
   try {
     const before = fs.readFileSync(providerModule);
@@ -305,7 +313,10 @@ function createHostProjectsContextProvider(env = process.env) {
       : null,
     async read(request) {
       // Values from the host binding win over all model-visible request keys.
-      const capabilityReceipt = capabilityReceiptPath ? readPrivateJson(capabilityReceiptPath) : null;
+      const recentActivity = request.profile?.name === 'recent-activity';
+      const receiptPath = recentActivity ? recentActivityCapabilityReceiptPath : capabilityReceiptPath;
+      const capabilityReceipt = receiptPath ? readPrivateJson(receiptPath) : null;
+      if (recentActivity && !capabilityReceipt) return { status: 'unavailable', code: 'CONTEXT_UNAVAILABLE' };
       const capabilitySecret = capabilitySecretPath ? readPrivate(capabilitySecretPath) : null;
       const hostSecret = hostSecretPath ? readPrivate(hostSecretPath) : null;
       return provider.read({

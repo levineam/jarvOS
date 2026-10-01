@@ -130,6 +130,19 @@ capability, scope, and state paths; MCP callers supply only the bounded proposal
 envelope. Applying a proposal is deliberately absent from both this library and
 MCP.
 
+For host-configured reads, `capabilityReceiptPath` remains the orientation/default
+receipt. The optional `recentActivityCapabilityReceiptPath` binds a separate
+receipt to `recent-activity`; it must be an absolute owner-only file under the
+trusted state root and cannot alias the orientation, roster, or proof receipt.
+Missing or invalid recent bindings make that optional read unavailable without
+disabling orientation. Callers select only the named profile and bounded date
+window, never a receipt path or capability. The provider still verifies the
+exact query, identity, expiry, coverage, and limits of the selected receipt.
+This binding preserves `projects-profiles-1` and its current freshness limits;
+changing those semantics requires a compatible profile and capability migration.
+Installing the config or issuing live capabilities follows the host's activation
+process; adding this source support does not enable a deployed profile.
+
 ## Journal actions
 
 Journal mutation requires an explicit configured journal directory and valid
