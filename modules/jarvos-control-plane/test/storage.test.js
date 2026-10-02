@@ -93,6 +93,32 @@ test('file store recovers from a malformed stale lock', () => {
   } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
 });
 
+test('stale-lock recovery does not move a live lock', () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-control-plane-live-lock-'));
+  const lockPath = path.join(tmp, 'state.lock');
+  const originalRename = fs.renameSync;
+  let lockRenameAttempted = false;
+  try {
+    fs.writeFileSync(lockPath, JSON.stringify({ pid: process.pid, token: 'live-owner' }));
+    const staleAt = new Date(Date.now() - 1000);
+    fs.utimesSync(lockPath, staleAt, staleAt);
+    fs.renameSync = (from, to) => {
+      if (from === lockPath) lockRenameAttempted = true;
+      return originalRename(from, to);
+    };
+
+    assert.throws(
+      () => createFileStore(tmp, { staleLockMs: 10, lockTimeoutMs: 20 }).acquireLease({ key: 'live-lock', holder: 'contender' }),
+      /Timed out acquiring file store lock/
+    );
+    assert.equal(lockRenameAttempted, false);
+    assert.equal(JSON.parse(fs.readFileSync(lockPath, 'utf8')).token, 'live-owner');
+  } finally {
+    fs.renameSync = originalRename;
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
 test('stale-lock recovery never unlinks a fresh lock installed after takeover', () => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-control-plane-lock-race-'));
   const lockPath = path.join(tmp, 'state.lock');
