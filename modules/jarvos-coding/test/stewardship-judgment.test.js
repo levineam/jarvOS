@@ -93,3 +93,20 @@ test('envelope permits a non-enumerated owning harness and three bounded choices
   ], defaultChoiceId: 'one', fallback: { channelKind: 'discord' } });
   assert.equal(validateJudgmentEnvelope(value).ok, true);
 });
+
+test('validation rejects forged states without their required event history', () => {
+  const accepted = envelope();
+  for (const change of [
+    { state: 'delivered_in_session' },
+    { state: 'acknowledged' },
+    { state: 'delivered_fallback' },
+    { state: 'timed_out' },
+    { state: 'answered' },
+    { answer: { choiceId: 'keep' } },
+    { eventIds: { ...accepted.eventIds, answer: 'event:forged-answer' } },
+  ]) {
+    const forged = { ...accepted, ...change };
+    assert.equal(validateJudgmentEnvelope(forged).ok, false);
+    assert.equal(applyJudgmentEvent(forged, event('answered', { choiceId: 'keep' })).reason, 'invalid_envelope');
+  }
+});
