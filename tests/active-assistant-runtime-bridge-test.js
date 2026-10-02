@@ -50,6 +50,25 @@ test('rejects relative roots and symlinked implementation files', (t) => {
   );
 });
 
+test('rejects group- or world-writable runtime paths', (t) => {
+  const cases = [
+    { target: (f) => f.runtimeRoot, mode: 0o720 },
+    { target: (f) => path.dirname(f.entrypoint), mode: 0o702 },
+    { target: (f) => f.entrypoint, mode: 0o620 },
+    { target: (f) => f.entrypoint, mode: 0o602 },
+  ];
+
+  for (const testCase of cases) {
+    const f = fixture();
+    t.after(() => fs.rmSync(f.runtimeRoot, { recursive: true, force: true }));
+    fs.chmodSync(testCase.target(f), testCase.mode);
+    assert.throws(
+      () => bridge.resolveImplementationEntrypoint(f),
+      { code: 'active_assistant_runtime_permissions_unsafe' },
+    );
+  }
+});
+
 test('rejects a runtime that aliases the genuine public root through a symlink', (t) => {
   const genuine = fixture();
   const aliasRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-aa-alias-'));
