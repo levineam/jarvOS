@@ -313,18 +313,63 @@ test('an expired v3 component is stale even inside a fresh outer System snapshot
   assert.equal(report.modules[0].state, 'needs your attention');
 });
 
-test('a stale v3 component never asserts fresh healthy or service repair', () => {
+test('expired v3 failures retain their last severity and diagnostic until fresh success', () => {
   const observedAt = new Date(NOW.getTime() - 60 * 60 * 1000).toISOString();
   const validUntil = new Date(NOW.getTime() - 1).toISOString();
-  for (const state of ['healthy', 'repair needed']) {
+  const vendor = require('../apps/desktop/server/vendor/jarvos-doctor-modules');
+  assert.equal(fs.readFileSync(path.join(__dirname, '../lib/jarvos-doctor-modules.js'), 'utf8'),
+    fs.readFileSync(path.join(__dirname, '../apps/desktop/server/vendor/jarvos-doctor-modules.js'), 'utf8'));
+  assert.equal(fs.readFileSync(path.join(__dirname, '../lib/jarvos-system-doctor.js'), 'utf8'),
+    fs.readFileSync(path.join(__dirname, '../apps/desktop/server/vendor/jarvos-system-doctor.js'), 'utf8'));
+  for (const state of ['warning', 'repair needed', 'not configured']) {
     const root = workspace();
-    writeSnapshot(root, systemSnapshotV3({
-      facts: { profile: 'minimal', components: [systemComponentV3('provider.paperclip', state, { observedAt, validUntil })] },
-    }));
-    const component = loadHealthModules({ workspace: root, now: NOW, profile: 'minimal' }).modules[0].components[0];
-    assert.equal(component.state, 'warning');
-    assert.equal(component.reasonClass, 'component-stale');
+    const input = systemSnapshotV3({
+      facts: { profile: 'minimal', components: [systemComponentV3('provider.paperclip', state,
+        { observedAt, validUntil }, { reasonClass: 'reported-condition' })] },
+    });
+    writeSnapshot(root, input);
+    const report = loadHealthModules({ workspace: root, now: NOW, profile: 'minimal' });
+    assert.deepEqual(vendor.loadHealthModules({ workspace: root, now: NOW, profile: 'minimal' }), report);
+    const component = report.modules[0].components[0];
+    assert.equal(component.state, state);
+    assert.equal(component.reasonClass, 'reported-condition');
+    assert.equal(component.observedAt, observedAt);
+    assert.equal(component.validUntil, validUntil);
+    const receipt = buildSystemDoctorReceipt({ ok: false, profile: 'minimal', workspace: root, modules: report.modules });
+    assert.equal(receipt.components[0].state, state);
+    assert.equal(receipt.components[0].reasonClass, 'reported-condition');
+    assert.equal(receipt.components[0].validUntil, validUntil);
+    if (state === 'repair needed') assert.equal(receipt.status, 'repair needed');
+    const text = renderSystemDoctor({ systemDoctor: receipt }, { now: NOW });
+    assert.match(text, /Last observation: reported condition\. Evidence expired; verify the current state before repair\./);
+    assert.doesNotMatch(text, /Fix it|Configure it/);
+
+    input.generation += 1;
+    input.observedAt = new Date(NOW.getTime() + 1).toISOString();
+    writeSnapshot(root, input);
+    assert.equal(loadHealthModules({ workspace: root, now: new Date(NOW.getTime() + 1), profile: 'minimal' })
+      .modules[0].components[0].state, state);
+
+    input.facts.components = [systemComponentV3('provider.paperclip', 'healthy')];
+    writeSnapshot(root, input);
+    const recovered = loadHealthModules({ workspace: root, now: new Date(NOW.getTime() + 1), profile: 'minimal' });
+    assert.equal(recovered.modules[0].state, 'healthy');
+    assert.equal(recovered.modules[0].components[0].reasonClass, 'none');
   }
+});
+
+test('expired SearXNG evidence keeps an independently detected search failure', () => {
+  const root = workspace();
+  writeSnapshot(root, systemSnapshotV3({
+    facts: { profile: 'minimal', components: [systemComponentV3('provider.searxng', 'healthy', {
+      observedAt: new Date(NOW.getTime() - 60 * 60 * 1000).toISOString(),
+      validUntil: NOW.toISOString(),
+    }, { evidence: { httpReachable: true, searchResultCount: 0, runtimeToolAvailable: true } })] },
+  }));
+  const component = loadHealthModules({ workspace: root, now: NOW, profile: 'minimal' }).modules[0].components[0];
+  assert.equal(component.state, 'warning');
+  assert.equal(component.reasonClass, 'search-empty');
+  assert.equal(component.validUntil, NOW.toISOString());
 });
 
 test('a stale v3 SearXNG component cannot assert a fresh healthy search result', () => {
