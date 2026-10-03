@@ -319,6 +319,8 @@ test('expired v3 failures retain their last severity and diagnostic until fresh 
   const vendor = require('../apps/desktop/server/vendor/jarvos-doctor-modules');
   assert.equal(fs.readFileSync(path.join(__dirname, '../lib/jarvos-doctor-modules.js'), 'utf8'),
     fs.readFileSync(path.join(__dirname, '../apps/desktop/server/vendor/jarvos-doctor-modules.js'), 'utf8'));
+  assert.equal(fs.readFileSync(path.join(__dirname, '../lib/jarvos-system-doctor.js'), 'utf8'),
+    fs.readFileSync(path.join(__dirname, '../apps/desktop/server/vendor/jarvos-system-doctor.js'), 'utf8'));
   for (const state of ['warning', 'repair needed', 'not configured']) {
     const root = workspace();
     const input = systemSnapshotV3({
@@ -338,6 +340,9 @@ test('expired v3 failures retain their last severity and diagnostic until fresh 
     assert.equal(receipt.components[0].reasonClass, 'reported-condition');
     assert.equal(receipt.components[0].validUntil, validUntil);
     if (state === 'repair needed') assert.equal(receipt.status, 'repair needed');
+    const text = renderSystemDoctor({ systemDoctor: receipt }, { now: NOW });
+    assert.match(text, /Last observation: reported condition\. Evidence expired; verify the current state before repair\./);
+    assert.doesNotMatch(text, /Fix it|Configure it/);
 
     input.generation += 1;
     input.observedAt = new Date(NOW.getTime() + 1).toISOString();
