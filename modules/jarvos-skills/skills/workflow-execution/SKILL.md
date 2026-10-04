@@ -39,10 +39,26 @@ if the approach becomes expensive without useful evidence, narrow or change
 it. Routine reversible choices within scope remain autonomous; material scope
 changes and existing authority boundaries require the user's decision.
 
-Persist the current mode, immediate question, next visible result, bounded
-budget, and excluded work in the existing handoff or durable project artifact.
-Recover these on resume before taking action; the eventual product goal must
-not silently replace the current checkpoint. No new tracking layer is needed.
+Record intent in the existing durable tracker or handoff; no new layer: the
+human-intended result and its observable acceptance, including legitimate stop
+boundaries; placement as an existing Outcome ID@revision, an intentional
+one-off, or unresolved; for work continuing beyond the turn, one owner and the
+actual start or resume trigger, or a plain note that it is authorized but
+unscheduled; and the current lane, checkpoint, budget, and exclusions. Recover
+these on resume before acting; the eventual product goal must not silently
+replace the current checkpoint. Lightweight exploration and ordinary Q&A need
+no heavier record. Missing optional PMS or context data is disclosed, never a
+new blocker or an authority grant; unresolved placement may continue
+authorized useful work while naming the human decision and resume trigger.
+
+Human-only choices, missing required access or authority, and a missing
+continuation owner remain honest stops. On a stop or scope change, keep the
+original scenario in view and try a useful authorized alternative, or say why
+not. Close with a verdict against the original acceptance: achieved; partial,
+naming the remaining acceptance; or stopped-unanswered, naming the blocker,
+owner, and resume trigger. Name the proof layer (source, installed, or live)
+and the PMS record@revision changed, or unresolved placement. A safety review
+ending never makes an unanswered usefulness question achieved.
 
 ## Choose the lane
 
@@ -118,7 +134,10 @@ For hardening work, the workflow is complete only when:
 2. **Track.** Create or reuse the smallest issue that matches the work. Check for
    active or completed duplicates before opening a new one.
 3. **Plan.** Capture goal linkage, scope boundary, definition of done,
-   constraints, risks, and ordered steps.
+   constraints, risks, and ordered steps. Decide the observable acceptance
+   scenarios now, in proportion to the claim; unit tests cannot repair
+   unstarted work, wrong acceptance, unavailable access, or human-only
+   decisions.
 4. **Package context.** Attach the plan, relevant design notes, links, and test
    expectations where the executing agent can retrieve them without chat memory.
 5. **Route.** Decide which repo/workspace owns the change before editing.
@@ -190,7 +209,7 @@ spending, destructive action, or an external send.
 
 ```md
 ## Definition of Done
-- [ ] Intended user outcome is demonstrated at the claimed boundary
+- [ ] Verdict vs. original acceptance (achieved / partial / stopped-unanswered) at a named layer (source / installed / live)
 - [ ] Artifact or code path exists in the intended repo/workspace
 - [ ] Documentation explains how to use or adapt it
 - [ ] Tests or smoke checks pass
