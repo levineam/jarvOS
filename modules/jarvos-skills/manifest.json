@@ -35,7 +35,7 @@
       "purpose": "Plan, track, package, execute, and verify non-trivial work.",
       "source": {
         "revision": "jarvos-skills-v0.3.0",
-        "digest": "13c363bdf0d7534086fe301fbf55182e191e2ac58fc21bdd9e7457bbb9ab9b2f",
+        "digest": "389cfad28ed5c7c3a3d0898c285d3316be923047c6ca3bac1fcdb844e783d7aa",
         "license": "MIT",
         "provenance": "jarvOS reviewed source"
       },
