@@ -279,7 +279,7 @@ function publicMutationResult(receipt) {
 }
 
 function publicBacklinkResult(journal) {
-  const status = journal?.linked ? 'linked' : journal?.deferred ? 'deferred' : journal?.status === 'pending' ? 'pending' : 'failed';
+  const status = journal?.status === 'not_requested' ? 'not_requested' : journal?.linked ? 'linked' : journal?.deferred ? 'deferred' : journal?.status === 'pending' ? 'pending' : 'failed';
   return {
     status,
     linked: status === 'linked',
@@ -1530,6 +1530,8 @@ function readSessionThread(input = {}) {
 }
 
 function writeSessionThread(input = {}) {
+  const journalPolicy = input.journalPolicy ?? 'link';
+  if (!['link', 'none'].includes(journalPolicy)) throw new Error('journalPolicy must be link or none');
   const thread = resolveSessionThread(input);
   const noteWriter = loadNoteWriter();
   const jarvosPaths = loadJarvosPaths();
@@ -1558,19 +1560,21 @@ function writeSessionThread(input = {}) {
       ...(existing ? { appendEntry: entry } : {}),
       ...noteMutationContext({ title: thread.title, input, jarvosPaths, service: mutationService, source: 'agent-context.session-thread' }),
     });
-    noteResult.journal = linkWrittenNote({
-      noteResult,
-      section: firstString(input.section, DEFAULT_SESSION_THREAD_SECTION),
-      createJournalIfMissing: input.createJournalIfMissing !== false,
-      mutationService,
-    });
+    noteResult.journal = journalPolicy === 'none'
+      ? { status: 'not_requested', linked: false, deferred: false, failed: false }
+      : linkWrittenNote({
+        noteResult,
+        section: firstString(input.section, DEFAULT_SESSION_THREAD_SECTION),
+        createJournalIfMissing: input.createJournalIfMissing !== false,
+        mutationService,
+      });
     if (noteResult.written) readBack = readSessionThread({ ...input, title: thread.title, maxChars: input.maxChars });
   } finally {
     releaseLock();
   }
 
   const outcome = publicCaptureOutcome(noteResult, noteResult.journal);
-  const complete = noteResult.written && noteResult.journal?.linked === true;
+  const complete = noteResult.written && (journalPolicy === 'none' || noteResult.journal?.linked === true);
   // Expose the bounded identifier for recovery, never the private operation payload.
   const operationId = noteResult.receipt?.operation?.operationId;
   const publicOperationId = typeof operationId === 'string' && /^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/.test(operationId) ? operationId : 'unavailable';
