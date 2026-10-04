@@ -10,7 +10,8 @@ actual-trigger guidance. Keep lightweight work lightweight, unresolved optional
 placement non-blocking, and human/authority stops honest. Define acceptance
 scenarios during planning without replacing existing independent-contract tests.
 Close against the original acceptance with a verdict and source/installed/live
-proof layer. Update the required derived manifest checksum; no software changes.
+proof layer. Update the required derived manifest and Hermes artifact-binding
+checksums; no software, setup-logic or activation-policy changes.
 One private Overseer acceptance paragraph is maintained separately, not published.
 
 ## Source acceptance
