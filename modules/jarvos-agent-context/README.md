@@ -28,7 +28,7 @@ The bundled stdio MCP server exposes:
 | `jarvos_journal_health` | Read-only health projection for today's configured journal |
 | `jarvos_ensure_today_journal` | Empty-input, today-only ensure through the shared journal lifecycle |
 | `jarvos_session_thread_read` | Read the rolling live working thread for an issue, artifact, project, or host session |
-| `jarvos_session_thread_write` | Append a checkpoint to that thread as a normal secondbrain note linked from today's journal |
+| `jarvos_session_thread_write` | Append a checkpoint, linked from today's journal by default; internal checkpoints can explicitly opt out |
 | `jarvos_startup_brief` | Bounded startup context for agent sessions |
 | `jarvos_hydrate` | Bounded working-context packet for startup hydration, including ontology context when configured |
 | `jarvos_todo_create` | Create one canonically linked Beads-backed Todo through the host-authorized work-action service |
@@ -181,16 +181,25 @@ ontology source is configured, hydration succeeds and reports the omission.
 The session thread is the lightweight handoff surface for work that moves across
 Claude Code, OpenClaw, Codex, Hermes, or another host. It is not a hidden store:
 each thread is a Markdown note named `JarvOS Session Thread - <threadId>` in the
-configured Notes directory, and every write links that note from today's journal
+configured Notes directory, and ordinary writes link that note from today's journal
 through the same `@jarvos/secondbrain` note and journal helpers used by
 `jarvos_create_note`.
+
+For internal checkpoints such as Overseer reconciliation, pass
+`journalPolicy: "none"` to the shared writer or MCP tool. This appends through
+the same canonical mutation service but never dispatches a journal link or
+creates a deferred-backlink intent. The receipt reports `not_requested`; a
+confirmed append can succeed without a link. Omitted policy (or `"link"`)
+preserves ordinary journal-backed session threads. `jarvos_create_note` always
+keeps its existing journal contract. Unknown policies are rejected before
+mutation. This option grants no new mutation authority or recovery permission.
 
 Write results keep mutation, backlink and sync states separate:
 
 - **Mutation status** preserves `unknown_after_dispatch` when a dispatched write lacks acknowledgement. The note may already exist; this is not permission to repeat the checkpoint. `blocked` can mean an earlier operation is unresolved.
 - **Operation** identifies the existing session-thread mutation for host-owned recovery. Read the thread, then have the owning host reconcile that operation; a fresh write creates a new checkpoint, not a status query.
 - **Obsidian acknowledgement** remains independent of local file presence. Durable operation intent alone does not prove saved note bytes.
-- **Journal backlink** says `linked`, `deferred`, `pending` (dispatch not attempted yet), or `failed` independently of the note.
+- **Journal backlink** says `linked`, `deferred`, `pending` (dispatch not attempted yet), `failed`, or `not_requested` (explicit internal policy) independently of the note.
 - **Sync** says `converged`, `pending`, `diverged`, or `unknown`; an Obsidian acknowledgement alone never proves remote Sync convergence.
 
 MCP session-thread write responses expose these bounded states, the operation

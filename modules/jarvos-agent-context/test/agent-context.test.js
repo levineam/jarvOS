@@ -592,6 +592,65 @@ test('MCP session thread tools round-trip through the shared note and journal pa
   });
 });
 
+test('MCP internal session thread requests no journal backlink or deferred intent', async () => {
+  await withTempVault(async ({ vault, notes, journal, mutationService }) => {
+    const date = new Date().toLocaleDateString('en-CA', { timeZone: 'UTC' });
+    const journalPath = path.join(journal, `${date}.md`);
+    const original = `# ${date}\n\n## 📝 Notes\n`;
+    fs.writeFileSync(journalPath, original);
+    writeSessionThread({ threadId: 'internal-checkpoint', summary: 'earlier internal checkpoint', journalPolicy: 'none', mutationService });
+    const execute = mutationService.execute.bind(mutationService);
+    const operations = [];
+    mutationService.execute = (operation) => { operations.push(operation); return execute(operation); };
+    const write = await callTool('jarvos_session_thread_write', {
+      threadId: 'internal-checkpoint', summary: 'internal checkpoint once', journalPolicy: 'none', mutationService,
+    });
+    assert.equal(write.isError, false);
+    assert.match(write.content[0].text, /Journal backlink: not_requested/);
+    assert.match(write.content[0].text, /Session Thread Written/);
+    const content = fs.readFileSync(path.join(notes, 'JarvOS Session Thread - internal-checkpoint.md'), 'utf8');
+    assert.equal((content.match(/internal checkpoint once/g) || []).length, 1);
+    assert.equal(operations.length, 1, 'only the note mutation is submitted');
+    assert.equal(operations[0].transformName, 'session-thread-append');
+    assert.equal(fs.readFileSync(journalPath, 'utf8'), original);
+    assert.equal(fs.existsSync(path.join(vault, '.jarvos/journal-maintenance/deferred-backlinks.json')), false);
+  });
+});
+
+test('MCP internal session thread preserves an ambiguous append identity without journal work', async () => {
+  await withTempVault(async ({ vault, journal, mutationService }) => {
+    const execute = mutationService.execute.bind(mutationService);
+    let submissions = 0;
+    mutationService.execute = (operation) => {
+      submissions += 1;
+      execute(operation);
+      return { ...fakeReceipt(operation, 'unknown_after_dispatch'), obsidian: 'unacknowledged' };
+    };
+    const write = await callTool('jarvos_session_thread_write', {
+      threadId: 'internal-lost-ack', summary: 'ambiguous internal checkpoint', journalPolicy: 'none', mutationService,
+    });
+    assert.equal(write.isError, true);
+    assert.match(write.content[0].text, /Mutation status: unknown_after_dispatch/);
+    assert.match(write.content[0].text, /Operation: test-operation-00000001/);
+    assert.match(write.content[0].text, /Journal backlink: not_requested/);
+    assert.match(write.content[0].text, /Do not repeat the checkpoint/);
+    const read = await callTool('jarvos_session_thread_read', { threadId: 'internal-lost-ack' });
+    assert.equal((read.content[0].text.match(/ambiguous internal checkpoint/g) || []).length, 1);
+    assert.equal(submissions, 1, 'readback neither replays nor drains');
+    assert.deepEqual(fs.readdirSync(journal), []);
+    assert.equal(fs.existsSync(path.join(vault, '.jarvos/journal-maintenance/deferred-backlinks.json')), false);
+  });
+});
+
+test('session thread rejects unknown journal policy before mutation', () => {
+  withTempVault(({ notes, journal, mutationService }) => {
+    mutationService.createWriteContext = () => { throw new Error('must not create mutation intent'); };
+    assert.throws(() => writeSessionThread({ threadId: 'invalid-policy', summary: 'reject this checkpoint', journalPolicy: 'typo', mutationService }), /journalPolicy/);
+    assert.deepEqual(fs.readdirSync(notes), []);
+    assert.deepEqual(fs.readdirSync(journal), []);
+  });
+});
+
 test('MCP session thread preserves ambiguous operation identity and an unattempted backlink', async () => {
   await withTempVault(async ({ journal, mutationService }) => {
     const execute = mutationService.execute.bind(mutationService);
