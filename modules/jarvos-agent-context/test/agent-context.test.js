@@ -642,13 +642,47 @@ test('MCP internal session thread preserves an ambiguous append identity without
   });
 });
 
-test('session thread rejects unknown journal policy before mutation', () => {
-  withTempVault(({ notes, journal, mutationService }) => {
-    mutationService.createWriteContext = () => { throw new Error('must not create mutation intent'); };
-    assert.throws(() => writeSessionThread({ threadId: 'invalid-policy', summary: 'reject this checkpoint', journalPolicy: 'typo', mutationService }), /journalPolicy/);
-    assert.deepEqual(fs.readdirSync(notes), []);
-    assert.deepEqual(fs.readdirSync(journal), []);
-  });
+test('direct and MCP session threads reject null and malformed journal policies before mutation', async () => {
+  for (const journalPolicy of [null, 'typo', '', false, 0, [], {}, ['link']]) {
+    for (const invoke of [writeSessionThread, (input) => callTool('jarvos_session_thread_write', input)]) {
+      await withTempVault(async ({ vault, notes, journal, mutationService }) => {
+        let intents = 0;
+        let submissions = 0;
+        mutationService.createWriteContext = () => { intents += 1; throw new Error('must not create mutation intent'); };
+        mutationService.execute = () => { submissions += 1; throw new Error('must not dispatch mutation'); };
+        await assert.rejects(async () => invoke({
+          threadId: 'invalid-policy', summary: 'reject this checkpoint', journalPolicy, mutationService,
+        }), /journalPolicy must be link or none/);
+        assert.equal(intents, 0);
+        assert.equal(submissions, 0);
+        assert.deepEqual(fs.readdirSync(notes), []);
+        assert.deepEqual(fs.readdirSync(journal), []);
+        assert.equal(fs.existsSync(path.join(vault, '.jarvos/journal-maintenance/deferred-backlinks.json')), false);
+      });
+    }
+  }
+});
+
+test('direct and MCP session threads preserve omitted and valid journal policies', async () => {
+  for (const policy of [{}, { journalPolicy: undefined }, { journalPolicy: 'link' }, { journalPolicy: 'none' }]) {
+    for (const viaMcp of [false, true]) {
+      await withTempVault(async ({ notes, journal, mutationService }) => {
+        const input = { threadId: 'valid-policy', summary: 'one valid checkpoint', mutationService, ...policy };
+        const result = viaMcp ? await callTool('jarvos_session_thread_write', input) : writeSessionThread(input);
+        const unlinked = policy.journalPolicy === 'none';
+        if (viaMcp) {
+          assert.equal(result.isError, false);
+          assert.match(result.content[0].text, unlinked ? /Journal backlink: not_requested/ : /Journal backlink: linked/);
+        } else {
+          assert.equal(result.ok, true);
+          assert.equal(result.journal.linked, !unlinked);
+        }
+        const note = fs.readFileSync(path.join(notes, 'JarvOS Session Thread - valid-policy.md'), 'utf8');
+        assert.equal((note.match(/one valid checkpoint/g) || []).length, 1);
+        assert.equal(fs.readdirSync(journal).length, unlinked ? 0 : 1);
+      });
+    }
+  }
 });
 
 test('MCP session thread preserves ambiguous operation identity and an unattempted backlink', async () => {
