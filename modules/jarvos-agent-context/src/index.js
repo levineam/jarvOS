@@ -1530,7 +1530,7 @@ function readSessionThread(input = {}) {
 }
 
 function writeSessionThread(input = {}) {
-  const journalPolicy = input.journalPolicy ?? 'link';
+  const { journalPolicy = 'link' } = input;
   if (!['link', 'none'].includes(journalPolicy)) throw new Error('journalPolicy must be link or none');
   const thread = resolveSessionThread(input);
   const noteWriter = loadNoteWriter();
