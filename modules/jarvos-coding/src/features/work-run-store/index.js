@@ -15,9 +15,19 @@ const WORK_RUN_STORE_SCHEMA_VERSION_V2 = 'jarvos-coding-work-run/v2';
 const WORKSPACE_BINDING_VERSION = 'jarvos-coding-workspace-binding/v1';
 const WORKSPACE_BINDING_PUBLIC_VERSION = 'jarvos-coding-workspace-binding-public/v1';
 const WORKSPACE_ID = /^ws_[0-9a-f]{24}$/;
-// Strict allowlists: this slice must not consume future (handoff/revision) binding state.
-const WORKSPACE_BINDING_KEYS = new Set(['version', 'workspaceId', 'identity', 'workRunId', 'subjectKey', 'ownerId', 'runFence', 'bindingFence', 'state', 'boundAt', 'updatedAt']);
+// Strict allowlists: this slice must not consume future (handoff) binding state.
+const WORKSPACE_BINDING_KEYS = new Set(['version', 'workspaceId', 'identity', 'workRunId', 'subjectKey', 'ownerId', 'runFence', 'bindingFence', 'state', 'boundAt', 'updatedAt', 'revision', 'revisionHistory']);
 const WORKSPACE_IDENTITY_KEYS = new Set(['canonicalPath', 'dev', 'ino']);
+// Workspace revisions are caller assertions (factsSource 'caller'): nothing here runs or verifies Git,
+// and a recorded revision carries no effect or security authority.
+const WORKSPACE_REVISION_INTENT_SET = new Set(['initial', 'commit', 'rebase', 'base_update', 'branch_change', 'reset']);
+const WORKSPACE_REVISION_FACT_KEYS = ['branch', 'baseOid', 'headOid'];
+const WORKSPACE_REVISION_RECORD_KEYS = ['seq', 'branch', 'baseOid', 'headOid', 'intent', 'reasonCode', 'operationNonce', 'factsSource', 'at'];
+const WORKSPACE_REVISION_HISTORY_LIMIT = 32;
+const GIT_OID = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
+// Conservative ref-name grammar: controls/space, ~^:?*[\, "..", "@{", "//", leading -/. or trailing /. are refused.
+const GIT_BRANCH_FORBIDDEN = /[\x00-\x20\x7f~^:?*[\\]|\.\.|@\{|\/\/|^[-/.]|[/.]$/;
+const REASON_CODE = /^[a-z][a-z0-9_-]{1,63}$/;
 const WORK_RUN_EVENT_VERSION = 'jarvos-coding-work-run-event/v1';
 const WORK_RUN_PUBLIC_VERSION = 'jarvos-coding-work-run-public/v1';
 const FOLLOW_THROUGH_BINDING_VERSION = 'jarvos-coding-follow-through-binding/v1';
@@ -89,6 +99,72 @@ function sameWorkspaceIdentity(a, b) {
 // Path-segment aware: "/ws/a" overlaps "/ws" and "/ws/a/child" but not "/ws/a-b".
 function workspacePathsOverlap(a, b) {
   return a === b || a.startsWith(`${b}${path.sep}`) || b.startsWith(`${a}${path.sep}`);
+}
+
+function isGitOid(value) {
+  return typeof value === 'string' && GIT_OID.test(value);
+}
+
+function isGitBranch(value) {
+  return typeof value === 'string' && value.length > 0 && value !== '@' && !GIT_BRANCH_FORBIDDEN.test(value)
+    && value.split('/').every((part) => !part.startsWith('.') && !part.endsWith('.lock'))
+    && !SECRET_VALUE.test(value);
+}
+
+function isReasonCode(value) {
+  return typeof value === 'string' && REASON_CODE.test(value);
+}
+
+// Copies { branch, baseOid, headOid } from a plain object with exactly those keys, or returns null.
+function revisionFacts(next) {
+  if (!isObject(next)) return null;
+  const proto = Object.getPrototypeOf(next);
+  if (proto !== Object.prototype && proto !== null) return null;
+  const keys = Object.keys(next);
+  if (keys.length !== WORKSPACE_REVISION_FACT_KEYS.length || !WORKSPACE_REVISION_FACT_KEYS.every((key) => Object.hasOwn(next, key))) return null;
+  const facts = { branch: next.branch, baseOid: next.baseOid, headOid: next.headOid };
+  return isGitBranch(facts.branch) && isGitOid(facts.baseOid) && isGitOid(facts.headOid) ? facts : null;
+}
+
+function isRevisionRecord(record) {
+  return isObject(record)
+    && Object.keys(record).length === WORKSPACE_REVISION_RECORD_KEYS.length
+    && WORKSPACE_REVISION_RECORD_KEYS.every((key) => Object.hasOwn(record, key))
+    && Number.isSafeInteger(record.seq) && record.seq >= 1
+    && isGitBranch(record.branch) && isGitOid(record.baseOid) && isGitOid(record.headOid)
+    && WORKSPACE_REVISION_INTENT_SET.has(record.intent)
+    && (record.reasonCode === null ? record.intent !== 'reset' : isReasonCode(record.reasonCode))
+    && typeof record.operationNonce === 'string' && OPAQUE_ID.test(record.operationNonce)
+    && record.factsSource === 'caller'
+    && isTimestamp(record.at);
+}
+
+function sameRevisionRecord(a, b) {
+  return WORKSPACE_REVISION_RECORD_KEYS.every((key) => a[key] === b[key]);
+}
+
+function isLegalRevisionTransition(intent, current, next) {
+  const sameBranch = next.branch === current.branch;
+  const sameBase = next.baseOid === current.baseOid;
+  const sameHead = next.headOid === current.headOid;
+  if (sameBranch && sameBase && sameHead) return false;
+  switch (intent) {
+    case 'commit':
+    case 'reset':
+      return sameBranch && sameBase && !sameHead;
+    case 'rebase':
+      return sameBranch && !sameBase;
+    case 'base_update':
+      return sameBranch && sameHead && !sameBase;
+    case 'branch_change':
+      return !sameBranch;
+    default:
+      return false;
+  }
+}
+
+function publicRevision(record) {
+  return { seq: record.seq, branch: record.branch, baseOid: record.baseOid, headOid: record.headOid, intent: record.intent, at: record.at };
 }
 
 function assertSafeValue(value, label, options = {}) {
@@ -196,6 +272,7 @@ function validateWorkspaceState(state, workRuns, errors) {
     }
     if (binding.state !== 'bound') errors.push(`${label}.state is invalid`);
     if (!isTimestamp(binding.boundAt) || !isTimestamp(binding.updatedAt)) errors.push(`${label} timestamps are invalid`);
+    validateWorkspaceRevision(binding, label, errors);
   }
   for (let i = 0; i < identities.length; i += 1) {
     for (let j = i + 1; j < identities.length; j += 1) {
@@ -211,8 +288,25 @@ function validateWorkspaceState(state, workRuns, errors) {
   }
 }
 
+// Revision and history are present together or not at all; history is a contiguous, nonce-unique
+// suffix (at most 32 entries, so it need not start at seq 1) whose last entry equals the revision.
+function validateWorkspaceRevision(binding, label, errors) {
+  const { revision, revisionHistory: history } = binding;
+  if (revision === undefined && history === undefined) return;
+  if (!Array.isArray(history) || history.length < 1 || history.length > WORKSPACE_REVISION_HISTORY_LIMIT) {
+    errors.push(`${label}.revisionHistory must hold 1-${WORKSPACE_REVISION_HISTORY_LIMIT} entries`);
+    return;
+  }
+  if (!history.every(isRevisionRecord)) { errors.push(`${label}.revisionHistory contains an invalid entry`); return; }
+  for (let i = 1; i < history.length; i += 1) {
+    if (history[i].seq !== history[i - 1].seq + 1) { errors.push(`${label}.revisionHistory seqs must be contiguous`); break; }
+  }
+  if (new Set(history.map((entry) => entry.operationNonce)).size !== history.length) errors.push(`${label}.revisionHistory nonces must be unique`);
+  if (!isRevisionRecord(revision) || !sameRevisionRecord(revision, history[history.length - 1])) errors.push(`${label}.revision must equal the last revisionHistory entry`);
+}
+
 function publicWorkspaceBinding(binding) {
-  return {
+  const projection = {
     version: WORKSPACE_BINDING_PUBLIC_VERSION,
     workspaceId: binding.workspaceId,
     workRunId: binding.workRunId,
@@ -222,6 +316,8 @@ function publicWorkspaceBinding(binding) {
     boundAt: binding.boundAt,
     updatedAt: binding.updatedAt,
   };
+  if (binding.revision) projection.revision = publicRevision(binding.revision);
+  return projection;
 }
 
 // Default file-store resolver: an existing directory's realpath plus its (dev, ino) identity.
@@ -646,9 +742,7 @@ function createWorkRunStore(options = {}) {
 
   // Pure read (no lock, no write). A positive answer is a point-in-time check, not effect authority.
   function verifyWorkspaceFence(input = {}) {
-    if (input.expectedRevisionSeq !== undefined || input.expectedHeadOid !== undefined || input.revision !== undefined) {
-      return { ok: false, reason: 'workspace_revision_unavailable' };
-    }
+    if (input.revision !== undefined) return { ok: false, reason: 'workspace_revision_unavailable' };
     const state = loadState();
     const run = own(state.workRuns, input.workRunId);
     if (!run) return { ok: false, reason: 'not_found' };
@@ -656,7 +750,64 @@ function createWorkRunStore(options = {}) {
     if (!owner.ok) return owner;
     const binding = currentWorkspaceBinding(state, run, input);
     if (!binding) return { ok: false, reason: 'stale_binding_fence' };
+    const expectsSeq = input.expectedRevisionSeq !== undefined;
+    const expectsHead = input.expectedHeadOid !== undefined;
+    if (expectsSeq || expectsHead) {
+      const current = binding.revision;
+      if (!current) return { ok: false, reason: 'workspace_revision_unavailable' };
+      if ((expectsSeq && input.expectedRevisionSeq !== current.seq) || (expectsHead && input.expectedHeadOid !== current.headOid)) {
+        return { ok: false, reason: 'revision_compare_and_set_conflict', authoritative: publicRevision(current) };
+      }
+    }
     return { ok: true, binding: clone(binding) };
+  }
+
+  // One locked compare-and-set step over the bound workspace's caller-asserted revision facts.
+  // Revision facts are caller assertions (factsSource 'caller'): no Git verification, no effect authority.
+  function transitionWorkspaceRevision(input = {}) {
+    const refuse = (reason, extra = {}) => noCommit({ ok: false, reason, ...extra });
+    return mutate((state) => {
+      const run = own(state.workRuns, input.workRunId);
+      if (!run) return refuse('not_found');
+      const owner = assertRunOwner(run, input.ownerId, input.fence);
+      if (!owner.ok) return noCommit(owner);
+      const binding = currentWorkspaceBinding(state, run, input);
+      if (!binding) return refuse('stale_binding_fence');
+      const { operationNonce, intent, expectedRevisionSeq } = input;
+      if (typeof operationNonce !== 'string' || !OPAQUE_ID.test(operationNonce)) return refuse('operation_nonce_required');
+      const history = Array.isArray(binding.revisionHistory) ? binding.revisionHistory : [];
+      const prior = history.find((entry) => entry.operationNonce === operationNonce);
+      if (prior) {
+        // Only the retained history dedupes; an exact replay answers even after newer transitions.
+        const facts = revisionFacts(input.next);
+        const exact = expectedRevisionSeq === prior.seq - 1
+          && intent === prior.intent
+          && (input.reasonCode == null ? null : input.reasonCode) === prior.reasonCode
+          && facts !== null && WORKSPACE_REVISION_FACT_KEYS.every((key) => facts[key] === prior[key]);
+        return exact ? noCommit({ ok: true, deduped: true, revision: publicRevision(prior) }) : refuse('invalid_revision_transition');
+      }
+      const current = isObject(binding.revision) ? binding.revision : null;
+      if (!WORKSPACE_REVISION_INTENT_SET.has(intent)) return refuse('invalid_revision_transition');
+      if (current ? intent === 'initial' : intent !== 'initial') return refuse('invalid_revision_transition');
+      if (expectedRevisionSeq !== (current ? current.seq : 0)) {
+        return refuse('revision_compare_and_set_conflict', { authoritative: current ? publicRevision(current) : null });
+      }
+      const next = revisionFacts(input.next);
+      if (!next) return refuse('invalid_git_revision');
+      const reasonCode = input.reasonCode == null ? null : input.reasonCode;
+      if (reasonCode !== null && !isReasonCode(reasonCode)) return refuse('invalid_reason_code');
+      if (intent === 'reset' && reasonCode === null) return refuse('invalid_reason_code');
+      if (current && !isLegalRevisionTransition(intent, current, next)) return refuse('invalid_revision_transition');
+      const seq = current ? current.seq + 1 : 1;
+      // Fail closed without writing once the sequence would leave the safe-integer range.
+      if (!Number.isSafeInteger(seq)) return refuse('revision_seq_exhausted', { authoritative: publicRevision(current) });
+      const at = nowIso(clock);
+      const record = { ...next, seq, intent, reasonCode, operationNonce, factsSource: 'caller', at };
+      binding.revision = record;
+      binding.revisionHistory = [...history, { ...record }].slice(-WORKSPACE_REVISION_HISTORY_LIMIT);
+      binding.updatedAt = at;
+      return { ok: true, revision: publicRevision(record) };
+    });
   }
 
   function releaseWorkspace(input = {}) {
@@ -822,6 +973,7 @@ function createWorkRunStore(options = {}) {
     bindWorkspace,
     getWorkspaceBinding,
     verifyWorkspaceFence,
+    transitionWorkspaceRevision,
     releaseWorkspace,
     appendEvent,
     recordProviderSnapshot,
@@ -946,6 +1098,7 @@ module.exports = {
   WORKSPACE_BINDING_PUBLIC_VERSION,
   WORKSPACE_BINDING_VERSION,
   WORK_RUN_STATES: [...WORK_RUN_STATES],
+  WORKSPACE_REVISION_INTENTS: [...WORKSPACE_REVISION_INTENT_SET],
   createControlPlaneWorkRunEvidencePort,
   createFileWorkRunStatusReader,
   createFileWorkRunStore,
