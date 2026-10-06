@@ -76,6 +76,59 @@ function workspaceDirs(root) {
   return { ws, alias, child: path.join(ws, 'child'), file };
 }
 
+const oid = (n) => `c0ffee${n.toString(16).padStart(34, '0')}`;
+const REV_START = { branch: 'codex/SUP-3816-handoff', baseOid: oid(1), headOid: oid(2) };
+const HANDOFF_FIELDS = ['handoffFrom', 'handoffTo'];
+const HANDOFF_HELD = { ok: false, reason: 'handoff_reserved' };
+
+function snapshot(dir) {
+  const files = {};
+  for (const name of fs.readdirSync(dir).sort()) {
+    const stat = fs.statSync(path.join(dir, name));
+    files[name] = { bytes: stat.isFile() ? fs.readFileSync(path.join(dir, name)) : null, mtimeMs: stat.mtimeMs, size: stat.size, ino: stat.ino };
+  }
+  return { entries: Object.keys(files), mtimeMs: fs.statSync(dir).mtimeMs, files };
+}
+
+function assertBytes(store, before, label) {
+  assert.deepEqual(persisted(store).bytes, before.bytes, label);
+}
+
+// Run A binds root/ws and records one revision; target T, third party B and spare C are claimed and unbound;
+// run O holds root/other (so workspaceFenceSeq is 2). Returns A's full current binding token as `source`.
+function handoffFixture(root) {
+  const dirs = workspaceDirs(root);
+  const other = path.join(root, 'other');
+  fs.mkdirSync(other);
+  const storeRoot = path.join(root, 'store');
+  const store = createFileWorkRunStore(storeRoot);
+  const [a, t, b, c, o] = ['a', 't', 'b', 'c', 'o'].map((name) => claimRun(store, `run_ws_${name}`, `agent:${name}`));
+  const bound = store.bindWorkspace({ ...a, worktreePath: dirs.ws });
+  assert.equal(bound.bound, true, JSON.stringify(bound));
+  assert.equal(store.bindWorkspace({ ...o, worktreePath: other }).bound, true);
+  const source = { ...a, workspaceId: bound.binding.workspaceId, bindingFence: bound.binding.bindingFence };
+  const initial = store.transitionWorkspaceRevision({ ...source, expectedRevisionSeq: 0, intent: 'initial', operationNonce: 'nonce-handoff-initial', next: REV_START });
+  assert.equal(initial.ok, true, JSON.stringify(initial));
+  return { store, storeRoot, ...dirs, other, a, t, b, c, o, source, workspaceId: source.workspaceId };
+}
+
+function reserve(store, source, target) {
+  const result = store.releaseWorkspace({ ...source, handoffTo: target.workRunId });
+  assert.equal(result.ok, true, JSON.stringify(result));
+  return result;
+}
+
+// The target presents the source's exact binding token with its own run owner and fence.
+const consumeToken = (claim, source) => ({ ...claim, workspaceId: source.workspaceId, bindingFence: source.bindingFence });
+
+function staleTokens(token) {
+  return [
+    [{ ...token, workRunId: 'run_missing' }, 'not_found'], [{ ...token, ownerId: undefined }, 'owner_required'],
+    [{ ...token, fence: token.fence + 1 }, 'stale_fence'], [{ ...token, ownerId: 'agent:intruder' }, 'stale_fence'],
+    [{ ...token, bindingFence: token.bindingFence + 1 }, 'stale_binding_fence'], [{ ...token, workspaceId: UNKNOWN_WS }, 'stale_binding_fence'],
+  ];
+}
+
 test('legacy literal v1 state loads, refused binds leave its bytes untouched, and the first bind lazily upgrades to v2', () => {
   assert.equal(WORK_RUN_STORE_SCHEMA_VERSION, V1);
   assert.equal(WORK_RUN_STORE_SCHEMA_VERSION_V2, V2);
@@ -307,7 +360,7 @@ test('releaseWorkRun refuses while bound, releases run and workspace atomically,
       [store.releaseWorkRun({ ...a }), 'workspace_binding_held'],
       [store.releaseWorkRun({ ...a, handoffTo: 'agent:b' }), 'workspace_handoff_unavailable'],
       [store.releaseWorkRun({ ...a, releaseWorkspace: true, workspaceId, bindingFence, handoffTo: 'agent:b' }), 'workspace_handoff_unavailable'],
-      [store.releaseWorkspace({ ...a, workspaceId, bindingFence, handoffTo: 'agent:b' }), 'workspace_handoff_unavailable'],
+      [store.releaseWorkspace({ ...a, workspaceId, bindingFence, handoffTo: 'agent:b' }), 'invalid_handoff_target'],
       [store.releaseWorkRun({ ...b, handoffTo: 'agent:a' }), 'workspace_handoff_unavailable'],
     ]) assert.equal(result.reason, reason, JSON.stringify(result));
     assert.equal(store.releaseWorkRun({ ...a, releaseWorkspace: true, workspaceId, bindingFence: bindingFence + 1 }).ok, false);
@@ -429,7 +482,7 @@ test('status reader adds only workspace getters, stays pure on a missing root, a
 const CHILD_SCRIPT = `
 const fs = require('node:fs');
 const path = require('node:path');
-const [entry, root, barrier, index, workRunId, ownerId, fence, worktreePath] = process.argv.slice(1);
+const [entry, root, barrier, index, workRunId, ownerId, fence, worktreePath, tokenJson] = process.argv.slice(1);
 let report;
 try {
   const store = require(entry).createFileWorkRunStore(root);
@@ -440,8 +493,9 @@ try {
     if (Date.now() > deadline) throw new Error('barrier timeout');
     Atomics.wait(sleeper, 0, 0, 5);
   }
-  const result = store.bindWorkspace({ workRunId, ownerId, fence: Number(fence), worktreePath });
-  report = { index: Number(index), ok: result.ok === true, bound: result.bound === true, reason: result.reason || null };
+  const token = tokenJson ? JSON.parse(tokenJson) : {};
+  const result = store.bindWorkspace({ workRunId, ownerId, fence: Number(fence), worktreePath, ...token });
+  report = { index: Number(index), ok: result.ok === true, bound: result.bound === true, deduped: result.deduped === true, reason: result.reason || null };
 } catch (error) {
   report = { index: Number(index), ok: false, error: error.message };
 }
@@ -544,5 +598,407 @@ test('bindWorkspace against an incumbent lock is refused and leaves the lock and
     } finally {
       if (fd !== undefined) fs.closeSync(fd);
     }
+  });
+});
+
+test('releaseWorkspace handoffTo reserves the binding for an existing unbound target run without advancing the fence', () => {
+  withTempRoot('jarvos-ws-handoff-reserve-', (root) => {
+    const { store, ws, a, t, c, o, source, workspaceId } = handoffFixture(root);
+    const publicBefore = store.getWorkspaceBinding(workspaceId);
+    const before = persisted(store);
+    const privateBefore = before.state.workspaceBindings[workspaceId];
+    for (const [handoffTo, label] of [
+      [null, 'null'], ['', 'empty'], [a.workRunId, 'self'], ['bad target!', 'non-opaque'], [42, 'number'], [{ workRunId: t.workRunId }, 'object'],
+      ['run_missing', 'nonexistent'], ['agent:b', 'owner string'], [t.ownerId, 'target owner string'], [o.workRunId, 'target bound elsewhere'],
+    ]) {
+      const refused = store.releaseWorkspace({ ...source, handoffTo });
+      assert.equal(refused.reason, 'invalid_handoff_target', `${label}: ${JSON.stringify(refused)}`);
+    }
+    for (const [token, reason] of [...staleTokens(source), [{ ...source, workspaceId: undefined, bindingFence: undefined }, 'stale_binding_fence']]) {
+      const refused = store.releaseWorkspace({ ...token, handoffTo: t.workRunId });
+      assert.equal(refused.reason, reason, JSON.stringify(refused));
+    }
+    const runRelease = { ...a, releaseWorkspace: true, workspaceId, bindingFence: source.bindingFence };
+    assert.equal(store.releaseWorkRun({ ...runRelease, handoffTo: t.workRunId }).reason, 'workspace_handoff_unavailable');
+    assertBytes(store, before, 'refused reserves must not write');
+
+    const reserved = reserve(store, source, t);
+    if (reserved.public !== undefined) {
+      assert.deepEqual(Object.keys(reserved.public).sort(), Object.keys(publicBefore).sort());
+      assert.equal(reserved.public.state, 'handoff_pending');
+      for (const field of HANDOFF_FIELDS) assert.equal(Object.hasOwn(reserved.public, field), false, field);
+    }
+    const pending = persisted(store);
+    const binding = pending.state.workspaceBindings[workspaceId];
+    assert.equal(pending.state.revision, before.state.revision + 1);
+    assert.equal(pending.state.workspaceFenceSeq, before.state.workspaceFenceSeq, 'reserve must not advance the fence sequence');
+    assert.deepEqual(
+      [binding.state, binding.handoffFrom, binding.handoffTo, binding.workRunId, binding.ownerId, binding.runFence, binding.bindingFence],
+      ['handoff_pending', a.workRunId, t.workRunId, a.workRunId, a.ownerId, a.fence, source.bindingFence],
+    );
+    for (const field of ['identity', 'subjectKey', 'boundAt', 'revision', 'revisionHistory']) assert.deepEqual(binding[field], privateBefore[field], field);
+    assert.equal(pending.state.workRuns[a.workRunId].workspaceId, workspaceId);
+    assert.equal(pending.state.workRuns[t.workRunId].workspaceId ?? null, null);
+
+    const publicPending = store.getWorkspaceBinding(workspaceId);
+    assert.deepEqual(Object.keys(publicPending).sort(), Object.keys(publicBefore).sort());
+    const { updatedAt: _beforeAt, ...stableBefore } = publicBefore;
+    const { updatedAt: _pendingAt, ...stablePending } = publicPending;
+    assert.deepEqual(stablePending, { ...stableBefore, state: 'handoff_pending' });
+    const publicJson = JSON.stringify(publicPending);
+    assert.doesNotMatch(publicJson, /handoffFrom|handoffTo|run_ws_t|agent:|ownerId|runFence|identity|canonicalPath|"dev"|"ino"|operationNonce|nonce-/);
+    assert.equal(publicJson.includes(fs.realpathSync.native(ws)), false);
+
+    const dedupe = store.releaseWorkspace({ ...source, handoffTo: t.workRunId });
+    assert.equal(dedupe.ok, true, JSON.stringify(dedupe));
+    assert.equal(dedupe.deduped, true, JSON.stringify(dedupe));
+    assert.equal(store.releaseWorkspace({ ...source, handoffTo: c.workRunId }).reason, 'handoff_reserved');
+    assert.equal(store.releaseWorkRun({ ...a, handoffTo: t.workRunId }).reason, 'workspace_handoff_unavailable');
+    assert.equal(store.releaseWorkRun({ ...runRelease, handoffTo: c.workRunId }).reason, 'workspace_handoff_unavailable');
+    assertBytes(store, pending, 'pending dedupes and refusals must not write');
+  });
+});
+
+test('a pending handoff refuses verify, revision transitions, replays and third-party binds after full stale-token checks', () => {
+  withTempRoot('jarvos-ws-handoff-pending-', (root) => {
+    const { store, ws, alias, child, a, t, b, source, workspaceId } = handoffFixture(root);
+    reserve(store, source, t);
+    const pending = persisted(store);
+    const commit = { expectedRevisionSeq: 1, intent: 'commit', operationNonce: 'nonce-handoff-commit', next: { ...REV_START, headOid: oid(3) } };
+    for (const [token, reason] of staleTokens(source)) {
+      assert.equal(store.verifyWorkspaceFence(token).reason, reason, JSON.stringify(token));
+      assert.equal(store.transitionWorkspaceRevision({ ...token, ...commit }).reason, reason, JSON.stringify(token));
+    }
+    assert.deepEqual(store.verifyWorkspaceFence(source), HANDOFF_HELD);
+    assert.equal(store.verifyWorkspaceFence({ ...source, expectedRevisionSeq: 1 }).reason, 'handoff_reserved');
+    assert.equal(store.transitionWorkspaceRevision({ ...source, ...commit }).reason, 'handoff_reserved');
+    const replay = { ...source, expectedRevisionSeq: 0, intent: 'initial', operationNonce: 'nonce-handoff-initial', next: REV_START };
+    assert.equal(store.transitionWorkspaceRevision(replay).reason, 'handoff_reserved', 'pending outranks exact nonce replay');
+    for (const worktreePath of [ws, alias, child]) {
+      assert.equal(store.bindWorkspace({ ...b, worktreePath }).reason, 'handoff_reserved', worktreePath);
+    }
+    assertBytes(store, pending, 'pending refusals must not write');
+
+    // The current holder's ordinary release still deletes a pending binding.
+    const released = store.releaseWorkspace(source);
+    assert.equal(released.ok, true, JSON.stringify(released));
+    let state = persisted(store).state;
+    assert.equal(Object.hasOwn(state.workspaceBindings, workspaceId), false);
+    assert.equal(state.workspaceFenceSeq, pending.state.workspaceFenceSeq);
+    for (const run of [a, t]) assert.equal(state.workRuns[run.workRunId].workspaceId ?? null, null, run.workRunId);
+
+    // ...and so does releaseWorkRun with the full binding token.
+    const rebound = store.bindWorkspace({ ...a, worktreePath: ws });
+    assert.equal(rebound.bound, true, JSON.stringify(rebound));
+    const second = { ...a, workspaceId: rebound.binding.workspaceId, bindingFence: rebound.binding.bindingFence };
+    reserve(store, second, t);
+    const runReleased = store.releaseWorkRun({ ...a, releaseWorkspace: true, workspaceId: second.workspaceId, bindingFence: second.bindingFence });
+    assert.equal(runReleased.ok, true, JSON.stringify(runReleased));
+    state = persisted(store).state;
+    assert.equal(Object.hasOwn(state.workspaceBindings, second.workspaceId), false);
+    assert.equal(state.workRuns[a.workRunId].ownerId, null);
+    for (const run of [a, t]) assert.equal(state.workRuns[run.workRunId].workspaceId ?? null, null, run.workRunId);
+
+    // Identity replacement keeps its own reason while pending (memory store with a resolver map).
+    const id = (canonicalPath, ino) => ({ canonicalPath, dev: 7, ino });
+    const identities = { '/ws/a': id('/ws/a', 10), '/alias/a': id('/ws/a', 10), '/ws/a-replaced': id('/ws/a', 11), '/ws/a/child': id('/ws/a/child', 12) };
+    const memory = createMemoryWorkRunStore({ workspaceResolver: (p) => identities[p] });
+    const [ma, mt, mb] = ['a', 't', 'b'].map((name) => claimRun(memory, `run_ws_${name}`, `agent:${name}`));
+    const mBound = memory.bindWorkspace({ ...ma, worktreePath: '/ws/a' }).binding;
+    reserve(memory, { ...ma, workspaceId: mBound.workspaceId, bindingFence: mBound.bindingFence }, mt);
+    const mPending = memory.getWorkspaceBinding(mBound.workspaceId, { public: false });
+    assert.equal(memory.bindWorkspace({ ...mb, worktreePath: '/ws/a-replaced' }).reason, 'workspace_identity_changed');
+    for (const worktreePath of ['/ws/a', '/alias/a', '/ws/a/child']) {
+      assert.equal(memory.bindWorkspace({ ...mb, worktreePath }).reason, 'handoff_reserved', worktreePath);
+    }
+    assert.deepEqual(memory.getWorkspaceBinding(mBound.workspaceId, { public: false }), mPending);
+  });
+});
+
+test('the target consumes a reserved handoff via bindWorkspace with the exact token, advancing the fence once and moving the run pointer', () => {
+  withTempRoot('jarvos-ws-handoff-consume-', (root) => {
+    const { store, alias, other, a, t, b, source, workspaceId } = handoffFixture(root);
+    reserve(store, source, t);
+    const pending = persisted(store);
+    const prior = pending.state.workspaceBindings[workspaceId];
+    const priorSeq = pending.state.workspaceFenceSeq;
+    const exact = consumeToken(t, source);
+    for (const [input, reason] of [
+      [{ ...t, worktreePath: alias }, 'stale_binding_fence'],
+      [{ ...exact, bindingFence: undefined, worktreePath: alias }, 'stale_binding_fence'],
+      [{ ...exact, workspaceId: UNKNOWN_WS, worktreePath: alias }, 'stale_binding_fence'],
+      [{ ...exact, bindingFence: source.bindingFence + 1, worktreePath: alias }, 'stale_binding_fence'],
+      [{ ...exact, fence: t.fence + 1, worktreePath: alias }, 'stale_fence'],
+      [{ ...exact, ownerId: 'agent:intruder', worktreePath: alias }, 'stale_fence'],
+      [{ ...exact, ownerId: undefined, worktreePath: alias }, 'owner_required'],
+    ]) assert.equal(store.bindWorkspace(input).reason, reason, JSON.stringify(input));
+    assert.equal(store.bindWorkspace({ ...exact, worktreePath: other }).ok, false, 'a different identity cannot consume');
+    assert.equal(store.bindWorkspace({ ...consumeToken(b, source), worktreePath: alias }).ok, false, 'a third party cannot consume');
+    assertBytes(store, pending, 'refused consumes must not write');
+
+    const consumed = store.bindWorkspace({ ...exact, worktreePath: alias });
+    assert.equal(consumed.ok, true, JSON.stringify(consumed));
+    if (consumed.binding) assert.equal(consumed.binding.bindingFence, priorSeq + 1);
+    if (consumed.public) assert.deepEqual([consumed.public.state, consumed.public.workRunId], ['bound', t.workRunId]);
+    const after = persisted(store).state;
+    const binding = after.workspaceBindings[workspaceId];
+    assert.equal(after.revision, pending.state.revision + 1);
+    assert.equal(after.workspaceFenceSeq, priorSeq + 1);
+    assert.deepEqual(
+      [binding.state, binding.workRunId, binding.subjectKey, binding.ownerId, binding.runFence, binding.bindingFence],
+      ['bound', t.workRunId, `levineam/jarvOS:${t.workRunId}`, t.ownerId, t.fence, priorSeq + 1],
+    );
+    for (const field of HANDOFF_FIELDS) assert.equal(Object.hasOwn(binding, field), false, field);
+    for (const field of ['workspaceId', 'identity', 'revision', 'revisionHistory']) assert.deepEqual(binding[field], prior[field], field);
+    assert.equal(after.workRuns[t.workRunId].workspaceId, workspaceId);
+    assert.equal(after.workRuns[a.workRunId].workspaceId ?? null, null);
+
+    const consumedBytes = persisted(store);
+    const oldCommit = { expectedRevisionSeq: prior.revision.seq, intent: 'commit', operationNonce: 'nonce-handoff-old', next: { ...REV_START, headOid: oid(3) } };
+    const sourceStale = ['stale_binding_fence', 'stale_fence', 'not_found'];
+    assert.ok(sourceStale.includes(store.verifyWorkspaceFence(source).reason), 'old source token must be stale');
+    assert.equal(store.verifyWorkspaceFence(exact).reason, 'stale_binding_fence');
+    assert.ok(sourceStale.includes(store.transitionWorkspaceRevision({ ...source, ...oldCommit }).reason), 'old source token cannot transition');
+    assert.equal(store.bindWorkspace({ ...exact, worktreePath: alias }).reason, 'stale_binding_fence', 'a replayed consume is not a dedupe');
+    assert.equal(store.releaseWorkspace(source).ok, false);
+    assertBytes(store, consumedBytes, 'old tokens must not write after consume');
+
+    const current = { ...exact, bindingFence: priorSeq + 1 };
+    const verified = store.verifyWorkspaceFence({ ...current, expectedRevisionSeq: prior.revision.seq });
+    assert.equal(verified.ok, true, JSON.stringify(verified));
+    const moved = store.transitionWorkspaceRevision({ ...current, ...oldCommit, operationNonce: 'nonce-handoff-after' });
+    assert.equal(moved.ok, true, JSON.stringify(moved));
+    assert.equal(moved.revision.seq, prior.revision.seq + 1);
+    const history = persisted(store).state.workspaceBindings[workspaceId].revisionHistory;
+    assert.deepEqual(history.map((entry) => entry.operationNonce), ['nonce-handoff-initial', 'nonce-handoff-after']);
+  });
+});
+
+test('the source cancels a reserved handoff via bindWorkspace with its exact token, and explicit tokens on a bound-run dedupe are checked', () => {
+  withTempRoot('jarvos-ws-handoff-cancel-', (root) => {
+    const { store, ws, a, t, source, workspaceId } = handoffFixture(root);
+    reserve(store, source, t);
+    const pending = persisted(store);
+    const prior = pending.state.workspaceBindings[workspaceId];
+    const priorSeq = pending.state.workspaceFenceSeq;
+    for (const [input, reason] of [
+      [{ ...a, worktreePath: ws }, 'stale_binding_fence'],
+      [{ ...source, bindingFence: source.bindingFence + 1, worktreePath: ws }, 'stale_binding_fence'],
+      [{ ...source, workspaceId: UNKNOWN_WS, worktreePath: ws }, 'stale_binding_fence'],
+      [{ ...source, fence: a.fence + 1, worktreePath: ws }, 'stale_fence'],
+      [{ ...source, ownerId: 'agent:intruder', worktreePath: ws }, 'stale_fence'],
+    ]) assert.equal(store.bindWorkspace(input).reason, reason, JSON.stringify(input));
+    assertBytes(store, pending, 'refused cancels must not write');
+
+    const cancelled = store.bindWorkspace({ ...source, worktreePath: ws });
+    assert.equal(cancelled.ok, true, JSON.stringify(cancelled));
+    const after = persisted(store).state;
+    const binding = after.workspaceBindings[workspaceId];
+    assert.equal(after.revision, pending.state.revision + 1);
+    assert.equal(after.workspaceFenceSeq, priorSeq + 1);
+    assert.deepEqual(
+      [binding.state, binding.workRunId, binding.ownerId, binding.runFence, binding.bindingFence],
+      ['bound', a.workRunId, a.ownerId, a.fence, priorSeq + 1],
+    );
+    for (const field of HANDOFF_FIELDS) assert.equal(Object.hasOwn(binding, field), false, field);
+    for (const field of ['identity', 'revision', 'revisionHistory']) assert.deepEqual(binding[field], prior[field], field);
+    assert.equal(after.workRuns[a.workRunId].workspaceId, workspaceId);
+    assert.equal(after.workRuns[t.workRunId].workspaceId ?? null, null);
+
+    const current = { ...source, bindingFence: priorSeq + 1 };
+    const cancelledBytes = persisted(store);
+    assert.equal(store.verifyWorkspaceFence(source).reason, 'stale_binding_fence');
+    assert.equal(store.verifyWorkspaceFence(current).ok, true);
+    assert.equal(store.bindWorkspace({ ...consumeToken(t, source), worktreePath: ws }).ok, false, 'the target cannot consume a cancelled handoff');
+    assert.equal(store.bindWorkspace({ ...consumeToken(t, current), worktreePath: ws }).ok, false, 'nor with the new token');
+    assert.equal(store.bindWorkspace({ ...source, worktreePath: ws }).reason, 'stale_binding_fence', 'explicit old token on dedupe');
+    assert.equal(store.bindWorkspace({ ...current, workspaceId: UNKNOWN_WS, worktreePath: ws }).reason, 'stale_binding_fence');
+    const exactDedupe = store.bindWorkspace({ ...current, worktreePath: ws });
+    assert.equal(exactDedupe.ok && exactDedupe.deduped, true, JSON.stringify(exactDedupe));
+    const legacyDedupe = store.bindWorkspace({ ...a, worktreePath: ws });
+    assert.equal(legacyDedupe.ok && legacyDedupe.deduped, true, JSON.stringify(legacyDedupe));
+    assertBytes(store, cancelledBytes, 'checked dedupes and refusals must not write');
+  });
+});
+
+test('malformed handoff state fails closed with the invalid-state error and never a TypeError', () => {
+  withTempRoot('jarvos-ws-handoff-malformed-', (root) => {
+    const { store, storeRoot, a, t, c, o, source, workspaceId } = handoffFixture(root);
+    reserve(store, source, t);
+    const baseline = fs.readFileSync(store.paths.statePath, 'utf8');
+    const pendingOf = (s) => s.workspaceBindings[workspaceId];
+    const corruptions = {
+      boundWithBothHandoffFields: (s) => { pendingOf(s).state = 'bound'; },
+      boundWithHandoffFrom: (s) => { pendingOf(s).state = 'bound'; delete pendingOf(s).handoffTo; },
+      boundWithHandoffTo: (s) => { pendingOf(s).state = 'bound'; delete pendingOf(s).handoffFrom; },
+      missingHandoffTo: (s) => { delete pendingOf(s).handoffTo; },
+      nullHandoffTo: (s) => { pendingOf(s).handoffTo = null; },
+      malformedHandoffTo: (s) => { pendingOf(s).handoffTo = 'bad target!'; },
+      numericHandoffTo: (s) => { pendingOf(s).handoffTo = 42; },
+      nonexistentHandoffTo: (s) => { pendingOf(s).handoffTo = 'run_missing'; },
+      selfHandoffTo: (s) => { pendingOf(s).handoffTo = a.workRunId; },
+      missingHandoffFrom: (s) => { delete pendingOf(s).handoffFrom; },
+      handoffFromMismatch: (s) => { pendingOf(s).handoffFrom = c.workRunId; },
+      targetBoundElsewhere: (s) => { pendingOf(s).handoffTo = o.workRunId; },
+    };
+    for (const [name, corrupt] of Object.entries(corruptions)) {
+      const state = JSON.parse(baseline);
+      corrupt(state);
+      fs.writeFileSync(store.paths.statePath, JSON.stringify(state, null, 2));
+      assert.throws(() => createFileWorkRunStore(storeRoot).getWorkRun(a.workRunId), failsClosed, name);
+      assert.throws(() => createFileWorkRunStatusReader(storeRoot).getWorkspaceBinding(workspaceId), failsClosed, name);
+    }
+    fs.writeFileSync(store.paths.statePath, baseline);
+    assert.equal(createFileWorkRunStatusReader(storeRoot).getWorkspaceBinding(workspaceId).state, 'handoff_pending');
+  });
+});
+
+test('status getters and verify project a pending handoff and stay pure reads, even under an incumbent lock', () => {
+  withTempRoot('jarvos-ws-handoff-reads-', (root) => {
+    const { store, storeRoot, ws, t, source, workspaceId } = handoffFixture(root);
+    const publicBefore = store.getWorkspaceBinding(workspaceId);
+    reserve(store, source, t);
+    const priv = store.getWorkspaceBinding(workspaceId, { public: false });
+    const lockToken = `incumbent:${process.pid}`;
+    let fd;
+    try {
+      fd = fs.openSync(store.paths.lockPath, 'wx', 0o600);
+      fs.writeFileSync(fd, lockToken);
+      const lockIno = fs.statSync(store.paths.lockPath).ino;
+      const stateBefore = persisted(store).bytes;
+      const before = snapshot(storeRoot);
+      for (const view of [store, createFileWorkRunStatusReader(storeRoot)]) {
+        const pub = view.getWorkspaceBinding(workspaceId);
+        assert.deepEqual(Object.keys(pub).sort(), Object.keys(publicBefore).sort());
+        assert.equal(pub.state, 'handoff_pending');
+        assert.doesNotMatch(JSON.stringify(pub), /handoffFrom|handoffTo|run_ws_t|agent:|ownerId|canonicalPath|nonce-/);
+        assert.equal(JSON.stringify(pub).includes(fs.realpathSync.native(ws)), false);
+        assert.deepEqual(view.getWorkspaceBinding(workspaceId, { public: false }), priv);
+        assert.deepEqual(view.verifyWorkspaceFence(source), HANDOFF_HELD);
+        assert.equal(view.verifyWorkspaceFence({ ...source, bindingFence: source.bindingFence + 1 }).reason, 'stale_binding_fence');
+        assert.equal(view.verifyWorkspaceFence(consumeToken(t, source)).reason, 'stale_binding_fence');
+        assert.notEqual(view.getWorkRun(t.workRunId), null);
+      }
+      assert.deepEqual(snapshot(storeRoot), before);
+      assert.equal(fs.readFileSync(store.paths.lockPath, 'utf8'), lockToken);
+      assert.equal(fs.statSync(store.paths.lockPath).ino, lockIno);
+      assert.deepEqual(persisted(store).bytes, stateBefore);
+    } finally {
+      if (fd !== undefined) fs.closeSync(fd);
+    }
+  });
+});
+
+// kind 'A': the target T (index 0) consumes while RACERS-1 claimed third parties bind the dir or its alias.
+// kind 'B': RACERS children all consume for T with the same token. No retries: a busy child is a bounded outcome.
+async function handoffRaceRound(kind) {
+  const root = tempRoot(`jarvos-ws-handoff-race-${kind}-`);
+  const children = [];
+  try {
+    const storeRoot = path.join(root, 'store');
+    const barrier = path.join(root, 'barrier');
+    const target = path.join(root, 'target');
+    const alias = path.join(root, 'alias');
+    fs.mkdirSync(barrier);
+    fs.mkdirSync(target);
+    fs.symlinkSync(target, alias, 'dir');
+    const store = createFileWorkRunStore(storeRoot);
+    const a = claimRun(store, 'run_race_source', 'agent:source');
+    const t = claimRun(store, 'run_race_target', 'agent:target');
+    const thirds = kind === 'A' ? Array.from({ length: RACERS - 1 }, (_, i) => claimRun(store, `run_race_third_${i}`, `agent:third${i}`)) : [];
+    const bound = store.bindWorkspace({ ...a, worktreePath: target }).binding;
+    reserve(store, { ...a, workspaceId: bound.workspaceId, bindingFence: bound.bindingFence }, t);
+    const pending = persisted(store);
+    const priorSeq = pending.state.workspaceFenceSeq;
+    const tokenJson = JSON.stringify({ workspaceId: bound.workspaceId, bindingFence: bound.bindingFence });
+    const racers = kind === 'A' ? [t, ...thirds] : Array.from({ length: RACERS }, () => t);
+    const isConsumer = (index) => kind === 'B' || index === 0;
+    for (const [i, claim] of racers.entries()) {
+      const args = [PACKAGE_ENTRY, storeRoot, barrier, String(i), claim.workRunId, claim.ownerId, String(claim.fence), i % 2 ? alias : target];
+      if (isConsumer(i)) args.push(tokenJson);
+      children.push(spawnChild(args));
+    }
+    const allReady = await waitUntil(() => racers.every((_, i) => fs.existsSync(path.join(barrier, `ready-${i}`))), 10000);
+    fs.writeFileSync(path.join(barrier, 'go'), '');
+    const outcomes = await Promise.all(children.map((entry) => entry.done));
+    const diag = `handoff race ${kind}: ${JSON.stringify(outcomes)}`;
+    assert.equal(allReady, true, diag);
+    const reports = outcomes.map((outcome) => { assert.equal(outcome.code, 0, diag); return JSON.parse(outcome.stdout); });
+    const busy = (report) => report.error === 'work-run store is busy';
+    const winners = reports.filter((report) => report.ok === true);
+    for (const report of reports.filter((entry) => entry.ok !== true)) {
+      const allowed = isConsumer(report.index) ? ['stale_binding_fence'] : ['handoff_reserved', 'workspace_conflict'];
+      assert.ok(allowed.includes(report.reason) || busy(report), diag);
+    }
+    assert.ok(winners.length <= 1, diag);
+    assert.ok(winners.every((report) => isConsumer(report.index) && report.deduped !== true), diag);
+    // The first lock holder in B is always a valid consumer; in A, T can only lose the lock, never be refused.
+    if (kind === 'B' || !busy(reports[0])) assert.equal(winners.length, 1, diag);
+    assert.equal(fs.existsSync(store.paths.lockPath), false);
+    if (winners.length === 0) {
+      assert.deepEqual(persisted(store).bytes, pending.bytes, diag);
+      return;
+    }
+    const final = persisted(store).state;
+    assert.deepEqual(Object.keys(final.workspaceBindings), [bound.workspaceId], diag);
+    const binding = final.workspaceBindings[bound.workspaceId];
+    assert.deepEqual([binding.state, binding.workRunId, binding.ownerId, binding.bindingFence], ['bound', t.workRunId, t.ownerId, priorSeq + 1], diag);
+    for (const field of HANDOFF_FIELDS) assert.equal(Object.hasOwn(binding, field), false, diag);
+    assert.equal(final.workspaceFenceSeq, priorSeq + 1, diag);
+    assert.equal(final.revision, pending.state.revision + 1, diag);
+    assert.equal(final.workRuns[t.workRunId].workspaceId, bound.workspaceId, diag);
+    assert.equal(final.workRuns[a.workRunId].workspaceId ?? null, null, diag);
+    const verified = createFileWorkRunStatusReader(storeRoot).verifyWorkspaceFence({ ...t, workspaceId: bound.workspaceId, bindingFence: priorSeq + 1 });
+    assert.equal(verified.ok, true, diag);
+  } finally {
+    for (const { child } of children) if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+    await Promise.all(children.map((entry) => entry.done));
+    cleanup(root);
+  }
+}
+
+test('concurrent processes racing a reserved handoff consume it at most once with exactly one fence increment', { timeout: 120000 }, async () => {
+  for (const kind of ['A', 'B']) await handoffRaceRound(kind);
+});
+
+test('a target run holds at most one pending reservation and cannot bind elsewhere while reserved', () => {
+  const otherToken = (store, o) => {
+    const state = persisted(store).state;
+    const oWs = state.workRuns[o.workRunId].workspaceId;
+    return { oWs, token: { ...o, workspaceId: oWs, bindingFence: state.workspaceBindings[oWs].bindingFence } };
+  };
+  withTempRoot('jarvos-ws-handoff-single-', (root) => {
+    const { store, ws, other, t, o, source, workspaceId } = handoffFixture(root);
+    reserve(store, source, t);
+    const pending = persisted(store);
+    const { token } = otherToken(store, o);
+    const second = store.releaseWorkspace({ ...token, handoffTo: t.workRunId });
+    assert.equal(second.reason, 'invalid_handoff_target', JSON.stringify(second));
+    assertBytes(store, pending, 'a second reservation to the same target must not write');
+
+    const unrelated = path.join(root, 'unrelated');
+    fs.mkdirSync(unrelated);
+    for (const dir of [ws, other]) assert.equal(path.relative(dir, unrelated).startsWith('..'), true, dir);
+    const elsewhere = store.bindWorkspace({ ...t, worktreePath: unrelated });
+    assert.equal(elsewhere.reason, 'run_workspace_conflict', JSON.stringify(elsewhere));
+    assertBytes(store, pending, 'a reserved target binding elsewhere must not write');
+
+    const consumed = store.bindWorkspace({ ...consumeToken(t, source), worktreePath: ws });
+    assert.equal(consumed.ok, true, JSON.stringify(consumed));
+    assert.equal(persisted(store).state.workRuns[t.workRunId].workspaceId, workspaceId);
+  });
+  withTempRoot('jarvos-ws-handoff-double-', (root) => {
+    const { store, storeRoot, a, t, o, source, workspaceId } = handoffFixture(root);
+    reserve(store, source, t);
+    const { oWs } = otherToken(store, o);
+    const state = JSON.parse(fs.readFileSync(store.paths.statePath, 'utf8'));
+    Object.assign(state.workspaceBindings[oWs], { state: 'handoff_pending', handoffFrom: o.workRunId, handoffTo: t.workRunId });
+    assert.equal(state.workRuns[o.workRunId].workspaceId, oWs);
+    assert.equal(state.workRuns[t.workRunId].workspaceId ?? null, null);
+    fs.writeFileSync(store.paths.statePath, JSON.stringify(state, null, 2));
+    const corrupted = persisted(store);
+    assert.throws(() => createFileWorkRunStore(storeRoot).getWorkRun(a.workRunId), failsClosed, 'store');
+    assert.throws(() => createFileWorkRunStatusReader(storeRoot).getWorkspaceBinding(workspaceId), failsClosed, 'reader');
+    assertBytes(store, corrupted, 'fail-closed reads must not write');
   });
 });
