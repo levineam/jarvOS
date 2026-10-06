@@ -61,6 +61,13 @@ Daily Notes, Periodic Notes, Journals, template startup scripts, and similar
 writers must target another folder. The lifecycle reports a configured Daily
 Notes writer as a conflict before creating a missing file.
 
+The package's ownership metadata describes portable scheduled creation and
+derived-index maintenance. A host must separately inventory its authorized
+capture, active-day backlink and protected machine-section mutation callers;
+those callers do not gain recurring repair authority. Human/manual Sync edits
+remain permitted. Metadata review does not prove cross-device exclusivity or
+add a private host's inventory-age validator to this portable lifecycle.
+
 ## Human commands
 
 Read-only health:

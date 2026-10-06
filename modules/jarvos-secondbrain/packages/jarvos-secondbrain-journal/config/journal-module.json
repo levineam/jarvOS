@@ -7,9 +7,9 @@
     "owner": "jarvos-secondbrain-journal",
     "automatedWriters": ["jarvOS:journal-maintenance"],
     "derivedIndexWriters": ["jarvOS:journal-maintenance"],
-    "reviewedAt": "2026-08-08T00:00:00.000Z",
+    "reviewedAt": "2026-10-06T14:18:57.000Z",
     "maxAgeDays": 30,
-    "$doc": "journal-lifecycle.js exclusively creates a missing dated file. Obsidian-owned mutation is reserved for authorized active-day backlink and section updates. The derived Journaling.md page has one additive writer; other configured daily-note writers block scheduled creation rather than racing it."
+    "$doc": "Reviewed 2026-10-06 against the portable source creation/index boundary and the accepted bounded host adapter topology. Scheduled creation-only maintenance exclusively creates a missing dated file and additively updates a pure-generated existing Journaling.md index; it never flushes deferred backlinks or repairs authored journals. Host adapters may separately invoke the protected active-day machine-section mutation seam after successful creation. Private capture, authorized active-day backlink/fallback and human/manual Sync exceptions remain the host's inventory responsibility, not additional portable recurring writers. Existing configured-writer, expected-content and quiet-window guards remain in force. This metadata does not add private inventory age enforcement to the public lifecycle or claim cross-device exclusivity."
   },
 
   "derivedIndex": {
