@@ -559,19 +559,21 @@ function createMemoryWorkRunStore(options = {}) {
   return createWorkRunStore({ ...options, backend });
 }
 
+function readWorkRunStateFile(statePath) {
+  if (!fs.existsSync(statePath)) return emptyState();
+  let state;
+  try { state = JSON.parse(fs.readFileSync(statePath, 'utf8')); } catch (error) { throw new Error(`corrupt work-run state: ${error.message}`); }
+  const validation = validateState(state);
+  if (!validation.ok) throw new Error(`invalid work-run state: ${validation.errors.join('; ')}`);
+  return state;
+}
+
 function createFileWorkRunStore(rootDir, options = {}) {
   if (typeof rootDir !== 'string' || !rootDir) throw new Error('rootDir is required');
   fs.mkdirSync(rootDir, { recursive: true, mode: 0o700 });
   const statePath = path.join(rootDir, 'work-runs.json');
   const lockPath = path.join(rootDir, 'work-runs.lock');
-  function read() {
-    if (!fs.existsSync(statePath)) return emptyState();
-    let state;
-    try { state = JSON.parse(fs.readFileSync(statePath, 'utf8')); } catch (error) { throw new Error(`corrupt work-run state: ${error.message}`); }
-    const validation = validateState(state);
-    if (!validation.ok) throw new Error(`invalid work-run state: ${validation.errors.join('; ')}`);
-    return state;
-  }
+  const read = () => readWorkRunStateFile(statePath);
   function withLock(fn) {
     let fd;
     try {
@@ -603,6 +605,19 @@ function createFileWorkRunStore(rootDir, options = {}) {
   return Object.assign(createWorkRunStore({ ...options, backend }), { paths: { rootDir, statePath, lockPath } });
 }
 
+// Read-only status view: never creates the root, takes the lock, or writes state.
+function createFileWorkRunStatusReader(rootDir) {
+  if (typeof rootDir !== 'string' || !rootDir) throw new Error('rootDir is required');
+  const statePath = path.join(rootDir, 'work-runs.json');
+  const store = createWorkRunStore({
+    backend: {
+      load: () => readWorkRunStateFile(statePath),
+      save() { throw new Error('work-run status reader is read-only'); },
+    },
+  });
+  return { getWorkRun: store.getWorkRun, getFollowThrough: store.getFollowThrough };
+}
+
 function createControlPlaneWorkRunEvidencePort(options = {}) {
   if (!options.service || typeof options.service.execute !== 'function') throw new Error('control-plane service is required');
   if (typeof options.credential !== 'string') throw new Error('control-plane credential is required');
@@ -629,6 +644,7 @@ module.exports = {
   WORK_RUN_STORE_SCHEMA_VERSION,
   WORK_RUN_STATES: [...WORK_RUN_STATES],
   createControlPlaneWorkRunEvidencePort,
+  createFileWorkRunStatusReader,
   createFileWorkRunStore,
   createMemoryWorkRunStore,
   createWorkRunStore,
