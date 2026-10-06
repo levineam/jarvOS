@@ -15,8 +15,9 @@ const WORK_RUN_STORE_SCHEMA_VERSION_V2 = 'jarvos-coding-work-run/v2';
 const WORKSPACE_BINDING_VERSION = 'jarvos-coding-workspace-binding/v1';
 const WORKSPACE_BINDING_PUBLIC_VERSION = 'jarvos-coding-workspace-binding-public/v1';
 const WORKSPACE_ID = /^ws_[0-9a-f]{24}$/;
-// Strict allowlists: this slice must not consume future (handoff) binding state.
-const WORKSPACE_BINDING_KEYS = new Set(['version', 'workspaceId', 'identity', 'workRunId', 'subjectKey', 'ownerId', 'runFence', 'bindingFence', 'state', 'boundAt', 'updatedAt', 'revision', 'revisionHistory']);
+// Strict allowlists: handoffFrom/handoffTo exist only while state is 'handoff_pending'.
+const WORKSPACE_HANDOFF_KEYS = ['handoffFrom', 'handoffTo'];
+const WORKSPACE_BINDING_KEYS = new Set(['version', 'workspaceId', 'identity', 'workRunId', 'subjectKey', 'ownerId', 'runFence', 'bindingFence', 'state', 'boundAt', 'updatedAt', 'revision', 'revisionHistory', ...WORKSPACE_HANDOFF_KEYS]);
 const WORKSPACE_IDENTITY_KEYS = new Set(['canonicalPath', 'dev', 'ino']);
 // Workspace revisions are caller assertions (factsSource 'caller'): nothing here runs or verifies Git,
 // and a recorded revision carries no effect or security authority.
@@ -246,6 +247,7 @@ function validateWorkspaceState(state, workRuns, errors) {
   if (!Number.isSafeInteger(state.workspaceFenceSeq) || state.workspaceFenceSeq < 0) errors.push('state.workspaceFenceSeq must be a non-negative safe integer');
   if (!isObject(state.workspaceBindings)) { errors.push('state.workspaceBindings must be an object'); return; }
   const identities = [];
+  const handoffTargets = new Set();
   for (const [key, binding] of Object.entries(state.workspaceBindings)) {
     const label = `workspaceBindings.${key}`;
     if (!WORKSPACE_ID.test(key)) errors.push(`${label} key is invalid`);
@@ -270,7 +272,17 @@ function validateWorkspaceState(state, workRuns, errors) {
     if (!Number.isSafeInteger(binding.bindingFence) || binding.bindingFence < 1 || !(binding.bindingFence <= state.workspaceFenceSeq)) {
       errors.push(`${label}.bindingFence must be a positive integer within state.workspaceFenceSeq`);
     }
-    if (binding.state !== 'bound') errors.push(`${label}.state is invalid`);
+    if (binding.state === 'bound') {
+      if (WORKSPACE_HANDOFF_KEYS.some((field) => Object.hasOwn(binding, field))) errors.push(`${label} must not carry handoff fields while bound`);
+    } else if (binding.state === 'handoff_pending') {
+      validateWorkspaceHandoff(binding, label, workRuns, errors);
+      if (typeof binding.handoffTo === 'string') {
+        if (handoffTargets.has(binding.handoffTo)) errors.push(`${label}.handoffTo already holds another pending reservation`);
+        handoffTargets.add(binding.handoffTo);
+      }
+    } else {
+      errors.push(`${label}.state is invalid`);
+    }
     if (!isTimestamp(binding.boundAt) || !isTimestamp(binding.updatedAt)) errors.push(`${label} timestamps are invalid`);
     validateWorkspaceRevision(binding, label, errors);
   }
@@ -286,6 +298,15 @@ function validateWorkspaceState(state, workRuns, errors) {
     const binding = own(state.workspaceBindings, run.workspaceId);
     if (!isObject(binding) || binding.workRunId !== id) errors.push(`workRuns.${id}.workspaceId has no reciprocal binding`);
   }
+}
+
+// A pending reservation names its source run and another existing, unbound target run (which may be unowned;
+// no target-owner authority is implied). The source's reciprocal pointer, owner and fence checks still apply.
+function validateWorkspaceHandoff(binding, label, workRuns, errors) {
+  if (typeof binding.handoffFrom !== 'string' || binding.handoffFrom !== binding.workRunId) errors.push(`${label}.handoffFrom must equal its workRunId`);
+  const target = typeof binding.handoffTo === 'string' && OPAQUE_ID.test(binding.handoffTo) ? own(workRuns, binding.handoffTo) : undefined;
+  if (!isObject(target) || binding.handoffTo === binding.workRunId) errors.push(`${label}.handoffTo must name another existing work run`);
+  else if (target.workspaceId != null) errors.push(`${label}.handoffTo must name an unbound work run`);
 }
 
 // Revision and history are present together or not at all; history is a contiguous, nonce-unique
@@ -305,6 +326,7 @@ function validateWorkspaceRevision(binding, label, errors) {
   if (!isRevisionRecord(revision) || !sameRevisionRecord(revision, history[history.length - 1])) errors.push(`${label}.revision must equal the last revisionHistory entry`);
 }
 
+// state may be 'handoff_pending'; handoffFrom/handoffTo (run ids) are never projected.
 function publicWorkspaceBinding(binding) {
   const projection = {
     version: WORKSPACE_BINDING_PUBLIC_VERSION,
@@ -662,6 +684,55 @@ function createWorkRunStore(options = {}) {
     });
   }
 
+  // The (at most one) pending reservation naming workRunId as its target.
+  function pendingHandoffFor(bindings, workRunId) {
+    return Object.values(isObject(bindings) ? bindings : {})
+      .find((entry) => entry.state === 'handoff_pending' && entry.handoffTo === workRunId);
+  }
+
+  // Reserve only: the source keeps its pointer, owner, run fence and binding fence; the target gains nothing
+  // until it consumes with the exact token. A reservation is bookkeeping, not effect authority.
+  function reserveWorkspaceHandoff(state, run, binding, handoffTo) {
+    const pending = binding.state === 'handoff_pending';
+    if (pending && binding.handoffTo === handoffTo) {
+      return noCommit({ ok: true, deduped: true, released: true, handoffPending: true, public: publicWorkspaceBinding(binding) });
+    }
+    const target = typeof handoffTo === 'string' && OPAQUE_ID.test(handoffTo) ? own(state.workRuns, handoffTo) : undefined;
+    if (!isObject(target) || handoffTo === run.workRunId || target.workspaceId != null || pendingHandoffFor(state.workspaceBindings, handoffTo)) {
+      return noCommit({ ok: false, reason: 'invalid_handoff_target' });
+    }
+    if (pending) return noCommit({ ok: false, reason: 'handoff_reserved' });
+    binding.state = 'handoff_pending';
+    binding.handoffFrom = run.workRunId;
+    binding.handoffTo = handoffTo;
+    binding.updatedAt = nowIso(clock);
+    return { ok: true, released: true, handoffPending: true, public: publicWorkspaceBinding(binding) };
+  }
+
+  // Consume (targetRun set) or cancel (targetRun null) a pending reservation in one commit. The binding fence
+  // always advances, so every earlier token (including the reservation token) is stale afterwards.
+  function settleWorkspaceHandoff(state, binding, sourceRun, targetRun) {
+    const next = state.workspaceFenceSeq + 1;
+    if (!Number.isSafeInteger(next)) return noCommit({ ok: false, reason: 'binding_fence_exhausted' });
+    const at = nowIso(clock);
+    state.workspaceFenceSeq = next;
+    binding.bindingFence = next;
+    if (targetRun) {
+      binding.workRunId = targetRun.workRunId;
+      binding.subjectKey = targetRun.subjectKey;
+      binding.ownerId = targetRun.ownerId;
+      binding.runFence = targetRun.fence;
+      sourceRun.workspaceId = null;
+      targetRun.workspaceId = binding.workspaceId;
+      targetRun.updatedAt = at;
+    }
+    binding.state = 'bound';
+    for (const field of WORKSPACE_HANDOFF_KEYS) delete binding[field];
+    binding.updatedAt = at;
+    sourceRun.updatedAt = at;
+    return { ok: true, bound: true, binding: clone(binding), public: publicWorkspaceBinding(binding) };
+  }
+
   // Resolution runs before the lock. Honest limit (TOCTOU): the directory can be swapped after
   // resolution; an effect-time identity recheck is later work, so a binding is not effect authority.
   function resolveWorkspaceIdentity(worktreePath) {
@@ -688,20 +759,42 @@ function createWorkRunStore(options = {}) {
       const owner = assertRunOwner(run, input.ownerId, input.fence);
       if (!owner.ok) return noCommit(owner);
       const bindings = isObject(state.workspaceBindings) ? state.workspaceBindings : {};
+      const stale = () => noCommit({ ok: false, reason: 'stale_binding_fence' });
+      // An explicit token (either field) is always checked exactly; it never creates or redirects a binding.
+      const tokenSupplied = input.workspaceId !== undefined || input.bindingFence !== undefined;
       if (run.workspaceId != null) {
         const current = own(bindings, run.workspaceId);
+        if (tokenSupplied && currentWorkspaceBinding(state, run, input) !== current) return stale();
+        if (current.state === 'handoff_pending') {
+          // Only the source holds a pending binding: its exact token on the same identity cancels the reservation.
+          if (!tokenSupplied) return stale();
+          if (!sameWorkspaceIdentity(current.identity, identity)) {
+            const changed = current.identity.canonicalPath === identity.canonicalPath && !sameInode(current.identity, identity);
+            return workspaceRefusal(changed ? 'workspace_identity_changed' : 'run_workspace_conflict', current);
+          }
+          return settleWorkspaceHandoff(state, current, run, null);
+        }
         if (sameWorkspaceIdentity(current.identity, identity) && current.ownerId === run.ownerId && current.runFence === run.fence) {
           return noCommit({ ok: true, deduped: true, binding: clone(current), public: publicWorkspaceBinding(current) });
         }
         return workspaceRefusal('run_workspace_conflict', current);
       }
+      const reserved = pendingHandoffFor(bindings, run.workRunId);
+      if (reserved) {
+        // A reserved target binds nothing else; it consumes only the reserved identity with the exact token.
+        if (!sameWorkspaceIdentity(reserved.identity, identity)) return workspaceRefusal('run_workspace_conflict', reserved);
+        if (input.workspaceId !== reserved.workspaceId || input.bindingFence !== reserved.bindingFence) return stale();
+        return settleWorkspaceHandoff(state, reserved, own(state.workRuns, reserved.workRunId), run);
+      }
+      if (tokenSupplied) return stale();
       const others = Object.values(bindings);
+      const blocked = (entry, reason) => workspaceRefusal(entry.state === 'handoff_pending' ? 'handoff_reserved' : reason, entry);
       const replaced = others.find((entry) => entry.identity.canonicalPath === identity.canonicalPath && !sameInode(entry.identity, identity));
       if (replaced) return workspaceRefusal('workspace_identity_changed', replaced);
       const held = others.find((entry) => sameInode(entry.identity, identity));
-      if (held) return workspaceRefusal('workspace_conflict', held);
+      if (held) return blocked(held, 'workspace_conflict');
       const overlapping = others.find((entry) => workspacePathsOverlap(entry.identity.canonicalPath, identity.canonicalPath));
-      if (overlapping) return workspaceRefusal('workspace_overlap_conflict', overlapping);
+      if (overlapping) return blocked(overlapping, 'workspace_overlap_conflict');
       if (state.schemaVersion !== WORK_RUN_STORE_SCHEMA_VERSION_V2) {
         // Lazy upgrade on the first successful bind only; the fence sequence never resets afterwards.
         state.schemaVersion = WORK_RUN_STORE_SCHEMA_VERSION_V2;
@@ -750,6 +843,8 @@ function createWorkRunStore(options = {}) {
     if (!owner.ok) return owner;
     const binding = currentWorkspaceBinding(state, run, input);
     if (!binding) return { ok: false, reason: 'stale_binding_fence' };
+    // A reserved binding is held for its target: the source's token no longer verifies.
+    if (binding.state === 'handoff_pending') return { ok: false, reason: 'handoff_reserved' };
     const expectsSeq = input.expectedRevisionSeq !== undefined;
     const expectsHead = input.expectedHeadOid !== undefined;
     if (expectsSeq || expectsHead) {
@@ -773,6 +868,8 @@ function createWorkRunStore(options = {}) {
       if (!owner.ok) return noCommit(owner);
       const binding = currentWorkspaceBinding(state, run, input);
       if (!binding) return refuse('stale_binding_fence');
+      // Pending outranks nonce validation, replay and CAS: no revision moves while a handoff is reserved.
+      if (binding.state === 'handoff_pending') return refuse('handoff_reserved');
       const { operationNonce, intent, expectedRevisionSeq } = input;
       if (typeof operationNonce !== 'string' || !OPAQUE_ID.test(operationNonce)) return refuse('operation_nonce_required');
       const history = Array.isArray(binding.revisionHistory) ? binding.revisionHistory : [];
@@ -811,7 +908,6 @@ function createWorkRunStore(options = {}) {
   }
 
   function releaseWorkspace(input = {}) {
-    if (input.handoffTo !== undefined) return { ok: false, reason: 'workspace_handoff_unavailable' };
     return mutate((state) => {
       const run = own(state.workRuns, input.workRunId);
       if (!run) return noCommit({ ok: false, reason: 'not_found' });
@@ -819,7 +915,8 @@ function createWorkRunStore(options = {}) {
       if (!owner.ok) return noCommit(owner);
       const binding = currentWorkspaceBinding(state, run, input);
       if (!binding) return noCommit({ ok: false, reason: 'stale_binding_fence' });
-      // The binding is removed; state stays v2 and workspaceFenceSeq is kept so fences never repeat.
+      if (input.handoffTo !== undefined) return reserveWorkspaceHandoff(state, run, binding, input.handoffTo);
+      // The binding (bound or handoff_pending) is removed; state stays v2 and workspaceFenceSeq is kept so fences never repeat.
       delete state.workspaceBindings[binding.workspaceId];
       run.workspaceId = null;
       run.updatedAt = nowIso(clock);
