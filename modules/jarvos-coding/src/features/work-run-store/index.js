@@ -581,8 +581,10 @@ function createFileWorkRunStore(rootDir, options = {}) {
       if (error.code === 'EEXIST') throw new Error('work-run store is busy');
       throw error;
     } finally {
-      if (fd !== undefined) fs.closeSync(fd);
-      try { fs.unlinkSync(lockPath); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+      if (fd !== undefined) {
+        fs.closeSync(fd);
+        try { fs.unlinkSync(lockPath); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+      }
     }
   }
   const backend = {

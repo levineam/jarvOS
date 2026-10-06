@@ -1,6 +1,7 @@
 'use strict';
 
 const assert = require('node:assert/strict');
+const { spawnSync } = require('node:child_process');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
@@ -147,4 +148,68 @@ test('corrupt or incomplete durable state fails closed', () => {
   fs.writeFileSync(path.join(root, 'work-runs.json'), JSON.stringify({ schemaVersion: 'wrong', revision: 0, workRuns: {} }));
   const store = createFileWorkRunStore(root);
   assert.throws(() => store.getWorkRun('run_bad'), /invalid work-run state/);
+});
+
+test('a contender process that fails lock acquisition leaves the incumbent lock and state intact', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-work-run-lock-'));
+  let fd;
+  try {
+    const store = createFileWorkRunStore(root);
+    store.resolveWorkRun({ subjectKey: 'levineam/jarvOS:SUP-5000' });
+    const { lockPath, statePath } = store.paths;
+    const stateBefore = fs.readFileSync(statePath);
+    const token = `incumbent:${process.pid}`;
+    fd = fs.openSync(lockPath, 'wx', 0o600);
+    fs.writeFileSync(fd, token);
+    const ino = fs.statSync(lockPath).ino;
+
+    const script = `
+      const { createFileWorkRunStore } = require(process.argv[1]);
+      try {
+        createFileWorkRunStore(process.argv[2]).resolveWorkRun({ subjectKey: 'levineam/jarvOS:SUP-5001' });
+        process.stdout.write('unexpected-success');
+        process.exitCode = 3;
+      } catch (error) {
+        process.stdout.write(error.message);
+      }
+    `;
+    const contender = spawnSync(process.execPath, ['-e', script, path.join(__dirname, '..', 'src'), root], { encoding: 'utf8' });
+
+    assert.equal(contender.status, 0, contender.stderr);
+    assert.equal(contender.stdout.trim(), 'work-run store is busy', contender.stderr);
+    assert.equal(fs.existsSync(lockPath), true);
+    assert.equal(fs.readFileSync(lockPath, 'utf8'), token);
+    assert.equal(fs.statSync(lockPath).ino, ino);
+    assert.deepEqual(fs.readFileSync(statePath), stateBefore);
+  } finally {
+    if (fd !== undefined) fs.closeSync(fd);
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('an acquired lock is released after a successful mutation', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-work-run-lock-'));
+  try {
+    const store = createFileWorkRunStore(root);
+    claim(store);
+    assert.equal(fs.existsSync(store.paths.lockPath), false);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('an acquired lock is released when the locked save fails', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-work-run-lock-'));
+  try {
+    const store = createFileWorkRunStore(root);
+    store.resolveWorkRun({ subjectKey: 'levineam/jarvOS:SUP-5000' });
+    const stateBefore = fs.readFileSync(store.paths.statePath);
+    fs.mkdirSync(`${store.paths.statePath}.${process.pid}.tmp`);
+
+    assert.throws(() => store.resolveWorkRun({ subjectKey: 'levineam/jarvOS:SUP-5001' }), { code: 'EISDIR' });
+    assert.equal(fs.existsSync(store.paths.lockPath), false);
+    assert.deepEqual(fs.readFileSync(store.paths.statePath), stateBefore);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });
