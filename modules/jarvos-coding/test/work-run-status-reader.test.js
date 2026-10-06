@@ -159,7 +159,7 @@ test('status reader exposes only reads and matches normal store public, private,
       return { reader: created, reads: readerReads(created) };
     });
 
-    assert.deepEqual(Object.keys(reader).sort(), ['getFollowThrough', 'getWorkRun']);
+    assert.deepEqual(Object.keys(reader).sort(), ['getFollowThrough', 'getWorkRun', 'getWorkspaceBinding', 'verifyWorkspaceFence']);
     assert.deepEqual(reads, expected);
     assert.equal(reads.absent, null);
     assert.equal(withoutFilesystemWrites(() => reader.getFollowThrough('out_999999')), null);

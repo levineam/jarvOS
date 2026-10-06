@@ -10,6 +10,14 @@ const {
 } = require('../../providers/workflow-provider');
 
 const WORK_RUN_STORE_SCHEMA_VERSION = 'jarvos-coding-work-run/v1';
+// v2 state adds the exclusive workspace binding index; run records stay WORK_RUN_STORE_SCHEMA_VERSION.
+const WORK_RUN_STORE_SCHEMA_VERSION_V2 = 'jarvos-coding-work-run/v2';
+const WORKSPACE_BINDING_VERSION = 'jarvos-coding-workspace-binding/v1';
+const WORKSPACE_BINDING_PUBLIC_VERSION = 'jarvos-coding-workspace-binding-public/v1';
+const WORKSPACE_ID = /^ws_[0-9a-f]{24}$/;
+// Strict allowlists: this slice must not consume future (handoff/revision) binding state.
+const WORKSPACE_BINDING_KEYS = new Set(['version', 'workspaceId', 'identity', 'workRunId', 'subjectKey', 'ownerId', 'runFence', 'bindingFence', 'state', 'boundAt', 'updatedAt']);
+const WORKSPACE_IDENTITY_KEYS = new Set(['canonicalPath', 'dev', 'ino']);
 const WORK_RUN_EVENT_VERSION = 'jarvos-coding-work-run-event/v1';
 const WORK_RUN_PUBLIC_VERSION = 'jarvos-coding-work-run-public/v1';
 const FOLLOW_THROUGH_BINDING_VERSION = 'jarvos-coding-follow-through-binding/v1';
@@ -44,6 +52,45 @@ function isDigest(value) {
   return typeof value === 'string' && SHA256.test(value);
 }
 
+function isTimestamp(value) {
+  return typeof value === 'string' && !Number.isNaN(Date.parse(value));
+}
+
+// Own-property lookup so ids such as "__proto__" never resolve to prototype members.
+function own(map, key) {
+  return isObject(map) && typeof key === 'string' && Object.hasOwn(map, key) ? map[key] : undefined;
+}
+
+function isRootPath(value) {
+  return path.parse(value).root === value;
+}
+
+function isCanonicalWorkspacePath(value) {
+  return typeof value === 'string' && value.length > 0 && !value.includes('\0') && path.isAbsolute(value)
+    && path.normalize(value) === value && !isRootPath(value) && !value.endsWith(path.sep);
+}
+
+function isWorkspaceIdentity(identity) {
+  return isObject(identity)
+    && Object.keys(identity).every((key) => WORKSPACE_IDENTITY_KEYS.has(key))
+    && isCanonicalWorkspacePath(identity.canonicalPath)
+    && Number.isSafeInteger(identity.dev) && identity.dev >= 0
+    && Number.isSafeInteger(identity.ino) && identity.ino > 0;
+}
+
+function sameInode(a, b) {
+  return a.dev === b.dev && a.ino === b.ino;
+}
+
+function sameWorkspaceIdentity(a, b) {
+  return sameInode(a, b) && a.canonicalPath === b.canonicalPath;
+}
+
+// Path-segment aware: "/ws/a" overlaps "/ws" and "/ws/a/child" but not "/ws/a-b".
+function workspacePathsOverlap(a, b) {
+  return a === b || a.startsWith(`${b}${path.sep}`) || b.startsWith(`${a}${path.sep}`);
+}
+
 function assertSafeValue(value, label, options = {}) {
   if (typeof value === 'string') {
     if (value.includes('\0') || SECRET_VALUE.test(value)) throw new Error(`${label} contains unsafe content`);
@@ -70,13 +117,16 @@ function emptyState() {
 function validateState(state) {
   const errors = [];
   if (!isObject(state)) return { ok: false, errors: ['work-run state must be an object'] };
-  if (state.schemaVersion !== WORK_RUN_STORE_SCHEMA_VERSION) errors.push(`state.schemaVersion must be ${WORK_RUN_STORE_SCHEMA_VERSION}`);
+  if (state.schemaVersion !== WORK_RUN_STORE_SCHEMA_VERSION && state.schemaVersion !== WORK_RUN_STORE_SCHEMA_VERSION_V2) {
+    errors.push(`state.schemaVersion must be ${WORK_RUN_STORE_SCHEMA_VERSION} or ${WORK_RUN_STORE_SCHEMA_VERSION_V2}`);
+  }
   if (!Number.isInteger(state.revision) || state.revision < 0) errors.push('state.revision must be a non-negative integer');
   if (!isObject(state.workRuns)) errors.push('state.workRuns must be an object');
   if (state.followThrough !== undefined && !isObject(state.followThrough)) errors.push('state.followThrough must be an object');
-  for (const [id, run] of Object.entries(state.workRuns || {})) {
-    if (id !== run.workRunId) errors.push(`workRuns.${id}.workRunId must match its key`);
+  const workRuns = isObject(state.workRuns) ? state.workRuns : {};
+  for (const [id, run] of Object.entries(workRuns)) {
     if (!isObject(run)) { errors.push(`workRuns.${id} must be an object`); continue; }
+    if (id !== run.workRunId) errors.push(`workRuns.${id}.workRunId must match its key`);
     if (run.schemaVersion !== WORK_RUN_STORE_SCHEMA_VERSION) errors.push(`workRuns.${id}.schemaVersion is invalid`);
     if (!OPAQUE_ID.test(run.workRunId || '')) errors.push(`workRuns.${id}.workRunId must be opaque`);
     if (!SUBJECT_KEY.test(run.subjectKey || '')) errors.push(`workRuns.${id}.subjectKey must be safe`);
@@ -103,7 +153,87 @@ function validateState(state) {
     }
     if (typeof binding.boundAt !== 'string' || Number.isNaN(Date.parse(binding.boundAt))) errors.push(`followThrough.${outcomeId}.boundAt is invalid`);
   }
+  validateWorkspaceState(state, workRuns, errors);
   return { ok: errors.length === 0, errors };
+}
+
+function validateWorkspaceState(state, workRuns, errors) {
+  if (state.schemaVersion !== WORK_RUN_STORE_SCHEMA_VERSION_V2) {
+    // v1 state cannot carry (or hide) workspace bindings; the first successful bind upgrades to v2.
+    if (state.workspaceBindings !== undefined) errors.push('state.workspaceBindings requires v2 state');
+    if (state.workspaceFenceSeq !== undefined) errors.push('state.workspaceFenceSeq requires v2 state');
+    for (const [id, run] of Object.entries(workRuns)) {
+      if (isObject(run) && run.workspaceId != null) errors.push(`workRuns.${id}.workspaceId requires v2 state`);
+    }
+    return;
+  }
+  if (!Number.isSafeInteger(state.workspaceFenceSeq) || state.workspaceFenceSeq < 0) errors.push('state.workspaceFenceSeq must be a non-negative safe integer');
+  if (!isObject(state.workspaceBindings)) { errors.push('state.workspaceBindings must be an object'); return; }
+  const identities = [];
+  for (const [key, binding] of Object.entries(state.workspaceBindings)) {
+    const label = `workspaceBindings.${key}`;
+    if (!WORKSPACE_ID.test(key)) errors.push(`${label} key is invalid`);
+    if (!isObject(binding)) { errors.push(`${label} must be an object`); continue; }
+    const unsupported = Object.keys(binding).filter((field) => !WORKSPACE_BINDING_KEYS.has(field));
+    if (unsupported.length) errors.push(`${label} has unsupported fields: ${unsupported.join(', ')}`);
+    if (binding.version !== WORKSPACE_BINDING_VERSION) errors.push(`${label}.version is invalid`);
+    if (binding.workspaceId !== key) errors.push(`${label}.workspaceId must match its key`);
+    if (isWorkspaceIdentity(binding.identity)) identities.push({ key, ...binding.identity });
+    else errors.push(`${label}.identity is invalid`);
+    const run = own(workRuns, binding.workRunId);
+    if (!isObject(run)) {
+      errors.push(`${label}.workRunId must reference an existing work run`);
+    } else {
+      if (run.workspaceId !== key) errors.push(`${label} is not reciprocated by its work run`);
+      if (binding.subjectKey !== run.subjectKey) errors.push(`${label}.subjectKey must match its work run`);
+      if (binding.ownerId !== run.ownerId) errors.push(`${label}.ownerId must match its work run`);
+      if (binding.runFence !== run.fence) errors.push(`${label}.runFence must match its work run`);
+    }
+    if (typeof binding.ownerId !== 'string' || !OPAQUE_ID.test(binding.ownerId)) errors.push(`${label}.ownerId must be opaque`);
+    if (!Number.isSafeInteger(binding.runFence) || binding.runFence < 1) errors.push(`${label}.runFence must be a positive integer`);
+    if (!Number.isSafeInteger(binding.bindingFence) || binding.bindingFence < 1 || !(binding.bindingFence <= state.workspaceFenceSeq)) {
+      errors.push(`${label}.bindingFence must be a positive integer within state.workspaceFenceSeq`);
+    }
+    if (binding.state !== 'bound') errors.push(`${label}.state is invalid`);
+    if (!isTimestamp(binding.boundAt) || !isTimestamp(binding.updatedAt)) errors.push(`${label} timestamps are invalid`);
+  }
+  for (let i = 0; i < identities.length; i += 1) {
+    for (let j = i + 1; j < identities.length; j += 1) {
+      const [a, b] = [identities[i], identities[j]];
+      if (sameInode(a, b)) errors.push(`workspaceBindings.${a.key} and ${b.key} share one identity`);
+      else if (workspacePathsOverlap(a.canonicalPath, b.canonicalPath)) errors.push(`workspaceBindings.${a.key} and ${b.key} have overlapping paths`);
+    }
+  }
+  for (const [id, run] of Object.entries(workRuns)) {
+    if (!isObject(run) || run.workspaceId == null) continue;
+    const binding = own(state.workspaceBindings, run.workspaceId);
+    if (!isObject(binding) || binding.workRunId !== id) errors.push(`workRuns.${id}.workspaceId has no reciprocal binding`);
+  }
+}
+
+function publicWorkspaceBinding(binding) {
+  return {
+    version: WORKSPACE_BINDING_PUBLIC_VERSION,
+    workspaceId: binding.workspaceId,
+    workRunId: binding.workRunId,
+    subjectKey: binding.subjectKey,
+    bindingFence: binding.bindingFence,
+    state: binding.state,
+    boundAt: binding.boundAt,
+    updatedAt: binding.updatedAt,
+  };
+}
+
+// Default file-store resolver: an existing directory's realpath plus its (dev, ino) identity.
+function createFsWorkspaceResolver() {
+  return function resolveWorkspace(worktreePath) {
+    const canonicalPath = fs.realpathSync.native(worktreePath);
+    const stat = fs.statSync(canonicalPath, { bigint: true });
+    if (!stat.isDirectory()) throw new Error('workspace must be an existing directory');
+    const max = BigInt(Number.MAX_SAFE_INTEGER);
+    if (stat.dev > max || stat.ino > max) throw new Error('workspace identity exceeds the safe integer range');
+    return { canonicalPath, dev: Number(stat.dev), ino: Number(stat.ino) };
+  };
 }
 
 function normalizeProviderSnapshot(snapshot) {
@@ -228,6 +358,7 @@ function createWorkRunStore(options = {}) {
   if (!options.backend || typeof options.backend.load !== 'function' || typeof options.backend.save !== 'function') throw new Error('work-run store backend must implement load/save');
   const clock = options.clock || (() => Date.now());
   const evidencePort = options.evidencePort || null;
+  const workspaceResolver = typeof options.workspaceResolver === 'function' ? options.workspaceResolver : null;
 
   const backendIo = {
     load: () => options.backend.load(),
@@ -394,14 +525,154 @@ function createWorkRunStore(options = {}) {
   }
 
   function releaseWorkRun(input = {}) {
+    if (input.handoffTo !== undefined) return { ok: false, reason: 'workspace_handoff_unavailable' };
     return mutate((state) => {
       const run = state.workRuns[input.workRunId];
       if (!run) return noCommit({ ok: false, reason: 'not_found' });
       const owner = assertRunOwner(run, input.ownerId, input.fence);
       if (!owner.ok) return noCommit(owner);
+      if (run.workspaceId != null) {
+        // A bound run releases only together with its current binding token, in one commit.
+        if (input.releaseWorkspace !== true) return noCommit({ ok: false, reason: 'workspace_binding_held' });
+        const binding = currentWorkspaceBinding(state, run, input);
+        if (!binding) return noCommit({ ok: false, reason: 'stale_binding_fence' });
+        delete state.workspaceBindings[binding.workspaceId];
+        run.workspaceId = null;
+      }
       run.ownerId = null;
       run.updatedAt = nowIso(clock);
       return { ok: true, workRun: clone(run), public: publicRun(run) };
+    });
+  }
+
+  // Exact current token only: the run must point at workspaceId and bindingFence must be current.
+  function currentWorkspaceBinding(state, run, input) {
+    if (typeof input.workspaceId !== 'string' || run.workspaceId !== input.workspaceId) return null;
+    const binding = own(state.workspaceBindings, input.workspaceId);
+    if (!isObject(binding) || binding.bindingFence !== input.bindingFence) return null;
+    return binding;
+  }
+
+  function workspaceRefusal(reason, binding) {
+    // Redacted holder: never the holder's owner, path, dev or ino.
+    return noCommit({
+      ok: false,
+      reason,
+      conflict: {
+        workspaceId: binding.workspaceId,
+        holder: { workRunId: binding.workRunId, subjectKey: binding.subjectKey },
+        bindingFence: binding.bindingFence,
+      },
+    });
+  }
+
+  // Resolution runs before the lock. Honest limit (TOCTOU): the directory can be swapped after
+  // resolution; an effect-time identity recheck is later work, so a binding is not effect authority.
+  function resolveWorkspaceIdentity(worktreePath) {
+    if (typeof worktreePath !== 'string' || !worktreePath || worktreePath.includes('\0') || !path.isAbsolute(worktreePath)) return null;
+    if (isRootPath(path.resolve(worktreePath))) return null;
+    try {
+      const resolved = workspaceResolver(worktreePath);
+      if (!isObject(resolved)) return null;
+      const identity = { canonicalPath: resolved.canonicalPath, dev: resolved.dev, ino: resolved.ino };
+      return isWorkspaceIdentity(identity) ? identity : null;
+    } catch {
+      return null;
+    }
+  }
+
+  function bindWorkspace(input = {}) {
+    if (input.revision !== undefined) return { ok: false, reason: 'workspace_revision_unavailable' };
+    if (!workspaceResolver) return { ok: false, reason: 'workspace_resolver_required' };
+    const identity = resolveWorkspaceIdentity(input.worktreePath);
+    if (!identity) return { ok: false, reason: 'workspace_unresolvable' };
+    return mutate((state) => {
+      const run = own(state.workRuns, input.workRunId);
+      if (!run) return noCommit({ ok: false, reason: 'not_found' });
+      const owner = assertRunOwner(run, input.ownerId, input.fence);
+      if (!owner.ok) return noCommit(owner);
+      const bindings = isObject(state.workspaceBindings) ? state.workspaceBindings : {};
+      if (run.workspaceId != null) {
+        const current = own(bindings, run.workspaceId);
+        if (sameWorkspaceIdentity(current.identity, identity) && current.ownerId === run.ownerId && current.runFence === run.fence) {
+          return noCommit({ ok: true, deduped: true, binding: clone(current), public: publicWorkspaceBinding(current) });
+        }
+        return workspaceRefusal('run_workspace_conflict', current);
+      }
+      const others = Object.values(bindings);
+      const replaced = others.find((entry) => entry.identity.canonicalPath === identity.canonicalPath && !sameInode(entry.identity, identity));
+      if (replaced) return workspaceRefusal('workspace_identity_changed', replaced);
+      const held = others.find((entry) => sameInode(entry.identity, identity));
+      if (held) return workspaceRefusal('workspace_conflict', held);
+      const overlapping = others.find((entry) => workspacePathsOverlap(entry.identity.canonicalPath, identity.canonicalPath));
+      if (overlapping) return workspaceRefusal('workspace_overlap_conflict', overlapping);
+      if (state.schemaVersion !== WORK_RUN_STORE_SCHEMA_VERSION_V2) {
+        // Lazy upgrade on the first successful bind only; the fence sequence never resets afterwards.
+        state.schemaVersion = WORK_RUN_STORE_SCHEMA_VERSION_V2;
+        state.workspaceBindings = {};
+        state.workspaceFenceSeq = 0;
+      }
+      state.workspaceFenceSeq += 1;
+      let workspaceId;
+      do { workspaceId = `ws_${crypto.randomBytes(12).toString('hex')}`; } while (Object.hasOwn(state.workspaceBindings, workspaceId));
+      const at = nowIso(clock);
+      const binding = {
+        version: WORKSPACE_BINDING_VERSION,
+        workspaceId,
+        identity: { canonicalPath: identity.canonicalPath, dev: identity.dev, ino: identity.ino },
+        workRunId: run.workRunId,
+        subjectKey: run.subjectKey,
+        ownerId: run.ownerId,
+        runFence: run.fence,
+        bindingFence: state.workspaceFenceSeq,
+        state: 'bound',
+        boundAt: at,
+        updatedAt: at,
+      };
+      state.workspaceBindings[workspaceId] = binding;
+      run.workspaceId = workspaceId;
+      run.updatedAt = at;
+      return { ok: true, bound: true, binding: clone(binding), public: publicWorkspaceBinding(binding) };
+    });
+  }
+
+  function getWorkspaceBinding(workspaceId, options = {}) {
+    const state = loadState();
+    if (typeof workspaceId !== 'string' || !WORKSPACE_ID.test(workspaceId)) return null;
+    const binding = own(state.workspaceBindings, workspaceId);
+    if (!binding) return null;
+    return options.public === false ? clone(binding) : publicWorkspaceBinding(binding);
+  }
+
+  // Pure read (no lock, no write). A positive answer is a point-in-time check, not effect authority.
+  function verifyWorkspaceFence(input = {}) {
+    if (input.expectedRevisionSeq !== undefined || input.expectedHeadOid !== undefined || input.revision !== undefined) {
+      return { ok: false, reason: 'workspace_revision_unavailable' };
+    }
+    const state = loadState();
+    const run = own(state.workRuns, input.workRunId);
+    if (!run) return { ok: false, reason: 'not_found' };
+    const owner = assertRunOwner(run, input.ownerId, input.fence);
+    if (!owner.ok) return owner;
+    const binding = currentWorkspaceBinding(state, run, input);
+    if (!binding) return { ok: false, reason: 'stale_binding_fence' };
+    return { ok: true, binding: clone(binding) };
+  }
+
+  function releaseWorkspace(input = {}) {
+    if (input.handoffTo !== undefined) return { ok: false, reason: 'workspace_handoff_unavailable' };
+    return mutate((state) => {
+      const run = own(state.workRuns, input.workRunId);
+      if (!run) return noCommit({ ok: false, reason: 'not_found' });
+      const owner = assertRunOwner(run, input.ownerId, input.fence);
+      if (!owner.ok) return noCommit(owner);
+      const binding = currentWorkspaceBinding(state, run, input);
+      if (!binding) return noCommit({ ok: false, reason: 'stale_binding_fence' });
+      // The binding is removed; state stays v2 and workspaceFenceSeq is kept so fences never repeat.
+      delete state.workspaceBindings[binding.workspaceId];
+      run.workspaceId = null;
+      run.updatedAt = nowIso(clock);
+      return { ok: true, released: true, handoffPending: false, public: publicWorkspaceBinding(binding) };
     });
   }
 
@@ -548,6 +819,10 @@ function createWorkRunStore(options = {}) {
     bindFollowThrough,
     claimWorkRun,
     releaseWorkRun,
+    bindWorkspace,
+    getWorkspaceBinding,
+    verifyWorkspaceFence,
+    releaseWorkspace,
     appendEvent,
     recordProviderSnapshot,
     recordProviderReceipt,
@@ -620,7 +895,8 @@ function createFileWorkRunStore(rootDir, options = {}) {
       return withLock(() => fn({ load: read, save: saveLocked }));
     },
   };
-  return Object.assign(createWorkRunStore({ ...options, backend }), { paths: { rootDir, statePath, lockPath } });
+  const workspaceResolver = options.workspaceResolver || createFsWorkspaceResolver();
+  return Object.assign(createWorkRunStore({ ...options, workspaceResolver, backend }), { paths: { rootDir, statePath, lockPath } });
 }
 
 // Read-only status view: never creates the root, takes the lock, or writes state.
@@ -633,7 +909,13 @@ function createFileWorkRunStatusReader(rootDir) {
       save() { throw new Error('work-run status reader is read-only'); },
     },
   });
-  return { getWorkRun: store.getWorkRun, getFollowThrough: store.getFollowThrough };
+  // Pure loadState getters only; none of them reach mutate, so the throwing save is never called.
+  return {
+    getWorkRun: store.getWorkRun,
+    getFollowThrough: store.getFollowThrough,
+    getWorkspaceBinding: store.getWorkspaceBinding,
+    verifyWorkspaceFence: store.verifyWorkspaceFence,
+  };
 }
 
 function createControlPlaneWorkRunEvidencePort(options = {}) {
@@ -660,13 +942,18 @@ module.exports = {
   WORK_RUN_EVENT_VERSION,
   WORK_RUN_PUBLIC_VERSION,
   WORK_RUN_STORE_SCHEMA_VERSION,
+  WORK_RUN_STORE_SCHEMA_VERSION_V2,
+  WORKSPACE_BINDING_PUBLIC_VERSION,
+  WORKSPACE_BINDING_VERSION,
   WORK_RUN_STATES: [...WORK_RUN_STATES],
   createControlPlaneWorkRunEvidencePort,
   createFileWorkRunStatusReader,
   createFileWorkRunStore,
+  createFsWorkspaceResolver,
   createMemoryWorkRunStore,
   createWorkRunStore,
   publicFollowThrough,
   publicRun,
+  publicWorkspaceBinding,
   validateState,
 };
