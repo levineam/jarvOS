@@ -229,8 +229,13 @@ function createWorkRunStore(options = {}) {
   const clock = options.clock || (() => Date.now());
   const evidencePort = options.evidencePort || null;
 
-  function loadState() {
-    const state = options.backend.load();
+  const backendIo = {
+    load: () => options.backend.load(),
+    save: (next, expectedRevision) => options.backend.save(next, expectedRevision),
+  };
+
+  function loadState(io = backendIo) {
+    const state = io.load();
     // v1 stores created before the additive follow-through index remain readable.
     if (state && state.followThrough === undefined) state.followThrough = {};
     const validation = validateState(state);
@@ -238,20 +243,24 @@ function createWorkRunStore(options = {}) {
     return state;
   }
 
-  function commit(state, expectedRevision) {
+  function commit(state, expectedRevision, io) {
     const validation = validateState(state);
     if (!validation.ok) throw new Error(`invalid work-run state: ${validation.errors.join('; ')}`);
     state.revision = expectedRevision + 1;
-    options.backend.save(state, expectedRevision);
+    io.save(state, expectedRevision);
   }
 
   function mutate(mutator) {
-    const state = loadState();
-    const expectedRevision = state.revision;
-    const result = mutator(state);
-    if (result && result.__noCommit) return result.value;
-    commit(state, expectedRevision);
-    return result;
+    const transaction = (io) => {
+      const state = loadState(io);
+      const expectedRevision = state.revision;
+      const result = mutator(state);
+      if (result && result.__noCommit) return result.value;
+      commit(state, expectedRevision, io);
+      return result;
+    };
+    // Transactional backends hold one lock across load, decision and commit; others keep load/save CAS.
+    return typeof options.backend.transact === 'function' ? options.backend.transact(transaction) : transaction(backendIo);
   }
 
   function createRun(state, input, workRunId) {
@@ -397,7 +406,8 @@ function createWorkRunStore(options = {}) {
   }
 
   function appendEvent(input = {}) {
-    return mutate((state) => {
+    let evidence = null;
+    const result = mutate((state) => {
       const run = state.workRuns[input.workRunId];
       if (!run) return noCommit({ ok: false, reason: 'not_found' });
       const owner = assertRunOwner(run, input.ownerId, input.fence);
@@ -427,9 +437,12 @@ function createWorkRunStore(options = {}) {
       run.eventNonces[input.operationNonce] = event;
       if (event.artifact && !run.artifacts.some((artifact) => artifact.reference === event.artifact.reference)) run.artifacts.push(event.artifact);
       run.updatedAt = event.at;
-      if (evidencePort && typeof evidencePort.append === 'function') evidencePort.append({ workRunId: run.workRunId, ownerId: input.ownerId, fence: input.fence, event });
+      evidence = { workRunId: run.workRunId, ownerId: input.ownerId, fence: input.fence, event };
       return { ok: true, deduped: false, event: clone(event), workRun: clone(run), public: publicRun(run) };
     });
+    // Best-effort post-commit delivery (after lock release): not exactly-once and not an outbox.
+    if (evidence && evidencePort && typeof evidencePort.append === 'function') evidencePort.append(evidence);
+    return result;
   }
 
   function recordProviderSnapshot(input = {}) {
@@ -589,17 +602,22 @@ function createFileWorkRunStore(rootDir, options = {}) {
       }
     }
   }
+  // Caller must hold the lock.
+  function saveLocked(next, expectedRevision) {
+    const current = read();
+    if (current.revision !== expectedRevision) throw new Error('concurrent work-run state mutation');
+    const tempPath = `${statePath}.${process.pid}.tmp`;
+    const fd = fs.openSync(tempPath, 'w', 0o600);
+    try { fs.writeFileSync(fd, JSON.stringify(next, null, 2)); fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
+    fs.renameSync(tempPath, statePath);
+  }
   const backend = {
     load: read,
     save(next, expectedRevision) {
-      return withLock(() => {
-        const current = read();
-        if (current.revision !== expectedRevision) throw new Error('concurrent work-run state mutation');
-        const tempPath = `${statePath}.${process.pid}.tmp`;
-        const fd = fs.openSync(tempPath, 'w', 0o600);
-        try { fs.writeFileSync(fd, JSON.stringify(next, null, 2)); fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
-        fs.renameSync(tempPath, statePath);
-      });
+      return withLock(() => saveLocked(next, expectedRevision));
+    },
+    transact(fn) {
+      return withLock(() => fn({ load: read, save: saveLocked }));
     },
   };
   return Object.assign(createWorkRunStore({ ...options, backend }), { paths: { rootDir, statePath, lockPath } });
