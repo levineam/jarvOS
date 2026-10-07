@@ -209,6 +209,10 @@ function createLiveGitBranch(options = {}) {
       });
 
       if (add.status === 0) {
+        // Re-check authority after the effect: a fence revoked during a
+        // successful add must not report success (nor fall back to attach).
+        // This is a point-in-time check, not atomic Git authority.
+        assertFence();
         return {
           schemaVersion: BRANCH_SCHEMA_VERSION,
           status: 'created',
@@ -232,6 +236,10 @@ function createLiveGitBranch(options = {}) {
       });
 
       if (attach.status === 0) {
+        // Re-check authority after the effect: a fence revoked during a
+        // successful attach must not report success. This is a point-in-time
+        // check, not atomic Git authority.
+        assertFence();
         return {
           schemaVersion: BRANCH_SCHEMA_VERSION,
           status: 'attached',

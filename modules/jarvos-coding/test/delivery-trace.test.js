@@ -759,3 +759,50 @@ test('a reattached merged pull request whose live head is not the observed head 
     assert.equal(result.events.some((event) => event.stage === 'verifyClose'), false, name);
   }
 });
+
+test('a fence revoked during a successful worktree add or fallback attach is refused, not reported as success', async () => {
+  // revokeOn: which worktree command revokes authority while it succeeds
+  // (null keeps the fence current). existingBranch: the `-b` add fails as
+  // "branch already exists" while still current, forcing the fallback attach.
+  const branchStage = ({ revokeOn = null, existingBranch = false } = {}) => {
+    const effects = [];
+    let revoked = false;
+    const adapter = createLiveGitBranch({
+      repoRootDir: '/tmp/repo', worktreeRoot: '/tmp/worktrees', now: () => 1, mkdir: () => {},
+      run: (command, args) => {
+        effects.push(args.join(' '));
+        if (args[0] === 'symbolic-ref') return { status: 0, stdout: '', stderr: '' };
+        if (args[0] === 'rev-parse') return { status: 0, stdout: `${args.at(-1) === 'refs/remotes/origin/main^{commit}' ? BASE : HEAD}\n`, stderr: '' };
+        if (args[0] === 'worktree' && args.includes('-b')) {
+          if (existingBranch) return { status: 1, stdout: '', stderr: 'branch already exists' };
+          if (revokeOn === 'add') revoked = true;
+          return { status: 0, stdout: '', stderr: '' };
+        }
+        if (args[0] === 'worktree') {
+          if (revokeOn === 'attach') revoked = true;
+          return { status: 0, stdout: '', stderr: '' };
+        }
+        return { status: 0, stdout: '', stderr: '' };
+      },
+    });
+    const controlPlane = { assertCurrentFence: () => { if (revoked) throw new Error('stale_fence'); } };
+    return { adapter, effects, controlPlane };
+  };
+
+  // Compatibility: a fence that stays current through a successful add still creates.
+  const current = branchStage();
+  const created = await current.adapter.createBranch({ branch: BRANCH, baseRef: 'origin/main', controlPlane: current.controlPlane });
+  assert.deepEqual([created.ok, created.status, created.baseCommit], [true, 'created', BASE]);
+
+  for (const [name, options, isRevokingCommand] of [
+    ['add', { revokeOn: 'add' }, (effect) => effect.startsWith('worktree add -b ')],
+    ['attach', { revokeOn: 'attach', existingBranch: true }, (effect) => effect.startsWith('worktree add ') && !effect.includes(' -b ')],
+  ]) {
+    const { adapter, effects, controlPlane } = branchStage(options);
+    await assert.rejects(() => adapter.createBranch({ branch: BRANCH, baseRef: 'origin/main', controlPlane }), /stale_fence/, name);
+    const at = effects.findIndex(isRevokingCommand);
+    assert.ok(at >= 0, `${name}: the revoking worktree command ran`);
+    // Nothing after the revoked command: no fallback attach and no cleanup.
+    assert.deepEqual(effects.slice(at + 1).filter((effect) => /^(worktree|branch|checkout|reset)\b/.test(effect)), [], name);
+  }
+});
