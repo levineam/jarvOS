@@ -14,6 +14,46 @@ const operation = () => ({ schemaVersion: 1, operationId: 'op-20260806-adapter-t
 const ledgerPath = () => path.join(os.tmpdir(), `jarvos-adapter-${Math.random()}.json`);
 const inspectionToken = (code) => JSON.parse(Buffer.from(code.match(/atob\('([^']+)'\)/)[1], 'base64').toString('utf8')).inspectionToken;
 
+for (const [name, queued, terminal, status, polls] of [
+  ['null bootstrap with proven invariant', null, { status: 'done', invariant: true }, 'committed', 1],
+  ['null bootstrap with terminal error', null, { status: 'error' }, 'failed', 1],
+  ['null bootstrap with false invariant', null, { status: 'done', invariant: false }, 'failed', 1],
+  ['null bootstrap with absent invariant', null, { status: 'done' }, 'failed', 1],
+  ['null bootstrap with absent token', null, undefined, 'unknown_after_dispatch', 1],
+  ['null bootstrap with null token', null, null, 'unknown_after_dispatch', 1],
+  ['null bootstrap with pending token', null, { status: 'pending' }, 'unknown_after_dispatch', 1],
+  ['explicit valid acknowledgement', { queued: true, token: operation().operationId }, { status: 'done', invariant: true }, 'committed', 1],
+  ...[undefined, {}, false, '', { queued: true, token: 'wrong-token' }, { queued: 'true', token: operation().operationId }, { queued: 1, token: operation().operationId }]
+    .map((receipt, index) => [`invalid acknowledgement ${index}`, receipt, { status: 'done', invariant: true }, 'unknown_after_dispatch', 0]),
+]) {
+  test(`mutation bootstrap receipt: ${name}`, () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-mutation-bootstrap-'));
+    try {
+      const input = operation();
+      const mutationProgram = buildObsidianMutationProgram(input);
+      const pollProgram = `JSON.stringify(globalThis.__jarvosVaultMutationResults?.[${JSON.stringify(input.operationId)}] || null)`;
+      const cleanupProgram = `delete globalThis.__jarvosVaultMutationResults?.[${JSON.stringify(input.operationId)}]; JSON.stringify(true)`;
+      const calls = [];
+      const adapter = createVaultMutationAdapter({
+        vaultRoot: root, vaultId: input.vaultId, ledgerPath: path.join(root, 'ledger.json'),
+        probe: () => ({ state: 'available', vaultId: input.vaultId }), maxPollAttempts: 1,
+        evaluate(code) {
+          calls.push(code);
+          return code === mutationProgram ? queued : code === cleanupProgram ? true : terminal;
+        },
+      });
+      const result = adapter.execute(input);
+      assert.equal(calls.filter(code => code === mutationProgram).length, 1, 'mutation is submitted exactly once');
+      assert.equal(calls.filter(code => code === pollProgram).length, polls, 'only the same operation token is polled, within the one-attempt budget');
+      const cleanup = status === 'committed' || status === 'failed';
+      assert.deepEqual(calls, [mutationProgram, ...(polls ? [pollProgram] : []), ...(cleanup ? [cleanupProgram] : [])]);
+      assert.equal(result.status, status);
+      assert.equal(result.obsidian, status === 'committed' ? 'acknowledged' : 'unacknowledged');
+      assert.equal(adapter.ledger.get(input.operationId).status, status === 'committed' ? 'acknowledged' : status === 'failed' ? 'conflict' : 'unknown_after_dispatch');
+    } finally { fs.rmSync(root, { recursive: true, force: true }); }
+  });
+}
+
 test('a queued response without a terminal app token is never committed', () => {
   const states = [{ queued: true, token: 'op-20260806-adapter-test' }, { status: 'pending' }];
   const adapter = createVaultMutationAdapter({ vaultRoot: '/vault', vaultId: 'vault-a', ledgerPath: ledgerPath(), probe: () => ({ state: 'available', vaultId: 'vault-a' }), evaluate: () => states.shift(), maxPollAttempts: 1 });
