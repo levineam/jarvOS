@@ -213,7 +213,7 @@ function createVaultMutationAdapter({ vaultRoot, vaultId, vaultName = path.basen
     try {
       const deadline = Date.now() + pollTimeoutMs;
       const queued = run(buildObsidianMutationProgram(operation), Math.max(1, deadline - Date.now()));
-      if (!queued?.queued || queued.token !== operation.operationId) throw new Error('invalid queued acknowledgement');
+      if (queued !== null && (queued?.queued !== true || queued.token !== operation.operationId)) throw new Error('invalid queued acknowledgement');
       let result = null;
       for (let attempt = 0; attempt < maxPollAttempts; attempt += 1) {
         const remaining = deadline - Date.now();
