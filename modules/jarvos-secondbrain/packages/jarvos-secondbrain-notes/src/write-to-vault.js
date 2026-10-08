@@ -14,11 +14,12 @@ const {
   artifactFromMutationResult,
   createArtifactReceipt,
 } = require('../../../src/artifact-receipt');
-const { cleanNoteContent } = require('../../../bridge/provenance/src/content-origin-contract');
+const { appendHistoricalReceipt, cleanNoteContent, collectDraftingDeclarations, seedDraftingHistory } = require('../../../bridge/provenance/src/content-origin-contract');
 const { getVaultNotesDir, loadConfig } = require('./lib/notes-config');
 const { optimizeNoteKnowledge } = require('./knowledge-optimizer');
 const {
   canonicalizeFrontmatter,
+  CONTENT_ORIGIN_DRAFTING_FIELD,
   CONTENT_ORIGIN_FIELDS,
   frontmatterToObject,
   parseFrontmatter,
@@ -64,7 +65,8 @@ function appendBlock(content, block) {
 }
 
 function provenanceDeclarationsDiffer(existing = {}, next = {}) {
-  return CONTENT_ORIGIN_FIELDS.some((field) => JSON.stringify(existing[field]) !== JSON.stringify(next[field]));
+  return [...CONTENT_ORIGIN_FIELDS, CONTENT_ORIGIN_DRAFTING_FIELD]
+    .some((field) => JSON.stringify(existing[field]) !== JSON.stringify(next[field]));
 }
 
 // Metadata-only provenance repair needs the stored body to survive byte for
@@ -145,16 +147,30 @@ function readExistingFrontmatter(filePath) {
 
 // Receipt checks for a human declaration need the note content and the
 // caller-injected source resolver; without a resolver the claim fails closed.
-function originOptions({ title, content, resolveUserSource } = {}) {
+// A served-model claim likewise needs the injected resolveServedModel.
+function originOptions({ title, content, resolveUserSource, drafting, resolveServedModel } = {}) {
   return {
     content: cleanNoteContent(String(content ?? ''), title),
     ...(typeof resolveUserSource === 'function' ? { resolveUserSource } : {}),
+    ...(drafting !== undefined ? { drafting } : {}),
+    ...(typeof resolveServedModel === 'function' ? { resolveServedModel } : {}),
   };
 }
 
 function normalizeFrontmatter({ incoming = {}, existing = {}, preserveExistingProvenance = true, origin = {} } = {}) {
   const existingForNormalization = { ...existing };
+  // Seed before the stored origin may be dropped, so a body change cannot
+  // erase pre-feature assistant/mixed involvement.
+  const seeded = seedDraftingHistory(existing[CONTENT_ORIGIN_DRAFTING_FIELD], existing.content_origin);
+  if (seeded !== undefined) existingForNormalization[CONTENT_ORIGIN_DRAFTING_FIELD] = seeded;
   if (!preserveExistingProvenance) {
+    // The current receipt cannot describe changed content, but the original
+    // user source it proved is kept as history.
+    const withReceipt = appendHistoricalReceipt(
+      existingForNormalization[CONTENT_ORIGIN_DRAFTING_FIELD],
+      existing.content_origin === 'human' ? existing.content_origin_source : undefined,
+    );
+    if (withReceipt !== undefined) existingForNormalization[CONTENT_ORIGIN_DRAFTING_FIELD] = withReceipt;
     for (const field of CONTENT_ORIGIN_FIELDS) delete existingForNormalization[field];
   }
   const canonical = canonicalizeFrontmatter({
@@ -197,7 +213,7 @@ function buildFrontmatter({ incomingFrontmatter = {}, existingFrontmatter = {}, 
 // whose provenance frontmatter is being rewritten, with no append entry and with
 // caller content that already matches the stored body. Any other use is refused
 // with a `NoteBodyPreservationError` instead of dropping the caller's prose.
-function createNoteMutationOperation({ operationId, vaultId, vaultRelativePath, title, content, frontmatter = {}, existingContent = '', existingFrontmatter = {}, appendEntry, sequence = 1, source, resolveUserSource, preserveExistingBodyBytes = false } = {}) {
+function createNoteMutationOperation({ operationId, vaultId, vaultRelativePath, title, content, frontmatter = {}, existingContent = '', existingFrontmatter = {}, appendEntry, sequence = 1, source, resolveUserSource, drafting, resolveServedModel, preserveExistingBodyBytes = false } = {}) {
   if (typeof operationId !== 'string' || !operationId.trim()) throw new Error('operationId is required for a note mutation');
   if (!vaultId || !vaultRelativePath) throw new Error('vaultId and vaultRelativePath are required for a note mutation');
   if (preserveExistingBodyBytes !== false && preserveExistingBodyBytes !== true) {
@@ -219,9 +235,9 @@ function createNoteMutationOperation({ operationId, vaultId, vaultRelativePath, 
     incoming: frontmatter,
     existing: existingFrontmatter,
     preserveExistingProvenance,
-    origin: originOptions({ title, content, resolveUserSource }),
+    origin: originOptions({ title, content, resolveUserSource, drafting, resolveServedModel }),
   });
-  const rendered = renderFrontmatter(normalizedFrontmatter) + body;
+  const rendered =renderFrontmatter(normalizedFrontmatter) + body;
   const created = !existingContent;
   // Replace the whole note whenever the normalized provenance differs from what
   // is stored — including when NOTHING is stored.
@@ -289,7 +305,10 @@ function hasPersistedNoteBytes(filePath, receipt) {
   );
 }
 
-function writeNoteFile({ title, content, frontmatter = {}, appendEntry, mutationExecutor, operationId, vaultId, vaultRoot, sequence = 1, source, resolveUserSource, preserveExistingBodyBytes = false, expectedExistingContent }) {
+function writeNoteFile({ title, content, frontmatter = {}, appendEntry, mutationExecutor, operationId, vaultId, vaultRoot, sequence = 1, source, resolveUserSource, drafting, content_origin_drafting, resolveServedModel, preserveExistingBodyBytes = false, expectedExistingContent }) {
+  const collectedDrafting = collectDraftingDeclarations(drafting, content_origin_drafting);
+  if (!collectedDrafting.ok) throw new Error(`Invalid note frontmatter: content_origin_drafting rejected: invalid_drafting:${collectedDrafting.reason}`);
+  const draftingDeclaration = collectedDrafting.entries;
   if (!title) throw new Error('title is required');
   if (content === undefined || content === null) throw new Error('content is required');
   if (!frontmatter || typeof frontmatter !== 'object' || Array.isArray(frontmatter)) {
@@ -325,7 +344,7 @@ function writeNoteFile({ title, content, frontmatter = {}, appendEntry, mutation
     incoming: frontmatter,
     existing: existingFrontmatter,
     preserveExistingProvenance,
-    origin: originOptions({ title, content, resolveUserSource }),
+    origin: originOptions({ title, content, resolveUserSource, drafting: draftingDeclaration, resolveServedModel }),
   });
   if (typeof mutationExecutor !== 'function' || !vaultId || !vaultRoot || !operationId) {
     throw new Error('Canonical vault mutation composition is required; package note writes cannot modify Markdown directly');
@@ -344,6 +363,8 @@ function writeNoteFile({ title, content, frontmatter = {}, appendEntry, mutation
     sequence,
     source,
     resolveUserSource,
+    drafting: draftingDeclaration,
+    resolveServedModel,
     // Opt-in metadata-only repair; the factory refuses it for anything else.
     preserveExistingBodyBytes,
   });

@@ -2,6 +2,10 @@
 
 Release sections describe user-facing jarvOS changes. Historical public-doc sync entries are preserved below for traceability.
 
+## [Unreleased]
+
+- Notes record append-only `content_origin_drafting` history (assistant draft/edit with harness and declared, resolver-verified served, or unknown model; historical user-source receipts). History cannot be erased by later writes, and notes with assistant history are never human evidence (SUP-4054).
+
 ## [0.11.0](https://github.com/levineam/jarvOS/compare/jarvos-bootstrap-v0.10.0...jarvos-bootstrap-v0.11.0) (2026-09-19)
 
 

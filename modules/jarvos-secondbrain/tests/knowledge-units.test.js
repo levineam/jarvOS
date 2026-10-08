@@ -78,6 +78,38 @@ test('buildArtifact emits generalized source-backed knowledge units for safe not
   assert.equal(unit.evidence[0].bodySha256, first.bodyHash);
 });
 
+test('buildArtifact keeps verified human knowledge but drops it under assistant or malformed drafting history', () => {
+  const { notesDir, filePath } = noteFixture();
+  const text = 'Verified human sentences stay eligible only without assistant drafting history.';
+  const body = `# Drafted\n\n${text}`;
+  const receipt = { capture_event_id: 'capture-ku', actor: 'user', source_digest: digestText(text), content_digest: digestText(text) };
+  const resolveUserSource = (id) => (id === 'capture-ku' ? { capture_event_id: id, actor: 'user', text } : null);
+  const human = { type: 'reference', content_origin: 'human', content_origin_basis: 'verbatim_user', content_origin_source: receipt, human_evidence_eligible: true };
+  const build = (frontmatter) => buildArtifact({ filePath, notesDir, title: 'Drafted', body, frontmatter, created: true, resolveUserSource });
+
+  assert.equal(build(human).knowledgeUnits[0].human_evidence_eligible, true);
+  for (const content_origin_drafting of [
+    [{ kind: 'assistant_edit', harness: 'claude-code', model: 'claude-opus-5-5', model_evidence: 'declared' }],
+    'garbage',
+    [{ kind: 'ghost' }],
+  ]) {
+    const units = build({ ...human, content_origin_drafting }).knowledgeUnits;
+    assert.ok(units.length > 0);
+    assert.ok(units.every((unit) => unit.human_evidence_eligible === false && unit.provenance.human_evidence_eligible === false), JSON.stringify(content_origin_drafting));
+  }
+  // A historical user_source receipt alone does not disqualify human content.
+  const sourceOnly = [{ kind: 'user_source', capture_event_id: 'capture-ku', actor: 'user', source_digest: digestText(text) }];
+  assert.equal(build({ ...human, content_origin_drafting: sourceOnly }).knowledgeUnits[0].human_evidence_eligible, true);
+});
+
+test('humanEvidenceEligible refuses a flagged human record with assistant or malformed history', () => {
+  const { humanEvidenceEligible } = require('../bridge/provenance/src/content-origin-contract');
+  const record = { content_origin: 'human', content_origin_basis: 'verbatim_user', human_evidence_eligible: true };
+  assert.equal(humanEvidenceEligible(record), true);
+  assert.equal(humanEvidenceEligible({ ...record, content_origin_drafting: [{ kind: 'assistant_draft', harness: 'codex' }] }), false);
+  assert.equal(humanEvidenceEligible({ ...record, content_origin_drafting: {} }), false);
+});
+
 test('optimizeNoteKnowledge writes knowledge units into artifacts and queues', () => {
   const { root, notesDir, filePath } = noteFixture();
   const knowledgeDir = path.join(root, '.jarvos', 'knowledge');

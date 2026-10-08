@@ -10,6 +10,8 @@ const {
   sourceReceipt,
   validateUserSourceReceipt,
   parseJournalEntry,
+  CONTENT_ORIGIN_DRAFTING_FIELD,
+  contentOriginDraftingAllowsHuman,
 } = require('./content-origin-contract');
 const { frontmatterToObject, parseFrontmatter } = require('../../../packages/jarvos-secondbrain-notes/src/lib/note-schema');
 
@@ -108,12 +110,17 @@ function projectNoteMarkdown(markdown, { sourcePath = null, title = null, resolv
     content: cleanNoteContent(clean_text, title),
     resolveUserSource,
   });
+  // Malformed drafting history, or any assistant contribution in it, keeps the
+  // note out of human evidence regardless of its declared origin.
+  const draftingAllowsHuman = contentOriginDraftingAllowsHuman(frontmatter[CONTENT_ORIGIN_DRAFTING_FIELD]);
+  // The receipt binds the authored content, not the writer-added title heading,
+  // so the projected text is that same authored content and stays digest-bound.
   const projected = projectEvidenceRecord({
-    clean_text,
+    clean_text: cleanNoteContent(clean_text, title),
     content_origin: normalized.content_origin,
     content_origin_basis: normalized.content_origin_basis,
     user_source: normalized.user_source,
-    human_evidence_eligible: normalized.human_evidence_eligible === true,
+    human_evidence_eligible: normalized.human_evidence_eligible === true && draftingAllowsHuman,
   }, { resolveUserSource });
   return {
     ...projected,

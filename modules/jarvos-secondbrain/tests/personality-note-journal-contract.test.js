@@ -69,6 +69,10 @@ function makeTestMutationService(vaultRoot) {
       if (operation.operationKind === 'create') {
         if (fs.existsSync(target)) return fs.readFileSync(target, 'utf8') === operation.content ? { status: 'already_satisfied', obsidian: 'acknowledged' } : { status: 'conflict' };
         fs.writeFileSync(target, operation.content, 'utf8');
+      } else if (operation.operationKind === 'replace') {
+        // Compare-and-swap against the exact pre-state the writer read.
+        if (fs.readFileSync(target, 'utf8') !== operation.expectedContent) return { status: 'conflict' };
+        fs.writeFileSync(target, operation.content, 'utf8');
       } else {
         const current = fs.readFileSync(target, 'utf8');
         if (operation.transformName === 'journal-backlink') {
@@ -137,6 +141,112 @@ test('supported AI personalities can execute the Obsidian note/journal contract'
       assert.equal(qmd.entries[`Notes/${second.title}.md`].status, 'pending-refresh');
     });
   }
+});
+
+test('Codex draft then Claude edit through the contract keeps multi-model drafting history end to end', () => {
+  const { frontmatterToObject, parseFrontmatter } = require('../packages/jarvos-secondbrain-notes/src/lib/note-schema.js');
+  const { projectNoteMarkdown } = require('../bridge/provenance/src/content-origin-evidence.js');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sup-4054-drafting-'));
+  withEnv({
+    VAULT_NOTES_DIR: path.join(root, 'Notes'),
+    JOURNAL_DIR: path.join(root, 'Journal'),
+    JARVOS_KNOWLEDGE_DIR: path.join(root, '.jarvos', 'knowledge'),
+    JARVOS_ALLOW_UNSAFE_TEST_JOURNAL_WRITE: '1',
+  }, () => {
+    const mutationService = makeTestMutationService(root);
+    const title = 'SUP-4054 drafting history';
+    const draft = 'Codex drafted this explanation for later retrieval.';
+    const frontmatter = { status: 'draft', type: 'reference', project: 'SUP-4054', author: 'jarvis' };
+    const codexServed = { kind: 'assistant_draft', harness: 'codex', model: 'gpt-5-codex', model_evidence: 'served', served_ref: 'resp-codex-1' };
+    const claudeDeclared = { kind: 'assistant_edit', harness: 'claude-code', model: 'claude-opus-5-5', model_evidence: 'declared' };
+    const resolveServedModel = (ref) => (ref === 'resp-codex-1' ? { model: 'gpt-5-codex' } : null);
+    const readStored = (notePath) => frontmatterToObject(parseFrontmatter(fs.readFileSync(notePath, 'utf8')));
+
+    // A served claim without the injected resolver is refused, not downgraded.
+    assert.throws(() => writeNoteThroughContract({
+      personality: 'codex', title, content: draft, content_origin: 'assistant', content_origin_basis: 'assistant_generated', drafting: [codexServed], frontmatter,
+    }, { mutationService }), /served_unresolved/);
+
+    const first = writeNoteThroughContract({
+      personality: 'codex', title, content: draft, content_origin: 'assistant', content_origin_basis: 'assistant_generated', drafting: [codexServed], frontmatter,
+    }, { mutationService, resolveServedModel });
+    assert.deepEqual(readStored(first.notePath).content_origin_drafting, [codexServed]);
+
+    const editInput = {
+      personality: 'claude-code',
+      title,
+      content: `${draft}\n\nClaude tightened the explanation.`,
+      content_origin: 'mixed',
+      content_origin_basis: 'mixed_composition',
+      drafting: [claudeDeclared],
+      frontmatter: { ...frontmatter, content_origin_drafting: [] },
+    };
+    const second = writeNoteThroughContract(editInput, { mutationService });
+    assert.deepEqual(readStored(second.notePath).content_origin_drafting, [codexServed, claudeDeclared]);
+    const retried = writeNoteThroughContract(editInput, { mutationService });
+    assert.deepEqual(readStored(retried.notePath).content_origin_drafting, [codexServed, claudeDeclared]);
+
+    const markdown = fs.readFileSync(retried.notePath, 'utf8');
+    assert.ok(markdown.includes(draft), 'original body survives');
+    assert.equal(projectNoteMarkdown(markdown, { title }).human_evidence_eligible, false);
+    const journalMd = fs.readFileSync(retried.journalPath, 'utf8');
+    assert.equal(journalMd.split(`- [[${title}]]`).length - 1, 1);
+
+    // Human adoption cannot erase the recorded assistant contributions.
+    const adoptionText = `${draft}\n\nClaude tightened the explanation.`;
+    const digest = digestText(adoptionText);
+    assert.throws(() => writeNoteThroughContract({
+      personality: 'claude-code', title, content: adoptionText, content_origin: 'human', content_origin_basis: 'verbatim_user',
+      user_source: { capture_event_id: 'adopt-1', actor: 'user', source_digest: digest, content_digest: digest },
+      drafting: [], frontmatter,
+    }, { mutationService, resolveUserSource: () => ({ capture_event_id: 'adopt-1', actor: 'user', text: adoptionText }) }), /human_origin_with_assistant_history/);
+    assert.deepEqual(readStored(retried.notePath).content_origin_drafting, [codexServed, claudeDeclared]);
+
+    // Unknown model is recorded as unknown, never inferred.
+    const unknownModel = writeNoteThroughContract({
+      personality: 'codex', title: 'SUP-4054 unknown model', content: 'Model was not reported.', content_origin: 'assistant', content_origin_basis: 'assistant_generated',
+      drafting: [{ kind: 'assistant_draft', harness: 'codex' }], frontmatter,
+    }, { mutationService });
+    assert.deepEqual(readStored(unknownModel.notePath).content_origin_drafting, [{ kind: 'assistant_draft', harness: 'codex', model: 'unknown', model_evidence: 'unknown' }]);
+  });
+});
+
+test('valid human receipt saved by an assistant stays eligible, and a later mixed edit keeps its source digest as history', () => {
+  const { frontmatterToObject, parseFrontmatter } = require('../packages/jarvos-secondbrain-notes/src/lib/note-schema.js');
+  const { projectNoteMarkdown } = require('../bridge/provenance/src/content-origin-evidence.js');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sup-4054-human-'));
+  withEnv({
+    VAULT_NOTES_DIR: path.join(root, 'Notes'),
+    JOURNAL_DIR: path.join(root, 'Journal'),
+    JARVOS_KNOWLEDGE_DIR: path.join(root, '.jarvos', 'knowledge'),
+    JARVOS_ALLOW_UNSAFE_TEST_JOURNAL_WRITE: '1',
+  }, () => {
+    const mutationService = makeTestMutationService(root);
+    const title = 'SUP-4054 human source';
+    const text = 'The user said exactly this and wants it kept verbatim.';
+    const receipt = { capture_event_id: 'capture-human-1', actor: 'user', source_digest: digestText(text), content_digest: digestText(text) };
+    const resolveUserSource = (id) => (id === 'capture-human-1' ? { capture_event_id: id, actor: 'user', text } : null);
+    const frontmatter = { status: 'draft', type: 'reference', project: 'SUP-4054', author: 'andrew' };
+
+    const saved = writeNoteThroughContract({
+      personality: 'claude-code', title, content: text, content_origin: 'human', content_origin_basis: 'verbatim_user', user_source: receipt, frontmatter,
+    }, { mutationService, resolveUserSource });
+    const stored = frontmatterToObject(parseFrontmatter(fs.readFileSync(saved.notePath, 'utf8')));
+    assert.equal(stored.content_origin, 'human');
+    assert.equal(stored.human_evidence_eligible, true);
+    assert.equal(stored.content_origin_drafting, undefined);
+    assert.equal(projectNoteMarkdown(fs.readFileSync(saved.notePath, 'utf8'), { title, resolveUserSource }).human_evidence_eligible, true);
+
+    const edited = writeNoteThroughContract({
+      personality: 'codex', title, content: `${text}\n\nCodex added context.`, content_origin: 'mixed', content_origin_basis: 'mixed_composition',
+      drafting: [{ kind: 'assistant_edit', harness: 'codex', model: 'gpt-5-codex', model_evidence: 'declared' }], frontmatter,
+    }, { mutationService });
+    const after = frontmatterToObject(parseFrontmatter(fs.readFileSync(edited.notePath, 'utf8')));
+    assert.equal(after.human_evidence_eligible, false);
+    const history = after.content_origin_drafting.find((entry) => entry.kind === 'user_source');
+    assert.equal(history.source_digest, receipt.source_digest);
+    assert.equal(history.capture_event_id, 'capture-human-1');
+  });
 });
 
 test('personality contract carries an explicit assistant origin without adopting deferred state', () => {

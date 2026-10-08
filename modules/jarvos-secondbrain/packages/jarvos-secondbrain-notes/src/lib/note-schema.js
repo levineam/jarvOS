@@ -6,6 +6,10 @@ const {
   CONTENT_ORIGIN_SCHEMA_VERSION,
   CONTENT_ORIGINS,
   frontmatterForContentOrigin,
+  CONTENT_ORIGIN_DRAFTING_FIELD,
+  collectDraftingDeclarations,
+  mergeContentOriginDrafting,
+  seedDraftingHistory,
 } = require('../../../../bridge/provenance/src/content-origin-contract');
 
 const REQUIRED_FIELDS = ['status', 'type', 'project', 'created', 'updated', 'author'];
@@ -525,7 +529,23 @@ function canonicalizeFrontmatter({ incomingFrontmatter = {}, existingFrontmatter
     { ...normalized, ...declaration },
     { ...origin, verifyDeclaration: incomingDeclaresOrigin },
   );
+  // Drafting history merges stored entries before the caller's declaration, so
+  // a caller can append to it but never replace or erase it.
+  // Frontmatter and top-level declarations are combined, never one shadowing
+  // the other.
+  const declared = collectDraftingDeclarations(split.optional[CONTENT_ORIGIN_DRAFTING_FIELD], origin.drafting);
+  const drafting = declared.ok
+    ? mergeContentOriginDrafting({
+      existing: seedDraftingHistory(existingOptional[CONTENT_ORIGIN_DRAFTING_FIELD], existingOptional.content_origin),
+      incoming: declared.entries,
+      origin: provenance.fields.content_origin,
+      previousReceipt: existingOptional.content_origin === 'human' ? existingOptional.content_origin_source : undefined,
+    }, origin)
+    : { ...declared, reason: `invalid_drafting:${declared.reason}` };
   for (const field of CONTENT_ORIGIN_FIELDS) delete optional[field];
+  delete optional[CONTENT_ORIGIN_DRAFTING_FIELD];
+  if (drafting.ok && drafting.entries.length) provenance.fields[CONTENT_ORIGIN_DRAFTING_FIELD] = drafting.entries;
+  if (!drafting.ok) provenance.errors.push(`content_origin_drafting rejected: ${drafting.reason}`);
 
   return {
     errors: [...errors, ...provenance.errors],
@@ -552,6 +572,7 @@ module.exports = {
   WRITER_OWNED_FIELDS,
   RESERVED_V1_FIELDS,
   CONTENT_ORIGIN_FIELDS,
+  CONTENT_ORIGIN_DRAFTING_FIELD,
   ALLOWED_STATUS,
   ALLOWED_TYPE,
   ALLOWED_AUTHOR,

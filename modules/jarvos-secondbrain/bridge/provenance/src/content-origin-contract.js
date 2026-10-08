@@ -318,6 +318,206 @@ function parseJournalEntry(lines, index) {
   };
 }
 
+// content_origin_drafting is an append-only history of who drafted or edited
+// the content. Model identity is recorded beside the origin, never used to
+// establish it: a served model only says which model ran, not whose words
+// these are. Nothing here infers a model from environment, defaults, or actor.
+const CONTENT_ORIGIN_DRAFTING_FIELD = 'content_origin_drafting';
+const DRAFTING_KINDS = Object.freeze(['assistant_draft', 'assistant_edit', 'user_source']);
+const ASSISTANT_DRAFTING_KINDS = Object.freeze(['assistant_draft', 'assistant_edit']);
+const MODEL_EVIDENCE = Object.freeze(['declared', 'served', 'unknown']);
+
+function draftingError(reason) {
+  return { ok: false, reason, entries: null };
+}
+
+function nonEmptyString(value) {
+  return typeof value === 'string' && Boolean(value.trim());
+}
+
+// `fresh` entries are caller declarations: a served claim must resolve through
+// the injected resolveServedModel. Persisted entries were verified when they
+// were written and are only checked structurally, so history stays unchanged.
+function normalizeDraftingEntry(entry, { fresh = false, resolveServedModel } = {}) {
+  if (!isPlainObject(entry)) return draftingError('entry_not_object');
+  const kind = String(entry.kind ?? '').trim();
+  if (!DRAFTING_KINDS.includes(kind)) return draftingError('invalid_kind');
+  if (kind === 'user_source') {
+    if (!nonEmptyString(entry.capture_event_id) || entry.actor !== 'user'
+      || !SHA256_RE.test(String(entry.source_digest || ''))
+      || (entry.content_digest !== undefined && !SHA256_RE.test(String(entry.content_digest)))) {
+      return draftingError('invalid_user_source_receipt');
+    }
+    return {
+      ok: true,
+      entry: {
+        kind,
+        capture_event_id: entry.capture_event_id.trim(),
+        actor: 'user',
+        source_digest: entry.source_digest,
+        ...(entry.content_digest !== undefined ? { content_digest: entry.content_digest } : {}),
+        ...(nonEmptyString(entry.harness) ? { harness: entry.harness.trim() } : {}),
+      },
+    };
+  }
+  if (!nonEmptyString(entry.harness)) return draftingError('missing_harness');
+  if (entry.model !== undefined && !nonEmptyString(entry.model)) return draftingError('invalid_model');
+  const model = entry.model === undefined ? 'unknown' : entry.model.trim();
+  const evidence = entry.model_evidence === undefined
+    ? (model === 'unknown' ? 'unknown' : 'declared')
+    : String(entry.model_evidence).trim();
+  if (!MODEL_EVIDENCE.includes(evidence)) return draftingError('invalid_model_evidence');
+  if ((model === 'unknown') !== (evidence === 'unknown')) return draftingError('model_evidence_conflict');
+  if (evidence !== 'served' && entry.served_ref !== undefined) return draftingError('served_ref_without_served_evidence');
+  if (evidence === 'served') {
+    if (!nonEmptyString(entry.served_ref)) return draftingError('missing_served_ref');
+    if (fresh) {
+      if (typeof resolveServedModel !== 'function') return draftingError('served_unresolved');
+      let served;
+      try {
+        served = resolveServedModel(entry.served_ref.trim());
+      } catch (_error) {
+        return draftingError('served_unresolved');
+      }
+      const servedModel = typeof served === 'string' ? served : served?.model;
+      if (!nonEmptyString(servedModel)) return draftingError('served_unresolved');
+      if (servedModel.trim() !== model) return draftingError('served_model_conflict');
+    }
+  }
+  return {
+    ok: true,
+    entry: {
+      kind,
+      harness: entry.harness.trim(),
+      model,
+      model_evidence: evidence,
+      ...(evidence === 'served' ? { served_ref: entry.served_ref.trim() } : {}),
+    },
+  };
+}
+
+function normalizeDraftingList(value, options = {}) {
+  if (value === undefined || value === null || value === '') return { ok: true, reason: null, entries: [] };
+  if (!Array.isArray(value)) return draftingError('drafting_not_array');
+  const entries = [];
+  for (const raw of value) {
+    const result = normalizeDraftingEntry(raw, options);
+    if (!result.ok) return result;
+    entries.push(result.entry);
+  }
+  return { ok: true, reason: null, entries };
+}
+
+function appendDraftingEntries(history, additions) {
+  const seen = new Set(history.map((entry) => JSON.stringify(entry)));
+  const merged = [...history];
+  for (const entry of additions) {
+    const key = JSON.stringify(entry);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    merged.push(entry);
+  }
+  return merged;
+}
+
+// Record a superseded human receipt as a historical user_source entry. It is
+// never a current receipt and never grants human eligibility. Malformed history
+// is returned untouched so the merge still rejects it.
+function appendHistoricalReceipt(history, previousReceipt) {
+  if (!isPlainObject(previousReceipt)) return history;
+  const receipt = normalizeDraftingEntry({ ...previousReceipt, kind: 'user_source' });
+  const parsed = normalizeDraftingList(history);
+  if (!receipt.ok || !parsed.ok) return history;
+  return appendDraftingEntries(parsed.entries, [receipt.entry]);
+}
+
+function hasAssistantContribution(entries = []) {
+  return entries.some((entry) => ASSISTANT_DRAFTING_KINDS.includes(entry.kind));
+}
+
+/**
+ * Merge persisted drafting history with a fresh caller declaration for the
+ * origin the write is about to persist. Persisted history comes first and is
+ * never dropped: an empty array, omission, or human adoption cannot erase a
+ * past assistant contribution. Returns { ok, reason, entries }.
+ */
+function mergeContentOriginDrafting({ existing, incoming, origin, previousReceipt } = {}, options = {}) {
+  const persisted = normalizeDraftingList(existing);
+  if (!persisted.ok) return draftingError(`invalid_persisted_drafting:${persisted.reason}`);
+  // A caller resending stored entries (for example a metadata-only repair) is
+  // not making a fresh claim, so only entries new to the history re-resolve.
+  const stored = new Set(persisted.entries.map((entry) => JSON.stringify(entry)));
+  const structural = normalizeDraftingList(incoming);
+  if (!structural.ok) return draftingError(`invalid_drafting:${structural.reason}`);
+  const declared = normalizeDraftingList(
+    structural.entries.filter((entry) => !stored.has(JSON.stringify(entry))),
+    { fresh: true, resolveServedModel: options.resolveServedModel },
+  );
+  if (!declared.ok) return draftingError(`invalid_drafting:${declared.reason}`);
+  let entries = appendDraftingEntries(persisted.entries, declared.entries);
+  if (origin === 'human' && hasAssistantContribution(entries)) {
+    return draftingError('human_origin_with_assistant_history');
+  }
+  // A prior human receipt survives any change away from human as history only.
+  if (origin !== 'human') entries = appendHistoricalReceipt(entries, previousReceipt);
+  // Assistant/mixed content with no recorded contribution gets an explicitly
+  // unknown one rather than a fabricated harness or model.
+  if ((origin === 'assistant' || origin === 'mixed') && !hasAssistantContribution(entries)) {
+    entries = appendDraftingEntries(entries, [{
+      kind: origin === 'assistant' ? 'assistant_draft' : 'assistant_edit',
+      harness: 'unknown',
+      model: 'unknown',
+      model_evidence: 'unknown',
+    }]);
+  }
+  return { ok: true, reason: null, entries };
+}
+
+// A note stored as assistant/mixed before drafting history existed still had
+// an AI contributor. Seed one explicitly unknown entry so a later declaration
+// (including human adoption) cannot erase that involvement. Malformed history
+// is returned untouched so the merge still rejects it.
+function seedDraftingHistory(history, origin) {
+  if (origin !== 'assistant' && origin !== 'mixed') return history;
+  const parsed = normalizeDraftingList(history);
+  if (!parsed.ok || hasAssistantContribution(parsed.entries)) return history;
+  return [...parsed.entries, {
+    kind: origin === 'assistant' ? 'assistant_draft' : 'assistant_edit',
+    harness: 'unknown',
+    model: 'unknown',
+    model_evidence: 'unknown',
+  }];
+}
+
+// Combine every alias a caller used (top-level drafting, content_origin_drafting,
+// frontmatter) so none silently hides another. Any non-array alias rejects;
+// duplicates are removed later by the merge.
+function collectDraftingDeclarations(...values) {
+  const present = values.filter((value) => value !== undefined && value !== null);
+  if (present.some((value) => !Array.isArray(value))) return draftingError('drafting_not_array');
+  return { ok: true, reason: null, entries: present.length ? present.flat() : undefined };
+}
+
+// Read-side check: malformed history or a human record with assistant history
+// is ineligible as human evidence.
+function contentOriginDraftingAllowsHuman(value) {
+  const parsed = normalizeDraftingList(value);
+  return parsed.ok && !hasAssistantContribution(parsed.entries);
+}
+
+function recordDraftingHistory(record) {
+  return record[CONTENT_ORIGIN_DRAFTING_FIELD] ?? record.contentOriginDrafting;
+}
+
+// Every read normalizer funnels through this so knowledge, evidence, and audit
+// consumers all drop human eligibility on assistant or malformed history.
+function withDraftingEligibility(normalized, input) {
+  if (!normalized?.human_evidence_eligible || contentOriginDraftingAllowsHuman(recordDraftingHistory(input))) {
+    return normalized;
+  }
+  return { ...normalized, human_evidence_eligible: false, normalization_reason: 'drafting_history_excludes_human_evidence' };
+}
+
 function resolveLegacyOrigin(input = {}) {
   const author = String(input.author || '').trim().toLowerCase();
   const sourceAgent = String(input.source_agent || input.sourceAgent || '').trim().toLowerCase();
@@ -336,6 +536,7 @@ function resolveLegacyOrigin(input = {}) {
 
 function humanEvidenceEligible(record = {}, options = {}) {
   if (!isPlainObject(record) || record.content_origin !== 'human') return false;
+  if (!contentOriginDraftingAllowsHuman(recordDraftingHistory(record))) return false;
   if (record.human_evidence_eligible === true) return true;
   if (record.content_origin_basis === 'legacy_author') return options.allowLegacyFallback === true;
   if (options.manualEntry === true) return true;
@@ -347,7 +548,7 @@ function humanEvidenceEligible(record = {}, options = {}) {
 function normalizeContentOriginWithLegacy(input = {}, options = {}) {
   if (input.content_origin || input.contentOrigin || input.content_origin_basis || input.contentOriginBasis) {
     if (options.allowUnresolvedReceipt === true) return normalizeContentOriginForRead(input, options);
-    return normalizeContentOrigin(input, options);
+    return withDraftingEligibility(normalizeContentOrigin(input, options), input);
   }
   if (input.author) return resolveLegacyOrigin(input);
   return unknownRecord('missing_declaration');
@@ -369,13 +570,13 @@ function normalizeContentOriginForRead(input = {}, options = {}) {
       return unknownRecord('read_content_digest_mismatch');
     }
   }
-  return {
+  return withDraftingEligibility({
     schema_version: CONTENT_ORIGIN_SCHEMA_VERSION,
     content_origin: origin,
     content_origin_basis: basis,
     ...(receipt ? { user_source: { ...receipt } } : {}),
     human_evidence_eligible: origin === 'human' && source.human_evidence_eligible === true,
-  };
+  }, source);
 }
 
 module.exports = {
@@ -403,4 +604,15 @@ module.exports = {
   normalizeContentOriginForRead,
   resolveLegacyOrigin,
   humanEvidenceEligible,
+  CONTENT_ORIGIN_DRAFTING_FIELD,
+  DRAFTING_KINDS,
+  MODEL_EVIDENCE,
+  normalizeDraftingEntry,
+  normalizeDraftingList,
+  mergeContentOriginDrafting,
+  collectDraftingDeclarations,
+  seedDraftingHistory,
+  appendHistoricalReceipt,
+  hasAssistantContribution,
+  contentOriginDraftingAllowsHuman,
 };
