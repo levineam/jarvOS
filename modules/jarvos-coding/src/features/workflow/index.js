@@ -24,6 +24,9 @@ const SHA256 = /^[a-f0-9]{64}$/i;
 const OPAQUE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 const RELATIVE_PATH = /^(?![\\/])(?!.*(?:^|[\\/])\.\.(?:[\\/]|$))[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)*$/;
 const SHELL_META = /[;&|`$<>\n\r]/;
+const DEFAULT_OWNER_ID = 'jarvos-coding';
+const ABSOLUTE_PATH = /^(?:\/(?!\/)|[A-Za-z]:[\\/]|\\\\)/;
+const CONTROL_CHARS = /[\u0000-\u001f\u007f]/;
 const FORBIDDEN_INVOCATION_FIELDS = new Set(['executable', 'command', 'shell', 'cwd', 'plugin', 'pluginId', 'activation', 'activationCommand', 'prompt', 'artifactPath', 'receiptPath']);
 
 function isObject(value) {
@@ -37,6 +40,42 @@ function clone(value) {
 function digest(value) {
   const crypto = require('node:crypto');
   return crypto.createHash('sha256').update(typeof value === 'string' ? value : JSON.stringify(value)).digest('hex');
+}
+
+const DRIVE_ROOT = /^[A-Za-z]:[\\/]/;
+const UNC_ROOT = /^\\\\([^\\/]+)\\([^\\/]+)(\\[^/]*)?$/;
+
+function isUncWorktreeRoot(value) {
+  // Complete `\\server\share[\...]` only: no bare `\\`, `\\server` or `\\server\`,
+  // no `\\.\` / `\\?\` device namespaces, no `.`/`..`/empty segments, no `/`.
+  const match = UNC_ROOT.exec(value);
+  if (!match) return false;
+  const [, server, share, rest = ''] = match;
+  if (['.', '..', '?'].includes(server) || ['.', '..'].includes(share)) return false;
+  const segments = rest.split('\\').slice(1);
+  if (segments.length > 0 && segments[segments.length - 1] === '') segments.pop();
+  return segments.every((segment) => segment !== '' && segment !== '.' && segment !== '..');
+}
+
+function isWorktreeRoot(value) {
+  if (typeof value !== 'string' || value.length === 0 || value.length > 4096) return false;
+  if (CONTROL_CHARS.test(value) || !ABSOLUTE_PATH.test(value)) return false;
+  // Every ABSOLUTE_PATH match lands in exactly one branch; roots are never rewritten.
+  // POSIX roots must already be normalized (no `.`/`..` segments or doubled separators).
+  if (value.startsWith('/')) return path.posix.normalize(value) === value;
+  // Drive-letter roots must equal their win32-normalized form, so only backslash
+  // `C:\x` style without `.`/`..` segments or doubled separators is accepted.
+  if (DRIVE_ROOT.test(value)) return path.win32.normalize(value) === value;
+  if (value.startsWith('\\\\')) return isUncWorktreeRoot(value);
+  return false;
+}
+
+function isOwnerId(value) {
+  return typeof value === 'string' && OPAQUE_ID.test(value);
+}
+
+function authorityRefusal(message) {
+  return new Error(`coding workflow authority refused: ${message}`);
 }
 
 function defaultManifestPath() {
@@ -107,7 +146,11 @@ function createManagedCodingWorkflow(options = {}) {
   const manifest = resolveManifest(options);
   const providerAdapter = options.providerAdapter || {};
   const nativeAdapter = options.nativeAdapter || {};
-  const ownerId = options.ownerId || 'jarvos-coding';
+  // Factory owner/root are authoritative; validated lazily per operation so
+  // constructor-only manifest inspection keeps working without them.
+  const ownerId = options.ownerId === undefined ? DEFAULT_OWNER_ID : options.ownerId;
+  const factoryRootSupplied = options.canonicalWorktree !== undefined;
+  const factoryRoot = options.canonicalWorktree;
   const providerSnapshot = options.providerSnapshot || null;
   const providerSnapshotVerifier = options.providerSnapshotVerifier;
   const pendingProviders = new Set();
@@ -135,17 +178,58 @@ function createManagedCodingWorkflow(options = {}) {
 
   const trustedConfiguredSnapshot = isTrustedProviderSnapshot(providerSnapshot) ? providerSnapshot : null;
 
-  function claim(input) {
-    const subjectKey = input.subjectKey || input.issueIdentifier || input.issue?.identifier;
+  // SUP-3816: shared claim boundary for every verb. This is a model-input
+  // boundary repair: caller ownerId/canonicalWorktree are optional same-valued
+  // assertions and can never override, adopt, retarget or bootstrap. It is NOT
+  // authenticated owner proof, nor an atomic filesystem/Git binding of the root.
+  // Every refusal below happens before claimWorkRun and any adapter call.
+  function resolveClaimAuthority(input) {
+    if (!isOwnerId(ownerId)) throw authorityRefusal('factory ownerId is malformed');
+    if (input.ownerId !== undefined) {
+      if (!isOwnerId(input.ownerId)) throw authorityRefusal('caller ownerId is malformed');
+      if (input.ownerId !== ownerId) throw authorityRefusal('caller ownerId does not match the factory owner');
+    }
+    if (factoryRootSupplied && !isWorktreeRoot(factoryRoot)) throw authorityRefusal('factory canonicalWorktree is malformed');
+    const callerRootSupplied = input.canonicalWorktree !== undefined;
+    if (callerRootSupplied && !isWorktreeRoot(input.canonicalWorktree)) throw authorityRefusal('caller canonicalWorktree is malformed');
+
+    let subjectKey;
+    if (input.subjectKey !== undefined) subjectKey = input.subjectKey;
+    else if (input.issueIdentifier !== undefined) subjectKey = input.issueIdentifier;
+    else subjectKey = input.issue?.identifier;
     if (typeof subjectKey !== 'string' || !subjectKey) throw new Error('coding workflow requires a stable subjectKey');
+    if (input.workRunId !== undefined && (typeof input.workRunId !== 'string' || !OPAQUE_ID.test(input.workRunId))) {
+      throw new Error('coding workflow requires an opaque workRunId');
+    }
+    // Same default identity the work-run store derives for a subject.
+    const workRunId = input.workRunId === undefined ? `run_${digest(subjectKey).slice(0, 24)}` : input.workRunId;
+
+    const existing = options.workRunStore.getWorkRun(workRunId, { public: false });
+    let trustedRoot;
+    if (existing) {
+      if (existing.subjectKey !== subjectKey) throw new Error('coding work-run claim failed: workRunId is bound to a different subject');
+      if (!isWorktreeRoot(existing.canonicalWorktree)) throw authorityRefusal('stored canonicalWorktree is missing or malformed');
+      if (factoryRootSupplied && factoryRoot !== existing.canonicalWorktree) throw authorityRefusal('factory canonicalWorktree conflicts with the stored worktree');
+      trustedRoot = existing.canonicalWorktree;
+    } else {
+      if (!factoryRootSupplied) throw authorityRefusal('a new work run requires a trusted factory canonicalWorktree bootstrap');
+      trustedRoot = factoryRoot;
+    }
+    if (callerRootSupplied && input.canonicalWorktree !== trustedRoot) throw authorityRefusal('caller canonicalWorktree does not match the trusted worktree');
+    return { subjectKey, workRunId, trustedRoot };
+  }
+
+  function claim(input) {
+    const { subjectKey, workRunId, trustedRoot } = resolveClaimAuthority(input);
     let claimed = options.workRunStore.claimWorkRun({
       subjectKey,
-      workRunId: input.workRunId,
-      canonicalWorktree: input.canonicalWorktree,
-      ownerId: input.ownerId || ownerId,
+      workRunId,
+      canonicalWorktree: trustedRoot,
+      ownerId,
       providerSnapshot: trustedConfiguredSnapshot,
     });
     if (!claimed.ok) throw new Error(`coding work-run claim failed: ${claimed.reason}`);
+    if (claimed.workRun.canonicalWorktree !== trustedRoot) throw authorityRefusal('claimed canonicalWorktree does not match the trusted worktree');
     if (trustedConfiguredSnapshot && claimed.workRun.providerSnapshot
       && claimed.workRun.providerSnapshot.pinDigest !== trustedConfiguredSnapshot.pinDigest) {
       throw new Error('coding provider snapshot failed: provider_pin_conflict');
@@ -177,7 +261,7 @@ function createManagedCodingWorkflow(options = {}) {
       operationNonce,
       idempotencyKey: input.idempotencyKey || `${operation}:${claimed.workRunId}`,
       provider: null,
-      canonicalWorktree: input.canonicalWorktree || claimed.workRun.canonicalWorktree,
+      canonicalWorktree: claimed.workRun.canonicalWorktree,
       input: clone(requestInput),
       args: [operation, claimed.workRunId, operationNonce],
       env: {
@@ -225,7 +309,7 @@ function createManagedCodingWorkflow(options = {}) {
       operationNonce: input.operationNonce || `${operation}-${claimed.workRunId}`,
       idempotencyKey: input.idempotencyKey || `${operation}:${claimed.workRunId}`,
       provider,
-      canonicalWorktree: input.canonicalWorktree || claimed.workRun.canonicalWorktree,
+      canonicalWorktree: claimed.workRun.canonicalWorktree,
       input: requestInput,
       acceptedPlanDigest,
     });

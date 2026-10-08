@@ -203,6 +203,40 @@ the trace to the plan revision this work run accepted: the trace's plan digest
 must equal the store's `acceptedPlan.digest`. A digest restated by the caller is
 ignored, and a run that never accepted a plan cannot complete.
 
+### Work-run owner and worktree authority
+
+Every verb (`plan`, `acceptPlan`, `work`, `compound`, `complete`) claims through
+one shared boundary. The host-provided factory `ownerId` (default
+`jarvos-coding`) is authoritative, and the work-run root comes only from trusted
+sources:
+
+- **First-run bootstrap.** A new work run is created only on the factory
+  `canonicalWorktree`. Without a valid factory root, a new run is refused and
+  nothing is created, even if the caller supplies a root.
+- **Re-entry.** A host-preclaimed or previously created run re-enters on its
+  stored root. A factory root, when supplied, must equal the stored root; it
+  never retargets the run.
+- **Caller assertions.** A caller `ownerId` or `canonicalWorktree` is an
+  optional, same-valued legacy assertion. It must equal the factory owner and
+  the chosen root; it never overrides, adopts, or bootstraps.
+- **Fail closed.** Missing, malformed (non-string, empty, relative, control
+  characters, unnormalized POSIX or Windows drive roots, forward-slash drive
+  roots, or incomplete UNC/device-namespace roots), or conflicting owners and
+  roots are refused
+  before any run is created and before any provider or native adapter runs.
+
+```js
+const workflow = createManagedCodingWorkflow({
+  workRunStore: hostStore,
+  ownerId: hostOwnerId,
+  canonicalWorktree: hostWorktreeRoot,
+});
+await workflow.plan({ subjectKey: hostSubjectKey });
+```
+
+This boundary checks model-provided input only. It is not authenticated owner
+proof, and it does not atomically bind the root to the filesystem or Git.
+
 Learning capture is deliberately independent of coding completion. It runs only
 after live review, tests, pull-request, post-merge, and close evidence establish
 a verified result and a bounded signal names a reusable root cause,
