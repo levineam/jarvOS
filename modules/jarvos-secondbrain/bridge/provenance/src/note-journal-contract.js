@@ -14,6 +14,7 @@ const { linkNoteToJournal } = require('./link-to-journal');
 const { createArtifactReceipt } = require('../../../src/artifact-receipt');
 const {
   cleanNoteContent,
+  collectDraftingDeclarations,
   frontmatterForContentOrigin,
 } = require('./content-origin-contract');
 
@@ -87,6 +88,15 @@ function parseInput(input, { resolveUserSource } = {}) {
     resolveUserSource,
     captureEventId: input.captureEventId ?? input.capture_event_id,
   });
+  // Drafting history is passed through as declared; the canonical writer
+  // merges it with stored history and verifies served models.
+  const collected = collectDraftingDeclarations(
+    suppliedFrontmatter.content_origin_drafting,
+    input.content_origin_drafting,
+    input.drafting,
+  );
+  if (!collected.ok) throw new Error(`content_origin_drafting rejected: ${collected.reason}`);
+  const drafting = collected.entries;
 
   return {
     personality,
@@ -98,6 +108,7 @@ function parseInput(input, { resolveUserSource } = {}) {
       source_personality: personality,
       contract: 'obsidian-note-journal-v1',
       ...normalizedOrigin,
+      ...(drafting !== undefined ? { content_origin_drafting: drafting } : {}),
     },
   };
 }
@@ -273,7 +284,7 @@ function dispatchBacklink({ result, section = '📝 Notes', createIfMissing = tr
   }
 }
 
-function writeNoteThroughContract(rawInput, { mutationService, link, resolveUserSource } = {}) {
+function writeNoteThroughContract(rawInput, { mutationService, link, resolveUserSource, resolveServedModel } = {}) {
   const input = parseInput(rawInput, { resolveUserSource });
   const service = mutationService || createObsidianOwnedMutationService({ source: 'bridge.note-journal-contract' });
   const filePath = path.join(getVaultNotesDir(), `${String(input.title).trim().replace(/[/\\:*?"<>|]/g, '-')}.md`);
@@ -288,6 +299,7 @@ function writeNoteThroughContract(rawInput, { mutationService, link, resolveUser
     content: input.content,
     frontmatter: input.frontmatter,
     resolveUserSource,
+    resolveServedModel,
     ...writeContext,
   });
   const result = {

@@ -6,6 +6,9 @@ const {
 } = require('../../../packages/jarvos-ambient/src/intent/capture-contract');
 const {
   normalizeContentOrigin,
+  collectDraftingDeclarations,
+  hasAssistantContribution,
+  normalizeDraftingList,
 } = require('../../provenance/src/content-origin-contract');
 const {
   applyRoutingPlan,
@@ -120,6 +123,21 @@ function normalizeCaptureEvent(rawInput = {}, options = {}) {
     error.errors = ['human content requires a valid user-source receipt'];
     throw error;
   }
+  // Drafting history is only what the caller declares; actor.model is never a
+  // drafting identity, and a served model needs the injected resolver.
+  const collected = collectDraftingDeclarations(raw.content_origin_drafting, raw.drafting);
+  const drafting = collected.ok
+    ? normalizeDraftingList(collected.entries, { fresh: true, resolveServedModel: options.resolveServedModel })
+    : collected;
+  if (drafting.ok && contentOrigin.content_origin === 'human' && hasAssistantContribution(drafting.entries)) {
+    drafting.ok = false;
+    drafting.reason = 'human_origin_with_assistant_history';
+  }
+  if (!drafting.ok) {
+    const error = new Error(`invalid CaptureEvent v2: content_origin_drafting rejected: ${drafting.reason}`);
+    error.errors = [`content_origin_drafting rejected: ${drafting.reason}`];
+    throw error;
+  }
   const event = {
     schemaVersion: String(raw.schemaVersion || CAPTURE_EVENT_SCHEMA_VERSION),
     captureEventId,
@@ -143,6 +161,7 @@ function normalizeCaptureEvent(rawInput = {}, options = {}) {
     content_origin_basis: contentOrigin.content_origin_basis,
     user_source: contentOrigin.user_source,
     human_evidence_eligible: contentOrigin.human_evidence_eligible,
+    content_origin_drafting: drafting.entries.length ? drafting.entries : undefined,
     substantive: raw.substantive,
     createNote: raw.createNote,
     createDurableNote: raw.createDurableNote,
@@ -185,6 +204,7 @@ function frontmatterForCaptureEvent(event) {
     content_origin_basis: event.content_origin_basis,
     content_origin_source: event.user_source,
     human_evidence_eligible: event.human_evidence_eligible,
+    content_origin_drafting: event.content_origin_drafting,
   });
 }
 

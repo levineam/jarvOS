@@ -166,6 +166,41 @@ test('receipt-bound human provenance survives the universal capture-to-note rout
   assert.equal(calls[0].frontmatter.content_origin_source.capture_event_id, captureEventId);
 });
 
+test('capture drafting history reaches the canonical writer with served evidence only via the injected resolver', () => {
+  const { frontmatterToObject, parseFrontmatter } = require('../packages/jarvos-secondbrain-notes/src/lib/note-schema');
+  const served = { kind: 'assistant_draft', harness: 'codex', model: 'gpt-5-codex', model_evidence: 'served', served_ref: 'resp-cap-1' };
+  const declared = { kind: 'assistant_edit', harness: 'claude-code', model: 'claude-opus-5-5', model_evidence: 'declared' };
+  const resolveServedModel = (ref) => (ref === 'resp-cap-1' ? { model: 'gpt-5-codex' } : null);
+  const frontmatter = { status: 'draft', type: 'reference', project: 'SUP-4054', author: 'jarvis' };
+  const capture = (title, content_origin_drafting, extra = {}) => baseCapture('codex', {
+    title,
+    text: `note: ${title} drafted by an assistant for later retrieval.`,
+    actor: { type: 'assistant', name: 'codex', model: 'actor-model-must-not-appear' },
+    content_origin: 'assistant',
+    content_origin_basis: 'assistant_generated',
+    content_origin_drafting,
+    frontmatter,
+    ...extra,
+  });
+  const vault = makeTempVault();
+  withVaultEnv(vault, (options) => {
+    const result = captureWithJarvos(capture('Drafted capture', [served, declared]), { ...options, resolveServedModel });
+    assert.equal(result.ok, true);
+    const stored = frontmatterToObject(parseFrontmatter(fs.readFileSync(result.note.path, 'utf8')));
+    assert.deepEqual(stored.content_origin_drafting, [served, declared]);
+    assert.doesNotMatch(JSON.stringify(stored), /actor-model-must-not-appear/);
+
+    // No resolver: the served claim is rejected rather than trusted.
+    assert.throws(() => captureWithJarvos(capture('Unresolved capture', [served]), options), /served_unresolved/);
+
+    // Harness-neutral capture with no declared model stays explicitly unknown.
+    const unknown = captureWithJarvos(capture('Unknown capture', undefined), options);
+    assert.equal(unknown.ok, true);
+    const unknownStored = frontmatterToObject(parseFrontmatter(fs.readFileSync(unknown.note.path, 'utf8')));
+    assert.deepEqual(unknownStored.content_origin_drafting, [{ kind: 'assistant_draft', harness: 'unknown', model: 'unknown', model_evidence: 'unknown' }]);
+  });
+});
+
 test('normalizes supported and custom agents into CaptureEvent v2', () => {
   for (const source of ['codex', 'claude-code', 'openclaw', 'chatgpt', 'custom:future-agent']) {
     const event = normalizeCaptureEvent(baseCapture(source, {

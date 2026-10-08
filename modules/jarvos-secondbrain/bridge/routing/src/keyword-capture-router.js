@@ -86,6 +86,7 @@ function applyPlan(capture, plan, options = {}) {
         ...(plan.noteFrontmatter || {}),
       },
       ...(typeof options.resolveUserSource === 'function' ? { resolveUserSource: options.resolveUserSource } : {}),
+      ...(typeof options.resolveServedModel === 'function' ? { resolveServedModel: options.resolveServedModel } : {}),
       ...(intentId ? { intentId: `${intentId}:note`, requestHash } : {}),
     });
   }

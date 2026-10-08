@@ -53,6 +53,36 @@ stay undeclared. Journal bullets carry an adjacent hidden marker
 bound to the digest of the clean bullet text; the marker never contains source
 prose and is stripped from any clean text used for embeddings or prompts.
 
+Notes may also carry `content_origin_drafting`, an inline JSON array of
+drafting history. Each entry is `assistant_draft`/`assistant_edit` (with
+`harness`, `model` — `unknown` when absent — and `model_evidence`
+`declared`/`served`/`unknown`) or a historical `user_source` receipt. A
+`served` entry needs a `served_ref` that the injected `resolveServedModel`
+confirms; models are never inferred from environment, defaults, or actor.
+Model identity never establishes content origin. Stored history is merged
+before the caller's entries and is never dropped, so an empty array, omission,
+or human adoption cannot erase an assistant contribution: a human declaration
+over assistant history is rejected, and assistant/mixed notes with no recorded
+contribution get an explicit unknown one. Malformed history rejects the write.
+On read, `humanEvidenceEligible` and `normalizeContentOriginWithLegacy` (used
+by knowledge units and evidence projection) mark any record with assistant or
+malformed history as ineligible for human evidence. Writers may pass history
+as top-level `drafting`, `content_origin_drafting`, or in frontmatter; all
+supplied aliases are combined and deduplicated, and any non-array alias
+rejects the write. Entries that repeat stored history are not re-resolved, so
+metadata-only rewrites keep served entries. A note stored as assistant/mixed
+before this field existed is seeded with one explicitly unknown contributor on
+its next write, so human adoption cannot erase that involvement; unknown notes
+are not backfilled. Whenever a write moves a human note away from human,
+including a body change with no origin declaration (which leaves it
+`unknown`), the original receipt is kept as a historical `user_source` entry,
+never as the current receipt. Capture events validate declared history with
+`options.resolveServedModel`, and the keyword router and Obsidian storage
+adapter forward that resolver to the canonical writer alongside
+`resolveUserSource`; without it a served entry is rejected. Note projection
+binds the receipt to the authored content without the writer-added title
+heading. Journal markers are unchanged.
+
 ## Writer inventory
 
 `src/content-origin-writers.js` holds the declared inventory. Enforcement has
