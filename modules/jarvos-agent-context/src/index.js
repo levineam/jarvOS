@@ -1013,8 +1013,9 @@ function listGbrainSourcesFromCli(config = {}) {
     // The index can be busy (a long embed drain holds it), and gbrain's own default
     // connect timeout is 10s -- far too long to make a recall answer wait on a label.
     // Ask for a short one explicitly; a busy index means fall back to the single-source
-    // reading, not stall the caller.
-    const result = spawnSync(bin, ['sources', 'list', '--json', '--timeout=3'], spawnOptions);
+    // reading, not stall the caller. A bare number is milliseconds (3 would abort
+    // at once), so say seconds explicitly; the outer 2000ms spawn cap still wins.
+    const result = spawnSync(bin, ['sources', 'list', '--json', '--timeout=3s'], spawnOptions);
     if (result.error || result.status !== 0) return null;
     const parsed = parseJsonPayload(result.stdout);
     if (!parsed) return null;

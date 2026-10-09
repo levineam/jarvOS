@@ -75,7 +75,14 @@ function recallConfig(brainDir, gbrainDir, extra = {}) {
   };
 }
 
-function writeGbrainSourcesStub(dir, payload) {
+// The stub parses --timeout the way real GBrain does: a bare number is
+// milliseconds, an `s` suffix is seconds. Anything else, or no flag, fails.
+// A budget under one second times out, so a bare `--timeout=3` (3ms) aborts
+// while `3s` (or `3000ms`) reaches the payload. The fixture covers the
+// bare/ms/s forms used here, not all of GBrain's duration grammar. `hang`
+// blocks a valid `sources list` for 30s so the caller's own spawn deadline has
+// to cut it, and records `hang-entered` (epoch ms) in `dir` only when it does.
+function writeGbrainSourcesStub(dir, payload, { hang = false } = {}) {
   const jsonPath = path.join(dir, 'sources.json');
   const bin = path.join(dir, 'gbrain-stub');
   fs.writeFileSync(jsonPath, `${JSON.stringify(payload)}\n`);
@@ -84,11 +91,31 @@ function writeGbrainSourcesStub(dir, payload) {
     `#!/usr/bin/env node
 const fs = require('fs');
 const args = process.argv.slice(2);
-if (args[0] === 'sources' && args[1] === 'list') {
-  process.stdout.write(fs.readFileSync(${JSON.stringify(jsonPath)}, 'utf8'));
+function timeoutMs() {
+  const flag = args.find((arg) => arg.startsWith('--timeout='));
+  if (flag === undefined) return null;
+  const match = /^([0-9]+)(ms|s)?$/.exec(flag.slice('--timeout='.length));
+  if (!match) return null;
+  return Number(match[1]) * (match[2] === 's' ? 1000 : 1);
+}
+if (args[0] === '--version') {
+  process.stdout.write('gbrain-stub 0.0.0\\n');
   process.exit(0);
 }
-process.exit(1);
+if (args[0] === 'sources' && args[1] === 'list') {
+  const ms = timeoutMs();
+  if (ms === null) process.exit(2);
+  if (ms < 1000) process.exit(124);
+  if (${JSON.stringify(hang)}) {
+    fs.writeFileSync(${JSON.stringify(path.join(dir, 'hang-entered'))}, String(Date.now()));
+    setTimeout(() => process.exit(0), 30000);
+  } else {
+    process.stdout.write(fs.readFileSync(${JSON.stringify(jsonPath)}, 'utf8'));
+    process.exit(0);
+  }
+} else {
+  process.exit(1);
+}
 `,
     { mode: 0o755 },
   );
@@ -96,11 +123,23 @@ process.exit(1);
   // First execution of a newly written script can incur host security-scan
   // latency. Admit and verify the fixture before testing the unchanged
   // two-second production read deadline.
-  const ready = spawnSync(bin, ['sources', 'list', '--json', '--timeout=3'], {
-    encoding: 'utf8', timeout: 30000,
-  });
+  const run = (...args) => spawnSync(bin, args, { encoding: 'utf8', timeout: 30000 });
+  if (hang) {
+    // A valid sources call would block for the full 30s, so admit the script
+    // through a call that returns.
+    const version = run('--version');
+    assert.equal(version.status, 0, version.error?.code || version.stderr);
+    return bin;
+  }
+  const ready = run('sources', 'list', '--json', '--timeout=3s');
   assert.equal(ready.status, 0, ready.error?.code || ready.stderr);
   assert.deepEqual(JSON.parse(ready.stdout), payload);
+  const bare = run('sources', 'list', '--json', '--timeout=3');
+  assert.equal(bare.status, 124, bare.error?.code || bare.stderr);
+  assert.equal(bare.stdout, '');
+  const wrongUnit = run('sources', 'list', '--json', '--timeout=3sec');
+  assert.equal(wrongUnit.status, 2, wrongUnit.error?.code || wrongUnit.stderr);
+  assert.equal(wrongUnit.stdout, '');
   return bin;
 }
 
@@ -371,6 +410,39 @@ test('recall reads multiple sources from gbrain sources list --json', () => {
     );
     assert.equal(result.markdown.includes(brainDir), false);
     assert.equal(result.markdown.includes(vaultDir), false);
+  });
+});
+
+test('recall keeps the single-source reading when gbrain sources list hangs', () => {
+  withTempDir((tmp) => {
+    const brainDir = path.join(tmp, 'brain');
+    const vaultDir = path.join(tmp, 'vault');
+    const gbrainDir = path.join(tmp, 'gbrain');
+    fs.mkdirSync(gbrainDir, { recursive: true });
+    initBrainRepo(brainDir, STALE_AT);
+    fs.mkdirSync(vaultDir, { recursive: true });
+    fs.writeFileSync(path.join(vaultDir, 'note.md'), 'live\n');
+    setDirMtime(vaultDir, '2026-08-21T11:00:00.000Z');
+    const gbrainBin = writeGbrainSourcesStub(gbrainDir, {
+      sources: [
+        { id: 'default', local_path: brainDir, last_sync_at: null },
+        { id: 'vault', local_path: vaultDir, last_sync_at: '2026-08-21T11:00:00.000Z' },
+      ],
+    }, { hang: true });
+    const result = recall(recallOptions(recallConfig(brainDir, gbrainDir, { gbrainBin })));
+    const returnedAt = Date.now();
+    // The marker exists only if the stub accepted the seconds budget and really
+    // blocked, so a fast bare-millisecond rejection cannot satisfy this test.
+    const markerPath = path.join(gbrainDir, 'hang-entered');
+    assert.ok(fs.existsSync(markerPath), 'sources list never entered the hang branch');
+    const hangMs = returnedAt - Number(fs.readFileSync(markerPath, 'utf8'));
+    assert.match(
+      result.markdown,
+      /^# jarvOS Recall Bundle\n\nbrain age: last commit 2026-05-01 \(112d ago\); last sync unknown\n/,
+    );
+    assert.doesNotMatch(result.markdown, /vault|2026-08-21|last sync: /);
+    assert.equal(result.markdown.includes(tmp), false);
+    assert.ok(hangMs < 5000, `recall returned ${hangMs}ms after the stub blocked`);
   });
 });
 
