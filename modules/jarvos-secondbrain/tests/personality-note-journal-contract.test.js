@@ -211,6 +211,98 @@ test('Codex draft then Claude edit through the contract keeps multi-model drafti
   });
 });
 
+test('session adapter drafting flows through capture into the canonical writer: Codex then Claude history survives edit and retry', () => {
+  const { frontmatterToObject, parseFrontmatter } = require('../packages/jarvos-secondbrain-notes/src/lib/note-schema.js');
+  const { projectNoteMarkdown } = require('../bridge/provenance/src/content-origin-evidence.js');
+  const { createCodexSessionAdapter, createClaudeCodeSessionAdapter } = require('../adapters');
+  const { normalizeCaptureEvent } = require('../bridge/capture/src/universal-capture.js');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sup-4054-adapter-writer-'));
+  withEnv({
+    VAULT_NOTES_DIR: path.join(root, 'Notes'),
+    JOURNAL_DIR: path.join(root, 'Journal'),
+    JARVOS_KNOWLEDGE_DIR: path.join(root, '.jarvos', 'knowledge'),
+    JARVOS_ALLOW_UNSAFE_TEST_JOURNAL_WRITE: '1',
+  }, () => {
+    const mutationService = makeTestMutationService(root);
+    const frontmatter = { status: 'draft', type: 'reference', project: 'SUP-4054', author: 'jarvis' };
+    const readStored = (notePath) => frontmatterToObject(parseFrontmatter(fs.readFileSync(notePath, 'utf8')));
+    const toWriterInput = (personality, title, captureEvent) => ({
+      personality,
+      title,
+      content: captureEvent.text,
+      captureEventId: captureEvent.captureEventId,
+      content_origin: captureEvent.content_origin,
+      content_origin_basis: captureEvent.content_origin_basis,
+      ...(captureEvent.user_source ? { user_source: captureEvent.user_source } : {}),
+      drafting: captureEvent.content_origin_drafting,
+      frontmatter,
+    });
+
+    const title = 'SUP-4054 adapter drafting';
+    const draft = 'Codex drafted this explanation from the session.';
+    const codexEvent = createCodexSessionAdapter().normalizeSession({
+      sessionId: 'codex-writer-session',
+      model: 'session-model-must-not-be-drafting',
+      messages: [{ id: 'reply-1', role: 'assistant', model: 'gpt-5-codex', content: draft }],
+    }).events[0];
+    assert.ok(codexEvent, 'Codex assistant message is emitted');
+    const codexCapture = normalizeCaptureEvent(codexEvent);
+    const first = writeNoteThroughContract(toWriterInput('codex', title, codexCapture), { mutationService });
+    const codexEntry = { kind: 'assistant_draft', harness: 'codex', model: 'gpt-5-codex', model_evidence: 'declared' };
+    assert.deepEqual(readStored(first.notePath).content_origin_drafting, [codexEntry]);
+
+    const edited = `${draft}\n\nClaude tightened the explanation.`;
+    const claudeEvent = createClaudeCodeSessionAdapter().normalizeSession({
+      conversationId: 'claude-writer-session',
+      model: 'session-model-must-not-be-drafting',
+      entries: [{
+        uuid: 'edit-1', role: 'assistant', model: 'claude-opus-5-5', content_origin: 'mixed', content_origin_basis: 'mixed_composition', content: edited,
+      }],
+    }).events[0];
+    assert.ok(claudeEvent, 'Claude mixed edit is emitted');
+    const claudeInput = toWriterInput('claude-code', title, normalizeCaptureEvent(claudeEvent));
+    const assertHistory = (notePath) => {
+      const history = readStored(notePath).content_origin_drafting;
+      assert.deepEqual(history, [
+        codexEntry,
+        { kind: 'assistant_edit', harness: 'claude-code', model: 'claude-opus-5-5', model_evidence: 'declared' },
+      ], 'Claude edit follows the Codex draft');
+      assert.doesNotMatch(JSON.stringify(history), /session-model-must-not-be-drafting/);
+      return history;
+    };
+    const second = writeNoteThroughContract(claudeInput, { mutationService });
+    const afterEdit = assertHistory(second.notePath);
+    const retried = writeNoteThroughContract(claudeInput, { mutationService });
+    assert.deepEqual(assertHistory(retried.notePath), afterEdit, 'retry does not duplicate or drop history');
+    const markdown = fs.readFileSync(retried.notePath, 'utf8');
+    assert.equal(readStored(retried.notePath).human_evidence_eligible, false);
+    assert.equal(projectNoteMarkdown(markdown, { title }).human_evidence_eligible, false);
+
+    // A resolver-backed user message saved through Codex stays human with no AI contribution.
+    const verbatim = 'The user said exactly this through the session.';
+    const sessionId = 'codex-writer-human';
+    const captureEventId = `capture:codex:${sessionId}:user-1`;
+    const resolveUserSource = (id) => (id === captureEventId ? { capture_event_id: id, actor: 'user', text: verbatim } : null);
+    const humanEvent = createCodexSessionAdapter({ resolveUserSource }).normalizeSession({
+      sessionId,
+      model: 'session-model-must-not-be-drafting',
+      messages: [{ id: 'user-1', role: 'user', content: verbatim }],
+    }).events[0];
+    assert.ok(humanEvent);
+    const humanTitle = 'SUP-4054 adapter human source';
+    const saved = writeNoteThroughContract(
+      toWriterInput('codex', humanTitle, normalizeCaptureEvent(humanEvent, { resolveUserSource })),
+      { mutationService, resolveUserSource },
+    );
+    const humanStored = readStored(saved.notePath);
+    assert.equal(humanStored.content_origin, 'human');
+    assert.equal(humanStored.human_evidence_eligible, true);
+    assert.ok(!(humanStored.content_origin_drafting || []).some((entry) => entry.kind !== 'user_source'));
+    assert.equal(projectNoteMarkdown(fs.readFileSync(saved.notePath, 'utf8'), { title: humanTitle, resolveUserSource }).human_evidence_eligible, true);
+  });
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
 test('valid human receipt saved by an assistant stays eligible, and a later mixed edit keeps its source digest as history', () => {
   const { frontmatterToObject, parseFrontmatter } = require('../packages/jarvos-secondbrain-notes/src/lib/note-schema.js');
   const { projectNoteMarkdown } = require('../bridge/provenance/src/content-origin-evidence.js');

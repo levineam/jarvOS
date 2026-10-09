@@ -13,6 +13,26 @@ const {
   CAPTURE_EVENT_SCHEMA_VERSION,
   validateCaptureEvent,
 } = require('../packages/jarvos-ambient/src/intent/capture-contract');
+const {
+  digestText,
+  hasAssistantContribution,
+  normalizeDraftingList,
+} = require('../bridge/provenance/src/content-origin-contract');
+const { normalizeCaptureEvent } = require('../bridge/capture/src/universal-capture');
+
+function eventFor(result, messageId) {
+  return result.events.find((event) => event.source.messageId === messageId);
+}
+
+function assertSkippedFor(result, messageId, pattern) {
+  assert.equal(eventFor(result, messageId), undefined, `${messageId} must not be emitted`);
+  const skip = result.skipped.find((entry) => entry.messageId === messageId);
+  assert.ok(skip, `${messageId} must be reported as skipped`);
+  if (pattern) assert.match(JSON.stringify(skip), pattern);
+}
+
+const CODEX_DECLARED = { kind: 'assistant_draft', harness: 'codex', model: 'gpt-5-codex', model_evidence: 'declared' };
+const CLAUDE_DECLARED = { kind: 'assistant_edit', harness: 'claude-code', model: 'claude-opus-5-5', model_evidence: 'declared' };
 
 function assertSourceBackedEvent(event, sourceTool, expectedPrivacyTier = 'local-private') {
   assert.equal(event.schemaVersion, CAPTURE_EVENT_SCHEMA_VERSION);
@@ -197,4 +217,204 @@ test('session adapters record empty messages as skipped without emitting invalid
   assert.equal(result.skipped[0].reason, 'empty-message');
   assert.equal(result.skipped[0].messageId, 'empty');
   assertSourceBackedEvent(result.events[0], 'openclaw');
+});
+
+// SUP-4054: drafting provenance at the session-source seam.
+
+test('actual Codex, Claude Code and OpenClaw assistant messages declare their own harness and message model', () => {
+  const cases = [
+    [createCodexSessionAdapter(), 'codex', 'gpt-5-codex'],
+    [createClaudeCodeSessionAdapter(), 'claude-code', 'claude-opus-5-5'],
+    [createOpenClawSessionAdapter(), 'openclaw', 'openclaw-message-model'],
+  ];
+  for (const [adapter, tool, model] of cases) {
+    const result = adapter.normalizeSession({
+      sessionId: `${tool}-drafting-session`,
+      model: 'session-model-must-not-be-drafting',
+      messages: [{ id: 'reply-1', role: 'assistant', model, content: `${tool} drafted this reply.` }],
+    });
+    assert.equal(result.skipped.length, 0, tool);
+    const event = eventFor(result, 'reply-1');
+    assertSourceBackedEvent(event, tool);
+    assert.equal(event.content_origin, 'assistant');
+    assert.equal(event.human_evidence_eligible, false);
+    assert.deepEqual(event.content_origin_drafting, [
+      { kind: 'assistant_draft', harness: tool, model, model_evidence: 'declared' },
+    ], tool);
+    // The emitted declaration survives the capture boundary unchanged.
+    assert.deepEqual(normalizeCaptureEvent(event).content_origin_drafting, event.content_origin_drafting, tool);
+  }
+});
+
+test('assistant message without its own model records an explicitly unknown model, never session or default models', () => {
+  const result = createCodexSessionAdapter({ model: 'provider-default-model' }).normalizeSession({
+    sessionId: 'codex-session-model-only',
+    model: 'session-only-model',
+    messages: [{ id: 'reply-1', role: 'assistant', content: 'Reply with no per-message model.' }],
+  });
+  const event = eventFor(result, 'reply-1');
+  assert.ok(event);
+  assert.equal(event.content_origin, 'assistant');
+  assert.deepEqual(event.content_origin_drafting, [
+    { kind: 'assistant_draft', harness: 'codex', model: 'unknown', model_evidence: 'unknown' },
+  ]);
+  assert.doesNotMatch(JSON.stringify(event.content_origin_drafting), /session-only-model|provider-default-model/);
+});
+
+test('explicit mixed message keeps its supplied prior contributor and does not copy a session-wide declaration', () => {
+  const sessionWide = { kind: 'assistant_draft', harness: 'session-wide-harness', model: 'session-wide-model', model_evidence: 'declared' };
+  const result = createClaudeCodeSessionAdapter().normalizeSession({
+    sessionId: 'claude-mixed-session',
+    model: 'session-wide-model',
+    content_origin_drafting: [sessionWide],
+    messages: [
+      {
+        id: 'edit-1',
+        role: 'assistant',
+        model: 'claude-opus-5-5',
+        content_origin: 'mixed',
+        content_origin_basis: 'mixed_composition',
+        content_origin_drafting: [CODEX_DECLARED],
+        content: 'Claude revised the Codex draft with the user.',
+      },
+      { id: 'reply-2', role: 'assistant', content: 'A later reply with no message model.' },
+    ],
+  });
+
+  const edit = eventFor(result, 'edit-1');
+  assert.ok(edit);
+  assert.equal(edit.content_origin, 'mixed');
+  assert.equal(edit.content_origin_basis, 'mixed_composition');
+  assert.equal(edit.human_evidence_eligible, false);
+  assert.deepEqual(edit.content_origin_drafting, [
+    CODEX_DECLARED,
+    { kind: 'assistant_edit', harness: 'claude-code', model: 'claude-opus-5-5', model_evidence: 'declared' },
+  ]);
+  assert.ok(normalizeDraftingList(edit.content_origin_drafting).ok);
+  assert.ok(hasAssistantContribution(edit.content_origin_drafting));
+  assert.doesNotMatch(JSON.stringify(edit.content_origin_drafting), /session-wide-harness|session-wide-model/);
+
+  const later = eventFor(result, 'reply-2');
+  assert.ok(later);
+  assert.deepEqual(later.content_origin_drafting, [
+    { kind: 'assistant_draft', harness: 'claude-code', model: 'unknown', model_evidence: 'unknown' },
+  ]);
+});
+
+test('a prior contribution is not proof of the current response: exact kind, harness and message model must match', () => {
+  const result = createCodexSessionAdapter().normalizeSession({
+    sessionId: 'codex-current-tuple-session',
+    messages: [
+      // Prior known Codex draft; this response reports no model of its own.
+      { id: 'no-model', role: 'assistant', content_origin_drafting: [CODEX_DECLARED], content: 'Reply without a per-message model.' },
+      // Prior same-harness/model draft; this response is a mixed edit.
+      {
+        id: 'mixed-edit',
+        role: 'assistant',
+        model: 'gpt-5-codex',
+        content_origin: 'mixed',
+        content_origin_basis: 'mixed_composition',
+        content_origin_drafting: [CODEX_DECLARED],
+        content: 'Codex revised its earlier draft with the user.',
+      },
+    ],
+  });
+
+  assert.deepEqual(eventFor(result, 'no-model').content_origin_drafting, [
+    CODEX_DECLARED,
+    { kind: 'assistant_draft', harness: 'codex', model: 'unknown', model_evidence: 'unknown' },
+  ]);
+  assert.deepEqual(eventFor(result, 'mixed-edit').content_origin_drafting, [
+    CODEX_DECLARED,
+    { kind: 'assistant_edit', harness: 'codex', model: 'gpt-5-codex', model_evidence: 'declared' },
+  ]);
+});
+
+test('both message drafting aliases are preserved and a malformed alias is skipped, not hidden', () => {
+  const result = createCodexSessionAdapter().normalizeSession({
+    sessionId: 'codex-alias-session',
+    messages: [
+      { id: 'both', role: 'assistant', model: 'gpt-5-codex', content_origin_drafting: [CODEX_DECLARED], drafting: [CLAUDE_DECLARED], content: 'Both aliases declared.' },
+      { id: 'malformed-type', role: 'assistant', model: 'gpt-5-codex', content_origin_drafting: [CODEX_DECLARED], drafting: 'not-an-array', content: 'Second alias is not a list.' },
+      { id: 'malformed-entry', role: 'assistant', model: 'gpt-5-codex', drafting: [{ kind: 'assistant_draft' }], content: 'Entry lacks a harness.' },
+    ],
+  });
+
+  const both = eventFor(result, 'both');
+  assert.ok(both);
+  // The current Codex/gpt-5-codex contribution is already declared, so no clone is appended.
+  assert.deepEqual(both.content_origin_drafting, [CODEX_DECLARED, CLAUDE_DECLARED]);
+  assertSkippedFor(result, 'malformed-type', /drafting/);
+  assertSkippedFor(result, 'malformed-entry', /drafting|harness/);
+});
+
+test('resolver-owned human message stays eligible with no assistant contribution; human plus assistant history is not laundered', () => {
+  const sessionId = 'codex-human-session';
+  const verbatim = 'Keep exactly these words as my own note.';
+  const laundered = 'These words also claim to be mine.';
+  const transcribed = 'An assistant saved these user words verbatim.';
+  const texts = { 'user-1': verbatim, 'user-2': laundered, 'saved-1': transcribed };
+  const savedId = `capture:codex:${sessionId}:saved-1`;
+  const resolveUserSource = (captureEventId) => {
+    const id = captureEventId.split(':').pop();
+    return texts[id] && captureEventId === `capture:codex:${sessionId}:${id}`
+      ? { capture_event_id: captureEventId, actor: 'user', text: texts[id] }
+      : null;
+  };
+  const result = createCodexSessionAdapter({ resolveUserSource }).normalizeSession({
+    sessionId,
+    model: 'session-model-must-not-be-drafting',
+    messages: [
+      { id: 'user-1', role: 'user', content: verbatim },
+      { id: 'user-2', role: 'user', content: laundered, content_origin_drafting: [CODEX_DECLARED] },
+      {
+        id: 'saved-1',
+        role: 'assistant',
+        model: 'gpt-5-codex',
+        content: transcribed,
+        content_origin: 'human',
+        content_origin_basis: 'verbatim_user',
+        user_source: { capture_event_id: savedId, actor: 'user', source_digest: digestText(transcribed), content_digest: digestText(transcribed) },
+      },
+    ],
+  });
+
+  const human = eventFor(result, 'user-1');
+  assert.ok(human);
+  assert.equal(human.content_origin, 'human');
+  assert.equal(human.content_origin_basis, 'verbatim_user');
+  assert.equal(human.human_evidence_eligible, true);
+  assert.equal(hasAssistantContribution(human.content_origin_drafting || []), false);
+  assert.doesNotMatch(JSON.stringify(human.content_origin_drafting || []), /session-model-must-not-be-drafting/);
+
+  // Human origin with assistant history is reported, never emitted as human evidence.
+  assertSkippedFor(result, 'user-2', /human_origin_with_assistant_history/);
+  assert.ok(result.events.length >= 2, 'other messages in the session are still emitted');
+
+  // Saving or transcribing verbatim user words does not add an assistant contribution.
+  const saved = eventFor(result, 'saved-1');
+  assert.ok(saved);
+  assert.equal(saved.content_origin, 'human');
+  assert.equal(saved.human_evidence_eligible, true);
+  assert.equal(saved.content_origin_drafting, undefined);
+});
+
+test('served drafting claims need the injected resolver; unresolved, forged or mismatched claims are skipped', () => {
+  const served = { kind: 'assistant_draft', harness: 'codex', model: 'gpt-5-codex', model_evidence: 'served', served_ref: 'resp-session-1' };
+  const session = {
+    sessionId: 'codex-served-session',
+    messages: [{ id: 'served-1', role: 'assistant', model: 'gpt-5-codex', content_origin_drafting: [served], content: 'Served reply.' }],
+  };
+
+  assertSkippedFor(createCodexSessionAdapter().normalizeSession(session), 'served-1', /served/);
+  assertSkippedFor(createCodexSessionAdapter({ resolveServedModel: () => null }).normalizeSession(session), 'served-1', /served/);
+  assertSkippedFor(createCodexSessionAdapter({ resolveServedModel: () => ({ model: 'other-model' }) }).normalizeSession(session), 'served-1', /served/);
+
+  const resolveServedModel = (ref) => (ref === 'resp-session-1' ? { model: 'gpt-5-codex' } : null);
+  const accepted = createCodexSessionAdapter({ resolveServedModel }).normalizeSession(session);
+  const event = eventFor(accepted, 'served-1');
+  assert.ok(event);
+  // Served evidence is kept as resolved, with no redundant declared clone.
+  assert.deepEqual(event.content_origin_drafting, [served]);
+  assert.equal(event.human_evidence_eligible, false);
 });

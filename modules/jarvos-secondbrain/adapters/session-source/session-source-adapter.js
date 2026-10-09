@@ -6,8 +6,11 @@ const {
   validateCaptureEvent,
 } = require('../../packages/jarvos-ambient/src/intent/capture-contract');
 const {
+  collectDraftingDeclarations,
   digestText,
+  mergeContentOriginDrafting,
   normalizeContentOrigin,
+  normalizeDraftingList,
 } = require('../../bridge/provenance/src/content-origin-contract');
 
 const TOOL_SOURCE = {
@@ -163,6 +166,40 @@ function originForMessage({ actorType, text, captureEventId, message = {}, sessi
   return { content_origin: 'unknown', content_origin_basis: 'unknown' };
 }
 
+// Drafting history is message-scoped. Both message aliases are fresh caller
+// declarations (served claims resolve only through options.resolveServedModel).
+// The current assistant contribution, when absent, is derived from the actual
+// adapter tool and the message's own model only; session, default, actor, and
+// environment models are never drafting identity. Session-level drafting is
+// deliberately not copied onto every message.
+function draftingForMessage({ tool, actorType, origin, message = {}, options = {} }) {
+  const collected = collectDraftingDeclarations(message.content_origin_drafting, message.drafting);
+  if (!collected.ok) return collected;
+  const supplied = collected.entries || [];
+  const structural = normalizeDraftingList(supplied);
+  if (!structural.ok) return { ok: false, reason: `invalid_drafting:${structural.reason}`, entries: null };
+  const incoming = [...supplied];
+  if (actorType === 'assistant' && (origin === 'assistant' || origin === 'mixed')) {
+    const kind = origin === 'assistant' ? 'assistant_draft' : 'assistant_edit';
+    const harness = TOOL_SOURCE[tool];
+    const model = firstString(message.model) || 'unknown';
+    // Only an entry with the exact current kind/harness/model tuple (any
+    // evidence, e.g. a resolved served entry) already records this response.
+    const alreadyDeclared = structural.entries.some((entry) => entry.kind === kind
+      && entry.harness === harness
+      && entry.model === model);
+    if (!alreadyDeclared) {
+      incoming.push({
+        kind,
+        harness,
+        model,
+        model_evidence: model === 'unknown' ? 'unknown' : 'declared',
+      });
+    }
+  }
+  return mergeContentOriginDrafting({ incoming, origin }, { resolveServedModel: options.resolveServedModel });
+}
+
 function sessionMessages(session = {}) {
   return [
     ...asArray(session.messages),
@@ -214,6 +251,14 @@ function buildCaptureEvent({ tool, session, message, index, options }) {
     session,
     options,
   });
+  const drafting = draftingForMessage({
+    tool,
+    actorType,
+    origin: contentOrigin.content_origin,
+    message,
+    options,
+  });
+  if (!drafting.ok) return { draftingError: drafting.reason };
   const timestamp = firstString(
     message.timestamp,
     message.createdAt,
@@ -262,6 +307,7 @@ function buildCaptureEvent({ tool, session, message, index, options }) {
     content_origin_basis: contentOrigin.content_origin_basis,
     ...(contentOrigin.user_source ? { user_source: contentOrigin.user_source } : {}),
     human_evidence_eligible: contentOrigin.human_evidence_eligible === true,
+    ...(drafting.entries.length ? { content_origin_drafting: drafting.entries } : {}),
   };
 }
 
@@ -296,6 +342,15 @@ function normalizeSessionToCaptureEvents(tool, session = {}, options = {}) {
         reason: 'empty-message',
         sourceTool: TOOL_SOURCE[tool],
         messageId: messageId(message, index),
+      });
+      return;
+    }
+    if (event.draftingError) {
+      skipped.push({
+        reason: 'invalid-content-origin-drafting',
+        sourceTool: TOOL_SOURCE[tool],
+        messageId: messageId(message, index),
+        errors: [`content_origin_drafting rejected: ${event.draftingError}`],
       });
       return;
     }

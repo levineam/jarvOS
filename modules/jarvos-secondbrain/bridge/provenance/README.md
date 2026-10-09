@@ -83,6 +83,24 @@ adapter forward that resolver to the canonical writer alongside
 binds the receipt to the authored content without the writer-added title
 heading. Journal markers are unchanged.
 
+Session source adapters (Codex, Claude Code, OpenClaw) emit drafting history
+per message. A message's own `content_origin_drafting` and `drafting` aliases
+are combined and validated as fresh declarations, so served claims must pass
+the injected `resolveServedModel`. For assistant or mixed messages, the
+adapter appends the current contribution, `assistant_draft` (generation) or
+`assistant_edit` (mixed), using the adapter's own harness and only the
+message's own `model` as `declared`; without a per-message model it records
+`model: unknown`. Prior entries are kept, and the current entry is skipped
+only when an entry with the exact same kind, harness and model is already
+declared (for example a resolved `served` entry). Session, default,
+actor, or environment models are never used. The adapter never infers
+`served` evidence, and session-level drafting is not copied onto messages. A
+receipt-validated human message gains no assistant entry merely because an
+assistant saved it. A message with malformed aliases, an unresolved or
+mismatched served claim, or human origin with assistant history is reported
+in `skipped` (`invalid-content-origin-drafting`) while other messages are
+still emitted.
+
 ## Writer inventory
 
 `src/content-origin-writers.js` holds the declared inventory. Enforcement has
