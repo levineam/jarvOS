@@ -2,6 +2,63 @@
 
 Release sections describe user-facing jarvOS changes. Historical public-doc sync entries are preserved below for traceability.
 
+## [0.12.0](https://github.com/levineam/jarvOS/compare/jarvos-bootstrap-v0.11.0...jarvos-bootstrap-v0.12.0) (2026-10-09)
+
+
+### Features
+
+* **coding:** bind authenticated Codex completion evidence (SUP-4029) ([#340](https://github.com/levineam/jarvOS/issues/340)) ([26fe64f](https://github.com/levineam/jarvOS/commit/26fe64ff9be7b9533e9a04f7868d1a25bb448ac3))
+* **memory:** declare transcript index coverage and speaker roles ([#323](https://github.com/levineam/jarvOS/issues/323)) ([b92a0e8](https://github.com/levineam/jarvOS/commit/b92a0e85524ee8937c255f0d8a994d21c848162d))
+* **projects:** add bounded pending proposal transport ([6ac656f](https://github.com/levineam/jarvOS/commit/6ac656f93e916f58d41c2e16f55a105b12065237))
+* **projects:** add bounded pending proposal transport ([6ab1bf4](https://github.com/levineam/jarvOS/commit/6ab1bf442006429de9bc34d9a85062d4102b4fe9))
+* **projects:** expose complete identity roster to MCP callers ([#322](https://github.com/levineam/jarvOS/issues/322)) ([60c2409](https://github.com/levineam/jarvOS/commit/60c24092c9698dceab2979fadbd12f2feaf9c06b))
+* **provenance:** retain note drafting attribution across edits ([#356](https://github.com/levineam/jarvOS/issues/356)) ([b1ffaaa](https://github.com/levineam/jarvOS/commit/b1ffaaaa459e5a4eb22e95cdcfef7b82c73b9249))
+
+
+### Bug Fixes
+
+* **agent-context:** bind shared-skills default config ([#331](https://github.com/levineam/jarvOS/issues/331)) ([ef0d540](https://github.com/levineam/jarvOS/commit/ef0d5405eefd2b5f69ce9a32dfe09e312524ad2c))
+* **agent-context:** scope shared-skills owner access ([#332](https://github.com/levineam/jarvOS/issues/332)) ([aeaa1bc](https://github.com/levineam/jarvOS/commit/aeaa1bc6553547988fdeafbbe798b53583990d11))
+* **agent-context:** use seconds for GBrain source probe ([d7a5528](https://github.com/levineam/jarvOS/commit/d7a5528298e50407972332ae9ee8bfa3c3095a8a))
+* **agent-context:** use seconds for GBrain source probe ([8a6d524](https://github.com/levineam/jarvOS/commit/8a6d52454970d341edf3e02e0ea019c9e86fc4a9))
+* **coding:** enforce exclusive workspace bindings across work runs ([#350](https://github.com/levineam/jarvOS/issues/350)) ([40298f3](https://github.com/levineam/jarvOS/commit/40298f36f613e02d65a113fbefccb8e68eeaa5eb))
+* **coding:** preserve incumbent lock on failed acquisition ([#346](https://github.com/levineam/jarvOS/issues/346)) ([92dbd8c](https://github.com/levineam/jarvOS/commit/92dbd8c438593a99d4b307c6797c3f8edab9945b))
+* **coding:** prevent callers from retargeting managed work runs ([#355](https://github.com/levineam/jarvOS/issues/355)) ([e4096e4](https://github.com/levineam/jarvOS/commit/e4096e403ace71536588776176e6c032e2366ed3))
+* **coding:** read work-run status without initializing storage ([#348](https://github.com/levineam/jarvOS/issues/348)) ([9a67668](https://github.com/levineam/jarvOS/commit/9a67668ba125d9d659586060177099b88faca5c3))
+* **coding:** reject stale authority after worktree creation ([#354](https://github.com/levineam/jarvOS/issues/354)) ([13da1c0](https://github.com/levineam/jarvOS/commit/13da1c0c42e3229200dc6daa42f165245f38e90e))
+* **coding:** reject stale recorded workspace revisions ([#351](https://github.com/levineam/jarvOS/issues/351)) ([70009ef](https://github.com/levineam/jarvOS/commit/70009ef80731d66f75972267c43856f2303c02f0))
+* **coding:** require plan-to-proof trace before completion ([532827f](https://github.com/levineam/jarvOS/commit/532827fbd3628a8b3cb4ea2322b748447ceff1e5))
+* **coding:** reserve workspace handoffs for the intended run ([#352](https://github.com/levineam/jarvOS/issues/352)) ([aa2fdfa](https://github.com/levineam/jarvOS/commit/aa2fdfa4cbf66aa254286d09798d078525474f3a))
+* **coding:** serialize work-run changes before emitting evidence ([#349](https://github.com/levineam/jarvOS/issues/349)) ([7306782](https://github.com/levineam/jarvOS/commit/7306782a99dffdf6f507e1dbcec0c1c429973323))
+* **context:** allow internal checkpoints without journal links (SUP-4007) ([#344](https://github.com/levineam/jarvOS/issues/344)) ([bacfc02](https://github.com/levineam/jarvOS/commit/bacfc02334c88dab3654504f6f3b39c88b51e870))
+* **context:** reject null journal policies before mutation (SUP-4007) ([#345](https://github.com/levineam/jarvOS/issues/345)) ([c915539](https://github.com/levineam/jarvOS/commit/c915539aecaf7e8e9fed572fdf0cb4dcbad13422))
+* **doctor:** preserve expired failure diagnostics ([d38d2d4](https://github.com/levineam/jarvOS/commit/d38d2d4f28dad108117505e1f23a03e39716c776))
+* **doctor:** qualify expired observations in CLI text ([fcde11c](https://github.com/levineam/jarvOS/commit/fcde11c4eec3ec7edf9b4dfa047f7724bd4dea4a))
+* **doctor:** retain expired failure severity and diagnostics ([5a9b5a4](https://github.com/levineam/jarvOS/commit/5a9b5a4136389fb0eb631114a8192d613e55a779))
+* **journal:** attest scheduled receipts with runner provenance ([#319](https://github.com/levineam/jarvOS/issues/319)) ([b5b949f](https://github.com/levineam/jarvOS/commit/b5b949f378d0333484321ca063ee34beec1bf4ca))
+* **journal:** distinguish reviewed portable writer metadata (SUP-4007) ([#347](https://github.com/levineam/jarvOS/issues/347)) ([b63d98f](https://github.com/levineam/jarvOS/commit/b63d98ff029ba2ca6062cae3deeb951904dafde1))
+* **memory:** preserve canonical transcript citations ([#327](https://github.com/levineam/jarvOS/issues/327)) ([cec8484](https://github.com/levineam/jarvOS/commit/cec8484aca147109bd85ab6f3d1f0e4fb0bcb291))
+* **projects:** always show every active project in the orientation packet ([#336](https://github.com/levineam/jarvOS/issues/336)) ([9d3bbbd](https://github.com/levineam/jarvOS/commit/9d3bbbd8e1f41c991dac64d26e5f7c503256ba40))
+* **projects:** preserve active roster at item cap ([6782536](https://github.com/levineam/jarvOS/commit/67825360673b067b260d68560aed4c35bc20b741))
+* **projects:** preserve active roster at item cap ([9f467a6](https://github.com/levineam/jarvOS/commit/9f467a6d2541ae2e27e7b96cace269fa2efb4a24))
+* **projects:** preserve orientation with optional recent activity ([#341](https://github.com/levineam/jarvOS/issues/341)) ([0dbf508](https://github.com/levineam/jarvOS/commit/0dbf508f12026490ec95b08eef21e58f6946ea11))
+* **projects:** version pending proposal contract ([39aa6ae](https://github.com/levineam/jarvOS/commit/39aa6ae57060f52aac9eaafa907cb8ea336f85bf))
+* **provenance:** retain session drafting identity ([#357](https://github.com/levineam/jarvOS/issues/357)) ([ae72381](https://github.com/levineam/jarvOS/commit/ae72381ad72d9ef85fd055eb954f64849d936851))
+* **release:** separate published and candidate lanes ([1ce60ea](https://github.com/levineam/jarvOS/commit/1ce60ea2a463f73badabd4159bada911fed73fe1))
+* **release:** separate published and candidate lanes ([43c0a6d](https://github.com/levineam/jarvOS/commit/43c0a6d662e659b7058334c2fae913682c09d12e))
+* **secondbrain:** poll mutation token after a lost queued reply (SUP-4007) ([#353](https://github.com/levineam/jarvOS/issues/353)) ([316a469](https://github.com/levineam/jarvOS/commit/316a469a2119f241a83ad544f95d8dc91c6be605))
+* **secondbrain:** stage large Obsidian CLI evals so vault writes are acknowledged ([#329](https://github.com/levineam/jarvOS/issues/329)) ([5421db0](https://github.com/levineam/jarvOS/commit/5421db0401844ca2b7e12a30c7b963962b2cfef1))
+* **skills:** accept OpenAI agent metadata ([#338](https://github.com/levineam/jarvOS/issues/338)) ([06dafdd](https://github.com/levineam/jarvOS/commit/06dafdd11d45675709d234ab797b9d691a05858f))
+* **skills:** admit article generator routing evals safely ([#310](https://github.com/levineam/jarvOS/issues/310)) ([e08b08d](https://github.com/levineam/jarvOS/commit/e08b08d6f380d95cb46025c9bd39777be0b7b987))
+* **skills:** harden active assistant update proof ([#325](https://github.com/levineam/jarvOS/issues/325)) ([a1d331c](https://github.com/levineam/jarvOS/commit/a1d331caef0732ced0a557e663106c2e047a0169))
+* **skills:** keep routine checks meaningful and isolated ([#324](https://github.com/levineam/jarvOS/issues/324)) ([f9da728](https://github.com/levineam/jarvOS/commit/f9da7288e8825fdcc6ba00c47b4ee67679c852e1))
+* **skills:** preserve intent through work closeout ([#343](https://github.com/levineam/jarvOS/issues/343)) ([6ce8cd1](https://github.com/levineam/jarvOS/commit/6ce8cd1f7325bd1b96c2654ea454a3971f42ebb4))
+* **skills:** sync testing guidance across harnesses ([#330](https://github.com/levineam/jarvOS/issues/330)) ([6563882](https://github.com/levineam/jarvOS/commit/6563882a23fdb711cafc8ee4c1e79041e7355a6d))
+* **stewardship:** require native-hook sessions to report coordination presence ([#335](https://github.com/levineam/jarvOS/issues/335)) ([c8bad5d](https://github.com/levineam/jarvOS/commit/c8bad5da6b5c9aa0f489f53c22a3f0895662f9de))
+* **SUP-4006:** register the stable jarvos-mcp shim in managed Claude/Codex setup ([#320](https://github.com/levineam/jarvOS/issues/320)) ([56482c8](https://github.com/levineam/jarvOS/commit/56482c8067fd32eb149640a9f0cb87eadbbff3f5))
+* **vault:** give Obsidian capability probe its own timeout ([#333](https://github.com/levineam/jarvOS/issues/333)) ([acf0889](https://github.com/levineam/jarvOS/commit/acf088949e084f8751437afba454c87fd2dca40f))
+* **vault:** recover response-less invariant reads (SUP-4007) ([#334](https://github.com/levineam/jarvOS/issues/334)) ([f09c386](https://github.com/levineam/jarvOS/commit/f09c3864ea102ebe0ba1e8e08f2a632f9402aa77))
+
 ## [0.11.0](https://github.com/levineam/jarvOS/compare/jarvos-bootstrap-v0.10.0...jarvos-bootstrap-v0.11.0) (2026-09-19)
 
 
