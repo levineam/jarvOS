@@ -237,8 +237,11 @@ function validateState(state) {
 function validateWorkspaceState(state, workRuns, errors) {
   if (state.schemaVersion !== WORK_RUN_STORE_SCHEMA_VERSION_V2) {
     // v1 state cannot carry (or hide) workspace bindings; the first successful bind upgrades to v2.
+    // A retired (rolled-back) v1 state may keep only the fence high-water so fences never repeat.
     if (state.workspaceBindings !== undefined) errors.push('state.workspaceBindings requires v2 state');
-    if (state.workspaceFenceSeq !== undefined) errors.push('state.workspaceFenceSeq requires v2 state');
+    if (state.workspaceFenceSeq !== undefined && (!Number.isSafeInteger(state.workspaceFenceSeq) || state.workspaceFenceSeq < 0)) {
+      errors.push('state.workspaceFenceSeq must be a non-negative safe integer');
+    }
     for (const [id, run] of Object.entries(workRuns)) {
       if (isObject(run) && run.workspaceId != null) errors.push(`workRuns.${id}.workspaceId requires v2 state`);
     }
@@ -796,10 +799,11 @@ function createWorkRunStore(options = {}) {
       const overlapping = others.find((entry) => workspacePathsOverlap(entry.identity.canonicalPath, identity.canonicalPath));
       if (overlapping) return blocked(overlapping, 'workspace_overlap_conflict');
       if (state.schemaVersion !== WORK_RUN_STORE_SCHEMA_VERSION_V2) {
-        // Lazy upgrade on the first successful bind only; the fence sequence never resets afterwards.
+        // Lazy upgrade on the first successful bind only; the fence sequence never resets afterwards,
+        // including across a retireWorkspaceIndex() rollback that kept the high-water.
         state.schemaVersion = WORK_RUN_STORE_SCHEMA_VERSION_V2;
         state.workspaceBindings = {};
-        state.workspaceFenceSeq = 0;
+        state.workspaceFenceSeq = state.workspaceFenceSeq ?? 0;
       }
       state.workspaceFenceSeq += 1;
       let workspaceId;
@@ -921,6 +925,24 @@ function createWorkRunStore(options = {}) {
       run.workspaceId = null;
       run.updatedAt = nowIso(clock);
       return { ok: true, released: true, handoffPending: false, public: publicWorkspaceBinding(binding) };
+    });
+  }
+
+  // Rollback step: converts fully released v2 state back to v1 in one locked commit so an exact v1
+  // predecessor can read and write it. Only the empty index and null run pointers are dropped; the
+  // fence high-water and every run, event, nonce, artifact, terminal and follow-through record are kept.
+  function retireWorkspaceIndex() {
+    return mutate((state) => {
+      if (state.schemaVersion !== WORK_RUN_STORE_SCHEMA_VERSION_V2) return noCommit({ ok: true, deduped: true });
+      const held = Object.keys(state.workspaceBindings).length > 0
+        || Object.values(state.workRuns).some((run) => run.workspaceId != null);
+      if (held) return noCommit({ ok: false, reason: 'workspace_binding_held' });
+      state.schemaVersion = WORK_RUN_STORE_SCHEMA_VERSION;
+      delete state.workspaceBindings;
+      for (const run of Object.values(state.workRuns)) {
+        if (Object.hasOwn(run, 'workspaceId')) delete run.workspaceId;
+      }
+      return { ok: true, deduped: false, workspaceFenceSeq: state.workspaceFenceSeq };
     });
   }
 
@@ -1072,6 +1094,7 @@ function createWorkRunStore(options = {}) {
     verifyWorkspaceFence,
     transitionWorkspaceRevision,
     releaseWorkspace,
+    retireWorkspaceIndex,
     appendEvent,
     recordProviderSnapshot,
     recordProviderReceipt,
