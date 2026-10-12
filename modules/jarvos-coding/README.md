@@ -249,6 +249,76 @@ learning artifact is captured per work run, with additional signals deferred.
 contract for registries, docs, and setup tools that need to inspect support
 without instantiating a runtime adapter.
 
+### Work-run store rollback
+
+The first successful `bindWorkspace` upgrades the store from
+`jarvos-coding-work-run/v1` to `v2`. Releasing every binding alone is **not** a
+rollback: released v2 stays v2, and the exact v1 predecessor (commit
+`26fe64ff9be7b9533e9a04f7868d1a25bb448ac3`) fails closed on it. The mutable file
+store's `retireWorkspaceIndex()` is the only conversion back to v1:
+
+1. **Quiesce.** Stop every managed writer so exactly one writer remains. The
+   26fe writer lacks the current single-lock load/decide/commit semantics (the
+   contender-lock defect), so it must never run beside another writer, during
+   rollback or roll-forward.
+2. **Retire with the candidate.** `store.retireWorkspaceIndex()` runs under the
+   store lock. It refuses with `{ ok: false, reason: 'workspace_binding_held' }`
+   while any binding is bound or `handoff_pending` or any run still points at a
+   workspace. On released v2 it drops the empty index and null run pointers,
+   sets v1, keeps `workspaceFenceSeq` (the fence high-water) and every run,
+   event, nonce, artifact, terminal and follow-through record, and advances the
+   revision once. On v1 it is an idempotent no-op that writes nothing.
+3. **Run only the predecessor.** The 26fe build then reads and writes the
+   converted v1 state and keeps the retained high-water.
+4. **Roll forward** only with a new candidate under the same quiescence. Its
+   next bind re-upgrades to v2 from the retained high-water (high-water + 1,
+   never 0), so every earlier workspace token stays `stale_binding_fence`. A
+   frozen ae723 build is not a re-upgrade path: it fails closed on converted v1.
+
+Nothing calls `retireWorkspaceIndex()` automatically and source availability is
+not live authorization. The status reader stays read-only and does not expose
+it. Steward pair requalification, then private integration and adoption, are
+separate gates with their own owner and authority.
+
+**Verification map** (run from `modules/jarvos-coding`):
+
+| Flow | Proof |
+| --- | --- |
+| F1 capture/placement | `node --test test/local-change-intake.test.js test/projects-activity.test.js` |
+| F2 plan/owner | `node --test test/managed-workflow.test.js test/work-run-store.test.js` |
+| F3 execution | `node --test test/work-follow-through.test.js test/work-run-workspace-binding.test.js` |
+| F4 result | `node --test test/delivery-trace.test.js test/submission-gate.test.js` |
+| F5 blocker | `node --test test/managed-workflow.test.js test/triage.test.js` |
+| F6 rollback | `JARVOS_REQUIRE_PREDECESSOR=1 node --test test/work-run-rollback.test.js` |
+
+F6 in full:
+
+- **Launch:** `JARVOS_REQUIRE_PREDECESSOR=1 JARVOS_ROLLBACK_EVIDENCE_DIR=<dir> node --test test/work-run-rollback.test.js`.
+  `JARVOS_REQUIRE_PREDECESSOR=1` is mandatory for a rollback proof: without it,
+  a clone missing the 26fe commit skips instead of failing.
+  `JARVOS_ROLLBACK_EVIDENCE_DIR` is optional.
+- **Doctor:** the test pins the 26fe commit and store blob with `git rev-parse`
+  and `git cat-file` (argv arrays, no shell, checkout or index change) and
+  re-hashes the materialized bytes.
+- **Drive:** the predecessor is required from a fresh `jarvos-rollback-*` temp
+  root; the candidate comes from `require('../src')`. Only exported factories
+  and store methods are used, one writer at a time.
+- **Evidence:** with `JARVOS_ROLLBACK_EVIDENCE_DIR` set, each stage appends one
+  JSONL line (state sha256, revision, schema, fence high-water, record
+  inventory) to `SUP-3816-sr1-<case>.jsonl`. The directory must resolve outside
+  every temp fixture root, so the proof survives cleanup.
+- **Cleanup:** only the exact `jarvos-rollback-*` roots the test created under
+  `os.tmpdir()` are removed; production store roots are never touched.
+- **Helpers:** `loadPredecessor`, `seedWithOld`, `driveCandidate`, `oldWrites`,
+  `committed` and `recorder` are test-local. There is no new CLI, framework,
+  skill, installer, scheduler/controller, pstack config or default routing.
+
+The F6 proof is source-level. An installed or live rollback drive is not
+reachable from this repository: it needs an installed candidate build, the 26fe
+predecessor build installed for the same store root, all managed writers
+stopped, and explicit owner authority over the production store. None of that
+is implied by a passing test.
+
 ## Control-plane compatibility
 
 `createCodingControlPlanePort(...)` is the public, fenced compatibility port
