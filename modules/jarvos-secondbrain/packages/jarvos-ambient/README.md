@@ -35,6 +35,10 @@ Host apps own routing policy and provide concrete backends.
 - `classifyMessage(text)` and `detectSalience(capture)` for salience scoring.
 - `detectTrigger(capture)` and `hasCaptureIntent(capture)` for explicit capture
   wording.
+- `authorizeCapture(capture)` for the pure explicit-durable-capture-intent
+  predicate: `{ authorized, source, trigger }`. Salience and confidence are
+  never authorization inputs; they only decorate an already-authorized capture
+  (SUP-3981).
 - `findBestCapture(recentMessages)` and related helpers for retroactive
   "capture that" flows.
 - `validateCaptureEvent(event)` plus canonical salience classes and keyword
@@ -102,10 +106,16 @@ Routing plans can be applied generically through their `skillInvocations`
 entries:
 
 ```js
-const classification = classifyMessage('The decision is final: use adapter writes');
-const plan = buildThreePackagePlan({ text: 'The decision is final: use adapter writes', ...classification });
+const text = 'Note: the decision is final, use adapter writes';
+const classification = classifyMessage(text);
+const plan = buildThreePackagePlan({ text, ...classification });
 const dispatch = await dispatchSkillInvocations(plan, adapter);
 ```
+
+The explicit `Note:` above is required: salience/confidence from `classification`
+only decorate the plan (e.g. memory eligibility) once `text` itself carries
+explicit durable-capture intent. The same call without an intent marker returns
+an ignored plan — see `authorizeCapture` above.
 
 This keeps the portable flow explicit: intent classification -> routing plan ->
 skill dispatch -> adapter write. Legacy hosts can keep compatibility shims thin

@@ -6,6 +6,23 @@ const { run: defaultRun } = require('./run');
 
 const BRANCH_SCHEMA_VERSION = 'jarvos-coding-live-branch/v1';
 const DEFAULT_WORKTREE_SUBDIR = 'worktrees';
+const DEFAULT_TRUSTED_BASE_REF = 'origin/main';
+const GIT_OBJECT_ID = /^[a-f0-9]{40}(?:[a-f0-9]{24})?$/i;
+// `<remote>/<branch>` with plain path segments only: no `+`, `:`, leading dash,
+// empty segment, or `..`, so it can never read to Git as a refspec or an option.
+const REMOTE_TRACKING_REF = /^[A-Za-z0-9][A-Za-z0-9._-]*(?:\/[A-Za-z0-9][A-Za-z0-9._-]*)+$/;
+
+/**
+ * Normalize the host-configured integration base to a remote-tracking ref. A
+ * bare branch (`release`, the form the pull-request adapter also accepts) means
+ * `origin/release`. Returns null when the configuration is not a safe ref.
+ */
+function normalizeTrustedBaseRef(configured) {
+  if (configured !== undefined && configured !== null && typeof configured !== 'string') return null;
+  const value = configured || DEFAULT_TRUSTED_BASE_REF;
+  const ref = value.includes('/') ? value : `origin/${value}`;
+  return REMOTE_TRACKING_REF.test(ref) && !ref.includes('..') ? ref : null;
+}
 
 /**
  * Resolve the root directory that holds per-branch worktrees. Mirrors the env
@@ -55,6 +72,42 @@ function createLiveGitBranch(options = {}) {
   const worktreeRoot = resolveWorktreeRoot(options, env);
   const now = options.now || (() => Date.now());
   const mkdir = options.mkdir || ((dir) => fs.mkdirSync(dir, { recursive: true }));
+  // The integration base is host configuration, never a per-run argument.
+  // Null when the configuration itself is not a safe remote-tracking ref.
+  const trustedBaseRef = normalizeTrustedBaseRef(options.baseRef);
+
+  // A run may only name the host's base: the normalized ref, or the exact
+  // string the host configured. Anything else — `HEAD`, the branch itself, a
+  // refspec, an option-like string — is refused rather than handed to Git.
+  function requestsTrustedBase(requested) {
+    if (!trustedBaseRef) return false;
+    if (requested === undefined || requested === null || requested === '') return true;
+    return requested === trustedBaseRef || requested === options.baseRef;
+  }
+
+  /**
+   * Base evidence for the delivery comparison: the commit the freshly fetched
+   * trusted remote-tracking ref points at. A failed fetch or an unresolvable
+   * ref yields no base commit and therefore no observation.
+   */
+  function git(args) {
+    return run('git', args, { cwd: repoRootDir, timeoutMs: 30000, allowFail: true });
+  }
+
+  function canonicalPath(value) {
+    try { return fs.realpathSync(value); } catch { return path.resolve(value); }
+  }
+
+  function resolveTrustedBase(fetched) {
+    if (!fetched || fetched.status !== 0) return null;
+    const resolved = run('git', ['rev-parse', '--verify', '--quiet', `refs/remotes/${trustedBaseRef}^{commit}`], {
+      cwd: repoRootDir,
+      timeoutMs: 30000,
+      allowFail: true,
+    });
+    const commit = resolved.status === 0 ? String(resolved.stdout || '').trim().toLowerCase() : '';
+    return GIT_OBJECT_ID.test(commit) ? commit : null;
+  }
 
   return {
     schemaVersion: BRANCH_SCHEMA_VERSION,
@@ -62,16 +115,93 @@ function createLiveGitBranch(options = {}) {
     async createBranch(input = {}) {
       const branch = input.branch || input.branchName;
       if (!branch) throw new Error('live createBranch requires a branch name');
-      const baseRef = input.baseRef || 'origin/main';
+
+      // Decided before any effect: no directory, fetch, or worktree is touched
+      // for a base the host did not configure or for unsafe host configuration.
+      if (!requestsTrustedBase(input.baseRef)) {
+        return {
+          schemaVersion: BRANCH_SCHEMA_VERSION,
+          status: 'failed',
+          ok: false,
+          reasonCode: trustedBaseRef ? 'base_ref_untrusted' : 'trusted_base_ref_invalid',
+          branch,
+          baseRef: trustedBaseRef,
+          baseCommit: null,
+          baseBranch: null,
+          worktreeDir: null,
+          error: trustedBaseRef
+            ? `requested base is not the host-configured base ${trustedBaseRef}`
+            : 'host-configured base is not a safe remote-tracking ref',
+        };
+      }
+      const baseRef = trustedBaseRef;
+      const failed = (reasonCode, error) => ({
+        schemaVersion: BRANCH_SCHEMA_VERSION,
+        status: 'failed',
+        ok: false,
+        reasonCode,
+        branch,
+        baseRef,
+        baseCommit: null,
+        baseBranch: null,
+        worktreeDir: null,
+        error,
+      });
+
+      // A supplied control-plane fence is rechecked before any Git or
+      // filesystem effect of this stage, and again after each potentially long
+      // Git command before the next effect or a reported success.
+      const assertFence = () => {
+        if (typeof input.controlPlane?.assertCurrentFence === 'function') input.controlPlane.assertCurrentFence();
+      };
+      assertFence();
+
+      // Work is usually already checked out on the host's own repository root.
+      // Reuse exactly that canonical worktree when it is on the requested
+      // branch — never another worktree, and never a checkout, detach, or
+      // delete — with the same trusted-base evidence as a new worktree.
+      const current = git(['symbolic-ref', '--quiet', '--short', 'HEAD']);
+      if (current.status === 0 && String(current.stdout || '').trim() === branch) {
+        const topLevel = git(['rev-parse', '--show-toplevel']);
+        const head = git(['rev-parse', '--verify', '--quiet', 'HEAD^{commit}']);
+        const headCommit = head.status === 0 ? String(head.stdout || '').trim().toLowerCase() : '';
+        if (topLevel.status !== 0 || canonicalPath(String(topLevel.stdout || '').trim()) !== canonicalPath(repoRootDir)
+          || !GIT_OBJECT_ID.test(headCommit)) {
+          return failed('existing_worktree_unverified', 'host repository root is not a verifiable checkout of the branch');
+        }
+        const { remote, branch: baseBranch } = splitBaseRef(baseRef);
+        const baseCommit = resolveTrustedBase(run('git', ['fetch', remote, baseBranch], { cwd: repoRootDir, timeoutMs: 120000, allowFail: true }));
+        assertFence();
+        if (!baseCommit) return failed('trusted_base_unverified', `host-configured base ${baseRef} could not be verified`);
+        return {
+          schemaVersion: BRANCH_SCHEMA_VERSION,
+          status: 'reused',
+          mode: 'existing-worktree',
+          ok: true,
+          preexisting: true,
+          branch,
+          baseRef,
+          baseCommit,
+          baseBranch,
+          headCommit,
+          worktreeDir: repoRootDir,
+        };
+      }
 
       mkdir(worktreeRoot);
       const worktreeDir = path.join(worktreeRoot, `${sanitizeForPath(branch)}-${now()}`);
 
       // Fetch the base so the new worktree branches off the latest base ref.
       const { remote, branch: baseBranch } = splitBaseRef(baseRef);
-      run('git', ['fetch', remote, baseBranch], { cwd: repoRootDir, timeoutMs: 120000, allowFail: true });
+      const fetched = run('git', ['fetch', remote, baseBranch], { cwd: repoRootDir, timeoutMs: 120000, allowFail: true });
+
+      // Resolved once, from the fetched ref, for both a new branch and a
+      // reattached existing branch. Null means the base is unverified.
+      const baseCommit = resolveTrustedBase(fetched);
+      const baseEvidence = { baseCommit, baseBranch: baseCommit ? baseBranch : null };
 
       // Create a new branch in its own worktree off the base ref.
+      assertFence();
       const add = run('git', ['worktree', 'add', '-b', branch, worktreeDir, baseRef], {
         cwd: repoRootDir,
         timeoutMs: 120000,
@@ -79,6 +209,10 @@ function createLiveGitBranch(options = {}) {
       });
 
       if (add.status === 0) {
+        // Re-check authority after the effect: a fence revoked during a
+        // successful add must not report success (nor fall back to attach).
+        // This is a point-in-time check, not atomic Git authority.
+        assertFence();
         return {
           schemaVersion: BRANCH_SCHEMA_VERSION,
           status: 'created',
@@ -86,6 +220,7 @@ function createLiveGitBranch(options = {}) {
           ok: true,
           branch,
           baseRef,
+          ...baseEvidence,
           worktreeDir,
         };
       }
@@ -93,6 +228,7 @@ function createLiveGitBranch(options = {}) {
       // The branch may already exist (e.g. a resumed run). Attach a worktree to
       // the existing branch — keeping its name meaningful for the later PR —
       // rather than failing the stage.
+      assertFence();
       const attach = run('git', ['worktree', 'add', worktreeDir, branch], {
         cwd: repoRootDir,
         timeoutMs: 120000,
@@ -100,6 +236,10 @@ function createLiveGitBranch(options = {}) {
       });
 
       if (attach.status === 0) {
+        // Re-check authority after the effect: a fence revoked during a
+        // successful attach must not report success. This is a point-in-time
+        // check, not atomic Git authority.
+        assertFence();
         return {
           schemaVersion: BRANCH_SCHEMA_VERSION,
           status: 'attached',
@@ -107,6 +247,7 @@ function createLiveGitBranch(options = {}) {
           ok: true,
           branch,
           baseRef,
+          ...baseEvidence,
           worktreeDir,
         };
       }

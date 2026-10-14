@@ -1,0 +1,14 @@
+{
+  "name": "@jarvos/workspace-manager",
+  "version": "0.1.0",
+  "description": "Portable, capability-gated workspace observation and disposition contracts for jarvOS.",
+  "license": "MIT",
+  "main": "src/index.js",
+  "exports": { ".": "./src/index.js" },
+  "type": "commonjs",
+  "private": false,
+  "scripts": { "test": "node --test test/*.test.js" },
+  "repository": { "type": "git", "url": "https://github.com/levineam/jarvOS.git" },
+  "engines": { "node": ">=18" },
+  "keywords": ["jarvos", "workspace", "git", "safety", "control-plane"]
+}

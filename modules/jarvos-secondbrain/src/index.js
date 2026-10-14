@@ -21,7 +21,12 @@ const adapters = require('../adapters');
 const ambient = require('../packages/jarvos-ambient/src');
 const capture = require('../bridge/capture/src/universal-capture.js');
 const synthesis = require('../bridge/synthesis');
+const contentOrigin = require('../bridge/provenance/src/content-origin-contract.js');
+const contentOriginEvidence = require('../bridge/provenance/src/content-origin-evidence.js');
+const ripenessArtifact = require('../bridge/provenance/src/ripeness-artifact-contract.js');
 const wiki = require('../packages/jarvos-secondbrain-wiki/src');
+const artifactReceipt = require('./artifact-receipt');
+const artifactLink = require('./obsidian-artifact-link');
 
 // ── Path resolution ────────────────────────────────────────────────────────
 
@@ -145,12 +150,20 @@ module.exports = {
   adapters,
   ambient,
   capture,
+  contentOrigin,
+  contentOriginEvidence,
+  ripenessArtifact,
   synthesis,
   wiki,
   ...adapters,
   ...capture,
+  ...contentOrigin,
+  ...contentOriginEvidence,
+  ...ripenessArtifact,
   ...synthesis,
   ...wiki,
   ...routing,
   ...skillContracts,
+  ...artifactReceipt,
+  ...artifactLink,
 };

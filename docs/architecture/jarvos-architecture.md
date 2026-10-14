@@ -71,6 +71,20 @@ Responsibilities:
    - Environment-fit guidance for OpenClaw, Hermes, Codex, Claude, and future
      runtime adapters
 
+6. **Managed Coding Provider Boundary**
+   - `@jarvos/coding` owns provider-neutral `plan`, `work`, and completion
+     behavior, durable work-run identity, accepted plan revisions, review and
+     terminal evidence.
+   - `@jarvos/skills` owns the approved external Compound Engineering manifest
+     and inspect-then-apply profile reconciliation; it does not vendor the CE
+     skill corpus into the coding package.
+   - Runtime adapters own harness discovery, profile-specific activation, and
+     capability denial. A discovered provider is not healthy until the adapter
+     has a matching immutable pin, strict receipt, and conformance proof.
+   - Provider failure falls back through the native jarvOS workflow in the same
+     run/worktree. Optional post-verification learning is a separate tail and
+     cannot satisfy or rewrite completion.
+
 ## 3) Adopted Patterns
 
 ### Pattern: Layered memory and knowledge retrieval

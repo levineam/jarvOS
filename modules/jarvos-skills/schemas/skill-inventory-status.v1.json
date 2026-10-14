@@ -1,0 +1,203 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "jarvos.skill-inventory-status/v1",
+  "title": "jarvOS redacted outward skill inventory status",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "generationId",
+    "observedAt",
+    "digest",
+    "counts",
+    "roots",
+    "skills",
+    "exclusions"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": "jarvos.skill-inventory-status/v1"
+    },
+    "generationId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "acceptedGenerationId": {
+      "type": ["string", "null"]
+    },
+    "acceptedAt": {
+      "type": ["string", "null"],
+      "format": "date-time"
+    },
+    "observedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "digest": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "counts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "skills",
+        "shared",
+        "already_managed",
+        "harness_local",
+        "blocked",
+        "needs_input",
+        "actionable",
+        "exclusions"
+      ],
+      "properties": {
+        "skills": { "type": "integer", "minimum": 0 },
+        "shared": { "type": "integer", "minimum": 0 },
+        "already_managed": { "type": "integer", "minimum": 0 },
+        "harness_local": { "type": "integer", "minimum": 0 },
+        "blocked": { "type": "integer", "minimum": 0 },
+        "needs_input": { "type": "integer", "minimum": 0 },
+        "actionable": { "type": "integer", "minimum": 0 },
+        "exclusions": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "roots": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["rootId", "harness", "lifecycle", "trustClass", "complete"],
+        "properties": {
+          "rootId": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,63}$"
+          },
+          "harness": {
+            "type": "string",
+            "enum": ["codex", "claude", "openclaw", "hermes"]
+          },
+          "lifecycle": {
+            "type": "string",
+            "enum": ["available", "stale", "unregistered"]
+          },
+          "trustClass": {
+            "type": "string",
+            "enum": ["markdown-only", "portable-bundles"]
+          },
+          "complete": {
+            "type": "boolean"
+          }
+        }
+      }
+    },
+    "skills": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "logicalId",
+          "treeDigest",
+          "disposition",
+          "matrix",
+          "attention",
+          "observationCount"
+        ],
+        "properties": {
+          "logicalId": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,63}$"
+          },
+          "treeDigest": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          },
+          "disposition": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["kind", "reasonCode"],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "shared",
+                  "already_managed",
+                  "harness_local",
+                  "blocked",
+                  "needs_input"
+                ]
+              },
+              "reasonCode": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          },
+          "matrix": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["harness", "projection", "verification"],
+              "properties": {
+                "harness": {
+                  "type": "string",
+                  "enum": ["codex", "claude", "openclaw", "hermes"]
+                },
+                "projection": {
+                  "type": "string",
+                  "enum": [
+                    "source_present",
+                    "missing",
+                    "installed",
+                    "locally_modified",
+                    "conflict",
+                    "retired"
+                  ]
+                },
+                "verification": {
+                  "type": "string",
+                  "enum": [
+                    "model_visible",
+                    "verification_pending",
+                    "unverifiable"
+                  ]
+                }
+              }
+            }
+          },
+          "attention": {
+            "type": "string",
+            "enum": ["quiet", "actionable", "resolved"]
+          },
+          "observationCount": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      }
+    },
+    "exclusions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["logicalId", "reasonCode", "excludedAt"],
+        "properties": {
+          "logicalId": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,63}$"
+          },
+          "reasonCode": {
+            "type": "string",
+            "minLength": 1
+          },
+          "excludedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      }
+    }
+  }
+}

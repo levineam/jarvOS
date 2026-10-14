@@ -7,9 +7,9 @@
     "owner": "jarvos-secondbrain-journal",
     "automatedWriters": ["jarvOS:journal-maintenance"],
     "derivedIndexWriters": ["jarvOS:journal-maintenance"],
-    "reviewedAt": "2026-08-08T00:00:00.000Z",
+    "reviewedAt": "2026-10-06T14:18:57.000Z",
     "maxAgeDays": 30,
-    "$doc": "journal-lifecycle.js exclusively creates a missing dated file. Obsidian-owned mutation is reserved for authorized active-day backlink and section updates. The derived Journaling.md page has one additive writer; other configured daily-note writers block scheduled creation rather than racing it."
+    "$doc": "Reviewed 2026-10-06 against the portable source creation/index boundary and the accepted bounded host adapter topology. Scheduled creation-only maintenance exclusively creates a missing dated file and additively updates a pure-generated existing Journaling.md index; it never flushes deferred backlinks or repairs authored journals. Host adapters may separately invoke the protected active-day machine-section mutation seam after successful creation. Private capture, authorized active-day backlink/fallback and human/manual Sync exceptions remain the host's inventory responsibility, not additional portable recurring writers. Existing configured-writer, expected-content and quiet-window guards remain in force. This metadata does not add private inventory age enforcement to the public lifecycle or claim cross-device exclusivity."
   },
 
   "derivedIndex": {
@@ -29,7 +29,8 @@
         "id": "projects",
         "heading": "## 🚀 Projects",
         "source": "projects",
-        "description": "Ongoing projects from the vault Projects record, as wiki-links. The orientation surface: what you are actually working on, and the shared reference point between you and your assistants. Owned by jarvos-secondbrain-projects."
+        "presence": "when-supported-activity",
+        "description": "Canonical parent Projects touched by admitted activity on this local date, as wiki-links. This is a concise navigation projection, not an orientation source; Projects context remains the assistant-facing source of truth. Owned by jarvos-secondbrain-projects."
       },
       {
         "id": "notes",
@@ -52,7 +53,7 @@
     ],
 
     "optional": [],
-    "$optional_doc": "Empty by design. Today's Calendar, Apple Reminders, and Paperclip Inbox were removed in favour of a simpler journal — see migration.legacySections. Add new opt-in sections here."
+    "$optional_doc": "Empty by design. Today's Calendar, Apple Reminders, and Paperclip Inbox were removed in favour of a simpler journal — see migration.legacySections. Projects is a configured machine section whose presence is conditional on supported same-day activity. Add new opt-in sections here."
   },
 
   "ordering": {
@@ -64,12 +65,13 @@
     "enabled": true,
     "rules": {
       "requiredSectionsAlwaysPresent": true,
+      "conditionalMachineSectionsMayBeAbsent": true,
       "optionalSectionsMatchEnabled": true,
       "noUnknownSections": true,
       "orderMatchesConfig": true,
       "driftAutoCorrect": true
     },
-    "doc": "Structure lock validates that the journal entry matches this config. Required sections must always exist. Optional sections appear only when enabled=true. Unknown sections are flagged (not deleted — content is preserved under the nearest matching section or appended to Notes). Drift is auto-corrected on each heartbeat pass."
+    "doc": "Structure lock validates that the journal entry matches this config. Required manual sections must always exist. A machine section with presence=when-supported-activity is omitted unless fresh, complete, non-empty activity supports it. Optional sections appear only when enabled=true. Unknown sections are flagged (not deleted — content is preserved under the nearest matching section or appended to Notes). Drift is auto-corrected on each heartbeat pass."
   },
 
   "migration": {
@@ -88,7 +90,7 @@
       "paperclip-inbox": {
         "heading": "## 📎 Paperclip Inbox",
         "action": "drop",
-        "doc": "Removed. Issue-tracker state belongs in the tracker; the journal's job is the human-readable surface. The Projects section is the replacement orientation view."
+        "doc": "Removed. Issue-tracker state belongs in the tracker; the journal's job is a concise human-readable activity navigation surface. Projects context remains the assistant-facing source of truth."
       },
       "current-focus": {
         "heading": "## 🎯 Current Focus",

@@ -1,0 +1,6 @@
+{
+  "schemaVersion": "jarvos.capability-ledger.v1",
+  "records": [
+    { "capabilityId": "unsafe-evidence", "title": "Unsafe evidence reference", "specification": "draft", "implementation": "absent", "repository": "local-only", "verification": "untested", "activation": "inactive", "authority": "none", "evidence": [{ "type": "repo-path", "ref": "/private/example/contract.js" }], "assertedOn": "2026-08-31" }
+  ]
+}

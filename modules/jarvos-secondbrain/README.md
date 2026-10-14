@@ -13,6 +13,27 @@ Public package state:
   watch status are generic jarvOS surfaces; private vault content and raw
   transcripts are not part of this package
 
+## Content origin (`jarvos-content-origin/v1`)
+
+Canonical durable-note writes go through `packages/jarvos-secondbrain-notes` → `write-to-vault.js` → `lib/note-schema.js`, which calls `bridge/provenance/src/content-origin-contract.js` (`frontmatterForContentOrigin()`).
+
+Written frontmatter includes:
+
+| Field | Meaning |
+|---|---|
+| `content_origin_schema` | Always `jarvos-content-origin/v1` |
+| `content_origin` | `human` \| `assistant` \| `mixed` \| `unknown` |
+| `content_origin_basis` | `verbatim_user` \| `user_derived` \| `assistant_generated` \| `mixed_composition` \| `unknown` (`legacy_author` is read-time only) |
+| `content_origin_source` | Present only when a user receipt verifies human evidence |
+
+A `human` declaration without `{capture_event_id, actor: "user", source_digest, content_digest}` that resolves and matches stored content is written as `unknown`. Downstream Ripeness / Active Assistant / memory gates must use that receipt check; they must not treat `author:` heuristics as human evidence.
+
+Private host writers (for example a local article-generator) should pass the same keys through the note-journal contract shim. Vault body text is not rewritten by origin repair.
+
+Journal bullets declare through an adjacent hidden marker bound to the digest of the clean bullet text; a bullet that is only a note wikilink is declared by the linked note instead. An **unmarked** material bullet is read as an unmarked manual entry — that is, as Andrew's own typing — so programmatic journal writers must declare rather than omit.
+
+The declared set of canonical writers and vault transforms lives in `bridge/provenance/src/content-origin-writers.js` and is enforced by `tests/content-origin-writer-conformance.test.js`: a newly added writer that never declares how it emits the contract fails the suite. For vault coverage reporting and the apply-gated repair path, see `docs/operations/content-origin-audit.md`.
+
 ## Layout
 
 ```text
@@ -67,6 +88,13 @@ Alternatively, set paths under `paths.*` in `jarvos.config.json`:
 }
 ```
 
+Every `paths.*` value must be absolute or `~`-rooted. The resolver ignores a
+relative value: `workspace` and `vault` fall back to the home defaults, while a
+derived key such as `journal` or `notes` is recomputed from its resolved vault
+or workspace parent. The configured value is never used either way, so
+`jarvos doctor` reports one as a failure instead of quietly resolving it
+against the workspace.
+
 For journal mutation, timezone may be `user.timezone`, `user.timeZone`,
 `timezone`, or `timeZone` in that config. The process `TZ` value is not an
 implicit journal fallback. See the [journal install contract](../../docs/journal-install-contract.md)
@@ -95,26 +123,58 @@ configuration, but scheduler delivery and operational evidence stay outside
 this package. The stdio MCP health action is read-only; MCP ensure is reserved
 for an explicit user request or host-declared journal-maintenance trigger.
 
-## Shared-Vault Runtime Onboarding
+## Sync with an Existing jarvOS Installation
 
-When a new runtime such as Hermes should reuse an existing secondbrain, make
-`jarvos-secondbrain` own the vault handoff instead of adding runtime-specific
-path instructions. Run the shared-vault onboarding helper from the runtime's
-workspace:
+When a new harness such as Hermes should reuse an existing secondbrain, make
+`jarvos-secondbrain` own the vault handoff instead of adding harness-specific
+path instructions. From the public jarvOS checkout, inspect the sync plan first:
 
 ```bash
-npm --prefix jarvos-secondbrain run onboard:shared-vault -- \
+jarvos sync \
   --vault "$HOME/Vaults/MyVault" \
   --workspace "$PWD" \
-  --config "$PWD/jarvos.config.json"
+  --name "Your Name" \
+  --timezone Area/City \
+  --dry-run
 ```
 
-The helper validates that the vault contains `Notes/` and `Journal/`, then writes
-a `jarvos.config.json` whose `paths.vault`, `paths.notes`, and `paths.journal`
-all point at the existing vault. After that, any runtime using
-`resolveConfig()` writes through the same Journal and Notes surfaces as the
-configured host. Use `--dry-run` first when you want to inspect the
-resolved paths without writing the config.
+For a new target, rerun without `--dry-run` to create the config. The command
+validates that the vault contains `Notes/`, `Journal/`, and `Tags/`, then writes a
+`jarvos.config.json` whose shared paths all point at the existing vault. In
+ordinary, uncontended use it writes no config contents inside the vault,
+rejects symlinked config targets,
+and refuses to replace any different existing config. A compatible portable
+config lets `jarvos sync --workspace "$PWD" --dry-run` reuse its configured
+vault, name, and timezone without repeating those flags. After that, any
+harness using `resolveConfig()` reads and writes through the same Journal,
+Notes, and Tags surfaces as the configured host. Run `jarvos doctor --profile
+minimal --workspace "$PWD"` afterward; a successful config handoff does not by
+itself claim the rest of the harness is installed.
+
+The config directory's identity is pinned by a POSIX directory descriptor and
+rechecked before and after writing. The final target is opened directly with
+exclusive `O_EXCL`/`0600` flags, its pathname is checked against the retained
+descriptor, the file is fsynced when available, and the exact bytes are read
+back through that descriptor before success is reported. A directory or target
+substituted during the run fails closed. Platforms without the descriptor fail
+closed.
+
+In ordinary, uncontended use sync selects the config directory outside the vault
+and writes no config contents there. It never enumerates or removes vault paths.
+A failed create may leave an empty `0600` config target that requires manual
+removal; the held descriptor is truncated best-effort before close, but sync
+never deletes its pathname. If simultaneous local filesystem changes are
+observed by the identity checks, sync fails closed. The OS does not provide a
+transaction against every same-account change in the narrow intervals between
+checks.
+
+Sync never migrates a legacy-shaped config in place. It reports
+`manual-reconcile` during a dry run and asks you to reconcile the existing file
+manually or pass `--config` to a new path. A portable existing config remains
+`already-synced`; a different config remains a conflict.
+
+The lower-level `onboard:shared-vault` npm script remains available for module
+consumers, with the same config-only and no-overwrite safety contract.
 
 ## Bootstrap choices
 
@@ -123,6 +183,29 @@ resolved paths without writing the config.
   integrations remain injectable and optional.
 
 See `docs/architecture/jarvos-secondbrain-monorepo-spec.md` for the boundary model.
+
+## Vault mutation ownership
+
+Authored Markdown does not count as saved merely because a filesystem write
+completed. The top-level mutation service records the intent, sends live
+creates and latest-content transforms through Obsidian's `app.vault` API, and
+waits for app-owned readback before returning `committed`. Notes, journals,
+backlinks, project pages, session threads, and maintenance repairs all compose
+this same lifecycle.
+
+If Obsidian is unavailable, a host may authorize only a safe exclusive create
+or exact-hash local replacement. The result is
+`saved_locally_sync_pending`, retained outside the vault, and must later be
+reconciled through Obsidian. Use:
+
+```bash
+JARVOS_VAULT_ROOT=/path/to/vault npm run health:vault-mutations
+JARVOS_VAULT_ROOT=/path/to/vault npm run maintain:vault-mutations
+```
+
+Sync verification is a separate, optional status. Obsidian has no supported
+per-file Sync API, so the private inspector is disabled by default and returns
+only bounded `converged`, `pending`, `diverged`, or `unknown` projections.
 
 ## Ambient Package
 
@@ -150,11 +233,16 @@ printf '%s\n' '{
 ```
 
 Supported source tools include `openclaw`, `codex`, `claude-code`, `hermes`,
-`chatgpt`, and `custom:<slug>` for future agents. The entrypoint normalizes the
+`grok-bot`, `chatgpt`, and `custom:<slug>` for future agents. The entrypoint normalizes the
 input into `CaptureEvent` v2, routes it through `jarvos-ambient`, writes through
 the canonical Obsidian adapter, and uses the note optimizer so durable notes
 enter the secondbrain stack. Lightweight `idea:` captures stay in the Journal
 Ideas section; substantive ideas become source-backed notes linked from Ideas.
+
+Host runtimes that intercept strict capture commands must follow the
+[hard-capture host-adapter contract](docs/contracts/HARD_CAPTURE_HOST_ADAPTERS.md):
+one public grammar, one receipt-derived response, and one native pre-model
+terminal owner.
 
 The canonical journal path is `Journal/YYYY-MM-DD.md`. Agents must not create
 guessed daily journal files under `Notes/`.

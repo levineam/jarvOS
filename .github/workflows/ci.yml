@@ -15,10 +15,10 @@ jobs:
     name: Markdown lint
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: '22'
 
@@ -46,7 +46,7 @@ jobs:
     outputs:
       had_broken_links: ${{ steps.markdown_links.outcome == 'failure' }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Check markdown links
         id: markdown_links
@@ -68,7 +68,7 @@ jobs:
     name: Meta hygiene
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Validate metadata JSON
         run: python3 -m json.tool docs/meta/source-to-export-map.json > /dev/null
@@ -123,7 +123,7 @@ jobs:
     name: Secret scan
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
 
@@ -138,7 +138,6 @@ jobs:
             base="${{ github.event.before }}"
           fi
 
-          pattern='(ghp_|sk-[A-Za-z0-9]{20,}|xox[baprs]-[A-Za-z0-9-]{10,}|BEGIN (RSA|OPENSSH|EC|DSA|PRIVATE) KEY|api[_-]?key[[:space:]]*[:=]|private[_-]?key[[:space:]]*[:=]|access[_-]?token[[:space:]]*[:=]|bearer[_-]?token[[:space:]]*[:=]|password[[:space:]]*[:=]|secret[_-]?key[[:space:]]*[:=]|auth[_-]?token[[:space:]]*[:=])'
           sensitive_exts=(
             '*.js' '*.jsx' '*.ts' '*.tsx' '*.mjs' '*.cjs'
             '*.py' '*.sh' '*.bash'
@@ -147,12 +146,14 @@ jobs:
           )
 
           if [[ -z "$base" || "$base" =~ ^0+$ ]] || ! git cat-file -e "$base^{commit}" 2>/dev/null; then
-            if git grep -nI -E "$pattern" -- "${sensitive_exts[@]}" ':!.github/workflows/ci.yml'; then
+            if git grep -nI '' -- "${sensitive_exts[@]}" ':!.github/workflows/ci.yml' \
+              | bash scripts/filter-secret-scan-candidates.sh; then
               echo "Potential secret pattern detected in repository history scan."
               exit 1
             fi
           else
-            if git diff -U0 "$base"...HEAD -- "${sensitive_exts[@]}" ':!.github/workflows/ci.yml' | grep -E -i "$pattern"; then
+            if git diff -U0 "$base"...HEAD -- "${sensitive_exts[@]}" ':!.github/workflows/ci.yml' \
+              | bash scripts/filter-secret-scan-candidates.sh; then
               echo "Potential secret pattern detected in changed content."
               exit 1
             fi
@@ -162,7 +163,7 @@ jobs:
     name: Smoke test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Run smoke test on clean checkout
         shell: bash
@@ -180,10 +181,10 @@ jobs:
     name: Unit tests
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: '22'
           cache: npm
@@ -198,6 +199,25 @@ jobs:
         shell: bash
         run: npm test
 
+  desktop-tests:
+    name: Desktop tests and assets
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+      - run: npm ci --include=dev
+        working-directory: apps/desktop
+      - run: npm test
+        working-directory: apps/desktop
+      - run: npm run build
+        working-directory: apps/desktop
+      - name: Require current prebuilt assets
+        run: git diff --exit-code -- apps/desktop/static/chat
+
   ci-summary:
     name: CI summary
     runs-on: ubuntu-latest
@@ -208,6 +228,7 @@ jobs:
       - secret-scan
       - smoke-test
       - unit-tests
+      - desktop-tests
     if: always()
     steps:
       - name: Summarize results
@@ -224,8 +245,9 @@ jobs:
           echo "secret-scan        : ${{ needs.secret-scan.result }}"
           echo "smoke-test         : ${{ needs.smoke-test.result }}"
           echo "unit-tests         : ${{ needs.unit-tests.result }}"
+          echo "desktop-tests      : ${{ needs.desktop-tests.result }}"
 
-          for r in "${{ needs.markdown-lint.result }}" "${{ needs.link-check.result }}" "${{ needs.meta-hygiene.result }}" "${{ needs.secret-scan.result }}" "${{ needs.smoke-test.result }}" "${{ needs.unit-tests.result }}"; do
+          for r in "${{ needs.markdown-lint.result }}" "${{ needs.link-check.result }}" "${{ needs.meta-hygiene.result }}" "${{ needs.secret-scan.result }}" "${{ needs.smoke-test.result }}" "${{ needs.unit-tests.result }}" "${{ needs.desktop-tests.result }}"; do
             if [[ "$r" == "failure" || "$r" == "cancelled" ]]; then
               echo "One or more CI jobs failed/cancelled."
               exit 1

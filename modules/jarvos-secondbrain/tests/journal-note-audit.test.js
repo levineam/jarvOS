@@ -10,7 +10,31 @@ const {
   extractTrackedSection,
   findMissingLinks,
   injectNoteLinks,
+  applyAuditRepair,
 } = require('../bridge/provenance/src/journal-note-audit.js');
+
+test('journal audit repairs require and use the app-owned mutation boundary', () => {
+  assert.throws(() => applyAuditRepair({
+    journalPath: '/vault/Journal/2026-01-02.md',
+    expectedContent: 'old',
+    nextContent: 'new',
+  }), /Obsidian-owned/);
+
+  let operation;
+  const receipt = applyAuditRepair({
+    journalPath: '/vault/Journal/2026-01-02.md',
+    expectedContent: 'old',
+    nextContent: 'new',
+    applyMarkdownMutation(input) { operation = input; return { status: 'committed' }; },
+  });
+  assert.equal(receipt.status, 'committed');
+  assert.deepEqual(operation, {
+    filePath: '/vault/Journal/2026-01-02.md',
+    expectedContent: 'old',
+    nextContent: 'new',
+    source: 'journal.note-audit',
+  });
+});
 
 function withFreshAuditModule(env, fn) {
   const keys = ['JARVOS_NOTES_DIR', 'JARVOS_JOURNAL_DIR', 'VAULT_NOTES_DIR', 'JOURNAL_DIR'];

@@ -246,8 +246,9 @@ try {
   const defaultNotePlan = sb.buildRoutingPlan({ text: 'remember this module smoke capture' });
   if (
     notePlan.route === 'note' &&
-    defaultNotePlan.route === 'note' &&
-    defaultNotePlan.defaultedToNoteBias === true &&
+    defaultNotePlan.route === null &&
+    defaultNotePlan.ignored === true &&
+    defaultNotePlan.defaultedToNoteBias === false &&
     sb.SKILL_CONTRACTS &&
     sb.SKILL_CONTRACTS['note-creation']
   ) {
@@ -360,7 +361,7 @@ try {
   const manifest = skills.getManifest();
   const names = skills.listSkills().map((skill) => skill.name);
 
-  if (validation.ok && validation.skillCount === 4) {
+  if (validation.ok && validation.skillCount === 7) {
     ok('validateBundle accepts default skill bundle');
   } else {
     bad('validateBundle', new Error(JSON.stringify(validation)));
@@ -468,6 +469,23 @@ try {
     })));
   }
 
+  const managedProvider = require(path.join(ROOT, 'modules/jarvos-coding/providers/compound-engineering.json'));
+  if (
+    typeof coding.createManagedCodingWorkflow === 'function'
+    && coding.MANAGED_WORKFLOW_SCHEMA_VERSION === 'jarvos-managed-coding-workflow/v1'
+    && managedProvider.id === 'compound-engineering'
+    && managedProvider.source.revision
+    && managedProvider.source.contentDigest
+    && managedProvider.review.status === 'approved'
+  ) {
+    ok('managed Compound Engineering provider ships with the coding boundary');
+  } else {
+    bad('managed Compound Engineering provider', new Error(JSON.stringify({
+      workflow: typeof coding.createManagedCodingWorkflow,
+      provider: managedProvider,
+    })));
+  }
+
   const smoke = require('child_process').spawnSync(process.execPath, ['-e', `
     const coding = require('./modules/jarvos-coding/src');
     const calls = [];
@@ -481,14 +499,40 @@ try {
         async verifyAndClose() { calls.push('verifyClose'); return { status: 'closed' }; },
       },
       git: { async createBranch(input) { calls.push('branch'); return { status: 'created', branch: input.branch }; } },
-      fixer: { async fixAndRerun() { calls.push('fixRerun'); return { status: 'passed' }; } },
+      fixer: { async fixAndRerun() { calls.push('fixRerun'); return { status: 'passed', deliveryObservation }; } },
       pullRequest: { async openPullRequest() { calls.push('pullRequest'); return { status: 'created' }; } },
       postMerge: { async sweep() { calls.push('postMergeSweep'); return { status: 'completed' }; } },
     }});
-    adapter.runTakeIssueToDone({ issueIdentifier: 'SUP-2214', branch: 'SUP-2214/modules-smoke' })
+    // Completion needs a declared delivery trace that matches the fix stage's Git observation.
+    const headCommit = 'a'.repeat(40);
+    const planText = '# SUP-2214 modules smoke plan';
+    const changedFiles = ['docs/plans/SUP-2214.md', 'modules/jarvos-coding/README.md', 'modules/jarvos-coding/src/index.js'];
+    const deliveryObservation = { headCommit, changedFiles, plan: coding.observePlan(planText, 'SUP-2214') };
+    const deliveryTrace = {
+      schemaVersion: coding.DELIVERY_TRACE_SCHEMA_VERSION,
+      workIdentifier: 'SUP-2214',
+      plan: { path: changedFiles[0], digest: deliveryObservation.plan.digest },
+      docImpact: { decision: 'affected', docs: [changedFiles[1]] },
+      implementation: { headCommit, changedFiles },
+      proof: [{
+        kind: 'behavioral', level: 'source', status: 'passed', headCommit,
+        criterion: 'The Codex host adapter drives every orchestrator stage.',
+        claim: 'runTakeIssueToDone completes through the host adapter.',
+        command: 'node tests/modules-smoke-test.js',
+        observation: 'Every stage ran and the run reported completed.',
+      }],
+    };
+    const run = (input) => adapter.runTakeIssueToDone({ issueIdentifier: 'SUP-2214', branch: 'SUP-2214/modules-smoke', ...input });
+    run({ deliveryTrace })
       .then((result) => {
         if (result.status !== 'completed') throw new Error('host adapter did not complete');
         if (result.result.events.length !== coding.TAKE_ISSUE_TO_DONE_STAGES.length) throw new Error('stage count mismatch');
+        if (result.result.deliveryGate.claims.source !== 'proven' || result.result.deliveryGate.claims.live !== 'not-claimed') throw new Error('unexpected proof claims');
+        return run({});
+      })
+      .then((result) => {
+        if (result.status !== 'blocked') throw new Error('trace-less run was not blocked');
+        if (result.result.events.some((event) => event.stage === 'verifyClose')) throw new Error('blocked run reached verifyClose');
       })
       .catch((error) => { console.error(error.message); process.exit(1); });
   `], { cwd: ROOT, encoding: 'utf8' });
@@ -1008,6 +1052,84 @@ try {
 
 } catch (e) {
   bad('@jarvos/agentify channel-context load', e);
+}
+
+// ── @jarvos/storage-janitor ─────────────────────────────────────────────────
+
+console.log('\n→ @jarvos/storage-janitor');
+
+try {
+  const janitor = require(path.join(ROOT, 'modules/jarvos-storage-janitor/src/index.js'));
+
+  const policy = {
+    version: 'jarvos-storage-janitor.policy.v1',
+    policyId: 'policy:smoke',
+    requiredBytes: 1073741824,
+    safetyMarginBytes: 104857600,
+  };
+  const now = '2026-09-03T12:01:00.000Z';
+
+  const sufficient = janitor.computeCapacityPreflight({
+    observation: {
+      version: 'jarvos-storage-janitor.observation.v1',
+      candidateSetId: null,
+      observedAt: '2026-09-03T12:00:00.000Z',
+      freshUntil: '2026-09-03T12:05:00.000Z',
+      bytesAvailable: 2147483648,
+      bytesTotal: 1000000000000,
+    },
+    policy,
+    now,
+  });
+  if (sufficient.ok && sufficient.disposition === 'proceed') {
+    ok('computeCapacityPreflight proceeds on fresh sufficient capacity');
+  } else {
+    bad('computeCapacityPreflight proceed', new Error(JSON.stringify(sufficient)));
+  }
+
+  const insufficient = janitor.computeCapacityPreflight({
+    observation: {
+      version: 'jarvos-storage-janitor.observation.v1',
+      candidateSetId: null,
+      observedAt: '2026-09-03T12:00:00.000Z',
+      freshUntil: '2026-09-03T12:05:00.000Z',
+      bytesAvailable: 627048448,
+      bytesTotal: 1000000000000,
+    },
+    policy,
+    now,
+  });
+  if (insufficient.ok && insufficient.disposition === 'blocked') {
+    ok('computeCapacityPreflight blocks on insufficient capacity with no candidates');
+  } else {
+    bad('computeCapacityPreflight blocked', new Error(JSON.stringify(insufficient)));
+  }
+
+  const missingNow = janitor.computeCapacityPreflight({
+    observation: {
+      version: 'jarvos-storage-janitor.observation.v1',
+      candidateSetId: null,
+      observedAt: '2026-09-03T12:00:00.000Z',
+      freshUntil: '2026-09-03T12:05:00.000Z',
+      bytesAvailable: 2147483648,
+      bytesTotal: 1000000000000,
+    },
+    policy,
+  });
+  if (!missingNow.ok && missingNow.disposition === 'blocked') {
+    ok('computeCapacityPreflight fails closed on a missing now');
+  } else {
+    bad('computeCapacityPreflight missing now', new Error(JSON.stringify(missingNow)));
+  }
+
+  const invalid = janitor.validateCapacityObservation({});
+  if (invalid.ok === false) {
+    ok('validateCapacityObservation fails closed on a missing observation');
+  } else {
+    bad('validateCapacityObservation', new Error(JSON.stringify(invalid)));
+  }
+} catch (e) {
+  bad('@jarvos/storage-janitor module load', e);
 }
 
 // ── Summary ─────────────────────────────────────────────────────────────────

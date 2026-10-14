@@ -59,7 +59,11 @@ function defaultPaths(home) {
   };
 }
 
-function isUsablePath(value, home) {
+// A configured paths.* value only reaches the runtime when it survives this
+// check; normalizePathMap() drops everything else in favour of the
+// home-directory defaults.  Validators share this predicate so they cannot
+// report a path healthy that resolveConfig() will silently ignore.
+function isUsablePath(value, home = os.homedir()) {
   if (typeof value !== 'string' || value.trim() === '') return false;
   return path.isAbsolute(expandTilde(value.trim(), home));
 }
@@ -73,11 +77,21 @@ function normalizePathMap(rawPaths = {}, home) {
   return paths;
 }
 
-function firstEnvPath(keys = [], env = process.env, home = os.homedir()) {
+// Returns the specific env var name that would win firstEnvPath()'s
+// precedence order, or null if none of `keys` is currently set to a usable
+// path. Consumers that need to name the override in a diagnostic (rather
+// than just resolve its value) call this instead of re-deriving the same
+// precedence rule themselves.
+function winningPathEnvKey(keys = [], env = process.env, home = os.homedir()) {
   for (const key of keys) {
-    if (isUsablePath(env[key], home)) return expandTilde(env[key].trim(), home);
+    if (isUsablePath(env[key], home)) return key;
   }
   return null;
+}
+
+function firstEnvPath(keys = [], env = process.env, home = os.homedir()) {
+  const winningKey = winningPathEnvKey(keys, env, home);
+  return winningKey ? expandTilde(env[winningKey].trim(), home) : null;
 }
 
 function firstConfiguredJournalPath(keys = [], env = process.env, home = os.homedir()) {
@@ -151,15 +165,20 @@ function isValidTimezone(value) {
   }
 }
 
-function resolveUserTimezone(rest = {}, env = process.env) {
-  return validTimezone(
-    env.JARVOS_TIMEZONE
+function resolveUserTimezone(rest = {}, env = process.env, configPath = null) {
+  const configuredTimezone = env.JARVOS_TIMEZONE
     || rest.user?.timezone
     || rest.user?.timeZone
     || rest.timezone
-    || rest.timeZone
-    || env.TZ,
-  );
+    || rest.timeZone;
+  if (configuredTimezone) {
+    if (!isValidTimezone(configuredTimezone)) {
+      const source = env.JARVOS_TIMEZONE ? 'JARVOS_TIMEZONE' : (configPath || 'jarvos.config.json');
+      throw new Error(`jarvOS configuration has an invalid IANA timezone ${JSON.stringify(configuredTimezone)} from ${source}`);
+    }
+    return configuredTimezone;
+  }
+  return validTimezone(env.TZ);
 }
 
 /**
@@ -292,9 +311,17 @@ function resolveConfig(options = {}) {
   const env = options.env || process.env;
   const home = homeDir(options);
   const configPath = discoverConfigPath({ ...options, env, homeDir: home });
-  const raw = readJsonFile(configPath);
+  // Callers that need to assess a candidate before publication can supply the
+  // exact prospective config. Runtime callers continue to read configPath.
+  const raw = options.config && typeof options.config === 'object'
+    ? options.config
+    : readJsonFile(configPath);
   const { $schema: _schema, ...rest } = raw && typeof raw === 'object' ? raw : {};
   const basePaths = defaultPaths(home);
+  // Keep legacy bootstrap fields readable by the sync/migration path, but do
+  // not promote them into runtime resolution.  Historically they were ignored
+  // by this resolver; treating a stale legacy value as an active write target
+  // would silently redirect an existing installation.
   const configPaths = normalizePathMap(rest.paths, home);
   const envPaths = {};
 
@@ -337,8 +364,8 @@ function resolveConfig(options = {}) {
   assertWithinRequiredVault(paths.vault, requiredCanonicalVaultRoot(env, home), vaultSource);
 
   const user = {
-    name: rest.user?.name || DEFAULT_USER_NAME,
-    timezone: resolveUserTimezone(rest, env),
+    name: rest.user?.name || rest.userName || DEFAULT_USER_NAME,
+    timezone: resolveUserTimezone(rest, env, configPath),
   };
 
   const config = { paths, user };
@@ -361,9 +388,11 @@ module.exports = {
   requiredCanonicalVaultRoot,
   discoverConfigPath,
   expandTilde,
+  isUsablePath,
   resolveConfig,
   resolveJournalConfig,
   resolveUserTimezone,
   isValidTimezone,
+  winningPathEnvKey,
   xdgConfigPath,
 };

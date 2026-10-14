@@ -134,6 +134,26 @@ Doctor checks:
 - MCP tool list includes recall, startup brief, current work, and note capture
 - generated paths do not include private machine-specific examples
 
+The coding workflow also ships one managed Compound Engineering provider
+manifest. It is packaged as a reviewed external artifact rather than an npm
+dependency or vendored skill corpus. Codex provider admission follows this
+matrix:
+
+| State | Meaning | Coding behavior |
+| --- | --- | --- |
+| `healthy` | approved pin, discovery, bounded invocation/receipt, and capability proof all pass | CE-backed `plan`/`work`; jarvOS still owns completion |
+| `not-installed` | no approved provider found in the active `CODEX_HOME` | native jarvOS fallback |
+| `degraded` | installed but disabled, stale, or missing conformance evidence | native jarvOS fallback and visible recovery action |
+| `incompatible` | capability, version, or contract mismatch | fail closed; preserve profile state |
+| `local-modified` | jarvOS-owned state changed locally | preserve it; require inspect-then-apply reconciliation |
+| `unsupported` | discovery exists but the harness has not passed conformance | native jarvOS fallback; no activation mutation |
+
+New managed coding profiles use CE by default after the checked-in Codex
+conformance receipt is reviewed. Existing profiles preserve their current
+provider state during migration. Candidate discovery may be automatic, but
+activation and updates always require a jarvOS-approved immutable pin and
+matching evidence.
+
 ### `claude`
 
 Purpose: expose jarvOS context to Claude Desktop or Claude Code style clients.

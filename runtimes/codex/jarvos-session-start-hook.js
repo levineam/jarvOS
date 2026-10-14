@@ -5,12 +5,15 @@ const fs = require('node:fs');
 const os = require('os');
 const path = require('path');
 const { hydrate } = require('../../modules/jarvos-agent-context/src/index.js');
+const { envelopeHasContent: projectsContextRefreshHasContent } = require('../../modules/jarvos-runtime-kit/src/projects-context-refresh.js');
 const {
   additionalContext,
   bridgeEnvironment,
   hookSessionId,
   MAX_HOOK_INPUT_CHARS,
+  projectsContextStart,
   readHookInput,
+  sessionWaitContext,
   stewardshipAdapter,
 } = require('./jarvos-session-turn-hook.js');
 
@@ -45,7 +48,12 @@ function hydrationMaxChars() {
 
 function stewardshipContext(options = {}) {
   const input = stewardshipAdapter.nextTurnInput(options);
-  return input.pendingInSessionInput && input.nextTurnInput ? additionalContext(input) : '';
+  const sessionWait = stewardshipAdapter.sessionWaitNextTurn(options);
+  const contexts = [];
+  if (input.pendingInSessionInput && input.nextTurnInput) contexts.push(additionalContext(input));
+  const waitContext = sessionWaitContext(sessionWait);
+  if (waitContext) contexts.push(waitContext);
+  return contexts.join('\n\n');
 }
 
 function sessionStartInput(raw) {
@@ -57,20 +65,34 @@ function readSessionStartInput() {
   return readHookInput('SessionStart');
 }
 
+async function startupHydration(options = {}) {
+  const result = await hydrate({ maxChars: hydrationMaxChars(), ...options });
+  return result.markdown;
+}
+
 async function main() {
   try {
     const env = bridgeEnvironment(readSessionStartInput());
-    const judgment = env
-      ? (stewardshipAdapter.startOrResume({ env }), stewardshipContext({ env }))
-      : '';
+    let projectsContextMarkdown = '';
+    let judgment = '';
+    if (env) {
+      stewardshipAdapter.startOrResume({ env });
+      stewardshipAdapter.sessionWaitBind({ env });
+      judgment = stewardshipContext({ env });
+      // A single hard-timeout start call; invalid, timed out, nonzero, or
+      // unavailable all fail open to the ordinary hydrate() Projects fallback.
+      const refresh = projectsContextStart({ env });
+      if (projectsContextRefreshHasContent(refresh.envelope)) {
+        projectsContextMarkdown = refresh.envelope.markdown;
+      }
+    }
     let hydration = '';
     try {
-      const result = await hydrate({ maxChars: hydrationMaxChars() });
-      hydration = result.markdown;
+      hydration = await startupHydration(projectsContextMarkdown ? { projectsContext: false } : {});
     } catch (error) {
       logFailure(error);
     }
-    const context = [judgment, hydration].filter((value) => typeof value === 'string' && value.trim()).join('\n\n');
+    const context = [judgment, projectsContextMarkdown, hydration].filter((value) => typeof value === 'string' && value.trim()).join('\n\n');
     if (!context) {
       writeJson({});
       return;
@@ -100,6 +122,7 @@ module.exports = {
   hydrationMaxChars,
   main,
   readSessionStartInput,
+  startupHydration,
   sessionStartInput,
   stewardshipAdapter,
   stewardshipContext,

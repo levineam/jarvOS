@@ -1,0 +1,225 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "jarvos.skill-inventory/v1",
+  "title": "jarvOS skill inventory assessment document",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "generationId",
+    "observedAt",
+    "roots",
+    "skills",
+    "exclusions"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": "jarvos.skill-inventory/v1"
+    },
+    "generationId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "acceptedGenerationId": {
+      "type": ["string", "null"],
+      "minLength": 1
+    },
+    "acceptedAt": {
+      "type": ["string", "null"],
+      "format": "date-time"
+    },
+    "observedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "roots": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "rootId",
+          "harness",
+          "root",
+          "lifecycle",
+          "trustClass",
+          "complete"
+        ],
+        "properties": {
+          "rootId": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,63}$"
+          },
+          "harness": {
+            "type": "string",
+            "enum": ["codex", "claude", "openclaw", "hermes"]
+          },
+          "root": {
+            "type": "string",
+            "minLength": 1
+          },
+          "lifecycle": {
+            "type": "string",
+            "enum": ["available", "stale", "unregistered"]
+          },
+          "trustClass": {
+            "type": "string",
+            "enum": ["markdown-only", "portable-bundles"]
+          },
+          "complete": {
+            "type": "boolean"
+          }
+        }
+      }
+    },
+    "skills": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "logicalId",
+          "observedName",
+          "treeDigest",
+          "observations",
+          "disposition",
+          "matrix",
+          "attention"
+        ],
+        "properties": {
+          "logicalId": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,63}$"
+          },
+          "observedName": {
+            "type": "string",
+            "minLength": 1
+          },
+          "treeDigest": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          },
+          "observations": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "rootId",
+                "relativePath",
+                "absolutePath",
+                "state",
+                "observedAt"
+              ],
+              "properties": {
+                "rootId": {
+                  "type": "string",
+                  "pattern": "^[a-z][a-z0-9-]{0,63}$"
+                },
+                "relativePath": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "absolutePath": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "state": {
+                  "type": "string",
+                  "enum": ["new", "unchanged", "changed", "missing", "unsafe"]
+                },
+                "observedAt": {
+                  "type": "string",
+                  "format": "date-time"
+                }
+              }
+            }
+          },
+          "disposition": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["kind", "reasonCode"],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "shared",
+                  "already_managed",
+                  "harness_local",
+                  "blocked",
+                  "needs_input"
+                ]
+              },
+              "reasonCode": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          },
+          "matrix": {
+            "type": "array",
+            "minItems": 4,
+            "maxItems": 4,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["harness", "projection", "verification"],
+              "properties": {
+                "harness": {
+                  "type": "string",
+                  "enum": ["codex", "claude", "openclaw", "hermes"]
+                },
+                "projection": {
+                  "type": "string",
+                  "enum": [
+                    "source_present",
+                    "missing",
+                    "installed",
+                    "locally_modified",
+                    "conflict",
+                    "retired"
+                  ]
+                },
+                "verification": {
+                  "type": "string",
+                  "enum": [
+                    "model_visible",
+                    "verification_pending",
+                    "unverifiable"
+                  ]
+                }
+              }
+            }
+          },
+          "attention": {
+            "type": "string",
+            "enum": ["quiet", "actionable", "resolved"]
+          }
+        }
+      }
+    },
+    "exclusions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["logicalId", "reasonCode", "excludedAt"],
+        "properties": {
+          "logicalId": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,63}$"
+          },
+          "reasonCode": {
+            "type": "string",
+            "minLength": 1
+          },
+          "excludedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      }
+    }
+  }
+}

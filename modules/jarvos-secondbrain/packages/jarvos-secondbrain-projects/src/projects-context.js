@@ -1,0 +1,1166 @@
+'use strict';
+
+const crypto = require('node:crypto');
+
+const { resolvePriority } = require('./priority');
+const { validateProviderSnapshot } = require('./provider-contracts');
+const { STATUS_BY_KIND, validateInferenceMetadata } = require('./records');
+const inferenceContracts = require('./project-inference-contracts');
+const { ENGINE_REVISION, POLICY_REVISION } = require('./project-inference-reconciler');
+const { attentionSummaries, deriveIntentGapAttention } = require('./intent-gap-attention');
+const {
+  CONTEXT_CONTRACT,
+  PROOF_CONTRACT: PORTFOLIO_PROOF_CONTRACT,
+  REDACTION_CLASSES,
+  capabilityDigest,
+  verifyCapability,
+  verifyProofCapability,
+} = require('./projects-context-capability');
+
+const CONTEXT_SCHEMA_VERSION = 2;
+const ROSTER_CONTRACT = 'jarvos.projects-roster/v1';
+const SUPPORTED_CONTEXT_SCHEMA_VERSIONS = Object.freeze([CONTEXT_SCHEMA_VERSION]);
+const CONTEXT_PACKET_FIELDS = Object.freeze([
+  'contract', 'schemaVersion', 'packetId', 'capturedAt', 'expiresAt', 'query', 'canonical', 'activity', 'currentWork', 'attention',
+  'evidence', 'providers', 'inference', 'watermarks', 'omissions', 'truncation', 'redactionClass', 'capability',
+]);
+const QUERY_FIELDS = Object.freeze(['scope', 'include', 'limits']);
+const SCOPE_FIELDS = Object.freeze(['projectIds', 'outcomeIds', 'includeDescendants']);
+const LIMIT_FIELDS = Object.freeze(['maxItems', 'maxBytes', 'maxProviderAgeSeconds']);
+const INCLUDE_SECTIONS = Object.freeze(['hierarchy', 'activity', 'currentWork', 'attention']);
+const TERMINAL_WORK_STATUSES = new Set(['closed', 'completed', 'done', 'cancelled', 'canceled', 'rejected', 'abandoned']);
+const KNOWN_PROVIDERS = Object.freeze(['activity', 'beads', 'paperclip', 'release', 'stewardship', 'todo']);
+const SUMMARY_FIELDS = Object.freeze(['id', 'canonicalId', 'category', 'status', 'title', 'occurredAt', 'observedAt', 'evidenceRefs', 'source', 'canonicalAtAdmission']);
+const EVIDENCE_FIELDS = Object.freeze(['source', 'id', 'canonicalId', 'occurredAt', 'observedAt', 'evidenceRefs']);
+const RECORD_PACKET_FIELDS = Object.freeze([
+  'id', 'kind', 'title', 'aliases', 'parentId', 'lifecycle', 'declaredPriority', 'effectivePriority', 'priority',
+  'revision', 'createdAt', 'updatedAt', 'goal', 'definitionOfDone', 'links', 'breadcrumb', 'inference',
+]);
+const PRIORITY_FIELDS = Object.freeze(['declared', 'effective', 'source', 'sourceRecordId', 'sourceKind']);
+const INFERENCE_FIELDS = Object.freeze(['policyRevision', 'engineRevision', 'candidates', 'coverage', 'watermark', 'watermarks']);
+const INFERENCE_WATERMARK_FIELDS = Object.freeze(['sourceClass', 'state', 'observedAt', 'sourceRevision', 'evidenceId']);
+const ADMISSION_FIELDS = Object.freeze([
+  'canonicalId', 'canonicalKind', 'canonicalRevision', 'rootProjectId', 'rootProjectRevision', 'rootProjectLifecycle', 'registryGeneration',
+]);
+
+function isPlainObject(value) { return Boolean(value) && typeof value === 'object' && !Array.isArray(value); }
+function exactKeys(value, keys) { return isPlainObject(value) && Object.keys(value).length === keys.length && keys.every((key) => Object.prototype.hasOwnProperty.call(value, key)); }
+function requiredString(value, field) { if (typeof value !== 'string' || !value.trim()) throw new TypeError(`${field} must be a non-empty string`); return value.trim(); }
+function timestamp(value, field) { requiredString(value, field); if (Number.isNaN(Date.parse(value))) throw new TypeError(`${field} must be an ISO timestamp`); return value; }
+function integer(value, field, { min, max }) { if (!Number.isInteger(value) || value < min || value > max) throw new TypeError(`${field} must be an integer between ${min} and ${max}`); return value; }
+function clone(value) { return JSON.parse(JSON.stringify(value)); }
+function stableValue(value) {
+  if (Array.isArray(value)) return value.map(stableValue);
+  if (isPlainObject(value)) return Object.fromEntries(Object.keys(value).sort().map((key) => [key, stableValue(value[key])]));
+  return value;
+}
+function stableStringify(value) { return JSON.stringify(stableValue(value)); }
+function hash(value) { return crypto.createHash('sha256').update(stableStringify(value)).digest('hex'); }
+function byteLength(value) { return Buffer.byteLength(JSON.stringify(value), 'utf8'); }
+function constantTimeEqual(left, right) {
+  if (typeof left !== 'string' || typeof right !== 'string') return false;
+  const a = Buffer.from(left); const b = Buffer.from(right);
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+
+function opaque(value, field, { nullable = false } = {}) {
+  if (value === null || value === undefined) {
+    if (nullable) return null;
+    throw new TypeError(`${field} must be an opaque identifier`);
+  }
+  if (typeof value !== 'string' || !value.trim() || value.length > 256 || /\s|[\\/]|:\/\//.test(value)) {
+    throw new TypeError(`${field} must be an opaque identifier`);
+  }
+  return value.trim();
+}
+
+function normalizeAdmission(value, field = 'canonicalAtAdmission') {
+  if (value === null || value === undefined) return null;
+  if (!exactKeys(value, ADMISSION_FIELDS)) throw new TypeError(`${field} has unsupported fields`);
+  const canonicalId = opaque(value.canonicalId, `${field}.canonicalId`);
+  const canonicalKind = value.canonicalKind;
+  const rootProjectId = opaque(value.rootProjectId, `${field}.rootProjectId`);
+  if (!/^(?:prj|out)_[0-9]{6,}$/.test(canonicalId) || !/^prj_[0-9]{6,}$/.test(rootProjectId)) throw new TypeError(`${field} contains an invalid canonical ID`);
+  if (!['project', 'outcome'].includes(canonicalKind)) throw new TypeError(`${field}.canonicalKind is invalid`);
+  if (!Number.isInteger(value.canonicalRevision) || value.canonicalRevision < 1) throw new TypeError(`${field}.canonicalRevision is invalid`);
+  if (!Number.isInteger(value.rootProjectRevision) || value.rootProjectRevision < 1) throw new TypeError(`${field}.rootProjectRevision is invalid`);
+  if (value.rootProjectLifecycle !== 'active' && value.rootProjectLifecycle !== 'paused' && value.rootProjectLifecycle !== 'archived') throw new TypeError(`${field}.rootProjectLifecycle is invalid`);
+  if (!Number.isInteger(value.registryGeneration) || value.registryGeneration < 0) throw new TypeError(`${field}.registryGeneration is invalid`);
+  return {
+    canonicalId,
+    canonicalKind,
+    canonicalRevision: value.canonicalRevision,
+    rootProjectId,
+    rootProjectRevision: value.rootProjectRevision,
+    rootProjectLifecycle: value.rootProjectLifecycle,
+    registryGeneration: value.registryGeneration,
+  };
+}
+
+function normalizeInferenceWatermark(value, field) {
+  if (value === null || value === undefined) return null;
+  if (!exactKeys(value, INFERENCE_WATERMARK_FIELDS)) throw new TypeError(`${field} has unsupported fields`);
+  const sourceClass = value.sourceClass;
+  if (!inferenceContracts.SOURCE_CLASSES.includes(sourceClass)) throw new TypeError(`${field}.sourceClass is invalid`);
+  if (!inferenceContracts.COVERAGE_STATES.includes(value.state)) throw new TypeError(`${field}.state is invalid`);
+  const observedAt = timestamp(value.observedAt, `${field}.observedAt`);
+  const sourceRevision = opaque(value.sourceRevision, `${field}.sourceRevision`);
+  const evidenceId = value.evidenceId === null ? null : opaque(value.evidenceId, `${field}.evidenceId`);
+  return { sourceClass, state: value.state, observedAt, sourceRevision, evidenceId };
+}
+
+function normalizeInferenceSnapshot(input) {
+  const source = input === null || input === undefined ? {} : input;
+  if (!isPlainObject(source)) throw new TypeError('inference snapshot must be an object');
+  if (Object.keys(source).some((key) => !INFERENCE_FIELDS.includes(key))) throw new TypeError('inference snapshot has unsupported fields');
+  const policyRevision = opaque(source.policyRevision === undefined ? POLICY_REVISION : source.policyRevision, 'inference.policyRevision');
+  const engineRevision = opaque(source.engineRevision === undefined ? ENGINE_REVISION : source.engineRevision, 'inference.engineRevision');
+  const candidates = Array.isArray(source.candidates) ? source.candidates.map((candidate, index) => {
+    const result = inferenceContracts.validateProjectCandidate(candidate);
+    if (!result.ok) throw new TypeError(`inference.candidates[${index}] is invalid`);
+    if (result.candidate.disposition !== 'provisional') return null;
+    return result.candidate;
+  }).filter(Boolean) : [];
+  const coverage = Array.isArray(source.coverage) ? source.coverage.map((entry, index) => {
+    const result = inferenceContracts.validateCoverageStatus(entry);
+    if (!result.ok) throw new TypeError(`inference.coverage[${index}] is invalid`);
+    return result.coverage;
+  }) : [];
+  const coverageBySource = new Map();
+  for (const entry of coverage) {
+    if (coverageBySource.has(entry.sourceClass)) throw new TypeError('inference.coverage must contain one entry per source');
+    coverageBySource.set(entry.sourceClass, entry);
+  }
+  const watermarks = {};
+  if (source.watermarks !== undefined) {
+    if (!isPlainObject(source.watermarks)) throw new TypeError('inference.watermarks must be an object');
+    for (const key of Object.keys(source.watermarks).sort()) {
+      if (!inferenceContracts.SOURCE_CLASSES.includes(key)) throw new TypeError('inference.watermarks contains an unsupported source');
+      watermarks[key] = normalizeInferenceWatermark(source.watermarks[key], `inference.watermarks.${key}`);
+    }
+  }
+  const watermark = source.watermark === undefined || source.watermark === null ? null : opaque(source.watermark, 'inference.watermark');
+  candidates.sort((left, right) => left.candidateId.localeCompare(right.candidateId));
+  return {
+    policyRevision,
+    engineRevision,
+    candidates,
+    coverage: [...coverageBySource.values()].sort((left, right) => left.sourceClass.localeCompare(right.sourceClass)),
+    watermark,
+    watermarks,
+  };
+}
+
+function projectCandidate(candidate, selectedIds, wholePortfolio) {
+  const bound = candidate.parentId || candidate.parentAlternatives.find((id) => selectedIds.has(id)) || null;
+  if (!wholePortfolio && !bound) return null;
+  if (!wholePortfolio && candidate.parentId && !selectedIds.has(candidate.parentId)) return null;
+  const parentAlternatives = wholePortfolio
+    ? [...candidate.parentAlternatives]
+    : candidate.parentAlternatives.filter((id) => selectedIds.has(id));
+  return {
+    candidateId: candidate.candidateId,
+    kind: candidate.kind,
+    title: candidate.title,
+    aliases: [...candidate.aliases],
+    parentId: candidate.parentId,
+    parentAlternatives,
+    confidence: { ...candidate.confidence },
+    disposition: 'provisional',
+    reasonCodes: [...candidate.reasonCodes],
+    policyRevision: candidate.policyRevision,
+    engineRevision: candidate.engineRevision,
+    evidenceSetWatermark: candidate.evidenceSetWatermark,
+    lineage: [...candidate.lineage],
+    actionable: false,
+    support: [...candidate.reasonCodes],
+  };
+}
+
+function validateIds(value, field, prefix) {
+  if (!Array.isArray(value) || value.some((id) => typeof id !== 'string' || !id.startsWith(prefix) || !/^\w+_[0-9]{6,}$/.test(id))) throw new TypeError(`${field} must contain canonical IDs`);
+  if (new Set(value).size !== value.length) throw new TypeError(`${field} must not contain duplicates`);
+  return [...value].sort();
+}
+
+function validateScope(scope) {
+  if (!exactKeys(scope, SCOPE_FIELDS)) throw new TypeError('query scope has unsupported fields');
+  if (typeof scope.includeDescendants !== 'boolean') throw new TypeError('scope.includeDescendants must be boolean');
+  return {
+    projectIds: validateIds(scope.projectIds, 'scope.projectIds', 'prj_'),
+    outcomeIds: validateIds(scope.outcomeIds, 'scope.outcomeIds', 'out_'),
+    includeDescendants: scope.includeDescendants,
+  };
+}
+
+function validateLimits(limits) {
+  if (!exactKeys(limits, LIMIT_FIELDS)) throw new TypeError('query limits have unsupported fields');
+  return {
+    maxItems: integer(limits.maxItems, 'limits.maxItems', { min: 1, max: 1000 }),
+    maxBytes: integer(limits.maxBytes, 'limits.maxBytes', { min: 512, max: 1_000_000 }),
+    maxProviderAgeSeconds: integer(limits.maxProviderAgeSeconds, 'limits.maxProviderAgeSeconds', { min: 1, max: 86_400 }),
+  };
+}
+
+function validateContextQuery(query) {
+  if (!exactKeys(query, QUERY_FIELDS)) throw new TypeError('context query has unsupported fields');
+  const scope = validateScope(query.scope);
+  if (!Array.isArray(query.include) || !query.include.length || query.include.some((section) => !INCLUDE_SECTIONS.includes(section))) throw new TypeError('query include contains an unsupported section');
+  if (new Set(query.include).size !== query.include.length) throw new TypeError('query include must not contain duplicates');
+  return { scope, include: [...query.include], limits: validateLimits(query.limits) };
+}
+
+function recordIdsForScope(registry, scope) {
+  const requested = new Set([...scope.projectIds, ...scope.outcomeIds]);
+  for (const id of requested) if (!registry.get(id)) return null;
+  if (!requested.size) return new Set(registry.list().map((record) => record.id));
+  if (scope.includeDescendants) {
+    let changed = true;
+    while (changed) {
+      changed = false;
+      for (const record of registry.list()) {
+        if (record.parentId && requested.has(record.parentId) && !requested.has(record.id)) { requested.add(record.id); changed = true; }
+      }
+    }
+  }
+  return requested;
+}
+
+function validateProviderScope(scope) {
+  if (!exactKeys(scope, ['projectIds', 'outcomeIds'])) throw new TypeError('provider scope has unsupported fields');
+  return {
+    projectIds: validateIds(scope.projectIds, 'provider scope.projectIds', 'prj_'),
+    outcomeIds: validateIds(scope.outcomeIds, 'provider scope.outcomeIds', 'out_'),
+  };
+}
+
+function serializeRecord(record, registry, redactionClass) {
+  const priority = resolvePriority(record.id, Object.fromEntries(registry.list().map((item) => [item.id, item])));
+  let inference = null;
+  if (record.inference !== undefined) {
+    const result = validateInferenceMetadata(record.inference);
+    inference = result;
+  }
+  return {
+    id: record.id,
+    kind: record.kind,
+    title: record.title,
+    aliases: redactionClass === 'public' ? [] : [...record.aliases],
+    parentId: record.parentId,
+    lifecycle: record.lifecycle,
+    declaredPriority: priority.declared,
+    effectivePriority: priority.effective,
+    priority: {
+      declared: priority.declared,
+      effective: priority.effective,
+      source: priority.source,
+      sourceRecordId: priority.sourceRecordId,
+      sourceKind: priority.sourceKind,
+    },
+    revision: record.revision,
+    createdAt: record.createdAt,
+    updatedAt: record.updatedAt,
+    goal: redactionClass === 'public' ? null : (record.goal || null),
+    definitionOfDone: redactionClass === 'public' ? null : (record.definitionOfDone || null),
+    links: redactionClass === 'public' ? {} : clone(record.links || {}),
+    breadcrumb: registry.breadcrumb(record.id),
+    inference,
+  };
+}
+
+function normalizeSummary(summary, provider, redactionClass) {
+  const normalized = {
+    id: requiredString(summary.id, 'summary.id'),
+    canonicalId: requiredString(summary.canonicalId, 'summary.canonicalId'),
+    category: requiredString(summary.category, 'summary.category'),
+    status: requiredString(summary.status, 'summary.status'),
+    title: redactionClass === 'public' ? null : (summary.title || null),
+    occurredAt: summary.occurredAt || null,
+    observedAt: requiredString(summary.observedAt, 'summary.observedAt'),
+    evidenceRefs: redactionClass === 'public' ? [] : [...summary.evidenceRefs],
+    source: provider,
+    canonicalAtAdmission: normalizeAdmission(summary.canonicalAtAdmission),
+  };
+  return normalized;
+}
+
+function summarySort(left, right) {
+  const leftTime = Date.parse(left.occurredAt || left.observedAt) || 0;
+  const rightTime = Date.parse(right.occurredAt || right.observedAt) || 0;
+  return rightTime - leftTime || left.id.localeCompare(right.id) || left.source.localeCompare(right.source);
+}
+
+function emptyProvider(provider, state = 'omitted', omissions = ['provider-omitted']) {
+  return {
+    provider, state, trust: 'unverified', capturedAt: null, watermark: null,
+    scope: { projectIds: [], outcomeIds: [] }, itemCount: 0, omissions: [...omissions].sort(), errorCode: null,
+  };
+}
+
+function providerView(provider, snapshot, { now, maxAgeSeconds, selectedIds, redactionClass, authority }) {
+  if (!snapshot) return { view: emptyProvider(provider), summaries: [], omissions: [`provider:${provider}:omitted`] };
+  let validated;
+  try { validated = validateProviderSnapshot(snapshot); } catch (_) {
+    return { view: emptyProvider(provider, 'unknown', [`provider:${provider}:invalid-snapshot`]), summaries: [], omissions: [`provider:${provider}:invalid-snapshot`] };
+  }
+  if (validated.provider !== provider) {
+    return { view: emptyProvider(provider, 'unknown', [`provider:${provider}:provider-mismatch`]), summaries: [], omissions: [`provider:${provider}:provider-mismatch`] };
+  }
+  let trusted = validated.trust === 'verified' && validated.admission && authority && typeof authority.verifyProviderSnapshot === 'function';
+  if (validated.trust === 'unverified') {
+    return {
+      view: { ...emptyProvider(provider, 'unknown', [`provider:${provider}:untrusted`]), capturedAt: validated.capturedAt, watermark: validated.watermark, errorCode: 'UNTRUSTED' },
+      summaries: [], omissions: [`provider:${provider}:untrusted`],
+    };
+  }
+  if (trusted) trusted = authority.verifyProviderSnapshot(validated, { now, expectedProvider: provider }).ok;
+  if (validated.trust === 'verified' && !trusted) {
+    return {
+      view: { ...emptyProvider(provider, 'unknown', [`provider:${provider}:untrusted`]), capturedAt: validated.capturedAt, watermark: validated.watermark, errorCode: 'UNVERIFIED' },
+      summaries: [], omissions: [`provider:${provider}:untrusted`],
+    };
+  }
+  const omissions = validated.omissions.map((entry) => `provider:${provider}:${entry}`);
+  let state = validated.state;
+  const providerScope = validated.scope;
+  const coveredIds = new Set([...providerScope.projectIds, ...providerScope.outcomeIds]);
+  if (coveredIds.size && [...selectedIds].some((id) => !coveredIds.has(id))) {
+    state = state === 'healthy-empty' ? 'partial' : state;
+    omissions.push(`provider:${provider}:coverage`);
+  }
+  const captured = validated.capturedAt ? Date.parse(validated.capturedAt) : null;
+  const current = Date.parse(now);
+  if (captured !== null && captured > current) { state = 'partial'; omissions.push(`provider:${provider}:capture-boundary`); }
+  else if (state === 'fresh' && captured !== null && current - captured > maxAgeSeconds * 1000) state = 'stale';
+  if (state === 'unavailable' || state === 'unknown') return {
+    view: { provider, state, trust: validated.trust, capturedAt: validated.capturedAt, watermark: validated.watermark, scope: validated.scope, itemCount: 0, omissions: [...new Set(omissions)].sort(), errorCode: validated.errorCode },
+    summaries: [], omissions,
+  };
+  const summaries = [];
+  for (const summary of validated.summaries) {
+    if (!selectedIds.has(summary.canonicalId)) { omissions.push(`provider:${provider}:out-of-scope`); continue; }
+    const occurred = summary.occurredAt ? Date.parse(summary.occurredAt) : null;
+    const observed = Date.parse(summary.observedAt);
+    if ((occurred !== null && occurred > current) || observed > current) { omissions.push(`provider:${provider}:capture-boundary`); continue; }
+    summaries.push(normalizeSummary(summary, provider, redactionClass));
+  }
+  summaries.sort(summarySort);
+  const view = {
+    provider, state, trust: validated.trust, capturedAt: validated.capturedAt, watermark: validated.watermark,
+    scope: {
+      projectIds: providerScope.projectIds.filter((id) => selectedIds.has(id)),
+      outcomeIds: providerScope.outcomeIds.filter((id) => selectedIds.has(id)),
+    }, itemCount: summaries.length, omissions: [...new Set(omissions)].sort(), errorCode: validated.errorCode,
+  };
+  return { view, summaries, omissions };
+}
+
+function classifySummaries(summaries) {
+  const activity = summaries.filter((summary) => summary.category === 'activity');
+  const currentWork = summaries.filter((summary) => !TERMINAL_WORK_STATUSES.has(summary.status)
+    && (['intent', 'execution', 'work'].includes(summary.category)
+      || ['active', 'open', 'in_progress', 'tracked', 'claimed'].includes(summary.status)));
+  const attention = summaries.filter((summary) => summary.category === 'attention' || ['blocked', 'approval_due', 'due', 'overdue'].includes(summary.status));
+  return { activity, currentWork, attention };
+}
+
+function validateActivityWindow(activityWindow) {
+  if (activityWindow === null || activityWindow === undefined) return null;
+  if (!exactKeys(activityWindow, ['from', 'to', 'localDate', 'timeZone'])) throw new TypeError('activity window has unsupported fields');
+  if (typeof activityWindow.timeZone !== 'string' || !activityWindow.timeZone.trim()) throw new TypeError('activity window timeZone is required');
+  if (typeof activityWindow.localDate !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(activityWindow.localDate)) throw new TypeError('activity window localDate is invalid');
+  const from = Date.parse(activityWindow.from);
+  const to = Date.parse(activityWindow.to);
+  if (!Number.isFinite(from) || !Number.isFinite(to) || from >= to) throw new TypeError('activity window bounds are invalid');
+  return {
+    from: new Date(from).toISOString(),
+    to: new Date(to).toISOString(),
+    localDate: activityWindow.localDate,
+    timeZone: activityWindow.timeZone,
+  };
+}
+
+function filterNormalizedSummariesByWindow(summaries, window) {
+  if (!window) return summaries;
+  const from = Date.parse(window.from);
+  const to = Date.parse(window.to);
+  return summaries.filter((summary) => {
+    if (!summary.occurredAt) return false;
+    const occurred = Date.parse(summary.occurredAt);
+    return Number.isFinite(occurred) && occurred >= from && occurred < to;
+  });
+}
+
+function filterSummariesByWindow(summaries, activityWindow) {
+  return filterNormalizedSummariesByWindow(summaries, validateActivityWindow(activityWindow));
+}
+
+function redactEvidence(summary) {
+  return {
+    source: summary.source, id: summary.id, canonicalId: summary.canonicalId,
+    occurredAt: summary.occurredAt, observedAt: summary.observedAt, evidenceRefs: [...summary.evidenceRefs],
+  };
+}
+
+function countItems(packet) {
+  return packet.canonical.records.length + packet.activity.length + packet.currentWork.length + packet.attention.length + packet.evidence.length
+    + (packet.inference?.candidates?.length || 0);
+}
+
+const ROSTER_GOAL_CHARS = 100;
+const LIFECYCLE_RANK = Object.freeze({ active: 0, planned: 1, paused: 2, complete: 3, archived: 4 });
+const PRIORITY_RANK = Object.freeze({ high: 0, medium: 1, low: 2, unset: 3 });
+
+// The roster is the startup orientation guarantee: every active top-level
+// project stays visible, as a short line, for as long as the budget can hold it.
+function isRosterRecord(record) {
+  return record.kind === 'project' && record.parentId === null && record.lifecycle === 'active';
+}
+
+function compactGoal(goal) {
+  if (typeof goal !== 'string') return null;
+  const line = goal.replace(/\s+/g, ' ').trim();
+  if (!line) return null;
+  return line.length > ROSTER_GOAL_CHARS ? `${line.slice(0, ROSTER_GOAL_CHARS - 1).trimEnd()}\u2026` : line;
+}
+
+// Records with current activity, work or attention (and their ancestors) are
+// the last to lose detail or be dropped; then lifecycle and declared priority.
+// Roster records are never dropped before every other record (see dropNonRoster).
+function rankRecordsByImportance(packet) {
+  const byId = new Map(packet.canonical.records.map((record) => [record.id, record]));
+  const signalled = new Set();
+  for (const summary of [...packet.activity, ...packet.currentWork, ...packet.attention]) {
+    for (let record = byId.get(summary.canonicalId); record && !signalled.has(record.id); record = byId.get(record.parentId)) signalled.add(record.id);
+  }
+  const order = new Map(packet.canonical.records.map((record, index) => [record.id, index]));
+  // Spread the survivors across projects: every project's first outcome
+  // outranks any project's second, so one busy project cannot crowd out the rest.
+  const siblingCount = new Map();
+  const siblingIndex = new Map(packet.canonical.records.map((record) => {
+    const index = siblingCount.get(record.parentId) || 0;
+    siblingCount.set(record.parentId, index + 1);
+    return [record.id, index];
+  }));
+  const key = (record) => [
+    signalled.has(record.id) ? 0 : 1,
+    LIFECYCLE_RANK[record.lifecycle] ?? 5,
+    PRIORITY_RANK[record.effectivePriority] ?? 4,
+    siblingIndex.get(record.id),
+    order.get(record.id),
+  ];
+  return [...packet.canonical.records].sort((left, right) => {
+    const a = key(left);
+    const b = key(right);
+    for (let index = 0; index < a.length; index += 1) if (a[index] !== b[index]) return a[index] - b[index];
+    return 0;
+  });
+}
+
+function enforceBounds(packet, limits) {
+  const truncation = packet.truncation;
+  const targetFor = (section) => section === 'canonical.records'
+    ? packet.canonical.records
+    : section === 'inference.candidates' ? packet.inference.candidates : packet[section];
+  const noteOmitted = (section) => {
+    truncation.truncated = true;
+    truncation.omittedItems += 1;
+    if (!truncation.sections.includes(section)) truncation.sections.push(section);
+    truncation.sections.sort();
+  };
+  const trim = (section, predicate = () => true) => {
+    const target = targetFor(section);
+    while (predicate() && target.length) {
+      // Breadcrumb ordering puts ancestors before descendants, so tail
+      // removal preserves the canonical hierarchy without a second sort.
+      const removed = target.pop();
+      if (section === 'canonical.records') {
+        delete packet.canonical.revisions[removed.id];
+      }
+      noteOmitted(section);
+    }
+  };
+  const ranked = rankRecordsByImportance(packet);
+  // Drop the least important non-roster record that no retained record hangs
+  // off, so the hierarchy stays valid and every roster project survives.
+  const dropNonRoster = (predicate) => {
+    while (predicate()) {
+      const retained = new Set(packet.canonical.records.map((record) => record.id));
+      const hasChild = new Set(packet.canonical.records.map((record) => record.parentId).filter(Boolean));
+      let victim = null;
+      for (let index = ranked.length - 1; index >= 0; index -= 1) {
+        const record = ranked[index];
+        if (retained.has(record.id) && !isRosterRecord(record) && !hasChild.has(record.id)) { victim = record; break; }
+      }
+      if (!victim) return;
+      packet.canonical.records.splice(packet.canonical.records.findIndex((record) => record.id === victim.id), 1);
+      delete packet.canonical.revisions[victim.id];
+      noteOmitted('canonical.records');
+    }
+  };
+  // Detail is spent last: shrink the least important records first. Level 1
+  // keeps a one-line goal; level 2 (roster only, last resort) keeps title and
+  // lifecycle.
+  const compactDetail = (level, predicate) => {
+    for (let index = ranked.length - 1; index >= 0 && predicate(); index -= 1) {
+      const record = ranked[index];
+      if (!packet.canonical.records.some((candidate) => candidate.id === record.id)) continue;
+      const goal = level === 1 ? compactGoal(record.goal) : null;
+      const next = { goal, definitionOfDone: null, links: {}, aliases: [] };
+      if (record.goal === next.goal && record.definitionOfDone === null && record.aliases.length === 0 && Object.keys(record.links).length === 0) continue;
+      Object.assign(record, next);
+      if (!packet.omissions.includes('canonical:record-detail-compacted')) {
+        packet.omissions.push('canonical:record-detail-compacted');
+        packet.omissions.sort();
+      }
+    }
+  };
+  trim('activity', () => countItems(packet) > limits.maxItems);
+  trim('currentWork', () => countItems(packet) > limits.maxItems);
+  trim('evidence', () => countItems(packet) > limits.maxItems);
+  trim('inference.candidates', () => countItems(packet) > limits.maxItems);
+  dropNonRoster(() => countItems(packet) > limits.maxItems);
+  trim('attention', () => countItems(packet) > limits.maxItems);
+  trim('canonical.records', () => countItems(packet) > limits.maxItems);
+  const bytesExceeded = () => byteLength(packet) > limits.maxBytes;
+  compactDetail(1, bytesExceeded);
+  for (const section of ['activity', 'currentWork', 'evidence', 'inference.candidates', 'attention']) {
+    trim(section, bytesExceeded);
+  }
+  dropNonRoster(bytesExceeded);
+  compactDetail(2, bytesExceeded);
+  trim('canonical.records', bytesExceeded);
+  return packet;
+}
+
+function validatePacketRecord(record) {
+  if (!exactKeys(record, RECORD_PACKET_FIELDS) || !/^\w+_[0-9]{6,}$/.test(record.id) || !['project', 'outcome'].includes(record.kind)) return false;
+  const allowedLifecycle = record.kind === 'project' ? ['active', 'paused', 'archived'] : ['planned', 'active', 'complete', 'archived'];
+  if (requiredString(record.title, 'record.title') !== record.title || !Array.isArray(record.aliases) || record.aliases.some((alias) => requiredString(alias, 'record.alias') !== alias) || new Set(record.aliases).size !== record.aliases.length || !allowedLifecycle.includes(record.lifecycle)) return false;
+  if ((record.parentId !== null && (!/^prj_[0-9]{6,}$/.test(record.parentId) || record.parentId === record.id)) || (record.kind === 'outcome' && record.parentId === null)) return false;
+  if (!['high', 'medium', 'low', 'unset'].includes(record.declaredPriority) || !['high', 'medium', 'low', 'unset'].includes(record.effectivePriority)) return false;
+  if (!exactKeys(record.priority, PRIORITY_FIELDS) || !['explicit', 'inherited', 'unset'].includes(record.priority.source) || !['high', 'medium', 'low', 'unset'].includes(record.priority.declared) || !['high', 'medium', 'low', 'unset'].includes(record.priority.effective) || (record.priority.sourceRecordId !== null && !/^\w+_[0-9]{6,}$/.test(record.priority.sourceRecordId)) || (record.priority.sourceKind !== null && !['project', 'outcome'].includes(record.priority.sourceKind))) return false;
+  if (Number.isNaN(Date.parse(record.createdAt)) || Number.isNaN(Date.parse(record.updatedAt)) || (record.goal !== null && typeof record.goal !== 'string') || (record.definitionOfDone !== null && typeof record.definitionOfDone !== 'string') || !isPlainObject(record.links)) return false;
+  if (record.inference !== null) {
+    const result = validateInferenceMetadata(record.inference);
+    if (!result || stableStringify(result) !== stableStringify(record.inference)) return false;
+  }
+  return Number.isInteger(record.revision) && record.revision > 0 && typeof record.breadcrumb === 'string' && record.breadcrumb.trim().length > 0;
+}
+
+function validatePacketSummary(summary) {
+  return exactKeys(summary, SUMMARY_FIELDS)
+    && typeof summary.id === 'string'
+    && /^\w+_[0-9]{6,}$/.test(summary.canonicalId)
+    && typeof summary.category === 'string'
+    && typeof summary.status === 'string'
+    && (summary.title === null || typeof summary.title === 'string')
+    && (summary.occurredAt === null || typeof summary.occurredAt === 'string')
+    && typeof summary.observedAt === 'string'
+    && Array.isArray(summary.evidenceRefs)
+    && typeof summary.source === 'string'
+    && (summary.canonicalAtAdmission === null || (() => { try { normalizeAdmission(summary.canonicalAtAdmission); return true; } catch (_) { return false; } })());
+}
+
+function validateProvisionalCandidate(candidate) {
+  if (!exactKeys(candidate, [
+    'candidateId', 'kind', 'title', 'aliases', 'parentId', 'parentAlternatives', 'confidence', 'disposition',
+    'reasonCodes', 'policyRevision', 'engineRevision', 'evidenceSetWatermark', 'lineage', 'actionable', 'support',
+  ])) return false;
+  const result = inferenceContracts.validateProjectCandidate({
+    contract: inferenceContracts.PROJECT_CANDIDATE_CONTRACT,
+    candidateId: candidate.candidateId,
+    origin: 'inference',
+    evidenceIds: ['ev_context_placeholder'],
+    evidenceSetWatermark: candidate.evidenceSetWatermark,
+    engineRevision: candidate.engineRevision,
+    policyRevision: candidate.policyRevision,
+    kind: candidate.kind,
+    title: candidate.title,
+    aliases: candidate.aliases,
+    parentId: candidate.parentId,
+    parentAlternatives: candidate.parentAlternatives,
+    confidence: candidate.confidence,
+    disposition: candidate.disposition,
+    reasonCodes: candidate.reasonCodes,
+    lineage: candidate.lineage,
+  });
+  return result.ok && candidate.disposition === 'provisional' && candidate.actionable === false
+    && Array.isArray(candidate.support) && stableStringify(candidate.support) === stableStringify(candidate.reasonCodes);
+}
+
+function validateInferencePacket(inference) {
+  if (!exactKeys(inference, INFERENCE_FIELDS)) return false;
+  try {
+    if (inference.policyRevision !== opaque(inference.policyRevision, 'inference.policyRevision')) return false;
+    if (inference.engineRevision !== opaque(inference.engineRevision, 'inference.engineRevision')) return false;
+    if (!Array.isArray(inference.candidates) || inference.candidates.some((candidate) => !validateProvisionalCandidate(candidate))) return false;
+    if (!Array.isArray(inference.coverage)) return false;
+    const coverage = new Set();
+    for (const entry of inference.coverage) {
+      if (coverage.has(entry.sourceClass) || !inferenceContracts.validateCoverageStatus(entry).ok) return false;
+      coverage.add(entry.sourceClass);
+    }
+    if (inference.watermark !== null && typeof inference.watermark !== 'string') return false;
+    if (!isPlainObject(inference.watermarks)) return false;
+    for (const [source, watermark] of Object.entries(inference.watermarks)) {
+      if (!inferenceContracts.SOURCE_CLASSES.includes(source) || !normalizeInferenceWatermark(watermark, `inference.watermarks.${source}`)) return false;
+    }
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
+function validatePacketWatermarks(watermarks) {
+  return exactKeys(watermarks, ['registry', 'inference', 'activity'])
+    && typeof watermarks.registry === 'string'
+    && (watermarks.inference === null || typeof watermarks.inference === 'string')
+    && (watermarks.activity === null || typeof watermarks.activity === 'string');
+}
+
+function validatePacketEvidence(evidence) {
+  return exactKeys(evidence, EVIDENCE_FIELDS)
+    && typeof evidence.source === 'string'
+    && typeof evidence.id === 'string'
+    && /^\w+_[0-9]{6,}$/.test(evidence.canonicalId)
+    && (evidence.occurredAt === null || typeof evidence.occurredAt === 'string')
+    && typeof evidence.observedAt === 'string'
+    && Array.isArray(evidence.evidenceRefs);
+}
+
+function validateProviderView(view) {
+  if (!exactKeys(view, ['provider', 'state', 'trust', 'capturedAt', 'watermark', 'scope', 'itemCount', 'omissions', 'errorCode'])) return false;
+  if (typeof view.provider !== 'string' || !['omitted', 'fresh', 'stale', 'partial', 'unknown', 'unavailable', 'healthy-empty'].includes(view.state)) return false;
+  if (!['verified', 'unverified'].includes(view.trust) || (view.capturedAt !== null && typeof view.capturedAt !== 'string') || (view.watermark !== null && typeof view.watermark !== 'string')) return false;
+  try { validateProviderScope(view.scope); } catch (_) { return false; }
+  return Number.isInteger(view.itemCount) && view.itemCount >= 0 && Array.isArray(view.omissions) && view.omissions.every((entry) => typeof entry === 'string') && (view.errorCode === null || typeof view.errorCode === 'string');
+}
+
+function validateContextPacket(packet) {
+  if (!exactKeys(packet, CONTEXT_PACKET_FIELDS) || packet.contract !== CONTEXT_CONTRACT) return { ok: false, reason: 'invalid-contract' };
+  if (!SUPPORTED_CONTEXT_SCHEMA_VERSIONS.includes(packet.schemaVersion)) return { ok: false, reason: 'unsupported-schema' };
+  if (!/^ctx_[a-f0-9]{32}$/.test(packet.packetId) || Number.isNaN(Date.parse(packet.capturedAt)) || Number.isNaN(Date.parse(packet.expiresAt))) return { ok: false, reason: 'invalid-contract' };
+  if (!REDACTION_CLASSES.includes(packet.redactionClass) || !exactKeys(packet.capability, ['receiptId', 'digest']) || !/^cap_[a-f0-9]{32}$/.test(packet.capability.receiptId) || !/^[a-f0-9]{64}$/.test(packet.capability.digest)) return { ok: false, reason: 'invalid-contract' };
+  try {
+    validateContextQuery(packet.query);
+    if (!exactKeys(packet.canonical, ['generation', 'records', 'revisions']) || !Number.isInteger(packet.canonical.generation) || !Array.isArray(packet.canonical.records) || !isPlainObject(packet.canonical.revisions)) return { ok: false, reason: 'invalid-contract' };
+    if (packet.canonical.records.some((record) => !validatePacketRecord(record))) return { ok: false, reason: 'invalid-contract' };
+    const recordsById = new Map(packet.canonical.records.map((record) => [record.id, record]));
+    if (recordsById.size !== packet.canonical.records.length || packet.canonical.records.some((record) => record.parentId !== null && recordsById.get(record.parentId)?.kind !== 'project')) return { ok: false, reason: 'invalid-contract' };
+    if (!Object.entries(packet.canonical.revisions).every(([id, revision]) => /^\w+_[0-9]{6,}$/.test(id) && Number.isInteger(revision) && revision > 0)) return { ok: false, reason: 'invalid-contract' };
+    if (Object.keys(packet.canonical.revisions).length !== recordsById.size || [...recordsById].some(([id, record]) => packet.canonical.revisions[id] !== record.revision)) return { ok: false, reason: 'invalid-contract' };
+    if ([...packet.activity, ...packet.currentWork, ...packet.attention].some((value) => !validatePacketSummary(value)) || packet.evidence.some((value) => !validatePacketEvidence(value))) return { ok: false, reason: 'invalid-contract' };
+    if (!validateInferencePacket(packet.inference) || !validatePacketWatermarks(packet.watermarks)) return { ok: false, reason: 'invalid-contract' };
+    if (!isPlainObject(packet.providers) || Object.values(packet.providers).some((view) => !validateProviderView(view))) return { ok: false, reason: 'invalid-contract' };
+    if (!Array.isArray(packet.omissions) || packet.omissions.some((entry) => typeof entry !== 'string')) return { ok: false, reason: 'invalid-contract' };
+    if (!exactKeys(packet.truncation, ['truncated', 'maxItems', 'maxBytes', 'omittedItems', 'sections']) || typeof packet.truncation.truncated !== 'boolean' || !Number.isInteger(packet.truncation.maxItems) || !Number.isInteger(packet.truncation.maxBytes) || !Number.isInteger(packet.truncation.omittedItems) || !Array.isArray(packet.truncation.sections)) return { ok: false, reason: 'invalid-contract' };
+  } catch (_) {
+    return { ok: false, reason: 'invalid-contract' };
+  }
+  return { ok: true, packet };
+}
+
+function normalizeContextPacket(packet) {
+  const validation = validateContextPacket(packet);
+  return validation.ok
+    ? { ok: true, packet: clone(validation.packet), supportedSchemaVersions: [...SUPPORTED_CONTEXT_SCHEMA_VERSIONS] }
+    : validation;
+}
+
+function rosterUnavailable(code = 'ROSTER_UNAVAILABLE') {
+  return { status: 'unavailable', code };
+}
+
+function validRosterRequest(input) {
+  if (!isPlainObject(input)) return false;
+  const allowed = new Set(['registry', 'query', 'capability', 'capabilitySecret', 'subject', 'hostId', 'now', 'expectedGeneration']);
+  return Object.keys(input).every((key) => allowed.has(key));
+}
+
+function rosterRecord(record) {
+  if (!isPlainObject(record)
+    || !((record.kind === 'project' && /^prj_[0-9]{6,}$/.test(record.id))
+      || (record.kind === 'outcome' && /^out_[0-9]{6,}$/.test(record.id)))
+    || !['project', 'outcome'].includes(record.kind)
+    || (record.kind === 'project' && record.parentId !== null && !/^prj_[0-9]{6,}$/.test(record.parentId))
+    || (record.kind === 'outcome' && !/^prj_[0-9]{6,}$/.test(record.parentId))
+    || !Number.isInteger(record.revision) || record.revision < 1) throw new TypeError('invalid roster record');
+  return { id: record.id, kind: record.kind, parentId: record.parentId, revision: record.revision };
+}
+
+function rosterIdsForScope(records, scope) {
+  const requested = new Set([...scope.projectIds, ...scope.outcomeIds]);
+  const byId = new Map(records.map((record) => [record.id, record]));
+  if (byId.size !== records.length || [...requested].some((id) => !byId.has(id))) return null;
+  if (!requested.size) return new Set(byId.keys());
+  if (scope.includeDescendants) {
+    let changed = true;
+    while (changed) {
+      changed = false;
+      for (const record of records) {
+        if (record.parentId && requested.has(record.parentId) && !requested.has(record.id)) {
+          requested.add(record.id);
+          changed = true;
+        }
+      }
+    }
+  }
+  return requested;
+}
+
+function buildCanonicalRosterPacket(input = {}) {
+  if (!validRosterRequest(input)) return rosterUnavailable();
+  const { registry, query, capability, capabilitySecret, subject, hostId, now = new Date().toISOString(), expectedGeneration } = input;
+  let normalizedQuery;
+  try { normalizedQuery = validateContextQuery(query); } catch (_) { return rosterUnavailable(); }
+  if (typeof hostId !== 'string' || !hostId.trim() || typeof subject !== 'string' || !subject.trim()
+    || typeof now !== 'string' || Number.isNaN(Date.parse(now))
+    || (expectedGeneration !== undefined && (!Number.isSafeInteger(expectedGeneration) || expectedGeneration < 0))) return rosterUnavailable();
+  const verification = verifyCapability(capability, {
+    hostSecret: capabilitySecret,
+    now,
+    expectedSubject: subject,
+    expectedHostId: hostId,
+    expectedQuery: normalizedQuery,
+    expectedRedactionClass: capability && capability.redactionClass,
+  });
+  if (!verification.ok || !registry || typeof registry.list !== 'function') return rosterUnavailable();
+  const authorized = verification.capability;
+  if (stableStringify(authorized.scope) !== stableStringify(normalizedQuery.scope)
+    || authorized.limits.maxItems < normalizedQuery.limits.maxItems
+    || authorized.limits.maxBytes < normalizedQuery.limits.maxBytes
+    || authorized.limits.maxProviderAgeSeconds < normalizedQuery.limits.maxProviderAgeSeconds
+    || authorized.freshness.maxAgeSeconds < normalizedQuery.limits.maxProviderAgeSeconds) return rosterUnavailable();
+
+  let generationBefore; let rows;
+  try {
+    generationBefore = registry.generation;
+    if (!Number.isSafeInteger(generationBefore) || generationBefore < 0
+      || (expectedGeneration !== undefined && expectedGeneration !== generationBefore)) return rosterUnavailable('ROSTER_GENERATION_MISMATCH');
+    rows = registry.list();
+    if (!Array.isArray(rows) || rows.length > 1000) return rosterUnavailable();
+  } catch (_) {
+    return rosterUnavailable();
+  }
+
+  let records;
+  try {
+    const selectedIds = rosterIdsForScope(rows, normalizedQuery.scope);
+    if (!selectedIds) return rosterUnavailable();
+    records = rows.filter((record) => selectedIds.has(record.id)).map(rosterRecord).sort((left, right) => left.id.localeCompare(right.id));
+    if (new Set(records.map((record) => record.id)).size !== records.length) return rosterUnavailable();
+  } catch (_) {
+    return rosterUnavailable();
+  }
+  let generationAfter;
+  try { generationAfter = registry.generation; } catch (_) { return rosterUnavailable(); }
+  if (!Number.isSafeInteger(generationAfter) || generationAfter < 0 || generationAfter !== generationBefore) return rosterUnavailable('ROSTER_GENERATION_MISMATCH');
+
+  const roster = {
+    contract: ROSTER_CONTRACT,
+    generation: generationBefore,
+    capturedAt: now,
+    scope: normalizedQuery.scope,
+    records,
+    complete: true,
+  };
+  const complete = { status: 'ok', roster };
+  if (records.length <= normalizedQuery.limits.maxItems && byteLength(complete) <= normalizedQuery.limits.maxBytes) return complete;
+  const incomplete = { status: 'incomplete', roster: { ...roster, records: [], complete: false } };
+  return byteLength(incomplete) <= normalizedQuery.limits.maxBytes ? incomplete : rosterUnavailable('ROSTER_BUDGET_TOO_SMALL');
+}
+
+// Proof-only whole-portfolio contract: a fixed, non-caller-selectable query so
+// the returned hierarchy is deterministic and admits no partial/ambiguous scope.
+const PORTFOLIO_PROOF_SCOPE = Object.freeze({ projectIds: [], outcomeIds: [], includeDescendants: true });
+const PORTFOLIO_PROOF_QUERY = Object.freeze({
+  scope: PORTFOLIO_PROOF_SCOPE,
+  include: Object.freeze(['hierarchy']),
+  limits: Object.freeze({ maxItems: 1000, maxBytes: 262_144, maxProviderAgeSeconds: 86_400 }),
+});
+const PORTFOLIO_PROOF_RECORD_FIELDS = Object.freeze(['id', 'kind', 'parentId', 'lifecycle', 'revision']);
+const PORTFOLIO_PROOF_COUNTS_FIELDS = Object.freeze(['records', 'projects', 'outcomes']);
+const PORTFOLIO_PROOF_FIELDS = Object.freeze([
+  'contract', 'query', 'generation', 'capturedAt', 'expiresAt', 'capability', 'hostBindingDigests',
+  'records', 'complete', 'counts', 'recordsDigest', 'proofDigest', 'signature',
+]);
+const PORTFOLIO_PROOF_DIGEST_DOMAIN = `${PORTFOLIO_PROOF_CONTRACT}:proof-digest/v1`;
+const PORTFOLIO_PROOF_SIGNATURE_DOMAIN = `${PORTFOLIO_PROOF_CONTRACT}:signature/v1`;
+const PORTFOLIO_PROOF_MAX_VALIDITY_SECONDS = 900;
+const PORTFOLIO_PROOF_MAX_CAPABILITY_TTL_SECONDS = 86_400;
+
+function capabilityTtlMs(authorized) { return Date.parse(authorized.expiresAt) - Date.parse(authorized.issuedAt); }
+function portfolioProofExpiresAt(authorized, capturedAt) {
+  return new Date(Math.min(Date.parse(authorized.expiresAt), Date.parse(capturedAt) + PORTFOLIO_PROOF_MAX_VALIDITY_SECONDS * 1000)).toISOString();
+}
+
+function portfolioProofUnavailable(code = 'PORTFOLIO_PROOF_UNAVAILABLE') {
+  return { status: 'unavailable', code };
+}
+
+function validPortfolioProofRequest(input) {
+  if (!isPlainObject(input)) return false;
+  const allowed = new Set(['registry', 'capability', 'capabilitySecret', 'subject', 'hostId', 'hostBindingDigests', 'now', 'expectedGeneration']);
+  return Object.keys(input).every((key) => allowed.has(key));
+}
+
+const HOST_BINDING_DIGEST_FIELDS = Object.freeze(['configDigest', 'providerDigest']);
+
+function validateHostBindingDigests(value) {
+  if (!isPlainObject(value) || !exactKeys(value, HOST_BINDING_DIGEST_FIELDS)) throw new TypeError('hostBindingDigests must contain exactly configDigest and providerDigest');
+  for (const key of HOST_BINDING_DIGEST_FIELDS) {
+    if (typeof value[key] !== 'string' || !/^[a-f0-9]{64}$/.test(value[key])) throw new TypeError('hostBindingDigests values must be sha256 digests');
+  }
+  return { configDigest: value.configDigest, providerDigest: value.providerDigest };
+}
+
+function proofRecord(record) {
+  // Permissive of extra source fields (mirrors rosterRecord) so real registry rows,
+  // which carry far more than these five fields, can be trimmed down here. Callers
+  // that must reject tampered *proof* records with unexpected fields check
+  // PORTFOLIO_PROOF_RECORD_FIELDS with exactKeys before delegating to this function.
+  if (!isPlainObject(record) || !['project', 'outcome'].includes(record.kind)
+    || !((record.kind === 'project' && /^prj_[0-9]{6,}$/.test(record.id)) || (record.kind === 'outcome' && /^out_[0-9]{6,}$/.test(record.id)))
+    || (record.parentId !== null && (!/^prj_[0-9]{6,}$/.test(record.parentId) || record.parentId === record.id))
+    || (record.kind === 'outcome' && record.parentId === null)
+    || !STATUS_BY_KIND[record.kind].includes(record.lifecycle)
+    || !Number.isInteger(record.revision) || record.revision < 1) {
+    throw new TypeError('invalid proof record');
+  }
+  return { id: record.id, kind: record.kind, parentId: record.parentId, lifecycle: record.lifecycle, revision: record.revision };
+}
+
+function validateProofHierarchy(records) {
+  const byId = new Map(records.map((record) => [record.id, record]));
+  if (byId.size !== records.length) return false;
+  for (const record of records) {
+    if (record.parentId !== null) {
+      const parent = byId.get(record.parentId);
+      if (!parent || parent.kind !== 'project') return false;
+    }
+  }
+  for (const record of records) {
+    const seen = new Set();
+    let current = record;
+    while (current.parentId !== null) {
+      if (seen.has(current.id)) return false;
+      seen.add(current.id);
+      current = byId.get(current.parentId);
+      if (!current) return false;
+    }
+  }
+  return true;
+}
+
+function proofCounts(records) {
+  return {
+    records: records.length,
+    projects: records.filter((record) => record.kind === 'project').length,
+    outcomes: records.filter((record) => record.kind === 'outcome').length,
+  };
+}
+
+function proofBodyDigest(unsigned) { return hash({ domain: PORTFOLIO_PROOF_DIGEST_DOMAIN, body: unsigned }); }
+function proofSignatureValue(signable, secret) {
+  return crypto.createHmac('sha256', secret).update(stableStringify({ domain: PORTFOLIO_PROOF_SIGNATURE_DOMAIN, body: signable })).digest('base64url');
+}
+
+function buildPortfolioProof(input = {}) {
+  if (!validPortfolioProofRequest(input)) return portfolioProofUnavailable();
+  const {
+    registry, capability, capabilitySecret, subject, hostId, hostBindingDigests,
+    now = new Date().toISOString(), expectedGeneration,
+  } = input;
+  if (typeof hostId !== 'string' || !hostId.trim() || typeof subject !== 'string' || !subject.trim()
+    || typeof now !== 'string' || Number.isNaN(Date.parse(now))
+    || !Number.isSafeInteger(expectedGeneration) || expectedGeneration < 1) return portfolioProofUnavailable();
+  let normalizedHostBindingDigests;
+  try { normalizedHostBindingDigests = validateHostBindingDigests(hostBindingDigests); } catch (_) { return portfolioProofUnavailable(); }
+  const verification = verifyProofCapability(capability, {
+    hostSecret: capabilitySecret,
+    now,
+    expectedSubject: subject,
+    expectedHostId: hostId,
+    expectedQuery: PORTFOLIO_PROOF_QUERY,
+    expectedScope: PORTFOLIO_PROOF_SCOPE,
+  });
+  if (!verification.ok || !registry || typeof registry.list !== 'function') return portfolioProofUnavailable();
+  const authorized = verification.capability;
+  if (authorized.limits.maxItems < PORTFOLIO_PROOF_QUERY.limits.maxItems
+    || authorized.limits.maxBytes < PORTFOLIO_PROOF_QUERY.limits.maxBytes) return portfolioProofUnavailable();
+  if (!Number.isFinite(capabilityTtlMs(authorized)) || capabilityTtlMs(authorized) > PORTFOLIO_PROOF_MAX_CAPABILITY_TTL_SECONDS * 1000) {
+    return portfolioProofUnavailable('PORTFOLIO_PROOF_CAPABILITY_TTL_EXCEEDED');
+  }
+  const proofExpiresAt = portfolioProofExpiresAt(authorized, now);
+
+  let generationBefore; let rows;
+  try {
+    generationBefore = registry.generation;
+    if (!Number.isSafeInteger(generationBefore) || generationBefore < 1
+      || expectedGeneration !== generationBefore) return portfolioProofUnavailable('PORTFOLIO_PROOF_GENERATION_MISMATCH');
+    rows = registry.list();
+    if (!Array.isArray(rows) || rows.length > PORTFOLIO_PROOF_QUERY.limits.maxItems) return portfolioProofUnavailable();
+  } catch (_) {
+    return portfolioProofUnavailable();
+  }
+
+  let records;
+  try {
+    records = rows.map(proofRecord).sort((left, right) => left.id.localeCompare(right.id));
+    if (new Set(records.map((record) => record.id)).size !== records.length) return portfolioProofUnavailable('PORTFOLIO_PROOF_HIERARCHY_INVALID');
+    if (!validateProofHierarchy(records)) return portfolioProofUnavailable('PORTFOLIO_PROOF_HIERARCHY_INVALID');
+  } catch (_) {
+    return portfolioProofUnavailable();
+  }
+
+  let generationAfter;
+  try { generationAfter = registry.generation; } catch (_) { return portfolioProofUnavailable(); }
+  if (!Number.isSafeInteger(generationAfter) || generationAfter !== generationBefore) return portfolioProofUnavailable('PORTFOLIO_PROOF_GENERATION_MISMATCH');
+
+  const sign = (recordsForProof, complete) => {
+    const body = {
+      contract: PORTFOLIO_PROOF_CONTRACT,
+      query: PORTFOLIO_PROOF_QUERY,
+      generation: generationBefore,
+      capturedAt: now,
+      expiresAt: proofExpiresAt,
+      capability: { receiptId: authorized.receiptId, digest: capabilityDigest(authorized) },
+      hostBindingDigests: normalizedHostBindingDigests,
+      records: recordsForProof,
+      complete,
+      counts: proofCounts(recordsForProof),
+    };
+    const recordsDigest = hash(recordsForProof);
+    const unsigned = { ...body, recordsDigest };
+    const proofDigest = proofBodyDigest(unsigned);
+    const signable = { ...unsigned, proofDigest };
+    return { ...signable, signature: proofSignatureValue(signable, capabilitySecret) };
+  };
+
+  const complete = sign(records, true);
+  if (records.length <= PORTFOLIO_PROOF_QUERY.limits.maxItems && byteLength(complete) <= PORTFOLIO_PROOF_QUERY.limits.maxBytes) {
+    return { status: 'ok', proof: complete };
+  }
+  const incomplete = sign([], false);
+  return byteLength(incomplete) <= PORTFOLIO_PROOF_QUERY.limits.maxBytes
+    ? { status: 'incomplete', proof: incomplete }
+    : portfolioProofUnavailable('PORTFOLIO_PROOF_BUDGET_TOO_SMALL');
+}
+
+function verifyPortfolioProof(proof, { capability, capabilitySecret, subject, hostId, now = new Date().toISOString() } = {}) {
+  try {
+    if (!isPlainObject(proof) || !exactKeys(proof, PORTFOLIO_PROOF_FIELDS)) return { ok: false, reason: 'invalid-contract' };
+    if (proof.contract !== PORTFOLIO_PROOF_CONTRACT) return { ok: false, reason: 'invalid-contract' };
+    if (stableStringify(proof.query) !== stableStringify(PORTFOLIO_PROOF_QUERY)) return { ok: false, reason: 'invalid-query' };
+    if (!Number.isSafeInteger(proof.generation) || proof.generation < 1) return { ok: false, reason: 'invalid-contract' };
+    if (typeof proof.capturedAt !== 'string' || Number.isNaN(Date.parse(proof.capturedAt))) return { ok: false, reason: 'invalid-contract' };
+    if (typeof proof.expiresAt !== 'string' || Number.isNaN(Date.parse(proof.expiresAt))) return { ok: false, reason: 'invalid-contract' };
+    if (!exactKeys(proof.capability, ['receiptId', 'digest']) || !/^cap_[a-f0-9]{32}$/.test(proof.capability.receiptId) || !/^[a-f0-9]{64}$/.test(proof.capability.digest)) return { ok: false, reason: 'invalid-contract' };
+    let normalizedHostBindingDigests;
+    try { normalizedHostBindingDigests = validateHostBindingDigests(proof.hostBindingDigests); } catch (_) { return { ok: false, reason: 'invalid-contract' }; }
+    if (stableStringify(normalizedHostBindingDigests) !== stableStringify(proof.hostBindingDigests)) return { ok: false, reason: 'invalid-contract' };
+    if (typeof proof.complete !== 'boolean') return { ok: false, reason: 'invalid-contract' };
+    if (!Array.isArray(proof.records) || proof.records.length > PORTFOLIO_PROOF_QUERY.limits.maxItems
+      || proof.records.some((record) => !isPlainObject(record) || !exactKeys(record, PORTFOLIO_PROOF_RECORD_FIELDS))) return { ok: false, reason: 'invalid-contract' };
+    let normalizedRecords;
+    try { normalizedRecords = proof.records.map(proofRecord); } catch (_) { return { ok: false, reason: 'invalid-contract' }; }
+    if (stableStringify(normalizedRecords) !== stableStringify(proof.records)) return { ok: false, reason: 'invalid-contract' };
+    const ids = proof.records.map((record) => record.id);
+    if (JSON.stringify(ids) !== JSON.stringify([...ids].sort())) return { ok: false, reason: 'invalid-contract' };
+    if (!validateProofHierarchy(proof.records)) return { ok: false, reason: 'invalid-hierarchy' };
+    if (!isPlainObject(proof.counts) || !exactKeys(proof.counts, PORTFOLIO_PROOF_COUNTS_FIELDS) || stableStringify(proof.counts) !== stableStringify(proofCounts(proof.records))) return { ok: false, reason: 'invalid-contract' };
+    if (typeof proof.recordsDigest !== 'string' || !/^[a-f0-9]{64}$/.test(proof.recordsDigest) || proof.recordsDigest !== hash(proof.records)) return { ok: false, reason: 'invalid-contract' };
+    const { proofDigest: suppliedProofDigest, signature: suppliedSignature, ...unsigned } = proof;
+    if (typeof suppliedProofDigest !== 'string' || !/^[a-f0-9]{64}$/.test(suppliedProofDigest) || suppliedProofDigest !== proofBodyDigest(unsigned)) return { ok: false, reason: 'invalid-contract' };
+    if (typeof suppliedSignature !== 'string' || !suppliedSignature.trim()) return { ok: false, reason: 'invalid-signature' };
+
+    const capabilityVerification = verifyProofCapability(capability, {
+      hostSecret: capabilitySecret,
+      now,
+      expectedSubject: subject,
+      expectedHostId: hostId,
+      expectedQuery: PORTFOLIO_PROOF_QUERY,
+      expectedScope: PORTFOLIO_PROOF_SCOPE,
+    });
+    if (!capabilityVerification.ok) return { ok: false, reason: capabilityVerification.reason };
+    const authorized = capabilityVerification.capability;
+    if (authorized.receiptId !== proof.capability.receiptId || capabilityDigest(authorized) !== proof.capability.digest) return { ok: false, reason: 'capability-mismatch' };
+    if (!Number.isFinite(capabilityTtlMs(authorized)) || capabilityTtlMs(authorized) > PORTFOLIO_PROOF_MAX_CAPABILITY_TTL_SECONDS * 1000) {
+      return { ok: false, reason: 'capability-ttl-exceeded' };
+    }
+    if (proof.expiresAt !== portfolioProofExpiresAt(authorized, proof.capturedAt)) return { ok: false, reason: 'capability-mismatch' };
+
+    const expectedSignature = proofSignatureValue({ ...unsigned, proofDigest: suppliedProofDigest }, capabilitySecret);
+    if (!constantTimeEqual(expectedSignature, suppliedSignature)) return { ok: false, reason: 'invalid-signature' };
+
+    const current = Date.parse(now);
+    if (Number.isNaN(current)) return { ok: false, reason: 'invalid-contract' };
+    if (current < Date.parse(proof.capturedAt)) return { ok: false, reason: 'not-yet-valid' };
+    if (current >= Date.parse(proof.expiresAt)) return { ok: false, reason: 'expired' };
+    return { ok: true, proof: clone(proof) };
+  } catch (_) {
+    return { ok: false, reason: 'invalid-contract' };
+  }
+}
+
+function buildContextPacket({ registry, query, providers = {}, providerAuthorities = {}, capability, capabilitySecret, subject, hostId, activityWindow = null, inference = null, intentGaps = null, now = new Date().toISOString() } = {}) {
+  let normalizedQuery;
+  try { normalizedQuery = validateContextQuery(query); } catch (_) { return { status: 'unavailable', code: 'CONTEXT_UNAVAILABLE' }; }
+  let normalizedActivityWindow;
+  try { normalizedActivityWindow = validateActivityWindow(activityWindow); } catch (_) { return { status: 'unavailable', code: 'CONTEXT_UNAVAILABLE' }; }
+  let normalizedInference;
+  try { normalizedInference = normalizeInferenceSnapshot(inference); } catch (_) { return { status: 'unavailable', code: 'CONTEXT_UNAVAILABLE' }; }
+  if (typeof hostId !== 'string' || !hostId.trim()) return { status: 'unavailable', code: 'CONTEXT_UNAVAILABLE' };
+  const verification = verifyCapability(capability, {
+    hostSecret: capabilitySecret,
+    now,
+    expectedSubject: subject,
+    expectedHostId: hostId,
+    expectedQuery: normalizedQuery,
+    expectedRedactionClass: capability && capability.redactionClass,
+  });
+  if (!verification.ok || !registry || typeof registry.list !== 'function') return { status: 'unavailable', code: 'CONTEXT_UNAVAILABLE' };
+  const authorized = verification.capability;
+  if (stableStringify(authorized.scope) !== stableStringify(normalizedQuery.scope)
+    || authorized.limits.maxItems < normalizedQuery.limits.maxItems
+    || authorized.limits.maxBytes < normalizedQuery.limits.maxBytes
+    || authorized.limits.maxProviderAgeSeconds < normalizedQuery.limits.maxProviderAgeSeconds
+    || authorized.freshness.maxAgeSeconds < normalizedQuery.limits.maxProviderAgeSeconds) return { status: 'unavailable', code: 'CONTEXT_UNAVAILABLE' };
+  const selectedIds = recordIdsForScope(registry, normalizedQuery.scope);
+  if (!selectedIds) return { status: 'unavailable', code: 'CONTEXT_UNAVAILABLE' };
+  const wholePortfolio = normalizedQuery.scope.projectIds.length === 0 && normalizedQuery.scope.outcomeIds.length === 0;
+  const redactionClass = authorized.redactionClass;
+  let selectedRecords;
+  let records;
+  try {
+    selectedRecords = registry.list()
+      .filter((record) => selectedIds.has(record.id))
+      .sort((left, right) => registry.breadcrumb(left.id).localeCompare(registry.breadcrumb(right.id)) || left.id.localeCompare(right.id));
+    records = selectedRecords.map((record) => serializeRecord(record, registry, redactionClass));
+  } catch (_) {
+    return { status: 'unavailable', code: 'CONTEXT_UNAVAILABLE' };
+  }
+  const canonical = {
+    generation: registry.generation,
+    records,
+    revisions: Object.fromEntries(records.map((record) => [record.id, record.revision])),
+  };
+  const allProviderNames = [...new Set([...KNOWN_PROVIDERS, ...Object.keys(providers)])].sort();
+  const packetOmissions = [];
+  const providerResults = {};
+  const allSummaries = [];
+  if (intentGaps === null || intentGaps === undefined) {
+    packetOmissions.push('intent-gap:omitted');
+  } else if (redactionClass === 'public') {
+    packetOmissions.push('intent-gap:redacted');
+  } else {
+    try {
+      const derived = deriveIntentGapAttention({
+        records: selectedRecords,
+        registryGeneration: registry.generation,
+        // Do not normalize or verify a foreign descriptor: scope filtering is
+        // an authority boundary, not just packet presentation.
+        sources: Array.isArray(intentGaps.sources)
+          ? intentGaps.sources.filter((source) => source && selectedIds.has(source.canonicalId))
+          : intentGaps.sources,
+        sourceAuthority: intentGaps.sourceAuthority,
+        maxEvidenceAgeSeconds: normalizedQuery.limits.maxProviderAgeSeconds,
+        now,
+      });
+      allSummaries.push(...attentionSummaries(derived.entries, { observedAt: now }));
+    } catch (_) {
+      return { status: 'unavailable', code: 'CONTEXT_UNAVAILABLE' };
+    }
+  }
+  for (const provider of allProviderNames) {
+    if (!authorized.providerCoverage.includes(provider)) {
+      const result = { view: emptyProvider(provider, 'omitted', [`provider:${provider}:not-covered`]), summaries: [], omissions: [`provider:${provider}:not-covered`] };
+      providerResults[provider] = result.view;
+      packetOmissions.push(...result.omissions);
+      continue;
+    }
+    const result = providerView(provider, providers[provider], {
+      now, maxAgeSeconds: normalizedQuery.limits.maxProviderAgeSeconds, selectedIds, redactionClass, authority: providerAuthorities[provider],
+    });
+    providerResults[provider] = result.view;
+    const summaries = filterNormalizedSummariesByWindow(result.summaries, normalizedActivityWindow);
+    if (normalizedActivityWindow) providerResults[provider] = { ...result.view, itemCount: summaries.length };
+    allSummaries.push(...summaries);
+    packetOmissions.push(...result.omissions);
+  }
+  allSummaries.sort(summarySort);
+  const classified = classifySummaries(allSummaries);
+  const evidence = allSummaries.map(redactEvidence).sort(summarySort);
+  const provisionalCandidates = redactionClass === 'public' ? [] : normalizedInference.candidates
+    .map((candidate) => projectCandidate(candidate, selectedIds, wholePortfolio))
+    .filter(Boolean);
+  if (redactionClass === 'public' && normalizedInference.candidates.length) {
+    packetOmissions.push('inference:candidates:redacted');
+  }
+  const packetWatermarks = {
+    registry: `registry:${registry.generation}`,
+    inference: normalizedInference.watermark,
+    activity: providerResults.activity?.watermark || null,
+  };
+  const expiresAt = authorized.expiresAt;
+  const packet = {
+    contract: CONTEXT_CONTRACT,
+    schemaVersion: CONTEXT_SCHEMA_VERSION,
+    packetId: '',
+    capturedAt: now,
+    expiresAt,
+    query: normalizedQuery,
+    canonical,
+    activity: normalizedQuery.include.includes('activity') ? classified.activity : [],
+    currentWork: normalizedQuery.include.includes('currentWork') ? classified.currentWork : [],
+    attention: normalizedQuery.include.includes('attention') ? classified.attention : [],
+    evidence,
+    providers: providerResults,
+    inference: {
+      policyRevision: normalizedInference.policyRevision,
+      engineRevision: normalizedInference.engineRevision,
+      candidates: provisionalCandidates,
+      coverage: normalizedInference.coverage,
+      watermark: normalizedInference.watermark,
+      watermarks: normalizedInference.watermarks,
+    },
+    watermarks: packetWatermarks,
+    omissions: [...new Set(packetOmissions)].sort(),
+    truncation: { truncated: false, maxItems: normalizedQuery.limits.maxItems, maxBytes: normalizedQuery.limits.maxBytes, omittedItems: 0, sections: [] },
+    redactionClass,
+    capability: { receiptId: authorized.receiptId, digest: capabilityDigest(authorized) },
+  };
+  packet.packetId = `ctx_${hash({ ...packet, packetId: undefined }).slice(0, 32)}`;
+  enforceBounds(packet, normalizedQuery.limits);
+  packet.packetId = `ctx_${hash({ ...packet, packetId: undefined }).slice(0, 32)}`;
+  if (byteLength(packet) > normalizedQuery.limits.maxBytes) return { status: 'unavailable', code: 'CONTEXT_BUDGET_TOO_SMALL' };
+  return { status: 'ok', packet };
+}
+
+module.exports = {
+  CONTEXT_CONTRACT,
+  CONTEXT_SCHEMA_VERSION,
+  SUPPORTED_CONTEXT_SCHEMA_VERSIONS,
+  CONTEXT_PACKET_FIELDS,
+  EVIDENCE_FIELDS,
+  INCLUDE_SECTIONS,
+  KNOWN_PROVIDERS,
+  LIMIT_FIELDS,
+  QUERY_FIELDS,
+  SUMMARY_FIELDS,
+  ROSTER_CONTRACT,
+  PORTFOLIO_PROOF_CONTRACT,
+  PORTFOLIO_PROOF_SCOPE,
+  PORTFOLIO_PROOF_QUERY,
+  buildCanonicalRosterPacket,
+  buildContextPacket,
+  buildPortfolioProof,
+  filterSummariesByWindow,
+  normalizeInferenceSnapshot,
+  normalizeContextPacket,
+  validateActivityWindow,
+  validateContextPacket,
+  validateContextQuery,
+  verifyPortfolioProof,
+};

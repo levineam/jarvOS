@@ -34,7 +34,6 @@ const {
 
 const {
   createMemoryRecord,
-  checkMemoryDedup,
 } = require('../../../../jarvos-memory/src');
 
 const {
@@ -45,19 +44,27 @@ const {
   REVIEW_CONFIDENCE_MIN,
   REVIEW_CONFIDENCE_MAX,
   buildThreePackagePlan,
+  journalContentOriginForPlan,
 } = require('../../../packages/jarvos-ambient/src/routing');
 
 const {
   resolveConfiguredHeading,
 } = require('../../../packages/jarvos-secondbrain-journal/src/section-config');
+const { createArtifactReceipt } = require('../../../src/artifact-receipt');
+const { prepareIdentifiedCapture, projectNoteTitle } = require('../../../packages/jarvos-ambient/src/intent/capture-identity');
 
 function applyStoragePlan(plan, capture = {}, options = {}) {
+  const prepared = prepareIdentifiedCapture(capture, plan);
+  ({ capture, plan } = prepared);
+  const { intentId, requestHash } = prepared;
   const adapter = options.adapter || createStorageAdapter(options);
   const date = plan.date;
   const result = {
+    ...(intentId ? { plan } : {}),
     journalEntry: null,
     note: null,
     noteLink: null,
+    artifactReceipt: createArtifactReceipt(),
   };
 
   if (plan.ignored) {
@@ -72,7 +79,19 @@ function applyStoragePlan(plan, capture = {}, options = {}) {
         ...(capture.frontmatter || {}),
         ...(plan.noteFrontmatter || {}),
       },
+      ...(typeof options.resolveUserSource === 'function' ? { resolveUserSource: options.resolveUserSource } : {}),
+      ...(intentId ? { intentId: `${intentId}:note`, requestHash } : {}),
     });
+  }
+
+  if (intentId && !result.note?.written) {
+    result.artifactReceipt = createArtifactReceipt({ artifacts: result.note?.artifactReceipt?.artifacts || [] });
+    return result;
+  }
+
+  if (intentId && result.note?.title) {
+    plan = projectNoteTitle(plan, result.note.title);
+    result.plan = plan;
   }
 
   if (plan.journalSection && plan.journalLine) {
@@ -105,16 +124,24 @@ function applyStoragePlan(plan, capture = {}, options = {}) {
       // Resolve the plan's (default) heading to the currently-configured one, so a
       // renamed/reordered section in journal-module.json is honored by the capture
       // path — not just the renderer (WS0 config-driven sections).
+      const contentOrigin = journalContentOriginForPlan({ ...plan, journalLine });
       result.journalEntry = adapter.appendLineToJournalSection({
         heading: resolveConfiguredHeading(plan.journalSection),
         line: journalLine,
         date,
+        ...(intentId ? { intentId: `${intentId}:journal`, requestHash } : {}),
+        ...(contentOrigin ? { contentOrigin } : {}),
       });
       result.noteLink = result.journalEntry;
     }
   } else {
-    adapter.ensureJournal({ date });
+    result.journalEntry = adapter.ensureJournal({ date });
   }
+
+  result.artifactReceipt = createArtifactReceipt({ artifacts: [
+    ...(result.note?.artifactReceipt?.artifacts || []),
+    ...(result.journalEntry?.artifactReceipt?.artifacts || []),
+  ] });
 
   return result;
 }
@@ -127,15 +154,18 @@ function applyStoragePlan(plan, capture = {}, options = {}) {
  * 3. If a note was created, link it in the memory record
  */
 function applyThreePackagePlan(capture = {}, options = {}) {
-  const plan = buildThreePackagePlan(capture);
+  let plan = buildThreePackagePlan(capture);
 
   // Step 1: Apply keyword routing (journal + notes)
   const keywordResult = applyStoragePlan(plan, capture, options);
+  plan = keywordResult.plan || plan;
 
   // Step 2: Apply memory routing
   let memoryResult = null;
   if (plan.routeToMemory && plan.memoryParams) {
-    const dedupResult = checkMemoryDedup(plan.memoryParams.content, plan.memoryParams.class);
+    const dedupResult = typeof options.checkMemoryDedup === 'function'
+      ? options.checkMemoryDedup(plan.memoryParams.content, plan.memoryParams.class)
+      : { isDuplicate: false, reason: 'dedup_adapter_not_configured' };
     plan.memoryDedup = dedupResult;
     if (dedupResult && dedupResult.isDuplicate) {
       return {
@@ -146,6 +176,7 @@ function applyThreePackagePlan(capture = {}, options = {}) {
         journal: keywordResult.journalEntry,
         note: keywordResult.note,
         noteLink: keywordResult.noteLink,
+        artifactReceipt: keywordResult.artifactReceipt,
         memory: null,
       };
     }
@@ -153,7 +184,7 @@ function applyThreePackagePlan(capture = {}, options = {}) {
     const params = { ...plan.memoryParams };
 
     // If a note was created, add the reference
-    if (keywordResult.note) {
+    if (keywordResult.note && keywordResult.note.written !== false && keywordResult.note.error == null) {
       params.noteRef = keywordResult.note.title || keywordResult.note.path || undefined;
     }
 
@@ -165,6 +196,7 @@ function applyThreePackagePlan(capture = {}, options = {}) {
     journal: keywordResult.journalEntry,
     note: keywordResult.note,
     noteLink: keywordResult.noteLink,
+    artifactReceipt: keywordResult.artifactReceipt,
     memory: memoryResult,
   };
 }

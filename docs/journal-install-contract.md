@@ -73,10 +73,10 @@ node modules/jarvos-secondbrain/scripts/journal-health.js --json
 node modules/jarvos-secondbrain/scripts/journal-health-alarm.js
 ```
 
-The creation-only path is available through the package maintenance entrypoint:
+The creation-only path is available through the composed maintenance entrypoint:
 
 ```bash
-node modules/jarvos-secondbrain/packages/jarvos-secondbrain-journal/src/journal-maintenance.js \
+node modules/jarvos-secondbrain/scripts/journal-maintenance.js \
   --create-if-missing --json
 ```
 
@@ -97,6 +97,43 @@ command to reconcile those backlinks.
 The older maintenance/repair command remains a separate, human-approved
 compatibility operation. It is not the agent ensure path and should not be
 scheduled as a replacement for the creation-only lifecycle.
+
+## Obsidian-owned live mutations
+
+When Obsidian is running, jarvOS asks `app.vault` to create, transform, or
+guardedly replace journal Markdown. A write is `committed` only after Obsidian
+reads the result back and confirms the operation's invariant. Seeing the new
+bytes on disk is not acknowledgement and is not enough to claim that Sync saw
+the change.
+
+Mutation results have deliberately different meanings:
+
+| Result | Meaning |
+| --- | --- |
+| `committed` | Obsidian acknowledged the intended content. Sync may still be unknown or pending. |
+| `already_satisfied` | Obsidian read the latest content and the exact invariant already held. |
+| `saved_locally_sync_pending` | An explicitly authorized offline write reached disk and has a durable reconciliation record. It is not synchronized yet. |
+| `conflict` | Latest content no longer matched the guarded expectation. Human review is required. |
+| `unavailable` or `blocked` | No safe write claim can be made; the retained operation remains visible to health tooling. |
+
+Inspect retained work without changing vault content:
+
+```bash
+JARVOS_VAULT_ROOT=/path/to/vault \
+  node modules/jarvos-secondbrain/scripts/vault-mutation-health.js
+```
+
+Reconnect Obsidian, then explicitly reconcile bounded retained operations:
+
+```bash
+JARVOS_VAULT_ROOT=/path/to/vault \
+  node modules/jarvos-secondbrain/scripts/vault-mutation-reconcile.js
+```
+
+Reconciliation replays a registered latest-content transform or an exact
+guarded operation. It does not blindly replace a journal with an older disk
+copy, so a phone or tablet edit made in the meantime is preserved or surfaced
+as a conflict.
 
 ## Single-writer ownership
 
@@ -121,18 +158,16 @@ writer stops rather than risking that content.
 
 ## Agent and host-adapter boundary
 
-The stdio MCP server exposes two bounded actions:
+The public stdio MCP server does not currently register standalone journal
+health or ensure-today actions. Its note and session-thread actions do use this
+lifecycle and return bounded mutation and backlink outcomes. Journal health,
+creation, reconciliation, and repair remain operator/package surfaces until a
+separate agent contract is implemented and registered.
 
-- `jarvos_journal_health` is read-only and is the default status check.
-- `jarvos_ensure_today_journal` accepts an empty object and should be called
-  only for an explicit user request or a host-declared journal-maintenance
-  trigger. It is not startup boilerplate.
-
-Both actions use the same package lifecycle and return only status, local date,
-and a bounded outcome. They do not expose paths, journal content, hashes,
-timestamps, receipt locations, or host provenance. Arbitrary paths, dates,
-repair flags, provenance, and unknown fields are rejected before filesystem
-access.
+Any future agent journal action must return only status, local date, and a
+bounded outcome. It must not expose paths, journal content, hashes, timestamps,
+receipt locations, or host provenance. Arbitrary paths, dates, repair flags,
+provenance, and unknown fields must be rejected before filesystem access.
 
 Host schedulers and runtime adapters own their own delivery, retry, and
 operational evidence. They inject the public configuration; they do not become

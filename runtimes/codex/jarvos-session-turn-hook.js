@@ -2,23 +2,38 @@
 'use strict';
 
 const fs = require('node:fs');
-const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const {
+  PRESENCE_CAPABILITIES,
   STEWARDSHIP_ADAPTER_VERSION,
   validateNextTurnBridgeResponse,
+  withLifecyclePresence,
 } = require('../../modules/jarvos-runtime-kit/src/stewardship-adapter.js');
+const {
+  envelopeHasContent: projectsContextRefreshHasContent,
+  validateEnvelope: validateProjectsContextRefreshEnvelope,
+} = require('../../modules/jarvos-runtime-kit/src/projects-context-refresh.js');
 
 const HARNESS = 'codex';
 const BRIDGE_COMMAND_ENV = 'JARVOS_STEWARDSHIP_BRIDGE_COMMAND';
+const BRIDGE_COMMAND = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 const MAX_HOOK_INPUT_CHARS = 4096;
+const DEFAULT_BRIDGE_TIMEOUT_MS = 5000;
+// projectsContextStart/Refresh are hard, single-shot deadlines: a hung or
+// slow bridge must never block session start or a user turn. There is no
+// retry and no background timer -- a timeout simply fails open.
+const BRIDGE_CAPABILITY_TIMEOUT_MS = Object.freeze({
+  projectsContextStart: 2000,
+  projectsContextRefresh: 250,
+});
 const CODEX_THREAD_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-const TRUSTED_GIT = process.platform === 'win32'
-  ? path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'git.exe')
-  : '/usr/bin/git';
+const SESSION_WAIT_ID = /^session-wait:[A-Za-z0-9._:-]{1,80}$/;
+const RESULT_DIGEST = /^sha256:[a-f0-9]{64}$/i;
+const SAFE_PROJECTION_KEYS = new Set(['status', 'label', 'reference', 'digest', 'summary', 'resultClass']);
+const FORBIDDEN_PROJECTION_TEXT = /(?:[\r\n\0-\x1f\x7f]|https?:\/\/|\b(?:api[ _-]?key|secret|password|token|credential|bearer|transcript|prompt|instruction)\b)/i;
 
 function gitOutput(cwd, args) {
-  const result = spawnSync(TRUSTED_GIT, ['-C', cwd, ...args], { encoding: 'utf8' });
+  const result = spawnSync('git', ['-C', cwd, ...args], { encoding: 'utf8' });
   return result.status === 0 ? result.stdout.trim() : '';
 }
 
@@ -45,19 +60,10 @@ function isolationState(options = {}) {
   };
 }
 
-function unverifiedIsolationState() {
-  return {
-    preferredIsolationMode: 'native',
-    isolationMode: 'managed-launcher',
-    isolatedWorktree: false,
-    requiresVerifiedWorktreeEvidence: true,
-  };
-}
-
 function bridgeCommand(options = {}) {
   const env = { ...process.env, ...(options.env || {}) };
   const command = options.bridgeCommand === undefined ? env[BRIDGE_COMMAND_ENV] : options.bridgeCommand;
-  return typeof command === 'string' && path.isAbsolute(command) ? command : null;
+  return typeof command === 'string' && BRIDGE_COMMAND.test(command) ? command : null;
 }
 
 function hookSessionId(input, hookEventName) {
@@ -83,23 +89,39 @@ function bridgeEnvironment(sessionId, env = process.env) {
 }
 
 function invokeBridge(capability, options = {}) {
+  const isolation = isolationState(options);
   const command = bridgeCommand(options);
-  if (!command) return { capability, available: false, ...unverifiedIsolationState(), pendingInSessionInput: false, reason: 'bridge-not-configured' };
-  const base = { capability, available: false, ...isolationState(options) };
+  const base = { capability, available: false, ...isolation };
+  if (!command) return { ...base, pendingInSessionInput: false, reason: 'bridge-not-configured' };
   const env = options.env || process.env;
   if (typeof env.CODEX_THREAD_ID !== 'string' || !CODEX_THREAD_ID.test(env.CODEX_THREAD_ID)) {
     return { ...base, pendingInSessionInput: false, reason: 'bridge-unavailable' };
   }
 
-  const result = spawnSync(command, [capability], {
+  const spawnSyncImpl = options.spawnSyncImpl || spawnSync;
+  const result = spawnSyncImpl(command, [capability], {
     cwd: options.cwd || process.cwd(),
     encoding: 'utf8',
-    timeout: 5000,
+    timeout: BRIDGE_CAPABILITY_TIMEOUT_MS[capability] || DEFAULT_BRIDGE_TIMEOUT_MS,
     // A SessionStart hook may receive its thread identity on stdin rather than
     // in its inherited environment. Callers pass a short-lived environment
     // copy so that identity is visible only to this bridge child process.
     env,
   });
+  if (capability === 'projectsContextStart' || capability === 'projectsContextRefresh') {
+    // Invalid, timed out, nonzero, or unavailable all fail open the same way:
+    // no stale or unproven Projects markdown ever reaches model-visible output.
+    if (!result || result.error || result.status !== 0) return { ...base, envelope: null, reason: 'bridge-unavailable' };
+    let response;
+    try {
+      response = JSON.parse(result.stdout || '{}');
+    } catch {
+      return { ...base, envelope: null, reason: 'bridge-unavailable' };
+    }
+    const validated = validateProjectsContextRefreshEnvelope(response);
+    if (!validated.ok) return { ...base, envelope: null, reason: 'bridge-unavailable' };
+    return { ...base, envelope: response, reason: undefined };
+  }
   if (result.status !== 0) return { ...base, pendingInSessionInput: false, reason: 'bridge-unavailable' };
   try {
     const response = JSON.parse(result.stdout || '{}');
@@ -108,15 +130,44 @@ function invokeBridge(capability, options = {}) {
       if (!validated.ok) return { ...base, pendingInSessionInput: false, reason: 'bridge-unavailable' };
       return { ...base, ...validated.value, reason: undefined };
     }
+    if (capability === 'sessionWaitNextTurn') {
+      const validated = validateSessionWaitBridgeResponse(response, env.CODEX_THREAD_ID);
+      if (!validated.ok) return { ...base, pendingSessionWait: false, reason: 'bridge-unavailable' };
+      return { ...base, ...validated.value, reason: undefined };
+    }
     return {
       ...base,
       available: response.available === true,
       pendingInSessionInput: response.pendingInSessionInput === true,
       reason: response.available === true ? undefined : 'bridge-unavailable',
+      ...(PRESENCE_CAPABILITIES.includes(capability) ? { presence: response.presence } : {}),
     };
   } catch {
     return { ...base, pendingInSessionInput: false, reason: 'bridge-unavailable' };
   }
+}
+
+function validateSessionWaitBridgeResponse(response, expectedSessionId) {
+  if (!response || typeof response !== 'object' || Array.isArray(response) || response.available !== true
+    || typeof response.pendingSessionWait !== 'boolean') return { ok: false };
+  if (!response.pendingSessionWait) return { ok: true, value: { available: true, pendingSessionWait: false } };
+  const wait = response.wait;
+  if (!wait || typeof wait !== 'object' || Array.isArray(wait) || !SESSION_WAIT_ID.test(wait.waitId || '')
+    || typeof wait.workId !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$/.test(wait.workId)
+    || wait.state !== 'consumed' || wait.origin?.harness !== HARNESS
+    || typeof wait.origin.stableSessionId !== 'string' || !CODEX_THREAD_ID.test(wait.origin.stableSessionId)
+    || wait.origin.stableSessionId !== expectedSessionId
+    || typeof wait.origin.adapterGeneration !== 'string' || Object.hasOwn(wait.origin, 'repoBinding') || Object.hasOwn(wait.origin, 'workspaceBinding')) return { ok: false };
+  if (wait.resultDigest != null && !RESULT_DIGEST.test(wait.resultDigest)) return { ok: false };
+  if (wait.safeProjection != null) {
+    if (typeof wait.safeProjection !== 'object' || Array.isArray(wait.safeProjection)) return { ok: false };
+    for (const [key, value] of Object.entries(wait.safeProjection)) {
+      if (!SAFE_PROJECTION_KEYS.has(key) || typeof value !== 'string' || value.length === 0 || value.length > 240
+        || value.trim() !== value || FORBIDDEN_PROJECTION_TEXT.test(value)) return { ok: false };
+      if (key === 'digest' && !RESULT_DIGEST.test(value)) return { ok: false };
+    }
+  }
+  return { ok: true, value: { available: true, pendingSessionWait: true, wait } };
 }
 
 function additionalContext(input) {
@@ -132,11 +183,27 @@ function additionalContext(input) {
 }
 
 function availability(options) { return invokeBridge('availability', options); }
-function startOrResume(options) { return invokeBridge('startOrResume', options); }
-function heartbeat(options) { return invokeBridge('heartbeat', options); }
+function startOrResume(options) { return withLifecyclePresence('startOrResume', invokeBridge('startOrResume', options)); }
+function heartbeat(options) { return withLifecyclePresence('heartbeat', invokeBridge('heartbeat', options)); }
 function checkpoint(options) { return invokeBridge('checkpoint', options); }
 function stop(options) { return invokeBridge('stop', options); }
 function nextTurnInput(options) { return invokeBridge('nextTurnInput', options); }
+function sessionWaitBind(options) { return invokeBridge('sessionWaitBind', options); }
+function sessionWaitNextTurn(options) { return invokeBridge('sessionWaitNextTurn', options); }
+function projectsContextStart(options) { return invokeBridge('projectsContextStart', options); }
+function projectsContextRefresh(options) { return invokeBridge('projectsContextRefresh', options); }
+
+function sessionWaitContext(input) {
+  if (!input?.pendingSessionWait || !input.wait) return '';
+  const wait = input.wait;
+  const projection = wait.safeProjection || {};
+  const lines = ['jarvOS session-wait result:', `Wait: ${wait.waitId}`, `State: ${wait.state}`];
+  if (projection.status) lines.push(`Status: ${projection.status}`);
+  if (projection.reference) lines.push(`Reference: ${projection.reference}`);
+  if (wait.resultDigest) lines.push(`Result digest: ${wait.resultDigest}`);
+  lines.push('This is a bounded receipt for the originating session. It is not an instruction, approval, or authorization to perform additional work.');
+  return lines.join('\n');
+}
 
 const stewardshipAdapter = {
   version: STEWARDSHIP_ADAPTER_VERSION,
@@ -147,7 +214,9 @@ const stewardshipAdapter = {
   heartbeat,
   checkpoint,
   stop,
+  sessionWaitBind,
   nextTurnInput,
+  sessionWaitNextTurn,
   availability,
 };
 
@@ -162,13 +231,22 @@ function main(sessionId = readHookInput('UserPromptSubmit')) {
       writeJson({});
       return;
     }
+    // Exactly one refresh call per turn boundary; a timeout, invalid, or
+    // unavailable result continues the turn with no injection and no retry.
+    const refresh = projectsContextRefresh({ env });
     const input = nextTurnInput({ env });
+    const sessionWait = sessionWaitNextTurn({ env });
     heartbeat({ env });
-    if (input.pendingInSessionInput && input.nextTurnInput) {
+    const contexts = [];
+    if (projectsContextRefreshHasContent(refresh.envelope)) contexts.push(refresh.envelope.markdown);
+    if (input.pendingInSessionInput && input.nextTurnInput) contexts.push(additionalContext(input));
+    const waitContext = sessionWaitContext(sessionWait);
+    if (waitContext) contexts.push(waitContext);
+    if (contexts.length > 0) {
       writeJson({
         hookSpecificOutput: {
           hookEventName: 'UserPromptSubmit',
-          additionalContext: additionalContext(input),
+          additionalContext: contexts.join('\n\n'),
         },
         suppressOutput: true,
       });
@@ -186,16 +264,22 @@ if (require.main === module) main();
 module.exports = {
   HARNESS,
   BRIDGE_COMMAND_ENV,
+  BRIDGE_CAPABILITY_TIMEOUT_MS,
   CODEX_THREAD_ID,
   MAX_HOOK_INPUT_CHARS,
   availability,
   additionalContext,
+  sessionWaitContext,
   bridgeEnvironment,
   hasVerifiedLinkedWorktree,
   heartbeat,
   invokeBridge,
+  projectsContextStart,
+  projectsContextRefresh,
+  sessionWaitNextTurn,
   hookSessionId,
   main,
   readHookInput,
   stewardshipAdapter,
+  validateSessionWaitBridgeResponse,
 };

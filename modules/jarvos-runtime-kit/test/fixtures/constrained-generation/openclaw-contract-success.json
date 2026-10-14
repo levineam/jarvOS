@@ -1,0 +1,13 @@
+{
+  "version": "jarvos-constrained-generation/v1",
+  "backend": { "id": "openclaw", "verification": "claimed-unverified" },
+  "request": { "provider": "openai", "model": "gpt-5.6-luna", "reasoningEffort": "max" },
+  "runtimeProof": { "status": "recorded-fixture", "receiptDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" },
+  "observed": {
+    "provider": "openai", "model": "gpt-5.6-luna", "reasoningEffort": "max", "toolCallCount": 0,
+    "delivered": false, "fallbackUsed": false,
+    "attempts": [{ "provider": "openai", "model": "gpt-5.6-luna" }],
+    "usage": { "inputTokens": 12, "outputTokens": 8, "totalTokens": 20 },
+    "outputDigest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  }
+}

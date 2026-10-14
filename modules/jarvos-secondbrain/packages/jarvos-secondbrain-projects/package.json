@@ -1,6 +1,6 @@
 {
   "name": "jarvos-secondbrain-projects",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "description": "JarvOS secondbrain — the Projects record: one markdown page per project holding Goal, High-level plan, and Definition of Done",
   "main": "src/projects.js",
   "bin": {
@@ -8,7 +8,8 @@
   },
   "scripts": {
     "start": "node src/projects-cli.js list",
-    "check": "node src/projects-cli.js check"
+    "check": "node src/projects-cli.js check",
+    "test": "node --test test/*.test.js"
   },
   "keywords": [
     "jarvos",
@@ -24,6 +25,25 @@
   "exports": {
     ".": "./src/projects.js",
     "./project-context": "./src/project-context.js",
-    "./cli": "./src/projects-cli.js"
+    "./cli": "./src/projects-cli.js",
+    "./records": "./src/records.js",
+    "./priority": "./src/priority.js",
+    "./registry": "./src/registry.js",
+    "./projects-context": "./src/projects-context.js",
+    "./projects-context-capability": "./src/projects-context-capability.js",
+    "./provider-contracts": "./src/provider-contracts.js",
+    "./execution-link-store": "./src/execution-link-store.js",
+    "./migrate": "./src/migrate.js",
+    "./journal-projection": "./src/journal-projection.js",
+    "./activity-store": "./src/activity-store.js",
+    "./projects-context-handoff": "./src/projects-context-handoff.js",
+    "./projects-context-profiles": "./src/projects-context-profiles.js",
+    "./session-focus": "./src/session-focus.js",
+    "./projects-context-conformance": "./src/projects-context-conformance.js",
+    "./project-inference-contracts": "./src/project-inference-contracts.js",
+    "./project-inference-ledger": "./src/project-inference-ledger.js",
+    "./project-inference-evaluation": "./src/project-inference-evaluation.js",
+    "./project-inference-reconciler": "./src/project-inference-reconciler.js",
+    "./intent-gap-attention": "./src/intent-gap-attention.js"
   }
 }
