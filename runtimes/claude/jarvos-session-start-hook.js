@@ -20,57 +20,19 @@ const REORIENT_MAX_CHARS = 4000;
 const MAX_ALLOWED_CHARS = 10000;
 const REORIENT_SOURCES = new Set(['compact', 'resume']);
 const LOG_PATH = path.join(os.homedir(), '.claude', 'jarvos-hydration.log');
-const BRIDGE_COMMAND = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+const { trustedExecutable } = require('../../modules/jarvos-runtime-kit/src/trusted-native-command.js');
 const CLAUDE_SESSION_MAP_ROOT_ENV = 'JARVOS_STEWARDSHIP_CLAUDE_SESSION_MAP_ROOT';
 
 function shellQuote(value) {
-  return `'${value.replace(/'/g, "'\\\"'\\\"'")}'`;
-}
-
-function isTrustedPathEntry(entry, uid, type) {
-  let stat;
-  try {
-    stat = fs.lstatSync(entry);
-  } catch {
-    return null;
-  }
-  return (!stat.isSymbolicLink()
-    && stat[type]()
-    && (stat.uid === uid || stat.uid === 0)
-    && (stat.mode & 0o022) === 0) ? stat : null;
-}
-
-function bridgeDirectory(command, searchPath) {
-  const uid = typeof process.getuid === 'function' ? process.getuid() : null;
-  if (typeof searchPath !== 'string' || uid === null) return null;
-  for (const directory of searchPath.split(path.delimiter)) {
-    if (!path.isAbsolute(directory)) continue;
-    const candidate = path.join(directory, command);
-    const candidateStat = isTrustedPathEntry(candidate, uid, 'isFile');
-    if (!candidateStat || (candidateStat.mode & 0o111) === 0) continue;
-
-    let ancestor = path.resolve(directory);
-    let trusted = true;
-    while (true) {
-      if (!isTrustedPathEntry(ancestor, uid, 'isDirectory')) {
-        trusted = false;
-        break;
-      }
-      const parent = path.dirname(ancestor);
-      if (parent === ancestor) break;
-      ancestor = parent;
-    }
-    if (trusted) return directory;
-  }
-  return null;
+  return `'${value.replace(/'/g, `'"'"'`)}'`;
 }
 
 function persistBridgeEnvironment(options = {}) {
   const env = options.env || process.env;
   const envFile = env.CLAUDE_ENV_FILE;
-  const command = env[BRIDGE_COMMAND_ENV];
+  const command = trustedExecutable(env[BRIDGE_COMMAND_ENV]);
   const mapRoot = env[CLAUDE_SESSION_MAP_ROOT_ENV];
-  if (!path.isAbsolute(envFile || '') || !BRIDGE_COMMAND.test(command || '') || !path.isAbsolute(mapRoot || '')) return false;
+  if (!path.isAbsolute(envFile || '') || !command || !path.isAbsolute(mapRoot || '')) return false;
 
   let stat;
   try {
@@ -80,13 +42,10 @@ function persistBridgeEnvironment(options = {}) {
   }
   const uid = typeof process.getuid === 'function' ? process.getuid() : null;
   if (!stat.isFile() || uid === null || stat.uid !== uid || (stat.mode & 0o077) !== 0) return false;
-  const directory = bridgeDirectory(command, env.PATH);
-  if (!directory) return false;
 
   const lines = [
     `export ${BRIDGE_COMMAND_ENV}=${shellQuote(command)}`,
     `export ${CLAUDE_SESSION_MAP_ROOT_ENV}=${shellQuote(mapRoot)}`,
-    `export PATH=${shellQuote(directory)}:\"$PATH\"`,
   ];
   try {
     const current = fs.readFileSync(envFile, 'utf8');

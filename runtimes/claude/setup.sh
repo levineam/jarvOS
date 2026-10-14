@@ -252,12 +252,15 @@ function privateDirectory(value, name) {
   return fs.realpathSync(value);
 }
 
+const { trustedExecutable } = require(path.resolve(path.dirname(turnHookScript), '../../modules/jarvos-runtime-kit/src/trusted-native-command.js'));
+
 function stewardshipBridgeEnvironment() {
   if (!bridgeCommand && !claudeSessionMapRoot && !bridgePath) return null;
   if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(bridgeCommand || '')) throw new Error('JARVOS_STEWARDSHIP_BRIDGE_COMMAND must be a bounded executable name');
   const mapRoot = privateDirectory(claudeSessionMapRoot, 'JARVOS_STEWARDSHIP_CLAUDE_SESSION_MAP_ROOT');
   const bin = privateDirectory(bridgePath, 'JARVOS_STEWARDSHIP_BRIDGE_PATH');
-  const executable = path.join(bin, bridgeCommand);
+  const executable = trustedExecutable(path.join(bin, bridgeCommand));
+  if (!executable) throw new Error('JARVOS_STEWARDSHIP_BRIDGE_PATH must contain a trusted executable path');
   const stat = fs.lstatSync(executable);
   if (stat.isSymbolicLink() || !stat.isFile() || (stat.mode & 0o077) !== 0 || (stat.mode & 0o111) === 0) throw new Error('JARVOS_STEWARDSHIP_BRIDGE_PATH must contain an owner-only bridge executable');
   return { command: fs.realpathSync(executable), mapRoot, bin };
@@ -363,7 +366,7 @@ function upsertClaudeCodeHook(settings, bridge) {
       ? `${shellQuote(dispatcher)} --harness claude --action ${action}`
       : `node ${shellQuote(script)}`;
     const invocation = bridge
-      ? `env JARVOS_STEWARDSHIP_BRIDGE_COMMAND=${shellQuote(bridge.command)} JARVOS_STEWARDSHIP_CLAUDE_SESSION_MAP_ROOT=${shellQuote(bridge.mapRoot)} PATH=${shellQuote(bridge.bin)}:\"$PATH\" ${target}`
+      ? `env JARVOS_STEWARDSHIP_BRIDGE_COMMAND=${shellQuote(bridge.command)} JARVOS_STEWARDSHIP_CLAUDE_SESSION_MAP_ROOT=${shellQuote(bridge.mapRoot)} ${target}`
       : target;
     const command = failOpen ? failOpenCommand(invocation) : invocation;
     const entry = {

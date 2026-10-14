@@ -3,6 +3,7 @@
 
 const fs = require('node:fs');
 const { spawnSync } = require('node:child_process');
+const { trustedExecutable } = require('../../modules/jarvos-runtime-kit/src/trusted-native-command.js');
 const {
   PRESENCE_CAPABILITIES,
   STEWARDSHIP_ADAPTER_VERSION,
@@ -16,7 +17,7 @@ const {
 
 const HARNESS = 'codex';
 const BRIDGE_COMMAND_ENV = 'JARVOS_STEWARDSHIP_BRIDGE_COMMAND';
-const BRIDGE_COMMAND = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+
 const MAX_HOOK_INPUT_CHARS = 4096;
 const DEFAULT_BRIDGE_TIMEOUT_MS = 5000;
 // projectsContextStart/Refresh are hard, single-shot deadlines: a hung or
@@ -33,7 +34,7 @@ const SAFE_PROJECTION_KEYS = new Set(['status', 'label', 'reference', 'digest', 
 const FORBIDDEN_PROJECTION_TEXT = /(?:[\r\n\0-\x1f\x7f]|https?:\/\/|\b(?:api[ _-]?key|secret|password|token|credential|bearer|transcript|prompt|instruction)\b)/i;
 
 function gitOutput(cwd, args) {
-  const result = spawnSync('git', ['-C', cwd, ...args], { encoding: 'utf8' });
+  const result = spawnSync('/usr/bin/git', ['-C', cwd, ...args], { encoding: 'utf8', env: { PATH: '/usr/bin:/bin' } });
   return result.status === 0 ? result.stdout.trim() : '';
 }
 
@@ -63,7 +64,7 @@ function isolationState(options = {}) {
 function bridgeCommand(options = {}) {
   const env = { ...process.env, ...(options.env || {}) };
   const command = options.bridgeCommand === undefined ? env[BRIDGE_COMMAND_ENV] : options.bridgeCommand;
-  return typeof command === 'string' && BRIDGE_COMMAND.test(command) ? command : null;
+  return trustedExecutable(command);
 }
 
 function hookSessionId(input, hookEventName) {
@@ -89,8 +90,8 @@ function bridgeEnvironment(sessionId, env = process.env) {
 }
 
 function invokeBridge(capability, options = {}) {
-  const isolation = isolationState(options);
   const command = bridgeCommand(options);
+  const isolation = command ? isolationState(options) : { preferredIsolationMode: 'native', isolationMode: 'managed-launcher', isolatedWorktree: false, requiresVerifiedWorktreeEvidence: true };
   const base = { capability, available: false, ...isolation };
   if (!command) return { ...base, pendingInSessionInput: false, reason: 'bridge-not-configured' };
   const env = options.env || process.env;
@@ -106,7 +107,7 @@ function invokeBridge(capability, options = {}) {
     // A SessionStart hook may receive its thread identity on stdin rather than
     // in its inherited environment. Callers pass a short-lived environment
     // copy so that identity is visible only to this bridge child process.
-    env,
+    env: { ...env, PATH: '/usr/bin:/bin' },
   });
   if (capability === 'projectsContextStart' || capability === 'projectsContextRefresh') {
     // Invalid, timed out, nonzero, or unavailable all fail open the same way:
