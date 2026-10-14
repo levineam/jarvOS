@@ -99,8 +99,10 @@ const adapters = buildLiveCodingAdapters({
 });
 ```
 
-The adapter requires an explicit absolute path to a regular, non-symlinked,
-non-world-writable executable, then verifies its capabilities, schema, and
+The adapter requires an explicit canonical absolute path to an executable regular
+file with trusted ownership and no group/world-writable file or non-sticky
+ancestor directories. It rejects symlinks throughout the path and rechecks the
+path before every invocation, then verifies its capabilities, schema, and
 `br where` binding before mutation. Each create/claim/transition/dependency/checkpoint
 operation is prepared with an operation identity and reconciled before an
 uncertain retry. It returns only executable work evidence; canonical project

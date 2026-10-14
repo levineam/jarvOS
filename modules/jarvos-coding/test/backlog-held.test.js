@@ -142,8 +142,10 @@ test('host-enabled backlog holds, admits, and completes one fixture without a se
 test('Beads accepts only deferred or open create status', async (t) => {
   const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-held-backlog-status-'));
   t.after(() => fs.rmSync(workspaceRoot, { recursive: true, force: true }));
+  const executable = path.join(fs.realpathSync(workspaceRoot), 'br');
+  fs.writeFileSync(executable, '// mocked native executable', { mode: 0o700 });
   let calls = 0;
-  const tracker = createLiveBeadsTracker({ workspaceRoot, run() { calls += 1; return { status: 0, stdout: '{}' }; } });
+  const tracker = createLiveBeadsTracker({ executable, workspaceRoot, run() { calls += 1; return { status: 0, stdout: '{}' }; } });
   await assert.rejects(() => tracker.createWorkItem({ title: 'terminal bypass', operationId: 'held-terminal', status: 'closed' }), /create status is unsupported/);
   assert.equal(calls, 0);
 });
