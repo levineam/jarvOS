@@ -12,11 +12,13 @@ const {
 const HARNESS = 'claude-code';
 const BRIDGE_COMMAND_ENV = 'JARVOS_STEWARDSHIP_BRIDGE_COMMAND';
 const CLAUDE_SESSION_ID_ENV = 'JARVOS_STEWARDSHIP_CLAUDE_SESSION_ID';
-const BRIDGE_COMMAND = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 const CLAUDE_SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const TRUSTED_GIT = process.platform === 'win32'
+  ? path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'git.exe')
+  : '/usr/bin/git';
 
 function gitOutput(cwd, args) {
-  const result = spawnSync('git', ['-C', cwd, ...args], { encoding: 'utf8' });
+  const result = spawnSync(TRUSTED_GIT, ['-C', cwd, ...args], { encoding: 'utf8' });
   return result.status === 0 ? result.stdout.trim() : '';
 }
 
@@ -43,9 +45,18 @@ function isolationState(options = {}) {
   };
 }
 
+function unverifiedIsolationState() {
+  return {
+    preferredIsolationMode: 'native',
+    isolationMode: 'managed-launcher',
+    isolatedWorktree: false,
+    requiresVerifiedWorktreeEvidence: true,
+  };
+}
+
 function bridgeCommand(options = {}) {
   const command = options.bridgeCommand === undefined ? process.env[BRIDGE_COMMAND_ENV] : options.bridgeCommand;
-  return typeof command === 'string' && BRIDGE_COMMAND.test(command) ? command : null;
+  return typeof command === 'string' && path.isAbsolute(command) ? command : null;
 }
 
 function suppliedInputValue(input, key) {
@@ -90,10 +101,9 @@ function bridgeEnvironment(options = {}) {
 }
 
 function invokeBridge(capability, options = {}) {
-  const isolation = isolationState(options);
   const command = bridgeCommand(options);
-  const base = { capability, available: false, ...isolation };
-  if (!command) return { ...base, pendingInSessionInput: false, reason: 'bridge-not-configured' };
+  if (!command) return { capability, available: false, ...unverifiedIsolationState(), pendingInSessionInput: false, reason: 'bridge-not-configured' };
+  const base = { capability, available: false, ...isolationState(options) };
   const env = bridgeEnvironment(options);
   const sessionId = options.sessionId === undefined ? env[CLAUDE_SESSION_ID_ENV] : options.sessionId;
   if (typeof sessionId !== 'string' || !CLAUDE_SESSION_ID.test(sessionId)) {

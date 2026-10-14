@@ -130,7 +130,7 @@ function stewardshipBridgeEnvironment() {
   const executable = path.join(bin, bridgeCommand);
   const stat = fs.lstatSync(executable);
   if (stat.isSymbolicLink() || !stat.isFile() || (stat.mode & 0o077) !== 0 || (stat.mode & 0o111) === 0) throw new Error('JARVOS_STEWARDSHIP_BRIDGE_PATH must contain an owner-only bridge executable');
-  return { command: bridgeCommand, mapRoot, bin };
+  return { command: fs.realpathSync(executable), mapRoot, bin };
 }
 
 function upsertClaudeCodeHook(settings, bridge) {
