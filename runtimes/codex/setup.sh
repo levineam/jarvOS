@@ -14,10 +14,20 @@ CONTROL_PLANE_SERVICE_MODULE="${JARVOS_CONTROL_PLANE_SERVICE_MODULE:-}"
 # Setup registers only a non-secret file path. Never pass the credential value
 # through `codex mcp add --env` — that puts it on argv and persists it in config.
 CONTROL_PLANE_CREDENTIAL_FILE="${JARVOS_CONTROL_PLANE_CREDENTIAL_FILE:-}"
+SHARED_SKILLS_OWNER_CREDENTIAL_FILE="${JARVOS_SHARED_SKILLS_OWNER_CREDENTIAL_FILE:-}"
 STEWARDSHIP_BRIDGE_COMMAND="${JARVOS_STEWARDSHIP_BRIDGE_COMMAND:-}"
 STEWARDSHIP_CODEX_SESSION_MAP_ROOT="${JARVOS_STEWARDSHIP_CODEX_SESSION_MAP_ROOT:-}"
 STEWARDSHIP_STABLE_ROOT="${JARVOS_STEWARDSHIP_STABLE_ROOT:-}"
 STEWARDSHIP_DISPATCHER=""
+CODEX_PROVIDER_MODE="${JARVOS_CODEX_PROVIDER_MODE:-}"
+# Optional owner-controlled stable selector-aware entrypoint. When set, this
+# is what gets persisted in Codex config instead of this immutable install's
+# own MCP script -- so a later selected-runtime transition does not require
+# rewriting persisted client config. Unset preserves the current portable
+# behavior: register this run's own $MCP_SERVER directly.
+# Managed mode (JARVOS_MANAGED_REPOSITORIES) defaults it to the stable
+# bundle's jarvos-mcp shim and fails closed without one.
+STABLE_MCP_ENTRYPOINT="${JARVOS_MCP_STABLE_ENTRYPOINT:-}"
 
 # The private installer materializes this owner-controlled bundle once. Native
 # configuration must refer to it, never to a selected immutable runtime stage.
@@ -69,6 +79,75 @@ fi
 if [ ! -f "$TRUST_SCRIPT" ]; then
   echo "jarvOS Codex hook trust script not found: $TRUST_SCRIPT" >&2
   exit 1
+fi
+
+# Managed mode rotates immutable runtime stages under a stable selector, so a
+# persisted MCP command must be the stable bundle's selector-aware jarvos-mcp
+# shim, never this stage's own script: a stage-pinned registration keeps
+# serving the old stage (without the selected runtime's Projects bindings)
+# after the next promotion. Default to the shim the private installer
+# materializes beside the stable dispatcher, and refuse to persist a
+# stage-pinned path when it is missing. An explicit
+# JARVOS_MCP_STABLE_ENTRYPOINT still wins; either way it is validated below.
+if [ -n "${JARVOS_MANAGED_REPOSITORIES:-}" ] && [ "${JARVOS_MANAGED_HARNESS_ROLLBACK:-0}" != "1" ] \
+  && [ -z "$STABLE_MCP_ENTRYPOINT" ] && [ "${JARVOS_STEWARDSHIP_ONLY:-0}" != "1" ]; then
+  if [ -e "$STEWARDSHIP_STABLE_ROOT/jarvos-mcp" ] || [ -L "$STEWARDSHIP_STABLE_ROOT/jarvos-mcp" ]; then
+    STABLE_MCP_ENTRYPOINT="$STEWARDSHIP_STABLE_ROOT/jarvos-mcp"
+  else
+    echo "Managed jarvOS setup requires the stable jarvos-mcp shim in the stewardship bundle (JARVOS_STEWARDSHIP_STABLE_ROOT) or an explicit JARVOS_MCP_STABLE_ENTRYPOINT; refusing to register Codex against an immutable runtime stage" >&2
+    exit 1
+  fi
+fi
+
+# The stable entrypoint is what setup registers with Codex, so it must be
+# validated to the same bar as the stable stewardship dispatcher: absolute,
+# not a symlink, an owner-only executable file. An owner-only leaf is not
+# enough on its own -- an unprivileged co-tenant of a writable *ancestor*
+# directory can delete and replace that "trusted" file at will, so every
+# directory from the entrypoint's parent up to the filesystem root ("/",
+# a boundary public setup can name without inventing a private path) must
+# also be owned by us (or root) and not group/world-writable, mirroring the
+# stewardship dispatcher and control-plane credential-file checks. Reject
+# without echoing the path -- an unsafe binding is refused before it is ever
+# persisted.
+MCP_COMMAND=(node "$MCP_SERVER")
+if [ -n "$STABLE_MCP_ENTRYPOINT" ]; then
+  case "$STABLE_MCP_ENTRYPOINT" in
+    /*) ;;
+    *)
+      echo "JARVOS_MCP_STABLE_ENTRYPOINT must be an absolute path" >&2
+      exit 1
+      ;;
+  esac
+  if ! node -e '
+const fs = require("fs");
+const path = require("path");
+const value = process.argv[1];
+let stat;
+try { stat = fs.lstatSync(value); } catch { process.exit(1); }
+const uid = typeof process.getuid === "function" ? process.getuid() : null;
+if (stat.isSymbolicLink() || !stat.isFile() || (stat.mode & 0o077) !== 0 || (stat.mode & 0o111) === 0 || (uid !== null && stat.uid !== uid)) process.exit(1);
+function trustedAncestor(dirStat) {
+  if (!dirStat.isDirectory()) return false;
+  if (uid !== null && dirStat.uid !== 0 && dirStat.uid !== uid) return false;
+  const writable = (dirStat.mode & 0o022) !== 0;
+  const sticky = (dirStat.mode & 0o1000) !== 0;
+  return !writable || sticky;
+}
+let dir = path.dirname(value);
+for (;;) {
+  let dirStat;
+  try { dirStat = fs.statSync(dir); } catch { process.exit(1); }
+  if (!trustedAncestor(dirStat)) process.exit(1);
+  const parent = path.dirname(dir);
+  if (parent === dir) break;
+  dir = parent;
+}
+' "$STABLE_MCP_ENTRYPOINT"; then
+    echo "JARVOS_MCP_STABLE_ENTRYPOINT must be an absolute, owner-only executable file with trusted, non-writable ancestry up to the filesystem root" >&2
+    exit 1
+  fi
+  MCP_COMMAND=("$STABLE_MCP_ENTRYPOINT")
 fi
 
 # Control-plane host bindings are optional on public/minimal installs.
@@ -144,32 +223,97 @@ readTrustedCredentialFile(process.argv[2]);
   )
 fi
 
-if [ "${JARVOS_STEWARDSHIP_ONLY:-0}" != "1" ]; then
-  if codex mcp get jarvos >/dev/null 2>&1; then
-    codex mcp remove jarvos >/dev/null
+# Shared-skill owner decisions are narrower than the control plane. Bind their
+# host credential independently so approving a skill change does not also
+# enable unrelated control-plane operations.
+if [ -n "$SHARED_SKILLS_OWNER_CREDENTIAL_FILE" ]; then
+  case "$SHARED_SKILLS_OWNER_CREDENTIAL_FILE" in
+    /*) ;;
+    *)
+      echo "JARVOS_SHARED_SKILLS_OWNER_CREDENTIAL_FILE must be an absolute path" >&2
+      exit 1
+      ;;
+  esac
+  if [ ! -f "$SHARED_SKILLS_OWNER_CREDENTIAL_FILE" ] || ! node -e '
+const { readTrustedCredentialFile } = require(process.argv[1]);
+readTrustedCredentialFile(process.argv[2]);
+' "$ROOT/modules/jarvos-control-plane/scripts/jarvos-manager.js" "$SHARED_SKILLS_OWNER_CREDENTIAL_FILE"; then
+    echo "JARVOS_SHARED_SKILLS_OWNER_CREDENTIAL_FILE must be a non-empty, owner-only credential file in a trusted non-writable location (mode 0600/0400)" >&2
+    exit 1
   fi
-
-  if [ ${#MCP_ENV_ARGS[@]} -gt 0 ]; then
-    codex mcp add "${MCP_ENV_ARGS[@]}" jarvos -- node "$MCP_SERVER"
-    echo "Registered jarvOS MCP server for Codex with control-plane host bindings: $MCP_SERVER"
-  else
-    codex mcp add jarvos -- node "$MCP_SERVER"
-    echo "Registered jarvOS MCP server for Codex: $MCP_SERVER"
-  fi
+  MCP_ENV_ARGS+=(--env "JARVOS_SHARED_SKILLS_OWNER_CREDENTIAL_FILE=$SHARED_SKILLS_OWNER_CREDENTIAL_FILE")
 fi
+
+# Optional Todo work-action host bindings. Unset keeps public/minimal behavior.
+# When set, persist the non-secret absolute paths on the MCP child. Trust
+# checks stay in the MCP server (fail closed on an untrusted path).
+append_optional_mcp_env() {
+  local name="$1"
+  local value="${2:-}"
+  if [ -z "$value" ]; then
+    return 0
+  fi
+  case "$value" in
+    /*) ;;
+    *)
+      echo "${name} must be an absolute path when set" >&2
+      exit 1
+      ;;
+  esac
+  MCP_ENV_ARGS+=(--env "${name}=${value}")
+}
+
+append_optional_mcp_env JARVOS_WORK_ACTION_SERVICE_MODULE "${JARVOS_WORK_ACTION_SERVICE_MODULE:-}"
+append_optional_mcp_env JARVOS_PROJECTS_CONTEXT_CONFIG "${JARVOS_PROJECTS_CONTEXT_CONFIG:-}"
+append_optional_mcp_env JARVOS_COMMON_WORK_SERVICE_MODULE "${JARVOS_COMMON_WORK_SERVICE_MODULE:-}"
+MCP_HAS_HOST_BINDING=${#MCP_ENV_ARGS[@]}
+MCP_ENV_ARGS+=(--env "JARVOS_COMMON_WORK_HARNESS=codex")
 
 mkdir -p "$(dirname "$CODEX_CONFIG")"
 if [ ! -f "$CODEX_CONFIG" ]; then
   touch "$CODEX_CONFIG"
 fi
 
-node - "$CODEX_CONFIG" "$LEGACY_HOOKS_JSON" "$HOOK_SCRIPT" "$TURN_HOOK_SCRIPT" "$STEWARDSHIP_DISPATCHER" "${JARVOS_MANAGED_HARNESS_ROLLBACK:-0}" "$STEWARDSHIP_BRIDGE_COMMAND" "$STEWARDSHIP_CODEX_SESSION_MAP_ROOT" "${JARVOS_STAGED_PUBLIC_RUNTIME_ROOT:-}" <<'NODE'
+if [ "${JARVOS_STEWARDSHIP_ONLY:-0}" != "1" ] \
+  && { [ -n "$SHARED_SKILLS_OWNER_CREDENTIAL_FILE" ] || [ -n "$CONTROL_PLANE_CREDENTIAL_FILE" ]; } \
+  && [ "$CODEX_CONFIG" != "$CODEX_HOME/config.toml" ]; then
+  echo 'Owner-bound jarvOS MCP registration requires CODEX_CONFIG to equal $CODEX_HOME/config.toml' >&2
+  exit 1
+fi
+
+update_codex_config() {
+  local mode="$1"
+  node - "$CODEX_CONFIG" "$LEGACY_HOOKS_JSON" "$HOOK_SCRIPT" "$TURN_HOOK_SCRIPT" "$STEWARDSHIP_DISPATCHER" "${JARVOS_MANAGED_HARNESS_ROLLBACK:-0}" "$STEWARDSHIP_BRIDGE_COMMAND" "$STEWARDSHIP_CODEX_SESSION_MAP_ROOT" "${JARVOS_STAGED_PUBLIC_RUNTIME_ROOT:-}" "${JARVOS_STEWARDSHIP_ONLY:-0}" "$mode" <<'NODE'
 const fs = require('fs');
 const path = require('path');
 
-const [configPath, legacyHooksPath, hookScript, turnHookScript, dispatcher, rollback, bridgeCommand, codexSessionMapRoot, stagedRoot] = process.argv.slice(2);
+const [configPath, legacyHooksPath, hookScript, turnHookScript, dispatcher, rollback, bridgeCommand, codexSessionMapRoot, stagedRoot, stewardshipOnly, mode] = process.argv.slice(2);
 const original = fs.readFileSync(configPath, 'utf8');
 let next = original;
+
+function requireSharedSkillsApproval(content) {
+  const header = '[mcp_servers.jarvos.tools.jarvos_shared_skills]';
+  const lines = content.split('\n');
+  const start = lines.findIndex((line) => line.trim() === header);
+  if (start < 0) {
+    const hasUnknownForm = lines.some((line) => line.replace(/#.*/, '').includes('jarvos_shared_skills'));
+    if (hasUnknownForm) fail('unrecognized jarvos_shared_skills tool config');
+    return `${content.replace(/\n*$/, '')}\n\n${header}\napproval_mode = "prompt"\n`;
+  }
+  let end = lines.length;
+  for (let index = start + 1; index < lines.length; index += 1) {
+    if (/^\s*\[/.test(lines[index])) { end = index; break; }
+  }
+  const approval = lines.slice(start + 1, end).findIndex((line) => /^\s*(?:approval_mode|"approval_mode"|'approval_mode')\s*=/.test(line));
+  if (approval >= 0) {
+    const index = start + 1 + approval;
+    if (!/=\s*(?:"[^"]*"|'[^']*')\s*(?:#.*)?$/.test(lines[index])) fail('unrecognized jarvos_shared_skills tool config');
+    lines[index] = 'approval_mode = "prompt"';
+  } else lines.splice(start + 1, 0, 'approval_mode = "prompt"');
+  return lines.join('\n');
+}
+
+if (stewardshipOnly !== '1') next = requireSharedSkillsApproval(next);
 
 function fail(message) {
   throw new Error(`refusing Codex hook migration: ${message}`);
@@ -572,7 +716,9 @@ if (rollback === '1') {
 next = setFeature(next, 'hooks', 'true');
 next = removeFeature(next, 'codex_hooks');
 
-if (next !== original || migrated) {
+if (mode === 'preflight') {
+  process.exit(0);
+} else if (next !== original || migrated) {
   const backupStamp = stamp();
   const backupPath = next !== original ? backup(configPath, backupStamp) : null;
   const legacyBackupPath = migrated ? backup(legacyHooksPath, backupStamp) : null;
@@ -585,6 +731,35 @@ if (next !== original || migrated) {
   console.log(`Codex config already has jarvOS hooks enabled: ${configPath}`);
 }
 NODE
+}
+
+# Validate the complete config transform before registering any owner-bound MCP.
+update_codex_config preflight
+
+if [ "${JARVOS_STEWARDSHIP_ONLY:-0}" != "1" ]; then
+  if codex mcp get jarvos >/dev/null 2>&1; then
+    codex mcp remove jarvos >/dev/null
+  fi
+
+  if [ ${#MCP_ENV_ARGS[@]} -gt 0 ]; then
+    codex mcp add "${MCP_ENV_ARGS[@]}" jarvos -- "${MCP_COMMAND[@]}"
+    if [ "$MCP_HAS_HOST_BINDING" -gt 0 ]; then
+      echo "Registered jarvOS MCP server for Codex with host bindings: ${MCP_COMMAND[*]}"
+    else
+      echo "Registered jarvOS MCP server for Codex: ${MCP_COMMAND[*]}"
+    fi
+  else
+    codex mcp add jarvos -- "${MCP_COMMAND[@]}"
+    echo "Registered jarvOS MCP server for Codex: ${MCP_COMMAND[*]}"
+  fi
+fi
+
+if ! update_codex_config apply; then
+  if [ "${JARVOS_STEWARDSHIP_ONLY:-0}" != "1" ]; then
+    codex mcp remove jarvos >/dev/null 2>&1 || true
+  fi
+  exit 1
+fi
 
 if [ "$CODEX_CONFIG" = "$HOME/.codex/config.toml" ]; then
   if node "$TRUST_SCRIPT" "$ROOT" "$HOOK_SCRIPT" && node "$TRUST_SCRIPT" "$ROOT" "$TURN_HOOK_SCRIPT"; then
@@ -594,4 +769,14 @@ if [ "$CODEX_CONFIG" = "$HOME/.codex/config.toml" ]; then
   fi
 else
   echo "Skipping automatic hook trust for custom CODEX_CONFIG: $CODEX_CONFIG"
+fi
+
+# Compound Engineering is a managed external provider, not an ambient setup
+# side effect. New managed coding profiles pass `new-managed`; existing
+# profiles must pass `opt-in`. With no explicit mode setup preserves the
+# profile, while rollback removes only a recorded jarvOS-owned activation.
+# Run this after the hook transaction so a provider reconciliation failure
+# cannot prevent jarvOS from rolling back its own lifecycle configuration.
+if [ -n "$CODEX_PROVIDER_MODE" ] || [ "${JARVOS_PROFILE:-}" = "codex" ] || [ "${JARVOS_MANAGED_HARNESS_ROLLBACK:-0}" = "1" ]; then
+  node "$ROOT/runtimes/codex/compound-engineering-activation.js"
 fi

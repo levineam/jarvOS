@@ -1,6 +1,7 @@
 'use strict';
 
 const crypto = require('crypto');
+const sessionWait = require('./session-wait');
 
 const CONTRACT_VERSION = '1.0.0';
 const CONTRACT_MAJOR = 1;
@@ -656,4 +657,5 @@ module.exports = {
   validateManagedSoftwareEntry,
   validateManagerManifest,
   validateRecord,
+  ...sessionWait,
 };

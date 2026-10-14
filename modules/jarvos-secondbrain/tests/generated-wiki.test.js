@@ -144,3 +144,10 @@ test('compileSecondbrainWiki removes stale generated pages before rebuilding', (
   assert.equal(fs.existsSync(path.join(outputDir, 'sources', 'stale-source.md')), false);
   assert.equal(fs.existsSync(path.join(outputDir, 'index.md')), true);
 });
+
+test('generated wiki refuses raw output inside a configured Obsidian vault', () => {
+  const { root, artifactsDir } = fixtureRoot();
+  const outputDir = path.join(root, 'Generated Wiki');
+  assert.throws(() => compileSecondbrainWiki({ artifactsDir, outputDir, vaultRoot: root }), /Obsidian-owned/);
+  assert.equal(fs.existsSync(path.join(outputDir, 'index.md')), false);
+});

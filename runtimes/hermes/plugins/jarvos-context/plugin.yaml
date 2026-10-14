@@ -1,0 +1,9 @@
+name: jarvos-context
+version: 1.0.0
+kind: standalone
+description: Bounded first-turn jarvOS context hydration through the configured jarvos MCP tool.
+author: jarvOS
+provides_hooks:
+  - on_session_start
+  - on_session_reset
+  - pre_llm_call

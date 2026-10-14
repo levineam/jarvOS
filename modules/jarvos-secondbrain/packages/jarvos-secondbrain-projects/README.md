@@ -19,8 +19,27 @@ and the whole directory can be handed to an assistant as context — which is th
 point. An assistant given your journal, your ideas, and your projects knows what
 you are actually trying to do.
 
-The daily journal lists the ongoing ones, so the vault stays the one surface
-where you and your assistants get aligned.
+The daily journal's Projects section is a derived navigation view. The
+canonical `journal-projection` module lists only established Projects touched
+by accepted activity on that journal date. It receives canonical note mappings
+from the host and renders their mapped targets; it never turns a Project title
+into a link by itself. The vault remains the one surface where you and your
+assistants get aligned without making Journal content an identity authority.
+
+The canonical Projects context contract is the assistant-facing read model:
+`jarvOS` is a durable Project and `v1.0.0 release` is a child Outcome. Legacy
+pages can be inspected with the dry-run migration API without changing source
+files. Applying a migration requires an explicit mapping, field-disposition
+table, source digest, and approval; the migration ledger makes reruns,
+conflicts, and rollback visible.
+
+The touched-only journal projection is the only Projects-section renderer. It
+rolls child activity up to the root Project pinned at activity admission time,
+so a later archive or hierarchy change does not erase a historical touch. A
+fresh empty activity result removes a stale generated Projects section; partial
+or unavailable activity preserves it. Missing canonical note mappings are
+degraded rather than replaced with title-only links. Reading a Projects
+context packet is not activity.
 
 ## Usage
 
@@ -36,12 +55,16 @@ Definition of Done, so it can gate a scheduled routine. A project with no
 Definition of Done cannot be judged on track or off track — catching that is
 most of the value here.
 
+`projects.js` retains `journalProjectLines()` only as a compatibility wrapper.
+It delegates to `journal-projection` and cannot render an all-project inventory
+or a title-only fallback.
+
 ## Status
 
 | status | in the journal? | meaning |
 | --- | --- | --- |
-| `active` | yes | being worked on |
-| `paused` | yes | deliberately set down, still yours |
+| `active` | when touched | being worked on |
+| `paused` | when touched | deliberately set down, still yours |
 | `done` | no | finished |
 | `abandoned` | no | dropped on purpose |
 
@@ -57,6 +80,18 @@ silently dropped.
 
 `index.md` is generated from the project pages. It is a view, not a source of
 truth; edits to it are overwritten.
+
+## Programmatic context APIs
+
+Additional provider-neutral APIs are exported as `./migrate` and
+`./journal-projection`. Their mutation callbacks are injected and receive an
+expected-content revision plus a projection manifest; they do not write the
+vault directly.
+
+Version 2 requires Obsidian-owned mutation callbacks for `createProject()` and
+`writeIndex()`. This is an intentional safety boundary: library callers must
+compose callbacks from the canonical jarvOS vault mutation service; the bundled
+CLI no longer falls back to direct Markdown filesystem writes.
 
 ## Not in scope
 

@@ -18,6 +18,11 @@ replace, or rewrite it. An authorized note/backlink caller may use the separate
 active-day mutation seam after existence has been ensured; that seam is not a
 repair authority.
 
+When the Obsidian app is running, jarvOS owns journal policy but Obsidian's
+`app.vault` API owns live file mutation. A write completes only after
+app-owned readback confirms the intended section or exact content, so Obsidian
+Sync observes the same content that reached disk.
+
 Canonical journal health and the derived `Journaling.md` index are reported
 separately. When enabled, the scheduled pass may add missing embeds for the
 current date and previously created dates to an existing pure-generated index;
@@ -56,6 +61,13 @@ Daily Notes, Periodic Notes, Journals, template startup scripts, and similar
 writers must target another folder. The lifecycle reports a configured Daily
 Notes writer as a conflict before creating a missing file.
 
+The package's ownership metadata describes portable scheduled creation and
+derived-index maintenance. A host must separately inventory its authorized
+capture, active-day backlink and protected machine-section mutation callers;
+those callers do not gain recurring repair authority. Human/manual Sync edits
+remain permitted. Metadata review does not prove cross-device exclusivity or
+add a private host's inventory-age validator to this portable lifecycle.
+
 ## Human commands
 
 Read-only health:
@@ -79,6 +91,11 @@ authored journals.
 The older maintenance command can still perform human-approved repair and
 deferred-backlink reconciliation for compatibility. It is intentionally not
 the scheduled or agent creation path.
+
+If an authorized offline write is necessary, maintenance reports
+`saved_locally_sync_pending` and retains a reconciliation operation outside the
+vault. It must not report the journal synchronized until Obsidian later
+acknowledges that operation.
 
 ## Agent access
 

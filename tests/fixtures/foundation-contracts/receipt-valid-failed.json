@@ -1,0 +1,12 @@
+{
+  "schemaVersion": "jarvos.promotion-receipt.v1",
+  "receiptId": "jarvos:receipt:example:r-0002",
+  "operation": "promotion",
+  "outcome": "failed",
+  "candidateIds": ["jarvos:candidate:example:c-0002"],
+  "policyId": "jarvos:policy:example:promotion-v1",
+  "authorization": { "mode": "policy-automatic" },
+  "destination": { "surface": "notes", "artifactId": "jarvos:artifact:example:a-0002", "revisionBefore": "rev-0001", "revisionAfter": null, "reversalMode": "none" },
+  "recordedAt": "2026-08-31T12:05:00Z",
+  "evidence": [{ "type": "policy-decision", "ref": "policy-decision:0002", "digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" }]
+}

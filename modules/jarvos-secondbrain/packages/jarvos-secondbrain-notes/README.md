@@ -84,6 +84,11 @@ npm run maintain:manual-notes:apply
 
 Apply mode only fixes frontmatter drift that the normal linter can infer, then calls the shared optimizer for each candidate. The optimizer writes local artifacts, GBrain and memory-wiki queues for safe notes, sensitivity skip decisions for private notes, lossless continuity, and `qmd-refresh-pending.json`. Run `qmd update` and `qmd embed` after apply mode before treating QMD search as fresh.
 
+The apply command must be invoked through the composed repository entrypoint.
+The package computes the proposed note content, while the top-level vault
+mutation service performs an exact-hash Obsidian mutation and waits for app
+acknowledgement. A disk-only change is reported as Sync pending, not done.
+
 For ongoing watcher-style maintenance, run a bounded poll from cron or a service supervisor:
 
 ```bash
@@ -105,12 +110,17 @@ printf '%s' '{"personality":"michael","title":"Example","content":"Body"}' \
   | node scripts/obsidian-note-journal-contract.js
 ```
 
-The contract delegates to `src/write-to-vault.js`, then fails closed unless:
+The contract delegates to `src/write-to-vault.js` through the composed vault
+mutation service, then fails closed unless:
 
 - the note path is under the canonical Notes directory
 - canonical frontmatter is present, including the calling personality
 - today's journal has exactly one `[[note title]]` backlink
 - QMD/search freshness is recorded as `pending-refresh`
+
+Note persistence and journal backlink status are separate results. A durable
+note can truthfully report a deferred backlink, whose identity-safe retry uses
+the latest journal content rather than overwriting a concurrent mobile edit.
 
 ## Source Material provenance
 

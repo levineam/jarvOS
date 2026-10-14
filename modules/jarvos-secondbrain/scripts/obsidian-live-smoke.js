@@ -1,65 +1,76 @@
 #!/usr/bin/env node
-// Explicit workstation-only smoke for the canonical Obsidian Vault.process backlink path.
-// It is intentionally disabled unless JARVOS_LIVE_OBSIDIAN_SMOKE=1.
-
 'use strict';
 
+const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
-const {
-  getVaultDir,
-  getVaultJournalDir,
-  getVaultNotesDir,
-} = require('../bridge/provenance/src/lib/provenance-config');
-const {
-  linkNoteInSection,
-  mutateJournalThroughObsidian,
-  readNoteId,
-  runObsidianEval,
-  escapeRegex,
-  isPathInside,
-} = require('../bridge/provenance/src/link-to-journal');
+const { hashUtf8, validateVaultRelativeMarkdownPath } = require('../adapters/obsidian/src/vault-mutation-contract');
+const { createConfiguredVaultMutationService } = require('../src/vault-mutation-service');
 
 const LIVE_GATE = 'JARVOS_LIVE_OBSIDIAN_SMOKE';
-const JOURNAL_PATH_ENV = 'JARVOS_LIVE_OBSIDIAN_JOURNAL_PATH';
-const NOTE_PATH_ENV = 'JARVOS_LIVE_OBSIDIAN_NOTE_PATH';
-const NOTE_TARGET_ENV = 'JARVOS_LIVE_OBSIDIAN_NOTE_TARGET';
+const CANDIDATE_MANIFEST_ENV = 'JARVOS_LIVE_CANDIDATE_MANIFEST';
+const RUNTIME_MANIFEST_ENV = 'JARVOS_LIVE_RUNTIME_MANIFEST';
+const ATTESTATION_PATH_ENV = 'JARVOS_LIVE_ATTESTATION_PATH';
+const SMOKE_DIRECTORY_ENV = 'JARVOS_LIVE_OBSIDIAN_SMOKE_DIR';
 const MINIMUM_OBSIDIAN_VERSION = [1, 12, 7];
+const HEALTH_FIELDS = Object.freeze(['pending', 'ambiguous', 'conflict', 'quarantined', 'malformed', 'retainedTerminal']);
+const ACTIVE_HEALTH_FIELDS = Object.freeze(['pending', 'ambiguous', 'conflict', 'quarantined', 'malformed']);
 
-function resolveConfiguredPath(value, root, label) {
-  if (typeof value !== 'string' || !value.trim()) {
-    throw new Error(`${label} is required when ${LIVE_GATE}=1`);
+function readJsonFile(filePath, label) {
+  if (typeof filePath !== 'string' || !path.isAbsolute(filePath)) throw new Error(`${label} must be an absolute path`);
+  try { return JSON.parse(fs.readFileSync(filePath, 'utf8')); } catch (error) { throw new Error(`${label} is unreadable or invalid JSON: ${error.message}`); }
+}
+
+function isDigest(value) { return typeof value === 'string' && /^[a-f0-9]{64}$/i.test(value); }
+
+function assertMatchingManifests({ candidatePath, runtimePath } = {}) {
+  const candidate = readJsonFile(candidatePath, CANDIDATE_MANIFEST_ENV);
+  const runtime = readJsonFile(runtimePath, RUNTIME_MANIFEST_ENV);
+  if (candidate.clean !== true) throw new Error('Candidate manifest must attest a clean source revision');
+  if (typeof candidate.revision !== 'string' || !candidate.revision || candidate.revision !== runtime.revision) throw new Error('Candidate and runtime revisions do not match');
+  if (!isDigest(candidate.artifactManifestHash) || candidate.artifactManifestHash !== runtime.artifactManifestHash) throw new Error('Candidate and runtime artifact manifests do not match');
+  const gates = candidate.gateOutputDigests;
+  if (!gates || typeof gates !== 'object' || Array.isArray(gates) || Object.keys(gates).length === 0 || !Object.values(gates).every(isDigest)) throw new Error('Candidate manifest must include gate output digests');
+  return Object.freeze({
+    revision: candidate.revision,
+    artifactManifestHash: candidate.artifactManifestHash.toLowerCase(),
+    gateOutputDigests: Object.freeze({ ...gates }),
+    equality: true,
+  });
+}
+
+function writePrivateAttestation(filePath, value, { vaultRoot } = {}) {
+  if (typeof filePath !== 'string' || !path.isAbsolute(filePath)) throw new Error(`${ATTESTATION_PATH_ENV} must be an absolute path`);
+  const resolved = path.resolve(filePath);
+  const root = path.resolve(vaultRoot);
+  if (resolved === root || resolved.startsWith(`${root}${path.sep}`)) throw new Error('Live attestation must remain outside the Obsidian vault');
+  fs.mkdirSync(path.dirname(resolved), { recursive: true, mode: 0o700 });
+  const temporary = `${resolved}.${process.pid}.${crypto.randomUUID()}.tmp`;
+  fs.writeFileSync(temporary, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
+  fs.chmodSync(temporary, 0o600);
+  fs.renameSync(temporary, resolved);
+  fs.chmodSync(resolved, 0o600);
+}
+
+function normalizeHealth(value, label) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(`${label} mutation health is unavailable`);
+  const normalized = {};
+  for (const field of HEALTH_FIELDS) {
+    const count = value[field] ?? (field === 'malformed' ? 0 : undefined);
+    if (!Number.isSafeInteger(count) || count < 0) throw new Error(`${label} mutation health has an invalid ${field} count`);
+    normalized[field] = count;
   }
-  const resolved = path.resolve(root, value);
-  if (!isPathInside(root, resolved)) throw new Error(`${label} must be inside ${root}: ${value}`);
-  return resolved;
+  return Object.freeze(normalized);
 }
 
-function assertExistingFile(filePath, label) {
-  try {
-    if (fs.statSync(filePath).isFile()) return;
-  } catch (error) {
-    if (error.code !== 'ENOENT') throw error;
+function assertSafeHealthDelta(before, after, expectedTerminalDelta) {
+  for (const field of ACTIVE_HEALTH_FIELDS) {
+    if (after[field] !== before[field]) throw new Error(`Live smoke changed active mutation health: ${field} ${before[field]} -> ${after[field]}`);
   }
-  throw new Error(`Configured ${label} does not exist: ${filePath}`);
-}
-
-function relativePathFromVault(vaultRoot, filePath) {
-  return path.relative(vaultRoot, filePath).split(path.sep).join('/');
-}
-
-function noteTargetForPath(vaultRoot, notePath, configuredTarget) {
-  const target = configuredTarget || relativePathFromVault(vaultRoot, notePath).replace(/\.md$/i, '');
-  if (typeof target !== 'string' || !target.trim() || /[\r\n\[\]]/.test(target)) {
-    throw new Error(`${NOTE_TARGET_ENV} must be a non-empty Obsidian link target without brackets or newlines`);
+  if (after.retainedTerminal !== before.retainedTerminal + expectedTerminalDelta) {
+    throw new Error(`Live smoke retained-terminal delta was ${after.retainedTerminal - before.retainedTerminal}; expected ${expectedTerminalDelta}`);
   }
-  return target.trim();
-}
-
-function canonicalLinkCount(journalContent, noteTarget) {
-  const link = new RegExp(`^\\s*-\\s*\\[\\[${escapeRegex(noteTarget)}\\]\\]\\s*$`, 'gm');
-  return [...String(journalContent).matchAll(link)].length;
 }
 
 function parseObsidianVersion(output) {
@@ -78,163 +89,159 @@ function isSupportedObsidianVersion(version) {
 function verifyObsidianCli({ command = 'obsidian', execute = execFileSync } = {}) {
   let output;
   try {
-    output = execute(command, ['version'], {
-      encoding: 'utf8',
-      timeout: 10 * 1000,
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
+    output = execute(command, ['version'], { encoding: 'utf8', timeout: 10_000, stdio: ['ignore', 'pipe', 'pipe'] });
   } catch (error) {
     const detail = String(error.stderr || error.stdout || error.message || '').trim();
     throw new Error(`Registered Obsidian CLI could not run \`${command} version\`${detail ? `: ${detail}` : ''}`);
   }
   const version = parseObsidianVersion(output);
-  if (!isSupportedObsidianVersion(version)) {
-    throw new Error(`Obsidian CLI must report version ${MINIMUM_OBSIDIAN_VERSION.join('.')} or newer; got ${String(output).trim() || '(no version)'}`);
-  }
-  return { command, version: version.join('.') };
+  if (!isSupportedObsidianVersion(version)) throw new Error(`Obsidian CLI must report version ${MINIMUM_OBSIDIAN_VERSION.join('.')} or newer; got ${String(output).trim() || '(no version)'}`);
+  return Object.freeze({ command, version: version.join('.') });
 }
 
-function buildVaultVerificationCode({ journalRelativePath, noteRelativePath, noteTarget }) {
-  const payload = Buffer.from(JSON.stringify({ journalRelativePath, noteRelativePath, noteTarget }), 'utf8').toString('base64');
-  return `(() => {
-    const bytes = Uint8Array.from(atob('${payload}'), (char) => char.charCodeAt(0));
-    const input = JSON.parse(new TextDecoder().decode(bytes));
-    const journal = app.vault.getFileByPath(input.journalRelativePath);
-    const note = app.vault.getFileByPath(input.noteRelativePath);
-    const target = app.metadataCache.getFirstLinkpathDest(input.noteTarget, input.journalRelativePath);
-    return JSON.stringify({
-      vaultName: app.vault.getName(),
-      journalPath: journal?.path || null,
-      notePath: note?.path || null,
-      linkTargetPath: target?.path || null,
-    });
-  })()`;
+function fixturePathFor({ smokeDirectory, nonce }) {
+  if (typeof smokeDirectory !== 'string' || !smokeDirectory || path.posix.normalize(smokeDirectory) !== smokeDirectory || smokeDirectory === '.' || smokeDirectory.startsWith('../') || smokeDirectory.includes('\\')) throw new Error(`${SMOKE_DIRECTORY_ENV} must be a normalized vault-relative directory`);
+  if (!/^[a-f0-9-]{16,64}$/i.test(nonce)) throw new Error('Smoke nonce is invalid');
+  return validateVaultRelativeMarkdownPath(`${smokeDirectory}/jarvos-live-smoke-${nonce}.md`);
 }
 
-function resolveLivePair(env = process.env, roots = {}) {
-  const vaultRoot = path.resolve(roots.vaultRoot || getVaultDir());
-  const journalDir = path.resolve(roots.journalDir || getVaultJournalDir());
-  const notesDir = path.resolve(roots.notesDir || getVaultNotesDir());
-  if (!isPathInside(vaultRoot, journalDir) || !isPathInside(vaultRoot, notesDir)) {
-    throw new Error('Configured Journal and Notes directories must be inside the configured vault');
-  }
-
-  const journalPath = resolveConfiguredPath(env[JOURNAL_PATH_ENV], vaultRoot, JOURNAL_PATH_ENV);
-  const notePath = resolveConfiguredPath(env[NOTE_PATH_ENV], vaultRoot, NOTE_PATH_ENV);
-  if (!isPathInside(journalDir, journalPath) || path.extname(journalPath).toLowerCase() !== '.md') {
-    throw new Error(`${JOURNAL_PATH_ENV} must name a Markdown file inside ${journalDir}`);
-  }
-  if (!isPathInside(notesDir, notePath) || path.extname(notePath).toLowerCase() !== '.md') {
-    throw new Error(`${NOTE_PATH_ENV} must name a Markdown file inside ${notesDir}`);
-  }
-  assertExistingFile(journalPath, 'journal');
-  assertExistingFile(notePath, 'note');
-  const noteId = readNoteId(notePath);
-  if (!noteId) throw new Error(`Configured note has no jarvos_note_id: ${notePath}`);
-
-  return {
-    vaultRoot,
-    journalPath,
-    notePath,
-    noteId,
-    journalRelativePath: relativePathFromVault(vaultRoot, journalPath),
-    noteRelativePath: relativePathFromVault(vaultRoot, notePath),
-    noteTarget: noteTargetForPath(vaultRoot, notePath, env[NOTE_TARGET_ENV]),
-  };
-}
-
-function assertPreconditions({ pair, evaluate, readFile = fs.readFileSync }) {
-  const vault = evaluate(buildVaultVerificationCode(pair));
-  if (!vault || vault.vaultName !== path.basename(pair.vaultRoot)) {
-    throw new Error(`Obsidian CLI targeted the wrong vault: expected ${path.basename(pair.vaultRoot)}, got ${vault?.vaultName || '(none)'}`);
-  }
-  if (vault.journalPath !== pair.journalRelativePath || vault.notePath !== pair.noteRelativePath) {
-    throw new Error('Obsidian CLI could not resolve the configured existing journal-note pair');
-  }
-  if (vault.linkTargetPath !== pair.noteRelativePath) {
-    throw new Error(`Configured note target does not resolve to the selected note: [[${pair.noteTarget}]]`);
-  }
-
-  const journal = readFile(pair.journalPath, 'utf8');
-  const canonical = linkNoteInSection(journal, pair.noteTarget);
-  if (!canonical.alreadyPresent || canonical.content !== journal || canonicalLinkCount(journal, pair.noteTarget) !== 1) {
-    throw new Error(`Configured journal must already contain exactly one canonical link: [[${pair.noteTarget}]]`);
-  }
-  return journal;
+function committed(result, phase) {
+  if (!result || !['committed', 'already_satisfied'].includes(result.status) || result.obsidian !== 'acknowledged') throw new Error(`${phase} was not acknowledged by Obsidian`);
 }
 
 function runLiveSmoke({
   env = process.env,
-  roots,
-  evaluate,
-  mutate = mutateJournalThroughObsidian,
-  readFile = fs.readFileSync,
   execute = execFileSync,
+  serviceFactory = createConfiguredVaultMutationService,
+  nonce = crypto.randomUUID(),
+  inspectSync,
+  now = () => new Date().toISOString(),
 } = {}) {
-  if (env[LIVE_GATE] !== '1') {
-    return { skipped: true, reason: `${LIVE_GATE} is not 1` };
-  }
+  if (env[LIVE_GATE] !== '1') return { skipped: true, reason: `${LIVE_GATE} is not 1` };
 
-  const command = env.OBSIDIAN_CLI || 'obsidian';
-  const cli = verifyObsidianCli({ command, execute });
-  const pair = resolveLivePair(env, roots);
-  const runner = evaluate || ((code) => runObsidianEval(code, {
-    vaultName: path.basename(pair.vaultRoot),
-    command: cli.command,
-  }));
-  const before = assertPreconditions({ pair, evaluate: runner, readFile });
+  const vaultRoot = path.resolve(env.JARVOS_VAULT_ROOT || '');
+  if (!env.JARVOS_VAULT_ROOT || !path.isAbsolute(env.JARVOS_VAULT_ROOT)) throw new Error('JARVOS_VAULT_ROOT must be an absolute path');
+  const manifest = assertMatchingManifests({ candidatePath: env[CANDIDATE_MANIFEST_ENV], runtimePath: env[RUNTIME_MANIFEST_ENV] });
+  const attestationPath = env[ATTESTATION_PATH_ENV];
+  const cli = verifyObsidianCli({ command: env.OBSIDIAN_CLI || 'obsidian', execute });
+  const smokeDirectory = env[SMOKE_DIRECTORY_ENV] || 'JarVOS Smoke';
+  if (!fs.statSync(path.join(vaultRoot, smokeDirectory), { throwIfNoEntry: false })?.isDirectory()) throw new Error(`Dedicated smoke directory does not exist: ${smokeDirectory}`);
 
-  for (let pass = 1; pass <= 2; pass += 1) {
-    const result = mutate({
-      journalPath: pair.journalPath,
-      noteTitle: pair.noteTarget,
-      section: '📝 Notes',
-      evaluate: runner,
-    });
-    if (!result?.alreadyPresent || result.mutationOwner !== 'obsidian-vault-process') {
-      throw new Error(`Canonical Obsidian mutation did not report an existing no-op link on pass ${pass}`);
-    }
-    const current = readFile(pair.journalPath, 'utf8');
-    if (current !== before || canonicalLinkCount(current, pair.noteTarget) !== 1) {
-      throw new Error(`Canonical Obsidian mutation changed the journal or duplicated [[${pair.noteTarget}]] on pass ${pass}`);
-    }
-  }
-
-  return {
-    skipped: false,
-    vault: pair.vaultRoot,
-    journalPath: pair.journalPath,
-    notePath: pair.notePath,
-    noteId: pair.noteId,
-    noteTarget: pair.noteTarget,
-    obsidianVersion: cli.version,
-    linkCount: 1,
-    mutationPasses: 2,
+  const vaultRelativePath = fixturePathFor({ smokeDirectory, nonce });
+  const deleteAuthority = (operation) => operation.source === 'operator.obsidian-live-smoke' && operation.vaultRelativePath === vaultRelativePath;
+  const service = serviceFactory({ vaultRoot, source: 'operator.obsidian-live-smoke', allowDeleteOperation: deleteAuthority });
+  const baseline = normalizeHealth(service.reconciler.health(), 'Baseline');
+  const initialContent = `---\njarvos_smoke_fixture: true\nnonce: ${nonce}\n---\n\n# jarvOS Obsidian Live Smoke\n`;
+  const appendedLine = `- acknowledged transform: ${nonce}`;
+  const finalContent = `${initialContent}${appendedLine}\n`;
+  const createContext = service.createWriteContext({ vaultRelativePath, operationId: `smoke-create-${nonce}` });
+  const createOperation = {
+    schemaVersion: 1,
+    operationId: createContext.operationId,
+    vaultId: createContext.vaultId,
+    vaultRelativePath,
+    sequence: createContext.sequence,
+    operationKind: 'create',
+    content: initialContent,
+    source: createContext.source,
   };
+  const absence = service.adapter.inspectInvariant(createOperation);
+  if (absence.status !== 'missing') throw new Error('Disposable smoke fixture was not proven absent through Obsidian');
+
+  const attestation = {
+    schemaVersion: 1,
+    startedAt: now(),
+    manifest,
+    fixture: { vaultRelativePath, expectedTerminalDelta: 3 },
+    baseline,
+    status: 'preflight_verified',
+  };
+  writePrivateAttestation(attestationPath, attestation, { vaultRoot });
+
+  let created = false;
+  let transformed = false;
+  try {
+    const createResult = createContext.mutationExecutor(createOperation);
+    committed(createResult, 'Fixture create');
+    created = true;
+
+    const transformContext = service.createWriteContext({ vaultRelativePath, operationId: `smoke-transform-${nonce}` });
+    const transformResult = transformContext.mutationExecutor({
+      schemaVersion: 1,
+      operationId: transformContext.operationId,
+      vaultId: transformContext.vaultId,
+      vaultRelativePath,
+      sequence: transformContext.sequence,
+      operationKind: 'transform',
+      transformName: 'append-line',
+      transformVersion: 1,
+      replayPayload: { line: appendedLine },
+      source: transformContext.source,
+    });
+    committed(transformResult, 'Fixture transform');
+    transformed = true;
+
+    if (typeof inspectSync !== 'function') throw new Error('Live rollout requires the configured per-file Sync inspector');
+    const sync = inspectSync({ vaultId: service.vaultId, vaultRelativePath, expectedHash: hashUtf8(finalContent) });
+    if (!sync || sync.status !== 'converged') throw new Error(`Live rollout Sync did not converge: ${sync?.status || 'invalid'}`);
+
+    const deleteResult = service.deleteMarkdownFile({
+      vaultRelativePath,
+      expectedContent: finalContent,
+      operationId: `smoke-delete-${nonce}`,
+    });
+    committed(deleteResult, 'Fixture deletion');
+    created = false;
+    const deletion = service.adapter.inspectInvariant({
+      schemaVersion: 1,
+      operationId: `smoke-delete-check-${nonce}`,
+      vaultId: service.vaultId,
+      vaultRelativePath,
+      sequence: 1,
+      operationKind: 'delete',
+      expectedContent: finalContent,
+      expectedHash: hashUtf8(finalContent),
+      source: 'operator.obsidian-live-smoke',
+    });
+    if (deletion.status !== 'satisfied' || deletion.invariant !== true) throw new Error('Obsidian did not confirm fixture deletion');
+
+    const after = normalizeHealth(service.reconciler.health(), 'Post-smoke');
+    assertSafeHealthDelta(baseline, after, 3);
+    const result = { skipped: false, obsidianVersion: cli.version, fixture: vaultRelativePath, create: 'acknowledged', transform: 'acknowledged', deletion: 'acknowledged', sync, baseline, after };
+    writePrivateAttestation(attestationPath, { ...attestation, completedAt: now(), status: 'passed', result }, { vaultRoot });
+    return result;
+  } catch (error) {
+    const expectedContent = transformed ? finalContent : initialContent;
+    if (created) {
+      try { service.deleteMarkdownFile({ vaultRelativePath, expectedContent, operationId: `smoke-cleanup-${nonce}` }); } catch { /* guarded cleanup failure leaves the fixture for operator inspection */ }
+    }
+    writePrivateAttestation(attestationPath, { ...attestation, failedAt: now(), status: 'failed', failure: error.message }, { vaultRoot });
+    throw error;
+  }
 }
 
 function main() {
-  try {
-    const result = runLiveSmoke();
-    console.log(JSON.stringify(result));
-  } catch (error) {
-    console.error(JSON.stringify({ error: error.message }));
-    process.exitCode = 1;
-  }
+  try { process.stdout.write(`${JSON.stringify(runLiveSmoke())}\n`); }
+  catch (error) { process.stderr.write(`${JSON.stringify({ error: error.message })}\n`); process.exitCode = 1; }
 }
 
 module.exports = {
+  ACTIVE_HEALTH_FIELDS,
+  ATTESTATION_PATH_ENV,
+  CANDIDATE_MANIFEST_ENV,
+  HEALTH_FIELDS,
   LIVE_GATE,
-  JOURNAL_PATH_ENV,
-  NOTE_PATH_ENV,
-  NOTE_TARGET_ENV,
   MINIMUM_OBSIDIAN_VERSION,
-  buildVaultVerificationCode,
-  canonicalLinkCount,
+  RUNTIME_MANIFEST_ENV,
+  SMOKE_DIRECTORY_ENV,
+  assertMatchingManifests,
+  assertSafeHealthDelta,
+  fixturePathFor,
+  normalizeHealth,
   parseObsidianVersion,
-  resolveLivePair,
   runLiveSmoke,
   verifyObsidianCli,
+  writePrivateAttestation,
 };
 
 if (require.main === module) main();

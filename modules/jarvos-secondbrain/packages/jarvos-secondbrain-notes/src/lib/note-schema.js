@@ -1,7 +1,27 @@
 'use strict';
 
+const {
+  BASIS_ORIGIN,
+  CONTENT_ORIGIN_BASES,
+  CONTENT_ORIGIN_SCHEMA_VERSION,
+  CONTENT_ORIGINS,
+  frontmatterForContentOrigin,
+  CONTENT_ORIGIN_DRAFTING_FIELD,
+  collectDraftingDeclarations,
+  mergeContentOriginDrafting,
+  seedDraftingHistory,
+} = require('../../../../bridge/provenance/src/content-origin-contract');
+
 const REQUIRED_FIELDS = ['status', 'type', 'project', 'created', 'updated', 'author'];
 const WRITER_OWNED_FIELDS = ['jarvos_note_id'];
+const RESERVED_V1_FIELDS = ['content_adoption'];
+const CONTENT_ORIGIN_FIELDS = [
+  'content_origin_schema',
+  'content_origin',
+  'content_origin_basis',
+  'content_origin_source',
+  'human_evidence_eligible',
+];
 
 const ALLOWED_STATUS = new Set(['active', 'draft', 'archived', 'abandoned']);
 const ALLOWED_TYPE = new Set(['project-note', 'draft', 'research', 'decision', 'reference', 'article', 'chapter']);
@@ -415,15 +435,73 @@ function splitIncomingFrontmatter(frontmatter) {
     if (REQUIRED_FIELDS.includes(key)) required[key] = value;
     // A note id is assigned by the canonical writer. Ignore caller-provided
     // values so writes cannot forge an id or replace an existing one.
-    else if (WRITER_OWNED_FIELDS.includes(key)) continue;
+    else if (WRITER_OWNED_FIELDS.includes(key) || RESERVED_V1_FIELDS.includes(key)) continue;
     else optional[key] = value;
   }
   return { required, optional };
 }
 
-function canonicalizeFrontmatter({ incomingFrontmatter = {}, existingFrontmatter = {}, today }) {
+// Every canonical note write lands here, so this is the single place a
+// declaration becomes jarvos-content-origin/v1 frontmatter. A declaration the
+// caller supplies (options.verifyDeclaration) goes through the contract helper:
+// human origin without a resolvable receipt fails closed to unknown. A stored
+// declaration that the write merely carries forward is enum-checked only.
+function normalizeContentOriginFrontmatter(frontmatter = {}, options = {}) {
+  const normalized = { ...frontmatter };
+  const hasDeclaration = CONTENT_ORIGIN_FIELDS.some((field) => normalized[field] !== undefined);
+  if (!hasDeclaration) {
+    return { fields: frontmatterForContentOrigin({}), errors: [] };
+  }
+
+  const origin = String(normalized.content_origin || '').trim().toLowerCase();
+  const basis = String(normalized.content_origin_basis || '').trim().toLowerCase();
+  const errors = [];
+  if (!CONTENT_ORIGINS.includes(origin)) {
+    errors.push(`content_origin must be one of: ${CONTENT_ORIGINS.join(', ')}`);
+  }
+  if (!CONTENT_ORIGIN_BASES.includes(basis)) {
+    errors.push(`content_origin_basis must be one of: ${CONTENT_ORIGIN_BASES.join(', ')}`);
+  }
+  if (basis === 'legacy_author') {
+    errors.push('content_origin_basis legacy_author is read-time-only');
+  } else if (BASIS_ORIGIN[basis] && BASIS_ORIGIN[basis] !== origin) {
+    errors.push(`content_origin ${origin || '(missing)'} does not match basis ${basis}`);
+  }
+  if (normalized.human_evidence_eligible !== undefined && typeof normalized.human_evidence_eligible !== 'boolean') {
+    errors.push('human_evidence_eligible must be a boolean when provided');
+  }
+
+  if (options.verifyDeclaration === true) {
+    // Caller-supplied human_evidence_eligible is never trusted; the helper
+    // derives it from a verified receipt.
+    return {
+      fields: frontmatterForContentOrigin(errors.length ? {} : {
+        content_origin: origin,
+        content_origin_basis: basis,
+        content_origin_source: normalized.content_origin_source,
+      }, options),
+      errors,
+    };
+  }
+
+  return {
+    fields: {
+      content_origin_schema: normalized.content_origin_schema || CONTENT_ORIGIN_SCHEMA_VERSION,
+      content_origin: origin || 'unknown',
+      content_origin_basis: basis || 'unknown',
+      ...(normalized.content_origin_source !== undefined
+        ? { content_origin_source: normalized.content_origin_source }
+        : {}),
+      human_evidence_eligible: normalized.human_evidence_eligible === true && origin === 'human',
+    },
+    errors,
+  };
+}
+
+function canonicalizeFrontmatter({ incomingFrontmatter = {}, existingFrontmatter = {}, today, origin = {} }) {
   const split = splitIncomingFrontmatter(incomingFrontmatter);
   if (split.error) return { errors: [split.error] };
+  const incomingDeclaresOrigin = CONTENT_ORIGIN_FIELDS.some((field) => split.optional[field] !== undefined);
 
   const existingRequired = {};
   const existingOptional = {};
@@ -431,6 +509,7 @@ function canonicalizeFrontmatter({ incomingFrontmatter = {}, existingFrontmatter
   for (const [key, value] of Object.entries(existingFrontmatter || {})) {
     if (REQUIRED_FIELDS.includes(key)) existingRequired[key] = value;
     else if (WRITER_OWNED_FIELDS.includes(key)) existingWriterOwned[key] = value;
+    else if (RESERVED_V1_FIELDS.includes(key)) continue;
     else existingOptional[key] = value;
   }
 
@@ -443,11 +522,36 @@ function canonicalizeFrontmatter({ incomingFrontmatter = {}, existingFrontmatter
   const optional = { ...existingOptional, ...split.optional, ...existingWriterOwned };
   for (const key of REQUIRED_FIELDS) delete optional[key];
 
+  // An incoming declaration replaces the stored one wholesale, so stale
+  // stored fields (for example an old receipt) cannot be mixed into it.
+  const declaration = incomingDeclaresOrigin ? split.optional : optional;
+  const provenance = normalizeContentOriginFrontmatter(
+    { ...normalized, ...declaration },
+    { ...origin, verifyDeclaration: incomingDeclaresOrigin },
+  );
+  // Drafting history merges stored entries before the caller's declaration, so
+  // a caller can append to it but never replace or erase it.
+  // Frontmatter and top-level declarations are combined, never one shadowing
+  // the other.
+  const declared = collectDraftingDeclarations(split.optional[CONTENT_ORIGIN_DRAFTING_FIELD], origin.drafting);
+  const drafting = declared.ok
+    ? mergeContentOriginDrafting({
+      existing: seedDraftingHistory(existingOptional[CONTENT_ORIGIN_DRAFTING_FIELD], existingOptional.content_origin),
+      incoming: declared.entries,
+      origin: provenance.fields.content_origin,
+      previousReceipt: existingOptional.content_origin === 'human' ? existingOptional.content_origin_source : undefined,
+    }, origin)
+    : { ...declared, reason: `invalid_drafting:${declared.reason}` };
+  for (const field of CONTENT_ORIGIN_FIELDS) delete optional[field];
+  delete optional[CONTENT_ORIGIN_DRAFTING_FIELD];
+  if (drafting.ok && drafting.entries.length) provenance.fields[CONTENT_ORIGIN_DRAFTING_FIELD] = drafting.entries;
+  if (!drafting.ok) provenance.errors.push(`content_origin_drafting rejected: ${drafting.reason}`);
+
   return {
-    errors,
+    errors: [...errors, ...provenance.errors],
     required: normalized,
-    optional,
-    frontmatter: { ...normalized, ...optional },
+    optional: { ...optional, ...provenance.fields },
+    frontmatter: { ...normalized, ...optional, ...provenance.fields },
   };
 }
 
@@ -466,6 +570,9 @@ function renderFrontmatter(frontmatter) {
 module.exports = {
   REQUIRED_FIELDS,
   WRITER_OWNED_FIELDS,
+  RESERVED_V1_FIELDS,
+  CONTENT_ORIGIN_FIELDS,
+  CONTENT_ORIGIN_DRAFTING_FIELD,
   ALLOWED_STATUS,
   ALLOWED_TYPE,
   ALLOWED_AUTHOR,
@@ -484,6 +591,7 @@ module.exports = {
   frontmatterToObject,
   defaultRequiredFields,
   splitIncomingFrontmatter,
+  normalizeContentOriginFrontmatter,
   canonicalizeFrontmatter,
   renderFrontmatter,
 };

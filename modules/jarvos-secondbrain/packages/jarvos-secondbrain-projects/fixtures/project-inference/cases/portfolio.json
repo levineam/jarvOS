@@ -1,0 +1,54 @@
+{
+  "contract": "jarvos.project-inference-case/v1",
+  "caseId": "portfolio",
+  "engineRevision": null,
+  "coverage": [
+    { "sourceClass": "note", "state": "fresh" },
+    { "sourceClass": "release", "state": "fresh" },
+    { "sourceClass": "stewardship", "state": "stale" }
+  ],
+  "observations": [
+    {
+      "observationId": "obs_public_portfolio_note_001",
+      "evidenceId": "ev_public_portfolio_note_001",
+      "sourceClass": "note",
+      "occurredAt": "2026-08-03T09:00:00.000Z",
+      "observedAt": "2026-08-05T09:00:00.000Z",
+      "sourceRevision": "fixture-note-r1",
+      "sensitivity": "public-fixture",
+      "coverageState": "fresh",
+      "contentDigest": "ea18a027586cc7899326dc20f4bb393079e38b365e681788a99bbded87bc94fd"
+    },
+    {
+      "observationId": "obs_public_portfolio_release_001",
+      "evidenceId": "ev_public_portfolio_release_001",
+      "sourceClass": "release",
+      "occurredAt": "2026-08-05T13:00:00.000Z",
+      "observedAt": "2026-08-05T14:00:00.000Z",
+      "sourceRevision": "fixture-release-r1",
+      "sensitivity": "public-fixture",
+      "coverageState": "fresh",
+      "contentDigest": "24b8177faccb5074932617285bc7d241eb6a01a61d7ad698526bc8d48a0dc013"
+    },
+    {
+      "observationId": "obs_public_portfolio_stewardship_001",
+      "evidenceId": "ev_public_portfolio_stewardship_001",
+      "sourceClass": "stewardship",
+      "occurredAt": "2026-07-30T08:00:00.000Z",
+      "observedAt": "2026-08-05T15:00:00.000Z",
+      "sourceRevision": "fixture-stewardship-r1",
+      "sensitivity": "public-fixture",
+      "coverageState": "stale",
+      "contentDigest": "c3f213ae4d8c5ed6dd8d4cc5dc1cd606ebb148b408ad50ca07e53feaf6f843c6"
+    }
+  ],
+  "correction": null,
+  "expected": {
+    "decision": "associate",
+    "kind": "project",
+    "canonicalName": "Amazing Abundance Portfolio",
+    "aliases": ["AAF", "Amazing Abundance Fund", "AAF Observatory"],
+    "parentCanonicalName": null
+  },
+  "contentDigest": "2f480f051ed48bf8fc8e34cf2fc8a37c9b423b4696080e69ee1c4396abd1ee60"
+}

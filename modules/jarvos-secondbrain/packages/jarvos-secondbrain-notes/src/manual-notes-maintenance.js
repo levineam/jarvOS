@@ -31,7 +31,7 @@ const {
 const {
   frontmatterToObject,
   parseFrontmatter,
-} = require('../../../../scripts/lib/note-schema.js');
+} = require('./lib/note-schema');
 
 const DEFAULT_INTERVAL_SECONDS = 300;
 const DEFAULT_LIMIT = 0;
@@ -231,6 +231,7 @@ function makeRunReport(flags) {
       filesWithViolations: 0,
       violations: 0,
       filesChanged: 0,
+      filesPendingSync: 0,
       fieldUpdates: 0,
       filesSkippedUnfixable: 0,
     },
@@ -258,9 +259,12 @@ function makeRunReport(flags) {
   };
 }
 
-function processOnce(flags) {
+function processOnce(flags, { applyMarkdownMutation } = {}) {
   if (!fs.existsSync(flags.notesDir) || !fs.statSync(flags.notesDir).isDirectory()) {
     throw new Error(`Notes directory does not exist or is not a directory: ${flags.notesDir}`);
+  }
+  if (flags.apply && typeof applyMarkdownMutation !== 'function') {
+    throw new Error('Cannot apply manual frontmatter maintenance without an Obsidian-owned Markdown mutation executor');
   }
 
   const files = fileList(flags);
@@ -351,16 +355,32 @@ function processOnce(flags) {
         });
         report.frontmatter.filesSkippedUnfixable += 1;
       } else if (flags.apply && frontmatterFix.changed) {
-        fs.writeFileSync(filePath, frontmatterFix.updatedText, 'utf8');
-        const updatedNote = readNote(filePath);
+        const receipt = applyMarkdownMutation({
+          filePath,
+          expectedContent: note.content,
+          nextContent: frontmatterFix.updatedText,
+        });
+        if (!['committed', 'already_satisfied', 'saved_locally_sync_pending'].includes(receipt?.status)) {
+          throw new Error(`Frontmatter maintenance was not applied through Obsidian: ${receipt?.status || 'unavailable'}`);
+        }
+        const parsed = parseFrontmatter(frontmatterFix.updatedText);
+        const updatedNote = {
+          frontmatter: frontmatterToObject(parsed),
+          body: parsed ? parsed.remainder : frontmatterFix.updatedText,
+          contentSha256: sha256(frontmatterFix.updatedText),
+          bodySha256: sha256(parsed ? parsed.remainder : frontmatterFix.updatedText),
+        };
         frontmatterForOptimization = updatedNote.frontmatter;
         bodyForOptimization = updatedNote.body;
         contentShaForState = updatedNote.contentSha256;
         bodyShaForState = updatedNote.bodySha256;
         stateStat = fs.statSync(filePath);
         fileResult.frontmatterChanged = true;
+        fileResult.frontmatterMutationStatus = receipt.status;
+        fileResult.frontmatterSyncPending = receipt.status === 'saved_locally_sync_pending';
         currentFrontmatterViolationCount = 0;
         report.frontmatter.filesChanged += 1;
+        report.frontmatter.filesPendingSync += receipt.status === 'saved_locally_sync_pending' ? 1 : 0;
         report.frontmatter.fieldUpdates += frontmatterFix.fixedCount;
       }
 
@@ -475,7 +495,7 @@ function summarizeHuman(report) {
   const lines = [
     `manual-notes-maintenance ${status} (${action})`,
     `Scanned ${report.scanned} note(s); candidates ${report.candidates}; unchanged skipped ${report.skippedUnchanged}.`,
-    `Frontmatter: ${report.frontmatter.filesWithViolations} file(s), ${report.frontmatter.violations} violation(s), ${report.frontmatter.filesChanged} file(s) changed, ${report.frontmatter.filesSkippedUnfixable} skipped as unfixable.`,
+    `Frontmatter: ${report.frontmatter.filesWithViolations} file(s), ${report.frontmatter.violations} violation(s), ${report.frontmatter.filesChanged} file(s) changed (${report.frontmatter.filesPendingSync} Sync pending), ${report.frontmatter.filesSkippedUnfixable} skipped as unfixable.`,
     `Optimization: artifacts=${report.optimization.artifactsWritten}, auditOnly=${report.optimization.auditOnly}, gbrainQueued=${report.optimization.gbrainQueued}, memoryWikiQueued=${report.optimization.memoryWikiQueued}, qmdPending=${report.optimization.qmdPending}, sensitiveSkipped=${report.optimization.sensitiveSkipped}.`,
   ];
   if (report.errors.length) {
@@ -500,12 +520,12 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function runWatch(flags) {
+async function runWatch(flags, options = {}) {
   const reports = [];
   let run = 0;
   while (true) {
     run += 1;
-    const report = processOnce(flags);
+    const report = processOnce(flags, options);
     report.watchRun = run;
     reports.push(report);
     if (flags.summaryPath) writeJson(flags.summaryPath, privateSafeSummary(report));
@@ -520,7 +540,7 @@ async function runWatch(flags) {
   return reports;
 }
 
-async function main() {
+async function main({ applyMarkdownMutation } = {}) {
   let flags;
   try {
     flags = parseArgs(process.argv);
@@ -529,11 +549,11 @@ async function main() {
       return;
     }
     if (flags.watch) {
-      const reports = await runWatch(flags);
+      const reports = await runWatch(flags, { applyMarkdownMutation });
       process.exitCode = reports.every((report) => report.ok) ? 0 : 1;
       return;
     }
-    const report = processOnce(flags);
+    const report = processOnce(flags, { applyMarkdownMutation });
     if (flags.summaryPath) writeJson(flags.summaryPath, privateSafeSummary(report));
     if (flags.json) console.log(JSON.stringify(report, null, 2));
     else process.stdout.write(summarizeHuman(report));

@@ -1,0 +1,13 @@
+{
+  "approvedRelease": {
+    "message": "jarvOS 0.7.0 is currently published. A proposed 0.8.0 release has passed checks and is ready for Andrew's review; nothing will publish automatically. The separate v1.0.0 milestone remains future work. Action required: Review the proposed release before it can publish. Next: after your review, jarvOS will continue the release process.",
+    "freshness": "current"
+  },
+  "unsafe": [
+    { "message": "recovery_failed at /Users/andrew/private", "code": "internal-code" },
+    { "message": "See /var/tmp/jarvos.log before continuing.", "code": "absolute-path" },
+    { "message": "Error: failed\\n at private.js:1:1", "code": "stack-text" },
+    { "message": "Source 8cb3909 failed.", "code": "source-sha" },
+    { "message": "jarvOS needs attention.", "code": "ambiguous-attention" }
+  ]
+}

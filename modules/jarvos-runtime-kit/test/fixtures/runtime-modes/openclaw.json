@@ -1,0 +1,7 @@
+{
+  "version": "jarvos-runtime-mode/v1",
+  "mode": "openclaw",
+  "installedAdapters": [{ "id": "openclaw" }],
+  "workloadRoutes": [],
+  "capabilityTruth": [{ "adapter": "openclaw", "capability": "resident", "state": "available", "evidence": [{ "kind": "fixture", "detail": "OpenClaw adapter declaration is present." }] }]
+}

@@ -1,0 +1,939 @@
+#!/usr/bin/env node
+// Read-only content-origin audit plus an explicitly apply-gated backfill.
+//
+// Two hard rules shape this module:
+//
+//   1. `auditContentOrigin` never writes. It opens files for reading and
+//      returns counts only. It does not invoke a model, a network call, or
+//      Active Assistant, and it does not emit note bodies, journal bullets,
+//      source receipts, or any other stored frontmatter value — only closed
+//      vocabulary terms and integers. Paths are omitted unless the operator
+//      explicitly asks for them, and asking for paths adds normalized relative
+//      paths and nothing else.
+//   2. Backfill is a two-step boundary. `planContentOriginBackfill` produces
+//      proposals; `applyContentOriginBackfill` refuses to touch anything unless
+//      `apply === true` and a supported note writer is supplied. Every proposal
+//      is `unknown`/`unknown`/ineligible: a stored `author`, personality, model,
+//      or harness is not evidence of intellectual origin, so ambiguity is
+//      recorded as ambiguity rather than guessed.
+//
+// Apply additionally runs a fail-closed preflight before any mutation. A plan is
+// caller-supplied data, so the path it names is treated as untrusted input, and
+// the exact post-write bytes are computed from the supported writer's own pure
+// operation factory and compared to the stored body BEFORE anything is
+// committed. Nothing is mutated on the hope that the body survives.
+//
+// The write is bound to the exact bytes the preflight read, not to whatever the
+// writer reads later, and recovery may only undo bytes this repair provably
+// produced. Anything else on disk belongs to someone else and is left alone.
+
+'use strict';
+
+const crypto = require('node:crypto');
+const fs = require('node:fs');
+const path = require('node:path');
+
+const {
+  CONTENT_ORIGIN_SCHEMA_VERSION,
+  CONTENT_ORIGIN_BASES,
+  emptyOriginCounts,
+  normalizeContentOriginForRead,
+  resolveLegacyOrigin,
+} = require('./content-origin-contract');
+const { projectJournalEntriesFromMarkdown } = require('./content-origin-evidence');
+const { CANONICAL_WRITERS } = require('./content-origin-writers');
+const { frontmatterToObject, parseFrontmatter } = require('../../../packages/jarvos-secondbrain-notes/src/lib/note-schema');
+// The supported writer's own pure operation factory and path resolver. Using
+// them — rather than re-deriving what a write would produce — is what makes the
+// preflight below a prediction of the real mutation instead of a second
+// implementation of it.
+const {
+  NOTE_BODY_PRESERVATION_REFUSED,
+  NOTE_EXPECTED_STATE_REFUSED,
+  createNoteMutationOperation,
+  noteFilePath,
+} = require('../../../packages/jarvos-secondbrain-notes/src/write-to-vault');
+const { getVaultNotesDir, getVaultJournalDir } = require('./lib/provenance-config');
+
+const CONTENT_ORIGIN_AUDIT_VERSION = 'jarvos-content-origin-audit/v1';
+const JOURNAL_FILE_RE = /^\d{4}-\d{2}-\d{2}\.md$/;
+// Vaults nest, but not infinitely. A bound keeps a pathological tree from
+// turning a read-only audit into an unbounded walk.
+const MAX_SCAN_DEPTH = 16;
+
+// How a stored record declares itself, before any origin is resolved.
+const CONTRACT_STATES = Object.freeze(['declared_v1', 'declared_other_version', 'legacy_author_only', 'undeclared']);
+
+// Writer attribution is reported through a CLOSED vocabulary.
+//
+// `source_personality` and `source` are free-text frontmatter. A stored value
+// can be a URL, a file path, a capture receipt, or a line of prose, so copying
+// one into a report key would put vault content into a report whose entire
+// contract is "counts, not content" — and it would put it there in the DEFAULT
+// report, which does not even emit file names. The bucket therefore emits a
+// stored value only when that value is a known stable writer identifier, and
+// collapses everything else into fixed aggregates.
+//
+// The four buckets are: a known personality, a known source kind, some other
+// attribution this build does not recognise, and no attribution at all. That is
+// enough to answer "which supported writer produced the undeclared notes?"
+// without the report ever echoing a stored string back at the operator.
+const KNOWN_WRITER_PERSONALITIES = Object.freeze([
+  // Mirrors SUPPORTED_PERSONALITIES in bridge/provenance/src/note-journal-contract.js,
+  // which is the closed set the personality-facing contract will write. Kept as
+  // a literal so the audit does not pull the whole contract module in, and
+  // asserted against it by tests/content-origin-audit.test.js.
+  'claude-code',
+  'codex',
+  'hermes',
+  'michael',
+]);
+
+// `source` is not writer-owned, so there is no separate inventory of stored
+// values to mirror. The declared canonical writer ids are this tree's one
+// closed vocabulary of stable writer identifiers, so they are the only `source`
+// values worth recognising; nothing else is echoed.
+const KNOWN_SOURCE_KINDS = Object.freeze(CANONICAL_WRITERS.map((writer) => writer.id).sort());
+
+const WRITER_BUCKET_OTHER_ATTRIBUTED = 'other_attributed';
+const WRITER_BUCKET_UNATTRIBUTED = 'unattributed';
+
+// Every bucket key the report can contain, so the vocabulary is enumerable and
+// a test can assert nothing outside it is ever emitted.
+const WRITER_BUCKETS = Object.freeze([
+  ...KNOWN_WRITER_PERSONALITIES.map((personality) => `personality:${personality}`),
+  ...KNOWN_SOURCE_KINDS.map((kind) => `source_kind:${kind}`),
+  WRITER_BUCKET_OTHER_ATTRIBUTED,
+  WRITER_BUCKET_UNATTRIBUTED,
+]);
+
+function emptyBasisCounts() {
+  return Object.fromEntries(CONTENT_ORIGIN_BASES.map((basis) => [basis, 0]));
+}
+
+function emptyContractCounts() {
+  return Object.fromEntries(CONTRACT_STATES.map((state) => [state, 0]));
+}
+
+/**
+ * Walk `dir` for Markdown notes and return normalized POSIX-relative paths.
+ *
+ * Notes nest — `Notes/Projects/Something.md` is an ordinary vault shape — so a
+ * flat `readdirSync` silently under-reports coverage, and an under-report on a
+ * provenance audit reads as "everything is declared" when it is not.
+ *
+ * Symlinks are never followed, for directories or files. A symlinked directory
+ * can point anywhere on disk, including outside the vault, and a symlinked note
+ * is not a file this audit can honestly claim to have read in place. Dotted
+ * entries (`.obsidian`, `.trash`) are skipped: they are tool state, not notes.
+ */
+function listMarkdownRelative(dir, { filter = () => true, maxDepth = MAX_SCAN_DEPTH } = {}) {
+  const found = [];
+  const walk = (absoluteDir, relativeDir, depth) => {
+    if (depth > maxDepth) return;
+    let entries;
+    try {
+      entries = fs.readdirSync(absoluteDir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if (entry.name.startsWith('.')) continue;
+      // readdirSync(withFileTypes) reports link status without resolving it, so
+      // this check happens before any decision to descend or read.
+      if (entry.isSymbolicLink()) continue;
+      const relative = relativeDir ? `${relativeDir}/${entry.name}` : entry.name;
+      if (entry.isDirectory()) {
+        walk(path.join(absoluteDir, entry.name), relative, depth + 1);
+        continue;
+      }
+      if (!entry.isFile() || !entry.name.endsWith('.md')) continue;
+      if (!filter(entry.name, relative)) continue;
+      found.push(relative);
+    }
+  };
+  walk(dir, '', 0);
+  return found.sort();
+}
+
+function noteTitleFromRelativePath(relativePath) {
+  return path.posix.basename(relativePath).replace(/\.md$/, '');
+}
+
+function sha256(value) {
+  return crypto.createHash('sha256').update(String(value), 'utf8').digest('hex');
+}
+
+function contractStateFor(frontmatter = {}) {
+  const schema = String(frontmatter.content_origin_schema || '').trim();
+  const declared = frontmatter.content_origin !== undefined || frontmatter.content_origin_basis !== undefined;
+  if (schema === CONTENT_ORIGIN_SCHEMA_VERSION) return 'declared_v1';
+  if (schema || declared) return 'declared_other_version';
+  if (frontmatter.author !== undefined) return 'legacy_author_only';
+  return 'undeclared';
+}
+
+/**
+ * Map a stored record onto one closed writer bucket.
+ *
+ * A value is echoed only when it matches a known identifier exactly. Any other
+ * non-empty attribution — a URL, a path, a sentence, a personality this build
+ * has never heard of — is counted as `other_attributed` and its text is
+ * discarded here, before it can reach a report key.
+ */
+function writerBucket(frontmatter = {}) {
+  const personality = String(frontmatter.source_personality ?? '').trim();
+  if (KNOWN_WRITER_PERSONALITIES.includes(personality)) return `personality:${personality}`;
+  const source = String(frontmatter.source ?? '').trim();
+  if (KNOWN_SOURCE_KINDS.includes(source)) return `source_kind:${source}`;
+  if (personality || source) return WRITER_BUCKET_OTHER_ATTRIBUTED;
+  return WRITER_BUCKET_UNATTRIBUTED;
+}
+
+/**
+ * Classify one stored note without mutating it. The resolved origin uses the
+ * read-time projection, so a declaration whose receipt no longer binds the
+ * stored body resolves to unknown instead of staying human.
+ */
+function classifyNoteRecord({ markdown, title }) {
+  const parsed = parseFrontmatter(String(markdown || ''));
+  const frontmatter = parsed ? frontmatterToObject(parsed) : {};
+  const contract = contractStateFor(frontmatter);
+  const body = String(parsed?.remainder ?? markdown ?? '');
+
+  if (contract === 'declared_v1' || contract === 'declared_other_version') {
+    const normalized = normalizeContentOriginForRead({
+      content_origin: frontmatter.content_origin,
+      content_origin_basis: frontmatter.content_origin_basis,
+      content_origin_source: frontmatter.content_origin_source,
+      human_evidence_eligible: frontmatter.human_evidence_eligible,
+    }, { content: stripHeading(body, title) });
+    return {
+      contract,
+      content_origin: normalized.content_origin,
+      content_origin_basis: normalized.content_origin_basis,
+      human_evidence_eligible: normalized.human_evidence_eligible === true,
+      writer: writerBucket(frontmatter),
+      // A v1 declaration that fails read-time validation is a real finding:
+      // the note claims something the stored bytes no longer support.
+      degraded: normalized.content_origin !== String(frontmatter.content_origin || '').trim().toLowerCase(),
+    };
+  }
+
+  const legacy = contract === 'legacy_author_only'
+    ? resolveLegacyOrigin(frontmatter)
+    : { content_origin: 'unknown', content_origin_basis: 'unknown' };
+  return {
+    contract,
+    content_origin: legacy.content_origin,
+    content_origin_basis: legacy.content_origin_basis,
+    // legacy_author is read-time-only and never establishes human evidence.
+    human_evidence_eligible: false,
+    writer: writerBucket(frontmatter),
+    degraded: false,
+  };
+}
+
+function stripHeading(body, title) {
+  const text = String(body || '').replace(/\r\n/g, '\n').trim();
+  const heading = String(title || '').trim();
+  if (!heading || !text.startsWith(`# ${heading}\n`)) return text;
+  return text.slice(heading.length + 3).trim();
+}
+
+function countInto(bucket, key) {
+  if (!Object.prototype.hasOwnProperty.call(bucket, key)) bucket[key] = 0;
+  bucket[key] += 1;
+}
+
+/**
+ * Read-only audit. Returns counts by contract state, origin, basis,
+ * eligibility, and closed writer bucket. `includePaths` is opt-in because a
+ * vault filename is itself private content, and it adds normalized relative
+ * paths only — never a stored frontmatter value and never note text.
+ */
+function auditContentOrigin({
+  notesDir = getVaultNotesDir(),
+  journalDir = getVaultJournalDir(),
+  includePaths = false,
+} = {}) {
+  const notes = {
+    scanned: 0,
+    // How many of the scanned notes live below the notes root. This is a count,
+    // not a path, and it matters: the supported flat writer cannot address them,
+    // so they are reported but never backfilled in place.
+    nested: 0,
+    contract: emptyContractCounts(),
+    origin: emptyOriginCounts(),
+    basis: emptyBasisCounts(),
+    human_evidence_eligible: 0,
+    degraded_declarations: 0,
+    byWriter: {},
+    ...(includePaths ? { undeclaredPaths: [] } : {}),
+  };
+
+  for (const relativePath of listMarkdownRelative(notesDir)) {
+    const absolute = path.join(notesDir, ...relativePath.split('/'));
+    let markdown;
+    try {
+      markdown = fs.readFileSync(absolute, 'utf8');
+    } catch {
+      continue;
+    }
+    // A nested note's heading matches its file name, not its folder path.
+    const title = noteTitleFromRelativePath(relativePath);
+    const record = classifyNoteRecord({ markdown, title });
+    notes.scanned += 1;
+    if (relativePath.includes('/')) notes.nested += 1;
+    countInto(notes.contract, record.contract);
+    countInto(notes.origin, record.content_origin);
+    countInto(notes.basis, record.content_origin_basis);
+    if (record.human_evidence_eligible) notes.human_evidence_eligible += 1;
+    if (record.degraded) notes.degraded_declarations += 1;
+    countInto(notes.byWriter, record.writer);
+    if (includePaths && record.contract !== 'declared_v1') notes.undeclaredPaths.push(relativePath);
+  }
+
+  const journal = {
+    scannedDays: 0,
+    entries: 0,
+    marked: 0,
+    unmarked: 0,
+    origin: emptyOriginCounts(),
+    human_evidence_eligible: 0,
+  };
+
+  // Journal days are sometimes filed under year or month folders, so the date
+  // comes from the file name and the folder is irrelevant to classification.
+  for (const relativePath of listMarkdownRelative(journalDir, { filter: (name) => JOURNAL_FILE_RE.test(name) })) {
+    const absolute = path.join(journalDir, ...relativePath.split('/'));
+    let markdown;
+    try {
+      markdown = fs.readFileSync(absolute, 'utf8');
+    } catch {
+      continue;
+    }
+    const date = noteTitleFromRelativePath(relativePath);
+    journal.scannedDays += 1;
+    for (const section of ['ideas', 'notes']) {
+      // No resolver is available in an audit, so a human claim can only be
+      // reported as unverified; the projection already downgrades it.
+      for (const entry of projectJournalEntriesFromMarkdown(markdown, { date, section })) {
+        journal.entries += 1;
+        countInto(journal.origin, entry.content_origin);
+        if (entry.human_evidence_eligible) journal.human_evidence_eligible += 1;
+        if (entry.marker_present) journal.marked += 1;
+        else journal.unmarked += 1;
+      }
+    }
+  }
+
+  return {
+    audit_version: CONTENT_ORIGIN_AUDIT_VERSION,
+    content_origin_schema: CONTENT_ORIGIN_SCHEMA_VERSION,
+    read_only: true,
+    mutated: false,
+    declaredWriters: CANONICAL_WRITERS.length,
+    notes,
+    journal,
+  };
+}
+
+// The one supported-writer capability this module asks for: a metadata-only
+// provenance rewrite that keeps the stored body remainder byte for byte. The
+// same frozen object is handed to the preflight's operation factory and to the
+// injected writer, so the bytes that were proven are the bytes requested.
+const METADATA_ONLY_WRITE_OPTIONS = Object.freeze({ preserveExistingBodyBytes: true });
+
+// The writer refuses this capability rather than rewriting prose behind the
+// caller's back. A refusal is a preflight verdict, not a crash, so each reason
+// maps onto the vocabulary an operator already reads in the results table.
+const PRESERVE_BODY_REFUSALS = Object.freeze({
+  body_would_change: 'body_bytes_would_change',
+  body_bytes_not_reproducible: 'body_bytes_would_change',
+  not_a_provenance_rewrite: 'not_a_metadata_only_replace',
+  not_an_existing_note: 'not_a_metadata_only_replace',
+  append_entry_unsupported: 'not_a_metadata_only_replace',
+});
+
+const PROPOSED_DECLARATION = Object.freeze({
+  content_origin_schema: CONTENT_ORIGIN_SCHEMA_VERSION,
+  content_origin: 'unknown',
+  content_origin_basis: 'unknown',
+  human_evidence_eligible: false,
+});
+
+/**
+ * Propose a conservative frontmatter-only repair for every note without an
+ * explicit v1 declaration. Nothing is inferred: every proposal is `unknown`.
+ *
+ * The walk is recursive, so nested notes are reported. Paths are withheld
+ * unless `includePaths` is set, for the same reason the audit withholds them —
+ * a vault filename is private content. Apply needs them, so an operator who
+ * intends to apply plans with `includePaths: true` deliberately.
+ *
+ * Every proposal records `sourceDigest`, the SHA-256 of the exact bytes the
+ * plan was computed from. That is what lets apply reject a stale or tampered
+ * proposal instead of writing a declaration derived from a file that has since
+ * changed.
+ */
+function planContentOriginBackfill({ notesDir = getVaultNotesDir(), includeDegraded = false, includePaths = false } = {}) {
+  const proposals = [];
+  let nested = 0;
+  for (const relativePath of listMarkdownRelative(notesDir)) {
+    const absolute = path.join(notesDir, ...relativePath.split('/'));
+    let markdown;
+    try {
+      markdown = fs.readFileSync(absolute, 'utf8');
+    } catch {
+      continue;
+    }
+    const title = noteTitleFromRelativePath(relativePath);
+    const record = classifyNoteRecord({ markdown, title });
+    const needsDeclaration = record.contract !== 'declared_v1';
+    if (!needsDeclaration && !(includeDegraded && record.degraded)) continue;
+    if (relativePath.includes('/')) nested += 1;
+    proposals.push({
+      ...(includePaths ? { relativePath, title } : {}),
+      sourceDigest: sha256(markdown),
+      reason: needsDeclaration ? `contract:${record.contract}` : 'degraded_declaration',
+      current: {
+        contract: record.contract,
+        content_origin: record.content_origin,
+        content_origin_basis: record.content_origin_basis,
+      },
+      next: { ...PROPOSED_DECLARATION },
+    });
+  }
+  return {
+    audit_version: CONTENT_ORIGIN_AUDIT_VERSION,
+    ...(includePaths ? { notesDir } : {}),
+    pathsIncluded: includePaths === true,
+    nestedProposals: nested,
+    proposals,
+    proposalCount: proposals.length,
+  };
+}
+
+// Raw, untrimmed body remainder. Trimming here is exactly the bug this module
+// had: two bodies that differ only in trailing bytes are NOT the same body, and
+// calling that "preserved" turns a silent rewrite into a success report.
+function bodyOf(markdown) {
+  const parsed = parseFrontmatter(String(markdown || ''));
+  return String(parsed?.remainder ?? markdown ?? '');
+}
+
+/**
+ * Resolve a caller-supplied proposal path inside `notesDir`, or refuse it.
+ *
+ * A plan is data. It can come from another process, a file, or a hand-edit, so
+ * its `relativePath` is untrusted: absolute paths, drive-qualified paths, `..`
+ * segments, backslash segments, and anything that still escapes the notes root
+ * after resolution are rejected before the filesystem is touched at all.
+ */
+function resolveProposalPath(notesDir, relativePath) {
+  if (typeof relativePath !== 'string' || !relativePath) return { ok: false, reason: 'path_missing' };
+  if (relativePath !== relativePath.trim()) return { ok: false, reason: 'path_not_normalized' };
+  if (path.isAbsolute(relativePath) || relativePath.startsWith('/') || /^[A-Za-z]:/.test(relativePath)) {
+    return { ok: false, reason: 'path_absolute' };
+  }
+  const segments = relativePath.split('/');
+  const safeSegment = (segment) => segment.length > 0
+    && segment !== '.' && segment !== '..'
+    && !segment.includes('\\') && !segment.includes('\0');
+  if (!segments.length || !segments.every(safeSegment)) return { ok: false, reason: 'path_escape' };
+  if (!relativePath.endsWith('.md')) return { ok: false, reason: 'path_not_markdown' };
+
+  const root = path.resolve(notesDir);
+  const absolute = path.resolve(root, ...segments);
+  if (absolute === root || !absolute.startsWith(root + path.sep)) return { ok: false, reason: 'path_escape' };
+
+  // Walk every component with lstat. A symlink anywhere on the way down can
+  // redirect the write outside the vault, and a symlinked note is not a note
+  // this module is willing to rewrite in place.
+  let current = root;
+  for (const segment of segments) {
+    current = path.join(current, segment);
+    let stats;
+    try {
+      stats = fs.lstatSync(current);
+    } catch {
+      return { ok: false, reason: 'unreadable' };
+    }
+    if (stats.isSymbolicLink()) return { ok: false, reason: 'symlink' };
+  }
+  let stats;
+  try {
+    stats = fs.lstatSync(absolute);
+  } catch {
+    return { ok: false, reason: 'unreadable' };
+  }
+  if (!stats.isFile()) return { ok: false, reason: 'not_a_regular_file' };
+  return { ok: true, absolute, relativePath: segments.join('/') };
+}
+
+/**
+ * Decide, without mutating anything, whether one proposal can be applied with a
+ * provably byte-identical body.
+ *
+ * The decisive step is building the operation the supported writer would build
+ * and reading the bytes it would commit. `createNoteMutationOperation` is pure:
+ * for a frontmatter-only provenance change on an existing note it returns a
+ * `replace` carrying both the exact next content and the `expectedHash` of the
+ * pre-state. So the body comparison happens BEFORE the commit. Apply then hands
+ * the writer these same preflight bytes as `expectedExistingContent`, so the
+ * commit is compare-and-swap against the preflight state itself — a concurrent
+ * edit between preflight and commit turns into a conflict, not a lost edit.
+ *
+ * The operation is built with the writer's `preserveExistingBodyBytes` option,
+ * the supported metadata-only capability, and apply asks the injected writer for
+ * the same one. Without it the writer re-renders the body around canonical
+ * frontmatter, which is a legitimate write but not a byte-identical one; the
+ * writer refuses the option for anything but a metadata-only repair, and a
+ * refusal is recorded as a skip rather than swallowed.
+ *
+ * Anything that cannot be proven is skipped, not attempted.
+ */
+function preflightProposal({ notesDir, proposal }) {
+  const relativePath = proposal?.relativePath;
+  if (typeof relativePath !== 'string' || !relativePath) {
+    return { ok: false, reason: 'plan_paths_withheld' };
+  }
+  const resolved = resolveProposalPath(notesDir, relativePath);
+  if (!resolved.ok) return { ok: false, relativePath, reason: resolved.reason };
+
+  let before;
+  try {
+    before = fs.readFileSync(resolved.absolute, 'utf8');
+  } catch {
+    return { ok: false, relativePath, reason: 'unreadable' };
+  }
+
+  // The plan describes bytes that existed when it was produced. If the note has
+  // changed since, the classification behind the proposal is no longer known to
+  // hold, so the proposal is stale and must be re-planned, not applied.
+  if (typeof proposal.sourceDigest !== 'string' || !proposal.sourceDigest) {
+    return { ok: false, relativePath, reason: 'proposal_unverifiable' };
+  }
+  if (proposal.sourceDigest !== sha256(before)) {
+    return { ok: false, relativePath, reason: 'stale_proposal' };
+  }
+  // The declaration is this module's, not the plan's. A hand-edited plan cannot
+  // smuggle `content_origin: human` through the backfill path.
+  const next = { ...PROPOSED_DECLARATION };
+
+  const title = noteTitleFromRelativePath(relativePath);
+  const record = classifyNoteRecord({ markdown: before, title });
+  if (record.contract === 'declared_v1' && !record.degraded) {
+    return { ok: false, relativePath, reason: 'no_longer_applicable' };
+  }
+
+  // Where would the supported writer actually put this title? If that is not
+  // this file, applying would create a second note somewhere else and leave the
+  // original untouched. Nested notes land here, because the canonical writer is
+  // flat by construction.
+  let writerTarget;
+  try {
+    writerTarget = noteFilePath(title);
+  } catch {
+    return { ok: false, relativePath, reason: 'writer_path_unresolvable' };
+  }
+  if (path.resolve(writerTarget) !== resolved.absolute) {
+    return { ok: false, relativePath, reason: 'writer_path_mismatch' };
+  }
+
+  const bodyBefore = bodyOf(before);
+  const content = bodyBefore.trim();
+  const parsedBefore = parseFrontmatter(before);
+  const existingFrontmatter = parsedBefore ? frontmatterToObject(parsedBefore) : {};
+
+  let operation;
+  try {
+    operation = createNoteMutationOperation({
+      operationId: 'content-origin-backfill-preflight',
+      vaultId: 'content-origin-backfill-preflight',
+      vaultRelativePath: relativePath,
+      title,
+      content,
+      frontmatter: next,
+      existingContent: before,
+      existingFrontmatter,
+      ...METADATA_ONLY_WRITE_OPTIONS,
+    });
+  } catch (error) {
+    if (error?.code === NOTE_BODY_PRESERVATION_REFUSED) {
+      return { ok: false, relativePath, reason: PRESERVE_BODY_REFUSALS[error.reason] || 'preflight_failed' };
+    }
+    return { ok: false, relativePath, reason: 'preflight_failed' };
+  }
+
+  // Only a `replace` carries its full next content up front. A `create` or a
+  // `transform` would have to be executed to find out what it did, which is
+  // precisely the "mutate first, discover afterwards" shape this refuses.
+  if (operation.operationKind !== 'replace' || typeof operation.content !== 'string') {
+    return { ok: false, relativePath, reason: 'not_a_metadata_only_replace' };
+  }
+  if (operation.expectedHash !== sha256(before)) {
+    return { ok: false, relativePath, reason: 'expected_state_mismatch' };
+  }
+  if (bodyOf(operation.content) !== bodyBefore) {
+    return { ok: false, relativePath, reason: 'body_bytes_would_change' };
+  }
+
+  return {
+    ok: true,
+    relativePath,
+    absolute: resolved.absolute,
+    title,
+    content,
+    next,
+    before,
+    bodyBefore,
+    predictedBody: bodyOf(operation.content),
+  };
+}
+
+const COMMITTED_RECEIPT_STATUSES = Object.freeze(['committed', 'already_satisfied']);
+// Statuses under which the writer says bytes landed on disk. Only these can have
+// produced output this module could be responsible for undoing.
+const PERSISTED_RECEIPT_STATUSES = Object.freeze([...COMMITTED_RECEIPT_STATUSES, 'saved_locally_sync_pending']);
+
+/**
+ * Apply a backfill plan through a supported note writer.
+ *
+ * `apply !== true` is a hard stop: nothing is written, and the returned
+ * `results` are the read-only preflight verdicts — the safe dry run an operator
+ * should read before deciding anything.
+ *
+ * With `apply === true` the caller must supply `writeNote`, the canonical note
+ * mutation composition, so this module never opens a vault file for writing
+ * itself. Each proposal is fully preflighted first; only a proposal whose
+ * post-write body bytes are already known to be identical is written at all.
+ *
+ * The write is bound to the preflight bytes: `writeNote` receives them as
+ * `expectedExistingContent` and must return the writer's `stateBinding` — the
+ * hash it was guarded by and the hash of the content it submitted. A binding
+ * that is missing or names a different pre-state is an integrity violation,
+ * because the write cannot be shown to have been guarded by what was proven.
+ *
+ * The post-write re-read is defence in depth, not the guarantee. It is judged
+ * against the binding:
+ *
+ *   - no persisted receipt: nothing of ours landed, so nothing is restored;
+ *   - bytes other than the submitted content: someone else wrote after the
+ *     commit, so the file is preserved and reported as a conflict;
+ *   - exactly the submitted content with a changed body: the writer itself
+ *     misbehaved, so the run stops and the pre-image goes to the optional
+ *     `restoreNote` seam, guarded by the hash of that exact output.
+ */
+function applyContentOriginBackfill({
+  plan,
+  apply = false,
+  writeNote,
+  restoreNote,
+  notesDir = plan?.notesDir || getVaultNotesDir(),
+} = {}) {
+  const proposals = Array.isArray(plan?.proposals) ? plan.proposals : [];
+  if (apply !== true) {
+    const results = proposals.map((proposal) => {
+      const preflight = preflightProposal({ notesDir, proposal });
+      return {
+        ...(preflight.relativePath ? { relativePath: preflight.relativePath } : {}),
+        status: preflight.ok ? 'eligible' : 'skipped',
+        ...(preflight.ok ? {} : { reason: preflight.reason }),
+      };
+    });
+    return {
+      audit_version: CONTENT_ORIGIN_AUDIT_VERSION,
+      mode: 'dry-run',
+      applied: false,
+      mutated: false,
+      proposalCount: proposals.length,
+      eligibleCount: results.filter((result) => result.status === 'eligible').length,
+      results,
+    };
+  }
+  if (typeof writeNote !== 'function') {
+    throw new Error('applyContentOriginBackfill requires a supported note writer; this module never writes vault Markdown directly');
+  }
+
+  const results = [];
+  let aborted = false;
+  let writeAttempted = false;
+  for (const proposal of proposals) {
+    if (aborted) {
+      results.push({
+        ...(typeof proposal?.relativePath === 'string' ? { relativePath: proposal.relativePath } : {}),
+        status: 'skipped',
+        reason: 'aborted_after_integrity_violation',
+      });
+      continue;
+    }
+
+    const preflight = preflightProposal({ notesDir, proposal });
+    if (!preflight.ok) {
+      results.push({
+        ...(preflight.relativePath ? { relativePath: preflight.relativePath } : {}),
+        status: 'skipped',
+        reason: preflight.reason,
+      });
+      continue;
+    }
+
+    let written;
+    writeAttempted = true;
+    try {
+      written = writeNote({
+        title: preflight.title,
+        content: preflight.content,
+        frontmatter: { ...preflight.next },
+        // Same capability the preflight proved, asked of the writer explicitly.
+        // A writer that ignores it does not get the benefit of the doubt: the
+        // post-write body comparison below still has to hold.
+        ...METADATA_ONLY_WRITE_OPTIONS,
+        // The exact bytes the preflight proved against. The writer builds the
+        // operation from these and the executor commits only if the note still
+        // hashes to them, so a fresh read inside the writer proves nothing.
+        expectedExistingContent: preflight.before,
+      });
+    } catch (error) {
+      const changed = error?.code === NOTE_EXPECTED_STATE_REFUSED && error.reason === 'changed_since_expected_state';
+      results.push({
+        relativePath: preflight.relativePath,
+        status: changed ? 'conflict' : 'failed',
+        reason: changed ? 'changed_since_preflight' : 'write_rejected',
+        rollbackAttempted: false,
+      });
+      continue;
+    }
+
+    const mutationStatus = written?.receipt?.status || written?.mutationStatus || 'unknown';
+    const current = readQuietly(preflight.absolute);
+    // Raw remainder equality, byte for byte. Not trimmed: a body that gained or
+    // lost trailing bytes is a changed body.
+    const bodyPreserved = current !== null && bodyOf(current) === preflight.bodyBefore;
+
+    if (!PERSISTED_RECEIPT_STATUSES.includes(mutationStatus)) {
+      // No repair landed, so whatever is on disk now is not this module's to
+      // undo — it is the preflight image or somebody's later edit. Never restore.
+      const conflict = mutationStatus === 'conflict';
+      results.push({
+        relativePath: preflight.relativePath,
+        status: conflict ? 'conflict' : 'failed',
+        reason: conflict ? 'changed_since_preflight' : `mutation_not_committed:${mutationStatus}`,
+        bodyPreserved,
+        mutationStatus,
+        rollbackAttempted: false,
+      });
+      // A guarded conflict is the model working. An unexplained receipt next to
+      // a moved body is not, and no further note is safe.
+      if (!conflict && current !== preflight.before) aborted = true;
+      continue;
+    }
+
+    const binding = written?.stateBinding;
+    if (!binding
+      || binding.expectedHash !== sha256(preflight.before)
+      || typeof binding.contentHash !== 'string'
+      || !binding.contentHash) {
+      results.push({
+        relativePath: preflight.relativePath,
+        status: 'failed',
+        reason: 'writer_did_not_bind_expected_state',
+        bodyPreserved,
+        mutationStatus,
+        rollbackAttempted: false,
+      });
+      aborted = true;
+      continue;
+    }
+
+    if (current === null) {
+      results.push({
+        relativePath: preflight.relativePath,
+        status: 'failed',
+        reason: 'unreadable_after_write',
+        mutationStatus,
+        rollbackAttempted: false,
+      });
+      aborted = true;
+      continue;
+    }
+
+    if (sha256(current) !== binding.contentHash) {
+      // Not the bytes this repair submitted. Either a legitimate edit landed
+      // after the commit or the writer's report is wrong; in both cases the only
+      // safe move is to keep the file as it is and say so.
+      results.push({
+        relativePath: preflight.relativePath,
+        status: 'conflict',
+        reason: 'changed_after_write',
+        bodyPreserved,
+        mutationStatus,
+        rollbackAttempted: false,
+      });
+      // With the body moved, this run can no longer tell a concurrent editor
+      // from a misbehaving writer, so it does not go on to the next note.
+      if (!bodyPreserved) aborted = true;
+      continue;
+    }
+
+    if (!bodyPreserved) {
+      // Exactly the bytes this repair submitted, and they changed the body: the
+      // writer is not behaving as modelled. Recovery may undo this output and
+      // only this output.
+      const recovery = attemptRestore({ restoreNote, preflight, output: current, outputHash: binding.contentHash });
+      results.push({
+        relativePath: preflight.relativePath,
+        status: 'failed',
+        reason: 'body_changed_after_write',
+        bodyPreserved: false,
+        mutationStatus,
+        ...recovery,
+      });
+      // Stop the run. The preflight said this was impossible, so the writer or
+      // the vault is not behaving as modelled and no further note is safe.
+      aborted = true;
+      continue;
+    }
+
+    results.push({
+      relativePath: preflight.relativePath,
+      status: COMMITTED_RECEIPT_STATUSES.includes(mutationStatus) ? 'applied' : 'applied_pending_sync',
+      bodyPreserved: true,
+      bodyBytesIdentical: true,
+      mutationStatus,
+    });
+  }
+
+  return {
+    audit_version: CONTENT_ORIGIN_AUDIT_VERSION,
+    mode: 'apply',
+    applied: results.some((result) => result.status === 'applied'),
+    // True as soon as the supported writer was invoked at all: an operator must
+    // not read `mutated: false` off a run that reached the mutation boundary.
+    mutated: writeAttempted,
+    aborted,
+    proposalCount: proposals.length,
+    results,
+  };
+}
+
+function readQuietly(absolute) {
+  try {
+    return fs.readFileSync(absolute, 'utf8');
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Hand the pre-image back to a caller-supplied recovery seam.
+ *
+ * This module still refuses to write Markdown itself, so recovery goes through
+ * the same supported mutation boundary as the write did. It is only ever called
+ * for bytes already shown to be exactly the output this repair submitted, and
+ * the seam is guarded by the hash of that output — never by a hash of whatever
+ * was observed last — so a restore can only replace this repair's own bytes and
+ * a concurrent edit that lands first turns the restore into a conflict. Without
+ * a seam there is nothing to do but say so loudly.
+ */
+function attemptRestore({ restoreNote, preflight, output, outputHash }) {
+  if (typeof restoreNote !== 'function') return { rollbackAvailable: false, rollbackAttempted: false, rolledBack: false };
+  if (sha256(output) !== outputHash) {
+    return { rollbackAvailable: true, rollbackAttempted: false, rolledBack: false, restoreStatus: 'output_unverified' };
+  }
+  try {
+    const outcome = restoreNote({
+      relativePath: preflight.relativePath,
+      absolutePath: preflight.absolute,
+      content: preflight.before,
+      expectedContent: output,
+      expectedHash: outputHash,
+    });
+    const restored = fs.readFileSync(preflight.absolute, 'utf8');
+    return {
+      rollbackAvailable: true,
+      rollbackAttempted: true,
+      rolledBack: restored === preflight.before,
+      restoreStatus: outcome?.receipt?.status || outcome?.status || 'unknown',
+    };
+  } catch {
+    return { rollbackAvailable: true, rollbackAttempted: true, rolledBack: false, restoreStatus: 'threw' };
+  }
+}
+
+function parseArgs(argv) {
+  const args = { json: false, backfill: false, apply: false, includePaths: false };
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index];
+    if (arg === '--json') args.json = true;
+    else if (arg === '--backfill') args.backfill = true;
+    else if (arg === '--apply') args.apply = true;
+    else if (arg === '--include-paths') args.includePaths = true;
+    else if (arg === '--notes-dir') args.notesDir = argv[++index];
+    else if (arg === '--journal-dir') args.journalDir = argv[++index];
+  }
+  return args;
+}
+
+function main(argv = process.argv.slice(2)) {
+  const args = parseArgs(argv);
+  if (!args.backfill) {
+    const report = auditContentOrigin({
+      ...(args.notesDir ? { notesDir: args.notesDir } : {}),
+      ...(args.journalDir ? { journalDir: args.journalDir } : {}),
+      includePaths: args.includePaths,
+    });
+    process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
+    return report;
+  }
+
+  const plan = planContentOriginBackfill({
+    ...(args.notesDir ? { notesDir: args.notesDir } : {}),
+    includePaths: args.includePaths,
+  });
+  if (!args.apply) {
+    // The dry run is read-only and reports, per proposal, whether apply could
+    // prove byte preservation. Without `--include-paths` the plan withholds
+    // paths, so the preflight can only report that.
+    const dryRun = applyContentOriginBackfill({
+      plan,
+      ...(args.notesDir ? { notesDir: args.notesDir } : {}),
+    });
+    process.stdout.write(`${JSON.stringify({ ...plan, ...dryRun, mutated: false }, null, 2)}\n`);
+    return plan;
+  }
+  // The apply path is deliberately not wired to a default vault writer from the
+  // CLI. Applying a backfill is an operator decision that goes through the
+  // supported note contract with an explicit composition.
+  process.stderr.write(`${JSON.stringify({
+    error: 'refusing to apply from the CLI',
+    detail: 'compose applyContentOriginBackfill with the canonical note writer explicitly',
+    proposalCount: plan.proposalCount,
+  }, null, 2)}\n`);
+  process.exitCode = 1;
+  return plan;
+}
+
+module.exports = {
+  CONTENT_ORIGIN_AUDIT_VERSION,
+  CONTRACT_STATES,
+  KNOWN_SOURCE_KINDS,
+  KNOWN_WRITER_PERSONALITIES,
+  MAX_SCAN_DEPTH,
+  WRITER_BUCKETS,
+  classifyNoteRecord,
+  writerBucket,
+  auditContentOrigin,
+  listMarkdownRelative,
+  resolveProposalPath,
+  preflightProposal,
+  planContentOriginBackfill,
+  applyContentOriginBackfill,
+  main,
+};
+
+if (require.main === module) {
+  main();
+}

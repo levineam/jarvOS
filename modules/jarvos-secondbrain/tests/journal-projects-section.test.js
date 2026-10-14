@@ -12,6 +12,19 @@ const {
 
 const TEST_DATE = '2026-01-02';
 
+function fakeOwnedMutation({ filePath, expectedContent, nextContent }) {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  if (fs.existsSync(filePath) && fs.readFileSync(filePath, 'utf8') !== expectedContent) return { status: 'conflict' };
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, nextContent, 'utf8');
+  return { status: 'committed' };
+}
+
+function ownedMutationOptions(options = {}) {
+  return { applyMarkdownMutation: fakeOwnedMutation, createMarkdownFile: fakeOwnedMutation, ...options };
+}
+
 function sectionBody(markdown, heading) {
   const escaped = heading.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const pattern = `${escaped}\\n([\\s\\S]*?)(?=\\n## |\\n— Edited by Jarvis|$)`;
@@ -50,9 +63,18 @@ function legacyEntry() {
 
 const stubFetchers = { projects: () => '- [[Alpha]]\n- [[Beta]]' };
 
-function render(original, { fetchers = stubFetchers, date = TEST_DATE } = {}) {
+function render(original, {
+  fetchers = stubFetchers,
+  date = TEST_DATE,
+  projectsActivityReader,
+  timeZone,
+} = {}) {
   const config = loadConfig();
-  const normalized = normalizeSections(original, date, config, { fetchers });
+  const normalized = normalizeSections(original, date, config, {
+    fetchers,
+    projectsActivityReader,
+    timeZone,
+  });
   return renderJournal(date, config, normalized);
 }
 
@@ -63,6 +85,7 @@ test('the shipped contract is the simplified journal: Projects, Notes, Ideas, Jo
     ['projects', 'notes', 'ideas', 'journal-entry'],
   );
   assert.deepEqual(config.sections.optional, []);
+  assert.equal(config.sections.required[0].presence, 'when-supported-activity');
 });
 
 test('the removed sections are declared as dropped, not migrated', () => {
@@ -110,7 +133,61 @@ test('Projects renders first, ahead of Notes', () => {
   assert.ok(output.indexOf('## 🚀 Projects') < output.indexOf('## 📝 Notes'));
 });
 
-test('Projects is refreshed on a backfilled date, unlike day-scoped sources', () => {
+test('activity-backed projection renders a touched Outcome as its canonical parent', () => {
+  const output = render('', {
+    fetchers: {},
+    timeZone: 'America/New_York',
+    projectsActivityReader: ({ profile, date, timeZone }) => {
+      assert.equal(profile, 'recent-activity');
+      assert.equal(date, TEST_DATE);
+      assert.equal(timeZone, 'America/New_York');
+      return {
+        status: 'ok',
+        coverageWatermark: 'activity:7',
+        projects: [
+          { id: 'prj_000001', kind: 'project', title: 'jarvOS', lifecycle: 'active' },
+          { id: 'out_000001', kind: 'outcome', title: 'v1.0.0 release', parentId: 'prj_000001', lifecycle: 'active' },
+          { id: 'prj_000002', kind: 'project', title: 'Untouched', lifecycle: 'active' },
+        ],
+        noteMappings: { prj_000001: { target: 'Projects/jarvOS' } },
+        activities: [{ canonicalId: 'out_000001', canonicalAtAdmission: { rootProjectId: 'prj_000001' }, occurredAt: '2026-01-02T15:00:00.000Z', trust: 'verified' }],
+      };
+    },
+  });
+  assert.equal(sectionBody(output, '## 🚀 Projects'), '- [[Projects/jarvOS]]');
+  assert.doesNotMatch(output, /v1\.0\.0 release/);
+  assert.doesNotMatch(output, /Untouched/);
+});
+
+test('healthy-empty and degraded activity evidence both omit stale Projects navigation', () => {
+  const entry = [
+    '---',
+    'journal: Journal',
+    `journal-date: ${TEST_DATE}`,
+    '---',
+    '',
+    '## 🚀 Projects',
+    '- [[jarvOS]]',
+    '',
+    '## 📝 Notes',
+    '- [[Note]]',
+    '',
+  ].join('\n');
+
+  const empty = render(entry, {
+    fetchers: {},
+    projectsActivityReader: () => ({ status: 'ok', activityProviderState: 'healthy-empty', projects: [], activities: [] }),
+  });
+  assert.doesNotMatch(empty, /## 🚀 Projects/);
+
+  const degraded = render(entry, {
+    fetchers: {},
+    projectsActivityReader: () => ({ status: 'partial', activityProviderState: 'partial', projects: [], activities: [] }),
+  });
+  assert.doesNotMatch(degraded, /## 🚀 Projects/);
+});
+
+test('activity projection can repair a backfilled date from that date\'s evidence', () => {
   const older = [
     '---',
     'journal: Journal',
@@ -125,19 +202,24 @@ test('Projects is refreshed on a backfilled date, unlike day-scoped sources', ()
     '',
   ].join('\n');
 
-  const output = render(older, { date: '2025-12-01' });
-  assert.equal(sectionBody(output, '## 🚀 Projects'), '- [[Alpha]]\n- [[Beta]]');
+  const output = render(older, {
+    date: '2025-12-01',
+    fetchers: {},
+    projectsActivityReader: ({ date }) => ({
+      status: 'ok',
+      projects: [{ id: 'prj_000001', kind: 'project', title: 'Historical', lifecycle: 'active' }],
+      noteMappings: { prj_000001: { target: 'Projects/Historical' } },
+      activities: [{ canonicalId: 'prj_000001', canonicalAtAdmission: { rootProjectId: 'prj_000001' }, occurredAt: `${date}T11:00:00.000Z`, trust: 'verified' }],
+    }),
+  });
+  assert.equal(sectionBody(output, '## 🚀 Projects'), '- [[Projects/Historical]]');
 });
 
-/**
- * `projects.js` documented this contract -- "the journal treats [the unavailable
- * marker] as a degraded source and will not write over existing content" -- and
- * the journal never implemented it. `'- (projects unavailable)'` is a truthy
- * string, so it won the `fetched || existingContent` chain and replaced the
- * real list. One unmounted volume or permissions blip would rewrite a populated
- * Projects section down to a single placeholder line on every date in the run.
+/** Machine-owned navigation is useful only when its dated activity evidence is
+ * complete. A read failure must remove the whole section, including stale
+ * output from an earlier implementation, without affecting authored sections.
  */
-test('a degraded projects read does not overwrite an existing project list', () => {
+test('a degraded projects read removes an existing machine-owned project list', () => {
   const entry = [
     '---',
     'journal: Journal',
@@ -154,25 +236,15 @@ test('a degraded projects read does not overwrite an existing project list', () 
   ].join('\n');
 
   const output = render(entry, { fetchers: { projects: () => '- (projects unavailable)' } });
-  assert.equal(
-    sectionBody(output, '## 🚀 Projects'),
-    '- [[AAF Observatory]]\n- [[Proof of Value]]',
-    'a marker meaning "could not read" must not replace real evidence',
-  );
+  assert.doesNotMatch(output, /## 🚀 Projects/);
 });
 
-test('a degraded projects read still renders the marker when there is nothing to protect', () => {
-  // The other half: the marker is diagnostic and must stay visible on an entry
-  // whose Projects section is genuinely empty, rather than silently rendering
-  // a bare '-'.
+test('a degraded projects read never renders a diagnostic placeholder section', () => {
   const output = render(legacyEntry(), { fetchers: { projects: () => '- (projects unavailable)' } });
-  assert.equal(sectionBody(output, '## 🚀 Projects'), '- (projects unavailable)');
+  assert.doesNotMatch(output, /## 🚀 Projects/);
 });
 
-test('a positive empty-state claim still replaces a stale list', () => {
-  // `- No ongoing projects` is an observation, not a read failure, so it is
-  // allowed to overwrite -- otherwise closing your last project could never
-  // clear the section.
+test('a positive empty-state claim removes the stale Projects section', () => {
   const entry = [
     '---',
     'journal: Journal',
@@ -185,10 +257,10 @@ test('a positive empty-state claim still replaces a stale list', () => {
   ].join('\n');
 
   const output = render(entry, { fetchers: { projects: () => '- No ongoing projects' } });
-  assert.equal(sectionBody(output, '## 🚀 Projects'), '- No ongoing projects');
+  assert.doesNotMatch(output, /## 🚀 Projects/);
 });
 
-test('a failing projects source degrades visibly instead of emptying the section', () => {
+test('a failing projects source omits the section without taking down the entry', () => {
   const output = render(legacyEntry(), {
     fetchers: {
       projects: () => {
@@ -196,9 +268,8 @@ test('a failing projects source degrades visibly instead of emptying the section
       },
     },
   });
-  // The fetcher itself swallows errors; a thrown fetcher must not take the
-  // whole entry down, and the section must still exist.
-  assert.match(output, /## 🚀 Projects/);
+  assert.doesNotMatch(output, /## 🚀 Projects/);
+  assert.match(output, /## 📝 Notes/);
 });
 
 test('the empty-projects line does not read as real content to the blank-journal guard', () => {
@@ -409,7 +480,7 @@ test('the known-good snapshot refreshes across a contract migration', () => {
       },
     }, null, 2), 'utf8');
 
-    syncOneDate(date, config, { dryRun: false, fetchers: { projects: () => '- [[Alpha]]' } });
+    syncOneDate(date, config, ownedMutationOptions({ dryRun: false, fetchers: { projects: () => '- [[Alpha]]' } }));
 
     const after = JSON.parse(fs.readFileSync(path.join(stateDir, 'state.json'), 'utf8'));
     const entry = after.dates[date];
@@ -492,7 +563,7 @@ test('a damaged entry must not overwrite a good pre-migration snapshot', () => {
       },
     }, null, 2), 'utf8');
 
-    syncOneDate(date, config, { dryRun: false, fetchers: { projects: () => '- [[Alpha]]' } });
+    syncOneDate(date, config, ownedMutationOptions({ dryRun: false, fetchers: { projects: () => '- [[Alpha]]' } }));
 
     const snapshot = fs.readFileSync(kgPath, 'utf8');
     assert.match(snapshot, /Note one/, 'the intact snapshot must survive a damaged entry');

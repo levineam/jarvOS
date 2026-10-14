@@ -1,0 +1,44 @@
+{
+  "schemaVersion": "jarvos-managed-workflow-provider/v1",
+  "id": "compound-engineering",
+  "version": "3.21.4",
+  "contractVersion": "jarvos-workflow-provider/v1",
+  "source": {
+    "repository": "https://github.com/EveryInc/compound-engineering-plugin.git",
+    "revision": "e36ddb8cbd4dd902d3b6ddd96165a783b0ac4711",
+    "contentDigest": "3fbe99d87731f58e59f5613770c2e4cfb3c08f98a43bcafb6b54e13728b23420",
+    "license": "MIT",
+    "capabilityRecord": "runtimes/codex/compound-engineering-capability.json"
+  },
+  "review": {
+    "status": "approved",
+    "reviewedAt": "2026-08-12",
+    "reviewEvidence": [
+      "Codex capability fixture and immutable source archive were inspected by jarvOS"
+    ]
+  },
+  "operations": [
+    "plan",
+    "work",
+    "compound"
+  ],
+  "harnesses": {
+    "codex": {
+      "status": "supported",
+      "adapter": "codex-ce-adapter.v1",
+      "capabilityRecord": "runtimes/codex/compound-engineering-capability.json"
+    },
+    "claude-code": {
+      "status": "unsupported",
+      "adapter": "claude-ce-adapter.v1"
+    },
+    "openclaw": {
+      "status": "unsupported",
+      "adapter": "openclaw-ce-adapter.v1"
+    },
+    "hermes": {
+      "status": "unsupported",
+      "adapter": "hermes-ce-adapter.v1"
+    }
+  }
+}

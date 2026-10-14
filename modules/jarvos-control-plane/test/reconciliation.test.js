@@ -7,8 +7,10 @@ const {
   createMemoryStore,
   createPolicyEngine,
   createReconciler,
+  createProfileReconciliationPort,
   createRegistry,
   createRequest,
+  PROFILE_RECONCILIATION_MUTATION_CLASS,
 } = require('../src/index.js');
 
 function fixtureRequest(overrides = {}) {
@@ -72,6 +74,30 @@ test('allowed request emits one command and independently verified evidence', as
   assert.equal(result.command.status, 'satisfied');
   assert.equal(result.evidence.outcome, 'satisfied');
   assert.match(result.command.lifecycle.map((entry) => entry.status).join(','), /lease_acquired,dispatching,executed,verifying,satisfied/);
+});
+
+test('profile reconciliation uses its own fenced mutation class and receipt shape', async () => {
+  let calls = 0;
+  const port = createProfileReconciliationPort({
+    reconcile: async (input, context) => {
+      calls += 1;
+      assert.equal(input.providerId, 'compound-engineering');
+      assert.equal(context.fence, 4);
+      return { ok: true, status: 'installed', applied: true, provider: { id: input.providerId }, targetDigest: 'a'.repeat(64) };
+    },
+    verify: async (execution) => ({ outcome: execution.status === 'installed' ? 'satisfied' : 'unverifiable', postcondition: { managed: true } }),
+  });
+  const command = {
+    mutationClass: PROFILE_RECONCILIATION_MUTATION_CLASS,
+    commandSpec: { arguments: { providerId: 'compound-engineering' } },
+  };
+  const execution = await port.executeFenced(command, { fence: 4, assertCurrentFence: () => true });
+  assert.equal(execution.status, 'installed');
+  assert.equal(execution.mutationClass, PROFILE_RECONCILIATION_MUTATION_CLASS);
+  const verification = await port.verify(command, { execution });
+  assert.equal(verification.outcome, 'satisfied');
+  assert.equal(calls, 1);
+  await assert.rejects(() => port.executeFenced({ ...command, mutationClass: 'coding.take-issue-to-done' }, { fence: 4, assertCurrentFence: () => true }), /mutation class/);
 });
 
 test('equivalent allowed requests converge on the same action key without duplicate dispatch', async () => {
