@@ -1087,6 +1087,309 @@ test('shared-skill MCP decision operations use opaque references and reject stal
   }
 });
 
+const SHARED_SKILL_OWNER_OPERATIONS = ['inventory', 'plan', 'repair', 'exclude', 'include', 'decisions', 'explain-decision', 'resolve-decision', 'acknowledge-decision', 'defer-decision', 'resume-decision'];
+
+// Child driver: records fs access under the watched shared-skill roots per
+// callTool call, so a denial can be shown to precede config/ledger access.
+const SHARED_SKILL_AUTHORITY_DRIVER = `'use strict';
+const fs = require('fs');
+const path = require('path');
+const [mcpPath, requestsJson, ...watched] = process.argv.slice(2);
+let touched = new Set();
+const record = (value) => {
+  const text = typeof value === 'string' ? value : value instanceof URL ? value.pathname : null;
+  if (text && watched.some((root) => text === root || text.startsWith(root + path.sep))) touched.add(text);
+};
+for (const key of Object.keys(fs)) {
+  const original = fs[key];
+  if (typeof original !== 'function' || /^[A-Z]/.test(key)) continue;
+  const spied = function (...args) { record(args[0]); record(args[1]); return original.apply(this, args); };
+  Object.assign(spied, original);
+  fs[key] = spied;
+}
+const { callTool } = require(mcpPath);
+(async () => {
+  const results = [];
+  for (const [name, args] of JSON.parse(requestsJson)) {
+    touched = new Set();
+    try {
+      const result = await callTool(name, args);
+      results.push({ isError: result.isError === true, text: result.content.map((item) => item.text).join('\\n'), touched: [...touched] });
+    } catch (error) {
+      results.push({ threw: true, isError: true, text: String(error && error.message), touched: [...touched] });
+    }
+  }
+  process.stdout.write(JSON.stringify(results));
+})().catch((error) => { console.error(error); process.exit(1); });
+`;
+
+// Disposable shared-skill root: default config under a fixture HOME, harness
+// roots, a seeded pending decision, synthetic credentials and a synthetic
+// control-plane host built on the existing application-service factory.
+function createSharedSkillAuthorityFixture() {
+  const skills = require('../../jarvos-skills/src');
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-mcp-skill-authority-')));
+  fs.chmodSync(root, 0o700);
+  const home = path.join(root, 'home');
+  const controlRoot = path.join(home, '.jarvos', 'shared-skills');
+  const harnessRoot = path.join(root, 'harnesses');
+  const auth = path.join(root, 'auth');
+  const workspace = path.join(root, 'workspace');
+  for (const dir of [controlRoot, harnessRoot, auth, workspace, path.join(root, 'tmp')]) {
+    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  }
+  const bundle = path.join(harnessRoot, 'registered', 'private-authority-skill');
+  fs.mkdirSync(bundle, { recursive: true, mode: 0o700 });
+  fs.writeFileSync(path.join(bundle, 'SKILL.md'), [
+    '---', 'name: private-authority-skill', 'description: authority fixture', '---', '', 'PRIVATE-BODY-MARKER', '',
+  ].join('\n'), { mode: 0o600 });
+  const configPath = path.join(controlRoot, 'config.json');
+  const config = skills.defaultConfig();
+  config.controlRoot = controlRoot;
+  config.publicCatalogPath = path.join(controlRoot, 'public-catalog.json');
+  config.localOverlayPath = path.join(controlRoot, 'local-overlay.json');
+  config.inventory.enabled = true;
+  config.inventory.registeredRoots = [{
+    rootId: 'codex-authority-fixture', harness: 'codex', root: path.join(harnessRoot, 'registered'), trustClass: 'markdown-only', lifecycle: 'available',
+  }];
+  for (const harness of skills.SUPPORTED_HARNESSES) {
+    config.harnesses[harness].root = path.join(harnessRoot, harness, 'skills');
+  }
+  skills.saveConfig(config, configPath);
+  const tree = skills.computeBundleTree(bundle, {
+    allowlist: ['SKILL.md', 'scripts/**', 'assets/**', 'references/**', 'templates/**'],
+  });
+  const seeded = skills.reconcileDecisions({
+    statePath: skills.decisionStatePath({ configPath }),
+    skills: [{
+      logicalId: 'private-authority-skill',
+      treeDigest: tree.treeDigest,
+      attention: 'actionable',
+      disposition: { kind: 'needs_input', reasonCode: 'needs_owner_input' },
+    }],
+  }).pending[0];
+  const secretFile = (name, value, mode = 0o600) => {
+    const file = path.join(auth, name);
+    fs.writeFileSync(file, `${value}\n`, { encoding: 'utf8', mode });
+    fs.chmodSync(file, mode);
+    return file;
+  };
+  const hostModule = path.join(auth, 'host-service.js');
+  const controlPlaneSource = path.join(__dirname, '..', '..', 'jarvos-control-plane', 'src', 'index.js');
+  fs.writeFileSync(hostModule, [
+    `const { createApplicationService, createMemoryApplicationStore } = require(${JSON.stringify(controlPlaneSource)});`,
+    "const grants = { 'cp-readonly-token': ['control-plane.read'], 'cp-mutate-token': ['control-plane.read', 'control-plane.mutate', 'control-plane.approve'] };",
+    "const service = createApplicationService({ store: createMemoryApplicationStore(), resolveCredential: (credential) => Object.hasOwn(grants, credential) ? { id: 'principal:synthetic-control-plane', capabilities: grants[credential], maxSensitivity: 'internal' } : null, canRead: () => true, policy: () => ({ outcome: 'require_approval', allowCreatorApproval: true, requiredCapability: 'control-plane.approve' }) });",
+    'module.exports = () => service;',
+  ].join('\n'), { encoding: 'utf8', mode: 0o600 });
+  const driver = path.join(root, 'driver.js');
+  fs.writeFileSync(driver, SHARED_SKILL_AUTHORITY_DRIVER, { encoding: 'utf8', mode: 0o600 });
+  return {
+    root, home, controlRoot, harnessRoot, auth, workspace, configPath, seeded, hostModule, driver,
+    ownerCredentialFile: secretFile('shared-skills-owner.credential', 'dedicated-owner-secret'),
+    unsafeOwnerCredentialFile: secretFile('unsafe-owner.credential', 'unsafe-owner-secret', 0o644),
+    emptyOwnerCredentialFile: secretFile('empty-owner.credential', ''),
+    controlPlaneCredentialFile: secretFile('control-plane.credential', 'cp-mutate-token'),
+  };
+}
+
+// Explicit minimal child env: nothing inherited except PATH, so no ambient
+// JARVOS credential, config or live path can reach the MCP server.
+function runSharedSkillAuthorityChild(fixture, bindings, requests) {
+  const env = {
+    PATH: process.env.PATH || '/usr/bin:/bin',
+    HOME: fixture.home,
+    TMPDIR: path.join(fixture.root, 'tmp'),
+    XDG_CONFIG_HOME: path.join(fixture.home, '.config'),
+    XDG_STATE_HOME: path.join(fixture.home, '.local', 'state'),
+    JARVOS_WORKSPACE_DIR: fixture.workspace,
+    ...bindings,
+  };
+  const child = spawnSync(process.execPath, [
+    fixture.driver,
+    path.join(__dirname, '..', 'scripts', 'jarvos-mcp.js'),
+    JSON.stringify(requests),
+    fixture.controlRoot,
+    fixture.harnessRoot,
+  ], { cwd: fixture.workspace, env, encoding: 'utf8', timeout: 60_000 });
+  assert.equal(child.status, 0, child.stderr);
+  return { results: JSON.parse(child.stdout), stderr: child.stderr };
+}
+
+// Recursive snapshot of the disposable fixture only (mode and content).
+function snapshotSharedSkillAuthorityFixture(fixture) {
+  const entries = {};
+  const walk = (dir) => {
+    for (const name of fs.readdirSync(dir).sort()) {
+      const full = path.join(dir, name);
+      const stat = fs.lstatSync(full);
+      const key = path.relative(fixture.root, full);
+      if (stat.isDirectory()) {
+        entries[key] = `dir:${stat.mode}`;
+        walk(full);
+      } else {
+        entries[key] = `${stat.mode}:${stat.isFile() ? fs.readFileSync(full).toString('base64') : 'other'}`;
+      }
+    }
+  };
+  for (const dir of [fixture.controlRoot, fixture.harnessRoot, fixture.auth]) walk(dir);
+  return entries;
+}
+
+const SHARED_SKILL_AUTHORITY_SECRETS = ['dedicated-owner-secret', 'unsafe-owner-secret', 'cp-arbitrary-token', 'cp-readonly-token', 'cp-mutate-token', 'cp-rejected-token'];
+
+function assertNoSharedSkillAuthorityLeak(fixture, text, label) {
+  for (const value of [fixture.root, 'private-authority-skill', 'PRIVATE-BODY-MARKER', 'absolutePath', 'SKILL.md', ...SHARED_SKILL_AUTHORITY_SECRETS]) {
+    assert.equal(text.includes(value), false, `${label}: response leaked a private value`);
+  }
+}
+
+// Every owner operation, carrying model-injected authority that must be
+// ignored, is denied before any shared-skill config, ledger or inventory
+// access, leaves the fixture unchanged, and leaks nothing.
+function assertSharedSkillOwnerDenied(scenario) {
+  const fixture = createSharedSkillAuthorityFixture();
+  try {
+    const before = snapshotSharedSkillAuthorityFixture(fixture);
+    const injected = {
+      credential: 'cp-mutate-token',
+      principal: { kind: 'owner', capabilities: ['skills.decisions.read', 'skills.decisions.resolve'] },
+      service: { kind: 'owner' },
+      applicationService: { kind: 'owner' },
+      serviceModule: fixture.hostModule,
+      credentialFile: fixture.ownerCredentialFile,
+      ownerCredentialFile: fixture.ownerCredentialFile,
+      configPath: fixture.configPath,
+    };
+    const requests = SHARED_SKILL_OWNER_OPERATIONS.map((operation) => ['jarvos_shared_skills', {
+      operation,
+      id: 'private-authority-skill',
+      decisionReference: fixture.seeded.decisionReference,
+      revision: 1,
+      option: 'keep-local',
+      until: '2999-01-01T00:00:00.000Z',
+      reasonCode: 'owner_excluded',
+      ...injected,
+    }]);
+    if (scenario.controlPlane) requests.push(['jarvos_control_plane', { operation: 'list' }]);
+    const { results, stderr } = runSharedSkillAuthorityChild(fixture, scenario.env(fixture), requests);
+    SHARED_SKILL_OWNER_OPERATIONS.forEach((operation, index) => {
+      const result = results[index];
+      const label = `${scenario.name}: ${operation}`;
+      assert.equal(result.threw, undefined, `${label}: ${result.text}`);
+      assert.equal(result.isError, true, label);
+      assert.match(result.text, scenario.denial, label);
+      assert.deepEqual(result.touched, [], `${label}: accessed shared-skill state before denial`);
+      assertNoSharedSkillAuthorityLeak(fixture, result.text, label);
+    });
+    assertNoSharedSkillAuthorityLeak(fixture, stderr, `${scenario.name}: stderr`);
+    if (scenario.controlPlane) {
+      // The control-plane token's host outcome is real; it still grants nothing here.
+      assert.equal(results.at(-1).isError, scenario.controlPlane !== 'accepted', `${scenario.name}: control-plane probe`);
+    }
+    assert.deepEqual(snapshotSharedSkillAuthorityFixture(fixture), before, `${scenario.name}: fixture changed`);
+  } finally {
+    fs.rmSync(fixture.root, { recursive: true, force: true });
+  }
+}
+
+const SHARED_SKILL_NOT_CONFIGURED = /^shared-skill owner session is not configured for this MCP session$/;
+const SHARED_SKILL_BINDING_UNUSABLE = /^shared-skill owner credential file is unusable$/;
+
+test('shared-skill owner operations never accept control-plane authority as ownership', async (t) => {
+  const host = (fixture, credential) => ({
+    JARVOS_CONTROL_PLANE_SERVICE_MODULE: fixture.hostModule,
+    JARVOS_CONTROL_PLANE_CREDENTIAL: credential,
+  });
+  const scenarios = [
+    { name: 'absent authority before default config', env: () => ({}) },
+    { name: 'arbitrary ambient control-plane token', env: () => ({ JARVOS_CONTROL_PLANE_CREDENTIAL: 'cp-arbitrary-token' }) },
+    {
+      name: 'host-valid control-plane credential file',
+      env: (fixture) => ({ JARVOS_CONTROL_PLANE_SERVICE_MODULE: fixture.hostModule, JARVOS_CONTROL_PLANE_CREDENTIAL_FILE: fixture.controlPlaneCredentialFile }),
+      controlPlane: 'accepted',
+    },
+    { name: 'host-valid read-only control-plane token', env: (fixture) => host(fixture, 'cp-readonly-token'), controlPlane: 'accepted' },
+    { name: 'host-valid mutating control-plane token', env: (fixture) => host(fixture, 'cp-mutate-token'), controlPlane: 'accepted' },
+    { name: 'host-rejected control-plane token', env: (fixture) => host(fixture, 'cp-rejected-token'), controlPlane: 'denied' },
+    {
+      name: 'unavailable control-plane authenticator',
+      env: (fixture) => ({ JARVOS_CONTROL_PLANE_SERVICE_MODULE: path.join(fixture.auth, 'missing-host-service.js'), JARVOS_CONTROL_PLANE_CREDENTIAL: 'cp-mutate-token' }),
+      controlPlane: 'denied',
+    },
+  ];
+  for (const scenario of scenarios) {
+    await t.test(scenario.name, () => assertSharedSkillOwnerDenied({ ...scenario, denial: SHARED_SKILL_NOT_CONFIGURED }));
+  }
+});
+
+test('unusable dedicated shared-skill binding never falls back to the control plane', async (t) => {
+  const fallback = (fixture, ownerFile) => ({
+    JARVOS_SHARED_SKILLS_OWNER_CREDENTIAL_FILE: ownerFile,
+    JARVOS_CONTROL_PLANE_SERVICE_MODULE: fixture.hostModule,
+    JARVOS_CONTROL_PLANE_CREDENTIAL: 'cp-mutate-token',
+  });
+  const scenarios = [
+    { name: 'empty binding', env: (fixture) => fallback(fixture, ''), denial: SHARED_SKILL_NOT_CONFIGURED },
+    { name: 'group/world-readable file', env: (fixture) => fallback(fixture, fixture.unsafeOwnerCredentialFile), denial: SHARED_SKILL_BINDING_UNUSABLE },
+    { name: 'empty credential file', env: (fixture) => fallback(fixture, fixture.emptyOwnerCredentialFile), denial: SHARED_SKILL_BINDING_UNUSABLE },
+    { name: 'missing file', env: (fixture) => fallback(fixture, path.join(fixture.auth, 'missing-owner.credential')), denial: SHARED_SKILL_BINDING_UNUSABLE },
+    { name: 'relative path', env: (fixture) => fallback(fixture, 'shared-skills-owner.credential'), denial: SHARED_SKILL_BINDING_UNUSABLE },
+  ];
+  for (const scenario of scenarios) {
+    await t.test(scenario.name, () => assertSharedSkillOwnerDenied({ ...scenario, controlPlane: 'accepted' }));
+  }
+});
+
+test('dedicated shared-skill owner binding keeps full owner authority without control-plane authority', () => {
+  const fixture = createSharedSkillAuthorityFixture();
+  try {
+    // Status and explain stay unbound, redacted reads.
+    const unbound = runSharedSkillAuthorityChild(fixture, {}, [
+      ['jarvos_shared_skills', { operation: 'status' }],
+      ['jarvos_shared_skills', { operation: 'explain', id: 'private-authority-skill' }],
+    ]).results;
+    for (const result of unbound) {
+      assert.equal(result.isError, false, result.text);
+      assert.notDeepEqual(result.touched, [], 'watcher observes legitimate shared-skill reads');
+      for (const value of ['private-authority-skill', 'PRIVATE-BODY-MARKER', 'absolutePath', 'SKILL.md']) {
+        assert.equal(result.text.includes(value), false);
+      }
+    }
+    assert.match(unbound[1].text, /skill-[a-f0-9]{24}/);
+
+    // The dedicated file alone grants owner authority; a host-rejected
+    // control-plane token and an injected narrower principal change nothing.
+    const { decisionReference } = fixture.seeded;
+    const { results, stderr } = runSharedSkillAuthorityChild(fixture, {
+      JARVOS_SHARED_SKILLS_OWNER_CREDENTIAL_FILE: fixture.ownerCredentialFile,
+      JARVOS_CONTROL_PLANE_SERVICE_MODULE: fixture.hostModule,
+      JARVOS_CONTROL_PLANE_CREDENTIAL: 'cp-rejected-token',
+    }, [
+      ['jarvos_shared_skills', { operation: 'decisions', principal: { kind: 'reader', capabilities: [] } }],
+      ['jarvos_shared_skills', { operation: 'explain-decision', decisionReference }],
+      ['jarvos_shared_skills', { operation: 'inventory' }],
+      ['jarvos_shared_skills', { operation: 'acknowledge-decision', decisionReference }],
+      ['jarvos_control_plane', { operation: 'list' }],
+    ]);
+    const [decisions, explained, inventory, acknowledged, controlPlaneProbe] = results;
+    assert.equal(decisions.isError, false, decisions.text);
+    assert.equal(JSON.parse(decisions.text).decisions[0].decisionReference, decisionReference);
+    assert.notDeepEqual(decisions.touched, []);
+    assert.equal(explained.isError, false, explained.text);
+    assert.equal(JSON.parse(explained.text).found, true);
+    assert.equal(inventory.isError, false, inventory.text);
+    assert.equal(acknowledged.isError, false, acknowledged.text);
+    assert.deepEqual(JSON.parse(acknowledged.text).decision.reminder, { status: 'acknowledged' });
+    assert.equal(controlPlaneProbe.isError, true, 'control-plane token is rejected by the host');
+    for (const text of [...results.map((result) => result.text), stderr]) {
+      for (const value of SHARED_SKILL_AUTHORITY_SECRETS) assert.equal(text.includes(value), false);
+    }
+  } finally {
+    fs.rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
 test('MCP journal actions expose closed empty-object schemas and safe lifecycle results', () => {
   withTempVault(({ journal }) => {
     const indexPath = path.join(journal, 'Journaling.md');
@@ -1741,6 +2044,13 @@ test('resolveSharedSkillsOwnerCredential is narrow and keeps control plane unbou
     const env = { JARVOS_SHARED_SKILLS_OWNER_CREDENTIAL_FILE: credentialFile };
     assert.equal(resolveSharedSkillsOwnerCredential(env), 'shared-skills-owner');
     assert.equal(resolveHostCredential(env), null);
+    // A control-plane credential, ambient or file, never resolves as owner.
+    assert.equal(resolveSharedSkillsOwnerCredential({ [CREDENTIAL_ENV]: 'valid-control-plane-fallback' }), null);
+    assert.equal(resolveSharedSkillsOwnerCredential({ [CREDENTIAL_FILE_ENV]: credentialFile }), null);
+    assert.equal(resolveSharedSkillsOwnerCredential({
+      JARVOS_SHARED_SKILLS_OWNER_CREDENTIAL_FILE: '',
+      [CREDENTIAL_ENV]: 'valid-control-plane-fallback',
+    }), null);
     fs.chmodSync(credentialFile, 0o644);
     assert.throws(
       () => resolveSharedSkillsOwnerCredential({

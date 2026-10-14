@@ -109,6 +109,16 @@ credential arguments are dropped. `approval-state` returns an execution
 resource and command spec) only to the principal that created the request.
 `JARVOS_CODING_PRODUCER_TIMEOUT_MS` (default one hour) bounds a single call.
 
+`jarvos_shared_skills` `status` and `explain` are unbound redacted reads. Every
+other operation is a full shared-skill owner operation and requires the
+dedicated host-bound `JARVOS_SHARED_SKILLS_OWNER_CREDENTIAL_FILE` (same trusted
+owner-only file rules as the control-plane credential file); it is checked
+before any skills config, decision ledger or inventory access. A control-plane
+credential, ambient or file, never implies skills ownership, whatever the host
+grants it. Hosts that relied on the former control-plane fallback must have an
+administrator provision the dedicated owner file as a follow-up; this source
+change performs no credential provisioning or live configuration.
+
 ## Projects context
 
 Projects is the assistant-facing source of truth for project and outcome identity,
