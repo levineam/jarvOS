@@ -182,6 +182,7 @@
     },
     "bridge": {
       "environment": "JARVOS_STEWARDSHIP_BRIDGE_COMMAND",
+      "executableBinding": "canonical-absolute",
       "contract": "A canonical absolute trusted executable accepts one lifecycle capability name and emits a public-safe JSON availability receipt. For nextTurnInput, a pending receipt may contain only a bounded plain-English prompt, 2-3 choices, a listed default, and an opaque correlation identifier; hooks display it without granting authority. Codex resolves private bridge state only through the current CODEX_THREAD_ID and a session-neutral private mapping root. Native hooks do not capture arbitrary reply text: the in-session agent verifies an exact listed reply, then invokes `\"$JARVOS_STEWARDSHIP_BRIDGE_COMMAND\" answer --correlation <correlation> --choice <listed-choice>`, which passes only those two bounded fields."
     },
     "capabilities": {

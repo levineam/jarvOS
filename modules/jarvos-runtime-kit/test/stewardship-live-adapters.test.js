@@ -67,6 +67,7 @@ test('checked-in runtime adapters expose one opt-in stewardship lifecycle contra
     assert.equal(declaration.isolation.providesIsolatedWorktrees, true);
     assert.equal(declaration.isolation.requiresVerifiedWorktreeEvidence, true);
     if (['claude', 'codex'].includes(runtime)) {
+      assert.equal(declaration.bridge.executableBinding, 'canonical-absolute');
       assert.match(declaration.bridge.contract, /nextTurnInput/);
       assert.match(declaration.bridge.contract, /2-3 choices/);
       assert.match(declaration.bridge.contract, /without granting authority/);
