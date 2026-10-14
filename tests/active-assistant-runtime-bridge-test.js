@@ -92,7 +92,36 @@ test('loads the paired implementation and keeps module introspection local', (t)
 
 test('publishes the typed synthesis contract version without exposing host evidence', () => {
   assert.equal(bridge.SYNTHESIS_CONTRACT_VERSION, 'active-assistant-synthesis/v1');
+  assert.deepEqual(bridge.SUPPORTED_SYNTHESIS_CONTRACT_VERSIONS, [
+    'active-assistant-synthesis/v1',
+    'active-assistant-synthesis/v2',
+  ]);
   assert.equal(Object.keys(bridge).includes('coachMessage'), false);
+});
+
+test('loads the paired v2 implementation and rejects an unknown synthesis contract', (t) => {
+  const f = fixture();
+  t.after(() => fs.rmSync(f.runtimeRoot, { recursive: true, force: true }));
+  fs.writeFileSync(
+    f.entrypoint,
+    'module.exports={synthesisContractVersion:"active-assistant-synthesis/v2",runSynthesis(){},runCollectedPacket(){return "v2";}};\n',
+    { mode: 0o600 },
+  );
+  assert.equal(bridge.loadImplementation({
+    env: { [bridge.ROOT_ENV]: f.runtimeRoot },
+    publicRoot: f.publicRoot,
+  }).runCollectedPacket(), 'v2');
+
+  fs.writeFileSync(
+    f.entrypoint,
+    'module.exports={synthesisContractVersion:"active-assistant-synthesis/v3",runSynthesis(){}};\n',
+    { mode: 0o600 },
+  );
+  delete require.cache[require.resolve(f.entrypoint)];
+  assert.throws(
+    () => bridge.loadImplementation({ env: { [bridge.ROOT_ENV]: f.runtimeRoot }, publicRoot: f.publicRoot }),
+    { code: 'active_assistant_synthesis_contract_mismatch' },
+  );
 });
 
 test('CLI awaits main and redacts implementation failures', (t) => {

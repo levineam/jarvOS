@@ -150,31 +150,51 @@ test('paused projects are ongoing; done and abandoned are not', () => {
   assert.deepEqual(ongoing.sort(), ['A', 'P']);
 });
 
-test('journalProjectLines emits wiki-links for ongoing projects only', () => {
-  const dir = tmpDir();
-  write(dir, 'A.md', completePage('A', 'active'));
-  write(dir, 'P.md', completePage('P', 'paused'));
-  write(dir, 'D.md', completePage('D', 'done'));
-
-  const lines = projects.journalProjectLines(projects.listProjects({ dir }));
-  assert.equal(lines, '- [[A]]\n- [[P]]');
-  assert.ok(!lines.includes('[[D]]'));
+test('journalProjectLines delegates touched-only rendering to canonical note mappings', () => {
+  const list = [
+    { id: 'prj_000001', kind: 'project', title: 'A', lifecycle: 'active' },
+    { id: 'prj_000002', kind: 'project', title: 'P', lifecycle: 'paused' },
+    { id: 'prj_000003', kind: 'project', title: 'D', lifecycle: 'archived' },
+  ];
+  const lines = projects.journalProjectLines(list, projects.loadConfig(), {
+    date: '2026-08-08',
+    timeZone: 'UTC',
+    activities: [
+      { canonicalId: 'prj_000001', occurredAt: '2026-08-08T11:00:00.000Z', trust: 'verified' },
+      { canonicalId: 'prj_000003', occurredAt: '2026-08-08T11:00:00.000Z', trust: 'verified' },
+    ],
+    noteMappings: {
+      prj_000001: { target: 'Projects/A' },
+      prj_000003: { target: 'Projects/D' },
+    },
+  });
+  assert.equal(lines, '- [[Projects/A]]\n- [[Projects/D]]');
+  assert.ok(!lines.includes('[[P]]'));
 });
 
-test('journalProjectLines says so when there is nothing ongoing', () => {
+test('journalProjectLines says so when there is no accepted touch', () => {
   const dir = tmpDir();
   write(dir, 'D.md', completePage('D', 'done'));
-  assert.equal(projects.journalProjectLines(projects.listProjects({ dir })), '- No ongoing projects');
-  assert.equal(projects.journalProjectLines([]), '- No ongoing projects');
+  assert.equal(projects.journalProjectLines(projects.listProjects({ dir })), '- No projects touched today');
+  assert.equal(projects.journalProjectLines([]), '- No projects touched today');
 });
 
-test('journalProjectLines caps the list and says how many were held back', () => {
+test('journalProjectLines caps mapped touched projects and says how many were held back', () => {
   const config = { ...projects.loadConfig() };
   config.journal = { ...config.journal, maxItems: 2 };
-  const list = ['A', 'B', 'C', 'D'].map((title) => ({ title, status: 'active' }));
+  const list = ['A', 'B', 'C', 'D'].map((title, index) => ({
+    id: `prj_00000${index + 1}`, kind: 'project', title, lifecycle: 'active',
+  }));
 
-  const lines = projects.journalProjectLines(list, config);
-  assert.equal(lines, '- [[A]]\n- [[B]]\n- _...and 2 more_');
+  const lines = projects.journalProjectLines(list, config, {
+    date: '2026-08-08',
+    timeZone: 'UTC',
+    activities: list.map((project) => ({
+      canonicalId: project.id, occurredAt: '2026-08-08T11:00:00.000Z', trust: 'verified',
+    })),
+    noteMappings: Object.fromEntries(list.map((project) => [project.id, { target: `Projects/${project.title}` }])),
+  });
+  assert.equal(lines, '- [[Projects/A]]\n- [[Projects/B]]\n- _...and 2 more_');
 });
 
 test('checkProjects reports only ongoing projects that are missing sections', () => {
@@ -315,7 +335,7 @@ test('an unreadable projects directory is not reported as "no projects"', () => 
 test('a genuinely empty projects directory still reports no projects', () => {
   const dir = tmpDir();
   assert.deepEqual(projects.readProjectsDir({ dir }), []);
-  assert.equal(projects.journalProjectLines(projects.readProjectsDir({ dir })), '- No ongoing projects');
+  assert.equal(projects.journalProjectLines(projects.readProjectsDir({ dir })), '- No projects touched today');
 });
 
 test('listProjects still flattens an unreadable directory to an empty list', () => {

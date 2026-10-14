@@ -10,12 +10,33 @@ const {
 } = require('../../providers/workflow-provider');
 
 const WORK_RUN_STORE_SCHEMA_VERSION = 'jarvos-coding-work-run/v1';
+// v2 state adds the exclusive workspace binding index; run records stay WORK_RUN_STORE_SCHEMA_VERSION.
+const WORK_RUN_STORE_SCHEMA_VERSION_V2 = 'jarvos-coding-work-run/v2';
+const WORKSPACE_BINDING_VERSION = 'jarvos-coding-workspace-binding/v1';
+const WORKSPACE_BINDING_PUBLIC_VERSION = 'jarvos-coding-workspace-binding-public/v1';
+const WORKSPACE_ID = /^ws_[0-9a-f]{24}$/;
+// Strict allowlists: handoffFrom/handoffTo exist only while state is 'handoff_pending'.
+const WORKSPACE_HANDOFF_KEYS = ['handoffFrom', 'handoffTo'];
+const WORKSPACE_BINDING_KEYS = new Set(['version', 'workspaceId', 'identity', 'workRunId', 'subjectKey', 'ownerId', 'runFence', 'bindingFence', 'state', 'boundAt', 'updatedAt', 'revision', 'revisionHistory', ...WORKSPACE_HANDOFF_KEYS]);
+const WORKSPACE_IDENTITY_KEYS = new Set(['canonicalPath', 'dev', 'ino']);
+// Workspace revisions are caller assertions (factsSource 'caller'): nothing here runs or verifies Git,
+// and a recorded revision carries no effect or security authority.
+const WORKSPACE_REVISION_INTENT_SET = new Set(['initial', 'commit', 'rebase', 'base_update', 'branch_change', 'reset']);
+const WORKSPACE_REVISION_FACT_KEYS = ['branch', 'baseOid', 'headOid'];
+const WORKSPACE_REVISION_RECORD_KEYS = ['seq', 'branch', 'baseOid', 'headOid', 'intent', 'reasonCode', 'operationNonce', 'factsSource', 'at'];
+const WORKSPACE_REVISION_HISTORY_LIMIT = 32;
+const GIT_OID = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
+// Conservative ref-name grammar: controls/space, ~^:?*[\, "..", "@{", "//", leading -/. or trailing /. are refused.
+const GIT_BRANCH_FORBIDDEN = /[\x00-\x20\x7f~^:?*[\\]|\.\.|@\{|\/\/|^[-/.]|[/.]$/;
+const REASON_CODE = /^[a-z][a-z0-9_-]{1,63}$/;
 const WORK_RUN_EVENT_VERSION = 'jarvos-coding-work-run-event/v1';
 const WORK_RUN_PUBLIC_VERSION = 'jarvos-coding-work-run-public/v1';
+const FOLLOW_THROUGH_BINDING_VERSION = 'jarvos-coding-follow-through-binding/v1';
 const WORK_RUN_STATES = new Set(['active', 'blocked', 'completed', 'failed']);
 const WORK_RUN_EVENT_TYPES = new Set(['route', 'provider', 'artifact', 'recovery', 'terminal']);
 const SHA256 = /^[a-f0-9]{64}$/i;
 const OPAQUE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
+const PROJECT_OUTCOME_ID = /^out_[0-9]{6,}$/;
 const ARTIFACT_REFERENCE = /^artifact:[A-Za-z0-9._-]{6,160}$/;
 const SUBJECT_KEY = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$/;
 const ABSOLUTE_PATH = /^(?:\/(?!\/)|[A-Za-z]:[\\/]|\\\\)/;
@@ -42,6 +63,111 @@ function isDigest(value) {
   return typeof value === 'string' && SHA256.test(value);
 }
 
+function isTimestamp(value) {
+  return typeof value === 'string' && !Number.isNaN(Date.parse(value));
+}
+
+// Own-property lookup so ids such as "__proto__" never resolve to prototype members.
+function own(map, key) {
+  return isObject(map) && typeof key === 'string' && Object.hasOwn(map, key) ? map[key] : undefined;
+}
+
+function isRootPath(value) {
+  return path.parse(value).root === value;
+}
+
+function isCanonicalWorkspacePath(value) {
+  return typeof value === 'string' && value.length > 0 && !value.includes('\0') && path.isAbsolute(value)
+    && path.normalize(value) === value && !isRootPath(value) && !value.endsWith(path.sep);
+}
+
+function isWorkspaceIdentity(identity) {
+  return isObject(identity)
+    && Object.keys(identity).every((key) => WORKSPACE_IDENTITY_KEYS.has(key))
+    && isCanonicalWorkspacePath(identity.canonicalPath)
+    && Number.isSafeInteger(identity.dev) && identity.dev >= 0
+    && Number.isSafeInteger(identity.ino) && identity.ino > 0;
+}
+
+function sameInode(a, b) {
+  return a.dev === b.dev && a.ino === b.ino;
+}
+
+function sameWorkspaceIdentity(a, b) {
+  return sameInode(a, b) && a.canonicalPath === b.canonicalPath;
+}
+
+// Path-segment aware: "/ws/a" overlaps "/ws" and "/ws/a/child" but not "/ws/a-b".
+function workspacePathsOverlap(a, b) {
+  return a === b || a.startsWith(`${b}${path.sep}`) || b.startsWith(`${a}${path.sep}`);
+}
+
+function isGitOid(value) {
+  return typeof value === 'string' && GIT_OID.test(value);
+}
+
+function isGitBranch(value) {
+  return typeof value === 'string' && value.length > 0 && value !== '@' && !GIT_BRANCH_FORBIDDEN.test(value)
+    && value.split('/').every((part) => !part.startsWith('.') && !part.endsWith('.lock'))
+    && !SECRET_VALUE.test(value);
+}
+
+function isReasonCode(value) {
+  return typeof value === 'string' && REASON_CODE.test(value);
+}
+
+// Copies { branch, baseOid, headOid } from a plain object with exactly those keys, or returns null.
+function revisionFacts(next) {
+  if (!isObject(next)) return null;
+  const proto = Object.getPrototypeOf(next);
+  if (proto !== Object.prototype && proto !== null) return null;
+  const keys = Object.keys(next);
+  if (keys.length !== WORKSPACE_REVISION_FACT_KEYS.length || !WORKSPACE_REVISION_FACT_KEYS.every((key) => Object.hasOwn(next, key))) return null;
+  const facts = { branch: next.branch, baseOid: next.baseOid, headOid: next.headOid };
+  return isGitBranch(facts.branch) && isGitOid(facts.baseOid) && isGitOid(facts.headOid) ? facts : null;
+}
+
+function isRevisionRecord(record) {
+  return isObject(record)
+    && Object.keys(record).length === WORKSPACE_REVISION_RECORD_KEYS.length
+    && WORKSPACE_REVISION_RECORD_KEYS.every((key) => Object.hasOwn(record, key))
+    && Number.isSafeInteger(record.seq) && record.seq >= 1
+    && isGitBranch(record.branch) && isGitOid(record.baseOid) && isGitOid(record.headOid)
+    && WORKSPACE_REVISION_INTENT_SET.has(record.intent)
+    && (record.reasonCode === null ? record.intent !== 'reset' : isReasonCode(record.reasonCode))
+    && typeof record.operationNonce === 'string' && OPAQUE_ID.test(record.operationNonce)
+    && record.factsSource === 'caller'
+    && isTimestamp(record.at);
+}
+
+function sameRevisionRecord(a, b) {
+  return WORKSPACE_REVISION_RECORD_KEYS.every((key) => a[key] === b[key]);
+}
+
+function isLegalRevisionTransition(intent, current, next) {
+  const sameBranch = next.branch === current.branch;
+  const sameBase = next.baseOid === current.baseOid;
+  const sameHead = next.headOid === current.headOid;
+  if (sameBranch && sameBase && sameHead) return false;
+  switch (intent) {
+    case 'commit':
+    case 'reset':
+      return sameBranch && sameBase && !sameHead;
+    case 'rebase':
+      return sameBranch && !sameBase;
+    case 'base_update':
+      return sameBranch && sameHead && !sameBase;
+    case 'branch_change':
+      return !sameBranch;
+    default:
+      return false;
+  }
+}
+
+function publicRevision(record) {
+  return { seq: record.seq, branch: record.branch, baseOid: record.baseOid, headOid: record.headOid, intent: record.intent, at: record.at };
+}
+
 function assertSafeValue(value, label, options = {}) {
   if (typeof value === 'string') {
     if (value.includes('\0') || SECRET_VALUE.test(value)) throw new Error(`${label} contains unsafe content`);
@@ -61,18 +187,23 @@ function emptyState() {
     schemaVersion: WORK_RUN_STORE_SCHEMA_VERSION,
     revision: 0,
     workRuns: {},
+    followThrough: {},
   };
 }
 
 function validateState(state) {
   const errors = [];
   if (!isObject(state)) return { ok: false, errors: ['work-run state must be an object'] };
-  if (state.schemaVersion !== WORK_RUN_STORE_SCHEMA_VERSION) errors.push(`state.schemaVersion must be ${WORK_RUN_STORE_SCHEMA_VERSION}`);
+  if (state.schemaVersion !== WORK_RUN_STORE_SCHEMA_VERSION && state.schemaVersion !== WORK_RUN_STORE_SCHEMA_VERSION_V2) {
+    errors.push(`state.schemaVersion must be ${WORK_RUN_STORE_SCHEMA_VERSION} or ${WORK_RUN_STORE_SCHEMA_VERSION_V2}`);
+  }
   if (!Number.isInteger(state.revision) || state.revision < 0) errors.push('state.revision must be a non-negative integer');
   if (!isObject(state.workRuns)) errors.push('state.workRuns must be an object');
-  for (const [id, run] of Object.entries(state.workRuns || {})) {
-    if (id !== run.workRunId) errors.push(`workRuns.${id}.workRunId must match its key`);
+  if (state.followThrough !== undefined && !isObject(state.followThrough)) errors.push('state.followThrough must be an object');
+  const workRuns = isObject(state.workRuns) ? state.workRuns : {};
+  for (const [id, run] of Object.entries(workRuns)) {
     if (!isObject(run)) { errors.push(`workRuns.${id} must be an object`); continue; }
+    if (id !== run.workRunId) errors.push(`workRuns.${id}.workRunId must match its key`);
     if (run.schemaVersion !== WORK_RUN_STORE_SCHEMA_VERSION) errors.push(`workRuns.${id}.schemaVersion is invalid`);
     if (!OPAQUE_ID.test(run.workRunId || '')) errors.push(`workRuns.${id}.workRunId must be opaque`);
     if (!SUBJECT_KEY.test(run.subjectKey || '')) errors.push(`workRuns.${id}.subjectKey must be safe`);
@@ -82,7 +213,148 @@ function validateState(state) {
     if (!Array.isArray(run.artifacts)) errors.push(`workRuns.${id}.artifacts must be an array`);
     if (!isObject(run.recovery)) errors.push(`workRuns.${id}.recovery must be an object`);
   }
+  for (const [outcomeId, binding] of Object.entries(state.followThrough || {})) {
+    if (!isObject(binding)) { errors.push(`followThrough.${outcomeId} must be an object`); continue; }
+    if (binding.outcomeId !== outcomeId || !PROJECT_OUTCOME_ID.test(outcomeId) || binding.version !== FOLLOW_THROUGH_BINDING_VERSION) errors.push(`followThrough.${outcomeId} is invalid`);
+    for (const field of ['outcomeId', 'executorOwnerId', 'harnessWorkspaceId', 'workRunId', 'todoId', 'triggerId']) {
+      if ((field === 'outcomeId' ? !PROJECT_OUTCOME_ID.test(binding[field] || '') : !OPAQUE_ID.test(binding[field] || ''))) errors.push(`followThrough.${outcomeId}.${field} must be opaque`);
+    }
+    if (!Number.isInteger(binding.fence) || binding.fence < 1) errors.push(`followThrough.${outcomeId}.fence is invalid`);
+    if (binding.leaseHistory !== undefined) {
+      if (!Array.isArray(binding.leaseHistory) || !binding.leaseHistory.length) errors.push(`followThrough.${outcomeId}.leaseHistory is invalid`);
+      for (const lease of binding.leaseHistory || []) {
+        if (!isObject(lease) || !Number.isInteger(lease.fence) || lease.fence < 1 || typeof lease.boundAt !== 'string' || Number.isNaN(Date.parse(lease.boundAt))) {
+          errors.push(`followThrough.${outcomeId}.leaseHistory contains an invalid entry`);
+        }
+      }
+    }
+    if (typeof binding.boundAt !== 'string' || Number.isNaN(Date.parse(binding.boundAt))) errors.push(`followThrough.${outcomeId}.boundAt is invalid`);
+  }
+  validateWorkspaceState(state, workRuns, errors);
   return { ok: errors.length === 0, errors };
+}
+
+function validateWorkspaceState(state, workRuns, errors) {
+  if (state.schemaVersion !== WORK_RUN_STORE_SCHEMA_VERSION_V2) {
+    // v1 state cannot carry (or hide) workspace bindings; the first successful bind upgrades to v2.
+    // A retired (rolled-back) v1 state may keep only the fence high-water so fences never repeat.
+    if (state.workspaceBindings !== undefined) errors.push('state.workspaceBindings requires v2 state');
+    if (state.workspaceFenceSeq !== undefined && (!Number.isSafeInteger(state.workspaceFenceSeq) || state.workspaceFenceSeq < 0)) {
+      errors.push('state.workspaceFenceSeq must be a non-negative safe integer');
+    }
+    for (const [id, run] of Object.entries(workRuns)) {
+      if (isObject(run) && run.workspaceId != null) errors.push(`workRuns.${id}.workspaceId requires v2 state`);
+    }
+    return;
+  }
+  if (!Number.isSafeInteger(state.workspaceFenceSeq) || state.workspaceFenceSeq < 0) errors.push('state.workspaceFenceSeq must be a non-negative safe integer');
+  if (!isObject(state.workspaceBindings)) { errors.push('state.workspaceBindings must be an object'); return; }
+  const identities = [];
+  const handoffTargets = new Set();
+  for (const [key, binding] of Object.entries(state.workspaceBindings)) {
+    const label = `workspaceBindings.${key}`;
+    if (!WORKSPACE_ID.test(key)) errors.push(`${label} key is invalid`);
+    if (!isObject(binding)) { errors.push(`${label} must be an object`); continue; }
+    const unsupported = Object.keys(binding).filter((field) => !WORKSPACE_BINDING_KEYS.has(field));
+    if (unsupported.length) errors.push(`${label} has unsupported fields: ${unsupported.join(', ')}`);
+    if (binding.version !== WORKSPACE_BINDING_VERSION) errors.push(`${label}.version is invalid`);
+    if (binding.workspaceId !== key) errors.push(`${label}.workspaceId must match its key`);
+    if (isWorkspaceIdentity(binding.identity)) identities.push({ key, ...binding.identity });
+    else errors.push(`${label}.identity is invalid`);
+    const run = own(workRuns, binding.workRunId);
+    if (!isObject(run)) {
+      errors.push(`${label}.workRunId must reference an existing work run`);
+    } else {
+      if (run.workspaceId !== key) errors.push(`${label} is not reciprocated by its work run`);
+      if (binding.subjectKey !== run.subjectKey) errors.push(`${label}.subjectKey must match its work run`);
+      if (binding.ownerId !== run.ownerId) errors.push(`${label}.ownerId must match its work run`);
+      if (binding.runFence !== run.fence) errors.push(`${label}.runFence must match its work run`);
+    }
+    if (typeof binding.ownerId !== 'string' || !OPAQUE_ID.test(binding.ownerId)) errors.push(`${label}.ownerId must be opaque`);
+    if (!Number.isSafeInteger(binding.runFence) || binding.runFence < 1) errors.push(`${label}.runFence must be a positive integer`);
+    if (!Number.isSafeInteger(binding.bindingFence) || binding.bindingFence < 1 || !(binding.bindingFence <= state.workspaceFenceSeq)) {
+      errors.push(`${label}.bindingFence must be a positive integer within state.workspaceFenceSeq`);
+    }
+    if (binding.state === 'bound') {
+      if (WORKSPACE_HANDOFF_KEYS.some((field) => Object.hasOwn(binding, field))) errors.push(`${label} must not carry handoff fields while bound`);
+    } else if (binding.state === 'handoff_pending') {
+      validateWorkspaceHandoff(binding, label, workRuns, errors);
+      if (typeof binding.handoffTo === 'string') {
+        if (handoffTargets.has(binding.handoffTo)) errors.push(`${label}.handoffTo already holds another pending reservation`);
+        handoffTargets.add(binding.handoffTo);
+      }
+    } else {
+      errors.push(`${label}.state is invalid`);
+    }
+    if (!isTimestamp(binding.boundAt) || !isTimestamp(binding.updatedAt)) errors.push(`${label} timestamps are invalid`);
+    validateWorkspaceRevision(binding, label, errors);
+  }
+  for (let i = 0; i < identities.length; i += 1) {
+    for (let j = i + 1; j < identities.length; j += 1) {
+      const [a, b] = [identities[i], identities[j]];
+      if (sameInode(a, b)) errors.push(`workspaceBindings.${a.key} and ${b.key} share one identity`);
+      else if (workspacePathsOverlap(a.canonicalPath, b.canonicalPath)) errors.push(`workspaceBindings.${a.key} and ${b.key} have overlapping paths`);
+    }
+  }
+  for (const [id, run] of Object.entries(workRuns)) {
+    if (!isObject(run) || run.workspaceId == null) continue;
+    const binding = own(state.workspaceBindings, run.workspaceId);
+    if (!isObject(binding) || binding.workRunId !== id) errors.push(`workRuns.${id}.workspaceId has no reciprocal binding`);
+  }
+}
+
+// A pending reservation names its source run and another existing, unbound target run (which may be unowned;
+// no target-owner authority is implied). The source's reciprocal pointer, owner and fence checks still apply.
+function validateWorkspaceHandoff(binding, label, workRuns, errors) {
+  if (typeof binding.handoffFrom !== 'string' || binding.handoffFrom !== binding.workRunId) errors.push(`${label}.handoffFrom must equal its workRunId`);
+  const target = typeof binding.handoffTo === 'string' && OPAQUE_ID.test(binding.handoffTo) ? own(workRuns, binding.handoffTo) : undefined;
+  if (!isObject(target) || binding.handoffTo === binding.workRunId) errors.push(`${label}.handoffTo must name another existing work run`);
+  else if (target.workspaceId != null) errors.push(`${label}.handoffTo must name an unbound work run`);
+}
+
+// Revision and history are present together or not at all; history is a contiguous, nonce-unique
+// suffix (at most 32 entries, so it need not start at seq 1) whose last entry equals the revision.
+function validateWorkspaceRevision(binding, label, errors) {
+  const { revision, revisionHistory: history } = binding;
+  if (revision === undefined && history === undefined) return;
+  if (!Array.isArray(history) || history.length < 1 || history.length > WORKSPACE_REVISION_HISTORY_LIMIT) {
+    errors.push(`${label}.revisionHistory must hold 1-${WORKSPACE_REVISION_HISTORY_LIMIT} entries`);
+    return;
+  }
+  if (!history.every(isRevisionRecord)) { errors.push(`${label}.revisionHistory contains an invalid entry`); return; }
+  for (let i = 1; i < history.length; i += 1) {
+    if (history[i].seq !== history[i - 1].seq + 1) { errors.push(`${label}.revisionHistory seqs must be contiguous`); break; }
+  }
+  if (new Set(history.map((entry) => entry.operationNonce)).size !== history.length) errors.push(`${label}.revisionHistory nonces must be unique`);
+  if (!isRevisionRecord(revision) || !sameRevisionRecord(revision, history[history.length - 1])) errors.push(`${label}.revision must equal the last revisionHistory entry`);
+}
+
+// state may be 'handoff_pending'; handoffFrom/handoffTo (run ids) are never projected.
+function publicWorkspaceBinding(binding) {
+  const projection = {
+    version: WORKSPACE_BINDING_PUBLIC_VERSION,
+    workspaceId: binding.workspaceId,
+    workRunId: binding.workRunId,
+    subjectKey: binding.subjectKey,
+    bindingFence: binding.bindingFence,
+    state: binding.state,
+    boundAt: binding.boundAt,
+    updatedAt: binding.updatedAt,
+  };
+  if (binding.revision) projection.revision = publicRevision(binding.revision);
+  return projection;
+}
+
+// Default file-store resolver: an existing directory's realpath plus its (dev, ino) identity.
+function createFsWorkspaceResolver() {
+  return function resolveWorkspace(worktreePath) {
+    const canonicalPath = fs.realpathSync.native(worktreePath);
+    const stat = fs.statSync(canonicalPath, { bigint: true });
+    if (!stat.isDirectory()) throw new Error('workspace must be an existing directory');
+    const max = BigInt(Number.MAX_SAFE_INTEGER);
+    if (stat.dev > max || stat.ino > max) throw new Error('workspace identity exceeds the safe integer range');
+    return { canonicalPath, dev: Number(stat.dev), ino: Number(stat.ino) };
+  };
 }
 
 function normalizeProviderSnapshot(snapshot) {
@@ -178,6 +450,21 @@ function publicRun(run) {
   };
 }
 
+function publicFollowThrough(binding) {
+  return {
+    version: FOLLOW_THROUGH_BINDING_VERSION,
+    outcomeId: binding.outcomeId,
+    executorOwnerId: binding.executorOwnerId,
+    harnessWorkspaceId: binding.harnessWorkspaceId,
+    workRunId: binding.workRunId,
+    fence: binding.fence,
+    todoId: binding.todoId,
+    triggerId: binding.triggerId,
+    boundAt: binding.boundAt,
+    leaseHistory: clone(binding.leaseHistory || [{ fence: binding.fence, boundAt: binding.boundAt }]),
+  };
+}
+
 function assertRunOwner(run, ownerId, fence) {
   if (typeof ownerId !== 'string' || !OPAQUE_ID.test(ownerId)) return { ok: false, reason: 'owner_required' };
   if (run.ownerId !== ownerId || run.fence !== fence) return { ok: false, reason: 'stale_fence', expectedFence: run.fence, providedFence: fence };
@@ -192,28 +479,40 @@ function createWorkRunStore(options = {}) {
   if (!options.backend || typeof options.backend.load !== 'function' || typeof options.backend.save !== 'function') throw new Error('work-run store backend must implement load/save');
   const clock = options.clock || (() => Date.now());
   const evidencePort = options.evidencePort || null;
+  const workspaceResolver = typeof options.workspaceResolver === 'function' ? options.workspaceResolver : null;
 
-  function loadState() {
-    const state = options.backend.load();
+  const backendIo = {
+    load: () => options.backend.load(),
+    save: (next, expectedRevision) => options.backend.save(next, expectedRevision),
+  };
+
+  function loadState(io = backendIo) {
+    const state = io.load();
+    // v1 stores created before the additive follow-through index remain readable.
+    if (state && state.followThrough === undefined) state.followThrough = {};
     const validation = validateState(state);
     if (!validation.ok) throw new Error(`invalid work-run state: ${validation.errors.join('; ')}`);
     return state;
   }
 
-  function commit(state, expectedRevision) {
+  function commit(state, expectedRevision, io) {
     const validation = validateState(state);
     if (!validation.ok) throw new Error(`invalid work-run state: ${validation.errors.join('; ')}`);
     state.revision = expectedRevision + 1;
-    options.backend.save(state, expectedRevision);
+    io.save(state, expectedRevision);
   }
 
   function mutate(mutator) {
-    const state = loadState();
-    const expectedRevision = state.revision;
-    const result = mutator(state);
-    if (result && result.__noCommit) return result.value;
-    commit(state, expectedRevision);
-    return result;
+    const transaction = (io) => {
+      const state = loadState(io);
+      const expectedRevision = state.revision;
+      const result = mutator(state);
+      if (result && result.__noCommit) return result.value;
+      commit(state, expectedRevision, io);
+      return result;
+    };
+    // Transactional backends hold one lock across load, decision and commit; others keep load/save CAS.
+    return typeof options.backend.transact === 'function' ? options.backend.transact(transaction) : transaction(backendIo);
   }
 
   function createRun(state, input, workRunId) {
@@ -271,6 +570,64 @@ function createWorkRunStore(options = {}) {
     return options.public === false ? clone(run) : publicRun(run);
   }
 
+  function normalizeFollowThroughBinding(input = {}) {
+    if (!isObject(input)) throw new Error('follow-through binding must be an object');
+    const binding = {
+      version: FOLLOW_THROUGH_BINDING_VERSION,
+      outcomeId: input.outcomeId,
+      executorOwnerId: input.executorOwnerId,
+      harnessWorkspaceId: input.harnessWorkspaceId,
+      workRunId: input.workRunId,
+      fence: input.fence,
+      todoId: input.todoId,
+      triggerId: input.triggerId,
+    };
+    for (const field of Object.keys(binding).filter((field) => field !== 'version' && field !== 'fence')) {
+      if ((field === 'outcomeId' ? !PROJECT_OUTCOME_ID.test(binding[field] || '') : !OPAQUE_ID.test(binding[field] || ''))) throw new Error(`follow-through ${field} must be an opaque identifier`);
+    }
+    if (!Number.isInteger(binding.fence) || binding.fence < 1) throw new Error('follow-through fence must be a positive integer');
+    return binding;
+  }
+
+  function getFollowThrough(outcomeId) {
+    if (!PROJECT_OUTCOME_ID.test(outcomeId || '')) throw new Error('outcomeId must be a Projects outcome identifier');
+    const binding = loadState().followThrough[outcomeId];
+    return binding ? publicFollowThrough(binding) : null;
+  }
+
+  function bindFollowThrough(input = {}) {
+    const binding = normalizeFollowThroughBinding(input);
+    return mutate((state) => {
+      const run = state.workRuns[binding.workRunId];
+      if (!run) return noCommit({ ok: false, reason: 'not_found' });
+      const owner = assertRunOwner(run, input.ownerId, input.fence);
+      if (!owner.ok) return noCommit(owner);
+      if (run.ownerId !== binding.executorOwnerId) return noCommit({ ok: false, reason: 'executor_owner_conflict' });
+      const existing = state.followThrough[binding.outcomeId];
+      if (existing) {
+        const sameReferences = ['executorOwnerId', 'harnessWorkspaceId', 'workRunId', 'todoId', 'triggerId']
+          .every((field) => existing[field] === binding[field]);
+        if (sameReferences && existing.fence === binding.fence) return noCommit({ ok: true, deduped: true, binding: publicFollowThrough(existing) });
+        if (sameReferences
+          && existing.executorOwnerId === run.ownerId
+          && binding.fence > existing.fence) {
+          const boundAt = nowIso(clock);
+          const leaseHistory = [...(existing.leaseHistory || [{ fence: existing.fence, boundAt: existing.boundAt }]), { fence: binding.fence, boundAt }];
+          const renewed = { ...existing, fence: binding.fence, boundAt, leaseHistory };
+          state.followThrough[binding.outcomeId] = renewed;
+          return { ok: true, renewed: true, binding: publicFollowThrough(renewed) };
+        }
+        return noCommit({ ok: false, reason: 'outcome_binding_conflict', binding: publicFollowThrough(existing) });
+      }
+      const boundElsewhere = Object.values(state.followThrough).find((entry) => entry.workRunId === binding.workRunId);
+      if (boundElsewhere) return noCommit({ ok: false, reason: 'work_run_binding_conflict', binding: publicFollowThrough(boundElsewhere) });
+      const boundAt = nowIso(clock);
+      const stored = { ...binding, boundAt, leaseHistory: [{ fence: binding.fence, boundAt }] };
+      state.followThrough[binding.outcomeId] = stored;
+      return { ok: true, deduped: false, binding: publicFollowThrough(stored) };
+    });
+  }
+
   function claimWorkRun(input = {}) {
     if (!OPAQUE_ID.test(input.ownerId || '')) throw new Error('ownerId must be an opaque identifier');
     const normalized = normalizeWorkRunInput(input);
@@ -289,19 +646,309 @@ function createWorkRunStore(options = {}) {
   }
 
   function releaseWorkRun(input = {}) {
+    if (input.handoffTo !== undefined) return { ok: false, reason: 'workspace_handoff_unavailable' };
     return mutate((state) => {
       const run = state.workRuns[input.workRunId];
       if (!run) return noCommit({ ok: false, reason: 'not_found' });
       const owner = assertRunOwner(run, input.ownerId, input.fence);
       if (!owner.ok) return noCommit(owner);
+      if (run.workspaceId != null) {
+        // A bound run releases only together with its current binding token, in one commit.
+        if (input.releaseWorkspace !== true) return noCommit({ ok: false, reason: 'workspace_binding_held' });
+        const binding = currentWorkspaceBinding(state, run, input);
+        if (!binding) return noCommit({ ok: false, reason: 'stale_binding_fence' });
+        delete state.workspaceBindings[binding.workspaceId];
+        run.workspaceId = null;
+      }
       run.ownerId = null;
       run.updatedAt = nowIso(clock);
       return { ok: true, workRun: clone(run), public: publicRun(run) };
     });
   }
 
-  function appendEvent(input = {}) {
+  // Exact current token only: the run must point at workspaceId and bindingFence must be current.
+  function currentWorkspaceBinding(state, run, input) {
+    if (typeof input.workspaceId !== 'string' || run.workspaceId !== input.workspaceId) return null;
+    const binding = own(state.workspaceBindings, input.workspaceId);
+    if (!isObject(binding) || binding.bindingFence !== input.bindingFence) return null;
+    return binding;
+  }
+
+  function workspaceRefusal(reason, binding) {
+    // Redacted holder: never the holder's owner, path, dev or ino.
+    return noCommit({
+      ok: false,
+      reason,
+      conflict: {
+        workspaceId: binding.workspaceId,
+        holder: { workRunId: binding.workRunId, subjectKey: binding.subjectKey },
+        bindingFence: binding.bindingFence,
+      },
+    });
+  }
+
+  // The (at most one) pending reservation naming workRunId as its target.
+  function pendingHandoffFor(bindings, workRunId) {
+    return Object.values(isObject(bindings) ? bindings : {})
+      .find((entry) => entry.state === 'handoff_pending' && entry.handoffTo === workRunId);
+  }
+
+  // Reserve only: the source keeps its pointer, owner, run fence and binding fence; the target gains nothing
+  // until it consumes with the exact token. A reservation is bookkeeping, not effect authority.
+  function reserveWorkspaceHandoff(state, run, binding, handoffTo) {
+    const pending = binding.state === 'handoff_pending';
+    if (pending && binding.handoffTo === handoffTo) {
+      return noCommit({ ok: true, deduped: true, released: true, handoffPending: true, public: publicWorkspaceBinding(binding) });
+    }
+    const target = typeof handoffTo === 'string' && OPAQUE_ID.test(handoffTo) ? own(state.workRuns, handoffTo) : undefined;
+    if (!isObject(target) || handoffTo === run.workRunId || target.workspaceId != null || pendingHandoffFor(state.workspaceBindings, handoffTo)) {
+      return noCommit({ ok: false, reason: 'invalid_handoff_target' });
+    }
+    if (pending) return noCommit({ ok: false, reason: 'handoff_reserved' });
+    binding.state = 'handoff_pending';
+    binding.handoffFrom = run.workRunId;
+    binding.handoffTo = handoffTo;
+    binding.updatedAt = nowIso(clock);
+    return { ok: true, released: true, handoffPending: true, public: publicWorkspaceBinding(binding) };
+  }
+
+  // Consume (targetRun set) or cancel (targetRun null) a pending reservation in one commit. The binding fence
+  // always advances, so every earlier token (including the reservation token) is stale afterwards.
+  function settleWorkspaceHandoff(state, binding, sourceRun, targetRun) {
+    const next = state.workspaceFenceSeq + 1;
+    if (!Number.isSafeInteger(next)) return noCommit({ ok: false, reason: 'binding_fence_exhausted' });
+    const at = nowIso(clock);
+    state.workspaceFenceSeq = next;
+    binding.bindingFence = next;
+    if (targetRun) {
+      binding.workRunId = targetRun.workRunId;
+      binding.subjectKey = targetRun.subjectKey;
+      binding.ownerId = targetRun.ownerId;
+      binding.runFence = targetRun.fence;
+      sourceRun.workspaceId = null;
+      targetRun.workspaceId = binding.workspaceId;
+      targetRun.updatedAt = at;
+    }
+    binding.state = 'bound';
+    for (const field of WORKSPACE_HANDOFF_KEYS) delete binding[field];
+    binding.updatedAt = at;
+    sourceRun.updatedAt = at;
+    return { ok: true, bound: true, binding: clone(binding), public: publicWorkspaceBinding(binding) };
+  }
+
+  // Resolution runs before the lock. Honest limit (TOCTOU): the directory can be swapped after
+  // resolution; an effect-time identity recheck is later work, so a binding is not effect authority.
+  function resolveWorkspaceIdentity(worktreePath) {
+    if (typeof worktreePath !== 'string' || !worktreePath || worktreePath.includes('\0') || !path.isAbsolute(worktreePath)) return null;
+    if (isRootPath(path.resolve(worktreePath))) return null;
+    try {
+      const resolved = workspaceResolver(worktreePath);
+      if (!isObject(resolved)) return null;
+      const identity = { canonicalPath: resolved.canonicalPath, dev: resolved.dev, ino: resolved.ino };
+      return isWorkspaceIdentity(identity) ? identity : null;
+    } catch {
+      return null;
+    }
+  }
+
+  function bindWorkspace(input = {}) {
+    if (input.revision !== undefined) return { ok: false, reason: 'workspace_revision_unavailable' };
+    if (!workspaceResolver) return { ok: false, reason: 'workspace_resolver_required' };
+    const identity = resolveWorkspaceIdentity(input.worktreePath);
+    if (!identity) return { ok: false, reason: 'workspace_unresolvable' };
     return mutate((state) => {
+      const run = own(state.workRuns, input.workRunId);
+      if (!run) return noCommit({ ok: false, reason: 'not_found' });
+      const owner = assertRunOwner(run, input.ownerId, input.fence);
+      if (!owner.ok) return noCommit(owner);
+      const bindings = isObject(state.workspaceBindings) ? state.workspaceBindings : {};
+      const stale = () => noCommit({ ok: false, reason: 'stale_binding_fence' });
+      // An explicit token (either field) is always checked exactly; it never creates or redirects a binding.
+      const tokenSupplied = input.workspaceId !== undefined || input.bindingFence !== undefined;
+      if (run.workspaceId != null) {
+        const current = own(bindings, run.workspaceId);
+        if (tokenSupplied && currentWorkspaceBinding(state, run, input) !== current) return stale();
+        if (current.state === 'handoff_pending') {
+          // Only the source holds a pending binding: its exact token on the same identity cancels the reservation.
+          if (!tokenSupplied) return stale();
+          if (!sameWorkspaceIdentity(current.identity, identity)) {
+            const changed = current.identity.canonicalPath === identity.canonicalPath && !sameInode(current.identity, identity);
+            return workspaceRefusal(changed ? 'workspace_identity_changed' : 'run_workspace_conflict', current);
+          }
+          return settleWorkspaceHandoff(state, current, run, null);
+        }
+        if (sameWorkspaceIdentity(current.identity, identity) && current.ownerId === run.ownerId && current.runFence === run.fence) {
+          return noCommit({ ok: true, deduped: true, binding: clone(current), public: publicWorkspaceBinding(current) });
+        }
+        return workspaceRefusal('run_workspace_conflict', current);
+      }
+      const reserved = pendingHandoffFor(bindings, run.workRunId);
+      if (reserved) {
+        // A reserved target binds nothing else; it consumes only the reserved identity with the exact token.
+        if (!sameWorkspaceIdentity(reserved.identity, identity)) return workspaceRefusal('run_workspace_conflict', reserved);
+        if (input.workspaceId !== reserved.workspaceId || input.bindingFence !== reserved.bindingFence) return stale();
+        return settleWorkspaceHandoff(state, reserved, own(state.workRuns, reserved.workRunId), run);
+      }
+      if (tokenSupplied) return stale();
+      const others = Object.values(bindings);
+      const blocked = (entry, reason) => workspaceRefusal(entry.state === 'handoff_pending' ? 'handoff_reserved' : reason, entry);
+      const replaced = others.find((entry) => entry.identity.canonicalPath === identity.canonicalPath && !sameInode(entry.identity, identity));
+      if (replaced) return workspaceRefusal('workspace_identity_changed', replaced);
+      const held = others.find((entry) => sameInode(entry.identity, identity));
+      if (held) return blocked(held, 'workspace_conflict');
+      const overlapping = others.find((entry) => workspacePathsOverlap(entry.identity.canonicalPath, identity.canonicalPath));
+      if (overlapping) return blocked(overlapping, 'workspace_overlap_conflict');
+      if (state.schemaVersion !== WORK_RUN_STORE_SCHEMA_VERSION_V2) {
+        // Lazy upgrade on the first successful bind only; the fence sequence never resets afterwards,
+        // including across a retireWorkspaceIndex() rollback that kept the high-water.
+        state.schemaVersion = WORK_RUN_STORE_SCHEMA_VERSION_V2;
+        state.workspaceBindings = {};
+        state.workspaceFenceSeq = state.workspaceFenceSeq ?? 0;
+      }
+      state.workspaceFenceSeq += 1;
+      let workspaceId;
+      do { workspaceId = `ws_${crypto.randomBytes(12).toString('hex')}`; } while (Object.hasOwn(state.workspaceBindings, workspaceId));
+      const at = nowIso(clock);
+      const binding = {
+        version: WORKSPACE_BINDING_VERSION,
+        workspaceId,
+        identity: { canonicalPath: identity.canonicalPath, dev: identity.dev, ino: identity.ino },
+        workRunId: run.workRunId,
+        subjectKey: run.subjectKey,
+        ownerId: run.ownerId,
+        runFence: run.fence,
+        bindingFence: state.workspaceFenceSeq,
+        state: 'bound',
+        boundAt: at,
+        updatedAt: at,
+      };
+      state.workspaceBindings[workspaceId] = binding;
+      run.workspaceId = workspaceId;
+      run.updatedAt = at;
+      return { ok: true, bound: true, binding: clone(binding), public: publicWorkspaceBinding(binding) };
+    });
+  }
+
+  function getWorkspaceBinding(workspaceId, options = {}) {
+    const state = loadState();
+    if (typeof workspaceId !== 'string' || !WORKSPACE_ID.test(workspaceId)) return null;
+    const binding = own(state.workspaceBindings, workspaceId);
+    if (!binding) return null;
+    return options.public === false ? clone(binding) : publicWorkspaceBinding(binding);
+  }
+
+  // Pure read (no lock, no write). A positive answer is a point-in-time check, not effect authority.
+  function verifyWorkspaceFence(input = {}) {
+    if (input.revision !== undefined) return { ok: false, reason: 'workspace_revision_unavailable' };
+    const state = loadState();
+    const run = own(state.workRuns, input.workRunId);
+    if (!run) return { ok: false, reason: 'not_found' };
+    const owner = assertRunOwner(run, input.ownerId, input.fence);
+    if (!owner.ok) return owner;
+    const binding = currentWorkspaceBinding(state, run, input);
+    if (!binding) return { ok: false, reason: 'stale_binding_fence' };
+    // A reserved binding is held for its target: the source's token no longer verifies.
+    if (binding.state === 'handoff_pending') return { ok: false, reason: 'handoff_reserved' };
+    const expectsSeq = input.expectedRevisionSeq !== undefined;
+    const expectsHead = input.expectedHeadOid !== undefined;
+    if (expectsSeq || expectsHead) {
+      const current = binding.revision;
+      if (!current) return { ok: false, reason: 'workspace_revision_unavailable' };
+      if ((expectsSeq && input.expectedRevisionSeq !== current.seq) || (expectsHead && input.expectedHeadOid !== current.headOid)) {
+        return { ok: false, reason: 'revision_compare_and_set_conflict', authoritative: publicRevision(current) };
+      }
+    }
+    return { ok: true, binding: clone(binding) };
+  }
+
+  // One locked compare-and-set step over the bound workspace's caller-asserted revision facts.
+  // Revision facts are caller assertions (factsSource 'caller'): no Git verification, no effect authority.
+  function transitionWorkspaceRevision(input = {}) {
+    const refuse = (reason, extra = {}) => noCommit({ ok: false, reason, ...extra });
+    return mutate((state) => {
+      const run = own(state.workRuns, input.workRunId);
+      if (!run) return refuse('not_found');
+      const owner = assertRunOwner(run, input.ownerId, input.fence);
+      if (!owner.ok) return noCommit(owner);
+      const binding = currentWorkspaceBinding(state, run, input);
+      if (!binding) return refuse('stale_binding_fence');
+      // Pending outranks nonce validation, replay and CAS: no revision moves while a handoff is reserved.
+      if (binding.state === 'handoff_pending') return refuse('handoff_reserved');
+      const { operationNonce, intent, expectedRevisionSeq } = input;
+      if (typeof operationNonce !== 'string' || !OPAQUE_ID.test(operationNonce)) return refuse('operation_nonce_required');
+      const history = Array.isArray(binding.revisionHistory) ? binding.revisionHistory : [];
+      const prior = history.find((entry) => entry.operationNonce === operationNonce);
+      if (prior) {
+        // Only the retained history dedupes; an exact replay answers even after newer transitions.
+        const facts = revisionFacts(input.next);
+        const exact = expectedRevisionSeq === prior.seq - 1
+          && intent === prior.intent
+          && (input.reasonCode == null ? null : input.reasonCode) === prior.reasonCode
+          && facts !== null && WORKSPACE_REVISION_FACT_KEYS.every((key) => facts[key] === prior[key]);
+        return exact ? noCommit({ ok: true, deduped: true, revision: publicRevision(prior) }) : refuse('invalid_revision_transition');
+      }
+      const current = isObject(binding.revision) ? binding.revision : null;
+      if (!WORKSPACE_REVISION_INTENT_SET.has(intent)) return refuse('invalid_revision_transition');
+      if (current ? intent === 'initial' : intent !== 'initial') return refuse('invalid_revision_transition');
+      if (expectedRevisionSeq !== (current ? current.seq : 0)) {
+        return refuse('revision_compare_and_set_conflict', { authoritative: current ? publicRevision(current) : null });
+      }
+      const next = revisionFacts(input.next);
+      if (!next) return refuse('invalid_git_revision');
+      const reasonCode = input.reasonCode == null ? null : input.reasonCode;
+      if (reasonCode !== null && !isReasonCode(reasonCode)) return refuse('invalid_reason_code');
+      if (intent === 'reset' && reasonCode === null) return refuse('invalid_reason_code');
+      if (current && !isLegalRevisionTransition(intent, current, next)) return refuse('invalid_revision_transition');
+      const seq = current ? current.seq + 1 : 1;
+      // Fail closed without writing once the sequence would leave the safe-integer range.
+      if (!Number.isSafeInteger(seq)) return refuse('revision_seq_exhausted', { authoritative: publicRevision(current) });
+      const at = nowIso(clock);
+      const record = { ...next, seq, intent, reasonCode, operationNonce, factsSource: 'caller', at };
+      binding.revision = record;
+      binding.revisionHistory = [...history, { ...record }].slice(-WORKSPACE_REVISION_HISTORY_LIMIT);
+      binding.updatedAt = at;
+      return { ok: true, revision: publicRevision(record) };
+    });
+  }
+
+  function releaseWorkspace(input = {}) {
+    return mutate((state) => {
+      const run = own(state.workRuns, input.workRunId);
+      if (!run) return noCommit({ ok: false, reason: 'not_found' });
+      const owner = assertRunOwner(run, input.ownerId, input.fence);
+      if (!owner.ok) return noCommit(owner);
+      const binding = currentWorkspaceBinding(state, run, input);
+      if (!binding) return noCommit({ ok: false, reason: 'stale_binding_fence' });
+      if (input.handoffTo !== undefined) return reserveWorkspaceHandoff(state, run, binding, input.handoffTo);
+      // The binding (bound or handoff_pending) is removed; state stays v2 and workspaceFenceSeq is kept so fences never repeat.
+      delete state.workspaceBindings[binding.workspaceId];
+      run.workspaceId = null;
+      run.updatedAt = nowIso(clock);
+      return { ok: true, released: true, handoffPending: false, public: publicWorkspaceBinding(binding) };
+    });
+  }
+
+  // Rollback step: converts fully released v2 state back to v1 in one locked commit so an exact v1
+  // predecessor can read and write it. Only the empty index and null run pointers are dropped; the
+  // fence high-water and every run, event, nonce, artifact, terminal and follow-through record are kept.
+  function retireWorkspaceIndex() {
+    return mutate((state) => {
+      if (state.schemaVersion !== WORK_RUN_STORE_SCHEMA_VERSION_V2) return noCommit({ ok: true, deduped: true });
+      const held = Object.keys(state.workspaceBindings).length > 0
+        || Object.values(state.workRuns).some((run) => run.workspaceId != null);
+      if (held) return noCommit({ ok: false, reason: 'workspace_binding_held' });
+      state.schemaVersion = WORK_RUN_STORE_SCHEMA_VERSION;
+      delete state.workspaceBindings;
+      for (const run of Object.values(state.workRuns)) {
+        if (Object.hasOwn(run, 'workspaceId')) delete run.workspaceId;
+      }
+      return { ok: true, deduped: false, workspaceFenceSeq: state.workspaceFenceSeq };
+    });
+  }
+
+  function appendEvent(input = {}) {
+    let evidence = null;
+    const result = mutate((state) => {
       const run = state.workRuns[input.workRunId];
       if (!run) return noCommit({ ok: false, reason: 'not_found' });
       const owner = assertRunOwner(run, input.ownerId, input.fence);
@@ -331,9 +978,12 @@ function createWorkRunStore(options = {}) {
       run.eventNonces[input.operationNonce] = event;
       if (event.artifact && !run.artifacts.some((artifact) => artifact.reference === event.artifact.reference)) run.artifacts.push(event.artifact);
       run.updatedAt = event.at;
-      if (evidencePort && typeof evidencePort.append === 'function') evidencePort.append({ workRunId: run.workRunId, ownerId: input.ownerId, fence: input.fence, event });
+      evidence = { workRunId: run.workRunId, ownerId: input.ownerId, fence: input.fence, event };
       return { ok: true, deduped: false, event: clone(event), workRun: clone(run), public: publicRun(run) };
     });
+    // Best-effort post-commit delivery (after lock release): not exactly-once and not an outbox.
+    if (evidence && evidencePort && typeof evidencePort.append === 'function') evidencePort.append(evidence);
+    return result;
   }
 
   function recordProviderSnapshot(input = {}) {
@@ -405,7 +1055,7 @@ function createWorkRunStore(options = {}) {
       const owner = assertRunOwner(run, input.ownerId, input.fence);
       if (!owner.ok) return noCommit(owner);
       if (!isObject(input.evidence) || typeof input.evidence.reference !== 'string' || !OPAQUE_ID.test(input.evidence.reference)) return noCommit({ ok: false, reason: 'invalid_terminal_evidence' });
-      const evidence = { reference: input.evidence.reference, digest: input.evidence.digest || null, status: input.evidence.status || null, recordedAt: nowIso(clock) };
+      const evidence = { reference: input.evidence.reference, digest: input.evidence.digest || null, status: input.evidence.status || null, fence: input.fence, recordedAt: nowIso(clock) };
       if (evidence.digest !== null && !isDigest(evidence.digest)) return noCommit({ ok: false, reason: 'invalid_terminal_evidence_digest' });
       run.terminalEvidence = evidence;
       run.state = input.state === 'failed' ? 'failed' : input.state === 'blocked' ? 'blocked' : 'completed';
@@ -435,8 +1085,16 @@ function createWorkRunStore(options = {}) {
   return {
     resolveWorkRun,
     getWorkRun,
+    getFollowThrough,
+    bindFollowThrough,
     claimWorkRun,
     releaseWorkRun,
+    bindWorkspace,
+    getWorkspaceBinding,
+    verifyWorkspaceFence,
+    transitionWorkspaceRevision,
+    releaseWorkspace,
+    retireWorkspaceIndex,
     appendEvent,
     recordProviderSnapshot,
     recordProviderReceipt,
@@ -461,19 +1119,21 @@ function createMemoryWorkRunStore(options = {}) {
   return createWorkRunStore({ ...options, backend });
 }
 
+function readWorkRunStateFile(statePath) {
+  if (!fs.existsSync(statePath)) return emptyState();
+  let state;
+  try { state = JSON.parse(fs.readFileSync(statePath, 'utf8')); } catch (error) { throw new Error(`corrupt work-run state: ${error.message}`); }
+  const validation = validateState(state);
+  if (!validation.ok) throw new Error(`invalid work-run state: ${validation.errors.join('; ')}`);
+  return state;
+}
+
 function createFileWorkRunStore(rootDir, options = {}) {
   if (typeof rootDir !== 'string' || !rootDir) throw new Error('rootDir is required');
   fs.mkdirSync(rootDir, { recursive: true, mode: 0o700 });
   const statePath = path.join(rootDir, 'work-runs.json');
   const lockPath = path.join(rootDir, 'work-runs.lock');
-  function read() {
-    if (!fs.existsSync(statePath)) return emptyState();
-    let state;
-    try { state = JSON.parse(fs.readFileSync(statePath, 'utf8')); } catch (error) { throw new Error(`corrupt work-run state: ${error.message}`); }
-    const validation = validateState(state);
-    if (!validation.ok) throw new Error(`invalid work-run state: ${validation.errors.join('; ')}`);
-    return state;
-  }
+  const read = () => readWorkRunStateFile(statePath);
   function withLock(fn) {
     let fd;
     try {
@@ -483,24 +1143,51 @@ function createFileWorkRunStore(rootDir, options = {}) {
       if (error.code === 'EEXIST') throw new Error('work-run store is busy');
       throw error;
     } finally {
-      if (fd !== undefined) fs.closeSync(fd);
-      try { fs.unlinkSync(lockPath); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+      if (fd !== undefined) {
+        fs.closeSync(fd);
+        try { fs.unlinkSync(lockPath); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+      }
     }
+  }
+  // Caller must hold the lock.
+  function saveLocked(next, expectedRevision) {
+    const current = read();
+    if (current.revision !== expectedRevision) throw new Error('concurrent work-run state mutation');
+    const tempPath = `${statePath}.${process.pid}.tmp`;
+    const fd = fs.openSync(tempPath, 'w', 0o600);
+    try { fs.writeFileSync(fd, JSON.stringify(next, null, 2)); fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
+    fs.renameSync(tempPath, statePath);
   }
   const backend = {
     load: read,
     save(next, expectedRevision) {
-      return withLock(() => {
-        const current = read();
-        if (current.revision !== expectedRevision) throw new Error('concurrent work-run state mutation');
-        const tempPath = `${statePath}.${process.pid}.tmp`;
-        const fd = fs.openSync(tempPath, 'w', 0o600);
-        try { fs.writeFileSync(fd, JSON.stringify(next, null, 2)); fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
-        fs.renameSync(tempPath, statePath);
-      });
+      return withLock(() => saveLocked(next, expectedRevision));
+    },
+    transact(fn) {
+      return withLock(() => fn({ load: read, save: saveLocked }));
     },
   };
-  return Object.assign(createWorkRunStore({ ...options, backend }), { paths: { rootDir, statePath, lockPath } });
+  const workspaceResolver = options.workspaceResolver || createFsWorkspaceResolver();
+  return Object.assign(createWorkRunStore({ ...options, workspaceResolver, backend }), { paths: { rootDir, statePath, lockPath } });
+}
+
+// Read-only status view: never creates the root, takes the lock, or writes state.
+function createFileWorkRunStatusReader(rootDir) {
+  if (typeof rootDir !== 'string' || !rootDir) throw new Error('rootDir is required');
+  const statePath = path.join(rootDir, 'work-runs.json');
+  const store = createWorkRunStore({
+    backend: {
+      load: () => readWorkRunStateFile(statePath),
+      save() { throw new Error('work-run status reader is read-only'); },
+    },
+  });
+  // Pure loadState getters only; none of them reach mutate, so the throwing save is never called.
+  return {
+    getWorkRun: store.getWorkRun,
+    getFollowThrough: store.getFollowThrough,
+    getWorkspaceBinding: store.getWorkspaceBinding,
+    verifyWorkspaceFence: store.verifyWorkspaceFence,
+  };
 }
 
 function createControlPlaneWorkRunEvidencePort(options = {}) {
@@ -523,14 +1210,23 @@ function createControlPlaneWorkRunEvidencePort(options = {}) {
 }
 
 module.exports = {
+  FOLLOW_THROUGH_BINDING_VERSION,
   WORK_RUN_EVENT_VERSION,
   WORK_RUN_PUBLIC_VERSION,
   WORK_RUN_STORE_SCHEMA_VERSION,
+  WORK_RUN_STORE_SCHEMA_VERSION_V2,
+  WORKSPACE_BINDING_PUBLIC_VERSION,
+  WORKSPACE_BINDING_VERSION,
   WORK_RUN_STATES: [...WORK_RUN_STATES],
+  WORKSPACE_REVISION_INTENTS: [...WORKSPACE_REVISION_INTENT_SET],
   createControlPlaneWorkRunEvidencePort,
+  createFileWorkRunStatusReader,
   createFileWorkRunStore,
+  createFsWorkspaceResolver,
   createMemoryWorkRunStore,
   createWorkRunStore,
+  publicFollowThrough,
   publicRun,
+  publicWorkspaceBinding,
   validateState,
 };

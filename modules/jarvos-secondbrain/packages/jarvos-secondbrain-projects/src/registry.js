@@ -5,15 +5,21 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const {
+  RECORD_CONTRACT,
+  RECORD_CONTRACT_V2,
   STATUS_BY_KIND,
   cloneRecord,
   normalizeName,
+  validateInferenceMetadata,
   validateRecord,
 } = require('./records');
 const { resolvePriority } = require('./priority');
 
 const REGISTRY_CONTRACT = 'jarvos.projects-registry/v1';
 const STATE_FILE = 'CURRENT';
+const LOCK_FILE = '.registry.lock';
+const LOCK_TIMEOUT_MS = 3000;
+const STALE_LOCK_MS = 30_000;
 
 function initialState() {
   return {
@@ -115,6 +121,30 @@ function idFor(kind, allocator) {
   return `${prefix}${String(allocator[kind]).padStart(6, '0')}`;
 }
 
+function receiptClaims({ decisionId, reasonCodes } = {}, inference) {
+  const hasDecisionId = decisionId !== undefined;
+  const hasReasonCodes = reasonCodes !== undefined;
+  if (!hasDecisionId && !hasReasonCodes) return {};
+  if (!inference) throw new TypeError('receipt inference claims require inference metadata');
+
+  const normalized = validateInferenceMetadata({
+    ...inference,
+    ...(hasDecisionId ? { decisionId } : {}),
+    ...(hasReasonCodes ? { reasonCodes } : {}),
+  });
+  if (hasDecisionId && normalized.decisionId !== inference.decisionId) {
+    throw new TypeError('receipt decisionId must match inference metadata');
+  }
+  if (hasReasonCodes && JSON.stringify(normalized.reasonCodes) !== JSON.stringify([...inference.reasonCodes].sort())) {
+    throw new TypeError('receipt reasonCodes must match inference metadata');
+  }
+
+  const claims = {};
+  if (hasDecisionId) claims.decisionId = normalized.decisionId;
+  if (hasReasonCodes) claims.reasonCodes = normalized.reasonCodes;
+  return claims;
+}
+
 class ProjectRegistry {
   constructor({ stateDir, now = () => new Date().toISOString() } = {}) {
     if (typeof stateDir !== 'string' || !stateDir.trim()) throw new TypeError('stateDir is required');
@@ -175,47 +205,41 @@ class ProjectRegistry {
     return resolvePriority(id, this.state.records);
   }
 
-  create(input, { expectedGeneration, actor = 'system', session = 'unknown' } = {}) {
-    this.assertGeneration(expectedGeneration);
-    const next = cloneState(this.state);
-    const kind = input.kind || 'project';
-    if (!STATUS_BY_KIND[kind]) throw new TypeError(`unsupported kind: ${kind}`);
-    const id = idFor(kind, next.allocator);
-    next.allocator[kind] += 1;
-    const timestamp = this.now();
-    const { record } = validateRecord({
-      ...input,
-      id,
-      kind,
-      revision: 1,
-      createdAt: input.createdAt || timestamp,
-      updatedAt: input.updatedAt || timestamp,
-    }, { records: next.records });
-    next.records[id] = record;
-    return this.commit(next, { operation: 'create', actor, session, recordId: id });
+  create(input, {
+    expectedGeneration,
+    actor = 'system',
+    session = 'unknown',
+    decisionId,
+    reasonCodes,
+  } = {}) {
+    return this._withLock(() => {
+      this.reload();
+      this.assertGeneration(expectedGeneration);
+      const next = cloneState(this.state);
+      const { id, record } = this._createInState(next, input);
+      return this.commit(next, {
+        operation: 'create', actor, session, recordId: id, decisionId, reasonCodes,
+      });
+    });
   }
 
-  update(id, patch, { expectedGeneration, expectedRevision, actor = 'system', session = 'unknown' } = {}) {
-    this.assertGeneration(expectedGeneration);
-    const current = this.state.records[id];
-    if (!current) throw new Error(`project record not found: ${id}`);
-    if (expectedRevision !== current.revision) throw new Error(`stale project revision: expected ${expectedRevision}, current ${current.revision}`);
-    if (patch.id !== undefined || patch.kind !== undefined || patch.createdAt !== undefined || patch.revision !== undefined) {
-      throw new TypeError('immutable project fields cannot be updated');
-    }
-    const next = cloneState(this.state);
-    const timestamp = this.now();
-    const { record } = validateRecord({
-      ...current,
-      ...patch,
-      id: current.id,
-      kind: current.kind,
-      revision: current.revision + 1,
-      createdAt: current.createdAt,
-      updatedAt: patch.updatedAt || timestamp,
-    }, { records: next.records });
-    next.records[id] = record;
-    return this.commit(next, { operation: 'update', actor, session, recordId: id });
+  update(id, patch, {
+    expectedGeneration,
+    expectedRevision,
+    actor = 'system',
+    session = 'unknown',
+    decisionId,
+    reasonCodes,
+  } = {}) {
+    return this._withLock(() => {
+      this.reload();
+      this.assertGeneration(expectedGeneration);
+      const next = cloneState(this.state);
+      const { record } = this._updateInState(next, id, patch, { expectedRevision });
+      return this.commit(next, {
+        operation: 'update', actor, session, recordId: id, decisionId, reasonCodes,
+      });
+    });
   }
 
   integrity() {
@@ -235,12 +259,149 @@ class ProjectRegistry {
     }
   }
 
-  commit(next, { operation, actor, session, recordId }) {
+  _createInState(next, input) {
+    const kind = input.kind || 'project';
+    if (!STATUS_BY_KIND[kind]) throw new TypeError(`unsupported kind: ${kind}`);
+    const id = idFor(kind, next.allocator);
+    next.allocator[kind] += 1;
+    const timestamp = this.now();
+    const { record } = validateRecord({
+      ...input,
+      id,
+      kind,
+      revision: 1,
+      createdAt: input.createdAt || timestamp,
+      updatedAt: input.updatedAt || timestamp,
+    }, { records: next.records });
+    next.records[id] = record;
+    return { id, record };
+  }
+
+  _updateInState(next, id, patch, { expectedRevision } = {}) {
+    const current = next.records[id];
+    if (!current) throw new Error(`project record not found: ${id}`);
+    if (expectedRevision !== current.revision) throw new Error(`stale project revision: expected ${expectedRevision}, current ${current.revision}`);
+    if (patch.id !== undefined || patch.kind !== undefined || patch.createdAt !== undefined || patch.revision !== undefined) {
+      throw new TypeError('immutable project fields cannot be updated');
+    }
+    const suppliesInference = Object.prototype.hasOwnProperty.call(patch, 'inference');
+    if (current.inference !== undefined && (!suppliesInference || patch.inference === undefined || patch.inference === null)) {
+      if (suppliesInference) throw new TypeError('inference metadata cannot be removed');
+    }
+    if (suppliesInference && patch.inference === undefined) {
+      throw new TypeError('inference metadata cannot be removed');
+    }
+    const timestamp = this.now();
+    const { record } = validateRecord({
+      ...current,
+      ...patch,
+      contract: suppliesInference ? RECORD_CONTRACT_V2 : current.contract,
+      id: current.id,
+      kind: current.kind,
+      revision: current.revision + 1,
+      createdAt: current.createdAt,
+      updatedAt: patch.updatedAt || timestamp,
+    }, { records: next.records });
+    next.records[id] = record;
+    return { id, record };
+  }
+
+  mutate(mutator, {
+    expectedGeneration,
+    actor = 'system',
+    session = 'unknown',
+    operation = 'mutate',
+    recordId,
+    decisionId,
+    reasonCodes,
+  } = {}) {
+    if (typeof mutator !== 'function') throw new TypeError('registry mutator is required');
+    return this._withLock(() => {
+      this.reload();
+      this.assertGeneration(expectedGeneration);
+      const next = cloneState(this.state);
+      const transaction = {
+        generation: next.generation,
+        get: (id) => next.records[id] ? cloneRecord(next.records[id]) : null,
+        list: () => Object.values(next.records).map(cloneRecord).sort((a, b) => a.title.localeCompare(b.title)),
+        create: (input) => cloneRecord(this._createInState(next, input).record),
+        update: (id, patch, options = {}) => cloneRecord(this._updateInState(next, id, patch, options).record),
+      };
+      const result = mutator(transaction);
+      const committedRecordId = recordId || result?.recordId || result?.record?.id;
+      if (!committedRecordId || !next.records[committedRecordId]) {
+        throw new TypeError('registry mutation must identify a committed record');
+      }
+      const committed = this.commit(next, {
+        operation, actor, session, recordId: committedRecordId, decisionId, reasonCodes,
+      });
+      return { ...committed, result };
+    });
+  }
+
+  _withLock(fn) {
+    fs.mkdirSync(this.stateDir, { recursive: true, mode: 0o700 });
+    try { fs.chmodSync(this.stateDir, 0o700); } catch (_) { /* best effort on non-POSIX hosts */ }
+    const lockPath = path.join(this.stateDir, LOCK_FILE);
+    const lockToken = crypto.randomBytes(16).toString('hex');
+    const lockOwner = JSON.stringify({ pid: process.pid, createdAt: Date.now(), token: lockToken });
+    const deadline = Date.now() + LOCK_TIMEOUT_MS;
+    let acquired = false;
+    while (!acquired) {
+      const temporary = `${lockPath}.${process.pid}.${lockToken}.tmp`;
+      try {
+        writeDurably(temporary, lockOwner);
+        fs.linkSync(temporary, lockPath);
+        acquired = true;
+      } catch (error) {
+        if (error.code !== 'EEXIST' || Date.now() >= deadline) throw new Error('project registry is busy');
+        let stale = false;
+        let observed = null;
+        try {
+          observed = fs.readFileSync(lockPath, 'utf8');
+          const lock = JSON.parse(observed);
+          stale = !Number.isInteger(lock.pid) || Date.now() - Number(lock.createdAt || 0) > STALE_LOCK_MS;
+          if (!stale && lock.pid !== process.pid) {
+            try { process.kill(lock.pid, 0); } catch (probeError) { stale = probeError.code === 'ESRCH'; }
+          }
+        } catch (_) { stale = true; }
+        if (stale) {
+          const takeover = `${lockPath}.stale.${process.pid}.${crypto.randomBytes(6).toString('hex')}`;
+          try {
+            fs.renameSync(lockPath, takeover);
+            let moved = null;
+            try { moved = fs.readFileSync(takeover, 'utf8'); } catch (_) {}
+            if (observed !== moved) {
+              try { fs.linkSync(takeover, lockPath); } catch (restoreError) {
+                if (restoreError.code !== 'EEXIST') throw restoreError;
+              }
+            }
+            try { fs.unlinkSync(takeover); } catch (_) {}
+          } catch (takeoverError) {
+            if (takeoverError.code !== 'ENOENT') throw takeoverError;
+          }
+        }
+        else Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
+      } finally {
+        try { fs.unlinkSync(temporary); } catch (_) {}
+      }
+    }
+    try {
+      return fn();
+    } finally {
+      try {
+        const owner = JSON.parse(fs.readFileSync(lockPath, 'utf8'));
+        if (owner.token === lockToken) fs.unlinkSync(lockPath);
+      } catch (_) {}
+    }
+  }
+
+  commit(next, { operation, actor, session, recordId, decisionId, reasonCodes }) {
     next.generation = this.state.generation + 1;
     const indexes = buildIndexes(next.records);
     next.aliases = indexes.aliases;
     next.parents = indexes.parents;
-    next.receipts.push({
+    const receipt = {
       id: `rcpt_${next.generation}_${crypto.randomUUID()}`,
       operation,
       recordId,
@@ -248,7 +409,9 @@ class ProjectRegistry {
       session,
       generation: next.generation,
       observedAt: this.now(),
-    });
+      ...receiptClaims({ decisionId, reasonCodes }, next.records[recordId].inference),
+    };
+    next.receipts.push(receipt);
     validateState(next);
     const generationFile = path.join(this.stateDir, generationName(next.generation));
     writeDurably(generationFile, `${JSON.stringify(next, null, 2)}\n`);
@@ -260,9 +423,12 @@ class ProjectRegistry {
 
 module.exports = {
   ProjectRegistry,
+  RECORD_CONTRACT,
+  RECORD_CONTRACT_V2,
   REGISTRY_CONTRACT,
   STATUS_BY_KIND,
   buildIndexes,
+  cloneRecord,
   validateState,
   validateRecord,
 };

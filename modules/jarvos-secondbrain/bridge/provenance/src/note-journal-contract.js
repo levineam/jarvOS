@@ -5,13 +5,18 @@
 
 const fs = require('fs');
 const path = require('path');
-const { writeNoteFile, todayDate } = require('../../../packages/jarvos-secondbrain-notes/src/write-to-vault');
-const { sourcePathFor } = require('../../../packages/jarvos-secondbrain-notes/src/knowledge-optimizer');
+const { writeNoteFile, todayDate, noteFilePath, sanitizeTitle } = require('../../../packages/jarvos-secondbrain-notes/src/write-to-vault');
+const { defaultKnowledgeDir, sourcePathFor } = require('../../../packages/jarvos-secondbrain-notes/src/knowledge-optimizer');
 const { getVaultNotesDir, getVaultJournalDir } = require('./lib/provenance-config');
 const { frontmatterToObject, parseFrontmatter } = require('../../../packages/jarvos-secondbrain-notes/src/lib/note-schema');
 const { createObsidianOwnedMutationService } = require('./obsidian-mutation');
 const { linkNoteToJournal } = require('./link-to-journal');
 const { createArtifactReceipt } = require('../../../src/artifact-receipt');
+const {
+  cleanNoteContent,
+  collectDraftingDeclarations,
+  frontmatterForContentOrigin,
+} = require('./content-origin-contract');
 
 const SUPPORTED_PERSONALITIES = new Set(['michael', 'claude-code', 'hermes', 'codex']);
 const LIGHTWEIGHT_IDEA_RE = /^\s*idea\s*[:\-]/i;
@@ -35,7 +40,7 @@ function countJournalBacklinks(journalMd, title) {
   return matches ? matches.length : 0;
 }
 
-function parseInput(input) {
+function parseInput(input, { resolveUserSource } = {}) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) {
     throw new Error('input must be a JSON object');
   }
@@ -48,6 +53,11 @@ function parseInput(input) {
   if (input.frontmatter !== undefined && (!input.frontmatter || typeof input.frontmatter !== 'object' || Array.isArray(input.frontmatter))) {
     throw new Error('frontmatter must be an object when provided');
   }
+  const operationId = input.operationId == null ? null : String(input.operationId).trim();
+  if (operationId && (!/^[A-Za-z0-9][A-Za-z0-9_.:-]{0,239}$/.test(operationId)
+    || input.frontmatter?.mapping_operation_id !== operationId)) {
+    throw new Error('operationId must be an opaque identifier bound to frontmatter.mapping_operation_id');
+  }
   if (
     LIGHTWEIGHT_IDEA_RE.test(String(input.content || ''))
     && input.substantive !== true
@@ -56,16 +66,79 @@ function parseInput(input) {
   ) {
     throw new Error('lightweight Idea: captures must use node scripts/jarvos-capture.js; pass substantive:true or createDurableNote:true only for intentional durable idea notes');
   }
+  const suppliedFrontmatter = input.frontmatter || {};
+  const contentOrigin = input.content_origin ?? input.contentOrigin ?? suppliedFrontmatter.content_origin ?? 'unknown';
+  const contentOriginBasis = input.content_origin_basis
+    ?? input.contentOriginBasis
+    ?? suppliedFrontmatter.content_origin_basis
+    ?? 'unknown';
+  const contentOriginSource = input.user_source
+    ?? input.userSource
+    ?? suppliedFrontmatter.content_origin_source;
+  const humanEvidenceEligible = input.human_evidence_eligible
+    ?? suppliedFrontmatter.human_evidence_eligible
+    ?? false;
+  const normalizedOrigin = frontmatterForContentOrigin({
+    content_origin: contentOrigin,
+    content_origin_basis: contentOriginBasis,
+    content_origin_source: contentOriginSource,
+    human_evidence_eligible: humanEvidenceEligible,
+  }, {
+    content: cleanNoteContent(String(input.content), input.title),
+    resolveUserSource,
+    captureEventId: input.captureEventId ?? input.capture_event_id,
+  });
+  // Drafting history is passed through as declared; the canonical writer
+  // merges it with stored history and verifies served models.
+  const collected = collectDraftingDeclarations(
+    suppliedFrontmatter.content_origin_drafting,
+    input.content_origin_drafting,
+    input.drafting,
+  );
+  if (!collected.ok) throw new Error(`content_origin_drafting rejected: ${collected.reason}`);
+  const drafting = collected.entries;
+
   return {
     personality,
+    operationId,
     title: input.title,
     content: String(input.content),
     frontmatter: {
-      ...(input.frontmatter || {}),
+      ...suppliedFrontmatter,
       source_personality: personality,
       contract: 'obsidian-note-journal-v1',
+      ...normalizedOrigin,
+      ...(drafting !== undefined ? { content_origin_drafting: drafting } : {}),
     },
   };
+}
+
+function inspectProjectNote({ title, canonicalId, operationId, personality = 'codex' } = {}) {
+  if (typeof title !== 'string' || !title.trim()) throw new Error('title is required');
+  if (typeof canonicalId !== 'string' || !/^prj_[0-9]{6,}$/.test(canonicalId)) throw new Error('canonicalId must identify a Project');
+  if (typeof operationId !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9_.:-]{0,239}$/.test(operationId)) throw new Error('operationId must be opaque');
+  const normalizedTitle = sanitizeTitle(title);
+  const filePath = noteFilePath(normalizedTitle);
+  if (!fs.existsSync(filePath)) return { status: 'absent', title: normalizedTitle, verification: { ok: true } };
+  const frontmatter = frontmatterToObject(parseFrontmatter(fs.readFileSync(filePath, 'utf8')));
+  if ((frontmatter.project_id && frontmatter.project_id !== canonicalId)
+    || (frontmatter.mapping_operation_id && frontmatter.mapping_operation_id !== operationId)) {
+    return { status: 'conflict', title: normalizedTitle, verification: { ok: true } };
+  }
+  if (frontmatter.mapping_operation_id !== operationId) {
+    return { status: 'existing', title: normalizedTitle, verification: { ok: true } };
+  }
+  const notesDir = getVaultNotesDir();
+  const qmdPendingPath = path.join(defaultKnowledgeDir(notesDir), 'qmd-refresh-pending.json');
+  const verification = verifyContract({
+    path: filePath,
+    title: normalizedTitle,
+    created: true,
+    receipt: { status: 'committed' },
+    journal: { status: 'linked' },
+    knowledge: { qmdPendingPath, qmdStatus: 'pending-refresh' },
+  }, personality);
+  return { status: verification.ok ? 'applied' : 'partial', title: normalizedTitle, verification };
 }
 
 function verifyContract(result, personality) {
@@ -211,8 +284,8 @@ function dispatchBacklink({ result, section = '📝 Notes', createIfMissing = tr
   }
 }
 
-function writeNoteThroughContract(rawInput, { mutationService, link } = {}) {
-  const input = parseInput(rawInput);
+function writeNoteThroughContract(rawInput, { mutationService, link, resolveUserSource, resolveServedModel } = {}) {
+  const input = parseInput(rawInput, { resolveUserSource });
   const service = mutationService || createObsidianOwnedMutationService({ source: 'bridge.note-journal-contract' });
   const filePath = path.join(getVaultNotesDir(), `${String(input.title).trim().replace(/[/\\:*?"<>|]/g, '-')}.md`);
   const vaultRelativePath = path.relative(service.vaultRoot, filePath).split(path.sep).join('/');
@@ -225,6 +298,8 @@ function writeNoteThroughContract(rawInput, { mutationService, link } = {}) {
     title: input.title,
     content: input.content,
     frontmatter: input.frontmatter,
+    resolveUserSource,
+    resolveServedModel,
     ...writeContext,
   });
   const result = {
@@ -244,6 +319,7 @@ function writeNoteThroughContract(rawInput, { mutationService, link } = {}) {
   }
   return {
     personality: input.personality,
+    operationId: input.operationId,
     written: result.written,
     savedLocally: result.savedLocally,
     title: result.title,
@@ -283,6 +359,7 @@ function main() {
 module.exports = {
   SUPPORTED_PERSONALITIES,
   countJournalBacklinks,
+  inspectProjectNote,
   dispatchBacklink,
   main,
   parseInput,

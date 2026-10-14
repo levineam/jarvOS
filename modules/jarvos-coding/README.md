@@ -28,6 +28,8 @@ const {
   inspectRuntimeCheckout,
   submissionGateContract,
   evaluateSubmissionGate,
+  evaluateDeliveryTrace,
+  observePlan,
   buildSubmissionGate,
   formatSubmissionGateMarkdown,
   validateSubmissionEvidence,
@@ -55,6 +57,30 @@ const triage = triageCodingWork({
 
 Adapters should persist this object as evidence, then translate the portable
 decision into their own labels, documents, comments, or workflow state.
+
+### Held backlog source slice
+
+`createBeadsWorkActionService` supports Project/Outcome-linked held capture
+only when the composing host sets `backlogEnabled: true`. It is disabled by
+default. `captureBacklog({ title, description, operationId, canonical,
+sourceIntent, sourceRef, notBefore })` preserves intent and source in the
+Beads description and atomically creates native `deferred` work. No executor
+or schedule is registered. Reuse the same operation ID for a retried capture;
+changing its payload is an identity conflict.
+
+The host calls `admitBacklog({ itemId, operationId, expectedRevision })`
+explicitly. It reads durable work, validates the due time, canonical binding
+and current revision, and requires a separate host mutation authorization.
+The ordinary claim and completion path then applies, including host-resolved
+completion evidence. Neither MCP arguments nor a due timestamp grant execution
+authority. The source slice supplies no fairness policy, automatic dispatch,
+one-off placement or production rollout; hosts must qualify those separately.
+
+Keep backlog disabled to roll back an unactivated installation. Preserve any
+held items and operation/evidence stores; do not release or delete them as a
+rollback action. A deployed host must reconcile already-admitted work with its
+executor before reverting source. No private database, host path, provider or
+Paperclip service is required by the fixture tests.
 
 ### Beads execution transport
 
@@ -91,9 +117,18 @@ runs the portable loop:
 claim -> branch -> sliceReview -> holisticReview -> fixRerun -> pullRequest -> postMergeSweep -> verifyClose
 ```
 
+After `fixRerun` the orchestrator evaluates the [delivery trace](#delivery-trace)
+declared on `input.deliveryTrace` against the `deliveryObservation` that the fix
+stage itself read from Git. If the trace is absent, stale, or carries only
+generic test or review proof, the run returns `status: 'blocked'` with
+`deliveryGate.reasons`: no pull request is opened and `verifyClose` never runs.
+An observation passed on the input is ignored. The result echoes the declared
+trace as `deliveryTrace` and reports the evaluation as `deliveryGate`.
+
 When a Projects activity adapter is supplied, callers must include a fresh,
-run-scoped `runId`; work-item and issue identifiers are deliberately not used
-as a cross-run fallback.
+run-scoped `runId` and an exact, protected Beads execution reference. The
+reference binds the canonical revision, workspace, work item, and item revision;
+work-item and issue identifiers are deliberately not used as a cross-run fallback.
 
 The orchestrator depends on injected tracker/git/PR/post-merge adapters and a
 generic review-engine interface. The default review engine is
@@ -163,6 +198,45 @@ disabled, or unavailable, `plan`, `work`, and `complete` fall back to the native
 jarvOS route in the same work run and worktree. A failed fallback does not make
 a second branch, plan, pull request, or completion claim.
 
+`complete` runs the same orchestrator and delivery gate, and additionally binds
+the trace to the plan revision this work run accepted: the trace's plan digest
+must equal the store's `acceptedPlan.digest`. A digest restated by the caller is
+ignored, and a run that never accepted a plan cannot complete.
+
+### Work-run owner and worktree authority
+
+Every verb (`plan`, `acceptPlan`, `work`, `compound`, `complete`) claims through
+one shared boundary. The host-provided factory `ownerId` (default
+`jarvos-coding`) is authoritative, and the work-run root comes only from trusted
+sources:
+
+- **First-run bootstrap.** A new work run is created only on the factory
+  `canonicalWorktree`. Without a valid factory root, a new run is refused and
+  nothing is created, even if the caller supplies a root.
+- **Re-entry.** A host-preclaimed or previously created run re-enters on its
+  stored root. A factory root, when supplied, must equal the stored root; it
+  never retargets the run.
+- **Caller assertions.** A caller `ownerId` or `canonicalWorktree` is an
+  optional, same-valued legacy assertion. It must equal the factory owner and
+  the chosen root; it never overrides, adopts, or bootstraps.
+- **Fail closed.** Missing, malformed (non-string, empty, relative, control
+  characters, unnormalized POSIX or Windows drive roots, forward-slash drive
+  roots, or incomplete UNC/device-namespace roots), or conflicting owners and
+  roots are refused
+  before any run is created and before any provider or native adapter runs.
+
+```js
+const workflow = createManagedCodingWorkflow({
+  workRunStore: hostStore,
+  ownerId: hostOwnerId,
+  canonicalWorktree: hostWorktreeRoot,
+});
+await workflow.plan({ subjectKey: hostSubjectKey });
+```
+
+This boundary checks model-provided input only. It is not authenticated owner
+proof, and it does not atomically bind the root to the filesystem or Git.
+
 Learning capture is deliberately independent of coding completion. It runs only
 after live review, tests, pull-request, post-merge, and close evidence establish
 a verified result and a bounded signal names a reusable root cause,
@@ -174,6 +248,76 @@ learning artifact is captured per work run, with additional signals deferred.
 `codingHostAdapterContract('claude-code' | 'openclaw' | 'codex')` remains the descriptor-only
 contract for registries, docs, and setup tools that need to inspect support
 without instantiating a runtime adapter.
+
+### Work-run store rollback
+
+The first successful `bindWorkspace` upgrades the store from
+`jarvos-coding-work-run/v1` to `v2`. Releasing every binding alone is **not** a
+rollback: released v2 stays v2, and the exact v1 predecessor (commit
+`26fe64ff9be7b9533e9a04f7868d1a25bb448ac3`) fails closed on it. The mutable file
+store's `retireWorkspaceIndex()` is the only conversion back to v1:
+
+1. **Quiesce.** Stop every managed writer so exactly one writer remains. The
+   26fe writer lacks the current single-lock load/decide/commit semantics (the
+   contender-lock defect), so it must never run beside another writer, during
+   rollback or roll-forward.
+2. **Retire with the candidate.** `store.retireWorkspaceIndex()` runs under the
+   store lock. It refuses with `{ ok: false, reason: 'workspace_binding_held' }`
+   while any binding is bound or `handoff_pending` or any run still points at a
+   workspace. On released v2 it drops the empty index and null run pointers,
+   sets v1, keeps `workspaceFenceSeq` (the fence high-water) and every run,
+   event, nonce, artifact, terminal and follow-through record, and advances the
+   revision once. On v1 it is an idempotent no-op that writes nothing.
+3. **Run only the predecessor.** The 26fe build then reads and writes the
+   converted v1 state and keeps the retained high-water.
+4. **Roll forward** only with a new candidate under the same quiescence. Its
+   next bind re-upgrades to v2 from the retained high-water (high-water + 1,
+   never 0), so every earlier workspace token stays `stale_binding_fence`. A
+   frozen ae723 build is not a re-upgrade path: it fails closed on converted v1.
+
+Nothing calls `retireWorkspaceIndex()` automatically and source availability is
+not live authorization. The status reader stays read-only and does not expose
+it. Steward pair requalification, then private integration and adoption, are
+separate gates with their own owner and authority.
+
+**Verification map** (run from `modules/jarvos-coding`):
+
+| Flow | Proof |
+| --- | --- |
+| F1 capture/placement | `node --test test/local-change-intake.test.js test/projects-activity.test.js` |
+| F2 plan/owner | `node --test test/managed-workflow.test.js test/work-run-store.test.js` |
+| F3 execution | `node --test test/work-follow-through.test.js test/work-run-workspace-binding.test.js` |
+| F4 result | `node --test test/delivery-trace.test.js test/submission-gate.test.js` |
+| F5 blocker | `node --test test/managed-workflow.test.js test/triage.test.js` |
+| F6 rollback | `JARVOS_REQUIRE_PREDECESSOR=1 node --test test/work-run-rollback.test.js` |
+
+F6 in full:
+
+- **Launch:** `JARVOS_REQUIRE_PREDECESSOR=1 JARVOS_ROLLBACK_EVIDENCE_DIR=<dir> node --test test/work-run-rollback.test.js`.
+  `JARVOS_REQUIRE_PREDECESSOR=1` is mandatory for a rollback proof: without it,
+  a clone missing the 26fe commit skips instead of failing.
+  `JARVOS_ROLLBACK_EVIDENCE_DIR` is optional.
+- **Doctor:** the test pins the 26fe commit and store blob with `git rev-parse`
+  and `git cat-file` (argv arrays, no shell, checkout or index change) and
+  re-hashes the materialized bytes.
+- **Drive:** the predecessor is required from a fresh `jarvos-rollback-*` temp
+  root; the candidate comes from `require('../src')`. Only exported factories
+  and store methods are used, one writer at a time.
+- **Evidence:** with `JARVOS_ROLLBACK_EVIDENCE_DIR` set, each stage appends one
+  JSONL line (state sha256, revision, schema, fence high-water, record
+  inventory) to `SUP-3816-sr1-<case>.jsonl`. The directory must resolve outside
+  every temp fixture root, so the proof survives cleanup.
+- **Cleanup:** only the exact `jarvos-rollback-*` roots the test created under
+  `os.tmpdir()` are removed; production store roots are never touched.
+- **Helpers:** `loadPredecessor`, `seedWithOld`, `driveCandidate`, `oldWrites`,
+  `committed` and `recorder` are test-local. There is no new CLI, framework,
+  skill, installer, scheduler/controller, pstack config or default routing.
+
+The F6 proof is source-level. An installed or live rollback drive is not
+reachable from this repository: it needs an installed candidate build, the 26fe
+predecessor build installed for the same store root, all managed writers
+stopped, and explicit owner authority over the production store. None of that
+is implied by a passing test.
 
 ## Control-plane compatibility
 
@@ -221,6 +365,12 @@ cleanliness, submission readiness, merge, or issue close:
 - `verify` independently recomputes the complete-phase submission gate from
   durable stage evidence and ignores any caller-cached `submissionGate.ready`
 - gate input never hardcodes success fields such as `git.clean: true`
+- the delivery trace is taken from the orchestrator result (the command's
+  `deliveryTrace` argument is forwarded to the host as a declaration), and its
+  Git observation is read only from an authentic `fixRerun` stage result. An
+  observation in the command arguments, beside the result, or on an unconfirmed
+  reattached stage is not evidence. `verify` still trusts the stage events it is
+  handed, so the execution record itself must come from a trusted store
 
 ```js
 const gate = evaluateSubmissionGate({
@@ -229,19 +379,23 @@ const gate = evaluateSubmissionGate({
     branch: 'SUP-2138/submission-gate',
     baseBranch: 'origin/main',
     clean: true,
-    intendedFiles: ['jarvos-coding/src/lifecycle/policy.js'],
+    intendedFiles: ['modules/jarvos-coding/src/lifecycle/policy.js'],
   },
   checks: {
-    tests: [{ command: 'npx vitest run tests/scripts/jarvos-coding-submission-gate.test.js', status: 'passed' }],
+    tests: [{ command: 'node --test modules/jarvos-coding/test/submission-gate.test.js', status: 'passed' }],
     clawpatch: { status: 'passed', artifact: '.clawpatch/runs/latest.json' },
     autoreview: { status: 'recorded', artifact: 'PR review summary' },
+    goalAlignment: { status: 'aligned', summary: 'Aligned with the SUP-2138 plan.' },
     pullRequest: { status: 'created', url: 'https://github.com/owner/repo/pull/1' },
   },
+  deliveryTrace,        // declared by the agent, see "Delivery trace"
+  deliveryObservation,  // read from Git by the host
 });
 ```
 
 The submit phase requires the host's Git-backed work identity, issue-named branch hygiene, tests,
-clawpatch, autoreview, and pull request evidence. A Paperclip record is optional
+clawpatch, autoreview, goal alignment, pull request evidence, and a verified
+delivery trace. A Paperclip record is optional
 one-way reference/status projection after the authoritative outcome; it cannot
 admit, block, own, or close out supported work. The
 complete phase adds post-merge clawsweeper evidence or an explicit
@@ -369,13 +523,109 @@ The required evidence keys are:
 - `tests`: focused test/lint/build/smoke output, or an explicit no-test rationale.
 - `clawpatch`: pre-PR clawpatch advisory or a documented kill-switch/intake-only exception.
 - `autoreview`: pre-PR local autoreview result.
+- `goalAlignment`: an AI reviewer compared the change with the work goal/plan.
 - `pullRequest`: PR URL/number, or explicit `intake-only` status when no code was submitted.
+- `deliveryTrace`: the declared delivery trace, checked against
+  `deliveryObservation`. Unlike the keys above it is evaluated, not just
+  present. This helper has no host of its own, so the observation is what the
+  submitting agent read from Git; terminal verification re-observes it.
 
 `validateSubmissionEvidence(evidence, { identifier })` fails closed when any
 required evidence is missing. Use `mode: 'intake-only'` only for routing or
-planning packets that intentionally do not submit code. `clawsweeper` remains a
+planning packets that intentionally do not submit code; that mode needs no
+trace and reports `document-exception`, never a submission. `clawsweeper` remains a
 post-merge sweep and must not replace pre-submit clawpatch, autoreview, tests,
 or PR evidence.
+
+Both checks share one contract version, `jarvos-coding-submission-gate/v3`. v3
+is stricter than v2: evidence that passed on tests and review alone now fails
+until a delivery trace is supplied.
+
+## Delivery trace
+
+Approved coding work keeps a reviewable path from its owning plan to the
+documentation decision, the implemented change, and a behavioral observation.
+`evaluateDeliveryTrace(trace, { identifier, observed })` is the one pure
+evaluator used by both submission checks, the orchestrator, managed `complete`,
+and control-plane verification.
+
+The agent declares the trace. It is pointer-only: paths, digests, and commit ids.
+
+```js
+const deliveryTrace = {
+  schemaVersion: 'jarvos-coding-delivery-trace/v1',
+  workIdentifier: 'SUP-4029',
+  plan: { path: 'docs/plans/2026-09-30-SUP-4029-approval-doc-trace.md', digest: '<sha256 of the plan file>' },
+  // Either the docs this change updates...
+  docImpact: { decision: 'affected', docs: ['modules/jarvos-coding/README.md'] },
+  // ...or: { decision: 'none', reason: 'Internal mapping only; no exported name or documented behavior changes.' }
+  implementation: { headCommit: '<head sha>', changedFiles: ['<every file changed from the base>'] },
+  proof: [{
+    kind: 'behavioral',
+    level: 'source',
+    criterion: '<the plan acceptance item this shows>',
+    claim: '<the behavior demonstrated>',
+    command: '<command, or artifact: a pointer to the recorded output>',
+    observation: '<what was seen, e.g. failed before the change and passed at this head>',
+    status: 'passed',
+    headCommit: '<head sha>',
+  }],
+};
+```
+
+The host supplies the observation from Git, never from the caller:
+
+```js
+const deliveryObservation = {
+  baseCommit,                   // branch-stage resolution of the host-trusted base
+  headCommit,                    // git rev-parse HEAD
+  changedFiles,                  // git diff --name-only <baseCommit>...HEAD
+  plan: observePlan(planText, 'SUP-4029'),  // git show HEAD:<plan.path> -> { digest, mentionsWorkIdentifier }
+};
+```
+
+`createLiveFixer` returns this as `deliveryObservation` on the `fixRerun` result,
+using read-only Git argument arrays (no shell). The plan path is read only when
+it is a safe repo-relative path. Missing base evidence blocks the trace rather
+than treating an empty diff from a caller-provided ref as proof.
+The live adapters use the host-configured integration base (default
+`origin/main`); a bare host setting such as `release` means `origin/release`.
+A run naming another base is rejected before fetch or worktree creation.
+
+The result is `{ ok, reasons, claims }`. Reason codes:
+
+| Reason | Meaning |
+| --- | --- |
+| `delivery_trace_missing` | No trace, or not `jarvos-coding-delivery-trace/v1`. |
+| `observation_unavailable` | The host supplied no Git observation. |
+| `plan_missing` | No safe repo-relative plan path plus digest, or the plan is not at the observed head. A tracker URL is not a plan of record. |
+| `plan_identity_mismatch` | The trace names other work, or the plan text does not mention this work identifier. |
+| `plan_stale` | The plan digest differs from the file at the observed head, or from the accepted plan revision on the managed path. |
+| `doc_impact_missing` | No `affected`/`none` documentation decision. |
+| `doc_impact_reason_missing` | `none` with an empty, placeholder, or under-20-character reason. |
+| `doc_not_updated` | `affected` with no docs, an unsafe path, the plan itself listed as the doc, or a listed doc absent from the observed change. |
+| `implementation_stale` | The declared head is not the observed head. |
+| `implementation_mismatch` | The declared files are not exactly the observed changed files. |
+| `behavioral_proof_missing` | No passed `behavioral` source entry with criterion, claim, observation, and command or artifact. `tests`, `lint`, `build`, and `review` entries never count. |
+| `proof_stale` | A behavioral source entry was recorded at another commit. |
+| `proof_level_unsupported` | An `installed`/`live` entry lacks `runtime.target`, `runtime.revision`, `observedAt`, and `artifact`. |
+
+A changed plan, head, or file set blocks until a new matching trace is supplied;
+nothing is silently re-pinned.
+
+What this does and does not prove:
+
+- `claims.source` is `proven` only when every link matches. `claims.installed`
+  and `claims.live` are `not-claimed`, or `declared-unverified` when an entry
+  carries runtime evidence. A source pass never promotes them; merge, installed
+  runtime, and live behavior are separate claims that need their own evidence.
+- The evaluator compares declarations with Git. It cannot judge whether a
+  `none` reason is true, whether an entry labelled `behavioral` really shows the
+  named behavior, or whether the listed docs say the right thing. Those remain
+  goal-alignment and pull-request review questions; the trace makes them
+  explicit and contestable.
+- No tracker field is an input. A Paperclip record, URL, outage, or approval
+  assertion cannot replace the Git plan or observation, or change the result.
 
 The supported lifecycle has fixed authority boundaries: Git is code truth and
 Agent Mail provides live coordination. Paperclip is optional record-only

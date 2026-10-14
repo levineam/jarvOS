@@ -147,6 +147,66 @@ the experience until installed.
 4. Keep Paperclip as the live task authority. Obsidian Bases and Canvas are
    reading, review, and artifact surfaces only.
 
+## Machine-wide skill parity
+
+jarvOS can make every eligible user-owned skill available to every compatible
+supported harness: Codex, Claude Code, OpenClaw, and Hermes. This is a local,
+machine-wide service—not a feature of whichever repository or chat is open.
+
+The flow is ordered: `inventory` scans only registered absolute roots;
+`inventory-assess` admits only rule-proven safe, portable candidates into an
+owner-only immutable source store; `apply` reconciles that accepted generation
+through the receipt-owning projector; and `autonomous-repair` coalesces events
+and provides the periodic full-scan backstop. An incomplete scan cannot admit,
+update, alias, or retire anything. A healthy replay writes and notifies nothing.
+
+Public portable-skill selection remains explicit in
+`schemas/catalog.schema.json` and `schemas/local-overlay.schema.json`.
+Private overlay bodies, observed paths, snapshots, receipts, and delivery state
+stay local. CLI, doctor, scheduler, and agent status use redacted logical IDs,
+digests, states, and allowlisted reason codes only.
+
+
+## Shared skill operator CLI
+
+Public catalog operations are available on `jarvos-skills`:
+
+```sh
+jarvos-skills init-config --config ~/.jarvos/shared-skills/config.json --json
+jarvos-skills share --id my-skill --path ./skills/my-skill --scope public --json
+jarvos-skills plan --config ~/.jarvos/shared-skills/config.json --json
+jarvos-skills apply --config ~/.jarvos/shared-skills/config.json --json
+jarvos-skills status --config ~/.jarvos/shared-skills/config.json --json
+jarvos-skills repair --config ~/.jarvos/shared-skills/config.json --json
+jarvos-skills enable --harness codex --json
+jarvos-skills disable --harness claude --json
+jarvos-skills rename --id my-skill --name jarvos-my-skill --json
+jarvos-skills scheduler --write --interval-minutes 60 --json
+jarvos-skills doctor-shared --json
+jarvos-skills inventory --json
+jarvos-skills inventory-assess --json
+jarvos-skills autonomous-repair --json
+jarvos-skills-scheduled-repair --config ~/.jarvos/shared-skills/config.json
+node scripts/live-preflight-checklist.js --json
+```
+
+`share --scope local` admits private bundles through an owner-controlled overlay
+outside the package. Scheduler unit files are written disabled by default and
+never auto-enable live harness gates. Claude interactive proof remains
+`verification_pending` until the owner authorizes a remote model probe.
+
+`autonomous-repair` is the scheduler command. It stays inert until inventory is
+enabled in owner-local configuration and never enables the scheduler itself.
+`jarvos-skills-scheduled-repair` wraps that command for delivery-aware schedulers:
+healthy repeats print `NO_REPLY`, while new attention, repair, or failure prints
+one redacted count-only message. `--announce-convergence` is a one-run activation
+option, not a recurring schedule flag.
+The public preflight is permanently read-only; first live convergence happens
+only through the installed, merged runtime. See the
+[architecture](../../docs/architecture/shared-skill-distribution.md) and
+[runbook](../../docs/runbooks/shared-skill-distribution.md).
+
+
 ## Manifest
 
 `manifest.json` is the source of truth for the default bundle. Each skill has

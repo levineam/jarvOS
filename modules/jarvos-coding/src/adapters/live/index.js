@@ -34,6 +34,7 @@ const {
   createLiveBeadsTracker,
   createMemoryOperationStore,
 } = require('./beads-tracker');
+const { OPERATION_STORE_SCHEMA_VERSION, createFileOperationStore } = require('./file-operation-store');
 
 const LIVE_ADAPTERS_SCHEMA_VERSION = 'jarvos-coding-live-adapters/v2';
 
@@ -97,11 +98,14 @@ function buildLiveCodingAdapters(options = {}) {
     dryRun: options.dryRun,
   });
 
+  // The same host-owned base governs the branch observation and the pull
+  // request target: `release` and `origin/release` both mean origin/release.
   const git = options.git || createLiveGitBranch({
     run: options.run,
     env: options.env,
     repoRootDir: options.repoRootDir,
     worktreeRoot: options.worktreeRoot,
+    baseRef: options.baseRef,
   });
 
   const fixer = options.fixer || createLiveFixer({
@@ -132,6 +136,7 @@ module.exports = {
   BEADS_TRACKER_SCHEMA_VERSION,
   COUPLED_STAGES,
   DEFAULT_BEADS_VERSION,
+  OPERATION_STORE_SCHEMA_VERSION,
   FIXER_SCHEMA_VERSION,
   HOLISTIC_REVIEW_SCHEMA_VERSION,
   LIVE_ADAPTERS_SCHEMA_VERSION,
@@ -150,5 +155,6 @@ module.exports = {
   createLivePullRequest,
   parseClawpatchCommand,
   createMemoryOperationStore,
+  createFileOperationStore,
   resolveWorktreeRoot,
 };

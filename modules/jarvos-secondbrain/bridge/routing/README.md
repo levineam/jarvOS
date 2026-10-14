@@ -13,9 +13,15 @@ Note, or is promoted outward to adjacent systems.
 - `../capture/src/universal-capture.js` — jarVOS-owned CaptureEvent v2
   entrypoint for agents
 - `../dispatch/src/capture-dispatcher.js` — classifier-output dispatch into capture skills
-  - high-confidence idea → journal entry
-  - high-confidence non-idea salience → note creation plus memory where eligible
-  - medium-confidence salience → ignored unless explicitly captured or high-confidence
+  - explicit durable-capture intent (strict command, caller-set trigger, keyword or
+    bounded natural-language directive) → journal entry or note creation, decorated
+    with salience/confidence for downstream memory eligibility
+  - no explicit intent → never captured, regardless of salience or confidence;
+    high-confidence salience is surfaced as observation-only metadata
+    (`path: 'salience_observed'`), not a durable write
+  - see `../../packages/jarvos-ambient/src/intent/capture-authorization.js` for the
+    pure authorization predicate both this dispatcher and the ambient routing plan
+    enforce (SUP-3981)
 
 ## Why this lives here
 

@@ -8,8 +8,15 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 
 const { ProjectRegistry } = require('../src/registry');
-const { CONTEXT_CONTRACT, buildContextPacket, validateContextPacket, validateContextQuery } = require('../src/projects-context');
+const { CONTEXT_CONTRACT, buildContextPacket, normalizeContextPacket, SUPPORTED_CONTEXT_SCHEMA_VERSIONS, validateContextPacket, validateContextQuery } = require('../src/projects-context');
 const { CAPABILITY_CONTRACT, issueCapability, verifyCapability } = require('../src/projects-context-capability');
+const inferenceContracts = require('../src/project-inference-contracts');
+const {
+  acknowledgeIntentGapAlerts,
+  createMemoryIntentGapAlertState,
+  deriveIntentGapAttention,
+  intentSourceDescriptorDigest,
+} = require('../src/intent-gap-attention');
 const {
   PROVIDER_STATES,
   createHostAdmission,
@@ -82,6 +89,53 @@ function providerAuthorities(providers) {
   ]));
 }
 
+function intentGapSource(authority, record, registryGeneration, overrides = {}) {
+  const descriptor = {
+    canonicalId: record.id, recordRevision: record.revision, registryGeneration,
+    role: 'migration-source', status: 'current', scope: 'record',
+    fields: { goal: 'Keep the bounded context current', definitionOfDone: 'Context is proven' },
+    sourceRef: 'packet-intent-source', sourceDigest: 'b'.repeat(64),
+    ...overrides,
+  };
+  const evidence = authority.admitEvidenceUnit({
+    observationId: 'obs_packet_intent', evidenceId: 'ev_packet_intent', sourceClass: 'note', occurredAt: NOW, observedAt: NOW,
+    sourceRevision: 'brief-v1', sensitivity: 'owner-private', coverageState: 'fresh', contentDigest: intentSourceDescriptorDigest(descriptor),
+  });
+  return { ...descriptor, evidence };
+}
+
+function candidate(overrides = {}) {
+  return inferenceContracts.createProjectCandidate({
+    evidenceIds: ['ev_000001'],
+    evidenceSetWatermark: 'a'.repeat(64),
+    engineRevision: 'deterministic-baseline-v1',
+    policyRevision: 'jarvos.project-inference-policy-v1',
+    kind: 'project',
+    title: 'A provisional project',
+    aliases: [],
+    parentId: null,
+    parentAlternatives: [],
+    confidence: {
+      identityMatch: 0.5,
+      novelty: 0.5,
+      sourceDiversity: 0.5,
+      temporalContinuity: 0.5,
+      parentFit: 0.5,
+      sourceCoverage: 0.5,
+    },
+    disposition: 'provisional',
+    reasonCodes: ['needs-review'],
+    lineage: [],
+    ...overrides,
+  });
+}
+
+function coverage(sourceClass, state) {
+  return inferenceContracts.createCoverageStatus({
+    sourceClass, state, observedAt: NOW, sourceRevision: `${sourceClass}-revision-1`,
+  });
+}
+
 test('canonical-only packet is useful and optional providers are visibly omitted', () => {
   const { registry, root, outcome } = makeRegistry();
   const query = queryFor(root, outcome);
@@ -111,7 +165,238 @@ test('canonical-only packet is useful and optional providers are visibly omitted
   assert.deepEqual(result.packet.activity, []);
   assert.deepEqual(result.packet.currentWork, []);
   assert.deepEqual(result.packet.attention, []);
+  assert.ok(result.packet.omissions.includes('intent-gap:omitted'));
   assert.equal(validateContextPacket(result.packet).ok, true);
+});
+
+test('intent gaps enter the existing bounded attention seam only after scope and redaction checks', () => {
+  const { registry, root, outcome } = makeRegistry();
+  const authority = createHostAdmission({ producerId: 'projects-intent-source', secret: 'intent-source-secret', allowedSourceClasses: ['note'] });
+  const scopedQuery = queryFor(root, outcome, {
+    scope: { projectIds: [root.id], outcomeIds: [], includeDescendants: false },
+    limits: { maxItems: 2, maxBytes: 20000, maxProviderAgeSeconds: 3600 },
+  });
+  const alertState = createMemoryIntentGapAlertState();
+  const intentGaps = {
+    sources: [intentGapSource(authority, root, registry.generation), { canonicalId: outcome.id, malformed: true }],
+    sourceAuthority: authority,
+    alertState,
+  };
+  const scoped = buildContextPacket({
+    registry, query: scopedQuery, capability: issue(scopedQuery, { nonce: 'intent-scope' }), capabilitySecret: SECRET,
+    subject: 'agent:test-session', hostId: 'projects-host', now: NOW, providers: {}, intentGaps,
+  });
+  assert.equal(scoped.status, 'ok');
+  assert.deepEqual(scoped.packet.attention.map((summary) => summary.canonicalId), [root.id]);
+  assert.equal(scoped.packet.attention[0].source, 'projects-intent-gap');
+  assert.equal(scoped.packet.attention[0].status, 'recoverable-migration');
+  assert.equal(scoped.packet.canonical.records.some((record) => record.id === outcome.id), false);
+  assert.equal(scoped.packet.truncation.truncated, true);
+  assert.equal(scoped.packet.attention.length, 1);
+  const unacknowledged = deriveIntentGapAttention({
+    records: [root], registryGeneration: registry.generation, sources: intentGaps.sources.filter((source) => source.canonicalId === root.id),
+    sourceAuthority: authority, now: NOW,
+  });
+  assert.equal(acknowledgeIntentGapAlerts(unacknowledged.entries, { alertState, consumerKey: 'overseer' }).length, 1);
+  const publicResult = buildContextPacket({
+    registry, query: scopedQuery, capability: issue(scopedQuery, { nonce: 'intent-public', redactionClass: 'public' }), capabilitySecret: SECRET,
+    subject: 'agent:test-session', hostId: 'projects-host', now: NOW, providers: {}, intentGaps,
+  });
+  assert.equal(publicResult.status, 'ok');
+  assert.deepEqual(publicResult.packet.attention, []);
+  assert.ok(publicResult.packet.omissions.includes('intent-gap:redacted'));
+});
+
+test('an unresolved intent gap leaves an already-authorized Todo in current work', () => {
+  const { registry, root, outcome } = makeRegistry();
+  const authority = createHostAdmission({ producerId: 'projects-intent-source', secret: 'intent-source-secret', allowedSourceClasses: ['note'] });
+  const query = queryFor(root, outcome, {
+    scope: { projectIds: [root.id], outcomeIds: [], includeDescendants: false },
+  });
+  const providers = {
+    todo: snapshot('todo', 'fresh', {
+      summaries: [{
+        id: 'todo-authorized', canonicalId: root.id, category: 'work', status: 'in_progress', title: 'Authorized repair',
+        occurredAt: NOW, observedAt: NOW, evidenceRefs: ['todo:authorized'],
+      }],
+    }),
+  };
+  const result = buildContextPacket({
+    registry, query, capability: issue(query, { nonce: 'intent-current-work' }), capabilitySecret: SECRET,
+    subject: 'agent:test-session', hostId: 'projects-host', now: NOW, providers, providerAuthorities: providerAuthorities(providers),
+    intentGaps: {
+      sourceAuthority: authority,
+      sources: [intentGapSource(authority, root, registry.generation, { fields: { goal: '-', definitionOfDone: '-' } })],
+    },
+  });
+  assert.equal(result.status, 'ok');
+  assert.deepEqual(result.packet.currentWork.map((summary) => summary.id), ['todo-authorized']);
+  assert.deepEqual(result.packet.attention.map((summary) => summary.status), ['unresolved-intent']);
+});
+
+test('canonical packet accepts nested projects beneath a project parent', () => {
+  const { registry, root, outcome } = makeRegistry();
+  const child = registry.create({ title: 'Active Assistant', parentId: root.id }).record;
+  const query = queryFor(root, outcome, {
+    scope: { projectIds: [root.id], outcomeIds: [], includeDescendants: true },
+  });
+  const result = buildContextPacket({
+    registry,
+    query,
+    capability: issue(query),
+    capabilitySecret: SECRET,
+    subject: 'agent:test-session',
+    hostId: 'projects-host',
+    now: NOW,
+    providers: {},
+  });
+
+  assert.equal(result.status, 'ok');
+  assert.equal(result.packet.canonical.records.find((record) => record.id === child.id).parentId, root.id);
+  assert.equal(validateContextPacket(result.packet).ok, true);
+});
+
+test('inference is versioned, provisional candidates are explicitly non-actionable, and coverage remains typed', () => {
+  const { registry, root, outcome } = makeRegistry();
+  const query = queryFor(root, outcome);
+  const provisional = candidate({ parentId: root.id, parentAlternatives: [root.id, 'prj_999999'] });
+  const result = buildContextPacket({
+    registry,
+    query,
+    capability: issue(query),
+    capabilitySecret: SECRET,
+    subject: 'agent:test-session',
+    hostId: 'projects-host',
+    now: NOW,
+    providers: {},
+    inference: {
+      candidates: [provisional],
+      coverage: [
+        coverage('note', 'fresh'),
+        coverage('chat', 'healthy-empty'),
+        coverage('execution', 'partial'),
+        coverage('release', 'unavailable'),
+        coverage('stewardship', 'policy-omitted'),
+      ],
+      watermark: 'b'.repeat(64),
+      watermarks: {},
+    },
+  });
+
+  assert.equal(result.status, 'ok');
+  assert.equal(result.packet.schemaVersion, 2);
+  assert.equal(result.packet.inference.candidates.length, 1);
+  assert.equal(result.packet.inference.candidates[0].disposition, 'provisional');
+  assert.equal(result.packet.inference.candidates[0].actionable, false);
+  assert.deepEqual(result.packet.inference.candidates[0].parentAlternatives, [root.id]);
+  assert.deepEqual(result.packet.inference.coverage.map((entry) => entry.state), ['healthy-empty', 'partial', 'fresh', 'unavailable', 'policy-omitted']);
+  assert.equal(result.packet.inference.watermark, 'b'.repeat(64));
+  assert.equal(result.packet.watermarks.registry, `registry:${registry.generation}`);
+  assert.equal(validateContextPacket(result.packet).ok, true);
+
+  const forged = {
+    ...result.packet,
+    inference: {
+      ...result.packet.inference,
+      candidates: [{ ...result.packet.inference.candidates[0], privateEvidence: 'must-not-cross' }],
+    },
+  };
+  assert.equal(validateContextPacket(forged).ok, false);
+});
+
+test('narrow Projects scope excludes unbound candidates and does not enumerate alternative parents', () => {
+  const { registry, root, outcome } = makeRegistry();
+  const query = queryFor(root, outcome, { scope: { projectIds: [root.id], outcomeIds: [], includeDescendants: false } });
+  const inScope = candidate({ parentId: root.id, parentAlternatives: [root.id, 'prj_999999'] });
+  const outOfScope = candidate({
+    candidateId: 'cand_22222222222222222222222222222222',
+    title: 'Unbound candidate',
+    evidenceIds: ['ev_000002'],
+    parentId: 'prj_999999',
+  });
+  const result = buildContextPacket({
+    registry,
+    query,
+    capability: issue(query, { nonce: 'nonce-narrow' }),
+    capabilitySecret: SECRET,
+    subject: 'agent:test-session',
+    hostId: 'projects-host',
+    now: NOW,
+    providers: {},
+    inference: { candidates: [inScope, outOfScope] },
+  });
+  assert.equal(result.status, 'ok');
+  assert.deepEqual(result.packet.canonical.records.map((record) => record.id), [root.id]);
+  assert.deepEqual(result.packet.inference.candidates.map((entry) => entry.title), ['A provisional project']);
+  assert.deepEqual(result.packet.inference.candidates[0].parentAlternatives, [root.id]);
+});
+
+test('public context redacts provisional candidate identities', () => {
+  const { registry, root, outcome } = makeRegistry();
+  const query = queryFor(root, outcome);
+  const result = buildContextPacket({
+    registry,
+    query,
+    capability: issue(query, { nonce: 'nonce-public-inference', redactionClass: 'public' }),
+    capabilitySecret: SECRET,
+    subject: 'agent:test-session',
+    hostId: 'projects-host',
+    now: NOW,
+    providers: {},
+    inference: { candidates: [candidate({ parentId: root.id })] },
+  });
+
+  assert.equal(result.status, 'ok');
+  assert.deepEqual(result.packet.inference.candidates, []);
+  assert.ok(result.packet.omissions.includes('inference:candidates:redacted'));
+  assert.equal(JSON.stringify(result.packet).includes('A provisional project'), false);
+  assert.equal(validateContextPacket(result.packet).ok, true);
+});
+
+test('activity summaries carry the admission-time canonical root tuple', () => {
+  const { registry, root, outcome } = makeRegistry();
+  const query = queryFor(root, outcome);
+  const activity = snapshot('activity', 'fresh', {
+    summaries: [{
+      id: 'activity-admission', canonicalId: outcome.id, category: 'activity', status: 'done', title: 'admitted activity',
+      occurredAt: NOW, observedAt: NOW, evidenceRefs: ['activity:admission'],
+      canonicalAtAdmission: {
+        canonicalId: outcome.id,
+        canonicalKind: 'outcome',
+        canonicalRevision: 1,
+        rootProjectId: root.id,
+        rootProjectRevision: 1,
+        rootProjectLifecycle: 'active',
+        registryGeneration: registry.generation,
+      },
+    }],
+  });
+  const result = buildContextPacket({
+    registry, query, capability: issue(query, { nonce: 'nonce-admission' }), capabilitySecret: SECRET,
+    subject: 'agent:test-session', hostId: 'projects-host', now: NOW, providers: { activity },
+    providerAuthorities: providerAuthorities({ activity }),
+  });
+  assert.equal(result.status, 'ok');
+  assert.deepEqual(result.packet.activity[0].canonicalAtAdmission, {
+    canonicalId: outcome.id,
+    canonicalKind: 'outcome',
+    canonicalRevision: 1,
+    rootProjectId: root.id,
+    rootProjectRevision: 1,
+    rootProjectLifecycle: 'active',
+    registryGeneration: registry.generation,
+  });
+  assert.equal(validateContextPacket(result.packet).ok, true);
+
+  const tampered = structuredClone(activity);
+  tampered.summaries[0].canonicalAtAdmission.rootProjectRevision += 1;
+  const rejected = buildContextPacket({
+    registry, query, capability: issue(query, { nonce: 'nonce-admission-tamper' }), capabilitySecret: SECRET,
+    subject: 'agent:test-session', hostId: 'projects-host', now: NOW, providers: { activity: tampered },
+    providerAuthorities: providerAuthorities({ activity: tampered }),
+  });
+  assert.equal(rejected.packet.providers.activity.state, 'unknown');
+  assert.deepEqual(rejected.packet.activity, []);
 });
 
 test('provider states remain distinct and verified summaries feed bounded sections', () => {
@@ -119,10 +404,16 @@ test('provider states remain distinct and verified summaries feed bounded sectio
   const query = queryFor(root, outcome);
   const providers = {
     todo: snapshot('todo', 'fresh', {
-      summaries: [{
-        id: 'todo-1', canonicalId: outcome.id, category: 'intent', status: 'open', title: 'Finish release notes',
-        occurredAt: NOW, observedAt: NOW, evidenceRefs: ['todo:todo-1'],
-      }],
+      summaries: [
+        {
+          id: 'todo-1', canonicalId: outcome.id, category: 'intent', status: 'open', title: 'Finish release notes',
+          occurredAt: NOW, observedAt: NOW, evidenceRefs: ['todo:todo-1'],
+        },
+        {
+          id: 'todo-closed', canonicalId: outcome.id, category: 'work', status: 'closed', title: 'Finished release notes',
+          occurredAt: NOW, observedAt: NOW, evidenceRefs: ['todo:todo-closed'],
+        },
+      ],
     }),
     beads: snapshot('beads', 'healthy-empty'),
     paperclip: snapshot('paperclip', 'stale', { capturedAt: '2026-08-08T10:00:00.000Z' }),
@@ -143,6 +434,7 @@ test('provider states remain distinct and verified summaries feed bounded sectio
   assert.equal(result.packet.providers.activity.state, 'unavailable');
   assert.equal(result.packet.currentWork.length, 1);
   assert.equal(result.packet.currentWork[0].id, 'todo-1');
+  assert.equal(result.packet.currentWork.some((entry) => entry.id === 'todo-closed'), false);
   assert.equal(result.packet.omissions.some((entry) => entry.includes('untrusted')), true);
 });
 
@@ -297,6 +589,89 @@ test('bounds preserve attention evidence over ordinary activity and reject impos
   }), { status: 'unavailable', code: 'CONTEXT_BUDGET_TOO_SMALL' });
 });
 
+test('byte trimming keeps the final packet valid, bounded and deterministic across portfolio shapes', () => {
+  for (let seed = 1; seed <= 5; seed += 1) {
+    const { registry, root, outcome } = makeRegistry();
+    const parents = [root];
+    for (let index = 0; index < 9; index += 1) {
+      const parent = parents[(index * seed) % parents.length];
+      const record = registry.create({
+        title: `Project ${seed}-${index}`, parentId: index % 3 ? parent.id : null,
+        goal: 'Synthetic goal '.repeat(10 + index),
+        definitionOfDone: 'Synthetic acceptance evidence '.repeat(10 + seed),
+      }).record;
+      parents.push(record);
+    }
+    const providers = { release: snapshot('release', 'fresh', {
+      capturedAt: '2026-08-08T10:00:00.000Z',
+      summaries: [{
+        id: 'release-work', canonicalId: root.id, category: 'work', status: 'open',
+        title: 'Synthetic release work '.repeat(10), occurredAt: NOW, observedAt: NOW, evidenceRefs: ['release:work'],
+      }, {
+        id: 'release-attention', canonicalId: outcome.id, category: 'attention', status: 'blocked',
+        title: 'Synthetic release blocker '.repeat(10), occurredAt: NOW, observedAt: NOW, evidenceRefs: ['release:attention'],
+      }],
+    }) };
+    const build = (maxItems, maxBytes) => {
+      const query = queryFor(root, outcome, {
+        scope: { projectIds: [], outcomeIds: [], includeDescendants: true },
+        limits: { maxItems, maxBytes, maxProviderAgeSeconds: 60 },
+      });
+      return buildContextPacket({
+        registry, query, capability: issue(query), capabilitySecret: SECRET,
+        subject: 'agent:test-session', hostId: 'projects-host', now: NOW,
+        providers, providerAuthorities: providerAuthorities(providers),
+      });
+    };
+    for (const maxItems of [1, 5, 50]) {
+      for (const maxBytes of [512, 4096, 8000, 16000, 30000]) {
+        const result = build(maxItems, maxBytes);
+        assert.deepEqual(result, build(maxItems, maxBytes));
+        if (maxBytes >= 8000) assert.equal(result.status, 'ok');
+        if (result.status !== 'ok') {
+          assert.deepEqual(result, { status: 'unavailable', code: 'CONTEXT_BUDGET_TOO_SMALL' });
+          continue;
+        }
+        const { packet } = result;
+        assert.equal(validateContextPacket(packet).ok, true, `seed=${seed}, items=${maxItems}, bytes=${maxBytes}`);
+        assert.ok(Buffer.byteLength(JSON.stringify(packet)) <= maxBytes);
+        const count = packet.canonical.records.length + packet.currentWork.length + packet.attention.length + packet.evidence.length;
+        assert.ok(count <= maxItems);
+        assert.equal(packet.truncation.omittedItems, 15 - count);
+        assert.equal(packet.truncation.truncated, count < 15);
+        const trimmed = [
+          ['canonical.records', packet.canonical.records.length, 11],
+          ['currentWork', packet.currentWork.length, 1],
+          ['attention', packet.attention.length, 1],
+          ['evidence', packet.evidence.length, 2],
+        ].filter(([, actual, initial]) => actual < initial).map(([section]) => section).sort();
+        assert.deepEqual(packet.truncation.sections, trimmed);
+        assert.equal(packet.providers.release.state, 'stale');
+      }
+    }
+    assert.equal(build(50, 16000).status, 'ok');
+    assert.ok(build(50, 16000).packet.canonical.records.length > 0);
+  }
+});
+
+test('truncation metadata is budgeted before accepting the final packet', () => {
+  const { registry, root, outcome } = makeRegistry();
+  const build = (maxBytes) => {
+    const query = queryFor(root, outcome, { limits: { maxItems: 1, maxBytes, maxProviderAgeSeconds: 3600 } });
+    return buildContextPacket({
+      registry, query, capability: issue(query), capabilitySecret: SECRET,
+      subject: 'agent:test-session', hostId: 'projects-host', now: NOW,
+    });
+  };
+  const full = build(20000);
+  const maxBytes = Buffer.byteLength(JSON.stringify(full.packet)) - 5;
+  const result = build(maxBytes);
+  assert.equal(result.status, 'ok');
+  assert.equal(validateContextPacket(result.packet).ok, true);
+  assert.ok(Buffer.byteLength(JSON.stringify(result.packet)) <= maxBytes);
+  assert.equal(result.packet.truncation.truncated, true);
+});
+
 test('expired, invalid-scope, and missing-record requests are non-enumerating', () => {
   const { registry, root, outcome } = makeRegistry();
   const query = queryFor(root, outcome);
@@ -369,4 +744,33 @@ test('packet identity is stable for the same bounded input', () => {
   assert.equal(first.packet.packetId, second.packet.packetId);
   assert.match(first.packet.packetId, /^ctx_[a-f0-9]{32}$/);
   assert.equal(crypto.createHash('sha256').update(JSON.stringify(first.packet.canonical.revisions)).digest('hex').length, 64);
+  assert.deepEqual(first.packet.inference, second.packet.inference);
+  assert.deepEqual(first.packet.watermarks, second.packet.watermarks);
+});
+
+test('packet normalization advertises the supported schema set and rejects unknown schemas', () => {
+  const { registry, root, outcome } = makeRegistry();
+  const query = queryFor(root, outcome);
+  const result = buildContextPacket({
+    registry, query, capability: issue(query), capabilitySecret: SECRET, subject: 'agent:test-session', hostId: 'projects-host', providers: {}, now: NOW,
+  });
+  assert.equal(result.status, 'ok');
+  assert.deepEqual(normalizeContextPacket(result.packet), {
+    ok: true, packet: result.packet, supportedSchemaVersions: [2],
+  });
+  assert.deepEqual(SUPPORTED_CONTEXT_SCHEMA_VERSIONS, [2]);
+  assert.deepEqual(normalizeContextPacket({ ...result.packet, schemaVersion: 99 }), { ok: false, reason: 'unsupported-schema' });
+  assert.deepEqual(normalizeContextPacket({
+    ...result.packet,
+    canonical: { ...result.packet.canonical, records: [{ ...result.packet.canonical.records[0], title: 42 }, ...result.packet.canonical.records.slice(1)] },
+  }), { ok: false, reason: 'invalid-contract' });
+  assert.deepEqual(normalizeContextPacket({
+    ...result.packet,
+    canonical: { ...result.packet.canonical, records: [result.packet.canonical.records[0], { ...result.packet.canonical.records[1], parentId: null }] },
+  }), { ok: false, reason: 'invalid-contract' });
+  for (const revisions of [
+    {},
+    { ...result.packet.canonical.revisions, prj_999999: 1 },
+    { ...result.packet.canonical.revisions, [result.packet.canonical.records[0].id]: result.packet.canonical.records[0].revision + 1 },
+  ]) assert.deepEqual(normalizeContextPacket({ ...result.packet, canonical: { ...result.packet.canonical, revisions } }), { ok: false, reason: 'invalid-contract' });
 });

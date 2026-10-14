@@ -6,7 +6,8 @@
     "workflow-execution",
     "rule-creation",
     "context-management",
-    "cron-hygiene"
+    "cron-hygiene",
+    "operator-communication"
   ],
   "optionalAdapters": [
     {
@@ -34,15 +35,19 @@
       "purpose": "Plan, track, package, execute, and verify non-trivial work.",
       "source": {
         "revision": "jarvos-skills-v0.3.0",
-        "digest": "32ad169ce1f2296433fd552be6b0c6251d69b9e28ea620b97123e9d9310e7c04",
+        "digest": "a4bb18b88bc0a8092806d2d8ca3c2dc8b3356e44be28c295bad1b746a156397b",
         "license": "MIT",
         "provenance": "jarvOS reviewed source"
       },
-      "supportedHarnesses": ["generic", "hermes"],
+      "supportedHarnesses": ["generic", "codex", "claude", "claude-code", "openclaw", "hermes"],
       "projection": {
         "mode": "copy",
         "targets": {
           "generic": { "path": "{skillsRoot}/workflow-execution/SKILL.md", "renderer": "raw-skill-md" },
+          "codex": { "path": "{skillsRoot}/workflow-execution/SKILL.md", "renderer": "raw-skill-md" },
+          "claude": { "path": "{skillsRoot}/workflow-execution/SKILL.md", "renderer": "raw-skill-md" },
+          "claude-code": { "path": "{skillsRoot}/workflow-execution/SKILL.md", "renderer": "raw-skill-md" },
+          "openclaw": { "path": "{skillsRoot}/workflow-execution/SKILL.md", "renderer": "raw-skill-md" },
           "hermes": { "path": "{skillsRoot}/workflow-execution/SKILL.md", "renderer": "raw-skill-md" }
         }
       }
@@ -72,7 +77,7 @@
       "purpose": "Maintain compact, coherent always-loaded context and durable memory routing.",
       "source": {
         "revision": "jarvos-skills-v0.3.0",
-        "digest": "a29f774811f08581069c2fbaab10bc8055183d4b5e609c974b92f0837c51f0f9",
+        "digest": "737f63f7688eb4ea6595b4be7b685b6cb754598ec5484c6fde7e4def37696e8b",
         "license": "MIT",
         "provenance": "jarvOS reviewed source"
       },
@@ -105,6 +110,28 @@
       }
     },
     {
+      "name": "operator-communication",
+      "path": "skills/operator-communication/SKILL.md",
+      "purpose": "Explain operational conditions safely in plain language without selecting a notification transport.",
+      "source": {
+        "revision": "jarvos-skills-v0.3.0",
+        "digest": "41ffc4ca3b1d363dd8d94a31b23b757a19c78f94e3a1e27b9813d1bcb4ae3938",
+        "license": "MIT",
+        "provenance": "jarvOS reviewed source"
+      },
+      "supportedHarnesses": ["generic", "claude-code", "codex", "openclaw", "hermes"],
+      "projection": {
+        "mode": "copy",
+        "targets": {
+          "generic": { "path": "{skillsRoot}/operator-communication/SKILL.md", "renderer": "raw-skill-md" },
+          "claude-code": { "path": "{skillsRoot}/operator-communication/SKILL.md", "renderer": "raw-skill-md" },
+          "codex": { "path": "{skillsRoot}/operator-communication/SKILL.md", "renderer": "raw-skill-md" },
+          "openclaw": { "path": "{skillsRoot}/operator-communication/SKILL.md", "renderer": "raw-skill-md" },
+          "hermes": { "path": "{skillsRoot}/operator-communication/SKILL.md", "renderer": "raw-skill-md" }
+        }
+      }
+    },
+    {
       "name": "explore-unknowns",
       "path": "skills/explore-unknowns/SKILL.md",
       "purpose": "Harmless fixture for proving that a harness can discover and load a managed skill.",
@@ -123,6 +150,24 @@
           "codex": { "path": "{skillsRoot}/explore-unknowns/SKILL.md", "renderer": "raw-skill-md" },
           "openclaw": { "path": "{skillsRoot}/explore-unknowns/SKILL.md", "renderer": "raw-skill-md" },
           "hermes": { "path": "{skillsRoot}/explore-unknowns/SKILL.md", "renderer": "raw-skill-md" }
+        }
+      }
+    },
+    {
+      "name": "session-wait",
+      "path": "skills/session-wait/SKILL.md",
+      "purpose": "Return one authenticated external result to the exact originating Codex session.",
+      "source": {
+        "revision": "jarvos-skills-v0.4.0",
+        "digest": "1645f9b7e5be3ee30e3fc0dac537f5243f5602c362da77b883985e3fc946fda6",
+        "license": "MIT",
+        "provenance": "jarvOS reviewed source"
+      },
+      "supportedHarnesses": ["codex"],
+      "projection": {
+        "mode": "copy",
+        "targets": {
+          "codex": { "path": "{skillsRoot}/session-wait/SKILL.md", "renderer": "raw-skill-md" }
         }
       }
     }

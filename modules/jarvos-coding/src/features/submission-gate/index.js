@@ -1,8 +1,10 @@
 'use strict';
 
-// v2 makes Git-backed work identity the required evidence key. `issue` remains
-// a historical input alias so existing callers can migrate without a rewrite.
-const SUBMISSION_GATE_SCHEMA_VERSION = 'jarvos-coding-submission-gate/v2';
+const { evaluateDeliveryTrace } = require('../delivery-trace');
+// One contract version for both submission checks. v2 made Git-backed work
+// identity the required evidence key (`issue` remains a historical input alias);
+// v3 adds the delivery trace.
+const { SUBMISSION_GATE_SCHEMA_VERSION } = require('../../lifecycle/policy');
 
 const REQUIRED_EVIDENCE = Object.freeze([
   {
@@ -39,6 +41,11 @@ const REQUIRED_EVIDENCE = Object.freeze([
     key: 'pullRequest',
     label: 'Pull request evidence',
     description: 'A PR URL/number exists, or the task is explicitly marked intake-only with no code submission.',
+  },
+  {
+    key: 'deliveryTrace',
+    label: 'Delivery trace',
+    description: 'The owning Git plan, the documentation decision (changed docs or a specific no-doc-impact reason), the implemented revision and files, and a passed behavioral observation at that revision all match the Git observation. Tests and review alone do not satisfy it.',
   },
 ]);
 
@@ -127,6 +134,8 @@ function validateSubmissionEvidence(evidence = {}, options = {}) {
   const reasons = [];
 
   for (const key of gate.evidenceKeys) {
+    // Judged by the shared evaluator below, not by presence.
+    if (key === 'deliveryTrace') continue;
     const value = key === 'workIdentity'
       ? evidence.workIdentity || evidence.issue
       : evidence[key];
@@ -146,6 +155,17 @@ function validateSubmissionEvidence(evidence = {}, options = {}) {
     reasons.push(`work identity must match ${gate.identifier}`);
   }
 
+  // This handoff check has no host of its own: `deliveryObservation` is what the
+  // submitting agent read from Git. Terminal verification re-observes it.
+  const deliveryTrace = evaluateDeliveryTrace(evidence.deliveryTrace, {
+    identifier: gate.identifier,
+    observed: evidence.deliveryObservation,
+  });
+  if (!deliveryTrace.ok) {
+    missing.push('deliveryTrace');
+    reasons.push(`deliveryTrace is not verified: ${deliveryTrace.reasons.join(', ')}`);
+  }
+
   return {
     schemaVersion: gate.schemaVersion,
     ok: missing.length === 0,
@@ -154,6 +174,7 @@ function validateSubmissionEvidence(evidence = {}, options = {}) {
     missing,
     reasons,
     evidenceKeys: gate.evidenceKeys,
+    deliveryTrace,
   };
 }
 
@@ -181,6 +202,8 @@ Tool roles:
 - \`autoreview\`: local branch gate before PR creation; accepted/actionable findings block submission until fixed. Equivalent allowed only when it records a holistic AI branch review against the PR diff.
 - Goal alignment: AI reviewer checks the PR against the work goal/plan context. If aligned and gates are clean, autonomous merge is allowed; if alignment is ambiguous, escalate only with the specific goal-clarity question.
 - Tests: focused command output or explicit no-test rationale tied to the changed surface.
+- Delivery trace: name the owning plan by Git path and SHA-256 digest; record the documentation decision as \`affected\` with the changed docs or \`none\` with a specific reason; list the implemented head commit and changed files; and record at least one passed \`behavioral\` observation at that commit with its plan criterion, claim, and command or artifact. Test, lint, build, and review entries are separate signals and never count as the behavioral observation. A changed plan, head, or file set needs a new trace.
+- Proof levels: this gate proves source behavior only. Report source, merged, installed, and live evidence separately; \`not-claimed\` is a valid final value for installed and live, and a source pass never promotes them.
 - Pull request: durable PR URL/number and branch evidence for review/CI.
 - \`clawsweeper\`: post-merge sweep only; equivalent allowed only when merged commits feed a documented follow-up audit queue. It must not replace pre-submit clawpatch, autoreview, tests, goal-alignment, or PR evidence.
 - Surface equivalents: use \`scripts/jarvos-gate-equivalents.js\` or the \`@jarvos/coding\` equivalent registry for jarvOS-repo PRs, Codex-native workers, and Hermes-hosted executors.

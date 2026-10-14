@@ -7,6 +7,7 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 CORE_DIR="$REPO_ROOT/core"
+WORK_CONTEXT_SOURCE="$REPO_ROOT/modules/jarvos-instruction-projection/content/durable-orientation.md"
 TEMPLATES_DIR="$REPO_ROOT/templates"
 PMS_DIR="$REPO_ROOT/core/pms"
 GOV_DIR="$REPO_ROOT/core/governance"
@@ -155,6 +156,7 @@ echo "→ Installing core behavioral layer..."
 for core_file in AGENTS.md SOUL.md IDENTITY.md; do
   copy_if_missing "$CORE_DIR/$core_file" "$WORKSPACE/$core_file"
 done
+copy_if_missing "$WORK_CONTEXT_SOURCE" "$WORKSPACE/WORK-CONTEXT.md"
 
 # ── PMS templates ──
 echo "→ Installing Project Management System..."
@@ -381,6 +383,16 @@ if command -v hermes >/dev/null 2>&1; then
     append_mcp_env JARVOS_HERMES_CONTEXT_BRIDGE_GENERATION
     append_mcp_env JARVOS_ROUTE_BINDING_SECRET_FILE
     append_mcp_env JARVOS_ROUTE_BINDING_GENERATION
+    if [ -n "${JARVOS_COMMON_WORK_SERVICE_MODULE:-}" ]; then
+      case "$JARVOS_COMMON_WORK_SERVICE_MODULE" in
+        /*) ;;
+        *) echo "JARVOS_COMMON_WORK_SERVICE_MODULE must be an absolute path when set" >&2; HERMES_MCP_STATUS=1 ;;
+      esac
+    fi
+    if [ "$HERMES_MCP_STATUS" -eq 0 ]; then
+      append_mcp_env JARVOS_COMMON_WORK_SERVICE_MODULE
+      MCP_ENV_ARGS+=(--env "JARVOS_COMMON_WORK_HARNESS=hermes")
+    fi
     if [ -n "${JARVOS_ROUTE_BINDING_SECRET_FILE:-}" ]; then
       # Once the private key is injected, route-bound tools must not fall back
       # to caller-selected thread dimensions.
@@ -589,6 +601,7 @@ echo "│  ✓ jarvOS installed!                            │"
 echo "│                                                 │"
 echo "│  What you got:                                  │"
 echo "│  • Behavioral rules (AGENTS.md)                 │"
+echo "│  • Work placement contract (WORK-CONTEXT.md)    │"
 echo "│  • Persona (SOUL.md)                            │"
 echo "│  • Project Management System (pms/)             │"
 echo "│  • Governance patterns (governance/)            │"

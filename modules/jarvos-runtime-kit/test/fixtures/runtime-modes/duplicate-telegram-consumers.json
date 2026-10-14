@@ -1,0 +1,7 @@
+{
+  "version": "jarvos-runtime-mode/v1",
+  "mode": "multi",
+  "installedAdapters": [{ "id": "hermes" }, { "id": "openclaw" }],
+  "workloadRoutes": [{ "workload": "telegram.updates", "adapter": "hermes" }, { "workload": "telegram.updates", "adapter": "openclaw" }],
+  "capabilityTruth": []
+}

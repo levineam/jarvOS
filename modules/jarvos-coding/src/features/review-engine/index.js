@@ -16,16 +16,16 @@ const GATE_EQUIVALENT_PROFILES = Object.freeze({
     surface: 'jarvos-repo',
     name: 'jarvos-repo-pr-review-equivalents',
     description: 'Public jarvOS repository PRs where clawd-local clawpatch/autoreview cannot run inside the target repository.',
-    equivalenceDecision: 'CodeRabbit counts as the slice-review equivalent and Codex GitHub review counts as the holistic-review equivalent only when both run on the PR head before merge and their evidence is linked on the tracker issue.',
+    equivalenceDecision: 'Codex GitHub review is the equivalent for both the slice and holistic gates, requested manually on the PR head before merge with its evidence linked on the tracker issue. Automatic triggering is deliberately disabled (.github/workflows/codex-review.yml), so the request is an explicit comment rather than something a push produces.',
     gates: Object.freeze({
       sliceReview: Object.freeze({
         key: 'clawpatch',
-        equivalent: 'coderabbit-pr-slice-review',
-        tool: 'coderabbit',
+        equivalent: 'codex-github-pr-slice-review',
+        tool: 'codex-github',
         role: 'PR-head diff and inline review that provides slice-scoped findings before merge.',
-        command: Object.freeze(['gh', 'pr', 'comment', '{pullRequestNumber}', '--body', '@coderabbitai review']),
+        command: Object.freeze(['gh', 'pr', 'comment', '{pullRequestNumber}', '--body', '@codex review']),
         evidence: Object.freeze([
-          'CodeRabbit comment or successful CodeRabbit status on the current PR head SHA',
+          'Codex GitHub review comment on the current PR head SHA',
           'summary of accepted findings and fixes or explicit no-actionable-findings result',
         ]),
       }),

@@ -1,31 +1,58 @@
 #!/usr/bin/env node
 'use strict';
 
+const fs = require('node:fs');
+const path = require('node:path');
 const readline = require('readline');
 const {
+  setMeaningProvider,
+  readRipenessContext,
+  assessActiveAssistant,
   createNote,
   controlPlane,
   currentWork,
+  renderCurrentWorkUnavailable,
   ensureTodayJournal,
   healthTodayJournal,
   hydrate,
+  HYDRATION_PROJECTS_PROVIDER,
   loadControlPlaneManager,
+  loadSharedSkills,
   recall,
   proposeProjectsContext,
+  proposePendingProjectsContext,
   readProjectsContext,
   readSessionThread,
+  runtimeActivationStatus,
   setProjectsContextProvider,
   startupBrief,
   synthesizeRecall,
   writeSessionThread,
 } = require('../src/index.js');
+const { createHostProjectsContextProvider } = require('../src/projects-context-bootstrap.js');
+const {
+  COMMON_WORK_ACTIONS,
+} = require('../../jarvos-runtime-kit/src/harness-dispatch.js');
+const { invokeCommonWork } = require('../../jarvos-runtime-kit/src/common-work-service.js');
 
 const CREDENTIAL_ENV = 'JARVOS_CONTROL_PLANE_CREDENTIAL';
 const CREDENTIAL_FILE_ENV = 'JARVOS_CONTROL_PLANE_CREDENTIAL_FILE';
+const SHARED_SKILLS_OWNER_CREDENTIAL_FILE_ENV = 'JARVOS_SHARED_SKILLS_OWNER_CREDENTIAL_FILE';
+const SHARED_SKILLS_CONFIG_ENV = 'JARVOS_SHARED_SKILLS_CONFIG_PATH';
+const COMMON_WORK_SERVICE_MODULE_ENV = 'JARVOS_COMMON_WORK_SERVICE_MODULE';
+const COMMON_WORK_HARNESS_ENV = 'JARVOS_COMMON_WORK_HARNESS';
+const CODING_PRODUCER_TOOL = 'jarvos_coding_take_issue_to_done';
+const CODING_PRODUCER_MODULE_ENV = 'JARVOS_CODING_PRODUCER_MODULE';
+const CODING_PRODUCER_TIMEOUT_ENV = 'JARVOS_CODING_PRODUCER_TIMEOUT_MS';
 const STRICT_EMPTY_ARGUMENT_TOOLS = new Set([
   'jarvos_journal_health',
   'jarvos_ensure_today_journal',
+  'jarvos_projects_roster',
 ]);
+// Host-only profiles (e.g. 'session-focus') are resolved exclusively through
+// internal readProjectsContext(..., true) callers after protected principal
+// resolution. They are never reachable from this caller-facing MCP tool.
+const PUBLIC_PROJECTS_CONTEXT_PROFILES = new Set(['orientation', 'recent-activity']);
 
 let mcpProjectsContextProvider = null;
 
@@ -59,7 +86,136 @@ function resolveHostCredential(env = process.env) {
   return null;
 }
 
+// Bind shared-skill ownership only through the dedicated host-bound owner
+// credential file. Control-plane credentials (ambient or file, whatever the
+// host grants them) never imply skills ownership, and callers can never supply
+// either credential through MCP arguments.
+function resolveSharedSkillsOwnerCredential(env = process.env) {
+  const file = env[SHARED_SKILLS_OWNER_CREDENTIAL_FILE_ENV];
+  if (typeof file !== 'string' || file.length === 0) return null;
+  try {
+    return readCredentialFile(file);
+  } catch {
+    throw new Error('shared-skill owner credential file is unusable');
+  }
+}
+
+// ownerOnly distinguishes two trust policies sharing one ancestry check:
+// service/executable modules must be owner-only (no group/world bits at
+// all), while a config file may be owner-controlled and merely
+// non-group/world-writable, matching projects-context-bootstrap.js's split.
+// Never loosen the default -- callers that load and execute code must pass
+// ownerOnly: true explicitly or accept it as the default.
+function trustedFile(filePath, { root = null, ownerOnly = true } = {}) {
+  if (typeof filePath !== 'string' || !path.isAbsolute(filePath)) return null;
+  try {
+    if (fs.lstatSync(filePath).isSymbolicLink()) return null;
+    const real = fs.realpathSync(filePath);
+    const stat = fs.statSync(real);
+    const uid = typeof process.getuid === 'function' ? process.getuid() : null;
+    if (!stat.isFile() || (uid !== null && stat.uid !== uid)) return null;
+    if (ownerOnly ? (stat.mode & 0o077) !== 0 : (stat.mode & 0o022) !== 0) return null;
+    if (root) {
+      const relative = path.relative(root, real);
+      if (relative.startsWith('..') || path.isAbsolute(relative)) return null;
+    }
+    let cursor = path.dirname(real);
+    for (;;) {
+      const ancestor = fs.statSync(cursor);
+      if ((ancestor.mode & 0o022) !== 0 && !(ancestor.isDirectory() && (ancestor.mode & 0o1000) !== 0)) return null;
+      if (uid !== null && ancestor.uid !== uid && ancestor.uid !== 0) return null;
+      const parent = path.dirname(cursor);
+      if (parent === cursor) break;
+      cursor = parent;
+    }
+    return real;
+  } catch {
+    return null;
+  }
+}
+
+function selectedWorkspaceRoot(env = process.env) {
+  const configPath = trustedFile(env.JARVOS_PROJECTS_CONTEXT_CONFIG, { ownerOnly: false });
+  if (!configPath) return null;
+  try {
+    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    if (typeof config.workspaceRoot !== 'string' || !path.isAbsolute(config.workspaceRoot)) return null;
+    return fs.realpathSync(config.workspaceRoot);
+  } catch {
+    return null;
+  }
+}
+
 const TOOLS = [
+  {
+    name: 'jarvos_ripeness_context',
+    description: 'Read bounded, host-authorized prior analysis with coverage and limitations. Never invokes a model, refreshes analysis, or expands scope.',
+    inputSchema: { type: 'object', additionalProperties: false, properties: { maxChars: { type: 'integer', minimum: 2000, maximum: 8000 } } },
+  },
+  {
+    name: 'jarvos_active_assistant',
+    description: 'Request an assessment only when the host has bound permission for the user’s specific request. Missing authority or an unsupported provider lifecycle returns unavailable. Callers cannot select sources, models, or grant authority.',
+    inputSchema: { type: 'object', additionalProperties: false, properties: {} },
+  },
+  {
+    name: 'jarvos_common_work',
+    description: 'Call one host-bound canonical common-work action. The installed harness and host service are fixed by setup; callers may provide only ordinary action input.',
+    inputSchema: {
+      type: 'object', additionalProperties: false, required: ['action', 'input'],
+      properties: {
+        action: { type: 'string', enum: COMMON_WORK_ACTIONS },
+        input: { type: 'object' },
+      },
+    },
+  },
+  {
+    name: 'jarvos_todo_create',
+    description: 'Create one canonically linked Beads-backed Todo through the host-authorized work-action service. Supply backlog to preserve intent and hold work until explicit host admission; unavailable backlog support never falls back to immediate work. Agent-discovered work must be submitted as a proposal by the host.',
+    inputSchema: {
+      type: 'object', additionalProperties: false, required: ['title', 'operationId', 'canonical'],
+      properties: {
+        title: { type: 'string' }, description: { type: 'string' }, operationId: { type: 'string' }, canonical: { type: 'object' },
+        backlog: {
+          type: 'object', additionalProperties: false, required: ['sourceIntent', 'sourceRef', 'notBefore'],
+          properties: {
+            sourceIntent: { type: 'string', minLength: 1 },
+            sourceRef: { type: 'string', minLength: 1 },
+            notBefore: { type: 'string', format: 'date-time' },
+          },
+        },
+      },
+    },
+  },
+  {
+    name: 'jarvos_todo_list',
+    description: 'List bounded, canonically linked Beads-backed Todo work through the host-authorized work-action service.',
+    inputSchema: { type: 'object', additionalProperties: false, properties: {} },
+  },
+  {
+    name: 'jarvos_todo_show',
+    description: 'Show one canonically linked Beads-backed Todo work item through the host-authorized work-action service.',
+    inputSchema: { type: 'object', additionalProperties: false, required: ['itemId'], properties: { itemId: { type: 'string' } } },
+  },
+  {
+    name: 'jarvos_todo_transition',
+    description: 'Request a claim, transition, completion, or reopen through the host-authorized work-action service. The MCP caller cannot supply authorization or verification evidence.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['itemId', 'operationId', 'action'],
+      properties: {
+        itemId: { type: 'string' },
+        operationId: { type: 'string' },
+        action: { type: 'string', enum: ['claim', 'transition', 'complete', 'reopen'] },
+        status: { type: 'string', minLength: 1 },
+        expectedRevision: { type: 'string' },
+      },
+      oneOf: [
+        { properties: { action: { const: 'transition' } }, required: ['status'] },
+        { properties: { action: { enum: ['claim', 'complete', 'reopen'] } }, not: { required: ['status'] } },
+      ],
+    },
+  },
   {
     name: 'jarvos_control_plane',
     description: 'Use the installed host\'s authenticated jarvOS control-plane application service. It has the same request and approval semantics as the human CLI. The host binds the credential to this MCP session server-side; never pass a credential as a tool argument.',
@@ -67,7 +223,8 @@ const TOOLS = [
       type: 'object',
       required: ['operation'],
       properties: {
-        operation: { type: 'string', enum: ['list', 'inspect', 'evidence', 'approval-state', 'request', 'approve'] },
+        operation: { type: 'string', enum: ['list', 'inspect', 'evidence', 'approval-state', 'activation-status', 'request', 'approve'] },
+        runtime: { type: 'string', enum: ['all', 'claude', 'codex', 'hermes', 'openclaw'] },
         requestId: { type: 'string' },
         actor: { type: 'object' }, resource: { type: 'object' }, mutationClass: { type: 'string' },
         desiredGeneration: { type: 'string' }, commandSpec: { type: 'object' }, idempotencyKey: { type: 'string' }, fence: { type: 'number' },
@@ -75,8 +232,42 @@ const TOOLS = [
     },
   },
   {
+    name: CODING_PRODUCER_TOOL,
+    description: 'Run one host-bound jarvOS coding operation for an approved control-plane request. accept-plan records the approved plan revision; complete takes the approved issue to done only when the host observes the accepted plan, documentation decision, implementation and behavior. The host binds the credential, owner, repository, base and work run; callers supply only the request id, issue and declared delivery trace.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['operation', 'requestId', 'issueIdentifier'],
+      properties: {
+        operation: { type: 'string', enum: ['accept-plan', 'complete'] },
+        requestId: { type: 'string', description: 'Approved control-plane request created by this session.' },
+        issueIdentifier: { type: 'string', description: 'Issue identifier the approved request is bound to, for example SUP-4029.' },
+        deliveryTrace: { type: 'object', description: 'Declared jarvos-coding-delivery-trace/v1 for complete. Observations are made by the host and are never arguments.' },
+      },
+    },
+  },
+  {
+    name: 'jarvos_shared_skills',
+    description: 'Inspect and manage cross-harness shared-skill parity. Status and explain are redacted reads; all other operations require the host-bound owner session and never reveal private names, paths, or bodies. Pending decisions are reminded hourly; acknowledge-decision and defer-decision pause reminders without resolving, and resume-decision restores them.',
+    inputSchema: {
+      type: 'object',
+      required: ['operation'],
+      additionalProperties: false,
+      properties: {
+        operation: { type: 'string', enum: ['status', 'explain', 'inventory', 'plan', 'repair', 'exclude', 'include', 'decisions', 'explain-decision', 'resolve-decision', 'acknowledge-decision', 'defer-decision', 'resume-decision'] },
+        id: { type: 'string', description: 'Owner-known canonical skill id for explain, exclude, or include.' },
+        decisionId: { type: 'string', description: 'Owner-visible decision reference for decision operations.' },
+        decisionReference: { type: 'string', description: 'Opaque transport correlation reference for an owner decision.' },
+        revision: { type: 'number', description: 'Current decision revision for a resolution.' },
+        option: { type: 'string', description: 'One option listed by explain-decision.' },
+        until: { type: 'string', description: 'Future ISO-8601 UTC time for defer-decision; reminders resume by themselves after it.' },
+        reasonCode: { type: 'string', description: 'Optional exclusion reason code.' },
+      },
+    },
+  },
+  {
     name: 'jarvos_current_work',
-    description: 'Return a compact jarvOS current-work summary from Paperclip.',
+    description: 'Diagnostic compatibility only: return a compact Paperclip current-work summary. This is not Projects orientation context.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -87,35 +278,69 @@ const TOOLS = [
   },
   {
     name: 'jarvos_projects_context',
-    description: 'Return the canonical jarvOS Projects context packet through the injected Projects provider. This is the assistant-facing read model; optional Todo, Beads, Paperclip, release, and journal sources remain behind that provider.',
+    description: 'Return the canonical bounded Projects packet through the host-bound provider. This is the sole project-orientation read model; unavailable or partial provider state is returned without raw-ledger fallback.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
       properties: {
         profile: { type: 'string', enum: ['orientation', 'recent-activity'], description: 'Named bounded Projects read profile.' },
-        projectIds: { type: 'array', items: { type: 'string' }, description: 'Optional canonical project IDs to expand.' },
-        outcomeIds: { type: 'array', items: { type: 'string' }, description: 'Optional canonical outcome IDs to expand.' },
-        includeDescendants: { type: 'boolean', description: 'Include descendants of selected projects.' },
         date: { type: 'string', description: 'Local calendar date for recent-activity (YYYY-MM-DD).' },
         timeZone: { type: 'string', description: 'IANA timezone for recent-activity.' },
         from: { type: 'string', description: 'Optional bounded UTC activity-window start.' },
         to: { type: 'string', description: 'Optional bounded UTC activity-window end.' },
-        include: { type: 'array', items: { type: 'string', enum: ['hierarchy', 'activity', 'currentWork', 'attention'] } },
-        maxItems: { type: 'number', description: 'Maximum bounded packet items.' },
-        maxBytes: { type: 'number', description: 'Maximum bounded packet bytes.' },
-        maxProviderAgeSeconds: { type: 'number', description: 'Maximum provider evidence age.' },
       },
     },
   },
   {
+    name: 'jarvos_projects_roster',
+    description: 'Return the complete host-bound Projects identity roster for the whole portfolio as the existing jarvos.projects-roster/v1 all-or-nothing packet: id, kind, parentId, and revision for every project and outcome, plus generation, scope, capturedAt, and complete. Identity-only: it carries no lifecycle, owner, next action, or wait/revisit signal, and returning it does not authorize continuing work. Missing host binding returns unavailable, never an empty-success roster.',
+    inputSchema: { type: 'object', additionalProperties: false, properties: {} },
+  },
+  {
     name: 'jarvos_projects_propose',
-    description: 'Submit a reviewable Projects proposal through the injected provider. This never creates a project, task, release, or external handoff directly.',
+    description: 'Deprecated compatibility surface for the original provider-neutral injected proposal contract. Ordinary host proposals use jarvos_projects_propose_v1.',
     inputSchema: {
       type: 'object',
       required: ['proposal'],
       additionalProperties: false,
       properties: {
         proposal: { type: 'object', description: 'Provider-neutral proposal payload.' },
+      },
+    },
+  },
+  {
+    name: 'jarvos_projects_propose_v1',
+    description: 'Submit a jarvos.projects-proposal/v1 pending create proposal through an opt-in host provider. This never creates, updates, or applies a project, task, release, or external handoff.',
+    inputSchema: {
+      type: 'object',
+      required: ['proposal'],
+      additionalProperties: false,
+      properties: {
+        proposal: {
+          type: 'object',
+          required: ['kind', 'expectedGeneration', 'record', 'rationale', 'evidenceRefs', 'expiresAt'],
+          additionalProperties: false,
+          properties: {
+            kind: { const: 'create' },
+            expectedGeneration: { type: 'integer', minimum: 0 },
+            record: {
+              type: 'object',
+              required: ['kind', 'title', 'parentId', 'goal', 'definitionOfDone'],
+              additionalProperties: false,
+              properties: {
+                kind: { type: 'string', enum: ['project', 'outcome'] },
+                title: { type: 'string', minLength: 1, maxLength: 200 },
+                parentId: { type: ['string', 'null'], pattern: '^(?:prj|out)_[0-9]{6,}$' },
+                goal: { type: 'string', minLength: 1, maxLength: 4000 },
+                definitionOfDone: { type: 'string', minLength: 1, maxLength: 8000 },
+                links: { type: 'object', maxProperties: 16, additionalProperties: { type: 'string', minLength: 1, maxLength: 2000 } },
+              },
+            },
+            rationale: { type: 'string', minLength: 1, maxLength: 2000 },
+            evidenceRefs: { type: 'array', minItems: 1, maxItems: 16, items: { type: 'string', minLength: 1, maxLength: 2000 } },
+            expiresAt: { type: 'string', format: 'date-time', description: 'UTC ISO-8601 timestamp ending in Z.' },
+          },
+        },
       },
     },
   },
@@ -182,7 +407,7 @@ const TOOLS = [
   },
   {
     name: 'jarvos_session_thread_write',
-    description: "Append a checkpoint to the rolling journal-backed live session thread and link the thread note from today's journal.",
+    description: "Append a checkpoint to the rolling live session thread. Link from today's journal by default; internal checkpoints may explicitly request no journal link.",
     inputSchema: {
       type: 'object',
       properties: {
@@ -192,6 +417,7 @@ const TOOLS = [
         project: { type: 'string', description: 'Project tag for frontmatter.' },
         host: { type: 'string', description: 'Host writing the checkpoint, such as claude-code, openclaw, codex, or hermes.' },
         actor: { type: 'string', description: 'AI/persona writing the checkpoint.' },
+        journalPolicy: { type: 'string', enum: ['link', 'none'], description: 'Defaults to link. Use none only for an internal checkpoint that requests neither a journal backlink nor a deferred backlink intent.' },
         event: { type: 'string', description: 'Checkpoint event such as entry, decision, artifact-change, task-switch, or pre-compaction.' },
         summary: { type: 'string', description: 'What changed or what the next AI needs to know.' },
         decision: { type: 'string', description: 'Latest decision to preserve.' },
@@ -249,6 +475,136 @@ const TOOLS = [
     },
   },
 ];
+
+const WORK_ACTION_HOST_UNAVAILABLE = 'Todo work-action host binding is unavailable. Set JARVOS_WORK_ACTION_SERVICE_MODULE to an absolute owner-only host service module and JARVOS_PROJECTS_CONTEXT_CONFIG to an absolute trusted Projects context config whose workspaceRoot contains that module.';
+const WORK_ACTION_HOST_REFUSED = 'Todo work-action host binding was refused. JARVOS_WORK_ACTION_SERVICE_MODULE must be an owner-only regular file contained under the workspaceRoot selected by JARVOS_PROJECTS_CONTEXT_CONFIG.';
+const COMMON_WORK_HOST_UNAVAILABLE = 'Common-work host binding is unavailable. Setup must bind JARVOS_COMMON_WORK_SERVICE_MODULE and a fixed JARVOS_COMMON_WORK_HARNESS.';
+
+function envBinding(name, env = process.env) {
+  const value = env[name];
+  return typeof value === 'string' && value.length > 0 ? value : null;
+}
+
+function loadHostWorkActionService() {
+  const modulePath = envBinding('JARVOS_WORK_ACTION_SERVICE_MODULE');
+  const configPath = envBinding('JARVOS_PROJECTS_CONTEXT_CONFIG');
+  if (!modulePath || !configPath) {
+    return { service: null, error: WORK_ACTION_HOST_UNAVAILABLE };
+  }
+  const selectedRoot = selectedWorkspaceRoot();
+  const trusted = selectedRoot ? trustedFile(modulePath, { root: selectedRoot, ownerOnly: true }) : null;
+  if (!trusted) {
+    return { service: null, error: WORK_ACTION_HOST_REFUSED };
+  }
+  // Past this point the module passed the containment check, so reporting the
+  // containment message would name the wrong cause -- the failure is inside the
+  // host module, and the operator needs to see which.
+  try {
+    const loaded = require(trusted);
+    const service = typeof loaded === 'function' ? loaded() : (loaded?.service || loaded);
+    if (!service || typeof service !== 'object') {
+      return { service: null, error: 'Todo work-action host module loaded but exported no service object.' };
+    }
+    return { service, error: null };
+  } catch (error) {
+    const detail = error && error.message ? error.message : 'unknown error';
+    return { service: null, error: `Todo work-action host module failed to load: ${detail}` };
+  }
+}
+
+async function todoAction(name, args) {
+  const { service, error } = loadHostWorkActionService();
+  if (!service) return textResult(error, true);
+  // Deliberately project only ordinary request fields. Authorization, human
+  // identity, and verification receipts are host-bound service state, never
+  // caller-controlled MCP arguments.
+  const actor = { kind: 'agent', id: 'mcp' };
+  if (name === 'jarvos_todo_create') {
+    const request = { title: args.title, description: args.description, operationId: args.operationId, canonical: args.canonical, actor };
+    if (Object.hasOwn(args, 'backlog')) {
+      if (!args.backlog || typeof args.backlog !== 'object' || Array.isArray(args.backlog)) return textResult('Todo backlog input must be an object', true);
+      if (typeof service.captureBacklog !== 'function') return textResult('Todo backlog host binding is unavailable; no work was created', true);
+      const { sourceIntent, sourceRef, notBefore } = args.backlog;
+      return textResult(JSON.stringify(await service.captureBacklog({ ...request, sourceIntent, sourceRef, notBefore }), null, 2));
+    }
+    return textResult(JSON.stringify(await service.create(request), null, 2));
+  }
+  if (name === 'jarvos_todo_list') return textResult(JSON.stringify(await service.list(), null, 2));
+  if (name === 'jarvos_todo_show') return textResult(JSON.stringify(await service.show(args), null, 2));
+  const request = { itemId: args.itemId, operationId: args.operationId, expectedRevision: args.expectedRevision, actor };
+  if (args.action === 'claim') return textResult(JSON.stringify(await service.claim(request), null, 2));
+  if (args.action === 'transition') {
+    if (typeof args.status !== 'string' || !args.status.trim()) return textResult('Todo transition status is required', true);
+    return textResult(JSON.stringify(await service.transition({ ...request, status: args.status }), null, 2));
+  }
+  if (args.action === 'complete') {
+    if (typeof service.completeFromHost !== 'function') return textResult('Todo host completion binding is unavailable', true);
+    return textResult(JSON.stringify(await service.completeFromHost(request), null, 2));
+  }
+  if (args.action === 'reopen') return textResult(JSON.stringify(await service.reopen(request), null, 2));
+  return textResult('Unsupported Todo transition action', true);
+}
+
+const CODING_PRODUCER_HOST_UNAVAILABLE = 'Coding producer host binding is unavailable. Set JARVOS_CODING_PRODUCER_MODULE to an absolute owner-only host module contained under the workspaceRoot selected by JARVOS_PROJECTS_CONTEXT_CONFIG.';
+
+function loadHostCodingProducer() {
+  const modulePath = envBinding(CODING_PRODUCER_MODULE_ENV);
+  const selectedRoot = modulePath && envBinding('JARVOS_PROJECTS_CONTEXT_CONFIG') ? selectedWorkspaceRoot() : null;
+  const trusted = selectedRoot ? trustedFile(modulePath, { root: selectedRoot, ownerOnly: true }) : null;
+  if (!trusted) return { producer: null, error: CODING_PRODUCER_HOST_UNAVAILABLE };
+  try {
+    const loaded = require(trusted);
+    const producer = typeof loaded === 'function' ? loaded() : (loaded?.producer || loaded);
+    if (!producer || typeof producer.invoke !== 'function') {
+      return { producer: null, error: 'Coding producer host module loaded but exported no producer.' };
+    }
+    return { producer, error: null };
+  } catch (error) {
+    return { producer: null, error: `Coding producer host module failed to load: ${error?.message || 'unknown error'}` };
+  }
+}
+
+async function codingProducerAction(args) {
+  // Authentication comes first and only from the session binding: a missing
+  // credential never loads the producer or touches Git, trackers or PRs.
+  let credential;
+  try {
+    credential = resolveHostCredential();
+  } catch (error) {
+    return textResult(error.message || 'control-plane host credential binding failed', true);
+  }
+  if (!credential) return textResult('control-plane host credential is not configured for this MCP session', true);
+  const { producer, error } = loadHostCodingProducer();
+  if (!producer) return textResult(error, true);
+  // Only ordinary request fields cross the boundary. Owners, work runs, plan
+  // digests, observations, fences and callbacks are host-bound state.
+  const request = {
+    operation: args.operation,
+    requestId: args.requestId,
+    issueIdentifier: args.issueIdentifier,
+    deliveryTrace: args.deliveryTrace,
+  };
+  const readApproval = (requestId) => controlPlane('approval-state', { requestId, credential });
+  try {
+    const result = await producer.invoke(request, { readApproval });
+    return textResult(JSON.stringify(result, null, 2), result?.ok !== true);
+  } catch (failure) {
+    return textResult(failure?.message || 'coding producer failed', true);
+  }
+}
+
+function codingProducerTimeoutMs() {
+  const value = Number(process.env[CODING_PRODUCER_TIMEOUT_ENV] || 3600000);
+  return Number.isFinite(value) && value > 0 ? value : 3600000;
+}
+
+async function commonWorkAction(args) {
+  const harness = envBinding(COMMON_WORK_HARNESS_ENV);
+  const serviceModule = envBinding(COMMON_WORK_SERVICE_MODULE_ENV);
+  if (!harness || !serviceModule) return textResult(COMMON_WORK_HOST_UNAVAILABLE, true);
+  const result = await invokeCommonWork({ serviceModule, harness, action: args.action, input: args.input });
+  return textResult(JSON.stringify(result, null, 2), result?.ok === false);
+}
 
 function setMcpProjectsContextProvider(provider) {
   mcpProjectsContextProvider = provider || null;
@@ -367,8 +723,65 @@ function requireEmptyObjectArguments(args) {
   }
 }
 
-async function callTool(name, args = {}) {
+function sharedSkillsConfigPath(env = process.env, defaultPath = null) {
+  const value = env[SHARED_SKILLS_CONFIG_ENV];
+  if (typeof value === 'string' && value.trim()) return value.trim();
+  return typeof defaultPath === 'function' ? defaultPath() : defaultPath || undefined;
+}
+
+// The dedicated binding grants full shared-skill owner authority by host
+// contract, so the owner principal is constructed only here, after it loads.
+function requireSharedSkillsOwnerSession(env = process.env) {
+  const credential = resolveSharedSkillsOwnerCredential(env);
+  if (!credential) throw new Error('shared-skill owner session is not configured for this MCP session');
+  return { kind: 'owner', capabilities: ['skills.decisions.read', 'skills.decisions.resolve'] };
+}
+
+function redactSharedSkillPlan(result, opaqueSkillId) {
+  return {
+    ok: result?.ok !== false,
+    mode: 'plan',
+    catalogDigest: result?.catalogDigest || null,
+    aliasRevision: result?.aliasRevision ?? null,
+    pairs: (result?.pairs || []).map((pair) => ({
+      id: opaqueSkillId(pair.id),
+      harness: pair.harness,
+      effectiveName: pair.effectiveName ? opaqueSkillId(pair.effectiveName) : null,
+      status: pair.status,
+      action: pair.action || null,
+      reason: pair.reason || null,
+    })),
+  };
+}
+
+function redactSharedSkillMutation(result, opaqueSkillId) {
+  const safe = {
+    ok: result?.ok !== false,
+    mode: result?.mode || null,
+    repaired: result?.repaired,
+    mutationDenied: result?.mutationDenied,
+    reason: result?.reason || null,
+  };
+  if (result?.logicalId) safe.logicalId = opaqueSkillId(result.logicalId);
+  if (Array.isArray(result?.applied)) {
+    safe.applied = result.applied.map((item) => ({
+      id: opaqueSkillId(item.id),
+      harness: item.harness,
+      effectiveName: item.effectiveName ? opaqueSkillId(item.effectiveName) : null,
+      status: item.status,
+      applied: item.applied === true,
+    }));
+  }
+  return safe;
+}
+
+async function callTool(name, args = {}, lifecycle = {}) {
   args = normalizeToolArguments(name, args);
+  if (name === 'jarvos_ripeness_context') return textResult(JSON.stringify(await readRipenessContext(args)));
+  if (name === 'jarvos_active_assistant') return textResult(JSON.stringify(await assessActiveAssistant(args, lifecycle)));
+  if (name === 'jarvos_common_work') return commonWorkAction(args);
+  if (name === CODING_PRODUCER_TOOL) return codingProducerAction(args);
+  if (['jarvos_todo_create', 'jarvos_todo_list', 'jarvos_todo_show', 'jarvos_todo_transition'].includes(name)) return todoAction(name, args);
   if (name === 'jarvos_journal_health') {
     requireEmptyObjectArguments(args);
     const result = healthTodayJournal();
@@ -394,6 +807,18 @@ async function callTool(name, args = {}) {
     if (!hostCredential) {
       return textResult('control-plane host credential is not configured for this MCP session', true);
     }
+    if (input.operation === 'activation-status') {
+      // Reuse the authenticated control-plane read boundary, then project the
+      // same closed runtime-kit result used by the CLI. The evidence path is a
+      // host binding and is never model-visible.
+      try {
+        controlPlane('list', { credential: hostCredential });
+        const result = runtimeActivationStatus({ runtime: input.runtime || 'all' });
+        return textResult(JSON.stringify(result, null, 2), !result.ok);
+      } catch (error) {
+        return textResult(error.message || 'activation status is unavailable', true);
+      }
+    }
     // Match CLI numeric semantics for approve fence comparisons (strict ===).
     try {
       loadControlPlaneManager().coerceNumericFlags(input, { labelPrefix: '' });
@@ -403,16 +828,161 @@ async function callTool(name, args = {}) {
     const result = controlPlane(input.operation, { ...input, credential: hostCredential });
     return textResult(JSON.stringify(result, null, 2), !result.ok);
   }
+  if (name === 'jarvos_shared_skills') {
+    const operation = args.operation;
+    if (operation === 'status' || operation === 'explain') {
+      const skills = loadSharedSkills();
+      const configPath = sharedSkillsConfigPath(process.env, () => skills.loadConfig().path);
+      if (operation === 'status') {
+        return textResult(JSON.stringify(skills.sharedStatusOperator({ configPath }), null, 2));
+      }
+      return textResult(JSON.stringify(skills.explainOperator({ configPath, id: args.id }), null, 2));
+    }
+    // Every other operation is owner-only: deny before config resolution or
+    // any decision, ledger or inventory access.
+    let principal;
+    try {
+      principal = requireSharedSkillsOwnerSession();
+    } catch (error) {
+      return textResult(error.message, true);
+    }
+    const skills = loadSharedSkills();
+    const configPath = sharedSkillsConfigPath(process.env, () => skills.loadConfig().path);
+    if (operation === 'inventory') {
+      return textResult(JSON.stringify(skills.inventoryStatusOperator({ configPath, persist: false }), null, 2));
+    }
+    if (operation === 'plan') {
+      return textResult(JSON.stringify(redactSharedSkillPlan(skills.planOperator({ configPath }), skills.opaqueSkillId), null, 2));
+    }
+    if (operation === 'repair') {
+      return textResult(JSON.stringify(redactSharedSkillMutation(skills.repairOperator({ configPath }), skills.opaqueSkillId), null, 2));
+    }
+    if (operation === 'exclude') {
+      return textResult(JSON.stringify(redactSharedSkillMutation(skills.excludeSkillOperator({ configPath, id: args.id, reasonCode: args.reasonCode }), skills.opaqueSkillId), null, 2));
+    }
+    if (operation === 'include') {
+      return textResult(JSON.stringify(redactSharedSkillMutation(skills.includeSkillOperator({ configPath, id: args.id }), skills.opaqueSkillId), null, 2));
+    }
+    if (operation === 'decisions') {
+      return textResult(JSON.stringify(skills.decisionsOperator({ configPath, principal }), null, 2));
+    }
+    if (operation === 'explain-decision') {
+      return textResult(JSON.stringify(skills.explainDecisionOperator({ configPath, principal, decisionId: args.decisionId, decisionReference: args.decisionReference }), null, 2));
+    }
+    const reminderOperators = {
+      'acknowledge-decision': skills.acknowledgeDecisionOperator,
+      'defer-decision': skills.deferDecisionOperator,
+      'resume-decision': skills.resumeDecisionOperator,
+    };
+    if (Object.hasOwn(reminderOperators, operation)) {
+      // Pausing or restoring reminders never resolves a decision; a deferral
+      // needs a validated future time and fails closed otherwise.
+      const result = reminderOperators[operation]({ configPath, principal, decisionId: args.decisionId, decisionReference: args.decisionReference, until: args.until });
+      return textResult(JSON.stringify(result, null, 2), !['updated', 'unchanged'].includes(result.status));
+    }
+    if (operation === 'resolve-decision') {
+      // The decision store verifies the source digest immediately before this
+      // callback. Details is intentionally a no-op; exclusion is delegated to
+      // the established single-skill operator, never a caller-provided path.
+      const inventory = skills.inventoryAssessOperator({ configPath, persist: false, includeDocument: true });
+      const decision = skills.explainDecisionOperator({ configPath, principal, decisionId: args.decisionId, decisionReference: args.decisionReference }).decision;
+      const currentSkill = (inventory.document?.skills || []).find((skill) => skill.logicalId === decision?.skill) || null;
+      const result = skills.resolveDecisionOperator({
+        configPath, principal, decisionId: args.decisionId, decisionReference: args.decisionReference, revision: args.revision, option: args.option, currentSkill,
+        mutate: ({ skill, option }) => {
+          if (option === 'exclude') skills.excludeSkillOperator({ configPath, id: skill, reasonCode: 'owner_excluded' });
+          if (option === 'keep-local') skills.excludeSkillOperator({ configPath, id: skill, reasonCode: 'owner_keep_local' });
+          // share is authorized by the resolved decision. The follow-up repair
+          // reads that receipt and admits only the same source digest.
+        },
+      });
+      if (result.status !== 'resolved') {
+        return textResult(JSON.stringify(result, null, 2), result.status === 'invalid_option' || result.status === 'stale');
+      }
+      let postResolution = { status: 'pending' };
+      try {
+        const followup = skills.autonomousRepairOperator({ configPath });
+        postResolution = {
+          status: followup.ok && followup.mutationDenied !== true ? 'completed' : 'pending',
+          reason: followup.reason || null,
+        };
+      } catch {
+        // The durable resolution receipt is authoritative; a later scheduled
+        // repair can safely retry if this immediate follow-up is unavailable.
+      }
+      return textResult(JSON.stringify({ ...result, postResolution }, null, 2), false);
+    }
+    return textResult('unsupported shared-skill operation', true);
+  }
   if (name === 'jarvos_current_work') {
-    const result = await currentWork(args);
-    return textResult(result.markdown, !result.ok);
+    try {
+      const result = await currentWork(args);
+      if (!result || typeof result.markdown !== 'string' || !result.markdown.trim()) {
+        return textResult(renderCurrentWorkUnavailable(), true);
+      }
+      return textResult(result.markdown, !result.ok);
+    } catch {
+      return textResult(renderCurrentWorkUnavailable(), true);
+    }
   }
   if (name === 'jarvos_projects_context') {
-    const result = await readProjectsContext(mcpProjectsContextProvider ? { ...args, provider: mcpProjectsContextProvider } : args);
+    const requestedProfile = args.profile === undefined ? 'orientation' : args.profile;
+    // Enforced at runtime, not only in the tool's JSON schema: MCP callers
+    // may only request the public named profiles. 'session-focus' (and any
+    // other non-public profile) is host-only and must never reach the
+    // provider from this caller-facing entrypoint.
+    if (!PUBLIC_PROJECTS_CONTEXT_PROFILES.has(requestedProfile)) {
+      return textResult(JSON.stringify({
+        status: 'unavailable',
+        code: 'PROJECTS_QUERY_UNAVAILABLE',
+        reason: 'Projects query is unavailable',
+        packet: null,
+      }, null, 2), false);
+    }
+    const request = {
+      profile: requestedProfile,
+      date: args.date,
+      timeZone: args.timeZone,
+      from: args.from,
+      to: args.to,
+    };
+    if (mcpProjectsContextProvider) request.provider = mcpProjectsContextProvider;
+    const result = await readProjectsContext(request, true);
     return textResult(JSON.stringify(result, null, 2), false);
+  }
+  if (name === 'jarvos_projects_roster') {
+    requireEmptyObjectArguments(args);
+    // No caller-selected query, scope, capability, path, or limits: this is a
+    // strictly no-argument tool. The injected MCP provider (test/host wiring)
+    // wins when present; otherwise fall back to the trusted host bootstrap.
+    // Neither path ever falls back to the orientation query or receipt.
+    let provider;
+    try {
+      provider = mcpProjectsContextProvider || createHostProjectsContextProvider();
+    } catch {
+      provider = null;
+    }
+    if (!provider || typeof provider.readPortfolioRoster !== 'function') {
+      return textResult(JSON.stringify({ status: 'unavailable', code: 'PORTFOLIO_ROSTER_UNAVAILABLE' }, null, 2), false);
+    }
+    try {
+      const result = await provider.readPortfolioRoster();
+      return textResult(JSON.stringify(result, null, 2), false);
+    } catch {
+      return textResult(JSON.stringify({ status: 'unavailable', code: 'PORTFOLIO_ROSTER_UNAVAILABLE' }, null, 2), false);
+    }
   }
   if (name === 'jarvos_projects_propose') {
     const result = await proposeProjectsContext({ ...args, provider: mcpProjectsContextProvider });
+    return textResult(JSON.stringify(result, null, 2), false);
+  }
+  if (name === 'jarvos_projects_propose_v1') {
+    const request = { proposal: args.proposal };
+    // An explicit library null deliberately disables host resolution. The MCP
+    // wrapper must omit this field when no test provider is injected so an
+    // ordinary configured host can expose its opt-in proposal transport.
+    if (mcpProjectsContextProvider !== null) request.provider = mcpProjectsContextProvider;
+    const result = await proposePendingProjectsContext(request);
     return textResult(JSON.stringify(result, null, 2), false);
   }
   if (name === 'jarvos_recall') {
@@ -440,9 +1010,7 @@ async function callTool(name, args = {}) {
     return textResult(result.markdown, !result.ok);
   }
   if (name === 'jarvos_hydrate') {
-    const projectsContext = { ...(args.projectsContext || {}) };
-    if (mcpProjectsContextProvider) projectsContext.provider = mcpProjectsContextProvider;
-    const result = await hydrate({ ...args, projectsContext });
+    const result = await hydrate({ ...args, [HYDRATION_PROJECTS_PROVIDER]: mcpProjectsContextProvider });
     return textResult(result.markdown, !result.ok);
   }
   throw new Error(`Unknown tool: ${name}`);
@@ -471,9 +1039,14 @@ function promptResult(name, args = {}) {
   };
 }
 
+const activeAssessments = new Map();
 async function handle(message) {
   if (!message || typeof message !== 'object') return;
   const { id, method, params } = message;
+  if (method === 'notifications/cancelled') {
+    activeAssessments.get(params?.requestId)?.abort();
+    return;
+  }
   if (!id && String(method || '').startsWith('notifications/')) return;
 
   try {
@@ -509,9 +1082,26 @@ async function handle(message) {
 
     if (method === 'tools/call') {
       const toolArguments = normalizeToolArguments(params?.name, params?.arguments);
+      if (params?.name === 'jarvos_active_assistant') {
+        if (activeAssessments.has(id)) throw new Error('assessment request already active');
+        const controller = new AbortController();
+        activeAssessments.set(id, controller);
+        const timer = setTimeout(() => controller.abort(), 600000);
+        try {
+          // A qualified provider resolves only after its owned work stops.
+          // Never race the waiting promise and label that cancellation.
+          const result = await callTool(params.name, toolArguments, { signal: controller.signal });
+          write({ jsonrpc: '2.0', id, result });
+        } finally {
+          clearTimeout(timer);
+          activeAssessments.delete(id);
+        }
+        return;
+      }
       const result = await withToolTimeout(
         params?.name,
         () => callTool(params?.name, toolArguments),
+        ...(params?.name === CODING_PRODUCER_TOOL ? [codingProducerTimeoutMs()] : []),
       );
       write({ jsonrpc: '2.0', id, result });
       return;
@@ -550,6 +1140,7 @@ async function runCliCommand() {
 }
 
 async function main() {
+  loadMeaningHostProvider();
   if (await runCliCommand()) return;
 
   const rl = readline.createInterface({ input: process.stdin });
@@ -567,6 +1158,21 @@ async function main() {
   });
 }
 
+function loadMeaningHostProvider(env = process.env) {
+  setMeaningProvider(null);
+  const root = selectedWorkspaceRoot(env);
+  const file = root && trustedFile(env.JARVOS_MEANING_PROVIDER_MODULE, { root, ownerOnly: true });
+  if (!file) return false;
+  try {
+    const host = require(file);
+    if (typeof host.createMeaningProvider !== 'function') return false;
+    const provider = host.createMeaningProvider();
+    if (typeof provider?.readContext !== 'function' || typeof provider?.assess !== 'function') return false;
+    setMeaningProvider(provider);
+    return true;
+  } catch { return false; }
+}
+
 if (require.main === module) {
   main().catch((error) => {
     console.error(error.stack || error.message);
@@ -574,14 +1180,24 @@ if (require.main === module) {
   });
 }
 
-module.exports = { TOOLS, callTool, handle, setMcpProjectsContextProvider, textResult };
+module.exports = { TOOLS, callTool, handle, setMcpProjectsContextProvider, textResult, loadHostWorkActionService, commonWorkAction };
+module.exports.setMeaningProvider = setMeaningProvider;
+module.exports.loadMeaningHostProvider = loadMeaningHostProvider;
+module.exports.WORK_ACTION_HOST_UNAVAILABLE = WORK_ACTION_HOST_UNAVAILABLE;
+module.exports.WORK_ACTION_HOST_REFUSED = WORK_ACTION_HOST_REFUSED;
 module.exports.BOOT_JARVOS_PROMPT_TEXT = BOOT_JARVOS_PROMPT_TEXT;
 module.exports.PROMPTS = PROMPTS;
 module.exports.promptResult = promptResult;
 module.exports.noteCaptureArgs = noteCaptureArgs;
 module.exports.withToolTimeout = withToolTimeout;
 module.exports.resolveHostCredential = resolveHostCredential;
+module.exports.resolveSharedSkillsOwnerCredential = resolveSharedSkillsOwnerCredential;
 module.exports.readCredentialFile = readCredentialFile;
 module.exports.requireEmptyObjectArguments = requireEmptyObjectArguments;
 module.exports.CREDENTIAL_ENV = CREDENTIAL_ENV;
 module.exports.CREDENTIAL_FILE_ENV = CREDENTIAL_FILE_ENV;
+module.exports.COMMON_WORK_HOST_UNAVAILABLE = COMMON_WORK_HOST_UNAVAILABLE;
+module.exports.CODING_PRODUCER_TOOL = CODING_PRODUCER_TOOL;
+module.exports.CODING_PRODUCER_HOST_UNAVAILABLE = CODING_PRODUCER_HOST_UNAVAILABLE;
+module.exports.loadHostCodingProducer = loadHostCodingProducer;
+module.exports.sharedSkillsConfigPath = sharedSkillsConfigPath;

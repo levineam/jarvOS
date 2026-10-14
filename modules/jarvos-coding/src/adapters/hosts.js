@@ -154,6 +154,10 @@ function buildMcpToolDescriptor(host, options = {}) {
           type: 'object',
           description: 'Optional pointer-only session-thread or handoff reference. Raw transcript or note content is not accepted.',
         },
+        deliveryTrace: {
+          type: 'object',
+          description: 'Declared jarvos-coding-delivery-trace/v1: owning plan path and digest, documentation decision, implemented head and files, and behavioral proof. Required for completion. The Git observation it is checked against is read by the host and is not an argument.',
+        },
       },
     },
   };
@@ -323,6 +327,9 @@ function submissionEvidenceFrom(result = {}) {
     pullRequest: byStage.pullRequest || null,
     postMergeSweep: byStage.postMergeSweep || null,
     verifyClose: byStage.verifyClose || null,
+    // The declared trace only. Its Git observation stays inside the fixRerun
+    // stage result and is re-read from there at every recompute.
+    deliveryTrace: result.deliveryTrace || null,
     events: Array.isArray(result.events) ? result.events : [],
   };
 }
@@ -486,9 +493,22 @@ function buildSubmissionGateInput(orchestrator = {}, evidence = null) {
     ? orchestrator.intendedFiles
     : (Array.isArray(gitEvidence?.intendedFiles) ? gitEvidence.intendedFiles : []);
 
+  // The delivery observation is only ever the fix stage's own post-fix Git
+  // read. A copy placed beside the result, in command arguments, or on an
+  // unconfirmed reattached stage is not evidence.
+  const deliveryObservation = fix
+    && fix.ok !== false
+    && hasAuthenticStageResult(fix)
+    && fix.deliveryObservation
+    && typeof fix.deliveryObservation === 'object'
+    ? fix.deliveryObservation
+    : null;
+
   return {
     issue: { identifier: issueIdentifier },
     issueIdentifier,
+    deliveryTrace: orchestrator.deliveryTrace || submissionEvidence.deliveryTrace || null,
+    deliveryObservation,
     git: {
       branch,
       baseBranch: orchestrator.baseRef || gitEvidence?.baseBranch || gitEvidence?.baseRef || 'origin/main',
@@ -561,8 +581,8 @@ function assessTerminalSubmission(orchestrator = {}, options = {}) {
   }
 
   // Always recompute the complete-phase gate from durable evidence. Ignore any
-  // caller-provided / cached submissionGate.ready blob.
-  const gateInput = options.gateInput || buildSubmissionGateInput(orchestrator, evidence);
+  // caller-provided / cached submissionGate.ready blob or prebuilt gate input.
+  const gateInput = buildSubmissionGateInput(orchestrator, evidence);
   const submissionGate = evaluateSubmissionGate(gateInput, { phase: 'complete' });
   if (!submissionGate.ready) {
     reasons.push(`submission gate blocked: ${(submissionGate.missing || []).join(', ') || 'incomplete evidence'}`);
@@ -633,6 +653,8 @@ function createCodingControlPlanePort(options = {}) {
       issue: args.issue || { identifier: issueIdentifier },
       branch: args.branch,
       baseRef: args.baseRef,
+      // Declared trace only; an observation in the arguments is never forwarded.
+      deliveryTrace: args.deliveryTrace,
       resumeFrom: command.checkpoint || args.resumeFrom || null,
       controlPlane: {
         commandId: command.id,

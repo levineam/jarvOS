@@ -44,6 +44,14 @@ test('profiles reject unknown names and unscoped caller requests', () => {
   assert.equal(validateQueryProfile({ ...hostDefault, query: { ...hostDefault.query, limits: { ...hostDefault.query.limits, maxItems: 1 } } }).ok, false);
 });
 
+test('session-focus is a host-only bounded hierarchy profile: caller-supplied scope is rejected, host-authorized scope resolves hierarchy-only', () => {
+  assert.throws(() => resolveQueryProfile('session-focus', { scope: SCOPE }), /host-authorized scope/);
+  const profile = resolveQueryProfile('session-focus', { scope: SCOPE, authorizedScope: true });
+  assert.equal(profile.scopeOrigin, 'host-authorized');
+  assert.deepEqual(profile.query.include, ['hierarchy']);
+  assert.deepEqual(validateQueryProfile(profile), { ok: true, profile });
+});
+
 test('activity windows filter by occurrence time rather than provider capture order', () => {
   const rows = [
     { id: 'a', occurredAt: '2026-08-12T03:59:59.000Z' },

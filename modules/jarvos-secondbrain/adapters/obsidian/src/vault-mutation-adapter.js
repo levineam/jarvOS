@@ -8,6 +8,11 @@ const { createInternalReceipt, hashUtf8, validateOperation, validateVaultRelativ
 const { createVaultMutationLedger } = require('./vault-mutation-ledger');
 
 const RESULT_STORE = '__jarvosVaultMutationResults';
+// Obsidian CLI eval round-trips take ~1.5-2.5 s. The capability probe is one
+// small round-trip. The dispatch/poll deadline must cover a staged program
+// (several chunk calls plus the runner) and at least one poll, with headroom.
+const DEFAULT_PROBE_TIMEOUT_MS = 10_000;
+const DEFAULT_POLL_TIMEOUT_MS = 30_000;
 const CAPABILITY_STATES = Object.freeze(['available', 'cli_missing', 'app_stopped', 'app_busy', 'app_unreachable', 'cli_disabled', 'cli_unsupported', 'wrong_vault', 'api_incompatible']);
 
 function sleepSync(milliseconds) {
@@ -15,9 +20,66 @@ function sleepSync(milliseconds) {
 }
 
 function parseEvalResult(output) { const match = [...String(output || '').matchAll(/^=>\s*(.+)$/gm)].at(-1); return match ? JSON.parse(match[1]) : null; }
-function runObsidianEval(code, { vaultName, command = process.env.OBSIDIAN_CLI || 'obsidian', timeoutMs = 10_000, execute = execFileSync } = {}) {
-  try { return parseEvalResult(execute(command, [`vault=${vaultName}`, 'eval', `code=${code}`], { encoding: 'utf8', timeout: timeoutMs, stdio: ['ignore', 'pipe', 'pipe'] })); }
-  catch (error) { const wrapped = new Error(String(error.stderr || error.stdout || error.message || 'Obsidian CLI failed')); wrapped.code = error.code; throw wrapped; }
+// Obsidian CLI 1.14 exits 0 with no output at all, and without running the
+// code, for eval payloads above roughly 8 KB: about half of 10 KB calls and
+// every 14 KB call are dropped. The fixed programs below are 9-20 KB, so larger
+// programs are staged in the app in bounded chunks and run by one small call.
+// A genuine undefined result prints "(no output)", so an empty response is a
+// transport drop and is replayed within the caller's deadline. Replays are
+// safe: chunk writes are indexed, and each program is idempotent against the
+// app's current content.
+const EVAL_STAGE = '__jarvosEvalStage';
+const EVAL_CHUNK_BYTES = 6_000;
+const EMPTY_EVAL_RETRIES = 4;
+function evalOnce(code, { vaultName, command, deadline, execute, emptyRetries }) {
+  for (let attempt = 0; ; attempt += 1) {
+    let output;
+    try { output = execute(command, [`vault=${vaultName}`, 'eval', `code=${code}`], { encoding: 'utf8', timeout: Math.max(1, deadline - Date.now()), stdio: ['ignore', 'pipe', 'pipe'] }); }
+    catch (error) { const wrapped = new Error(String(error.stderr || error.stdout || error.message || 'Obsidian CLI failed')); wrapped.code = error.code; throw wrapped; }
+    if (String(output || '').trim() || attempt >= emptyRetries || Date.now() >= deadline) return parseEvalResult(output);
+  }
+}
+function runObsidianEval(code, { vaultName, command = process.env.OBSIDIAN_CLI || 'obsidian', timeoutMs = 10_000, execute = execFileSync, emptyRetries = EMPTY_EVAL_RETRIES, chunkBytes = EVAL_CHUNK_BYTES } = {}) {
+  const options = { vaultName, command, deadline: Date.now() + timeoutMs, execute, emptyRetries };
+  if (Buffer.byteLength(code, 'utf8') <= chunkBytes) return evalOnce(code, options);
+  const encoded = Buffer.from(code, 'utf8').toString('base64');
+  const parts = encoded.match(new RegExp(`.{1,${chunkBytes}}`, 'g'));
+  const stageId = JSON.stringify(crypto.randomUUID());
+  try {
+    parts.forEach((part, index) => {
+      const staged = evalOnce(`((globalThis.${EVAL_STAGE} ||= {})[${stageId}] ||= [])[${index}] = '${part}'; JSON.stringify(${index})`, options);
+      if (staged !== index) throw new Error(`Obsidian CLI did not stage eval chunk ${index + 1} of ${parts.length}`);
+    });
+  } catch (error) {
+    // The program never ran, so callers may treat this as retryable rather
+    // than ambiguous. Drop any chunks that did arrive.
+    try { evalOnce(`delete globalThis.${EVAL_STAGE}?.[${stageId}]; JSON.stringify(true)`, { ...options, deadline: Math.max(options.deadline, Date.now() + 2_500), emptyRetries: 1 }); } catch { /* best effort */ }
+    const notStaged = new Error(error.message);
+    notStaged.code = 'EVAL_NOT_STAGED';
+    throw notStaged;
+  }
+  const runner = `(() => { const stage = globalThis.${EVAL_STAGE} || {}; const parts = stage[${stageId}]; delete stage[${stageId}]; if (!Array.isArray(parts) || parts.length !== ${parts.length} || parts.join('').length !== ${encoded.length}) throw new Error('staged eval is incomplete'); return (0, eval)(new TextDecoder().decode(Uint8Array.from(atob(parts.join('')), c => c.charCodeAt(0)))); })()`;
+  // The runner deletes the stage before evaluating, so it is sent once per
+  // attempt and never blindly replayed: a surviving stage proves the runner did
+  // not run and may be resent, while a missing stage means it ran and only the
+  // response was lost, which callers recover by polling the result token.
+  // Probes get a small floor past the caller's deadline so they can finish.
+  const probeOptions = () => ({ ...options, deadline: Math.max(options.deadline, Date.now() + 2_500), emptyRetries: 1 });
+  const stageSurvived = (drop) => {
+    try { return evalOnce(`(() => { const stage = globalThis.${EVAL_STAGE}; const kept = Boolean(stage?.[${stageId}]); if (kept && ${drop}) delete stage[${stageId}]; return JSON.stringify(kept); })()`, probeOptions()) === true; }
+    catch { return false; }
+  };
+  for (let attempt = 0; ; attempt += 1) {
+    const result = evalOnce(runner, { ...options, emptyRetries: 0 });
+    if (result !== null) return result;
+    const last = attempt >= emptyRetries || Date.now() >= options.deadline;
+    if (!stageSurvived(last)) return null;
+    if (last) {
+      const notRun = new Error('Obsidian CLI did not run the staged eval');
+      notRun.code = 'EVAL_NOT_STAGED';
+      throw notRun;
+    }
+  }
 }
 function payload(operation) { return Buffer.from(JSON.stringify(operation), 'utf8').toString('base64'); }
 // This program is fixed. Data enters solely through base64 JSON. The only
@@ -30,6 +92,18 @@ function rawInvariantTransformProgram() {
   return `const p = input.replayPayload || {}; const hasNoteIdentity = (current, id) => { const match = current.match(/^---\\r?\\n[\\s\\S]*?^jarvos_note_id:\\s*(?:\"([^\"]+)\"|'([^']+)'|([^\\s#]+))[\\s\\S]*?^---/m); return (match?.[1] || match?.[2] || match?.[3] || '') === id; }; const heading = raw => { const name = String(raw || '').trim().replace(/^##\\s*/, '').trim(); return name ? '## ' + (name === '🗂️ Notes Created' ? '📝 Notes' : name) : null; }; const range = (lines, h) => { const start = lines.findIndex(line => line.trim() === h); let end = lines.length; for (let i = start + 1; start !== -1 && i < lines.length; i += 1) { if (/^##\\s/.test(lines[i])) { end = i; break; } } return { start, end }; }; const escape = value => String(value).replace(/[.*+?^\${}()|[\\]\\\\]/g, '\\\\$&'); const linkRe = target => new RegExp('^\\\\s*-\\\\s*\\\\[\\\\[' + escape(target) + '(?:\\\\|[^\\\\]]+)?\\\\]\\\\]\\\\s*$'); const transform = (() => { if (input.transformName === 'append-line' && input.transformVersion === 1 && typeof p.line === 'string') { const line = p.line.trim(); return current => current.includes(line); } if (input.transformName === 'note-append-body' && input.transformVersion === 1 && typeof p.noteId === 'string' && typeof p.body === 'string') { const id = p.noteId.trim(); const body = p.body.trim(); return current => hasNoteIdentity(current, id) && current.includes(body); } if (input.transformName === 'session-thread-append' && input.transformVersion === 1 && typeof p.noteId === 'string' && typeof p.entry === 'string') { const id = p.noteId.trim(); const entry = p.entry.trim(); return current => hasNoteIdentity(current, id) && current.includes(entry); } if (input.transformName === 'journal-section-line' && input.transformVersion === 1 && typeof p.heading === 'string' && typeof p.line === 'string') { const h = heading(p.heading); const line = p.line.trim(); return current => { const lines = String(current).split('\\n'); const r = range(lines, h); return Boolean(h && r.start !== -1 && lines.slice(r.start + 1, r.end).some(entry => entry.trim() === line)); }; } if (input.transformName === 'journal-backlink' && input.transformVersion === 1 && typeof p.linkTarget === 'string') { const h = heading(p.section || '📝 Notes'); const re = linkRe(p.linkTarget.trim()); return current => { const lines = String(current).split('\\n'); const r = range(lines, h); return Boolean(h && r.start !== -1 && lines.slice(r.start + 1, r.end).filter(entry => re.test(entry)).length === 1 && lines.filter(entry => re.test(entry)).length === 1); }; } return null; })();`;
 }
 
+function journalOriginTransformHelpersProgram() {
+  return "const markerPayload = origin => { const o = origin || {}; const json = JSON.stringify({ schema_version: 'jarvos-content-origin/v1', content_origin: o.content_origin, content_origin_basis: o.content_origin_basis, clean_text_digest: o.clean_text_digest, human_evidence_eligible: o.human_evidence_eligible === true && o.content_origin === 'human', ...(o.source_ref ? { source_ref: String(o.source_ref) } : {}), ...(o.user_source && typeof o.user_source === 'object' ? { user_source: { capture_event_id: o.user_source.capture_event_id, actor: o.user_source.actor, source_digest: o.user_source.source_digest, content_digest: o.clean_text_digest || o.user_source.content_digest } } : {}) }); const encoded = btoa(unescape(encodeURIComponent(json))).replace(/\\+/g, '-').replace(/\\//g, '_').replace(/=+$/g, ''); return '<!-- jarvos-content-origin/v1 ' + encoded + ' -->'; }; const cleanMarker = value => String(value || '').replace(/<!--\\s*jarvos-content-origin\\/[^>]*-->\\s*/gi, '').trim(); const markerObject = value => { const match = String(value || '').match(/^<!--\\s*jarvos-content-origin\\/v1\\s+([^\\s>]+)\\s*-->$/); if (!match) return null; try { const token = match[1]; const padded = token.replace(/-/g, '+').replace(/_/g, '/') + '==='.slice((token.length + 3) % 4); const decoded = token.startsWith('%7B') || token.startsWith('%7b') ? decodeURIComponent(token) : new TextDecoder().decode(Uint8Array.from(atob(padded), c => c.charCodeAt(0))); return JSON.parse(decoded); } catch (_) { return null; } }; const sha256 = value => /^[a-f0-9]{64}$/.test(String(value || '')); const verifiedHumanMarker = value => { const marker = markerObject(value); const receipt = marker && marker.user_source; return Boolean(marker && marker.schema_version === 'jarvos-content-origin/v1' && marker.content_origin === 'human' && (marker.content_origin_basis === 'verbatim_user' || marker.content_origin_basis === 'user_derived') && marker.human_evidence_eligible === true && sha256(marker.clean_text_digest) && receipt && receipt.actor === 'user' && typeof receipt.capture_event_id === 'string' && receipt.capture_event_id.trim() && sha256(receipt.source_digest) && receipt.content_digest === marker.clean_text_digest && marker.source_ref === receipt.capture_event_id); }; const sameVerifiedHumanOrigin = (left, right) => { const a = markerObject(left); const b = markerObject(right); return Boolean(verifiedHumanMarker(left) && verifiedHumanMarker(right) && a.content_origin === b.content_origin && a.content_origin_basis === b.content_origin_basis && a.human_evidence_eligible === b.human_evidence_eligible); }; const cleanLine = value => { const clean = cleanMarker(value); return clean.startsWith('- ') ? clean : '- ' + clean.replace(/^[-\\s]+/, ''); }; ";
+}
+
+function journalOriginMutationBranchProgram() {
+  return "if (input.transformName === 'journal-section-line' && input.transformVersion === 2 && typeof p.heading === 'string' && typeof p.line === 'string' && p.contentOrigin) { const h = heading(p.heading); const line = cleanLine(p.line); const marker = markerPayload(p.contentOrigin); return { apply: current => { if (!h || !line.startsWith('- ')) return current; const lines = String(current).split('\\n'); const r = range(lines, h); if (r.start === -1) { const trimmed = String(current).trimEnd(); return trimmed + (trimmed ? '\\n\\n' : '') + h + '\\n' + line + '\\n' + marker + '\\n'; } let match = -1; for (let i = r.start + 1; i < r.end; i += 1) { if (lines[i].trim().startsWith('- ') && cleanMarker(lines[i]) === line) { match = i; break; } } if (match !== -1) { const firstMarker = String(lines[match + 1] || '').trim(); if (!firstMarker.startsWith('<!-- jarvos-content-origin/')) return current; if (sameVerifiedHumanOrigin(firstMarker, marker)) return current; if (verifiedHumanMarker(firstMarker) && !verifiedHumanMarker(marker)) return current; let markerEnd = match + 1; while (markerEnd < r.end && String(lines[markerEnd] || '').trim().startsWith('<!-- jarvos-content-origin/')) markerEnd += 1; if (markerEnd === match + 2 && firstMarker === marker) return current; lines.splice(match + 1, markerEnd - match - 1, marker); return lines.join('\\n'); } const section = lines.slice(r.start + 1, r.end).filter(entry => entry.trim() !== '-' && entry.trim() !== ''); section.push(line, marker); return [...lines.slice(0, r.start + 1), ...section, '', ...lines.slice(r.end)].join('\\n'); }, invariant: current => { const lines = String(current).split('\\n'); const r = range(lines, h); if (r.start === -1) return false; for (let i = r.start + 1; i < r.end; i += 1) { if (lines[i].trim() === line) { const firstMarker = String(lines[i + 1] || '').trim(); if (!firstMarker.startsWith('<!-- jarvos-content-origin/')) return true; if (firstMarker === marker || sameVerifiedHumanOrigin(firstMarker, marker)) return true; } } return false; } }; } ";
+}
+
+function journalOriginInvariantBranchProgram() {
+  return "if (input.transformName === 'journal-section-line' && input.transformVersion === 2 && typeof p.heading === 'string' && typeof p.line === 'string' && p.contentOrigin) { const h = heading(p.heading); const line = cleanLine(p.line); const marker = markerPayload(p.contentOrigin); return current => { const lines = String(current).split('\\n'); const r = range(lines, h); if (r.start === -1) return false; for (let i = r.start + 1; i < r.end; i += 1) { if (lines[i].trim() === line) { const firstMarker = String(lines[i + 1] || '').trim(); if (!firstMarker.startsWith('<!-- jarvos-content-origin/')) return true; if (firstMarker === marker || sameVerifiedHumanOrigin(firstMarker, marker)) return true; } } return false; }; } ";
+}
+
 function exactBlockTransformProgram(program) {
   const helper = "const hasBlock = (current, block) => { const expected = String(block || '').trim(); return Boolean(expected && ('\\n\\n' + String(current).trim() + '\\n\\n').includes('\\n\\n' + expected + '\\n\\n')); }; ";
   return program
@@ -37,8 +111,16 @@ function exactBlockTransformProgram(program) {
     .replaceAll('current.includes(body)', 'hasBlock(current, body)')
     .replaceAll('current.includes(entry)', 'hasBlock(current, entry)');
 }
-function mutationTransformProgram() { return exactBlockTransformProgram(rawMutationTransformProgram()); }
-function invariantTransformProgram() { return exactBlockTransformProgram(rawInvariantTransformProgram()); }
+function mutationTransformProgram() {
+  const program = rawMutationTransformProgram()
+    .replace('const transform = (() => {', `${journalOriginTransformHelpersProgram()}const transform = (() => {${journalOriginMutationBranchProgram()}`);
+  return exactBlockTransformProgram(program);
+}
+function invariantTransformProgram() {
+  const program = rawInvariantTransformProgram()
+    .replace('const transform = (() => {', `${journalOriginTransformHelpersProgram()}const transform = (() => {${journalOriginInvariantBranchProgram()}`);
+  return exactBlockTransformProgram(program);
+}
 
 function buildObsidianDeleteProgram(operation) {
   const encoded = payload(operation);
@@ -59,7 +141,7 @@ function buildObsidianInvariantProgram(operation, inspectionToken, inspectionNon
 function tokenProgram(operationId) { return `JSON.stringify(globalThis.${RESULT_STORE}?.[${JSON.stringify(operationId)}] || null)`; }
 function cleanupProgram(operationId) { return `delete globalThis.${RESULT_STORE}?.[${JSON.stringify(operationId)}]; JSON.stringify(true)`; }
 
-function createVaultMutationAdapter({ vaultRoot, vaultId, vaultName = path.basename(vaultRoot || ''), ledger, ledgerPath, transforms, evaluate, maxPollAttempts = 40, pollIntervalMs = 50, pollTimeoutMs = 2_500, probe, ownerId = crypto.randomUUID(), opportunisticDrain, allowDeleteOperation } = {}) {
+function createVaultMutationAdapter({ vaultRoot, vaultId, vaultName = path.basename(vaultRoot || ''), ledger, ledgerPath, transforms, evaluate, maxPollAttempts = 40, pollIntervalMs = 50, pollTimeoutMs = DEFAULT_POLL_TIMEOUT_MS, probeTimeoutMs = DEFAULT_PROBE_TIMEOUT_MS, probe, ownerId = crypto.randomUUID(), opportunisticDrain, allowDeleteOperation } = {}) {
   if (typeof vaultRoot !== 'string' || !path.isAbsolute(vaultRoot)) throw new Error('vaultRoot must be absolute');
   if (typeof vaultId !== 'string' || !vaultId) throw new Error('vaultId is required');
   // Keep operational intent outside authored vault content. Hosts normally supply
@@ -76,7 +158,7 @@ function createVaultMutationAdapter({ vaultRoot, vaultId, vaultName = path.basen
   const run = evaluate || ((code, timeoutMs = pollTimeoutMs) => runObsidianEval(code, { vaultName, timeoutMs }));
   const deleteAllowed = (operation) => operation.operationKind !== 'delete' || (typeof allowDeleteOperation === 'function' && allowDeleteOperation(operation) === true);
   let draining = false;
-  function capability() { if (probe) return probe(); try { const inspected = run(`JSON.stringify({ vaultName: app?.vault?.getName?.(), hasVault: Boolean(app?.vault?.create && app?.vault?.process && app?.vault?.read) })`); if (!inspected?.hasVault) return { state: 'api_incompatible' }; return inspected.vaultName && inspected.vaultName !== vaultName ? { state: 'wrong_vault' } : { state: 'available', vaultId }; } catch (error) { const message = String(error.message || ''); if (error.code === 'ENOENT') return { state: 'cli_missing' }; if (error.code === 'ETIMEDOUT' || /timed?\s*out|busy|temporar/i.test(message)) return { state: 'app_busy' }; if (/disabled/i.test(message)) return { state: 'cli_disabled' }; if (/unsupported|unknown command|eval/i.test(message)) return { state: 'cli_unsupported' }; if (/not running|no running|connection refused|failed to connect/i.test(message)) return { state: 'app_stopped' }; return { state: 'app_unreachable' }; } }
+  function capability() { if (probe) return probe(); try { const inspected = run(`JSON.stringify({ vaultName: app?.vault?.getName?.(), hasVault: Boolean(app?.vault?.create && app?.vault?.process && app?.vault?.read) })`, probeTimeoutMs); if (!inspected?.hasVault) return { state: 'api_incompatible' }; return inspected.vaultName && inspected.vaultName !== vaultName ? { state: 'wrong_vault' } : { state: 'available', vaultId }; } catch (error) { const message = String(error.message || ''); if (error.code === 'ENOENT') return { state: 'cli_missing' }; if (error.code === 'ETIMEDOUT' || /timed?\s*out|busy|temporar/i.test(message)) return { state: 'app_busy' }; if (/disabled/i.test(message)) return { state: 'cli_disabled' }; if (/unsupported|unknown command|eval/i.test(message)) return { state: 'cli_unsupported' }; if (/not running|no running|connection refused|failed to connect/i.test(message)) return { state: 'app_stopped' }; return { state: 'app_unreachable' }; } }
   function inspectInvariant(input) {
     const operation = validateOperation(input);
     if (operation.vaultId !== vaultId) return { status: 'unavailable' };
@@ -89,7 +171,9 @@ function createVaultMutationAdapter({ vaultRoot, vaultId, vaultName = path.basen
       const inspectionNonce = crypto.randomUUID();
       const deadline = Date.now() + pollTimeoutMs;
       const queued = run(buildObsidianInvariantProgram(operation, inspectionToken, inspectionNonce), Math.max(1, deadline - Date.now()));
-      if (!queued?.queued || queued.token !== inspectionToken) return { status: 'unavailable' };
+      // A successful CLI eval may omit stdout even though it started the read.
+      // Only a missing receipt may fall through; an explicit bad receipt cannot.
+      if (queued !== null && (queued?.queued !== true || queued.token !== inspectionToken)) return { status: 'unavailable' };
       let result = null;
       for (let attempt = 0; attempt < maxPollAttempts; attempt += 1) {
         const remaining = deadline - Date.now();
@@ -129,7 +213,7 @@ function createVaultMutationAdapter({ vaultRoot, vaultId, vaultName = path.basen
     try {
       const deadline = Date.now() + pollTimeoutMs;
       const queued = run(buildObsidianMutationProgram(operation), Math.max(1, deadline - Date.now()));
-      if (!queued?.queued || queued.token !== operation.operationId) throw new Error('invalid queued acknowledgement');
+      if (queued !== null && (queued?.queued !== true || queued.token !== operation.operationId)) throw new Error('invalid queued acknowledgement');
       let result = null;
       for (let attempt = 0; attempt < maxPollAttempts; attempt += 1) {
         const remaining = deadline - Date.now();
@@ -147,6 +231,11 @@ function createVaultMutationAdapter({ vaultRoot, vaultId, vaultName = path.basen
       mutationLedger.transition(operation.operationId, 'unknown_after_dispatch', { ownerId, fence: claim.fence });
       return createInternalReceipt({ operation, status: 'unknown_after_dispatch', persistence: 'durable', obsidian: 'unacknowledged' });
     } catch (error) {
+      if (error.code === 'EVAL_NOT_STAGED') {
+        // The mutation program never reached the app; keep it retryable.
+        mutationLedger.transition(operation.operationId, 'planned', { ownerId, fence: claim.fence, evidence: { errorClass: 'eval_not_staged' } });
+        return createInternalReceipt({ operation, status: 'unavailable', lifecycleState: 'planned', persistence: 'durable', obsidian: 'unacknowledged' });
+      }
       mutationLedger.transition(operation.operationId, 'unknown_after_dispatch', { ownerId, fence: claim.fence, evidence: { errorClass: error.code === 'ENOENT' ? 'cli_missing' : 'dispatch_failed' } });
       return createInternalReceipt({ operation, status: 'unknown_after_dispatch', persistence: 'durable', obsidian: 'unacknowledged' });
     }

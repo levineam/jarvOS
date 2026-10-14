@@ -1,0 +1,43 @@
+{
+  "contract": "jarvos.project-inference-case/v1",
+  "caseId": "ambiguity",
+  "engineRevision": null,
+  "coverage": [
+    { "sourceClass": "chat", "state": "partial" },
+    { "sourceClass": "execution", "state": "partial" }
+  ],
+  "observations": [
+    {
+      "observationId": "obs_public_ambiguity_chat_001",
+      "evidenceId": "ev_public_ambiguity_chat_001",
+      "sourceClass": "chat",
+      "occurredAt": "2026-08-07T09:00:00.000Z",
+      "observedAt": "2026-08-07T10:00:00.000Z",
+      "sourceRevision": "fixture-chat-r2",
+      "sensitivity": "public-fixture",
+      "coverageState": "partial",
+      "contentDigest": "c5bf0d8b2879ede0d0885e8a669d675e9fc9eca382b5e92b501998f6fb45cce9"
+    },
+    {
+      "observationId": "obs_public_ambiguity_execution_001",
+      "evidenceId": "ev_public_ambiguity_execution_001",
+      "sourceClass": "execution",
+      "occurredAt": "2026-08-07T11:00:00.000Z",
+      "observedAt": "2026-08-07T12:00:00.000Z",
+      "sourceRevision": "fixture-execution-r2",
+      "sensitivity": "public-fixture",
+      "coverageState": "partial",
+      "contentDigest": "56b48bd92610c4f70a20a4cfc432a640f13fea57ea26d6675388d63a22cb2b0b"
+    }
+  ],
+  "correction": null,
+  "expected": {
+    "decision": "quarantine",
+    "kind": "project",
+    "canonicalName": null,
+    "alternatives": ["jarvOS", "Proof of Value"],
+    "reason": "ambiguous-identity",
+    "sideEffects": []
+  },
+  "contentDigest": "e72cad6c14bf41a7eec9f74c123cc17e0e8c867563ae231e92ea6cd963a61265"
+}

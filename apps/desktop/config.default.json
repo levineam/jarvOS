@@ -1,0 +1,11 @@
+{
+  "port": 4807,
+  "vault": { "root": null, "journalDir": null, "notesDir": null },
+  "ontologyDir": null,
+  "memory": { "indexFile": null, "dailyDir": null },
+  "paperclip": { "url": null, "companyId": null, "projectId": null, "authFile": null },
+  "projectsContext": { "contextModule": null },
+  "whisper": { "binary": "whisper-cli", "ffmpeg": "ffmpeg", "model": null, "args": [], "timeoutMs": 60000 },
+  "jarvosRepo": null,
+  "systemDoctor": { "workspace": null, "profile": null, "receiptFile": null }
+}

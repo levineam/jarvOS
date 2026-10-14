@@ -72,8 +72,34 @@ function assertCodingContract() {
 
 async function assertRunTakeIssueToDoneCallable(tempFilePath) {
   const store = coding.createFileSessionStateStore(tempFilePath);
+  // Completion needs a declared delivery trace that matches the fix stage's
+  // Git observation; this smoke path supplies both from fixed fixture values.
+  const headCommit = 'a'.repeat(40);
+  const changedFiles = ['docs/plans/SUP-2232.md', 'modules/jarvos-coding/README.md', 'scripts/jarvos-v05-profile-smoke.js'];
+  const deliveryObservation = {
+    headCommit,
+    changedFiles,
+    plan: coding.observePlan('# SUP-2232 v0.5 profile smoke plan', 'SUP-2232'),
+  };
   const result = await coding.runTakeIssueToDone({
     issueIdentifier: 'SUP-2232',
+    deliveryTrace: {
+      schemaVersion: coding.DELIVERY_TRACE_SCHEMA_VERSION,
+      workIdentifier: 'SUP-2232',
+      plan: { path: changedFiles[0], digest: deliveryObservation.plan.digest },
+      docImpact: { decision: 'affected', docs: [changedFiles[1]] },
+      implementation: { headCommit, changedFiles },
+      proof: [{
+        kind: 'behavioral',
+        level: 'source',
+        status: 'passed',
+        headCommit,
+        criterion: 'The v0.5 profile can drive the coding orchestrator end to end.',
+        claim: 'runTakeIssueToDone completes with injected adapters.',
+        command: 'node scripts/jarvos-v05-profile-smoke.js',
+        observation: 'The smoke path ran every stage and reported completed.',
+      }],
+    },
   }, {
     sessionState: store,
     tracker: {
@@ -84,7 +110,7 @@ async function assertRunTakeIssueToDoneCallable(tempFilePath) {
       createBranch: async () => ({ branch: 'SUP-2232/jarvos-v05-smoke' }),
     },
     fixer: {
-      fixAndRerun: async () => ({ status: 'fixed' }),
+      fixAndRerun: async () => ({ status: 'fixed', deliveryObservation }),
     },
     reviewEngine: {
       sliceReview: async () => ({ status: 'pass', drives: ['runTakeIssueToDone'] }),

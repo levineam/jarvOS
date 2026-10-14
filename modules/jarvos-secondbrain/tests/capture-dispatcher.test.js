@@ -3,7 +3,9 @@ const assert = require('node:assert/strict');
 
 const {
   dispatchCapture,
+  responseForHardCaptureReceipt,
 } = require('../bridge/dispatch/src/capture-dispatcher.js');
+const { createArtifactReceipt } = require('../src/artifact-receipt.js');
 
 function makeMockAdapter() {
   const calls = [];
@@ -180,4 +182,57 @@ test('dispatcher ignores medium-confidence salience instead of writing a Flagged
   assert.deepEqual(result.destinations, []);
   assert.deepEqual(result.artifactReceipt, { schemaVersion: 'jarvos.artifact-receipt.v1', artifacts: [] });
   assert.deepEqual(mock.calls, []);
+});
+
+test('dispatcher treats strict journal aliases as journal-entry captures', () => {
+  for (const text of ['Journal: reviewed the capture bug', 'Add to Journal: reviewed the capture bug']) {
+    const mock = makeMockAdapter();
+    const result = dispatchCapture({ text, date: '2026-01-02' }, { adapter: mock.adapter });
+
+    assert.equal(result.captured, true);
+    assert.equal(result.skillId, 'journal-entry');
+    assert.equal(result.trigger, 'journal');
+    assert.equal(result.hardCommand.disposition, 'capture');
+    assert.deepEqual(mock.calls, [[
+      'appendLineToJournalSection',
+      '## 📓 Journal Entry',
+      '- reviewed the capture bug',
+      '2026-01-02',
+    ]]);
+  }
+});
+
+test('dispatcher returns needs_input for bare hard commands without storage calls', () => {
+  for (const text of ['Idea:', 'Note:', 'Journal:', 'Add to Journal:']) {
+    const mock = makeMockAdapter();
+    const result = dispatchCapture({ text, date: '2026-01-02' }, { adapter: mock.adapter });
+
+    assert.equal(result.captured, false);
+    assert.equal(result.path, 'hard_command_needs_input');
+    assert.equal(result.hardCommand.disposition, 'needs_input');
+    assert.deepEqual(mock.calls, []);
+  }
+});
+
+test('hard-command responses are derived from validated receipt outcomes', () => {
+  const command = dispatchCapture({ text: 'Idea:', date: '2026-01-02' }).hardCommand;
+  assert.equal(responseForHardCaptureReceipt(command), 'What idea should I capture?');
+
+  const populated = dispatchCapture({ text: 'Journal: reviewed capture', date: '2026-01-02' }, {
+    adapter: makeMockAdapter().adapter,
+  }).hardCommand;
+  const receipt = (...outcomes) => createArtifactReceipt({
+    artifacts: outcomes.map((outcome, index) => ({
+      kind: 'journal',
+      vaultRelativePath: `Journal/2026-01-0${index + 2}.md`,
+      outcome,
+    })),
+  });
+
+  assert.equal(responseForHardCaptureReceipt(populated, receipt('committed')), 'Captured to Journal.');
+  assert.equal(responseForHardCaptureReceipt(populated, receipt('already_satisfied')), 'Captured to Journal.');
+  assert.equal(responseForHardCaptureReceipt(populated, receipt('committed', 'saved_locally_sync_pending')), 'Saved locally; sync pending.');
+  assert.equal(responseForHardCaptureReceipt(populated, receipt('deferred')), "I couldn't confirm that capture. Please try again.");
+  assert.equal(responseForHardCaptureReceipt(populated, { schemaVersion: 'future', artifacts: [] }), "I couldn't confirm that capture. Please try again.");
+  assert.equal(responseForHardCaptureReceipt(populated, null), "I couldn't confirm that capture. Please try again.");
 });

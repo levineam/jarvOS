@@ -4,12 +4,14 @@ const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { run: defaultRun } = require('./run');
+const { createFileOperationStore } = require('./file-operation-store');
 
 const BEADS_TRACKER_SCHEMA_VERSION = 'jarvos-coding-live-beads-tracker/v1';
 const DEFAULT_BEADS_VERSION = '0.2.19';
 const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_MAX_BUFFER = 512 * 1024;
 const REQUIRED_CAPABILITIES = Object.freeze(['create', 'update', 'dependency', 'checkpoint']);
+const CREATE_RECONCILE_LIMIT = 1001;
 
 function plain(value) { return Boolean(value) && typeof value === 'object' && !Array.isArray(value); }
 
@@ -51,17 +53,30 @@ function operationFingerprint(method, input) {
   return JSON.stringify({ method, input: operationInputOf(input) });
 }
 
+function createStatus(input = {}) {
+  if (input.status === undefined) return null;
+  const status = requiredString(input.status, 'create status').toLowerCase();
+  if (!['open', 'deferred'].includes(status)) throw new Error('Beads create status is unsupported');
+  return status;
+}
+
 function operationExpectation(method, input = {}) {
-  if (method === 'create') return {};
+  if (method === 'create') return {
+    externalReference: String(input.externalReference || operationIdOf(input, method)),
+    ...(createStatus(input) ? { status: createStatus(input) } : {}),
+  };
   const itemId = workIdOf(input, method);
   if (method === 'claim') return { itemId, status: 'in_progress' };
-  if (method === 'transition') return { itemId, status: requiredString(input.status, 'transition status') };
+  if (method === 'transition') {
+    const requested = requiredString(input.status, 'transition status').toLowerCase();
+    return { itemId, status: ['done', 'closed'].includes(requested) ? 'closed' : requested };
+  }
   if (method === 'dependency') return { itemId, dependencyId: requiredString(input.dependsOn || input.dependencyId, 'dependency id') };
-  if (method === 'checkpoint') return {
-    itemId,
-    stage: requiredString(input.stage, 'checkpoint stage'),
-    nextStep: requiredString(input.nextStep, 'checkpoint next step'),
-  };
+  if (method === 'checkpoint') {
+    const stage = requiredString(input.stage, 'checkpoint stage');
+    const nextStep = requiredString(input.nextStep, 'checkpoint next step');
+    return { itemId, stage, nextStep, marker: checkpointMarker(operationIdOf(input, method), stage, nextStep) };
+  }
   return { itemId };
 }
 
@@ -76,6 +91,17 @@ function operationIdOf(input = {}, method = 'operation') {
     return `${method}:${requiredString(itemId, `${method} work item id`)}:${digest}`;
   }
   throw new Error(`Beads ${method} operationId is required`);
+}
+
+function withoutReferenceOperationIds(input = {}) {
+  const copy = { ...input };
+  for (const key of ['workReference', 'workRef']) {
+    if (plain(copy[key]) && copy[key].operationId !== undefined) {
+      const { operationId: _claimOperationId, ...reference } = copy[key];
+      copy[key] = reference;
+    }
+  }
+  return copy;
 }
 
 function workIdOf(input = {}, method = 'operation') {
@@ -110,22 +136,67 @@ function validateWorkspace(workspaceRoot, approvedRoots) {
   return workspace;
 }
 
+function checkpointMarker(operationId, stage, nextStep) {
+  return `[jarvos-checkpoint/v1] ${JSON.stringify({ operationId, stage, nextStep })}`;
+}
+
 function commandArgs(method, input, operationId) {
-  const format = ['--format', 'json'];
   if (method === 'create') {
     const args = ['create', '--title', requiredString(input.title, 'create title')];
     if (input.description) args.push('--description', String(input.description));
     if (input.priority !== undefined) args.push('--priority', String(input.priority));
-    args.push('--external-ref', operationId, ...format);
+    const status = createStatus(input);
+    if (status) args.push('--status', status);
+    args.push('--external-ref', String(input.externalReference || operationId), '--json');
     return args;
   }
   const itemId = workIdOf(input, method);
-  if (method === 'claim') return ['update', itemId, '--status', 'in_progress', '--operation-id', operationId, ...format];
-  if (method === 'transition') return ['update', itemId, '--status', requiredString(input.status, 'transition status'), '--operation-id', operationId, ...format];
-  if (method === 'dependency') return ['dep', 'add', itemId, requiredString(input.dependsOn || input.dependencyId, 'dependency id'), '--operation-id', operationId, ...format];
-  if (method === 'checkpoint') return ['checkpoint', itemId, '--stage', requiredString(input.stage, 'checkpoint stage'), '--next-step', requiredString(input.nextStep, 'checkpoint next step'), '--operation-id', operationId, ...format];
-  if (method === 'show') return ['show', itemId, ...format];
+  if (method === 'claim') return ['update', itemId, '--claim', '--json'];
+  if (method === 'transition') {
+    const status = requiredString(input.status, 'transition status').toLowerCase();
+    if (['done', 'closed'].includes(status)) return ['close', itemId, '--reason', 'Completed by jarvOS work action', '--json'];
+    if (status === 'open' && input.reopen === true) return ['reopen', itemId, '--reason', 'Reopened by jarvOS work action', '--json'];
+    return ['update', itemId, '--status', status, '--json'];
+  }
+  if (method === 'dependency') return ['dep', 'add', itemId, requiredString(input.dependsOn || input.dependencyId, 'dependency id'), '--json'];
+  if (method === 'checkpoint') {
+    const stage = requiredString(input.stage, 'checkpoint stage');
+    const nextStep = requiredString(input.nextStep, 'checkpoint next step');
+    return ['comments', 'add', itemId, '--message', checkpointMarker(operationId, stage, nextStep), '--json'];
+  }
+  if (method === 'show') return ['show', itemId, '--format', 'json'];
   throw new Error(`unsupported Beads operation: ${method}`);
+}
+
+function normalizedItem(value) {
+  const candidate = Array.isArray(value) && value.length === 1
+    ? value[0]
+    : (plain(value?.item)
+      ? value.item
+      : (Array.isArray(value?.reopened) && value.reopened.length === 1 ? value.reopened[0] : value));
+  if (!plain(candidate)) return candidate;
+  return {
+    ...candidate,
+    ...(candidate.updatedAt || candidate.updated_at ? { updatedAt: candidate.updatedAt || candidate.updated_at } : {}),
+    ...(candidate.externalRef || candidate.external_ref ? { externalRef: candidate.externalRef || candidate.external_ref } : {}),
+  };
+}
+
+function hasItemRevision(value) {
+  return plain(value) && Boolean(value.revision || value.version || value.updatedAt || value.updated_at);
+}
+
+function advertisedCapabilities(capabilities) {
+  if (Array.isArray(capabilities.capabilities)) return new Set(capabilities.capabilities);
+  const commands = new Set(Array.isArray(capabilities.commands)
+    ? capabilities.commands.map((command) => plain(command) ? command.name : command).filter((name) => typeof name === 'string')
+    : []);
+  const advertised = new Set();
+  if (commands.has('create')) advertised.add('create');
+  if (['update', 'show', 'close', 'reopen'].every((command) => commands.has(command))) advertised.add('update');
+  if (commands.has('dep')) advertised.add('dependency');
+  if (commands.has('comments')) advertised.add('checkpoint');
+  return advertised;
 }
 
 function createMemoryOperationStore(initial = {}) {
@@ -143,7 +214,16 @@ function createLiveBeadsTracker(options = {}) {
   const workspaceRoot = validateWorkspace(options.workspaceRoot || process.cwd(), options.approvedRoots);
   const timeoutMs = Number(options.timeoutMs || DEFAULT_TIMEOUT_MS);
   const maxBuffer = Number(options.maxBuffer || DEFAULT_MAX_BUFFER);
-  const operationStore = options.operationStore || createMemoryOperationStore();
+  // A host-selected state root upgrades the exact same operation contract to
+  // durable storage.  No caller path is accepted by the action facade.
+  const live = options.mode === 'live';
+  const operationStore = options.operationStore || (options.operationStoreRoot
+    ? createFileOperationStore({ root: options.operationStoreRoot, maxRecords: options.maxOperationRecords })
+    : createMemoryOperationStore());
+  if (live && (operationStore?.schemaVersion !== 'jarvos-coding-operation-store/v1'
+    || operationStore?.storage !== 'file' || typeof operationStore?.root !== 'string')) {
+    throw new Error('live Beads tracker requires a durable tracker operation ledger');
+  }
   const actor = options.actor || 'jarvos-coding';
   const commandMap = options.commands || {};
   let preflight = null;
@@ -168,8 +248,11 @@ function createLiveBeadsTracker(options = {}) {
 
   async function verifyWorkspace() {
     const where = invoke(['where'], { timeoutMs: Math.min(timeoutMs, 10_000) });
-    const resolved = canonicalRoot(output(where));
-    if (where.status !== 0 || !resolved || resolved !== workspaceRoot) {
+    const reported = output(where).split(/\r?\n/, 1)[0];
+    const resolved = canonicalRoot(reported);
+    const beadsDirectory = canonicalRoot(path.join(workspaceRoot, '.beads'));
+    const expected = beadsDirectory && fs.existsSync(beadsDirectory) ? beadsDirectory : workspaceRoot;
+    if (where.status !== 0 || !resolved || resolved !== expected) {
       throw new Error('Beads workspace verification failed');
     }
     return resolved;
@@ -187,7 +270,7 @@ function createLiveBeadsTracker(options = {}) {
       if (capabilitiesResult.status !== 0 || schemaResult.status !== 0 || !plain(capabilities) || !plain(schema)) {
         throw new Error('Beads capability negotiation failed');
       }
-      const advertised = new Set(Array.isArray(capabilities.capabilities) ? capabilities.capabilities : Object.keys(capabilities));
+      const advertised = advertisedCapabilities(capabilities);
       const missing = REQUIRED_CAPABILITIES.filter((capability) => !advertised.has(capability));
       if (missing.length && options.requireCapabilities !== false) throw new Error('Beads capability negotiation failed');
       preflight = { version, capabilities, schema, missing };
@@ -200,11 +283,20 @@ function createLiveBeadsTracker(options = {}) {
     if (typeof options.reconcile === 'function') return options.reconcile(operation);
     const expectation = operation.expectation || {};
     const args = operation.method === 'create'
-      ? ['show', '--external-ref', operation.operationId, '--format', 'json']
+      ? ['list', '--all', '--limit', String(CREATE_RECONCILE_LIMIT), '--format', 'json']
       : ['show', expectation.itemId, '--format', 'json'];
     const result = invoke(args);
     if (result.status === 0) {
-      const found = parseJson(result.stdout);
+      const parsed = parseJson(result.stdout);
+      if (operation.method === 'create') {
+        const rows = Array.isArray(parsed) ? parsed : (Array.isArray(parsed?.issues) ? parsed.issues : null);
+        if (!rows) return { state: 'indeterminate' };
+        const matches = rows.filter((row) => matchesExpectation('create', row, expectation));
+        if (matches.length === 1) return { state: 'committed', result: normalizedItem(matches[0]) };
+        if (matches.length > 1 || rows.length >= CREATE_RECONCILE_LIMIT) return { state: 'indeterminate' };
+        return { state: 'not-committed' };
+      }
+      const found = normalizedItem(parsed);
       if (found && matchesExpectation(operation.method, found, expectation)) return { state: 'committed', result: found };
       if (found) return { state: 'indeterminate', result: found };
     }
@@ -213,8 +305,14 @@ function createLiveBeadsTracker(options = {}) {
   }
 
   function matchesExpectation(method, value, expectation) {
-    if (method === 'create') return Boolean(value);
-    const found = plain(value?.item) ? value.item : value;
+    if (method === 'create') {
+      const found = normalizedItem(value);
+      if (!plain(found)) return false;
+      const externalReference = found.external_ref || found.externalRef || found.externalReference || found.external_reference;
+      return typeof externalReference === 'string' && externalReference === expectation.externalReference
+        && (!expectation.status || String(found.status || found.state || '').toLowerCase() === expectation.status);
+    }
+    const found = normalizedItem(value);
     if (!plain(found)) return false;
     if (method === 'claim' || method === 'transition') {
       return String(found.status || found.state || '').toLowerCase() === String(expectation.status).toLowerCase();
@@ -230,10 +328,12 @@ function createLiveBeadsTracker(options = {}) {
         ...(Array.isArray(found.checkpoints) ? found.checkpoints : []),
         ...(Array.isArray(found.history) ? found.history : []),
         ...(Array.isArray(found.events) ? found.events : []),
+        ...(Array.isArray(found.comments) ? found.comments : []),
       ];
       return checkpoints.some((checkpoint) => plain(checkpoint)
-        && String(checkpoint.stage || '') === expectation.stage
-        && String(checkpoint.nextStep || checkpoint.next_step || '') === expectation.nextStep);
+        && (String(checkpoint.text || checkpoint.message || '') === expectation.marker
+          || (String(checkpoint.stage || '') === expectation.stage
+            && String(checkpoint.nextStep || checkpoint.next_step || '') === expectation.nextStep)));
     }
     return false;
   }
@@ -254,12 +354,19 @@ function createLiveBeadsTracker(options = {}) {
       } else return { ...existing, status: 'indeterminate', retryable: false };
     }
     await ensureReady();
+    // A supplied control-plane fence is rechecked after asynchronous
+    // preparation and immediately before the tracker mutation.
+    if (typeof input.controlPlane?.assertCurrentFence === 'function') input.controlPlane.assertCurrentFence();
     // Build and validate argv before persisting the prepared record. Caller
     // input errors are not uncertain I/O and must not poison an idempotency
     // key with an execution-uncertain state.
     const args = mappedArgs(method, input, operationId);
     const prepared = { schemaVersion: BEADS_TRACKER_SCHEMA_VERSION, operationId, method, fingerprint, expectation, state: 'prepared', actor, workspaceRoot };
     await operationStore.write(prepared);
+    // Recheck after the awaited write and immediately before the mutation. A
+    // refusal here keeps its reason and leaves the prepared record, which
+    // reconciles to not-committed because nothing was invoked.
+    if (typeof input.controlPlane?.assertCurrentFence === 'function') input.controlPlane.assertCurrentFence();
     let result;
     try {
       result = invoke(args);
@@ -278,7 +385,27 @@ function createLiveBeadsTracker(options = {}) {
       await operationStore.write(failed);
       return failed;
     }
-    const committed = { ...prepared, state: 'committed', status: 'committed', retryable: false, result: parseJson(result.stdout) || { output: output(result) } };
+    const parsedOutput = parseJson(result.stdout);
+    let parsed = ['create', 'claim', 'transition'].includes(method) ? normalizedItem(parsedOutput) : parsedOutput;
+    if (['claim', 'transition'].includes(method) && !hasItemRevision(parsed)) {
+      const observed = invoke(['show', expectation.itemId, '--format', 'json']);
+      parsed = observed.status === 0 ? normalizedItem(parseJson(observed.stdout)) : null;
+      if (!hasItemRevision(parsed) || !matchesExpectation(method, parsed, expectation)) {
+        const indeterminate = { ...prepared, state: 'indeterminate', status: 'indeterminate', retryable: false, errorCode: 'POSTCONDITION_UNCONFIRMED' };
+        await operationStore.write(indeterminate);
+        return indeterminate;
+      }
+    }
+    // A create is only committed when the returned Beads item carries the
+    // operation identity we will use to reconcile a timeout after I/O.  A
+    // syntactically valid but unrelated JSON response must remain explicit
+    // uncertainty rather than being linked to the wrong canonical work.
+    if (method === 'create' && !matchesExpectation(method, parsed, expectation)) {
+      const indeterminate = { ...prepared, state: 'indeterminate', status: 'indeterminate', retryable: false, errorCode: 'CREATE_REFERENCE_UNCONFIRMED' };
+      await operationStore.write(indeterminate);
+      return indeterminate;
+    }
+    const committed = { ...prepared, state: 'committed', status: 'committed', retryable: false, result: parsed || { output: output(result) } };
     await operationStore.write(committed);
     return committed;
   }
@@ -303,6 +430,9 @@ function createLiveBeadsTracker(options = {}) {
     schemaVersion: BEADS_TRACKER_SCHEMA_VERSION,
     authority: 'beads',
     workspaceRoot,
+    operationStoreRoot: operationStore.root || null,
+    operationStoreContract: operationStore.schemaVersion || null,
+    operationStoreStorage: operationStore.storage || null,
     async preflight() { return ensureReady(); },
     async createWorkItem(input = {}) { return mutate('create', input); },
     async claimIssue(input = {}) {
@@ -313,12 +443,25 @@ function createLiveBeadsTracker(options = {}) {
     async transition(input = {}) { return mutate('transition', input); },
     async addDependency(input = {}) { return mutate('dependency', input); },
     async writeCheckpoint(input = {}) { return mutate('checkpoint', input); },
+    async showWorkItem(input = {}) {
+      const itemId = workIdOf(input, 'show');
+      await ensureReady();
+      const result = invoke(mappedArgs('show', input, operationIdOf({ ...input, operationId: input.operationId || `show:${itemId}` }, 'show')));
+      if (result.status !== 0) return { state: 'unavailable', status: 'unavailable', errorCode: 'READ_FAILED' };
+      return { state: 'committed', status: 'available', result: normalizedItem(parseJson(result.stdout)) || null };
+    },
     async verifyAndClose(input = {}) {
       const pullRequest = input.pullRequest || {};
       const merged = input.merged === true || pullRequest.merged === true || String(pullRequest.state || pullRequest.status || '').toLowerCase() === 'merged';
       if (!merged) return { schemaVersion: BEADS_TRACKER_SCHEMA_VERSION, status: 'deferred', reason: 'pull request not merged', ok: true };
-      const operationId = operationIdOf(input, 'close');
-      const result = await mutate('transition', { ...input, status: 'done', operationId });
+      // A work reference returned by the claim stage carries the claim's
+      // operation id. Closing is a distinct operation, so only an explicit
+      // close id is honored; otherwise the close derives its own identity.
+      const closeInput = input.operationId || input.idempotencyKey
+        ? input
+        : withoutReferenceOperationIds(input);
+      const operationId = operationIdOf(closeInput, 'close');
+      const result = await mutate('transition', { ...closeInput, status: 'done', operationId });
       return { ...result, status: result.state === 'committed' ? 'closed' : result.status || result.state, ok: result.state === 'committed' };
     },
     async reconcile(operation) { return reconcile(operation); },

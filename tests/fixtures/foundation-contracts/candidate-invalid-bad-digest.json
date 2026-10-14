@@ -1,0 +1,14 @@
+{
+  "schemaVersion": "jarvos.candidate.v1",
+  "candidateId": "jarvos:candidate:example:c-0104",
+  "candidateType": "memory-unit",
+  "authority": "non-authoritative",
+  "sources": [{ "sourceEventId": "jarvos:source-event:example:se-0104", "evidenceDigest": "md5:not-source-evidence" }],
+  "privacyTier": "private",
+  "sourceTrust": "user-authored",
+  "construction": { "extractorId": "example-extractor", "extractorVersion": "1.0.0", "eligibilityPolicyId": "jarvos:policy:example:eligibility-v1" },
+  "dedupeKey": "invalid:bad-digest",
+  "createdAt": "2026-08-31T12:00:00Z",
+  "expiresAt": "2026-09-30T12:00:00Z",
+  "proposal": { "title": "Bad digest", "summary": "Source evidence must use the canonical digest format." }
+}
