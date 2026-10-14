@@ -209,6 +209,8 @@ only through the installed, merged runtime. See the
 
 ## Manifest
 
+The exported `createSharedSkillManager` binds autonomous `apply`/`repair` to the actual catalog contents, source roots and enrolled harness root identities reviewed by a human `enable` call. Supply the catalog, source roots and complete harness configuration at enrollment and reconciliation. Payload digests are rechecked before installation; caller digest labels are never approval evidence. Changing the catalog or replacing a root requires explicit re-enrollment. Existing enrollment without a reviewed catalog still permits local overlay previews, but cannot authorize repair. The separate inventory/operator CLI retains its accepted-generation contract.
+
 `manifest.json` is the source of truth for the default bundle. Each skill has
 reviewed source revision, SHA-256 digest, license/provenance, supported-harness,
 and target-rendering metadata. Runtimes and setup scripts should use the
