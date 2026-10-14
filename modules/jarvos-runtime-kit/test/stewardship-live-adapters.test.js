@@ -497,7 +497,7 @@ test('Codex SessionStart exposes a pending public judgment for both fresh and re
     const context = hook.stewardshipContext({ cwd: temp, env: { ...process.env, CODEX_THREAD_ID: CODEX_HOOK_SESSION_ID } });
     assert.match(context, /Choose the safe recovery step\./);
     assert.match(context, /resume-42/);
-    assert.match(context, /jarvos-stewardship-bridge answer --correlation <correlation> --choice <listed-choice>/);
+    assert.ok(context.includes('"$JARVOS_STEWARDSHIP_BRIDGE_COMMAND" answer --correlation <correlation> --choice <listed-choice>'));
     assert.doesNotMatch(context, new RegExp(temp.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
   } finally {
     if (oldBridge === undefined) delete process.env.JARVOS_STEWARDSHIP_BRIDGE_COMMAND;
@@ -553,7 +553,7 @@ test('Codex SessionStart derives a bridge-only thread identity from resume stdin
     const output = JSON.parse(resumed.stdout);
     assert.match(output.hookSpecificOutput.additionalContext, /Resume safely\?/);
     assert.match(output.hookSpecificOutput.additionalContext, /codex-resume-42/);
-    assert.match(output.hookSpecificOutput.additionalContext, /jarvos-stewardship-bridge answer --correlation <correlation> --choice <listed-choice>/);
+    assert.ok(output.hookSpecificOutput.additionalContext.includes('"$JARVOS_STEWARDSHIP_BRIDGE_COMMAND" answer --correlation <correlation> --choice <listed-choice>'));
     assert.doesNotMatch(JSON.stringify(output), new RegExp(temp.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
     assert.deepEqual(fs.readFileSync(invoked, 'utf8').trim().split('\n'), ['startOrResume', 'sessionWaitBind', 'nextTurnInput', 'sessionWaitNextTurn', 'projectsContextStart']);
 
@@ -758,7 +758,7 @@ test('Claude SessionStart exposes a pending stewardship judgment even when hydra
     const context = hook.stewardshipContext({ cwd: temp, sessionId: CLAUDE_HOOK_SESSION_ID });
     assert.match(context, /Choose the safe recovery step\./);
     assert.match(context, /claude-start-42/);
-    assert.match(context, /jarvos-stewardship-bridge answer --correlation <correlation> --choice <listed-choice>/);
+    assert.ok(context.includes('"$JARVOS_STEWARDSHIP_BRIDGE_COMMAND" answer --correlation <correlation> --choice <listed-choice>'));
     const started = spawnSync(process.execPath, [path.join(ROOT, 'runtimes', 'claude', 'jarvos-session-start-hook.js')], {
       cwd: temp,
       encoding: 'utf8',

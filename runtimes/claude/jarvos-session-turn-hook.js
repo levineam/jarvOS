@@ -165,7 +165,7 @@ function additionalContext(input) {
     'Choices:',
     ...judgment.choices.map((choice, index) => `${index + 1}. ${choice}${choice === judgment.default ? ' (default)' : ''}`),
     `Correlation: ${judgment.correlation}`,
-    'An exact user reply with a listed choice and this correlation authorizes only recording that preference through the bridge; it does not authorize changing code, merging, publishing, or any other downstream action. This hook never reads reply text; after verifying an exact listed reply, the in-session agent records only its correlation and listed label with: jarvos-stewardship-bridge answer --correlation <correlation> --choice <listed-choice>. Recording the preference is not approval to execute it.',
+    'An exact user reply with a listed choice and this correlation authorizes only recording that preference through the bridge; it does not authorize changing code, merging, publishing, or any other downstream action. This hook never reads reply text; after verifying an exact listed reply, the in-session agent records only its correlation and listed label with: "$JARVOS_STEWARDSHIP_BRIDGE_COMMAND" answer --correlation <correlation> --choice <listed-choice>. Recording the preference is not approval to execute it.',
   ].join('\n');
 }
 

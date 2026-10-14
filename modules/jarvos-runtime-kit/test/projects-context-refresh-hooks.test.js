@@ -14,6 +14,10 @@ const {
 } = require('../src/projects-context-refresh.js');
 
 const ROOT = path.resolve(__dirname, '..', '..', '..');
+const fixtureRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'projects-bridge-fixture-')));
+const fakeBridge = path.join(fixtureRoot, 'bridge');
+fs.writeFileSync(fakeBridge, '#!/bin/sh\nexit 0\n', { mode: 0o700 });
+test.after(() => fs.rmSync(fixtureRoot, { recursive: true, force: true }));
 const CODEX_SESSION_ID = '019fbf11-8aca-79c0-981e-15abcd2392f4';
 const CLAUDE_SESSION_ID = '66666666-7777-4888-8999-aaaaaaaaaaaa';
 const FINGERPRINT = 'a'.repeat(64);
@@ -81,7 +85,7 @@ test('codex projectsContextStart passes a hard 2000ms timeout with exactly one c
   const hook = codexHook();
   const impl = spawnSyncStub(okResult(envelope('refreshed')));
   const result = hook.projectsContextStart({
-    env: { CODEX_THREAD_ID: CODEX_SESSION_ID, JARVOS_STEWARDSHIP_BRIDGE_COMMAND: 'fake-bridge' },
+    env: { CODEX_THREAD_ID: CODEX_SESSION_ID, JARVOS_STEWARDSHIP_BRIDGE_COMMAND: fakeBridge },
     spawnSyncImpl: impl,
   });
   assert.equal(impl.calls.length, 1);
@@ -94,7 +98,7 @@ test('codex projectsContextRefresh passes a hard 250ms timeout with exactly one 
   const hook = codexHook();
   const impl = spawnSyncStub(okResult(envelope('refreshed')));
   const result = hook.projectsContextRefresh({
-    env: { CODEX_THREAD_ID: CODEX_SESSION_ID, JARVOS_STEWARDSHIP_BRIDGE_COMMAND: 'fake-bridge' },
+    env: { CODEX_THREAD_ID: CODEX_SESSION_ID, JARVOS_STEWARDSHIP_BRIDGE_COMMAND: fakeBridge },
     spawnSyncImpl: impl,
   });
   assert.equal(impl.calls.length, 1);
@@ -105,12 +109,12 @@ test('codex projectsContextRefresh passes a hard 250ms timeout with exactly one 
 test('claude projectsContextStart/Refresh pass 2000ms/250ms with exactly one call each', () => {
   const hook = claudeHook();
   const startImpl = spawnSyncStub(okResult(envelope('refreshed')));
-  hook.projectsContextStart({ sessionId: CLAUDE_SESSION_ID, bridgeCommand: 'fake-bridge', spawnSyncImpl: startImpl });
+  hook.projectsContextStart({ sessionId: CLAUDE_SESSION_ID, bridgeCommand: fakeBridge, spawnSyncImpl: startImpl });
   assert.equal(startImpl.calls.length, 1);
   assert.equal(startImpl.calls[0].opts.timeout, 2000);
 
   const refreshImpl = spawnSyncStub(okResult(envelope('unchanged')));
-  hook.projectsContextRefresh({ sessionId: CLAUDE_SESSION_ID, bridgeCommand: 'fake-bridge', spawnSyncImpl: refreshImpl });
+  hook.projectsContextRefresh({ sessionId: CLAUDE_SESSION_ID, bridgeCommand: fakeBridge, spawnSyncImpl: refreshImpl });
   assert.equal(refreshImpl.calls.length, 1);
   assert.equal(refreshImpl.calls[0].opts.timeout, 250);
 });
@@ -120,8 +124,8 @@ test('a fake timed-out spawnSync result fails open with no retry for both capabi
     for (const capability of ['projectsContextStart', 'projectsContextRefresh']) {
       const impl = spawnSyncStub(FAKE_TIMEOUT_RESULT);
       const options = hook.HARNESS === 'claude-code'
-        ? { sessionId: CLAUDE_SESSION_ID, bridgeCommand: 'fake-bridge', spawnSyncImpl: impl }
-        : { env: { CODEX_THREAD_ID: CODEX_SESSION_ID, JARVOS_STEWARDSHIP_BRIDGE_COMMAND: 'fake-bridge' }, spawnSyncImpl: impl };
+        ? { sessionId: CLAUDE_SESSION_ID, bridgeCommand: fakeBridge, spawnSyncImpl: impl }
+        : { env: { CODEX_THREAD_ID: CODEX_SESSION_ID, JARVOS_STEWARDSHIP_BRIDGE_COMMAND: fakeBridge }, spawnSyncImpl: impl };
       const result = hook[capability](options);
       assert.equal(impl.calls.length, 1, 'a timeout must not trigger a retry');
       assert.equal(result.envelope, null);
@@ -133,7 +137,7 @@ test('a fake timed-out spawnSync result fails open with no retry for both capabi
 test('refreshed and partial envelopes carry content; unchanged, unavailable, and invalid do not', () => {
   const hook = codexHook();
   const baseOptions = (impl) => ({
-    env: { CODEX_THREAD_ID: CODEX_SESSION_ID, JARVOS_STEWARDSHIP_BRIDGE_COMMAND: 'fake-bridge' },
+    env: { CODEX_THREAD_ID: CODEX_SESSION_ID, JARVOS_STEWARDSHIP_BRIDGE_COMMAND: fakeBridge },
     spawnSyncImpl: impl,
   });
 
@@ -221,7 +225,7 @@ function shellQuote(value) {
 }
 
 function buildBridgeScript(handlers) {
-  const lines = ['#!/usr/bin/env sh'];
+  const lines = ['#!/bin/sh'];
   for (const [capability, payload] of Object.entries(handlers)) {
     lines.push(`if [ "$1" = "${capability}" ]; then`);
     if (payload === 'FAIL') {
@@ -239,7 +243,7 @@ function buildBridgeScript(handlers) {
 }
 
 function withBridge(handlers, fn) {
-  const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-projects-refresh-hook-'));
+  const temp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-projects-refresh-hook-')));
   const bin = path.join(temp, 'bin');
   const bridge = path.join(bin, 'jarvos-stewardship-bridge');
   fs.mkdirSync(bin, { recursive: true });
@@ -263,7 +267,7 @@ function sessionStartEnvironment(bin, temp, runtime) {
     ...process.env,
     PATH: `${bin}${path.delimiter}${process.env.PATH || ''}`,
     HOME: path.join(temp, 'home'),
-    JARVOS_STEWARDSHIP_BRIDGE_COMMAND: 'jarvos-stewardship-bridge',
+    JARVOS_STEWARDSHIP_BRIDGE_COMMAND: path.join(bin, 'jarvos-stewardship-bridge'),
     JARVOS_TEST_HYDRATE_CALLS_FILE: path.join(temp, 'hydrate-calls.json'),
     ...(runtime === 'codex' ? { CODEX_THREAD_ID: CODEX_SESSION_ID } : {}),
   };
@@ -362,7 +366,7 @@ test('codex turn hook coexists with one refreshed Projects block, SessionWait, a
     const env = {
       ...process.env,
       PATH: `${bin}${path.delimiter}${process.env.PATH || ''}`,
-      JARVOS_STEWARDSHIP_BRIDGE_COMMAND: 'jarvos-stewardship-bridge',
+      JARVOS_STEWARDSHIP_BRIDGE_COMMAND: path.join(bin, 'jarvos-stewardship-bridge'),
       CODEX_THREAD_ID: CODEX_SESSION_ID,
     };
     const output = runTurnHook('codex', env, { hook_event_name: 'UserPromptSubmit', session_id: CODEX_SESSION_ID });
@@ -384,7 +388,7 @@ test('codex turn hook preserves SessionWait without Projects injection when unch
     const env = {
       ...process.env,
       PATH: `${bin}${path.delimiter}${process.env.PATH || ''}`,
-      JARVOS_STEWARDSHIP_BRIDGE_COMMAND: 'jarvos-stewardship-bridge',
+      JARVOS_STEWARDSHIP_BRIDGE_COMMAND: path.join(bin, 'jarvos-stewardship-bridge'),
       CODEX_THREAD_ID: CODEX_SESSION_ID,
     };
     const output = runTurnHook('codex', env, { hook_event_name: 'UserPromptSubmit', session_id: CODEX_SESSION_ID });
@@ -411,7 +415,7 @@ test('codex turn hook injects exactly one Projects block on refreshed and coexis
     const env = {
       ...process.env,
       PATH: `${bin}${path.delimiter}${process.env.PATH || ''}`,
-      JARVOS_STEWARDSHIP_BRIDGE_COMMAND: 'jarvos-stewardship-bridge',
+      JARVOS_STEWARDSHIP_BRIDGE_COMMAND: path.join(bin, 'jarvos-stewardship-bridge'),
       CODEX_THREAD_ID: CODEX_SESSION_ID,
     };
     const output = runTurnHook('codex', env, { hook_event_name: 'UserPromptSubmit', session_id: CODEX_SESSION_ID });
@@ -430,7 +434,7 @@ test('codex turn hook injects no Projects block when unchanged, and no context a
     const env = {
       ...process.env,
       PATH: `${bin}${path.delimiter}${process.env.PATH || ''}`,
-      JARVOS_STEWARDSHIP_BRIDGE_COMMAND: 'jarvos-stewardship-bridge',
+      JARVOS_STEWARDSHIP_BRIDGE_COMMAND: path.join(bin, 'jarvos-stewardship-bridge'),
       CODEX_THREAD_ID: CODEX_SESSION_ID,
     };
     const output = runTurnHook('codex', env, { hook_event_name: 'UserPromptSubmit', session_id: CODEX_SESSION_ID });
@@ -446,7 +450,7 @@ test('codex turn hook injects nothing when the Projects refresh capability is un
     const env = {
       ...process.env,
       PATH: `${bin}${path.delimiter}${process.env.PATH || ''}`,
-      JARVOS_STEWARDSHIP_BRIDGE_COMMAND: 'jarvos-stewardship-bridge',
+      JARVOS_STEWARDSHIP_BRIDGE_COMMAND: path.join(bin, 'jarvos-stewardship-bridge'),
       CODEX_THREAD_ID: CODEX_SESSION_ID,
     };
     const output = runTurnHook('codex', env, { hook_event_name: 'UserPromptSubmit', session_id: CODEX_SESSION_ID });
@@ -469,7 +473,7 @@ test('claude turn hook injects exactly one Projects block on partial and coexist
     const env = {
       ...process.env,
       PATH: `${bin}${path.delimiter}${process.env.PATH || ''}`,
-      JARVOS_STEWARDSHIP_BRIDGE_COMMAND: 'jarvos-stewardship-bridge',
+      JARVOS_STEWARDSHIP_BRIDGE_COMMAND: path.join(bin, 'jarvos-stewardship-bridge'),
     };
     const output = runTurnHook('claude', env, { session_id: CLAUDE_SESSION_ID });
     const context = output.hookSpecificOutput.additionalContext;
@@ -487,7 +491,7 @@ test('claude turn hook injects no Projects block on an invalid envelope shape', 
     const env = {
       ...process.env,
       PATH: `${bin}${path.delimiter}${process.env.PATH || ''}`,
-      JARVOS_STEWARDSHIP_BRIDGE_COMMAND: 'jarvos-stewardship-bridge',
+      JARVOS_STEWARDSHIP_BRIDGE_COMMAND: path.join(bin, 'jarvos-stewardship-bridge'),
     };
     const output = runTurnHook('claude', env, { session_id: CLAUDE_SESSION_ID });
     assert.deepEqual(output, {});
