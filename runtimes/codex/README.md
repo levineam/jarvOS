@@ -266,3 +266,13 @@ the configured `Notes/` directory, link exactly once from
 `Journal/YYYY-MM-DD.md`, record source-backed provenance, and leave QMD/search
 freshness as `pending-refresh`. Codex must not create guessed daily journal
 files under `Notes/`.
+
+Native stewardship hooks require `JARVOS_STEWARDSHIP_BRIDGE_COMMAND` to name a
+canonical absolute executable with trusted ownership, safe ancestor permissions
+and no symlinks. They use system Git and constrain bridge helper/interpreter PATH
+to `/usr/bin:/bin`; bridge scripts must bind any other interpreter explicitly.
+Claude setup still accepts a bounded command name plus an approved bridge bin,
+then persists the resulting absolute identity. Session environment persistence
+does not extend PATH. Unconfigured or unsafe commands remain unavailable without
+probing workspace commands. Platforms without POSIX ownership verification fail
+closed. Protected selected-runtime adoption remains a separate operation.

@@ -688,12 +688,16 @@ function setStewardshipBridgeEnvironment(content, bridge) {
   return lines.join('\n');
 }
 
+const { trustedExecutable } = require(path.resolve(path.dirname(turnHookScript), '../../modules/jarvos-runtime-kit/src/trusted-native-command.js'));
+
 function stewardshipBridgeEnvironment(command, codexMapRoot) {
   if (!command && !codexMapRoot) return undefined;
-  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(command || '')) fail('JARVOS_STEWARDSHIP_BRIDGE_COMMAND must be a bounded executable name');
+  if (!path.isAbsolute(command || '')) fail('JARVOS_STEWARDSHIP_BRIDGE_COMMAND must be an absolute path');
+  const executable = trustedExecutable(command);
+  if (!executable) fail('JARVOS_STEWARDSHIP_BRIDGE_COMMAND must identify a trusted executable path');
   if (!path.isAbsolute(codexMapRoot || '')) fail('JARVOS_STEWARDSHIP_CODEX_SESSION_MAP_ROOT must be an absolute path');
   return {
-    JARVOS_STEWARDSHIP_BRIDGE_COMMAND: command,
+    JARVOS_STEWARDSHIP_BRIDGE_COMMAND: executable,
     JARVOS_STEWARDSHIP_CODEX_SESSION_MAP_ROOT: codexMapRoot,
   };
 }
