@@ -1011,7 +1011,7 @@ function prepareStableStewardshipBundle(temp, rootName = 'managed-harness-bin', 
   fs.chmodSync(path.join(plugin, 'openclaw.plugin.json'), 0o600);
   fs.writeFileSync(path.join(plugin, 'jarvos-next-turn-plugin.js'), 'module.exports = {};\n', { mode: 0o600 });
   fs.chmodSync(path.join(plugin, 'jarvos-next-turn-plugin.js'), 0o600);
-  return root;
+  return fs.realpathSync(root);
 }
 
 function prepareFakeOpenClaw(temp) {
@@ -1232,6 +1232,37 @@ test('OpenClaw rejects relative, missing, and unsafe stable plugin bundles witho
   } finally { fs.rmSync(temp, { recursive: true, force: true }); }
 });
 
+for (const runtime of RUNTIMES) {
+  test(`${runtime} setup rejects replaceable and symlinked stable ancestors before changing user config`, () => {
+    const temp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-stable-ancestry-')));
+    try {
+      const home = path.join(temp, 'home'); fs.mkdirSync(home, { mode: 0o700 });
+      const config = path.join(home, 'config'); fs.writeFileSync(config, 'unrelated user configuration\n');
+      const bin = path.join(temp, 'bin'); fs.mkdirSync(bin, { mode: 0o700 });
+      for (const command of ['claude', 'codex', 'openclaw']) fs.writeFileSync(path.join(bin, command), "#!/bin/sh\nprintf '[]\\n'\n", { mode: 0o700 });
+      const shared = path.join(temp, 'shared'); fs.mkdirSync(shared, { mode: 0o777 }); fs.chmodSync(shared, 0o777);
+      const unsafe = prepareStableStewardshipBundle(shared);
+      const parent = path.join(temp, 'real'); fs.mkdirSync(parent, { mode: 0o700 });
+      prepareStableStewardshipBundle(parent);
+      const link = path.join(temp, 'link'); fs.symlinkSync(parent, link);
+      for (const stable of [unsafe, path.join(link, 'managed-harness-bin')]) {
+        const result = runSetupResult(path.join(ROOT, 'runtimes', runtime, 'setup.sh'), cleanEnv({
+          HOME: home, PATH: `${bin}${path.delimiter}${process.env.PATH}`, CODEX_HOME: path.join(home, '.codex'),
+          HERMES_HOME: path.join(home, '.hermes'), HERMES_CONFIG: config,
+          CLAUDE_SETTINGS: config, CLAUDE_DESKTOP_CONFIG: config, CLAUDE_MD_PATH: config,
+          CODEX_CONFIG: config, OPENCLAW_CONFIG_PATH: config,
+          JARVOS_MANAGED_REPOSITORIES: '/managed/repo', JARVOS_STEWARDSHIP_ONLY: '1',
+          JARVOS_MANAGED_HARNESS_STATE_ROOT: path.join(temp, 'state'),
+          JARVOS_STEWARDSHIP_STABLE_ROOT: stable,
+        }));
+        assert.notEqual(result.status, 0);
+        assert.match(result.stderr, /stable .* (missing or unsafe|is missing or unsafe)/);
+        assert.equal(fs.readFileSync(config, 'utf8'), 'unrelated user configuration\n');
+      }
+    } finally { fs.rmSync(temp, { recursive: true, force: true }); }
+  });
+}
+
 test('Hermes stewardship-only setup records exact consent idempotently and removes only that consent on rollback', () => {
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-hermes-stewardship-setup-'));
   const home = path.join(temp, 'home'); const config = path.join(temp, 'config.yaml'); const staged = path.join(temp, 'stage'); const allowlist = path.join(home, '.hermes', 'shell-hooks-allowlist.json');
@@ -1252,7 +1283,7 @@ test('Hermes stewardship-only setup records exact consent idempotently and remov
 });
 
 test('Claude setup merges both jarvOS lifecycle hooks without replacing user hooks', () => {
-  const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-claude-hook-setup-'));
+  const temp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-claude-hook-setup-')));
   const settings = path.join(temp, 'settings.json');
   const desktop = path.join(temp, 'desktop.json');
   const staged = path.join(temp, 'staged-public');
