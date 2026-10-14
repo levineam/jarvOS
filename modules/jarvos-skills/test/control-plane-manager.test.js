@@ -48,13 +48,13 @@ test('repeated clean repair is a redacted no-op without changing manager state',
     const catalog = { entries: [{ id: 'clean-skill', allowedHarnesses: ['codex'], bundle: { root: 'clean-skill', allowlist: ['SKILL.md'], treeDigest: tree.treeDigest } }] };
     const principal = { kind: 'human', capabilities: ['skills.mutate'] };
     const manager = createSharedSkillManager({ stateRoot: root, scheduler: { register: () => ({ status: 'registered' }) } });
-    manager.execute({ operation: 'enable', principal, harnesses: [{ id: 'codex', root: harnessRoot }] });
+    manager.execute({ operation: 'enable', principal, catalog, publicSourceRoot: sourceRoot, harnesses: [{ id: 'codex', root: harnessRoot }] });
     const applied = manager.execute({ operation: 'apply', principal, catalog, publicSourceRoot: sourceRoot, harnesses: [{ id: 'codex', root: harnessRoot }] });
     assert.equal(applied.status, 'applied');
     assert.deepEqual(applied.result.applied, [{ id: 'clean-skill', harness: 'codex', effectiveName: 'clean-skill', status: 'missing', applied: true }]);
     const stateFile = path.join(root, 'shared-skills-state.json'); const before = fs.readFileSync(stateFile, 'utf8');
     const repaired = manager.execute({ operation: 'repair', principal, catalog, publicSourceRoot: sourceRoot, harnesses: [{ id: 'codex', root: harnessRoot }] });
-    assert.deepEqual(repaired, { operation: 'repair', status: 'noop', state: { generation: 2, enabled: true, enrolled: ['codex'], acceptedGeneration: null, lastCatalogDigest: applied.state.lastCatalogDigest } });
+    assert.deepEqual(repaired, { operation: 'repair', status: 'noop', state: { generation: 2, enabled: true, enrolled: ['codex'], acceptedGeneration: applied.state.acceptedGeneration, lastCatalogDigest: applied.state.lastCatalogDigest } });
     assert.equal(fs.readFileSync(stateFile, 'utf8'), before);
     assert.equal(fs.existsSync(path.join(root, 'reconciliation', 'shared-skill-reconcile.journal.json')), false);
   } finally {
