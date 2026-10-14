@@ -86,19 +86,18 @@ function resolveHostCredential(env = process.env) {
   return null;
 }
 
-// Bind shared-skill ownership independently from the broader control plane.
-// Existing authenticated control-plane hosts remain compatible, but callers
-// can never supply either credential through MCP arguments.
+// Bind shared-skill ownership only through the dedicated host-bound owner
+// credential file. Control-plane credentials (ambient or file, whatever the
+// host grants them) never imply skills ownership, and callers can never supply
+// either credential through MCP arguments.
 function resolveSharedSkillsOwnerCredential(env = process.env) {
   const file = env[SHARED_SKILLS_OWNER_CREDENTIAL_FILE_ENV];
-  if (typeof file === 'string' && file.length > 0) {
-    try {
-      return readCredentialFile(file);
-    } catch {
-      throw new Error('shared-skill owner credential file is unusable');
-    }
+  if (typeof file !== 'string' || file.length === 0) return null;
+  try {
+    return readCredentialFile(file);
+  } catch {
+    throw new Error('shared-skill owner credential file is unusable');
   }
-  return resolveHostCredential(env);
 }
 
 // ownerOnly distinguishes two trust policies sharing one ancestry check:
@@ -730,9 +729,12 @@ function sharedSkillsConfigPath(env = process.env, defaultPath = null) {
   return typeof defaultPath === 'function' ? defaultPath() : defaultPath || undefined;
 }
 
-function requireSharedSkillsOwnerSession() {
-  const credential = resolveSharedSkillsOwnerCredential();
+// The dedicated binding grants full shared-skill owner authority by host
+// contract, so the owner principal is constructed only here, after it loads.
+function requireSharedSkillsOwnerSession(env = process.env) {
+  const credential = resolveSharedSkillsOwnerCredential(env);
   if (!credential) throw new Error('shared-skill owner session is not configured for this MCP session');
+  return { kind: 'owner', capabilities: ['skills.decisions.read', 'skills.decisions.resolve'] };
 }
 
 function redactSharedSkillPlan(result, opaqueSkillId) {
@@ -827,20 +829,25 @@ async function callTool(name, args = {}, lifecycle = {}) {
     return textResult(JSON.stringify(result, null, 2), !result.ok);
   }
   if (name === 'jarvos_shared_skills') {
-    const skills = loadSharedSkills();
-    const configPath = sharedSkillsConfigPath(process.env, () => skills.loadConfig().path);
     const operation = args.operation;
-    if (operation === 'status') {
-      return textResult(JSON.stringify(skills.sharedStatusOperator({ configPath }), null, 2));
-    }
-    if (operation === 'explain') {
+    if (operation === 'status' || operation === 'explain') {
+      const skills = loadSharedSkills();
+      const configPath = sharedSkillsConfigPath(process.env, () => skills.loadConfig().path);
+      if (operation === 'status') {
+        return textResult(JSON.stringify(skills.sharedStatusOperator({ configPath }), null, 2));
+      }
       return textResult(JSON.stringify(skills.explainOperator({ configPath, id: args.id }), null, 2));
     }
+    // Every other operation is owner-only: deny before config resolution or
+    // any decision, ledger or inventory access.
+    let principal;
     try {
-      requireSharedSkillsOwnerSession();
+      principal = requireSharedSkillsOwnerSession();
     } catch (error) {
       return textResult(error.message, true);
     }
+    const skills = loadSharedSkills();
+    const configPath = sharedSkillsConfigPath(process.env, () => skills.loadConfig().path);
     if (operation === 'inventory') {
       return textResult(JSON.stringify(skills.inventoryStatusOperator({ configPath, persist: false }), null, 2));
     }
@@ -856,7 +863,6 @@ async function callTool(name, args = {}, lifecycle = {}) {
     if (operation === 'include') {
       return textResult(JSON.stringify(redactSharedSkillMutation(skills.includeSkillOperator({ configPath, id: args.id }), skills.opaqueSkillId), null, 2));
     }
-    const principal = { kind: 'owner', capabilities: ['skills.decisions.read', 'skills.decisions.resolve'] };
     if (operation === 'decisions') {
       return textResult(JSON.stringify(skills.decisionsOperator({ configPath, principal }), null, 2));
     }
