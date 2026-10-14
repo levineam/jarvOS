@@ -10,8 +10,14 @@
  * Each initialize issues a Mcp-Session-Id and a dedicated stdio child so
  * clients do not share one MCP session or JSON-RPC id space.
  *
- * createServer({ readOnly: true }) is opt-in and only enabled by the Muse
- * launcher (runtimes/muse/gateway.js). The default forwards everything.
+ * Policy modes (both opt-in; the default forwards the full MCP surface):
+ * - createServer({ readOnly: true }) is enabled only by the Muse launcher
+ *   (runtimes/muse/gateway.js): a fixed read-only tool subset.
+ * - createServer({ toolPolicy }) is a trusted, launcher-owned policy enabled
+ *   only by the Grok launcher (runtimes/grok-bot/gateway.js): a fixed tool set
+ *   with gateway-owned closed schemas and host-stamped write arguments. The
+ *   policy is never taken from requests or environment.
+ * The default full-surface gateway must not be reused for scoped clients.
  */
 
 const { randomUUID } = require('node:crypto');
@@ -34,7 +40,13 @@ const DEFAULT_REQUEST_TIMEOUT_MS = 15_000;
 const DEFAULT_MAX_SESSIONS = 32;
 const DEFAULT_SESSION_IDLE_MS = 15 * 60_000;
 const DEFAULT_PROTOCOL_VERSION = '2025-06-18';
-const SUPPORTED_PROTOCOL_VERSIONS = new Set([DEFAULT_PROTOCOL_VERSION]);
+const SUPPORTED_PROTOCOL_VERSIONS = new Set([
+  DEFAULT_PROTOCOL_VERSION,
+  // Grok Bot / Cursor Streamable HTTP clients commonly negotiate these.
+  '2025-11-25',
+  '2025-03-26',
+  '2024-11-05',
+]);
 
 // Read-only mode (opt-in, used only by runtimes/muse/gateway.js). These rules
 // are the gateway-owned closed schemas; the child's inputSchema is never
@@ -59,6 +71,14 @@ const READ_ONLY_TOOLS = Object.freeze({
   },
   jarvos_startup_brief: { properties: { query: QUERY_ARG, maxChars: MAX_CHARS_ARG } },
 });
+// Muse read-only mode is one instance of the generic host-owned tool policy:
+// { label, tools: { name: { properties, required?, writes?, transform? } } }.
+// Policies come from trusted launcher code only, never from client JSON.
+const READ_ONLY_POLICY = Object.freeze({ label: 'read-only', tools: READ_ONLY_TOOLS });
+const FORBIDDEN_ARGUMENT_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
+// Bounded, body-free error for policy write tools whose bridge call timed out
+// or failed. No automatic retry happens and no replay guarantee is implied.
+const WRITE_OUTCOME_UNCERTAIN = 'jarvOS write was sent but not confirmed (bridge timeout or failure): outcome uncertain. Check the note or thread before writing again; do not retry blindly.';
 const UNSAFE_TEXT = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/;
 const SAFE_CLIENT_INFO = /^[\x20-\x7e]{1,128}$/;
 
@@ -465,37 +485,64 @@ function matchesRule(rule, value) {
   if (rule.type === 'integer') return Number.isSafeInteger(value) && value >= rule.minimum && value <= rule.maximum;
   if (rule.type !== 'string' || typeof value !== 'string') return false;
   if (rule.enum) return rule.enum.includes(value);
-  if (value.length < (rule.minLength || 1) || value.length > rule.maxLength || UNSAFE_TEXT.test(value)) return false;
+  if (value.length < (rule.minLength ?? 1) || value.length > rule.maxLength || UNSAFE_TEXT.test(value)) return false;
   return !rule.pattern || new RegExp(rule.pattern).test(value);
 }
 
-// Rebuilds allowlisted arguments into a fresh null-prototype object, or null.
-function readOnlyToolArguments(name, args) {
-  const spec = READ_ONLY_TOOLS[name];
-  if (!isPlainObject(args)) return null;
+// Rebuilds allowlisted arguments of a closed spec into a fresh null-prototype
+// object, or null. Nested { type: 'object' } rules are validated as closed
+// objects too; prototype keys are always refused.
+function closedArguments(spec, args) {
+  if (!isPlainObject(args) || !isJsonRpcObject(spec) || !isPlainObject(spec.properties)) return null;
   const clean = Object.create(null);
   for (const key of Object.keys(args)) {
-    if (!hasOwn(spec.properties, key) || !matchesRule(spec.properties[key], args[key])) return null;
-    clean[key] = args[key];
+    if (FORBIDDEN_ARGUMENT_KEYS.has(key) || !hasOwn(spec.properties, key)) return null;
+    const rule = spec.properties[key];
+    if (rule.type === 'object') {
+      const nested = closedArguments(rule, args[key]);
+      if (!nested) return null;
+      clean[key] = nested;
+    } else if (matchesRule(rule, args[key])) {
+      clean[key] = args[key];
+    } else {
+      return null;
+    }
   }
   for (const key of spec.required || []) if (!hasOwn(clean, key)) return null;
   return clean;
 }
 
-function readOnlyToolSchema(name) {
-  const spec = READ_ONLY_TOOLS[name];
-  const schema = { type: 'object', additionalProperties: false, properties: spec.properties };
-  if (spec.required) schema.required = spec.required;
-  return JSON.parse(JSON.stringify(schema));
+// Gateway-owned closed discovery schema for a policy tool spec.
+function closedSchema(spec) {
+  const properties = {};
+  for (const [key, rule] of Object.entries(spec.properties)) {
+    properties[key] = rule.type === 'object' ? closedSchema(rule) : JSON.parse(JSON.stringify(rule));
+  }
+  const schema = { type: 'object', additionalProperties: false, properties };
+  if (spec.required) schema.required = [...spec.required];
+  return schema;
 }
 
 function rpcReject(status, id, code, message) {
   return { reject: { status, body: { jsonrpc: '2.0', id: id ?? null, error: { code, message } } } };
 }
 
-// Read-only gate for one client message: { reject }, { local } or { forward }.
-// Runs before session creation, so nothing denied ever reaches a child.
-function readOnlyDecision(message) {
+function resolveToolPolicy(readOnly, toolPolicy) {
+  if (toolPolicy == null) return readOnly ? READ_ONLY_POLICY : null;
+  if (readOnly) throw new Error('readOnly and toolPolicy are mutually exclusive');
+  if (!isJsonRpcObject(toolPolicy) || typeof toolPolicy.label !== 'string' || !SAFE_CLIENT_INFO.test(toolPolicy.label)
+    || !isPlainObject(toolPolicy.tools)
+    || !Object.values(toolPolicy.tools).every((spec) => isJsonRpcObject(spec) && isPlainObject(spec.properties))) {
+    throw new TypeError('toolPolicy must be a trusted host-owned policy object');
+  }
+  return toolPolicy;
+}
+
+// Policy gate for one client message: { reject }, { local } or { forward }
+// (plus write: true for policy write tools). Runs before session creation, so
+// nothing denied ever reaches a child.
+function policyDecision(policy, message) {
+  const gatewayLabel = `${policy.label} gateway`;
   if (message.jsonrpc !== '2.0' || typeof message.method !== 'string'
     || Object.keys(message).some((key) => !['jsonrpc', 'id', 'method', 'params'].includes(key))) {
     return rpcReject(400, null, -32600, 'Invalid Request');
@@ -503,7 +550,7 @@ function readOnlyDecision(message) {
   const { method } = message;
   if (!hasOwn(message, 'id')) {
     if (method === 'notifications/initialized' && isEmptyParams(message)) return { forward: { jsonrpc: '2.0', method } };
-    return rpcReject(400, null, -32601, 'notification not allowed by read-only gateway');
+    return rpcReject(400, null, -32601, `notification not allowed by ${gatewayLabel}`);
   }
   if (!isValidRequestId(message.id)) return rpcReject(400, null, -32600, 'Invalid Request');
   const { id } = message;
@@ -533,19 +580,40 @@ function readOnlyDecision(message) {
   if (method === 'tools/call') {
     const params = message.params;
     if (!isPlainObject(params) || Object.keys(params).some((key) => key !== 'name' && key !== 'arguments')
-      || typeof params.name !== 'string' || !hasOwn(READ_ONLY_TOOLS, params.name)) {
-      return rpcReject(200, id, -32602, 'tool not allowed by read-only gateway');
+      || typeof params.name !== 'string' || !hasOwn(policy.tools, params.name)) {
+      return rpcReject(200, id, -32602, `tool not allowed by ${gatewayLabel}`);
     }
-    const args = readOnlyToolArguments(params.name, hasOwn(params, 'arguments') ? params.arguments : {});
-    if (!args) return rpcReject(200, id, -32602, 'invalid arguments for read-only tool');
-    return { forward: { jsonrpc: '2.0', id, method, params: { name: params.name, arguments: args } } };
+    const spec = policy.tools[params.name];
+    const args = closedArguments(spec, hasOwn(params, 'arguments') ? params.arguments : {});
+    if (!args) return rpcReject(200, id, -32602, `invalid arguments for ${policy.label} tool`);
+    let forwardedArgs = args;
+    if (typeof spec.transform === 'function') {
+      // Trusted host-owned stamping runs only after closed validation.
+      try {
+        forwardedArgs = spec.transform(args);
+      } catch {
+        forwardedArgs = null;
+      }
+      if (!isJsonRpcObject(forwardedArgs)) return rpcReject(200, id, -32603, 'Internal error');
+    }
+    const decision = { forward: { jsonrpc: '2.0', id, method, params: { name: params.name, arguments: forwardedArgs } } };
+    if (spec.writes === true) decision.write = true;
+    return decision;
   }
   return rpcReject(200, id, -32601, 'Method not found');
 }
 
+function readOnlyDecision(message) {
+  return policyDecision(READ_ONLY_POLICY, message);
+}
+
+function shapeReadOnlyResponse(method, response) {
+  return shapePolicyResponse(READ_ONLY_POLICY, method, response);
+}
+
 // Narrows child responses: tools-only capabilities, allowlisted tools with
 // gateway-owned closed schemas, and errors without child-supplied data.
-function shapeReadOnlyResponse(method, response) {
+function shapePolicyResponse(policy, method, response) {
   if (!isJsonRpcObject(response)) return response;
   if (hasOwn(response, 'error')) {
     const error = isJsonRpcObject(response.error) ? response.error : {};
@@ -569,12 +637,12 @@ function shapeReadOnlyResponse(method, response) {
   if (method === 'tools/list') {
     const tools = [];
     for (const tool of Array.isArray(result.tools) ? result.tools : []) {
-      if (!isJsonRpcObject(tool) || typeof tool.name !== 'string' || !hasOwn(READ_ONLY_TOOLS, tool.name)) continue;
+      if (!isJsonRpcObject(tool) || typeof tool.name !== 'string' || !hasOwn(policy.tools, tool.name)) continue;
       if (tools.some((item) => item.name === tool.name)) continue;
       tools.push({
         name: tool.name,
         description: typeof tool.description === 'string' ? tool.description : '',
-        inputSchema: readOnlyToolSchema(tool.name),
+        inputSchema: closedSchema(policy.tools[tool.name]),
       });
     }
     return { jsonrpc: '2.0', id: response.id, result: { tools } };
@@ -593,7 +661,11 @@ function createServer({
   idleSessionMs = DEFAULT_SESSION_IDLE_MS,
   supportedProtocolVersions = SUPPORTED_PROTOCOL_VERSIONS,
   readOnly = false,
+  toolPolicy = null,
 }) {
+  // Throws before any timer, session or child exists when both are supplied.
+  const policy = resolveToolPolicy(readOnly, toolPolicy);
+  const restricted = policy !== null;
   const sessions = new Map();
   const sessionState = new Map();
   const factory = createBridge || (bridge ? () => bridge : () => startStdioBridge());
@@ -745,9 +817,9 @@ function createServer({
       return;
     }
 
-    if (req.method === 'GET' && readOnly) {
-      // No SSE stream in read-only mode, so child-originated messages have no
-      // delivery path and are dropped by the bridge.
+    if (req.method === 'GET' && restricted) {
+      // No SSE stream in read-only or tool-policy mode, so child-originated
+      // messages have no delivery path and are dropped by the bridge.
       res.writeHead(405, { allow: 'POST, DELETE', 'content-type': 'application/json' });
       res.end(JSON.stringify({ error: 'method not allowed' }));
       return;
@@ -777,7 +849,7 @@ function createServer({
     }
 
     if (req.method !== 'POST') {
-      res.writeHead(405, { allow: readOnly ? 'POST, DELETE' : 'GET, POST, DELETE', 'content-type': 'application/json' });
+      res.writeHead(405, { allow: restricted ? 'POST, DELETE' : 'GET, POST, DELETE', 'content-type': 'application/json' });
       res.end(JSON.stringify({ error: 'method not allowed' }));
       return;
     }
@@ -798,7 +870,7 @@ function createServer({
       return;
     }
 
-    const decision = readOnly ? readOnlyDecision(message) : null;
+    const decision = policy ? policyDecision(policy, message) : null;
     if (decision && decision.reject) {
       res.writeHead(decision.reject.status, { 'content-type': 'application/json' });
       res.end(JSON.stringify(decision.reject.body));
@@ -854,7 +926,7 @@ function createServer({
         : message;
       if (decision) forwardedMessage = decision.forward;
       let result = await resolved.bridge.send(forwardedMessage, requestTimeoutMs);
-      if (decision) result = shapeReadOnlyResponse(message.method, result);
+      if (decision) result = shapePolicyResponse(policy, message.method, result);
       const negotiatedVersion = result?.result?.protocolVersion;
       if (resolved.created && result && result.error) {
         disposeSession(resolved.id);
@@ -891,7 +963,10 @@ function createServer({
       const headers = { 'content-type': 'application/json' };
       if (!resolved.created) headers['mcp-session-id'] = resolved.id;
       res.writeHead(504, headers);
-      res.end(JSON.stringify({ jsonrpc: '2.0', id: message?.id ?? null, error: { code: -32000, message: error.message } }));
+      // Policy write tools: the child may already have applied the write, so
+      // report a bounded uncertain outcome without echoing the request.
+      const errorMessage = decision && decision.write === true ? WRITE_OUTCOME_UNCERTAIN : error.message;
+      res.end(JSON.stringify({ jsonrpc: '2.0', id: message?.id ?? null, error: { code: -32000, message: errorMessage } }));
     }
   });
   server.sessions = sessions;
@@ -930,16 +1005,19 @@ async function main(env = process.env) {
   return serve({ token, host, port, env });
 }
 
-async function serve({ token, host, port, env = process.env, readOnly = false, childEnv }) {
+async function serve({ token, host, port, env = process.env, readOnly = false, toolPolicy = null, childEnv }) {
+  if (readOnly && toolPolicy != null) throw new Error('readOnly and toolPolicy are mutually exclusive');
   const server = createServer({
     token,
     host,
     port,
     readOnly,
+    toolPolicy,
     createBridge: () => startStdioBridge({ env, childEnv }),
   });
   await listen(server, host, port);
-  process.stderr.write(`jarvos MCP Streamable HTTP ${readOnly ? '(read-only) ' : ''}listening on http://${host}:${port}${MCP_PATH}\n`);
+  const mode = readOnly ? '(read-only) ' : (toolPolicy != null ? '(tool policy) ' : '');
+  process.stderr.write(`jarvos MCP Streamable HTTP ${mode}listening on http://${host}:${port}${MCP_PATH}\n`);
   if (!isLoopbackHost(host)) {
     process.stderr.write('WARNING: non-loopback bind carries the bearer token in cleartext HTTP unless a TLS terminator sits in front.\n');
   }
@@ -965,6 +1043,8 @@ module.exports = {
   ALLOW_NON_LOOPBACK_ENV,
   DEFAULT_PORT,
   READ_ONLY_TOOLS,
+  DEFAULT_PROTOCOL_VERSION,
+  SUPPORTED_PROTOCOL_VERSIONS,
   resolveToken,
   trustedTokenFile,
   childEnvFrom,

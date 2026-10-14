@@ -31,13 +31,22 @@ test('grok-bot adapter is listed and satisfies the runtime contract', () => {
   assert.equal(manifest.targets[0].hydration.mode, 'manual');
   assert.equal(manifest.capabilityDescriptor.capabilities.context.startupHydration.status, 'unsupported');
   assert.match(manifest.targets[0].mcp.registration, /Do not register stdio MCP on the Grok Bot disk/);
+  assert.match(manifest.targets[0].mcp.registration, /runtimes\/grok-bot\/gateway\.js/);
+  assert.match(manifest.targets[0].mcp.registration, /JARVOS_GROK_MCP_TOKEN_FILE/);
+  assert.doesNotMatch(manifest.targets[0].hydration.command, /boot_jarvos/);
+  assert.deepEqual(manifest.sharedAgentContext.requiredTools, GROK_TOOLS);
   const validated = validateManifest(manifest);
   assert.equal(validated.ok, true, validated.errors.join('\n'));
   const checked = checkRuntime(ADAPTER, { root: ROOT });
   assert.equal(checked.ok, true, checked.errors.join('\n'));
 });
 
-test('grok-bot docs refuse stdio-on-the-box and require remote HTTP', () => {
+const GROK_TOOLS = [
+  'jarvos_hydrate', 'jarvos_startup_brief', 'jarvos_projects_context', 'jarvos_recall',
+  'jarvos_create_note', 'jarvos_session_thread_read', 'jarvos_session_thread_write', 'jarvos_journal_health',
+];
+
+test('grok-bot docs and setup use the scoped launcher, not stdio or the full-surface gateway', () => {
   const readme = fs.readFileSync(path.join(ROOT, 'runtimes/grok-bot/README.md'), 'utf8');
   const setup = fs.readFileSync(path.join(ROOT, 'runtimes/grok-bot/setup.sh'), 'utf8');
   for (const text of [readme, setup]) {
@@ -48,15 +57,144 @@ test('grok-bot docs refuse stdio-on-the-box and require remote HTTP', () => {
     assert.doesNotMatch(text, /claude mcp add --scope user jarvos -- node/);
     assert.match(text, /stdio/i);
     assert.match(text, /wrong machine|separate computer|Do not register/i);
+    assert.match(text, /runtimes\/grok-bot\/gateway\.js/);
+    assert.match(text, /JARVOS_GROK_MCP_TOKEN_FILE/);
+    assert.match(text, /8767/);
+    assert.match(text, /jarvos_hydrate/);
+    assert.doesNotMatch(text, /JARVOS_MCP_HTTP_/);
   }
-  assert.match(readme, /boot_jarvos/);
-  assert.match(readme, /jarvos_hydrate/);
+  for (const tool of GROK_TOOLS) assert.ok(readme.includes(tool), tool);
+  assert.match(readme, /legacy[^\n]*boot_jarvos/);
   assert.match(readme, /grok-bot-http/);
   assert.match(readme, /fail open|unreachable/i);
-  assert.match(readme, /JARVOS_MCP_HTTP_ALLOW_NON_LOOPBACK/);
-  assert.match(readme, /ssh -L|tunnel/i);
-  assert.match(readme, /full MCP surface|all registered tools/i);
+  assert.match(readme, /ssh -N -L|tunnel/i);
+  assert.match(readme, /Tailscale Funnel/);
+  assert.match(readme, /LaunchAgent|KeepAlive|supervised/i);
+  assert.match(readme, /2025-11-25/);
+  assert.match(readme, /2024 HTTP\+SSE transport is not claimed/);
+  assert.match(readme, /Obsidian|acknowledg/i);
+  assert.match(readme, /full-surface/);
+  assert.match(readme, /outcome uncertain/);
+  assert.match(readme, /JARVOS_CONFIG_PATH/);
+  assert.match(readme, /JARVOS_REQUIRE_ROUTE_CAPABILITY/);
+  assert.match(readme, /fail closed/);
+  assert.match(readme, /Mac mini/);
+  assert.match(readme, /no custom router/i);
+  assert.match(readme, /no silent cross-machine write fallback/i);
+  assert.match(readme, /nonce/);
+  const starts = setup.split('\n').filter((line) => /^\s*node\s+"/.test(line));
+  assert.ok(starts.length >= 1);
+  for (const line of starts) assert.match(line, /\$LAUNCHER/);
   assert.doesNotMatch(setup, /Bearer \$\{|Bearer \$\(cat/);
+  assert.doesNotMatch(setup, /launchctl|tailscale funnel|systemctl/);
+});
+
+test('grok-bot setup validates before creating a token, keeps it, and refuses generic reuse', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-grok-setup-'));
+  const setupPath = path.join(ROOT, 'runtimes/grok-bot/setup.sh');
+  const tokenFile = path.join(home, '.jarvos', 'grok-bot-mcp.token');
+  const baseEnv = { HOME: home, PATH: `${path.dirname(process.execPath)}:/usr/bin:/bin` };
+  const run = (extra = {}) => spawnSync('bash', [setupPath], { encoding: 'utf8', env: { ...baseEnv, ...extra }, timeout: 20000 });
+  try {
+    for (const extra of [{ JARVOS_GROK_MCP_PORT: '99999' }, { JARVOS_GROK_MCP_HOST: '0.0.0.0' }]) {
+      const refused = run(extra);
+      assert.notEqual(refused.status, 0, JSON.stringify(extra));
+      assert.equal(fs.existsSync(tokenFile), false, JSON.stringify(extra));
+    }
+
+    const cwd = path.join(home, 'relative-cwd');
+    fs.mkdirSync(cwd);
+    const relative = spawnSync('bash', [setupPath], {
+      cwd, encoding: 'utf8', env: { ...baseEnv, JARVOS_GROK_MCP_TOKEN_FILE: 'relative/grok.token' }, timeout: 20000,
+    });
+    assert.notEqual(relative.status, 0);
+    assert.match(relative.stderr, /JARVOS_GROK_MCP_TOKEN_FILE must be an absolute path/);
+    assert.deepEqual(fs.readdirSync(cwd), []);
+    assert.equal(fs.existsSync(path.dirname(tokenFile)), false);
+
+    const first = run();
+    assert.equal(first.status, 0, first.stderr);
+    const token = fs.readFileSync(tokenFile, 'utf8');
+    assert.ok(token.trim().length >= 32);
+    assert.equal(fs.statSync(tokenFile).mode & 0o777, 0o600);
+    assert.equal(`${first.stdout}${first.stderr}`.includes(token.trim()), false);
+    assert.match(first.stdout, /export JARVOS_GROK_MCP_PORT="8767"/);
+    assert.match(first.stdout, /export JARVOS_CONFIG_PATH=/);
+    assert.match(first.stdout, /runtimes\/grok-bot\/gateway\.js/);
+
+    const second = run();
+    assert.equal(second.status, 0, second.stderr);
+    assert.equal(fs.readFileSync(tokenFile, 'utf8'), token);
+    assert.ok(fs.readdirSync(path.dirname(tokenFile)).some((name) => name.includes('.bak-jarvos-')));
+
+    const reused = run({ JARVOS_MCP_HTTP_TOKEN_FILE: tokenFile });
+    assert.notEqual(reused.status, 0);
+    assert.equal(fs.readFileSync(tokenFile, 'utf8'), token);
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test('HTTP gateway accepts Cursor/Grok Bot MCP protocol versions and rejects unknown', async () => {
+  const gateway = require(GATEWAY);
+  assert.equal(gateway.DEFAULT_PROTOCOL_VERSION, '2025-06-18');
+  for (const version of ['2025-11-25', '2025-06-18', '2025-03-26', '2024-11-05']) {
+    assert.ok(gateway.SUPPORTED_PROTOCOL_VERSIONS.has(version), version);
+  }
+
+  const token = 'grok-bot-test-token-32chars-min';
+  const bridge = {
+    sseClients: new Set(),
+    send: async (message) => ({
+      jsonrpc: '2.0',
+      id: message.id,
+      result: {
+        protocolVersion: message.params?.protocolVersion || gateway.DEFAULT_PROTOCOL_VERSION,
+        capabilities: { tools: {} },
+        serverInfo: { name: 'jarvos', version: '0.1.0' },
+      },
+    }),
+    health: () => ({ alive: true, restarts: 0 }),
+  };
+  const server = gateway.createServer({ token, host: '127.0.0.1', port: 0, bridge });
+  await new Promise((resolve, reject) => server.listen(0, '127.0.0.1', (error) => error ? reject(error) : resolve()));
+  const { port } = server.address();
+  try {
+    for (const version of ['2025-11-25', '2025-06-18', '2025-03-26', '2024-11-05']) {
+      const ok = await httpRequest({
+        port,
+        path: '/mcp',
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          id: 1,
+          method: 'initialize',
+          params: { protocolVersion: version, capabilities: {}, clientInfo: { name: 'test', version: '0.1' } },
+        }),
+      });
+      assert.equal(ok.status, 200, version);
+      assert.equal(JSON.parse(ok.body).result.protocolVersion, version);
+      assert.ok(ok.headers['mcp-session-id']);
+    }
+
+    const rejected = await httpRequest({
+      port,
+      path: '/mcp',
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'initialize',
+        params: { protocolVersion: '1999-01-01', capabilities: {}, clientInfo: { name: 'test', version: '0.1' } },
+      }),
+    });
+    assert.equal(rejected.status, 400);
+    assert.match(rejected.body, /unsupported initialize protocol version/);
+  } finally {
+    await disposeServer(server);
+  }
 });
 
 test('HTTP gateway fails closed without a token and rejects bad auth', async () => {

@@ -7,116 +7,180 @@ does not auto-ingest all chats, and does not expose `SendMessage` or CloudAgent
 from this adapter.
 
 This connector is **operator-supervised** and sits **outside conformance**. It
-is not in `CANONICAL_HARNESS_IDS` and has no live lifecycle coverage.
+is not in `CANONICAL_HARNESS_IDS`, has no canonical-harness, skill or native
+dispatch support, and has no live lifecycle coverage.
 
 ## Why remote HTTP, not stdio
 
 `jarvos-mcp.js` is a stdio server that reads the vault on the machine where it
 runs. Registering that stdio command on the Grok Bot disk hydrates **Grok Bot's
-files**, not the vault host. v1 is an authenticated **Streamable HTTP** connector
-**on the vault host** (JSON-RPC responses in the POST body, `Mcp-Session-Id` per
-client). The Grok Bot client is only a **URL + token**.
+files** (the wrong machine), not the vault host. Do not register stdio MCP on
+the Grok Bot disk. The Grok Bot client is only a **remote URL + bearer token**
+pointing at an authenticated **Streamable HTTP** endpoint on the vault host
+(JSON-RPC responses in the POST body, `Mcp-Session-Id` per `initialize`).
 
-If the vault-host connector is unreachable, Grok Bot should fail open: continue
-the chat without jarvOS context instead of pretending the local box is the vault.
+If the endpoint is unreachable, Grok Bot should fail open: continue the chat
+without jarvOS context instead of pretending the local box is the vault.
 
-## Checked-in adapter status
+## Scoped Grok interface
 
-`grok-bot-http` uses **manual hydration**. `startupHydration` is unsupported.
+Grok Bot uses its own launcher, `runtimes/grok-bot/gateway.js`. It serves
+exactly eight tools with host-owned, closed argument schemas:
 
-When the remote connector is up:
+| Tool | Effect |
+| --- | --- |
+| `jarvos_hydrate` | read |
+| `jarvos_startup_brief` | read |
+| `jarvos_projects_context` | read |
+| `jarvos_recall` | read |
+| `jarvos_journal_health` | read |
+| `jarvos_session_thread_read` | read |
+| `jarvos_create_note` | write (host stamps `source_personality: grok-bot`) |
+| `jarvos_session_thread_write` | write (host stamps `host: grok-bot`, journal link) |
 
-1. Use the MCP prompt `boot_jarvos`, or
-2. Call the `jarvos_hydrate` tool.
+Unknown arguments are refused; attribution is stamped by the host after
+validation. Prompts and every other tool are denied. The policy is fixed in the
+launcher; `requiredTools` in `adapter.json` is only a declaration.
 
-Do not expect a SessionStart hook on Grok Bot.
+The general gateway `modules/jarvos-agent-context/scripts/jarvos-mcp-http.js`
+run directly is **full-surface** (all registered tools, including writes and
+control-plane). Do **not** reuse it, or its token, for this client. The Grok
+launcher reads only Grok credentials and refuses a token file or value shared
+with the generic or Muse gateway.
+
+## Hydration (manual)
+
+`grok-bot-http` uses **manual hydration**; `startupHydration` is unsupported
+and there is no SessionStart hook. After connecting, call the `jarvos_hydrate`
+tool. The legacy `boot_jarvos` prompt exists only on the general gateway; the
+scoped endpoint denies prompts, so do not use it here.
 
 ## What's here
 
 - `adapter.json` — public runtime declaration (not a canonical managed harness)
-- `setup.sh` — vault-host token + HTTP gateway helper
+- `gateway.js` — scoped Grok launcher (fixed eight-tool policy)
+- `setup.sh` — vault-host token preparation and read-only validation
 - this README
 
-Skill projection, CloudAgent-as-coding-host, and bidirectional memory sync are
-out of scope.
+## Stages (keep them separate)
 
-## Setup (vault host)
+1. **Preparation** (vault host): run `setup.sh`, configure the host.
+2. **Credential provisioning**: give Grok Bot the token out of band.
+3. **Public exposure**: TLS front (for example Tailscale Funnel) to loopback.
+4. **Protected activation**: operator starts the launcher under a supervisor.
+5. **Client qualification**: prove reads and writes end to end (below).
 
-Run from a jarvOS checkout **on the machine that holds the vault**:
+None of these happen implicitly; `setup.sh` performs only stage 1.
+
+## 1. Preparation (vault host)
 
 ```bash
 ./runtimes/grok-bot/setup.sh
 ```
 
-The script:
+The script validates `JARVOS_GROK_MCP_HOST` / `JARVOS_GROK_MCP_PORT` before
+touching any token, keeps an existing trusted owner-only regular token file
+(backed up, never rotated or printed), creates a new `0600` token only if
+absent (default `~/.jarvos/grok-bot-mcp.token`), then validates the result with
+the launcher's own resolver without starting a server. It does not install a
+daemon, service or Funnel.
 
-- refuses to write a stdio MCP command as if the vault lived on Grok Bot
-- creates an owner-only bearer token on the vault host (backed up first)
-- prints how to start the gateway and where the token file lives
-- does **not** print the live bearer token
+Environment controls (Grok-only names):
 
-Start the gateway on the vault host:
+- `JARVOS_GROK_MCP_TOKEN_FILE` — owner-only token file (preferred)
+- `JARVOS_GROK_MCP_HOST` — bind host, default `127.0.0.1`
+- `JARVOS_GROK_MCP_PORT` — required by the launcher; examples use `8767`
+- `JARVOS_GROK_MCP_ALLOW_NON_LOOPBACK=1` — explicit opt-in; the bearer token
+  would travel as cleartext HTTP unless TLS terminates in front. Not a default.
+
+Safe host configuration: set `JARVOS_CONFIG_PATH` to this host's config that
+names the canonical vault. The existing note/thread writer must already be
+qualified on this host. Enforcement flags `JARVOS_REQUIRE_ROUTE_CAPABILITY`
+and `JARVOS_REQUIRE_CANONICAL_VAULT` are forwarded to the child; route
+secrets, caller capabilities and owner/module bindings are not. A host that
+requires a route capability may therefore **fail closed** until a proper
+adapter exists; do not disable enforcement to work around it.
+
+Start (operator-supervised, manual):
 
 ```bash
-export JARVOS_MCP_HTTP_TOKEN_FILE="$HOME/.jarvos/grok-bot-mcp.token"
-node modules/jarvos-agent-context/scripts/jarvos-mcp-http.js
+export JARVOS_CONFIG_PATH=/ABS/PATH/TO/jarvos.config.json
+export JARVOS_GROK_MCP_TOKEN_FILE="$HOME/.jarvos/grok-bot-mcp.token"
+export JARVOS_GROK_MCP_PORT=8767
+node runtimes/grok-bot/gateway.js
 ```
 
-Defaults: bind `127.0.0.1:8765`. Missing token fails closed (the process will
-not start). The gateway speaks Streamable HTTP: POST `/mcp`, JSON response in
-the body, `Mcp-Session-Id` issued on `initialize`. Each session gets its own
-`jarvos-mcp.js` child.
+Missing or reused credentials fail closed (the process will not start).
 
-### Reaching Grok Bot (loopback is the vault host)
+## 2–3. Credential provisioning and public exposure
 
-`http://127.0.0.1:8765/mcp` is reachable only **on the vault host**. Grok Bot is
-a different computer; its loopback is not this process. Pick one:
+`http://127.0.0.1:8767/mcp` is reachable only **on the vault host**. Pick one:
 
 1. **SSH tunnel** (token stays on loopback at both ends):
 
    ```bash
-   ssh -N -L 8765:127.0.0.1:8765 user@vault-host
+   ssh -N -L 8767:127.0.0.1:8767 user@vault-host
    ```
 
-   Then point Grok Bot at `http://127.0.0.1:8765/mcp` **on the machine where
-   that tunnel is listening**.
-
-2. **Non-loopback bind** (explicit, and the bearer token is cleartext HTTP
-   unless you terminate TLS in front):
+2. **Tailscale Funnel** (or another TLS reverse proxy) to the loopback launcher:
 
    ```bash
-   export JARVOS_MCP_HTTP_HOST=0.0.0.0
-   export JARVOS_MCP_HTTP_ALLOW_NON_LOOPBACK=1
+   tailscale funnel --bg http://127.0.0.1:8767
+   tailscale funnel status
    ```
 
-   Put a TLS reverse proxy in front before exposing this beyond a trusted LAN.
+   Point Grok Bot at the HTTPS URL plus `/mcp` (for example
+   `https://<vault-host>.<tailnet>.ts.net/mcp`) with
+   `Authorization: Bearer <token>`. If the launcher dies, Funnel returns 502.
 
-`JARVOS_MCP_HTTP_TOKEN_FILE` may override the default token path; treat that
-file as secret and do not paste it into agent transcripts.
+Provision the token to Grok Bot out of band; never paste it into transcripts.
 
-### Grok Bot client
+## 4. Protected activation (supervised)
 
-In Grok Bot, add a remote MCP server using **Streamable HTTP**:
+Ad-hoc shells exit with their session. Prefer a user LaunchAgent (macOS) or
+equivalent supervisor with `KeepAlive`, running `node
+/ABS/PATH/TO/jarvOS/runtimes/grok-bot/gateway.js` with
+`JARVOS_GROK_MCP_TOKEN_FILE`, `JARVOS_GROK_MCP_HOST=127.0.0.1`,
+`JARVOS_GROK_MCP_PORT=8767` and `JARVOS_CONFIG_PATH` in its environment. Load it
+yourself (`launchctl bootstrap gui/$(id -u) <plist>`); nothing here installs it.
 
-- URL: the **tunneled or TLS** vault-host URL (not the vault host's loopback
-  unless a tunnel is listening on the Grok Bot side)
-- Auth: `Authorization: Bearer <token from the token file>`
+## Write timeouts
 
-Do **not** add `node .../jarvos-mcp.js` as a stdio server on Grok Bot.
+If `jarvos_create_note` or `jarvos_session_thread_write` times out, the result
+is **outcome uncertain**: the write may or may not have landed. Do not retry
+blindly; read back (`jarvos_session_thread_read`, `jarvos_recall`) first.
+`jarvos_create_note` follows the vault mutation contract: Obsidian should be
+open on the vault host so pending mutations can be acknowledged/reconciled.
 
-The bearer token grants the **full MCP surface** of `jarvos-mcp.js` (all
-registered tools, including writes and control-plane), not only the five
-`requiredTools` listed in `adapter.json`. Those names are the hydration
-contract, not a gateway allowlist.
+## Choosing a machine
 
-If the URL does not respond, leave jarvOS unhydrated and continue. That is the
-supported fail-open path.
+The Mac mini is the primary example vault host; a MacBook may be added later
+only after it is qualified the same way. Each machine runs its own launcher and
+is a separate native named connector in Grok Bot; the connector URL selects the
+machine. There is no custom router and no silent cross-machine write fallback:
+select the target explicitly. Every target must use the same canonical
+session-thread id and storage destination.
+
+## 5. Client qualification
+
+Before relying on a target, pass a both-direction proof: Grok Bot writes a
+fresh nonce with `jarvos_session_thread_write` and the vault host confirms it;
+the host writes a nonce/test result Grok Bot then reads back with
+`jarvos_session_thread_read`. Repeat per target. Public tests use fakes only
+and are not live client conformance.
+
+## Protocol versions
+
+`initialize` accepts the dated allowlist (`2025-11-25`, `2025-06-18`,
+`2025-03-26`, `2024-11-05`); the child negotiates a supported version and the
+gateway pins it for the session. This is Streamable HTTP only: the legacy
+2024 HTTP+SSE transport is not claimed, nor is live Grok client conformance.
 
 ## Intentional capture
 
-When the user asks to save a note or idea through Grok Bot, use the shared
-capture path with source `grok-bot`. Do not raw-write vault Markdown on the Grok
-Bot disk.
+When the user asks to save a note or idea through Grok Bot, use
+`jarvos_create_note` via this endpoint. Do not raw-write vault Markdown on the
+Grok Bot disk.
 
 ## Verification
 
