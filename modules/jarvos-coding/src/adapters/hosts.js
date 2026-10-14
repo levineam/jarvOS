@@ -1,6 +1,7 @@
 'use strict';
 
 const { runTakeIssueToDone } = require('../features/orchestrator');
+const { assertIssueIdentity } = require('../features/orchestrator/work-identity');
 const { evaluateSubmissionGate } = require('../lifecycle/policy');
 
 function controlPlaneContractVersion() {
@@ -307,26 +308,6 @@ function issueIdentifierFor(command = {}) {
   return String(identifier);
 }
 
-function assertIssueIdentity(value, issueIdentifier, location, seen = new Set()) {
-  if (!value || typeof value !== 'object' || seen.has(value)) return;
-  seen.add(value);
-
-  if (Object.hasOwn(value, 'issueIdentifier')
-    && String(value.issueIdentifier) !== issueIdentifier) {
-    throw new Error(`${location}.issueIdentifier must match command.resource.id`);
-  }
-  if (value.issue && typeof value.issue === 'object'
-    && Object.hasOwn(value.issue, 'identifier')
-    && String(value.issue.identifier) !== issueIdentifier) {
-    throw new Error(`${location}.issue.identifier must match command.resource.id`);
-  }
-
-  for (const [key, child] of Object.entries(value)) {
-    if (key !== 'issue' && child && typeof child === 'object') {
-      assertIssueIdentity(child, issueIdentifier, `${location}.${key}`, seen);
-    }
-  }
-}
 
 function eventsByStage(result = {}) {
   const events = Array.isArray(result.events) ? result.events : [];
@@ -662,7 +643,10 @@ function createCodingControlPlanePort(options = {}) {
 
     // Idempotent redelivery must not depend on a still-current lease fence.
     const completedResult = completed.get(command.id);
-    if (completedResult) return completedResult;
+    if (completedResult) {
+      assertIssueIdentity(completedResult, issueIdentifier, 'cached execution');
+      return completedResult;
+    }
 
     context.assertCurrentFence();
 
@@ -679,6 +663,7 @@ function createCodingControlPlanePort(options = {}) {
       deliveryTrace: args.deliveryTrace,
       resumeFrom: command.checkpoint || args.resumeFrom || null,
       controlPlane: {
+        issueIdentifier,
         commandId: command.id,
         fence: context.fence,
         desiredGeneration: command.desiredGeneration,
@@ -716,8 +701,16 @@ function createCodingControlPlanePort(options = {}) {
     return execution;
   }
 
-  async function verify(_command, context = {}) {
+  async function verify(command, context = {}) {
     const execution = context.execution;
+    try {
+      const issueIdentifier = issueIdentifierFor(command);
+      assertIssueIdentity(command.commandSpec?.arguments, issueIdentifier, 'command arguments');
+      assertIssueIdentity(command.checkpoint, issueIdentifier, 'command checkpoint');
+      assertIssueIdentity(execution, issueIdentifier, 'execution');
+    } catch (error) {
+      return { outcome: 'unverifiable', verifier: `${CODING_MANAGER_ID}.verify`, reason: error.message };
+    }
     if (!execution || !execution.submissionEvidence) {
       return {
         outcome: 'unverifiable',

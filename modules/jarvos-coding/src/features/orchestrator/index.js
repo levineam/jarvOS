@@ -1,5 +1,7 @@
 'use strict';
 
+const { assertIssueIdentity } = require('./work-identity');
+
 const { evaluateDeliveryTrace } = require('../delivery-trace');
 const { assertReviewEngineAdapter } = require('../review-engine');
 const {
@@ -186,6 +188,12 @@ function resolveResumePlan(input = {}, entrySessionState = null) {
 
   let reattachment = null;
   for (const candidate of candidates) {
+    if (input.controlPlane?.issueIdentifier) {
+      try { assertIssueIdentity(candidate, input.controlPlane.issueIdentifier, 'resume'); } catch (error) {
+        if (candidate === input.resumeFrom || candidate === input.checkpoint) throw error;
+        continue; // A different session's implicit state cannot select this command's work item.
+      }
+    }
     const hints = extractReattachmentHints(candidate);
     if (hints) {
       reattachment = hints;
@@ -309,6 +317,8 @@ async function runTakeIssueToDone(input = {}, adapters = {}) {
     ? input.controlPlane
     : null;
 
+  if (controlPlane?.issueIdentifier) assertIssueIdentity(input, controlPlane.issueIdentifier, 'coding input');
+
   const context = {
     branch: input.branch || input.branchName || `${issueIdentifier}/take-issue-to-done`,
     baseRef: input.baseRef || 'origin/main',
@@ -344,6 +354,7 @@ async function runTakeIssueToDone(input = {}, adapters = {}) {
     // The claim adapter establishes the durable work reference. Install it
     // before recording the claim milestone so the activity receipt is bound
     // to Beads rather than the pre-claim context.
+    if (stage === 'claim' && controlPlane?.issueIdentifier) assertIssueIdentity(result, controlPlane.issueIdentifier, 'claim result');
     if (stage === 'claim' && result?.workReference) context.workReference = result.workReference;
     if (stage === 'claim' && result?.executionLink) context.executionReference = result.executionLink;
 

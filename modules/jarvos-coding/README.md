@@ -672,3 +672,11 @@ Historical Paperclip compatibility flow (not the default lifecycle):
    `jarvos-release-intake` document/update path, including `releasePlacement`,
    `targetVersion`, `releaseParentIssue`, `releaseRationale`, and
    `verificationGate`.
+
+Coding control-plane commands bind execution and verification to
+`command.resource.id`, the exact authorized issue or execution work-item identity.
+Explicit issue/work references and resume checkpoints must agree with it. A
+foreign implicit session checkpoint is ignored before tracker mutation; a
+same-resource checkpoint remains a pointer to revalidate. Cached completion and
+verification cannot be reused for a different resource. Canonical project and
+outcome references remain separate from the execution item.

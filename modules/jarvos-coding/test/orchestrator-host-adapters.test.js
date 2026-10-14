@@ -945,3 +945,46 @@ test('Hermes host adapter registers the existing coding entrypoint once with poi
     /continuityReference may not include transcript/,
   );
 });
+
+test('control-plane work references cannot redirect an authorized resource through resume aliases', async () => {
+  let calls = 0;
+  const port = createCodingControlPlanePort({ hostAdapter: { runTakeIssueToDone: async () => { calls += 1; return completedOrchestration(); } } });
+  for (const checkpoint of [
+    { workReference: { authority: 'beads', itemId: 'bd-other' } },
+    { codeThread: { issueIdentifier: 'SUP-2214', workReference: { authority: 'beads', id: 'bd-other' } } },
+    { workRef: 'bd-other' },
+    { artifact: { kind: 'beads-work-item', itemId: 'bd-other' } },
+  ]) {
+    await assert.rejects(() => port.executeFenced(codingCommand({ checkpoint }), { fence: 1, assertCurrentFence() {} }), /must match command.resource.id/);
+  }
+  assert.equal(calls, 0);
+});
+
+test('control-plane discards foreign implicit session work before a tracker mutation and preserves same-resource resume', async () => {
+  for (const itemId of ['bd-other', 'SUP-2214']) {
+    const sessionState = createMemorySessionStateStore({
+      codeThread: { issueIdentifier: 'SUP-2214', branch: 'resumed-branch', workReference: { authority: 'beads', itemId } },
+    });
+    const adapters = buildAdapters([], sessionState);
+    const claims = [];
+    adapters.tracker.claimIssue = async (input) => {
+      claims.push(input);
+      return { status: 'claimed', workReference: { authority: 'beads', itemId: 'SUP-2214' } };
+    };
+    const port = createCodingControlPlanePort({ adapters });
+    const execution = await port.executeFenced(codingCommand(), { fence: 1, assertCurrentFence() {} });
+    assert.equal(execution.status, 'completed');
+    assert.equal(claims.length, 1);
+    assert.equal(claims[0].issueIdentifier, 'SUP-2214');
+    assert.equal(claims[0].workReference?.itemId || null, itemId === 'SUP-2214' ? itemId : null);
+  }
+});
+
+test('control-plane verifier and completed cache stay bound to the authorized resource', async () => {
+  const port = createCodingControlPlanePort({ hostAdapter: { runTakeIssueToDone: async () => completedOrchestration() } });
+  const execution = await port.executeFenced(codingCommand(), { fence: 1, assertCurrentFence() {} });
+  const other = codingCommand({ resource: { type: 'paperclip-issue', id: 'SUP-OTHER' }, commandSpec: { operation: 'take-issue-to-done', arguments: { issueIdentifier: 'SUP-OTHER' } } });
+  await assert.rejects(() => port.executeFenced(other, { assertCurrentFence() {} }), /must match command.resource.id/);
+  assert.equal((await port.verify(other, { execution })).outcome, 'unverifiable');
+  assert.equal((await port.verify(codingCommand(), { execution })).outcome, 'satisfied');
+});
