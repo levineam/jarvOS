@@ -1015,3 +1015,27 @@ test('host-approved issue and Beads identities remain distinct and caller resume
   assert.equal((await port.verify(command, { execution })).outcome, 'satisfied');
   assert.equal(await port.executeFenced(command, { assertCurrentFence() { throw new Error('redelivery has no lease'); } }), execution);
 });
+
+test('mapped resume aliases retain the canonical host execution selector before claim and later stages', async () => {
+  for (const workReference of ['bd-approved', { authority: 'beads', id: 'bd-approved' }, { authority: 'beads', ref: 'bd-approved' }]) {
+    const approvedWorkBinding = { resourceId: 'SUP-2214', workReference: { authority: 'beads', itemId: 'bd-approved' } };
+    const adapters = buildAdapters([]);
+    let claims = 0;
+    adapters.tracker.claimIssue = async (input) => {
+      assert.deepEqual(input.workReference, approvedWorkBinding.workReference);
+      claims += 1;
+      return { status: 'claimed', workReference };
+    };
+    const createBranch = adapters.git.createBranch;
+    adapters.git.createBranch = async (input) => {
+      assert.deepEqual(input.workReference, approvedWorkBinding.workReference);
+      return createBranch(input);
+    };
+    const port = createCodingControlPlanePort({ adapters, approvedWorkBinding });
+    const command = codingCommand({ checkpoint: { workReference } });
+    const execution = await port.executeFenced(command, { fence: 1, assertCurrentFence() {} });
+    assert.equal(execution.status, 'completed');
+    assert.equal(claims, 1);
+    assert.equal((await port.verify(command, { execution })).outcome, 'satisfied');
+  }
+});

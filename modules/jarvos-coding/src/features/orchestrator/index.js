@@ -211,7 +211,7 @@ function resolveResumePlan(input = {}, entrySessionState = null) {
     // Always re-run stages. Resume never advances the stage cursor.
     startIndex: 0,
     branch: branch || null,
-    workReference: reattachment?.workReference || input.workReference || input.workRef || null,
+    workReference: input.controlPlane?.workReference || reattachment?.workReference || input.workReference || input.workRef || null,
     pullRequest: reattachment?.pullRequest || null,
     reattachment,
     // Intentionally empty: prior checkpoint events are not durable proof.
@@ -355,7 +355,7 @@ async function runTakeIssueToDone(input = {}, adapters = {}) {
     // before recording the claim milestone so the activity receipt is bound
     // to Beads rather than the pre-claim context.
     if (stage === 'claim' && controlPlane?.issueIdentifier) assertIssueIdentity(result, controlPlane, 'claim result');
-    if (stage === 'claim' && result?.workReference) context.workReference = result.workReference;
+    if (stage === 'claim' && result?.workReference) context.workReference = controlPlane?.workReference || result.workReference;
     if (stage === 'claim' && result?.executionLink) context.executionReference = result.executionLink;
 
     const event = buildStageEvent(stage, result, {
@@ -404,7 +404,7 @@ async function runTakeIssueToDone(input = {}, adapters = {}) {
     controlPlane,
     reattach,
   }));
-  context.workReference = claim?.workReference || context.workReference;
+  context.workReference = controlPlane?.workReference || claim?.workReference || context.workReference;
 
   const branch = await runStage('branch', () => requireFn(adapters.git, 'createBranch', 'branch')({
     issue: input.issue,
