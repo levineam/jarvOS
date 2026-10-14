@@ -20,6 +20,7 @@ test('Claude setup materializes a quoted capture path that ignores a hostile wor
       'runtimes/claude/setup.sh',
       'runtimes/claude/templates/CLAUDE.md.template',
       'modules/jarvos-instruction-projection/content/durable-orientation.md',
+      'modules/jarvos-runtime-kit/src/trusted-native-command.js',
     ]) {
       const destination = path.join(install, relative);
       fs.mkdirSync(path.dirname(destination), { recursive: true });

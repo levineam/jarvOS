@@ -4,6 +4,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
+const { trustedExecutable } = require('../../modules/jarvos-runtime-kit/src/trusted-native-command.js');
 const {
   PRESENCE_CAPABILITIES,
   STEWARDSHIP_ADAPTER_VERSION,
@@ -18,7 +19,7 @@ const {
 const HARNESS = 'claude-code';
 const BRIDGE_COMMAND_ENV = 'JARVOS_STEWARDSHIP_BRIDGE_COMMAND';
 const CLAUDE_SESSION_ID_ENV = 'JARVOS_STEWARDSHIP_CLAUDE_SESSION_ID';
-const BRIDGE_COMMAND = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+
 const CLAUDE_SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const DEFAULT_BRIDGE_TIMEOUT_MS = 5000;
 // projectsContextStart/Refresh are hard, single-shot deadlines: a hung or
@@ -30,7 +31,7 @@ const BRIDGE_CAPABILITY_TIMEOUT_MS = Object.freeze({
 });
 
 function gitOutput(cwd, args) {
-  const result = spawnSync('git', ['-C', cwd, ...args], { encoding: 'utf8' });
+  const result = spawnSync('/usr/bin/git', ['-C', cwd, ...args], { encoding: 'utf8', env: { PATH: '/usr/bin:/bin' } });
   return result.status === 0 ? result.stdout.trim() : '';
 }
 
@@ -58,8 +59,9 @@ function isolationState(options = {}) {
 }
 
 function bridgeCommand(options = {}) {
-  const command = options.bridgeCommand === undefined ? process.env[BRIDGE_COMMAND_ENV] : options.bridgeCommand;
-  return typeof command === 'string' && BRIDGE_COMMAND.test(command) ? command : null;
+  const env = { ...process.env, ...(options.env || {}) };
+  const command = options.bridgeCommand === undefined ? env[BRIDGE_COMMAND_ENV] : options.bridgeCommand;
+  return trustedExecutable(command);
 }
 
 function suppliedInputValue(input, key) {
@@ -104,8 +106,8 @@ function bridgeEnvironment(options = {}) {
 }
 
 function invokeBridge(capability, options = {}) {
-  const isolation = isolationState(options);
   const command = bridgeCommand(options);
+  const isolation = command ? isolationState(options) : { preferredIsolationMode: 'native', isolationMode: 'managed-launcher', isolatedWorktree: false, requiresVerifiedWorktreeEvidence: true };
   const base = { capability, available: false, ...isolation };
   if (!command) return { ...base, pendingInSessionInput: false, reason: 'bridge-not-configured' };
   const env = bridgeEnvironment(options);
@@ -119,7 +121,7 @@ function invokeBridge(capability, options = {}) {
     cwd: options.cwd || process.cwd(),
     encoding: 'utf8',
     timeout: BRIDGE_CAPABILITY_TIMEOUT_MS[capability] || DEFAULT_BRIDGE_TIMEOUT_MS,
-    env,
+    env: { ...env, PATH: '/usr/bin:/bin' },
   });
   if (capability === 'projectsContextStart' || capability === 'projectsContextRefresh') {
     // Invalid, timed out, nonzero, or unavailable all fail open the same way:
@@ -163,7 +165,7 @@ function additionalContext(input) {
     'Choices:',
     ...judgment.choices.map((choice, index) => `${index + 1}. ${choice}${choice === judgment.default ? ' (default)' : ''}`),
     `Correlation: ${judgment.correlation}`,
-    'An exact user reply with a listed choice and this correlation authorizes only recording that preference through the bridge; it does not authorize changing code, merging, publishing, or any other downstream action. This hook never reads reply text; after verifying an exact listed reply, the in-session agent records only its correlation and listed label with: jarvos-stewardship-bridge answer --correlation <correlation> --choice <listed-choice>. Recording the preference is not approval to execute it.',
+    'An exact user reply with a listed choice and this correlation authorizes only recording that preference through the bridge; it does not authorize changing code, merging, publishing, or any other downstream action. This hook never reads reply text; after verifying an exact listed reply, the in-session agent records only its correlation and listed label with: "$JARVOS_STEWARDSHIP_BRIDGE_COMMAND" answer --correlation <correlation> --choice <listed-choice>. Recording the preference is not approval to execute it.',
   ].join('\n');
 }
 
