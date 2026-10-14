@@ -3,33 +3,83 @@
   "$id": "https://github.com/levineam/jarvOS/schemas/jarvos.config.schema.json",
   "title": "jarvOS config",
   "type": "object",
-  "required": [
-    "assistantName",
-    "userName",
-    "coachName",
-    "vaultPath",
-    "workspacePath",
-    "runtime"
+  "anyOf": [
+    {
+      "title": "Legacy bootstrap config",
+      "type": "object",
+      "required": [
+        "assistantName",
+        "userName",
+        "coachName",
+        "vaultPath",
+        "workspacePath",
+        "runtime"
+      ]
+    },
+    {
+      "title": "Portable shared-installation config",
+      "type": "object",
+      "required": ["paths", "user"],
+      "properties": {
+        "paths": {
+          "type": "object",
+          "required": ["workspace", "vault"]
+        },
+        "user": {
+          "type": "object",
+          "required": ["name", "timezone"]
+        }
+      }
+    }
   ],
   "properties": {
-    "assistantName": { "type": "string" },
-    "userName": { "type": "string" },
-    "coachName": { "type": "string" },
-    "vaultPath": { "type": "string" },
-    "workspacePath": { "type": "string" },
-    "runtime": { "type": "string" },
+    "assistantName": { "type": "string", "minLength": 1 },
+    "userName": { "type": "string", "minLength": 1 },
+    "coachName": { "type": "string", "minLength": 1 },
+    "vaultPath": { "type": "string", "minLength": 1 },
+    "workspacePath": { "type": "string", "minLength": 1 },
+    "runtime": { "type": "string", "minLength": 1 },
+    "runtimeMode": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "mode", "installedAdapters", "workloadRoutes", "capabilityTruth"],
+      "properties": {
+        "version": { "const": "jarvos-runtime-mode/v1" },
+        "mode": { "enum": ["none", "hermes", "openclaw", "multi"] },
+        "installedAdapters": { "type": "array", "items": { "type": "object", "additionalProperties": false, "required": ["id"], "properties": { "id": { "enum": ["hermes", "openclaw"] } } } },
+        "workloadRoutes": { "type": "array", "items": { "type": "object", "additionalProperties": false, "required": ["workload", "adapter"], "properties": { "workload": { "type": "string" }, "adapter": { "enum": ["hermes", "openclaw"] } } } },
+        "capabilityTruth": { "type": "array", "items": { "type": "object", "additionalProperties": false, "required": ["adapter", "capability", "state", "evidence"], "properties": { "adapter": { "enum": ["hermes", "openclaw"] }, "capability": { "type": "string" }, "state": { "enum": ["available", "unavailable", "unknown"] }, "evidence": { "type": "array", "minItems": 1, "items": { "type": "object", "additionalProperties": false, "required": ["kind", "detail"], "properties": { "kind": { "type": "string" }, "detail": { "type": "string" } } } } } } },
+        "conformanceFacts": { "type": "object", "additionalProperties": false, "required": ["version", "facts"], "properties": { "version": { "const": "jarvos-harness-conformance/v1" }, "facts": { "type": "array", "items": { "type": "object", "additionalProperties": false, "required": ["harness", "tier", "state", "evidence"], "properties": { "harness": { "enum": ["hermes", "openclaw"] }, "tier": { "enum": ["baseline-context", "conversational", "mutation-capable", "proactive-authority"] }, "state": { "enum": ["claimed-unverified", "verified"] }, "evidence": { "type": "array", "minItems": 1, "items": { "type": "object", "additionalProperties": false, "required": ["kind", "detail"], "properties": { "kind": { "type": "string" }, "detail": { "type": "string" } } } }, "installedTuple": { "type": "object", "additionalProperties": false, "required": ["harness", "runtimeVersion", "assetDigest"], "properties": { "harness": { "enum": ["hermes", "openclaw"] }, "runtimeVersion": { "type": "string", "minLength": 1 }, "assetDigest": { "type": "string", "pattern": "^[a-fA-F0-9]{64}$" } } } } } } } }
+      }
+    },
     "paths": {
       "type": "object",
+      "description": "Runtime path map. Every value must be absolute or ~-rooted. The resolver ignores a relative value: workspace and vault then fall back to the home defaults, and a derived key is recomputed from its resolved workspace or vault parent.",
       "properties": {
-        "vault": { "type": "string" },
-        "journal": { "type": "string" }
+        "workspace": { "type": "string", "minLength": 1, "format": "absolute-path" },
+        "vault": { "type": "string", "minLength": 1, "format": "absolute-path" },
+        "notes": { "type": "string", "format": "absolute-path" },
+        "journal": { "type": "string", "format": "absolute-path" },
+        "tags": { "type": "string", "format": "absolute-path" },
+        "memory": { "type": "string", "format": "absolute-path" },
+        "scripts": { "type": "string", "format": "absolute-path" },
+        "workflows": { "type": "string", "format": "absolute-path" },
+        "customers": { "type": "string", "format": "absolute-path" }
       },
       "additionalProperties": true
     },
     "user": {
       "type": "object",
       "properties": {
-        "timezone": { "type": "string" }
+        "name": { "type": "string", "minLength": 1 },
+        "timezone": { "type": "string", "minLength": 1, "format": "time-zone" }
+      },
+      "additionalProperties": true
+    },
+    "gbrainContinuity": {
+      "type": "object",
+      "properties": {
+        "required": { "type": "boolean" }
       },
       "additionalProperties": true
     }

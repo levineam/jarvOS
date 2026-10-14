@@ -1,24 +1,30 @@
 #!/usr/bin/env node
 // Package-owned canonical note writer for jarvos-secondbrain-notes.
 // Input (stdin): { "title": "...", "content": "...", "frontmatter": {...} }
-// Writes to <vault-notes>/<title>.md.
+// Builds a note mutation for <vault-notes>/<title>.md. Execution is supplied
+// by bridge/top-level composition; this package never writes vault Markdown.
 // Output: { "written": true, "path": "...", "created": true|false, "journal": {...}, "knowledge": {...} }
 
 'use strict';
 
-const { existsSync, mkdirSync, readFileSync, writeFileSync } = require('fs');
-const { randomUUID } = require('crypto');
-const { dirname, join } = require('path');
+const { existsSync, readFileSync } = require('fs');
+const { createHash, randomUUID } = require('crypto');
+const { join, relative, sep } = require('path');
+const {
+  artifactFromMutationResult,
+  createArtifactReceipt,
+} = require('../../../src/artifact-receipt');
+const { appendHistoricalReceipt, cleanNoteContent, collectDraftingDeclarations, seedDraftingHistory } = require('../../../bridge/provenance/src/content-origin-contract');
 const { getVaultNotesDir, loadConfig } = require('./lib/notes-config');
-const { repairZeroByteVaultRootDuplicate } = require('./lib/vault-root-duplicate-guard');
 const { optimizeNoteKnowledge } = require('./knowledge-optimizer');
 const {
   canonicalizeFrontmatter,
+  CONTENT_ORIGIN_DRAFTING_FIELD,
+  CONTENT_ORIGIN_FIELDS,
   frontmatterToObject,
   parseFrontmatter,
   renderFrontmatter,
 } = require('./lib/note-schema');
-const { linkNoteToJournal } = require('../../../bridge/provenance/src/link-to-journal');
 
 function todayDate() {
   return new Intl.DateTimeFormat('en-CA', {
@@ -41,17 +47,137 @@ function buildNoteBody(title, content) {
   return String(content || '').startsWith('# ') ? String(content || '') : `# ${title}\n\n${content}`;
 }
 
+function hasContentOriginDeclaration(frontmatter = {}) {
+  return CONTENT_ORIGIN_FIELDS.some((field) => frontmatter[field] !== undefined);
+}
+
+function hasExactBlock(content, block) {
+  const expected = String(block || '').trim();
+  return Boolean(expected && (`\n\n${String(content || '').trim()}\n\n`).includes(`\n\n${expected}\n\n`));
+}
+
+function appendBlock(content, block) {
+  const source = String(content || '');
+  const expected = String(block || '').trim();
+  return hasExactBlock(source, expected)
+    ? source
+    : `${source.trimEnd()}\n\n${expected}\n`;
+}
+
+function provenanceDeclarationsDiffer(existing = {}, next = {}) {
+  return [...CONTENT_ORIGIN_FIELDS, CONTENT_ORIGIN_DRAFTING_FIELD]
+    .some((field) => JSON.stringify(existing[field]) !== JSON.stringify(next[field]));
+}
+
+// Metadata-only provenance repair needs the stored body to survive byte for
+// byte, which the default render path cannot promise: `renderFrontmatter` ends
+// with a blank separator line while a parsed remainder already carries its own
+// leading bytes, so concatenating both inserts one. The capability below is
+// opt-in and refuses rather than approximates, so no caller silently loses
+// prose to it.
+const NOTE_BODY_PRESERVATION_REFUSED = 'note_body_preservation_refused';
+
+class NoteBodyPreservationError extends Error {
+  constructor(reason) {
+    super(`preserveExistingBodyBytes refused: ${reason}`);
+    this.name = 'NoteBodyPreservationError';
+    this.code = NOTE_BODY_PRESERVATION_REFUSED;
+    this.reason = reason;
+  }
+}
+
+// A caller that already read a note and proved something about those exact
+// bytes can bind the write to them with `expectedExistingContent`. The writer
+// then builds the operation from those bytes, not from a fresh read, so the
+// submitted compare-and-swap guard is the caller's state rather than whatever
+// happens to be on disk by the time the writer runs. A fresh read that already
+// disagrees is refused before submission; one that changes later is rejected by
+// the executor's guard on the same hash.
+const NOTE_EXPECTED_STATE_REFUSED = 'note_expected_state_refused';
+
+class NoteExpectedStateError extends Error {
+  constructor(reason) {
+    super(`expectedExistingContent refused: ${reason}`);
+    this.name = 'NoteExpectedStateError';
+    this.code = NOTE_EXPECTED_STATE_REFUSED;
+    this.reason = reason;
+  }
+}
+
+function hashUtf8(value) {
+  return createHash('sha256').update(String(value), 'utf8').digest('hex');
+}
+
+// The raw parsed remainder, untrimmed: a note without frontmatter is all body,
+// and an empty remainder is an empty body, not a missing one.
+function rawBodyRemainder(content) {
+  const text = String(content ?? '');
+  const parsed = parseFrontmatter(text);
+  return String(parsed?.remainder ?? text);
+}
+
+// Everything `parseFrontmatter` consumes before the remainder, taken from the
+// renderer's own output rather than assumed: whatever the renderer emits past
+// the closing fence is its remainder, and the stored note supplies its own.
+function frontmatterBlockOf(rendered) {
+  const parsed = parseFrontmatter(rendered);
+  if (!parsed) return null;
+  return rendered.slice(0, rendered.length - String(parsed.remainder ?? '').length);
+}
+
+// Canonical frontmatter in front of the existing remainder, unchanged. The
+// result is re-parsed before it is returned, so the byte-for-byte guarantee is
+// checked against the parser instead of argued from the renderer's shape.
+function bodyPreservingContent(normalizedFrontmatter, existingContent) {
+  const existingBodyBytes = rawBodyRemainder(existingContent);
+  const block = frontmatterBlockOf(renderFrontmatter(normalizedFrontmatter));
+  if (block === null) throw new NoteBodyPreservationError('body_bytes_not_reproducible');
+  const nextContent = `${block}${existingBodyBytes}`;
+  if (rawBodyRemainder(nextContent) !== existingBodyBytes) {
+    throw new NoteBodyPreservationError('body_bytes_not_reproducible');
+  }
+  return nextContent;
+}
+
 function readExistingFrontmatter(filePath) {
   if (!existsSync(filePath)) return {};
   const existing = readFileSync(filePath, 'utf8');
   return frontmatterToObject(parseFrontmatter(existing));
 }
 
-function normalizeFrontmatter({ incoming = {}, existing = {} } = {}) {
+// Receipt checks for a human declaration need the note content and the
+// caller-injected source resolver; without a resolver the claim fails closed.
+// A served-model claim likewise needs the injected resolveServedModel.
+function originOptions({ title, content, resolveUserSource, drafting, resolveServedModel } = {}) {
+  return {
+    content: cleanNoteContent(String(content ?? ''), title),
+    ...(typeof resolveUserSource === 'function' ? { resolveUserSource } : {}),
+    ...(drafting !== undefined ? { drafting } : {}),
+    ...(typeof resolveServedModel === 'function' ? { resolveServedModel } : {}),
+  };
+}
+
+function normalizeFrontmatter({ incoming = {}, existing = {}, preserveExistingProvenance = true, origin = {} } = {}) {
+  const existingForNormalization = { ...existing };
+  // Seed before the stored origin may be dropped, so a body change cannot
+  // erase pre-feature assistant/mixed involvement.
+  const seeded = seedDraftingHistory(existing[CONTENT_ORIGIN_DRAFTING_FIELD], existing.content_origin);
+  if (seeded !== undefined) existingForNormalization[CONTENT_ORIGIN_DRAFTING_FIELD] = seeded;
+  if (!preserveExistingProvenance) {
+    // The current receipt cannot describe changed content, but the original
+    // user source it proved is kept as history.
+    const withReceipt = appendHistoricalReceipt(
+      existingForNormalization[CONTENT_ORIGIN_DRAFTING_FIELD],
+      existing.content_origin === 'human' ? existing.content_origin_source : undefined,
+    );
+    if (withReceipt !== undefined) existingForNormalization[CONTENT_ORIGIN_DRAFTING_FIELD] = withReceipt;
+    for (const field of CONTENT_ORIGIN_FIELDS) delete existingForNormalization[field];
+  }
   const canonical = canonicalizeFrontmatter({
     incomingFrontmatter: incoming,
-    existingFrontmatter: existing,
+    existingFrontmatter: existingForNormalization,
     today: todayDate(),
+    origin,
   });
 
   if (canonical.errors?.length) {
@@ -60,120 +186,234 @@ function normalizeFrontmatter({ incoming = {}, existing = {} } = {}) {
 
   // jarvos_note_id is deliberately writer-owned: callers cannot choose it,
   // while an existing canonical note retains its stable identity.
-  return {
+  const normalizedFrontmatter = {
     ...canonical.frontmatter,
     jarvos_note_id: canonical.frontmatter.jarvos_note_id || randomUUID(),
   };
+  // Reserved v1 fields are intentionally not persisted, even if a caller
+  // supplied them through a lower-level adapter.
+  delete normalizedFrontmatter.content_adoption;
+  return normalizedFrontmatter;
 }
 
-function buildFrontmatter({ incomingFrontmatter = {}, existingFrontmatter = {} } = {}) {
+function buildFrontmatter({ incomingFrontmatter = {}, existingFrontmatter = {}, preserveExistingProvenance = true } = {}) {
   return renderFrontmatter(normalizeFrontmatter({
     incoming: incomingFrontmatter,
     existing: existingFrontmatter,
+    preserveExistingProvenance,
   }));
 }
 
-function normalizeJournalResult(result) {
-  if (result?.linked === true) {
-    return { ...result, status: 'linked', linked: true, deferred: false, disabled: false, failed: false };
+// Pure operation factory.  The package deliberately does not know which
+// transport executes it; bridge and agent composition inject that executor.
+//
+// `preserveExistingBodyBytes` is a narrow, opt-in capability for a metadata-only
+// provenance repair: the next content is canonical frontmatter in front of the
+// stored body remainder, unchanged. It is permitted only for an existing note
+// whose provenance frontmatter is being rewritten, with no append entry and with
+// caller content that already matches the stored body. Any other use is refused
+// with a `NoteBodyPreservationError` instead of dropping the caller's prose.
+function createNoteMutationOperation({ operationId, vaultId, vaultRelativePath, title, content, frontmatter = {}, existingContent = '', existingFrontmatter = {}, appendEntry, sequence = 1, source, resolveUserSource, drafting, resolveServedModel, preserveExistingBodyBytes = false } = {}) {
+  if (typeof operationId !== 'string' || !operationId.trim()) throw new Error('operationId is required for a note mutation');
+  if (!vaultId || !vaultRelativePath) throw new Error('vaultId and vaultRelativePath are required for a note mutation');
+  if (preserveExistingBodyBytes !== false && preserveExistingBodyBytes !== true) {
+    throw new NoteBodyPreservationError('option_not_boolean');
   }
-  return {
-    ...result,
-    status: 'failed',
-    linked: false,
-    deferred: false,
-    disabled: false,
-    failed: true,
-    reason: result?.reason || 'journal linker returned an unsuccessful result',
-  };
-}
-
-function journalResultFromError(error) {
-  const deferredBacklink = error?.deferredBacklink;
-  if (deferredBacklink?.deferredPath && deferredBacklink?.key) {
+  if (preserveExistingBodyBytes) {
+    if (!existingContent) throw new NoteBodyPreservationError('not_an_existing_note');
+    if (appendEntry) throw new NoteBodyPreservationError('append_entry_unsupported');
+  }
+  const body = buildNoteBody(title, content);
+  const existingBody = parseFrontmatter(existingContent)?.remainder || existingContent;
+  const appendBody = appendEntry ? String(appendEntry).trim() : body;
+  const materialBodyChange = Boolean(existingContent) && !hasExactBlock(existingBody, appendBody);
+  // A material change means the caller is supplying prose the stored body does
+  // not already contain, which preservation would silently discard.
+  if (preserveExistingBodyBytes && materialBodyChange) throw new NoteBodyPreservationError('body_would_change');
+  const preserveExistingProvenance = !(materialBodyChange && !hasContentOriginDeclaration(frontmatter));
+  const normalizedFrontmatter = normalizeFrontmatter({
+    incoming: frontmatter,
+    existing: existingFrontmatter,
+    preserveExistingProvenance,
+    origin: originOptions({ title, content, resolveUserSource, drafting, resolveServedModel }),
+  });
+  const rendered =renderFrontmatter(normalizedFrontmatter) + body;
+  const created = !existingContent;
+  // Replace the whole note whenever the normalized provenance differs from what
+  // is stored — including when NOTHING is stored.
+  //
+  // The gate used to require a declaration on one side or the other, which let a
+  // pre-contract note escape the contract indefinitely: appending prose to a
+  // legacy note with a valid `jarvos_note_id` and no declaration selected the
+  // append-only `note-append-body` transform, so the new prose landed and the
+  // frontmatter stayed undeclared. Undeclared is not neutral downstream — a
+  // stored `author:` reads as legacy_author — so every supported write to an
+  // existing note now persists the canonical declaration in the same operation
+  // that writes the prose. With no caller declaration that record is
+  // `unknown`/`unknown`/ineligible, which is the honest one.
+  //
+  // Already-canonical notes are unaffected: their normalized declaration equals
+  // the stored one, so the comparison is false and the append-only transforms
+  // are still selected.
+  const provenanceRewrite = Boolean(existingContent)
+    && provenanceDeclarationsDiffer(existingFrontmatter, normalizedFrontmatter);
+  if (provenanceRewrite) {
+    // Compare-and-swap semantics are identical either way: the whole note is
+    // replaced against the hash of the exact pre-state read above.
+    const nextContent = preserveExistingBodyBytes
+      ? bodyPreservingContent(normalizedFrontmatter, existingContent)
+      : `${renderFrontmatter(normalizedFrontmatter)}${appendBlock(existingBody, appendBody).trimEnd()}\n`;
     return {
-      status: 'deferred',
-      linked: false,
-      deferred: true,
-      disabled: false,
-      failed: false,
-      reason: error.message,
-      deferredBacklink,
-      journalPath: deferredBacklink.journalPath,
-      deferredPath: deferredBacklink.deferredPath,
-      recoveryKey: deferredBacklink.key,
+      schemaVersion: 1,
+      operationId: operationId.trim(),
+      vaultId,
+      vaultRelativePath,
+      sequence,
+      operationKind: 'replace',
+      content: nextContent,
+      expectedContent: String(existingContent),
+      expectedHash: hashUtf8(existingContent),
+      noteId: normalizedFrontmatter.jarvos_note_id,
+      ...(source ? { source } : {}),
     };
   }
+  // Outside a provenance rewrite there is no whole-content replacement to make
+  // byte-preserving, and an append transform is not a metadata-only repair.
+  if (preserveExistingBodyBytes) throw new NoteBodyPreservationError('not_a_provenance_rewrite');
+  const replayPayload = created
+    ? null
+    : appendEntry
+      ? { noteId: normalizedFrontmatter.jarvos_note_id, entry: String(appendEntry).trim() }
+      : { noteId: normalizedFrontmatter.jarvos_note_id, body };
   return {
-    status: 'failed',
-    linked: false,
-    deferred: false,
-    disabled: false,
-    failed: true,
-    reason: error.message,
+    schemaVersion: 1,
+    operationId: operationId.trim(),
+    vaultId,
+    vaultRelativePath,
+    sequence,
+    operationKind: created ? 'create' : 'transform',
+    ...(created ? { content: rendered } : { transformName: appendEntry ? 'session-thread-append' : 'note-append-body', transformVersion: 1, replayPayload }),
+    noteId: normalizedFrontmatter.jarvos_note_id,
+    ...(source ? { source } : {}),
   };
 }
 
-function writeNoteFile({ title, content, frontmatter = {} }) {
+function hasPersistedNoteBytes(filePath, receipt) {
+  return Boolean(
+    ['committed', 'already_satisfied', 'saved_locally_sync_pending'].includes(receipt?.status)
+    && existsSync(filePath),
+  );
+}
+
+function writeNoteFile({ title, content, frontmatter = {}, appendEntry, mutationExecutor, operationId, vaultId, vaultRoot, sequence = 1, source, resolveUserSource, drafting, content_origin_drafting, resolveServedModel, preserveExistingBodyBytes = false, expectedExistingContent }) {
+  const collectedDrafting = collectDraftingDeclarations(drafting, content_origin_drafting);
+  if (!collectedDrafting.ok) throw new Error(`Invalid note frontmatter: content_origin_drafting rejected: invalid_drafting:${collectedDrafting.reason}`);
+  const draftingDeclaration = collectedDrafting.entries;
   if (!title) throw new Error('title is required');
   if (content === undefined || content === null) throw new Error('content is required');
   if (!frontmatter || typeof frontmatter !== 'object' || Array.isArray(frontmatter)) {
     throw new Error('frontmatter must be an object when provided');
+  }
+  const bindExpectedState = expectedExistingContent !== undefined;
+  if (bindExpectedState && (typeof expectedExistingContent !== 'string' || !expectedExistingContent)) {
+    throw new NoteExpectedStateError('expected_state_invalid');
   }
 
   const safeName = sanitizeTitle(title);
   const notesDir = getVaultNotesDir();
   const filePath = noteFilePath(safeName);
   const created = !existsSync(filePath);
-  const existingFrontmatter = readExistingFrontmatter(filePath);
+  // The fresh read below is only ever grounds for refusal, never proof that the
+  // caller's state still holds: the operation is built from the caller's bytes
+  // and the executor enforces the hash of those bytes at commit.
+  if (bindExpectedState && (created || readFileSync(filePath, 'utf8') !== expectedExistingContent)) {
+    throw new NoteExpectedStateError('changed_since_expected_state');
+  }
+  const existingFrontmatter = bindExpectedState
+    ? frontmatterToObject(parseFrontmatter(expectedExistingContent))
+    : readExistingFrontmatter(filePath);
   const body = buildNoteBody(title, content);
+  const existingContent = bindExpectedState
+    ? expectedExistingContent
+    : created ? '' : readFileSync(filePath, 'utf8');
+  const existingBody = parseFrontmatter(existingContent)?.remainder || existingContent;
+  const appendBody = appendEntry ? String(appendEntry).trim() : buildNoteBody(title, content);
+  const materialBodyChange = Boolean(existingContent) && !hasExactBlock(existingBody, appendBody);
+  const preserveExistingProvenance = !(materialBodyChange && !hasContentOriginDeclaration(frontmatter));
   const normalizedFrontmatter = normalizeFrontmatter({
     incoming: frontmatter,
     existing: existingFrontmatter,
+    preserveExistingProvenance,
+    origin: originOptions({ title, content, resolveUserSource, drafting: draftingDeclaration, resolveServedModel }),
   });
-  const fileContent = renderFrontmatter(normalizedFrontmatter) + body;
-
-  mkdirSync(dirname(filePath), { recursive: true });
-  writeFileSync(filePath, fileContent, 'utf8');
-  const vaultRootDuplicate = repairZeroByteVaultRootDuplicate({
-    noteTitle: safeName,
-    notesDir,
-    notesFilePath: filePath,
-  });
-
-  let journal = {
-    status: 'disabled',
-    linked: false,
-    deferred: false,
-    disabled: true,
-    failed: false,
-    skipped: true,
-    reason: 'disabled by JARVOS_JOURNAL_BACKLINK=0',
-  };
-  if (process.env.JARVOS_JOURNAL_BACKLINK !== '0') {
-    try {
-      journal = normalizeJournalResult(linkNoteToJournal({
-        noteTitle: safeName,
-        section: '📝 Notes',
-        noteId: normalizedFrontmatter.jarvos_note_id,
-        notePath: filePath,
-      }));
-    } catch (error) {
-      journal = journalResultFromError(error);
-    }
+  if (typeof mutationExecutor !== 'function' || !vaultId || !vaultRoot || !operationId) {
+    throw new Error('Canonical vault mutation composition is required; package note writes cannot modify Markdown directly');
   }
-
-  const knowledge = optimizeNoteKnowledge({
-    filePath,
-    notesDir,
-    title: safeName,
-    body,
-    frontmatter: normalizedFrontmatter,
-    created,
-    journal,
+  const vaultRelativePath = relative(vaultRoot, filePath).split(sep).join('/');
+  const operation = createNoteMutationOperation({
+    operationId,
+    vaultId,
+    vaultRelativePath,
+    title,
+    content,
+    frontmatter,
+    existingContent,
+    existingFrontmatter,
+    appendEntry,
+    sequence,
+    source,
+    resolveUserSource,
+    drafting: draftingDeclaration,
+    resolveServedModel,
+    // Opt-in metadata-only repair; the factory refuses it for anything else.
+    preserveExistingBodyBytes,
   });
+  // Only a guarded whole-content replace can enforce the caller's state. An
+  // append transform or a create carries no expected hash, so it is refused
+  // rather than submitted unguarded.
+  if (bindExpectedState && (operation.operationKind !== 'replace' || operation.expectedHash !== hashUtf8(expectedExistingContent))) {
+    throw new NoteExpectedStateError('expected_state_not_enforceable');
+  }
+  const receipt = mutationExecutor(operation);
+  const persistedOperation = receipt.operation || operation;
+  const hasBytes = hasPersistedNoteBytes(filePath, receipt);
+  const artifactReceipt = createArtifactReceipt({
+    artifacts: [{
+      record: artifactFromMutationResult({
+        kind: 'note',
+        vaultRelativePath,
+        result: receipt,
+      }),
+      intent: 'user_requested',
+    }],
+  });
+  const journal = { status: 'pending', linked: false, deferred: false, disabled: false, failed: false, reason: 'backlink dispatch is composed separately' };
+  const knowledge = hasBytes
+    ? optimizeNoteKnowledge({ filePath, notesDir, title: safeName, body, frontmatter: { ...normalizedFrontmatter, jarvos_note_id: persistedOperation.noteId }, created, journal })
+    : null;
 
-  return { written: true, path: filePath, title: safeName, created, journal, knowledge, vaultRootDuplicate };
+  return {
+    written: ['committed', 'already_satisfied'].includes(receipt?.status),
+    savedLocally: receipt?.status === 'saved_locally_sync_pending',
+    path: filePath,
+    title: safeName,
+    created,
+    noteId: persistedOperation.noteId,
+    receipt,
+    artifactReceipt,
+    journal,
+    knowledge,
+    vaultRootDuplicate: null,
+    // What a bound write was guarded by and what it asked to commit, as hashes
+    // of the operation actually submitted. A caller verifying the result can
+    // then tell "the bytes this write produced" from "bytes someone wrote since".
+    ...(bindExpectedState ? {
+      stateBinding: {
+        expectedHash: persistedOperation.expectedHash,
+        contentHash: typeof persistedOperation.content === 'string' ? hashUtf8(persistedOperation.content) : null,
+      },
+    } : {}),
+  };
 }
 
 function main() {
@@ -200,9 +440,14 @@ function main() {
 
 module.exports = {
   main,
+  NOTE_BODY_PRESERVATION_REFUSED,
+  NoteBodyPreservationError,
+  NOTE_EXPECTED_STATE_REFUSED,
+  NoteExpectedStateError,
   buildFrontmatter,
   buildNoteBody,
   normalizeFrontmatter,
+  createNoteMutationOperation,
   sanitizeTitle,
   noteFilePath,
   todayDate,

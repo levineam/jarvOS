@@ -9,8 +9,11 @@ const path = require('node:path');
 
 const {
   captureWithJarvos,
+  frontmatterForCaptureEvent,
   normalizeCaptureEvent,
 } = require('../bridge/capture/src/universal-capture');
+const { createAcknowledgedVaultMutationService } = require('./helpers/acknowledged-vault-mutation-service');
+const { digestText } = require('../bridge/provenance/src/content-origin-contract');
 
 const TEST_DATE = '2026-06-22';
 
@@ -31,14 +34,16 @@ function withVaultEnv(vault, fn) {
     JOURNAL_DIR: process.env.JOURNAL_DIR,
     JARVOS_JOURNAL_DIR: process.env.JARVOS_JOURNAL_DIR,
     JARVOS_KNOWLEDGE_DIR: process.env.JARVOS_KNOWLEDGE_DIR,
+    JARVOS_VAULT_DIR: process.env.JARVOS_VAULT_DIR,
   };
   process.env.VAULT_NOTES_DIR = vault.notesDir;
   process.env.JARVOS_NOTES_DIR = vault.notesDir;
   process.env.JOURNAL_DIR = vault.journalDir;
   process.env.JARVOS_JOURNAL_DIR = vault.journalDir;
   process.env.JARVOS_KNOWLEDGE_DIR = vault.knowledgeDir;
+  process.env.JARVOS_VAULT_DIR = vault.root;
   try {
-    return fn();
+    return fn({ mutationService: createAcknowledgedVaultMutationService(vault.root), vaultRoot: vault.root, journalDir: vault.journalDir });
   } finally {
     for (const [key, value] of Object.entries(previous)) {
       if (value === undefined) delete process.env[key];
@@ -60,6 +65,142 @@ function baseCapture(source, overrides = {}) {
   };
 }
 
+test('compatibility captures carry explicit unknown provenance and enforcement rejects omissions', () => {
+  const compatibility = normalizeCaptureEvent(baseCapture('codex', {
+    text: 'note: compatibility provenance',
+  }));
+  assert.equal(compatibility.content_origin, 'unknown');
+  assert.equal(compatibility.content_origin_basis, 'unknown');
+  assert.equal(compatibility.human_evidence_eligible, false);
+
+  assert.throws(
+    () => normalizeCaptureEvent(baseCapture('codex', { text: 'note: enforced provenance' }), { requireDeclaration: true }),
+    /content_origin declaration is required/,
+  );
+  for (const partial of [
+    { content_origin: 'assistant' },
+    { content_origin_basis: 'assistant_generated' },
+    { user_source: { capture_event_id: 'capture-only' } },
+  ]) {
+    assert.throws(
+      () => normalizeCaptureEvent(baseCapture('codex', { text: 'note: partial provenance', ...partial }), { requireDeclaration: true }),
+      /content_origin declaration is required/,
+    );
+  }
+  assert.throws(
+    () => normalizeCaptureEvent(baseCapture('codex', {
+      text: 'note: human without receipt',
+      content_origin: 'human',
+      content_origin_basis: 'verbatim_user',
+    }), { requireDeclaration: true }),
+    /valid user-source receipt/,
+  );
+});
+
+test('declared provenance reaches note frontmatter while deferred adoption is stripped', () => {
+  const event = normalizeCaptureEvent(baseCapture('codex', {
+    title: 'Assistant-origin note',
+    content: 'Generated copy that remains searchable context.',
+    content_origin: 'assistant',
+    content_origin_basis: 'assistant_generated',
+    content_adoption: { state: 'accepted' },
+  }));
+  const frontmatter = frontmatterForCaptureEvent(event);
+
+  assert.equal(frontmatter.content_origin, 'assistant');
+  assert.equal(frontmatter.content_origin_basis, 'assistant_generated');
+  assert.equal(frontmatter.human_evidence_eligible, false);
+  assert.equal('content_adoption' in frontmatter, false);
+});
+
+test('receipt-bound human provenance survives the universal capture-to-note route', () => {
+  const content = 'The user supplied this durable thought.';
+  const captureEventId = 'capture-codex-human-1';
+  const calls = [];
+  const adapter = {
+    ensureJournal() {
+      return {
+        existed: true,
+        artifactReceipt: { artifacts: [{ kind: 'journal', vaultRelativePath: 'Journal/2026-06-22.md', outcome: 'committed' }] },
+      };
+    },
+    appendLineToJournalSection(input) {
+      return {
+        ...input,
+        artifactReceipt: { artifacts: [{ kind: 'journal', vaultRelativePath: 'Journal/2026-06-22.md', outcome: 'committed' }] },
+      };
+    },
+    writeNote(input) {
+      calls.push(input);
+      return {
+        written: true,
+        title: input.title,
+        path: `/tmp/${input.title}.md`,
+        artifactReceipt: { artifacts: [{ kind: 'note', vaultRelativePath: 'Notes/User thought.md', outcome: 'committed' }] },
+      };
+    },
+  };
+  const result = captureWithJarvos({
+    ...baseCapture('codex', {
+      captureEventId,
+      title: 'User thought',
+      text: content,
+      content_origin: 'human',
+      content_origin_basis: 'verbatim_user',
+      user_source: {
+        capture_event_id: captureEventId,
+        actor: 'user',
+        source_digest: digestText(content),
+        content_digest: digestText(content),
+      },
+    }),
+  }, {
+    adapter,
+    resolveUserSource: (id) => id === captureEventId ? { capture_event_id: id, actor: 'user', text: content } : null,
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(calls[0].frontmatter.content_origin, 'human');
+  assert.equal(calls[0].frontmatter.content_origin_basis, 'verbatim_user');
+  assert.equal(calls[0].frontmatter.human_evidence_eligible, true);
+  assert.equal(calls[0].frontmatter.content_origin_source.capture_event_id, captureEventId);
+});
+
+test('capture drafting history reaches the canonical writer with served evidence only via the injected resolver', () => {
+  const { frontmatterToObject, parseFrontmatter } = require('../packages/jarvos-secondbrain-notes/src/lib/note-schema');
+  const served = { kind: 'assistant_draft', harness: 'codex', model: 'gpt-5-codex', model_evidence: 'served', served_ref: 'resp-cap-1' };
+  const declared = { kind: 'assistant_edit', harness: 'claude-code', model: 'claude-opus-5-5', model_evidence: 'declared' };
+  const resolveServedModel = (ref) => (ref === 'resp-cap-1' ? { model: 'gpt-5-codex' } : null);
+  const frontmatter = { status: 'draft', type: 'reference', project: 'SUP-4054', author: 'jarvis' };
+  const capture = (title, content_origin_drafting, extra = {}) => baseCapture('codex', {
+    title,
+    text: `note: ${title} drafted by an assistant for later retrieval.`,
+    actor: { type: 'assistant', name: 'codex', model: 'actor-model-must-not-appear' },
+    content_origin: 'assistant',
+    content_origin_basis: 'assistant_generated',
+    content_origin_drafting,
+    frontmatter,
+    ...extra,
+  });
+  const vault = makeTempVault();
+  withVaultEnv(vault, (options) => {
+    const result = captureWithJarvos(capture('Drafted capture', [served, declared]), { ...options, resolveServedModel });
+    assert.equal(result.ok, true);
+    const stored = frontmatterToObject(parseFrontmatter(fs.readFileSync(result.note.path, 'utf8')));
+    assert.deepEqual(stored.content_origin_drafting, [served, declared]);
+    assert.doesNotMatch(JSON.stringify(stored), /actor-model-must-not-appear/);
+
+    // No resolver: the served claim is rejected rather than trusted.
+    assert.throws(() => captureWithJarvos(capture('Unresolved capture', [served]), options), /served_unresolved/);
+
+    // Harness-neutral capture with no declared model stays explicitly unknown.
+    const unknown = captureWithJarvos(capture('Unknown capture', undefined), options);
+    assert.equal(unknown.ok, true);
+    const unknownStored = frontmatterToObject(parseFrontmatter(fs.readFileSync(unknown.note.path, 'utf8')));
+    assert.deepEqual(unknownStored.content_origin_drafting, [{ kind: 'assistant_draft', harness: 'unknown', model: 'unknown', model_evidence: 'unknown' }]);
+  });
+});
+
 test('normalizes supported and custom agents into CaptureEvent v2', () => {
   for (const source of ['codex', 'claude-code', 'openclaw', 'chatgpt', 'custom:future-agent']) {
     const event = normalizeCaptureEvent(baseCapture(source, {
@@ -75,7 +216,7 @@ test('normalizes supported and custom agents into CaptureEvent v2', () => {
 test('explicit note capture writes canonical note journal backlink and sidecars for each agent path', () => {
   for (const source of ['codex', 'claude-code', 'openclaw', 'hermes', 'custom:future-agent']) {
     const vault = makeTempVault();
-    withVaultEnv(vault, () => {
+    withVaultEnv(vault, (options) => {
       const result = captureWithJarvos(baseCapture(source, {
         title: `${source} universal capture`,
         text: 'note: capture the universal note path with source-backed evidence.',
@@ -85,11 +226,15 @@ test('explicit note capture writes canonical note journal backlink and sidecars 
           project: 'SUP-3233',
           author: 'jarvis',
         },
-      }));
+      }), options);
 
       assert.equal(result.ok, true);
       assert.equal(result.routing.plan.route, 'note');
       assert.ok(result.note.path.startsWith(vault.notesDir));
+      assert.deepEqual(result.artifactReceipt.artifacts.map(({ kind, vaultRelativePath, outcome }) => ({ kind, vaultRelativePath, outcome })), [
+        { kind: 'note', vaultRelativePath: `Notes/${result.note.title}.md`, outcome: 'committed' },
+        { kind: 'journal', vaultRelativePath: `Journal/${TEST_DATE}.md`, outcome: 'committed' },
+      ]);
       assert.equal(result.journalEntry.journalPath, path.join(vault.journalDir, `${TEST_DATE}.md`));
       assert.equal(fs.existsSync(path.join(vault.notesDir, `Daily Journal — ${TEST_DATE}.md`)), false);
 
@@ -109,10 +254,10 @@ test('explicit note capture writes canonical note journal backlink and sidecars 
 
 test('idea capture keeps lightweight ideas in journal and promotes substantive ideas to notes', () => {
   const vault = makeTempVault();
-  withVaultEnv(vault, () => {
+  withVaultEnv(vault, (options) => {
     const lightweight = captureWithJarvos(baseCapture('codex', {
       text: 'idea: tiny dashboard polish',
-    }));
+    }), options);
     assert.equal(lightweight.routing.plan.route, 'idea');
     assert.equal(lightweight.note, null);
 
@@ -125,7 +270,7 @@ test('idea capture keeps lightweight ideas in journal and promotes substantive i
         project: 'SUP-3233',
         author: 'jarvis',
       },
-    }));
+    }), options);
     assert.equal(substantive.routing.plan.route, 'idea');
     assert.ok(substantive.note);
     assert.equal(substantive.note.title, 'Universal capture contract');
@@ -137,14 +282,48 @@ test('idea capture keeps lightweight ideas in journal and promotes substantive i
   });
 });
 
+test('strict journal commands use the public hard-command route', () => {
+  const vault = makeTempVault();
+  withVaultEnv(vault, (options) => {
+    const result = captureWithJarvos(baseCapture('openclaw', {
+      text: 'Add to Journal: reviewed the capture bug: no model needed',
+    }), options);
+
+    assert.equal(result.ok, true);
+    assert.equal(result.hardCommand.disposition, 'capture');
+    assert.equal(result.hardCommand.command, 'add-to-journal');
+    assert.equal(result.routing.plan.route, 'journal');
+    assert.equal(result.routing.note, null);
+    assert.equal(result.routing.noteLink.heading, '## 📓 Journal Entry');
+    assert.equal(result.routing.noteLink.line, '- reviewed the capture bug: no model needed');
+  });
+});
+
+test('bare strict commands return needs_input without writing', () => {
+  const vault = makeTempVault();
+  withVaultEnv(vault, (options) => {
+    const result = captureWithJarvos(baseCapture('openclaw', {
+      text: 'Idea:   ',
+    }), options);
+
+    assert.equal(result.ok, false);
+    assert.equal(result.error, null);
+    assert.equal(result.hardCommand.disposition, 'needs_input');
+    assert.equal(result.routing.response, 'What idea should I capture?');
+    assert.deepEqual(result.artifactReceipt.artifacts, []);
+    assert.equal(fs.readdirSync(vault.notesDir).length, 0);
+    assert.equal(fs.readdirSync(vault.journalDir).length, 0);
+  });
+});
+
 test('triggerless title+content capture defaults to note intent for library callers', () => {
   const vault = makeTempVault();
-  withVaultEnv(vault, () => {
+  withVaultEnv(vault, (options) => {
     const result = captureWithJarvos(baseCapture('claude-code', {
       title: 'Plain Programmatic Entry',
       content: 'Durable body text without router keywords.',
       evidence: [{ type: 'message', text: 'Durable body text without router keywords.' }],
-    }));
+    }), options);
 
     assert.equal(result.ok, true);
     assert.equal(result.routing.plan.ignored, false);
@@ -155,7 +334,7 @@ test('triggerless title+content capture defaults to note intent for library call
   });
 });
 
-test('triggerless capture CLI defaults to note capture instead of ignored', () => {
+test('triggerless capture CLI does not claim a disk write without Obsidian acknowledgement', () => {
   const vault = makeTempVault();
   const env = {
     ...process.env,
@@ -164,6 +343,9 @@ test('triggerless capture CLI defaults to note capture instead of ignored', () =
     JOURNAL_DIR: vault.journalDir,
     JARVOS_JOURNAL_DIR: vault.journalDir,
     JARVOS_KNOWLEDGE_DIR: vault.knowledgeDir,
+    JARVOS_VAULT_DIR: vault.root,
+    XDG_STATE_HOME: path.join(vault.root, '.state'),
+    OBSIDIAN_CLI: path.join(vault.root, 'missing-obsidian-cli'),
   };
   const result = spawnSync(process.execPath, [
     path.join(__dirname, '../scripts/jarvos-capture.js'),
@@ -178,18 +360,18 @@ test('triggerless capture CLI defaults to note capture instead of ignored', () =
   });
 
   assert.equal(result.status, 0);
-  assert.equal(result.stderr, '');
   const parsed = JSON.parse(result.stdout);
-  assert.equal(parsed.ok, true);
   assert.equal(parsed.routing.plan.ignored, false);
   assert.equal(parsed.routing.plan.route, 'note');
-  assert.equal(fs.readdirSync(vault.notesDir).length, 1);
+  assert.equal(parsed.note.written, false);
+  assert.notEqual(parsed.artifactReceipt.artifacts.find((artifact) => artifact.kind === 'note')?.outcome, 'committed');
+  assert.equal(fs.readdirSync(vault.notesDir).filter((name) => name.endsWith('.md')).length, 0);
 });
 test('long raw Idea capture stays journal-only without note backlink or QMD artifact', () => {
   const vault = makeTempVault();
-  withVaultEnv(vault, () => {
+  withVaultEnv(vault, (options) => {
     const text = 'Idea: the end of "vibe economics". Concept is that economics up until now has basically been based on vibes, and the shift is that agents, markets, and measurement loops can finally make those vibes explicit enough to inspect.';
-    const result = captureWithJarvos(baseCapture('codex', { text }));
+    const result = captureWithJarvos(baseCapture('codex', { text }), options);
 
     assert.equal(result.ok, true);
     assert.equal(result.routing.plan.route, 'idea');
@@ -208,12 +390,12 @@ test('long raw Idea capture stays journal-only without note backlink or QMD arti
 
 test('explicit durable idea flag wins over substantive false', () => {
   const vault = makeTempVault();
-  withVaultEnv(vault, () => {
+  withVaultEnv(vault, (options) => {
     const result = captureWithJarvos(baseCapture('codex', {
       text: 'Idea: durable capture contract for future agents',
       substantive: false,
       createDurableNote: true,
-    }));
+    }), options);
 
     assert.equal(result.ok, true);
     assert.equal(result.routing.plan.route, 'idea');

@@ -1,0 +1,55 @@
+{
+  "$schema": "jarvos.release-outcome-fixture/v1",
+  "releaseEvidence": {
+    "contract": "jarvos.release-evidence/v1",
+    "evidenceId": "release-evidence-000001",
+    "canonical": {
+      "contract": "jarvos.canonical-reference/v1",
+      "kind": "outcome",
+      "id": "out_000001",
+      "revision": 2,
+      "breadcrumb": "jarvOS › v1.0.0 release"
+    },
+    "finding": {
+      "code": "unpublished-target",
+      "summary": "v1.0.0 remains unpublished"
+    },
+    "release": {
+      "version": "v1.0.0",
+      "published": false,
+      "latestPublicVersion": "v0.7.0",
+      "drift": "tracked"
+    },
+    "repairReference": {
+      "contract": "jarvos.execution-reference/v1",
+      "authority": "beads",
+      "provider": "beads",
+      "workspaceId": "workspace-release",
+      "itemId": "bd_000001",
+      "itemRevision": "7",
+      "status": "in_progress",
+      "canonical": {
+        "contract": "jarvos.canonical-reference/v1",
+        "kind": "outcome",
+        "id": "out_000001",
+        "revision": 2,
+        "breadcrumb": "jarvOS › v1.0.0 release"
+      },
+      "capturedAt": "2026-08-08T12:04:00.000Z",
+      "sourceRevision": "beads-7"
+    },
+    "observedAt": "2026-08-08T12:00:00.000Z",
+    "sourceRevision": "release-reconciler-12",
+    "evidenceRefs": ["telegram:release-monitor:1"],
+    "trust": "verified"
+  },
+  "unknownLink": {
+    "proposalId": "proposal-000001",
+    "source": "release-reconciler",
+    "externalReference": "release:v2.0.0",
+    "displayName": "unknown local release relationship",
+    "evidenceId": "release-evidence-000002",
+    "reason": "canonical project link was not resolved",
+    "createdAt": "2026-08-08T12:00:00.000Z"
+  }
+}

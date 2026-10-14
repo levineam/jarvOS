@@ -28,6 +28,13 @@ const {
   FIXER_SCHEMA_VERSION,
   createLiveFixer,
 } = require('./fixer');
+const {
+  BEADS_TRACKER_SCHEMA_VERSION,
+  DEFAULT_BEADS_VERSION,
+  createLiveBeadsTracker,
+  createMemoryOperationStore,
+} = require('./beads-tracker');
+const { OPERATION_STORE_SCHEMA_VERSION, createFileOperationStore } = require('./file-operation-store');
 
 const LIVE_ADAPTERS_SCHEMA_VERSION = 'jarvos-coding-live-adapters/v2';
 
@@ -40,7 +47,7 @@ const COUPLED_STAGES = Object.freeze(['branch', 'holisticReview', 'fixRerun']);
 /**
  * Assemble the FULL live coding adapter set for runTakeIssueToDone. Every stage is
  * a live adapter wrapping the corresponding clawd logic — no mocks:
- *   claim/verifyClose -> paperclip-pr-link
+ *   claim/verifyClose -> selected Beads transport or optional Paperclip projection
  *   branch            -> git worktree add (branch.js)
  *   sliceReview       -> clawpatch review (clawpatch-review.js)
  *   holisticReview    -> autoreview gate + pr-autopilot review bots (holistic-review.js)
@@ -69,11 +76,14 @@ function buildLiveCodingAdapters(options = {}) {
     holisticGate: reviewEngine.holisticReview.bind(reviewEngine),
   });
 
-  const tracker = options.tracker || createLivePaperclipTracker({
-    prLink: options.prLink,
-    claimComment: options.claimComment,
-    closeComment: options.closeComment,
-  });
+  const tracker = options.tracker
+    || (options.beads
+      ? createLiveBeadsTracker(options.beads === true ? {} : options.beads)
+      : createLivePaperclipTracker({
+        prLink: options.prLink,
+        claimComment: options.claimComment,
+        closeComment: options.closeComment,
+      }));
 
   const postMerge = options.postMerge || createLivePostMergeSweep({
     prLink: options.prLink,
@@ -88,11 +98,14 @@ function buildLiveCodingAdapters(options = {}) {
     dryRun: options.dryRun,
   });
 
+  // The same host-owned base governs the branch observation and the pull
+  // request target: `release` and `origin/release` both mean origin/release.
   const git = options.git || createLiveGitBranch({
     run: options.run,
     env: options.env,
     repoRootDir: options.repoRootDir,
     worktreeRoot: options.worktreeRoot,
+    baseRef: options.baseRef,
   });
 
   const fixer = options.fixer || createLiveFixer({
@@ -113,13 +126,17 @@ function buildLiveCodingAdapters(options = {}) {
     pullRequest,
     git,
     fixer,
+    activity: options.activity || options.projectsActivity || null,
     sessionState: options.sessionState || null,
   };
 }
 
 module.exports = {
   BRANCH_SCHEMA_VERSION,
+  BEADS_TRACKER_SCHEMA_VERSION,
   COUPLED_STAGES,
+  DEFAULT_BEADS_VERSION,
+  OPERATION_STORE_SCHEMA_VERSION,
   FIXER_SCHEMA_VERSION,
   HOLISTIC_REVIEW_SCHEMA_VERSION,
   LIVE_ADAPTERS_SCHEMA_VERSION,
@@ -129,6 +146,7 @@ module.exports = {
   buildLiveCodingAdapters,
   createLiveClawpatchReviewEngine,
   createLiveClawpatchRunner,
+  createLiveBeadsTracker,
   createLiveGitBranch,
   createLiveHolisticReview,
   createLiveFixer,
@@ -136,5 +154,7 @@ module.exports = {
   createLivePostMergeSweep,
   createLivePullRequest,
   parseClawpatchCommand,
+  createMemoryOperationStore,
+  createFileOperationStore,
   resolveWorktreeRoot,
 };

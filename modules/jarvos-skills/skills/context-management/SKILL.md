@@ -19,6 +19,10 @@ metadata:
 Use this skill when editing always-loaded files, deciding where durable knowledge
 belongs, diagnosing context bloat, or preserving continuity across compaction.
 
+For new substantive work or materially changed scope, follow the native
+`WORK-CONTEXT.md` contract when present; this skill points to that contract but
+does not own work-placement policy.
+
 ## Contract
 
 The workflow is complete only when:

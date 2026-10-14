@@ -21,6 +21,7 @@ const os = require('os');
 const path = require('path');
 
 const CONFIG_PATH = path.join(__dirname, '..', 'config', 'projects-module.json');
+const journalProjection = require('./journal-projection');
 
 /**
  * Resolve the shared vault config if the bridge is present.
@@ -313,7 +314,14 @@ function renderProjectPage({
   return `${lines.join('\n').trimEnd()}\n`;
 }
 
-function createProject({ title, dir, config = loadConfig(), now = new Date(), ...rest } = {}) {
+function assertPersisted(receipt, label) {
+  if (!['committed', 'already_satisfied', 'saved_locally_sync_pending'].includes(receipt?.status)) {
+    throw new Error(`${label} was not persisted through the Obsidian-owned mutation boundary: ${receipt?.status || 'unavailable'}`);
+  }
+  return receipt;
+}
+
+function createProject({ title, dir, config = loadConfig(), now = new Date(), createMarkdownFile, ...rest } = {}) {
   const clean = slugify(title);
   if (!clean) throw new Error('a project needs a title');
 
@@ -332,32 +340,47 @@ function createProject({ title, dir, config = loadConfig(), now = new Date(), ..
 
   const created = now.toISOString().slice(0, 10);
   const page = renderProjectPage({ title: clean, created, config, ...rest });
-  fs.writeFileSync(filePath, page, 'utf8');
-  return { path: filePath, slug: clean, title: clean, created };
+  if (typeof createMarkdownFile !== 'function') throw new Error('Project creation requires an Obsidian-owned Markdown create executor');
+  const receipt = assertPersisted(createMarkdownFile({
+    filePath,
+    nextContent: page,
+  }), 'Project creation');
+  return {
+    path: filePath,
+    slug: clean,
+    title: clean,
+    created,
+    written: ['committed', 'already_satisfied'].includes(receipt.status),
+    savedLocally: receipt.status === 'saved_locally_sync_pending',
+    receipt,
+  };
 }
 
 /**
- * Wiki-links for the journal's Projects section.
+ * Compatibility entry point for callers that used to render an all-ongoing
+ * inventory. The Journal projection owns that section now; this function only
+ * delegates to it and therefore cannot manufacture a title-only wiki-link.
  *
- * `projects` of null means the directory could not be read. That renders the
- * unavailable marker, which the journal treats as a degraded source and will
- * not write over existing content — unlike the empty-state line, which is a
- * positive claim that there are no projects.
+ * `options.noteMappings` (or `canonicalNoteMappings`) must contain the
+ * injected canonical note targets. `projects === null` remains an unavailable
+ * read and is surfaced as a degraded marker for legacy callers.
  */
-function journalProjectLines(projects, config = loadConfig()) {
+function journalProjectLines(projects, config = loadConfig(), options = {}) {
   const journal = config.journal || {};
-  if (projects === null) return journal.unavailableText || '- (projects unavailable)';
-  const allowed = Array.isArray(journal.listStatuses) && journal.listStatuses.length
-    ? new Set(journal.listStatuses)
-    : ongoingStatuses(config);
-  const max = Number.isFinite(journal.maxItems) ? journal.maxItems : 25;
-
-  const listed = projects.filter((project) => allowed.has(String(project.status || '').toLowerCase()));
-  if (!listed.length) return journal.emptyText || '- No ongoing projects';
-
-  const lines = listed.slice(0, max).map((project) => `- [[${project.title}]]`);
-  if (listed.length > max) lines.push(`- _...and ${listed.length - max} more_`);
-  return lines.join('\n');
+  const timeZone = options.timeZone || config.timeZone || 'UTC';
+  const date = options.date || journalProjection.localDate(new Date().toISOString(), timeZone);
+  const state = options.activityProviderState || options.providerState || (projects === null ? 'unavailable' : 'healthy-empty');
+  const result = journalProjection.projectLines({
+    projects: projects === null ? [] : projects,
+    activities: Array.isArray(options.activities) ? options.activities : [],
+    date,
+    timeZone,
+    providerState: state,
+    maxItems: Number.isFinite(options.maxItems) ? options.maxItems : (Number.isFinite(journal.maxItems) ? journal.maxItems : 25),
+    noteMappings: options.noteMappings === undefined ? options.canonicalNoteMappings : options.noteMappings,
+  });
+  if (result.status === 'degraded') return journal.unavailableText || '- (projects unavailable)';
+  return result.content || '- No projects touched today';
 }
 
 function renderIndex(projects, config = loadConfig()) {
@@ -392,13 +415,30 @@ function renderIndex(projects, config = loadConfig()) {
   return `${lines.join('\n').trimEnd()}\n`;
 }
 
-function writeIndex({ dir, config = loadConfig(), projects } = {}) {
+function writeIndex({ dir, config = loadConfig(), projects, createMarkdownFile, applyMarkdownMutation } = {}) {
   const projectsDir = dir || resolveProjectsDir(config);
   const list = projects || listProjects({ dir: projectsDir, config });
   fs.mkdirSync(projectsDir, { recursive: true });
   const indexPath = path.join(projectsDir, indexFilename(config));
-  fs.writeFileSync(indexPath, renderIndex(list, config), 'utf8');
-  return { path: indexPath, count: list.length };
+  const nextContent = renderIndex(list, config);
+  const exists = fs.existsSync(indexPath);
+  const expectedContent = exists ? fs.readFileSync(indexPath, 'utf8') : '';
+  if (exists && expectedContent === nextContent) return { path: indexPath, count: list.length, written: false, savedLocally: false, status: 'unchanged' };
+  const mutate = exists ? applyMarkdownMutation : createMarkdownFile;
+  if (typeof mutate !== 'function') throw new Error('Project index generation requires an Obsidian-owned Markdown mutation executor');
+  const receipt = assertPersisted(mutate({
+    filePath: indexPath,
+    ...(exists ? { expectedContent } : {}),
+    nextContent,
+  }), 'Project index generation');
+  return {
+    path: indexPath,
+    count: list.length,
+    written: ['committed', 'already_satisfied'].includes(receipt.status),
+    savedLocally: receipt.status === 'saved_locally_sync_pending',
+    status: receipt.status,
+    receipt,
+  };
 }
 
 /**
@@ -423,6 +463,7 @@ function checkProjects({ dir, config = loadConfig(), projects } = {}) {
 module.exports = {
   CONFIG_PATH,
   loadConfig,
+  tryResolveSharedConfig,
   resolveProjectsDir,
   readProjectsDir,
   requiredSections,

@@ -2,6 +2,72 @@
   "schemaVersion": 1,
   "id": "hermes",
   "displayName": "Hermes Agent",
+  "skillProjection": {
+    "version": "jarvos-skill-projection-adapter/v1",
+    "managedRoot": "~/.hermes/skills",
+    "orderedScopes": ["workspace", "user", "managed"],
+    "scopeRoots": { "workspace": "./skills", "user": "~/.hermes/skills" },
+    "renderer": "raw-skill-bundle",
+    "verificationTier": "exact-path",
+    "bundleAllowlist": ["SKILL.md", "scripts/**", "assets/**", "references/**", "templates/**"],
+    "alias": { "pattern": "^[a-z][a-z0-9-]{0,63}$", "maxLength": 64, "reservedNames": [] },
+    "probeIsolation": { "mode": "receipt-bound-exact-path", "unattended": true }
+  },
+  "instructionProjection": {
+    "version": "jarvos-instruction-projection-adapter/v1",
+    "status": "discovery-pending",
+    "loader": null,
+    "supportedVersions": null,
+    "precedence": null,
+    "reason": "Native instruction loader discovery is required before compatibility can be declared."
+  },
+  "operatorNotification": {
+    "version": "jarvos-operator-notification-adapter/v1",
+    "contract": "jarvos-operator-notification/v1",
+    "delivery": { "status": "not-configured", "reason": "Local owner configuration chooses a delivery surface; this public adapter does not configure one." }
+  },
+  "harnessConformance": {
+    "version": "jarvos-harness-conformance/v1",
+    "facts": [
+      { "harness": "hermes", "tier": "baseline-context", "state": "claimed-unverified", "evidence": [{ "kind": "adapter-declaration", "detail": "Checked-in Hermes adapter declaration; no owner-local harness proof was run." }] },
+      { "harness": "hermes", "tier": "conversational", "state": "claimed-unverified", "evidence": [{ "kind": "adapter-declaration", "detail": "Checked-in Hermes adapter declaration; no owner-local harness proof was run." }] },
+      { "harness": "hermes", "tier": "mutation-capable", "state": "claimed-unverified", "evidence": [{ "kind": "adapter-declaration", "detail": "Checked-in Hermes adapter declaration; no owner-local harness proof was run." }] },
+      { "harness": "hermes", "tier": "proactive-authority", "state": "claimed-unverified", "evidence": [{ "kind": "offline-declaration", "detail": "Mac Mini exact installed-tuple evidence and owner-local proof are required before proactive routing." }] }
+    ]
+  },
+  "artifactGeneration": {
+    "version": "jarvos-hermes-artifact-generation.v1",
+    "releaseRevision": "291c334-route-capability",
+    "generationDigest": "bbdd721df604a03b3b858fefcf2be2bb0297fd49c51e75b15e15b5c3dfcf398e",
+    "components": [
+      { "name": "skills-manifest", "path": "modules/jarvos-skills/manifest.json", "digest": "8a14f6f4146918e3cac6ae2f050bff45b0122fc5fda968bc166f6bf46a4dacc4" },
+      { "name": "context-plugin-metadata", "path": "runtimes/hermes/plugins/jarvos-context/plugin.yaml", "digest": "74f3bc53308a43b119773cf0a0fa5f47019761038d1bada4cc2fd5a1b13370bb" },
+      { "name": "context-plugin-code", "path": "runtimes/hermes/plugins/jarvos-context/__init__.py", "digest": "7f05fd28a036af20f26ac46a5d44b60514c51b4da4ad4b01511bc5d6371d3dbf" },
+      { "name": "coding-host-adapter", "path": "modules/jarvos-coding/src/adapters/hosts.js", "digest": "3e9ed8ffa448b8cba94d86028458482dc35479699febadda4cb0e60d623855e5" }
+    ]
+  },
+  "capabilityDescriptor": {
+    "version": "jarvos-runtime-capability-descriptor.v1", "harness": "hermes",
+    "capabilities": {
+      "context": { "currentWork": { "status": "supported", "transport": "jarvos MCP", "evidence": "sharedAgentContext required tools" }, "recall": { "status": "supported", "transport": "jarvos MCP", "evidence": "sharedAgentContext required tools" }, "startupHydration": { "status": "supported", "transport": "Hermes on_session_start + pre_llm_call plugin hooks", "evidence": "plugins/jarvos-context/__init__.py" } },
+      "notes": { "create": { "status": "supported", "transport": "jarvos_create_note MCP tool", "evidence": "sharedAgentContext required tools" }, "read": { "status": "unsupported", "reason": "No public Hermes note-read bridge is declared." }, "update": { "status": "unsupported", "reason": "No public Hermes note-update bridge is declared." }, "journalLink": { "status": "unsupported", "reason": "No public Hermes journal-link bridge is declared." } },
+      "skills": { "discover": { "status": "manual", "transport": "Hermes skill directory", "reason": "The public adapter installs guidance but does not claim skill discovery integration." }, "invoke": { "status": "manual", "transport": "Hermes skill directory", "reason": "Hermes owns skill invocation." } },
+      "toolAuthorization": { "declare": { "status": "unsupported", "reason": "No public Hermes authorization contract is installed." }, "enforce": { "status": "unsupported", "reason": "Hermes owns tool authorization." } },
+      "egress": { "declare": { "status": "unsupported", "reason": "No public Hermes egress declaration is installed." }, "enforce": { "status": "unsupported", "reason": "Hermes owns egress enforcement." } },
+      "session": { "startupHook": { "status": "supported", "transport": "Hermes on_session_start + pre_llm_call plugin hooks", "evidence": "plugins/jarvos-context/__init__.py" }, "handoff": { "status": "unsupported", "reason": "No public Hermes handoff adapter is declared." }, "preCompactHook": { "status": "unsupported", "reason": "No public Hermes pre-compaction session-thread flush is declared." } },
+      "inboundDispatch": { "receive": { "status": "unsupported", "reason": "No public Hermes inbound dispatch bridge is declared." }, "validate": { "status": "unsupported", "reason": "No public Hermes inbound dispatch bridge is declared." } },
+      "lifecycle": { "receipt": { "status": "supported", "transport": "Hermes gateway lifecycle outbox + private bridge", "evidence": "gateway/lifecycle_events.py@ed13651a30deb6ca5f8902a13eaecada412d6f22" } },
+      "scheduledWork": { "participate": { "status": "unsupported", "reason": "Hermes scheduling remains host-native." } },
+      "codingEntrypoint": { "invoke": { "status": "supported", "transport": "jarvos_coding_take_issue_to_done MCP tool", "evidence": "modules/jarvos-coding/src/adapters/hosts.js#createHermesHostAdapter" } }
+    }
+  },
+  "commonWorkBridge": {
+    "version": "jarvos-common-work-bridge.v1",
+    "actions": ["resolve_work_record", "resolve_workspace", "get_status", "attach_or_resume", "submit_judgment", "claim", "request_or_answer_approval", "get_terminal_receipt"],
+    "availability": "injected-authority",
+    "handoff": { "pointerOnly": true, "fields": ["workId", "workspaceId", "headOid"] },
+    "authority": { "rereadBefore": ["attach_or_resume", "submit_judgment", "claim", "request_or_answer_approval", "get_terminal_receipt"] }
+  },
   "sharedAgentContext": {
     "mcpServer": "modules/jarvos-agent-context/scripts/jarvos-mcp.js",
     "requiredTools": [
@@ -9,8 +75,33 @@
       "jarvos_recall",
       "jarvos_create_note",
       "jarvos_startup_brief",
-      "jarvos_hydrate"
+      "jarvos_hydrate",
+      "jarvos_session_thread_read",
+      "jarvos_session_thread_write"
     ]
+  },
+  "gbrainContinuity": {
+    "version": "jarvos-gbrain-continuity/v1",
+    "availability": "optional-public-required-private",
+    "provider": "gbrain",
+    "transport": "provider-native-stdio",
+    "launcher": "modules/jarvos-gbrain/scripts/jarvos-gbrain-provider.js",
+    "descriptorEnvironment": "JARVOS_GBRAIN_RUNTIME_DESCRIPTOR",
+    "requiredTools": ["get_brain_identity", "recall", "remember", "list_skills", "get_skill"],
+    "skillProjection": {
+      "owner": "gbrain",
+      "mode": "provider-resolver",
+      "skill": "skillify",
+      "copiedIntoJarvosSkills": false
+    },
+    "maintenance": {
+      "sweepDisabled": true,
+      "owner": "scheduler-owned-delta-maintenance"
+    },
+    "registration": {
+      "command": "hermes mcp add gbrain --command node --env JARVOS_GBRAIN_RUNTIME_DESCRIPTOR=<owner-only-descriptor> --args <provider-launcher>",
+      "verification": "hermes mcp test gbrain followed by a native recall turn"
+    }
   },
   "targets": [
     {
@@ -23,14 +114,44 @@
         "verification": "hermes mcp test jarvos"
       },
       "hydration": {
-        "mode": "manual",
-        "command": "Call the jarvos_hydrate MCP tool at session start.",
-        "reason": "Hermes exposes MCP registration, but this adapter does not claim an automatic startup hook until the native hook contract is verified."
+        "mode": "hook",
+        "event": "on_session_start + pre_llm_call",
+        "script": "plugins/jarvos-context/__init__.py",
+        "defaultMaxChars": 6000,
+        "fallback": "Call the jarvos_hydrate MCP tool at session start if the plugin is not installed or enabled."
       }
     }
   ],
   "setup": {
     "script": "setup.sh"
+  },
+  "managedActivation": {
+    "version": "jarvos-managed-activation/v1",
+    "harness": "hermes",
+    "executionOwner": "harness-process",
+    "backgroundProcess": {
+      "owner": "harness",
+      "jarvosStartsProcess": false
+    },
+    "preparation": {
+      "requiresExactSetup": true,
+      "requiresSelectedTuple": true
+    },
+    "liveProof": {
+      "requiredSequence": ["session", "turn"],
+      "producerEvents": { "session": "managed_session_start", "turn": "pre_llm_call" },
+      "freshnessSeconds": 900,
+      "forwardSkewSeconds": 30
+    },
+    "health": {
+      "mayActivate": false,
+      "mayExplainDegradation": true
+    },
+    "rollback": {
+      "ownership": "exact-owned",
+      "invalidatesGeneration": true,
+      "refuseModified": true
+    }
   },
   "stewardshipAdapter": {
     "version": "jarvos-stewardship-adapter.v1",
@@ -51,14 +172,14 @@
       "rootEnvironment": "JARVOS_STEWARDSHIP_STABLE_ROOT",
       "dispatcher": "jarvos-stewardship-dispatcher",
       "entrypoint": { "kind": "hermesShell", "path": "jarvos-hermes-pre-llm-hook.js" },
-      "actions": ["harness-launch", "session-start", "session-turn", "bridge", "provenance-probe"],
+      "actions": ["harness-launch", "session-start", "session-turn", "bridge", "provenance-probe", "session-precompact"],
       "selectedRuntimeAssets": ["runtimes/hermes/jarvos-pre-llm-hook.js"],
       "installedConfig": { "inspection": "stable-entrypoint-only", "prepare": "reversible", "rollback": "exact-owned-state" },
       "provenance": { "action": "provenance-probe", "sideEffectFree": true }
     },
     "bridge": {
       "environment": "JARVOS_STEWARDSHIP_BRIDGE_COMMAND",
-      "contract": "An executable on PATH accepts one lifecycle capability name and emits a public-safe JSON availability receipt."
+      "contract": "The selected bridge executable accepts one capability name. Native pre-LLM refresh invokes projectsContextRefresh once with a hard 250ms deadline and injects only a validated jarvos.projects-context-refresh/v1 refreshed or partial envelope."
     },
     "capabilities": {
       "startOrResume": { "mode": "managed-launcher" },
@@ -66,6 +187,7 @@
       "checkpoint": { "mode": "managed-launcher", "state": "stable-idle" },
       "stop": { "mode": "managed-launcher" },
       "nextTurnInput": { "mode": "native-hook", "event": "pre_llm_call", "script": "jarvos-hermes-pre-llm-hook.js", "reason": "The stable shell is recorded in Hermes's exact allowlist with its immutable mtime." },
+      "projectsContextRefresh": { "mode": "native-hook", "event": "pre_llm_call", "script": "jarvos-hermes-pre-llm-hook.js", "timeoutMs": 250, "contract": "jarvos.projects-context-refresh/v1" },
       "availability": { "mode": "managed-launcher" }
     }
   },
@@ -78,12 +200,7 @@
       "~/.hermes/skills/jarvos/SKILL.md"
     ]
   },
-  "unsupportedCapabilities": [
-    {
-      "capability": "automatic-startup-hydration",
-      "reason": "Hermes MCP registration is supported; automatic startup hydration remains deferred until the native startup hook surface is verified."
-    }
-  ],
+  "unsupportedCapabilities": [],
   "verification": [
     "node modules/jarvos-runtime-kit/scripts/jarvos-runtime-kit.js check hermes"
   ]

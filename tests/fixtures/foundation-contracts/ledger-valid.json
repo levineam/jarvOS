@@ -1,0 +1,33 @@
+{
+  "schemaVersion": "jarvos.capability-ledger.v1",
+  "records": [
+    {
+      "capabilityId": "example-contract",
+      "title": "Example portable contract",
+      "specification": "canonical",
+      "implementation": "partial",
+      "repository": "local-only",
+      "verification": "fixture-proven",
+      "activation": "inactive",
+      "authority": "none",
+      "evidence": [
+        { "type": "repo-path", "ref": "modules/example/src/contract.js" },
+        { "type": "test", "ref": "modules/example/test/contract.test.js" }
+      ],
+      "assertedOn": "2026-08-31",
+      "notes": "Synthetic fixture; it makes no live activation claim."
+    },
+    {
+      "capabilityId": "example-adapter",
+      "title": "Example optional adapter",
+      "specification": "draft",
+      "implementation": "absent",
+      "repository": "local-only",
+      "verification": "untested",
+      "activation": "unknown",
+      "authority": "read-only",
+      "evidence": [{ "type": "document", "ref": "docs/example-adapter.md" }],
+      "assertedOn": "2026-08-31"
+    }
+  ]
+}

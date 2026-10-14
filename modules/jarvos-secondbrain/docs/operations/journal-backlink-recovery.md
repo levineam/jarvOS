@@ -73,20 +73,26 @@ regular recovery pass.
 ## Optional live Obsidian smoke
 
 Normal tests are deterministic and do not launch Obsidian. A workstation
-release check may explicitly opt into the live smoke:
+release check may explicitly opt into a disposable live smoke. Before running,
+create an otherwise empty, dedicated folder such as `JarVOS Smoke` in the
+vault. Produce private candidate and installed-runtime manifests with matching
+`revision` and `artifactManifestHash`; the clean candidate manifest also lists
+the SHA-256 output digest for every release gate. Keep those manifests and the
+attestation outside the vault.
 
 ```bash
 JARVOS_LIVE_OBSIDIAN_SMOKE=1 \
-JARVOS_LIVE_OBSIDIAN_JOURNAL_PATH='Journal/YYYY-MM-DD.md' \
-JARVOS_LIVE_OBSIDIAN_NOTE_PATH='Notes/Existing Note.md' \
+JARVOS_VAULT_ROOT='/path/to/vault' \
+JARVOS_LIVE_OBSIDIAN_SMOKE_DIR='JarVOS Smoke' \
+JARVOS_LIVE_CANDIDATE_MANIFEST='/private/candidate.json' \
+JARVOS_LIVE_RUNTIME_MANIFEST='/private/runtime.json' \
+JARVOS_LIVE_ATTESTATION_PATH='/private/live-smoke-attestation.json' \
   npm --prefix modules/jarvos-secondbrain run test:obsidian-live
 ```
 
-Run this only against an already-linked real note and canonical journal in the
-intended vault. The smoke requires a supported, registered Obsidian CLI and a
-running app; it verifies vault identity, note identity, and the existing exact
-backlink before issuing two production no-op mutations. The supplied paths may
-be vault-relative as shown (or absolute paths within the configured vault).
-It compares the journal before and after, so it must not create a test note,
-journal, or backlink. This is an opt-in workstation gate, not CI or routine
-queue maintenance.
+The smoke refuses dirty or mismatched source/runtime evidence. It proves a
+nonce-named fixture absent through Obsidian, creates it, applies one registered
+latest-content transform, optionally observes bounded Sync convergence, and
+deletes it with an exact-content guard. It then requires all active mutation
+health counts to return to their baseline. It never targets a real journal or
+note. This is an opt-in workstation gate, not CI or routine queue maintenance.

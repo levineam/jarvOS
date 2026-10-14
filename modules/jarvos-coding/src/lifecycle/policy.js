@@ -1,9 +1,13 @@
 'use strict';
 
+const { evaluateDeliveryTrace } = require('../features/delivery-trace');
 const { evaluateGoalAlignment } = require('../features/goal-alignment');
 
 const TRIAGE_SCHEMA_VERSION = 'jarvos-coding-triage/v1';
-const SUBMISSION_GATE_SCHEMA_VERSION = 'jarvos-coding-submission-gate/v2';
+// v3 requires a delivery trace: evidence that passed v2 on tests and review
+// alone now fails until the plan, documentation, implementation, and
+// behavioral proof link is declared and matches the Git observation.
+const SUBMISSION_GATE_SCHEMA_VERSION = 'jarvos-coding-submission-gate/v3';
 // v2 makes cleanup the authoritative closeout result; tracker closure is an
 // optional projection and is therefore reported separately.
 const ISSUE_BRANCH_LIFECYCLE_SCHEMA_VERSION = 'jarvos-coding-issue-branch-lifecycle/v2';
@@ -163,6 +167,12 @@ const SUBMISSION_GATE_STAGES = Object.freeze([
     phase: 'submit',
     role: 'Create a durable review surface for non-trivial code changes.',
     evidence: 'checks.pullRequest.url or checks.pullRequest.number with created/approved status',
+  },
+  {
+    key: 'delivery_trace',
+    phase: 'submit',
+    role: 'Link the owning plan to the documentation decision, the implemented revision, and a behavioral observation; tests and review alone do not satisfy it.',
+    evidence: 'deliveryTrace (declared) compared with deliveryObservation (host-read Git head, changed files, and plan digest)',
   },
   {
     key: 'post_merge_clawsweeper',
@@ -554,9 +564,33 @@ function evaluateIssueBranchLifecycle(input = {}) {
   };
 }
 
-function stageSatisfied(stageKey, input = {}) {
+function workIdentifierFor(input = {}) {
+  const workIdentity = input.workIdentity || {};
+  const issue = input.issue || {};
+  return firstValue(
+    workIdentity.identifier,
+    workIdentity.id,
+    input.workIdentifier,
+    input.workId,
+    issue.identifier,
+    issue.id,
+    input.issueIdentifier,
+    input.issueId,
+  );
+}
+
+function deliveryTraceFor(input = {}) {
+  return evaluateDeliveryTrace(input.deliveryTrace, {
+    identifier: workIdentifierFor(input),
+    observed: input.deliveryObservation,
+  });
+}
+
+function stageSatisfied(stageKey, input = {}, deliveryTrace = deliveryTraceFor(input)) {
   const checks = input.checks || {};
   switch (stageKey) {
+    case 'delivery_trace':
+      return deliveryTrace.ok;
     case 'issue_linkage':
       return hasIssueLinkage(input);
     case 'branch_hygiene':
@@ -608,15 +642,18 @@ function submissionGateContract(options = {}) {
     reviewPolicy: 'clawpatch-before-pr-autoreview-goal-alignment-as-separate-signals',
     equivalentPolicy: 'equivalent-gates-must-document-pre-pr-slice-review-holistic-review-goal-alignment-and-post-merge-audit',
     completionPolicy: 'pull-request-merge-then-post-merge-clawsweeper-or-defined-equivalent',
+    deliveryTracePolicy: 'git-plan-doc-decision-implementation-and-behavioral-proof-match-host-observation',
+    proofPolicy: 'source-proof-only-installed-and-live-claims-are-never-promoted',
     stages: SUBMISSION_GATE_STAGES.filter((stage) => includedPhases.includes(stage.phase)),
   };
 }
 
 function evaluateSubmissionGate(input = {}, options = {}) {
   const contract = submissionGateContract(options);
+  const deliveryTrace = deliveryTraceFor(input);
   const stages = contract.stages.map((stage) => ({
     ...stage,
-    status: stageSatisfied(stage.key, input) ? 'passed' : 'missing',
+    status: stageSatisfied(stage.key, input, deliveryTrace) ? 'passed' : 'missing',
   }));
   const missing = stages.filter((stage) => stage.status !== 'passed');
 
@@ -628,6 +665,8 @@ function evaluateSubmissionGate(input = {}, options = {}) {
     decision: missing.length === 0 ? 'ready' : 'blocked',
     missing: missing.map((stage) => stage.key),
     stages,
+    // Reason codes and proof levels for the delivery_trace stage.
+    deliveryTrace,
   };
 }
 
