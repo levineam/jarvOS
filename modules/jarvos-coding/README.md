@@ -673,10 +673,12 @@ Historical Paperclip compatibility flow (not the default lifecycle):
    `targetVersion`, `releaseParentIssue`, `releaseRationale`, and
    `verificationGate`.
 
-Coding control-plane commands bind execution and verification to
-`command.resource.id`, the exact authorized issue or execution work-item identity.
-Explicit issue/work references and resume checkpoints must agree with it. A
-foreign implicit session checkpoint is ignored before tracker mutation; a
-same-resource checkpoint remains a pointer to revalidate. Cached completion and
-verification cannot be reused for a different resource. Canonical project and
-outcome references remain separate from the execution item.
+Coding control-plane commands bind their issue identity to `command.resource.id`.
+A trusted host may supply `approvedWorkBinding` with that resource and its
+independently approved execution work reference; the issue and Beads item can
+have different IDs. The factory snapshots this pair. Request arguments and
+resume pointers must agree with it and cannot choose a replacement mapping.
+Without a host mapping, execution references must use the resource identity.
+Foreign implicit session state is ignored before tracker mutation; same-binding
+state remains a pointer to revalidate. Cache replay and verification use the
+same approved pair. Canonical project/outcome references remain separate.

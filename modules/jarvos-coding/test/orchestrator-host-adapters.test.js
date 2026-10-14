@@ -988,3 +988,30 @@ test('control-plane verifier and completed cache stay bound to the authorized re
   assert.equal((await port.verify(other, { execution })).outcome, 'unverifiable');
   assert.equal((await port.verify(codingCommand(), { execution })).outcome, 'satisfied');
 });
+
+test('host-approved issue and Beads identities remain distinct and caller resume data cannot replace their binding', async () => {
+  const approved = { resourceId: 'SUP-2214', workReference: { authority: 'beads', itemId: 'bd-approved' } };
+  const sessionState = createMemorySessionStateStore({ codeThread: { issueIdentifier: 'SUP-2214', workReference: { authority: 'beads', itemId: 'bd-approved' } } });
+  const adapters = buildAdapters([], sessionState);
+  const claims = [];
+  adapters.tracker.claimIssue = async (input) => {
+    claims.push(input);
+    return { status: 'claimed', workReference: { authority: 'beads', itemId: 'bd-approved' } };
+  };
+  const port = createCodingControlPlanePort({ adapters, approvedWorkBinding: approved });
+  approved.workReference.itemId = 'bd-replaced-after-construction';
+  const context = { fence: 1, assertCurrentFence() {} };
+  for (const checkpoint of [
+    { workReference: { authority: 'beads', itemId: 'bd-other' } },
+    { workReference: { authority: 'other-tracker', itemId: 'bd-approved' } },
+  ]) {
+    await assert.rejects(() => port.executeFenced(codingCommand({ checkpoint }), context), /must match/);
+  }
+  assert.equal(claims.length, 0);
+  const command = codingCommand({ checkpoint: { issueIdentifier: 'SUP-2214', workReference: { authority: 'beads', itemId: 'bd-approved' } } });
+  const execution = await port.executeFenced(command, context);
+  assert.equal(claims[0].issueIdentifier, 'SUP-2214');
+  assert.equal(claims[0].workReference.itemId, 'bd-approved');
+  assert.equal((await port.verify(command, { execution })).outcome, 'satisfied');
+  assert.equal(await port.executeFenced(command, { assertCurrentFence() { throw new Error('redelivery has no lease'); } }), execution);
+});

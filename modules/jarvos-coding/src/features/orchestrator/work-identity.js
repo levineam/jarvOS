@@ -1,10 +1,13 @@
 'use strict';
 
-function assertIssueIdentity(value, issueIdentifier, location, seen = new Set()) {
+function assertIssueIdentity(value, binding, location, seen = new Set()) {
+  const issueIdentifier = typeof binding === 'string' ? binding : binding.issueIdentifier;
+  const workReference = typeof binding === 'string' ? null : binding.workReference;
+  const itemId = workReference?.itemId || issueIdentifier;
   if (!value || typeof value !== 'object' || seen.has(value)) return;
   seen.add(value);
   for (const field of ['issueIdentifier', 'itemId', 'workItemId']) {
-    if (value[field] != null && String(value[field]) !== issueIdentifier) {
+    if (value[field] != null && String(value[field]) !== (field === 'issueIdentifier' ? issueIdentifier : itemId)) {
       throw new Error(`${location}.${field} must match command.resource.id`);
     }
   }
@@ -14,9 +17,10 @@ function assertIssueIdentity(value, issueIdentifier, location, seen = new Set())
   for (const [key, child] of Object.entries(value)) {
     if (['workReference', 'workRef', 'beadsReference'].includes(key) && child != null) {
       const identifier = typeof child === 'string' ? child : child.itemId || child.id || child.ref;
-      if (identifier == null || String(identifier) !== issueIdentifier) throw new Error(`${location}.${key} must match command.resource.id`);
+      if (workReference?.authority && typeof child === 'object' && child.authority !== workReference.authority) throw new Error(`${location}.${key} authority must match the host binding`);
+      if (identifier == null || String(identifier) !== itemId) throw new Error(`${location}.${key} must match command.resource.id`);
     }
-    if (child && typeof child === 'object') assertIssueIdentity(child, issueIdentifier, `${location}.${key}`, seen);
+    if (child && typeof child === 'object') assertIssueIdentity(child, binding, `${location}.${key}`, seen);
   }
 }
 

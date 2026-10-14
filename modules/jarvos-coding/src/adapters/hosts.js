@@ -624,6 +624,22 @@ function createCodingControlPlanePort(options = {}) {
   const host = normalizeHost(options.host || 'codex');
   const hostAdapter = options.hostAdapter || createCodingHostAdapter(host, { adapters: options.adapters });
   const completed = new Map();
+  const suppliedBinding = options.approvedWorkBinding;
+  if (suppliedBinding && (typeof suppliedBinding.resourceId !== 'string' || !suppliedBinding.resourceId
+    || typeof suppliedBinding.workReference?.authority !== 'string' || !suppliedBinding.workReference.authority
+    || typeof suppliedBinding.workReference?.itemId !== 'string' || !suppliedBinding.workReference.itemId)) {
+    throw new Error('approved work binding requires a resource and execution reference');
+  }
+  const approvedWorkBinding = suppliedBinding ? Object.freeze({
+    resourceId: suppliedBinding.resourceId,
+    workReference: Object.freeze({ authority: suppliedBinding.workReference.authority, itemId: suppliedBinding.workReference.itemId }),
+  }) : null;
+  function identityFor(command) {
+    const issueIdentifier = issueIdentifierFor(command);
+    if (approvedWorkBinding && approvedWorkBinding.resourceId !== issueIdentifier) throw new Error('command.resource.id must match the host binding');
+    return { issueIdentifier, workReference: approvedWorkBinding?.workReference || null };
+  }
+
 
   async function executeFenced(command = {}, context = {}) {
     if (command.mutationClass !== CODING_MUTATION_CLASS) {
@@ -636,15 +652,16 @@ function createCodingControlPlanePort(options = {}) {
       throw new Error('coding control-plane execution requires assertCurrentFence');
     }
 
-    const issueIdentifier = issueIdentifierFor(command);
+    const identity = identityFor(command);
+    const { issueIdentifier } = identity;
     const args = command.commandSpec.arguments || {};
-    assertIssueIdentity(args, issueIdentifier, 'command.commandSpec.arguments');
-    assertIssueIdentity(command.checkpoint, issueIdentifier, 'command.checkpoint');
+    assertIssueIdentity(args, identity, 'command.commandSpec.arguments');
+    assertIssueIdentity(command.checkpoint, identity, 'command.checkpoint');
 
     // Idempotent redelivery must not depend on a still-current lease fence.
     const completedResult = completed.get(command.id);
     if (completedResult) {
-      assertIssueIdentity(completedResult, issueIdentifier, 'cached execution');
+      assertIssueIdentity(completedResult, identity, 'cached execution');
       return completedResult;
     }
 
@@ -657,6 +674,7 @@ function createCodingControlPlanePort(options = {}) {
     const result = await hostAdapter.runTakeIssueToDone({
       issueIdentifier,
       issue: { ...(args.issue || {}), identifier: issueIdentifier },
+      ...(identity.workReference ? { workReference: identity.workReference } : {}),
       branch: args.branch,
       baseRef: args.baseRef,
       // Declared trace only; an observation in the arguments is never forwarded.
@@ -664,6 +682,7 @@ function createCodingControlPlanePort(options = {}) {
       resumeFrom: command.checkpoint || args.resumeFrom || null,
       controlPlane: {
         issueIdentifier,
+        ...(identity.workReference ? { workReference: identity.workReference } : {}),
         commandId: command.id,
         fence: context.fence,
         desiredGeneration: command.desiredGeneration,
@@ -704,10 +723,10 @@ function createCodingControlPlanePort(options = {}) {
   async function verify(command, context = {}) {
     const execution = context.execution;
     try {
-      const issueIdentifier = issueIdentifierFor(command);
-      assertIssueIdentity(command.commandSpec?.arguments, issueIdentifier, 'command arguments');
-      assertIssueIdentity(command.checkpoint, issueIdentifier, 'command checkpoint');
-      assertIssueIdentity(execution, issueIdentifier, 'execution');
+      const identity = identityFor(command);
+      assertIssueIdentity(command.commandSpec?.arguments, identity, 'command arguments');
+      assertIssueIdentity(command.checkpoint, identity, 'command checkpoint');
+      assertIssueIdentity(execution, identity, 'execution');
     } catch (error) {
       return { outcome: 'unverifiable', verifier: `${CODING_MANAGER_ID}.verify`, reason: error.message };
     }
