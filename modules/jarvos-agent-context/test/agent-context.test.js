@@ -2344,6 +2344,39 @@ test('redactObviousSecrets removes common token shapes', () => {
   assert.doesNotMatch(redacted, /abcdefghijklmnopqrstuvwxyz/);
 });
 
+test('required-route hydration rejects missing, invalid, expired and foreign capabilities before returning private context', async () => {
+  await withTempVault(async ({ journal }) => {
+    const keys = ['JARVOS_REQUIRE_ROUTE_CAPABILITY', 'JARVOS_ROUTE_BINDING_SECRET', 'JARVOS_ROUTE_BINDING_SECRET_FILE', 'JARVOS_ROUTE_BINDING_GENERATION'];
+    const previous = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
+    const secret = 'hydration-test-route-secret';
+    const route = { harness: 'hermes', profile: 'default', platform: 'telegram', conversation: 'chat', sender: 'sender', nativeSession: 'hydration', generation: 'hermes-jarvos.v1' };
+    process.env.JARVOS_REQUIRE_ROUTE_CAPABILITY = '1';
+    process.env.JARVOS_ROUTE_BINDING_SECRET = secret;
+    delete process.env.JARVOS_ROUTE_BINDING_SECRET_FILE;
+    process.env.JARVOS_ROUTE_BINDING_GENERATION = route.generation;
+    fs.writeFileSync(path.join(journal, '2026-05-12.md'), '# Private fixture journal\n');
+    const options = { maxChars: 6000, projectsContext: false, ontology: false, journal: { date: '2026-05-12', timeZone: 'UTC' } };
+    try {
+      for (const sessionThread of [undefined, false, {},
+        { routeCapability: 'invalid-capability' },
+        { routeCapability: issueRouteCapability({ route, secret, now: 0 }) },
+        { routeCapability: issueRouteCapability({ route: { ...route, generation: 'other-generation' }, secret }) },
+        { routeCapability: issueRouteCapability({ route, secret: 'foreign-test-route-secret' }) },
+      ]) {
+        await assert.rejects(() => hydrate({ ...options, sessionThread }), /route capability/);
+      }
+      await assert.rejects(() => callTool('jarvos_hydrate', { maxChars: 6000, sessionThread: { routeCapability: 'invalid-capability' } }), /route capability/);
+      const allowed = await hydrate({ ...options, sessionThread: { routeCapability: issueRouteCapability({ route, secret }) } });
+      assert.match(allowed.markdown, /Private fixture journal/);
+    } finally {
+      for (const [key, value] of Object.entries(previous)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+  });
+});
+
 test('hydrate includes journal, linked notes, ontology context packet, report, and redacts secrets', async () => {
   const oldFetch = global.fetch;
   const oldEnv = {

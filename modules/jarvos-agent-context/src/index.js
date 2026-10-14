@@ -1831,6 +1831,8 @@ function refreshFinalSize(markdown, report) {
 }
 
 async function hydrate(options = {}) {
+  // Route authorization covers the whole private packet, before any source read.
+  routeThreadKey(options.sessionThread && typeof options.sessionThread === 'object' ? options.sessionThread : {});
   const maxChars = Number(options.maxChars || DEFAULT_HYDRATION_MAX_CHARS);
   const report = {
     sources: [], omissions: [], handles: [], finalChars: 0,
