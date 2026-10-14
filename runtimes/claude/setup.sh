@@ -467,7 +467,7 @@ if (!path.isAbsolute(captureScript)) throw new Error('capture script path must b
 const shellQuote = (value) => `'${value.replace(/'/g, `'"'"'`)}'`;
 const template = fs.readFileSync(templatePath, 'utf8').replace(
   '{{JARVOS_CAPTURE_SCRIPT}}',
-  shellQuote(captureScript),
+  () => shellQuote(captureScript),
 );
 const existing = readFileOrNull(claudeMdPath);
 const { mode, body } = extractLocalExtensions(existing);

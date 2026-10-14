@@ -11,7 +11,7 @@ const ROOT = path.resolve(__dirname, '../../..');
 test('Claude setup materializes a quoted capture path that ignores a hostile workspace', () => {
   const temp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-capture-path-')));
   try {
-    const install = path.join(temp, "trusted install's root");
+    const install = path.join(temp, "trusted $& $$ $` $' install's root");
     const workspace = path.join(temp, 'workspace');
     const home = path.join(temp, 'home');
     const markdown = path.join(home, 'CLAUDE.md');
