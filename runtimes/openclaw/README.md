@@ -240,10 +240,11 @@ candidates or inquiry items; promotion into active ontology requires review.
 
 OpenClaw is the reference adapter for deterministic note and journal behavior,
 but jarvOS owns the contract. For `note:`, `make a note`, `idea:`, `save this`,
-and similar explicit capture requests, OpenClaw should call:
+and similar explicit capture requests, OpenClaw should resolve the trusted
+jarvOS installation outside the current workspace and call its absolute path:
 
 ```bash
-node modules/jarvos-secondbrain/scripts/jarvos-capture.js
+node "/absolute/path/to/trusted/jarvOS/modules/jarvos-secondbrain/scripts/jarvos-capture.js"
 ```
 
 The capture event source is `openclaw`. Successful note captures must write
