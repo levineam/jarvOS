@@ -27,7 +27,7 @@
         },
         "startupHydration": {
           "status": "unsupported",
-          "reason": "Grok Bot has a separate computer; automatic startup hydration would target the wrong machine. Use boot_jarvos or jarvos_hydrate after connecting to the vault-host URL."
+          "reason": "Grok Bot has a separate computer; automatic startup hydration would target the wrong machine. After connecting to the scoped Grok vault-host endpoint, invoke the jarvos_hydrate tool; prompts such as boot_jarvos are denied there."
         }
       },
       "notes": {
@@ -122,11 +122,14 @@
   "sharedAgentContext": {
     "mcpServer": "modules/jarvos-agent-context/scripts/jarvos-mcp.js",
     "requiredTools": [
-      "jarvos_current_work",
+      "jarvos_hydrate",
+      "jarvos_startup_brief",
+      "jarvos_projects_context",
       "jarvos_recall",
       "jarvos_create_note",
-      "jarvos_startup_brief",
-      "jarvos_hydrate"
+      "jarvos_session_thread_read",
+      "jarvos_session_thread_write",
+      "jarvos_journal_health"
     ]
   },
   "targets": [
@@ -136,11 +139,11 @@
       "mcp": {
         "supported": true,
         "transport": "http",
-        "registration": "On the VAULT HOST run modules/jarvos-agent-context/scripts/jarvos-mcp-http.js (authenticated Streamable HTTP in front of jarvos-mcp.js; Mcp-Session-Id per initialize). On Grok Bot register only the tunneled URL plus bearer token. Do not register stdio MCP on the Grok Bot disk; that hydrates the wrong machine. The token grants the full MCP surface, not only requiredTools."
+        "registration": "On the VAULT HOST run the scoped launcher runtimes/grok-bot/gateway.js (authenticated Streamable HTTP; fixed eight-tool policy with host-owned closed arguments; Mcp-Session-Id per initialize) with a Grok-only token from JARVOS_GROK_MCP_TOKEN_FILE. On Grok Bot register only the TLS or tunneled URL plus that bearer token. Do not register stdio MCP on the Grok Bot disk; that hydrates the wrong machine. Do not reuse the full-surface general gateway or its token. requiredTools is a declaration; enforcement lives in the launcher."
       },
       "hydration": {
         "mode": "manual",
-        "command": "After the remote connector is reachable, use the boot_jarvos prompt or call the jarvos_hydrate MCP tool.",
+        "command": "After the scoped endpoint is reachable, call the jarvos_hydrate MCP tool (the scoped launcher denies prompts).",
         "reason": "startupHydration is unsupported because Grok Bot is a separate computer from the canonical vault."
       }
     }
