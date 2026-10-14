@@ -257,11 +257,12 @@ const { trustedExecutable } = require(path.resolve(path.dirname(turnHookScript),
 
 function stewardshipBridgeEnvironment() {
   if (!bridgeCommand && !claudeSessionMapRoot && !bridgePath) return null;
-  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(bridgeCommand || '')) throw new Error('JARVOS_STEWARDSHIP_BRIDGE_COMMAND must be a bounded executable name');
+  const commandName = path.isAbsolute(bridgeCommand || '') ? path.basename(bridgeCommand) : bridgeCommand;
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(commandName || '')) throw new Error('JARVOS_STEWARDSHIP_BRIDGE_COMMAND must be a bounded executable name');
   const mapRoot = privateDirectory(claudeSessionMapRoot, 'JARVOS_STEWARDSHIP_CLAUDE_SESSION_MAP_ROOT');
   const bin = privateDirectory(bridgePath, 'JARVOS_STEWARDSHIP_BRIDGE_PATH');
-  const executable = trustedExecutable(path.join(bin, bridgeCommand));
-  if (!executable) throw new Error('JARVOS_STEWARDSHIP_BRIDGE_PATH must contain a trusted executable path');
+  const executable = trustedExecutable(path.isAbsolute(bridgeCommand) ? bridgeCommand : path.join(bin, bridgeCommand));
+  if (!executable || path.dirname(executable) !== bin) throw new Error('JARVOS_STEWARDSHIP_BRIDGE_PATH must contain a trusted executable path');
   const stat = fs.lstatSync(executable);
   if (stat.isSymbolicLink() || !stat.isFile() || (stat.mode & 0o077) !== 0 || (stat.mode & 0o111) === 0) throw new Error('JARVOS_STEWARDSHIP_BRIDGE_PATH must contain an owner-only bridge executable');
   return { command: fs.realpathSync(executable), mapRoot, bin };

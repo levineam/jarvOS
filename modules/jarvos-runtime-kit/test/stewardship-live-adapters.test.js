@@ -1517,6 +1517,9 @@ test('Claude setup injects a private bridge command environment without retainin
       JARVOS_STEWARDSHIP_CLAUDE_SESSION_MAP_ROOT: mapRoot, JARVOS_STEWARDSHIP_BRIDGE_PATH: bin,
     };
     runSetup(path.join(ROOT, 'runtimes', 'claude', 'setup.sh'), env);
+    const namedConfiguration = fs.readFileSync(settings, 'utf8');
+    runSetup(path.join(ROOT, 'runtimes', 'claude', 'setup.sh'), { ...env, JARVOS_STEWARDSHIP_BRIDGE_COMMAND: bridge });
+    assert.equal(fs.readFileSync(settings, 'utf8'), namedConfiguration);
     const configured = JSON.parse(fs.readFileSync(settings, 'utf8'));
     const command = configured.hooks.SessionStart[0].hooks[0].command;
     const turnCommand = configured.hooks.UserPromptSubmit[0].hooks[0].command;
