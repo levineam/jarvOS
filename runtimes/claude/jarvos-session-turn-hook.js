@@ -59,7 +59,8 @@ function isolationState(options = {}) {
 }
 
 function bridgeCommand(options = {}) {
-  const command = options.bridgeCommand === undefined ? process.env[BRIDGE_COMMAND_ENV] : options.bridgeCommand;
+  const env = { ...process.env, ...(options.env || {}) };
+  const command = options.bridgeCommand === undefined ? env[BRIDGE_COMMAND_ENV] : options.bridgeCommand;
   return trustedExecutable(command);
 }
 

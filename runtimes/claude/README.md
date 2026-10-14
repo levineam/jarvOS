@@ -178,3 +178,13 @@ node runtimes/claude/jarvos-session-start-hook.js
 node runtimes/claude/jarvos-precompact-hook.js
 node modules/jarvos-runtime-kit/scripts/jarvos-runtime-kit.js check claude
 ```
+
+Native stewardship hooks require `JARVOS_STEWARDSHIP_BRIDGE_COMMAND` to name a
+canonical absolute executable with trusted ownership, safe ancestor permissions
+and no symlinks. They use system Git and constrain bridge helper/interpreter PATH
+to `/usr/bin:/bin`; bridge scripts must bind any other interpreter explicitly.
+Claude setup still accepts a bounded command name plus an approved bridge bin,
+then persists the resulting absolute identity. Session environment persistence
+does not extend PATH. Unconfigured or unsafe commands remain unavailable without
+probing workspace commands. Platforms without POSIX ownership verification fail
+closed. Protected selected-runtime adoption remains a separate operation.
