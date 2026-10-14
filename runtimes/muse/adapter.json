@@ -1,0 +1,181 @@
+{
+  "capabilityDescriptor": {
+    "capabilities": {
+      "codingEntrypoint": {
+        "invoke": {
+          "reason": "CloudAgent coding host is out of scope; Muse is not a jarvOS coding entrypoint.",
+          "status": "unsupported"
+        }
+      },
+      "context": {
+        "currentWork": {
+          "evidence": "jarvos_hydrate and jarvos_startup_brief through the Muse read-only gateway",
+          "status": "supported",
+          "transport": "vault-host read-only remote MCP"
+        },
+        "recall": {
+          "evidence": "jarvos_recall through the Muse read-only gateway (query, includeQmd, autoGraph only)",
+          "status": "supported",
+          "transport": "vault-host read-only remote MCP"
+        },
+        "startupHydration": {
+          "reason": "Muse runs on a separate computer with no session-start hook into the Muse host; automatic startup hydration would target the wrong lifecycle. Hydrate manually with the jarvos_hydrate tool.",
+          "status": "unsupported"
+        }
+      },
+      "egress": {
+        "declare": {
+          "reason": "No public Muse egress declaration is shipped.",
+          "status": "unsupported"
+        },
+        "enforce": {
+          "reason": "Muse owns native egress.",
+          "status": "unsupported"
+        }
+      },
+      "inboundDispatch": {
+        "receive": {
+          "reason": "jarvOS does not expose SendMessage or CloudAgent from this adapter.",
+          "status": "unsupported"
+        },
+        "validate": {
+          "reason": "jarvOS does not expose SendMessage or CloudAgent from this adapter.",
+          "status": "unsupported"
+        }
+      },
+      "lifecycle": {
+        "receipt": {
+          "reason": "No public Muse lifecycle receipt bridge is declared.",
+          "status": "unsupported"
+        }
+      },
+      "notes": {
+        "create": {
+          "reason": "The Muse read-only gateway denies jarvos_create_note; note capture is not exposed to Muse.",
+          "status": "unsupported"
+        },
+        "journalLink": {
+          "reason": "The Muse read-only gateway exposes no capture path, so no journal links are written.",
+          "status": "unsupported"
+        },
+        "read": {
+          "evidence": "read-only tools over HTTP; no raw vault file access from the Muse host",
+          "status": "supported",
+          "transport": "jarvos_recall MCP tool through the Muse read-only gateway"
+        },
+        "update": {
+          "reason": "The Muse read-only gateway denies every write tool, including session-thread writes.",
+          "status": "unsupported"
+        }
+      },
+      "scheduledWork": {
+        "participate": {
+          "reason": "Muse scheduled work stays host-owned.",
+          "status": "unsupported"
+        }
+      },
+      "session": {
+        "handoff": {
+          "reason": "The Muse read-only gateway denies session-thread writes and reads; jarvos_hydrate may include session-thread context but Muse cannot hand off.",
+          "status": "unsupported"
+        },
+        "startupHook": {
+          "reason": "startupHydration is unsupported; there is no Muse startup hook on the vault host.",
+          "status": "unsupported"
+        }
+      },
+      "skills": {
+        "discover": {
+          "reason": "Skill projection is out of scope; the skills manager does not project to Muse and the read-only gateway denies jarvos_shared_skills.",
+          "status": "unsupported"
+        },
+        "invoke": {
+          "reason": "Skill projection is out of scope; the skills manager does not project to Muse.",
+          "status": "unsupported"
+        }
+      },
+      "toolAuthorization": {
+        "declare": {
+          "reason": "No public Muse authorization contract is shipped.",
+          "status": "unsupported"
+        },
+        "enforce": {
+          "reason": "Muse owns native tool authorization.",
+          "status": "unsupported"
+        }
+      }
+    },
+    "harness": "muse",
+    "version": "jarvos-runtime-capability-descriptor.v1"
+  },
+  "configWrites": {
+    "backupBeforeWrite": true,
+    "paths": [
+      "~/.jarvos/muse-mcp.token"
+    ]
+  },
+  "displayName": "Muse",
+  "id": "muse",
+  "operatorNotification": {
+    "contract": "jarvos-operator-notification/v1",
+    "delivery": {
+      "reason": "Local owner configuration chooses a delivery surface; this public adapter does not configure one.",
+      "status": "not-configured"
+    },
+    "version": "jarvos-operator-notification-adapter/v1"
+  },
+  "schemaVersion": 1,
+  "setup": {
+    "script": "setup.sh"
+  },
+  "sharedAgentContext": {
+    "mcpServer": "modules/jarvos-agent-context/scripts/jarvos-mcp.js",
+    "requiredTools": [
+      "jarvos_hydrate",
+      "jarvos_projects_context",
+      "jarvos_recall",
+      "jarvos_startup_brief"
+    ]
+  },
+  "targets": [
+    {
+      "hydration": {
+        "command": "After the remote connector is reachable, call the jarvos_hydrate MCP tool at session start.",
+        "mode": "manual",
+        "reason": "startupHydration is unsupported because Muse is a separate computer from the canonical vault."
+      },
+      "id": "muse-http",
+      "kind": "agent-runtime",
+      "mcp": {
+        "registration": "On the VAULT HOST run runtimes/muse/gateway.js (read-only Streamable HTTP in front of jarvos-mcp.js; default 127.0.0.1:8766; Muse-only token via JARVOS_MUSE_MCP_TOKEN_FILE). It exposes exactly jarvos_hydrate, jarvos_projects_context, jarvos_recall and jarvos_startup_brief with closed argument schemas; prompts, resources, writes and GET SSE are denied. On the Muse host register only the reachable Muse gateway URL plus the Muse bearer token. Never point Muse at the general jarvos-mcp-http.js gateway and never reuse its credential. Do not register stdio MCP on the Muse host disk; that hydrates the wrong machine.",
+        "supported": true,
+        "transport": "http"
+      }
+    }
+  ],
+  "unsupportedCapabilities": [
+    {
+      "capability": "startup-hydration",
+      "reason": "Automatic session-start hydration is unsupported; Muse hydrates manually per session with jarvos_hydrate."
+    },
+    {
+      "capability": "notes-write",
+      "reason": "The Muse read-only gateway denies note capture, note updates and session-thread writes."
+    },
+    {
+      "capability": "session-handoff",
+      "reason": "No handoff: session-thread writes are denied by the Muse read-only gateway."
+    },
+    {
+      "capability": "skill-projection",
+      "reason": "The skills manager does not project to Muse; jarvos_shared_skills is denied by the read-only gateway."
+    },
+    {
+      "capability": "mcp-prompts",
+      "reason": "The Muse read-only gateway advertises tools only; prompts such as boot_jarvos are denied."
+    }
+  ],
+  "verification": [
+    "node modules/jarvos-runtime-kit/scripts/jarvos-runtime-kit.js check muse"
+  ]
+}

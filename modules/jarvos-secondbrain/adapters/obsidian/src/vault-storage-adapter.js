@@ -10,6 +10,7 @@ const fs = require('node:fs');
 const { loadConfig, normalizeSections, renderJournal } = require('../../../packages/jarvos-secondbrain-journal/src/journal-maintenance.js');
 const { noteFilePath, writeNoteFile } = require('../../../packages/jarvos-secondbrain-notes/src/write-to-vault.js');
 const { getTimeZone, getVaultDir, getVaultJournalDir } = require('../../../bridge/provenance/src/lib/provenance-config.js');
+const { cleanJournalEntryText, digestText } = require('../../../bridge/provenance/src/content-origin-contract.js');
 const {
   artifactFromMutationResult,
   createArtifactReceipt,
@@ -49,20 +50,20 @@ function journalArtifact({ journalPath, vaultRoot, receipt, intent = 'auxiliary'
 function createVaultStorageAdapter({ mutationService, vaultRoot = getVaultDir(), journalDir = getVaultJournalDir(), source = 'obsidian.vault-storage-adapter' } = {}) {
   const service = mutationService || require('../../../src/vault-mutation-service.js').createConfiguredVaultMutationService({ vaultRoot: path.resolve(vaultRoot), source });
   if (typeof service.execute !== 'function' || typeof service.createWriteContext !== 'function') throw new Error('vault storage adapter requires the configured mutation service');
-  function contextFor(vaultRelativePath, intentId) { return service.createWriteContext({ vaultRelativePath, intentId, operationSource: service.source }); }
-  function executeTransform({ date, transformName, replayPayload, intentId }) {
+  function contextFor(vaultRelativePath, intentId, requestHash) { return service.createWriteContext({ vaultRelativePath, intentId, requestHash, operationSource: service.source }); }
+  function executeTransform({ date, transformName, transformVersion = 1, replayPayload, intentId, requestHash }) {
     const journalPath = path.join(journalDir, `${date}.md`);
     const vaultRelativePath = relativeToVault(vaultRoot, journalPath);
-    const context = contextFor(vaultRelativePath, intentId);
-    const receipt = context.mutationExecutor({ schemaVersion: 1, operationId: context.operationId, vaultId: context.vaultId, vaultRelativePath, sequence: context.sequence, operationKind: 'transform', transformName, transformVersion: 1, replayPayload, source: context.source });
+    const context = contextFor(vaultRelativePath, intentId, requestHash);
+    const receipt = context.mutationExecutor({ schemaVersion: 1, operationId: context.operationId, vaultId: context.vaultId, vaultRelativePath, sequence: context.sequence, operationKind: 'transform', transformName, transformVersion, replayPayload, source: context.source });
     return { journalPath, receipt };
   }
   return Object.freeze({
-    ensureJournal({ date = todayDate(), intentId } = {}) {
+    ensureJournal({ date = todayDate(), intentId, requestHash } = {}) {
       const journalPath = path.join(journalDir, `${date}.md`);
       const existed = fs.existsSync(journalPath);
       const vaultRelativePath = relativeToVault(vaultRoot, journalPath);
-      const context = contextFor(vaultRelativePath, intentId || `journal-create-${date}-${crypto.randomUUID()}`);
+      const context = contextFor(vaultRelativePath, intentId || `journal-create-${date}-${crypto.randomUUID()}`, requestHash);
       const content = existed ? fs.readFileSync(journalPath, 'utf8') : renderJournalScaffold(date);
       const receipt = context.mutationExecutor({ schemaVersion: 1, operationId: context.operationId, vaultId: context.vaultId, vaultRelativePath, sequence: context.sequence, operationKind: 'create', content, source: context.source });
       return {
@@ -73,12 +74,33 @@ function createVaultStorageAdapter({ mutationService, vaultRoot = getVaultDir(),
         artifactReceipt: artifactReceiptFor([journalArtifact({ journalPath, vaultRoot, receipt })]),
       };
     },
-    appendLineToJournalSection({ heading, line, date = todayDate(), intentId } = {}) {
+    appendLineToJournalSection({ heading, line, date = todayDate(), intentId, requestHash, contentOrigin } = {}) {
       if (!heading) throw new Error('heading is required');
       if (!line || !String(line).trim()) throw new Error('line is required');
-      const ensured = this.ensureJournal({ date, intentId: intentId ? `${intentId}:create` : undefined });
-      if (!receiptIsAcknowledged(ensured.receipt)) return { journalPath: ensured.journalPath, heading, line: String(line).trim(), receipt: ensured.receipt, acknowledged: false, artifactReceipt: ensured.artifactReceipt };
-      const outcome = executeTransform({ date, transformName: 'journal-section-line', replayPayload: { heading, line }, intentId: intentId ? `${intentId}:section` : undefined });
+      // An existing identified journal needs only the section operation's
+      // app-owned readback. Rechecking the original scaffold's exact bytes after
+      // the backlink was added would turn every successful retry into conflict.
+      const journalExists = requestHash && fs.existsSync(path.join(journalDir, `${date}.md`));
+      const ensured = journalExists ? null : this.ensureJournal({ date, intentId: intentId ? `${intentId}:create` : undefined, requestHash });
+      if (ensured && !receiptIsAcknowledged(ensured.receipt)) return { journalPath: ensured.journalPath, heading, line: String(line).trim(), receipt: ensured.receipt, acknowledged: false, artifactReceipt: ensured.artifactReceipt };
+      const cleanLine = cleanJournalEntryText(String(line).trim());
+      const canonicalCleanText = cleanLine.startsWith('- ')
+        ? cleanLine.slice(2).trim()
+        : cleanLine.replace(/^[-\s]+/, '').trim();
+      const contentOriginPayload = contentOrigin
+        ? {
+          ...contentOrigin,
+          clean_text_digest: digestText(canonicalCleanText),
+        }
+        : null;
+      const outcome = executeTransform({
+        date,
+        transformName: 'journal-section-line',
+        transformVersion: contentOriginPayload ? 2 : 1,
+        replayPayload: { heading, line, ...(contentOriginPayload ? { contentOrigin: contentOriginPayload } : {}) },
+        intentId: intentId ? `${intentId}:section` : undefined,
+        requestHash,
+      });
       return {
         journalPath: outcome.journalPath,
         heading,
@@ -87,14 +109,14 @@ function createVaultStorageAdapter({ mutationService, vaultRoot = getVaultDir(),
         acknowledged: receiptIsAcknowledged(outcome.receipt),
         alreadyPresent: outcome.receipt.status === 'already_satisfied',
         artifactReceipt: artifactReceiptFor([
-          ...(ensured.artifactReceipt?.artifacts || []),
+          ...(ensured?.artifactReceipt?.artifacts || []),
           journalArtifact({ journalPath: outcome.journalPath, vaultRoot, receipt: outcome.receipt, intent: 'user_requested' }),
         ]),
       };
     },
-    writeNote({ title, content, frontmatter = {}, intentId } = {}) {
+    writeNote({ title, content, frontmatter = {}, intentId, requestHash, resolveUserSource, resolveServedModel } = {}) {
       const filePath = noteFilePath(title);
-      return writeNoteFile({ title, content, frontmatter, ...contextFor(relativeToVault(vaultRoot, filePath), intentId) });
+      return writeNoteFile({ title, content, frontmatter, resolveUserSource, resolveServedModel, ...contextFor(relativeToVault(vaultRoot, filePath), intentId, requestHash) });
     },
     linkNoteToJournal({ noteTitle, noteId, date = todayDate(), heading = NOTES_HEADING, intentId } = {}) {
       if (!noteTitle) throw new Error('noteTitle is required');

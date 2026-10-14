@@ -9,7 +9,9 @@ const { spawnSync } = require('child_process');
 
 const REPO_ROOT = path.resolve(__dirname, '..');
 const CONTRACT_CLI = path.join(REPO_ROOT, 'scripts', 'obsidian-note-journal-contract.js');
+const { inspectProjectNote } = require('../bridge/provenance/src/note-journal-contract');
 const { verifyContract, writeNoteThroughContract } = require('../bridge/provenance/src/note-journal-contract.js');
+const { digestText } = require('../bridge/provenance/src/content-origin-contract.js');
 const { createConfiguredVaultMutationService } = require('../src/vault-mutation-service.js');
 
 function runContract({ root, personality, frontmatter = {} }) {
@@ -67,6 +69,10 @@ function makeTestMutationService(vaultRoot) {
       if (operation.operationKind === 'create') {
         if (fs.existsSync(target)) return fs.readFileSync(target, 'utf8') === operation.content ? { status: 'already_satisfied', obsidian: 'acknowledged' } : { status: 'conflict' };
         fs.writeFileSync(target, operation.content, 'utf8');
+      } else if (operation.operationKind === 'replace') {
+        // Compare-and-swap against the exact pre-state the writer read.
+        if (fs.readFileSync(target, 'utf8') !== operation.expectedContent) return { status: 'conflict' };
+        fs.writeFileSync(target, operation.content, 'utf8');
       } else {
         const current = fs.readFileSync(target, 'utf8');
         if (operation.transformName === 'journal-backlink') {
@@ -117,6 +123,9 @@ test('supported AI personalities can execute the Obsidian note/journal contract'
       assert.equal(first.created, true);
       assert.equal(first.qmdStatus, 'pending-refresh');
       assert.equal(first.verification.ok, true);
+      assert.equal(first.verification.frontmatter.content_origin, 'unknown');
+      assert.equal(first.verification.frontmatter.content_origin_basis, 'unknown');
+      assert.equal(first.verification.frontmatter.human_evidence_eligible, false);
       assert.ok(first.notePath.startsWith(path.join(root, 'Notes')));
       assert.equal(first.journalPath, path.join(root, 'Journal', `${new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' })}.md`));
 
@@ -132,6 +141,275 @@ test('supported AI personalities can execute the Obsidian note/journal contract'
       assert.equal(qmd.entries[`Notes/${second.title}.md`].status, 'pending-refresh');
     });
   }
+});
+
+test('Codex draft then Claude edit through the contract keeps multi-model drafting history end to end', () => {
+  const { frontmatterToObject, parseFrontmatter } = require('../packages/jarvos-secondbrain-notes/src/lib/note-schema.js');
+  const { projectNoteMarkdown } = require('../bridge/provenance/src/content-origin-evidence.js');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sup-4054-drafting-'));
+  withEnv({
+    VAULT_NOTES_DIR: path.join(root, 'Notes'),
+    JOURNAL_DIR: path.join(root, 'Journal'),
+    JARVOS_KNOWLEDGE_DIR: path.join(root, '.jarvos', 'knowledge'),
+    JARVOS_ALLOW_UNSAFE_TEST_JOURNAL_WRITE: '1',
+  }, () => {
+    const mutationService = makeTestMutationService(root);
+    const title = 'SUP-4054 drafting history';
+    const draft = 'Codex drafted this explanation for later retrieval.';
+    const frontmatter = { status: 'draft', type: 'reference', project: 'SUP-4054', author: 'jarvis' };
+    const codexServed = { kind: 'assistant_draft', harness: 'codex', model: 'gpt-5-codex', model_evidence: 'served', served_ref: 'resp-codex-1' };
+    const claudeDeclared = { kind: 'assistant_edit', harness: 'claude-code', model: 'claude-opus-5-5', model_evidence: 'declared' };
+    const resolveServedModel = (ref) => (ref === 'resp-codex-1' ? { model: 'gpt-5-codex' } : null);
+    const readStored = (notePath) => frontmatterToObject(parseFrontmatter(fs.readFileSync(notePath, 'utf8')));
+
+    // A served claim without the injected resolver is refused, not downgraded.
+    assert.throws(() => writeNoteThroughContract({
+      personality: 'codex', title, content: draft, content_origin: 'assistant', content_origin_basis: 'assistant_generated', drafting: [codexServed], frontmatter,
+    }, { mutationService }), /served_unresolved/);
+
+    const first = writeNoteThroughContract({
+      personality: 'codex', title, content: draft, content_origin: 'assistant', content_origin_basis: 'assistant_generated', drafting: [codexServed], frontmatter,
+    }, { mutationService, resolveServedModel });
+    assert.deepEqual(readStored(first.notePath).content_origin_drafting, [codexServed]);
+
+    const editInput = {
+      personality: 'claude-code',
+      title,
+      content: `${draft}\n\nClaude tightened the explanation.`,
+      content_origin: 'mixed',
+      content_origin_basis: 'mixed_composition',
+      drafting: [claudeDeclared],
+      frontmatter: { ...frontmatter, content_origin_drafting: [] },
+    };
+    const second = writeNoteThroughContract(editInput, { mutationService });
+    assert.deepEqual(readStored(second.notePath).content_origin_drafting, [codexServed, claudeDeclared]);
+    const retried = writeNoteThroughContract(editInput, { mutationService });
+    assert.deepEqual(readStored(retried.notePath).content_origin_drafting, [codexServed, claudeDeclared]);
+
+    const markdown = fs.readFileSync(retried.notePath, 'utf8');
+    assert.ok(markdown.includes(draft), 'original body survives');
+    assert.equal(projectNoteMarkdown(markdown, { title }).human_evidence_eligible, false);
+    const journalMd = fs.readFileSync(retried.journalPath, 'utf8');
+    assert.equal(journalMd.split(`- [[${title}]]`).length - 1, 1);
+
+    // Human adoption cannot erase the recorded assistant contributions.
+    const adoptionText = `${draft}\n\nClaude tightened the explanation.`;
+    const digest = digestText(adoptionText);
+    assert.throws(() => writeNoteThroughContract({
+      personality: 'claude-code', title, content: adoptionText, content_origin: 'human', content_origin_basis: 'verbatim_user',
+      user_source: { capture_event_id: 'adopt-1', actor: 'user', source_digest: digest, content_digest: digest },
+      drafting: [], frontmatter,
+    }, { mutationService, resolveUserSource: () => ({ capture_event_id: 'adopt-1', actor: 'user', text: adoptionText }) }), /human_origin_with_assistant_history/);
+    assert.deepEqual(readStored(retried.notePath).content_origin_drafting, [codexServed, claudeDeclared]);
+
+    // Unknown model is recorded as unknown, never inferred.
+    const unknownModel = writeNoteThroughContract({
+      personality: 'codex', title: 'SUP-4054 unknown model', content: 'Model was not reported.', content_origin: 'assistant', content_origin_basis: 'assistant_generated',
+      drafting: [{ kind: 'assistant_draft', harness: 'codex' }], frontmatter,
+    }, { mutationService });
+    assert.deepEqual(readStored(unknownModel.notePath).content_origin_drafting, [{ kind: 'assistant_draft', harness: 'codex', model: 'unknown', model_evidence: 'unknown' }]);
+  });
+});
+
+test('session adapter drafting flows through capture into the canonical writer: Codex then Claude history survives edit and retry', () => {
+  const { frontmatterToObject, parseFrontmatter } = require('../packages/jarvos-secondbrain-notes/src/lib/note-schema.js');
+  const { projectNoteMarkdown } = require('../bridge/provenance/src/content-origin-evidence.js');
+  const { createCodexSessionAdapter, createClaudeCodeSessionAdapter } = require('../adapters');
+  const { normalizeCaptureEvent } = require('../bridge/capture/src/universal-capture.js');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sup-4054-adapter-writer-'));
+  withEnv({
+    VAULT_NOTES_DIR: path.join(root, 'Notes'),
+    JOURNAL_DIR: path.join(root, 'Journal'),
+    JARVOS_KNOWLEDGE_DIR: path.join(root, '.jarvos', 'knowledge'),
+    JARVOS_ALLOW_UNSAFE_TEST_JOURNAL_WRITE: '1',
+  }, () => {
+    const mutationService = makeTestMutationService(root);
+    const frontmatter = { status: 'draft', type: 'reference', project: 'SUP-4054', author: 'jarvis' };
+    const readStored = (notePath) => frontmatterToObject(parseFrontmatter(fs.readFileSync(notePath, 'utf8')));
+    const toWriterInput = (personality, title, captureEvent) => ({
+      personality,
+      title,
+      content: captureEvent.text,
+      captureEventId: captureEvent.captureEventId,
+      content_origin: captureEvent.content_origin,
+      content_origin_basis: captureEvent.content_origin_basis,
+      ...(captureEvent.user_source ? { user_source: captureEvent.user_source } : {}),
+      drafting: captureEvent.content_origin_drafting,
+      frontmatter,
+    });
+
+    const title = 'SUP-4054 adapter drafting';
+    const draft = 'Codex drafted this explanation from the session.';
+    const codexEvent = createCodexSessionAdapter().normalizeSession({
+      sessionId: 'codex-writer-session',
+      model: 'session-model-must-not-be-drafting',
+      messages: [{ id: 'reply-1', role: 'assistant', model: 'gpt-5-codex', content: draft }],
+    }).events[0];
+    assert.ok(codexEvent, 'Codex assistant message is emitted');
+    const codexCapture = normalizeCaptureEvent(codexEvent);
+    const first = writeNoteThroughContract(toWriterInput('codex', title, codexCapture), { mutationService });
+    const codexEntry = { kind: 'assistant_draft', harness: 'codex', model: 'gpt-5-codex', model_evidence: 'declared' };
+    assert.deepEqual(readStored(first.notePath).content_origin_drafting, [codexEntry]);
+
+    const edited = `${draft}\n\nClaude tightened the explanation.`;
+    const claudeEvent = createClaudeCodeSessionAdapter().normalizeSession({
+      conversationId: 'claude-writer-session',
+      model: 'session-model-must-not-be-drafting',
+      entries: [{
+        uuid: 'edit-1', role: 'assistant', model: 'claude-opus-5-5', content_origin: 'mixed', content_origin_basis: 'mixed_composition', content: edited,
+      }],
+    }).events[0];
+    assert.ok(claudeEvent, 'Claude mixed edit is emitted');
+    const claudeInput = toWriterInput('claude-code', title, normalizeCaptureEvent(claudeEvent));
+    const assertHistory = (notePath) => {
+      const history = readStored(notePath).content_origin_drafting;
+      assert.deepEqual(history, [
+        codexEntry,
+        { kind: 'assistant_edit', harness: 'claude-code', model: 'claude-opus-5-5', model_evidence: 'declared' },
+      ], 'Claude edit follows the Codex draft');
+      assert.doesNotMatch(JSON.stringify(history), /session-model-must-not-be-drafting/);
+      return history;
+    };
+    const second = writeNoteThroughContract(claudeInput, { mutationService });
+    const afterEdit = assertHistory(second.notePath);
+    const retried = writeNoteThroughContract(claudeInput, { mutationService });
+    assert.deepEqual(assertHistory(retried.notePath), afterEdit, 'retry does not duplicate or drop history');
+    const markdown = fs.readFileSync(retried.notePath, 'utf8');
+    assert.equal(readStored(retried.notePath).human_evidence_eligible, false);
+    assert.equal(projectNoteMarkdown(markdown, { title }).human_evidence_eligible, false);
+
+    // A resolver-backed user message saved through Codex stays human with no AI contribution.
+    const verbatim = 'The user said exactly this through the session.';
+    const sessionId = 'codex-writer-human';
+    const captureEventId = `capture:codex:${sessionId}:user-1`;
+    const resolveUserSource = (id) => (id === captureEventId ? { capture_event_id: id, actor: 'user', text: verbatim } : null);
+    const humanEvent = createCodexSessionAdapter({ resolveUserSource }).normalizeSession({
+      sessionId,
+      model: 'session-model-must-not-be-drafting',
+      messages: [{ id: 'user-1', role: 'user', content: verbatim }],
+    }).events[0];
+    assert.ok(humanEvent);
+    const humanTitle = 'SUP-4054 adapter human source';
+    const saved = writeNoteThroughContract(
+      toWriterInput('codex', humanTitle, normalizeCaptureEvent(humanEvent, { resolveUserSource })),
+      { mutationService, resolveUserSource },
+    );
+    const humanStored = readStored(saved.notePath);
+    assert.equal(humanStored.content_origin, 'human');
+    assert.equal(humanStored.human_evidence_eligible, true);
+    assert.ok(!(humanStored.content_origin_drafting || []).some((entry) => entry.kind !== 'user_source'));
+    assert.equal(projectNoteMarkdown(fs.readFileSync(saved.notePath, 'utf8'), { title: humanTitle, resolveUserSource }).human_evidence_eligible, true);
+  });
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+test('valid human receipt saved by an assistant stays eligible, and a later mixed edit keeps its source digest as history', () => {
+  const { frontmatterToObject, parseFrontmatter } = require('../packages/jarvos-secondbrain-notes/src/lib/note-schema.js');
+  const { projectNoteMarkdown } = require('../bridge/provenance/src/content-origin-evidence.js');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sup-4054-human-'));
+  withEnv({
+    VAULT_NOTES_DIR: path.join(root, 'Notes'),
+    JOURNAL_DIR: path.join(root, 'Journal'),
+    JARVOS_KNOWLEDGE_DIR: path.join(root, '.jarvos', 'knowledge'),
+    JARVOS_ALLOW_UNSAFE_TEST_JOURNAL_WRITE: '1',
+  }, () => {
+    const mutationService = makeTestMutationService(root);
+    const title = 'SUP-4054 human source';
+    const text = 'The user said exactly this and wants it kept verbatim.';
+    const receipt = { capture_event_id: 'capture-human-1', actor: 'user', source_digest: digestText(text), content_digest: digestText(text) };
+    const resolveUserSource = (id) => (id === 'capture-human-1' ? { capture_event_id: id, actor: 'user', text } : null);
+    const frontmatter = { status: 'draft', type: 'reference', project: 'SUP-4054', author: 'andrew' };
+
+    const saved = writeNoteThroughContract({
+      personality: 'claude-code', title, content: text, content_origin: 'human', content_origin_basis: 'verbatim_user', user_source: receipt, frontmatter,
+    }, { mutationService, resolveUserSource });
+    const stored = frontmatterToObject(parseFrontmatter(fs.readFileSync(saved.notePath, 'utf8')));
+    assert.equal(stored.content_origin, 'human');
+    assert.equal(stored.human_evidence_eligible, true);
+    assert.equal(stored.content_origin_drafting, undefined);
+    assert.equal(projectNoteMarkdown(fs.readFileSync(saved.notePath, 'utf8'), { title, resolveUserSource }).human_evidence_eligible, true);
+
+    const edited = writeNoteThroughContract({
+      personality: 'codex', title, content: `${text}\n\nCodex added context.`, content_origin: 'mixed', content_origin_basis: 'mixed_composition',
+      drafting: [{ kind: 'assistant_edit', harness: 'codex', model: 'gpt-5-codex', model_evidence: 'declared' }], frontmatter,
+    }, { mutationService });
+    const after = frontmatterToObject(parseFrontmatter(fs.readFileSync(edited.notePath, 'utf8')));
+    assert.equal(after.human_evidence_eligible, false);
+    const history = after.content_origin_drafting.find((entry) => entry.kind === 'user_source');
+    assert.equal(history.source_digest, receipt.source_digest);
+    assert.equal(history.capture_event_id, 'capture-human-1');
+  });
+});
+
+test('personality contract carries an explicit assistant origin without adopting deferred state', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sup-provenance-contract-'));
+  withEnv({
+    VAULT_NOTES_DIR: path.join(root, 'Notes'),
+    JOURNAL_DIR: path.join(root, 'Journal'),
+    JARVOS_KNOWLEDGE_DIR: path.join(root, '.jarvos', 'knowledge'),
+    JARVOS_ALLOW_UNSAFE_TEST_JOURNAL_WRITE: '1',
+  }, () => {
+    const mutationService = makeTestMutationService(root);
+    const result = writeNoteThroughContract({
+      personality: 'codex',
+      title: 'Assistant provenance contract',
+      content: 'Generated explanation for later retrieval.',
+      content_origin: 'assistant',
+      content_origin_basis: 'assistant_generated',
+      content_adoption: { state: 'accepted' },
+      frontmatter: { status: 'draft', type: 'reference', project: 'SUP-2229', author: 'jarvis' },
+    }, { mutationService });
+
+    assert.equal(result.verification.frontmatter.content_origin, 'assistant');
+    assert.equal(result.verification.frontmatter.content_origin_basis, 'assistant_generated');
+    assert.equal(result.verification.frontmatter.human_evidence_eligible, false);
+    assert.doesNotMatch(fs.readFileSync(result.notePath, 'utf8'), /content_adoption/);
+  });
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+test('personality contract cannot self-certify human provenance without the capture resolver', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sup-provenance-contract-human-'));
+  withEnv({
+    VAULT_NOTES_DIR: path.join(root, 'Notes'),
+    JOURNAL_DIR: path.join(root, 'Journal'),
+    JARVOS_KNOWLEDGE_DIR: path.join(root, '.jarvos', 'knowledge'),
+    JARVOS_ALLOW_UNSAFE_TEST_JOURNAL_WRITE: '1',
+  }, () => {
+    const mutationService = makeTestMutationService(root);
+    const content = 'User supplied words preserved verbatim.';
+    const captureEventId = 'capture-contract-human-1';
+    const receipt = {
+      capture_event_id: captureEventId,
+      actor: 'user',
+      source_digest: digestText(content),
+      content_digest: digestText(content),
+    };
+    const input = {
+      personality: 'codex',
+      title: 'Resolver-backed human contract',
+      content,
+      captureEventId,
+      content_origin: 'human',
+      content_origin_basis: 'verbatim_user',
+      user_source: receipt,
+      human_evidence_eligible: true,
+      frontmatter: { status: 'draft', type: 'reference', project: 'SUP-2229', author: 'jarvis' },
+    };
+
+    const unresolved = writeNoteThroughContract(input, { mutationService });
+    assert.equal(unresolved.verification.frontmatter.content_origin, 'unknown');
+    assert.equal(unresolved.verification.frontmatter.human_evidence_eligible, false);
+
+    const resolved = writeNoteThroughContract({ ...input, title: 'Resolver-backed human contract (valid)' }, {
+      mutationService: makeTestMutationService(root),
+      resolveUserSource: (id) => id === captureEventId ? { capture_event_id: id, actor: 'user', text: content } : null,
+    });
+    assert.equal(resolved.verification.frontmatter.content_origin, 'human');
+    assert.equal(resolved.verification.frontmatter.content_origin_basis, 'verbatim_user');
+    assert.equal(resolved.verification.frontmatter.human_evidence_eligible, true);
+  });
+  fs.rmSync(root, { recursive: true, force: true });
 });
 
 test('canonical writer owns jarvos_note_id and preserves it across caller-supplied rewrites', () => {
@@ -280,6 +558,44 @@ test('unsupported personalities fail closed instead of raw-writing orphaned mark
   assert.match(result.stderr, /unsupported personality/);
   assert.equal(fs.existsSync(path.join(root, 'Notes')), false);
   assert.equal(fs.existsSync(path.join(root, 'Journal')), false);
+});
+
+test('Project-note inspection distinguishes absent, existing, applied, and conflicting notes without writing', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'project-note-inspection-'));
+  const notesDir = path.join(root, 'Notes');
+  const journalDir = path.join(root, 'Journal');
+  const knowledgeDir = path.join(root, '.jarvos', 'knowledge');
+  fs.mkdirSync(notesDir, { recursive: true });
+  const priorNotesDir = process.env.VAULT_NOTES_DIR;
+  const priorJournalDir = process.env.JOURNAL_DIR;
+  const priorKnowledgeDir = process.env.JARVOS_KNOWLEDGE_DIR;
+  process.env.VAULT_NOTES_DIR = notesDir;
+  process.env.JOURNAL_DIR = journalDir;
+  process.env.JARVOS_KNOWLEDGE_DIR = knowledgeDir;
+  try {
+    const operationId = `project-note-map:${'a'.repeat(64)}`;
+    assert.equal(inspectProjectNote({ title: 'Portfolio', canonicalId: 'prj_000001', operationId }).status, 'absent');
+    const notePath = path.join(notesDir, 'Portfolio.md');
+    fs.writeFileSync(notePath, '---\nproject_id: prj_000001\n---\n\n# Portfolio\n\nKeep me.\n');
+    assert.equal(inspectProjectNote({ title: 'Portfolio', canonicalId: 'prj_000001', operationId }).status, 'existing');
+    const today = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+    fs.writeFileSync(notePath, `---\nstatus: active\ntype: project-note\nproject: Portfolio\ncreated: ${today}\nupdated: ${today}\nauthor: jarvis\nsource_personality: codex\ncontract: obsidian-note-journal-v1\njarvos_note_id: note_project_000001\nproject_id: prj_000001\nmapping_operation_id: ${operationId}\n---\n\n# Portfolio\n\nKeep me.\n`);
+    assert.equal(inspectProjectNote({ title: 'Portfolio', canonicalId: 'prj_000001', operationId }).status, 'partial');
+    fs.mkdirSync(journalDir, { recursive: true });
+    fs.writeFileSync(path.join(journalDir, `${today}.md`), '## 📝 Notes\n- [[Portfolio]]\n');
+    fs.mkdirSync(knowledgeDir, { recursive: true });
+    fs.writeFileSync(path.join(knowledgeDir, 'qmd-refresh-pending.json'), JSON.stringify({ entries: { 'Notes/Portfolio.md': { status: 'pending-refresh' } } }));
+    assert.equal(inspectProjectNote({ title: 'Portfolio', canonicalId: 'prj_000001', operationId }).status, 'applied');
+    assert.equal(inspectProjectNote({ title: 'Portfolio', canonicalId: 'prj_000002', operationId }).status, 'conflict');
+    assert.match(fs.readFileSync(notePath, 'utf8'), /Keep me\./);
+  } finally {
+    if (priorNotesDir === undefined) delete process.env.VAULT_NOTES_DIR;
+    else process.env.VAULT_NOTES_DIR = priorNotesDir;
+    if (priorJournalDir === undefined) delete process.env.JOURNAL_DIR;
+    else process.env.JOURNAL_DIR = priorJournalDir;
+    if (priorKnowledgeDir === undefined) delete process.env.JARVOS_KNOWLEDGE_DIR;
+    else process.env.JARVOS_KNOWLEDGE_DIR = priorKnowledgeDir;
+  }
 });
 
 test('durable note contract refuses lightweight Idea captures without explicit durable intent', () => {

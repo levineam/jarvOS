@@ -16,6 +16,7 @@ const {
 } = require('../src');
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-skills-projection-'));
+const codexRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-skills-projection-codex-'));
 const manifest = getManifest();
 const digest = (value) => crypto.createHash('sha256').update(value).digest('hex');
 
@@ -29,7 +30,23 @@ try {
   const first = planSkillProjection({ harness: 'hermes', skillsRoot: root, skills: ['workflow-execution'] });
   assert.equal(first.entries[0].status, 'missing');
   assert.equal(first.entries[0].action, 'create');
-  assert.equal(planSkillProjection({ harness: 'codex', skillsRoot: root, skills: ['workflow-execution'] }).entries[0].status, 'unsupported');
+  const codexWorkflow = planSkillProjection({ harness: 'codex', skillsRoot: codexRoot, skills: ['workflow-execution'] });
+  assert.equal(codexWorkflow.entries[0].status, 'missing');
+  assert.equal(codexWorkflow.entries[0].action, 'create');
+  const codexInitial = applySkillProjection(codexWorkflow);
+  assert.equal(codexInitial.applied[0].applied, true);
+  const codexText = fs.readFileSync(path.join(codexRoot, 'workflow-execution', 'SKILL.md'), 'utf8');
+  assert.match(codexText, /jarvos_coding_finish/);
+  assert.match(codexText, /merge it\s+autonomously/);
+  assert.match(codexText, /separate authority for publication, live activation,\s+spending, destructive action, or an external send/);
+  for (const harness of ['claude', 'claude-code', 'openclaw']) {
+    const harnessRoot = fs.mkdtempSync(path.join(os.tmpdir(), `jarvos-workflow-${harness}-`));
+    const plan = planSkillProjection({ harness, skillsRoot: harnessRoot, skills: ['workflow-execution'] });
+    assert.equal(plan.entries[0].status, 'missing');
+    assert.equal(plan.entries[0].outputDigest, plan.entries[0].sourceDigest);
+    assert.equal(applySkillProjection(plan).applied[0].applied, true);
+    fs.rmSync(harnessRoot, { recursive: true, force: true });
+  }
   assert.equal(planSkillProjection({ harness: 'hermes', skillsRoot: root, skills: ['workflow-execution'], incompatibleSkills: ['workflow-execution'] }).entries[0].status, 'incompatible');
   const initial = applySkillProjection(first);
   assert.equal(initial.applied[0].applied, true);
@@ -44,6 +61,16 @@ try {
   assert.equal(local.entries[0].status, 'local_modified');
   assert.equal(applySkillProjection(local).applied[0].applied, false);
   assert.equal(fs.readFileSync(target, 'utf8'), 'local edit\n');
+
+  const unownedRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-skills-projection-unowned-'));
+  const unownedTarget = path.join(unownedRoot, 'workflow-execution', 'SKILL.md');
+  fs.mkdirSync(path.dirname(unownedTarget), { recursive: true });
+  fs.writeFileSync(unownedTarget, 'unowned skill\n');
+  const unowned = planSkillProjection({ harness: 'hermes', skillsRoot: unownedRoot, skills: ['workflow-execution'] });
+  assert.equal(unowned.entries[0].status, 'unknown');
+  assert.equal(applySkillProjection(unowned).applied[0].applied, false);
+  assert.equal(fs.readFileSync(unownedTarget, 'utf8'), 'unowned skill\n');
+  fs.rmSync(unownedRoot, { recursive: true, force: true });
 
   const oldContent = 'previous reviewed skill\n';
   const oldDigest = digest(oldContent);
@@ -183,6 +210,7 @@ try {
   fs.rmSync(stagingRoot, { recursive: true, force: true });
 } finally {
   fs.rmSync(root, { recursive: true, force: true });
+  fs.rmSync(codexRoot, { recursive: true, force: true });
 }
 
 console.log('PASS @jarvos/skills projection');

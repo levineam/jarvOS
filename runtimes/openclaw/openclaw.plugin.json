@@ -6,7 +6,7 @@
   "main": "jarvos-next-turn-plugin.js",
   "hooks": ["agent_turn_prepare"],
   "contracts": {
-    "tools": ["jarvos_stewardship_answer"]
+    "tools": ["jarvos_stewardship_answer", "jarvos_common_work"]
   },
   "configSchema": {
     "type": "object",
@@ -16,7 +16,14 @@
         "type": "string",
         "pattern": "^/"
       },
+      "commonWorkServiceModule": {
+        "type": "string",
+        "pattern": "^/"
+      },
       "toolAllowAddedByJarvos": {
+        "type": "boolean"
+      },
+      "commonWorkToolAllowAddedByJarvos": {
         "type": "boolean"
       },
       "agentToolGrantByJarvos": {

@@ -4,6 +4,10 @@ This folder is home. Treat it that way.
 
 This file is the **always-loaded hub**. It stays lean. If your runtime includes an `agents/` folder, keep deeper behavioral rules in focused modules there and load them when the work calls for it.
 
+For new substantive work or materially changed scope, read `WORK-CONTEXT.md`
+when present. It owns portable work placement and goal-fit behavior; missing
+context is not authority to invent project state.
+
 ---
 
 ## 🏗️ Operating System Vision
@@ -60,6 +64,8 @@ Three rules. No exceptions.
 1. **Plan before complex work.** For implicit planning, chat can be enough. If the user explicitly asks to create/make/formalize a plan, the plan must exist as a tracked artifact before execution continues.
 2. **Verify completion.** Before marking done, check the done criteria from the plan. No "I think it worked" — show proof.
 3. **Choose the simplest reliable execution lane.** Execute directly when the work is small or bounded. Use delegation (subagents, background processes) only when it is clearly warranted by complexity, runtime, or explicit user preference.
+
+For substantive code changes, use the shared `workflow-execution` test authoring check as a reasoning aid; protect behavior with the cheapest credible regression rather than test volume.
 
 The discipline is: plan → execute → verify.
 

@@ -1,0 +1,28 @@
+{
+  "schemaVersion": "jarvos.foundation-fixtures.v1",
+  "cases": [
+    { "name": "all portable identity kinds", "contract": "identity-set", "file": "identity-valid-kinds.json", "valid": true },
+    { "name": "path-like identity", "contract": "identity", "file": "identity-invalid-path.json", "valid": false },
+    { "name": "unknown identity kind", "contract": "identity", "file": "identity-invalid-kind.json", "valid": false },
+    { "name": "generic capability ledger", "contract": "capability-ledger", "file": "ledger-valid.json", "valid": true },
+    { "name": "duplicate capability IDs", "contract": "capability-ledger", "file": "ledger-invalid-duplicates.json", "valid": false },
+    { "name": "absolute evidence path", "contract": "capability-ledger", "file": "ledger-invalid-absolute-evidence.json", "valid": false },
+    { "name": "machine-specific activation", "contract": "capability-ledger", "file": "ledger-invalid-machine-activation.json", "valid": false },
+    { "name": "unsupported ledger schema", "contract": "capability-ledger", "file": "ledger-invalid-schema.json", "valid": false },
+    { "name": "memory candidate", "contract": "candidate", "file": "candidate-valid-memory.json", "valid": true },
+    { "name": "project signal candidate", "contract": "candidate", "file": "candidate-valid-project-signal.json", "valid": true },
+    { "name": "authoritative candidate", "contract": "candidate", "file": "candidate-invalid-authoritative.json", "valid": false },
+    { "name": "untrusted candidate", "contract": "candidate", "file": "candidate-invalid-untrusted.json", "valid": false },
+    { "name": "candidate missing expiry", "contract": "candidate", "file": "candidate-invalid-missing-expiry.json", "valid": false },
+    { "name": "candidate with bad digest", "contract": "candidate", "file": "candidate-invalid-bad-digest.json", "valid": false },
+    { "name": "candidate with mutable status", "contract": "candidate", "file": "candidate-invalid-status.json", "valid": false },
+    { "name": "committed promotion", "contract": "promotion-receipt", "file": "receipt-valid-committed.json", "valid": true },
+    { "name": "failed promotion attempt", "contract": "promotion-receipt", "file": "receipt-valid-failed.json", "valid": true },
+    { "name": "supersession with predecessor", "contract": "promotion-receipt", "file": "receipt-valid-supersession.json", "valid": true },
+    { "name": "promotion without candidate", "contract": "promotion-receipt", "file": "receipt-invalid-no-candidate.json", "valid": false },
+    { "name": "supersession without predecessor", "contract": "promotion-receipt", "file": "receipt-invalid-no-predecessor.json", "valid": false },
+    { "name": "failed attempt inventing revision", "contract": "promotion-receipt", "file": "receipt-invalid-invented-revision.json", "valid": false },
+    { "name": "receipt with wrong identity kinds", "contract": "promotion-receipt", "file": "receipt-invalid-identity-kinds.json", "valid": false },
+    { "name": "receipt with raw content field", "contract": "promotion-receipt", "file": "receipt-invalid-unknown-field.json", "valid": false }
+  ]
+}

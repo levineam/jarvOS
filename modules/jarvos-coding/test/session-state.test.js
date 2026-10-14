@@ -10,9 +10,11 @@ const {
   ARTICLE_THREAD_KIND,
   CODE_THREAD_KIND,
   SESSION_STATE_SCHEMA_VERSION,
+  WORK_HANDOFF_POINTER_FIELDS,
   buildArticleThreadCheckpoint,
   buildCodeThreadCheckpoint,
   buildLiveArtifactPointer,
+  buildWorkHandoff,
   buildSessionCheckpoint,
   createFileSessionStateStore,
   createMemorySessionStateStore,
@@ -38,6 +40,20 @@ test('live artifact pointers reject copied snapshots', () => {
     path: '/notes/draft.md',
     markdown: '# copied snapshot',
   }), /pointers, not snapshots/);
+});
+
+test('work handoffs retain only canonical work, workspace, and head pointers', () => {
+  const handoff = buildWorkHandoff({
+    workId: 'work:SUP-2214',
+    workspaceId: 'workspace:jarvos-main',
+    headOid: 'a'.repeat(40),
+  });
+  assert.deepEqual(WORK_HANDOFF_POINTER_FIELDS, ['workId', 'workspaceId', 'headOid']);
+  assert.deepEqual(handoff, {
+    workId: 'work:SUP-2214', workspaceId: 'workspace:jarvos-main', headOid: 'a'.repeat(40),
+  });
+  assert.throws(() => buildWorkHandoff({ ...handoff, branch: 'copied-branch' }), /only workId/);
+  assert.throws(() => buildWorkHandoff({ ...handoff, headOid: 'short' }), /Git headOid/);
 });
 
 test('session checkpoints share a generic shape for code and article work', () => {
@@ -78,6 +94,24 @@ test('session checkpoints can point to a Beads work item without Paperclip-shape
     authority: 'beads', itemId: 'bd-42', operationId: 'op-42',
   });
   assert.equal(checkpoint.codeThread.issueIdentifier, null);
+});
+
+test('session checkpoints keep a work handoff pointer without checkpoint authority', () => {
+  const checkpoint = buildCodeThreadCheckpoint({
+    handoff: {
+      workId: 'work:SUP-2214',
+      workspaceId: 'workspace:jarvos-main',
+      headOid: 'a'.repeat(40),
+    },
+    stage: 'claim',
+    nextStep: 'branch',
+  });
+  assert.equal(checkpoint.artifact.kind, 'work-handoff');
+  assert.equal(checkpoint.artifact.ref, 'work:SUP-2214');
+  assert.deepEqual(checkpoint.codeThread.handoff, {
+    workId: 'work:SUP-2214', workspaceId: 'workspace:jarvos-main', headOid: 'a'.repeat(40),
+  });
+  assert.equal('authoritySnapshot' in checkpoint.codeThread, false);
 });
 
 test('memory session state checkpoints only the thin code thread', async () => {

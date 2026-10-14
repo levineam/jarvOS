@@ -1,0 +1,24 @@
+{
+  "schemaVersion": "jarvos-codex-ce-invocation-fixture.v1",
+  "surface": "codex exec",
+  "status": "characterized-not-conformant",
+  "operations": ["plan", "work", "compound"],
+  "input": {
+    "workRun": "opaque-work-run-id",
+    "operationNonce": "opaque-operation-nonce",
+    "canonicalWorktree": "<canonical-worktree>",
+    "boundedPrompt": "<provider-operation-packet>"
+  },
+  "output": {
+    "artifactReference": "jarvos-private-artifact-reference",
+    "receipt": "jarvos-provider-receipt.v1",
+    "completionAuthority": "jarvos"
+  },
+  "constraints": {
+    "shellFragments": false,
+    "providerSelectedCwd": false,
+    "providerSelectedExecutable": false,
+    "profileMutation": false
+  },
+  "requiresU5RealInvocationProof": true
+}

@@ -165,38 +165,77 @@ function canonicalLegacyNotePath(notesDir, noteTitle) {
   return isPathInside(notesDir, candidate) ? candidate : null;
 }
 
+function isCanonicalDate(value) {
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const parsed = new Date(`${value}T00:00:00.000Z`);
+  return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value;
+}
+
+function canonicalJournalPath(entry, journalDir) {
+  if (Object.hasOwn(entry || {}, 'journalPath')) {
+    return typeof entry.journalPath === 'string' && entry.journalPath
+      && (!journalDir || isPathInside(journalDir, entry.journalPath))
+      ? entry.journalPath
+      : null;
+  }
+  if (!journalDir || !isCanonicalDate(entry?.journalDate)) return null;
+  const candidate = path.join(journalDir, `${entry.journalDate}.md`);
+  return isPathInside(journalDir, candidate) ? candidate : null;
+}
+
+function journalHasExactLink(journalPath, noteTitle, section = '📝 Notes') {
+  if (!existsSync(journalPath) || typeof noteTitle !== 'string' || !noteTitle) return false;
+  let lines;
+  try {
+    lines = readFileSync(journalPath, 'utf8').split('\n');
+  } catch {
+    return false;
+  }
+  const heading = `## ${normalizeSectionName(section)}`;
+  const { sectionLineStart, sectionLineEnd } = findSectionRange(lines, heading);
+  if (sectionLineStart === -1) return false;
+  const exactLinkLine = linkLineRegex(noteTitle);
+  return lines.slice(sectionLineStart + 1, sectionLineEnd).some((line) => exactLinkLine.test(line));
+}
+
 function classifyDeferredBacklink(entry, {
   vaultRoot = getVaultDir(),
   notesDir = getVaultNotesDir(),
   journalDir,
 } = {}) {
   if (!isPlainObject(entry)) return { status: 'unresolved', reason: 'invalid-entry' };
-  if (typeof entry.journalPath !== 'string' || !entry.journalPath
-    || (journalDir && !isPathInside(journalDir, entry.journalPath))) {
+  const journalPath = canonicalJournalPath(entry, journalDir);
+  if (!journalPath) {
     return { status: 'unresolved', reason: 'journal-path-unsafe' };
   }
+  if (!existsSync(journalPath)) return { status: 'unresolved', reason: 'journal-missing', journalPath };
   const isV2 = Boolean(entry.noteId || entry.notePath);
   if (!isV2) {
-    if (typeof entry.noteTitle !== 'string' || !entry.noteTitle || typeof entry.journalPath !== 'string') {
+    if (typeof entry.noteTitle !== 'string' || !entry.noteTitle) {
       return { status: 'unresolved', reason: 'legacy-entry-missing-title-or-journal' };
+    }
+    if (journalHasExactLink(journalPath, entry.noteTitle, entry.section)) {
+      return { status: 'linked', reason: 'exact-link-present', journalPath };
     }
     const canonical = canonicalLegacyNotePath(notesDir, entry.noteTitle);
     if (!canonical) return { status: 'unresolved', reason: 'legacy-note-title-unsafe' };
     return existsSync(canonical)
-      ? { status: 'retry', reason: 'legacy-exact-note-present', noteTitle: entry.noteTitle, notePath: path.relative(vaultRoot, canonical).split(path.sep).join('/') }
+      ? { status: 'retry', reason: 'legacy-exact-note-present', noteTitle: entry.noteTitle, notePath: path.relative(vaultRoot, canonical).split(path.sep).join('/'), journalPath }
       : { status: 'unresolved', reason: 'legacy-exact-note-missing' };
   }
 
-  if (typeof entry.noteId !== 'string' || !entry.noteId || typeof entry.notePath !== 'string' || !entry.notePath || typeof entry.journalPath !== 'string') {
+  if (typeof entry.noteId !== 'string' || !entry.noteId || typeof entry.notePath !== 'string' || !entry.notePath) {
     return { status: 'unresolved', reason: 'v2-entry-missing-identity-or-path' };
   }
   const normalizedPath = normalizeVaultRelativeNotePath(entry.notePath, vaultRoot, notesDir);
   if (!normalizedPath) return { status: 'unresolved', reason: 'v2-note-path-unsafe' };
   const exactPath = path.resolve(vaultRoot, normalizedPath);
   if (existsSync(exactPath)) {
-    return readNoteId(exactPath) === entry.noteId
-      ? { status: 'retry', reason: 'v2-exact-identity-present', notePath: normalizedPath, noteTitle: wikilinkTargetFromNotePath(normalizedPath) }
-      : { status: 'unresolved', reason: 'v2-note-identity-mismatch' };
+    if (readNoteId(exactPath) !== entry.noteId) return { status: 'unresolved', reason: 'v2-note-identity-mismatch' };
+    const noteTitle = wikilinkTargetFromNotePath(normalizedPath);
+    return journalHasExactLink(journalPath, noteTitle, entry.section)
+      ? { status: 'linked', reason: 'exact-link-present', journalPath }
+      : { status: 'retry', reason: 'v2-exact-identity-present', notePath: normalizedPath, noteTitle, journalPath };
   }
   const matches = recursivelyFindNotesById(notesDir, entry.noteId);
   if (matches.length === 1) {
@@ -400,8 +439,8 @@ function flushDeferredBacklinks({
       const result = linkNoteToJournal({
         noteTitle: classification.noteTitle,
         section: entry.section || '📝 Notes',
-        journalPath: entry.journalPath,
-        createIfMissing: true,
+        journalPath: classification.journalPath,
+        createIfMissing: false,
         mutationService: retryMutationService,
         deferOnFailure: false,
         noteId: entry.noteId,
@@ -465,6 +504,54 @@ function flushDeferredBacklinks({
     writeJson(deferredPath, latest);
   });
   return summary;
+}
+
+function supersedeDeferredBacklink({
+  journalDir = getVaultJournalDir(),
+  key,
+  reason,
+  evidence,
+  dryRun = false,
+} = {}) {
+  if (!key || !reason || !evidence) throw new Error('key, reason, and evidence are required to supersede a deferred backlink');
+  const deferredPath = deferredQueuePathForJournalDir(journalDir);
+  const queue = readDeferredQueue(deferredPath);
+  const entry = queue.entries[key];
+  if (!entry) throw new Error(`Deferred backlink key not found: ${key}`);
+  if (!['pending', 'unresolved'].includes(entry.status)) {
+    throw new Error(`Deferred backlink ${key} is already terminal: ${entry.status}`);
+  }
+  const result = { key, status: 'superseded', reason, evidence, previousStatus: entry.status, dryRun };
+  if (dryRun) return result;
+  const now = new Date().toISOString();
+  withDeferredQueueLock(deferredPath, () => {
+    const latest = readDeferredQueue(deferredPath);
+    const current = latest.entries[key];
+    if (!current) throw new Error(`Deferred backlink key disappeared during supersede: ${key}`);
+    if (!['pending', 'unresolved'].includes(current.status)) {
+      throw new Error(`Deferred backlink ${key} changed before supersede: ${current.status}`);
+    }
+    latest.entries[key] = {
+      ...current,
+      status: 'superseded',
+      updatedAt: now,
+      terminalAt: now,
+      terminalReason: reason,
+      terminalEvidence: evidence,
+      events: queueEvent(current, {
+        at: now,
+        type: 'operator-superseded',
+        status: 'superseded',
+        previousStatus: current.status,
+        reason,
+        evidence,
+      }),
+    };
+    latest.version = 2;
+    latest.updatedAt = now;
+    writeJson(deferredPath, latest);
+  });
+  return { ...result, dryRun: false };
 }
 
 function reconcileDeferredBacklink({
@@ -748,6 +835,7 @@ module.exports = {
   linkNoteToJournal,
   flushDeferredBacklinks,
   reconcileDeferredBacklink,
+  supersedeDeferredBacklink,
   classifyDeferredBacklink,
   normalizeVaultRelativeNotePath,
   readNoteId,

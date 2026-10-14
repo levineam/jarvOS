@@ -38,16 +38,19 @@ function run(command, args, options = {}) {
   });
 }
 
-function readText(filePath) {
-  return fs.readFileSync(path.join(ROOT, filePath), 'utf8');
-}
-
-function exists(filePath) {
-  return fs.existsSync(path.join(ROOT, filePath));
-}
-
 function normalizeVersion(value) {
   return String(value || '').trim().replace(/^v/i, '');
+}
+
+// Names under which a release may already be published. These are only probed
+// against tags that exist; a tag is never assumed or created from them.
+function releaseTagNames(target, packageName) {
+  return [`v${target}`, ...(packageName ? [`${packageName}-v${target}`] : [])];
+}
+
+function findExistingReleaseTag(tagList, target, packageName) {
+  const existing = new Set(String(tagList || '').split(/\r?\n/).map((name) => name.trim()).filter(Boolean));
+  return releaseTagNames(target, packageName).find((name) => existing.has(name)) || null;
 }
 
 function findReleaseProcessCurrentClaims(releaseProcess) {
@@ -140,21 +143,29 @@ Checks:
   - CHANGELOG.md has target version section
   - release docs/template exist and contain required sections
   - release notes draft exists for the target version
-  - git tag does not already exist
+  - neither vX.Y.Z nor <package>-vX.Y.Z tag already exists
   - git working tree is clean
   - tracked files do not include common local artifacts
   - npm test passes
 
 Development flags:
   --allow-dirty          Allow an in-progress working tree
-  --allow-unreleased     Allow the changelog section to say Unreleased
+  --allow-unreleased     Allow candidate changelog wording and defer target release notes
   --allow-existing-tag   Allow the target tag to already exist
   --skip-smoke           Skip npm test
 `);
 }
 
 function checkReleaseReadiness(opts = {}) {
-  const pkg = JSON.parse(readText('package.json'));
+  const root = path.resolve(opts.root || ROOT);
+  const read = (filePath) => fs.readFileSync(path.join(root, filePath), 'utf8');
+  const fileExists = (filePath) => fs.existsSync(path.join(root, filePath));
+  const runLocal = (command, args, options = {}) => run(opts.npmPath && command === 'npm' ? opts.npmPath : command, args, {
+    ...options,
+    cwd: root,
+    ...(opts.env ? { env: opts.env } : {}),
+  });
+  const pkg = JSON.parse(read('package.json'));
   const target = normalizeVersion(opts.version || pkg.version);
   const tag = `v${target}`;
   const results = [];
@@ -177,8 +188,9 @@ function checkReleaseReadiness(opts = {}) {
   else fail('package.json version', `package.json has ${pkg.version}; target is ${target}`);
 
   try {
-    const changelog = readText('CHANGELOG.md');
-    const changelogHeading = changelog.match(new RegExp(`^##\\s+${tag.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b([^\\n]*)`, 'm'));
+    const changelog = read('CHANGELOG.md');
+    const escapedTarget = target.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const changelogHeading = changelog.match(new RegExp(`^##\\s+(?:\\[)?v?${escapedTarget}\\b(?:\\])?([^\\n]*)`, 'm'));
     if (!changelogHeading) {
       fail('CHANGELOG.md version section', `Missing heading for ${tag}`);
     } else if (/unreleased/i.test(changelogHeading[1] || '') && !opts.allowUnreleased) {
@@ -190,19 +202,19 @@ function checkReleaseReadiness(opts = {}) {
     fail('CHANGELOG.md missing or unreadable', `Could not read CHANGELOG.md: ${error.message}`);
   }
 
-  if (exists('docs/release-process.md')) pass('release process doc', 'docs/release-process.md');
+  if (fileExists('docs/release-process.md')) pass('release process doc', 'docs/release-process.md');
   else fail('release process doc', 'docs/release-process.md missing');
 
   results.push(...checkFrontDoorReleaseProse({
     target,
     tag,
     allowUnreleased: opts.allowUnreleased,
-    readText,
-    exists,
+    readText: read,
+    exists: fileExists,
   }));
 
-  if (exists('.github/release-template.md')) {
-    const template = readText('.github/release-template.md');
+  if (fileExists('.github/release-template.md')) {
+    const template = read('.github/release-template.md');
     const required = ['## Summary', "## What's Included", '## Known Limitations', '## Install / Update', '## Verification'];
     const missing = required.filter((section) => !template.includes(section));
     if (missing.length) fail('GitHub release template', `Missing sections: ${missing.join(', ')}`);
@@ -212,13 +224,15 @@ function checkReleaseReadiness(opts = {}) {
   }
 
   const releaseNotesPath = `docs/releases/${tag}.md`;
-  if (exists(releaseNotesPath)) {
-    const notes = readText(releaseNotesPath);
+  if (fileExists(releaseNotesPath)) {
+    const notes = read(releaseNotesPath);
     const required = ['## Summary', "## What's Included", '## Known Limitations', '## Install / Update', '## Verification'];
     const missing = required.filter((section) => !notes.includes(section));
     if (missing.length) fail('release notes draft', `Missing sections in ${releaseNotesPath}: ${missing.join(', ')}`);
     else if (/ISSUE\b|VERSION\b/.test(notes)) fail('release notes draft', `${releaseNotesPath} still contains placeholders`);
     else pass('release notes draft', releaseNotesPath);
+  } else if (opts.allowUnreleased) {
+    pass('release notes draft', `${releaseNotesPath} deferred for unreleased candidate`);
   } else {
     fail('release notes draft', `${releaseNotesPath} missing`);
   }
@@ -226,17 +240,17 @@ function checkReleaseReadiness(opts = {}) {
   const gbrainNarrativeFiles = [
     'README.md',
     'CHANGELOG.md',
-    releaseNotesPath,
     'modules/README.md',
     'modules/jarvos-gbrain/README.md',
     'PUBLIC_BASELINE.md',
   ];
+  if (fileExists(releaseNotesPath)) gbrainNarrativeFiles.splice(2, 0, releaseNotesPath);
   try {
-    const missingFiles = gbrainNarrativeFiles.filter((filePath) => !exists(filePath));
+    const missingFiles = gbrainNarrativeFiles.filter((filePath) => !fileExists(filePath));
     if (missingFiles.length) {
       fail('GBrain-first release narrative', `Missing files: ${missingFiles.join(', ')}`);
     } else {
-      const combined = gbrainNarrativeFiles.map((filePath) => readText(filePath)).join('\n');
+      const combined = gbrainNarrativeFiles.map((filePath) => read(filePath)).join('\n');
       const requiredPhrases = [
         'GBrain-first',
         '@jarvos/gbrain',
@@ -258,18 +272,19 @@ function checkReleaseReadiness(opts = {}) {
     fail('GBrain-first release narrative', error.message);
   }
 
-  const tagCheck = run('git', ['rev-parse', '--verify', '--quiet', `refs/tags/${tag}`]);
+  const tagCheck = runLocal('git', ['tag', '--list']);
   if (tagCheck.error) {
     fail('git tag preflight', `git failed: ${tagCheck.error.message}`);
-  } else if (tagCheck.status === 0 && !opts.allowExistingTag) {
-    fail('git tag preflight', `${tag} already exists`);
-  } else if (tagCheck.status === 0) {
-    pass('git tag preflight', `${tag} exists and was allowed`);
+  } else if (tagCheck.status !== 0) {
+    fail('git tag preflight', `git tag --list failed: ${String(tagCheck.stderr || '').trim() || 'tag list unavailable'}`);
   } else {
-    pass('git tag preflight', `${tag} does not exist yet`);
+    const existingTag = findExistingReleaseTag(tagCheck.stdout, target, pkg.name);
+    if (existingTag && !opts.allowExistingTag) fail('git tag preflight', `${existingTag} already exists`);
+    else if (existingTag) pass('git tag preflight', `${existingTag} exists and was allowed`);
+    else pass('git tag preflight', `${releaseTagNames(target, pkg.name).join(' or ')} does not exist yet`);
   }
 
-  const status = run('git', ['status', '--porcelain']);
+  const status = runLocal('git', ['status', '--porcelain']);
   if (status.error) {
     fail('working tree cleanliness', `git failed: ${status.error.message}`);
   } else {
@@ -279,7 +294,7 @@ function checkReleaseReadiness(opts = {}) {
     else pass('working tree cleanliness', 'clean');
   }
 
-  const tracked = run('git', ['ls-files']);
+  const tracked = runLocal('git', ['ls-files']);
   if (tracked.error) {
     fail('tracked local artifacts', `git failed: ${tracked.error.message}`);
   } else {
@@ -293,7 +308,7 @@ function checkReleaseReadiness(opts = {}) {
   if (opts.skipSmoke) {
     pass('smoke test', 'skipped by --skip-smoke');
   } else {
-    const smoke = run('npm', ['test']);
+    const smoke = runLocal('npm', ['test']);
     if (smoke.status === 0) pass('smoke test', 'npm test passed');
     else fail('smoke test', String(smoke.stdout || smoke.stderr || '').split('\n').slice(-20).join('\n'));
   }
@@ -325,10 +340,12 @@ function main() {
 module.exports = {
   checkFrontDoorReleaseProse,
   checkReleaseReadiness,
+  findExistingReleaseTag,
   findReadmeCurrentReleaseClaims,
   findReleaseProcessCurrentClaims,
   normalizeVersion,
   parseArgs,
+  releaseTagNames,
 };
 
 if (require.main === module) {

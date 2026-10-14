@@ -15,8 +15,43 @@ const {
   stripLeadingRecoveryScaffold,
   syncOneDate: rawSyncOneDate,
 } = require('../packages/jarvos-secondbrain-journal/src/journal-maintenance.js');
+const { renderJournalOriginMarker } = require('../bridge/provenance/src/content-origin-contract');
 
 const TEST_DATE = '2026-01-02';
+
+test('ordinary maintenance removes legacy signatures without adding a replacement and preserves hidden markers', () => {
+  const marker = renderJournalOriginMarker({
+    cleanText: 'assistant thought',
+    content_origin: 'assistant',
+    content_origin_basis: 'assistant_generated',
+    source_ref: 'capture:codex:maintenance',
+  });
+  const original = [
+    '---',
+    'journal: Journal',
+    `journal-date: ${TEST_DATE}`,
+    '---',
+    '',
+    '## 📝 Notes',
+    '-',
+    '',
+    '## 💡 Ideas',
+    '- assistant thought',
+    marker,
+    '',
+    '## 📓 Journal Entry',
+    '-',
+    '',
+    '— Edited by Jarvis',
+    '',
+  ].join('\n');
+
+  const config = loadConfig();
+  const normalized = normalizeSections(original, TEST_DATE, config, { fetchers: { projects: () => '-' } });
+  const output = renderJournal(TEST_DATE, config, normalized);
+  assert.doesNotMatch(output, /Written by Jarvis|Edited by Jarvis/);
+  assert.match(output, /- assistant thought\n<!-- jarvos-content-origin\/v1 /);
+});
 
 function fakeOwnedMutation({ filePath, expectedContent, nextContent }) {
   const exists = fs.existsSync(filePath);
@@ -87,7 +122,8 @@ test('activity-backed Journal maintenance carries a separate projection receipt 
         status: 'ok',
         coverageWatermark: 'activity:9',
         projects: [{ id: 'prj_000001', kind: 'project', title: 'jarvOS', lifecycle: 'active' }],
-        activities: [{ canonicalId: 'prj_000001', occurredAt: '2026-01-02T15:00:00.000Z', trust: 'verified' }],
+        noteMappings: { prj_000001: { target: 'Projects/jarvOS' } },
+        activities: [{ canonicalId: 'prj_000001', canonicalAtAdmission: { rootProjectId: 'prj_000001' }, occurredAt: '2026-01-02T15:00:00.000Z', trust: 'verified' }],
       }),
       applyMarkdownMutation(input) {
         projectionReceipt = input.projectionReceipt;
@@ -97,13 +133,99 @@ test('activity-backed Journal maintenance carries a separate projection receipt 
     assert.equal(result.projectProjection.coverageWatermark, 'activity:9');
     assert.equal(projectionReceipt.inputDigest, result.projectProjection.inputDigest);
     assert.equal(projectionReceipt.status, 'fresh');
-    assert.equal(sectionBody(fs.readFileSync(journalPath, 'utf8'), '## 🚀 Projects'), '- [[jarvOS]]');
+    assert.equal(sectionBody(fs.readFileSync(journalPath, 'utf8'), '## 🚀 Projects'), '- [[Projects/jarvOS]]');
   } finally {
     if (previous === undefined) delete process.env.JARVOS_JOURNAL_DIR;
     else process.env.JARVOS_JOURNAL_DIR = previous;
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+test('Journal keeps receipt category and malformed activity omissions visible', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-journal-activity-shape-'));
+  const journalDir = path.join(root, 'Journal');
+  const journalPath = path.join(journalDir, `${TEST_DATE}.md`);
+  const previous = process.env.JARVOS_JOURNAL_DIR;
+  fs.mkdirSync(journalDir, { recursive: true });
+  fs.writeFileSync(journalPath, [
+    '---',
+    'journal: Journal',
+    `journal-date: ${TEST_DATE}`,
+    '---',
+    '',
+    '## 🚀 Projects',
+    '- [[Existing]]',
+    '',
+    '## 📝 Notes',
+    '- [[Note]]',
+    '',
+  ].join('\n'), 'utf8');
+  process.env.JARVOS_JOURNAL_DIR = journalDir;
+  let projectionReceipt = null;
+  try {
+    const config = loadConfig();
+    const result = rawSyncOneDate(TEST_DATE, config, {
+      projectsActivityReader: () => ({
+        status: 'ok',
+        projects: [{ id: 'prj_000001', kind: 'project', title: 'jarvOS' }],
+        noteMappings: { prj_000001: { target: 'Projects/jarvOS' } },
+        activities: [
+          { receipt: { canonicalId: 'prj_000001', occurredAt: `${TEST_DATE}T11:00:00.000Z`, trust: 'verified' }, category: 'context-read' },
+          null,
+        ],
+      }),
+      applyMarkdownMutation(input) {
+        projectionReceipt = input.projectionReceipt;
+        return fakeOwnedMutation(input);
+      },
+    });
+    assert.equal(result.projectProjection.status, 'degraded');
+    assert.equal(result.projectProjection.preserve, false);
+    assert.equal(result.projectProjection.omit, true);
+    assert.ok(result.projectProjection.omissions.includes('activity-invalid:1'));
+    assert.equal(projectionReceipt.status, 'degraded');
+    assert.doesNotMatch(fs.readFileSync(journalPath, 'utf8'), /## 🚀 Projects/);
+  } finally {
+    if (previous === undefined) delete process.env.JARVOS_JOURNAL_DIR;
+    else process.env.JARVOS_JOURNAL_DIR = previous;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+for (const [label, projectsActivityReader, expectedOmission] of [
+  ['missing', undefined, 'activity-reader:missing'],
+  ['throwing', () => { throw new Error('reader unavailable'); }, 'activity-reader:failed'],
+]) {
+  test(`Journal emits a degraded projection receipt for a ${label} activity reader`, () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), `jarvos-journal-reader-${label}-`));
+    const journalDir = path.join(root, 'Journal');
+    const journalPath = path.join(journalDir, `${TEST_DATE}.md`);
+    const previous = process.env.JARVOS_JOURNAL_DIR;
+    fs.mkdirSync(journalDir, { recursive: true });
+    fs.writeFileSync(journalPath, '## 🚀 Projects\n- [[Existing]]\n\n## 📝 Notes\n- [[Note]]\n', 'utf8');
+    process.env.JARVOS_JOURNAL_DIR = journalDir;
+    let projectionReceipt = null;
+    try {
+      const config = loadConfig();
+      const result = rawSyncOneDate(TEST_DATE, config, {
+        projectsActivityReader,
+        applyMarkdownMutation(input) {
+          projectionReceipt = input.projectionReceipt;
+          return fakeOwnedMutation(input);
+        },
+      });
+      assert.equal(result.projectProjection.status, 'degraded');
+      assert.equal(result.projectProjection.omit, true);
+      assert.ok(result.projectProjection.omissions.includes(expectedOmission));
+      assert.deepEqual(projectionReceipt, result.projectProjection);
+      assert.doesNotMatch(fs.readFileSync(journalPath, 'utf8'), /## 🚀 Projects/);
+    } finally {
+      if (previous === undefined) delete process.env.JARVOS_JOURNAL_DIR;
+      else process.env.JARVOS_JOURNAL_DIR = previous;
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+}
 
 test('Sync-pending local journal bytes never advance the known-good recovery snapshot', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-journal-pending-known-good-'));
@@ -659,7 +781,11 @@ test('create-if-missing dispatches to the creation-only lifecycle', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-create-only-'));
   try {
     const report = runMaintenance(['--create-if-missing', '--json'], {
-      config: { paths: { journal: path.join(root, 'Journal') }, user: { timezone: 'UTC' } },
+      config: {
+        paths: { journal: path.join(root, 'Journal') },
+        user: { timezone: 'UTC' },
+        derivedIndex: { enabled: false },
+      },
       now: new Date('2026-08-03T12:00:00.000Z'),
       mutationContext: { vaultId: 'test-vault', vaultRoot: root },
       mutationExecutor(operation) {

@@ -9,7 +9,7 @@ modules rather than replacing them:
 - `@jarvos/gbrain` for recall bundles.
 - `@jarvos/secondbrain` for note writing and journal linking.
 - `@jarvos/ontology` for bounded hierarchy-of-meaning context packets.
-- Paperclip for current execution state.
+- Paperclip only for the separately labelled diagnostic compatibility read.
 - An injected Projects context provider for canonical project/outcome identity and bounded cross-provider context.
 
 ## Tools
@@ -18,24 +18,106 @@ The bundled stdio MCP server exposes:
 
 | Tool | Purpose |
 |---|---|
-| `jarvos_current_work` | Compact Paperclip current-work summary |
+| `jarvos_current_work` | Diagnostic compatibility: compact Paperclip current-work summary, not project orientation |
 | `jarvos_projects_context` | Canonical `jarvos.projects-context/v1` read packet from the injected Projects provider |
-| `jarvos_projects_propose` | Provider-neutral, uncommitted Projects proposal through the injected provider |
+| `jarvos_projects_propose` | Deprecated compatibility surface for the original injected-provider proposal contract |
+| `jarvos_projects_propose_v1` | Versioned, bounded pending-create proposal through an opt-in host provider |
 | `jarvos_recall` | GBrain/QMD/graph recall bundle rendered as Markdown; pass `synthesize: true` or `mode: "synthesis"` for WS5 synthesis |
 | `jarvos_synthesize` | Concise WS5 synthesis over WS4 retrieval evidence with the source bundle preserved |
 | `jarvos_create_note` | Obsidian note creation + today journal wikilink + KB sidecars + verification |
 | `jarvos_journal_health` | Read-only health projection for today's configured journal |
 | `jarvos_ensure_today_journal` | Empty-input, today-only ensure through the shared journal lifecycle |
 | `jarvos_session_thread_read` | Read the rolling live working thread for an issue, artifact, project, or host session |
-| `jarvos_session_thread_write` | Append a checkpoint to that thread as a normal secondbrain note linked from today's journal |
+| `jarvos_session_thread_write` | Append a checkpoint, linked from today's journal by default; internal checkpoints can explicitly opt out |
 | `jarvos_startup_brief` | Bounded startup context for agent sessions |
 | `jarvos_hydrate` | Bounded working-context packet for startup hydration, including ontology context when configured |
+| `jarvos_todo_create` | Create one canonically linked Beads-backed Todo through the host-authorized work-action service |
+| `jarvos_todo_list` | List bounded, canonically linked Beads-backed Todo work |
+| `jarvos_todo_show` | Show one canonically linked Beads-backed Todo work item |
+| `jarvos_todo_transition` | Request a claim, transition, completion, or reopen through the host-authorized work-action service |
 | `jarvos_control_plane` | Authenticated request, inspection, evidence, and approval access through the installed host application service |
+| `jarvos_coding_take_issue_to_done` | Run `accept-plan` or `complete` for one approved control-plane request through the host-bound coding producer |
+
+`jarvos_todo_*` tools are available only after the host binds two optional
+non-secret paths on the MCP child:
+
+- `JARVOS_WORK_ACTION_SERVICE_MODULE` — absolute owner-only host service module
+  contained under the selected workspace root. Copy
+  `examples/work-action-host-service.js` into that workspace; the public clone
+  cannot be the live binding when Projects `workspaceRoot` is elsewhere.
+- `JARVOS_PROJECTS_CONTEXT_CONFIG` — absolute trusted Projects context config
+  whose `workspaceRoot` contains that module.
+
+Unset keeps the tools present but unavailable. A set but untrusted module path
+is refused and never loaded. Runtime setup scripts pass these through when set
+and never require them for a public/minimal install.
+
+The copied example is a live-only composition. Its trusted config must supply
+three distinct owner-only durable roots—`trackerOperationStoreRoot`,
+`workActionOperationStoreRoot`, and `executionLinkStoreRoot`—as well as the
+pinned opaque `beadsWorkspaceId`, `workActionAuthorizationModule`,
+`workActionCompletionModule`, and non-empty
+`registeredCompletionProducers`. The tracker operation ledger, work-action
+operation ledger, and Projects execution-link store cannot be aliases. The
+host refuses absent, memory-only, or shared roots before Beads I/O; memory
+stores remain available only for explicitly test-mode services.
+The three state roots must be provisioned before the service starts; loading or
+listing the service never creates or changes their permissions.
+
+Todo authorization and completion receipts are host-resolved. MCP callers may
+send ordinary operation and canonical-reference fields only; they cannot supply
+authorization, actor identity, or evidence. Each authorization receipt must
+echo the host-issued request fingerprint, exact operation, item, workspace, and
+canonical reference. Generic transitions cannot enter a terminal state.
+Completion requires a registered host receipt; an
+`andrew-owner-attestation` records Andrew's attestation, not technical or
+external verification.
+
+For “backlog this”, `jarvos_todo_create` accepts an optional `backlog` object
+with `sourceIntent`, `sourceRef`, and an ISO timestamp `notBefore`. The host
+must explicitly enable the coding service's backlog support. Capture preserves
+the original intent in Beads and creates a deferred item; it never starts work.
+An unavailable backlog method never falls back to ordinary immediate creation.
+Admission is an explicit host operation, not an MCP transition or a timer.
+See [held backlog](../jarvos-coding/README.md#held-backlog-source-slice) for the
+disabled source/fixture contract and its limits.
 
 `jarvos_control_plane` is available only after the host has configured
 `JARVOS_CONTROL_PLANE_SERVICE_MODULE`. `@jarvos/agent-context` declares
 `@jarvos/control-plane` as a runtime dependency so this boundary resolves from
 an installed package, not from a repository-relative path.
+
+The authenticated `jarvos_control_plane` operation `activation-status` returns
+the same closed, redacted managed-harness status as `@jarvos/runtime-kit`.
+Owner-local evidence is supplied only through the host-bound
+`JARVOS_MANAGED_ACTIVATION_EVIDENCE_FILE`; agents cannot choose a path, submit
+receipts, start a harness, or promote activation through this read surface.
+
+`jarvos_coding_take_issue_to_done` is available only when the MCP session has a
+bound control-plane credential (`JARVOS_CONTROL_PLANE_CREDENTIAL_FILE` or the
+ambient host credential) and the host binds `JARVOS_CODING_PRODUCER_MODULE`: an
+absolute owner-only module under the `workspaceRoot` selected by
+`JARVOS_PROJECTS_CONTEXT_CONFIG`. The module exports a producer (or a
+zero-argument factory) with `invoke(request, { readApproval })`. The credential
+is checked before the module is loaded and never reaches it; the producer only
+receives `readApproval(requestId)`, which performs the authenticated
+`approval-state` read. Callers pass `operation` (`accept-plan` or `complete`),
+`requestId`, `issueIdentifier` and, for `complete`, the declared
+`deliveryTrace`. Owner, work-run, plan digest, observation, fence and
+credential arguments are dropped. `approval-state` returns an execution
+`binding` (status, fence, current fence, pause state, approval consumption,
+resource and command spec) only to the principal that created the request.
+`JARVOS_CODING_PRODUCER_TIMEOUT_MS` (default one hour) bounds a single call.
+
+`jarvos_shared_skills` `status` and `explain` are unbound redacted reads. Every
+other operation is a full shared-skill owner operation and requires the
+dedicated host-bound `JARVOS_SHARED_SKILLS_OWNER_CREDENTIAL_FILE` (same trusted
+owner-only file rules as the control-plane credential file); it is checked
+before any skills config, decision ledger or inventory access. A control-plane
+credential, ambient or file, never implies skills ownership, whatever the host
+grants it. Hosts that relied on the former control-plane fallback must have an
+administrator provision the dedicated owner file as a follow-up; this source
+change performs no credential provisioning or live configuration.
 
 ## Projects context
 
@@ -47,10 +129,29 @@ to assemble this packet. A host injects a provider with
 the stdio MCP wrapper); the provider implements `read(request)` and may
 implement `propose(request)`. The read path returns a normalized
 `jarvos.projects-context/v1` packet and deterministic fingerprint. A missing
-provider is an explicit, non-enumerating `unavailable` result, so legacy
-Paperclip orientation remains available while the Projects reader is in shadow
-mode. Proposals are reviewable outputs only and never create tasks, releases,
-or external handoffs directly.
+provider is an explicit, non-enumerating `unavailable` or `partial` result;
+hydration and startup do not substitute Paperclip, Todo, Beads, release, or
+Journal project state. Proposals are reviewable pending outputs only and never
+create or update the registry, tasks, releases, or external handoffs. They are
+exposed only when trusted host config has an enabled `proposals` block with a
+separate owner-only proposal state directory, authorized subject, and bounded
+retention/rate/TTL policy. The provider receives host-owned identity,
+capability, scope, and state paths; MCP callers supply only the bounded proposal
+envelope. Applying a proposal is deliberately absent from both this library and
+MCP.
+
+For host-configured reads, `capabilityReceiptPath` remains the orientation/default
+receipt. The optional `recentActivityCapabilityReceiptPath` binds a separate
+receipt to `recent-activity`; it must be an absolute owner-only file under the
+trusted state root and cannot alias the orientation, roster, or proof receipt.
+Missing or invalid recent bindings make that optional read unavailable without
+disabling orientation. Callers select only the named profile and bounded date
+window, never a receipt path or capability. The provider still verifies the
+exact query, identity, expiry, coverage, and limits of the selected receipt.
+This binding preserves `projects-profiles-1` and its current freshness limits;
+changing those semantics requires a compatible profile and capability migration.
+Installing the config or issuing live capabilities follows the host's activation
+process; adding this source support does not enable a deployed profile.
 
 ## Journal actions
 
@@ -90,30 +191,66 @@ ontology source is configured, hydration succeeds and reports the omission.
 The session thread is the lightweight handoff surface for work that moves across
 Claude Code, OpenClaw, Codex, Hermes, or another host. It is not a hidden store:
 each thread is a Markdown note named `JarvOS Session Thread - <threadId>` in the
-configured Notes directory, and every write links that note from today's journal
+configured Notes directory, and ordinary writes link that note from today's journal
 through the same `@jarvos/secondbrain` note and journal helpers used by
 `jarvos_create_note`.
 
-Write results keep three facts separate:
+For internal checkpoints such as Overseer reconciliation, pass
+`journalPolicy: "none"` to the shared writer or MCP tool. This appends through
+the same canonical mutation service but never dispatches a journal link or
+creates a deferred-backlink intent. The receipt reports `not_requested`; a
+confirmed append can succeed without a link. Omitted policy (or `"link"`)
+preserves ordinary journal-backed session threads. `jarvos_create_note` always
+keeps its existing journal contract. Unknown policies are rejected before
+mutation. This option grants no new mutation authority or recovery permission.
 
-- **Note persistence** says whether Obsidian acknowledged the note, or whether it is only saved locally with reconciliation pending.
-- **Journal backlink** says `linked`, `deferred`, or `failed` independently of the note.
+Write results keep mutation, backlink and sync states separate:
+
+- **Mutation status** preserves `unknown_after_dispatch` when a dispatched write lacks acknowledgement. The note may already exist; this is not permission to repeat the checkpoint. `blocked` can mean an earlier operation is unresolved.
+- **Operation** identifies the existing session-thread mutation for host-owned recovery. Read the thread, then have the owning host reconcile that operation; a fresh write creates a new checkpoint, not a status query.
+- **Obsidian acknowledgement** remains independent of local file presence. Durable operation intent alone does not prove saved note bytes.
+- **Journal backlink** says `linked`, `deferred`, `pending` (dispatch not attempted yet), `failed`, or `not_requested` (explicit internal policy) independently of the note.
 - **Sync** says `converged`, `pending`, `diverged`, or `unknown`; an Obsidian acknowledgement alone never proves remote Sync convergence.
 
-MCP write responses expose only these bounded states and the note title. They
-do not include local paths, content hashes, operation identifiers, timestamps,
-or private adapter evidence. Session-thread checkpoints use a latest-content
+MCP session-thread write responses expose these bounded states, the operation
+identifier and the note title. They do not include local paths, content hashes,
+timestamps or private adapter evidence. General public capture projections
+continue to omit operation identifiers. Session-thread checkpoints use a latest-content
 append transform so a concurrent Obsidian or mobile edit is preserved.
 
 Host reflex:
 
 1. On entry, call `jarvos_session_thread_read` with the issue, artifact, project,
-   or `JARVOS_SESSION_THREAD_ID`, then call `jarvos_current_work` or
-   `jarvos_hydrate`.
+   or `JARVOS_SESSION_THREAD_ID`, then call `jarvos_hydrate`. Use
+   `jarvos_current_work` only when explicitly diagnosing Paperclip compatibility.
 2. During work, call `jarvos_session_thread_write` at task switches, decisions,
    artifact changes, and pre-compaction flushes.
 3. Keep writes compact: summary, latest decision, and concrete next step. Link
    the live artifact instead of copying large snapshots.
+
+## On-demand meaning (host-bound)
+
+`jarvos_ripeness_context` reads an already-produced analysis without refreshing it
+or invoking a model. Its optional `maxChars` is 2,000–8,000. The response separates
+observations from inferences and includes analysis identity, source references,
+coverage and omissions. Missing, stale, malformed and healthy-empty results remain
+distinct. Content is untrusted evidence, not instructions.
+
+`jarvos_active_assistant` takes no arguments. Only a trusted host may authorize
+the user's specific request and bind its sources, destination, revision and
+provider. A caller-supplied approval flag, request id or model override is rejected.
+Missing host authority/accounting or unsupported provider cancellation returns
+unavailable before assessment work starts. Cancellation forwards an abort signal;
+the host must acknowledge stopped owned work before reporting a terminal result.
+
+The optional owner-controlled `JARVOS_MEANING_PROVIDER_MODULE` exports
+`createMeaningProvider()` with `readContext` and `assess` methods. This is a trusted
+host integration point, not an authorization issuer. No default private access or
+live-provider route is installed by this module. Responses use the bounded
+`jarvos-meaning-projection/v1` content contract, separate from metadata-only service
+receipts. Raw synthesis packets, prompts, diagnostics and filesystem paths are not
+part of that contract. Host installation and real-session qualification are separate
+from synthetic source tests.
 
 ## Prompts
 

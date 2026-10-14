@@ -2,14 +2,305 @@
 
 Release sections describe user-facing jarvOS changes. Historical public-doc sync entries are preserved below for traceability.
 
+## [0.11.0](https://github.com/levineam/jarvOS/compare/jarvos-bootstrap-v0.10.0...jarvos-bootstrap-v0.11.0) (2026-09-19)
+
+
+### Features
+
+* **context:** add portable work orientation ([26a7db6](https://github.com/levineam/jarvOS/commit/26a7db612c02d3d875bddb2b26bb4fc693d99c2b))
+* **context:** package portable work orientation ([7822691](https://github.com/levineam/jarvOS/commit/7822691d0001baf6b51bb1007ac66ef46f2fb2d6))
+* **desktop:** bundle companion in standard installation ([aadcaa4](https://github.com/levineam/jarvOS/commit/aadcaa4e10a130111aed03dae3c9010673d19e87))
+* **desktop:** bundle the companion in standard installation ([78d2414](https://github.com/levineam/jarvOS/commit/78d2414412ea7dbd3246e995200e2e015249f45c))
+* **skill-sync:** expose Desktop recommendation contract ([#306](https://github.com/levineam/jarvOS/issues/306)) ([b2e05f3](https://github.com/levineam/jarvOS/commit/b2e05f3e2c8ab31e62a0d45b4a61b7571b8d6c44))
+
+
+### Bug Fixes
+
+* **context:** load work orientation through Codex static instructions ([c1dce45](https://github.com/levineam/jarvOS/commit/c1dce45c1a02f9f6890abda8a2033496bebeea48))
+* **context:** load work orientation through Codex static instructions ([9ae8ff7](https://github.com/levineam/jarvOS/commit/9ae8ff76bd673e03ac5f411aa5b56f338e960e89))
+* **journal:** omit unsupported Projects sections ([#301](https://github.com/levineam/jarvOS/issues/301)) ([eda3964](https://github.com/levineam/jarvOS/commit/eda3964ed8e97b4b73af625155f678aec0cdb335))
+* **journal:** reconcile deferred backlinks safely ([#303](https://github.com/levineam/jarvOS/issues/303)) ([5115c9f](https://github.com/levineam/jarvOS/commit/5115c9f8fe9619b0dce7067a8d80b7edc4fa9693))
+* **projects:** expose an authorized complete roster (U0a) ([6ec7d7a](https://github.com/levineam/jarvOS/commit/6ec7d7a342d422d6caae227d714fbfcd48704734))
+* **projects:** expose an authorized complete roster (U0a) ([6d4990d](https://github.com/levineam/jarvOS/commit/6d4990dbc01f28bbe1231a80cba9b620d5a6d938))
+* **secondbrain:** harden content-origin provenance ([1596995](https://github.com/levineam/jarvOS/commit/15969957ec44d3adeb803fb5a332d6bca347739e))
+* **secondbrain:** reject incidental and unicode-negated capture language ([#309](https://github.com/levineam/jarvOS/issues/309)) ([2f75c68](https://github.com/levineam/jarvOS/commit/2f75c686190b53cc69d7722ca5aada3cb182d036))
+* **skills:** close owner decision reliability loop ([a7aa4f0](https://github.com/levineam/jarvOS/commit/a7aa4f0f0e1e43874c73209226c825c231f6802e))
+* **skills:** make owner decisions understandable and dependency-closed ([d9cbce2](https://github.com/levineam/jarvOS/commit/d9cbce239f8293c13e66272886d98059b7f89e15))
+* **skills:** prove active assistant update visibility ([#311](https://github.com/levineam/jarvOS/issues/311)) ([ee2ac88](https://github.com/levineam/jarvOS/commit/ee2ac883019cacf9405345e9064df286ccfd5dff))
+* **skills:** prove aliased update convergence ([441bdff](https://github.com/levineam/jarvOS/commit/441bdff406587bbc28cc6072e26eff6978d595ec))
+* **skills:** prove aliased update convergence ([0b80ad3](https://github.com/levineam/jarvOS/commit/0b80ad3a6ca729a125623b5652ca5bb7198f0ace))
+* **SUP-3820:** one concise skill decision digest per occurrence ([#305](https://github.com/levineam/jarvOS/issues/305)) ([78a6985](https://github.com/levineam/jarvOS/commit/78a6985dc51d051d0bbc8c074da01e27580d2abf))
+* **SUP-3959:** bind provenance repair state ([9ff1d7d](https://github.com/levineam/jarvOS/commit/9ff1d7d6ff500ca5406ce58e71e5a730a96350f1))
+* **SUP-3959:** close provenance trust gaps ([6a350e2](https://github.com/levineam/jarvOS/commit/6a350e2c2624408716c747b910a86ded58a3fe1e))
+* **SUP-3959:** emit and bind jarvos-content-origin/v1 receipts ([c715a90](https://github.com/levineam/jarvOS/commit/c715a90c0e67ab43a8d9f910d6502e00a3bc45f1))
+* **SUP-3959:** harden content-origin writer coverage ([40c4469](https://github.com/levineam/jarvOS/commit/40c44691895262722c87bf0974b1c42e651d2889))
+
+## [0.10.0](https://github.com/levineam/jarvOS/compare/jarvos-bootstrap-v0.9.0...jarvos-bootstrap-v0.10.0) (2026-09-11)
+
+
+### Features
+
+* **active-assistant:** add harness-neutral service contract ([bf155d8](https://github.com/levineam/jarvOS/commit/bf155d802051df21693922846d029175e40bf0c3))
+* **active-assistant:** define jarvOS-owned service boundary ([56eff4e](https://github.com/levineam/jarvOS/commit/56eff4edf599c54ee96474f4c6567f1573e03945))
+* add capability truth ledger contract ([8303902](https://github.com/levineam/jarvOS/commit/8303902401f5aa9b0ad82588c382e9e3b0afb89e))
+* add runtime mode routing contract ([58d9344](https://github.com/levineam/jarvOS/commit/58d9344cba7fe2463775d081cba3fa62dcff7f66))
+* add safe existing-installation sync flow ([f70c507](https://github.com/levineam/jarvOS/commit/f70c507173ecc580b703fc32022b679cdd6b2fc0))
+* **ambient:** add candidate envelope contract ([c6c3bc7](https://github.com/levineam/jarvOS/commit/c6c3bc718eec51e57ce0ac6d152d2513709ade66))
+* **codex:** integrate optional native GBrain plugin ([#288](https://github.com/levineam/jarvOS/issues/288)) ([d4a63a7](https://github.com/levineam/jarvOS/commit/d4a63a70140886abdee6b2dda5afa81b9acff0c6))
+* **context:** add fail-closed on-demand meaning tools (U2) ([#287](https://github.com/levineam/jarvOS/issues/287)) ([7d6e226](https://github.com/levineam/jarvOS/commit/7d6e2264784332ed80895085d283072a469940cb))
+* **control-plane:** add portable identity contract ([bf49cb2](https://github.com/levineam/jarvOS/commit/bf49cb214d7d70aef5cc7c9604e527cc4ca286bf))
+* **control-plane:** add promotion receipt contract ([15cda24](https://github.com/levineam/jarvOS/commit/15cda241530272ac1534e1c62af2c6f5f1ce45cd))
+* **doctor:** add profile-aware System Doctor ([#277](https://github.com/levineam/jarvOS/issues/277)) ([811a734](https://github.com/levineam/jarvOS/commit/811a734841f101d63f01398aae52ea8c14040db2))
+* **gbrain:** activate shared continuity across harnesses ([d1b65e7](https://github.com/levineam/jarvOS/commit/d1b65e752aa68dcb2f9bcfde309a7e015d080b60))
+* **gbrain:** activate shared continuity contract ([5e82686](https://github.com/levineam/jarvOS/commit/5e82686fe071dcf113422551d00ebb947fddc5ed))
+* make starter templates runtime-neutral ([8d7e663](https://github.com/levineam/jarvOS/commit/8d7e6632a482b1e10b0ec665db952877d311bfa1))
+* **projects:** carry context across every harness ([#244](https://github.com/levineam/jarvOS/issues/244)) ([db63fdf](https://github.com/levineam/jarvOS/commit/db63fdf05a25b98547a27bd14aa8aada51c4596f))
+* **runtime-kit:** add constrained generation contract ([ab1c8e8](https://github.com/levineam/jarvOS/commit/ab1c8e8a36c5d5e5c2d966b490a51c5ca56199f7))
+* **runtime:** add generic runner state compatibility reads ([b01ff58](https://github.com/levineam/jarvOS/commit/b01ff581f5191858df58e5d24a9a8ecb80ab11a1))
+* **runtime:** add generic runner state compatibility reads ([3f7c962](https://github.com/levineam/jarvOS/commit/3f7c962dd1e9a58e90c872fe7fb09be4efd142e3))
+* **runtime:** add Grok Bot remote HTTP/SSE adapter ([4514e90](https://github.com/levineam/jarvOS/commit/4514e9009cb79fdc85c86c99b996b8800cc6bf87))
+* **runtime:** add tiered harness conformance admission ([965c45f](https://github.com/levineam/jarvOS/commit/965c45ffb4c9b1914518addf79469fb0fb8c8bf3))
+* **runtime:** add tiered harness conformance admission ([f73b7b9](https://github.com/levineam/jarvOS/commit/f73b7b93cf1d488e837d15df668220aa96634c17))
+* **runtime:** bridge common work across harnesses ([af427a6](https://github.com/levineam/jarvOS/commit/af427a68bbe88c0f08dc516356e3fee55cf41b89))
+* **runtime:** bridge common work across harnesses ([1f06808](https://github.com/levineam/jarvOS/commit/1f0680839989c84050ef8c7640a7ccf9f8341636))
+* **runtime:** expose canonical work bridge ([ce34fc5](https://github.com/levineam/jarvOS/commit/ce34fc526554c5f5003709cb4f869af80c9919de))
+* **storage:** add portable capacity admission contracts ([#276](https://github.com/levineam/jarvOS/issues/276)) ([96ba9aa](https://github.com/levineam/jarvOS/commit/96ba9aace223c170a53dad8d62c3cc5897700ae7))
+* **storage:** release unused capacity reservations ([#281](https://github.com/levineam/jarvOS/issues/281)) ([2a2ae97](https://github.com/levineam/jarvOS/commit/2a2ae9703237c53453837a22f7027290442337c1))
+* sync with an existing jarvOS installation ([#248](https://github.com/levineam/jarvOS/issues/248)) ([9a1384b](https://github.com/levineam/jarvOS/commit/9a1384b24949a74d0377670fbc2d4c7c7701914a))
+* **sync:** connect an existing jarvOS installation ([a746541](https://github.com/levineam/jarvOS/commit/a746541adb124812df648cb04ef7617d4d157143))
+
+
+### Bug Fixes
+
+* **active-assistant:** accept quoted sentence endings ([7ec1eda](https://github.com/levineam/jarvOS/commit/7ec1eda0f55168a1f49887df0e09f58b8cfa761e))
+* **active-assistant:** accept quoted sentence endings ([12d7559](https://github.com/levineam/jarvOS/commit/12d7559a36fb026613c1c6d306b1265e937b76ec))
+* **active-assistant:** bind governed delivery invariants ([2e346d0](https://github.com/levineam/jarvOS/commit/2e346d09c88d9301c0558f72f6db8a3548d44876))
+* **active-assistant:** preserve selection and replay integrity ([4758b20](https://github.com/levineam/jarvOS/commit/4758b206facda7957bc685a69e775f5c107b8697))
+* **active-assistant:** reject opening quote suffixes ([febd6ba](https://github.com/levineam/jarvOS/commit/febd6ba72c3be7560e33c814de6c10f013587dcc))
+* advance merged capability truth states ([2f82ac9](https://github.com/levineam/jarvOS/commit/2f82ac9b9257a3444fa55b09fe9c9ebdc2bf32bc))
+* advance merged capability truth states ([370387e](https://github.com/levineam/jarvOS/commit/370387e0ffebcf544bdaac497b3f04b949608dec))
+* canonicalize init vault containment ([dc0f17e](https://github.com/levineam/jarvOS/commit/dc0f17eddc2492eec2a8e62045732c98dd174435))
+* **ci:** refresh Hermes skills manifest pin ([e7c2944](https://github.com/levineam/jarvOS/commit/e7c2944e3e7028f0d9003354ff7eabf08c7730ea))
+* **ci:** satisfy continuity documentation gates ([f6786ef](https://github.com/levineam/jarvOS/commit/f6786ef6911f71d2a4a7674cac850d22ca99c9a0))
+* **coding:** distinguish unavailable follow-through evidence ([#285](https://github.com/levineam/jarvOS/issues/285)) ([9e2db73](https://github.com/levineam/jarvOS/commit/9e2db735ca4eb9a4dd31225c7931541933ccc4c4))
+* **context:** verify portfolio coverage and recall source age ([#294](https://github.com/levineam/jarvOS/issues/294)) ([8d2cb7b](https://github.com/levineam/jarvOS/commit/8d2cb7bfd32b948936e8715bbffa8a6529ca6f13))
+* **doctor:** require runtime-effective paths ([d482a91](https://github.com/levineam/jarvOS/commit/d482a91037429906feb91c7551b2466d925a72d0))
+* **doctor:** restore compact eleven-row status ([#280](https://github.com/levineam/jarvOS/issues/280)) ([af943b7](https://github.com/levineam/jarvOS/commit/af943b7330b42a7f9e521edf3b035e14a8322b6c))
+* **gbrain:** harden continuity evidence ([5d4b7b8](https://github.com/levineam/jarvOS/commit/5d4b7b86fd68eca178043aca0cf2ba1c14603d37))
+* guard init vault boundaries ([fa16232](https://github.com/levineam/jarvOS/commit/fa162322a5ec5e02fce03d0a5e502aa17cb2932b))
+* harden existing-installation sync safety ([f5fba72](https://github.com/levineam/jarvOS/commit/f5fba7227895339c87ad8cacf72af9e39a4ac7d0))
+* harden foundation contract truth boundaries ([7603ae6](https://github.com/levineam/jarvOS/commit/7603ae6c1d0ee9779e7dda9583115b922ab5cd69))
+* harden foundation timestamp validation ([8d41a2d](https://github.com/levineam/jarvOS/commit/8d41a2dd055e9aa60b043da8e9ce1aff62c0d775))
+* **init:** attach existing vaults safely ([8c54120](https://github.com/levineam/jarvOS/commit/8c54120738f4a7647dadd6dd5d59ea50d4759106))
+* **init:** fail closed on existing workspaces ([#251](https://github.com/levineam/jarvOS/issues/251)) ([5b7a31e](https://github.com/levineam/jarvOS/commit/5b7a31e6f77867f5bb4b9a09234b0c1a678de449))
+* **init:** fail closed on existing workspaces ([#251](https://github.com/levineam/jarvOS/issues/251)) ([d98ef85](https://github.com/levineam/jarvOS/commit/d98ef8596abb3536ba51d05a8ec7e05ac80d6e25))
+* **init:** harden compatibility write boundary ([e984740](https://github.com/levineam/jarvOS/commit/e9847409fdcfb972f106e6deb8f71e1f33c90492))
+* **init:** make file publication race-safe ([6e69bf0](https://github.com/levineam/jarvOS/commit/6e69bf0ed1b39e5ce5075f92f75c2244f5706ce5))
+* **init:** reject ambiguous and symlinked targets ([#251](https://github.com/levineam/jarvOS/issues/251)) ([2ca2297](https://github.com/levineam/jarvOS/commit/2ca2297188e9e5f5e6f415cad667e014c202edc0))
+* **init:** validate explicit path environment ([#251](https://github.com/levineam/jarvOS/issues/251)) ([2c1449b](https://github.com/levineam/jarvOS/commit/2c1449bdb1b146dde4127eb77c57ccb15a9c7a73))
+* **journal:** reject non-activity projection evidence ([#283](https://github.com/levineam/jarvOS/issues/283)) ([2411ebe](https://github.com/levineam/jarvOS/commit/2411ebe6dc13c0fbaf6f9f34fcf1b7bd95f833e2))
+* keep dormant vault checks non-mutating ([87a8846](https://github.com/levineam/jarvOS/commit/87a88465a9ffc6e569739a29e6188aa1e2399295))
+* **mcp-http:** harden Streamable HTTP session isolation ([1b788da](https://github.com/levineam/jarvOS/commit/1b788dadb16094efa10f771352889a0032107a25))
+* **projects:** admit nested projects in context packets ([bd2f501](https://github.com/levineam/jarvOS/commit/bd2f50153ac4192de073040bbc38b86d75d6c10f))
+* **projects:** admit nested projects in context packets ([1ed6c29](https://github.com/levineam/jarvOS/commit/1ed6c294c1d47fb1cc9a7961289d21aaa5d0024a))
+* **projects:** bind consumers to one packet contract ([4ac93a5](https://github.com/levineam/jarvOS/commit/4ac93a57187c9a3c8b98355d766108e9a484fbe8))
+* **projects:** bind consumers to one packet contract (U1, U2) ([b4ccc78](https://github.com/levineam/jarvOS/commit/b4ccc78620af71f6d5cc19f9943c74df7a221a87))
+* **projects:** expose intent gaps and verified work follow-through ([#284](https://github.com/levineam/jarvOS/issues/284)) ([47acaea](https://github.com/levineam/jarvOS/commit/47acaeab4962fe478307e672847b0ccb2cac3746))
+* **projects:** fail closed on inconsistent bindings ([f88bd3b](https://github.com/levineam/jarvOS/commit/f88bd3bd8eef1655d7878462959d4de9c5c73f3e))
+* **projects:** keep byte-trimmed context packets valid ([#289](https://github.com/levineam/jarvOS/issues/289)) ([cefda2a](https://github.com/levineam/jarvOS/commit/cefda2a4afacba482dc69226c3f42da31a0359a3))
+* reject symlinked compatible install files ([073fca4](https://github.com/levineam/jarvOS/commit/073fca41195e5dfacc944f9b725bd86b11d9916e))
+* **release:** recognize Release Please tags ([a63f2ff](https://github.com/levineam/jarvOS/commit/a63f2ff7e35810cc070169b66071cea9bc210351))
+* **runtime-kit:** fail closed on unproven generation proof ([32ca74a](https://github.com/levineam/jarvOS/commit/32ca74a44be54b0277162779436536e9942becb4))
+* **runtime-kit:** reject untrusted generation verification ([3cb8b6c](https://github.com/levineam/jarvOS/commit/3cb8b6c91452b1e869dd8751e7f2e1464600b9bb))
+* **runtime:** align managed work and release drift checks ([e64df8d](https://github.com/levineam/jarvOS/commit/e64df8d6a13014d574284691a26269d745839620))
+* **runtime:** constrain Telegram route identities ([2e2cda7](https://github.com/levineam/jarvOS/commit/2e2cda772355455102dc575787160177d9ba0426))
+* **runtime:** harden runner state compatibility reads ([17babe4](https://github.com/levineam/jarvOS/commit/17babe4e757d4019973cf85240959257c0314cb5))
+* **runtime:** keep runner state reads private ([a205263](https://github.com/levineam/jarvOS/commit/a20526321486a1569c7e6569c6f26b637512b17f))
+* **secondbrain:** make hard capture commands terminal ([5f7c6fa](https://github.com/levineam/jarvOS/commit/5f7c6fa285a2b1f7ce3dabd15c18d9d5a9ccedb7))
+* **secondbrain:** preserve capture identity and correction lineage ([#286](https://github.com/levineam/jarvOS/issues/286)) ([1367b13](https://github.com/levineam/jarvOS/commit/1367b13531186c50fab63374d677cb11071d1c1c))
+* **skills:** finish clean workflow PRs autonomously ([ef62b42](https://github.com/levineam/jarvOS/commit/ef62b421daf6c75cdc60455e7cf2f03363444c45))
+* **skills:** finish clean workflow PRs autonomously ([e2e0608](https://github.com/levineam/jarvOS/commit/e2e0608cc0809e439119c0400ad878720b5b213d))
+* **sync:** align doctor with resolved runtime paths ([17abb8d](https://github.com/levineam/jarvOS/commit/17abb8d2693b7b4cde14b6d1a9792dd6aff323dc))
+* **sync:** allow verified macOS parent aliases ([fe9acc3](https://github.com/levineam/jarvOS/commit/fe9acc308582dd7d1440f632067202bb60d4f90a))
+* **sync:** close migration safety gaps ([91ef75a](https://github.com/levineam/jarvOS/commit/91ef75a0ed32d16853c449e10b20f4faf465ce3e))
+* **sync:** enforce portable config invariants ([70cdf84](https://github.com/levineam/jarvOS/commit/70cdf846855ae2c0191e8fbf7a8e8efeb9bc5241))
+* **sync:** migrate compatible legacy configs ([bfe01d7](https://github.com/levineam/jarvOS/commit/bfe01d7aedc2f8fd2628853ed99676855e97f58b))
+* **sync:** normalize equivalent runtime overrides ([9197296](https://github.com/levineam/jarvOS/commit/9197296f298d00b994a2d25404e1af19857e9776))
+* **sync:** normalize existing runtime path checks ([b93ae61](https://github.com/levineam/jarvOS/commit/b93ae61c8bf891058f4ae01a0b6b4a81bc8fe1f1))
+* **sync:** preserve legacy runtime safety ([87f6c9b](https://github.com/levineam/jarvOS/commit/87f6c9b641f6d1f1d60226482d63af67099fd559))
+* **sync:** recognize omitted derived config paths ([142ac5d](https://github.com/levineam/jarvOS/commit/142ac5d0610f67824ddd20bd82a7c1b2972584e3))
+* **sync:** reject ambiguous runtime path traversal ([e6cf68a](https://github.com/levineam/jarvOS/commit/e6cf68a7c21c551825257bdceec3028b94127abb))
+* **sync:** reject divergent overrides before create ([5e6e55e](https://github.com/levineam/jarvOS/commit/5e6e55ee73eb974be4974e41d7b46a4962e4b16a))
+* **sync:** revalidate config creation paths ([546022b](https://github.com/levineam/jarvOS/commit/546022b03f4f9a087ad7caebaf387e567b222ee5))
+* **system-doctor:** preserve validated check freshness ([#290](https://github.com/levineam/jarvOS/issues/290)) ([99f2f0a](https://github.com/levineam/jarvOS/commit/99f2f0a48b8c630310251aabe8674cb20dad90c1))
+* validate runtime modes in minimal doctor ([0f9fff4](https://github.com/levineam/jarvOS/commit/0f9fff4dc300cc2bbd96f0824cb9d80a65f3b9e0))
+
+## [0.9.0](https://github.com/levineam/jarvOS/compare/jarvos-bootstrap-v0.8.0...jarvos-bootstrap-v0.9.0) (2026-08-26)
+
+
+### Features
+
+* **active-assistant:** add portable provider selection ([664ae6f](https://github.com/levineam/jarvOS/commit/664ae6fa4dabfb1ee2c178c03fec55b04cdfee2d))
+* **active-assistant:** add provider selection contract ([17d448e](https://github.com/levineam/jarvOS/commit/17d448e93f65c189e4af714f2a8592483a8ad887))
+* **active-assistant:** add strict cycle runtime bridge ([#220](https://github.com/levineam/jarvOS/issues/220)) ([8c06627](https://github.com/levineam/jarvOS/commit/8c0662734a3c8aad263536213e3eb0859490a8f0))
+* **active-assistant:** record Grok capability blockers ([b21b9cc](https://github.com/levineam/jarvOS/commit/b21b9cccc65effac9f1763150bb6f2ab36054e9f))
+* **active-assistant:** restore portfolio coaching contract ([#222](https://github.com/levineam/jarvOS/issues/222)) ([4e812e9](https://github.com/levineam/jarvOS/commit/4e812e9a9db9a2e16618b81350c6d37dab10771c))
+* **claude:** make jarvOS participate in a Claude Code session ([#223](https://github.com/levineam/jarvOS/issues/223)) ([f2b8f42](https://github.com/levineam/jarvOS/commit/f2b8f42994e1547ff884d386590e48010f6c5ed8))
+* **instructions:** add deterministic projection core ([7c6f497](https://github.com/levineam/jarvOS/commit/7c6f497411f054a80f69df120fde273c1916bc52))
+* **instructions:** add deterministic projection core (U2) ([2e7d8b9](https://github.com/levineam/jarvOS/commit/2e7d8b96355b02301f6ee4b9348e9b95de543973))
+* **instructions:** define portable role contract ([4c5a4bb](https://github.com/levineam/jarvOS/commit/4c5a4bb240e9aaf7b829852aa05444de9c4043fb))
+* **instructions:** define portable role contract (SUP-3861) ([d8fe492](https://github.com/levineam/jarvOS/commit/d8fe49295ddafc93ac0661b5ffb0497110e995f1))
+* make Projects Todo host durable ([1800a16](https://github.com/levineam/jarvOS/commit/1800a16d0039896e1bf4f67552e24383e823a4b5))
+* **projects:** infer canonical project structure autonomously ([#224](https://github.com/levineam/jarvOS/issues/224)) ([a9a6761](https://github.com/levineam/jarvOS/commit/a9a6761f7290ca9128a6657d058a7649977147aa))
+* **projects:** integrate Beads-backed Todo context ([#212](https://github.com/levineam/jarvOS/issues/212)) ([aede083](https://github.com/levineam/jarvOS/commit/aede08330d793f7a6f09eb220f72e8654268a2f7))
+* **runtime-kit:** prove managed harness activation ([#218](https://github.com/levineam/jarvOS/issues/218)) ([e898af8](https://github.com/levineam/jarvOS/commit/e898af8ce6611cd1cdbc87d1c5ec3fd2af9c4e1d))
+* **runtime-kit:** support optional Grok profiles ([17e5ec9](https://github.com/levineam/jarvOS/commit/17e5ec94c9d02783b27733316c706dee1757ab77))
+* **runtime-kit:** support optional Grok provider profiles ([d2e1cff](https://github.com/levineam/jarvOS/commit/d2e1cff0e842a1a9940a0d31b740c7f4f5682cc5))
+* **runtime-kit:** verify dispatcher conformance instead of assuming it ([#227](https://github.com/levineam/jarvOS/issues/227)) ([74a3962](https://github.com/levineam/jarvOS/commit/74a39621164cef3ab53e3c7a61ecec636aa335af))
+* support stable Projects MCP entrypoints ([5594ce6](https://github.com/levineam/jarvOS/commit/5594ce69aa1fab34614720b9f60ede163fb9a91b))
+
+
+### Bug Fixes
+
+* **active-assistant:** accept managed selector receipts ([e1df6bc](https://github.com/levineam/jarvOS/commit/e1df6bcd8999b3c67efa1a5a6425d671ab4834f9))
+* **active-assistant:** accept managed selector receipts ([a61699b](https://github.com/levineam/jarvOS/commit/a61699bdb14395842da3f53a823fb9bba16540b5))
+* **active-assistant:** admit synthesis v2 runtime ([#226](https://github.com/levineam/jarvOS/issues/226)) ([98da559](https://github.com/levineam/jarvOS/commit/98da55957ec4959709bf4977708f3fdac7a12530))
+* **active-assistant:** bind provider qualification truthfully ([e4b6d79](https://github.com/levineam/jarvOS/commit/e4b6d79148e6c63e90cc805ac60fef31cfa254ef))
+* **agent-context:** resolve ontology and Projects config from the workspace ([#221](https://github.com/levineam/jarvOS/issues/221)) ([124502d](https://github.com/levineam/jarvOS/commit/124502daf8339e514dbc0ebfac08f9ed5ed13165))
+* align Beads adapter with v0.2.19 ([ab5267d](https://github.com/levineam/jarvOS/commit/ab5267d000e3e0aaf983988b4d71870ebad9a9f8))
+* bind Projects reads to selected runtime ([d21af83](https://github.com/levineam/jarvOS/commit/d21af8384ed129bd20d5f55387832920f91bce3d))
+* **coding:** distinguish Beads resume from reopen ([#238](https://github.com/levineam/jarvOS/issues/238)) ([ec32879](https://github.com/levineam/jarvOS/commit/ec328795c5bc264bc69ea1e832417a7d6578aeac))
+* **gbrain:** align evaluation with top-ten recall contract ([f7ce2db](https://github.com/levineam/jarvOS/commit/f7ce2dbe10e14f08be19e3f689a912ef2cd872b1))
+* **gbrain:** harden combined recall fallback ([45219e7](https://github.com/levineam/jarvOS/commit/45219e7d19d20db93428c579b2a8e7de81bf680a))
+* **gbrain:** preserve combined recall fallback semantics ([8db4cd7](https://github.com/levineam/jarvOS/commit/8db4cd704b3ea08c643dfad7307f3fcc78c36e22))
+* **gbrain:** preserve sanitized recall failure evidence ([df1c412](https://github.com/levineam/jarvOS/commit/df1c41275231e627f95f585844360012a8a4784c))
+* **package:** bundle runtime-kit in direct skills tarball ([#216](https://github.com/levineam/jarvOS/issues/216)) ([3682993](https://github.com/levineam/jarvOS/commit/3682993872ab5a3eb924498c6ed0ed1b4f8e342f))
+* **package:** install bundled runtime-kit dependency ([#215](https://github.com/levineam/jarvOS/issues/215)) ([72532cd](https://github.com/levineam/jarvOS/commit/72532cd14f2aa2e6c4856696d94bb2dc4aea45a4))
+* **release:** preserve component-prefixed release tags ([#209](https://github.com/levineam/jarvOS/issues/209)) ([f40483a](https://github.com/levineam/jarvOS/commit/f40483abbe47740c7d903bb217ef9d1c605bee0b))
+* **runtime-kit:** align Grok prompt budget ([ce1912d](https://github.com/levineam/jarvOS/commit/ce1912d5447fc3a4e197b5ce192d9d5609f37c7c))
+* unlock durable Projects and Todo runtime bindings ([04e024d](https://github.com/levineam/jarvOS/commit/04e024d34b9d92f876cc084cf88635f33960c18f))
+* validate stable MCP entrypoint ancestry ([0da0377](https://github.com/levineam/jarvOS/commit/0da0377d611abe11d4f1ccf8156557ee72bac45f))
+
+## [0.8.0](https://github.com/levineam/jarvOS/compare/jarvos-bootstrap-v0.7.0...jarvos-bootstrap-v0.8.0) (2026-08-16)
+
+
+### Features
+
+* **active-assistant:** add portable managed runtime ([#128](https://github.com/levineam/jarvOS/issues/128)) ([e97204c](https://github.com/levineam/jarvOS/commit/e97204c522be505aa80ef0fd3bdeb513ba2bf586))
+* **active-assistant:** publish deterministic synthesis contracts ([#130](https://github.com/levineam/jarvOS/issues/130)) ([eb4387f](https://github.com/levineam/jarvOS/commit/eb4387fa09d0a0c9fb56ed19a3e38096776cbeb0))
+* add Codex session follow-through contract ([#146](https://github.com/levineam/jarvOS/issues/146)) ([66366a7](https://github.com/levineam/jarvOS/commit/66366a7a5b208b5c73c2f7d0e8397c3fc4df46a0))
+* add source-bound release observer ([dd47290](https://github.com/levineam/jarvOS/commit/dd472909b94cf4eb1cbe3c1b5de08f80bff1a3b4))
+* add source-bound release observer ([97739d0](https://github.com/levineam/jarvOS/commit/97739d014939afeae5b786f637c880b45a357e3e))
+* **codex:** bind session-wait origins at session start ([a243422](https://github.com/levineam/jarvOS/commit/a243422f2f547c3a83a69c6152bf019b9bcd52d2))
+* **coding:** activate managed harness stewardship ([dfc0500](https://github.com/levineam/jarvOS/commit/dfc0500bd937e6a59dd3be4929eadeac65af0b73))
+* **coding:** add stewardship adapter contract ([e32e33e](https://github.com/levineam/jarvOS/commit/e32e33eea1e9b53e884fd6d99cb7e2db5ec80095))
+* **coding:** add Touch ID approval vault ([0c18d90](https://github.com/levineam/jarvOS/commit/0c18d90a6d16d3adc88f6c08ca6d8b0b795fac63))
+* **coding:** assess managed local changes ([00e0061](https://github.com/levineam/jarvOS/commit/00e006150d0435876c3d833706b6445142d7c4f6))
+* **coding:** define stewardship judgment contract ([42aa4e4](https://github.com/levineam/jarvOS/commit/42aa4e4f63b7690a55e507c837ca3e5fdc4f6575))
+* **coding:** harden local change intake ([e88a951](https://github.com/levineam/jarvOS/commit/e88a95181ece22a4caca564df44440339bca1112))
+* **coding:** manage conformance-backed CE provider ([#139](https://github.com/levineam/jarvOS/issues/139)) ([a6793d5](https://github.com/levineam/jarvOS/commit/a6793d5ed9c9eadcae0c274499edd29a96f8f021))
+* **coding:** record stewardship choices in session ([cf06630](https://github.com/levineam/jarvOS/commit/cf066305ad5e5fc80b3a417d2606c017320583bb))
+* **coding:** surface stewardship judgments in session ([d5c7f2b](https://github.com/levineam/jarvOS/commit/d5c7f2b21be80e6d837c038bcb60ba1154aaecc5))
+* **control-plane:** add managed software catalog contract ([032b083](https://github.com/levineam/jarvOS/commit/032b08357b2414869dee1e9672d1c6529bb437c9))
+* **control-plane:** bind runtime provenance policy ([b3fb789](https://github.com/levineam/jarvOS/commit/b3fb789e6537a784aef3578cca64b5a1359f1c02))
+* **control-plane:** harden managed software catalog ([61f1cec](https://github.com/levineam/jarvOS/commit/61f1cec9b46a7cd50f163dcbf601c9956294cdd8))
+* **doctor:** add the public memory health module ([#140](https://github.com/levineam/jarvOS/issues/140)) ([30e3871](https://github.com/levineam/jarvOS/commit/30e387130af3ba8238fa8567b9f5b9a18d9617a0))
+* **jarvos-skills:** add bounded machine-wide inventory (SUP-3808 U2) ([c9a6678](https://github.com/levineam/jarvOS/commit/c9a6678b6700d930fddaac71215dac6475410266))
+* **jarvos-skills:** add inventory and assessment contracts (SUP-3807 U1) ([d7ccaa9](https://github.com/levineam/jarvOS/commit/d7ccaa9fd599bbc4508fc92e1d6bca460c262be0))
+* **jarvos-skills:** autonomous triggers, shared status, attention routing (SUP-3814 U5) ([589a245](https://github.com/levineam/jarvOS/commit/589a245b6609ba86edbf2641184979444e6d3628))
+* **jarvos-skills:** classify and auto-admit eligible skills (SUP-3811 U3) ([806672d](https://github.com/levineam/jarvOS/commit/806672d6184f005f1c9b9816275d26554727b2f8))
+* **jarvos-skills:** reconcile admitted matrix with adopt path (SUP-3812 U4) ([8f1b03f](https://github.com/levineam/jarvOS/commit/8f1b03f963392b90e1d5165df6eb645878fa9f0c))
+* **journal:** simplify the daily journal and add the Projects record ([#118](https://github.com/levineam/jarvOS/issues/118)) ([0be1678](https://github.com/levineam/jarvOS/commit/0be1678480934aeab376bb04a54266d5e7a7e683))
+* make Hermes a first-class jarvOS harness ([#144](https://github.com/levineam/jarvOS/issues/144)) ([6471b5e](https://github.com/levineam/jarvOS/commit/6471b5e00d8e8c4e4418b981ca86c07fbeb9b274))
+* **projects:** add bounded assistant context ([#142](https://github.com/levineam/jarvOS/issues/142)) ([8240523](https://github.com/levineam/jarvOS/commit/824052382f1684107632601cf6b6cdeee5cb8a5f))
+* **projects:** add canonical project context foundation ([928b278](https://github.com/levineam/jarvOS/commit/928b27863986f4631b32ea07492b6d0576a80be1))
+* **projects:** add project context capability contract ([3634f1e](https://github.com/levineam/jarvOS/commit/3634f1e8e2bdc123b68dd2aa0349cf438cce54dc))
+* **projects:** authorize reusable context capability ([37ed213](https://github.com/levineam/jarvOS/commit/37ed213a11f7b6ebcf829eed484df983a830b3c8))
+* publish grounded Active Assistant contracts ([#136](https://github.com/levineam/jarvOS/issues/136)) ([9cb3635](https://github.com/levineam/jarvOS/commit/9cb3635b62a6f089b8f687a6a40d19c0f78770bc))
+* **runtime:** add Hermes dispatch contracts ([6c533bc](https://github.com/levineam/jarvOS/commit/6c533bc55f63861a7cddd3baa658d0f4ea8af66e))
+* **runtime:** add Hermes runtime contracts ([bb5c714](https://github.com/levineam/jarvOS/commit/bb5c7144a5ebcd19fdec1cab2377cff09c856605))
+* **runtime:** add stewardship lifecycle adapters ([dc23a43](https://github.com/levineam/jarvOS/commit/dc23a43948d027e0b3376e8726d3b4542e72791d))
+* **runtime:** emit local change invalidation ([946dc7a](https://github.com/levineam/jarvOS/commit/946dc7a2c58c4ef13999f7fdb6f76aa2ef186038))
+* **runtime:** preserve Hermes first-contact receipt identity ([76b4fbb](https://github.com/levineam/jarvOS/commit/76b4fbb960b140a739b4a27a8929cb5ae130e9d0))
+* **skills:** add catalog reconciliation, aliasing, and harness projection contracts (SUP-3798) ([5ded44b](https://github.com/levineam/jarvOS/commit/5ded44b14143809ac5b91675ffdc2fa66d05f0a1))
+* **skills:** add public catalog and local overlay contracts (SUP-3798) ([0cc5d06](https://github.com/levineam/jarvOS/commit/0cc5d06f02115ec6326733c5bbdeb90d664f6493))
+* **skills:** add verified cross-harness projection contract (SUP-3756) ([#133](https://github.com/levineam/jarvOS/issues/133)) ([deccb5c](https://github.com/levineam/jarvOS/commit/deccb5cc8526be27e9801fc2101af2b3b4c4a0bf))
+* **skills:** add verified Hermes projections ([103a00c](https://github.com/levineam/jarvOS/commit/103a00c0913ac029a556c44a3fe2cb1b207bf68e))
+* **skills:** reconcile verified installs immediately ([#135](https://github.com/levineam/jarvOS/issues/135)) ([82fc8bd](https://github.com/levineam/jarvOS/commit/82fc8bd566dc748a131973166f1a434221a1f031))
+* **skills:** rename Codex session wait skill ([3a823bc](https://github.com/levineam/jarvOS/commit/3a823bcd54b3c0f8c3b91e08e60670b2ad3972d4))
+* **skills:** rename Codex session wait skill ([51227e3](https://github.com/levineam/jarvOS/commit/51227e3cf1cd8f071270feaa17fcf6b3ba3c21dc))
+* **stewardship:** add portable release stewardship adapters ([356839c](https://github.com/levineam/jarvOS/commit/356839c13428c9f6dfe910a17bb99cfc7e99f8e8))
+* **stewardship:** inventory unmerged local work ([39c185d](https://github.com/levineam/jarvOS/commit/39c185d037d4a9f03d17593a6cb9cbb3e581c97a))
+* **workspace-manager:** require release clearance for cleanup ([#138](https://github.com/levineam/jarvOS/issues/138)) ([1fd7c13](https://github.com/levineam/jarvOS/commit/1fd7c13a4c397d968082279892308532b9913ef1))
+
+
+### Bug Fixes
+
+* bind Codex wait receipts to current session ([#160](https://github.com/levineam/jarvOS/issues/160)) ([656dc57](https://github.com/levineam/jarvOS/commit/656dc5724e7952dc37206b5a3a607669b7079c1a))
+* **ci:** actually run the test suite in CI ([#115](https://github.com/levineam/jarvOS/issues/115)) ([7c880f7](https://github.com/levineam/jarvOS/commit/7c880f78bd9d620e2578f55c6a8965f2e9a0877b))
+* **ci:** avoid secret-scan false positives ([2980e1e](https://github.com/levineam/jarvOS/commit/2980e1e5838afbc104d08091de328a9821e37b87))
+* **ci:** mint Release Please App token per run ([#141](https://github.com/levineam/jarvOS/issues/141)) ([49c8666](https://github.com/levineam/jarvOS/commit/49c866687a111c2eb3c3338db8863b9baa38d67f))
+* **ci:** unblock Release Please candidate checks ([#204](https://github.com/levineam/jarvOS/issues/204)) ([28529a9](https://github.com/levineam/jarvOS/commit/28529a9933b5d840a5c9fb330dbc9bb53d9fd38a))
+* **claude:** bind stewardship notices to sessions ([550ed5a](https://github.com/levineam/jarvOS/commit/550ed5a0e2cddddf78de552459845d1dfd29c6f6))
+* **claude:** configure private session bridge ([8c07897](https://github.com/levineam/jarvOS/commit/8c078977011bcb3544b419db65a765033fb93727))
+* **claude:** persist safe bridge environment ([e94c0df](https://github.com/levineam/jarvOS/commit/e94c0dfcfb64febbd6bc68061885cca6a0e43287))
+* **claude:** preserve startup stewardship notice ([331dbe1](https://github.com/levineam/jarvOS/commit/331dbe10529ba21fba703cc3530752191ed4c67a))
+* **codex:** migrate legacy hook configuration ([eab38ee](https://github.com/levineam/jarvOS/commit/eab38eec4d5a59f0d5c33d1981129048c322b3fd))
+* **codex:** preserve nested environment policy ([c6bcef0](https://github.com/levineam/jarvOS/commit/c6bcef0999b6661bb634ea1b130e5aaba0a7faa6))
+* **coding:** keep trackers record-only ([85ab525](https://github.com/levineam/jarvOS/commit/85ab5250f1deccf0a73fc3ecbcdb0d20fc4a58d1))
+* **coding:** version stewardship contract changes ([e7e5509](https://github.com/levineam/jarvOS/commit/e7e550918aa088b35f6afdc0338c951b4b811fe0))
+* **jarvos-skills:** attest reused roots before capture (SUP-3798) ([51fbfd6](https://github.com/levineam/jarvOS/commit/51fbfd61764e54b9954ce23ed0e22db7a2ae240e))
+* **jarvos-skills:** clear U6 public PR CI gates (SUP-3815) ([bb366be](https://github.com/levineam/jarvOS/commit/bb366be9ead847d60e9bceefe4b7eed765f782d6))
+* **jarvos-skills:** close cross-harness parity safety gaps (SUP-3798) ([d835fb7](https://github.com/levineam/jarvOS/commit/d835fb75129070a8d06c9fd8eb143b6e169fc254))
+* **jarvos-skills:** enforce retirement grace interval (SUP-3798) ([dc76bbd](https://github.com/levineam/jarvOS/commit/dc76bbdcf9ba52296ce1815068c40df6e1ef185f))
+* **jarvos-skills:** isolate per-bundle inventory overflow (SUP-3798) ([3b96dfa](https://github.com/levineam/jarvOS/commit/3b96dfadb4775b851a56a43c786c59e7b0473887))
+* **jarvos-skills:** migrate legacy manual source roots (SUP-3798) ([2e9dfd8](https://github.com/levineam/jarvOS/commit/2e9dfd8bbe68c7e58c04576834041a919c5bc73a))
+* **jarvos-skills:** preserve generated roots during migration (SUP-3798) ([21af5d3](https://github.com/levineam/jarvOS/commit/21af5d31a41ef9410d8687e3ffd71dd2539b4183))
+* **jarvos-skills:** recover bounded parity automation failures (SUP-3798) ([7118879](https://github.com/levineam/jarvOS/commit/711887991bb340521b1fa76eb5ce6563b59efb9a))
+* **jarvos-skills:** recover orphaned source generations (SUP-3798) ([8b38ec9](https://github.com/levineam/jarvOS/commit/8b38ec9384384cc9b1a6a3f8d6b6a9e6a2bb9481))
+* **jarvos-skills:** redact non-home doctor paths (SUP-3798) ([ff6117a](https://github.com/levineam/jarvOS/commit/ff6117af060205de176734ef0aab1dcd4e864c84))
+* **jarvos-skills:** replay committed retirement cleanup (SUP-3798) ([e148888](https://github.com/levineam/jarvOS/commit/e14888837ce14864a832bc4aecd6e2387a4bac3f))
+* **jarvos-skills:** replay interrupted source migration (SUP-3798) ([0dd29dc](https://github.com/levineam/jarvOS/commit/0dd29dc24d68f08c67eed80a2f6a8759c6eaac03))
+* **jarvos-skills:** resolve parity lifecycle review findings (SUP-3798) ([1e48bc5](https://github.com/levineam/jarvOS/commit/1e48bc5071d6d1c8dcc90b9d7012c97a632960d7))
+* **jarvos-skills:** tighten U6 operator/doctor inventory edges (SUP-3815) ([6954f95](https://github.com/levineam/jarvOS/commit/6954f9511027a22d71b795b0559824f16b197464))
+* **journal:** make daily capture visible and recoverable ([#127](https://github.com/levineam/jarvOS/issues/127)) ([9dc360d](https://github.com/levineam/jarvOS/commit/9dc360dae151d2f92ae45e4abed07f464eb01283))
+* **journal:** recover deferred Obsidian backlinks safely ([#121](https://github.com/levineam/jarvOS/issues/121)) ([42d02bb](https://github.com/levineam/jarvOS/commit/42d02bb51860100faa877b7151a58f267a55a9bc))
+* **openclaw:** allow stewardship answer tool ([0380616](https://github.com/levineam/jarvOS/commit/0380616445c06953ab1123476c90f13f1ef187c6))
+* **openclaw:** declare ownership marker schema ([ff056eb](https://github.com/levineam/jarvOS/commit/ff056eb94008d49e50f719c6897e226c9ad45b3f))
+* **openclaw:** declare stewardship answer tool ([459d780](https://github.com/levineam/jarvOS/commit/459d780094226f48910bc1f037b936a12e2e43e3))
+* **openclaw:** expose callable stewardship bridge ([3a1f065](https://github.com/levineam/jarvOS/commit/3a1f0656f361070cd3b367ccb820c4ba234187b9))
+* **openclaw:** make permission ownership atomic ([f46797b](https://github.com/levineam/jarvOS/commit/f46797b505216e9d505b061672cec9bdb1c72195))
+* **openclaw:** preserve exact agent session identity ([252d813](https://github.com/levineam/jarvOS/commit/252d8138ca7eacb6e221473174f874d426be0cba))
+* **openclaw:** preserve preexisting tool permission ([f1a2e88](https://github.com/levineam/jarvOS/commit/f1a2e885a42bdbf641816511580b97501591acbb))
+* **openclaw:** record permissions after config ([e11bb1a](https://github.com/levineam/jarvOS/commit/e11bb1af77db09edb8adb524117822ebe8d03627))
+* **openclaw:** record stewardship choices with native tool ([84d0c2e](https://github.com/levineam/jarvOS/commit/84d0c2e8ad60e27848719bce293e00f49da43a6d))
+* **openclaw:** resolve normalized explicit sessions ([93618e3](https://github.com/levineam/jarvOS/commit/93618e378a6580821e76ce7830f3ebf9ba22f366))
+* **openclaw:** retain stewardship plugin configuration ([e958e01](https://github.com/levineam/jarvOS/commit/e958e019ed86e7280e0678f4a8d39a305a31929a))
+* **openclaw:** widen active agent tool policy ([c646624](https://github.com/levineam/jarvOS/commit/c6466247271d68d69d8613559ccb0aa391c2dc17))
+* preserve OpenClaw managed plugin persistence ([#126](https://github.com/levineam/jarvOS/issues/126)) ([ff74a30](https://github.com/levineam/jarvOS/commit/ff74a306773311860f062c877d46f3e08efb8e14))
+* **projects:** bind context receipts to activation ([3451311](https://github.com/levineam/jarvOS/commit/3451311d2b77fe28149096e669a6137e3540943d))
+* **projects:** don't mistake a broken bridge for an absent one ([#120](https://github.com/levineam/jarvOS/issues/120)) ([5bc3551](https://github.com/levineam/jarvOS/commit/5bc35512ed63c510faa54550656b0b2cb7b6800e))
+* **projects:** require activation envelope expectation ([89ecdcd](https://github.com/levineam/jarvOS/commit/89ecdcd502afbf54462164ffa4c6e3855bb2b18f))
+* **release:** let Release Please choose the next version ([bec64c5](https://github.com/levineam/jarvOS/commit/bec64c572312781923550351679b5605733ff794))
+* **runtime:** bind stewardship hooks to live sessions ([d416b2b](https://github.com/levineam/jarvOS/commit/d416b2b66401b83089129504c5daa7b17e1ad257))
+* **runtime:** deliver judgments on normal harness turns ([ed01f71](https://github.com/levineam/jarvOS/commit/ed01f713ce02fe453c0c0e02e266a98cc437f7be))
+* **runtime:** deliver stewardship choices on live turns ([b7e337e](https://github.com/levineam/jarvOS/commit/b7e337efa7a64b8db76f9c4803bb6c989e0c240d))
+* **runtime:** enforce Hermes public-boundary checks ([b7c635d](https://github.com/levineam/jarvOS/commit/b7c635d923caaf1d5da6253cdf18fd97fbb7564a))
+* **runtime:** harden stable stewardship adapter contract ([#125](https://github.com/levineam/jarvOS/issues/125)) ([9a344b6](https://github.com/levineam/jarvOS/commit/9a344b6cdaf2fd98b3700a2683b35cf9590406fa))
+* **security:** keep approval signing material internal ([c0ba936](https://github.com/levineam/jarvOS/commit/c0ba936f28b7a903f5b85ab3d6d556ddda8ea0c6))
+* **SUP-3663:** resolve gbrain doctor bin via bun-link fallback ([#119](https://github.com/levineam/jarvOS/issues/119)) ([702a166](https://github.com/levineam/jarvOS/commit/702a166f537699e92a4f26531839efa708a7fe45))
+* update runtime artifact pins for session-wait ([45b0407](https://github.com/levineam/jarvOS/commit/45b04076f62e8bf9f08760e3c8d01f922220e07c))
+* **vault:** make Obsidian own note mutations ([#134](https://github.com/levineam/jarvOS/issues/134)) ([b096826](https://github.com/levineam/jarvOS/commit/b09682627ae9f682601c6c940122d4b018ab13ae))
+
 ## [Unreleased]
 
-Staging area for the active v1.0.0 clean-machine confidence lane (Paperclip
-SUP-3548). These entries are merged on `main` after v0.7.0 and are **not** a
-published release. Publication still requires Andrew approval and a green
-`npm run release:check` after `package.json` is intentionally bumped.
+These entries are the post-v0.7.0 forming batch. They are merged on `main` but
+are **not** a published release. Release Please derives the next version from
+this public range and prepares the exact proposal; publication still requires
+the Steward's release-level approval and verification.
 
 ### Added
+- **secondbrain:** emit `jarvos-content-origin/v1` on canonical durable-note writes (`content_origin`, `content_origin_basis`, `content_origin_schema`). Human origin without a verifiable user receipt fails closed to `unknown`. Ripeness, Active Assistant, and memory evidence gates must not treat unverified human claims as receipt-bound evidence (SUP-3959).
 - Add a data-only optional Memory health module to `jarvos doctor`. The public
   Doctor owns the four-state health vocabulary and keeps private Supervisor
   diagnostics, repair commands, runtime paths, and delivery receipts out of
@@ -31,6 +322,7 @@ published release. Publication still requires Andrew approval and a green
   as wiki-links. It renders first, as the orientation surface, and stays
   current on backfilled entries because projects are current-state rather than
   day-scoped.
+- Notes record append-only `content_origin_drafting` history (assistant draft/edit with harness and declared, resolver-verified served, or unknown model; historical user-source receipts). History cannot be erased by later writes, and notes with assistant history are never human evidence. Session source adapters validate per-message drafting declarations and derive a missing current contribution only from the adapter harness and the message's own model (otherwise `unknown`), never from session/default models or inferred served evidence; invalid messages are skipped individually (SUP-4054).
 
 ### Changed
 - Simplify the daily journal to what the user actually writes: remove
@@ -43,6 +335,14 @@ published release. Publication still requires Andrew approval and a green
   never rewritten in bulk.
 
 ### Fixed
+- Managed Claude Code, Claude Desktop, and Codex setup now registers the
+  stable selector-aware `jarvos-mcp` shim from the stewardship bundle by
+  default and refuses to persist an immutable runtime stage's own MCP script.
+  A stage-pinned registration kept serving the old stage after a runtime
+  promotion, so Projects context failed in Claude while Codex worked.
+  `jarvos doctor` gains an `mcp-registration` check that fails when harness
+  registrations disagree, point at a missing target, or miss the managed
+  stable entrypoint (SUP-4006).
 - Route authored vault Markdown through one acknowledged Obsidian mutation
   lifecycle. Notes, journals, backlinks, project pages, session threads, and
   maintenance repairs no longer claim success from disk bytes alone; safe

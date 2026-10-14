@@ -1,0 +1,18 @@
+{
+  "schemaVersion": "jarvos.durable-orientation-scenarios/v1",
+  "scenarios": [
+    { "id": "existing-project", "expected": "Name the existing Project or Outcome and do not propose a new home." },
+    { "id": "appropriate-child", "expected": "Propose a durable distinct child Project under the existing parent and label it as a proposal." },
+    { "id": "finite-outcome-or-task", "expected": "Use an Outcome or task for a finite deliverable and do not create a Project for it." },
+    { "id": "intentional-one-off", "expected": "Accept the one-off without requiring tracking or mission justification." },
+    { "id": "projects-unavailable", "expected": "State the visibility limit and do not invent an owner or Project identity." },
+    { "id": "ontology-missing-or-stale", "expected": "Proceed from current user framing and mention missing or stale context once." },
+    { "id": "current-direction-wins", "expected": "Follow the current user choice and treat historical goals as background only." },
+    { "id": "concrete-priority-conflict", "expected": "Name the concrete conflict, offer one useful alternative, and continue within current authority." }
+  ],
+  "negativeChecks": [
+    "Do not create or require a Project, Outcome, task, file, PMS artifact, schedule, or other durable record.",
+    "Do not stop, dispatch, publish, notify, install, or activate on this contract's authority.",
+    "Do not invent Project identities, owners, goals, or ontology facts when context is absent or truncated."
+  ]
+}

@@ -30,28 +30,40 @@ const { spawnSync } = require('child_process');
 
 const ROOT = path.resolve(__dirname, '..');
 
-function git(args) {
-  const r = spawnSync('git', args, { cwd: ROOT, encoding: 'utf8', maxBuffer: 10 * 1024 * 1024 });
+function git(args, root = ROOT, env) {
+  const r = spawnSync('git', args, { cwd: root, encoding: 'utf8', maxBuffer: 10 * 1024 * 1024, ...(env ? { env } : {}) });
   if (r.error) throw new Error(`git ${args.join(' ')} failed: ${r.error.message}`);
   return { status: r.status, out: String(r.stdout || '').trim(), err: String(r.stderr || '').trim() };
 }
 
-function semverTags() {
-  const { out } = git(['tag', '--list']);
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function releaseTagVersion(tag, packageName) {
+  const pattern = packageName
+    ? `^(?:v|${escapeRegExp(packageName)}-v)(\\d+\\.\\d+\\.\\d+)$`
+    : '(?:^|-)v(\\d+\\.\\d+\\.\\d+)$';
+  const m = tag.match(new RegExp(pattern));
+  return m ? m[1] : null;
+}
+
+function semverTags(root = ROOT, env, packageName = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')).name) {
+  const { out } = git(['tag', '--list'], root, env);
   return out
     .split(/\r?\n/)
     .map((t) => t.trim())
-    .filter((t) => /^v\d+\.\d+\.\d+$/.test(t))
+    .filter((t) => releaseTagVersion(t, packageName))
     .sort((a, b) => {
-      const pa = a.slice(1).split('.').map(Number);
-      const pb = b.slice(1).split('.').map(Number);
+      const pa = releaseTagVersion(a, packageName).split('.').map(Number);
+      const pb = releaseTagVersion(b, packageName).split('.').map(Number);
       return pa[0] - pb[0] || pa[1] - pb[1] || pa[2] - pb[2];
     });
 }
 
-// Returns { present, dated } for the `## v<version>` heading in the changelog.
+// Returns { present, dated } for a conventional or Release Please version heading.
 function changelogVersionSection(changelog, version) {
-  const re = new RegExp(`^##\\s+v${version.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\$&')}\\b([^\\n]*)`, 'm');
+  const re = new RegExp(`^##\\s+(?:\\[)?v?${escapeRegExp(version)}\\b(?:\\])?([^\\n]*)`, 'm');
   const m = changelog.match(re);
   if (!m) return { present: false, dated: false };
   return { present: true, dated: !/unreleased/i.test(m[1] || '') };
@@ -83,34 +95,24 @@ function unreleasedSection(changelog) {
   return { present: true, nonEmpty };
 }
 
-function main() {
-  const json = process.argv.slice(2).includes('--json');
-  let pkg;
-  let changelog;
-  try {
-    pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
-    changelog = fs.readFileSync(path.join(ROOT, 'CHANGELOG.md'), 'utf8');
-  } catch (e) {
-    console.error(`[unreleased-drift] Error: ${e.message}`);
-    process.exit(2);
-  }
-
-  const version = String(pkg.version || '').trim();
-  const tags = semverTags();
+function evaluateUnreleasedDrift({ version, tags, commitsSinceTag, changelog, candidate }) {
   const latestTag = tags.length ? tags[tags.length - 1] : null;
-  const latestTagVersion = latestTag ? latestTag.slice(1) : null;
-
-  let commitsSinceTag = null;
-  try {
-    if (latestTag) commitsSinceTag = parseInt(git(['rev-list', '--count', `${latestTag}..HEAD`]).out, 10);
-  } catch (_) { commitsSinceTag = null; }
-
+  const latestTagVersion = latestTag ? releaseTagVersion(latestTag) : null;
   const verSection = changelogVersionSection(changelog, version);
   const unreleased = unreleasedSection(changelog);
+
+  // A package-prefixed tag (jarvos-bootstrap-vX.Y.Z) only names the published
+  // baseline; it never implies a Release Please candidate exists. Work after it
+  // is tracked by a candidate only when the caller supplies an explicit
+  // candidate observation, otherwise it needs ordinary [Unreleased] tracking.
+  const explicitCandidate = Boolean(candidate) && candidate.status === 'present';
 
   const result = {
     packageVersion: version,
     latestTag,
+    baselineTag: latestTag,
+    baselineVersion: latestTagVersion,
+    candidateVersion: null,
     commitsSinceTag,
     changelogHasVersionSection: verSection.present,
     changelogVersionDated: verSection.dated,
@@ -131,15 +133,22 @@ function main() {
       result.messages.push(`package.json is ${version} (ahead of latest tag ${latestTag || 'none'}) but CHANGELOG has no "## v${version}" section. Add the release section before tagging, or revert the version bump.`);
     } else if (!verSection.dated) {
       result.state = 'prep';
+      result.candidateVersion = version;
       result.messages.push(`v${version} section exists but is still marked Unreleased — finalize its date when ready to tag.`);
     } else {
       result.state = 'ready-to-tag';
-      result.messages.push(`v${version} is finalized in CHANGELOG and ahead of latest tag ${latestTag || 'none'} — ready to "git tag v${version}".`);
+      result.candidateVersion = version;
+      // Do not name a tag here: the release tool decides its published name.
+      result.messages.push(`v${version} is finalized in CHANGELOG and ahead of latest tag ${latestTag || 'none'} — ready for its release tag to be published.`);
     }
   } else {
     // package.json matches the latest tag — we are post-release; pending work
-    // must be tracked under [Unreleased].
-    if (commitsSinceTag && commitsSinceTag > 0 && !(unreleased.present && unreleased.nonEmpty)) {
+    // must be tracked under [Unreleased] unless an explicitly observed
+    // Release Please candidate tracks it.
+    if (explicitCandidate && commitsSinceTag > 0) {
+      result.state = 'ok';
+      result.messages.push(`${commitsSinceTag} commit(s) since ${latestTag}; tracked by the explicitly observed Release Please candidate.`);
+    } else if (commitsSinceTag && commitsSinceTag > 0 && !(unreleased.present && unreleased.nonEmpty)) {
       result.drift = true;
       result.state = 'unlogged-work';
       result.messages.push(`${commitsSinceTag} commit(s) since ${latestTag} but the CHANGELOG "## [Unreleased]" section is ${unreleased.present ? 'empty' : 'missing'}. Record pending user-facing work there.`);
@@ -149,6 +158,34 @@ function main() {
     }
   }
 
+  return result;
+}
+
+function checkUnreleasedDrift({ root = ROOT, env, candidate } = {}) {
+  const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
+  const changelog = fs.readFileSync(path.join(root, 'CHANGELOG.md'), 'utf8');
+  const tags = semverTags(root, env);
+  const latestTag = tags.length ? tags[tags.length - 1] : null;
+  let commitsSinceTag = null;
+  if (latestTag) {
+    const count = git(['rev-list', '--count', `${latestTag}..HEAD`], root, env);
+    if (count.status !== 0 || !/^\d+$/.test(count.out)) {
+      throw new Error(`git rev-list failed: ${count.err || 'invalid commit count'}`);
+    }
+    commitsSinceTag = Number(count.out);
+  }
+  return evaluateUnreleasedDrift({ version: String(pkg.version || '').trim(), tags, commitsSinceTag, changelog, candidate });
+}
+
+function main() {
+  const json = process.argv.slice(2).includes('--json');
+  let result;
+  try {
+    result = checkUnreleasedDrift();
+  } catch (e) {
+    console.error(`[unreleased-drift] Error: ${e.message}`);
+    process.exit(2);
+  }
   if (json) {
     console.log(JSON.stringify(result, null, 2));
   } else {
@@ -161,4 +198,4 @@ function main() {
 
 if (require.main === module) main();
 
-module.exports = { semverTags, changelogVersionSection, unreleasedSection };
+module.exports = { semverTags, changelogVersionSection, unreleasedSection, evaluateUnreleasedDrift, checkUnreleasedDrift };

@@ -5,8 +5,15 @@
   "license": "MIT",
   "type": "commonjs",
   "main": "src/index.js",
+  "dependencies": {
+    "@jarvos/runtime-kit": "file:../jarvos-runtime-kit"
+  },
+  "bundledDependencies": [
+    "@jarvos/runtime-kit"
+  ],
   "bin": {
-    "jarvos-skills": "scripts/install-skills.js"
+    "jarvos-skills": "scripts/install-skills.js",
+    "jarvos-skills-scheduled-repair": "scripts/scheduled-repair.js"
   },
   "files": [
     "README.md",
@@ -15,10 +22,12 @@
     "src/",
     "scripts/",
     "skills/",
-    "docs/"
+    "docs/",
+    "schemas/"
   ],
   "scripts": {
-    "test": "node test/skills.test.js && node test/projection.test.js"
+    "prepack": "node scripts/bundle-runtime-kit.js",
+    "test": "node --test test/*.test.js"
   },
   "engines": {
     "node": ">=18"
