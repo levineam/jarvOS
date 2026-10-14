@@ -1,6 +1,7 @@
 'use strict';
 
 const { runTakeIssueToDone } = require('../features/orchestrator');
+const { assertIssueIdentity } = require('../features/orchestrator/work-identity');
 const { evaluateSubmissionGate } = require('../lifecycle/policy');
 
 function controlPlaneContractVersion() {
@@ -302,12 +303,11 @@ function codingControlPlaneManifest(options = {}) {
 }
 
 function issueIdentifierFor(command = {}) {
-  const identifier = command.commandSpec?.arguments?.issueIdentifier
-    || command.commandSpec?.arguments?.issue?.identifier
-    || command.resource?.id;
+  const identifier = command.resource?.id;
   if (!identifier) throw new Error('coding command requires an issueIdentifier-scoped resource');
   return String(identifier);
 }
+
 
 function eventsByStage(result = {}) {
   const events = Array.isArray(result.events) ? result.events : [];
@@ -624,6 +624,22 @@ function createCodingControlPlanePort(options = {}) {
   const host = normalizeHost(options.host || 'codex');
   const hostAdapter = options.hostAdapter || createCodingHostAdapter(host, { adapters: options.adapters });
   const completed = new Map();
+  const suppliedBinding = options.approvedWorkBinding;
+  if (suppliedBinding && (typeof suppliedBinding.resourceId !== 'string' || !suppliedBinding.resourceId
+    || typeof suppliedBinding.workReference?.authority !== 'string' || !suppliedBinding.workReference.authority
+    || typeof suppliedBinding.workReference?.itemId !== 'string' || !suppliedBinding.workReference.itemId)) {
+    throw new Error('approved work binding requires a resource and execution reference');
+  }
+  const approvedWorkBinding = suppliedBinding ? Object.freeze({
+    resourceId: suppliedBinding.resourceId,
+    workReference: Object.freeze({ authority: suppliedBinding.workReference.authority, itemId: suppliedBinding.workReference.itemId }),
+  }) : null;
+  function identityFor(command) {
+    const issueIdentifier = issueIdentifierFor(command);
+    if (approvedWorkBinding && approvedWorkBinding.resourceId !== issueIdentifier) throw new Error('command.resource.id must match the host binding');
+    return { issueIdentifier, workReference: approvedWorkBinding?.workReference || null };
+  }
+
 
   async function executeFenced(command = {}, context = {}) {
     if (command.mutationClass !== CODING_MUTATION_CLASS) {
@@ -636,9 +652,18 @@ function createCodingControlPlanePort(options = {}) {
       throw new Error('coding control-plane execution requires assertCurrentFence');
     }
 
+    const identity = identityFor(command);
+    const { issueIdentifier } = identity;
+    const args = command.commandSpec.arguments || {};
+    assertIssueIdentity(args, identity, 'command.commandSpec.arguments');
+    assertIssueIdentity(command.checkpoint, identity, 'command.checkpoint');
+
     // Idempotent redelivery must not depend on a still-current lease fence.
     const completedResult = completed.get(command.id);
-    if (completedResult) return completedResult;
+    if (completedResult) {
+      assertIssueIdentity(completedResult, identity, 'cached execution');
+      return completedResult;
+    }
 
     context.assertCurrentFence();
 
@@ -646,17 +671,18 @@ function createCodingControlPlanePort(options = {}) {
       throw new Error('coding host adapter is unavailable for take-issue-to-done');
     }
 
-    const issueIdentifier = issueIdentifierFor(command);
-    const args = command.commandSpec.arguments || {};
     const result = await hostAdapter.runTakeIssueToDone({
       issueIdentifier,
-      issue: args.issue || { identifier: issueIdentifier },
+      issue: { ...(args.issue || {}), identifier: issueIdentifier },
+      ...(identity.workReference ? { workReference: identity.workReference } : {}),
       branch: args.branch,
       baseRef: args.baseRef,
       // Declared trace only; an observation in the arguments is never forwarded.
       deliveryTrace: args.deliveryTrace,
       resumeFrom: command.checkpoint || args.resumeFrom || null,
       controlPlane: {
+        issueIdentifier,
+        ...(identity.workReference ? { workReference: identity.workReference } : {}),
         commandId: command.id,
         fence: context.fence,
         desiredGeneration: command.desiredGeneration,
@@ -669,8 +695,15 @@ function createCodingControlPlanePort(options = {}) {
 
     const orchestrator = result.result || result;
     const assessment = assessTerminalSubmission(orchestrator);
+    if (assessment.submissionEvidence.issueIdentifier != null
+      && String(assessment.submissionEvidence.issueIdentifier) !== issueIdentifier) {
+      throw new Error('submissionEvidence.issueIdentifier must match command.resource.id');
+    }
     if (!assessment.ok) {
       throw new Error(`coding host did not complete command: ${assessment.reasons.join('; ')}`);
+    }
+    if (assessment.submissionEvidence.issueIdentifier == null) {
+      throw new Error('submissionEvidence.issueIdentifier must match command.resource.id');
     }
 
     const execution = {
@@ -687,8 +720,16 @@ function createCodingControlPlanePort(options = {}) {
     return execution;
   }
 
-  async function verify(_command, context = {}) {
+  async function verify(command, context = {}) {
     const execution = context.execution;
+    try {
+      const identity = identityFor(command);
+      assertIssueIdentity(command.commandSpec?.arguments, identity, 'command arguments');
+      assertIssueIdentity(command.checkpoint, identity, 'command checkpoint');
+      assertIssueIdentity(execution, identity, 'execution');
+    } catch (error) {
+      return { outcome: 'unverifiable', verifier: `${CODING_MANAGER_ID}.verify`, reason: error.message };
+    }
     if (!execution || !execution.submissionEvidence) {
       return {
         outcome: 'unverifiable',

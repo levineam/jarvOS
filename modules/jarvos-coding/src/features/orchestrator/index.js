@@ -1,5 +1,7 @@
 'use strict';
 
+const { assertIssueIdentity } = require('./work-identity');
+
 const { evaluateDeliveryTrace } = require('../delivery-trace');
 const { assertReviewEngineAdapter } = require('../review-engine');
 const {
@@ -186,6 +188,12 @@ function resolveResumePlan(input = {}, entrySessionState = null) {
 
   let reattachment = null;
   for (const candidate of candidates) {
+    if (input.controlPlane?.issueIdentifier) {
+      try { assertIssueIdentity(candidate, input.controlPlane, 'resume'); } catch (error) {
+        if (candidate === input.resumeFrom || candidate === input.checkpoint) throw error;
+        continue; // A different session's implicit state cannot select this command's work item.
+      }
+    }
     const hints = extractReattachmentHints(candidate);
     if (hints) {
       reattachment = hints;
@@ -203,7 +211,7 @@ function resolveResumePlan(input = {}, entrySessionState = null) {
     // Always re-run stages. Resume never advances the stage cursor.
     startIndex: 0,
     branch: branch || null,
-    workReference: reattachment?.workReference || input.workReference || input.workRef || null,
+    workReference: input.controlPlane?.workReference || reattachment?.workReference || input.workReference || input.workRef || null,
     pullRequest: reattachment?.pullRequest || null,
     reattachment,
     // Intentionally empty: prior checkpoint events are not durable proof.
@@ -309,6 +317,8 @@ async function runTakeIssueToDone(input = {}, adapters = {}) {
     ? input.controlPlane
     : null;
 
+  if (controlPlane?.issueIdentifier) assertIssueIdentity(input, controlPlane, 'coding input');
+
   const context = {
     branch: input.branch || input.branchName || `${issueIdentifier}/take-issue-to-done`,
     baseRef: input.baseRef || 'origin/main',
@@ -344,7 +354,8 @@ async function runTakeIssueToDone(input = {}, adapters = {}) {
     // The claim adapter establishes the durable work reference. Install it
     // before recording the claim milestone so the activity receipt is bound
     // to Beads rather than the pre-claim context.
-    if (stage === 'claim' && result?.workReference) context.workReference = result.workReference;
+    if (stage === 'claim' && controlPlane?.issueIdentifier) assertIssueIdentity(result, controlPlane, 'claim result');
+    if (stage === 'claim' && result?.workReference) context.workReference = controlPlane?.workReference || result.workReference;
     if (stage === 'claim' && result?.executionLink) context.executionReference = result.executionLink;
 
     const event = buildStageEvent(stage, result, {
@@ -393,7 +404,7 @@ async function runTakeIssueToDone(input = {}, adapters = {}) {
     controlPlane,
     reattach,
   }));
-  context.workReference = claim?.workReference || context.workReference;
+  context.workReference = controlPlane?.workReference || claim?.workReference || context.workReference;
 
   const branch = await runStage('branch', () => requireFn(adapters.git, 'createBranch', 'branch')({
     issue: input.issue,
