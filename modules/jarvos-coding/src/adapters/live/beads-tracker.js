@@ -136,6 +136,30 @@ function validateWorkspace(workspaceRoot, approvedRoots) {
   return workspace;
 }
 
+function validateExecutable(value) {
+  if (typeof value !== 'string' || !path.isAbsolute(value) || path.resolve(value) !== value) {
+    throw new Error('Beads executable must be an explicit canonical absolute path');
+  }
+  if (typeof process.getuid !== 'function') throw new Error('Beads executable ownership verification is unavailable');
+  let current = value;
+  while (true) {
+    let stat;
+    try { stat = fs.lstatSync(current); } catch { throw new Error('Beads executable is unavailable'); }
+    if (stat.isSymbolicLink()) throw new Error('Beads executable path must not contain symbolic links');
+    if (stat.uid !== 0 && stat.uid !== process.getuid()) throw new Error('Beads executable path has an untrusted owner');
+    if (current === value) {
+      if (!stat.isFile() || (stat.mode & 0o111) === 0) throw new Error('Beads executable must be an executable regular file');
+      if (stat.mode & 0o022) throw new Error('Beads executable must not be group/world-writable');
+    } else if (!stat.isDirectory() || ((stat.mode & 0o022) && !(stat.mode & 0o1000))) {
+      throw new Error('Beads executable has an unsafe ancestor directory');
+    }
+    const parent = path.dirname(current);
+    if (parent === current) break;
+    current = parent;
+  }
+  return value;
+}
+
 function checkpointMarker(operationId, stage, nextStep) {
   return `[jarvos-checkpoint/v1] ${JSON.stringify({ operationId, stage, nextStep })}`;
 }
@@ -209,7 +233,7 @@ function createMemoryOperationStore(initial = {}) {
 
 function createLiveBeadsTracker(options = {}) {
   const run = options.run || defaultRun;
-  const executable = options.executable || options.command || 'br';
+  const executable = validateExecutable(options.executable || options.command);
   const expectedVersion = options.expectedVersion || DEFAULT_BEADS_VERSION;
   const workspaceRoot = validateWorkspace(options.workspaceRoot || process.cwd(), options.approvedRoots);
   const timeoutMs = Number(options.timeoutMs || DEFAULT_TIMEOUT_MS);
@@ -230,7 +254,7 @@ function createLiveBeadsTracker(options = {}) {
   const operationLocks = new Map();
 
   function invoke(args, extra = {}) {
-    return run(executable, args, {
+    return run(validateExecutable(executable), args, {
       cwd: workspaceRoot,
       timeoutMs,
       maxBuffer,

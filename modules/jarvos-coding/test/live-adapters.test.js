@@ -15,6 +15,10 @@ const {
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const beadsFixtureRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-beads-binary-')));
+const beadsExecutable = path.join(beadsFixtureRoot, 'br');
+fs.writeFileSync(beadsExecutable, '// mocked native executable', { mode: 0o700 });
+test.after(() => fs.rmSync(beadsFixtureRoot, { recursive: true, force: true }));
 const {
   createFileExecutionLinkStore,
 } = require('../../jarvos-secondbrain/packages/jarvos-secondbrain-projects/src/execution-link-store');
@@ -56,13 +60,13 @@ test('live Beads tracker selects the durable operation ledger when the host supp
     if (args[0] === 'where') return { status: 0, stdout: workspaceRoot };
     return { status: 0, stdout: JSON.stringify({ id: 'bd-durable', revision: '1' }) };
   };
-  await createLiveBeadsTracker({ workspaceRoot, operationStoreRoot: ledgerRoot, run }).createWorkItem({ title: 'durable', operationId: 'durable-op' });
+  await createLiveBeadsTracker({ executable: beadsExecutable, workspaceRoot, operationStoreRoot: ledgerRoot, run }).createWorkItem({ title: 'durable', operationId: 'durable-op' });
   assert.ok(fs.readdirSync(ledgerRoot).some((name) => name.endsWith('.json')));
 });
 
 test('live Todo composition refuses memory, missing, and aliased durable roots while test mode can be explicit memory', () => {
   const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-todo-live-roots-'));
-  assert.throws(() => createLiveBeadsTracker({ workspaceRoot, mode: 'live' }), /durable tracker operation ledger/);
+  assert.throws(() => createLiveBeadsTracker({ executable: beadsExecutable, workspaceRoot, mode: 'live' }), /durable tracker operation ledger/);
 
   const { createBeadsWorkActionService, createMemoryExecutionLinkStore, createFileOperationStore } = require('../src/index.js');
   const memoryTracker = { authority: 'beads', workspaceRoot, async createWorkItem() { return null; } };
@@ -454,7 +458,7 @@ test('live Todo create reconciles both durable ledgers after timeout and restart
     throw new Error(`unexpected Beads command: ${args.join(' ')}`);
   };
   const build = () => {
-    const tracker = createLiveBeadsTracker({ workspaceRoot, approvedRoots: [workspaceRoot], operationStoreRoot: trackerRoot, mode: 'live', run });
+    const tracker = createLiveBeadsTracker({ executable: beadsExecutable, workspaceRoot, approvedRoots: [workspaceRoot], operationStoreRoot: trackerRoot, mode: 'live', run });
     return createBeadsWorkActionService({
       tracker,
       mode: 'live',
@@ -516,7 +520,7 @@ test('buildLiveCodingAdapters() constructs without clawd present (lazy clawd req
 test('explicit Beads transport works without Paperclip and uses bounded argv', async () => {
   const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-beads-workspace-'));
   const calls = [];
-  const tracker = createLiveBeadsTracker({
+  const tracker = createLiveBeadsTracker({ executable: beadsExecutable,
     workspaceRoot,
     approvedRoots: [workspaceRoot],
     run(command, args, options) {
@@ -540,11 +544,11 @@ test('explicit Beads transport works without Paperclip and uses bounded argv', a
   assert.equal(claimed.workReference.authority, 'beads');
   assert.equal(dependency.state, 'committed');
   assert.equal(checkpoint.state, 'committed');
-  assert.ok(calls.every((call) => call.command === 'br' && call.options.shell === false));
+  assert.ok(calls.every((call) => call.command === beadsExecutable && call.options.shell === false));
   assert.ok(calls.some((call) => call.args.includes('--external-ref') && call.args.includes('op-create-1')));
 
   const adapters = buildLiveCodingAdapters({
-    beads: { workspaceRoot, approvedRoots: [workspaceRoot], run: () => ({ status: 0, stdout: '', stderr: '' }) },
+    beads: { executable: beadsExecutable, workspaceRoot, approvedRoots: [workspaceRoot], run: () => ({ status: 0, stdout: '', stderr: '' }) },
   });
   assert.equal(adapters.tracker.authority, 'beads');
 });
@@ -552,7 +556,7 @@ test('explicit Beads transport works without Paperclip and uses bounded argv', a
 test('Beads preflight derives logical capabilities from the real v0.2.19 command inventory', async () => {
   const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-beads-real-capabilities-'));
   const externalReference = 'real-capability-create';
-  const tracker = createLiveBeadsTracker({
+  const tracker = createLiveBeadsTracker({ executable: beadsExecutable,
     workspaceRoot,
     run(command, args) {
       if (args[0] === '--version') return { status: 0, stdout: 'br 0.2.19', stderr: '' };
@@ -577,7 +581,7 @@ test('Beads workspace proof accepts only the exact discovered .beads directory w
   const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-beads-where-shape-'));
   const beadsRoot = path.join(workspaceRoot, '.beads');
   fs.mkdirSync(beadsRoot);
-  const tracker = createLiveBeadsTracker({
+  const tracker = createLiveBeadsTracker({ executable: beadsExecutable,
     workspaceRoot,
     run(command, args) {
       if (args[0] === '--version') return { status: 0, stdout: 'br 0.2.19', stderr: '' };
@@ -593,7 +597,7 @@ test('Beads workspace proof accepts only the exact discovered .beads directory w
 
 test('Beads preflight rejects an unpinned version before mutation', async () => {
   const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-beads-version-'));
-  const tracker = createLiveBeadsTracker({
+  const tracker = createLiveBeadsTracker({ executable: beadsExecutable,
     workspaceRoot,
     run: (command, args) => args[0] === '--version'
       ? { status: 0, stdout: 'br v9.9.9', stderr: '' }
@@ -605,7 +609,7 @@ test('Beads preflight rejects an unpinned version before mutation', async () => 
 test('Beads caller validation happens before an operation is prepared', async () => {
   const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-beads-input-validation-'));
   const calls = [];
-  const tracker = createLiveBeadsTracker({
+  const tracker = createLiveBeadsTracker({ executable: beadsExecutable,
     workspaceRoot,
     run(command, args) {
       calls.push(args);
@@ -627,7 +631,7 @@ test('prepared Beads operations reconcile before replay after an uncertain launc
   const operationStore = new Map();
   const calls = [];
   let firstMutation = true;
-  const tracker = createLiveBeadsTracker({
+  const tracker = createLiveBeadsTracker({ executable: beadsExecutable,
     workspaceRoot,
     operationStore: {
       read: async (id) => operationStore.get(id) || null,
@@ -671,9 +675,9 @@ test('derived create references survive timeout and restart reconciliation witho
     return { status: 1, stdout: '', stderr: 'timed out', error: new Error('timed out') };
   };
   const input = { title: 'derived reconciliation', operationId: 'caller-operation', externalReference };
-  const first = createLiveBeadsTracker({ workspaceRoot, operationStoreRoot, run });
+  const first = createLiveBeadsTracker({ executable: beadsExecutable, workspaceRoot, operationStoreRoot, run });
   assert.equal((await first.createWorkItem(input)).state, 'indeterminate');
-  const restarted = createLiveBeadsTracker({ workspaceRoot, operationStoreRoot, run });
+  const restarted = createLiveBeadsTracker({ executable: beadsExecutable, workspaceRoot, operationStoreRoot, run });
   const reconciled = await restarted.createWorkItem(input);
   assert.equal(reconciled.state, 'committed');
   assert.equal(createCount, 1);
@@ -682,7 +686,7 @@ test('derived create references survive timeout and restart reconciliation witho
 
 test('Beads create treats empty or unrelated external references as indeterminate', async () => {
   const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-beads-unrelated-create-'));
-  const tracker = createLiveBeadsTracker({
+  const tracker = createLiveBeadsTracker({ executable: beadsExecutable,
     workspaceRoot,
     run(command, args) {
       if (args[0] === '--version') return { status: 0, stdout: 'br v0.2.19' };
@@ -702,7 +706,7 @@ test('Beads replay reconciles non-create operations by their exact postcondition
   const operationStore = new Map();
   const calls = [];
   let mutationCount = 0;
-  const tracker = createLiveBeadsTracker({
+  const tracker = createLiveBeadsTracker({ executable: beadsExecutable,
     workspaceRoot,
     operationStore: {
       read: async (id) => operationStore.get(id) || null,
@@ -731,7 +735,7 @@ test('Beads replay reconciles non-create operations by their exact postcondition
 test('Beads default operation identities distinguish operation inputs', async () => {
   const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-beads-operation-id-'));
   const operationIds = [];
-  const tracker = createLiveBeadsTracker({
+  const tracker = createLiveBeadsTracker({ executable: beadsExecutable,
     workspaceRoot,
     operationStore: {
       async read() { return null; },
@@ -752,7 +756,7 @@ test('Beads default operation identities distinguish operation inputs', async ()
 
 test('Beads close remains deferred until authoritative merge evidence', async () => {
   const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-beads-close-'));
-  const tracker = createLiveBeadsTracker({
+  const tracker = createLiveBeadsTracker({ executable: beadsExecutable,
     workspaceRoot,
     run: (command, args) => {
       if (args[0] === '--version') return { status: 0, stdout: '0.2.19', stderr: '' };
@@ -774,7 +778,7 @@ test('Beads rechecks a supplied control-plane fence after preparation and before
   const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-beads-fence-'));
   const calls = [];
   const writes = [];
-  const tracker = createLiveBeadsTracker({
+  const tracker = createLiveBeadsTracker({ executable: beadsExecutable,
     workspaceRoot,
     operationStore: { async read() { return null; }, async write(record) { writes.push(record); return record; } },
     run: (command, args) => {
@@ -798,7 +802,7 @@ test('Beads refuses a fence revoked during the prepared write and never invokes 
     const calls = [];
     const writes = [];
     let revoked = false;
-    const tracker = createLiveBeadsTracker({
+    const tracker = createLiveBeadsTracker({ executable: beadsExecutable,
       workspaceRoot,
       operationStore: {
         async read() { return null; },
@@ -829,7 +833,7 @@ test('Beads refuses a fence revoked during the prepared write and never invokes 
 test('Beads close after a claim derives its own operation identity from the claimed work reference', async () => {
   const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-beads-claim-close-'));
   const calls = [];
-  const tracker = createLiveBeadsTracker({
+  const tracker = createLiveBeadsTracker({ executable: beadsExecutable,
     workspaceRoot,
     run: (command, args) => {
       calls.push(args);
@@ -858,7 +862,7 @@ test('Beads close after a claim derives its own operation identity from the clai
 test('Beads adapter emits exact argv for every live operation without a command-map override', async () => {
   const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-beads-argv-'));
   const calls = [];
-  const tracker = createLiveBeadsTracker({
+  const tracker = createLiveBeadsTracker({ executable: beadsExecutable,
     workspaceRoot,
     run(command, args) {
       calls.push(args);
@@ -909,7 +913,7 @@ test('Beads adapter emits exact argv for every live operation without a command-
 test('Beads preflight fails closed when a required capability is missing before any mutation runs', async () => {
   const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-beads-missing-capability-'));
   const calls = [];
-  const tracker = createLiveBeadsTracker({
+  const tracker = createLiveBeadsTracker({ executable: beadsExecutable,
     workspaceRoot,
     run(command, args) {
       calls.push(args);
@@ -927,7 +931,7 @@ test('Beads preflight fails closed when a required capability is missing before 
 test('Beads preflight fails closed when capabilities output is not parseable JSON', async () => {
   const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-beads-bad-json-'));
   const calls = [];
-  const tracker = createLiveBeadsTracker({
+  const tracker = createLiveBeadsTracker({ executable: beadsExecutable,
     workspaceRoot,
     run(command, args) {
       calls.push(args);
@@ -946,7 +950,7 @@ test('Beads mutation fails closed when the workspace realpath does not match at 
   const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-beads-realpath-expected-'));
   const otherRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-beads-realpath-other-'));
   const calls = [];
-  const tracker = createLiveBeadsTracker({
+  const tracker = createLiveBeadsTracker({ executable: beadsExecutable,
     workspaceRoot,
     run(command, args) {
       calls.push(args);
@@ -964,7 +968,7 @@ test('Beads mutation fails closed when the workspace realpath does not match at 
 test('Beads construction rejects a workspace outside its approved roots', () => {
   const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-beads-unapproved-workspace-'));
   const approvedRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-beads-unapproved-approved-'));
-  assert.throws(() => createLiveBeadsTracker({
+  assert.throws(() => createLiveBeadsTracker({ executable: beadsExecutable,
     workspaceRoot,
     approvedRoots: [approvedRoot],
     run: () => ({ status: 0, stdout: '', stderr: '' }),
@@ -975,7 +979,7 @@ test('Beads showWorkItem uses bounded read-only argv and fails closed when the r
   const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-beads-show-'));
   const calls = [];
   let failShow = false;
-  const tracker = createLiveBeadsTracker({
+  const tracker = createLiveBeadsTracker({ executable: beadsExecutable,
     workspaceRoot,
     run(command, args) {
       calls.push(args);
@@ -1005,7 +1009,7 @@ test('Beads showWorkItem uses bounded read-only argv and fails closed when the r
 test('Beads mutation refuses to reuse an operationId with different input before dispatching a second command', async () => {
   const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-beads-identity-conflict-'));
   const calls = [];
-  const tracker = createLiveBeadsTracker({
+  const tracker = createLiveBeadsTracker({ executable: beadsExecutable,
     workspaceRoot,
     run(command, args) {
       calls.push(args);
