@@ -1237,7 +1237,8 @@ for (const runtime of RUNTIMES) {
     const temp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-stable-ancestry-')));
     try {
       const home = path.join(temp, 'home'); fs.mkdirSync(home, { mode: 0o700 });
-      const config = path.join(home, 'config'); fs.writeFileSync(config, 'unrelated user configuration\n');
+      const original = runtime === 'codex' ? 'unrelated = true\n' : '{}\n';
+      const config = path.join(home, 'config'); fs.writeFileSync(config, original);
       const bin = path.join(temp, 'bin'); fs.mkdirSync(bin, { mode: 0o700 });
       for (const command of ['claude', 'codex', 'openclaw']) fs.writeFileSync(path.join(bin, command), "#!/bin/sh\nprintf '[]\\n'\n", { mode: 0o700 });
       const shared = path.join(temp, 'shared'); fs.mkdirSync(shared, { mode: 0o777 }); fs.chmodSync(shared, 0o777);
@@ -1257,7 +1258,7 @@ for (const runtime of RUNTIMES) {
         }));
         assert.notEqual(result.status, 0);
         assert.match(result.stderr, /stable .* (missing or unsafe|is missing or unsafe)/);
-        assert.equal(fs.readFileSync(config, 'utf8'), 'unrelated user configuration\n');
+        assert.equal(fs.readFileSync(config, 'utf8'), original);
       }
     } finally { fs.rmSync(temp, { recursive: true, force: true }); }
   });
