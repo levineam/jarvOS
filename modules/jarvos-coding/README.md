@@ -672,3 +672,13 @@ Historical Paperclip compatibility flow (not the default lifecycle):
    `jarvos-release-intake` document/update path, including `releasePlacement`,
    `targetVersion`, `releaseParentIssue`, `releaseRationale`, and
    `verificationGate`.
+
+Coding control-plane commands bind their issue identity to `command.resource.id`.
+A trusted host may supply `approvedWorkBinding` with that resource and its
+independently approved execution work reference; the issue and Beads item can
+have different IDs. The factory snapshots this pair. Request arguments and
+resume pointers must agree with it and cannot choose a replacement mapping.
+Without a host mapping, execution references must use the resource identity.
+Foreign implicit session state is ignored before tracker mutation; same-binding
+state remains a pointer to revalidate. Cache replay and verification use the
+same approved pair. Canonical project/outcome references remain separate.

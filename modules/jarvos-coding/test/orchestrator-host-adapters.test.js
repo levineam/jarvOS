@@ -262,6 +262,67 @@ test('control-plane port selects public hosts and returns canonical submission e
   assert.equal(typeof seen[0].controlPlane.assertCurrentFence, 'function');
 });
 
+test('control-plane port binds every coding issue identity to the authorized resource', async () => {
+  const seen = [];
+  const port = createCodingControlPlanePort({
+    hostAdapter: {
+      runTakeIssueToDone: async (input) => {
+        seen.push(input);
+        return completedOrchestration();
+      },
+    },
+  });
+  const context = { fence: 1, assertCurrentFence: () => true };
+
+  await assert.rejects(
+    () => port.executeFenced(codingCommand({
+      commandSpec: { operation: 'take-issue-to-done', arguments: { issueIdentifier: 'VICTIM-1' } },
+    }), context),
+    /must match command\.resource\.id/,
+  );
+  await assert.rejects(
+    () => port.executeFenced(codingCommand({
+      commandSpec: {
+        operation: 'take-issue-to-done',
+        arguments: { issueIdentifier: 'SUP-2214', issue: { identifier: 'VICTIM-2' } },
+      },
+    }), context),
+    /must match command\.resource\.id/,
+  );
+  await assert.rejects(
+    () => port.executeFenced(codingCommand({
+      checkpoint: { codeThread: { issueIdentifier: 'VICTIM-3' } },
+    }), context),
+    /must match command\.resource\.id/,
+  );
+  assert.equal(seen.length, 0);
+
+  const execution = await port.executeFenced(codingCommand({
+    commandSpec: {
+      operation: 'take-issue-to-done',
+      arguments: {
+        issueIdentifier: 'SUP-2214',
+        issue: { identifier: 'SUP-2214', title: 'Preserved metadata' },
+      },
+    },
+  }), context);
+  assert.equal(execution.status, 'completed');
+  assert.deepEqual(seen[0].issue, { identifier: 'SUP-2214', title: 'Preserved metadata' });
+});
+
+test('control-plane port rejects terminal evidence for a different issue', async () => {
+  const port = createCodingControlPlanePort({
+    hostAdapter: {
+      runTakeIssueToDone: async () => completedOrchestration({ issueIdentifier: 'VICTIM-4' }),
+    },
+  });
+
+  await assert.rejects(
+    () => port.executeFenced(codingCommand(), { fence: 1, assertCurrentFence: () => true }),
+    /submissionEvidence\.issueIdentifier must match command\.resource\.id/,
+  );
+});
+
 test('control-plane port reattaches supplied branch and checkpoint after session loss', async () => {
   let input;
   const port = createCodingControlPlanePort({
@@ -883,4 +944,98 @@ test('Hermes host adapter registers the existing coding entrypoint once with poi
     () => adapter.runTakeIssueToDone({ issueIdentifier: 'SUP-2214', continuityReference: { threadId: 'route-thread-1', transcript: 'not allowed' } }),
     /continuityReference may not include transcript/,
   );
+});
+
+test('control-plane work references cannot redirect an authorized resource through resume aliases', async () => {
+  let calls = 0;
+  const port = createCodingControlPlanePort({ hostAdapter: { runTakeIssueToDone: async () => { calls += 1; return completedOrchestration(); } } });
+  for (const checkpoint of [
+    { workReference: { authority: 'beads', itemId: 'bd-other' } },
+    { codeThread: { issueIdentifier: 'SUP-2214', workReference: { authority: 'beads', id: 'bd-other' } } },
+    { workRef: 'bd-other' },
+    { artifact: { kind: 'beads-work-item', itemId: 'bd-other' } },
+  ]) {
+    await assert.rejects(() => port.executeFenced(codingCommand({ checkpoint }), { fence: 1, assertCurrentFence() {} }), /must match command.resource.id/);
+  }
+  assert.equal(calls, 0);
+});
+
+test('control-plane discards foreign implicit session work before a tracker mutation and preserves same-resource resume', async () => {
+  for (const itemId of ['bd-other', 'SUP-2214']) {
+    const sessionState = createMemorySessionStateStore({
+      codeThread: { issueIdentifier: 'SUP-2214', branch: 'resumed-branch', workReference: { authority: 'beads', itemId } },
+    });
+    const adapters = buildAdapters([], sessionState);
+    const claims = [];
+    adapters.tracker.claimIssue = async (input) => {
+      claims.push(input);
+      return { status: 'claimed', workReference: { authority: 'beads', itemId: 'SUP-2214' } };
+    };
+    const port = createCodingControlPlanePort({ adapters });
+    const execution = await port.executeFenced(codingCommand(), { fence: 1, assertCurrentFence() {} });
+    assert.equal(execution.status, 'completed');
+    assert.equal(claims.length, 1);
+    assert.equal(claims[0].issueIdentifier, 'SUP-2214');
+    assert.equal(claims[0].workReference?.itemId || null, itemId === 'SUP-2214' ? itemId : null);
+  }
+});
+
+test('control-plane verifier and completed cache stay bound to the authorized resource', async () => {
+  const port = createCodingControlPlanePort({ hostAdapter: { runTakeIssueToDone: async () => completedOrchestration() } });
+  const execution = await port.executeFenced(codingCommand(), { fence: 1, assertCurrentFence() {} });
+  const other = codingCommand({ resource: { type: 'paperclip-issue', id: 'SUP-OTHER' }, commandSpec: { operation: 'take-issue-to-done', arguments: { issueIdentifier: 'SUP-OTHER' } } });
+  await assert.rejects(() => port.executeFenced(other, { assertCurrentFence() {} }), /must match command.resource.id/);
+  assert.equal((await port.verify(other, { execution })).outcome, 'unverifiable');
+  assert.equal((await port.verify(codingCommand(), { execution })).outcome, 'satisfied');
+});
+
+test('host-approved issue and Beads identities remain distinct and caller resume data cannot replace their binding', async () => {
+  const approved = { resourceId: 'SUP-2214', workReference: { authority: 'beads', itemId: 'bd-approved' } };
+  const sessionState = createMemorySessionStateStore({ codeThread: { issueIdentifier: 'SUP-2214', workReference: { authority: 'beads', itemId: 'bd-approved' } } });
+  const adapters = buildAdapters([], sessionState);
+  const claims = [];
+  adapters.tracker.claimIssue = async (input) => {
+    claims.push(input);
+    return { status: 'claimed', workReference: { authority: 'beads', itemId: 'bd-approved' } };
+  };
+  const port = createCodingControlPlanePort({ adapters, approvedWorkBinding: approved });
+  approved.workReference.itemId = 'bd-replaced-after-construction';
+  const context = { fence: 1, assertCurrentFence() {} };
+  for (const checkpoint of [
+    { workReference: { authority: 'beads', itemId: 'bd-other' } },
+    { workReference: { authority: 'other-tracker', itemId: 'bd-approved' } },
+  ]) {
+    await assert.rejects(() => port.executeFenced(codingCommand({ checkpoint }), context), /must match/);
+  }
+  assert.equal(claims.length, 0);
+  const command = codingCommand({ checkpoint: { issueIdentifier: 'SUP-2214', workReference: { authority: 'beads', itemId: 'bd-approved' } } });
+  const execution = await port.executeFenced(command, context);
+  assert.equal(claims[0].issueIdentifier, 'SUP-2214');
+  assert.equal(claims[0].workReference.itemId, 'bd-approved');
+  assert.equal((await port.verify(command, { execution })).outcome, 'satisfied');
+  assert.equal(await port.executeFenced(command, { assertCurrentFence() { throw new Error('redelivery has no lease'); } }), execution);
+});
+
+test('mapped resume aliases retain the canonical host execution selector before claim and later stages', async () => {
+  for (const workReference of ['bd-approved', { authority: 'beads', id: 'bd-approved' }, { authority: 'beads', ref: 'bd-approved' }]) {
+    const approvedWorkBinding = { resourceId: 'SUP-2214', workReference: { authority: 'beads', itemId: 'bd-approved' } };
+    const adapters = buildAdapters([]);
+    let claims = 0;
+    adapters.tracker.claimIssue = async (input) => {
+      assert.deepEqual(input.workReference, approvedWorkBinding.workReference);
+      claims += 1;
+      return { status: 'claimed', workReference };
+    };
+    const createBranch = adapters.git.createBranch;
+    adapters.git.createBranch = async (input) => {
+      assert.deepEqual(input.workReference, approvedWorkBinding.workReference);
+      return createBranch(input);
+    };
+    const port = createCodingControlPlanePort({ adapters, approvedWorkBinding });
+    const command = codingCommand({ checkpoint: { workReference } });
+    const execution = await port.executeFenced(command, { fence: 1, assertCurrentFence() {} });
+    assert.equal(execution.status, 'completed');
+    assert.equal(claims, 1);
+    assert.equal((await port.verify(command, { execution })).outcome, 'satisfied');
+  }
 });
