@@ -50,9 +50,17 @@ replace the current checkpoint. Lightweight exploration and ordinary Q&A need
 no heavier record. Missing optional PMS or context data is disclosed, never a
 new blocker or an authority grant; unresolved placement may continue
 authorized useful work while naming the human decision and resume trigger.
+When an optional PMS writeback is unavailable, disclose it and continue the
+independent ready work; it blocks only where the actual profile or operation
+requires that write.
 
 Human-only choices, missing required access or authority, and a missing
-continuation owner remain honest stops. On a stop or scope change, keep the
+continuation owner remain honest stops. A required write or operation that a
+hook or permission control actually denies stays held at that operation: do
+not retry around it, switch tools to evade it, or bypass permissions. Record
+the denial and continue only work that does not depend on it. Recovery never
+authorizes violating an explicit provider, egress, or no-fallback instruction.
+On a stop or scope change, keep the
 original scenario in view and try a useful authorized alternative, or say why
 not. Close with a verdict against the original acceptance: achieved; partial,
 naming the remaining acceptance; or stopped-unanswered, naming the blocker,
@@ -114,6 +122,15 @@ tracker issue, and plan the remaining hardening work. Earlier smoke checks do
 not become production evidence retroactively; add the tests, review,
 documentation, migration and rollback proof the real boundary requires.
 
+Authorized execution means the whole human-intended outcome, not a source
+edit: ordinary covered local setup, running, scoped installation, proof of the
+real behavior, and authorized submission. An explicit human limit, such as
+first checkpoint only, plan only, no install, or no merge, binds the
+operations it excludes; stop there and report the verdict against that limit.
+A source-only limit excludes effects beyond source; by itself it does not
+forbid scoped source submission and clean-gate merge. Protected runtime, deployment, credentials, spending,
+public release, and external sends remain separately gated.
+
 ## Hardening contract
 
 For hardening work, the workflow is complete only when:
@@ -141,6 +158,8 @@ For hardening work, the workflow is complete only when:
 4. **Package context.** Attach the plan, relevant design notes, links, and test
    expectations where the executing agent can retrieve them without chat memory.
 5. **Route.** Decide which repo/workspace owns the change before editing.
+   Default to the existing repo that owns the behavior; create a new repo only
+   for a real, authorized ownership need, not because the work is reusable.
 6. **Execute.** Make the smallest coherent change that can satisfy the definition
    of done. Preserve unrelated local changes.
 7. **Verify.** Run targeted checks, inspect the diff, and record evidence of the
@@ -166,8 +185,12 @@ When adding a regression test for a bug fix, demonstrate when reproducible that
 the focused regression fails on the broken code for the intended reason and
 passes after the fix; otherwise record the honest unavailable or flaky limit.
 A success check must fail when the intended behavior breaks; `unavailable` is
-not success. Routine verification must not start shared live or subscription
-runtimes; use disposable local fixtures when an integration path is needed.
+not success. Use disposable fixtures for effects outside the task's authority.
+Do not start protected shared services or subscription sessions without their
+required authority. When ordinary local app setup, running, or scoped
+installation is covered by the request, verify the real owning app, preserving
+drafts and rollback. A fixture does not satisfy a real-behavior or
+installed-behavior requirement merely because it passed.
 
 ## Managed coding workflow (hardening)
 
@@ -194,14 +217,20 @@ If the provider is unavailable, modified, unsupported, or fails during a run,
 fall back through the generic workflow in the same work run and worktree. Do
 not start a second plan, branch, or pull request. Treat provider checkpoints as
 reattachment hints only and revalidate current Git, review, test, and PR
-evidence before claiming completion.
+evidence before claiming completion. This fallback never overrides an explicit
+provider pin, no-fallback, or egress instruction; hold and report instead.
 
-Inside a jarvOS-managed coding run, code work finishes through this managed workflow
-rather than stopping at a local commit or open pull request. When the exact
-pull-request head is aligned with the tracked goal and every required submission
-gate is clean, merge it autonomously and close the tracked work; routine non-author approval is not a
-gate. Outside such a run, follow the host's normal
-submission and merge authority. Stop only for unclear goal alignment, a required failed or missing gate,
+When submission is authorized, inside a jarvOS-managed coding run or by the
+request, code work finishes through this managed workflow where selected, or
+the owning generic workflow, rather than stopping at a local commit or open
+pull request: push the branch, open or reuse the pull request, and run the
+required checks. When the exact pull-request head is aligned with the tracked
+goal and every required submission gate is clean, merge it autonomously and
+close the tracked work. A routine non-author approval is not a gate, nor is a
+new approval or a pre-existing pull request or receipt. The host's branch
+protection and path policy still apply. Stop only for an explicit human limit
+that excludes that operation (for example, first checkpoint only, plan only,
+or no merge), unclear goal alignment, a required failed or missing gate,
 branch or path policy, or separate authority for publication, live activation,
 spending, destructive action, or an external send.
 
@@ -215,7 +244,7 @@ spending, destructive action, or an external send.
 - [ ] Tests or smoke checks pass
 - [ ] Bug regressions include reproducible fail-then-pass proof or an honest limit
 - [ ] Diff contains only intended files
-- [ ] Review/merge path is clear
+- [ ] Authorized submission merged at clean gates, or the blocking gate or explicit human limit excluding it is named
 ```
 
 ## Tracker-neutral notes
