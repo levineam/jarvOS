@@ -91,9 +91,8 @@ def _canonical_request(request: dict[str, Any]) -> bytes:
 def _request_route_capability(kwargs: dict[str, Any]) -> str | None:
     """Obtain a short-lived capability from the private bridge.
 
-    A missing bridge is deliberately a degraded-but-usable state: hydration
-    remains available, while route-bound session-thread access fails closed in
-    the public MCP service.
+    A missing or unavailable bridge prevents automatic hydration so private
+    context is never injected into a session whose route was not authorized.
     """
     socket_path = os.environ.get("JARVOS_HERMES_CONTEXT_BRIDGE_SOCKET", "").strip()
     credential = _read_credential()
@@ -153,12 +152,15 @@ def _call_bounded(ctx: Any, kwargs: dict[str, Any]) -> str | None:
     def dispatch() -> None:
         try:
             capability = _request_route_capability(kwargs)
-            args: dict[str, Any] = {"maxChars": _MAX_CHARS}
-            if capability:
-                # Hydration may include the route-bound live thread without
-                # exposing the capability to the model. The public service
-                # validates it before resolving the thread identity.
-                args["sessionThread"] = {"routeCapability": capability}
+            if not capability:
+                result.put(None)
+                return
+            # Require the private bridge to authorize the route before asking
+            # for any hydration data, not only the route-bound live thread.
+            args: dict[str, Any] = {
+                "maxChars": _MAX_CHARS,
+                "sessionThread": {"routeCapability": capability},
+            }
             result.put(ctx.dispatch_tool("jarvos_hydrate", args))
         except Exception:
             result.put(None)

@@ -17,6 +17,7 @@ import importlib.util, json, os, sys, time
 spec = importlib.util.spec_from_file_location("jarvos_context", sys.argv[1])
 module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)
+module._request_route_capability = lambda kwargs: "authorized-route-capability-" + ("x" * 48)
 class Context:
   def __init__(self): self.hooks = {}; self.calls = []
   def register_hook(self, name, fn): self.hooks[name] = fn
@@ -48,7 +49,32 @@ test('Hermes plugin injects a bounded packet once per route/session without coll
   assert.equal(result.second, null);
   assert.match(result.route.context, /Working Context Packet/);
   assert.equal(result.calls.length, 2);
-  assert.deepEqual(result.calls[0], ['jarvos_hydrate', { maxChars: 6000 }]);
+  assert.match(result.calls[0][1].sessionThread.routeCapability, /^authorized-route-capability-/);
+});
+
+test('Hermes plugin does not hydrate when the route capability is unavailable', () => {
+  const script = String.raw`
+import importlib.util, json, sys
+spec = importlib.util.spec_from_file_location("jarvos_context", sys.argv[1])
+module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
+class Context:
+  def __init__(self): self.hooks = {}; self.calls = []
+  def register_hook(self, name, fn): self.hooks[name] = fn
+  def dispatch_tool(self, name, args):
+    self.calls.append([name, args])
+    return "# jarvOS Working Context Packet\\nPrivate context"
+ctx = Context(); module.register(ctx)
+ctx.hooks["on_session_start"](session_id="untrusted", platform="external-gateway")
+result = ctx.hooks["pre_llm_call"](session_id="untrusted", platform="external-gateway")
+print(json.dumps({"result": result, "calls": ctx.calls}))
+`;
+  const env = { ...process.env };
+  delete env.JARVOS_HERMES_CONTEXT_BRIDGE_SOCKET;
+  delete env.JARVOS_HERMES_CONTEXT_BRIDGE_CREDENTIAL;
+  delete env.JARVOS_HERMES_CONTEXT_BRIDGE_CREDENTIAL_FILE;
+  const output = JSON.parse(execFileSync('python3', ['-c', script, PLUGIN], { encoding: 'utf8', env }));
+  assert.equal(output.result, null);
+  assert.deepEqual(output.calls, []);
 });
 
 test('Hermes plugin obtains an opaque route capability without putting route fields in the packet', async () => {
