@@ -1,0 +1,6 @@
+{
+  "schemaVersion": "jarvos.capability-ledger.v2",
+  "records": [
+    { "capabilityId": "future-schema", "title": "Unsupported schema", "specification": "draft", "implementation": "absent", "repository": "local-only", "verification": "untested", "activation": "inactive", "authority": "none", "evidence": [{ "type": "document", "ref": "docs/future.md" }], "assertedOn": "2026-08-31" }
+  ]
+}

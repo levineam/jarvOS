@@ -31,7 +31,14 @@ const PACKAGE_ROOT = path.resolve(__dirname, '..');
 const CLAWD_ROOT = path.resolve(__dirname, '../../../..');
 const CONFIG_PATH = path.join(PACKAGE_ROOT, 'config', 'journal-module.json');
 const PAPERCLIP_BRIDGE_SCRIPT = path.join(CLAWD_ROOT, 'scripts', 'journal-paperclip-inbox.js');
-const SIGNATURE = '— Edited by Jarvis';
+const PROJECTS_PROJECTION_MODULE = path.join(
+  PACKAGE_ROOT,
+  '..',
+  'jarvos-secondbrain-projects',
+  'src',
+  'journal-projection.js',
+);
+const LEGACY_SIGNATURES = new Set(['— Edited by Jarvis', '— Written by Jarvis']);
 const DEFAULT_TIMEZONE = 'America/New_York';
 const LEGACY_SALIENCE_LINE_RE = /^-\s*📌\s*\*\(([^,]+),\s*(\d+)%\)\*\s*(.+)$/i;
 const JOURNAL_STATE_DIR = '.jarvos/journal-maintenance';
@@ -138,8 +145,9 @@ function trimOuterBlankLines(text) {
 }
 
 function stripSignature(md) {
+  const signaturePattern = [...LEGACY_SIGNATURES].map(escapeRegex).join('|');
   return String(md || '')
-    .replace(new RegExp(`^${escapeRegex(SIGNATURE)}\\s*$`, 'gm'), '')
+    .replace(new RegExp(`^(?:${signaturePattern})\\s*$`, 'gm'), '')
     .replace(/\n{3,}/g, '\n\n');
 }
 
@@ -251,7 +259,7 @@ function authoredBodyLines(body, config) {
       continue;
     }
     if (generated) continue;
-    if (!line || line === SIGNATURE || line === '-') continue;
+    if (!line || LEGACY_SIGNATURES.has(line) || line === '-') continue;
     if (isGeneratedPlaceholderLine(line)) continue;
     lines.push(line);
   }
@@ -276,7 +284,7 @@ function journalMetrics(markdown, config) {
 }
 
 function isGeneratedPlaceholderLine(line) {
-  return /^-\s+(?:No events today|No reminders due today|No blocked Paperclip issues|No notes created(?: on .*)?|No notes today|No notes yet|No ongoing projects|\((?:calendar unavailable|reminders unavailable|projects unavailable|Paperclip inbox script not found|Paperclip API unavailable)\))$/i.test(line);
+  return /^-\s+(?:No events today|No reminders due today|No blocked Paperclip issues|No notes created(?: on .*)?|No notes today|No notes yet|No ongoing projects|No projects touched today|\((?:calendar unavailable|reminders unavailable|projects unavailable(?:\s+—\s+[^)]+)?|Paperclip inbox script not found|Paperclip API unavailable)\))$/i.test(line);
 }
 
 /**
@@ -290,7 +298,7 @@ function isGeneratedPlaceholderLine(line) {
  * content that is already in the entry -- the existing list is better evidence
  * about the world than a marker saying we couldn't look.
  *
- * `projects.js` documented exactly this contract ("the journal treats [it] as a
+ * The Projects projection documents exactly this contract ("the journal treats [it] as a
  * degraded source and will not write over existing content") and the journal
  * never implemented it, so one unmounted volume or permissions blip would
  * rewrite a populated Projects section down to a single placeholder line.
@@ -298,7 +306,7 @@ function isGeneratedPlaceholderLine(line) {
 function isDegradedSourceMarker(content) {
   const trimmed = trimOuterBlankLines(String(content == null ? '' : content));
   if (!trimmed || trimmed.includes('\n')) return false;
-  return /^-\s+\((?:calendar unavailable|reminders unavailable|projects unavailable|Paperclip inbox script not found|Paperclip API unavailable)\)$/i.test(trimmed);
+  return /^-\s+\((?:calendar unavailable|reminders unavailable|projects unavailable(?:\s+—\s+[^)]+)?|Paperclip inbox script not found|Paperclip API unavailable)\)$/i.test(trimmed);
 }
 
 /** Does a section body carry anything beyond the empty `-` placeholder? */
@@ -316,7 +324,7 @@ function hasMeaningfulBodyText(body) {
     .split(/\r?\n/)
     .map((line) => line.trim())
     .filter(Boolean)
-    .some((line) => line !== SIGNATURE && line !== '-');
+    .some((line) => !LEGACY_SIGNATURES.has(line) && line !== '-');
 }
 
 /**
@@ -336,8 +344,11 @@ function hasMeaningfulBodyText(body) {
  * exact loss this machinery exists to prevent.
  */
 function contractSignature(config) {
-  const headings = buildDesiredSections(config || {}).map((section) => section.heading);
-  return contentHash(headings.join('\u0000'));
+  const sections = buildDesiredSections(config || {}).map((section) => ({
+    heading: section.heading,
+    presence: section.presence || 'always',
+  }));
+  return contentHash(JSON.stringify(sections));
 }
 
 /**
@@ -354,11 +365,20 @@ function contractSignature(config) {
  * is genuinely damaged, and the shrink guard and restore path must still fire.
  */
 function structureMatchesContract(sections, config) {
-  const desired = buildDesiredSections(config || {}).map((section) => String(section.heading).trim());
+  const desired = buildDesiredSections(config || {});
   if (!desired.length) return false;
   const have = (sections || []).map((heading) => String(heading).trim());
-  if (have.length !== desired.length) return false;
-  return desired.every((heading, index) => have[index] === heading);
+  let haveIndex = 0;
+  for (const section of desired) {
+    const heading = String(section.heading).trim();
+    if (have[haveIndex] === heading) {
+      haveIndex += 1;
+      continue;
+    }
+    if (section.presence === 'when-supported-activity') continue;
+    return false;
+  }
+  return haveIndex === have.length;
 }
 
 /**
@@ -659,29 +679,146 @@ function filterLegacyNotesCreatedContent(content) {
   );
 }
 
-function buildSourceFetchers() {
-  return {
-    /**
-     * Ongoing projects from the vault Projects record, as wiki-links.
-     *
-     * Unlike the other sources this is not time-bound — the projects you have
-     * are the projects you have, whichever day's entry is being written — so it
-     * renders for backfilled dates too rather than returning null for !isToday.
-     */
-    projects: () => {
+function loadProjectsProjection() {
+  // The Journal package depends on the public projection contract only. The
+  // host selects the reader over registry/activity state; this module never
+  // reads Beads, Paperclip, or private state roots itself.
+  // eslint-disable-next-line global-require, import/no-dynamic-require
+  return require(PROJECTS_PROJECTION_MODULE);
+}
+
+function activityReceiptForProjection(activity) {
+  if (!activity || typeof activity !== 'object' || Array.isArray(activity)) return activity;
+  if (activity.receipt && typeof activity.receipt === 'object') {
+    // Keep admission metadata carried by an ActivityStore envelope. In
+    // particular, the root Project pinned at admission must survive the
+    // unwrap; resolving an Outcome through today's hierarchy would rewrite a
+    // historical Journal touch after a later reparent.
+    const carried = {};
+    for (const field of ['canonicalAtAdmission', 'disposition', 'inferenceDecision', 'kind', 'category']) {
+      if (Object.prototype.hasOwnProperty.call(activity, field)) carried[field] = activity[field];
+    }
+    return {
+      ...activity.receipt,
+      ...carried,
+      trust: activity.receipt.trust || activity.trust || 'verified',
+      accepted: true,
+    };
+  }
+  return { ...activity };
+}
+
+function normalizeProjectsActivityResult(result, { date, timeZone, maxItems = 25 } = {}) {
+  const projection = loadProjectsProjection();
+  if (result && result.contract === projection.JOURNAL_PROJECTION_CONTRACT) return result;
+
+  const value = result && typeof result === 'object' ? result : {};
+  const state = value.activityProviderState || value.providerState || value.state
+    || ({
+      ok: 'fresh',
+      fresh: 'fresh',
+      'healthy-empty': 'healthy-empty',
+      'fresh-empty': 'healthy-empty',
+    }[value.status] || 'unavailable');
+  const packet = value.packet && typeof value.packet === 'object' ? value.packet : value;
+  const projects = Array.isArray(value.projects)
+    ? value.projects
+    : (Array.isArray(packet.projects) ? packet.projects : (Array.isArray(packet.canonical?.records) ? packet.canonical.records : []));
+  const rawActivities = Array.isArray(value.activities)
+    ? value.activities
+    : (Array.isArray(value.activityReceipts) ? value.activityReceipts : (Array.isArray(packet.activities) ? packet.activities : []));
+  const noteMappings = value.noteMappings !== undefined
+    ? value.noteMappings
+    : (value.canonicalNoteMappings !== undefined
+      ? value.canonicalNoteMappings
+      : (packet.noteMappings !== undefined ? packet.noteMappings : packet.canonicalNoteMappings));
+  let activities = rawActivities.map(activityReceiptForProjection);
+
+  // A verified Projects context packet exposes bounded activity summaries
+  // rather than receipt envelopes. They are safe for navigation only when the
+  // host explicitly marks the activity provider as fresh; context reads are
+  // not activity and therefore never reach this fallback.
+  if (!activities.length && value.status === 'ok' && state === 'fresh' && Array.isArray(packet.activity)) {
+    activities = packet.activity
+      .filter((summary) => summary && summary.category === 'activity' && summary.occurredAt)
+      .map((summary) => ({
+        canonicalId: summary.canonicalId,
+        occurredAt: summary.occurredAt,
+        ...(summary.canonicalAtAdmission ? { canonicalAtAdmission: summary.canonicalAtAdmission } : {}),
+        trust: 'verified',
+        accepted: true,
+      }));
+  }
+
+  return projection.buildJournalProjection({
+    date,
+    timeZone,
+    projects,
+    activities,
+    noteMappings,
+    activityProviderState: state,
+    coverageWatermark: value.coverageWatermark || value.watermark || packet.watermark || null,
+    generator: value.generator || 'projects-activity-v1',
+    maxItems,
+  });
+}
+
+function buildProjectsActivityFetcher({ reader, timeZone = DEFAULT_TIMEZONE, onProjection = null } = {}) {
+  return ({ date, config, section }) => {
+    const projectionOptions = {
+      date,
+      timeZone: timeZone || config?.timeZone || DEFAULT_TIMEZONE,
+      maxItems: Number(config?.journal?.maxItems || 25),
+    };
+    let projectsProjection;
+    const unavailableProjection = (reason) => {
+      const unavailable = normalizeProjectsActivityResult({
+        activityProviderState: 'unavailable',
+        generator: 'projects-activity-v1',
+      }, projectionOptions);
+      return {
+        ...unavailable,
+        omissions: [...new Set([...(unavailable.omissions || []), reason])].sort(),
+      };
+    };
+
+    if (typeof reader !== 'function' && !(reader && typeof reader.read === 'function')) {
+      projectsProjection = unavailableProjection('activity-reader:missing');
+    } else {
       try {
-        // eslint-disable-next-line global-require
-        const projects = require('../../jarvos-secondbrain-projects/src/projects');
-        const config = projects.loadConfig();
-        // readProjectsDir, not listProjects: null means the directory could not
-        // be read, which must render the unavailable marker rather than a
-        // positive "no ongoing projects". The Projects section renders on every
-        // date, so an unmounted vault would otherwise rewrite them all.
-        return projects.journalProjectLines(projects.readProjectsDir({ config }), config);
+        const read = typeof reader === 'function' ? reader : reader.read.bind(reader);
+        const result = read({
+          profile: 'recent-activity',
+          date,
+          timeZone: projectionOptions.timeZone,
+          maxItems: projectionOptions.maxItems,
+          section,
+        });
+        if (result && typeof result.then === 'function') {
+          throw new Error('asynchronous Projects activity readers are not supported by synchronous journal maintenance');
+        }
+        projectsProjection = normalizeProjectsActivityResult(result, projectionOptions);
       } catch {
-        return '- (projects unavailable)';
+        projectsProjection = unavailableProjection('activity-reader:failed');
       }
-    },
+    }
+
+    if (typeof onProjection === 'function') onProjection(projectsProjection);
+    if (projectsProjection.omit || projectsProjection.preserve || !projectsProjection.content) return null;
+    return projectsProjection.content;
+  };
+}
+
+function buildSourceFetchers({ projectsActivityReader = null, timeZone = DEFAULT_TIMEZONE, onProjectProjection = null } = {}) {
+  return {
+    // Projects is now a touched-parent navigation projection. The host must
+    // supply a reader over admitted activity; there is no all-project
+    // filesystem fallback here.
+    projects: buildProjectsActivityFetcher({
+      reader: projectsActivityReader,
+      timeZone,
+      onProjection: onProjectProjection,
+    }),
 
     'google-calendar': ({ isToday }) => {
       if (!isToday) return null;
@@ -811,7 +948,14 @@ function normalizeSections(original, date, config, opts = {}) {
   const desiredByHeading = new Map(desiredSections.map((section) => [section.heading, section]));
   const configuredHeadingMap = buildConfiguredHeadingMap(config);
   const configuredById = new Map(desiredSections.map((section) => [section.id, section]));
-  const fetchers = opts.fetchers || buildSourceFetchers();
+  const fetchers = {
+    ...buildSourceFetchers({
+      projectsActivityReader: opts.projectsActivityReader,
+      timeZone: opts.timeZone || config.timeZone || DEFAULT_TIMEZONE,
+      onProjectProjection: opts.onProjectProjection,
+    }),
+    ...(opts.fetchers || {}),
+  };
   const isToday = date === today();
 
   const withoutSignature = stripSignature(original);
@@ -915,14 +1059,17 @@ function normalizeSections(original, date, config, opts = {}) {
         }
       }
       // Most sources are a snapshot of *that day* and must never be
-      // back-written onto an older entry. Projects are current-state, not
-      // day-scoped, so they render on backfilled dates too.
+      // back-written onto an older entry. The activity projection is explicitly
+      // date-scoped, so it renders a backfilled date from that date's evidence.
       if (isToday || section.source === 'projects') {
+        if (section.source === 'projects'
+          && (!fetched || isDegradedSourceMarker(fetched) || /^-\s+No (?:ongoing projects|projects touched today)$/i.test(trimOuterBlankLines(fetched)))) {
+          continue;
+        }
         // ...but a DEGRADED read is not a fact about the world, only about our
         // ability to read it, so it must never overwrite content already in
-        // the entry. Without this, one unmounted volume rewrote a populated
-        // Projects list down to `- (projects unavailable)` on every date in
-        // the run, and burned an audit backup doing it.
+        // the entry. Without this, one unavailable activity source could
+        // rewrite a populated navigation list and burn an audit backup.
         content = isDegradedSourceMarker(fetched) && hasRenderedContent(existingContent)
           ? existingContent
           : (fetched || existingContent || '-');
@@ -964,8 +1111,6 @@ function renderJournal(date, config, normalized) {
     parts.push(section.content || '-');
     parts.push('');
   }
-  parts.push(SIGNATURE);
-  parts.push('');
   return trimOuterBlankLines(parts.join('\n')) + '\n';
 }
 
@@ -1012,28 +1157,52 @@ function syncOneDate(date, config, opts = {}) {
     ? readKnownGoodContent(journalDir, date, knownGood)
     : null;
   const source = restoreSource || original;
+  let projectProjection = null;
   const normalized = normalizeSections(source, date, config, {
     fetchers: opts.fetchers,
+    projectsActivityReader: opts.projectsActivityReader,
+    timeZone: opts.timeZone,
+    onProjectProjection: (projection) => {
+      projectProjection = projection;
+      if (typeof opts.onProjectProjection === 'function') opts.onProjectProjection(projection);
+    },
     sectionTransforms: opts.sectionTransforms,
   });
   const updated = renderJournal(date, config, normalized);
   const changed = updated !== original;
   const backupReason = restoreSource ? 'stub-restore' : healthBefore.status;
   let backupPath = null;
+  let mutationReceipt = null;
 
   if (changed && !opts.dryRun) {
-    fs.mkdirSync(journalDir, { recursive: true });
+    const mutate = existed ? opts.applyMarkdownMutation : opts.createMarkdownFile;
+    if (typeof mutate !== 'function') {
+      throw new Error('Canonical vault mutation composition is required; journal maintenance cannot modify Markdown directly');
+    }
     if (existed) {
       backupPath = auditBackupPath(journalDir, date, backupReason);
       fs.mkdirSync(path.dirname(backupPath), { recursive: true });
       fs.writeFileSync(backupPath, original, 'utf8');
     }
-    fs.writeFileSync(journalPath, updated, 'utf8');
+    mutationReceipt = mutate({
+      filePath: journalPath,
+      expectedContent: original,
+      nextContent: updated,
+      projectionReceipt: projectProjection,
+    });
   }
 
+  const persisted = !changed || opts.dryRun || [
+    'committed',
+    'already_satisfied',
+    'saved_locally_sync_pending',
+  ].includes(mutationReceipt?.status);
+  const acknowledged = !changed || ['committed', 'already_satisfied'].includes(mutationReceipt?.status);
+  const effectiveContent = changed && persisted ? updated : original;
+
   let healthAfter = classifyJournalHealth({
-    existed: true,
-    markdown: changed ? updated : original,
+    existed: existed || persisted,
+    markdown: effectiveContent,
     knownGood,
     config,
   });
@@ -1043,6 +1212,7 @@ function syncOneDate(date, config, opts = {}) {
   const intentionalTransformWrite = Boolean(
     !opts.dryRun
     && changed
+    && acknowledged
     && Array.isArray(opts.sectionTransforms)
     && opts.sectionTransforms.length > 0,
   );
@@ -1064,10 +1234,8 @@ function syncOneDate(date, config, opts = {}) {
   //   1. A section-contract change. Retiring a section shrinks every entry, so
   //      the first pass after the change reports `stale` against the old
   //      snapshot.
-  //   2. Ordinary generated-section churn. Generated sections are current-state,
-  //      and Projects renders on backfilled dates by design ("Projects is
-  //      refreshed on a backfilled date, unlike day-scoped sources"), so marking
-  //      one project done drops a line from every past entry.
+  //   2. Ordinary generated-section churn. Generated sections are projections,
+  //      and a late activity receipt may legitimately change a backfilled date.
   //
   // In both cases, refusing to refresh pins the entry to an older, larger
   // snapshot PERMANENTLY: the next pass makes the same comparison and reaches
@@ -1087,14 +1255,14 @@ function syncOneDate(date, config, opts = {}) {
   const authoredContentIntact = Boolean(
     knownGood
     && knownGoodMarkdown
-    && authoredContentPreserved(changed ? updated : original, knownGoodMarkdown, config)
+    && authoredContentPreserved(effectiveContent, knownGoodMarkdown, config)
   );
 
-  if (!opts.dryRun && (healthAfter.status === 'healthy' || authoredContentIntact)) {
+  if (!opts.dryRun && acknowledged && (healthAfter.status === 'healthy' || authoredContentIntact)) {
     const updatedKnownGoodPath = knownGoodPath(journalDir, date);
     fs.mkdirSync(path.dirname(updatedKnownGoodPath), { recursive: true });
-    fs.writeFileSync(updatedKnownGoodPath, changed ? updated : original, 'utf8');
-    const metrics = journalMetrics(changed ? updated : original, config);
+    fs.writeFileSync(updatedKnownGoodPath, effectiveContent, 'utf8');
+    const metrics = journalMetrics(effectiveContent, config);
     state.version = 1;
     state.dates = state.dates || {};
     state.dates[date] = {
@@ -1115,12 +1283,15 @@ function syncOneDate(date, config, opts = {}) {
     journalPath,
     existed,
     changed,
-    written: Boolean(changed && !opts.dryRun),
-    writeStatus: opts.dryRun ? 'dry-run' : (changed ? 'written' : 'unchanged'),
+    written: Boolean(changed && !opts.dryRun && acknowledged),
+    savedLocally: mutationReceipt?.status === 'saved_locally_sync_pending',
+    writeStatus: opts.dryRun ? 'dry-run' : (changed ? (mutationReceipt?.status || 'failed') : 'unchanged'),
+    mutationReceipt,
     healthBefore,
     healthAfter,
     backupPath,
     restoredKnownGood: Boolean(restoreSource),
+    projectProjection,
   };
 }
 
@@ -1262,7 +1433,15 @@ function runMaintenance(argv = process.argv.slice(2), opts = {}) {
   const flush = opts.flushDeferredBacklinks || deferredBacklinkFlush();
   const readFlushMetadata = opts.readDeferredBacklinkFlushMetadata || readDeferredBacklinkFlushMetadata;
   const dates = unique(args.dateSpecs.map(resolveDateSpec));
-  const results = dates.map((date) => sync(date, config, args));
+  const mutationOptions = {
+    ...args,
+    ...(opts.applyMarkdownMutation ? { applyMarkdownMutation: opts.applyMarkdownMutation } : {}),
+    ...(opts.createMarkdownFile ? { createMarkdownFile: opts.createMarkdownFile } : {}),
+    ...(opts.projectsActivityReader ? { projectsActivityReader: opts.projectsActivityReader } : {}),
+    ...(opts.timeZone ? { timeZone: opts.timeZone } : {}),
+    ...(opts.onProjectProjection ? { onProjectProjection: opts.onProjectProjection } : {}),
+  };
+  const results = dates.map((date) => sync(date, config, mutationOptions));
   const journalDir = path.dirname(results[0].journalPath);
   const rawFlushSummary = flush({
     journalDir,
@@ -1310,14 +1489,16 @@ function runMaintenance(argv = process.argv.slice(2), opts = {}) {
   return report;
 }
 
-function main(argv = process.argv.slice(2), env = process.env) {
-  const report = runMaintenance(argv, { env });
+function main(argv = process.argv.slice(2), env = process.env, options = {}) {
+  const report = runMaintenance(argv, { env, ...options });
   console.log(report.output);
   return report;
 }
 
 module.exports = {
   applySectionTransforms,
+  buildSourceFetchers,
+  buildProjectsActivityFetcher,
   main,
   classifyJournalHealth,
   contractSignature,
@@ -1329,6 +1510,7 @@ module.exports = {
   loadConfig,
   readConfig,
   normalizeSections,
+  normalizeProjectsActivityResult,
   requiresDeferredBacklinkAttention,
   renderJournal,
   resolveDateSpec,

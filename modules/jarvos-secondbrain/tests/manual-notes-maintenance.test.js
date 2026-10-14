@@ -5,12 +5,16 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const vm = require('node:vm');
 
 const {
   parseArgs,
   privateSafeSummary,
   processOnce,
 } = require('../packages/jarvos-secondbrain-notes/src/manual-notes-maintenance');
+const { collectViolations } = require('../packages/jarvos-secondbrain-notes/src/lint-frontmatter');
+const { createConfiguredVaultMutationService } = require('../src/vault-mutation-service');
+const { hashUtf8 } = require('../adapters/obsidian/src/vault-mutation-contract');
 
 function fixture() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-manual-notes-'));
@@ -47,6 +51,120 @@ function readJson(filePath) {
   return JSON.parse(fs.readFileSync(filePath, 'utf8'));
 }
 
+// This is the test double for the app-owned transport. It deliberately
+// compares the latest bytes before applying, matching the real replace guard.
+function appOwnedMutationExecutor({ filePath, expectedContent, nextContent }) {
+  if (fs.readFileSync(filePath, 'utf8') !== expectedContent) return { status: 'conflict' };
+  fs.writeFileSync(filePath, nextContent, 'utf8');
+  return { status: 'committed', obsidian: 'acknowledged' };
+}
+
+function applyOptions() {
+  return { applyMarkdownMutation: appOwnedMutationExecutor };
+}
+
+function settled(value) {
+  return { then(fn) { try { fn(value); return this; } catch (error) { this.error = error; return this; } }, catch(fn) { if (this.error) fn(this.error); return this; } };
+}
+
+function fakeObsidianEvaluator(initialContent) {
+  const files = new Map([['Notes/Concurrent.md', { path: 'Notes/Concurrent.md', content: initialContent }]]);
+  const vault = {
+    getFileByPath: (target) => files.get(target) || null,
+    create: (target, content) => { const file = { path: target, content }; files.set(target, file); return settled(file); },
+    process: (file, transform) => { file.content = transform(file.content); return settled(file); },
+    read: (file) => settled(file.content),
+  };
+  const context = { app: { vault }, TextDecoder, Uint8Array, atob: (value) => Buffer.from(value, 'base64').toString('binary'), JSON };
+  context.globalThis = context;
+  return { files, evaluate(code) { const raw = vm.runInNewContext(code, context); return typeof raw === 'string' ? JSON.parse(raw) : raw; } };
+}
+
+test('manual maintenance apply fails closed without an Obsidian-owned Markdown executor', () => {
+  const { notesDir, knowledgeDir, statePath } = fixture();
+  const filePath = writeNote(notesDir, 'No Executor.md', '# No Executor\n');
+  const before = fs.readFileSync(filePath, 'utf8');
+  assert.throws(() => processOnce(flagsFor({ notesDir, knowledgeDir, statePath, apply: true })), /Obsidian-owned Markdown mutation executor/);
+  assert.equal(fs.readFileSync(filePath, 'utf8'), before);
+});
+
+test('frontmatter lint fixes only through its injected app-owned executor', () => {
+  const { notesDir } = fixture();
+  const filePath = writeNote(notesDir, 'Lint Me.md', '# Lint Me\n');
+  assert.throws(() => collectViolations([filePath], { fix: true }), /Obsidian-owned Markdown mutation executor/);
+  let received;
+  const result = collectViolations([filePath], {
+    fix: true,
+    applyMarkdownMutation: (mutation) => {
+      received = mutation;
+      return appOwnedMutationExecutor(mutation);
+    },
+  });
+  assert.equal(result.filesChanged, 1);
+  assert.equal(received.expectedContent, '# Lint Me\n');
+  assert.equal(received.source, undefined);
+  assert.match(fs.readFileSync(filePath, 'utf8'), /^---\nstatus: active\n/m);
+});
+
+test('exact-hash replacement conflicts without overwriting a concurrent app edit', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-maintenance-conflict-'));
+  try {
+    const fake = fakeObsidianEvaluator('mobile edit');
+    const service = createConfiguredVaultMutationService({
+      vaultRoot: root,
+      vaultId: 'vault-maintenance-conflict',
+      source: 'test.manual-maintenance',
+      adapterOptions: {
+        ledgerPath: path.join(root, '.state', 'ledger.json'),
+        probe: () => ({ state: 'available', vaultId: 'vault-maintenance-conflict' }),
+        evaluate: fake.evaluate,
+        maxPollAttempts: 2,
+      },
+    });
+    const receipt = service.applyMarkdownMutation({
+      filePath: path.join(root, 'Notes', 'Concurrent.md'),
+      expectedContent: 'old disk content',
+      nextContent: 'frontmatter repaired',
+    });
+    assert.equal(receipt.status, 'conflict');
+    assert.equal(fake.files.get('Notes/Concurrent.md').content, 'mobile edit');
+    const operation = Object.values(service.adapter.ledger.read().operations)[0].operation;
+    assert.equal(operation.expectedContent, 'old disk content');
+    assert.equal(operation.expectedHash, hashUtf8('old disk content'));
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('a fresh identical replacement is not hidden by an older acknowledged intent', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-maintenance-repeat-'));
+  try {
+    const fake = fakeObsidianEvaluator('old');
+    const service = createConfiguredVaultMutationService({
+      vaultRoot: root,
+      vaultId: 'vault-maintenance-repeat',
+      source: 'test.manual-maintenance.repeat',
+      adapterOptions: {
+        ledgerPath: path.join(root, '.state', 'ledger.json'),
+        probe: () => ({ state: 'available', vaultId: 'vault-maintenance-repeat' }),
+        evaluate: fake.evaluate,
+        maxPollAttempts: 2,
+      },
+    });
+    const mutation = {
+      filePath: path.join(root, 'Notes', 'Concurrent.md'),
+      expectedContent: 'old',
+      nextContent: 'new',
+    };
+    assert.equal(service.applyMarkdownMutation(mutation).status, 'committed');
+    fake.files.get('Notes/Concurrent.md').content = 'old';
+    assert.equal(service.applyMarkdownMutation(mutation).status, 'committed');
+    assert.equal(Object.keys(service.adapter.ledger.read().operations).length, 2);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('manual notes dry-run reports stack decisions without writing artifacts or source notes', () => {
   const { notesDir, knowledgeDir, statePath } = fixture();
   const filePath = writeNote(
@@ -75,12 +193,21 @@ test('manual notes dry-run reports stack decisions without writing artifacts or 
   assert.equal(summary.cohorts.auditMissing, 1);
 });
 
+test('maintenance source has no direct Markdown overwrite branch', () => {
+  const notesRoot = path.join(__dirname, '..', 'packages', 'jarvos-secondbrain-notes', 'src');
+  const lintSource = fs.readFileSync(path.join(notesRoot, 'lint-frontmatter.js'), 'utf8');
+  const maintenanceSource = fs.readFileSync(path.join(notesRoot, 'manual-notes-maintenance.js'), 'utf8');
+  assert.doesNotMatch(lintSource, /fs\.writeFileSync\(/);
+  assert.doesNotMatch(maintenanceSource, /fs\.writeFileSync\(filePath,\s*frontmatterFix\.updatedText/);
+  assert.match(maintenanceSource, /applyMarkdownMutation\(\{/);
+});
+
 test('manual notes apply preserves body content and writes sidecars, queues, qmd, and state', () => {
   const { notesDir, knowledgeDir, statePath } = fixture();
   const body = '# Manual Insight\n\nManually captured ideas should join the secondbrain stack after review.';
   const filePath = writeNote(notesDir, 'Manual Insight.md', body);
 
-  const report = processOnce(flagsFor({ notesDir, knowledgeDir, statePath, apply: true }));
+  const report = processOnce(flagsFor({ notesDir, knowledgeDir, statePath, apply: true }), applyOptions());
   const updated = fs.readFileSync(filePath, 'utf8');
   const qmd = readJson(path.join(knowledgeDir, 'qmd-refresh-pending.json'));
   const gbrain = readJson(path.join(knowledgeDir, 'gbrain-import-queue.json'));
@@ -122,7 +249,7 @@ test('manual notes apply keeps sensitive artifacts local and clears automatic qu
     ].join('\n'),
   );
 
-  const report = processOnce(flagsFor({ notesDir, knowledgeDir, statePath, apply: true }));
+  const report = processOnce(flagsFor({ notesDir, knowledgeDir, statePath, apply: true }), applyOptions());
   const qmd = readJson(path.join(knowledgeDir, 'qmd-refresh-pending.json'));
   const audit = readJson(path.join(knowledgeDir, 'optimization-audit.json'));
   const gbrainPath = path.join(knowledgeDir, 'gbrain-import-queue.json');
@@ -156,7 +283,7 @@ test('manual notes apply parks unfixable frontmatter without optimizer side effe
   ].join('\n');
   const filePath = writeNote(notesDir, 'Unsafe Metadata.md', original);
 
-  const report = processOnce(flagsFor({ notesDir, knowledgeDir, statePath, apply: true }));
+  const report = processOnce(flagsFor({ notesDir, knowledgeDir, statePath, apply: true }), applyOptions());
   const summary = privateSafeSummary(report);
   const state = readJson(statePath);
 
@@ -189,7 +316,7 @@ test('manual notes apply clears stale automatic queues when parking unsafe notes
     '# Queued Then Parked\n\nThis note starts safe, then becomes unsafe for automatic promotion.',
   );
 
-  const firstReport = processOnce(flagsFor({ notesDir, knowledgeDir, statePath, apply: true }));
+  const firstReport = processOnce(flagsFor({ notesDir, knowledgeDir, statePath, apply: true }), applyOptions());
   const firstUpdated = fs.readFileSync(filePath, 'utf8');
   assert.equal(firstReport.ok, true);
   assert.equal(readJson(path.join(knowledgeDir, 'gbrain-import-queue.json')).entries['Notes/Queued Then Parked.md'].status, 'queued');
@@ -200,7 +327,7 @@ test('manual notes apply clears stale automatic queues when parking unsafe notes
     .replace('author: andrew\n', 'author: andrew\nprivate: true\n');
   fs.writeFileSync(filePath, parked, 'utf8');
 
-  const secondReport = processOnce(flagsFor({ notesDir, knowledgeDir, statePath, apply: true, sinceState: true }));
+  const secondReport = processOnce(flagsFor({ notesDir, knowledgeDir, statePath, apply: true, sinceState: true }), applyOptions());
   const gbrain = readJson(path.join(knowledgeDir, 'gbrain-import-queue.json'));
   const memoryWiki = readJson(path.join(knowledgeDir, 'memory-wiki-queue.json'));
   const state = readJson(statePath);
@@ -223,7 +350,7 @@ test('manual notes since-state reprocesses privacy flips and clears automatic qu
     '# Public Then Private\n\nThis note should leave automatic queues after a privacy flip.',
   );
 
-  const firstReport = processOnce(flagsFor({ notesDir, knowledgeDir, statePath, apply: true }));
+  const firstReport = processOnce(flagsFor({ notesDir, knowledgeDir, statePath, apply: true }), applyOptions());
   const firstUpdated = fs.readFileSync(filePath, 'utf8');
   assert.equal(firstReport.ok, true);
   assert.equal(readJson(path.join(knowledgeDir, 'gbrain-import-queue.json')).entries['Notes/Public Then Private.md'].status, 'queued');
@@ -232,7 +359,7 @@ test('manual notes since-state reprocesses privacy flips and clears automatic qu
   const privatized = firstUpdated.replace('author: andrew\n', 'author: andrew\nprivate: true\n');
   fs.writeFileSync(filePath, privatized, 'utf8');
 
-  const secondReport = processOnce(flagsFor({ notesDir, knowledgeDir, statePath, apply: true, sinceState: true }));
+  const secondReport = processOnce(flagsFor({ notesDir, knowledgeDir, statePath, apply: true, sinceState: true }), applyOptions());
   const audit = readJson(path.join(knowledgeDir, 'optimization-audit.json'));
   const qmd = readJson(path.join(knowledgeDir, 'qmd-refresh-pending.json'));
   const gbrain = readJson(path.join(knowledgeDir, 'gbrain-import-queue.json'));
@@ -259,7 +386,7 @@ test('manual notes since-state skips unchanged notes after apply coverage exists
     '# Manual Insight\n\nManually captured ideas should join the secondbrain stack after review.',
   );
 
-  const applyReport = processOnce(flagsFor({ notesDir, knowledgeDir, statePath, apply: true }));
+  const applyReport = processOnce(flagsFor({ notesDir, knowledgeDir, statePath, apply: true }), applyOptions());
   const dryRunReport = processOnce(flagsFor({ notesDir, knowledgeDir, statePath, sinceState: true }));
 
   assert.equal(applyReport.ok, true);

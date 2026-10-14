@@ -1,0 +1,14 @@
+{
+  "name": "@jarvos/storage-janitor",
+  "version": "0.1.0",
+  "description": "Portable, adapter-neutral capacity-safety contracts and preflight decisions for jarvOS storage janitors.",
+  "license": "MIT",
+  "main": "src/index.js",
+  "exports": { ".": "./src/index.js" },
+  "type": "commonjs",
+  "private": false,
+  "scripts": { "test": "node --test test/*.test.js" },
+  "repository": { "type": "git", "url": "https://github.com/levineam/jarvOS.git" },
+  "engines": { "node": ">=18" },
+  "keywords": ["jarvos", "storage", "capacity", "safety", "control-plane"]
+}

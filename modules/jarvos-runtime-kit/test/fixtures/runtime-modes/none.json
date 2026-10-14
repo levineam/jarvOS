@@ -1,0 +1,7 @@
+{
+  "version": "jarvos-runtime-mode/v1",
+  "mode": "none",
+  "installedAdapters": [],
+  "workloadRoutes": [],
+  "capabilityTruth": []
+}

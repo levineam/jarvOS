@@ -5,7 +5,7 @@ const path = require('path');
 const STEWARDSHIP_BOOTSTRAP_CONTRACT_VERSION = 'jarvos-stewardship-bootstrap.v1';
 const STEWARDSHIP_STABLE_ROOT_ENV = 'JARVOS_STEWARDSHIP_STABLE_ROOT';
 const STEWARDSHIP_DISPATCHER = 'jarvos-stewardship-dispatcher';
-const STEWARDSHIP_ACTIONS = ['harness-launch', 'session-start', 'session-turn', 'bridge', 'provenance-probe'];
+const STEWARDSHIP_ACTIONS = ['harness-launch', 'session-start', 'session-turn', 'bridge', 'provenance-probe', 'session-precompact'];
 const STABLE_ENTRYPOINTS = {
   dispatcher: STEWARDSHIP_DISPATCHER,
   hermesShell: 'jarvos-hermes-pre-llm-hook.js',

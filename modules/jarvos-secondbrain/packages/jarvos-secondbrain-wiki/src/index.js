@@ -218,9 +218,19 @@ function resetGeneratedOutput(outputDir) {
   }
 }
 
-function compileSecondbrainWiki({ artifactsDir, outputDir }) {
+function assertExternalGeneratedOutput(outputDir, vaultRoot = process.env.JARVOS_VAULT_DIR) {
+  if (!vaultRoot) return;
+  const output = path.resolve(outputDir);
+  const vault = path.resolve(vaultRoot);
+  if (output === vault || output.startsWith(`${vault}${path.sep}`)) {
+    throw new Error('Generated wiki output inside the configured vault requires Obsidian-owned create, replace, and delete operations; choose an external output directory');
+  }
+}
+
+function compileSecondbrainWiki({ artifactsDir, outputDir, vaultRoot }) {
   if (!artifactsDir) throw new Error('artifactsDir is required');
   if (!outputDir) throw new Error('outputDir is required');
+  assertExternalGeneratedOutput(outputDir, vaultRoot);
 
   const entries = readArtifacts(artifactsDir);
   ensureDir(outputDir);
@@ -269,6 +279,7 @@ function compileSecondbrainWiki({ artifactsDir, outputDir }) {
 
 module.exports = {
   GENERATED_HEADER,
+  assertExternalGeneratedOutput,
   compileSecondbrainWiki,
   renderConceptPage,
   renderSourcePage,

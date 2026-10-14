@@ -1,0 +1,27 @@
+{
+  "contract": "jarvos.project-inference-case/v1",
+  "caseId": "duplicate",
+  "engineRevision": null,
+  "coverage": [
+    { "sourceClass": "note", "state": "fresh" }
+  ],
+  "observations": [
+    {
+      "observationId": "obs_public_book_note_001",
+      "evidenceId": "ev_public_book_note_001",
+      "sourceClass": "note",
+      "occurredAt": "2026-08-04T10:00:00.000Z",
+      "observedAt": "2026-08-05T10:00:00.000Z",
+      "sourceRevision": "fixture-note-r1",
+      "sensitivity": "public-fixture",
+      "coverageState": "fresh",
+      "contentDigest": "828e5368114d5571b7d2552b615529cda0c18fc41d4645c989262ffaca503916"
+    }
+  ],
+  "correction": null,
+  "expected": {
+    "decision": "deduplicate",
+    "deduplicatedObservationId": "obs_public_book_note_001"
+  },
+  "contentDigest": "5285da37b3496044b85ceac90d2bd9b3e2d5e5d4ca725f537082a13ee3dc3801"
+}

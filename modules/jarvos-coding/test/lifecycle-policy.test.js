@@ -11,8 +11,35 @@ const {
   submissionGateContract,
 } = require('../src');
 
+function deliveryEvidence(identifier) {
+  const headCommit = 'a'.repeat(40);
+  const digest = 'd'.repeat(64);
+  const changedFiles = [`docs/plans/${identifier}.md`, 'modules/jarvos-coding/README.md', 'modules/jarvos-coding/src/lifecycle/policy.js'];
+  return {
+    deliveryTrace: {
+      schemaVersion: 'jarvos-coding-delivery-trace/v1',
+      workIdentifier: identifier,
+      plan: { path: changedFiles[0], digest },
+      docImpact: { decision: 'affected', docs: [changedFiles[1]] },
+      implementation: { headCommit, changedFiles },
+      proof: [{
+        kind: 'behavioral',
+        level: 'source',
+        criterion: 'Closeout requires the plan, documentation, implementation, and proof path.',
+        claim: 'The supported lifecycle submits with a verified source trace.',
+        command: 'node --test modules/jarvos-coding/test/lifecycle-policy.test.js',
+        observation: 'The focused lifecycle cases passed at this head.',
+        status: 'passed',
+        headCommit,
+      }],
+    },
+    deliveryObservation: { headCommit, changedFiles, plan: { digest, mentionsWorkIdentifier: true } },
+  };
+}
+
 function authoritativeLifecycleInput() {
   return {
+    ...deliveryEvidence('SUP-2138'),
     workIdentity: { identifier: 'SUP-2138' },
     owner: 'codex',
     repo: { slug: 'levineam/jarvOS' },
@@ -63,6 +90,7 @@ test('Paperclip absence does not block supported lifecycle closeout or submissio
     authority: 'none',
   });
   assert.equal(submission.ready, true);
+  assert.equal(submission.schemaVersion, 'jarvos-coding-submission-gate/v3');
   assert.equal(submission.missing.includes('paperclip_evidence'), false);
 });
 

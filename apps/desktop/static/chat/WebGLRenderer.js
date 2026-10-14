@@ -1,0 +1,1 @@
+import{n as e}from"./VoiceAvatarPanel.js";export{e as WebGLRenderer};

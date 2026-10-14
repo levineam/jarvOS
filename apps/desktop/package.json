@@ -1,0 +1,31 @@
+{
+  "name": "jarvos-desktop",
+  "version": "0.1.0",
+  "description": "jarvOS Desktop — a unified local-first interface for the jarvOS operating layer: journal, notes, work, memory, ontology.",
+  "main": "electron/main.js",
+  "scripts": {
+    "serve": "node server/index.js",
+    "desktop": "electron .",
+    "build": "vite build",
+    "dev:chat": "vite --host 127.0.0.1",
+    "test": "node --test",
+    "smoke": "node scripts/smoke.js"
+  },
+  "license": "MIT",
+  "engines": { "node": ">=22.12" },
+  "devDependencies": {
+    "electron": "^42.5.1"
+  },
+  "dependencies": {
+    "@ai-sdk/openai": "^4.0.3",
+    "@ai-sdk/react": "^4.0.8",
+    "@assistant-ui/react": "^0.14.24",
+    "@vitejs/plugin-react": "^6.0.3",
+    "ai": "^7.0.7",
+    "pixi.js": "^8.20.1",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7",
+    "vite": "^8.1.0",
+    "zod": "^4.4.3"
+  }
+}

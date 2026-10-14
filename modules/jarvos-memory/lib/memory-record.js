@@ -16,6 +16,7 @@ const { getClawdRoot: getWorkspaceRoot } = require('./memory-config');
  * @param {string} [params.noteRef] - Link to full note if one was created
  * @param {number} [params.confidence] - 0.0-1.0
  * @param {string} [params.supersedes] - ID of prior memory this replaces
+ * @param {object} [params.provenance] - Intellectual-origin declaration from the source unit
  * @returns {{ record: object, written: boolean, path: string|null, error: string|null }}
  */
 function createMemoryRecord(params = {}) {
@@ -54,6 +55,9 @@ function createMemoryRecord(params = {}) {
     created: now.toISOString(),
     confidence: typeof params.confidence === 'number' ? params.confidence : undefined,
     supersedes: params.supersedes || undefined,
+    content_origin: params.provenance?.content_origin || undefined,
+    content_origin_basis: params.provenance?.content_origin_basis || undefined,
+    human_evidence_eligible: params.provenance?.human_evidence_eligible === true ? true : undefined,
     status: 'active',
   };
 
@@ -94,6 +98,9 @@ function createMemoryRecord(params = {}) {
       record.noteRef ? `note_ref: "${record.noteRef}"` : null,
       record.supersedes ? `supersedes: "${record.supersedes}"` : null,
       record.confidence != null ? `confidence: ${record.confidence}` : null,
+      record.content_origin ? `content_origin: ${record.content_origin}` : null,
+      record.content_origin_basis ? `content_origin_basis: ${record.content_origin_basis}` : null,
+      record.human_evidence_eligible === true ? 'human_evidence_eligible: true' : null,
       '---',
     ].filter(Boolean).join('\n');
 

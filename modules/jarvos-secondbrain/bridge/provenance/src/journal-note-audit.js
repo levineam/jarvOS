@@ -19,9 +19,10 @@
 
 const fs = require('fs');
 const path = require('path');
-const { getVaultNotesDir, getVaultJournalDir } = require('./lib/provenance-config');
+const { getVaultDir, getVaultNotesDir, getVaultJournalDir } = require('./lib/provenance-config');
 const { getSectionHeading, getJournalSections } = require('../../../packages/jarvos-secondbrain-journal/src/section-config');
 const { migrateLegacyNotesCreatedSection } = require('./notes-section-normalizer');
+const { createObsidianOwnedMutationService } = require('./obsidian-mutation');
 
 const NOTES_DIR = getVaultNotesDir();
 const JOURNAL_DIR = getVaultJournalDir();
@@ -357,6 +358,17 @@ function scaffoldMissingSections(journalMd, missingHeadings) {
   return `${String(journalMd).trimEnd()}\n\n${additions}\n`;
 }
 
+function applyAuditRepair({ journalPath, expectedContent, nextContent, applyMarkdownMutation }) {
+  if (typeof applyMarkdownMutation !== 'function') {
+    throw new Error('Journal audit repair requires an Obsidian-owned Markdown mutation executor');
+  }
+  return applyMarkdownMutation({
+    filePath: journalPath,
+    expectedContent,
+    nextContent,
+  });
+}
+
 function main() {
   const opts = parseArgs(process.argv.slice(2));
 
@@ -453,7 +465,23 @@ function main() {
     mutated = true;
   }
   if (mutated) {
-    fs.writeFileSync(journalPath, working, 'utf8');
+    const mutationService = createObsidianOwnedMutationService({
+      vaultRoot: getVaultDir(),
+      source: 'journal.note-audit',
+    });
+    const receipt = applyAuditRepair({
+      journalPath,
+      expectedContent: journalMd,
+      nextContent: working,
+      applyMarkdownMutation: (input) => mutationService.applyMarkdownMutation(input),
+    });
+    result.mutationStatus = receipt?.status || 'failed';
+    result.savedLocally = receipt?.status === 'saved_locally_sync_pending';
+    if (!['committed', 'already_satisfied'].includes(receipt?.status)) {
+      result.patched = false;
+      result.structureRepaired = false;
+      result.legacyNotesCreated.migrated = false;
+    }
   }
 
   // Re-evaluate structure post-repair so the exit code reflects the final file.
@@ -524,6 +552,7 @@ module.exports = {
   stripFrontmatter,
   checkJournalStructure,
   scaffoldMissingSections,
+  applyAuditRepair,
 };
 
 if (require.main === module) {

@@ -4,7 +4,13 @@
 const assert = require('assert/strict');
 const test = require('node:test');
 
-const { checkFrontDoorReleaseProse, checkReleaseReadiness } = require('../scripts/release-readiness-check');
+const packageJson = require('../package.json');
+const {
+  checkFrontDoorReleaseProse,
+  checkReleaseReadiness,
+  findExistingReleaseTag,
+  releaseTagNames,
+} = require('../scripts/release-readiness-check');
 
 function runFrontDoorCheck(files, options = {}) {
   return checkFrontDoorReleaseProse({
@@ -164,6 +170,21 @@ test('front-door release prose allows candidate wording in candidate mode', () =
   assert.equal(releaseProcessResult.ok, true);
 });
 
+test('tag preflight recognizes the published package-prefixed v0.11 tag', () => {
+  const tags = 'v0.7.0\njarvos-bootstrap-v0.10.0\njarvos-bootstrap-v0.11.0\n';
+
+  assert.equal(findExistingReleaseTag(tags, '0.11.0', 'jarvos-bootstrap'), 'jarvos-bootstrap-v0.11.0');
+  assert.equal(findExistingReleaseTag(tags, '0.7.0', 'jarvos-bootstrap'), 'v0.7.0');
+});
+
+test('tag preflight never treats an unpublished candidate or foreign package tag as existing', () => {
+  const tags = 'jarvos-bootstrap-v0.11.0\nother-package-v0.11.1\n';
+
+  assert.equal(findExistingReleaseTag(tags, '0.11.1', 'jarvos-bootstrap'), null);
+  assert.equal(findExistingReleaseTag('', '0.11.1', 'jarvos-bootstrap'), null);
+  assert.deepEqual(releaseTagNames('0.11.1', 'jarvos-bootstrap'), ['v0.11.1', 'jarvos-bootstrap-v0.11.1']);
+});
+
 test('candidate release gate passes as unreleased work without authorizing a versioned release', () => {
   const report = checkReleaseReadiness({
     allowDirty: true,
@@ -173,7 +194,7 @@ test('candidate release gate passes as unreleased work without authorizing a ver
   });
 
   assert.equal(report.ok, true);
-  assert.equal(report.version, 'v0.7.0');
+  assert.equal(report.version, `v${packageJson.version}`);
   assert.equal(report.results.find((result) => result.label === 'CHANGELOG.md version section').ok, true);
   assert.equal(report.results.find((result) => result.label === 'git tag preflight').ok, true);
 });

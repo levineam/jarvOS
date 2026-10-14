@@ -5,7 +5,9 @@ const {
 } = require('./adapters/paperclip');
 const {
   BRANCH_SCHEMA_VERSION,
+  BEADS_TRACKER_SCHEMA_VERSION,
   COUPLED_STAGES,
+  DEFAULT_BEADS_VERSION,
   FIXER_SCHEMA_VERSION,
   HOLISTIC_REVIEW_SCHEMA_VERSION,
   LIVE_ADAPTERS_SCHEMA_VERSION,
@@ -15,6 +17,7 @@ const {
   buildLiveCodingAdapters,
   createLiveClawpatchReviewEngine,
   createLiveClawpatchRunner,
+  createLiveBeadsTracker,
   createLiveGitBranch,
   createLiveHolisticReview,
   createLiveFixer,
@@ -22,8 +25,12 @@ const {
   createLivePostMergeSweep,
   createLivePullRequest,
   parseClawpatchCommand,
+  createMemoryOperationStore,
+  createFileOperationStore,
+  OPERATION_STORE_SCHEMA_VERSION,
   resolveWorktreeRoot,
 } = require('./adapters/live');
+const { WORK_ACTION_CONTRACT, createBeadsWorkActionService, createMemoryExecutionLinkStore } = require('./features/work-actions');
 const {
   DEFAULT_MCP_TOOL_NAME,
   DEFAULT_SKILL_NAME,
@@ -40,6 +47,7 @@ const {
   createCodexHostAdapter,
   createCodingHostAdapter,
   createCodingControlPlanePort,
+  createHermesHostAdapter,
   createOpenClawHostAdapter,
   codingControlPlaneManifest,
   normalizeHost,
@@ -71,6 +79,11 @@ const {
   validateSubmissionEvidence,
 } = require('./features/submission-gate');
 const {
+  DELIVERY_TRACE_SCHEMA_VERSION,
+  evaluateDeliveryTrace,
+  observePlan,
+} = require('./features/delivery-trace');
+const {
   ORCHESTRATOR_SCHEMA_VERSION,
   TAKE_ISSUE_TO_DONE_STAGES,
   runTakeIssueToDone,
@@ -100,10 +113,12 @@ const {
   CODE_THREAD_KIND,
   ARTICLE_THREAD_KIND,
   SESSION_STATE_SCHEMA_VERSION,
+  WORK_HANDOFF_POINTER_FIELDS,
   buildSessionCheckpoint,
   buildArticleThreadCheckpoint,
   buildCodeThreadCheckpoint,
   buildLiveArtifactPointer,
+  buildWorkHandoff,
   createFileSessionStateStore,
   createMemorySessionStateStore,
   readJarvosSessionState,
@@ -151,15 +166,31 @@ const stewardshipContract = require('./stewardship/contract');
 const stewardshipJudgment = require('./stewardship/judgment');
 const stewardshipPolicy = require('./stewardship/policy');
 const reconcilePolicy = require('./stewardship/reconcile-policy');
+const projectsActivity = require('./projects-activity');
+const compoundEngineeringProvider = require('./providers/compound-engineering');
+const workflowProvider = require('./providers/workflow-provider');
+const learningEligibility = require('./providers/learning-eligibility');
+const workRunStore = require('./features/work-run-store');
+const workFollowThrough = require('./features/work-follow-through');
+const managedWorkflow = require('./features/workflow');
 module.exports = {
+  ...projectsActivity,
   ...stewardshipContract,
   ...stewardshipJudgment,
   ...stewardshipPolicy,
   ...reconcilePolicy,
+  ...compoundEngineeringProvider,
+  ...workflowProvider,
+  ...learningEligibility,
+  ...workRunStore,
+  ...workFollowThrough,
+  ...managedWorkflow,
   ACTIVE_STATUSES,
   DEFAULT_IGNORED_PATH_SEGMENTS,
   BRANCH_SCHEMA_VERSION,
+  BEADS_TRACKER_SCHEMA_VERSION,
   COUPLED_STAGES,
+  DEFAULT_BEADS_VERSION,
   FIXER_SCHEMA_VERSION,
   HOLISTIC_REVIEW_SCHEMA_VERSION,
   LIVE_ADAPTERS_SCHEMA_VERSION,
@@ -171,6 +202,7 @@ module.exports = {
   buildLiveCodingAdapters,
   createLiveClawpatchReviewEngine,
   createLiveClawpatchRunner,
+  createLiveBeadsTracker,
   createLiveGitBranch,
   createLiveHolisticReview,
   createLiveFixer,
@@ -178,12 +210,17 @@ module.exports = {
   createLivePostMergeSweep,
   createLivePullRequest,
   parseClawpatchCommand,
+  createMemoryOperationStore,
+  createFileOperationStore,
+  createBeadsWorkActionService,
+  createMemoryExecutionLinkStore,
   resolveWorktreeRoot,
   CODING_MATURITY_STATES,
   CODE_THREAD_KIND,
   ARTICLE_THREAD_KIND,
   DEFAULT_MCP_TOOL_NAME,
   DEFAULT_SKILL_NAME,
+  DELIVERY_TRACE_SCHEMA_VERSION,
   GATE_EQUIVALENT_PROFILES,
   GATE_EQUIVALENT_SURFACES,
   GOAL_ALIGNMENT_SCHEMA_VERSION,
@@ -193,9 +230,11 @@ module.exports = {
   ISSUE_BRANCH_LIFECYCLE_TRANSITIONS,
   ISSUE_BRANCH_METADATA_REQUIREMENTS,
   ORCHESTRATOR_SCHEMA_VERSION,
+  OPERATION_STORE_SCHEMA_VERSION,
   REQUIRED_EVIDENCE,
   REVIEW_ENGINE_SCHEMA_VERSION,
   SESSION_STATE_SCHEMA_VERSION,
+  WORK_HANDOFF_POINTER_FIELDS,
   SUBMISSION_GATE_PHASES,
   SUBMISSION_GATE_SCHEMA_VERSION,
   SUBMISSION_GATE_STAGES,
@@ -203,6 +242,7 @@ module.exports = {
   TAKE_ISSUE_TO_DONE_STAGES,
   TERMINAL_STATUSES,
   TRIAGE_SCHEMA_VERSION,
+  WORK_ACTION_CONTRACT,
   assertReviewEngineAdapter,
   assessLocalChange,
   buildGateEquivalentCommands,
@@ -214,6 +254,7 @@ module.exports = {
   buildSessionCheckpoint,
   buildArticleThreadCheckpoint,
   buildLiveArtifactPointer,
+  buildWorkHandoff,
   buildSkillDescriptor,
   createFileSessionStateStore,
   branchSatisfiesIdentifier,
@@ -233,11 +274,13 @@ module.exports = {
   createCodexHostAdapter,
   createCodingHostAdapter,
   createCodingControlPlanePort,
+  createHermesHostAdapter,
   createOpenClawHostAdapter,
   codingControlPlaneManifest,
   createGateEquivalentReviewEngine,
   createMemorySessionStateStore,
   decideCodingTriage,
+  evaluateDeliveryTrace,
   evaluateIssueBranchLifecycle,
   evaluateGoalAlignment,
   evaluateSubmissionGate,
@@ -258,6 +301,7 @@ module.exports = {
   normalizeHost,
   normalizeLabels,
   normalizeLocalRefInventory,
+  observePlan,
   parseGitStatus,
   privacyOutcome,
   readJarvosSessionState,

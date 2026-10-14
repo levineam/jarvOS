@@ -1,11 +1,13 @@
 'use strict';
 
+const { evaluateDeliveryTrace } = require('../delivery-trace');
 const { assertReviewEngineAdapter } = require('../review-engine');
 const {
   buildCodeThreadCheckpoint,
   readJarvosSessionState,
   writeJarvosSessionState,
 } = require('../session-state');
+const { evaluateLearningEligibility } = require('../../providers/learning-eligibility');
 
 const ORCHESTRATOR_SCHEMA_VERSION = 'jarvos-coding-orchestrator/v1';
 const TAKE_ISSUE_TO_DONE_STAGES = Object.freeze([
@@ -49,6 +51,8 @@ const REATTACHMENT_HINT_KEYS = Object.freeze([
   'artifact',
   'codeThread',
   'issueIdentifier',
+  'workReference',
+  'workRef',
 ]);
 
 function requireFn(container, method, stage) {
@@ -120,6 +124,7 @@ function extractReattachmentHints(source = null) {
       lastDecision: codeThread.lastDecision || null,
       nextStep: codeThread.nextStep || null,
     };
+    if (isPlainObject(codeThread.workReference)) hints.workReference = codeThread.workReference;
   }
 
   const artifactKind = String(isPlainObject(hints.artifact) ? hints.artifact.kind || '' : '').toLowerCase();
@@ -146,7 +151,7 @@ function extractReattachmentHints(source = null) {
     isPlainObject(hints.artifact) ? hints.artifact.branch : null,
   );
 
-  if (!branch && !pullRequestPointer && !hints.sessionId && !hints.session && !hints.worktree && !hints.worktreePath && !hints.codeThread) {
+  if (!branch && !pullRequestPointer && !hints.sessionId && !hints.session && !hints.worktree && !hints.worktreePath && !hints.codeThread && !hints.workReference) {
     return null;
   }
 
@@ -156,6 +161,7 @@ function extractReattachmentHints(source = null) {
     sessionId: hints.sessionId || (isPlainObject(hints.session) ? hints.session.id || null : null),
     worktreePath: firstDefined(hints.worktreePath, hints.worktree) || null,
     issueIdentifier: hints.issueIdentifier || null,
+    workReference: hints.workReference || null,
     codeThread: hints.codeThread || null,
     artifact: hints.artifact || null,
     source: source,
@@ -197,6 +203,7 @@ function resolveResumePlan(input = {}, entrySessionState = null) {
     // Always re-run stages. Resume never advances the stage cursor.
     startIndex: 0,
     branch: branch || null,
+    workReference: reattachment?.workReference || input.workReference || input.workRef || null,
     pullRequest: reattachment?.pullRequest || null,
     reattachment,
     // Intentionally empty: prior checkpoint events are not durable proof.
@@ -219,6 +226,25 @@ function isFailedStageEvent(event) {
   if (!event) return false;
   if (event.result?.ok === false) return true;
   return FAILED_STAGE_STATUSES.has(stageStatusToken(event));
+}
+
+/**
+ * Compare the declared delivery trace with the fix stage's own Git read.
+ *
+ * The observation is taken only from the live fixRerun result. An observation
+ * on the input, or on an unconfirmed reattached stage, is ignored. The accepted
+ * plan digest is set by the managed workflow from its store.
+ */
+function evaluateDeliveryGate(input, issueIdentifier, fixRerun) {
+  const authentic = isPlainObject(fixRerun)
+    && fixRerun.ok !== false
+    && !(fixRerun.reattached === true && fixRerun.liveConfirmed !== true)
+    && isPlainObject(fixRerun.deliveryObservation);
+  const observed = authentic ? { ...fixRerun.deliveryObservation } : null;
+  if (observed && input.acceptedPlanDigest !== undefined && input.acceptedPlanDigest !== null) {
+    observed.acceptedPlanDigest = input.acceptedPlanDigest;
+  }
+  return evaluateDeliveryTrace(input.deliveryTrace, { identifier: issueIdentifier, observed });
 }
 
 function deriveOrchestratorStatus(events) {
@@ -244,13 +270,16 @@ async function checkpointIfConfigured(input, context, stage, result, nextStep) {
   const pullRequestUrl = context.pullRequest?.url || null;
   const checkpoint = buildCodeThreadCheckpoint({
     issueIdentifier: input.issue?.identifier || input.issueIdentifier,
+    workReference: context.workReference || input.workReference || input.workRef,
     branch: context.branch || input.branch,
     stage,
     lastDecision: result?.decision || result?.status || null,
     nextStep,
     artifact: {
-      kind: pullRequestUrl ? 'pull-request' : 'paperclip-issue',
+      kind: pullRequestUrl ? 'pull-request' : (context.workReference ? 'beads-work-item' : 'paperclip-issue'),
       issueIdentifier: input.issue?.identifier || input.issueIdentifier,
+      authority: context.workReference?.authority,
+      itemId: context.workReference?.itemId,
       branch: context.branch || input.branch,
       url: pullRequestUrl || input.issue?.url,
     },
@@ -261,18 +290,19 @@ async function checkpointIfConfigured(input, context, stage, result, nextStep) {
 }
 
 function reattachmentPayload(context) {
-  if (!context.reattachment && !context.pullRequest) return null;
+  if (!context.reattachment && !context.pullRequest && !context.workReference) return null;
   return {
     branch: context.branch || null,
     pullRequest: context.pullRequest || null,
     sessionId: context.reattachment?.sessionId || null,
     worktreePath: context.reattachment?.worktreePath || null,
+    workReference: context.workReference || null,
   };
 }
 
 async function runTakeIssueToDone(input = {}, adapters = {}) {
-  const issueIdentifier = input.issue?.identifier || input.issueIdentifier;
-  if (!issueIdentifier) throw new Error('take-issue-to-done orchestration requires an issue identifier');
+  const issueIdentifier = input.issue?.identifier || input.issueIdentifier || input.workReference?.itemId || input.workRef?.itemId;
+  if (!issueIdentifier) throw new Error('take-issue-to-done orchestration requires an issue or work identifier');
 
   const reviewEngine = assertReviewEngineAdapter(adapters.reviewEngine);
   const controlPlane = input.controlPlane && typeof input.controlPlane === 'object'
@@ -284,6 +314,8 @@ async function runTakeIssueToDone(input = {}, adapters = {}) {
     baseRef: input.baseRef || 'origin/main',
     sessionState: adapters.sessionState || null,
     pullRequest: null,
+    workReference: input.workReference || input.workRef || null,
+    executionReference: input.executionReference || null,
     reattachment: null,
   };
   const entrySessionState = context.sessionState
@@ -292,10 +324,12 @@ async function runTakeIssueToDone(input = {}, adapters = {}) {
   const resumePlan = resolveResumePlan(input, entrySessionState);
   if (resumePlan.branch) context.branch = resumePlan.branch;
   if (resumePlan.pullRequest) context.pullRequest = resumePlan.pullRequest;
+  if (resumePlan.workReference) context.workReference = resumePlan.workReference;
   context.reattachment = resumePlan.reattachment;
 
   const events = [];
   const checkpoints = [];
+  const activityEvents = [];
   const stageResults = {};
   const reattach = reattachmentPayload(context);
 
@@ -307,6 +341,11 @@ async function runTakeIssueToDone(input = {}, adapters = {}) {
     assertFenceForStage(stage, controlPlane);
     const result = await action();
     assertFenceForStage(stage, controlPlane);
+    // The claim adapter establishes the durable work reference. Install it
+    // before recording the claim milestone so the activity receipt is bound
+    // to Beads rather than the pre-claim context.
+    if (stage === 'claim' && result?.workReference) context.workReference = result.workReference;
+    if (stage === 'claim' && result?.executionLink) context.executionReference = result.executionLink;
 
     const event = buildStageEvent(stage, result, {
       reattached: Boolean(reattach) && Boolean(result?.reattached),
@@ -324,19 +363,42 @@ async function runTakeIssueToDone(input = {}, adapters = {}) {
       stageNextStep(stage, index),
     );
     if (checkpoint) checkpoints.push(checkpoint);
+    const activity = adapters.activity || adapters.projectsActivity;
+    if (activity && typeof activity.recordMilestone === 'function') {
+      try {
+        activityEvents.push(await activity.recordMilestone({
+          ...input,
+          stage,
+          result,
+          issueIdentifier,
+          branch: context.branch,
+          workReference: context.workReference,
+          executionReference: context.executionReference,
+          pullRequest: context.pullRequest,
+        }));
+      } catch (_) {
+        // Activity projection is deliberately non-authoritative. A failed
+        // admission is surfaced in the result but cannot change the coding
+        // lifecycle or fabricate a Project claim.
+        activityEvents.push({ status: 'unavailable', stage, reason: 'activity-admission-failed' });
+      }
+    }
     return result;
   };
 
   const claim = await runStage('claim', () => requireFn(adapters.tracker, 'claimIssue', 'claim')({
     issue: input.issue,
     issueIdentifier,
+    workReference: context.workReference,
     controlPlane,
     reattach,
   }));
+  context.workReference = claim?.workReference || context.workReference;
 
   const branch = await runStage('branch', () => requireFn(adapters.git, 'createBranch', 'branch')({
     issue: input.issue,
     issueIdentifier,
+    workReference: context.workReference,
     baseRef: context.baseRef,
     branch: context.branch,
     claim,
@@ -349,6 +411,7 @@ async function runTakeIssueToDone(input = {}, adapters = {}) {
   const sliceReview = await runStage('sliceReview', () => reviewEngine.sliceReview({
     issue: input.issue,
     issueIdentifier,
+    workReference: context.workReference,
     branch: context.branch,
     baseRef: context.baseRef,
     branchResult: branch,
@@ -359,6 +422,7 @@ async function runTakeIssueToDone(input = {}, adapters = {}) {
   const holisticReview = await runStage('holisticReview', () => reviewEngine.holisticReview({
     issue: input.issue,
     issueIdentifier,
+    workReference: context.workReference,
     branch: context.branch,
     baseRef: context.baseRef,
     sliceReview,
@@ -369,6 +433,7 @@ async function runTakeIssueToDone(input = {}, adapters = {}) {
   const fixRerun = await runStage('fixRerun', () => requireFn(adapters.fixer, 'fixAndRerun', 'fixRerun')({
     issue: input.issue,
     issueIdentifier,
+    workReference: context.workReference,
     branch: context.branch,
     baseRef: context.baseRef,
     branchResult: branch,
@@ -378,52 +443,94 @@ async function runTakeIssueToDone(input = {}, adapters = {}) {
       sliceReview,
       holisticReview,
     },
+    // Declared trace, so the fixer knows which plan path to read from Git.
+    deliveryTrace: input.deliveryTrace,
     controlPlane,
     reattach,
   }));
 
-  const pullRequest = await runStage('pullRequest', () => requireFn(adapters.pullRequest, 'openPullRequest', 'pullRequest')({
-    issue: input.issue,
-    issueIdentifier,
-    branch: context.branch,
-    baseRef: context.baseRef,
-    fixRerun,
-    controlPlane,
-    fence: controlPlane?.fence,
-    assertCurrentFence: controlPlane?.assertCurrentFence,
-    reattach,
-    existingPullRequest: context.pullRequest,
-  }), {
-    beforeCheckpoint: (result) => {
-      context.pullRequest = result || context.pullRequest;
-    },
-  });
-  context.pullRequest = pullRequest || context.pullRequest;
+  // Submission boundary. Without a verified plan -> docs -> implementation ->
+  // behavioral-proof link, no pull request is opened and the work is never
+  // closed: green tests and review alone cannot reach verifyClose.
+  const deliveryGate = evaluateDeliveryGate(input, issueIdentifier, fixRerun);
 
-  const postMergeSweep = await runStage('postMergeSweep', () => requireFn(adapters.postMerge, 'sweep', 'postMergeSweep')({
-    issue: input.issue,
-    issueIdentifier,
-    branch: context.branch,
-    pullRequest: context.pullRequest,
-    controlPlane,
-    fence: controlPlane?.fence,
-    assertCurrentFence: controlPlane?.assertCurrentFence,
-    reattach,
-  }));
+  if (deliveryGate.ok) {
+    const pullRequest = await runStage('pullRequest', () => requireFn(adapters.pullRequest, 'openPullRequest', 'pullRequest')({
+      issue: input.issue,
+      issueIdentifier,
+      workReference: context.workReference,
+      branch: context.branch,
+      baseRef: context.baseRef,
+      // Branch-stage base evidence: the trusted target an existing pull
+      // request is checked against. `baseRef` above is not that evidence.
+      branchResult: branch,
+      fixRerun,
+      controlPlane,
+      fence: controlPlane?.fence,
+      assertCurrentFence: controlPlane?.assertCurrentFence,
+      reattach,
+      existingPullRequest: context.pullRequest,
+    }), {
+      beforeCheckpoint: (result) => {
+        context.pullRequest = result || context.pullRequest;
+      },
+    });
+    context.pullRequest = pullRequest || context.pullRequest;
 
-  await runStage('verifyClose', () => requireFn(adapters.tracker, 'verifyAndClose', 'verifyClose')({
-    issue: input.issue,
-    issueIdentifier,
-    branch: context.branch,
-    pullRequest: context.pullRequest,
-    postMergeSweep,
-    controlPlane,
-    fence: controlPlane?.fence,
-    assertCurrentFence: controlPlane?.assertCurrentFence,
-    reattach,
-  }));
+    // A failed pull-request stage — including an existing pull request whose
+    // live-read base is not the trusted target — is not a review surface.
+    // Nothing is swept or closed on it; the run reports failed.
+    if (pullRequest?.ok !== false) {
+      const postMergeSweep = await runStage('postMergeSweep', () => requireFn(adapters.postMerge, 'sweep', 'postMergeSweep')({
+        issue: input.issue,
+        issueIdentifier,
+        workReference: context.workReference,
+        branch: context.branch,
+        pullRequest: context.pullRequest,
+        controlPlane,
+        fence: controlPlane?.fence,
+        assertCurrentFence: controlPlane?.assertCurrentFence,
+        reattach,
+      }));
 
-  const status = deriveOrchestratorStatus(events);
+      await runStage('verifyClose', () => requireFn(adapters.tracker, 'verifyAndClose', 'verifyClose')({
+        issue: input.issue,
+        issueIdentifier,
+        workReference: context.workReference,
+        branch: context.branch,
+        pullRequest: context.pullRequest,
+        postMergeSweep,
+        controlPlane,
+        fence: controlPlane?.fence,
+        assertCurrentFence: controlPlane?.assertCurrentFence,
+        reattach,
+      }));
+    }
+  }
+
+  // A blocked delivery gate is its own non-terminal status; an earlier stage
+  // failure still reports as failed.
+  const status = deliveryGate.ok || events.some(isFailedStageEvent)
+    ? deriveOrchestratorStatus(events)
+    : 'blocked';
+
+  // Learning is an optional, non-terminal tail. It is evaluated from the
+  // live stage results above; callers may use the returned decision to invoke
+  // a provider, but compounding can never change the coding status.
+  const hasLearningInput = input.learningSignals !== undefined
+    || input.learning !== undefined
+    || input.declineLearning === true
+    || input.declinedLearning === true;
+  const learning = hasLearningInput
+    ? evaluateLearningEligibility({
+      verification: {
+        status,
+        events,
+      },
+      signals: input.learningSignals ?? input.learning,
+      declined: input.declineLearning === true || input.declinedLearning === true,
+    })
+    : null;
 
   return {
     schemaVersion: ORCHESTRATOR_SCHEMA_VERSION,
@@ -439,6 +546,12 @@ async function runTakeIssueToDone(input = {}, adapters = {}) {
     },
     events,
     checkpoints,
+    activityEvents,
+    // The declared trace is echoed so later verification is self-contained; the
+    // gate result carries reason codes and source/installed/live claims.
+    deliveryTrace: input.deliveryTrace ?? null,
+    deliveryGate,
+    ...(learning ? { learning } : {}),
   };
 }
 

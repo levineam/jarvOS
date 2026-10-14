@@ -12,7 +12,8 @@
 const fs = require('fs');
 const path = require('path');
 const { writeNoteFile, noteFilePath } = require('../../../packages/jarvos-secondbrain-notes/src/write-to-vault.js');
-const { getVaultJournalDir } = require('./lib/provenance-config');
+const { getVaultDir, getVaultJournalDir } = require('./lib/provenance-config');
+const { createObsidianOwnedMutationService } = require('./obsidian-mutation');
 
 const NOTES_HEADING = '## 📝 Notes';
 const LEGACY_NOTES_CREATED_HEADING = '## 🗂️ Notes Created';
@@ -262,6 +263,10 @@ function normalizeJournalNotes({
       },
     });
 
+    if (!result.written && !result.savedLocally) {
+      throw new Error(`Note creation was not persisted through the canonical vault owner: ${result.receipt?.status || 'unavailable'}`);
+    }
+
     if (result.created) {
       changes.push({
         type: 'note-created',
@@ -322,20 +327,43 @@ function main() {
   }
 
   const journalContent = fs.readFileSync(journalPath, 'utf8');
+  const mutationService = options.dryRun ? null : createObsidianOwnedMutationService({
+    vaultRoot: getVaultDir(),
+    source: 'journal.notes-section-normalizer',
+  });
+  const composedWriteNote = options.dryRun ? undefined : (input) => {
+    const filePath = noteFilePath(input.title);
+    const vaultRelativePath = path.relative(mutationService.vaultRoot, filePath).split(path.sep).join('/');
+    const context = mutationService.createWriteContext({
+      vaultRelativePath,
+      operationSource: mutationService.source,
+    });
+    return writeNoteFile({ ...input, ...context });
+  };
   const result = normalizeJournalNotes({
     journalContent,
     date: options.date,
     dryRun: options.dryRun,
+    ...(composedWriteNote ? { writeNote: composedWriteNote } : {}),
   });
 
-  if (!options.dryRun) {
-    fs.writeFileSync(journalPath, result.normalizedContent, 'utf8');
+  let journalMutation = null;
+  if (!options.dryRun && result.normalizedContent !== journalContent) {
+    journalMutation = mutationService.applyMarkdownMutation({
+      filePath: journalPath,
+      expectedContent: journalContent,
+      nextContent: result.normalizedContent,
+    });
+    if (!['committed', 'already_satisfied', 'saved_locally_sync_pending'].includes(journalMutation?.status)) {
+      throw new Error(`Journal normalization was not applied through Obsidian: ${journalMutation?.status || 'unavailable'}`);
+    }
   }
 
   console.log(JSON.stringify({
     journalPath,
     dryRun: options.dryRun,
     changes: result.changes,
+    mutationStatus: journalMutation?.status || (options.dryRun ? 'dry-run' : 'unchanged'),
   }, null, 2));
 }
 

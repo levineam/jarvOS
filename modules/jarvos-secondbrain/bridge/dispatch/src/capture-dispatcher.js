@@ -4,8 +4,18 @@ const {
   applyThreePackagePlan,
 } = require('../../routing/src/three-package-router');
 const {
-  detectTrigger,
+  HARD_COMMAND_RESPONSES,
+  IDEA,
+  JOURNAL,
+  NOTE,
+  authorizeCapture,
+  parseHardCaptureCommand,
 } = require('../../routing/src/keyword-capture-router');
+const {
+  createArtifactReceipt,
+  receiptIsAcknowledged,
+  validateArtifactReceipt,
+} = require('../../../src/artifact-receipt');
 
 const HIGH_CONFIDENCE = 0.8;
 const MEDIUM_CONFIDENCE = 0.5;
@@ -26,13 +36,15 @@ function normalizeInput(input = {}) {
     input.classification || input.classifierOutput || input.salience || {},
   );
   const text = String(input.text || input.content || input.body || '').trim();
-  const trigger = input.trigger || detectTrigger({ ...input, text });
+  const authorization = authorizeCapture({ ...input, text });
+  const trigger = input.trigger || authorization.trigger;
 
   return {
     ...input,
     text,
     date: input.date,
     trigger,
+    authorization,
     classification,
   };
 }
@@ -59,6 +71,7 @@ function buildCaptureEvent(capture, trigger) {
     durable: capture.durable,
     durableNote: capture.durableNote,
     standaloneNote: capture.standaloneNote,
+    hardCommand: capture.hardCommand,
   };
 
   if (classification.salienceClass !== 'nothing' && classification.confidence >= HIGH_CONFIDENCE) {
@@ -72,25 +85,27 @@ function buildCaptureEvent(capture, trigger) {
 const CAPTURE_SKILLS = [
   {
     id: 'journal-entry',
-    description: 'Write idea-class captures into the journal package.',
+    description: 'Write idea and journal-entry captures into the journal package.',
     matches(capture) {
-      if (capture.trigger === 'idea') return true;
-      return capture.classification.salienceClass === 'idea'
-        && capture.classification.confidence >= HIGH_CONFIDENCE;
+      return capture.authorization.authorized
+        && (capture.trigger === IDEA || capture.trigger === JOURNAL);
     },
     invoke(capture, options = {}) {
-      const routing = applyThreePackagePlan(buildCaptureEvent(capture, 'idea'), options);
+      const trigger = capture.trigger === JOURNAL ? JOURNAL : IDEA;
+      const routing = applyThreePackagePlan(buildCaptureEvent(capture, trigger), options);
       const createsNote = Boolean(routing?.note);
       return {
         captured: true,
         skillId: createsNote ? 'note-creation' : 'journal-entry',
-        path: capture.trigger ? 'keyword_trigger' : 'salience_high',
+        path: 'keyword_trigger',
         trigger: capture.trigger || null,
         salienceClass: capture.classification.salienceClass,
         confidence: capture.classification.confidence,
         destinations: destinationsFromRouting(routing),
         title: routing.plan?.noteTitle || routing.note?.title || null,
         routing,
+        artifactReceipt: routing.artifactReceipt,
+        hardCommand: capture.hardCommand || null,
       };
     },
   },
@@ -98,23 +113,22 @@ const CAPTURE_SKILLS = [
     id: 'note-creation',
     description: 'Create durable notes through the configured storage adapter.',
     matches(capture) {
-      if (capture.trigger === 'note') return true;
-      return capture.classification.salienceClass !== 'nothing'
-        && capture.classification.salienceClass !== 'idea'
-        && capture.classification.confidence >= HIGH_CONFIDENCE;
+      return capture.authorization.authorized && capture.trigger === NOTE;
     },
     invoke(capture, options = {}) {
       const routing = applyThreePackagePlan(buildCaptureEvent(capture, 'note'), options);
       return {
         captured: true,
         skillId: 'note-creation',
-        path: capture.trigger ? 'keyword_trigger' : 'salience_high',
+        path: 'keyword_trigger',
         trigger: capture.trigger || null,
         salienceClass: capture.classification.salienceClass,
         confidence: capture.classification.confidence,
         destinations: destinationsFromRouting(routing),
         title: routing.plan?.noteTitle || routing.note?.title || null,
         routing,
+        artifactReceipt: routing.artifactReceipt,
+        hardCommand: capture.hardCommand || null,
       };
     },
   },
@@ -123,6 +137,7 @@ const CAPTURE_SKILLS = [
 function noCaptureResult(capture, path = 'no_capture') {
   return {
     captured: false,
+    observed: path === 'salience_observed',
     skillId: null,
     path,
     trigger: capture.trigger || null,
@@ -130,23 +145,69 @@ function noCaptureResult(capture, path = 'no_capture') {
     confidence: capture.classification.confidence,
     destinations: [],
     title: null,
+    artifactReceipt: createArtifactReceipt(),
   };
 }
 
+// Unauthorized salience is never a capture, but a high-confidence classification
+// is worth surfacing as descriptive observation metadata (observed:true) rather
+// than silently discarding it. Salience never grants write permission either way.
 function ignoredPathForCapture(capture) {
   const confidence = capture.classification?.confidence;
-  if (
-    typeof confidence === 'number'
-    && confidence >= MEDIUM_CONFIDENCE
-    && confidence < HIGH_CONFIDENCE
-  ) {
+  const salienceClass = capture.classification?.salienceClass;
+  if (typeof confidence !== 'number' || !salienceClass || salienceClass === 'nothing') {
+    return 'no_capture';
+  }
+  if (confidence >= HIGH_CONFIDENCE) {
+    return 'salience_observed';
+  }
+  if (confidence >= MEDIUM_CONFIDENCE) {
     return 'salience_medium_ignored';
   }
   return 'no_capture';
 }
 
+function responseForHardCaptureReceipt(hardCommand, receipt) {
+  if (!hardCommand?.matched) return null;
+  if (hardCommand.disposition !== 'capture') return hardCommand.response;
+
+  try {
+    validateArtifactReceipt(receipt);
+  } catch {
+    return HARD_COMMAND_RESPONSES.failure;
+  }
+
+  if (receiptIsAcknowledged(receipt)) return hardCommand.response;
+
+  const outcomes = receipt.artifacts.map((artifact) => artifact.outcome);
+  const locallyPending = outcomes.length > 0
+    && outcomes.includes('saved_locally_sync_pending')
+    && outcomes.every((outcome) => (
+      outcome === 'committed'
+      || outcome === 'already_satisfied'
+      || outcome === 'saved_locally_sync_pending'
+    ));
+  return locallyPending
+    ? HARD_COMMAND_RESPONSES.savedLocallySyncPending
+    : HARD_COMMAND_RESPONSES.failure;
+}
+
 function dispatchCapture(input = {}, options = {}) {
-  const capture = normalizeInput(input);
+  const hardCommand = parseHardCaptureCommand(input);
+  if (hardCommand.disposition === 'needs_input') {
+    const result = noCaptureResult(normalizeInput(input), 'hard_command_needs_input');
+    result.hardCommand = hardCommand;
+    return result;
+  }
+
+  const capture = normalizeInput(hardCommand.disposition === 'capture' ? {
+    ...input,
+    text: hardCommand.content,
+    content: hardCommand.content,
+    body: undefined,
+    trigger: hardCommand.route,
+    hardCommand,
+  } : input);
 
   if (!capture.text) {
     return noCaptureResult(capture, 'empty_input');
@@ -168,4 +229,5 @@ module.exports = {
   ignoredPathForCapture,
   normalizeClassification,
   normalizeInput,
+  responseForHardCaptureReceipt,
 };
